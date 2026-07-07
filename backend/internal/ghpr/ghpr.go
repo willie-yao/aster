@@ -100,7 +100,7 @@ func (c *Client) OpenPR(ctx context.Context, req Request) (string, error) {
 	pushOwner, pushRepo := req.Owner, req.Repo
 	headPrefix := ""
 	if req.Fork {
-		login, err := c.authedLogin(ctx)
+		login, err := c.AuthedLogin(ctx)
 		if err != nil {
 			return "", fmt.Errorf("resolving fork identity: %w", err)
 		}
@@ -155,9 +155,9 @@ var (
 	forkPollInterval = 2 * time.Second
 )
 
-// authedLogin returns the login of the user the token authenticates as (the
-// fork owner).
-func (c *Client) authedLogin(ctx context.Context) (string, error) {
+// AuthedLogin returns the login of the user the token authenticates as. It
+// doubles as a token-validity check: an invalid token returns an error.
+func (c *Client) AuthedLogin(ctx context.Context) (string, error) {
 	var u struct {
 		Login string `json:"login"`
 	}

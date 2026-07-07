@@ -12,6 +12,7 @@ import Typography from "@mui/material/Typography";
 import { useColorScheme } from "@mui/material/styles";
 import { Link as RouterLink, Outlet, useLocation } from "react-router-dom";
 import { SearchBar } from "./SearchBar";
+import { ProfileMenu } from "./ProfileMenu";
 import { useManifest } from "../hooks/useManifest";
 
 export function Layout() {
@@ -125,6 +126,7 @@ export function Layout() {
                 {isDark ? <LightMode fontSize="small" /> : <DarkMode fontSize="small" />}
               </IconButton>
             )}
+            <ProfileMenu />
           </Box>
         </Toolbar>
       </AppBar>

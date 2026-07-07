@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -68,6 +69,16 @@ type Options struct {
 	// CritiqueRetries bounds re-prompts to resolve a reviewer's objections or a
 	// validation error before the fix is dropped.
 	CritiqueRetries int
+	// PRFiller, when set, reformats the PR description to follow the repo's PR
+	// template. A nil filler (or one that finds no template) is a pass-through.
+	PRFiller PRBodyFiller
+}
+
+// PRBodyFiller reformats a PR description to follow the repo's PR template.
+// repotemplate.PRFiller satisfies it. Implementations must be safe to call with
+// a nil receiver and must return the input on any error.
+type PRBodyFiller interface {
+	FillBody(ctx context.Context, description string) string
 }
 
 // Manager reconciles systemic recurring patterns into fix PRs.
@@ -107,6 +118,15 @@ type Stats struct {
 	Proposed  int // PRs opened (draft mode)
 	Adopted   int // existing open PR adopted
 	Previewed int // dry-run previews produced
+	// Failures records why a fix was not opened for a pattern. The batch path
+	// logs and ignores these; on-demand callers surface the reason.
+	Failures []Failure
+}
+
+// Failure is a per-pattern reason a fix could not be proposed.
+type Failure struct {
+	Subject string
+	Reason  string
 }
 
 // NewClients builds the GitHub PR client and source reader from a token.
@@ -156,7 +176,29 @@ func (m *Manager) SaveState() error {
 	if err != nil {
 		return fmt.Errorf("marshalling fix-PR state: %w", err)
 	}
-	return os.WriteFile(m.stateFile, data, 0o644)
+	return writeFileAtomic(m.stateFile, data)
+}
+
+// writeFileAtomic writes data to a temp file and renames it into place so a
+// concurrent reader never observes a half-written state file.
+func writeFileAtomic(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpName, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 // Reconcile drafts fixes for eligible patterns. Per-pattern errors are logged
@@ -229,7 +271,14 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 		fix, err := gen(ctx, p)
 		if err != nil {
 			log.Printf("  ⚠ fix generation failed for %q: %v", p.Subject, err)
+			stats.Failures = append(stats.Failures, Failure{Subject: p.Subject, Reason: err.Error()})
 			continue
+		}
+
+		// Reformat the description to follow the repo PR template when configured.
+		description := prDescription(p, fix)
+		if m.opts.PRFiller != nil {
+			description = m.opts.PRFiller.FillBody(ctx, description)
 		}
 
 		url, err := m.pr.OpenPR(ctx, ghpr.Request{
@@ -238,7 +287,7 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 			Files:        fix.files,
 			BranchPrefix: "ai-fix",
 			Title:        prTitle(p),
-			Body:         prBody(p, fix, key, m.opts.DashboardURL),
+			Body:         prBody(p, fix, key, m.opts.DashboardURL, description),
 			Draft:        true,
 			Fork:         m.opts.Fork,
 			Base:         &base,
@@ -249,6 +298,7 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 		})
 		if url == "" {
 			log.Printf("  ⚠ failed to open fix PR for %q: %v", p.Subject, err)
+			stats.Failures = append(stats.Failures, Failure{Subject: p.Subject, Reason: "opening the pull request failed"})
 			continue
 		}
 		if err != nil {
@@ -288,6 +338,13 @@ func eligible(patterns []models.PatternAnalysis, minConfidence string) []models.
 	return out
 }
 
+// TrackedURL returns the PR URL recorded for a pattern, if one has been opened
+// or adopted. Used by on-demand callers to report the result after Reconcile.
+func (m *Manager) TrackedURL(p models.PatternAnalysis) (string, bool) {
+	t, ok := m.state.Tracked[keyFor(p)]
+	return t.URL, ok
+}
+
 // keyFor is the dedup identity of a pattern: the job plus a fingerprint of the
 // shared root cause, so distinct causes on one job dedupe separately.
 func keyFor(p models.PatternAnalysis) string {
@@ -317,9 +374,25 @@ func prTitle(p models.PatternAnalysis) string {
 	return "fix: address recurring failure in " + subj
 }
 
-func prBody(p models.PatternAnalysis, fix *proposedFix, key, dashboardURL string) string {
+func prBody(p models.PatternAnalysis, fix *proposedFix, key, dashboardURL, description string) string {
 	var sb strings.Builder
 	sb.WriteString("> [!WARNING]\n> Draft PR auto-proposed by a CI failure-analysis dashboard. Review carefully before use; the change is a starting point, not a verified fix.\n\n")
+	sb.WriteString(strings.TrimSpace(description))
+	sb.WriteString("\n\n")
+	sb.WriteString("<details><summary>Proposed diff</summary>\n\n```diff\n")
+	sb.WriteString(fix.diff)
+	sb.WriteString("\n```\n</details>\n")
+	if dashboardURL != "" {
+		fmt.Fprintf(&sb, "\nDashboard: %s\n", dashboardURL)
+	}
+	fmt.Fprintf(&sb, "\n%s\n", markerFor(key))
+	return sb.String()
+}
+
+// prDescription is the human-readable summary of the fix. It is the part that
+// gets reformatted to follow a repo PR template when one is configured.
+func prDescription(p models.PatternAnalysis, fix *proposedFix) string {
+	var sb strings.Builder
 	if r := strings.TrimSpace(fix.rationale); r != "" {
 		fmt.Fprintf(&sb, "**Proposed change:** %s\n\n", oneLine(r))
 	}
@@ -330,14 +403,7 @@ func prBody(p models.PatternAnalysis, fix *proposedFix, key, dashboardURL string
 	fmt.Fprintf(&sb, "**Builds analyzed:** %d (confidence: %s)\n\n", p.BuildsAnalyzed, p.Confidence)
 	sb.WriteString("**Before merging, a human must:**\n")
 	sb.WriteString("- Verify the change actually fixes the root cause (run the affected job).\n")
-	sb.WriteString("- Confirm it follows the project's conventions and doesn't regress other flavors.\n\n")
-	sb.WriteString("<details><summary>Proposed diff</summary>\n\n```diff\n")
-	sb.WriteString(fix.diff)
-	sb.WriteString("\n```\n</details>\n")
-	if dashboardURL != "" {
-		fmt.Fprintf(&sb, "\nDashboard: %s\n", dashboardURL)
-	}
-	fmt.Fprintf(&sb, "\n%s\n", markerFor(key))
+	sb.WriteString("- Confirm it follows the project's conventions and doesn't regress other flavors.")
 	return sb.String()
 }
 

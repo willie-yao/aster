@@ -16,7 +16,8 @@ import (
 type fakeCompleter struct {
 	locate      string
 	edit        string
-	critique    string // JSON {"issues":[...]}; empty -> approved
+	editSeq     []string // when set, returns one entry per edit call, in order
+	critique    string   // JSON {"issues":[...]}; empty -> approved
 	locateErr   error
 	editErr     error
 	critiqueErr error
@@ -36,7 +37,14 @@ func (f *fakeCompleter) Complete(_ context.Context, system, _ string) (string, e
 		}
 		return f.critique, nil
 	default: // editSystemPrompt
+		idx := f.editCalls
 		f.editCalls++
+		if len(f.editSeq) > 0 {
+			if idx >= len(f.editSeq) {
+				idx = len(f.editSeq) - 1
+			}
+			return f.editSeq[idx], f.editErr
+		}
 		return f.edit, f.editErr
 	}
 }
@@ -152,6 +160,48 @@ func TestGenerateFix_NoCandidates(t *testing.T) {
 	src := &fakeSource{files: map[string]string{}}
 	if _, err := generateFix(context.Background(), genParamsFor(c, src), systemicPattern("etcd")); err == nil || !strings.Contains(err.Error(), "no candidate") {
 		t.Errorf("expected no-candidate error, got %v", err)
+	}
+}
+
+func TestGenerateFix_NoEditsRetriesThenSucceeds(t *testing.T) {
+	// The model returns an empty edit set first, then a real edit after the
+	// feedback nudge. critiqueRetries must allow at least one retry.
+	c := &fakeCompleter{
+		locate: `{"files": ["templates/cluster.yaml"]}`,
+		editSeq: []string{
+			`{"rationale": "n/a", "edits": []}`,
+			`{"rationale": "use a faster disk", "edits": [{"file": "templates/cluster.yaml", "old": "diskType: StandardSSD_LRS", "new": "diskType: Premium_LRS"}]}`,
+		},
+	}
+	src := &fakeSource{files: map[string]string{"templates/cluster.yaml": sampleFile}}
+	gp := genParamsFor(c, src)
+	gp.critiqueRetries = 1
+
+	fix, err := generateFix(context.Background(), gp, systemicPattern("etcd"))
+	if err != nil {
+		t.Fatalf("generateFix: %v", err)
+	}
+	if !strings.Contains(fix.files["templates/cluster.yaml"], "Premium_LRS") {
+		t.Errorf("retry edit not applied: %q", fix.files["templates/cluster.yaml"])
+	}
+	if c.editCalls != 2 {
+		t.Errorf("edit calls = %d, want 2 (initial + retry)", c.editCalls)
+	}
+}
+
+func TestGenerateFix_NoEditsExhaustsToClearError(t *testing.T) {
+	// Always-empty edits: after retries, a clear not-auto-fixable error.
+	c := &fakeCompleter{
+		locate: `{"files": ["templates/cluster.yaml"]}`,
+		edit:   `{"rationale": "n/a", "edits": []}`,
+	}
+	src := &fakeSource{files: map[string]string{"templates/cluster.yaml": sampleFile}}
+	gp := genParamsFor(c, src)
+	gp.critiqueRetries = 1
+
+	_, err := generateFix(context.Background(), gp, systemicPattern("etcd"))
+	if err == nil || !strings.Contains(err.Error(), "could not produce a code change") {
+		t.Errorf("expected clear not-auto-fixable error, got %v", err)
 	}
 }
 
@@ -580,5 +630,31 @@ func TestReconcile_PartialSuccessTracksAndCounts(t *testing.T) {
 	}
 	if _, tracked := m.state.Tracked[keyFor(p)]; !tracked {
 		t.Errorf("partial-success PR should be tracked")
+	}
+}
+
+func TestParseJSONObject_ToleratesLiteralTabsAndNewlines(t *testing.T) {
+	// A model copying a Go snippet verbatim emits literal tabs/newlines inside
+	// the JSON string values, which strict JSON rejects. parseJSONObject must
+	// recover by escaping them.
+	raw := "{\"edits\": [{\"file\": \"a.go\", \"old\": \"func F() {\n\treturn\n}\", \"new\": \"func F() {\n\treturn nil\n}\"}]}"
+	var v struct {
+		Edits []edit `json:"edits"`
+	}
+	if err := parseJSONObject(raw, &v); err != nil {
+		t.Fatalf("parseJSONObject: %v", err)
+	}
+	if len(v.Edits) != 1 || !strings.Contains(v.Edits[0].New, "return nil") {
+		t.Errorf("parsed edits = %+v", v.Edits)
+	}
+}
+
+func TestEscapeStringControlChars_LeavesStructureAndEscapes(t *testing.T) {
+	// Structural whitespace between tokens is untouched; an already-escaped \n
+	// is not double-escaped; a literal tab inside a string is escaped.
+	in := "{\n\t\"k\": \"a\\nb\tc\"\n}"
+	out := escapeStringControlChars(in)
+	if !strings.Contains(out, `a\nb\tc`) {
+		t.Errorf("escaped = %q", out)
 	}
 }

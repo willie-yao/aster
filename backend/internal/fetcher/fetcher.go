@@ -37,6 +37,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prow/jobconfig"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prowbuild"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/repotemplate"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/skillsuggest"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
@@ -337,6 +338,14 @@ func (p *pipeline) refresh(ctx context.Context, jobs []models.ProwJob) (*refresh
 	// Run AI failure analysis when enabled.
 	if p.enableAI {
 		analyzeFailuresWithAI(ctx, cfg, details, flakinessReport, p.aiToken, opts.OutDir, p.aiSystemPrompt, p.aiSkillSet)
+		// Assign stable IDs so the frontend and actions API can address a
+		// specific pattern. Set here so both jobs/*.json and the folded
+		// flakiness.json patterns carry the same ID.
+		for i := range details {
+			for j := range details[i].PatternAnalyses {
+				details[i].PatternAnalyses[j].ID = models.PatternID(details[i].PatternAnalyses[j])
+			}
+		}
 		// Fold systemic job-level verdicts into flakiness.json for the home page.
 		flakinessReport.RecurringPatterns = collectRecurringPatterns(details)
 		if n := len(flakinessReport.RecurringPatterns); n > 0 {
@@ -381,7 +390,7 @@ func (p *pipeline) runSideEffects(ctx context.Context, res *refreshResult) {
 	}
 
 	// Auto-file GitHub issues when enabled and ISSUE_TOKEN is present.
-	processIssues(ctx, cfg, flakinessReport, details, opts.OutDir)
+	processIssues(ctx, cfg, flakinessReport, details, p.aiToken, p.enableAI, opts.OutDir)
 
 	// Draft skill-recipe PRs when enabled, AI ran, and SKILL_TOKEN is present.
 	if p.enableAI {
@@ -453,7 +462,7 @@ func RunWatch(ctx context.Context, opts Options, watchInterval, reconcileInterva
 
 // processIssues reconciles the project's highest-signal findings into GitHub
 // issues on the configured target repo. Gated on issues.enabled and ISSUE_TOKEN.
-func processIssues(ctx context.Context, cfg *project.Config, report models.FlakinessReport, details []models.JobDetail, outDir string) {
+func processIssues(ctx context.Context, cfg *project.Config, report models.FlakinessReport, details []models.JobDetail, aiToken string, enableAI bool, outDir string) {
 	if cfg.Issues == nil || !cfg.Issues.Enabled {
 		return
 	}
@@ -476,6 +485,19 @@ func processIssues(ctx context.Context, cfg *project.Config, report models.Flaki
 		DashboardURL: cfg.Branding.SiteURL,
 	})
 
+	// When AI is available, reformat issue bodies to follow the target repo's
+	// issue template. Falls back to the default body when no template exists.
+	var filler issues.TemplateFiller
+	if enableAI {
+		aiClient := ai.NewClientWithOptions(ai.Options{
+			Token:        aiToken,
+			Endpoint:     aiEndpoint(cfg),
+			Model:        aiModel(cfg),
+			ExtraHeaders: aiHeaders(cfg),
+		})
+		filler = repotemplate.NewIssueFiller(token, aiClient, eff.Repo.Owner, eff.Repo.Name)
+	}
+
 	client := issues.NewClient(token, eff.Repo.Owner, eff.Repo.Name)
 	targetRepo := eff.Repo.Owner + "/" + eff.Repo.Name
 	mgr := issues.NewManager(client, filepath.Join(outDir, "issue_state.json"), targetRepo, issues.Options{
@@ -483,6 +505,7 @@ func processIssues(ctx context.Context, cfg *project.Config, report models.Flaki
 		CloseOnRecovery:   eff.CloseOnRecovery,
 		MaxNewPerRun:      eff.MaxNewPerRun,
 		RecoverPrefixes:   issues.RecoverPrefixesFor(eff.Triggers),
+		TemplateFiller:    filler,
 	})
 	stats, err := mgr.Reconcile(ctx, specs)
 	if err != nil {
@@ -624,6 +647,7 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 			DashboardURL:    cfg.Branding.SiteURL,
 			Critique:        critique,
 			CritiqueRetries: critiqueRetries,
+			PRFiller:        repotemplate.NewPRFiller(fixToken, aiClient, eff.Repo.Owner, eff.Repo.Name),
 		})
 	stats, err := mgr.Reconcile(ctx, patterns)
 	if err != nil {

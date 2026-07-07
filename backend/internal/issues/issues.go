@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -97,6 +98,17 @@ type Options struct {
 	// A tracked key outside the set is left as-is so disabled or skipped
 	// triggers never wrongly resolve their issues.
 	RecoverPrefixes []string
+	// TemplateFiller, when set, reformats a new issue's title and body to follow
+	// the repo's issue template before filing. A nil filler (or one that finds
+	// no template) is a pass-through.
+	TemplateFiller TemplateFiller
+}
+
+// TemplateFiller reformats an issue's title and body to follow the repo's issue
+// template. repotemplate.IssueFiller satisfies it. Implementations must be safe
+// to call with a nil receiver and must return the input on any error.
+type TemplateFiller interface {
+	FillIssue(ctx context.Context, title, body string) (string, string)
 }
 
 // Manager reconciles the current set of findings against tracked issues.
@@ -113,6 +125,14 @@ type Stats struct {
 	Created   int
 	Adopted   int
 	Recovered int
+}
+
+// TrackedURL returns the issue URL recorded for a finding key, if one has been
+// filed or adopted. Used by on-demand callers to report the result after
+// Reconcile.
+func (m *Manager) TrackedURL(key string) (string, bool) {
+	t, ok := m.state.Tracked[key]
+	return t.URL, ok
 }
 
 // NewManager builds a Manager and loads prior state from stateFile if present.
@@ -157,7 +177,29 @@ func (m *Manager) SaveState() error {
 	if err != nil {
 		return fmt.Errorf("marshalling issue state: %w", err)
 	}
-	return os.WriteFile(m.stateFile, data, 0o644)
+	return writeFileAtomic(m.stateFile, data)
+}
+
+// writeFileAtomic writes data to a temp file and renames it into place so a
+// concurrent reader never observes a half-written state file.
+func writeFileAtomic(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpName, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 // Reconcile files issues for new findings, adopts a pre-existing open issue when
@@ -190,7 +232,18 @@ func (m *Manager) Reconcile(ctx context.Context, specs []IssueSpec) (Stats, erro
 			log.Printf("  ⓘ issue create cap (%d) reached; deferring %s to next run", m.opts.MaxNewPerRun, key)
 			continue
 		}
-		num, urlStr, err := m.client.CreateIssue(ctx, spec.Title, spec.Body, spec.Labels)
+		title, body := spec.Title, spec.Body
+		if m.opts.TemplateFiller != nil {
+			// Reformat to follow the repo issue template, then guarantee the
+			// dedup marker survives so tracking and adoption keep working.
+			marker := markerFor(key)
+			title, body = m.opts.TemplateFiller.FillIssue(ctx, title, strings.ReplaceAll(body, marker, ""))
+			title = clampTitle(title)
+			if !strings.Contains(body, marker) {
+				body = strings.TrimRight(body, "\n") + "\n\n" + marker
+			}
+		}
+		num, urlStr, err := m.client.CreateIssue(ctx, title, body, spec.Labels)
 		if err != nil {
 			log.Printf("  ⚠ failed to create issue for %s: %v", key, err)
 			continue

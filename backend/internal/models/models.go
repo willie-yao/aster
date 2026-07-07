@@ -204,6 +204,9 @@ type JobDetail struct {
 // It captures whether varied-looking failures share one recurring, fixable
 // cause. The specific failing test may differ between builds.
 type PatternAnalysis struct {
+	// ID is a stable, URL-safe identifier for this pattern, used to address it
+	// from the frontend and the actions API. See models.PatternID.
+	ID string `json:"id,omitempty"`
 	// Subject is what the correlated failures belong to.
 	Subject string `json:"subject"`
 	// JobID lets home-page aggregations link back to the job page.

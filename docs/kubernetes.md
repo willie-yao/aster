@@ -126,10 +126,48 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | `fetcher.buildsPerJob`, `fetcher.workers`, `fetcher.timeout` | Fetch depth and budget. |
 | `fetcher.extraEnv` | Extra env such as `GITHUB_TOKEN` or `SLACK_WEBHOOK_URL`. |
 | `ingress.enabled`, `ingress.hosts`, `ingress.tls` | Public read path. |
+| `server.actions.enabled`, `server.actions.mode` | Turn on write actions; `oauth` (GitHub sign-in) or `proxy` (SSO proxy + bot token). |
+| `server.actions.admins` | GitHub logins allowed to file issues / draft fix PRs. |
 
 The public read endpoints (`/data/*`, `/api/capabilities`, `/healthz`) are
-unauthenticated. Interactive write actions and their auth model are a later
-phase; until then the server is read-only.
+unauthenticated. Admin write actions are opt-in: set `server.actions.enabled`
+and choose `server.actions.mode` (`oauth` for GitHub sign-in with per-user
+attribution, or `proxy` for an upstream SSO proxy plus a bot token), then list
+the allowed GitHub logins in `server.actions.admins` (see [server.md](server.md)).
+
+### Enabling actions with Helm
+
+OAuth mode (per-user attribution). Register a GitHub OAuth App first (see
+[server.md](server.md#setting-up-oauth-mode)); its callback URL is your
+dashboard URL plus `/api/auth/callback`.
+
+```bash
+helm upgrade --install capz deploy/helm/prow-ai-dashboard \
+  ... \
+  --set server.actions.enabled=true \
+  --set server.actions.mode=oauth \
+  --set 'server.actions.admins={alice,bob}' \
+  --set server.actions.oauth.clientId=<client-id> \
+  --set server.actions.oauth.clientSecret=<client-secret> \
+  --set server.actions.oauth.redirectUrl=https://dashboard.example.com/api/auth/callback \
+  --set server.actions.oauth.sessionKey="$(openssl rand -base64 32)"
+```
+
+Proxy mode (an SSO proxy fronts the server; a bot token writes):
+
+```bash
+helm upgrade --install capz deploy/helm/prow-ai-dashboard \
+  ... \
+  --set server.actions.enabled=true \
+  --set server.actions.mode=proxy \
+  --set server.actions.proxy.header=X-Auth-Request-Email \
+  --set server.actions.proxy.botToken=<bot-pat> \
+  --set 'server.actions.admins={alice,bob}'
+```
+
+Provide the OAuth secret/session key or bot token via a pre-made Secret instead
+with `server.actions.oauth.existingSecret` (keys `OAUTH_CLIENT_SECRET`,
+`SESSION_KEY`) or `server.actions.proxy.existingSecret` (key `BOT_TOKEN`).
 
 `/data/*` serves everything the fetcher writes to the shared volume, matching
 the static Pages path exactly. That includes the AI cache and the fetcher's

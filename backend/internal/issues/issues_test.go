@@ -482,3 +482,66 @@ func TestMarker_StableAndKeyed(t *testing.T) {
 		t.Error("marker comment should contain the search token")
 	}
 }
+
+// TestReconcile_SingleSpecNoRecoverPrefixes documents the on-demand actions
+// contract: filing one issue with no recover prefixes must not recover, close,
+// or drop any other tracked finding.
+func TestReconcile_SingleSpecNoRecoverPrefixes(t *testing.T) {
+	f := newFakeGitHub(t)
+	m := newTestManager(t, f, Options{MaxNewPerRun: 1}) // no RecoverPrefixes
+
+	// Pre-track an unrelated finding as if a prior batch run filed it.
+	m.state.Tracked["pattern::other-job"] = TrackedIssue{Number: 42, URL: "u", FirstFiledAt: now()}
+
+	stats, err := m.Reconcile(context.Background(), []IssueSpec{spec("pattern::job-a")})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if stats.Created != 1 {
+		t.Errorf("Created = %d, want 1", stats.Created)
+	}
+	if stats.Recovered != 0 {
+		t.Errorf("Recovered = %d, want 0 (single-spec create must not recover others)", stats.Recovered)
+	}
+	if _, ok := m.state.Tracked["pattern::other-job"]; !ok {
+		t.Error("unrelated tracked finding was dropped by a single-spec create")
+	}
+}
+
+// stubFiller reformats to a template-like body that drops the marker, to prove
+// Reconcile re-adds it.
+type stubFiller struct{}
+
+func (stubFiller) FillIssue(_ context.Context, title, _ string) (string, string) {
+	return title + " (templated)", "**What happened**: filled from template"
+}
+
+func TestReconcile_TemplateFillerPreservesMarker(t *testing.T) {
+	f := newFakeGitHub(t)
+	opts := defaultOpts()
+	opts.TemplateFiller = stubFiller{}
+	m := newTestManager(t, f, opts)
+
+	key := "pattern::job-a"
+	if _, err := m.Reconcile(context.Background(), []IssueSpec{spec(key)}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	// The created issue body must still carry the dedup marker so a later run
+	// adopts it instead of filing a duplicate.
+	var created *fakeIssue
+	for _, is := range f.issues {
+		created = is
+	}
+	if created == nil {
+		t.Fatal("no issue created")
+	}
+	if !strings.Contains(created.Body, markerFor(key)) {
+		t.Errorf("marker missing from templated body: %q", created.Body)
+	}
+	if !strings.Contains(created.Body, "filled from template") {
+		t.Errorf("template fill not applied: %q", created.Body)
+	}
+	if !strings.Contains(created.Title, "templated") {
+		t.Errorf("title not templated: %q", created.Title)
+	}
+}

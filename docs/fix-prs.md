@@ -148,6 +148,19 @@ pipeline (locate, fetch, edit, validate) and writes the proposed changes to
 **opens no PR and forks nothing**. Inspect the previews, confirm the edits look
 right and target the correct files, then flip `dry_run` off.
 
+## Following the repo's PR template
+
+When the source repo has a pull-request template (`.github/PULL_REQUEST_TEMPLATE.md`,
+`PULL_REQUEST_TEMPLATE.md`, or `docs/PULL_REQUEST_TEMPLATE.md`), the engine
+reformats the generated PR description to follow it with one extra AI call: it
+fills the template's sections from the proposed change, keeps placeholder text
+and checklists you have no information for, and picks a single best-fit Prow
+`/kind` line when the template has one. The warning banner, rendered diff,
+dashboard link, and dedup marker are always preserved. No template (or no AI
+configured) falls back to the default body, and any error during reformatting
+silently uses the default. This is automatic; there is no flag to set. Fetching
+the template uses `FIX_TOKEN`, which already has Contents read on the source repo.
+
 ## Guardrails (summary)
 
 - **Opt-in** per project; **draft-only** PRs; never pushes to a protected branch.

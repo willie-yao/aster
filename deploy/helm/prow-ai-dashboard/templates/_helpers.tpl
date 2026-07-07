@@ -81,3 +81,16 @@ Name of the Secret holding the AI token.
 {{- printf "%s-ai" (include "prow-ai-dashboard.fullname" .) -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Name of the Secret holding the server auth credentials (OAuth secret + session
+key, or bot token).
+*/}}
+{{- define "prow-ai-dashboard.authSecret" -}}
+{{- $a := .Values.server.actions -}}
+{{- if eq $a.mode "oauth" -}}
+{{- if $a.oauth.existingSecret -}}{{ $a.oauth.existingSecret }}{{- else -}}{{ printf "%s-auth" (include "prow-ai-dashboard.fullname" .) }}{{- end -}}
+{{- else -}}
+{{- if $a.proxy.existingSecret -}}{{ $a.proxy.existingSecret }}{{- else -}}{{ printf "%s-auth" (include "prow-ai-dashboard.fullname" .) }}{{- end -}}
+{{- end -}}
+{{- end -}}

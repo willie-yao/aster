@@ -66,7 +66,9 @@ backend/                       Go 1.25
     output/                    JSON writers (dashboard.json, jobs/, ...)
     project/                   project.yaml load + validate
     prow/jobconfig/            kubernetes/test-infra job parsing
-    server/                    HTTP handler: /data/* read parity + /api/capabilities
+    server/                    HTTP handler: /data/* read parity + /api/capabilities + actions
+    auth/                      Admin auth seam (PAT allowlist; OAuth-swappable)
+    actions/                   On-demand single-failure issue / fix-PR service
 
 frontend/                      React 19 + Vite 8 + Tailwind 4
   public/data/                 Fetcher writes JSON here; Vite serves it

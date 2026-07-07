@@ -92,6 +92,36 @@ server:
   # Path to the SPA baked into the image.
   staticDir: /app/web
   port: 8080
+  # Admin-gated write actions: file an issue or draft a fix PR for a failure.
+  # Enabling actions mounts the project config and AI secret into the server and
+  # gives it write access to the shared volume (issue/fix-PR dedup state).
+  actions:
+    # enabled turns the write endpoints on. mode selects how admins authenticate.
+    enabled: false
+    # mode: "oauth" (each admin signs in with GitHub; their token performs the
+    # write) or "proxy" (an upstream SSO proxy authenticates; a bot token writes).
+    mode: oauth
+    # admins is the GitHub login allowlist (case-insensitive).
+    admins: []
+    # oauth mode settings. clientId is public; clientSecret and sessionKey are
+    # held in a Secret (inline here, or reuse one via existingSecret).
+    oauth:
+      clientId: ""
+      clientSecret: ""
+      # redirectUrl must match the OAuth App's callback, e.g.
+      # https://dashboard.example.com/api/auth/callback
+      redirectUrl: ""
+      # sessionKey seeds the session-cookie encryption; use a long random value.
+      sessionKey: ""
+      scope: repo
+      existingSecret: ""
+    # proxy mode settings.
+    proxy:
+      # header carries the SSO-authenticated user, e.g. X-Auth-Request-Email.
+      header: X-Auth-Request-Email
+      # botToken is the GitHub PAT that performs writes (in a Secret).
+      botToken: ""
+      existingSecret: ""
   resources: {}
   nodeSelector: {}
   tolerations: []

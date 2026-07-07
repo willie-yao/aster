@@ -8,9 +8,16 @@ export interface CapabilityFeatures {
   actions: boolean;
 }
 
+// AuthInfo tells the frontend how admins sign in for write actions.
+export interface AuthInfo {
+  mode: "oauth" | "proxy";
+  login_url?: string;
+}
+
 export interface Capabilities {
   mode: "static" | "server";
   features: CapabilityFeatures;
+  auth?: AuthInfo;
 }
 
 // STATIC_CAPABILITIES is the read-only default used whenever no server

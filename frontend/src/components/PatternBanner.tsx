@@ -7,6 +7,7 @@ import { Link as RouterLink } from "react-router-dom";
 import { Insights } from "@mui/icons-material";
 import type { PatternAnalysis } from "../types/dashboard";
 import { RichText } from "./RichText";
+import { FailureActions } from "./FailureActions";
 import { soft } from "../theme";
 
 /**
@@ -118,6 +119,8 @@ export function PatternBanner({
             </Stack>
           </Box>
         )}
+
+        {pattern.systemic && pattern.id && <FailureActions failureID={pattern.id} />}
       </Stack>
     </Box>
   );

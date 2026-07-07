@@ -26,6 +26,9 @@ project under `branding.source_repo`) requires a separate token:
 
 - A **fine-grained PAT** or a **GitHub App installation token** with
   `issues: write` on the **target** repo, provided as the `ISSUE_TOKEN` secret.
+  To follow the target repo's issue template (see below), the token also needs
+  `contents: read`; without it, template-following is skipped and issues use the
+  default body.
 - You must actually have rights to open issues there. Auto-filing bot issues on
   an upstream community repo is usually unwanted, so point `issues.repo` at a
   repo **you control** (your consumer repo, or a dedicated tracking repo) unless
@@ -99,6 +102,19 @@ finding drops out and its issue is resolved on the next run. Recovery is scoped
 to the triggers you have enabled, so turning a trigger off leaves its existing
 issues untouched (it does not mass-resolve them); and changing `issues.repo`
 resets the local tracking state so issue numbers are never mixed across repos.
+
+## Following the repo's issue template
+
+When the target repo has one or more Markdown issue templates (under
+`.github/ISSUE_TEMPLATE/`, or a legacy `.github/ISSUE_TEMPLATE.md`), the engine
+reformats a new issue with one extra AI call: it picks the best-fit template,
+fills its sections from the finding, keeps placeholder text and checklists it has
+no information for, and chooses a single `/kind` line when the template has one.
+The hidden dedup marker is always preserved so tracking and adoption keep
+working. YAML issue *forms* are skipped (only `.md` templates are followed). No
+template (or no AI configured) falls back to the default body, and any error
+during reformatting silently uses the default. This is automatic; there is no
+flag to set.
 
 ## Implementation reference
 
