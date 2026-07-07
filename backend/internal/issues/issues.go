@@ -9,13 +9,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"log"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
 )
 
 // markerPrefix tags the hidden HTML comment embedded in every filed issue. The
@@ -66,13 +65,7 @@ func markerToken(key string) string {
 }
 
 // State persists filed issues so an active tracked finding needs no API calls.
-type State struct {
-	// Repo is the "owner/name" the tracked numbers belong to. State for a
-	// different target repo is discarded on load, so changing issues.repo never
-	// mis-skips a finding or mutates an unrelated issue number.
-	Repo    string                  `json:"repo,omitempty"`
-	Tracked map[string]TrackedIssue `json:"tracked"`
-}
+type State = statefile.State[TrackedIssue]
 
 // TrackedIssue records the issue filed for a finding key.
 type TrackedIssue struct {
@@ -139,67 +132,18 @@ func (m *Manager) TrackedURL(key string) (string, bool) {
 // targetRepo scopes state by owner/name so issue numbers are never mixed
 // across repos.
 func NewManager(client gh, stateFile, targetRepo string, opts Options) *Manager {
-	m := &Manager{
+	return &Manager{
 		client:     client,
 		stateFile:  stateFile,
 		targetRepo: targetRepo,
 		opts:       opts,
-		state:      &State{Repo: targetRepo, Tracked: map[string]TrackedIssue{}},
-	}
-	m.loadState()
-	return m
-}
-
-func (m *Manager) loadState() {
-	data, err := os.ReadFile(m.stateFile)
-	if err != nil {
-		return // no state yet
-	}
-	var s State
-	if err := json.Unmarshal(data, &s); err != nil {
-		log.Printf("Warning: failed to parse issue state: %v", err)
-		return
-	}
-	// Discard state for a different target repo so issue numbers are not reused.
-	if s.Repo != "" && s.Repo != m.targetRepo {
-		log.Printf("Issues: target repo changed (%s -> %s); starting issue state fresh", s.Repo, m.targetRepo)
-		return
-	}
-	if s.Tracked != nil {
-		m.state = &s
-		m.state.Repo = m.targetRepo
+		state:      statefile.Load[TrackedIssue](stateFile, targetRepo, "issues"),
 	}
 }
 
 // SaveState writes the tracking state to disk.
 func (m *Manager) SaveState() error {
-	data, err := json.MarshalIndent(m.state, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshalling issue state: %w", err)
-	}
-	return writeFileAtomic(m.stateFile, data)
-}
-
-// writeFileAtomic writes data to a temp file and renames it into place so a
-// concurrent reader never observes a half-written state file.
-func writeFileAtomic(path string, data []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Chmod(tmpName, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, path)
+	return m.state.Save(m.stateFile)
 }
 
 // Reconcile files issues for new findings, adopts a pre-existing open issue when

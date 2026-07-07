@@ -9,17 +9,15 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"log"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
 )
 
 // keyPrefix namespaces a fix's dedup key (one per recurring pattern + cause).
@@ -92,12 +90,7 @@ type Manager struct {
 }
 
 // State persists which patterns already have a fix PR.
-type State struct {
-	// Repo scopes the state to the source repo; state for a different repo is
-	// discarded on load.
-	Repo    string                `json:"repo,omitempty"`
-	Tracked map[string]TrackedFix `json:"tracked"`
-}
+type State = statefile.State[TrackedFix]
 
 // TrackedFix records the fix PR opened for a pattern key.
 type TrackedFix struct {
@@ -136,69 +129,20 @@ func NewClients(token string) (*ghpr.Client, sourceReader) {
 
 // NewManager builds a Manager and loads prior state from stateFile if present.
 func NewManager(pr prClient, completer Completer, source sourceReader, stateFile string, opts Options) *Manager {
-	m := &Manager{
+	repo := opts.SourceOwner + "/" + opts.SourceName
+	return &Manager{
 		pr:        pr,
 		completer: completer,
 		source:    source,
 		stateFile: stateFile,
 		opts:      opts,
-		state:     &State{Repo: opts.SourceOwner + "/" + opts.SourceName, Tracked: map[string]TrackedFix{}},
-	}
-	m.loadState()
-	return m
-}
-
-func (m *Manager) targetRepo() string { return m.opts.SourceOwner + "/" + m.opts.SourceName }
-
-func (m *Manager) loadState() {
-	data, err := os.ReadFile(m.stateFile)
-	if err != nil {
-		return
-	}
-	var s State
-	if err := json.Unmarshal(data, &s); err != nil {
-		log.Printf("Warning: failed to parse fix-PR state: %v", err)
-		return
-	}
-	if s.Repo != "" && s.Repo != m.targetRepo() {
-		log.Printf("Fix PRs: target repo changed (%s -> %s); starting state fresh", s.Repo, m.targetRepo())
-		return
-	}
-	if s.Tracked != nil {
-		m.state = &s
-		m.state.Repo = m.targetRepo()
+		state:     statefile.Load[TrackedFix](stateFile, repo, "fix PRs"),
 	}
 }
 
 // SaveState writes the tracking state to disk.
 func (m *Manager) SaveState() error {
-	data, err := json.MarshalIndent(m.state, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshalling fix-PR state: %w", err)
-	}
-	return writeFileAtomic(m.stateFile, data)
-}
-
-// writeFileAtomic writes data to a temp file and renames it into place so a
-// concurrent reader never observes a half-written state file.
-func writeFileAtomic(path string, data []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Chmod(tmpName, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, path)
+	return m.state.Save(m.stateFile)
 }
 
 // Reconcile drafts fixes for eligible patterns. Per-pattern errors are logged
@@ -422,11 +366,7 @@ func confidenceRank(c string) int {
 }
 
 func writePreviews(path string, previews []Preview) error {
-	data, err := json.MarshalIndent(previews, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0o644)
+	return statefile.WriteJSON(path, previews)
 }
 
 func now() string { return time.Now().UTC().Format(time.RFC3339) }

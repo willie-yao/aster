@@ -4,10 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"log"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -15,6 +13,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
 )
 
 // keyPrefix namespaces suggestion dedup keys.
@@ -55,11 +54,7 @@ type Manager struct {
 }
 
 // State persists suggestion PRs so open suggestions are not re-proposed.
-type State struct {
-	// Repo scopes the state; state for a different repo is discarded on load.
-	Repo    string               `json:"repo,omitempty"`
-	Tracked map[string]TrackedPR `json:"tracked"`
-}
+type State = statefile.State[TrackedPR]
 
 // TrackedPR records the suggestion PR opened for a pattern key.
 type TrackedPR struct {
@@ -76,7 +71,7 @@ type Stats struct {
 
 // NewManager builds a Manager and loads prior state from stateFile if present.
 func NewManager(pr prClient, completer Completer, existing *skills.Set, owner, repo, stateFile string, opts Options) *Manager {
-	m := &Manager{
+	return &Manager{
 		pr:        pr,
 		completer: completer,
 		existing:  existing,
@@ -84,41 +79,13 @@ func NewManager(pr prClient, completer Completer, existing *skills.Set, owner, r
 		repo:      repo,
 		stateFile: stateFile,
 		opts:      opts,
-		state:     &State{Repo: owner + "/" + repo, Tracked: map[string]TrackedPR{}},
-	}
-	m.loadState()
-	return m
-}
-
-func (m *Manager) targetRepo() string { return m.owner + "/" + m.repo }
-
-func (m *Manager) loadState() {
-	data, err := os.ReadFile(m.stateFile)
-	if err != nil {
-		return
-	}
-	var s State
-	if err := json.Unmarshal(data, &s); err != nil {
-		log.Printf("Warning: failed to parse skill-suggestion state: %v", err)
-		return
-	}
-	if s.Repo != "" && s.Repo != m.targetRepo() {
-		log.Printf("Skill suggestions: target repo changed (%s -> %s); starting state fresh", s.Repo, m.targetRepo())
-		return
-	}
-	if s.Tracked != nil {
-		m.state = &s
-		m.state.Repo = m.targetRepo()
+		state:     statefile.Load[TrackedPR](stateFile, owner+"/"+repo, "skill suggestions"),
 	}
 }
 
 // SaveState writes the tracking state to disk.
 func (m *Manager) SaveState() error {
-	data, err := json.MarshalIndent(m.state, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshalling skill-suggestion state: %w", err)
-	}
-	return os.WriteFile(m.stateFile, data, 0o644)
+	return m.state.Save(m.stateFile)
 }
 
 // Reconcile suggests skill recipes for eligible patterns. Per-pattern errors are

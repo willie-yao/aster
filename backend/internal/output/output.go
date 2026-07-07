@@ -2,13 +2,12 @@
 package output
 
 import (
-	"encoding/json"
-	"os"
 	"path/filepath"
 	"regexp"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
 )
 
 var unsafeChars = regexp.MustCompile(`[^a-zA-Z0-9\-_]`)
@@ -18,34 +17,10 @@ func SanitizeFilename(name string) string {
 	return unsafeChars.ReplaceAllString(name, "-")
 }
 
-// writeJSON writes indented JSON and creates parent directories as needed. It
-// writes to a temp file and renames into place so a concurrent reader (the
-// server in Kubernetes-native mode) never observes a half-written file.
+// writeJSON writes indented JSON to path atomically, creating parent
+// directories as needed. See statefile.WriteJSON.
 func writeJSON(path string, v any) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	// Best-effort: some filesystems (SMB/azurefile RWX) don't support chmod and
-	// return EPERM, where the mount's file_mode governs readability instead.
-	_ = os.Chmod(tmpName, 0o644)
-	return os.Rename(tmpName, path)
+	return statefile.WriteJSON(path, v)
 }
 
 // WriteDashboard writes dashboard.json to dir.
