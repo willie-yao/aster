@@ -90,6 +90,23 @@ func TestWriteDashboard_CreatesParentDirs(t *testing.T) {
 	}
 }
 
+func TestWriteDashboard_NormalizesMode(t *testing.T) {
+	dir := t.TempDir()
+	if err := WriteDashboard(dir, sampleDashboard()); err != nil {
+		t.Fatalf("WriteDashboard: %v", err)
+	}
+	// On a POSIX filesystem the best-effort chmod runs and normalizes the mode
+	// to 0644. On filesystems that reject chmod (SMB/azurefile) the write must
+	// still succeed; that path is tolerated by ignoring the chmod error.
+	fi, err := os.Stat(filepath.Join(dir, "dashboard.json"))
+	if err != nil {
+		t.Fatalf("stat dashboard.json: %v", err)
+	}
+	if got := fi.Mode().Perm(); got != 0o644 {
+		t.Errorf("dashboard.json mode = %o, want 644", got)
+	}
+}
+
 func TestWriteJobDetail(t *testing.T) {
 	dir := t.TempDir()
 	detail := sampleJobDetail("periodic-cluster-api-provider-azure-e2e-main")

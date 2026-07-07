@@ -42,9 +42,9 @@ func writeJSON(path string, v any) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Chmod(tmpName, 0o644); err != nil {
-		return err
-	}
+	// Best-effort: some filesystems (SMB/azurefile RWX) don't support chmod and
+	// return EPERM, where the mount's file_mode governs readability instead.
+	_ = os.Chmod(tmpName, 0o644)
 	return os.Rename(tmpName, path)
 }
 

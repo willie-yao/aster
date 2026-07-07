@@ -38,8 +38,9 @@ spec:
             {{- if $actions }}
             - -project-dir={{ .Values.project.mountPath }}
             {{- end }}
-          {{- if $actions }}
+          {{- if or $actions .Values.server.extraEnv }}
           env:
+            {{- if $actions }}
             - name: AUTH_MODE
               value: {{ $a.mode | quote }}
             {{- if $a.admins }}
@@ -86,6 +87,10 @@ spec:
             - name: AI_MODEL
               value: {{ .Values.ai.model | quote }}
             {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- with .Values.server.extraEnv }}
+            {{- toYaml . | nindent 12 }}
             {{- end }}
           {{- end }}
           ports:

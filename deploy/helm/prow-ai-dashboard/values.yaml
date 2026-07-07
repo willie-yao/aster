@@ -92,6 +92,10 @@ server:
   # Path to the SPA baked into the image.
   staticDir: /app/web
   port: 8080
+  # Extra environment variables for the server container. Standard core/v1
+  # EnvVar entries. Example: COOKIE_INSECURE=1 to allow the session cookie over
+  # plain http when testing behind a local port-forward.
+  extraEnv: []
   # Admin-gated write actions: file an issue or draft a fix PR for a failure.
   # Enabling actions mounts the project config and AI secret into the server and
   # gives it write access to the shared volume (issue/fix-PR dedup state).
