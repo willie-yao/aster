@@ -37,6 +37,7 @@ backend/                       Go 1.25
   cmd/
     fetcher/                   Main entrypoint; one binary per deploy
     server/                    Kubernetes-native API server (read parity + capabilities)
+    worker/                    Continuous watch worker (in-cluster incremental fetch)
     ai-toolcall-spike/         Throwaway probe; safe to ignore
     _manifest_check/           Build-time check on manifest schema
   internal/

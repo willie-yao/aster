@@ -13,6 +13,17 @@ imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
 
+# Fetch mode selects how data is produced. Both modes have exactly one writer.
+#   watch: (default) a continuous worker Deployment refreshes on a short interval
+#          and reconciles (rediscovers jobs, runs side effects) periodically.
+#          Best for an in-cluster deploy co-located with the inference stack.
+#   cron:  the fetcher runs as a scheduled CronJob (portable, also the GitHub
+#          Pages path).
+# In watch mode the worker must be the only writer to the shared volume: do not
+# also run the CronJob or a manual fetch-now Job, and do not point a second
+# release at the same existingClaim.
+mode: watch
+
 # Shared volume holding fetcher output and the AI cache. It must be
 # ReadWriteMany so the CronJob (writer) and the server (reader) can mount it at
 # the same time. Set existingClaim to reuse a pre-provisioned PVC.
@@ -54,12 +65,16 @@ ai:
   tokenSecretKey: AI_TOKEN
 
 fetcher:
-  # Cron schedule for the fetch. Default: every 6 hours.
+  # Cron schedule for the fetch. Default: every 6 hours. (mode: cron)
   schedule: "0 */6 * * *"
   # Forbid overlapping runs so a slow fetch never races itself.
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
+  # watch mode: how often to refresh data reusing the cached job list, and how
+  # often to rediscover jobs and run a full pass with side effects.
+  watchInterval: 5m
+  reconcileInterval: 1h
   buildsPerJob: 10
   workers: 5
   timeout: 30m

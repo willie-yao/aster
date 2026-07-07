@@ -60,16 +60,52 @@ type Options struct {
 	Version string
 }
 
-// Run executes the full pipeline: load, discover, fetch, aggregate, analyze,
-// write output, and notify. Per-job fetch errors are logged but do not abort.
+// pipeline holds the resolved, reusable state for a run: config, storage,
+// collector, and AI settings. It is built once by setupPipeline and drives one
+// or many passes (one-shot Run, or repeated passes in RunWatch).
+type pipeline struct {
+	opts              Options
+	cfg               *project.Config
+	client            *http.Client
+	backend           storage.Backend
+	collector         collectors.Collector
+	enableAI          bool
+	aiToken           string
+	aiSystemPrompt    string
+	aiSkillSet        *skills.Set
+	includePresubmits bool
+}
+
+// refreshResult carries the outputs a pass needs for its side effects.
+type refreshResult struct {
+	details   []models.JobDetail
+	flakiness models.FlakinessReport
+}
+
+// Run executes the full pipeline once: load, discover, fetch, aggregate,
+// analyze, write output, and notify. Per-job fetch errors are logged but do not
+// abort.
 func Run(ctx context.Context, opts Options) error {
+	p, err := setupPipeline(opts)
+	if err != nil {
+		return err
+	}
+	if _, err := p.fullPass(ctx); err != nil {
+		return err
+	}
+	log.Println("Done!")
+	return nil
+}
+
+// setupPipeline loads config and resolves storage, collector, and AI settings.
+func setupPipeline(opts Options) (*pipeline, error) {
 	if opts.Collectors == nil {
-		return fmt.Errorf("fetcher.Options.Collectors registry is required")
+		return nil, fmt.Errorf("fetcher.Options.Collectors registry is required")
 	}
 
 	cfg, err := project.Load(filepath.Join(opts.ProjectDir, "project.yaml"))
 	if err != nil {
-		return fmt.Errorf("loading project config: %w", err)
+		return nil, fmt.Errorf("loading project config: %w", err)
 	}
 	log.Printf("Project: %s (%s) storage=%s bucket=%s",
 		cfg.Name, cfg.DisplayShortName(), cfg.StorageConfig().Provider, cfg.Storage.Bucket)
@@ -83,21 +119,22 @@ func Run(ctx context.Context, opts Options) error {
 	// Validate the collector reference against the registry up front so a
 	// typo'd artifacts.collector fails before any expensive work.
 	if !opts.Collectors.Has(cfg.CollectorName()) {
-		return fmt.Errorf("unknown artifacts.collector %q (registered: %s)",
+		return nil, fmt.Errorf("unknown artifacts.collector %q (registered: %s)",
 			cfg.CollectorName(), strings.Join(opts.Collectors.Names(), ", "))
 	}
 
 	// AI_TOKEN authenticates the configured chat-completions endpoint.
+	enableAI := opts.EnableAI
 	aiToken := os.Getenv("AI_TOKEN")
-	if opts.EnableAI && aiToken == "" {
+	if enableAI && aiToken == "" {
 		log.Println("Warning: -ai enabled but AI_TOKEN is not set, disabling AI analysis")
-		opts.EnableAI = false
+		enableAI = false
 	}
 	// AI needs an explicit endpoint and model. Fail fast rather than publishing a
 	// dashboard with missing analysis.
-	if opts.EnableAI {
+	if enableAI {
 		if aiEndpoint(cfg) == "" || aiModel(cfg) == "" {
-			return fmt.Errorf("AI is enabled but no provider is configured: set ai.endpoint and ai.model in project.yaml, or the AI_ENDPOINT and AI_MODEL env vars")
+			return nil, fmt.Errorf("AI is enabled but no provider is configured: set ai.endpoint and ai.model in project.yaml, or the AI_ENDPOINT and AI_MODEL env vars")
 		}
 	}
 
@@ -105,10 +142,10 @@ func Run(ctx context.Context, opts Options) error {
 	// configured, so a config error surfaces before any content errors.
 	var aiSystemPrompt string
 	var aiSkillSet *skills.Set
-	if opts.EnableAI {
+	if enableAI {
 		_, prompt, err := project.LoadDir(opts.ProjectDir)
 		if err != nil {
-			return fmt.Errorf("loading AI prompt: %w", err)
+			return nil, fmt.Errorf("loading AI prompt: %w", err)
 		}
 		aiSystemPrompt = ai.ComposeSystemPrompt(prompt)
 
@@ -117,7 +154,7 @@ func Run(ctx context.Context, opts Options) error {
 		// Parse or regex compile errors are hard startup errors.
 		set, err := skills.Load(opts.ProjectDir)
 		if err != nil {
-			return fmt.Errorf("loading AI skills: %w", err)
+			return nil, fmt.Errorf("loading AI skills: %w", err)
 		}
 		aiSkillSet = set
 		if n := len(aiSkillSet.Skills()); n > 0 {
@@ -126,30 +163,61 @@ func Run(ctx context.Context, opts Options) error {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, opts.Timeout)
-	defer cancel()
-
 	client := &http.Client{Timeout: 30 * time.Second}
 	backend, err := storage.New(cfg.StorageConfig(), client)
 	if err != nil {
-		return fmt.Errorf("configuring storage: %w", err)
+		return nil, fmt.Errorf("configuring storage: %w", err)
 	}
 
 	collector, err := opts.Collectors.Build(cfg, backend, client)
 	if err != nil {
-		return fmt.Errorf("building collector: %w", err)
+		return nil, fmt.Errorf("building collector: %w", err)
 	}
 	log.Printf("Using artifact collector: %s", collector.Name())
 
-	// Discover jobs from test-infra or from the artifact bucket's indexes.
+	return &pipeline{
+		opts:              opts,
+		cfg:               cfg,
+		client:            client,
+		backend:           backend,
+		collector:         collector,
+		enableAI:          enableAI,
+		aiToken:           aiToken,
+		aiSystemPrompt:    aiSystemPrompt,
+		aiSkillSet:        aiSkillSet,
+		includePresubmits: opts.IncludePresubmits || cfg.Source.IncludePresubmits,
+	}, nil
+}
+
+// fullPass runs discovery, a data refresh, and side effects under the run
+// timeout. It returns the discovered jobs so callers can reuse them.
+func (p *pipeline) fullPass(ctx context.Context) ([]models.ProwJob, error) {
+	ctx, cancel := context.WithTimeout(ctx, p.opts.Timeout)
+	defer cancel()
+
+	jobs, err := p.discover(ctx)
+	if err != nil {
+		return nil, err
+	}
+	res, err := p.refresh(ctx, jobs)
+	if err != nil {
+		return nil, err
+	}
+	p.runSideEffects(ctx, res)
+	return jobs, nil
+}
+
+// discover lists the project's jobs from test-infra or the artifact bucket.
+func (p *pipeline) discover(ctx context.Context) ([]models.ProwJob, error) {
+	cfg := p.cfg
 	var jobs []models.ProwJob
-	includePresubmits := opts.IncludePresubmits || cfg.Source.IncludePresubmits
+	var err error
 	switch cfg.EffectiveDiscoverySource() {
 	case project.DiscoveryBucket:
 		log.Println("Discovering jobs from the storage bucket...")
-		jobs, err = prowbuild.DiscoverJobs(ctx, backend, includePresubmits, cfg.Discovery.JobFilters)
+		jobs, err = prowbuild.DiscoverJobs(ctx, p.backend, p.includePresubmits, cfg.Discovery.JobFilters)
 		if err != nil {
-			return fmt.Errorf("discovering jobs from bucket: %w", err)
+			return nil, fmt.Errorf("discovering jobs from bucket: %w", err)
 		}
 		// Bucket discovery has no job-config YAML, so assign categories here.
 		for i := range jobs {
@@ -157,11 +225,11 @@ func Run(ctx context.Context, opts Options) error {
 		}
 	default:
 		log.Println("Fetching job configs from test-infra...")
-		jobs, err = jobconfig.FetchJobConfigs(ctx, client, cfg)
+		jobs, err = jobconfig.FetchJobConfigs(ctx, p.client, cfg)
 		if err != nil {
-			return fmt.Errorf("fetching job configs: %w", err)
+			return nil, fmt.Errorf("fetching job configs: %w", err)
 		}
-		if !includePresubmits {
+		if !p.includePresubmits {
 			var periodic []models.ProwJob
 			for _, j := range jobs {
 				if j.JobType == models.JobTypePeriodic {
@@ -171,12 +239,20 @@ func Run(ctx context.Context, opts Options) error {
 			jobs = periodic
 		}
 	}
-	log.Printf("Discovered %d jobs (presubmits=%v)", len(jobs), includePresubmits)
+	log.Printf("Discovered %d jobs (presubmits=%v)", len(jobs), p.includePresubmits)
 
 	// Derive the display-only short-name prefix from the discovered set so
 	// the frontend can render compact job names without consumers having to
 	// hand-maintain the prefix.
 	cfg.ShortNamePrefix = jobconfig.DerivePeriodicPrefix(jobs)
+	return jobs, nil
+}
+
+// refresh fetches each job's builds, aggregates, runs AI analysis, and writes
+// the output JSON. Completed builds are reused from the on-disk cache, so
+// repeated passes only fetch new or still-running builds.
+func (p *pipeline) refresh(ctx context.Context, jobs []models.ProwJob) (*refreshResult, error) {
+	cfg, opts := p.cfg, p.opts
 
 	// Fetch each job's builds. Cached completed builds are reused.
 	cachedJobs := loadCachedJobDetails(opts.OutDir)
@@ -199,7 +275,7 @@ func Run(ctx context.Context, opts Options) error {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			runs, err := fetchJobRunsCached(ctx, backend, cfg, collector, &j, opts.BuildsPerJob, cachedJobs[j.JobID])
+			runs, err := fetchJobRunsCached(ctx, p.backend, cfg, p.collector, &j, opts.BuildsPerJob, cachedJobs[j.JobID])
 			if err != nil {
 				mu.Lock()
 				fetchErrors = append(fetchErrors, fmt.Errorf("job %s: %w", j.Name, err))
@@ -259,8 +335,8 @@ func Run(ctx context.Context, opts Options) error {
 	log.Printf("Search index: %d entries", len(searchIndex.Entries))
 
 	// Run AI failure analysis when enabled.
-	if opts.EnableAI {
-		analyzeFailuresWithAI(ctx, cfg, details, flakinessReport, aiToken, opts.OutDir, aiSystemPrompt, aiSkillSet)
+	if p.enableAI {
+		analyzeFailuresWithAI(ctx, cfg, details, flakinessReport, p.aiToken, opts.OutDir, p.aiSystemPrompt, p.aiSkillSet)
 		// Fold systemic job-level verdicts into flakiness.json for the home page.
 		flakinessReport.RecurringPatterns = collectRecurringPatterns(details)
 		if n := len(flakinessReport.RecurringPatterns); n > 0 {
@@ -270,8 +346,18 @@ func Run(ctx context.Context, opts Options) error {
 
 	log.Printf("Writing output to %s/ (%d jobs)", opts.OutDir, len(dashboard.Jobs))
 	if err := output.WriteAll(opts.OutDir, cfg, dashboard, details, flakinessReport, searchIndex); err != nil {
-		return fmt.Errorf("writing output: %w", err)
+		return nil, fmt.Errorf("writing output: %w", err)
 	}
+
+	return &refreshResult{details: details, flakiness: flakinessReport}, nil
+}
+
+// runSideEffects handles notifications, issue filing, and draft PRs. These are
+// gated on their own env tokens and run after the data is written.
+func (p *pipeline) runSideEffects(ctx context.Context, res *refreshResult) {
+	cfg, opts := p.cfg, p.opts
+	details := res.details
+	flakinessReport := res.flakiness
 
 	// Send Slack notifications for persistent failures when configured.
 	if slackWebhookURL := os.Getenv("SLACK_WEBHOOK_URL"); slackWebhookURL != "" {
@@ -279,7 +365,7 @@ func Run(ctx context.Context, opts Options) error {
 			slackWebhookURL,
 			filepath.Join(opts.OutDir, "notification_state.json"),
 			cfg.Branding.SiteURL,
-			backend.ProwURL("logs/"),
+			p.backend.ProwURL("logs/"),
 		)
 		stats, err := notifier.ProcessFailures(ctx, flakinessReport, details)
 		if err != nil {
@@ -298,18 +384,71 @@ func Run(ctx context.Context, opts Options) error {
 	processIssues(ctx, cfg, flakinessReport, details, opts.OutDir)
 
 	// Draft skill-recipe PRs when enabled, AI ran, and SKILL_TOKEN is present.
-	if opts.EnableAI {
-		processSkillSuggestions(ctx, cfg, flakinessReport.RecurringPatterns, aiSkillSet, aiToken, opts.OutDir)
+	if p.enableAI {
+		processSkillSuggestions(ctx, cfg, flakinessReport.RecurringPatterns, p.aiSkillSet, p.aiToken, opts.OutDir)
 	}
 
 	// Draft fix PRs against the source repo when enabled, AI ran, and FIX_TOKEN
 	// is present.
-	if opts.EnableAI {
-		processFixPRs(ctx, cfg, flakinessReport.RecurringPatterns, aiToken, opts.OutDir)
+	if p.enableAI {
+		processFixPRs(ctx, cfg, flakinessReport.RecurringPatterns, p.aiToken, opts.OutDir)
+	}
+}
+
+// RunWatch runs the pipeline continuously as a single writer: a lightweight
+// refresh every watchInterval that reuses a cached job list, and a full pass
+// (rediscovery plus side effects) every reconcileInterval. Cached completed
+// builds mean each refresh only fetches new or still-running builds. It returns
+// when ctx is cancelled.
+func RunWatch(ctx context.Context, opts Options, watchInterval, reconcileInterval time.Duration) error {
+	if watchInterval <= 0 || reconcileInterval <= 0 {
+		return fmt.Errorf("watch and reconcile intervals must be positive (got watch=%s reconcile=%s)", watchInterval, reconcileInterval)
+	}
+	p, err := setupPipeline(opts)
+	if err != nil {
+		return err
 	}
 
-	log.Println("Done!")
-	return nil
+	// Seed the output and the job list with an initial full pass.
+	jobs, err := p.fullPass(ctx)
+	if err != nil {
+		log.Printf("⚠ initial pass failed: %v", err)
+	}
+
+	watch := time.NewTicker(watchInterval)
+	defer watch.Stop()
+	reconcile := time.NewTicker(reconcileInterval)
+	defer reconcile.Stop()
+
+	log.Printf("👀 watching: refresh every %s, reconcile every %s", watchInterval, reconcileInterval)
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-watch.C:
+			if len(jobs) == 0 {
+				// Initial discovery failed; retry it rather than idle until the
+				// next reconcile.
+				if newJobs, err := p.fullPass(ctx); err != nil {
+					log.Printf("⚠ discovery retry failed: %v", err)
+				} else {
+					jobs = newJobs
+				}
+				continue
+			}
+			passCtx, cancel := context.WithTimeout(ctx, opts.Timeout)
+			if _, err := p.refresh(passCtx, jobs); err != nil {
+				log.Printf("⚠ refresh failed: %v", err)
+			}
+			cancel()
+		case <-reconcile.C:
+			if newJobs, err := p.fullPass(ctx); err != nil {
+				log.Printf("⚠ reconcile failed: %v", err)
+			} else {
+				jobs = newJobs
+			}
+		}
+	}
 }
 
 // processIssues reconciles the project's highest-signal findings into GitHub

@@ -1,3 +1,7 @@
+{{- if not (or (eq .Values.mode "cron") (eq .Values.mode "watch")) }}
+{{- fail (printf "mode must be \"cron\" or \"watch\", got %q" .Values.mode) }}
+{{- end }}
+{{- if eq .Values.mode "cron" }}
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -100,3 +104,4 @@ spec:
                     path: prompts/system.md
             - name: tmp
               emptyDir: {}
+{{- end }}

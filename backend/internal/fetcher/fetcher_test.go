@@ -1,7 +1,9 @@
 package fetcher
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
@@ -100,5 +102,16 @@ func TestCollectRecurringPatterns_FiltersAndRanks(t *testing.T) {
 		if got[i].Subject != want {
 			t.Errorf("rank %d: got %q, want %q", i, got[i].Subject, want)
 		}
+	}
+}
+
+func TestRunWatch_RejectsNonPositiveIntervals(t *testing.T) {
+	ctx := context.Background()
+	opts := Options{Collectors: NewCollectorRegistry()}
+	if err := RunWatch(ctx, opts, 0, time.Hour); err == nil {
+		t.Error("expected error for zero watch interval")
+	}
+	if err := RunWatch(ctx, opts, time.Minute, 0); err == nil {
+		t.Error("expected error for zero reconcile interval")
 	}
 }

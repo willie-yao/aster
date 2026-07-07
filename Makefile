@@ -1,4 +1,4 @@
-.PHONY: all build build-server serve image test test-v e2e lint fmt tidy \
+.PHONY: all build build-server build-worker serve image test test-v e2e lint fmt tidy \
        fetch-data fetch-data-quick fetch-data-ai fetch-data-ai-quick \
        fe-install dev fe-build fe-check \
        dist dist-ai clean clean-cache clean-all deploy help
@@ -24,6 +24,10 @@ build:
 # Build the Kubernetes-native API server binary
 build-server:
 	cd backend && go build -o ../bin/server ./cmd/server/
+
+# Build the continuous watch worker binary
+build-worker:
+	cd backend && go build -o ../bin/worker ./cmd/worker/
 
 # Serve fetched data + capability descriptor over HTTP (server-mode preview).
 # Point a built SPA at it with -static-dir=frontend/dist for a self-contained run.

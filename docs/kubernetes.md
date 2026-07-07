@@ -35,6 +35,30 @@ mount the same `ReadWriteMany` volume: the fetcher writes `dashboard.json`,
 `jobs/*.json`, and the rest (plus its `ai_cache.json`), and the server reads
 them. `ReadWriteMany` is required so both pods can mount the claim at once.
 
+## Fetch modes: cron vs watch
+
+The chart produces data in one of two modes, set by `mode`. Both keep exactly
+one writer to the shared volume.
+
+- `mode: watch` (default): a continuous worker Deployment refreshes data on a
+  short interval, reusing a cached job list so it skips job rediscovery, and does
+  a full pass (rediscover jobs, run notifications and issue and PR side effects)
+  on a longer interval. Newly finished builds are analyzed within the watch
+  interval instead of waiting for the next cron tick. The worker uses a
+  `Recreate` rollout so an update never runs two writers at once.
+- `mode: cron`: the fetcher runs as a scheduled CronJob. Portable, and the same
+  binary the GitHub Actions + Pages path uses.
+
+Watch mode detects new builds by listing each job's builds in the artifact
+store and reusing the on-disk cache, the same mechanism a normal fetch uses. It
+needs no TestGrid API, no Prow or bucket ownership, and no pub/sub.
+
+The worker must be the only writer to the shared volume. Do not run the CronJob
+or a manual `fetch-now` Job alongside it, and do not point a second release at
+the same `existingClaim`. A `Recreate` rollout keeps a single worker across
+updates, and Helm-managed config or secret changes trigger a rollout
+automatically.
+
 ## Build and push the image
 
 ```bash
@@ -89,6 +113,7 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | Value | Purpose |
 | --- | --- |
 | `image.repository`, `image.tag` | Engine image; tag defaults to the chart `appVersion`. |
+| `mode` | `watch` (continuous worker Deployment, default) or `cron` (scheduled CronJob). |
 | `persistence.accessMode` | Must be `ReadWriteMany`. |
 | `persistence.storageClass`, `persistence.size` | The shared volume's class and size. |
 | `persistence.existingClaim` | Reuse a pre-provisioned PVC instead of creating one. |
@@ -96,7 +121,8 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | `project.existingConfigMap` | Reuse a ConfigMap with keys `project.yaml` and `system.md`. |
 | `ai.enabled`, `ai.endpoint`, `ai.model`, `ai.token` | AI analysis and its OpenAI-compatible endpoint. |
 | `ai.existingSecret`, `ai.tokenSecretKey` | Reuse a Secret holding the token. |
-| `fetcher.schedule` | Cron schedule (default every 6 hours). |
+| `fetcher.schedule` | Cron schedule (default every 6 hours). `mode: cron`. |
+| `fetcher.watchInterval`, `fetcher.reconcileInterval` | Refresh and full-pass cadence. `mode: watch`. |
 | `fetcher.buildsPerJob`, `fetcher.workers`, `fetcher.timeout` | Fetch depth and budget. |
 | `fetcher.extraEnv` | Extra env such as `GITHUB_TOKEN` or `SLACK_WEBHOOK_URL`. |
 | `ingress.enabled`, `ingress.hosts`, `ingress.tls` | Public read path. |

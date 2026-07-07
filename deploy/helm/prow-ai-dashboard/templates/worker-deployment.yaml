@@ -1,0 +1,118 @@
+{{- if eq .Values.mode "watch" }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "prow-ai-dashboard.fullname" . }}-worker
+  labels:
+    {{- include "prow-ai-dashboard.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  # Single writer: Recreate ensures the old pod stops before the new one starts.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "prow-ai-dashboard.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      {{- $cmManaged := not .Values.project.existingConfigMap }}
+      {{- $secretManaged := and .Values.ai.enabled (not .Values.ai.existingSecret) }}
+      {{- if or $cmManaged $secretManaged }}
+      annotations:
+        {{- if $cmManaged }}
+        checksum/project-config: {{ include (print $.Template.BasePath "/configmap-project.yaml") . | sha256sum }}
+        {{- end }}
+        {{- if $secretManaged }}
+        checksum/ai-secret: {{ include (print $.Template.BasePath "/secret-ai.yaml") . | sha256sum }}
+        {{- end }}
+      {{- end }}
+      labels:
+        {{- include "prow-ai-dashboard.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+    spec:
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: worker
+          image: {{ include "prow-ai-dashboard.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - /usr/local/bin/worker
+            - -project-dir={{ .Values.project.mountPath }}
+            - -out={{ .Values.persistence.mountPath }}
+            - -builds={{ .Values.fetcher.buildsPerJob }}
+            - -workers={{ .Values.fetcher.workers }}
+            - -timeout={{ .Values.fetcher.timeout }}
+            - -watch-interval={{ .Values.fetcher.watchInterval }}
+            - -reconcile-interval={{ .Values.fetcher.reconcileInterval }}
+            {{- if .Values.fetcher.includePresubmits }}
+            - -include-presubmits
+            {{- end }}
+            {{- if .Values.ai.enabled }}
+            - -ai
+            {{- end }}
+          env:
+            {{- if .Values.ai.enabled }}
+            - name: AI_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "prow-ai-dashboard.aiSecret" . }}
+                  key: {{ .Values.ai.tokenSecretKey }}
+            {{- if .Values.ai.endpoint }}
+            - name: AI_ENDPOINT
+              value: {{ .Values.ai.endpoint | quote }}
+            {{- end }}
+            {{- if .Values.ai.model }}
+            - name: AI_MODEL
+              value: {{ .Values.ai.model | quote }}
+            {{- end }}
+            {{- end }}
+            {{- with .Values.fetcher.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: {{ .Values.persistence.mountPath }}
+            - name: project
+              mountPath: {{ .Values.project.mountPath }}
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            {{- toYaml .Values.fetcher.resources | nindent 12 }}
+      {{- with .Values.fetcher.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.fetcher.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.fetcher.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "prow-ai-dashboard.pvcName" . }}
+        - name: project
+          configMap:
+            name: {{ include "prow-ai-dashboard.projectConfigMap" . }}
+            items:
+              - key: project.yaml
+                path: project.yaml
+              - key: system.md
+                path: prompts/system.md
+        - name: tmp
+          emptyDir: {}
+{{- end }}
