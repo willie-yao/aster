@@ -119,6 +119,9 @@ func TestHandler_SPAFallback(t *testing.T) {
 	if got := readBody(t, resp); got != "console.log(1)" {
 		t.Errorf("asset body = %q", got)
 	}
+	if got := resp.Header.Get("Cache-Control"); got != "public, max-age=31536000, immutable" {
+		t.Errorf("asset Cache-Control = %q, want immutable long cache", got)
+	}
 
 	// A client-side route falls back to index.html.
 	resp, err = http.Get(srv.URL + "/job/periodic-x/test/foo")
@@ -127,6 +130,32 @@ func TestHandler_SPAFallback(t *testing.T) {
 	}
 	if got := readBody(t, resp); got != "<!doctype html><title>app</title>" {
 		t.Errorf("deep-link body = %q, want index.html", got)
+	}
+	if got := resp.Header.Get("Cache-Control"); got != "no-cache" {
+		t.Errorf("index fallback Cache-Control = %q, want no-cache", got)
+	}
+}
+
+// TestHandler_DataNoCache verifies the frequently-rewritten data files are
+// served no-cache so browsers revalidate instead of serving a stale copy.
+func TestHandler_DataNoCache(t *testing.T) {
+	dataDir := t.TempDir()
+	writeFile(t, dataDir, "dashboard.json", `{"generated_at":"now"}`)
+
+	h, err := Handler(Options{DataDir: dataDir, Capabilities: DefaultCapabilities()})
+	if err != nil {
+		t.Fatalf("Handler: %v", err)
+	}
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/data/dashboard.json")
+	if err != nil {
+		t.Fatalf("GET dashboard.json: %v", err)
+	}
+	resp.Body.Close()
+	if got := resp.Header.Get("Cache-Control"); got != "no-cache" {
+		t.Errorf("data Cache-Control = %q, want no-cache", got)
 	}
 }
 

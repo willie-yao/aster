@@ -138,9 +138,12 @@ func Handler(opts Options) (http.Handler, error) {
 
 	// /data/* serves the fetcher output tree (manifest.json, dashboard.json,
 	// jobs/*.json, flakiness.json, search-index.json) at read parity. Directory
-	// listings are disabled so it serves files, not a browsable tree.
+	// listings are disabled so it serves files, not a browsable tree. The data
+	// is rewritten every fetch, so mark it no-cache: the browser revalidates via
+	// If-Modified-Since (cheap 304 when unchanged) instead of serving a stale
+	// copy from its heuristic cache.
 	dataFS := http.FileServer(noListFS{http.Dir(opts.DataDir)})
-	mux.Handle("/data/", http.StripPrefix("/data/", dataFS))
+	mux.Handle("/data/", http.StripPrefix("/data/", noCache(dataFS)))
 
 	if opts.StaticDir != "" {
 		if info, err := os.Stat(opts.StaticDir); err != nil {
@@ -212,24 +215,44 @@ func actionHandler(timeout time.Duration, run actionFunc) http.Handler {
 
 // spaHandler serves a single-page app from dir: real files are served as-is,
 // and any unmatched path falls back to index.html so client-side routes resolve
-// on deep links and refreshes.
+// on deep links and refreshes. Content-hashed build assets under /assets/ are
+// cached immutably; index.html is never cached so a new deploy is picked up
+// immediately.
 func spaHandler(dir string) http.HandlerFunc {
 	index := filepath.Join(dir, "index.html")
 	fileServer := http.FileServer(http.Dir(dir))
+	serveIndex := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		http.ServeFile(w, r, index)
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		clean := filepath.Clean(strings.TrimPrefix(r.URL.Path, "/"))
 		// Anything that is not a lexically local path (traversal, absolute) or
 		// is the root falls back to index.html rather than touching the disk.
 		if clean == "." || !filepath.IsLocal(clean) {
-			http.ServeFile(w, r, index)
+			serveIndex(w, r)
 			return
 		}
 		if info, err := os.Stat(filepath.Join(dir, clean)); err == nil && !info.IsDir() {
+			// Vite emits content-hashed filenames under assets/, so they can be
+			// cached forever; a content change yields a new name.
+			if strings.HasPrefix(clean, "assets/") {
+				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			}
 			fileServer.ServeHTTP(w, r)
 			return
 		}
-		http.ServeFile(w, r, index)
+		serveIndex(w, r)
 	}
+}
+
+// noCache marks a response as always-revalidate so browsers don't serve a stale
+// heuristically-cached copy of the frequently-rewritten data files.
+func noCache(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		next.ServeHTTP(w, r)
+	})
 }
 
 // noListFS wraps an http.FileSystem to disable directory listings: opening a
