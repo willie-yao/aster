@@ -11,12 +11,25 @@ site by calling the reusable workflow shipped here from any repo it controls.
 
 ## How it works
 
-A project ships three files in a dedicated repo or a subdirectory of an existing
-one: `project.yaml`, `prompts/system.md`, and a ~20-line `deploy.yml`. The host
-repo must not already publish a GitHub Pages site.
+The same engine ships **two deploy paths**; pick per project. Both build from
+one codebase, run the same Go fetcher and React UI, and read the same
+`project.yaml` + `prompts/system.md`.
+
+**Kubernetes-native (in-cluster).** A worker runs the fetch and AI analysis
+inside your cluster, next to the inference stack, and a small server serves the
+dashboard plus the `/data/*.json` contract from a shared volume. The AI calls
+stay in-cluster (low latency, no egress, private endpoints work), and it unlocks
+interactive admin actions (File issue / Propose fix) behind GitHub sign-in.
+Deployed with the Helm chart in [`deploy/helm`](deploy/helm). See
+[Kubernetes deploy](docs/kubernetes.md) and [Server mode](docs/server.md).
+
+**GitHub Actions + Pages (static).** A ~20-line reusable workflow runs the
+fetcher on a schedule, builds the branded SPA, and publishes to the host repo's
+GitHub Pages. Public, cheap, no backend or cluster. Read-only (no interactive
+actions).
 
 ```yaml
-# <your-repo>/.github/workflows/deploy.yml
+# <your-repo>/.github/workflows/deploy.yml  (Pages path)
 jobs:
   deploy:
     uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
@@ -27,13 +40,17 @@ jobs:
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 ```
 
-The reusable workflow checks out the host repo for the config and prompt and
-this engine for the code, runs the fetcher against `<project_dir>`, builds the
-branded frontend, and publishes to the host's GitHub Pages via
-`actions/deploy-pages`. For repos that already use Pages or whose AI endpoint is
-private, see the escape hatches in
-[onboarding](docs/onboarding-a-new-project.md) and
-[in-cluster runners](docs/self-hosted-runner-in-cluster.md).
+Both paths serve the identical `/data/*.json` schema; the Kubernetes-native
+server is a strict superset that adds a capability descriptor the frontend uses
+to light up server-only features. Whichever you pick, you never fork the engine.
+
+| | Kubernetes-native | GitHub Actions + Pages |
+| --- | --- | --- |
+| Runs the fetch | In-cluster worker/CronJob | GitHub Actions runner |
+| Serves the site | In-cluster server (+ ingress) | GitHub Pages |
+| AI endpoint | In-cluster or public | Public (or self-hosted runner) |
+| Interactive actions | Yes (admin sign-in) | No (read-only) |
+| Needs a cluster | Yes | No |
 
 ## What you configure
 
@@ -46,15 +63,15 @@ A dashboard is shaped by three things:
   hard-errors if it is missing when `-ai` is enabled.
 - **Engine collectors and AI modules** in `backend/internal/collectors/` and
   `backend/internal/ai/modules/`, selected by `project.yaml`. The engine itself,
-  a Go fetcher in `backend/` and a React UI in `frontend/`, is built per project
-  at deploy time; you never fork it.
+  a Go fetcher in `backend/` and a React UI in `frontend/`, is built or imaged
+  per project at deploy time; you never fork it.
 
 ## Documentation
 
 **Getting started**
-- [Onboarding a new project](docs/onboarding-a-new-project.md): the single
-  setup path. The `onboard` subcommand scaffolds a dashboard, then a full
-  field-by-field reference covers the rest.
+- [Onboarding a new project](docs/onboarding-a-new-project.md): choose a deploy
+  path, scaffold it with the `onboard` subcommand (`-mode k8s` or Pages), then a
+  full field-by-field reference covers the rest.
 
 **Configuration & authoring**
 - [AI providers](docs/ai-providers.md): point the engine at any
@@ -74,13 +91,14 @@ A dashboard is shaped by three things:
   and open a guardrailed draft PR against the source repo.
 
 **Operations**
-- [In-cluster runner](docs/self-hosted-runner-in-cluster.md): run the deploy on
-  a self-hosted runner to reach a private, in-cluster AI endpoint.
-- [Server mode](docs/server.md): run the dashboard Kubernetes-native, serving
-  the same `/data/*.json` contract plus a capability descriptor, while keeping
-  static Pages as the default.
-- [Kubernetes deploy](docs/kubernetes.md): run the fetcher as a CronJob and the
-  server from a shared volume, via the Helm chart in `deploy/helm`.
+- [Kubernetes deploy](docs/kubernetes.md): run the dashboard in-cluster, a
+  worker/CronJob writing to a shared volume that a server reads, via the Helm
+  chart in `deploy/helm`.
+- [Server mode](docs/server.md): the in-cluster server that serves the same
+  `/data/*.json` contract plus a capability descriptor and admin-gated actions.
+- [In-cluster runner](docs/self-hosted-runner-in-cluster.md): for the Pages
+  path, run the deploy on a self-hosted runner to reach a private, in-cluster
+  AI endpoint.
 - [Releasing](docs/releasing.md): cut an engine release and how consumers pin.
 
 **Development**
@@ -91,10 +109,17 @@ A dashboard is shaped by three things:
 
 ## Adding a project
 
-See [onboarding](docs/onboarding-a-new-project.md). In short: add `project.yaml`
-and `prompts/system.md` to a repo, add a `deploy.yml` calling
-`reusable-deploy.yml@main` as shown above, set the `AI_TOKEN` secret, and enable
-GitHub Pages with **Source: GitHub Actions**. No engine PR required.
+See [onboarding](docs/onboarding-a-new-project.md). The `onboard` subcommand
+scaffolds either path:
+
+- **Kubernetes-native**: `onboard -mode k8s` generates `project.yaml`,
+  `prompts/system.md`, and a `deploy/` folder (Helm `values.yaml` + a deploy
+  README). Fill in the RWX storage class and AI endpoint, then `helm install`.
+- **GitHub Actions + Pages**: `onboard` (default) generates `project.yaml`,
+  `prompts/system.md`, and the two workflow files. Set the `AI_TOKEN` secret and
+  enable Pages with **Source: GitHub Actions**.
+
+Either way: no engine fork, no engine PR.
 
 ## License
 

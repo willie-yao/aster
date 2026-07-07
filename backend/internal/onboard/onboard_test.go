@@ -326,3 +326,103 @@ func TestScaffold_LoadsViaLoadDir(t *testing.T) {
 		t.Error("expected writeFiles to refuse overwriting existing files")
 	}
 }
+
+// TestValidateOptions_Mode checks the deploy-mode flag defaults to pages and
+// rejects an unknown value.
+func TestValidateOptions_Mode(t *testing.T) {
+	t.Run("defaults to pages", func(t *testing.T) {
+		opts := testOpts()
+		if err := validateOptions(&opts); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if opts.Mode != modePages {
+			t.Errorf("Mode = %q, want %q", opts.Mode, modePages)
+		}
+	})
+	t.Run("k8s accepted", func(t *testing.T) {
+		opts := testOpts()
+		opts.Mode = modeK8s
+		if err := validateOptions(&opts); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+	t.Run("unknown rejected", func(t *testing.T) {
+		opts := testOpts()
+		opts.Mode = "helmchart"
+		if err := validateOptions(&opts); err == nil || !strings.Contains(err.Error(), "--mode") {
+			t.Errorf("err = %v, want --mode error", err)
+		}
+	})
+}
+
+// TestScaffold_K8sMode confirms the Kubernetes-native scaffold loads, serves at
+// the domain root, seeds the Helm values from the AI env, and emits no Pages
+// workflow files.
+func TestScaffold_K8sMode(t *testing.T) {
+	opts := testOpts()
+	opts.Mode = modeK8s
+	opts.AIEndpoint = "http://model.ns.svc.cluster.local:8000/v1/chat/completions"
+	opts.AIModel = "some-model-id"
+	if err := validateOptions(&opts); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	data := buildScaffoldData(opts, nil)
+
+	// Kubernetes-native serves at the domain root, not a gh-pages subpath.
+	if data.BasePath != "/" {
+		t.Errorf("base_path = %q, want /", data.BasePath)
+	}
+
+	projectYAML, err := renderProjectYAML(data)
+	if err != nil {
+		t.Fatalf("render project.yaml: %v", err)
+	}
+	values, err := render(k8sValuesTmpl, data)
+	if err != nil {
+		t.Fatalf("render values.yaml: %v", err)
+	}
+	if !strings.Contains(values, opts.AIEndpoint) || !strings.Contains(values, opts.AIModel) {
+		t.Errorf("values.yaml did not seed AI endpoint/model from env:\n%s", values)
+	}
+	readme, err := render(k8sDeployReadmeTmpl, data)
+	if err != nil {
+		t.Fatalf("render deploy README: %v", err)
+	}
+	// The install commands must reference the scaffold directory (the dashboard
+	// repo name), not the human display name, and the namespace/release must be
+	// a DNS-1123-safe name.
+	if !strings.Contains(readme, "../"+data.DashboardName+"/deploy/values.yaml") {
+		t.Errorf("README does not reference the scaffold dir %q:\n%s", data.DashboardName, readme)
+	}
+	if strings.Contains(readme, "../"+data.Name+"/") {
+		t.Errorf("README uses the display name %q as a path", data.Name)
+	}
+	if data.Namespace != "my-proj" {
+		t.Errorf("Namespace = %q, want DNS-safe my-proj", data.Namespace)
+	}
+	prompt, err := render(systemPromptTmpl, data)
+	if err != nil {
+		t.Fatalf("render prompt: %v", err)
+	}
+
+	dir := t.TempDir()
+	if err := writeFiles(dir, map[string]string{
+		"project.yaml":       projectYAML,
+		"prompts/system.md":  prompt,
+		"deploy/values.yaml": values,
+		"deploy/README.md":   readme,
+	}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	cfg, gotPrompt, err := project.LoadDir(dir)
+	if err != nil {
+		t.Fatalf("LoadDir rejected the k8s scaffold: %v", err)
+	}
+	if cfg.Branding.BasePath != "/" {
+		t.Errorf("loaded base_path = %q, want /", cfg.Branding.BasePath)
+	}
+	if strings.TrimSpace(gotPrompt) == "" {
+		t.Error("k8s scaffold still needs a non-empty prompts/system.md")
+	}
+}

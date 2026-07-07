@@ -1,16 +1,18 @@
 # Server mode (Kubernetes-native)
 
-The dashboard ships two deploy modes from one codebase:
+The dashboard ships two coequal deploy paths from one codebase:
 
-- **Static (default).** The fetcher writes JSON, GitHub Actions builds the SPA,
-  and GitHub Pages serves it. Public, cheap, no backend.
-- **Server.** A small Go server (`backend/cmd/server`) serves the same JSON over
-  HTTP alongside the inference stack, so the site can later gain stateful,
-  interactive features. The static path keeps working unchanged.
+- **Kubernetes-native (this page).** A small Go server (`backend/cmd/server`)
+  serves the dashboard and its JSON over HTTP alongside the inference stack,
+  reading from a shared volume a worker or CronJob writes. It adds a capability
+  descriptor and admin-gated interactive actions on top of the read contract.
+- **Static.** The fetcher writes JSON, GitHub Actions builds the SPA, and GitHub
+  Pages serves it. Public, cheap, no backend.
 
 Server mode is a strict superset of the static contract: it serves the exact
 same `/data/*.json` files the SPA already reads, then adds a capability
-descriptor the frontend uses to discover server-only features.
+descriptor the frontend uses to discover server-only features. The static path
+keeps working unchanged, and all `/data/*.json` schemas stay byte-compatible.
 
 ## Endpoints
 

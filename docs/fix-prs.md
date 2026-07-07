@@ -132,6 +132,7 @@ independent than the model grading its own work.
 Wire the token into the deploy workflow:
 
 ```yaml
+# .github/workflows/deploy.yml  (GitHub Actions + Pages path)
 jobs:
   deploy:
     uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
@@ -139,6 +140,11 @@ jobs:
       AI_TOKEN: ${{ secrets.AI_TOKEN }}
       FIX_TOKEN: ${{ secrets.FIX_TOKEN }}
 ```
+
+On the [Kubernetes-native](kubernetes.md) path, set `FIX_TOKEN` on the worker via
+`fetcher.extraEnv` in the Helm values instead. An admin can also draft a single
+fix PR on demand from the UI, using their own token (see
+[server.md](server.md#admin-gated-actions)).
 
 ## Start with dry-run
 

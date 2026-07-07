@@ -17,6 +17,12 @@ type Options struct {
 	// SourceRepo is the owner/name repo for the code under test.
 	SourceRepo string
 
+	// Mode selects the deploy target the scaffold is generated for:
+	// "pages" (GitHub Actions + Pages, the default) or "k8s" (Kubernetes-native
+	// Helm). It changes which deploy files are emitted and the branding
+	// defaults; project.yaml and prompts/system.md are the same either way.
+	Mode string
+
 	// ID/Name override the derived project identity. Optional.
 	ID   string
 	Name string

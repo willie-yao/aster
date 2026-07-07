@@ -2,29 +2,47 @@
 
 The fastest way to add a prow-ai-dashboard project is the [`onboard`
 subcommand](#fast-start-scaffold-it-with-onboard) below: it scaffolds the whole
-file set for you. The rest of this page is the full reference for the fields and
-steps it generates, plus the options it leaves at their defaults: job grouping,
-presubmits, host-repo choice, version pinning, and private chat-completions
-endpoints.
+file set for either deploy path. The rest of this page is the full reference for
+the fields and steps it generates.
+
+## Choose your path
+
+The engine ships two deploy paths from one codebase. Pick per project; both use
+the same `project.yaml` and `prompts/system.md`, and you never fork the engine.
+
+- **Kubernetes-native** (this page covers it [first](#step-3-deploy)). A worker
+  runs the fetch and AI analysis in your cluster and a server serves the
+  dashboard from a shared volume. Choose it when the model runs in-cluster (or
+  you want analysis to stay in-cluster), or when you want the interactive admin
+  actions (File issue / Propose fix, which are Kubernetes-native only). Needs a
+  cluster with a `ReadWriteMany` storage class.
+- **GitHub Actions + Pages** (covered [second](#step-3b-github-actions--pages)).
+  A reusable workflow runs the fetcher on a schedule and publishes a static site
+  to GitHub Pages. Choose it for a public, backend-free dashboard with no
+  cluster. Read-only. The host repo must not already publish a Pages site.
+
+`onboard` scaffolds either: `-mode k8s` for the Kubernetes-native layout,
+`-mode pages` (the default) for the Pages layout.
 
 ## What you ship
 
 A dashboard is a few small files in a **dedicated repo** or a **subdirectory of
-an existing repo** that does not already publish a GitHub Pages site. Everything
-else is reused from the engine at deploy time.
+an existing repo**. Everything else is reused from the engine at deploy time.
+The config and prompt are the same for both paths; only the deploy files differ.
 
 ```
-<host-repo>/
-├── <project_dir>/             # repo root, or a subdir of your choice
-│   ├── project.yaml           # bucket, branding, chat-completions endpoint
-│   └── prompts/system.md      # AI prompt addendum (required)
-└── .github/workflows/
-    ├── deploy.yml             # calls the reusable deploy workflow
-    └── clear-cache.yml        # calls the reusable clear-cache workflow
+# Kubernetes-native (-mode k8s)          # GitHub Actions + Pages (default)
+<repo>/                                  <host-repo>/
+├── project.yaml                         ├── <project_dir>/
+├── prompts/system.md                    │   ├── project.yaml
+└── deploy/                              │   └── prompts/system.md
+    ├── values.yaml   # Helm values      └── .github/workflows/
+    └── README.md     # install steps        ├── deploy.yml
+                                              └── clear-cache.yml
 ```
 
-- `project_dir` on the reusable workflow points at wherever `project.yaml`
-  lives: `.` for a dedicated repo, or a subdir such as `dashboard/`.
+- `project_dir` (Pages) points at wherever `project.yaml` lives: `.` for a
+  dedicated repo, or a subdir such as `dashboard/`.
 - No Go or React code, and no engine fork.
 - Both **periodic** and **presubmit** jobs are supported. Periodics are on by
   default; enable presubmits with `source.include_presubmits: true` in
@@ -34,9 +52,14 @@ else is reused from the engine at deploy time.
 
 The `onboard` subcommand generates this whole file set for you. It verifies your
 discovery config actually finds jobs, infers `categories` from the job names,
-and produces a ready-to-review scaffold (`project.yaml`, both workflows, a
-`prompts/system.md` draft, and a `CHECKLIST.md` of the manual steps). It never
-touches secrets.
+and produces a ready-to-review scaffold plus a `CHECKLIST.md` of the manual
+steps. It never touches secrets. `-mode` selects the deploy path:
+
+- `-mode k8s`: `project.yaml`, a `prompts/system.md` draft, and a `deploy/`
+  folder (Helm `values.yaml` + a deploy README). When `AI_ENDPOINT` / `AI_MODEL`
+  are set (below), they seed `deploy/values.yaml` so the install is ready to run.
+- `-mode pages` (default): `project.yaml`, a `prompts/system.md` draft, and the
+  two workflow files (`deploy.yml`, `clear-cache.yml`).
 
 There are two ways to run it, from least to most setup.
 
@@ -54,9 +77,11 @@ go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboar
   -testgrid "<your-testgrid-dashboard-name>" \
   -dashboard-repo "<owner>/<dashboard-repo>" \
   -source-repo "<owner>/<code-repo-under-test>" \
+  -mode k8s \
   -out ./my-dashboard
 ```
 
+Drop `-mode k8s` (or pass `-mode pages`) for the GitHub Actions + Pages layout.
 This writes a local scaffold directory you review and push yourself. To skip the
 local copy and have onboard open the PR for you, swap `-out` for `-open-pr`. It
 uses `GITHUB_TOKEN` for write access to the dashboard repo (needs
@@ -97,10 +122,11 @@ with TODOs instead. Either way the result is **a draft to review**, not a
 finished prompt; prompt quality is the biggest lever on analysis depth.
 
 Then **review the output**: refine `prompts/system.md`, trim or reorder the
-inferred `categories`, and follow `CHECKLIST.md` for the GitHub configuration
-(enable Pages, set the deploy-time `AI_TOKEN` secret). The sections below are the
-manual reference for each generated field if you prefer to write them by hand or
-to understand what the scaffold produced.
+inferred `categories`, and follow `CHECKLIST.md` for the remaining steps (for
+Pages: enable Pages and set the `AI_TOKEN` secret; for Kubernetes-native: fill in
+`deploy/values.yaml` and `helm install`). The sections below are the manual
+reference for each generated field if you prefer to write them by hand or to
+understand what the scaffold produced.
 
 ## Step 0: sweep the jobs first
 
@@ -169,10 +195,15 @@ which annotates every field. The fields that matter:
   excluded automatically.
 - **`branding`** (required):
   - `title`: header text, e.g. `"My Project Prow Dashboard"`.
-  - `base_path`: the Pages sub-path, which is `/` plus the repo that serves
-    Pages, e.g. `/myproject-prow-ai-dashboard`. Leading slash, no trailing slash.
-  - `site_url`: the full Pages URL, e.g.
-    `https://my-org.github.io/myproject-prow-ai-dashboard`.
+  - `base_path`: where the SPA is served. For Pages it is the sub-path `/` plus
+    the repo that serves Pages, e.g. `/myproject-prow-ai-dashboard` (leading
+    slash, no trailing slash). For Kubernetes-native the server serves at the
+    domain root, so use `/`.
+  - `site_url`: the full dashboard URL. For Pages, e.g.
+    `https://my-org.github.io/myproject-prow-ai-dashboard`. For Kubernetes-native
+    use your ingress hostname, or a placeholder such as `http://localhost:8080`
+    until one exists (it is only used for the dashboard link in issue/PR bodies
+    and the UI).
   - `source_repo`: the project's code repo, as `{owner, name}`, e.g.
     `{owner: kubernetes, name: kubernetes}`. Used to link cited source files;
     this is the code repo, not the dashboard repo.
@@ -218,7 +249,102 @@ Required: the fetcher hard-errors at startup if it is missing or
 whitespace-only. There is no default prompt. See
 [writing-prompts.md](writing-prompts.md) for the sections worth including.
 
-## Step 3: workflows
+## Step 3: deploy
+
+Pick the path you chose above. Kubernetes-native is covered first, GitHub Actions
++ Pages second.
+
+### Step 3a: Kubernetes-native
+
+`onboard -mode k8s` writes a `deploy/` folder with a Helm `values.yaml` and a
+`README.md`. If you are writing it by hand, `deploy/values.yaml` supplies the
+engine chart at `willie-yao/prow-ai-dashboard/deploy/helm/prow-ai-dashboard`;
+`project.yaml` and `prompts/system.md` are passed separately at install time.
+
+**Prerequisites.**
+
+- A cluster with an OpenAI-compatible chat-completions endpoint reachable over
+  cluster DNS (or a public one). See [ai-providers.md](ai-providers.md).
+- A `ReadWriteMany` storage class: the worker (writer) and server (reader) mount
+  one shared volume at once. Examples: `azurefile-csi` (AKS), `efs-sc` (EKS),
+  `filestore`/`nfs` (GKE).
+- A checkout of `willie-yao/prow-ai-dashboard` for the chart, plus `helm` and
+  `kubectl` pointed at the cluster.
+
+**`deploy/values.yaml`.** Set the storage class and the AI endpoint/model; the
+token is passed at install time, not committed.
+
+```yaml
+image:
+  tag: main                    # or a release tag
+mode: watch                    # continuous in-cluster worker (single writer)
+persistence:
+  storageClass: "<your-rwx-storage-class>"
+  accessMode: ReadWriteMany
+  size: 1Gi
+ai:
+  enabled: true
+  endpoint: "http://<your-model-svc>.<ns>.svc.cluster.local:8000/v1/chat/completions"
+  model: "<your-model-id>"
+fetcher:
+  buildsPerJob: 10
+  workers: 4
+  timeout: 120m                # per-pass cap; keep it > a cold serial pass on a slow model
+  watchInterval: 5m
+  reconcileInterval: 1h
+```
+
+> **Timeout note.** `fetcher.timeout` is a per-**pass** cap. On a slow
+> self-hosted model, a cold pass analyzing many failures serially can be long;
+> keep it comfortably larger than that pass or tail failures die with
+> `context deadline exceeded`. The AI cache persists across passes, so only the
+> cold pass is slow.
+
+**Install.** From the engine checkout, pointing at your dashboard repo:
+
+```bash
+helm upgrade --install myproject deploy/helm/prow-ai-dashboard \
+  --namespace myproject --create-namespace \
+  -f ../myproject-dashboard/deploy/values.yaml \
+  --set-file project.config=../myproject-dashboard/project.yaml \
+  --set-file project.systemPrompt=../myproject-dashboard/prompts/system.md \
+  --set ai.token=<token>   # any non-empty string if the endpoint needs no key
+```
+
+Provide the token via `--set ai.token=...` (or `ai.existingSecret` for
+production, so it stays out of shell history and Helm metadata; see
+[kubernetes.md](kubernetes.md)).
+
+**Access and validate.** Port-forward the server:
+
+```bash
+kubectl -n myproject port-forward svc/myproject-prow-ai-dashboard-server 8080:80
+open http://localhost:8080
+```
+
+Follow the worker as it populates data:
+
+```bash
+kubectl -n myproject logs -f deploy/myproject-prow-ai-dashboard-worker
+```
+
+The first cold pass can be slow on a self-hosted model; the dashboard fills in
+once it completes. Then check:
+
+- `http://localhost:8080/healthz` returns `ok`.
+- `http://localhost:8080/api/capabilities` reports `"mode":"server"`.
+- `http://localhost:8080/data/dashboard.json` lists your jobs (count matches
+  Step 0), and its `generated_at` is recent.
+- For a failing job, `.../data/jobs/<sanitized-job-id>.json` has failed
+  `test_cases` with an `ai_summary` naming real symbols from your project.
+
+**Optional: interactive actions.** To enable the admin-gated **File issue** /
+**Propose fix** buttons (Kubernetes-native only), register a GitHub OAuth App and
+set `server.actions` in `values.yaml`. See
+[server.md](server.md#setting-up-oauth-mode) for the OAuth walkthrough and
+[kubernetes.md](kubernetes.md#enabling-actions-with-helm) for the Helm wiring.
+
+### Step 3b: GitHub Actions + Pages
 
 Two thin callers of the engine's reusable workflows, both under
 `.github/workflows/`. Set `project_dir` to match where `project.yaml` lives
@@ -300,7 +426,7 @@ uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
 - Optional: set `min_engine_version` in `project.yaml` to warn (advisory only)
   when the pinned engine is older than your config expects.
 
-## Step 4: pick a host repo
+### Pick a host repo (Pages)
 
 Both options end up at `https://<org>.github.io/<repo>/`.
 
@@ -328,7 +454,7 @@ A repo can serve only one Pages site. If the existing repo already publishes
 Pages, use Option A (a dedicated repo); enabling the dashboard's deploy would
 replace the existing site. Non-Pages deploy targets are not yet supported.
 
-## Step 5: manual GitHub config
+### Manual GitHub config (Pages)
 
 Done once by the host-repo owner; not scriptable from the engine.
 
@@ -342,7 +468,7 @@ gh secret set AI_TOKEN --repo my-org/<repo-name>
 gh secret set SLACK_WEBHOOK_URL --repo my-org/<repo-name>
 ```
 
-## Step 6: first deploy + validation
+### First deploy + validation (Pages)
 
 ```bash
 gh workflow run deploy.yml --repo my-org/<repo-name>
@@ -363,10 +489,12 @@ redeploy. Prompt edits take effect automatically: the affected analyses re-run
 on the next deploy with no cache clear. Two or three iterations is normal. (To
 re-baseline everything at once, run the **Clear AI Cache** workflow first.)
 
-## Optional: chat-completions endpoint unreachable from GitHub-hosted runners
+## Optional (Pages): chat-completions endpoint unreachable from GitHub-hosted runners
 
-If your endpoint is private (a cloud private endpoint, a K8s ClusterIP service,
-on-prem inference), GitHub-hosted runners cannot reach it. Two options:
+On the Pages path, if your endpoint is private (a cloud private endpoint, a K8s
+ClusterIP service, on-prem inference), GitHub-hosted runners cannot reach it.
+Two options (or switch to the Kubernetes-native path in Step 3a, where the fetch
+runs in-cluster next to the endpoint):
 
 **Fetch locally, publish pre-fetched data.** Set `skip-fetch: true` under
 `with:` in `deploy.yml` so each deploy publishes the committed

@@ -60,6 +60,7 @@ func runOnboard(args []string) {
 	fs.StringVar(&opts.GCSWebBase, "gcsweb-base", "", "gcsweb gateway root for the bucket (e.g. https://gcsweb.istio.io/s3); selects the gcsweb provider")
 	fs.StringVar(&opts.DashboardRepo, "dashboard-repo", "", "owner/name of the repo that will publish the dashboard (required)")
 	fs.StringVar(&opts.SourceRepo, "source-repo", "", "owner/name of the code repo under test (required)")
+	fs.StringVar(&opts.Mode, "mode", "pages", "deploy target for the scaffold: \"pages\" (GitHub Actions + Pages) or \"k8s\" (Kubernetes-native Helm)")
 	fs.StringVar(&opts.ID, "id", "", "project id (default: derived from the dashboard repo name)")
 	fs.StringVar(&opts.Name, "name", "", "project display name (default: derived from the id)")
 	fs.BoolVar(&opts.IncludePresubmits, "include-presubmits", false, "include presubmit jobs in the sweep")

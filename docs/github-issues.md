@@ -59,7 +59,7 @@ issues:
 Wire the token in the deploy workflow:
 
 ```yaml
-# .github/workflows/deploy.yml
+# .github/workflows/deploy.yml  (GitHub Actions + Pages path)
 jobs:
   deploy:
     uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@v1
@@ -67,6 +67,11 @@ jobs:
     secrets:
       ISSUE_TOKEN: ${{ secrets.ISSUE_TOKEN }}
 ```
+
+On the [Kubernetes-native](kubernetes.md) path, set `ISSUE_TOKEN` on the worker
+instead, via `fetcher.extraEnv` in the Helm values (sourced from a Secret). The
+same scheduled auto-filing runs there; and an admin can additionally file a
+single issue on demand from the UI (see [server.md](server.md#admin-gated-actions)).
 
 ## How dedup works
 

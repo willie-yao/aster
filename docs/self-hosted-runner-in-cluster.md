@@ -1,5 +1,9 @@
 # Running the deploy on an in-cluster self-hosted runner
 
+This applies to the **GitHub Actions + Pages** path. (If you instead run the
+dashboard [Kubernetes-native](kubernetes.md), the fetch already runs in-cluster
+next to your endpoint and none of this is needed.)
+
 The deploy workflow runs the fetcher, which calls your chat-completions endpoint over HTTP. By
 default it runs on a GitHub-hosted runner, which only has public internet
 access. If your AI inference stack runs **inside a Kubernetes cluster** and is
@@ -11,9 +15,10 @@ the same cluster**. The runner reaches your model over cluster DNS, so the
 endpoint never has to be exposed publicly, and the dashboard refreshes on its
 schedule with no machine of yours in the loop.
 
-This is one of two escape hatches for a private endpoint; the other is fetching
-locally and publishing pre-fetched data with `skip-fetch: true` (see
-[onboarding-a-new-project.md](onboarding-a-new-project.md#optional-chat-completions-endpoint-unreachable-from-github-hosted-runners)).
+This is one of two escape hatches for a private endpoint on the Pages path; the
+other is fetching locally and publishing pre-fetched data with `skip-fetch: true`
+(see
+[onboarding-a-new-project.md](onboarding-a-new-project.md#optional-pages-chat-completions-endpoint-unreachable-from-github-hosted-runners)).
 Prefer the in-cluster runner for sustained, automated runs.
 
 ## How it works

@@ -1,10 +1,11 @@
 # Running the dashboard Kubernetes-native
 
-The engine ships two deploy modes from one codebase. The default is the static
-[GitHub Actions + Pages](../README.md) path: the fetcher writes JSON, Actions
-builds the SPA, and Pages serves it. This guide covers the second mode, running
-in-cluster next to your inference stack, where the fetcher is a CronJob and a
-small server serves the dashboard from a shared volume.
+The engine ships two coequal deploy paths from one codebase. This guide covers
+the **Kubernetes-native** path: the dashboard runs in-cluster next to your
+inference stack, with the fetch as a worker (or CronJob) and a small server
+serving the dashboard from a shared volume. The other path is the static
+[GitHub Actions + Pages](../README.md) deploy, where the fetcher writes JSON,
+Actions builds the SPA, and Pages serves it.
 
 Server mode is a strict superset of the static contract. The server exposes the
 same `/data/*.json` files the SPA already reads, adds `/api/capabilities` so the
@@ -73,7 +74,9 @@ Pushes to `main` and `vX.Y.Z` tags publish the image automatically via
 
 The chart lives at `deploy/helm/prow-ai-dashboard`. Supply your consumer-owned
 `project.yaml` and `prompts/system.md` at install time; they are never checked
-into the engine repo.
+into the engine repo. The `onboard -mode k8s` subcommand scaffolds a project
+plus a `deploy/values.yaml` ready to pass here with `-f`; see
+[onboarding-a-new-project.md](onboarding-a-new-project.md#step-3a-kubernetes-native).
 
 ```bash
 helm install capz deploy/helm/prow-ai-dashboard \

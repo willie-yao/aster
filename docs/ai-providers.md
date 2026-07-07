@@ -74,6 +74,10 @@ yaml entries still win if you ever need to override per-repo. Sourcing
 the inputs from `vars.*` (instead of hardcoding in the workflow file)
 keeps the values out of the public repo source.
 
+On the [Kubernetes-native](kubernetes.md) path, set the endpoint and model in the
+Helm values (`ai.endpoint` / `ai.model`) and the token via `--set ai.token=` or
+`ai.existingSecret` instead of workflow secrets.
+
 The engine also scrubs `ai.endpoint`, `ai.model`, and per-failure
 `ai_analysis.model` from every JSON file written to `frontend/public/data/`
 regardless of where the values came from, so private model labels never
