@@ -19,6 +19,9 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/repotree"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
@@ -32,9 +35,11 @@ var errNoEdits = errors.New("model proposed no edits")
 var errNoTargetSelected = errors.New("no candidate file fit the failure")
 
 // Completer is the subset of the AI client this package needs (an interface so
-// generation is unit-testable).
+// generation is unit-testable). ToolLoop runs the agentic source-tree loop the
+// locate step uses; Complete drives the single-shot edit and critique steps.
 type Completer interface {
 	Complete(ctx context.Context, system, user string) (string, error)
+	ToolLoop(ctx context.Context, sys, user string, reg *tools.Registry, enabled []string, env *tools.Env, opts ai.ToolLoopOptions) (string, error)
 }
 
 // edit is one anchored search/replace within a single file.
@@ -91,7 +96,7 @@ func generateFix(ctx context.Context, gp genParams, p models.PatternAnalysis) (*
 		return nil, fmt.Errorf("no candidate files in the repo matched the failure")
 	}
 
-	files, err := locateTargets(ctx, gp.completer, p, candidates, gp.maxFiles)
+	files, err := locateTargetsAgentic(ctx, gp, p, candidates, tree)
 	if err != nil {
 		// When the model found no in-repo file and the analysis pointed the fix
 		// at source outside this repo, say so instead of a bare "no fit".
@@ -165,30 +170,75 @@ func generateFix(ctx context.Context, gp genParams, p models.PatternAnalysis) (*
 	}
 }
 
-const locateSystemPrompt = `You identify which source files a known CI failure fix should touch. You are given a candidate list of REAL repository file paths. Choose the smallest set of paths FROM THAT LIST that must change to fix the failure, preferring configuration, template, or manifest files. You MUST only return paths that appear verbatim in the candidate list; if none fit, return an empty list. Answer only with one-line JSON, no prose.`
+// locateMaxIters bounds the tool-call rounds the locate loop may take to grep
+// and read the source tree before choosing target files.
+const locateMaxIters = 10
 
-// locateTargets has the model pick target file(s) from the candidate paths,
-// capped at maxFiles. Picks outside the candidate set are rejected.
-func locateTargets(ctx context.Context, c Completer, p models.PatternAnalysis, candidates []string, maxFiles int) ([]string, error) {
+const locateAgenticSystemPrompt = `You identify which source files a known CI failure fix should touch. Use the tools to investigate the repository before you answer: grep for the symbols, values, config keys, or filenames named in the failure, list directories, and read the promising files. Choose the smallest set of REAL repository paths that must change to fix the failure, preferring configuration, template, or manifest files, and choose only files you have actually read or grepped. If no file in this repository can fix the failure, because the fix belongs to an upstream dependency or is operational rather than a code change, return an empty list. When you are done investigating, answer with one line of JSON and nothing else: {"files": ["path/one", "path/two"]}`
+
+// repoReaderAdapter binds a sourceReader to one owner/repo/ref so it satisfies
+// tools.RepoReader, whose methods are identifier-free. tree, when set, is the
+// already-fetched blob listing so the locate loop does not re-list the tree.
+type repoReaderAdapter struct {
+	source             sourceReader
+	owner, repo, refID string
+	tree               []string
+}
+
+func (a repoReaderAdapter) ListTree(ctx context.Context) ([]string, error) {
+	if a.tree != nil {
+		return a.tree, nil
+	}
+	return a.source.ListTree(ctx, a.owner, a.repo, a.refID)
+}
+
+func (a repoReaderAdapter) ReadFile(ctx context.Context, path string) (string, bool, error) {
+	return a.source.FileContent(ctx, a.owner, a.repo, a.refID, path)
+}
+
+// locateTargetsAgentic runs an agentic loop over the source tree so the model
+// greps and reads real files before choosing edit targets, instead of guessing
+// from a path list. The ranked candidates are passed as starting hints. Returned
+// paths are validated against the real repo tree; picks outside it are rejected
+// as hallucinations. Returns errNoTargetSelected when the model finds no
+// in-repo file to change, which the caller upgrades to an upstream decline.
+func locateTargetsAgentic(ctx context.Context, gp genParams, p models.PatternAnalysis, candidates, tree []string) ([]string, error) {
+	reg := tools.NewRegistry()
+	repotree.Register(reg)
+	enabled, err := reg.Enable([]string{repotree.Group})
+	if err != nil {
+		return nil, fmt.Errorf("enabling repo tools: %w", err)
+	}
+	env := &tools.Env{
+		Repo:  repoReaderAdapter{source: gp.source, owner: gp.owner, repo: gp.repo, refID: gp.ref, tree: tree},
+		Cache: tools.NewCache(),
+	}
+
 	user := fmt.Sprintf(`Recurring failure pattern:
 - subject: %s
 - shared_root_cause: %s
 - suggested_fix: %s
 - summary: %s
 
-Candidate repository files (choose only from these exact paths):
-%s
-
-Choose the file path(s) to change, fewest first, only from the list above.
-Answer with one line of JSON:
-{"files": ["path/one", "path/two"]}`,
+Likely-relevant files to start from (verify by reading before choosing; you may pick other files you discover):
+%s`,
 		p.Subject, oneLine(p.SharedRootCause), oneLine(p.SuggestedFix), oneLine(p.Summary),
 		strings.Join(candidates, "\n"))
 
-	out, err := c.Complete(ctx, locateSystemPrompt, user)
+	// SingleToolCall bounds per-turn tool fan-out (so grep_repo cannot be issued
+	// many times in parallel), and MinToolCalls makes the model actually
+	// investigate before its first answer. Together with MaxIters these cap the
+	// GitHub reads a single locate can make.
+	out, err := gp.completer.ToolLoop(ctx, locateAgenticSystemPrompt, user, reg,
+		enabled, env, ai.ToolLoopOptions{
+			MaxIters:       locateMaxIters,
+			MinToolCalls:   1,
+			SingleToolCall: true,
+		})
 	if err != nil {
 		return nil, err
 	}
+
 	var v struct {
 		Files []string `json:"files"`
 	}
@@ -199,15 +249,15 @@ Answer with one line of JSON:
 	if len(files) == 0 {
 		return nil, errNoTargetSelected
 	}
-	if len(files) > maxFiles {
-		return nil, fmt.Errorf("model named %d files, exceeds max_files %d", len(files), maxFiles)
+	if len(files) > gp.maxFiles {
+		return nil, fmt.Errorf("model named %d files, exceeds max_files %d", len(files), gp.maxFiles)
 	}
-	candSet := make(map[string]bool, len(candidates))
-	for _, c := range candidates {
-		candSet[c] = true
+	treeSet := make(map[string]bool, len(tree))
+	for _, t := range tree {
+		treeSet[t] = true
 	}
 	for _, f := range files {
-		if !candSet[f] {
+		if !treeSet[f] {
 			return nil, fmt.Errorf("model named %q, which is not a real repo file", f)
 		}
 	}

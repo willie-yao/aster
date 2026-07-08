@@ -73,12 +73,28 @@ type Tool interface {
 	Dispatch(ctx context.Context, env *Env, args json.RawMessage) Result
 }
 
+// RepoReader is the per-repo source-tree view used by source tools. Like
+// Browser it is bound to one owner/repo/ref at construction so tool schemas
+// stay identifier-free. Nil for an artifact-only loop.
+type RepoReader interface {
+	// ListTree returns the repo's blob (file) paths at the bound ref.
+	ListTree(ctx context.Context) ([]string, error)
+	// ReadFile returns the file at path. found is false (no error) when the
+	// file does not exist.
+	ReadFile(ctx context.Context, path string) (content string, found bool, err error)
+}
+
 // Env is the per-analysis context passed to every Tool. It deliberately
 // does not expose the agent's loop state, so tools cannot mutate loop
 // internals.
 type Env struct {
-	// Browser is the per-build artifact view. Always non-nil.
+	// Browser is the per-build artifact view. Non-nil for artifact tools; nil
+	// for a repo-only loop that enables only source tools.
 	Browser artifacts.Browser
+
+	// Repo is the per-repo source-tree view. Non-nil for source tools; nil for
+	// an artifact-only analysis loop.
+	Repo RepoReader
 
 	// Cache is a per-build memoization layer. Tools should use it to cache
 	// expensive discovery results so 50 failed tests in the same build do not

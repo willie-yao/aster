@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
@@ -26,8 +28,6 @@ type fakeCompleter struct {
 
 func (f *fakeCompleter) Complete(_ context.Context, system, _ string) (string, error) {
 	switch system {
-	case locateSystemPrompt:
-		return f.locate, f.locateErr
 	case critiqueSystemPrompt:
 		if f.critiqueErr != nil {
 			return "", f.critiqueErr
@@ -47,6 +47,12 @@ func (f *fakeCompleter) Complete(_ context.Context, system, _ string) (string, e
 		}
 		return f.edit, f.editErr
 	}
+}
+
+// ToolLoop stands in for the agentic locate loop: it returns the canned locate
+// JSON without exercising the real tools, which are covered by their own tests.
+func (f *fakeCompleter) ToolLoop(_ context.Context, _, _ string, _ *tools.Registry, _ []string, _ *tools.Env, _ ai.ToolLoopOptions) (string, error) {
+	return f.locate, f.locateErr
 }
 
 // fakeSource serves canned file content and records the ref it was read at.
@@ -152,6 +158,29 @@ func TestGenerateFix_RejectsHallucinatedFile(t *testing.T) {
 	src := &fakeSource{files: map[string]string{"templates/cluster.yaml": sampleFile}}
 	if _, err := generateFix(context.Background(), genParamsFor(c, src), systemicPattern("etcd")); err == nil || !strings.Contains(err.Error(), "not a real repo file") {
 		t.Errorf("expected hallucinated-file rejection, got %v", err)
+	}
+}
+
+func TestGenerateFix_AcceptsDiscoveredFileBeyondSeeds(t *testing.T) {
+	// The agentic locate loop may pick any real repo file it discovers, not just
+	// the ranked seed candidates. "misc/notes.txt" shares no keywords with the
+	// failure so it never ranks into candidates, but it is a real file, so the
+	// tree-membership guard accepts it. "config/disk-tuning.yaml" ranks in on the
+	// "disk" keyword, keeping the candidate list non-empty.
+	c := &fakeCompleter{
+		locate: `{"files": ["misc/notes.txt"]}`,
+		edit:   `{"rationale": "raise the timeout", "edits": [{"file": "misc/notes.txt", "old": "timeout = 600", "new": "timeout = 1200"}]}`,
+	}
+	src := &fakeSource{files: map[string]string{
+		"config/disk-tuning.yaml": "diskType: StandardSSD_LRS\n",
+		"misc/notes.txt":          "# scratch notes\nretries = 3\ntimeout = 600\nverbose = false\n",
+	}}
+	fix, err := generateFix(context.Background(), genParamsFor(c, src), systemicPattern("etcd"))
+	if err != nil {
+		t.Fatalf("generateFix: %v", err)
+	}
+	if got := fix.files["misc/notes.txt"]; !strings.Contains(got, "timeout = 1200") {
+		t.Errorf("edit not applied to discovered file: %q", got)
 	}
 }
 
