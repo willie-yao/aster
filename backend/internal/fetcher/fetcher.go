@@ -857,6 +857,7 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, details []m
 			MinGCSBytes:        eff.MinGCSBytes,
 			CritiqueMaxRetries: eff.Critique.MaxRetries,
 			SingleToolCall:     eff.SingleToolCall,
+			SemanticJudge:      true,
 		}, factory, registry, enabled)
 		// nil is safe; without recipes the service skips skill matching.
 		service.SetSkills(skillSet)

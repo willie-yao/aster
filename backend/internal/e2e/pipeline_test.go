@@ -179,6 +179,9 @@ func TestPipeline_WithAI(t *testing.T) {
 		`"root_cause":"Only 2 of 3 control plane machines registered before the 600s timeout",` +
 		`"severity":"High","suggested_fix":"Raise the control-plane bootstrap timeout above 600s so all three machines have time to register",` +
 		`"relevant_files":["build-log.txt"]}`)
+	// The semantic judge reviews the accepted draft; return no objections so it
+	// publishes as-is.
+	script.PushFinal(`{"objections":[]}`)
 
 	t.Setenv("AI_TOKEN", "test-token")
 	aiBlock := "  endpoint: \"" + script.URL + "\"\n  model: \"script-model\"\n  tools: [filesystem]\n"

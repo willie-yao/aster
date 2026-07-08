@@ -72,6 +72,13 @@ type AgenticOptions struct {
 	// assistant message. Defaults to false so providers that support parallel
 	// tool calls keep their efficiency.
 	SingleToolCall bool
+
+	// SemanticJudge enables the second-line LLM judge that reviews an accepted
+	// draft's reasoning for a fluent-but-wrong root cause (see semantic.go). It
+	// runs at most once per analysis and only drives a re-prompt. Engine-owned
+	// and set by the fetcher; not a project.yaml knob. Defaults to false so
+	// deterministic-critique unit tests are not perturbed by the extra call.
+	SemanticJudge bool
 }
 
 // artifactTreeMaxPaths caps how many artifact paths the seed lists, bounding
@@ -705,6 +712,10 @@ func (c *Client) doAnalyzeAgentic(
 	critiqueRetriesUsed := 0
 	maxIters := in.Opts.MaxIters
 
+	// semanticJudged bounds the LLM semantic judge to at most one call per
+	// analysis, so the second-line reasoning check does not multiply cost.
+	semanticJudged := false
+
 	// Fixed schema cost added to every size estimate so compaction budgets
 	// against the real request, not just message content.
 	schemaBytes := schemaPayloadBytes(schemas)
@@ -796,6 +807,35 @@ func (c *Client) doAnalyzeAgentic(
 					}
 				}
 				if out.Passed {
+					// Second-line semantic judge: a focused LLM review that
+					// catches a fluent-but-wrong root cause the deterministic
+					// gate accepts. Runs at most once per analysis (its own
+					// one-shot budget, independent of the deterministic retry
+					// count, so it still engages on hard drafts that spent those
+					// retries) and only drives a re-prompt. Best-effort: a failed
+					// judge call publishes the draft rather than blocking.
+					if in.Opts.SemanticJudge && !semanticJudged {
+						semanticJudged = true
+						objs, err := c.semanticCritique(loopCtx, parsed, state.readPathList())
+						switch {
+						case err != nil:
+							log.Printf("  ⓘ semantic judge: skipped (%v)", err)
+						case len(objs) > 0:
+							echo := agChatMessage{Role: "assistant"}
+							if msg.Content != nil {
+								echo.Content = msg.Content
+							}
+							messages = append(messages, echo, agChatMessage{
+								Role:    "user",
+								Content: strPtr(formatSemanticObjections(objs)),
+							})
+							maxIters += critiqueRetryIters
+							log.Printf("  ✗ semantic judge: %d objection(s); re-prompting (+%d iters)", len(objs), critiqueRetryIters)
+							continue
+						default:
+							log.Printf("  ✓ semantic judge: no objections")
+						}
+					}
 					state.critiquePassed = true
 				} else if critiqueRetriesUsed < in.Opts.CritiqueMaxRetries {
 					echo := agChatMessage{Role: "assistant"}
@@ -906,6 +946,11 @@ func (c *Client) doAnalyzeAgentic(
 		}
 		switch {
 		case out.Passed:
+			// Give the semantic judge a shot on the force-finalize path too,
+			// since a hard draft often lands here rather than passing in-loop.
+			if in.Opts.SemanticJudge {
+				parsed = c.applySemanticJudgePostLoop(loopCtx, state, messages, finalContent, parsed, in.Opts.ContextByteBudget)
+			}
 			state.critiquePassed = true
 		case len(out.UnreadCitations) > 0 || len(out.MissingSkillEvidence) > 0:
 			// The force-finalized draft cited artifacts the agent never read,

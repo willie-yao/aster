@@ -33,6 +33,20 @@ Options:
   Without it, a compact built-in prompt and the live CAPZ-Dynamo tuning are used.
 - `BENCH_USE_GCS=1` reads artifacts from live GCS instead of the committed
   fixture. Only works before Prow garbage-collects the build.
+- `BENCH_MIN_TOOL_CALLS`, `BENCH_MIN_GCS_BYTES`, `BENCH_MAX_ITERS`,
+  `BENCH_TIMEOUT`, `BENCH_CRITIQUE_RETRIES` override the default (weak-model)
+  floors so a stronger model can be benchmarked fairly, since the weak-model
+  floors distort a strong model that answers concisely. Example for a strong
+  hosted model: `BENCH_MIN_TOOL_CALLS=3 BENCH_MIN_GCS_BYTES=0`.
+
+## Signal tiers
+
+Each case's `signals` are regexes checked against the model's summary, root
+cause, and suggested fix. A `must` signal that misses fails the test. A `nice`
+signal is informational (how deep the analysis got). Some `nice` signals are
+labeled `STRETCH`: an aspirational bar even strong models miss today, tracked
+but never required. Keep the `must` bar at the achievable correct diagnosis so
+the benchmark is a real regression gate rather than permanently red.
 
 ## Fixtures
 
@@ -57,4 +71,22 @@ plus the root-cause signals a correct analysis should contain.
   unreachable, and every namespace hangs Terminating. All 64 failed tests report
   only "timed out waiting for the condition", so the agent must read the
   `AzureCluster` resource dump to find the empty control-plane route table. Fixed
-  in cluster-api-provider-azure PR #6358, in a different repo than the job.
+  in cluster-api-provider-azure PR #6358, in a different repo than the job. This
+  is the hard/aspirational case: the exact route-table cause is a `STRETCH`
+  signal, and the `must` bar is the achievable high-level diagnosis (systemic,
+  control-plane/networking, CAPZ).
+
+- **apiversion-upgrade-clusterctl-aso-ratelimit**
+  (`apiversion-upgrade-aso-clusterctl.tar.gz`):
+  `periodic-cluster-api-provider-azure-apiversion-upgrade-main` build
+  `2074603331648491520`. `clusterctl upgrade` scales the Azure Service Operator
+  (ASO) controller down during the management-cluster provider upgrade, so ASO's
+  CRD conversion webhook becomes unreachable. clusterctl's object-graph
+  discovery then fails listing ASO resource CRDs (VirtualNetworksSubnet,
+  ManagedClustersAgentPool) because the storage-version conversion call is
+  refused, retrying until the client-side rate limiter hits its context
+  deadline. Unlike the route-table case, the proximate cause is stated verbatim
+  in `build-log.txt` and the `clusterctl-upgrade.log` dumps, so a competent agent
+  finds it by reading the logs. Persistent (7+ consecutive builds); the real fix
+  is partly upstream in cluster-api's clusterctl upgrade sequencing. This is the
+  achievable case: a strong analysis scores full marks.
