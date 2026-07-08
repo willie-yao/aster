@@ -112,6 +112,57 @@ func TestService_SkipWhenAlreadyAnalyzedSameMode(t *testing.T) {
 	}
 }
 
+// TestStaleTransientVerdict verifies the predicate guarding a cached transient
+// verdict: it is stale only once the failure recurs at or above the threshold.
+func TestStaleTransientVerdict(t *testing.T) {
+	transient := &models.TestCase{AISummary: &models.AISummary{IsTransient: true}}
+	real := &models.TestCase{AISummary: &models.AISummary{IsTransient: false}}
+
+	if staleTransientVerdict(transient, transientPersistThreshold-1) {
+		t.Error("transient below threshold should not be stale")
+	}
+	if !staleTransientVerdict(transient, transientPersistThreshold) {
+		t.Error("transient at threshold should be stale")
+	}
+	if staleTransientVerdict(real, transientPersistThreshold+5) {
+		t.Error("non-transient verdict is never stale by this rule")
+	}
+	if staleTransientVerdict(&models.TestCase{}, transientPersistThreshold) {
+		t.Error("nil summary should not be stale")
+	}
+}
+
+// TestService_ReanalyzesStaleTransientOnPersistence verifies a cached transient
+// verdict is re-analyzed once the same test becomes persistent, closing the gap
+// where a transient answer from consec=1 would otherwise serve forever.
+func TestService_ReanalyzesStaleTransientOnPersistence(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	final := `{"summary":"real bug","is_transient":false,"root_cause":"r","severity":"High","suggested_fix":"f","relevant_files":[]}`
+	srv.push(200, chatRespFinal(final))
+
+	client := newAgenticTestClient(t, srv.URL)
+	registry, enabled := newServiceTestRegistry(t)
+	// The test is now persistent (>= threshold consecutive builds).
+	consec := map[string]int{"j::Test A": transientPersistThreshold}
+	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", consec)
+	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}, &fakeFactory{}, registry, enabled)
+
+	// A cached transient verdict that otherwise passes every gate.
+	tc := newFailedTC("Test A", "msg")
+	tc.AISummary = &models.AISummary{Summary: "flaky", IsTransient: true}
+	tc.AIAnalysis = &models.AIAnalysis{RootCause: "flake", Mode: AgenticMode, PromptHash: PromptFingerprint("sys"), CritiquePassed: true, CritiqueVersion: currentCritiqueVersion}
+
+	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
+
+	if got := atomic.LoadInt32(&srv.calls); got == 0 {
+		t.Error("expected re-analysis (server call) for a persistent failure with a cached transient verdict")
+	}
+	if tc.AISummary.IsTransient {
+		t.Errorf("expected the transient verdict to be replaced, got IsTransient=true (summary %q)", tc.AISummary.Summary)
+	}
+}
+
 func TestService_CacheKeyShape(t *testing.T) {
 	s := &Service{module: &stubModule{name: "kubernetes"}}
 	// Agentic key encodes job + build so two builds of the same test never collide.

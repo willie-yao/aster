@@ -81,7 +81,7 @@ func TestPuntRE_SanityTable(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			out := critiqueDraft(analysisResponse{SuggestedFix: tc.text}, nil, nil, nil)
+			out := critiqueDraft(analysisResponse{SuggestedFix: tc.text}, nil, nil, nil, 0)
 			gotPunt := !out.Passed
 			if gotPunt != tc.wantPunt {
 				t.Errorf("punt=%v, want %v\nmatches=%v\ntext=%q",
@@ -91,13 +91,64 @@ func TestPuntRE_SanityTable(t *testing.T) {
 	}
 }
 
+// TestCritiqueDraft_TransientButPersistent verifies the transient-vs-persistent
+// contradiction: a draft claiming is_transient=true on a failure that has
+// recurred at or above the threshold is rejected with re-investigation feedback.
+func TestCritiqueDraft_TransientButPersistent(t *testing.T) {
+	transient := analysisResponse{
+		IsTransient:  true,
+		SuggestedFix: "Re-run the job; this is an infrastructure flake.",
+	}
+
+	// Below threshold: a transient verdict on a non-persistent failure passes.
+	if out := critiqueDraft(transient, nil, nil, nil, transientPersistThreshold-1); !out.Passed {
+		t.Errorf("transient below threshold should pass, got %v", out.Matches())
+	}
+
+	// At threshold: contradiction fires.
+	out := critiqueDraft(transient, nil, nil, nil, transientPersistThreshold)
+	if out.Passed {
+		t.Fatal("transient at threshold should fail")
+	}
+	if out.TransientPersistCount != transientPersistThreshold {
+		t.Errorf("TransientPersistCount = %d, want %d", out.TransientPersistCount, transientPersistThreshold)
+	}
+	if !strings.Contains(out.Feedback, "consecutive builds") {
+		t.Errorf("feedback should explain the persistence contradiction, got %q", out.Feedback)
+	}
+	if !strings.Contains(out.Feedback, "is_transient=false") {
+		t.Errorf("feedback should tell the model to flip is_transient, got %q", out.Feedback)
+	}
+	found := false
+	for _, m := range out.Matches() {
+		if strings.HasPrefix(m, "transient-but-persistent") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("Matches should include the transient token, got %v", out.Matches())
+	}
+}
+
+// TestCritiqueDraft_NonTransientPersistentPasses verifies a persistent failure
+// with is_transient=false is not flagged by the contradiction check.
+func TestCritiqueDraft_NonTransientPersistentPasses(t *testing.T) {
+	real := analysisResponse{
+		IsTransient:  false,
+		SuggestedFix: "Set the control-plane subnet route table in azurecluster_default.go.",
+	}
+	if out := critiqueDraft(real, nil, nil, nil, transientPersistThreshold+5); !out.Passed {
+		t.Errorf("non-transient persistent failure should pass, got %v", out.Matches())
+	}
+}
+
 // TestCritiqueDraft_PassedReturnsEmptyFeedback verifies the
 // passed-path contract: caller can rely on Feedback being empty so
 // the agentic loop doesn't accidentally append a no-op user message.
 func TestCritiqueDraft_PassedReturnsEmptyFeedback(t *testing.T) {
 	out := critiqueDraft(analysisResponse{
 		SuggestedFix: "Update kustomize/cluster-template.yaml line 42 to bump the kube-vip image tag.",
-	}, nil, nil, nil)
+	}, nil, nil, nil, 0)
 	if !out.Passed {
 		t.Fatalf("expected passed, got %+v", out)
 	}
@@ -113,7 +164,7 @@ func TestCritiqueDraft_PassedReturnsEmptyFeedback(t *testing.T) {
 // the draft and lists matched phrases.
 func TestCritiqueDraft_FeedbackQuotesOffendingText(t *testing.T) {
 	bad := "Check the AzureMachine status. Verify cloud-init."
-	out := critiqueDraft(analysisResponse{SuggestedFix: bad}, nil, nil, nil)
+	out := critiqueDraft(analysisResponse{SuggestedFix: bad}, nil, nil, nil, 0)
 	if out.Passed {
 		t.Fatalf("expected punt, got passed")
 	}
@@ -141,7 +192,7 @@ func TestCritiqueDraft_FeedbackQuotesOffendingText(t *testing.T) {
 // listed once in feedback.
 func TestCritiqueDraft_FeedbackDeduplicatesMatches(t *testing.T) {
 	repeat := "Check A. Check B. Check C. Check D."
-	out := critiqueDraft(analysisResponse{SuggestedFix: repeat}, nil, nil, nil)
+	out := critiqueDraft(analysisResponse{SuggestedFix: repeat}, nil, nil, nil, 0)
 	if out.Passed {
 		t.Fatalf("expected punt")
 	}
@@ -155,7 +206,7 @@ func TestCritiqueDraft_FeedbackDeduplicatesMatches(t *testing.T) {
 // TestCritiqueDraft_EmptySuggestedFixPasses verifies empty suggested_fix passes
 // this punt-pattern check.
 func TestCritiqueDraft_EmptySuggestedFixPasses(t *testing.T) {
-	out := critiqueDraft(analysisResponse{SuggestedFix: ""}, nil, nil, nil)
+	out := critiqueDraft(analysisResponse{SuggestedFix: ""}, nil, nil, nil, 0)
 	if !out.Passed {
 		t.Errorf("empty suggested_fix should pass critique, got %+v", out)
 	}
@@ -268,7 +319,7 @@ func TestCritiqueDraft_HallucinationOnly(t *testing.T) {
 		SuggestedFix: "Update kustomize/cluster-template.yaml to match the vnet peering name; reapply.",
 	}
 	// Empty initialized reads make the unread-citation check fire.
-	out := critiqueDraft(parsed, map[string]bool{}, map[string]bool{}, nil)
+	out := critiqueDraft(parsed, map[string]bool{}, map[string]bool{}, nil, 0)
 	if out.Passed {
 		t.Fatalf("expected fail on hallucinated citation, got passed: %+v", out)
 	}
@@ -328,7 +379,7 @@ func TestCritiqueDraft_CitesRealReleaseURL_Passes(t *testing.T) {
 		RootCause:    "clusterctl failed to apply https://github.com/kubernetes-sigs/cluster-api/releases/download/v1.11.11/core-components.yaml because the management cluster could not reach the registry.",
 		SuggestedFix: "Re-run the job; the registry pull is transient.",
 	}
-	out := critiqueDraft(parsed, map[string]bool{}, map[string]bool{}, nil)
+	out := critiqueDraft(parsed, map[string]bool{}, map[string]bool{}, nil, 0)
 	if !out.Passed {
 		t.Fatalf("draft citing a real release URL should pass, got: %+v", out)
 	}
@@ -381,7 +432,7 @@ required_evidence:
 	reads := map[string]bool{
 		"config/certmanager/issuer.yaml": true,
 	}
-	out := critiqueDraft(parsed, reads, map[string]bool{"issuer.yaml": true}, set.Match("x509"))
+	out := critiqueDraft(parsed, reads, map[string]bool{"issuer.yaml": true}, set.Match("x509"), 0)
 	if !out.Passed {
 		t.Fatalf("expected Passed=true with all evidence satisfied, got %+v", out)
 	}
@@ -419,7 +470,7 @@ procedure: |
 	}
 	// Agent has read no relevant evidence.
 	reads := map[string]bool{"build-log.txt": true}
-	out := critiqueDraft(parsed, reads, map[string]bool{"build-log.txt": true}, set.Match("x509"))
+	out := critiqueDraft(parsed, reads, map[string]bool{"build-log.txt": true}, set.Match("x509"), 0)
 	if out.Passed {
 		t.Fatalf("expected Passed=false with no evidence read, got passed: %+v", out)
 	}
@@ -470,7 +521,7 @@ required_evidence:
 	reads := map[string]bool{
 		"config/certmanager/issuer.yaml": true,
 	}
-	out := critiqueDraft(parsed, reads, map[string]bool{}, set.Match("x509"))
+	out := critiqueDraft(parsed, reads, map[string]bool{}, set.Match("x509"), 0)
 	if out.Passed {
 		t.Fatalf("expected fail when one group still missing, got %+v", out)
 	}
@@ -496,7 +547,7 @@ func TestCritiqueDraft_NilSkillsDisablesCheck(t *testing.T) {
 		RootCause:    "Webhook x509 failure.",
 		SuggestedFix: "Fix the cert and reapply.",
 	}
-	out := critiqueDraft(parsed, map[string]bool{"build-log.txt": true}, map[string]bool{}, nil)
+	out := critiqueDraft(parsed, map[string]bool{"build-log.txt": true}, map[string]bool{}, nil, 0)
 	if !out.Passed {
 		t.Fatalf("expected Passed=true with nil skills, got %+v", out)
 	}
@@ -528,7 +579,7 @@ required_evidence:
 		RootCause: "x509 webhook failure combined with cloud-init issues.",
 	}
 	out := critiqueDraft(parsed, map[string]bool{}, map[string]bool{},
-		set.Match(parsed.RootCause))
+		set.Match(parsed.RootCause), 0)
 	if out.Passed {
 		t.Fatalf("expected fail with two unmatched recipes, got passed")
 	}
@@ -566,7 +617,7 @@ required_evidence:
 	out := critiqueDraft(parsed,
 		map[string]bool{"build-log.txt": true},
 		map[string]bool{"build-log.txt": true},
-		set.Match("x509"))
+		set.Match("x509"), 0)
 
 	if out.Passed {
 		t.Fatalf("expected fail with all issues firing, got passed: %+v", out)
@@ -616,7 +667,7 @@ required_evidence:
 	out := critiqueDraft(parsed,
 		map[string]bool{"build-log.txt": true},
 		map[string]bool{"build-log.txt": true},
-		set.Match("x509"))
+		set.Match("x509"), 0)
 	if out.Passed || len(out.MissingSkillEvidence) != 1 {
 		t.Fatalf("setup: expected one missing skill group, got passed=%v misses=%v", out.Passed, out.MissingSkillEvidence)
 	}
@@ -683,7 +734,7 @@ required_evidence:
 	out := critiqueDraft(parsed,
 		map[string]bool{"build-log.txt": true},
 		map[string]bool{"build-log.txt": true},
-		set.Match("x509"))
+		set.Match("x509"), 0)
 	if len(out.PuntMatches) == 0 || len(out.MissingSkillEvidence) != 1 {
 		t.Fatalf("setup: expected punt + one skill miss, got %+v", out)
 	}

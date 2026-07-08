@@ -105,7 +105,14 @@ func findPunts(text string) []string {
 // weaker version are invalidated on read. Cosmetic prompt-shape changes
 // do not bump; only behavior changes that make an existing cached answer
 // invalid under today's contract.
-const currentCritiqueVersion = 4
+const currentCritiqueVersion = 5
+
+// transientPersistThreshold is the consecutive-failure count at or above which a
+// draft claiming is_transient=true is contradicted. It matches the engine's
+// persistent-failure definition (aggregator flakiness and patternMinFailedBuilds
+// both use 3): a genuine infrastructure flake does not recur identically across
+// three or more consecutive builds.
+const transientPersistThreshold = 3
 
 // artifactCitationRE matches strings in the model's prose that look like
 // Prow artifact filenames. Intentionally narrow on bare basenames, limited to
@@ -247,6 +254,11 @@ type critiqueOutcome struct {
 	// MissingSkillEvidence pairs each matched recipe with the evidence
 	// groups it still requires the agent to satisfy.
 	MissingSkillEvidence []skillEvidenceMiss
+
+	// TransientPersistCount is the consecutive-failure count when the draft
+	// claimed is_transient=true on a persistent failure. Zero when the check
+	// did not fire.
+	TransientPersistCount int
 }
 
 // skillEvidenceMiss bundles one matched recipe with the evidence groups it
@@ -261,6 +273,9 @@ type skillEvidenceMiss struct {
 // for callers that just want "what tripped the gate".
 func (o critiqueOutcome) Matches() []string {
 	n := len(o.PuntMatches) + len(o.UnreadCitations) + len(o.MissingSkillEvidence)
+	if o.TransientPersistCount > 0 {
+		n++
+	}
 	if n == 0 {
 		return nil
 	}
@@ -274,6 +289,9 @@ func (o critiqueOutcome) Matches() []string {
 			ids = append(ids, g.ID)
 		}
 		out = append(out, fmt.Sprintf("skill:%s(missing:%s)", m.Skill.ID, strings.Join(ids, ",")))
+	}
+	if o.TransientPersistCount > 0 {
+		out = append(out, fmt.Sprintf("transient-but-persistent(%dx)", o.TransientPersistCount))
 	}
 	return out
 }
@@ -289,14 +307,17 @@ func (o critiqueOutcome) MissingEvidenceCount() int {
 }
 
 // critiqueDraft inspects a parsed final answer against the critique contract
-// against punt, unread-citation, and recipe-driven missing-evidence checks.
-// Returns Passed=true only when every check passes. On failure, Feedback
-// combines all triggered checks so one retry can fix everything.
+// against punt, unread-citation, recipe-driven missing-evidence, and
+// transient-but-persistent checks. Returns Passed=true only when every check
+// passes. On failure, Feedback combines all triggered checks so one retry can
+// fix everything.
 //
 // readsFull and readsBase are the agent's fetched artifact paths, indexed by
 // full path and basename. matchedSkills is the recipe subset whose triggers
 // fired on this draft; pass nil to disable the skill-evidence check.
-func critiqueDraft(parsed analysisResponse, readsFull, readsBase map[string]bool, matchedSkills []skills.Skill) critiqueOutcome {
+// consecutiveFailures is how many consecutive builds this test has failed; it
+// contradicts an is_transient=true verdict at or above transientPersistThreshold.
+func critiqueDraft(parsed analysisResponse, readsFull, readsBase map[string]bool, matchedSkills []skills.Skill, consecutiveFailures int) critiqueOutcome {
 	puntMatches := findPunts(parsed.SuggestedFix)
 
 	// Scan every prose field plus each relevant_files entry: the model
@@ -334,12 +355,22 @@ func critiqueDraft(parsed analysisResponse, readsFull, readsBase map[string]bool
 		missingSkillEv = append(missingSkillEv, skillEvidenceMiss{Skill: sk, Missing: missing})
 	}
 
-	out := critiqueOutcome{
-		PuntMatches:          puntMatches,
-		UnreadCitations:      unread,
-		MissingSkillEvidence: missingSkillEv,
+	// A draft that calls a failure transient is contradicted when the same test
+	// has failed many consecutive builds: a real infrastructure flake does not
+	// recur identically that often, so the transient shortcut is masking a
+	// systemic root cause.
+	transientPersist := 0
+	if parsed.IsTransient && consecutiveFailures >= transientPersistThreshold {
+		transientPersist = consecutiveFailures
 	}
-	if len(puntMatches) == 0 && len(unread) == 0 && len(missingSkillEv) == 0 {
+
+	out := critiqueOutcome{
+		PuntMatches:           puntMatches,
+		UnreadCitations:       unread,
+		MissingSkillEvidence:  missingSkillEv,
+		TransientPersistCount: transientPersist,
+	}
+	if len(puntMatches) == 0 && len(unread) == 0 && len(missingSkillEv) == 0 && transientPersist == 0 {
 		out.Passed = true
 		return out
 	}
@@ -382,7 +413,7 @@ func pruneAbsentSkillEvidence(parsed analysisResponse, out *critiqueOutcome, tre
 		return 0
 	}
 	out.MissingSkillEvidence = kept
-	if len(out.PuntMatches) == 0 && len(out.UnreadCitations) == 0 && len(out.MissingSkillEvidence) == 0 {
+	if len(out.PuntMatches) == 0 && len(out.UnreadCitations) == 0 && len(out.MissingSkillEvidence) == 0 && out.TransientPersistCount == 0 {
 		out.Passed = true
 		out.Feedback = ""
 	} else {
@@ -408,10 +439,28 @@ func formatCritiqueFeedback(parsed analysisResponse, out critiqueOutcome) string
 	if len(out.MissingSkillEvidence) > 0 {
 		sections = append(sections, formatSkillEvidenceSection(out.MissingSkillEvidence))
 	}
+	if out.TransientPersistCount > 0 {
+		sections = append(sections, formatTransientPersistSection(out.TransientPersistCount))
+	}
 
 	sections = append(sections, `Re-emit your JSON addressing every issue above. Do NOT re-emit the same draft. If you re-emit the same issues, your answer will be rejected again.`)
 
 	return strings.Join(sections, "\n\n")
+}
+
+// formatTransientPersistSection is the feedback for a draft that marked a
+// persistent failure transient. It forces the model to re-investigate for a
+// systemic root cause instead of taking the transient shortcut.
+func formatTransientPersistSection(consecutive int) string {
+	return fmt.Sprintf(`You set is_transient=true, but this exact test has failed %d consecutive builds. A genuine infrastructure flake (throttling, quota, transient DNS, a one-off cleanup-phase deadline) does not recur identically that many times in a row; consistent recurrence is the signature of a systemic, deterministic root cause in the configuration or code under test, not the environment.
+
+Before re-emitting:
+
+1. Treat this as a real bug, not a flake. Do NOT stop at the transient shortcut.
+2. The symptom you saw first (a timeout, a stuck resource, an unreachable endpoint) is usually downstream of the true cause. Read the cluster resource dumps and the owning controller logs for a configuration or code defect that would produce this failure on EVERY run: a missing or misconfigured field, a networking/route/subnet gap, a bad default, a version mismatch.
+3. Be wary of end-of-run noise: credential-expiry, resource-cleanup (janitor) errors, and DNS-no-longer-resolves messages appear AFTER the test already failed and are symptoms of teardown, not the cause. Anchor your root cause on the EARLIEST anomaly, not the loudest or latest error.
+4. Re-emit with is_transient=false and a concrete root_cause and suggested_fix grounded in the specific artifact evidence you read.`,
+		consecutive)
 }
 
 // formatPuntSection is the punt-detection feedback, extracted so the

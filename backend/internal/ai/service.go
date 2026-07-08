@@ -106,15 +106,15 @@ func (s *Service) SetSourceRepo(owner, name string) {
 // meets the current quality floors. On API failure or endpoints without
 // function-calling, it leaves an "AI analysis unavailable" summary.
 func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, jobID, buildPrefix string, run *models.BuildResult, tc *models.TestCase) {
-	if tc.AISummary != nil && tc.AIAnalysis != nil && !s.shouldReanalyze(tc) {
-		return
-	}
-
-	log.Printf("  🔍 Analyzing: %s [%s]", tc.Name, AgenticMode)
 	consec := s.consecutiveMap[consecutiveKey(jobID, tc.Name)]
 	if consec < 1 {
 		consec = 1
 	}
+	if tc.AISummary != nil && tc.AIAnalysis != nil && !s.shouldReanalyze(tc) && !staleTransientVerdict(tc, consec) {
+		return
+	}
+
+	log.Printf("  🔍 Analyzing: %s [%s]", tc.Name, AgenticMode)
 
 	userPrompt := s.module.AnalysisPrompt(ctx, httpClient, run, tc, consec)
 
@@ -124,7 +124,7 @@ func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, jobID, b
 		s.setUnavailable(tc, fmt.Errorf("AI endpoint requires function-calling support"))
 		return
 	}
-	summary, analysis, err := s.runAgentic(ctx, jobID, buildPrefix, run, tc, userPrompt)
+	summary, analysis, err := s.runAgentic(ctx, jobID, buildPrefix, run, tc, userPrompt, consec)
 	if err != nil {
 		if errors.Is(err, ErrToolsUnsupported) {
 			s.toolsUnsupported.Store(true)
@@ -145,7 +145,7 @@ func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, jobID, b
 
 // runAgentic does the per-failure agentic call setup. Kept separate so
 // Analyze stays readable.
-func (s *Service) runAgentic(ctx context.Context, jobID, buildPrefix string, run *models.BuildResult, tc *models.TestCase, userPrompt string) (*models.AISummary, *models.AIAnalysis, error) {
+func (s *Service) runAgentic(ctx context.Context, jobID, buildPrefix string, run *models.BuildResult, tc *models.TestCase, userPrompt string, consecutiveFailures int) (*models.AISummary, *models.AIAnalysis, error) {
 	if s.browserFactory == nil {
 		return nil, nil, fmt.Errorf("agentic mode enabled but no browser factory configured")
 	}
@@ -156,14 +156,15 @@ func (s *Service) runAgentic(ctx context.Context, jobID, buildPrefix string, run
 	cache := s.toolCacheFor(buildPrefix)
 	cacheKey := s.agenticCacheKey(jobID, run.BuildID, tc.Name, tc.FailureMessage)
 	in := AgenticInputs{
-		Browser:      browser,
-		Opts:         s.agenticOpts,
-		Registry:     s.registry,
-		EnabledTools: s.enabledTools,
-		Cache:        cache,
-		WebURLBase:   run.WebURL,
-		Mode:         AgenticMode,
-		Skills:       s.skillSet,
+		Browser:             browser,
+		Opts:                s.agenticOpts,
+		Registry:            s.registry,
+		EnabledTools:        s.enabledTools,
+		Cache:               cache,
+		WebURLBase:          run.WebURL,
+		Mode:                AgenticMode,
+		Skills:              s.skillSet,
+		ConsecutiveFailures: consecutiveFailures,
 	}
 	return s.client.doAnalyzeAgentic(ctx, in, cacheKey, s.systemPrompt, userPrompt)
 }
@@ -202,6 +203,15 @@ const unavailablePrefix = "AI analysis unavailable: "
 // engine-written "unavailable" placeholder.
 func isUnavailableSummary(s *models.AISummary) bool {
 	return s != nil && !s.IsTransient && strings.HasPrefix(s.Summary, unavailablePrefix)
+}
+
+// staleTransientVerdict reports whether a cached transient verdict must be
+// re-analyzed because the failure has since become persistent. A transient
+// flake that recurs across transientPersistThreshold consecutive builds is
+// contradicted by the critique gate, so a cached transient answer produced when
+// the failure was not yet persistent must not keep being served.
+func staleTransientVerdict(tc *models.TestCase, consecutiveFailures int) bool {
+	return tc.AISummary != nil && tc.AISummary.IsTransient && consecutiveFailures >= transientPersistThreshold
 }
 
 // shouldReanalyze returns true when a cached analysis must be discarded

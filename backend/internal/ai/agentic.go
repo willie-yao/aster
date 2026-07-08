@@ -353,6 +353,11 @@ type agentState struct {
 	// stamp the hash without re-threading it.
 	skillSet *skills.Set
 
+	// consecutiveFailures is how many consecutive builds this test has failed.
+	// Passed to the critique gate to contradict an is_transient=true verdict on
+	// a persistent failure.
+	consecutiveFailures int
+
 	// promptHash is the fingerprint of the composed system prompt for this
 	// run. Stamped onto the accepted analysis and the cache entry so a later
 	// prompt edit invalidates them on read. Held on state so the stamp and
@@ -459,6 +464,11 @@ type AgenticInputs struct {
 	// cached entries so consumer-side recipe edits invalidate cache without an
 	// engine version bump.
 	Skills *skills.Set
+
+	// ConsecutiveFailures is how many consecutive builds this test has failed,
+	// used by the critique gate to contradict an is_transient=true verdict on a
+	// persistent failure. 1 (or 0) means not persistent.
+	ConsecutiveFailures int
 }
 
 // ---------- Context-window compaction ----------
@@ -613,6 +623,12 @@ func (c *Client) doAnalyzeAgentic(
 			// invalidates the entry regardless of critique. Editing
 			// prompts/system.md re-analyzes on the next run with no cache clear.
 			promptOK := cached.PromptHash == PromptFingerprint(sysPrompt)
+			// A cached transient verdict is stale once the failure has become
+			// persistent: the transient-vs-persistent critique would now reject
+			// it, so re-analyze instead of serving the old flake verdict.
+			if cached.IsTransient && in.ConsecutiveFailures >= transientPersistThreshold {
+				critiqueOK = false
+			}
 			if cached.ToolCalls >= in.Opts.MinToolCalls && cached.GCSBytes >= in.Opts.MinGCSBytes && critiqueOK && promptOK {
 				summary, analysis := c.buildOutputs(cached.analysisResponse)
 				stampAgenticTelemetry(analysis, nil, in.Mode, true, start)
@@ -647,6 +663,7 @@ func (c *Client) doAnalyzeAgentic(
 	// Skills are consulted inside the always-on critique gate. Recipe presence
 	// is the opt-in; an empty set is a no-op.
 	state.skillSet = in.Skills
+	state.consecutiveFailures = in.ConsecutiveFailures
 	// Pre-init the read-tracking maps so findUnreadArtifactCitations runs the
 	// check even when the model has made zero successful reads. Otherwise the
 	// nil-disables contract would skip the worst-case hallucination scenario.
@@ -770,7 +787,7 @@ func (c *Client) doAnalyzeAgentic(
 			// below.
 			if parsed, ok := tryParseAnalysis(candidate); ok {
 				matchedSkills := matchSkillsForDraft(state, parsed)
-				out := critiqueDraft(parsed, state.readArtifactsFull, state.readArtifactsBase, matchedSkills)
+				out := critiqueDraft(parsed, state.readArtifactsFull, state.readArtifactsBase, matchedSkills, state.consecutiveFailures)
 				if len(out.MissingSkillEvidence) > 0 {
 					if treeSet := state.artifactTreeSet(loopCtx); treeSet != nil {
 						if n := pruneAbsentSkillEvidence(parsed, &out, treeSet); n > 0 {
@@ -879,7 +896,7 @@ func (c *Client) doAnalyzeAgentic(
 	// and publish-but-never-cache forever.
 	if !state.critiquePassed {
 		matchedSkills := matchSkillsForDraft(state, parsed)
-		out := critiqueDraft(parsed, state.readArtifactsFull, state.readArtifactsBase, matchedSkills)
+		out := critiqueDraft(parsed, state.readArtifactsFull, state.readArtifactsBase, matchedSkills, state.consecutiveFailures)
 		if len(out.MissingSkillEvidence) > 0 {
 			if treeSet := state.artifactTreeSet(loopCtx); treeSet != nil {
 				if n := pruneAbsentSkillEvidence(parsed, &out, treeSet); n > 0 {
@@ -911,7 +928,7 @@ func (c *Client) doAnalyzeAgentic(
 				}
 				if ok2 {
 					parsed = rp
-					out2 := critiqueDraft(parsed, state.readArtifactsFull, state.readArtifactsBase, matchSkillsForDraft(state, parsed))
+					out2 := critiqueDraft(parsed, state.readArtifactsFull, state.readArtifactsBase, matchSkillsForDraft(state, parsed), state.consecutiveFailures)
 					if len(out2.MissingSkillEvidence) > 0 {
 						if treeSet := state.artifactTreeSet(loopCtx); treeSet != nil {
 							pruneAbsentSkillEvidence(parsed, &out2, treeSet)

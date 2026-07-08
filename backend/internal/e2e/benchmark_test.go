@@ -74,7 +74,12 @@ type benchCase struct {
 	testName     string
 	junitFile    string
 	failureMsg   string
-	signals      []benchSignal
+	// consecutiveFailures is how many consecutive builds this test had failed at
+	// the time of the snapshot. The live engine derives this from the flakiness
+	// report; the benchmark feeds it so the analysis (and the critique gate's
+	// transient-vs-persistent check) see the real persistence signal.
+	consecutiveFailures int
+	signals             []benchSignal
 }
 
 // fixtureReleaseBase is the download root for benchmark-fixtures release assets.
@@ -107,6 +112,9 @@ var benchCases = []benchCase{
 		testName:     "[It] Azure node resources should set node provider id correctly [Node]",
 		junitFile:    "junit_01.xml",
 		failureMsg:   `Unexpected error: <wait.errInterrupted>: timed out waiting for the condition { cause: <*errors.errorString>{ s: "timed out waiting for the condition", }, } occurred`,
+		// This dual-stack job failed ~9 consecutive builds before PR #6358; a
+		// genuine flake would not, so a transient verdict is contradicted.
+		consecutiveFailures: 9,
 		signals: []benchSignal{
 			{name: "route table", re: mustRE(`(?i)route[\s_-]?table`), must: true},
 			{name: "control-plane subnet or apiserver->pod reachability", re: mustRE(`(?i)control[\s_-]?plane|api[\s_-]?server|subnet`), must: true},
@@ -169,7 +177,15 @@ func runBenchCase(t *testing.T, bc benchCase, endpoint, model, token, systemProm
 		t.Fatalf("enable tools: %v", err)
 	}
 
-	service := ai.NewService(client, universal.New(), systemPrompt, nil)
+	// Feed the persistence signal the live engine would have from the flakiness
+	// report. The service keys it as jobID + "::" + testName (consecutiveKey).
+	jobID := models.JobIDFor(bc.jobType, bc.repo, bc.jobName)
+	var consecutiveMap map[string]int
+	if bc.consecutiveFailures > 0 {
+		consecutiveMap = map[string]int{jobID + "::" + bc.testName: bc.consecutiveFailures}
+	}
+
+	service := ai.NewService(client, universal.New(), systemPrompt, consecutiveMap)
 	service.SetSourceRepo(bc.sourceRepo[0], bc.sourceRepo[1])
 
 	// Size the model/context budgets from the endpoint's window, matching the
@@ -206,7 +222,6 @@ func runBenchCase(t *testing.T, bc benchCase, endpoint, model, token, systemProm
 		JUnitFile:      bc.junitFile,
 	}
 
-	jobID := models.JobIDFor(bc.jobType, bc.repo, bc.jobName)
 	start := time.Now()
 	service.Analyze(context.Background(), &http.Client{Timeout: 60 * time.Second}, jobID, loc.BuildPath(), run, tc)
 	elapsed := time.Since(start).Round(time.Second)

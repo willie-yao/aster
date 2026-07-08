@@ -327,6 +327,43 @@ func TestAgentic_CacheHit(t *testing.T) {
 	}
 }
 
+// TestAgentic_CacheMiss_StaleTransientOnPersistence verifies the on-disk agentic
+// cache invalidates a transient entry once the failure is persistent: a second
+// call with ConsecutiveFailures>=threshold re-analyzes instead of serving the
+// cached transient verdict.
+func TestAgentic_CacheMiss_StaleTransientOnPersistence(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	transient := `{"summary":"flaky","is_transient":true,"root_cause":"infra","severity":"Low","suggested_fix":"re-run","relevant_files":[]}`
+	real := `{"summary":"real","is_transient":false,"root_cause":"bug","severity":"High","suggested_fix":"fix it","relevant_files":[]}`
+	srv.push(200, chatRespFinal(transient)) // first call: caches transient
+	srv.push(200, chatRespFinal(real))      // re-analysis after invalidation
+
+	client := newAgenticTestClient(t, srv.URL)
+	browser := &fakeBrowser{}
+	opts := AgenticOptions{MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}
+
+	// First call: not yet persistent, transient verdict is accepted and cached.
+	in1 := newTestAgenticInputs(t, browser, opts)
+	if _, _, err := client.doAnalyzeAgentic(context.Background(), in1, "agentic:test:staletransient", "sys", "user"); err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+
+	// Second call: now persistent. The cached transient entry must be a miss.
+	in2 := newTestAgenticInputs(t, browser, opts)
+	in2.ConsecutiveFailures = transientPersistThreshold
+	_, a2, err := client.doAnalyzeAgentic(context.Background(), in2, "agentic:test:staletransient", "sys", "user")
+	if err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+	if a2.CacheHit {
+		t.Error("expected a cache miss (re-analysis) for a persistent failure with a cached transient verdict")
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 2 {
+		t.Errorf("expected 2 server calls (initial + re-analysis), got %d", got)
+	}
+}
+
 func TestAgentic_ToolsUnsupported_FirstCall(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
@@ -954,7 +991,7 @@ func TestCritiqueDraft_FeedbackTruncatesLongFix(t *testing.T) {
 	if len(long) <= feedbackQuoteLimit {
 		t.Fatalf("test setup: long fix is too short (%d <= %d)", len(long), feedbackQuoteLimit)
 	}
-	out := critiqueDraft(analysisResponse{SuggestedFix: long}, nil, nil, nil)
+	out := critiqueDraft(analysisResponse{SuggestedFix: long}, nil, nil, nil, 0)
 	if out.Passed {
 		t.Fatalf("expected punt")
 	}
