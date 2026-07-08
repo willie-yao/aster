@@ -115,3 +115,45 @@ func TestRunWatch_RejectsNonPositiveIntervals(t *testing.T) {
 		t.Error("expected error for zero reconcile interval")
 	}
 }
+
+func TestFailureLocationFile(t *testing.T) {
+	cases := map[string]string{
+		"test/e2e/foo_test.go:123":                                "test/e2e/foo_test.go",
+		"test/e2e/foo_test.go:123:45":                             "test/e2e/foo_test.go",
+		"sigs.k8s.io/cluster-api/test@v1.13.3/framework/x.go:190": "sigs.k8s.io/cluster-api/test@v1.13.3/framework/x.go",
+		"":              "",
+		"   ":           "",
+		"plain/path.go": "plain/path.go",
+	}
+	for in, want := range cases {
+		if got := failureLocationFile(in); got != want {
+			t.Errorf("failureLocationFile(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestGatherPatternFailures_SeedsFailingTestLocation(t *testing.T) {
+	d := &models.JobDetail{
+		Runs: []models.BuildResult{{
+			BuildInfo: models.BuildInfo{BuildID: "100", Passed: false, Result: "FAILURE"},
+			TestCases: []models.TestCase{{
+				Name:            "[It] upgrade test",
+				Status:          "failed",
+				FailureLocation: "test/e2e/azure_apiversion_upgrade_test.go:88",
+				AIAnalysis:      &models.AIAnalysis{Severity: "high", RelevantFiles: []string{"test/e2e/config/azure-dev.yaml"}},
+			}},
+		}},
+	}
+	got := gatherPatternFailures(d)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 pattern failure, got %d", len(got))
+	}
+	// The failing test's file is carried in LocationFile (kept out of the
+	// correlation prompt), not folded into the prompt-facing RelevantFiles.
+	if got[0].LocationFile != "test/e2e/azure_apiversion_upgrade_test.go" {
+		t.Errorf("LocationFile = %q, want the failing-test file", got[0].LocationFile)
+	}
+	if len(got[0].RelevantFiles) != 1 || got[0].RelevantFiles[0] != "test/e2e/config/azure-dev.yaml" {
+		t.Errorf("RelevantFiles should stay the AI's list only, got %v", got[0].RelevantFiles)
+	}
+}

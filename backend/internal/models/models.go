@@ -224,6 +224,9 @@ type PatternAnalysis struct {
 	SharedBuilds []string `json:"shared_builds,omitempty"`
 	// SuggestedFix is the cross-cutting fix for the shared cause.
 	SuggestedFix string `json:"suggested_fix,omitempty"`
+	// RelevantFiles are the source files the per-build analyses implicated,
+	// unioned across builds. They ground the fix harness's target selection.
+	RelevantFiles []string `json:"relevant_files,omitempty"`
 	// Summary is a one-paragraph human-readable verdict.
 	Summary string `json:"summary"`
 }

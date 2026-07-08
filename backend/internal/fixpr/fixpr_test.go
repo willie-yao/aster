@@ -163,6 +163,54 @@ func TestGenerateFix_NoCandidates(t *testing.T) {
 	}
 }
 
+func TestGenerateFix_DeclinesWhenFixIsUpstream(t *testing.T) {
+	// The analysis pointed the fix at upstream Kubernetes source that does not
+	// exist in this repo. The repo has an unrelated file so candidates are
+	// non-empty, but the model correctly selects none. The error must name the
+	// upstream target rather than the vague "no candidate file fit".
+	src := &fakeSource{files: map[string]string{
+		"test/e2e/conformance_test.go": "package e2e\n",
+	}}
+	p := systemicPattern("dra device plugin registration race")
+	p.SuggestedFix = "add a poll in test/e2e/dra/dra.go before creating tester pods"
+	p.RelevantFiles = []string{
+		"k8s.io/kubernetes/test/e2e/dra/dra.go", // upstream .go, not in repo
+		"pkg/kubelet/cm/dra/manager/manager.go", // upstream, not in repo
+		"build-log.txt",                         // artifact, ignored
+	}
+	// Model honestly selects no in-repo file.
+	c := &fakeCompleter{locate: `{"files": []}`}
+	_, err := generateFix(context.Background(), genParamsFor(c, src), p)
+	if err == nil {
+		t.Fatal("expected a decline error")
+	}
+	if !strings.Contains(err.Error(), "outside") || !strings.Contains(err.Error(), "dra.go") {
+		t.Errorf("expected an upstream-decline message naming the external file, got %v", err)
+	}
+}
+
+func TestExternalSourceFiles(t *testing.T) {
+	tree := []string{"test/e2e/conformance_test.go", "config/a.yaml"}
+	relevant := []string{
+		"k8s.io/kubernetes/test/e2e/dra/dra.go",                // external source
+		"pkg/kubelet/cm/dra/manager/manager.go",                // external source
+		"sigs.k8s.io/cluster-api-provider-azure/config/a.yaml", // resolves in-repo -> excluded
+		"test/e2e/conformance_test.go",                         // in-repo -> excluded
+		"artifacts/foo/dump.yaml",                              // artifact -> excluded
+		"build-log.txt",                                        // log -> excluded
+	}
+	got := externalSourceFiles(relevant, tree)
+	want := []string{"k8s.io/kubernetes/test/e2e/dra/dra.go", "pkg/kubelet/cm/dra/manager/manager.go"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("position %d: got %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestGenerateFix_NoEditsRetriesThenSucceeds(t *testing.T) {
 	// The model returns an empty edit set first, then a real edit after the
 	// feedback nudge. critiqueRetries must allow at least one retry.
@@ -240,6 +288,121 @@ func TestRankCandidates_ExtensionAloneExcluded(t *testing.T) {
 	tree := []string{"random/unrelated/file.go", "another/thing.yaml"}
 	if got := rankCandidates(tree, systemicPattern("etcd")); len(got) != 0 {
 		t.Errorf("extension-only paths should be excluded, got %v", got)
+	}
+}
+
+func TestRepoRelevantFiles_MapsToRealPaths(t *testing.T) {
+	tree := []string{
+		"test/e2e/azure_apiversion_upgrade_test.go",
+		"test/e2e/clusterctl_upgrade_test.go",
+		"test/e2e/config/azure-dev.yaml",
+		"main.go",
+	}
+	// Mirrors what an analysis actually implicates: real repo files, vendored/
+	// prefixed paths, upstream module paths, and artifact logs.
+	relevant := []string{
+		"test/e2e/azure_apiversion_upgrade_test.go",                                  // exact
+		"sigs.k8s.io/cluster-api-provider-azure/test/e2e/clusterctl_upgrade_test.go", // prefixed -> resolves
+		"test/e2e/config/azure-dev.yaml",                                             // exact
+		"sigs.k8s.io/cluster-api/test/framework/clusterctl/client.go",                // upstream, no repo match
+		"artifacts/clusters/bootstrap/logs/manager.log",                              // artifact, dropped
+		"build-log.txt", // dropped
+		"/home/prow/go/pkg/mod/sigs.k8s.io/cluster-api/test@v1.13.3/framework/x.go", // dropped
+	}
+	got := repoRelevantFiles(relevant, tree)
+	want := map[string]bool{
+		"test/e2e/azure_apiversion_upgrade_test.go": true,
+		"test/e2e/clusterctl_upgrade_test.go":       true,
+		"test/e2e/config/azure-dev.yaml":            true,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %d real paths", got, len(want))
+	}
+	for _, g := range got {
+		if !want[g] {
+			t.Errorf("unexpected path %q in %v", g, got)
+		}
+	}
+}
+
+func TestRepoRelevantFiles_RejectsBareBasenameSuffix(t *testing.T) {
+	// A vendored path must not resolve to an unrelated root-level file by bare
+	// basename; only a >=2-segment suffix (or an exact match) counts.
+	tree := []string{"client.go", "test/e2e/clusterctl_upgrade_test.go"}
+	relevant := []string{
+		"sigs.k8s.io/cluster-api/test/framework/clusterctl/client.go", // must NOT match root client.go
+		"client.go", // exact repo-relative match is fine
+	}
+	got := repoRelevantFiles(relevant, tree)
+	if len(got) != 1 || got[0] != "client.go" {
+		t.Errorf("expected only the exact client.go match, got %v", got)
+	}
+}
+
+func TestRepoRelevantFiles_NormalizesDotSlash(t *testing.T) {
+	// A "./main.go" prefix must still match the root file main.go exactly.
+	got := repoRelevantFiles([]string{"./main.go"}, []string{"main.go"})
+	if len(got) != 1 || got[0] != "main.go" {
+		t.Errorf("expected ./main.go to resolve to main.go, got %v", got)
+	}
+}
+
+func TestGenerateFix_DeclinesUpstreamWhenNoCandidates(t *testing.T) {
+	// No in-repo file even ranks (empty candidate set) and the analysis named
+	// only external source. The early return must still give the clear upstream
+	// decline, not the generic "no candidate files in the repo" message.
+	src := &fakeSource{files: map[string]string{"README.md": "# x\n"}}
+	p := systemicPattern("dra race")
+	p.RelevantFiles = []string{"k8s.io/kubernetes/test/e2e/dra/dra.go"}
+	c := &fakeCompleter{} // locate never called
+	_, err := generateFix(context.Background(), genParamsFor(c, src), p)
+	if err == nil || !strings.Contains(err.Error(), "outside") {
+		t.Errorf("expected an upstream-decline message, got %v", err)
+	}
+}
+
+func TestMergeCandidates_SeedsFirstDeduped(t *testing.T) {
+	seeds := []string{"a.go", "b.go"}
+	ranked := []string{"b.go", "c.go"} // b.go overlaps
+	got := mergeCandidates(seeds, ranked)
+	want := []string{"a.go", "b.go", "c.go"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("position %d: got %q, want %q (%v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+func TestGenerateFix_SeedsRelevantFilesWhenRankingMisses(t *testing.T) {
+	// Keyword ranking would miss this file (its name shares no keyword with the
+	// failure), but the analysis named it. Seeding must surface it so the locate
+	// step can pick it instead of failing with "no candidate file fit".
+	target := "test/e2e/azure_apiversion_upgrade_test.go"
+	src := &fakeSource{files: map[string]string{
+		target:          "package e2e\n\nfunc TestUpgrade() { doThing() }\n",
+		"README.md":     "# readme\n",
+		"vendor/x/y.go": "package x\n",
+	}}
+	p := systemicPattern("aso webhook readiness race")
+	p.SharedRootCause = "clusterctl upgrade races the ASO conversion webhook lifecycle"
+	p.SuggestedFix = "wait for the webhook endpoints before tearing down the old provider"
+	p.RelevantFiles = []string{
+		"sigs.k8s.io/cluster-api-provider-azure/" + target, // resolves to target
+		"artifacts/clusters/bootstrap/logs/manager.log",    // dropped
+	}
+	c := &fakeCompleter{
+		locate: `{"files": ["test/e2e/azure_apiversion_upgrade_test.go"]}`,
+		edit:   `{"rationale": "guard the webhook", "edits": [{"file": "test/e2e/azure_apiversion_upgrade_test.go", "old": "doThing()", "new": "waitForWebhook(); doThing()"}]}`,
+	}
+	fix, err := generateFix(context.Background(), genParamsFor(c, src), p)
+	if err != nil {
+		t.Fatalf("generateFix: %v", err)
+	}
+	if _, ok := fix.files[target]; !ok {
+		t.Errorf("expected an edit to %q, got %v", target, fix.files)
 	}
 }
 

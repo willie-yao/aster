@@ -161,6 +161,42 @@ func TestPatternCacheKey_TracksModelInput(t *testing.T) {
 	}
 }
 
+func TestCollectRelevantFiles_LeadsWithLocation(t *testing.T) {
+	failures := []PatternFailure{
+		{LocationFile: "test/e2e/foo_test.go", RelevantFiles: []string{"config/a.yaml", "test/e2e/foo_test.go"}},
+		{LocationFile: "test/e2e/foo_test.go", RelevantFiles: []string{"config/b.yaml"}},
+	}
+	got := collectRelevantFiles(failures)
+	want := []string{"test/e2e/foo_test.go", "config/a.yaml", "config/b.yaml"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("position %d: got %q, want %q (%v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+// TestCollectRelevantFiles_NotInCacheKey guards the invariant that the failing-
+// test location seeds the fix harness without perturbing the pattern cache key:
+// LocationFile must not be rendered into the correlation prompt.
+func TestCollectRelevantFiles_NotInCacheKey(t *testing.T) {
+	base := patternFailures(2)
+	withLoc := patternFailures(2)
+	withLoc[0].LocationFile = "test/e2e/foo_test.go"
+
+	k1 := patternCacheKey("kubernetes", "job", "job", buildPatternUserPrompt("job", base))
+	k2 := patternCacheKey("kubernetes", "job", "job", buildPatternUserPrompt("job", withLoc))
+	if k1 != k2 {
+		t.Error("LocationFile must not change the pattern cache key (kept out of the prompt)")
+	}
+	// But it must still surface in the pattern's relevant files.
+	if got := collectRelevantFiles(withLoc); len(got) == 0 || got[0] != "test/e2e/foo_test.go" {
+		t.Errorf("LocationFile should lead collectRelevantFiles, got %v", got)
+	}
+}
+
 func TestBuildPatternUserPrompt_RendersFixAndFiles(t *testing.T) {
 	failures := patternFailures(2)
 	failures[0].SuggestedFix = "serialize nodepool scaling operations"

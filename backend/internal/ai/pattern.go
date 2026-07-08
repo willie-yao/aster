@@ -35,8 +35,12 @@ type PatternFailure struct {
 	// RelevantFiles are the source files this build's analysis implicated,
 	// so the correlation can name concrete targets in the cross-cutting fix.
 	RelevantFiles []string
-	IsTransient   bool
-	Severity      string
+	// LocationFile is the failing test's own source file (from the JUnit
+	// failure location). It seeds the fix harness but is deliberately kept out
+	// of the correlation prompt so it never perturbs the pattern cache key.
+	LocationFile string
+	IsTransient  bool
+	Severity     string
 }
 
 // patternResponse is the model's JSON contract for the correlation verdict.
@@ -101,7 +105,7 @@ func (s *Service) AnalyzePattern(ctx context.Context, jobID, subject string, fai
 	if raw, ok := s.client.cache.Get(key); ok {
 		var cached patternResponse
 		if json.Unmarshal(raw, &cached) == nil && validPatternResponse(cached) {
-			return buildPatternAnalysis(subject, len(failures), cached), nil
+			return buildPatternAnalysis(subject, len(failures), cached, collectRelevantFiles(failures)), nil
 		}
 	}
 
@@ -124,7 +128,31 @@ func (s *Service) AnalyzePattern(ctx context.Context, jobID, subject string, fai
 		return nil, fmt.Errorf("pattern analysis: incomplete verdict (empty summary, or systemic without a root cause)")
 	}
 	_ = s.client.cache.Set(key, parsed)
-	return buildPatternAnalysis(subject, len(failures), parsed), nil
+	return buildPatternAnalysis(subject, len(failures), parsed, collectRelevantFiles(failures)), nil
+}
+
+// collectRelevantFiles unions the files each build implicated, in first-seen
+// order, leading with the failing test's own source file. These carry the
+// analysis's own targeting into the pattern so the fix harness can ground
+// candidate selection on them rather than re-deriving targets from scratch.
+func collectRelevantFiles(failures []PatternFailure) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(f string) {
+		f = strings.TrimSpace(f)
+		if f == "" || seen[f] {
+			return
+		}
+		seen[f] = true
+		out = append(out, f)
+	}
+	for _, f := range failures {
+		add(f.LocationFile)
+		for _, rf := range f.RelevantFiles {
+			add(rf)
+		}
+	}
+	return out
 }
 
 // validPatternResponse rejects empty or self-contradictory verdicts so they are
@@ -140,7 +168,7 @@ func validPatternResponse(p patternResponse) bool {
 }
 
 // buildPatternAnalysis converts a parsed verdict into the published model.
-func buildPatternAnalysis(subject string, builds int, p patternResponse) *models.PatternAnalysis {
+func buildPatternAnalysis(subject string, builds int, p patternResponse, relevantFiles []string) *models.PatternAnalysis {
 	conf := strings.ToLower(strings.TrimSpace(p.Confidence))
 	switch conf {
 	case "high", "medium", "low":
@@ -157,6 +185,7 @@ func buildPatternAnalysis(subject string, builds int, p patternResponse) *models
 		SharedBuilds:    p.SharedBuilds,
 		SuggestedFix:    strings.TrimSpace(p.SuggestedFix),
 		Summary:         strings.TrimSpace(p.Summary),
+		RelevantFiles:   relevantFiles,
 	}
 }
 

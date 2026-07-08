@@ -1099,11 +1099,27 @@ func gatherPatternFailures(d *models.JobDetail) []ai.PatternFailure {
 			RootCause:      rep.AIAnalysis.RootCause,
 			SuggestedFix:   rep.AIAnalysis.SuggestedFix,
 			RelevantFiles:  rep.AIAnalysis.RelevantFiles,
-			IsTransient:    rep.AISummary != nil && rep.AISummary.IsTransient,
-			Severity:       rep.AIAnalysis.Severity,
+			// The failing test's location seeds the fix harness (via the
+			// pattern's RelevantFiles) without entering the correlation prompt,
+			// so warm pattern-cache entries survive. repoRelevantFiles drops it
+			// later when it points at vendored or upstream code.
+			LocationFile: failureLocationFile(rep.FailureLocation),
+			IsTransient:  rep.AISummary != nil && rep.AISummary.IsTransient,
+			Severity:     rep.AIAnalysis.Severity,
 		})
 	}
 	return out
+}
+
+// failureLocationFile strips the trailing :line[:col] from a JUnit failure
+// location, returning just the file path (empty when there is none).
+func failureLocationFile(loc string) string {
+	loc = strings.TrimSpace(loc)
+	if loc == "" {
+		return ""
+	}
+	file, _, _ := strings.Cut(loc, ":")
+	return file
 }
 
 // severityRank orders analysis severities so the most actionable failure in a
