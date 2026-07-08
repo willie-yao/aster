@@ -472,14 +472,6 @@ func TestAgentic_Effective(t *testing.T) {
 			t.Error("SingleToolCall=true should pass through")
 		}
 	})
-	t.Run("EvidenceInjection flips through", func(t *testing.T) {
-		if eff(Agentic{}).EvidenceInjection {
-			t.Error("EvidenceInjection should default to false")
-		}
-		if !eff(Agentic{EvidenceInjection: true}).EvidenceInjection {
-			t.Error("EvidenceInjection=true should pass through")
-		}
-	})
 	t.Run("Tools list passes through", func(t *testing.T) {
 		in := &AI{Agentic: Agentic{Tools: []string{"filesystem"}}}
 		got := in.EffectiveAgentic()
@@ -498,9 +490,9 @@ func TestAgentic_Effective(t *testing.T) {
 			t.Errorf("Tools = %v, want empty", got.Tools)
 		}
 	})
-	t.Run("MinToolCalls defaults to zero", func(t *testing.T) {
-		if got := eff(Agentic{}); got.MinToolCalls != 0 {
-			t.Errorf("MinToolCalls = %d, want 0", got.MinToolCalls)
+	t.Run("MinToolCalls defaults to 2", func(t *testing.T) {
+		if got := eff(Agentic{}); got.MinToolCalls != 2 {
+			t.Errorf("MinToolCalls = %d, want 2 (default floor on)", got.MinToolCalls)
 		}
 	})
 	t.Run("MinToolCalls passes through when set", func(t *testing.T) {
@@ -518,27 +510,13 @@ func TestAgentic_Effective(t *testing.T) {
 			t.Errorf("MinGCSBytes = %d, want 200000", got.MinGCSBytes)
 		}
 	})
-	t.Run("Critique disabled by default with default max retries", func(t *testing.T) {
-		got := eff(Agentic{})
-		if got.Critique.Enabled {
-			t.Error("Critique.Enabled = true, want false (default)")
-		}
-		if got.Critique.MaxRetries != 2 {
+	t.Run("Critique defaults to max retries 2", func(t *testing.T) {
+		if got := eff(Agentic{}); got.Critique.MaxRetries != 2 {
 			t.Errorf("Critique.MaxRetries = %d, want 2 (default)", got.Critique.MaxRetries)
 		}
 	})
-	t.Run("Critique.Enabled flips through", func(t *testing.T) {
-		got := eff(Agentic{Critique: AgenticCritique{Enabled: true}})
-		if !got.Critique.Enabled {
-			t.Error("Critique.Enabled = false, want true")
-		}
-		// Omitted MaxRetries falls back to default 2.
-		if got.Critique.MaxRetries != 2 {
-			t.Errorf("Critique.MaxRetries = %d, want default 2", got.Critique.MaxRetries)
-		}
-	})
 	t.Run("Critique.MaxRetries passes through when set", func(t *testing.T) {
-		got := eff(Agentic{Critique: AgenticCritique{Enabled: true, MaxRetries: 5}})
+		got := eff(Agentic{Critique: AgenticCritique{MaxRetries: 5}})
 		if got.Critique.MaxRetries != 5 {
 			t.Errorf("Critique.MaxRetries = %d, want 5", got.Critique.MaxRetries)
 		}
@@ -553,7 +531,6 @@ func agenticEqual(a, b Agentic) bool {
 		a.MinGCSBytes == b.MinGCSBytes &&
 		a.Critique == b.Critique &&
 		a.SingleToolCall == b.SingleToolCall &&
-		a.EvidenceInjection == b.EvidenceInjection &&
 		equalStrings(a.Tools, b.Tools)
 }
 
@@ -583,23 +560,6 @@ func TestAnalysisConcurrency_HonorsConfiguredValue(t *testing.T) {
 	c.AI = &AI{Concurrency: 6}
 	if got := c.AnalysisConcurrency(); got != 6 {
 		t.Errorf("AnalysisConcurrency = %d, want 6", got)
-	}
-}
-
-func TestValidate_EvidenceInjectionRequiresCritique(t *testing.T) {
-	c := validConfig()
-	c.AI = &AI{Agentic: Agentic{EvidenceInjection: true}}
-	err := c.Validate()
-	if err == nil {
-		t.Fatal("expected error when evidence_injection without critique.enabled")
-	}
-	if !strings.Contains(err.Error(), "critique.enabled") {
-		t.Errorf("error %q should mention critique.enabled", err.Error())
-	}
-	// With critique enabled the same config validates.
-	c.AI.Agentic.Critique.Enabled = true
-	if err := c.Validate(); err != nil {
-		t.Fatalf("validation should pass when critique is enabled alongside injection: %v", err)
 	}
 }
 
@@ -645,37 +605,6 @@ func TestParse_AgenticTimeoutField(t *testing.T) {
 	}
 	if c.AI.Agentic.Timeout != 8*time.Minute {
 		t.Errorf("Agentic.Timeout = %v, want 8m", c.AI.Agentic.Timeout)
-	}
-}
-
-func TestEngineVersionWarning(t *testing.T) {
-	cases := []struct {
-		name      string
-		minVer    string
-		engineVer string
-		wantWarn  bool
-	}{
-		{"no minimum set", "", "v1.0.0", false},
-		{"engine newer", "1.2.0", "v1.3.0", false},
-		{"engine equal", "1.2.0", "v1.2.0", false},
-		{"engine older", "1.4.0", "v1.2.0", true},
-		{"engine older, v-prefixed min", "v1.4.0", "v1.2.0", true},
-		{"dev engine never warns", "1.4.0", "dev-abc1234", false},
-		{"bare dev never warns", "1.4.0", "dev", false},
-		{"empty engine never warns", "1.4.0", "", false},
-		{"unrecognized engine version warns", "1.4.0", "garbage", true},
-		{"prerelease engine sorts below release", "1.0.0", "v1.0.0-beta.1", true},
-		{"invalid minimum is reported", "not-a-version", "v1.2.0", true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			c := &Config{MinEngineVersion: tc.minVer}
-			got := c.EngineVersionWarning(tc.engineVer)
-			if (got != "") != tc.wantWarn {
-				t.Errorf("EngineVersionWarning(%q) with min %q = %q; wantWarn=%v",
-					tc.engineVer, tc.minVer, got, tc.wantWarn)
-			}
-		})
 	}
 }
 

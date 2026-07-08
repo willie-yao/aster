@@ -56,8 +56,7 @@ type Options struct {
 	IncludePresubmits bool
 	EnableAI          bool
 	Collectors        *CollectorRegistry
-	// Version is the engine version embedded at build time.
-	// Empty or "dev" disables min_engine_version comparison.
+	// Version is the engine version embedded at build time, logged at startup.
 	Version string
 }
 
@@ -113,14 +112,11 @@ func setupPipeline(opts Options) (*pipeline, error) {
 	if opts.Version != "" {
 		log.Printf("Engine version: %s", opts.Version)
 	}
-	if w := cfg.EngineVersionWarning(opts.Version); w != "" {
-		log.Printf("⚠ %s", w)
-	}
 
 	// Validate the collector reference against the registry up front so a
-	// typo'd artifacts.collector fails before any expensive work.
+	// missing collector fails before any expensive work.
 	if !opts.Collectors.Has(cfg.CollectorName()) {
-		return nil, fmt.Errorf("unknown artifacts.collector %q (registered: %s)",
+		return nil, fmt.Errorf("unknown collector %q (registered: %s)",
 			cfg.CollectorName(), strings.Join(opts.Collectors.Names(), ", "))
 	}
 
@@ -606,27 +602,14 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 		ExtraHeaders: aiHeaders(cfg),
 	})
 
-	// Resolve the review client: reuse the generation client unless the consumer
-	// pointed the review at a different endpoint/model/token.
+	// The fix reviewer reuses the generation client (same endpoint and model).
 	critiqueRetries := 0
 	if eff.CritiqueRetries != nil {
 		critiqueRetries = *eff.CritiqueRetries
 	}
 	var critique fixpr.Completer
 	if critiqueRetries > 0 {
-		cEndpoint := firstNonEmpty(eff.CritiqueEndpoint, os.Getenv("FIX_CRITIQUE_ENDPOINT"), aiEndpoint(cfg))
-		cModel := firstNonEmpty(eff.CritiqueModel, os.Getenv("FIX_CRITIQUE_MODEL"), aiModel(cfg))
-		cToken := firstNonEmpty(os.Getenv("FIX_CRITIQUE_TOKEN"), aiToken)
-		if cEndpoint == aiEndpoint(cfg) && cModel == aiModel(cfg) && cToken == aiToken {
-			critique = aiClient
-		} else {
-			critique = ai.NewClientWithOptions(ai.Options{
-				Token:        cToken,
-				Endpoint:     cEndpoint,
-				Model:        cModel,
-				ExtraHeaders: aiHeaders(cfg),
-			})
-		}
+		critique = aiClient
 	}
 
 	prClient, source := fixpr.NewClients(fixToken)
@@ -662,16 +645,6 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 			log.Printf("Warning: failed to save fix-PR state: %v", err)
 		}
 	}
-}
-
-// firstNonEmpty returns the first non-empty string, or "".
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 // loadCachedJobDetails loads existing per-job JSON files from the output dir.
@@ -845,12 +818,6 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, details []m
 	service.SetSourceRepo(cfg.Branding.SourceRepo.Owner, cfg.Branding.SourceRepo.Name)
 
 	eff := cfg.AI.EffectiveAgentic()
-	// Recipes feed the critique gate, so their presence auto-enables critique.
-	// An explicit critique block still supplies max_retries.
-	if !eff.Critique.Enabled && skillSet != nil && len(skillSet.Skills()) > 0 {
-		eff.Critique.Enabled = true
-		log.Printf("🧪 %d skill recipe(s) present; auto-enabling the critique gate they feed", len(skillSet.Skills()))
-	}
 	// Size byte budgets from the endpoint's reported context window.
 	// Fall back to a static model budget with compaction off when absent.
 	modelByteBudget := fallbackModelByteBudget
@@ -888,23 +855,17 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, details []m
 			ContextByteBudget:  contextByteBudget,
 			MinToolCalls:       eff.MinToolCalls,
 			MinGCSBytes:        eff.MinGCSBytes,
-			CritiqueEnabled:    eff.Critique.Enabled,
 			CritiqueMaxRetries: eff.Critique.MaxRetries,
 			SingleToolCall:     eff.SingleToolCall,
-			EvidenceInjection:  eff.EvidenceInjection,
 		}, factory, registry, enabled)
 		// nil is safe; without recipes the service skips skill matching.
 		service.SetSkills(skillSet)
-		critiqueLog := "off"
-		if eff.Critique.Enabled {
-			critiqueLog = fmt.Sprintf("on/%d", eff.Critique.MaxRetries)
-		}
 		skillsLog := "off"
-		if eff.Critique.Enabled && skillSet != nil && len(skillSet.Skills()) > 0 {
+		if skillSet != nil && len(skillSet.Skills()) > 0 {
 			skillsLog = fmt.Sprintf("on/%d", len(skillSet.Skills()))
 		}
-		log.Printf("🤖 Agentic AI enabled (%d iters, %dKB model, %dMB gcs, %s timeout, min_tools=%d, min_gcs_kb=%d, critique=%s, skills=%s, tools=%v)",
-			eff.MaxIters, modelByteBudget/1024, gcsByteBudget/1024/1024, eff.Timeout, eff.MinToolCalls, eff.MinGCSBytes/1024, critiqueLog, skillsLog, enabled)
+		log.Printf("🤖 Agentic AI enabled (%d iters, %dKB model, %dMB gcs, %s timeout, min_tools=%d, min_gcs_kb=%d, critique=on/%d, skills=%s, tools=%v)",
+			eff.MaxIters, modelByteBudget/1024, gcsByteBudget/1024/1024, eff.Timeout, eff.MinToolCalls, eff.MinGCSBytes/1024, eff.Critique.MaxRetries, skillsLog, enabled)
 	}
 	log.Printf("Using AI endpoint: %s, model: %s", aiClient.Endpoint(), aiClient.ModelName())
 

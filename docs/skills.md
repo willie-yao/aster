@@ -1,8 +1,8 @@
 # Authoring AI skills (recipes) for your project
 
-> Status: Consumer-side opt-in. Skills extend the critique gate; shipping
-> recipe files auto-enables critique, so you only need this doc if you want
-> to harden the gate against the specific failure patterns your CI hits.
+> Status: Consumer-side opt-in. Skills extend the always-on critique gate, so
+> you only need this doc if you want to harden the gate against the specific
+> failure patterns your CI hits.
 
 This doc explains how to author and ship diagnostic recipes (called
 "skills" in the engine) that bias the AI loop toward reading the
@@ -13,14 +13,14 @@ evidence your project considers canonical for known failure modes.
 A skill is a YAML file at `<your-project-dir>/skills/<name>.yaml`
 that declares:
 
-1. **Triggers** — regex patterns that, when any matches the model's
+1. **Triggers:** regex patterns that, when any matches the model's
    draft analysis (root_cause + summary + suggested_fix + relevant_files),
    marks the recipe as "applicable" to this failure.
-2. **Required evidence** — one or more groups of regex patterns. For
+2. **Required evidence:** one or more groups of regex patterns. For
    each group, the agent must have successfully read at least one
    artifact whose path matches one of the group's patterns. A group
    is satisfied by any single match.
-3. **Procedure** — markdown guidance quoted back to the model when
+3. **Procedure:** markdown guidance quoted back to the model when
    the recipe matches but evidence is still missing. Treated as
    *consumer guidance*; the engine wraps it with a disclaimer when
    injecting it so the recipe cannot accidentally override the
@@ -177,20 +177,17 @@ Loaded 7 AI skill recipe(s) from ./skills/ (hash=a1b2c3d4)
 Skills are loaded regardless of any flag (so a parse error catches a
 broken recipe before runtime). There is no `skills.enabled` flag:
 shipping recipe files under `<project_dir>/skills/*.yaml` is the opt-in.
-Skills extend the critique gate, so the fetcher auto-enables `critique`
-when recipes are present:
+Skills extend the always-on critique gate when recipes are present:
 
 ```yaml
 # project.yaml
 ai:
-  # critique is auto-enabled because skills/*.yaml recipes exist;
-  # set it explicitly only to override max_retries.
   critique:
-    max_retries: 2
+    max_retries: 2  # optional; default 2
 ```
 
-Skills extend critique; they don't replace it. If you ship recipes but
-do not want the critique gate, remove the recipe files.
+Skills extend critique; they don't replace it. If you ship recipes, the
+gate uses them to require the evidence paths they describe.
 
 ## Cache invalidation
 
@@ -198,13 +195,13 @@ Each cache entry is stamped with the SHA-256 fingerprint of the
 loaded skill set at write time (`SkillSetHash` field). On the next
 fetcher run:
 
-- If skills are disabled, the hash check is skipped (cache unaffected
+- If no skills are loaded, the hash check is skipped (cache unaffected
   by recipe set changes).
-- If skills are enabled, cache entries whose stored hash differs from
-  the currently-loaded set's hash are invalidated and re-analyzed.
+- If skills are loaded, cache entries whose stored hash differs from the
+  currently-loaded set's hash are invalidated and re-analyzed.
 
-This means editing a recipe — even a single character in a trigger
-regex or procedure — invalidates every cache entry on the next run.
+Editing a recipe, even a single character in a trigger regex or procedure,
+invalidates every cache entry on the next run.
 The fingerprint is whitespace- and comment-insensitive, so reformatting
 a YAML file does not bust the cache.
 

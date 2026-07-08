@@ -100,7 +100,7 @@ func TestService_SkipWhenAlreadyAnalyzedSameMode(t *testing.T) {
 
 	tc := newFailedTC("Test A", "msg")
 	tc.AISummary = &models.AISummary{Summary: "cached"}
-	tc.AIAnalysis = &models.AIAnalysis{RootCause: "cached", Mode: AgenticMode, PromptHash: PromptFingerprint("sys")}
+	tc.AIAnalysis = &models.AIAnalysis{RootCause: "cached", Mode: AgenticMode, PromptHash: PromptFingerprint("sys"), CritiquePassed: true, CritiqueVersion: currentCritiqueVersion}
 
 	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
 
@@ -132,7 +132,7 @@ func TestService_ShouldReanalyze_PromptHash(t *testing.T) {
 	// Meets the (zero) floors and is agentic mode, so only the prompt gate
 	// can force re-analysis here.
 	mk := func(promptHash string) *models.TestCase {
-		return &models.TestCase{AIAnalysis: &models.AIAnalysis{Mode: AgenticMode, PromptHash: promptHash}}
+		return &models.TestCase{AIAnalysis: &models.AIAnalysis{Mode: AgenticMode, PromptHash: promptHash, CritiquePassed: true, CritiqueVersion: currentCritiqueVersion}}
 	}
 
 	if s.shouldReanalyze(mk(PromptFingerprint("engine base + my prompt"))) {
@@ -210,7 +210,9 @@ func TestService_ShouldReanalyze_FloorTable(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s := &Service{systemPrompt: "sys", agenticOpts: AgenticOptions{MinToolCalls: tc.minToolCalls, MinGCSBytes: tc.minGCSBytes}}
 			testCase := &models.TestCase{
-				AIAnalysis: &models.AIAnalysis{Mode: tc.cachedMode, ToolCalls: tc.cachedCalls, GCSBytes: tc.cachedGCS, PromptHash: PromptFingerprint("sys")},
+				// Critique is always on, so a reusable entry must be
+				// critique-passing; this table isolates the floor behavior.
+				AIAnalysis: &models.AIAnalysis{Mode: tc.cachedMode, ToolCalls: tc.cachedCalls, GCSBytes: tc.cachedGCS, PromptHash: PromptFingerprint("sys"), CritiquePassed: true, CritiqueVersion: currentCritiqueVersion},
 			}
 			if got := s.shouldReanalyze(testCase); got != tc.want {
 				t.Errorf("shouldReanalyze cached(mode=%q, calls=%d, gcs=%d) floors(calls=%d, gcs=%d) = %v, want %v",

@@ -224,27 +224,22 @@ func (s *Service) belowCurrentAgenticFloor(tc *models.TestCase) bool {
 	if tc.AIAnalysis.GCSBytes < s.agenticOpts.MinGCSBytes {
 		return true
 	}
-	if s.agenticOpts.CritiqueEnabled {
-		if !tc.AIAnalysis.CritiquePassed {
-			return true
-		}
-		if tc.AIAnalysis.CritiqueVersion < currentCritiqueVersion {
-			return true
-		}
+	if !tc.AIAnalysis.CritiquePassed {
+		return true
 	}
-	// Invalidate entries whose SkillSetHash doesn't match the loaded set
-	// so consumer recipe edits trigger re-analysis. Skills feed
-	// the critique gate, so the hash is part of the contract exactly when
-	// critique is on. Empty wantHash matches an entry stamped with no
-	// recipes. Nothing is invalidated when no recipes are loaded.
-	if s.agenticOpts.CritiqueEnabled {
-		wantHash := ""
-		if s.skillSet != nil {
-			wantHash = s.skillSet.Hash()
-		}
-		if tc.AIAnalysis.SkillSetHash != wantHash {
-			return true
-		}
+	if tc.AIAnalysis.CritiqueVersion < currentCritiqueVersion {
+		return true
+	}
+	// Invalidate entries whose SkillSetHash doesn't match the loaded set so
+	// consumer recipe edits trigger re-analysis. Skills feed the critique
+	// gate, so the hash is part of the contract. Empty wantHash matches an
+	// entry stamped with no recipes.
+	wantHash := ""
+	if s.skillSet != nil {
+		wantHash = s.skillSet.Hash()
+	}
+	if tc.AIAnalysis.SkillSetHash != wantHash {
+		return true
 	}
 	// The prompt is always sent to the model, so prompt edits invalidate the
 	// entry without a critique dependency.

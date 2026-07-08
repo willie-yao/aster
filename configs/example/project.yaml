@@ -14,12 +14,6 @@ name: "Example Kubernetes Project"
 # Optional short name for compact UIs.
 short_name: "EXAMPLE"
 
-# Optional. Lowest engine release this config expects (e.g. "1.4.0"). The
-# fetcher warns at startup if the engine it is built from is older, catching a
-# config that adopted a newer field without bumping the pinned engine ref
-# (uses:@<ref>). Advisory only; it warns, it does not fail. Omit to disable.
-# min_engine_version: "1.0.0"
-
 # Optional source-side knobs. Job discovery itself is fully automatic:
 # the engine lists every YAML under kubernetes/test-infra/config/jobs/ at
 # the current master commit and keeps jobs whose testgrid-dashboards
@@ -126,7 +120,7 @@ ai:
   # context window and the GCS fetch ceiling is a fixed engine safety cap
   # (see docs/agentic.md "Automatic budget sizing").
   # timeout: 5m             # per-failure wall-clock timeout
-  # min_tool_calls: 0       # if >0, refuse to accept a final answer
+  # min_tool_calls: 2       # default 2; refuse to accept a final answer
   #                         # until the model has made this many calls.
   #                         # Below-floor finals are published but not
   #                         # cached, so the next run retries. Useful for
@@ -137,14 +131,10 @@ ai:
   #                         # calls or tiny byte ranges). Same publish/
   #                         # don't-cache semantics as min_tool_calls.
   # critique:
-  #   enabled: false        # Deterministic regex pass that rejects
+  #   max_retries: 2        # default 2; deterministic regex pass rejects
   #                         # punt-shaped suggested_fix, hallucinated
   #                         # artifact citations, fabricated import
   #                         # paths, and missing skill-driven evidence.
-  #                         # Re-prompts up to max_retries times.
-  #                         # Auto-enabled when skills/*.yaml recipes
-  #                         # are present (recipes feed this gate).
-  #   max_retries: 2
   # Cross-build pattern analysis runs automatically (no flag): after the
   # per-failure analyses, for any job that failed in >=3 recent builds the
   # engine correlates one representative failure per failed build into a single
@@ -188,9 +178,7 @@ ai:
   #   max_new_per_run: 1          # default 1
   #   labels: [ai-proposed-fix]   # default [ai-proposed-fix]
   #   dry_run: true               # propose to fix_previews.json without a PR
-  #   critique_retries: 1         # LLM review re-prompts before dropping (default 1; 0 disables)
-  #   critique_endpoint: "..."    # optional: review with a different endpoint/model
-  #   critique_model: "..."       #   (e.g. a stronger reviewer); token via FIX_CRITIQUE_TOKEN
+  #   critique_retries: 1         # LLM review re-prompts before dropping (default 1)
 
 # Optional: auto-file GitHub issues for systemic recurring patterns and
 # persistent failures. Off by default. Active only when enabled AND an

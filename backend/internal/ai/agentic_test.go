@@ -253,7 +253,7 @@ func TestAgentic_HappyPath_ToolThenFinalJSON(t *testing.T) {
 	// Round 1: model calls list_artifacts.
 	srv.push(200, chatRespToolCall("call_1", "list_artifacts", map[string]interface{}{"path": ""}))
 	// Round 2: model returns final JSON.
-	final := `{"summary":"DNS lookup failed","is_transient":false,"root_cause":"resolver pointed at stale nameserver","severity":"High","suggested_fix":"Update /etc/resolv.conf","relevant_files":["build-log.txt"]}`
+	final := `{"summary":"DNS lookup failed","is_transient":false,"root_cause":"resolver pointed at stale nameserver","severity":"High","suggested_fix":"Update /etc/resolv.conf","relevant_files":[]}`
 	srv.push(200, chatRespFinal(final))
 
 	client := newAgenticTestClient(t, srv.URL)
@@ -454,8 +454,9 @@ func TestAgentic_MinToolCalls_NudgeForcesInvestigation(t *testing.T) {
 	// Round 1: model tries to finalize immediately with no tool calls.
 	final1 := `{"summary":"made up","is_transient":false,"root_cause":"premature guess","severity":"High","suggested_fix":"x","relevant_files":[]}`
 	srv.push(200, chatRespFinal(final1))
-	// Round 2: after the nudge, model calls list_artifacts.
-	srv.push(200, chatRespToolCall("call_1", "list_artifacts", map[string]interface{}{"path": ""}))
+	// Round 2: after the nudge, model reads build-log.txt (the artifact it
+	// will cite), satisfying both the floor and the critique's read check.
+	srv.push(200, chatRespToolCall("call_1", "read_artifact", map[string]interface{}{"path": "build-log.txt", "offset": 0, "length": 16384}))
 	// Round 3: model finalizes with the post-investigation answer.
 	final2 := `{"summary":"real cause","is_transient":false,"root_cause":"found in build-log.txt line 42","severity":"High","suggested_fix":"fix it","relevant_files":["build-log.txt"]}`
 	srv.push(200, chatRespFinal(final2))
@@ -761,7 +762,6 @@ func TestAgentic_Critique_FailRetryPass(t *testing.T) {
 		ModelByteBudget:    100_000,
 		GCSByteBudget:      100_000,
 		Timeout:            30 * time.Second,
-		CritiqueEnabled:    true,
 		CritiqueMaxRetries: 2,
 	}
 	summary, analysis, err := client.doAnalyzeAgentic(context.Background(),
@@ -814,7 +814,6 @@ func TestAgentic_Critique_ExhaustedAcceptedNotCached(t *testing.T) {
 		ModelByteBudget:    100_000,
 		GCSByteBudget:      100_000,
 		Timeout:            30 * time.Second,
-		CritiqueEnabled:    true,
 		CritiqueMaxRetries: 2,
 	}
 	summary, _, err := client.doAnalyzeAgentic(context.Background(),
@@ -847,95 +846,6 @@ func TestAgentic_Critique_ExhaustedAcceptedNotCached(t *testing.T) {
 	}
 }
 
-// TestAgentic_Critique_Disabled_NoBehaviorChange verifies a punt-shaped final
-// is accepted and cached when critique is disabled.
-func TestAgentic_Critique_Disabled_NoBehaviorChange(t *testing.T) {
-	shrinkCallDelay(t)
-	srv := newScriptedChatServer(t)
-	srv.push(200, chatRespFinal(puntyFinalJSON))
-
-	client := newAgenticTestClient(t, srv.URL)
-	opts := AgenticOptions{
-		MaxIters:        5,
-		ModelByteBudget: 100_000,
-		GCSByteBudget:   100_000,
-		Timeout:         30 * time.Second,
-		// CritiqueEnabled defaults to false.
-	}
-	summary, _, err := client.doAnalyzeAgentic(context.Background(),
-		newTestAgenticInputs(t, &fakeBrowser{}, opts),
-		"agentic:test:critique-disabled", "sys", "user")
-	if err != nil {
-		t.Fatalf("doAnalyzeAgentic: %v", err)
-	}
-	if got := atomic.LoadInt32(&srv.calls); got != 1 {
-		t.Errorf("call count = %d, want 1 (no retry with critique off)", got)
-	}
-	if summary.Summary != "shallow" {
-		t.Errorf("expected unmodified punt-shaped final, got %q", summary.Summary)
-	}
-
-	// Second call hits cache because the critique gate is disabled.
-	_, hit, err := client.doAnalyzeAgentic(context.Background(),
-		newTestAgenticInputs(t, &fakeBrowser{}, opts),
-		"agentic:test:critique-disabled", "sys", "user")
-	if err != nil {
-		t.Fatalf("second call: %v", err)
-	}
-	if got := atomic.LoadInt32(&srv.calls); got != 1 {
-		t.Errorf("call count after cache hit = %d, want 1", got)
-	}
-	if !hit.CacheHit {
-		t.Errorf("CacheHit = false, want true")
-	}
-}
-
-// TestAgentic_Critique_CacheInvalidatesUncritiqued verifies the cache
-// invalidation path: an entry cached while critique was disabled has
-// CritiquePassed=false. When a consumer later enables critique, that
-// entry must be treated as a cache miss and re-analyzed.
-func TestAgentic_Critique_CacheInvalidatesUncritiqued(t *testing.T) {
-	shrinkCallDelay(t)
-	srv := newScriptedChatServer(t)
-
-	// First call: critique disabled, model emits a punt-shaped final, cached.
-	srv.push(200, chatRespFinal(puntyFinalJSON))
-	client := newAgenticTestClient(t, srv.URL)
-	off := AgenticOptions{MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}
-	if _, _, err := client.doAnalyzeAgentic(context.Background(),
-		newTestAgenticInputs(t, &fakeBrowser{}, off),
-		"agentic:test:critique-invalidate", "sys", "user"); err != nil {
-		t.Fatalf("first call: %v", err)
-	}
-	if got := atomic.LoadInt32(&srv.calls); got != 1 {
-		t.Fatalf("first call should hit server once, got %d", got)
-	}
-
-	// Enable critique. Cached CritiquePassed=false invalidates and re-analyzes.
-	srv.push(200, chatRespFinal(puntyFinalJSON))
-	srv.push(200, chatRespFinal(cleanFinalJSON))
-	on := AgenticOptions{
-		MaxIters:           5,
-		ModelByteBudget:    100_000,
-		GCSByteBudget:      100_000,
-		Timeout:            30 * time.Second,
-		CritiqueEnabled:    true,
-		CritiqueMaxRetries: 2,
-	}
-	summary, _, err := client.doAnalyzeAgentic(context.Background(),
-		newTestAgenticInputs(t, &fakeBrowser{}, on),
-		"agentic:test:critique-invalidate", "sys", "user")
-	if err != nil {
-		t.Fatalf("second call: %v", err)
-	}
-	if summary.Summary != "deep" {
-		t.Errorf("expected re-analyzed clean final, got %q (stale cache served)", summary.Summary)
-	}
-	if got := atomic.LoadInt32(&srv.calls); got != 3 {
-		t.Errorf("call count = %d, want 3 (1 first + punt-retry-clean for second)", got)
-	}
-}
-
 // TestAgentic_Critique_FinalizeRoundOutputCritiqued verifies forced-finalize
 // output is critique-checked before publish and cache.
 func TestAgentic_Critique_FinalizeRoundOutputCritiqued(t *testing.T) {
@@ -955,7 +865,6 @@ func TestAgentic_Critique_FinalizeRoundOutputCritiqued(t *testing.T) {
 		ModelByteBudget:    100_000,
 		GCSByteBudget:      100_000,
 		Timeout:            30 * time.Second,
-		CritiqueEnabled:    true,
 		CritiqueMaxRetries: 2,
 	}
 	summary, analysis, err := client.doAnalyzeAgentic(context.Background(),
@@ -1017,7 +926,6 @@ func TestAgentic_Critique_RetryAllowsToolCallThenFinal(t *testing.T) {
 		ModelByteBudget:    100_000,
 		GCSByteBudget:      100_000,
 		Timeout:            30 * time.Second,
-		CritiqueEnabled:    true,
 		CritiqueMaxRetries: 1,
 	}
 	summary, analysis, err := client.doAnalyzeAgentic(context.Background(),
@@ -1095,7 +1003,6 @@ func TestAgentic_HallucinationRetry(t *testing.T) {
 		ModelByteBudget:    100_000,
 		GCSByteBudget:      100_000,
 		Timeout:            30 * time.Second,
-		CritiqueEnabled:    true,
 		CritiqueMaxRetries: 2,
 	}
 	summary, analysis, err := client.doAnalyzeAgentic(context.Background(),
@@ -1134,7 +1041,6 @@ func TestAgentic_CacheInvalidatedByCritiqueVersionBump(t *testing.T) {
 		ModelByteBudget:    100_000,
 		GCSByteBudget:      100_000,
 		Timeout:            30 * time.Second,
-		CritiqueEnabled:    true,
 		CritiqueMaxRetries: 2,
 	}
 	const key = "agentic:test:version-invalidate"
@@ -1233,7 +1139,6 @@ required_evidence:
 		ModelByteBudget:    100_000,
 		GCSByteBudget:      100_000,
 		Timeout:            30 * time.Second,
-		CritiqueEnabled:    true,
 		CritiqueMaxRetries: 2,
 	}
 	in := newTestAgenticInputs(t, &fakeBrowser{}, opts)
@@ -1431,9 +1336,8 @@ func countAssistantToolCalls(t *testing.T, body []byte) int {
 // ---------- Evidence injection ----------
 
 // TestAgentic_EvidenceInjection_FetchesCitedUnreadArtifact verifies that when
-// a critique-failing draft cites an artifact it never read and
-// EvidenceInjection is on, the loop fetches that artifact and embeds its
-// content in the retry request.
+// a critique-failing draft cites an artifact it never read, the critique retry
+// fetches that artifact and embeds its content in the retry request.
 func TestAgentic_EvidenceInjection_FetchesCitedUnreadArtifact(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
@@ -1453,7 +1357,7 @@ func TestAgentic_EvidenceInjection_FetchesCitedUnreadArtifact(t *testing.T) {
 	}}
 	opts := AgenticOptions{
 		MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
-		CritiqueEnabled: true, CritiqueMaxRetries: 2, EvidenceInjection: true,
+		CritiqueMaxRetries: 2,
 	}
 	_, _, err := client.doAnalyzeAgentic(context.Background(),
 		newTestAgenticInputs(t, browser, opts), "agentic:test:ei", "sys", "user")
@@ -1474,37 +1378,6 @@ func TestAgentic_EvidenceInjection_FetchesCitedUnreadArtifact(t *testing.T) {
 	}
 	if !strings.Contains(retry, "engine fetched evidence") {
 		t.Errorf("retry request should carry the injection header")
-	}
-}
-
-// TestAgentic_EvidenceInjection_OffByDefault confirms the default does not
-// fetch or inject: the retry request carries only the text feedback.
-func TestAgentic_EvidenceInjection_OffByDefault(t *testing.T) {
-	shrinkCallDelay(t)
-	srv := newScriptedChatServer(t)
-	citePath := "artifacts/clusters/c1/machines/m1/cloud-init-output.log"
-	round1 := `{"summary":"s","is_transient":false,"root_cause":"cloud-init failed per ` + citePath + `","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 10; reapply.","relevant_files":[]}`
-	round2 := `{"summary":"deep","is_transient":false,"root_cause":"cloud-init failed; vnet mismatch confirmed","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 10; reapply.","relevant_files":[]}`
-	srv.push(200, chatRespFinal(round1))
-	srv.push(200, chatRespFinal(round2))
-
-	client := newAgenticTestClient(t, srv.URL)
-	browser := &fakeBrowser{files: map[string][]byte{
-		citePath: []byte("INJECT_ME_MARKER should not appear\n"),
-	}}
-	opts := AgenticOptions{
-		MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
-		CritiqueEnabled: true, CritiqueMaxRetries: 2, // EvidenceInjection off
-	}
-	_, _, err := client.doAnalyzeAgentic(context.Background(),
-		newTestAgenticInputs(t, browser, opts), "agentic:test:ei-off", "sys", "user")
-	if err != nil {
-		t.Fatalf("doAnalyzeAgentic: %v", err)
-	}
-	srv.mu.Lock()
-	defer srv.mu.Unlock()
-	if len(srv.requests) >= 2 && strings.Contains(string(srv.requests[1]), "INJECT_ME_MARKER") {
-		t.Errorf("default (injection off) must not embed fetched artifact content")
 	}
 }
 
@@ -1530,7 +1403,7 @@ func TestAgentic_EvidenceInjection_PostLoopRetry(t *testing.T) {
 	}}
 	opts := AgenticOptions{
 		MaxIters: 2, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
-		CritiqueEnabled: true, CritiqueMaxRetries: 2, EvidenceInjection: true,
+		CritiqueMaxRetries: 2,
 	}
 	_, analysis, err := client.doAnalyzeAgentic(context.Background(),
 		newTestAgenticInputs(t, browser, opts), "agentic:test:ei-postloop", "sys", "user")
@@ -1569,7 +1442,7 @@ func TestAgentic_EvidenceInjection_ResolvesBareBasename(t *testing.T) {
 	}
 	opts := AgenticOptions{
 		MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
-		CritiqueEnabled: true, CritiqueMaxRetries: 2, EvidenceInjection: true,
+		CritiqueMaxRetries: 2,
 	}
 	_, _, err := client.doAnalyzeAgentic(context.Background(),
 		newTestAgenticInputs(t, browser, opts), "agentic:test:ei-basename", "sys", "user")
@@ -1612,7 +1485,7 @@ required_evidence:
 	}
 	in := newTestAgenticInputs(t, browser, AgenticOptions{
 		MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
-		CritiqueEnabled: true, CritiqueMaxRetries: 2, EvidenceInjection: true,
+		CritiqueMaxRetries: 2,
 	})
 	in.Skills = set
 	_, _, err := client.doAnalyzeAgentic(context.Background(), in, "agentic:test:ei-skill", "sys", "user")
@@ -1779,7 +1652,7 @@ required_evidence:
 	}}
 	opts := AgenticOptions{
 		MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
-		Timeout: 30 * time.Second, CritiqueEnabled: true, CritiqueMaxRetries: 2,
+		Timeout: 30 * time.Second, CritiqueMaxRetries: 2,
 	}
 	in := newTestAgenticInputs(t, browser, opts)
 	in.Skills = set
@@ -1794,13 +1667,15 @@ required_evidence:
 	}
 }
 
-// TestAgentic_SkillEvidencePresentButUnread_DoesNotCache verifies existing but
-// unread required evidence keeps the draft uncached.
-func TestAgentic_SkillEvidencePresentButUnread_DoesNotCache(t *testing.T) {
+// TestAgentic_SkillEvidencePresentButUnread_InjectionRescues verifies that when
+// required evidence exists but the draft never read it, the always-on critique
+// fetches and injects it, letting the re-grounded draft pass.
+func TestAgentic_SkillEvidencePresentButUnread_InjectionRescues(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 	final := `{"summary":"webhook cert","is_transient":false,"root_cause":"x509 webhook validation failure prevented cluster creation","severity":"High","suggested_fix":"Regenerate the webhook serving certificate and redeploy the controller.","relevant_files":[]}`
-	// Identical finals keep the scripted server deterministic.
+	// Identical finals keep the scripted server deterministic across the
+	// injection-triggered re-finalize rounds.
 	srv.push(200, chatRespFinal(final))
 	srv.push(200, chatRespFinal(final))
 	srv.push(200, chatRespFinal(final))
@@ -1815,14 +1690,15 @@ required_evidence:
     any_of: ["config/webhook/.*\\.yaml"]
 `,
 	})
-	// Build tree contains the required evidence, but the agent never read it.
+	// Build tree contains the required evidence, unread by the draft; injection
+	// fetches it and marks it read so the re-critique passes.
 	browser := &fakeBrowser{files: map[string][]byte{
 		"build-log.txt":                 []byte("x509 error"),
 		"config/webhook/manifests.yaml": []byte("webhooks:"),
 	}}
 	opts := AgenticOptions{
 		MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
-		Timeout: 30 * time.Second, CritiqueEnabled: true, CritiqueMaxRetries: 0,
+		Timeout: 30 * time.Second, CritiqueMaxRetries: 0,
 	}
 	in := newTestAgenticInputs(t, browser, opts)
 	in.Skills = set
@@ -1832,8 +1708,8 @@ required_evidence:
 	if err != nil {
 		t.Fatalf("doAnalyzeAgentic: %v", err)
 	}
-	if analysis.CritiquePassed {
-		t.Errorf("present-but-unread required evidence must keep the draft uncached (CritiquePassed=false)")
+	if !analysis.CritiquePassed {
+		t.Errorf("present-but-unread required evidence should be injected and rescue the draft (CritiquePassed=true)")
 	}
 }
 

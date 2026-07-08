@@ -52,13 +52,13 @@ func (r *CollectorRegistry) Names() []string {
 }
 
 // Build picks the factory named by cfg.CollectorName() and invokes it. The
-// error message lists registered alternatives so misconfigurations point
-// users at the fix.
+// error message lists registered alternatives so a missing collector points at
+// the fix.
 func (r *CollectorRegistry) Build(cfg *project.Config, backend storage.Backend, client *http.Client) (collectors.Collector, error) {
 	name := cfg.CollectorName()
 	f, ok := r.factories[name]
 	if !ok {
-		return nil, fmt.Errorf("unknown artifacts.collector %q (registered: %s)", name, strings.Join(r.Names(), ", "))
+		return nil, fmt.Errorf("unknown collector %q (registered: %s)", name, strings.Join(r.Names(), ", "))
 	}
 	return f(cfg, backend, client)
 }

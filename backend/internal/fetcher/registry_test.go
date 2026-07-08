@@ -36,15 +36,22 @@ func TestCollectorRegistry_BuildAndNames(t *testing.T) {
 		t.Errorf("Has wrong: kubernetes=%v missing=%v", r.Has("kubernetes"), r.Has("missing"))
 	}
 
-	cfg := &project.Config{Artifacts: &project.Artifacts{Collector: "kubernetes"}}
-	got, err := r.Build(cfg, nil, nil)
-	if err != nil || got.Name() != "kubernetes" {
-		t.Fatalf("Build(kubernetes): got=%v err=%v", got, err)
+	// CollectorName always resolves to the shipped generic collector.
+	got, err := r.Build(&project.Config{}, nil, nil)
+	if err != nil || got.Name() != "generic" {
+		t.Fatalf("Build(generic): got=%v err=%v", got, err)
 	}
+}
 
-	cfg.Artifacts.Collector = "ghost"
-	_, err = r.Build(cfg, nil, nil)
-	if err == nil || !strings.Contains(err.Error(), "registered: generic, kubernetes") {
+func TestCollectorRegistry_UnknownCollectorErrors(t *testing.T) {
+	// A registry without the generic collector surfaces a clear error listing
+	// what is registered.
+	r := NewCollectorRegistry()
+	r.Register("kubernetes", func(_ *project.Config, _ storage.Backend, _ *http.Client) (collectors.Collector, error) {
+		return &stubCollector{name: "kubernetes"}, nil
+	})
+	_, err := r.Build(&project.Config{}, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "registered: kubernetes") {
 		t.Errorf("unknown collector error should list registered: %v", err)
 	}
 }

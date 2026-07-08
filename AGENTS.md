@@ -56,7 +56,7 @@ backend/                       Go 1.25
       cache.go                 On-disk cache (JSON, keyed by mode+hash)
     aggregator/                Roll-ups across builds
     artifacts/                 Build-log + artifact parsing
-    collectors/                Pluggable; `generic` ships in-tree
+    collectors/                Built-in generic collector
     fetcher/                   AIModuleRegistry, CollectorRegistry wiring
     storage/                  Pluggable artifact store (gcs / gcsweb backends)
     prowbuild/                Prow path layout, build info, JUnit + job discovery
@@ -200,8 +200,8 @@ first. Quick map:
 - **Critique gate** (`critique.go`): deterministic regex judge runs after
   every draft. Catches investigation-as-remediation, hallucinated artifact
   paths, fabricated import paths, etc. Re-prompts the model with feedback;
-  caches the result with the critique version it passed under. Auto-enabled
-  when skill recipes are present.
+  caches the result with the critique version it passed under. Skill recipes
+  extend this gate when present.
 - **Skills** (`skills/`): consumer-owned recipe registry. Each recipe pairs
   a failure signal with required evidence the model must read before
   claiming that class of failure. Hash of loaded skills participates in
@@ -223,9 +223,9 @@ Engine ships the AI defaults; consumer overrides per project. The contract:
   tool schemas, cache shape.
 - **Consumer-owned** (in `project.yaml`): bucket, dashboard, branding,
   the inlined `ai.*` agentic tuning (floors `min_tool_calls` /
-  `min_gcs_bytes`, `max_iters`, `timeout`, `critique`, `tools`,
-  `evidence_injection`), evidence selection (`ai.evidence.machine_logs`,
-  `ai.evidence.controller_logs`, `ai.evidence.build_log_patterns`).
+  `min_gcs_bytes`, `max_iters`, `timeout`, `tools`, `critique.max_retries`),
+  evidence selection (`ai.evidence.machine_logs`, `ai.evidence.controller_logs`,
+  `ai.evidence.build_log_patterns`).
 - **Consumer-owned** (in `prompts/system.md`): project-specific AI
   knowledge. Mandatory; injected verbatim between BasePrompt and
   ResponseFormatFooter.

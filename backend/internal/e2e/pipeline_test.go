@@ -170,12 +170,14 @@ func TestPipeline_NoAI(t *testing.T) {
 // the tool call actually exercised the local storage backend.
 func TestPipeline_WithAI(t *testing.T) {
 	script := aitest.NewScriptServer(t)
-	// Iter 0: the model reads the build log (exercises the local backend);
-	// iter 1: it returns the final analysis JSON.
+	// Iters 0-1: the model reads the build log twice (exercises the local
+	// backend and clears the min_tool_calls floor); iter 2: it returns the
+	// final analysis JSON with a concrete remediation.
 	script.PushToolCall("c1", "read_artifact", map[string]any{"path": "build-log.txt"})
+	script.PushToolCall("c2", "tail_artifact", map[string]any{"path": "build-log.txt"})
 	script.PushFinal(`{"summary":"Control plane provisioning timed out","is_transient":false,` +
 		`"root_cause":"Only 2 of 3 control plane machines registered before the 600s timeout",` +
-		`"severity":"High","suggested_fix":"Investigate why the third control plane machine failed to register",` +
+		`"severity":"High","suggested_fix":"Raise the control-plane bootstrap timeout above 600s so all three machines have time to register",` +
 		`"relevant_files":["build-log.txt"]}`)
 
 	t.Setenv("AI_TOKEN", "test-token")

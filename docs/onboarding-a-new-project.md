@@ -423,8 +423,6 @@ uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
 - Use the same ref on `reusable-clear-cache.yml`.
 - `@vMAJOR` is the sweet spot: automatic fixes and features, with a deliberate
   bump only for a new major. See [releasing.md](releasing.md).
-- Optional: set `min_engine_version` in `project.yaml` to warn (advisory only)
-  when the pinned engine is older than your config expects.
 
 ### Pick a host repo (Pages)
 

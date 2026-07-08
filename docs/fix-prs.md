@@ -52,11 +52,11 @@ it) is dropped and logged. No partial or speculative changes are ever pushed.
 How the fix branch reaches the source repo depends on whether you can write to
 it, controlled by `ai.fix_prs.fork` (default `true`):
 
-- **`fork: true` (default) — fork-and-PR.** For a source repo you **don't** own
+- **`fork: true` (default): fork-and-PR.** For a source repo you **don't** own
   (the usual case: an upstream community repo). The engine forks the repo under
   the token's identity, pushes the branch to that fork, and opens a **cross-fork
   PR** against the source repo.
-- **`fork: false` — direct.** For a source repo you **do** own or maintain (e.g.
+- **`fork: false`: direct.** For a source repo you **do** own or maintain (e.g.
   a team running the dashboard on its own CI). The engine pushes the branch
   straight to the source repo and opens a **same-repo PR**. No fork involved.
 
@@ -106,9 +106,7 @@ ai:
     # max_new_per_run: 1          # cap fix PRs per fetch (default 1)
     # labels: [ai-proposed-fix]   # labels applied to each PR
     # dry_run: false              # propose without opening a PR (see below)
-    # critique_retries: 1         # LLM review re-prompts before dropping (default 1; 0 disables)
-    # critique_endpoint: "..."    # optional: review with a different chat-completions endpoint
-    # critique_model: "..."       # optional: review with a different model (e.g. a stronger one)
+    # critique_retries: 1         # LLM review re-prompts before dropping (default 1)
 ```
 
 `enabled: true` requires `author_name` and `author_email` (validated at load).
@@ -121,13 +119,7 @@ no-op, never a deploy failure.
 After the edit parses, a second LLM call reviews it as a skeptical reviewer and
 returns concrete defects (not style). If it objects, the engine re-prompts the
 edit step with that feedback, up to `critique_retries` times (default 1), then
-drops the fix. Set `critique_retries: 0` to skip the review.
-
-By default the review uses the **same** provider as generation. To review with a
-different (e.g. stronger) model, set `critique_endpoint` / `critique_model` (or
-the `FIX_CRITIQUE_ENDPOINT` / `FIX_CRITIQUE_MODEL` env vars), with the token in
-`FIX_CRITIQUE_TOKEN` (falls back to `AI_TOKEN`). A separate reviewer is also more
-independent than the model grading its own work.
+drops the fix. The review uses the same AI client as generation.
 
 Wire the token into the deploy workflow:
 

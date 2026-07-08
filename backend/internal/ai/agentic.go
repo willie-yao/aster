@@ -61,18 +61,9 @@ type AgenticOptions struct {
 	// floor invalidates calls-only finalization. Defaults to 0.
 	MinGCSBytes int
 
-	// CritiqueEnabled opts the run into the regex critique gate. After
-	// the agentic loop produces a parseable tools-free final, critiqueDraft
-	// inspects it; punt-shaped, hallucinated, or import-fabricating
-	// answers get re-prompted with targeted feedback up to
-	// CritiqueMaxRetries times. Drafts that still fail after retries are
-	// published but not cached so the next run gets a fresh attempt.
-	CritiqueEnabled bool
-
 	// CritiqueMaxRetries caps the extra re-prompt rounds the loop spends
-	// on critique. 0 means critique once but never retry, which acts as a
-	// don't-cache gate. 2 gets up to 3 total evaluations. Only meaningful
-	// when CritiqueEnabled.
+	// on the always-on critique gate. 0 means critique once but never retry,
+	// which acts as a don't-cache gate. 2 gets up to 3 total evaluations.
 	CritiqueMaxRetries int
 
 	// SingleToolCall caps the loop to one tool call per assistant turn. Extra
@@ -81,13 +72,6 @@ type AgenticOptions struct {
 	// assistant message. Defaults to false so providers that support parallel
 	// tool calls keep their efficiency.
 	SingleToolCall bool
-
-	// EvidenceInjection makes a critique retry fetch the artifacts the draft
-	// cited but never read and embed their content in the retry feedback,
-	// instead of only asking the model to read them. Only meaningful when
-	// CritiqueEnabled. Adds the fetched bytes to the conversation, so it
-	// suits large-context models.
-	EvidenceInjection bool
 }
 
 // artifactTreeMaxPaths caps how many artifact paths the seed lists, bounding
@@ -348,10 +332,8 @@ type agentState struct {
 	budgetExhausted bool
 
 	// critiquePassed records whether the accepted answer cleared the
-	// critique gate. Stamped onto the published AIAnalysis so the
-	// build-level shouldReanalyze gate can invalidate uncritiqued
-	// entries when critique is enabled later. Meaningful only when
-	// opts.CritiqueEnabled.
+	// always-on critique gate. Stamped onto the published AIAnalysis so the
+	// build-level shouldReanalyze gate can invalidate uncritiqued entries.
 	critiquePassed bool
 
 	// readArtifactsFull / readArtifactsBase track artifacts the agent
@@ -614,22 +596,18 @@ func (c *Client) doAnalyzeAgentic(
 		var cached agenticCacheData
 		if json.Unmarshal(raw, &cached) == nil {
 			// Re-validate the cache hit against the current floors and
-			// critique contract. Raising any floor, enabling critique,
-			// bumping currentCritiqueVersion, or editing the recipe set
-			// invalidate cached entries on read.
-			critiqueOK := !in.Opts.CritiqueEnabled ||
-				(cached.CritiquePassed && cached.CritiqueVersion >= currentCritiqueVersion)
-			// Skills feed only the critique gate, so the recipe-set hash
-			// is part of the cache contract exactly when critique is on:
-			// editing recipes then invalidates prior entries on read.
-			if in.Opts.CritiqueEnabled {
-				wantHash := ""
-				if in.Skills != nil {
-					wantHash = in.Skills.Hash()
-				}
-				if cached.SkillSetHash != wantHash {
-					critiqueOK = false
-				}
+			// critique contract. Raising any floor, bumping
+			// currentCritiqueVersion, or editing the recipe set invalidate
+			// cached entries on read.
+			critiqueOK := cached.CritiquePassed && cached.CritiqueVersion >= currentCritiqueVersion
+			// Skills feed the critique gate, so the recipe-set hash is part of
+			// the cache contract: editing recipes invalidates prior entries.
+			wantHash := ""
+			if in.Skills != nil {
+				wantHash = in.Skills.Hash()
+			}
+			if cached.SkillSetHash != wantHash {
+				critiqueOK = false
 			}
 			// The prompt is always sent to the model, so a prompt change
 			// invalidates the entry regardless of critique. Editing
@@ -666,20 +644,14 @@ func (c *Client) doAnalyzeAgentic(
 		startTime:    time.Now(),
 		promptHash:   PromptFingerprint(sysPrompt),
 	}
-	// Skills are consulted only inside the critique gate, so load the
-	// recipe set into the run exactly when critique is enabled. Recipe presence
+	// Skills are consulted inside the always-on critique gate. Recipe presence
 	// is the opt-in; an empty set is a no-op.
-	if in.Opts.CritiqueEnabled {
-		state.skillSet = in.Skills
-	}
-	// Pre-init the read-tracking maps when critique is enabled so
-	// findUnreadArtifactCitations runs the check even when the model has
-	// made zero successful reads. Otherwise the nil-disables contract would
-	// skip the worst-case hallucination scenario.
-	if in.Opts.CritiqueEnabled {
-		state.readArtifactsFull = map[string]bool{}
-		state.readArtifactsBase = map[string]bool{}
-	}
+	state.skillSet = in.Skills
+	// Pre-init the read-tracking maps so findUnreadArtifactCitations runs the
+	// check even when the model has made zero successful reads. Otherwise the
+	// nil-disables contract would skip the worst-case hallucination scenario.
+	state.readArtifactsFull = map[string]bool{}
+	state.readArtifactsBase = map[string]bool{}
 
 	fullSysPrompt := sysPrompt + agToolDocs
 	// Always seed the build's artifact path list into the prompt so the
@@ -791,67 +763,62 @@ func (c *Client) doAnalyzeAgentic(
 				}
 			}
 
-			// Critique gate. Re-prompts the model with targeted feedback
-			// when the draft punts, hallucinates, fabricates an import
-			// path, or fails recipe-driven evidence. Only fires on
-			// parseable candidates; unparseable finals fall through to
-			// runFinalizeRound below.
-			if in.Opts.CritiqueEnabled {
-				if parsed, ok := tryParseAnalysis(candidate); ok {
-					matchedSkills := matchSkillsForDraft(state, parsed)
-					out := critiqueDraft(parsed, state.readArtifactsFull, state.readArtifactsBase, matchedSkills)
-					if len(out.MissingSkillEvidence) > 0 {
-						if treeSet := state.artifactTreeSet(loopCtx); treeSet != nil {
-							if n := pruneAbsentSkillEvidence(parsed, &out, treeSet); n > 0 {
-								log.Printf("  ⓘ skill-evidence: %d required group(s) absent from this build's artifacts; not held against the draft", n)
-							}
+			// Critique gate (always on). Re-prompts the model with targeted
+			// feedback when the draft punts, hallucinates, fabricates an import
+			// path, or fails recipe-driven evidence. Only fires on parseable
+			// candidates; unparseable finals fall through to runFinalizeRound
+			// below.
+			if parsed, ok := tryParseAnalysis(candidate); ok {
+				matchedSkills := matchSkillsForDraft(state, parsed)
+				out := critiqueDraft(parsed, state.readArtifactsFull, state.readArtifactsBase, matchedSkills)
+				if len(out.MissingSkillEvidence) > 0 {
+					if treeSet := state.artifactTreeSet(loopCtx); treeSet != nil {
+						if n := pruneAbsentSkillEvidence(parsed, &out, treeSet); n > 0 {
+							log.Printf("  ⓘ skill-evidence: %d required group(s) absent from this build's artifacts; not held against the draft", n)
 						}
 					}
-					if out.Passed {
-						state.critiquePassed = true
-					} else if critiqueRetriesUsed < in.Opts.CritiqueMaxRetries {
-						echo := agChatMessage{Role: "assistant"}
-						if msg.Content != nil {
-							echo.Content = msg.Content
-						}
-						// Evidence injection fetches evidence the draft cited but
-						// never read and skill-required evidence it skipped. This
-						// gives the bytes to models that ignore "go read X".
-						// Best-effort; failures fall back to the plain text
-						// feedback.
-						feedback := out.Feedback
-						if in.Opts.EvidenceInjection {
-							if inj := c.buildEvidenceInjection(loopCtx, state, out); inj != "" {
-								feedback = feedback + "\n\n" + inj
-							}
-						}
-						messages = append(messages, echo, agChatMessage{
-							Role:    "user",
-							Content: strPtr(feedback),
-						})
-						critiqueRetriesUsed++
-						// Extend the retry budget proportional to the
-						// number of missing evidence groups. Plain
-						// re-prompts stay at critiqueRetryIters; skill-
-						// driven re-prompts get a bonus capped at
-						// critiqueMissingEvidenceBonusCap so 10-group
-						// recipes don't unbound the loop.
-						extra := critiqueRetryIters
-						if missing := out.MissingEvidenceCount(); missing > 0 {
-							bonus := 1 + 2*missing
-							if bonus > critiqueMissingEvidenceBonusCap {
-								bonus = critiqueMissingEvidenceBonusCap
-							}
-							extra += bonus
-						}
-						maxIters += extra
-						log.Printf("  ✗ agentic critique: %v; re-prompting (retry %d/%d, +%d iters)",
-							out.Matches(), critiqueRetriesUsed, in.Opts.CritiqueMaxRetries, extra)
-						continue
-					} else {
-						log.Printf("  ⚠ agentic critique: still failing after %d retries %v; accepting but not caching",
-							in.Opts.CritiqueMaxRetries, out.Matches())
+				}
+				if out.Passed {
+					state.critiquePassed = true
+				} else if critiqueRetriesUsed < in.Opts.CritiqueMaxRetries {
+					echo := agChatMessage{Role: "assistant"}
+					if msg.Content != nil {
+						echo.Content = msg.Content
 					}
+					// A critique retry fetches evidence the draft cited but
+					// never read and skill-required evidence it skipped, giving
+					// the bytes to models that ignore "go read X". Best-effort;
+					// failures fall back to the plain text feedback.
+					feedback := out.Feedback
+					if inj := c.buildEvidenceInjection(loopCtx, state, out); inj != "" {
+						feedback = feedback + "\n\n" + inj
+					}
+					messages = append(messages, echo, agChatMessage{
+						Role:    "user",
+						Content: strPtr(feedback),
+					})
+					critiqueRetriesUsed++
+					// Extend the retry budget proportional to the
+					// number of missing evidence groups. Plain
+					// re-prompts stay at critiqueRetryIters; skill-
+					// driven re-prompts get a bonus capped at
+					// critiqueMissingEvidenceBonusCap so 10-group
+					// recipes don't unbound the loop.
+					extra := critiqueRetryIters
+					if missing := out.MissingEvidenceCount(); missing > 0 {
+						bonus := 1 + 2*missing
+						if bonus > critiqueMissingEvidenceBonusCap {
+							bonus = critiqueMissingEvidenceBonusCap
+						}
+						extra += bonus
+					}
+					maxIters += extra
+					log.Printf("  ✗ agentic critique: %v; re-prompting (retry %d/%d, +%d iters)",
+						out.Matches(), critiqueRetriesUsed, in.Opts.CritiqueMaxRetries, extra)
+					continue
+				} else {
+					log.Printf("  ⚠ agentic critique: still failing after %d retries %v; accepting but not caching",
+						in.Opts.CritiqueMaxRetries, out.Matches())
 				}
 			}
 
@@ -910,7 +877,7 @@ func (c *Client) doAnalyzeAgentic(
 	// tools-free responses that parse on the spot; outputs from
 	// runFinalizeRound and slow-parse outputs would otherwise bypass it
 	// and publish-but-never-cache forever.
-	if in.Opts.CritiqueEnabled && !state.critiquePassed {
+	if !state.critiquePassed {
 		matchedSkills := matchSkillsForDraft(state, parsed)
 		out := critiqueDraft(parsed, state.readArtifactsFull, state.readArtifactsBase, matchedSkills)
 		if len(out.MissingSkillEvidence) > 0 {
@@ -923,7 +890,7 @@ func (c *Client) doAnalyzeAgentic(
 		switch {
 		case out.Passed:
 			state.critiquePassed = true
-		case in.Opts.EvidenceInjection && (len(out.UnreadCitations) > 0 || len(out.MissingSkillEvidence) > 0):
+		case len(out.UnreadCitations) > 0 || len(out.MissingSkillEvidence) > 0:
 			// The force-finalized draft cited artifacts the agent never read,
 			// or skipped evidence its claimed failure class requires. Fetch
 			// that evidence, inject it, and run one more finalize round so the
@@ -1166,21 +1133,17 @@ func matchSkillsForDraft(state *agentState, parsed analysisResponse) []skills.Sk
 }
 
 // cacheAcceptedAnalysis writes a parsed analysis to the cache, but only if
-// the agent met every per-project quality gate: floors and critique. Below-
-// floor or critique-failing finals are still published for this run but are not
-// cached, so the next run re-attempts them. critiquePassed is ignored when
-// opts.CritiqueEnabled is false.
+// the agent met every per-project quality gate: floors and the always-on
+// critique. Below-floor or critique-failing finals are still published for this
+// run but are not cached, so the next run re-attempts them.
 func (c *Client) cacheAcceptedAnalysis(cacheKey string, parsed analysisResponse, state *agentState, opts AgenticOptions, critiquePassed bool) {
 	if evalFloors(state, opts).anyUnmet() {
 		return
 	}
-	if opts.CritiqueEnabled && !critiquePassed {
+	if !critiquePassed {
 		return
 	}
-	version := 0
-	if opts.CritiqueEnabled && critiquePassed {
-		version = currentCritiqueVersion
-	}
+	version := currentCritiqueVersion
 	skillHash := ""
 	if state.skillSet != nil {
 		skillHash = state.skillSet.Hash()

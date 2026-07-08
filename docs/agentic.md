@@ -40,14 +40,11 @@ ai:
   concurrency: 1                # parallel analyses (raise for endpoints you control)
   max_iters: 15                 # tool-call rounds per failure
   timeout: 5m                   # per-failure agentic wall-clock timeout
-  min_tool_calls: 0             # minimum tool calls before a final answer is accepted
+  min_tool_calls: 2             # minimum tool calls before a final answer is accepted
   min_gcs_bytes: 0              # minimum GCS bytes fetched before a final answer is accepted
   single_tool_call: false       # send at most one tool call per turn (for single-tool-call-only models)
   critique:
-    enabled: false              # opt into the deterministic critique gate
-                                # (auto-enabled when skills/*.yaml recipes are present)
-    max_retries: 2              # re-prompt rounds before accepting a still-failing draft
-  evidence_injection: false     # on a critique retry, fetch+inject cited-but-unread artifacts
+    max_retries: 2              # critique re-prompt rounds before accepting a still-failing draft
   tools: [filesystem, k8s]      # registered tool groups exposed to the model
 ```
 
@@ -81,10 +78,10 @@ the whole-loop budget.
 
 ### `min_tool_calls`
 
-Minimum tool calls before a final answer is accepted. Default `0` (no floor).
-Below-floor finals are published but not cached, so the next run retries.
-Leave at 0 for strong models; set `3` or higher for weaker open-weights models
-that finalize from the prompt alone. See [Investigation floors](#investigation-floors).
+Minimum tool calls before a final answer is accepted. Default `2`. Below-floor
+finals are published but not cached, so the next run retries. Raise it to `3`
+or higher for weaker open-weights models that finalize from the prompt alone.
+See [Investigation floors](#investigation-floors).
 
 ### `min_gcs_bytes`
 
@@ -96,19 +93,11 @@ Minimum bytes fetched from GCS before a final answer is accepted. Default `0`
 
 ### `critique`
 
-Opt into the deterministic critique gate, which rejects punt-shaped and
-ungrounded drafts and re-prompts up to `max_retries` times. Defaults to
-disabled; `max_retries` defaults to `2` when enabled. **Auto-enabled when
-skill recipes are present.** Recommended for weaker open-weights models that
-punt despite the prompt rules; strong tool-using models rarely need it. See
+The deterministic critique gate always runs. It rejects punt-shaped and
+ungrounded drafts and re-prompts up to `max_retries` times, which defaults to
+`2`. The only reason to set `max_retries` is to allow more or fewer repair
+rounds before a still-failing draft is published uncached. See
 [The critique gate](#the-critique-gate).
-
-### `evidence_injection`
-
-On a critique retry, fetch the artifacts the draft cited but never read and
-embed their content in the retry feedback ("here is what it actually shows").
-Off by default; requires `critique.enabled`. Best suited to large-context
-models. See [Evidence injection](#evidence-injection).
 
 ### `single_tool_call`
 
@@ -141,14 +130,12 @@ two things weaker models do worst: they finalize before they have investigated,
 and they emit punt-shaped or ungrounded answers. The knobs group by what each
 one compensates for:
 
-- **Investigation depth** (`min_tool_calls`, `min_gcs_bytes`, `critique`): a
-  weak model's most common failure is finalizing from the prompt alone, or
-  after a couple of cheap `list_artifacts` calls. The floors reject a too-early
-  final and re-prompt; the critique gate repairs punt-shaped fixes and
-  hallucinated citations.
-- **Context fit** (`evidence_injection`): injects cited-but-unread artifact
-  bodies into the retry feedback. It is the single biggest critique-pass win
-  but it spends context, so it is only safe when the window is large.
+- **Investigation depth** (`min_tool_calls`, `min_gcs_bytes`): a weak model's
+  most common failure is finalizing from the prompt alone, or after a couple of
+  cheap `list_artifacts` calls. The floors reject a too-early final and
+  re-prompt. The critique gate and its evidence injection, which repair
+  punt-shaped fixes and hallucinated citations, always run, so you do not tune
+  them.
 - **Protocol quirks** (`single_tool_call`): some open-weights chat templates
   reject more than one tool call per assistant turn.
 - **Throughput** (`concurrency`): a property of the *endpoint*, not the model.
@@ -158,40 +145,34 @@ one compensates for:
 You never size the byte budgets yourself: the engine auto-sizes them from the
 endpoint's reported context window (see
 [Automatic budget sizing](#automatic-budget-sizing)), so a small-context model
-is handled automatically. The only window-sensitive *choice* you make is
-whether to enable `evidence_injection`.
+is handled automatically.
 
 ### Smaller or weaker models: what to turn on
 
 In rough order of impact when stepping down from a frontier hosted model:
 
-1. **Add investigation floors.** Start `min_tool_calls: 3` and
+1. **Raise the investigation floors.** The default `min_tool_calls: 2` already
+   forces two tool calls before a final; step up to `min_tool_calls: 3` and add
    `min_gcs_bytes: 200000` (200 KB), then raise gradually if analyses still
    finalize shallow. The byte floor matters because the call-count floor alone
    is gameable with cheap listings (see
    [Investigation floors](#investigation-floors)).
-2. **Enable the critique gate** (`critique.enabled: true`). It catches
-   punt-shaped `suggested_fix` ("Check X, verify Y, investigate Z") and root
-   causes built on artifacts the model never read, both of which weak models
-   emit despite the prompt forbidding them. Strong models rarely trip it.
-3. **Set `single_tool_call: true` only if the model's chat template rejects
+2. **Set `single_tool_call: true` only if the model's chat template rejects
    parallel tool calls.** Required for the stock Llama 3.x Instruct template
    (it raises "This model only supports single tool-calls at once!", surfaced
    as a 500). Leave it off for Qwen3-Coder, Copilot, OpenAI, and Claude, which
    emit parallel calls cleanly; forcing it there only slows investigation.
-4. **Enable `evidence_injection` only on a large-context model.** On a small
-   window (e.g. a 32-40K open-weights deployment) the injected artifact bodies
-   can push the request toward overflow, so leave it off there and rely on the
-   plain-text "go read X" retry instead.
+
+The critique gate and its evidence injection run on every model tier, so there
+is nothing to turn on for them: punt-shaped fixes and hallucinated citations
+are repaired automatically.
 
 ### Settings by model tier
 
 | Option | Strong hosted (Claude / GPT / Copilot) | Strong open-weights, large ctx | Small / weak open-weights |
 |---|---|---|---|
-| `min_tool_calls` | off (`0`) | `5` | `3` |
+| `min_tool_calls` | `2` (default) | `5` | `3` |
 | `min_gcs_bytes` | off (`0`) | `500000` | `200000` |
-| `critique.enabled` | off | on | on |
-| `evidence_injection` | off | on (large ctx) | off (small ctx) |
 | `single_tool_call` | off | off | on *if template requires* |
 | `max_iters` | `15` (default) | `30` | `15` |
 | `concurrency` | `1` (shared provider) | `4` (dedicated endpoint) | endpoint-dependent |
@@ -203,24 +184,24 @@ set them in `project.yaml` or via `AI_ENDPOINT` / `AI_MODEL`.
 
 **Strong hosted model** (e.g. Claude / GPT / Gemini via Copilot or OpenAI). The
 tuning defaults are enough here, so set just the endpoint, model, and tools. A
-frontier model investigates deeply and writes concrete fixes without the
-guardrails, and the provider is shared and rate-limited, so leave `concurrency`
-at `1`.
+frontier model investigates deeply and writes concrete fixes with only the
+default floors, and the provider is shared and rate-limited, so leave
+`concurrency` at `1`.
 
 ```yaml
 ai:
   endpoint: "https://api.githubcopilot.com/chat/completions"
   model: "claude-sonnet-4.5"
   tools: [filesystem, k8s]
-  # everything else defaults: no floors, critique off, concurrency 1,
+  # everything else defaults: min_tool_calls 2, concurrency 1,
   # single_tool_call off.
 ```
 
 **Strong open-weights, large context, dedicated endpoint** (e.g.
 Qwen3-Coder-480B at a 256K window on self-hosted vLLM / TRT-LLM / Dynamo). This
 is the Qwen dashboard. The endpoint is dedicated and batches concurrent
-requests, so concurrency pays off; the large window makes `evidence_injection`
-safe; the floors and critique keep a real investigation bar.
+requests, so concurrency pays off, and the raised floors keep a real
+investigation bar.
 
 ```yaml
 ai:
@@ -228,10 +209,6 @@ ai:
   max_iters: 30             # heavy-tail analyses were iteration-bound at 20
   min_tool_calls: 5         # floors: keep a real investigation bar
   min_gcs_bytes: 500000
-  critique:
-    enabled: true           # repair punts + hallucinated citations
-    max_retries: 2
-  evidence_injection: true  # safe: the 256K window absorbs injected bodies
   tools: [filesystem, k8s]
   # single_tool_call left off: Qwen3-Coder emits parallel tool calls cleanly.
 ```
@@ -245,10 +222,6 @@ ai:
   max_iters: 15             # default; raise only if analyses are iteration-bound
   min_tool_calls: 3         # lower floor than the 480B; raise gradually
   min_gcs_bytes: 200000
-  critique:
-    enabled: true
-    max_retries: 2
-  evidence_injection: false # small window: injected bodies risk overflow
   single_tool_call: true    # ONLY if the chat template rejects parallel calls
                             # (stock Llama 3.x); drop it otherwise
   tools: [filesystem, k8s]
@@ -402,9 +375,9 @@ tripped the gate, and re-states the two allowed shapes (concrete remediation
 OR the strict no-remediation escape hatch). It then re-prompts; each retry
 consumes one extra agentic iteration on top of `max_iters`. Drafts that still
 punt after `max_retries` retries are published but NOT cached, so the next
-fetcher run retries with a fresh attempt. When enabled, expect 1.0-1.5x
-baseline iterations for the typical failure (most analyses pass on the first
-try; only the punts incur retries).
+fetcher run retries with a fresh attempt. Expect 1.0-1.5x baseline iterations
+for the typical failure; most analyses pass on the first try and only the punts
+incur retries.
 
 **Coverage.** Critique runs both in-loop (on tools-free finals that parse on
 the spot, with re-prompt retries) AND post-loop (on outputs from the
@@ -413,14 +386,13 @@ post-loop check is single-shot — it gates caching but doesn't re-prompt — so
 punt-shaped finalize-round result publishes, doesn't cache, and re-analyzes on
 the next run.
 
-**Cache invalidation.** Enabling `critique` on an existing project invalidates
-any cached entries that didn't pass critique (same two-layer behavior as the
-floors). Disabling it does NOT invalidate previously critique-passed entries;
-they serve from cache as usual. A `critique_version` int is stamped onto every
-critique-passing analysis; the invalidation gates reject entries whose version
-is below the current engine's, so strengthening the gate automatically
-invalidates entries that passed under the older, weaker contract without
-per-consumer cache clears.
+**Cache invalidation.** Only critique-passing analyses are cached; a draft that
+still fails after `max_retries` publishes but is not cached, so the next
+fetcher run retries it (same two-layer behavior as the floors). A
+`critique_version` int is stamped onto every critique-passing analysis; the
+invalidation gates reject entries whose version is below the current engine's,
+so strengthening the gate automatically invalidates entries that passed under
+the older, weaker contract without per-consumer cache clears.
 
 #### Hallucinated citation check
 
@@ -443,10 +415,8 @@ matches any read with the same basename. Failed reads (tool returned
 `{"error": ...}`) do NOT count as reads, so a model cannot launder a citation
 by reading a non-existent file.
 
-When the loop runs with `critique.enabled: true`, the read-tracking maps are
-pre-allocated even before the first successful read, so the check is active
-from the first tools-free final. When critique is disabled the maps stay nil
-and the check is a free no-op.
+The read-tracking maps are pre-allocated even before the first successful read,
+so the hallucination check is active from the first tools-free final.
 
 #### Skills and recipes
 
@@ -462,9 +432,8 @@ not engine instruction" disclaimer) and dynamically extends the retry budget so
 the agent has room to satisfy the missing evidence in the next round.
 
 Skills are not gated by a config flag: shipping recipe files is the opt-in.
-They extend the critique gate, so the fetcher auto-enables `critique` when
-recipes are present (an explicit `critique` block still supplies
-`max_retries`). Every cache entry carries a `skill_set_hash` fingerprint of
+They extend the always-on critique gate; a `critique` block only tunes
+`max_retries`. Every cache entry carries a `skill_set_hash` fingerprint of
 the loaded recipe set; consumer edits to any recipe change the hash and
 invalidate affected entries on the next run, independently of the
 `critique_version` bump.
@@ -486,13 +455,12 @@ observability notes.
 ### Evidence injection
 
 The critique gate already detects when a draft cites an artifact the agent
-never read and re-prompts the model to go read it. Weak models frequently
-ignore that instruction and re-emit the same ungrounded claim. When
-`evidence_injection` is on, the engine instead **fetches** each cited-but-
-unread artifact (the model already named the path), caps it, and embeds its
-content directly in the retry feedback: "here is what it actually shows; ground
-your root_cause in it or drop the claim." The fetched paths are marked read, so
-the next critique pass does not re-flag them.
+never read. Rather than only re-prompting the model to go read it, which weak
+models frequently ignore, the engine **fetches** each cited-but-unread artifact
+(the model already named the path), caps it, and embeds its content directly in
+the retry feedback: "here is what it actually shows; ground your root_cause in
+it or drop the claim." The fetched paths are marked read, so the next critique
+pass does not re-flag them.
 
 This converts an ignored "go read X" loop into "here is X", the single most
 common reason drafts fail critique on weaker models. It covers two buckets:
@@ -506,10 +474,11 @@ exhausting their tool-call budget), in the latter case driving one extra
 finalize round with the injected evidence. If that post-injection finalize
 comes back as prose instead of JSON, the engine retries it once before giving
 up, so a one-off formatting slip does not discard an otherwise-cacheable
-answer. It adds the fetched bytes (up to a few capped artifacts per retry) to
-the conversation, so it is best suited to large-context models. Best-effort: a
-path that cannot be resolved or fetched is skipped and the plain-text feedback
-still applies. No cache-version interaction; it only changes the retry prompt.
+answer. It adds the fetched bytes to the conversation, capped at a few
+artifacts per retry so the injection cannot blow the context window.
+Best-effort: a path that cannot be resolved or fetched is skipped and the
+plain-text feedback still applies. No cache-version interaction; it only
+changes the retry prompt.
 
 ### Single tool call
 

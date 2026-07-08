@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/mod/semver"
 	"gopkg.in/yaml.v3"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
@@ -32,14 +31,8 @@ type Config struct {
 	Branding             Branding       `yaml:"branding"   json:"branding"`
 	Categories           []CategoryRule `yaml:"categories,omitempty"            json:"categories,omitempty"`
 	CategoryDisplayOrder []string       `yaml:"category_display_order,omitempty" json:"category_display_order,omitempty"`
-	Artifacts            *Artifacts     `yaml:"artifacts,omitempty"  json:"artifacts,omitempty"`
 	AI                   *AI            `yaml:"ai,omitempty"         json:"ai,omitempty"`
 	Issues               *Issues        `yaml:"issues,omitempty"     json:"issues,omitempty"`
-
-	// MinEngineVersion is the lowest engine release this config expects.
-	// Values may be written as "1.4.0" or "v1.4.0". Mismatches warn at startup
-	// and do not fail the run. Not serialized to manifest.json.
-	MinEngineVersion string `yaml:"min_engine_version,omitempty" json:"-"`
 
 	// ShortNamePrefix is a display-only hint derived at fetch time.
 	// It is the longest "periodic-<x>-" prefix shared by most periodic jobs.
@@ -182,13 +175,6 @@ type Branding struct {
 type SourceRepo struct {
 	Owner string `yaml:"owner" json:"owner"`
 	Name  string `yaml:"name"  json:"name"`
-}
-
-// Artifacts selects the per-build artifact collector used by the fetcher.
-// Implementations live under backend/internal/collectors/.
-type Artifacts struct {
-	// Collector names the registered collector. When unset, generic is used.
-	Collector string `yaml:"collector" json:"collector,omitempty"`
 }
 
 // Issue trigger names.
@@ -386,12 +372,6 @@ type FixPRs struct {
 	// fix is dropped. Defaults to 1; 0 disables the review. Excluded from
 	// manifest.json.
 	CritiqueRetries *int `yaml:"critique_retries,omitempty" json:"-"`
-	// CritiqueEndpoint / CritiqueModel optionally point the review step at a
-	// different chat-completions provider than the one drafting the fix; both
-	// default to ai.endpoint / ai.model. Token via the FIX_CRITIQUE_TOKEN env
-	// (falls back to AI_TOKEN). Excluded from manifest.json.
-	CritiqueEndpoint string `yaml:"critique_endpoint,omitempty" json:"-"`
-	CritiqueModel    string `yaml:"critique_model,omitempty" json:"-"`
 }
 
 // EffectiveFixPRs resolves the fix-PR config with defaults applied. The target
@@ -467,21 +447,14 @@ type Agentic struct {
 	// Defaults to 0, which disables the floor.
 	MinGCSBytes int `yaml:"min_gcs_bytes,omitempty" json:"min_gcs_bytes,omitempty"`
 
-	// Critique configures the critique gate. After the agentic loop produces a
-	// parseable tools-free final, a deterministic regex checks suggested_fix.
-	// Punting drafts get targeted feedback and retry up to MaxRetries times.
-	// Drafts that still punt are published but not cached.
-	//
-	// Defaults to disabled. Recommended for weaker tool-using models
-	// where the prompt rules alone don't reliably prevent punt-shaped
-	// answers.
+	// Critique tunes the always-on critique gate. After the agentic loop
+	// produces a parseable tools-free final, a deterministic regex checks
+	// suggested_fix; punting drafts get targeted feedback and retry up to
+	// MaxRetries times, and a critique retry fetches cited-but-unread artifacts
+	// and injects capped content into the feedback. Drafts that still punt are
+	// published but not cached. Recipes under <project_dir>/skills/*.yaml feed
+	// the gate whenever present.
 	Critique AgenticCritique `yaml:"critique,omitempty" json:"critique,omitempty"`
-
-	// Recipe-driven skills are not gated by a config flag. Recipes
-	// under <project_dir>/skills/*.yaml are consulted by the critique gate
-	// whenever they are present and critique is enabled. Shipping recipe
-	// files is itself the opt-in. The fetcher auto-enables critique when
-	// recipes are present.
 
 	// SingleToolCall makes the loop execute at most one tool call per assistant
 	// turn. Extra tool calls are dropped, and the model can request them later.
@@ -489,12 +462,6 @@ type Agentic struct {
 	// assistant message. Leave it off for providers that support parallel tool
 	// calls so they keep their round-trip efficiency.
 	SingleToolCall bool `yaml:"single_tool_call,omitempty" json:"single_tool_call,omitempty"`
-
-	// EvidenceInjection fetches cited-but-unread artifacts during critique retry
-	// and embeds capped content in the feedback. Only meaningful with critique
-	// enabled. Best suited to large-context models because it adds evidence to
-	// the conversation.
-	EvidenceInjection bool `yaml:"evidence_injection,omitempty" json:"evidence_injection,omitempty"`
 
 	// Artifact-tree seeding is always on and not configurable. It is
 	// deterministic, capped, and a no-op when the listing is empty.
@@ -505,17 +472,12 @@ type Agentic struct {
 	Tools []string `yaml:"tools,omitempty" json:"tools,omitempty"`
 }
 
-// AgenticCritique is the per-project critique-gate config. See
-// Agentic.Critique for the operational semantics.
+// AgenticCritique tunes the always-on critique gate. See Agentic.Critique for
+// the operational semantics.
 type AgenticCritique struct {
-	// Enabled turns the critique gate on for this consumer. When false, the
-	// agentic loop's tools-free final is accepted as-is and cached normally.
-	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
-
 	// MaxRetries caps the number of extra re-prompt rounds the loop
 	// spends per analysis when critique fails. Each retry consumes one
-	// extra agentic iteration on top of MaxIters. Defaults to 2 when
-	// Enabled is true and MaxRetries is 0.
+	// extra agentic iteration on top of MaxIters. Defaults to 2.
 	MaxRetries int `yaml:"max_retries,omitempty" json:"max_retries,omitempty"`
 }
 
@@ -525,10 +487,9 @@ type AgenticCritique struct {
 var DefaultAgentic = Agentic{
 	MaxIters:     15,
 	Timeout:      5 * time.Minute,
-	MinToolCalls: 0,
+	MinToolCalls: 2,
 	MinGCSBytes:  0,
 	Critique: AgenticCritique{
-		Enabled:    false,
 		MaxRetries: 2,
 	},
 }
@@ -552,24 +513,20 @@ func (a *AI) EffectiveAgentic() Agentic {
 	if a.Agentic.MinGCSBytes > 0 {
 		out.MinGCSBytes = a.Agentic.MinGCSBytes
 	}
-	out.Critique.Enabled = a.Agentic.Critique.Enabled
 	if a.Agentic.Critique.MaxRetries > 0 {
 		out.Critique.MaxRetries = a.Agentic.Critique.MaxRetries
 	}
 	out.SingleToolCall = a.Agentic.SingleToolCall
-	out.EvidenceInjection = a.Agentic.EvidenceInjection
 	if len(a.Agentic.Tools) > 0 {
 		out.Tools = append([]string(nil), a.Agentic.Tools...)
 	}
 	return out
 }
 
-// CollectorName returns the configured collector name, defaulting to "generic".
+// CollectorName returns the artifact collector name. The engine ships a single
+// generic collector.
 func (c *Config) CollectorName() string {
-	if c.Artifacts == nil || strings.TrimSpace(c.Artifacts.Collector) == "" {
-		return "generic"
-	}
-	return c.Artifacts.Collector
+	return "generic"
 }
 
 // Load reads and validates a project.yaml file from disk.
@@ -708,14 +665,6 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	// Evidence injection hooks the critique retry path, so it is inert without
-	// critique. Require ai.critique.enabled explicitly here; the fetcher's
-	// recipe-driven critique auto-enable happens later and does not satisfy
-	// this load-time check.
-	if c.AI != nil && c.AI.Agentic.EvidenceInjection && !c.AI.Agentic.Critique.Enabled {
-		return fmt.Errorf("ai.evidence_injection requires ai.critique.enabled: true")
-	}
-
 	// Validate issue triggers when the feature is configured, so a typo fails
 	// at load rather than silently never firing.
 	if c.Issues != nil {
@@ -758,38 +707,4 @@ func (c *Config) DisplayShortName() string {
 		return c.ShortName
 	}
 	return c.ID
-}
-
-// EngineVersionWarning returns an advisory message when the running engine is
-// older than MinEngineVersion. Dev or unparseable values are treated as
-// incomparable and do not warn.
-func (c *Config) EngineVersionWarning(engineVersion string) string {
-	if c.MinEngineVersion == "" {
-		return ""
-	}
-	want := ensureVPrefix(c.MinEngineVersion)
-	if !semver.IsValid(want) {
-		return fmt.Sprintf("project.yaml min_engine_version %q is not a valid version; ignoring", c.MinEngineVersion)
-	}
-	got := ensureVPrefix(engineVersion)
-	if !semver.IsValid(got) {
-		// Local or untagged builds cannot be compared.
-		if engineVersion == "" || engineVersion == "dev" || strings.HasPrefix(engineVersion, "dev-") {
-			return ""
-		}
-		// Any other unparseable version signals a broken build embed; surface it.
-		return fmt.Sprintf("engine version %q is not a recognized release; cannot verify min_engine_version %s", engineVersion, want)
-	}
-	if semver.Compare(got, want) < 0 {
-		return fmt.Sprintf("engine version %s is older than this project's min_engine_version %s; "+
-			"some project.yaml fields may be unsupported. Pin a newer engine release.", got, want)
-	}
-	return ""
-}
-
-func ensureVPrefix(s string) string {
-	if s == "" || s[0] == 'v' {
-		return s
-	}
-	return "v" + s
 }
