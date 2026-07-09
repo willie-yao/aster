@@ -100,6 +100,7 @@ make fe-build        # production build into frontend/dist/
 # Kubernetes-native mode (Go 1.25)
 make build-server    # cd backend && go build -o ../bin/server ./cmd/server/
 make serve           # serve frontend/public/data over HTTP
+make dev-actions     # serve SPA + API with admin actions enabled (local auth)
 make image           # docker build fetcher + server + SPA into one image
 ```
 
@@ -123,6 +124,13 @@ make dev
 
 # Frontend-only iteration (no Go, no GCS): drop pre-built JSON from a
 # deployed site's gh-pages publish into frontend/public/data/, then `make dev`.
+
+# Preview the server-mode UI *with* admin actions (File issue / Propose fix /
+# Mark resolved). `make dev` is read-only: it has no capability endpoint, so the
+# action buttons never render. dev-actions serves the built SPA from the API
+# server with local proxy auth (auto-authorized as admin), so the buttons act.
+# It serves a static build (no HMR); rerun to pick up frontend changes.
+make dev-actions PROJECT_DIR=../<your-consumer-repo>   # http://localhost:8080
 ```
 
 Vite serves `frontend/public/` at the site root, so any JSON the fetcher

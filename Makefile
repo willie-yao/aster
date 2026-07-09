@@ -1,4 +1,4 @@
-.PHONY: all build build-server build-worker serve image test test-v e2e lint fmt tidy \
+.PHONY: all build build-server build-worker serve dev-actions image test test-v e2e lint fmt tidy \
        fetch-data fetch-data-quick fetch-data-ai fetch-data-ai-quick \
        fe-install dev fe-build fe-check \
        dist dist-ai clean clean-cache clean-all deploy help
@@ -33,6 +33,18 @@ build-worker:
 # Point a built SPA at it with -static-dir=frontend/dist for a self-contained run.
 serve: build-server
 	./bin/server -data-dir=frontend/public/data
+
+# Server-mode preview WITH admin actions (File issue / Propose fix / Mark
+# resolved). Builds the SPA and serves it from the API server so the capability
+# descriptor advertises actions and the buttons render. Local proxy auth with no
+# trusted header auto-authorizes every request as an admin, so no OAuth setup is
+# needed. Unlike `make dev` (Vite + HMR), this serves a static build, so rebuild
+# to pick up frontend changes. Override PROJECT_DIR to resolve issue/fix repos.
+dev-actions: build-server fe-build
+	AUTH_MODE=proxy BOT_TOKEN=dummy ./bin/server \
+		-data-dir=frontend/public/data \
+		-static-dir=frontend/dist \
+		-project-dir=$(PROJECT_DIR)
 
 # Build the container image (fetcher + server + SPA). Override IMAGE/VERSION:
 #   make image IMAGE=ghcr.io/you/prow-ai-dashboard VERSION=v1.2.3
@@ -132,6 +144,7 @@ help:
 	@echo "  build              Build Go data fetcher binary"
 	@echo "  build-server       Build Go API server binary"
 	@echo "  serve              Serve fetched data + capabilities over HTTP"
+	@echo "  dev-actions        Serve SPA + API with admin actions enabled (local auth)"
 	@echo "  test               Run Go tests"
 	@echo "  test-v             Run Go tests (verbose)"
 	@echo "  lint               Run golangci-lint"

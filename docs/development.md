@@ -36,3 +36,18 @@ For a one-off run without the Makefile:
 
 To work on the UI without running the fetcher, drop pre-built JSON from a
 deployed site into `frontend/public/data/`, then `make dev`.
+
+## Previewing admin actions locally
+
+`make dev` (Vite) is read-only: it has no `/api/capabilities` endpoint, so the
+admin action buttons (File issue, Propose fix, Mark resolved) never render. To
+preview them, serve the built SPA from the API server with actions enabled:
+
+```bash
+make dev-actions PROJECT_DIR=../your-consumer-repo   # http://localhost:8080
+```
+
+This builds the frontend and runs the server in `proxy` auth mode with no
+trusted header, which auto-authorizes every request as an admin, so no OAuth
+setup is needed. `PROJECT_DIR` resolves the issue/fix target repos. It serves a
+static build (no HMR), so rerun it to pick up frontend changes.
