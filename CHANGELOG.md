@@ -20,101 +20,126 @@ for how to pin a release.
 
 ## [Unreleased]
 
-### Changed
-
-- **Breaking: AI analysis now requires an explicit endpoint and model.** The
-  engine no longer defaults to GitHub Copilot (`api.githubcopilot.com` /
-  `claude-sonnet-4.5`) when `ai.endpoint` / `ai.model` are unset. When AI is
-  enabled, configure both in `project.yaml` (`ai.endpoint`, `ai.model`) or via
-  the `AI_ENDPOINT` / `AI_MODEL` env vars; otherwise the fetch fails fast with a
-  clear error instead of silently calling Copilot. To keep prior behavior, set
-  `ai.endpoint: https://api.githubcopilot.com/chat/completions` and
-  `ai.model: claude-sonnet-4.5` (or the equivalent repo variables). This makes
-  the engine fully provider-agnostic with no opinionated default.
-
-- Consolidated getting started into a single path: removed `docs/quickstart.md`
-  and made `docs/onboarding-a-new-project.md` the one entry point, leading with
-  the `onboard` scaffold. The README is restructured and now indexes every doc,
-  and local-development setup moved to a new `docs/development.md`.
-- Made the docs provider-agnostic: replaced Azure/CAPZ-specific examples with
-  generic ones, keeping Azure OpenAI only where it documents a supported
-  endpoint shape.
+## [1.0.0-beta.5] - 2026-07-09
 
 ### Added
 
+- **Kubernetes-native deploy mode.** The engine now runs in-cluster as a strict
+  superset of the GitHub Actions + Pages path, so it can sit next to a private
+  in-cluster inference stack. A new `cmd/server` serves the exact same
+  `/data/*.json` contract the static site reads, plus a `/api/capabilities`
+  descriptor the frontend probes to light up server-only features; with no
+  descriptor the frontend stays in read-only static mode, so one build serves
+  both targets. A `cmd/worker` runs a continuous watch loop (incremental every
+  few minutes, full rediscovery hourly) writing to a shared volume the server
+  reads. Ships as a single container image (fetcher + server + SPA) and a Helm
+  chart (`deploy/helm/prow-ai-dashboard`: fetcher CronJob + server from a shared
+  RWX volume). See [docs/kubernetes.md](docs/kubernetes.md) and
+  [docs/server.md](docs/server.md).
+- **Admin-gated on-demand actions** (server mode). Signed-in admins can, per
+  systemic failure, file a GitHub issue, propose a draft fix PR, or mark a
+  pattern resolved, reusing the same engines as the scheduled path. Two auth
+  modes behind one seam: `oauth` (per-user attribution via a GitHub OAuth App,
+  each admin's token held in an encrypted httpOnly session cookie) and `proxy`
+  (an upstream SSO proxy authenticates; a bot token performs the write). Off
+  unless configured; CSRF-guarded, admin-allowlisted, tokens never logged or
+  served. The issue and fix actions are two-phase: a **preview** renders the
+  exact issue or PR (and, for a fix, the diff) without posting, with an optional
+  refine-by-prompt step, then a confirm posts the previewed draft.
+- **Mark recurring patterns resolved.** A maintainer can mark a systemic pattern
+  resolved (often it is fixed by a change in a repo the engine does not watch);
+  it moves to a collapsed "Resolved" section and **auto-reopens** if the failure
+  recurs on a build newer than the watermark recorded at resolution time, so a
+  flake that comes back is never permanently hidden. State lives in
+  `resolved.json`, served read-only.
+- The Helm chart is now published on each release: a `v*.*.*` tag pushes it to
+  `oci://ghcr.io/<owner>/charts/prow-ai-dashboard` (image pinned to the release)
+  and attaches the packaged `.tgz` to the GitHub Release.
+- `make dev-actions` previews the server-mode UI with admin actions enabled
+  locally (local proxy auth, no OAuth setup), unlike the read-only `make dev`.
 - Optional **agent-proposed fix PRs** (`ai.fix_prs`): after each fetch, for a
   systemic recurring pattern with a concrete remediation, the engine drafts a
   minimal code fix and opens a **draft PR** against the source repo via
   fork-and-PR. Off by default and heavily guardrailed: the target file(s) are
-  chosen from the repo's **real file tree** (keyword-ranked) so the model can't
-  invent a path; **anchored search/replace** edits are applied only on an exact
-  single match and bounded by `max_files`; each edited file is **parse-checked**
-  (Go/YAML/JSON, with a best-effort in-process Go type check that skips when
-  symbols or imports can't be resolved in the runner) and the fix is dropped if
-  an edit broke it; a second LLM
-  **review** (`critique_retries`, default 1; optionally a separate
-  `critique_endpoint`/`critique_model`) re-prompts on concrete defects and drops
-  the fix if unresolved; draft-only; a dedicated `FIX_TOKEN` (a CLA-signed
+  chosen from the repo's **real file tree** so the model can't invent a path;
+  **anchored search/replace** edits are applied only on an exact single match and
+  bounded by `max_files`; each edited file is **parse-checked** (Go/YAML/JSON)
+  and the fix is dropped if an edit broke it; a second LLM **review**
+  (`critique_retries`, default 1) re-prompts on concrete defects and drops the
+  fix if unresolved; draft-only; a dedicated `FIX_TOKEN` (a CLA-signed
   contributor PAT) authors the commit under that identity with a DCO
   `Signed-off-by`; idempotent marker dedup; and a `max_new_per_run` cap. A
   `dry_run` mode runs the full pipeline and writes proposed diffs to
   `fix_previews.json` without opening any PR. `fork: false` (default `true`)
-  switches from fork-and-PR to a direct branch + same-repo PR for a source repo
-  you own. The `ghpr` helper gained fork-and-PR support (fork on demand,
-  cross-fork draft PR) for this. See [docs/fix-prs.md](docs/fix-prs.md).
-
+  switches to a direct branch + same-repo PR for a source repo you own. See
+  [docs/fix-prs.md](docs/fix-prs.md).
 - Optional **self-improving skills** (`ai.suggest_skills`): after each fetch,
   the engine drafts a diagnostic skill recipe for any systemic recurring pattern
   that no existing skill covers, and opens a **draft PR** adding
-  `skills/<id>.yaml` to the dashboard repo for review. Off by default; enable
-  with `ai.suggest_skills.enabled: true`. Reuses the configured AI provider to
-  decide coverage (trigger prefilter + an LLM confirm) and draft the recipe,
-  validates the draft against the skills schema before proposing, and dedupes by
-  a hidden marker so a pattern is never suggested twice. Needs a `SKILL_TOKEN`
-  secret (contents + pull-requests write on the dashboard repo; a dedicated
-  token like `ISSUE_TOKEN`, so the deploy job's default permissions stay
-  read-only). See [docs/skills.md](docs/skills.md#auto-suggesting-recipes).
-- New internal `ghpr` helper extracts the onboard scaffold's one-commit
-  "open a PR from a file-set" flow (GitHub Git Data API) so onboarding and skill
-  suggestions share it, with seams (draft, labels, commit author, DCO sign-off)
-  for a future source-repo fix-PR feature.
-
+  `skills/<id>.yaml` to the dashboard repo for review. Off by default. Reuses the
+  configured AI provider to decide coverage and draft the recipe, validates the
+  draft against the skills schema before proposing, and dedupes by a hidden
+  marker. Needs a `SKILL_TOKEN` secret. See
+  [docs/skills.md](docs/skills.md#auto-suggesting-recipes).
 - New `fetcher onboard` subcommand scaffolds a new dashboard from a testgrid
-  dashboard name or a storage bucket. It verifies discovery actually finds jobs,
-  infers `categories` from the job names, and writes a ready-to-review scaffold
-  (`project.yaml`, both workflows, a `prompts/system.md` draft, and a manual
-  `CHECKLIST.md`), validating the generated config against the engine's own
-  loader before writing. When `AI_TOKEN` (plus the provider's `AI_ENDPOINT` and
-  `AI_MODEL`, both required since the engine assumes no default endpoint) is set,
-  it drafts `prompts/system.md` from the source repo's own docs (architecture,
-  where evidence lives, known transient classes); otherwise it writes a stub. By
-  default it writes a local directory and makes no GitHub writes; pass
-  `-open-pr` to open a scaffold PR against the dashboard repo instead (one
-  commit on a new branch), using `GITHUB_TOKEN`. It runs without a clone via
-  `go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest
-  onboard ...`. See
+  dashboard name or a storage bucket. It verifies discovery finds jobs, infers
+  `categories` from the job names, and writes a ready-to-review scaffold
+  (`project.yaml`, both workflows, a `prompts/system.md` draft, a `CHECKLIST.md`),
+  validating the generated config against the engine's own loader before writing.
+  When AI creds are set it drafts `prompts/system.md` from the source repo's own
+  docs; otherwise it writes a stub. Pass `-open-pr` to open a scaffold PR instead
+  of writing locally, and `-mode k8s` to also scaffold a `deploy/` folder. See
   [docs/onboarding-a-new-project.md](docs/onboarding-a-new-project.md#fast-start-scaffold-it-with-onboard).
 - Optional **auto-filing of GitHub issues** for the dashboard's highest-signal
-  findings: systemic recurring patterns and persistent failures (≥3 consecutive
-  runs). Off by default; enable with an `issues:` block in `project.yaml` plus an
-  `ISSUE_TOKEN` secret (a token with `issues: write` on the target repo, which
-  defaults to `branding.source_repo` but should usually point at a repo you
-  control). Each finding maps to one issue, deduped by a hidden marker via local
-  state plus an eviction-proof repo-side search, so the same issue is reused
-  across runs rather than re-created. Recovered findings get a "recovered"
-  comment (and optionally a close). See
-  [docs/github-issues.md](docs/github-issues.md).
+  findings: systemic recurring patterns and persistent failures (>=3 consecutive
+  runs). Off by default; enable with an `issues:` block plus an `ISSUE_TOKEN`
+  secret. Each finding maps to one issue, deduped by a hidden marker via local
+  state plus an eviction-proof repo-side search. Recovered findings get a
+  "recovered" comment. See [docs/github-issues.md](docs/github-issues.md).
+- New internal `ghpr` helper extracts the one-commit "open a PR from a file-set"
+  flow (GitHub Git Data API) shared by onboarding, skill suggestions, and fix
+  PRs, with seams for draft, labels, commit author, and DCO sign-off.
 
 ### Changed
 
-- `AI_TOKEN` is no longer allowed to fall back to `GITHUB_TOKEN`. It is the
-  credential for the configured chat-completions endpoint (a Copilot PAT, an
-  OpenAI/NVIDIA key, a self-hosted placeholder, etc.) and must be set explicitly
-  to enable AI analysis; a GitHub token is unrelated to most users' model
-  endpoint and the Actions-provided `GITHUB_TOKEN` cannot authenticate to a model
-  provider anyway. Deployed consumers already pass `AI_TOKEN`, so they are
-  unaffected; only local runs that relied on the implicit fallback now need
-  `AI_TOKEN` set.
+- **Breaking: AI analysis now requires an explicit endpoint and model.** The
+  engine no longer defaults to GitHub Copilot when `ai.endpoint` / `ai.model` are
+  unset. When AI is enabled, configure both in `project.yaml` or via the
+  `AI_ENDPOINT` / `AI_MODEL` env vars; otherwise the fetch fails fast with a
+  clear error. This makes the engine fully provider-agnostic with no opinionated
+  default.
+- **Breaking: config surface trimmed.** `ai.pattern_analysis`, the critique
+  enable flag, and several low-value `project.yaml` fields were removed; critique
+  and the investigation floors are now always-on engine defaults rather than
+  per-project toggles. Consumers that set the removed fields must drop them, as
+  the loader rejects unknown fields.
+- `AI_TOKEN` no longer falls back to `GITHUB_TOKEN`; it is the credential for the
+  configured chat-completions endpoint and must be set explicitly to enable AI
+  analysis. Deployed consumers already pass it and are unaffected; only local
+  runs that relied on the implicit fallback now need it set.
+- **Frontend redesign** with a new theme and command-band dashboard layout.
+- **Fix-PR file selection is now agentic.** Instead of keyword ranking alone, the
+  fix harness runs a bounded source-tree loop (grep/read the repo) to choose
+  target files, grounded on the analysis's implicated files, and declines clearly
+  when the fix belongs to an upstream dependency rather than inventing an in-repo
+  edit.
+- **Stronger critique gate** (forces re-analysis on upgrade). The deterministic
+  judge now rejects a "transient" verdict on a test that has failed many
+  consecutive builds, and an optional model-backed **semantic judge** runs after
+  the deterministic pass. These bump the critique cache version, so existing
+  analyses are re-evaluated once on the first run after upgrading.
+- Consolidated getting started into a single path: removed `docs/quickstart.md`
+  and made `docs/onboarding-a-new-project.md` the one entry point. The README is
+  restructured and indexes every doc, and local-development setup moved to a new
+  `docs/development.md`. Docs are now provider-agnostic.
+
+### Fixed
+
+- The Helm chart tolerates chmod-less RWX volumes (SMB/azurefile return EPERM on
+  chmod; the mount's file mode governs readability), and gained `server.extraEnv`
+  for injecting extra configuration.
+- The server sets `Cache-Control` so browsers revalidate `/data/*` and
+  `index.html` instead of serving a stale dashboard or SPA after a deploy.
 
 ## [1.0.0-beta.4] - 2026-06-26
 
