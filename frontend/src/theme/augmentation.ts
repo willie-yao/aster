@@ -38,10 +38,14 @@ declare module "@mui/material/styles" {
   interface TypographyVariants {
     headline: React.CSSProperties;
     label: React.CSSProperties;
+    data: React.CSSProperties;
+    stat: React.CSSProperties;
   }
   interface TypographyVariantsOptions {
     headline?: React.CSSProperties;
     label?: React.CSSProperties;
+    data?: React.CSSProperties;
+    stat?: React.CSSProperties;
   }
 }
 
@@ -49,5 +53,7 @@ declare module "@mui/material/Typography" {
   interface TypographyPropsVariantOverrides {
     headline: true;
     label: true;
+    data: true;
+    stat: true;
   }
 }

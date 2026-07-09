@@ -31,6 +31,8 @@ export function buildComponents(): Components<Theme> {
         variantMapping: {
           headline: "h2",
           label: "span",
+          data: "span",
+          stat: "span",
         },
       },
     },

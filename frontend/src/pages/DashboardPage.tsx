@@ -13,7 +13,7 @@ import {
   categoryDisplayOrder,
 } from "../lib/utils";
 import type { JobSummary } from "../types/dashboard";
-import { SummaryBar } from "../components/SummaryBar";
+import { HealthPanel } from "../components/HealthPanel";
 import { NeedsAttention } from "../components/NeedsAttention";
 import { JobCard } from "../components/JobCard";
 import { LoadingState } from "../components/LoadingState";
@@ -129,18 +129,38 @@ export function DashboardPage() {
         <Typography variant="h4" component="h1">
           Test Health Overview
         </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-          Last updated: {timeAgo(data.generated_at)}
-        </Typography>
+        <Box sx={{ mt: 0.75, display: "flex", alignItems: "center", gap: 0.75 }}>
+          <Box
+            sx={{
+              width: 7,
+              height: 7,
+              borderRadius: "50%",
+              bgcolor: "success.main",
+              boxShadow: (theme) => `0 0 8px ${(theme.vars ?? theme).palette.success.main}`,
+            }}
+          />
+          <Typography variant="data" color="text.secondary" sx={{ fontSize: "0.75rem" }}>
+            Updated {timeAgo(data.generated_at)}
+          </Typography>
+        </Box>
       </Box>
 
-      <NeedsAttention />
-
-      <SummaryBar
-        jobs={data.jobs}
-        onFilterClick={(s) => setStatusFilter(s as StatusFilter)}
-        activeFilter={statusFilter}
-      />
+      <Box
+        sx={{
+          display: "grid",
+          gridTemplateColumns: { xs: "1fr", md: "minmax(300px, 5fr) 7fr" },
+          gap: 2,
+          alignItems: "stretch",
+          height: { md: 360 },
+        }}
+      >
+        <HealthPanel
+          jobs={data.jobs}
+          onFilterClick={(s) => setStatusFilter(s as StatusFilter)}
+          activeFilter={statusFilter}
+        />
+        <NeedsAttention />
+      </Box>
 
       <Box sx={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
         <Box
@@ -203,10 +223,11 @@ export function DashboardPage() {
             display: "grid",
             gridTemplateColumns: {
               xs: "1fr",
-              md: "1fr 1fr",
-              lg: "repeat(3, 1fr)",
+              sm: "repeat(2, 1fr)",
+              md: "repeat(3, 1fr)",
+              lg: "repeat(4, 1fr)",
             },
-            gap: 2,
+            gap: 1.5,
           }}
         >
           {filtered.map((job) => (
@@ -216,23 +237,42 @@ export function DashboardPage() {
       ) : (
         sortedCategories.map((category) => (
           <Box key={category} component="section">
-            <Typography
-              variant="headline"
-              component="h2"
-              sx={{ mb: 2, fontSize: "1.25rem" }}
-            >
-              {categoryLabels[category] ??
-                category.charAt(0).toUpperCase() + category.slice(1)}
-            </Typography>
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1.25, mb: 2 }}>
+              <Box
+                sx={{
+                  width: 4,
+                  height: 18,
+                  borderRadius: 999,
+                  bgcolor: "primary.main",
+                  flexShrink: 0,
+                }}
+              />
+              <Typography
+                variant="headline"
+                component="h2"
+                sx={{ fontSize: "1.25rem" }}
+              >
+                {categoryLabels[category] ??
+                  category.charAt(0).toUpperCase() + category.slice(1)}
+              </Typography>
+              <Typography
+                variant="data"
+                color="text.secondary"
+                sx={{ fontSize: "0.8125rem" }}
+              >
+                {grouped[category].length}
+              </Typography>
+            </Box>
             <Box
               sx={{
                 display: "grid",
                 gridTemplateColumns: {
                   xs: "1fr",
-                  md: "1fr 1fr",
-                  lg: "repeat(3, 1fr)",
+                  sm: "repeat(2, 1fr)",
+                  md: "repeat(3, 1fr)",
+                  lg: "repeat(4, 1fr)",
                 },
-                gap: 2,
+                gap: 1.5,
               }}
             >
               {grouped[category].map((job) => (

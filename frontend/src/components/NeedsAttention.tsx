@@ -23,14 +23,6 @@ const MAX_ITEMS = 10;
 // them so a noisy fleet cannot crowd out test-level regressions below.
 const MAX_PATTERNS = 5;
 
-// Persist the expanded/collapsed choice across visits. Defaults to expanded.
-const OPEN_KEY = "prow-dashboard.needs-attention-open";
-
-function readOpenPref(): boolean {
-  if (typeof window === "undefined") return true;
-  return window.localStorage.getItem(OPEN_KEY) !== "false";
-}
-
 interface ItemGroup {
   label: string;
   items: TestFlakiness[];
@@ -39,20 +31,9 @@ interface ItemGroup {
 export function NeedsAttention() {
   const manifest = useManifest();
   const filePrefix = manifest.short_name_prefix ?? "";
-  const { data, loading } = useFlakinessReport();
+  const { data, loading, error } = useFlakinessReport();
   const { data: resolved } = useResolved();
-  const [open, setOpen] = useState(readOpenPref);
   const [resolvedOpen, setResolvedOpen] = useState(false);
-
-  function toggleOpen() {
-    setOpen((prev) => {
-      const next = !prev;
-      if (typeof window !== "undefined") {
-        window.localStorage.setItem(OPEN_KEY, String(next));
-      }
-      return next;
-    });
-  }
 
   // Backend already filters to systemic verdicts and ranks by confidence, then
   // builds. Drop entries missing a job link, hide admin-resolved patterns
@@ -105,62 +86,79 @@ export function NeedsAttention() {
     return [];
   }, [data]);
 
-  if (loading || (recurring.length === 0 && groups.length === 0 && resolvedPatterns.length === 0)) return null;
+  if (loading) return null;
+
+  // Only claim "all clear" on a successful, empty load. A failed fetch leaves
+  // data null; surface nothing rather than a false all-clear.
+  if (error || !data) return null;
+
+  if (recurring.length === 0 && groups.length === 0 && resolvedPatterns.length === 0) {
+    return (
+      <Panel
+        elevation={0}
+        sx={{
+          borderRadius: "12px",
+          p: { xs: 3, sm: 4 },
+          height: "100%",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          textAlign: "center",
+          gap: 1,
+        }}
+      >
+        <CheckCircleOutlined sx={{ fontSize: 32, color: "success.main" }} />
+        <Typography variant="headline" component="h2" sx={{ fontSize: "1.05rem" }}>
+          All clear
+        </Typography>
+        <Typography variant="body2" color="text.secondary">
+          No tests currently need attention.
+        </Typography>
+      </Panel>
+    );
+  }
 
   const totalItems =
     recurring.length + groups.reduce((sum, g) => sum + g.items.length, 0);
 
   return (
-    <Panel elevation={0} sx={{ borderRadius: "12px", overflow: "hidden" }}>
-      <Typography variant="headline" component="h2" sx={{ m: 0, fontSize: "1.25rem" }}>
-        <Box
-          component="button"
-          type="button"
-          onClick={toggleOpen}
-          aria-expanded={open}
-          aria-label={`Needs Attention, ${totalItems} item${totalItems === 1 ? "" : "s"}, click to ${open ? "collapse" : "expand"}`}
-          sx={{
-            width: "100%",
-            appearance: "none",
-            border: 0,
-            background: "transparent",
-            cursor: "pointer",
-            textAlign: "left",
-            font: "inherit",
-            color: "inherit",
-            p: { xs: 2, sm: 2.5 },
-            display: "flex",
-            alignItems: "center",
-            gap: 1,
-            "&:hover": {
-              bgcolor: (theme) => (theme.vars ?? theme).palette.surface.containerHigh,
-            },
-          }}
-        >
-          <ReportProblem color="warning" fontSize="small" />
-          <Box component="span">Needs Attention ({totalItems})</Box>
-          <ExpandMore
-            sx={{
-              ml: "auto",
-              color: "text.secondary",
-              transition: (t) =>
-                t.transitions.create("transform", { duration: t.transitions.duration.short }),
-              transform: open ? "rotate(0deg)" : "rotate(-90deg)",
-            }}
-          />
-        </Box>
-      </Typography>
+    <Panel
+      elevation={0}
+      sx={{
+        borderRadius: "12px",
+        overflow: "hidden",
+        height: "100%",
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          gap: 1,
+          p: { xs: 2, sm: 2.5 },
+          flexShrink: 0,
+        }}
+      >
+        <ReportProblem color="warning" fontSize="small" />
+        <Typography variant="headline" component="h2" sx={{ m: 0, fontSize: "1.25rem" }}>
+          Needs Attention ({totalItems})
+        </Typography>
+      </Box>
 
-      <Collapse in={open} timeout="auto" unmountOnExit>
-        <List
-          disablePadding
-          sx={{
-            maxHeight: "60vh",
-            overflowY: "auto",
-            px: { xs: 2, sm: 2.5 },
-            pb: { xs: 2, sm: 2.5 },
-          }}
-        >
+      <List
+        disablePadding
+        sx={{
+          flex: 1,
+          minHeight: 0,
+          overflowY: "auto",
+          maxHeight: { xs: "60vh", md: "none" },
+          px: { xs: 2, sm: 2.5 },
+          pb: { xs: 2, sm: 2.5 },
+        }}
+      >
           {recurring.length > 0 && (
             <Box component="li" sx={{ listStyle: "none" }}>
               <Typography
@@ -413,7 +411,6 @@ export function NeedsAttention() {
             </Box>
           )}
         </List>
-      </Collapse>
     </Panel>
   );
 }

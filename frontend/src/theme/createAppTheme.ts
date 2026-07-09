@@ -66,6 +66,9 @@ function paletteFromTokens(t: ColorTokens): PaletteOptions {
   };
 }
 
+const monoFontFamily =
+  '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+
 const typography = {
   fontFamily: '"Inter", system-ui, -apple-system, "Segoe UI", sans-serif',
   // The root html font-size is 17px in index.css. Keeping MUI's htmlFontSize at
@@ -75,8 +78,8 @@ const typography = {
   h2: { fontWeight: 700, letterSpacing: "-0.01em" },
   h3: { fontWeight: 700, letterSpacing: "-0.01em" },
   // Page titles and stat counts.
-  h4: { fontWeight: 700, fontSize: "1.875rem" },
-  h5: { fontWeight: 600 },
+  h4: { fontWeight: 800, fontSize: "1.75rem", letterSpacing: "-0.02em" },
+  h5: { fontWeight: 700, letterSpacing: "-0.01em" },
   // Sub-section headings and empty/error titles.
   h6: { fontWeight: 600, fontSize: "1.125rem" },
   button: { fontWeight: 600 },
@@ -90,10 +93,28 @@ const typography = {
   },
   label: {
     fontFamily: '"Inter", sans-serif',
-    fontWeight: 500,
-    fontSize: "0.75rem",
-    letterSpacing: "0.04em",
+    fontWeight: 600,
+    fontSize: "0.6875rem",
+    letterSpacing: "0.05em",
     lineHeight: 1.4,
+  },
+  // Monospace face for data values: build IDs, durations, percentages, counts.
+  // Tabular figures keep columns from shifting as digits change.
+  data: {
+    fontFamily: monoFontFamily,
+    fontWeight: 500,
+    fontSize: "0.8125rem",
+    letterSpacing: "-0.01em",
+    fontFeatureSettings: '"tnum" 1, "cv01" 1',
+  },
+  // Large metric numbers for the summary strip and stat rows.
+  stat: {
+    fontFamily: monoFontFamily,
+    fontWeight: 700,
+    fontSize: "1.75rem",
+    lineHeight: 1.1,
+    letterSpacing: "-0.02em",
+    fontFeatureSettings: '"tnum" 1',
   },
 };
 

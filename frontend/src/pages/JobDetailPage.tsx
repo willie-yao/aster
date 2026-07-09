@@ -32,7 +32,7 @@ export function JobDetailPage() {
   const [gridOpen, setGridOpen] = useState(false);
   const { data, loading, error } = useJobDetail(jobID);
 
-  const runs = data?.runs ?? [];
+  const runs = useMemo(() => data?.runs ?? [], [data]);
   const displayName = data?.name ?? jobID ?? "";
 
   const selectedBuildId =
@@ -50,6 +50,15 @@ export function JobDetailPage() {
     if (runs.length === 0) return null;
     const recent = runs.slice(0, 10);
     return recent.filter((r) => r.passed).length / recent.length;
+  }, [runs]);
+
+  // Average duration across completed runs.
+  const avgDuration = useMemo(() => {
+    const done = runs.filter(
+      (r) => r.result !== "PENDING" && r.duration_seconds != null,
+    );
+    if (done.length === 0) return null;
+    return done.reduce((sum, r) => sum + r.duration_seconds, 0) / done.length;
   }, [runs]);
 
   function handleSelectRun(buildId: string) {
@@ -99,37 +108,70 @@ export function JobDetailPage() {
         >
           {displayName}
         </Typography>
-        <Box sx={{ mt: 1.5, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 1.5 }}>
-          {passRateRecent !== null && (() => {
-            const color = passRateColor(passRateRecent);
-            return (
-              <Chip
-                size="small"
-                label={`${formatPercent(passRateRecent)} pass rate (last 10 runs)`}
-                sx={{
-                  bgcolor: (t) => soft(t, color, 0.15),
-                  color: `${color}.main`,
-                  fontWeight: 600,
-                }}
-              />
-            );
-          })()}
-          <Typography variant="body2" color="text.secondary">
-            {runs.length} total run{runs.length !== 1 && "s"}
+        {lastRun && (
+          <Typography
+            variant="data"
+            color="text.secondary"
+            sx={{ display: "block", mt: 0.75, fontSize: "0.75rem" }}
+          >
+            Last run {timeAgo(lastRun.started)}
           </Typography>
-          {lastRun && (
-            <Typography variant="body2" color="text.secondary">
-              Last run {timeAgo(lastRun.started)}
-            </Typography>
-          )}
+        )}
+        <Box
+          sx={{
+            mt: 2,
+            display: "grid",
+            gridTemplateColumns: { xs: "repeat(2, 1fr)", sm: "repeat(3, 1fr)" },
+            gap: 1.5,
+            maxWidth: 560,
+          }}
+        >
+          {(() => {
+            const rateColor = passRateRecent !== null ? passRateColor(passRateRecent) : "primary";
+            const tiles: { label: string; value: string; color?: string }[] = [
+              {
+                label: "Pass rate",
+                value: passRateRecent !== null ? formatPercent(passRateRecent) : "—",
+                color: `${rateColor}.main`,
+              },
+              { label: "Total runs", value: String(runs.length) },
+              {
+                label: "Avg duration",
+                value: avgDuration !== null ? formatDuration(avgDuration) : "—",
+              },
+            ];
+            return tiles.map((tile) => (
+              <Panel key={tile.label} sx={{ borderRadius: "12px", px: 1.75, py: 1.25 }}>
+                <Typography
+                  variant="label"
+                  color="text.secondary"
+                  sx={{ display: "block", textTransform: "uppercase", fontSize: "0.625rem" }}
+                >
+                  {tile.label}
+                </Typography>
+                <Typography
+                  variant="stat"
+                  component="span"
+                  sx={{ fontSize: "1.375rem", color: tile.color ?? "text.primary" }}
+                >
+                  {tile.value}
+                </Typography>
+              </Panel>
+            ));
+          })()}
         </Box>
       </Box>
 
       {pattern && <PatternBanner pattern={pattern} jobID={jobID} />}
 
       {runs.length === 0 ? (
-        <Panel sx={{ borderRadius: 3, p: 4, textAlign: "center" }}>
-          <Typography color="text.secondary">No runs found</Typography>
+        <Panel sx={{ borderRadius: 3, p: 6, textAlign: "center" }}>
+          <Typography variant="headline" sx={{ fontSize: "1rem", color: "text.primary" }}>
+            No runs found
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+            This job has no recorded builds in the current window.
+          </Typography>
         </Panel>
       ) : (
         <>
@@ -216,7 +258,7 @@ export function JobDetailPage() {
                   <Typography variant="label" color="text.secondary">
                     Build ID
                   </Typography>
-                  <Typography variant="body2" color="text.primary">
+                  <Typography variant="data" component="p" color="text.primary">
                     {selectedRun.build_id}
                   </Typography>
                 </Box>
@@ -242,7 +284,7 @@ export function JobDetailPage() {
                   <Typography variant="label" color="text.secondary">
                     Duration
                   </Typography>
-                  <Typography variant="body2" color="text.primary">
+                  <Typography variant="data" component="p" color="text.primary">
                     {selectedRun.result === "PENDING"
                       ? "—"
                       : formatDuration(selectedRun.duration_seconds)}
@@ -252,7 +294,7 @@ export function JobDetailPage() {
                   <Typography variant="label" color="text.secondary">
                     Commit
                   </Typography>
-                  <Typography variant="body2" color="text.primary" sx={{ fontFamily: "monospace" }}>
+                  <Typography variant="data" component="p" color="text.primary">
                     {selectedRun.commit
                       ? selectedRun.commit.slice(0, 8)
                       : "—"}

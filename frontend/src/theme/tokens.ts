@@ -53,96 +53,98 @@ export interface ColorTokens {
   glass: string;
 }
 
-// Dark palette from the Material Design 3 values used by the current design.
+// Dark palette: layered slate surfaces with vibrant status hues. Near-black
+// slate keeps glass panels legible while their backdrop-blur reads against it.
 export const darkTokens: ColorTokens = {
-  background: "#0e0e0e",
-  surface: "#0e0e0e",
-  surfaceDim: "#0e0e0e",
-  surfaceBright: "#2c2c2c",
-  surfaceContainer: "#1a1919",
-  surfaceContainerLow: "#131313",
-  surfaceContainerHigh: "#201f1f",
-  surfaceContainerHighest: "#262626",
-  surfaceVariant: "#262626",
+  background: "#090c14",
+  surface: "#090c14",
+  surfaceDim: "#06080e",
+  surfaceBright: "#1b2233",
+  surfaceContainer: "#121826",
+  surfaceContainerLow: "#0d111b",
+  surfaceContainerHigh: "#1a2233",
+  surfaceContainerHighest: "#212a40",
+  surfaceVariant: "#212a40",
 
-  onSurface: "#ffffff",
-  onSurfaceVariant: "#adaaaa",
+  onSurface: "#f1f5f9",
+  onSurfaceVariant: "#93a1b8",
 
-  primary: "#87adff",
-  primaryDim: "#006ff0",
-  primaryContainer: "#6f9fff",
-  onPrimary: "#002c67",
+  primary: "#6d8bff",
+  primaryDim: "#3b6fe0",
+  primaryContainer: "#9fb6ff",
+  onPrimary: "#04122e",
 
-  secondary: "#69f6b8",
-  secondaryDim: "#58e7ab",
-  secondaryContainer: "#006c49",
-  onSecondary: "#005a3c",
+  secondary: "#34e39b",
+  secondaryDim: "#12b981",
+  secondaryContainer: "#065f46",
+  onSecondary: "#00120a",
 
-  tertiary: "#ffb148",
-  tertiaryContainer: "#f8a010",
-  onTertiary: "#573500",
+  tertiary: "#ffb020",
+  tertiaryContainer: "#f59e0b",
+  onTertiary: "#3d2800",
 
-  error: "#ff716c",
-  errorDim: "#d7383b",
-  errorContainer: "#9f0519",
-  onError: "#490006",
+  error: "#ff5d6b",
+  errorDim: "#e02f45",
+  errorContainer: "#7f1d2b",
+  onError: "#2b0007",
 
-  // Brightness-matched against the bright mint pass color so a lone failed dot
-  // among passes does not read as smaller or higher.
-  dotPass: "#45c78f",
-  dotFail: "#ff8e89",
+  // Brightness-matched so a lone failed dot among passes does not read as
+  // smaller or higher on the dark surface.
+  dotPass: "#2ee6a0",
+  dotFail: "#ff6b78",
 
-  outline: "#777575",
-  outlineVariant: "#494847",
+  outline: "#3a465e",
+  outlineVariant: "#242e44",
 
-  surfaceTint: "#87adff",
+  surfaceTint: "#6d8bff",
 
-  glass: "rgba(32, 31, 31, 0.8)",
+  glass: "rgba(18, 24, 38, 0.72)",
 };
 
-// Light palette uses Material Design 3 values derived from the same hues.
+// Light palette: slate-tinted neutrals sharing the dark scheme's hue family,
+// with status colors darkened for AA contrast on light surfaces.
 export const lightTokens: ColorTokens = {
-  background: "#fbfbff",
-  surface: "#fbfbff",
-  surfaceDim: "#dad9e0",
-  surfaceBright: "#fbfbff",
-  surfaceContainer: "#f0eff5",
-  surfaceContainerLow: "#f5f4fa",
-  surfaceContainerHigh: "#eae9f0",
-  surfaceContainerHighest: "#e4e3ea",
-  surfaceVariant: "#e1e2ec",
+  background: "#f7f9fc",
+  surface: "#f7f9fc",
+  surfaceDim: "#dde3ec",
+  surfaceBright: "#ffffff",
+  surfaceContainer: "#eef1f7",
+  surfaceContainerLow: "#f2f5fa",
+  surfaceContainerHigh: "#e7ebf3",
+  surfaceContainerHighest: "#e1e6ef",
+  surfaceVariant: "#e1e6ef",
 
-  onSurface: "#1a1c1e",
-  onSurfaceVariant: "#44474e",
+  onSurface: "#0f172a",
+  onSurfaceVariant: "#475569",
 
-  primary: "#005ac6",
-  primaryDim: "#0049a8",
-  primaryContainer: "#d8e2ff",
+  primary: "#2f6bff",
+  primaryDim: "#1e50d8",
+  primaryContainer: "#d9e4ff",
   onPrimary: "#ffffff",
 
-  secondary: "#006c49",
-  secondaryDim: "#00583a",
-  secondaryContainer: "#8ff8c4",
+  secondary: "#047857",
+  secondaryDim: "#036045",
+  secondaryContainer: "#a7f3d0",
   onSecondary: "#ffffff",
 
-  tertiary: "#8a5100",
-  tertiaryContainer: "#ffddb3",
+  tertiary: "#b45309",
+  tertiaryContainer: "#fde3b3",
   onTertiary: "#ffffff",
 
-  error: "#ba1a1a",
-  errorDim: "#93000a",
+  error: "#dc2626",
+  errorDim: "#b01818",
   errorContainer: "#ffdad6",
   onError: "#ffffff",
 
   // Light scheme renders dark dots on a light surface, so no bloom mismatch;
   // keep the semantic pass/fail hues.
-  dotPass: "#006c49",
-  dotFail: "#ba1a1a",
+  dotPass: "#047857",
+  dotFail: "#dc2626",
 
-  outline: "#74777f",
-  outlineVariant: "#c4c6cf",
+  outline: "#64748b",
+  outlineVariant: "#cbd3e0",
 
-  surfaceTint: "#005ac6",
+  surfaceTint: "#2f6bff",
 
-  glass: "rgba(240, 239, 245, 0.8)",
+  glass: "rgba(238, 241, 247, 0.8)",
 };

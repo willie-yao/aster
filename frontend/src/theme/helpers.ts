@@ -51,3 +51,37 @@ export function dotColorFor(
   if (result === "PENDING") return p.warning.main;
   return passed ? p.dot.pass : p.dot.fail;
 }
+
+/** Status-driven accent for glass blocks: an edge bar plus tinted border and
+ * glow. Failing draws the eye with a colored border and drop glow; passing and
+ * flaky stay calm with only the edge bar. */
+export interface StatusAccent {
+  bar: string;
+  border: string;
+  glow: string;
+  hoverBorder: string;
+  hoverGlow: string;
+}
+
+export function statusAccent(theme: Theme, status: DashboardStatus): StatusAccent {
+  const p = (theme.vars ?? theme).palette;
+  const color = statusToMuiColor(status);
+  if (color === "default") {
+    return {
+      bar: p.divider,
+      border: p.divider,
+      glow: "none",
+      hoverBorder: soft(theme, "primary", 0.5),
+      hoverGlow: `0 10px 34px -14px ${soft(theme, "primary", 0.4)}`,
+    };
+  }
+  const main = p[color].main;
+  const emphasize = color === "error";
+  return {
+    bar: main,
+    border: emphasize ? soft(theme, color, 0.42) : p.divider,
+    glow: emphasize ? `0 8px 30px -14px ${soft(theme, color, 0.6)}` : "none",
+    hoverBorder: soft(theme, color, 0.6),
+    hoverGlow: `0 12px 38px -14px ${soft(theme, color, emphasize ? 0.65 : 0.42)}`,
+  };
+}

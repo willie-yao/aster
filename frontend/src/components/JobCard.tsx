@@ -7,6 +7,7 @@ import Typography from "@mui/material/Typography";
 import { Link as RouterLink } from "react-router-dom";
 import type { JobSummary } from "../types/dashboard";
 import { formatPercent, timeAgo, formatDuration } from "../lib/utils";
+import { statusAccent } from "../theme";
 import { StatusChip } from "./StatusChip";
 import { Sparkline } from "./Sparkline";
 
@@ -30,20 +31,38 @@ export function JobCard({ job }: JobCardProps) {
   return (
     <Card
       elevation={0}
-      sx={{
-        height: "100%",
-        borderRadius: "16px",
-        bgcolor: (theme) => (theme.vars ?? theme).palette.surface.glass,
-        backdropFilter: "blur(12px)",
-        WebkitBackdropFilter: "blur(12px)",
-        border: "1px solid",
-        borderColor: "divider",
-        backgroundImage: "none",
-        transition: "filter 160ms ease, border-color 160ms ease",
-        "&:hover": {
-          filter: "brightness(1.08)",
-          borderColor: "primary.main",
-        },
+      sx={(theme) => {
+        const accent = statusAccent(theme, job.overall_status);
+        return {
+          position: "relative",
+          height: "100%",
+          borderRadius: "16px",
+          bgcolor: (theme.vars ?? theme).palette.surface.glass,
+          backdropFilter: "blur(14px)",
+          WebkitBackdropFilter: "blur(14px)",
+          border: "1px solid",
+          borderColor: accent.border,
+          boxShadow: accent.glow,
+          backgroundImage: "none",
+          overflow: "hidden",
+          transition: "transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease",
+          // Status accent bar down the leading edge.
+          "&::before": {
+            content: '""',
+            position: "absolute",
+            insetBlock: 0,
+            insetInlineStart: 0,
+            width: 3,
+            bgcolor: accent.bar,
+          },
+          "@media (hover: hover)": {
+            "&:hover": {
+              transform: "translateY(-3px)",
+              borderColor: accent.hoverBorder,
+              boxShadow: accent.hoverGlow,
+            },
+          },
+        };
       }}
     >
       <CardActionArea
@@ -58,6 +77,7 @@ export function JobCard({ job }: JobCardProps) {
             flexDirection: "column",
             gap: 1.5,
             p: 2,
+            pl: 2.25,
             "&:last-child": { pb: 2 },
           }}
         >
@@ -112,18 +132,26 @@ export function JobCard({ job }: JobCardProps) {
           >
             {footerItems.map((item) => {
               const content = (
-                <Typography
+                <Box
                   key={item.label}
-                  variant="label"
-                  component="span"
-                  color="text.secondary"
-                  sx={{ fontSize: "0.6875rem" }}
+                  sx={{ display: "flex", alignItems: "baseline", gap: 0.75 }}
                 >
-                  {item.label}{" "}
-                  <Box component="span" sx={{ color: "text.primary" }}>
+                  <Typography
+                    variant="label"
+                    component="span"
+                    color="text.secondary"
+                    sx={{ textTransform: "uppercase", fontSize: "0.625rem" }}
+                  >
+                    {item.label}
+                  </Typography>
+                  <Typography
+                    variant="data"
+                    component="span"
+                    sx={{ color: "text.primary", fontSize: "0.75rem" }}
+                  >
                     {item.value}
-                  </Box>
-                </Typography>
+                  </Typography>
+                </Box>
               );
               return item.tooltip ? (
                 <Tooltip key={item.label} title={item.tooltip}>

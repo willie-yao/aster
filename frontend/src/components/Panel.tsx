@@ -6,8 +6,9 @@ import Paper from "@mui/material/Paper";
 // Cast back to `typeof Paper` so it keeps Paper's polymorphic `component` prop.
 export const Panel = styled(Paper)(({ theme }) => ({
   backgroundColor: (theme.vars ?? theme).palette.surface.glass,
-  backdropFilter: "blur(12px)",
-  WebkitBackdropFilter: "blur(12px)",
+  backdropFilter: "blur(14px)",
+  WebkitBackdropFilter: "blur(14px)",
   border: `1px solid ${(theme.vars ?? theme).palette.divider}`,
   backgroundImage: "none",
+  boxShadow: "0 1px 2px rgba(0, 0, 0, 0.16)",
 })) as typeof Paper;

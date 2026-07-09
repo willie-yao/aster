@@ -79,7 +79,24 @@ function TestRow({ item, tab }: { item: TestFlakiness; tab: Tab }) {
   const lastFailureMessage = item.last_failure?.failure_message;
 
   return (
-    <Panel sx={{ borderRadius: "12px", overflow: "hidden" }}>
+    <Panel
+      sx={{
+        borderRadius: "12px",
+        overflow: "hidden",
+        position: "relative",
+        "&::before": {
+          content: '""',
+          position: "absolute",
+          insetBlock: 0,
+          insetInlineStart: 0,
+          width: 3,
+          bgcolor: (theme) =>
+            classificationColor === "default"
+              ? (theme.vars ?? theme).palette.divider
+              : soft(theme, classificationColor, 0.9),
+        },
+      }}
+    >
       <Accordion
         disableGutters
         elevation={0}
@@ -169,13 +186,18 @@ function TestRow({ item, tab }: { item: TestFlakiness; tab: Tab }) {
                 sx={{
                   flexShrink: 0,
                   textAlign: { xs: "left", sm: "right" },
-                  width: { xs: 72, sm: 64 },
+                  width: { xs: 84, sm: 80 },
                 }}
               >
-                <Typography variant="label" color="text.secondary">
+                <Typography variant="label" component="div" color="text.secondary">
                   {metricLabel(tab)}
                 </Typography>
-                <Typography variant="body2" color="text.primary" sx={{ fontWeight: 700 }}>
+                <Typography
+                  variant="data"
+                  component="div"
+                  color="text.primary"
+                  sx={{ fontSize: "0.9375rem", fontWeight: 700 }}
+                >
                   {metricValue(tab, item)}
                 </Typography>
               </Box>
@@ -360,13 +382,24 @@ export function FlakinessPage() {
 
   return (
     <Stack spacing={4}>
-      <Stack spacing={0.5}>
+      <Stack spacing={0.75}>
         <Typography variant="h4" component="h1">
           Test Analysis
         </Typography>
-        <Typography variant="body2" color="text.secondary">
-          Last updated: {timeAgo(data.generated_at)}
-        </Typography>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
+          <Box
+            sx={{
+              width: 7,
+              height: 7,
+              borderRadius: "50%",
+              bgcolor: "success.main",
+              boxShadow: (theme) => `0 0 8px ${(theme.vars ?? theme).palette.success.main}`,
+            }}
+          />
+          <Typography variant="data" color="text.secondary" sx={{ fontSize: "0.75rem" }}>
+            Updated {timeAgo(data.generated_at)}
+          </Typography>
+        </Box>
       </Stack>
 
       <Stack spacing={1.5}>
