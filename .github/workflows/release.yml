@@ -10,7 +10,7 @@ on:
       - "v*.*.*"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   # Re-run the full CI gate against the tagged commit before releasing.
@@ -20,6 +20,8 @@ jobs:
   release:
     needs: gate
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -48,3 +50,41 @@ jobs:
               git push origin -f "refs/tags/$MAJOR"
               ;;
           esac
+
+  # Publish the Helm chart for the Kubernetes-native deploy mode: package it at
+  # the release version (pinning its image to the released tag), push it to GHCR
+  # as an OCI artifact, and attach the .tgz to the release. Runs after `release`
+  # so the release exists for the asset upload. The container image itself is
+  # built by image.yml, which the same tag triggers in parallel.
+  publish-chart:
+    needs: [gate, release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Package, push, and attach the chart
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # Chart versions must be strict SemVer with no leading v; appVersion
+          # is the released image tag (the chart defaults image.tag to it).
+          CHART_VERSION="${TAG#v}"
+          helm lint deploy/helm/prow-ai-dashboard
+          helm package deploy/helm/prow-ai-dashboard \
+            --version "$CHART_VERSION" --app-version "$TAG"
+          PKG="prow-ai-dashboard-${CHART_VERSION}.tgz"
+          # A charts/ sub-namespace avoids colliding with the image package,
+          # which shares the prow-ai-dashboard name under the owner root.
+          helm push "$PKG" "oci://ghcr.io/${{ github.repository_owner }}/charts"
+          gh release upload "$TAG" "$PKG" --clobber

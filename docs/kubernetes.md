@@ -68,20 +68,49 @@ docker push ghcr.io/you/prow-ai-dashboard:v1.0.0
 ```
 
 Pushes to `main` and `vX.Y.Z` tags publish the image automatically via
-`.github/workflows/image.yml` to `ghcr.io/<owner>/prow-ai-dashboard`.
+`.github/workflows/image.yml` to `ghcr.io/<owner>/prow-ai-dashboard`. A `vX.Y.Z`
+tag additionally publishes the Helm chart to
+`oci://ghcr.io/<owner>/charts/prow-ai-dashboard` and attaches the packaged
+`.tgz` to the GitHub release (see `.github/workflows/release.yml`).
 
 ## Install with Helm
 
-The chart lives at `deploy/helm/prow-ai-dashboard`. Supply your consumer-owned
+The chart is published to GHCR as an OCI artifact on each release, and its
+source lives at `deploy/helm/prow-ai-dashboard`. Supply your consumer-owned
 `project.yaml` and `prompts/system.md` at install time; they are never checked
 into the engine repo. The `onboard -mode k8s` subcommand scaffolds a project
 plus a `deploy/values.yaml` ready to pass here with `-f`; see
 [onboarding-a-new-project.md](onboarding-a-new-project.md#step-3a-kubernetes-native).
 
+Install the released chart straight from GHCR (no repo checkout needed). The
+chart pins its image to the matching release, so `image.tag` is optional:
+
+```bash
+helm install capz oci://ghcr.io/willie-yao/charts/prow-ai-dashboard \
+  --version 1.0.0-beta.5 \
+  --namespace dashboards --create-namespace \
+  --set persistence.storageClass=<your-rwx-class> \
+  --set-file project.config=../capz-prow-ai-dashboard/project.yaml \
+  --set-file project.systemPrompt=../capz-prow-ai-dashboard/prompts/system.md \
+  --set ai.enabled=true \
+  --set ai.endpoint=http://vllm.inference.svc.cluster.local/v1/chat/completions \
+  --set ai.model=<model-id> \
+  --set ai.token=<token>
+```
+
+> GHCR packages are private by default. If the pull fails with an auth error,
+> make the `charts/prow-ai-dashboard` package public once in the repo's package
+> settings, or `helm registry login ghcr.io` first. As a no-auth alternative,
+> every release also attaches the packaged chart `.tgz`: download it from the
+> release page and `helm install capz ./prow-ai-dashboard-<version>.tgz ...`.
+
+To install from a local checkout instead (e.g. an unreleased change), point Helm
+at the chart directory and set `image.tag` to a published image tag:
+
 ```bash
 helm install capz deploy/helm/prow-ai-dashboard \
   --namespace dashboards --create-namespace \
-  --set image.tag=v1.0.0 \
+  --set image.tag=v1.0.0-beta.5 \
   --set persistence.storageClass=<your-rwx-class> \
   --set-file project.config=../capz-prow-ai-dashboard/project.yaml \
   --set-file project.systemPrompt=../capz-prow-ai-dashboard/prompts/system.md \

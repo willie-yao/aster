@@ -1,9 +1,9 @@
 # Releasing the engine
 
-How to cut a release of the prow-ai-dashboard engine. Consumers pin the engine
-through the reusable deploy workflow, so a "release" is a git tag plus a GitHub
-Release; there are no binary artifacts (the frontend is built per consumer from
-its base path, and the fetcher builds from source).
+How to cut a release of the prow-ai-dashboard engine. Consumers on the GitHub
+Actions + Pages path pin the engine through the reusable deploy workflow, so for
+them a "release" is just a git tag plus a GitHub Release. A tag also publishes
+the Kubernetes-native artifacts: the container image and the Helm chart.
 
 ## Versioning
 
@@ -33,7 +33,14 @@ upgrade and are therefore at least a minor bump; call them out in the changelog.
    - re-runs the full CI gate against the tagged commit,
    - creates the GitHub Release with auto-generated notes (marked
      **pre-release** when the tag has a `-beta`/`-rc` suffix),
+   - packages the Helm chart at the release version (with its image pinned to
+     the tag), pushes it to `oci://ghcr.io/<owner>/charts/prow-ai-dashboard`,
+     and attaches the `.tgz` to the release,
    - for a **stable** tag only, fast-forwards the `vMAJOR` alias to the tag.
+
+   In parallel, `.github/workflows/image.yml` builds and pushes the container
+   image (fetcher + server + SPA) to `ghcr.io/<owner>/prow-ai-dashboard` with
+   the version tags.
 
 The tag glob is `v*.*.*`, so pushing the `vMAJOR` alias does not re-trigger the
 workflow.
