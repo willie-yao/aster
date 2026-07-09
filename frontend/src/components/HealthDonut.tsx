@@ -22,6 +22,10 @@ export function HealthDonut({ passing, flaky, failing, size = 128 }: HealthDonut
   ];
 
   const strokeWidth = 3.4;
+  // A small gap between segments avoids the butt-cap spike where two arcs meet
+  // (most visible when one category is 0, leaving exactly two segments).
+  const active = segments.filter((seg) => seg.value > 0);
+  const gap = active.length > 1 ? 1.5 : 0;
   let offset = 0;
 
   return (
@@ -43,9 +47,9 @@ export function HealthDonut({ passing, flaky, failing, size = 128 }: HealthDonut
           stroke="var(--mui-palette-divider)"
         />
         {total > 0 &&
-          segments.map((seg) => {
-            if (seg.value === 0) return null;
-            const dash = (seg.value / total) * 100;
+          active.map((seg) => {
+            const pct = (seg.value / total) * 100;
+            const dash = Math.max(pct - gap, 0.5);
             const circle = (
               <circle
                 key={seg.stroke}
@@ -61,7 +65,7 @@ export function HealthDonut({ passing, flaky, failing, size = 128 }: HealthDonut
                 stroke={seg.stroke}
               />
             );
-            offset += dash;
+            offset += pct;
             return circle;
           })}
       </Box>
