@@ -38,6 +38,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prow/jobconfig"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prowbuild"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/repotemplate"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/resolve"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/skillsuggest"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
@@ -346,6 +347,21 @@ func (p *pipeline) refresh(ctx context.Context, jobs []models.ProwJob) (*refresh
 		flakinessReport.RecurringPatterns = collectRecurringPatterns(details)
 		if n := len(flakinessReport.RecurringPatterns); n > 0 {
 			log.Printf("🔗 %d systemic recurring pattern(s) surfaced on the home page", n)
+		}
+	}
+
+	// Auto-reopen resolved patterns that have recurred past their watermark, so
+	// a fixed-then-flaked failure returns to the active view. The server may
+	// also write resolved.json on an admin action; both use atomic writes, and a
+	// rare lost update self-heals on the next pass (same trade-off as the other
+	// *_state.json files).
+	if rs := resolve.Load(opts.OutDir); len(rs.Resolved) > 0 {
+		if pruned, changed := rs.Prune(flakinessReport.RecurringPatterns); changed {
+			if err := pruned.Save(opts.OutDir); err != nil {
+				log.Printf("Warning: failed to save resolved state: %v", err)
+			} else {
+				log.Printf("↩ re-opened %d resolved pattern(s) after recurrence", len(rs.Resolved)-len(pruned.Resolved))
+			}
 		}
 	}
 

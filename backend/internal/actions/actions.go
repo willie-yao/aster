@@ -24,6 +24,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/repotemplate"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/resolve"
 )
 
 // ErrNotFound means no pattern in the published data matched the given id.
@@ -315,6 +316,55 @@ func (s *Service) Confirm(ctx context.Context, token, userToken string) (string,
 		return url, nil
 	}
 	return "", ErrPreviewNotFound
+}
+
+// Resolve marks a systemic pattern as resolved: it is hidden from the active
+// view until a failing build newer than the current watermark recurs. note is
+// an optional maintainer comment (e.g. the fixing PR). login attributes it.
+func (s *Service) Resolve(failureID, login, note string) error {
+	pa, err := s.findPattern(failureID)
+	if err != nil {
+		return err
+	}
+	if !pa.Systemic {
+		return fmt.Errorf("only systemic recurring patterns can be resolved")
+	}
+	watermark := resolve.Watermark(*pa)
+	if watermark == "" {
+		return fmt.Errorf("pattern has no build history to resolve against")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	st := resolve.Load(s.dataDir)
+	st.Resolved[failureID] = resolve.Entry{
+		ResolvedAt: time.Now().UTC().Format(time.RFC3339),
+		ResolvedBy: login,
+		Note:       strings.TrimSpace(note),
+		Watermark:  watermark,
+		Subject:    pa.Subject,
+	}
+	if err := st.Save(s.dataDir); err != nil {
+		return fmt.Errorf("saving resolved state: %w", err)
+	}
+	return nil
+}
+
+// Unresolve clears a pattern's resolved mark so it returns to the active view.
+func (s *Service) Unresolve(failureID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	st := resolve.Load(s.dataDir)
+	if !st.IsResolved(failureID) {
+		return ErrNotFound
+	}
+	delete(st.Resolved, failureID)
+	if err := st.Save(s.dataDir); err != nil {
+		return fmt.Errorf("saving resolved state: %w", err)
+	}
+	return nil
 }
 
 // stash caches a draft under a fresh token bound to the admin's identity and

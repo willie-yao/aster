@@ -11,9 +11,10 @@ import Link from "@mui/material/Link";
 import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
-import { BugReport, Build, GitHub } from "@mui/icons-material";
+import { BugReport, Build, GitHub, CheckCircleOutlined, Replay } from "@mui/icons-material";
 import { useCapabilities } from "../hooks/useCapabilities";
 import { useAuth } from "../hooks/useAuth";
+import { useResolved } from "../hooks/useData";
 
 type Action = "create-issue" | "propose-fix";
 
@@ -54,6 +55,12 @@ export function FailureActions({ failureID }: { failureID: string }) {
   const [instruction, setInstruction] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [url, setUrl] = useState<string | null>(null);
+
+  const { data: resolved, refetch: refetchResolved } = useResolved();
+  const [resolveOpen, setResolveOpen] = useState(false);
+  const [note, setNote] = useState("");
+  const [resolveBusy, setResolveBusy] = useState(false);
+  const [resolveError, setResolveError] = useState<string | null>(null);
 
   // Cached drafts hold a server token bound to a specific failure. If this
   // instance is reused for a different failure (e.g. route change without a
@@ -179,7 +186,55 @@ export function FailureActions({ failureID }: { failureID: string }) {
     setError(null);
   }
 
+  async function submitResolve() {
+    setResolveBusy(true);
+    setResolveError(null);
+    try {
+      const res = await fetch(
+        `${API_BASE}api/failures/${encodeURIComponent(failureID)}/resolve`,
+        {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ note: note.trim() }),
+        },
+      );
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text.trim() || `HTTP ${res.status}`);
+      }
+      setResolveOpen(false);
+      setNote("");
+      refetchResolved();
+    } catch (e) {
+      setResolveError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setResolveBusy(false);
+    }
+  }
+
+  async function unresolve() {
+    setResolveBusy(true);
+    setResolveError(null);
+    try {
+      const res = await fetch(
+        `${API_BASE}api/failures/${encodeURIComponent(failureID)}/unresolve`,
+        { method: "POST", credentials: "same-origin" },
+      );
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text.trim() || `HTTP ${res.status}`);
+      }
+      refetchResolved();
+    } catch (e) {
+      setResolveError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setResolveBusy(false);
+    }
+  }
+
   const isFix = action === "propose-fix";
+  const isResolved = !!resolved.resolved[failureID];
 
   return (
     <Box>
@@ -204,7 +259,74 @@ export function FailureActions({ failureID }: { failureID: string }) {
         >
           Propose fix
         </Button>
+        {isResolved ? (
+          <Button
+            size="small"
+            variant="outlined"
+            color="success"
+            startIcon={<Replay sx={{ fontSize: 18 }} />}
+            disabled={resolveBusy}
+            onClick={unresolve}
+          >
+            Unresolve
+          </Button>
+        ) : (
+          <Button
+            size="small"
+            variant="outlined"
+            color="success"
+            startIcon={<CheckCircleOutlined sx={{ fontSize: 18 }} />}
+            disabled={resolveBusy}
+            onClick={() => {
+              setResolveError(null);
+              setResolveOpen(true);
+            }}
+          >
+            Mark resolved
+          </Button>
+        )}
       </Stack>
+
+      {resolveError && (
+        <Alert severity="error" sx={{ mt: 1 }}>
+          <Typography variant="body2">{resolveError}</Typography>
+        </Alert>
+      )}
+
+      <Dialog open={resolveOpen} onClose={resolveBusy ? undefined : () => setResolveOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Mark pattern resolved</DialogTitle>
+        <DialogContent dividers>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Hides this recurring pattern from the active view. It re-appears
+            automatically if a newer failing build recurs.
+          </Typography>
+          <TextField
+            label="Note (optional)"
+            placeholder="e.g. fixed by kubernetes/test-infra #12345"
+            fullWidth
+            multiline
+            minRows={2}
+            size="small"
+            value={note}
+            disabled={resolveBusy}
+            onChange={(e) => setNote(e.target.value)}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setResolveOpen(false)} disabled={resolveBusy}>
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            color="success"
+            disabled={resolveBusy}
+            startIcon={resolveBusy ? <CircularProgress size={16} color="inherit" /> : undefined}
+            onClick={submitResolve}
+          >
+            Mark resolved
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {url && (
         <Alert severity="success" sx={{ mt: 1 }}>

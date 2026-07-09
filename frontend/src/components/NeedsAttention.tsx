@@ -8,9 +8,10 @@ import Typography from "@mui/material/Typography";
 import ReportProblem from "@mui/icons-material/ReportProblem";
 import Insights from "@mui/icons-material/Insights";
 import ExpandMore from "@mui/icons-material/ExpandMore";
+import CheckCircleOutlined from "@mui/icons-material/CheckCircleOutlined";
 import { useMemo, useState } from "react";
 import { Link as RouterLink } from "react-router-dom";
-import { useFlakinessReport } from "../hooks/useData";
+import { useFlakinessReport, useResolved } from "../hooks/useData";
 import { useManifest } from "../hooks/useManifest";
 import { shortJobName, shortTestName } from "../lib/utils";
 import { soft } from "../theme";
@@ -39,7 +40,9 @@ export function NeedsAttention() {
   const manifest = useManifest();
   const filePrefix = manifest.short_name_prefix ?? "";
   const { data, loading } = useFlakinessReport();
+  const { data: resolved } = useResolved();
   const [open, setOpen] = useState(readOpenPref);
+  const [resolvedOpen, setResolvedOpen] = useState(false);
 
   function toggleOpen() {
     setOpen((prev) => {
@@ -52,10 +55,21 @@ export function NeedsAttention() {
   }
 
   // Backend already filters to systemic verdicts and ranks by confidence, then
-  // builds. Drop entries missing a job link and cap for display.
+  // builds. Drop entries missing a job link, hide admin-resolved patterns
+  // (shown in a separate collapsed section), and cap for display.
   const recurring = useMemo<PatternAnalysis[]>(
-    () => (data?.recurring_patterns ?? []).filter((p) => p.job_id).slice(0, MAX_PATTERNS),
-    [data],
+    () =>
+      (data?.recurring_patterns ?? [])
+        .filter((p) => p.job_id && !(p.id && resolved.resolved[p.id]))
+        .slice(0, MAX_PATTERNS),
+    [data, resolved],
+  );
+
+  // Patterns a maintainer marked resolved: kept visible but tucked into a
+  // collapsed section so the active list stays focused.
+  const resolvedPatterns = useMemo<PatternAnalysis[]>(
+    () => (data?.recurring_patterns ?? []).filter((p) => p.job_id && p.id && resolved.resolved[p.id]),
+    [data, resolved],
   );
 
   const groups = useMemo<ItemGroup[]>(() => {
@@ -91,7 +105,7 @@ export function NeedsAttention() {
     return [];
   }, [data]);
 
-  if (loading || (recurring.length === 0 && groups.length === 0)) return null;
+  if (loading || (recurring.length === 0 && groups.length === 0 && resolvedPatterns.length === 0)) return null;
 
   const totalItems =
     recurring.length + groups.reduce((sum, g) => sum + g.items.length, 0);
@@ -319,6 +333,85 @@ export function NeedsAttention() {
               ))}
             </Box>
           ))}
+
+          {resolvedPatterns.length > 0 && (
+            <Box component="li" sx={{ listStyle: "none" }}>
+              {(recurring.length > 0 || groups.length > 0) && <Divider sx={{ my: 1 }} />}
+              <Box
+                component="button"
+                type="button"
+                onClick={() => setResolvedOpen((p) => !p)}
+                aria-expanded={resolvedOpen}
+                sx={{
+                  width: "100%",
+                  appearance: "none",
+                  border: 0,
+                  m: 0,
+                  background: "transparent",
+                  cursor: "pointer",
+                  textAlign: "left",
+                  font: "inherit",
+                  color: "inherit",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 0.5,
+                  px: 0,
+                  py: 1,
+                }}
+              >
+                <Typography variant="label" component="span" color="text.secondary" sx={{ textTransform: "uppercase" }}>
+                  Resolved ({resolvedPatterns.length})
+                </Typography>
+                <ExpandMore
+                  sx={{
+                    fontSize: 18,
+                    color: "text.secondary",
+                    transition: (t) => t.transitions.create("transform", { duration: t.transitions.duration.short }),
+                    transform: resolvedOpen ? "rotate(0deg)" : "rotate(-90deg)",
+                  }}
+                />
+              </Box>
+              <Collapse in={resolvedOpen} timeout="auto" unmountOnExit>
+                {resolvedPatterns.map((pattern) => {
+                  const entry = pattern.id ? resolved.resolved[pattern.id] : undefined;
+                  return (
+                    <ListItemButton
+                      key={pattern.id ?? pattern.job_id ?? pattern.subject}
+                      component={RouterLink}
+                      to={`/job/${encodeURIComponent(pattern.job_id ?? "")}`}
+                      sx={{
+                        gap: 1.5,
+                        px: 1,
+                        py: 1,
+                        borderRadius: "8px",
+                        color: "inherit",
+                        textDecoration: "none",
+                        opacity: 0.7,
+                        "&:hover": {
+                          bgcolor: (theme) => (theme.vars ?? theme).palette.surface.containerHigh,
+                        },
+                      }}
+                    >
+                      <CheckCircleOutlined sx={{ fontSize: 18, color: "success.main", flexShrink: 0, mt: "2px" }} />
+                      <Box sx={{ minWidth: 0, flex: 1 }}>
+                        <Typography variant="caption" color="text.secondary" noWrap>
+                          {shortJobName(pattern.subject, filePrefix)}
+                        </Typography>
+                        <Typography variant="body2" color="text.primary" noWrap>
+                          {pattern.shared_root_cause || pattern.summary}
+                        </Typography>
+                        {entry?.note && (
+                          <Typography variant="caption" color="text.secondary" noWrap sx={{ display: "block" }}>
+                            {entry.note}
+                          </Typography>
+                        )}
+                      </Box>
+                    </ListItemButton>
+                  );
+                })}
+              </Collapse>
+            </Box>
+          )}
         </List>
       </Collapse>
     </Panel>

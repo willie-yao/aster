@@ -26,11 +26,14 @@ import (
 
 // ActionRunner performs on-demand actions for a failure id using the admin's
 // token. Actions are two-phase: a preview renders the exact issue or PR without
-// posting, then Confirm posts the previewed draft. actions.Service satisfies it.
+// posting, then Confirm posts the previewed draft. Resolve/Unresolve hide or
+// restore a systemic pattern in the published view. actions.Service satisfies it.
 type ActionRunner interface {
 	PreviewIssue(ctx context.Context, failureID, userToken, instruction string) (actions.PreviewResult, error)
 	PreviewFix(ctx context.Context, failureID, userToken, instruction string) (actions.PreviewResult, error)
 	Confirm(ctx context.Context, token, userToken string) (string, error)
+	Resolve(failureID, login, note string) error
+	Unresolve(failureID string) error
 }
 
 // defaultActionTimeout bounds a single on-demand action. Fix-PR drafting calls
@@ -138,6 +141,10 @@ func Handler(opts Options) (http.Handler, error) {
 			auth.Middleware(opts.Auth, csrfGuard(previewHandler(timeout, opts.Actions.PreviewFix))))
 		mux.Handle("POST /api/actions/confirm",
 			auth.Middleware(opts.Auth, csrfGuard(confirmHandler(timeout, opts.Actions.Confirm))))
+		mux.Handle("POST /api/failures/{id}/resolve",
+			auth.Middleware(opts.Auth, csrfGuard(resolveHandler(opts.Actions.Resolve))))
+		mux.Handle("POST /api/failures/{id}/unresolve",
+			auth.Middleware(opts.Auth, csrfGuard(unresolveHandler(opts.Actions.Unresolve))))
 	}
 	mux.HandleFunc("/api/capabilities", capabilitiesHandler(caps))
 
@@ -265,6 +272,45 @@ func writeActionError(w http.ResponseWriter, id, login string, err error) {
 	}
 	log.Printf("action failed for %s (by %s): %v", id, login, err)
 	http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+}
+
+// resolveHandler marks a systemic pattern resolved with an optional {"note":...}.
+// It attributes the action to the signed-in admin and returns 204 on success.
+func resolveHandler(run func(failureID, login, note string) error) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		identity, ok := auth.IdentityFrom(r.Context())
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		var body struct {
+			Note string `json:"note"`
+		}
+		_ = json.NewDecoder(io.LimitReader(r.Body, 8192)).Decode(&body)
+		if err := run(id, identity.Login, body.Note); err != nil {
+			writeActionError(w, id, identity.Login, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
+// unresolveHandler clears a pattern's resolved mark, returning 204 on success.
+func unresolveHandler(run func(failureID string) error) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		identity, ok := auth.IdentityFrom(r.Context())
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if err := run(id); err != nil {
+			writeActionError(w, id, identity.Login, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 }
 
 // spaHandler serves a single-page app from dir: real files are served as-is,

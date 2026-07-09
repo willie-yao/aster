@@ -12,6 +12,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/resolve"
 )
 
 // writeJobDetail writes a jobs/<name>.json fixture under dataDir.
@@ -34,6 +35,54 @@ func systemicPattern() models.PatternAnalysis {
 	pa := models.PatternAnalysis{JobID: "periodic-x", Systemic: true, SharedRootCause: "etcd timeout"}
 	pa.ID = models.PatternID(pa)
 	return pa
+}
+
+func TestResolve_Unresolve_RoundTrip(t *testing.T) {
+	dataDir := t.TempDir()
+	pa := models.PatternAnalysis{JobID: "periodic-x", Systemic: true, SharedRootCause: "etcd timeout", SharedBuilds: []string{"100", "250", "175"}}
+	pa.ID = models.PatternID(pa)
+	writeJobDetail(t, dataDir, "periodic-x.json", models.JobDetail{JobID: "periodic-x", PatternAnalyses: []models.PatternAnalysis{pa}})
+	s := NewService(&project.Config{}, dataDir, AIConfig{})
+
+	if err := s.Resolve(pa.ID, "willie-yao", "fixed by test-infra #123"); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	st := resolve.Load(dataDir)
+	e, ok := st.Resolved[pa.ID]
+	if !ok {
+		t.Fatal("pattern should be resolved")
+	}
+	if e.ResolvedBy != "willie-yao" || e.Note != "fixed by test-infra #123" {
+		t.Errorf("entry metadata wrong: %+v", e)
+	}
+	if e.Watermark != "250" { // highest of the shared builds
+		t.Errorf("watermark = %q, want 250", e.Watermark)
+	}
+
+	if err := s.Unresolve(pa.ID); err != nil {
+		t.Fatalf("Unresolve: %v", err)
+	}
+	if resolve.Load(dataDir).IsResolved(pa.ID) {
+		t.Fatal("pattern should be unresolved")
+	}
+}
+
+func TestResolve_NonSystemicRejected(t *testing.T) {
+	dataDir := t.TempDir()
+	pa := models.PatternAnalysis{JobID: "periodic-x", Systemic: false, SharedRootCause: "flake"}
+	pa.ID = models.PatternID(pa)
+	writeJobDetail(t, dataDir, "periodic-x.json", models.JobDetail{JobID: "periodic-x", PatternAnalyses: []models.PatternAnalysis{pa}})
+	s := NewService(&project.Config{}, dataDir, AIConfig{})
+	if err := s.Resolve(pa.ID, "willie-yao", ""); err == nil {
+		t.Fatal("expected non-systemic resolve to be rejected")
+	}
+}
+
+func TestUnresolve_NotFound(t *testing.T) {
+	s := NewService(&project.Config{}, t.TempDir(), AIConfig{})
+	if err := s.Unresolve("nope"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("want ErrNotFound, got %v", err)
+	}
 }
 
 func TestPreviewIssue_NotFound(t *testing.T) {

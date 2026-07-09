@@ -217,7 +217,11 @@ func (fakeAuth) Authenticate(ctx context.Context, r *http.Request) (*auth.Identi
 
 // fakeRunner records calls and returns canned drafts/URLs, or a not-found error
 // for the "missing" id/token.
-type fakeRunner struct{ gotID, gotToken, gotInstruction, gotConfirmToken string }
+type fakeRunner struct {
+	gotID, gotToken, gotInstruction, gotConfirmToken string
+	gotResolveID, gotResolveLogin, gotResolveNote    string
+	gotUnresolveID                                   string
+}
 
 func (f *fakeRunner) PreviewIssue(ctx context.Context, id, token, instruction string) (actions.PreviewResult, error) {
 	if id == "missing" {
@@ -236,6 +240,20 @@ func (f *fakeRunner) Confirm(ctx context.Context, token, userToken string) (stri
 	}
 	f.gotConfirmToken, f.gotToken = token, userToken
 	return "https://github.com/o/r/issues/1", nil
+}
+func (f *fakeRunner) Resolve(id, login, note string) error {
+	if id == "missing" {
+		return actions.ErrNotFound
+	}
+	f.gotResolveID, f.gotResolveLogin, f.gotResolveNote = id, login, note
+	return nil
+}
+func (f *fakeRunner) Unresolve(id string) error {
+	if id == "missing" {
+		return actions.ErrNotFound
+	}
+	f.gotUnresolveID = id
+	return nil
 }
 
 func TestHandler_ActionsDisabledByDefault(t *testing.T) {
@@ -342,6 +360,24 @@ func TestHandler_ActionsEnabled(t *testing.T) {
 	// An unknown/expired token maps to 404.
 	if r := do("/api/actions/confirm", "ok", `{"token":"missing"}`); r.StatusCode != http.StatusNotFound {
 		t.Errorf("expired-token status = %d, want 404", r.StatusCode)
+	}
+	// Resolve: 204, passing id + login + note through.
+	if r := do("/api/failures/abc/resolve", "ok", `{"note":"fixed by test-infra #99"}`); r.StatusCode != http.StatusNoContent {
+		t.Errorf("resolve status = %d, want 204", r.StatusCode)
+	}
+	if runner.gotResolveID != "abc" || runner.gotResolveLogin != "alice" || runner.gotResolveNote != "fixed by test-infra #99" {
+		t.Errorf("resolve got id=%q login=%q note=%q", runner.gotResolveID, runner.gotResolveLogin, runner.gotResolveNote)
+	}
+	// Resolve on an unknown failure maps to 404.
+	if r := do("/api/failures/missing/resolve", "ok", `{}`); r.StatusCode != http.StatusNotFound {
+		t.Errorf("resolve not-found status = %d, want 404", r.StatusCode)
+	}
+	// Unresolve: 204.
+	if r := do("/api/failures/abc/unresolve", "ok", ``); r.StatusCode != http.StatusNoContent {
+		t.Errorf("unresolve status = %d, want 204", r.StatusCode)
+	}
+	if runner.gotUnresolveID != "abc" {
+		t.Errorf("unresolve got id=%q, want abc", runner.gotUnresolveID)
 	}
 }
 

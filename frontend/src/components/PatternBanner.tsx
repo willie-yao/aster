@@ -8,6 +8,7 @@ import { Insights } from "@mui/icons-material";
 import type { PatternAnalysis } from "../types/dashboard";
 import { RichText } from "./RichText";
 import { FailureActions } from "./FailureActions";
+import { useResolved } from "../hooks/useData";
 import { soft } from "../theme";
 
 /**
@@ -29,6 +30,9 @@ export function PatternBanner({
       : pattern.confidence === "medium"
         ? "warning"
         : undefined;
+
+  const { data: resolved } = useResolved();
+  const resolvedEntry = pattern.id ? resolved.resolved[pattern.id] : undefined;
 
   return (
     <Box
@@ -62,7 +66,26 @@ export function PatternBanner({
                 : { bgcolor: "action.selected", color: "text.secondary" }),
             }}
           />
+          {resolvedEntry && (
+            <Chip
+              size="small"
+              label="Resolved"
+              sx={{
+                fontWeight: 600,
+                bgcolor: (t) => soft(t, "success", 0.2),
+                color: "success.main",
+              }}
+            />
+          )}
         </Stack>
+
+        {resolvedEntry && (
+          <Typography variant="caption" color="text.secondary">
+            Marked resolved by {resolvedEntry.resolved_by}
+            {resolvedEntry.note ? ` — ${resolvedEntry.note}` : ""}. Re-opens
+            automatically if it recurs.
+          </Typography>
+        )}
 
         <Typography variant="body2" sx={{ whiteSpace: "pre-line", lineHeight: 1.6 }}>
           <RichText text={pattern.summary} steps />

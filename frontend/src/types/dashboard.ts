@@ -188,3 +188,15 @@ export interface SearchIndex {
   generated_at: string;
   entries: SearchEntry[];
 }
+
+export interface ResolvedEntry {
+  resolved_at: string;
+  resolved_by: string;
+  note?: string;
+  watermark: string;
+  subject?: string;
+}
+
+export interface ResolvedState {
+  resolved: Record<string, ResolvedEntry>;
+}

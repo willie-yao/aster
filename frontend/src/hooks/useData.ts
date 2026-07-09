@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import type { Dashboard, FlakinessReport, JobDetail, SearchIndex } from "../types/dashboard";
+import type { Dashboard, FlakinessReport, JobDetail, ResolvedState, SearchIndex } from "../types/dashboard";
 
 const DATA_BASE =
   import.meta.env.VITE_DATA_URL ?? `${import.meta.env.BASE_URL}data`;
@@ -80,4 +80,32 @@ export function useSearchIndex() {
   }, []);
 
   return { data, loading, error };
+}
+
+export function useResolved() {
+  const [data, setData] = useState<ResolvedState>({ resolved: {} });
+  const [loading, setLoading] = useState(true);
+  const [nonce, setNonce] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${DATA_BASE}/resolved.json`, { cache: "no-store" })
+      // A missing file (static mode, or nothing resolved yet) is normal: treat
+      // it as an empty set rather than an error.
+      .then((r) => (r.ok ? r.json() : { resolved: {} }))
+      .then((d: ResolvedState) => {
+        if (!cancelled) setData(d?.resolved ? d : { resolved: {} });
+      })
+      .catch(() => {
+        if (!cancelled) setData({ resolved: {} });
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [nonce]);
+
+  return { data, loading, refetch: () => setNonce((n) => n + 1) };
 }
