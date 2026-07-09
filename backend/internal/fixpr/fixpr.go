@@ -162,16 +162,7 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 		return stats, fmt.Errorf("resolving %s/%s base: %w", m.opts.SourceOwner, m.opts.SourceName, err)
 	}
 	gen := func(ctx context.Context, p models.PatternAnalysis) (*proposedFix, error) {
-		return generateFix(ctx, genParams{
-			completer:       m.completer,
-			critique:        m.opts.Critique,
-			source:          m.source,
-			owner:           m.opts.SourceOwner,
-			repo:            m.opts.SourceName,
-			ref:             base.HeadSHA,
-			maxFiles:        m.opts.MaxFiles,
-			critiqueRetries: m.opts.CritiqueRetries,
-		}, p)
+		return m.generate(ctx, p, base.HeadSHA, "")
 	}
 
 	for _, p := range work {
@@ -220,26 +211,9 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 		}
 
 		// Reformat the description to follow the repo PR template when configured.
-		description := prDescription(p, fix)
-		if m.opts.PRFiller != nil {
-			description = m.opts.PRFiller.FillBody(ctx, description)
-		}
+		_, body := m.renderBody(ctx, p, fix, key)
 
-		url, err := m.pr.OpenPR(ctx, ghpr.Request{
-			Owner:        m.opts.SourceOwner,
-			Repo:         m.opts.SourceName,
-			Files:        fix.files,
-			BranchPrefix: "ai-fix",
-			Title:        prTitle(p),
-			Body:         prBody(p, fix, key, m.opts.DashboardURL, description),
-			Draft:        true,
-			Fork:         m.opts.Fork,
-			Base:         &base,
-			Labels:       m.opts.Labels,
-			AuthorName:   m.opts.AuthorName,
-			AuthorEmail:  m.opts.AuthorEmail,
-			SignOff:      true,
-		})
+		url, err := m.openPR(ctx, prTitle(p), body, fix.files, base)
 		if url == "" {
 			log.Printf("  ⚠ failed to open fix PR for %q: %v", p.Subject, err)
 			stats.Failures = append(stats.Failures, Failure{Subject: p.Subject, Reason: "opening the pull request failed"})
@@ -260,6 +234,130 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 		}
 	}
 	return stats, nil
+}
+
+// generate runs the fix generation for one pattern against ref. instruction is
+// an optional maintainer directive that steers the edit; empty for the batch
+// path.
+func (m *Manager) generate(ctx context.Context, p models.PatternAnalysis, ref, instruction string) (*proposedFix, error) {
+	return generateFix(ctx, genParams{
+		completer:       m.completer,
+		critique:        m.opts.Critique,
+		source:          m.source,
+		owner:           m.opts.SourceOwner,
+		repo:            m.opts.SourceName,
+		ref:             ref,
+		maxFiles:        m.opts.MaxFiles,
+		critiqueRetries: m.opts.CritiqueRetries,
+		instruction:     instruction,
+	}, p)
+}
+
+// renderBody builds the final PR description (reformatted to follow the repo PR
+// template when a filler is configured) and the full PR body that embeds it.
+func (m *Manager) renderBody(ctx context.Context, p models.PatternAnalysis, fix *proposedFix, key string) (description, body string) {
+	description = prDescription(p, fix)
+	if m.opts.PRFiller != nil {
+		description = m.opts.PRFiller.FillBody(ctx, description)
+	}
+	return description, prBody(p, fix, key, m.opts.DashboardURL, description)
+}
+
+// openPR opens a draft fix PR with the given title, body, and files against the
+// pinned base.
+func (m *Manager) openPR(ctx context.Context, title, body string, files map[string]string, base ghpr.Base) (string, error) {
+	return m.pr.OpenPR(ctx, ghpr.Request{
+		Owner:        m.opts.SourceOwner,
+		Repo:         m.opts.SourceName,
+		Files:        files,
+		BranchPrefix: "ai-fix",
+		Title:        title,
+		Body:         body,
+		Draft:        true,
+		Fork:         m.opts.Fork,
+		Base:         &base,
+		Labels:       m.opts.Labels,
+		AuthorName:   m.opts.AuthorName,
+		AuthorEmail:  m.opts.AuthorEmail,
+		SignOff:      true,
+	})
+}
+
+// GeneratedFix is an in-memory, ready-to-open fix produced by GeneratePreview.
+// A caller previews Title/Description/Diff, then passes the value back to
+// OpenFromPreview to open exactly the previewed PR. The base is pinned at
+// generation time so confirm opens the same diff against the same snapshot.
+type GeneratedFix struct {
+	Preview     Preview // Subject, Rationale, Diff, Files
+	Title       string  // final PR title
+	Description string  // PR description (after any repo-template reformat)
+	Body        string  // full PR body that embeds Description + diff + marker
+
+	pattern models.PatternAnalysis
+	key     string
+	base    ghpr.Base
+}
+
+// GeneratePreview generates a fix for one pattern and renders the exact PR title
+// and body without opening anything. instruction is an optional maintainer
+// directive that steers the edit. The returned *GeneratedFix is opaque to
+// callers and is passed back to OpenFromPreview to open the PR.
+func (m *Manager) GeneratePreview(ctx context.Context, p models.PatternAnalysis, instruction string) (*GeneratedFix, error) {
+	// Apply the same eligibility gate as the batch path so an on-demand preview
+	// cannot draft a fix for a failure the engine would not consider actionable
+	// (non-systemic or without a suggested fix).
+	if len(eligible([]models.PatternAnalysis{p}, m.opts.MinConfidence)) == 0 {
+		return nil, fmt.Errorf("this failure is not auto-fixable (needs a systemic pattern with a suggested fix)")
+	}
+	base, err := m.pr.ResolveBase(ctx, m.opts.SourceOwner, m.opts.SourceName)
+	if err != nil {
+		return nil, fmt.Errorf("resolving %s/%s base: %w", m.opts.SourceOwner, m.opts.SourceName, err)
+	}
+	fix, err := m.generate(ctx, p, base.HeadSHA, instruction)
+	if err != nil {
+		return nil, err
+	}
+	key := keyFor(p)
+	description, body := m.renderBody(ctx, p, fix, key)
+	return &GeneratedFix{
+		Preview:     Preview{Subject: p.Subject, Rationale: fix.rationale, Diff: fix.diff, Files: fix.files},
+		Title:       prTitle(p),
+		Description: description,
+		Body:        body,
+		pattern:     p,
+		key:         key,
+		base:        base,
+	}, nil
+}
+
+// OpenFromPreview opens the draft PR for a previously generated fix, applying
+// the same dedup guard as Reconcile: skip if the pattern is already tracked or
+// an open fix PR already exists. It returns the PR URL and records tracking
+// state; the caller saves state.
+func (m *Manager) OpenFromPreview(ctx context.Context, gf *GeneratedFix) (string, error) {
+	if gf == nil {
+		return "", fmt.Errorf("no generated fix to open")
+	}
+	key := gf.key
+	if t, tracked := m.state.Tracked[key]; tracked {
+		return t.URL, nil
+	}
+	if _, url, found, err := m.pr.SearchOpenPR(ctx, m.opts.SourceOwner, m.opts.SourceName, markerToken(key), markerFor(key)); err != nil {
+		return "", fmt.Errorf("fix-PR search failed: %w", err)
+	} else if found {
+		m.state.Tracked[key] = TrackedFix{URL: url, OpenedAt: now()}
+		return url, nil
+	}
+	url, err := m.openPR(ctx, gf.Title, gf.Body, gf.Preview.Files, gf.base)
+	if url == "" {
+		return "", fmt.Errorf("opening the pull request failed")
+	}
+	if err != nil {
+		// PR opened but a follow-up (e.g. labeling) failed; still track it.
+		log.Printf("  ⚠ fix PR opened with a warning for %q: %v", gf.pattern.Subject, err)
+	}
+	m.state.Tracked[key] = TrackedFix{URL: url, OpenedAt: now()}
+	return url, nil
 }
 
 // eligible filters to systemic patterns at or above minConfidence that carry a

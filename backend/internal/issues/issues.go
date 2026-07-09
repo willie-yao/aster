@@ -146,6 +146,52 @@ func (m *Manager) SaveState() error {
 	return m.state.Save(m.stateFile)
 }
 
+// RenderSpec applies the template filler (if any) to a spec and guarantees the
+// dedup marker survives, returning the final title and body that CreateIssue
+// files. Exported so callers can preview the exact issue text without filing
+// it; a nil filler returns the spec's title and body unchanged.
+func RenderSpec(ctx context.Context, filler TemplateFiller, spec IssueSpec) (title, body string) {
+	title, body = spec.Title, spec.Body
+	if filler == nil {
+		return title, body
+	}
+	// Reformat to follow the repo issue template, then guarantee the dedup
+	// marker survives so tracking and adoption keep working.
+	marker := markerFor(spec.Key)
+	title, body = filler.FillIssue(ctx, title, strings.ReplaceAll(body, marker, ""))
+	title = clampTitle(title)
+	if !strings.Contains(body, marker) {
+		body = strings.TrimRight(body, "\n") + "\n\n" + marker
+	}
+	return title, body
+}
+
+// Completer runs a single chat completion. The AI client satisfies it; used by
+// ReviseBody to revise an issue draft per a maintainer instruction.
+type Completer interface {
+	Complete(ctx context.Context, system, user string) (string, error)
+}
+
+// ReviseBody asks the completer to revise a rendered issue's body per a
+// maintainer instruction, preserving the dedup marker. A nil completer, blank
+// instruction, or any error returns spec unchanged.
+func ReviseBody(ctx context.Context, c Completer, spec IssueSpec, instruction string) IssueSpec {
+	if c == nil || strings.TrimSpace(instruction) == "" {
+		return spec
+	}
+	marker := markerFor(spec.Key)
+	bodyNoMarker := strings.TrimSpace(strings.ReplaceAll(spec.Body, marker, ""))
+	const sys = "You revise the body of a GitHub issue to satisfy a maintainer's instruction. Return only the revised issue body as GitHub-flavored markdown, with no preamble, no code fences, and no invented facts."
+	user := "Maintainer instruction: " + instruction + "\n\nCurrent issue body:\n" + bodyNoMarker
+	out, err := c.Complete(ctx, sys, user)
+	body := strings.TrimSpace(out)
+	if err != nil || body == "" {
+		return spec
+	}
+	body = strings.TrimRight(body, "\n") + "\n\n" + marker
+	return IssueSpec{Key: spec.Key, Title: spec.Title, Body: body, Labels: spec.Labels}
+}
+
 // Reconcile files issues for new findings, adopts a pre-existing open issue when
 // local state was lost, and comments/closes issues whose finding has recovered.
 // Per-finding API errors are logged and skipped; the run is best-effort.
@@ -176,17 +222,7 @@ func (m *Manager) Reconcile(ctx context.Context, specs []IssueSpec) (Stats, erro
 			log.Printf("  ⓘ issue create cap (%d) reached; deferring %s to next run", m.opts.MaxNewPerRun, key)
 			continue
 		}
-		title, body := spec.Title, spec.Body
-		if m.opts.TemplateFiller != nil {
-			// Reformat to follow the repo issue template, then guarantee the
-			// dedup marker survives so tracking and adoption keep working.
-			marker := markerFor(key)
-			title, body = m.opts.TemplateFiller.FillIssue(ctx, title, strings.ReplaceAll(body, marker, ""))
-			title = clampTitle(title)
-			if !strings.Contains(body, marker) {
-				body = strings.TrimRight(body, "\n") + "\n\n" + marker
-			}
-		}
+		title, body := RenderSpec(ctx, m.opts.TemplateFiller, spec)
 		num, urlStr, err := m.client.CreateIssue(ctx, title, body, spec.Labels)
 		if err != nil {
 			log.Printf("  ⚠ failed to create issue for %s: %v", key, err)

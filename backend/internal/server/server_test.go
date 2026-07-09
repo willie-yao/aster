@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actions"
@@ -214,18 +215,27 @@ func (fakeAuth) Authenticate(ctx context.Context, r *http.Request) (*auth.Identi
 	return nil, auth.ErrNoToken
 }
 
-// fakeRunner records calls and returns a canned URL, or ErrNotFound for "missing".
-type fakeRunner struct{ gotID, gotToken string }
+// fakeRunner records calls and returns canned drafts/URLs, or a not-found error
+// for the "missing" id/token.
+type fakeRunner struct{ gotID, gotToken, gotInstruction, gotConfirmToken string }
 
-func (f *fakeRunner) CreateIssue(ctx context.Context, id, token string) (string, error) {
+func (f *fakeRunner) PreviewIssue(ctx context.Context, id, token, instruction string) (actions.PreviewResult, error) {
 	if id == "missing" {
-		return "", actions.ErrNotFound
+		return actions.PreviewResult{}, actions.ErrNotFound
 	}
-	f.gotID, f.gotToken = id, token
-	return "https://github.com/o/r/issues/1", nil
+	f.gotID, f.gotToken, f.gotInstruction = id, token, instruction
+	return actions.PreviewResult{Token: "ptok", Kind: "issue", Title: "T", Body: "B"}, nil
 }
-func (f *fakeRunner) ProposeFix(ctx context.Context, id, token string) (string, error) {
-	return "https://github.com/o/r/pull/2", nil
+func (f *fakeRunner) PreviewFix(ctx context.Context, id, token, instruction string) (actions.PreviewResult, error) {
+	f.gotID, f.gotToken, f.gotInstruction = id, token, instruction
+	return actions.PreviewResult{Token: "ptok", Kind: "fix", Title: "T", Body: "B", Diff: "d"}, nil
+}
+func (f *fakeRunner) Confirm(ctx context.Context, token, userToken string) (string, error) {
+	if token == "missing" {
+		return "", actions.ErrPreviewNotFound
+	}
+	f.gotConfirmToken, f.gotToken = token, userToken
+	return "https://github.com/o/r/issues/1", nil
 }
 
 func TestHandler_ActionsDisabledByDefault(t *testing.T) {
@@ -247,7 +257,7 @@ func TestHandler_ActionsDisabledByDefault(t *testing.T) {
 		t.Error("actions must be false when unconfigured")
 	}
 	// The route is not registered.
-	r, _ := http.Post(srv.URL+"/api/failures/x/create-issue", "application/json", nil)
+	r, _ := http.Post(srv.URL+"/api/failures/x/create-issue/preview", "application/json", nil)
 	if r.StatusCode != http.StatusNotFound {
 		t.Errorf("status = %d, want 404 when actions disabled", r.StatusCode)
 	}
@@ -273,8 +283,12 @@ func TestHandler_ActionsEnabled(t *testing.T) {
 		t.Error("actions must be true when configured")
 	}
 
-	do := func(path, authz string) *http.Response {
-		req, _ := http.NewRequest(http.MethodPost, srv.URL+path, nil)
+	do := func(path, authz, body string) *http.Response {
+		var rdr io.Reader
+		if body != "" {
+			rdr = strings.NewReader(body)
+		}
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+path, rdr)
 		if authz != "" {
 			req.Header.Set("Authorization", authz)
 		}
@@ -286,26 +300,48 @@ func TestHandler_ActionsEnabled(t *testing.T) {
 	}
 
 	// Unauthorized.
-	if r := do("/api/failures/abc/create-issue", ""); r.StatusCode != http.StatusUnauthorized {
+	if r := do("/api/failures/abc/create-issue/preview", "", ""); r.StatusCode != http.StatusUnauthorized {
 		t.Errorf("unauth status = %d, want 401", r.StatusCode)
 	}
-	// Authorized success returns the URL and passes the id + token through.
-	r := do("/api/failures/abc/create-issue", "ok")
+	// Authorized preview returns a token and passes id + token + instruction through.
+	r := do("/api/failures/abc/create-issue/preview", "ok", `{"instruction":"tighten it"}`)
 	if r.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", r.StatusCode)
 	}
-	var body map[string]string
-	json.NewDecoder(r.Body).Decode(&body)
+	var draft map[string]string
+	json.NewDecoder(r.Body).Decode(&draft)
 	r.Body.Close()
-	if body["url"] == "" {
-		t.Error("expected url in response")
+	if draft["token"] == "" {
+		t.Error("expected token in preview response")
 	}
-	if runner.gotID != "abc" || runner.gotToken != "tok" {
-		t.Errorf("runner got id=%q token=%q, want abc/tok", runner.gotID, runner.gotToken)
+	if runner.gotID != "abc" || runner.gotToken != "tok" || runner.gotInstruction != "tighten it" {
+		t.Errorf("runner got id=%q token=%q instruction=%q, want abc/tok/tighten it", runner.gotID, runner.gotToken, runner.gotInstruction)
 	}
 	// Unknown failure maps to 404.
-	if r := do("/api/failures/missing/create-issue", "ok"); r.StatusCode != http.StatusNotFound {
+	if r := do("/api/failures/missing/create-issue/preview", "ok", ""); r.StatusCode != http.StatusNotFound {
 		t.Errorf("not-found status = %d, want 404", r.StatusCode)
+	}
+	// Confirm posts the previewed draft and returns the URL.
+	r = do("/api/actions/confirm", "ok", `{"token":"ptok"}`)
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("confirm status = %d, want 200", r.StatusCode)
+	}
+	var confirmed map[string]string
+	json.NewDecoder(r.Body).Decode(&confirmed)
+	r.Body.Close()
+	if confirmed["url"] == "" {
+		t.Error("expected url in confirm response")
+	}
+	if runner.gotConfirmToken != "ptok" {
+		t.Errorf("confirm got token=%q, want ptok", runner.gotConfirmToken)
+	}
+	// A blank token is a 400.
+	if r := do("/api/actions/confirm", "ok", `{}`); r.StatusCode != http.StatusBadRequest {
+		t.Errorf("blank-token status = %d, want 400", r.StatusCode)
+	}
+	// An unknown/expired token maps to 404.
+	if r := do("/api/actions/confirm", "ok", `{"token":"missing"}`); r.StatusCode != http.StatusNotFound {
+		t.Errorf("expired-token status = %d, want 404", r.StatusCode)
 	}
 }
 
@@ -320,7 +356,7 @@ func TestHandler_CSRFCrossOriginRejected(t *testing.T) {
 	defer srv.Close()
 
 	// A cross-origin POST (Origin != Host) is rejected before auth runs.
-	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/failures/abc/create-issue", nil)
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/failures/abc/create-issue/preview", nil)
 	req.Header.Set("Authorization", "ok")
 	req.Header.Set("Origin", "https://evil.example")
 	resp, err := http.DefaultClient.Do(req)

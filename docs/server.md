@@ -22,8 +22,9 @@ keeps working unchanged, and all `/data/*.json` schemas stay byte-compatible.
 | `GET /api/capabilities` | Deploy descriptor, for example `{"mode":"server","features":{"chat":false,"actions":false}}`. |
 | `GET /healthz` | Liveness and readiness probe. |
 | `GET /` | The built SPA, when `-static-dir` is set, with deep-link fallback to `index.html`. |
-| `POST /api/failures/{id}/create-issue` | Admin-gated: file a GitHub issue for one failure. Enabled only when actions are configured. |
-| `POST /api/failures/{id}/propose-fix` | Admin-gated: draft a fix PR for one failure. |
+| `POST /api/failures/{id}/create-issue/preview` | Admin-gated: render the exact GitHub issue for one failure without filing it. Enabled only when actions are configured. |
+| `POST /api/failures/{id}/propose-fix/preview` | Admin-gated: generate and render the exact draft fix PR for one failure without opening it. |
+| `POST /api/actions/confirm` | Admin-gated: file the issue or open the PR previewed under the posted `{"token":...}`. |
 
 ## Capability seam
 
@@ -44,6 +45,14 @@ failure on demand, reusing the same engines the scheduled fetch uses. They are
 off unless the server is started with `-project-dir` and `AUTH_MODE` selects an
 auth mechanism. When enabled, the server sets `features.actions: true` and the
 frontend shows the buttons.
+
+Actions are two-phase so nothing is posted without review. A `*/preview`
+request renders the exact issue or generates the exact draft fix PR (title,
+body, and, for a fix, the diff) without touching GitHub, and returns a
+short-lived token. The frontend shows the draft in a dialog where the admin can
+optionally refine it with a prompt (re-previewing) and then confirm; only the
+confirm posts the previewed draft, keyed by that token. The token is single-use,
+expires after 15 minutes, and is bound to the admin who generated it.
 
 Two auth modes, both keeping the admin allowlist (`ADMIN_LOGINS`):
 

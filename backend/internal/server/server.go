@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -24,10 +25,12 @@ import (
 )
 
 // ActionRunner performs on-demand actions for a failure id using the admin's
-// token. actions.Service satisfies it.
+// token. Actions are two-phase: a preview renders the exact issue or PR without
+// posting, then Confirm posts the previewed draft. actions.Service satisfies it.
 type ActionRunner interface {
-	CreateIssue(ctx context.Context, failureID, userToken string) (string, error)
-	ProposeFix(ctx context.Context, failureID, userToken string) (string, error)
+	PreviewIssue(ctx context.Context, failureID, userToken, instruction string) (actions.PreviewResult, error)
+	PreviewFix(ctx context.Context, failureID, userToken, instruction string) (actions.PreviewResult, error)
+	Confirm(ctx context.Context, token, userToken string) (string, error)
 }
 
 // defaultActionTimeout bounds a single on-demand action. Fix-PR drafting calls
@@ -129,10 +132,12 @@ func Handler(opts Options) (http.Handler, error) {
 		if reg, ok := opts.Auth.(authRegistrar); ok {
 			reg.Register(mux)
 		}
-		mux.Handle("POST /api/failures/{id}/create-issue",
-			auth.Middleware(opts.Auth, csrfGuard(actionHandler(timeout, opts.Actions.CreateIssue))))
-		mux.Handle("POST /api/failures/{id}/propose-fix",
-			auth.Middleware(opts.Auth, csrfGuard(actionHandler(timeout, opts.Actions.ProposeFix))))
+		mux.Handle("POST /api/failures/{id}/create-issue/preview",
+			auth.Middleware(opts.Auth, csrfGuard(previewHandler(timeout, opts.Actions.PreviewIssue))))
+		mux.Handle("POST /api/failures/{id}/propose-fix/preview",
+			auth.Middleware(opts.Auth, csrfGuard(previewHandler(timeout, opts.Actions.PreviewFix))))
+		mux.Handle("POST /api/actions/confirm",
+			auth.Middleware(opts.Auth, csrfGuard(confirmHandler(timeout, opts.Actions.Confirm))))
 	}
 	mux.HandleFunc("/api/capabilities", capabilitiesHandler(caps))
 
@@ -181,13 +186,13 @@ func csrfGuard(next http.Handler) http.Handler {
 	})
 }
 
-// actionFunc runs one on-demand action for a failure id with the admin's token.
-type actionFunc func(ctx context.Context, failureID, userToken string) (string, error)
+// previewFunc renders a draft (issue or fix) for a failure id without posting.
+type previewFunc func(ctx context.Context, failureID, userToken, instruction string) (actions.PreviewResult, error)
 
-// actionHandler runs an authed action and returns {"url": ...}. The admin
+// previewHandler runs an authed preview and returns the draft JSON. The admin
 // identity is set by auth.Middleware. Errors map to 404 (unknown failure) or
 // 422 (not actionable / misconfigured / upstream), never leaking the token.
-func actionHandler(timeout time.Duration, run actionFunc) http.Handler {
+func previewHandler(timeout time.Duration, run previewFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		identity, ok := auth.IdentityFrom(r.Context())
@@ -195,22 +200,71 @@ func actionHandler(timeout time.Duration, run actionFunc) http.Handler {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
+		instruction := decodeInstruction(r)
 		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
 
-		url, err := run(ctx, id, identity.Token)
+		res, err := run(ctx, id, identity.Token, instruction)
 		if err != nil {
-			if errors.Is(err, actions.ErrNotFound) {
-				http.Error(w, "failure not found", http.StatusNotFound)
-				return
-			}
-			log.Printf("action failed for %s (by %s): %v", id, identity.Login, err)
-			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+			writeActionError(w, id, identity.Login, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(res)
+	})
+}
+
+// confirmFunc posts the draft previously cached under a token.
+type confirmFunc func(ctx context.Context, token, userToken string) (string, error)
+
+// confirmHandler posts the previewed draft named by {"token": ...} and returns
+// {"url": ...}. The admin identity is set by auth.Middleware.
+func confirmHandler(timeout time.Duration, run confirmFunc) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		identity, ok := auth.IdentityFrom(r.Context())
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		var body struct {
+			Token string `json:"token"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&body); err != nil || strings.TrimSpace(body.Token) == "" {
+			http.Error(w, "missing token", http.StatusBadRequest)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
+		defer cancel()
+
+		url, err := run(ctx, strings.TrimSpace(body.Token), identity.Token)
+		if err != nil {
+			writeActionError(w, "confirm", identity.Login, err)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"url": url})
 	})
+}
+
+// decodeInstruction reads an optional {"instruction": ...} from the request
+// body, tolerating an absent or empty body.
+func decodeInstruction(r *http.Request) string {
+	var body struct {
+		Instruction string `json:"instruction"`
+	}
+	_ = json.NewDecoder(io.LimitReader(r.Body, 8192)).Decode(&body)
+	return strings.TrimSpace(body.Instruction)
+}
+
+// writeActionError maps an action error to a status code without leaking the
+// token: an unknown failure or expired preview is 404, everything else is 422.
+func writeActionError(w http.ResponseWriter, id, login string, err error) {
+	if errors.Is(err, actions.ErrNotFound) || errors.Is(err, actions.ErrPreviewNotFound) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	log.Printf("action failed for %s (by %s): %v", id, login, err)
+	http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 }
 
 // spaHandler serves a single-page app from dir: real files are served as-is,

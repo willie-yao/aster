@@ -108,6 +108,17 @@ func enableActions(opts *server.Options, projectDir, dataDir string) error {
 		Headers:  aiHeaders(cfg),
 	})
 
+	// A single fix draft runs locate + edit + critique against the model; the
+	// 5-minute default is tight for slow self-hosted endpoints, so allow an
+	// override (e.g. ACTION_TIMEOUT=15m).
+	if v := os.Getenv("ACTION_TIMEOUT"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return fmt.Errorf("invalid ACTION_TIMEOUT %q: %w", v, err)
+		}
+		opts.ActionTimeout = d
+	}
+
 	admins := splitList(os.Getenv("ADMIN_LOGINS"))
 	switch mode := os.Getenv("AUTH_MODE"); mode {
 	case "oauth":

@@ -6,6 +6,9 @@ package actions
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
@@ -25,12 +29,40 @@ import (
 // ErrNotFound means no pattern in the published data matched the given id.
 var ErrNotFound = errors.New("failure not found")
 
+// ErrPreviewNotFound means the confirm token is unknown, expired, or belongs to
+// a different admin.
+var ErrPreviewNotFound = errors.New("preview not found or expired")
+
+// previewTTL bounds how long a generated draft is held for confirmation.
+const previewTTL = 15 * time.Minute
+
 // AIConfig is the resolved chat-completions configuration used to draft fixes.
 type AIConfig struct {
 	Token    string
 	Endpoint string
 	Model    string
 	Headers  map[string]string
+}
+
+// PreviewResult is the draft shown to the admin before they confirm it. Token
+// is passed back to Confirm to file the exact previewed issue or open the exact
+// previewed PR. Diff is set for fixes only.
+type PreviewResult struct {
+	Token string `json:"token"`
+	Kind  string `json:"kind"` // "issue" | "fix"
+	Title string `json:"title"`
+	Body  string `json:"body"`
+	Diff  string `json:"diff,omitempty"`
+}
+
+// previewEntry is a cached draft awaiting confirmation. Exactly one of spec or
+// fix is set, per kind. owner binds the draft to the admin who generated it.
+type previewEntry struct {
+	owner     string
+	kind      string
+	spec      issues.IssueSpec    // issue drafts
+	fix       *fixpr.GeneratedFix // fix drafts
+	createdAt time.Time
 }
 
 // Service runs on-demand actions against the data written to DataDir. It reads
@@ -44,17 +76,21 @@ type Service struct {
 	dataDir string
 	ai      AIConfig
 	mu      sync.Mutex
+
+	pmu      sync.Mutex
+	previews map[string]*previewEntry
 }
 
 // NewService builds a Service. dataDir is the fetcher output directory holding
 // jobs/*.json and the *_state.json files.
 func NewService(cfg *project.Config, dataDir string, ai AIConfig) *Service {
-	return &Service{cfg: cfg, dataDir: dataDir, ai: ai}
+	return &Service{cfg: cfg, dataDir: dataDir, ai: ai, previews: map[string]*previewEntry{}}
 }
 
-// aiCompleter returns an AI client for template reformatting when AI is fully
-// configured, else nil (which makes the fillers a pass-through).
-func (s *Service) aiCompleter() repotemplate.Completer {
+// aiClient returns a chat client when AI is fully configured, else a nil
+// pointer (callers must nil-check the concrete type). Both the template fillers
+// and the revise step use it.
+func (s *Service) aiClient() *ai.Client {
 	if s.ai.Endpoint == "" || s.ai.Model == "" || s.ai.Token == "" {
 		return nil
 	}
@@ -64,6 +100,17 @@ func (s *Service) aiCompleter() repotemplate.Completer {
 		Model:        s.ai.Model,
 		ExtraHeaders: s.ai.Headers,
 	})
+}
+
+// aiCompleter returns an AI client for template reformatting when AI is fully
+// configured, else nil (which makes the fillers a pass-through). It returns a
+// true nil interface so callers' nil checks work.
+func (s *Service) aiCompleter() repotemplate.Completer {
+	c := s.aiClient()
+	if c == nil {
+		return nil
+	}
+	return c
 }
 
 // findPattern resolves a failure id to its PatternAnalysis by scanning the
@@ -98,24 +145,18 @@ func (s *Service) findPattern(id string) (*models.PatternAnalysis, error) {
 	return nil, ErrNotFound
 }
 
-// CreateIssue files a single GitHub issue for the failure using userToken and
-// returns the issue URL. The user's token attributes the issue to them.
-func (s *Service) CreateIssue(ctx context.Context, failureID, userToken string) (string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
+// buildIssueSpec resolves the failure to a single issue spec and the target
+// repo. It forces the patterns trigger: the admin explicitly asked to file
+// this, so the project's configured triggers do not gate the on-demand action.
+func (s *Service) buildIssueSpec(failureID string) (issues.IssueSpec, string, error) {
 	pa, err := s.findPattern(failureID)
 	if err != nil {
-		return "", err
+		return issues.IssueSpec{}, "", err
 	}
-
 	eff := s.cfg.EffectiveIssues()
 	if eff.Repo == nil || eff.Repo.Owner == "" || eff.Repo.Name == "" {
-		return "", fmt.Errorf("no target repo resolved (set issues.repo or branding.source_repo)")
+		return issues.IssueSpec{}, "", fmt.Errorf("no target repo resolved (set issues.repo or branding.source_repo)")
 	}
-
-	// Force the patterns trigger: the admin explicitly asked to file this, so
-	// the project's configured triggers do not gate the on-demand action.
 	report := models.FlakinessReport{RecurringPatterns: []models.PatternAnalysis{*pa}}
 	specs := issues.BuildSpecs(issues.BuildInput{
 		Report:       report,
@@ -124,63 +165,23 @@ func (s *Service) CreateIssue(ctx context.Context, failureID, userToken string) 
 		DashboardURL: s.cfg.Branding.SiteURL,
 	})
 	if len(specs) == 0 {
-		return "", fmt.Errorf("failure %s is not an actionable systemic pattern", failureID)
+		return issues.IssueSpec{}, "", fmt.Errorf("failure %s is not an actionable systemic pattern", failureID)
 	}
-
-	client := issues.NewClient(userToken, eff.Repo.Owner, eff.Repo.Name)
-	targetRepo := eff.Repo.Owner + "/" + eff.Repo.Name
-	// When AI is available, reformat the issue body to follow the target repo's
-	// issue template; nil filler leaves the default body untouched.
-	var filler issues.TemplateFiller
-	if c := s.aiCompleter(); c != nil {
-		filler = repotemplate.NewIssueFiller(userToken, c, eff.Repo.Owner, eff.Repo.Name)
-	}
-	// RecoverPrefixes is deliberately empty: a single on-demand create must only
-	// create or adopt this one spec. A non-empty set would make Reconcile treat
-	// every other tracked issue as recovered and comment/close it.
-	mgr := issues.NewManager(client, filepath.Join(s.dataDir, "issue_state.json"), targetRepo, issues.Options{
-		MaxNewPerRun:   1,
-		TemplateFiller: filler,
-	})
-	if _, err := mgr.Reconcile(ctx, specs); err != nil {
-		return "", fmt.Errorf("filing issue: %w", err)
-	}
-	if err := mgr.SaveState(); err != nil {
-		return "", fmt.Errorf("saving issue state: %w", err)
-	}
-	url, ok := mgr.TrackedURL(specs[0].Key)
-	if !ok {
-		return "", fmt.Errorf("issue was not filed for %s", failureID)
-	}
-	return url, nil
+	return specs[0], eff.Repo.Owner + "/" + eff.Repo.Name, nil
 }
 
-// ProposeFix drafts a single fix PR against the source repo for the failure
-// using userToken and returns the PR URL. On-demand always opens a draft PR
-// (never dry-run) since a human explicitly requested it.
-func (s *Service) ProposeFix(ctx context.Context, failureID, userToken string) (string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	pa, err := s.findPattern(failureID)
-	if err != nil {
-		return "", err
-	}
-
+// buildFixManager builds the fix-PR manager for the source repo using
+// userToken. It does not resolve a failure; callers that need the pattern look
+// it up separately.
+func (s *Service) buildFixManager(userToken string) (*fixpr.Manager, error) {
 	eff := s.cfg.EffectiveFixPRs()
 	if eff.Repo == nil || eff.Repo.Owner == "" || eff.Repo.Name == "" {
-		return "", fmt.Errorf("no source repo resolved (set ai.fix_prs.repo or branding.source_repo)")
+		return nil, fmt.Errorf("no source repo resolved (set ai.fix_prs.repo or branding.source_repo)")
 	}
-	if s.ai.Endpoint == "" || s.ai.Model == "" || s.ai.Token == "" {
-		return "", fmt.Errorf("AI is not configured on the server; cannot draft a fix")
+	aiClient := s.aiClient()
+	if aiClient == nil {
+		return nil, fmt.Errorf("AI is not configured on the server; cannot draft a fix")
 	}
-
-	aiClient := ai.NewClientWithOptions(ai.Options{
-		Token:        s.ai.Token,
-		Endpoint:     s.ai.Endpoint,
-		Model:        s.ai.Model,
-		ExtraHeaders: s.ai.Headers,
-	})
 
 	// Keep the batch critique guardrail: when the project configures critique
 	// retries, reuse the generation client to review the draft before opening.
@@ -208,23 +209,161 @@ func (s *Service) ProposeFix(ctx context.Context, failureID, userToken string) (
 			CritiqueRetries: critiqueRetries,
 			PRFiller:        repotemplate.NewPRFiller(userToken, aiClient, eff.Repo.Owner, eff.Repo.Name),
 		})
-	stats, err := mgr.Reconcile(ctx, []models.PatternAnalysis{*pa})
+	return mgr, nil
+}
+
+// PreviewIssue renders the exact issue that would be filed for the failure,
+// without filing it, and caches it for confirmation. instruction is an optional
+// maintainer directive that revises the draft body.
+func (s *Service) PreviewIssue(ctx context.Context, failureID, userToken, instruction string) (PreviewResult, error) {
+	spec, _, err := s.buildIssueSpec(failureID)
 	if err != nil {
-		return "", fmt.Errorf("drafting fix PR: %w", err)
+		return PreviewResult{}, err
 	}
-	if err := mgr.SaveState(); err != nil {
-		return "", fmt.Errorf("saving fix-PR state: %w", err)
+	// Reformat to follow the target repo's issue template when AI is available;
+	// a nil filler leaves the default body untouched.
+	var filler issues.TemplateFiller
+	if c := s.aiCompleter(); c != nil {
+		eff := s.cfg.EffectiveIssues()
+		filler = repotemplate.NewIssueFiller(userToken, c, eff.Repo.Owner, eff.Repo.Name)
 	}
-	url, ok := mgr.TrackedURL(*pa)
-	if !ok {
-		// Surface why generation did not produce a PR, sanitized so no upstream
-		// (AI provider) detail reaches the browser.
-		if len(stats.Failures) > 0 {
-			return "", fmt.Errorf("%s", safeReason(stats.Failures[0].Reason))
+	title, body := issues.RenderSpec(ctx, filler, spec)
+	final := issues.IssueSpec{Key: spec.Key, Title: title, Body: body, Labels: spec.Labels}
+	if strings.TrimSpace(instruction) != "" {
+		if c := s.aiClient(); c != nil {
+			final = issues.ReviseBody(ctx, c, final, instruction)
 		}
-		return "", fmt.Errorf("no fix PR was opened for this failure")
 	}
-	return url, nil
+	token := s.stash(userToken, &previewEntry{kind: "issue", spec: final})
+	return PreviewResult{Token: token, Kind: "issue", Title: final.Title, Body: final.Body}, nil
+}
+
+// PreviewFix generates the fix and renders the exact PR that would be opened,
+// without opening it, and caches it for confirmation. instruction is an
+// optional maintainer directive that steers the edit.
+func (s *Service) PreviewFix(ctx context.Context, failureID, userToken, instruction string) (PreviewResult, error) {
+	pa, err := s.findPattern(failureID)
+	if err != nil {
+		return PreviewResult{}, err
+	}
+	mgr, err := s.buildFixManager(userToken)
+	if err != nil {
+		return PreviewResult{}, err
+	}
+	gf, err := mgr.GeneratePreview(ctx, *pa, instruction)
+	if err != nil {
+		return PreviewResult{}, fmt.Errorf("%s", safeReason(err.Error()))
+	}
+	token := s.stash(userToken, &previewEntry{kind: "fix", fix: gf})
+	return PreviewResult{
+		Token: token, Kind: "fix", Title: gf.Title,
+		Body: gf.Description, Diff: gf.Preview.Diff,
+	}, nil
+}
+
+// Confirm files the issue or opens the PR previously cached under token, using
+// userToken. It posts the exact previewed content and returns the created URL.
+func (s *Service) Confirm(ctx context.Context, token, userToken string) (string, error) {
+	entry, err := s.take(userToken, token)
+	if err != nil {
+		return "", err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	switch entry.kind {
+	case "issue":
+		eff := s.cfg.EffectiveIssues()
+		if eff.Repo == nil || eff.Repo.Owner == "" || eff.Repo.Name == "" {
+			return "", fmt.Errorf("no target repo resolved (set issues.repo or branding.source_repo)")
+		}
+		client := issues.NewClient(userToken, eff.Repo.Owner, eff.Repo.Name)
+		targetRepo := eff.Repo.Owner + "/" + eff.Repo.Name
+		// The spec body was already rendered at preview time; a nil filler posts
+		// it verbatim. RecoverPrefixes is empty so a single create only files or
+		// adopts this one spec, never recovering other tracked issues.
+		mgr := issues.NewManager(client, filepath.Join(s.dataDir, "issue_state.json"), targetRepo, issues.Options{
+			MaxNewPerRun: 1,
+		})
+		if _, err := mgr.Reconcile(ctx, []issues.IssueSpec{entry.spec}); err != nil {
+			return "", fmt.Errorf("filing issue: %w", err)
+		}
+		if err := mgr.SaveState(); err != nil {
+			return "", fmt.Errorf("saving issue state: %w", err)
+		}
+		url, ok := mgr.TrackedURL(entry.spec.Key)
+		if !ok {
+			return "", fmt.Errorf("issue was not filed")
+		}
+		return url, nil
+
+	case "fix":
+		// Rebuild the manager with userToken to open the previewed fix. State is
+		// loaded fresh so the open dedupes against any concurrent writer.
+		mgr, err := s.buildFixManager(userToken)
+		if err != nil {
+			return "", err
+		}
+		url, err := mgr.OpenFromPreview(ctx, entry.fix)
+		if err != nil {
+			return "", fmt.Errorf("%s", safeReason(err.Error()))
+		}
+		if err := mgr.SaveState(); err != nil {
+			return "", fmt.Errorf("saving fix-PR state: %w", err)
+		}
+		return url, nil
+	}
+	return "", ErrPreviewNotFound
+}
+
+// stash caches a draft under a fresh token bound to the admin's identity and
+// returns the token, evicting expired entries first.
+func (s *Service) stash(userToken string, e *previewEntry) string {
+	e.owner = tokenHash(userToken)
+	e.createdAt = time.Now()
+	token := newToken()
+	s.pmu.Lock()
+	defer s.pmu.Unlock()
+	s.evictExpiredLocked()
+	s.previews[token] = e
+	return token
+}
+
+// take removes and returns the draft cached under token if it exists, has not
+// expired, and belongs to the same admin.
+func (s *Service) take(userToken, token string) (*previewEntry, error) {
+	s.pmu.Lock()
+	defer s.pmu.Unlock()
+	s.evictExpiredLocked()
+	e, ok := s.previews[token]
+	if !ok || e.owner != tokenHash(userToken) {
+		return nil, ErrPreviewNotFound
+	}
+	delete(s.previews, token)
+	return e, nil
+}
+
+func (s *Service) evictExpiredLocked() {
+	cutoff := time.Now().Add(-previewTTL)
+	for k, e := range s.previews {
+		if e.createdAt.Before(cutoff) {
+			delete(s.previews, k)
+		}
+	}
+}
+
+// tokenHash binds a preview to the admin who generated it without retaining the
+// raw token.
+func tokenHash(t string) string {
+	sum := sha256.Sum256([]byte(t))
+	return hex.EncodeToString(sum[:])
+}
+
+func newToken() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
 }
 
 // safeReason turns an internal failure reason into a message safe to show a
