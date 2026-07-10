@@ -23,15 +23,13 @@ import {
   OpenInNew,
 } from "@mui/icons-material";
 import { useJobDetail } from "../hooks/useData";
-import {
-  formatDuration,
-  timeAgo,
-  fileToUrl,
-  fileSortKey,
-} from "../lib/utils";
+import { formatDuration, timeAgo } from "../lib/utils";
 import { RichText } from "../components/RichText";
 import { RunTimeline } from "../components/RunTimeline";
 import { Panel } from "../components/Panel";
+import { StatusChip } from "../components/StatusChip";
+import { SectionHeading } from "../components/SectionHeading";
+import { AiAnalysisPanel } from "../components/AiAnalysisPanel";
 import { LoadingState } from "../components/LoadingState";
 import { ErrorState } from "../components/ErrorState";
 import { soft } from "../theme";
@@ -86,21 +84,16 @@ interface FailureGroup {
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-/** MUI color name for a test-case status, or undefined for skipped/absent. */
-function statusColorName(status: string): "success" | "error" | undefined {
-  return status === "passed" ? "success" : status === "failed" ? "error" : undefined;
-}
-
-const sectionTitleSx = { fontSize: "1.125rem", mb: 1.5 } as const;
-
 /** A labelled value used in the run-detail grid. */
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ label, children, mono }: { label: string; children: React.ReactNode; mono?: boolean }) {
   return (
     <Box>
       <Typography variant="label" color="text.secondary" sx={{ display: "block" }}>
         {label}
       </Typography>
-      <Typography variant="body2">{children}</Typography>
+      <Typography variant={mono ? "data" : "body2"} component="p">
+        {children}
+      </Typography>
     </Box>
   );
 }
@@ -120,6 +113,67 @@ const artifactLinkSx = {
   gap: 0.5,
   fontSize: "0.75rem",
 } as const;
+
+const runLinkSx = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 0.5,
+  color: "primary.main",
+  fontSize: "0.875rem",
+} as const;
+
+/**
+ * RunMetaPanel shows metadata for the selected run of this test. "column"
+ * stacks fields for the sticky rail; "row" spreads them full-width.
+ */
+function RunMetaPanel({
+  run,
+  tc,
+  orientation,
+}: {
+  run: BuildResult;
+  tc: TestCase;
+  orientation: "row" | "column";
+}) {
+  return (
+    <Panel component="section" sx={{ borderRadius: "12px", p: { xs: 2, sm: 3 } }}>
+      <Box sx={{ mb: 2, display: "flex", alignItems: "center", gap: 1.5, flexWrap: "wrap" }}>
+        <Typography variant="headline" component="h2" sx={{ fontSize: "1rem" }}>
+          Run Detail
+        </Typography>
+        <StatusChip status={tc.status} label={cap(tc.status)} />
+        <Box sx={{ ml: "auto", display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
+          {run.prow_url && (
+            <Link href={run.prow_url} target="_blank" rel="noopener noreferrer" underline="hover" sx={runLinkSx}>
+              View in Prow <OpenInNew sx={{ fontSize: 16 }} />
+            </Link>
+          )}
+          {run.build_log_url && (
+            <Link href={run.build_log_url} target="_blank" rel="noopener noreferrer" underline="hover" sx={runLinkSx}>
+              Build Log <OpenInNew sx={{ fontSize: 16 }} />
+            </Link>
+          )}
+        </Box>
+      </Box>
+      <Box
+        sx={{
+          display: "grid",
+          columnGap: 4,
+          rowGap: 1.5,
+          gridTemplateColumns:
+            orientation === "row"
+              ? { xs: "1fr 1fr", sm: "repeat(4, minmax(0, 1fr))" }
+              : "1fr",
+        }}
+      >
+        <Field label="Build ID" mono>{run.build_id}</Field>
+        <Field label="Started">{new Date(run.started).toLocaleString()}</Field>
+        <Field label="Duration" mono>{formatDuration(tc.duration_seconds)}</Field>
+        <Field label="Run finished">{timeAgo(run.finished)}</Field>
+      </Box>
+    </Panel>
+  );
+}
 
 export function TestDetailPage() {
   const theme = useTheme();
@@ -271,7 +325,6 @@ export function TestDetailPage() {
   const selectedRun = selectedOccurrence?.run ?? null;
   const displayStatus =
     selectedTc?.status ?? latestOccurrence?.testCase?.status ?? "skipped";
-  const dispColor = statusColorName(displayStatus);
   const clsColor = classification
     ? classification.startsWith("Persistent")
       ? "error"
@@ -286,6 +339,16 @@ export function TestDetailPage() {
     webUrl: run?.web_url,
     fileLinks: tc.ai_analysis?.file_links,
   });
+
+  // Whether the selected run has failure output or artifacts to show below the band.
+  const hasEvidence = !!(
+    selectedTc &&
+    (selectedTc.failure_message ||
+      selectedTc.failure_body ||
+      selectedTc.failure_location ||
+      selectedTc.cluster_artifacts ||
+      (selectedTc.ai_summary && !selectedTc.ai_analysis))
+  );
 
   return (
     <Stack spacing={{ xs: 3, sm: 4 }}>
@@ -315,16 +378,7 @@ export function TestDetailPage() {
           {testName}
         </Typography>
         <Stack direction="row" spacing={1.5} sx={{ mt: 1.5, flexWrap: "wrap" }}>
-          <Chip
-            size="small"
-            label={cap(displayStatus)}
-            sx={{
-              fontWeight: 600,
-              ...(dispColor
-                ? { bgcolor: (t) => soft(t, dispColor, 0.2), color: `${dispColor}.main` }
-                : { bgcolor: "action.selected", color: "text.secondary" }),
-            }}
-          />
+          <StatusChip status={displayStatus} label={cap(displayStatus)} />
           {classification && (
             <Chip
               size="small"
@@ -342,9 +396,7 @@ export function TestDetailPage() {
 
       {/* History timeline colored by this test's status. */}
       <Box component="section">
-        <Typography variant="headline" sx={sectionTitleSx}>
-          History
-        </Typography>
+        <SectionHeading title="History" />
         <RunTimeline
           runs={data?.runs ?? []}
           selectedBuildId={effectiveSelectedId ?? undefined}
@@ -371,9 +423,7 @@ export function TestDetailPage() {
       {/* Grouped failure messages across runs. */}
       {failureGroups.length > 0 && (
         <Box component="section">
-          <Typography variant="headline" sx={sectionTitleSx}>
-            Failure Patterns
-          </Typography>
+          <SectionHeading title="Failure Patterns" />
           <Panel sx={{ borderRadius: "12px", p: 2 }}>
             <Stack spacing={1}>
               {failureGroups.map((group, i) => (
@@ -407,76 +457,38 @@ export function TestDetailPage() {
 
       {/* Selected run details for this test. */}
       {selectedRun && selectedTc && (
-        <Panel
-          component="section"
-          sx={{ borderRadius: "12px", p: { xs: 2, sm: 3 } }}
-        >
-          <Stack spacing={2.5}>
-            <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }}>
-              <Typography variant="headline" sx={{ fontSize: "1rem" }}>
-                Run Detail
-              </Typography>
-              <Box
-                sx={{
-                  width: 10,
-                  height: 10,
-                  borderRadius: "50%",
-                  bgcolor:
-                    selectedTc.status === "passed"
-                      ? "success.main"
-                      : selectedTc.status === "failed"
-                        ? "error.main"
-                        : "text.secondary",
-                }}
-              />
-            </Stack>
-
+        <>
+          {selectedTc.ai_analysis ? (
             <Box
               sx={{
                 display: "grid",
-                columnGap: 4,
-                rowGap: 1.5,
-                gridTemplateColumns: {
-                  xs: "1fr",
-                  sm: "1fr 1fr",
-                  lg: "repeat(3, 1fr)",
-                },
+                gridTemplateColumns: { xs: "1fr", lg: "minmax(0, 1.5fr) minmax(300px, 1fr)" },
+                gap: 2,
+                alignItems: "start",
               }}
             >
-              <Field label="Build ID">{selectedRun.build_id}</Field>
-              <Field label="Started">
-                {new Date(selectedRun.started).toLocaleString()}
-              </Field>
-              <Field label="Duration">
-                {formatDuration(selectedTc.duration_seconds)}
-              </Field>
-              <Field label="Run finished">{timeAgo(selectedRun.finished)}</Field>
-              <Box sx={{ display: "flex", alignItems: "flex-end", gap: 2 }}>
-                {selectedRun.prow_url && (
-                  <Link
-                    href={selectedRun.prow_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    underline="hover"
-                    sx={{ display: "inline-flex", alignItems: "center", gap: 0.5 }}
-                  >
-                    View in Prow <OpenInNew sx={{ fontSize: 14 }} />
-                  </Link>
-                )}
-                {selectedRun.build_log_url && (
-                  <Link
-                    href={selectedRun.build_log_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    underline="hover"
-                    sx={{ display: "inline-flex", alignItems: "center", gap: 0.5 }}
-                  >
-                    Build Log <OpenInNew sx={{ fontSize: 14 }} />
-                  </Link>
-                )}
+              <AiAnalysisPanel
+                analysis={selectedTc.ai_analysis}
+                fileCtx={fileCtx(selectedRun, selectedTc)}
+              />
+              <Box
+                sx={{
+                  minWidth: 0,
+                  position: { lg: "sticky" },
+                  top: { lg: 80 },
+                  alignSelf: "start",
+                }}
+              >
+                <RunMetaPanel run={selectedRun} tc={selectedTc} orientation="column" />
               </Box>
             </Box>
+          ) : (
+            <RunMetaPanel run={selectedRun} tc={selectedTc} orientation="row" />
+          )}
 
+          {hasEvidence && (
+            <Panel component="section" sx={{ borderRadius: "12px", p: { xs: 2, sm: 3 } }}>
+              <Stack spacing={2.5}>
             {selectedTc.failure_message && (
               <Box
                 component="pre"
@@ -669,117 +681,6 @@ export function TestDetailPage() {
               </Box>
             )}
 
-            {/* Deep AI analysis. */}
-            {selectedTc.ai_analysis && (
-              <Box
-                sx={{
-                  borderRadius: "8px",
-                  border: 1,
-                  borderColor: (t) => soft(t, "primary", 0.3),
-                  bgcolor: (t) => soft(t, "primary", 0.05),
-                  p: { xs: 1.5, sm: 2.5 },
-                }}
-              >
-                <Stack spacing={2}>
-                  <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-                    <AutoAwesome sx={{ fontSize: 20, color: "primary.main" }} />
-                    <Typography variant="label" sx={{ fontWeight: 600 }} color="primary.main">
-                      AI Analysis
-                    </Typography>
-                    {(() => {
-                      const sev = selectedTc.ai_analysis.severity;
-                      const sevColor =
-                        sev === "Critical" || sev === "High"
-                          ? "error"
-                          : sev === "Medium"
-                            ? "warning"
-                            : undefined;
-                      return (
-                        <Chip
-                          size="small"
-                          label={`Severity: ${sev}`}
-                          sx={{
-                            fontWeight: 600,
-                            ...(sevColor
-                              ? { bgcolor: (t) => soft(t, sevColor, 0.2), color: `${sevColor}.main` }
-                              : { bgcolor: "action.selected", color: "text.secondary" }),
-                          }}
-                        />
-                      );
-                    })()}
-                  </Stack>
-                  <Box>
-                    <Typography variant="label" color="text.secondary" sx={{ fontWeight: 600, display: "block", mb: 0.5 }}>
-                      Root Cause
-                    </Typography>
-                    <Typography variant="body2" sx={{ whiteSpace: "pre-line", lineHeight: 1.6 }}>
-                      <RichText
-                        text={selectedTc.ai_analysis.root_cause}
-                        steps
-                        fileCtx={fileCtx(selectedRun, selectedTc)}
-                      />
-                    </Typography>
-                  </Box>
-                  <Box>
-                    <Typography variant="label" color="text.secondary" sx={{ fontWeight: 600, display: "block", mb: 0.5 }}>
-                      Suggested Fix
-                    </Typography>
-                    <Typography variant="body2" sx={{ whiteSpace: "pre-line", lineHeight: 1.6 }}>
-                      <RichText
-                        text={selectedTc.ai_analysis.suggested_fix}
-                        steps
-                        fileCtx={fileCtx(selectedRun, selectedTc)}
-                      />
-                    </Typography>
-                  </Box>
-                  {selectedTc.ai_analysis.relevant_files &&
-                    selectedTc.ai_analysis.relevant_files.length > 0 && (
-                      <Box>
-                        <Typography variant="label" color="text.secondary" sx={{ fontWeight: 600, display: "block", mb: 0.5 }}>
-                          Files to Check
-                        </Typography>
-                        <Box
-                          component="ul"
-                          sx={{ listStyle: "disc inside", m: 0, pl: 0 }}
-                        >
-                          {[...selectedTc.ai_analysis.relevant_files]
-                            .sort(
-                              (a, b) =>
-                                fileSortKey(a, fileCtx(selectedRun, selectedTc)) -
-                                fileSortKey(b, fileCtx(selectedRun, selectedTc))
-                            )
-                            .map((f, i) => {
-                              const url = fileToUrl(f, fileCtx(selectedRun, selectedTc));
-                              return (
-                                <Box
-                                  component="li"
-                                  key={i}
-                                  sx={{ fontFamily: "monospace", fontSize: "0.75rem" }}
-                                >
-                                  {url ? (
-                                    <Link
-                                      href={url}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      underline="hover"
-                                    >
-                                      {f}
-                                    </Link>
-                                  ) : (
-                                    <Box component="span" sx={{ color: "text.secondary" }}>
-                                      {f}
-                                    </Box>
-                                  )}
-                                </Box>
-                              );
-                            })}
-                        </Box>
-                      </Box>
-                    )}
-                </Stack>
-              </Box>
-            )}
-
             {/* AI summary shown only when deep analysis is absent. */}
             {selectedTc.ai_summary && !selectedTc.ai_analysis && (
               <Stack
@@ -804,8 +705,10 @@ export function TestDetailPage() {
                 </Typography>
               </Stack>
             )}
-          </Stack>
-        </Panel>
+              </Stack>
+            </Panel>
+          )}
+        </>
       )}
 
       {/* When a run is selected but the test was absent. */}

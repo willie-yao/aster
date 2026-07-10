@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
@@ -15,6 +15,8 @@ import { BugReport, Build, GitHub, CheckCircleOutlined, Replay } from "@mui/icon
 import { useCapabilities } from "../hooks/useCapabilities";
 import { useAuth } from "../hooks/useAuth";
 import { useResolved } from "../hooks/useData";
+import { soft } from "../theme";
+import type { Theme } from "@mui/material/styles";
 
 type Action = "create-issue" | "propose-fix";
 
@@ -32,6 +34,82 @@ const API_BASE = import.meta.env.BASE_URL;
 // the posted content keeps it.
 function stripComments(s: string): string {
   return s.replace(/<!--[\s\S]*?-->/g, "").trim();
+}
+
+const sectionLabelSx = {
+  display: "block",
+  textTransform: "uppercase",
+  fontSize: "0.625rem",
+  fontWeight: 700,
+  letterSpacing: "0.06em",
+  color: "text.secondary",
+  mb: 0.75,
+} as const;
+
+// Bordered surface block used to preview generated markdown / diffs verbatim.
+const previewBoxSx = {
+  borderRadius: "10px",
+  border: "1px solid",
+  borderColor: "divider",
+  bgcolor: (t: Theme) => (t.vars ?? t).palette.surface.containerLow,
+  p: 1.75,
+  fontFamily: "monospace",
+  fontSize: "0.8125rem",
+  lineHeight: 1.65,
+  whiteSpace: "pre-wrap",
+  wordBreak: "break-word",
+} as const;
+
+const dialogPaperSx = {
+  borderRadius: "16px",
+  border: "1px solid",
+  borderColor: "divider",
+  backgroundImage: "none",
+} as const;
+
+// DialogHeader gives dialogs a tinted icon tile plus title/subtitle.
+function DialogHeader({
+  icon,
+  accent,
+  title,
+  subtitle,
+}: {
+  icon: ReactNode;
+  accent: "warning" | "success";
+  title: string;
+  subtitle?: string;
+}) {
+  return (
+    <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 1.5, px: 3, py: 2.25 }}>
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          width: 38,
+          height: 38,
+          borderRadius: "11px",
+          flexShrink: 0,
+          color: `${accent}.main`,
+          bgcolor: (t) => soft(t, accent, 0.15),
+          border: "1px solid",
+          borderColor: (t) => soft(t, accent, 0.3),
+        }}
+      >
+        {icon}
+      </Box>
+      <Box sx={{ minWidth: 0 }}>
+        <Typography variant="headline" component="span" sx={{ display: "block", fontSize: "1.125rem", lineHeight: 1.2 }}>
+          {title}
+        </Typography>
+        {subtitle && (
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.25 }}>
+            {subtitle}
+          </Typography>
+        )}
+      </Box>
+    </DialogTitle>
+  );
 }
 
 // FailureActions renders admin write buttons for one systemic pattern. It shows
@@ -293,8 +371,18 @@ export function FailureActions({ failureID }: { failureID: string }) {
         </Alert>
       )}
 
-      <Dialog open={resolveOpen} onClose={resolveBusy ? undefined : () => setResolveOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Mark pattern resolved</DialogTitle>
+      <Dialog
+        open={resolveOpen}
+        onClose={resolveBusy ? undefined : () => setResolveOpen(false)}
+        maxWidth="sm"
+        fullWidth
+        slotProps={{ paper: { sx: dialogPaperSx } }}
+      >
+        <DialogHeader
+          icon={<CheckCircleOutlined sx={{ fontSize: 20 }} />}
+          accent="success"
+          title="Mark pattern resolved"
+        />
         <DialogContent dividers>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
             Hides this recurring pattern from the active view. It re-appears
@@ -312,13 +400,14 @@ export function FailureActions({ failureID }: { failureID: string }) {
             onChange={(e) => setNote(e.target.value)}
           />
         </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setResolveOpen(false)} disabled={resolveBusy}>
+        <DialogActions sx={{ px: 3, py: 2 }}>
+          <Button onClick={() => setResolveOpen(false)} disabled={resolveBusy} color="inherit">
             Cancel
           </Button>
           <Button
             variant="contained"
             color="success"
+            disableElevation
             disabled={resolveBusy}
             startIcon={resolveBusy ? <CircularProgress size={16} color="inherit" /> : undefined}
             onClick={submitResolve}
@@ -337,9 +426,20 @@ export function FailureActions({ failureID }: { failureID: string }) {
         </Alert>
       )}
 
-      <Dialog open={action !== null} onClose={busy ? undefined : close} maxWidth="md" fullWidth>
-        <DialogTitle>{isFix ? "Review draft fix PR" : "Review issue"}</DialogTitle>
-        <DialogContent dividers>
+      <Dialog
+        open={action !== null}
+        onClose={busy ? undefined : close}
+        maxWidth="md"
+        fullWidth
+        slotProps={{ paper: { sx: dialogPaperSx } }}
+      >
+        <DialogHeader
+          icon={isFix ? <Build sx={{ fontSize: 20 }} /> : <BugReport sx={{ fontSize: 20 }} />}
+          accent="warning"
+          title={isFix ? "Review draft fix PR" : "Review issue"}
+          subtitle={`Review the exact ${isFix ? "pull request" : "issue"} before it is opened on GitHub`}
+        />
+        <DialogContent dividers sx={{ px: 3, py: 2.5 }}>
           {busy === "preview" && (
             <Stack direction="row" spacing={1.5} sx={{ alignItems: "center", py: 3 }}>
               <CircularProgress size={20} />
@@ -352,96 +452,98 @@ export function FailureActions({ failureID }: { failureID: string }) {
           )}
 
           {error && (
-            <Alert severity="error" sx={{ mb: 2 }}>
+            <Alert severity="error" variant="outlined" sx={{ mb: 2, borderRadius: "10px" }}>
               <Typography variant="body2">{error}</Typography>
             </Alert>
           )}
 
           {preview && busy !== "preview" && (
-            <>
-              <Typography variant="subtitle2" color="text.secondary">
-                Title
-              </Typography>
-              <Typography variant="body1" sx={{ mb: 2, fontWeight: 600 }}>
-                {preview.title}
-              </Typography>
-              <Typography variant="subtitle2" color="text.secondary">
-                {preview.kind === "fix" ? "Description" : "Body"}
-              </Typography>
-              <Box
-                sx={{
-                  mb: 2,
-                  p: 1.5,
-                  bgcolor: "action.hover",
-                  borderRadius: 1,
-                  whiteSpace: "pre-wrap",
-                  wordBreak: "break-word",
-                  fontSize: "0.875rem",
-                }}
-              >
-                {stripComments(preview.body) || "(no description)"}
-              </Box>
-              {preview.diff && (
-                <>
-                  <Typography variant="subtitle2" color="text.secondary">
-                    Proposed diff
+            <Stack spacing={2.5}>
+              <Box>
+                <Typography sx={sectionLabelSx}>Title</Typography>
+                <Box
+                  sx={{
+                    borderRadius: "10px",
+                    border: "1px solid",
+                    borderColor: "divider",
+                    bgcolor: (t) => (t.vars ?? t).palette.surface.containerLow,
+                    px: 1.75,
+                    py: 1.25,
+                  }}
+                >
+                  <Typography variant="body1" sx={{ fontWeight: 600, wordBreak: "break-word" }}>
+                    {preview.title}
                   </Typography>
-                  <Box
-                    component="pre"
-                    sx={{
-                      mb: 2,
-                      p: 1.5,
-                      bgcolor: "action.hover",
-                      borderRadius: 1,
-                      overflowX: "auto",
-                      maxHeight: 320,
-                      fontSize: "0.8rem",
-                      m: 0,
-                    }}
-                  >
+                </Box>
+              </Box>
+
+              <Box>
+                <Typography sx={sectionLabelSx}>
+                  {preview.kind === "fix" ? "Description" : "Body"}
+                </Typography>
+                <Box sx={{ ...previewBoxSx, maxHeight: 340, overflowY: "auto" }}>
+                  {stripComments(preview.body) || "(no description)"}
+                </Box>
+              </Box>
+
+              {preview.diff && (
+                <Box>
+                  <Typography sx={sectionLabelSx}>Proposed diff</Typography>
+                  <Box component="pre" sx={{ ...previewBoxSx, m: 0, maxHeight: 320, overflow: "auto" }}>
                     {preview.diff}
                   </Box>
-                </>
+                </Box>
               )}
-              <TextField
-                label="Refine this draft with a prompt (optional)"
-                placeholder={
-                  isFix
-                    ? "e.g. patch the kustomize base instead of the rendered template"
-                    : "e.g. mention this also affects the IPv6 flavor"
-                }
-                fullWidth
-                multiline
-                minRows={2}
-                size="small"
-                value={instruction}
-                disabled={busy !== null}
-                onChange={(e) => setInstruction(e.target.value)}
-                sx={{ mt: 1 }}
-              />
-              <Button
-                size="small"
-                variant="contained"
-                color="primary"
-                sx={{ mt: 1 }}
-                startIcon={busy === "refine" ? <CircularProgress size={14} color="inherit" /> : undefined}
-                disabled={busy !== null || instruction.trim() === "" || action === null}
-                onClick={() => action && loadPreview(action, true)}
-              >
-                {busy === "refine" ? "Regenerating…" : "Regenerate with prompt"}
-              </Button>
-            </>
+
+              <Box>
+                <TextField
+                  label="Refine this draft with a prompt (optional)"
+                  placeholder={
+                    isFix
+                      ? "e.g. patch the kustomize base instead of the rendered template"
+                      : "e.g. mention this also affects the IPv6 flavor"
+                  }
+                  fullWidth
+                  multiline
+                  minRows={2}
+                  size="small"
+                  value={instruction}
+                  disabled={busy !== null}
+                  onChange={(e) => setInstruction(e.target.value)}
+                />
+                <Button
+                  size="small"
+                  variant="outlined"
+                  color="primary"
+                  sx={{ mt: 1.25 }}
+                  startIcon={busy === "refine" ? <CircularProgress size={14} color="inherit" /> : undefined}
+                  disabled={busy !== null || instruction.trim() === "" || action === null}
+                  onClick={() => action && loadPreview(action, true)}
+                >
+                  {busy === "refine" ? "Regenerating…" : "Regenerate with prompt"}
+                </Button>
+              </Box>
+            </Stack>
           )}
         </DialogContent>
-        <DialogActions>
-          <Button onClick={close} disabled={busy !== null}>
+        <DialogActions sx={{ px: 3, py: 2 }}>
+          <Button onClick={close} disabled={busy !== null} color="inherit">
             Cancel
           </Button>
           <Button
             variant="contained"
             color="warning"
+            disableElevation
+            startIcon={
+              busy === "confirm" ? (
+                <CircularProgress size={16} color="inherit" />
+              ) : isFix ? (
+                <Build sx={{ fontSize: 18 }} />
+              ) : (
+                <BugReport sx={{ fontSize: 18 }} />
+              )
+            }
             disabled={busy !== null || !preview}
-            startIcon={busy === "confirm" ? <CircularProgress size={16} color="inherit" /> : undefined}
             onClick={confirm}
           >
             {isFix ? "Open draft PR" : "File issue"}

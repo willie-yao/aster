@@ -7,6 +7,7 @@ import { Link as RouterLink } from "react-router-dom";
 import { Insights } from "@mui/icons-material";
 import type { PatternAnalysis } from "../types/dashboard";
 import { RichText } from "./RichText";
+import { LabeledBlock } from "./LabeledBlock";
 import { FailureActions } from "./FailureActions";
 import { useResolved } from "../hooks/useData";
 import { soft } from "../theme";
@@ -37,10 +38,9 @@ export function PatternBanner({
   return (
     <Box
       component="section"
+      className="ai-aurora"
       sx={{
         borderRadius: "12px",
-        border: 1,
-        borderColor: (t) => soft(t, color, 0.3),
         bgcolor: (t) => soft(t, color, 0.05),
         p: { xs: 2, sm: 2.5 },
       }}
@@ -92,25 +92,19 @@ export function PatternBanner({
         </Typography>
 
         {pattern.systemic && pattern.shared_root_cause && (
-          <Box>
-            <Typography variant="label" color="text.secondary" sx={{ fontWeight: 600, display: "block", mb: 0.5 }}>
-              Shared Root Cause
-            </Typography>
+          <LabeledBlock label="Shared Root Cause" accent={color}>
             <Typography variant="body2" sx={{ whiteSpace: "pre-line", lineHeight: 1.6 }}>
               <RichText text={pattern.shared_root_cause} steps />
             </Typography>
-          </Box>
+          </LabeledBlock>
         )}
 
         {pattern.systemic && pattern.suggested_fix && (
-          <Box>
-            <Typography variant="label" color="text.secondary" sx={{ fontWeight: 600, display: "block", mb: 0.5 }}>
-              Suggested Fix
-            </Typography>
+          <LabeledBlock label="Suggested Fix" accent="primary">
             <Typography variant="body2" sx={{ whiteSpace: "pre-line", lineHeight: 1.6 }}>
               <RichText text={pattern.suggested_fix} steps />
             </Typography>
-          </Box>
+          </LabeledBlock>
         )}
 
         {pattern.systemic && pattern.shared_builds && pattern.shared_builds.length > 0 && (
