@@ -133,6 +133,10 @@ server:
   service:
     type: ClusterIP
     port: 80
+    # Annotations for the server Service. Use these to configure a cloud
+    # LoadBalancer, e.g. restrict a public LB to Azure Front Door only:
+    #   service.beta.kubernetes.io/azure-allowed-service-tags: AzureFrontDoor.Backend
+    annotations: {}
 
 ingress:
   enabled: false
