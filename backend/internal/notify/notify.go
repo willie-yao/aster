@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/redact"
 )
 
 // NotificationState tracks which persistent failures have been notified.
@@ -331,13 +332,14 @@ func (n *Notifier) postWebhook(ctx context.Context, payload interface{}) error {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, n.webhookURL, bytes.NewReader(data))
 	if err != nil {
-		return fmt.Errorf("creating webhook request: %w", err)
+		return fmt.Errorf("creating webhook request: %s", redact.URLs(err.Error()))
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := n.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("posting to webhook: %w", err)
+		// The webhook URL path is itself the secret; a transport error embeds it.
+		return fmt.Errorf("posting to webhook: %s", redact.URLs(err.Error()))
 	}
 	defer resp.Body.Close()
 

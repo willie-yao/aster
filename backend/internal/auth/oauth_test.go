@@ -129,7 +129,7 @@ func TestOAuth_MissingConfig(t *testing.T) {
 }
 
 func TestBot_TrustedHeaderAllowlist(t *testing.T) {
-	b := NewBotAuthenticator("X-Auth-Request-Email", "bot-tok", []string{"alice"})
+	b := NewBotAuthenticator("X-Auth-Request-Email", "bot-tok", []string{"alice"}, "")
 	req := httptest.NewRequest("POST", "/", nil)
 	req.Header.Set("X-Auth-Request-Email", "alice")
 	id, err := b.Authenticate(context.Background(), req)
@@ -152,12 +152,40 @@ func TestBot_TrustedHeaderAllowlist(t *testing.T) {
 	}
 }
 
-func TestBot_NoHeaderNoAllowlist(t *testing.T) {
-	// No trusted header configured: authorize with the bot token (network-isolated
-	// deployment).
-	b := NewBotAuthenticator("", "bot-tok", nil)
-	id, err := b.Authenticate(context.Background(), httptest.NewRequest("POST", "/", nil))
-	if err != nil || id.Token != "bot-tok" {
+func TestBot_FailsClosed(t *testing.T) {
+	// No trusted header configured -> reject (was previously authorize-all).
+	b := NewBotAuthenticator("", "bot-tok", nil, "")
+	if _, err := b.Authenticate(context.Background(), httptest.NewRequest("POST", "/", nil)); err == nil {
+		t.Error("empty header must fail closed")
+	}
+
+	// Header set but no admins configured -> reject.
+	b = NewBotAuthenticator("X-Auth-Request-Email", "bot-tok", nil, "")
+	req := httptest.NewRequest("POST", "/", nil)
+	req.Header.Set("X-Auth-Request-Email", "alice")
+	if _, err := b.Authenticate(context.Background(), req); err == nil {
+		t.Error("empty allowlist must fail closed")
+	}
+}
+
+func TestBot_SharedSecret(t *testing.T) {
+	b := NewBotAuthenticator("X-Auth-Request-Email", "bot-tok", []string{"alice"}, "s3cret")
+
+	// Correct identity but missing/wrong secret -> reject.
+	req := httptest.NewRequest("POST", "/", nil)
+	req.Header.Set("X-Auth-Request-Email", "alice")
+	if _, err := b.Authenticate(context.Background(), req); err == nil {
+		t.Error("missing proxy secret must be rejected")
+	}
+	req.Header.Set("X-Proxy-Secret", "wrong")
+	if _, err := b.Authenticate(context.Background(), req); err == nil {
+		t.Error("wrong proxy secret must be rejected")
+	}
+
+	// Correct secret + admin identity -> authorized.
+	req.Header.Set("X-Proxy-Secret", "s3cret")
+	id, err := b.Authenticate(context.Background(), req)
+	if err != nil || id.Login != "alice" || id.Token != "bot-tok" {
 		t.Fatalf("id=%+v err=%v", id, err)
 	}
 }

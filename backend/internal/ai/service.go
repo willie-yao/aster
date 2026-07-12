@@ -16,6 +16,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/redact"
 )
 
 // Service orchestrates AI analysis for a single project. It composes a generic
@@ -190,7 +191,10 @@ func (s *Service) setUnavailable(tc *models.TestCase, err error) {
 	}
 	tc.AISummary = &models.AISummary{
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
-		Summary:     unavailablePrefix + err.Error(),
+		// This summary is published in jobs/*.json. A transport error embeds the
+		// full request URL (the hidden AI endpoint), so strip URLs before it is
+		// serialized.
+		Summary:     unavailablePrefix + redact.URLs(err.Error()),
 		IsTransient: false,
 	}
 }

@@ -166,7 +166,21 @@ func Handler(opts Options) (http.Handler, error) {
 		mux.Handle("/", spaHandler(opts.StaticDir))
 	}
 
-	return mux, nil
+	return securityHeaders(mux), nil
+}
+
+// securityHeaders wraps the handler with conservative response headers. It denies
+// framing (clickjacking of the admin action flow), disables MIME sniffing, and
+// limits referrer leakage. No Content-Security-Policy is set here because the SPA
+// relies on inline styles; a nonce-based CSP is a separate frontend change.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		next.ServeHTTP(w, r)
+	})
 }
 
 // capabilitiesHandler returns the capability descriptor as JSON.

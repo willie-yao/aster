@@ -884,7 +884,14 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, details []m
 		log.Printf("🤖 Agentic AI enabled (%d iters, %dKB model, %dMB gcs, %s timeout, min_tools=%d, min_gcs_kb=%d, critique=on/%d, skills=%s, tools=%v)",
 			eff.MaxIters, modelByteBudget/1024, gcsByteBudget/1024/1024, eff.Timeout, eff.MinToolCalls, eff.MinGCSBytes/1024, eff.Critique.MaxRetries, skillsLog, enabled)
 	}
-	log.Printf("Using AI endpoint: %s, model: %s", aiClient.Endpoint(), aiClient.ModelName())
+	// The endpoint and model are deliberately kept out of published data files;
+	// in the pages deployment the fetcher's stdout is a public Actions build log,
+	// so only disclose them when an operator opts in.
+	if os.Getenv("AI_LOG_ENDPOINT") == "1" {
+		log.Printf("Using AI endpoint: %s, model: %s", aiClient.Endpoint(), aiClient.ModelName())
+	} else {
+		log.Printf("AI client configured (set AI_LOG_ENDPOINT=1 to log endpoint and model)")
+	}
 
 	var totalFailures int
 	for _, d := range details {

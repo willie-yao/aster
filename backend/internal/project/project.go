@@ -267,8 +267,10 @@ type AI struct {
 	// Headers are extra HTTP headers merged into every AI request after
 	// the defaults. Use for provider-specific routing headers or to
 	// override the default Authorization scheme. Do not put secrets here;
-	// AI_TOKEN is the supported channel for the bearer token.
-	Headers map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
+	// AI_TOKEN is the supported channel for the bearer token. Never
+	// serialized: the config is published as manifest.json, and a header
+	// could carry a provider credential (e.g. an api-key header).
+	Headers map[string]string `yaml:"headers,omitempty" json:"-"`
 
 	// Concurrency caps how many failures are analyzed in parallel. Each analysis
 	// is independent, so batching endpoints can process several investigations at

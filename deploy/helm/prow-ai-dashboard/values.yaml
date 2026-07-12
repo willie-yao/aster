@@ -125,6 +125,11 @@ server:
       header: X-Auth-Request-Email
       # botToken is the GitHub PAT that performs writes (in a Secret).
       botToken: ""
+      # secret, when set, is a shared value the proxy must inject in the
+      # X-Proxy-Secret header; the backend rejects requests without it. This
+      # defends against a client reaching the server directly and spoofing the
+      # identity header if network isolation is imperfect. Held in a Secret.
+      secret: ""
       existingSecret: ""
   resources: {}
   nodeSelector: {}
@@ -148,6 +153,20 @@ ingress:
         - path: /
           pathType: Prefix
   tls: []
+
+# NetworkPolicy restricting ingress to the server pod. Strongly recommended with
+# proxy actions mode, where the server trusts an SSO-proxy identity header: it
+# keeps the server reachable only from the proxy, so a client cannot reach the
+# server directly and spoof the header. When enabled with no `from` rules, all
+# ingress is denied except the healthz port from within the namespace.
+networkPolicy:
+  enabled: false
+  # from is a list of NetworkPolicyPeer entries allowed to reach the server
+  # (e.g. the SSO proxy). Example:
+  #   - namespaceSelector:
+  #       matchLabels:
+  #         kubernetes.io/metadata.name: ingress-nginx
+  from: []
 
 # Applied to both the fetcher and server pods. The numeric UID/GID match the
 # distroless nonroot user; fsGroup makes the shared volume group-writable so the

@@ -72,6 +72,13 @@ spec:
                 secretKeyRef:
                   name: {{ include "prow-ai-dashboard.authSecret" . }}
                   key: BOT_TOKEN
+            {{- if $a.proxy.secret }}
+            - name: AUTH_PROXY_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "prow-ai-dashboard.authSecret" . }}
+                  key: AUTH_PROXY_SECRET
+            {{- end }}
             {{- end }}
             {{- if .Values.ai.enabled }}
             - name: AI_TOKEN

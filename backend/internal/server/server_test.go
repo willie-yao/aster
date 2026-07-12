@@ -160,6 +160,34 @@ func TestHandler_DataNoCache(t *testing.T) {
 	}
 }
 
+// TestHandler_SecurityHeaders verifies the hardening response headers are set on
+// every route.
+func TestHandler_SecurityHeaders(t *testing.T) {
+	dataDir := t.TempDir()
+	h, err := Handler(Options{DataDir: dataDir, Capabilities: DefaultCapabilities()})
+	if err != nil {
+		t.Fatalf("Handler: %v", err)
+	}
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/healthz")
+	if err != nil {
+		t.Fatalf("GET healthz: %v", err)
+	}
+	resp.Body.Close()
+	want := map[string]string{
+		"X-Frame-Options":        "DENY",
+		"X-Content-Type-Options": "nosniff",
+		"Referrer-Policy":        "strict-origin-when-cross-origin",
+	}
+	for k, v := range want {
+		if got := resp.Header.Get(k); got != v {
+			t.Errorf("%s = %q, want %q", k, got, v)
+		}
+	}
+}
+
 // TestHandler_NoDirectoryListing verifies /data/ does not expose a browsable
 // listing of the output tree.
 func TestHandler_NoDirectoryListing(t *testing.T) {
@@ -278,6 +306,63 @@ func TestHandler_ActionsDisabledByDefault(t *testing.T) {
 	r, _ := http.Post(srv.URL+"/api/failures/x/create-issue/preview", "application/json", nil)
 	if r.StatusCode != http.StatusNotFound {
 		t.Errorf("status = %d, want 404 when actions disabled", r.StatusCode)
+	}
+}
+
+// notAdminAuth authenticates the request but denies authorization, so handlers
+// see a 403.
+type notAdminAuth struct{}
+
+func (notAdminAuth) Authenticate(ctx context.Context, r *http.Request) (*auth.Identity, error) {
+	return nil, auth.ErrNotAdmin
+}
+
+// writeEndpoints is every state-changing route the server exposes.
+var writeEndpoints = []string{
+	"/api/failures/abc/create-issue/preview",
+	"/api/failures/abc/propose-fix/preview",
+	"/api/actions/confirm",
+	"/api/failures/abc/resolve",
+	"/api/failures/abc/unresolve",
+}
+
+// TestHandler_WriteEndpointsRejectUnauthorized verifies every write endpoint
+// rejects a request with no credential (401) and a non-admin credential (403),
+// so no state-changing route is reachable without an authorized admin.
+func TestHandler_WriteEndpointsRejectUnauthorized(t *testing.T) {
+	post := func(h http.Handler, path string) int {
+		srv := httptest.NewServer(h)
+		defer srv.Close()
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+path, strings.NewReader(`{"token":"x","note":"y"}`))
+		// Same-origin so the CSRF guard is not what rejects the request; auth is.
+		req.Header.Set("Origin", srv.URL)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	dataDir := t.TempDir()
+	writeFile(t, dataDir, "manifest.json", `{}`)
+
+	noAuth, err := Handler(Options{DataDir: dataDir, Capabilities: DefaultCapabilities(), Auth: fakeAuth{}, Actions: &fakeRunner{}})
+	if err != nil {
+		t.Fatalf("Handler: %v", err)
+	}
+	nonAdmin, err := Handler(Options{DataDir: dataDir, Capabilities: DefaultCapabilities(), Auth: notAdminAuth{}, Actions: &fakeRunner{}})
+	if err != nil {
+		t.Fatalf("Handler: %v", err)
+	}
+
+	for _, ep := range writeEndpoints {
+		if got := post(noAuth, ep); got != http.StatusUnauthorized {
+			t.Errorf("%s without credential = %d, want 401", ep, got)
+		}
+		if got := post(nonAdmin, ep); got != http.StatusForbidden {
+			t.Errorf("%s with non-admin = %d, want 403", ep, got)
+		}
 	}
 }
 
