@@ -11,11 +11,11 @@ import Link from "@mui/material/Link";
 import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
-import { BugReport, Build, GitHub, CheckCircleOutlined, Replay } from "@mui/icons-material";
+import { BugReport, Build, GitHub, CheckCircleOutlined, ErrorOutlined, Replay } from "@mui/icons-material";
 import { useCapabilities } from "../hooks/useCapabilities";
 import { useAuth } from "../hooks/useAuth";
 import { useResolved } from "../hooks/useData";
-import { soft } from "../theme";
+import { soft, type SoftColor } from "../theme";
 import type { Theme } from "@mui/material/styles";
 
 type Action = "create-issue" | "propose-fix";
@@ -26,6 +26,8 @@ interface Preview {
   title: string;
   body: string;
   diff?: string;
+  verify_status?: string;
+  verify_summary?: string;
 }
 
 const API_BASE = import.meta.env.BASE_URL;
@@ -34,6 +36,52 @@ const API_BASE = import.meta.env.BASE_URL;
 // the posted content keeps it.
 function stripComments(s: string): string {
   return s.replace(/<!--[\s\S]*?-->/g, "").trim();
+}
+
+// VerifyBadge shows the pre-PR build/vet verdict on a fix draft. It renders only
+// for a decisive verdict: "skipped" (verification off or no toolchain) shows
+// nothing, so its absence never reads as a false "verified".
+function VerifyBadge({ status, summary }: { status?: string; summary?: string }) {
+  if (status !== "passed" && status !== "failed") return null;
+  const passed = status === "passed";
+  const accent: SoftColor = passed ? "success" : "error";
+  return (
+    <Box
+      sx={{
+        display: "flex",
+        alignItems: "center",
+        gap: 1,
+        borderRadius: "10px",
+        border: "1px solid",
+        borderColor: (t) => soft(t, accent, 0.3),
+        bgcolor: (t) => soft(t, accent, 0.12),
+        px: 1.5,
+        py: 1,
+      }}
+    >
+      {passed ? (
+        <CheckCircleOutlined sx={{ fontSize: 18, color: `${accent}.main`, flexShrink: 0 }} />
+      ) : (
+        <ErrorOutlined sx={{ fontSize: 18, color: `${accent}.main`, flexShrink: 0 }} />
+      )}
+      <Typography variant="body2" sx={{ wordBreak: "break-word" }}>
+        <Box component="span" sx={{ fontWeight: 600, color: `${accent}.main` }}>
+          {passed ? "Automated verification passed" : "Automated verification failed"}
+        </Box>
+        {summary && (
+          <Box component="span" sx={{ color: "text.secondary" }}>
+            {" \u2014 "}
+            {summary}
+          </Box>
+        )}
+        {!passed && (
+          <Box component="span" sx={{ color: "text.secondary" }}>
+            {". The change likely does not build as-is; treat it as a lead."}
+          </Box>
+        )}
+      </Typography>
+    </Box>
+  );
 }
 
 const sectionLabelSx = {
@@ -467,6 +515,10 @@ export function FailureActions({ failureID }: { failureID: string }) {
                   </Typography>
                 </Box>
               </Box>
+
+              {preview.kind === "fix" && (
+                <VerifyBadge status={preview.verify_status} summary={preview.verify_summary} />
+              )}
 
               <Box>
                 <Typography sx={sectionLabelSx}>
