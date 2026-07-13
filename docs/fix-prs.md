@@ -107,6 +107,12 @@ ai:
     # labels: [ai-proposed-fix]   # labels applied to each PR
     # dry_run: false              # propose without opening a PR (see below)
     # critique_retries: 1         # LLM review re-prompts before dropping (default 1)
+    # verify:                     # build/vet the change before opening the PR (see below)
+    #   enabled: false            # off by default; needs a git + language toolchain on the runner
+    #   commands:                 # override the default; each line is one command (no shell)
+    #     - go build ./...
+    #     - go vet ./...
+    #   timeout: 10m              # per-command bound
 ```
 
 `enabled: true` requires `author_name` and `author_email` (validated at load).
@@ -120,6 +126,26 @@ After the edit parses, a second LLM call reviews it as a skeptical reviewer and
 returns concrete defects (not style). If it objects, the engine re-prompts the
 edit step with that feedback, up to `critique_retries` times (default 1), then
 drops the fix. The review uses the same AI client as generation.
+
+### Verification (`verify`)
+
+When `verify.enabled` is set, the engine builds and vets the proposed change
+before opening the PR: it checks out the source repo at the pinned base, overlays
+the edited files, and runs the verify commands (default `go build ./...` then
+`go vet ./...`). The verdict is stamped on the PR body and the confirm preview:
+"passed", "failed" (the diff likely does not build; the draft is still produced
+as a lead), or "skipped". This catches the common failure modes of a generated
+diff, a hallucinated API or a broken signature, that syntax parsing alone misses.
+It does not reproduce the CI failure itself; that is left to the PR's own
+presubmits.
+
+Verification is annotate-only: a build failure never blocks the draft. It needs
+git and the language toolchain on the runner, so it runs in a full CI runner or
+a dev host; on the distroless server/worker image it reports "skipped". Execution
+runs the edited repo's build, so enable it only for a source repo you trust. The
+build resolves the repo's dependencies, so the runner needs network access (or a
+warmed module cache); a fetch failure surfaces as a "failed" verdict, so set a
+`timeout` that accommodates the first cold build.
 
 Wire the token into the deploy workflow:
 

@@ -398,6 +398,51 @@ type FixPRs struct {
 	// fix is dropped. Defaults to 1; 0 disables the review. Excluded from
 	// manifest.json.
 	CritiqueRetries *int `yaml:"critique_retries,omitempty" json:"-"`
+	// Verify builds and vets a proposed fix in a local Runtime before the PR is
+	// opened, recording the verdict on the PR and preview. Off by default; it
+	// needs a git and language toolchain on the runner, which the distroless
+	// image lacks (verification then reports "skipped"). Excluded from
+	// manifest.json.
+	Verify *FixVerify `yaml:"verify,omitempty" json:"-"`
+}
+
+// FixVerify configures pre-PR verification of a proposed fix.
+type FixVerify struct {
+	// Enabled turns verification on. Defaults to false.
+	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	// Commands override the default verification. Each entry is one command line
+	// split on spaces (no shell). Defaults to `go build ./...` then
+	// `go vet ./...`.
+	Commands []string `yaml:"commands,omitempty" json:"-"`
+	// Timeout bounds each command, e.g. "10m". Empty uses the Runtime default.
+	Timeout string `yaml:"timeout,omitempty" json:"-"`
+}
+
+// ParsedCommands splits each configured command line into argv. An empty result
+// tells the caller to use its built-in default.
+func (v *FixVerify) ParsedCommands() [][]string {
+	if v == nil {
+		return nil
+	}
+	out := make([][]string, 0, len(v.Commands))
+	for _, c := range v.Commands {
+		if f := strings.Fields(c); len(f) > 0 {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// ParsedTimeout returns the per-command timeout, or 0 when unset or invalid.
+func (v *FixVerify) ParsedTimeout() time.Duration {
+	if v == nil {
+		return 0
+	}
+	d, err := time.ParseDuration(strings.TrimSpace(v.Timeout))
+	if err != nil {
+		return 0
+	}
+	return d
 }
 
 // EffectiveFixPRs resolves the fix-PR config with defaults applied. The target

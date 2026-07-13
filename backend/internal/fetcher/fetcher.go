@@ -38,6 +38,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prowbuild"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/repotemplate"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/resolve"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/skillsuggest"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
@@ -600,25 +601,33 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 	}
 
 	prClient, source := fixpr.NewClients(fixToken)
+	fixOpts := fixpr.Options{
+		SourceOwner:     eff.Repo.Owner,
+		SourceName:      eff.Repo.Name,
+		Fork:            eff.Fork == nil || *eff.Fork,
+		AuthorName:      eff.AuthorName,
+		AuthorEmail:     eff.AuthorEmail,
+		MinConfidence:   eff.MinConfidence,
+		MaxFiles:        eff.MaxFiles,
+		MaxNewPerRun:    eff.MaxNewPerRun,
+		Labels:          eff.Labels,
+		DryRun:          eff.DryRun,
+		PreviewFile:     filepath.Join(outDir, "fix_previews.json"),
+		DashboardURL:    cfg.Branding.SiteURL,
+		Critique:        critique,
+		CritiqueRetries: critiqueRetries,
+		PRFiller:        repotemplate.NewPRFiller(fixToken, aiClient, eff.Repo.Owner, eff.Repo.Name),
+	}
+	if eff.Verify != nil && eff.Verify.Enabled {
+		fixOpts.Verify = &fixpr.VerifyConfig{
+			Runtime:  runtime.NewLocal(),
+			Commands: eff.Verify.ParsedCommands(),
+			Timeout:  eff.Verify.ParsedTimeout(),
+			Token:    fixToken,
+		}
+	}
 	mgr := fixpr.NewManager(prClient, aiClient, source,
-		filepath.Join(outDir, "fix_pr_state.json"),
-		fixpr.Options{
-			SourceOwner:     eff.Repo.Owner,
-			SourceName:      eff.Repo.Name,
-			Fork:            eff.Fork == nil || *eff.Fork,
-			AuthorName:      eff.AuthorName,
-			AuthorEmail:     eff.AuthorEmail,
-			MinConfidence:   eff.MinConfidence,
-			MaxFiles:        eff.MaxFiles,
-			MaxNewPerRun:    eff.MaxNewPerRun,
-			Labels:          eff.Labels,
-			DryRun:          eff.DryRun,
-			PreviewFile:     filepath.Join(outDir, "fix_previews.json"),
-			DashboardURL:    cfg.Branding.SiteURL,
-			Critique:        critique,
-			CritiqueRetries: critiqueRetries,
-			PRFiller:        repotemplate.NewPRFiller(fixToken, aiClient, eff.Repo.Owner, eff.Repo.Name),
-		})
+		filepath.Join(outDir, "fix_pr_state.json"), fixOpts)
 	stats, err := mgr.Reconcile(ctx, patterns)
 	if err != nil {
 		log.Printf("Warning: fix-PR processing failed: %v", err)

@@ -25,6 +25,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/repotemplate"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/resolve"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 )
 
 // ErrNotFound means no pattern in the published data matched the given id.
@@ -54,6 +55,10 @@ type PreviewResult struct {
 	Title string `json:"title"`
 	Body  string `json:"body"`
 	Diff  string `json:"diff,omitempty"`
+	// Verify reports the pre-PR build/vet verdict for a fix ("passed" |
+	// "failed" | "skipped"). Empty for an issue preview.
+	VerifyStatus  string `json:"verify_status,omitempty"`
+	VerifySummary string `json:"verify_summary,omitempty"`
 }
 
 // previewEntry is a cached draft awaiting confirmation. Exactly one of spec or
@@ -194,22 +199,30 @@ func (s *Service) buildFixManager(userToken string) (*fixpr.Manager, error) {
 	}
 
 	prClient, source := fixpr.NewClients(userToken)
+	opts := fixpr.Options{
+		SourceOwner:     eff.Repo.Owner,
+		SourceName:      eff.Repo.Name,
+		Fork:            eff.Fork == nil || *eff.Fork,
+		AuthorName:      eff.AuthorName,
+		AuthorEmail:     eff.AuthorEmail,
+		MaxFiles:        eff.MaxFiles,
+		MaxNewPerRun:    1,
+		Labels:          eff.Labels,
+		DashboardURL:    s.cfg.Branding.SiteURL,
+		Critique:        critique,
+		CritiqueRetries: critiqueRetries,
+		PRFiller:        repotemplate.NewPRFiller(userToken, aiClient, eff.Repo.Owner, eff.Repo.Name),
+	}
+	if eff.Verify != nil && eff.Verify.Enabled {
+		opts.Verify = &fixpr.VerifyConfig{
+			Runtime:  runtime.NewLocal(),
+			Commands: eff.Verify.ParsedCommands(),
+			Timeout:  eff.Verify.ParsedTimeout(),
+			Token:    userToken,
+		}
+	}
 	mgr := fixpr.NewManager(prClient, aiClient, source,
-		filepath.Join(s.dataDir, "fix_pr_state.json"),
-		fixpr.Options{
-			SourceOwner:     eff.Repo.Owner,
-			SourceName:      eff.Repo.Name,
-			Fork:            eff.Fork == nil || *eff.Fork,
-			AuthorName:      eff.AuthorName,
-			AuthorEmail:     eff.AuthorEmail,
-			MaxFiles:        eff.MaxFiles,
-			MaxNewPerRun:    1,
-			Labels:          eff.Labels,
-			DashboardURL:    s.cfg.Branding.SiteURL,
-			Critique:        critique,
-			CritiqueRetries: critiqueRetries,
-			PRFiller:        repotemplate.NewPRFiller(userToken, aiClient, eff.Repo.Owner, eff.Repo.Name),
-		})
+		filepath.Join(s.dataDir, "fix_pr_state.json"), opts)
 	return mgr, nil
 }
 
@@ -259,6 +272,8 @@ func (s *Service) PreviewFix(ctx context.Context, failureID, userToken, instruct
 	return PreviewResult{
 		Token: token, Kind: "fix", Title: gf.Title,
 		Body: gf.Description, Diff: gf.Preview.Diff,
+		VerifyStatus:  string(gf.Preview.Verify.Status),
+		VerifySummary: gf.Preview.Verify.Summary,
 	}, nil
 }
 

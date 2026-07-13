@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
 )
 
@@ -70,6 +72,47 @@ type Options struct {
 	// PRFiller, when set, reformats the PR description to follow the repo's PR
 	// template. A nil filler (or one that finds no template) is a pass-through.
 	PRFiller PRBodyFiller
+	// Verify, when set, builds and vets the proposed change in a Runtime before
+	// the PR is opened, recording the verdict in the PR body and preview. nil
+	// skips verification (the verdict is "skipped").
+	Verify *VerifyConfig
+}
+
+// VerifyConfig configures pre-PR verification of a proposed fix.
+type VerifyConfig struct {
+	// Runtime executes the verification commands against the patched repo.
+	Runtime runtime.Runtime
+	// Commands each run in the checked-out, patched repo; all must pass for a
+	// "passed" verdict. Defaults to `go build ./...` then `go vet ./...`.
+	Commands [][]string
+	// Timeout bounds each command. Zero uses the Runtime default.
+	Timeout time.Duration
+	// Token authenticates the clone of a private source repo. Empty clones
+	// anonymously, which is enough for a public repo.
+	Token string
+}
+
+// VerifyStatus is the outcome of pre-PR verification.
+type VerifyStatus string
+
+const (
+	// VerifyPassed means every verification command succeeded.
+	VerifyPassed VerifyStatus = "passed"
+	// VerifyFailed means a command failed or timed out; the change likely does
+	// not build. The draft is still produced (annotate, do not block).
+	VerifyFailed VerifyStatus = "failed"
+	// VerifySkipped means verification did not run (not configured, or the
+	// toolchain was unavailable, or an infra error prevented it).
+	VerifySkipped VerifyStatus = "skipped"
+)
+
+// VerifyResult records a verification verdict for the PR body and preview.
+type VerifyResult struct {
+	Status VerifyStatus `json:"status"`
+	// Summary is a one-line description of what ran and its verdict.
+	Summary string `json:"summary"`
+	// Output is the tail of the failing command's output, empty unless failed.
+	Output string `json:"output,omitempty"`
 }
 
 // PRBodyFiller reformats a PR description to follow the repo's PR template.
@@ -104,6 +147,7 @@ type Preview struct {
 	Rationale string            `json:"rationale"`
 	Diff      string            `json:"diff"`
 	Files     map[string]string `json:"-"`
+	Verify    VerifyResult      `json:"verify"`
 }
 
 // Stats reports what a reconcile did, for logging.
@@ -178,9 +222,10 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 				log.Printf("  ⚠ fix generation failed for %q: %v", p.Subject, err)
 				continue
 			}
-			previews = append(previews, Preview{Subject: p.Subject, Rationale: fix.rationale, Diff: fix.diff, Files: fix.files})
+			v := m.verify(ctx, base, fix.files)
+			previews = append(previews, Preview{Subject: p.Subject, Rationale: fix.rationale, Diff: fix.diff, Files: fix.files, Verify: v})
 			stats.Previewed++
-			log.Printf("  🧪 fix preview for %q (%d file(s)):\n%s", p.Subject, len(fix.files), fix.diff)
+			log.Printf("  🧪 fix preview for %q (%d file(s), verify=%s):\n%s", p.Subject, len(fix.files), v.Status, fix.diff)
 			continue
 		}
 
@@ -211,7 +256,8 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 		}
 
 		// Reformat the description to follow the repo PR template when configured.
-		_, body := m.renderBody(ctx, p, fix, key)
+		v := m.verify(ctx, base, fix.files)
+		_, body := m.renderBody(ctx, p, fix, v, key)
 
 		url, err := m.openPR(ctx, prTitle(p), body, fix.files, base)
 		if url == "" {
@@ -253,14 +299,58 @@ func (m *Manager) generate(ctx context.Context, p models.PatternAnalysis, ref, i
 	}, p)
 }
 
+// verify builds and vets the proposed change against the pinned base in the
+// configured Runtime. It never blocks: a build failure yields a "failed"
+// verdict (annotated on the draft), and an unavailable toolchain or infra error
+// yields "skipped". Verification runs once, at generation time.
+func (m *Manager) verify(ctx context.Context, base ghpr.Base, files map[string]string) VerifyResult {
+	if m.opts.Verify == nil || m.opts.Verify.Runtime == nil {
+		return VerifyResult{Status: VerifySkipped, Summary: "verification not configured"}
+	}
+	cmds := m.opts.Verify.Commands
+	if len(cmds) == 0 {
+		cmds = defaultVerifyCommands
+	}
+	repo := runtime.RepoRef{Owner: m.opts.SourceOwner, Name: m.opts.SourceName, Ref: base.HeadSHA, Token: m.opts.Verify.Token}
+	var ran []string
+	for _, cmd := range cmds {
+		label := strings.Join(cmd, " ")
+		res, err := m.opts.Verify.Runtime.Run(ctx, runtime.Spec{
+			Repo: repo, Overlay: files, Command: cmd, Timeout: m.opts.Verify.Timeout,
+		})
+		if errors.Is(err, runtime.ErrUnavailable) {
+			return VerifyResult{Status: VerifySkipped, Summary: "verification skipped: toolchain unavailable"}
+		}
+		if err != nil {
+			return VerifyResult{Status: VerifySkipped, Summary: "verification skipped: " + oneLine(err.Error())}
+		}
+		if res.TimedOut {
+			return VerifyResult{Status: VerifyFailed, Summary: label + " timed out", Output: res.Output}
+		}
+		if !res.Passed() {
+			return VerifyResult{Status: VerifyFailed, Summary: label + " failed", Output: res.Output}
+		}
+		ran = append(ran, label)
+	}
+	return VerifyResult{Status: VerifyPassed, Summary: strings.Join(ran, " and ") + " passed"}
+}
+
+// defaultVerifyCommands compile-check and vet a Go repo, catching the common
+// failure modes of a model-generated diff: it does not build, uses a
+// hallucinated API, or breaks a signature.
+var defaultVerifyCommands = [][]string{
+	{"go", "build", "./..."},
+	{"go", "vet", "./..."},
+}
+
 // renderBody builds the final PR description (reformatted to follow the repo PR
 // template when a filler is configured) and the full PR body that embeds it.
-func (m *Manager) renderBody(ctx context.Context, p models.PatternAnalysis, fix *proposedFix, key string) (description, body string) {
+func (m *Manager) renderBody(ctx context.Context, p models.PatternAnalysis, fix *proposedFix, v VerifyResult, key string) (description, body string) {
 	description = prDescription(p, fix)
 	if m.opts.PRFiller != nil {
 		description = m.opts.PRFiller.FillBody(ctx, description)
 	}
-	return description, prBody(p, fix, key, m.opts.DashboardURL, description)
+	return description, prBody(p, fix, v, key, m.opts.DashboardURL, description)
 }
 
 // openPR opens a draft fix PR with the given title, body, and files against the
@@ -288,7 +378,7 @@ func (m *Manager) openPR(ctx context.Context, title, body string, files map[stri
 // OpenFromPreview to open exactly the previewed PR. The base is pinned at
 // generation time so confirm opens the same diff against the same snapshot.
 type GeneratedFix struct {
-	Preview     Preview // Subject, Rationale, Diff, Files
+	Preview     Preview // Subject, Rationale, Diff, Files, Verify
 	Title       string  // final PR title
 	Description string  // PR description (after any repo-template reformat)
 	Body        string  // full PR body that embeds Description + diff + marker
@@ -318,9 +408,10 @@ func (m *Manager) GeneratePreview(ctx context.Context, p models.PatternAnalysis,
 		return nil, err
 	}
 	key := keyFor(p)
-	description, body := m.renderBody(ctx, p, fix, key)
+	v := m.verify(ctx, base, fix.files)
+	description, body := m.renderBody(ctx, p, fix, v, key)
 	return &GeneratedFix{
-		Preview:     Preview{Subject: p.Subject, Rationale: fix.rationale, Diff: fix.diff, Files: fix.files},
+		Preview:     Preview{Subject: p.Subject, Rationale: fix.rationale, Diff: fix.diff, Files: fix.files, Verify: v},
 		Title:       prTitle(p),
 		Description: description,
 		Body:        body,
@@ -409,19 +500,39 @@ func prTitle(p models.PatternAnalysis) string {
 	return "fix: address recurring failure in " + subj
 }
 
-func prBody(p models.PatternAnalysis, fix *proposedFix, key, dashboardURL, description string) string {
+func prBody(p models.PatternAnalysis, fix *proposedFix, v VerifyResult, key, dashboardURL, description string) string {
 	var sb strings.Builder
-	sb.WriteString("> [!WARNING]\n> Draft PR auto-proposed by a CI failure-analysis dashboard. Review carefully before use; the change is a starting point, not a verified fix.\n\n")
+	sb.WriteString("> [!WARNING]\n> Draft PR auto-proposed by a CI failure-analysis dashboard. Review carefully before use; the change is a starting point, not a merge-ready fix.\n\n")
+	sb.WriteString(verifyBanner(v))
 	sb.WriteString(strings.TrimSpace(description))
 	sb.WriteString("\n\n")
 	sb.WriteString("<details><summary>Proposed diff</summary>\n\n```diff\n")
 	sb.WriteString(fix.diff)
 	sb.WriteString("\n```\n</details>\n")
+	if strings.TrimSpace(v.Output) != "" {
+		sb.WriteString("\n<details><summary>Verification output</summary>\n\n```\n")
+		sb.WriteString(strings.TrimSpace(v.Output))
+		sb.WriteString("\n```\n</details>\n")
+	}
 	if dashboardURL != "" {
 		fmt.Fprintf(&sb, "\nDashboard: %s\n", dashboardURL)
 	}
 	fmt.Fprintf(&sb, "\n%s\n", markerFor(key))
 	return sb.String()
+}
+
+// verifyBanner renders the verification verdict line for the PR body. Passed and
+// failed are stated plainly; skipped is silent to avoid noise on deployments
+// without a verification toolchain.
+func verifyBanner(v VerifyResult) string {
+	switch v.Status {
+	case VerifyPassed:
+		return fmt.Sprintf("> [!NOTE]\n> Automated verification passed: %s.\n\n", oneLine(v.Summary))
+	case VerifyFailed:
+		return fmt.Sprintf("> [!CAUTION]\n> Automated verification failed: %s. The proposed change likely does not build as-is; treat it as a lead, not a fix.\n\n", oneLine(v.Summary))
+	default:
+		return ""
+	}
 }
 
 // prDescription is the human-readable summary of the fix. It is the part that
