@@ -7,6 +7,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/textutil"
 )
 
 // BuildInput carries everything the spec builder needs to turn findings into
@@ -94,7 +95,7 @@ func persistentSpec(tf models.TestFlakiness, summary, rootCause, site string, la
 		fmt.Fprintf(&b, "### Summary\n\n%s\n\n", summary)
 	}
 	if tf.LastFailure != nil && tf.LastFailure.FailureMessage != "" {
-		fmt.Fprintf(&b, "### Latest failure\n\n```\n%s\n```\n\n", truncate(tf.LastFailure.FailureMessage, 800))
+		fmt.Fprintf(&b, "### Latest failure\n\n```\n%s\n```\n\n", textutil.Truncate(tf.LastFailure.FailureMessage, 800))
 	}
 	b.WriteString(footer(key))
 

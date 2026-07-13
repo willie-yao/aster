@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/textutil"
 )
 
 // apiBase is the GitHub REST API root, overridable per Client for tests.
@@ -369,19 +371,12 @@ func (c *Client) do(ctx context.Context, method, url string, body, out any, okSt
 		}
 	}
 	if !ok {
-		return fmt.Errorf("%s %s: %s: %s", method, url, resp.Status, truncate(string(rb), 300))
+		return fmt.Errorf("%s %s: %s: %s", method, url, resp.Status, textutil.Truncate(string(rb), 300))
 	}
 	if out != nil {
 		return json.Unmarshal(rb, out)
 	}
 	return nil
-}
-
-func truncate(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max] + "…"
 }
 
 // SearchOpenPR finds an open PR in owner/repo whose body contains confirmMarker.

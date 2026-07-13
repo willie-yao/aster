@@ -63,8 +63,6 @@ func flakyHoursAgo(h int) time.Time {
 	return flakyBaseTime.Add(-time.Duration(h) * time.Hour)
 }
 
-// ---------- ComputeTestFlakiness tests ----------
-
 func TestComputeTestFlakiness_FlipRate(t *testing.T) {
 	// fail, pass, fail, pass newest-first yields 3 flips over 3 transitions.
 	runs := []models.BuildResult{
@@ -85,7 +83,6 @@ func TestComputeTestFlakiness_FlipRate(t *testing.T) {
 	if tf.Passes != 2 {
 		t.Errorf("Passes = %d, want 2", tf.Passes)
 	}
-	// All 3 transitions are flips.
 	if math.Abs(tf.FlipRate-1.0) > 0.001 {
 		t.Errorf("FlipRate = %f, want 1.0", tf.FlipRate)
 	}
@@ -189,7 +186,6 @@ func TestComputeTestFlakiness_DurationHistory(t *testing.T) {
 	if len(tf.DurationHistory) != 2 {
 		t.Fatalf("DurationHistory length = %d, want 2", len(tf.DurationHistory))
 	}
-	// Newest first.
 	if tf.DurationHistory[0].BuildID != "2" || tf.DurationHistory[0].Duration != 5.5 || !tf.DurationHistory[0].Passed {
 		t.Errorf("DurationHistory[0] = %+v, unexpected", tf.DurationHistory[0])
 	}
@@ -250,8 +246,6 @@ func TestComputeTestFlakiness_TestNotInAllRuns(t *testing.T) {
 		t.Errorf("TotalRuns = %d, want 2", tf.TotalRuns)
 	}
 }
-
-// ---------- ComputeFlakinessReport tests ----------
 
 func TestComputeFlakinessReport_MostFlakySorting(t *testing.T) {
 	now := flakyBaseTime

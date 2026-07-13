@@ -131,7 +131,7 @@ func TestPreviewFix_AINotConfigured(t *testing.T) {
 	writeJobDetail(t, dataDir, "periodic-x.json", models.JobDetail{JobID: "periodic-x", PatternAnalyses: []models.PatternAnalysis{pa}})
 	cfg := &project.Config{AI: &project.AI{FixPRs: &project.FixPRs{Repo: &project.SourceRepo{Owner: "o", Name: "r"}}}}
 
-	s := NewService(cfg, dataDir, AIConfig{}) // empty AI config
+	s := NewService(cfg, dataDir, AIConfig{})
 	_, err := s.PreviewFix(context.Background(), pa.ID, "tok", "")
 	if err == nil || errors.Is(err, ErrNotFound) {
 		t.Fatalf("want AI-not-configured error, got %v", err)
@@ -159,7 +159,6 @@ func TestPreviewCache_TokenOwnershipAndConsumption(t *testing.T) {
 func TestPreviewCache_Expiry(t *testing.T) {
 	s := NewService(&project.Config{}, t.TempDir(), AIConfig{})
 	tok := s.stash("owner-token", &previewEntry{kind: "issue"})
-	// Age the entry past the TTL.
 	s.pmu.Lock()
 	s.previews[tok].createdAt = time.Now().Add(-previewTTL - time.Minute)
 	s.pmu.Unlock()

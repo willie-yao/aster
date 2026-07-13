@@ -109,11 +109,9 @@ func TestResolveFileLinks_GenericResolution(t *testing.T) {
 			t.Errorf("links[%q] = %q, want %q", k, links[k], v)
 		}
 	}
-	// Paths outside the project repo are dropped without fallback.
 	if _, ok := links["test/e2e/clusterctl_upgrade_test.go"]; ok {
 		t.Errorf("unverified path must be dropped")
 	}
-	// Non-source tokens are never linked.
 	if _, ok := links["calico-system/calico-kube-controllers"]; ok {
 		t.Errorf("resource name must not be linked")
 	}

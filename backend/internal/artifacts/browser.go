@@ -93,8 +93,6 @@ type GrepMatch struct {
 	Context []string
 }
 
-// ---------- Path validation ----------
-
 // ErrUnsafePath is returned when a caller-supplied path fails validation.
 var ErrUnsafePath = errors.New("unsafe path")
 

@@ -54,8 +54,6 @@ func cachedDiscoverClusters(ctx context.Context, env *tools.Env) ([]Cluster, err
 	return clusters, nil
 }
 
-// ---------- discover_clusters ----------
-
 type discoverClustersTool struct{}
 
 func (*discoverClustersTool) Name() string  { return "discover_clusters" }
@@ -93,8 +91,6 @@ func (*discoverClustersTool) Dispatch(ctx context.Context, env *tools.Env, _ jso
 		"count":    len(items),
 	}}
 }
-
-// ---------- find_my_cluster ----------
 
 type findMyClusterTool struct{}
 
@@ -170,8 +166,6 @@ func (*findMyClusterTool) Dispatch(ctx context.Context, env *tools.Env, raw json
 	}}
 }
 
-// ---------- list_cluster_machines ----------
-
 type listMachinesTool struct{}
 
 func (*listMachinesTool) Name() string  { return "list_cluster_machines" }
@@ -221,8 +215,6 @@ func (*listMachinesTool) Dispatch(ctx context.Context, env *tools.Env, raw json.
 		"count":    len(items),
 	}}
 }
-
-// ---------- list_machine_logs ----------
 
 type listMachineLogsTool struct{}
 
@@ -274,8 +266,6 @@ func (*listMachineLogsTool) Dispatch(ctx context.Context, env *tools.Env, raw js
 		"count":   len(items),
 	}}
 }
-
-// ---------- discover_controllers ----------
 
 type discoverControllersTool struct{}
 
@@ -341,8 +331,6 @@ func (*discoverControllersTool) Dispatch(ctx context.Context, env *tools.Env, ra
 	}
 	return tools.Result{Payload: payload}
 }
-
-// ---------- resolve_controller_log ----------
 
 type resolveControllerLogTool struct{}
 

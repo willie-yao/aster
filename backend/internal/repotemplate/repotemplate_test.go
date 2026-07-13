@@ -96,7 +96,6 @@ func TestFetcher_IssueTemplates_DirMarkdownOnly(t *testing.T) {
 	if !strings.Contains(names, "Bug Report") || !strings.Contains(names, "Flaky Test") {
 		t.Errorf("names = %q", names)
 	}
-	// Front-matter stripped.
 	if strings.Contains(ts[0].Body, "name:") {
 		t.Errorf("front-matter not stripped: %q", ts[0].Body)
 	}
@@ -124,19 +123,15 @@ func (f fakeCompleter) Complete(context.Context, string, string) (string, error)
 }
 
 func TestFillPR_Fallbacks(t *testing.T) {
-	// nil completer -> unchanged.
 	if got := FillPR(context.Background(), nil, "tmpl", "desc"); got != "desc" {
 		t.Errorf("nil completer changed body: %q", got)
 	}
-	// error -> unchanged.
 	if got := FillPR(context.Background(), fakeCompleter{err: context.DeadlineExceeded}, "tmpl", "desc"); got != "desc" {
 		t.Errorf("error did not fall back: %q", got)
 	}
-	// success -> filled.
 	if got := FillPR(context.Background(), fakeCompleter{resp: "**What this PR does**: fixes it"}, "tmpl", "desc"); !strings.Contains(got, "fixes it") {
 		t.Errorf("fill not applied: %q", got)
 	}
-	// code fence stripped.
 	if got := FillPR(context.Background(), fakeCompleter{resp: "```md\nfilled\n```"}, "tmpl", "desc"); strings.Contains(got, "```") {
 		t.Errorf("code fence not stripped: %q", got)
 	}
@@ -149,14 +144,12 @@ func TestFillIssue_PicksAndFills(t *testing.T) {
 	if title != "etcd join times out" || !strings.Contains(body, "learner promotion") {
 		t.Errorf("fill = %q / %q", title, body)
 	}
-	// nil completer or no templates -> unchanged.
 	if tt, bb := FillIssue(context.Background(), nil, tmpls, "t", "b"); tt != "t" || bb != "b" {
 		t.Errorf("nil completer changed: %q %q", tt, bb)
 	}
 	if tt, bb := FillIssue(context.Background(), c, nil, "t", "b"); tt != "t" || bb != "b" {
 		t.Errorf("no templates changed: %q %q", tt, bb)
 	}
-	// bad JSON -> unchanged.
 	if tt, bb := FillIssue(context.Background(), fakeCompleter{resp: "not json"}, tmpls, "t", "b"); tt != "t" || bb != "b" {
 		t.Errorf("bad JSON did not fall back: %q %q", tt, bb)
 	}

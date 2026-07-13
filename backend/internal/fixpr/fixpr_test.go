@@ -125,8 +125,6 @@ func systemicPattern(subject string) models.PatternAnalysis {
 	}
 }
 
-// ---- generation ----
-
 // genParamsFor builds genParams for generation-only tests (review disabled).
 func genParamsFor(c Completer, src sourceReader) genParams {
 	return genParams{completer: c, source: src, owner: "o", repo: "r", ref: "ref", maxFiles: 2}
@@ -153,7 +151,6 @@ func TestGenerateFix_HappyPath(t *testing.T) {
 }
 
 func TestGenerateFix_RejectsHallucinatedFile(t *testing.T) {
-	// The model picks a path that is not among the real candidate files.
 	c := &fakeCompleter{locate: `{"files": ["does/not/exist.yaml"]}`}
 	src := &fakeSource{files: map[string]string{"templates/cluster.yaml": sampleFile}}
 	if _, err := generateFix(context.Background(), genParamsFor(c, src), systemicPattern("etcd")); err == nil || !strings.Contains(err.Error(), "not a real repo file") {
@@ -207,7 +204,6 @@ func TestGenerateFix_DeclinesWhenFixIsUpstream(t *testing.T) {
 		"pkg/kubelet/cm/dra/manager/manager.go", // upstream, not in repo
 		"build-log.txt",                         // artifact, ignored
 	}
-	// Model honestly selects no in-repo file.
 	c := &fakeCompleter{locate: `{"files": []}`}
 	_, err := generateFix(context.Background(), genParamsFor(c, src), p)
 	if err == nil {
@@ -548,8 +544,6 @@ func TestGenerateFix_DropsTypeError(t *testing.T) {
 	}
 }
 
-// ---- critique loop ----
-
 func critiqueParams(c Completer, src sourceReader, retries int) genParams {
 	gp := genParamsFor(c, src)
 	gp.critique = c
@@ -577,7 +571,6 @@ func TestGenerateFix_CritiqueRejectsThenDrops(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "rejected by review") {
 		t.Errorf("expected review rejection, got %v", err)
 	}
-	// One initial attempt + one retry = 2 edit calls.
 	if c.editCalls != 2 {
 		t.Errorf("editCalls = %d, want 2 (initial + 1 retry)", c.editCalls)
 	}
@@ -649,8 +642,6 @@ func TestApplyEdits_RejectsOversizedChange(t *testing.T) {
 		t.Errorf("expected oversized-change rejection, got %v", err)
 	}
 }
-
-// ---- reconciler ----
 
 func newManager(t *testing.T, pr prClient, c Completer, src sourceReader, opts Options) *Manager {
 	t.Helper()
@@ -754,7 +745,6 @@ func TestReconcile_DryRunWritesPreviewsNoPR(t *testing.T) {
 }
 
 func TestReconcile_SkipsTrackedAndAdoptsOpen(t *testing.T) {
-	// Tracked: no PR.
 	pr := &fakePR{}
 	m := newManager(t, pr, goodCompleter(), goodSource(), Options{})
 	p := systemicPattern("etcd")
@@ -764,7 +754,6 @@ func TestReconcile_SkipsTrackedAndAdoptsOpen(t *testing.T) {
 		t.Errorf("tracked pattern should be skipped: %+v", stats)
 	}
 
-	// Open PR found via search: adopt, no new PR.
 	pr2 := &fakePR{searchFound: true, searchURL: "https://github.com/up/stream/pull/3"}
 	m2 := newManager(t, pr2, goodCompleter(), goodSource(), Options{})
 	stats2, _ := m2.Reconcile(context.Background(), []models.PatternAnalysis{systemicPattern("etcd")})

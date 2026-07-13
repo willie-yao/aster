@@ -20,6 +20,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/textutil"
 )
 
 // AgenticMode is stored in models.AIAnalysis.Mode for agentic results. A cached
@@ -154,8 +155,6 @@ const critiqueRetryIters = 3
 // recipes unbounded budget.
 const critiqueMissingEvidenceBonusCap = 6
 
-// ---------- Chat protocol ----------
-
 // agChatMessage uses *string for Content so the tool-call echo can send a
 // null content alongside tool_calls, matching the OpenAI spec.
 type agChatMessage struct {
@@ -198,8 +197,6 @@ type agChatResponse struct {
 }
 
 func strPtr(s string) *string { return &s }
-
-// ---------- Tool documentation appended to the system prompt ----------
 
 // agToolDocs is the tool-usage strategy section appended to the system
 // prompt by the agentic loop. Tool names + descriptions reach the model
@@ -323,8 +320,6 @@ func evalFloors(state *agentState, opts AgenticOptions) floorStatus {
 	}
 }
 
-// ---------- Agent state ----------
-
 type agentState struct {
 	browser         artifacts.Browser
 	opts            AgenticOptions
@@ -447,8 +442,6 @@ func stampAgenticTelemetry(analysis *models.AIAnalysis, state *agentState, mode 
 	}
 }
 
-// ---------- Public entry point ----------
-
 // AgenticInputs bundles the per-failure context required by the agentic loop.
 // Lifetime notes:
 //   - Browser, Cache, and WebURLBase are scoped to one build.
@@ -477,8 +470,6 @@ type AgenticInputs struct {
 	// persistent failure. 1 (or 0) means not persistent.
 	ConsecutiveFailures int
 }
-
-// ---------- Context-window compaction ----------
 
 const (
 	// compactionTargetRatio is the fraction of ContextByteBudget compaction
@@ -1262,8 +1253,6 @@ func tryParseAnalysis(s string) (analysisResponse, bool) {
 	return out, true
 }
 
-// ---------- HTTP call ----------
-
 var toolsUnsupportedRe = regexp.MustCompile(`(?i)tool[s_]?call|function[s_]?call|tools_choice|tools provided|function calling`)
 
 func isToolsUnsupportedError(err error) bool {
@@ -1316,16 +1305,14 @@ func (c *Client) callChatWithTools(ctx context.Context, messages []agChatMessage
 	defer resp.Body.Close()
 	rb, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("chat returned %d: %s", resp.StatusCode, truncate(string(rb), 500))
+		return nil, fmt.Errorf("chat returned %d: %s", resp.StatusCode, textutil.Truncate(string(rb), 500))
 	}
 	var out agChatResponse
 	if err := json.Unmarshal(rb, &out); err != nil {
-		return nil, fmt.Errorf("decode response: %w; body=%s", err, truncate(string(rb), 500))
+		return nil, fmt.Errorf("decode response: %w; body=%s", err, textutil.Truncate(string(rb), 500))
 	}
 	return &out, nil
 }
-
-// ---------- Tool dispatch ----------
 
 // dispatchAgenticTool routes one tool call through the registry, accumulates
 // bytes/budget telemetry on the agent state, and returns the model-bound
@@ -1379,7 +1366,7 @@ func dispatchAgenticTool(ctx context.Context, s *agentState, tc agToolCall) stri
 		if _, hasErr := result.Payload["error"]; hasErr {
 			flag = "ERROR"
 		}
-		log.Printf("    🔧 %s(%s) -> %d gcs bytes [%s]", tc.Function.Name, truncate(tc.Function.Arguments, 140), result.BytesFetched, flag)
+		log.Printf("    🔧 %s(%s) -> %d gcs bytes [%s]", tc.Function.Name, textutil.Truncate(tc.Function.Arguments, 140), result.BytesFetched, flag)
 	}
 
 	return toolEnvelopeJSON(s, result.Payload)

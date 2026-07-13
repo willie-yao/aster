@@ -36,8 +36,6 @@ func newFailedTC(name, msg string) *models.TestCase {
 	return &models.TestCase{Name: name, FailureMessage: msg, Status: "failed"}
 }
 
-// ---------- Mode + cache invalidation ----------
-
 func TestService_Agentic_TagsModeAgentic(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
@@ -73,7 +71,6 @@ func TestService_ReanalyzeOnModeChange(t *testing.T) {
 	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
 	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}, &fakeFactory{}, registry, enabled)
 
-	// Test case already has a cached analysis with a foreign mode.
 	tc := newFailedTC("Test A", "msg")
 	tc.AISummary = &models.AISummary{Summary: "stale summary"}
 	tc.AIAnalysis = &models.AIAnalysis{RootCause: "stale root cause", Mode: "old-mode"}
@@ -91,7 +88,6 @@ func TestService_ReanalyzeOnModeChange(t *testing.T) {
 func TestService_SkipWhenAlreadyAnalyzedSameMode(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	// No server pushes: should not call the API.
 
 	client := newAgenticTestClient(t, srv.URL)
 	registry, enabled := newServiceTestRegistry(t)
@@ -143,12 +139,10 @@ func TestService_ReanalyzesStaleTransientOnPersistence(t *testing.T) {
 
 	client := newAgenticTestClient(t, srv.URL)
 	registry, enabled := newServiceTestRegistry(t)
-	// The test is now persistent (>= threshold consecutive builds).
 	consec := map[string]int{"j::Test A": transientPersistThreshold}
 	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", consec)
 	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}, &fakeFactory{}, registry, enabled)
 
-	// A cached transient verdict that otherwise passes every gate.
 	tc := newFailedTC("Test A", "msg")
 	tc.AISummary = &models.AISummary{Summary: "flaky", IsTransient: true}
 	tc.AIAnalysis = &models.AIAnalysis{RootCause: "flake", Mode: AgenticMode, PromptHash: PromptFingerprint("sys"), CritiquePassed: true, CritiqueVersion: currentCritiqueVersion}
@@ -197,8 +191,6 @@ func TestService_ShouldReanalyze_PromptHash(t *testing.T) {
 		t.Error("unstamped (pre-feature) entry should re-analyze once")
 	}
 }
-
-// ---------- tools-unsupported (no fallback) ----------
 
 // TestService_ToolsUnsupported_SetsUnavailable verifies tools-unsupported
 // endpoints mark failures unavailable and short-circuit subsequent failures.
@@ -279,7 +271,6 @@ func TestService_ShouldReanalyze_FloorTable(t *testing.T) {
 func TestService_BelowFloor_ReanalyzesBuildCacheEntry(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	// Final after one tool call to satisfy floor=1.
 	srv.push(200, chatRespToolCall("call_1", "list_artifacts", map[string]interface{}{"path": ""}))
 	srv.push(200, chatRespFinal(`{"summary":"fresh post-floor","is_transient":false,"root_cause":"r","severity":"Low","suggested_fix":"f","relevant_files":[]}`))
 
@@ -291,7 +282,6 @@ func TestService_BelowFloor_ReanalyzesBuildCacheEntry(t *testing.T) {
 		&fakeFactory{}, registry, enabled,
 	)
 
-	// Pre-floor cached agentic analysis with ToolCalls=0 is already attached.
 	tc := newFailedTC("Test A", "msg")
 	tc.AISummary = &models.AISummary{Summary: "stale zero-tool"}
 	tc.AIAnalysis = &models.AIAnalysis{RootCause: "stale", Mode: AgenticMode, ToolCalls: 0}
@@ -318,19 +308,14 @@ func newServiceTestRegistry(t *testing.T) (*tools.Registry, []string) {
 	return r, enabled
 }
 
-// ---------- Test helper: fake factory ----------
-
 type fakeFactory struct{}
 
 func (f *fakeFactory) ForBuild(_, _ string) artifacts.Browser {
 	return &fakeBrowser{}
 }
 
-// Compile-time interface checks.
 var _ Module = (*stubModule)(nil)
 var _ artifacts.Factory = (*fakeFactory)(nil)
-
-// ---------- setUnavailable retry semantics ----------
 
 // TestSetUnavailable_RetrySemantics verifies unavailable summaries are replaced
 // on retry while transient and real summaries are preserved.

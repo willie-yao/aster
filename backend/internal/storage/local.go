@@ -43,7 +43,7 @@ func (b *localBackend) resolve(path string) (string, error) {
 	}
 	for _, seg := range strings.Split(p, "/") {
 		if seg == ".." {
-			return "", fmt.Errorf("storage: path %q must not contain ..", path)
+			return "", fmt.Errorf("storage: path %q must not contain a .. segment", path)
 		}
 	}
 	full := filepath.Join(b.root, filepath.FromSlash(p))

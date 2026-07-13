@@ -114,9 +114,6 @@ func TestToolLoop_ImmediateFinal(t *testing.T) {
 	}
 }
 
-// TestToolLoop_GroupNameNotResolved guards the bug where a caller passes a group
-// alias instead of resolved tool names: reg.Schemas returns nothing, so the loop
-// would silently run with no tools. ToolLoop now errors instead.
 func TestToolLoop_GroupNameNotResolved(t *testing.T) {
 	reg := tools.NewRegistry()
 	reg.Register(&stubTool{}) // group "stub", tool name "echo"

@@ -4,7 +4,7 @@ import Link from "@mui/material/Link";
 import Typography from "@mui/material/Typography";
 import { Link as RouterLink } from "react-router-dom";
 import type { BuildResult } from "../types/dashboard";
-import { shortTestName } from "../lib/utils";
+import { shortDate, shortTestName } from "../lib/utils";
 import { Panel } from "./Panel";
 
 interface TestResultsGridProps {
@@ -23,13 +23,7 @@ interface GridRow {
 const setupPatterns =
   /^(SynchronizedBeforeSuite|SynchronizedAfterSuite|BeforeSuite|AfterSuite)$/i;
 
-function shortDate(dateStr: string): string {
-  const d = new Date(dateStr);
-  return `${d.getMonth() + 1}/${d.getDate()}`;
-}
-
 export function TestResultsGrid({ runs, jobID }: TestResultsGridProps) {
-  // Sort runs oldest to newest for left-to-right display.
   const sortedRuns = useMemo(
     () =>
       [...runs].sort(
@@ -42,7 +36,6 @@ export function TestResultsGrid({ runs, jobID }: TestResultsGridProps) {
   const gridRows = useMemo(() => {
     if (sortedRuns.length === 0) return [];
 
-    // Track each test's status by run index.
     const testMap = new Map<string, CellStatus[]>();
 
     for (let col = 0; col < sortedRuns.length; col++) {
@@ -69,7 +62,6 @@ export function TestResultsGrid({ runs, jobID }: TestResultsGridProps) {
       rows.push({ testName, failCount, cells });
     }
 
-    // Sort by failure count, then name.
     rows.sort((a, b) => {
       if (b.failCount !== a.failCount) return b.failCount - a.failCount;
       return a.testName.localeCompare(b.testName);

@@ -4,6 +4,7 @@ import Typography from "@mui/material/Typography";
 import { useTheme } from "@mui/material/styles";
 import type { BuildResult } from "../types/dashboard";
 import { dotColorFor } from "../theme";
+import { shortDate } from "../lib/utils";
 
 interface RunTimelineProps {
   runs: BuildResult[];
@@ -13,11 +14,6 @@ interface RunTimelineProps {
   colorFn?: (run: BuildResult) => string;
   /** Custom tooltip per run. */
   tooltipFn?: (run: BuildResult) => string;
-}
-
-function shortDate(dateStr: string): string {
-  const d = new Date(dateStr);
-  return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
 export function RunTimeline({

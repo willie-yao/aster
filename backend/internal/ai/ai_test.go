@@ -12,8 +12,6 @@ import (
 	"time"
 )
 
-// ---------- Cache tests ----------
-
 func TestCacheSetAndGet(t *testing.T) {
 	dir := t.TempDir()
 	c := NewCache(dir)
@@ -51,7 +49,6 @@ func TestCacheExpiry(t *testing.T) {
 	c := NewCache(dir)
 
 	_ = c.Set("old", "data")
-	// Manually back-date the entry.
 	c.mu.Lock()
 	entry := c.entries["old"]
 	entry.CreatedAt = time.Now().Add(-31 * 24 * time.Hour)
@@ -72,7 +69,6 @@ func TestCacheSaveAndReload(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	// Verify file exists.
 	data, err := os.ReadFile(filepath.Join(dir, "ai_cache.json"))
 	if err != nil {
 		t.Fatalf("read cache file: %v", err)
@@ -81,7 +77,6 @@ func TestCacheSaveAndReload(t *testing.T) {
 		t.Fatal("cache file is empty")
 	}
 
-	// Reload.
 	c2 := NewCache(dir)
 	raw, ok := c2.Get("persist")
 	if !ok {
@@ -93,8 +88,6 @@ func TestCacheSaveAndReload(t *testing.T) {
 		t.Fatalf("unexpected: %q", got)
 	}
 }
-
-// ---------- Helper tests ----------
 
 func TestNormalizeError(t *testing.T) {
 	input := "error at 0xDEADBEEF with id 12345678-1234-1234-1234-123456789abc foo"
@@ -117,8 +110,6 @@ func TestExtractJSON(t *testing.T) {
 		t.Fatalf("unexpected: %q", got)
 	}
 }
-
-// ---------- Pluggable endpoint / header tests ----------
 
 func TestNewClientWithOptionsNoDefaulting(t *testing.T) {
 	// Endpoint and Model are used verbatim; the engine applies no default

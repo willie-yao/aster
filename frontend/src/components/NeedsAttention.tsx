@@ -13,7 +13,7 @@ import { useMemo, useState } from "react";
 import { Link as RouterLink } from "react-router-dom";
 import { useFlakinessReport, useResolved } from "../hooks/useData";
 import { useManifest } from "../hooks/useManifest";
-import { shortJobName, shortTestName } from "../lib/utils";
+import { confidenceColor, shortJobName, shortTestName } from "../lib/utils";
 import { soft } from "../theme";
 import { Panel } from "./Panel";
 import type { PatternAnalysis, TestFlakiness } from "../types/dashboard";
@@ -171,7 +171,7 @@ export function NeedsAttention() {
               </Typography>
 
               {recurring.map((pattern) => {
-                const confColor = pattern.confidence === "low" ? undefined : "warning";
+                const confColor = confidenceColor(pattern.confidence);
                 return (
                   <ListItemButton
                     key={pattern.job_id ?? pattern.subject}

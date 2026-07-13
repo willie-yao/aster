@@ -46,7 +46,6 @@ const sectionLabelSx = {
   mb: 0.75,
 } as const;
 
-// Bordered surface block used to preview generated markdown / diffs verbatim.
 const previewBoxSx = {
   borderRadius: "10px",
   border: "1px solid",
@@ -67,7 +66,6 @@ const dialogPaperSx = {
   backgroundImage: "none",
 } as const;
 
-// DialogHeader gives dialogs a tinted icon tile plus title/subtitle.
 function DialogHeader({
   icon,
   accent,
@@ -112,13 +110,6 @@ function DialogHeader({
   );
 }
 
-// FailureActions renders admin write buttons for one systemic pattern. It shows
-// only in server mode when the actions capability is present. Auth state is
-// shared with the navbar via useAuth: in oauth mode a signed-out admin sees a
-// contextual sign-in prompt; once signed in (or in proxy mode) the buttons act.
-// Each action first previews the exact issue/PR in a dialog so the admin can
-// review, optionally refine it with a prompt, and confirm before anything is
-// posted.
 export function FailureActions({ failureID }: { failureID: string }) {
   const { features } = useCapabilities();
   const { status, signIn } = useAuth();

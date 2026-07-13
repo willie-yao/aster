@@ -30,7 +30,6 @@ import (
 // Group is the alias used to enable all repo tools at once.
 const Group = "repotree"
 
-// Bounds shared across tools.
 const (
 	readMaxBytes = 16384 // per read_repo_file call
 	grepMaxBytes = 16384 // per matched file scanned by grep_repo
@@ -83,8 +82,6 @@ func readFile(ctx context.Context, env *tools.Env, path string) (string, bool, e
 	}
 	return content, true, nil
 }
-
-// ---------- list_repo_tree ----------
 
 type listTool struct{}
 
@@ -150,8 +147,6 @@ func (*listTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 		"files": files,
 	}}
 }
-
-// ---------- read_repo_file ----------
 
 type readTool struct{}
 
@@ -222,8 +217,6 @@ func (*readTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 		},
 	}
 }
-
-// ---------- grep_repo ----------
 
 type grepTool struct{}
 

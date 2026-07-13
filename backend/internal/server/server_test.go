@@ -302,7 +302,6 @@ func TestHandler_ActionsDisabledByDefault(t *testing.T) {
 	if caps.Features.Actions {
 		t.Error("actions must be false when unconfigured")
 	}
-	// The route is not registered.
 	r, _ := http.Post(srv.URL+"/api/failures/x/create-issue/preview", "application/json", nil)
 	if r.StatusCode != http.StatusNotFound {
 		t.Errorf("status = %d, want 404 when actions disabled", r.StatusCode)
@@ -402,11 +401,9 @@ func TestHandler_ActionsEnabled(t *testing.T) {
 		return resp
 	}
 
-	// Unauthorized.
 	if r := do("/api/failures/abc/create-issue/preview", "", ""); r.StatusCode != http.StatusUnauthorized {
 		t.Errorf("unauth status = %d, want 401", r.StatusCode)
 	}
-	// Authorized preview returns a token and passes id + token + instruction through.
 	r := do("/api/failures/abc/create-issue/preview", "ok", `{"instruction":"tighten it"}`)
 	if r.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", r.StatusCode)
@@ -420,11 +417,9 @@ func TestHandler_ActionsEnabled(t *testing.T) {
 	if runner.gotID != "abc" || runner.gotToken != "tok" || runner.gotInstruction != "tighten it" {
 		t.Errorf("runner got id=%q token=%q instruction=%q, want abc/tok/tighten it", runner.gotID, runner.gotToken, runner.gotInstruction)
 	}
-	// Unknown failure maps to 404.
 	if r := do("/api/failures/missing/create-issue/preview", "ok", ""); r.StatusCode != http.StatusNotFound {
 		t.Errorf("not-found status = %d, want 404", r.StatusCode)
 	}
-	// Confirm posts the previewed draft and returns the URL.
 	r = do("/api/actions/confirm", "ok", `{"token":"ptok"}`)
 	if r.StatusCode != http.StatusOK {
 		t.Fatalf("confirm status = %d, want 200", r.StatusCode)
@@ -438,7 +433,6 @@ func TestHandler_ActionsEnabled(t *testing.T) {
 	if runner.gotConfirmToken != "ptok" {
 		t.Errorf("confirm got token=%q, want ptok", runner.gotConfirmToken)
 	}
-	// A blank token is a 400.
 	if r := do("/api/actions/confirm", "ok", `{}`); r.StatusCode != http.StatusBadRequest {
 		t.Errorf("blank-token status = %d, want 400", r.StatusCode)
 	}
@@ -446,18 +440,15 @@ func TestHandler_ActionsEnabled(t *testing.T) {
 	if r := do("/api/actions/confirm", "ok", `{"token":"missing"}`); r.StatusCode != http.StatusNotFound {
 		t.Errorf("expired-token status = %d, want 404", r.StatusCode)
 	}
-	// Resolve: 204, passing id + login + note through.
 	if r := do("/api/failures/abc/resolve", "ok", `{"note":"fixed by test-infra #99"}`); r.StatusCode != http.StatusNoContent {
 		t.Errorf("resolve status = %d, want 204", r.StatusCode)
 	}
 	if runner.gotResolveID != "abc" || runner.gotResolveLogin != "alice" || runner.gotResolveNote != "fixed by test-infra #99" {
 		t.Errorf("resolve got id=%q login=%q note=%q", runner.gotResolveID, runner.gotResolveLogin, runner.gotResolveNote)
 	}
-	// Resolve on an unknown failure maps to 404.
 	if r := do("/api/failures/missing/resolve", "ok", `{}`); r.StatusCode != http.StatusNotFound {
 		t.Errorf("resolve not-found status = %d, want 404", r.StatusCode)
 	}
-	// Unresolve: 204.
 	if r := do("/api/failures/abc/unresolve", "ok", ``); r.StatusCode != http.StatusNoContent {
 		t.Errorf("unresolve status = %d, want 204", r.StatusCode)
 	}

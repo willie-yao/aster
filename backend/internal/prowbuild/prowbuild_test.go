@@ -198,7 +198,6 @@ func TestDiscoverJobs_BucketDriven(t *testing.T) {
 	}}
 	ctx := context.Background()
 
-	// No filter, periodics only.
 	jobs, err := DiscoverJobs(ctx, b, false, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -207,7 +206,6 @@ func TestDiscoverJobs_BucketDriven(t *testing.T) {
 		t.Errorf("periodic discovery = %+v, want 2", jobs)
 	}
 
-	// Include presubmits, with a name filter.
 	jobs, err = DiscoverJobs(ctx, b, true, []string{"integ-"})
 	if err != nil {
 		t.Fatal(err)

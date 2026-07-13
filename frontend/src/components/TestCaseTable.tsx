@@ -1,4 +1,4 @@
-import { Fragment, useState, type ReactElement } from "react";
+import { Fragment, useState } from "react";
 import Accordion from "@mui/material/Accordion";
 import AccordionDetails from "@mui/material/AccordionDetails";
 import AccordionSummary from "@mui/material/AccordionSummary";
@@ -22,7 +22,7 @@ import {
 } from "@mui/icons-material";
 import { Link as RouterLink } from "react-router-dom";
 import type { TestCase } from "../types/dashboard";
-import { formatDuration, fileToUrl, fileSortKey } from "../lib/utils";
+import { formatDuration, fileToUrl, fileSortKey, highlightStackTrace } from "../lib/utils";
 import { RichText } from "./RichText";
 import { soft } from "../theme";
 import { Panel } from "./Panel";
@@ -55,32 +55,6 @@ function statusIcon(status: string) {
 
 // Hide Ginkgo setup/teardown entries unless they failed.
 const setupPatterns = /synchronizedbeforesuite|synchronizedaftersuite|beforesuite|aftersuite/i;
-
-// Highlight Go file:line references in stack traces.
-const goFileLineRe = /([a-zA-Z0-9_/.\-@]+\.go:\d+)/g;
-
-function highlightStackTrace(body: string): (string | ReactElement)[] {
-  const parts: (string | ReactElement)[] = [];
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  let key = 0;
-
-  while ((match = goFileLineRe.exec(body)) !== null) {
-    if (match.index > lastIndex) {
-      parts.push(body.slice(lastIndex, match.index));
-    }
-    parts.push(
-      <Box component="span" key={key++} sx={{ color: "primary.main" }}>
-        {match[1]}
-      </Box>,
-    );
-    lastIndex = match.index + match[0].length;
-  }
-  if (lastIndex < body.length) {
-    parts.push(body.slice(lastIndex));
-  }
-  return parts;
-}
 
 function severityToColor(severity: string): "error" | "warning" | null {
   if (severity === "Critical" || severity === "High") return "error";

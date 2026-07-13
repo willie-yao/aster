@@ -185,7 +185,7 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 		}
 
 		if _, tracked := m.state.Tracked[key]; tracked {
-			continue // already proposed
+			continue
 		}
 		// A prior run may have an open fix PR even if local state is lost.
 		if _, url, found, err := m.pr.SearchOpenPR(ctx, m.opts.SourceOwner, m.opts.SourceName, markerToken(key), markerFor(key)); err != nil {
@@ -378,13 +378,6 @@ func eligible(patterns []models.PatternAnalysis, minConfidence string) []models.
 		return confidenceRank(out[i].Confidence) > confidenceRank(out[j].Confidence)
 	})
 	return out
-}
-
-// TrackedURL returns the PR URL recorded for a pattern, if one has been opened
-// or adopted. Used by on-demand callers to report the result after Reconcile.
-func (m *Manager) TrackedURL(p models.PatternAnalysis) (string, bool) {
-	t, ok := m.state.Tracked[keyFor(p)]
-	return t.URL, ok
 }
 
 // keyFor is the dedup identity of a pattern: the job plus a fingerprint of the

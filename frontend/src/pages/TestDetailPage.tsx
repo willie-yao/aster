@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Link as RouterLink, useParams, useSearchParams } from "react-router-dom";
 import {
   Box,
@@ -23,7 +23,7 @@ import {
   OpenInNew,
 } from "@mui/icons-material";
 import { useJobDetail } from "../hooks/useData";
-import { formatDuration, timeAgo } from "../lib/utils";
+import { formatDuration, highlightStackTrace, timeAgo } from "../lib/utils";
 import { RichText } from "../components/RichText";
 import { RunTimeline } from "../components/RunTimeline";
 import { Panel } from "../components/Panel";
@@ -45,32 +45,6 @@ function normalizeMessage(msg: string): string {
     .trim();
 }
 
-/** Highlight Go file:line references in stack traces. */
-const goFileLineRe = /([a-zA-Z0-9_/.\-@]+\.go:\d+)/g;
-
-function highlightStackTrace(body: string): (string | React.ReactElement)[] {
-  const parts: (string | React.ReactElement)[] = [];
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  let key = 0;
-
-  while ((match = goFileLineRe.exec(body)) !== null) {
-    if (match.index > lastIndex) {
-      parts.push(body.slice(lastIndex, match.index));
-    }
-    parts.push(
-      <Box component="span" key={key++} sx={{ color: "primary.main" }}>
-        {match[1]}
-      </Box>
-    );
-    lastIndex = match.index + match[0].length;
-  }
-  if (lastIndex < body.length) {
-    parts.push(body.slice(lastIndex));
-  }
-  return parts;
-}
-
 interface TestOccurrence {
   run: BuildResult;
   testCase: TestCase | null; // Absent from this run.
@@ -85,7 +59,7 @@ interface FailureGroup {
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /** A labelled value used in the run-detail grid. */
-function Field({ label, children, mono }: { label: string; children: React.ReactNode; mono?: boolean }) {
+function Field({ label, children, mono }: { label: string; children: ReactNode; mono?: boolean }) {
   return (
     <Box>
       <Typography variant="label" color="text.secondary" sx={{ display: "block" }}>
@@ -394,7 +368,6 @@ export function TestDetailPage() {
         </Stack>
       </Box>
 
-      {/* History timeline colored by this test's status. */}
       <Box component="section">
         <SectionHeading title="History" />
         <RunTimeline
@@ -420,7 +393,6 @@ export function TestDetailPage() {
         />
       </Box>
 
-      {/* Grouped failure messages across runs. */}
       {failureGroups.length > 0 && (
         <Box component="section">
           <SectionHeading title="Failure Patterns" />
@@ -455,7 +427,6 @@ export function TestDetailPage() {
         </Box>
       )}
 
-      {/* Selected run details for this test. */}
       {selectedRun && selectedTc && (
         <>
           {selectedTc.ai_analysis ? (
@@ -681,7 +652,6 @@ export function TestDetailPage() {
               </Box>
             )}
 
-            {/* AI summary shown only when deep analysis is absent. */}
             {selectedTc.ai_summary && !selectedTc.ai_analysis && (
               <Stack
                 direction="row"
@@ -711,7 +681,6 @@ export function TestDetailPage() {
         </>
       )}
 
-      {/* When a run is selected but the test was absent. */}
       {selectedRun && !selectedTc && (
         <Panel component="section" sx={{ borderRadius: "12px", p: 4, textAlign: "center" }}>
           <Typography color="text.secondary">

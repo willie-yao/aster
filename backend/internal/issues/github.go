@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/textutil"
 )
 
 // defaultAPIBase is the GitHub REST API root. Overridable per-client so tests
@@ -77,7 +79,7 @@ func (c *Client) SearchOpenIssue(ctx context.Context, queryToken, confirmMarker 
 		return 0, "", false, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return 0, "", false, fmt.Errorf("search issues: %s: %s", resp.Status, truncate(string(rb), 300))
+		return 0, "", false, fmt.Errorf("search issues: %s: %s", resp.Status, textutil.Truncate(string(rb), 300))
 	}
 	var out struct {
 		Items []struct {
@@ -109,7 +111,7 @@ func (c *Client) CreateIssue(ctx context.Context, title, body string, labels []s
 		return 0, "", err
 	}
 	if resp.StatusCode != http.StatusCreated {
-		return 0, "", fmt.Errorf("create issue: %s: %s", resp.Status, truncate(string(rb), 300))
+		return 0, "", fmt.Errorf("create issue: %s: %s", resp.Status, textutil.Truncate(string(rb), 300))
 	}
 	var out struct {
 		Number  int    `json:"number"`
@@ -130,7 +132,7 @@ func (c *Client) CommentIssue(ctx context.Context, number int, body string) erro
 		return err
 	}
 	if resp.StatusCode != http.StatusCreated {
-		return fmt.Errorf("comment issue #%d: %s: %s", number, resp.Status, truncate(string(rb), 300))
+		return fmt.Errorf("comment issue #%d: %s: %s", number, resp.Status, textutil.Truncate(string(rb), 300))
 	}
 	return nil
 }
@@ -144,14 +146,7 @@ func (c *Client) CloseIssue(ctx context.Context, number int) error {
 		return err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("close issue #%d: %s: %s", number, resp.Status, truncate(string(rb), 300))
+		return fmt.Errorf("close issue #%d: %s: %s", number, resp.Status, textutil.Truncate(string(rb), 300))
 	}
 	return nil
-}
-
-func truncate(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max] + "…"
 }

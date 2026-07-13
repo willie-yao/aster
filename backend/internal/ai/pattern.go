@@ -16,6 +16,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/repotree"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/textutil"
 )
 
 // patternPromptVersion is bumped when the pattern prompt or output contract
@@ -327,11 +328,7 @@ func patternCacheKey(module, jobID, subject, userPrompt, groundKey string) strin
 // clampPattern trims a field to max bytes so one verbose analysis can't blow
 // the pattern prompt budget.
 func clampPattern(s string, max int) string {
-	s = strings.TrimSpace(s)
-	if len(s) <= max {
-		return s
-	}
-	return s[:max] + "…"
+	return textutil.Truncate(strings.TrimSpace(s), max)
 }
 
 // patternPathRe matches repo-relative-looking file paths embedded in prose,

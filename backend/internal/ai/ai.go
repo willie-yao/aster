@@ -169,8 +169,6 @@ func modelsURLFor(chatURL string) (string, bool) {
 	return base + "/models", true
 }
 
-// ---------- Low-level API calls ----------
-
 // analysisResponse is the expected JSON structure from the analysis model.
 // Combines the headline summary, transient classification, and deep root-cause
 // fields in a single response so the list view and detail view always agree.
@@ -239,8 +237,6 @@ func firstSentence(s string) string {
 	return s
 }
 
-// ---------- API helper ----------
-
 // setRequestHeaders applies the standard headers and then merges any
 // user-supplied ExtraHeaders. Extras win on conflict so projects can
 // override the default Authorization scheme.
@@ -267,8 +263,6 @@ func isCopilotEndpoint(rawURL string) bool {
 	return strings.HasSuffix(u.Hostname(), "githubcopilot.com")
 }
 
-// ---------- Helpers ----------
-
 var whitespaceRe = regexp.MustCompile(`\s+`)
 
 func normalizeError(msg string) string {
@@ -279,21 +273,12 @@ func normalizeError(msg string) string {
 	return strings.TrimSpace(s)
 }
 
-func truncate(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max] + "..."
-}
-
 // extractJSON tries to pull a JSON object from text that may include markdown fences.
 func extractJSON(s string) string {
-	// Try to find JSON between ```json ... ``` fences.
 	re := regexp.MustCompile("(?s)```(?:json)?\\s*({.*?})\\s*```")
 	if m := re.FindStringSubmatch(s); len(m) > 1 {
 		return m[1]
 	}
-	// Try to find a bare JSON object.
 	start := strings.Index(s, "{")
 	end := strings.LastIndex(s, "}")
 	if start >= 0 && end > start {

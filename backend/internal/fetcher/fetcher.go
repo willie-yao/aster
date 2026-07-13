@@ -277,7 +277,6 @@ func (p *pipeline) refresh(ctx context.Context, jobs []models.ProwJob) (*refresh
 		log.Printf("Warning: %d jobs had fetch errors", len(fetchErrors))
 	}
 
-	// Aggregate job summaries.
 	now := time.Now().UTC()
 	dashboard := models.Dashboard{GeneratedAt: now}
 	var details []models.JobDetail
@@ -296,7 +295,6 @@ func (p *pipeline) refresh(ctx context.Context, jobs []models.ProwJob) (*refresh
 		})
 	}
 
-	// Build flakiness and search data keyed by JobID.
 	jobResultMap := make(map[string][]models.BuildResult, len(results))
 	for _, r := range results {
 		if r.job.Name == "" {
@@ -311,7 +309,6 @@ func (p *pipeline) refresh(ctx context.Context, jobs []models.ProwJob) (*refresh
 	searchIndex := aggregator.BuildSearchIndex(jobResultMap, jobs, now)
 	log.Printf("Search index: %d entries", len(searchIndex.Entries))
 
-	// Run AI failure analysis when enabled.
 	if p.enableAI {
 		analyzeFailuresWithAI(ctx, cfg, details, flakinessReport, p.aiToken, opts.OutDir, p.aiSystemPrompt, p.aiSkillSet)
 		// Assign stable IDs so the frontend and actions API can address a
@@ -359,7 +356,6 @@ func (p *pipeline) runSideEffects(ctx context.Context, res *refreshResult) {
 	details := res.details
 	flakinessReport := res.flakiness
 
-	// Send Slack notifications for persistent failures when configured.
 	if slackWebhookURL := os.Getenv("SLACK_WEBHOOK_URL"); slackWebhookURL != "" {
 		notifier := notify.NewNotifier(
 			slackWebhookURL,
@@ -380,16 +376,12 @@ func (p *pipeline) runSideEffects(ctx context.Context, res *refreshResult) {
 		log.Println("Notifications: skipped (no SLACK_WEBHOOK_URL)")
 	}
 
-	// Auto-file GitHub issues when enabled and ISSUE_TOKEN is present.
 	processIssues(ctx, cfg, flakinessReport, details, p.aiToken, p.enableAI, opts.OutDir)
 
-	// Draft skill-recipe PRs when enabled, AI ran, and SKILL_TOKEN is present.
 	if p.enableAI {
 		processSkillSuggestions(ctx, cfg, flakinessReport.RecurringPatterns, p.aiSkillSet, p.aiToken, opts.OutDir)
 	}
 
-	// Draft fix PRs against the source repo when enabled, AI ran, and FIX_TOKEN
-	// is present.
 	if p.enableAI {
 		processFixPRs(ctx, cfg, flakinessReport.RecurringPatterns, p.aiToken, opts.OutDir)
 	}

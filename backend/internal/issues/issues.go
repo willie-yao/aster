@@ -205,7 +205,7 @@ func (m *Manager) Reconcile(ctx context.Context, specs []IssueSpec) (Stats, erro
 
 	for key, spec := range current {
 		if _, tracked := m.state.Tracked[key]; tracked {
-			continue // already has an issue
+			continue
 		}
 		// Local state doesn't know this finding: it may still have an open
 		// issue from a prior run whose state was lost. Search before creating.

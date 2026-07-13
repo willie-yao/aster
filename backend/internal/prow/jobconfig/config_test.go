@@ -43,7 +43,6 @@ func TestParsePeriodics(t *testing.T) {
 		t.Fatalf("expected 3 jobs, got %d", got)
 	}
 
-	// Verify the first job fully.
 	j := jobs[0]
 	assertEqual(t, "Name", j.Name, "periodic-cluster-api-provider-azure-conformance-main")
 	assertEqual(t, "TabName", j.TabName, "capz-periodic-conformance-main")
@@ -57,12 +56,10 @@ func TestParsePeriodics(t *testing.T) {
 	assertEqual(t, "Repo", j.Repo, "")
 	assertEqual(t, "JobID", j.JobID, "periodic-cluster-api-provider-azure-conformance-main")
 
-	// Second job: e2e maps to the generic "e2e" category.
 	assertEqual(t, "jobs[1].Category", jobs[1].Category, "e2e")
 	assertEqual(t, "jobs[1].MinimumInterval", jobs[1].MinimumInterval, "24h")
 	assertEqual(t, "jobs[1].Timeout", jobs[1].Timeout, "3h")
 
-	// Third job: coverage category.
 	assertEqual(t, "jobs[2].Category", jobs[2].Category, "coverage")
 }
 

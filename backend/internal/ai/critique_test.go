@@ -212,8 +212,6 @@ func TestCritiqueDraft_EmptySuggestedFixPasses(t *testing.T) {
 	}
 }
 
-// --- Hallucination + import-path checks ---
-
 // TestNormalizeArtifactCitation covers the shared citation-cleaning rules used
 // by read tracking and unread-citation detection.
 func TestNormalizeArtifactCitation(t *testing.T) {
@@ -287,7 +285,6 @@ func TestFindUnreadArtifactCitations(t *testing.T) {
 		got := findUnreadArtifactCitations(
 			"checked started.json and build-log.txt and prowjob.json",
 			map[string]bool{}, map[string]bool{})
-		// All three should be flagged; order preserved.
 		if len(got) != 3 {
 			t.Errorf("expected 3 unread, got %v", got)
 		}
@@ -384,8 +381,6 @@ func TestCritiqueDraft_CitesRealReleaseURL_Passes(t *testing.T) {
 		t.Fatalf("draft citing a real release URL should pass, got: %+v", out)
 	}
 }
-
-// ---------- Skill-driven missing-evidence tests ----------
 
 // loadSkillsForTest writes the given recipes into a temp dir and loads
 // them via skills.Load. Returns the loaded set; fails the test on any
@@ -535,7 +530,6 @@ required_evidence:
 		t.Errorf("Feedback should mention missing group: %s", out.Feedback)
 	}
 	if strings.Contains(out.Feedback, "cert-config") {
-		// Satisfied groups should not be surfaced.
 		t.Errorf("Feedback unexpectedly mentions satisfied group cert-config: %s", out.Feedback)
 	}
 }
@@ -586,7 +580,6 @@ required_evidence:
 	if got := len(out.MissingSkillEvidence); got != 2 {
 		t.Fatalf("expected 2 skill misses, got %d", got)
 	}
-	// MissingEvidenceCount should sum per-recipe.
 	if c := out.MissingEvidenceCount(); c != 2 {
 		t.Errorf("MissingEvidenceCount = %d, want 2", c)
 	}
@@ -632,7 +625,6 @@ required_evidence:
 		t.Errorf("expected MissingSkillEvidence non-empty (cert-config unread)")
 	}
 
-	// All three sections should appear in feedback.
 	for _, marker := range []string{
 		"diagnostic / information-gathering",     // punt section
 		"tool log shows no read_artifact",        // unread section
@@ -643,8 +635,6 @@ required_evidence:
 		}
 	}
 }
-
-// ---------- Skill-evidence absence pruning ----------
 
 // skillMissOutcome builds a critiqueOutcome with one unsatisfied required-
 // evidence group, the input pruneAbsentSkillEvidence operates on.

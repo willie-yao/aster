@@ -35,8 +35,6 @@ func Register(r *tools.Registry) {
 	r.Register(&findTool{})
 }
 
-// ---------- list_artifacts ----------
-
 type listTool struct{}
 
 func (*listTool) Name() string  { return "list_artifacts" }
@@ -86,8 +84,6 @@ func (*listTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 	}
 	return tools.Result{Payload: payload}
 }
-
-// ---------- read_artifact ----------
 
 type readTool struct{}
 
@@ -144,8 +140,6 @@ func (*readTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 	}
 }
 
-// ---------- tail_artifact ----------
-
 type tailTool struct{}
 
 func (*tailTool) Name() string  { return "tail_artifact" }
@@ -201,8 +195,6 @@ func (*tailTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 		},
 	}
 }
-
-// ---------- grep_artifact ----------
 
 type grepTool struct{}
 
@@ -277,8 +269,6 @@ func (*grepTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 		},
 	}
 }
-
-// ---------- find_artifacts ----------
 
 type findTool struct{}
 

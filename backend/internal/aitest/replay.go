@@ -17,6 +17,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/textutil"
 )
 
 // volatileToolFields are envelope keys the agentic loop stamps onto every tool
@@ -203,7 +205,7 @@ func (rs *ReplayServer) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Replay miss: surface the unmatched request so fixtures can be updated.
-	rs.t.Errorf("aitest: no recorded response for fingerprint %s; request head: %s", fp, truncate(body, 400))
+	rs.t.Errorf("aitest: no recorded response for fingerprint %s; request head: %s", fp, textutil.Truncate(string(body), 400))
 	http.Error(w, "aitest: no recorded response", http.StatusInternalServerError)
 }
 
@@ -291,11 +293,4 @@ func (rs *ReplayServer) writeFixture(fp string, data []byte) error {
 		return err
 	}
 	return os.Rename(tmpName, final)
-}
-
-func truncate(b []byte, n int) string {
-	if len(b) <= n {
-		return string(b)
-	}
-	return string(b[:n]) + "..."
 }

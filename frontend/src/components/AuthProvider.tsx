@@ -14,7 +14,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const mode = auth?.mode ?? null;
   const loginUrl = auth?.login_url;
 
-  // oauth holds the fetched session result; only meaningful in oauth mode.
   const [oauth, setOAuth] = useState<{ status: "loading" | "anonymous" | "authenticated"; login: string | null }>({
     status: "loading",
     login: null,
@@ -48,7 +47,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setOAuth({ status: "anonymous", login: null });
   }, []);
 
-  // Derive the exposed state from capabilities and the oauth fetch.
   let status: AuthStatus;
   let login: string | null = null;
   if (!actionsAvailable) {

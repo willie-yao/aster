@@ -33,7 +33,6 @@ func TestStateSaveLoad(t *testing.T) {
 		t.Fatalf("SaveState: %v", err)
 	}
 
-	// Reload from disk.
 	n2 := NewNotifier("http://example.com", stateFile, "https://dash.example.com", "https://prow.example.com/view/")
 	if len(n2.state.Notified) != 1 {
 		t.Fatalf("expected 1 notified entry, got %d", len(n2.state.Notified))
@@ -99,7 +98,6 @@ func TestNewPersistentFailureDetection(t *testing.T) {
 		t.Fatalf("expected 1 webhook call, got %d", len(received))
 	}
 
-	// Verify state was updated.
 	nf, ok := n.state.Notified["my-job::TestSomething"]
 	if !ok {
 		t.Fatal("expected state entry for my-job::TestSomething")
@@ -122,7 +120,6 @@ func TestRecoveryDetection(t *testing.T) {
 	dir := t.TempDir()
 	stateFile := filepath.Join(dir, "state.json")
 
-	// Pre-populate state with a notified failure.
 	n := NewNotifier(srv.URL, stateFile, "https://dash.example.com", "https://prow.example.com/view/")
 	n.state.Notified["my-job::TestRecovered"] = NotifiedFailure{
 		FirstNotifiedAt:  "2024-01-01T00:00:00Z",
@@ -278,13 +275,11 @@ func TestWebhookPOSTFormat(t *testing.T) {
 		t.Fatalf("ProcessFailures: %v", err)
 	}
 
-	// Validate Slack Block Kit structure.
 	blocks, ok := receivedBody["blocks"].([]interface{})
 	if !ok || len(blocks) == 0 {
 		t.Fatal("expected blocks array")
 	}
 
-	// First block should be a header with failure text.
 	header := blocks[0].(map[string]interface{})
 	if header["type"] != "header" {
 		t.Fatalf("expected header type, got %v", header["type"])
@@ -294,7 +289,6 @@ func TestWebhookPOSTFormat(t *testing.T) {
 		t.Fatalf("expected failure header, got %v", headerText["text"])
 	}
 
-	// Verify blocks contain action buttons
 	raw, _ := json.Marshal(receivedBody)
 	rawStr := string(raw)
 	if !contains(rawStr, "View on Dashboard") {
@@ -413,7 +407,6 @@ func TestAILookup(t *testing.T) {
 		t.Fatalf("ProcessFailures: %v", err)
 	}
 
-	// Verify the AI root cause appears in the card.
 	raw, _ := json.Marshal(receivedBody)
 	body := string(raw)
 	if !contains(body, "Azure VM provisioning delay") {
@@ -462,7 +455,6 @@ func TestStateFileRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	stateFile := filepath.Join(dir, "state.json")
 
-	// Write state manually.
 	state := NotificationState{
 		Notified: map[string]NotifiedFailure{
 			"j1::t1": {
@@ -482,7 +474,6 @@ func TestStateFileRoundTrip(t *testing.T) {
 		t.Fatalf("expected 1 entry, got %d", len(n.state.Notified))
 	}
 
-	// Modify and save.
 	n.state.Notified["j2::t2"] = NotifiedFailure{
 		ErrorHash: "new",
 		JobName:   "j2",
@@ -492,7 +483,6 @@ func TestStateFileRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Reload.
 	n2 := NewNotifier("", stateFile, "https://dash.example.com", "https://prow.example.com/view/")
 	if len(n2.state.Notified) != 2 {
 		t.Fatalf("expected 2 entries, got %d", len(n2.state.Notified))

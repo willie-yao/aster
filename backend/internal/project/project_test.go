@@ -103,7 +103,6 @@ branding:
 }
 
 func TestParseRejectsLegacySourcePaths(t *testing.T) {
-	// Legacy source path fields must fail strict YAML parsing with a clear error.
 	const legacy = `
 id: x
 name: x
@@ -541,8 +540,6 @@ func agenticEqual(a, b Agentic) bool {
 		a.SingleToolCall == b.SingleToolCall &&
 		equalStrings(a.Tools, b.Tools)
 }
-
-// ---------- analysis concurrency ----------
 
 func TestAnalysisConcurrency_DefaultsToOne(t *testing.T) {
 	c := validConfig()

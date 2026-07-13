@@ -53,7 +53,6 @@ func TestAgentic_SemanticJudge_ObjectsThenReprompts(t *testing.T) {
 	// unread citations) but is semantically shallow.
 	shallow := `{"summary":"flake","is_transient":false,"root_cause":"the PR broke it","severity":"High","suggested_fix":"revert kustomize/cluster-template.yaml line 5","relevant_files":[]}`
 	srv.push(200, chatRespFinal(shallow))
-	// The semantic judge objects.
 	srv.push(200, chatRespFinal(`{"objections":["root_cause blames the PR without evidence; check the cluster network config"]}`))
 	// Round 2: after the objection, a corrected final.
 	corrected := `{"summary":"deep","is_transient":false,"root_cause":"control-plane subnet route table missing","severity":"High","suggested_fix":"set the control-plane subnet route table in kustomize/cluster-template.yaml line 5","relevant_files":[]}`
@@ -79,7 +78,6 @@ func TestAgentic_SemanticJudge_ObjectsThenReprompts(t *testing.T) {
 	if !strings.Contains(analysis.RootCause, "route table") {
 		t.Errorf("expected corrected root cause, got %q", analysis.RootCause)
 	}
-	// draft + judge + corrected = 3 calls.
 	if got := atomic.LoadInt32(&srv.calls); got != 3 {
 		t.Errorf("call count = %d, want 3 (draft + judge + corrected)", got)
 	}
@@ -91,7 +89,6 @@ func TestAgentic_SemanticJudge_ObjectsThenReprompts(t *testing.T) {
 func TestApplySemanticJudgePostLoop_RefinalizesOnObjection(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	// Judge objects, then the refinalize returns a clean draft.
 	srv.push(200, chatRespFinal(`{"objections":["blames the PR without checking the network config"]}`))
 	srv.push(200, chatRespFinal(`{"summary":"deep","is_transient":false,"root_cause":"control-plane subnet route table missing","severity":"High","suggested_fix":"set the route table in kustomize/cluster-template.yaml line 5","relevant_files":[]}`))
 	client := newAgenticTestClient(t, srv.URL)

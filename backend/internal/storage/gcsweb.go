@@ -285,7 +285,6 @@ func (b *gcswebBackend) List(ctx context.Context, prefix string) (*Listing, erro
 		if child == "" || seen[child] {
 			continue
 		}
-		// Immediate children only.
 		trimmed := strings.TrimSuffix(child, "/")
 		if strings.Contains(trimmed, "/") {
 			continue

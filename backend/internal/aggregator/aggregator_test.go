@@ -54,8 +54,6 @@ func hoursAgo(h int) time.Time {
 	return baseTime.Add(-time.Duration(h) * time.Hour)
 }
 
-// ---------- ComputeJobSummary tests ----------
-
 func TestComputeJobSummary_AllPassing(t *testing.T) {
 	job := models.ProwJob{Name: "job-pass", Category: "e2e"}
 	runs := []models.BuildResult{
@@ -238,8 +236,6 @@ func TestComputeJobSummary_RecentRunsCapped(t *testing.T) {
 	}
 }
 
-// ---------- BuildRunSummary tests ----------
-
 func TestBuildRunSummary(t *testing.T) {
 	br := makeBuild("42", baseTime, true, []models.TestCase{
 		{Name: "t1", Status: "passed", DurationSeconds: 1.0},
@@ -261,8 +257,6 @@ func TestBuildRunSummary(t *testing.T) {
 		t.Errorf("test counts wrong: total=%d passed=%d failed=%d", rs.TestsTotal, rs.TestsPassed, rs.TestsFailed)
 	}
 }
-
-// ---------- ClassifyFailure tests ----------
 
 func makeTestCase(name, status, failMsg string) models.TestCase {
 	return models.TestCase{
@@ -339,8 +333,6 @@ func TestClassifyFailure_LatestPasses(t *testing.T) {
 	}
 }
 
-// ---------- NormalizeErrorMessage tests ----------
-
 func TestNormalizeErrorMessage_Timestamps(t *testing.T) {
 	msg := "failed at 2026-03-15T10:30:00Z with error"
 	got := NormalizeErrorMessage(msg)
@@ -377,8 +369,6 @@ func TestNormalizeErrorMessage_Combined(t *testing.T) {
 		t.Errorf("expected same normalized form, got %q vs %q", n1, n2)
 	}
 }
-
-// ---------- HashError tests ----------
 
 func TestHashError_SameInput(t *testing.T) {
 	h1 := HashError("some error message")

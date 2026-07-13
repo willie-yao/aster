@@ -6,17 +6,13 @@ import Typography from "@mui/material/Typography";
 import { Link as RouterLink } from "react-router-dom";
 import { Insights } from "@mui/icons-material";
 import type { PatternAnalysis } from "../types/dashboard";
+import { confidenceColor } from "../lib/utils";
 import { RichText } from "./RichText";
 import { LabeledBlock } from "./LabeledBlock";
 import { FailureActions } from "./FailureActions";
 import { useResolved } from "../hooks/useData";
 import { soft } from "../theme";
 
-/**
- * PatternBanner surfaces job-level cross-build correlation. It distinguishes a
- * shared root cause from independent failures and renders only when
- * ai.pattern_analysis produced a verdict.
- */
 export function PatternBanner({
   pattern,
   jobID,
@@ -25,12 +21,7 @@ export function PatternBanner({
   jobID?: string;
 }) {
   const color = pattern.systemic ? "warning" : "success";
-  const confColor =
-    pattern.confidence === "high"
-      ? color
-      : pattern.confidence === "medium"
-        ? "warning"
-        : undefined;
+  const confColor = confidenceColor(pattern.confidence, color);
 
   const { data: resolved } = useResolved();
   const resolvedEntry = pattern.id ? resolved.resolved[pattern.id] : undefined;

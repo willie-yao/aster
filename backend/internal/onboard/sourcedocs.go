@@ -9,6 +9,8 @@ import (
 	"path"
 	"sort"
 	"strings"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/textutil"
 )
 
 // Doc bounds for grounding generation: keep the prompt budget sane while still
@@ -195,14 +197,7 @@ func ghJSON(ctx context.Context, client *http.Client, url, token string, out any
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("GET %s: %s: %s", url, resp.Status, truncate(string(body), 200))
+		return fmt.Errorf("GET %s: %s: %s", url, resp.Status, textutil.Truncate(string(body), 200))
 	}
 	return json.Unmarshal(body, out)
-}
-
-func truncate(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max] + "…"
 }

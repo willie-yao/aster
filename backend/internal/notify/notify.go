@@ -16,6 +16,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/redact"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/textutil"
 )
 
 // NotificationState tracks which persistent failures have been notified.
@@ -209,19 +210,12 @@ func lookupAI(lookup map[string]aiEntry, jobID, testName string) (summary, rootC
 	return "", ""
 }
 
-func truncate(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max] + "…"
-}
-
 // sendFailureAlert posts a failure notification to the Slack webhook.
 func (n *Notifier) sendFailureAlert(ctx context.Context, tf models.TestFlakiness, aiSummary, aiRootCause string) error {
 	failureMsg := ""
 	prowURL := ""
 	if tf.LastFailure != nil {
-		failureMsg = truncate(tf.LastFailure.FailureMessage, 200)
+		failureMsg = textutil.Truncate(tf.LastFailure.FailureMessage, 200)
 		if tf.LastFailure.BuildID != "" {
 			prowURL = n.prowURLBase + tf.JobName + "/" + tf.LastFailure.BuildID
 		}
@@ -264,7 +258,7 @@ func (n *Notifier) sendFailureAlert(ctx context.Context, tf models.TestFlakiness
 
 	blocks = append(blocks, map[string]interface{}{
 		"type": "section",
-		"text": map[string]string{"type": "mrkdwn", "text": fmt.Sprintf("*🤖 AI Analysis:*\n%s", truncate(aiText, 500))},
+		"text": map[string]string{"type": "mrkdwn", "text": fmt.Sprintf("*🤖 AI Analysis:*\n%s", textutil.Truncate(aiText, 500))},
 	})
 
 	linkParts := []string{fmt.Sprintf("<%s|View on Dashboard>", dashboardURL)}

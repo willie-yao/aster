@@ -23,7 +23,6 @@ import (
 var version = "dev"
 
 func main() {
-	// Dispatch the only subcommand before parsing pipeline flags.
 	if len(os.Args) > 1 && os.Args[1] == "onboard" {
 		runOnboard(os.Args[2:])
 		return

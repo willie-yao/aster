@@ -213,11 +213,9 @@ func TestBuildSearchIndex_SortOrder(t *testing.T) {
 
 	idx := BuildSearchIndex(jobResults, jobs, searchBaseTime)
 
-	// 2 job entries plus 3 test entries.
 	if len(idx.Entries) != 5 {
 		t.Fatalf("expected 5 entries, got %d", len(idx.Entries))
 	}
-	// Filter to test entries only for sort order checks.
 	var testEntries []models.SearchEntry
 	for _, e := range idx.Entries {
 		if e.Kind == "test" {

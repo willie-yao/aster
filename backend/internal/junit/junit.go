@@ -65,7 +65,6 @@ var knownRepos = map[string]string{
 // knows which file the data came from. Multi-JUnit builds rely on JUnitFile to
 // disambiguate same-named cases across shards and suites.
 func Parse(data []byte) ([]models.TestCase, error) {
-	// Try parsing as <testsuites> first.
 	var suites xmlTestSuites
 	if err := xml.Unmarshal(data, &suites); err == nil && len(suites.TestSuites) > 0 {
 		return convertSuites(suites.TestSuites), nil
@@ -147,14 +146,12 @@ func ExtractFailureLocation(failureBody string) (location string, url string) {
 	filePath := matches[3]   // example: /framework/controlplane_helpers.go
 	line := matches[4]       // example: 115
 
-	// Reconstruct the raw location string.
 	location = modulePath
 	if version != "" {
 		location += "@" + version
 	}
 	location += filePath + ":" + line
 
-	// Find the GitHub repo for this module path, using the longest matching prefix.
 	var ghRepo string
 	var subPath string
 	var bestLen int
@@ -174,7 +171,6 @@ func ExtractFailureLocation(failureBody string) (location string, url string) {
 		ref = version
 	}
 
-	// Build the full path from the module subpath and regex file path.
 	fullPath := subPath + filePath // example: /test/framework/controlplane_helpers.go
 	fullPath = strings.TrimPrefix(fullPath, "/")
 

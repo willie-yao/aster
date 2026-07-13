@@ -23,8 +23,6 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 )
 
-// ---------- Test scaffolding ----------
-
 // newTestRegistry returns a filesystem registry so tests hit real dispatch.
 // K8s tools are omitted because fakeBrowser does not model discovery paths.
 func newTestRegistry(t *testing.T) (*tools.Registry, []string) {
@@ -244,8 +242,6 @@ func shrinkCallDelay(t *testing.T) {
 	t.Cleanup(func() { callDelay = old })
 }
 
-// ---------- Tests ----------
-
 func TestAgentic_HappyPath_ToolThenFinalJSON(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
@@ -279,7 +275,6 @@ func TestAgentic_HappyPath_ToolThenFinalJSON(t *testing.T) {
 	if atomic.LoadInt32(&srv.calls) != 2 {
 		t.Errorf("call count = %d, want 2", srv.calls)
 	}
-	// Telemetry records one tool call, echoed model bytes, elapsed time, and no cache hit.
 	if analysis.ToolCalls != 1 {
 		t.Errorf("tool_calls = %d, want 1", analysis.ToolCalls)
 	}
@@ -307,7 +302,6 @@ func TestAgentic_CacheHit(t *testing.T) {
 	if _, _, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), "agentic:test:cached", "sys", "user"); err != nil {
 		t.Fatalf("first call: %v", err)
 	}
-	// Second call hits cache and does not increment server calls.
 	_, a2, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), "agentic:test:cached", "sys", "user")
 	if err != nil {
 		t.Fatalf("second call: %v", err)
@@ -423,7 +417,6 @@ func TestAgentic_BudgetExhausted_SynthesizesFallback(t *testing.T) {
 	if analysis.Mode != AgenticMode {
 		t.Errorf("mode = %q", analysis.Mode)
 	}
-	// Fallbacks are not cached; retry should hit the server again.
 	srv.push(200, chatRespFinal("still not json"))
 	srv.push(200, chatRespFinal("still not json"))
 	before := atomic.LoadInt32(&srv.calls)
@@ -480,8 +473,6 @@ func TestTryParseAnalysis(t *testing.T) {
 	}
 }
 
-// ---------- MinToolCalls floor ----------
-
 // TestAgentic_MinToolCalls_NudgeForcesInvestigation verifies a tools-free final
 // is rejected until the min-tool-call floor is met.
 func TestAgentic_MinToolCalls_NudgeForcesInvestigation(t *testing.T) {
@@ -522,7 +513,6 @@ func TestAgentic_MinToolCalls_NudgeForcesInvestigation(t *testing.T) {
 		t.Errorf("tool_calls = %d, want 1", analysis.ToolCalls)
 	}
 
-	// Floor is met, so the second call hits cache and skips the server.
 	_, _, err = client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), "agentic:test:nudge1", "sys", "user")
 	if err != nil {
 		t.Fatalf("second call: %v", err)
@@ -565,8 +555,6 @@ func TestAgentic_MinToolCalls_RejectedFinalNotReusedAfterMaxIters(t *testing.T) 
 		t.Errorf("expected finalize-round output, got %q", summary.Summary)
 	}
 }
-
-// ---------- MinGCSBytes floor ----------
 
 // bigPayload returns deterministic bytes for MinGCSBytes floor tests.
 func bigPayload(n int) []byte {
@@ -616,7 +604,6 @@ func TestAgentic_MinGCSBytes_NudgeForcesMoreReading(t *testing.T) {
 		t.Errorf("call count = %d, want 4 (list + premature final + read + final)", got)
 	}
 
-	// Floor is met; re-run hits cache.
 	_, _, err = client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), "agentic:test:gcsnudge", "sys", "user")
 	if err != nil {
 		t.Fatalf("second call: %v", err)
@@ -769,8 +756,6 @@ func TestResponseFormatFooter_DepthAnchors(t *testing.T) {
 	}
 }
 
-// ---------- Critique gate ----------
-//
 // A "punt-shaped" suggested_fix is a diagnostic / information-gathering
 // TODO list ("Check X. Verify Y. Investigate Z.") instead of a concrete
 // remediation. Critique catches this pattern and re-prompts the model.
@@ -985,7 +970,6 @@ func TestAgentic_Critique_RetryAllowsToolCallThenFinal(t *testing.T) {
 // TestCritiqueDraft_FeedbackTruncatesLongFix verifies long quoted fixes are
 // truncated while matched phrases remain listed.
 func TestCritiqueDraft_FeedbackTruncatesLongFix(t *testing.T) {
-	// Build a long fix that triggers the punt regex.
 	prefix := "Check the AzureMachine status. "
 	long := prefix + strings.Repeat("Additional details and context. ", 200)
 	if len(long) <= feedbackQuoteLimit {
@@ -1006,8 +990,6 @@ func TestCritiqueDraft_FeedbackTruncatesLongFix(t *testing.T) {
 		t.Errorf("Feedback unexpectedly long: %d chars (limit ~%d)", got, feedbackQuoteLimit+3000)
 	}
 }
-
-// --- Hallucination + import-path integration tests ---
 
 // hallucinatedFinalJSON has a clean suggested_fix but cites unread manager.log.
 const hallucinatedFinalJSON = `{"summary":"deep","is_transient":false,"root_cause":"manager.log shows the controller failed to reconcile the AzureMachine","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 142 to match the staging vnet peering name; reapply.","relevant_files":[]}`
@@ -1233,8 +1215,6 @@ required_evidence:
 	}
 }
 
-// ---------- SingleToolCall ----------
-
 func TestLimitToolCalls(t *testing.T) {
 	three := []agToolCall{{ID: "a"}, {ID: "b"}, {ID: "c"}}
 	t.Run("disabled passes through", func(t *testing.T) {
@@ -1283,7 +1263,6 @@ func TestAgentic_SingleToolCall_EchoesOneToolCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("doAnalyzeAgentic: %v", err)
 	}
-	// Only the first tool call should have been dispatched.
 	if analysis.ToolCalls != 1 {
 		t.Errorf("tool_calls = %d, want 1 (second parallel call dropped)", analysis.ToolCalls)
 	}
@@ -1369,8 +1348,6 @@ func countAssistantToolCalls(t *testing.T, body []byte) int {
 	}
 	return n
 }
-
-// ---------- Evidence injection ----------
 
 // TestAgentic_EvidenceInjection_FetchesCitedUnreadArtifact verifies that when
 // a critique-failing draft cites an artifact it never read, the critique retry
@@ -1564,8 +1541,6 @@ func TestResolveEvidenceByWalk_BoundedAndMultiTarget(t *testing.T) {
 	}
 }
 
-// ---------- Artifact-tree seed ----------
-
 // TestAgentic_SeedArtifactTree_InjectsPaths verifies that the build's
 // artifact path list is always prepended to the task prompt so the model
 // sees exact paths up front.
@@ -1638,7 +1613,6 @@ func TestAgentic_SeedArtifactTree_ByteCapped(t *testing.T) {
 		files[p] = []byte("y")
 	}
 	browser := &fakeBrowser{files: files}
-	// ModelByteBudget 20000 yields artifactTreeSeedBytes = 15% = 3000 bytes.
 	opts := AgenticOptions{MaxIters: 3, ModelByteBudget: 20_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}
 
 	_, _, err := client.doAnalyzeAgentic(context.Background(),
@@ -1660,10 +1634,6 @@ func TestAgentic_SeedArtifactTree_ByteCapped(t *testing.T) {
 	}
 }
 
-// TestAgentic_SkillEvidenceAbsentFromBuild_StillCaches verifies the
-// skill-evidence absence fix: when a matched recipe requires evidence that
-// does not exist anywhere in the build's artifact tree, the recipe is
-// inapplicable and must not block caching of an otherwise-clean draft.
 func TestAgentic_SkillEvidenceAbsentFromBuild_StillCaches(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)

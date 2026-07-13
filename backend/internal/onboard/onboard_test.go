@@ -7,8 +7,6 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 )
 
-// ---------- category inference ----------
-
 func TestInferCategories_GroupsAndOrders(t *testing.T) {
 	jobs := []string{
 		"periodic-capz-e2e-aks-main",
@@ -136,8 +134,6 @@ func TestLabelFor(t *testing.T) {
 	}
 }
 
-// ---------- scaffold rendering + validation ----------
-
 func testOpts() Options {
 	return Options{
 		TestGrid:      "my-dashboard",
@@ -159,7 +155,6 @@ func TestRenderProjectYAML_ValidatesForTestGrid(t *testing.T) {
 	if err := validateGeneratedYAML(yamlText); err != nil {
 		t.Fatalf("generated yaml failed validation: %v\n---\n%s", err, yamlText)
 	}
-	// Spot-check derived fields.
 	for _, want := range []string{
 		`dashboard: "my-dashboard"`,
 		`provider: gcs`,
@@ -173,7 +168,6 @@ func TestRenderProjectYAML_ValidatesForTestGrid(t *testing.T) {
 			t.Errorf("project.yaml missing %q\n---\n%s", want, yamlText)
 		}
 	}
-	// id derived from the dashboard repo with the dashboard suffix stripped.
 	if !strings.Contains(yamlText, "id: my-proj") {
 		t.Errorf("expected id my-proj derived from repo name\n%s", yamlText)
 	}
@@ -205,7 +199,6 @@ func TestRenderProjectYAML_ValidatesForBucketGCSWeb(t *testing.T) {
 			t.Errorf("bucket yaml missing %q\n---\n%s", want, yamlText)
 		}
 	}
-	// No categories block when none inferred.
 	if strings.Contains(yamlText, "categories:") {
 		t.Errorf("did not expect a categories block\n%s", yamlText)
 	}
@@ -221,8 +214,6 @@ func TestRenderProjectYAML_NoBlankLineRuns(t *testing.T) {
 		t.Errorf("found a run of blank lines:\n%s", yamlText)
 	}
 }
-
-// ---------- options validation ----------
 
 func TestValidateOptions(t *testing.T) {
 	cases := []struct {
@@ -321,7 +312,6 @@ func TestScaffold_LoadsViaLoadDir(t *testing.T) {
 		t.Error("prompt stub must be non-empty (LoadDir requires it)")
 	}
 
-	// Writing again into the same dir must refuse rather than clobber.
 	if err := writeFiles(dir, files); err == nil {
 		t.Error("expected writeFiles to refuse overwriting existing files")
 	}

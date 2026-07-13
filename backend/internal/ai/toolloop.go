@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/textutil"
 )
 
 // ToolLoopOptions tunes the generic tool loop. All fields are optional; a zero
@@ -154,7 +155,7 @@ func dispatchToolLoop(ctx context.Context, reg *tools.Registry, env *tools.Env, 
 		if _, hasErr := result.Payload["error"]; hasErr {
 			flag = "ERROR"
 		}
-		log.Printf("    🔧 %s(%s) [%s]", tc.Function.Name, truncate(tc.Function.Arguments, 140), flag)
+		log.Printf("    🔧 %s(%s) [%s]", tc.Function.Name, textutil.Truncate(tc.Function.Arguments, 140), flag)
 	}
 	out, _ := json.Marshal(result.Payload)
 	return capJSON(string(out))

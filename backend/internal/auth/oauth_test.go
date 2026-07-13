@@ -153,7 +153,6 @@ func TestBot_TrustedHeaderAllowlist(t *testing.T) {
 }
 
 func TestBot_FailsClosed(t *testing.T) {
-	// No trusted header configured -> reject (was previously authorize-all).
 	b := NewBotAuthenticator("", "bot-tok", nil, "")
 	if _, err := b.Authenticate(context.Background(), httptest.NewRequest("POST", "/", nil)); err == nil {
 		t.Error("empty header must fail closed")

@@ -26,7 +26,6 @@ func TestPrune_ReopensOnNewerFailingBuild(t *testing.T) {
 	s := &State{Resolved: map[string]Entry{
 		"a": {Watermark: "2069829458465918976"},
 	}}
-	// Same pattern now has a strictly newer failing build -> recurrence.
 	patterns := []models.PatternAnalysis{
 		pattern("a", "2069829458465918976", "2070999999999999999"),
 	}
@@ -43,7 +42,6 @@ func TestPrune_KeepsWhenNoNewerBuild(t *testing.T) {
 	s := &State{Resolved: map[string]Entry{
 		"a": {Watermark: "2069829458465918976"},
 	}}
-	// Only the same (or older) builds are present: still fixed.
 	patterns := []models.PatternAnalysis{
 		pattern("a", "2069829458465918976", "2065378387123245056"),
 	}
@@ -60,7 +58,6 @@ func TestPrune_KeepsWhenPatternAbsent(t *testing.T) {
 	s := &State{Resolved: map[string]Entry{
 		"a": {Watermark: "2069829458465918976"},
 	}}
-	// Pattern no longer present (aged out): keep the resolution.
 	out, changed := s.Prune([]models.PatternAnalysis{pattern("b", "1")})
 	if changed {
 		t.Fatal("expected changed=false when pattern absent")
@@ -97,7 +94,6 @@ func TestPrune_ReopensDespiteWhitespaceInNewerBuild(t *testing.T) {
 }
 
 func TestPrune_KeepsWhenOnlyUnparseableOlderContext(t *testing.T) {
-	// Valid watermark, current builds all older/equal: stays resolved.
 	s := &State{Resolved: map[string]Entry{"a": {Watermark: "250"}}}
 	out, changed := s.Prune([]models.PatternAnalysis{pattern("a", "100", "250")})
 	if changed || !out.IsResolved("a") {

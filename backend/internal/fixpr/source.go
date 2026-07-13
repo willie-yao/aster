@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/textutil"
 )
 
 // sourceReader fetches file content and lists the file tree of a GitHub repo at
@@ -66,7 +68,7 @@ func (s *httpSource) FileContent(ctx context.Context, owner, repo, ref, path str
 	}
 	rb, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return "", false, fmt.Errorf("reading %s: %s: %s", path, resp.Status, truncate(string(rb), 200))
+		return "", false, fmt.Errorf("reading %s: %s: %s", path, resp.Status, textutil.Truncate(string(rb), 200))
 	}
 	var out struct {
 		Content  string `json:"content"`
@@ -122,7 +124,7 @@ func (s *httpSource) ListTree(ctx context.Context, owner, repo, ref string) ([]s
 	defer resp.Body.Close()
 	rb, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("listing tree at %s: %s: %s", ref, resp.Status, truncate(string(rb), 200))
+		return nil, fmt.Errorf("listing tree at %s: %s: %s", ref, resp.Status, textutil.Truncate(string(rb), 200))
 	}
 	var out struct {
 		Tree []struct {
@@ -143,11 +145,4 @@ func (s *httpSource) ListTree(ctx context.Context, owner, repo, ref string) ([]s
 		}
 	}
 	return paths, nil
-}
-
-func truncate(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max] + "…"
 }

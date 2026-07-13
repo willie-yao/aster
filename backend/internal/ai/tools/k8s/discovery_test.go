@@ -209,7 +209,6 @@ func TestDiscoverControllersAllNamespaces(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Expect two capz-system controllers and one capi-system controller.
 	if len(controllers) != 3 {
 		t.Fatalf("expected 3 controllers, got %d: %+v", len(controllers), controllers)
 	}

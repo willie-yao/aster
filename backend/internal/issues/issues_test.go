@@ -180,8 +180,6 @@ func spec(key string) IssueSpec {
 	}
 }
 
-// ---------- Reconcile ----------
-
 func TestReconcile_CreatesNewIssue(t *testing.T) {
 	f := newFakeGitHub(t)
 	m := newTestManager(t, f, defaultOpts())
@@ -345,7 +343,6 @@ func TestState_RoundTrip(t *testing.T) {
 func TestState_DiscardedOnRepoChange(t *testing.T) {
 	f := newFakeGitHub(t)
 	path := filepath.Join(t.TempDir(), "s.json")
-	// Write state that belongs to a different repo.
 	prior := State{Repo: "other/repo", Tracked: map[string]TrackedIssue{
 		"pattern::job-a": {Number: 42},
 	}}
@@ -472,7 +469,7 @@ func TestBuildSpecs_TriggerSelection(t *testing.T) {
 }
 
 func TestMarker_StableAndKeyed(t *testing.T) {
-	if markerFor("a") != markerFor("a") {
+	if first, second := markerFor("a"), markerFor("a"); first != second {
 		t.Error("marker must be stable for the same key")
 	}
 	if markerFor("a") == markerFor("b") {

@@ -98,7 +98,6 @@ func TestReadRepoFile_RangeAndCache(t *testing.T) {
 		t.Errorf("reads = %d after cached read, want still 1", repo.reads)
 	}
 
-	// Offset/length slices the content.
 	sl := dispatch(t, tool, env, map[string]interface{}{"path": "config/dev.yaml", "offset": 10, "length": 6})
 	if sl["content"] != "1\nimag" {
 		t.Errorf("sliced content = %q, want \"1\\nimag\"", sl["content"])

@@ -74,7 +74,6 @@ func TestCompactMessages_ElidesOldestKeepsRecentAndPreamble(t *testing.T) {
 	if requestSizeEstimate(out, 0) > budget {
 		t.Fatalf("post-compaction estimate %d exceeds budget %d", requestSizeEstimate(out, 0), budget)
 	}
-	// System + task preserved verbatim.
 	if isStubbed(out[0].Content) || *out[0].Content != "system prompt" {
 		t.Errorf("system prompt must be preserved")
 	}
@@ -86,7 +85,6 @@ func TestCompactMessages_ElidesOldestKeepsRecentAndPreamble(t *testing.T) {
 	if last.Role != "tool" || isStubbed(last.Content) {
 		t.Errorf("most recent tool result should be kept verbatim, got stubbed=%v", isStubbed(last.Content))
 	}
-	// Oldest tool result should be stubbed.
 	if !isStubbed(out[3].Content) { // index 3 = first tool result
 		t.Errorf("oldest tool result should be stubbed")
 	}
@@ -134,7 +132,6 @@ func TestCompactMessages_FallsBackToRecentToolsThenReasoning(t *testing.T) {
 	if elided == 0 {
 		t.Fatal("expected aggressive compaction")
 	}
-	// All tool results should be stubbed when the budget is this tight.
 	for i := range out {
 		if out[i].Role == "tool" && !isStubbed(out[i].Content) {
 			t.Errorf("msg %d: tool result should be stubbed under a tight budget", i)

@@ -89,8 +89,6 @@ func (b *backendBrowser) cachePut(key string, body []byte) {
 
 func (b *backendBrowser) BuildRoot() string { return b.root }
 
-// ---------- List ----------
-
 func (b *backendBrowser) List(ctx context.Context, dir string) (*Listing, error) {
 	clean, err := SafePath(dir)
 	if err != nil {
@@ -110,16 +108,12 @@ func (b *backendBrowser) List(ctx context.Context, dir string) (*Listing, error)
 	return out, nil
 }
 
-// ---------- ListTree ----------
-
 func (b *backendBrowser) ListTree(ctx context.Context, maxPaths int) ([]string, bool, error) {
 	if maxPaths <= 0 {
 		return nil, false, nil
 	}
 	return b.backend.ListTree(ctx, b.prefix, maxPaths)
 }
-
-// ---------- Read ----------
 
 func (b *backendBrowser) Read(ctx context.Context, file string, offset, length int) ([]byte, int64, error) {
 	clean, err := SafePath(file)
@@ -159,8 +153,6 @@ func sliceCached(data []byte, offset, length int) []byte {
 	}
 	return data[offset:end]
 }
-
-// ---------- Tail ----------
 
 func (b *backendBrowser) Tail(ctx context.Context, file string, lines, maxBytes int) (*TailResult, error) {
 	clean, err := SafePath(file)
@@ -211,8 +203,6 @@ func tailFromBytes(data []byte, fileSize int64, lines, maxBytes int) *TailResult
 		Content:       out,
 	}
 }
-
-// ---------- Grep ----------
 
 func (b *backendBrowser) Grep(ctx context.Context, file string, re *regexp.Regexp, contextLines, maxMatches, maxLineLen int) (*GrepResult, error) {
 	clean, err := SafePath(file)

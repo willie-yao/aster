@@ -17,8 +17,6 @@ interface RichTextProps {
   fileCtx?: FileToUrlContext;
 }
 
-// Inline code uses a monospace pill and relative font size so it scales with
-// surrounding Typography.
 const codeSx = {
   fontFamily: "monospace",
   fontSize: "0.85em",
@@ -30,7 +28,6 @@ const codeSx = {
   wordBreak: "break-word",
 } as const;
 
-// A linked code span keeps the pill but reads as a link.
 const codeLinkSx = {
   ...codeSx,
   color: "primary.main",
@@ -48,11 +45,8 @@ const pathLinkSx = {
   "&:hover": { textDecorationColor: "inherit" },
 } as const;
 
-// Inline-code span splitter: capture groups land on odd indices.
 const CODE_SPLIT = /`([^`]+)`/g;
 
-// basename shortens linked paths to their final segment. The full path stays in
-// title and href.
 function basename(path: string): string {
   const i = path.lastIndexOf("/");
   return i >= 0 ? path.slice(i + 1) : path;

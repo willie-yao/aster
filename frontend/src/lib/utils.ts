@@ -1,4 +1,6 @@
-import type { JobSummary } from "../types/dashboard";
+import Box from "@mui/material/Box";
+import { createElement, type ElementType, type ReactElement } from "react";
+import type { JobSummary, PatternAnalysis } from "../types/dashboard";
 import type { CategoryRule } from "../types/manifest";
 
 export function formatDuration(seconds: number): string {
@@ -19,8 +21,24 @@ export function timeAgo(dateStr: string): string {
   return `${days} days ago`;
 }
 
+export function shortDate(dateStr: string): string {
+  const d = new Date(dateStr);
+  return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
 export function formatPercent(rate: number): string {
   return `${Math.round(rate * 100)}%`;
+}
+
+type ConfidenceColor = "success" | "warning";
+
+export function confidenceColor(
+  confidence: PatternAnalysis["confidence"],
+  highColor: ConfidenceColor = "warning",
+): ConfidenceColor | undefined {
+  if (confidence === "high") return highColor;
+  if (confidence === "medium") return "warning";
+  return undefined;
 }
 
 export function jobDataFilename(jobName: string): string {
@@ -138,6 +156,35 @@ export function shortTestName(name: string): string {
 export function shortJobName(name: string, shortNamePrefix: string): string {
   if (!shortNamePrefix) return name;
   return name.startsWith(shortNamePrefix) ? name.slice(shortNamePrefix.length) : name;
+}
+
+const goFileLineRe = /([a-zA-Z0-9_/.\-@]+\.go:\d+)/g;
+const stackTraceHighlightSx = { color: "primary.main" } as const;
+const StackTraceSpan = Box as ElementType;
+
+export function highlightStackTrace(body: string): (string | ReactElement)[] {
+  const parts: (string | ReactElement)[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  let key = 0;
+
+  while ((match = goFileLineRe.exec(body)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(body.slice(lastIndex, match.index));
+    }
+    parts.push(
+      createElement(
+        StackTraceSpan,
+        { component: "span", key: key++, sx: stackTraceHighlightSx },
+        match[1],
+      ),
+    );
+    lastIndex = match.index + match[0].length;
+  }
+  if (lastIndex < body.length) {
+    parts.push(body.slice(lastIndex));
+  }
+  return parts;
 }
 
 export interface FileToUrlContext {
