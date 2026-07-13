@@ -80,6 +80,10 @@ spec:
                   key: AUTH_PROXY_SECRET
             {{- end }}
             {{- end }}
+            {{- with $a.trustedOrigins }}
+            - name: TRUSTED_ORIGINS
+              value: {{ join "," . | quote }}
+            {{- end }}
             {{- if .Values.ai.enabled }}
             - name: AI_TOKEN
               valueFrom:

@@ -60,6 +60,12 @@ type Options struct {
 	AuthMode string
 	// LoginURL is where the frontend sends admins to sign in (oauth mode).
 	LoginURL string
+	// TrustedOrigins are extra public origins the CSRF guard accepts in addition
+	// to the request host, given as full origins ("https://host") or bare hosts.
+	// Needed when a reverse proxy (e.g. Azure Front Door) terminates the public
+	// hostname but forwards a different Host to this server, so the browser's
+	// Origin never equals r.Host. Empty keeps strict same-origin behavior.
+	TrustedOrigins []string
 }
 
 // Capabilities tells the frontend which deploy mode it is talking to and which
@@ -135,16 +141,18 @@ func Handler(opts Options) (http.Handler, error) {
 		if reg, ok := opts.Auth.(authRegistrar); ok {
 			reg.Register(mux)
 		}
+		trusted := trustedOriginSet(opts.TrustedOrigins)
+		guard := func(next http.Handler) http.Handler { return csrfGuard(trusted, next) }
 		mux.Handle("POST /api/failures/{id}/create-issue/preview",
-			auth.Middleware(opts.Auth, csrfGuard(previewHandler(timeout, opts.Actions.PreviewIssue))))
+			auth.Middleware(opts.Auth, guard(previewHandler(timeout, opts.Actions.PreviewIssue))))
 		mux.Handle("POST /api/failures/{id}/propose-fix/preview",
-			auth.Middleware(opts.Auth, csrfGuard(previewHandler(timeout, opts.Actions.PreviewFix))))
+			auth.Middleware(opts.Auth, guard(previewHandler(timeout, opts.Actions.PreviewFix))))
 		mux.Handle("POST /api/actions/confirm",
-			auth.Middleware(opts.Auth, csrfGuard(confirmHandler(timeout, opts.Actions.Confirm))))
+			auth.Middleware(opts.Auth, guard(confirmHandler(timeout, opts.Actions.Confirm))))
 		mux.Handle("POST /api/failures/{id}/resolve",
-			auth.Middleware(opts.Auth, csrfGuard(resolveHandler(opts.Actions.Resolve))))
+			auth.Middleware(opts.Auth, guard(resolveHandler(opts.Actions.Resolve))))
 		mux.Handle("POST /api/failures/{id}/unresolve",
-			auth.Middleware(opts.Auth, csrfGuard(unresolveHandler(opts.Actions.Unresolve))))
+			auth.Middleware(opts.Auth, guard(unresolveHandler(opts.Actions.Unresolve))))
 	}
 	mux.HandleFunc("/api/capabilities", capabilitiesHandler(caps))
 
@@ -192,19 +200,51 @@ func capabilitiesHandler(c Capabilities) http.HandlerFunc {
 }
 
 // csrfGuard rejects a state-changing request whose Origin header is present and
-// does not match the request host. Combined with the SameSite=Lax session
-// cookie, this blocks cross-site POSTs while leaving same-origin and
-// non-browser (no Origin header) clients unaffected.
-func csrfGuard(next http.Handler) http.Handler {
+// matches neither the request host nor a configured trusted origin. Combined
+// with the SameSite=Lax session cookie, this blocks cross-site POSTs while
+// leaving same-origin and non-browser (no Origin header) clients unaffected.
+// trusted carries public hostnames served by a reverse proxy that rewrites the
+// forwarded Host, so the browser's Origin never equals r.Host.
+func csrfGuard(trusted map[string]struct{}, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if origin := r.Header.Get("Origin"); origin != "" {
-			if u, err := url.Parse(origin); err != nil || u.Host != r.Host {
+			u, err := url.Parse(origin)
+			if err != nil || (u.Host != r.Host && !originTrusted(trusted, u.Host)) {
 				http.Error(w, "cross-origin request rejected", http.StatusForbidden)
 				return
 			}
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// originTrusted reports whether host is in the trusted set. Empty set never
+// matches, preserving strict same-origin behavior.
+func originTrusted(trusted map[string]struct{}, host string) bool {
+	if host == "" || len(trusted) == 0 {
+		return false
+	}
+	_, ok := trusted[host]
+	return ok
+}
+
+// trustedOriginSet normalizes configured origins to a host set. Each entry may
+// be a full origin ("https://host[:port]") or a bare host; the scheme is
+// dropped so it matches an Origin header's host component.
+func trustedOriginSet(origins []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(origins))
+	for _, o := range origins {
+		o = strings.TrimSpace(o)
+		if o == "" {
+			continue
+		}
+		host := o
+		if u, err := url.Parse(o); err == nil && u.Host != "" {
+			host = u.Host
+		}
+		set[host] = struct{}{}
+	}
+	return set
 }
 
 // previewFunc renders a draft (issue or fix) for a failure id without posting.

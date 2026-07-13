@@ -115,6 +115,12 @@ server:
     mode: oauth
     # admins is the GitHub login allowlist (case-insensitive).
     admins: []
+    # trustedOrigins are extra public origins the CSRF guard accepts for write
+    # actions, as full origins ("https://dash.example.net") or bare hosts. Needed
+    # when a reverse proxy (e.g. Azure Front Door) serves the public hostname but
+    # forwards a different Host to the server. In oauth mode the redirect URL's
+    # host is trusted automatically, so this is mainly for proxy mode.
+    trustedOrigins: []
     # oauth mode settings. clientId is public; clientSecret and sessionKey are
     # held in a Secret (inline here, or reuse one via existingSecret).
     oauth:

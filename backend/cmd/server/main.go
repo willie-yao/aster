@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -160,7 +161,27 @@ func enableActions(opts *server.Options, projectDir, dataDir string) error {
 	default:
 		return fmt.Errorf("unknown AUTH_MODE %q (want oauth or proxy)", mode)
 	}
+
+	// Behind a reverse proxy that terminates the public hostname (e.g. Azure
+	// Front Door), the browser's Origin is the public host but r.Host is the
+	// forwarded origin host, so the CSRF guard needs the public origin(s). The
+	// OAuth redirect URL's host is exactly that public origin; TRUSTED_ORIGINS
+	// adds any extra hosts (and covers proxy auth mode, which has no redirect).
+	opts.TrustedOrigins = trustedOrigins(os.Getenv("OAUTH_REDIRECT_URL"), os.Getenv("TRUSTED_ORIGINS"))
 	return nil
+}
+
+// trustedOrigins collects the public origins the CSRF guard should accept: the
+// host of the OAuth redirect URL when set, plus a comma/space separated
+// TRUSTED_ORIGINS list.
+func trustedOrigins(redirectURL, extra string) []string {
+	var out []string
+	if redirectURL != "" {
+		if u, err := url.Parse(redirectURL); err == nil && u.Host != "" {
+			out = append(out, u.Host)
+		}
+	}
+	return append(out, splitList(extra)...)
 }
 
 // splitList parses a comma or whitespace separated list, dropping blanks.

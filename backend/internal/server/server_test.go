@@ -488,3 +488,51 @@ func TestHandler_CSRFCrossOriginRejected(t *testing.T) {
 		t.Errorf("capability auth = %+v, want oauth with login url", caps.Auth)
 	}
 }
+
+// TestCSRFGuard_TrustedOrigin verifies the guard accepts a cross-host Origin
+// only when it is in the trusted set (the reverse-proxy case), while keeping
+// strict same-origin behavior otherwise.
+func TestCSRFGuard_TrustedOrigin(t *testing.T) {
+	trusted := trustedOriginSet([]string{"https://dash.example.net"})
+	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	guard := csrfGuard(trusted, ok)
+
+	cases := []struct {
+		name   string
+		host   string
+		origin string
+		want   int
+	}{
+		{name: "no origin passes", host: "10.0.0.1", origin: "", want: http.StatusOK},
+		{name: "same host passes", host: "dash.example.net", origin: "https://dash.example.net", want: http.StatusOK},
+		{name: "trusted cross-host passes", host: "10.0.0.1", origin: "https://dash.example.net", want: http.StatusOK},
+		{name: "untrusted cross-host rejected", host: "10.0.0.1", origin: "https://evil.example", want: http.StatusForbidden},
+		{name: "malformed origin rejected", host: "10.0.0.1", origin: "://bad", want: http.StatusForbidden},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "http://ignored/api/actions/confirm", nil)
+			req.Host = tc.host
+			if tc.origin != "" {
+				req.Header.Set("Origin", tc.origin)
+			}
+			rec := httptest.NewRecorder()
+			guard.ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Errorf("status = %d, want %d", rec.Code, tc.want)
+			}
+		})
+	}
+}
+
+func TestTrustedOriginSet_NormalizesToHosts(t *testing.T) {
+	set := trustedOriginSet([]string{"https://a.example:8443", "  ", "b.example", ""})
+	for _, want := range []string{"a.example:8443", "b.example"} {
+		if _, ok := set[want]; !ok {
+			t.Errorf("trusted set missing %q (got %v)", want, set)
+		}
+	}
+	if len(set) != 2 {
+		t.Errorf("set size = %d, want 2 (%v)", len(set), set)
+	}
+}

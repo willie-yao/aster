@@ -70,7 +70,11 @@ Two auth modes, both keeping the admin allowlist (`ADMIN_LOGINS`):
 The `Authenticator` is a seam, so the two modes share one code path and a third
 mechanism can be added without touching the handlers. Sessions are stateless
 (encrypted cookie), CSRF is covered by a `SameSite=Lax` cookie plus an Origin
-check, and tokens are never logged or returned to the browser.
+check, and tokens are never logged or returned to the browser. Behind a reverse
+proxy that serves a public hostname but forwards a different `Host` to the
+server (e.g. Azure Front Door), the Origin check needs the public origin: in
+oauth mode the `OAUTH_REDIRECT_URL` host is trusted automatically, and
+`TRUSTED_ORIGINS` adds any others (required in proxy mode).
 
 ### Auth endpoints (oauth mode)
 
@@ -109,6 +113,7 @@ check, and tokens are never logged or returned to the browser.
    | `ADMIN_LOGINS` | Comma-separated GitHub logins allowed to act. |
    | `OAUTH_SCOPE` | Optional; defaults to `repo`. Use `public_repo` for public-only. |
    | `COOKIE_INSECURE=1` | Optional; allow the cookie over plain http for local testing only. |
+   | `TRUSTED_ORIGINS` | Optional; extra public origins the CSRF guard accepts (comma-separated) when behind a proxy. The `OAUTH_REDIRECT_URL` host is trusted automatically. |
 
    ```bash
    make fe-build
@@ -135,6 +140,7 @@ server trusts that header, so it must be reachable **only** through the proxy.
 | `AUTH_PROXY_HEADER` | Header carrying the user, e.g. `X-Auth-Request-Email`. |
 | `BOT_TOKEN` | GitHub PAT that performs the writes (bot account). |
 | `ADMIN_LOGINS` | Optional; restrict which header identities may act. |
+| `TRUSTED_ORIGINS` | Public origin(s) the CSRF guard accepts (comma-separated), e.g. `https://dash.example.net`. Required when the proxy's public host differs from the forwarded `Host`. |
 
 ## Running locally
 
