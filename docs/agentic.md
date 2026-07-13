@@ -560,18 +560,21 @@ For each job, the engine:
    > `Low` > `Transient-Ignore`). The transient classification is carried
    through deliberately, because an all-transient set is exactly what the pass
    reconsiders.
-3. Makes **one tool-free chat call** that asks the model to weigh the underlying
+3. Makes **one correlation call** that asks the model to weigh the underlying
    mechanism across builds and decide `systemic` (one shared, fixable cause) vs
    not, with a confidence, the shared root cause, the cross-cutting fix, and the
    builds it judges to share the cause. The newest 10 representatives are sent.
+   When a source repo is wired (see grounding below), this call is a repotree
+   tool loop; otherwise it is a single tool-free chat call.
 
 The verdict is cached under `pattern:<module>:<hash>`, where the hash covers the
-prompt version plus the exact rendered model input (every representative's build
-ID, failing test, root cause, and failure message), so the pass only re-runs
-when that evidence changes. The result is stored on the `JobDetail` and surfaces
-as a banner at the top of the job page: a "recurring failure pattern" callout
-with the shared cause and fix when systemic, or a quiet "no shared root cause"
-note when the failures are genuinely independent.
+prompt version, the grounding mode (grounded vs tool-free), plus the exact
+rendered model input (every representative's build ID, failing test, root cause,
+and failure message), so the pass only re-runs when that evidence changes. The
+result is stored on the `JobDetail` and surfaces as a banner at the top of the
+job page: a "recurring failure pattern" callout with the shared cause and fix
+when systemic, or a quiet "no shared root cause" note when the failures are
+genuinely independent.
 
 The **systemic** verdicts are also aggregated across all jobs into
 `flakiness.json` (`recurring_patterns`) and surfaced on the landing page inside
@@ -579,9 +582,32 @@ the **Needs Attention** box, ranked by confidence then build span, so a
 confirmed recurring bug is visible without opening each job. Non-systemic
 verdicts are not aggregated there.
 
-This pass does not call tools or read artifacts itself; it reasons purely over
-the per-failure analyses the agentic loop already produced, so its marginal cost
-is a single small completion per qualifying job.
+#### Grounding the correlation on the source tree
+
+The per-build analyses fed into this pass are already grounded (each cites real
+artifact files and line numbers from its own agentic loop), but the correlation
+step names the source **file or config to change** in `suggested_fix`. To keep
+that from being a plausible-sounding guess, the pass grounds itself on the real
+repository when `branding.source_repo` is set and a read token is available:
+
+- **Repo tool loop.** With a reader wired, the correlation runs as a repotree
+  loop (`list_repo_tree` / `read_repo_file` / `grep_repo` over the source repo
+  at `HEAD`), so the model verifies a path exists before naming it. The
+  recursive tree listing and file reads are memoized once per run across every
+  job. Set the token via `GITHUB_READ_TOKEN` (falling back to `FIX_TOKEN`, then
+  the Actions-provided `GITHUB_TOKEN`); it clears GitHub's anonymous trees-API
+  rate limit. File reads use the `raw.githubusercontent.com` CDN and need no
+  token, so grounding assumes a public source repo.
+- **Path guard (always on).** Independent of the tool loop, any path named in
+  `suggested_fix` that does not exist in the source repo is annotated
+  `(unverified path)` rather than asserted as fact. When no reader is wired the
+  guard verifies against the raw CDN (no token). Only `suggested_fix` is
+  guarded, because `shared_root_cause` and `summary` legitimately cite GCS
+  artifact paths that are not in the source tree.
+
+Without a source repo or token, the pass falls back to the single tool-free
+completion plus the CDN-backed guard, so it still never asserts a fabricated
+path.
 
 ## Troubleshooting
 

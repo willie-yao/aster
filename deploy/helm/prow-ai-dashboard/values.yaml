@@ -63,6 +63,14 @@ ai:
   token: ""
   existingSecret: ""
   tokenSecretKey: AI_TOKEN
+  # githubReadToken grounds the recurring-pattern agent on the source repo's
+  # file tree (read-only, via branding.source_repo). Optional: without it the
+  # pattern agent falls back to a tool-free correlation plus a path-verification
+  # guard. Reuse a read-only PAT. Stored in the AI Secret when set here; with
+  # existingSecret, that Secret must hold the key named by
+  # githubReadTokenSecretKey.
+  githubReadToken: ""
+  githubReadTokenSecretKey: GITHUB_READ_TOKEN
 
 fetcher:
   # Cron schedule for the fetch. Default: every 6 hours. (mode: cron)

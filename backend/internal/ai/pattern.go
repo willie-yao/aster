@@ -6,20 +6,29 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"path"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/repotree"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
 // patternPromptVersion is bumped when the pattern prompt or output contract
 // changes, so cached verdicts from an older contract are re-run.
-const patternPromptVersion = 2
+const patternPromptVersion = 3
 
 // maxPatternBuilds caps how many per-build analyses are fed into one pattern
 // call, keeping the prompt bounded for a test that failed in many builds.
 const maxPatternBuilds = 10
+
+// patternMaxIters bounds the repotree tool rounds the grounded correlation loop
+// spends verifying file and config paths against the real source repo.
+const patternMaxIters = 6
 
 // PatternFailure is one build's analyzed job failure, used as input to
 // cross-failure correlation. FailingTest is the specific test or spec that
@@ -81,11 +90,26 @@ Respond with ONLY a JSON object, no prose, no code fences:
   "summary": "one short paragraph: the verdict and the evidence for it"
 }`
 
+// patternGroundedSystemPrompt is patternSystemPrompt plus the repotree tool
+// contract. It is used when a source-repo reader is wired, so the model
+// verifies every file, template, or config path it names against the real
+// repository instead of guessing one.
+const patternGroundedSystemPrompt = patternSystemPrompt + `
+
+You also have read-only tools over the source repository:
+- list_repo_tree(path): immediate children of a directory
+- read_repo_file(path, offset, len): byte-range read of one file
+- grep_repo(pattern, path_glob?): RE2 search over a bounded file set
+
+Ground every path you cite. BEFORE naming any file, template, manifest, or config in shared_root_cause or suggested_fix, confirm it exists by grepping for its name or the symbols/keys involved, listing the directory, and reading the file. NEVER invent or guess a path: an unread path is a hallucination. If you cannot find a real file that fits, describe the change without a fabricated path and lower confidence accordingly. When you are done investigating, respond with ONLY the JSON object described above and nothing else.`
+
 // AnalyzePattern correlates the per-build analyses of one repeatedly-failing
-// job into a single PatternAnalysis. It makes one tool-free model call and
-// caches the verdict keyed by the exact model input, so it only re-runs when
-// the evidence changes. Returns nil when there is too little to correlate
-// when there are fewer than two analyzed builds.
+// job into a single PatternAnalysis. When a source-repo reader is wired it runs
+// a repotree tool loop so the model verifies file and config paths against the
+// real repo; otherwise it makes one tool-free model call. Either way a
+// path-verification guard flags citations that do not exist. The verdict is
+// cached keyed by the exact model input, so it only re-runs when the evidence
+// changes. Returns nil when there are fewer than two analyzed builds.
 func (s *Service) AnalyzePattern(ctx context.Context, jobID, subject string, failures []PatternFailure) (*models.PatternAnalysis, error) {
 	if len(failures) < 2 {
 		return nil, nil
@@ -98,10 +122,19 @@ func (s *Service) AnalyzePattern(ctx context.Context, jobID, subject string, fai
 	}
 
 	userPrompt := buildPatternUserPrompt(subject, failures)
+	grounded := s.patternRepo != nil
+	// groundKey namespaces the cache entry by grounding mode and, when grounded,
+	// the source repo identity, so a repo change or a switch between grounded and
+	// tool-free never serves a stale verdict.
+	groundKey := "toolfree"
+	if grounded {
+		groundKey = "grounded:" + s.sourceRepoOwner + "/" + s.sourceRepoName
+	}
 
-	// Key the verdict to the exact model input, including prompt version and
-	// rendered user prompt, so any evidence change invalidates the entry.
-	key := patternCacheKey(s.module.Name(), jobID, subject, userPrompt)
+	// Key the verdict to the exact model input, including prompt version, the
+	// grounding mode, and the rendered user prompt, so any evidence change or a
+	// switch between grounded and tool-free invalidates the entry.
+	key := patternCacheKey(s.module.Name(), jobID, subject, userPrompt, groundKey)
 	if raw, ok := s.client.cache.Get(key); ok {
 		var cached patternResponse
 		if json.Unmarshal(raw, &cached) == nil && validPatternResponse(cached) {
@@ -109,26 +142,85 @@ func (s *Service) AnalyzePattern(ctx context.Context, jobID, subject string, fai
 		}
 	}
 
+	var parsed patternResponse
+	var err error
+	if grounded {
+		parsed, err = s.groundedPatternVerdict(ctx, userPrompt)
+	} else {
+		parsed, err = s.toolFreePatternVerdict(ctx, userPrompt)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !validPatternResponse(parsed) {
+		return nil, fmt.Errorf("pattern analysis: incomplete verdict (empty summary, or systemic without a root cause)")
+	}
+
+	// Flag any file path the verdict names that does not exist in the source
+	// repo, so a fabricated citation is marked rather than asserted as fact.
+	s.guardPatternPaths(ctx, &parsed)
+
+	_ = s.client.cache.Set(key, parsed)
+	return buildPatternAnalysis(subject, len(failures), parsed, collectRelevantFiles(failures)), nil
+}
+
+// toolFreePatternVerdict makes the single correlation call with no tools, used
+// when no source-repo reader is wired.
+func (s *Service) toolFreePatternVerdict(ctx context.Context, userPrompt string) (patternResponse, error) {
 	messages := []agChatMessage{
 		{Role: "system", Content: strPtr(patternSystemPrompt)},
 		{Role: "user", Content: strPtr(userPrompt)},
 	}
 	resp, err := s.client.callChatWithTools(ctx, messages, nil, nil)
 	if err != nil {
-		return nil, fmt.Errorf("pattern analysis chat: %w", err)
+		return patternResponse{}, fmt.Errorf("pattern analysis chat: %w", err)
 	}
 	if len(resp.Choices) == 0 || resp.Choices[0].Message.Content == nil {
-		return nil, fmt.Errorf("pattern analysis: empty response")
+		return patternResponse{}, fmt.Errorf("pattern analysis: empty response")
 	}
 	var parsed patternResponse
 	if err := json.Unmarshal([]byte(extractJSON(*resp.Choices[0].Message.Content)), &parsed); err != nil {
-		return nil, fmt.Errorf("pattern analysis: parse response: %w", err)
+		return patternResponse{}, fmt.Errorf("pattern analysis: parse response: %w", err)
 	}
-	if !validPatternResponse(parsed) {
-		return nil, fmt.Errorf("pattern analysis: incomplete verdict (empty summary, or systemic without a root cause)")
+	return parsed, nil
+}
+
+// groundedPatternVerdict runs the correlation as a repotree tool loop so the
+// model greps and reads real source files before naming a fix target. It
+// recovers a non-JSON final message with one cheap extraction completion rather
+// than re-running the loop.
+func (s *Service) groundedPatternVerdict(ctx context.Context, userPrompt string) (patternResponse, error) {
+	reg := tools.NewRegistry()
+	repotree.Register(reg)
+	enabled, err := reg.Enable([]string{repotree.Group})
+	if err != nil {
+		return patternResponse{}, fmt.Errorf("enabling repo tools: %w", err)
 	}
-	_ = s.client.cache.Set(key, parsed)
-	return buildPatternAnalysis(subject, len(failures), parsed, collectRelevantFiles(failures)), nil
+	env := &tools.Env{Repo: s.patternRepo, Cache: s.patternToolCache()}
+	out, err := s.client.ToolLoop(ctx, patternGroundedSystemPrompt, userPrompt, reg, enabled, env,
+		ToolLoopOptions{MaxIters: patternMaxIters, MinToolCalls: 1, SingleToolCall: true})
+	if err != nil {
+		return patternResponse{}, fmt.Errorf("pattern analysis tool loop: %w", err)
+	}
+	// A content-free loop carries no evidence to correlate; reject it rather
+	// than letting the recovery completion synthesize a verdict from nothing.
+	if strings.TrimSpace(out) == "" {
+		return patternResponse{}, fmt.Errorf("pattern analysis: empty tool-loop output")
+	}
+	var parsed patternResponse
+	if perr := json.Unmarshal([]byte(extractJSON(out)), &parsed); perr != nil {
+		extract := "Extract the correlation verdict this investigation reached as JSON with exactly these keys: " +
+			`{"systemic": true|false, "confidence": "high"|"medium"|"low", "shared_root_cause": "...", "shared_builds": ["..."], "suggested_fix": "...", "summary": "..."}. ` +
+			"Reply with ONLY the JSON.\n\nInvestigation:\n" + out
+		out2, ferr := s.client.Complete(ctx, "You output only a JSON object.", extract)
+		if ferr != nil {
+			return patternResponse{}, fmt.Errorf("pattern analysis: parse response: %w", perr)
+		}
+		if perr2 := json.Unmarshal([]byte(extractJSON(out2)), &parsed); perr2 != nil {
+			return patternResponse{}, fmt.Errorf("pattern analysis: parse response: %w", perr2)
+		}
+	}
+	return parsed, nil
 }
 
 // collectRelevantFiles unions the files each build implicated, in first-seen
@@ -223,11 +315,12 @@ func buildPatternUserPrompt(subject string, failures []PatternFailure) string {
 }
 
 // patternCacheKey keys a verdict by the project module, job, prompt version,
-// and the rendered model input, so the verdict is reused only while the exact
-// evidence the model saw is unchanged.
-func patternCacheKey(module, jobID, subject, userPrompt string) string {
+// the grounding namespace (mode plus, when grounded, the source repo), and the
+// rendered model input, so the verdict is reused only while the exact evidence
+// the model saw is unchanged.
+func patternCacheKey(module, jobID, subject, userPrompt, groundKey string) string {
 	h := sha256.New()
-	fmt.Fprintf(h, "v%d\x00%s\x00%s\x00%s", patternPromptVersion, jobID, subject, userPrompt)
+	fmt.Fprintf(h, "v%d\x00%s\x00%s\x00%s\x00%s", patternPromptVersion, groundKey, jobID, subject, userPrompt)
 	return fmt.Sprintf("pattern:%s:%s", module, hex.EncodeToString(h.Sum(nil)[:12]))
 }
 
@@ -239,4 +332,103 @@ func clampPattern(s string, max int) string {
 		return s
 	}
 	return s[:max] + "…"
+}
+
+// patternPathRe matches repo-relative-looking file paths embedded in prose,
+// with or without a directory prefix, ending in a source or config extension.
+// Bounded to real file references so it does not flag incidental words. Log and
+// prose extensions (.log/.txt/.md) are excluded because suggested_fix names
+// files to change, not evidence artifacts.
+var patternPathRe = regexp.MustCompile(`(?:[A-Za-z0-9_.\-]+/)*[A-Za-z0-9_.\-]+\.(?:go|ya?ml|sh|json|tpl|star|bzl|toml|cfg|conf|mod)`)
+
+// guardPatternPaths annotates any file path in the verdict's suggested fix that
+// does not exist in the source repo, so a fabricated citation is marked
+// "(unverified path)" rather than asserted as fact. It is a no-op when no repo
+// is available to verify against. Only suggested_fix is guarded: shared_root_cause
+// and summary describe evidence and legitimately cite GCS artifact paths that are
+// not in the source tree.
+func (s *Service) guardPatternPaths(ctx context.Context, p *patternResponse) {
+	exists := s.patternPathVerifier(ctx)
+	if exists == nil {
+		return
+	}
+	p.SuggestedFix = annotateUnverifiedPaths(p.SuggestedFix, exists)
+}
+
+// patternPathVerifier returns a func reporting whether a cited path exists, or
+// nil when nothing can verify. The memoized repo tree verifies both full paths
+// and bare basenames; if the tree is unavailable it falls back to a raw-CDN
+// existence check against branding.source_repo so the guard stays active rather
+// than silently disabling. The CDN fallback verifies only explicit repo-relative
+// paths, leaving bare names unflagged since it cannot locate them to a subdir.
+func (s *Service) patternPathVerifier(ctx context.Context) func(string) bool {
+	if s.patternRepo != nil {
+		if tree, err := s.patternRepoTree(ctx); err == nil && len(tree) > 0 {
+			full := make(map[string]bool, len(tree))
+			base := make(map[string]bool, len(tree))
+			for _, t := range tree {
+				full[t] = true
+				base[path.Base(t)] = true
+			}
+			return func(p string) bool {
+				if strings.Contains(p, "/") {
+					return full[p]
+				}
+				return base[p]
+			}
+		}
+	}
+	if s.sourceRepoOwner != "" && s.sourceRepoName != "" {
+		client := &http.Client{Timeout: 10 * time.Second}
+		return func(p string) bool {
+			if !strings.Contains(p, "/") {
+				return true
+			}
+			return s.verifyGitHubFile(ctx, client, s.sourceRepoOwner, s.sourceRepoName, p)
+		}
+	}
+	return nil
+}
+
+// annotateUnverifiedPaths marks each path-like token that fails exists with a
+// trailing "(unverified path)" note, once per distinct token.
+func annotateUnverifiedPaths(text string, exists func(string) bool) string {
+	if strings.TrimSpace(text) == "" {
+		return text
+	}
+	seen := map[string]bool{}
+	for _, m := range patternPathRe.FindAllString(text, -1) {
+		clean := strings.TrimPrefix(m, "./")
+		if seen[m] || exists(clean) {
+			seen[m] = true
+			continue
+		}
+		seen[m] = true
+		text = strings.ReplaceAll(text, m, m+" (unverified path)")
+	}
+	return text
+}
+
+// patternRepoTree returns the source repo's blob paths, memoized for the run so
+// the recursive tree listing costs one API call across every job.
+func (s *Service) patternRepoTree(ctx context.Context) ([]string, error) {
+	s.patternTreeMu.Lock()
+	defer s.patternTreeMu.Unlock()
+	if s.patternTreeDone {
+		return s.patternTree, s.patternTreeErr
+	}
+	s.patternTree, s.patternTreeErr = s.patternRepo.ListTree(ctx)
+	s.patternTreeDone = true
+	return s.patternTree, s.patternTreeErr
+}
+
+// patternToolCache returns the tools.Cache shared across all pattern tool loops
+// in a run, so repotree memoizes the tree and file reads once across jobs.
+func (s *Service) patternToolCache() *tools.Cache {
+	s.patternTreeMu.Lock()
+	defer s.patternTreeMu.Unlock()
+	if s.patternCache == nil {
+		s.patternCache = tools.NewCache()
+	}
+	return s.patternCache
 }

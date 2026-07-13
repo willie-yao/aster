@@ -62,6 +62,14 @@ spec:
                 - name: AI_MODEL
                   value: {{ .Values.ai.model | quote }}
                 {{- end }}
+                {{- if or .Values.ai.githubReadToken .Values.ai.existingSecret }}
+                - name: GITHUB_READ_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "prow-ai-dashboard.aiSecret" . }}
+                      key: {{ .Values.ai.githubReadTokenSecretKey }}
+                      optional: true
+                {{- end }}
                 {{- end }}
                 {{- with .Values.fetcher.extraEnv }}
                 {{- toYaml . | nindent 16 }}

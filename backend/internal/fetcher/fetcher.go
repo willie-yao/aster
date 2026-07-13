@@ -806,6 +806,19 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, details []m
 	service := ai.NewService(aiClient, module, systemPrompt, consecutiveMap)
 	// Resolve and verify repo-relative file citations against branding.source_repo.
 	service.SetSourceRepo(cfg.Branding.SourceRepo.Owner, cfg.Branding.SourceRepo.Name)
+	// Ground the recurring-pattern agent on the real source tree when a repo is
+	// configured, so it verifies file/config paths instead of guessing. The
+	// token clears GitHub's anonymous trees-API rate limit; file reads use the
+	// raw CDN and need none. Without a repo or token it falls back to the
+	// tool-free correlation call plus the path-verification guard.
+	if cfg.Branding.SourceRepo.Owner != "" && cfg.Branding.SourceRepo.Name != "" {
+		if ghToken := githubReadToken(); ghToken != "" {
+			service.SetPatternRepoReader(ai.NewGitHubRepoReader(
+				cfg.Branding.SourceRepo.Owner, cfg.Branding.SourceRepo.Name, "", ghToken))
+			log.Printf("🔎 Pattern agent grounded on %s/%s source tree",
+				cfg.Branding.SourceRepo.Owner, cfg.Branding.SourceRepo.Name)
+		}
+	}
 
 	eff := cfg.AI.EffectiveAgentic()
 	// Size byte budgets from the endpoint's reported context window.
@@ -1104,6 +1117,20 @@ func severityRank(sev string) int {
 // project.yaml wins over AI_ENDPOINT.
 func aiEndpoint(cfg *project.Config) string {
 	return cfg.ResolveAIProvider(os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL")).Endpoint
+}
+
+// githubReadToken returns the token for read-only GitHub API access (the
+// pattern agent's recursive repo-tree listing). GITHUB_READ_TOKEN is preferred;
+// FIX_TOKEN then GITHUB_TOKEN are reused as fallbacks so a deploy that already
+// has a fix-PR token or the Actions-provided token grounds the pattern agent
+// without extra configuration.
+func githubReadToken() string {
+	for _, name := range []string{"GITHUB_READ_TOKEN", "FIX_TOKEN", "GITHUB_TOKEN"} {
+		if t := os.Getenv(name); t != "" {
+			return t
+		}
+	}
+	return ""
 }
 
 // shortHash returns a short SkillSet hash prefix for startup logs.

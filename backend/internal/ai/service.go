@@ -57,6 +57,21 @@ type Service struct {
 	sourceRepoOwner string
 	sourceRepoName  string
 
+	// patternRepo is the source-tree reader that grounds the recurring-pattern
+	// agent's repotree tools. nil disables tool grounding, leaving the tool-free
+	// correlation call plus the path-verification guard.
+	patternRepo tools.RepoReader
+
+	// patternTreeMu guards the per-run pattern memos below. patternTree caches
+	// the source repo's blob paths (one recursive listing per run) for the path
+	// guard; patternCache is the tools.Cache shared across pattern tool loops so
+	// repotree fetches the tree and files once across jobs.
+	patternTreeMu   sync.Mutex
+	patternTree     []string
+	patternTreeErr  error
+	patternTreeDone bool
+	patternCache    *tools.Cache
+
 	// linkVerifyCache memoizes GitHub file-existence checks across all
 	// analyses in a run, keyed by "owner/repo/path" to existence.
 	linkVerifyCache sync.Map
@@ -100,6 +115,14 @@ func (s *Service) SetSkills(set *skills.Set) {
 func (s *Service) SetSourceRepo(owner, name string) {
 	s.sourceRepoOwner = owner
 	s.sourceRepoName = name
+}
+
+// SetPatternRepoReader installs the source-tree reader that grounds the
+// recurring-pattern agent. When set, AnalyzePattern runs a repotree tool loop
+// so the model verifies file and config paths against the real repo before
+// naming them. Safe to call once at fetcher startup.
+func (s *Service) SetPatternRepoReader(reader tools.RepoReader) {
+	s.patternRepo = reader
 }
 
 // Analyze fills tc.AISummary and tc.AIAnalysis for a single failed test case
