@@ -241,7 +241,7 @@ func runBenchCase(t *testing.T, bc benchCase, endpoint, model, token, systemProm
 		ContextByteBudget:  contextByteBudget,
 		MinToolCalls:       agentic.MinToolCalls,
 		MinGCSBytes:        agentic.MinGCSBytes,
-		CritiqueMaxRetries: agentic.Critique.MaxRetries,
+		CritiqueMaxRetries: *agentic.Critique.MaxRetries,
 		SingleToolCall:     agentic.SingleToolCall,
 		SemanticJudge:      true,
 	}, factory, registry, enabled)
@@ -445,12 +445,13 @@ func benchByteBudgets(t *testing.T, client *ai.Client) (modelByteBudget, context
 // BENCH_PROJECT_DIR, since the weak-model floors distort a strong model that
 // answers concisely.
 func defaultBenchAgentic() project.Agentic {
+	critiqueRetries := benchEnvInt("BENCH_CRITIQUE_RETRIES", 2)
 	a := project.Agentic{
 		MaxIters:     benchEnvInt("BENCH_MAX_ITERS", 15),
 		Timeout:      benchEnvDuration("BENCH_TIMEOUT", 20*time.Minute),
 		MinToolCalls: benchEnvInt("BENCH_MIN_TOOL_CALLS", 5),
 		MinGCSBytes:  benchEnvInt("BENCH_MIN_GCS_BYTES", 500_000),
-		Critique:     project.AgenticCritique{MaxRetries: benchEnvInt("BENCH_CRITIQUE_RETRIES", 2)},
+		Critique:     project.AgenticCritique{MaxRetries: &critiqueRetries},
 	}
 	return a
 }

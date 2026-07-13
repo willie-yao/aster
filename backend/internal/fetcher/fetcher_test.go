@@ -107,7 +107,7 @@ func TestCollectRecurringPatterns_FiltersAndRanks(t *testing.T) {
 
 func TestRunWatch_RejectsNonPositiveIntervals(t *testing.T) {
 	ctx := context.Background()
-	opts := Options{Collectors: NewCollectorRegistry()}
+	opts := Options{}
 	if err := RunWatch(ctx, opts, 0, time.Hour); err == nil {
 		t.Error("expected error for zero watch interval")
 	}

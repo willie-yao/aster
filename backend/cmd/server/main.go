@@ -106,11 +106,12 @@ func enableActions(opts *server.Options, projectDir, dataDir string) error {
 	if err != nil {
 		return fmt.Errorf("loading project config: %w", err)
 	}
+	provider := cfg.ResolveAIProvider(os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"))
 	opts.Actions = actions.NewService(cfg, dataDir, actions.AIConfig{
 		Token:    os.Getenv("AI_TOKEN"),
-		Endpoint: firstNonEmpty(aiField(cfg, "endpoint"), os.Getenv("AI_ENDPOINT")),
-		Model:    firstNonEmpty(aiField(cfg, "model"), os.Getenv("AI_MODEL")),
-		Headers:  aiHeaders(cfg),
+		Endpoint: provider.Endpoint,
+		Model:    provider.Model,
+		Headers:  provider.Headers,
 	})
 
 	// A single fix draft runs locate + edit + critique against the model; the
@@ -160,36 +161,6 @@ func enableActions(opts *server.Options, projectDir, dataDir string) error {
 		return fmt.Errorf("unknown AUTH_MODE %q (want oauth or proxy)", mode)
 	}
 	return nil
-}
-
-// aiField returns cfg.AI.<endpoint|model> or "" when AI is unset.
-func aiField(cfg *project.Config, which string) string {
-	if cfg.AI == nil {
-		return ""
-	}
-	switch which {
-	case "endpoint":
-		return cfg.AI.Endpoint
-	case "model":
-		return cfg.AI.Model
-	}
-	return ""
-}
-
-func aiHeaders(cfg *project.Config) map[string]string {
-	if cfg.AI == nil || len(cfg.AI.Headers) == 0 {
-		return nil
-	}
-	return cfg.AI.Headers
-}
-
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 // splitList parses a comma or whitespace separated list, dropping blanks.

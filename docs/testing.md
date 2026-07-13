@@ -1,15 +1,15 @@
 # Testing
 
-The engine has three layers of tests. The first two are deterministic CI gates;
-the third is an on-demand quality harness (planned).
+The engine has deterministic unit and end-to-end tests. Model quality evaluation
+is tracked separately from CI.
 
 ## Unit tests
 
 Per-package tests live alongside the code. Run them with:
 
 ```bash
-make test          # cd backend && go test ./... -count=1
-go vet ./...
+make test
+cd backend && go vet ./...
 ```
 
 These are the CI gates (see `.github/workflows/ci.yml`).
@@ -63,10 +63,9 @@ token, run the analysis once to populate `testdata`, then switch the test to
 `NewReplayServer`. Scrub any sensitive content from recorded responses before
 committing.
 
-## Quality evaluation harness (planned)
+## Quality evaluation
 
 A separate, gated harness scores AI analysis quality against a labeled dataset
 of real failures (transient precision/recall, grounding rate, citation validity,
-depth) and supports A/B comparison across models or configs. Because model
-output is non-deterministic, it is a tracked scorecard run on model/prompt/config
-changes, not a pass/fail CI gate. See the implementation plan for details.
+depth) Because model output is non-deterministic, quality evaluation is not a pass/fail
+CI gate. There is currently no checked-in A/B comparison command.

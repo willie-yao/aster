@@ -1,85 +1,66 @@
 import { useState, useEffect } from "react";
 import type { Dashboard, FlakinessReport, JobDetail, ResolvedState, SearchIndex } from "../types/dashboard";
+import { jobDataFilename } from "../lib/utils";
 
 const DATA_BASE =
   import.meta.env.VITE_DATA_URL ?? `${import.meta.env.BASE_URL}data`;
 
-export function useDashboard() {
-  const [data, setData] = useState<Dashboard | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function useJSON<T>(path: string | null) {
+  const [result, setResult] = useState<{
+    path: string | null;
+    data: T | null;
+    error: string | null;
+  }>({ path: null, data: null, error: null });
 
   useEffect(() => {
-    fetch(`${DATA_BASE}/dashboard.json`)
+    let cancelled = false;
+    if (path === null) return;
+
+    fetch(`${DATA_BASE}/${path}`)
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
+        return r.json() as Promise<T>;
       })
-      .then(setData)
-      .catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
-  }, []);
+      .then((value) => {
+        if (!cancelled) setResult({ path, data: value, error: null });
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setResult({ path, data: null, error: errorMessage(error) });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [path]);
 
-  return { data, loading, error };
+  if (path === null) {
+    return { data: null, loading: false, error: null };
+  }
+  if (result.path !== path) {
+    return { data: null, loading: true, error: null };
+  }
+  return { data: result.data, loading: false, error: result.error };
+}
+
+export function useDashboard() {
+  return useJSON<Dashboard>("dashboard.json");
 }
 
 export function useFlakinessReport() {
-  const [data, setData] = useState<FlakinessReport | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    fetch(`${DATA_BASE}/flakiness.json`)
-      .then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
-      .then(setData)
-      .catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
-  }, []);
-
-  return { data, loading, error };
+  return useJSON<FlakinessReport>("flakiness.json");
 }
 
 export function useJobDetail(jobName: string | undefined) {
-  const [data, setData] = useState<JobDetail | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!jobName) return;
-    const sanitized = jobName.replace(/[^a-zA-Z0-9\-_]/g, "-");
-    fetch(`${DATA_BASE}/jobs/${sanitized}.json`)
-      .then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
-      .then(setData)
-      .catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
-  }, [jobName]);
-
-  return { data, loading, error };
+  return useJSON<JobDetail>(jobName ? `jobs/${jobDataFilename(jobName)}` : null);
 }
 
 export function useSearchIndex() {
-  const [data, setData] = useState<SearchIndex | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    fetch(`${DATA_BASE}/search-index.json`)
-      .then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
-      .then(setData)
-      .catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
-  }, []);
-
-  return { data, loading, error };
+  return useJSON<SearchIndex>("search-index.json");
 }
 
 export function useResolved() {

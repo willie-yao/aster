@@ -26,7 +26,6 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/filesystem"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/k8s"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/collectors"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/issues"
@@ -44,7 +43,7 @@ import (
 )
 
 // Options is the parsed invocation for a single fetcher run.
-// cmd/fetcher constructs it from flags and wires collector factories before Run.
+// cmd/fetcher constructs it from flags before Run.
 type Options struct {
 	ProjectDir   string
 	OutDir       string
@@ -56,20 +55,18 @@ type Options struct {
 	// enable presubmits.
 	IncludePresubmits bool
 	EnableAI          bool
-	Collectors        *CollectorRegistry
 	// Version is the engine version embedded at build time, logged at startup.
 	Version string
 }
 
-// pipeline holds the resolved, reusable state for a run: config, storage,
-// collector, and AI settings. It is built once by setupPipeline and drives one
+// pipeline holds the resolved, reusable state for a run: config, storage, and
+// AI settings. It is built once by setupPipeline and drives one
 // or many passes (one-shot Run, or repeated passes in RunWatch).
 type pipeline struct {
 	opts              Options
 	cfg               *project.Config
 	client            *http.Client
 	backend           storage.Backend
-	collector         collectors.Collector
 	enableAI          bool
 	aiToken           string
 	aiSystemPrompt    string
@@ -98,12 +95,8 @@ func Run(ctx context.Context, opts Options) error {
 	return nil
 }
 
-// setupPipeline loads config and resolves storage, collector, and AI settings.
+// setupPipeline loads config and resolves storage and AI settings.
 func setupPipeline(opts Options) (*pipeline, error) {
-	if opts.Collectors == nil {
-		return nil, fmt.Errorf("fetcher.Options.Collectors registry is required")
-	}
-
 	cfg, err := project.Load(filepath.Join(opts.ProjectDir, "project.yaml"))
 	if err != nil {
 		return nil, fmt.Errorf("loading project config: %w", err)
@@ -112,13 +105,6 @@ func setupPipeline(opts Options) (*pipeline, error) {
 		cfg.Name, cfg.DisplayShortName(), cfg.StorageConfig().Provider, cfg.Storage.Bucket)
 	if opts.Version != "" {
 		log.Printf("Engine version: %s", opts.Version)
-	}
-
-	// Validate the collector reference against the registry up front so a
-	// missing collector fails before any expensive work.
-	if !opts.Collectors.Has(cfg.CollectorName()) {
-		return nil, fmt.Errorf("unknown collector %q (registered: %s)",
-			cfg.CollectorName(), strings.Join(opts.Collectors.Names(), ", "))
 	}
 
 	// AI_TOKEN authenticates the configured chat-completions endpoint.
@@ -141,7 +127,7 @@ func setupPipeline(opts Options) (*pipeline, error) {
 	var aiSystemPrompt string
 	var aiSkillSet *skills.Set
 	if enableAI {
-		_, prompt, err := project.LoadDir(opts.ProjectDir)
+		prompt, err := project.LoadPrompt(opts.ProjectDir)
 		if err != nil {
 			return nil, fmt.Errorf("loading AI prompt: %w", err)
 		}
@@ -167,18 +153,11 @@ func setupPipeline(opts Options) (*pipeline, error) {
 		return nil, fmt.Errorf("configuring storage: %w", err)
 	}
 
-	collector, err := opts.Collectors.Build(cfg, backend, client)
-	if err != nil {
-		return nil, fmt.Errorf("building collector: %w", err)
-	}
-	log.Printf("Using artifact collector: %s", collector.Name())
-
 	return &pipeline{
 		opts:              opts,
 		cfg:               cfg,
 		client:            client,
 		backend:           backend,
-		collector:         collector,
 		enableAI:          enableAI,
 		aiToken:           aiToken,
 		aiSystemPrompt:    aiSystemPrompt,
@@ -273,7 +252,7 @@ func (p *pipeline) refresh(ctx context.Context, jobs []models.ProwJob) (*refresh
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			runs, err := fetchJobRunsCached(ctx, p.backend, cfg, p.collector, &j, opts.BuildsPerJob, cachedJobs[j.JobID])
+			runs, err := fetchJobRunsCached(ctx, p.backend, cfg, &j, opts.BuildsPerJob, cachedJobs[j.JobID])
 			if err != nil {
 				mu.Lock()
 				fetchErrors = append(fetchErrors, fmt.Errorf("job %s: %w", j.Name, err))
@@ -700,7 +679,7 @@ func loadCachedJobDetails(outDir string) map[string]map[string]models.BuildResul
 
 // fetchJobRunsCached discovers recent builds and reuses cached data for
 // completed builds. Per-build fetch errors are logged but do not abort.
-func fetchJobRunsCached(ctx context.Context, backend storage.Backend, cfg *project.Config, collector collectors.Collector, job *models.ProwJob, count int, cachedBuilds map[string]models.BuildResult) ([]models.BuildResult, error) {
+func fetchJobRunsCached(ctx context.Context, backend storage.Backend, cfg *project.Config, job *models.ProwJob, count int, cachedBuilds map[string]models.BuildResult) ([]models.BuildResult, error) {
 	builds, err := prowbuild.ListRecentBuilds(ctx, backend, job, count)
 	if err != nil {
 		return nil, fmt.Errorf("listing builds: %w", err)
@@ -714,7 +693,7 @@ func fetchJobRunsCached(ctx context.Context, backend storage.Backend, cfg *proje
 			reused++
 			continue
 		}
-		result, err := fetchBuildResult(ctx, backend, collector, job, b)
+		result, err := fetchBuildResult(ctx, backend, job, b)
 		if err != nil {
 			log.Printf("    ⚠ %s/%s: %v", job.Name, b.ID, err)
 			continue
@@ -731,8 +710,7 @@ func fetchJobRunsCached(ctx context.Context, backend storage.Backend, cfg *proje
 }
 
 // fetchBuildResult fetches metadata and JUnit XML for a single build.
-// Per-test artifact discovery is delegated to the configured collector.
-func fetchBuildResult(ctx context.Context, backend storage.Backend, collector collectors.Collector, job *models.ProwJob, build prowbuild.Build) (*models.BuildResult, error) {
+func fetchBuildResult(ctx context.Context, backend storage.Backend, job *models.ProwJob, build prowbuild.Build) (*models.BuildResult, error) {
 	loc := prowbuild.BuildLocation{
 		JobLocation: prowbuild.JobLocation{JobType: job.JobType, Repo: job.Repo},
 		JobName:     job.Name,
@@ -781,10 +759,6 @@ func fetchBuildResult(ctx context.Context, backend storage.Backend, collector co
 		case "skipped":
 			result.TestsSkipped++
 		}
-	}
-
-	if err := collector.CollectArtifacts(ctx, loc, result); err != nil {
-		log.Printf("    ⚠ %s/%s: collector %s: %v", job.Name, build.ID, collector.Name(), err)
 	}
 
 	return result, nil
@@ -871,7 +845,7 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, details []m
 			ContextByteBudget:  contextByteBudget,
 			MinToolCalls:       eff.MinToolCalls,
 			MinGCSBytes:        eff.MinGCSBytes,
-			CritiqueMaxRetries: eff.Critique.MaxRetries,
+			CritiqueMaxRetries: *eff.Critique.MaxRetries,
 			SingleToolCall:     eff.SingleToolCall,
 			SemanticJudge:      true,
 		}, factory, registry, enabled)
@@ -882,7 +856,7 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, details []m
 			skillsLog = fmt.Sprintf("on/%d", len(skillSet.Skills()))
 		}
 		log.Printf("🤖 Agentic AI enabled (%d iters, %dKB model, %dMB gcs, %s timeout, min_tools=%d, min_gcs_kb=%d, critique=on/%d, skills=%s, tools=%v)",
-			eff.MaxIters, modelByteBudget/1024, gcsByteBudget/1024/1024, eff.Timeout, eff.MinToolCalls, eff.MinGCSBytes/1024, eff.Critique.MaxRetries, skillsLog, enabled)
+			eff.MaxIters, modelByteBudget/1024, gcsByteBudget/1024/1024, eff.Timeout, eff.MinToolCalls, eff.MinGCSBytes/1024, *eff.Critique.MaxRetries, skillsLog, enabled)
 	}
 	// The endpoint and model are deliberately kept out of published data files;
 	// in the pages deployment the fetcher's stdout is a public Actions build log,
@@ -1129,10 +1103,7 @@ func severityRank(sev string) int {
 // aiEndpoint returns the configured AI chat-completions URL.
 // project.yaml wins over AI_ENDPOINT.
 func aiEndpoint(cfg *project.Config) string {
-	if cfg.AI != nil && cfg.AI.Endpoint != "" {
-		return cfg.AI.Endpoint
-	}
-	return os.Getenv("AI_ENDPOINT")
+	return cfg.ResolveAIProvider(os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL")).Endpoint
 }
 
 // shortHash returns a short SkillSet hash prefix for startup logs.
@@ -1149,16 +1120,10 @@ func shortHash(h string) string {
 // aiModel returns the configured AI model identifier.
 // project.yaml wins over AI_MODEL.
 func aiModel(cfg *project.Config) string {
-	if cfg.AI != nil && cfg.AI.Model != "" {
-		return cfg.AI.Model
-	}
-	return os.Getenv("AI_MODEL")
+	return cfg.ResolveAIProvider(os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL")).Model
 }
 
 // aiHeaders returns the extra HTTP headers to attach to AI provider requests.
 func aiHeaders(cfg *project.Config) map[string]string {
-	if cfg.AI == nil || len(cfg.AI.Headers) == 0 {
-		return nil
-	}
-	return cfg.AI.Headers
+	return cfg.ResolveAIProvider(os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL")).Headers
 }

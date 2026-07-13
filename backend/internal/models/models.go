@@ -76,7 +76,7 @@ type AISummary struct {
 	IsTransient bool   `json:"is_transient"`
 }
 
-// AIAnalysis is a deep AI-generated root cause analysis for persistent failures.
+// AIAnalysis is a deep AI-generated root cause analysis.
 type AIAnalysis struct {
 	GeneratedAt string `json:"generated_at"`
 	// Model is the provider's model identifier used for the analysis. Kept
@@ -108,12 +108,11 @@ type AIAnalysis struct {
 	// budget caps and was forced to finalize on best-effort evidence.
 	BudgetExhausted bool `json:"budget_exhausted,omitempty"`
 
-	// CritiquePassed reports whether this analysis cleared the critique
-	// gate. Only meaningful when the project has critique enabled.
+	// CritiquePassed reports whether this analysis cleared the critique gate.
 	CritiquePassed bool `json:"critique_passed,omitempty"`
 
 	// CritiqueVersion records the critique contract this analysis passed.
-	// Cache gates require the current version when critique is enabled.
+	// Cache gates require the current version.
 	CritiqueVersion int `json:"critique_version,omitempty"`
 
 	// SkillSetHash fingerprints the loaded recipe set for this analysis.

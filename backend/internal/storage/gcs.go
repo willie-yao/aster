@@ -77,14 +77,9 @@ func (b *gcsBackend) Open(ctx context.Context, path string) (io.ReadCloser, int6
 }
 
 func (b *gcsBackend) ReadRange(ctx context.Context, path string, offset, length int64) ([]byte, int64, error) {
-	if offset < 0 {
-		return nil, 0, fmt.Errorf("read %s: offset must be >= 0", path)
-	}
-	if length <= 0 {
-		return nil, 0, fmt.Errorf("read %s: length must be > 0", path)
-	}
-	if length > perCallCap {
-		length = perCallCap
+	length, err := validateRange(path, offset, length)
+	if err != nil {
+		return nil, 0, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, b.objURL(path), nil)
 	if err != nil {
@@ -106,7 +101,7 @@ func (b *gcsBackend) ReadRange(ctx context.Context, path string, offset, length 
 		if err != nil {
 			return nil, 0, fmt.Errorf("read %s: %w", path, err)
 		}
-		return sliceFrom(full, offset, length), int64(len(full)), nil
+		return sliceRange(full, offset, length), int64(len(full)), nil
 	}
 	// Partial Content means the body is exactly the requested window.
 	body, err := io.ReadAll(io.LimitReader(resp.Body, length))
@@ -114,18 +109,6 @@ func (b *gcsBackend) ReadRange(ctx context.Context, path string, offset, length 
 		return nil, 0, fmt.Errorf("read %s: %w", path, err)
 	}
 	return body, trimTotal(resp.Header.Get("Content-Range")), nil
-}
-
-// sliceFrom returns full[offset:offset+length] clamped to full.
-func sliceFrom(full []byte, offset, length int64) []byte {
-	if offset >= int64(len(full)) {
-		return nil
-	}
-	end := offset + length
-	if end > int64(len(full)) {
-		end = int64(len(full))
-	}
-	return full[offset:end]
 }
 
 func (b *gcsBackend) ReadTail(ctx context.Context, path string, maxBytes int64) ([]byte, int64, error) {

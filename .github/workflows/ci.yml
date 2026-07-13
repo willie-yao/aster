@@ -42,7 +42,10 @@ jobs:
         run: npm ci
       - name: Type check
         working-directory: frontend
-        run: npx tsc --noEmit
+        run: npx tsc -b
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
       - name: Build
         working-directory: frontend
         run: npm run build

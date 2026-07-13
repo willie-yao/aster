@@ -1,8 +1,7 @@
 // Command fetcher is the dashboard data pipeline. It loads a project
 // configuration, discovers Prow jobs, fetches build results from GCS, runs
 // optional AI failure analysis, and writes JSON for the frontend to render.
-// Orchestration lives in internal/fetcher; this file handles flags and
-// registers the built-in collector.
+// Orchestration lives in internal/fetcher; this file handles flags.
 //
 // The onboard subcommand scaffolds a new dashboard config from a TestGrid
 // dashboard name or storage bucket.
@@ -15,7 +14,6 @@ import (
 	"os"
 	"time"
 
-	collectorgeneric "github.com/willie-yao/prow-ai-dashboard/backend/internal/collectors/generic"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fetcher"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/onboard"
 )
@@ -42,8 +40,6 @@ func main() {
 	flag.Parse()
 
 	opts.Version = version
-	opts.Collectors = fetcher.NewCollectorRegistry()
-	opts.Collectors.Register("generic", collectorgeneric.Factory)
 
 	if err := fetcher.Run(context.Background(), opts); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

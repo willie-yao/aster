@@ -511,14 +511,20 @@ func TestAgentic_Effective(t *testing.T) {
 		}
 	})
 	t.Run("Critique defaults to max retries 2", func(t *testing.T) {
-		if got := eff(Agentic{}); got.Critique.MaxRetries != 2 {
-			t.Errorf("Critique.MaxRetries = %d, want 2 (default)", got.Critique.MaxRetries)
+		if got := eff(Agentic{}); got.Critique.MaxRetries == nil || *got.Critique.MaxRetries != 2 {
+			t.Errorf("Critique.MaxRetries = %v, want 2 (default)", got.Critique.MaxRetries)
+		}
+	})
+	t.Run("Critique.MaxRetries accepts explicit zero", func(t *testing.T) {
+		got := eff(Agentic{Critique: AgenticCritique{MaxRetries: intPtr(0)}})
+		if got.Critique.MaxRetries == nil || *got.Critique.MaxRetries != 0 {
+			t.Errorf("Critique.MaxRetries = %v, want 0", got.Critique.MaxRetries)
 		}
 	})
 	t.Run("Critique.MaxRetries passes through when set", func(t *testing.T) {
-		got := eff(Agentic{Critique: AgenticCritique{MaxRetries: 5}})
-		if got.Critique.MaxRetries != 5 {
-			t.Errorf("Critique.MaxRetries = %d, want 5", got.Critique.MaxRetries)
+		got := eff(Agentic{Critique: AgenticCritique{MaxRetries: intPtr(5)}})
+		if got.Critique.MaxRetries == nil || *got.Critique.MaxRetries != 5 {
+			t.Errorf("Critique.MaxRetries = %v, want 5", got.Critique.MaxRetries)
 		}
 	})
 }
@@ -529,7 +535,9 @@ func agenticEqual(a, b Agentic) bool {
 		a.Timeout == b.Timeout &&
 		a.MinToolCalls == b.MinToolCalls &&
 		a.MinGCSBytes == b.MinGCSBytes &&
-		a.Critique == b.Critique &&
+		a.Critique.MaxRetries != nil &&
+		b.Critique.MaxRetries != nil &&
+		*a.Critique.MaxRetries == *b.Critique.MaxRetries &&
 		a.SingleToolCall == b.SingleToolCall &&
 		equalStrings(a.Tools, b.Tools)
 }
@@ -571,6 +579,7 @@ func TestParse_AgenticInlineFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
+
 	if c.AI == nil {
 		t.Fatal("AI is nil")
 	}
@@ -579,6 +588,37 @@ func TestParse_AgenticInlineFields(t *testing.T) {
 	}
 	if !equalStrings(c.AI.Agentic.Tools, []string{"filesystem"}) {
 		t.Errorf("Tools = %v, want [filesystem]", c.AI.Agentic.Tools)
+	}
+}
+
+func TestParse_CritiqueMaxRetries(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		yaml string
+		want int
+	}{
+		{name: "omitted", yaml: "", want: 2},
+		{name: "zero", yaml: "  critique:\n    max_retries: 0\n", want: 0},
+		{name: "positive", yaml: "  critique:\n    max_retries: 4\n", want: 4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			yml := validYAML
+			if tc.yaml != "" {
+				yml += "\nai:\n" + tc.yaml
+			}
+			cfg, err := parse(strings.NewReader(yml))
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			var aiConfig *AI
+			if cfg.AI != nil {
+				aiConfig = cfg.AI
+			}
+			got := aiConfig.EffectiveAgentic()
+			if got.Critique.MaxRetries == nil || *got.Critique.MaxRetries != tc.want {
+				t.Errorf("MaxRetries = %v, want %d", got.Critique.MaxRetries, tc.want)
+			}
+		})
 	}
 }
 

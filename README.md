@@ -61,10 +61,8 @@ A dashboard is shaped by three things:
   for every field.
 - **`prompts/system.md`**: project-specific AI knowledge. Mandatory; the fetcher
   hard-errors if it is missing when `-ai` is enabled.
-- **Engine collectors and AI modules** in `backend/internal/collectors/` and
-  `backend/internal/ai/modules/`, selected by `project.yaml`. The engine itself,
-  a Go fetcher in `backend/` and a React UI in `frontend/`, is built or imaged
-  per project at deploy time; you never fork it.
+- **The engine**, a Go fetcher in `backend/` and a React UI in `frontend/`, is
+  built or imaged per project at deploy time; you never fork it.
 
 ## Documentation
 

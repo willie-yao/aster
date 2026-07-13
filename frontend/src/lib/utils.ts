@@ -23,6 +23,10 @@ export function formatPercent(rate: number): string {
   return `${Math.round(rate * 100)}%`;
 }
 
+export function jobDataFilename(jobName: string): string {
+  return `${jobName.replace(/[^a-zA-Z0-9\-_]/g, "-")}.json`;
+}
+
 export function groupByCategory(
   jobs: JobSummary[]
 ): Record<string, JobSummary[]> {

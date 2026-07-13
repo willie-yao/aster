@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aitest"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/collectors/generic"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fetcher"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
@@ -79,8 +78,6 @@ func runPipeline(t *testing.T, projectDir string, enableAI bool) string {
 		t.Setenv(k, "")
 	}
 	outDir := t.TempDir()
-	reg := fetcher.NewCollectorRegistry()
-	reg.Register("generic", generic.Factory)
 	err := fetcher.Run(context.Background(), fetcher.Options{
 		ProjectDir:   projectDir,
 		OutDir:       outDir,
@@ -88,7 +85,6 @@ func runPipeline(t *testing.T, projectDir string, enableAI bool) string {
 		Workers:      2,
 		Timeout:      2 * time.Minute,
 		EnableAI:     enableAI,
-		Collectors:   reg,
 	})
 	if err != nil {
 		t.Fatalf("fetcher.Run: %v", err)

@@ -82,6 +82,10 @@ func (b *localBackend) Open(_ context.Context, path string) (io.ReadCloser, int6
 }
 
 func (b *localBackend) ReadRange(_ context.Context, path string, offset, length int64) ([]byte, int64, error) {
+	length, err := validateRange(path, offset, length)
+	if err != nil {
+		return nil, 0, err
+	}
 	full, err := b.resolve(path)
 	if err != nil {
 		return nil, 0, err
@@ -99,7 +103,7 @@ func (b *localBackend) ReadRange(_ context.Context, path string, offset, length 
 	if offset >= size {
 		return nil, size, nil
 	}
-	if length <= 0 || offset+length > size {
+	if offset+length > size {
 		length = size - offset
 	}
 	buf := make([]byte, length)

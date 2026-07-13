@@ -150,11 +150,9 @@ func (b *gcswebBackend) get(ctx context.Context, path string) (*http.Response, i
 }
 
 func (b *gcswebBackend) ReadRange(ctx context.Context, path string, offset, length int64) ([]byte, int64, error) {
-	if offset < 0 {
-		return nil, 0, fmt.Errorf("read %s: offset must be >= 0", path)
-	}
-	if length <= 0 {
-		return nil, 0, fmt.Errorf("read %s: length must be > 0", path)
+	length, err := validateRange(path, offset, length)
+	if err != nil {
+		return nil, 0, err
 	}
 	if cached, ok := b.cacheGet(path); ok {
 		return sliceRange(cached, offset, length), int64(len(cached)), nil
@@ -211,19 +209,6 @@ func (b *gcswebBackend) ReadTail(ctx context.Context, path string, maxBytes int6
 		total = streamed
 	}
 	return data, total, nil
-}
-
-// sliceRange returns body[offset:offset+length] clamped to body.
-func sliceRange(body []byte, offset, length int64) []byte {
-	total := int64(len(body))
-	if offset >= total {
-		return nil
-	}
-	end := offset + length
-	if end > total {
-		end = total
-	}
-	return body[offset:end]
 }
 
 // tailOf returns the last maxBytes of body.

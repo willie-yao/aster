@@ -16,7 +16,6 @@ import (
 	"syscall"
 	"time"
 
-	collectorgeneric "github.com/willie-yao/prow-ai-dashboard/backend/internal/collectors/generic"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fetcher"
 )
 
@@ -37,8 +36,6 @@ func main() {
 	flag.Parse()
 
 	opts.Version = version
-	opts.Collectors = fetcher.NewCollectorRegistry()
-	opts.Collectors.Register("generic", collectorgeneric.Factory)
 
 	// Cancel the watch loop on SIGINT/SIGTERM so K8s rollouts drain cleanly.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

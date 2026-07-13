@@ -265,6 +265,23 @@ func contains(s []string, v string) bool {
 	return false
 }
 
+func TestURLEscaping(t *testing.T) {
+	cases := map[string]string{
+		"space here": "space%20here",
+		"slash/here": "slash%2Fhere",
+		"日本語":       "%E6%97%A5%E6%9C%AC%E8%AA%9E",
+		"a?b=c&d+e":  "a%3Fb%3Dc%26d%2Be",
+	}
+	for input, want := range cases {
+		if got := queryEscape(input); got != want {
+			t.Errorf("queryEscape(%q) = %q, want %q", input, got, want)
+		}
+	}
+	if got := escapePath("space here/slash"); got != "space%20here/slash" {
+		t.Errorf("escapePath = %q", got)
+	}
+}
+
 func TestURLsPreserveTrailingSlash(t *testing.T) {
 	// Directory URLs must keep their trailing slash: callers (the AI artifact
 	// link base, the notifier's Prow base) concatenate relative paths directly.
