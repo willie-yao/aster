@@ -1,9 +1,11 @@
 # Agentic AI analysis (tool calling)
 
 The agentic loop is the engine's only analysis path: the LLM decides which
-artifacts to read instead of pre-fetching a fixed set. The model calls four
+artifacts to read instead of pre-fetching a fixed set. The model calls
 function-calling tools that browse the build's GCS artifact tree:
-`list_artifacts`, `read_artifact`, `tail_artifact`, and `grep_artifact`.
+`list_artifacts`, `read_artifact`, `tail_artifact`, `grep_artifact`,
+`find_artifacts`, and `verify_timeline` (which returns a log's timestamped
+events ordered in time, so the model can check causal ordering).
 Optional tier-2 tools add Kubernetes-shaped discovery (`discover_clusters`,
 `discover_controllers`, etc.).
 

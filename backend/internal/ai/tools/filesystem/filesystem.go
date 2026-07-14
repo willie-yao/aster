@@ -33,6 +33,7 @@ func Register(r *tools.Registry) {
 	r.Register(&tailTool{})
 	r.Register(&grepTool{})
 	r.Register(&findTool{})
+	r.Register(&timelineTool{})
 }
 
 type listTool struct{}
