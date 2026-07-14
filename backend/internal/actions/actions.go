@@ -59,6 +59,9 @@ type PreviewResult struct {
 	// "failed" | "skipped"). Empty for an issue preview.
 	VerifyStatus  string `json:"verify_status,omitempty"`
 	VerifySummary string `json:"verify_summary,omitempty"`
+	// VerifyOutput is the tail of the failing command's output, set only when
+	// verification failed, so the reviewer sees why before confirming.
+	VerifyOutput string `json:"verify_output,omitempty"`
 }
 
 // previewEntry is a cached draft awaiting confirmation. Exactly one of spec or
@@ -274,6 +277,7 @@ func (s *Service) PreviewFix(ctx context.Context, failureID, userToken, instruct
 		Body: gf.Description, Diff: gf.Preview.Diff,
 		VerifyStatus:  string(gf.Preview.Verify.Status),
 		VerifySummary: gf.Preview.Verify.Summary,
+		VerifyOutput:  gf.Preview.Verify.Output,
 	}, nil
 }
 

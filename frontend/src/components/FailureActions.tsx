@@ -28,6 +28,7 @@ interface Preview {
   diff?: string;
   verify_status?: string;
   verify_summary?: string;
+  verify_output?: string;
 }
 
 const API_BASE = import.meta.env.BASE_URL;
@@ -517,7 +518,20 @@ export function FailureActions({ failureID }: { failureID: string }) {
               </Box>
 
               {preview.kind === "fix" && (
-                <VerifyBadge status={preview.verify_status} summary={preview.verify_summary} />
+                <Stack spacing={1.25}>
+                  <VerifyBadge status={preview.verify_status} summary={preview.verify_summary} />
+                  {preview.verify_status === "failed" && preview.verify_output && (
+                    <Box>
+                      <Typography sx={sectionLabelSx}>Verification output</Typography>
+                      <Box
+                        component="pre"
+                        sx={{ ...previewBoxSx, m: 0, maxHeight: 200, overflow: "auto" }}
+                      >
+                        {preview.verify_output}
+                      </Box>
+                    </Box>
+                  )}
+                </Stack>
               )}
 
               <Box>
