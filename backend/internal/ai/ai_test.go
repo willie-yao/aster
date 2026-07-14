@@ -288,6 +288,31 @@ func TestDetectContextWindowTokens(t *testing.T) {
 		}
 	})
 
+	t.Run("Ray Serve metadata.max_request_context_length", func(t *testing.T) {
+		// The exact shape Ray Serve's build_openai_app returns.
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(`{"data":[{"id":"moonshotai/Kimi-K2-Instruct-0905","metadata":{"max_request_context_length":32768}}]}`))
+		}))
+		defer srv.Close()
+		c := NewClientWithOptions(Options{Endpoint: srv.URL + "/v1/chat/completions", Model: "moonshotai/Kimi-K2-Instruct-0905", Token: "x"})
+		got, ok := c.DetectContextWindowTokens(context.Background())
+		if !ok || got != 32768 {
+			t.Errorf("got (%d,%v), want (32768,true)", got, ok)
+		}
+	})
+
+	t.Run("vanilla vLLM top-level max_model_len", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(`{"data":[{"id":"m","max_model_len":131072}]}`))
+		}))
+		defer srv.Close()
+		c := NewClientWithOptions(Options{Endpoint: srv.URL + "/v1/chat/completions", Model: "m", Token: "x"})
+		got, ok := c.DetectContextWindowTokens(context.Background())
+		if !ok || got != 131072 {
+			t.Errorf("got (%d,%v), want (131072,true)", got, ok)
+		}
+	})
+
 	t.Run("no context_window reported -> not ok", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte(`{"data":[{"id":"m"}]}`))

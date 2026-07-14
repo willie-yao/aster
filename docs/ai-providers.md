@@ -162,6 +162,30 @@ ai:
 Self-hosted endpoints typically don't require a token; set `AI_TOKEN` to any
 non-empty placeholder in your workflow so the env check in the fetcher passes.
 
+## Ray Serve (KubeRay)
+
+Ray Serve's LLM app (`ray.serve.llm:build_openai_app`) serves the OpenAI schema
+on vLLM, so it works unchanged. With the default `route_prefix: "/"` the
+chat-completions path is `/v1/chat/completions`:
+
+```yaml
+ai:
+  endpoint: "http://<serve-svc>.<namespace>.svc.cluster.local:8000/v1/chat/completions"
+  model: "moonshotai/Kimi-K2-Instruct-0905"   # must equal the RayService model_id
+```
+
+Notes:
+
+- `model` must match the serve config's `model_loading_config.model_id`
+  exactly, and is what `/v1/models` reports.
+- The app has no auth by default; set `AI_TOKEN` to any non-empty placeholder.
+- Function calling requires `enable_auto_tool_choice: true` plus a
+  `tool_call_parser` for the model (e.g. `kimi_k2`, `hermes`) in the serve
+  `engine_kwargs`. Without it the agentic loop cannot run.
+- Context-window auto-sizing works: Ray reports the window under
+  `metadata.max_request_context_length` in `/v1/models`, which the fetcher
+  reads (alongside top-level `context_window` / `max_model_len`).
+
 ## Cache invalidation when switching providers
 
 Cache keys are content-based (hash of the test name + normalized failure
@@ -181,8 +205,9 @@ The engine sends an OpenAI-style `tools` field on every request and expects
 agentic call to an endpoint that returns HTTP 400/422 with a tools-related
 error is treated as a capability miss, and every failure that run surfaces as
 an "AI analysis unavailable" summary (the fetcher logs `AI endpoint rejected
-tools`). Verified endpoints: GitHub Copilot, OpenAI, Azure OpenAI, and
-tool-calling Ollama / NIM models (per-model).
+tools`). Verified endpoints: GitHub Copilot, OpenAI, Azure OpenAI, Ray Serve
+(Kimi-K2 / Qwen2.5 with a tool-call parser), and tool-calling Ollama / NIM
+models (per-model).
 
 ## Cost and latency notes
 

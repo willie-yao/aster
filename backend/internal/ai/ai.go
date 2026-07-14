@@ -100,18 +100,43 @@ func (c *Client) Complete(ctx context.Context, system, user string) (string, err
 }
 
 // modelsResponse is the subset of the OpenAI-compatible /v1/models payload we
-// care about. vLLM and TRT-LLM report the served model's context window here;
-// providers such as Copilot omit it.
+// care about. Providers report the served model's context window under
+// different keys: OpenAI-style servers use top-level context_window; vanilla
+// vLLM uses top-level max_model_len; Ray Serve LLM nests it under
+// metadata.max_request_context_length. Copilot and some others omit it.
 type modelsResponse struct {
-	Data []struct {
-		ID            string `json:"id"`
-		ContextWindow int    `json:"context_window"`
-	} `json:"data"`
+	Data []modelEntry `json:"data"`
+}
+
+type modelEntry struct {
+	ID            string `json:"id"`
+	ContextWindow int    `json:"context_window"`
+	MaxModelLen   int    `json:"max_model_len"`
+	Metadata      struct {
+		MaxRequestContextLength int `json:"max_request_context_length"`
+		MaxModelLen             int `json:"max_model_len"`
+	} `json:"metadata"`
+}
+
+// contextTokens returns the entry's reported context window in tokens, checking
+// the known provider-specific fields in order, or 0 when none report it.
+func (m modelEntry) contextTokens() int {
+	for _, v := range []int{
+		m.ContextWindow,
+		m.MaxModelLen,
+		m.Metadata.MaxRequestContextLength,
+		m.Metadata.MaxModelLen,
+	} {
+		if v > 0 {
+			return v
+		}
+	}
+	return 0
 }
 
 // DetectContextWindowTokens queries the endpoint's /v1/models and returns the
 // served model's context window in tokens. Returns ok=false when the endpoint
-// does not expose /v1/models, does not report context_window, or errors.
+// does not expose /v1/models, does not report a context window, or errors.
 // Best effort: one short GET, no retries.
 func (c *Client) DetectContextWindowTokens(ctx context.Context) (int, bool) {
 	modelsURL, ok := modelsURLFor(c.apiURL)
@@ -141,14 +166,15 @@ func (c *Client) DetectContextWindowTokens(ctx context.Context) (int, bool) {
 	// that reports a positive window.
 	best := 0
 	for _, m := range out.Data {
-		if m.ContextWindow <= 0 {
+		win := m.contextTokens()
+		if win <= 0 {
 			continue
 		}
 		if m.ID == c.model {
-			return m.ContextWindow, true
+			return win, true
 		}
 		if best == 0 {
-			best = m.ContextWindow
+			best = win
 		}
 	}
 	if best > 0 {
