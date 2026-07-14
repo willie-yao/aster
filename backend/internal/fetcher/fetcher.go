@@ -769,7 +769,11 @@ func fetchBuildResult(ctx context.Context, backend storage.Backend, job *models.
 // before endpoints with hard context limits fail on overflow. Budgets derive
 // from the reported context window and are not deployment-configurable.
 const (
-	avgBytesPerToken       = 4  // rough bytes per token for logs, JSON, and prose
+	// Conservative bytes/token: CI logs (long paths, hex IDs, timestamps,
+	// stack traces) tokenize densely, so a low estimate underfills the token
+	// window and keeps the byte budget inside the model's hard limit. A higher
+	// value overshoots a small window and the request 400s on overflow.
+	avgBytesPerToken       = 3
 	modelBudgetWindowPct   = 50 // evidence-gathering cap ~= half the window
 	contextBudgetWindowPct = 75 // compaction guard ~= 3/4 the window for response headroom
 

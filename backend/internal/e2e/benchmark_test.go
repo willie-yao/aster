@@ -418,7 +418,7 @@ func extractTarGz(r io.Reader, dest string) error {
 // Budget knobs mirrored from the fetcher so the benchmark sizes context the
 // same way a live analysis does.
 const (
-	benchAvgBytesPerToken        = 4
+	benchAvgBytesPerToken        = 3
 	benchModelBudgetWindowPct    = 50
 	benchContextBudgetWindowPct  = 75
 	benchFallbackModelByteBudget = 300_000
