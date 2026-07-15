@@ -36,7 +36,7 @@ spec:
       serviceAccountName: orka-pipeline
       containers:
         - name: ingestor
-          image: orka-ingestor:latest
+          image: ghcr.io/willie-yao/prow-ai-dashboard/orka-ingestor:main
           args:
             - -serve
             - -addr=:8080

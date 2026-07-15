@@ -64,7 +64,7 @@ spec:
                     path: prompts/system.md
           initContainers:
             - name: fetch
-              image: ghcr.io/willie-yao/prow-ai-dashboard:latest
+              image: ghcr.io/willie-yao/prow-ai-dashboard:main
               command: ["/usr/local/bin/fetcher"]
               args:
                 - -project-dir=/config
@@ -75,7 +75,7 @@ spec:
                 - { name: data, mountPath: /data }
                 - { name: config, mountPath: /config, readOnly: true }
             - name: produce
-              image: orka-producer:latest
+              image: ghcr.io/willie-yao/prow-ai-dashboard/orka-producer:main
               args:
                 - -data=/data
                 - -project-dir=/config
@@ -93,7 +93,7 @@ spec:
                 - { name: base-tools, mountPath: /base-tools, readOnly: true }
           containers:
             - name: ingest
-              image: orka-ingestor:latest
+              image: ghcr.io/willie-yao/prow-ai-dashboard/orka-ingestor:main
               args:
                 - -data=/data
                 - -api=http://orka.orka-system.svc:8080

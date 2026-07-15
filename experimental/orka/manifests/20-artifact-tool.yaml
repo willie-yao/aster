@@ -22,7 +22,7 @@ spec:
     spec:
       containers:
       - name: artifact-tool
-        image: orka-artifact-tool:latest
+        image: ghcr.io/willie-yao/prow-ai-dashboard/orka-artifact-tool:main
         imagePullPolicy: IfNotPresent
         ports: [{containerPort: 8080}]
         env:

@@ -22,7 +22,7 @@ spec:
     spec:
       containers:
       - name: proxy
-        image: orka-copilot-proxy:latest
+        image: ghcr.io/willie-yao/prow-ai-dashboard/orka-copilot-proxy:main
         imagePullPolicy: IfNotPresent
         ports: [{containerPort: 8080}]
         # UPSTREAM and COPILOT_INTEGRATION_ID default to api.githubcopilot.com

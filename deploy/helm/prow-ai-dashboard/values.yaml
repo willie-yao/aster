@@ -54,9 +54,10 @@ orka:
   taskTimeout: 10m
   retries: 1
   ingestWait: 45m
-  # Producer + ingestor images (built from experimental/orka/Dockerfile).
-  producerImage: orka-producer:latest
-  ingestorImage: orka-ingestor:latest
+  # Producer + ingestor images, published to GHCR alongside the engine image by
+  # .github/workflows/image.yml. Override for a local build (see USAGE.md).
+  producerImage: ghcr.io/willie-yao/prow-ai-dashboard/orka-producer:main
+  ingestorImage: ghcr.io/willie-yao/prow-ai-dashboard/orka-ingestor:main
   imagePullPolicy: IfNotPresent
   # RBAC: create a ServiceAccount + Role/RoleBinding for the pipeline (create/patch
   # Tasks+Tools, read status, GC Tools). Disable to reuse an existing SA.
