@@ -201,7 +201,7 @@ func (s *Service) buildFixManager(userToken string) (*fixpr.Manager, error) {
 		critique = aiClient
 	}
 
-	prClient, source := fixpr.NewClients(userToken)
+	prClient := fixpr.NewClients(userToken)
 	opts := fixpr.Options{
 		SourceOwner:     eff.Repo.Owner,
 		SourceName:      eff.Repo.Name,
@@ -224,7 +224,23 @@ func (s *Service) buildFixManager(userToken string) (*fixpr.Manager, error) {
 			Token:    userToken,
 		}
 	}
-	mgr := fixpr.NewManager(prClient, aiClient, source,
+	ar := eff.AgentRuntime
+	allowBash := ar.AllowBash == nil || *ar.AllowBash
+	model := ar.Model
+	if model == "" {
+		model = s.ai.Model
+	}
+	opts.Agent = &fixpr.AgentConfig{
+		Runtime:    runtime.NewLocalAgent(),
+		Model:      model,
+		Endpoint:   s.ai.Endpoint,
+		ModelToken: s.ai.Token,
+		MaxTurns:   ar.MaxTurns,
+		AllowBash:  allowBash,
+		Timeout:    ar.ParsedTimeout(),
+		GitToken:   userToken,
+	}
+	mgr := fixpr.NewManager(prClient,
 		filepath.Join(s.dataDir, "fix_pr_state.json"), opts)
 	return mgr, nil
 }

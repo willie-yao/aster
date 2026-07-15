@@ -76,6 +76,29 @@ type Options struct {
 	// the PR is opened, recording the verdict in the PR body and preview. nil
 	// skips verification (the verdict is "skipped").
 	Verify *VerifyConfig
+	// Agent generates the fix with a coding-agent CLI in a real workspace clone
+	// (multi-file edits, can build/test). Required: it is the fix generator.
+	Agent *AgentConfig
+}
+
+// AgentConfig configures the coding-agent fix generator.
+type AgentConfig struct {
+	// Runtime runs the coding agent against a clone of the source repo.
+	Runtime runtime.AgentRuntime
+	// Model, Endpoint, and ModelToken point the agent at the model. Empty Model
+	// uses the CLI default.
+	Model      string
+	Endpoint   string
+	ModelToken string
+	// MaxTurns bounds the agent loop; zero uses the CLI default.
+	MaxTurns int
+	// AllowBash lets the agent run build/tests while fixing.
+	AllowBash bool
+	// Timeout bounds the whole generation. Zero uses the Runtime default.
+	Timeout time.Duration
+	// GitToken authenticates the source clone. Empty clones anonymously, which
+	// is enough for a public repo.
+	GitToken string
 }
 
 // VerifyConfig configures pre-PR verification of a proposed fix.
@@ -125,8 +148,6 @@ type PRBodyFiller interface {
 // Manager reconciles systemic recurring patterns into fix PRs.
 type Manager struct {
 	pr        prClient
-	completer Completer
-	source    sourceReader
 	stateFile string
 	opts      Options
 	state     *State
@@ -166,18 +187,16 @@ type Failure struct {
 	Reason  string
 }
 
-// NewClients builds the GitHub PR client and source reader from a token.
-func NewClients(token string) (*ghpr.Client, sourceReader) {
-	return ghpr.NewClient(nil, token), newHTTPSource(token)
+// NewClients builds the GitHub PR client from a token.
+func NewClients(token string) *ghpr.Client {
+	return ghpr.NewClient(nil, token)
 }
 
 // NewManager builds a Manager and loads prior state from stateFile if present.
-func NewManager(pr prClient, completer Completer, source sourceReader, stateFile string, opts Options) *Manager {
+func NewManager(pr prClient, stateFile string, opts Options) *Manager {
 	repo := opts.SourceOwner + "/" + opts.SourceName
 	return &Manager{
 		pr:        pr,
-		completer: completer,
-		source:    source,
 		stateFile: stateFile,
 		opts:      opts,
 		state:     statefile.Load[TrackedFix](stateFile, repo, "fix PRs"),
@@ -286,16 +305,15 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 // an optional maintainer directive that steers the edit; empty for the batch
 // path.
 func (m *Manager) generate(ctx context.Context, p models.PatternAnalysis, ref, instruction string) (*proposedFix, error) {
-	return generateFix(ctx, genParams{
-		completer:       m.completer,
+	return generateWithAgent(ctx, genParams{
 		critique:        m.opts.Critique,
-		source:          m.source,
 		owner:           m.opts.SourceOwner,
 		repo:            m.opts.SourceName,
 		ref:             ref,
 		maxFiles:        m.opts.MaxFiles,
 		critiqueRetries: m.opts.CritiqueRetries,
 		instruction:     instruction,
+		agent:           m.opts.Agent,
 	}, p)
 }
 

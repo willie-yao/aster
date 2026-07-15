@@ -729,6 +729,44 @@ func TestEffectiveFixPRsDefaults(t *testing.T) {
 	}
 }
 
+func TestEffectiveFixPRs_AgentRuntimeDefaults(t *testing.T) {
+	c := &Config{
+		Branding: Branding{SourceRepo: SourceRepo{Owner: "o", Name: "n"}},
+		AI: &AI{FixPRs: &FixPRs{
+			Enabled: true, AuthorName: "J", AuthorEmail: "j@e.com",
+			AgentRuntime: &FixAgentRuntime{},
+		}},
+	}
+	ar := c.EffectiveFixPRs().AgentRuntime
+	if ar == nil || ar.Type != "opencode" || ar.MaxTurns != 30 {
+		t.Fatalf("agent_runtime defaults wrong: %+v", ar)
+	}
+	if ar.AllowBash == nil || !*ar.AllowBash {
+		t.Errorf("allow_bash default = %v, want true", ar.AllowBash)
+	}
+	// An explicit allow_bash: false is preserved.
+	no := false
+	c.AI.FixPRs.AgentRuntime.AllowBash = &no
+	if got := c.EffectiveFixPRs().AgentRuntime; got.AllowBash == nil || *got.AllowBash {
+		t.Errorf("explicit allow_bash=false not preserved: %v", got.AllowBash)
+	}
+}
+
+func TestEffectiveFixPRs_NilAgentRuntimeDefaultsToOpencode(t *testing.T) {
+	// A nil agent_runtime block means "opencode with defaults": the coding-agent
+	// generator is the only fix path, so the effective config always resolves.
+	c := &Config{
+		Branding: Branding{SourceRepo: SourceRepo{Owner: "o", Name: "n"}},
+		AI: &AI{FixPRs: &FixPRs{
+			Enabled: true, AuthorName: "J", AuthorEmail: "j@e.com",
+		}},
+	}
+	ar := c.EffectiveFixPRs().AgentRuntime
+	if ar == nil || ar.Type != "opencode" || ar.MaxTurns != 30 || ar.AllowBash == nil || !*ar.AllowBash {
+		t.Fatalf("nil agent_runtime should default to opencode: %+v", ar)
+	}
+}
+
 func TestValidateFixPRsRequiresAuthor(t *testing.T) {
 	base := func() *Config {
 		c, err := parse(strings.NewReader(validYAML))
@@ -761,5 +799,23 @@ func TestValidateFixPRsRequiresAuthor(t *testing.T) {
 	c.AI = &AI{FixPRs: &FixPRs{Enabled: true, AuthorName: "Jane", AuthorEmail: "jane@example.com", CritiqueRetries: &neg}}
 	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "critique_retries must be >= 0") {
 		t.Errorf("expected negative-critique_retries error, got %v", err)
+	}
+	// An unsupported agent_runtime.type is rejected.
+	c = base()
+	c.AI = &AI{FixPRs: &FixPRs{Enabled: true, AuthorName: "Jane", AuthorEmail: "jane@example.com", AgentRuntime: &FixAgentRuntime{Type: "claude"}}}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "agent_runtime.type") {
+		t.Errorf("expected unsupported agent_runtime.type error, got %v", err)
+	}
+	// opencode (and empty) agent_runtime.type is accepted.
+	c = base()
+	c.AI = &AI{FixPRs: &FixPRs{Enabled: true, AuthorName: "Jane", AuthorEmail: "jane@example.com", AgentRuntime: &FixAgentRuntime{Type: "opencode", Timeout: "10m"}}}
+	if err := c.Validate(); err != nil {
+		t.Errorf("unexpected error for opencode agent_runtime: %v", err)
+	}
+	// A bad agent_runtime.timeout is rejected.
+	c = base()
+	c.AI = &AI{FixPRs: &FixPRs{Enabled: true, AuthorName: "Jane", AuthorEmail: "jane@example.com", AgentRuntime: &FixAgentRuntime{Timeout: "soon"}}}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "agent_runtime.timeout") {
+		t.Errorf("expected bad-timeout error, got %v", err)
 	}
 }

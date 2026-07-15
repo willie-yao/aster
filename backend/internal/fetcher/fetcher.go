@@ -600,7 +600,7 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 		critique = aiClient
 	}
 
-	prClient, source := fixpr.NewClients(fixToken)
+	prClient := fixpr.NewClients(fixToken)
 	fixOpts := fixpr.Options{
 		SourceOwner:     eff.Repo.Owner,
 		SourceName:      eff.Repo.Name,
@@ -626,7 +626,23 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 			Token:    fixToken,
 		}
 	}
-	mgr := fixpr.NewManager(prClient, aiClient, source,
+	ar := eff.AgentRuntime
+	allowBash := ar.AllowBash == nil || *ar.AllowBash
+	model := ar.Model
+	if model == "" {
+		model = aiModel(cfg)
+	}
+	fixOpts.Agent = &fixpr.AgentConfig{
+		Runtime:    runtime.NewLocalAgent(),
+		Model:      model,
+		Endpoint:   aiEndpoint(cfg),
+		ModelToken: aiToken,
+		MaxTurns:   ar.MaxTurns,
+		AllowBash:  allowBash,
+		Timeout:    ar.ParsedTimeout(),
+		GitToken:   fixToken,
+	}
+	mgr := fixpr.NewManager(prClient,
 		filepath.Join(outDir, "fix_pr_state.json"), fixOpts)
 	stats, err := mgr.Reconcile(ctx, patterns)
 	if err != nil {
@@ -1076,10 +1092,9 @@ func gatherPatternFailures(d *models.JobDetail) []ai.PatternFailure {
 			RootCause:      rep.AIAnalysis.RootCause,
 			SuggestedFix:   rep.AIAnalysis.SuggestedFix,
 			RelevantFiles:  rep.AIAnalysis.RelevantFiles,
-			// The failing test's location seeds the fix harness (via the
-			// pattern's RelevantFiles) without entering the correlation prompt,
-			// so warm pattern-cache entries survive. repoRelevantFiles drops it
-			// later when it points at vendored or upstream code.
+			// The failing test's location seeds the fix agent (via the pattern's
+			// RelevantFiles) without entering the correlation prompt, so warm
+			// pattern-cache entries survive.
 			LocationFile: failureLocationFile(rep.FailureLocation),
 			IsTransient:  rep.AISummary != nil && rep.AISummary.IsTransient,
 			Severity:     rep.AIAnalysis.Severity,
