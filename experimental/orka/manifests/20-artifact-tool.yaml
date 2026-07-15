@@ -1,0 +1,54 @@
+# The artifact-tool service: exposes the engine's real filesystem tools
+# (list/read/tail/grep/find over a Prow build's artifact tree) as HTTP
+# endpoints Orka Tools can call. Storage-provider agnostic: it serves whatever
+# STORAGE_PROVIDER points at (gcs, or gcsweb over an S3 gateway). Pinned to one
+# build via BUILD_PREFIX.
+#
+# Build + load the image into kind first:
+#   docker build -f experimental/orka/Dockerfile -t orka-artifact-tool:latest backend/
+#   kind load docker-image orka-artifact-tool:latest --name orka-spike
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: artifact-tool
+  namespace: orka-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: artifact-tool}
+  template:
+    metadata:
+      labels: {app: artifact-tool}
+    spec:
+      containers:
+      - name: artifact-tool
+        image: orka-artifact-tool:latest
+        imagePullPolicy: IfNotPresent
+        ports: [{containerPort: 8080}]
+        env:
+        # Bucket-relative, trailing-slashed Prow build directory to serve.
+        - name: BUILD_PREFIX
+          value: "logs/periodic-cluster-api-provider-azure-e2e-main/2073230525962653696/"
+        - name: DISPLAY
+          value: "capz-e2e-main/2073230525962653696"
+        # BUCKET defaults to kubernetes-ci-logs.
+        # Storage provider: gcs (default) or gcsweb (any bucket behind a gcsweb
+        # gateway, e.g. an S3 bucket). For gcsweb also set STORAGE_BASE (the
+        # gateway root) and optionally STORAGE_PROW_BASE (the Prow deck root).
+        # These are the shim's defaults; the producer overrides them per request
+        # via X-Storage-* headers from each consumer's project.yaml.
+        # - name: STORAGE_PROVIDER
+        #   value: "gcsweb"
+        # - name: STORAGE_BASE
+        #   value: "https://gcsweb.my-project.io/s3"
+        # - name: STORAGE_PROW_BASE
+        #   value: "https://prow.my-project.io/view/s3"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: artifact-tool
+  namespace: orka-system
+spec:
+  selector: {app: artifact-tool}
+  ports: [{port: 8080, targetPort: 8080}]

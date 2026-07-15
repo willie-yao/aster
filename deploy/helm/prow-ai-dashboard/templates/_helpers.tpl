@@ -83,6 +83,29 @@ Name of the Secret holding the AI token.
 {{- end -}}
 
 {{/*
+Name of the ServiceAccount the Orka analysis pipeline runs as.
+*/}}
+{{- define "prow-ai-dashboard.orkaServiceAccountName" -}}
+{{- if .Values.orka.rbac.serviceAccountName -}}
+{{- .Values.orka.rbac.serviceAccountName -}}
+{{- else -}}
+{{- printf "%s-orka" (include "prow-ai-dashboard.fullname" .) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Validate the analysis backend selection and its constraints.
+*/}}
+{{- define "prow-ai-dashboard.validateAnalysis" -}}
+{{- if not (or (eq .Values.analysis "inprocess") (eq .Values.analysis "orka")) -}}
+{{- fail (printf "analysis must be \"inprocess\" or \"orka\", got %q" .Values.analysis) -}}
+{{- end -}}
+{{- if and (eq .Values.analysis "orka") (ne .Values.mode "cron") -}}
+{{- fail "analysis: orka requires mode: cron (the produce->ingest flow is batch-oriented)" -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Name of the Secret holding the server auth credentials (OAuth secret + session
 key, or bot token).
 */}}

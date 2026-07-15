@@ -1,7 +1,9 @@
+{{- include "prow-ai-dashboard.validateAnalysis" . -}}
 {{- if not (or (eq .Values.mode "cron") (eq .Values.mode "watch")) }}
 {{- fail (printf "mode must be \"cron\" or \"watch\", got %q" .Values.mode) }}
 {{- end }}
 {{- if eq .Values.mode "cron" }}
+{{- $orka := eq .Values.analysis "orka" }}
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -23,13 +25,95 @@ spec:
             app.kubernetes.io/component: fetcher
         spec:
           restartPolicy: OnFailure
+          {{- if $orka }}
+          serviceAccountName: {{ include "prow-ai-dashboard.orkaServiceAccountName" . }}
+          automountServiceAccountToken: true
+          {{- else }}
           automountServiceAccountToken: false
+          {{- end }}
           {{- with .Values.imagePullSecrets }}
           imagePullSecrets:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           securityContext:
             {{- toYaml .Values.podSecurityContext | nindent 12 }}
+          {{- if $orka }}
+          # Orka analysis: fetch the skeleton (-ai=false), produce one Task per
+          # failing test, then ingest the results. The engine's in-process AI is
+          # not used; Orka + the tool shim + a Provider must already be installed.
+          initContainers:
+            - name: fetch
+              image: {{ include "prow-ai-dashboard.image" . }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command:
+                - /usr/local/bin/fetcher
+                - -project-dir={{ .Values.project.mountPath }}
+                - -out={{ .Values.persistence.mountPath }}
+                - -ai=false
+                - -builds={{ .Values.fetcher.buildsPerJob }}
+                - -workers={{ .Values.fetcher.workers }}
+                - -timeout={{ .Values.fetcher.timeout }}
+                {{- if .Values.fetcher.includePresubmits }}
+                - -include-presubmits
+                {{- end }}
+              {{- with .Values.fetcher.extraEnv }}
+              env:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+              securityContext:
+                {{- toYaml .Values.securityContext | nindent 16 }}
+              volumeMounts:
+                - { name: data, mountPath: {{ .Values.persistence.mountPath }} }
+                - { name: project, mountPath: {{ .Values.project.mountPath }}, readOnly: true }
+                - { name: tmp, mountPath: /tmp }
+              resources:
+                {{- toYaml .Values.fetcher.resources | nindent 16 }}
+            - name: produce
+              image: {{ .Values.orka.producerImage }}
+              imagePullPolicy: {{ .Values.orka.imagePullPolicy }}
+              command:
+                - /usr/local/bin/orka-producer
+                - -data={{ .Values.persistence.mountPath }}
+                - -project-dir={{ .Values.project.mountPath }}
+                - -tool-manifests=/base-tools
+                - -tasks-out=/tmp/tasks
+                - -tools-out=/tmp/build-tools
+                - -apply
+                - -namespace={{ .Values.orka.namespace }}
+                - -provider={{ .Values.orka.provider }}
+                - -model={{ .Values.orka.model }}
+                - -version={{ .Values.orka.version }}
+                - -timeout={{ .Values.orka.taskTimeout }}
+                - -retries={{ .Values.orka.retries | int }}
+              securityContext:
+                {{- toYaml .Values.securityContext | nindent 16 }}
+              volumeMounts:
+                - { name: data, mountPath: {{ .Values.persistence.mountPath }} }
+                - { name: project, mountPath: {{ .Values.project.mountPath }}, readOnly: true }
+                - { name: base-tools, mountPath: /base-tools, readOnly: true }
+                - { name: tmp, mountPath: /tmp }
+          containers:
+            - name: ingest
+              image: {{ .Values.orka.ingestorImage }}
+              imagePullPolicy: {{ .Values.orka.imagePullPolicy }}
+              command:
+                - /usr/local/bin/orka-ingestor
+                - -data={{ .Values.persistence.mountPath }}
+                - -api={{ .Values.orka.apiBase }}
+                - -token-file=/var/run/secrets/kubernetes.io/serviceaccount/token
+                - -namespace={{ .Values.orka.namespace }}
+                - -version={{ .Values.orka.version }}
+                - -model={{ .Values.orka.model }}
+                - -wait={{ .Values.orka.ingestWait }}
+                - -gc=true
+              securityContext:
+                {{- toYaml .Values.securityContext | nindent 16 }}
+              volumeMounts:
+                - { name: data, mountPath: {{ .Values.persistence.mountPath }} }
+                - { name: tmp, mountPath: /tmp }
+              resources:
+                {{- toYaml .Values.fetcher.resources | nindent 16 }}
+          {{- else }}
           containers:
             - name: fetcher
               image: {{ include "prow-ai-dashboard.image" . }}
@@ -86,6 +170,7 @@ spec:
                   mountPath: /tmp
               resources:
                 {{- toYaml .Values.fetcher.resources | nindent 16 }}
+          {{- end }}
           {{- with .Values.fetcher.nodeSelector }}
           nodeSelector:
             {{- toYaml . | nindent 12 }}
@@ -110,6 +195,11 @@ spec:
                     path: project.yaml
                   - key: system.md
                     path: prompts/system.md
+            {{- if $orka }}
+            - name: base-tools
+              configMap:
+                name: {{ .Values.orka.baseToolsConfigMap }}
+            {{- end }}
             - name: tmp
               emptyDir: {}
 {{- end }}

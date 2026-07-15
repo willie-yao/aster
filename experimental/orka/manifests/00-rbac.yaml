@@ -1,0 +1,26 @@
+# Grants the Orka controller service account full access to the core.orka.ai
+# CRDs. The upstream Orka helm chart's controller ClusterRole predates some
+# newer CRDs (e.g. agentruntimes), so the controller crashes on "cannot list
+# agentruntimes" without this. Spike-only; a real deploy should carry the fix
+# upstream in the chart.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: orka-spike-full-crd
+rules:
+- apiGroups: ["core.orka.ai"]
+  resources: ["*"]
+  verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: orka-spike-full-crd
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: orka-spike-full-crd
+subjects:
+- kind: ServiceAccount
+  name: orka
+  namespace: orka-system

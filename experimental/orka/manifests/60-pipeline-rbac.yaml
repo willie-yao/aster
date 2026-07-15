@@ -1,0 +1,35 @@
+# RBAC for the in-cluster Orka pipeline. The orka-producer applies Tasks +
+# per-build Tools via server-side apply. The orka-ingestor reads Task status and
+# garbage-collects completed builds' Tools. Both run under this ServiceAccount,
+# whose token also authenticates the ingestor to the Orka result API (via
+# TokenReview), so no separate credential is needed.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: orka-pipeline
+  namespace: orka-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: orka-pipeline
+  namespace: orka-system
+rules:
+  # create/patch to apply, get/list to poll status, delete for per-build Tool GC (H4).
+  - apiGroups: ["core.orka.ai"]
+    resources: ["tasks", "tools"]
+    verbs: ["create", "get", "list", "watch", "patch", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: orka-pipeline
+  namespace: orka-system
+subjects:
+  - kind: ServiceAccount
+    name: orka-pipeline
+    namespace: orka-system
+roleRef:
+  kind: Role
+  name: orka-pipeline
+  apiGroup: rbac.authorization.k8s.io

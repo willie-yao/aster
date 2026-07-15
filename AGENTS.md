@@ -38,6 +38,10 @@ backend/                       Go 1.25
     fetcher/                   Main entrypoint; one binary per deploy
     server/                    Kubernetes-native API server (read parity + capabilities)
     worker/                    Continuous watch worker (in-cluster incremental fetch)
+    orka-producer/             Opt-in Orka backend: emits analysis Tasks + Tools
+    orka-ingestor/             Opt-in Orka backend: patches Task results into jobs/*.json
+    orka-artifact-tool/        Opt-in Orka backend: HTTP shim exposing artifact tools
+    orka-copilot-proxy/        Opt-in Orka backend: Copilot de-streaming proxy
     ai-toolcall-spike/         Throwaway probe; safe to ignore
     _manifest_check/           Build-time check on manifest schema
   internal/
@@ -69,6 +73,7 @@ backend/                       Go 1.25
     server/                    HTTP handler: /data/* read parity + /api/capabilities + actions
     auth/                      Admin auth seam (PAT allowlist; OAuth-swappable)
     actions/                   On-demand single-failure issue / fix-PR service
+    orka/                      Opt-in Orka backend: Task naming + client-go apply helpers
 
 frontend/                      React 19 + Vite 8 + Tailwind 4
   public/data/                 Fetcher writes JSON here; Vite serves it
@@ -77,6 +82,7 @@ frontend/                      React 19 + Vite 8 + Tailwind 4
     components/ManifestProvider.tsx   Loads manifest.json
 configs/example/               Docs-only sample project.yaml + prompts/
 deploy/helm/                   Helm chart for the Kubernetes-native mode
+experimental/orka/             Opt-in Orka analysis backend (docs, manifests, worker-patches)
 Dockerfile                     Multi-stage image: fetcher + server + SPA
 docs/                          agentic.md, ai-providers.md, skills.md,
                                writing-prompts.md, onboarding-a-new-project.md

@@ -1,8 +1,10 @@
 name: Image
 
-# Builds and pushes the engine image (fetcher + server + SPA) to GHCR. Pushes
-# on main produce a :main tag and a :sha-<short> tag; semver tags (vX.Y.Z)
-# produce version tags plus a moving major alias.
+# Builds and pushes the engine image (fetcher + server + SPA) to GHCR, plus the
+# opt-in Orka backend images (orka-producer, orka-ingestor, orka-artifact-tool,
+# orka-copilot-proxy) under the same repo path. Pushes on main produce a :main
+# tag and a :sha-<short> tag; semver tags (vX.Y.Z) produce version tags plus a
+# moving major alias.
 on:
   push:
     branches: [main]
@@ -53,3 +55,54 @@ jobs:
             VERSION=${{ steps.meta.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # Opt-in Orka backend images. Each is a separate image so the default engine
+  # image stays unchanged and free of the client-go dependency the Orka commands
+  # pull in. Built from experimental/orka/Dockerfile with the backend/ build
+  # context, one per command via the CMD build-arg.
+  orka-images:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        cmd:
+          - orka-producer
+          - orka-ingestor
+          - orka-artifact-tool
+          - orka-copilot-proxy
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}/${{ matrix.cmd }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=sha-
+            type=semver,pattern={{raw}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          file: experimental/orka/Dockerfile
+          push: true
+          build-args: |
+            CMD=${{ matrix.cmd }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.cmd }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.cmd }}

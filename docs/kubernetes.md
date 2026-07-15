@@ -60,6 +60,32 @@ the same `existingClaim`. A `Recreate` rollout keeps a single worker across
 updates, and Helm-managed config or secret changes trigger a rollout
 automatically.
 
+## Analysis backend: in-process or Orka
+
+The `analysis` value selects how failing tests are analyzed. Both backends write
+the same `jobs/*.json`, so the server, the SPA, and the `/data` contract are
+identical either way.
+
+- `analysis: inprocess` (default): the worker or CronJob runs the engine's
+  in-process agentic loop, governed by `ai.enabled`. It is self-contained, so a
+  fresh `helm install` works with no extra components.
+- `analysis: orka` (recommended for the Kubernetes-native path): the fetch step
+  writes the dashboard skeleton only, and the [Orka](../experimental/orka/)
+  pipeline runs the analysis as Kubernetes-native Tasks alongside your inference
+  stack, with native retries, per-Task observability, and a path to agent-runtime
+  remediation. This is the preferred backend once you operate an in-cluster
+  model, because the analysis then runs as first-class cluster workloads next to
+  it rather than inside the fetch process.
+
+Orka mode requires `mode: cron` and assumes Orka, the artifact tool shim, a
+Provider, and the patched ai-worker image are already installed in the cluster.
+The chart deploys the analysis pipeline, not Orka itself, so the default stays
+`inprocess` and a fresh install always works. Opt into Orka once those
+prerequisites are in place. See
+[experimental/orka/USAGE.md](../experimental/orka/USAGE.md) for the full setup
+and [experimental/orka/ARCHITECTURE.md](../experimental/orka/ARCHITECTURE.md) for
+how it works.
+
 ## Build and push the image
 
 ```bash
@@ -146,6 +172,7 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | --- | --- |
 | `image.repository`, `image.tag` | Engine image; tag defaults to the chart `appVersion`. |
 | `mode` | `watch` (continuous worker Deployment, default) or `cron` (scheduled CronJob). |
+| `analysis` | `inprocess` (default; in-cluster agentic loop) or `orka` (Kubernetes-native Orka pipeline, recommended when you run an in-cluster inference stack; requires `mode: cron` and Orka installed). |
 | `persistence.accessMode` | Must be `ReadWriteMany`. |
 | `persistence.storageClass`, `persistence.size` | The shared volume's class and size. |
 | `persistence.existingClaim` | Reuse a pre-provisioned PVC instead of creating one. |

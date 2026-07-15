@@ -11,6 +11,16 @@ Shared volume:    {{ include "prow-ai-dashboard.pvcName" . }} ({{ .Values.persis
 The server serves the SPA at / and the JSON contract at /data/*, with a
 capability descriptor at /api/capabilities.
 
+{{- if eq .Values.analysis "orka" }}
+
+Analysis backend: orka. The fetcher CronJob writes the skeleton (-ai=false), the
+orka-producer applies one Orka Task per failing test, and the orka-ingestor patches
+the results. Orka + the tool shim + a Provider + the ai-worker patches must already
+be installed in namespace {{ .Values.orka.namespace }}, and the base Tool CRDs must
+exist as ConfigMap {{ .Values.orka.baseToolsConfigMap }}. See
+experimental/orka/USAGE.md.
+{{- end }}
+
 {{- if .Values.ingress.enabled }}
 Reach it at:
 {{- range .Values.ingress.hosts }}

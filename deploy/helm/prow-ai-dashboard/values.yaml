@@ -24,6 +24,47 @@ fullnameOverride: ""
 # release at the same existingClaim.
 mode: watch
 
+# Analysis backend selects HOW failures are analyzed.
+#   inprocess: (default) the fetcher/worker runs the engine's in-process agentic
+#              loop (governed by ai.enabled). No change to existing behavior.
+#   orka:      the fetch step writes the skeleton only (-ai=false) and the Orka
+#              pipeline (orka-producer -> Orka Tasks -> orka-ingestor) does the
+#              analysis, running alongside an in-cluster inference stack. Requires
+#              mode: cron, and Orka + the tool shim + a Provider + the ai-worker
+#              patches must already be installed (this chart deploys the pipeline,
+#              not Orka itself). See experimental/orka/USAGE.md.
+analysis: inprocess
+
+# Orka analysis backend settings. Only used when analysis: orka.
+orka:
+  namespace: orka-system
+  # Provider CRD name and the model the Tasks request.
+  provider: copilot
+  model: claude-sonnet-4.5
+  # The multi-bucket GCS tool shim and the Orka result API (in-cluster Services).
+  toolShimEnv: {}
+  apiBase: http://orka.orka-system.svc:8080
+  # ConfigMap holding the base Tool CRDs the producer clones per build. Create it
+  # from experimental/orka/manifests (kubectl create configmap orka-base-tools
+  # --from-file=experimental/orka/manifests/).
+  baseToolsConfigMap: orka-base-tools
+  # Content-address version; bump to force re-analysis after a prompt/tool change.
+  version: v1
+  # Per-Task timeout, retryPolicy, and how long the ingest step waits for results.
+  taskTimeout: 10m
+  retries: 1
+  ingestWait: 45m
+  # Producer + ingestor images (built from experimental/orka/Dockerfile).
+  producerImage: orka-producer:latest
+  ingestorImage: orka-ingestor:latest
+  imagePullPolicy: IfNotPresent
+  # RBAC: create a ServiceAccount + Role/RoleBinding for the pipeline (create/patch
+  # Tasks+Tools, read status, GC Tools). Disable to reuse an existing SA.
+  rbac:
+    create: true
+    serviceAccountName: ""
+
+
 # Shared volume holding fetcher output and the AI cache. It must be
 # ReadWriteMany so the CronJob (writer) and the server (reader) can mount it at
 # the same time. Set existingClaim to reuse a pre-provisioned PVC.

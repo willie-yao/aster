@@ -1,0 +1,45 @@
+{{- include "prow-ai-dashboard.validateAnalysis" . -}}
+{{- if and (eq .Values.analysis "orka") .Values.orka.rbac.create }}
+# The pipeline pod runs in the release namespace but creates Tasks/Tools in the
+# Orka namespace, so the ServiceAccount lives here (release ns) and the
+# Role/RoleBinding grant it access in the Orka namespace cross-namespace.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "prow-ai-dashboard.orkaServiceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "prow-ai-dashboard.labels" . | nindent 4 }}
+    app.kubernetes.io/component: orka-pipeline
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "prow-ai-dashboard.orkaServiceAccountName" . }}
+  namespace: {{ .Values.orka.namespace }}
+  labels:
+    {{- include "prow-ai-dashboard.labels" . | nindent 4 }}
+    app.kubernetes.io/component: orka-pipeline
+rules:
+  # create/patch to apply, get/list/watch to poll status, delete for Tool GC.
+  - apiGroups: ["core.orka.ai"]
+    resources: ["tasks", "tools"]
+    verbs: ["create", "get", "list", "watch", "patch", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "prow-ai-dashboard.orkaServiceAccountName" . }}
+  namespace: {{ .Values.orka.namespace }}
+  labels:
+    {{- include "prow-ai-dashboard.labels" . | nindent 4 }}
+    app.kubernetes.io/component: orka-pipeline
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "prow-ai-dashboard.orkaServiceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: {{ include "prow-ai-dashboard.orkaServiceAccountName" . }}
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

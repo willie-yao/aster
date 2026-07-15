@@ -1,0 +1,21 @@
+# LLM provider for Orka. Uses GitHub Models (OpenAI-compatible) with a PAT that
+# has models:read. Create the secret first:
+#   kubectl create secret generic gh-models-secret -n orka-system \
+#     --from-literal=api-key=<YOUR_GITHUB_PAT>
+#
+# NOTE: GitHub Models free tier caps each request at 8k-16k input tokens, which
+# is too small for parity-depth CI analysis. For a real evaluation, point
+# baseURL/secretRef at a large-context endpoint (Dynamo/Kimi, Copilot, or a paid
+# OpenAI key) instead.
+apiVersion: core.orka.ai/v1alpha1
+kind: Provider
+metadata:
+  name: gh-models
+  namespace: orka-system
+spec:
+  type: openai
+  baseURL: https://models.github.ai/inference
+  secretRef:
+    name: gh-models-secret
+    key: api-key
+  defaultModel: openai/gpt-4o

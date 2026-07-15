@@ -20,7 +20,10 @@ inside your cluster, next to the inference stack, and a small server serves the
 dashboard plus the `/data/*.json` contract from a shared volume. The AI calls
 stay in-cluster (low latency, no egress, private endpoints work), and it unlocks
 interactive admin actions (File issue / Propose fix) behind GitHub sign-in.
-Deployed with the Helm chart in [`deploy/helm`](deploy/helm). See
+Deployed with the Helm chart in [`deploy/helm`](deploy/helm). The analysis
+backend is selectable: the in-process agentic loop by default, or the
+[Orka](experimental/orka/) Kubernetes-native pipeline, the recommended backend
+once you run an in-cluster inference stack. See
 [Kubernetes deploy](docs/kubernetes.md) and [Server mode](docs/server.md).
 
 **GitHub Actions + Pages (static).** A ~20-line reusable workflow runs the
@@ -94,6 +97,9 @@ A dashboard is shaped by three things:
   chart in `deploy/helm`.
 - [Server mode](docs/server.md): the in-cluster server that serves the same
   `/data/*.json` contract plus a capability descriptor and admin-gated actions.
+- [Orka analysis backend](experimental/orka/): the recommended Kubernetes-native
+  analysis backend, running failure analysis as Orka Tasks alongside your
+  inference stack.
 - [In-cluster runner](docs/self-hosted-runner-in-cluster.md): for the Pages
   path, run the deploy on a self-hosted runner to reach a private, in-cluster
   AI endpoint.
