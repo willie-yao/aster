@@ -20,6 +20,14 @@ for how to pin a release.
 
 ## [Unreleased]
 
+### Removed
+
+- **Self-improving skills (`ai.suggest_skills`).** The opt-in feature that
+  auto-drafted `skills/<id>.yaml` recipe PRs for uncovered systemic patterns is
+  removed, along with its `SKILL_TOKEN` workflow secret. Authoring recipes by
+  hand under `skills/*.yaml` is unchanged; only the auto-suggestion is gone.
+  Removing the `ai.suggest_skills` field is a breaking config change.
+
 ## [1.0.0-beta.5] - 2026-07-09
 
 ### Added

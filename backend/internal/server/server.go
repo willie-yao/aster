@@ -16,12 +16,14 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actions"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/auth"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
 )
 
 // ActionRunner performs on-demand actions for a failure id using the admin's
@@ -91,8 +93,6 @@ type AuthInfo struct {
 
 // Features enumerates the optional interactive capabilities.
 type Features struct {
-	// Chat enables conversational triage UI.
-	Chat bool `json:"chat"`
 	// Actions enables on-page create-issue / propose-fix buttons.
 	Actions bool `json:"actions"`
 }
@@ -409,12 +409,16 @@ func noCache(next http.Handler) http.Handler {
 	})
 }
 
-// noListFS wraps an http.FileSystem to disable directory listings: opening a
-// directory returns os.ErrNotExist, so http.FileServer responds 404 instead of
-// rendering an index of the tree.
+// noListFS wraps an http.FileSystem to disable directory listings and hide
+// operational files: opening a directory or a non-published file (the AI cache
+// and write-automation state) returns os.ErrNotExist, so http.FileServer
+// responds 404 instead of listing the tree or serving operational metadata.
 type noListFS struct{ fs http.FileSystem }
 
 func (f noListFS) Open(name string) (http.File, error) {
+	if hidden[path.Base(name)] {
+		return nil, os.ErrNotExist
+	}
 	file, err := f.fs.Open(name)
 	if err != nil {
 		return nil, err
@@ -430,3 +434,14 @@ func (f noListFS) Open(name string) (http.File, error) {
 	}
 	return file, nil
 }
+
+// hidden is the set of operational files noListFS refuses to serve, keyed by
+// base name. Sourced from output.NonPublishedFiles so the server and the
+// fetcher agree on what is not public.
+var hidden = func() map[string]bool {
+	m := make(map[string]bool, len(output.NonPublishedFiles))
+	for _, n := range output.NonPublishedFiles {
+		m[n] = true
+	}
+	return m
+}()

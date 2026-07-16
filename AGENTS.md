@@ -42,8 +42,6 @@ backend/                       Go 1.25
     orka-ingestor/             Opt-in Orka backend: patches Task results into jobs/*.json
     orka-artifact-tool/        Opt-in Orka backend: HTTP shim exposing artifact tools
     orka-copilot-proxy/        Opt-in Orka backend: Copilot de-streaming proxy
-    ai-toolcall-spike/         Throwaway probe; safe to ignore
-    _manifest_check/           Build-time check on manifest schema
   internal/
     ai/                        AI orchestration (most active area)
       ai.go                    Chat client, JSON parsing, header handling
@@ -80,7 +78,8 @@ frontend/                      React 19 + Vite 8 + Tailwind 4
   src/
     hooks/useData.ts           Loads dashboard.json, flakiness.json, jobs/*
     components/ManifestProvider.tsx   Loads manifest.json
-configs/example/               Docs-only sample project.yaml + prompts/
+configs/example/               Docs-only sample project.yaml (minimal) +
+                               project.reference.yaml (full) + prompts/
 deploy/helm/                   Helm chart for the Kubernetes-native mode
 experimental/orka/             Opt-in Orka analysis backend (docs, manifests, worker-patches)
 Dockerfile                     Multi-stage image: fetcher + server + SPA
@@ -134,8 +133,9 @@ make dev
 # Preview the server-mode UI *with* admin actions (File issue / Propose fix /
 # Mark resolved). `make dev` is read-only: it has no capability endpoint, so the
 # action buttons never render. dev-actions serves the built SPA from the API
-# server with local proxy auth (auto-authorized as admin), so the buttons act.
-# It serves a static build (no HMR); rerun to pick up frontend changes.
+# server with AUTH_MODE=dev (every request authenticated as an admin; local
+# only), so the buttons act. Set BOT_TOKEN to a real token for writes to reach
+# GitHub. It serves a static build (no HMR); rerun to pick up frontend changes.
 make dev-actions PROJECT_DIR=../<your-consumer-repo>   # http://localhost:8080
 ```
 
@@ -151,10 +151,8 @@ needed for local dev (defaults to `/`).
 - **Race detector** (AI subsystem only): `go test -race -count=1 ./internal/ai/...`
 - **Vet:** `cd backend && go vet ./...`
 - **Format:** `cd backend && gofmt -l .` (then `gofmt -w .` to fix)
-- **Static analysis:** `cd backend && staticcheck ./...`
-  - One unrelated pre-existing warning is expected in
-    `cmd/ai-toolcall-spike/main.go`. Any new warning from code you touched is a
-    regression.
+- **Static analysis:** `cd backend && staticcheck ./...` (expected clean; any
+  warning from code you touched is a regression).
 
 CI (`.github/workflows/ci.yml`) runs build + test + vet on backend and
 build + lint on frontend. CI does not run staticcheck; please still run it

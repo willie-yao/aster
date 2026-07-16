@@ -4,13 +4,12 @@
 // mode and interactive features stay off.
 
 export interface CapabilityFeatures {
-  chat: boolean;
   actions: boolean;
 }
 
 // AuthInfo tells the frontend how admins sign in for write actions.
 export interface AuthInfo {
-  mode: "oauth" | "proxy";
+  mode: "oauth" | "proxy" | "dev";
   login_url?: string;
 }
 
@@ -24,5 +23,5 @@ export interface Capabilities {
 // advertises capabilities (the static Pages path).
 export const STATIC_CAPABILITIES: Capabilities = {
   mode: "static",
-  features: { chat: false, actions: false },
+  features: { actions: false },
 };

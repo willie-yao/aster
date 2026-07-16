@@ -10,7 +10,10 @@
 //	       Needs OAUTH_CLIENT_ID, OAUTH_CLIENT_SECRET, OAUTH_REDIRECT_URL,
 //	       SESSION_KEY, and ADMIN_LOGINS.
 //	proxy: an upstream SSO proxy authenticates and passes AUTH_PROXY_HEADER;
-//	       a bot token (BOT_TOKEN) performs the write. ADMIN_LOGINS optional.
+//	       a bot token (BOT_TOKEN) performs the write. Requires ADMIN_LOGINS.
+//	dev:   local development only; authenticates every request as an admin.
+//	       Needs BOT_TOKEN (the write credential); DEV_LOGIN sets the identity.
+//	       Never use in a deployment reachable by untrusted clients.
 package main
 
 import (
@@ -158,8 +161,20 @@ func enableActions(opts *server.Options, projectDir, dataDir string) error {
 		}
 		opts.Auth = auth.NewBotAuthenticator(header, botToken, admins, os.Getenv("AUTH_PROXY_SECRET"))
 		opts.AuthMode = "proxy"
+	case "dev":
+		botToken := os.Getenv("BOT_TOKEN")
+		if botToken == "" {
+			return fmt.Errorf("dev auth mode requires BOT_TOKEN (the write credential)")
+		}
+		login := os.Getenv("DEV_LOGIN")
+		if login == "" {
+			login = "dev-admin"
+		}
+		log.Printf("⚠️  AUTH_MODE=dev: authenticating every request as admin %q; local use only, never expose this server", login)
+		opts.Auth = auth.NewDevAuthenticator(login, botToken)
+		opts.AuthMode = "dev"
 	default:
-		return fmt.Errorf("unknown AUTH_MODE %q (want oauth or proxy)", mode)
+		return fmt.Errorf("unknown AUTH_MODE %q (want oauth, proxy, or dev)", mode)
 	}
 
 	// Behind a reverse proxy that terminates the public hostname (e.g. Azure

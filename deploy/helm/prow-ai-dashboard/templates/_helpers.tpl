@@ -72,6 +72,23 @@ Name of the ConfigMap holding the consumer project config.
 {{- end -}}
 
 {{/*
+ConfigMap volume items for the project config: project.yaml, system.md (mapped
+to prompts/system.md), and each consumer skill recipe mapped to skills/<name> so
+the engine loads them from <project_dir>/skills/. Include with nindent at the
+call site.
+*/}}
+{{- define "prow-ai-dashboard.projectVolumeItems" -}}
+- key: project.yaml
+  path: project.yaml
+- key: system.md
+  path: prompts/system.md
+{{- range $name, $content := .Values.project.skills }}
+- key: {{ $name }}
+  path: skills/{{ $name }}
+{{- end }}
+{{- end -}}
+
+{{/*
 Name of the Secret holding the AI token.
 */}}
 {{- define "prow-ai-dashboard.aiSecret" -}}

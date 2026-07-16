@@ -12,6 +12,20 @@ import (
 
 var unsafeChars = regexp.MustCompile(`[^a-zA-Z0-9\-_]`)
 
+// NonPublishedFiles are operational files written into the output directory that
+// must not be served by the API server or deployed to the public Pages site:
+// the AI cache and the write-automation dedup/preview state. The frontend never
+// reads them; they carry operational metadata (issue numbers, PR URLs) rather
+// than dashboard data. resolved.json is intentionally excluded from this list
+// because the frontend serves it to render resolved-failure state.
+var NonPublishedFiles = []string{
+	"ai_cache.json",
+	"issue_state.json",
+	"fix_pr_state.json",
+	"fix_previews.json",
+	"notification_state.json",
+}
+
 // SanitizeFilename replaces unsafe filename characters with hyphens.
 func SanitizeFilename(name string) string {
 	return unsafeChars.ReplaceAllString(name, "-")

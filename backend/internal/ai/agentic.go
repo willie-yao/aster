@@ -295,6 +295,12 @@ type agenticCacheData struct {
 	// effective evidence requirements differ.
 	SkillSetHash string `json:"skill_set_hash,omitempty"`
 
+	// ModelHash is the fingerprint of the model + endpoint that produced
+	// this draft. The cache-read gate invalidates the entry when it differs
+	// from the current model, so a provider or model swap re-analyzes instead
+	// of serving the prior model's verdict.
+	ModelHash string `json:"model_hash,omitempty"`
+
 	// PromptHash is the fingerprint of the composed system prompt under
 	// which this entry was produced. The cache-read gate invalidates the
 	// entry when it differs from the current prompt.
@@ -365,6 +371,13 @@ type agentState struct {
 	// prompt edit invalidates them on read. Held on state so the stamp and
 	// cache-write paths reuse it without re-threading sysPrompt.
 	promptHash string
+
+	// Semantic-judge telemetry, for measuring the always-on second-line judge.
+	// judgeRan is set when the judge was invoked; judgeObjected when it raised
+	// objections; judgeRevised when its objections drove an accepted revision.
+	judgeRan      bool
+	judgeObjected bool
+	judgeRevised  bool
 
 	// artifactTreeSetCache is the normalized set of every artifact path
 	// in the build, fetched lazily the first time a skill-evidence miss
@@ -439,6 +452,9 @@ func stampAgenticTelemetry(analysis *models.AIAnalysis, state *agentState, mode 
 			analysis.SkillSetHash = state.skillSet.Hash()
 		}
 		analysis.PromptHash = state.promptHash
+		analysis.JudgeRan = state.judgeRan
+		analysis.JudgeObjected = state.judgeObjected
+		analysis.JudgeRevised = state.judgeRevised
 	}
 }
 
@@ -617,6 +633,11 @@ func (c *Client) doAnalyzeAgentic(
 			if cached.SkillSetHash != wantHash {
 				critiqueOK = false
 			}
+			// A model or endpoint swap invalidates the entry: a new model must
+			// not serve the prior model's cached verdict.
+			if cached.ModelHash != c.modelFingerprint() {
+				critiqueOK = false
+			}
 			// The prompt is always sent to the model, so a prompt change
 			// invalidates the entry regardless of critique. Editing
 			// prompts/system.md re-analyzes on the next run with no cache clear.
@@ -642,6 +663,7 @@ func (c *Client) doAnalyzeAgentic(
 				analysis.CritiquePassed = cached.CritiquePassed
 				analysis.CritiqueVersion = cached.CritiqueVersion
 				analysis.SkillSetHash = cached.SkillSetHash
+				analysis.ModelHash = cached.ModelHash
 				analysis.PromptHash = cached.PromptHash
 				return summary, analysis, nil
 			}
@@ -807,11 +829,13 @@ func (c *Client) doAnalyzeAgentic(
 					// judge call publishes the draft rather than blocking.
 					if in.Opts.SemanticJudge && !semanticJudged {
 						semanticJudged = true
+						state.judgeRan = true
 						objs, err := c.semanticCritique(loopCtx, parsed, state.readPathList())
 						switch {
 						case err != nil:
 							log.Printf("  ⓘ semantic judge: skipped (%v)", err)
 						case len(objs) > 0:
+							state.judgeObjected = true
 							echo := agChatMessage{Role: "assistant"}
 							if msg.Content != nil {
 								echo.Content = msg.Content
@@ -826,6 +850,11 @@ func (c *Client) doAnalyzeAgentic(
 						default:
 							log.Printf("  ✓ semantic judge: no objections")
 						}
+					}
+					// Reaching acceptance after the judge objected on an earlier
+					// draft means its objections drove an accepted revision.
+					if state.judgeObjected {
+						state.judgeRevised = true
 					}
 					state.critiquePassed = true
 				} else if critiqueRetriesUsed < in.Opts.CritiqueMaxRetries {
@@ -1210,6 +1239,7 @@ func (c *Client) cacheAcceptedAnalysis(cacheKey string, parsed analysisResponse,
 		CritiquePassed:   critiquePassed,
 		CritiqueVersion:  version,
 		SkillSetHash:     skillHash,
+		ModelHash:        c.modelFingerprint(),
 		PromptHash:       state.promptHash,
 	})
 }

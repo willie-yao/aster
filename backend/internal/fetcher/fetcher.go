@@ -27,7 +27,6 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/k8s"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/issues"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/junit"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
@@ -39,7 +38,6 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/repotemplate"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/resolve"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/skillsuggest"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
 
@@ -380,10 +378,6 @@ func (p *pipeline) runSideEffects(ctx context.Context, res *refreshResult) {
 	processIssues(ctx, cfg, flakinessReport, details, p.aiToken, p.enableAI, opts.OutDir)
 
 	if p.enableAI {
-		processSkillSuggestions(ctx, cfg, flakinessReport.RecurringPatterns, p.aiSkillSet, p.aiToken, opts.OutDir)
-	}
-
-	if p.enableAI {
 		processFixPRs(ctx, cfg, flakinessReport.RecurringPatterns, p.aiToken, opts.OutDir)
 	}
 }
@@ -501,64 +495,6 @@ func processIssues(ctx context.Context, cfg *project.Config, report models.Flaki
 	if err := mgr.SaveState(); err != nil {
 		log.Printf("Warning: failed to save issue state: %v", err)
 	}
-}
-
-// processSkillSuggestions drafts skill-recipe PRs for systemic recurring
-// patterns no existing skill covers. Gated on ai.suggest_skills.enabled,
-// SKILL_TOKEN, and GITHUB_REPOSITORY. Any missing piece is a no-op.
-func processSkillSuggestions(ctx context.Context, cfg *project.Config, patterns []models.PatternAnalysis, skillSet *skills.Set, aiToken, outDir string) {
-	if cfg.AI == nil || cfg.AI.SuggestSkills == nil || !cfg.AI.SuggestSkills.Enabled {
-		return
-	}
-	if len(patterns) == 0 {
-		return
-	}
-	ghToken := os.Getenv("SKILL_TOKEN")
-	if ghToken == "" {
-		log.Println("Skill suggestions: enabled but SKILL_TOKEN is unset; skipping")
-		return
-	}
-	owner, name, ok := splitOwnerName(os.Getenv("GITHUB_REPOSITORY"))
-	if !ok {
-		log.Printf("Skill suggestions: GITHUB_REPOSITORY unset or invalid (%q); skipping", os.Getenv("GITHUB_REPOSITORY"))
-		return
-	}
-
-	eff := cfg.EffectiveSuggestSkills()
-	aiClient := ai.NewClientWithOptions(ai.Options{
-		Token:        aiToken,
-		Endpoint:     aiEndpoint(cfg),
-		Model:        aiModel(cfg),
-		ExtraHeaders: aiHeaders(cfg),
-	})
-	mgr := skillsuggest.NewManager(
-		ghpr.NewClient(nil, ghToken), aiClient, skillSet, owner, name,
-		filepath.Join(outDir, "skill_suggest_state.json"),
-		skillsuggest.Options{
-			MinConfidence: eff.MinConfidence,
-			MaxNewPerRun:  eff.MaxNewPerRun,
-			Labels:        eff.Labels,
-			DashboardURL:  cfg.Branding.SiteURL,
-		})
-	stats, err := mgr.Reconcile(ctx, patterns)
-	if err != nil {
-		log.Printf("Warning: skill suggestion processing failed: %v", err)
-	} else if stats.Suggested+stats.Adopted+stats.Covered > 0 {
-		log.Printf("🧩 Skill suggestions (%s/%s): %d suggested, %d adopted, %d already-covered",
-			owner, name, stats.Suggested, stats.Adopted, stats.Covered)
-	}
-	if err := mgr.SaveState(); err != nil {
-		log.Printf("Warning: failed to save skill suggestion state: %v", err)
-	}
-}
-
-// splitOwnerName parses an "owner/name" slug. ok is false on a malformed value.
-func splitOwnerName(slug string) (owner, name string, ok bool) {
-	parts := strings.SplitN(strings.TrimSpace(slug), "/", 2)
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return "", "", false
-	}
-	return parts[0], parts[1], true
 }
 
 // processFixPRs drafts minimal fix PRs against the source repo for systemic
@@ -960,6 +896,7 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, details []m
 	}
 
 	var transientSkipped atomic.Int64
+	var judgeRan, judgeObjected, judgeRevised atomic.Int64
 	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
 	for _, w := range work {
@@ -973,10 +910,24 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, details []m
 			if before == nil && w.tc.AISummary != nil && w.tc.AISummary.IsTransient && w.tc.AIAnalysis == nil {
 				transientSkipped.Add(1)
 			}
+			if a := w.tc.AIAnalysis; a != nil {
+				if a.JudgeRan {
+					judgeRan.Add(1)
+				}
+				if a.JudgeObjected {
+					judgeObjected.Add(1)
+				}
+				if a.JudgeRevised {
+					judgeRevised.Add(1)
+				}
+			}
 		}(w)
 	}
 	wg.Wait()
 	log.Printf("🤖 AI analysis complete (%d transient skipped)", transientSkipped.Load())
+	if n := judgeRan.Load(); n > 0 {
+		log.Printf("⚖️ semantic judge: ran on %d, objected on %d, revised %d", n, judgeObjected.Load(), judgeRevised.Load())
+	}
 
 	// Always run the job-level pattern pass. It self-gates on failed build count
 	// and is cached.

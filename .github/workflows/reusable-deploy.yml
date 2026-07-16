@@ -23,7 +23,6 @@ name: Reusable Deploy
 #         AI_TOKEN: ${{ secrets.AI_TOKEN }}
 #         SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 #         ISSUE_TOKEN: ${{ secrets.ISSUE_TOKEN }}
-#         SKILL_TOKEN: ${{ secrets.SKILL_TOKEN }}
 #         FIX_TOKEN: ${{ secrets.FIX_TOKEN }}
 
 on:
@@ -88,9 +87,6 @@ on:
         required: false
       ISSUE_TOKEN:
         description: "GitHub token (PAT or App token) with issues:write on the target repo, for auto-filing issues when issues.enabled is set. Optional; omit to disable."
-        required: false
-      SKILL_TOKEN:
-        description: "GitHub token (PAT or App token) with contents:write + pull-requests:write on the dashboard repo, for opening skill-suggestion PRs when ai.suggest_skills.enabled is set. Optional; omit to disable."
         required: false
       FIX_TOKEN:
         description: "GitHub PAT of a CLA-signed identity that can fork the source repo and open PRs, for agent-proposed fix PRs when ai.fix_prs.enabled is set. Optional; omit to disable. See docs/fix-prs.md."
@@ -198,7 +194,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           ISSUE_TOKEN: ${{ secrets.ISSUE_TOKEN }}
-          SKILL_TOKEN: ${{ secrets.SKILL_TOKEN }}
           FIX_TOKEN: ${{ secrets.FIX_TOKEN }}
         run: |
           AI_FLAG=""
@@ -255,6 +250,17 @@ jobs:
         env:
           VITE_BASE_PATH: ${{ steps.cfg.outputs.base_path }}
         run: npm run build
+
+      # Keep operational files out of the public site. Vite copies public/data/
+      # into dist/data/ at build; strip the AI cache and write-automation state
+      # (they carry operational metadata, never dashboard data). Kept in sync
+      # with output.NonPublishedFiles in the backend.
+      - name: Strip non-published data files
+        run: |
+          d=engine/frontend/dist/data
+          [ -d "$d" ] && rm -f "$d"/ai_cache.json "$d"/issue_state.json \
+            "$d"/fix_pr_state.json "$d"/fix_previews.json \
+            "$d"/skill_suggest_state.json "$d"/notification_state.json || true
 
       # --- Deploy to GitHub Pages ---
       - uses: actions/configure-pages@v5

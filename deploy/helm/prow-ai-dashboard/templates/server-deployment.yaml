@@ -153,10 +153,7 @@ spec:
           configMap:
             name: {{ include "prow-ai-dashboard.projectConfigMap" . }}
             items:
-              - key: project.yaml
-                path: project.yaml
-              - key: system.md
-                path: prompts/system.md
+              {{- include "prow-ai-dashboard.projectVolumeItems" . | nindent 14 }}
         - name: tmp
           emptyDir: {}
         {{- end }}

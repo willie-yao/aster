@@ -100,6 +100,9 @@ func TestApplySemanticJudgePostLoop_RefinalizesOnObjection(t *testing.T) {
 	if !strings.Contains(got.RootCause, "route table") {
 		t.Errorf("expected the refinalized draft, got root_cause=%q", got.RootCause)
 	}
+	if !state.judgeRan || !state.judgeObjected || !state.judgeRevised {
+		t.Errorf("telemetry = ran:%v objected:%v revised:%v, want all true", state.judgeRan, state.judgeObjected, state.judgeRevised)
+	}
 }
 
 // TestApplySemanticJudgePostLoop_NoObjectionsKeepsDraft verifies a sound draft
@@ -119,6 +122,9 @@ func TestApplySemanticJudgePostLoop_NoObjectionsKeepsDraft(t *testing.T) {
 	}
 	if calls := atomic.LoadInt32(&srv.calls); calls != 1 {
 		t.Errorf("expected 1 call (judge only, no refinalize), got %d", calls)
+	}
+	if !state.judgeRan || state.judgeObjected || state.judgeRevised {
+		t.Errorf("telemetry = ran:%v objected:%v revised:%v, want ran-only", state.judgeRan, state.judgeObjected, state.judgeRevised)
 	}
 }
 

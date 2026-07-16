@@ -36,12 +36,14 @@ serve: build-server
 
 # Server-mode preview WITH admin actions (File issue / Propose fix / Mark
 # resolved). Builds the SPA and serves it from the API server so the capability
-# descriptor advertises actions and the buttons render. Local proxy auth with no
-# trusted header auto-authorizes every request as an admin, so no OAuth setup is
-# needed. Unlike `make dev` (Vite + HMR), this serves a static build, so rebuild
-# to pick up frontend changes. Override PROJECT_DIR to resolve issue/fix repos.
+# descriptor advertises actions and the buttons render. AUTH_MODE=dev
+# authenticates every request as an admin, so no OAuth or proxy setup is needed
+# (dev only; never expose this server). Set BOT_TOKEN to a GitHub token for the
+# writes to actually reach GitHub. Unlike `make dev` (Vite + HMR), this serves a
+# static build, so rebuild to pick up frontend changes. Override PROJECT_DIR to
+# resolve issue/fix repos.
 dev-actions: build-server fe-build
-	AUTH_MODE=proxy BOT_TOKEN=dummy ./bin/server \
+	AUTH_MODE=dev BOT_TOKEN=$${BOT_TOKEN:-dev-token} ./bin/server \
 		-data-dir=frontend/public/data \
 		-static-dir=frontend/dist \
 		-project-dir=$(PROJECT_DIR)

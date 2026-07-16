@@ -246,8 +246,6 @@ the template uses `FIX_TOKEN`, which already has Contents read on the source rep
 ## Relationship to the other features
 
 This builds on the same pattern analysis that drives the home-page recurring
-patterns, the auto-filed issues ([github-issues.md](github-issues.md)), and the
-skill suggestions ([skills.md](skills.md#auto-suggesting-recipes)). Issues and
-skill suggestions act on **your** repos; fix PRs are the only feature that writes
-to the **source** repo, which is why the identity and CLA requirements are
-stricter.
+patterns and the auto-filed issues ([github-issues.md](github-issues.md)).
+Issues act on **your** repos; fix PRs are the only feature that writes to the
+**source** repo, which is why the identity and CLA requirements are stricter.

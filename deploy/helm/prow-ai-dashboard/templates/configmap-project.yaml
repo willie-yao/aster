@@ -16,4 +16,8 @@ data:
     {{- .Values.project.config | nindent 4 }}
   system.md: |
     {{- .Values.project.systemPrompt | nindent 4 }}
+{{- range $name, $content := .Values.project.skills }}
+  {{ $name }}: |
+    {{- $content | nindent 4 }}
+{{- end }}
 {{- end }}

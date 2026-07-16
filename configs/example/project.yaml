@@ -1,9 +1,10 @@
-# Example project config for prow-ai-dashboard.
+# Minimal project config for prow-ai-dashboard: only the required fields.
 #
-# This file documents every field a consumer repo can set. Copy it into your
-# consumer repo as project.yaml, drop a prompts/system.md alongside it, and
-# point .github/workflows/deploy.yml at the reusable workflow in this engine
-# repo. See docs/onboarding-a-new-project.md and docs/writing-prompts.md.
+# Copy this into your consumer repo as project.yaml, drop a prompts/system.md
+# alongside it, and point .github/workflows/deploy.yml at the reusable workflow
+# in this engine repo. Every optional field (job grouping, AI tuning, issues,
+# fix PRs, notifications, ...) is documented in project.reference.yaml in this
+# directory. See docs/onboarding-a-new-project.md and docs/writing-prompts.md.
 
 # Stable identifier used in cache keys and log lines. Lowercase, no spaces.
 id: example
@@ -11,68 +12,18 @@ id: example
 # Full display name shown in the site header.
 name: "Example Kubernetes Project"
 
-# Optional short name for compact UIs.
-short_name: "EXAMPLE"
-
-# Optional source-side knobs. Job discovery itself is fully automatic:
-# the engine lists every YAML under kubernetes/test-infra/config/jobs/ at
-# the current master commit and keeps jobs whose testgrid-dashboards
-# annotation matches yours. No paths or filename prefixes to maintain.
-source:
-  # Include presubmit jobs in addition to periodics. ORed with the
-  # workflow's include-presubmits input. Default false (periodics only).
-  include_presubmits: false
-
-# Which testgrid dashboard's jobs to show (used by the default testgrid
-# discovery source; ignored when discovery.source is "bucket").
+# Which testgrid dashboard's jobs to show (the default discovery source).
 testgrid:
   dashboard: "sig-foo-your-project"
 
 # Where the project's Prow build artifacts live. The engine does not assume GCS,
-# so `provider` is required.
-#   provider: gcs    -> native Google Cloud Storage (kubernetes.io Prow).
-#   provider: gcsweb -> any gcsweb gateway fronting a bucket (e.g. an S3 bucket
-#                       behind gcsweb.<project>.io); set `base` to that gateway,
-#                       and `prow_base` to the Prow deck root.
+# so provider is required. See project.reference.yaml for the gcsweb and local
+# providers.
 storage:
   provider: gcs
   bucket: "kubernetes-ci-logs"
-  # gcsweb example:
-  # provider: gcsweb
-  # bucket: "my-prow"
-  # base: "https://gcsweb.my-project.io/s3"
-  # prow_base: "https://prow.my-project.io/view/s3"
 
-# How the fetcher finds the project's jobs. Optional; defaults to "testgrid".
-#   source: testgrid -> kubernetes/test-infra job YAMLs filtered by
-#                       testgrid.dashboard (the k8s ecosystem path).
-#   source: bucket   -> list the storage bucket's own job indexes (works for any
-#                       Prow instance). Optional job_filters keep only job names
-#                       containing a substring; omit to take every job.
-# discovery:
-#   source: bucket
-#   job_filters:
-#     - "integ-"
-
-# Optional job grouping. When omitted (the default), the dashboard renders
-# every job in a single flat grid. Declare rules to bucket jobs into
-# labeled sections. Rules are evaluated in order; first lowercase
-# substring match wins. Jobs with no match go in "other".
-# categories:
-#   - match: "conformance"
-#     id: "conformance"
-#     label: "Conformance"
-#   - match: "e2e"
-#     id: "e2e"
-#     label: "E2E"
-
-# Optional display order for category sections on the landing page.
-# Only meaningful when `categories:` is declared above.
-# category_display_order:
-#   - e2e
-#   - conformance
-
-# UI branding. Frontend reads these from data/manifest.json at runtime.
+# Site identity and the source repo issues/fix PRs target.
 branding:
   title: "Your Project Prow Dashboard"
   base_path: "/your-consumer-repo"
@@ -80,126 +31,3 @@ branding:
   source_repo:
     owner: "kubernetes-sigs"
     name: "your-project"
-
-# AI configuration. Composed at fetcher startup from:
-#   1. engine's universal Prow base prompt
-#   2. this repo's prompts/system.md (mandatory)
-#   3. engine's JSON response schema footer
-#
-# The fetcher hard-errors at startup if prompts/system.md is missing or empty.
-# See docs/writing-prompts.md.
-#
-# endpoint, model, and headers target any OpenAI-compatible chat completions
-# API. Both endpoint and model are required (the engine has no default
-# provider). See docs/ai-providers.md for Nvidia Dynamo / Azure OpenAI /
-# OpenAI / Ollama snippets.
-#
-# Keep private or preview identifiers out of this public file by omitting
-# them here and setting AI_ENDPOINT / AI_MODEL via repo variables on the
-# consumer (`gh variable set AI_MODEL ...`), passed through the reusable
-# workflow's ai-model / ai-endpoint inputs. The fetcher reads the env when
-# YAML fields are blank; the YAML wins if both are set.
-ai:
-  endpoint: "https://api.githubcopilot.com/chat/completions"
-  model: "claude-sonnet-4.5"
-
-  # The agentic tool-calling loop is the only analysis path: the LLM browses
-  # GCS + cluster artifacts itself via the registered tools and returns a
-  # single JSON verdict. A function-calling endpoint is required. All agentic
-  # tuning is inlined directly under `ai:` (no nested `agentic:` block).
-
-  # tools: which registered tool groups the model can call. Defaults to
-  # ["filesystem", "k8s"]. Narrow to ["filesystem"] if your project's
-  # artifact tree doesn't include kubernetes resource YAMLs.
-  tools:
-    - filesystem
-    - k8s
-  # max_iters: 15           # tool-call rounds per failure (engine default)
-  # NOTE: the model-output, context (compaction), and GCS byte budgets are
-  # not configurable; the model/context budgets auto-size from the endpoint's
-  # context window and the GCS fetch ceiling is a fixed engine safety cap
-  # (see docs/agentic.md "Automatic budget sizing").
-  # timeout: 5m             # per-failure wall-clock timeout
-  # min_tool_calls: 2       # default 2; refuse to accept a final answer
-  #                         # until the model has made this many calls.
-  #                         # Below-floor finals are published but not
-  #                         # cached, so the next run retries. Useful for
-  #                         # weaker models that finalize prematurely.
-  # min_gcs_bytes: 0        # if >0, also require this many bytes of GCS
-  #                         # evidence (catches the case where the model
-  #                         # satisfies min_tool_calls with cheap list
-  #                         # calls or tiny byte ranges). Same publish/
-  #                         # don't-cache semantics as min_tool_calls.
-  # critique:
-  #   max_retries: 2        # default 2; deterministic regex pass rejects
-  #                         # punt-shaped suggested_fix, hallucinated
-  #                         # artifact citations, fabricated import
-  #                         # paths, and missing skill-driven evidence.
-  # Cross-build pattern analysis runs automatically (no flag): after the
-  # per-failure analyses, for any job that failed in >=3 recent builds the
-  # engine correlates one representative failure per failed build into a single
-  # "do these share one root cause?" verdict, catching a recurring "transient"
-  # that is really a systemic bug. It shows as a banner on the job page.
-  # See docs/agentic.md.
-  # Recipe-driven evidence requirements are loaded automatically from
-  # <project_dir>/skills/*.yaml when present; no config flag. See
-  # docs/skills.md for the schema.
-
-  # Optional: auto-suggest skill recipes. After each fetch, for any systemic
-  # recurring pattern no existing skill covers, the engine drafts a
-  # skills/<id>.yaml recipe and opens a draft PR adding it to this repo. Off by
-  # default. Needs a SKILL_TOKEN secret (contents:write + pull-requests:write on
-  # this repo) wired into the deploy workflow; a dedicated token, like
-  # ISSUE_TOKEN. See docs/skills.md#auto-suggesting-recipes.
-  # suggest_skills:
-  #   enabled: true
-  #   min_confidence: high        # default high; only systemic patterns qualify
-  #   max_new_per_run: 1          # default 1
-  #   labels: [skill-suggestion]  # default [skill-suggestion]
-
-  # Optional: agent-proposed fix PRs. After each fetch, for a systemic recurring
-  # pattern with a concrete fix, a coding agent (opencode) drafts a minimal
-  # change in a clone of the source repo and opens a DRAFT PR via fork-and-PR.
-  # Off by default and the highest-risk feature (writes code upstream). Needs a
-  # FIX_TOKEN secret: a CLA-signed contributor's PAT that can fork the source
-  # repo, and the opencode CLI + git on the runner (use deploy/fixer.Dockerfile
-  # on the Kubernetes-native path). author_name and author_email MUST be that
-  # CLA-signed identity (EasyCLA/DCO). Start with dry_run. See docs/fix-prs.md.
-  # fix_prs:
-  #   enabled: true
-  #   author_name: "Jane Maintainer"     # required: CLA-signed identity
-  #   author_email: "jane@example.com"   # required: matches that GitHub account
-  #   repo:                       # defaults to branding.source_repo
-  #     owner: "kubernetes-sigs"
-  #     name: "cluster-api-provider-azure"
-  #   fork: true                  # true (default): fork-and-PR (repo you don't own);
-  #                               # false: direct branch + same-repo PR (repo you own)
-  #   min_confidence: high        # default high
-  #   max_files: 3                # default 3 (bounded change scope)
-  #   max_new_per_run: 1          # default 1
-  #   labels: [ai-proposed-fix]   # default [ai-proposed-fix]
-  #   dry_run: true               # propose to fix_previews.json without a PR
-  #   critique_retries: 1         # LLM review re-prompts before dropping (default 1)
-  #   # Optional: tune the coding-agent generator. A nil block uses opencode with
-  #   # these defaults. The agent reuses the engine's ai.endpoint/model.
-  #   agent_runtime:
-  #     type: opencode           # default (only supported value)
-  #     model: ""                # defaults to ai.model
-  #     max_turns: 30            # default 30
-  #     allow_bash: true         # let it run build/tests while fixing (default true)
-  #     timeout: 10m             # default: the Runtime default
-
-# Optional: auto-file GitHub issues for systemic recurring patterns and
-# persistent failures. Off by default. Active only when enabled AND an
-# ISSUE_TOKEN secret (issues:write on the target repo) is wired in the deploy
-# workflow. Point `repo` at a repo you control. See docs/github-issues.md.
-# issues:
-#   enabled: true
-#   repo:                       # defaults to branding.source_repo
-#     owner: "your-org"
-#     name: "your-tracking-repo"
-#   triggers: [patterns, persistent]   # default: both
-#   labels: [prow-dashboard]           # default: [prow-dashboard]
-#   comment_on_recovery: true          # default true
-#   close_on_recovery: false           # default false (leave the issue open)
-#   max_new_per_run: 5                 # default 5 (flood guard)

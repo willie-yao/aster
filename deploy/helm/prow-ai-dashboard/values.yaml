@@ -85,12 +85,15 @@ persistence:
 #     --set-file project.systemPrompt=prompts/system.md
 # Or point at a ConfigMap you created yourself with keys project.yaml and
 # system.md via project.existingConfigMap.
-# Note: consumer-owned skills/*.yaml recipes are not wired into this chart yet.
-# Use project.existingConfigMap with a git-sync sidecar if you need them.
+# Consumer skill recipes: set project.skills to a map of <name>.yaml -> file
+# contents (e.g. --set-file project.skills.myrecipe\.yaml=skills/myrecipe.yaml).
+# Each is mounted at <project_dir>/skills/<name>.yaml so the engine loads it.
 project:
   existingConfigMap: ""
   config: ""
   systemPrompt: ""
+  # Consumer skill recipes: <name>.yaml -> file contents. Mounted under skills/.
+  skills: {}
   # Mount path the fetcher reads as -project-dir.
   mountPath: /config
 

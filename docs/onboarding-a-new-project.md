@@ -167,7 +167,9 @@ continuing. If your project has only presubmit jobs, add `source:` with
 ## Step 1: `project.yaml`
 
 Start from [`configs/example/project.yaml`](../configs/example/project.yaml),
-which annotates every field. The fields that matter:
+the minimal required set;
+[`project.reference.yaml`](../configs/example/project.reference.yaml) annotates
+every optional field. The fields that matter:
 
 - **`storage`** (required): where the project's Prow build artifacts live. The
   engine does not assume GCS.

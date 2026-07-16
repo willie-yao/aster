@@ -96,7 +96,7 @@ func TestService_SkipWhenAlreadyAnalyzedSameMode(t *testing.T) {
 
 	tc := newFailedTC("Test A", "msg")
 	tc.AISummary = &models.AISummary{Summary: "cached"}
-	tc.AIAnalysis = &models.AIAnalysis{RootCause: "cached", Mode: AgenticMode, PromptHash: PromptFingerprint("sys"), CritiquePassed: true, CritiqueVersion: currentCritiqueVersion}
+	tc.AIAnalysis = &models.AIAnalysis{RootCause: "cached", Mode: AgenticMode, PromptHash: PromptFingerprint("sys"), ModelHash: client.modelFingerprint(), CritiquePassed: true, CritiqueVersion: currentCritiqueVersion}
 
 	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
 
@@ -189,6 +189,30 @@ func TestService_ShouldReanalyze_PromptHash(t *testing.T) {
 	// Unstamped entries re-analyze once.
 	if !s.shouldReanalyze(mk("")) {
 		t.Error("unstamped (pre-feature) entry should re-analyze once")
+	}
+}
+
+// TestService_ShouldReanalyze_ModelHash verifies a model or endpoint swap
+// invalidates a cached analysis while a matching model is reused.
+func TestService_ShouldReanalyze_ModelHash(t *testing.T) {
+	srv := newScriptedChatServer(t)
+	client := newAgenticTestClient(t, srv.URL)
+	s := NewService(client, &stubModule{name: "kubernetes"}, "sys", nil)
+
+	mk := func(modelHash string) *models.TestCase {
+		return &models.TestCase{AIAnalysis: &models.AIAnalysis{Mode: AgenticMode, PromptHash: PromptFingerprint("sys"), ModelHash: modelHash, CritiquePassed: true, CritiqueVersion: currentCritiqueVersion}}
+	}
+
+	if s.shouldReanalyze(mk(client.modelFingerprint())) {
+		t.Error("matching model hash should be reused, got re-analyze")
+	}
+	if !s.shouldReanalyze(mk("some-other-model")) {
+		t.Error("changed model hash should force re-analysis")
+	}
+	// Unstamped (pre-feature) entries re-analyze once so a stale verdict from an
+	// unknown model does not persist.
+	if !s.shouldReanalyze(mk("")) {
+		t.Error("unstamped entry should re-analyze once")
 	}
 }
 

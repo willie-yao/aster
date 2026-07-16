@@ -12,7 +12,7 @@ export interface AuthState {
   // login is the GitHub login when signed in via oauth; null in proxy mode.
   login: string | null;
   // mode mirrors capabilities.auth.mode.
-  mode: "oauth" | "proxy" | null;
+  mode: "oauth" | "proxy" | "dev" | null;
   signIn: () => void;
   signOut: () => Promise<void>;
 }

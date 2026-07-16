@@ -61,7 +61,9 @@ A dashboard is shaped by three things:
 
 - **`project.yaml`**: bucket, dashboard, branding, AI provider, and feature
   toggles. See [`configs/example/project.yaml`](configs/example/project.yaml)
-  for every field.
+  for the minimal required set and
+  [`project.reference.yaml`](configs/example/project.reference.yaml) for every
+  field.
 - **`prompts/system.md`**: project-specific AI knowledge. Mandatory; the fetcher
   hard-errors if it is missing when `-ai` is enabled.
 - **The engine**, a Go fetcher in `backend/` and a React UI in `frontend/`, is

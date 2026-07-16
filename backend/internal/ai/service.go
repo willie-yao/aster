@@ -278,6 +278,11 @@ func (s *Service) belowCurrentAgenticFloor(tc *models.TestCase) bool {
 	if tc.AIAnalysis.SkillSetHash != wantHash {
 		return true
 	}
+	// A model or endpoint swap invalidates the entry so a new model does not
+	// serve the prior model's cached verdict.
+	if s.client != nil && tc.AIAnalysis.ModelHash != s.client.modelFingerprint() {
+		return true
+	}
 	// The prompt is always sent to the model, so prompt edits invalidate the
 	// entry without a critique dependency.
 	if tc.AIAnalysis.PromptHash != PromptFingerprint(s.systemPrompt) {

@@ -666,33 +666,6 @@ func TestCategorize(t *testing.T) {
 	}
 }
 
-func TestEffectiveSuggestSkillsDefaults(t *testing.T) {
-	// Nil receiver and nil block both yield a disabled config with defaults.
-	for _, c := range []*Config{nil, {}, {AI: &AI{}}} {
-		got := c.EffectiveSuggestSkills()
-		if got.Enabled {
-			t.Errorf("EffectiveSuggestSkills().Enabled = true, want false for %+v", c)
-		}
-		if got.MinConfidence != "high" {
-			t.Errorf("MinConfidence = %q, want high", got.MinConfidence)
-		}
-		if got.MaxNewPerRun != 1 {
-			t.Errorf("MaxNewPerRun = %d, want 1", got.MaxNewPerRun)
-		}
-		if len(got.Labels) != 1 || got.Labels[0] != "skill-suggestion" {
-			t.Errorf("Labels = %v, want [skill-suggestion]", got.Labels)
-		}
-	}
-	// Explicit values win over defaults.
-	c := &Config{AI: &AI{SuggestSkills: &SuggestSkills{
-		Enabled: true, MinConfidence: "medium", MaxNewPerRun: 3, Labels: []string{"x"},
-	}}}
-	got := c.EffectiveSuggestSkills()
-	if !got.Enabled || got.MinConfidence != "medium" || got.MaxNewPerRun != 3 || got.Labels[0] != "x" {
-		t.Errorf("explicit config not preserved: %+v", got)
-	}
-}
-
 func TestEffectiveFixPRsDefaults(t *testing.T) {
 	// Defaults the target repo to branding.source_repo and applies field defaults.
 	c := &Config{

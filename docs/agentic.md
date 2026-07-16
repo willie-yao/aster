@@ -454,6 +454,26 @@ behavior.
 See [`docs/skills.md`](skills.md) for the full schema, authoring guidance, and
 observability notes.
 
+### The semantic judge
+
+After a draft clears the deterministic critique gate, a second-line **semantic
+judge** reviews it: one focused LLM call that checks the *reasoning* for defects
+the regex gate cannot see (a fluent-but-wrong root cause, a conclusion the cited
+evidence does not support). It never redoes the investigation. On objections it
+re-prompts once, in-loop or in a tools-free post-loop finalize round; a revised
+draft is used only if it still clears the deterministic gate, so the judge can
+never downgrade an answer below the gate it already passed. It is best-effort: a
+failed judge call publishes the draft rather than blocking, and it runs at most
+once per analysis.
+
+The judge is currently always on for the agentic path (there is no config knob).
+Each analysis records whether the judge ran, objected, and drove a revision
+(`judge_ran` / `judge_objected` / `judge_revised` in the published analysis
+JSON), and the fetcher logs a per-pass roll-up (`⚖️ semantic judge: ran on N,
+objected on M, revised K`). Those signals exist so the judge's value can be
+measured before deciding whether to keep it unconditional, gate it behind a
+quality profile, or drop it.
+
 ### Evidence injection
 
 The critique gate already detects when a draft cites an artifact the agent

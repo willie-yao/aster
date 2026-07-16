@@ -111,6 +111,14 @@ type AIAnalysis struct {
 	// CritiquePassed reports whether this analysis cleared the critique gate.
 	CritiquePassed bool `json:"critique_passed,omitempty"`
 
+	// JudgeRan / JudgeObjected / JudgeRevised are the semantic-judge telemetry:
+	// whether the second-line LLM judge ran, whether it raised objections, and
+	// whether its objections drove an accepted revision. Recorded so the judge's
+	// value can be measured before deciding to keep it always-on.
+	JudgeRan      bool `json:"judge_ran,omitempty"`
+	JudgeObjected bool `json:"judge_objected,omitempty"`
+	JudgeRevised  bool `json:"judge_revised,omitempty"`
+
 	// CritiqueVersion records the critique contract this analysis passed.
 	// Cache gates require the current version.
 	CritiqueVersion int `json:"critique_version,omitempty"`
@@ -119,6 +127,11 @@ type AIAnalysis struct {
 	// Edits to triggers, required evidence, or procedure force re-analysis.
 	// Empty when no recipes are loaded.
 	SkillSetHash string `json:"skill_set_hash,omitempty"`
+
+	// ModelHash fingerprints the model + endpoint that produced this
+	// analysis. A provider or model swap changes it, forcing re-analysis so a
+	// new model does not serve the prior model's cached verdict.
+	ModelHash string `json:"model_hash,omitempty"`
 
 	// PromptHash fingerprints the composed system prompt for this analysis.
 	// Prompt edits refresh affected failures on the next run.

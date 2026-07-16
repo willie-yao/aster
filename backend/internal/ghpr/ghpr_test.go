@@ -121,7 +121,7 @@ func TestOpenPR_HappyPath(t *testing.T) {
 	url, err := testClient(f).OpenPR(context.Background(), Request{
 		Owner: "o", Repo: "r",
 		Files:        map[string]string{"skills/x.yaml": "id: x", "prompts/system.md": "stub"},
-		BranchPrefix: "skill-suggest",
+		BranchPrefix: "onboard",
 		Title:        "title", Body: "body",
 	})
 	if err != nil {
@@ -133,8 +133,8 @@ func TestOpenPR_HappyPath(t *testing.T) {
 	if f.createdTree["skills/x.yaml"] != "id: x" || f.createdTree["prompts/system.md"] != "stub" {
 		t.Errorf("tree missing files: %v", f.createdTree)
 	}
-	if !strings.HasPrefix(f.createdBranch, "refs/heads/skill-suggest-") {
-		t.Errorf("branch = %q, want skill-suggest-*", f.createdBranch)
+	if !strings.HasPrefix(f.createdBranch, "refs/heads/onboard-") {
+		t.Errorf("branch = %q, want onboard-*", f.createdBranch)
 	}
 	if f.prBase != "main" || f.prHead == "" || f.prTitle != "title" {
 		t.Errorf("PR base/head/title wrong: base=%q head=%q title=%q", f.prBase, f.prHead, f.prTitle)

@@ -1,5 +1,5 @@
 // Package ghpr opens pull requests that add or update files in one commit using
-// the GitHub Git Data API. It is shared by onboarding and skill suggestions.
+// the GitHub Git Data API. It is shared by onboarding and the fix-PR flow.
 package ghpr
 
 import (

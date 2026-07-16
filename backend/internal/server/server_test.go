@@ -64,6 +64,37 @@ func TestHandler_DataReadParity(t *testing.T) {
 	}
 }
 
+// TestHandler_HidesOperationalFiles verifies the AI cache and write-automation
+// state files are not served, so operational metadata never leaks via /data.
+func TestHandler_HidesOperationalFiles(t *testing.T) {
+	dataDir := t.TempDir()
+	writeFile(t, dataDir, "dashboard.json", `{"jobs":[]}`)
+	writeFile(t, dataDir, "ai_cache.json", `{"secret":"cache"}`)
+	writeFile(t, dataDir, "issue_state.json", `{"tracked":{}}`)
+	writeFile(t, dataDir, "fix_pr_state.json", `{"tracked":{}}`)
+
+	h, err := Handler(Options{DataDir: dataDir, Capabilities: DefaultCapabilities()})
+	if err != nil {
+		t.Fatalf("Handler: %v", err)
+	}
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	// The dashboard is served; the operational files 404.
+	if resp, _ := http.Get(srv.URL + "/data/dashboard.json"); resp.StatusCode != http.StatusOK {
+		t.Errorf("dashboard.json status = %d, want 200", resp.StatusCode)
+	}
+	for _, name := range []string{"ai_cache.json", "issue_state.json", "fix_pr_state.json"} {
+		resp, err := http.Get(srv.URL + "/data/" + name)
+		if err != nil {
+			t.Fatalf("GET %s: %v", name, err)
+		}
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("GET %s: status %d, want 404 (operational file must not be served)", name, resp.StatusCode)
+		}
+	}
+}
+
 // TestHandler_Capabilities verifies the descriptor shape served in server mode.
 func TestHandler_Capabilities(t *testing.T) {
 	dataDir := t.TempDir()
@@ -91,7 +122,7 @@ func TestHandler_Capabilities(t *testing.T) {
 	if got.Mode != "server" {
 		t.Errorf("Mode = %q, want server", got.Mode)
 	}
-	if got.Features.Chat || got.Features.Actions {
+	if got.Features.Actions {
 		t.Errorf("Features = %+v, want all false at read parity", got.Features)
 	}
 }

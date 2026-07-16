@@ -119,6 +119,7 @@ func (s *agentState) readPathList() []string {
 // deterministic critique, so the judge can never downgrade an answer below the
 // gate it already passed. Returns the draft to publish.
 func (c *Client) applySemanticJudgePostLoop(ctx context.Context, state *agentState, messages []agChatMessage, finalContent string, parsed analysisResponse, budget int) analysisResponse {
+	state.judgeRan = true
 	objs, err := c.semanticCritique(ctx, parsed, state.readPathList())
 	if err != nil {
 		log.Printf("  ⓘ semantic judge (post-loop): skipped (%v)", err)
@@ -128,6 +129,7 @@ func (c *Client) applySemanticJudgePostLoop(ctx context.Context, state *agentSta
 		log.Printf("  ✓ semantic judge (post-loop): no objections")
 		return parsed
 	}
+	state.judgeObjected = true
 	msgs := append(messages,
 		agChatMessage{Role: "assistant", Content: strPtr(finalContent)},
 		agChatMessage{Role: "user", Content: strPtr(formatSemanticObjections(objs))})
@@ -142,6 +144,7 @@ func (c *Client) applySemanticJudgePostLoop(ctx context.Context, state *agentSta
 		log.Printf("  ✗ semantic judge (post-loop): %d objection(s); revised draft failed critique %v, keeping original", len(objs), out.Matches())
 		return parsed
 	}
+	state.judgeRevised = true
 	log.Printf("  ✗ semantic judge (post-loop): %d objection(s); accepted refinalized draft", len(objs))
 	return rp
 }

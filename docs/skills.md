@@ -48,55 +48,6 @@ If the model already does the right thing on this failure pattern,
 do not author a skill: extra triggers just inflate the recipe set
 hash and invalidate cache for no benefit.
 
-## Auto-suggesting recipes
-
-The engine can draft these recipes for you. When **`ai.suggest_skills`** is
-enabled, after each fetch the engine looks at the systemic recurring patterns it
-found (the same ones surfaced on the home page), and for any pattern that **no
-existing skill already covers**, it drafts a recipe and opens a **draft PR**
-adding `skills/<id>.yaml` to the dashboard repo. You review and merge.
-
-It is **off by default** and opt-in:
-
-```yaml
-ai:
-  suggest_skills:
-    enabled: true
-    # min_confidence: high        # only systemic patterns at >= this confidence (default high)
-    # max_new_per_run: 1          # cap draft PRs per fetch (default 1)
-    # labels: [skill-suggestion]  # labels applied to each PR
-```
-
-How it decides and drafts:
-
-- **Eligibility.** Only **systemic** patterns at or above `min_confidence` that
-  carry a concrete shared root cause qualify. Non-systemic or low-confidence
-  verdicts are ignored.
-- **Already-covered check.** Existing recipes whose triggers regex-match the
-  pattern are found first (cheap), then the model confirms whether any of them
-  already covers the failure class. A covered pattern is skipped, so you don't
-  get a duplicate recipe.
-- **Generation + validation.** The model drafts the recipe from the pattern's
-  evidence; the engine validates it against this schema (and compiles every
-  regex) before opening the PR. An invalid draft is dropped, never proposed.
-- **Idempotent.** Each suggestion carries a hidden marker keyed by the pattern,
-  so the same pattern is never suggested twice (local state plus a repo-side
-  search both guard against duplicates).
-
-Requirements:
-
-- AI must be enabled (the feature reuses the configured chat-completions
-  provider for the covered-check and drafting).
-- A **`SKILL_TOKEN`** secret (a PAT or App token with `contents: write` +
-  `pull-requests: write` on the dashboard repo) must be wired into the deploy
-  workflow. Without it the step is a no-op. A dedicated token is used rather than
-  the automatic `GITHUB_TOKEN` so the deploy job's default permissions stay
-  read-only (same pattern as `ISSUE_TOKEN`).
-
-The draft is a starting point, not a finished recipe: review the triggers
-(do they over-fire?), the evidence paths (do they match the real artifact
-tree?), and tighten the procedure before merging.
-
 ## Schema
 
 ```yaml

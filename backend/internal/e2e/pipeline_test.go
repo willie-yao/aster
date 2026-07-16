@@ -74,7 +74,7 @@ func runPipeline(t *testing.T, projectDir string, enableAI bool) string {
 	t.Helper()
 	// Clear env that fetcher.Run reads, so a developer's environment can't make
 	// the pipeline reach Slack, GitHub, or a real AI endpoint.
-	for _, k := range []string{"SLACK_WEBHOOK_URL", "ISSUE_TOKEN", "SKILL_TOKEN", "FIX_TOKEN", "GITHUB_TOKEN", "AI_ENDPOINT", "AI_MODEL"} {
+	for _, k := range []string{"SLACK_WEBHOOK_URL", "ISSUE_TOKEN", "FIX_TOKEN", "GITHUB_TOKEN", "AI_ENDPOINT", "AI_MODEL"} {
 		t.Setenv(k, "")
 	}
 	outDir := t.TempDir()

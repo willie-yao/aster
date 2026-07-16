@@ -1,7 +1,7 @@
 // Package statefile provides atomic JSON file writes and a repo-scoped tracking
-// state shared by the output writer and the issue, fix-PR, and skill-suggestion
-// managers. Centralizing the writer keeps the atomic-rename and
-// filesystem-compatibility behavior in one place.
+// state shared by the output writer and the issue and fix-PR managers.
+// Centralizing the writer keeps the atomic-rename and filesystem-compatibility
+// behavior in one place.
 package statefile
 
 import (

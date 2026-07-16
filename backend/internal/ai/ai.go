@@ -5,6 +5,8 @@ package ai
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -75,6 +77,13 @@ func (c *Client) Endpoint() string { return c.apiURL }
 
 // ModelName returns the configured model identifier.
 func (c *Client) ModelName() string { return c.model }
+
+// modelFingerprint hashes the model + endpoint so a provider or model swap
+// invalidates cached analyses produced by the prior model.
+func (c *Client) modelFingerprint() string {
+	sum := sha256.Sum256([]byte(c.model + "\x00" + c.apiURL))
+	return hex.EncodeToString(sum[:8])
+}
 
 // Cache returns the underlying cache so callers can persist it.
 func (c *Client) Cache() *Cache {
@@ -234,6 +243,7 @@ func (c *Client) buildOutputs(parsed analysisResponse) (*models.AISummary, *mode
 	analysis := &models.AIAnalysis{
 		GeneratedAt:   now,
 		Model:         c.model,
+		ModelHash:     c.modelFingerprint(),
 		RootCause:     parsed.RootCause,
 		Severity:      parsed.Severity,
 		SuggestedFix:  parsed.SuggestedFix,
