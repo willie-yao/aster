@@ -19,16 +19,18 @@ static Pages path keeps working unchanged.
   no need to expose a private endpoint publicly.
 - The AI cache and output live on a shared volume, so warm caches survive across
   fetch runs and the server always serves the latest completed fetch.
-- It is the foundation for stateful, interactive features added later.
+- It supports stateful, admin-gated actions such as filing issues and marking
+  recurring failures resolved.
 
 ## Architecture
 
 ```
-CronJob (fetcher)  --writes-->  RWX volume  <--reads--  Deployment (server)
-   -project-dir=/config           /data                   -data-dir=/data
-   -out=/data                  data + ai_cache.json        -static-dir=/app/web
-                                                                |
-                                                             Service / Ingress
+Worker Deployment (default) or CronJob
+   -project-dir=/config  --writes--> RWX volume <--reads-- Deployment (server)
+   -out=/data                         /data                 -data-dir=/data
+                                                            -static-dir=/app/web
+                                                                   |
+                                                            Service / Ingress
 ```
 
 One image carries both binaries and the built SPA. The fetcher and the server
@@ -69,18 +71,17 @@ identical either way.
 - `analysis: inprocess` (default): the worker or CronJob runs the engine's
   in-process agentic loop, governed by `ai.enabled`. It is self-contained, so a
   fresh `helm install` works with no extra components.
-- `analysis: orka` (recommended for the Kubernetes-native path): the fetch step
+- `analysis: orka` (advanced and experimental): the fetch step
   writes the dashboard skeleton only, and the [Orka](../experimental/orka/)
   pipeline runs the analysis as Kubernetes-native Tasks alongside your inference
   stack, with native retries, per-Task observability, and a path to agent-runtime
-  remediation. This is the preferred backend once you operate an in-cluster
-  model, because the analysis then runs as first-class cluster workloads next to
-  it rather than inside the fetch process.
+  remediation. It is useful when you want one observable Task per failure and
+  are prepared to operate the additional Orka components and worker patches.
 
 Orka mode requires `mode: cron` and assumes Orka, the artifact tool shim, a
 Provider, and the patched ai-worker image are already installed in the cluster.
 The chart deploys the analysis pipeline, not Orka itself, so the default stays
-`inprocess` and a fresh install always works. Opt into Orka once those
+`inprocess` and a fresh install always works. Opt into Orka only after those
 prerequisites are in place. See
 [experimental/orka/QUICKSTART.md](../experimental/orka/QUICKSTART.md) for the full setup
 and [experimental/orka/ARCHITECTURE.md](../experimental/orka/ARCHITECTURE.md) for
@@ -172,7 +173,7 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | --- | --- |
 | `image.repository`, `image.tag` | Engine image; tag defaults to the chart `appVersion`. |
 | `mode` | `watch` (continuous worker Deployment, default) or `cron` (scheduled CronJob). |
-| `analysis` | `inprocess` (default; in-cluster agentic loop) or `orka` (Kubernetes-native Orka pipeline, recommended when you run an in-cluster inference stack; requires `mode: cron` and Orka installed). |
+| `analysis` | `inprocess` (default; in-cluster agentic loop) or `orka` (advanced experimental pipeline; requires `mode: cron`, Orka, the tool shim, a Provider, and worker patches). |
 | `persistence.accessMode` | Must be `ReadWriteMany`. |
 | `persistence.storageClass`, `persistence.size` | The shared volume's class and size. |
 | `persistence.existingClaim` | Reuse a pre-provisioned PVC instead of creating one. |
@@ -186,7 +187,7 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | `fetcher.extraEnv` | Extra env such as `GITHUB_TOKEN`, `SLACK_WEBHOOK_URL`, or the `ISSUE_TOKEN` / `FIX_TOKEN` write tokens (see [Automatic issues and fix PRs](#automatic-issues-and-fix-prs)). |
 | `ingress.enabled`, `ingress.hosts`, `ingress.tls` | Public read path. |
 | `server.actions.enabled`, `server.actions.mode` | Turn on write actions; `oauth` (GitHub sign-in) or `proxy` (SSO proxy + bot token). |
-| `server.actions.admins` | GitHub logins allowed to file issues / draft fix PRs. |
+| `server.actions.admins` | Required allowlist for write actions. An empty list fails closed. |
 
 The public read endpoints (`/data/*`, `/api/capabilities`, `/healthz`) are
 unauthenticated. Admin write actions are opt-in: set `server.actions.enabled`
@@ -228,11 +229,10 @@ Provide the OAuth secret/session key or bot token via a pre-made Secret instead
 with `server.actions.oauth.existingSecret` (keys `OAUTH_CLIENT_SECRET`,
 `SESSION_KEY`) or `server.actions.proxy.existingSecret` (key `BOT_TOKEN`).
 
-`/data/*` serves everything the fetcher writes to the shared volume, matching
-the static Pages path exactly. That includes the AI cache and the fetcher's
-state files (issue, skill, and fix-PR tracking). None hold credentials, but if
-you want those kept off a public ingress, keep the server on an internal
-Service or split the fetcher's state onto a separate volume in a follow-up.
+`/data/*` serves the public dashboard files that the static Pages path exposes.
+The server rejects operational files such as `ai_cache.json`, issue state,
+fix-PR state, previews, and notification state. Pages strips the same files
+before publication. `resolved.json` remains public because the frontend uses it.
 
 ## Automatic issues and fix PRs
 
@@ -241,6 +241,12 @@ for the highest-signal failures and drafts fix PRs for recurring ones on every
 pass: each cron run in `mode: cron`, or each reconcile pass in `mode: watch`.
 Each needs the feature turned on in `project.yaml` and a write-scoped token in
 the fetcher's environment.
+
+Fix PR generation also needs `opencode` and git in the writer container. The
+standard distroless engine image does not contain them, and the chart does not
+install them. Use a custom writer deployment before enabling scheduled fix PRs.
+The same runtime requirement applies to the interactive Propose fix action;
+File issue and Mark resolved work in the standard server image.
 
 Turn them on in `project.yaml`:
 

@@ -10,7 +10,7 @@ Guidance for AI coding agents working on `prow-ai-dashboard`. See
 dashboards. It is consumed by lightweight per-project repos (the
 "consumers") via a reusable GitHub Actions workflow. The engine repo holds
 all the code; consumer repos hold only `project.yaml` + `prompts/system.md`
-+ a ~20-line workflow file. See [`README.md`](README.md) for the current
++ a small workflow file. See [`README.md`](README.md) for the current
 list of live consumers.
 
 The data flow per scheduled deploy is:
@@ -60,7 +60,7 @@ backend/                       Go 1.25
     artifacts/                 Build-log + artifact parsing
     collectors/                Built-in generic collector
     fetcher/                   AIModuleRegistry, CollectorRegistry wiring
-    storage/                  Pluggable artifact store (gcs / gcsweb backends)
+    storage/                  Pluggable artifact store (gcs / gcsweb / local backends)
     prowbuild/                Prow path layout, build info, JUnit + job discovery
     junit/                     JUnit XML parser
     models/                    Wire-format types (BuildResult, AIAnalysis, ...)
@@ -73,7 +73,7 @@ backend/                       Go 1.25
     actions/                   On-demand single-failure issue / fix-PR service
     orka/                      Opt-in Orka backend: Task naming + client-go apply helpers
 
-frontend/                      React 19 + Vite 8 + Tailwind 4
+frontend/                      React 19 + Vite 8 + MUI 9
   public/data/                 Fetcher writes JSON here; Vite serves it
   src/
     hooks/useData.ts           Loads dashboard.json, flakiness.json, jobs/*
@@ -83,8 +83,8 @@ configs/example/               Docs-only sample project.yaml (minimal) +
 deploy/helm/                   Helm chart for the Kubernetes-native mode
 experimental/orka/             Opt-in Orka analysis backend (docs, manifests, worker-patches)
 Dockerfile                     Multi-stage image: fetcher + server + SPA
-docs/                          agentic.md, ai-providers.md, skills.md,
-                               writing-prompts.md, onboarding-a-new-project.md
+docs/                          onboarding, deployment, configuration, AI,
+                               feature, troubleshooting, and contributor guides
 .github/workflows/             ci.yml + reusable-deploy.yml + reusable-clear-cache.yml + image.yml
 Makefile                       Local-dev entry points (PROJECT_DIR override)
 ```
@@ -99,7 +99,7 @@ make tidy            # go mod tidy
 
 # Frontend (Node 20+, npm)
 make fe-install      # npm ci in frontend/
-make fe-check        # tsc --noEmit
+make fe-check        # tsc -b across the referenced projects
 make fe-build        # production build into frontend/dist/
 
 # Kubernetes-native mode (Go 1.25)
@@ -235,9 +235,7 @@ Engine ships the AI defaults; consumer overrides per project. The contract:
   tool schemas, cache shape.
 - **Consumer-owned** (in `project.yaml`): bucket, dashboard, branding,
   the inlined `ai.*` agentic tuning (floors `min_tool_calls` /
-  `min_gcs_bytes`, `max_iters`, `timeout`, `tools`, `critique.max_retries`),
-  evidence selection (`ai.evidence.machine_logs`, `ai.evidence.controller_logs`,
-  `ai.evidence.build_log_patterns`).
+  `min_gcs_bytes`, `max_iters`, `timeout`, `tools`, `critique.max_retries`).
 - **Consumer-owned** (in `prompts/system.md`): project-specific AI
   knowledge. Mandatory; injected verbatim between BasePrompt and
   ResponseFormatFooter.
@@ -254,9 +252,8 @@ live deploy.
   When in doubt, grep for callers: if nothing in any consumer's
   `project.yaml` or the engine code paths references a given branch, it
   is a deletion candidate.
-- **Conventional, terse commit messages.** Opening paragraph explains
-  rationale; bulleted list describes the changes; closing line confirms
-  `go build / vet / test / staticcheck` are clean.
+- **Conventional, terse commit messages.** Use a single-line subject. Put the
+  detailed rationale and verification in the pull request description.
 
 ## Common pitfalls
 
@@ -283,8 +280,10 @@ live deploy.
 
 ## Pointers to deeper docs
 
-- `docs/onboarding-a-new-project.md` - full worked example for adding a new
-  consumer repo.
+- `docs/onboarding-a-new-project.md` - common onboarding and scaffold flow.
+- `docs/project-configuration.md` - strict project.yaml field reference.
+- `docs/github-pages.md` - GitHub Actions and Pages deployment.
+- `docs/troubleshooting.md` - first-deploy failures and checks.
 - `docs/agentic.md` - agentic mode, tool docs, floors, critique gate.
 - `docs/skills.md` - consumer-side recipe registry format + hashing.
 - `docs/writing-prompts.md` - how `prompts/system.md` slots into the

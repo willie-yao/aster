@@ -1,71 +1,89 @@
 # Testing
 
-The engine has deterministic unit and end-to-end tests. Model quality evaluation
-is tracked separately from CI.
+The engine has deterministic backend, frontend, and end-to-end tests. Live model
+quality evaluation is opt-in and is not a normal CI gate.
 
-## Unit tests
+## Full validation
 
-Per-package tests live alongside the code. Run them with:
+Run these before opening a pull request that affects both backend and frontend:
 
 ```bash
-make test
-cd backend && go vet ./...
+make build
+cd backend && go vet ./... && go test ./... -count=1 && staticcheck ./...
+cd ../frontend && npm ci && npx tsc -b && npm run lint && npm run build
 ```
 
-These are the CI gates (see `.github/workflows/ci.yml`).
+CI runs backend build, test, and vet plus frontend type check, lint, and build.
+CI does not run `staticcheck`, so run it locally for backend changes.
+
+Check Go formatting with:
+
+```bash
+cd backend
+gofmt -l .
+```
+
+## Focused backend tests
+
+```bash
+# One package tree.
+cd backend && go test ./internal/ai/... -count=1
+
+# One test.
+cd backend && go test ./internal/ai -run TestService_CacheKeyShape -v
+
+# AI subsystem with the race detector.
+cd backend && go test -race -count=1 ./internal/ai/...
+```
+
+Prompt text in `agentic.go`, `responseformat.go`, and `critique.go` is pinned by
+anchor tests. Update the relevant anchor test in the same change as intentional
+prompt edits.
 
 ## End-to-end pipeline tests
 
-`internal/e2e` runs the full `fetcher.Run` pipeline (discover, fetch, parse
-JUnit, aggregate, AI analysis, write output) against committed fixtures with no
-network, no real model, and no GCS. They are hermetic and deterministic.
+`internal/e2e` runs `fetcher.Run` through discovery, artifact parsing,
+aggregation, scripted AI analysis, and output writing against local fixtures.
+It has no network, model, or GCS dependency.
 
 ```bash
-make e2e           # go test ./internal/e2e/... -count=1 -v
+make e2e
 ```
 
-The harness relies on two seams:
+The harness uses:
 
-- **Local storage provider** (`storage.ProviderLocal`): reads artifacts from a
-  directory tree mirroring the bucket layout. The fixture `project.yaml` sets
-  `storage.provider: local`, `storage.base: <fixture bucket>`, and
-  `discovery.source: bucket`, so discovery and the agentic artifact tools both
-  read the fixtures. This provider is also usable for offline or air-gapped
-  fetches against a downloaded artifact tree. It is intended for testing and
-  offline use, not for publishing a public dashboard: without `storage.web_base`
-  set, artifact links are emitted as root-relative paths (never the on-disk
-  root). Set `web_base` to the real public bucket URL if you publish
-  offline-fetched data.
-- **Scripted model** (`internal/aitest.ScriptServer`): an httptest
-  chat-completions server that returns queued responses in order, so a single
-  failure's agentic loop is fully deterministic. Its sibling
-  `aitest.ReplayServer` serves recorded responses keyed by a request
-  fingerprint, for higher-fidelity record/replay.
+- The local storage provider with a fixture tree that mirrors Prow storage.
+- `internal/aitest.ScriptServer` for ordered deterministic model responses.
+- `internal/aitest.ReplayServer` for recorded request and response fixtures.
 
-Fixtures live under `internal/e2e/testdata/`:
+Fixtures live under `backend/internal/e2e/testdata`. Scrub secrets and private
+artifact content before committing a recording.
 
-```
-testdata/
-  bucket/logs/<job>/<build>/{started,finished}.json
-  bucket/logs/<job>/<build>/build-log.txt
-  bucket/logs/<job>/<build>/artifacts/junit.xml
-  prompts/system.md
+## AI quality benchmark
+
+The opt-in benchmark runs real agentic analysis against labeled historical
+failures. Model output is nondeterministic, so it is not part of CI.
+
+```bash
+cd backend
+RUN_AI_BENCHMARK=1 \
+AI_ENDPOINT=http://127.0.0.1:8000/v1/chat/completions \
+AI_MODEL=<model-id> AI_TOKEN=<token-or-placeholder> \
+  go test ./internal/e2e -run TestAIBenchmark -v -timeout 60m
 ```
 
-To add a scenario, extend the fixture tree and add a test in
-`internal/e2e/pipeline_test.go`.
+Set `BENCH_PROJECT_DIR` to a consumer repository to load its prompt and AI
+settings. The benchmark also accepts `BENCH_MAX_ITERS`, `BENCH_TIMEOUT`,
+`BENCH_MIN_TOOL_CALLS`, `BENCH_MIN_GCS_BYTES`, and
+`BENCH_CRITIQUE_RETRIES` overrides.
 
-### Recording real model responses
+There is no checked-in A/B comparison command. Compare benchmark logs or saved
+results when evaluating two models or configurations.
 
-`aitest.ReplayServer` can capture fixtures from a real endpoint once, then
-replay them deterministically. Build a recording server with an upstream URL and
-token, run the analysis once to populate `testdata`, then switch the test to
-`NewReplayServer`. Scrub any sensitive content from recorded responses before
-committing.
+## Documentation validation
 
-## Quality evaluation
+When editing Markdown:
 
-A separate, gated harness scores AI analysis quality against a labeled dataset
-of real failures (transient precision/recall, grounding rate, citation validity,
-depth) Because model output is non-deterministic, quality evaluation is not a pass/fail
-CI gate. There is currently no checked-in A/B comparison command.
+- Verify local links and heading anchors.
+- Validate generated scaffold text with `go test ./internal/onboard`.
+- Run `helm lint` when Helm examples or values change.

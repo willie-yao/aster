@@ -252,3 +252,9 @@ After the run, every `AIAnalysis` in `data/jobs/*.json` carries:
 
 Grouping analyses by `skill_set_hash` lets you compare runs from
 before and after a recipe change without re-fetching unchanged entries.
+
+## Auto-suggesting recipes
+
+The former `ai.suggest_skills` automation was removed. Consumers still author
+and review recipe files under `skills/*.yaml`; their presence is the opt-in.
+There is no scheduled recipe-generation feature or `SKILL_TOKEN` secret.

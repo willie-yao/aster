@@ -1,7 +1,7 @@
 # Default values for the prow-ai-dashboard chart.
-# The fetcher runs as a CronJob and writes JSON (and its AI cache) to a shared
-# volume; the server Deployment reads that volume and serves the SPA plus the
-# /data/*.json contract and /api/capabilities.
+# A worker Deployment (default) or CronJob writes JSON and its AI cache to a
+# shared volume. The server Deployment reads the public files from that volume
+# and serves the SPA, /data/*.json, and /api/capabilities.
 
 image:
   repository: ghcr.io/willie-yao/prow-ai-dashboard
@@ -27,7 +27,7 @@ mode: watch
 # Analysis backend selects HOW failures are analyzed.
 #   inprocess: (default) the fetcher/worker runs the engine's in-process agentic
 #              loop (governed by ai.enabled). No change to existing behavior.
-#   orka:      the fetch step writes the skeleton only (-ai=false) and the Orka
+#   orka:      an advanced experimental path where fetch writes the skeleton and Orka
 #              pipeline (orka-producer -> Orka Tasks -> orka-ingestor) does the
 #              analysis, running alongside an in-cluster inference stack. Requires
 #              mode: cron, and Orka + the tool shim + a Provider + the ai-worker

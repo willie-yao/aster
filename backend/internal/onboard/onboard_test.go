@@ -309,11 +309,43 @@ func TestScaffold_LoadsViaLoadDir(t *testing.T) {
 		t.Errorf("loaded config missing id/name: %+v", cfg)
 	}
 	if strings.TrimSpace(gotPrompt) == "" {
-		t.Error("prompt stub must be non-empty (LoadDir requires it)")
+		t.Error("prompt draft must be non-empty (LoadDir requires it)")
 	}
 
 	if err := writeFiles(dir, files); err == nil {
 		t.Error("expected writeFiles to refuse overwriting existing files")
+	}
+}
+
+func TestScaffold_PagesIncludesProviderSetup(t *testing.T) {
+	data := buildScaffoldData(testOpts(), nil)
+
+	deploy, err := render(deployYAMLTmpl, data)
+	if err != nil {
+		t.Fatalf("render deploy workflow: %v", err)
+	}
+	for _, want := range []string{"vars.AI_ENDPOINT", "vars.AI_MODEL", "secrets.AI_TOKEN"} {
+		if !strings.Contains(deploy, want) {
+			t.Errorf("deploy workflow missing %q:\n%s", want, deploy)
+		}
+	}
+
+	checklist, err := render(checklistTmpl, checklistData{
+		Name:           data.Name,
+		DashboardOwner: "my-org",
+		DashboardName:  data.DashboardName,
+		EngineRef:      data.EngineRef,
+	})
+	if err != nil {
+		t.Fatalf("render checklist: %v", err)
+	}
+	for _, want := range []string{"gh variable set AI_ENDPOINT", "gh variable set AI_MODEL", "gh secret set AI_TOKEN"} {
+		if !strings.Contains(checklist, want) {
+			t.Errorf("checklist missing %q:\n%s", want, checklist)
+		}
+	}
+	if strings.Contains(checklist, "is a **stub**") {
+		t.Errorf("checklist labels every prompt as a stub:\n%s", checklist)
 	}
 }
 

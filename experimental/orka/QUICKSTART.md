@@ -250,7 +250,8 @@ The Orka path reads only the storage, tool, and id fields from the consumer's
 
 Everything else under `ai:` is engine-only and has no effect on the Orka path:
 `ai.concurrency`, `ai.timeout`, `ai.max_iters`, `ai.min_tool_calls`,
-`ai.min_gcs_bytes`, `ai.critique.*`, `ai.evidence.*`. `prompts/system.md` is
+`ai.min_gcs_bytes`, `ai.single_tool_call`, and `ai.critique.*`.
+`prompts/system.md` is
 composed into the Task's system prompt exactly as in the engine.
 
 The equivalent Orka knobs are producer flags, surfaced as Helm `orka.*` values:

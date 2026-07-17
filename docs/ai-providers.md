@@ -1,11 +1,12 @@
 # AI providers
 
-The dashboard's AI analysis is provider-agnostic. The fetcher speaks plain
-OpenAI chat-completions over HTTPS, so anything that exposes a
-`POST /chat/completions` endpoint will work: GitHub Copilot, OpenAI, Azure
-OpenAI, Nvidia Dynamo / NIMs, vLLM, Ollama, or a self-hosted proxy. There is
-**no default provider**: you must configure an endpoint and model explicitly
-(in `project.yaml` or via env), or AI analysis fails fast with a clear error.
+The dashboard's AI analysis is provider-agnostic. The fetcher speaks OpenAI
+chat-completions over HTTPS and requires function calling: the endpoint must
+accept `tools` in the request and return `tool_calls`. GitHub Copilot, OpenAI,
+Nvidia Dynamo / NIMs, vLLM, Ollama, and compatible proxies can work when the
+selected model supports that contract. There is **no default provider**: you
+must configure an endpoint and model explicitly (in `project.yaml` or via env),
+or AI analysis fails fast with a clear error.
 
 Configure your provider in your consumer repo's `project.yaml` under `ai:`:
 
@@ -120,21 +121,23 @@ ai:
 
 ## Azure OpenAI
 
-Azure OpenAI uses a per-deployment URL and an `api-key` header instead of
-`Authorization: Bearer`. Put the key in the `headers:` map so it replaces
-the default bearer scheme:
+Azure OpenAI commonly uses a per-deployment URL and an `api-key` header instead
+of `Authorization: Bearer`. The engine can send custom headers, but it does not
+interpolate secrets into `project.yaml` header values:
 
 ```yaml
 ai:
   endpoint: "https://my-resource.openai.azure.com/openai/deployments/gpt-5-mini/chat/completions?api-version=2024-08-01-preview"
   model: "gpt-5-mini"
   headers:
-    api-key: "${AI_TOKEN}"
+    api-key: "<literal-key>"
 ```
 
-Note: `${AI_TOKEN}` interpolation isn't built in. Either inject the literal
-value via a workflow `env:` step or set the header directly in the YAML
-(only safe for non-secret routing values).
+Do not commit a real key in a public consumer repository. The stock reusable
+workflow supports `AI_TOKEN` only as a bearer token and does not have a
+secret-header input. Use a trusted proxy that translates the bearer token to an
+Azure `api-key`, or customize the deployment to inject a private project config.
+The selected Azure deployment must also support function calling.
 
 ## Nvidia Dynamo / NIM
 
@@ -188,15 +191,14 @@ Notes:
 
 ## Cache invalidation when switching providers
 
-Cache keys are content-based (hash of the test name + normalized failure
-message) and do not include the model or endpoint. Switching providers will
-return stale cached responses from the previous model until the cache is
-cleared. Run the project's `clear-cache.yml` workflow after changing
-`endpoint` or `model` if you want fresh analyses.
+Each cached analysis records a fingerprint of the model and endpoint that
+produced it. Changing either value automatically marks the entry stale and
+reanalyzes it on the next fetch. The prior result stays published until a
+replacement succeeds, so a slow or failing provider swap does not erase the
+last usable analysis.
 
-Switching providers does NOT change the analysis mode: the engine always
-runs the agentic loop. Cached entries simply re-analyze when the cached
-`mode` no longer matches, which self-heals over one fetcher run.
+The engine always runs the agentic loop. Use `clear-cache.yml` only when you
+want an immediate full rebaseline rather than incremental refresh.
 
 ## Function-calling support (required)
 

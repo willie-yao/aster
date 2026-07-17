@@ -124,7 +124,8 @@ this engine repo.
   if you see the model ignoring the user message.
 - **Iterate against real failures.** Trigger an AI analysis on a known
   failure, read the summary, and refine the prompt where the model got it
-  wrong. Clear the AI cache (see below) so the next run regenerates.
+  wrong. Prompt fingerprinting refreshes affected analyses on the next run.
+  Clear the cache only when you want an immediate full rebaseline.
 
 ## Iterating on the prompt
 

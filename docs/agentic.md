@@ -55,7 +55,7 @@ function calling (`tools` field on the request, `tool_calls` field on
 the response). Verified endpoints:
 
 - **GitHub Copilot** (`api.githubcopilot.com`) — supported.
-- **OpenAI** — supported on all models since gpt-3.5-turbo-0613.
+- **OpenAI**: supported on models that expose function calling.
 - **Azure OpenAI** — supported on tool-calling-capable deployments.
 - **Ollama / vLLM / NIMs** — supported per-model; check your model card.
 
@@ -603,6 +603,11 @@ Agentic analyses are cached under `agentic:<module>:<job>:<build>:<hash>`. The
 engine records the analysis `mode` on each entry; an entry from a prior
 pipeline (or one below the current quality floors) is detected as stale on the
 next fetcher run and re-analyzed.
+
+Entries also carry fingerprints for the composed prompt, model and endpoint,
+and loaded skill set. Changing any of them triggers incremental re-analysis on
+the next fetch. The last usable result stays published until its replacement
+succeeds. A manual cache clear is only for an immediate full rebaseline.
 
 Cached agentic entries are scoped to a specific build because answers cite
 build-specific paths and line numbers; the same test failing in two different

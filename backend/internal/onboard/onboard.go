@@ -136,7 +136,7 @@ func Run(ctx context.Context, opts Options) error {
 
 // scaffoldPRBody is the PR description: a short summary plus the human steps.
 func scaffoldPRBody(name, mode string) string {
-	finalStep := "Complete the GitHub configuration in `CHECKLIST.md` (enable Pages, set the `AI_TOKEN` secret)."
+	finalStep := "Complete the GitHub configuration in `CHECKLIST.md` (enable Pages, set the AI provider variables and token)."
 	if mode == modeK8s {
 		finalStep = "Follow `deploy/README.md` to `helm install` the dashboard, and fill in `deploy/values.yaml` (RWX storage class, AI endpoint/model)."
 	}

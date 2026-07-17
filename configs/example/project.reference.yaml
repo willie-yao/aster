@@ -34,6 +34,8 @@ testgrid:
 #   provider: gcsweb -> any gcsweb gateway fronting a bucket (e.g. an S3 bucket
 #                       behind gcsweb.<project>.io); set `base` to that gateway,
 #                       and `prow_base` to the Prow deck root.
+#   provider: local  -> a downloaded artifact tree for tests or offline fetches;
+#                       set `base` to its absolute root directory.
 storage:
   provider: gcs
   bucket: "kubernetes-ci-logs"
@@ -42,6 +44,10 @@ storage:
   # bucket: "my-prow"
   # base: "https://gcsweb.my-project.io/s3"
   # prow_base: "https://prow.my-project.io/view/s3"
+  # local example:
+  # provider: local
+  # base: "/absolute/path/to/artifacts"
+  # web_base: "https://artifacts.example.net" # optional public link root
 
 # How the fetcher finds the project's jobs. Optional; defaults to "testgrid".
 #   source: testgrid -> kubernetes/test-infra job YAMLs filtered by
@@ -102,6 +108,14 @@ branding:
 ai:
   endpoint: "https://api.githubcopilot.com/chat/completions"
   model: "claude-sonnet-4.5"
+  # Extra public routing headers. Do not commit credentials here; AI_TOKEN is
+  # the supported bearer-token channel. See docs/ai-providers.md for providers
+  # that require a secret in another header.
+  # headers:
+  #   X-Routing-Key: "public-value"
+
+  # Parallel analyses. Default 1 because shared providers can rate-limit.
+  # concurrency: 1
 
   # The agentic tool-calling loop is the only analysis path: the LLM browses
   # GCS + cluster artifacts itself via the registered tools and returns a
@@ -120,6 +134,7 @@ ai:
   # context window and the GCS fetch ceiling is a fixed engine safety cap
   # (see docs/agentic.md "Automatic budget sizing").
   # timeout: 5m             # per-failure wall-clock timeout
+  # single_tool_call: false # enable for model templates that allow one call/turn
   # min_tool_calls: 2       # default 2; refuse to accept a final answer
   #                         # until the model has made this many calls.
   #                         # Below-floor finals are published but not
@@ -166,8 +181,14 @@ ai:
   #   max_files: 3                # default 3 (bounded change scope)
   #   max_new_per_run: 1          # default 1
   #   labels: [ai-proposed-fix]   # default [ai-proposed-fix]
-  #   dry_run: true               # propose to fix_previews.json without a PR
+  #   dry_run: true               # write non-public fix_previews.json without a PR
   #   critique_retries: 1         # LLM review re-prompts before dropping (default 1)
+  #   verify:                      # optional build/vet before opening the draft
+  #     enabled: true
+  #     commands:
+  #       - go build ./...
+  #       - go vet ./...
+  #     timeout: 10m              # per-command timeout
   #   # Optional: tune the coding-agent generator. A nil block uses opencode with
   #   # these defaults. The agent reuses the engine's ai.endpoint/model.
   #   agent_runtime:

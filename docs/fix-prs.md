@@ -8,6 +8,10 @@ scope, a CLA-signed commit author, and idempotent dedup.
 This is the highest-risk automation the engine offers (it writes code to a repo),
 so read this whole page before enabling it.
 
+The standard deployments do not include the coding-agent runtime. Scheduled and
+interactive fix generation require `opencode` and git in the process that runs
+the feature. File issue and Mark resolved do not have this requirement.
+
 ## What it does
 
 After each fetch, for every **systemic** recurring pattern (the same ones
@@ -146,15 +150,23 @@ over an OpenAI-compatible endpoint. `opencode` is provider-agnostic; the engine
 configures it with a single custom provider pointed at your endpoint in an
 isolated home directory, so no opencode account or extra key is needed.
 
-Fix generation needs a toolchain on the runner: the `opencode` CLI and git. When
-either is absent the feature reports "unavailable" and the fix is skipped, so the
-distroless server/worker image cannot produce fix PRs. Install `opencode` in the
-deploy workflow (Pages path), or on the Kubernetes-native path use
-[`deploy/fixer.Dockerfile`](../deploy/fixer.Dockerfile), which builds a fetcher
-image on a glibc base with `opencode` and git preinstalled; run it as the fetcher
-CronJob/Job. Because the agent runs `bash` in a clone of the source repo, enable
-fix PRs only for a source repo you trust; it runs on the same trust boundary as
-`verify`.
+Fix generation needs the `opencode` CLI and git. When either is absent the
+feature reports "unavailable" and skips the fix.
+
+On the Pages path, a job that calls a reusable workflow cannot add installation
+steps. Use the workflow's `runs-on` input with a preconfigured self-hosted runner
+that already contains `opencode` and git. The standard GitHub-hosted path does
+not generate fixes.
+
+On the Kubernetes-native path, the default distroless server and worker image
+does not contain either tool. [`deploy/fixer.Dockerfile`](../deploy/fixer.Dockerfile)
+builds a fetcher-only image with the required runtime for a custom CronJob or
+Job. It is not a drop-in replacement for the chart's combined server image. A
+custom server image containing the normal server and SPA plus `opencode` and git
+is required for the interactive Propose fix action.
+
+Because the agent runs `bash` in a clone of the source repo, enable fix PRs only
+for a source repo you trust. It runs on the same trust boundary as `verify`.
 
 A pod-isolated agent runtime can replace the local one later behind the same
 interface without any config change.
@@ -186,23 +198,31 @@ Wire the token into the deploy workflow:
 jobs:
   deploy:
     uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
+    with:
+      runs-on: fix-enabled-runner   # preinstalled opencode + git
     secrets:
       AI_TOKEN: ${{ secrets.AI_TOKEN }}
       FIX_TOKEN: ${{ secrets.FIX_TOKEN }}
 ```
 
 On the [Kubernetes-native](kubernetes.md) path, set `FIX_TOKEN` on the worker via
-`fetcher.extraEnv` in the Helm values instead. An admin can also draft a single
-fix PR on demand from the UI, using their own token (see
+`fetcher.extraEnv` in the Helm values instead. The writer still needs a custom
+runtime image as described above. An admin can draft a single fix PR on demand
+only when the server image also contains `opencode` and git (see
 [server.md](server.md#admin-gated-actions)).
 
 ## Start with dry-run
 
 Before letting it open real PRs, set `dry_run: true`. The engine runs the full
 pipeline (locate, fetch, edit, validate) and writes the proposed changes to
-`fix_previews.json` in the published data directory (and logs the diffs), but
+`fix_previews.json` in the fetcher's output directory and logs the diffs, but
 **opens no PR and forks nothing**. Inspect the previews, confirm the edits look
 right and target the correct files, then flip `dry_run` off.
+
+`fix_previews.json` is operational state. Pages removes it before publication
+and the Kubernetes server returns 404 for it. Inspect it in a local output
+directory, the persistent volume, or the fetch logs rather than through the
+dashboard URL.
 
 ## Following the repo's PR template
 

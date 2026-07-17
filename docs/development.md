@@ -1,53 +1,91 @@
 # Local development
 
-Build, test, and run the engine against a consumer repo locally. For the full
-command catalog and testing matrix, see [AGENTS.md](../AGENTS.md).
+This guide is for contributors working on the engine. See
+[`CONTRIBUTING.md`](../CONTRIBUTING.md) for the contribution workflow and
+[Testing](testing.md) for the full validation matrix.
+
+## Prerequisites
+
+- Go 1.25 as declared by `backend/go.mod`
+- Node.js 20 or newer
+- npm
+- `staticcheck` for full backend validation
+
+Docker, Helm, and kubectl are needed only for container or Kubernetes work.
 
 ## Build and test
 
 ```bash
-make build && make test              # backend (Go 1.25)
-make fe-install && make fe-check     # frontend (Node 20+)
+make build
+make test
+make fe-install
+make fe-check
 ```
+
+`make fe-check` uses `tsc -b`. The root TypeScript config is a solution file, so
+plain `tsc --noEmit` would not walk the referenced projects.
 
 ## Run the fetcher locally
 
 The fetcher takes `-project-dir=<consumer-repo>`, a directory holding
-`project.yaml` and `prompts/system.md`. It writes JSON into
-`frontend/public/data/`, which the Vite dev server serves at the site root, so
-output is immediately visible.
+`project.yaml` and, when AI is enabled, `prompts/system.md`. It writes JSON into
+`frontend/public/data`, which Vite serves immediately.
 
 ```bash
-make fetch-data PROJECT_DIR=../your-consumer-repo
-make dev                             # http://localhost:5173 with HMR
+make fetch-data-quick PROJECT_DIR=../my-consumer
+make dev
 ```
 
-Add `-ai` and set `AI_TOKEN`, `AI_ENDPOINT`, and `AI_MODEL` to populate AI
-summaries. See [ai-providers.md](ai-providers.md) for endpoint details.
+The Vite server runs at <http://localhost:5173> with HMR.
 
-For a one-off run without the Makefile:
+For AI analysis:
 
 ```bash
-./bin/fetcher -project-dir=../your-consumer-repo -out=frontend/public/data \
+export AI_TOKEN=<token>
+export AI_ENDPOINT=<chat-completions-url>
+export AI_MODEL=<model-id>
+make fetch-data-ai-quick PROJECT_DIR=../my-consumer
+make dev
+```
+
+For a one-off run, build the binary first:
+
+```bash
+make build
+./bin/fetcher -project-dir=../my-consumer -out=frontend/public/data \
   -builds=3 -workers=5
 ```
 
 ## Frontend-only iteration
 
-To work on the UI without running the fetcher, drop pre-built JSON from a
-deployed site into `frontend/public/data/`, then `make dev`.
+Copy the public JSON files from a deployed dashboard into
+`frontend/public/data`, then run `make dev`. Do not copy operational files such
+as `ai_cache.json` or issue and fix state.
 
-## Previewing admin actions locally
+## Preview admin actions
 
-`make dev` (Vite) is read-only: it has no `/api/capabilities` endpoint, so the
-admin action buttons (File issue, Propose fix, Mark resolved) never render. To
-preview them, serve the built SPA from the API server with actions enabled:
+The Vite server has no `/api/capabilities`, so action buttons do not render.
+Serve the built SPA through the API server instead:
 
 ```bash
-make dev-actions PROJECT_DIR=../your-consumer-repo   # http://localhost:8080
+make dev-actions PROJECT_DIR=../my-consumer
 ```
 
-This builds the frontend and runs the server in `proxy` auth mode with no
-trusted header, which auto-authorizes every request as an admin, so no OAuth
-setup is needed. `PROJECT_DIR` resolves the issue/fix target repos. It serves a
-static build (no HMR), so rerun it to pick up frontend changes.
+This runs at <http://localhost:8080> with local development authentication. It
+serves a static build and has no HMR.
+
+File issue and Mark resolved work with a real `BOT_TOKEN`. Propose fix also needs
+`opencode` and git installed on the host.
+
+## Kubernetes-native development
+
+```bash
+make build-server
+make build-worker
+make image
+helm lint deploy/helm/prow-ai-dashboard \
+  --set-file project.config=configs/example/project.yaml \
+  --set-file project.systemPrompt=configs/example/prompts/system.md
+```
+
+Use [Kubernetes-native deployment](kubernetes.md) for runtime configuration.

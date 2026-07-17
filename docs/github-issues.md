@@ -16,13 +16,13 @@ comment (and optionally closes the issue).
 | `persistent` | flakiness report | a test failed in **≥3 consecutive** runs |
 
 Both are already computed by the fetcher; issues are just a delivery channel for
-them, alongside the existing Slack/Teams notifications.
+them, alongside optional Slack notifications.
 
 ## Permissions (read this first)
 
-The deploy runs in your **consumer** repo with its `GITHUB_TOKEN`, which can only
-act on that repo. Filing issues on a **different** repo (e.g. the upstream
-project under `branding.source_repo`) requires a separate token:
+The issue feature always uses the dedicated `ISSUE_TOKEN`. The reusable
+workflow's `GITHUB_TOKEN` is not passed to the issue manager. This remains true
+when the target is the consumer repository itself.
 
 - A **fine-grained PAT** or a **GitHub App installation token** with
   `issues: write` on the **target** repo, provided as the `ISSUE_TOKEN` secret.
@@ -62,7 +62,7 @@ Wire the token in the deploy workflow:
 # .github/workflows/deploy.yml  (GitHub Actions + Pages path)
 jobs:
   deploy:
-    uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@v1
+    uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
     # ...
     secrets:
       ISSUE_TOKEN: ${{ secrets.ISSUE_TOKEN }}

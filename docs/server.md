@@ -15,8 +15,8 @@ descriptor the frontend uses to discover server-only features. The static path
 keeps working unchanged, and all `/data/*.json` schemas stay byte-compatible.
 
 The server is independent of how the data was analyzed. Whether the worker runs
-the in-process agentic loop or the [Orka](../experimental/orka/) pipeline (the
-recommended Kubernetes-native analysis backend) produces the same `jobs/*.json`,
+the in-process agentic loop or the advanced experimental
+[Orka](../experimental/orka/) pipeline produces the same `jobs/*.json`,
 so the server serves both identically. See
 [kubernetes.md](kubernetes.md#analysis-backend-in-process-or-orka) for the
 backend choice.
@@ -26,12 +26,14 @@ backend choice.
 | Path | Purpose |
 | --- | --- |
 | `GET /data/*` | The fetcher output tree at read parity: `manifest.json`, `dashboard.json`, `jobs/*.json`, `flakiness.json`, `search-index.json`. |
-| `GET /api/capabilities` | Deploy descriptor, for example `{"mode":"server","features":{"chat":false,"actions":false}}`. |
+| `GET /api/capabilities` | Deploy descriptor, for example `{"mode":"server","features":{"actions":false}}`. |
 | `GET /healthz` | Liveness and readiness probe. |
 | `GET /` | The built SPA, when `-static-dir` is set, with deep-link fallback to `index.html`. |
 | `POST /api/failures/{id}/create-issue/preview` | Admin-gated: render the exact GitHub issue for one failure without filing it. Enabled only when actions are configured. |
 | `POST /api/failures/{id}/propose-fix/preview` | Admin-gated: generate and render the exact draft fix PR for one failure without opening it. |
 | `POST /api/actions/confirm` | Admin-gated: file the issue or open the PR previewed under the posted `{"token":...}`. |
+| `POST /api/failures/{id}/resolve` | Admin-gated: mark a recurring pattern resolved at its latest-build watermark. |
+| `POST /api/failures/{id}/unresolve` | Admin-gated: remove the resolved marker. |
 
 ## Capability seam
 
@@ -52,6 +54,11 @@ failure on demand, reusing the same engines the scheduled fetch uses. They are
 off unless the server is started with `-project-dir` and `AUTH_MODE` selects an
 auth mechanism. When enabled, the server sets `features.actions: true` and the
 frontend shows the buttons.
+
+File issue and Mark resolved work in the standard server image. Propose fix
+starts the local `opencode` runtime and also needs git. The standard distroless
+image contains neither tool, so fix previews report unavailable unless you
+deploy a custom server image that includes them.
 
 Actions are two-phase so nothing is posted without review. A `*/preview`
 request renders the exact issue or generates the exact draft fix PR (title,
@@ -123,7 +130,7 @@ oauth mode the `OAUTH_REDIRECT_URL` host is trusted automatically, and
    | `TRUSTED_ORIGINS` | Optional; extra public origins the CSRF guard accepts (comma-separated) when behind a proxy. The `OAUTH_REDIRECT_URL` host is trusted automatically. |
 
    ```bash
-   make fe-build
+   make build-server fe-build
    AUTH_MODE=oauth COOKIE_INSECURE=1 \
    OAUTH_CLIENT_ID=<client-id> OAUTH_CLIENT_SECRET=<client-secret> \
    OAUTH_REDIRECT_URL=http://localhost:8080/api/auth/callback \
@@ -146,7 +153,7 @@ server trusts that header, so it must be reachable **only** through the proxy.
 | `AUTH_MODE=proxy` | Select proxy mode. |
 | `AUTH_PROXY_HEADER` | Header carrying the user, e.g. `X-Auth-Request-Email`. |
 | `BOT_TOKEN` | GitHub PAT that performs the writes (bot account). |
-| `ADMIN_LOGINS` | Optional; restrict which header identities may act. |
+| `ADMIN_LOGINS` | Required comma-separated allowlist of identities that may act. An empty list fails closed. |
 | `TRUSTED_ORIGINS` | Public origin(s) the CSRF guard accepts (comma-separated), e.g. `https://dash.example.net`. Required when the proxy's public host differs from the forwarded `Host`. |
 
 ## Running locally
@@ -156,7 +163,7 @@ server trusts that header, so it must be reachable **only** through the proxy.
 make serve                 # builds bin/server, serves frontend/public/data
 
 # Or serve a self-contained build (SPA + data from one origin):
-make fe-build
+make build-server fe-build
 ./bin/server -data-dir=frontend/public/data -static-dir=frontend/dist
 ```
 

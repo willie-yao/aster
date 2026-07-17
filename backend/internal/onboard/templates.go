@@ -109,8 +109,8 @@ jobs:
       # Headroom for a cold full re-analysis with the critique retry loop;
       # the AI cache persists partial progress so each run converges.
       fetch-timeout: "150m"
-      # Optional: keep model/endpoint out of the public project.yaml by
-      # sourcing them from repo variables. The project.yaml ai.* fields win.
+      # Required unless project.yaml sets ai.model and ai.endpoint. Repository
+      # variables keep provider coordinates out of the public project.yaml.
       ai-model: ${{"{{"}} vars.AI_MODEL {{"}}"}}
       ai-endpoint: ${{"{{"}} vars.AI_ENDPOINT {{"}}"}}
     secrets:
@@ -118,6 +118,7 @@ jobs:
       # Optional: uncomment to enable the matching feature.
       # SLACK_WEBHOOK_URL: ${{"{{"}} secrets.SLACK_WEBHOOK_URL {{"}}"}}
       # ISSUE_TOKEN: ${{"{{"}} secrets.ISSUE_TOKEN {{"}}"}}
+      # FIX_TOKEN: ${{"{{"}} secrets.FIX_TOKEN {{"}}"}}
 `))
 
 var clearCacheYAMLTmpl = template.Must(template.New("clear-cache.yml").Parse(
@@ -177,8 +178,9 @@ fetcher:
   watchInterval: 5m
   reconcileInterval: 1h
 
-# Optional: admin-gated File issue / Propose fix buttons (Kubernetes-native
-# only). Register a GitHub OAuth App (see deploy/README.md), then uncomment:
+# Optional: admin-gated File issue / Mark resolved actions. Propose fix also
+# requires a custom server image with opencode and git. Register a GitHub OAuth
+# App (see deploy/README.md), then uncomment:
 # server:
 #   actions:
 #     enabled: true
@@ -246,8 +248,8 @@ sweep confirmed your discovery config finds jobs. Remaining steps need a human:
 
 ## 1. Review the generated files (required)
 
-- ` + "`prompts/system.md`" + ` is a **stub**: fill it in with project-specific
-  knowledge. This is the single biggest lever on analysis quality.
+- Review the ` + "`prompts/system.md`" + ` draft. Replace any TODOs and confirm its
+  project-specific claims. Prompt quality is the biggest lever on analysis depth.
 - ` + "`project.yaml`" + ` ` + "`categories`" + ` were inferred from job names; reorder,
   rename, or trim them.
 - ` + "`deploy/values.yaml`" + `: set ` + "`persistence.storageClass`" + ` (a ReadWriteMany
@@ -269,9 +271,10 @@ helm upgrade --install {{.Namespace}} deploy/helm/prow-ai-dashboard \
 
 ## 3. Optional: interactive actions
 
-To enable the admin-gated **File issue** / **Propose fix** buttons, register a
-GitHub OAuth App and uncomment the ` + "`server.actions`" + ` block in
-` + "`deploy/values.yaml`" + `. See
+To enable admin-gated actions, register a GitHub OAuth App and uncomment the
+` + "`server.actions`" + ` block in ` + "`deploy/values.yaml`" + `. File issue and Mark
+resolved work in the standard image. Propose fix requires a custom server image
+with opencode and git. See
 https://github.com/willie-yao/prow-ai-dashboard/blob/{{.EngineRef}}/docs/server.md
 for the OAuth setup.
 
@@ -319,8 +322,8 @@ confirmed your discovery config finds jobs. Remaining steps need a human:
 
 ## 1. Review the generated files (required)
 
-- ` + "`prompts/system.md`" + ` is a **stub**: fill it in with project-specific
-  knowledge. This is the single biggest lever on analysis quality.
+- Review the ` + "`prompts/system.md`" + ` draft. Replace any TODOs and confirm its
+  project-specific claims. Prompt quality is the biggest lever on analysis depth.
 - ` + "`project.yaml`" + ` ` + "`categories`" + ` were inferred from job names; reorder,
   rename, or trim them.
 
@@ -336,13 +339,18 @@ Existing repo: put them in a subdir and set ` + "`project_dir`" + ` in the workf
 gh api -X POST repos/{{.DashboardOwner}}/{{.DashboardName}}/pages \
   -f build_type=workflow
 
-# Set the AI token secret (a token your chat-completions endpoint accepts):
+# Set the required provider coordinates and token. You may instead commit
+# ai.endpoint and ai.model under project.yaml.
+gh variable set AI_ENDPOINT --repo {{.DashboardOwner}}/{{.DashboardName}}
+gh variable set AI_MODEL --repo {{.DashboardOwner}}/{{.DashboardName}}
 gh secret set AI_TOKEN --repo {{.DashboardOwner}}/{{.DashboardName}}
 
 # Optional: GitHub issue auto-filing (a token with issues:write on the target):
 # gh secret set ISSUE_TOKEN --repo {{.DashboardOwner}}/{{.DashboardName}}
 # Optional: Slack notifications:
 # gh secret set SLACK_WEBHOOK_URL --repo {{.DashboardOwner}}/{{.DashboardName}}
+# Optional: agent-proposed fix PRs on a runner with opencode and git:
+# gh secret set FIX_TOKEN --repo {{.DashboardOwner}}/{{.DashboardName}}
 ` + "```" + `
 
 ## 4. First deploy

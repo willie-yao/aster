@@ -14,6 +14,10 @@ the Kubernetes-native artifacts: the container image and the Helm chart.
 - A moving `vMAJOR` alias (e.g. `v1`) tracks the latest stable release in that
   major, created/advanced automatically on each stable release.
 
+Before the first stable release in a major, the moving alias does not exist.
+Consumers must use `@main`, a commit SHA, or an exact prerelease tag that is
+already published. Do not document `@v1` as usable until `v1.0.0` exists.
+
 See [CHANGELOG.md](../CHANGELOG.md) for what bumps major/minor/patch. Note that
 internal cache-version bumps (critique, skills, depth) force re-analysis on
 upgrade and are therefore at least a minor bump; call them out in the changelog.
