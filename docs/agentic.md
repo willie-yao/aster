@@ -35,7 +35,7 @@ loop runs and how the guardrails are enforced:
 | --- | --- | --- |
 | Orchestration | Goroutines in the fetcher | One Task per failure, applied to the cluster |
 | Quality gates | Enforced in Go code | Enforced as tools the agent must call plus ai-worker re-prompts |
-| Cache | On-disk JSON keyed by mode + hash | The Kubernetes object store: a content-addressed Task name; bump `-version` to re-analyze |
+| Cache | On-disk JSON keyed by mode + hash | The Kubernetes object store: Task names fingerprint project/build/test identity and the model-visible analysis contract; `-version` is a manual override |
 | Config surface | Every `ai.*` knob | Only `ai.tools`, the `storage` block, and the display id are read; the rest is baked into the worker patches and shim tools |
 | Endpoint | Any OpenAI-compatible chat-completions | Same, via an Orka `Provider`; Copilot needs a de-streaming proxy |
 
@@ -613,10 +613,16 @@ Cached agentic entries are scoped to a specific build because answers cite
 build-specific paths and line numbers; the same test failing in two different
 builds gets two separate agentic analyses.
 
-On the Orka backend the cache is the Kubernetes object store itself: each Task is
-named by the same content address of build, failure hash, and `version`, so
-re-applying an existing Task is a no-op and bumping `-version` forces
-re-analysis. There is no on-disk cache file.
+On the Orka backend the cache is the Kubernetes object store itself. Each Task
+name fingerprints project, storage, job, build, exact test index, rendered
+prompt, provider/model, timeout/retry, and Tool definitions. Re-applying an
+unchanged Task is a no-op. `-version` remains a manual override for semantic
+changes outside that fingerprint. There is no on-disk response cache file; a
+private `orka_analysis.json` manifest carries the producer identity contract to
+the ingestor and is never served or published. Ingested analyses store that
+contract hash, so cached job JSON is refreshed whenever the current contract
+changes. Tool resources use a contract-versioned scope as well, preventing an
+old Task from observing a newly applied Tool definition.
 
 ### Pattern analysis
 

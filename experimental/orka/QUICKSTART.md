@@ -264,7 +264,7 @@ The equivalent Orka knobs are producer flags, surfaced as Helm `orka.*` values:
 | provider | `orka.provider` | `-provider` | `copilot` |
 | per-Task timeout | `orka.taskTimeout` | `-timeout` | `10m` |
 | retries | `orka.retries` | `-retries` | `1` |
-| re-analysis version | `orka.version` | `-version` | `v1` |
+| manual cache-bust version | `orka.version` | `-version` | `v1` |
 | job-pattern finalization wait | `orka.patternWait` | ingestor `-pattern-wait` | `25m` |
 
 Iteration budget, forced finalization, and the transient-critique gate live in the
@@ -277,10 +277,10 @@ Orka ai-worker (see [worker-patches/](worker-patches/)), not in config.
 # job-level pattern analyses and systemic recurring patterns it finalized.
 kubectl logs -n orka-system job/orka-run-1 -c ingest | tail
 
-# Force re-analysis after a prompt or tool change: bump orka.version (Helm) or
-# -version (manifests). Task names embed the version, so old Tasks are ignored and
-# new ones created. Re-applying an unchanged Task is a no-op: the K8s object store
-# is the run-once cache.
+# Prompt, provider/model, timeout/retry, and Tool-definition changes create new
+# content-addressed Tasks automatically. Bump orka.version (Helm) or -version
+# (manifests) only for external semantic changes the producer cannot fingerprint,
+# such as a shim implementation change. Re-applying an unchanged Task is a no-op.
 ```
 
 ## Troubleshoot
@@ -290,7 +290,8 @@ kubectl logs -n orka-system job/orka-run-1 -c ingest | tail
   applied.
 - **`AI analysis unavailable: analysis Task ...`.** Honest surfacing of a
   `Failed`/`Cancelled`/missing Task, not a silent blank. Inspect that Task, fix the
-  cause, bump the version, re-run.
+  cause. Fix the dependency or bump the version when retrying an external
+  semantic change.
 - **`ImagePullBackOff` on an orka-* image.** The GHCR package is not pullable from
   the cluster. Make it public or add an `imagePullSecret`, or build locally and
   override the image (see [Local build](#local-build-for-kind)).

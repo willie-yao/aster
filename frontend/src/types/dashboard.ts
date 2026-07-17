@@ -67,6 +67,7 @@ export interface AIAnalysis {
   // present, this map is authoritative and absent files stay unlinked.
   file_links?: Record<string, string>;
   mode?: string;
+  contract_hash?: string;
   // Optional per-analysis telemetry emitted by the backend. Cached analyses may
   // omit metrics or record zero when a metric is unavailable.
   tool_calls?: number;

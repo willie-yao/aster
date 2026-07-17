@@ -13,16 +13,17 @@ import (
 
 // NonPublishedFiles are operational files written into the output directory that
 // must not be served by the API server or deployed to the public Pages site:
-// the AI cache and operational side-effect state. The frontend never
-// reads them; they carry operational metadata (issue numbers, PR URLs) rather
-// than dashboard data. resolved.json is intentionally excluded from this list
-// because the frontend serves it to render resolved-failure state.
+// the AI cache, Orka identity manifest, and operational side-effect state. The
+// frontend never reads them; they carry operational metadata rather than
+// dashboard data. resolved.json is intentionally excluded from this list because
+// the frontend serves it to render resolved-failure state.
 var NonPublishedFiles = []string{
 	"ai_cache.json",
 	"issue_state.json",
 	"fix_pr_state.json",
 	"fix_previews.json",
 	"notification_state.json",
+	"orka_analysis.json",
 }
 
 // writeJSON writes indented JSON to path atomically, creating parent

@@ -129,7 +129,7 @@ dist-ai: fetch-data-ai fe-build
 
 # Clean build artifacts and generated data
 clean:
-	rm -rf bin/ frontend/dist frontend/public/data/dashboard.json frontend/public/data/jobs/ frontend/public/data/flakiness.json
+	rm -rf bin/ frontend/dist frontend/public/data/dashboard.json frontend/public/data/jobs/ frontend/public/data/flakiness.json frontend/public/data/orka_analysis.json
 
 # Clean AI analysis cache (forces re-analysis on next fetch)
 clean-cache:

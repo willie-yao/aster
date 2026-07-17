@@ -96,6 +96,9 @@ type AIAnalysis struct {
 	RelevantFiles []string `json:"relevant_files,omitempty"`
 	// Mode records the analysis pipeline. Cache gates reject non-agentic entries.
 	Mode string `json:"mode,omitempty"`
+	// ContractHash identifies the Orka analysis contract that produced this
+	// result. The ingestor refreshes cached results when the current hash differs.
+	ContractHash string `json:"contract_hash,omitempty"`
 
 	// ToolCalls is the number of agent tool invocations made during this
 	// analysis.

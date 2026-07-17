@@ -3,8 +3,9 @@
 #      the shared data volume (jobs/*.json, dashboard.json, ...).
 #   2. produce (orka-producer): reads the skeleton, composes the engine prompt,
 #      and server-side applies one content-addressed Task per failing test plus
-#      the per-build header-routed Tools (option L). Run-once: re-applying an
-#      existing Task is a no-op, so overlapping runs are cheap.
+#      project/job/build-scoped header-routed Tools. It writes the private
+#      producer-to-ingestor identity manifest before applying. Run-once:
+#      re-applying an existing Task is a no-op, so overlapping runs are cheap.
 #   3. ingest (orka-ingestor): polls the Orka result API (-wait) until every
 #      failing test is analyzed, then patches ai_summary/ai_analysis into the
 #      skeleton in place. The server Deployment serves the result unchanged.
@@ -28,7 +29,9 @@
 #         --from-file=system.md=<consumer>/prompts/system.md
 #   - A ReadWriteMany PVC shared with the server Deployment: prow-ai-dashboard-data
 #
-# Bump VERSION (the -version suffix) to force re-analysis after a prompt/tool change.
+# Prompt, model, timeout, retry, and Tool-definition changes invalidate Tasks
+# automatically. Bump VERSION for external semantic changes such as a shim-only
+# behavior update.
 apiVersion: batch/v1
 kind: CronJob
 metadata:

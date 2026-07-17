@@ -48,7 +48,8 @@ orka:
   # from experimental/orka/manifests (kubectl create configmap orka-base-tools
   # --from-file=experimental/orka/manifests/).
   baseToolsConfigMap: orka-base-tools
-  # Content-address version; bump to force re-analysis after a prompt/tool change.
+  # Manual cache-bust version. Prompt, model, timeout, retry, and Tool-definition
+  # changes invalidate Tasks automatically; bump this for external semantic changes.
   version: v1
   # Per-Task timeout, retryPolicy, and result/finalization wait budgets.
   taskTimeout: 10m

@@ -72,6 +72,7 @@ func TestHandler_HidesOperationalFiles(t *testing.T) {
 	writeFile(t, dataDir, "ai_cache.json", `{"secret":"cache"}`)
 	writeFile(t, dataDir, "issue_state.json", `{"tracked":{}}`)
 	writeFile(t, dataDir, "fix_pr_state.json", `{"tracked":{}}`)
+	writeFile(t, dataDir, "orka_analysis.json", `{"contract_hash":"private"}`)
 
 	h, err := Handler(Options{DataDir: dataDir, Capabilities: DefaultCapabilities()})
 	if err != nil {
@@ -84,7 +85,7 @@ func TestHandler_HidesOperationalFiles(t *testing.T) {
 	if resp, _ := http.Get(srv.URL + "/data/dashboard.json"); resp.StatusCode != http.StatusOK {
 		t.Errorf("dashboard.json status = %d, want 200", resp.StatusCode)
 	}
-	for _, name := range []string{"ai_cache.json", "issue_state.json", "fix_pr_state.json"} {
+	for _, name := range []string{"ai_cache.json", "issue_state.json", "fix_pr_state.json", "orka_analysis.json"} {
 		resp, err := http.Get(srv.URL + "/data/" + name)
 		if err != nil {
 			t.Fatalf("GET %s: %v", name, err)

@@ -72,7 +72,7 @@ func FinalizePatterns(ctx context.Context, dataDir string, analyzer patterns.Ana
 }
 
 func loadJobDetails(dataDir string) ([]models.JobDetail, error) {
-	active, err := loadActiveJobIDs(dataDir)
+	active, err := ActiveJobIDs(dataDir)
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +102,8 @@ func loadJobDetails(dataDir string) ([]models.JobDetail, error) {
 	return details, nil
 }
 
-func loadActiveJobIDs(dataDir string) (map[string]bool, error) {
+// ActiveJobIDs returns the jobs present in the current dashboard snapshot.
+func ActiveJobIDs(dataDir string) (map[string]bool, error) {
 	path := filepath.Join(dataDir, "dashboard.json")
 	data, err := os.ReadFile(path)
 	if err != nil {

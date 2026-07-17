@@ -3,15 +3,15 @@
 // reuses the engine's discovery output (jobs/*.json) and prompt composition, so
 // the only thing that moves off the engine is the analysis step itself.
 //
-// Build isolation (model-independent): for each distinct build, the producer
+// Build isolation (model-independent): for each distinct project/job/build, the producer
 // clones the base Tool CRDs with a static `X-Build-Prefix` header and a
-// build-suffixed name, and each Task references its build's tool set. The shim
+// scope-suffixed name, and each Task references its build's tool set. The shim
 // routes by that header, so tools always read the Task's own build regardless of
 // what the model does. (A model-passed `build` param proved unreliable.)
 //
-// Run-once: each Task name is content-addressed (az-<build>-<failureHash>-<ver>),
-// so re-running and re-applying is idempotent. Bump -version to force re-analysis
-// after a prompt/tool change.
+// Run-once: Task names fingerprint the consumer, build, test index, rendered
+// prompt, provider/model, and Tool definitions. Bump -version to force an
+// operator-requested re-analysis beyond automatic contract invalidation.
 //
 // By default the producer is pure: it writes Task + Tool YAMLs to -tasks-out /
 // -tools-out for a separate apply step. With -apply it server-side applies them
@@ -92,7 +92,7 @@ func main() {
 	namespace := flag.String("namespace", "orka-system", "namespace for the Tasks and Tools")
 	provider := flag.String("provider", "copilot", "Orka Provider name")
 	model := flag.String("model", "claude-sonnet-4.5", "model id")
-	version := flag.String("version", "v1", "content-address version suffix; bump to force re-analysis")
+	version := flag.String("version", "v1", "manual cache-bust version included in the automatic analysis fingerprint")
 	timeout := flag.String("timeout", "10m", "per-Task timeout")
 	toolsCSV := flag.String("tools", "", "override the comma-separated base Tool names (default: derive from the consumer's project.yaml ai.tools + quality tools)")
 	bucketFlag := flag.String("bucket", "", "GCS bucket routed to the shim via the X-Bucket header (default: the consumer's storage.bucket)")
@@ -140,62 +140,102 @@ func main() {
 	if err != nil {
 		log.Fatalf("load base tools: %v", err)
 	}
+	toolContracts := make([]orka.ToolContract, 0, len(toolNames))
+	for _, name := range toolNames {
+		toolContracts = append(toolContracts, orka.ToolContract{Name: name, Definition: baseTools[name]})
+	}
+	contractHash, err := orka.AnalysisContractHash(orka.AnalysisContract{
+		Provider: *provider, Model: *model, Version: *version,
+		Timeout: *timeout, Retries: *retries, SystemPrompt: systemPrompt,
+		Tools: toolContracts,
+	})
+	if err != nil {
+		log.Fatalf("analysis contract: %v", err)
+	}
+	storageCfg := cfg.StorageConfig()
+	projectScope := orka.ProjectScopeID(cfg.ID, string(storageCfg.Provider), bucket, storageCfg.Base, storageCfg.WebBase, storageCfg.ProwBase)
+	manifest := orka.NewAnalysisManifest(projectScope, projectLabel, contractHash, *provider, *model, *version)
+	activeJobs, err := orka.ActiveJobIDs(*dataDir)
+	if err != nil {
+		log.Fatalf("load active jobs: %v", err)
+	}
 
 	mustMkdir(*tasksOut)
 	mustMkdir(*toolsOut)
 
 	jobFiles, _ := filepath.Glob(filepath.Join(*dataDir, "jobs", "*.json"))
-	builds := map[string]string{} // buildID -> buildPrefix (distinct builds seen)
+	type buildPlan struct {
+		scope  string
+		prefix string
+	}
+	builds := map[string]buildPlan{}
 	var taskObjs []namedObj
 	for _, jf := range jobFiles {
 		var detail models.JobDetail
 		if b, err := os.ReadFile(jf); err != nil || json.Unmarshal(b, &detail) != nil {
 			continue
 		}
+		if !activeJobs[detail.JobID] {
+			continue
+		}
 		for _, run := range detail.Runs {
 			buildPrefix := buildPrefixFor(bucket, detail.JobID, run)
-			for _, tc := range run.TestCases {
+			buildScope := orka.BuildScopeID(projectScope, detail.JobID, run.BuildID, buildPrefix)
+			toolScope := orka.ToolScopeID(buildScope, contractHash)
+			registered := false
+			for ti := range run.TestCases {
+				tc := run.TestCases[ti]
 				if tc.Status != "failed" {
 					continue
 				}
-				builds[run.BuildID] = buildPrefix
-				name := orka.TaskName(run.BuildID, orka.FailureHash(tc.Name, tc.FailureMessage), *version)
+				if !registered {
+					manifest.SetBuild(detail.JobID, run.BuildID, buildScope, toolScope, buildPrefix)
+					builds[orka.BuildKey(detail.JobID, run.BuildID)] = buildPlan{scope: toolScope, prefix: buildPrefix}
+					registered = true
+				}
+				ref, err := manifest.TaskRef(detail.JobID, run, ti, tc)
+				if err != nil {
+					log.Fatalf("task identity: %v", err)
+				}
 				task := orka.BuildAITask(orka.AITaskSpec{
-					Name:         name,
+					Name:         ref.Name,
 					Namespace:    *namespace,
 					Provider:     *provider,
 					Model:        *model,
 					Timeout:      *timeout,
 					MaxRetries:   *retries,
 					WebhookURL:   *webhookURL,
-					Tools:        buildToolNames(toolNames, run.BuildID),
+					Tools:        buildToolNames(toolNames, ref.ToolScope),
 					SystemPrompt: systemPrompt,
-					Prompt:       userPrompt(projectLabel, detail.JobID, buildPrefix, tc),
+					Prompt:       ref.Prompt,
 					Labels: map[string]string{
 						orka.ManagedByLabel: orka.ManagedByValue,
-						orka.BuildLabel:     run.BuildID,
+						orka.BuildLabel:     ref.ToolScope,
 					},
 				})
-				writeYAML(filepath.Join(*tasksOut, name+".yaml"), task)
-				taskObjs = append(taskObjs, namedObj{name, task})
+				writeYAML(filepath.Join(*tasksOut, ref.Name+".yaml"), task)
+				taskObjs = append(taskObjs, namedObj{ref.Name, task})
 			}
 		}
 	}
 
 	// Emit per-build Tool CRD clones (header-routed) for every distinct build.
 	var toolObjs []namedObj
-	for buildID, prefix := range builds {
+	for _, build := range builds {
 		for _, base := range toolNames {
 			doc := baseTools[base]
-			clone := cloneToolForBuild(doc, base, buildID, prefix, bucket, *namespace, storageMeta)
-			toolName := buildToolName(base, buildID)
+			clone := cloneToolForBuild(doc, base, build.scope, build.prefix, bucket, *namespace, storageMeta)
+			toolName := buildToolName(base, build.scope)
 			writeYAML(filepath.Join(*toolsOut, toolName+".yaml"), clone)
 			toolObjs = append(toolObjs, namedObj{toolName, clone})
 		}
 	}
 
-	log.Printf("wrote %d Tasks (%s) and %d per-build Tools across %d builds (%s) for %s [bucket=%s, k8s-tools=%v]",
+	log.Printf("wrote %d Tasks (%s) and %d contract-scoped Tools across %d builds (%s) for %s [bucket=%s, k8s-tools=%v]",
 		len(taskObjs), *tasksOut, len(toolObjs), len(builds), *toolsOut, projectLabel, bucket, k8sEnabled)
+	if err := manifest.Write(*dataDir); err != nil {
+		log.Fatalf("write analysis manifest: %v", err)
+	}
 
 	if *apply {
 		if err := applyAll(*namespace, *kubeContext, toolObjs, taskObjs); err != nil {
@@ -285,29 +325,6 @@ revise if any applies:
 Respond with ONLY the required JSON object.`
 }
 
-func userPrompt(projectLabel, jobID, buildPrefix string, tc models.TestCase) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "This %s CI test FAILED. Root-cause it and classify transient vs real bug.\n\n", projectLabel)
-	fmt.Fprintf(&b, "Job: %s\n", jobID)
-	fmt.Fprintf(&b, "Build: %s\n", buildPrefix)
-	fmt.Fprintf(&b, "Failed test: %s\n", tc.Name)
-	if tc.FailureLocation != "" {
-		fmt.Fprintf(&b, "Failure location: %s\n", tc.FailureLocation)
-	}
-	if tc.JUnitFile != "" {
-		fmt.Fprintf(&b, "JUnit file: %s\n", tc.JUnitFile)
-	}
-	msg := tc.FailureMessage
-	if len(msg) > 1200 {
-		msg = msg[:1200]
-	}
-	if msg != "" {
-		fmt.Fprintf(&b, "Failure output:\n%s\n", msg)
-	}
-	fmt.Fprintf(&b, "\nInvestigate the build's artifacts with the tools and conclude with your JSON.")
-	return b.String()
-}
-
 // loadBaseTools parses Tool CRDs from every YAML doc under dir and returns the
 // ones named in want, keyed by name.
 func loadBaseTools(dir string, want []string) (map[string]map[string]any, error) {
@@ -345,18 +362,18 @@ func loadBaseTools(dir string, want []string) (map[string]map[string]any, error)
 // cloneToolForBuild copies a base Tool CRD, renames it per build, and injects the
 // build/bucket/storage headers so the shim serves this build from the right
 // bucket and provider.
-func cloneToolForBuild(base map[string]any, baseName, buildID, prefix, bucket, namespace string, storageMeta map[string]string) map[string]any {
+func cloneToolForBuild(base map[string]any, baseName, buildScope, prefix, bucket, namespace string, storageMeta map[string]string) map[string]any {
 	doc := deepCopy(base).(map[string]any)
 	meta, _ := doc["metadata"].(map[string]any)
 	if meta == nil {
 		meta = map[string]any{}
 		doc["metadata"] = meta
 	}
-	meta["name"] = buildToolName(baseName, buildID)
+	meta["name"] = buildToolName(baseName, buildScope)
 	meta["namespace"] = namespace
 	meta["labels"] = map[string]any{
 		orka.ManagedByLabel: orka.ManagedByValue,
-		orka.BuildLabel:     buildID,
+		orka.BuildLabel:     buildScope,
 	}
 
 	spec, _ := doc["spec"].(map[string]any)
@@ -436,15 +453,15 @@ func prefixFromURL(u, bucket string) string {
 	return p
 }
 
-func buildToolNames(base []string, buildID string) []string {
+func buildToolNames(base []string, buildScope string) []string {
 	out := make([]string, len(base))
 	for i, b := range base {
-		out[i] = buildToolName(b, buildID)
+		out[i] = buildToolName(b, buildScope)
 	}
 	return out
 }
 
-func buildToolName(base, buildID string) string { return orka.Sanitize(base + "-b" + buildID) }
+func buildToolName(base, buildScope string) string { return orka.Sanitize(base + "-b" + buildScope) }
 
 // --- helpers ---
 

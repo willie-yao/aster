@@ -9,19 +9,6 @@ import (
 	"strings"
 )
 
-// FailureHash is a deterministic short hash of a failing test's identity, used
-// as the content-address for its analysis Task.
-func FailureHash(testName, failureMessage string) string {
-	sum := sha256.Sum256([]byte(testName + "\x00" + strings.Join(strings.Fields(failureMessage), " ")))
-	return hex.EncodeToString(sum[:6])
-}
-
-// TaskName is the RFC1123 content-addressed Task name for a failure. Prow build
-// IDs are globally unique, so build+hash+version is unique per failure+version.
-func TaskName(buildID, hash, version string) string {
-	return Sanitize("az-" + buildID + "-" + hash + "-" + version)
-}
-
 // PatternTaskName is the content-addressed Task name for one job-level correlation.
 func PatternTaskName(jobID, prompt, version string) string {
 	sum := sha256.Sum256([]byte(jobID + "\x00" + prompt))

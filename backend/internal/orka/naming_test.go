@@ -2,27 +2,6 @@ package orka
 
 import "testing"
 
-func TestFailureHash_DeterministicAndMessageNormalized(t *testing.T) {
-	a := FailureHash("[It] creates a cluster", "timed out   waiting\nfor node")
-	b := FailureHash("[It] creates a cluster", "timed out waiting for node")
-	if a != b {
-		t.Fatalf("whitespace-only message differences must hash equal: %q != %q", a, b)
-	}
-	if got := FailureHash("[It] creates a cluster", "different error"); got == a {
-		t.Fatalf("different messages must hash differently")
-	}
-	if len(a) != 12 { // 6 bytes hex-encoded
-		t.Fatalf("hash length = %d, want 12", len(a))
-	}
-}
-
-func TestTaskName_ShapeAndValidity(t *testing.T) {
-	name := TaskName("2075040971715776512", "7d9bbb65bce4", "v1")
-	if want := "az-2075040971715776512-7d9bbb65bce4-v1"; name != want {
-		t.Fatalf("TaskName = %q, want %q", name, want)
-	}
-}
-
 func TestPatternTaskName_Deterministic(t *testing.T) {
 	a := PatternTaskName("periodic-a", "prompt", "v1")
 	b := PatternTaskName("periodic-a", "prompt", "v1")

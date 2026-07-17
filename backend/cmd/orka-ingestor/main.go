@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -38,7 +39,7 @@ func main() {
 	apiBase := flag.String("api", "http://localhost:8080", "Orka API base URL")
 	token := flag.String("token", "", "bearer token for the Orka API (or set -token-file)")
 	tokenFile := flag.String("token-file", "", "file holding the bearer token")
-	version := flag.String("version", "v1", "content-address version suffix (must match the producer run)")
+	version := flag.String("version", "v1", "manual cache-bust version (must match the producer manifest)")
 	provider := flag.String("provider", "copilot", "Orka Provider name for job-level pattern analysis")
 	model := flag.String("model", "claude-sonnet-4.5", "model label recorded on each analysis")
 	wait := flag.Duration("wait", 0, "keep polling until every failing test is patched or this deadline elapses (0 = single pass)")
@@ -72,19 +73,31 @@ func main() {
 	client := &orkaClient{base: strings.TrimRight(*apiBase, "/"), token: tok, http: &http.Client{Timeout: 30 * time.Second}}
 
 	if *serve {
-		srv := &webhookServer{client: client, dataDir: *dataDir, namespace: *namespace, version: *version, model: *model}
+		srv := &webhookServer{client: client, dataDir: *dataDir, namespace: *namespace, model: *model}
 		srv.rebuildIndex()
 		http.HandleFunc("/webhook", srv.handle)
 		http.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 		http.HandleFunc("/status", func(w http.ResponseWriter, _ *http.Request) {
+			srv.mu.Lock()
+			manifest := srv.manifest
+			srv.mu.Unlock()
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(skeletonStatus(*dataDir, *version))
+			_ = json.NewEncoder(w).Encode(skeletonStatus(*dataDir, manifest))
 		})
-		st := skeletonStatus(*dataDir, *version)
+		st := skeletonStatus(*dataDir, srv.manifest)
 		log.Printf("🔔 webhook receiver on %s (data=%s version=%s); %d failing: %d analyzed, %d unavailable, %d pending",
 			*addr, *dataDir, *version, st.Failing, st.Analyzed, st.Unavailable, st.Pending)
 		server := &http.Server{Addr: *addr, Handler: http.DefaultServeMux, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 120 * time.Second}
 		log.Fatal(server.ListenAndServe())
+	}
+
+	manifest, err := orka.LoadAnalysisManifest(*dataDir)
+	if err != nil {
+		log.Fatalf("load analysis manifest: %v", err)
+	}
+	if manifest.Provider != *provider || manifest.Model != *model || manifest.Version != *version {
+		log.Fatalf("analysis manifest provider/model/version %s/%s/%s does not match ingestor flags %s/%s/%s",
+			manifest.Provider, manifest.Model, manifest.Version, *provider, *model, *version)
 	}
 
 	// A kube client enables phase-based unavailable reasons and Tool GC. It is
@@ -96,7 +109,7 @@ func main() {
 	builds := map[string]bool{}
 	for {
 		final := *wait > 0 && !time.Now().Before(deadline)
-		patched, failedTests, missing := ingestPass(client, kube, *namespace, *dataDir, *version, *model, final, builds)
+		patched, failedTests, missing := ingestPass(client, kube, *namespace, *dataDir, manifest, *model, final, builds)
 		log.Printf("patched %d/%d failing tests (%d results missing/unavailable)", patched, failedTests, missing)
 		if *wait <= 0 || missing == 0 || final {
 			break
@@ -112,7 +125,8 @@ func main() {
 			analyzer := &patternTaskAnalyzer{
 				kube: kube, client: client, namespace: *namespace,
 				provider: *provider, model: *model, version: *version,
-				timeout: *patternTimeout, retries: *patternRetries, poll: *patternPoll,
+				projectScope: manifest.ProjectScope,
+				timeout:      *patternTimeout, retries: *patternRetries, poll: *patternPoll,
 			}
 			stats, err := orka.FinalizePatterns(ctx, *dataDir, analyzer)
 			cancel()
@@ -129,7 +143,7 @@ func main() {
 		gcTools(kube, *namespace, builds)
 	}
 
-	st := skeletonStatus(*dataDir, *version)
+	st := skeletonStatus(*dataDir, manifest)
 	log.Printf("📊 %d failing tests: %d analyzed, %d unavailable, %d pending",
 		st.Failing, st.Analyzed, st.Unavailable, st.Pending)
 }
@@ -144,7 +158,7 @@ type status struct {
 
 // skeletonStatus counts, across all failing tests, how many have a real analysis,
 // how many are marked unavailable, and how many are still awaiting a result.
-func skeletonStatus(dataDir, version string) status {
+func skeletonStatus(dataDir string, manifest *orka.AnalysisManifest) status {
 	var st status
 	jobFiles, _ := filepath.Glob(filepath.Join(dataDir, "jobs", "*.json"))
 	for _, jf := range jobFiles {
@@ -154,6 +168,9 @@ func skeletonStatus(dataDir, version string) status {
 		}
 		var detail models.JobDetail
 		if json.Unmarshal(raw, &detail) != nil {
+			continue
+		}
+		if manifest != nil && !manifest.Jobs[detail.JobID] {
 			continue
 		}
 		for ri := range detail.Runs {
@@ -201,9 +218,9 @@ const unavailablePrefix = "AI analysis unavailable: "
 
 // ingestPass patches every available result into the skeleton once. When final
 // is set, still-missing failing tests are marked unavailable (with a Task-phase
-// reason when a kube client is present). Distinct build IDs are recorded in
-// builds. Returns how many failing tests it patched, saw, and left unresolved.
-func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir, version, model string, final bool, builds map[string]bool) (patched, failedTests, missing int) {
+// reason when a kube client is present). Distinct scoped builds are recorded
+// for Tool garbage collection. Returns patched, seen, and unresolved counts.
+func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir string, manifest *orka.AnalysisManifest, model string, final bool, builds map[string]bool) (patched, failedTests, missing int) {
 	jobFiles, _ := filepath.Glob(filepath.Join(dataDir, "jobs", "*.json"))
 	for _, jf := range jobFiles {
 		raw, err := os.ReadFile(jf)
@@ -214,11 +231,16 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir, v
 		if json.Unmarshal(raw, &detail) != nil {
 			continue
 		}
+		if !manifest.Jobs[detail.JobID] {
+			continue
+		}
 		type pendingTest struct {
-			tc   *models.TestCase
-			name string
+			tc    *models.TestCase
+			name  string
+			stale bool
 		}
 		var pending []pendingTest
+		var changed atomic.Bool
 		for ri := range detail.Runs {
 			run := &detail.Runs[ri]
 			for ti := range run.TestCases {
@@ -227,16 +249,22 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir, v
 					continue
 				}
 				failedTests++
-				builds[run.BuildID] = true
-				if tc.AIAnalysis != nil {
+				ref, err := manifest.TaskRef(detail.JobID, *run, ti, *tc)
+				if err != nil {
+					missing++
+					if final && setUnavailable(tc, "analysis Task identity is missing") {
+						changed.Store(true)
+					}
+					continue
+				}
+				builds[ref.ToolScope] = true
+				if tc.AIAnalysis != nil && tc.AIAnalysis.ContractHash == manifest.ContractHash {
 					continue // already patched by an earlier pass
 				}
-				name := orka.TaskName(run.BuildID, orka.FailureHash(tc.Name, tc.FailureMessage), version)
-				pending = append(pending, pendingTest{tc: tc, name: name})
+				pending = append(pending, pendingTest{tc: tc, name: ref.Name, stale: tc.AIAnalysis != nil})
 			}
 		}
 		var patchedCount, missingCount atomic.Int64
-		var changed atomic.Bool
 		sem := make(chan struct{}, 8)
 		var wg sync.WaitGroup
 		for _, item := range pending {
@@ -245,14 +273,21 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir, v
 			go func(item pendingTest) {
 				defer wg.Done()
 				defer func() { <-sem }()
-				if applyResult(item.tc, client, namespace, item.name, model) {
+				if applyResult(item.tc, client, namespace, item.name, model, manifest.ContractHash) {
 					patchedCount.Add(1)
 					changed.Store(true)
 					return
 				}
 				missingCount.Add(1)
-				if final && markUnavailable(item.tc, kube, namespace, item.name) {
-					changed.Store(true)
+				if final {
+					if item.stale {
+						item.tc.AISummary = nil
+						item.tc.AIAnalysis = nil
+						changed.Store(true)
+					}
+					if markUnavailable(item.tc, kube, namespace, item.name) {
+						changed.Store(true)
+					}
 				}
 			}(item)
 		}
@@ -270,7 +305,7 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir, v
 
 // applyResult fetches taskName's result, parses the analysis, and patches it
 // onto tc. Returns true if it patched (result available and parseable).
-func applyResult(tc *models.TestCase, client *orkaClient, namespace, taskName, model string) bool {
+func applyResult(tc *models.TestCase, client *orkaClient, namespace, taskName, model, contractHash string) bool {
 	result, ok := client.result(namespace, taskName)
 	if !ok {
 		return false
@@ -279,11 +314,11 @@ func applyResult(tc *models.TestCase, client *orkaClient, namespace, taskName, m
 	if !ok {
 		return false
 	}
-	applyParsedAnalysis(tc, a, model)
+	applyParsedAnalysis(tc, a, model, contractHash)
 	return true
 }
 
-func applyParsedAnalysis(tc *models.TestCase, a analysis, model string) {
+func applyParsedAnalysis(tc *models.TestCase, a analysis, model, contractHash string) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	tc.AISummary = &models.AISummary{GeneratedAt: now, Summary: a.RootCause, IsTransient: a.IsTransient}
 	tc.AIAnalysis = &models.AIAnalysis{
@@ -294,6 +329,7 @@ func applyParsedAnalysis(tc *models.TestCase, a analysis, model string) {
 		SuggestedFix:  a.SuggestedFix,
 		RelevantFiles: a.RelevantFiles,
 		Mode:          "agentic",
+		ContractHash:  contractHash,
 	}
 }
 
@@ -389,7 +425,7 @@ type webhookServer struct {
 	client    *orkaClient
 	dataDir   string
 	namespace string
-	version   string
+	manifest  *orka.AnalysisManifest
 	model     string
 	index     map[string]string
 }
@@ -434,6 +470,13 @@ func (s *webhookServer) preparePatch(p webhookPayload) preparedPatch {
 }
 
 func (s *webhookServer) rebuildIndex() {
+	manifest, err := orka.LoadAnalysisManifest(s.dataDir)
+	if err != nil {
+		log.Printf("load analysis manifest for webhook index: %v", err)
+		return
+	}
+	s.manifest = manifest
+	s.model = manifest.Model
 	s.index = map[string]string{}
 	jobFiles, _ := filepath.Glob(filepath.Join(s.dataDir, "jobs", "*.json"))
 	for _, jf := range jobFiles {
@@ -445,13 +488,18 @@ func (s *webhookServer) rebuildIndex() {
 		if json.Unmarshal(raw, &detail) != nil {
 			continue
 		}
+		if !s.manifest.Jobs[detail.JobID] {
+			continue
+		}
 		for ri := range detail.Runs {
 			run := &detail.Runs[ri]
 			for ti := range run.TestCases {
 				tc := &run.TestCases[ti]
 				if tc.Status == "failed" {
-					name := orka.TaskName(run.BuildID, orka.FailureHash(tc.Name, tc.FailureMessage), s.version)
-					s.index[name] = jf
+					ref, err := s.manifest.TaskRef(detail.JobID, *run, ti, *tc)
+					if err == nil {
+						s.index[ref.Name] = jf
+					}
 				}
 			}
 		}
@@ -482,8 +530,8 @@ func (s *webhookServer) patchTask(p webhookPayload, patch preparedPatch) {
 			if tc.Status != "failed" {
 				continue
 			}
-			name := orka.TaskName(run.BuildID, orka.FailureHash(tc.Name, tc.FailureMessage), s.version)
-			if name != p.TaskName {
+			ref, err := s.manifest.TaskRef(detail.JobID, *run, ti, *tc)
+			if err != nil || ref.Name != p.TaskName {
 				continue
 			}
 			if s.applyPrepared(tc, patch) {
@@ -499,13 +547,15 @@ func (s *webhookServer) patchTask(p webhookPayload, patch preparedPatch) {
 }
 
 func (s *webhookServer) applyPrepared(tc *models.TestCase, patch preparedPatch) bool {
-	if tc.AIAnalysis != nil {
+	if tc.AIAnalysis != nil && tc.AIAnalysis.ContractHash == s.manifest.ContractHash {
 		return false
 	}
 	if patch.analysis != nil {
-		applyParsedAnalysis(tc, *patch.analysis, s.model)
+		applyParsedAnalysis(tc, *patch.analysis, s.model, s.manifest.ContractHash)
 		return true
 	}
+	tc.AISummary = nil
+	tc.AIAnalysis = nil
 	return setUnavailable(tc, patch.reason)
 }
 
@@ -587,15 +637,16 @@ func (c *orkaClient) result(namespace, taskName string) (string, bool) {
 }
 
 type patternTaskAnalyzer struct {
-	kube      patternKubeClient
-	client    *orkaClient
-	namespace string
-	provider  string
-	model     string
-	version   string
-	timeout   string
-	retries   int
-	poll      time.Duration
+	kube         patternKubeClient
+	client       *orkaClient
+	namespace    string
+	provider     string
+	model        string
+	version      string
+	projectScope string
+	timeout      string
+	retries      int
+	poll         time.Duration
 }
 
 type patternKubeClient interface {
@@ -608,7 +659,15 @@ func (a *patternTaskAnalyzer) AnalyzePattern(ctx context.Context, jobID, subject
 	if len(input.Failures) < 2 {
 		return nil, nil
 	}
-	fingerprint := a.provider + "\x00" + a.model + "\x00" + input.SystemPrompt + "\x00" + input.UserPrompt
+	fingerprint := strings.Join([]string{
+		a.projectScope,
+		a.provider,
+		a.model,
+		a.timeout,
+		strconv.Itoa(a.retries),
+		input.SystemPrompt,
+		input.UserPrompt,
+	}, "\x00")
 	name := orka.PatternTaskName(jobID, fingerprint, a.version)
 	task := orka.BuildAITask(orka.AITaskSpec{
 		Name: name, Namespace: a.namespace, Provider: a.provider, Model: a.model,
