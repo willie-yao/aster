@@ -103,8 +103,12 @@ spec:
                 - -token-file=/var/run/secrets/kubernetes.io/serviceaccount/token
                 - -namespace={{ .Values.orka.namespace }}
                 - -version={{ .Values.orka.version }}
+                - -provider={{ .Values.orka.provider }}
                 - -model={{ .Values.orka.model }}
                 - -wait={{ .Values.orka.ingestWait }}
+                - -pattern-wait={{ .Values.orka.patternWait }}
+                - -pattern-timeout={{ .Values.orka.taskTimeout }}
+                - -pattern-retries={{ .Values.orka.retries | int }}
                 - -gc=true
               securityContext:
                 {{- toYaml .Values.securityContext | nindent 16 }}

@@ -101,8 +101,12 @@ spec:
                 - -wait=45m
                 - -poll=20s
                 - -version=v1
+                - -provider=copilot
                 - -model=claude-sonnet-4.5
                 - -namespace=orka-system
+                - -pattern-wait=25m
+                - -pattern-timeout=10m
+                - -pattern-retries=1
                 - -gc=true
               volumeMounts:
                 - { name: data, mountPath: /data }

@@ -22,6 +22,12 @@ func TaskName(buildID, hash, version string) string {
 	return Sanitize("az-" + buildID + "-" + hash + "-" + version)
 }
 
+// PatternTaskName is the content-addressed Task name for one job-level correlation.
+func PatternTaskName(jobID, prompt, version string) string {
+	sum := sha256.Sum256([]byte(jobID + "\x00" + prompt))
+	return Sanitize("az-pattern-" + hex.EncodeToString(sum[:8]) + "-" + version)
+}
+
 // Labels the producer stamps on every Task and per-build Tool it creates, so the
 // ingestor can group them by build for status checks and garbage collection.
 const (

@@ -160,9 +160,22 @@ func main() {
 				}
 				builds[run.BuildID] = buildPrefix
 				name := orka.TaskName(run.BuildID, orka.FailureHash(tc.Name, tc.FailureMessage), *version)
-				task := buildTask(name, *namespace, run.BuildID, *provider, *model, *timeout, *retries, *webhookURL,
-					buildToolNames(toolNames, run.BuildID), systemPrompt,
-					userPrompt(projectLabel, detail.JobID, buildPrefix, tc))
+				task := orka.BuildAITask(orka.AITaskSpec{
+					Name:         name,
+					Namespace:    *namespace,
+					Provider:     *provider,
+					Model:        *model,
+					Timeout:      *timeout,
+					MaxRetries:   *retries,
+					WebhookURL:   *webhookURL,
+					Tools:        buildToolNames(toolNames, run.BuildID),
+					SystemPrompt: systemPrompt,
+					Prompt:       userPrompt(projectLabel, detail.JobID, buildPrefix, tc),
+					Labels: map[string]string{
+						orka.ManagedByLabel: orka.ManagedByValue,
+						orka.BuildLabel:     run.BuildID,
+					},
+				})
 				writeYAML(filepath.Join(*tasksOut, name+".yaml"), task)
 				taskObjs = append(taskObjs, namedObj{name, task})
 			}
@@ -293,39 +306,6 @@ func userPrompt(projectLabel, jobID, buildPrefix string, tc models.TestCase) str
 	}
 	fmt.Fprintf(&b, "\nInvestigate the build's artifacts with the tools and conclude with your JSON.")
 	return b.String()
-}
-
-func buildTask(name, namespace, buildID, provider, model, timeout string, maxRetries int, webhookURL string, tools []string, systemPrompt, prompt string) map[string]any {
-	spec := map[string]any{
-		"type":    "ai",
-		"timeout": timeout,
-		"ai": map[string]any{
-			"providerRef":  map[string]any{"name": provider},
-			"model":        model,
-			"tools":        tools,
-			"systemPrompt": systemPrompt,
-			"prompt":       prompt,
-		},
-	}
-	if maxRetries > 0 {
-		spec["retryPolicy"] = map[string]any{"maxRetries": maxRetries}
-	}
-	if webhookURL != "" {
-		spec["webhookURL"] = webhookURL
-	}
-	return map[string]any{
-		"apiVersion": "core.orka.ai/v1alpha1",
-		"kind":       "Task",
-		"metadata": map[string]any{
-			"name":      name,
-			"namespace": namespace,
-			"labels": map[string]any{
-				orka.ManagedByLabel: orka.ManagedByValue,
-				orka.BuildLabel:     buildID,
-			},
-		},
-		"spec": spec,
-	}
 }
 
 // loadBaseTools parses Tool CRDs from every YAML doc under dir and returns the

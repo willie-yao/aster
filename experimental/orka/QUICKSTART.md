@@ -212,6 +212,8 @@ kubectl apply -f experimental/orka/manifests/70-pipeline-job.yaml
 
 # Optional event-driven ingestion: apply the receiver, then uncomment -webhook-url
 # in the 70 produce step so each Task notifies it on completion.
+# The receiver patches per-test results only; the batch ingestor performs
+# job-level pattern finalization.
 kubectl apply -f experimental/orka/manifests/71-ingestor-webhook.yaml
 ```
 
@@ -263,6 +265,7 @@ The equivalent Orka knobs are producer flags, surfaced as Helm `orka.*` values:
 | per-Task timeout | `orka.taskTimeout` | `-timeout` | `10m` |
 | retries | `orka.retries` | `-retries` | `1` |
 | re-analysis version | `orka.version` | `-version` | `v1` |
+| job-pattern finalization wait | `orka.patternWait` | ingestor `-pattern-wait` | `25m` |
 
 Iteration budget, forced finalization, and the transient-critique gate live in the
 Orka ai-worker (see [worker-patches/](worker-patches/)), not in config.
@@ -270,8 +273,8 @@ Orka ai-worker (see [worker-patches/](worker-patches/)), not in config.
 ## Operate
 
 ```bash
-# Coverage: the ingestor logs "N failing: analyzed/unavailable/pending", and the
-# -serve receiver exposes it as JSON at /status.
+# Coverage: the ingestor logs failing-test coverage, then the number of
+# job-level pattern analyses and systemic recurring patterns it finalized.
 kubectl logs -n orka-system job/orka-run-1 -c ingest | tail
 
 # Force re-analysis after a prompt or tool change: bump orka.version (Helm) or

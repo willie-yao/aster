@@ -20,7 +20,8 @@ orka-producer            one content-addressed Task per failing test
    v
 Orka ai-worker           runs the agentic loop per Task, calling the shim tools
    |
-orka-ingestor            reads each Task's result, patches it into jobs/*.json
+orka-ingestor            reads each Task's result, patches it into jobs/*.json,
+                         then runs one job-level pattern Task for eligible jobs
    |
 server / Pages           unchanged
 ```
@@ -37,7 +38,7 @@ types. The two CRDs it creates:
 
 ### Task (one per failing test)
 
-Built by `buildTask` (`cmd/orka-producer/main.go:284`). Shape:
+Built by `orka.BuildAITask` (`internal/orka/task.go`). Shape:
 
 ```yaml
 apiVersion: core.orka.ai/v1alpha1
@@ -61,7 +62,7 @@ spec:
 ```
 
 The producer walks `jobs/*.json`, and for every `status: "failed"` test case
-(`main.go:136-156`) emits one Task named by
+emits one Task named by
 `orka.TaskName(buildID, FailureHash(testName, failureMessage), version)`
 (`internal/orka/naming.go`).
 
@@ -69,7 +70,7 @@ The producer walks `jobs/*.json`, and for every `status: "failed"` test case
 
 A single artifact tool shim serves every build and bucket. The producer does
 **not** create a tool per Task; it clones each base Tool CRD once per distinct
-build (`main.go:159-169`) via `cloneToolForBuild` (`main.go:351`), injecting
+build via `cloneToolForBuild`, injecting
 static routing headers:
 
 ```yaml
@@ -89,11 +90,11 @@ model passes. Storage is provider-agnostic: the shim reuses the engine's
 `internal/storage` (gcs, or gcsweb over an S3 gateway), defaulting from its
 `STORAGE_*` env and overriding per request from the `X-Storage-*` headers the
 producer derives from `project.yaml`. Base Tool CRDs are loaded from
-`experimental/orka/manifests/` by `loadBaseTools` (`main.go:319`).
+`experimental/orka/manifests/` by `loadBaseTools`.
 
 ### The apply
 
-`applyAll` (`main.go:187`) applies Tools before Tasks (Tasks reference them),
+`applyAll` applies Tools before Tasks (Tasks reference them),
 using `KubeClient.Apply` (`internal/orka/kube.go`), a server-side-apply Patch
 with `FieldManager: orka-producer` and `Force: true`. `RESTConfig`
 (`kube.go`) prefers in-cluster config and falls back to kubeconfig + a
@@ -102,25 +103,36 @@ to `-tasks-out` / `-tools-out` for inspection.
 
 ## How the result comes back
 
-`orka-ingestor` re-derives each Task name from the same skeleton
+`orka-ingestor` re-derives each per-test Task name from the same skeleton
 (`FailureHash` is shared through `orka`, so both sides agree) and patches the
-result in place. `applyResult` (`cmd/orka-ingestor/main.go:225`) fetches the
+result in place. `applyResult` fetches the
 Task's result, parses the analysis JSON, and writes `tc.AISummary` +
 `tc.AIAnalysis` with `Mode: "agentic"`, the same wire shape the in-process path
 produces. Failing/absent results get the engine's `unavailable` placeholder via
-`setUnavailable` (`main.go:251`), mirroring `internal/ai/service.go`.
+`setUnavailable`, mirroring `internal/ai/service.go`.
 
 Two ingest modes:
 
 - **Batch** (`-wait`): poll Task phases until terminal, then patch. `markUnavailable`
-  (`main.go:265`) reads `TaskPhase` to explain deadline/failure.
-- **Event-driven** (`-serve`): a `webhookServer` (`main.go:335`) patches a single
+  reads `TaskPhase` to explain deadline/failure.
+- **Event-driven** (`-serve`): a `webhookServer` patches a single
   result as each Task fires its `webhookURL`, serialized so concurrent deliveries
   never corrupt a `jobs/*.json` file. `/status` exposes coverage via
-  `skeletonStatus` (`main.go:114`).
+  `skeletonStatus`.
 
-Per-build Tool + Task garbage collection is `gcTools` (`main.go:284`), selecting
+Job-level pattern finalization currently runs in batch mode after the per-test
+wait completes. The optional webhook receiver patches per-test results only.
+
+Per-build Tool + Task garbage collection is `gcTools`, selecting
 by the `orka.dashboard/build` label.
+
+After per-test ingestion, the ingestor runs the same bounded cross-build pattern
+contract as the in-process backend. It applies one content-addressed, tool-free
+AI Task per eligible job, ingests its `PatternAnalysis`, assigns stable pattern
+IDs, and folds systemic verdicts into `flakiness.json`. This makes recurring
+patterns available to the existing dashboard and interactive actions. Because
+the correlation Task has no source-repository tools, any file path it introduces
+in `suggested_fix` is marked as unverified.
 
 ## How the harness is replicated
 
@@ -133,11 +145,12 @@ reconstructed out of Kubernetes objects and deterministic tool endpoints:
 |---|---|---|
 | On-disk analysis cache (keyed by mode+hash) | Content-addressed Task name; re-applying an existing Task is a no-op, so the K8s object store *is* the cache. Bump `-version` to force re-analysis. | `orka.TaskName` / `FailureHash`; `Apply` is idempotent |
 | Per-failure build isolation (fetcher scopes each analysis to one build) | Per-build Tool clones with static `X-Build-Prefix` / `X-Bucket` headers; the model cannot read the wrong build. | `cloneToolForBuild` + shim `toolenv.go` |
-| Prompt composition (BasePrompt + system.md + footer) | The producer calls the same `ai.ComposeSystemPrompt` and appends a tool-usage/self-critique addendum. | `main.go:117`, `toolUsageAddendum` |
+| Prompt composition (BasePrompt + system.md + footer) | The producer calls the same `ai.ComposeSystemPrompt` and appends a tool-usage/self-critique addendum. | `toolUsageAddendum` |
 | Convergence (loop always yields a final verdict) | Worker patches: forced tools-free finalization near the budget + re-prompt on an empty final message. | `worker-patches/` (2,3) |
 | Critique gate: hallucinated-citation guard | `validate_analysis` tool deterministically 1-byte-reads every cited path against the build tree. | `orka-artifact-tool/validate.go` |
 | Critique gate: transient discipline | Worker re-prompts an `is_transient=true` that never called `verify_timeline`, per the engine's confirm-or-default-to-bug contract. | `worker-patches/` (4) + `timeline.go` |
-| Cross-build pattern correlation | `check_recurrence` tool correlates a failure across recent builds. | `orka-artifact-tool/recurrence.go` |
+| Per-test recurrence evidence | `check_recurrence` reports whether one test recurs across recent builds. | `orka-artifact-tool/recurrence.go` |
+| Job-level cross-build correlation | After per-test ingestion, one content-addressed pattern Task correlates representative failures and writes `PatternAnalysis` + recurring patterns. | `orka-ingestor` + `orka.FinalizePatterns` |
 | Skill-driven required evidence | `required_evidence` tool returns the must-read artifacts for a failure class. | `orka-artifact-tool/requiredevidence.go` |
 | Transient-signature background-noise filter | `check_transient_signatures` tool tails build logs for known-noise patterns. | `orka-artifact-tool/transient.go` |
 
@@ -160,7 +173,7 @@ for Claude, so `manifests/50-copilot-proxy.yaml` de-streams and injects the
 ## Consumer-driven, multi-consumer
 
 The producer reads the tool, storage, and id fields from a consumer's
-`project.yaml`: `ai.tools` (via `resolveTools`, `main.go:59`), the `storage`
+`project.yaml`: `ai.tools` (via `resolveTools`), the `storage`
 block (`bucket` + `provider`/`base`/`prow_base`), and the display id. Tool
 selection, bucket + provider routing, and the prompt all follow from those, so
 the same binaries serve CAPZ (`kubernetes-ci-logs` on GCS, cluster-per-test,

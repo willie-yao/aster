@@ -15,10 +15,11 @@ capability descriptor at /api/capabilities.
 
 Analysis backend: orka. The fetcher CronJob writes the skeleton (-ai=false), the
 orka-producer applies one Orka Task per failing test, and the orka-ingestor patches
-the results. Orka + the tool shim + a Provider + the ai-worker patches must already
-be installed in namespace {{ .Values.orka.namespace }}, and the base Tool CRDs must
-exist as ConfigMap {{ .Values.orka.baseToolsConfigMap }}. See
-experimental/orka/USAGE.md.
+the results and finalizes job-level recurring patterns. Orka + the tool shim + a
+Provider + the ai-worker patches must already be installed in namespace
+{{ .Values.orka.namespace }}, and the base Tool CRDs must exist as ConfigMap
+{{ .Values.orka.baseToolsConfigMap }}. See
+experimental/orka/QUICKSTART.md.
 {{- end }}
 
 {{- if .Values.ingress.enabled }}

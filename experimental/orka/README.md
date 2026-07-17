@@ -36,6 +36,11 @@ cheap-model path; do not decommission. Convergence and discipline numbers are in
 
 ## Known constraints
 
+- **Scheduled pattern issues and fix PRs are not finalized yet.** The batch
+  ingestor now writes job-level recurring patterns for the dashboard and
+  interactive server actions, but the fetcher's unattended issue/fix-PR side
+  effects run before Orka results exist. Keep those scheduled automations on the
+  in-process backend until a post-finalization runner is wired.
 - **Copilot needs the de-streaming proxy.** Copilot's non-streaming endpoint
   returns null tool_calls for Claude (the calls only arrive over streaming SSE).
   manifests/50-copilot-proxy.yaml de-streams so the worker sees real tool calls.

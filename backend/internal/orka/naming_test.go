@@ -23,6 +23,23 @@ func TestTaskName_ShapeAndValidity(t *testing.T) {
 	}
 }
 
+func TestPatternTaskName_Deterministic(t *testing.T) {
+	a := PatternTaskName("periodic-a", "prompt", "v1")
+	b := PatternTaskName("periodic-a", "prompt", "v1")
+	if a != b || len(a) == 0 {
+		t.Fatalf("PatternTaskName = %q and %q, want equal non-empty names", a, b)
+	}
+	if c := PatternTaskName("periodic-a", "different", "v1"); c == a {
+		t.Fatalf("different prompts must have different names: %q", c)
+	}
+	if c := PatternTaskName("periodic-b", "prompt", "v1"); c == a {
+		t.Fatalf("different jobs must have different names: %q", c)
+	}
+	if c := PatternTaskName("periodic-a", "prompt", "v2"); c == a {
+		t.Fatalf("different versions must have different names: %q", c)
+	}
+}
+
 func TestSanitize_RFC1123(t *testing.T) {
 	cases := map[string]string{
 		"Foo_Bar.Baz":            "foo-bar-baz",

@@ -53,6 +53,14 @@ type PatternFailure struct {
 	Severity     string
 }
 
+// PatternInput is the bounded, deterministic model input for one job-level
+// correlation. Failures are newest-first and capped to the prompt limit.
+type PatternInput struct {
+	SystemPrompt string
+	UserPrompt   string
+	Failures     []PatternFailure
+}
+
 // patternResponse is the model's JSON contract for the correlation verdict.
 type patternResponse struct {
 	Systemic        bool     `json:"systemic"`
@@ -112,17 +120,12 @@ Ground every path you cite. BEFORE naming any file, template, manifest, or confi
 // cached keyed by the exact model input, so it only re-runs when the evidence
 // changes. Returns nil when there are fewer than two analyzed builds.
 func (s *Service) AnalyzePattern(ctx context.Context, jobID, subject string, failures []PatternFailure) (*models.PatternAnalysis, error) {
-	if len(failures) < 2 {
+	input := BuildPatternInput(subject, failures)
+	if len(input.Failures) < 2 {
 		return nil, nil
 	}
-	// Deterministic newest-first order and a stable cap keep the prompt and
-	// cache key from churning run to run.
-	sort.Slice(failures, func(i, j int) bool { return failures[i].BuildID > failures[j].BuildID })
-	if len(failures) > maxPatternBuilds {
-		failures = failures[:maxPatternBuilds]
-	}
-
-	userPrompt := buildPatternUserPrompt(subject, failures)
+	failures = input.Failures
+	userPrompt := input.UserPrompt
 	grounded := s.patternRepo != nil
 	// groundKey namespaces the cache entry by grounding mode and, when grounded,
 	// the source repo identity, so a repo change or a switch between grounded and
@@ -162,6 +165,37 @@ func (s *Service) AnalyzePattern(ctx context.Context, jobID, subject string, fai
 	s.guardPatternPaths(ctx, &parsed)
 
 	_ = s.client.cache.Set(key, parsed)
+	return buildPatternAnalysis(subject, len(failures), parsed, collectRelevantFiles(failures)), nil
+}
+
+// BuildPatternInput renders the shared pattern-analysis contract used by the
+// in-process and Orka backends.
+func BuildPatternInput(subject string, failures []PatternFailure) PatternInput {
+	prepared := append([]PatternFailure(nil), failures...)
+	sort.Slice(prepared, func(i, j int) bool { return prepared[i].BuildID > prepared[j].BuildID })
+	if len(prepared) > maxPatternBuilds {
+		prepared = prepared[:maxPatternBuilds]
+	}
+	return PatternInput{
+		SystemPrompt: patternSystemPrompt,
+		UserPrompt:   buildPatternUserPrompt(subject, prepared),
+		Failures:     prepared,
+	}
+}
+
+// ParsePatternResult validates a model correlation result and converts it to
+// the published PatternAnalysis shape.
+func ParsePatternResult(subject string, failures []PatternFailure, result string) (*models.PatternAnalysis, error) {
+	var parsed patternResponse
+	if err := json.Unmarshal([]byte(extractJSON(result)), &parsed); err != nil {
+		return nil, fmt.Errorf("pattern analysis: parse response: %w", err)
+	}
+	if !validPatternResponse(parsed) {
+		return nil, fmt.Errorf("pattern analysis: incomplete verdict (empty summary, or systemic without a root cause)")
+	}
+	// The Orka correlation task has no source-repository tools. Mark every path
+	// it introduces as unverified rather than presenting a guessed target as fact.
+	parsed.SuggestedFix = annotateUnverifiedPaths(parsed.SuggestedFix, func(string) bool { return false })
 	return buildPatternAnalysis(subject, len(failures), parsed, collectRelevantFiles(failures)), nil
 }
 

@@ -12,7 +12,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -32,6 +31,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/notify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/patterns"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prow/jobconfig"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prowbuild"
@@ -310,14 +310,7 @@ func (p *pipeline) refresh(ctx context.Context, jobs []models.ProwJob) (*refresh
 
 	if p.enableAI {
 		analyzeFailuresWithAI(ctx, cfg, details, flakinessReport, p.aiToken, opts.OutDir, p.aiSystemPrompt, p.aiSkillSet)
-		// Assign stable IDs so the frontend and actions API can address a
-		// specific pattern. Set here so both jobs/*.json and the folded
-		// flakiness.json patterns carry the same ID.
-		for i := range details {
-			for j := range details[i].PatternAnalyses {
-				details[i].PatternAnalyses[j].ID = models.PatternID(details[i].PatternAnalyses[j])
-			}
-		}
+		patterns.AssignIDs(details)
 		// Fold systemic job-level verdicts into flakiness.json for the home page.
 		flakinessReport.RecurringPatterns = collectRecurringPatterns(details)
 		if n := len(flakinessReport.RecurringPatterns); n > 0 {
@@ -934,154 +927,28 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, details []m
 	analyzePatternsAcrossBuilds(ctx, service, details)
 }
 
-// patternMinFailedBuilds gates job-level recurring pattern analysis.
-// It matches the persistent-failure consecutive count.
-const patternMinFailedBuilds = 3
-
 // analyzePatternsAcrossBuilds correlates representative failures across failed
 // builds into one systemic-vs-transient verdict per job.
 func analyzePatternsAcrossBuilds(ctx context.Context, service *ai.Service, details []models.JobDetail) {
-	for i := range details {
-		d := &details[i]
-		failures := gatherPatternFailures(d)
-		failedBuilds := countFailedBuilds(d)
-		if failedBuilds < patternMinFailedBuilds || len(failures) < 2 {
-			continue
-		}
-		pa, err := service.AnalyzePattern(ctx, d.JobID, d.Name, failures)
-		if err != nil {
-			log.Printf("  ⚠ pattern analysis failed for %s: %v", d.Name, err)
-			continue
-		}
-		if pa == nil {
-			continue
-		}
-		pa.JobID = d.JobID
-		d.PatternAnalyses = []models.PatternAnalysis{*pa}
-		verdict := "not systemic"
-		if pa.Systemic {
-			verdict = fmt.Sprintf("SYSTEMIC (%s): %s", pa.Confidence, pa.SharedRootCause)
-		}
-		log.Printf("  🔗 pattern analysis for %s across %d builds: %s", d.Name, pa.BuildsAnalyzed, verdict)
-	}
+	patterns.Analyze(ctx, service, details)
 }
 
 // collectRecurringPatterns gathers systemic job-level verdicts for the home
 // page, sorted by confidence and span.
 func collectRecurringPatterns(details []models.JobDetail) []models.PatternAnalysis {
-	var out []models.PatternAnalysis
-	for i := range details {
-		for _, pa := range details[i].PatternAnalyses {
-			if pa.Systemic {
-				out = append(out, pa)
-			}
-		}
-	}
-	sort.SliceStable(out, func(i, j int) bool {
-		ri, rj := confidenceRank(out[i].Confidence), confidenceRank(out[j].Confidence)
-		if ri != rj {
-			return ri > rj
-		}
-		return out[i].BuildsAnalyzed > out[j].BuildsAnalyzed
-	})
-	return out
-}
-
-// confidenceRank orders verdict confidences so the home-page list leads with
-// the surest patterns.
-func confidenceRank(c string) int {
-	switch strings.ToLower(strings.TrimSpace(c)) {
-	case "high":
-		return 3
-	case "medium":
-		return 2
-	case "low":
-		return 1
-	default:
-		return 0
-	}
-}
-
-// countFailedBuilds counts a job's completed failed builds.
-func countFailedBuilds(d *models.JobDetail) int {
-	n := 0
-	for i := range d.Runs {
-		run := &d.Runs[i]
-		if !run.Passed && run.Result != "PENDING" {
-			n++
-		}
-	}
-	return n
+	return patterns.CollectRecurring(details)
 }
 
 // gatherPatternFailures picks the most severe analyzed failure from each failed
 // build. The transient classification is carried into the pattern pass.
 func gatherPatternFailures(d *models.JobDetail) []ai.PatternFailure {
-	var out []ai.PatternFailure
-	for i := range d.Runs {
-		run := &d.Runs[i]
-		if run.Passed || run.Result == "PENDING" {
-			continue
-		}
-		var rep *models.TestCase
-		for j := range run.TestCases {
-			tc := &run.TestCases[j]
-			if tc.Status != "failed" || tc.AIAnalysis == nil {
-				continue
-			}
-			if rep == nil || severityRank(tc.AIAnalysis.Severity) > severityRank(rep.AIAnalysis.Severity) {
-				rep = tc
-			}
-		}
-		if rep == nil {
-			continue
-		}
-		out = append(out, ai.PatternFailure{
-			BuildID:        run.BuildID,
-			FailingTest:    rep.Name,
-			FailureMessage: rep.FailureMessage,
-			RootCause:      rep.AIAnalysis.RootCause,
-			SuggestedFix:   rep.AIAnalysis.SuggestedFix,
-			RelevantFiles:  rep.AIAnalysis.RelevantFiles,
-			// The failing test's location seeds the fix agent (via the pattern's
-			// RelevantFiles) without entering the correlation prompt, so warm
-			// pattern-cache entries survive.
-			LocationFile: failureLocationFile(rep.FailureLocation),
-			IsTransient:  rep.AISummary != nil && rep.AISummary.IsTransient,
-			Severity:     rep.AIAnalysis.Severity,
-		})
-	}
-	return out
+	return patterns.GatherFailures(d)
 }
 
 // failureLocationFile strips the trailing :line[:col] from a JUnit failure
 // location, returning just the file path (empty when there is none).
 func failureLocationFile(loc string) string {
-	loc = strings.TrimSpace(loc)
-	if loc == "" {
-		return ""
-	}
-	file, _, _ := strings.Cut(loc, ":")
-	return file
-}
-
-// severityRank orders analysis severities so the most actionable failure in a
-// build is picked as its representative. Unknown/empty sorts lowest.
-func severityRank(sev string) int {
-	switch strings.ToLower(strings.TrimSpace(sev)) {
-	case "critical":
-		return 5
-	case "high":
-		return 4
-	case "medium":
-		return 3
-	case "low":
-		return 2
-	case "transient-ignore":
-		return 1
-	default:
-		return 0
-	}
+	return patterns.FailureLocationFile(loc)
 }
 
 // aiEndpoint returns the configured AI chat-completions URL.

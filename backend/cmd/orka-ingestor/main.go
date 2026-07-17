@@ -2,7 +2,8 @@
 // dashboard skeleton. For every failing test in jobs/*.json it re-derives the
 // producer's content-addressed Task name, fetches that Task's result from the
 // Orka API, parses the analysis JSON, and writes ai_summary/ai_analysis onto the
-// test case. The frontend then renders a dashboard produced entirely by Orka.
+// test case. In batch mode it also correlates analyzed builds into job-level
+// recurring patterns before the frontend reads the completed dashboard data.
 //
 // Idempotent: re-running patches whatever results are now available and leaves
 // the rest untouched, so it can run repeatedly as Tasks complete.
@@ -12,18 +13,23 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 func main() {
@@ -32,9 +38,14 @@ func main() {
 	token := flag.String("token", "", "bearer token for the Orka API (or set -token-file)")
 	tokenFile := flag.String("token-file", "", "file holding the bearer token")
 	version := flag.String("version", "v1", "content-address version suffix (must match the producer run)")
+	provider := flag.String("provider", "copilot", "Orka Provider name for job-level pattern analysis")
 	model := flag.String("model", "claude-sonnet-4.5", "model label recorded on each analysis")
 	wait := flag.Duration("wait", 0, "keep polling until every failing test is patched or this deadline elapses (0 = single pass)")
 	poll := flag.Duration("poll", 15*time.Second, "interval between passes when -wait is set")
+	patternWait := flag.Duration("pattern-wait", 25*time.Minute, "total deadline for job-level pattern analysis (0 disables it)")
+	patternPoll := flag.Duration("pattern-poll", 5*time.Second, "poll interval for job-level pattern Tasks")
+	patternTimeout := flag.String("pattern-timeout", "10m", "per-Task timeout for job-level pattern analysis")
+	patternRetries := flag.Int("pattern-retries", 1, "pattern Task retryPolicy maxRetries")
 	namespace := flag.String("namespace", "orka-system", "namespace holding the Tasks and Tools")
 	kubeContext := flag.String("context", "", "kubeconfig context for Task-status checks and GC (in-cluster config is used when empty)")
 	gc := flag.Bool("gc", false, "after ingesting, delete per-build Tools whose Tasks are all terminal")
@@ -60,7 +71,7 @@ func main() {
 	client := &orkaClient{base: strings.TrimRight(*apiBase, "/"), token: tok, http: &http.Client{Timeout: 30 * time.Second}}
 
 	if *serve {
-		srv := &webhookServer{client: client, dataDir: *dataDir, version: *version, model: *model}
+		srv := &webhookServer{client: client, dataDir: *dataDir, namespace: *namespace, version: *version, model: *model}
 		http.HandleFunc("/webhook", srv.handle)
 		http.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 		http.HandleFunc("/status", func(w http.ResponseWriter, _ *http.Request) {
@@ -88,6 +99,27 @@ func main() {
 			break
 		}
 		time.Sleep(*poll)
+	}
+
+	if *patternWait > 0 {
+		if kube == nil {
+			log.Printf("⚠ pattern finalization skipped: no cluster access")
+		} else {
+			ctx, cancel := context.WithTimeout(context.Background(), *patternWait)
+			analyzer := &patternTaskAnalyzer{
+				kube: kube, client: client, namespace: *namespace,
+				provider: *provider, model: *model, version: *version,
+				timeout: *patternTimeout, retries: *patternRetries, poll: *patternPoll,
+			}
+			stats, err := orka.FinalizePatterns(ctx, *dataDir, analyzer)
+			cancel()
+			if err != nil {
+				log.Printf("⚠ pattern finalization failed: %v", err)
+			} else {
+				log.Printf("🔗 finalized %d pattern analyses (%d systemic, %d failed) across %d jobs",
+					stats.PatternAnalyses, stats.RecurringPatterns, stats.PatternFailures, stats.Jobs)
+			}
+		}
 	}
 
 	if *gc && kube != nil {
@@ -193,7 +225,7 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir, v
 					continue // already patched by an earlier pass
 				}
 				name := orka.TaskName(run.BuildID, orka.FailureHash(tc.Name, tc.FailureMessage), version)
-				if applyResult(tc, client, name, model) {
+				if applyResult(tc, client, namespace, name, model) {
 					patched++
 					changed = true
 					continue
@@ -205,12 +237,7 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir, v
 			}
 		}
 		if changed {
-			out, err := json.MarshalIndent(detail, "", "  ")
-			if err != nil {
-				log.Printf("marshal %s: %v", jf, err)
-				continue
-			}
-			if err := os.WriteFile(jf, out, 0o644); err != nil {
+			if err := statefile.WriteJSON(jf, detail); err != nil {
 				log.Printf("write %s: %v", jf, err)
 			}
 		}
@@ -220,8 +247,8 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir, v
 
 // applyResult fetches taskName's result, parses the analysis, and patches it
 // onto tc. Returns true if it patched (result available and parseable).
-func applyResult(tc *models.TestCase, client *orkaClient, taskName, model string) bool {
-	result, ok := client.result(taskName)
+func applyResult(tc *models.TestCase, client *orkaClient, namespace, taskName, model string) bool {
+	result, ok := client.result(namespace, taskName)
 	if !ok {
 		return false
 	}
@@ -331,11 +358,12 @@ type webhookPayload struct {
 // completes, driven by Orka's completion webhook instead of polling. Patches are
 // serialized so concurrent deliveries never corrupt a jobs/*.json file.
 type webhookServer struct {
-	mu      sync.Mutex
-	client  *orkaClient
-	dataDir string
-	version string
-	model   string
+	mu        sync.Mutex
+	client    *orkaClient
+	dataDir   string
+	namespace string
+	version   string
+	model     string
 }
 
 func (s *webhookServer) handle(w http.ResponseWriter, r *http.Request) {
@@ -382,9 +410,7 @@ func (s *webhookServer) patchTask(p webhookPayload) {
 					continue
 				}
 				if s.applyOrMark(tc, p, name) {
-					if out, err := json.MarshalIndent(detail, "", "  "); err != nil {
-						log.Printf("marshal %s: %v", jf, err)
-					} else if err := os.WriteFile(jf, out, 0o644); err != nil {
+					if err := statefile.WriteJSON(jf, detail); err != nil {
 						log.Printf("write %s: %v", jf, err)
 					} else {
 						log.Printf("🔔 patched %s (phase=%s)", p.TaskName, p.Phase)
@@ -403,7 +429,7 @@ func (s *webhookServer) applyOrMark(tc *models.TestCase, p webhookPayload, name 
 		return false // already patched
 	}
 	if p.Phase == "Succeeded" && (p.ResultRef == nil || p.ResultRef.Available) {
-		if applyResult(tc, s.client, name, s.model) {
+		if applyResult(tc, s.client, s.namespace, name, s.model) {
 			return true
 		}
 		return setUnavailable(tc, "analysis Task produced no readable result")
@@ -455,8 +481,12 @@ type orkaClient struct {
 }
 
 // result fetches a Task's result text, or ok=false if not available.
-func (c *orkaClient) result(taskName string) (string, bool) {
-	req, err := http.NewRequest(http.MethodGet, c.base+"/api/v1/tasks/"+taskName+"/result", nil)
+func (c *orkaClient) result(namespace, taskName string) (string, bool) {
+	endpoint := c.base + "/api/v1/tasks/" + url.PathEscape(taskName) + "/result"
+	if namespace != "" {
+		endpoint += "?namespace=" + url.QueryEscape(namespace)
+	}
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
 	if err != nil {
 		return "", false
 	}
@@ -478,8 +508,63 @@ func (c *orkaClient) result(taskName string) (string, bool) {
 	var wrap struct {
 		Result string `json:"result"`
 	}
-	if json.Unmarshal(body, &wrap) != nil || wrap.Result == "" {
+	if json.Unmarshal(body, &wrap) != nil || strings.TrimSpace(wrap.Result) == "" {
 		return "", false
 	}
 	return wrap.Result, true
+}
+
+type patternTaskAnalyzer struct {
+	kube      patternKubeClient
+	client    *orkaClient
+	namespace string
+	provider  string
+	model     string
+	version   string
+	timeout   string
+	retries   int
+	poll      time.Duration
+}
+
+type patternKubeClient interface {
+	Apply(context.Context, schema.GroupVersionResource, string, map[string]any) error
+	TaskPhase(context.Context, string, string) (string, error)
+}
+
+func (a *patternTaskAnalyzer) AnalyzePattern(ctx context.Context, jobID, subject string, failures []ai.PatternFailure) (*models.PatternAnalysis, error) {
+	input := ai.BuildPatternInput(subject, failures)
+	if len(input.Failures) < 2 {
+		return nil, nil
+	}
+	fingerprint := a.provider + "\x00" + a.model + "\x00" + input.SystemPrompt + "\x00" + input.UserPrompt
+	name := orka.PatternTaskName(jobID, fingerprint, a.version)
+	task := orka.BuildAITask(orka.AITaskSpec{
+		Name: name, Namespace: a.namespace, Provider: a.provider, Model: a.model,
+		Timeout: a.timeout, MaxRetries: a.retries,
+		SystemPrompt: input.SystemPrompt, Prompt: input.UserPrompt,
+		Labels: map[string]string{orka.ManagedByLabel: orka.ManagedByValue},
+	})
+	if err := a.kube.Apply(ctx, orka.TasksGVR, a.namespace, task); err != nil {
+		return nil, fmt.Errorf("apply pattern Task %s: %w", name, err)
+	}
+	poll := a.poll
+	if poll <= 0 {
+		poll = 5 * time.Second
+	}
+	ticker := time.NewTicker(poll)
+	defer ticker.Stop()
+	for {
+		if result, ok := a.client.result(a.namespace, name); ok {
+			return ai.ParsePatternResult(subject, input.Failures, result)
+		}
+		phase, err := a.kube.TaskPhase(ctx, a.namespace, name)
+		if err == nil && (phase == "Failed" || phase == "Cancelled") {
+			return nil, fmt.Errorf("pattern Task %s %s", name, strings.ToLower(phase))
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("pattern Task %s: %w", name, ctx.Err())
+		case <-ticker.C:
+		}
+	}
 }

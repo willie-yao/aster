@@ -250,3 +250,21 @@ func TestAnalyzePattern_CapsBuilds(t *testing.T) {
 		t.Errorf("prompt build count = %d, want %d", strings.Count(user, "--- Build "), maxPatternBuilds)
 	}
 }
+
+func TestParsePatternResultMarksPathsUnverified(t *testing.T) {
+	result := `{
+		"systemic": true,
+		"confidence": "high",
+		"shared_root_cause": "the controller writes stale state",
+		"shared_builds": ["2", "1"],
+		"suggested_fix": "serialize updates in config/controller.yaml",
+		"summary": "the same controller path failed twice"
+	}`
+	pa, err := ParsePatternResult("job", patternFailures(2), result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(pa.SuggestedFix, "config/controller.yaml (unverified path)") {
+		t.Fatalf("suggested fix = %q, want unverified path annotation", pa.SuggestedFix)
+	}
+}
