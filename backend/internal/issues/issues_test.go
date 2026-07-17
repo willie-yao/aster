@@ -113,7 +113,7 @@ func (f *fakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (f *fakeGitHub) url(n int) string { return f.Server.URL + "/issues/" + strconv.Itoa(n) }
+func (f *fakeGitHub) url(n int) string { return f.URL + "/issues/" + strconv.Itoa(n) }
 
 // seedOpenIssue inserts a pre-existing open issue.
 func (f *fakeGitHub) seedOpenIssue(body string) int {
@@ -153,7 +153,7 @@ func pathIntSuffix(path, after string) int {
 
 func newTestClient(f *fakeGitHub) *Client {
 	c := NewClient("test-token", "owner", "repo")
-	c.apiBase = f.Server.URL
+	c.apiBase = f.URL
 	return c
 }
 

@@ -225,7 +225,7 @@ func (b *backendBrowser) Grep(ctx context.Context, file string, re *regexp.Regex
 		maxLineLen = 1000
 	}
 	if data, ok := b.cacheGet(clean); ok {
-		return grepStream(bytes.NewReader(data), int64(len(data)), int64(len(data)), re, contextLines, maxMatches, maxLineLen), nil
+		return grepStream(bytes.NewReader(data), int64(len(data)), int64(len(data)), re, contextLines, maxMatches, maxLineLen)
 	}
 	rc, size, err := b.backend.Open(ctx, b.prefix+clean)
 	if err != nil {
@@ -233,13 +233,14 @@ func (b *backendBrowser) Grep(ctx context.Context, file string, re *regexp.Regex
 	}
 	defer rc.Close()
 	limited := io.LimitReader(rc, perCallCap)
-	return grepStream(limited, size, perCallCap, re, contextLines, maxMatches, maxLineLen), nil
+	return grepStream(limited, size, perCallCap, re, contextLines, maxMatches, maxLineLen)
 }
 
 // grepStream scans r for matching lines with surrounding context. Long lines
 // are truncated, and maxBytes caps consumption from r.
-func grepStream(r io.Reader, fileSize, maxBytes int64, re *regexp.Regexp, contextLines, maxMatches, maxLineLen int) *GrepResult {
+func grepStream(r io.Reader, fileSize, maxBytes int64, re *regexp.Regexp, contextLines, maxMatches, maxLineLen int) (*GrepResult, error) {
 	out := &GrepResult{FileSize: fileSize}
+	counter := &countingReader{r: r}
 
 	// Ring buffer of recent lines for before context.
 	before := make([]string, contextLines)
@@ -252,7 +253,7 @@ func grepStream(r io.Reader, fileSize, maxBytes int64, re *regexp.Regexp, contex
 	}
 	var pendings []*pendingAfter
 
-	scanner := bufio.NewScanner(r)
+	scanner := bufio.NewScanner(counter)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 
 	lineNo := 0
@@ -308,16 +309,23 @@ func grepStream(r io.Reader, fileSize, maxBytes int64, re *regexp.Regexp, contex
 			beforeIdx = (beforeIdx + 1) % contextLines
 		}
 	}
-	_ = scanner.Err()
-	out.BytesScanned = countBytesScanned(maxBytes, lineNo)
-	return out
+	out.BytesScanned = counter.n
+	if fileSize > maxBytes || (fileSize < 0 && counter.n >= maxBytes) {
+		out.Truncated = true
+	}
+	if err := scanner.Err(); err != nil {
+		return out, fmt.Errorf("scan artifact: %w", err)
+	}
+	return out, nil
 }
 
-// countBytesScanned estimates bytes consumed for logging. LimitReader already
-// enforces the read budget.
-func countBytesScanned(maxBytes int64, lines int) int64 {
-	if int64(lines)*80 > maxBytes {
-		return maxBytes
-	}
-	return int64(lines) * 80
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (r *countingReader) Read(p []byte) (int, error) {
+	n, err := r.r.Read(p)
+	r.n += int64(n)
+	return n, err
 }

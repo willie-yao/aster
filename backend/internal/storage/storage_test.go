@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -269,7 +270,7 @@ func TestURLEscaping(t *testing.T) {
 	cases := map[string]string{
 		"space here": "space%20here",
 		"slash/here": "slash%2Fhere",
-		"日本語":       "%E6%97%A5%E6%9C%AC%E8%AA%9E",
+		"日本語":        "%E6%97%A5%E6%9C%AC%E8%AA%9E",
 		"a?b=c&d+e":  "a%3Fb%3Dc%26d%2Be",
 	}
 	for input, want := range cases {
@@ -332,3 +333,27 @@ func TestSliceRange(t *testing.T) {
 		t.Errorf("sliceRange past end = %q, want nil", got)
 	}
 }
+
+func TestReadAllRejectsOversizedObject(t *testing.T) {
+	if _, err := ReadAll(context.Background(), oversizedBackend{}, "huge"); err == nil {
+		t.Fatal("expected whole-read limit error")
+	}
+}
+
+type oversizedBackend struct{}
+
+func (oversizedBackend) Open(context.Context, string) (io.ReadCloser, int64, error) {
+	return io.NopCloser(strings.NewReader("")), maxWholeObjectBytes + 1, nil
+}
+func (oversizedBackend) ReadRange(context.Context, string, int64, int64) ([]byte, int64, error) {
+	panic("unused")
+}
+func (oversizedBackend) ReadTail(context.Context, string, int64) ([]byte, int64, error) {
+	panic("unused")
+}
+func (oversizedBackend) List(context.Context, string) (*Listing, error) { panic("unused") }
+func (oversizedBackend) ListTree(context.Context, string, int) ([]string, bool, error) {
+	panic("unused")
+}
+func (oversizedBackend) WebURL(string) string  { return "" }
+func (oversizedBackend) ProwURL(string) string { return "" }

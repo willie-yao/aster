@@ -31,6 +31,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 )
 
 func env(key, def string) string {
@@ -69,11 +70,14 @@ func main() {
 		},
 	}
 
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = 30 * time.Second
+	transport.IdleConnTimeout = 90 * time.Second
 	h := &handler{
 		target:        target,
 		integrationID: integrationID,
 		passthrough:   passthrough,
-		client:        &http.Client{},
+		client:        &http.Client{Transport: transport},
 	}
 
 	mux := http.NewServeMux()
@@ -83,7 +87,8 @@ func main() {
 	mux.Handle("/", h)
 
 	log.Printf("orka-copilot-proxy on %s -> %s (integration-id=%s)", addr, upstream, integrationID)
-	log.Fatal(http.ListenAndServe(addr, mux))
+	server := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 120 * time.Second}
+	log.Fatal(server.ListenAndServe())
 }
 
 func normalizePath(p string) string {
@@ -110,6 +115,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 8<<20)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
@@ -168,7 +174,7 @@ func (h *handler) destream(w http.ResponseWriter, r *http.Request, req map[strin
 
 	if resp.StatusCode != http.StatusOK {
 		// Surface upstream errors verbatim so Orka's fallback logic can act.
-		raw, _ := io.ReadAll(resp.Body)
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		log.Printf("↗ %s (destream) -> %d", up.Path, resp.StatusCode)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(resp.StatusCode)

@@ -83,9 +83,41 @@ func TestCacheSaveAndReload(t *testing.T) {
 		t.Fatal("expected cache hit after reload")
 	}
 	var got string
-	json.Unmarshal(raw, &got)
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
 	if got != "yes" {
 		t.Fatalf("unexpected: %q", got)
+	}
+}
+
+func TestCachePrunesExpiredEntriesOnLoad(t *testing.T) {
+	dir := t.TempDir()
+	entries := map[string]CacheEntry{
+		"old": {Key: "old", CreatedAt: time.Now().Add(-31 * 24 * time.Hour), Data: json.RawMessage(`"old"`)},
+		"new": {Key: "new", CreatedAt: time.Now(), Data: json.RawMessage(`"new"`)},
+	}
+	data, err := json.Marshal(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ai_cache.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	c := NewCache(dir)
+	if _, ok := c.Get("old"); ok {
+		t.Fatal("expired entry survived load")
+	}
+	if _, ok := c.Get("new"); !ok {
+		t.Fatal("fresh entry was pruned")
+	}
+	if err := c.Save(); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := NewCache(dir)
+	if len(reloaded.entries) != 1 {
+		t.Fatalf("reloaded entries = %d, want 1", len(reloaded.entries))
 	}
 }
 

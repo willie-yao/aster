@@ -2,6 +2,7 @@
 package models
 
 import (
+	"encoding/base64"
 	"time"
 )
 
@@ -34,13 +35,18 @@ type ProwJob struct {
 }
 
 // JobIDFor builds a stable per-job identifier. Periodics use the bare name
-// the bare name because Prow periodics are unique. Presubmits use
+// because Prow periodics are unique. Presubmits use
 // "<repo>/<name>" so same-named jobs do not collide downstream.
 func JobIDFor(jobType, repo, name string) string {
 	if jobType == JobTypePresubmit {
 		return repo + "/" + name
 	}
 	return name
+}
+
+// JobDataFilename returns the injective, URL-safe filename for one JobID.
+func JobDataFilename(jobID string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(jobID)) + ".json"
 }
 
 // BuildInfo represents metadata for a single prow build.
@@ -94,9 +100,9 @@ type AIAnalysis struct {
 	// ToolCalls is the number of agent tool invocations made during this
 	// analysis.
 	ToolCalls int `json:"tool_calls,omitempty"`
-	// ModelBytes is the cumulative bytes sent to / received from the chat
-	// completion endpoint.
-	ModelBytes int `json:"model_bytes,omitempty"`
+	// ContextBytes is the cumulative tool-result and injected-evidence bytes added
+	// to the model conversation.
+	ContextBytes int `json:"context_bytes,omitempty"`
 	// GCSBytes is the cumulative bytes fetched from GCS via agent tool
 	// calls.
 	GCSBytes int `json:"gcs_bytes,omitempty"`

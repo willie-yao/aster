@@ -13,6 +13,7 @@ import (
 	"path"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -441,7 +442,7 @@ func stampAgenticTelemetry(analysis *models.AIAnalysis, state *agentState, mode 
 	analysis.ElapsedMs = int(time.Since(start) / time.Millisecond)
 	if state != nil {
 		analysis.ToolCalls = state.calls
-		analysis.ModelBytes = state.modelBytes
+		analysis.ContextBytes = state.modelBytes
 		analysis.GCSBytes = state.gcsBytes
 		analysis.BudgetExhausted = state.budgetExhausted
 		analysis.CritiquePassed = state.critiquePassed
@@ -461,8 +462,8 @@ func stampAgenticTelemetry(analysis *models.AIAnalysis, state *agentState, mode 
 // AgenticInputs bundles the per-failure context required by the agentic loop.
 // Lifetime notes:
 //   - Browser, Cache, and WebURLBase are scoped to one build.
-//   - Registry and EnabledTools are scoped to one Service, built once per
-//     project at fetcher startup.
+//   - Registry and EnabledTools are scoped to one pipeline and reused across
+//     analyses.
 //   - Opts and Skills are per-project.
 //   - Mode is stamped on the returned AIAnalysis and defaults to AgenticMode.
 type AgenticInputs struct {
@@ -600,6 +601,42 @@ func compactMessages(messages []agChatMessage, schemaBytes, budgetBytes int) ([]
 	return messages, elided
 }
 
+func (c *Client) cachedAgenticAnalysis(in AgenticInputs, cacheKey, sysPrompt string, start time.Time) (*models.AISummary, *models.AIAnalysis, bool) {
+	raw, ok := c.cache.Get(cacheKey)
+	if !ok {
+		return nil, nil, false
+	}
+	var cached agenticCacheData
+	if json.Unmarshal(raw, &cached) != nil {
+		return nil, nil, false
+	}
+	critiqueOK := cached.CritiquePassed && cached.CritiqueVersion >= currentCritiqueVersion
+	wantSkillHash := ""
+	if in.Skills != nil {
+		wantSkillHash = in.Skills.Hash()
+	}
+	critiqueOK = critiqueOK && cached.SkillSetHash == wantSkillHash
+	critiqueOK = critiqueOK && cached.ModelHash == c.modelFingerprint()
+	if cached.IsTransient && in.ConsecutiveFailures >= transientPersistThreshold {
+		critiqueOK = false
+	}
+	if cached.ToolCalls < in.Opts.MinToolCalls || cached.GCSBytes < in.Opts.MinGCSBytes || !critiqueOK || cached.PromptHash != PromptFingerprint(sysPrompt) {
+		return nil, nil, false
+	}
+	summary, analysis := c.buildOutputs(cached.analysisResponse)
+	stampAgenticTelemetry(analysis, nil, in.Mode, true, start)
+	analysis.ToolCalls = cached.ToolCalls
+	analysis.ContextBytes = cached.ModelBytes
+	analysis.GCSBytes = cached.GCSBytes
+	analysis.BudgetExhausted = cached.BudgetExhausted
+	analysis.CritiquePassed = cached.CritiquePassed
+	analysis.CritiqueVersion = cached.CritiqueVersion
+	analysis.SkillSetHash = cached.SkillSetHash
+	analysis.ModelHash = cached.ModelHash
+	analysis.PromptHash = cached.PromptHash
+	return summary, analysis, true
+}
+
 // doAnalyzeAgentic runs the tool-calling AI loop for one failure. Returns the
 // summary and analysis pair for the published output.
 //
@@ -616,58 +653,8 @@ func (c *Client) doAnalyzeAgentic(
 	cacheKey, sysPrompt, userPrompt string,
 ) (*models.AISummary, *models.AIAnalysis, error) {
 	start := time.Now()
-	if raw, ok := c.cache.Get(cacheKey); ok {
-		var cached agenticCacheData
-		if json.Unmarshal(raw, &cached) == nil {
-			// Re-validate the cache hit against the current floors and
-			// critique contract. Raising any floor, bumping
-			// currentCritiqueVersion, or editing the recipe set invalidate
-			// cached entries on read.
-			critiqueOK := cached.CritiquePassed && cached.CritiqueVersion >= currentCritiqueVersion
-			// Skills feed the critique gate, so the recipe-set hash is part of
-			// the cache contract: editing recipes invalidates prior entries.
-			wantHash := ""
-			if in.Skills != nil {
-				wantHash = in.Skills.Hash()
-			}
-			if cached.SkillSetHash != wantHash {
-				critiqueOK = false
-			}
-			// A model or endpoint swap invalidates the entry: a new model must
-			// not serve the prior model's cached verdict.
-			if cached.ModelHash != c.modelFingerprint() {
-				critiqueOK = false
-			}
-			// The prompt is always sent to the model, so a prompt change
-			// invalidates the entry regardless of critique. Editing
-			// prompts/system.md re-analyzes on the next run with no cache clear.
-			promptOK := cached.PromptHash == PromptFingerprint(sysPrompt)
-			// A cached transient verdict is stale once the failure has become
-			// persistent: the transient-vs-persistent critique would now reject
-			// it, so re-analyze instead of serving the old flake verdict.
-			if cached.IsTransient && in.ConsecutiveFailures >= transientPersistThreshold {
-				critiqueOK = false
-			}
-			if cached.ToolCalls >= in.Opts.MinToolCalls && cached.GCSBytes >= in.Opts.MinGCSBytes && critiqueOK && promptOK {
-				summary, analysis := c.buildOutputs(cached.analysisResponse)
-				stampAgenticTelemetry(analysis, nil, in.Mode, true, start)
-				// Restore the recorded per-analysis telemetry so the
-				// published JSON keeps its tool-call/cost/budget-exhausted
-				// signals across cache hits; without this, hits would
-				// publish ToolCalls=0 and shouldReanalyze would re-trigger
-				// reanalysis on every run.
-				analysis.ToolCalls = cached.ToolCalls
-				analysis.ModelBytes = cached.ModelBytes
-				analysis.GCSBytes = cached.GCSBytes
-				analysis.BudgetExhausted = cached.BudgetExhausted
-				analysis.CritiquePassed = cached.CritiquePassed
-				analysis.CritiqueVersion = cached.CritiqueVersion
-				analysis.SkillSetHash = cached.SkillSetHash
-				analysis.ModelHash = cached.ModelHash
-				analysis.PromptHash = cached.PromptHash
-				return summary, analysis, nil
-			}
-		}
+	if summary, analysis, ok := c.cachedAgenticAnalysis(in, cacheKey, sysPrompt, start); ok {
+		return summary, analysis, nil
 	}
 
 	state := &agentState{
@@ -708,7 +695,6 @@ func (c *Client) doAnalyzeAgentic(
 	defer cancel()
 
 	var finalContent string
-	var done bool
 	// Per-floor anti-thrash: track the calls + gcsBytes counters at the
 	// time we last nudged so we can detect whether the model has made
 	// progress on the unmet axis since then. A model that keeps coming
@@ -742,7 +728,7 @@ func (c *Client) doAnalyzeAgentic(
 		parallelToolCalls = &f
 	}
 
-	for iter := 0; iter < maxIters && !done; iter++ {
+	for iter := 0; iter < maxIters; iter++ {
 		if in.Opts.ContextByteBudget > 0 {
 			var elided int
 			messages, elided = compactMessages(messages, schemaBytes, in.Opts.ContextByteBudget)
@@ -900,7 +886,6 @@ func (c *Client) doAnalyzeAgentic(
 			}
 
 			finalContent = candidate
-			done = true
 			break
 		}
 
@@ -949,77 +934,63 @@ func (c *Client) doAnalyzeAgentic(
 		return summary, analysis, nil
 	}
 
-	// Also critique post-loop parsed answers when the in-loop path didn't
-	// already mark critique as passed. The in-loop critique only fires on
-	// tools-free responses that parse on the spot; outputs from
-	// runFinalizeRound and slow-parse outputs would otherwise bypass it
-	// and publish-but-never-cache forever.
-	if !state.critiquePassed {
-		matchedSkills := matchSkillsForDraft(state, parsed)
-		out := critiqueDraft(parsed, state.readArtifactsFull, state.readArtifactsBase, matchedSkills, state.consecutiveFailures)
-		if len(out.MissingSkillEvidence) > 0 {
-			if treeSet := state.artifactTreeSet(loopCtx); treeSet != nil {
-				if n := pruneAbsentSkillEvidence(parsed, &out, treeSet); n > 0 {
-					log.Printf("  ⓘ skill-evidence: %d required group(s) absent from this build's artifacts; not held against the draft", n)
-				}
-			}
-		}
-		switch {
-		case out.Passed:
-			// Give the semantic judge a shot on the force-finalize path too,
-			// since a hard draft often lands here rather than passing in-loop.
-			if in.Opts.SemanticJudge {
-				parsed = c.applySemanticJudgePostLoop(loopCtx, state, messages, finalContent, parsed, in.Opts.ContextByteBudget)
-			}
-			state.critiquePassed = true
-		case len(out.UnreadCitations) > 0 || len(out.MissingSkillEvidence) > 0:
-			// The force-finalized draft cited artifacts the agent never read,
-			// or skipped evidence its claimed failure class requires. Fetch
-			// that evidence, inject it, and run one more finalize round so the
-			// model can re-ground its answer. This is the dominant post-loop
-			// failure on weak models.
-			if inj := c.buildEvidenceInjection(loopCtx, state, out); inj != "" {
-				messages = append(messages,
-					agChatMessage{Role: "assistant", Content: strPtr(finalContent)},
-					agChatMessage{Role: "user", Content: strPtr(out.Feedback + "\n\n" + inj)})
-				revised := c.runFinalizeRound(loopCtx, messages, in.Opts.ContextByteBudget)
-				rp, ok2 := tryParseAnalysis(revised)
-				if !ok2 {
-					// The model sometimes answers the injected evidence in
-					// prose instead of JSON on the first finalize. One more
-					// attempt with the same JSON-only prompt usually lands it.
-					revised = c.runFinalizeRound(loopCtx, messages, in.Opts.ContextByteBudget)
-					rp, ok2 = tryParseAnalysis(revised)
-				}
-				if ok2 {
-					parsed = rp
-					out2 := critiqueDraft(parsed, state.readArtifactsFull, state.readArtifactsBase, matchSkillsForDraft(state, parsed), state.consecutiveFailures)
-					if len(out2.MissingSkillEvidence) > 0 {
-						if treeSet := state.artifactTreeSet(loopCtx); treeSet != nil {
-							pruneAbsentSkillEvidence(parsed, &out2, treeSet)
-						}
-					}
-					if out2.Passed {
-						state.critiquePassed = true
-					} else {
-						log.Printf("  ⚠ agentic critique: post-injection draft still failing %v; accepting but not caching", out2.Matches())
-					}
-				} else {
-					log.Printf("  ⚠ agentic critique: post-injection finalize did not parse after retry; keeping prior draft, not caching")
-				}
-			} else {
-				log.Printf("  ⚠ agentic critique: post-loop draft still failing %v; no fetchable evidence to inject; accepting but not caching", out.Matches())
-			}
-		default:
-			log.Printf("  ⚠ agentic critique: post-loop draft still failing %v; accepting but not caching",
-				out.Matches())
-		}
-	}
+	parsed = c.applyPostLoopCritique(loopCtx, state, messages, finalContent, parsed, in.Opts)
 
 	c.cacheAcceptedAnalysis(cacheKey, parsed, state, in.Opts, state.critiquePassed)
 	summary, analysis := c.buildOutputs(parsed)
 	stampAgenticTelemetry(analysis, state, in.Mode, false, start)
 	return summary, analysis, nil
+}
+
+func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, messages []agChatMessage, finalContent string, parsed analysisResponse, opts AgenticOptions) analysisResponse {
+	if state.critiquePassed {
+		return parsed
+	}
+	out := critiqueDraft(parsed, state.readArtifactsFull, state.readArtifactsBase, matchSkillsForDraft(state, parsed), state.consecutiveFailures)
+	if len(out.MissingSkillEvidence) > 0 {
+		if treeSet := state.artifactTreeSet(ctx); treeSet != nil {
+			pruneAbsentSkillEvidence(parsed, &out, treeSet)
+		}
+	}
+	if out.Passed {
+		if opts.SemanticJudge {
+			parsed = c.applySemanticJudgePostLoop(ctx, state, messages, finalContent, parsed, opts.ContextByteBudget)
+		}
+		state.critiquePassed = true
+		return parsed
+	}
+	if len(out.UnreadCitations) == 0 && len(out.MissingSkillEvidence) == 0 {
+		log.Printf("  ⚠ agentic critique: post-loop draft still failing %v; accepting but not caching", out.Matches())
+		return parsed
+	}
+	injection := c.buildEvidenceInjection(ctx, state, out)
+	if injection == "" {
+		log.Printf("  ⚠ agentic critique: post-loop draft still failing %v; no fetchable evidence to inject; accepting but not caching", out.Matches())
+		return parsed
+	}
+	messages = append(messages, agChatMessage{Role: "assistant", Content: strPtr(finalContent)}, agChatMessage{Role: "user", Content: strPtr(out.Feedback + "\n\n" + injection)})
+	revised := c.runFinalizeRound(ctx, messages, opts.ContextByteBudget)
+	next, ok := tryParseAnalysis(revised)
+	if !ok {
+		revised = c.runFinalizeRound(ctx, messages, opts.ContextByteBudget)
+		next, ok = tryParseAnalysis(revised)
+	}
+	if !ok {
+		log.Printf("  ⚠ agentic critique: post-injection finalize did not parse after retry; keeping prior draft, not caching")
+		return parsed
+	}
+	out = critiqueDraft(next, state.readArtifactsFull, state.readArtifactsBase, matchSkillsForDraft(state, next), state.consecutiveFailures)
+	if len(out.MissingSkillEvidence) > 0 {
+		if treeSet := state.artifactTreeSet(ctx); treeSet != nil {
+			pruneAbsentSkillEvidence(next, &out, treeSet)
+		}
+	}
+	if out.Passed {
+		state.critiquePassed = true
+	} else {
+		log.Printf("  ⚠ agentic critique: post-injection draft still failing %v; accepting but not caching", out.Matches())
+	}
+	return next
 }
 
 // buildArtifactTreeSeed returns a prompt addendum listing the build's
@@ -1321,8 +1292,11 @@ func (c *Client) callChatWithTools(ctx context.Context, messages []agChatMessage
 			return nil, fmt.Errorf("post: %w", err)
 		}
 		if resp.StatusCode == http.StatusTooManyRequests {
+			if attempt == 2 {
+				break
+			}
+			wait := retryAfter(resp.Header.Get("Retry-After"), time.Duration(2<<attempt)*time.Second)
 			resp.Body.Close()
-			wait := time.Duration(2<<attempt) * time.Second
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
@@ -1342,6 +1316,18 @@ func (c *Client) callChatWithTools(ctx context.Context, messages []agChatMessage
 		return nil, fmt.Errorf("decode response: %w; body=%s", err, textutil.Truncate(string(rb), 500))
 	}
 	return &out, nil
+}
+
+func retryAfter(value string, fallback time.Duration) time.Duration {
+	if seconds, err := strconv.Atoi(strings.TrimSpace(value)); err == nil && seconds >= 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	if when, err := http.ParseTime(value); err == nil {
+		if wait := time.Until(when); wait > 0 {
+			return wait
+		}
+	}
+	return fallback
 }
 
 // dispatchAgenticTool routes one tool call through the registry, accumulates

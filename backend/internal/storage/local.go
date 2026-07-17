@@ -21,7 +21,7 @@ type localBackend struct {
 
 // NewLocalBackend returns a Backend reading objects from root. webBase, when
 // set, is the prefix returned by WebURL/ProwURL for human-browsable links;
-// otherwise a file:// URL into root is returned. root must exist.
+// otherwise a root-relative URL is returned. root must exist.
 func NewLocalBackend(root, webBase string) (Backend, error) {
 	info, err := os.Stat(root)
 	if err != nil {

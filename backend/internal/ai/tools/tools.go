@@ -121,9 +121,8 @@ type Env struct {
 	RemainingGCSBytes   int
 }
 
-// Registry maps tool names to Tool implementations and tracks groups for
-// bulk enablement. A Registry is constructed per agentic call so per-failure
-// config differences can be honored.
+// Registry maps tool names to Tool implementations and tracks groups for bulk
+// enablement. The fetcher shares one registry across analyses and watch passes.
 type Registry struct {
 	tools  map[string]Tool
 	groups map[string][]string // group → tool names

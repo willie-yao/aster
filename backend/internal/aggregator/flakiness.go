@@ -12,57 +12,78 @@ const maxFlakyResults = 50
 // ComputeTestFlakiness computes flakiness stats for one test across a job's runs.
 // Runs are expected newest-first.
 func ComputeTestFlakiness(testName, jobID, jobName string, runs []models.BuildResult) models.TestFlakiness {
-	tf := models.TestFlakiness{
-		TestName: testName,
-		JobName:  jobName,
-		JobID:    jobID,
-	}
+	return computeTestFlakiness(testName, jobID, jobName, outcomesForTest(testName, runs))
+}
 
-	type testOutcome struct {
-		passed  bool
-		message string
-		buildID string
-		started time.Time
-		dur     float64
-	}
+type testOutcome struct {
+	passed  bool
+	message string
+	buildID string
+	started time.Time
+	dur     float64
+}
 
-	// Outcomes follow run order, newest first.
+func outcomesForTest(testName string, runs []models.BuildResult) []testOutcome {
 	var outcomes []testOutcome
-	for _, r := range runs {
-		for _, tc := range r.TestCases {
-			if tc.Name == testName {
-				// Skipped tests are neither pass nor fail.
-				if tc.Status == "skipped" {
-					break
-				}
+	for _, run := range runs {
+		for _, tc := range run.TestCases {
+			if tc.Name != testName {
+				continue
+			}
+			if tc.Status != "skipped" {
 				outcomes = append(outcomes, testOutcome{
 					passed:  tc.Status == "passed",
 					message: tc.FailureMessage,
-					buildID: r.BuildID,
-					started: r.Started,
+					buildID: run.BuildID,
+					started: run.Started,
 					dur:     tc.DurationSeconds,
 				})
-				break
 			}
+			break
 		}
 	}
+	return outcomes
+}
 
-	tf.TotalRuns = len(outcomes)
-	if tf.TotalRuns == 0 {
+func collectTestOutcomes(runs []models.BuildResult) map[string][]testOutcome {
+	out := make(map[string][]testOutcome)
+	for _, run := range runs {
+		seen := make(map[string]bool, len(run.TestCases))
+		for _, tc := range run.TestCases {
+			if seen[tc.Name] {
+				continue
+			}
+			seen[tc.Name] = true
+			if tc.Status == "skipped" {
+				continue
+			}
+			out[tc.Name] = append(out[tc.Name], testOutcome{
+				passed:  tc.Status == "passed",
+				message: tc.FailureMessage,
+				buildID: run.BuildID,
+				started: run.Started,
+				dur:     tc.DurationSeconds,
+			})
+		}
+	}
+	return out
+}
+
+func computeTestFlakiness(testName, jobID, jobName string, outcomes []testOutcome) models.TestFlakiness {
+	tf := models.TestFlakiness{TestName: testName, JobName: jobName, JobID: jobID, TotalRuns: len(outcomes)}
+	if len(outcomes) == 0 {
 		return tf
 	}
 
-	for _, o := range outcomes {
-		if o.passed {
+	for _, outcome := range outcomes {
+		if outcome.passed {
 			tf.Passes++
 		} else {
 			tf.Failures++
 		}
 	}
-
 	tf.FailRate = float64(tf.Failures) / float64(tf.TotalRuns)
 
-	// Flip rate is state transitions divided by total adjacent pairs.
 	if tf.TotalRuns >= 2 {
 		flips := 0
 		for i := 1; i < len(outcomes); i++ {
@@ -73,61 +94,52 @@ func ComputeTestFlakiness(testName, jobID, jobName string, runs []models.BuildRe
 		tf.FlipRate = float64(flips) / float64(tf.TotalRuns-1)
 	}
 
-	// Consecutive failures from the most recent run.
-	for _, o := range outcomes {
-		if !o.passed {
-			tf.ConsecutiveFailures++
-		} else {
+	for _, outcome := range outcomes {
+		if outcome.passed {
 			break
 		}
+		tf.ConsecutiveFailures++
 	}
+	tf.Classification = classifyOutcomes(outcomes, 3).Classification
 
-	info := ClassifyFailure(testName, runs, 3)
-	tf.Classification = info.Classification
-
-	// FirstFailedAt is the oldest run in the current failure streak.
 	if tf.ConsecutiveFailures > 0 {
-		// Outcomes are newest-first, so this index is the streak's oldest run.
 		tf.FirstFailedAt = outcomes[tf.ConsecutiveFailures-1].started.UTC().Format(time.RFC3339)
 	}
-
-	// LastFailure is the most recent failed run.
-	for _, o := range outcomes {
-		if !o.passed {
-			normalized := NormalizeErrorMessage(o.message)
-			tf.LastFailure = &models.TestFailureInfo{
-				BuildID:        o.buildID,
-				Timestamp:      o.started.UTC().Format(time.RFC3339),
-				FailureMessage: o.message,
-				ErrorHash:      HashError(normalized),
-			}
-			break
-		}
-	}
-
-	// Group failures by normalized message.
-	patternMap := make(map[string]*models.ErrorPattern)
-	for _, o := range outcomes {
-		if o.passed {
+	for _, outcome := range outcomes {
+		if outcome.passed {
 			continue
 		}
-		normalized := NormalizeErrorMessage(o.message)
+		normalized := NormalizeErrorMessage(outcome.message)
+		tf.LastFailure = &models.TestFailureInfo{
+			BuildID:        outcome.buildID,
+			Timestamp:      outcome.started.UTC().Format(time.RFC3339),
+			FailureMessage: outcome.message,
+			ErrorHash:      HashError(normalized),
+		}
+		break
+	}
+
+	patterns := make(map[string]*models.ErrorPattern)
+	for _, outcome := range outcomes {
+		if outcome.passed {
+			continue
+		}
+		normalized := NormalizeErrorMessage(outcome.message)
 		hash := HashError(normalized)
-		if ep, ok := patternMap[hash]; ok {
-			ep.Count++
+		if pattern := patterns[hash]; pattern != nil {
+			pattern.Count++
 		} else {
-			patternMap[hash] = &models.ErrorPattern{
+			patterns[hash] = &models.ErrorPattern{
 				NormalizedMessage: normalized,
 				ErrorHash:         hash,
 				Count:             1,
-				ExampleMessage:    o.message,
+				ExampleMessage:    outcome.message,
 			}
 		}
 	}
-	for _, ep := range patternMap {
-		tf.ErrorPatterns = append(tf.ErrorPatterns, *ep)
+	for _, pattern := range patterns {
+		tf.ErrorPatterns = append(tf.ErrorPatterns, *pattern)
 	}
-	// Sort patterns by count for deterministic output.
 	sort.Slice(tf.ErrorPatterns, func(i, j int) bool {
 		if tf.ErrorPatterns[i].Count != tf.ErrorPatterns[j].Count {
 			return tf.ErrorPatterns[i].Count > tf.ErrorPatterns[j].Count
@@ -135,16 +147,14 @@ func ComputeTestFlakiness(testName, jobID, jobName string, runs []models.BuildRe
 		return tf.ErrorPatterns[i].ErrorHash < tf.ErrorPatterns[j].ErrorHash
 	})
 
-	// Duration history follows run order, newest first.
-	for _, o := range outcomes {
+	for _, outcome := range outcomes {
 		tf.DurationHistory = append(tf.DurationHistory, models.DurationPoint{
-			BuildID:   o.buildID,
-			Timestamp: o.started.UTC().Format(time.RFC3339),
-			Duration:  o.dur,
-			Passed:    o.passed,
+			BuildID:   outcome.buildID,
+			Timestamp: outcome.started.UTC().Format(time.RFC3339),
+			Duration:  outcome.dur,
+			Passed:    outcome.passed,
 		})
 	}
-
 	return tf
 }
 
@@ -159,16 +169,20 @@ func ComputeFlakinessReport(jobResults map[string][]models.BuildResult, jobs []m
 
 	var allFlaky []models.TestFlakiness
 
-	for jobID, runs := range jobResults {
-		testSet := make(map[string]struct{})
-		for _, r := range runs {
-			for _, tc := range r.TestCases {
-				testSet[tc.Name] = struct{}{}
-			}
+	jobIDs := make([]string, 0, len(jobResults))
+	for jobID := range jobResults {
+		jobIDs = append(jobIDs, jobID)
+	}
+	sort.Strings(jobIDs)
+	for _, jobID := range jobIDs {
+		outcomesByTest := collectTestOutcomes(jobResults[jobID])
+		testNames := make([]string, 0, len(outcomesByTest))
+		for testName := range outcomesByTest {
+			testNames = append(testNames, testName)
 		}
-
-		for testName := range testSet {
-			tf := ComputeTestFlakiness(testName, jobID, jobName[jobID], runs)
+		sort.Strings(testNames)
+		for _, testName := range testNames {
+			tf := computeTestFlakiness(testName, jobID, jobName[jobID], outcomesByTest[testName])
 			if tf.Failures > 0 {
 				allFlaky = append(allFlaky, tf)
 			}
@@ -193,7 +207,10 @@ func ComputeFlakinessReport(jobResults map[string][]models.BuildResult, jobs []m
 		if mostFlaky[i].FlipRate != mostFlaky[j].FlipRate {
 			return mostFlaky[i].FlipRate > mostFlaky[j].FlipRate
 		}
-		return mostFlaky[i].FailRate > mostFlaky[j].FailRate
+		if mostFlaky[i].FailRate != mostFlaky[j].FailRate {
+			return mostFlaky[i].FailRate > mostFlaky[j].FailRate
+		}
+		return testFlakinessLess(mostFlaky[i], mostFlaky[j])
 	})
 	if len(mostFlaky) > maxFlakyResults {
 		mostFlaky = mostFlaky[:maxFlakyResults]
@@ -211,7 +228,7 @@ func ComputeFlakinessReport(jobResults map[string][]models.BuildResult, jobs []m
 		if persistent[i].ConsecutiveFailures != persistent[j].ConsecutiveFailures {
 			return persistent[i].ConsecutiveFailures > persistent[j].ConsecutiveFailures
 		}
-		return persistent[i].TestName < persistent[j].TestName
+		return testFlakinessLess(persistent[i], persistent[j])
 	})
 	report.PersistentFailures = persistent
 
@@ -232,9 +249,19 @@ func ComputeFlakinessReport(jobResults map[string][]models.BuildResult, jobs []m
 	}
 	sort.Slice(recentlyBroken, func(i, j int) bool {
 		// Sort by first_failed_at descending.
-		return recentlyBroken[i].FirstFailedAt > recentlyBroken[j].FirstFailedAt
+		if recentlyBroken[i].FirstFailedAt != recentlyBroken[j].FirstFailedAt {
+			return recentlyBroken[i].FirstFailedAt > recentlyBroken[j].FirstFailedAt
+		}
+		return testFlakinessLess(recentlyBroken[i], recentlyBroken[j])
 	})
 	report.RecentlyBroken = recentlyBroken
 
 	return report
+}
+
+func testFlakinessLess(a, b models.TestFlakiness) bool {
+	if a.JobID != b.JobID {
+		return a.JobID < b.JobID
+	}
+	return a.TestName < b.TestName
 }

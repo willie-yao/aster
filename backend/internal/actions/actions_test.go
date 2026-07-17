@@ -140,7 +140,10 @@ func TestPreviewFix_AINotConfigured(t *testing.T) {
 
 func TestPreviewCache_TokenOwnershipAndConsumption(t *testing.T) {
 	s := NewService(&project.Config{}, t.TempDir(), AIConfig{})
-	tok := s.stash("owner-token", &previewEntry{kind: "issue"})
+	tok, err := s.stash("owner-token", &previewEntry{kind: "issue"})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// A different admin's token must not resolve the draft.
 	if _, err := s.take("someone-else", tok); !errors.Is(err, ErrPreviewNotFound) {
@@ -158,7 +161,10 @@ func TestPreviewCache_TokenOwnershipAndConsumption(t *testing.T) {
 
 func TestPreviewCache_Expiry(t *testing.T) {
 	s := NewService(&project.Config{}, t.TempDir(), AIConfig{})
-	tok := s.stash("owner-token", &previewEntry{kind: "issue"})
+	tok, err := s.stash("owner-token", &previewEntry{kind: "issue"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	s.pmu.Lock()
 	s.previews[tok].createdAt = time.Now().Add(-previewTTL - time.Minute)
 	s.pmu.Unlock()

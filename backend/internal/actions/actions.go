@@ -267,7 +267,10 @@ func (s *Service) PreviewIssue(ctx context.Context, failureID, userToken, instru
 			final = issues.ReviseBody(ctx, c, final, instruction)
 		}
 	}
-	token := s.stash(userToken, &previewEntry{kind: "issue", spec: final})
+	token, err := s.stash(userToken, &previewEntry{kind: "issue", spec: final})
+	if err != nil {
+		return PreviewResult{}, err
+	}
 	return PreviewResult{Token: token, Kind: "issue", Title: final.Title, Body: final.Body}, nil
 }
 
@@ -287,7 +290,10 @@ func (s *Service) PreviewFix(ctx context.Context, failureID, userToken, instruct
 	if err != nil {
 		return PreviewResult{}, fmt.Errorf("%s", safeReason(err.Error()))
 	}
-	token := s.stash(userToken, &previewEntry{kind: "fix", fix: gf})
+	token, err := s.stash(userToken, &previewEntry{kind: "fix", fix: gf})
+	if err != nil {
+		return PreviewResult{}, err
+	}
 	return PreviewResult{
 		Token: token, Kind: "fix", Title: gf.Title,
 		Body: gf.Description, Diff: gf.Preview.Diff,
@@ -404,15 +410,18 @@ func (s *Service) Unresolve(failureID string) error {
 
 // stash caches a draft under a fresh token bound to the admin's identity and
 // returns the token, evicting expired entries first.
-func (s *Service) stash(userToken string, e *previewEntry) string {
+func (s *Service) stash(userToken string, e *previewEntry) (string, error) {
 	e.owner = tokenHash(userToken)
 	e.createdAt = time.Now()
-	token := newToken()
+	token, err := newToken()
+	if err != nil {
+		return "", fmt.Errorf("generating preview token: %w", err)
+	}
 	s.pmu.Lock()
 	defer s.pmu.Unlock()
 	s.evictExpiredLocked()
 	s.previews[token] = e
-	return token
+	return token, nil
 }
 
 // take removes and returns the draft cached under token if it exists, has not
@@ -445,10 +454,12 @@ func tokenHash(t string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func newToken() string {
+func newToken() (string, error) {
 	var b [16]byte
-	_, _ = rand.Read(b[:])
-	return hex.EncodeToString(b[:])
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b[:]), nil
 }
 
 // safeReason turns an internal failure reason into a message safe to show a

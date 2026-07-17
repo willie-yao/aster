@@ -2,15 +2,14 @@
 package output
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
-	"regexp"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
 )
-
-var unsafeChars = regexp.MustCompile(`[^a-zA-Z0-9\-_]`)
 
 // NonPublishedFiles are operational files written into the output directory that
 // must not be served by the API server or deployed to the public Pages site:
@@ -24,11 +23,6 @@ var NonPublishedFiles = []string{
 	"fix_pr_state.json",
 	"fix_previews.json",
 	"notification_state.json",
-}
-
-// SanitizeFilename replaces unsafe filename characters with hyphens.
-func SanitizeFilename(name string) string {
-	return unsafeChars.ReplaceAllString(name, "-")
 }
 
 // writeJSON writes indented JSON to path atomically, creating parent
@@ -45,8 +39,7 @@ func WriteDashboard(dir string, dashboard models.Dashboard) error {
 // WriteJobDetail writes a per-job detail file under dir/jobs.
 // Keying by JobID prevents same-named jobs from overwriting each other.
 func WriteJobDetail(dir string, detail models.JobDetail) error {
-	name := SanitizeFilename(detail.JobID) + ".json"
-	return writeJSON(filepath.Join(dir, "jobs", name), detail)
+	return writeJSON(filepath.Join(dir, "jobs", models.JobDataFilename(detail.JobID)), detail)
 }
 
 // WriteFlakinessReport writes flakiness.json to dir.
@@ -79,11 +72,38 @@ func WriteAll(dir string, cfg *project.Config, dashboard models.Dashboard, detai
 			return err
 		}
 	}
+	if err := pruneJobDetails(dir, details); err != nil {
+		return err
+	}
 	if err := WriteFlakinessReport(dir, flakiness); err != nil {
 		return err
 	}
 	if err := WriteSearchIndex(dir, searchIndex); err != nil {
 		return err
+	}
+	return nil
+}
+
+func pruneJobDetails(dir string, details []models.JobDetail) error {
+	expected := make(map[string]bool, len(details))
+	for _, detail := range details {
+		expected[models.JobDataFilename(detail.JobID)] = true
+	}
+	jobsDir := filepath.Join(dir, "jobs")
+	entries, err := os.ReadDir(jobsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" || expected[entry.Name()] {
+			continue
+		}
+		if err := os.Remove(filepath.Join(jobsDir, entry.Name())); err != nil {
+			return fmt.Errorf("remove stale job detail %s: %w", entry.Name(), err)
+		}
 	}
 	return nil
 }

@@ -25,7 +25,7 @@ func TestPatternID_URLSafeAndNonEmpty(t *testing.T) {
 		t.Fatal("expected a non-empty ID")
 	}
 	for _, r := range id {
-		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
 			t.Errorf("ID %q is not hex/URL-safe", id)
 		}
 	}

@@ -112,7 +112,7 @@ func TestIngestThenFinalizePatterns(t *testing.T) {
 		t.Fatalf("finalize stats = %+v", stats)
 	}
 
-	data, err := os.ReadFile(filepath.Join(dir, "jobs", "periodic-controller.json"))
+	data, err := os.ReadFile(filepath.Join(dir, "jobs", models.JobDataFilename("periodic-controller")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,5 +178,34 @@ func TestPatternTaskAnalyzerAppliesTaskAndParsesResult(t *testing.T) {
 	aiSpec := spec["ai"].(map[string]any)
 	if aiSpec["providerRef"].(map[string]any)["name"] != "models" || aiSpec["model"] != "strong-model" {
 		t.Fatalf("applied AI spec = %+v", aiSpec)
+	}
+}
+
+func TestWebhookIndexTargetsOneJobFile(t *testing.T) {
+	dir := t.TempDir()
+	detail := models.JobDetail{JobID: "job", Runs: []models.BuildResult{{
+		BuildInfo: models.BuildInfo{BuildID: "1"},
+		TestCases: []models.TestCase{{Name: "test", Status: "failed", FailureMessage: "boom"}},
+	}}}
+	if err := output.WriteJobDetail(dir, detail); err != nil {
+		t.Fatal(err)
+	}
+	s := &webhookServer{dataDir: dir, namespace: "orka-system", version: "v1", model: "m"}
+	s.rebuildIndex()
+	name := orkaapi.TaskName("1", orkaapi.FailureHash("test", "boom"), "v1")
+	path := filepath.Join(dir, "jobs", models.JobDataFilename("job"))
+	if got := s.index[name]; got != path {
+		t.Fatalf("index[%q] = %q, want %q", name, got, path)
+	}
+	s.patchTask(webhookPayload{TaskName: name, Phase: "Succeeded"}, preparedPatch{analysis: &analysis{RootCause: "root", Severity: "High"}})
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.Runs[0].TestCases[0].AIAnalysis == nil {
+		t.Fatal("analysis was not patched")
 	}
 }

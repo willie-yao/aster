@@ -106,7 +106,8 @@ func main() {
 	})
 
 	log.Printf("orka-artifact-tool on %s default-bucket=%s build=%s", addr, bucket, buildPrefix)
-	log.Fatal(http.ListenAndServe(addr, nil))
+	server := &http.Server{Addr: addr, Handler: http.DefaultServeMux, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 120 * time.Second}
+	log.Fatal(server.ListenAndServe())
 }
 
 func truncate(b []byte, n int) string {

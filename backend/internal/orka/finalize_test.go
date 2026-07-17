@@ -77,7 +77,7 @@ func TestFinalizePatternsWritesJobAndFlakinessPatterns(t *testing.T) {
 		t.Fatalf("stats = %+v, want one job, analysis, and recurring pattern", stats)
 	}
 
-	jobData, err := os.ReadFile(filepath.Join(dir, "jobs", "periodic-controller.json"))
+	jobData, err := os.ReadFile(filepath.Join(dir, "jobs", models.JobDataFilename("periodic-controller")))
 	if err != nil {
 		t.Fatal(err)
 	}

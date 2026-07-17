@@ -41,8 +41,11 @@ export function confidenceColor(
   return undefined;
 }
 
-export function jobDataFilename(jobName: string): string {
-  return `${jobName.replace(/[^a-zA-Z0-9\-_]/g, "-")}.json`;
+export function jobDataFilename(jobID: string): string {
+  const bytes = new TextEncoder().encode(jobID);
+  let binary = "";
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return `${btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")}.json`;
 }
 
 export function groupByCategory(

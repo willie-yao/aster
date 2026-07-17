@@ -915,3 +915,14 @@ notifications:
 		t.Fatalf("email config = %+v enabled=%v", email, enabled)
 	}
 }
+
+func TestValidateFixVerifyTimeout(t *testing.T) {
+	cfg := validConfig()
+	cfg.AI = &AI{FixPRs: &FixPRs{
+		Enabled: true, AuthorName: "Jane", AuthorEmail: "jane@example.com",
+		Verify: &FixVerify{Enabled: true, Timeout: "not-a-duration"},
+	}}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "verify.timeout") {
+		t.Fatalf("Validate error = %v, want verify.timeout", err)
+	}
+}

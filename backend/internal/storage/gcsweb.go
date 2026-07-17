@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -88,37 +87,12 @@ func (b *gcswebBackend) cachePut(path string, body []byte) {
 	b.used += int64(len(body))
 }
 
-// whole returns the entire object body, from cache when resident.
-func (b *gcswebBackend) whole(ctx context.Context, path string) ([]byte, error) {
-	if v, ok := b.cacheGet(path); ok {
-		return v, nil
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, b.objURL(path), nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := b.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("fetch %s: %w", path, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("fetch %s: HTTP %d", path, resp.StatusCode)
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, perCallCap))
-	if err != nil {
-		return nil, fmt.Errorf("fetch %s: %w", path, err)
-	}
-	b.cachePut(path, body)
-	return body, nil
-}
-
 func (b *gcswebBackend) Open(ctx context.Context, path string) (io.ReadCloser, int64, error) {
-	body, err := b.whole(ctx, path)
+	resp, total, err := b.get(ctx, path)
 	if err != nil {
 		return nil, 0, err
 	}
-	return io.NopCloser(bytes.NewReader(body)), int64(len(body)), nil
+	return resp.Body, total, nil
 }
 
 // streamCap bounds bytes consumed by one streaming gcsweb read.

@@ -871,6 +871,13 @@ func (c *Config) Validate() error {
 		if f.CritiqueRetries != nil && *f.CritiqueRetries < 0 {
 			return fmt.Errorf("ai.fix_prs.critique_retries must be >= 0 (0 disables the review)")
 		}
+		if verify := f.Verify; verify != nil {
+			if value := strings.TrimSpace(verify.Timeout); value != "" {
+				if _, err := time.ParseDuration(value); err != nil {
+					return fmt.Errorf("ai.fix_prs.verify.timeout %q is not a valid duration", verify.Timeout)
+				}
+			}
+		}
 		if ar := f.AgentRuntime; ar != nil {
 			switch strings.TrimSpace(ar.Type) {
 			case "", "opencode":

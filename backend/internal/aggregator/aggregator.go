@@ -114,91 +114,46 @@ func BuildRunSummary(result models.BuildResult) models.RunSummary {
 // failure is persistent, flaky, or a one-off. threshold sets the consecutive
 // failure count required for a persistent classification.
 func ClassifyFailure(testName string, runs []models.BuildResult, threshold int) FailureInfo {
+	return classifyOutcomes(outcomesForTest(testName, runs), threshold)
+}
+
+func classifyOutcomes(outcomes []testOutcome, threshold int) FailureInfo {
 	if threshold <= 0 {
 		threshold = 3
 	}
-
-	type testOutcome struct {
-		failed  bool
-		message string
-	}
-	outcomes := make([]testOutcome, 0, len(runs))
-	for _, r := range runs {
-		for _, tc := range r.TestCases {
-			if tc.Name == testName {
-				if tc.Status == "skipped" {
-					break
-				}
-				outcomes = append(outcomes, testOutcome{
-					failed:  tc.Status == "failed",
-					message: tc.FailureMessage,
-				})
-				break
-			}
-		}
-	}
-
 	if len(outcomes) == 0 {
 		return FailureInfo{Classification: models.ClassificationOneOff}
 	}
 
-	// Count consecutive failures from the most recent run backwards.
 	consecutiveFailures := 0
 	var firstFailMsg string
-	for _, o := range outcomes {
-		if !o.failed {
+	for _, outcome := range outcomes {
+		if outcome.passed {
 			break
 		}
 		consecutiveFailures++
 		if firstFailMsg == "" {
-			firstFailMsg = o.message
+			firstFailMsg = outcome.message
 		}
 	}
-
 	errHash := HashError(NormalizeErrorMessage(firstFailMsg))
-
 	if consecutiveFailures >= threshold {
-		return FailureInfo{
-			Classification:      models.ClassificationPersistent,
-			ConsecutiveFailures: consecutiveFailures,
-			ErrorHash:           errHash,
-		}
+		return FailureInfo{Classification: models.ClassificationPersistent, ConsecutiveFailures: consecutiveFailures, ErrorHash: errHash}
 	}
 
-	// Mixed pass and fail outcomes are flaky unless the failure was one-off.
 	failCount := 0
-	passCount := 0
-	for _, o := range outcomes {
-		if o.failed {
+	for _, outcome := range outcomes {
+		if !outcome.passed {
 			failCount++
-		} else {
-			passCount++
 		}
 	}
-
-	// One-off: failed exactly once in recent history.
 	if failCount == 1 {
-		return FailureInfo{
-			Classification:      models.ClassificationOneOff,
-			ConsecutiveFailures: consecutiveFailures,
-			ErrorHash:           errHash,
-		}
+		return FailureInfo{Classification: models.ClassificationOneOff, ConsecutiveFailures: consecutiveFailures, ErrorHash: errHash}
 	}
-
-	// Flaky: mix of passes and failures.
-	if failCount > 0 && passCount > 0 {
-		return FailureInfo{
-			Classification:      models.ClassificationFlaky,
-			ConsecutiveFailures: consecutiveFailures,
-			ErrorHash:           errHash,
-		}
+	if failCount > 0 && failCount < len(outcomes) {
+		return FailureInfo{Classification: models.ClassificationFlaky, ConsecutiveFailures: consecutiveFailures, ErrorHash: errHash}
 	}
-
-	return FailureInfo{
-		Classification:      models.ClassificationOneOff,
-		ConsecutiveFailures: consecutiveFailures,
-		ErrorHash:           errHash,
-	}
+	return FailureInfo{Classification: models.ClassificationOneOff, ConsecutiveFailures: consecutiveFailures, ErrorHash: errHash}
 }
 
 // numericRegex matches integers and decimal numbers.

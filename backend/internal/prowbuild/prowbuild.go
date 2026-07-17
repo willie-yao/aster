@@ -69,7 +69,7 @@ func (l JobLocation) jobPath(jobName, pullNumber string) string {
 // BuildPath returns the bucket-relative path down to a specific build, trailing
 // slash included.
 func (l BuildLocation) BuildPath() string {
-	return l.JobLocation.jobPath(l.JobName, l.PullNumber) + l.BuildID + "/"
+	return l.jobPath(l.JobName, l.PullNumber) + l.BuildID + "/"
 }
 
 // JobIndexPrefix returns the bucket-relative prefix for listing builds without

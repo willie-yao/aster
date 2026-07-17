@@ -70,7 +70,7 @@ export interface AIAnalysis {
   // Optional per-analysis telemetry emitted by the backend. Cached analyses may
   // omit metrics or record zero when a metric is unavailable.
   tool_calls?: number;
-  model_bytes?: number;
+  context_bytes?: number;
   gcs_bytes?: number;
   elapsed_ms?: number;
   cache_hit?: boolean;

@@ -29,6 +29,13 @@ for how to pin a release.
   inert email links that open the authenticated issue or fix preview flow for
   systemic recurring patterns.
 
+### Changed
+
+- Job detail filenames now use a collision-free base64url encoding of `job_id`.
+  Consumers must rebuild the frontend and data together.
+- AI analysis telemetry renames `model_bytes` to `context_bytes` to describe the
+  tool-result and evidence bytes added to the model conversation.
+
 ### Removed
 
 - **Slack webhook notifications.** `SLACK_WEBHOOK_URL` and Slack Block Kit

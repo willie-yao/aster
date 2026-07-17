@@ -2,10 +2,13 @@ package ai
 
 import (
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
 )
 
 const cacheMaxAge = 30 * 24 * time.Hour
@@ -22,6 +25,7 @@ type Cache struct {
 	dir     string
 	mu      sync.Mutex
 	entries map[string]CacheEntry
+	dirty   bool
 }
 
 // NewCache creates a cache, loading existing entries from dir/ai_cache.json.
@@ -30,11 +34,18 @@ func NewCache(dir string) *Cache {
 		dir:     dir,
 		entries: make(map[string]CacheEntry),
 	}
+	if dir == "" {
+		return c
+	}
 	data, err := os.ReadFile(filepath.Join(dir, "ai_cache.json"))
 	if err == nil {
 		var entries map[string]CacheEntry
-		if json.Unmarshal(data, &entries) == nil {
+		if err := json.Unmarshal(data, &entries); err == nil {
 			c.entries = entries
+			c.dirty = c.pruneExpiredLocked(time.Now())
+		} else {
+			log.Printf("Warning: failed to parse AI cache: %v", err)
+			c.dirty = true
 		}
 	}
 	return c
@@ -50,6 +61,7 @@ func (c *Cache) Get(key string) (json.RawMessage, bool) {
 	}
 	if time.Since(entry.CreatedAt) > cacheMaxAge {
 		delete(c.entries, key)
+		c.dirty = true
 		return nil, false
 	}
 	return entry.Data, true
@@ -68,6 +80,7 @@ func (c *Cache) Set(key string, data any) error {
 		CreatedAt: time.Now(),
 		Data:      raw,
 	}
+	c.dirty = true
 	return nil
 }
 
@@ -75,9 +88,29 @@ func (c *Cache) Set(key string, data any) error {
 func (c *Cache) Save() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	data, err := json.MarshalIndent(c.entries, "", "  ")
-	if err != nil {
+	if c.dir == "" {
+		return nil
+	}
+	if c.pruneExpiredLocked(time.Now()) {
+		c.dirty = true
+	}
+	if !c.dirty {
+		return nil
+	}
+	if err := statefile.WriteJSON(filepath.Join(c.dir, "ai_cache.json"), c.entries); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(c.dir, "ai_cache.json"), data, 0o644)
+	c.dirty = false
+	return nil
+}
+
+func (c *Cache) pruneExpiredLocked(now time.Time) bool {
+	changed := false
+	for key, entry := range c.entries {
+		if now.Sub(entry.CreatedAt) > cacheMaxAge {
+			delete(c.entries, key)
+			changed = true
+		}
+	}
+	return changed
 }

@@ -281,8 +281,8 @@ func runBenchCase(t *testing.T, bc benchCase, endpoint, model, token, systemProm
 	scored := strings.ToLower(strings.Join([]string{tc.AISummary.Summary, a.RootCause, a.SuggestedFix}, "\n"))
 
 	t.Logf("\n===== %s =====", bc.name)
-	t.Logf("elapsed=%s tool_calls=%d gcs_bytes=%d model_bytes=%d critique_passed=%v budget_exhausted=%v",
-		elapsed, a.ToolCalls, a.GCSBytes, a.ModelBytes, a.CritiquePassed, a.BudgetExhausted)
+	t.Logf("elapsed=%s tool_calls=%d gcs_bytes=%d context_bytes=%d critique_passed=%v budget_exhausted=%v",
+		elapsed, a.ToolCalls, a.GCSBytes, a.ContextBytes, a.CritiquePassed, a.BudgetExhausted)
 	t.Logf("severity=%s transient=%v", a.Severity, tc.AISummary.IsTransient)
 	t.Logf("SUMMARY:\n%s", tc.AISummary.Summary)
 	t.Logf("ROOT CAUSE:\n%s", a.RootCause)

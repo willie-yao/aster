@@ -115,7 +115,7 @@ func TestWriteJobDetail(t *testing.T) {
 		t.Fatalf("WriteJobDetail: %v", err)
 	}
 
-	path := filepath.Join(dir, "jobs", "periodic-cluster-api-provider-azure-e2e-main.json")
+	path := filepath.Join(dir, "jobs", models.JobDataFilename(detail.JobID))
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read job detail: %v", err)
@@ -133,21 +133,15 @@ func TestWriteJobDetail(t *testing.T) {
 	}
 }
 
-func TestSanitizeFilename(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"periodic-cluster-api-provider-azure-e2e-main", "periodic-cluster-api-provider-azure-e2e-main"},
-		{"job/with:special chars!", "job-with-special-chars-"},
-		{"has spaces here", "has-spaces-here"},
-		{"keep_underscores_too", "keep_underscores_too"},
-		{"dots.are.replaced", "dots-are-replaced"},
+func TestJobDataFilenameIsInjective(t *testing.T) {
+	a := models.JobDataFilename("foo/bar-baz/qux")
+	b := models.JobDataFilename("foo-bar/baz/qux")
+	if a == b {
+		t.Fatalf("distinct job IDs collided at %q", a)
 	}
-	for _, tt := range tests {
-		got := SanitizeFilename(tt.input)
-		if got != tt.want {
-			t.Errorf("SanitizeFilename(%q) = %q, want %q", tt.input, got, tt.want)
+	for _, name := range []string{a, b} {
+		if strings.ContainsAny(name, "/+=") || !strings.HasSuffix(name, ".json") {
+			t.Errorf("unsafe job filename %q", name)
 		}
 	}
 }
@@ -205,7 +199,7 @@ func TestWriteAll(t *testing.T) {
 	}
 	// job files exist
 	for _, d := range details {
-		p := filepath.Join(dir, "jobs", SanitizeFilename(d.JobID)+".json")
+		p := filepath.Join(dir, "jobs", models.JobDataFilename(d.JobID))
 		if _, err := os.Stat(p); err != nil {
 			t.Errorf("job file %s missing", p)
 		}
@@ -217,6 +211,24 @@ func TestWriteAll(t *testing.T) {
 	// search-index.json exists
 	if _, err := os.Stat(filepath.Join(dir, "search-index.json")); err != nil {
 		t.Error("search-index.json missing")
+	}
+}
+
+func TestWriteAllPrunesStaleJobFiles(t *testing.T) {
+	dir := t.TempDir()
+	stale := filepath.Join(dir, "jobs", "stale.json")
+	if err := os.MkdirAll(filepath.Dir(stale), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stale, []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	detail := sampleJobDetail("job-alpha")
+	if err := WriteAll(dir, sampleConfig(), sampleDashboard(), []models.JobDetail{detail}, models.FlakinessReport{}, models.SearchIndex{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("stale job file still exists: %v", err)
 	}
 }
 

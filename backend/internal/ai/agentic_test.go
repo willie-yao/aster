@@ -278,8 +278,8 @@ func TestAgentic_HappyPath_ToolThenFinalJSON(t *testing.T) {
 	if analysis.ToolCalls != 1 {
 		t.Errorf("tool_calls = %d, want 1", analysis.ToolCalls)
 	}
-	if analysis.ModelBytes <= 0 {
-		t.Errorf("expected positive model_bytes, got %d", analysis.ModelBytes)
+	if analysis.ContextBytes <= 0 {
+		t.Errorf("expected positive context_bytes, got %d", analysis.ContextBytes)
 	}
 	if analysis.CacheHit {
 		t.Error("expected cache_hit=false on first call")
@@ -312,9 +312,9 @@ func TestAgentic_CacheHit(t *testing.T) {
 	if !a2.CacheHit {
 		t.Error("expected cache_hit=true on second (cached) call")
 	}
-	if a2.ToolCalls != 0 || a2.ModelBytes != 0 || a2.GCSBytes != 0 {
-		t.Errorf("expected zero counters on cache hit (no state), got tool_calls=%d model_bytes=%d gcs_bytes=%d",
-			a2.ToolCalls, a2.ModelBytes, a2.GCSBytes)
+	if a2.ToolCalls != 0 || a2.ContextBytes != 0 || a2.GCSBytes != 0 {
+		t.Errorf("expected zero counters on cache hit (no state), got tool_calls=%d context_bytes=%d gcs_bytes=%d",
+			a2.ToolCalls, a2.ContextBytes, a2.GCSBytes)
 	}
 	if a2.Mode != AgenticMode {
 		t.Errorf("cache-hit mode = %q, want %q", a2.Mode, AgenticMode)

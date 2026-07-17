@@ -112,7 +112,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func testClient(f *fakeGitHub) *Client {
 	c := NewClient(f.Client(), "t")
-	c.base = f.Server.URL
+	c.base = f.URL
 	return c
 }
 

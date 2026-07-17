@@ -1,11 +1,12 @@
 // Package storage abstracts read access to a Prow build-artifact store.
 // A Backend exposes object reads, prefix listings, and human-facing URLs.
 //
-// Two providers implement Backend:
+// Three providers implement Backend:
 //
 //   - gcs: native Google Cloud Storage with HTTP Range and the GCS JSON list API.
 //   - gcsweb: any gcsweb HTTP gateway in front of a bucket. HTTP Range is not
 //     assumed, so ranged reads are emulated by fetching and slicing.
+//   - local: a directory tree used for offline fetches and tests.
 //
 // All Backend paths are bucket-relative, with no leading slash or bucket prefix.
 package storage
@@ -16,6 +17,8 @@ import (
 	"io"
 	"net/http"
 )
+
+const maxWholeObjectBytes = 64 * 1024 * 1024
 
 // Provider names a storage backend implementation.
 type Provider string
@@ -29,8 +32,8 @@ const (
 	ProviderLocal Provider = "local"
 )
 
-// Config selects and configures a Backend. Bucket is always required. The
-// *Base fields are optional overrides; each provider supplies defaults.
+// Config selects and configures a Backend. Bucket is required for remote
+// providers. Local storage uses Base as its root directory.
 type Config struct {
 	Provider Provider
 	Bucket   string
@@ -125,10 +128,20 @@ func New(cfg Config, client *http.Client) (Backend, error) {
 
 // ReadAll reads the whole object at path via the backend.
 func ReadAll(ctx context.Context, b Backend, path string) ([]byte, error) {
-	rc, _, err := b.Open(ctx, path)
+	rc, size, err := b.Open(ctx, path)
 	if err != nil {
 		return nil, err
 	}
 	defer rc.Close()
-	return io.ReadAll(rc)
+	if size > maxWholeObjectBytes {
+		return nil, fmt.Errorf("storage: object %s is %d bytes, exceeds %d-byte whole-read limit", path, size, maxWholeObjectBytes)
+	}
+	data, err := io.ReadAll(io.LimitReader(rc, maxWholeObjectBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxWholeObjectBytes {
+		return nil, fmt.Errorf("storage: object %s exceeds %d-byte whole-read limit", path, maxWholeObjectBytes)
+	}
+	return data, nil
 }
