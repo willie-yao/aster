@@ -73,7 +73,7 @@ func main() {
 	client := &orkaClient{base: strings.TrimRight(*apiBase, "/"), token: tok, http: &http.Client{Timeout: 30 * time.Second}}
 
 	if *serve {
-		srv := &webhookServer{client: client, dataDir: *dataDir, namespace: *namespace, model: *model}
+		srv := &webhookServer{client: client, dataDir: *dataDir, namespace: *namespace}
 		srv.rebuildIndex()
 		http.HandleFunc("/webhook", srv.handle)
 		http.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
@@ -273,7 +273,8 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir st
 			go func(item pendingTest) {
 				defer wg.Done()
 				defer func() { <-sem }()
-				if applyResult(item.tc, client, namespace, item.name, model, manifest.ContractHash) {
+				accepted, rejection := applyResult(item.tc, client, namespace, item.name, model, manifest.ContractHash, manifest.MinToolCalls)
+				if accepted {
 					patchedCount.Add(1)
 					changed.Store(true)
 					return
@@ -285,7 +286,11 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir st
 						item.tc.AIAnalysis = nil
 						changed.Store(true)
 					}
-					if markUnavailable(item.tc, kube, namespace, item.name) {
+					if rejection != "" {
+						if setUnavailable(item.tc, rejection) {
+							changed.Store(true)
+						}
+					} else if markUnavailable(item.tc, kube, namespace, item.name) {
 						changed.Store(true)
 					}
 				}
@@ -305,31 +310,50 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir st
 
 // applyResult fetches taskName's result, parses the analysis, and patches it
 // onto tc. Returns true if it patched (result available and parseable).
-func applyResult(tc *models.TestCase, client *orkaClient, namespace, taskName, model, contractHash string) bool {
+func applyResult(tc *models.TestCase, client *orkaClient, namespace, taskName, model, contractHash string, minToolCalls int) (bool, string) {
 	result, ok := client.result(namespace, taskName)
 	if !ok {
-		return false
+		return false, ""
 	}
-	a, ok := parseAnalysis(result)
-	if !ok {
-		return false
+	a, err := parseAnalysis(result)
+	if err != nil {
+		return false, "analysis Task produced an invalid result: " + oneLine(err.Error())
 	}
-	applyParsedAnalysis(tc, a, model, contractHash)
-	return true
+	telemetry, err := client.analysisTelemetry(context.Background(), namespace, taskName)
+	if err != nil {
+		return false, "analysis Task telemetry unavailable: " + oneLine(err.Error())
+	}
+	if err := validateAnalysisAcceptance(a, telemetry, minToolCalls); err != nil {
+		return false, "analysis Task failed acceptance: " + oneLine(err.Error())
+	}
+	applyParsedAnalysis(tc, a, telemetry, model, contractHash)
+	return true, ""
 }
 
-func applyParsedAnalysis(tc *models.TestCase, a analysis, model, contractHash string) {
+func applyParsedAnalysis(tc *models.TestCase, a analysis, telemetry analysisTelemetry, model, contractHash string) {
 	now := time.Now().UTC().Format(time.RFC3339)
-	tc.AISummary = &models.AISummary{GeneratedAt: now, Summary: a.RootCause, IsTransient: a.IsTransient}
+	if telemetry.Model != "" {
+		model = telemetry.Model
+	}
+	tc.AISummary = &models.AISummary{GeneratedAt: now, Summary: a.Summary, IsTransient: *a.IsTransient}
 	tc.AIAnalysis = &models.AIAnalysis{
-		GeneratedAt:   now,
-		Model:         model,
-		RootCause:     a.RootCause,
-		Severity:      a.Severity,
-		SuggestedFix:  a.SuggestedFix,
-		RelevantFiles: a.RelevantFiles,
-		Mode:          "agentic",
-		ContractHash:  contractHash,
+		GeneratedAt:            now,
+		Model:                  model,
+		RootCause:              a.RootCause,
+		Severity:               a.Severity,
+		SuggestedFix:           a.SuggestedFix,
+		RelevantFiles:          a.RelevantFiles,
+		Mode:                   "agentic",
+		ContractHash:           contractHash,
+		ToolCalls:              telemetry.ToolCalls,
+		ElapsedMs:              telemetry.ElapsedMs,
+		InputTokens:            telemetry.InputTokens,
+		OutputTokens:           telemetry.OutputTokens,
+		BudgetExhausted:        telemetry.BudgetExhausted,
+		TimelineVerified:       telemetry.TimelineVerified,
+		ArtifactPathsValidated: telemetry.ValidationPassed,
+		CritiquePassed:         true,
+		CritiqueVersion:        orkaAcceptanceVersion,
 	}
 }
 
@@ -426,7 +450,6 @@ type webhookServer struct {
 	dataDir   string
 	namespace string
 	manifest  *orka.AnalysisManifest
-	model     string
 	index     map[string]string
 }
 
@@ -441,7 +464,21 @@ func (s *webhookServer) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if orka.TerminalPhase(p.Phase) {
-		patch := s.preparePatch(p)
+		s.mu.Lock()
+		if s.manifest == nil {
+			s.rebuildIndex()
+		}
+		manifest := s.manifest
+		s.mu.Unlock()
+		if manifest == nil {
+			http.Error(w, "analysis manifest unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		patch := s.preparePatch(p, manifest)
+		if patch.retry {
+			http.Error(w, patch.reason, http.StatusServiceUnavailable)
+			return
+		}
 		s.mu.Lock()
 		s.patchTask(p, patch)
 		s.mu.Unlock()
@@ -450,23 +487,34 @@ func (s *webhookServer) handle(w http.ResponseWriter, r *http.Request) {
 }
 
 type preparedPatch struct {
-	analysis *analysis
-	reason   string
+	analysis     *analysis
+	telemetry    analysisTelemetry
+	model        string
+	contractHash string
+	reason       string
+	retry        bool
 }
 
-func (s *webhookServer) preparePatch(p webhookPayload) preparedPatch {
+func (s *webhookServer) preparePatch(p webhookPayload, manifest *orka.AnalysisManifest) preparedPatch {
 	if p.Phase != "Succeeded" || (p.ResultRef != nil && !p.ResultRef.Available) {
 		return preparedPatch{reason: "analysis Task " + strings.ToLower(p.Phase)}
 	}
 	result, ok := s.client.result(s.namespace, p.TaskName)
 	if !ok {
-		return preparedPatch{reason: "analysis Task produced no readable result"}
+		return preparedPatch{reason: "analysis Task result is not readable yet", retry: true}
 	}
-	parsed, ok := parseAnalysis(result)
-	if !ok {
-		return preparedPatch{reason: "analysis Task produced no parseable result"}
+	parsed, err := parseAnalysis(result)
+	if err != nil {
+		return preparedPatch{reason: "analysis Task produced an invalid result: " + oneLine(err.Error())}
 	}
-	return preparedPatch{analysis: &parsed}
+	telemetry, err := s.client.analysisTelemetry(context.Background(), s.namespace, p.TaskName)
+	if err != nil {
+		return preparedPatch{reason: "analysis Task telemetry unavailable: " + oneLine(err.Error()), retry: true}
+	}
+	if err := validateAnalysisAcceptance(parsed, telemetry, manifest.MinToolCalls); err != nil {
+		return preparedPatch{reason: "analysis Task failed acceptance: " + oneLine(err.Error())}
+	}
+	return preparedPatch{analysis: &parsed, telemetry: telemetry, model: manifest.Model, contractHash: manifest.ContractHash}
 }
 
 func (s *webhookServer) rebuildIndex() {
@@ -476,7 +524,6 @@ func (s *webhookServer) rebuildIndex() {
 		return
 	}
 	s.manifest = manifest
-	s.model = manifest.Model
 	s.index = map[string]string{}
 	jobFiles, _ := filepath.Glob(filepath.Join(s.dataDir, "jobs", "*.json"))
 	for _, jf := range jobFiles {
@@ -547,11 +594,11 @@ func (s *webhookServer) patchTask(p webhookPayload, patch preparedPatch) {
 }
 
 func (s *webhookServer) applyPrepared(tc *models.TestCase, patch preparedPatch) bool {
-	if tc.AIAnalysis != nil && tc.AIAnalysis.ContractHash == s.manifest.ContractHash {
+	if tc.AIAnalysis != nil && tc.AIAnalysis.ContractHash == patch.contractHash {
 		return false
 	}
 	if patch.analysis != nil {
-		applyParsedAnalysis(tc, *patch.analysis, s.model, s.manifest.ContractHash)
+		applyParsedAnalysis(tc, *patch.analysis, patch.telemetry, patch.model, patch.contractHash)
 		return true
 	}
 	tc.AISummary = nil
@@ -561,16 +608,16 @@ func (s *webhookServer) applyPrepared(tc *models.TestCase, patch preparedPatch) 
 
 // analysis is the model's output JSON shape.
 type analysis struct {
+	Summary       string   `json:"summary"`
 	RootCause     string   `json:"root_cause"`
 	Severity      string   `json:"severity"`
-	IsTransient   bool     `json:"is_transient"`
+	IsTransient   *bool    `json:"is_transient"`
 	SuggestedFix  string   `json:"suggested_fix"`
 	RelevantFiles []string `json:"relevant_files"`
 }
 
-// parseAnalysis extracts the last balanced JSON object containing an analysis
-// from the model's (possibly prose-wrapped) result text.
-func parseAnalysis(text string) (analysis, bool) {
+// parseAnalysis extracts and validates the last analysis-shaped JSON object.
+func parseAnalysis(text string) (analysis, error) {
 	var best analysis
 	found := false
 	depth, start := 0, -1
@@ -586,14 +633,61 @@ func parseAnalysis(text string) (analysis, bool) {
 				depth--
 				if depth == 0 && start >= 0 {
 					var a analysis
-					if json.Unmarshal([]byte(text[start:i+1]), &a) == nil && (a.RootCause != "" || a.Severity != "") {
+					if json.Unmarshal([]byte(text[start:i+1]), &a) == nil && (a.RootCause != "" || a.Severity != "" || a.Summary != "") {
 						best, found = a, true
 					}
 				}
 			}
 		}
 	}
-	return best, found
+	if !found {
+		return analysis{}, fmt.Errorf("no analysis JSON object found")
+	}
+	if err := validateAnalysisShape(best); err != nil {
+		return analysis{}, err
+	}
+	return best, nil
+}
+
+func validateAnalysisShape(a analysis) error {
+	if strings.TrimSpace(a.Summary) == "" {
+		return fmt.Errorf("summary is required")
+	}
+	if strings.TrimSpace(a.RootCause) == "" {
+		return fmt.Errorf("root_cause is required")
+	}
+	if a.IsTransient == nil {
+		return fmt.Errorf("is_transient is required")
+	}
+	switch strings.ToLower(strings.TrimSpace(a.Severity)) {
+	case "critical", "high", "medium", "low":
+	default:
+		return fmt.Errorf("severity %q is invalid", a.Severity)
+	}
+	if strings.TrimSpace(a.SuggestedFix) == "" {
+		return fmt.Errorf("suggested_fix is required")
+	}
+	return nil
+}
+
+func validateAnalysisAcceptance(a analysis, telemetry analysisTelemetry, minToolCalls int) error {
+	if telemetry.EventCount == 0 {
+		return fmt.Errorf("execution event stream is empty")
+	}
+	if telemetry.ToolCalls < minToolCalls {
+		return fmt.Errorf("only %d tool call(s), need at least %d", telemetry.ToolCalls, minToolCalls)
+	}
+	if !telemetry.ValidationPassed {
+		return fmt.Errorf("analysis did not successfully complete validate_analysis")
+	}
+	if *a.IsTransient && !telemetry.TimelineVerified {
+		return fmt.Errorf("transient verdict did not complete verify_timeline")
+	}
+	return nil
+}
+
+func oneLine(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 type orkaClient struct {

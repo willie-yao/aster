@@ -36,6 +36,9 @@ cheap-model path; do not decommission. Convergence and discipline numbers are in
 
 ## Known constraints
 
+- **Execution events are required.** The ingestor reads each Task's event stream
+  to enforce the tool-call floor, `validate_analysis`, and transient timeline
+  evidence before publishing a result.
 - **Scheduled pattern issues and fix PRs are not finalized yet.** The batch
   ingestor now writes job-level recurring patterns for the dashboard and
   interactive server actions, but the fetcher's unattended issue/fix-PR side

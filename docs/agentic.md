@@ -95,10 +95,10 @@ the GCS fetch ceiling) are **not** configurable: the first two auto-size from
 the endpoint's context window and the GCS ceiling is a fixed engine safety cap
 (see [Automatic budget sizing](#automatic-budget-sizing)).
 
-> These knobs govern the in-process backend. On the Orka backend they are inert:
-> only `ai.tools`, the `storage` block, and the display id are read from
-> `project.yaml`, while `max_iters`, the floors, `critique.*`, and `evidence.*`
-> live in the ai-worker patches and shim tools instead. See
+> These knobs govern the in-process backend. On the Orka backend only
+> `ai.tools`, `ai.min_tool_calls`, the `storage` block, and the display id are
+> read from `project.yaml`; `max_iters`, `min_gcs_bytes`, `critique.*`, and
+> `evidence.*` live in the ai-worker patches and shim tools instead. See
 > [In-process and Orka backends](#in-process-and-orka-backends).
 
 ### `max_iters`
@@ -622,7 +622,12 @@ private `orka_analysis.json` manifest carries the producer identity contract to
 the ingestor and is never served or published. Ingested analyses store that
 contract hash, so cached job JSON is refreshed whenever the current contract
 changes. Tool resources use a contract-versioned scope as well, preventing an
-old Task from observing a newly applied Tool definition.
+old Task from observing a newly applied Tool definition. Before publishing a
+result, the ingestor reads Orka's durable execution events, enforces the JSON
+schema and `min_tool_calls`, requires a successful `validate_analysis` call, and
+requires a completed `verify_timeline` call for every transient verdict.
+Accepted analyses publish Tool-call count, duration, provider token usage, and
+quality-tool evidence alongside the result.
 
 ### Pattern analysis
 

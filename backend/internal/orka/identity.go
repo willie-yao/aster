@@ -21,6 +21,7 @@ type AnalysisContract struct {
 	Version      string         `json:"version"`
 	Timeout      string         `json:"timeout"`
 	Retries      int            `json:"retries"`
+	MinToolCalls int            `json:"min_tool_calls"`
 	SystemPrompt string         `json:"system_prompt"`
 	Tools        []ToolContract `json:"tools"`
 }

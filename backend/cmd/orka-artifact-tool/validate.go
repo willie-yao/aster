@@ -46,11 +46,17 @@ func validateAnalysis(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 			present = append(present, p)
 		}
 	}
-	log.Printf("✔ validate_analysis paths=%d present=%d missing=%d", len(args.Paths), len(present), len(missing))
-	writeJSON(w, map[string]any{
+	result := map[string]any{
 		"checked":     len(present) + len(missing),
 		"present":     present,
 		"missing":     missing,
 		"all_present": len(missing) == 0,
-	})
+	}
+	if len(missing) > 0 {
+		log.Printf("⚠ validate_analysis paths=%d present=%d missing=%d", len(args.Paths), len(present), len(missing))
+		writeJSONStatus(w, http.StatusUnprocessableEntity, result)
+		return
+	}
+	log.Printf("✔ validate_analysis paths=%d present=%d missing=0", len(args.Paths), len(present))
+	writeJSON(w, result)
 }

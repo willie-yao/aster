@@ -94,7 +94,7 @@ func main() {
 	model := flag.String("model", "claude-sonnet-4.5", "model id")
 	version := flag.String("version", "v1", "manual cache-bust version included in the automatic analysis fingerprint")
 	timeout := flag.String("timeout", "10m", "per-Task timeout")
-	toolsCSV := flag.String("tools", "", "override the comma-separated base Tool names (default: derive from the consumer's project.yaml ai.tools + quality tools)")
+	toolsCSV := flag.String("tools", "", "override comma-separated analysis Tool names; mandatory quality tools are still appended")
 	bucketFlag := flag.String("bucket", "", "GCS bucket routed to the shim via the X-Bucket header (default: the consumer's storage.bucket)")
 	retries := flag.Int("retries", 1, "Task retryPolicy maxRetries for transient model/tool errors")
 	webhookURL := flag.String("webhook-url", "", "Task webhookURL for event-driven ingestion (must be a same-namespace ClusterIP service, e.g. http://orka-ingestor.orka-system.svc:8080/webhook)")
@@ -107,10 +107,10 @@ func main() {
 		log.Fatalf("load project %s: %v", *projectDir, err)
 	}
 
-	toolNames, k8sEnabled := resolveTools(cfg.AI.EffectiveAgentic().Tools)
+	agentic := cfg.AI.EffectiveAgentic()
+	toolNames, k8sEnabled := resolveTools(agentic.Tools)
 	if *toolsCSV != "" {
-		toolNames = splitCSV(*toolsCSV)
-		k8sEnabled = hasK8sTool(toolNames)
+		toolNames, k8sEnabled = resolveTools(splitCSV(*toolsCSV))
 	}
 	systemPrompt := ai.ComposeSystemPrompt(addendum) + toolUsageAddendum(k8sEnabled)
 
@@ -146,7 +146,7 @@ func main() {
 	}
 	contractHash, err := orka.AnalysisContractHash(orka.AnalysisContract{
 		Provider: *provider, Model: *model, Version: *version,
-		Timeout: *timeout, Retries: *retries, SystemPrompt: systemPrompt,
+		Timeout: *timeout, Retries: *retries, MinToolCalls: agentic.MinToolCalls, SystemPrompt: systemPrompt,
 		Tools: toolContracts,
 	})
 	if err != nil {
@@ -154,7 +154,7 @@ func main() {
 	}
 	storageCfg := cfg.StorageConfig()
 	projectScope := orka.ProjectScopeID(cfg.ID, string(storageCfg.Provider), bucket, storageCfg.Base, storageCfg.WebBase, storageCfg.ProwBase)
-	manifest := orka.NewAnalysisManifest(projectScope, projectLabel, contractHash, *provider, *model, *version)
+	manifest := orka.NewAnalysisManifest(projectScope, projectLabel, contractHash, *provider, *model, *version, agentic.MinToolCalls)
 	activeJobs, err := orka.ActiveJobIDs(*dataDir)
 	if err != nil {
 		log.Fatalf("load active jobs: %v", err)
@@ -399,19 +399,6 @@ func cloneToolForBuild(base map[string]any, baseName, buildScope, prefix, bucket
 		headers[k] = v
 	}
 	return doc
-}
-
-// hasK8sTool reports whether an explicit tool list includes any CAPZ-style
-// cluster navigation tool, so the cluster prompt guidance can be gated.
-func hasK8sTool(names []string) bool {
-	for _, n := range names {
-		for _, k := range engineToolGroups["k8s"] {
-			if n == k {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // buildPrefixFor returns the bucket-relative build directory. It prefers deriving

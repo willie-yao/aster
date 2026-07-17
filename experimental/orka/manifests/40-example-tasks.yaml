@@ -96,7 +96,7 @@ spec:
       artifacts/clusters/<cluster>/azure-activity-logs/<cluster>.log. Be decisive:
       once you have the activity-log evidence, STOP and write your JSON answer.
       Respond with ONLY:
-      {"root_cause":"...","severity":"<Low|Medium|High>","is_transient":<true|false>,"suggested_fix":"...","relevant_files":["..."]}
+      {"summary":"...","root_cause":"...","severity":"<Low|Medium|High|Critical>","is_transient":<true|false>,"suggested_fix":"...","relevant_files":["..."]}
     prompt: |
       This CAPZ E2E test FAILED. Determine the root cause and classify transient vs bug.
       Failed test: [It] Workload cluster creation Creating a highly available cluster

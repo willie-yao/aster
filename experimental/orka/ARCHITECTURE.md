@@ -113,7 +113,13 @@ then patches the result in place. `applyResult` fetches the
 Task's result, parses the analysis JSON, and writes `tc.AISummary` +
 `tc.AIAnalysis` with `Mode: "agentic"`, the same wire shape the in-process path
 produces. Each analysis stores the contract hash, so a cached result is reused
-only while it matches the current producer manifest. Failing/absent results get the engine's `unavailable` placeholder via
+only while it matches the current producer manifest. The ingestor also reads the
+Task's durable execution-event stream. It rejects incomplete response schemas,
+analyses below `ai.min_tool_calls`, results without a completed
+`validate_analysis` call, and transient verdicts without a successful
+`verify_timeline` call. Accepted results carry Tool-call, elapsed-time, token,
+and quality-tool telemetry. Failing/absent results get the engine's `unavailable`
+placeholder via
 `setUnavailable`, mirroring `internal/ai/service.go`.
 
 Two ingest modes:
@@ -154,7 +160,8 @@ reconstructed out of Kubernetes objects and deterministic tool endpoints:
 | Prompt composition (BasePrompt + system.md + footer) | The producer calls the same `ai.ComposeSystemPrompt` and appends a tool-usage/self-critique addendum. | `toolUsageAddendum` |
 | Convergence (loop always yields a final verdict) | Worker patches: forced tools-free finalization near the budget + re-prompt on an empty final message. | `worker-patches/` (2,3) |
 | Critique gate: hallucinated-citation guard | `validate_analysis` tool deterministically 1-byte-reads every cited path against the build tree. | `orka-artifact-tool/validate.go` |
-| Critique gate: transient discipline | Worker re-prompts an `is_transient=true` that never called `verify_timeline`, per the engine's confirm-or-default-to-bug contract. | `worker-patches/` (4) + `timeline.go` |
+| Critique gate: transient discipline | The worker re-prompts an unsupported transient verdict, and the ingestor independently rejects any final transient result without a completed `verify_timeline` event. | `worker-patches/` (4), `timeline.go`, ingestor event acceptance |
+| Investigation floor | The producer fingerprints `ai.min_tool_calls`; the ingestor counts `ToolCallStarted` events and rejects shallower results. | `AnalysisManifest.MinToolCalls`, Task events API |
 | Per-test recurrence evidence | `check_recurrence` reports whether one test recurs across recent builds. | `orka-artifact-tool/recurrence.go` |
 | Job-level cross-build correlation | After per-test ingestion, one content-addressed pattern Task correlates representative failures and writes `PatternAnalysis` + recurring patterns. | `orka-ingestor` + `orka.FinalizePatterns` |
 | Skill-driven required evidence | `required_evidence` tool returns the must-read artifacts for a failure class. | `orka-artifact-tool/requiredevidence.go` |
@@ -179,11 +186,12 @@ for Claude, so `manifests/50-copilot-proxy.yaml` de-streams and injects the
 ## Consumer-driven, multi-consumer
 
 The producer reads the tool, storage, and id fields from a consumer's
-`project.yaml`: `ai.tools` (via `resolveTools`), the `storage`
+`project.yaml`: `ai.tools` and `ai.min_tool_calls` (via `resolveTools` and the
+acceptance manifest), the `storage`
 block (`bucket` + `provider`/`base`/`prow_base`), and the display id. Tool
 selection, bucket + provider routing, and the prompt all follow from those, so
 the same binaries serve CAPZ (`kubernetes-ci-logs` on GCS, cluster-per-test,
 `k8s` tools) and a project on an S3-backed Prow behind gcsweb (`filesystem` only)
-unchanged. Every other `ai.*` knob (`max_iters`, `min_tool_calls`, `critique.*`,
+unchanged. Every other `ai.*` knob (`max_iters`, `min_gcs_bytes`, `critique.*`,
 `evidence.*`) is engine-only and inert on this path: it lives in the worker
 patches and the shim tools, not in `project.yaml`.

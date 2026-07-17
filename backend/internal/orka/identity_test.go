@@ -9,7 +9,7 @@ import (
 
 func TestAnalysisContractHashTracksSemanticInputs(t *testing.T) {
 	base := AnalysisContract{
-		Provider: "models", Model: "model-a", Version: "v1", Timeout: "10m", Retries: 1,
+		Provider: "models", Model: "model-a", Version: "v1", Timeout: "10m", Retries: 1, MinToolCalls: 2,
 		SystemPrompt: "system", Tools: []ToolContract{{Name: "read", Definition: map[string]any{"description": "read files"}}},
 	}
 	first, err := AnalysisContractHash(base)
@@ -23,12 +23,13 @@ func TestAnalysisContractHashTracksSemanticInputs(t *testing.T) {
 	if first != second {
 		t.Fatalf("contract hashes differ: %q != %q", first, second)
 	}
-	changes := []AnalysisContract{base, base, base, base, base}
+	changes := []AnalysisContract{base, base, base, base, base, base}
 	changes[0].Model = "model-b"
 	changes[1].Version = "v2"
 	changes[2].Timeout = "20m"
 	changes[3].SystemPrompt = "changed"
 	changes[4].Tools = []ToolContract{{Name: "read", Definition: map[string]any{"description": "changed"}}}
+	changes[5].MinToolCalls = 3
 	for i, changed := range changes {
 		got, err := AnalysisContractHash(changed)
 		if err != nil {

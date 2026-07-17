@@ -111,11 +111,19 @@ type AIAnalysis struct {
 	GCSBytes int `json:"gcs_bytes,omitempty"`
 	// ElapsedMs is the wall-clock duration of the analysis in milliseconds.
 	ElapsedMs int `json:"elapsed_ms,omitempty"`
+	// InputTokens and OutputTokens are provider-reported usage totals when the
+	// backend exposes them.
+	InputTokens  int `json:"input_tokens,omitempty"`
+	OutputTokens int `json:"output_tokens,omitempty"`
 	// CacheHit reports whether the analysis was served from the AI cache.
 	CacheHit bool `json:"cache_hit,omitempty"`
 	// BudgetExhausted reports whether the agentic loop hit one of its
 	// budget caps and was forced to finalize on best-effort evidence.
 	BudgetExhausted bool `json:"budget_exhausted,omitempty"`
+	// TimelineVerified and ArtifactPathsValidated record deterministic Orka
+	// quality-tool evidence used by the result acceptance gate.
+	TimelineVerified       bool `json:"timeline_verified,omitempty"`
+	ArtifactPathsValidated bool `json:"artifact_paths_validated,omitempty"`
 
 	// CritiquePassed reports whether this analysis cleared the critique gate.
 	CritiquePassed bool `json:"critique_passed,omitempty"`

@@ -22,6 +22,17 @@ func TestResolveToolsIncludesQualityTools(t *testing.T) {
 	}
 }
 
+func TestResolveToolsKeepsQualityToolsForExplicitNames(t *testing.T) {
+	names, _ := resolveTools([]string{"read-artifact"})
+	seen := map[string]bool{}
+	for _, name := range names {
+		seen[name] = true
+	}
+	if !seen["read-artifact"] || !seen["validate-analysis"] || !seen["verify-timeline"] {
+		t.Fatalf("resolved tools = %v, want explicit and mandatory quality tools", names)
+	}
+}
+
 func TestBuildToolNameSeparatesConsumerScopes(t *testing.T) {
 	projectA := orka.ProjectScopeID("a", "gcs", "bucket", "", "", "")
 	projectB := orka.ProjectScopeID("b", "gcs", "bucket", "", "", "")

@@ -74,8 +74,12 @@ export interface AIAnalysis {
   context_bytes?: number;
   gcs_bytes?: number;
   elapsed_ms?: number;
+  input_tokens?: number;
+  output_tokens?: number;
   cache_hit?: boolean;
   budget_exhausted?: boolean;
+  timeline_verified?: boolean;
+  artifact_paths_validated?: boolean;
 }
 
 export interface ClusterArtifacts {

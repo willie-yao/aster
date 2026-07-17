@@ -152,8 +152,8 @@ Azure `api-key`, need a trusted proxy or a customized deployment that injects th
 header without storing it in public YAML. See [AI providers](ai-providers.md).
 
 The in-process loop reads all fields above. The experimental Orka backend reads
-only the project id, prompt, storage settings, and `ai.tools`; its execution
-settings live under Helm `orka.*` values.
+the project id, prompt, storage settings, `ai.tools`, and `ai.min_tool_calls`;
+its other execution settings live under Helm `orka.*` values.
 
 ## Skills
 

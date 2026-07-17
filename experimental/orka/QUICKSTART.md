@@ -240,18 +240,19 @@ and `71-ingestor-webhook.yaml`.
 
 ## Configuration the Orka path reads
 
-The Orka path reads only the storage, tool, and id fields from the consumer's
+The Orka path reads the storage, tool, investigation-floor, and id fields from the consumer's
 `project.yaml`:
 
 | Field | Used for |
 |---|---|
 | `ai.tools` | which tool groups to enable (`filesystem`, `k8s`); default `[filesystem, k8s]` |
+| `ai.min_tool_calls` | minimum recorded Orka tool calls before a result is accepted; default `2` |
 | `storage.bucket` | the bucket, routed to the shim via the `X-Bucket` header |
 | `storage.provider` / `storage.base` / `storage.prow_base` | the storage backend (gcs or gcsweb/S3), routed via `X-Storage-*` headers so the shim reads the right provider |
 | `id` / `short_name` | the project label in the prompt |
 
 Everything else under `ai:` is engine-only and has no effect on the Orka path:
-`ai.concurrency`, `ai.timeout`, `ai.max_iters`, `ai.min_tool_calls`,
+`ai.concurrency`, `ai.timeout`, `ai.max_iters`,
 `ai.min_gcs_bytes`, `ai.single_tool_call`, and `ai.critique.*`.
 `prompts/system.md` is
 composed into the Task's system prompt exactly as in the engine.
@@ -292,6 +293,10 @@ kubectl logs -n orka-system job/orka-run-1 -c ingest | tail
   `Failed`/`Cancelled`/missing Task, not a silent blank. Inspect that Task, fix the
   cause. Fix the dependency or bump the version when retrying an external
   semantic change.
+- **`AI analysis unavailable: analysis Task telemetry unavailable`.** The
+  ingestor requires Orka execution-event storage to enforce tool-call and
+  timeline gates. Verify the controller event store and Task events API are
+  enabled and reachable by the pipeline ServiceAccount.
 - **`ImagePullBackOff` on an orka-* image.** The GHCR package is not pullable from
   the cluster. Make it public or add an `imagePullSecret`, or build locally and
   override the image (see [Local build](#local-build-for-kind)).

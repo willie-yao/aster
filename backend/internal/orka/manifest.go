@@ -24,6 +24,7 @@ type AnalysisManifest struct {
 	Provider      string                   `json:"provider"`
 	Model         string                   `json:"model"`
 	Version       string                   `json:"version"`
+	MinToolCalls  int                      `json:"min_tool_calls"`
 	Jobs          map[string]bool          `json:"jobs"`
 	Builds        map[string]AnalysisBuild `json:"builds"`
 }
@@ -43,7 +44,7 @@ type AnalysisTaskRef struct {
 }
 
 // NewAnalysisManifest constructs an empty manifest for one producer pass.
-func NewAnalysisManifest(projectScope, projectLabel, contractHash, provider, model, version string) *AnalysisManifest {
+func NewAnalysisManifest(projectScope, projectLabel, contractHash, provider, model, version string, minToolCalls int) *AnalysisManifest {
 	return &AnalysisManifest{
 		SchemaVersion: analysisManifestVersion,
 		ProjectScope:  projectScope,
@@ -52,6 +53,7 @@ func NewAnalysisManifest(projectScope, projectLabel, contractHash, provider, mod
 		Provider:      provider,
 		Model:         model,
 		Version:       version,
+		MinToolCalls:  minToolCalls,
 		Jobs:          map[string]bool{},
 		Builds:        map[string]AnalysisBuild{},
 	}
@@ -112,6 +114,9 @@ func (m *AnalysisManifest) Validate() error {
 	}
 	if m.Jobs == nil || m.Builds == nil {
 		return fmt.Errorf("orka analysis manifest has no jobs or builds map")
+	}
+	if m.MinToolCalls < 0 {
+		return fmt.Errorf("orka analysis manifest min_tool_calls must be non-negative")
 	}
 	return nil
 }

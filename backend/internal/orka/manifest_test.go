@@ -7,7 +7,7 @@ import (
 )
 
 func TestAnalysisManifestRoundTripAndTaskIdentity(t *testing.T) {
-	manifest := NewAnalysisManifest("project", "Project", "contract", "models", "model", "v1")
+	manifest := NewAnalysisManifest("project", "Project", "contract", "models", "model", "v1", 2)
 	manifest.SetBuild("job", "1", "build-scope", "tool-scope", "logs/job/1/")
 	run := models.BuildResult{BuildInfo: models.BuildInfo{BuildID: "1"}}
 	tc := models.TestCase{Name: "test", JUnitFile: "junit.xml", FailureMessage: "boom"}
@@ -38,7 +38,7 @@ func TestAnalysisManifestRoundTripAndTaskIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != first || !loaded.Jobs["job"] {
-		t.Fatalf("loaded task ref = %+v, jobs = %+v", got, loaded.Jobs)
+	if got != first || !loaded.Jobs["job"] || loaded.MinToolCalls != 2 {
+		t.Fatalf("loaded task ref = %+v, jobs = %+v, min_tool_calls = %d", got, loaded.Jobs, loaded.MinToolCalls)
 	}
 }
