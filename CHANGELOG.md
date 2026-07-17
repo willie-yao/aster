@@ -27,7 +27,8 @@ for how to pin a release.
   passwords are supplied through the `EMAIL_SMTP_PASSWORD` deployment secret;
   STARTTLS is the default transport. Kubernetes-native deployments can opt into
   inert email links that open the authenticated issue or fix preview flow for
-  systemic recurring patterns.
+  systemic recurring patterns. Draft generation can run asynchronously with
+  persisted 24-hour review requests and draft-ready email links.
 
 ### Changed
 

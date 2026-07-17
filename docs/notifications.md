@@ -69,8 +69,10 @@ data.
 
 Opening a link performs an inert GET. After GitHub OAuth or proxy authentication,
 the dashboard shows a second **Generate draft** prompt. Only that explicit click
-starts the preview POST. The maintainer then reviews the exact issue or diff and
-must confirm it before the dashboard writes to GitHub.
+creates a persistent asynchronous request. The user can leave the page while the
+server generates the draft. When server-side SMTP is configured, the dashboard
+emails a draft-ready review link. The requesting maintainer signs in, reviews the
+exact issue or diff, and confirms it before the dashboard writes to GitHub.
 
 This extra step is intentional. Email security scanners and forwarded messages
 must not be able to start generation or create an issue or PR merely by opening
@@ -125,8 +127,8 @@ password secret.
 
 ## Kubernetes-native deployment
 
-Store the password in a Kubernetes Secret and expose it only to the fetcher or
-worker:
+Store the password in a Kubernetes Secret. Expose it to the fetcher or worker
+for scheduled alerts, and to the server for asynchronous draft-ready emails:
 
 ```bash
 kubectl -n dashboards create secret generic capz-smtp \
@@ -135,16 +137,20 @@ kubectl -n dashboards create secret generic capz-smtp \
 
 ```yaml
 fetcher:
-  extraEnv:
+  extraEnv: &smtpEnv
     - name: EMAIL_SMTP_PASSWORD
       valueFrom:
         secretKeyRef:
           name: capz-smtp
           key: password
+server:
+  extraEnv: *smtpEnv
 ```
 
-The server does not send scheduled notifications. The fetcher CronJob or watch
-worker sends them during full passes.
+The fetcher sends scheduled failure alerts. The server sends draft-ready emails
+for asynchronous action requests. Ready requests and their exact reviewed drafts
+are persisted in non-public `action_request_state.json` for 24 hours. Pending
+requests interrupted by a server restart are marked failed and can be recreated.
 
 ## State and retry behavior
 

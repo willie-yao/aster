@@ -14,7 +14,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const mode = auth?.mode ?? null;
   const loginUrl = auth?.login_url;
 
-  const [oauth, setOAuth] = useState<{ status: "loading" | "anonymous" | "authenticated"; login: string | null }>({
+  const [oauth, setOAuth] = useState<{
+    status: "loading" | "anonymous" | "authenticated";
+    login: string | null;
+  }>({
     status: "loading",
     login: null,
   });
@@ -25,7 +28,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     fetch(`${API_BASE}api/auth/user`, { credentials: "same-origin" })
       .then((r) => (r.ok ? (r.json() as Promise<{ login: string }>) : null))
       .then((u) => {
-        if (!cancelled) setOAuth({ status: u ? "authenticated" : "anonymous", login: u?.login ?? null });
+        if (!cancelled)
+          setOAuth({
+            status: u ? "authenticated" : "anonymous",
+            login: u?.login ?? null,
+          });
       })
       .catch(() => {
         if (!cancelled) setOAuth({ status: "anonymous", login: null });
@@ -38,12 +45,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signIn = useCallback(() => {
     const base = loginUrl ?? `${API_BASE}api/auth/login`;
     // Return to the current page after signing in.
-    const here = window.location.pathname + window.location.search + window.location.hash;
+    const here =
+      window.location.pathname + window.location.search + window.location.hash;
     window.location.href = `${base}?redirect=${encodeURIComponent(here)}`;
   }, [loginUrl]);
 
   const signOut = useCallback(async () => {
-    await fetch(`${API_BASE}api/auth/logout`, { method: "POST", credentials: "same-origin" });
+    await fetch(`${API_BASE}api/auth/logout`, {
+      method: "POST",
+      credentials: "same-origin",
+    });
     setOAuth({ status: "anonymous", login: null });
   }, []);
 

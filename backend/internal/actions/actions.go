@@ -50,7 +50,7 @@ type AIConfig struct {
 // is passed back to Confirm to file the exact previewed issue or open the exact
 // previewed PR. Diff is set for fixes only.
 type PreviewResult struct {
-	Token string `json:"token"`
+	Token string `json:"token,omitempty"`
 	Kind  string `json:"kind"` // "issue" | "fix"
 	Title string `json:"title"`
 	Body  string `json:"body"`
@@ -88,12 +88,25 @@ type Service struct {
 
 	pmu      sync.Mutex
 	previews map[string]*previewEntry
+
+	rmu             sync.Mutex
+	requests        *actionRequestState
+	requestTimeout  time.Duration
+	requestNotify   RequestReadyNotifier
+	requestCancels  map[string]context.CancelFunc
+	requestConfirms map[string]struct{}
 }
 
 // NewService builds a Service. dataDir is the fetcher output directory holding
 // jobs/*.json and the *_state.json files.
 func NewService(cfg *project.Config, dataDir string, ai AIConfig) *Service {
-	return &Service{cfg: cfg, dataDir: dataDir, ai: ai, previews: map[string]*previewEntry{}}
+	s := &Service{
+		cfg: cfg, dataDir: dataDir, ai: ai,
+		previews: map[string]*previewEntry{}, requestCancels: map[string]context.CancelFunc{}, requestConfirms: map[string]struct{}{},
+		requestTimeout: defaultRequestTimeout,
+	}
+	s.loadActionRequests()
+	return s
 }
 
 // aiClient returns a chat client when AI is fully configured, else a nil
@@ -245,16 +258,12 @@ func (s *Service) buildFixManager(userToken string) (*fixpr.Manager, error) {
 	return mgr, nil
 }
 
-// PreviewIssue renders the exact issue that would be filed for the failure,
-// without filing it, and caches it for confirmation. instruction is an optional
-// maintainer directive that revises the draft body.
-func (s *Service) PreviewIssue(ctx context.Context, failureID, userToken, instruction string) (PreviewResult, error) {
+// generateIssuePreview renders an issue draft without caching or posting it.
+func (s *Service) generateIssuePreview(ctx context.Context, failureID, userToken, instruction string) (PreviewResult, *previewEntry, error) {
 	spec, _, err := s.buildIssueSpec(failureID)
 	if err != nil {
-		return PreviewResult{}, err
+		return PreviewResult{}, nil, err
 	}
-	// Reformat to follow the target repo's issue template when AI is available;
-	// a nil filler leaves the default body untouched.
 	var filler issues.TemplateFiller
 	if c := s.aiCompleter(); c != nil {
 		eff := s.cfg.EffectiveIssues()
@@ -267,50 +276,72 @@ func (s *Service) PreviewIssue(ctx context.Context, failureID, userToken, instru
 			final = issues.ReviseBody(ctx, c, final, instruction)
 		}
 	}
-	token, err := s.stash(userToken, &previewEntry{kind: "issue", spec: final})
+	return PreviewResult{Kind: "issue", Title: final.Title, Body: final.Body},
+		&previewEntry{kind: "issue", spec: final}, nil
+}
+
+// PreviewIssue renders the exact issue that would be filed for the failure,
+// without filing it, and caches it for confirmation.
+func (s *Service) PreviewIssue(ctx context.Context, failureID, userToken, instruction string) (PreviewResult, error) {
+	preview, entry, err := s.generateIssuePreview(ctx, failureID, userToken, instruction)
 	if err != nil {
 		return PreviewResult{}, err
 	}
-	return PreviewResult{Token: token, Kind: "issue", Title: final.Title, Body: final.Body}, nil
-}
-
-// PreviewFix generates the fix and renders the exact PR that would be opened,
-// without opening it, and caches it for confirmation. instruction is an
-// optional maintainer directive that steers the edit.
-func (s *Service) PreviewFix(ctx context.Context, failureID, userToken, instruction string) (PreviewResult, error) {
-	pa, err := s.findPattern(failureID)
+	token, err := s.stash(userToken, entry)
 	if err != nil {
 		return PreviewResult{}, err
+	}
+	preview.Token = token
+	return preview, nil
+}
+
+// generateFixPreview creates a fix draft without caching or opening it.
+func (s *Service) generateFixPreview(ctx context.Context, failureID, userToken, instruction string) (PreviewResult, *previewEntry, error) {
+	pa, err := s.findPattern(failureID)
+	if err != nil {
+		return PreviewResult{}, nil, err
 	}
 	mgr, err := s.buildFixManager(userToken)
 	if err != nil {
-		return PreviewResult{}, err
+		return PreviewResult{}, nil, err
 	}
 	gf, err := mgr.GeneratePreview(ctx, *pa, instruction)
 	if err != nil {
-		return PreviewResult{}, fmt.Errorf("%s", safeReason(err.Error()))
+		return PreviewResult{}, nil, fmt.Errorf("%s", safeReason(err.Error()))
 	}
-	token, err := s.stash(userToken, &previewEntry{kind: "fix", fix: gf})
+	return PreviewResult{
+		Kind: gfKind, Title: gf.Title, Body: gf.Description, Diff: gf.Preview.Diff,
+		VerifyStatus: string(gf.Preview.Verify.Status), VerifySummary: gf.Preview.Verify.Summary,
+		VerifyOutput: gf.Preview.Verify.Output,
+	}, &previewEntry{kind: gfKind, fix: gf}, nil
+}
+
+const gfKind = "fix"
+
+// PreviewFix generates the exact fix PR preview and caches it for confirmation.
+func (s *Service) PreviewFix(ctx context.Context, failureID, userToken, instruction string) (PreviewResult, error) {
+	preview, entry, err := s.generateFixPreview(ctx, failureID, userToken, instruction)
 	if err != nil {
 		return PreviewResult{}, err
 	}
-	return PreviewResult{
-		Token: token, Kind: "fix", Title: gf.Title,
-		Body: gf.Description, Diff: gf.Preview.Diff,
-		VerifyStatus:  string(gf.Preview.Verify.Status),
-		VerifySummary: gf.Preview.Verify.Summary,
-		VerifyOutput:  gf.Preview.Verify.Output,
-	}, nil
+	token, err := s.stash(userToken, entry)
+	if err != nil {
+		return PreviewResult{}, err
+	}
+	preview.Token = token
+	return preview, nil
 }
 
-// Confirm files the issue or opens the PR previously cached under token, using
-// userToken. It posts the exact previewed content and returns the created URL.
+// Confirm files the issue or opens the PR previously cached under token.
 func (s *Service) Confirm(ctx context.Context, token, userToken string) (string, error) {
 	entry, err := s.take(userToken, token)
 	if err != nil {
 		return "", err
 	}
+	return s.confirmEntry(ctx, entry, userToken)
+}
 
+func (s *Service) confirmEntry(ctx context.Context, entry *previewEntry, userToken string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -322,12 +353,7 @@ func (s *Service) Confirm(ctx context.Context, token, userToken string) (string,
 		}
 		client := issues.NewClient(userToken, eff.Repo.Owner, eff.Repo.Name)
 		targetRepo := eff.Repo.Owner + "/" + eff.Repo.Name
-		// The spec body was already rendered at preview time; a nil filler posts
-		// it verbatim. RecoverPrefixes is empty so a single create only files or
-		// adopts this one spec, never recovering other tracked issues.
-		mgr := issues.NewManager(client, filepath.Join(s.dataDir, "issue_state.json"), targetRepo, issues.Options{
-			MaxNewPerRun: 1,
-		})
+		mgr := issues.NewManager(client, filepath.Join(s.dataDir, "issue_state.json"), targetRepo, issues.Options{MaxNewPerRun: 1})
 		if _, err := mgr.Reconcile(ctx, []issues.IssueSpec{entry.spec}); err != nil {
 			return "", fmt.Errorf("filing issue: %w", err)
 		}
@@ -339,10 +365,7 @@ func (s *Service) Confirm(ctx context.Context, token, userToken string) (string,
 			return "", fmt.Errorf("issue was not filed")
 		}
 		return url, nil
-
-	case "fix":
-		// Rebuild the manager with userToken to open the previewed fix. State is
-		// loaded fresh so the open dedupes against any concurrent writer.
+	case gfKind:
 		mgr, err := s.buildFixManager(userToken)
 		if err != nil {
 			return "", err

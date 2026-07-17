@@ -24,6 +24,7 @@ var NonPublishedFiles = []string{
 	"fix_previews.json",
 	"notification_state.json",
 	"orka_analysis.json",
+	"action_request_state.json",
 }
 
 // writeJSON writes indented JSON to path atomically, creating parent

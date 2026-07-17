@@ -73,6 +73,7 @@ func TestHandler_HidesOperationalFiles(t *testing.T) {
 	writeFile(t, dataDir, "issue_state.json", `{"tracked":{}}`)
 	writeFile(t, dataDir, "fix_pr_state.json", `{"tracked":{}}`)
 	writeFile(t, dataDir, "orka_analysis.json", `{"contract_hash":"private"}`)
+	writeFile(t, dataDir, "action_request_state.json", `{"requests":{}}`)
 
 	h, err := Handler(Options{DataDir: dataDir, Capabilities: DefaultCapabilities()})
 	if err != nil {
@@ -85,7 +86,7 @@ func TestHandler_HidesOperationalFiles(t *testing.T) {
 	if resp, _ := http.Get(srv.URL + "/data/dashboard.json"); resp.StatusCode != http.StatusOK {
 		t.Errorf("dashboard.json status = %d, want 200", resp.StatusCode)
 	}
-	for _, name := range []string{"ai_cache.json", "issue_state.json", "fix_pr_state.json", "orka_analysis.json"} {
+	for _, name := range []string{"ai_cache.json", "issue_state.json", "fix_pr_state.json", "orka_analysis.json", "action_request_state.json"} {
 		resp, err := http.Get(srv.URL + "/data/" + name)
 		if err != nil {
 			t.Fatalf("GET %s: %v", name, err)
@@ -566,5 +567,99 @@ func TestTrustedOriginSet_NormalizesToHosts(t *testing.T) {
 	}
 	if len(set) != 2 {
 		t.Errorf("set size = %d, want 2 (%v)", len(set), set)
+	}
+}
+
+type fakeAsyncRunner struct {
+	fakeRunner
+	request actions.ActionRequestView
+}
+
+func (f *fakeAsyncRunner) CreateRequest(failureID, kind, login, userToken, instruction string) (actions.ActionRequestView, error) {
+	if failureID == "missing" {
+		return actions.ActionRequestView{}, actions.ErrNotFound
+	}
+	f.request = actions.ActionRequestView{ID: "request-1", FailureID: failureID, Kind: kind, Owner: login, Status: actions.RequestPending}
+	f.gotID, f.gotToken, f.gotInstruction = failureID, userToken, instruction
+	return f.request, nil
+}
+func (f *fakeAsyncRunner) GetRequest(id, login string) (actions.ActionRequestView, error) {
+	if id != f.request.ID || login != f.request.Owner {
+		return actions.ActionRequestView{}, actions.ErrRequestNotFound
+	}
+	return f.request, nil
+}
+func (f *fakeAsyncRunner) ConfirmRequest(_ context.Context, id, login, token string) (string, error) {
+	if id != f.request.ID || login != f.request.Owner {
+		return "", actions.ErrRequestNotFound
+	}
+	f.gotConfirmToken, f.gotToken = id, token
+	return "https://github.com/o/r/issues/1", nil
+}
+func (f *fakeAsyncRunner) CancelRequest(id, login string) error {
+	if id != f.request.ID || login != f.request.Owner {
+		return actions.ErrRequestNotFound
+	}
+	f.request.Status = actions.RequestCancelled
+	return nil
+}
+
+func TestHandler_AsyncActionRequestFlow(t *testing.T) {
+	dataDir := t.TempDir()
+	writeFile(t, dataDir, "manifest.json", `{}`)
+	runner := &fakeAsyncRunner{}
+	h, err := Handler(Options{DataDir: dataDir, Capabilities: DefaultCapabilities(), Auth: fakeAuth{}, Actions: runner, AuthMode: "dev"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	request := func(method, path, body string) *http.Response {
+		req, _ := http.NewRequest(method, srv.URL+path, strings.NewReader(body))
+		req.Header.Set("Authorization", "ok")
+		if body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+
+	created := request(http.MethodPost, "/api/failures/pattern-1/create-issue/requests", `{"instruction":"mention IPv6"}`)
+	if created.StatusCode != http.StatusAccepted {
+		t.Fatalf("create status=%d body=%s", created.StatusCode, readBody(t, created))
+	}
+	_ = created.Body.Close()
+	if runner.gotID != "pattern-1" || runner.gotInstruction != "mention IPv6" {
+		t.Fatalf("create got id=%q instruction=%q", runner.gotID, runner.gotInstruction)
+	}
+
+	got := request(http.MethodGet, "/api/action-requests/request-1", "")
+	if got.StatusCode != http.StatusOK {
+		t.Fatalf("get status=%d body=%s", got.StatusCode, readBody(t, got))
+	}
+	_ = got.Body.Close()
+
+	confirmed := request(http.MethodPost, "/api/action-requests/request-1/confirm", "")
+	if confirmed.StatusCode != http.StatusOK {
+		t.Fatalf("confirm status=%d body=%s", confirmed.StatusCode, readBody(t, confirmed))
+	}
+	_ = confirmed.Body.Close()
+
+	cancelled := request(http.MethodPost, "/api/action-requests/request-1/cancel", "")
+	if cancelled.StatusCode != http.StatusNoContent {
+		t.Fatalf("cancel status=%d body=%s", cancelled.StatusCode, readBody(t, cancelled))
+	}
+	_ = cancelled.Body.Close()
+
+	capsResp, _ := http.Get(srv.URL + "/api/capabilities")
+	var caps Capabilities
+	_ = json.NewDecoder(capsResp.Body).Decode(&caps)
+	_ = capsResp.Body.Close()
+	if !caps.Features.ActionRequests {
+		t.Fatalf("capabilities = %+v", caps)
 	}
 }

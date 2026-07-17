@@ -201,6 +201,11 @@ fetcher:
 # requires a custom server image with opencode and git. Register a GitHub OAuth
 # App (see deploy/README.md), then uncomment:
 # server:
+#   # Reuse the SMTP Secret here to email async draft-ready review links.
+#   # extraEnv:
+#   #   - name: EMAIL_SMTP_PASSWORD
+#   #     valueFrom:
+#   #       secretKeyRef: { name: {{.Namespace}}-smtp, key: password }
 #   actions:
 #     enabled: true
 #     mode: oauth

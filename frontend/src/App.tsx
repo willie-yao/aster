@@ -3,6 +3,7 @@ import { DashboardPage } from "./pages/DashboardPage";
 import { JobDetailPage } from "./pages/JobDetailPage";
 import { TestDetailPage } from "./pages/TestDetailPage";
 import { FlakinessPage } from "./pages/FlakinessPage";
+import { ActionRequestPage } from "./pages/ActionRequestPage";
 import { Layout } from "./components/Layout";
 import { ManifestProvider } from "./components/ManifestProvider";
 import { CapabilitiesProvider } from "./components/CapabilitiesProvider";
@@ -22,7 +23,14 @@ export default function App() {
                 <Route index element={<DashboardPage />} />
                 <Route path="flaky" element={<FlakinessPage />} />
                 <Route path="job/:jobName" element={<JobDetailPage />} />
-                <Route path="job/:jobName/test/:testName" element={<TestDetailPage />} />
+                <Route
+                  path="job/:jobName/test/:testName"
+                  element={<TestDetailPage />}
+                />
+                <Route
+                  path="action-request/:requestID"
+                  element={<ActionRequestPage />}
+                />
               </Route>
             </Routes>
           </BrowserRouter>

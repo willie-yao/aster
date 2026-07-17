@@ -32,6 +32,10 @@ backend choice.
 | `POST /api/failures/{id}/create-issue/preview` | Admin-gated: render the exact GitHub issue for one failure without filing it. Enabled only when actions are configured. |
 | `POST /api/failures/{id}/propose-fix/preview` | Admin-gated: generate and render the exact draft fix PR for one failure without opening it. |
 | `POST /api/actions/confirm` | Admin-gated: file the issue or open the PR previewed under the posted `{"token":...}`. |
+| `POST /api/failures/{id}/{action}/requests` | Create a persisted asynchronous issue or fix draft request. |
+| `GET /api/action-requests/{id}` | Read the owning admin's pending, ready, failed, or confirmed request. |
+| `POST /api/action-requests/{id}/confirm` | Post the exact persisted ready draft. |
+| `POST /api/action-requests/{id}/cancel` | Cancel a pending or ready request. |
 | `POST /api/failures/{id}/resolve` | Admin-gated: mark a recurring pattern resolved at its latest-build watermark. |
 | `POST /api/failures/{id}/unresolve` | Admin-gated: remove the resolved marker. |
 
@@ -175,3 +179,19 @@ make build-server fe-build
 Flags: `-addr` (default `:8080`), `-data-dir` (default `data`), `-static-dir`
 (optional built SPA; empty serves data and API only). Add `-project-dir` plus
 the `AUTH_MODE` env above to enable admin actions.
+
+
+## Asynchronous action requests
+
+Email deep links use persistent action requests. Generation runs in the server
+process while request metadata and ready drafts are stored in
+`action_request_state.json`. The state file is not served under `/data`.
+Requests expire after 24 hours, are bound to the requesting authenticated login,
+and require the current user's GitHub token only when generating or confirming.
+Raw GitHub tokens are never persisted. A server restart marks unfinished pending
+requests failed; ready drafts survive and remain reviewable.
+
+When `notifications.email.action_links` is enabled and the server receives
+`EMAIL_SMTP_PASSWORD`, it emails the configured recipients after a draft becomes
+ready. The review link still requires the same authenticated login that created
+the request.

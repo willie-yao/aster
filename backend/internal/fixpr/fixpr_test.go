@@ -2,6 +2,7 @@ package fixpr
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -266,5 +267,38 @@ func TestEscapeStringControlChars_LeavesStructureAndEscapes(t *testing.T) {
 	out := escapeStringControlChars(in)
 	if !strings.Contains(out, `a\nb\tc`) {
 		t.Errorf("escaped = %q", out)
+	}
+}
+
+func TestGeneratedFixSnapshotRoundTrip(t *testing.T) {
+	original := &GeneratedFix{
+		Preview: Preview{
+			Subject: "subject", Rationale: "why", Diff: "diff",
+			Files:  map[string]string{"a.go": "package a"},
+			Verify: VerifyResult{Status: VerifyPassed, Summary: "ok"},
+		},
+		Title: "title", Description: "description", Body: "body",
+		pattern: models.PatternAnalysis{ID: "pattern", JobID: "job", Systemic: true},
+		key:     "key", base: ghpr.Base{Branch: "main", HeadSHA: "head", TreeSHA: "tree"},
+	}
+	snapshot := original.Snapshot()
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded GeneratedFixSnapshot
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	restored := RestoreGeneratedFix(&decoded)
+	if restored.Title != original.Title || restored.key != original.key || restored.base.HeadSHA != original.base.HeadSHA {
+		t.Fatalf("restored fix = %+v", restored)
+	}
+	if restored.Preview.Files["a.go"] != "package a" || restored.pattern.ID != "pattern" {
+		t.Fatalf("restored preview = %+v pattern=%+v", restored.Preview, restored.pattern)
+	}
+	restored.Preview.Files["a.go"] = "changed"
+	if decoded.Files["a.go"] != "package a" {
+		t.Fatal("restore did not deep copy files")
 	}
 }

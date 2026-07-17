@@ -406,6 +406,56 @@ type GeneratedFix struct {
 	base    ghpr.Base
 }
 
+// GeneratedFixSnapshot is the serializable form of a generated fix. It keeps
+// the exact files and pinned base needed to open the reviewed draft later.
+type GeneratedFixSnapshot struct {
+	Subject     string                 `json:"subject"`
+	Rationale   string                 `json:"rationale"`
+	Diff        string                 `json:"diff"`
+	Files       map[string]string      `json:"files"`
+	Verify      VerifyResult           `json:"verify"`
+	Title       string                 `json:"title"`
+	Description string                 `json:"description"`
+	Body        string                 `json:"body"`
+	Pattern     models.PatternAnalysis `json:"pattern"`
+	Key         string                 `json:"key"`
+	Base        ghpr.Base              `json:"base"`
+}
+
+// Snapshot returns a deep-copy serializable representation of gf.
+func (gf *GeneratedFix) Snapshot() *GeneratedFixSnapshot {
+	if gf == nil {
+		return nil
+	}
+	files := make(map[string]string, len(gf.Preview.Files))
+	for path, content := range gf.Preview.Files {
+		files[path] = content
+	}
+	return &GeneratedFixSnapshot{
+		Subject: gf.Preview.Subject, Rationale: gf.Preview.Rationale,
+		Diff: gf.Preview.Diff, Files: files, Verify: gf.Preview.Verify,
+		Title: gf.Title, Description: gf.Description, Body: gf.Body,
+		Pattern: gf.pattern, Key: gf.key, Base: gf.base,
+	}
+}
+
+// RestoreGeneratedFix rebuilds the opaque generated fix from a persisted snapshot.
+func RestoreGeneratedFix(snapshot *GeneratedFixSnapshot) *GeneratedFix {
+	if snapshot == nil {
+		return nil
+	}
+	files := make(map[string]string, len(snapshot.Files))
+	for path, content := range snapshot.Files {
+		files[path] = content
+	}
+	return &GeneratedFix{
+		Preview: Preview{Subject: snapshot.Subject, Rationale: snapshot.Rationale,
+			Diff: snapshot.Diff, Files: files, Verify: snapshot.Verify},
+		Title: snapshot.Title, Description: snapshot.Description, Body: snapshot.Body,
+		pattern: snapshot.Pattern, key: snapshot.Key, base: snapshot.Base,
+	}
+}
+
 // GeneratePreview generates a fix for one pattern and renders the exact PR title
 // and body without opening anything. instruction is an optional maintainer
 // directive that steers the edit. The returned *GeneratedFix is opaque to

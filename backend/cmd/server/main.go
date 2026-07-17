@@ -33,6 +33,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actions"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/auth"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/notify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/server"
 )
@@ -111,12 +112,13 @@ func enableActions(opts *server.Options, projectDir, dataDir string) error {
 		return fmt.Errorf("loading project config: %w", err)
 	}
 	provider := cfg.ResolveAIProvider(os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"))
-	opts.Actions = actions.NewService(cfg, dataDir, actions.AIConfig{
+	actionService := actions.NewService(cfg, dataDir, actions.AIConfig{
 		Token:    os.Getenv("AI_TOKEN"),
 		Endpoint: provider.Endpoint,
 		Model:    provider.Model,
 		Headers:  provider.Headers,
 	})
+	opts.Actions = actionService
 
 	// A single fix draft runs locate + edit + critique against the model; the
 	// 5-minute default is tight for slow self-hosted endpoints, so allow an
@@ -128,6 +130,12 @@ func enableActions(opts *server.Options, projectDir, dataDir string) error {
 		}
 		opts.ActionTimeout = d
 	}
+
+	requestTimeout := opts.ActionTimeout
+	if requestTimeout <= 0 {
+		requestTimeout = 10 * time.Minute
+	}
+	actionService.ConfigureAsyncRequests(requestTimeout, actionRequestNotifier(cfg))
 
 	admins := splitList(os.Getenv("ADMIN_LOGINS"))
 	switch mode := os.Getenv("AUTH_MODE"); mode {
@@ -184,6 +192,44 @@ func enableActions(opts *server.Options, projectDir, dataDir string) error {
 	// adds any extra hosts (and covers proxy auth mode, which has no redirect).
 	opts.TrustedOrigins = trustedOrigins(os.Getenv("OAUTH_REDIRECT_URL"), os.Getenv("TRUSTED_ORIGINS"))
 	return nil
+}
+
+func actionRequestNotifier(cfg *project.Config) actions.RequestReadyNotifier {
+	email, enabled := cfg.EffectiveEmailNotifications()
+	if !enabled || !email.ActionLinks {
+		return nil
+	}
+	password := os.Getenv("EMAIL_SMTP_PASSWORD")
+	if email.SMTP.Username != "" && password == "" {
+		log.Println("async action emails disabled (EMAIL_SMTP_PASSWORD is unset in the server)")
+		return nil
+	}
+	from, recipients, err := notify.ParseAddresses(email.From, email.To)
+	if err != nil {
+		log.Printf("async action emails disabled: %v", err)
+		return nil
+	}
+	sender, err := notify.NewSMTPSender(notify.SMTPConfig{
+		Host: email.SMTP.Host, Port: email.SMTP.Port, Username: email.SMTP.Username,
+		Password: password, TLSMode: email.SMTP.TLS,
+	})
+	if err != nil {
+		log.Printf("async action emails disabled: %v", err)
+		return nil
+	}
+	baseURL := strings.TrimRight(cfg.Branding.SiteURL, "/")
+	return func(ctx context.Context, request actions.ActionRequestView) error {
+		title := "draft"
+		if request.Preview != nil && request.Preview.Title != "" {
+			title = request.Preview.Title
+		}
+		message := notify.ActionDraftReadyMessage(notify.ActionDraftReady{
+			From: from, To: recipients, Project: cfg.Name, Owner: request.Owner,
+			RequestID: request.ID, Kind: request.Kind, Title: title,
+			ReviewURL: baseURL + "/action-request/" + url.PathEscape(request.ID),
+		})
+		return sender.Send(ctx, message)
+	}
 }
 
 // trustedOrigins collects the public origins the CSRF guard should accept: the

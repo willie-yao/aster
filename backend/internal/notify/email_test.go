@@ -108,3 +108,16 @@ func TestPatternMessageEscapesContentAndBuildsInertLinks(t *testing.T) {
 		}
 	}
 }
+
+func TestActionDraftReadyMessage(t *testing.T) {
+	message := ActionDraftReadyMessage(ActionDraftReady{
+		From: mail.Address{Address: "from@example.com"}, To: []mail.Address{{Address: "to@example.com"}},
+		Project: "Example", Owner: "alice", Kind: "propose-fix", Title: "Fix timeout",
+		ReviewURL: "https://dash.example.com/action-request/request-1",
+	})
+	for _, want := range []string{"Draft ready", "alice", "fix proposal", "Fix timeout", "request-1", "Nothing has been posted"} {
+		if !strings.Contains(message.Subject+message.TextBody+message.HTMLBody, want) {
+			t.Errorf("message missing %q", want)
+		}
+	}
+}

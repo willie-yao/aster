@@ -270,3 +270,41 @@ func patternJobID(pattern models.PatternAnalysis) string {
 	}
 	return pattern.Subject
 }
+
+// ActionDraftReady describes a persisted draft ready for authenticated review.
+type ActionDraftReady struct {
+	From      mail.Address
+	To        []mail.Address
+	Project   string
+	Owner     string
+	RequestID string
+	Kind      string
+	Title     string
+	ReviewURL string
+}
+
+// ActionDraftReadyMessage renders the email sent after async generation.
+func ActionDraftReadyMessage(input ActionDraftReady) Message {
+	label := "issue draft"
+	if input.Kind == "propose-fix" || input.Kind == "fix" {
+		label = "fix proposal"
+	}
+	subject := notificationSubject(input.Project, "Draft ready", input.Title)
+	text := fmt.Sprintf("Draft ready for review\n\nProject: %s\nRequested by: %s\nType: %s\nTitle: %s\n\nReview and confirm: %s\n\nNothing has been posted to GitHub. Sign in as the requesting maintainer to review and confirm the exact draft.\n",
+		input.Project, input.Owner, label, input.Title, input.ReviewURL)
+	view := struct {
+		Project, Owner, Label, Title, ReviewURL string
+	}{input.Project, input.Owner, label, input.Title, input.ReviewURL}
+	var html bytes.Buffer
+	_ = template.Must(template.New("draft-ready").Parse(`<!doctype html>
+<html><body>
+<h2>Draft ready for review</h2>
+<p><strong>Project:</strong> {{.Project}}</p>
+<p><strong>Requested by:</strong> {{.Owner}}</p>
+<p><strong>Type:</strong> {{.Label}}</p>
+<p><strong>Title:</strong> {{.Title}}</p>
+<p><a href="{{.ReviewURL}}" style="display:inline-block;padding:10px 14px;background:#1d4ed8;color:#ffffff;text-decoration:none;border-radius:6px">Review and confirm</a></p>
+<p>Nothing has been posted to GitHub. Sign in as the requesting maintainer to review and confirm the exact draft.</p>
+</body></html>`)).Execute(&html, view)
+	return Message{From: input.From, To: append([]mail.Address(nil), input.To...), Subject: subject, TextBody: text, HTMLBody: html.String()}
+}

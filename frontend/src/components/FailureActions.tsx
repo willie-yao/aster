@@ -11,13 +11,20 @@ import Link from "@mui/material/Link";
 import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
-import { BugReport, Build, GitHub, CheckCircleOutlined, ErrorOutlined, Replay } from "@mui/icons-material";
+import {
+  BugReport,
+  Build,
+  GitHub,
+  CheckCircleOutlined,
+  ErrorOutlined,
+  Replay,
+} from "@mui/icons-material";
 import { useCapabilities } from "../hooks/useCapabilities";
 import { useAuth } from "../hooks/useAuth";
 import { useResolved } from "../hooks/useData";
 import { soft, type SoftColor } from "../theme";
 import type { Theme } from "@mui/material/styles";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 type Action = "create-issue" | "propose-fix";
 
@@ -47,7 +54,13 @@ function stripComments(s: string): string {
 // VerifyBadge shows the pre-PR build/vet verdict on a fix draft. It renders only
 // for a decisive verdict: "skipped" (verification off or no toolchain) shows
 // nothing, so its absence never reads as a false "verified".
-function VerifyBadge({ status, summary }: { status?: string; summary?: string }) {
+function VerifyBadge({
+  status,
+  summary,
+}: {
+  status?: string;
+  summary?: string;
+}) {
   if (status !== "passed" && status !== "failed") return null;
   const passed = status === "passed";
   const accent: SoftColor = passed ? "success" : "error";
@@ -66,13 +79,19 @@ function VerifyBadge({ status, summary }: { status?: string; summary?: string })
       }}
     >
       {passed ? (
-        <CheckCircleOutlined sx={{ fontSize: 18, color: `${accent}.main`, flexShrink: 0 }} />
+        <CheckCircleOutlined
+          sx={{ fontSize: 18, color: `${accent}.main`, flexShrink: 0 }}
+        />
       ) : (
-        <ErrorOutlined sx={{ fontSize: 18, color: `${accent}.main`, flexShrink: 0 }} />
+        <ErrorOutlined
+          sx={{ fontSize: 18, color: `${accent}.main`, flexShrink: 0 }}
+        />
       )}
       <Typography variant="body2" sx={{ wordBreak: "break-word" }}>
         <Box component="span" sx={{ fontWeight: 600, color: `${accent}.main` }}>
-          {passed ? "Automated verification passed" : "Automated verification failed"}
+          {passed
+            ? "Automated verification passed"
+            : "Automated verification failed"}
         </Box>
         {summary && (
           <Box component="span" sx={{ color: "text.secondary" }}>
@@ -132,7 +151,9 @@ function DialogHeader({
   subtitle?: string;
 }) {
   return (
-    <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 1.5, px: 3, py: 2.25 }}>
+    <DialogTitle
+      sx={{ display: "flex", alignItems: "center", gap: 1.5, px: 3, py: 2.25 }}
+    >
       <Box
         sx={{
           display: "flex",
@@ -151,11 +172,19 @@ function DialogHeader({
         {icon}
       </Box>
       <Box sx={{ minWidth: 0 }}>
-        <Typography variant="headline" component="span" sx={{ display: "block", fontSize: "1.125rem", lineHeight: 1.2 }}>
+        <Typography
+          variant="headline"
+          component="span"
+          sx={{ display: "block", fontSize: "1.125rem", lineHeight: 1.2 }}
+        >
           {title}
         </Typography>
         {subtitle && (
-          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.25 }}>
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ display: "block", mt: 0.25 }}
+          >
             {subtitle}
           </Typography>
         )}
@@ -167,12 +196,17 @@ function DialogHeader({
 export function FailureActions({ failureID }: { failureID: string }) {
   const { features } = useCapabilities();
   const { status, signIn } = useAuth();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const linkedFailure = searchParams.get("failure");
   const linkedAction = requestedAction(searchParams.get("action"));
   const [reviewIntent, setReviewIntent] = useState<Action | null>(null);
+  const [requestBusy, setRequestBusy] = useState(false);
+  const [requestError, setRequestError] = useState<string | null>(null);
   const [action, setAction] = useState<Action | null>(null);
-  const [busy, setBusy] = useState<"preview" | "refine" | "confirm" | null>(null);
+  const [busy, setBusy] = useState<"preview" | "refine" | "confirm" | null>(
+    null,
+  );
   const [preview, setPreview] = useState<Preview | null>(null);
   // drafts caches the last generated preview per action so reopening the dialog
   // reuses it instead of regenerating (fix generation is expensive). A draft is
@@ -195,6 +229,8 @@ export function FailureActions({ failureID }: { failureID: string }) {
   // the wrong failure.
   useEffect(() => {
     setReviewIntent(null);
+    setRequestBusy(false);
+    setRequestError(null);
     setAction(null);
     setBusy(null);
     setPreview(null);
@@ -207,7 +243,12 @@ export function FailureActions({ failureID }: { failureID: string }) {
   // Email action links are inert GETs. After authentication, they open a local
   // intent dialog that still requires an explicit click before any preview POST.
   useEffect(() => {
-    if (!features.actions || status !== "authenticated" || linkedFailure !== failureID || !linkedAction) {
+    if (
+      !features.actions ||
+      status !== "authenticated" ||
+      linkedFailure !== failureID ||
+      !linkedAction
+    ) {
       return;
     }
     setReviewIntent(linkedAction);
@@ -215,9 +256,22 @@ export function FailureActions({ failureID }: { failureID: string }) {
     next.delete("failure");
     next.delete("action");
     setSearchParams(next, { replace: true });
-  }, [failureID, features.actions, linkedAction, linkedFailure, searchParams, setSearchParams, status]);
+  }, [
+    failureID,
+    features.actions,
+    linkedAction,
+    linkedFailure,
+    searchParams,
+    setSearchParams,
+    status,
+  ]);
 
-  if (!features.actions || !failureID || status === "loading" || status === "unavailable") {
+  if (
+    !features.actions ||
+    !failureID ||
+    status === "loading" ||
+    status === "unavailable"
+  ) {
     return null;
   }
 
@@ -237,14 +291,43 @@ export function FailureActions({ failureID }: { failureID: string }) {
   }
 
   function dismissReviewIntent() {
+    if (requestBusy) return;
     setReviewIntent(null);
+    setRequestError(null);
   }
 
-  function generateRequestedDraft() {
+  async function generateRequestedDraft() {
     if (!reviewIntent) return;
     const requested = reviewIntent;
-    setReviewIntent(null);
-    open(requested);
+    if (!features.action_requests) {
+      setReviewIntent(null);
+      open(requested);
+      return;
+    }
+    setRequestBusy(true);
+    setRequestError(null);
+    try {
+      const res = await fetch(
+        `${API_BASE}api/failures/${encodeURIComponent(failureID)}/${requested}/requests`,
+        {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        },
+      );
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text.trim() || `HTTP ${res.status}`);
+      }
+      const request = (await res.json()) as { id: string };
+      setReviewIntent(null);
+      navigate(`/action-request/${encodeURIComponent(request.id)}`);
+    } catch (e) {
+      setRequestError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRequestBusy(false);
+    }
   }
 
   function open(act: Action) {
@@ -317,7 +400,9 @@ export function FailureActions({ failureID }: { failureID: string }) {
         if (res.status === 404) {
           invalidate(act);
           setPreview(null);
-          throw new Error("This draft expired. Close and reopen to regenerate it.");
+          throw new Error(
+            "This draft expired. Close and reopen to regenerate it.",
+          );
         }
         throw new Error(text.trim() || `HTTP ${res.status}`);
       }
@@ -392,7 +477,11 @@ export function FailureActions({ failureID }: { failureID: string }) {
 
   return (
     <Box>
-      <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap", rowGap: 1 }}>
+      <Stack
+        direction="row"
+        spacing={1}
+        sx={{ alignItems: "center", flexWrap: "wrap", rowGap: 1 }}
+      >
         <Button
           size="small"
           variant="outlined"
@@ -449,28 +538,65 @@ export function FailureActions({ failureID }: { failureID: string }) {
 
       <Dialog
         open={reviewIntent !== null && action === null}
-        onClose={dismissReviewIntent}
+        onClose={requestBusy ? undefined : dismissReviewIntent}
         maxWidth="sm"
         fullWidth
         slotProps={{ paper: { sx: dialogPaperSx } }}
       >
         <DialogHeader
-          icon={reviewIntent === "propose-fix" ? <Build sx={{ fontSize: 20 }} /> : <BugReport sx={{ fontSize: 20 }} />}
+          icon={
+            reviewIntent === "propose-fix" ? (
+              <Build sx={{ fontSize: 20 }} />
+            ) : (
+              <BugReport sx={{ fontSize: 20 }} />
+            )
+          }
           accent="warning"
-          title={reviewIntent === "propose-fix" ? "Generate a fix proposal?" : "Generate an issue draft?"}
+          title={
+            reviewIntent === "propose-fix"
+              ? "Generate a fix proposal?"
+              : "Generate an issue draft?"
+          }
         />
         <DialogContent dividers>
           <Typography variant="body2" color="text.secondary">
-            Opening the email link did not create anything. Generate a draft now,
-            then review the exact content before confirming any GitHub write.
+            Opening the email link did not create anything. Generate a draft
+            now, then review the exact content before confirming any GitHub
+            write.
           </Typography>
+          {features.action_requests && (
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5 }}>
+              Generation continues in the background. If draft-ready email is
+              configured, the dashboard emails you when the draft is ready.
+            </Typography>
+          )}
+          {requestError && (
+            <Alert severity="error" sx={{ mt: 2 }}>
+              {requestError}
+            </Alert>
+          )}
         </DialogContent>
         <DialogActions sx={{ px: 3, py: 2 }}>
-          <Button onClick={dismissReviewIntent} color="inherit">
+          <Button
+            onClick={dismissReviewIntent}
+            color="inherit"
+            disabled={requestBusy}
+          >
             Cancel
           </Button>
-          <Button variant="contained" color="warning" disableElevation onClick={generateRequestedDraft}>
-            Generate draft
+          <Button
+            variant="contained"
+            color="warning"
+            disableElevation
+            disabled={requestBusy}
+            startIcon={
+              requestBusy ? (
+                <CircularProgress size={16} color="inherit" />
+              ) : undefined
+            }
+            onClick={generateRequestedDraft}
+          >
+            {requestBusy ? "Starting…" : "Generate draft"}
           </Button>
         </DialogActions>
       </Dialog>
@@ -505,7 +631,11 @@ export function FailureActions({ failureID }: { failureID: string }) {
           />
         </DialogContent>
         <DialogActions sx={{ px: 3, py: 2 }}>
-          <Button onClick={() => setResolveOpen(false)} disabled={resolveBusy} color="inherit">
+          <Button
+            onClick={() => setResolveOpen(false)}
+            disabled={resolveBusy}
+            color="inherit"
+          >
             Cancel
           </Button>
           <Button
@@ -513,7 +643,11 @@ export function FailureActions({ failureID }: { failureID: string }) {
             color="success"
             disableElevation
             disabled={resolveBusy}
-            startIcon={resolveBusy ? <CircularProgress size={16} color="inherit" /> : undefined}
+            startIcon={
+              resolveBusy ? (
+                <CircularProgress size={16} color="inherit" />
+              ) : undefined
+            }
             onClick={submitResolve}
           >
             Mark resolved
@@ -538,14 +672,24 @@ export function FailureActions({ failureID }: { failureID: string }) {
         slotProps={{ paper: { sx: dialogPaperSx } }}
       >
         <DialogHeader
-          icon={isFix ? <Build sx={{ fontSize: 20 }} /> : <BugReport sx={{ fontSize: 20 }} />}
+          icon={
+            isFix ? (
+              <Build sx={{ fontSize: 20 }} />
+            ) : (
+              <BugReport sx={{ fontSize: 20 }} />
+            )
+          }
           accent="warning"
           title={isFix ? "Review draft fix PR" : "Review issue"}
           subtitle={`Review the exact ${isFix ? "pull request" : "issue"} before it is opened on GitHub`}
         />
         <DialogContent dividers sx={{ px: 3, py: 2.5 }}>
           {busy === "preview" && (
-            <Stack direction="row" spacing={1.5} sx={{ alignItems: "center", py: 3 }}>
+            <Stack
+              direction="row"
+              spacing={1.5}
+              sx={{ alignItems: "center", py: 3 }}
+            >
               <CircularProgress size={20} />
               <Typography variant="body2" color="text.secondary">
                 {isFix
@@ -556,7 +700,11 @@ export function FailureActions({ failureID }: { failureID: string }) {
           )}
 
           {error && (
-            <Alert severity="error" variant="outlined" sx={{ mb: 2, borderRadius: "10px" }}>
+            <Alert
+              severity="error"
+              variant="outlined"
+              sx={{ mb: 2, borderRadius: "10px" }}
+            >
               <Typography variant="body2">{error}</Typography>
             </Alert>
           )}
@@ -575,7 +723,10 @@ export function FailureActions({ failureID }: { failureID: string }) {
                     py: 1.25,
                   }}
                 >
-                  <Typography variant="body1" sx={{ fontWeight: 600, wordBreak: "break-word" }}>
+                  <Typography
+                    variant="body1"
+                    sx={{ fontWeight: 600, wordBreak: "break-word" }}
+                  >
                     {preview.title}
                   </Typography>
                 </Box>
@@ -583,18 +734,29 @@ export function FailureActions({ failureID }: { failureID: string }) {
 
               {preview.kind === "fix" && (
                 <Stack spacing={1.25}>
-                  <VerifyBadge status={preview.verify_status} summary={preview.verify_summary} />
-                  {preview.verify_status === "failed" && preview.verify_output && (
-                    <Box>
-                      <Typography sx={sectionLabelSx}>Verification output</Typography>
-                      <Box
-                        component="pre"
-                        sx={{ ...previewBoxSx, m: 0, maxHeight: 200, overflow: "auto" }}
-                      >
-                        {preview.verify_output}
+                  <VerifyBadge
+                    status={preview.verify_status}
+                    summary={preview.verify_summary}
+                  />
+                  {preview.verify_status === "failed" &&
+                    preview.verify_output && (
+                      <Box>
+                        <Typography sx={sectionLabelSx}>
+                          Verification output
+                        </Typography>
+                        <Box
+                          component="pre"
+                          sx={{
+                            ...previewBoxSx,
+                            m: 0,
+                            maxHeight: 200,
+                            overflow: "auto",
+                          }}
+                        >
+                          {preview.verify_output}
+                        </Box>
                       </Box>
-                    </Box>
-                  )}
+                    )}
                 </Stack>
               )}
 
@@ -602,7 +764,9 @@ export function FailureActions({ failureID }: { failureID: string }) {
                 <Typography sx={sectionLabelSx}>
                   {preview.kind === "fix" ? "Description" : "Body"}
                 </Typography>
-                <Box sx={{ ...previewBoxSx, maxHeight: 340, overflowY: "auto" }}>
+                <Box
+                  sx={{ ...previewBoxSx, maxHeight: 340, overflowY: "auto" }}
+                >
                   {stripComments(preview.body) || "(no description)"}
                 </Box>
               </Box>
@@ -610,7 +774,15 @@ export function FailureActions({ failureID }: { failureID: string }) {
               {preview.diff && (
                 <Box>
                   <Typography sx={sectionLabelSx}>Proposed diff</Typography>
-                  <Box component="pre" sx={{ ...previewBoxSx, m: 0, maxHeight: 320, overflow: "auto" }}>
+                  <Box
+                    component="pre"
+                    sx={{
+                      ...previewBoxSx,
+                      m: 0,
+                      maxHeight: 320,
+                      overflow: "auto",
+                    }}
+                  >
                     {preview.diff}
                   </Box>
                 </Box>
@@ -637,11 +809,21 @@ export function FailureActions({ failureID }: { failureID: string }) {
                   variant="outlined"
                   color="primary"
                   sx={{ mt: 1.25 }}
-                  startIcon={busy === "refine" ? <CircularProgress size={14} color="inherit" /> : undefined}
-                  disabled={busy !== null || instruction.trim() === "" || action === null}
+                  startIcon={
+                    busy === "refine" ? (
+                      <CircularProgress size={14} color="inherit" />
+                    ) : undefined
+                  }
+                  disabled={
+                    busy !== null ||
+                    instruction.trim() === "" ||
+                    action === null
+                  }
                   onClick={() => action && loadPreview(action, true)}
                 >
-                  {busy === "refine" ? "Regenerating…" : "Regenerate with prompt"}
+                  {busy === "refine"
+                    ? "Regenerating…"
+                    : "Regenerate with prompt"}
                 </Button>
               </Box>
             </Stack>

@@ -38,6 +38,14 @@ type ActionRunner interface {
 	Unresolve(failureID string) error
 }
 
+// ActionRequestRunner persists asynchronous drafts for later authenticated review.
+type ActionRequestRunner interface {
+	CreateRequest(failureID, kind, login, userToken, instruction string) (actions.ActionRequestView, error)
+	GetRequest(id, login string) (actions.ActionRequestView, error)
+	ConfirmRequest(ctx context.Context, id, login, userToken string) (string, error)
+	CancelRequest(id, login string) error
+}
+
 // defaultActionTimeout bounds a single on-demand action. Fix-PR drafting calls
 // the model and opens a PR, so it can run for a while.
 const defaultActionTimeout = 5 * time.Minute
@@ -95,6 +103,8 @@ type AuthInfo struct {
 type Features struct {
 	// Actions enables on-page create-issue / propose-fix buttons.
 	Actions bool `json:"actions"`
+	// ActionRequests enables persisted asynchronous draft generation.
+	ActionRequests bool `json:"action_requests,omitempty"`
 }
 
 // authRegistrar is implemented by authenticators that need their own routes
@@ -153,6 +163,17 @@ func Handler(opts Options) (http.Handler, error) {
 			auth.Middleware(opts.Auth, guard(resolveHandler(opts.Actions.Resolve))))
 		mux.Handle("POST /api/failures/{id}/unresolve",
 			auth.Middleware(opts.Auth, guard(unresolveHandler(opts.Actions.Unresolve))))
+		if requests, ok := opts.Actions.(ActionRequestRunner); ok {
+			caps.Features.ActionRequests = true
+			mux.Handle("POST /api/failures/{id}/{action}/requests",
+				auth.Middleware(opts.Auth, guard(createActionRequestHandler(requests.CreateRequest))))
+			mux.Handle("GET /api/action-requests/{id}",
+				auth.Middleware(opts.Auth, getActionRequestHandler(requests.GetRequest)))
+			mux.Handle("POST /api/action-requests/{id}/confirm",
+				auth.Middleware(opts.Auth, guard(confirmActionRequestHandler(timeout, requests.ConfirmRequest))))
+			mux.Handle("POST /api/action-requests/{id}/cancel",
+				auth.Middleware(opts.Auth, guard(cancelActionRequestHandler(requests.CancelRequest))))
+		}
 	}
 	mux.HandleFunc("/api/capabilities", capabilitiesHandler(caps))
 
@@ -320,12 +341,89 @@ func decodeInstruction(r *http.Request) string {
 // writeActionError maps an action error to a status code without leaking the
 // token: an unknown failure or expired preview is 404, everything else is 422.
 func writeActionError(w http.ResponseWriter, id, login string, err error) {
-	if errors.Is(err, actions.ErrNotFound) || errors.Is(err, actions.ErrPreviewNotFound) {
+	if errors.Is(err, actions.ErrNotFound) || errors.Is(err, actions.ErrPreviewNotFound) || errors.Is(err, actions.ErrRequestNotFound) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
 	log.Printf("action failed for %s (by %s): %v", id, login, err)
 	http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+}
+
+type createActionRequestFunc func(failureID, kind, login, userToken, instruction string) (actions.ActionRequestView, error)
+
+func createActionRequestHandler(run createActionRequestFunc) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		identity, ok := auth.IdentityFrom(r.Context())
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		view, err := run(r.PathValue("id"), r.PathValue("action"), identity.Login, identity.Token, decodeInstruction(r))
+		if err != nil {
+			writeActionError(w, r.PathValue("id"), identity.Login, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(view)
+	})
+}
+
+type getActionRequestFunc func(id, login string) (actions.ActionRequestView, error)
+
+func getActionRequestHandler(run getActionRequestFunc) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		identity, ok := auth.IdentityFrom(r.Context())
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		view, err := run(r.PathValue("id"), identity.Login)
+		if err != nil {
+			writeActionError(w, r.PathValue("id"), identity.Login, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(view)
+	})
+}
+
+type confirmActionRequestFunc func(context.Context, string, string, string) (string, error)
+
+func confirmActionRequestHandler(timeout time.Duration, run confirmActionRequestFunc) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		identity, ok := auth.IdentityFrom(r.Context())
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
+		defer cancel()
+		url, err := run(ctx, r.PathValue("id"), identity.Login, identity.Token)
+		if err != nil {
+			writeActionError(w, r.PathValue("id"), identity.Login, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"url": url})
+	})
+}
+
+type cancelActionRequestFunc func(id, login string) error
+
+func cancelActionRequestHandler(run cancelActionRequestFunc) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		identity, ok := auth.IdentityFrom(r.Context())
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if err := run(r.PathValue("id"), identity.Login); err != nil {
+			writeActionError(w, r.PathValue("id"), identity.Login, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 }
 
 // resolveHandler marks a systemic pattern resolved with an optional {"note":...}.

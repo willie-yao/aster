@@ -70,3 +70,14 @@ Email action links require all of the following:
 Opening the link only displays an intent prompt. Click **Generate draft** before
 the dashboard calls the preview API. Fix proposals also require `opencode` and
 git in the server image.
+
+
+## Asynchronous draft stays pending or no ready email arrives
+
+- Check the server logs and `GET /api/action-requests/<id>` status.
+- A server restart marks an unfinished pending request failed because user tokens
+  are intentionally never persisted. Start a new request from the pattern.
+- Ready drafts persist for 24 hours in non-public `action_request_state.json`.
+- Draft-ready email requires `EMAIL_SMTP_PASSWORD` in `server.extraEnv`, not only
+  `fetcher.extraEnv`.
+- The review link is bound to the authenticated login that created the request.
