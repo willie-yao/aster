@@ -274,8 +274,9 @@ live deploy.
   `"agentic"` (e.g. from an earlier pipeline) is treated as a miss and
   re-analyzed on the next fetcher run. No action needed; it self-heals.
 - **In-cluster chat-completions endpoints** are unreachable from GitHub-hosted runners.
-  Use `runs-on:` + a self-hosted runner OR set `skip-fetch: true` and
-  commit pre-fetched `data/` to the consumer repo.
+  Use the Kubernetes-native path (fetch runs in-cluster next to the endpoint) OR,
+  on the Pages path, set `skip-fetch: true` and commit pre-fetched `data/` to the
+  consumer repo.
 - **Per-deploy `builds:` input.** Trade-off between history depth and
   cron-window budget. Halving this halves cold-cache fetch time;
   doubling it deepens history but risks overrunning the cron interval.

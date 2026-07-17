@@ -1,6 +1,6 @@
 # Agentic AI analysis (tool calling)
 
-The agentic loop is the engine's only analysis path: the LLM decides which
+The agentic loop is the engine's single analysis approach: the LLM decides which
 artifacts to read instead of pre-fetching a fixed set. The model calls
 function-calling tools that browse the build's GCS artifact tree:
 `list_artifacts`, `read_artifact`, `tail_artifact`, `grep_artifact`,
@@ -13,6 +13,40 @@ There is nothing to enable: if `-ai` is on and the endpoint supports
 function calling, every failure is analyzed by the agentic loop. The model
 browses everything itself via the registered tools; the per-failure prompt
 is just the failing test's context.
+
+## In-process and Orka backends
+
+The agentic loop is one analysis approach, but it runs in one of two backends:
+
+- **In-process** (default): the fetcher runs the loop itself, as goroutines,
+  enforcing every quality gate in Go. This is the backend the rest of this doc
+  describes, and the only one the GitHub Actions + Pages path uses.
+- **Orka** (opt-in, Kubernetes-native): the same loop runs as one
+  [Orka](https://github.com/orka-agents/orka) Task per failing test, alongside an
+  in-cluster inference stack. Discovery and output are unchanged; only the
+  per-failure analysis step moves. Select it with `analysis: orka` in the Helm
+  chart.
+
+Both backends run the same loop against the same artifact tools and write the
+same `jobs/*.json` wire shape with `Mode: "agentic"`. What differs is where the
+loop runs and how the guardrails are enforced:
+
+| | In-process | Orka |
+| --- | --- | --- |
+| Orchestration | Goroutines in the fetcher | One Task per failure, applied to the cluster |
+| Quality gates | Enforced in Go code | Enforced as tools the agent must call plus ai-worker re-prompts |
+| Cache | On-disk JSON keyed by mode + hash | The Kubernetes object store: a content-addressed Task name; bump `-version` to re-analyze |
+| Config surface | Every `ai.*` knob | Only `ai.tools`, the `storage` block, and the display id are read; the rest is baked into the worker patches and shim tools |
+| Endpoint | Any OpenAI-compatible chat-completions | Same, via an Orka `Provider`; Copilot needs a de-streaming proxy |
+
+The trade-off from the evaluation: Orka with a strong co-located model matches or
+beats the engine's reference labels on the hardest cases, but that edge is the
+model, not the harness. On a cheap model it reaches process parity, not better
+classification. So the recommendation keeps both: Orka as an optional
+strong-model backend, the in-process loop as the default. For the code-level
+mechanics of how each harness piece is reconstructed out of Kubernetes objects,
+see [experimental/orka/ARCHITECTURE.md](../experimental/orka/ARCHITECTURE.md); for
+setup, [experimental/orka/QUICKSTART.md](../experimental/orka/QUICKSTART.md).
 
 ## Endpoint requirements
 
@@ -60,6 +94,12 @@ and copy-paste presets. Each field below is the one-line summary; see
 the GCS fetch ceiling) are **not** configurable: the first two auto-size from
 the endpoint's context window and the GCS ceiling is a fixed engine safety cap
 (see [Automatic budget sizing](#automatic-budget-sizing)).
+
+> These knobs govern the in-process backend. On the Orka backend they are inert:
+> only `ai.tools`, the `storage` block, and the display id are read from
+> `project.yaml`, while `max_iters`, the floors, `critique.*`, and `evidence.*`
+> live in the ai-worker patches and shim tools instead. See
+> [In-process and Orka backends](#in-process-and-orka-backends).
 
 ### `max_iters`
 
@@ -232,6 +272,11 @@ ai:
 ---
 
 ## How it works
+
+The mechanics below are the in-process backend. The Orka backend runs the same
+loop but reconstructs each gate as a tool the agent must call or an ai-worker
+re-prompt; the piece-by-piece mapping is tabulated in
+[experimental/orka/ARCHITECTURE.md](../experimental/orka/ARCHITECTURE.md#how-the-harness-is-replicated).
 
 ### The loop at a glance
 
@@ -562,6 +607,11 @@ next fetcher run and re-analyzed.
 Cached agentic entries are scoped to a specific build because answers cite
 build-specific paths and line numbers; the same test failing in two different
 builds gets two separate agentic analyses.
+
+On the Orka backend the cache is the Kubernetes object store itself: each Task is
+named by the same content address of build, failure hash, and `version`, so
+re-applying an existing Task is a no-op and bumping `-version` forces
+re-analysis. There is no on-disk cache file.
 
 ### Pattern analysis
 

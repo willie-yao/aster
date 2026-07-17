@@ -82,7 +82,7 @@ Provider, and the patched ai-worker image are already installed in the cluster.
 The chart deploys the analysis pipeline, not Orka itself, so the default stays
 `inprocess` and a fresh install always works. Opt into Orka once those
 prerequisites are in place. See
-[experimental/orka/USAGE.md](../experimental/orka/USAGE.md) for the full setup
+[experimental/orka/QUICKSTART.md](../experimental/orka/QUICKSTART.md) for the full setup
 and [experimental/orka/ARCHITECTURE.md](../experimental/orka/ARCHITECTURE.md) for
 how it works.
 
@@ -183,7 +183,7 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | `fetcher.schedule` | Cron schedule (default every 6 hours). `mode: cron`. |
 | `fetcher.watchInterval`, `fetcher.reconcileInterval` | Refresh and full-pass cadence. `mode: watch`. |
 | `fetcher.buildsPerJob`, `fetcher.workers`, `fetcher.timeout` | Fetch depth and budget. |
-| `fetcher.extraEnv` | Extra env such as `GITHUB_TOKEN` or `SLACK_WEBHOOK_URL`. |
+| `fetcher.extraEnv` | Extra env such as `GITHUB_TOKEN`, `SLACK_WEBHOOK_URL`, or the `ISSUE_TOKEN` / `FIX_TOKEN` write tokens (see [Automatic issues and fix PRs](#automatic-issues-and-fix-prs)). |
 | `ingress.enabled`, `ingress.hosts`, `ingress.tls` | Public read path. |
 | `server.actions.enabled`, `server.actions.mode` | Turn on write actions; `oauth` (GitHub sign-in) or `proxy` (SSO proxy + bot token). |
 | `server.actions.admins` | GitHub logins allowed to file issues / draft fix PRs. |
@@ -233,6 +233,58 @@ the static Pages path exactly. That includes the AI cache and the fetcher's
 state files (issue, skill, and fix-PR tracking). None hold credentials, but if
 you want those kept off a public ingress, keep the server on an internal
 Service or split the fetcher's state onto a separate volume in a follow-up.
+
+## Automatic issues and fix PRs
+
+Both features are off by default. When enabled, the fetcher files GitHub issues
+for the highest-signal failures and drafts fix PRs for recurring ones on every
+pass: each cron run in `mode: cron`, or each reconcile pass in `mode: watch`.
+Each needs the feature turned on in `project.yaml` and a write-scoped token in
+the fetcher's environment.
+
+Turn them on in `project.yaml`:
+
+```yaml
+issues:
+  enabled: true          # repo defaults to branding.source_repo
+ai:
+  fix_prs:
+    enabled: true        # repo defaults to branding.source_repo
+```
+
+Supply the tokens through `fetcher.extraEnv`, which lands on both the worker and
+the CronJob. The engine reads `ISSUE_TOKEN` for issues and `FIX_TOKEN` for fix
+PRs. `ISSUE_TOKEN` wants `issues: write` on the target repo; `FIX_TOKEN` is a
+real contributor's PAT with `Contents: write` and `Pull requests: write`. See
+[fix-prs.md](fix-prs.md#identity-cla-and-the-token-read-this-first) for the
+fork-versus-branch token rules. Source both from a Secret you manage:
+
+```bash
+kubectl -n dashboards create secret generic capz-write-tokens \
+  --from-literal=ISSUE_TOKEN=<pat> \
+  --from-literal=FIX_TOKEN=<pat>
+```
+
+```yaml
+# values.yaml
+fetcher:
+  extraEnv:
+    - name: ISSUE_TOKEN
+      valueFrom:
+        secretKeyRef: { name: capz-write-tokens, key: ISSUE_TOKEN }
+    - name: FIX_TOKEN
+      valueFrom:
+        secretKeyRef: { name: capz-write-tokens, key: FIX_TOKEN }
+```
+
+If a feature is enabled but its token is missing, the fetcher logs a skip and
+continues, so a misconfigured token never fails the pass. See
+[github-issues.md](github-issues.md) and [fix-prs.md](fix-prs.md) for the
+triggers, guardrails, and the rest of the per-feature `project.yaml` fields.
+
+This is the scheduled, unattended path. To let an admin file one issue or draft
+one fix PR on demand from the dashboard UI, enable the interactive server
+actions instead (see [Enabling actions with Helm](#enabling-actions-with-helm)).
 
 ## Reusing existing config
 

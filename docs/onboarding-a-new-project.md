@@ -493,8 +493,9 @@ re-baseline everything at once, run the **Clear AI Cache** workflow first.)
 
 On the Pages path, if your endpoint is private (a cloud private endpoint, a K8s
 ClusterIP service, on-prem inference), GitHub-hosted runners cannot reach it.
-Two options (or switch to the Kubernetes-native path in Step 3a, where the fetch
-runs in-cluster next to the endpoint):
+The fix is to fetch where the endpoint is reachable and publish pre-fetched data
+(below), or switch to the Kubernetes-native path in Step 3a, where the fetch
+runs in-cluster next to the endpoint.
 
 **Fetch locally, publish pre-fetched data.** Set `skip-fetch: true` under
 `with:` in `deploy.yml` so each deploy publishes the committed
@@ -511,17 +512,3 @@ AI_TOKEN="<key or any non-empty string>" AI_MODEL="<model id>" \
 
 git add <project_dir>/data && git commit -m "Refresh prefetched data" && git push
 ```
-
-**Self-hosted runner with cluster-internal access.** For automated runs when the
-endpoint lives in a Kubernetes cluster, run the deploy on an in-cluster runner:
-
-```yaml
-uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@v1
-with:
-  project_dir: .
-  runs-on: my-runner   # ARC runner-set name (a JSON array also works)
-  ai-endpoint: http://your-svc.ns.svc.cluster.local:8000/v1/chat/completions
-```
-
-See [self-hosted-runner-in-cluster.md](self-hosted-runner-in-cluster.md) for the
-full ARC install and tuning walkthrough.

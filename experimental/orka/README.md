@@ -8,12 +8,12 @@ that run alongside your inference stack.
 
 > Opt-in and experimental. The engine's default analysis backend is the
 > in-process agentic loop; select this path explicitly with `analysis: orka` in
-> the Helm chart (see [USAGE.md](USAGE.md)). It requires Orka, the tool shim, a
+> the Helm chart (see [QUICKSTART.md](QUICKSTART.md)). It requires Orka, the tool shim, a
 > Provider, and the ai-worker patches installed in the cluster.
 
 ## Docs
 
-- **[USAGE.md](USAGE.md)** - how to deploy and run the Orka path, the config it
+- **[QUICKSTART.md](QUICKSTART.md)** - how to deploy and run the Orka path, the config it
   reads, and the knobs. Start here.
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** - how it works: where each Orka resource
   is created, the CRD shapes, and how the engine's harness (cache, convergence,

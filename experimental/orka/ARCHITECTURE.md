@@ -2,7 +2,7 @@
 
 How the Orka analysis path works at the code level: where each Orka resource is
 created, the CRD shapes, and how the engine's in-process harness is reconstructed
-out of Kubernetes objects. For how to run it, see [USAGE.md](USAGE.md). For the
+out of Kubernetes objects. For how to run it, see [QUICKSTART.md](QUICKSTART.md). For the
 evaluation and the productization call, see the "Headline finding" in
 [README.md](README.md).
 

@@ -51,7 +51,7 @@ to light up server-only features. Whichever you pick, you never fork the engine.
 | --- | --- | --- |
 | Runs the fetch | In-cluster worker/CronJob | GitHub Actions runner |
 | Serves the site | In-cluster server (+ ingress) | GitHub Pages |
-| AI endpoint | In-cluster or public | Public (or self-hosted runner) |
+| AI endpoint | In-cluster or public | Public (private via `skip-fetch`) |
 | Interactive actions | Yes (admin sign-in) | No (read-only) |
 | Needs a cluster | Yes | No |
 
@@ -75,6 +75,11 @@ A dashboard is shaped by three things:
 - [Onboarding a new project](docs/onboarding-a-new-project.md): choose a deploy
   path, scaffold it with the `onboard` subcommand (`-mode k8s` or Pages), then a
   full field-by-field reference covers the rest.
+- [Orka backend quickstart](experimental/orka/QUICKSTART.md): step-by-step setup for
+  the recommended Kubernetes-native analysis backend, running failure analysis as
+  Orka Tasks alongside your in-cluster inference stack. See also the
+  [overview](experimental/orka/README.md) and
+  [architecture](experimental/orka/ARCHITECTURE.md).
 
 **Configuration & authoring**
 - [AI providers](docs/ai-providers.md): point the engine at any
@@ -99,12 +104,9 @@ A dashboard is shaped by three things:
   chart in `deploy/helm`.
 - [Server mode](docs/server.md): the in-cluster server that serves the same
   `/data/*.json` contract plus a capability descriptor and admin-gated actions.
-- [Orka analysis backend](experimental/orka/): the recommended Kubernetes-native
-  analysis backend, running failure analysis as Orka Tasks alongside your
-  inference stack.
-- [In-cluster runner](docs/self-hosted-runner-in-cluster.md): for the Pages
-  path, run the deploy on a self-hosted runner to reach a private, in-cluster
-  AI endpoint.
+- [Orka analysis backend](experimental/orka/ARCHITECTURE.md): how the recommended
+  Kubernetes-native backend runs failure analysis as Orka Tasks alongside your
+  inference stack (setup lives in the Getting started quickstart above).
 - [Releasing](docs/releasing.md): cut an engine release and how consumers pin.
 
 **Development**

@@ -32,7 +32,7 @@ mode: watch
 #              analysis, running alongside an in-cluster inference stack. Requires
 #              mode: cron, and Orka + the tool shim + a Provider + the ai-worker
 #              patches must already be installed (this chart deploys the pipeline,
-#              not Orka itself). See experimental/orka/USAGE.md.
+#              not Orka itself). See experimental/orka/QUICKSTART.md.
 analysis: inprocess
 
 # Orka analysis backend settings. Only used when analysis: orka.
@@ -55,7 +55,7 @@ orka:
   retries: 1
   ingestWait: 45m
   # Producer + ingestor images, published to GHCR alongside the engine image by
-  # .github/workflows/image.yml. Override for a local build (see USAGE.md).
+  # .github/workflows/image.yml. Override for a local build (see QUICKSTART.md).
   producerImage: ghcr.io/willie-yao/prow-ai-dashboard/orka-producer:main
   ingestorImage: ghcr.io/willie-yao/prow-ai-dashboard/orka-ingestor:main
   imagePullPolicy: IfNotPresent
