@@ -133,7 +133,7 @@ fetcher:
   workers: 5
   timeout: 30m
   includePresubmits: false
-  # Extra environment variables (e.g. GITHUB_TOKEN, SLACK_WEBHOOK_URL) sourced
+  # Extra environment variables (e.g. GITHUB_TOKEN, EMAIL_SMTP_PASSWORD) sourced
   # from secrets or given inline. Standard core/v1 EnvVar entries.
   extraEnv: []
   resources: {}

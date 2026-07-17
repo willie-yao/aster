@@ -71,6 +71,20 @@ branding:
   source_repo:
     owner: "{{.SourceOwner}}"
     name: "{{.SourceName}}"
+
+# Optional email notifications for persistent failures and recoveries.
+# Set EMAIL_SMTP_PASSWORD separately when smtp.username is configured.
+# notifications:
+#   email:
+#     enabled: true
+#     action_links: false  # set true only for a server deploy with actions enabled
+#     from: "Prow Dashboard <prow-dashboard@example.com>"
+#     to: ["ci-team@example.com"]
+#     smtp:
+#       host: "smtp.example.com"
+#       port: 587
+#       username: "prow-dashboard@example.com"
+#       tls: starttls
 {{if .IncludePresubmits}}
 # This project's dashboard includes presubmit jobs.
 source:
@@ -116,7 +130,7 @@ jobs:
     secrets:
       AI_TOKEN: ${{"{{"}} secrets.AI_TOKEN {{"}}"}}
       # Optional: uncomment to enable the matching feature.
-      # SLACK_WEBHOOK_URL: ${{"{{"}} secrets.SLACK_WEBHOOK_URL {{"}}"}}
+      # EMAIL_SMTP_PASSWORD: ${{"{{"}} secrets.EMAIL_SMTP_PASSWORD {{"}}"}}
       # ISSUE_TOKEN: ${{"{{"}} secrets.ISSUE_TOKEN {{"}}"}}
       # FIX_TOKEN: ${{"{{"}} secrets.FIX_TOKEN {{"}}"}}
 `))
@@ -177,6 +191,11 @@ fetcher:
   timeout: 120m
   watchInterval: 5m
   reconcileInterval: 1h
+  # For authenticated email notifications, source the password from a Secret:
+  # extraEnv:
+  #   - name: EMAIL_SMTP_PASSWORD
+  #     valueFrom:
+  #       secretKeyRef: { name: {{.Namespace}}-smtp, key: password }
 
 # Optional: admin-gated File issue / Mark resolved actions. Propose fix also
 # requires a custom server image with opencode and git. Register a GitHub OAuth
@@ -269,7 +288,18 @@ helm upgrade --install {{.Namespace}} deploy/helm/prow-ai-dashboard \
   --set ai.token=<token>
 ` + "```" + `
 
-## 3. Optional: interactive actions
+## 3. Optional: email notifications
+
+After enabling ` + "`notifications.email`" + ` in ` + "`project.yaml`" + `, create the SMTP
+password Secret and uncomment the ` + "`fetcher.extraEnv`" + ` example in
+` + "`deploy/values.yaml`" + `:
+
+` + "```bash" + `
+kubectl -n {{.Namespace}} create secret generic {{.Namespace}}-smtp \
+  --from-literal=password=<smtp-password>
+` + "```" + `
+
+## 4. Optional: interactive actions
 
 To enable admin-gated actions, register a GitHub OAuth App and uncomment the
 ` + "`server.actions`" + ` block in ` + "`deploy/values.yaml`" + `. File issue and Mark
@@ -347,8 +377,8 @@ gh secret set AI_TOKEN --repo {{.DashboardOwner}}/{{.DashboardName}}
 
 # Optional: GitHub issue auto-filing (a token with issues:write on the target):
 # gh secret set ISSUE_TOKEN --repo {{.DashboardOwner}}/{{.DashboardName}}
-# Optional: Slack notifications:
-# gh secret set SLACK_WEBHOOK_URL --repo {{.DashboardOwner}}/{{.DashboardName}}
+# Optional: after enabling notifications.email in project.yaml:
+# gh secret set EMAIL_SMTP_PASSWORD --repo {{.DashboardOwner}}/{{.DashboardName}}
 # Optional: agent-proposed fix PRs on a runner with opencode and git:
 # gh secret set FIX_TOKEN --repo {{.DashboardOwner}}/{{.DashboardName}}
 ` + "```" + `

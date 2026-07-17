@@ -87,6 +87,23 @@ branding:
     owner: "kubernetes-sigs"
     name: "your-project"
 
+# Optional email notifications for persistent failures, changed errors, and
+# recoveries. The SMTP password is supplied through EMAIL_SMTP_PASSWORD and is
+# required only when smtp.username is set. Use a team distribution list when
+# this project.yaml is stored in a public repository. See docs/notifications.md.
+# notifications:
+#   email:
+#     enabled: true
+#     action_links: false  # set true only for a server deploy with actions enabled
+#     from: "Prow AI Dashboard <prow-dashboard@example.com>"
+#     to:
+#       - "ci-team@example.com"
+#     smtp:
+#       host: "smtp.example.com"
+#       port: 587               # default 587 for starttls, 465 for tls, 25 for none
+#       username: "prow-dashboard@example.com"
+#       tls: starttls           # starttls (default), tls, or none
+
 # AI configuration. Composed at fetcher startup from:
 #   1. engine's universal Prow base prompt
 #   2. this repo's prompts/system.md (mandatory)

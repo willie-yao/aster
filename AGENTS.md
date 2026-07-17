@@ -64,7 +64,7 @@ backend/                       Go 1.25
     prowbuild/                Prow path layout, build info, JUnit + job discovery
     junit/                     JUnit XML parser
     models/                    Wire-format types (BuildResult, AIAnalysis, ...)
-    notify/                    Slack notifications
+    notify/                    SMTP email notifications
     output/                    JSON writers (dashboard.json, jobs/, ...)
     project/                   project.yaml load + validate
     prow/jobconfig/            kubernetes/test-infra job parsing
@@ -234,8 +234,9 @@ Engine ships the AI defaults; consumer overrides per project. The contract:
 - **Engine-owned:** BasePrompt, ResponseFormatFooter, critique contract,
   tool schemas, cache shape.
 - **Consumer-owned** (in `project.yaml`): bucket, dashboard, branding,
-  the inlined `ai.*` agentic tuning (floors `min_tool_calls` /
-  `min_gcs_bytes`, `max_iters`, `timeout`, `tools`, `critique.max_retries`).
+  email notification routing, and the inlined `ai.*` agentic tuning (floors
+  `min_tool_calls` / `min_gcs_bytes`, `max_iters`, `timeout`, `tools`,
+  `critique.max_retries`). SMTP passwords stay in deployment secrets.
 - **Consumer-owned** (in `prompts/system.md`): project-specific AI
   knowledge. Mandatory; injected verbatim between BasePrompt and
   ResponseFormatFooter.

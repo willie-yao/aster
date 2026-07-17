@@ -17,8 +17,13 @@ import { useAuth } from "../hooks/useAuth";
 import { useResolved } from "../hooks/useData";
 import { soft, type SoftColor } from "../theme";
 import type { Theme } from "@mui/material/styles";
+import { useSearchParams } from "react-router-dom";
 
 type Action = "create-issue" | "propose-fix";
+
+function requestedAction(value: string | null): Action | null {
+  return value === "create-issue" || value === "propose-fix" ? value : null;
+}
 
 interface Preview {
   token: string;
@@ -162,6 +167,10 @@ function DialogHeader({
 export function FailureActions({ failureID }: { failureID: string }) {
   const { features } = useCapabilities();
   const { status, signIn } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const linkedFailure = searchParams.get("failure");
+  const linkedAction = requestedAction(searchParams.get("action"));
+  const [reviewIntent, setReviewIntent] = useState<Action | null>(null);
   const [action, setAction] = useState<Action | null>(null);
   const [busy, setBusy] = useState<"preview" | "refine" | "confirm" | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
@@ -185,6 +194,7 @@ export function FailureActions({ failureID }: { failureID: string }) {
   // remount), reset everything so a stale draft can never be confirmed against
   // the wrong failure.
   useEffect(() => {
+    setReviewIntent(null);
     setAction(null);
     setBusy(null);
     setPreview(null);
@@ -193,6 +203,19 @@ export function FailureActions({ failureID }: { failureID: string }) {
     setError(null);
     setUrl(null);
   }, [failureID]);
+
+  // Email action links are inert GETs. After authentication, they open a local
+  // intent dialog that still requires an explicit click before any preview POST.
+  useEffect(() => {
+    if (!features.actions || status !== "authenticated" || linkedFailure !== failureID || !linkedAction) {
+      return;
+    }
+    setReviewIntent(linkedAction);
+    const next = new URLSearchParams(searchParams);
+    next.delete("failure");
+    next.delete("action");
+    setSearchParams(next, { replace: true });
+  }, [failureID, features.actions, linkedAction, linkedFailure, searchParams, setSearchParams, status]);
 
   if (!features.actions || !failureID || status === "loading" || status === "unavailable") {
     return null;
@@ -206,9 +229,22 @@ export function FailureActions({ failureID }: { failureID: string }) {
         startIcon={<GitHub sx={{ fontSize: 18 }} />}
         onClick={signIn}
       >
-        Sign in to file issues or fixes
+        {linkedFailure === failureID && linkedAction
+          ? `Sign in to review ${linkedAction === "propose-fix" ? "a fix proposal" : "an issue draft"}`
+          : "Sign in to file issues or fixes"}
       </Button>
     );
+  }
+
+  function dismissReviewIntent() {
+    setReviewIntent(null);
+  }
+
+  function generateRequestedDraft() {
+    if (!reviewIntent) return;
+    const requested = reviewIntent;
+    setReviewIntent(null);
+    open(requested);
   }
 
   function open(act: Action) {
@@ -410,6 +446,34 @@ export function FailureActions({ failureID }: { failureID: string }) {
           <Typography variant="body2">{resolveError}</Typography>
         </Alert>
       )}
+
+      <Dialog
+        open={reviewIntent !== null && action === null}
+        onClose={dismissReviewIntent}
+        maxWidth="sm"
+        fullWidth
+        slotProps={{ paper: { sx: dialogPaperSx } }}
+      >
+        <DialogHeader
+          icon={reviewIntent === "propose-fix" ? <Build sx={{ fontSize: 20 }} /> : <BugReport sx={{ fontSize: 20 }} />}
+          accent="warning"
+          title={reviewIntent === "propose-fix" ? "Generate a fix proposal?" : "Generate an issue draft?"}
+        />
+        <DialogContent dividers>
+          <Typography variant="body2" color="text.secondary">
+            Opening the email link did not create anything. Generate a draft now,
+            then review the exact content before confirming any GitHub write.
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, py: 2 }}>
+          <Button onClick={dismissReviewIntent} color="inherit">
+            Cancel
+          </Button>
+          <Button variant="contained" color="warning" disableElevation onClick={generateRequestedDraft}>
+            Generate draft
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <Dialog
         open={resolveOpen}

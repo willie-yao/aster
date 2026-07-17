@@ -3,8 +3,7 @@ package notify
 import (
 	"context"
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,491 +12,448 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
+type fakeSender struct {
+	messages []Message
+	failNext int
+}
+
+func (f *fakeSender) Send(_ context.Context, message Message) error {
+	if f.failNext > 0 {
+		f.failNext--
+		return errors.New("delivery failed")
+	}
+	f.messages = append(f.messages, message)
+	return nil
+}
+
+func newTestNotifier(t *testing.T, sender Sender, stateFile string) *Notifier {
+	t.Helper()
+	from, to, err := ParseAddresses("Prow Dashboard <prow@example.com>", []string{"team@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return NewNotifier(sender, from, to, stateFile, "Example", "https://dash.example.com", "https://prow.example.com/view/", true)
+}
+
+func makeReport(failures ...models.TestFlakiness) models.FlakinessReport {
+	return models.FlakinessReport{PersistentFailures: failures}
+}
+
+func persistentFailure(jobID, jobName, testName, hash string, count int) models.TestFlakiness {
+	return models.TestFlakiness{
+		JobID:               jobID,
+		JobName:             jobName,
+		TestName:            testName,
+		ConsecutiveFailures: count,
+		LastFailure: &models.TestFailureInfo{
+			BuildID:        "100",
+			FailureMessage: "context deadline exceeded",
+			ErrorHash:      hash,
+		},
+	}
+}
+
 func TestStateSaveLoad(t *testing.T) {
-	dir := t.TempDir()
-	stateFile := filepath.Join(dir, "state.json")
-
-	n := NewNotifier("http://example.com", stateFile, "https://dash.example.com", "https://prow.example.com/view/")
-	if len(n.state.Notified) != 0 {
-		t.Fatal("expected empty state on first load")
-	}
-
-	n.state.Notified["job1::test1"] = NotifiedFailure{
-		FirstNotifiedAt:  "2024-01-01T00:00:00Z",
-		ConsecutiveCount: 5,
-		ErrorHash:        "abc123",
-		JobName:          "job1",
-		TestName:         "test1",
-	}
-	if err := n.SaveState(); err != nil {
-		t.Fatalf("SaveState: %v", err)
-	}
-
-	n2 := NewNotifier("http://example.com", stateFile, "https://dash.example.com", "https://prow.example.com/view/")
-	if len(n2.state.Notified) != 1 {
-		t.Fatalf("expected 1 notified entry, got %d", len(n2.state.Notified))
-	}
-	nf := n2.state.Notified["job1::test1"]
-	if nf.ErrorHash != "abc123" || nf.ConsecutiveCount != 5 {
-		t.Fatalf("unexpected state: %+v", nf)
-	}
-}
-
-func TestStateLoadMissingFile(t *testing.T) {
-	n := NewNotifier("http://example.com", "/nonexistent/state.json", "https://dash.example.com", "https://prow.example.com/view/")
-	if len(n.state.Notified) != 0 {
-		t.Fatal("expected empty state when file doesn't exist")
-	}
-}
-
-func makeReport(failures []models.TestFlakiness) models.FlakinessReport {
-	return models.FlakinessReport{
-		GeneratedAt:        "2024-01-01T00:00:00Z",
-		PersistentFailures: failures,
-	}
-}
-
-func TestNewPersistentFailureDetection(t *testing.T) {
-	var received []map[string]interface{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]interface{}
-		json.NewDecoder(r.Body).Decode(&body)
-		received = append(received, body)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	dir := t.TempDir()
-	n := NewNotifier(srv.URL, filepath.Join(dir, "state.json"), "https://dash.example.com", "https://prow.example.com/view/")
-
-	report := makeReport([]models.TestFlakiness{
-		{
-			TestName:            "TestSomething",
-			JobID:               "my-job",
-			JobName:             "my-job",
-			ConsecutiveFailures: 5,
-			LastFailure: &models.TestFailureInfo{
-				BuildID:        "100",
-				FailureMessage: "context deadline exceeded",
-				ErrorHash:      "hash1",
-			},
-		},
-	})
-
-	stats, err := n.ProcessFailures(context.Background(), report, nil)
-	if err != nil {
-		t.Fatalf("ProcessFailures: %v", err)
-	}
-	if stats.NewAlerts != 1 {
-		t.Fatalf("expected 1 new alert, got %d", stats.NewAlerts)
-	}
-	if stats.Recoveries != 0 {
-		t.Fatalf("expected 0 recoveries, got %d", stats.Recoveries)
-	}
-	if len(received) != 1 {
-		t.Fatalf("expected 1 webhook call, got %d", len(received))
-	}
-
-	nf, ok := n.state.Notified["my-job::TestSomething"]
-	if !ok {
-		t.Fatal("expected state entry for my-job::TestSomething")
-	}
-	if nf.ErrorHash != "hash1" {
-		t.Fatalf("expected error hash 'hash1', got %q", nf.ErrorHash)
-	}
-}
-
-func TestRecoveryDetection(t *testing.T) {
-	var received []map[string]interface{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]interface{}
-		json.NewDecoder(r.Body).Decode(&body)
-		received = append(received, body)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	dir := t.TempDir()
-	stateFile := filepath.Join(dir, "state.json")
-
-	n := NewNotifier(srv.URL, stateFile, "https://dash.example.com", "https://prow.example.com/view/")
-	n.state.Notified["my-job::TestRecovered"] = NotifiedFailure{
-		FirstNotifiedAt:  "2024-01-01T00:00:00Z",
-		ConsecutiveCount: 4,
-		ErrorHash:        "oldhash",
-		JobName:          "my-job",
-		TestName:         "TestRecovered",
-	}
-
-	// Report with no persistent failures triggers recovery.
-	report := makeReport(nil)
-	stats, err := n.ProcessFailures(context.Background(), report, nil)
-	if err != nil {
-		t.Fatalf("ProcessFailures: %v", err)
-	}
-	if stats.Recoveries != 1 {
-		t.Fatalf("expected 1 recovery, got %d", stats.Recoveries)
-	}
-	if stats.NewAlerts != 0 {
-		t.Fatalf("expected 0 new alerts, got %d", stats.NewAlerts)
-	}
-	if len(n.state.Notified) != 0 {
-		t.Fatal("expected state entry to be removed after recovery")
-	}
-	if len(received) != 1 {
-		t.Fatalf("expected 1 webhook call, got %d", len(received))
-	}
-}
-
-func TestErrorHashChangeDetection(t *testing.T) {
-	var received []map[string]interface{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]interface{}
-		json.NewDecoder(r.Body).Decode(&body)
-		received = append(received, body)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	dir := t.TempDir()
-	n := NewNotifier(srv.URL, filepath.Join(dir, "state.json"), "https://dash.example.com", "https://prow.example.com/view/")
-	n.state.Notified["my-job::TestChanged"] = NotifiedFailure{
-		FirstNotifiedAt:  "2024-01-01T00:00:00Z",
-		ConsecutiveCount: 3,
-		ErrorHash:        "oldhash",
-		JobName:          "my-job",
-		TestName:         "TestChanged",
-	}
-
-	report := makeReport([]models.TestFlakiness{
-		{
-			TestName:            "TestChanged",
-			JobID:               "my-job",
-			JobName:             "my-job",
-			ConsecutiveFailures: 4,
-			LastFailure: &models.TestFailureInfo{
-				BuildID:        "200",
-				FailureMessage: "new error message",
-				ErrorHash:      "newhash",
-			},
-		},
-	})
-
-	stats, err := n.ProcessFailures(context.Background(), report, nil)
-	if err != nil {
-		t.Fatalf("ProcessFailures: %v", err)
-	}
-	if stats.NewAlerts != 1 {
-		t.Fatalf("expected 1 new alert (hash change), got %d", stats.NewAlerts)
-	}
-	if n.state.Notified["my-job::TestChanged"].ErrorHash != "newhash" {
-		t.Fatal("expected state to be updated with new hash")
-	}
-}
-
-func TestDeduplication(t *testing.T) {
-	var callCount int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callCount++
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	dir := t.TempDir()
-	n := NewNotifier(srv.URL, filepath.Join(dir, "state.json"), "https://dash.example.com", "https://prow.example.com/view/")
-	n.state.Notified["my-job::TestSame"] = NotifiedFailure{
-		FirstNotifiedAt:  "2024-01-01T00:00:00Z",
-		ConsecutiveCount: 3,
-		ErrorHash:        "samehash",
-		JobName:          "my-job",
-		TestName:         "TestSame",
-	}
-
-	report := makeReport([]models.TestFlakiness{
-		{
-			TestName:            "TestSame",
-			JobID:               "my-job",
-			JobName:             "my-job",
-			ConsecutiveFailures: 5,
-			LastFailure: &models.TestFailureInfo{
-				ErrorHash: "samehash",
-			},
-		},
-	})
-
-	stats, err := n.ProcessFailures(context.Background(), report, nil)
-	if err != nil {
-		t.Fatalf("ProcessFailures: %v", err)
-	}
-	if stats.NewAlerts != 0 {
-		t.Fatalf("expected 0 alerts (de-duplicated), got %d", stats.NewAlerts)
-	}
-	if stats.Recoveries != 0 {
-		t.Fatalf("expected 0 recoveries, got %d", stats.Recoveries)
-	}
-	if callCount != 0 {
-		t.Fatalf("expected 0 webhook calls, got %d", callCount)
-	}
-}
-
-func TestWebhookPOSTFormat(t *testing.T) {
-	var receivedBody map[string]interface{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			t.Errorf("expected POST, got %s", r.Method)
-		}
-		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
-			t.Errorf("expected application/json, got %s", ct)
-		}
-		json.NewDecoder(r.Body).Decode(&receivedBody)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	dir := t.TempDir()
-	n := NewNotifier(srv.URL, filepath.Join(dir, "state.json"), "https://dash.example.com", "https://prow.example.com/view/")
-
-	report := makeReport([]models.TestFlakiness{
-		{
-			TestName:            "TestWebhook",
-			JobName:             "webhook-job",
-			ConsecutiveFailures: 3,
-			LastFailure: &models.TestFailureInfo{
-				BuildID:        "999",
-				FailureMessage: "something broke",
-				ErrorHash:      "webhookhash",
-			},
-		},
-	})
-
-	_, err := n.ProcessFailures(context.Background(), report, nil)
-	if err != nil {
-		t.Fatalf("ProcessFailures: %v", err)
-	}
-
-	blocks, ok := receivedBody["blocks"].([]interface{})
-	if !ok || len(blocks) == 0 {
-		t.Fatal("expected blocks array")
-	}
-
-	header := blocks[0].(map[string]interface{})
-	if header["type"] != "header" {
-		t.Fatalf("expected header type, got %v", header["type"])
-	}
-	headerText := header["text"].(map[string]interface{})
-	if !strings.Contains(headerText["text"].(string), "Persistent Test Failure") {
-		t.Fatalf("expected failure header, got %v", headerText["text"])
-	}
-
-	raw, _ := json.Marshal(receivedBody)
-	rawStr := string(raw)
-	if !contains(rawStr, "View on Dashboard") {
-		t.Fatal("expected 'View on Dashboard' button")
-	}
-}
-
-func TestGracefulEmptyWebhookURL(t *testing.T) {
-	dir := t.TempDir()
-	n := NewNotifier("", filepath.Join(dir, "state.json"), "https://dash.example.com", "https://prow.example.com/view/")
-
-	report := makeReport([]models.TestFlakiness{
-		{
-			TestName:            "TestNoWebhook",
-			JobName:             "some-job",
-			ConsecutiveFailures: 5,
-			LastFailure: &models.TestFailureInfo{
-				ErrorHash: "hash",
-			},
-		},
-	})
-
-	stats, err := n.ProcessFailures(context.Background(), report, nil)
-	if err != nil {
-		t.Fatalf("ProcessFailures: %v", err)
-	}
-	// Empty webhook still records a new alert because postWebhook returns nil.
-	if stats.NewAlerts != 1 {
-		t.Fatalf("expected 1 new alert, got %d", stats.NewAlerts)
-	}
-}
-
-func TestBelowThresholdIgnored(t *testing.T) {
-	var callCount int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callCount++
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	dir := t.TempDir()
-	n := NewNotifier(srv.URL, filepath.Join(dir, "state.json"), "https://dash.example.com", "https://prow.example.com/view/")
-
-	// ConsecutiveFailures = 2, below threshold of 3.
-	report := makeReport([]models.TestFlakiness{
-		{
-			TestName:            "TestFlaky",
-			JobName:             "flaky-job",
-			ConsecutiveFailures: 2,
-			LastFailure: &models.TestFailureInfo{
-				ErrorHash: "hash",
-			},
-		},
-	})
-
-	stats, err := n.ProcessFailures(context.Background(), report, nil)
-	if err != nil {
-		t.Fatalf("ProcessFailures: %v", err)
-	}
-	if stats.NewAlerts != 0 {
-		t.Fatalf("expected 0 alerts for below-threshold failure, got %d", stats.NewAlerts)
-	}
-	if callCount != 0 {
-		t.Fatalf("expected 0 webhook calls, got %d", callCount)
-	}
-}
-
-func TestAILookup(t *testing.T) {
-	var receivedBody map[string]interface{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewDecoder(r.Body).Decode(&receivedBody)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	dir := t.TempDir()
-	n := NewNotifier(srv.URL, filepath.Join(dir, "state.json"), "https://dash.example.com", "https://prow.example.com/view/")
-
-	report := makeReport([]models.TestFlakiness{
-		{
-			TestName:            "TestWithAI",
-			JobName:             "ai-job",
-			ConsecutiveFailures: 4,
-			LastFailure: &models.TestFailureInfo{
-				BuildID:        "300",
-				FailureMessage: "node not ready",
-				ErrorHash:      "aihash",
-			},
-		},
-	})
-
-	jobDetails := []models.JobDetail{
-		{
-			Name: "ai-job",
-			Runs: []models.BuildResult{
-				{
-					TestCases: []models.TestCase{
-						{
-							Name:   "TestWithAI",
-							Status: "failed",
-							AISummary: &models.AISummary{
-								Summary: "Node readiness check timed out",
-							},
-							AIAnalysis: &models.AIAnalysis{
-								RootCause: "Azure VM provisioning delay",
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	_, err := n.ProcessFailures(context.Background(), report, jobDetails)
-	if err != nil {
-		t.Fatalf("ProcessFailures: %v", err)
-	}
-
-	raw, _ := json.Marshal(receivedBody)
-	body := string(raw)
-	if !contains(body, "Azure VM provisioning delay") {
-		t.Fatal("expected AI root cause in webhook body")
-	}
-}
-
-func TestRecoveryCardFormat(t *testing.T) {
-	var receivedBody map[string]interface{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewDecoder(r.Body).Decode(&receivedBody)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	dir := t.TempDir()
-	n := NewNotifier(srv.URL, filepath.Join(dir, "state.json"), "https://dash.example.com", "https://prow.example.com/view/")
-	n.state.Notified["recovery-job::TestRecoveryCard"] = NotifiedFailure{
-		FirstNotifiedAt:  "2024-01-01T00:00:00Z",
-		ConsecutiveCount: 7,
-		ErrorHash:        "old",
-		JobName:          "recovery-job",
-		TestName:         "TestRecoveryCard",
-	}
-
-	report := makeReport(nil) // no persistent failures, so recovery
-	_, err := n.ProcessFailures(context.Background(), report, nil)
-	if err != nil {
-		t.Fatalf("ProcessFailures: %v", err)
-	}
-
-	blocks := receivedBody["blocks"].([]interface{})
-	header := blocks[0].(map[string]interface{})
-	headerText := header["text"].(map[string]interface{})
-	if !strings.Contains(headerText["text"].(string), "Recovery") {
-		t.Fatalf("expected recovery header, got %v", headerText["text"])
-	}
-
-	raw, _ := json.Marshal(receivedBody)
-	if !contains(string(raw), "7 consecutive") {
-		t.Fatal("expected consecutive count in recovery card")
-	}
-}
-
-func TestStateFileRoundTrip(t *testing.T) {
-	dir := t.TempDir()
-	stateFile := filepath.Join(dir, "state.json")
-
-	state := NotificationState{
-		Notified: map[string]NotifiedFailure{
-			"j1::t1": {
-				FirstNotifiedAt:  "2024-06-01T00:00:00Z",
-				ConsecutiveCount: 10,
-				ErrorHash:        "xyz",
-				JobName:          "j1",
-				TestName:         "t1",
-			},
-		},
-	}
-	data, _ := json.Marshal(state)
-	os.WriteFile(stateFile, data, 0644)
-
-	n := NewNotifier("", stateFile, "https://dash.example.com", "https://prow.example.com/view/")
-	if len(n.state.Notified) != 1 {
-		t.Fatalf("expected 1 entry, got %d", len(n.state.Notified))
-	}
-
-	n.state.Notified["j2::t2"] = NotifiedFailure{
-		ErrorHash: "new",
-		JobName:   "j2",
-		TestName:  "t2",
-	}
+	stateFile := filepath.Join(t.TempDir(), "state.json")
+	n := newTestNotifier(t, &fakeSender{}, stateFile)
+	n.state.Notified["job1::test1"] = NotifiedFailure{ErrorHash: "abc", JobName: "job1", TestName: "test1"}
 	if err := n.SaveState(); err != nil {
 		t.Fatal(err)
 	}
 
-	n2 := NewNotifier("", stateFile, "https://dash.example.com", "https://prow.example.com/view/")
-	if len(n2.state.Notified) != 2 {
-		t.Fatalf("expected 2 entries, got %d", len(n2.state.Notified))
+	n2 := newTestNotifier(t, &fakeSender{}, stateFile)
+	if n2.state.Channel != notificationChannel || len(n2.state.Notified) != 1 {
+		t.Fatalf("state = %+v", n2.state)
 	}
 }
 
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && searchContains(s, substr)
+func TestLegacyStateResetsForEmailChannel(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "state.json")
+	legacy := NotificationState{Notified: map[string]NotifiedFailure{"job::test": {ErrorHash: "old"}}}
+	data, _ := json.Marshal(legacy)
+	if err := os.WriteFile(stateFile, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	n := newTestNotifier(t, &fakeSender{}, stateFile)
+	if n.state.Channel != notificationChannel || len(n.state.Notified) != 0 {
+		t.Fatalf("legacy state was not reset: %+v", n.state)
+	}
 }
 
-func searchContains(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
+func TestNewPersistentFailure(t *testing.T) {
+	sender := &fakeSender{}
+	n := newTestNotifier(t, sender, filepath.Join(t.TempDir(), "state.json"))
+	failure := persistentFailure("job-id", "job", "TestSomething", "hash1", 5)
+
+	stats, err := n.ProcessFailures(context.Background(), makeReport(failure), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.NewAlerts != 1 || stats.Failed != 0 || len(sender.messages) != 1 {
+		t.Fatalf("stats=%+v messages=%d", stats, len(sender.messages))
+	}
+	if got := n.state.Notified["job-id::TestSomething"]; got.ErrorHash != "hash1" {
+		t.Fatalf("state = %+v", got)
+	}
+}
+
+func TestSameFailureIsNotRepeated(t *testing.T) {
+	sender := &fakeSender{}
+	n := newTestNotifier(t, sender, filepath.Join(t.TempDir(), "state.json"))
+	failure := persistentFailure("job-id", "job", "TestSomething", "hash1", 3)
+	if _, err := n.ProcessFailures(context.Background(), makeReport(failure), nil); err != nil {
+		t.Fatal(err)
+	}
+	failure.ConsecutiveFailures = 7
+	stats, err := n.ProcessFailures(context.Background(), makeReport(failure), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.NewAlerts != 0 || len(sender.messages) != 1 {
+		t.Fatalf("stats=%+v messages=%d", stats, len(sender.messages))
+	}
+	if got := n.state.Notified["job-id::TestSomething"].ConsecutiveCount; got != 7 {
+		t.Fatalf("consecutive count = %d", got)
+	}
+}
+
+func TestChangedErrorSendsAgain(t *testing.T) {
+	sender := &fakeSender{}
+	n := newTestNotifier(t, sender, filepath.Join(t.TempDir(), "state.json"))
+	failure := persistentFailure("job-id", "job", "TestSomething", "hash1", 3)
+	if _, err := n.ProcessFailures(context.Background(), makeReport(failure), nil); err != nil {
+		t.Fatal(err)
+	}
+	failure.LastFailure.ErrorHash = "hash2"
+	stats, err := n.ProcessFailures(context.Background(), makeReport(failure), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.NewAlerts != 1 || len(sender.messages) != 2 {
+		t.Fatalf("stats=%+v messages=%d", stats, len(sender.messages))
+	}
+	if !strings.Contains(sender.messages[1].Subject, "Failure changed") {
+		t.Fatalf("subject = %q", sender.messages[1].Subject)
+	}
+}
+
+func TestRecoverySendsAndDeletesState(t *testing.T) {
+	sender := &fakeSender{}
+	n := newTestNotifier(t, sender, filepath.Join(t.TempDir(), "state.json"))
+	n.state.Notified["job-id::TestRecovered"] = NotifiedFailure{
+		ConsecutiveCount: 7,
+		ErrorHash:        "hash",
+		JobName:          "job",
+		TestName:         "TestRecovered",
+	}
+
+	stats, err := n.ProcessFailures(context.Background(), makeReport(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Recoveries != 1 || len(sender.messages) != 1 {
+		t.Fatalf("stats=%+v messages=%d", stats, len(sender.messages))
+	}
+	if len(n.state.Notified) != 0 {
+		t.Fatalf("state not cleared: %+v", n.state.Notified)
+	}
+}
+
+func TestBelowThresholdIgnored(t *testing.T) {
+	sender := &fakeSender{}
+	n := newTestNotifier(t, sender, filepath.Join(t.TempDir(), "state.json"))
+	failure := persistentFailure("job-id", "job", "TestSomething", "hash", 2)
+
+	stats, err := n.ProcessFailures(context.Background(), makeReport(failure), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats != (Stats{}) || len(sender.messages) != 0 {
+		t.Fatalf("stats=%+v messages=%d", stats, len(sender.messages))
+	}
+}
+
+func TestJobIDSeparatesSameNames(t *testing.T) {
+	sender := &fakeSender{}
+	n := newTestNotifier(t, sender, filepath.Join(t.TempDir(), "state.json"))
+	one := persistentFailure("periodic/job", "same-job", "TestSame", "hash", 3)
+	two := persistentFailure("presubmit/repo/1/job", "same-job", "TestSame", "hash", 3)
+
+	stats, err := n.ProcessFailures(context.Background(), makeReport(one, two), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.NewAlerts != 2 || len(n.state.Notified) != 2 {
+		t.Fatalf("stats=%+v state=%+v", stats, n.state.Notified)
+	}
+}
+
+func TestAILookupUsesNewestFailedRun(t *testing.T) {
+	sender := &fakeSender{}
+	n := newTestNotifier(t, sender, filepath.Join(t.TempDir(), "state.json"))
+	failure := persistentFailure("job-id", "job", "TestAI", "hash", 4)
+	details := []models.JobDetail{{
+		JobID: "job-id",
+		Runs: []models.BuildResult{
+			{TestCases: []models.TestCase{{Name: "TestAI", Status: "failed", AIAnalysis: &models.AIAnalysis{RootCause: "new root cause"}}}},
+			{TestCases: []models.TestCase{{Name: "TestAI", Status: "failed", AIAnalysis: &models.AIAnalysis{RootCause: "old root cause"}}}},
+		},
+	}}
+
+	if _, err := n.ProcessFailures(context.Background(), makeReport(failure), details); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(sender.messages[0].TextBody, "new root cause") || strings.Contains(sender.messages[0].TextBody, "old root cause") {
+		t.Fatalf("body = %s", sender.messages[0].TextBody)
+	}
+}
+
+func TestFailedNewAlertRetries(t *testing.T) {
+	sender := &fakeSender{failNext: 1}
+	n := newTestNotifier(t, sender, filepath.Join(t.TempDir(), "state.json"))
+	failure := persistentFailure("job-id", "job", "TestRetry", "hash", 3)
+
+	stats, err := n.ProcessFailures(context.Background(), makeReport(failure), nil)
+	if err == nil || stats.Failed != 1 || len(n.state.Notified) != 0 {
+		t.Fatalf("first pass stats=%+v err=%v state=%+v", stats, err, n.state.Notified)
+	}
+	stats, err = n.ProcessFailures(context.Background(), makeReport(failure), nil)
+	if err != nil || stats.NewAlerts != 1 || len(n.state.Notified) != 1 {
+		t.Fatalf("retry stats=%+v err=%v state=%+v", stats, err, n.state.Notified)
+	}
+}
+
+func TestFailedChangedAlertPreservesOldHash(t *testing.T) {
+	sender := &fakeSender{}
+	n := newTestNotifier(t, sender, filepath.Join(t.TempDir(), "state.json"))
+	failure := persistentFailure("job-id", "job", "TestRetry", "old", 3)
+	if _, err := n.ProcessFailures(context.Background(), makeReport(failure), nil); err != nil {
+		t.Fatal(err)
+	}
+	sender.failNext = 1
+	failure.LastFailure.ErrorHash = "new"
+	if _, err := n.ProcessFailures(context.Background(), makeReport(failure), nil); err == nil {
+		t.Fatal("expected delivery error")
+	}
+	if got := n.state.Notified["job-id::TestRetry"].ErrorHash; got != "old" {
+		t.Fatalf("hash advanced after failed send: %q", got)
+	}
+}
+
+func TestFailedRecoveryRetries(t *testing.T) {
+	sender := &fakeSender{failNext: 1}
+	n := newTestNotifier(t, sender, filepath.Join(t.TempDir(), "state.json"))
+	n.state.Notified["job-id::TestRecovery"] = NotifiedFailure{JobName: "job", TestName: "TestRecovery", ConsecutiveCount: 4}
+
+	if _, err := n.ProcessFailures(context.Background(), makeReport(), nil); err == nil {
+		t.Fatal("expected delivery error")
+	}
+	if len(n.state.Notified) != 1 {
+		t.Fatal("failed recovery was removed from state")
+	}
+	stats, err := n.ProcessFailures(context.Background(), makeReport(), nil)
+	if err != nil || stats.Recoveries != 1 || len(n.state.Notified) != 0 {
+		t.Fatalf("retry stats=%+v err=%v state=%+v", stats, err, n.state.Notified)
+	}
+}
+
+func TestProcessContinuesAfterFailure(t *testing.T) {
+	sender := &fakeSender{failNext: 1}
+	n := newTestNotifier(t, sender, filepath.Join(t.TempDir(), "state.json"))
+	one := persistentFailure("a", "job-a", "TestA", "hash", 3)
+	two := persistentFailure("b", "job-b", "TestB", "hash", 3)
+
+	stats, err := n.ProcessFailures(context.Background(), makeReport(one, two), nil)
+	if err == nil || stats.Failed != 1 || stats.NewAlerts != 1 || len(sender.messages) != 1 {
+		t.Fatalf("stats=%+v err=%v messages=%d", stats, err, len(sender.messages))
+	}
+}
+
+func TestParseAddresses(t *testing.T) {
+	from, recipients, err := ParseAddresses("Dashboard <dashboard@example.com>", []string{"One <one@example.com>", "two@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if from.Address != "dashboard@example.com" || len(recipients) != 2 || recipients[0].Address != "one@example.com" {
+		t.Fatalf("from=%+v recipients=%+v", from, recipients)
+	}
+	if _, _, err := ParseAddresses("bad", []string{"one@example.com"}); err == nil {
+		t.Fatal("expected invalid sender error")
+	}
+}
+
+var _ Sender = (*fakeSender)(nil)
+
+func systemicPattern(id, jobID, subject string) models.PatternAnalysis {
+	return models.PatternAnalysis{
+		ID:              id,
+		JobID:           jobID,
+		Subject:         subject,
+		Systemic:        true,
+		Confidence:      "high",
+		BuildsAnalyzed:  5,
+		SharedRootCause: "shared controller timeout",
+		SuggestedFix:    "increase the controller timeout",
+	}
+}
+
+func TestSystemicPatternSendsActionableEmailOnce(t *testing.T) {
+	sender := &fakeSender{}
+	n := newTestNotifier(t, sender, filepath.Join(t.TempDir(), "state.json"))
+	report := makeReport()
+	report.RecurringPatterns = []models.PatternAnalysis{systemicPattern("pattern-1", "job-id", "periodic-job")}
+
+	stats, err := n.ProcessFailures(context.Background(), report, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.PatternAlerts != 1 || len(sender.messages) != 1 {
+		t.Fatalf("stats=%+v messages=%d", stats, len(sender.messages))
+	}
+	message := sender.messages[0]
+	for _, want := range []string{"Systemic recurring failure", "Review issue draft", "Review fix proposal", "failure=pattern-1", "action=create-issue", "action=propose-fix"} {
+		if !strings.Contains(message.Subject+message.TextBody, want) {
+			t.Errorf("message missing %q: subject=%q body=%s", want, message.Subject, message.TextBody)
 		}
 	}
-	return false
+	if _, ok := n.state.Patterns["pattern-1"]; !ok {
+		t.Fatal("pattern notification state was not recorded")
+	}
+
+	stats, err = n.ProcessFailures(context.Background(), report, nil)
+	if err != nil || stats.PatternAlerts != 0 || len(sender.messages) != 1 {
+		t.Fatalf("repeat stats=%+v err=%v messages=%d", stats, err, len(sender.messages))
+	}
+}
+
+func TestPatternEmailOmitsActionsWhenDisabled(t *testing.T) {
+	sender := &fakeSender{}
+	from, to, err := ParseAddresses("Prow Dashboard <prow@example.com>", []string{"team@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := NewNotifier(sender, from, to, filepath.Join(t.TempDir(), "state.json"), "Example", "https://dash.example.com", "https://prow.example.com/view/", false)
+	report := makeReport()
+	report.RecurringPatterns = []models.PatternAnalysis{systemicPattern("pattern-1", "job-id", "periodic-job")}
+
+	stats, err := n.ProcessFailures(context.Background(), report, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.PatternAlerts != 0 || len(sender.messages) != 0 || len(n.state.Patterns) != 0 {
+		t.Fatalf("disabled action links sent pattern email: stats=%+v messages=%d state=%+v", stats, len(sender.messages), n.state.Patterns)
+	}
+}
+
+func TestFailedPatternEmailRetries(t *testing.T) {
+	sender := &fakeSender{failNext: 1}
+	n := newTestNotifier(t, sender, filepath.Join(t.TempDir(), "state.json"))
+	report := makeReport()
+	report.RecurringPatterns = []models.PatternAnalysis{systemicPattern("pattern-1", "job-id", "periodic-job")}
+
+	stats, err := n.ProcessFailures(context.Background(), report, nil)
+	if err == nil || stats.Failed != 1 || len(n.state.Patterns) != 0 {
+		t.Fatalf("first stats=%+v err=%v state=%+v", stats, err, n.state.Patterns)
+	}
+	stats, err = n.ProcessFailures(context.Background(), report, nil)
+	if err != nil || stats.PatternAlerts != 1 || len(n.state.Patterns) != 1 {
+		t.Fatalf("retry stats=%+v err=%v state=%+v", stats, err, n.state.Patterns)
+	}
+}
+
+func TestCurrentEmailStateInitializesPatternMap(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "state.json")
+	state := NotificationState{Channel: notificationChannel, Notified: map[string]NotifiedFailure{}}
+	data, _ := json.Marshal(state)
+	if err := os.WriteFile(stateFile, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	n := newTestNotifier(t, &fakeSender{}, stateFile)
+	if n.state.Patterns == nil {
+		t.Fatal("pattern state map was not initialized")
+	}
+}
+
+func TestPatternNotificationComputesMissingIDAndSkipsNonSystemic(t *testing.T) {
+	sender := &fakeSender{}
+	n := newTestNotifier(t, sender, filepath.Join(t.TempDir(), "state.json"))
+	pattern := systemicPattern("", "job-id", "periodic-job")
+	notSystemic := pattern
+	notSystemic.JobID = "other-job"
+	notSystemic.Systemic = false
+	report := makeReport()
+	report.RecurringPatterns = []models.PatternAnalysis{pattern, notSystemic}
+
+	stats, err := n.ProcessFailures(context.Background(), report, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.PatternAlerts != 1 || len(n.state.Patterns) != 1 || len(sender.messages) != 1 {
+		t.Fatalf("stats=%+v state=%+v messages=%d", stats, n.state.Patterns, len(sender.messages))
+	}
+	for id := range n.state.Patterns {
+		if id == "" {
+			t.Fatal("computed pattern id is empty")
+		}
+	}
+}
+
+func failedRuns(count int) []models.BuildResult {
+	runs := make([]models.BuildResult, count)
+	for i := range runs {
+		runs[i] = models.BuildResult{BuildInfo: models.BuildInfo{Passed: false, Result: "FAILURE"}}
+	}
+	return runs
+}
+
+func TestPatternStateClearsAfterAuthoritativeRecovery(t *testing.T) {
+	sender := &fakeSender{}
+	n := newTestNotifier(t, sender, filepath.Join(t.TempDir(), "state.json"))
+	pattern := systemicPattern("pattern-1", "job-id", "periodic-job")
+	report := makeReport()
+	report.RecurringPatterns = []models.PatternAnalysis{pattern}
+	details := []models.JobDetail{{JobID: "job-id", Name: "periodic-job", Runs: failedRuns(3), PatternAnalyses: []models.PatternAnalysis{pattern}}}
+
+	if _, err := n.ProcessFailures(context.Background(), report, details); err != nil {
+		t.Fatal(err)
+	}
+	if len(n.state.Patterns) != 1 {
+		t.Fatalf("pattern state = %+v", n.state.Patterns)
+	}
+
+	nonSystemic := pattern
+	nonSystemic.Systemic = false
+	clearDetails := []models.JobDetail{{JobID: "job-id", Name: "periodic-job", Runs: failedRuns(3), PatternAnalyses: []models.PatternAnalysis{nonSystemic}}}
+	if _, err := n.ProcessFailures(context.Background(), makeReport(), clearDetails); err != nil {
+		t.Fatal(err)
+	}
+	if len(n.state.Patterns) != 0 {
+		t.Fatalf("recovered pattern remained deduped: %+v", n.state.Patterns)
+	}
+
+	stats, err := n.ProcessFailures(context.Background(), report, details)
+	if err != nil || stats.PatternAlerts != 1 || len(sender.messages) != 2 {
+		t.Fatalf("recurrence stats=%+v err=%v messages=%d", stats, err, len(sender.messages))
+	}
+}
+
+func TestPatternStateSurvivesUnavailableAnalysis(t *testing.T) {
+	sender := &fakeSender{}
+	n := newTestNotifier(t, sender, filepath.Join(t.TempDir(), "state.json"))
+	pattern := systemicPattern("pattern-1", "job-id", "periodic-job")
+	report := makeReport()
+	report.RecurringPatterns = []models.PatternAnalysis{pattern}
+	details := []models.JobDetail{{JobID: "job-id", Name: "periodic-job", Runs: failedRuns(3), PatternAnalyses: []models.PatternAnalysis{pattern}}}
+	if _, err := n.ProcessFailures(context.Background(), report, details); err != nil {
+		t.Fatal(err)
+	}
+
+	unavailable := []models.JobDetail{{JobID: "job-id", Name: "periodic-job", Runs: failedRuns(3)}}
+	if _, err := n.ProcessFailures(context.Background(), makeReport(), unavailable); err != nil {
+		t.Fatal(err)
+	}
+	if len(n.state.Patterns) != 1 {
+		t.Fatalf("unavailable analysis cleared pattern state: %+v", n.state.Patterns)
+	}
 }

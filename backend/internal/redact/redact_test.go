@@ -9,9 +9,9 @@ func TestURLs(t *testing.T) {
 		want string
 	}{
 		{
-			name: "slack webhook in error is stripped",
-			in:   `posting to webhook: Post "https://hooks.slack.com/services/T00/B00/secret": dial tcp: timeout`,
-			want: `posting to webhook: Post "[redacted-url]": dial tcp: timeout`,
+			name: "secret-bearing gateway URL is stripped",
+			in:   `posting to gateway: Post "https://gateway.example/send?token=secret": dial tcp: timeout`,
+			want: `posting to gateway: Post "[redacted-url]": dial tcp: timeout`,
 		},
 		{
 			name: "ai endpoint in url.Error is stripped",

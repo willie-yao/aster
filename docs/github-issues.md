@@ -16,7 +16,7 @@ comment (and optionally closes the issue).
 | `persistent` | flakiness report | a test failed in **≥3 consecutive** runs |
 
 Both are already computed by the fetcher; issues are just a delivery channel for
-them, alongside optional Slack notifications.
+them, alongside optional [email notifications](notifications.md).
 
 ## Permissions (read this first)
 

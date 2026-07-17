@@ -154,7 +154,31 @@ Operational cache and write-state files are removed before Pages publication.
 
 ## Optional features
 
-Slack notifications, automatic issues, and scheduled fix PRs run during the
+### Email notifications
+
+Enable `notifications.email` in `project.yaml`, then pass the SMTP password when
+the relay uses authentication:
+
+```yaml
+jobs:
+  deploy:
+    uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
+    secrets:
+      AI_TOKEN: ${{ secrets.AI_TOKEN }}
+      EMAIL_SMTP_PASSWORD: ${{ secrets.EMAIL_SMTP_PASSWORD }}
+```
+
+```bash
+gh secret set EMAIL_SMTP_PASSWORD --repo my-org/my-dashboard
+```
+
+The SMTP host must be reachable from the selected runner. Keep
+`notifications.email.action_links` false because a static Pages deployment has
+no authenticated action API. See [Email notifications](notifications.md) for the
+project configuration and TLS modes.
+
+
+Email notifications, automatic issues, and scheduled fix PRs run during the
 fetch step when configured. Interactive actions are not available on a static
 Pages site.
 

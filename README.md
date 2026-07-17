@@ -43,7 +43,8 @@ jobs:
       ai-endpoint: ${{ vars.AI_ENDPOINT }}
     secrets:
       AI_TOKEN: ${{ secrets.AI_TOKEN }}
-      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      # Optional after notifications.email is enabled in project.yaml.
+      EMAIL_SMTP_PASSWORD: ${{ secrets.EMAIL_SMTP_PASSWORD }}
 ```
 
 Both paths serve the identical `/data/*.json` schema; the Kubernetes-native
@@ -99,8 +100,9 @@ A dashboard is shaped by three things:
 - [Skills](docs/skills.md): author diagnostic recipes for recurring patterns.
 - [Fix PRs](docs/fix-prs.md): draft a minimal code fix for a recurring failure
   and open a guardrailed draft PR against the source repo.
-- [Slack notifications](docs/notifications.md): alert on persistent failures,
-  changed errors, and recoveries.
+- [Email notifications](docs/notifications.md): alert on persistent failures,
+  changed errors, recoveries, and optionally link systemic patterns into the
+  authenticated issue and fix review flow.
 
 **Operations**
 - [Kubernetes deploy](docs/kubernetes.md): run the dashboard in-cluster, a

@@ -28,6 +28,7 @@ export function PatternBanner({
 
   return (
     <Box
+      id={pattern.id ? `pattern-${pattern.id}` : undefined}
       component="section"
       className="ai-aurora"
       sx={{

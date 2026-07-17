@@ -20,7 +20,21 @@ for how to pin a release.
 
 ## [Unreleased]
 
+### Added
+
+- **SMTP email notifications.** Consumers can configure persistent-failure,
+  changed-error, and recovery email alerts under `notifications.email`. SMTP
+  passwords are supplied through the `EMAIL_SMTP_PASSWORD` deployment secret;
+  STARTTLS is the default transport. Kubernetes-native deployments can opt into
+  inert email links that open the authenticated issue or fix preview flow for
+  systemic recurring patterns.
+
 ### Removed
+
+- **Slack webhook notifications.** `SLACK_WEBHOOK_URL` and Slack Block Kit
+  delivery are removed. Consumers that need notifications must configure the new
+  email transport before upgrading. This is a breaking reusable-workflow secret
+  change.
 
 - **Self-improving skills (`ai.suggest_skills`).** The opt-in feature that
   auto-drafted `skills/<id>.yaml` recipe PRs for uncovered systemic patterns is

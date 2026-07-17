@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/mail"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,6 +35,7 @@ type Config struct {
 	CategoryDisplayOrder []string       `yaml:"category_display_order,omitempty" json:"category_display_order,omitempty"`
 	AI                   *AI            `yaml:"ai,omitempty"         json:"ai,omitempty"`
 	Issues               *Issues        `yaml:"issues,omitempty"     json:"issues,omitempty"`
+	Notifications        *Notifications `yaml:"notifications,omitempty" json:"-"`
 
 	// ShortNamePrefix is a display-only hint derived at fetch time.
 	// It is the longest "periodic-<x>-" prefix shared by most periodic jobs.
@@ -176,6 +178,59 @@ type Branding struct {
 type SourceRepo struct {
 	Owner string `yaml:"owner" json:"owner"`
 	Name  string `yaml:"name"  json:"name"`
+}
+
+// Email TLS modes.
+const (
+	EmailTLSStartTLS = "starttls"
+	EmailTLSImplicit = "tls"
+	EmailTLSNone     = "none"
+)
+
+// Notifications configures optional delivery of dashboard alerts.
+type Notifications struct {
+	Email *EmailNotifications `yaml:"email,omitempty" json:"-"`
+}
+
+// EmailNotifications configures persistent-failure email alerts.
+type EmailNotifications struct {
+	Enabled     bool      `yaml:"enabled,omitempty" json:"-"`
+	ActionLinks bool      `yaml:"action_links,omitempty" json:"-"`
+	From        string    `yaml:"from,omitempty" json:"-"`
+	To          []string  `yaml:"to,omitempty" json:"-"`
+	SMTP        EmailSMTP `yaml:"smtp,omitempty" json:"-"`
+}
+
+// EmailSMTP configures the SMTP relay used for email alerts.
+type EmailSMTP struct {
+	Host     string `yaml:"host,omitempty" json:"-"`
+	Port     int    `yaml:"port,omitempty" json:"-"`
+	Username string `yaml:"username,omitempty" json:"-"`
+	TLS      string `yaml:"tls,omitempty" json:"-"`
+}
+
+// EffectiveEmailNotifications returns enabled email settings with defaults.
+func (c *Config) EffectiveEmailNotifications() (EmailNotifications, bool) {
+	if c == nil || c.Notifications == nil || c.Notifications.Email == nil || !c.Notifications.Email.Enabled {
+		return EmailNotifications{}, false
+	}
+	out := *c.Notifications.Email
+	out.To = append([]string(nil), c.Notifications.Email.To...)
+	out.SMTP.TLS = strings.ToLower(strings.TrimSpace(out.SMTP.TLS))
+	if out.SMTP.TLS == "" {
+		out.SMTP.TLS = EmailTLSStartTLS
+	}
+	if out.SMTP.Port == 0 {
+		switch out.SMTP.TLS {
+		case EmailTLSImplicit:
+			out.SMTP.Port = 465
+		case EmailTLSNone:
+			out.SMTP.Port = 25
+		default:
+			out.SMTP.Port = 587
+		}
+	}
+	return out, true
 }
 
 // Issue trigger names.
@@ -750,6 +805,38 @@ func (c *Config) Validate() error {
 			if _, ok := known[id]; !ok {
 				return fmt.Errorf("category_display_order[%d] %q is not a declared category id", i, id)
 			}
+		}
+	}
+
+	if email, enabled := c.EffectiveEmailNotifications(); enabled {
+		if strings.TrimSpace(email.From) == "" {
+			return fmt.Errorf("notifications.email.from is required when email notifications are enabled")
+		}
+		if _, err := mail.ParseAddress(email.From); err != nil {
+			return fmt.Errorf("notifications.email.from %q is not a valid email address: %w", email.From, err)
+		}
+		if len(email.To) == 0 {
+			return fmt.Errorf("notifications.email.to requires at least one recipient when email notifications are enabled")
+		}
+		for i, recipient := range email.To {
+			if _, err := mail.ParseAddress(recipient); err != nil {
+				return fmt.Errorf("notifications.email.to[%d] %q is not a valid email address: %w", i, recipient, err)
+			}
+		}
+		if strings.TrimSpace(email.SMTP.Host) == "" {
+			return fmt.Errorf("notifications.email.smtp.host is required when email notifications are enabled")
+		}
+		switch email.SMTP.TLS {
+		case EmailTLSStartTLS, EmailTLSImplicit, EmailTLSNone:
+		default:
+			return fmt.Errorf("notifications.email.smtp.tls %q is not valid (want %q, %q, or %q)",
+				email.SMTP.TLS, EmailTLSStartTLS, EmailTLSImplicit, EmailTLSNone)
+		}
+		if email.SMTP.Port < 1 || email.SMTP.Port > 65535 {
+			return fmt.Errorf("notifications.email.smtp.port must be between 1 and 65535")
+		}
+		if email.SMTP.TLS == EmailTLSNone && strings.TrimSpace(email.SMTP.Username) != "" {
+			return fmt.Errorf("notifications.email.smtp.username requires encrypted SMTP (smtp.tls must be %q or %q)", EmailTLSStartTLS, EmailTLSImplicit)
 		}
 	}
 

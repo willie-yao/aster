@@ -1,6 +1,6 @@
 // Package redact scrubs sensitive values from strings before they are logged or
 // published, so error text cannot disclose a hidden endpoint or a secret-bearing
-// URL (e.g. a Slack webhook whose path is the secret).
+// URL whose path or query contains a secret.
 package redact
 
 import "regexp"

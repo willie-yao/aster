@@ -227,6 +227,15 @@ func TestWriteManifest_OmitsAIEndpointAndModel(t *testing.T) {
 		Endpoint: "https://internal.example/v1/chat/completions",
 		Model:    "internal-only-model-name",
 	}
+	cfg.Notifications = &project.Notifications{Email: &project.EmailNotifications{
+		Enabled: true,
+		From:    "private-sender@example.com",
+		To:      []string{"private-team@example.com"},
+		SMTP: project.EmailSMTP{
+			Host:     "smtp.internal.example",
+			Username: "private-user",
+		},
+	}}
 
 	if err := WriteManifest(dir, cfg); err != nil {
 		t.Fatalf("WriteManifest: %v", err)
@@ -244,6 +253,11 @@ func TestWriteManifest_OmitsAIEndpointAndModel(t *testing.T) {
 	}
 	if strings.Contains(string(data), "internal.example") {
 		t.Errorf("manifest.json leaks AI endpoint URL: %s", string(data))
+	}
+	for _, secret := range []string{"private-sender@example.com", "private-team@example.com", "smtp.internal.example", "private-user"} {
+		if strings.Contains(string(data), secret) {
+			t.Errorf("manifest.json leaks email notification config %q: %s", secret, string(data))
+		}
 	}
 }
 

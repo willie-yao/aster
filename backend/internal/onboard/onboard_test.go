@@ -324,7 +324,7 @@ func TestScaffold_PagesIncludesProviderSetup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render deploy workflow: %v", err)
 	}
-	for _, want := range []string{"vars.AI_ENDPOINT", "vars.AI_MODEL", "secrets.AI_TOKEN"} {
+	for _, want := range []string{"vars.AI_ENDPOINT", "vars.AI_MODEL", "secrets.AI_TOKEN", "secrets.EMAIL_SMTP_PASSWORD"} {
 		if !strings.Contains(deploy, want) {
 			t.Errorf("deploy workflow missing %q:\n%s", want, deploy)
 		}
@@ -339,7 +339,7 @@ func TestScaffold_PagesIncludesProviderSetup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render checklist: %v", err)
 	}
-	for _, want := range []string{"gh variable set AI_ENDPOINT", "gh variable set AI_MODEL", "gh secret set AI_TOKEN"} {
+	for _, want := range []string{"gh variable set AI_ENDPOINT", "gh variable set AI_MODEL", "gh secret set AI_TOKEN", "gh secret set EMAIL_SMTP_PASSWORD"} {
 		if !strings.Contains(checklist, want) {
 			t.Errorf("checklist missing %q:\n%s", want, checklist)
 		}
@@ -347,6 +347,19 @@ func TestScaffold_PagesIncludesProviderSetup(t *testing.T) {
 	if strings.Contains(checklist, "is a **stub**") {
 		t.Errorf("checklist labels every prompt as a stub:\n%s", checklist)
 	}
+	if strings.Contains(deploy+checklist, "SLACK_WEBHOOK_URL") {
+		t.Errorf("scaffold still references Slack:\n%s\n%s", deploy, checklist)
+	}
+	projectYAML, err := renderProjectYAML(data)
+	if err != nil {
+		t.Fatalf("render project config: %v", err)
+	}
+	for _, want := range []string{"notifications:", "EMAIL_SMTP_PASSWORD", "tls: starttls"} {
+		if !strings.Contains(projectYAML+deploy, want) {
+			t.Errorf("scaffold missing email hint %q:\n%s\n%s", want, projectYAML, deploy)
+		}
+	}
+
 }
 
 // TestValidateOptions_Mode checks the deploy-mode flag defaults to pages and
@@ -446,5 +459,30 @@ func TestScaffold_K8sMode(t *testing.T) {
 	}
 	if strings.TrimSpace(gotPrompt) == "" {
 		t.Error("k8s scaffold still needs a non-empty prompts/system.md")
+	}
+}
+
+func TestScaffold_K8sIncludesEmailSecretSetup(t *testing.T) {
+	data := buildScaffoldData(testOpts(), nil)
+	data.Mode = modeK8s
+
+	values, err := render(k8sValuesTmpl, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checklist, err := render(k8sChecklistTmpl, checklistData{
+		Name:           data.Name,
+		DashboardOwner: "my-org",
+		DashboardName:  data.DashboardName,
+		EngineRef:      data.EngineRef,
+		Namespace:      data.Namespace,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"EMAIL_SMTP_PASSWORD", "secretKeyRef", "kubectl -n " + data.Namespace + " create secret generic"} {
+		if !strings.Contains(values+checklist, want) {
+			t.Errorf("Kubernetes scaffold missing %q:\n%s\n%s", want, values, checklist)
+		}
 	}
 }

@@ -175,6 +175,7 @@ At minimum, confirm:
 - `branding.base_path` matches the deployment.
 - `branding.source_repo` points at the code repository under test.
 - AI provider settings are supplied through YAML or the deployment environment.
+- Optional email notification settings identify the SMTP relay and recipients.
 
 ## Write the project prompt
 

@@ -1,27 +1,30 @@
-// Package notify sends Slack notifications for persistent test failures through
-// incoming webhooks, with deduplication and recovery tracking.
+// Package notify sends email notifications for persistent test failures with
+// deduplication and recovery tracking.
 package notify
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
-	"net/http"
-	"net/url"
+	"net/mail"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/redact"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/textutil"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
 )
+
+const notificationChannel = "email-v1"
 
 // NotificationState tracks which persistent failures have been notified.
 type NotificationState struct {
+	Channel  string                     `json:"channel"`
 	Notified map[string]NotifiedFailure `json:"notified"`
+	Patterns map[string]NotifiedPattern `json:"patterns,omitempty"`
 }
 
 // NotifiedFailure tracks a single notified persistent failure.
@@ -33,61 +36,103 @@ type NotifiedFailure struct {
 	TestName         string `json:"test_name"`
 }
 
-// Notifier sends Slack notifications for persistent test failures.
+// NotifiedPattern tracks one systemic recurring pattern email.
+type NotifiedPattern struct {
+	PatternID       string `json:"pattern_id"`
+	JobID           string `json:"job_id"`
+	Subject         string `json:"subject"`
+	SharedRootCause string `json:"shared_root_cause"`
+}
+
+// Message is one rendered email notification.
+type Message struct {
+	From     mail.Address
+	To       []mail.Address
+	Subject  string
+	TextBody string
+	HTMLBody string
+}
+
+// Sender delivers one email message.
+type Sender interface {
+	Send(context.Context, Message) error
+}
+
+// Notifier sends email notifications for persistent test failures.
 type Notifier struct {
-	webhookURL       string
-	client           *http.Client
+	sender           Sender
+	from             mail.Address
+	to               []mail.Address
 	state            *NotificationState
 	stateFile        string
+	projectName      string
 	dashboardBaseURL string
 	prowURLBase      string
+	actionLinks      bool
 }
 
 // Stats tracks notification counts for logging.
 type Stats struct {
-	NewAlerts  int
-	Recoveries int
+	NewAlerts     int
+	PatternAlerts int
+	Recoveries    int
+	Failed        int
 }
 
 // NewNotifier creates a Notifier and loads existing state from stateFile.
-// prowURLBase is the trailing-slashed Prow view prefix for artifact links.
-func NewNotifier(webhookURL, stateFile, dashboardBaseURL, prowURLBase string) *Notifier {
+func NewNotifier(sender Sender, from mail.Address, to []mail.Address, stateFile, projectName, dashboardBaseURL, prowURLBase string, actionLinks bool) *Notifier {
 	n := &Notifier{
-		webhookURL:       webhookURL,
-		client:           &http.Client{Timeout: 15 * time.Second},
+		sender:           sender,
+		from:             from,
+		to:               append([]mail.Address(nil), to...),
 		stateFile:        stateFile,
+		projectName:      projectName,
 		dashboardBaseURL: strings.TrimRight(dashboardBaseURL, "/"),
 		prowURLBase:      prowURLBase,
-		state: &NotificationState{
-			Notified: make(map[string]NotifiedFailure),
-		},
+		actionLinks:      actionLinks,
+		state:            newNotificationState(),
 	}
 	n.loadState()
 	return n
 }
 
+func newNotificationState() *NotificationState {
+	return &NotificationState{
+		Channel:  notificationChannel,
+		Notified: make(map[string]NotifiedFailure),
+		Patterns: make(map[string]NotifiedPattern),
+	}
+}
+
 func (n *Notifier) loadState() {
 	data, err := os.ReadFile(n.stateFile)
 	if err != nil {
-		return // no state file yet
+		return
 	}
 	var s NotificationState
 	if err := json.Unmarshal(data, &s); err != nil {
 		log.Printf("Warning: failed to parse notification state: %v", err)
 		return
 	}
-	if s.Notified != nil {
-		n.state = &s
+	if s.Channel != notificationChannel {
+		log.Printf("Notifications: resetting state for channel %q", notificationChannel)
+		return
 	}
+	if s.Notified == nil {
+		s.Notified = make(map[string]NotifiedFailure)
+	}
+	if s.Patterns == nil {
+		s.Patterns = make(map[string]NotifiedPattern)
+	}
+	n.state = &s
 }
 
 // SaveState writes the current notification state to disk.
 func (n *Notifier) SaveState() error {
-	data, err := json.MarshalIndent(n.state, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshalling notification state: %w", err)
+	if err := statefile.WriteJSON(n.stateFile, n.state); err != nil {
+		return fmt.Errorf("saving notification state: %w", err)
 	}
-	return os.WriteFile(n.stateFile, data, 0644)
+	return nil
 }
 
 // notificationKey returns the deduplication key for a test. It uses JobID so
@@ -97,75 +142,163 @@ func notificationKey(jobID, testName string) string {
 }
 
 // ProcessFailures compares current persistent failures against state and sends
-// Slack notifications for new failures, changed error hashes, and recoveries.
+// email for new failures, changed error hashes, and recoveries.
 func (n *Notifier) ProcessFailures(ctx context.Context, report models.FlakinessReport, jobDetails []models.JobDetail) (Stats, error) {
 	var stats Stats
+	var sendErrs []error
 
-	// Current persistent failures require at least 3 consecutive failures.
 	current := make(map[string]models.TestFlakiness)
 	for _, tf := range report.PersistentFailures {
 		if tf.ConsecutiveFailures >= 3 {
-			key := notificationKey(tf.JobID, tf.TestName)
-			current[key] = tf
+			current[notificationKey(tf.JobID, tf.TestName)] = tf
 		}
 	}
 
 	aiLookup := buildAILookup(jobDetails)
-
-	for key, tf := range current {
+	currentKeys := sortedKeys(current)
+	for _, key := range currentKeys {
+		tf := current[key]
 		existing, wasNotified := n.state.Notified[key]
-
 		currentHash := ""
 		if tf.LastFailure != nil {
 			currentHash = tf.LastFailure.ErrorHash
 		}
 
-		if !wasNotified {
+		kind := eventNewFailure
+		send := !wasNotified
+		if wasNotified && currentHash != existing.ErrorHash {
+			kind = eventChangedFailure
+			send = true
+		}
+		if send {
 			summary, rootCause := lookupAI(aiLookup, tf.JobID, tf.TestName)
-			if err := n.sendFailureAlert(ctx, tf, summary, rootCause); err != nil {
-				log.Printf("  ⚠ Failed to send alert for %s: %v", key, err)
-			} else {
-				stats.NewAlerts++
+			if err := n.sender.Send(ctx, n.failureMessage(kind, tf, summary, rootCause)); err != nil {
+				stats.Failed++
+				sendErrs = append(sendErrs, fmt.Errorf("%s: %w", key, err))
+				continue
+			}
+			stats.NewAlerts++
+			firstNotifiedAt := time.Now().UTC().Format(time.RFC3339)
+			if wasNotified {
+				firstNotifiedAt = existing.FirstNotifiedAt
 			}
 			n.state.Notified[key] = NotifiedFailure{
-				FirstNotifiedAt:  time.Now().UTC().Format(time.RFC3339),
+				FirstNotifiedAt:  firstNotifiedAt,
 				ConsecutiveCount: tf.ConsecutiveFailures,
 				ErrorHash:        currentHash,
 				JobName:          tf.JobName,
 				TestName:         tf.TestName,
 			}
-		} else if currentHash != existing.ErrorHash {
-			// Notify again when the failure mode changes.
-			summary, rootCause := lookupAI(aiLookup, tf.JobID, tf.TestName)
-			if err := n.sendFailureAlert(ctx, tf, summary, rootCause); err != nil {
-				log.Printf("  ⚠ Failed to send changed-alert for %s: %v", key, err)
-			} else {
-				stats.NewAlerts++
-			}
-			n.state.Notified[key] = NotifiedFailure{
-				FirstNotifiedAt:  existing.FirstNotifiedAt,
-				ConsecutiveCount: tf.ConsecutiveFailures,
-				ErrorHash:        currentHash,
-				JobName:          tf.JobName,
-				TestName:         tf.TestName,
-			}
+			continue
 		}
-		// Same error hash still failing has already been notified.
+
+		existing.ConsecutiveCount = tf.ConsecutiveFailures
+		existing.JobName = tf.JobName
+		existing.TestName = tf.TestName
+		n.state.Notified[key] = existing
 	}
 
-	// Recover state entries absent from current persistent failures.
-	for key, nf := range n.state.Notified {
-		if _, stillFailing := current[key]; !stillFailing {
-			if err := n.sendRecoveryAlert(ctx, nf); err != nil {
-				log.Printf("  ⚠ Failed to send recovery for %s: %v", key, err)
-			} else {
-				stats.Recoveries++
+	stateKeys := sortedKeys(n.state.Notified)
+	for _, key := range stateKeys {
+		if _, stillFailing := current[key]; stillFailing {
+			continue
+		}
+		nf := n.state.Notified[key]
+		if err := n.sender.Send(ctx, n.recoveryMessage(nf)); err != nil {
+			stats.Failed++
+			sendErrs = append(sendErrs, fmt.Errorf("%s: %w", key, err))
+			continue
+		}
+		stats.Recoveries++
+		delete(n.state.Notified, key)
+	}
+
+	if n.actionLinks {
+		for _, pattern := range report.RecurringPatterns {
+			if !pattern.Systemic {
+				continue
 			}
-			delete(n.state.Notified, key)
+			if pattern.ID == "" {
+				pattern.ID = models.PatternID(pattern)
+			}
+			if _, notified := n.state.Patterns[pattern.ID]; notified {
+				continue
+			}
+			if err := n.sender.Send(ctx, n.patternMessage(pattern)); err != nil {
+				stats.Failed++
+				sendErrs = append(sendErrs, fmt.Errorf("pattern %s: %w", pattern.ID, err))
+				continue
+			}
+			stats.PatternAlerts++
+			n.state.Patterns[pattern.ID] = NotifiedPattern{
+				PatternID:       pattern.ID,
+				JobID:           patternJobID(pattern),
+				Subject:         pattern.Subject,
+				SharedRootCause: pattern.SharedRootCause,
+			}
+		}
+		n.reconcilePatternState(report.RecurringPatterns, jobDetails)
+	}
+
+	return stats, errors.Join(sendErrs...)
+}
+
+func (n *Notifier) reconcilePatternState(current []models.PatternAnalysis, jobDetails []models.JobDetail) {
+	if len(jobDetails) == 0 || len(n.state.Patterns) == 0 {
+		return
+	}
+	currentIDs := make(map[string]bool, len(current))
+	for _, pattern := range current {
+		if !pattern.Systemic {
+			continue
+		}
+		id := pattern.ID
+		if id == "" {
+			id = models.PatternID(pattern)
+		}
+		currentIDs[id] = true
+	}
+
+	presentJobs := make(map[string]bool, len(jobDetails))
+	authoritativeJobs := make(map[string]bool, len(jobDetails))
+	for _, detail := range jobDetails {
+		jobID := detail.JobID
+		if jobID == "" {
+			jobID = detail.Name
+		}
+		presentJobs[jobID] = true
+		if len(detail.PatternAnalyses) > 0 || completedFailedBuilds(detail) < 3 {
+			authoritativeJobs[jobID] = true
 		}
 	}
 
-	return stats, nil
+	for id, notified := range n.state.Patterns {
+		if currentIDs[id] {
+			continue
+		}
+		if !presentJobs[notified.JobID] || authoritativeJobs[notified.JobID] {
+			delete(n.state.Patterns, id)
+		}
+	}
+}
+
+func completedFailedBuilds(detail models.JobDetail) int {
+	count := 0
+	for _, run := range detail.Runs {
+		if !run.Passed && run.Result != "PENDING" {
+			count++
+		}
+	}
+	return count
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // aiEntry stores AI text used in notifications.
@@ -184,7 +317,7 @@ func buildAILookup(jobDetails []models.JobDetail) map[string]aiEntry {
 				}
 				key := notificationKey(jd.JobID, tc.Name)
 				if _, exists := lookup[key]; exists {
-					continue // keep the first entry, since runs are newest-first
+					continue
 				}
 				var entry aiEntry
 				if tc.AISummary != nil {
@@ -203,142 +336,8 @@ func buildAILookup(jobDetails []models.JobDetail) map[string]aiEntry {
 }
 
 func lookupAI(lookup map[string]aiEntry, jobID, testName string) (summary, rootCause string) {
-	key := notificationKey(jobID, testName)
-	if e, ok := lookup[key]; ok {
-		return e.Summary, e.RootCause
+	if entry, ok := lookup[notificationKey(jobID, testName)]; ok {
+		return entry.Summary, entry.RootCause
 	}
 	return "", ""
-}
-
-// sendFailureAlert posts a failure notification to the Slack webhook.
-func (n *Notifier) sendFailureAlert(ctx context.Context, tf models.TestFlakiness, aiSummary, aiRootCause string) error {
-	failureMsg := ""
-	prowURL := ""
-	if tf.LastFailure != nil {
-		failureMsg = textutil.Truncate(tf.LastFailure.FailureMessage, 200)
-		if tf.LastFailure.BuildID != "" {
-			prowURL = n.prowURLBase + tf.JobName + "/" + tf.LastFailure.BuildID
-		}
-	}
-
-	aiText := aiRootCause
-	if aiText == "" {
-		aiText = aiSummary
-	}
-	if aiText == "" {
-		aiText = "No AI analysis available"
-	}
-
-	dashboardURL := fmt.Sprintf("%s/job/%s/test/%s",
-		n.dashboardBaseURL,
-		url.PathEscape(tf.JobName),
-		url.PathEscape(tf.TestName))
-
-	blocks := []map[string]interface{}{
-		{
-			"type": "header",
-			"text": map[string]string{"type": "plain_text", "text": "🔴 Persistent Test Failure"},
-		},
-		{
-			"type": "section",
-			"fields": []map[string]string{
-				{"type": "mrkdwn", "text": fmt.Sprintf("*Test:*\n%s", tf.TestName)},
-				{"type": "mrkdwn", "text": fmt.Sprintf("*Job:*\n%s", tf.JobName)},
-				{"type": "mrkdwn", "text": fmt.Sprintf("*Status:*\nFailed %d consecutive times", tf.ConsecutiveFailures)},
-			},
-		},
-	}
-
-	if failureMsg != "" {
-		blocks = append(blocks, map[string]interface{}{
-			"type": "section",
-			"text": map[string]string{"type": "mrkdwn", "text": fmt.Sprintf("*Error:*\n```%s```", failureMsg)},
-		})
-	}
-
-	blocks = append(blocks, map[string]interface{}{
-		"type": "section",
-		"text": map[string]string{"type": "mrkdwn", "text": fmt.Sprintf("*🤖 AI Analysis:*\n%s", textutil.Truncate(aiText, 500))},
-	})
-
-	linkParts := []string{fmt.Sprintf("<%s|View on Dashboard>", dashboardURL)}
-	if prowURL != "" {
-		linkParts = append(linkParts, fmt.Sprintf("<%s|View in Prow>", prowURL))
-	}
-	blocks = append(blocks, map[string]interface{}{
-		"type":     "actions",
-		"elements": slackButtons(linkParts),
-	})
-
-	payload := map[string]interface{}{"blocks": blocks}
-	return n.postWebhook(ctx, payload)
-}
-
-// sendRecoveryAlert posts a recovery notification to the Slack webhook.
-func (n *Notifier) sendRecoveryAlert(ctx context.Context, nf NotifiedFailure) error {
-	blocks := []map[string]interface{}{
-		{
-			"type": "header",
-			"text": map[string]string{"type": "plain_text", "text": "✅ Test Recovery"},
-		},
-		{
-			"type": "section",
-			"fields": []map[string]string{
-				{"type": "mrkdwn", "text": fmt.Sprintf("*Test:*\n%s", nf.TestName)},
-				{"type": "mrkdwn", "text": fmt.Sprintf("*Job:*\n%s", nf.JobName)},
-			},
-		},
-		{
-			"type": "section",
-			"text": map[string]string{"type": "mrkdwn", "text": fmt.Sprintf("Previously failed %d consecutive times. Now passing.", nf.ConsecutiveCount)},
-		},
-	}
-
-	payload := map[string]interface{}{"blocks": blocks}
-	return n.postWebhook(ctx, payload)
-}
-
-func slackButtons(links []string) []map[string]interface{} {
-	var elements []map[string]interface{}
-	for _, link := range links {
-		// Slack mrkdwn links use <url|text>.
-		parts := strings.SplitN(strings.Trim(link, "<>"), "|", 2)
-		if len(parts) == 2 {
-			elements = append(elements, map[string]interface{}{
-				"type": "button",
-				"text": map[string]string{"type": "plain_text", "text": parts[1]},
-				"url":  parts[0],
-			})
-		}
-	}
-	return elements
-}
-
-func (n *Notifier) postWebhook(ctx context.Context, payload interface{}) error {
-	if n.webhookURL == "" {
-		return nil
-	}
-
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("marshalling webhook payload: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, n.webhookURL, bytes.NewReader(data))
-	if err != nil {
-		return fmt.Errorf("creating webhook request: %s", redact.URLs(err.Error()))
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := n.client.Do(req)
-	if err != nil {
-		// The webhook URL path is itself the secret; a transport error embeds it.
-		return fmt.Errorf("posting to webhook: %s", redact.URLs(err.Error()))
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("webhook returned status %d", resp.StatusCode)
-	}
-	return nil
 }

@@ -348,24 +348,49 @@ func (p *pipeline) runSideEffects(ctx context.Context, res *refreshResult) {
 	details := res.details
 	flakinessReport := res.flakiness
 
-	if slackWebhookURL := os.Getenv("SLACK_WEBHOOK_URL"); slackWebhookURL != "" {
-		notifier := notify.NewNotifier(
-			slackWebhookURL,
-			filepath.Join(opts.OutDir, "notification_state.json"),
-			cfg.Branding.SiteURL,
-			p.backend.ProwURL("logs/"),
-		)
-		stats, err := notifier.ProcessFailures(ctx, flakinessReport, details)
-		if err != nil {
-			log.Printf("Warning: notification processing failed: %v", err)
+	if email, enabled := cfg.EffectiveEmailNotifications(); enabled {
+		password := os.Getenv("EMAIL_SMTP_PASSWORD")
+		if email.SMTP.Username != "" && password == "" {
+			log.Println("Notifications: skipped (EMAIL_SMTP_PASSWORD is unset)")
 		} else {
-			log.Printf("📢 Notifications: %d new alerts, %d recoveries", stats.NewAlerts, stats.Recoveries)
-		}
-		if err := notifier.SaveState(); err != nil {
-			log.Printf("Warning: failed to save notification state: %v", err)
+			from, recipients, err := notify.ParseAddresses(email.From, email.To)
+			if err != nil {
+				log.Printf("Warning: invalid email notification addresses: %v", err)
+			} else {
+				sender, err := notify.NewSMTPSender(notify.SMTPConfig{
+					Host:     email.SMTP.Host,
+					Port:     email.SMTP.Port,
+					Username: email.SMTP.Username,
+					Password: password,
+					TLSMode:  email.SMTP.TLS,
+				})
+				if err != nil {
+					log.Printf("Warning: invalid email notification config: %v", err)
+				} else {
+					notifier := notify.NewNotifier(
+						sender,
+						from,
+						recipients,
+						filepath.Join(opts.OutDir, "notification_state.json"),
+						cfg.Name,
+						cfg.Branding.SiteURL,
+						p.backend.ProwURL("logs/"),
+						email.ActionLinks,
+					)
+					stats, processErr := notifier.ProcessFailures(ctx, flakinessReport, details)
+					log.Printf("📧 Email notifications: %d failure alerts, %d pattern alerts, %d recoveries, %d failed deliveries",
+						stats.NewAlerts, stats.PatternAlerts, stats.Recoveries, stats.Failed)
+					if processErr != nil {
+						log.Printf("Warning: email notification processing failed: %v", processErr)
+					}
+					if err := notifier.SaveState(); err != nil {
+						log.Printf("Warning: failed to save notification state: %v", err)
+					}
+				}
+			}
 		}
 	} else {
-		log.Println("Notifications: skipped (no SLACK_WEBHOOK_URL)")
+		log.Println("Notifications: skipped (email disabled)")
 	}
 
 	processIssues(ctx, cfg, flakinessReport, details, p.aiToken, p.enableAI, opts.OutDir)

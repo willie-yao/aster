@@ -60,6 +60,11 @@ starts the local `opencode` runtime and also needs git. The standard distroless
 image contains neither tool, so fix previews report unavailable unless you
 deploy a custom server image that includes them.
 
+Systemic-pattern email links can deep-link into this flow with the public pattern
+id and requested action. The link itself is an inert GET. After authentication,
+the frontend requires an explicit **Generate draft** click before calling a
+preview endpoint, followed by the existing review and confirmation step.
+
 Actions are two-phase so nothing is posted without review. A `*/preview`
 request renders the exact issue or generates the exact draft fix PR (title,
 body, and, for a fix, the diff) without touching GitHub, and returns a

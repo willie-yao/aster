@@ -184,7 +184,7 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | `fetcher.schedule` | Cron schedule (default every 6 hours). `mode: cron`. |
 | `fetcher.watchInterval`, `fetcher.reconcileInterval` | Refresh and full-pass cadence. `mode: watch`. |
 | `fetcher.buildsPerJob`, `fetcher.workers`, `fetcher.timeout` | Fetch depth and budget. |
-| `fetcher.extraEnv` | Extra env such as `GITHUB_TOKEN`, `SLACK_WEBHOOK_URL`, or the `ISSUE_TOKEN` / `FIX_TOKEN` write tokens (see [Automatic issues and fix PRs](#automatic-issues-and-fix-prs)). |
+| `fetcher.extraEnv` | Extra env such as `GITHUB_TOKEN`, `EMAIL_SMTP_PASSWORD`, or the `ISSUE_TOKEN` / `FIX_TOKEN` write tokens (see [Automatic issues and fix PRs](#automatic-issues-and-fix-prs)). |
 | `ingress.enabled`, `ingress.hosts`, `ingress.tls` | Public read path. |
 | `server.actions.enabled`, `server.actions.mode` | Turn on write actions; `oauth` (GitHub sign-in) or `proxy` (SSO proxy + bot token). |
 | `server.actions.admins` | Required allowlist for write actions. An empty list fails closed. |
@@ -233,6 +233,30 @@ with `server.actions.oauth.existingSecret` (keys `OAUTH_CLIENT_SECRET`,
 The server rejects operational files such as `ai_cache.json`, issue state,
 fix-PR state, previews, and notification state. Pages strips the same files
 before publication. `resolved.json` remains public because the frontend uses it.
+
+## Email notifications
+
+Enable email delivery in the consumer `project.yaml`, then source the SMTP
+password from a Secret when the relay uses authentication:
+
+```bash
+kubectl -n dashboards create secret generic capz-smtp \
+  --from-literal=password=<smtp-password>
+```
+
+```yaml
+fetcher:
+  extraEnv:
+    - name: EMAIL_SMTP_PASSWORD
+      valueFrom:
+        secretKeyRef: { name: capz-smtp, key: password }
+```
+
+The SMTP host in `notifications.email.smtp.host` must be reachable from the
+worker or CronJob. Set `notifications.email.action_links: true` after server
+actions are enabled to add authenticated issue and fix review links to systemic
+pattern emails. See [Email notifications](notifications.md) for TLS modes,
+message behavior, and unauthenticated relay configuration.
 
 ## Automatic issues and fix PRs
 

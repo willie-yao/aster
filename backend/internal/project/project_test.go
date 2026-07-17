@@ -792,3 +792,126 @@ func TestValidateFixPRsRequiresAuthor(t *testing.T) {
 		t.Errorf("expected bad-timeout error, got %v", err)
 	}
 }
+
+func TestEffectiveEmailNotifications(t *testing.T) {
+	tests := []struct {
+		name     string
+		tls      string
+		port     int
+		wantTLS  string
+		wantPort int
+	}{
+		{name: "default starttls", wantTLS: EmailTLSStartTLS, wantPort: 587},
+		{name: "implicit TLS", tls: EmailTLSImplicit, wantTLS: EmailTLSImplicit, wantPort: 465},
+		{name: "plaintext", tls: EmailTLSNone, wantTLS: EmailTLSNone, wantPort: 25},
+		{name: "explicit port", tls: EmailTLSStartTLS, port: 2525, wantTLS: EmailTLSStartTLS, wantPort: 2525},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &Config{Notifications: &Notifications{Email: &EmailNotifications{
+				Enabled: true,
+				To:      []string{"team@example.com"},
+				SMTP:    EmailSMTP{TLS: tc.tls, Port: tc.port},
+			}}}
+			got, enabled := c.EffectiveEmailNotifications()
+			if !enabled || got.SMTP.TLS != tc.wantTLS || got.SMTP.Port != tc.wantPort {
+				t.Fatalf("enabled=%v config=%+v", enabled, got)
+			}
+			got.To[0] = "changed@example.com"
+			if c.Notifications.Email.To[0] != "team@example.com" {
+				t.Fatal("effective config mutated recipients")
+			}
+		})
+	}
+
+	if _, enabled := (&Config{}).EffectiveEmailNotifications(); enabled {
+		t.Fatal("email should be disabled without config")
+	}
+}
+
+func TestValidateEmailNotifications(t *testing.T) {
+	base := func() *Config {
+		c, err := parse(strings.NewReader(validYAML))
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.Notifications = &Notifications{Email: &EmailNotifications{
+			Enabled: true,
+			From:    "Dashboard <dashboard@example.com>",
+			To:      []string{"team@example.com"},
+			SMTP: EmailSMTP{
+				Host:     "smtp.example.com",
+				Username: "dashboard@example.com",
+			},
+		}}
+		return c
+	}
+
+	if err := base().Validate(); err != nil {
+		t.Fatalf("valid email config: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*EmailNotifications)
+		want   string
+	}{
+		{name: "missing from", mutate: func(e *EmailNotifications) { e.From = "" }, want: "notifications.email.from"},
+		{name: "invalid from", mutate: func(e *EmailNotifications) { e.From = "not-an-address" }, want: "valid email address"},
+		{name: "missing recipients", mutate: func(e *EmailNotifications) { e.To = nil }, want: "at least one recipient"},
+		{name: "invalid recipient", mutate: func(e *EmailNotifications) { e.To = []string{"bad"} }, want: "notifications.email.to[0]"},
+		{name: "missing host", mutate: func(e *EmailNotifications) { e.SMTP.Host = "" }, want: "smtp.host"},
+		{name: "invalid TLS", mutate: func(e *EmailNotifications) { e.SMTP.TLS = "sometimes" }, want: "smtp.tls"},
+		{name: "invalid port", mutate: func(e *EmailNotifications) { e.SMTP.Port = 70000 }, want: "smtp.port"},
+		{name: "plaintext auth", mutate: func(e *EmailNotifications) { e.SMTP.TLS = EmailTLSNone }, want: "requires encrypted SMTP"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := base()
+			tc.mutate(c.Notifications.Email)
+			if err := c.Validate(); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want containing %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestValidateEmailNotificationsAllowsUnauthenticatedRelay(t *testing.T) {
+	c, err := parse(strings.NewReader(validYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Notifications = &Notifications{Email: &EmailNotifications{
+		Enabled: true,
+		From:    "dashboard@example.com",
+		To:      []string{"team@example.com"},
+		SMTP:    EmailSMTP{Host: "relay.internal", TLS: EmailTLSNone},
+	}}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("unauthenticated relay: %v", err)
+	}
+}
+
+func TestParseEmailNotifications(t *testing.T) {
+	yaml := validYAML + `
+notifications:
+  email:
+    enabled: true
+    action_links: true
+    from: "Dashboard <dashboard@example.com>"
+    to:
+      - "team@example.com"
+    smtp:
+      host: "smtp.example.com"
+      username: "dashboard@example.com"
+      tls: starttls
+`
+	c, err := parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatal(err)
+	}
+	email, enabled := c.EffectiveEmailNotifications()
+	if !enabled || !email.ActionLinks || email.SMTP.Port != 587 || email.SMTP.Host != "smtp.example.com" || len(email.To) != 1 {
+		t.Fatalf("email config = %+v enabled=%v", email, enabled)
+	}
+}

@@ -73,8 +73,8 @@ categories:
 func runPipeline(t *testing.T, projectDir string, enableAI bool) string {
 	t.Helper()
 	// Clear env that fetcher.Run reads, so a developer's environment can't make
-	// the pipeline reach Slack, GitHub, or a real AI endpoint.
-	for _, k := range []string{"SLACK_WEBHOOK_URL", "ISSUE_TOKEN", "FIX_TOKEN", "GITHUB_TOKEN", "AI_ENDPOINT", "AI_MODEL"} {
+	// the pipeline reach email, GitHub, or a real AI endpoint.
+	for _, k := range []string{"EMAIL_SMTP_PASSWORD", "ISSUE_TOKEN", "FIX_TOKEN", "GITHUB_TOKEN", "AI_ENDPOINT", "AI_MODEL"} {
 		t.Setenv(k, "")
 	}
 	outDir := t.TempDir()
@@ -157,6 +157,9 @@ func TestPipeline_NoAI(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(out, f)); err != nil {
 			t.Errorf("missing output %s: %v", f, err)
 		}
+	}
+	if _, err := os.Stat(filepath.Join(out, "notification_state.json")); !os.IsNotExist(err) {
+		t.Errorf("disabled notifications wrote state: %v", err)
 	}
 }
 

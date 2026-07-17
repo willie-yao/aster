@@ -21,7 +21,7 @@ name: Reusable Deploy
 #         ai-endpoint: ${{ vars.AI_ENDPOINT }}
 #       secrets:
 #         AI_TOKEN: ${{ secrets.AI_TOKEN }}
-#         SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+#         EMAIL_SMTP_PASSWORD: ${{ secrets.EMAIL_SMTP_PASSWORD }}
 #         ISSUE_TOKEN: ${{ secrets.ISSUE_TOKEN }}
 #         FIX_TOKEN: ${{ secrets.FIX_TOKEN }}
 
@@ -82,8 +82,8 @@ on:
       AI_TOKEN:
         description: "Token used to call the chat completions endpoint."
         required: false
-      SLACK_WEBHOOK_URL:
-        description: "Slack webhook for failure notifications."
+      EMAIL_SMTP_PASSWORD:
+        description: "SMTP password for email notifications when notifications.email is enabled and smtp.username is set."
         required: false
       ISSUE_TOKEN:
         description: "GitHub token (PAT or App token) with issues:write on the target repo, for auto-filing issues when issues.enabled is set. Optional; omit to disable."
@@ -192,7 +192,7 @@ jobs:
           AI_MODEL: ${{ inputs.ai-model }}
           AI_ENDPOINT: ${{ inputs.ai-endpoint }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          EMAIL_SMTP_PASSWORD: ${{ secrets.EMAIL_SMTP_PASSWORD }}
           ISSUE_TOKEN: ${{ secrets.ISSUE_TOKEN }}
           FIX_TOKEN: ${{ secrets.FIX_TOKEN }}
         run: |
@@ -252,8 +252,8 @@ jobs:
         run: npm run build
 
       # Keep operational files out of the public site. Vite copies public/data/
-      # into dist/data/ at build; strip the AI cache and write-automation state
-      # (they carry operational metadata, never dashboard data). Kept in sync
+      # into dist/data/ at build; strip the AI cache and operational side-effect
+      # state (they carry operational metadata, never dashboard data). Kept in sync
       # with output.NonPublishedFiles in the backend.
       - name: Strip non-published data files
         run: |
