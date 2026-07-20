@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -194,9 +195,10 @@ func ReviseBody(ctx context.Context, c Completer, spec IssueSpec, instruction st
 
 // Reconcile files issues for new findings, adopts a pre-existing open issue when
 // local state was lost, and comments/closes issues whose finding has recovered.
-// Per-finding API errors are logged and skipped; the run is best-effort.
+// Per-finding API errors are collected while independent findings continue.
 func (m *Manager) Reconcile(ctx context.Context, specs []IssueSpec) (Stats, error) {
 	var stats Stats
+	var reconcileErrs []error
 
 	current := make(map[string]IssueSpec, len(specs))
 	for _, s := range specs {
@@ -211,6 +213,7 @@ func (m *Manager) Reconcile(ctx context.Context, specs []IssueSpec) (Stats, erro
 		// issue from a prior run whose state was lost. Search before creating.
 		if num, urlStr, found, err := m.client.SearchOpenIssue(ctx, markerToken(key), markerFor(key)); err != nil {
 			log.Printf("  ⚠ issue search failed for %s: %v", key, err)
+			reconcileErrs = append(reconcileErrs, fmt.Errorf("search %s: %w", key, err))
 			continue
 		} else if found {
 			m.state.Tracked[key] = TrackedIssue{Number: num, URL: urlStr, FirstFiledAt: now()}
@@ -226,6 +229,7 @@ func (m *Manager) Reconcile(ctx context.Context, specs []IssueSpec) (Stats, erro
 		num, urlStr, err := m.client.CreateIssue(ctx, title, body, spec.Labels)
 		if err != nil {
 			log.Printf("  ⚠ failed to create issue for %s: %v", key, err)
+			reconcileErrs = append(reconcileErrs, fmt.Errorf("create %s: %w", key, err))
 			continue
 		}
 		m.state.Tracked[key] = TrackedIssue{Number: num, URL: urlStr, FirstFiledAt: now()}
@@ -245,12 +249,14 @@ func (m *Manager) Reconcile(ctx context.Context, specs []IssueSpec) (Stats, erro
 		if m.opts.CommentOnRecovery {
 			if err := m.client.CommentIssue(ctx, tracked.Number, recoveryComment()); err != nil {
 				log.Printf("  ⚠ failed to comment recovery on #%d (%s): %v", tracked.Number, key, err)
+				reconcileErrs = append(reconcileErrs, fmt.Errorf("comment recovery %s: %w", key, err))
 				continue // keep tracking so we retry next run
 			}
 		}
 		if m.opts.CloseOnRecovery {
 			if err := m.client.CloseIssue(ctx, tracked.Number); err != nil {
 				log.Printf("  ⚠ failed to close #%d (%s): %v", tracked.Number, key, err)
+				reconcileErrs = append(reconcileErrs, fmt.Errorf("close recovery %s: %w", key, err))
 				continue
 			}
 		}
@@ -259,7 +265,7 @@ func (m *Manager) Reconcile(ctx context.Context, specs []IssueSpec) (Stats, erro
 		log.Printf("  ✅ marked issue #%d recovered for %s", tracked.Number, key)
 	}
 
-	return stats, nil
+	return stats, errors.Join(reconcileErrs...)
 }
 
 func now() string { return time.Now().UTC().Format(time.RFC3339) }

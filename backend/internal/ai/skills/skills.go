@@ -8,9 +8,14 @@
 package skills
 
 import (
+	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -22,38 +27,45 @@ import (
 
 // defaultPriority is assigned to any recipe that doesn't set its own
 // priority. Higher priority is preferred on ties.
-const defaultPriority = 100
+const (
+	defaultPriority             = 100
+	maxSkillContractBytes       = 256 << 10
+	maxSkillContractHeaderBytes = 48 << 10
+)
+
+// ContractHeader carries a serialized consumer skill set to external tools.
+const ContractHeader = "X-Prow-AI-Skills"
 
 // Skill is one consumer-owned diagnostic recipe.
 type Skill struct {
 	// ID is the recipe identifier; must be unique within a Set. Surfaced
 	// in critique feedback, so pick something human-meaningful.
-	ID string `yaml:"id"`
+	ID string `yaml:"id" json:"id"`
 
 	// Name is an optional longer label. Defaults to ID.
-	Name string `yaml:"name,omitempty"`
+	Name string `yaml:"name,omitempty" json:"name,omitempty"`
 
 	// Description is one-line guidance for the recipe author. Not shown
 	// to the model.
-	Description string `yaml:"description,omitempty"`
+	Description string `yaml:"description,omitempty" json:"description,omitempty"`
 
 	// Priority orders matched recipes when more than one fires on the
 	// same draft. Higher first; defaults to defaultPriority.
-	Priority int `yaml:"priority,omitempty"`
+	Priority int `yaml:"priority,omitempty" json:"priority,omitempty"`
 
 	// Triggers is the list of regex patterns ORed together to decide
 	// whether the recipe matches a given draft. Compiled at Load time.
-	Triggers []string `yaml:"triggers"`
+	Triggers []string `yaml:"triggers" json:"triggers"`
 
 	// RequiredEvidence is the list of evidence groups the critique gate
 	// checks once the recipe matches. Each group is satisfied if any of
 	// its any_of regexes matches any path the agent successfully read.
-	RequiredEvidence []EvidenceGroup `yaml:"required_evidence,omitempty"`
+	RequiredEvidence []EvidenceGroup `yaml:"required_evidence,omitempty" json:"required_evidence,omitempty"`
 
 	// Procedure is markdown guidance quoted back to the model when the
 	// recipe fires and evidence is missing. Treated as untrusted prose;
 	// the engine wraps it with "consumer guidance only" framing.
-	Procedure string `yaml:"procedure,omitempty"`
+	Procedure string `yaml:"procedure,omitempty" json:"procedure,omitempty"`
 
 	// compiled triggers. Not serialized.
 	triggerREs []*regexp.Regexp
@@ -65,15 +77,15 @@ type Skill struct {
 type EvidenceGroup struct {
 	// ID identifies the group within the recipe. Surfaced in feedback;
 	// recommended kebab-case, such as cert-manager-config.
-	ID string `yaml:"id"`
+	ID string `yaml:"id" json:"id"`
 
 	// Description is the human-readable phrase shown in feedback.
 	// Defaults to ID if empty.
-	Description string `yaml:"description,omitempty"`
+	Description string `yaml:"description,omitempty" json:"description,omitempty"`
 
 	// AnyOf is the list of regex patterns. Any single match satisfies
 	// the group.
-	AnyOf []string `yaml:"any_of"`
+	AnyOf []string `yaml:"any_of" json:"any_of"`
 
 	// compiled patterns. Not serialized.
 	anyOfREs []*regexp.Regexp
@@ -101,6 +113,106 @@ func (s *Set) Hash() string {
 		return ""
 	}
 	return s.hash
+}
+
+// Contract is the transport-safe representation used by external analysis backends.
+type Contract struct {
+	Hash   string  `json:"hash,omitempty"`
+	Skills []Skill `json:"skills,omitempty"`
+}
+
+// MarshalContract serializes the validated skill set without compiled regexes.
+func (s *Set) MarshalContract() ([]byte, error) {
+	contract := Contract{}
+	if s != nil {
+		contract.Hash = s.hash
+		contract.Skills = append([]Skill(nil), s.skills...)
+	}
+	return json.Marshal(contract)
+}
+
+// HeaderValue encodes the skill contract for an HTTP Tool header.
+func (s *Set) HeaderValue() (string, error) {
+	if s == nil || len(s.skills) == 0 {
+		return "", nil
+	}
+	data, err := s.MarshalContract()
+	if err != nil {
+		return "", err
+	}
+	if len(data) > maxSkillContractBytes {
+		return "", fmt.Errorf("skill contract is %d bytes, exceeds %d", len(data), maxSkillContractBytes)
+	}
+	var compressed bytes.Buffer
+	w := gzip.NewWriter(&compressed)
+	if _, err := w.Write(data); err != nil {
+		return "", fmt.Errorf("compress skill contract: %w", err)
+	}
+	if err := w.Close(); err != nil {
+		return "", fmt.Errorf("compress skill contract: %w", err)
+	}
+	header := base64.RawURLEncoding.EncodeToString(compressed.Bytes())
+	if len(header) > maxSkillContractHeaderBytes {
+		return "", fmt.Errorf("compressed skill contract header is %d bytes, exceeds %d", len(header), maxSkillContractHeaderBytes)
+	}
+	return header, nil
+}
+
+// ParseHeader decodes a skill contract from an HTTP Tool header.
+func ParseHeader(value string) (*Set, error) {
+	if strings.TrimSpace(value) == "" {
+		return &Set{}, nil
+	}
+	if len(value) > maxSkillContractHeaderBytes {
+		return nil, fmt.Errorf("skill contract header exceeds %d bytes", maxSkillContractHeaderBytes)
+	}
+	compressed, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil {
+		return nil, fmt.Errorf("decode skill contract header: %w", err)
+	}
+	r, err := gzip.NewReader(bytes.NewReader(compressed))
+	if err != nil {
+		return nil, fmt.Errorf("decompress skill contract header: %w", err)
+	}
+	defer r.Close()
+	data, err := io.ReadAll(io.LimitReader(r, maxSkillContractBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("decompress skill contract header: %w", err)
+	}
+	if len(data) > maxSkillContractBytes {
+		return nil, fmt.Errorf("skill contract exceeds %d bytes", maxSkillContractBytes)
+	}
+	return ParseContract(data)
+}
+
+// ParseContract validates and compiles a serialized skill set.
+func ParseContract(data []byte) (*Set, error) {
+	var contract Contract
+	if err := json.Unmarshal(data, &contract); err != nil {
+		return nil, fmt.Errorf("parse skill contract: %w", err)
+	}
+	seen := map[string]bool{}
+	loaded := append([]Skill(nil), contract.Skills...)
+	for i := range loaded {
+		if err := validateAndCompile(&loaded[i]); err != nil {
+			return nil, fmt.Errorf("skill contract entry %d: %w", i, err)
+		}
+		if seen[loaded[i].ID] {
+			return nil, fmt.Errorf("duplicate skill id %q", loaded[i].ID)
+		}
+		seen[loaded[i].ID] = true
+	}
+	sort.SliceStable(loaded, func(i, j int) bool {
+		if loaded[i].Priority != loaded[j].Priority {
+			return loaded[i].Priority > loaded[j].Priority
+		}
+		return loaded[i].ID < loaded[j].ID
+	})
+	hash := computeHash(loaded)
+	if contract.Hash != "" && contract.Hash != hash {
+		return nil, fmt.Errorf("skill contract hash mismatch")
+	}
+	return &Set{skills: loaded, hash: hash}, nil
 }
 
 // Match returns the recipes whose triggers fire on the given text,

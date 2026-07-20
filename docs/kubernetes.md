@@ -80,12 +80,25 @@ identical either way.
 
 Orka mode requires `mode: cron` and assumes Orka, the artifact tool shim, a
 Provider, and the patched ai-worker image are already installed in the cluster.
+The Orka skeleton fetch uses `-skip-side-effects`; notifications and GitHub
+reconciliation run once, after final analysis and pattern output exist.
+
 The chart deploys the analysis pipeline, not Orka itself, so the default stays
 `inprocess` and a fresh install always works. Opt into Orka only after those
 prerequisites are in place. See
 [experimental/orka/QUICKSTART.md](../experimental/orka/QUICKSTART.md) for the full setup
 and [experimental/orka/ARCHITECTURE.md](../experimental/orka/ARCHITECTURE.md) for
 how it works.
+
+Orka can also be used only for fix generation while analysis remains
+`inprocess`. Set `orka.fixRuntime.enabled=true`, then configure
+`ai.fix_prs.agent_runtime.type: orka` in the consumer project. This selects the
+git-capable fixer image and enables Task RBAC for scheduled generation. The
+server receives the ServiceAccount token only when interactive actions are also
+enabled.
+When the release namespace differs from `orka.namespace`, provide an
+`ORKA_API_TOKEN` authorized for the Orka namespace if the API's namespace policy
+does not accept the release ServiceAccount token.
 
 ## Build and push the image
 
@@ -174,6 +187,7 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | `image.repository`, `image.tag` | Engine image; tag defaults to the chart `appVersion`. |
 | `mode` | `watch` (continuous worker Deployment, default) or `cron` (scheduled CronJob). |
 | `analysis` | `inprocess` (default; in-cluster agentic loop) or `orka` (advanced experimental pipeline; requires `mode: cron`, Orka, the tool shim, a Provider, and worker patches). |
+| `orka.fixRuntime.enabled` | Mount a ServiceAccount token and grant Orka Task RBAC for `agent_runtime.type: orka` fix generation. |
 | `persistence.accessMode` | Must be `ReadWriteMany`. |
 | `persistence.storageClass`, `persistence.size` | The shared volume's class and size. |
 | `persistence.existingClaim` | Reuse a pre-provisioned PVC instead of creating one. |

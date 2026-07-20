@@ -231,9 +231,9 @@ func TestNormalizeArtifactCitation(t *testing.T) {
 		{"  ", ""},
 	}
 	for _, tc := range cases {
-		got := normalizeArtifactCitation(tc.in)
+		got := NormalizeArtifactCitation(tc.in)
 		if got != tc.want {
-			t.Errorf("normalizeArtifactCitation(%q) = %q, want %q", tc.in, got, tc.want)
+			t.Errorf("NormalizeArtifactCitation(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
 }

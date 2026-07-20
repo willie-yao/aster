@@ -233,8 +233,8 @@ func TestReconcile_PartialSuccessTracksAndCounts(t *testing.T) {
 	m := newManager(t, pr, goodAgent(), Options{})
 	p := systemicPattern("etcd")
 	stats, err := m.Reconcile(context.Background(), []models.PatternAnalysis{p})
-	if err != nil {
-		t.Fatalf("Reconcile: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "labeling failed") {
+		t.Fatalf("Reconcile error = %v, want follow-up failure", err)
 	}
 	if stats.Proposed != 1 {
 		t.Errorf("partial success should count: %+v", stats)

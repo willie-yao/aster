@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"path"
@@ -41,7 +42,7 @@ func recurrence(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if args.TestName == "" {
-		writeJSON(w, map[string]any{"error": "test_name is required"})
+		writeToolError(w, http.StatusBadRequest, "test_name is required")
 		return
 	}
 	count := args.Count
@@ -54,7 +55,7 @@ func recurrence(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 
 	jobName, ok := recurrenceJobName(env.buildPrefix)
 	if !ok {
-		writeJSON(w, map[string]any{"error": "invalid build prefix"})
+		writeToolError(w, http.StatusUnprocessableEntity, "invalid build prefix")
 		return
 	}
 
@@ -64,7 +65,7 @@ func recurrence(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 	job := &models.ProwJob{Name: jobName, JobType: models.JobTypePeriodic}
 	builds, err := prowbuild.ListRecentBuilds(ctx, env.backend, job, count)
 	if err != nil {
-		writeJSON(w, map[string]any{"error": err.Error()})
+		writeToolError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 
@@ -72,7 +73,11 @@ func recurrence(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 	failedIn := 0
 	reads := 0
 	for _, build := range builds {
-		failed := recurrenceBuildFailed(ctx, env, jobName, build.ID, args.TestName, &reads)
+		failed, err := recurrenceBuildFailed(ctx, env, jobName, build.ID, args.TestName, &reads)
+		if err != nil {
+			writeToolError(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
 		if failed {
 			failedIn++
 		}
@@ -99,7 +104,7 @@ func recurrenceJobName(buildPrefix string) (string, bool) {
 	return parts[0], true
 }
 
-func recurrenceBuildFailed(ctx context.Context, env *toolEnv, jobName, buildID, testName string, reads *int) bool {
+func recurrenceBuildFailed(ctx context.Context, env *toolEnv, jobName, buildID, testName string, reads *int) (bool, error) {
 	loc := prowbuild.BuildLocation{
 		JobLocation: prowbuild.JobLocation{JobType: models.JobTypePeriodic},
 		JobName:     jobName,
@@ -108,28 +113,31 @@ func recurrenceBuildFailed(ctx context.Context, env *toolEnv, jobName, buildID, 
 	buildPrefix := loc.BuildPath()
 	junitPaths, err := prowbuild.DiscoverJUnitPaths(ctx, env.backend, loc)
 	if err != nil {
-		return false
+		return false, err
 	}
 	for _, junitPath := range junitPaths {
 		if *reads >= recurrenceMaxReads {
-			return false
+			return false, nil
 		}
 		*reads++
 		data, err := storage.ReadAll(ctx, env.backend, recurrenceJUnitPath(buildPrefix, junitPath))
 		if err != nil {
-			return false
+			if errors.Is(err, errArtifactBudget) {
+				return false, err
+			}
+			continue
 		}
 		cases, err := junit.Parse(data)
 		if err != nil {
-			return false
+			continue
 		}
 		for _, tc := range cases {
 			if tc.Name == testName && tc.Status == "failed" {
-				return true
+				return true, nil
 			}
 		}
 	}
-	return false
+	return false, nil
 }
 
 func recurrenceJUnitPath(buildPrefix, junitPath string) string {

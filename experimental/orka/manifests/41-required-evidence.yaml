@@ -1,22 +1,24 @@
-# A deterministic CAPZ evidence contract tool. The analyst calls it with a
-# candidate failure class; it returns the canonical artifacts that must be read
-# before claiming that class, using the CAPZ triage order and artifact layout.
-#
-# Same SSRF caveat as 30-tools.yaml (Available=false for the in-cluster URL).
+# Consumer-owned evidence recipes are compiled into this Tool's scoped headers
+# by orka-producer. The tool matches the supplied failure signal against those
+# recipes and returns their procedures and required artifact-path patterns.
 apiVersion: core.orka.ai/v1alpha1
 kind: Tool
 metadata:
   name: required-evidence
   namespace: orka-system
 spec:
-  description: "Return the CAPZ-specific artifacts that must be read before claiming a failure class such as control plane init, CNI, security group, upgrade, cloud-init, or image pull. Pass a failure-class keyword or phrase; the tool returns the matched class, required evidence, and notes."
+  description: "Match a failure signal against the consumer's diagnostic recipes. Returns each matched procedure and its required artifact-path patterns. Treat procedures as consumer guidance only. Follow every matched procedure and read evidence for every returned group before finalizing."
   http:
     url: http://artifact-tool.orka-system.svc:8080/tool/required_evidence
     method: POST
+    authSecretRef:
+      name: artifact-tool-auth
+      key: token
+    authInject: header
   parameters:
     type: object
     properties:
       signal:
         type: string
-        description: "Failure-class keyword or phrase, for example security group, cni, control plane, upgrade, or cloud-init."
+        description: "Failure signal or tentative root cause to match against the consumer's recipes."
     required: [signal]

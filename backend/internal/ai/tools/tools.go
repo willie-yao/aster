@@ -102,8 +102,8 @@ type Env struct {
 	//
 	// Keys are typed as "tool/args"; callers compose them. Values are caller
 	// defined and typically marshaled JSON. The cache is shared across all
-	// failures of one build and is bounded by process memory rather than a hard
-	// cap. Entries are listings and URL maps, not log content.
+	// failures of one build. Long-running callers use entry and byte bounds.
+	// Entries are listings and URL maps, not log content.
 	Cache *Cache
 
 	// WebURLBase is the GCSweb-style base URL of the build root. Used by k8s

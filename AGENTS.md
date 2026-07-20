@@ -71,7 +71,8 @@ backend/                       Go 1.25
     server/                    HTTP handler: /data/* read parity + /api/capabilities + actions
     auth/                      Admin auth seam (PAT allowlist; OAuth-swappable)
     actions/                   On-demand single-failure issue / fix-PR service
-    orka/                      Opt-in Orka backend: Task naming + client-go apply helpers
+    fixruntime/                Selects local OpenCode or generation-only Orka fixes
+    orka/                      Orka Task identity, ingestion, and fix runtime helpers
 
 frontend/                      React 19 + Vite 8 + MUI 9
   public/data/                 Fetcher writes JSON here; Vite serves it
@@ -81,7 +82,7 @@ frontend/                      React 19 + Vite 8 + MUI 9
 configs/example/               Docs-only sample project.yaml (minimal) +
                                project.reference.yaml (full) + prompts/
 deploy/helm/                   Helm chart for the Kubernetes-native mode
-experimental/orka/             Opt-in Orka analysis backend (docs, manifests, worker-patches)
+experimental/orka/             Opt-in Orka analysis and fix-runtime backend
 Dockerfile                     Multi-stage image: fetcher + server + SPA
 docs/                          onboarding, deployment, configuration, AI,
                                feature, troubleshooting, and contributor guides
@@ -107,6 +108,7 @@ make build-server    # cd backend && go build -o ../bin/server ./cmd/server/
 make serve           # serve frontend/public/data over HTTP
 make dev-actions     # serve SPA + API with admin actions enabled (local auth)
 make image           # docker build fetcher + server + SPA into one image
+make fixer-image     # drop-in image with git for fix generation
 ```
 
 ## Local development workflow

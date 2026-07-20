@@ -36,6 +36,7 @@ func main() {
 	flag.DurationVar(&opts.Timeout, "timeout", 10*time.Minute, "overall fetch timeout")
 	flag.BoolVar(&opts.IncludePresubmits, "include-presubmits", false, "include presubmit jobs in addition to periodics (ORed with project.yaml source.include_presubmits)")
 	flag.BoolVar(&opts.EnableAI, "ai", false, "enable AI-powered failure analysis")
+	flag.BoolVar(&opts.SkipSideEffects, "skip-side-effects", false, "write data without notifications, issues, or fix PRs")
 	flag.Parse()
 
 	opts.Version = version

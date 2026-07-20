@@ -80,6 +80,14 @@ func checkTransientSignatures(env *toolEnv, w http.ResponseWriter, r *http.Reque
 		scanTransientSource("text", args.Text, &matches, classSet)
 	}
 
+	if len(unreadable) > 0 {
+		writeJSONStatus(w, http.StatusUnprocessableEntity, map[string]any{
+			"error":      "one or more requested sources were unreadable",
+			"unreadable": unreadable,
+		})
+		return
+	}
+
 	classes := []string{}
 	for _, sig := range transientSignatures {
 		if classSet[sig.Class] {

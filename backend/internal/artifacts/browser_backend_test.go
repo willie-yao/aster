@@ -2,11 +2,59 @@ package artifacts
 
 import (
 	"bytes"
+	"context"
 	"io"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
+
+func TestNewUncachedBackendBrowserIsNotMemoized(t *testing.T) {
+	factory := NewBackendFactory(nil, "bucket")
+	cached := factory.ForBuild("logs/job/1", "job/1")
+	if got := factory.ForBuild("logs/job/1/", "other"); got != cached {
+		t.Fatal("ForBuild did not reuse the memoized browser")
+	}
+
+	first := NewUncachedBackendBrowser(nil, "bucket", "logs/job/1", "job/1")
+	second := NewUncachedBackendBrowser(nil, "bucket", "logs/job/1/", "job/1")
+	if first == second || first == cached || second == cached {
+		t.Fatal("NewUncachedBackendBrowser reused a memoized browser")
+	}
+}
+
+func TestNewUncachedBackendBrowserDoesNotRetainFiles(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "logs", "job", "1", "file.txt")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("first"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	backend, err := storage.NewLocalBackend(root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	browser := NewUncachedBackendBrowser(backend, "bucket", "logs/job/1/", "job/1")
+	if _, _, err := browser.Read(context.Background(), "file.txt", 0, 16); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("second"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	data, _, err := browser.Read(context.Background(), "file.txt", 0, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "second" {
+		t.Fatalf("second read = %q, want uncached content", data)
+	}
+}
 
 func TestGrepStreamCountsBytes(t *testing.T) {
 	data := []byte("first\nmatch here\nlast\n")

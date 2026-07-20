@@ -202,6 +202,13 @@ ai:
     author_name: "Jane Maintainer"
     author_email: "jane@example.com"
     dry_run: true
+    agent_runtime:
+      type: orka
+      agent_ref: opencode-fixer
+      api: http://orka.orka-system.svc:8080
+      namespace: orka-system
+      retries: 1  # default; set 0 to disable Orka Task retries
+    critique_retries: 0  # required to opt out when no AI reviewer is configured
     verify:
       enabled: true
       commands:

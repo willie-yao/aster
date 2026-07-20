@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -36,13 +37,13 @@ func diffLastPassing(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if args.Path == "" {
-		writeJSON(w, map[string]any{"error": "path is required"})
+		writeToolError(w, http.StatusBadRequest, "path is required")
 		return
 	}
 
 	jobName, currentBuild, ok := diffLastPassingCurrentBuild(env.buildPrefix)
 	if !ok {
-		writeJSON(w, map[string]any{"error": fmt.Sprintf("unsupported build prefix %q", env.buildPrefix)})
+		writeToolError(w, http.StatusUnprocessableEntity, fmt.Sprintf("unsupported build prefix %q", env.buildPrefix))
 		return
 	}
 
@@ -50,7 +51,11 @@ func diffLastPassing(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	job := &models.ProwJob{Name: jobName, JobType: models.JobTypePeriodic}
-	passingBuild := diffLastPassingFindRecentGreen(ctx, env, job, currentBuild)
+	passingBuild, err := diffLastPassingFindRecentGreen(ctx, env, job, currentBuild)
+	if err != nil {
+		writeToolError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
 	if passingBuild == "" {
 		writeJSON(w, map[string]any{"passing_build": "", "note": "no recent passing build found"})
 		return
@@ -58,14 +63,14 @@ func diffLastPassing(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 
 	currentData, currentTruncated, err := diffLastPassingReadArtifact(ctx, env.browser, args.Path)
 	if err != nil {
-		writeJSON(w, map[string]any{"error": fmt.Sprintf("read current build %s %s: %v", currentBuild, args.Path, err)})
+		writeToolError(w, http.StatusUnprocessableEntity, fmt.Sprintf("read current build %s %s: %v", currentBuild, args.Path, err))
 		return
 	}
 
 	passingBrowser := env.browserForBuild("logs/"+jobName+"/"+passingBuild+"/", jobName+"/"+passingBuild)
 	passingData, passingTruncated, err := diffLastPassingReadArtifact(ctx, passingBrowser, args.Path)
 	if err != nil {
-		writeJSON(w, map[string]any{"error": fmt.Sprintf("read passing build %s %s: %v", passingBuild, args.Path, err)})
+		writeToolError(w, http.StatusUnprocessableEntity, fmt.Sprintf("read passing build %s %s: %v", passingBuild, args.Path, err))
 		return
 	}
 
@@ -95,8 +100,11 @@ func diffLastPassingCurrentBuild(prefix string) (string, string, bool) {
 	return parts[0], parts[1], true
 }
 
-func diffLastPassingFindRecentGreen(ctx context.Context, env *toolEnv, job *models.ProwJob, currentBuild string) string {
-	builds, _ := prowbuild.ListRecentBuilds(ctx, env.backend, job, 15)
+func diffLastPassingFindRecentGreen(ctx context.Context, env *toolEnv, job *models.ProwJob, currentBuild string) (string, error) {
+	builds, err := prowbuild.ListRecentBuilds(ctx, env.backend, job, 15)
+	if err != nil {
+		return "", err
+	}
 	for _, build := range builds {
 		if build.ID == currentBuild {
 			continue
@@ -106,14 +114,20 @@ func diffLastPassingFindRecentGreen(ctx context.Context, env *toolEnv, job *mode
 			JobName:     job.Name,
 			BuildID:     build.ID,
 		})
-		if err != nil || info == nil {
+		if err != nil {
+			if errors.Is(err, errArtifactBudget) {
+				return "", err
+			}
+			continue
+		}
+		if info == nil {
 			continue
 		}
 		if info.Passed || info.Result == "SUCCESS" {
-			return build.ID
+			return build.ID, nil
 		}
 	}
-	return ""
+	return "", nil
 }
 
 func diffLastPassingReadArtifact(ctx context.Context, browser artifacts.Browser, path string) ([]byte, bool, error) {

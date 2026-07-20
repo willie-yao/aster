@@ -19,33 +19,32 @@ func initRepo(t *testing.T) string {
 		t.Skip("git not on PATH")
 	}
 	dir := t.TempDir()
-	// Fully isolate git from the user's global and system config so no test git
-	// operation can read or trigger their settings (e.g. commit.gpgsign, which
-	// would pop a gpg prompt). GIT_CONFIG_GLOBAL/SYSTEM=/dev/null neutralizes
-	// both config layers for the child git processes.
-	env := append(os.Environ(),
+	runTestGit(t, dir, "init", "-q", "-b", "main")
+	runTestGit(t, dir, "config", "user.email", "t@example.com")
+	runTestGit(t, dir, "config", "user.name", "t")
+	runTestGit(t, dir, "config", "commit.gpgsign", "false")
+	if err := os.WriteFile(filepath.Join(dir, "orig.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runTestGit(t, dir, "add", "-A")
+	runTestGit(t, dir, "commit", "-q", "--no-gpg-sign", "-m", "base")
+	return dir
+}
+
+func runTestGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
 		"GIT_CONFIG_GLOBAL=/dev/null",
 		"GIT_CONFIG_SYSTEM=/dev/null",
 		"GIT_TERMINAL_PROMPT=0",
 	)
-	run := func(args ...string) {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		cmd.Env = env
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
-		}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
 	}
-	run("init", "-q", "-b", "main")
-	run("config", "user.email", "t@example.com")
-	run("config", "user.name", "t")
-	run("config", "commit.gpgsign", "false")
-	if err := os.WriteFile(filepath.Join(dir, "orig.txt"), []byte("base\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	run("add", "-A")
-	run("commit", "-q", "--no-gpg-sign", "-m", "base")
-	return dir
+	return string(out)
 }
 
 func TestLocalRuntime_RunOverlayAndExec(t *testing.T) {

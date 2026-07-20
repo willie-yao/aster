@@ -32,7 +32,12 @@ spec:
         {{- include "prow-ai-dashboard.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: worker
     spec:
+      {{- if .Values.orka.fixRuntime.enabled }}
+      serviceAccountName: {{ include "prow-ai-dashboard.orkaServiceAccountName" . }}
+      automountServiceAccountToken: true
+      {{- else }}
       automountServiceAccountToken: false
+      {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -41,8 +46,13 @@ spec:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
         - name: worker
+          {{- if .Values.orka.fixRuntime.enabled }}
+          image: {{ include "prow-ai-dashboard.fixerImage" . }}
+          imagePullPolicy: {{ .Values.orka.fixRuntime.image.pullPolicy }}
+          {{- else }}
           image: {{ include "prow-ai-dashboard.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- end }}
           command:
             - /usr/local/bin/worker
             - -project-dir={{ .Values.project.mountPath }}

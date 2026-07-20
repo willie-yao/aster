@@ -140,11 +140,11 @@ var artifactCitationRE = regexp.MustCompile(
 // "manager.log#L42-L50", so the basename matches the tool arg form.
 var citationStripRE = regexp.MustCompile(`(?::\d+(?:-\d+)?|#L\d+(?:-L?\d+)?)\b`)
 
-// normalizeArtifactCitation cleans up a path-shaped match for comparison
+// NormalizeArtifactCitation cleans up a path-shaped match for comparison
 // against the reads set: slash semantics, lowercase, trim wrapping
 // punctuation/quotes, strip line-number suffixes. Returns the cleaned
 // full path; callers use path.Base for basename-only comparison.
-func normalizeArtifactCitation(s string) string {
+func NormalizeArtifactCitation(s string) string {
 	s = strings.TrimSpace(s)
 	s = strings.Trim(s, "`'\"(),;:")
 	s = strings.ReplaceAll(s, `\`, `/`)
@@ -153,6 +153,25 @@ func normalizeArtifactCitation(s string) string {
 	s = strings.TrimPrefix(s, "./")
 	s = strings.TrimPrefix(s, "/")
 	return s
+}
+
+// ArtifactCitations extracts normalized artifact-like paths from text.
+func ArtifactCitations(text string) []string {
+	if text == "" {
+		return nil
+	}
+	matches := artifactCitationRE.FindAllString(text, -1)
+	seen := map[string]bool{}
+	out := make([]string, 0, len(matches))
+	for _, raw := range matches {
+		norm := NormalizeArtifactCitation(raw)
+		if norm == "" || seen[norm] {
+			continue
+		}
+		seen[norm] = true
+		out = append(out, norm)
+	}
+	return out
 }
 
 // findUnreadArtifactCitations extracts artifact-path-shaped tokens from text
@@ -181,23 +200,12 @@ func findUnreadArtifactCitations(text string, readsFull, readsBase map[string]bo
 	if text == "" {
 		return nil
 	}
-	matches := artifactCitationRE.FindAllString(text, -1)
+	matches := ArtifactCitations(text)
 	if len(matches) == 0 {
 		return nil
 	}
-	seen := map[string]bool{}
 	var out []string
-	for _, raw := range matches {
-		norm := normalizeArtifactCitation(raw)
-		if norm == "" {
-			continue
-		}
-		key := norm
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-
+	for _, norm := range matches {
 		base := path.Base(norm)
 		hasDir := strings.Contains(norm, "/")
 		if hasDir {

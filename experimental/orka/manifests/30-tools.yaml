@@ -19,6 +19,10 @@ spec:
   http:
     url: http://artifact-tool.orka-system.svc:8080/tool/list_artifacts
     method: POST
+    authSecretRef:
+      name: artifact-tool-auth
+      key: token
+    authInject: header
   parameters:
     type: object
     properties:
@@ -37,6 +41,10 @@ spec:
   http:
     url: http://artifact-tool.orka-system.svc:8080/tool/find_artifacts
     method: POST
+    authSecretRef:
+      name: artifact-tool-auth
+      key: token
+    authInject: header
   parameters:
     type: object
     properties:
@@ -57,10 +65,14 @@ metadata:
   name: grep-artifact
   namespace: orka-system
 spec:
-  description: "Regex-search a file for matching lines with surrounding context. Use for huge build-logs to find specific errors."
+  description: "Regex-search a file for matching lines with surrounding context. Use for huge build-logs to find specific errors. Successful calls return an evidence_token for validate_analysis."
   http:
     url: http://artifact-tool.orka-system.svc:8080/tool/grep_artifact
     method: POST
+    authSecretRef:
+      name: artifact-tool-auth
+      key: token
+    authInject: header
   parameters:
     type: object
     properties:
@@ -84,10 +96,14 @@ metadata:
   name: read-artifact
   namespace: orka-system
 spec:
-  description: "Read a byte range of a file. Use for small/known files. Returns up to 16384 bytes."
+  description: "Read a byte range of a file. Use for small/known files. Returns up to 16384 bytes plus an evidence_token for validate_analysis."
   http:
     url: http://artifact-tool.orka-system.svc:8080/tool/read_artifact
     method: POST
+    authSecretRef:
+      name: artifact-tool-auth
+      key: token
+    authInject: header
   parameters:
     type: object
     properties:
@@ -108,10 +124,14 @@ metadata:
   name: tail-artifact
   namespace: orka-system
 spec:
-  description: "Return the last N lines of a file. Most efficient way to inspect the end of a build or controller log."
+  description: "Return the last N lines of a file. Most efficient way to inspect the end of a build or controller log. Successful calls return an evidence_token for validate_analysis."
   http:
     url: http://artifact-tool.orka-system.svc:8080/tool/tail_artifact
     method: POST
+    authSecretRef:
+      name: artifact-tool-auth
+      key: token
+    authInject: header
   parameters:
     type: object
     properties:

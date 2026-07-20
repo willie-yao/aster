@@ -134,3 +134,17 @@ func loadFlakinessReport(dataDir string) (models.FlakinessReport, error) {
 	}
 	return report, nil
 }
+
+// FinalizePatternsAndRun finalizes pattern output, then runs post-analysis side effects.
+func FinalizePatternsAndRun(ctx context.Context, dataDir string, analyzer patterns.Analyzer, sideEffects func(context.Context) error) (FinalizeStats, error) {
+	stats, err := FinalizePatterns(ctx, dataDir, analyzer)
+	if err != nil {
+		return FinalizeStats{}, err
+	}
+	if sideEffects != nil {
+		if err := sideEffects(ctx); err != nil {
+			return stats, fmt.Errorf("orka finalization: side effects: %w", err)
+		}
+	}
+	return stats, nil
+}

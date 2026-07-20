@@ -40,7 +40,10 @@ func RESTConfig(context string) (*rest.Config, error) {
 
 // KubeClient applies Orka objects and reads Task status via the dynamic client,
 // so the pipeline needs no Orka Go types.
-type KubeClient struct{ dyn dynamic.Interface }
+type KubeClient struct {
+	dyn     dynamic.Interface
+	Manager string
+}
 
 // NewKubeClient builds a dynamic client from cfg.
 func NewKubeClient(cfg *rest.Config) (*KubeClient, error) {
@@ -59,9 +62,13 @@ func (k *KubeClient) Apply(ctx context.Context, gvr schema.GroupVersionResource,
 	if err != nil {
 		return err
 	}
+	manager := k.Manager
+	if manager == "" {
+		manager = fieldManager
+	}
 	force := true
 	_, err = k.dyn.Resource(gvr).Namespace(ns).Patch(ctx, u.GetName(), types.ApplyPatchType, data,
-		metav1.PatchOptions{FieldManager: fieldManager, Force: &force})
+		metav1.PatchOptions{FieldManager: manager, Force: &force})
 	if err != nil {
 		return fmt.Errorf("apply %s/%s: %w", gvr.Resource, u.GetName(), err)
 	}

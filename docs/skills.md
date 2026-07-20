@@ -236,6 +236,16 @@ Before merging a new recipe:
    and confirm the recipe-matched cases gain evidence reads and
    substantive root-cause depth versus the prior run.
 
+## Orka backend
+
+The Orka producer loads the same consumer recipes and includes their hash in the
+analysis contract. It exposes the recipes through the scoped
+`required_evidence` Tool. When recipes are present, every accepted Orka analysis
+must consult that Tool before finalizing. The Tool matches the supplied failure
+signal against recipe triggers and returns the consumer procedure plus every
+required-evidence group. Recipe edits therefore invalidate both in-process cache
+entries and Orka Tasks.
+
 ## Observability
 
 When a recipe fires, the fetcher logs (per analysis):

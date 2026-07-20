@@ -20,6 +20,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixruntime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/issues"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
@@ -201,19 +202,20 @@ func (s *Service) buildFixManager(userToken string) (*fixpr.Manager, error) {
 		return nil, fmt.Errorf("no source repo resolved (set ai.fix_prs.repo or branding.source_repo)")
 	}
 	aiClient := s.aiClient()
-	if aiClient == nil {
-		return nil, fmt.Errorf("AI is not configured on the server; cannot draft a fix")
+	ar := eff.AgentRuntime
+	if aiClient == nil && ar.Type != "orka" {
+		return nil, fmt.Errorf("AI is not configured on the server; cannot draft a local fix")
 	}
 
-	// Keep the batch critique guardrail: when the project configures critique
-	// retries, reuse the generation client to review the draft before opening.
-	var critique fixpr.Completer
-	critiqueRetries := 0
-	if eff.CritiqueRetries != nil && *eff.CritiqueRetries > 0 {
-		critiqueRetries = *eff.CritiqueRetries
-		critique = aiClient
+	critique, critiqueRetries, err := fixruntime.Critique(aiClient, eff.CritiqueRetries)
+	if err != nil {
+		return nil, err
 	}
 
+	var prFiller fixpr.PRBodyFiller
+	if aiClient != nil {
+		prFiller = repotemplate.NewPRFiller(userToken, aiClient, eff.Repo.Owner, eff.Repo.Name)
+	}
 	prClient := fixpr.NewClients(userToken)
 	opts := fixpr.Options{
 		SourceOwner:     eff.Repo.Owner,
@@ -227,7 +229,7 @@ func (s *Service) buildFixManager(userToken string) (*fixpr.Manager, error) {
 		DashboardURL:    s.cfg.Branding.SiteURL,
 		Critique:        critique,
 		CritiqueRetries: critiqueRetries,
-		PRFiller:        repotemplate.NewPRFiller(userToken, aiClient, eff.Repo.Owner, eff.Repo.Name),
+		PRFiller:        prFiller,
 	}
 	if eff.Verify != nil && eff.Verify.Enabled {
 		opts.Verify = &fixpr.VerifyConfig{
@@ -237,14 +239,17 @@ func (s *Service) buildFixManager(userToken string) (*fixpr.Manager, error) {
 			Token:    userToken,
 		}
 	}
-	ar := eff.AgentRuntime
 	allowBash := ar.AllowBash == nil || *ar.AllowBash
+	agentRuntime, err := fixruntime.New(ar)
+	if err != nil {
+		return nil, err
+	}
 	model := ar.Model
 	if model == "" {
 		model = s.ai.Model
 	}
 	opts.Agent = &fixpr.AgentConfig{
-		Runtime:    runtime.NewLocalAgent(),
+		Runtime:    agentRuntime,
 		Model:      model,
 		Endpoint:   s.ai.Endpoint,
 		ModelToken: s.ai.Token,

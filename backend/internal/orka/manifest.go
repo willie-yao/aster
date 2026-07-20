@@ -13,7 +13,7 @@ import (
 // AnalysisManifestFile is the private producer-to-ingestor identity contract.
 const AnalysisManifestFile = "orka_analysis.json"
 
-const analysisManifestVersion = 1
+const analysisManifestVersion = 3
 
 // AnalysisManifest records the exact Task identity contract for one fetch pass.
 type AnalysisManifest struct {
@@ -25,6 +25,9 @@ type AnalysisManifest struct {
 	Model         string                   `json:"model"`
 	Version       string                   `json:"version"`
 	MinToolCalls  int                      `json:"min_tool_calls"`
+	MinGCSBytes   int                      `json:"min_gcs_bytes"`
+	SkillSetHash  string                   `json:"skill_set_hash,omitempty"`
+	ValidationKey string                   `json:"validation_key"`
 	Jobs          map[string]bool          `json:"jobs"`
 	Builds        map[string]AnalysisBuild `json:"builds"`
 }
@@ -109,7 +112,7 @@ func (m *AnalysisManifest) Validate() error {
 	if m.SchemaVersion != analysisManifestVersion {
 		return fmt.Errorf("unsupported Orka analysis manifest version %d", m.SchemaVersion)
 	}
-	if m.ProjectScope == "" || m.ContractHash == "" || m.Provider == "" || m.Model == "" || m.Version == "" {
+	if m.ProjectScope == "" || m.ContractHash == "" || m.Provider == "" || m.Model == "" || m.Version == "" || m.ValidationKey == "" {
 		return fmt.Errorf("orka analysis manifest is missing required identity fields")
 	}
 	if m.Jobs == nil || m.Builds == nil {
@@ -117,6 +120,9 @@ func (m *AnalysisManifest) Validate() error {
 	}
 	if m.MinToolCalls < 0 {
 		return fmt.Errorf("orka analysis manifest min_tool_calls must be non-negative")
+	}
+	if m.MinGCSBytes < 0 {
+		return fmt.Errorf("orka analysis manifest min_gcs_bytes must be non-negative")
 	}
 	return nil
 }

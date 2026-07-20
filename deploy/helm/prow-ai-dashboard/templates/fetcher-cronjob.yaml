@@ -4,6 +4,7 @@
 {{- end }}
 {{- if eq .Values.mode "cron" }}
 {{- $orka := eq .Values.analysis "orka" }}
+{{- $orkaAccess := or $orka .Values.orka.fixRuntime.enabled }}
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -25,7 +26,7 @@ spec:
             app.kubernetes.io/component: fetcher
         spec:
           restartPolicy: OnFailure
-          {{- if $orka }}
+          {{- if $orkaAccess }}
           serviceAccountName: {{ include "prow-ai-dashboard.orkaServiceAccountName" . }}
           automountServiceAccountToken: true
           {{- else }}
@@ -43,13 +44,19 @@ spec:
           # not used; Orka + the tool shim + a Provider must already be installed.
           initContainers:
             - name: fetch
+              {{- if .Values.orka.fixRuntime.enabled }}
+              image: {{ include "prow-ai-dashboard.fixerImage" . }}
+              imagePullPolicy: {{ .Values.orka.fixRuntime.image.pullPolicy }}
+              {{- else }}
               image: {{ include "prow-ai-dashboard.image" . }}
               imagePullPolicy: {{ .Values.image.pullPolicy }}
+              {{- end }}
               command:
                 - /usr/local/bin/fetcher
                 - -project-dir={{ .Values.project.mountPath }}
                 - -out={{ .Values.persistence.mountPath }}
                 - -ai=false
+                - -skip-side-effects
                 - -builds={{ .Values.fetcher.buildsPerJob }}
                 - -workers={{ .Values.fetcher.workers }}
                 - -timeout={{ .Values.fetcher.timeout }}
@@ -78,6 +85,8 @@ spec:
                 - -tool-manifests=/base-tools
                 - -tasks-out=/tmp/tasks
                 - -tools-out=/tmp/build-tools
+                - -tool-auth-secret={{ .Values.orka.toolAuthSecret }}
+                - -tool-auth-key={{ .Values.orka.toolAuthKey }}
                 - -apply
                 - -namespace={{ .Values.orka.namespace }}
                 - -provider={{ .Values.orka.provider }}
@@ -94,11 +103,17 @@ spec:
                 - { name: tmp, mountPath: /tmp }
           containers:
             - name: ingest
+              {{- if .Values.orka.fixRuntime.enabled }}
+              image: {{ include "prow-ai-dashboard.fixerImage" . }}
+              imagePullPolicy: {{ .Values.orka.fixRuntime.image.pullPolicy }}
+              {{- else }}
               image: {{ .Values.orka.ingestorImage }}
               imagePullPolicy: {{ .Values.orka.imagePullPolicy }}
+              {{- end }}
               command:
                 - /usr/local/bin/orka-ingestor
                 - -data={{ .Values.persistence.mountPath }}
+                - -project-dir={{ .Values.project.mountPath }}
                 - -api={{ .Values.orka.apiBase }}
                 - -token-file=/var/run/secrets/kubernetes.io/serviceaccount/token
                 - -namespace={{ .Values.orka.namespace }}
@@ -110,18 +125,45 @@ spec:
                 - -pattern-timeout={{ .Values.orka.taskTimeout }}
                 - -pattern-retries={{ .Values.orka.retries | int }}
                 - -gc=true
+              {{- if or .Values.ai.enabled .Values.fetcher.extraEnv }}
+              env:
+                {{- if .Values.ai.enabled }}
+                - name: AI_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "prow-ai-dashboard.aiSecret" . }}
+                      key: {{ .Values.ai.tokenSecretKey }}
+                {{- if .Values.ai.endpoint }}
+                - name: AI_ENDPOINT
+                  value: {{ .Values.ai.endpoint | quote }}
+                {{- end }}
+                {{- if .Values.ai.model }}
+                - name: AI_MODEL
+                  value: {{ .Values.ai.model | quote }}
+                {{- end }}
+                {{- end }}
+                {{- with .Values.fetcher.extraEnv }}
+                {{- toYaml . | nindent 16 }}
+                {{- end }}
+              {{- end }}
               securityContext:
                 {{- toYaml .Values.securityContext | nindent 16 }}
               volumeMounts:
                 - { name: data, mountPath: {{ .Values.persistence.mountPath }} }
+                - { name: project, mountPath: {{ .Values.project.mountPath }}, readOnly: true }
                 - { name: tmp, mountPath: /tmp }
               resources:
                 {{- toYaml .Values.fetcher.resources | nindent 16 }}
           {{- else }}
           containers:
             - name: fetcher
+              {{- if .Values.orka.fixRuntime.enabled }}
+              image: {{ include "prow-ai-dashboard.fixerImage" . }}
+              imagePullPolicy: {{ .Values.orka.fixRuntime.image.pullPolicy }}
+              {{- else }}
               image: {{ include "prow-ai-dashboard.image" . }}
               imagePullPolicy: {{ .Values.image.pullPolicy }}
+              {{- end }}
               command:
                 - /usr/local/bin/fetcher
                 - -project-dir={{ .Values.project.mountPath }}

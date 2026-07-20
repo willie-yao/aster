@@ -624,10 +624,23 @@ contract hash, so cached job JSON is refreshed whenever the current contract
 changes. Tool resources use a contract-versioned scope as well, preventing an
 old Task from observing a newly applied Tool definition. Before publishing a
 result, the ingestor reads Orka's durable execution events, enforces the JSON
-schema and `min_tool_calls`, requires a successful `validate_analysis` call, and
-requires a completed `verify_timeline` call for every transient verdict.
-Accepted analyses publish Tool-call count, duration, provider token usage, and
-quality-tool evidence alongside the result.
+schema, `min_tool_calls`, and `min_gcs_bytes`, requires a successful terminal Task event, rejects
+quality tools whose last attempt failed, requires a successful
+`validate_analysis` call whose token matches the exact final JSON and whose
+scoped evidence tokens prove every cited artifact was returned by a successful
+content read. The final token is keyed by a producer-generated secret carried
+only in the private manifest and a per-Task validate Tool's hidden headers, so it cannot be recomputed for a different final object or replayed by another Task. Recipe groups absent from a complete bounded
+artifact-tree listing are treated as inapplicable, matching the in-process
+critique path. Signed evidence tokens carry the successful artifact-read byte count, which is enforced and published as `AIAnalysis.GCSBytes`. Acceptance also requires a completed `verify_timeline` call for
+every transient verdict. Accepted analyses publish Tool/model failures, retry
+count, context truncations, duration, provider token usage, stop reason, and
+quality-tool evidence alongside the result. Consumer `skills/*.yaml` recipes are
+compiled into the scoped `required_evidence` Tool, and their hash participates
+in the Task fingerprint. When recipes are present, acceptance requires a
+completed recipe lookup before publishing the result. The Orka tool set also
+includes `diff_last_passing` for targeted regression comparisons. After batch pattern finalization,
+the Orka ingestor runs the same notification, issue, and fix-PR reconciliation
+stage as the in-process fetcher.
 
 ### Pattern analysis
 

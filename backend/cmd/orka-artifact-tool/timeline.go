@@ -43,7 +43,7 @@ func verifyTimeline(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if args.Path == "" {
-		writeJSON(w, map[string]any{"error": "path is required"})
+		writeToolError(w, http.StatusBadRequest, "path is required")
 		return
 	}
 
@@ -52,7 +52,7 @@ func verifyTimeline(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 
 	content, err := readTimelineFile(ctx, env, args.Path)
 	if err != nil {
-		writeJSON(w, map[string]any{"error": err.Error()})
+		writeToolError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
 

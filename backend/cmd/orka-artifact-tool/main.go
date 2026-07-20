@@ -1,19 +1,12 @@
-// Command orka-artifact-tool is an HTTP shim that exposes the engine's artifact
-// tools (filesystem: list/read/tail/grep/find and k8s:
-// discover_clusters/find_my_cluster/... over a Prow build's GCS artifact tree)
-// as plain HTTP endpoints so Orka Tool CRDs can call them. The engine's domain
-// code is reused unchanged; only the transport is HTTP.
-//
-// One shim serves any build from any bucket: a request selects its bucket via
-// the X-Bucket header (or "bucket" body field) and its build via X-Build-Prefix
-// (or "build"), so a single service backs many concurrent per-build Tasks across
-// consumers (e.g. capz's kubernetes-ci-logs and istio's istio-prow).
+// Command orka-artifact-tool exposes the engine's read-only artifact tools as
+// authenticated HTTP endpoints for Orka Tool CRDs.
 package main
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -37,11 +30,12 @@ func main() {
 	bucket := env("BUCKET", "kubernetes-ci-logs")
 	buildPrefix := env("BUILD_PREFIX", "logs/periodic-cluster-api-provider-azure-e2e-main/2073230525962653696/")
 	addr := env("ADDR", ":8080")
+	authToken, err := loadAuthToken()
+	if err != nil {
+		log.Fatal(err)
+	}
+	evidence := newEvidenceAttestor(authToken)
 
-	// Default storage config. STORAGE_PROVIDER selects the backend (gcs, gcsweb
-	// over an S3 gateway, local); the *_BASE vars point gcsweb at its gateway.
-	// Per-request X-Storage-* headers override these, so one shim can serve
-	// consumers on different providers.
 	defaultCfg := storage.Config{
 		Provider: storage.Provider(env("STORAGE_PROVIDER", string(storage.ProviderGCS))),
 		Base:     os.Getenv("STORAGE_BASE"),
@@ -52,62 +46,90 @@ func main() {
 	reg := tools.NewRegistry()
 	filesystem.Register(reg)
 	k8s.Register(reg)
-
-	// The resolver serves any build from any bucket per-request (via the
-	// X-Bucket / X-Build-Prefix headers or "bucket" / "build" body fields), so
-	// one shared service backs many concurrent per-build analysis Tasks across
-	// consumers. Absent a selector it uses BUCKET / BUILD_PREFIX / STORAGE_*.
 	resolver, err := newBuildResolver(defaultCfg, bucket, buildPrefix)
 	if err != nil {
 		log.Fatalf("newBuildResolver: %v", err)
 	}
 
-	// Self-registered deterministic quality tools each live in their own file
-	// and register via registerQTool (see validate.go for the template). Each
-	// request resolves its own bucket- and build-scoped toolEnv.
+	mux := http.NewServeMux()
 	for _, qt := range qtools {
 		qt := qt
-		http.HandleFunc(qt.route, func(w http.ResponseWriter, r *http.Request) {
-			body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-			tenv := resolver.toolEnvFor(requestBucket(r, body), requestBuild(r, body), requestStorage(r))
+		mux.HandleFunc(qt.route, requireBearer(authToken, func(w http.ResponseWriter, r *http.Request) {
+			body, err := readToolBody(w, r)
+			if err != nil {
+				return
+			}
+			tenv, budget, err := resolver.toolEnvFor(requestBucket(r), requestBuild(r), requestScope(r), requestStorage(r))
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			tenv.evidence = evidence
 			r.Body = io.NopCloser(bytes.NewReader(body))
-			qt.h(tenv, w, r)
-		})
+			writeBudgetedResponse(w, budget, func(buffer http.ResponseWriter) {
+				qt.h(tenv, buffer, r)
+			})
+		}))
 	}
 
-	// POST /tool/{name}; body is the raw JSON tool arguments. Response is the
-	// tool's Payload as JSON, exactly what the engine would hand the model.
-	http.HandleFunc("/tool/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/tool/", requireBearer(authToken, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
 			return
 		}
 		name := r.URL.Path[len("/tool/"):]
-		raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		raw, err := readToolBody(w, r)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		if len(raw) == 0 {
 			raw = []byte("{}")
 		}
+		env, budget, err := resolver.aiEnv(requestBucket(r), requestBuild(r), requestScope(r), requestStorage(r))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 		defer cancel()
-		// Engine tools ignore the extra "bucket"/"build" fields; the resolver
-		// uses them to pick the bucket- and build-scoped Env.
-		res := reg.Dispatch(ctx, resolver.aiEnv(requestBucket(r, raw), requestBuild(r, raw), requestStorage(r)), name, json.RawMessage(raw))
-		log.Printf("🛠  %s args=%s bytes=%d", name, truncate(raw, 200), res.BytesFetched)
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(res.Payload)
-	})
+		res := reg.Dispatch(ctx, env, name, json.RawMessage(raw))
+		attachEvidenceToken(evidence, requestScope(r), name, res.BytesFetched, res.Payload)
+		log.Printf("🛠 %s args=%s bytes=%d", name, truncate(raw, 200), res.BytesFetched)
+		writeBudgetedResponse(w, budget, func(buffer http.ResponseWriter) {
+			buffer.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(buffer).Encode(res.Payload)
+		})
+	}))
 
-	http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	})
 
 	log.Printf("orka-artifact-tool on %s default-bucket=%s build=%s", addr, bucket, buildPrefix)
-	server := &http.Server{Addr: addr, Handler: http.DefaultServeMux, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 120 * time.Second}
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      70 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    64 << 10,
+	}
 	log.Fatal(server.ListenAndServe())
+}
+
+func readToolBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			http.Error(w, "request body exceeds 1 MiB", http.StatusRequestEntityTooLarge)
+		} else {
+			http.Error(w, "read request body", http.StatusBadRequest)
+		}
+		return nil, err
+	}
+	return body, nil
 }
 
 func truncate(b []byte, n int) string {

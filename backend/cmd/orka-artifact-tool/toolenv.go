@@ -5,39 +5,51 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
 
-// buildResolver serves any build from any bucket in one process so a single
-// shared tool service can back many concurrent per-build analysis Tasks across
-// consumers. A request selects its bucket via the X-Bucket header or a "bucket"
-// body field, and its build via X-Build-Prefix or a "build" body field; absent
-// those, defaultBucket / defaultPrefix are used. Backends, Browsers and caches
-// are memoized per bucket and per (bucket, build).
+const (
+	maxResolverBackends     = 32
+	maxResolverBuilds       = 128
+	maxResolverCacheEntries = 64
+	maxResolverCacheBytes   = 1 << 20
+)
+
+// buildResolver serves authenticated, header-scoped artifact requests across consumers.
 type buildResolver struct {
 	defaultCfg    storage.Config
 	defaultBucket string
 	defaultPrefix string
+	modelBudget   int
+	gcsBudget     int
 
-	mu       sync.Mutex
-	buckets  map[string]*bucketBackend    // bucket -> backend + factory
-	browsers map[string]artifacts.Browser // "bucket\x00prefix" -> browser
-	caches   map[string]*tools.Cache      // "bucket\x00prefix" -> cache
+	mu          sync.Mutex
+	clock       uint64
+	backends    map[string]*bucketBackend
+	backendUsed map[string]uint64
+	builds      map[string]*buildEntry
 }
 
-// bucketBackend is the storage backend + artifact factory for one bucket.
 type bucketBackend struct {
+	key     string
 	bucket  string
 	backend storage.Backend
-	factory *artifacts.BackendFactory
+}
+
+type buildEntry struct {
+	browser artifacts.Browser
+	cache   *tools.Cache
+	used    uint64
 }
 
 func newBuildResolver(defaultCfg storage.Config, defaultBucket, defaultPrefix string) (*buildResolver, error) {
@@ -45,25 +57,37 @@ func newBuildResolver(defaultCfg storage.Config, defaultBucket, defaultPrefix st
 		defaultCfg:    defaultCfg,
 		defaultBucket: defaultBucket,
 		defaultPrefix: normalizeBuildPrefix(defaultPrefix),
-		buckets:       map[string]*bucketBackend{},
-		browsers:      map[string]artifacts.Browser{},
-		caches:        map[string]*tools.Cache{},
+		modelBudget:   envPositiveInt("MODEL_BYTE_BUDGET", defaultScopeModelBytes),
+		gcsBudget:     envPositiveInt("GCS_BYTE_BUDGET", defaultScopeGCSBytes),
+		backends:      map[string]*bucketBackend{},
+		backendUsed:   map[string]uint64{},
+		builds:        map[string]*buildEntry{},
 	}
-	// Eagerly create the default bucket so a misconfiguration fails fast and the
-	// per-request fallback always has a backend to fall back to.
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, err := r.bucketLocked(defaultBucket, storage.Config{}); r.buckets[defaultBucket] == nil {
+	if _, err := r.backendLocked(defaultBucket, storage.Config{}); err != nil {
 		return nil, err
 	}
 	return r, nil
 }
 
-// effectiveCfg merges the shim's default storage config with a per-request
-// override (X-Storage-* headers), so a single shim can serve consumers on
-// different storage providers (gcs, gcsweb over an S3 gateway, ...).
+func envPositiveInt(name string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
+}
+
 func (r *buildResolver) effectiveCfg(bucket string, override storage.Config) storage.Config {
 	cfg := r.defaultCfg
+	if bucket == "" {
+		bucket = r.defaultBucket
+	}
 	cfg.Bucket = bucket
 	if override.Provider != "" {
 		cfg.Provider = override.Provider
@@ -83,27 +107,54 @@ func (r *buildResolver) effectiveCfg(bucket string, override storage.Config) sto
 	return cfg
 }
 
-// bucketLocked returns the backend for bucket, creating it on first use from the
-// merged default + override storage config. The caller must hold r.mu. On a bad
-// bucket it logs and falls back to the default.
-func (r *buildResolver) bucketLocked(bucket string, override storage.Config) (*bucketBackend, error) {
-	if bucket == "" {
-		bucket = r.defaultBucket
-	}
-	if bb, ok := r.buckets[bucket]; ok {
+func storageRouteKey(cfg storage.Config) string {
+	return strings.Join([]string{string(cfg.Provider), cfg.Bucket, cfg.Base, cfg.WebBase, cfg.ProwBase}, "\x00")
+}
+
+func (r *buildResolver) backendLocked(bucket string, override storage.Config) (*bucketBackend, error) {
+	cfg := r.effectiveCfg(bucket, override)
+	key := storageRouteKey(cfg)
+	if bb, ok := r.backends[key]; ok {
+		r.touchBackendLocked(key)
 		return bb, nil
 	}
-	backend, err := storage.New(r.effectiveCfg(bucket, override), nil)
+	backend, err := storage.New(cfg, nil)
 	if err != nil {
-		if bb, ok := r.buckets[r.defaultBucket]; ok {
-			log.Printf("⚠ bucket %q init failed (%v); using default %q", bucket, err, r.defaultBucket)
-			return bb, nil
-		}
-		return nil, fmt.Errorf("storage.New bucket=%s: %w", bucket, err)
+		return nil, fmt.Errorf("storage route provider=%s bucket=%s: %w", cfg.Provider, cfg.Bucket, err)
 	}
-	bb := &bucketBackend{bucket: bucket, backend: backend, factory: artifacts.NewBackendFactory(backend, bucket)}
-	r.buckets[bucket] = bb
+	bb := &bucketBackend{key: key, bucket: cfg.Bucket, backend: backend}
+	r.backends[key] = bb
+	r.touchBackendLocked(key)
+	r.evictBackendsLocked(key)
 	return bb, nil
+}
+
+func (r *buildResolver) touchBackendLocked(key string) {
+	r.clock++
+	r.backendUsed[key] = r.clock
+}
+
+func (r *buildResolver) evictBackendsLocked(keep string) {
+	for len(r.backends) > maxResolverBackends {
+		oldest := oldestKey(r.backendUsed, keep)
+		if oldest == "" {
+			return
+		}
+		delete(r.backends, oldest)
+		delete(r.backendUsed, oldest)
+	}
+}
+
+func oldestKey(used map[string]uint64, keep string) string {
+	var oldest string
+	var tick uint64
+	for key, value := range used {
+		if key == keep || oldest != "" && value >= tick {
+			continue
+		}
+		oldest, tick = key, value
+	}
+	return oldest
 }
 
 func normalizeBuildPrefix(p string) string {
@@ -117,70 +168,89 @@ func normalizeBuildPrefix(p string) string {
 	return p
 }
 
-// resolve returns the backend, Browser, web-URL base and normalized prefix for a
-// build in a bucket, memoizing the Browser per (bucket, build).
-func (r *buildResolver) resolve(bucket, prefix string, override storage.Config) (*bucketBackend, artifacts.Browser, string, string) {
+func (r *buildResolver) resolve(bucket, prefix, scope string, override storage.Config) (*bucketBackend, *buildEntry, string, string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	bb, _ := r.bucketLocked(bucket, override)
+	bb, err := r.backendLocked(bucket, override)
+	if err != nil {
+		return nil, nil, "", "", err
+	}
 	prefix = normalizeBuildPrefix(prefix)
 	if prefix == "" {
 		prefix = r.defaultPrefix
 	}
-	key := bb.bucket + "\x00" + prefix
-	b, ok := r.browsers[key]
-	if !ok {
-		b = bb.factory.ForBuild(prefix, prefix)
-		r.browsers[key] = b
+	if scope == "" {
+		scope = prefix
 	}
-	return bb, b, bb.backend.WebURL(prefix), prefix
+	key := bb.key + "\x00" + scope + "\x00" + prefix
+	entry, ok := r.builds[key]
+	if !ok {
+		entry = &buildEntry{
+			browser: artifacts.NewUncachedBackendBrowser(bb.backend, bb.bucket, prefix, prefix),
+			cache:   tools.NewBoundedCache(maxResolverCacheEntries, maxResolverCacheBytes),
+		}
+		r.builds[key] = entry
+	}
+	r.clock++
+	entry.used = r.clock
+	r.evictBuildsLocked(key)
+	return bb, entry, bb.backend.WebURL(prefix), prefix, nil
 }
 
-func (r *buildResolver) cache(bucket, prefix string) *tools.Cache {
-	prefix = normalizeBuildPrefix(prefix)
-	if prefix == "" {
-		prefix = r.defaultPrefix
+func (r *buildResolver) evictBuildsLocked(keep string) {
+	for len(r.builds) > maxResolverBuilds {
+		var oldest string
+		var tick uint64
+		for key, entry := range r.builds {
+			if key == keep || oldest != "" && entry.used >= tick {
+				continue
+			}
+			oldest, tick = key, entry.used
+		}
+		if oldest == "" {
+			return
+		}
+		delete(r.builds, oldest)
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	bb, _ := r.bucketLocked(bucket, storage.Config{})
-	key := bb.bucket + "\x00" + prefix
-	c, ok := r.caches[key]
-	if !ok {
-		c = tools.NewCache()
-		r.caches[key] = c
-	}
-	return c
 }
 
-// aiEnv builds the engine-tool Env for a build in a bucket.
-func (r *buildResolver) aiEnv(bucket, prefix string, override storage.Config) *tools.Env {
-	bb, b, web, p := r.resolve(bucket, prefix, override)
+func (r *buildResolver) aiEnv(bucket, prefix, scope string, override storage.Config) (*tools.Env, *scopeBudget, error) {
+	_, entry, web, _, err := r.resolve(bucket, prefix, scope, override)
+	if err != nil {
+		return nil, nil, err
+	}
+	budget := newScopeBudget(r.modelBudget, r.gcsBudget)
+	modelRemaining, gcsRemaining := budget.remaining()
 	return &tools.Env{
-		Browser:             b,
-		Cache:               r.cache(bb.bucket, p),
+		Browser:             &budgetBrowser{Browser: entry.browser, budget: budget},
+		Cache:               entry.cache,
 		WebURLBase:          web,
-		RemainingModelBytes: 1 << 30,
-		RemainingGCSBytes:   1 << 30,
-	}
+		RemainingModelBytes: modelRemaining,
+		RemainingGCSBytes:   gcsRemaining,
+	}, budget, nil
 }
 
-// toolEnvFor builds the quality-tool toolEnv for a build in a bucket.
-func (r *buildResolver) toolEnvFor(bucket, prefix string, override storage.Config) *toolEnv {
-	bb, b, web, p := r.resolve(bucket, prefix, override)
+func (r *buildResolver) toolEnvFor(bucket, prefix, scope string, override storage.Config) (*toolEnv, *scopeBudget, error) {
+	bb, entry, web, p, err := r.resolve(bucket, prefix, scope, override)
+	if err != nil {
+		return nil, nil, err
+	}
+	budget := newScopeBudget(r.modelBudget, r.gcsBudget)
+	wrap := func(browser artifacts.Browser) artifacts.Browser {
+		return &budgetBrowser{Browser: browser, budget: budget}
+	}
 	return &toolEnv{
-		backend:         bb.backend,
-		bucket:          bb.bucket,
-		buildPrefix:     p,
-		webURLBase:      web,
-		browser:         b,
-		browserForBuild: bb.factory.ForBuild,
-	}
+		backend:     &budgetBackend{Backend: bb.backend, budget: budget},
+		bucket:      bb.bucket,
+		buildPrefix: p,
+		webURLBase:  web,
+		browser:     wrap(entry.browser),
+		browserForBuild: func(prefix, display string) artifacts.Browser {
+			return wrap(artifacts.NewUncachedBackendBrowser(bb.backend, bb.bucket, prefix, display))
+		},
+	}, budget, nil
 }
 
-// requestStorage extracts per-request storage overrides from the X-Storage-*
-// headers, so a shared shim can serve consumers on different providers. Empty
-// fields fall back to the shim's default storage config.
 func requestStorage(r *http.Request) storage.Config {
 	return storage.Config{
 		Provider: storage.Provider(strings.TrimSpace(r.Header.Get("X-Storage-Provider"))),
@@ -190,34 +260,16 @@ func requestStorage(r *http.Request) storage.Config {
 	}
 }
 
-// requestBucket extracts the caller-selected GCS bucket from the X-Bucket header
-// (preferred) or a "bucket" field in the JSON body. Empty means default.
-func requestBucket(r *http.Request, body []byte) string {
-	if h := strings.TrimSpace(r.Header.Get("X-Bucket")); h != "" {
-		return h
-	}
-	var meta struct {
-		Bucket string `json:"bucket"`
-	}
-	if len(body) > 0 {
-		_ = json.Unmarshal(body, &meta)
-	}
-	return meta.Bucket
+func requestBucket(r *http.Request) string {
+	return strings.TrimSpace(r.Header.Get("X-Bucket"))
 }
 
-// requestBuild extracts the caller-selected build prefix from the X-Build-Prefix
-// header (preferred) or a "build" field in the JSON body. Empty means default.
-func requestBuild(r *http.Request, body []byte) string {
-	if h := strings.TrimSpace(r.Header.Get("X-Build-Prefix")); h != "" {
-		return h
-	}
-	var meta struct {
-		Build string `json:"build"`
-	}
-	if len(body) > 0 {
-		_ = json.Unmarshal(body, &meta)
-	}
-	return meta.Build
+func requestBuild(r *http.Request) string {
+	return strings.TrimSpace(r.Header.Get("X-Build-Prefix"))
+}
+
+func requestScope(r *http.Request) string {
+	return strings.TrimSpace(r.Header.Get(orka.ToolScopeHeader))
 }
 
 // toolEnv is the per-request context handed to every self-registered quality
@@ -229,6 +281,7 @@ type toolEnv struct {
 	buildPrefix string
 	webURLBase  string
 	browser     artifacts.Browser
+	evidence    *evidenceAttestor
 	// browserForBuild returns a Browser bound to another build in the same
 	// bucket. prefix is the bucket-relative, trailing-slashed build directory.
 	browserForBuild func(prefix, display string) artifacts.Browser
@@ -279,6 +332,10 @@ func writeJSONStatus(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+func writeToolError(w http.ResponseWriter, status int, message string) {
+	writeJSONStatus(w, status, map[string]any{"error": message})
 }
 
 // requirePOST writes 405 and returns false if the method is not POST.

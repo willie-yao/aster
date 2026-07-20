@@ -926,3 +926,51 @@ func TestValidateFixVerifyTimeout(t *testing.T) {
 		t.Fatalf("Validate error = %v, want verify.timeout", err)
 	}
 }
+
+func TestEffectiveFixPRsOrkaRuntimeDefaults(t *testing.T) {
+	c := &Config{
+		Branding: Branding{SourceRepo: SourceRepo{Owner: "o", Name: "n"}},
+		AI: &AI{FixPRs: &FixPRs{
+			Enabled: true, AuthorName: "J", AuthorEmail: "j@e.com",
+			AgentRuntime: &FixAgentRuntime{Type: "orka", OrkaAgentRef: "opencode-fixer", OrkaAPI: "http://orka:8080"},
+		}},
+	}
+	got := c.EffectiveFixPRs().AgentRuntime
+	if got.OrkaNamespace != "orka-system" || got.OrkaVersion != "v1" || got.OrkaRetries == nil || *got.OrkaRetries != 1 {
+		t.Fatalf("Orka defaults = %+v", got)
+	}
+}
+
+func TestValidateFixPRsOrkaRuntime(t *testing.T) {
+	base := func() *Config {
+		c, err := parse(strings.NewReader(validYAML))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	c := base()
+	c.AI = &AI{FixPRs: &FixPRs{Enabled: true, AuthorName: "Jane", AuthorEmail: "jane@example.com", AgentRuntime: &FixAgentRuntime{Type: "orka"}}}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "agent_ref and api") {
+		t.Fatalf("missing Orka config error = %v", err)
+	}
+	c.AI.FixPRs.AgentRuntime.OrkaAgentRef = "opencode-fixer"
+	c.AI.FixPRs.AgentRuntime.OrkaAPI = "http://orka:8080"
+	if err := c.Validate(); err != nil {
+		t.Fatalf("valid Orka runtime rejected: %v", err)
+	}
+	negativeRetries := -1
+	c.AI.FixPRs.AgentRuntime.OrkaRetries = &negativeRetries
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "retries") {
+		t.Fatalf("negative Orka retries error = %v", err)
+	}
+}
+
+func TestEffectiveFixPRsPreservesZeroOrkaRetries(t *testing.T) {
+	zero := 0
+	c := &Config{AI: &AI{FixPRs: &FixPRs{AgentRuntime: &FixAgentRuntime{Type: "orka", OrkaRetries: &zero}}}}
+	got := c.EffectiveFixPRs().AgentRuntime
+	if got.OrkaRetries == nil || *got.OrkaRetries != 0 {
+		t.Fatalf("OrkaRetries = %v, want explicit zero", got.OrkaRetries)
+	}
+}

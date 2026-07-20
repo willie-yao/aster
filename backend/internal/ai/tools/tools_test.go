@@ -158,6 +158,38 @@ func TestCacheConcurrentSafe(t *testing.T) {
 	}
 }
 
+func TestBoundedCacheEvictsLeastRecentlyUsed(t *testing.T) {
+	c := NewBoundedCache(2, 100)
+	c.Set("a", "1")
+	c.Set("b", "2")
+	if _, ok := c.Get("a"); !ok {
+		t.Fatal("expected a before eviction")
+	}
+	c.Set("c", "3")
+	if _, ok := c.Get("b"); ok {
+		t.Fatal("least recently used entry was retained")
+	}
+	if c.Len() != 2 {
+		t.Fatalf("Len = %d, want 2", c.Len())
+	}
+}
+
+func TestBoundedCacheEnforcesByteLimit(t *testing.T) {
+	c := NewBoundedCache(10, 5)
+	c.Set("a", "12")
+	c.Set("b", "34")
+	if _, ok := c.Get("a"); ok {
+		t.Fatal("oldest entry was retained past the byte limit")
+	}
+	if got := c.Bytes(); got > 5 {
+		t.Fatalf("Bytes = %d, want <= 5", got)
+	}
+	c.Set("oversized", "value")
+	if _, ok := c.Get("oversized"); ok {
+		t.Fatal("oversized entry was cached")
+	}
+}
+
 func TestErrPayloadEnvelope(t *testing.T) {
 	res := ErrPayload("boom")
 	if res.Payload["error"] != "boom" {

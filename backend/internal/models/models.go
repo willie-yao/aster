@@ -103,9 +103,16 @@ type AIAnalysis struct {
 	// ToolCalls is the number of agent tool invocations made during this
 	// analysis.
 	ToolCalls int `json:"tool_calls,omitempty"`
+	// ToolFailures is the number of failed tool calls recorded by the backend.
+	ToolFailures int `json:"tool_failures,omitempty"`
+	// ModelRequests and ModelFailures report model request attempts and failures.
+	ModelRequests int `json:"model_requests,omitempty"`
+	ModelFailures int `json:"model_failures,omitempty"`
 	// ContextBytes is the cumulative tool-result and injected-evidence bytes added
 	// to the model conversation.
 	ContextBytes int `json:"context_bytes,omitempty"`
+	// ContextTruncations reports model-context compaction or truncation events.
+	ContextTruncations int `json:"context_truncations,omitempty"`
 	// GCSBytes is the cumulative bytes fetched from GCS via agent tool
 	// calls.
 	GCSBytes int `json:"gcs_bytes,omitempty"`
@@ -120,6 +127,10 @@ type AIAnalysis struct {
 	// BudgetExhausted reports whether the agentic loop hit one of its
 	// budget caps and was forced to finalize on best-effort evidence.
 	BudgetExhausted bool `json:"budget_exhausted,omitempty"`
+	// TaskRetries, TaskOutcome, and StopReason describe backend completion.
+	TaskRetries int    `json:"task_retries,omitempty"`
+	TaskOutcome string `json:"task_outcome,omitempty"`
+	StopReason  string `json:"stop_reason,omitempty"`
 	// TimelineVerified and ArtifactPathsValidated record deterministic Orka
 	// quality-tool evidence used by the result acceptance gate.
 	TimelineVerified       bool `json:"timeline_verified,omitempty"`

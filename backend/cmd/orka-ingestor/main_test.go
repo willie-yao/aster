@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,6 +18,36 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
+
+const testValidationKey = "test-validation-key"
+
+func withValidation(a analysis) analysis { return withValidationForTask(a, "task") }
+
+func withValidationForTask(a analysis, taskName string) analysis {
+	if a.GCSBytes == nil {
+		zero := 0
+		a.GCSBytes = &zero
+	}
+	if a.RelevantFiles == nil {
+		a.RelevantFiles = []string{}
+	}
+	a.ValidationToken = orkaapi.AnalysisValidationToken(testValidationKey, taskName, a.validationInput(), *a.GCSBytes)
+	return a
+}
+
+func validatedAnalysisJSON(t *testing.T, a analysis, taskNames ...string) string {
+	t.Helper()
+	taskName := "task"
+	if len(taskNames) > 0 {
+		taskName = taskNames[0]
+	}
+	a = withValidationForTask(a, taskName)
+	data, err := json.Marshal(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
 
 type staticPatternAnalyzer struct{}
 
@@ -57,6 +88,7 @@ func TestIngestThenFinalizePatterns(t *testing.T) {
 	results := map[string]string{}
 	detail := models.JobDetail{Name: "periodic-controller", JobID: "periodic-controller"}
 	manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "test-model", "v1", 2)
+	manifest.ValidationKey = testValidationKey
 	for _, buildID := range []string{"103", "102", "101"} {
 		tc := models.TestCase{
 			Name:            "should reconcile",
@@ -74,7 +106,12 @@ func TestIngestThenFinalizePatterns(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		results[ref.Name] = `{"summary":"stale controller configuration","root_cause":"the controller wrote stale configuration","severity":"High","is_transient":false,"suggested_fix":"serialize the update","relevant_files":["config/controller.yaml"]}`
+		nonTransient := false
+		results[ref.Name] = validatedAnalysisJSON(t, analysis{
+			Summary: "stale controller configuration", RootCause: "the controller wrote stale configuration",
+			Severity: "High", IsTransient: &nonTransient, SuggestedFix: "serialize the update",
+			RelevantFiles: []string{"config/controller.yaml"},
+		}, ref.Name)
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -144,7 +181,7 @@ func TestIngestThenFinalizePatterns(t *testing.T) {
 		if !analysis.ArtifactPathsValidated {
 			t.Fatalf("build %s did not record validate_analysis", run.BuildID)
 		}
-		if !analysis.CritiquePassed || analysis.CritiqueVersion != orkaAcceptanceVersion {
+		if !analysis.CritiquePassed || analysis.CritiqueVersion != orkaapi.AcceptanceVersion {
 			t.Fatalf("build %s acceptance metadata = %+v", run.BuildID, analysis)
 		}
 	}
@@ -237,6 +274,7 @@ func TestWebhookIndexTargetsOneJobFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "m", "v1", 2)
+	manifest.ValidationKey = testValidationKey
 	manifest.SetBuild("job", "1", "build-1", "tool-1", "logs/job/1/")
 	s := &webhookServer{dataDir: dir, namespace: "orka-system"}
 	s.rebuildIndex()
@@ -281,6 +319,7 @@ func TestWebhookIndexTargetsOneJobFile(t *testing.T) {
 func TestIngestRefreshesMismatchedContractHash(t *testing.T) {
 	const namespace = "orka-system"
 	manifest := orkaapi.NewAnalysisManifest("project", "test", "new-contract", "models", "model", "v1", 2)
+	manifest.ValidationKey = testValidationKey
 	tc := models.TestCase{
 		Name: "test", Status: "failed", FailureMessage: "boom",
 		AISummary:  &models.AISummary{Summary: "old"},
@@ -293,6 +332,8 @@ func TestIngestRefreshesMismatchedContractHash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	nonTransient := false
+	newResult := validatedAnalysisJSON(t, analysis{Summary: "new root", RootCause: "new root", Severity: "High", IsTransient: &nonTransient, SuggestedFix: "fix it"}, ref.Name)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.Contains(r.URL.Path, ref.Name) {
 			http.NotFound(w, r)
@@ -302,7 +343,7 @@ func TestIngestRefreshesMismatchedContractHash(t *testing.T) {
 			writeAcceptedEvents(w, false)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]string{"result": `{"summary":"new root","root_cause":"new root","severity":"High","is_transient":false,"suggested_fix":"fix it"}`})
+		_ = json.NewEncoder(w).Encode(map[string]string{"result": newResult})
 	}))
 	defer server.Close()
 
@@ -331,6 +372,7 @@ func TestIngestRefreshesMismatchedContractHash(t *testing.T) {
 
 func TestIngestKeepsMatchingContractHash(t *testing.T) {
 	manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "model", "v1", 2)
+	manifest.ValidationKey = testValidationKey
 	tc := models.TestCase{
 		Name: "test", Status: "failed", FailureMessage: "boom",
 		AISummary:  &models.AISummary{Summary: "current"},
@@ -356,9 +398,9 @@ func writeAcceptedEvents(w http.ResponseWriter, transient bool) {
 	events := []map[string]any{
 		{"seq": 1, "type": "TaskStarted", "createdAt": base},
 		{"seq": 2, "type": "ToolCallStarted", "toolName": "read-artifact", "toolCallID": "call-1", "createdAt": base.Add(time.Second)},
-		{"seq": 3, "type": "ToolCallCompleted", "toolName": "read-artifact", "toolCallID": "call-1", "createdAt": base.Add(2 * time.Second)},
+		{"seq": 3, "type": "ToolCallCompleted", "toolName": "read-artifact", "toolCallID": "call-1", "content": map[string]any{"resultLength": 40}, "createdAt": base.Add(2 * time.Second)},
 		{"seq": 4, "type": "ToolCallStarted", "toolName": "grep-artifact", "toolCallID": "call-2", "createdAt": base.Add(3 * time.Second)},
-		{"seq": 5, "type": "ToolCallCompleted", "toolName": "grep-artifact", "toolCallID": "call-2", "createdAt": base.Add(4 * time.Second)},
+		{"seq": 5, "type": "ToolCallCompleted", "toolName": "grep-artifact", "toolCallID": "call-2", "content": map[string]any{"resultLength": 60}, "createdAt": base.Add(4 * time.Second)},
 		{"seq": 6, "type": "ToolCallStarted", "toolName": "validate-analysis-bscope", "toolCallID": "call-3", "createdAt": base.Add(5 * time.Second)},
 		{"seq": 7, "type": "ToolCallCompleted", "toolName": "validate-analysis-bscope", "toolCallID": "call-3", "createdAt": base.Add(6 * time.Second)},
 		{"seq": 8, "type": "ModelRequestCompleted", "provider": "openai", "model": "actual-model", "stopReason": "stop", "inputTokens": 100, "outputTokens": 20, "createdAt": base.Add(7 * time.Second)},
@@ -372,4 +414,65 @@ func writeAcceptedEvents(w http.ResponseWriter, transient bool) {
 	last := int64(len(events) + 1)
 	events = append(events, map[string]any{"seq": last, "type": "TaskSucceeded", "createdAt": base.Add(10 * time.Second)})
 	_ = json.NewEncoder(w).Encode(map[string]any{"latestSeq": last, "events": events})
+}
+
+func TestWebhookMissingTerminalEventIsRetryable(t *testing.T) {
+	const namespace = "orka-system"
+	nonTransient := false
+	result := validatedAnalysisJSON(t, analysis{Summary: "summary", RootCause: "cause", Severity: "High", IsTransient: &nonTransient, SuggestedFix: "fix"})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/events") {
+			base := time.Date(2026, 7, 18, 0, 0, 0, 0, time.UTC)
+			events := []map[string]any{
+				{"seq": 1, "type": "TaskStarted", "createdAt": base},
+				{"seq": 2, "type": "ToolCallStarted", "toolName": "read-artifact", "toolCallID": "call-1", "createdAt": base},
+				{"seq": 3, "type": "ToolCallStarted", "toolName": "validate-analysis", "toolCallID": "call-2", "createdAt": base},
+				{"seq": 4, "type": "ToolCallCompleted", "toolName": "validate-analysis", "toolCallID": "call-2", "createdAt": base},
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"latestSeq": 4, "events": events})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"result": result})
+	}))
+	defer server.Close()
+	manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "model", "v1", 2)
+	manifest.ValidationKey = testValidationKey
+	s := &webhookServer{client: &orkaClient{base: server.URL, http: server.Client()}, namespace: namespace}
+	patch := s.preparePatch(webhookPayload{TaskName: "task", Phase: "Succeeded"}, manifest)
+	if !patch.retry || !strings.Contains(patch.reason, "no terminal") {
+		t.Fatalf("patch = %+v, want retryable terminal-event lag", patch)
+	}
+}
+
+func TestFinalizeBatchPropagatesPostFinalizationFailure(t *testing.T) {
+	want := errors.New("side effects unavailable")
+	_, err := finalizeBatch(context.Background(), t.TempDir(), nil, func(context.Context) error {
+		return want
+	})
+	if !errors.Is(err, want) {
+		t.Fatalf("error = %v, want %v", err, want)
+	}
+}
+
+func TestFinalizeBatchStopsBeforeSideEffectsOnFinalizationFailure(t *testing.T) {
+	called := false
+	_, err := finalizeBatch(context.Background(), t.TempDir(), staticPatternAnalyzer{}, func(context.Context) error {
+		called = true
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "read dashboard") {
+		t.Fatalf("error = %v, want dashboard finalization failure", err)
+	}
+	if called {
+		t.Fatal("side effects ran after finalization failed")
+	}
+}
+
+func TestParseAnalysisRequiresRelevantFilesArray(t *testing.T) {
+	for _, value := range []string{"", `,"relevant_files":null`} {
+		input := `{"summary":"summary","root_cause":"cause","severity":"High","is_transient":false,"suggested_fix":"fix"` + value + `,"validation_token":"token"}`
+		if _, err := parseAnalysis(input); err == nil || !strings.Contains(err.Error(), "relevant_files") {
+			t.Fatalf("parse error = %v, want relevant_files rejection for %s", err, input)
+		}
+	}
 }

@@ -424,10 +424,9 @@ type FixPRs struct {
 
 // FixAgentRuntime configures the coding-agent generator for fix PRs.
 type FixAgentRuntime struct {
-	// Type selects the coding-agent CLI. Defaults to "opencode".
+	// Type selects "opencode" (default) or the in-cluster "orka" runtime.
 	Type string `yaml:"type,omitempty" json:"type,omitempty"`
-	// Model overrides the model the agent uses, in the CLI's id form. Empty uses
-	// the engine's configured ai.model.
+	// Model overrides the local opencode model. Orka takes its model from AgentRef.
 	Model string `yaml:"model,omitempty" json:"model,omitempty"`
 	// MaxTurns bounds the agent loop. Defaults to 30.
 	MaxTurns int `yaml:"max_turns,omitempty" json:"max_turns,omitempty"`
@@ -437,6 +436,13 @@ type FixAgentRuntime struct {
 	// Timeout bounds the whole generation, e.g. "10m". Empty uses the Runtime
 	// default.
 	Timeout string `yaml:"timeout,omitempty" json:"-"`
+	// Orka fields are used only when Type is "orka".
+	OrkaAgentRef  string `yaml:"agent_ref,omitempty" json:"-"`
+	OrkaAPI       string `yaml:"api,omitempty" json:"-"`
+	OrkaNamespace string `yaml:"namespace,omitempty" json:"-"`
+	OrkaGitSecret string `yaml:"git_secret,omitempty" json:"-"`
+	OrkaVersion   string `yaml:"version,omitempty" json:"-"`
+	OrkaRetries   *int   `yaml:"retries,omitempty" json:"-"`
 }
 
 // FixVerify configures pre-PR verification of a proposed fix.
@@ -525,7 +531,8 @@ func (c *Config) EffectiveFixPRs() FixPRs {
 	if out.AgentRuntime == nil {
 		out.AgentRuntime = &FixAgentRuntime{}
 	}
-	if strings.TrimSpace(out.AgentRuntime.Type) == "" {
+	out.AgentRuntime.Type = strings.TrimSpace(out.AgentRuntime.Type)
+	if out.AgentRuntime.Type == "" {
 		out.AgentRuntime.Type = "opencode"
 	}
 	if out.AgentRuntime.MaxTurns <= 0 {
@@ -534,6 +541,22 @@ func (c *Config) EffectiveFixPRs() FixPRs {
 	if out.AgentRuntime.AllowBash == nil {
 		t := true
 		out.AgentRuntime.AllowBash = &t
+	}
+	if out.AgentRuntime.Type == "orka" {
+		out.AgentRuntime.OrkaAgentRef = strings.TrimSpace(out.AgentRuntime.OrkaAgentRef)
+		out.AgentRuntime.OrkaAPI = strings.TrimSpace(out.AgentRuntime.OrkaAPI)
+		out.AgentRuntime.OrkaNamespace = strings.TrimSpace(out.AgentRuntime.OrkaNamespace)
+		out.AgentRuntime.OrkaGitSecret = strings.TrimSpace(out.AgentRuntime.OrkaGitSecret)
+		out.AgentRuntime.OrkaVersion = strings.TrimSpace(out.AgentRuntime.OrkaVersion)
+		if out.AgentRuntime.OrkaNamespace == "" {
+			out.AgentRuntime.OrkaNamespace = "orka-system"
+		}
+		if out.AgentRuntime.OrkaVersion == "" {
+			out.AgentRuntime.OrkaVersion = "v1"
+		}
+		if out.AgentRuntime.OrkaRetries == nil {
+			out.AgentRuntime.OrkaRetries = intPtr(1)
+		}
 	}
 	return out
 }
@@ -881,8 +904,15 @@ func (c *Config) Validate() error {
 		if ar := f.AgentRuntime; ar != nil {
 			switch strings.TrimSpace(ar.Type) {
 			case "", "opencode":
+			case "orka":
+				if strings.TrimSpace(ar.OrkaAgentRef) == "" || strings.TrimSpace(ar.OrkaAPI) == "" {
+					return fmt.Errorf("ai.fix_prs.agent_runtime type %q requires agent_ref and api", "orka")
+				}
 			default:
-				return fmt.Errorf("ai.fix_prs.agent_runtime.type %q is not supported (only %q)", ar.Type, "opencode")
+				return fmt.Errorf("ai.fix_prs.agent_runtime.type %q is not supported (only %q or %q)", ar.Type, "opencode", "orka")
+			}
+			if ar.OrkaRetries != nil && *ar.OrkaRetries < 0 {
+				return fmt.Errorf("ai.fix_prs.agent_runtime.retries must be >= 0")
 			}
 			if ar.MaxTurns < 0 {
 				return fmt.Errorf("ai.fix_prs.agent_runtime.max_turns must be >= 0")

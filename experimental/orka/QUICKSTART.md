@@ -111,12 +111,19 @@ kubectl apply -f experimental/orka/manifests/11-copilot-provider.yaml
 ## Step 3: deploy the artifact tool shim
 
 The shim exposes the engine's artifact tools over HTTP for the Orka Tasks to call.
-Apply the RBAC gap fix and the shim:
+Create the shared bearer token, then apply the RBAC gap fix and the shim:
 
 ```bash
+kubectl create secret generic artifact-tool-auth -n orka-system \
+  --from-literal=token="$(openssl rand -hex 32)"
 kubectl apply -f experimental/orka/manifests/00-rbac.yaml
 kubectl apply -f experimental/orka/manifests/20-artifact-tool.yaml
 ```
+
+The producer adds `authSecretRef` to every scoped Tool, so Orka injects the same
+bearer token that the shim requires. The included NetworkPolicy admits only Orka
+AI-worker pods. Requests cannot select a bucket or build through model arguments;
+only producer-owned headers control routing.
 
 The shim is storage-provider agnostic. It defaults to GCS; for an S3 bucket behind
 a gcsweb gateway, set `STORAGE_PROVIDER: gcsweb` and `STORAGE_BASE` in
@@ -143,6 +150,8 @@ kubectl create configmap orka-base-tools -n orka-system \
 
 helm install dash deploy/helm/prow-ai-dashboard \
   --set mode=cron --set analysis=orka \
+  --set orka.toolAuthSecret=artifact-tool-auth \
+  --set orka.toolAuthKey=token \
   --set orka.provider=copilot --set orka.model=claude-sonnet-4.5 \
   --set-file project.config=<consumer>/project.yaml \
   --set-file project.systemPrompt=<consumer>/prompts/system.md

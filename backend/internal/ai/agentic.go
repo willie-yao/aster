@@ -415,7 +415,7 @@ func (s *agentState) artifactTreeSet(ctx context.Context) map[string]bool {
 	}
 	set := make(map[string]bool, len(paths))
 	for _, p := range paths {
-		if norm := normalizeArtifactCitation(p); norm != "" {
+		if norm := NormalizeArtifactCitation(p); norm != "" {
 			set[norm] = true
 		}
 	}
@@ -1417,13 +1417,13 @@ func extractToolPathArg(raw string) string {
 
 // recordSuccessfulRead normalizes a successfully-read path and adds it to
 // both the full-path and basename indices. Silent no-op when critique is
-// disabled because the maps are nil. Uses the same normalizeArtifactCitation as
+// disabled because the maps are nil. Uses the same NormalizeArtifactCitation as
 // findUnreadArtifactCitations so writer and reader stay consistent.
 func (s *agentState) recordSuccessfulRead(rawPath string) {
 	if s.readArtifactsFull == nil && s.readArtifactsBase == nil {
 		return
 	}
-	norm := normalizeArtifactCitation(rawPath)
+	norm := NormalizeArtifactCitation(rawPath)
 	if norm == "" {
 		return
 	}

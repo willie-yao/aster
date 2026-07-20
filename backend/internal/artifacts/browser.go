@@ -34,10 +34,10 @@ type Browser interface {
 	// when possible. Returned Content MUST NOT exceed maxBytes.
 	Tail(ctx context.Context, file string, lines, maxBytes int) (*TailResult, error)
 
-	// Grep streams the file and returns up to maxMatches matching lines
-	// with the given context. Implementations MUST stream rather than
-	// load the whole file into memory.
-	Grep(ctx context.Context, file string, re *regexp.Regexp, contextLines, maxMatches, maxLineLen int) (*GrepResult, error)
+	// Grep streams up to maxBytes and returns up to maxMatches matching lines
+	// with the given context. Implementations MUST stream rather than load the
+	// whole file into memory.
+	Grep(ctx context.Context, file string, re *regexp.Regexp, contextLines, maxMatches, maxLineLen, maxBytes int) (*GrepResult, error)
 }
 
 // Factory creates per-build Browser instances.

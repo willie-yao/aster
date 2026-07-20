@@ -50,6 +50,14 @@ Image reference, defaulting the tag to the chart appVersion.
 {{- end -}}
 
 {{/*
+Git-capable engine image used by the opt-in fix runtime.
+*/}}
+{{- define "prow-ai-dashboard.fixerImage" -}}
+{{- $tag := .Values.orka.fixRuntime.image.tag | default .Chart.AppVersion -}}
+{{- printf "%s:%s" .Values.orka.fixRuntime.image.repository $tag -}}
+{{- end -}}
+
+{{/*
 Name of the PVC the fetcher and server share.
 */}}
 {{- define "prow-ai-dashboard.pvcName" -}}

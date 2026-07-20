@@ -388,3 +388,42 @@ required_evidence:
 		}
 	})
 }
+
+func TestContractHeaderRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	writeSkill(t, dir, "quota", `
+id: quota
+priority: 200
+triggers: ["(?i)quota"]
+required_evidence:
+  - id: events
+    description: quota events
+    any_of: ["events/.*quota"]
+procedure: Inspect the quota event before changing limits.
+`)
+	original, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	header, err := original.HeaderValue()
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := ParseHeader(header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Hash() != original.Hash() {
+		t.Fatalf("hash = %q, want %q", decoded.Hash(), original.Hash())
+	}
+	matched := decoded.Match("resource quota exceeded")
+	if len(matched) != 1 || matched[0].ID != "quota" || len(matched[0].RequiredEvidence) != 1 {
+		t.Fatalf("matched skills = %+v", matched)
+	}
+}
+
+func TestParseHeaderRejectsOversizedValue(t *testing.T) {
+	if _, err := ParseHeader(strings.Repeat("a", maxSkillContractHeaderBytes+1)); err == nil {
+		t.Fatal("oversized skill header was accepted")
+	}
+}

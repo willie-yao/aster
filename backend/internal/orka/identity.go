@@ -13,17 +13,38 @@ import (
 
 const identityDigestBytes = 16
 
+// AcceptanceVersion identifies the Orka result acceptance contract.
+const AcceptanceVersion = 6
+
+// ToolScopeHeader binds artifact-tool caches and budgets to one Tool contract.
+const ToolScopeHeader = "X-Prow-AI-Scope"
+
+// ValidationKeyHeader carries the private result-attestation key to validate_analysis.
+const ValidationKeyHeader = "X-Prow-AI-Validation-Key"
+
+// MinGCSBytesHeader carries the configured artifact-read floor to validate_analysis.
+const MinGCSBytesHeader = "X-Prow-AI-Min-GCS-Bytes"
+
+// ValidationTaskHeader binds validate_analysis to one analysis Task.
+const ValidationTaskHeader = "X-Prow-AI-Task"
+
 // AnalysisContract is the model and tool contract that determines whether a
 // prior Orka result can be reused.
 type AnalysisContract struct {
-	Provider     string         `json:"provider"`
-	Model        string         `json:"model"`
-	Version      string         `json:"version"`
-	Timeout      string         `json:"timeout"`
-	Retries      int            `json:"retries"`
-	MinToolCalls int            `json:"min_tool_calls"`
-	SystemPrompt string         `json:"system_prompt"`
-	Tools        []ToolContract `json:"tools"`
+	Provider          string         `json:"provider"`
+	Model             string         `json:"model"`
+	Version           string         `json:"version"`
+	Timeout           string         `json:"timeout"`
+	Retries           int            `json:"retries"`
+	MinToolCalls      int            `json:"min_tool_calls"`
+	MinGCSBytes       int            `json:"min_gcs_bytes"`
+	AcceptanceVersion int            `json:"acceptance_version"`
+	SkillSetHash      string         `json:"skill_set_hash,omitempty"`
+	ToolAuthSecret    string         `json:"tool_auth_secret,omitempty"`
+	ToolAuthKey       string         `json:"tool_auth_key,omitempty"`
+	ValidationKeyHash string         `json:"validation_key_hash"`
+	SystemPrompt      string         `json:"system_prompt"`
+	Tools             []ToolContract `json:"tools"`
 }
 
 // ToolContract is one enabled Orka Tool definition in model-visible order.

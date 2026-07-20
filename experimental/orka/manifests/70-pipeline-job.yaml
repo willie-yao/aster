@@ -8,7 +8,9 @@
 #      re-applying an existing Task is a no-op, so overlapping runs are cheap.
 #   3. ingest (orka-ingestor): polls the Orka result API (-wait) until every
 #      failing test is analyzed, then patches ai_summary/ai_analysis into the
-#      skeleton in place. The server Deployment serves the result unchanged.
+#      skeleton in place, finalizes recurring patterns, and runs configured
+#      notifications, issue reconciliation, and fix-PR reconciliation. The
+#      server Deployment serves the result unchanged.
 #
 # This CronJob is the SOLE writer to the data volume for the Orka deploy: run the
 # server in read-only mode and do NOT also run the fetcher CronJob or watch
@@ -72,6 +74,7 @@ spec:
               args:
                 - -project-dir=/config
                 - -ai=false
+                - -skip-side-effects
                 - -out=/data
                 - -builds=20
               volumeMounts:
@@ -99,6 +102,7 @@ spec:
               image: ghcr.io/willie-yao/prow-ai-dashboard/orka-ingestor:main
               args:
                 - -data=/data
+                - -project-dir=/config
                 - -api=http://orka.orka-system.svc:8080
                 - -token-file=/var/run/secrets/kubernetes.io/serviceaccount/token
                 - -wait=45m
@@ -113,3 +117,4 @@ spec:
                 - -gc=true
               volumeMounts:
                 - { name: data, mountPath: /data }
+                - { name: config, mountPath: /config, readOnly: true }

@@ -13,22 +13,30 @@ import (
 )
 
 const (
-	eventPageSize         = 500
-	maxEventPages         = 100
-	orkaAcceptanceVersion = 1
+	eventPageSize = 500
+	maxEventPages = 100
 )
 
 type analysisTelemetry struct {
-	EventCount       int
-	ToolCalls        int
-	InputTokens      int
-	OutputTokens     int
-	ElapsedMs        int
-	Provider         string
-	Model            string
-	TimelineVerified bool
-	ValidationPassed bool
-	BudgetExhausted  bool
+	EventCount          int
+	ToolCalls           int
+	ToolFailures        int
+	ModelRequests       int
+	ModelFailures       int
+	ContextBytes        int
+	ContextTruncations  int
+	TaskRetries         int
+	InputTokens         int
+	OutputTokens        int
+	ElapsedMs           int
+	Provider            string
+	Model               string
+	StopReason          string
+	TaskOutcome         string
+	TimelineVerified    bool
+	ValidationPassed    bool
+	BudgetExhausted     bool
+	qualityToolOutcomes map[string]string
 }
 
 type eventListResponse struct {
@@ -37,16 +45,17 @@ type eventListResponse struct {
 }
 
 type executionEvent struct {
-	Seq          int64     `json:"seq"`
-	Type         string    `json:"type"`
-	ToolName     string    `json:"toolName,omitempty"`
-	ToolCallID   string    `json:"toolCallID,omitempty"`
-	Provider     string    `json:"provider,omitempty"`
-	Model        string    `json:"model,omitempty"`
-	StopReason   string    `json:"stopReason,omitempty"`
-	InputTokens  int       `json:"inputTokens,omitempty"`
-	OutputTokens int       `json:"outputTokens,omitempty"`
-	CreatedAt    time.Time `json:"createdAt"`
+	Seq          int64           `json:"seq"`
+	Type         string          `json:"type"`
+	ToolName     string          `json:"toolName,omitempty"`
+	ToolCallID   string          `json:"toolCallID,omitempty"`
+	Provider     string          `json:"provider,omitempty"`
+	Model        string          `json:"model,omitempty"`
+	StopReason   string          `json:"stopReason,omitempty"`
+	InputTokens  int             `json:"inputTokens,omitempty"`
+	OutputTokens int             `json:"outputTokens,omitempty"`
+	Content      json.RawMessage `json:"content,omitempty"`
+	CreatedAt    time.Time       `json:"createdAt"`
 }
 
 func (c *orkaClient) analysisTelemetry(ctx context.Context, namespace, taskName string) (analysisTelemetry, error) {
@@ -86,7 +95,13 @@ func (c *orkaClient) analysisTelemetry(ctx context.Context, namespace, taskName 
 			return analysisTelemetry{}, fmt.Errorf("parse Task events: %w", err)
 		}
 		events = append(events, page.Events...)
-		if len(page.Events) == 0 || after >= page.LatestSeq {
+		if len(page.Events) == 0 {
+			if page.LatestSeq > after {
+				return analysisTelemetry{}, fmt.Errorf("task events through sequence %d are not readable yet", page.LatestSeq)
+			}
+			return summarizeEvents(events), nil
+		}
+		if after >= page.LatestSeq {
 			return summarizeEvents(events), nil
 		}
 		next := page.Events[len(page.Events)-1].Seq
@@ -102,9 +117,10 @@ func (c *orkaClient) analysisTelemetry(ctx context.Context, namespace, taskName 
 }
 
 func summarizeEvents(events []executionEvent) analysisTelemetry {
-	out := analysisTelemetry{EventCount: len(events)}
+	out := analysisTelemetry{EventCount: len(events), qualityToolOutcomes: map[string]string{}}
 	toolCalls := map[string]bool{}
 	var earliest, latest, started, completed time.Time
+	starts := 0
 	for _, event := range events {
 		if !event.CreatedAt.IsZero() {
 			if earliest.IsZero() || event.CreatedAt.Before(earliest) {
@@ -116,9 +132,13 @@ func summarizeEvents(events []executionEvent) analysisTelemetry {
 		}
 		switch event.Type {
 		case "TaskStarted":
-			started = event.CreatedAt
+			starts++
+			if started.IsZero() {
+				started = event.CreatedAt
+			}
 		case "TaskSucceeded", "TaskFailed", "TaskCancelled":
 			completed = event.CreatedAt
+			out.TaskOutcome = strings.ToLower(strings.TrimPrefix(event.Type, "Task"))
 		case "ToolCallStarted":
 			key := event.ToolCallID
 			if key == "" {
@@ -127,13 +147,18 @@ func summarizeEvents(events []executionEvent) analysisTelemetry {
 			toolCalls[key] = true
 		case "ToolCallCompleted":
 			name := normalizeToolName(event.ToolName)
-			switch {
-			case matchesScopedTool(name, "verify_timeline"):
-				out.TimelineVerified = true
-			case matchesScopedTool(name, "validate_analysis"):
-				out.ValidationPassed = true
+			out.recordQualityToolOutcome(name, "completed")
+			out.ContextBytes += eventResultLength(event.Content)
+		case "ToolCallFailed":
+			out.ToolFailures++
+			out.recordQualityToolOutcome(normalizeToolName(event.ToolName), "failed")
+		case "ContextTruncated":
+			out.ContextTruncations++
+		case "ModelRequestCompleted", "ModelRequestFailed":
+			out.ModelRequests++
+			if event.Type == "ModelRequestFailed" {
+				out.ModelFailures++
 			}
-		case "ModelRequestCompleted":
 			out.InputTokens += event.InputTokens
 			out.OutputTokens += event.OutputTokens
 			if event.Provider != "" {
@@ -142,6 +167,9 @@ func summarizeEvents(events []executionEvent) analysisTelemetry {
 			if event.Model != "" {
 				out.Model = event.Model
 			}
+			if event.StopReason != "" {
+				out.StopReason = event.StopReason
+			}
 			stop := strings.ToLower(strings.TrimSpace(event.StopReason))
 			if strings.Contains(stop, "length") || strings.Contains(stop, "max_token") {
 				out.BudgetExhausted = true
@@ -149,6 +177,9 @@ func summarizeEvents(events []executionEvent) analysisTelemetry {
 		}
 	}
 	out.ToolCalls = len(toolCalls)
+	if starts > 1 {
+		out.TaskRetries = starts - 1
+	}
 	if started.IsZero() {
 		started = earliest
 	}
@@ -159,6 +190,46 @@ func summarizeEvents(events []executionEvent) analysisTelemetry {
 		out.ElapsedMs = int(completed.Sub(started).Milliseconds())
 	}
 	return out
+}
+
+func (t *analysisTelemetry) recordQualityToolOutcome(name, outcome string) {
+	base := qualityToolBase(name)
+	if base == "" {
+		return
+	}
+	t.qualityToolOutcomes[base] = outcome
+	switch base {
+	case "verify_timeline":
+		t.TimelineVerified = outcome == "completed"
+	case "validate_analysis":
+		t.ValidationPassed = outcome == "completed"
+	}
+}
+
+func qualityToolBase(name string) string {
+	for _, base := range []string{
+		"validate_analysis",
+		"verify_timeline",
+		"check_transient_signatures",
+		"recurrence",
+		"required_evidence",
+		"diff_last_passing",
+	} {
+		if matchesScopedTool(name, base) {
+			return base
+		}
+	}
+	return ""
+}
+
+func eventResultLength(content json.RawMessage) int {
+	var payload struct {
+		ResultLength int `json:"resultLength"`
+	}
+	if json.Unmarshal(content, &payload) != nil || payload.ResultLength < 0 {
+		return 0
+	}
+	return payload.ResultLength
 }
 
 func normalizeToolName(name string) string {

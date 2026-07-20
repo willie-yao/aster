@@ -6,6 +6,7 @@ package fetcher
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixruntime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/issues"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/junit"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
@@ -49,6 +51,8 @@ type Options struct {
 	// enable presubmits.
 	IncludePresubmits bool
 	EnableAI          bool
+	// SkipSideEffects writes dashboard data without notifications or GitHub writes.
+	SkipSideEffects bool
 	// Version is the engine version embedded at build time, logged at startup.
 	Version string
 }
@@ -183,7 +187,11 @@ func (p *pipeline) fullPass(ctx context.Context) ([]models.ProwJob, error) {
 	if err != nil {
 		return nil, err
 	}
-	p.runSideEffects(ctx, res)
+	if !p.opts.SkipSideEffects {
+		if err := p.runSideEffects(ctx, res); err != nil {
+			return nil, err
+		}
+	}
 	return jobs, nil
 }
 
@@ -346,20 +354,23 @@ func (p *pipeline) refresh(ctx context.Context, jobs []models.ProwJob) (*refresh
 }
 
 // runSideEffects handles notifications, issue filing, and draft PRs. These are
-// gated on their own env tokens and run after the data is written.
-func (p *pipeline) runSideEffects(ctx context.Context, res *refreshResult) {
+// gated on their own env tokens and return joined operational errors.
+func (p *pipeline) runSideEffects(ctx context.Context, res *refreshResult) error {
 	cfg, opts := p.cfg, p.opts
 	details := res.details
 	flakinessReport := res.flakiness
+	var sideEffectErrs []error
 
 	if email, enabled := cfg.EffectiveEmailNotifications(); enabled {
 		password := os.Getenv("EMAIL_SMTP_PASSWORD")
 		if email.SMTP.Username != "" && password == "" {
 			log.Println("Notifications: skipped (EMAIL_SMTP_PASSWORD is unset)")
+			sideEffectErrs = append(sideEffectErrs, fmt.Errorf("email notifications: EMAIL_SMTP_PASSWORD is unset"))
 		} else {
 			from, recipients, err := notify.ParseAddresses(email.From, email.To)
 			if err != nil {
 				log.Printf("Warning: invalid email notification addresses: %v", err)
+				sideEffectErrs = append(sideEffectErrs, fmt.Errorf("email addresses: %w", err))
 			} else {
 				sender, err := notify.NewSMTPSender(notify.SMTPConfig{
 					Host:     email.SMTP.Host,
@@ -370,6 +381,7 @@ func (p *pipeline) runSideEffects(ctx context.Context, res *refreshResult) {
 				})
 				if err != nil {
 					log.Printf("Warning: invalid email notification config: %v", err)
+					sideEffectErrs = append(sideEffectErrs, fmt.Errorf("email config: %w", err))
 				} else {
 					notifier := notify.NewNotifier(
 						sender,
@@ -386,9 +398,11 @@ func (p *pipeline) runSideEffects(ctx context.Context, res *refreshResult) {
 						stats.NewAlerts, stats.PatternAlerts, stats.Recoveries, stats.Failed)
 					if processErr != nil {
 						log.Printf("Warning: email notification processing failed: %v", processErr)
+						sideEffectErrs = append(sideEffectErrs, fmt.Errorf("email notifications: %w", processErr))
 					}
 					if err := notifier.SaveState(); err != nil {
 						log.Printf("Warning: failed to save notification state: %v", err)
+						sideEffectErrs = append(sideEffectErrs, err)
 					}
 				}
 			}
@@ -397,11 +411,14 @@ func (p *pipeline) runSideEffects(ctx context.Context, res *refreshResult) {
 		log.Println("Notifications: skipped (email disabled)")
 	}
 
-	processIssues(ctx, cfg, flakinessReport, details, p.aiToken, p.enableAI, opts.OutDir)
-
-	if p.enableAI {
-		processFixPRs(ctx, cfg, flakinessReport.RecurringPatterns, p.aiToken, opts.OutDir)
+	if err := processIssues(ctx, cfg, flakinessReport, details, p.aiToken, p.enableAI, opts.OutDir); err != nil {
+		sideEffectErrs = append(sideEffectErrs, err)
 	}
+
+	if err := processFixPRs(ctx, cfg, flakinessReport.RecurringPatterns, p.aiToken, opts.OutDir); err != nil {
+		sideEffectErrs = append(sideEffectErrs, err)
+	}
+	return errors.Join(sideEffectErrs...)
 }
 
 // RunWatch runs the pipeline continuously as a single writer: a lightweight
@@ -471,19 +488,19 @@ func RunWatch(ctx context.Context, opts Options, watchInterval, reconcileInterva
 
 // processIssues reconciles the project's highest-signal findings into GitHub
 // issues on the configured target repo. Gated on issues.enabled and ISSUE_TOKEN.
-func processIssues(ctx context.Context, cfg *project.Config, report models.FlakinessReport, details []models.JobDetail, aiToken string, enableAI bool, outDir string) {
+func processIssues(ctx context.Context, cfg *project.Config, report models.FlakinessReport, details []models.JobDetail, aiToken string, enableAI bool, outDir string) error {
 	if cfg.Issues == nil || !cfg.Issues.Enabled {
-		return
+		return nil
 	}
 	token := os.Getenv("ISSUE_TOKEN")
 	if token == "" {
 		log.Println("Issues: enabled in config but ISSUE_TOKEN is unset; skipping")
-		return
+		return fmt.Errorf("issues: ISSUE_TOKEN is unset")
 	}
 	eff := cfg.EffectiveIssues()
 	if eff.Repo == nil || eff.Repo.Owner == "" || eff.Repo.Name == "" {
 		log.Println("Issues: no target repo resolved (set issues.repo or branding.source_repo); skipping")
-		return
+		return fmt.Errorf("issues: no target repo resolved")
 	}
 
 	specs := issues.BuildSpecs(issues.BuildInput{
@@ -523,51 +540,60 @@ func processIssues(ctx context.Context, cfg *project.Config, report models.Flaki
 		log.Printf("🐙 Issues (%s/%s): %d filed, %d adopted, %d recovered",
 			eff.Repo.Owner, eff.Repo.Name, stats.Created, stats.Adopted, stats.Recovered)
 	}
-	if err := mgr.SaveState(); err != nil {
-		log.Printf("Warning: failed to save issue state: %v", err)
+	saveErr := mgr.SaveState()
+	if saveErr != nil {
+		log.Printf("Warning: failed to save issue state: %v", saveErr)
 	}
+	return errors.Join(wrapOptional("issue processing", err), wrapOptional("save issue state", saveErr))
+}
+
+var newBatchFixRuntime = fixruntime.New
+var newBatchFixManager = func(token, stateFile string, opts fixpr.Options) *fixpr.Manager {
+	return fixpr.NewManager(fixpr.NewClients(token), stateFile, opts)
 }
 
 // processFixPRs drafts minimal fix PRs against the source repo for systemic
 // recurring patterns. Gated on ai.fix_prs.enabled and FIX_TOKEN (a CLA-signed
 // operator PAT). In dry-run it writes previews instead of opening PRs. Any
 // missing piece is a no-op.
-func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.PatternAnalysis, aiToken, outDir string) {
+func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.PatternAnalysis, aiToken, outDir string) error {
 	if cfg.AI == nil || cfg.AI.FixPRs == nil || !cfg.AI.FixPRs.Enabled {
-		return
+		return nil
 	}
 	if len(patterns) == 0 {
-		return
+		return nil
 	}
 	eff := cfg.EffectiveFixPRs()
 	if eff.Repo == nil || eff.Repo.Owner == "" || eff.Repo.Name == "" {
 		log.Println("Fix PRs: no source repo resolved (set ai.fix_prs.repo or branding.source_repo); skipping")
-		return
+		return fmt.Errorf("fix PRs: no source repo resolved")
 	}
 	fixToken := os.Getenv("FIX_TOKEN")
 	if fixToken == "" {
 		log.Println("Fix PRs: enabled but FIX_TOKEN is unset; skipping")
-		return
+		return fmt.Errorf("fix PRs: FIX_TOKEN is unset")
 	}
 
-	aiClient := ai.NewClientWithOptions(ai.Options{
-		Token:        aiToken,
-		Endpoint:     aiEndpoint(cfg),
-		Model:        aiModel(cfg),
-		ExtraHeaders: aiHeaders(cfg),
-	})
-
-	// The fix reviewer reuses the generation client (same endpoint and model).
-	critiqueRetries := 0
-	if eff.CritiqueRetries != nil {
-		critiqueRetries = *eff.CritiqueRetries
+	provider := cfg.ResolveAIProvider(os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"))
+	var aiClient *ai.Client
+	if aiToken != "" && provider.Endpoint != "" && provider.Model != "" {
+		aiClient = ai.NewClientWithOptions(ai.Options{Token: aiToken, Endpoint: provider.Endpoint, Model: provider.Model, ExtraHeaders: provider.Headers})
 	}
-	var critique fixpr.Completer
-	if critiqueRetries > 0 {
-		critique = aiClient
+	if eff.AgentRuntime.Type != "orka" && aiClient == nil {
+		log.Println("Fix PRs: local runtime requires AI_TOKEN, endpoint, and model; skipping")
+		return fmt.Errorf("fix PRs: local runtime requires AI_TOKEN, endpoint, and model")
 	}
 
-	prClient := fixpr.NewClients(fixToken)
+	critique, critiqueRetries, err := fixruntime.Critique(aiClient, eff.CritiqueRetries)
+	if err != nil {
+		log.Printf("Fix PRs: %v; skipping", err)
+		return fmt.Errorf("fix PR critique: %w", err)
+	}
+	var prFiller fixpr.PRBodyFiller
+	if aiClient != nil {
+		prFiller = repotemplate.NewPRFiller(fixToken, aiClient, eff.Repo.Owner, eff.Repo.Name)
+	}
+
 	fixOpts := fixpr.Options{
 		SourceOwner:     eff.Repo.Owner,
 		SourceName:      eff.Repo.Name,
@@ -583,7 +609,7 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 		DashboardURL:    cfg.Branding.SiteURL,
 		Critique:        critique,
 		CritiqueRetries: critiqueRetries,
-		PRFiller:        repotemplate.NewPRFiller(fixToken, aiClient, eff.Repo.Owner, eff.Repo.Name),
+		PRFiller:        prFiller,
 	}
 	if eff.Verify != nil && eff.Verify.Enabled {
 		fixOpts.Verify = &fixpr.VerifyConfig{
@@ -595,12 +621,17 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 	}
 	ar := eff.AgentRuntime
 	allowBash := ar.AllowBash == nil || *ar.AllowBash
+	agentRuntime, err := newBatchFixRuntime(ar)
+	if err != nil {
+		log.Printf("Fix PRs: %v; skipping", err)
+		return fmt.Errorf("fix PR runtime: %w", err)
+	}
 	model := ar.Model
 	if model == "" {
 		model = aiModel(cfg)
 	}
 	fixOpts.Agent = &fixpr.AgentConfig{
-		Runtime:    runtime.NewLocalAgent(),
+		Runtime:    agentRuntime,
 		Model:      model,
 		Endpoint:   aiEndpoint(cfg),
 		ModelToken: aiToken,
@@ -609,8 +640,7 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 		Timeout:    ar.ParsedTimeout(),
 		GitToken:   fixToken,
 	}
-	mgr := fixpr.NewManager(prClient,
-		filepath.Join(outDir, "fix_pr_state.json"), fixOpts)
+	mgr := newBatchFixManager(fixToken, filepath.Join(outDir, "fix_pr_state.json"), fixOpts)
 	stats, err := mgr.Reconcile(ctx, patterns)
 	if err != nil {
 		log.Printf("Warning: fix-PR processing failed: %v", err)
@@ -619,11 +649,21 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 			eff.Repo.Owner, eff.Repo.Name, stats.Proposed, stats.Adopted, stats.Previewed)
 	}
 	// Dry-run keeps no state (it re-previews each run).
+	var saveErr error
 	if !eff.DryRun {
-		if err := mgr.SaveState(); err != nil {
-			log.Printf("Warning: failed to save fix-PR state: %v", err)
+		saveErr = mgr.SaveState()
+		if saveErr != nil {
+			log.Printf("Warning: failed to save fix-PR state: %v", saveErr)
 		}
 	}
+	return errors.Join(wrapOptional("fix-PR processing", err), wrapOptional("save fix-PR state", saveErr))
+}
+
+func wrapOptional(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", operation, err)
 }
 
 // loadCachedJobDetails loads existing per-job JSON files from the output dir.

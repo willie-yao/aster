@@ -14,6 +14,10 @@ spec:
   http:
     url: http://artifact-tool.orka-system.svc:8080/tool/diff_last_passing
     method: POST
+    authSecretRef:
+      name: artifact-tool-auth
+      key: token
+    authInject: header
   parameters:
     type: object
     properties:

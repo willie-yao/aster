@@ -23,13 +23,23 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if and .Values.orka.fixRuntime.enabled $actions }}
+      serviceAccountName: {{ include "prow-ai-dashboard.orkaServiceAccountName" . }}
+      automountServiceAccountToken: true
+      {{- else }}
       automountServiceAccountToken: false
+      {{- end }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
         - name: server
+          {{- if and .Values.orka.fixRuntime.enabled $actions }}
+          image: {{ include "prow-ai-dashboard.fixerImage" . }}
+          imagePullPolicy: {{ .Values.orka.fixRuntime.image.pullPolicy }}
+          {{- else }}
           image: {{ include "prow-ai-dashboard.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- end }}
           command:
             - /usr/local/bin/server
             - -addr=:{{ .Values.server.port }}

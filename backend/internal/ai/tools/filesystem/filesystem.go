@@ -248,7 +248,7 @@ func (*grepTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 	if err != nil {
 		return tools.ErrPayload("invalid regex: " + err.Error())
 	}
-	res, err := env.Browser.Grep(ctx, args.Path, re, contextLines, maxMatches, 1000)
+	res, err := env.Browser.Grep(ctx, args.Path, re, contextLines, maxMatches, 1000, env.RemainingGCSBytes)
 	if err != nil {
 		return tools.ErrPayload(err.Error())
 	}

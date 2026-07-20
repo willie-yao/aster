@@ -70,7 +70,7 @@ func (b *fakeBrowser) Tail(_ context.Context, p string, _, _ int) (*artifacts.Ta
 	return &artifacts.TailResult{FileSize: int64(len(d)), Content: d}, nil
 }
 
-func (b *fakeBrowser) Grep(_ context.Context, p string, _ *regexp.Regexp, _, _, _ int) (*artifacts.GrepResult, error) {
+func (b *fakeBrowser) Grep(_ context.Context, p string, _ *regexp.Regexp, _, _, _, _ int) (*artifacts.GrepResult, error) {
 	d, ok := b.files[p]
 	if !ok {
 		return nil, fmt.Errorf("not found: %s", p)

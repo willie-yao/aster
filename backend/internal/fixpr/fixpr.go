@@ -208,11 +208,12 @@ func (m *Manager) SaveState() error {
 	return m.state.Save(m.stateFile)
 }
 
-// Reconcile drafts fixes for eligible patterns. Per-pattern errors are logged
-// and skipped; the run is best-effort.
+// Reconcile drafts fixes for eligible patterns. Per-pattern errors are collected
+// while independent patterns continue.
 func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalysis) (Stats, error) {
 	var stats Stats
 	var previews []Preview
+	var reconcileErrs []error
 
 	work := eligible(patterns, m.opts.MinConfidence)
 	if len(work) == 0 {
@@ -239,6 +240,8 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 			fix, err := gen(ctx, p)
 			if err != nil {
 				log.Printf("  ⚠ fix generation failed for %q: %v", p.Subject, err)
+				stats.Failures = append(stats.Failures, Failure{Subject: p.Subject, Reason: err.Error()})
+				reconcileErrs = append(reconcileErrs, fmt.Errorf("generate preview for %q: %w", p.Subject, err))
 				continue
 			}
 			v := m.verify(ctx, base, fix.files)
@@ -254,6 +257,8 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 		// A prior run may have an open fix PR even if local state is lost.
 		if _, url, found, err := m.pr.SearchOpenPR(ctx, m.opts.SourceOwner, m.opts.SourceName, markerToken(key), markerFor(key)); err != nil {
 			log.Printf("  ⚠ fix-PR search failed for %s: %v", key, err)
+			stats.Failures = append(stats.Failures, Failure{Subject: p.Subject, Reason: err.Error()})
+			reconcileErrs = append(reconcileErrs, fmt.Errorf("search fix PR for %q: %w", p.Subject, err))
 			continue
 		} else if found {
 			m.state.Tracked[key] = TrackedFix{URL: url, OpenedAt: now()}
@@ -271,6 +276,7 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 		if err != nil {
 			log.Printf("  ⚠ fix generation failed for %q: %v", p.Subject, err)
 			stats.Failures = append(stats.Failures, Failure{Subject: p.Subject, Reason: err.Error()})
+			reconcileErrs = append(reconcileErrs, fmt.Errorf("generate fix for %q: %w", p.Subject, err))
 			continue
 		}
 
@@ -282,11 +288,16 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 		if url == "" {
 			log.Printf("  ⚠ failed to open fix PR for %q: %v", p.Subject, err)
 			stats.Failures = append(stats.Failures, Failure{Subject: p.Subject, Reason: "opening the pull request failed"})
+			if err == nil {
+				err = fmt.Errorf("empty pull request URL")
+			}
+			reconcileErrs = append(reconcileErrs, fmt.Errorf("open fix PR for %q: %w", p.Subject, err))
 			continue
 		}
 		if err != nil {
 			// PR opened but a follow-up (e.g. labeling) failed; still track it.
 			log.Printf("  ⚠ fix PR opened with a warning for %q: %v", p.Subject, err)
+			reconcileErrs = append(reconcileErrs, fmt.Errorf("finish fix PR for %q: %w", p.Subject, err))
 		}
 		m.state.Tracked[key] = TrackedFix{URL: url, OpenedAt: now()}
 		stats.Proposed++
@@ -296,9 +307,10 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 	if m.opts.DryRun && len(previews) > 0 && m.opts.PreviewFile != "" {
 		if err := writePreviews(m.opts.PreviewFile, previews); err != nil {
 			log.Printf("Warning: failed to write fix previews: %v", err)
+			reconcileErrs = append(reconcileErrs, fmt.Errorf("write fix previews: %w", err))
 		}
 	}
-	return stats, nil
+	return stats, errors.Join(reconcileErrs...)
 }
 
 // generate runs the fix generation for one pattern against ref. instruction is
