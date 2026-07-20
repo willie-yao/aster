@@ -86,7 +86,9 @@ shim only when the operator intentionally owns those resources separately.
 The Orka skeleton fetch uses `-skip-side-effects`; notifications and GitHub
 reconciliation run once, after final analysis and pattern output exist. Set
 `orka.sideEffects.enabled=false` to suppress that final external reconciliation
-for an evaluation run.
+for an evaluation run. Per-test Tasks are applied in bounded producer waves by
+default. `orka.taskExecution` copies node selectors, tolerations, and affinity to
+both per-test and pattern Task worker pods.
 
 The chart deploys the analysis pipeline, not Orka itself, so the default stays
 `inprocess` and a fresh install always works. Opt into Orka only after those
@@ -201,6 +203,8 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | `analysis` | `inprocess` (default; in-cluster agentic loop) or `orka` (advanced experimental pipeline; requires `mode: cron`, the Orka control plane, a Provider, and worker patches). |
 | `orka.artifactTool.*` | Release-scoped artifact Tool image, authentication, network policy, resources, and scheduling. |
 | `orka.baseTools.*` | Create the synchronized producer ConfigMap or reference an existing ConfigMap in the release namespace. |
+| `orka.producer.maxConcurrentTasks`, `taskPoll`, `waveTimeout` | Apply per-test Tasks in bounded waves (`0` through `1000`) and bound placement recovery and intermediate-wave polling. |
+| `orka.taskExecution.*` | Copy node selectors, tolerations, and affinity to Orka per-test and pattern worker pods. |
 | `orka.sideEffects.enabled` | Run post-analysis notifications and GitHub reconciliation. Disable for an Orka evaluation. |
 | `orka.fixRuntime.enabled` | Mount a ServiceAccount token and grant Orka Task RBAC for `agent_runtime.type: orka` fix generation. |
 | `persistence.accessMode` | Must be `ReadWriteMany`. |

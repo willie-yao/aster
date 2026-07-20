@@ -16,7 +16,8 @@ Only the **analysis** step moves to Orka; discovery and output are unchanged.
 fetcher -ai=false        writes the dashboard skeleton (jobs/*.json, no AI)
    |
 orka-producer            one content-addressed Task per failing test
-   |                     + per-build, header-routed Tool clones  -> kube-apply
+   |                     + per-build, header-routed Tool clones
+   |                     + bounded Task apply waves              -> kube-apply
    v
 Orka ai-worker           runs the agentic loop per Task, calling the shim tools
    |
@@ -34,7 +35,13 @@ carrying the patches in [worker-patches/](worker-patches/).
 
 Everything the producer emits is an unstructured `map[string]any` built in Go and
 server-side applied through a dynamic client, so the pipeline links no Orka Go
-types. The two CRDs it creates:
+types. The producer can apply per-test Tasks in bounded waves, waiting for each
+intermediate wave to become terminal before submitting the next. Task placement
+is emitted under `spec.execution` for both per-test and pattern Tasks. Placement
+is excluded from semantic identity so successful results remain cached. When
+placement changes, non-successful Tasks are deleted and recreated only after
+Orka's finalizer clears their worker, result, and event state. The two CRDs it
+creates:
 
 ### Task (one per failing test)
 

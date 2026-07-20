@@ -622,7 +622,12 @@ private `orka_analysis.json` manifest carries the producer identity contract to
 the ingestor and is never served or published. Ingested analyses store that
 contract hash, so cached job JSON is refreshed whenever the current contract
 changes. Tool resources use a contract-versioned scope as well, preventing an
-old Task from observing a newly applied Tool definition. Before publishing a
+old Task from observing a newly applied Tool definition. Producer waves bound
+per-test submissions, and `Task.spec.execution` places both per-test and pattern
+worker pods without changing semantic cache identity. Successful Tasks keep their
+cached result after a placement change. Non-successful Tasks with stale placement
+are deleted and recreated after Orka finishes cleaning their result and event
+state. Before publishing a
 result, the ingestor reads Orka's durable execution events, enforces the JSON
 schema, `min_tool_calls`, and `min_gcs_bytes`, requires a successful terminal Task event, rejects
 quality tools whose last attempt failed, requires a successful

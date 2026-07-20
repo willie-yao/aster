@@ -58,6 +58,12 @@ orka:
   # Producer + ingestor images are published alongside the engine image. Empty
   # tags inherit image.tag, then Chart.appVersion.
   producer:
+    # Apply per-test Tasks in bounded waves (0-1000). Set 0 to apply every Task at once.
+    maxConcurrentTasks: 2
+    taskPoll: 5s
+    # Deadline for placement recovery in every wave and Task completion in each
+    # intermediate wave. Final-wave Task execution is left to the ingestor.
+    waveTimeout: 30m
     image:
       repository: ghcr.io/willie-yao/prow-ai-dashboard/orka-producer
       tag: ""
@@ -67,6 +73,13 @@ orka:
       repository: ghcr.io/willie-yao/prow-ai-dashboard/orka-ingestor
       tag: ""
       pullPolicy: IfNotPresent
+
+  # Placement copied to spec.execution on per-test and pattern Tasks. These
+  # fields schedule Orka's dynamic AI-worker pods, not the dashboard CronJob.
+  taskExecution:
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
 
   # Base Tool definitions are mounted into the producer in the dashboard
   # release namespace. Set create=false and existingConfigMap to use an

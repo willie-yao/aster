@@ -75,6 +75,59 @@ func (k *KubeClient) Apply(ctx context.Context, gvr schema.GroupVersionResource,
 	return nil
 }
 
+// TaskState is the existing execution state needed before reapplying a Task.
+type TaskState struct {
+	Exists          bool
+	Phase           string
+	Execution       map[string]any
+	ResourceVersion string
+	UID             string
+	Deleting        bool
+}
+
+// TaskState returns a Task's phase and execution placement. A missing Task has
+// Exists=false and no error.
+func (k *KubeClient) TaskState(ctx context.Context, ns, name string) (TaskState, error) {
+	u, err := k.dyn.Resource(TasksGVR).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return TaskState{}, nil
+	}
+	if err != nil {
+		return TaskState{}, err
+	}
+	state, err := taskStateFromObject(u)
+	if err != nil {
+		return TaskState{}, fmt.Errorf("read Task %s state: %w", name, err)
+	}
+	return state, nil
+}
+
+func taskStateFromObject(u *unstructured.Unstructured) (TaskState, error) {
+	phase, _, _ := unstructured.NestedString(u.Object, "status", "phase")
+	execution, found, err := unstructured.NestedMap(u.Object, "spec", "execution")
+	if err != nil {
+		return TaskState{}, err
+	}
+	if !found {
+		execution = nil
+	}
+	return TaskState{
+		Exists: true, Phase: phase, Execution: execution,
+		ResourceVersion: u.GetResourceVersion(), UID: string(u.GetUID()),
+		Deleting: u.GetDeletionTimestamp() != nil,
+	}, nil
+}
+
+// DeleteTask deletes one Task only if its resourceVersion still matches.
+func (k *KubeClient) DeleteTask(ctx context.Context, ns, name, resourceVersion string) error {
+	preconditions := &metav1.Preconditions{ResourceVersion: &resourceVersion}
+	err := k.dyn.Resource(TasksGVR).Namespace(ns).Delete(ctx, name, metav1.DeleteOptions{Preconditions: preconditions})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	return err
+}
+
 // TaskPhase returns a Task's status.phase, or "" if unset.
 func (k *KubeClient) TaskPhase(ctx context.Context, ns, name string) (string, error) {
 	u, err := k.dyn.Resource(TasksGVR).Namespace(ns).Get(ctx, name, metav1.GetOptions{})

@@ -172,14 +172,45 @@ helm install dash deploy/helm/prow-ai-dashboard \
   --set-file project.systemPrompt=<consumer>/prompts/system.md
 ```
 
-On heterogeneous clusters, place the artifact Tool on an appropriate CPU node
-pool with a cluster-specific selector, for example:
+On heterogeneous clusters, configure the dashboard components and dynamic Orka
+workers independently. `orka.artifactTool.nodeSelector` places the shim, while
+`orka.taskExecution` is copied to every per-test and pattern Task:
 
-```bash
---set orka.artifactTool.nodeSelector.agentpool=nodepool1
+```yaml
+orka:
+  artifactTool:
+    nodeSelector:
+      agentpool: cpu
+  producer:
+    maxConcurrentTasks: 2
+  taskExecution:
+    nodeSelector:
+      agentpool: cpu
+    tolerations:
+      - key: dedicated
+        operator: Equal
+        value: orka
+        effect: NoSchedule
+    affinity: {}
 ```
 
-Do not copy this selector onto clusters that do not define that label.
+Do not copy these selectors or tolerations onto clusters that do not define the
+matching labels and taints. `fetcher.nodeSelector` separately places the
+producer and ingestor CronJob pod.
+
+`maxConcurrentTasks` accepts `0` through `1000` and limits per-test submissions
+from one producer invocation.
+The producer applies a wave, waits for its Tasks to become terminal, and then
+applies the next wave. It does not cap unrelated Tasks already running in the
+namespace, and job-level pattern Tasks still start concurrently during
+finalization. Set it to `0` to restore immediate submission of every per-test
+Task.
+
+Placement is not part of semantic Task identity. A placement change keeps a
+successful Task and its cached result. If an existing per-test or pattern Task is
+pending, running, failed, or cancelled under different placement, the pipeline
+deletes it, waits for Orka's finalizer to clear the old worker, result, and event
+state, and recreates the same Task name with the new placement.
 
 Producer, ingestor, and artifact-tool tags inherit the engine `image.tag`, so one
 immutable SHA pins the complete dashboard pipeline. Set `orka.provider` to your
@@ -316,6 +347,10 @@ The equivalent Orka knobs are producer flags, surfaced as Helm `orka.*` values:
 | provider | `orka.provider` | `-provider` | `copilot` |
 | per-Task timeout | `orka.taskTimeout` | `-timeout` | `10m` |
 | retries | `orka.retries` | `-retries` | `1` |
+| per-test wave size | `orka.producer.maxConcurrentTasks` | `-max-concurrent-tasks` | `2` |
+| wave poll interval | `orka.producer.taskPoll` | `-task-poll` | `5s` |
+| placement recovery and intermediate-wave deadline | `orka.producer.waveTimeout` | `-wave-timeout` | `30m` |
+| worker placement | `orka.taskExecution` | `-task-execution` | empty |
 | manual cache-bust version | `orka.version` | `-version` | `v1` |
 | job-pattern finalization wait | `orka.patternWait` | ingestor `-pattern-wait` | `25m` |
 

@@ -5,6 +5,7 @@
 {{- if eq .Values.mode "cron" }}
 {{- $orka := eq .Values.analysis "orka" }}
 {{- $orkaAccess := or $orka .Values.orka.fixRuntime.enabled }}
+{{- $hasTaskExecution := or (not (empty .Values.orka.taskExecution.nodeSelector)) (not (empty .Values.orka.taskExecution.tolerations)) (not (empty .Values.orka.taskExecution.affinity)) }}
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -95,6 +96,12 @@ spec:
                 - -version={{ .Values.orka.version }}
                 - -timeout={{ .Values.orka.taskTimeout }}
                 - -retries={{ .Values.orka.retries | int }}
+                - -max-concurrent-tasks={{ .Values.orka.producer.maxConcurrentTasks | int }}
+                - -task-poll={{ .Values.orka.producer.taskPoll }}
+                - -wave-timeout={{ .Values.orka.producer.waveTimeout }}
+                {{- if $hasTaskExecution }}
+                - {{ printf "-task-execution=%s" (toJson .Values.orka.taskExecution) | quote }}
+                {{- end }}
               securityContext:
                 {{- toYaml .Values.securityContext | nindent 16 }}
               volumeMounts:
@@ -125,6 +132,9 @@ spec:
                 - -pattern-wait={{ .Values.orka.patternWait }}
                 - -pattern-timeout={{ .Values.orka.taskTimeout }}
                 - -pattern-retries={{ .Values.orka.retries | int }}
+                {{- if $hasTaskExecution }}
+                - {{ printf "-task-execution=%s" (toJson .Values.orka.taskExecution) | quote }}
+                {{- end }}
                 {{- if not .Values.orka.sideEffects.enabled }}
                 - -skip-side-effects
                 {{- end }}
