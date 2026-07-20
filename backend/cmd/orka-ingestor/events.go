@@ -237,5 +237,6 @@ func normalizeToolName(name string) string {
 }
 
 func matchesScopedTool(name, base string) bool {
-	return name == base || strings.HasPrefix(name, base+"_b")
+	return name == base || strings.HasPrefix(name, base+"_b") ||
+		(base == "validate_analysis" && strings.HasPrefix(name, base+"_az_analysis_"))
 }

@@ -253,3 +253,10 @@ func TestValidateAnalysisAcceptanceEnforcesMinimumGCSBytes(t *testing.T) {
 		t.Fatalf("acceptance error = %v, want minimum GCS byte rejection", err)
 	}
 }
+
+func TestQualityToolBaseRecognizesTaskScopedValidator(t *testing.T) {
+	name := "validate-analysis-az-analysis-3929c1698d436de980b5888747ca973f"
+	if got := qualityToolBase(normalizeToolName(name)); got != "validate_analysis" {
+		t.Fatalf("qualityToolBase(%q) = %q, want validate_analysis", name, got)
+	}
+}

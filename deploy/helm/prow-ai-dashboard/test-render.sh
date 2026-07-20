@@ -6,6 +6,20 @@ chart="$root/deploy/helm/prow-ai-dashboard"
 tmp="${TMPDIR:-/tmp}/prow-ai-dashboard-helm-$$"
 mkdir -p "$tmp"
 
+container_command() {
+  local name=$1
+  local file=$2
+  awk -v target="$name" '
+    $1 == "-" && $2 == "name:" { current = $3 }
+    current == target && $1 == "command:" {
+      getline
+      sub(/^[[:space:]]*-[[:space:]]*/, "")
+      print
+      exit
+    }
+  ' "$file"
+}
+
 cat > "$tmp/values.yaml" <<'VALUES'
 image:
   tag: sha-test
@@ -58,6 +72,14 @@ grep -Fq 'suspend: false' "$tmp/owned.yaml"
 grep -Fq -- '- -max-concurrent-tasks=2' "$tmp/owned.yaml"
 grep -Fq -- '- -task-poll=5s' "$tmp/owned.yaml"
 grep -Fq -- '- -wave-timeout=30m' "$tmp/owned.yaml"
+if [[ $(container_command produce "$tmp/owned.yaml") != /app ]]; then
+  echo 'specialized Orka producer command is not /app' >&2
+  exit 1
+fi
+if [[ $(container_command ingest "$tmp/owned.yaml") != /app ]]; then
+  echo 'specialized Orka ingestor command is not /app' >&2
+  exit 1
+fi
 if grep -Fq -- '-task-execution=' "$tmp/owned.yaml"; then
   echo 'default Orka render unexpectedly added Task placement' >&2
   exit 1
@@ -65,6 +87,21 @@ fi
 skip_count=$(grep -Fc -- '- -skip-side-effects' "$tmp/owned.yaml")
 if [[ $skip_count -ne 1 ]]; then
   echo "default Orka render has $skip_count skip-side-effects flags, want skeleton fetch only" >&2
+  exit 1
+fi
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set mode=cron \
+  --set analysis=orka \
+  --set orka.fixRuntime.enabled=true \
+  --show-only templates/fetcher-cronjob.yaml \
+  > "$tmp/fixer-runtime.yaml"
+if [[ $(container_command produce "$tmp/fixer-runtime.yaml") != /app ]]; then
+  echo 'fix-runtime Orka producer command is not /app' >&2
+  exit 1
+fi
+if [[ $(container_command ingest "$tmp/fixer-runtime.yaml") != /usr/local/bin/orka-ingestor ]]; then
+  echo 'fix-runtime Orka ingestor command is not /usr/local/bin/orka-ingestor' >&2
   exit 1
 fi
 

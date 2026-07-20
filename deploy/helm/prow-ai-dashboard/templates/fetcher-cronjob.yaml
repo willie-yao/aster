@@ -81,7 +81,7 @@ spec:
               image: {{ include "prow-ai-dashboard.orkaProducerImage" . }}
               imagePullPolicy: {{ .Values.orka.producer.image.pullPolicy }}
               command:
-                - /usr/local/bin/orka-producer
+                - /app
                 - -data={{ .Values.persistence.mountPath }}
                 - -project-dir={{ .Values.project.mountPath }}
                 - -tool-manifests=/base-tools
@@ -119,7 +119,11 @@ spec:
               imagePullPolicy: {{ .Values.orka.ingestor.image.pullPolicy }}
               {{- end }}
               command:
+                {{- if .Values.orka.fixRuntime.enabled }}
                 - /usr/local/bin/orka-ingestor
+                {{- else }}
+                - /app
+                {{- end }}
                 - -data={{ .Values.persistence.mountPath }}
                 - -project-dir={{ .Values.project.mountPath }}
                 - -api={{ .Values.orka.apiBase }}
