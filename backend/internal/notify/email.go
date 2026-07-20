@@ -170,11 +170,13 @@ func ParseAddresses(from string, recipients []string) (mail.Address, []mail.Addr
 }
 
 type patternEmailView struct {
+	Heading        string
 	ProjectName    string
 	Subject        string
 	Confidence     string
 	BuildsAnalyzed int
 	RootCause      string
+	PreviousCause  string
 	SuggestedFix   string
 	DashboardURL   string
 	IssueURL       string
@@ -184,14 +186,15 @@ type patternEmailView struct {
 var patternHTMLTemplate = template.Must(template.New("pattern-notification").Parse(`<!doctype html>
 <html>
 <body>
-  <h2>Systemic recurring failure</h2>
+  <h2>{{.Heading}}</h2>
   <p><strong>Project:</strong> {{.ProjectName}}</p>
   <table>
     <tr><td><strong>Job</strong></td><td>{{.Subject}}</td></tr>
     <tr><td><strong>Confidence</strong></td><td>{{.Confidence}}</td></tr>
     <tr><td><strong>Builds analyzed</strong></td><td>{{.BuildsAnalyzed}}</td></tr>
   </table>
-  {{if .RootCause}}<h3>Shared root cause</h3><p>{{.RootCause}}</p>{{end}}
+  {{if .PreviousCause}}<h3>Previous shared root cause</h3><p>{{.PreviousCause}}</p>{{end}}
+  {{if .RootCause}}<h3>Current shared root cause</h3><p>{{.RootCause}}</p>{{end}}
   {{if .SuggestedFix}}<h3>Suggested fix</h3><p>{{.SuggestedFix}}</p>{{end}}
   <p><a href="{{.DashboardURL}}">View recurring pattern</a></p>
   {{if .IssueURL}}
@@ -204,13 +207,21 @@ var patternHTMLTemplate = template.Must(template.New("pattern-notification").Par
 </body>
 </html>`))
 
-func (n *Notifier) patternMessage(pattern models.PatternAnalysis) Message {
+func (n *Notifier) patternMessage(pattern models.PatternAnalysis, previousRootCause string) Message {
+	heading := "Systemic recurring failure"
+	subjectLabel := heading
+	if previousRootCause != "" {
+		heading = "Systemic recurring failure changed"
+		subjectLabel = "Recurring failure changed"
+	}
 	view := patternEmailView{
+		Heading:        heading,
 		ProjectName:    n.projectName,
 		Subject:        pattern.Subject,
 		Confidence:     pattern.Confidence,
 		BuildsAnalyzed: pattern.BuildsAnalyzed,
 		RootCause:      textutil.Truncate(pattern.SharedRootCause, 1000),
+		PreviousCause:  textutil.Truncate(previousRootCause, 1000),
 		SuggestedFix:   textutil.Truncate(pattern.SuggestedFix, 1000),
 		DashboardURL:   n.patternURL(pattern),
 	}
@@ -221,7 +232,7 @@ func (n *Notifier) patternMessage(pattern models.PatternAnalysis) Message {
 	return Message{
 		From:     n.from,
 		To:       append([]mail.Address(nil), n.to...),
-		Subject:  notificationSubject(n.projectName, "Systemic recurring failure", pattern.Subject),
+		Subject:  notificationSubject(n.projectName, subjectLabel, pattern.Subject),
 		TextBody: patternText(view),
 		HTMLBody: renderPatternHTML(view),
 	}
@@ -229,10 +240,13 @@ func (n *Notifier) patternMessage(pattern models.PatternAnalysis) Message {
 
 func patternText(view patternEmailView) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Systemic recurring failure\n\nProject: %s\nJob: %s\nConfidence: %s\nBuilds analyzed: %d\n",
-		view.ProjectName, view.Subject, view.Confidence, view.BuildsAnalyzed)
+	fmt.Fprintf(&b, "%s\n\nProject: %s\nJob: %s\nConfidence: %s\nBuilds analyzed: %d\n",
+		view.Heading, view.ProjectName, view.Subject, view.Confidence, view.BuildsAnalyzed)
+	if view.PreviousCause != "" {
+		fmt.Fprintf(&b, "\nPrevious shared root cause:\n%s\n", view.PreviousCause)
+	}
 	if view.RootCause != "" {
-		fmt.Fprintf(&b, "\nShared root cause:\n%s\n", view.RootCause)
+		fmt.Fprintf(&b, "\nCurrent shared root cause:\n%s\n", view.RootCause)
 	}
 	if view.SuggestedFix != "" {
 		fmt.Fprintf(&b, "\nSuggested fix:\n%s\n", view.SuggestedFix)

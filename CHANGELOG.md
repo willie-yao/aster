@@ -38,6 +38,9 @@ for how to pin a release.
 
 ### Changed
 
+- Pattern email deduplication is now job-scoped and tolerates AI wording drift.
+  A materially different recurring root cause on the same job sends a changed-
+  pattern email with the previous and current causes.
 - Job detail filenames now use a collision-free base64url encoding of `job_id`.
   Consumers must rebuild the frontend and data together.
 - AI analysis telemetry renames `model_bytes` to `context_bytes` to describe the

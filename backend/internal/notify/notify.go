@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/mail"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -19,6 +20,77 @@ import (
 )
 
 const notificationChannel = "email-v1"
+
+const patternSimilarityFloor = 0.30
+
+var patternTokenRegex = regexp.MustCompile(`[a-z0-9]+`)
+
+var patternNumericSignalRegexes = []struct {
+	name string
+	re   *regexp.Regexp
+}{
+	{name: "http", re: regexp.MustCompile(`\bhttp(?:/[0-9.]+)?(?:\s+status(?:\s+code)?)?\s*[:=-]?\s*([1-5][0-9]{2})\b`)},
+	{name: "http", re: regexp.MustCompile(`\bstatus\s+code\s+([1-5][0-9]{2})\b`)},
+	{name: "port", re: regexp.MustCompile(`\bport\s+([0-9]{1,5})\b`)},
+	{name: "address-port", re: regexp.MustCompile(`(?:\]|[a-z][a-z0-9.-]*|(?:[0-9]{1,3}\.){3}[0-9]{1,3}):([0-9]{2,5})\b`)},
+	{name: "tls", re: regexp.MustCompile(`\btls(?:v|\s+version)?\s*([0-9]+(?:\.[0-9]+)?)\b`)},
+}
+
+var patternPolarityRegexes = []*regexp.Regexp{
+	regexp.MustCompile(`\b(?:not|no|without|never)\s+([a-z0-9]+)\b`),
+	regexp.MustCompile(`\b(?:fail|fails|failed)\s+to\s+([a-z0-9]+)\b`),
+	regexp.MustCompile(`\b(?:before|until)(?:\s+[a-z0-9-]+){0,8}\s+(?:is|was|becomes?)\s+([a-z0-9]+)\b`),
+}
+
+var patternNegativeTokens = map[string]string{
+	"disabled":     "enabled",
+	"unavailable":  "available",
+	"unauthorized": "authorized",
+	"unhealthy":    "healthy",
+	"unreachable":  "reachable",
+	"unready":      "ready",
+	"unsupported":  "supported",
+}
+
+var patternPolarityReplacer = strings.NewReplacer(
+	"isn't", "is not", "isn’t", "is not",
+	"aren't", "are not", "aren’t", "are not",
+	"wasn't", "was not", "wasn’t", "was not",
+	"weren't", "were not", "weren’t", "were not",
+	"doesn't", "does not", "doesn’t", "does not",
+	"don't", "do not", "don’t", "do not",
+	"didn't", "did not", "didn’t", "did not",
+	"can't", "can not", "can’t", "can not",
+	"cannot", "can not",
+	"couldn't", "could not", "couldn’t", "could not",
+	"won't", "will not", "won’t", "will not",
+	"wouldn't", "would not", "wouldn’t", "would not",
+	"shouldn't", "should not", "shouldn’t", "should not",
+	"hasn't", "has not", "hasn’t", "has not",
+	"haven't", "have not", "haven’t", "have not",
+	"hadn't", "had not", "hadn’t", "had not",
+	"no longer", "not",
+)
+
+var patternStopTokens = map[string]struct{}{
+	"all": {}, "and": {}, "any": {}, "are": {}, "because": {},
+	"been": {}, "being": {}, "but": {}, "can": {}, "context": {},
+	"could": {}, "deadline": {}, "during": {}, "error": {}, "errors": {},
+	"exceeded": {}, "failed": {}, "fails": {}, "failure": {}, "for": {},
+	"from": {}, "has": {}, "have": {}, "into": {}, "its": {},
+	"never": {}, "no": {}, "not": {}, "occurred": {}, "only": {}, "retry": {},
+	"side": {}, "that": {}, "the": {},
+	"their": {}, "then": {}, "this": {}, "through": {}, "was": {},
+	"were": {}, "when": {}, "which": {}, "while": {}, "will": {}, "with": {}, "without": {},
+}
+
+var patternLowWeightTokens = map[string]struct{}{
+	"api": {}, "azure": {}, "call": {}, "client": {}, "cluster": {},
+	"component": {}, "controller": {}, "conversion": {}, "error": {}, "fail": {},
+	"failure": {}, "job": {}, "node": {}, "operator": {}, "pod": {},
+	"provider": {}, "resource": {}, "server": {}, "service": {}, "timeout": {},
+	"webhook": {},
+}
 
 // NotificationState tracks which persistent failures have been notified.
 type NotificationState struct {
@@ -36,7 +108,7 @@ type NotifiedFailure struct {
 	TestName         string `json:"test_name"`
 }
 
-// NotifiedPattern tracks one systemic recurring pattern email.
+// NotifiedPattern tracks the latest systemic pattern emailed for one job.
 type NotifiedPattern struct {
 	PatternID       string `json:"pattern_id"`
 	JobID           string `json:"job_id"`
@@ -221,21 +293,24 @@ func (n *Notifier) ProcessFailures(ctx context.Context, report models.FlakinessR
 			if pattern.ID == "" {
 				pattern.ID = models.PatternID(pattern)
 			}
-			if _, notified := n.state.Patterns[pattern.ID]; notified {
+			key := patternJobID(pattern)
+			existing, notified, stateKeys := n.patternStateFor(pattern)
+			changed := notified && patternsMateriallyDifferent(existing.SharedRootCause, pattern.SharedRootCause)
+			if notified && !changed {
+				n.replacePatternState(key, stateKeys, notifiedPattern(pattern))
 				continue
 			}
-			if err := n.sender.Send(ctx, n.patternMessage(pattern)); err != nil {
+			previousRootCause := ""
+			if changed {
+				previousRootCause = existing.SharedRootCause
+			}
+			if err := n.sender.Send(ctx, n.patternMessage(pattern, previousRootCause)); err != nil {
 				stats.Failed++
-				sendErrs = append(sendErrs, fmt.Errorf("pattern %s: %w", pattern.ID, err))
+				sendErrs = append(sendErrs, fmt.Errorf("pattern %s: %w", key, err))
 				continue
 			}
 			stats.PatternAlerts++
-			n.state.Patterns[pattern.ID] = NotifiedPattern{
-				PatternID:       pattern.ID,
-				JobID:           patternJobID(pattern),
-				Subject:         pattern.Subject,
-				SharedRootCause: pattern.SharedRootCause,
-			}
+			n.replacePatternState(key, stateKeys, notifiedPattern(pattern))
 		}
 		n.reconcilePatternState(report.RecurringPatterns, jobDetails)
 	}
@@ -247,16 +322,12 @@ func (n *Notifier) reconcilePatternState(current []models.PatternAnalysis, jobDe
 	if len(jobDetails) == 0 || len(n.state.Patterns) == 0 {
 		return
 	}
-	currentIDs := make(map[string]bool, len(current))
+	currentJobs := make(map[string]bool, len(current))
 	for _, pattern := range current {
 		if !pattern.Systemic {
 			continue
 		}
-		id := pattern.ID
-		if id == "" {
-			id = models.PatternID(pattern)
-		}
-		currentIDs[id] = true
+		currentJobs[patternJobID(pattern)] = true
 	}
 
 	presentJobs := make(map[string]bool, len(jobDetails))
@@ -272,14 +343,255 @@ func (n *Notifier) reconcilePatternState(current []models.PatternAnalysis, jobDe
 		}
 	}
 
-	for id, notified := range n.state.Patterns {
-		if currentIDs[id] {
+	for stateKey, notified := range n.state.Patterns {
+		jobID := strings.TrimSpace(notified.JobID)
+		if jobID == "" {
+			jobID = stateKey
+		}
+		if currentJobs[jobID] {
 			continue
 		}
-		if !presentJobs[notified.JobID] || authoritativeJobs[notified.JobID] {
-			delete(n.state.Patterns, id)
+		if !presentJobs[jobID] || authoritativeJobs[jobID] {
+			delete(n.state.Patterns, stateKey)
 		}
 	}
+}
+
+func notifiedPattern(pattern models.PatternAnalysis) NotifiedPattern {
+	return NotifiedPattern{
+		PatternID:       pattern.ID,
+		JobID:           patternJobID(pattern),
+		Subject:         pattern.Subject,
+		SharedRootCause: pattern.SharedRootCause,
+	}
+}
+
+func (n *Notifier) patternStateFor(pattern models.PatternAnalysis) (NotifiedPattern, bool, []string) {
+	jobID := patternJobID(pattern)
+	var exact *NotifiedPattern
+	var closest *NotifiedPattern
+	closestSimilarity := -1.0
+	closestIsJobScoped := false
+	var stateKeys []string
+	for _, key := range sortedKeys(n.state.Patterns) {
+		candidate := n.state.Patterns[key]
+		candidateJobID := strings.TrimSpace(candidate.JobID)
+		if candidateJobID == "" && key == jobID {
+			candidateJobID = key
+		}
+		if candidateJobID != jobID {
+			continue
+		}
+		stateKeys = append(stateKeys, key)
+		copy := candidate
+		if candidate.PatternID == pattern.ID || key == pattern.ID {
+			exact = &copy
+		}
+		similarity := patternSimilarity(candidate.SharedRootCause, pattern.SharedRootCause)
+		if similarity > closestSimilarity || similarity == closestSimilarity && key == jobID && !closestIsJobScoped {
+			closest = &copy
+			closestSimilarity = similarity
+			closestIsJobScoped = key == jobID
+		}
+	}
+	if exact != nil {
+		return *exact, true, stateKeys
+	}
+	if closest != nil {
+		return *closest, true, stateKeys
+	}
+	return NotifiedPattern{}, false, nil
+}
+
+func (n *Notifier) replacePatternState(jobID string, oldKeys []string, pattern NotifiedPattern) {
+	for _, key := range oldKeys {
+		delete(n.state.Patterns, key)
+	}
+	n.state.Patterns[jobID] = pattern
+}
+
+func patternsMateriallyDifferent(previous, current string) bool {
+	if patternPolarityReversed(previous, current) {
+		return true
+	}
+	previousSignals := patternNumericSignals(previous)
+	currentSignals := patternNumericSignals(current)
+	if patternNumericSignalsConflict(previousSignals, currentSignals) {
+		return true
+	}
+	return patternSimilarity(previous, current) < patternSimilarityFloor
+}
+
+func patternPolarityReversed(previous, current string) bool {
+	previousPolarity := patternPolarityTargets(previous)
+	currentPolarity := patternPolarityTargets(current)
+	previousTokens := patternTokens(previous)
+	currentTokens := patternTokens(current)
+	for target := range previousPolarity {
+		if _, stillNegative := currentPolarity[target]; stillNegative {
+			continue
+		}
+		if _, nowPositive := currentTokens[target]; nowPositive {
+			return true
+		}
+	}
+	for target := range currentPolarity {
+		if _, alreadyNegative := previousPolarity[target]; alreadyNegative {
+			continue
+		}
+		if _, wasPositive := previousTokens[target]; wasPositive {
+			return true
+		}
+	}
+	return false
+}
+
+func patternPolarityTargets(value string) map[string]struct{} {
+	targets := make(map[string]struct{})
+	lower := normalizePatternPolarityText(value)
+	for _, re := range patternPolarityRegexes {
+		for _, match := range re.FindAllStringSubmatch(lower, -1) {
+			target := singularPatternToken(match[1])
+			if target != "" {
+				targets[target] = struct{}{}
+			}
+		}
+	}
+	for _, token := range patternTokenRegex.FindAllString(lower, -1) {
+		if target := patternNegativeTokens[token]; target != "" {
+			targets[target] = struct{}{}
+		}
+	}
+	return targets
+}
+
+func patternSimilarity(previous, current string) float64 {
+	previousTokens := patternTokens(previous)
+	currentTokens := patternTokens(current)
+	if len(previousTokens) == 0 || len(currentTokens) == 0 {
+		if strings.TrimSpace(strings.ToLower(previous)) == strings.TrimSpace(strings.ToLower(current)) {
+			return 1
+		}
+		return 0
+	}
+	unionTokens := make(map[string]struct{}, len(previousTokens)+len(currentTokens))
+	for token := range previousTokens {
+		unionTokens[token] = struct{}{}
+	}
+	for token := range currentTokens {
+		unionTokens[token] = struct{}{}
+	}
+	intersectionWeight := 0.0
+	unionWeight := 0.0
+	for token := range unionTokens {
+		weight := 1.0
+		if _, lowWeight := patternLowWeightTokens[token]; lowWeight {
+			weight = 0.2
+		}
+		unionWeight += weight
+		if _, previousHas := previousTokens[token]; previousHas {
+			if _, currentHas := currentTokens[token]; currentHas {
+				intersectionWeight += weight
+			}
+		}
+	}
+	return intersectionWeight / unionWeight
+}
+
+func patternTokens(value string) map[string]struct{} {
+	tokens := make(map[string]struct{})
+	value = normalizePatternPolarityText(value)
+	for _, token := range patternTokenRegex.FindAllString(value, -1) {
+		if isNumericToken(token) {
+			if len(token) <= 5 {
+				tokens[token] = struct{}{}
+			}
+			continue
+		}
+		if len(token) < 3 {
+			continue
+		}
+		if target := patternNegativeTokens[token]; target != "" {
+			token = target
+		}
+		token = singularPatternToken(token)
+		if _, stop := patternStopTokens[token]; stop {
+			continue
+		}
+		tokens[token] = struct{}{}
+	}
+	return tokens
+}
+
+func normalizePatternPolarityText(value string) string {
+	return patternPolarityReplacer.Replace(strings.ToLower(value))
+}
+
+func patternNumericSignals(value string) map[string]struct{} {
+	value = strings.ToLower(value)
+	signals := make(map[string]struct{})
+	for _, signal := range patternNumericSignalRegexes {
+		for _, match := range signal.re.FindAllStringSubmatch(value, -1) {
+			for _, number := range match[1:] {
+				if number != "" {
+					signals[signal.name+":"+number] = struct{}{}
+				}
+			}
+		}
+	}
+	return signals
+}
+
+func patternNumericSignalsConflict(a, b map[string]struct{}) bool {
+	byKind := func(signals map[string]struct{}) map[string]map[string]struct{} {
+		out := make(map[string]map[string]struct{})
+		for signal := range signals {
+			kind, value, ok := strings.Cut(signal, ":")
+			if !ok {
+				continue
+			}
+			if out[kind] == nil {
+				out[kind] = make(map[string]struct{})
+			}
+			out[kind][value] = struct{}{}
+		}
+		return out
+	}
+	aByKind, bByKind := byKind(a), byKind(b)
+	for kind, aValues := range aByKind {
+		bValues := bByKind[kind]
+		if bValues == nil {
+			continue
+		}
+		if len(aValues) != len(bValues) {
+			return true
+		}
+		for value := range aValues {
+			if _, ok := bValues[value]; !ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func singularPatternToken(token string) string {
+	if len(token) > 5 && strings.HasSuffix(token, "ies") {
+		return token[:len(token)-3] + "y"
+	}
+	if len(token) > 4 && strings.HasSuffix(token, "s") && !strings.HasSuffix(token, "ss") {
+		return token[:len(token)-1]
+	}
+	return token
+}
+
+func isNumericToken(token string) bool {
+	for _, r := range token {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func completedFailedBuilds(detail models.JobDetail) int {

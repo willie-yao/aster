@@ -98,7 +98,7 @@ func TestPatternMessageEscapesContentAndBuildsInertLinks(t *testing.T) {
 	}
 	pattern := systemicPattern("pattern-1", "periodic/job", "Job<script>")
 	pattern.SharedRootCause = `<script>alert(1)</script>`
-	message := n.patternMessage(pattern)
+	message := n.patternMessage(pattern, "")
 	if strings.Contains(message.HTMLBody, "<script>") || !strings.Contains(message.HTMLBody, "&lt;script&gt;") {
 		t.Fatalf("pattern HTML was not escaped: %s", message.HTMLBody)
 	}

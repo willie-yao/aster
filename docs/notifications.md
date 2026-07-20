@@ -18,10 +18,12 @@ Failure emails include the project, job, test, consecutive count, latest error,
 available AI root cause or summary, dashboard link, and Prow link. Each message
 contains plain-text and HTML alternatives.
 
-When `action_links: true`, the notifier also sends one pattern-level email for
-each newly observed systemic recurring root cause. That email includes inert
-**Review issue draft** and **Review fix proposal** links. Pattern emails are
-deduplicated by the stable pattern id.
+When `action_links: true`, the notifier also sends pattern-level email. It sends
+one message when a job first becomes systemic and another when that job's shared
+root cause changes materially. Ordinary AI paraphrasing updates the stored
+pattern without sending again. A changed-pattern message includes both the
+previous and current root causes. Each message includes inert **Review issue
+draft** and **Review fix proposal** links.
 
 ## Project configuration
 
@@ -159,9 +161,14 @@ cache. It is preserved between runs but is not published by Pages or served by
 the Kubernetes server.
 
 State tracks both persistent-test alerts and action-enabled systemic-pattern
-alerts. State changes only after successful delivery:
+alerts. Systemic patterns are keyed by job ID, with the latest pattern ID and
+root cause retained for links and changed-pattern comparison. The state resets
+after an authoritative non-systemic verdict or recovery. Delivery-tracking
+transitions happen only after successful delivery; ordinary paraphrases may
+refresh the stored pattern metadata without sending a message:
 
 - A failed new or changed-failure email is retried on the next full pass.
+- A failed new or changed-pattern email is retried on the next full pass.
 - A failed recovery email keeps its state entry and is retried.
 - Delivery failures are logged and do not fail the fetch or block other side
   effects.
