@@ -1,0 +1,146 @@
+# Tier-2 k8s discovery Tool CRDs, layered on the same artifact-tool service. These
+# encode Kubernetes-shaped navigation over the artifact tree (they use the same
+# artifact Browser as the filesystem tools, not a live cluster). They exist to
+# close the biggest gap seen in the filesystem-only evaluation: mapping a failed
+# test to its per-spec cluster. discover-clusters + find-my-cluster surface the
+# candidate clusters so the agent stops guessing wrong ones.
+#
+# Same SSRF caveat as 30-tools.yaml applies (Available=false for in-cluster URLs).
+apiVersion: core.orka.ai/v1alpha1
+kind: Tool
+metadata:
+  name: discover-clusters
+  namespace: orka-system
+spec:
+  description: "List workload Kubernetes clusters whose debug artifacts were captured under artifacts/clusters/ for this build. Excludes the management (bootstrap) cluster."
+  http:
+    url: http://artifact-tool.orka-system.svc:8080/tool/discover_clusters
+    method: POST
+    authSecretRef:
+      name: artifact-tool-auth
+      key: token
+    authInject: header
+  parameters:
+    type: object
+    properties: {}
+---
+apiVersion: core.orka.ai/v1alpha1
+kind: Tool
+metadata:
+  name: find-my-cluster
+  namespace: orka-system
+spec:
+  description: "Resolve which workload cluster a failed test most likely ran against. Returns the chosen cluster plus reason and the full candidate list so you can override. If no confident match, reason explains why and you should pick from candidates by reasoning about the test's flavor."
+  http:
+    url: http://artifact-tool.orka-system.svc:8080/tool/find_my_cluster
+    method: POST
+    authSecretRef:
+      name: artifact-tool-auth
+      key: token
+    authInject: header
+  parameters:
+    type: object
+    properties:
+      test_name:
+        type: string
+        description: "Full test name including any Ginkgo brackets."
+    required: [test_name]
+---
+apiVersion: core.orka.ai/v1alpha1
+kind: Tool
+metadata:
+  name: list-cluster-machines
+  namespace: orka-system
+spec:
+  description: "List the per-machine (per-VM/node) debug directories under a discovered cluster. Use list-machine-logs to see which log files each machine has."
+  http:
+    url: http://artifact-tool.orka-system.svc:8080/tool/list_cluster_machines
+    method: POST
+    authSecretRef:
+      name: artifact-tool-auth
+      key: token
+    authInject: header
+  parameters:
+    type: object
+    properties:
+      cluster:
+        type: string
+        description: "Cluster name as returned by discover-clusters."
+    required: [cluster]
+---
+apiVersion: core.orka.ai/v1alpha1
+kind: Tool
+metadata:
+  name: list-machine-logs
+  namespace: orka-system
+spec:
+  description: "List the log files present in a machine's debug directory (boot.log, kubelet.log, journal.log, etc.), in priority order. Use before tail/grep so you do not fetch missing files."
+  http:
+    url: http://artifact-tool.orka-system.svc:8080/tool/list_machine_logs
+    method: POST
+    authSecretRef:
+      name: artifact-tool-auth
+      key: token
+    authInject: header
+  parameters:
+    type: object
+    properties:
+      cluster:
+        type: string
+        description: "Cluster name."
+      machine:
+        type: string
+        description: "Machine (VM/node) name as returned by list-cluster-machines."
+    required: [cluster, machine]
+---
+apiVersion: core.orka.ai/v1alpha1
+kind: Tool
+metadata:
+  name: discover-controllers
+  namespace: orka-system
+spec:
+  description: "List management-cluster controller deployments captured under artifacts/clusters/bootstrap/logs/. One entry per (namespace, deployment). Pass a namespace to scope; omit for all."
+  http:
+    url: http://artifact-tool.orka-system.svc:8080/tool/discover_controllers
+    method: POST
+    authSecretRef:
+      name: artifact-tool-auth
+      key: token
+    authInject: header
+  parameters:
+    type: object
+    properties:
+      namespace:
+        type: string
+        description: "Optional namespace to scope, e.g. capz-system."
+---
+apiVersion: core.orka.ai/v1alpha1
+kind: Tool
+metadata:
+  name: resolve-controller-log
+  namespace: orka-system
+spec:
+  description: "Find the concrete pod-level container-log path for a controller deployment. Use the returned path with tail-artifact or grep-artifact."
+  http:
+    url: http://artifact-tool.orka-system.svc:8080/tool/resolve_controller_log
+    method: POST
+    authSecretRef:
+      name: artifact-tool-auth
+      key: token
+    authInject: header
+  parameters:
+    type: object
+    properties:
+      namespace:
+        type: string
+        description: "Namespace, e.g. capz-system."
+      deployment:
+        type: string
+        description: "Deployment name, e.g. capz-controller-manager."
+      pod_name_regex:
+        type: string
+        description: "Optional regex to filter pod names."
+      container_log:
+        type: string
+        description: "Container log file name (default manager.log)."
+    required: [namespace, deployment]

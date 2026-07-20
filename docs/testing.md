@@ -86,4 +86,6 @@ When editing Markdown:
 
 - Verify local links and heading anchors.
 - Validate generated scaffold text with `go test ./internal/onboard`.
-- Run `helm lint` when Helm examples or values change.
+- Run `make helm-check` when Helm templates, packaged files, examples, or values
+  change. It lints the chart, verifies Orka Tool synchronization, and exercises
+  owned and external artifact Tool renders.

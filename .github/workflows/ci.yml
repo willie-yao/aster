@@ -49,3 +49,11 @@ jobs:
       - name: Build
         working-directory: frontend
         run: npm run build
+
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: Lint and render
+        run: make helm-check

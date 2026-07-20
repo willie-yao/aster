@@ -8,8 +8,9 @@ that run alongside your inference stack.
 
 > Opt-in and experimental. The engine's default analysis backend is the
 > in-process agentic loop; select this path explicitly with `analysis: orka` in
-> the Helm chart (see [QUICKSTART.md](QUICKSTART.md)). It requires Orka, the tool shim, a
-> Provider, and the ai-worker patches installed in the cluster.
+> the Helm chart (see [QUICKSTART.md](QUICKSTART.md)). It requires the Orka
+> control plane, a Provider, and the ai-worker patches. The dashboard chart owns
+> its release-scoped artifact Tool service and base Tool ConfigMap by default.
 
 ## Docs
 
@@ -70,10 +71,11 @@ also carries the configured Orka retry policy.
   empty results) and skip the verify_timeline discipline. Apply
   worker-patches/ai-worker-convergence.patch (iteration cap, forced finalization,
   empty-final re-prompt, transient-critique gate) and rebuild the ai-worker image.
-- **Artifact-tool authentication is required.** Create the configured bearer
-  Secret before deploying the shim or scoped Tools. The service accepts routing
-  only from producer-owned headers and the included NetworkPolicy limits ingress
-  to Orka AI-worker pods.
+- **Artifact-tool authentication is required.** The Helm chart creates and
+  preserves a release-scoped bearer Secret by default. External shim deployments
+  must provide `orka.artifactTool.auth.existingSecret`. The service accepts
+  routing only from producer-owned headers and the included NetworkPolicy limits
+  ingress to Orka AI-worker pods.
 - **SSRF guard.** Orka marks tools whose URL resolves to a private/loopback IP as
   Available=false. In-cluster ClusterIPs are private, so the tools show unavailable
   but still work (the worker does not gate on availability).

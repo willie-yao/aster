@@ -1,4 +1,4 @@
-.PHONY: all build build-server build-worker serve dev-actions image fixer-image test test-v e2e lint fmt tidy \
+.PHONY: all build build-server build-worker serve dev-actions image fixer-image test test-v e2e lint fmt tidy helm-check \
        fetch-data fetch-data-quick fetch-data-ai fetch-data-ai-quick \
        fe-install dev fe-build fe-check fe-lint \
        dist dist-ai clean clean-cache clean-all help
@@ -81,6 +81,10 @@ fmt:
 tidy:
 	cd backend && go mod tidy
 
+# Lint and render the Helm chart, including the owned Orka resources.
+helm-check:
+	bash deploy/helm/prow-ai-dashboard/test-render.sh
+
 ## ─── Data Fetching ────────────────────────────────────────────
 
 # Fetch fresh test data from GCS into frontend/public/data/
@@ -156,6 +160,7 @@ help:
 	@echo "  lint               Run golangci-lint"
 	@echo "  fmt                Format Go code"
 	@echo "  tidy               Tidy Go modules"
+	@echo "  helm-check         Lint and validate Helm chart renders"
 	@echo ""
 	@echo "  fetch-data         Fetch data from GCS (8 builds/job)"
 	@echo "  fetch-data-quick   Fetch minimal data (3 builds/job)"

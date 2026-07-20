@@ -76,8 +76,8 @@ spec:
               resources:
                 {{- toYaml .Values.fetcher.resources | nindent 16 }}
             - name: produce
-              image: {{ .Values.orka.producerImage }}
-              imagePullPolicy: {{ .Values.orka.imagePullPolicy }}
+              image: {{ include "prow-ai-dashboard.orkaProducerImage" . }}
+              imagePullPolicy: {{ .Values.orka.producer.image.pullPolicy }}
               command:
                 - /usr/local/bin/orka-producer
                 - -data={{ .Values.persistence.mountPath }}
@@ -85,8 +85,8 @@ spec:
                 - -tool-manifests=/base-tools
                 - -tasks-out=/tmp/tasks
                 - -tools-out=/tmp/build-tools
-                - -tool-auth-secret={{ .Values.orka.toolAuthSecret }}
-                - -tool-auth-key={{ .Values.orka.toolAuthKey }}
+                - -tool-auth-secret={{ include "prow-ai-dashboard.orkaArtifactToolSecret" . }}
+                - -tool-auth-key={{ .Values.orka.artifactTool.auth.tokenKey }}
                 - -apply
                 - -namespace={{ .Values.orka.namespace }}
                 - -provider={{ .Values.orka.provider }}
@@ -107,8 +107,8 @@ spec:
               image: {{ include "prow-ai-dashboard.fixerImage" . }}
               imagePullPolicy: {{ .Values.orka.fixRuntime.image.pullPolicy }}
               {{- else }}
-              image: {{ .Values.orka.ingestorImage }}
-              imagePullPolicy: {{ .Values.orka.imagePullPolicy }}
+              image: {{ include "prow-ai-dashboard.orkaIngestorImage" . }}
+              imagePullPolicy: {{ .Values.orka.ingestor.image.pullPolicy }}
               {{- end }}
               command:
                 - /usr/local/bin/orka-ingestor
@@ -241,7 +241,7 @@ spec:
             {{- if $orka }}
             - name: base-tools
               configMap:
-                name: {{ .Values.orka.baseToolsConfigMap }}
+                name: {{ include "prow-ai-dashboard.orkaBaseToolsConfigMap" . }}
             {{- end }}
             - name: tmp
               emptyDir: {}

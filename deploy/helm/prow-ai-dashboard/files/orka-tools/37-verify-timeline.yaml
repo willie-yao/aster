@@ -1,0 +1,30 @@
+# Deterministically extract timestamped events from one log or activity-log
+# artifact and return them in time order. A reviewer agent (or the analyst) calls
+# it before making causal-ordering or is_transient claims, so those claims are
+# grounded in an ordered timeline instead of ad-hoc greps.
+#
+# Same SSRF caveat as 30-tools.yaml (Available=false for the in-cluster URL).
+apiVersion: core.orka.ai/v1alpha1
+kind: Tool
+metadata:
+  name: verify-timeline
+  namespace: orka-system
+spec:
+  description: "Deterministically extract timestamped events from a log or Azure activity-log artifact and return them ordered by time. Use this before making causal-ordering or is_transient claims; optionally filter to lines containing a resource substring."
+  http:
+    url: http://artifact-tool.orka-system.svc:8080/tool/verify_timeline
+    method: POST
+    authSecretRef:
+      name: artifact-tool-auth
+      key: token
+    authInject: header
+  parameters:
+    type: object
+    properties:
+      path:
+        type: string
+        description: "Artifact path relative to the build root, such as a build log, machine log, controller log, or Azure activity log."
+      resource:
+        type: string
+        description: "Optional case-insensitive substring filter; only timestamped lines containing this text are included."
+    required: [path]

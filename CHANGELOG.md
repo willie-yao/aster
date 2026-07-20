@@ -22,6 +22,11 @@ for how to pin a release.
 
 ### Added
 
+- **Chart-owned Orka artifact tools.** `analysis: orka` now creates a
+  release-scoped authenticated artifact Tool service in the Orka namespace and
+  a synchronized base Tool ConfigMap in the dashboard namespace. Producer,
+  ingestor, and artifact-tool image tags inherit the pinned engine tag, while
+  existing external services and ConfigMaps remain configurable.
 - **Orka fix generation runtime.** Fix PRs can opt into a generation-only Orka
   Agent Task while keeping base pinning, diff reconstruction, review,
   verification, previews, credentials, and PR creation inside the engine. The

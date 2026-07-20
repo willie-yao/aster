@@ -1,0 +1,144 @@
+# Orka Tool CRDs, one per filesystem operation, each a plain HTTP POST at the
+# artifact-tool service. The model-facing function name is metadata.name (RFC1123, so
+# hyphens not underscores); the service route keeps the engine's underscore name.
+#
+# CAVEAT: Orka's Tool controller has an SSRF guard that marks any tool whose URL
+# resolves to a private/loopback IP as Available=false. In-cluster ClusterIPs are
+# private, so these will show Available=false. They still WORK because the ai
+# worker's loadCustomTools does not gate on availability and the tool executor
+# does not re-check SSRF at call time. Relying on that is fragile; productionizing
+# an in-cluster tool service needs an Orka patch to expose SkipSSRFValidation,
+# a public ingress, or the MCP tool path.
+apiVersion: core.orka.ai/v1alpha1
+kind: Tool
+metadata:
+  name: list-artifacts
+  namespace: orka-system
+spec:
+  description: "List the immediate children (dirs and files) of a directory in the build's GCS artifact tree. Pass an empty string for the build root."
+  http:
+    url: http://artifact-tool.orka-system.svc:8080/tool/list_artifacts
+    method: POST
+    authSecretRef:
+      name: artifact-tool-auth
+      key: token
+    authInject: header
+  parameters:
+    type: object
+    properties:
+      path:
+        type: string
+        description: 'Directory path relative to the build root, e.g. "" for root, "artifacts/".'
+    required: [path]
+---
+apiVersion: core.orka.ai/v1alpha1
+kind: Tool
+metadata:
+  name: find-artifacts
+  namespace: orka-system
+spec:
+  description: "Recursively search the artifact tree for files whose basename matches a regex. Use to locate files like junit.*.xml, build-log.txt, kubelet.log. Matches file basenames only, not directory names."
+  http:
+    url: http://artifact-tool.orka-system.svc:8080/tool/find_artifacts
+    method: POST
+    authSecretRef:
+      name: artifact-tool-auth
+      key: token
+    authInject: header
+  parameters:
+    type: object
+    properties:
+      pattern:
+        type: string
+        description: "RE2 regex matched against each file's basename. Use (?i) for case-insensitive."
+      root:
+        type: string
+        description: "Directory to walk under, relative to build root. Default empty."
+      max_results:
+        type: integer
+        description: "Max matching files (default 50)."
+    required: [pattern]
+---
+apiVersion: core.orka.ai/v1alpha1
+kind: Tool
+metadata:
+  name: grep-artifact
+  namespace: orka-system
+spec:
+  description: "Regex-search a file for matching lines with surrounding context. Use for huge build-logs to find specific errors. Successful calls return an evidence_token for validate_analysis."
+  http:
+    url: http://artifact-tool.orka-system.svc:8080/tool/grep_artifact
+    method: POST
+    authSecretRef:
+      name: artifact-tool-auth
+      key: token
+    authInject: header
+  parameters:
+    type: object
+    properties:
+      path:
+        type: string
+        description: "File path relative to build root."
+      pattern:
+        type: string
+        description: "RE2 regex (Go syntax). Use (?i) prefix for case-insensitive."
+      context_lines:
+        type: integer
+        description: "Lines of context before/after each match (default 2)."
+      max_matches:
+        type: integer
+        description: "Max matches to return (default 30)."
+    required: [path, pattern]
+---
+apiVersion: core.orka.ai/v1alpha1
+kind: Tool
+metadata:
+  name: read-artifact
+  namespace: orka-system
+spec:
+  description: "Read a byte range of a file. Use for small/known files. Returns up to 16384 bytes plus an evidence_token for validate_analysis."
+  http:
+    url: http://artifact-tool.orka-system.svc:8080/tool/read_artifact
+    method: POST
+    authSecretRef:
+      name: artifact-tool-auth
+      key: token
+    authInject: header
+  parameters:
+    type: object
+    properties:
+      path:
+        type: string
+        description: "File path relative to build root."
+      offset:
+        type: integer
+        description: "Byte offset to start from (default 0)."
+      length:
+        type: integer
+        description: "Bytes to read (default 8192, max 16384)."
+    required: [path]
+---
+apiVersion: core.orka.ai/v1alpha1
+kind: Tool
+metadata:
+  name: tail-artifact
+  namespace: orka-system
+spec:
+  description: "Return the last N lines of a file. Most efficient way to inspect the end of a build or controller log. Successful calls return an evidence_token for validate_analysis."
+  http:
+    url: http://artifact-tool.orka-system.svc:8080/tool/tail_artifact
+    method: POST
+    authSecretRef:
+      name: artifact-tool-auth
+      key: token
+    authInject: header
+  parameters:
+    type: object
+    properties:
+      path:
+        type: string
+        description: "File path relative to build root."
+      lines:
+        type: integer
+        description: "Number of trailing lines (default 500, max 2000)."
+    required: [path]

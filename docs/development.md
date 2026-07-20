@@ -86,6 +86,7 @@ make image
 helm lint deploy/helm/prow-ai-dashboard \
   --set-file project.config=configs/example/project.yaml \
   --set-file project.systemPrompt=configs/example/prompts/system.md
+make helm-check
 ```
 
 Use [Kubernetes-native deployment](kubernetes.md) for runtime configuration.

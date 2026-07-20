@@ -1,26 +1,30 @@
-# Grants the Orka controller service account full access to the core.orka.ai
-# CRDs. The upstream Orka helm chart's controller ClusterRole predates some
-# newer CRDs (e.g. agentruntimes), so the controller crashes on "cannot list
-# agentruntimes" without this. Spike-only; a real deploy should carry the fix
-# upstream in the chart.
+# Compatibility RBAC for Orka revisions whose Helm chart predates the
+# AgentRuntime and SubstrateActorPool controllers. Remove this after the
+# upstream chart grants these resources to its controller ServiceAccount.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: orka-spike-full-crd
+  name: orka-dashboard-controller-extra
 rules:
-- apiGroups: ["core.orka.ai"]
-  resources: ["*"]
-  verbs: ["*"]
+  - apiGroups: ["core.orka.ai"]
+    resources: ["agentruntimes", "substrateactorpools"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["core.orka.ai"]
+    resources: ["agentruntimes/status", "substrateactorpools/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["core.orka.ai"]
+    resources: ["agentruntimes/finalizers", "substrateactorpools/finalizers"]
+    verbs: ["update"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: orka-spike-full-crd
+  name: orka-dashboard-controller-extra
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: orka-spike-full-crd
+  name: orka-dashboard-controller-extra
 subjects:
-- kind: ServiceAccount
-  name: orka
-  namespace: orka-system
+  - kind: ServiceAccount
+    name: orka
+    namespace: orka-system

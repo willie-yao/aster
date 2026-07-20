@@ -78,8 +78,11 @@ identical either way.
   remediation. It is useful when you want one observable Task per failure and
   are prepared to operate the additional Orka components and worker patches.
 
-Orka mode requires `mode: cron` and assumes Orka, the artifact tool shim, a
-Provider, and the patched ai-worker image are already installed in the cluster.
+Orka mode requires `mode: cron` and assumes the Orka control plane, a Provider,
+and the patched ai-worker image are installed. The dashboard chart creates a
+release-scoped artifact Tool Deployment, Service, authentication Secret,
+NetworkPolicy, and base Tool ConfigMap by default. Configure an external shared
+shim only when the operator intentionally owns those resources separately.
 The Orka skeleton fetch uses `-skip-side-effects`; notifications and GitHub
 reconciliation run once, after final analysis and pattern output exist.
 
@@ -186,7 +189,9 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | --- | --- |
 | `image.repository`, `image.tag` | Engine image; tag defaults to the chart `appVersion`. |
 | `mode` | `watch` (continuous worker Deployment, default) or `cron` (scheduled CronJob). |
-| `analysis` | `inprocess` (default; in-cluster agentic loop) or `orka` (advanced experimental pipeline; requires `mode: cron`, Orka, the tool shim, a Provider, and worker patches). |
+| `analysis` | `inprocess` (default; in-cluster agentic loop) or `orka` (advanced experimental pipeline; requires `mode: cron`, the Orka control plane, a Provider, and worker patches). |
+| `orka.artifactTool.*` | Release-scoped artifact Tool image, authentication, network policy, resources, and scheduling. |
+| `orka.baseTools.*` | Create the synchronized producer ConfigMap or reference an existing ConfigMap in the release namespace. |
 | `orka.fixRuntime.enabled` | Mount a ServiceAccount token and grant Orka Task RBAC for `agent_runtime.type: orka` fix generation. |
 | `persistence.accessMode` | Must be `ReadWriteMany`. |
 | `persistence.storageClass`, `persistence.size` | The shared volume's class and size. |

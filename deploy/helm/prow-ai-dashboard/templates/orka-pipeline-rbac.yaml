@@ -15,7 +15,7 @@ metadata:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ include "prow-ai-dashboard.orkaServiceAccountName" . }}
+  name: {{ include "prow-ai-dashboard.orkaRBACName" . }}
   namespace: {{ .Values.orka.namespace }}
   labels:
     {{- include "prow-ai-dashboard.labels" . | nindent 4 }}
@@ -36,7 +36,7 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ include "prow-ai-dashboard.orkaServiceAccountName" . }}
+  name: {{ include "prow-ai-dashboard.orkaRBACName" . }}
   namespace: {{ .Values.orka.namespace }}
   labels:
     {{- include "prow-ai-dashboard.labels" . | nindent 4 }}
@@ -47,6 +47,6 @@ subjects:
     namespace: {{ .Release.Namespace }}
 roleRef:
   kind: Role
-  name: {{ include "prow-ai-dashboard.orkaServiceAccountName" . }}
+  name: {{ include "prow-ai-dashboard.orkaRBACName" . }}
   apiGroup: rbac.authorization.k8s.io
 {{- end }}

@@ -1,0 +1,19 @@
+{{- include "prow-ai-dashboard.validateAnalysis" . -}}
+{{- if and (eq .Values.analysis "orka") .Values.orka.baseTools.create }}
+{{- $root := . -}}
+{{- $sourceBaseURL := "http://artifact-tool.orka-system.svc:8080" -}}
+{{- $targetBaseURL := include "prow-ai-dashboard.orkaArtifactToolBaseURL" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "prow-ai-dashboard.orkaBaseToolsConfigMap" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "prow-ai-dashboard.labels" . | nindent 4 }}
+    app.kubernetes.io/component: orka-base-tools
+data:
+{{- range $path, $_ := .Files.Glob "files/orka-tools/*.yaml" }}
+  {{ base $path }}: |
+    {{- $root.Files.Get $path | replace $sourceBaseURL $targetBaseURL | nindent 4 }}
+{{- end }}
+{{- end }}

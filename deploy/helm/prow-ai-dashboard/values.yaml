@@ -41,17 +41,8 @@ orka:
   # Provider CRD name and the model the Tasks request.
   provider: copilot
   model: claude-sonnet-4.5
-  # The multi-bucket GCS tool shim and the Orka result API (in-cluster Services).
-  toolShimEnv: {}
-  # Secret in orka.namespace shared by Orka Tool authSecretRef and the
-  # artifact-tool Deployment. The key must contain the raw bearer token.
-  toolAuthSecret: artifact-tool-auth
-  toolAuthKey: token
+  # Orka result API Service.
   apiBase: http://orka.orka-system.svc:8080
-  # ConfigMap holding the base Tool CRDs the producer clones per build. Create it
-  # from experimental/orka/manifests (kubectl create configmap orka-base-tools
-  # --from-file=experimental/orka/manifests/).
-  baseToolsConfigMap: orka-base-tools
   # Manual cache-bust version. Prompt, model, timeout, retry, and Tool-definition
   # changes invalidate Tasks automatically; bump this for external semantic changes.
   version: v1
@@ -60,11 +51,82 @@ orka:
   retries: 1
   ingestWait: 45m
   patternWait: 25m
-  # Producer + ingestor images, published to GHCR alongside the engine image by
-  # .github/workflows/image.yml. Override for a local build (see QUICKSTART.md).
-  producerImage: ghcr.io/willie-yao/prow-ai-dashboard/orka-producer:main
-  ingestorImage: ghcr.io/willie-yao/prow-ai-dashboard/orka-ingestor:main
-  imagePullPolicy: IfNotPresent
+  # Producer + ingestor images are published alongside the engine image. Empty
+  # tags inherit image.tag, then Chart.appVersion.
+  producer:
+    image:
+      repository: ghcr.io/willie-yao/prow-ai-dashboard/orka-producer
+      tag: ""
+      pullPolicy: IfNotPresent
+  ingestor:
+    image:
+      repository: ghcr.io/willie-yao/prow-ai-dashboard/orka-ingestor
+      tag: ""
+      pullPolicy: IfNotPresent
+
+  # Base Tool definitions are mounted into the producer in the dashboard
+  # release namespace. Set create=false and existingConfigMap to use an
+  # operator-managed ConfigMap instead.
+  baseTools:
+    create: true
+    existingConfigMap: ""
+
+  # Per-release artifact Tool service. The Service and authentication Secret
+  # live in orka.namespace beside the Orka AI-worker pods. The producer-owned
+  # base Tool definitions are rewritten to this Service automatically.
+  artifactTool:
+    enabled: true
+    # Required only when enabled=false. Include the scheme and port, with no
+    # trailing slash, for example http://artifact-tool.orka-system.svc:8080.
+    baseURL: ""
+    replicas: 1
+    image:
+      repository: ghcr.io/willie-yao/prow-ai-dashboard/orka-artifact-tool
+      tag: ""
+      pullPolicy: IfNotPresent
+    imagePullSecrets: []
+    auth:
+      # When existingSecret is empty, the chart creates a release-scoped Secret
+      # and preserves its token across upgrades.
+      existingSecret: ""
+      tokenKey: token
+      token: ""
+    service:
+      port: 8080
+    # Defaults used only when a Tool request lacks producer-owned routing
+    # headers. Scoped production Tools always provide the real build route.
+    defaultBucket: kubernetes-ci-logs
+    defaultBuildPrefix: logs/periodic-cluster-api-provider-azure-e2e-main/2073230525962653696/
+    modelByteBudget: 8388608
+    gcsByteBudget: 67108864
+    extraEnv: []
+    podSecurityContext:
+      runAsNonRoot: true
+      runAsUser: 65532
+      runAsGroup: 65532
+      fsGroup: 65532
+      seccompProfile:
+        type: RuntimeDefault
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop: ["ALL"]
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: "1"
+        memory: 512Mi
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    networkPolicy:
+      enabled: true
+      # Additional ingress peers appended beside the default Orka AI-worker
+      # pod selector. Each entry is a standard NetworkPolicyPeer.
+      from: []
   # Enable the Orka ServiceAccount and RBAC for scheduled and interactive
   # agent_runtime.type: orka fix generation even when analysis is inprocess.
   fixRuntime:

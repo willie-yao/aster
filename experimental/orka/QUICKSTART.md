@@ -46,20 +46,33 @@ ghcr.io/willie-yao/prow-ai-dashboard/orka-artifact-tool:main
 ghcr.io/willie-yao/prow-ai-dashboard/orka-copilot-proxy:main
 ```
 
-The Helm chart and the manifests reference these by default, so the steps below
-need no local image build. Ensure the GHCR packages are pullable from your
-cluster: make them public, or add an `imagePullSecret`. To build locally instead,
-see [Local build](#local-build-for-kind).
+The Helm chart uses the specialized repositories above and inherits the engine
+`image.tag`, so one SHA or release tag pins fetcher, producer, ingestor, and
+artifact tool together. The standalone manifests use `:main`. Ensure the GHCR
+packages are pullable from your cluster: make them public, use the chart's
+`imagePullSecrets` for pipeline images, and use
+`orka.artifactTool.imagePullSecrets` for the cross-namespace artifact Tool. To
+build locally instead, see [Local build](#local-build-for-kind).
 
 ## Step 1: install Orka and apply the worker patches
 
 Install the Orka control plane per its own docs
 ([orka-agents/orka](https://github.com/orka-agents/orka)); its images are private,
-so build them from source. The base install is one Helm release:
+so build them from source. Current upstream chart revisions do not yet package
+their generated CRDs and may omit RBAC for newer controllers. Install the CRDs
+and scoped compatibility RBAC before the Helm release. Remove these manual
+steps after the corresponding upstream chart fixes land:
 
 ```bash
-# In your Orka checkout, following Orka's build/install docs:
-helm install orka charts/orka --namespace orka-system --create-namespace
+# In your Orka checkout:
+kubectl create namespace orka-system --dry-run=client -o yaml | kubectl apply -f -
+kubectl apply -f config/crd/bases/
+
+# In this dashboard checkout:
+kubectl apply -f experimental/orka/manifests/00-rbac.yaml
+
+# Back in the Orka checkout:
+helm install orka charts/orka --namespace orka-system
 ```
 
 Then apply this repo's ai-worker patches. They add the convergence and
@@ -108,15 +121,20 @@ kubectl apply -f experimental/orka/manifests/50-copilot-proxy.yaml
 kubectl apply -f experimental/orka/manifests/11-copilot-provider.yaml
 ```
 
-## Step 3: deploy the artifact tool shim
+## Step 3: choose artifact Tool ownership
 
 The shim exposes the engine's artifact tools over HTTP for the Orka Tasks to call.
-Create the shared bearer token, then apply the RBAC gap fix and the shim:
+The dashboard Helm chart creates a release-scoped authenticated shim, Service,
+NetworkPolicy, Secret, and base Tool ConfigMap by default. Configure placement
+and resources under `orka.artifactTool`; no manual resources are required for
+the normal Helm path.
+
+For a non-Helm deployment, or when intentionally sharing one external shim,
+create the bearer Secret and apply the standalone manifest:
 
 ```bash
 kubectl create secret generic artifact-tool-auth -n orka-system \
   --from-literal=token="$(openssl rand -hex 32)"
-kubectl apply -f experimental/orka/manifests/00-rbac.yaml
 kubectl apply -f experimental/orka/manifests/20-artifact-tool.yaml
 ```
 
@@ -130,9 +148,9 @@ a gcsweb gateway, set `STORAGE_PROVIDER: gcsweb` and `STORAGE_BASE` in
 `20-artifact-tool.yaml`, or rely on the `X-Storage-*` headers the producer derives
 from `project.yaml`.
 
-The base Tool CRDs under `manifests/30-*` through `manifests/41-*` are not applied
-here. They are clone templates the producer copies per build (Step 5), so you only
-deploy the shim, not the Tool CRDs.
+The base Tool CRDs under `manifests/30-*` through `manifests/41-*` are clone
+templates, not cluster resources. Helm packages synchronized copies and writes
+them to the producer ConfigMap in the dashboard release namespace.
 
 ## Step 4: deploy the pipeline with Helm
 
@@ -141,26 +159,32 @@ The `deploy/helm/prow-ai-dashboard` chart runs the whole flow when
 fetch(`-ai=false`) then orka-producer then orka-ingestor, and the chart creates
 the pipeline RBAC.
 
-The chart deploys the pipeline, not Orka: Steps 1 to 3 must be done first. Create
-the base-tools ConfigMap the producer clones from, then install:
+The chart deploys the per-dashboard pipeline and artifact Tool service, not the
+Orka control plane. Install Orka and the Provider first, then install the
+dashboard:
 
 ```bash
-kubectl create configmap orka-base-tools -n orka-system \
-  --from-file=experimental/orka/manifests/
-
 helm install dash deploy/helm/prow-ai-dashboard \
+  --namespace dashboards --create-namespace \
   --set mode=cron --set analysis=orka \
-  --set orka.toolAuthSecret=artifact-tool-auth \
-  --set orka.toolAuthKey=token \
   --set orka.provider=copilot --set orka.model=claude-sonnet-4.5 \
   --set-file project.config=<consumer>/project.yaml \
   --set-file project.systemPrompt=<consumer>/prompts/system.md
 ```
 
-The producer and ingestor images default to the published GHCR tags, so no image
-flags are needed. Set `orka.provider` to your `Provider` name and `orka.model` to
-your model id. See `deploy/helm/prow-ai-dashboard/values.yaml` for the full `orka:`
-block: namespace, `apiBase`, `version`, `taskTimeout`, `ingestWait`, and RBAC.
+On heterogeneous clusters, place the artifact Tool on an appropriate CPU node
+pool with a cluster-specific selector, for example:
+
+```bash
+--set orka.artifactTool.nodeSelector.agentpool=nodepool1
+```
+
+Do not copy this selector onto clusters that do not define that label.
+
+Producer, ingestor, and artifact-tool tags inherit the engine `image.tag`, so one
+immutable SHA pins the complete dashboard pipeline. Set `orka.provider` to your
+Provider name and `orka.model` to your model id. See the chart values for
+external artifact Tool and existing ConfigMap overrides.
 
 `analysis: inprocess`, the default, is unchanged: the engine runs the in-process
 loop and none of the Orka path is deployed.
@@ -169,11 +193,11 @@ loop and none of the Orka path is deployed.
 
 ```bash
 # Trigger a run now instead of waiting for the schedule.
-kubectl create job -n orka-system --from=cronjob/dash-prow-ai-dashboard-fetcher orka-run-1
+kubectl create job -n dashboards --from=cronjob/dash-prow-ai-dashboard-fetcher orka-run-1
 
 # Watch the steps: fetch skeleton, produce Tasks, ingest results.
-kubectl logs -n orka-system job/orka-run-1 -c produce
-kubectl logs -n orka-system job/orka-run-1 -c ingest | tail
+kubectl logs -n dashboards job/orka-run-1 -c produce
+kubectl logs -n dashboards job/orka-run-1 -c ingest | tail
 
 # Per-Task state.
 kubectl get tasks -n orka-system -l app.kubernetes.io/managed-by=orka-producer
@@ -242,10 +266,20 @@ for cmd in orka-producer orka-ingestor orka-artifact-tool orka-copilot-proxy; do
 done
 ```
 
-For Helm, add `--set orka.producerImage=orka-producer:latest --set
-orka.ingestorImage=orka-ingestor:latest`. For the manifests, edit the `image:`
-fields in `20-artifact-tool.yaml`, `50-copilot-proxy.yaml`, `70-pipeline-job.yaml`,
-and `71-ingestor-webhook.yaml`.
+For Helm, override the structured image values:
+
+```bash
+--set orka.producer.image.repository=orka-producer \
+--set orka.producer.image.tag=latest \
+--set orka.ingestor.image.repository=orka-ingestor \
+--set orka.ingestor.image.tag=latest \
+--set orka.artifactTool.image.repository=orka-artifact-tool \
+--set orka.artifactTool.image.tag=latest
+```
+
+For the standalone manifests, edit the image fields in
+`20-artifact-tool.yaml`, `50-copilot-proxy.yaml`, `70-pipeline-job.yaml`, and
+`71-ingestor-webhook.yaml`.
 
 ## Configuration the Orka path reads
 
@@ -307,8 +341,9 @@ kubectl logs -n orka-system job/orka-run-1 -c ingest | tail
   timeline gates. Verify the controller event store and Task events API are
   enabled and reachable by the pipeline ServiceAccount.
 - **`ImagePullBackOff` on an orka-* image.** The GHCR package is not pullable from
-  the cluster. Make it public or add an `imagePullSecret`, or build locally and
-  override the image (see [Local build](#local-build-for-kind)).
+  the cluster. Make it public, configure top-level `imagePullSecrets` for the
+  pipeline, or configure `orka.artifactTool.imagePullSecrets` for the artifact
+  Tool. For local images, see [Local build](#local-build-for-kind).
 - **Webhook never fires.** Orka's SSRF guard requires a same-namespace ClusterIP
   Service with a selector; `71-ingestor-webhook.yaml` satisfies it. The receiver
   version must match the producer's.
@@ -325,7 +360,7 @@ manifests/
   00-rbac.yaml              Orka SA access to core.orka.ai (chart gap).
   11-copilot-provider.yaml  GitHub Copilot Provider (via the proxy).
   12-kimi-provider.yaml     OpenAI-compatible Provider template (no proxy).
-  20-artifact-tool.yaml     The storage-agnostic artifact tool shim Deployment + Service.
+  20-artifact-tool.yaml     Standalone artifact Tool shim for non-Helm deployments.
   30-tools.yaml             Filesystem Tool CRD templates (list/find/grep/read/tail).
   35-k8s-tools.yaml         k8s discovery Tool CRD templates (CAPZ cluster navigation).
   36-41-*.yaml              Deterministic quality Tool CRD templates (validate/verify/...).

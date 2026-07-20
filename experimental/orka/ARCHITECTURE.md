@@ -70,9 +70,10 @@ invalidates results when the model-visible analysis contract changes.
 
 ### Tool (one clone per project x job x build x analysis contract x tool group)
 
-A single artifact tool shim serves every build and bucket. The producer does
-**not** create a tool per Task; it clones each base Tool CRD once per distinct
-scoped build and analysis contract via `cloneToolForBuild`, injecting
+A release-scoped artifact Tool shim serves every build and bucket. The producer
+clones content and quality Tool CRDs once per distinct scoped build and analysis
+contract via `cloneToolForBuild`. It creates a task-specific validation Tool so
+the final attestation cannot be replayed across failures. Every clone receives
 static routing headers:
 
 ```yaml
@@ -98,8 +99,10 @@ Contract-scoped entries use bounded LRU eviction and bounded tool-result caches.
 The long-running shim disables each Browser's internal file cache. Each Tool call
 has explicit model-response and artifact-read ceilings, including storage reads
 performed directly by cross-build quality tools. Responses are buffered and
-rejected before headers are committed when they exceed the model-byte ceiling. Base Tool CRDs are loaded from
-`experimental/orka/manifests/` by `loadBaseTools`.
+rejected before headers are committed when they exceed the model-byte ceiling.
+For Helm deployments, synchronized base Tool definitions are packaged under the
+chart's `files/orka-tools/` directory and rendered into a release ConfigMap. Raw
+deployments load the source copies from `experimental/orka/manifests/`.
 
 ### The apply
 
