@@ -41,19 +41,20 @@ type RequestReadyNotifier func(context.Context, ActionRequestView) error
 
 // ActionRequestView is the API-safe representation of a persisted request.
 type ActionRequestView struct {
-	ID         string         `json:"id"`
-	FailureID  string         `json:"failure_id"`
-	Kind       string         `json:"kind"`
-	Owner      string         `json:"owner"`
-	Status     string         `json:"status"`
-	CreatedAt  string         `json:"created_at"`
-	UpdatedAt  string         `json:"updated_at"`
-	ExpiresAt  string         `json:"expires_at"`
-	Error      string         `json:"error,omitempty"`
-	ResultURL  string         `json:"result_url,omitempty"`
-	Preview    *PreviewResult `json:"preview,omitempty"`
-	EmailSent  bool           `json:"email_sent,omitempty"`
-	EmailError string         `json:"email_error,omitempty"`
+	ID           string         `json:"id"`
+	FailureID    string         `json:"failure_id"`
+	Kind         string         `json:"kind"`
+	Owner        string         `json:"owner"`
+	Status       string         `json:"status"`
+	CreatedAt    string         `json:"created_at"`
+	UpdatedAt    string         `json:"updated_at"`
+	ExpiresAt    string         `json:"expires_at"`
+	Error        string         `json:"error,omitempty"`
+	ResultURL    string         `json:"result_url,omitempty"`
+	SupersededBy string         `json:"superseded_by,omitempty"`
+	Preview      *PreviewResult `json:"preview,omitempty"`
+	EmailSent    bool           `json:"email_sent,omitempty"`
+	EmailError   string         `json:"email_error,omitempty"`
 }
 
 type actionRequest struct {
@@ -132,7 +133,7 @@ func (s *Service) ConfigureAsyncRequests(timeout time.Duration, notifier Request
 }
 
 // CreateRequest persists a pending request and starts draft generation.
-func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction string) (ActionRequestView, error) {
+func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, supersedesID string) (ActionRequestView, error) {
 	owner = strings.ToLower(strings.TrimSpace(owner))
 	if owner == "" || userToken == "" {
 		return ActionRequestView{}, fmt.Errorf("authenticated owner and token are required")
@@ -154,12 +155,39 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction s
 		Status: RequestPending, CreatedAt: now.Format(time.RFC3339),
 		UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(actionRequestTTL).Format(time.RFC3339),
 	}, Instruction: strings.TrimSpace(instruction)}
+	supersedesID = strings.TrimSpace(supersedesID)
 
 	s.rmu.Lock()
 	s.expireRequestsLocked(now)
+	var superseded *actionRequest
+	var supersededStatus, supersededUpdatedAt, supersededBy string
+	var supersededCancel context.CancelFunc
+	if supersedesID != "" {
+		superseded = s.requests.Requests[supersedesID]
+		if superseded == nil || superseded.Owner != owner {
+			s.rmu.Unlock()
+			return ActionRequestView{}, ErrRequestNotFound
+		}
+		if superseded.FailureID != failureID {
+			s.rmu.Unlock()
+			return ActionRequestView{}, fmt.Errorf("superseded action request does not match failure")
+		}
+		if _, confirming := s.requestConfirms[supersedesID]; confirming {
+			s.rmu.Unlock()
+			return ActionRequestView{}, fmt.Errorf("action request is being confirmed")
+		}
+		if superseded.Status != RequestPending && superseded.Status != RequestReady {
+			status := superseded.Status
+			s.rmu.Unlock()
+			return ActionRequestView{}, fmt.Errorf("action request is %s", status)
+		}
+	}
 	pending := 0
 	active := 0
-	for _, existing := range s.requests.Requests {
+	for existingID, existing := range s.requests.Requests {
+		if existingID == supersedesID {
+			continue
+		}
 		if existing.Status == RequestPending && existing.Owner == owner {
 			pending++
 		}
@@ -175,20 +203,54 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction s
 		s.rmu.Unlock()
 		return ActionRequestView{}, fmt.Errorf("too many active action requests")
 	}
+	if superseded != nil {
+		supersededStatus = superseded.Status
+		supersededUpdatedAt = superseded.UpdatedAt
+		supersededBy = superseded.SupersededBy
+		superseded.Status = RequestCancelled
+		superseded.UpdatedAt = now.Format(time.RFC3339)
+		superseded.SupersededBy = request.ID
+		supersededCancel = s.requestCancels[supersedesID]
+	}
 	s.requests.Requests[request.ID] = request
 	if err := s.saveRequestsLocked(); err != nil {
 		delete(s.requests.Requests, request.ID)
+		if superseded != nil {
+			superseded.Status = supersededStatus
+			superseded.UpdatedAt = supersededUpdatedAt
+			superseded.SupersededBy = supersededBy
+		}
 		s.rmu.Unlock()
 		return ActionRequestView{}, err
 	}
 	view := request.ActionRequestView
 	s.rmu.Unlock()
 
+	if supersededCancel != nil {
+		supersededCancel()
+	}
 	go s.generateRequest(request.ID, userToken)
 	return view, nil
 }
 
+type requestPreviewGenerator func(context.Context, string, string, string, string) (PreviewResult, *previewEntry, error)
+
 func (s *Service) generateRequest(id, userToken string) {
+	s.generateRequestWith(id, userToken, s.generateRequestPreview)
+}
+
+func (s *Service) generateRequestPreview(ctx context.Context, failureID, kind, userToken, instruction string) (PreviewResult, *previewEntry, error) {
+	switch kind {
+	case "create-issue":
+		return s.generateIssuePreview(ctx, failureID, userToken, instruction)
+	case "propose-fix":
+		return s.generateFixPreview(ctx, failureID, userToken, instruction)
+	default:
+		return PreviewResult{}, nil, fmt.Errorf("unsupported action %q", kind)
+	}
+}
+
+func (s *Service) generateRequestWith(id, userToken string, generate requestPreviewGenerator) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.requestTimeout)
 	s.rmu.Lock()
 	s.requestCancels[id] = cancel
@@ -209,15 +271,7 @@ func (s *Service) generateRequest(id, userToken string) {
 	failureID, kind, instruction := request.FailureID, request.Kind, request.Instruction
 	s.rmu.Unlock()
 
-	var preview PreviewResult
-	var entry *previewEntry
-	var err error
-	switch kind {
-	case "create-issue":
-		preview, entry, err = s.generateIssuePreview(ctx, failureID, userToken, instruction)
-	case "propose-fix":
-		preview, entry, err = s.generateFixPreview(ctx, failureID, userToken, instruction)
-	}
+	preview, entry, err := generate(ctx, failureID, kind, userToken, instruction)
 
 	s.rmu.Lock()
 	request = s.requests.Requests[id]

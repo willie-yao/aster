@@ -1,60 +1,45 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link as RouterLink, useNavigate, useParams } from "react-router-dom";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
+import Breadcrumbs from "@mui/material/Breadcrumbs";
 import Button from "@mui/material/Button";
+import Chip from "@mui/material/Chip";
 import CircularProgress from "@mui/material/CircularProgress";
 import Link from "@mui/material/Link";
 import Stack from "@mui/material/Stack";
+import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
-import { CheckCircle, GitHub } from "@mui/icons-material";
+import {
+  BugReport,
+  Build,
+  CheckCircle,
+  GitHub,
+} from "@mui/icons-material";
 import { useAuth } from "../hooks/useAuth";
 import { useCapabilities } from "../hooks/useCapabilities";
 import { Panel } from "../components/Panel";
+import { ActionDraftPreview } from "../components/ActionDraftPreview";
+import {
+  actionErrorMessage,
+  loadLatestActionRequest,
+  type ActionRequest,
+} from "../types/actions";
+import { soft } from "../theme";
 
 const API_BASE = import.meta.env.BASE_URL;
 
-type RequestStatus =
-  "pending" | "ready" | "failed" | "confirmed" | "cancelled" | "expired";
-
-interface Preview {
-  kind: "issue" | "fix";
-  title: string;
-  body: string;
-  diff?: string;
-  verify_status?: string;
-  verify_summary?: string;
-  verify_output?: string;
-}
-
-interface ActionRequest {
-  id: string;
-  failure_id: string;
-  kind: "create-issue" | "propose-fix";
-  owner: string;
-  status: RequestStatus;
-  created_at: string;
-  updated_at: string;
-  expires_at: string;
-  error?: string;
-  result_url?: string;
-  preview?: Preview;
-  email_sent?: boolean;
-  email_error?: string;
-}
-
-function stripComments(value: string): string {
-  return value.replace(/<!--[\s\S]*?-->/g, "").trim();
-}
-
 export function ActionRequestPage() {
   const { requestID = "" } = useParams();
+  const navigate = useNavigate();
   const { features } = useCapabilities();
   const { status, signIn } = useAuth();
   const [request, setRequest] = useState<ActionRequest | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [refining, setRefining] = useState(false);
+  const [instruction, setInstruction] = useState("");
 
   useEffect(() => {
     if (!features.action_requests || status !== "authenticated" || !requestID)
@@ -62,38 +47,39 @@ export function ActionRequestPage() {
     let cancelled = false;
     let timer: number | undefined;
     let retryCount = 0;
-    function scheduleRetry() {
-      const delay = Math.min(10_000, 1000 * 2 ** retryCount);
-      retryCount += 1;
-      timer = window.setTimeout(load, delay);
-    }
     async function load() {
       try {
         const res = await fetch(
           `${API_BASE}api/action-requests/${encodeURIComponent(requestID)}`,
-          {
-            credentials: "same-origin",
-            cache: "no-store",
-          },
+          { credentials: "same-origin", cache: "no-store" },
         );
         if (!res.ok) {
-          const text = await res.text();
-          const message = text.trim() || `HTTP ${res.status}`;
+          const message = await actionErrorMessage(res);
           if (cancelled) return;
           setError(message);
-          if (res.status >= 500) scheduleRetry();
+          if (res.status >= 500) {
+            const delay = Math.min(10_000, 1000 * 2 ** retryCount++);
+            timer = window.setTimeout(load, delay);
+          }
           return;
         }
         const value = (await res.json()) as ActionRequest;
         if (cancelled) return;
+        if (value.superseded_by) {
+          navigate(`/action-request/${encodeURIComponent(value.superseded_by)}`, {
+            replace: true,
+          });
+          return;
+        }
         retryCount = 0;
         setRequest(value);
-        setError(null);
+        setError(value.status === "failed" ? value.error || "Draft generation failed." : null);
         if (value.status === "pending") timer = window.setTimeout(load, 2000);
       } catch (e) {
         if (cancelled) return;
         setError(e instanceof Error ? e.message : String(e));
-        scheduleRetry();
+        const delay = Math.min(10_000, 1000 * 2 ** retryCount++);
+        timer = window.setTimeout(load, delay);
       }
     }
     void load();
@@ -101,7 +87,22 @@ export function ActionRequestPage() {
       cancelled = true;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [features.action_requests, requestID, status]);
+  }, [features.action_requests, navigate, requestID, status]);
+
+  async function refreshRequestState(id: string): Promise<ActionRequest | null> {
+    try {
+      const value = await loadLatestActionRequest(API_BASE, id);
+      setRequest(value);
+      if (value.id !== requestID) {
+        navigate(`/action-request/${encodeURIComponent(value.id)}`, {
+          replace: true,
+        });
+      }
+      return value;
+    } catch {
+      return null;
+    }
+  }
 
   async function confirm() {
     if (!request) return;
@@ -110,17 +111,20 @@ export function ActionRequestPage() {
     try {
       const res = await fetch(
         `${API_BASE}api/action-requests/${encodeURIComponent(request.id)}/confirm`,
-        {
-          method: "POST",
-          credentials: "same-origin",
-        },
+        { method: "POST", credentials: "same-origin" },
       );
-      if (!res.ok)
-        throw new Error((await res.text()).trim() || `HTTP ${res.status}`);
+      if (!res.ok) throw new Error(await actionErrorMessage(res));
       const body = (await res.json()) as { url: string };
       setRequest({ ...request, status: "confirmed", result_url: body.url });
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const message = e instanceof Error ? e.message : String(e);
+      const refreshed = await refreshRequestState(request.id);
+      setError(
+        refreshed?.status === "confirmed" ||
+          (refreshed !== null && refreshed.id !== request.id)
+          ? null
+          : message,
+      );
     } finally {
       setConfirming(false);
     }
@@ -133,18 +137,54 @@ export function ActionRequestPage() {
     try {
       const res = await fetch(
         `${API_BASE}api/action-requests/${encodeURIComponent(request.id)}/cancel`,
+        { method: "POST", credentials: "same-origin" },
+      );
+      if (!res.ok) throw new Error(await actionErrorMessage(res));
+      setRequest({ ...request, status: "cancelled" });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      const refreshed = await refreshRequestState(request.id);
+      setError(
+        refreshed?.status === "cancelled" ||
+          (refreshed !== null && refreshed.id !== request.id)
+          ? null
+          : message,
+      );
+    } finally {
+      setCancelling(false);
+    }
+  }
+
+  async function refine() {
+    if (!request || instruction.trim() === "") return;
+    setRefining(true);
+    setError(null);
+    try {
+      const res = await fetch(
+        `${API_BASE}api/failures/${encodeURIComponent(request.failure_id)}/${request.kind}/requests`,
         {
           method: "POST",
           credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            instruction: instruction.trim(),
+            supersedes_request_id: request.id,
+          }),
         },
       );
-      if (!res.ok)
-        throw new Error((await res.text()).trim() || `HTTP ${res.status}`);
-      setRequest({ ...request, status: "cancelled" });
+      if (!res.ok) throw new Error(await actionErrorMessage(res));
+      const next = (await res.json()) as ActionRequest;
+      setInstruction("");
+      setRequest(next);
+      navigate(`/action-request/${encodeURIComponent(next.id)}`, { replace: true });
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const message = e instanceof Error ? e.message : String(e);
+      const refreshed = await refreshRequestState(request.id);
+      setError(
+        refreshed !== null && refreshed.id !== request.id ? null : message,
+      );
     } finally {
-      setCancelling(false);
+      setRefining(false);
     }
   }
 
@@ -158,9 +198,17 @@ export function ActionRequestPage() {
   if (status === "loading") return <CircularProgress size={24} />;
   if (status === "anonymous") {
     return (
-      <Button variant="contained" startIcon={<GitHub />} onClick={signIn}>
-        Sign in to review this draft
-      </Button>
+      <Panel sx={{ maxWidth: 560, mx: "auto", p: 3, textAlign: "center" }}>
+        <Typography variant="h5" sx={{ mb: 1 }}>
+          Sign in to review this draft
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2.5 }}>
+          Drafts are bound to the maintainer who requested them.
+        </Typography>
+        <Button variant="contained" startIcon={<GitHub />} onClick={signIn}>
+          Sign in with GitHub
+        </Button>
+      </Panel>
     );
   }
   if (error && !request) return <Alert severity="error">{error}</Alert>;
@@ -168,147 +216,196 @@ export function ActionRequestPage() {
 
   const preview = request.preview;
   const isFix = request.kind === "propose-fix";
+  const terminal = ["failed", "confirmed", "cancelled", "expired"].includes(
+    request.status,
+  );
+
   return (
-    <Stack spacing={2.5}>
-      <Box>
-        <Typography variant="h4">
-          {isFix ? "Fix proposal" : "Issue draft"}
+    <Stack spacing={2.5} sx={{ maxWidth: 1040, mx: "auto" }}>
+      <Breadcrumbs separator="›" sx={{ color: "text.secondary", fontSize: "0.875rem" }}>
+        <Link component={RouterLink} to="/" color="inherit" underline="hover">
+          Dashboard
+        </Link>
+        <Typography variant="inherit" color="text.primary">
+          Draft review
         </Typography>
-        <Typography variant="body2" color="text.secondary">
-          Requested by {request.owner} · Status: {request.status}
-        </Typography>
-      </Box>
-      {error && <Alert severity="error">{error}</Alert>}
-      {request.status === "pending" && (
-        <Panel>
-          <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }}>
-            <CircularProgress size={20} />
-            <Typography>
-              Generating the draft. You may leave this page; when draft-ready
-              email is configured, a review link is sent when it is ready.
-            </Typography>
-          </Stack>
-          <Button
-            sx={{ mt: 2 }}
-            color="inherit"
-            variant="outlined"
-            disabled={cancelling}
-            onClick={cancel}
+      </Breadcrumbs>
+
+      <Panel sx={{ borderRadius: "16px", overflow: "hidden" }}>
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            gap: 1.5,
+            px: { xs: 2, sm: 3 },
+            py: 2.25,
+            borderBottom: "1px solid",
+            borderColor: "divider",
+          }}
+        >
+          <Box
+            sx={{
+              display: "grid",
+              placeItems: "center",
+              width: 40,
+              height: 40,
+              borderRadius: "11px",
+              color: "warning.main",
+              bgcolor: (theme) => soft(theme, "warning", 0.15),
+              border: "1px solid",
+              borderColor: (theme) => soft(theme, "warning", 0.3),
+              flexShrink: 0,
+            }}
           >
-            {cancelling ? "Cancelling…" : "Cancel request"}
-          </Button>
-        </Panel>
-      )}
-      {request.status === "failed" && (
-        <Alert severity="error">
-          {request.error || "Draft generation failed."}
-        </Alert>
-      )}
-      {request.status === "cancelled" && (
-        <Alert severity="info">This request was cancelled.</Alert>
-      )}
-      {request.status === "expired" && (
-        <Alert severity={request.result_url ? "info" : "warning"}>
-          {request.result_url ? (
-            <>
-              This request expired after creating:{" "}
+            {isFix ? <Build /> : <BugReport />}
+          </Box>
+          <Box sx={{ minWidth: 0, flex: 1 }}>
+            <Typography variant="h5">
+              {isFix ? "Review draft fix PR" : "Review issue"}
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Requested by {request.owner}
+            </Typography>
+          </Box>
+          <Chip
+            size="small"
+            label={request.status}
+            color={
+              request.status === "ready"
+                ? "warning"
+                : request.status === "confirmed"
+                  ? "success"
+                  : request.status === "failed"
+                    ? "error"
+                    : "default"
+            }
+            sx={{ textTransform: "capitalize" }}
+          />
+        </Box>
+
+        <Box sx={{ px: { xs: 2, sm: 3 }, py: 2.5 }}>
+          {error && (
+            <Alert severity="error" variant="outlined" sx={{ mb: 2 }}>
+              {error}
+            </Alert>
+          )}
+
+          {request.status === "pending" && (
+            <Box
+              sx={{
+                borderRadius: "12px",
+                bgcolor: (theme) =>
+                  (theme.vars ?? theme).palette.surface.containerLow,
+                border: "1px solid",
+                borderColor: "divider",
+                p: 2,
+              }}
+            >
+              <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }}>
+                <CircularProgress size={20} />
+                <Box>
+                  <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                    Generating the draft
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    You can leave this page. If draft-ready email is configured,
+                    the dashboard emails you when generation completes.
+                  </Typography>
+                </Box>
+              </Stack>
+            </Box>
+          )}
+
+          {request.status === "cancelled" && (
+            <Alert severity="info">This request was cancelled.</Alert>
+          )}
+          {request.status === "expired" && (
+            <Alert severity={request.result_url ? "info" : "warning"}>
+              {request.result_url ? (
+                <>
+                  This request expired after the GitHub item was created.{" "}
+                  <Link href={request.result_url} target="_blank" rel="noopener">
+                    View the created item
+                  </Link>
+                </>
+              ) : (
+                "This draft expired. Start a new request from the recurring pattern."
+              )}
+            </Alert>
+          )}
+          {request.status === "confirmed" && request.result_url && (
+            <Alert severity="success" icon={<CheckCircle />}>
+              Created:{" "}
               <Link href={request.result_url} target="_blank" rel="noopener">
                 {request.result_url}
               </Link>
-            </>
-          ) : (
-            "This draft expired. Start a new request from the recurring pattern."
-          )}
-        </Alert>
-      )}
-      {request.status === "confirmed" && request.result_url && (
-        <Alert severity="success" icon={<CheckCircle />}>
-          Created:{" "}
-          <Link href={request.result_url} target="_blank" rel="noopener">
-            {request.result_url}
-          </Link>
-        </Alert>
-      )}
-      {preview && request.status === "ready" && (
-        <Stack spacing={2}>
-          <Panel>
-            <Typography variant="label" color="text.secondary">
-              Title
-            </Typography>
-            <Typography variant="h6">{preview.title}</Typography>
-          </Panel>
-          <Panel>
-            <Typography variant="label" color="text.secondary">
-              {isFix ? "Description" : "Body"}
-            </Typography>
-            <Box
-              component="pre"
-              sx={{
-                whiteSpace: "pre-wrap",
-                overflowWrap: "anywhere",
-                fontFamily: "inherit",
-              }}
-            >
-              {stripComments(preview.body)}
-            </Box>
-          </Panel>
-          {preview.diff && (
-            <Panel>
-              <Typography variant="label" color="text.secondary">
-                Proposed diff
-              </Typography>
-              <Box
-                component="pre"
-                sx={{ whiteSpace: "pre", overflow: "auto", fontSize: 13 }}
-              >
-                {preview.diff}
-              </Box>
-            </Panel>
-          )}
-          {preview.verify_status && (
-            <Alert
-              severity={preview.verify_status === "failed" ? "warning" : "info"}
-            >
-              Verification: {preview.verify_status}
-              {preview.verify_summary ? ` · ${preview.verify_summary}` : ""}
             </Alert>
           )}
-          {preview.verify_status === "failed" && preview.verify_output && (
-            <Panel>
-              <Typography variant="label" color="text.secondary">
-                Verification output
-              </Typography>
-              <Box
-                component="pre"
-                sx={{
-                  whiteSpace: "pre-wrap",
-                  overflow: "auto",
-                  overflowWrap: "anywhere",
-                  maxHeight: 200,
-                  fontSize: 13,
-                }}
-              >
-                {preview.verify_output}
+
+          {preview && request.status === "ready" && (
+            <Stack spacing={2.5}>
+              <ActionDraftPreview preview={preview} />
+              <Box>
+                <TextField
+                  label="Refine this draft with a prompt (optional)"
+                  fullWidth
+                  multiline
+                  minRows={2}
+                  size="small"
+                  value={instruction}
+                  disabled={refining || confirming || cancelling}
+                  onChange={(event) => setInstruction(event.target.value)}
+                />
+                <Button
+                  size="small"
+                  variant="outlined"
+                  sx={{ mt: 1.25 }}
+                  disabled={
+                    refining ||
+                    confirming ||
+                    cancelling ||
+                    instruction.trim() === ""
+                  }
+                  startIcon={
+                    refining ? <CircularProgress size={14} color="inherit" /> : undefined
+                  }
+                  onClick={refine}
+                >
+                  {refining ? "Regenerating…" : "Regenerate with prompt"}
+                </Button>
               </Box>
-            </Panel>
+            </Stack>
           )}
-          <Stack direction="row" spacing={1}>
+        </Box>
+
+        <Box
+          sx={{
+            display: "flex",
+            justifyContent: "flex-end",
+            gap: 1,
+            px: { xs: 2, sm: 3 },
+            py: 2,
+            borderTop: "1px solid",
+            borderColor: "divider",
+          }}
+        >
+          {!terminal && (
             <Button
               color="inherit"
               variant="outlined"
-              disabled={cancelling || confirming}
+              disabled={cancelling || confirming || refining}
               onClick={cancel}
             >
               {cancelling ? "Cancelling…" : "Cancel request"}
             </Button>
+          )}
+          {request.status === "ready" && (
             <Button
               color="warning"
               variant="contained"
-              disabled={confirming || cancelling}
+              disabled={confirming || cancelling || refining}
               startIcon={
-                confirming ? (
-                  <CircularProgress size={16} color="inherit" />
-                ) : undefined
+                confirming ? <CircularProgress size={16} color="inherit" /> : undefined
               }
               onClick={confirm}
             >
@@ -318,9 +415,9 @@ export function ActionRequestPage() {
                   ? "Open draft PR"
                   : "File issue"}
             </Button>
-          </Stack>
-        </Stack>
-      )}
+          )}
+        </Box>
+      </Panel>
     </Stack>
   );
 }

@@ -40,7 +40,7 @@ type ActionRunner interface {
 
 // ActionRequestRunner persists asynchronous drafts for later authenticated review.
 type ActionRequestRunner interface {
-	CreateRequest(failureID, kind, login, userToken, instruction string) (actions.ActionRequestView, error)
+	CreateRequest(failureID, kind, login, userToken, instruction, supersedesID string) (actions.ActionRequestView, error)
 	GetRequest(id, login string) (actions.ActionRequestView, error)
 	ConfirmRequest(ctx context.Context, id, login, userToken string) (string, error)
 	CancelRequest(id, login string) error
@@ -349,7 +349,7 @@ func writeActionError(w http.ResponseWriter, id, login string, err error) {
 	http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 }
 
-type createActionRequestFunc func(failureID, kind, login, userToken, instruction string) (actions.ActionRequestView, error)
+type createActionRequestFunc func(failureID, kind, login, userToken, instruction, supersedesID string) (actions.ActionRequestView, error)
 
 func createActionRequestHandler(run createActionRequestFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -358,7 +358,28 @@ func createActionRequestHandler(run createActionRequestFunc) http.Handler {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		view, err := run(r.PathValue("id"), r.PathValue("action"), identity.Login, identity.Token, decodeInstruction(r))
+		var body struct {
+			Instruction         string `json:"instruction"`
+			SupersedesRequestID string `json:"supersedes_request_id"`
+		}
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192))
+		if err := decoder.Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		var extra any
+		if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		view, err := run(
+			r.PathValue("id"),
+			r.PathValue("action"),
+			identity.Login,
+			identity.Token,
+			strings.TrimSpace(body.Instruction),
+			strings.TrimSpace(body.SupersedesRequestID),
+		)
 		if err != nil {
 			writeActionError(w, r.PathValue("id"), identity.Login, err)
 			return

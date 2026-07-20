@@ -32,7 +32,7 @@ backend choice.
 | `POST /api/failures/{id}/create-issue/preview` | Admin-gated: render the exact GitHub issue for one failure without filing it. Enabled only when actions are configured. |
 | `POST /api/failures/{id}/propose-fix/preview` | Admin-gated: generate and render the exact draft fix PR for one failure without opening it. |
 | `POST /api/actions/confirm` | Admin-gated: file the issue or open the PR previewed under the posted `{"token":...}`. |
-| `POST /api/failures/{id}/{action}/requests` | Create a persisted asynchronous issue or fix draft request. |
+| `POST /api/failures/{id}/{action}/requests` | Create a persisted asynchronous issue or fix draft request. Pass `supersedes_request_id` to atomically replace an active request. |
 | `GET /api/action-requests/{id}` | Read the owning admin's pending, ready, failed, or confirmed request. |
 | `POST /api/action-requests/{id}/confirm` | Post the exact persisted ready draft. |
 | `POST /api/action-requests/{id}/cancel` | Cancel a pending or ready request. |
@@ -56,8 +56,9 @@ build serves both targets. All `/data/*.json` schemas stay byte-compatible.
 The write endpoints let an admin file an issue or draft a fix PR for a specific
 failure on demand, reusing the same engines the scheduled fetch uses. They are
 off unless the server is started with `-project-dir` and `AUTH_MODE` selects an
-auth mechanism. When enabled, the server sets `features.actions: true` and the
-frontend shows the buttons.
+auth mechanism. When enabled, the server sets `features.actions: true` for
+resolve controls. It also sets `features.action_requests: true` when the action
+runner supports persistent drafts, which enables the issue and fix controls.
 
 File issue and Mark resolved work in the standard server image. Propose fix
 starts the local `opencode` runtime and also needs git. The standard distroless
@@ -66,15 +67,20 @@ deploy a custom server image that includes them.
 
 Systemic-pattern email links can deep-link into this flow with the public pattern
 id and requested action. The link itself is an inert GET. After authentication,
-the frontend requires an explicit **Generate draft** click before calling a
-preview endpoint, followed by the existing review and confirmation step.
+the frontend requires an explicit **Generate draft** click before creating a
+persistent action request.
 
-Actions are two-phase so nothing is posted without review. A `*/preview`
-request renders the exact issue or generates the exact draft fix PR (title,
-body, and, for a fix, the diff) without touching GitHub, and returns a
-short-lived token. The frontend shows the draft in a dialog where the admin can
-optionally refine it with a prompt (re-previewing) and then confirm; only the
-confirm posts the previewed draft, keyed by that token. The token is single-use,
+The frontend review flow posts to `/api/failures/{id}/{action}/requests`, polls
+the returned request, and shows the exact issue or draft fix PR before anything
+is posted to GitHub. Refining a ready draft creates a replacement request and
+atomically cancels the superseded request. The old request exposes
+`superseded_by` so clients can recover the replacement after a lost response.
+Confirmation posts the persisted
+draft through `/api/action-requests/{id}/confirm`. Requests are bound to the
+admin who generated them and expire after 24 hours.
+
+The synchronous `*/preview` and `/api/actions/confirm` endpoints expose the same
+two-phase contract for direct API clients. Their preview token is single-use,
 expires after 15 minutes, and is bound to the admin who generated it.
 
 Two auth modes, both keeping the admin allowlist (`ADMIN_LOGINS`):
@@ -183,9 +189,10 @@ the `AUTH_MODE` env above to enable admin actions.
 
 ## Asynchronous action requests
 
-Email deep links use persistent action requests. Generation runs in the server
-process while request metadata and ready drafts are stored in
-`action_request_state.json`. The state file is not served under `/data`.
+Email deep links and the in-page issue and fix buttons use persistent action
+requests. Generation runs in the server process while request metadata and ready
+drafts are stored in `action_request_state.json`. The state file is not served
+under `/data`.
 Requests expire after 24 hours, are bound to the requesting authenticated login,
 and require the current user's GitHub token only when generating or confirming.
 Raw GitHub tokens are never persisted. A server restart marks unfinished pending

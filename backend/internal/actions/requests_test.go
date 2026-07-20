@@ -57,7 +57,7 @@ func TestAsyncIssueRequestPersistsAndNotifies(t *testing.T) {
 		return nil
 	})
 
-	created, err := service.CreateRequest(pattern.ID, "create-issue", "Alice", "token", "")
+	created, err := service.CreateRequest(pattern.ID, "create-issue", "Alice", "token", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,6 +91,151 @@ func TestAsyncIssueRequestPersistsAndNotifies(t *testing.T) {
 	}
 }
 
+func TestCreateRequestSupersedesReadyRequest(t *testing.T) {
+	service, pattern := requestTestService(t)
+	created, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitRequest(t, service, created.ID, "alice", RequestReady)
+
+	replacement, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "mention IPv6", created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacement.ID == created.ID || replacement.Status != RequestPending {
+		t.Fatalf("replacement = %+v", replacement)
+	}
+	old, err := service.GetRequest(created.ID, "alice")
+	if err != nil || old.Status != RequestCancelled || old.SupersededBy != replacement.ID {
+		t.Fatalf("superseded=%+v err=%v", old, err)
+	}
+	waitRequest(t, service, replacement.ID, "alice", RequestReady)
+
+	reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
+	old, err = reloaded.GetRequest(created.ID, "alice")
+	if err != nil || old.Status != RequestCancelled || old.SupersededBy != replacement.ID {
+		t.Fatalf("persisted superseded=%+v err=%v", old, err)
+	}
+	next, err := reloaded.GetRequest(replacement.ID, "alice")
+	if err != nil || next.Status != RequestReady {
+		t.Fatalf("persisted replacement=%+v err=%v", next, err)
+	}
+}
+
+func TestCreateRequestSupersedesPendingRequest(t *testing.T) {
+	service, pattern := requestTestService(t)
+	notified := make(chan string, 2)
+	service.ConfigureAsyncRequests(time.Minute, func(_ context.Context, view ActionRequestView) error {
+		notified <- view.ID
+		return nil
+	})
+	now := time.Now().UTC()
+	const blockedID = "blocked-request"
+	service.rmu.Lock()
+	service.requests.Requests[blockedID] = &actionRequest{ActionRequestView: ActionRequestView{
+		ID: blockedID, FailureID: pattern.ID, Kind: "create-issue", Owner: "alice",
+		Status: RequestPending, CreatedAt: now.Format(time.RFC3339),
+		UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
+	}}
+	if err := service.saveRequestsLocked(); err != nil {
+		service.rmu.Unlock()
+		t.Fatal(err)
+	}
+	service.rmu.Unlock()
+
+	started := make(chan struct{})
+	generatorDone := make(chan struct{})
+	go service.generateRequestWith(blockedID, "token", func(ctx context.Context, _, _, _, _ string) (PreviewResult, *previewEntry, error) {
+		close(started)
+		<-ctx.Done()
+		close(generatorDone)
+		return PreviewResult{}, nil, ctx.Err()
+	})
+	<-started
+
+	replacement, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "replacement", blockedID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-generatorDone
+	ready := waitRequest(t, service, replacement.ID, "alice", RequestReady)
+	if ready.Preview == nil {
+		t.Fatalf("replacement=%+v", ready)
+	}
+	old, err := service.GetRequest(blockedID, "alice")
+	if err != nil || old.Status != RequestCancelled || old.Preview != nil || old.SupersededBy != replacement.ID {
+		t.Fatalf("superseded=%+v err=%v", old, err)
+	}
+	select {
+	case id := <-notified:
+		if id != replacement.ID {
+			t.Fatalf("notification request=%q, want %q", id, replacement.ID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("replacement notification was not sent")
+	}
+	select {
+	case id := <-notified:
+		t.Fatalf("unexpected notification for %q", id)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		service.rmu.Lock()
+		_, running := service.requestCancels[blockedID]
+		service.rmu.Unlock()
+		if !running {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("superseded generator did not stop")
+}
+
+func TestCreateRequestSupersedesDifferentAction(t *testing.T) {
+	service, pattern := requestTestService(t)
+	created, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitRequest(t, service, created.ID, "alice", RequestReady)
+
+	replacement, err := service.CreateRequest(pattern.ID, "propose-fix", "alice", "token", "", created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, err := service.GetRequest(created.ID, "alice")
+	if err != nil || old.Status != RequestCancelled || old.SupersededBy != replacement.ID {
+		t.Fatalf("superseded=%+v err=%v", old, err)
+	}
+	if replacement.Kind != "propose-fix" || replacement.Status != RequestPending {
+		t.Fatalf("replacement=%+v", replacement)
+	}
+	waitRequest(t, service, replacement.ID, "alice", RequestFailed, RequestReady)
+}
+
+func TestCreateRequestRejectsDifferentFailureSupersede(t *testing.T) {
+	service, pattern := requestTestService(t)
+	created, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitRequest(t, service, created.ID, "alice", RequestReady)
+	service.rmu.Lock()
+	service.requests.Requests[created.ID].FailureID = "another-failure"
+	service.rmu.Unlock()
+
+	if _, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", created.ID); err == nil || !strings.Contains(err.Error(), "does not match failure") {
+		t.Fatalf("CreateRequest() err=%v", err)
+	}
+	view, err := service.GetRequest(created.ID, "alice")
+	if err != nil || view.Status != RequestReady {
+		t.Fatalf("original=%+v err=%v", view, err)
+	}
+}
+
 func TestPendingRequestBecomesFailedAfterRestart(t *testing.T) {
 	service, _ := requestTestService(t)
 	now := time.Now().UTC()
@@ -114,7 +259,7 @@ func TestPendingRequestBecomesFailedAfterRestart(t *testing.T) {
 
 func TestCancelReadyRequest(t *testing.T) {
 	service, pattern := requestTestService(t)
-	created, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "")
+	created, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -572,15 +572,17 @@ func TestTrustedOriginSet_NormalizesToHosts(t *testing.T) {
 
 type fakeAsyncRunner struct {
 	fakeRunner
-	request actions.ActionRequestView
+	request      actions.ActionRequestView
+	supersedesID string
 }
 
-func (f *fakeAsyncRunner) CreateRequest(failureID, kind, login, userToken, instruction string) (actions.ActionRequestView, error) {
+func (f *fakeAsyncRunner) CreateRequest(failureID, kind, login, userToken, instruction, supersedesID string) (actions.ActionRequestView, error) {
 	if failureID == "missing" {
 		return actions.ActionRequestView{}, actions.ErrNotFound
 	}
 	f.request = actions.ActionRequestView{ID: "request-1", FailureID: failureID, Kind: kind, Owner: login, Status: actions.RequestPending}
 	f.gotID, f.gotToken, f.gotInstruction = failureID, userToken, instruction
+	f.supersedesID = supersedesID
 	return f.request, nil
 }
 func (f *fakeAsyncRunner) GetRequest(id, login string) (actions.ActionRequestView, error) {
@@ -628,13 +630,32 @@ func TestHandler_AsyncActionRequestFlow(t *testing.T) {
 		return resp
 	}
 
-	created := request(http.MethodPost, "/api/failures/pattern-1/create-issue/requests", `{"instruction":"mention IPv6"}`)
+	created := request(http.MethodPost, "/api/failures/pattern-1/create-issue/requests", `{"instruction":"mention IPv6","supersedes_request_id":"request-old"}`)
 	if created.StatusCode != http.StatusAccepted {
 		t.Fatalf("create status=%d body=%s", created.StatusCode, readBody(t, created))
 	}
 	_ = created.Body.Close()
-	if runner.gotID != "pattern-1" || runner.gotInstruction != "mention IPv6" {
-		t.Fatalf("create got id=%q instruction=%q", runner.gotID, runner.gotInstruction)
+	if runner.gotID != "pattern-1" || runner.gotInstruction != "mention IPv6" || runner.supersedesID != "request-old" {
+		t.Fatalf("create got id=%q instruction=%q supersedes=%q", runner.gotID, runner.gotInstruction, runner.supersedesID)
+	}
+
+	malformed := request(http.MethodPost, "/api/failures/pattern-2/create-issue/requests", `{"instruction":`)
+	if malformed.StatusCode != http.StatusBadRequest {
+		t.Fatalf("malformed create status=%d body=%s", malformed.StatusCode, readBody(t, malformed))
+	}
+	_ = malformed.Body.Close()
+	if runner.gotID != "pattern-1" {
+		t.Fatalf("malformed create reached runner with id=%q", runner.gotID)
+	}
+
+	oversizedBody := `{"instruction":"` + strings.Repeat("x", 8192) + `"}`
+	oversized := request(http.MethodPost, "/api/failures/pattern-2/create-issue/requests", oversizedBody)
+	if oversized.StatusCode != http.StatusBadRequest {
+		t.Fatalf("oversized create status=%d body=%s", oversized.StatusCode, readBody(t, oversized))
+	}
+	_ = oversized.Body.Close()
+	if runner.gotID != "pattern-1" {
+		t.Fatalf("oversized create reached runner with id=%q", runner.gotID)
 	}
 
 	got := request(http.MethodGet, "/api/action-requests/request-1", "")
