@@ -186,6 +186,14 @@ immutable SHA pins the complete dashboard pipeline. Set `orka.provider` to your
 Provider name and `orka.model` to your model id. See the chart values for
 external artifact Tool and existing ConfigMap overrides.
 
+For an evaluation, also set `fetcher.suspend=true` and
+`orka.sideEffects.enabled=false`, then trigger one uniquely named Job after the
+release is ready. A new PVC clears dashboard data and generates a new private
+validation key, so per-test Tasks are cold. An exact matching pattern Task may
+still be reused while `orka.version` is unchanged. Bump the version when pattern
+Tasks must also be cold. The complete blue-green procedure is in
+[Evaluating Orka safely](../../docs/orka-evaluation.md).
+
 `analysis: inprocess`, the default, is unchanged: the engine runs the in-process
 loop and none of the Orka path is deployed.
 

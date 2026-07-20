@@ -84,14 +84,17 @@ release-scoped artifact Tool Deployment, Service, authentication Secret,
 NetworkPolicy, and base Tool ConfigMap by default. Configure an external shared
 shim only when the operator intentionally owns those resources separately.
 The Orka skeleton fetch uses `-skip-side-effects`; notifications and GitHub
-reconciliation run once, after final analysis and pattern output exist.
+reconciliation run once, after final analysis and pattern output exist. Set
+`orka.sideEffects.enabled=false` to suppress that final external reconciliation
+for an evaluation run.
 
 The chart deploys the analysis pipeline, not Orka itself, so the default stays
 `inprocess` and a fresh install always works. Opt into Orka only after those
 prerequisites are in place. See
 [experimental/orka/QUICKSTART.md](../experimental/orka/QUICKSTART.md) for the full setup
 and [experimental/orka/ARCHITECTURE.md](../experimental/orka/ARCHITECTURE.md) for
-how it works.
+how it works. For a fresh, side-effect-free comparison and a reversible PVC
+cutover, follow [Evaluating Orka safely](orka-evaluation.md).
 
 Orka can also be used only for fix generation while analysis remains
 `inprocess`. Set `orka.fixRuntime.enabled=true`, then configure
@@ -171,8 +174,14 @@ To populate data immediately rather than waiting for the schedule, run the
 fetcher once:
 
 ```bash
-kubectl -n dashboards create job --from=cronjob/capz-prow-ai-dashboard-fetcher fetch-now
+kubectl -n dashboards create job \
+  --from=cronjob/capz-prow-ai-dashboard-fetcher \
+  fetch-now-$(date -u +%Y%m%d%H%M%S)
 ```
+
+For a suspended evaluation CronJob, `run-cronjob-now.sh` checks for active
+scheduled or manual Jobs and can wait for completion. The check is not a
+distributed lock, so do not invoke the helper concurrently.
 
 Then reach the server:
 
@@ -192,15 +201,18 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | `analysis` | `inprocess` (default; in-cluster agentic loop) or `orka` (advanced experimental pipeline; requires `mode: cron`, the Orka control plane, a Provider, and worker patches). |
 | `orka.artifactTool.*` | Release-scoped artifact Tool image, authentication, network policy, resources, and scheduling. |
 | `orka.baseTools.*` | Create the synchronized producer ConfigMap or reference an existing ConfigMap in the release namespace. |
+| `orka.sideEffects.enabled` | Run post-analysis notifications and GitHub reconciliation. Disable for an Orka evaluation. |
 | `orka.fixRuntime.enabled` | Mount a ServiceAccount token and grant Orka Task RBAC for `agent_runtime.type: orka` fix generation. |
 | `persistence.accessMode` | Must be `ReadWriteMany`. |
 | `persistence.storageClass`, `persistence.size` | The shared volume's class and size. |
 | `persistence.existingClaim` | Reuse a pre-provisioned PVC instead of creating one. |
+| `persistence.retain` | Preserve a chart-managed PVC when it leaves the release. Defaults to `true`. |
 | `project.config`, `project.systemPrompt` | Consumer config, via `--set-file`. |
 | `project.existingConfigMap` | Reuse a ConfigMap with keys `project.yaml` and `system.md`. |
 | `ai.enabled`, `ai.endpoint`, `ai.model`, `ai.token` | AI analysis and its OpenAI-compatible endpoint. |
 | `ai.existingSecret`, `ai.tokenSecretKey` | Reuse a Secret holding the token. |
 | `fetcher.schedule` | Cron schedule (default every 6 hours). `mode: cron`. |
+| `fetcher.suspend` | Suspend scheduled CronJob starts while allowing manual Jobs. `mode: cron`. |
 | `fetcher.watchInterval`, `fetcher.reconcileInterval` | Refresh and full-pass cadence. `mode: watch`. |
 | `fetcher.buildsPerJob`, `fetcher.workers`, `fetcher.timeout` | Fetch depth and budget. |
 | `fetcher.extraEnv` | Extra env such as `GITHUB_TOKEN`, `EMAIL_SMTP_PASSWORD`, or the `ISSUE_TOKEN` / `FIX_TOKEN` write tokens (see [Automatic issues and fix PRs](#automatic-issues-and-fix-prs)). |

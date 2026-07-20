@@ -3,7 +3,7 @@ The prow-ai-dashboard is installed.
 {{- if eq .Values.mode "watch" }}
 Worker:           {{ include "prow-ai-dashboard.fullname" . }}-worker (watch every {{ .Values.fetcher.watchInterval }}, reconcile every {{ .Values.fetcher.reconcileInterval }})
 {{- else }}
-Fetcher CronJob:  {{ include "prow-ai-dashboard.fullname" . }}-fetcher (schedule {{ .Values.fetcher.schedule | quote }})
+Fetcher CronJob:  {{ include "prow-ai-dashboard.fullname" . }}-fetcher (schedule {{ .Values.fetcher.schedule | quote }}, suspended={{ .Values.fetcher.suspend }})
 {{- end }}
 Server:           {{ include "prow-ai-dashboard.fullname" . }}-server
 Shared volume:    {{ include "prow-ai-dashboard.pvcName" . }} ({{ .Values.persistence.accessMode }})
@@ -21,6 +21,10 @@ a Provider, and the ai-worker patches must already be installed in namespace
 service and {{ include "prow-ai-dashboard.orkaBaseToolsConfigMap" . }} ConfigMap
 unless existing resources were configured. See
 experimental/orka/QUICKSTART.md.
+{{- if not .Values.orka.sideEffects.enabled }}
+Scheduled side effects are disabled. Analysis and pattern data are written, but
+notifications, issues, and fix PRs are skipped.
+{{- end }}
 {{- end }}
 
 {{- if .Values.ingress.enabled }}
@@ -39,7 +43,7 @@ No ingress is enabled. Port-forward to try it:
 The fetcher runs on its schedule. To populate data immediately, create a Job
 from the CronJob:
 
-  kubectl --namespace {{ .Release.Namespace }} create job --from=cronjob/{{ include "prow-ai-dashboard.fullname" . }}-fetcher fetch-now
+  kubectl --namespace {{ .Release.Namespace }} create job --from=cronjob/{{ include "prow-ai-dashboard.fullname" . }}-fetcher fetch-now-$(date -u +%Y%m%d%H%M%S)
 {{- else }}
 The worker populates data continuously. Follow its progress:
 

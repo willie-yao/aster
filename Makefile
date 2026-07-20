@@ -84,6 +84,7 @@ tidy:
 # Lint and render the Helm chart, including the owned Orka resources.
 helm-check:
 	bash deploy/helm/prow-ai-dashboard/test-render.sh
+	bash deploy/helm/prow-ai-dashboard/test-operations.sh
 
 ## ─── Data Fetching ────────────────────────────────────────────
 

@@ -6,6 +6,10 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: {{ include "prow-ai-dashboard.pvcName" . }}
+  {{- if .Values.persistence.retain }}
+  annotations:
+    helm.sh/resource-policy: keep
+  {{- end }}
   labels:
     {{- include "prow-ai-dashboard.labels" . | nindent 4 }}
 spec:

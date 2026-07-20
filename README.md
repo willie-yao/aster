@@ -112,6 +112,8 @@ A dashboard is shaped by three things:
   `/data/*.json` contract plus a capability descriptor and admin-gated actions.
 - [Orka quickstart](experimental/orka/QUICKSTART.md): set up the advanced,
   experimental Kubernetes-native analysis backend.
+- [Safe Orka evaluation](docs/orka-evaluation.md): run a side-effect-free,
+  blue-green comparison with a fresh PVC and reversible cutover.
 - [Troubleshooting](docs/troubleshooting.md): common first-deploy failures and
   checks.
 - [Releasing](docs/releasing.md): cut an engine release and how consumers pin.

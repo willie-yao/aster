@@ -54,6 +54,7 @@ func main() {
 	namespace := flag.String("namespace", "orka-system", "namespace holding the Tasks and Tools")
 	kubeContext := flag.String("context", "", "kubeconfig context for Task-status checks and GC (in-cluster config is used when empty)")
 	gc := flag.Bool("gc", false, "after ingesting, delete per-build Tools whose Tasks are all terminal")
+	skipSideEffects := flag.Bool("skip-side-effects", false, "finalize dashboard data without notifications or GitHub writes")
 	serve := flag.Bool("serve", false, "run as a webhook receiver: patch each result as its Task completes (Task.webhookURL)")
 	addr := flag.String("addr", ":8080", "listen address in -serve mode")
 	flag.Parse()
@@ -120,11 +121,9 @@ func main() {
 		time.Sleep(*poll)
 	}
 
-	runSideEffects := func(sideEffectCtx context.Context) error {
-		return fetcher.RunFinalizedSideEffects(sideEffectCtx, fetcher.FinalizedSideEffectsOptions{
-			ProjectDir: *projectDir,
-			DataDir:    *dataDir,
-		})
+	runSideEffects := finalizedSideEffects(*skipSideEffects, *projectDir, *dataDir)
+	if runSideEffects == nil {
+		log.Println("Side effects: skipped (-skip-side-effects)")
 	}
 	if *patternWait > 0 {
 		if kube == nil {
@@ -157,6 +156,18 @@ func main() {
 	st := skeletonStatus(*dataDir, manifest)
 	log.Printf("📊 %d failing tests: %d analyzed, %d unavailable, %d pending",
 		st.Failing, st.Analyzed, st.Unavailable, st.Pending)
+}
+
+func finalizedSideEffects(skip bool, projectDir, dataDir string) func(context.Context) error {
+	if skip {
+		return nil
+	}
+	return func(ctx context.Context) error {
+		return fetcher.RunFinalizedSideEffects(ctx, fetcher.FinalizedSideEffectsOptions{
+			ProjectDir: projectDir,
+			DataDir:    dataDir,
+		})
+	}
 }
 
 func finalizeBatch(ctx context.Context, dataDir string, analyzer patterns.Analyzer, sideEffects func(context.Context) error) (orka.FinalizeStats, error) {

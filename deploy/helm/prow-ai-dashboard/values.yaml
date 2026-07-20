@@ -51,6 +51,10 @@ orka:
   retries: 1
   ingestWait: 45m
   patternWait: 25m
+  # Post-finalization notifications and GitHub writes. Disable this for a safe
+  # evaluation run while still producing complete dashboard and pattern data.
+  sideEffects:
+    enabled: true
   # Producer + ingestor images are published alongside the engine image. Empty
   # tags inherit image.tag, then Chart.appVersion.
   producer:
@@ -150,6 +154,9 @@ orka:
 persistence:
   enabled: true
   existingClaim: ""
+  # Preserve chart-managed data if the release is removed or switched to a
+  # different existingClaim. Delete retained claims manually after rollback.
+  retain: true
   accessMode: ReadWriteMany
   size: 1Gi
   storageClass: ""
@@ -200,6 +207,9 @@ fetcher:
   schedule: "0 */6 * * *"
   # Forbid overlapping runs so a slow fetch never races itself.
   concurrencyPolicy: Forbid
+  # Suspend scheduled starts while retaining the CronJob for manual evaluation
+  # runs created with kubectl create job --from=cronjob/....
+  suspend: false
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
   # watch mode: how often to refresh data reusing the cached job list, and how

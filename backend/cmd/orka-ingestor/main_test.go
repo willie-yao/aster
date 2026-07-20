@@ -444,6 +444,15 @@ func TestWebhookMissingTerminalEventIsRetryable(t *testing.T) {
 	}
 }
 
+func TestFinalizedSideEffectsCanBeDisabled(t *testing.T) {
+	if got := finalizedSideEffects(true, "project", "data"); got != nil {
+		t.Fatal("finalizedSideEffects returned a runner when disabled")
+	}
+	if got := finalizedSideEffects(false, "project", "data"); got == nil {
+		t.Fatal("finalizedSideEffects returned nil when enabled")
+	}
+}
+
 func TestFinalizeBatchPropagatesPostFinalizationFailure(t *testing.T) {
 	want := errors.New("side effects unavailable")
 	_, err := finalizeBatch(context.Background(), t.TempDir(), nil, func(context.Context) error {

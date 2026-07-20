@@ -54,6 +54,37 @@ grep -Eq 'http://test-prow-ai-dashboard-artifact-tool-[0-9a-f]{8}\.orka-test\.sv
 grep -Eq -- '-tool-auth-secret=test-prow-ai-dashboard-artifact-tool-[0-9a-f]{8}-auth' "$tmp/owned.yaml"
 grep -Fq 'name: test-prow-ai-dashboard-orka-tools' "$tmp/owned.yaml"
 grep -Fq 'agentpool: nodepool1' "$tmp/owned.yaml"
+grep -Fq 'suspend: false' "$tmp/owned.yaml"
+skip_count=$(grep -Fc -- '- -skip-side-effects' "$tmp/owned.yaml")
+if [[ $skip_count -ne 1 ]]; then
+  echo "default Orka render has $skip_count skip-side-effects flags, want skeleton fetch only" >&2
+  exit 1
+fi
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set mode=cron \
+  --set analysis=orka \
+  --set fetcher.suspend=true \
+  --set orka.sideEffects.enabled=false \
+  --show-only templates/fetcher-cronjob.yaml \
+  > "$tmp/evaluation.yaml"
+grep -Fq 'suspend: true' "$tmp/evaluation.yaml"
+skip_count=$(grep -Fc -- '- -skip-side-effects' "$tmp/evaluation.yaml")
+if [[ $skip_count -ne 2 ]]; then
+  echo "evaluation render has $skip_count skip-side-effects flags, want fetch and ingest" >&2
+  exit 1
+fi
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --show-only templates/pvc.yaml > "$tmp/pvc-retained.yaml"
+grep -Fq 'helm.sh/resource-policy: keep' "$tmp/pvc-retained.yaml"
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set persistence.retain=false \
+  --show-only templates/pvc.yaml > "$tmp/pvc-deletable.yaml"
+if grep -Fq 'helm.sh/resource-policy: keep' "$tmp/pvc-deletable.yaml"; then
+  echo 'persistence.retain=false still rendered the keep policy' >&2
+  exit 1
+fi
 
 artifact_name_a=$(helm template test "$chart" -n dashboard-a -f "$tmp/values.yaml" \
   --set mode=cron --set analysis=orka \
