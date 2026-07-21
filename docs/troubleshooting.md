@@ -17,7 +17,7 @@ cases below.
 | Analysis is generic | The project prompt lacks architecture, artifact layout, or real failure signatures. | Expand `prompts/system.md` and let prompt fingerprinting refresh affected entries. |
 | Cached analysis came from the old provider | A replacement analysis has not completed yet. | Provider fingerprinting refreshes it automatically. Clear the cache only for an immediate full rebaseline. |
 | `Propose fix` reports unavailable | The process cannot find `opencode` or git. | Use a runner or custom server image containing both tools. |
-| Orka Tasks remain pending | Orka, the Provider, tool shim, worker patches, or RBAC is incomplete. | Follow the experimental Orka quickstart and inspect Task and ai-worker status. |
+| Orka Tasks remain pending | Orka, the Provider, tool shim, compatibility worker, or RBAC is incomplete. | Follow the experimental Orka quickstart and inspect Task and ai-worker status. |
 
 ## Useful checks
 

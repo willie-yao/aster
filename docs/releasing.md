@@ -46,6 +46,14 @@ upgrade and are therefore at least a minor bump; call them out in the changelog.
    image (fetcher + server + SPA) to `ghcr.io/<owner>/prow-ai-dashboard` with
    the version tags.
 
+The experimental Orka compatibility worker has a separate lifecycle. Changes to
+its pinned source, patch, scripts, or workflow publish from `main` through
+`.github/workflows/orka-compat-image.yml`. Its tag contains the full Orka and
+dashboard commits instead of a semver alias. Get the exact published tag and
+digest from the latest [successful main-branch compatibility run](https://github.com/willie-yao/prow-ai-dashboard/actions/workflows/orka-compat-image.yml?query=branch%3Amain+is%3Asuccess); the
+[compatibility matrix](../experimental/orka/worker-patches/COMPATIBILITY.md)
+documents the contract and deployment forms.
+
 The tag glob is `v*.*.*`, so pushing the `vMAJOR` alias does not re-trigger the
 workflow.
 

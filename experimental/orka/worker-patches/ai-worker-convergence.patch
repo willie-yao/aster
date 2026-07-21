@@ -1,5 +1,212 @@
+diff --git a/workers/ai/compatibility_test.go b/workers/ai/compatibility_test.go
+new file mode 100644
+index 0000000..a988b56
+--- /dev/null
++++ b/workers/ai/compatibility_test.go
+@@ -0,0 +1,201 @@
++package main
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"strings"
++	"testing"
++
++	"github.com/orka-agents/orka/internal/llm"
++	toolspkg "github.com/orka-agents/orka/internal/tools"
++	"github.com/orka-agents/orka/workers/common"
++)
++
++func TestExecuteAgentLoopRepromptsEmptyFinal(t *testing.T) {
++	provider := &sequenceProvider{responses: []*llm.CompletionResponse{
++		{Content: "", StopReason: "end_turn", Model: "test-model"},
++		{Content: "final result", StopReason: "end_turn", Model: "test-model"},
++	}}
++	result, err := executeAgentLoopWithEvents(
++		context.Background(), provider, []llm.Message{{Role: "user", Content: "analyze"}},
++		"", "test-model", nil, nil, nil, common.NewFakeEventRecorder(),
++	)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if result != "final result" || provider.callCount != 2 {
++		t.Fatalf("result = %q, calls = %d, want final result after one re-prompt", result, provider.callCount)
++	}
++}
++
++func TestTransientWithoutTimeline(t *testing.T) {
++	for _, content := range []string{
++		`{"summary":"analysis","is_transient":true}`,
++		`{ "summary":"analysis", "is_transient" : true }`,
++		`{"SUMMARY":"analysis","IS_TRANSIENT": true}`,
++		"```json\n{\"summary\":\"analysis\",\"Is_Transient\": true}\n```",
++		`{"status":"thinking"} {"summary":"final","is_transient":true}`,
++		`{"summary":"unexpected } in log","is_transient":true}`,
++		`{"summary":"escaped \" } in log","is_transient":true}`,
++		`{"summary":"analysis","is_transient":false,"IS_TRANSIENT":true}`,
++	} {
++		if !transientWithoutTimeline(content, false) {
++			t.Fatalf("transient verdict %q was accepted", content)
++		}
++	}
++	for _, content := range []string{
++		`{"summary":"analysis","is_transient":false}`,
++		`{"summary":"analysis","is_transient":"true"}`,
++		`{"summary":"analysis","nested":{"is_transient":true}}`,
++		`not json`,
++		`{"summary":"first","is_transient":true} {"summary":"final","is_transient":false}`,
++		`{"summary":"analysis","is_transient":true,"IS_TRANSIENT":false}`,
++	} {
++		if transientWithoutTimeline(content, false) {
++			t.Fatalf("non-transient verdict %q was rejected", content)
++		}
++	}
++	if transientWithoutTimeline(`{"summary":"analysis","IS_TRANSIENT":true}`, true) {
++		t.Fatal("verified transient verdict was rejected")
++	}
++}
++
++func TestExecuteAgentLoopRepromptsUnsupportedTransient(t *testing.T) {
++	provider := &sequenceProvider{responses: []*llm.CompletionResponse{
++		{Content: `{"summary":"analysis","is_transient":true}`, StopReason: "end_turn", Model: "test-model"},
++		{Content: `{"summary":"analysis","is_transient":false}`, StopReason: "end_turn", Model: "test-model"},
++	}}
++	result, err := executeAgentLoopWithEvents(
++		context.Background(), provider, []llm.Message{{Role: "user", Content: "classify"}},
++		"", "test-model", nil, nil, nil, common.NewFakeEventRecorder(),
++	)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if result != `{"summary":"analysis","is_transient":false}` || provider.callCount != 2 {
++		t.Fatalf("result = %q, calls = %d, want corrected verdict after one re-prompt", result, provider.callCount)
++	}
++}
++
++func TestExecuteAgentLoopRepromptsAfterFailedTimeline(t *testing.T) {
++	provider := &sequenceProvider{responses: []*llm.CompletionResponse{
++		{
++			Content:    "checking timeline",
++			ToolCalls:  []llm.ToolCall{{ID: "timeline-1", Name: "verify_timeline", Arguments: json.RawMessage(`{}`)}},
++			StopReason: "tool_use",
++			Model:      "test-model",
++		},
++		{Content: `{"summary":"analysis","is_transient":true}`, StopReason: "end_turn", Model: "test-model"},
++		{Content: `{"summary":"analysis","is_transient":false}`, StopReason: "end_turn", Model: "test-model"},
++	}}
++	result, err := executeAgentLoopWithEvents(
++		context.Background(), provider, []llm.Message{{Role: "user", Content: "classify"}},
++		"", "test-model", nil, nil, nil, common.NewFakeEventRecorder(),
++	)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if result != `{"summary":"analysis","is_transient":false}` || provider.callCount != 3 {
++		t.Fatalf("result = %q, calls = %d, want corrected verdict after failed timeline call", result, provider.callCount)
++	}
++}
++
++func TestIsVerifyTimelineTool(t *testing.T) {
++	for _, name := range []string{"verify_timeline", "verify-timeline-babc123", "VERIFY_TIMELINE_BABC123"} {
++		if !isVerifyTimelineTool(name) {
++			t.Fatalf("required timeline tool %q was not recognized", name)
++		}
++	}
++	for _, name := range []string{"preverify-timeline-check", "verify_timeline_custom", "verify-timeline" + "-custom"} {
++		if isVerifyTimelineTool(name) {
++			t.Fatalf("unrelated tool %q was recognized as verify_timeline", name)
++		}
++	}
++}
++
++type retryTimelineTool struct {
++	calls int
++}
++
++func (*retryTimelineTool) Name() string        { return "verify_timeline" }
++func (*retryTimelineTool) Description() string { return "test timeline tool" }
++func (*retryTimelineTool) Parameters() json.RawMessage {
++	return json.RawMessage(`{"type":"object","properties":{}}`)
++}
++func (tool *retryTimelineTool) Execute(context.Context, json.RawMessage) (string, error) {
++	tool.calls++
++	if tool.calls == 1 {
++		return "timeline verified", nil
++	}
++	return "", errors.New("timeline unavailable")
++}
++
++func TestExecuteAgentLoopRepromptsAfterFailedTimelineRetry(t *testing.T) {
++	restore := replaceDefaultToolRegistryForTest(t)
++	defer restore()
++	timeline := &retryTimelineTool{}
++	toolspkg.DefaultRegistry.Register(timeline)
++	llmTools := toolspkg.DefaultRegistry.ToLLMTools([]string{timeline.Name()})
++	provider := &sequenceProvider{responses: []*llm.CompletionResponse{
++		{
++			Content:    "checking timeline",
++			ToolCalls:  []llm.ToolCall{{ID: "timeline-1", Name: timeline.Name(), Arguments: json.RawMessage(`{}`)}},
++			StopReason: "tool_use",
++			Model:      "test-model",
++		},
++		{
++			Content:    "retrying timeline",
++			ToolCalls:  []llm.ToolCall{{ID: "timeline-2", Name: timeline.Name(), Arguments: json.RawMessage(`{}`)}},
++			StopReason: "tool_use",
++			Model:      "test-model",
++		},
++		{Content: `{"summary":"analysis","is_transient":true}`, StopReason: "end_turn", Model: "test-model"},
++		{Content: `{"summary":"analysis","is_transient":false}`, StopReason: "end_turn", Model: "test-model"},
++	}}
++	result, err := executeAgentLoopWithEvents(
++		context.Background(), provider, []llm.Message{{Role: "user", Content: "classify"}},
++		"", "test-model", llmTools, nil, nil, common.NewFakeEventRecorder(),
++	)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if result != `{"summary":"analysis","is_transient":false}` || provider.callCount != 4 {
++		t.Fatalf("result = %q, calls = %d, want corrected verdict after failed timeline retry", result, provider.callCount)
++	}
++}
++
++func TestExecuteAgentLoopRejectsRepeatedEmptyFinal(t *testing.T) {
++	provider := &sequenceProvider{responses: []*llm.CompletionResponse{
++		{Content: "", StopReason: "end_turn", Model: "test-model"},
++		{Content: "", StopReason: "end_turn", Model: "test-model"},
++	}}
++	result, err := executeAgentLoopWithEvents(
++		context.Background(), provider, []llm.Message{{Role: "user", Content: "analyze"}},
++		"", "test-model", nil, nil, nil, common.NewFakeEventRecorder(),
++	)
++	if err == nil || !strings.Contains(err.Error(), "empty final response") {
++		t.Fatalf("result = %q, error = %v, want repeated-empty failure", result, err)
++	}
++	if provider.callCount != 2 {
++		t.Fatalf("provider calls = %d, want 2", provider.callCount)
++	}
++}
++
++func TestExecuteAgentLoopRejectsRepeatedUnsupportedTransient(t *testing.T) {
++	provider := &sequenceProvider{responses: []*llm.CompletionResponse{
++		{Content: `{"summary":"analysis","is_transient":true}`, StopReason: "end_turn", Model: "test-model"},
++		{Content: `{"summary":"analysis","is_transient":true}`, StopReason: "end_turn", Model: "test-model"},
++		{Content: `{"summary":"analysis","is_transient":true}`, StopReason: "end_turn", Model: "test-model"},
++	}}
++	result, err := executeAgentLoopWithEvents(
++		context.Background(), provider, []llm.Message{{Role: "user", Content: "classify"}},
++		"", "test-model", nil, nil, nil, common.NewFakeEventRecorder(),
++	)
++	if err == nil || !strings.Contains(err.Error(), "lacked verify_timeline") {
++		t.Fatalf("result = %q, error = %v, want unsupported-transient failure", result, err)
++	}
++	if provider.callCount != 3 {
++		t.Fatalf("provider calls = %d, want 3", provider.callCount)
++	}
++}
 diff --git a/workers/ai/main.go b/workers/ai/main.go
-index 47bc4ca..7de0ddd 100644
+index 47bc4ca..978c2ae 100644
 --- a/workers/ai/main.go
 +++ b/workers/ai/main.go
 @@ -929,9 +929,9 @@ func executeAgentLoopWithEvents(
@@ -14,19 +221,22 @@ index 47bc4ca..7de0ddd 100644
  	}
  	if coordinationEnv.AutonomousMode {
  		maxIterations = 100
-@@ -946,6 +946,11 @@ func executeAgentLoopWithEvents(
+@@ -946,6 +946,14 @@ func executeAgentLoopWithEvents(
  		return "", err
  	}
  
 +	// Critique gate budget: how many times a transient verdict unsupported by a
-+	// verify_timeline confirmation may be re-prompted before the answer is taken.
++	// verify_timeline confirmation may be re-prompted before the Task fails.
 +	critiqueRetries := 0
 +	const maxCritiqueRetries = 2
++	emptyFinalRetries := 0
++	const maxEmptyFinalRetries = 1
++	timelineVerified := false
 +
  	for iteration := range maxIterations {
  		stepCtx, stepSpan := startAgentStepSpan(ctx, iteration, provider, model, llmTools, baseToolCtx)
  		req := &llm.CompletionRequest{
-@@ -955,6 +960,18 @@ func executeAgentLoopWithEvents(
+@@ -955,6 +963,18 @@ func executeAgentLoopWithEvents(
  			MaxTokens:    4096,
  			Tools:        llmTools,
  		}
@@ -45,7 +255,7 @@ index 47bc4ca..7de0ddd 100644
  		common.RecordEventWithTimeout(eventRecorder, events.ExecutionEventTypeModelRequestStarted, modelLoopEventTimeout,
  			common.WithEventSummary("model request started"),
  			common.WithEventContent(eventContent(map[string]any{
-@@ -1026,8 +1043,34 @@ func executeAgentLoopWithEvents(
+@@ -1026,8 +1046,43 @@ func executeAgentLoopWithEvents(
  			common.WithEventContentText(resp.Content),
  		)
  
@@ -55,13 +265,18 @@ index 47bc4ca..7de0ddd 100644
 +		// otherwise submits an empty result. Re-prompt for the final answer once
 +		// instead of accepting nothing.
  		if len(resp.ToolCalls) == 0 {
-+			if strings.TrimSpace(resp.Content) == "" && iteration < maxIterations-1 {
-+				messages = append(messages,
-+					llm.Message{Role: "assistant", Content: resp.Content},
-+					llm.Message{Role: "user", Content: "Your last response was empty. Do NOT call any tools. Output your FINAL answer now as the required JSON object and nothing else, using the evidence you have already gathered."},
-+				)
++			if strings.TrimSpace(resp.Content) == "" {
++				if emptyFinalRetries < maxEmptyFinalRetries && iteration < maxIterations-1 {
++					emptyFinalRetries++
++					messages = append(messages,
++						llm.Message{Role: "assistant", Content: resp.Content},
++						llm.Message{Role: "user", Content: "Your last response was empty. Do NOT call any tools. Output your FINAL answer now as the required JSON object and nothing else, using the evidence you have already gathered."},
++					)
++					stepSpan.End()
++					continue
++				}
 +				stepSpan.End()
-+				continue
++				return "", fmt.Errorf("model returned an empty final response after %d retries", emptyFinalRetries)
 +			}
 +			// Critique gate: a transient verdict must be earned. If the model set
 +			// is_transient=true but never called verify_timeline to confirm the
@@ -69,19 +284,34 @@ index 47bc4ca..7de0ddd 100644
 +			// with the engine's contract (confirm or default to a real bug). A
 +			// generic "context deadline exceeded" or signature match is background
 +			// noise in CI logs, not proof of a transient.
-+			if critiqueRetries < maxCritiqueRetries && iteration < maxIterations-1 && transientWithoutTimeline(resp.Content, messages) {
-+				critiqueRetries++
-+				messages = append(messages,
-+					llm.Message{Role: "assistant", Content: resp.Content},
-+					llm.Message{Role: "user", Content: "You set is_transient=true but never called verify_timeline to confirm the failing operation was actually dropped, throttled, or never registered. A bare 'context deadline exceeded' or a transient-signature match is background noise in CI logs, not proof. Call verify_timeline now to confirm the specific operation recovered or never completed; if you cannot prove a known transient class from the timeline, set is_transient=false (default to a real bug). Then re-emit your final JSON."},
-+				)
++			if transientWithoutTimeline(resp.Content, timelineVerified) {
++				if critiqueRetries < maxCritiqueRetries && iteration < maxIterations-1 {
++					critiqueRetries++
++					messages = append(messages,
++						llm.Message{Role: "assistant", Content: resp.Content},
++						llm.Message{Role: "user", Content: "You set is_transient=true but never called verify_timeline to confirm the failing operation was actually dropped, throttled, or never registered. A bare 'context deadline exceeded' or a transient-signature match is background noise in CI logs, not proof. Call verify_timeline now to confirm the specific operation recovered or never completed; if you cannot prove a known transient class from the timeline, set is_transient=false (default to a real bug). Then re-emit your final JSON."},
++					)
++					stepSpan.End()
++					continue
++				}
 +				stepSpan.End()
-+				continue
++				return "", fmt.Errorf("transient verdict lacked verify_timeline after %d critique retries", critiqueRetries)
 +			}
  			stepSpan.End()
  			return resp.Content, nil
  		}
-@@ -1171,6 +1214,26 @@ func executeAgentLoopWithEvents(
+@@ -1136,6 +1191,10 @@ func executeAgentLoopWithEvents(
+ 				}
+ 			}
+ 
++			if isVerifyTimelineTool(toolName) {
++				timelineVerified = execErr == nil
++			}
++
+ 			if execErr != nil {
+ 				common.RecordEventWithTimeout(eventRecorder, events.ExecutionEventTypeToolCallFailed, modelLoopEventTimeout,
+ 					common.WithEventSeverity(events.ExecutionEventSeverityError),
+@@ -1171,6 +1230,74 @@ func executeAgentLoopWithEvents(
  	return "", fmt.Errorf("max iterations reached without completion")
  }
  
@@ -89,20 +319,68 @@ index 47bc4ca..7de0ddd 100644
 +// is_transient=true while the model never called verify_timeline to confirm it.
 +// It backs the critique gate: a transient verdict must be earned with a timeline
 +// confirmation, matching the engine's "default to bug unless proven" contract.
-+func transientWithoutTimeline(content string, messages []llm.Message) bool {
-+	compact := strings.NewReplacer(" ", "", "\n", "", "\t", "").Replace(content)
-+	if !strings.Contains(compact, `"is_transient":true`) {
-+		return false
-+	}
-+	for _, m := range messages {
-+		for _, tc := range m.ToolCalls {
-+			name := strings.ToLower(tc.Name)
-+			if strings.Contains(name, "verify-timeline") || strings.Contains(name, "verify_timeline") {
-+				return false
++func transientWithoutTimeline(content string, timelineVerified bool) bool {
++	return responseClaimsTransient(content) && !timelineVerified
++}
++
++func isVerifyTimelineTool(name string) bool {
++	normalized := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(name)), "-", "_")
++	return normalized == "verify_timeline" || strings.HasPrefix(normalized, "verify_timeline_b")
++}
++
++type analysisCandidate struct {
++	Summary     string `json:"summary"`
++	RootCause   string `json:"root_cause"`
++	Severity    string `json:"severity"`
++	IsTransient *bool  `json:"is_transient"`
++}
++
++func responseClaimsTransient(content string) bool {
++	var best *analysisCandidate
++	depth, start := 0, -1
++	inString, escaped := false, false
++	for i := 0; i < len(content); i++ {
++		ch := content[i]
++		if inString {
++			switch {
++			case escaped:
++				escaped = false
++			case ch == '\\':
++				escaped = true
++			case ch == '"':
++				inString = false
++			}
++			continue
++		}
++		if ch == '"' {
++			inString = true
++			continue
++		}
++		switch ch {
++		case '{':
++			if depth == 0 {
++				start = i
++			}
++			depth++
++		case '}':
++			if depth > 0 {
++				depth--
++				if depth == 0 && start >= 0 {
++					var candidate analysisCandidate
++					if json.Unmarshal([]byte(content[start:i+1]), &candidate) == nil && candidate.shaped() {
++						best = &candidate
++					}
++				}
 +			}
 +		}
 +	}
-+	return true
++	return best != nil && best.IsTransient != nil && *best.IsTransient
++}
++
++func (candidate analysisCandidate) shaped() bool {
++	return strings.TrimSpace(candidate.Summary) != "" ||
++		strings.TrimSpace(candidate.RootCause) != "" ||
++		strings.TrimSpace(candidate.Severity) != ""
 +}
 +
  func approvalToolingRequested(coordinationEnv workerenv.CoordinationEnv, allowedToolCalls map[string]struct{}) bool {

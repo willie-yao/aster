@@ -28,8 +28,9 @@ server / Pages           unchanged
 ```
 
 Three of these are code in this repo (`backend/cmd/orka-producer`,
-`orka-ingestor`, `orka-artifact-tool`); the ai-worker is Orka's own binary,
-carrying the patches in [worker-patches/](worker-patches/).
+`orka-ingestor`, `orka-artifact-tool`); the ai-worker is built from a pinned
+Orka commit plus the tested compatibility patch described in
+[worker-patches/COMPATIBILITY.md](worker-patches/COMPATIBILITY.md).
 
 ## Where Orka resources are created
 

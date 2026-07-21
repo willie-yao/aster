@@ -198,7 +198,7 @@ Continue with [Deploy with GitHub Actions and Pages](github-pages.md).
 
 For an advanced Kubernetes-native analysis backend, see the
 [experimental Orka quickstart](../experimental/orka/QUICKSTART.md). Orka requires
-additional components and worker patches and is not the default scaffold.
+additional components and a compatibility worker and is not the default scaffold.
 
 ## Versioning and pinning
 

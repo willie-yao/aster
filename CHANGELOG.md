@@ -22,6 +22,11 @@ for how to pin a release.
 
 ### Added
 
+- **Pinned Orka compatibility worker.** A dedicated workflow now checks out a
+  fixed Orka commit, verifies and applies the dashboard worker patch, runs
+  focused normal and race tests plus the full worker package, builds the worker
+  image on pull requests, and publishes a combined immutable tag, SBOM,
+  provenance, and digest record from `main`.
 - **Chart-owned Orka artifact tools.** `analysis: orka` now creates a
   release-scoped authenticated artifact Tool service in the Orka namespace and
   a synchronized base Tool ConfigMap in the dashboard namespace. Producer,

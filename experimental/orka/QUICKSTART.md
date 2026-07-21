@@ -51,43 +51,62 @@ The Helm chart uses the specialized repositories above and inherits the engine
 artifact tool together. The standalone manifests use `:main`. Ensure the GHCR
 packages are pullable from your cluster: make them public, use the chart's
 `imagePullSecrets` for pipeline images, and use
-`orka.artifactTool.imagePullSecrets` for the cross-namespace artifact Tool. To
-build locally instead, see [Local build](#local-build-for-kind).
+`orka.artifactTool.imagePullSecrets` for the cross-namespace artifact Tool.
 
-## Step 1: install Orka and apply the worker patches
+The Orka AI worker is published separately because it is built from pinned Orka
+source rather than this repository's Go module:
 
-Install the Orka control plane per its own docs
-([orka-agents/orka](https://github.com/orka-agents/orka)); its images are private,
-so build them from source. Current upstream chart revisions do not yet package
-their generated CRDs and may omit RBAC for newer controllers. Install the CRDs
-and scoped compatibility RBAC before the Helm release. Remove these manual
-steps after the corresponding upstream chart fixes land:
+```text
+ghcr.io/willie-yao/prow-ai-dashboard/orka-ai-worker:
+  v1-orka-<full-orka-commit>-dashboard-<full-dashboard-commit>
+```
+
+Use the exact tag or digest from the latest [successful main-branch
+compatibility run](https://github.com/willie-yao/prow-ai-dashboard/actions/workflows/orka-compat-image.yml?query=branch%3Amain+is%3Asuccess); the
+[compatibility matrix](worker-patches/COMPATIBILITY.md) explains the artifact and
+deployment formats. New GHCR packages may need to be made public before Orka can
+pull the dynamic worker. To build locally instead, see
+[Local build](#local-build-for-kind).
+
+## Step 1: install Orka and pin the compatibility worker
+
+Use the Orka source commit and compatibility worker recorded in
+[worker-patches/COMPATIBILITY.md](worker-patches/COMPATIBILITY.md). The workflow
+publishes a tag containing both full commits and records the registry digest.
+Create an Orka values file with that exact tag:
+
+```yaml
+workers:
+  ai:
+    image:
+      repository: ghcr.io/willie-yao/prow-ai-dashboard/orka-ai-worker
+      tag: v1-orka-1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254-dashboard-<dashboard-commit>
+      pullPolicy: IfNotPresent
+```
+
+Install the Orka control plane from the pinned source commit. Current chart
+revisions do not yet package their generated CRDs and may omit RBAC for newer
+controllers, so install the CRDs and scoped compatibility RBAC before Helm.
+Remove these manual steps after the corresponding upstream fixes land:
 
 ```bash
 # In your Orka checkout:
+git checkout 1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254
 kubectl create namespace orka-system --dry-run=client -o yaml | kubectl apply -f -
 kubectl apply -f config/crd/bases/
 
 # In this dashboard checkout:
 kubectl apply -f experimental/orka/manifests/00-rbac.yaml
 
-# Back in the Orka checkout:
-helm install orka charts/orka --namespace orka-system
+# Back in the pinned Orka checkout:
+helm upgrade --install orka charts/orka \
+  --namespace orka-system \
+  -f /path/to/orka-worker-values.yaml
 ```
 
-Then apply this repo's ai-worker patches. They add the convergence and
-transient-discipline behavior smaller models need, and are required for the Orka
-path to produce reliable results:
-
-```bash
-# In your Orka checkout:
-git apply /path/to/prow-ai-dashboard/experimental/orka/worker-patches/ai-worker-convergence.patch
-# Rebuild the ai-worker image per Orka's build docs, then load or push it so the
-# cluster runs the patched worker.
-```
-
-See [worker-patches/README.md](worker-patches/README.md) for what the patches
-change and the measured impact.
+For strict digest pinning and local build commands, see the compatibility
+matrix. The image includes the convergence and transient-discipline behavior
+smaller models need.
 
 ## Step 2: configure a model Provider
 
@@ -305,7 +324,36 @@ for cmd in orka-producer orka-ingestor orka-artifact-tool orka-copilot-proxy; do
 done
 ```
 
-For Helm, override the structured image values:
+Build the pinned patched Orka worker separately:
+
+```bash
+make orka-compat-image ORKA_COMPAT_IMAGE=orka-ai-worker:local
+kind load docker-image orka-ai-worker:local --name <cluster>
+```
+
+Point the Orka controller at that loaded worker in the pinned Orka checkout:
+
+```yaml
+# /tmp/orka-local-worker-values.yaml
+workers:
+  ai:
+    image:
+      repository: orka-ai-worker
+      tag: local
+```
+
+```bash
+helm upgrade --install orka charts/orka \
+  --namespace orka-system \
+  -f /tmp/orka-local-worker-values.yaml
+```
+
+The pinned Orka controller creates dynamic AI-worker Jobs with
+`imagePullPolicy: IfNotPresent`, so the kind-loaded `orka-ai-worker:local` image
+is used without a registry pull. The chart's `workers.ai.image.pullPolicy` value
+does not control those dynamic Jobs at this pinned revision.
+
+For the dashboard Helm release, override its structured pipeline image values:
 
 ```bash
 --set orka.producer.image.repository=orka-producer \
@@ -355,7 +403,8 @@ The equivalent Orka knobs are producer flags, surfaced as Helm `orka.*` values:
 | job-pattern finalization wait | `orka.patternWait` | ingestor `-pattern-wait` | `25m` |
 
 Iteration budget, forced finalization, and the transient-critique gate live in the
-Orka ai-worker (see [worker-patches/](worker-patches/)), not in config.
+pinned Orka compatibility worker, not in project config. See
+[worker-patches/COMPATIBILITY.md](worker-patches/COMPATIBILITY.md).
 
 ## Operate
 
@@ -373,8 +422,8 @@ kubectl logs -n orka-system job/orka-run-1 -c ingest | tail
 ## Troubleshoot
 
 - **Results stay `pending`.** Tasks are not finishing: check `kubectl get tasks`
-  for `Running`/`Failed` and the ai-worker logs. Confirm the worker patches are
-  applied.
+  for `Running`/`Failed` and the ai-worker logs. Confirm the pinned compatibility worker is
+  configured.
 - **`AI analysis unavailable: analysis Task ...`.** Honest surfacing of a
   `Failed`/`Cancelled`/missing Task, not a silent blank. Inspect that Task, fix the
   cause. Fix the dependency or bump the version when retrying an external
@@ -411,5 +460,5 @@ manifests/
   60-pipeline-rbac.yaml     Pipeline SA + Role/RoleBinding.
   70-pipeline-job.yaml      The analysis CronJob (fetch -> produce -> ingest).
   71-ingestor-webhook.yaml  Event-driven ingestor Deployment + Service.
-worker-patches/             Required Orka ai-worker changes + why.
+worker-patches/             Pinned worker build, compatibility matrix, patch, and tests.
 ```

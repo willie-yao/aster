@@ -36,7 +36,7 @@ loop runs and how the guardrails are enforced:
 | Orchestration | Goroutines in the fetcher | One Task per failure, applied to the cluster |
 | Quality gates | Enforced in Go code | Enforced as tools the agent must call plus ai-worker re-prompts |
 | Cache | On-disk JSON keyed by mode + hash | The Kubernetes object store: Task names fingerprint project/build/test identity and the model-visible analysis contract; `-version` is a manual override |
-| Config surface | Every `ai.*` knob | Only `ai.tools`, the `storage` block, and the display id are read; the rest is baked into the worker patches and shim tools |
+| Config surface | Every `ai.*` knob | Only `ai.tools`, the `storage` block, and the display id are read; the rest is provided by the compatibility worker and shim tools |
 | Endpoint | Any OpenAI-compatible chat-completions | Same, via an Orka `Provider`; Copilot needs a de-streaming proxy |
 
 The trade-off from the evaluation: Orka with a strong co-located model matches or
@@ -98,7 +98,7 @@ the endpoint's context window and the GCS ceiling is a fixed engine safety cap
 > These knobs govern the in-process backend. On the Orka backend only
 > `ai.tools`, `ai.min_tool_calls`, the `storage` block, and the display id are
 > read from `project.yaml`; `max_iters`, `min_gcs_bytes`, `critique.*`, and
-> `evidence.*` live in the ai-worker patches and shim tools instead. See
+> `evidence.*` live in the compatibility worker and shim tools instead. See
 > [In-process and Orka backends](#in-process-and-orka-backends).
 
 ### `max_iters`

@@ -89,3 +89,7 @@ When editing Markdown:
 - Run `make helm-check` when Helm templates, packaged files, examples, or values
   change. It lints the chart, verifies Orka Tool synchronization, exercises
   owned and external artifact Tool renders, and tests the operational helpers.
+- Run `make orka-compat-check` when the pinned Orka worker metadata, patch,
+  scripts, or workflow changes. The dedicated compatibility workflow applies the
+  patch to the pinned source, runs focused normal and race tests plus the full
+  worker package, and builds the image on pull requests without publishing it.

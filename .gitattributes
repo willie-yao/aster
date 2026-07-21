@@ -1,0 +1,2 @@
+# Patch context preserves upstream indentation; validate the applied source.
+experimental/orka/worker-patches/*.patch -whitespace

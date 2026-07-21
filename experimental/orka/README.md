@@ -9,7 +9,7 @@ that run alongside your inference stack.
 > Opt-in and experimental. The engine's default analysis backend is the
 > in-process agentic loop; select this path explicitly with `analysis: orka` in
 > the Helm chart (see [QUICKSTART.md](QUICKSTART.md)). It requires the Orka
-> control plane, a Provider, and the ai-worker patches. The dashboard chart owns
+> control plane, a Provider, and the pinned compatibility AI worker. The dashboard chart owns
 > its release-scoped artifact Tool service and base Tool ConfigMap by default.
 
 ## Docs
@@ -19,8 +19,8 @@ that run alongside your inference stack.
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** - how it works: where each Orka resource
   is created, the CRD shapes, and how the engine's harness (cache, convergence,
   critique, skills) is reconstructed out of Kubernetes objects.
-- **[worker-patches/](worker-patches/)** - the required Orka ai-worker changes
-  (convergence + transient-critique) and the numbers behind them.
+- **[worker-patches/](worker-patches/)** - the pinned, tested Orka AI-worker
+  compatibility image, patch, version matrix, and measured convergence results.
 
 ## Headline finding
 
@@ -67,10 +67,9 @@ also carries the configured Orka retry policy.
   manifests/50-copilot-proxy.yaml de-streams so the worker sees real tool calls.
   Standard OpenAI-compatible endpoints (vLLM, Ray Serve, Dynamo/NIM, Ollama) do NOT
   need it - point a Provider straight at them.
-- **Worker patches are required.** Small models otherwise fail to converge (submit
-  empty results) and skip the verify_timeline discipline. Apply
-  worker-patches/ai-worker-convergence.patch (iteration cap, forced finalization,
-  empty-final re-prompt, transient-critique gate) and rebuild the ai-worker image.
+- **The compatibility worker is required.** Small models otherwise fail to
+  converge and skip the verify_timeline discipline. Pin the published worker tag
+  or digest from the [compatibility matrix](worker-patches/COMPATIBILITY.md).
 - **Artifact-tool authentication is required.** The Helm chart creates and
   preserves a release-scoped bearer Secret by default. External shim deployments
   must provide `orka.artifactTool.auth.existingSecret`. The service accepts

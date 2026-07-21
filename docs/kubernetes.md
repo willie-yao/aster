@@ -76,10 +76,11 @@ identical either way.
   pipeline runs the analysis as Kubernetes-native Tasks alongside your inference
   stack, with native retries, per-Task observability, and a path to agent-runtime
   remediation. It is useful when you want one observable Task per failure and
-  are prepared to operate the additional Orka components and worker patches.
+  are prepared to operate the additional Orka components and compatibility worker.
 
 Orka mode requires `mode: cron` and assumes the Orka control plane, a Provider,
-and the patched ai-worker image are installed. The dashboard chart creates a
+and the pinned [compatibility AI worker](../experimental/orka/worker-patches/COMPATIBILITY.md)
+are installed. The dashboard chart creates a
 release-scoped artifact Tool Deployment, Service, authentication Secret,
 NetworkPolicy, and base Tool ConfigMap by default. Configure an external shared
 shim only when the operator intentionally owns those resources separately.
@@ -200,7 +201,7 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | --- | --- |
 | `image.repository`, `image.tag` | Engine image; tag defaults to the chart `appVersion`. |
 | `mode` | `watch` (continuous worker Deployment, default) or `cron` (scheduled CronJob). |
-| `analysis` | `inprocess` (default; in-cluster agentic loop) or `orka` (advanced experimental pipeline; requires `mode: cron`, the Orka control plane, a Provider, and worker patches). |
+| `analysis` | `inprocess` (default; in-cluster agentic loop) or `orka` (advanced experimental pipeline; requires `mode: cron`, the Orka control plane, a Provider, and the compatibility worker). |
 | `orka.artifactTool.*` | Release-scoped artifact Tool image, authentication, network policy, resources, and scheduling. |
 | `orka.baseTools.*` | Create the synchronized producer ConfigMap or reference an existing ConfigMap in the release namespace. |
 | `orka.producer.maxConcurrentTasks`, `taskPoll`, `waveTimeout` | Apply per-test Tasks in bounded waves (`0` through `1000`) and bound placement recovery and intermediate-wave polling. |
