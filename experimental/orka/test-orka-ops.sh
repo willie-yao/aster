@@ -237,6 +237,10 @@ if grep -Fq ' delete ' "$CALLS"; then
   exit 1
 fi
 
+"$script" --namespace orka-system gc --project "$project" --older-than 09m \
+  > "$tmp/gc-leading-zero.txt"
+grep -Fq 'Retention: older than 09m' "$tmp/gc-leading-zero.txt"
+
 if "$script" --namespace orka-system gc --project "$project" --older-than 7d --delete \
   > "$tmp/gc-delete-option.txt" 2>&1; then
   echo 'GC accepted the removed --delete option' >&2

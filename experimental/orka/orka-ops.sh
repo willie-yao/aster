@@ -27,7 +27,8 @@ Commands:
   gc         Preview terminal Tasks and inactive Tools older than the retention
              window. This command never deletes resources.
 
-Durations accept one integer unit, for example 30m, 24h, or 7d.
+Durations use one base-10 integer and unit, for example 30m, 24h, or 7d.
+Leading zeros remain decimal, so 08h is the same as 8h.
 USAGE
 }
 
@@ -90,7 +91,7 @@ cleanup_smoke() {
 parse_duration_seconds() {
   local value=$1 number unit
   if [[ $value =~ ^([0-9]+)([smhd])$ ]]; then
-    number=${BASH_REMATCH[1]}
+    number=$((10#${BASH_REMATCH[1]}))
     unit=${BASH_REMATCH[2]}
   else
     echo "invalid duration $value: use one integer unit such as 30m, 24h, or 7d" >&2

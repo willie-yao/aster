@@ -9,14 +9,15 @@ Create a uniquely named Job from a suspended dashboard CronJob. The command
 checks for active scheduled and manual Jobs before creating another one. This is
 a preflight check, not a distributed lock; do not invoke the helper concurrently.
 
-Timeout accepts one integer unit, for example 90m, 2h, or 300s.
+Timeout uses one base-10 integer and unit, for example 90m, 2h, or 300s.
+Leading zeros remain decimal, so 08h is the same as 8h.
 USAGE
 }
 
 parse_duration_seconds() {
   local value=$1 number unit
   if [[ $value =~ ^([0-9]+)([smh])$ ]]; then
-    number=${BASH_REMATCH[1]}
+    number=$((10#${BASH_REMATCH[1]}))
     unit=${BASH_REMATCH[2]}
   else
     echo "invalid timeout $value: use one integer unit such as 90m, 2h, or 300s" >&2

@@ -105,6 +105,8 @@ deploy/helm/prow-ai-dashboard/run-cronjob-now.sh --wait \
 
 Without `--wait`, the helper prints commands for following logs and checking the
 Job. The CronJob can remain suspended while manually created Jobs run.
+`--timeout` accepts one base-10 integer followed by `s`, `m`, or `h`; leading
+zeros remain decimal, so `08h` is the same as `8h`.
 
 Inspect the isolated server after the Job completes:
 

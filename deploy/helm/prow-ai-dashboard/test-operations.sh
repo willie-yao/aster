@@ -104,7 +104,7 @@ grep -Fq -- "--from=cronjob/$long_cronjob $job_name --dry-run=client -o yaml" "$
 grep -Fq "label --local -f - prow-ai-dashboard.willieyao.dev/source-cronjob=$long_cronjob -o yaml" "$tmp/job-calls"
 grep -Fq 'Created Job dashboards/' "$tmp/run-now.txt"
 
-KUBECTL="$tmp/kubectl-job" "$chart/run-cronjob-now.sh" --wait --timeout 5s \
+KUBECTL="$tmp/kubectl-job" "$chart/run-cronjob-now.sh" --wait --timeout 08h \
   dashboards "$long_cronjob" > "$tmp/completed-job.txt"
 grep -Fq 'job logs' "$tmp/completed-job.txt"
 

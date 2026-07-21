@@ -189,7 +189,9 @@ distributed lock, so do not invoke the helper concurrently.
 For the Orka backend, `experimental/orka/orka-ops.sh` validates the control
 plane and Provider, runs a disposable smoke Task, reports Task and Tool state by
 project and build, and previews age-bounded garbage collection. The preview is
-project-scoped and never deletes resources. See the
+project-scoped and never deletes resources. The smoke command checks the Orka
+controller, worker, and Provider only; use a complete dashboard Job to validate
+artifact Tools, Task events, and ingestion. See the
 [Orka quickstart](../experimental/orka/QUICKSTART.md#operate).
 
 Then reach the server:

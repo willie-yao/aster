@@ -160,7 +160,11 @@ experimental/orka/orka-ops.sh --namespace orka-system smoke \
 
 For a non-Copilot Provider, substitute its name and model. The smoke command
 requires `status.phase=Succeeded` and `status.resultRef.available=true`; a
-controller that is merely running is not enough.
+controller that is merely running is not enough. These commands validate the
+Orka control plane and Provider path. They do not call the dashboard artifact
+Tools or verify Task events. The first complete dashboard pipeline Job remains
+the end-to-end check for artifact routing, Tool authentication, result acceptance,
+and ingestion.
 
 ## Step 3: choose artifact Tool ownership
 
@@ -463,7 +467,9 @@ never selected by project-scoped garbage collection.
 
 The garbage-collection preview is age-bounded and read-only. It reports only
 terminal Tasks for one exact project scope. A Tool is eligible only when it is
-older than the retention window and no Task for its build is active.
+older than the retention window and no Task for its build is active. Duration
+flags use one base-10 integer followed by `s`, `m`, `h`, or `d`; leading zeros
+remain decimal, so `08h` is the same as `8h`.
 
 ```bash
 # Preview the default 168-hour retention plan.
