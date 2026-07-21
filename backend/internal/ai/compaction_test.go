@@ -5,26 +5,26 @@ import (
 	"testing"
 )
 
-func sysAndTask() []agChatMessage {
-	return []agChatMessage{
+func sysAndTask() []modelMessage {
+	return []modelMessage{
 		{Role: "system", Content: strPtr("system prompt")},
 		{Role: "user", Content: strPtr("analyze this failure")},
 	}
 }
 
-func toolMsg(id string, n int) agChatMessage {
-	return agChatMessage{Role: "tool", ToolCallID: id, Content: strPtr(strings.Repeat("x", n))}
+func toolMsg(id string, n int) modelMessage {
+	return modelMessage{Role: "tool", ToolCallID: id, Content: strPtr(strings.Repeat("x", n))}
 }
 
-func asstToolCall(id, reasoning string) agChatMessage {
-	return agChatMessage{
+func asstToolCall(id, reasoning string) modelMessage {
+	return modelMessage{
 		Role:      "assistant",
 		Content:   strPtr(reasoning),
-		ToolCalls: []agToolCall{{ID: id, Type: "function", Function: agFunction{Name: "read_artifact", Arguments: `{"path":"a"}`}}},
+		ToolCalls: []modelToolCall{{ID: id, Type: "function", Function: modelFunction{Name: "read_artifact", Arguments: `{"path":"a"}`}}},
 	}
 }
 
-func conversation(numTools, toolSize int) []agChatMessage {
+func conversation(numTools, toolSize int) []modelMessage {
 	msgs := sysAndTask()
 	for i := 0; i < numTools; i++ {
 		id := string(rune('a' + i))
@@ -33,7 +33,7 @@ func conversation(numTools, toolSize int) []agChatMessage {
 	return msgs
 }
 
-func countStubbed(msgs []agChatMessage) int {
+func countStubbed(msgs []modelMessage) int {
 	n := 0
 	for i := range msgs {
 		if isStubbed(msgs[i].Content) {

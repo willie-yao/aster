@@ -241,7 +241,7 @@ func TestAnalyzePattern_CapsBuilds(t *testing.T) {
 	if reqs != 1 {
 		t.Fatalf("expected one request captured, got %d", reqs)
 	}
-	var sent agChatRequest
+	var sent chatCompletionsRequest
 	if err := json.Unmarshal(srv.requests[0], &sent); err != nil {
 		t.Fatalf("unmarshal request: %v", err)
 	}

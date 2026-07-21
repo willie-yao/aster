@@ -202,8 +202,8 @@ func TestCopilotHeaderSkippedForNonCopilotEndpoint(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClientWithOptions(Options{Token: "tok", CacheDir: t.TempDir(), Endpoint: srv.URL, Model: "m"})
-	if _, err := c.callChatWithTools(context.Background(), []agChatMessage{{Role: "user", Content: strPtr("user")}}, nil, nil); err != nil {
-		t.Fatalf("callChatWithTools: %v", err)
+	if _, err := c.callModel(context.Background(), []modelMessage{{Role: "user", Content: strPtr("user")}}, nil, nil); err != nil {
+		t.Fatalf("callModel: %v", err)
 	}
 	if got != "" {
 		t.Errorf("expected no Copilot-Integration-Id header for %q, got %q", srv.URL, got)
@@ -231,8 +231,8 @@ func TestRequestHeaders_CustomHeaders(t *testing.T) {
 			"api-key":         "azure-key",
 		},
 	})
-	if _, err := c.callChatWithTools(context.Background(), []agChatMessage{{Role: "user", Content: strPtr("user")}}, nil, nil); err != nil {
-		t.Fatalf("callChatWithTools: %v", err)
+	if _, err := c.callModel(context.Background(), []modelMessage{{Role: "user", Content: strPtr("user")}}, nil, nil); err != nil {
+		t.Fatalf("callModel: %v", err)
 	}
 
 	if gotAuth != "Bearer secret-bearer" {
@@ -264,8 +264,8 @@ func TestRequestHeaders_ExtraHeadersOverrideAuthorization(t *testing.T) {
 			"Authorization": "Token custom-scheme",
 		},
 	})
-	if _, err := c.callChatWithTools(context.Background(), []agChatMessage{{Role: "user", Content: strPtr("user")}}, nil, nil); err != nil {
-		t.Fatalf("callChatWithTools: %v", err)
+	if _, err := c.callModel(context.Background(), []modelMessage{{Role: "user", Content: strPtr("user")}}, nil, nil); err != nil {
+		t.Fatalf("callModel: %v", err)
 	}
 	if gotAuth != "Token custom-scheme" {
 		t.Errorf("Authorization = %q, want extras to win", gotAuth)

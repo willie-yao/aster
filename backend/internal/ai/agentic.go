@@ -1,19 +1,15 @@
 package ai
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
 	"os"
 	"path"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -120,7 +116,7 @@ var artifactTreeNoiseExt = map[string]bool{
 // turn. With single=true and more than one call, only the first is kept so the
 // echoed assistant message stays compatible with single-call templates. The
 // dropped count is returned for logging. The model can re-request dropped calls.
-func limitToolCalls(calls []agToolCall, single bool) (kept []agToolCall, dropped int) {
+func limitToolCalls(calls []modelToolCall, single bool) (kept []modelToolCall, dropped int) {
 	if single && len(calls) > 1 {
 		return calls[:1], len(calls) - 1
 	}
@@ -155,49 +151,6 @@ const critiqueRetryIters = 3
 // realistic recipes with three to four evidence groups without giving large
 // recipes unbounded budget.
 const critiqueMissingEvidenceBonusCap = 6
-
-// agChatMessage uses *string for Content so the tool-call echo can send a
-// null content alongside tool_calls, matching the OpenAI spec.
-type agChatMessage struct {
-	Role       string       `json:"role"`
-	Content    *string      `json:"content,omitempty"`
-	Name       string       `json:"name,omitempty"`
-	ToolCallID string       `json:"tool_call_id,omitempty"`
-	ToolCalls  []agToolCall `json:"tool_calls,omitempty"`
-}
-
-type agToolCall struct {
-	ID       string     `json:"id"`
-	Type     string     `json:"type"`
-	Function agFunction `json:"function"`
-}
-
-type agFunction struct {
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"`
-}
-
-type agChatRequest struct {
-	Model    string          `json:"model"`
-	Messages []agChatMessage `json:"messages"`
-	Tools    []tools.Schema  `json:"tools,omitempty"`
-
-	// ParallelToolCalls is the OpenAI knob requesting at most one tool call
-	// per turn when set to false. Sent only when single_tool_call is on.
-	// Omitted otherwise so providers keep their parallel-call default.
-	// Endpoints that honor it let the model pick its single best call; endpoints
-	// that ignore it still return several, which the loop's client-side cap trims.
-	ParallelToolCalls *bool `json:"parallel_tool_calls,omitempty"`
-}
-
-type agChatResponse struct {
-	Choices []struct {
-		FinishReason string        `json:"finish_reason"`
-		Message      agChatMessage `json:"message"`
-	} `json:"choices"`
-}
-
-func strPtr(s string) *string { return &s }
 
 // agToolDocs is the tool-usage strategy section appended to the system
 // prompt by the agentic loop. Tool names + descriptions reach the model
@@ -540,7 +493,7 @@ func schemaPayloadBytes(schemas []tools.Schema) int {
 // requestSizeEstimate approximates the serialized chat-request size in bytes:
 // message content + tool-call arguments + per-message framing + the fixed
 // schema payload.
-func requestSizeEstimate(messages []agChatMessage, schemaBytes int) int {
+func requestSizeEstimate(messages []modelMessage, schemaBytes int) int {
 	total := schemaBytes + 64 // request framing
 	for i := range messages {
 		total += compactionMsgOverhead
@@ -559,7 +512,7 @@ func requestSizeEstimate(messages []agChatMessage, schemaBytes int) int {
 // budgetBytes <= 0. Preserves the system prompt, task, message order, and
 // tool_call_id wiring so OpenAI tool-call pairing stays valid. Returns the
 // slice and the number of messages elided this call.
-func compactMessages(messages []agChatMessage, schemaBytes, budgetBytes int) ([]agChatMessage, int) {
+func compactMessages(messages []modelMessage, schemaBytes, budgetBytes int) ([]modelMessage, int) {
 	if budgetBytes <= 0 || requestSizeEstimate(messages, schemaBytes) <= budgetBytes {
 		return messages, 0
 	}
@@ -685,7 +638,7 @@ func (c *Client) doAnalyzeAgentic(
 	if seed := c.buildArtifactTreeSeed(ctx, in.Browser, artifactTreeSeedBytes(in.Opts)); seed != "" {
 		userPrompt = seed + "\n\n---\n\n" + userPrompt
 	}
-	messages := []agChatMessage{
+	messages := []modelMessage{
 		{Role: "system", Content: strPtr(fullSysPrompt)},
 		{Role: "user", Content: strPtr(userPrompt)},
 	}
@@ -736,7 +689,7 @@ func (c *Client) doAnalyzeAgentic(
 				log.Printf("  ✂ context compaction: elided %d message(s) to fit ~%d-byte window", elided, in.Opts.ContextByteBudget)
 			}
 		}
-		resp, err := c.callChatWithTools(loopCtx, messages, schemas, parallelToolCalls)
+		resp, err := c.callModel(loopCtx, messages, schemas, parallelToolCalls)
 		if err != nil {
 			// Detect "tools not supported" on the first call only.
 			if iter == 0 && isToolsUnsupportedError(err) {
@@ -744,11 +697,10 @@ func (c *Client) doAnalyzeAgentic(
 			}
 			return nil, nil, fmt.Errorf("agentic iter %d: %w", iter+1, err)
 		}
-		if len(resp.Choices) == 0 {
+		if !resp.HasMessage {
 			return nil, nil, fmt.Errorf("agentic iter %d: empty choices", iter+1)
 		}
-		choice := resp.Choices[0]
-		msg := choice.Message
+		msg := resp.Message
 
 		if len(msg.ToolCalls) == 0 {
 			candidate := ""
@@ -774,11 +726,11 @@ func (c *Client) doAnalyzeAgentic(
 					progressed = true
 				}
 				if progressed {
-					echo := agChatMessage{Role: "assistant"}
+					echo := modelMessage{Role: "assistant"}
 					if msg.Content != nil {
 						echo.Content = msg.Content
 					}
-					messages = append(messages, echo, agChatMessage{
+					messages = append(messages, echo, modelMessage{
 						Role:    "user",
 						Content: strPtr(formatFloorsNudge(state, in.Opts)),
 					})
@@ -822,11 +774,11 @@ func (c *Client) doAnalyzeAgentic(
 							log.Printf("  ⓘ semantic judge: skipped (%v)", err)
 						case len(objs) > 0:
 							state.judgeObjected = true
-							echo := agChatMessage{Role: "assistant"}
+							echo := modelMessage{Role: "assistant"}
 							if msg.Content != nil {
 								echo.Content = msg.Content
 							}
-							messages = append(messages, echo, agChatMessage{
+							messages = append(messages, echo, modelMessage{
 								Role:    "user",
 								Content: strPtr(formatSemanticObjections(objs)),
 							})
@@ -844,7 +796,7 @@ func (c *Client) doAnalyzeAgentic(
 					}
 					state.critiquePassed = true
 				} else if critiqueRetriesUsed < in.Opts.CritiqueMaxRetries {
-					echo := agChatMessage{Role: "assistant"}
+					echo := modelMessage{Role: "assistant"}
 					if msg.Content != nil {
 						echo.Content = msg.Content
 					}
@@ -856,7 +808,7 @@ func (c *Client) doAnalyzeAgentic(
 					if inj := c.buildEvidenceInjection(loopCtx, state, out); inj != "" {
 						feedback = feedback + "\n\n" + inj
 					}
-					messages = append(messages, echo, agChatMessage{
+					messages = append(messages, echo, modelMessage{
 						Role:    "user",
 						Content: strPtr(feedback),
 					})
@@ -895,7 +847,7 @@ func (c *Client) doAnalyzeAgentic(
 				len(msg.ToolCalls), dropped)
 		}
 
-		echo := agChatMessage{Role: "assistant", ToolCalls: toolCalls}
+		echo := modelMessage{Role: "assistant", ToolCalls: toolCalls}
 		if msg.Content != nil {
 			echo.Content = msg.Content
 		}
@@ -904,7 +856,7 @@ func (c *Client) doAnalyzeAgentic(
 		for _, tc := range toolCalls {
 			result := dispatchAgenticTool(loopCtx, state, tc)
 			state.modelBytes += len(result)
-			messages = append(messages, agChatMessage{
+			messages = append(messages, modelMessage{
 				Role:       "tool",
 				ToolCallID: tc.ID,
 				Content:    strPtr(result),
@@ -942,7 +894,7 @@ func (c *Client) doAnalyzeAgentic(
 	return summary, analysis, nil
 }
 
-func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, messages []agChatMessage, finalContent string, parsed analysisResponse, opts AgenticOptions) analysisResponse {
+func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, messages []modelMessage, finalContent string, parsed analysisResponse, opts AgenticOptions) analysisResponse {
 	if state.critiquePassed {
 		return parsed
 	}
@@ -968,7 +920,7 @@ func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, m
 		log.Printf("  ⚠ agentic critique: post-loop draft still failing %v; no fetchable evidence to inject; accepting but not caching", out.Matches())
 		return parsed
 	}
-	messages = append(messages, agChatMessage{Role: "assistant", Content: strPtr(finalContent)}, agChatMessage{Role: "user", Content: strPtr(out.Feedback + "\n\n" + injection)})
+	messages = append(messages, modelMessage{Role: "assistant", Content: strPtr(finalContent)}, modelMessage{Role: "user", Content: strPtr(out.Feedback + "\n\n" + injection)})
 	revised := c.runFinalizeRound(ctx, messages, opts.ContextByteBudget)
 	next, ok := tryParseAnalysis(revised)
 	if !ok {
@@ -1219,22 +1171,22 @@ func (c *Client) cacheAcceptedAnalysis(cacheKey string, parsed analysisResponse,
 // just the final JSON. Used when the agent ran out of iterations or returned
 // prose without parseable JSON. Returns raw content; callers handle unparseable
 // responses.
-func (c *Client) runFinalizeRound(ctx context.Context, messages []agChatMessage, contextByteBudget int) string {
-	messages = append(messages, agChatMessage{Role: "user", Content: strPtr(agForceFinalizePrompt)})
+func (c *Client) runFinalizeRound(ctx context.Context, messages []modelMessage, contextByteBudget int) string {
+	messages = append(messages, modelMessage{Role: "user", Content: strPtr(agForceFinalizePrompt)})
 	if contextByteBudget > 0 {
 		// The finalize round sends no tool schemas, so estimate against
 		// messages alone.
 		messages, _ = compactMessages(messages, 0, contextByteBudget)
 	}
-	resp, err := c.callChatWithTools(ctx, messages, nil, nil)
+	resp, err := c.callModel(ctx, messages, nil, nil)
 	if err != nil {
 		log.Printf("  ⚠ agentic finalize round failed: %v", err)
 		return ""
 	}
-	if len(resp.Choices) == 0 || resp.Choices[0].Message.Content == nil {
+	if !resp.HasMessage || resp.Message.Content == nil {
 		return ""
 	}
-	return *resp.Choices[0].Message.Content
+	return *resp.Message.Content
 }
 
 // tryParseAnalysis extracts and unmarshals the JSON answer, returning ok=false
@@ -1267,73 +1219,10 @@ func isToolsUnsupportedError(err error) bool {
 	return toolsUnsupportedRe.MatchString(msg)
 }
 
-// callChatWithTools sends a chat-completions request with optional tool defs
-// and parses the OpenAI-shaped response. Retries on 429 like the single-shot
-// path. Sleeps the same callDelay between calls to be a good citizen. When
-// parallelToolCalls is non-nil it is sent as the OpenAI parallel_tool_calls
-// flag to request single tool calls on compliant endpoints.
-func (c *Client) callChatWithTools(ctx context.Context, messages []agChatMessage, toolDefs []tools.Schema, parallelToolCalls *bool) (*agChatResponse, error) {
-	time.Sleep(callDelay)
-
-	body, err := json.Marshal(agChatRequest{Model: c.model, Messages: messages, Tools: toolDefs, ParallelToolCalls: parallelToolCalls})
-	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
-	}
-
-	var resp *http.Response
-	for attempt := 0; attempt < 3; attempt++ {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.apiURL, bytes.NewReader(body))
-		if err != nil {
-			return nil, fmt.Errorf("build request: %w", err)
-		}
-		c.setRequestHeaders(req)
-		resp, err = c.httpClient.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("post: %w", err)
-		}
-		if resp.StatusCode == http.StatusTooManyRequests {
-			if attempt == 2 {
-				break
-			}
-			wait := retryAfter(resp.Header.Get("Retry-After"), time.Duration(2<<attempt)*time.Second)
-			resp.Body.Close()
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(wait):
-			}
-			continue
-		}
-		break
-	}
-	defer resp.Body.Close()
-	rb, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("chat returned %d: %s", resp.StatusCode, textutil.Truncate(string(rb), 500))
-	}
-	var out agChatResponse
-	if err := json.Unmarshal(rb, &out); err != nil {
-		return nil, fmt.Errorf("decode response: %w; body=%s", err, textutil.Truncate(string(rb), 500))
-	}
-	return &out, nil
-}
-
-func retryAfter(value string, fallback time.Duration) time.Duration {
-	if seconds, err := strconv.Atoi(strings.TrimSpace(value)); err == nil && seconds >= 0 {
-		return time.Duration(seconds) * time.Second
-	}
-	if when, err := http.ParseTime(value); err == nil {
-		if wait := time.Until(when); wait > 0 {
-			return wait
-		}
-	}
-	return fallback
-}
-
 // dispatchAgenticTool routes one tool call through the registry, accumulates
 // bytes/budget telemetry on the agent state, and returns the model-bound
 // envelope JSON.
-func dispatchAgenticTool(ctx context.Context, s *agentState, tc agToolCall) string {
+func dispatchAgenticTool(ctx context.Context, s *agentState, tc modelToolCall) string {
 	s.calls++
 	if s.modelRemaining() <= 0 {
 		s.budgetExhausted = true

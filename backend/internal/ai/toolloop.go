@@ -55,7 +55,7 @@ func (c *Client) ToolLoop(
 		maxIters = 8
 	}
 
-	messages := []agChatMessage{
+	messages := []modelMessage{
 		{Role: "system", Content: strPtr(sys)},
 		{Role: "user", Content: strPtr(user)},
 	}
@@ -81,17 +81,17 @@ func (c *Client) ToolLoop(
 				log.Printf("  ✂ tool loop: elided %d message(s) to fit ~%d-byte window", elided, opts.ContextByteBudget)
 			}
 		}
-		resp, err := c.callChatWithTools(ctx, messages, schemas, parallelToolCalls)
+		resp, err := c.callModel(ctx, messages, schemas, parallelToolCalls)
 		if err != nil {
 			if iter == 0 && isToolsUnsupportedError(err) {
 				return "", fmt.Errorf("%w: %v", ErrToolsUnsupported, err)
 			}
 			return "", fmt.Errorf("tool loop iter %d: %w", iter+1, err)
 		}
-		if len(resp.Choices) == 0 {
+		if !resp.HasMessage {
 			return "", fmt.Errorf("tool loop iter %d: empty choices", iter+1)
 		}
-		msg := resp.Choices[0].Message
+		msg := resp.Message
 
 		if len(msg.ToolCalls) == 0 {
 			// Require a minimum of investigation before accepting a final
@@ -100,9 +100,9 @@ func (c *Client) ToolLoop(
 			if opts.MinToolCalls > 0 && calls < opts.MinToolCalls && !nudged {
 				nudged = true
 				if msg.Content != nil {
-					messages = append(messages, agChatMessage{Role: "assistant", Content: msg.Content})
+					messages = append(messages, modelMessage{Role: "assistant", Content: msg.Content})
 				}
-				messages = append(messages, agChatMessage{
+				messages = append(messages, modelMessage{
 					Role:    "user",
 					Content: strPtr("Investigate with the tools before answering: grep and read the relevant files, then give your final JSON."),
 				})
@@ -118,7 +118,7 @@ func (c *Client) ToolLoop(
 		if dropped > 0 {
 			log.Printf("  ⤵ single_tool_call: executing 1 of %d tool calls, dropping %d", len(msg.ToolCalls), dropped)
 		}
-		echo := agChatMessage{Role: "assistant", ToolCalls: toolCalls}
+		echo := modelMessage{Role: "assistant", ToolCalls: toolCalls}
 		if msg.Content != nil {
 			echo.Content = msg.Content
 		}
@@ -127,7 +127,7 @@ func (c *Client) ToolLoop(
 		for _, tc := range toolCalls {
 			result := dispatchToolLoop(ctx, reg, env, tc)
 			calls++
-			messages = append(messages, agChatMessage{
+			messages = append(messages, modelMessage{
 				Role:       "tool",
 				ToolCallID: tc.ID,
 				Content:    strPtr(result),
@@ -143,7 +143,7 @@ func (c *Client) ToolLoop(
 // dispatchToolLoop routes one tool call through the registry and returns the
 // capped JSON payload to hand back to the model. Tools that gate on remaining
 // bytes see a large budget since the loop bounds work by iteration count.
-func dispatchToolLoop(ctx context.Context, reg *tools.Registry, env *tools.Env, tc agToolCall) string {
+func dispatchToolLoop(ctx context.Context, reg *tools.Registry, env *tools.Env, tc modelToolCall) string {
 	env.RemainingModelBytes = toolLoopBudget
 	env.RemainingGCSBytes = toolLoopBudget
 	result := reg.Dispatch(ctx, env, tc.Function.Name, json.RawMessage(tc.Function.Arguments))

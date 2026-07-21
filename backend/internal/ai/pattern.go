@@ -202,19 +202,19 @@ func ParsePatternResult(subject string, failures []PatternFailure, result string
 // toolFreePatternVerdict makes the single correlation call with no tools, used
 // when no source-repo reader is wired.
 func (s *Service) toolFreePatternVerdict(ctx context.Context, userPrompt string) (patternResponse, error) {
-	messages := []agChatMessage{
+	messages := []modelMessage{
 		{Role: "system", Content: strPtr(patternSystemPrompt)},
 		{Role: "user", Content: strPtr(userPrompt)},
 	}
-	resp, err := s.client.callChatWithTools(ctx, messages, nil, nil)
+	resp, err := s.client.callModel(ctx, messages, nil, nil)
 	if err != nil {
 		return patternResponse{}, fmt.Errorf("pattern analysis chat: %w", err)
 	}
-	if len(resp.Choices) == 0 || resp.Choices[0].Message.Content == nil {
+	if !resp.HasMessage || resp.Message.Content == nil {
 		return patternResponse{}, fmt.Errorf("pattern analysis: empty response")
 	}
 	var parsed patternResponse
-	if err := json.Unmarshal([]byte(extractJSON(*resp.Choices[0].Message.Content)), &parsed); err != nil {
+	if err := json.Unmarshal([]byte(extractJSON(*resp.Message.Content)), &parsed); err != nil {
 		return patternResponse{}, fmt.Errorf("pattern analysis: parse response: %w", err)
 	}
 	return parsed, nil

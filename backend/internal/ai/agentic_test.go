@@ -1216,7 +1216,7 @@ required_evidence:
 }
 
 func TestLimitToolCalls(t *testing.T) {
-	three := []agToolCall{{ID: "a"}, {ID: "b"}, {ID: "c"}}
+	three := []modelToolCall{{ID: "a"}, {ID: "b"}, {ID: "c"}}
 	t.Run("disabled passes through", func(t *testing.T) {
 		kept, dropped := limitToolCalls(three, false)
 		if len(kept) != 3 || dropped != 0 {
@@ -1738,25 +1738,25 @@ func TestChatClient_BoundedByContextNotFixedTimeout(t *testing.T) {
 	c := newAgenticTestClient(t, srv.URL)
 
 	// The client must carry no fixed timeout; the context is the only bound.
-	if c.httpClient.Timeout != 0 {
-		t.Fatalf("chat client must have no fixed Timeout, got %v", c.httpClient.Timeout)
+	if c.api.httpClient.Timeout != 0 {
+		t.Fatalf("chat client must have no fixed Timeout, got %v", c.api.httpClient.Timeout)
 	}
 
 	// Tight deadline (< server delay): the context must cancel the call.
 	tightCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	if _, err := c.callChatWithTools(tightCtx, nil, nil, nil); err == nil {
+	if _, err := c.callModel(tightCtx, nil, nil, nil); err == nil {
 		t.Fatal("expected a context-deadline error under a tight deadline, got nil")
 	}
 
 	// Generous deadline (> server delay): the same slow endpoint succeeds.
 	okCtx, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel2()
-	resp, err := c.callChatWithTools(okCtx, nil, nil, nil)
+	resp, err := c.callModel(okCtx, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("expected success within a generous deadline, got %v", err)
 	}
-	if len(resp.Choices) == 0 || resp.Choices[0].Message.Content == nil {
+	if !resp.HasMessage || resp.Message.Content == nil {
 		t.Fatal("expected a final content message")
 	}
 }

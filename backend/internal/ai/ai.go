@@ -1,5 +1,5 @@
-// Package ai provides a chat-completion client and the agentic tool-calling
-// analysis loop. Service composes the universal Module and Client to analyze a
+// Package ai provides model transports and the agentic tool-calling analysis
+// loop. Service composes the universal Module and Client to analyze a
 // single test failure.
 package ai
 
@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -24,12 +23,11 @@ var callDelay = 500 * time.Millisecond
 
 // Client calls an OpenAI chat-completions compatible API for AI analysis.
 type Client struct {
-	httpClient   *http.Client
-	apiURL       string
-	token        string
-	model        string
-	extraHeaders map[string]string
-	cache        *Cache
+	api       *httpAPIClient
+	transport modelTransport
+	apiURL    string
+	model     string
+	cache     *Cache
 }
 
 // Options configures a Client. Endpoint and Model are required; the engine
@@ -50,25 +48,13 @@ type Options struct {
 // NewClientWithOptions creates a Client from explicit options. Endpoint and
 // Model are used verbatim; callers are responsible for setting them.
 func NewClientWithOptions(opts Options) *Client {
-	// Preserve TLS and dial defaults. Only enlarge the idle pool so concurrent
-	// analyses reuse connections to one endpoint instead of churning them.
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.MaxIdleConns = 32
-	transport.MaxIdleConnsPerHost = 16
+	api := newHTTPAPIClient(opts.Endpoint, opts.Token, opts.ExtraHeaders)
 	return &Client{
-		// No client-level Timeout: per-request deadlines come from the
-		// caller's context. The agentic loop runs every chat call under the
-		// per-failure budget from ai.agentic.timeout. The /v1/models probe sets
-		// its own short sub-context. A fixed timeout here would override those
-		// budgets and prematurely kill slow reasoning or self-hosted responses.
-		httpClient: &http.Client{
-			Transport: transport,
-		},
-		apiURL:       opts.Endpoint,
-		token:        opts.Token,
-		model:        opts.Model,
-		extraHeaders: opts.ExtraHeaders,
-		cache:        NewCache(opts.CacheDir),
+		api:       api,
+		transport: newChatCompletionsTransport(api),
+		apiURL:    opts.Endpoint,
+		model:     opts.Model,
+		cache:     NewCache(opts.CacheDir),
 	}
 }
 
@@ -94,18 +80,18 @@ func (c *Client) Cache() *Cache {
 // returns the assistant's text. It is the one-shot generation entry point for
 // callers such as prompt drafting. The request is bounded only by ctx.
 func (c *Client) Complete(ctx context.Context, system, user string) (string, error) {
-	messages := []agChatMessage{
+	messages := []modelMessage{
 		{Role: "system", Content: strPtr(system)},
 		{Role: "user", Content: strPtr(user)},
 	}
-	resp, err := c.callChatWithTools(ctx, messages, nil, nil)
+	resp, err := c.callModel(ctx, messages, nil, nil)
 	if err != nil {
 		return "", err
 	}
-	if len(resp.Choices) == 0 || resp.Choices[0].Message.Content == nil {
+	if !resp.HasMessage || resp.Message.Content == nil {
 		return "", fmt.Errorf("empty completion response")
 	}
-	return *resp.Choices[0].Message.Content, nil
+	return *resp.Message.Content, nil
 }
 
 // modelsResponse is the subset of the OpenAI-compatible /v1/models payload we
@@ -158,8 +144,8 @@ func (c *Client) DetectContextWindowTokens(ctx context.Context) (int, bool) {
 	if err != nil {
 		return 0, false
 	}
-	c.setRequestHeaders(req)
-	resp, err := c.httpClient.Do(req)
+	c.api.setRequestHeaders(req)
+	resp, err := c.api.httpClient.Do(req)
 	if err != nil {
 		return 0, false
 	}
@@ -271,32 +257,6 @@ func firstSentence(s string) string {
 		return s[:200] + "..."
 	}
 	return s
-}
-
-// setRequestHeaders applies the standard headers and then merges any
-// user-supplied ExtraHeaders. Extras win on conflict so projects can
-// override the default Authorization scheme.
-func (c *Client) setRequestHeaders(req *http.Request) {
-	req.Header.Set("Content-Type", "application/json")
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
-	}
-	if isCopilotEndpoint(c.apiURL) {
-		req.Header.Set("Copilot-Integration-Id", "copilot-developer-cli")
-	}
-	for k, v := range c.extraHeaders {
-		req.Header.Set(k, v)
-	}
-}
-
-// isCopilotEndpoint reports whether the URL points at GitHub Copilot's models
-// API. The Copilot-Integration-Id header is only meaningful there.
-func isCopilotEndpoint(rawURL string) bool {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return false
-	}
-	return strings.HasSuffix(u.Hostname(), "githubcopilot.com")
 }
 
 var whitespaceRe = regexp.MustCompile(`\s+`)

@@ -95,7 +95,7 @@ func TestApplySemanticJudgePostLoop_RefinalizesOnObjection(t *testing.T) {
 
 	state := &agentState{readArtifactsFull: map[string]bool{}, readArtifactsBase: map[string]bool{}}
 	orig := analysisResponse{Summary: "shallow", RootCause: "the PR broke it", SuggestedFix: "revert it"}
-	got := client.applySemanticJudgePostLoop(context.Background(), state, []agChatMessage{{Role: "user", Content: strPtr("u")}}, "shallow-final", orig, 0)
+	got := client.applySemanticJudgePostLoop(context.Background(), state, []modelMessage{{Role: "user", Content: strPtr("u")}}, "shallow-final", orig, 0)
 
 	if !strings.Contains(got.RootCause, "route table") {
 		t.Errorf("expected the refinalized draft, got root_cause=%q", got.RootCause)
