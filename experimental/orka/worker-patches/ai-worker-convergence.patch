@@ -1,5 +1,5 @@
 diff --git a/internal/llm/openai/provider.go b/internal/llm/openai/provider.go
-index fbed0c07d10d3fd3173ce895afcaaa5ee91e9eff..758502c75c5d8408178c4a3e4e8f89e197311182 100644
+index fbed0c0..758502c 100644
 --- a/internal/llm/openai/provider.go
 +++ b/internal/llm/openai/provider.go
 @@ -35,9 +35,11 @@ const (
@@ -63,7 +63,7 @@ index fbed0c07d10d3fd3173ce895afcaaa5ee91e9eff..758502c75c5d8408178c4a3e4e8f89e1
  	result.OutputTokens = int(resp.Usage.CompletionTokens)
  	if len(resp.Choices) > 0 {
 diff --git a/internal/llm/openai/provider_test.go b/internal/llm/openai/provider_test.go
-index a15f2e78cc2ee97e169ccca2bf240f95911c5b68..ed62a14f2060116ef5074d11e7bf2c7b1227db28 100644
+index a15f2e7..ed62a14 100644
 --- a/internal/llm/openai/provider_test.go
 +++ b/internal/llm/openai/provider_test.go
 @@ -502,6 +502,9 @@ func TestComplete_ChatCompletions_Success(t *testing.T) {
@@ -144,7 +144,7 @@ index a15f2e78cc2ee97e169ccca2bf240f95911c5b68..ed62a14f2060116ef5074d11e7bf2c7b
  
  func TestComplete_AutoDetect_ResponsesSuccess(t *testing.T) {
 diff --git a/internal/llm/provider.go b/internal/llm/provider.go
-index f6afb7b40519bffb90331cff4d327d6792cf08ca..d5ea5359e38eb430d2b0ac49c2fa3b8ee76338ff 100644
+index f6afb7b..d5ea535 100644
 --- a/internal/llm/provider.go
 +++ b/internal/llm/provider.go
 @@ -61,6 +61,7 @@ type CompletionResponse struct {
@@ -156,7 +156,7 @@ index f6afb7b40519bffb90331cff4d327d6792cf08ca..d5ea5359e38eb430d2b0ac49c2fa3b8e
  
  // Message represents a chat message
 diff --git a/internal/llm/tracing.go b/internal/llm/tracing.go
-index 76c174529d4d52281f103535990b5bd115b7ef0c..9011f8d410baab1d9ff1227ffc2a30b2dfb8dc50 100644
+index 76c1745..9011f8d 100644
 --- a/internal/llm/tracing.go
 +++ b/internal/llm/tracing.go
 @@ -431,6 +431,9 @@ func setResponseAttributes(span trace.Span, resp *CompletionResponse, providerNa
@@ -171,10 +171,10 @@ index 76c174529d4d52281f103535990b5bd115b7ef0c..9011f8d410baab1d9ff1227ffc2a30b2
  	}
 diff --git a/workers/ai/analysis_budget.go b/workers/ai/analysis_budget.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..ed92cdd4c3c24a9ece2581392a56be56ac914f2d
+index 0000000..59d0e41
 --- /dev/null
 +++ b/workers/ai/analysis_budget.go
-@@ -0,0 +1,81 @@
+@@ -0,0 +1,84 @@
 +package main
 +
 +import (
@@ -209,6 +209,9 @@ index 0000000000000000000000000000000000000000..ed92cdd4c3c24a9ece2581392a56be56
 +}
 +
 +func (g *analysisLoopGuard) beginToolCall(name string) error {
++	if g.validationRequired {
++		g.validationFinalRetries = 0
++	}
 +	if !g.validationRequired || g.isFinalizationTool(name) {
 +		return nil
 +	}
@@ -258,10 +261,10 @@ index 0000000000000000000000000000000000000000..ed92cdd4c3c24a9ece2581392a56be56
 +}
 diff --git a/workers/ai/analysis_budget_test.go b/workers/ai/analysis_budget_test.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..4f6e1f4926ee821d47e960a2d97b3902e2a555fc
+index 0000000..3ade478
 --- /dev/null
 +++ b/workers/ai/analysis_budget_test.go
-@@ -0,0 +1,151 @@
+@@ -0,0 +1,172 @@
 +package main
 +
 +import (
@@ -296,6 +299,27 @@ index 0000000000000000000000000000000000000000..4f6e1f4926ee821d47e960a2d97b3902
 +	got = guard.selectToolCalls(calls[:2])
 +	if len(got) != 1 || got[0].Name != testSubmissionToolName {
 +		t.Fatalf("selected calls = %+v", got)
++	}
++}
++
++func TestAnalysisLoopGuardToolCallResetsValidationFinalRetries(t *testing.T) {
++	guard := newAnalysisLoopGuard([]llm.Tool{
++		{Name: "read_artifact"},
++		{Name: testSubmissionToolName},
++	}, nil)
++	guard.validationFinalRetries = maxValidationFinalRetries
++	if err := guard.beginToolCall("read_artifact"); err != nil {
++		t.Fatal(err)
++	}
++	if guard.validationFinalRetries != 0 {
++		t.Fatalf("validation final retries = %d, want 0", guard.validationFinalRetries)
++	}
++	guard.validationFinalRetries = maxValidationFinalRetries
++	if err := guard.beginToolCall(testSubmissionToolName); err != nil {
++		t.Fatal(err)
++	}
++	if guard.validationFinalRetries != 0 {
++		t.Fatalf("validation final retries after submission = %d, want 0", guard.validationFinalRetries)
 +	}
 +}
 +
@@ -415,7 +439,7 @@ index 0000000000000000000000000000000000000000..4f6e1f4926ee821d47e960a2d97b3902
 +}
 diff --git a/workers/ai/analysis_context.go b/workers/ai/analysis_context.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..488e8b294eb8b4a4777820ca5557ea69843188ad
+index 0000000..488e8b2
 --- /dev/null
 +++ b/workers/ai/analysis_context.go
 @@ -0,0 +1,279 @@
@@ -700,7 +724,7 @@ index 0000000000000000000000000000000000000000..488e8b294eb8b4a4777820ca5557ea69
 +}
 diff --git a/workers/ai/analysis_context_test.go b/workers/ai/analysis_context_test.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..f30b789fa34fcfb1e94f48df90f8872f6a971be4
+index 0000000..f30b789
 --- /dev/null
 +++ b/workers/ai/analysis_context_test.go
 @@ -0,0 +1,215 @@
@@ -920,7 +944,7 @@ index 0000000000000000000000000000000000000000..f30b789fa34fcfb1e94f48df90f8872f
 +	}
 +}
 diff --git a/workers/ai/approval_gate.go b/workers/ai/approval_gate.go
-index 86ea24936f647cfbc308c49aae5942bd9a6bfbdf..f6cd24fde0257ca57b30a93206cee30ea70294a2 100644
+index 86ea249..f6cd24f 100644
 --- a/workers/ai/approval_gate.go
 +++ b/workers/ai/approval_gate.go
 @@ -184,10 +184,11 @@ func (g *approvalGate) preScan(
@@ -1065,7 +1089,7 @@ index 86ea24936f647cfbc308c49aae5942bd9a6bfbdf..f6cd24fde0257ca57b30a93206cee30e
  		common.RecordEventWithTimeout(eventRecorder, events.ExecutionEventTypeToolCallFailed, modelLoopEventTimeout,
  			common.WithEventSeverity(events.ExecutionEventSeverityError),
 diff --git a/workers/ai/main.go b/workers/ai/main.go
-index 47bc4ca140cb38416f28fd19bd17961e7bcf78e3..54d6eb4bf15996d7897e51668518197162723fa7 100644
+index 47bc4ca..54d6eb4 100644
 --- a/workers/ai/main.go
 +++ b/workers/ai/main.go
 @@ -385,6 +385,7 @@ func loadCustomTools(
@@ -1373,7 +1397,7 @@ index 47bc4ca140cb38416f28fd19bd17961e7bcf78e3..54d6eb4bf15996d7897e516685181971
  	if len(coordinationEnv.ApprovalRequiredTools) > 0 {
  		return true
 diff --git a/workers/ai/main_test.go b/workers/ai/main_test.go
-index b04deee177ba1d693839d4309d70a0dd24662ef8..1e6ecd15ac7fc27edf00415715f2edf3b316527a 100644
+index b04deee..1e6ecd1 100644
 --- a/workers/ai/main_test.go
 +++ b/workers/ai/main_test.go
 @@ -620,6 +620,8 @@ func TestAIWorkerEventCompletenessSmoke(t *testing.T) {
@@ -1440,7 +1464,7 @@ index b04deee177ba1d693839d4309d70a0dd24662ef8..1e6ecd15ac7fc27edf00415715f2edf3
 +}
 diff --git a/workers/ai/tool_alias.go b/workers/ai/tool_alias.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..1873ea9b146dfdffecc051eb29e4c1a9a8f20bea
+index 0000000..1873ea9
 --- /dev/null
 +++ b/workers/ai/tool_alias.go
 @@ -0,0 +1,76 @@
@@ -1522,7 +1546,7 @@ index 0000000000000000000000000000000000000000..1873ea9b146dfdffecc051eb29e4c1a9
 +}
 diff --git a/workers/ai/tool_alias_test.go b/workers/ai/tool_alias_test.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..e7e4759327f5fb0413ed1689996b784bfe7b1193
+index 0000000..e7e4759
 --- /dev/null
 +++ b/workers/ai/tool_alias_test.go
 @@ -0,0 +1,266 @@
@@ -1794,7 +1818,7 @@ index 0000000000000000000000000000000000000000..e7e4759327f5fb0413ed1689996b784b
 +}
 diff --git a/workers/ai/tool_execution.go b/workers/ai/tool_execution.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..0b44bddb2c54795a5a06a92a7de8f7a15f818bc4
+index 0000000..0b44bdd
 --- /dev/null
 +++ b/workers/ai/tool_execution.go
 @@ -0,0 +1,120 @@
@@ -1920,10 +1944,10 @@ index 0000000000000000000000000000000000000000..0b44bddb2c54795a5a06a92a7de8f7a1
 +}
 diff --git a/workers/ai/validated_analysis.go b/workers/ai/validated_analysis.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..5adfecd4a63a0468125e28e992fa32a39005b837
+index 0000000..52442dc
 --- /dev/null
 +++ b/workers/ai/validated_analysis.go
-@@ -0,0 +1,500 @@
+@@ -0,0 +1,513 @@
 +package main
 +
 +import (
@@ -2073,10 +2097,12 @@ index 0000000000000000000000000000000000000000..5adfecd4a63a0468125e28e992fa32a3
 +	defaultTimelineToolName       = "verify_timeline"
 +	validationRequiredPrompt      = "The final answer cannot be accepted until validate_analysis succeeds. " +
 +		"Call validate_analysis now with the complete final analysis and every supporting evidence token. " +
++		`Always include "relevant_files" as an array; use [] when no source files apply. ` +
 +		"Do not return prose or final JSON before validation succeeds."
 +	validationFocusPrompt = "You have reached the investigation budget. Stop reading artifacts. " +
 +		"If is_transient is true, call verify_timeline first unless it already succeeded. " +
-+		"Then call validate_analysis exactly once with the complete final analysis and all supporting evidence tokens."
++		`Then call validate_analysis exactly once. Always include "relevant_files" as an array; ` +
++		"use [] when no source files apply, and include all supporting evidence tokens."
 +	toolsFreeFinalPrompt = "You have reached your tool-use budget. Do NOT call any more tools. " +
 +		"Using the information already gathered, provide the final answer in the format requested by the Task."
 +	emptyFinalPrompt = "Your last response was empty. Do NOT call any tools. " +
@@ -2293,8 +2319,7 @@ index 0000000000000000000000000000000000000000..5adfecd4a63a0468125e28e992fa32a3
 +	}
 +	failure := normalizedValidationFailure(inspection.execErr)
 +	g.validationFailures[failure]++
-+	inspection.repair = toolName + " failed: " + failure +
-+		". Correct the exact missing or invalid field and retry with changed arguments. Do not repeat the same call."
++	inspection.repair = validationRepairPrompt(toolName, failure)
 +	if g.validationFailures[failure] >= maxValidationFailures {
 +		inspection.fatal = fmt.Errorf(
 +			"validate_analysis repeated the same failure %d times: %s",
@@ -2303,6 +2328,18 @@ index 0000000000000000000000000000000000000000..5adfecd4a63a0468125e28e992fa32a3
 +		)
 +	}
 +	return inspection
++}
++
++func validationRepairPrompt(toolName, failure string) string {
++	prompt := toolName + " failed: " + failure +
++		". Correct the exact missing or invalid field and retry with changed arguments. Do not repeat the same call."
++	lower := strings.ToLower(failure)
++	if strings.Contains(lower, "relevant_files") && strings.Contains(lower, "required") {
++		prompt += ` Your next call MUST include "relevant_files" as an array. ` +
++			`Preserve every applicable source path you already identified; use "relevant_files": [] only when no source files apply. ` +
++			"Never omit the field and never use null."
++	}
++	return prompt
 +}
 +
 +func (g *analysisLoopGuard) finishValidatedResult(final, repair string) (string, string) {
@@ -2426,10 +2463,10 @@ index 0000000000000000000000000000000000000000..5adfecd4a63a0468125e28e992fa32a3
 +}
 diff --git a/workers/ai/validated_analysis_test.go b/workers/ai/validated_analysis_test.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..ffd21ae9bbc268ff6c54caaf5fec35361ee0db11
+index 0000000..8ba710e
 --- /dev/null
 +++ b/workers/ai/validated_analysis_test.go
-@@ -0,0 +1,280 @@
+@@ -0,0 +1,440 @@
 +package main
 +
 +import (
@@ -2525,6 +2562,162 @@ index 0000000000000000000000000000000000000000..ffd21ae9bbc268ff6c54caaf5fec3536
 +	}
 +}
 +
++func TestValidationPromptsRequireRelevantFilesArray(t *testing.T) {
++	for name, prompt := range map[string]string{
++		"required": validationRequiredPrompt,
++		"focus":    validationFocusPrompt,
++	} {
++		t.Run(name, func(t *testing.T) {
++			if !strings.Contains(prompt, `"relevant_files"`) || !strings.Contains(prompt, "use []") {
++				t.Fatalf("prompt = %q", prompt)
++			}
++		})
++	}
++}
++
++func TestValidationRepairPromptRequiresRelevantFilesArray(t *testing.T) {
++	prompt := validationRepairPrompt(
++		testSubmissionToolName,
++		"tool returned HTTP 400: relevant_files array is required",
++	)
++	for _, want := range []string{`"relevant_files" as an array`, "Preserve every applicable source path", `"relevant_files": [] only when no source files apply`, "Never omit the field", "never use null"} {
++		if !strings.Contains(prompt, want) {
++			t.Fatalf("repair prompt = %q, missing %q", prompt, want)
++		}
++	}
++}
++
++func TestValidationRepairPromptKeepsGenericFailuresFocused(t *testing.T) {
++	prompt := validationRepairPrompt(testSubmissionToolName, "analysis.root_cause is required")
++	if !strings.Contains(prompt, "root_cause") || strings.Contains(prompt, "relevant_files") {
++		t.Fatalf("repair prompt = %q", prompt)
++	}
++}
++
++func TestExecuteAgentLoopSendsRelevantFilesRepairToModel(t *testing.T) {
++	calls := 0
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
++		calls++
++		w.Header().Set("Content-Type", "application/json")
++		if calls == 1 {
++			http.Error(w, "relevant_files array is required", http.StatusBadRequest)
++			return
++		}
++		_, _ = fmt.Fprint(w, `{"gcs_bytes":123,"validation_token":"signed"}`)
++	}))
++	defer server.Close()
++
++	provider := &repairRecordingProvider{responses: []*llm.CompletionResponse{
++		{
++			ToolCalls: []llm.ToolCall{{
++				ID: "submit-1", Name: testSubmissionToolName, Arguments: json.RawMessage(`{
++					"summary":"summary","is_transient":false,"root_cause":"cause",
++					"severity":"High","suggested_fix":"fix","evidence_tokens":[]
++				}`),
++			}},
++			StopReason: "tool_calls",
++		},
++		{
++			ToolCalls: []llm.ToolCall{{
++				ID: "submit-2", Name: testSubmissionToolName, Arguments: json.RawMessage(`{
++					"summary":"summary","is_transient":false,"root_cause":"cause",
++					"severity":"High","suggested_fix":"fix","relevant_files":[],"evidence_tokens":[]
++				}`),
++			}},
++			StopReason: "tool_calls",
++		},
++	}}
++	result, err := executeAgentLoop(
++		context.Background(), provider, []llm.Message{{Role: "user", Content: "analyze"}}, "", "model",
++		[]llm.Tool{{Name: testSubmissionToolName}}, validationCustomToolsNamed(testSubmissionToolName, server.URL), worker.NewToolExecutor(),
++	)
++	if err != nil {
++		t.Fatalf("executeAgentLoop() error = %v", err)
++	}
++	if !strings.Contains(result, `"validation_token":"signed"`) {
++		t.Fatalf("result = %s", result)
++	}
++	if len(provider.requests) != 2 {
++		t.Fatalf("provider requests = %d, want 2", len(provider.requests))
++	}
++	var repair string
++	for _, message := range provider.requests[1].Messages {
++		if strings.Contains(message.Content, `"relevant_files" as an array`) {
++			repair = message.Content
++			break
++		}
++	}
++	if repair == "" || !strings.Contains(repair, "Preserve every applicable source path") ||
++		!strings.Contains(repair, `"relevant_files": [] only when no source files apply`) {
++		t.Fatalf("second request did not preserve targeted repair: %+v", provider.requests[1].Messages)
++	}
++}
++
++type repairRecordingProvider struct {
++	responses []*llm.CompletionResponse
++	requests  []*llm.CompletionRequest
++}
++
++func (p *repairRecordingProvider) Complete(_ context.Context, req *llm.CompletionRequest) (*llm.CompletionResponse, error) {
++	copyReq := *req
++	copyReq.Messages = append([]llm.Message(nil), req.Messages...)
++	p.requests = append(p.requests, &copyReq)
++	if len(p.responses) == 0 {
++		return &llm.CompletionResponse{Content: "unexpected"}, nil
++	}
++	response := p.responses[0]
++	p.responses = p.responses[1:]
++	return response, nil
++}
++
++func (*repairRecordingProvider) Stream(context.Context, *llm.CompletionRequest) (<-chan llm.StreamChunk, error) {
++	return nil, fmt.Errorf("not implemented")
++}
++
++func (*repairRecordingProvider) Name() string { return "repair-recording" }
++
++func TestExecuteAgentLoopAllowsToolCallsAfterPrematureFinals(t *testing.T) {
++	calls := 0
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
++		calls++
++		w.Header().Set("Content-Type", "application/json")
++		if calls < 3 {
++			http.Error(w, "analysis.root_cause is required", http.StatusBadRequest)
++			return
++		}
++		_, _ = fmt.Fprint(w, `{"gcs_bytes":123,"validation_token":"signed"}`)
++	}))
++	defer server.Close()
++
++	validationCall := func(id string) *llm.CompletionResponse {
++		return &llm.CompletionResponse{
++			ToolCalls:  []llm.ToolCall{{ID: id, Name: testValidationToolName, Arguments: validAnalysisArguments()}},
++			StopReason: "tool_calls",
++		}
++	}
++	provider := &sequenceProvider{responses: []*llm.CompletionResponse{
++		{Content: `{"summary":"premature-1"}`, StopReason: "end_turn"},
++		validationCall("validate-1"),
++		{Content: `{"summary":"premature-2"}`, StopReason: "end_turn"},
++		validationCall("validate-2"),
++		{Content: `{"summary":"premature-3"}`, StopReason: "end_turn"},
++		validationCall("validate-3"),
++	}}
++	result, err := executeAgentLoop(
++		context.Background(), provider, []llm.Message{{Role: "user", Content: "analyze"}}, "", "model",
++		[]llm.Tool{{Name: testValidationToolName}}, validationCustomTools(server.URL), worker.NewToolExecutor(),
++	)
++	if err != nil {
++		t.Fatalf("executeAgentLoop() error = %v", err)
++	}
++	if !strings.Contains(result, `"validation_token":"signed"`) {
++		t.Fatalf("result = %s", result)
++	}
++	if provider.callCount != 6 {
++		t.Fatalf("provider calls = %d, want 6", provider.callCount)
++	}
++}
++
 +func TestExecuteAgentLoopStopsRepeatedValidationFailure(t *testing.T) {
 +	server := validationToolServer(t, http.StatusBadRequest, "analysis.root_cause is required")
 +	defer server.Close()
@@ -2565,9 +2758,13 @@ index 0000000000000000000000000000000000000000..ffd21ae9bbc268ff6c54caaf5fec3536
 +}
 +
 +func validationCustomTools(url string) map[string]*corev1alpha1.Tool {
++	return validationCustomToolsNamed(testValidationToolName, url)
++}
++
++func validationCustomToolsNamed(name, url string) map[string]*corev1alpha1.Tool {
 +	return map[string]*corev1alpha1.Tool{
-+		testValidationToolName: {
-+			ObjectMeta: metav1.ObjectMeta{Name: testValidationToolName},
++		name: {
++			ObjectMeta: metav1.ObjectMeta{Name: name},
 +			Spec: corev1alpha1.ToolSpec{
 +				Description: "validate analysis",
 +				HTTP:        &corev1alpha1.HTTPExecution{URL: url, Method: http.MethodPost},

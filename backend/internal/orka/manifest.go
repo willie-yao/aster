@@ -13,24 +13,25 @@ import (
 // AnalysisManifestFile is the private producer-to-ingestor identity contract.
 const AnalysisManifestFile = "orka_analysis.json"
 
-const analysisManifestVersion = 5
+const analysisManifestVersion = 6
 
 // AnalysisManifest records the exact Task identity contract for one fetch pass.
 type AnalysisManifest struct {
-	SchemaVersion int                      `json:"schema_version"`
-	ProjectScope  string                   `json:"project_scope"`
-	ProjectLabel  string                   `json:"project_label"`
-	ContractHash  string                   `json:"contract_hash"`
-	Provider      string                   `json:"provider"`
-	Model         string                   `json:"model"`
-	APIMode       string                   `json:"api_mode"`
-	Version       string                   `json:"version"`
-	MinToolCalls  int                      `json:"min_tool_calls"`
-	MinGCSBytes   int                      `json:"min_gcs_bytes"`
-	SkillSetHash  string                   `json:"skill_set_hash,omitempty"`
-	ValidationKey string                   `json:"validation_key"`
-	Jobs          map[string]bool          `json:"jobs"`
-	Builds        map[string]AnalysisBuild `json:"builds"`
+	SchemaVersion       int                      `json:"schema_version"`
+	ProjectScope        string                   `json:"project_scope"`
+	ProjectLabel        string                   `json:"project_label"`
+	ContractHash        string                   `json:"contract_hash"`
+	Provider            string                   `json:"provider"`
+	Model               string                   `json:"model"`
+	APIMode             string                   `json:"api_mode"`
+	Version             string                   `json:"version"`
+	MinToolCalls        int                      `json:"min_tool_calls"`
+	MinGCSBytes         int                      `json:"min_gcs_bytes"`
+	SkillSetHash        string                   `json:"skill_set_hash,omitempty"`
+	ValidationKey       string                   `json:"validation_key"`
+	ConsecutiveFailures map[string]int           `json:"consecutive_failures"`
+	Jobs                map[string]bool          `json:"jobs"`
+	Builds              map[string]AnalysisBuild `json:"builds"`
 }
 
 // AnalysisBuild holds the content-addressed Tool scope for one job build.
@@ -51,17 +52,18 @@ type AnalysisTaskRef struct {
 // NewAnalysisManifest constructs an empty manifest for one producer pass.
 func NewAnalysisManifest(projectScope, projectLabel, contractHash, provider, model, apiMode, version string, minToolCalls int) *AnalysisManifest {
 	return &AnalysisManifest{
-		SchemaVersion: analysisManifestVersion,
-		ProjectScope:  projectScope,
-		ProjectLabel:  projectLabel,
-		ContractHash:  contractHash,
-		Provider:      provider,
-		Model:         model,
-		APIMode:       apiMode,
-		Version:       version,
-		MinToolCalls:  minToolCalls,
-		Jobs:          map[string]bool{},
-		Builds:        map[string]AnalysisBuild{},
+		SchemaVersion:       analysisManifestVersion,
+		ProjectScope:        projectScope,
+		ProjectLabel:        projectLabel,
+		ContractHash:        contractHash,
+		Provider:            provider,
+		Model:               model,
+		APIMode:             apiMode,
+		Version:             version,
+		MinToolCalls:        minToolCalls,
+		ConsecutiveFailures: map[string]int{},
+		Jobs:                map[string]bool{},
+		Builds:              map[string]AnalysisBuild{},
 	}
 }
 
@@ -77,13 +79,28 @@ func (m *AnalysisManifest) SetBuild(jobID, buildID, buildScope, toolScope, prefi
 	}
 }
 
+// SetConsecutiveFailures records the recurrence signal used in the Task prompt.
+func (m *AnalysisManifest) SetConsecutiveFailures(jobID, testName string, count int) {
+	if count <= 0 {
+		return
+	}
+	if m.ConsecutiveFailures == nil {
+		m.ConsecutiveFailures = map[string]int{}
+	}
+	if count > persistentFailurePromptFloor {
+		count = persistentFailurePromptFloor
+	}
+	m.ConsecutiveFailures[jobID+"::"+testName] = count
+}
+
 // TaskRef re-derives the exact Task name emitted by the producer.
 func (m *AnalysisManifest) TaskRef(jobID string, run models.BuildResult, testIndex int, tc models.TestCase) (AnalysisTaskRef, error) {
 	build, ok := m.Builds[BuildKey(jobID, run.BuildID)]
 	if !ok {
 		return AnalysisTaskRef{}, fmt.Errorf("build identity not found for %s/%s", jobID, run.BuildID)
 	}
-	prompt := FailurePrompt(m.ProjectLabel, jobID, build.Prefix, tc)
+	consecutiveFailures := m.ConsecutiveFailures[jobID+"::"+tc.Name]
+	prompt := FailurePrompt(m.ProjectLabel, jobID, build.Prefix, tc, consecutiveFailures)
 	identityPrompt := prompt
 	if build.PromptSeedHash != "" {
 		identityPrompt += "\nartifact-tree-seed:" + build.PromptSeedHash
@@ -131,8 +148,13 @@ func (m *AnalysisManifest) Validate() error {
 	if _, err := NormalizeAPIMode(m.APIMode); err != nil {
 		return err
 	}
-	if m.Jobs == nil || m.Builds == nil {
-		return fmt.Errorf("orka analysis manifest has no jobs or builds map")
+	if m.ConsecutiveFailures == nil || m.Jobs == nil || m.Builds == nil {
+		return fmt.Errorf("orka analysis manifest has incomplete identity maps")
+	}
+	for key, count := range m.ConsecutiveFailures {
+		if count < 0 {
+			return fmt.Errorf("orka analysis manifest consecutive failure count for %s must be non-negative", key)
+		}
 	}
 	if m.MinToolCalls < 0 {
 		return fmt.Errorf("orka analysis manifest min_tool_calls must be non-negative")

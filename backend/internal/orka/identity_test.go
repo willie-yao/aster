@@ -93,11 +93,18 @@ func TestToolScopeTracksContract(t *testing.T) {
 func TestFailurePromptIncludesShardAndLocation(t *testing.T) {
 	prompt := FailurePrompt("project", "job", "logs/job/1/", models.TestCase{
 		Name: "test", FailureLocation: "test/e2e/foo.go:42", JUnitFile: "junit-03.xml", FailureMessage: "boom",
-	})
+	}, 0)
 	for _, want := range []string{"Job: job", "Build: logs/job/1/", "JUnit file: junit-03.xml", "test/e2e/foo.go:42", "boom"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("prompt missing %q: %s", want, prompt)
 		}
+	}
+}
+
+func TestFailurePromptIncludesConsecutiveFailures(t *testing.T) {
+	prompt := FailurePrompt("project", "job", "logs/job/1/", models.TestCase{Name: "test"}, 7)
+	if !strings.Contains(prompt, "Consecutive failures on this test: at least 3 (persistent, not flaky).") {
+		t.Fatalf("prompt missing recurrence evidence: %s", prompt)
 	}
 }
 
@@ -106,7 +113,7 @@ func TestFailurePromptIncludesBoundedFailureEvidence(t *testing.T) {
 	body := strings.Repeat("b", failureBodyPromptBytes+1000) + "endpoint not found in cache"
 	prompt := FailurePrompt("project", "job", "logs/job/1/", models.TestCase{
 		Name: "test", FailureMessage: message, FailureBody: body,
-	})
+	}, 0)
 	for _, want := range []string{
 		"Deterministic pre-triage evidence:",
 		"Failure message:", "message-head-", "-message-tail",

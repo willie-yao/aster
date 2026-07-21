@@ -58,7 +58,7 @@ source rather than this repository's Go module:
 
 ```text
 ghcr.io/willie-yao/prow-ai-dashboard/orka-ai-worker:
-  v3-orka-<full-orka-commit>-dashboard-<full-dashboard-commit>
+  v4-orka-<full-orka-commit>-dashboard-<full-dashboard-commit>
 ```
 
 Use the exact tag or digest from the latest [successful main-branch
@@ -80,7 +80,7 @@ workers:
   ai:
     image:
       repository: ghcr.io/willie-yao/prow-ai-dashboard/orka-ai-worker
-      tag: v3-orka-1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254-dashboard-<dashboard-commit>
+      tag: v4-orka-1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254-dashboard-<dashboard-commit>
       pullPolicy: IfNotPresent
 ```
 
@@ -533,7 +533,7 @@ kubectl logs -n dashboards job/orka-run-1 -c ingest | tail
   and timeline gates. Verify the controller event store and Task events API are
   enabled and reachable by the pipeline ServiceAccount.
 - **`model request telemetry did not report an API mode`.** The Orka installation
-  is not using the pinned compatibility v3 worker. Install the exact published
+  is not using the pinned compatibility v4 worker. Install the exact published
   image tag or digest before retrying.
 - **`model requests used ... expected ...`.** The Provider negotiated a different
   API than `orka.apiMode`. Correct the expectation or endpoint. Changing the mode

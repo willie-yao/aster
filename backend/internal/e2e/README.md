@@ -1,17 +1,19 @@
 # AI quality benchmark
 
-`benchmark_test.go` scores the real agentic analysis against real historical CI
+`benchmark_test.go` scores real agentic analysis against labeled historical CI
 failures, to track and guard root-cause quality as the prompts, tools, and fix
-harness change. It is separate from `pipeline_test.go`, which uses a scripted
-model and never calls a real endpoint.
+harness change. `benchmark_orka_test.go` runs the same cases and scorer through
+the live Orka producer, Task, Tool, and ingestor path. Both are separate from
+`pipeline_test.go`, which uses a scripted model and never calls a real endpoint.
 
 ## What it does
 
-For each case in `benchCases` it runs the full agentic analysis (`ai.Service`
-with the filesystem + k8s tools) against a real build's artifact tree, then
-checks the model's root cause against a set of `must` / `nice` signal regexes. A
-missed `must` signal fails the test, so the benchmark doubles as a regression
-gate.
+For each case in `benchCases`, the in-process benchmark runs `ai.Service` with
+the filesystem and k8s tools against a real build's artifact tree. The Orka
+adapter builds a one-failure dashboard skeleton, applies the production
+producer's scoped Tools and Task, waits through the production ingestor, and
+scores the patched result. Both check the model output against the same `must` /
+`nice` signal regexes. A missed `must` signal fails the test.
 
 ## Running it
 
@@ -38,6 +40,74 @@ Options:
   floors so a stronger model can be benchmarked fairly, since the weak-model
   floors distort a strong model that answers concisely. Example for a strong
   hosted model: `BENCH_MIN_TOOL_CALLS=3 BENCH_MIN_GCS_BYTES=0`.
+
+## Running through Orka
+
+The Orka adapter is also opt-in and is never part of normal tests or CI. It
+requires an installed Orka control plane, a ready Provider, the compatibility
+worker, the artifact Tool service, and an Orka API endpoint reachable from the
+test process.
+
+Start a local API port-forward and create a short-lived API token:
+
+```bash
+kubectl -n orka-system port-forward svc/orka 18099:8080
+kubectl -n orka-system create token orka --duration=30m
+```
+
+Then run one case:
+
+```bash
+cd backend
+RUN_ORKA_BENCHMARK=1 \
+BENCH_ORKA_PROVIDER=<provider-name> \
+BENCH_ORKA_MODEL=<model-id> \
+BENCH_ORKA_API=http://127.0.0.1:18099 \
+BENCH_ORKA_TOKEN=<short-lived-token> \
+BENCH_ORKA_CONTEXT=<kube-context> \
+  go test ./internal/e2e \
+    -run 'TestOrkaAIBenchmark/flatcar-worker-dns-providerid$' \
+    -v -timeout 60m
+```
+
+The test builds and invokes the production `orka-producer` and `orka-ingestor`.
+It applies uniquely identified Tasks and Tools to `orka-system` by default. It
+does not delete them. Use a dedicated namespace or remove only the generated
+resources after reviewing their labels.
+
+Additional options:
+
+- `BENCH_PROJECT_DIR` uses a real consumer prompt and project configuration.
+- `BENCH_ORKA_NAMESPACE` selects the Task and Tool namespace.
+- `BENCH_ORKA_API_MODE` selects `auto`, `responses`, or `chat_completions`.
+- `BENCH_ORKA_VERSION` sets the manual analysis-contract version.
+- `BENCH_ORKA_TASK_TIMEOUT` sets the Task execution and producer wait deadline.
+  `BENCH_ORKA_WAIT` sets the ingestion deadline.
+- `BENCH_ORKA_TOKEN_FILE` avoids placing the API token directly in the
+  environment.
+- `BENCH_ORKA_TOOL_MANIFESTS` points at Tool manifests customized for a release.
+- `BENCH_ORKA_TASK_EXECUTION` supplies `Task.spec.execution` placement JSON.
+- `BENCH_ORKA_TOOL_AUTH_SECRET` and `BENCH_ORKA_TOOL_AUTH_KEY` select the
+  artifact Tool bearer Secret.
+
+The generated project routes artifacts to live GCS. Unlike the in-process
+adapter, the in-cluster artifact Tool cannot see the fixture extracted on the
+local test host. After Prow garbage collection, use `BENCH_PROJECT_DIR` with a
+storage backend that the artifact Tool pods can reach, such as a gcsweb mirror
+or a fixture mounted into those pods at the configured local path.
+
+A local kind cluster can use an inference service inside another cluster by
+port-forwarding that service to the host and pointing the kind Provider at the
+Docker host alias. On Docker Desktop, for example:
+
+```bash
+kubectl -n default port-forward svc/kimi-0905-serve-svc 18000:8000
+```
+
+The kind Provider uses `http://host.docker.internal:18000/v1`. This isolates the
+benchmark's Orka Tasks and Tools from a deployed dashboard, but it still shares
+the remote model's inference capacity. Do not overlap it with a production or
+evaluation refetch using the same endpoint.
 
 ## Signal tiers
 
@@ -75,6 +145,21 @@ plus the root-cause signals a correct analysis should contain.
   is the hard/aspirational case: the exact route-table cause is a `STRETCH`
   signal, and the `must` bar is the achievable high-level diagnosis (systemic,
   control-plane/networking, CAPZ).
+
+- **flatcar-worker-dns-providerid**
+  (`flatcar-sysext-dns-providerid.tar.gz`):
+  `periodic-cluster-api-provider-azure-e2e-v1beta1-release-1-24` build
+  `2073261474372915200` from July 4, 2026. The Flatcar worker VM and Node were
+  running, but the Node retained its external-cloud-provider initialization
+  taint and never gained a providerID. cloud-node-manager then crash-looped
+  because it could not reach the API Service ClusterIP. The initiating error is
+  one artifact deeper: worker kube-proxy never synchronized because its API
+  endpoint DNS lookup used `[::1]:53`, which refused the connection. Build
+  `2074370797262082048` passed on July 7, 2026 with the same Kubernetes,
+  Flatcar, and containerd versions. This is the middle case: it requires a short
+  generic Kubernetes artifact chain, but not Azure route-table expertise. The
+  cloud-node-manager/providerID chain is required; the final kube-proxy/DNS hop
+  is tracked as a stretch signal.
 
 - **apiversion-upgrade-clusterctl-aso-ratelimit**
   (`apiversion-upgrade-aso-clusterctl.tar.gz`):

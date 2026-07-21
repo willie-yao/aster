@@ -2,8 +2,10 @@ package e2e
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +19,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/modules/universal"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/filesystem"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/k8s"
@@ -64,22 +67,25 @@ type benchCase struct {
 	// run extracts it and reads through the local storage provider, so the
 	// benchmark survives Prow garbage-collecting the original GCS artifacts. Set
 	// BENCH_USE_GCS=1 to read live GCS instead (only works before GC).
-	fixtureAsset string
-	jobType      string
-	repo         string // org/repo, required for presubmits
-	jobName      string
-	buildID      string
-	pullNumber   string
-	webURL       string
-	sourceRepo   [2]string // owner, name for repo-relative file-link resolution
-	testName     string
-	junitFile    string
-	failureMsg   string
+	fixtureAsset  string
+	fixtureSHA256 string
+	jobType       string
+	repo          string // org/repo, required for presubmits
+	jobName       string
+	buildID       string
+	pullNumber    string
+	webURL        string
+	sourceRepo    [2]string // owner, name for repo-relative file-link resolution
+	testName      string
+	junitFile     string
+	failureMsg    string
 	// consecutiveFailures is how many consecutive builds this test had failed at
 	// the time of the snapshot. The live engine derives this from the flakiness
 	// report; the benchmark feeds it so the analysis (and the critique gate's
 	// transient-vs-persistent check) see the real persistence signal.
 	consecutiveFailures int
+	skillYAML           string
+	oppositeDiagnosis   string
 	signals             []benchSignal
 }
 
@@ -100,19 +106,20 @@ var benchCases = []benchCase{
 		// the agent must read the AzureCluster resource dump to find the empty
 		// control-plane routeTable. The fix lives in a different repo than the
 		// job, so a correct answer also recognizes it is a CAPZ change.
-		name:         "ccm-dualstack-control-plane-routetable",
-		bucket:       "kubernetes-ci-logs",
-		fixtureAsset: "ccm-dualstack-capz-6358.tar.gz",
-		jobType:      models.JobTypePresubmit,
-		repo:         "kubernetes-sigs/cloud-provider-azure",
-		jobName:      "pull-cloud-provider-azure-e2e-ccm-dualstack-capz-1-30",
-		buildID:      "2062345846720040960",
-		pullNumber:   "10388",
-		webURL:       "https://gcsweb.k8s.io/gcs/kubernetes-ci-logs/pr-logs/pull/kubernetes-sigs_cloud-provider-azure/10388/pull-cloud-provider-azure-e2e-ccm-dualstack-capz-1-30/2062345846720040960/",
-		sourceRepo:   [2]string{"kubernetes-sigs", "cloud-provider-azure"},
-		testName:     "[It] Azure node resources should set node provider id correctly [Node]",
-		junitFile:    "junit_01.xml",
-		failureMsg:   `Unexpected error: <wait.errInterrupted>: timed out waiting for the condition { cause: <*errors.errorString>{ s: "timed out waiting for the condition", }, } occurred`,
+		name:          "ccm-dualstack-control-plane-routetable",
+		bucket:        "kubernetes-ci-logs",
+		fixtureAsset:  "ccm-dualstack-capz-6358.tar.gz",
+		fixtureSHA256: "179dcf40be61d6c8f4e1369793ec2b0c8c73eda0a0eb0fa5d832e488418c832f",
+		jobType:       models.JobTypePresubmit,
+		repo:          "kubernetes-sigs/cloud-provider-azure",
+		jobName:       "pull-cloud-provider-azure-e2e-ccm-dualstack-capz-1-30",
+		buildID:       "2062345846720040960",
+		pullNumber:    "10388",
+		webURL:        "https://gcsweb.k8s.io/gcs/kubernetes-ci-logs/pr-logs/pull/kubernetes-sigs_cloud-provider-azure/10388/pull-cloud-provider-azure-e2e-ccm-dualstack-capz-1-30/2062345846720040960/",
+		sourceRepo:    [2]string{"kubernetes-sigs", "cloud-provider-azure"},
+		testName:      "[It] Azure node resources should set node provider id correctly [Node]",
+		junitFile:     "junit_01.xml",
+		failureMsg:    `Unexpected error: <wait.errInterrupted>: timed out waiting for the condition { cause: <*errors.errorString>{ s: "timed out waiting for the condition", }, } occurred`,
 		// This dual-stack job failed ~9 consecutive builds before PR #6358; a
 		// genuine flake would not, so a transient verdict is contradicted.
 		consecutiveFailures: 9,
@@ -128,6 +135,68 @@ var benchCases = []benchCase{
 			{name: "traces the calico/apiservice/namespace cascade", re: mustRE(`(?i)calico|apiservice|namespace|terminating|discovery`)},
 			{name: "STRETCH: pinpoints the control-plane route table", re: mustRE(`(?i)route[\s_-]?table`)},
 			{name: "STRETCH: notes dual-stack / encapsulation none", re: mustRE(`(?i)dual[\s_-]?stack|ipv6|encapsulation`)},
+		},
+	},
+	{
+		// The Flatcar worker VM and Node both came up, but the Node remained
+		// cloud-provider uninitialized and had no providerID. cloud-node-manager
+		// crash-looped because it could not reach the API Service ClusterIP. The
+		// preceding kube-proxy log shows the initiating failure: it never synced
+		// because the API endpoint lookup used [::1]:53, where DNS was refusing
+		// connections. The next run passed with the same Kubernetes, Flatcar, and
+		// containerd versions, so this is a concrete transient bootstrap failure.
+		// Unlike the API-version case, the cause is not in build-log.txt; unlike
+		// the dual-stack case, following it needs only generic Kubernetes control
+		// plane, Service, and external cloud-provider reasoning.
+		name:                "flatcar-worker-dns-providerid",
+		bucket:              "kubernetes-ci-logs",
+		fixtureAsset:        "flatcar-sysext-dns-providerid.tar.gz",
+		fixtureSHA256:       "8ed886395742d145c014be4b6a2dc38b3ddf3db0ad6e7a5740da10eea80a1945",
+		jobType:             models.JobTypePeriodic,
+		jobName:             "periodic-cluster-api-provider-azure-e2e-v1beta1-release-1-24",
+		buildID:             "2073261474372915200",
+		webURL:              "https://gcsweb.k8s.io/gcs/kubernetes-ci-logs/logs/periodic-cluster-api-provider-azure-e2e-v1beta1-release-1-24/2073261474372915200/",
+		sourceRepo:          [2]string{"kubernetes-sigs", "cluster-api-provider-azure"},
+		testName:            "[It] Workload cluster creation Creating a Flatcar sysext cluster [OPTIONAL] With Flatcar control-plane and worker nodes",
+		junitFile:           "junit.e2e_suite.1.xml",
+		failureMsg:          `Timed out after 1500.000s. Timed out waiting for 1 nodes to be created for MachineDeployment capz-e2e-asfxe1/capz-e2e-asfxe1-flatcar-sysext-md-0. Expected 0 to equal 1`,
+		consecutiveFailures: 1,
+		skillYAML: `
+id: flatcar-node-providerid
+name: Flatcar node cloud-provider initialization
+priority: 200
+triggers:
+  - '(?i)\bflatcar\b'
+  - '(?i)(worker|machine|node).*(not ready|never became ready|registration|provider.?id|uninitialized)'
+required_evidence:
+  - id: machine-state
+    description: CAPI Machine or MachineDeployment state
+    any_of:
+      - '(?i)^artifacts/clusters/bootstrap/resources/[^/]+/Machine(?:Deployment)?/.*\.yaml$'
+  - id: node-state
+    description: workload Node state including providerID and taints
+    any_of:
+      - '(?i)^artifacts/clusters/[^/]+/nodes/[^/]+/node-describe\.txt$'
+  - id: cloud-node-manager
+    description: cloud-node-manager state on the affected node
+    any_of:
+      - '(?i)^artifacts/clusters/[^/]+/kube-system/cloud-node-manager-[^/]+/(cloud-node-manager\.log|pod-describe\.txt)$'
+  - id: kube-proxy
+    description: kube-proxy API and Service synchronization on the affected node
+    any_of:
+      - '(?i)^artifacts/clusters/[^/]+/kube-system/kube-proxy-[^/]+/kube-proxy\.log$'
+procedure: |
+  Do not stop at Azure VM provisioning, an early kubelet error, or a generic Flatcar boot hypothesis.
+  Compare the CAPI Machine state with the workload Node describe. If the Node exists or is Ready while the Machine waits for a matching providerID, investigate external cloud-provider initialization.
+  Read cloud-node-manager on the affected Node. If it cannot reach the Kubernetes API Service, read kube-proxy on that same Node and identify why Service or API synchronization failed.
+`,
+		oppositeDiagnosis: "The worker Node did not exist. Its providerID was set. cloud-node-manager reached the API Service.",
+		signals: []benchSignal{
+			{name: "recognizes the worker Node existed or registered", re: mustRE(`(?is)(?:worker\s+)?node(?:\s+object)?\s+(?:exist(?:ed|s)?|registered|became\s+ready|was\s+(?:created|registered|ready))|(?:exist(?:ed|s)?|registered)\s+(?:as\s+)?(?:a\s+)?(?:worker\s+)?node`), must: true},
+			{name: "identifies missing providerID or cloud-provider initialization", re: mustRE(`(?is)(?:missing|empty|unset|absent|lacked?|without|no)\s+(?:the\s+)?provider.?id|provider.?id.{0,40}(?:missing|empty|unset|absent|not\s+(?:set|populated|assigned))|cloud.?provider.{0,80}uninitialized|uninitialized.{0,80}cloud.?provider`), must: true},
+			{name: "identifies cloud-node-manager API reachability as the blocking failure", re: mustRE(`(?is)cloud-node-manager.{0,200}(?:could\s+not|couldn't|cannot|can't|failed|unable|unreachable|refus|timed?\s*out|timeout|crash).{0,120}(?:10\.96\.0\.1|api(?:server)?|cluster.?ip|kubernetes\s+service)|cloud-node-manager.{0,200}(?:10\.96\.0\.1|api(?:server)?|cluster.?ip|kubernetes\s+service).{0,120}(?:could\s+not|couldn't|cannot|can't|failed|unable|unreachable|refus|timed?\s*out|timeout|crash)|(?:10\.96\.0\.1|cluster.?ip).{0,120}(?:refus|timeout|unreachable|failed).{0,120}cloud-node-manager`), must: true},
+			{name: "STRETCH: traces kube-proxy failing to synchronize", re: mustRE(`(?is)kube-proxy.*(?:sync|watch|list|api|dns|lookup|resolve|service)`)},
+			{name: "STRETCH: pinpoints DNS refusal on the loopback resolver", re: mustRE(`(?is)(?:\[?::1\]?|loopback).*(?:53|dns|resolv|refus)|(?:dns|resolv|nameserver).*(?:\[?::1\]?|connection refused)`)},
 		},
 	},
 	{
@@ -148,6 +217,7 @@ var benchCases = []benchCase{
 		name:                "apiversion-upgrade-clusterctl-aso-ratelimit",
 		bucket:              "kubernetes-ci-logs",
 		fixtureAsset:        "apiversion-upgrade-aso-clusterctl.tar.gz",
+		fixtureSHA256:       "74e87df63463559f917e22723e86757b6ea1027fe6b27cab4b07fa5a4647dca2",
 		jobType:             models.JobTypePeriodic,
 		jobName:             "periodic-cluster-api-provider-azure-apiversion-upgrade-main",
 		buildID:             "2074603331648491520",
@@ -167,6 +237,52 @@ var benchCases = []benchCase{
 	},
 }
 
+func TestFlatcarBenchmarkSkillRequiresProviderIDChain(t *testing.T) {
+	var flatcar *benchCase
+	for i := range benchCases {
+		if benchCases[i].name == "flatcar-worker-dns-providerid" {
+			flatcar = &benchCases[i]
+			break
+		}
+	}
+	if flatcar == nil {
+		t.Fatal("Flatcar benchmark case is missing")
+	}
+	set := loadBenchCaseSkills(t, *flatcar)
+	matched := set.Match("Flatcar sysext worker machine never became ready")
+	if len(matched) != 1 || matched[0].ID != "flatcar-node-providerid" {
+		t.Fatalf("matched skills = %+v", matched)
+	}
+	groups := map[string]bool{}
+	for _, group := range matched[0].RequiredEvidence {
+		groups[group.ID] = true
+	}
+	for _, want := range []string{"machine-state", "node-state", "cloud-node-manager", "kube-proxy"} {
+		if !groups[want] {
+			t.Errorf("missing evidence group %q", want)
+		}
+	}
+}
+
+func TestFlatcarBenchmarkSignalsMatchReferenceDiagnosis(t *testing.T) {
+	var flatcar *benchCase
+	for i := range benchCases {
+		if benchCases[i].name == "flatcar-worker-dns-providerid" {
+			flatcar = &benchCases[i]
+			break
+		}
+	}
+	if flatcar == nil {
+		t.Fatal("Flatcar benchmark case is missing")
+	}
+	reference := `The worker Node existed and registered Ready, but it retained the cloud-provider uninitialized taint and had no providerID. cloud-node-manager crash-looped because it could not reach the API Service ClusterIP 10.96.0.1. kube-proxy never synchronized because the API hostname lookup used [::1]:53 and DNS returned connection refused.`
+	for _, signal := range flatcar.signals {
+		if !signal.re.MatchString(reference) {
+			t.Errorf("reference diagnosis missed %q", signal.name)
+		}
+	}
+}
+
 func TestAIBenchmark(t *testing.T) {
 	if os.Getenv("RUN_AI_BENCHMARK") == "" {
 		t.Skip("set RUN_AI_BENCHMARK=1 (plus AI_ENDPOINT/AI_MODEL) to run the AI quality benchmark")
@@ -184,6 +300,7 @@ func TestAIBenchmark(t *testing.T) {
 	// matches that live deploy. Otherwise use the built-in prompt and defaults.
 	systemPrompt := ComposeBenchPrompt()
 	agentic := defaultBenchAgentic()
+	var projectSkills *skills.Set
 	if dir := os.Getenv("BENCH_PROJECT_DIR"); dir != "" {
 		cfg, prompt, err := project.LoadDir(dir)
 		if err != nil {
@@ -191,16 +308,20 @@ func TestAIBenchmark(t *testing.T) {
 		}
 		systemPrompt = ai.ComposeSystemPrompt(prompt)
 		agentic = cfg.AI.EffectiveAgentic()
+		projectSkills, err = skills.Load(dir)
+		if err != nil {
+			t.Fatalf("load BENCH_PROJECT_DIR skills: %v", err)
+		}
 	}
 
 	for _, bc := range benchCases {
 		t.Run(bc.name, func(t *testing.T) {
-			runBenchCase(t, bc, endpoint, model, token, systemPrompt, agentic)
+			runBenchCase(t, bc, endpoint, model, token, systemPrompt, agentic, projectSkills)
 		})
 	}
 }
 
-func runBenchCase(t *testing.T, bc benchCase, endpoint, model, token, systemPrompt string, agentic project.Agentic) {
+func runBenchCase(t *testing.T, bc benchCase, endpoint, model, token, systemPrompt string, agentic project.Agentic, projectSkills *skills.Set) {
 	client := ai.NewClientWithOptions(ai.Options{
 		Token:    token,
 		Endpoint: endpoint,
@@ -228,6 +349,11 @@ func runBenchCase(t *testing.T, bc benchCase, endpoint, model, token, systemProm
 	}
 
 	service := ai.NewService(client, universal.New(), systemPrompt, consecutiveMap)
+	if projectSkills != nil {
+		service.SetSkills(projectSkills)
+	} else if caseSkills := loadBenchCaseSkills(t, bc); caseSkills != nil {
+		service.SetSkills(caseSkills)
+	}
 	service.SetSourceRepo(bc.sourceRepo[0], bc.sourceRepo[1])
 
 	// Size the model/context budgets from the endpoint's window, matching the
@@ -258,29 +384,74 @@ func runBenchCase(t *testing.T, bc benchCase, endpoint, model, token, systemProm
 		PullNumber: bc.pullNumber,
 		WebURL:     bc.webURL,
 	}}
-	tc := &models.TestCase{
-		Name:           bc.testName,
-		Status:         "failed",
-		FailureMessage: bc.failureMsg,
-		JUnitFile:      bc.junitFile,
-	}
+	tc := benchTestCase(bc)
 
 	start := time.Now()
 	service.Analyze(context.Background(), &http.Client{Timeout: 60 * time.Second}, jobID, loc.BuildPath(), run, tc)
 	elapsed := time.Since(start).Round(time.Second)
 
+	scoreBenchCase(t, bc, tc, elapsed, "in-process")
+}
+
+func TestBenchCasesRejectOppositeDiagnoses(t *testing.T) {
+	for _, bc := range benchCases {
+		if bc.oppositeDiagnosis == "" {
+			continue
+		}
+		for _, signal := range bc.signals {
+			if signal.must && signal.re.MatchString(bc.oppositeDiagnosis) {
+				t.Errorf("benchmark %s required signal %q accepts opposite diagnosis %q", bc.name, signal.name, bc.oppositeDiagnosis)
+			}
+		}
+	}
+}
+
+func loadBenchCaseSkills(t *testing.T, bc benchCase) *skills.Set {
+	t.Helper()
+	if strings.TrimSpace(bc.skillYAML) == "" {
+		return nil
+	}
+	dir := t.TempDir()
+	skillsDir := filepath.Join(dir, "skills")
+	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillsDir, bc.name+".yaml"), []byte(strings.TrimSpace(bc.skillYAML)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	set, err := skills.Load(dir)
+	if err != nil {
+		t.Fatalf("load benchmark skills: %v", err)
+	}
+	return set
+}
+
+func benchTestCase(bc benchCase) *models.TestCase {
+	return &models.TestCase{
+		Name:           bc.testName,
+		Status:         "failed",
+		FailureMessage: bc.failureMsg,
+		JUnitFile:      bc.junitFile,
+	}
+}
+
+func scoreBenchCase(t *testing.T, bc benchCase, tc *models.TestCase, elapsed time.Duration, backend string) {
+	t.Helper()
 	if tc.AIAnalysis == nil {
 		summary := "<none>"
 		if tc.AISummary != nil {
 			summary = tc.AISummary.Summary
 		}
-		t.Fatalf("analysis produced no AIAnalysis after %s (summary: %s)", elapsed, summary)
+		t.Fatalf("%s analysis produced no AIAnalysis after %s (summary: %s)", backend, elapsed, summary)
+	}
+	if tc.AISummary == nil {
+		t.Fatalf("%s analysis produced AIAnalysis without AISummary after %s", backend, elapsed)
 	}
 
 	a := tc.AIAnalysis
 	scored := strings.ToLower(strings.Join([]string{tc.AISummary.Summary, a.RootCause, a.SuggestedFix}, "\n"))
 
-	t.Logf("\n===== %s =====", bc.name)
+	t.Logf("\n===== %s (%s) =====", bc.name, backend)
 	t.Logf("elapsed=%s tool_calls=%d gcs_bytes=%d context_bytes=%d critique_passed=%v budget_exhausted=%v",
 		elapsed, a.ToolCalls, a.GCSBytes, a.ContextBytes, a.CritiquePassed, a.BudgetExhausted)
 	t.Logf("severity=%s transient=%v", a.Severity, tc.AISummary.IsTransient)
@@ -331,7 +502,7 @@ func benchStorage(t *testing.T, bc benchCase) (storage.Backend, string) {
 		t.Logf("reading artifacts from live GCS bucket %q", bc.bucket)
 		return backend, bc.bucket
 	}
-	root := ensureFixture(t, bc.fixtureAsset)
+	root := ensureFixture(t, bc.fixtureAsset, bc.fixtureSHA256)
 	backend, err := storage.New(storage.Config{Provider: storage.ProviderLocal, Base: root}, nil)
 	if err != nil {
 		t.Fatalf("local backend: %v", err)
@@ -341,21 +512,26 @@ func benchStorage(t *testing.T, bc benchCase) (storage.Backend, string) {
 }
 
 // ensureFixture downloads and extracts a benchmark-fixtures release asset into a
-// per-asset cache dir, returning the extract root (which contains the
-// bucket-relative pr-logs/... tree). A present, non-empty cache is reused.
-func ensureFixture(t *testing.T, asset string) string {
+// digest-scoped cache dir, returning the extract root. Cached fixtures are
+// reused only when their verified digest marker matches.
+func ensureFixture(t *testing.T, asset, wantSHA256 string) string {
 	t.Helper()
+	if len(wantSHA256) != sha256.Size*2 {
+		t.Fatalf("fixture %s has invalid SHA-256 %q", asset, wantSHA256)
+	}
 	cacheRoot, err := os.UserCacheDir()
 	if err != nil {
 		cacheRoot = os.TempDir()
 	}
-	dir := filepath.Join(cacheRoot, "prow-ai-dashboard-benchmark", strings.TrimSuffix(asset, ".tar.gz"))
-	if entries, err := os.ReadDir(dir); err == nil && len(entries) > 0 {
-		return dir // already extracted
+	cacheName := strings.TrimSuffix(asset, ".tar.gz") + "-" + wantSHA256[:12]
+	dir := filepath.Join(cacheRoot, "prow-ai-dashboard-benchmark", cacheName)
+	marker := filepath.Join(dir, ".sha256")
+	if digest, err := os.ReadFile(marker); err == nil && strings.TrimSpace(string(digest)) == wantSHA256 {
+		if entries, err := os.ReadDir(dir); err == nil && len(entries) > 1 {
+			return dir
+		}
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("fixture cache dir: %v", err)
-	}
+
 	url := fixtureReleaseBase + asset
 	t.Logf("downloading fixture %s", url)
 	resp, err := http.Get(url)
@@ -366,10 +542,45 @@ func ensureFixture(t *testing.T, asset string) string {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("download fixture %s: HTTP %d", url, resp.StatusCode)
 	}
-	if err := extractTarGz(resp.Body, dir); err != nil {
+	archive, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read fixture %s: %v", asset, err)
+	}
+	if err := verifyFixtureDigest(archive, wantSHA256); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatalf("reset fixture cache dir: %v", err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("fixture cache dir: %v", err)
+	}
+	if err := extractTarGz(bytes.NewReader(archive), dir); err != nil {
 		t.Fatalf("extract fixture: %v", err)
 	}
+	if err := os.WriteFile(marker, []byte(wantSHA256+"\n"), 0o644); err != nil {
+		t.Fatalf("write fixture digest marker: %v", err)
+	}
 	return dir
+}
+
+func verifyFixtureDigest(archive []byte, wantSHA256 string) error {
+	got := fmt.Sprintf("%x", sha256.Sum256(archive))
+	if got != wantSHA256 {
+		return fmt.Errorf("fixture SHA-256 = %s, want %s", got, wantSHA256)
+	}
+	return nil
+}
+
+func TestVerifyFixtureDigest(t *testing.T) {
+	archive := []byte("fixture archive")
+	want := fmt.Sprintf("%x", sha256.Sum256(archive))
+	if err := verifyFixtureDigest(archive, want); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyFixtureDigest(archive, strings.Repeat("0", sha256.Size*2)); err == nil {
+		t.Fatal("verifyFixtureDigest accepted a mismatched digest")
+	}
 }
 
 // extractTarGz unpacks a gzip'd tar stream under dest, rejecting entries whose
@@ -479,7 +690,8 @@ func benchEnvDuration(key string, def time.Duration) time.Duration {
 // ComposeBenchPrompt wraps a compact CAPZ/cloud-provider oriented addendum in
 // the engine's standard prompt composition, so a default run still gets the
 // engine BasePrompt + ResponseFormatFooter around it.
+const benchPromptAddendum = `You are debugging Kubernetes CI failures for Cluster API Provider Azure (CAPZ) and cloud-provider-azure e2e jobs. Many failures surface only as a generic "timed out waiting for the condition"; the real cause is usually deeper in the cluster state. Use the k8s discovery tools to read the dumped cluster resources under artifacts/clusters/**/resources (AzureCluster, subnets, route tables, machines) and the controller logs before concluding. When a test times out with no direct error, check whether cluster networking (subnets, route tables, CNI) or a core add-on (Calico, cloud-provider) is the underlying cause. The fix may live in a different repository than the one running the job.`
+
 func ComposeBenchPrompt() string {
-	const addendum = `You are debugging Kubernetes CI failures for Cluster API Provider Azure (CAPZ) and cloud-provider-azure e2e jobs. Many failures surface only as a generic "timed out waiting for the condition"; the real cause is usually deeper in the cluster state. Use the k8s discovery tools to read the dumped cluster resources under artifacts/clusters/**/resources (AzureCluster, subnets, route tables, machines) and the controller logs before concluding. When a test times out with no direct error, check whether cluster networking (subnets, route tables, CNI) or a core add-on (Calico, cloud-provider) is the underlying cause. The fix may live in a different repository than the one running the job.`
-	return ai.ComposeSystemPrompt(addendum)
+	return ai.ComposeSystemPrompt(benchPromptAddendum)
 }

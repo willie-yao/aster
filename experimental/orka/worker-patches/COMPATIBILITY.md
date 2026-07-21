@@ -6,13 +6,13 @@ commit. Moving tags are not published.
 
 ## Current contract
 
-| Field | Compatibility v3 |
+| Field | Compatibility v4 |
 | --- | --- |
 | Orka repository | `https://github.com/orka-agents/orka.git` |
 | Orka commit | `1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254` |
 | Orka Go version | `1.26.2` |
 | Patch | `ai-worker-convergence.patch` |
-| Patch SHA-256 | `1f9e75a8c6faaa6918723e79c757fd681c944bb050663eab39cf2e67fae2c5dc` |
+| Patch SHA-256 | `8ff35bd421b32ea890612889dca99b12a8f95de7047e7866db0db0053914b85e` |
 | Worker Dockerfile | `workers/ai/Dockerfile` from the pinned Orka commit |
 | Published platform | `linux/amd64` |
 | Workflow | `.github/workflows/orka-compat-image.yml` |
@@ -20,18 +20,25 @@ commit. Moving tags are not published.
 `compatibility.env` is the machine-readable source for the pinned values. The
 build fails when its patch checksum, source commit, or tag inputs do not match.
 
-Compatibility v3 also makes the provider API observable and safe for dashboard
-artifacts. Responses requests set `store: false`; completed model events and
-worker logs include the negotiated API mode and response ID. The dashboard
-ingestor can therefore enforce `auto`, `responses`, or `chat_completions` without
-adding fields to Orka's Provider CRD.
+Compatibility v4 retains the provider API observability and Copilot model
+fallback from v3, and adds a targeted validation repair for weak models. When a
+final submission omits the required `relevant_files` array, the worker tells the
+model to preserve applicable source paths and use `"relevant_files": []` only
+when no source files apply. The validation Tool remains strict and still rejects omitted or null fields. A
+subsequent Tool call resets the premature-final retry counter, so exploratory
+continuation after an early tools-free response does not exhaust finalization.
+
+Responses requests set `store: false`; completed model events and worker logs
+include the negotiated API mode and response ID. The dashboard ingestor can
+enforce `auto`, `responses`, or `chat_completions` without adding fields to
+Orka's Provider CRD.
 
 ## Image identity
 
 The workflow publishes this tag shape:
 
 ```text
-v3-orka-<full-orka-commit>-dashboard-<full-dashboard-commit>
+v4-orka-<full-orka-commit>-dashboard-<full-dashboard-commit>
 ```
 
 For this contract the image repository is:
@@ -102,7 +109,7 @@ workers:
   ai:
     image:
       repository: ghcr.io/willie-yao/prow-ai-dashboard/orka-ai-worker
-      tag: v3-orka-1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254-dashboard-<dashboard-commit>
+      tag: v4-orka-1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254-dashboard-<dashboard-commit>
       pullPolicy: IfNotPresent
 ```
 
@@ -139,4 +146,4 @@ Do not move an existing compatibility tag to new content. For an Orka update:
 6. Keep the prior image available for rollback.
 
 If the worker changes merge upstream, create a new contract without the obsolete
-patch rather than silently changing v2.
+patch rather than silently changing the prior contract.

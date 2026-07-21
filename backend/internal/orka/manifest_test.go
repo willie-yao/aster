@@ -1,6 +1,7 @@
 package orka
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
@@ -11,6 +12,7 @@ func TestAnalysisManifestRoundTripAndTaskIdentity(t *testing.T) {
 	manifest.SkillSetHash = "skills-hash"
 	manifest.ValidationKey = "validation-key"
 	manifest.MinGCSBytes = 123
+	manifest.SetConsecutiveFailures("job", "test", 7)
 	manifest.SetBuild("job", "1", "build-scope", "tool-scope", "logs/job/1/", "")
 	run := models.BuildResult{BuildInfo: models.BuildInfo{BuildID: "1"}}
 	tc := models.TestCase{Name: "test", JUnitFile: "junit.xml", FailureMessage: "boom"}
@@ -25,7 +27,7 @@ func TestAnalysisManifestRoundTripAndTaskIdentity(t *testing.T) {
 	if first.Name == second.Name {
 		t.Fatalf("duplicate test indices produced the same Task %q", first.Name)
 	}
-	if first.ToolScope != "tool-scope" || first.Prompt == "" {
+	if first.ToolScope != "tool-scope" || !strings.Contains(first.Prompt, "Consecutive failures on this test: at least 3") {
 		t.Fatalf("task ref = %+v", first)
 	}
 
@@ -41,8 +43,35 @@ func TestAnalysisManifestRoundTripAndTaskIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != first || !loaded.Jobs["job"] || loaded.MinToolCalls != 2 || loaded.MinGCSBytes != 123 || loaded.APIMode != APIModeAuto || loaded.SkillSetHash != "skills-hash" || loaded.ValidationKey != "validation-key" {
+	if got != first || loaded.ConsecutiveFailures["job::test"] != persistentFailurePromptFloor || !loaded.Jobs["job"] || loaded.MinToolCalls != 2 || loaded.MinGCSBytes != 123 || loaded.APIMode != APIModeAuto || loaded.SkillSetHash != "skills-hash" || loaded.ValidationKey != "validation-key" {
 		t.Fatalf("loaded task ref = %+v, jobs = %+v, min_tool_calls = %d", got, loaded.Jobs, loaded.MinToolCalls)
+	}
+}
+
+func TestAnalysisManifestRecurrenceIdentityStabilizesAtPersistenceFloor(t *testing.T) {
+	run := models.BuildResult{BuildInfo: models.BuildInfo{BuildID: "1"}}
+	tc := models.TestCase{Name: "test", FailureMessage: "failure"}
+	manifest := NewAnalysisManifest("project", "Project", "contract", "models", "model", APIModeAuto, "v1", 2)
+	manifest.SetBuild("job", "1", "build-scope", "tool-scope", "logs/job/1/", "")
+	withoutRecurrence, err := manifest.TaskRef("job", run, 0, tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.SetConsecutiveFailures("job", "test", persistentFailurePromptFloor)
+	atFloor, err := manifest.TaskRef("job", run, 0, tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.SetConsecutiveFailures("job", "test", 9)
+	aboveFloor, err := manifest.TaskRef("job", run, 0, tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if withoutRecurrence.Name == atFloor.Name {
+		t.Fatalf("persistence evidence did not change Task identity %q", withoutRecurrence.Name)
+	}
+	if atFloor != aboveFloor {
+		t.Fatalf("persistent recurrence changed Task identity: at floor=%+v above floor=%+v", atFloor, aboveFloor)
 	}
 }
 

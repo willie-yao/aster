@@ -88,6 +88,28 @@ settings. The benchmark also accepts `BENCH_MAX_ITERS`, `BENCH_TIMEOUT`,
 `BENCH_MIN_TOOL_CALLS`, `BENCH_MIN_GCS_BYTES`, and
 `BENCH_CRITIQUE_RETRIES` overrides.
 
+The same case catalog and scorer can run through a live Orka deployment:
+
+```bash
+cd backend
+RUN_ORKA_BENCHMARK=1 \
+BENCH_ORKA_PROVIDER=<provider-name> \
+BENCH_ORKA_MODEL=<model-id> \
+BENCH_ORKA_API=http://127.0.0.1:18099 \
+BENCH_ORKA_TOKEN=<short-lived-Orka-API-token> \
+BENCH_ORKA_CONTEXT=<kube-context> \
+  go test ./internal/e2e \
+    -run 'TestOrkaAIBenchmark/flatcar-worker-dns-providerid$' \
+    -v -timeout 60m
+```
+
+Start the API endpoint with `kubectl -n orka-system port-forward svc/orka
+18099:8080` and create a token with `kubectl -n orka-system create token orka
+--duration=30m`. The opt-in test applies uniquely identified Tasks and Tools and
+does not delete them. It uses live GCS by default because the in-cluster artifact
+Tool cannot read a fixture extracted only on the local test host. See
+`backend/internal/e2e/README.md` for the full configuration and storage options.
+
 There is no checked-in A/B comparison command. Compare benchmark logs or saved
 results when evaluating two models or configurations.
 

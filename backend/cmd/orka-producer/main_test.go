@@ -8,10 +8,35 @@ import (
 	"testing"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
+
+func TestLoadConsecutiveFailures(t *testing.T) {
+	dir := t.TempDir()
+	report := models.FlakinessReport{PersistentFailures: []models.TestFlakiness{{
+		JobID: "job", TestName: "test", ConsecutiveFailures: 7,
+	}}}
+	if err := output.WriteFlakinessReport(dir, report); err != nil {
+		t.Fatal(err)
+	}
+	manifest := orka.NewAnalysisManifest("project", "Project", "contract", "provider", "model", orka.APIModeAuto, "v1", 0)
+	manifest.ValidationKey = "key"
+	if err := loadConsecutiveFailures(dir, manifest); err != nil {
+		t.Fatal(err)
+	}
+	manifest.SetBuild("job", "1", "build", "tools", "logs/job/1/", "")
+	ref, err := manifest.TaskRef("job", models.BuildResult{BuildInfo: models.BuildInfo{BuildID: "1"}}, 0, models.TestCase{Name: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(ref.Prompt, "Consecutive failures on this test: at least 3") {
+		t.Fatalf("prompt missing recurrence evidence: %s", ref.Prompt)
+	}
+}
 
 func TestOrkaTaskIgnoredAIFields(t *testing.T) {
 	retries := 3

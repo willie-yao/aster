@@ -25,6 +25,7 @@ spec:
       suggested_fix: {type: string, minLength: 1}
       relevant_files:
         type: array
+        description: "Required source-repository paths. Use [] when no source files apply; never omit or use null."
         items: {type: string}
       evidence_tokens:
         type: array

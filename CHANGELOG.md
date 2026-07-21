@@ -70,6 +70,14 @@ for how to pin a release.
 
 ### Changed
 
+- **Orka weak-model final repair.** The compatibility worker keeps
+  `relevant_files` required, while finalization prompts, the Tool schema, and
+  validation retries show the exact `"relevant_files": []` argument when no
+  source files apply. Tool calls also reset premature-final retry state so an
+  early tools-free response cannot prevent later validated submission. Orka Task
+  prompts preserve persistent consecutive-failure evidence from the flakiness
+  report, and quality benchmarks pin fixture archives by SHA-256.
+
 - Pattern email deduplication is now job-scoped and tolerates AI wording drift.
   A materially different recurring root cause on the same job sends a changed-
   pattern email with the previous and current causes.

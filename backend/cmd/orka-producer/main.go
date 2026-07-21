@@ -252,6 +252,9 @@ func main() {
 	manifest.SkillSetHash = skillSet.Hash()
 	manifest.ValidationKey = validationKey
 	manifest.MinGCSBytes = agentic.MinGCSBytes
+	if err := loadConsecutiveFailures(*dataDir, manifest); err != nil {
+		log.Fatalf("load consecutive failures: %v", err)
+	}
 	activeJobs, err := orka.ActiveJobIDs(*dataDir)
 	if err != nil {
 		log.Fatalf("load active jobs: %v", err)
@@ -554,6 +557,21 @@ revise if any applies:
    will verify it), not plausible-sounding speculation?
 4. Fix validity: would suggested_fix actually resolve the stated root_cause?
 Call submit_analysis with the final fields. Do not return a separate final answer.`
+}
+
+func loadConsecutiveFailures(dataDir string, manifest *orka.AnalysisManifest) error {
+	data, err := os.ReadFile(filepath.Join(dataDir, "flakiness.json"))
+	if err != nil {
+		return fmt.Errorf("read flakiness report: %w", err)
+	}
+	var report models.FlakinessReport
+	if err := json.Unmarshal(data, &report); err != nil {
+		return fmt.Errorf("parse flakiness report: %w", err)
+	}
+	for _, failure := range report.PersistentFailures {
+		manifest.SetConsecutiveFailures(failure.JobID, failure.TestName, failure.ConsecutiveFailures)
+	}
+	return nil
 }
 
 // loadBaseTools parses Tool CRDs from every YAML doc under dir and returns the
