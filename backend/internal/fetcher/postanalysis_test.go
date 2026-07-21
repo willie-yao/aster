@@ -403,9 +403,9 @@ func TestSendRemediationEmailsPersistsSuccessfulDelivery(t *testing.T) {
 	dir := t.TempDir()
 	state := remediationEmailTestState(t, dir)
 	sender := &recordingRemediationSender{}
-	oldFactory := newRemediationEmailSender
-	newRemediationEmailSender = func(notify.SMTPConfig) (notify.Sender, error) { return sender, nil }
-	t.Cleanup(func() { newRemediationEmailSender = oldFactory })
+	oldFactory := newEmailSender
+	newEmailSender = func(notify.SMTPConfig) (notify.Sender, error) { return sender, nil }
+	t.Cleanup(func() { newEmailSender = oldFactory })
 	p := &pipeline{cfg: remediationEmailTestConfig(), opts: Options{OutDir: dir}}
 
 	if err := p.sendRemediationEmails(context.Background(), state); err != nil {
@@ -434,9 +434,9 @@ func TestSendRemediationEmailsRetriesFailedDeliveryAfterReload(t *testing.T) {
 	dir := t.TempDir()
 	state := remediationEmailTestState(t, dir)
 	failedSender := &recordingRemediationSender{err: errors.New("delivery failed")}
-	oldFactory := newRemediationEmailSender
-	newRemediationEmailSender = func(notify.SMTPConfig) (notify.Sender, error) { return failedSender, nil }
-	t.Cleanup(func() { newRemediationEmailSender = oldFactory })
+	oldFactory := newEmailSender
+	newEmailSender = func(notify.SMTPConfig) (notify.Sender, error) { return failedSender, nil }
+	t.Cleanup(func() { newEmailSender = oldFactory })
 	p := &pipeline{cfg: remediationEmailTestConfig(), opts: Options{OutDir: dir}}
 
 	if err := p.sendRemediationEmails(context.Background(), state); err == nil {
@@ -454,7 +454,7 @@ func TestSendRemediationEmailsRetriesFailedDeliveryAfterReload(t *testing.T) {
 	}
 
 	retrySender := &recordingRemediationSender{}
-	newRemediationEmailSender = func(notify.SMTPConfig) (notify.Sender, error) { return retrySender, nil }
+	newEmailSender = func(notify.SMTPConfig) (notify.Sender, error) { return retrySender, nil }
 	if err := p.sendRemediationEmails(context.Background(), reloaded); err != nil {
 		t.Fatal(err)
 	}

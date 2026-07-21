@@ -379,7 +379,7 @@ func (p *pipeline) runSideEffects(ctx context.Context, res *refreshResult) error
 				log.Printf("Warning: invalid email notification addresses: %v", err)
 				sideEffectErrs = append(sideEffectErrs, fmt.Errorf("email addresses: %w", err))
 			} else {
-				sender, err := notify.NewSMTPSender(notify.SMTPConfig{
+				sender, err := newEmailSender(notify.SMTPConfig{
 					Host:     email.SMTP.Host,
 					Port:     email.SMTP.Port,
 					Username: email.SMTP.Username,
@@ -1018,7 +1018,7 @@ func remediationCoverageRepos(targetRepo string, patterns []models.PatternAnalys
 	return out
 }
 
-var newRemediationEmailSender = func(config notify.SMTPConfig) (notify.Sender, error) {
+var newEmailSender = func(config notify.SMTPConfig) (notify.Sender, error) {
 	return notify.NewSMTPSender(config)
 }
 
@@ -1035,7 +1035,7 @@ func (p *pipeline) sendRemediationEmails(ctx context.Context, state *remediation
 	if err != nil {
 		return err
 	}
-	sender, err := newRemediationEmailSender(notify.SMTPConfig{
+	sender, err := newEmailSender(notify.SMTPConfig{
 		Host: email.SMTP.Host, Port: email.SMTP.Port, Username: email.SMTP.Username,
 		Password: password, TLSMode: email.SMTP.TLS,
 	})

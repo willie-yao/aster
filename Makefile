@@ -66,9 +66,10 @@ test:
 test-v:
 	cd backend && go test ./... -count=1 -v
 
-# Run the end-to-end pipeline tests (hermetic: local fixtures + scripted model)
+# Run the hermetic pipeline and email-remediation end-to-end tests.
 e2e:
 	cd backend && go test ./internal/e2e/... -count=1 -v
+	cd backend && go test ./internal/fetcher -run '^(TestEmailRemediationLoopE2E|TestOrkaFinalizationTriggersEmailSideEffects)$$' -count=1 -v
 
 # Run Go linter (requires golangci-lint)
 lint:
