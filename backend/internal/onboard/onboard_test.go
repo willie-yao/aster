@@ -324,9 +324,14 @@ func TestScaffold_PagesIncludesProviderSetup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render deploy workflow: %v", err)
 	}
-	for _, want := range []string{"vars.AI_ENDPOINT", "vars.AI_MODEL", "secrets.AI_TOKEN", "secrets.EMAIL_SMTP_PASSWORD"} {
+	for _, want := range []string{"vars.AI_ENDPOINT", "vars.AI_MODEL", "secrets.AI_TOKEN"} {
 		if !strings.Contains(deploy, want) {
 			t.Errorf("deploy workflow missing %q:\n%s", want, deploy)
+		}
+	}
+	for _, unwanted := range []string{"project_dir:", "builds:", "ai: true", "fetch-timeout:", "EMAIL_SMTP_PASSWORD", "ISSUE_TOKEN", "FIX_TOKEN"} {
+		if strings.Contains(deploy, unwanted) {
+			t.Errorf("deploy workflow includes advanced default %q:\n%s", unwanted, deploy)
 		}
 	}
 
@@ -339,7 +344,7 @@ func TestScaffold_PagesIncludesProviderSetup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render checklist: %v", err)
 	}
-	for _, want := range []string{"gh variable set AI_ENDPOINT", "gh variable set AI_MODEL", "gh secret set AI_TOKEN", "gh secret set EMAIL_SMTP_PASSWORD"} {
+	for _, want := range []string{"gh variable set AI_ENDPOINT", "gh variable set AI_MODEL", "gh secret set AI_TOKEN"} {
 		if !strings.Contains(checklist, want) {
 			t.Errorf("checklist missing %q:\n%s", want, checklist)
 		}
@@ -347,19 +352,18 @@ func TestScaffold_PagesIncludesProviderSetup(t *testing.T) {
 	if strings.Contains(checklist, "is a **stub**") {
 		t.Errorf("checklist labels every prompt as a stub:\n%s", checklist)
 	}
-	if strings.Contains(deploy+checklist, "SLACK_WEBHOOK_URL") {
-		t.Errorf("scaffold still references Slack:\n%s\n%s", deploy, checklist)
+	for _, unwanted := range []string{"SLACK_WEBHOOK_URL", "EMAIL_SMTP_PASSWORD", "ISSUE_TOKEN", "FIX_TOKEN"} {
+		if strings.Contains(deploy+checklist, unwanted) {
+			t.Errorf("Pages scaffold includes optional feature %q:\n%s\n%s", unwanted, deploy, checklist)
+		}
 	}
 	projectYAML, err := renderProjectYAML(data)
 	if err != nil {
 		t.Fatalf("render project config: %v", err)
 	}
-	for _, want := range []string{"notifications:", "EMAIL_SMTP_PASSWORD", "tls: starttls"} {
-		if !strings.Contains(projectYAML+deploy, want) {
-			t.Errorf("scaffold missing email hint %q:\n%s\n%s", want, projectYAML, deploy)
-		}
+	if strings.Contains(projectYAML, "notifications:") {
+		t.Errorf("minimal project scaffold includes optional notifications:\n%s", projectYAML)
 	}
-
 }
 
 // TestValidateOptions_Mode checks the deploy-mode flag defaults to pages and
@@ -462,7 +466,27 @@ func TestScaffold_K8sMode(t *testing.T) {
 	}
 }
 
-func TestScaffold_K8sIncludesEmailSecretSetup(t *testing.T) {
+func TestScaffoldGuideUsesModeFile(t *testing.T) {
+	if got := scaffoldGuide(modePages); got != "CHECKLIST.md" {
+		t.Fatalf("Pages guide = %q, want CHECKLIST.md", got)
+	}
+	if got := scaffoldGuide(modeK8s); got != "deploy/README.md" {
+		t.Fatalf("Kubernetes guide = %q, want deploy/README.md", got)
+	}
+}
+
+func TestScaffoldPRBodyUsesModeGuide(t *testing.T) {
+	pages := scaffoldPRBody("Project", modePages)
+	if !strings.Contains(pages, "CHECKLIST.md") || strings.Contains(pages, "deploy/README.md") {
+		t.Fatalf("Pages PR body uses the wrong guide:\n%s", pages)
+	}
+	k8s := scaffoldPRBody("Project", modeK8s)
+	if !strings.Contains(k8s, "deploy/README.md") || strings.Contains(k8s, "CHECKLIST.md") {
+		t.Fatalf("Kubernetes PR body uses the wrong guide:\n%s", k8s)
+	}
+}
+
+func TestScaffold_K8sStaysFocused(t *testing.T) {
 	data := buildScaffoldData(testOpts(), nil)
 	data.Mode = modeK8s
 
@@ -470,19 +494,18 @@ func TestScaffold_K8sIncludesEmailSecretSetup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	checklist, err := render(k8sChecklistTmpl, checklistData{
-		Name:           data.Name,
-		DashboardOwner: "my-org",
-		DashboardName:  data.DashboardName,
-		EngineRef:      data.EngineRef,
-		Namespace:      data.Namespace,
-	})
+	readme, err := render(k8sDeployReadmeTmpl, data)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"EMAIL_SMTP_PASSWORD", "secretKeyRef", "kubectl -n " + data.Namespace + " create secret generic"} {
-		if !strings.Contains(values+checklist, want) {
-			t.Errorf("Kubernetes scaffold missing %q:\n%s\n%s", want, values, checklist)
+	for _, want := range []string{"analysis: inprocess", "mode: watch", "Orka is the strategic"} {
+		if !strings.Contains(values+readme, want) {
+			t.Errorf("Kubernetes scaffold missing %q:\n%s\n%s", want, values, readme)
+		}
+	}
+	for _, unwanted := range []string{"EMAIL_SMTP_PASSWORD", "server.actions", "existingSecret", "ISSUE_TOKEN", "FIX_TOKEN"} {
+		if strings.Contains(values+readme, unwanted) {
+			t.Errorf("Kubernetes scaffold includes optional feature %q:\n%s\n%s", unwanted, values, readme)
 		}
 	}
 }

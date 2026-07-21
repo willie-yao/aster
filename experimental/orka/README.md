@@ -1,4 +1,4 @@
-# Orka backend (experimental)
+# Orka backend preview
 
 Runs the dashboard's AI failure analysis through
 [Orka](https://github.com/orka-agents/orka), a Kubernetes-native agent
@@ -6,16 +6,18 @@ orchestration platform, instead of the engine's in-process agentic loop. Discove
 and output are unchanged; only the per-failure analysis step moves to Orka Tasks
 that run alongside your inference stack.
 
-> Opt-in and experimental. The engine's default analysis backend is the
-> in-process agentic loop; select this path explicitly with `analysis: orka` in
-> the Helm chart (see [QUICKSTART.md](QUICKSTART.md)). It requires the Orka
-> control plane, a Provider, and the pinned compatibility AI worker. The dashboard chart owns
-> its release-scoped artifact Tool service and base Tool ConfigMap by default.
+> **Strategic preview.** Orka is the long-term Kubernetes orchestration backend
+> for per-failure Tasks, retries, telemetry, and agent runtimes. It is still under
+> heavy development. Today `analysis: orka` requires a compatible Orka control
+> plane, Provider, and worker. The intended product experience is for the
+> dashboard deployment to manage those dependencies. The in-process backend
+> remains the self-contained first install while that integration is completed.
 
 ## Docs
 
 - **[QUICKSTART.md](QUICKSTART.md)** - how to deploy and run the Orka path, the config it
   reads, and the knobs. Start here.
+- **[EVALUATION.md](EVALUATION.md)** - how to compare Orka safely with a separate release and data claim.
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** - how it works: where each Orka resource
   is created, the CRD shapes, and how the engine's harness (cache, convergence,
   critique, skills) is reconstructed out of Kubernetes objects.
@@ -36,9 +38,11 @@ message, failure body, and filtered artifact tree, then preserving successful
 Tool observations in an evidence ledger across proactive context compaction.
 Model capability still bounds the final reasoning, but the weak model now starts
 with and retains the same deterministic evidence as the in-process path.
-Recommendation: keep Orka optional while these parity improvements are evaluated
-against the cheaper models operators are likely to run. Convergence and discipline
-numbers are in [worker-patches/README.md](worker-patches/README.md).
+Orka remains opt-in during preview while these parity improvements are evaluated
+against the cheaper models operators are likely to run. This preserves a working
+self-contained path while the managed Orka deployment experience is built.
+Convergence and discipline numbers are in
+[worker-patches/README.md](worker-patches/README.md).
 
 ## Fix-PR generation runtime
 

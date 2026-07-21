@@ -8,10 +8,10 @@ Guidance for AI coding agents working on `prow-ai-dashboard`. See
 
 `prow-ai-dashboard` is the **reusable engine** for AI-powered Prow/TestGrid
 dashboards. It is consumed by lightweight per-project repos (the
-"consumers") via a reusable GitHub Actions workflow. The engine repo holds
-all the code; consumer repos hold only `project.yaml` + `prompts/system.md`
-+ a small workflow file. See [`README.md`](README.md) for the current
-list of live consumers.
+"consumers") via a reusable GitHub Actions workflow or Helm chart. The engine
+repo holds all the code; consumer repos hold `project.yaml`,
+`prompts/system.md`, and a small deployment file. See [`README.md`](README.md)
+for the user-facing deployment choices.
 
 The data flow per scheduled deploy is:
 
@@ -79,8 +79,7 @@ frontend/                      React 19 + Vite 8 + MUI 9
   src/
     hooks/useData.ts           Loads dashboard.json, flakiness.json, jobs/*
     components/ManifestProvider.tsx   Loads manifest.json
-configs/example/               Docs-only sample project.yaml (minimal) +
-                               project.reference.yaml (full) + prompts/
+configs/example/               Docs-only minimal project.yaml + prompts/
 deploy/helm/                   Helm chart for the Kubernetes-native mode
 experimental/orka/             Opt-in Orka analysis and fix-runtime backend
 Dockerfile                     Multi-stage image: fetcher + server + SPA

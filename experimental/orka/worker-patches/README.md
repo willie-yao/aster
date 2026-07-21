@@ -1,7 +1,7 @@
 # Orka AI-worker compatibility image
 
 The dashboard publishes a worker-only Orka compatibility image for the
-experimental analysis backend. The image is built from a pinned upstream Orka
+Orka backend preview. The image is built from a pinned upstream Orka
 commit plus `ai-worker-convergence.patch`; it does not require an upstream Orka
 PR or a patched controller, CRD, API server, or UI.
 

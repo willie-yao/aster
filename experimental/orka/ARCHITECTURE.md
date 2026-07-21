@@ -235,13 +235,10 @@ set itself.
 
 ## Consumer-driven, multi-consumer
 
-The producer reads the tool, storage, and id fields from a consumer's
-`project.yaml`: `ai.tools` and `ai.min_tool_calls` (via `resolveTools` and the
-acceptance manifest), the `storage`
-block (`bucket` + `provider`/`base`/`prow_base`), and the display id. Tool
-selection, bucket + provider routing, and the prompt all follow from those, so
-the same binaries serve CAPZ (`kubernetes-ci-logs` on GCS, cluster-per-test,
-`k8s` tools) and a project on an S3-backed Prow behind gcsweb (`filesystem` only)
-unchanged. Every other `ai.*` knob (`max_iters`, `min_gcs_bytes`, `critique.*`,
-`evidence.*`) is engine-only and inert on this path: it lives in the worker
-patches and the shim tools, not in `project.yaml`.
+The producer reads the shared Orka analysis contract from the consumer:
+`ai.tools`, `ai.min_tool_calls`, `ai.min_gcs_bytes`, `skills/*.yaml`, the storage
+block (`bucket` plus provider routing), the composed prompt, and the project id.
+The same binaries therefore serve GCS and gcsweb-backed projects without
+project-specific code. In-process loop settings such as `max_iters`, `timeout`,
+`single_tool_call`, and `critique.*` do not configure Orka Tasks; the
+compatibility worker and validation tools own convergence and acceptance.

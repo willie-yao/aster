@@ -9,8 +9,42 @@ import (
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
+
+func TestOrkaTaskIgnoredAIFields(t *testing.T) {
+	retries := 3
+	cfg := &project.Config{AI: &project.AI{
+		Endpoint:    "https://example.test/v1/chat/completions",
+		Model:       "model",
+		Headers:     map[string]string{"X-Route": "value"},
+		Concurrency: 4,
+		Agentic: project.Agentic{
+			MaxIters:       30,
+			Timeout:        10 * time.Minute,
+			MinToolCalls:   5,
+			MinGCSBytes:    500000,
+			SingleToolCall: true,
+			Tools:          []string{"filesystem"},
+			Critique:       project.AgenticCritique{MaxRetries: &retries},
+		},
+	}}
+
+	got := orkaTaskIgnoredAIFields(cfg)
+	want := []string{
+		"ai.endpoint", "ai.model", "ai.headers", "ai.concurrency",
+		"ai.max_iters", "ai.timeout", "ai.single_tool_call", "ai.critique.max_retries",
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("ignored fields = %v, want %v", got, want)
+	}
+	for _, shared := range []string{"ai.tools", "ai.min_tool_calls", "ai.min_gcs_bytes"} {
+		if strings.Contains(strings.Join(got, ","), shared) {
+			t.Fatalf("shared Orka field %q reported ignored: %v", shared, got)
+		}
+	}
+}
 
 func TestResolveToolsIncludesQualityTools(t *testing.T) {
 	names, k8sEnabled := resolveTools([]string{"filesystem"})

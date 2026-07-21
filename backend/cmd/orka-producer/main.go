@@ -98,6 +98,42 @@ func resolveTools(aiTools []string) (names []string, k8sEnabled bool) {
 	return names, k8sEnabled
 }
 
+// orkaTaskIgnoredAIFields reports configured in-process settings that do not
+// change Orka per-failure Tasks. Shared floors, tools, skills, and post-analysis
+// features are intentionally excluded.
+func orkaTaskIgnoredAIFields(cfg *project.Config) []string {
+	if cfg == nil || cfg.AI == nil {
+		return nil
+	}
+	aiCfg := cfg.AI
+	fields := []string{}
+	if aiCfg.Endpoint != "" {
+		fields = append(fields, "ai.endpoint")
+	}
+	if aiCfg.Model != "" {
+		fields = append(fields, "ai.model")
+	}
+	if len(aiCfg.Headers) > 0 {
+		fields = append(fields, "ai.headers")
+	}
+	if aiCfg.Concurrency != 0 {
+		fields = append(fields, "ai.concurrency")
+	}
+	if aiCfg.Agentic.MaxIters != 0 {
+		fields = append(fields, "ai.max_iters")
+	}
+	if aiCfg.Agentic.Timeout != 0 {
+		fields = append(fields, "ai.timeout")
+	}
+	if aiCfg.Agentic.SingleToolCall {
+		fields = append(fields, "ai.single_tool_call")
+	}
+	if aiCfg.Agentic.Critique.MaxRetries != nil {
+		fields = append(fields, "ai.critique.max_retries")
+	}
+	return fields
+}
+
 func main() {
 	dataDir := flag.String("data", "data", "dashboard skeleton dir (fetcher output, holds jobs/*.json)")
 	projectDir := flag.String("project-dir", ".", "consumer dir with project.yaml + prompts/system.md")
@@ -136,6 +172,9 @@ func main() {
 	cfg, addendum, err := project.LoadDir(*projectDir)
 	if err != nil {
 		log.Fatalf("load project %s: %v", *projectDir, err)
+	}
+	if ignored := orkaTaskIgnoredAIFields(cfg); len(ignored) > 0 {
+		log.Printf("ⓘ Orka Tasks do not use %s; configure Provider, model, and execution through Helm orka.* values", strings.Join(ignored, ", "))
 	}
 
 	skillSet, err := skills.Load(*projectDir)

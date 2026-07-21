@@ -1,78 +1,62 @@
-# Onboarding a new project
+# Onboarding a project
 
-The `fetcher onboard` command discovers the project's Prow jobs and creates a
-ready-to-review consumer scaffold. Use it for either GitHub Pages or the
-Kubernetes-native deployment.
+The `fetcher onboard` command verifies Prow job discovery and creates a small
+consumer scaffold. The project schema supports both analysis backends, while the
+command sets deployment-specific branding and files for Pages or Kubernetes.
 
-This page covers the common setup. Continue with the deployment guide for the
-path you choose:
+## Choose the environment
 
-- [GitHub Actions and Pages](github-pages.md)
-- [Kubernetes-native](kubernetes.md)
-
-## Choose a deployment
-
-| | GitHub Actions and Pages | Kubernetes-native |
+| Requirement | Deployment | Analysis |
 | --- | --- | --- |
-| Fetch location | GitHub Actions runner | Cluster worker or CronJob |
-| Site hosting | GitHub Pages | Go server and Service or Ingress |
-| Private model endpoint | Self-hosted runner or pre-fetched data | Native |
-| Interactive actions | No | Optional |
-| Extra infrastructure | None | Kubernetes and RWX storage |
-| Analysis backend | In-process | In-process by default; experimental Orka option |
+| Fastest evaluation or public read-only site | GitHub Actions and Pages | In-process |
+| Private in-cluster model endpoint | Kubernetes with Helm | In-process initially |
+| Authenticated server actions | Kubernetes with Helm | In-process or Orka |
+| Per-failure Tasks and Orka observability | Kubernetes with Helm | Orka preview |
 
-Both paths use the same `project.yaml`, `prompts/system.md`, frontend, and public
-JSON contract.
+Orka is the strategic Kubernetes orchestration backend. It currently requires a
+compatible Orka installation, Provider, and worker. The intended product
+experience is for the dashboard deployment to manage those dependencies. The
+first Kubernetes scaffold uses in-process analysis so it works by itself.
 
-## Files in a consumer
+## What the scaffold creates
+
+### GitHub Actions and Pages
 
 ```text
-# GitHub Pages
 project.yaml
 prompts/system.md
 .github/workflows/deploy.yml
-.github/workflows/clear-cache.yml
 CHECKLIST.md
+```
 
-# Kubernetes-native
+### Kubernetes with Helm
+
+```text
 project.yaml
 prompts/system.md
 deploy/values.yaml
 deploy/README.md
-CHECKLIST.md
 ```
 
-A Pages consumer may place `project.yaml` and `prompts/` in a subdirectory. The
-workflow's `project_dir` must point to that directory.
+Optional email, issue, fix-PR, action, and Orka configuration is not included in
+the first-run scaffold. Add those features after the first dashboard works.
 
 ## Before you start
 
-Collect these values:
+Collect:
 
-- The TestGrid dashboard name, or the artifact bucket for bucket discovery.
-- The dashboard host repository as `owner/name`.
+- The TestGrid dashboard name, or an artifact bucket for bucket discovery.
+- The dashboard repository as `owner/name`.
 - The source repository under test as `owner/name`.
-- An AI endpoint, model id, and bearer token if AI analysis will be enabled.
-- Confirmation that the endpoint and model support OpenAI-style function
-  calling.
+- An OpenAI-compatible endpoint, model id, and token when AI is enabled.
 
-The AI endpoint and model are deployment settings as well as prompt-drafting
-settings. Supplying them while running `onboard` drafts the prompt, but a Pages
-consumer must also save them as repository variables or commit them in
-`project.yaml`.
+The model must support function calling.
 
 ## Fast start: scaffold it with `onboard`
 
-The module command needs no checkout:
+Pages is the default and needs no engine checkout:
 
 ```bash
-export GITHUB_TOKEN="$(gh auth token)"
-
-# Optional prompt drafting. Omit all three or pass -no-prompt for a TODO draft.
-export AI_ENDPOINT="https://provider.example/v1/chat/completions"
-export AI_MODEL="model-id"
-export AI_TOKEN="token"
-
 go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboard \
   -testgrid "<testgrid-dashboard>" \
   -dashboard-repo "<owner>/<dashboard-repo>" \
@@ -80,7 +64,7 @@ go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboar
   -out ./my-dashboard
 ```
 
-Pages is the default mode. Add `-mode k8s` for the Kubernetes-native layout:
+For Kubernetes, add `-mode k8s`:
 
 ```bash
 go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboard \
@@ -91,131 +75,84 @@ go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboar
   -out ./my-dashboard
 ```
 
-For a Prow installation discovered from its artifact bucket, replace
-`-testgrid` with:
+The command performs a real discovery sweep before it writes anything. A zero-job
+result is an error rather than a broken scaffold.
+
+### Other Prow installations
+
+Replace `-testgrid` with `-bucket` to discover jobs from the artifact store:
 
 ```bash
 -bucket "<bucket>"
 ```
 
-Add `-gcsweb-base "https://gcsweb.example.net/s3"` when the bucket is behind a
-gcsweb gateway.
+Add `-gcsweb-base "https://gcsweb.example.net/s3"` when the bucket is served
+through gcsweb.
 
-To have the command open a scaffold PR instead of writing locally, replace
-`-out` with `-open-pr`. The `GITHUB_TOKEN` then needs contents and pull-request
-write access to the dashboard repository.
+### Optional prompt drafting
 
-A local checkout works too:
-
-```bash
-git clone https://github.com/willie-yao/prow-ai-dashboard /tmp/engine
-cd /tmp/engine/backend
-go build -o /tmp/fetcher ./cmd/fetcher
-/tmp/fetcher onboard -testgrid ... -dashboard-repo ... -source-repo ... -out ./my-dashboard
-```
-
-## Review the generated files
-
-The command validates discovery before writing and infers categories from job
-names. Review every generated file before deployment:
-
-1. Replace prompt TODOs and verify all drafted project claims.
-2. Reorder, relabel, or remove inferred categories.
-3. Confirm storage, branding, and source repository values.
-4. Follow `CHECKLIST.md` for provider credentials and deployment steps.
-
-The prompt is required only when AI analysis is enabled. A discovery-only fetch
-with `-ai=false` does not load it.
-
-## Confirm discovery manually
-
-Use this when diagnosing a dashboard name or bucket before scaffolding:
+Without an AI token, `onboard` writes a short prompt with TODOs. To draft it from
+the source repository documentation, set all three provider values before
+running the command:
 
 ```bash
-git clone https://github.com/willie-yao/prow-ai-dashboard /tmp/engine
-cd /tmp/engine/backend
-go build -o /tmp/fetcher ./cmd/fetcher
-
-mkdir -p /tmp/sweep
-cat > /tmp/sweep/project.yaml <<'YAML'
-id: myproject
-name: "My Project"
-testgrid:
-  dashboard: "<testgrid-dashboard>"
-storage:
-  provider: gcs
-  bucket: kubernetes-ci-logs
-branding:
-  title: "My Project Prow Dashboard"
-  base_path: "/my-dashboard"
-  site_url: "https://my-org.github.io/my-dashboard"
-  source_repo:
-    owner: my-org
-    name: myproject
-YAML
-
-GITHUB_TOKEN="$(gh auth token)" \
-  /tmp/fetcher -project-dir=/tmp/sweep -ai=false -builds=1
-python3 -c "import json; print(len(json.load(open('data/dashboard.json'))['jobs']), 'jobs')"
+export AI_ENDPOINT="https://provider.example/v1/chat/completions"
+export AI_MODEL="model-id"
+export AI_TOKEN="token"
 ```
 
-A nonzero count confirms the discovery selector. Add
-`source.include_presubmits: true` if the project has only presubmit jobs.
+Always review an AI-drafted prompt before deployment.
 
-## Configure the project
+### Open a scaffold pull request
 
-See [Project configuration](project-configuration.md) for the field reference and
-[`project.reference.yaml`](../configs/example/project.reference.yaml) for a full
-annotated example.
+Set `GITHUB_TOKEN` and use `-open-pr` instead of `-out`. The token needs contents
+and pull-request write access to the dashboard repository.
 
-At minimum, confirm:
+## Review only four things
 
-- `storage` identifies the artifact backend.
-- `testgrid.dashboard` is correct, unless bucket discovery is used.
-- `branding.base_path` matches the deployment.
-- `branding.source_repo` points at the code repository under test.
-- AI provider settings are supplied through YAML or the deployment environment.
-- Optional email notification settings identify the SMTP relay and recipients.
+1. Confirm `project.yaml` discovery, storage, branding, and source repository.
+2. Review or remove the inferred categories.
+3. Replace the TODOs or verify the claims in `prompts/system.md`.
+4. Follow `CHECKLIST.md` for Pages or `deploy/README.md` for Helm.
 
-## Write the project prompt
-
-`prompts/system.md` supplies the architecture, artifact layout, known failure
-patterns, and transient classes that the engine cannot infer generically. Review
-[Writing prompts](writing-prompts.md) before the first AI run.
-
-Prompt edits automatically invalidate affected cached analyses. A manual cache
-clear is needed only when you want an immediate full rebaseline.
+Do not add AI tuning, notifications, write features, or Orka settings until the
+first fetch publishes the expected jobs.
 
 ## Deploy
 
-### Step 3a: Kubernetes-native
+- [GitHub Actions and Pages](github-pages.md)
+- [Kubernetes with Helm](kubernetes.md)
+- [Orka preview quickstart](../experimental/orka/QUICKSTART.md)
 
-Continue with [Deploy Kubernetes-native](kubernetes.md).
+The Pages workflow uses repository variables `AI_ENDPOINT` and `AI_MODEL` plus
+the `AI_TOKEN` secret. The Kubernetes scaffold stores endpoint and model in
+`deploy/values.yaml` and accepts the token at install time.
 
-### Step 3b: GitHub Actions and Pages
+## Validate the first result
 
-Continue with [Deploy with GitHub Actions and Pages](github-pages.md).
+A successful first deployment has:
 
-For an advanced Kubernetes-native analysis backend, see the
-[experimental Orka quickstart](../experimental/orka/QUICKSTART.md). Orka requires
-additional components and a compatibility worker and is not the default scaffold.
+- The expected project branding in `data/manifest.json`.
+- At least one discovered job in `data/dashboard.json`.
+- Grounded analysis on a failing test when AI is enabled.
+- `/healthz` and `/api/capabilities` in Kubernetes mode.
+
+If the dashboard has no jobs, use the discovery check in
+[Troubleshooting](troubleshooting.md#no-jobs-were-published).
 
 ## Versioning and pinning
 
 The workflow or image ref controls the engine version. Before the first stable
 release, use `main`, a commit SHA, or an exact published prerelease. The moving
-`v1` alias is created only after `v1.0.0` exists. See
-[Releasing](releasing.md) and the version section in the
-[Pages guide](github-pages.md#engine-version).
+`v1` alias is created only after `v1.0.0` is published. See
+[Releasing](releasing.md).
 
-## Validate the first deployment
+## Advanced options
 
-Check these endpoints or files:
+`onboard -help` lists identity overrides, presubmit discovery, engine pinning,
+bucket discovery, and pull-request creation. These are not required for a normal
+first run.
 
-- `data/manifest.json` contains the expected branding.
-- `data/dashboard.json` contains the discovered jobs.
-- A failing test in `data/jobs/*.json` has grounded AI analysis.
-- Kubernetes-native deployments return `ok` from `/healthz` and `mode: server`
-  from `/api/capabilities`.
-
-See [Troubleshooting](troubleshooting.md) for common first-run failures.
+The reusable Pages workflow also exposes build depth, worker count, runner,
+timeout, pre-fetched data, and presubmit overrides. Keep their defaults until a
+real deployment needs different operational behavior.

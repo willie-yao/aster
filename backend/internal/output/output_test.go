@@ -79,6 +79,24 @@ func TestWriteDashboard(t *testing.T) {
 	}
 }
 
+func TestWriteDashboard_EmptyJobsWritesArray(t *testing.T) {
+	dir := t.TempDir()
+	if err := WriteDashboard(dir, models.Dashboard{GeneratedAt: time.Now()}); err != nil {
+		t.Fatalf("WriteDashboard: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "dashboard.json"))
+	if err != nil {
+		t.Fatalf("read dashboard.json: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal dashboard.json: %v", err)
+	}
+	if got := strings.TrimSpace(string(raw["jobs"])); got != "[]" {
+		t.Fatalf("jobs = %s, want []", got)
+	}
+}
+
 func TestWriteDashboard_CreatesParentDirs(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "a", "b", "c")
 

@@ -72,19 +72,6 @@ branding:
     owner: "{{.SourceOwner}}"
     name: "{{.SourceName}}"
 
-# Optional email notifications for persistent failures and recoveries.
-# Set EMAIL_SMTP_PASSWORD separately when smtp.username is configured.
-# notifications:
-#   email:
-#     enabled: true
-#     action_links: false  # set true only for a server deploy with actions enabled
-#     from: "Prow Dashboard <prow-dashboard@example.com>"
-#     to: ["ci-team@example.com"]
-#     smtp:
-#       host: "smtp.example.com"
-#       port: 587
-#       username: "prow-dashboard@example.com"
-#       tls: starttls
 {{if .IncludePresubmits}}
 # This project's dashboard includes presubmit jobs.
 source:
@@ -93,9 +80,6 @@ source:
 
 var deployYAMLTmpl = template.Must(template.New("deploy.yml").Parse(
 	`name: Deploy Dashboard
-
-# Calls the reusable workflow in willie-yao/prow-ai-dashboard to build and
-# deploy this repo's Prow dashboard to GitHub Pages.
 
 on:
   schedule:
@@ -117,172 +101,59 @@ jobs:
   deploy:
     uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@{{.EngineRef}}
     with:
-      project_dir: "."
-      builds: 10
-      ai: true
-      # Headroom for a cold full re-analysis with the critique retry loop;
-      # the AI cache persists partial progress so each run converges.
-      fetch-timeout: "150m"
-      # Required unless project.yaml sets ai.model and ai.endpoint. Repository
-      # variables keep provider coordinates out of the public project.yaml.
+      # Repository variables keep provider coordinates out of project.yaml.
       ai-model: ${{"{{"}} vars.AI_MODEL {{"}}"}}
       ai-endpoint: ${{"{{"}} vars.AI_ENDPOINT {{"}}"}}
     secrets:
       AI_TOKEN: ${{"{{"}} secrets.AI_TOKEN {{"}}"}}
-      # Optional: uncomment to enable the matching feature.
-      # EMAIL_SMTP_PASSWORD: ${{"{{"}} secrets.EMAIL_SMTP_PASSWORD {{"}}"}}
-      # ISSUE_TOKEN: ${{"{{"}} secrets.ISSUE_TOKEN {{"}}"}}
-      # FIX_TOKEN: ${{"{{"}} secrets.FIX_TOKEN {{"}}"}}
-`))
-
-var clearCacheYAMLTmpl = template.Must(template.New("clear-cache.yml").Parse(
-	`name: Clear AI Cache
-
-# Manually wipe this repo's data cache so the next deploy refetches
-# everything and regenerates AI summaries.
-
-on:
-  workflow_dispatch: {}
-
-permissions:
-  actions: write
-
-jobs:
-  clear:
-    uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-clear-cache.yml@{{.EngineRef}}
-    with:
-      project_dir: "."
 `))
 
 var k8sValuesTmpl = template.Must(template.New("values.yaml").Parse(
-	`# Helm values for the Kubernetes-native deploy of this dashboard.
-#
-# Consumed by the engine chart at
-# willie-yao/prow-ai-dashboard/deploy/helm/prow-ai-dashboard. project.yaml and
-# prompts/system.md are passed separately via --set-file (see deploy/README.md).
+	`# Minimal values for the Kubernetes-native dashboard.
+# project.yaml and prompts/system.md are passed separately with --set-file.
 
 image:
-  # Pin to a release tag once one ships, or track :main for the latest engine.
   tag: main
 
-# Continuous in-cluster worker (single writer) co-located with the model.
+# The self-contained backend is the safest first install. Orka is the strategic
+# orchestration backend and can be selected after its preview prerequisites are ready.
+analysis: inprocess
 mode: watch
 
-# Shared RWX volume so the worker (writer) and server (reader) mount it at once.
 persistence:
-  # Set to your cluster's ReadWriteMany class (azurefile-csi on AKS,
-  # efs-sc on EKS, filestore on GKE, ...).
+  # Set a ReadWriteMany class such as azurefile-csi, efs-sc, or filestore.
   storageClass: "<your-rwx-storage-class>"
   accessMode: ReadWriteMany
   size: 1Gi
 
-# AI analysis. Point at an OpenAI-compatible chat-completions endpoint reachable
-# from inside the cluster; provide the token at install time, not in this file.
 ai:
   enabled: true
   endpoint: "{{if .AIEndpoint}}{{.AIEndpoint}}{{else}}http://<your-model-svc>.<ns>.svc.cluster.local:8000/v1/chat/completions{{end}}"
   model: "{{if .AIModel}}{{.AIModel}}{{else}}<your-model-id>{{end}}"
 
-# Fetch depth and cadence. Raise fetcher.timeout for slow self-hosted models so
-# a cold serial pass fits in one per-pass budget.
+# Give a cold analysis pass room to finish on a self-hosted model.
 fetcher:
-  buildsPerJob: 10
-  workers: 4
   timeout: 120m
-  watchInterval: 5m
-  reconcileInterval: 1h
-  # For authenticated email notifications, source the password from a Secret:
-  # extraEnv:
-  #   - name: EMAIL_SMTP_PASSWORD
-  #     valueFrom:
-  #       secretKeyRef: { name: {{.Namespace}}-smtp, key: password }
-
-# Optional: admin-gated File issue / Mark resolved actions. Propose fix also
-# requires a custom server image with opencode and git. Register a GitHub OAuth
-# App (see deploy/README.md), then uncomment:
-# server:
-#   # Reuse the SMTP Secret here to email async draft-ready review links.
-#   # extraEnv:
-#   #   - name: EMAIL_SMTP_PASSWORD
-#   #     valueFrom:
-#   #       secretKeyRef: { name: {{.Namespace}}-smtp, key: password }
-#   actions:
-#     enabled: true
-#     mode: oauth
-#     admins: [<your-github-login>]
-#     oauth:
-#       clientId: "<oauth-app-client-id>"
-#       existingSecret: {{.Namespace}}-oauth   # keys: OAUTH_CLIENT_SECRET, SESSION_KEY
-#       redirectUrl: "https://<dashboard-host>/api/auth/callback"
 `))
 
-var k8sDeployReadmeTmpl = template.Must(template.New("deploy/README.md").Parse(
-	`# Deploying (Kubernetes-native)
+var k8sDeployReadmeTmpl = template.Must(template.New("README.md").Parse(
+	`# Deploying with Helm
 
-This dashboard runs in-cluster next to the model: a worker fetches builds and
-runs the analysis against an in-cluster endpoint, and a server serves the SPA
-plus the ` + "`/data/*.json`" + ` contract from a shared volume. No GitHub Actions or
-Pages. See the engine's
-[docs/kubernetes.md](https://github.com/willie-yao/prow-ai-dashboard/blob/{{.EngineRef}}/docs/kubernetes.md)
-for the full reference.
+This is the Kubernetes-native path. Use it when the model endpoint is private to
+the cluster or the dashboard needs authenticated server actions. The generated
+values use the self-contained in-process backend for the first install. Orka is
+the strategic orchestration backend and is available as a preview once its
+current prerequisites are installed.
 
-## Prerequisites
+## Before installing
 
-- A cluster with an OpenAI-compatible chat-completions endpoint reachable over
-  cluster DNS (set ` + "`ai.endpoint`" + ` / ` + "`ai.model`" + ` in ` + "`deploy/values.yaml`" + `).
-- A ` + "`ReadWriteMany`" + ` storage class (set ` + "`persistence.storageClass`" + `).
-- A checkout of ` + "`willie-yao/prow-ai-dashboard`" + ` for the Helm chart.
+1. Review ` + "`project.yaml`" + ` and the inferred categories.
+2. Replace the TODOs in ` + "`prompts/system.md`" + `.
+3. Set ` + "`persistence.storageClass`" + `, ` + "`ai.endpoint`" + `, and ` + "`ai.model`" + ` in ` + "`deploy/values.yaml`" + `.
 
 ## Install
 
-Run from an engine checkout so the chart path resolves, pointing at this repo
-for the consumer config:
-
-` + "```bash" + `
-helm upgrade --install {{.Namespace}} deploy/helm/prow-ai-dashboard \
-  --namespace {{.Namespace}} --create-namespace \
-  -f ../{{.DashboardName}}/deploy/values.yaml \
-  --set-file project.config=../{{.DashboardName}}/project.yaml \
-  --set-file project.systemPrompt=../{{.DashboardName}}/prompts/system.md \
-  --set ai.token=<token>   # any non-empty string if your endpoint needs no key
-` + "```" + `
-
-## Access
-
-` + "```bash" + `
-kubectl -n {{.Namespace}} port-forward svc/{{.Namespace}}-prow-ai-dashboard-server 8080:80
-open http://localhost:8080
-` + "```" + `
-
-Follow the worker as it populates data:
-
-` + "```bash" + `
-kubectl -n {{.Namespace}} logs -f deploy/{{.Namespace}}-prow-ai-dashboard-worker
-` + "```" + `
-
-The first cold pass can be slow on a self-hosted model; the dashboard fills in
-once the pass completes.
-`))
-
-var k8sChecklistTmpl = template.Must(template.New("CHECKLIST.md").Parse(
-	`# {{.Name}} dashboard: finish onboarding (Kubernetes-native)
-
-This scaffold was generated by ` + "`prow-ai-dashboard onboard -mode k8s`" + `. The job
-sweep confirmed your discovery config finds jobs. Remaining steps need a human:
-
-## 1. Review the generated files (required)
-
-- Review the ` + "`prompts/system.md`" + ` draft. Replace any TODOs and confirm its
-  project-specific claims. Prompt quality is the biggest lever on analysis depth.
-- ` + "`project.yaml`" + ` ` + "`categories`" + ` were inferred from job names; reorder,
-  rename, or trim them.
-- ` + "`deploy/values.yaml`" + `: set ` + "`persistence.storageClass`" + ` (a ReadWriteMany
-  class) and the ` + "`ai.endpoint`" + ` / ` + "`ai.model`" + ` for your in-cluster provider.
-
-## 2. Install with Helm
-
-From a checkout of ` + "`willie-yao/prow-ai-dashboard`" + ` (for the chart), follow
-` + "`deploy/README.md`" + `. In short:
+Run from a checkout of ` + "`willie-yao/prow-ai-dashboard`" + `:
 
 ` + "```bash" + `
 helm upgrade --install {{.Namespace}} deploy/helm/prow-ai-dashboard \
@@ -293,30 +164,24 @@ helm upgrade --install {{.Namespace}} deploy/helm/prow-ai-dashboard \
   --set ai.token=<token>
 ` + "```" + `
 
-## 3. Optional: email notifications
+Use any non-empty token when the endpoint does not require authentication.
 
-After enabling ` + "`notifications.email`" + ` in ` + "`project.yaml`" + `, create the SMTP
-password Secret and uncomment the ` + "`fetcher.extraEnv`" + ` example in
-` + "`deploy/values.yaml`" + `:
+## Open the dashboard
 
 ` + "```bash" + `
-kubectl -n {{.Namespace}} create secret generic {{.Namespace}}-smtp \
-  --from-literal=password=<smtp-password>
+kubectl -n {{.Namespace}} port-forward svc/{{.Namespace}}-prow-ai-dashboard-server 8080:80
+open http://localhost:8080
 ` + "```" + `
 
-## 4. Optional: interactive actions
+Follow the first fetch with:
 
-To enable admin-gated actions, register a GitHub OAuth App and uncomment the
-` + "`server.actions`" + ` block in ` + "`deploy/values.yaml`" + `. File issue and Mark
-resolved work in the standard image. Propose fix requires a custom server image
-with opencode and git. See
-https://github.com/willie-yao/prow-ai-dashboard/blob/{{.EngineRef}}/docs/server.md
-for the OAuth setup.
+` + "```bash" + `
+kubectl -n {{.Namespace}} logs -f deploy/{{.Namespace}}-prow-ai-dashboard-worker
+` + "```" + `
 
-The chart pins the engine image via ` + "`image.tag`" + ` in ` + "`deploy/values.yaml`" + `
-(defaults to ` + "`main`" + `); see
-https://github.com/willie-yao/prow-ai-dashboard/blob/{{.EngineRef}}/docs/releasing.md
-to pin a release instead.
+For Orka, authenticated actions, ingress, existing Secrets, and production
+storage settings, continue with the engine's Kubernetes guide:
+https://github.com/willie-yao/prow-ai-dashboard/blob/{{.EngineRef}}/docs/kubernetes.md
 `))
 
 var systemPromptTmpl = template.Must(template.New("system.md").Parse(
@@ -379,13 +244,6 @@ gh api -X POST repos/{{.DashboardOwner}}/{{.DashboardName}}/pages \
 gh variable set AI_ENDPOINT --repo {{.DashboardOwner}}/{{.DashboardName}}
 gh variable set AI_MODEL --repo {{.DashboardOwner}}/{{.DashboardName}}
 gh secret set AI_TOKEN --repo {{.DashboardOwner}}/{{.DashboardName}}
-
-# Optional: GitHub issue auto-filing (a token with issues:write on the target):
-# gh secret set ISSUE_TOKEN --repo {{.DashboardOwner}}/{{.DashboardName}}
-# Optional: after enabling notifications.email in project.yaml:
-# gh secret set EMAIL_SMTP_PASSWORD --repo {{.DashboardOwner}}/{{.DashboardName}}
-# Optional: agent-proposed fix PRs on a runner with opencode and git:
-# gh secret set FIX_TOKEN --repo {{.DashboardOwner}}/{{.DashboardName}}
 ` + "```" + `
 
 ## 4. First deploy
@@ -402,7 +260,6 @@ type checklistData struct {
 	DashboardOwner string
 	DashboardName  string
 	EngineRef      string
-	Namespace      string // k8s namespace / helm release (k8s mode only)
 }
 
 // renderProjectYAML renders and returns the project.yaml text, collapsing the

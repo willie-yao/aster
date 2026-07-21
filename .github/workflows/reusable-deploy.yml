@@ -11,7 +11,6 @@ name: Reusable Deploy
 #     deploy:
 #       uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
 #       with:
-#         project_dir: .
 #         # Optional: keep private or preview model identifiers and private
 #         # endpoint URLs out of the public project.yaml by sourcing them
 #         # from repo variables (`gh variable set AI_MODEL ...`) instead.
@@ -21,9 +20,6 @@ name: Reusable Deploy
 #         ai-endpoint: ${{ vars.AI_ENDPOINT }}
 #       secrets:
 #         AI_TOKEN: ${{ secrets.AI_TOKEN }}
-#         EMAIL_SMTP_PASSWORD: ${{ secrets.EMAIL_SMTP_PASSWORD }}
-#         ISSUE_TOKEN: ${{ secrets.ISSUE_TOKEN }}
-#         FIX_TOKEN: ${{ secrets.FIX_TOKEN }}
 
 on:
   workflow_call:
@@ -44,10 +40,10 @@ on:
         type: number
         default: 5
       fetch-timeout:
-        description: "Fetcher timeout (e.g. 30m)."
+        description: "Fetcher timeout. The long default gives a cold AI pass room to finish; lower it for fast providers."
         required: false
         type: string
-        default: 30m
+        default: 150m
       ai:
         description: "Whether to run AI analysis on failures."
         required: false
@@ -99,6 +95,11 @@ permissions:
 
 jobs:
   build-and-deploy:
+    # Prevent overlapping fetches from racing cache writes or external side effects.
+    # Scope by caller repository and project directory so independent dashboards can run.
+    concurrency:
+      group: prow-ai-dashboard-${{ github.repository }}-${{ inputs.project_dir }}
+      cancel-in-progress: false
     runs-on: ${{ startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on) || inputs.runs-on }}
     environment:
       name: github-pages

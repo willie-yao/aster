@@ -41,7 +41,6 @@ jobs:
   deploy:
     uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
     with:
-      project_dir: "."
       ai-model: ${{ vars.AI_MODEL }}
       ai-endpoint: ${{ vars.AI_ENDPOINT }}
     secrets:
@@ -84,8 +83,7 @@ uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@v1.0.0-
 ```
 
 The moving `@v1` alias is created only when the first stable `v1.0.0` release is
-published. Do not use `@v1` before that alias exists. Use the same ref for the
-clear-cache workflow.
+published. Do not use `@v1` before that alias exists.
 
 ## Host repository layout
 
@@ -95,7 +93,6 @@ A dedicated repository puts the files at the root:
 project.yaml
 prompts/system.md
 .github/workflows/deploy.yml
-.github/workflows/clear-cache.yml
 ```
 
 An existing repository can use a subdirectory:
@@ -104,10 +101,9 @@ An existing repository can use a subdirectory:
 dashboard/project.yaml
 dashboard/prompts/system.md
 .github/workflows/deploy.yml
-.github/workflows/clear-cache.yml
 ```
 
-Set `project_dir: dashboard` in both workflows. A repository can publish only one
+Set `project_dir: dashboard` in the deploy workflow. A repository can publish only one
 Pages site. If it already has one, use a dedicated dashboard repository or the
 Kubernetes-native deployment.
 
@@ -127,6 +123,14 @@ After the run succeeds, check:
 
 See [Troubleshooting](troubleshooting.md) if the workflow succeeds but the site
 is empty or analysis is unavailable.
+
+## Manual full cache reset
+
+Provider, model, prompt, and skill changes invalidate affected analyses
+automatically. A clear-cache workflow is therefore not generated for new
+projects. If an operator needs an immediate full rebaseline, add a small workflow
+that calls `.github/workflows/reusable-clear-cache.yml` with the same engine ref
+and `project_dir` as the deploy workflow.
 
 ## Private AI endpoints
 

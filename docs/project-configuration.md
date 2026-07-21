@@ -1,13 +1,24 @@
 # Project configuration
 
-Each consumer repository owns a strict `project.yaml`. Unknown fields are errors,
-so use the names documented here and in the annotated
-[`project.reference.yaml`](../configs/example/project.reference.yaml).
+Each consumer owns one strict `project.yaml`. Unknown fields are errors. Start
+with [`configs/example/project.yaml`](../configs/example/project.yaml) or let
+[`fetcher onboard`](onboarding-a-new-project.md) generate it. Add optional
+sections only when a working deployment needs them.
 
-Start with [`configs/example/project.yaml`](../configs/example/project.yaml), then
-add only the optional sections you need.
+## Configuration boundaries
 
-## Required fields
+Three files have different owners:
+
+| File | Owns |
+| --- | --- |
+| `project.yaml` | Portable project identity, discovery, storage, branding, analysis policy, and optional features |
+| `prompts/system.md` | Project-specific architecture and failure knowledge |
+| Pages workflow or Helm values | Infrastructure, credentials, runner or cluster settings, and Orka execution settings |
+
+Do not copy Helm or workflow tuning into `project.yaml`. Do not put project
+identity or artifact routing into Helm values.
+
+## Minimal configuration
 
 ```yaml
 id: myproject
@@ -31,18 +42,17 @@ branding:
 
 | Field | Purpose |
 | --- | --- |
-| `id` | Stable lowercase identifier used in cache keys and logs. |
-| `name` | Human-readable project name. |
-| `storage` | Artifact backend and bucket. |
-| `branding` | Site identity, base path, URL, and source repository. |
-| `testgrid.dashboard` | Required for the default `testgrid` discovery source. Omit it only when using bucket discovery. |
+| `id` | Stable lowercase identifier used in task identities, cache keys, and logs |
+| `name` | Human-readable project name |
+| `testgrid.dashboard` | TestGrid annotation used by the default discovery source |
+| `storage` | Artifact backend and bucket |
+| `branding` | Site identity, URL paths, and source repository |
 
-For GitHub Pages, `branding.base_path` is `/<host-repo>` and `site_url` is the
-full Pages URL. For Kubernetes-native deployments, use `/` and the ingress URL.
+`short_name` is an optional compact display label. For Pages, set
+`branding.base_path` to `/<host-repo>` and `site_url` to the full Pages URL. For
+Kubernetes, use `/` and the ingress URL.
 
 ## Storage
-
-The engine supports three providers:
 
 ```yaml
 # Native Google Cloud Storage.
@@ -61,29 +71,26 @@ storage:
 storage:
   provider: local
   base: "/absolute/path/to/artifacts"
-  web_base: "https://artifacts.example.net" # optional public link root
+  web_base: "https://artifacts.example.net"
 ```
 
-`web_base` overrides generated artifact links. `prow_base` overrides Prow build
-links. The local provider is intended for tests and offline fetches. Set
-`web_base` before publishing data produced from a local tree.
+`web_base` overrides artifact links. `prow_base` overrides Prow build links. The
+local provider is intended for tests and offline fetches.
 
 ## Job discovery
 
-The default source reads Kubernetes test-infra job configurations and keeps jobs
+The default source reads Kubernetes test-infra job configuration and keeps jobs
 whose `testgrid-dashboards` annotation contains `testgrid.dashboard`.
 
-For another Prow installation, discover directly from the artifact bucket:
+For another Prow installation, discover directly from its artifact bucket:
 
 ```yaml
 discovery:
   source: bucket
-  job_filters:
-    - "integration-"
+  job_filters: ["integration-"]
 ```
 
-`job_filters` are optional substring filters. Omit them to include every job in
-the bucket.
+Omit `job_filters` to include every job in the bucket.
 
 Periodics are included by default. Add presubmits with:
 
@@ -94,8 +101,8 @@ source:
 
 ## Categories
 
-Categories are optional. Without them, the dashboard renders one flat job grid.
-Rules are checked in order with case-insensitive substring matching.
+Categories are optional. Without them, the landing page renders one flat job
+grid. Rules use case-insensitive substring matching and the first match wins.
 
 ```yaml
 categories:
@@ -109,15 +116,14 @@ categories:
 category_display_order: [e2e, conformance, other]
 ```
 
-The first matching rule wins. Unmatched jobs use the reserved `other` category.
+Unmatched jobs use the reserved `other` category.
 
-## AI provider and analysis
+## Analysis configuration
 
-AI is optional at the fetcher level. When it is enabled, the endpoint, model,
-token, and a non-empty `prompts/system.md` are required. The endpoint must support
-OpenAI-style function calling.
+AI is optional at the fetcher level. When enabled, it needs a token, a non-empty
+`prompts/system.md`, and a function-calling model.
 
-Provider coordinates can be committed in `project.yaml`:
+For in-process analysis, provider coordinates can come from YAML:
 
 ```yaml
 ai:
@@ -125,18 +131,17 @@ ai:
   model: "model-id"
 ```
 
-For a public consumer repo, omit those fields and pass `AI_ENDPOINT` and
-`AI_MODEL` through the deployment environment. The YAML values win when both are
-set.
+Public consumers normally omit those values and use `AI_ENDPOINT`, `AI_MODEL`,
+and `AI_TOKEN` from the deployment. YAML wins when both are set.
 
-Optional provider and loop fields:
+Most projects do not need analysis tuning. The defaults are designed to work
+without an `ai:` block. Add only the setting that a measured model or artifact
+constraint requires:
 
 ```yaml
 ai:
-  headers:
-    X-Routing-Key: "public-routing-value"
-  concurrency: 1
   tools: [filesystem, k8s]
+  concurrency: 1
   max_iters: 15
   timeout: 5m
   min_tool_calls: 2
@@ -147,93 +152,68 @@ ai:
 ```
 
 Do not commit credentials under `ai.headers`. `AI_TOKEN` is the supported bearer
-token channel. Providers that require a secret in another header, such as an
-Azure `api-key`, need a trusted proxy or a customized deployment that injects the
-header without storing it in public YAML. See [AI providers](ai-providers.md).
+token channel. Use a trusted proxy or custom deployment for providers that need
+a secret in another header.
 
-The in-process loop reads all fields above. The experimental Orka backend reads
-the project id, prompt, storage settings, `ai.tools`, and `ai.min_tool_calls`;
-its other execution settings live under Helm `orka.*` values.
+### In-process and Orka compatibility
 
-## Skills
+The Kubernetes skeleton fetch still uses discovery, storage, branding, and
+categories before Orka begins. The Orka ingestor runs configured notifications
+and GitHub reconciliation after analysis completes.
 
-Consumer diagnostic recipes are YAML files under `skills/*.yaml`. Their presence
-is the opt-in; there is no `skills.enabled` field. See [Skills](skills.md).
+| Configuration | In-process | Orka preview |
+| --- | --- | --- |
+| `id`, `name`, `short_name` | Yes | Yes |
+| `source`, `testgrid`, `discovery` | Yes | Yes |
+| `storage.*` | Yes | Yes |
+| `branding`, categories | Yes | Yes |
+| `prompts/system.md` | Yes | Yes |
+| `skills/*.yaml` | Yes | Yes |
+| `ai.tools` | Yes | Yes |
+| `ai.min_tool_calls` | Yes | Yes |
+| `ai.min_gcs_bytes` | Yes | Yes |
+| `ai.endpoint`, `ai.model`, `ai.headers` for per-failure analysis | Yes | No, use an Orka Provider and `orka.model` |
+| `ai.concurrency`, `max_iters`, `timeout` | Yes | No, use `orka.*` execution settings where applicable |
+| `ai.single_tool_call`, `ai.critique.*` | Yes | No, the compatibility worker and validation tools own convergence and acceptance |
+| `notifications`, `issues`, `ai.fix_prs` | Yes | Yes, after Orka ingestion |
 
-## Email notifications
+Provider values under `ai.*` may still be used by optional post-analysis AI
+review, but they do not configure Orka's per-failure Tasks.
 
-Email notifications are optional and configured under `notifications.email`:
+Orka is a strategic backend that is still in preview. Its current Provider,
+model, task timeout, retry, placement, and load controls live in Helm `orka.*`
+values. See the [Orka quickstart](../experimental/orka/QUICKSTART.md).
 
-```yaml
-notifications:
-  email:
-    enabled: true
-    action_links: false
-    from: "Prow AI Dashboard <prow-dashboard@example.com>"
-    to:
-      - "ci-team@example.com"
-    smtp:
-      host: "smtp.example.com"
-      port: 587
-      username: "prow-dashboard@example.com"
-      tls: starttls
-```
+## Custom skills
 
-`tls` accepts `starttls` (default), `tls` for implicit TLS, or `none` for an
-explicit unauthenticated relay. The default ports are 587, 465, and 25
-respectively. When `smtp.username` is set, provide `EMAIL_SMTP_PASSWORD` through
-the deployment secret environment. Set `action_links: true` only for a
-Kubernetes-native server with authenticated actions; it adds pattern-level issue
-and fix review links. See [Email notifications](notifications.md).
+Diagnostic recipes live under `skills/*.yaml`. Their presence is the opt-in.
+Both analysis backends load the same recipes, enforce their required evidence,
+and include the skill-set hash in cache or Task identity. See
+[Custom diagnostic skills](skills.md).
 
-## Optional write features
+## Optional features
 
-Automatic issue filing is configured under top-level `issues`. Agent-proposed
-fix PRs are configured under `ai.fix_prs`.
+Keep these sections out of the first-run config. Add them after the dashboard
+publishes the expected jobs:
 
-```yaml
-issues:
-  enabled: true
-  repo: {owner: my-org, name: ci-tracking}
+- `notifications.email`: [Email notifications](notifications.md)
+- `issues`: [GitHub issues](github-issues.md)
+- `ai.fix_prs`: [Agent-proposed fix PRs](fix-prs.md)
 
-ai:
-  fix_prs:
-    enabled: true
-    author_name: "Jane Maintainer"
-    author_email: "jane@example.com"
-    dry_run: true
-    agent_runtime:
-      type: orka
-      agent_ref: opencode-fixer
-      api: http://orka.orka-system.svc:8080
-      namespace: orka-system
-      retries: 1  # default; set 0 to disable Orka Task retries
-    critique_retries: 0  # required to opt out when no AI reviewer is configured
-    verify:
-      enabled: true
-      commands:
-        - go build ./...
-        - go vet ./...
-      timeout: 10m
-```
-
-These features also require their write tokens and deployment prerequisites. See
-[GitHub issues](github-issues.md) and [Fix PRs](fix-prs.md).
-
-Prow fix verification needs no additional project fields. The engine
-reads job type, repository refs, trigger commands, pull request revisions,
-build status, and JUnit test identities from Prow metadata. It also discovers
-which presubmit jobs execute a periodic's failing test from recent JUnit
-coverage. Optional jobs without JUnit or a discoverable Prow configuration
-remain inconclusive rather than requiring guessed mappings.
+These features require deployment secrets and, in some cases, additional writer
+runtime dependencies. Their focused guides contain complete examples.
 
 ## Validate a config
 
-A discovery-only fetch validates the strict schema and confirms that jobs are
-found without making AI calls:
+A one-build, discovery-only fetch validates the strict schema without making AI
+calls:
 
 ```bash
 ./bin/fetcher -project-dir=../my-consumer -ai=false -builds=1
 ```
 
-Use the generated `data/dashboard.json` job count as the success check.
+Then inspect the job count:
+
+```bash
+python3 -c "import json; print(len(json.load(open('data/dashboard.json'))['jobs']))"
+```

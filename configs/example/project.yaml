@@ -2,9 +2,8 @@
 #
 # Copy this into your consumer repo as project.yaml, drop a prompts/system.md
 # alongside it, and point .github/workflows/deploy.yml at the reusable workflow
-# in this engine repo. Every optional field (job grouping, AI tuning, issues,
-# fix PRs, notifications, ...) is documented in project.reference.yaml in this
-# directory. See docs/onboarding-a-new-project.md and docs/writing-prompts.md.
+# in this engine repo. Add optional fields only from
+# docs/project-configuration.md and the focused feature guides.
 
 # Stable identifier used in cache keys and log lines. Lowercase, no spaces.
 id: example
@@ -17,8 +16,8 @@ testgrid:
   dashboard: "sig-foo-your-project"
 
 # Where the project's Prow build artifacts live. The engine does not assume GCS,
-# so provider is required. See project.reference.yaml for the gcsweb and local
-# providers.
+# so provider is required. See docs/project-configuration.md for gcsweb and
+# local providers.
 storage:
   provider: gcs
   bucket: "kubernetes-ci-logs"

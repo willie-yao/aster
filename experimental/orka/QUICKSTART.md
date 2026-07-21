@@ -1,4 +1,4 @@
-# Quickstart: run the dashboard on the Orka backend
+# Quickstart: run the Orka backend preview
 
 The Orka path runs the dashboard's AI failure analysis as Kubernetes-native Orka
 Tasks instead of the engine's in-process agentic loop, so analysis runs alongside
@@ -288,7 +288,7 @@ release is ready. A new PVC clears dashboard data and generates a new private
 validation key, so per-test Tasks are cold. An exact matching pattern Task may
 still be reused while `orka.version` is unchanged. Bump the version when pattern
 Tasks must also be cold. The complete blue-green procedure is in
-[Evaluating Orka safely](../../docs/orka-evaluation.md).
+[Evaluating Orka safely](EVALUATION.md).
 
 `analysis: inprocess`, the default, is unchanged: the engine runs the in-process
 loop and none of the Orka path is deployed.
@@ -423,15 +423,16 @@ The Orka path reads the storage, tool, investigation-floor, and id fields from t
 |---|---|
 | `ai.tools` | which tool groups to enable (`filesystem`, `k8s`); default `[filesystem, k8s]` |
 | `ai.min_tool_calls` | minimum recorded Orka tool calls before a result is accepted; default `2` |
+| `ai.min_gcs_bytes` | minimum bytes of validated artifact evidence before a result is accepted; default `0` |
+| `skills/*.yaml` | consumer evidence recipes exposed through `required_evidence` and enforced by `submit_analysis` |
 | `storage.bucket` | the bucket, routed to the shim via the `X-Bucket` header |
-| `storage.provider` / `storage.base` / `storage.prow_base` | the storage backend (gcs or gcsweb/S3), routed via `X-Storage-*` headers so the shim reads the right provider |
+| `storage.provider` / `storage.base` / `storage.web_base` / `storage.prow_base` | storage and link routing passed to the scoped artifact tools |
 | `id` / `short_name` | the project label in the prompt |
 
-Everything else under `ai:` is engine-only and has no effect on the Orka path:
-`ai.concurrency`, `ai.timeout`, `ai.max_iters`,
-`ai.min_gcs_bytes`, `ai.single_tool_call`, and `ai.critique.*`.
-`prompts/system.md` is
-composed into the Task's system prompt exactly as in the engine.
+The in-process loop settings `ai.concurrency`, `ai.timeout`, `ai.max_iters`,
+`ai.single_tool_call`, and `ai.critique.*` do not configure Orka Tasks.
+`prompts/system.md` is composed into the Task's system prompt exactly as in the
+engine.
 
 The equivalent Orka knobs are producer flags, surfaced as Helm `orka.*` values:
 

@@ -1,146 +1,145 @@
 # prow-ai-dashboard
 
-Reusable engine for **AI-powered Prow/TestGrid dashboards**: a project-agnostic
-alternative to TestGrid with AI-driven failure analysis, run triage, and
-notifications. Each project gets its own deployment, secrets, and GitHub Pages
-or Kubernetes-native site without forking the engine.
+Reusable engine for AI-powered Prow and TestGrid dashboards. It discovers Prow
+jobs, analyzes failures, renders a React dashboard, and can notify maintainers or
+open guarded GitHub actions without requiring each project to fork the engine.
 
-> ⚠️ **Active development.** Engine APIs such as the `project.yaml` schema and
-> reusable workflow inputs may still change. Pin to `@main` or a commit SHA
-> until a stable release is cut. The moving `v1` alias does not exist before
-> `v1.0.0` is published.
+> **Active development.** Pin consumers to `@main`, a commit SHA, or an exact
+> prerelease until a stable release and moving `v1` alias are published.
 
-## How it works
+## Start here
 
-The same engine ships **two deploy paths**; pick per project. Both build from
-one codebase, run the same Go fetcher and React UI, and read the same
-`project.yaml` + `prompts/system.md`.
+The fastest way to try the dashboard is the GitHub Actions and Pages scaffold:
 
-**Kubernetes-native (in-cluster).** A worker runs the fetch and AI analysis
-inside your cluster, next to the inference stack, and a small server serves the
-dashboard plus the `/data/*.json` contract from a shared volume. The AI calls
-stay in-cluster (low latency, no egress, private endpoints work), and it unlocks
-interactive admin actions behind GitHub sign-in. File issue and Mark resolved
-work in the standard image. Propose fix also requires `opencode` and git.
-Deployed with the Helm chart in [`deploy/helm`](deploy/helm). The analysis
-backend is selectable: the in-process agentic loop by default, or the advanced
-experimental [Orka](experimental/orka/) Kubernetes-native pipeline. See
-[Kubernetes deploy](docs/kubernetes.md) and [Server mode](docs/server.md).
-
-**GitHub Actions + Pages (static).** A small reusable workflow runs the
-fetcher on a schedule, builds the branded SPA, and publishes to the host repo's
-GitHub Pages. Public, cheap, no backend or cluster. Read-only (no interactive
-actions).
-
-```yaml
-# <your-repo>/.github/workflows/deploy.yml  (Pages path)
-jobs:
-  deploy:
-    uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
-    with:
-      project_dir: .          # wherever project.yaml lives
-      ai-model: ${{ vars.AI_MODEL }}
-      ai-endpoint: ${{ vars.AI_ENDPOINT }}
-    secrets:
-      AI_TOKEN: ${{ secrets.AI_TOKEN }}
-      # Optional after notifications.email is enabled in project.yaml.
-      EMAIL_SMTP_PASSWORD: ${{ secrets.EMAIL_SMTP_PASSWORD }}
+```bash
+go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboard \
+  -testgrid "<testgrid-dashboard>" \
+  -dashboard-repo "<owner>/<dashboard-repo>" \
+  -source-repo "<owner>/<source-repo>" \
+  -out ./my-dashboard
 ```
 
-Both paths serve the identical `/data/*.json` schema; the Kubernetes-native
-server is a strict superset that adds a capability descriptor the frontend uses
-to light up server-only features. Whichever you pick, you never fork the engine.
+The command verifies discovery before writing a small consumer repository. It
+generates `project.yaml`, `prompts/system.md`, one deploy workflow, and a short
+checklist. Continue with [Onboarding a project](docs/onboarding-a-new-project.md).
 
-| | Kubernetes-native | GitHub Actions + Pages |
+## Choose a deployment
+
+Deployment and analysis are separate choices.
+
+### Deployment
+
+| Need | Use |
+| --- | --- |
+| Fast evaluation or a public read-only dashboard | GitHub Actions and Pages |
+| A private in-cluster model endpoint | Kubernetes with Helm |
+| Authenticated issue, fix, or resolve actions | Kubernetes with Helm |
+| No cluster to operate | GitHub Actions and Pages |
+
+**GitHub Actions and Pages** runs the fetcher on a schedule, builds the SPA, and
+publishes static JSON and assets. It is inexpensive and read-only.
+
+**Kubernetes with Helm** runs a worker or CronJob beside a small API and SPA
+server. Use it for private inference endpoints, persistent shared data, and
+server-side actions. See [Kubernetes deployment](docs/kubernetes.md).
+
+### Analysis backend
+
+| Backend | Availability | Use it when |
 | --- | --- | --- |
-| Runs the fetch | In-cluster worker/CronJob | GitHub Actions runner |
-| Serves the site | In-cluster server (+ ingress) | GitHub Pages |
-| AI endpoint | In-cluster or public | Public, self-hosted runner, or pre-fetched data |
-| Interactive actions | Yes (admin sign-in) | No (read-only) |
-| Needs a cluster | Yes | No |
+| In-process | Pages and Kubernetes | You want the self-contained default |
+| Orka preview | Kubernetes | You want per-failure Tasks, retries, observability, and agent-runtime integration |
 
-## What you configure
+The in-process backend is the safest first install. **Orka is the strategic
+Kubernetes orchestration backend** and remains under heavy development. Today it
+requires a compatible Orka control plane, Provider, and worker. The intended
+product experience is for the dashboard deployment to manage those dependencies
+rather than requiring a separate Orka installation. See [Orka preview](experimental/orka/README.md).
 
-A dashboard is shaped by three things:
+Both backends produce the same `jobs/*.json` and dashboard UI.
 
-- **`project.yaml`**: bucket, dashboard, branding, AI provider, and feature
-  toggles. See [`configs/example/project.yaml`](configs/example/project.yaml)
-  for the minimal required set and
-  [`project.reference.yaml`](configs/example/project.reference.yaml) for the
-  annotated field reference.
-- **`prompts/system.md`**: project-specific AI knowledge. Mandatory; the fetcher
-  hard-errors if it is missing when `-ai` is enabled.
-- **The engine**, a Go fetcher in `backend/` and a React UI in `frontend/`, is
-  built or imaged per project at deploy time; you never fork it.
+## What a project owns
+
+A consumer normally contains only:
+
+```text
+project.yaml
+prompts/system.md
+.github/workflows/deploy.yml   # Pages
+# or deploy/values.yaml        # Kubernetes
+```
+
+- **`project.yaml`** identifies jobs, storage, branding, and optional features.
+  Start with [the minimal example](configs/example/project.yaml) and use the
+  [configuration reference](docs/project-configuration.md) only when adding an
+  optional field.
+- **`prompts/system.md`** supplies project-specific architecture, artifact, and
+  failure knowledge. It is required when AI analysis is enabled.
+- **Deployment configuration** supplies infrastructure details such as runner
+  selection, model credentials, persistence, and Orka settings.
+
+Most project settings are shared across deployments and analysis backends.
+`branding.base_path` and `branding.site_url` remain deployment-specific, and
+`onboard` generates the correct values for Pages or Kubernetes. In-process and
+Orka analysis within the same Kubernetes deployment use the same project file.
+
+## How data flows
+
+```text
+Prow job configuration and artifact storage
+                  |
+            fetcher or worker
+                  |
+        in-process analysis or Orka
+                  |
+ dashboard.json, jobs/*.json, flakiness.json
+                  |
+       Pages or the Kubernetes server
+                  |
+             React dashboard
+```
+
+The Kubernetes server serves the same `/data/*.json` contract as Pages and adds
+`/api/capabilities` for server-only features.
 
 ## Documentation
 
-**Getting started**
-- [Onboarding a new project](docs/onboarding-a-new-project.md): choose a deploy
-  path and scaffold it with the `onboard` subcommand.
-- [GitHub Actions and Pages](docs/github-pages.md): configure and validate the
-  static deployment.
-- [Kubernetes-native](docs/kubernetes.md): deploy the worker and server with
-  Helm.
+### Get started
 
-**Configuration & authoring**
-- [Project configuration](docs/project-configuration.md): strict
-  `project.yaml` field reference and examples.
-- [AI providers](docs/ai-providers.md): point the engine at any
-  OpenAI-compatible endpoint, such as Copilot, OpenAI, Dynamo/NIM, vLLM, or
-  Ollama.
-- [Writing prompts](docs/writing-prompts.md): author the required
-  `prompts/system.md`.
-- [Agentic loop](docs/agentic.md): how the model browses artifacts via
-  function-calling tools, and how to tune it per model tier.
+- [Onboarding a project](docs/onboarding-a-new-project.md)
+- [GitHub Actions and Pages](docs/github-pages.md)
+- [Kubernetes deployment](docs/kubernetes.md)
+- [Project configuration](docs/project-configuration.md)
+- [Troubleshooting](docs/troubleshooting.md)
 
-**Features**
-- [GitHub issues](docs/github-issues.md): auto-file and maintain issues for the
-  highest-signal failures.
-- [Skills](docs/skills.md): author diagnostic recipes for recurring patterns.
-- [Fix PRs](docs/fix-prs.md): draft a minimal code fix for a recurring failure
-  and open a guardrailed draft PR against the source repo.
-- [Email notifications](docs/notifications.md): alert on persistent failures,
-  changed errors, recoveries, and optionally link systemic patterns into the
-  authenticated issue and fix review flow.
+### Improve analysis
 
-**Operations**
-- [Kubernetes deploy](docs/kubernetes.md): run the dashboard in-cluster, a
-  worker/CronJob writing to a shared volume that a server reads, via the Helm
-  chart in `deploy/helm`.
-- [Server mode](docs/server.md): the in-cluster server that serves the same
-  `/data/*.json` contract plus a capability descriptor and admin-gated actions.
-- [Orka quickstart](experimental/orka/QUICKSTART.md): set up the advanced,
-  experimental Kubernetes-native analysis backend.
-- [Orka worker compatibility](experimental/orka/worker-patches/COMPATIBILITY.md):
-  pinned Orka source, worker image tags, digests, and validation contract.
-- [Safe Orka evaluation](docs/orka-evaluation.md): run a side-effect-free,
-  blue-green comparison with a fresh PVC and reversible cutover.
-- [Troubleshooting](docs/troubleshooting.md): common first-deploy failures and
-  checks.
-- [Releasing](docs/releasing.md): cut an engine release and how consumers pin.
+- [AI providers](docs/ai-providers.md)
+- [Writing the project prompt](docs/writing-prompts.md)
+- [Agentic analysis](docs/agentic.md)
+- [Custom diagnostic skills](docs/skills.md)
 
-**Development**
-- [Contributing](CONTRIBUTING.md): prerequisites and contribution workflow.
-- [Local development](docs/development.md): build, test, and run the fetcher
-  against a consumer repo locally.
-- [Testing](docs/testing.md): unit, end-to-end pipeline, and quality-evaluation
-  layers.
+### Optional features
 
-## Adding a project
+- [Email notifications](docs/notifications.md)
+- [GitHub issues](docs/github-issues.md)
+- [Agent-proposed fix PRs](docs/fix-prs.md)
+- [Server and authenticated actions](docs/server.md)
 
-See [onboarding](docs/onboarding-a-new-project.md). The `onboard` subcommand
-scaffolds either path:
+### Orka preview
 
-- **Kubernetes-native**: `onboard -mode k8s` generates `project.yaml`,
-  `prompts/system.md`, and a `deploy/` folder (Helm `values.yaml` + a deploy
-  README). Fill in the RWX storage class and AI endpoint, then `helm install`.
-- **GitHub Actions + Pages**: `onboard` (default) generates `project.yaml`,
-  `prompts/system.md`, and the two workflow files. Set the `AI_ENDPOINT` and
-  `AI_MODEL` repository variables, set the `AI_TOKEN` secret, and enable Pages
-  with **Source: GitHub Actions**.
+- [Product status and constraints](experimental/orka/README.md)
+- [Quickstart](experimental/orka/QUICKSTART.md)
+- [Safe evaluation](experimental/orka/EVALUATION.md)
+- [Architecture](experimental/orka/ARCHITECTURE.md)
+- [Worker compatibility](experimental/orka/worker-patches/COMPATIBILITY.md)
 
-Either way: no engine fork, no engine PR.
+### Development
+
+- [Contributing](CONTRIBUTING.md)
+- [Local development](docs/development.md)
+- [Testing](docs/testing.md)
+- [Releasing](docs/releasing.md)
 
 ## License
 

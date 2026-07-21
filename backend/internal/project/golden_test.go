@@ -39,23 +39,3 @@ func TestLoadExampleGolden(t *testing.T) {
 		t.Error("LoadDir returned empty prompt; expected example/prompts/system.md content")
 	}
 }
-
-// TestLoadReferenceGolden verifies the full project.reference.yaml parses and
-// validates, including the optional fields the minimal file omits.
-func TestLoadReferenceGolden(t *testing.T) {
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	ref := filepath.Join(filepath.Dir(thisFile), "..", "..", "..", "configs", "example", "project.reference.yaml")
-	cfg, err := Load(ref)
-	if err != nil {
-		t.Fatalf("Load(%s): %v", ref, err)
-	}
-	if cfg.ShortName != "EXAMPLE" {
-		t.Errorf("short_name = %q, want EXAMPLE", cfg.ShortName)
-	}
-	if cfg.AI == nil {
-		t.Errorf("reference should carry an active ai: block: %+v", cfg)
-	}
-}

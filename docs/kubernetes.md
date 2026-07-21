@@ -1,17 +1,17 @@
 # Running the dashboard Kubernetes-native
 
-The engine ships two coequal deploy paths from one codebase. This guide covers
-the **Kubernetes-native** path: the dashboard runs in-cluster next to your
-inference stack, with the fetch as a worker (or CronJob) and a small server
-serving the dashboard from a shared volume. The other path is the static
-[GitHub Actions + Pages](../README.md) deploy, where the fetcher writes JSON,
-Actions builds the SPA, and Pages serves it.
+Use the Helm chart when the dashboard needs a private in-cluster model endpoint,
+persistent shared data, or authenticated server actions. For a public read-only
+site without a cluster, use [GitHub Actions and Pages](github-pages.md).
 
-Server mode is a strict superset of the static contract. The server exposes the
-same `/data/*.json` files the SPA already reads, adds `/api/capabilities` so the
-frontend can discover server-only features, and serves the SPA itself. See
-[server.md](server.md) for the endpoint reference and the capability seam. The
-static Pages path keeps working unchanged.
+The chart runs a worker or CronJob beside a small server that serves the SPA and
+the same `/data/*.json` contract as Pages. The server also exposes
+`/api/capabilities` for server-only features. See [Server mode](server.md) for
+the endpoint and authentication reference.
+
+Start with `fetcher onboard -mode k8s`. Its generated values contain only the
+storage class, model connection, and a safe fetch timeout. The rest of this guide
+is an operator reference for production settings and optional features.
 
 ## Why run in-cluster
 
@@ -71,16 +71,16 @@ identical either way.
 - `analysis: inprocess` (default): the worker or CronJob runs the engine's
   in-process agentic loop, governed by `ai.enabled`. It is self-contained, so a
   fresh `helm install` works with no extra components.
-- `analysis: orka` (advanced and experimental): the fetch step
-  writes the dashboard skeleton only, and the [Orka](../experimental/orka/)
-  pipeline runs the analysis as Kubernetes-native Tasks alongside your inference
-  stack, with native retries, per-Task observability, and a path to agent-runtime
-  remediation. It is useful when you want one observable Task per failure and
-  are prepared to operate the additional Orka components and compatibility worker.
+- `analysis: orka` (strategic preview): the fetch step writes the dashboard
+  skeleton and Orka runs one observable Kubernetes Task per failure. This adds
+  native retries, per-Task telemetry, and the orchestration foundation for agent
+  runtimes. Orka remains under heavy development. Today it requires external
+  prerequisites; the intended product experience is for the dashboard deployment
+  to manage them.
 
-Orka mode requires `mode: cron` and assumes the Orka control plane, a Provider,
-and the pinned [compatibility AI worker](../experimental/orka/worker-patches/COMPATIBILITY.md)
-are installed. The dashboard chart creates a
+Orka currently requires `mode: cron`, the Orka control plane, a Provider, and the
+pinned [compatibility AI worker](../experimental/orka/worker-patches/COMPATIBILITY.md).
+The dashboard chart creates a
 release-scoped artifact Tool Deployment, Service, authentication Secret,
 NetworkPolicy, and base Tool ConfigMap by default. Configure an external shared
 shim only when the operator intentionally owns those resources separately.
@@ -97,7 +97,7 @@ prerequisites are in place. See
 [experimental/orka/QUICKSTART.md](../experimental/orka/QUICKSTART.md) for the full setup
 and [experimental/orka/ARCHITECTURE.md](../experimental/orka/ARCHITECTURE.md) for
 how it works. For a fresh, side-effect-free comparison and a reversible PVC
-cutover, follow [Evaluating Orka safely](orka-evaluation.md).
+cutover, follow [Evaluating Orka safely](../experimental/orka/EVALUATION.md).
 
 Orka can also be used only for fix generation while analysis remains
 `inprocess`. Set `orka.fixRuntime.enabled=true`, then configure
@@ -129,7 +129,7 @@ source lives at `deploy/helm/prow-ai-dashboard`. Supply your consumer-owned
 `project.yaml` and `prompts/system.md` at install time; they are never checked
 into the engine repo. The `onboard -mode k8s` subcommand scaffolds a project
 plus a `deploy/values.yaml` ready to pass here with `-f`; see
-[onboarding-a-new-project.md](onboarding-a-new-project.md#step-3a-kubernetes-native).
+[Onboarding a project](onboarding-a-new-project.md).
 
 Install the released chart straight from GHCR (no repo checkout needed). The
 chart pins its image to the matching release, so `image.tag` is optional:
@@ -209,7 +209,7 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | --- | --- |
 | `image.repository`, `image.tag` | Engine image; tag defaults to the chart `appVersion`. |
 | `mode` | `watch` (continuous worker Deployment, default) or `cron` (scheduled CronJob). |
-| `analysis` | `inprocess` (default; in-cluster agentic loop) or `orka` (advanced experimental pipeline; requires `mode: cron`, the Orka control plane, a Provider, and the compatibility worker). |
+| `analysis` | `inprocess` for the self-contained backend or `orka` for the strategic preview. Orka currently requires `mode: cron`, a compatible control plane, Provider, and worker. |
 | `orka.artifactTool.*` | Release-scoped artifact Tool image, authentication, network policy, resources, and scheduling. |
 | `orka.baseTools.*` | Create the synchronized producer ConfigMap or reference an existing ConfigMap in the release namespace. |
 | `orka.producer.maxConcurrentTasks`, `taskPoll`, `waveTimeout` | Apply per-test Tasks in bounded waves (`0` through `1000`) and bound placement recovery and intermediate-wave polling. |

@@ -13,7 +13,7 @@ capability descriptor at /api/capabilities.
 
 {{- if eq .Values.analysis "orka" }}
 
-Analysis backend: orka. The fetcher CronJob writes the skeleton (-ai=false), the
+Analysis backend: orka (strategic preview). The fetcher CronJob writes the skeleton (-ai=false), the
 orka-producer applies one Orka Task per failing test, and the orka-ingestor patches
 the results and finalizes job-level recurring patterns. The Orka control plane,
 a Provider, and the ai-worker patches must already be installed in namespace

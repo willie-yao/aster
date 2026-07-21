@@ -27,12 +27,12 @@ mode: watch
 # Analysis backend selects HOW failures are analyzed.
 #   inprocess: (default) the fetcher/worker runs the engine's in-process agentic
 #              loop (governed by ai.enabled). No change to existing behavior.
-#   orka:      an advanced experimental path where fetch writes the skeleton and Orka
-#              pipeline (orka-producer -> Orka Tasks -> orka-ingestor) does the
-#              analysis, running alongside an in-cluster inference stack. Requires
-#              mode: cron, and Orka + the tool shim + a Provider + the ai-worker
-#              patches must already be installed (this chart deploys the pipeline,
-#              not Orka itself). See experimental/orka/QUICKSTART.md.
+#   orka:      the strategic orchestration backend, currently in preview. The
+#              producer creates one observable Orka Task per failure and the
+#              ingestor publishes accepted results. Today it requires mode: cron,
+#              a compatible Orka control plane, Provider, and worker. The intended
+#              product experience is for this deployment to manage those
+#              dependencies. See experimental/orka/QUICKSTART.md.
 analysis: inprocess
 
 # Orka analysis backend settings. Only used when analysis: orka.

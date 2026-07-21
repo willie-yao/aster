@@ -37,6 +37,9 @@ func writeJSON(path string, v any) error {
 
 // WriteDashboard writes dashboard.json to dir.
 func WriteDashboard(dir string, dashboard models.Dashboard) error {
+	if dashboard.Jobs == nil {
+		dashboard.Jobs = []models.JobSummary{}
+	}
 	return writeJSON(filepath.Join(dir, "dashboard.json"), dashboard)
 }
 

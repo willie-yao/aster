@@ -46,7 +46,7 @@ upgrade and are therefore at least a minor bump; call them out in the changelog.
    image (fetcher + server + SPA) to `ghcr.io/<owner>/prow-ai-dashboard` with
    the version tags.
 
-The experimental Orka compatibility worker has a separate lifecycle. Changes to
+The Orka preview compatibility worker has a separate lifecycle. Changes to
 its pinned source, patch, scripts, or workflow publish from `main` through
 `.github/workflows/orka-compat-image.yml`. Its tag contains the full Orka and
 dashboard commits instead of a semver alias. Get the exact published tag and
