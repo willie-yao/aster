@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,6 +17,8 @@ const (
 	eventPageSize = 500
 	maxEventPages = 100
 )
+
+var errTaskEventsNotReadableYet = errors.New("task events are not readable yet")
 
 type analysisTelemetry struct {
 	EventCount          int
@@ -31,6 +34,8 @@ type analysisTelemetry struct {
 	ElapsedMs           int
 	Provider            string
 	Model               string
+	APIMode             string
+	ResponseID          string
 	StopReason          string
 	TaskOutcome         string
 	TimelineVerified    bool
@@ -97,7 +102,7 @@ func (c *orkaClient) analysisTelemetry(ctx context.Context, namespace, taskName 
 		events = append(events, page.Events...)
 		if len(page.Events) == 0 {
 			if page.LatestSeq > after {
-				return analysisTelemetry{}, fmt.Errorf("task events through sequence %d are not readable yet", page.LatestSeq)
+				return analysisTelemetry{}, fmt.Errorf("%w through sequence %d", errTaskEventsNotReadableYet, page.LatestSeq)
 			}
 			return summarizeEvents(events), nil
 		}
@@ -119,6 +124,7 @@ func (c *orkaClient) analysisTelemetry(ctx context.Context, namespace, taskName 
 func summarizeEvents(events []executionEvent) analysisTelemetry {
 	out := analysisTelemetry{EventCount: len(events), qualityToolOutcomes: map[string]string{}}
 	toolCalls := map[string]bool{}
+	apiModes := map[string]bool{}
 	var earliest, latest, started, completed time.Time
 	starts := 0
 	for _, event := range events {
@@ -158,6 +164,13 @@ func summarizeEvents(events []executionEvent) analysisTelemetry {
 			out.ModelRequests++
 			if event.Type == "ModelRequestFailed" {
 				out.ModelFailures++
+			} else {
+				if apiMode := eventContentString(event.Content, "apiMode", "api_mode"); apiMode != "" {
+					apiModes[apiMode] = true
+				}
+				if responseID := eventContentString(event.Content, "responseID", "response_id"); responseID != "" {
+					out.ResponseID = responseID
+				}
 			}
 			out.InputTokens += event.InputTokens
 			out.OutputTokens += event.OutputTokens
@@ -177,6 +190,13 @@ func summarizeEvents(events []executionEvent) analysisTelemetry {
 		}
 	}
 	out.ToolCalls = len(toolCalls)
+	for apiMode := range apiModes {
+		if out.APIMode == "" {
+			out.APIMode = apiMode
+		} else if out.APIMode != apiMode {
+			out.APIMode = "mixed"
+		}
+	}
 	if starts > 1 {
 		out.TaskRetries = starts - 1
 	}
@@ -218,6 +238,21 @@ func qualityToolBase(name string) string {
 	} {
 		if matchesScopedTool(name, base) {
 			return base
+		}
+	}
+	return ""
+}
+
+func eventContentString(content json.RawMessage, keys ...string) string {
+	var payload map[string]any
+	if json.Unmarshal(content, &payload) != nil {
+		return ""
+	}
+	for _, key := range keys {
+		if value, ok := payload[key].(string); ok {
+			if value = strings.TrimSpace(value); value != "" {
+				return value
+			}
 		}
 	}
 	return ""

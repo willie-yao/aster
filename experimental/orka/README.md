@@ -69,6 +69,10 @@ also carries the configured Orka retry policy.
   Finalization and side-effect errors fail the batch so the CronJob retries.
   Mount the consumer project config and provide the same side-effect credentials
   to the ingestor. Webhook mode patches per-test results only.
+- **The pinned worker supports both OpenAI APIs.** It tries Responses first,
+  falls back to Chat Completions when unsupported, sends `store: false` on
+  Responses requests, and records API mode plus response ID for debugging.
+  `orka.apiMode` makes the expected mode part of Task identity and ingestion.
 - **Copilot needs the de-streaming proxy.** Copilot's non-streaming endpoint
   returns null tool_calls for Claude (the calls only arrive over streaming SSE).
   manifests/50-copilot-proxy.yaml de-streams so the worker sees real tool calls.

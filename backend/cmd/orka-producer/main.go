@@ -107,6 +107,7 @@ func main() {
 	namespace := flag.String("namespace", "orka-system", "namespace for the Tasks and Tools")
 	provider := flag.String("provider", "copilot", "Orka Provider name")
 	model := flag.String("model", "claude-sonnet-4.5", "model id")
+	apiModeFlag := flag.String("api-mode", orka.APIModeAuto, "expected provider API: auto, responses, or chat_completions")
 	version := flag.String("version", "v1", "manual cache-bust version included in the automatic analysis fingerprint")
 	timeout := flag.String("timeout", "10m", "per-Task timeout")
 	toolsCSV := flag.String("tools", "", "override comma-separated analysis Tool names; mandatory quality tools are still appended")
@@ -123,6 +124,10 @@ func main() {
 	kubeContext := flag.String("context", "", "kubeconfig context to use when -apply runs outside the cluster")
 	flag.Parse()
 
+	apiMode, err := orka.NormalizeAPIMode(*apiModeFlag)
+	if err != nil {
+		log.Fatal(err)
+	}
 	taskExecution, err := orka.ParseTaskExecution(*taskExecutionJSON)
 	if err != nil {
 		log.Fatalf("task execution: %v", err)
@@ -184,7 +189,7 @@ func main() {
 		toolContracts = append(toolContracts, orka.ToolContract{Name: name, Definition: baseTools[name]})
 	}
 	contractHash, err := orka.AnalysisContractHash(orka.AnalysisContract{
-		Provider: *provider, Model: *model, Version: *version,
+		Provider: *provider, Model: *model, APIMode: apiMode, Version: *version,
 		Timeout: *timeout, Retries: *retries, MinToolCalls: agentic.MinToolCalls, MinGCSBytes: agentic.MinGCSBytes,
 		AcceptanceVersion: orka.AcceptanceVersion, SkillSetHash: skillSet.Hash(),
 		ToolAuthSecret: *toolAuthSecret, ToolAuthKey: *toolAuthKey,
@@ -204,7 +209,7 @@ func main() {
 	defer cancelArtifactSeeds()
 	artifactSeedBudgetLogged := false
 	projectScope := orka.ProjectScopeID(cfg.ID, string(storageCfg.Provider), bucket, storageCfg.Base, storageCfg.WebBase, storageCfg.ProwBase)
-	manifest := orka.NewAnalysisManifest(projectScope, projectLabel, contractHash, *provider, *model, *version, agentic.MinToolCalls)
+	manifest := orka.NewAnalysisManifest(projectScope, projectLabel, contractHash, *provider, *model, apiMode, *version, agentic.MinToolCalls)
 	manifest.SkillSetHash = skillSet.Hash()
 	manifest.ValidationKey = validationKey
 	manifest.MinGCSBytes = agentic.MinGCSBytes
@@ -276,6 +281,7 @@ func main() {
 					Namespace:    *namespace,
 					Provider:     *provider,
 					Model:        *model,
+					APIMode:      apiMode,
 					Timeout:      *timeout,
 					MaxRetries:   *retries,
 					WebhookURL:   *webhookURL,

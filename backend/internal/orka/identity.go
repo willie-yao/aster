@@ -33,6 +33,7 @@ const ValidationTaskHeader = "X-Prow-AI-Task"
 type AnalysisContract struct {
 	Provider          string         `json:"provider"`
 	Model             string         `json:"model"`
+	APIMode           string         `json:"api_mode"`
 	Version           string         `json:"version"`
 	Timeout           string         `json:"timeout"`
 	Retries           int            `json:"retries"`

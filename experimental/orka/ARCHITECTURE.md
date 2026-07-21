@@ -212,12 +212,26 @@ recommendation keeps both paths rather than replacing the engine.
 
 ## Provider seam
 
-An Orka `Provider` is just `type: openai` + a `baseURL` + a token secret
-(`manifests/1x-*-provider.yaml`), so any OpenAI-compatible endpoint works with no
-code change: in-cluster Kimi via Ray Serve (no proxy), vLLM, Dynamo/NIM, Ollama.
-Copilot is the one exception; its non-streaming endpoint returns null tool_calls
-for Claude, so `manifests/50-copilot-proxy.yaml` de-streams and injects the
-`Copilot-Integration-Id` header the Provider cannot set itself.
+An Orka `Provider` is `type: openai` plus a `baseURL` and token secret
+(`manifests/1x-*-provider.yaml`). At the pinned Orka revision, the OpenAI
+provider tries the Responses API first and falls back to Chat Completions when
+the endpoint does not support it. The compatibility worker sends `store: false`
+for Responses requests and records the negotiated API mode and response ID in
+model-completion events, logs, and OpenTelemetry spans.
+
+The producer fingerprints the expected mode from `orka.apiMode`. The ingestor
+requires the worker to report a mode and rejects a mismatch when the value is
+`responses` or `chat_completions`; `auto` accepts either. This makes protocol
+changes observable and cache-safe without changing Orka's Provider CRD.
+
+Responses support for Ray Serve, vLLM, Dynamo/NIM, Ollama, and other
+OpenAI-compatible deployments depends on the installed version and server
+configuration. Start with `orka.apiMode: auto`, run `orka-ops.sh smoke` to
+observe the negotiated mode, then set an explicit expectation when the
+deployment contract is known. Copilot uses Chat Completions; its non-streaming endpoint
+returns null tool calls for Claude, so `manifests/50-copilot-proxy.yaml`
+de-streams and injects the `Copilot-Integration-Id` header the Provider cannot
+set itself.
 
 ## Consumer-driven, multi-consumer
 

@@ -13,6 +13,7 @@ type AITaskSpec struct {
 	Namespace    string
 	Provider     string
 	Model        string
+	APIMode      string
 	Timeout      string
 	MaxRetries   int
 	WebhookURL   string
@@ -112,6 +113,9 @@ func BuildAITask(in AITaskSpec) map[string]any {
 		labels[k] = v
 	}
 	metadata := map[string]any{"name": in.Name, "namespace": in.Namespace}
+	if in.APIMode != "" {
+		metadata["annotations"] = map[string]any{APIModeAnnotation: in.APIMode}
+	}
 	if len(labels) > 0 {
 		metadata["labels"] = labels
 	}

@@ -37,7 +37,7 @@ loop runs and how the guardrails are enforced:
 | Quality gates | Enforced in Go code | Enforced as tools the agent must call plus ai-worker re-prompts |
 | Cache | On-disk JSON keyed by mode + hash | The Kubernetes object store: Task names fingerprint project/build/test identity and the model-visible analysis contract; `-version` is a manual override |
 | Config surface | Every `ai.*` knob | Only `ai.tools`, the `storage` block, and the display id are read; the rest is provided by the compatibility worker and shim tools |
-| Endpoint | Any OpenAI-compatible chat-completions | Same, via an Orka `Provider`; Copilot needs a de-streaming proxy |
+| Endpoint | Any OpenAI-compatible chat-completions | Orka tries Responses first and falls back to Chat Completions; Copilot needs a de-streaming proxy |
 
 The trade-off from the evaluation: Orka with a strong co-located model matches or
 beats the engine's reference labels on the hardest cases, but that edge is the

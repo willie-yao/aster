@@ -7,7 +7,7 @@ import (
 )
 
 func TestAnalysisManifestRoundTripAndTaskIdentity(t *testing.T) {
-	manifest := NewAnalysisManifest("project", "Project", "contract", "models", "model", "v1", 2)
+	manifest := NewAnalysisManifest("project", "Project", "contract", "models", "model", APIModeAuto, "v1", 2)
 	manifest.SkillSetHash = "skills-hash"
 	manifest.ValidationKey = "validation-key"
 	manifest.MinGCSBytes = 123
@@ -41,7 +41,7 @@ func TestAnalysisManifestRoundTripAndTaskIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != first || !loaded.Jobs["job"] || loaded.MinToolCalls != 2 || loaded.MinGCSBytes != 123 || loaded.SkillSetHash != "skills-hash" || loaded.ValidationKey != "validation-key" {
+	if got != first || !loaded.Jobs["job"] || loaded.MinToolCalls != 2 || loaded.MinGCSBytes != 123 || loaded.APIMode != APIModeAuto || loaded.SkillSetHash != "skills-hash" || loaded.ValidationKey != "validation-key" {
 		t.Fatalf("loaded task ref = %+v, jobs = %+v, min_tool_calls = %d", got, loaded.Jobs, loaded.MinToolCalls)
 	}
 }
@@ -49,14 +49,14 @@ func TestAnalysisManifestRoundTripAndTaskIdentity(t *testing.T) {
 func TestAnalysisManifestPromptSeedChangesTaskIdentity(t *testing.T) {
 	run := models.BuildResult{BuildInfo: models.BuildInfo{BuildID: "1"}}
 	tc := models.TestCase{Name: "test", FailureBody: "failure"}
-	first := NewAnalysisManifest("project", "Project", "contract", "models", "model", "v1", 2)
+	first := NewAnalysisManifest("project", "Project", "contract", "models", "model", APIModeAuto, "v1", 2)
 	first.ValidationKey = "key"
 	first.SetBuild("job", "1", "build-scope", "tool-scope", "logs/job/1/", "tree-a")
 	firstRef, err := first.TaskRef("job", run, 0, tc)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second := NewAnalysisManifest("project", "Project", "contract", "models", "model", "v1", 2)
+	second := NewAnalysisManifest("project", "Project", "contract", "models", "model", APIModeAuto, "v1", 2)
 	second.ValidationKey = "key"
 	second.SetBuild("job", "1", "build-scope", "tool-scope", "logs/job/1/", "tree-b")
 	secondRef, err := second.TaskRef("job", run, 0, tc)

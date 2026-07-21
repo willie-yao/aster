@@ -13,7 +13,7 @@ import (
 // AnalysisManifestFile is the private producer-to-ingestor identity contract.
 const AnalysisManifestFile = "orka_analysis.json"
 
-const analysisManifestVersion = 4
+const analysisManifestVersion = 5
 
 // AnalysisManifest records the exact Task identity contract for one fetch pass.
 type AnalysisManifest struct {
@@ -23,6 +23,7 @@ type AnalysisManifest struct {
 	ContractHash  string                   `json:"contract_hash"`
 	Provider      string                   `json:"provider"`
 	Model         string                   `json:"model"`
+	APIMode       string                   `json:"api_mode"`
 	Version       string                   `json:"version"`
 	MinToolCalls  int                      `json:"min_tool_calls"`
 	MinGCSBytes   int                      `json:"min_gcs_bytes"`
@@ -48,7 +49,7 @@ type AnalysisTaskRef struct {
 }
 
 // NewAnalysisManifest constructs an empty manifest for one producer pass.
-func NewAnalysisManifest(projectScope, projectLabel, contractHash, provider, model, version string, minToolCalls int) *AnalysisManifest {
+func NewAnalysisManifest(projectScope, projectLabel, contractHash, provider, model, apiMode, version string, minToolCalls int) *AnalysisManifest {
 	return &AnalysisManifest{
 		SchemaVersion: analysisManifestVersion,
 		ProjectScope:  projectScope,
@@ -56,6 +57,7 @@ func NewAnalysisManifest(projectScope, projectLabel, contractHash, provider, mod
 		ContractHash:  contractHash,
 		Provider:      provider,
 		Model:         model,
+		APIMode:       apiMode,
 		Version:       version,
 		MinToolCalls:  minToolCalls,
 		Jobs:          map[string]bool{},
@@ -123,8 +125,11 @@ func (m *AnalysisManifest) Validate() error {
 	if m.SchemaVersion != analysisManifestVersion {
 		return fmt.Errorf("unsupported Orka analysis manifest version %d", m.SchemaVersion)
 	}
-	if m.ProjectScope == "" || m.ContractHash == "" || m.Provider == "" || m.Model == "" || m.Version == "" || m.ValidationKey == "" {
+	if m.ProjectScope == "" || m.ContractHash == "" || m.Provider == "" || m.Model == "" || m.APIMode == "" || m.Version == "" || m.ValidationKey == "" {
 		return fmt.Errorf("orka analysis manifest is missing required identity fields")
+	}
+	if _, err := NormalizeAPIMode(m.APIMode); err != nil {
+		return err
 	}
 	if m.Jobs == nil || m.Builds == nil {
 		return fmt.Errorf("orka analysis manifest has no jobs or builds map")

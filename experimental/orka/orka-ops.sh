@@ -12,7 +12,7 @@ Usage:
   orka-ops.sh [--context <name>] [--namespace <name>] preflight \
     --provider <name> [--worker-image <image>] [--service-account <namespace/name>]
   orka-ops.sh [--context <name>] [--namespace <name>] smoke \
-    --provider <name> [--model <name>] [--timeout <duration>] [--keep]
+    --provider <name> [--model <name>] [--expect-api <mode>] [--timeout <duration>] [--keep]
   orka-ops.sh [--context <name>] [--namespace <name>] status \
     [--project <scope>]
   orka-ops.sh [--context <name>] [--namespace <name>] gc \
@@ -308,7 +308,7 @@ preflight() {
 }
 
 smoke() {
-  local provider="" model="" timeout="5m" keep=false
+  local provider="" model="" expect_api="auto" timeout="5m" keep=false
   while [[ $# -gt 0 ]]; do
     case $1 in
       --provider)
@@ -319,6 +319,11 @@ smoke() {
       --model)
         [[ $# -ge 2 ]] || { usage >&2; exit 2; }
         model=$2
+        shift 2
+        ;;
+      --expect-api)
+        [[ $# -ge 2 ]] || { usage >&2; exit 2; }
+        expect_api=$2
         shift 2
         ;;
       --timeout)
@@ -344,6 +349,13 @@ smoke() {
     echo "smoke requires --provider" >&2
     exit 2
   fi
+  case $expect_api in
+    auto|responses|chat_completions) ;;
+    *)
+      echo "invalid expected API mode $expect_api: use auto, responses, or chat_completions" >&2
+      exit 2
+      ;;
+  esac
   local timeout_seconds
   timeout_seconds=$(parse_duration_seconds "$timeout")
 
@@ -417,6 +429,35 @@ EOF_TASK
           return 1
         fi
         printf 'Smoke Task succeeded with an available result.\n'
+        local model_logs detected_modes invalid_modes mode_count mode_list model_log detected_api response_id
+        model_logs=$(kube -n "$namespace" logs "job/$job_name" 2>/dev/null | grep 'Model request completed .*api_mode=' || true)
+        detected_modes=$(sed -n 's/.*api_mode=\([^ ]*\).*/\1/p' <<< "$model_logs" | sort -u)
+        if [[ -z $detected_modes ]]; then
+          echo "Smoke Task completed without API mode telemetry" >&2
+          return 1
+        fi
+        invalid_modes=$(grep -Ev '^(responses|chat_completions)$' <<< "$detected_modes" || true)
+        if [[ -n $invalid_modes ]]; then
+          mode_list=$(paste -sd, - <<< "$invalid_modes")
+          echo "Smoke Task reported unsupported API mode telemetry: $mode_list" >&2
+          return 1
+        fi
+        mode_count=$(wc -l <<< "$detected_modes" | tr -d ' ')
+        if [[ $mode_count -ne 1 ]]; then
+          mode_list=$(paste -sd, - <<< "$detected_modes")
+          echo "Smoke Task used multiple API modes: $mode_list" >&2
+          return 1
+        fi
+        detected_api=$detected_modes
+        model_log=$(grep "api_mode=$detected_api" <<< "$model_logs" | tail -n 1)
+        response_id=$(sed -n 's/.*response_id=\([^ ]*\).*/\1/p' <<< "$model_log")
+        printf 'Smoke Task API mode: %s' "$detected_api"
+        [[ -n $response_id ]] && printf ' (response %s)' "$response_id"
+        printf '\n'
+        if [[ $expect_api != auto && $detected_api != "$expect_api" ]]; then
+          echo "Smoke Task used $detected_api, expected $expect_api" >&2
+          return 1
+        fi
         if [[ $keep == true ]]; then
           printf 'Kept Task %s/%s\n' "$namespace" "$name"
           smoke_cleanup_task=""

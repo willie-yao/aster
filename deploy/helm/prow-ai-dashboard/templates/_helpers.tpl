@@ -197,6 +197,9 @@ Validate the analysis backend selection and its constraints.
 {{- fail "analysis: orka requires mode: cron (the produce->ingest flow is batch-oriented)" -}}
 {{- end -}}
 {{- if eq .Values.analysis "orka" -}}
+{{- if not (has .Values.orka.apiMode (list "auto" "responses" "chat_completions")) -}}
+{{- fail "orka.apiMode must be auto, responses, or chat_completions" -}}
+{{- end -}}
 {{- $maxConcurrentTasks := printf "%v" .Values.orka.producer.maxConcurrentTasks -}}
 {{- if not (regexMatch "^(0|[1-9][0-9]{0,2}|1000)$" $maxConcurrentTasks) -}}
 {{- fail "orka.producer.maxConcurrentTasks must be an integer between 0 and 1000" -}}

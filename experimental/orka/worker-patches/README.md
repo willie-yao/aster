@@ -8,7 +8,7 @@ PR or a patched controller, CRD, API server, or UI.
 See [COMPATIBILITY.md](COMPATIBILITY.md) for the exact source revision, patch
 checksum, image identity, and deployment instructions.
 
-## Compatibility v2 behavior
+## Compatibility v3 behavior
 
 The patch keeps dashboard analysis policy inside the dashboard-owned worker:
 
@@ -28,7 +28,12 @@ The patch keeps dashboard analysis policy inside the dashboard-owned worker:
   byte-exact evidence tokens, and result excerpts; when necessary it removes
   non-token context or evicts whole older entries rather than truncating tokens;
 - proactively compacts old Tool-call/result blocks before provider rejection,
-  then restores the evidence ledger and finalization prompt.
+  then restores the evidence ledger and finalization prompt;
+- uses the Responses API when the Provider supports it and retains Chat
+  Completions fallback for compatible endpoints;
+- sends `store: false` on Responses requests;
+- records the negotiated API mode and response ID in completion events, worker
+  logs, and OpenTelemetry spans.
 
 The patch intentionally does not add durable event types, Task Trace states, UI
 behavior, Task CRD fields, or controller policy. Parallel Tool calls that are not
@@ -38,10 +43,10 @@ selected remain worker-local and do not require a `ToolCallSkipped` event.
 
 A Phase 2 run used `moonshotai/Kimi-K2-Instruct-0905` against the same DRA
 failure from build `2078833416211533824`. The prompt included the bounded JUnit
-failure body and filtered artifact tree. Compatibility v2 retained evidence
-through two proactive compactions.
+failure body and filtered artifact tree. Compatibility v3 retains the v2 evidence
+behavior through two proactive compactions.
 
-| Metric | Phase 1c | Compatibility v2 |
+| Metric | Phase 1c | Compatibility v2 baseline |
 |---|---:|---:|
 | Model requests | 22 | **13** |
 | Tool calls | 22 | **13** |
@@ -51,7 +56,7 @@ through two proactive compactions.
 | Runtime | 5m39s | 6m02s |
 
 Phase 1c described only a pod timeout and generic resource-allocation delay.
-Compatibility v2 traced the actual chain: the device-plugin stream ended with
+The v2 baseline traced the actual chain: the device-plugin stream ended with
 EOF, kubelet removed the endpoint, and container creation failed with
 `endpoint not found in cache for a registered resource`. Kimi still set
 `is_transient=true`, so final classification remains model-limited even though
@@ -65,10 +70,10 @@ make orka-compat-image ORKA_COMPAT_IMAGE=orka-ai-worker:local
 ```
 
 Pull requests verify the pinned source and patch checksum, apply the patch to a
-clean checkout, run focused and full worker tests, run the complete worker race
-suite, render the pinned Helm chart, and build the `linux/amd64` worker image
-without publishing. Merges to `main` publish an immutable tag containing both
-the Orka and dashboard commits, with SBOM and provenance attestations.
+clean checkout, run provider, focused, and full worker tests, run the complete
+worker race suite, render the pinned Helm chart, and build the `linux/amd64`
+worker image without publishing. Merges to `main` publish an immutable tag
+containing both the Orka and dashboard commits, with SBOM and provenance attestations.
 
 ## Ownership boundary
 

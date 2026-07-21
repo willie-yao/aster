@@ -28,6 +28,11 @@ From the engine checkout, verify the installed Provider and pipeline RBAC:
     --provider {{ .Values.orka.provider }} \
     --service-account {{ .Release.Namespace }}/{{ include "prow-ai-dashboard.orkaServiceAccountName" . }}
 
+  experimental/orka/orka-ops.sh --namespace {{ .Values.orka.namespace }} smoke \
+    --provider {{ .Values.orka.provider }} \
+    --model {{ .Values.orka.model }} \
+    --expect-api {{ .Values.orka.apiMode }}
+
 Report the dashboard-managed Task and Tool batches:
 
   experimental/orka/orka-ops.sh --namespace {{ .Values.orka.namespace }} status

@@ -12,6 +12,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -140,7 +141,7 @@ func main() {
 			ctx, cancel := context.WithTimeout(context.Background(), *patternWait)
 			analyzer := &patternTaskAnalyzer{
 				kube: kube, client: client, namespace: *namespace,
-				provider: *provider, model: *model, version: *version,
+				provider: *provider, model: *model, apiMode: manifest.APIMode, version: *version,
 				projectScope: manifest.ProjectScope,
 				timeout:      *patternTimeout, retries: *patternRetries, poll: *patternPoll,
 				execution: taskExecution,
@@ -327,7 +328,7 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir st
 			go func(item pendingTest) {
 				defer wg.Done()
 				defer func() { <-sem }()
-				accepted, rejection := applyResult(item.tc, client, namespace, item.name, model, manifest.ContractHash, manifest.MinToolCalls, manifest.MinGCSBytes, manifest.SkillSetHash, manifest.ValidationKey)
+				accepted, rejection := applyResult(item.tc, client, namespace, item.name, model, manifest.ContractHash, manifest.APIMode, manifest.MinToolCalls, manifest.MinGCSBytes, manifest.SkillSetHash, manifest.ValidationKey)
 				if accepted {
 					patchedCount.Add(1)
 					changed.Store(true)
@@ -379,7 +380,7 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir st
 
 // applyResult fetches taskName's result, parses the analysis, and patches it
 // onto tc. Returns true if it patched (result available and parseable).
-func applyResult(tc *models.TestCase, client *orkaClient, namespace, taskName, model, contractHash string, minToolCalls, minGCSBytes int, skillSetHash, validationKey string) (bool, string) {
+func applyResult(tc *models.TestCase, client *orkaClient, namespace, taskName, model, contractHash, apiMode string, minToolCalls, minGCSBytes int, skillSetHash, validationKey string) (bool, string) {
 	result, ok := client.result(namespace, taskName)
 	if !ok {
 		return false, ""
@@ -392,7 +393,7 @@ func applyResult(tc *models.TestCase, client *orkaClient, namespace, taskName, m
 	if err != nil {
 		return false, rejectionReason("analysis Task telemetry unavailable: ", err)
 	}
-	if err := validateAnalysisAcceptance(a, telemetry, taskName, minToolCalls, minGCSBytes, skillSetHash, validationKey); err != nil {
+	if err := validateAnalysisAcceptance(a, telemetry, taskName, apiMode, minToolCalls, minGCSBytes, skillSetHash, validationKey); err != nil {
 		return false, rejectionReason("analysis Task failed acceptance: ", err)
 	}
 	applyParsedAnalysis(tc, a, telemetry, model, contractHash, skillSetHash)
@@ -601,7 +602,7 @@ func (s *webhookServer) preparePatch(p webhookPayload, manifest *orka.AnalysisMa
 	if err != nil {
 		return preparedPatch{reason: rejectionReason("analysis Task telemetry unavailable: ", err), retry: true}
 	}
-	if err := validateAnalysisAcceptance(parsed, telemetry, p.TaskName, manifest.MinToolCalls, manifest.MinGCSBytes, manifest.SkillSetHash, manifest.ValidationKey); err != nil {
+	if err := validateAnalysisAcceptance(parsed, telemetry, p.TaskName, manifest.APIMode, manifest.MinToolCalls, manifest.MinGCSBytes, manifest.SkillSetHash, manifest.ValidationKey); err != nil {
 		retry := telemetry.EventCount == 0 || telemetry.TaskOutcome == ""
 		return preparedPatch{reason: rejectionReason("analysis Task failed acceptance: ", err), retry: retry}
 	}
@@ -789,7 +790,7 @@ func validateAnalysisShape(a analysis) error {
 	return nil
 }
 
-func validateAnalysisAcceptance(a analysis, telemetry analysisTelemetry, taskName string, minToolCalls, minGCSBytes int, skillSetHash, validationKey string) error {
+func validateAnalysisAcceptance(a analysis, telemetry analysisTelemetry, taskName, expectedAPIMode string, minToolCalls, minGCSBytes int, skillSetHash, validationKey string) error {
 	if a.GCSBytes == nil || *a.GCSBytes < 0 {
 		return fmt.Errorf("gcs_bytes is required and must be non-negative")
 	}
@@ -804,6 +805,9 @@ func validateAnalysisAcceptance(a analysis, telemetry analysisTelemetry, taskNam
 			return fmt.Errorf("execution event stream has no terminal Task outcome")
 		}
 		return fmt.Errorf("analysis Task outcome is %s", telemetry.TaskOutcome)
+	}
+	if err := orka.ValidateObservedAPIMode(expectedAPIMode, telemetry.APIMode); err != nil {
+		return err
 	}
 	if telemetry.ToolCalls < minToolCalls {
 		return fmt.Errorf("only %d tool call(s), need at least %d", telemetry.ToolCalls, minToolCalls)
@@ -907,6 +911,7 @@ type patternTaskAnalyzer struct {
 	namespace    string
 	provider     string
 	model        string
+	apiMode      string
 	version      string
 	projectScope string
 	timeout      string
@@ -930,6 +935,7 @@ func (a *patternTaskAnalyzer) AnalyzePattern(ctx context.Context, jobID, subject
 		a.projectScope,
 		a.provider,
 		a.model,
+		a.apiMode,
 		a.timeout,
 		strconv.Itoa(a.retries),
 		input.SystemPrompt,
@@ -937,7 +943,7 @@ func (a *patternTaskAnalyzer) AnalyzePattern(ctx context.Context, jobID, subject
 	}, "\x00")
 	name := orka.PatternTaskName(jobID, fingerprint, a.version)
 	task := orka.BuildAITask(orka.AITaskSpec{
-		Name: name, Namespace: a.namespace, Provider: a.provider, Model: a.model,
+		Name: name, Namespace: a.namespace, Provider: a.provider, Model: a.model, APIMode: a.apiMode,
 		Timeout: a.timeout, MaxRetries: a.retries,
 		SystemPrompt: input.SystemPrompt, Prompt: input.UserPrompt,
 		Labels: map[string]string{
@@ -962,16 +968,34 @@ func (a *patternTaskAnalyzer) AnalyzePattern(ctx context.Context, jobID, subject
 	}
 	ticker := time.NewTicker(poll)
 	defer ticker.Stop()
+	var lastTelemetryErr error
 	for {
 		if result, ok := a.client.result(a.namespace, name); ok {
-			return ai.ParsePatternResult(subject, input.Failures, result)
+			telemetry, telemetryErr := a.client.analysisTelemetry(ctx, a.namespace, name)
+			if telemetryErr != nil {
+				lastTelemetryErr = fmt.Errorf("pattern Task %s telemetry: %w", name, telemetryErr)
+			} else if err := orka.ValidateObservedAPIMode(a.apiMode, telemetry.APIMode); err != nil {
+				lastTelemetryErr = fmt.Errorf("pattern Task %s API mode: %w", name, err)
+			} else {
+				return ai.ParsePatternResult(subject, input.Failures, result)
+			}
 		}
 		phase, err := a.kube.TaskPhase(ctx, a.namespace, name)
-		if err == nil && (phase == "Failed" || phase == "Cancelled") {
-			return nil, fmt.Errorf("pattern Task %s %s", name, strings.ToLower(phase))
+		if err == nil {
+			switch phase {
+			case "Failed", "Cancelled":
+				return nil, fmt.Errorf("pattern Task %s %s", name, strings.ToLower(phase))
+			case "Succeeded":
+				if lastTelemetryErr != nil && !errors.Is(lastTelemetryErr, errTaskEventsNotReadableYet) {
+					return nil, lastTelemetryErr
+				}
+			}
 		}
 		select {
 		case <-ctx.Done():
+			if lastTelemetryErr != nil {
+				return nil, fmt.Errorf("%w: %w", lastTelemetryErr, ctx.Err())
+			}
 			return nil, fmt.Errorf("pattern Task %s: %w", name, ctx.Err())
 		case <-ticker.C:
 		}

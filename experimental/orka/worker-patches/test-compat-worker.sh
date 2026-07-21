@@ -11,10 +11,10 @@ bash -n "$script"
 "$script" verify
 metadata=$("$script" metadata 0123456789abcdef0123456789abcdef01234567)
 grep -Fq 'orka_commit=1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254' <<< "$metadata"
-grep -Fq 'patch_sha256=f40676522fa77289a3eecb2121d45b9b648e9e985b0d85d8bd55009c8b23dc00' <<< "$metadata"
+grep -Fq 'patch_sha256=7847f028d25d4a11c3e9f07548569de8771e43ada401187f689b0edee6b4bdf3' <<< "$metadata"
 backtick='`'
 grep -Fq "${backtick}1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254${backtick}" "$script_dir/COMPATIBILITY.md"
-grep -Fq "${backtick}f40676522fa77289a3eecb2121d45b9b648e9e985b0d85d8bd55009c8b23dc00${backtick}" "$script_dir/COMPATIBILITY.md"
+grep -Fq "${backtick}7847f028d25d4a11c3e9f07548569de8771e43ada401187f689b0edee6b4bdf3${backtick}" "$script_dir/COMPATIBILITY.md"
 for patch_file in \
   analysis_budget.go \
   analysis_context.go \
@@ -51,7 +51,7 @@ if [[ $(grep -Fc 'packages: write' "$workflow") -ne 1 ]]; then
   exit 1
 fi
 tag=$(awk -F= '$1 == "image_tag" { print $2 }' <<< "$metadata")
-[[ $tag == v2-orka-1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254-dashboard-0123456789abcdef0123456789abcdef01234567 ]]
+[[ $tag == v3-orka-1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254-dashboard-0123456789abcdef0123456789abcdef01234567 ]]
 (( ${#tag} <= 128 ))
 if "$script" metadata short > /dev/null 2>&1; then
   echo 'short dashboard commit was accepted' >&2
@@ -93,7 +93,7 @@ chmod +x "$tmp/bin/docker"
 
 dashboard=0123456789abcdef0123456789abcdef01234567
 orka=1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254
-patch=f40676522fa77289a3eecb2121d45b9b648e9e985b0d85d8bd55009c8b23dc00
+patch=7847f028d25d4a11c3e9f07548569de8771e43ada401187f689b0edee6b4bdf3
 published=$(FAKE_REGISTRY_RESULT=exact EXPECTED_DASHBOARD=$dashboard EXPECTED_ORKA=$orka EXPECTED_PATCH=$patch PATH="$tmp/bin:$PATH"   "$script" inspect-published ghcr.io/example/worker:test "$dashboard")
 grep -Fq '"digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"' <<< "$published"
 grep -Fq '"recovered": true' <<< "$published"

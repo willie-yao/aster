@@ -93,6 +93,7 @@ spec:
                 - -namespace={{ .Values.orka.namespace }}
                 - -provider={{ .Values.orka.provider }}
                 - -model={{ .Values.orka.model }}
+                - -api-mode={{ .Values.orka.apiMode }}
                 - -version={{ .Values.orka.version }}
                 - -timeout={{ .Values.orka.taskTimeout }}
                 - -retries={{ .Values.orka.retries | int }}

@@ -1,3 +1,110 @@
+diff --git a/internal/llm/openai/provider.go b/internal/llm/openai/provider.go
+index fbed0c07d10d3fd3173ce895afcaaa5ee91e9eff..afa2834fedb6519dd59a23c6f57c51b19ed96298 100644
+--- a/internal/llm/openai/provider.go
++++ b/internal/llm/openai/provider.go
+@@ -35,9 +35,11 @@ const (
+ )
+ 
+ const (
+-	eventTypeFunctionCall   = "function_call"
+-	providerTypeOpenAI      = "openai"
+-	providerTypeAzureOpenAI = "azure-openai"
++	eventTypeFunctionCall      = "function_call"
++	apiModeNameResponses       = "responses"
++	apiModeNameChatCompletions = "chat_completions"
++	providerTypeOpenAI         = "openai"
++	providerTypeAzureOpenAI    = "azure-openai"
+ )
+ 
+ func init() {
+@@ -371,6 +373,7 @@ func (p *Provider) completeResponses(ctx context.Context, req *llm.CompletionReq
+ 		InputTokens:  int(resp.Usage.InputTokens),
+ 		OutputTokens: int(resp.Usage.OutputTokens),
+ 		Model:        resp.Model,
++		APIMode:      apiModeNameResponses,
+ 	}
+ 	for _, item := range resp.Output {
+ 		if item.Type == eventTypeFunctionCall {
+@@ -408,6 +411,7 @@ func buildResponsesParams(req *llm.CompletionRequest) responses.ResponseNewParam
+ 		Input: responses.ResponseNewParamsInputUnion{
+ 			OfInputItemList: convertInputItems(req.Messages),
+ 		},
++		Store: openai.Bool(false),
+ 	}
+ 	if req.SystemPrompt != "" {
+ 		params.Instructions = openai.String(req.SystemPrompt)
+@@ -849,7 +853,10 @@ func (p *Provider) completeChatCompletions(ctx context.Context, req *llm.Complet
+ 		return nil, toProviderError(err)
+ 	}
+ 
+-	result := &llm.CompletionResponse{Model: resp.Model, Provider: p.TelemetryProviderName(), ID: resp.ID}
++	result := &llm.CompletionResponse{
++		Model: resp.Model, Provider: p.TelemetryProviderName(), ID: resp.ID,
++		APIMode: apiModeNameChatCompletions,
++	}
+ 	result.InputTokens = int(resp.Usage.PromptTokens)
+ 	result.OutputTokens = int(resp.Usage.CompletionTokens)
+ 	if len(resp.Choices) > 0 {
+diff --git a/internal/llm/openai/provider_test.go b/internal/llm/openai/provider_test.go
+index a15f2e78cc2ee97e169ccca2bf240f95911c5b68..c67840e0751b6a85fae9f659878d595b99c37a45 100644
+--- a/internal/llm/openai/provider_test.go
++++ b/internal/llm/openai/provider_test.go
+@@ -502,6 +502,9 @@ func TestComplete_ChatCompletions_Success(t *testing.T) {
+ 	if resp.InputTokens != 10 {
+ 		t.Errorf("expected 10 input tokens, got %d", resp.InputTokens)
+ 	}
++	if resp.APIMode != apiModeNameChatCompletions {
++		t.Errorf("expected API mode %q, got %q", apiModeNameChatCompletions, resp.APIMode)
++	}
+ }
+ 
+ func TestComplete_ChatCompletions_ServerError(t *testing.T) {
+@@ -1045,6 +1048,9 @@ func TestComplete_ResponsesAPI_Success(t *testing.T) {
+ 	if resp.OutputTokens != 5 {
+ 		t.Errorf("expected 5 output tokens, got %d", resp.OutputTokens)
+ 	}
++	if resp.APIMode != apiModeNameResponses {
++		t.Errorf("expected API mode %q, got %q", apiModeNameResponses, resp.APIMode)
++	}
+ }
+ 
+ func TestComplete_ResponsesAPI_WithToolCalls(t *testing.T) {
+@@ -1143,6 +1149,9 @@ func TestComplete_ResponsesAPI_WithAllOptions(t *testing.T) {
+ 	if receivedBody["tools"] == nil {
+ 		t.Error("expected tools to be set")
+ 	}
++	if store, ok := receivedBody["store"].(bool); !ok || store {
++		t.Errorf("expected store=false, got %#v", receivedBody["store"])
++	}
+ }
+ 
+ func TestComplete_AutoDetect_ResponsesSuccess(t *testing.T) {
+diff --git a/internal/llm/provider.go b/internal/llm/provider.go
+index f6afb7b40519bffb90331cff4d327d6792cf08ca..d5ea5359e38eb430d2b0ac49c2fa3b8ee76338ff 100644
+--- a/internal/llm/provider.go
++++ b/internal/llm/provider.go
+@@ -61,6 +61,7 @@ type CompletionResponse struct {
+ 	Model        string     `json:"model"`
+ 	Provider     string     `json:"provider,omitempty"`
+ 	ID           string     `json:"id,omitempty"`
++	APIMode      string     `json:"api_mode,omitempty"`
+ }
+ 
+ // Message represents a chat message
+diff --git a/internal/llm/tracing.go b/internal/llm/tracing.go
+index 76c174529d4d52281f103535990b5bd115b7ef0c..9011f8d410baab1d9ff1227ffc2a30b2dfb8dc50 100644
+--- a/internal/llm/tracing.go
++++ b/internal/llm/tracing.go
+@@ -431,6 +431,9 @@ func setResponseAttributes(span trace.Span, resp *CompletionResponse, providerNa
+ 	if resp.ID != "" {
+ 		attrs = append(attrs, attribute.String(genai.AttrResponseID, resp.ID))
+ 	}
++	if resp.APIMode != "" {
++		attrs = append(attrs, attribute.String("orka.llm.api_mode", resp.APIMode))
++	}
+ 	if resp.StopReason != "" {
+ 		attrs = append(attrs, attribute.StringSlice(genai.AttrResponseFinishReasons, []string{resp.StopReason}))
+ 	}
 diff --git a/workers/ai/analysis_budget.go b/workers/ai/analysis_budget.go
 new file mode 100644
 index 0000000000000000000000000000000000000000..ed92cdd4c3c24a9ece2581392a56be56ac914f2d
@@ -894,7 +1001,7 @@ index 86ea24936f647cfbc308c49aae5942bd9a6bfbdf..f6cd24fde0257ca57b30a93206cee30e
  		common.RecordEventWithTimeout(eventRecorder, events.ExecutionEventTypeToolCallFailed, modelLoopEventTimeout,
  			common.WithEventSeverity(events.ExecutionEventSeverityError),
 diff --git a/workers/ai/main.go b/workers/ai/main.go
-index 47bc4ca140cb38416f28fd19bd17961e7bcf78e3..3a4b5020c0f69698dc6fd36cf8a9ca15654a5b37 100644
+index 47bc4ca140cb38416f28fd19bd17961e7bcf78e3..54d6eb4bf15996d7897e51668518197162723fa7 100644
 --- a/workers/ai/main.go
 +++ b/workers/ai/main.go
 @@ -385,6 +385,7 @@ func loadCustomTools(
@@ -968,7 +1075,7 @@ index 47bc4ca140cb38416f28fd19bd17961e7bcf78e3..3a4b5020c0f69698dc6fd36cf8a9ca15
  			common.RecordEventWithTimeout(eventRecorder, events.ExecutionEventTypeContextTruncated, modelLoopEventTimeout,
  				common.WithEventSeverity(events.ExecutionEventSeverityWarning),
  				common.WithEventSummary("model context truncated after provider context limit error"),
-@@ -1002,34 +1005,46 @@ func executeAgentLoopWithEvents(
+@@ -1002,34 +1005,49 @@ func executeAgentLoopWithEvents(
  			stepSpan.End()
  			return "", fmt.Errorf("completion failed: %w", err)
  		}
@@ -994,8 +1101,11 @@ index 47bc4ca140cb38416f28fd19bd17961e7bcf78e3..3a4b5020c0f69698dc6fd36cf8a9ca15
 +				"stopReason":        resp.StopReason,
 +				"toolCalls":         len(originalToolCalls),
 +				"selectedToolCalls": len(selectedToolCalls),
++				"apiMode":           resp.APIMode,
++				"responseID":        resp.ID,
  			})),
  		)
++		fmt.Printf("Model request completed iteration=%d api_mode=%s response_id=%s\n", iteration+1, resp.APIMode, resp.ID)
  		common.RecordEventWithTimeout(eventRecorder, events.ExecutionEventTypeModelMessage, modelLoopEventTimeout,
  			common.WithEventSummary("model returned message"),
  			common.WithEventContent(eventContent(map[string]any{
@@ -1029,7 +1139,7 @@ index 47bc4ca140cb38416f28fd19bd17961e7bcf78e3..3a4b5020c0f69698dc6fd36cf8a9ca15
  		}
  
  		// Add assistant message with tool calls
-@@ -1048,7 +1063,7 @@ func executeAgentLoopWithEvents(
+@@ -1048,7 +1066,7 @@ func executeAgentLoopWithEvents(
  			messages,
  			resp.ToolCalls,
  			approvalGate,
@@ -1038,7 +1148,7 @@ index 47bc4ca140cb38416f28fd19bd17961e7bcf78e3..3a4b5020c0f69698dc6fd36cf8a9ca15
  			customTools,
  			eventRecorder,
  			baseToolCtx,
-@@ -1069,13 +1084,22 @@ func executeAgentLoopWithEvents(
+@@ -1069,13 +1087,22 @@ func executeAgentLoopWithEvents(
  			continue
  		}
  
@@ -1063,7 +1173,7 @@ index 47bc4ca140cb38416f28fd19bd17961e7bcf78e3..3a4b5020c0f69698dc6fd36cf8a9ca15
  			common.RecordEventWithTimeout(eventRecorder, events.ExecutionEventTypeToolCallStarted, modelLoopEventTimeout,
  				common.WithEventToolName(toolName),
  				common.WithEventToolCallID(tc.ID),
-@@ -1087,53 +1111,35 @@ func executeAgentLoopWithEvents(
+@@ -1087,53 +1114,35 @@ func executeAgentLoopWithEvents(
  				})),
  			)
  
@@ -1145,7 +1255,7 @@ index 47bc4ca140cb38416f28fd19bd17961e7bcf78e3..3a4b5020c0f69698dc6fd36cf8a9ca15
  			}
  
  			if execErr != nil {
-@@ -1145,14 +1151,19 @@ func executeAgentLoopWithEvents(
+@@ -1145,14 +1154,19 @@ func executeAgentLoopWithEvents(
  				)
  				result = fmt.Sprintf("Error executing tool: %v", execErr)
  			} else {
@@ -1166,7 +1276,7 @@ index 47bc4ca140cb38416f28fd19bd17961e7bcf78e3..3a4b5020c0f69698dc6fd36cf8a9ca15
  					})),
  				)
  			}
-@@ -1165,12 +1176,31 @@ func executeAgentLoopWithEvents(
+@@ -1165,12 +1179,31 @@ func executeAgentLoopWithEvents(
  				Name:       tc.Name,
  			})
  		}
@@ -1199,10 +1309,46 @@ index 47bc4ca140cb38416f28fd19bd17961e7bcf78e3..3a4b5020c0f69698dc6fd36cf8a9ca15
  	if len(coordinationEnv.ApprovalRequiredTools) > 0 {
  		return true
 diff --git a/workers/ai/main_test.go b/workers/ai/main_test.go
-index b04deee177ba1d693839d4309d70a0dd24662ef8..5ce726f626a0c940cd7a0cffb44fbb7ffd62d278 100644
+index b04deee177ba1d693839d4309d70a0dd24662ef8..1e6ecd15ac7fc27edf00415715f2edf3b316527a 100644
 --- a/workers/ai/main_test.go
 +++ b/workers/ai/main_test.go
-@@ -1136,3 +1136,25 @@ func TestExecuteAgentLoopTracingStepParentsModelAndToolSiblings(t *testing.T) {
+@@ -620,6 +620,8 @@ func TestAIWorkerEventCompletenessSmoke(t *testing.T) {
+ 			OutputTokens: 8,
+ 			Model:        "test-model",
+ 			Provider:     "azure.ai.openai",
++			ID:           "resp-events",
++			APIMode:      "responses",
+ 		},
+ 	}
+ 	recorder := common.NewFakeEventRecorder()
+@@ -659,6 +661,7 @@ func TestAIWorkerEventCompletenessSmoke(t *testing.T) {
+ 		t.Fatalf("AI worker events leaked fake API key: %s", data)
+ 	}
+ 	var sawTelemetryProvider bool
++	var sawResponseTrace bool
+ 	for _, event := range recorder.Events() {
+ 		if event.Type != events.ExecutionEventTypeModelRequestCompleted {
+ 			continue
+@@ -669,12 +672,17 @@ func TestAIWorkerEventCompletenessSmoke(t *testing.T) {
+ 		}
+ 		if content["provider"] == "azure.ai.openai" {
+ 			sawTelemetryProvider = true
+-			break
++		}
++		if content["apiMode"] == "responses" && content["responseID"] == "resp-events" {
++			sawResponseTrace = true
+ 		}
+ 	}
+ 	if !sawTelemetryProvider {
+ 		t.Fatalf("model completion event did not preserve response provider: %#v", recorder.Events())
+ 	}
++	if !sawResponseTrace {
++		t.Fatalf("model completion event did not preserve API mode and response ID: %#v", recorder.Events())
++	}
+ }
+ 
+ func TestAIWorkerRecordsRejectedToolTelemetry(t *testing.T) {
+@@ -1136,3 +1144,25 @@ func TestExecuteAgentLoopTracingStepParentsModelAndToolSiblings(t *testing.T) {
  		t.Fatalf("step %s = %q", tracing.AttrTaskID, got)
  	}
  }

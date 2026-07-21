@@ -90,6 +90,7 @@ if [[ $(container_command ingest "$tmp/owned.yaml") != /app ]]; then
   echo 'specialized Orka ingestor command is not /app' >&2
   exit 1
 fi
+grep -Fq -- '- -api-mode=auto' "$tmp/owned.yaml"
 if grep -Fq -- '-task-execution=' "$tmp/owned.yaml"; then
   echo 'default Orka render unexpectedly added Task placement' >&2
   exit 1
@@ -167,6 +168,15 @@ fi
 grep -Fq '\"nodeSelector\":{\"agentpool\":\"cpu\"}' "$tmp/task-execution.yaml"
 grep -Fq '\"tolerations\":[{\"effect\":\"NoSchedule\",\"key\":\"dedicated\",\"operator\":\"Equal\",\"value\":\"orka\"}]' "$tmp/task-execution.yaml"
 grep -Fq '\"affinity\":{\"nodeAffinity\"' "$tmp/task-execution.yaml"
+
+
+if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set mode=cron --set analysis=orka --set orka.apiMode=chat \
+  > "$tmp/invalid-api-mode.yaml" 2>&1; then
+  echo 'chart accepted an invalid Orka API mode' >&2
+  exit 1
+fi
+grep -Fq 'orka.apiMode must be auto, responses, or chat_completions' "$tmp/invalid-api-mode.yaml"
 
 for invalid in negative nonnumeric overlimit overflow; do
   case $invalid in

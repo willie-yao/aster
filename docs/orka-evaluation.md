@@ -16,6 +16,7 @@ fetcher:
   suspend: true
 
 orka:
+  apiMode: responses  # or chat_completions for a Chat-only Provider
   sideEffects:
     enabled: false
 

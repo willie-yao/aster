@@ -8,7 +8,7 @@ import (
 func TestBuildAITask(t *testing.T) {
 	execution := map[string]any{"nodeSelector": map[string]any{"agentpool": "cpu"}}
 	task := BuildAITask(AITaskSpec{
-		Name: "analysis-1", Namespace: "orka-system", Provider: "models", Model: "test-model",
+		Name: "analysis-1", Namespace: "orka-system", Provider: "models", Model: "test-model", APIMode: APIModeResponses,
 		Timeout: "5m", MaxRetries: 2, Tools: []string{"read-artifact"},
 		SystemPrompt: "system", Prompt: "user", Labels: map[string]string{"app": "test"},
 		Execution: execution,
@@ -16,6 +16,10 @@ func TestBuildAITask(t *testing.T) {
 	meta := task["metadata"].(map[string]any)
 	if meta["name"] != "analysis-1" || meta["namespace"] != "orka-system" {
 		t.Fatalf("metadata = %+v", meta)
+	}
+	annotations := meta["annotations"].(map[string]any)
+	if annotations[APIModeAnnotation] != APIModeResponses {
+		t.Fatalf("annotations = %+v", annotations)
 	}
 	spec := task["spec"].(map[string]any)
 	aiSpec := spec["ai"].(map[string]any)

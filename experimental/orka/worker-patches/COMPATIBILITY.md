@@ -6,13 +6,13 @@ commit. Moving tags are not published.
 
 ## Current contract
 
-| Field | Compatibility v2 |
+| Field | Compatibility v3 |
 | --- | --- |
 | Orka repository | `https://github.com/orka-agents/orka.git` |
 | Orka commit | `1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254` |
 | Orka Go version | `1.26.2` |
 | Patch | `ai-worker-convergence.patch` |
-| Patch SHA-256 | `f40676522fa77289a3eecb2121d45b9b648e9e985b0d85d8bd55009c8b23dc00` |
+| Patch SHA-256 | `7847f028d25d4a11c3e9f07548569de8771e43ada401187f689b0edee6b4bdf3` |
 | Worker Dockerfile | `workers/ai/Dockerfile` from the pinned Orka commit |
 | Published platform | `linux/amd64` |
 | Workflow | `.github/workflows/orka-compat-image.yml` |
@@ -20,12 +20,18 @@ commit. Moving tags are not published.
 `compatibility.env` is the machine-readable source for the pinned values. The
 build fails when its patch checksum, source commit, or tag inputs do not match.
 
+Compatibility v3 also makes the provider API observable and safe for dashboard
+artifacts. Responses requests set `store: false`; completed model events and
+worker logs include the negotiated API mode and response ID. The dashboard
+ingestor can therefore enforce `auto`, `responses`, or `chat_completions` without
+adding fields to Orka's Provider CRD.
+
 ## Image identity
 
 The workflow publishes this tag shape:
 
 ```text
-v2-orka-<full-orka-commit>-dashboard-<full-dashboard-commit>
+v3-orka-<full-orka-commit>-dashboard-<full-dashboard-commit>
 ```
 
 For this contract the image repository is:
@@ -59,10 +65,11 @@ Every pull request that changes the compatibility files:
 1. Checks out the exact Orka commit.
 2. Verifies and applies the patch to a clean checkout.
 3. Runs the focused compatibility tests.
-4. Runs the complete `./workers/ai` package with the race detector.
-5. Runs the complete `./workers/ai` package test suite.
-6. Renders the pinned Orka chart with both immutable-tag and digest overrides.
-7. Builds `workers/ai/Dockerfile` for `linux/amd64` without publishing.
+4. Runs the OpenAI provider and shared LLM package tests.
+5. Runs the complete `./workers/ai` package with the race detector.
+6. Runs the complete `./workers/ai` package test suite.
+7. Renders the pinned Orka chart with both immutable-tag and digest overrides.
+8. Builds `workers/ai/Dockerfile` for `linux/amd64` without publishing.
 
 A push to `main` must pass the same validation job. A separate package-write
 job then rebuilds and pushes the image, SBOM, provenance, and digest record. Pull
@@ -95,7 +102,7 @@ workers:
   ai:
     image:
       repository: ghcr.io/willie-yao/prow-ai-dashboard/orka-ai-worker
-      tag: v2-orka-1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254-dashboard-<dashboard-commit>
+      tag: v3-orka-1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254-dashboard-<dashboard-commit>
       pullPolicy: IfNotPresent
 ```
 

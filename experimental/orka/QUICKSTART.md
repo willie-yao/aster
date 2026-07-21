@@ -58,7 +58,7 @@ source rather than this repository's Go module:
 
 ```text
 ghcr.io/willie-yao/prow-ai-dashboard/orka-ai-worker:
-  v2-orka-<full-orka-commit>-dashboard-<full-dashboard-commit>
+  v3-orka-<full-orka-commit>-dashboard-<full-dashboard-commit>
 ```
 
 Use the exact tag or digest from the latest [successful main-branch
@@ -80,7 +80,7 @@ workers:
   ai:
     image:
       repository: ghcr.io/willie-yao/prow-ai-dashboard/orka-ai-worker
-      tag: v2-orka-1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254-dashboard-<dashboard-commit>
+      tag: v3-orka-1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254-dashboard-<dashboard-commit>
       pullPolicy: IfNotPresent
 ```
 
@@ -112,10 +112,12 @@ smaller models need.
 
 Pick one path.
 
-### OpenAI-compatible endpoint (vLLM, Ray Serve, Dynamo/NIM, Ollama)
+### OpenAI or an OpenAI-compatible endpoint
 
-No proxy needed. Create the token Secret, point the Provider at your endpoint's
-`/v1` base, and apply it:
+No proxy is needed. Create the token Secret, point the Provider at the endpoint's
+`/v1` base, and apply it. The pinned worker tries Responses first and falls back
+to Chat Completions when the endpoint does not support Responses. It sends
+`store: false` on Responses requests.
 
 ```bash
 kubectl create secret generic model-secret -n orka-system \
@@ -155,15 +157,17 @@ experimental/orka/orka-ops.sh --namespace orka-system preflight \
 # deleted after a successful result unless --keep is passed.
 experimental/orka/orka-ops.sh --namespace orka-system smoke \
   --provider copilot \
-  --model claude-sonnet-4.5
+  --model claude-sonnet-4.5 \
+  --expect-api chat_completions
 ```
 
-For a non-Copilot Provider, substitute its name and model. The smoke command
-requires `status.phase=Succeeded` and `status.resultRef.available=true`; a
-controller that is merely running is not enough. These commands validate the
-Orka control plane and Provider path. They do not call the dashboard artifact
-Tools or verify Task events. The first complete dashboard pipeline Job remains
-the end-to-end check for artifact routing, Tool authentication, result acceptance,
+For a non-Copilot Provider, substitute its name and model. Use
+`--expect-api responses` for an OpenAI Provider when Responses is required, or
+leave the default `auto` to accept either API. The smoke command requires
+`status.phase=Succeeded`, an available result, and worker API-mode telemetry. A
+controller that is merely running is not enough. The command does not call the
+dashboard artifact Tools. The first complete dashboard pipeline Job remains the
+end-to-end check for artifact routing, Tool authentication, result acceptance,
 and ingestion.
 
 ## Step 3: choose artifact Tool ownership
@@ -213,6 +217,7 @@ helm install dash deploy/helm/prow-ai-dashboard \
   --namespace dashboards --create-namespace \
   --set mode=cron --set analysis=orka \
   --set orka.provider=copilot --set orka.model=claude-sonnet-4.5 \
+  --set orka.apiMode=chat_completions \
   --set-file project.config=<consumer>/project.yaml \
   --set-file project.systemPrompt=<consumer>/prompts/system.md
 ```
@@ -273,8 +278,9 @@ state, and recreates the same Task name with the new placement.
 
 Producer, ingestor, and artifact-tool tags inherit the engine `image.tag`, so one
 immutable SHA pins the complete dashboard pipeline. Set `orka.provider` to your
-Provider name and `orka.model` to your model id. See the chart values for
-external artifact Tool and existing ConfigMap overrides.
+Provider name and `orka.model` to your model id. Set `orka.apiMode` to the
+required protocol when a fallback would hide a deployment mistake. See the chart
+values for external artifact Tool and existing ConfigMap overrides.
 
 For an evaluation, also set `fetcher.suspend=true` and
 `orka.sideEffects.enabled=false`, then trigger one uniquely named Job after the
@@ -433,6 +439,7 @@ The equivalent Orka knobs are producer flags, surfaced as Helm `orka.*` values:
 |---|---|---|---|
 | model | `orka.model` | `-model` | `claude-sonnet-4.5` |
 | provider | `orka.provider` | `-provider` | `copilot` |
+| expected API | `orka.apiMode` | `-api-mode` | `auto` |
 | per-Task timeout | `orka.taskTimeout` | `-timeout` | `10m` |
 | retries | `orka.retries` | `-retries` | `1` |
 | per-test wave size | `orka.producer.maxConcurrentTasks` | `-max-concurrent-tasks` | `2` |
@@ -497,7 +504,7 @@ a batch failed before that cleanup ran.
 # job-level pattern analyses and systemic recurring patterns it finalized.
 kubectl logs -n dashboards job/orka-run-1 -c ingest | tail
 
-# Prompt, provider/model, timeout/retry, and Tool-definition changes create new
+# Prompt, provider/model/API mode, timeout/retry, and Tool-definition changes create new
 # content-addressed Tasks automatically. Bump orka.version (Helm) or -version
 # (manifests) only for external semantic changes the producer cannot fingerprint,
 # such as a shim implementation change. Re-applying an unchanged Task is a no-op.
@@ -513,9 +520,15 @@ kubectl logs -n dashboards job/orka-run-1 -c ingest | tail
   cause. Fix the dependency or bump the version when retrying an external
   semantic change.
 - **`AI analysis unavailable: analysis Task telemetry unavailable`.** The
-  ingestor requires Orka execution-event storage to enforce tool-call and
-  timeline gates. Verify the controller event store and Task events API are
+  ingestor requires Orka execution-event storage to enforce tool-call, API-mode,
+  and timeline gates. Verify the controller event store and Task events API are
   enabled and reachable by the pipeline ServiceAccount.
+- **`model request telemetry did not report an API mode`.** The Orka installation
+  is not using the pinned compatibility v3 worker. Install the exact published
+  image tag or digest before retrying.
+- **`model requests used ... expected ...`.** The Provider negotiated a different
+  API than `orka.apiMode`. Correct the expectation or endpoint. Changing the mode
+  creates new content-addressed Tasks automatically.
 - **`ImagePullBackOff` on an orka-* image.** The GHCR package is not pullable from
   the cluster. Make it public, configure top-level `imagePullSecrets` for the
   pipeline, or configure `orka.artifactTool.imagePullSecrets` for the artifact

@@ -90,6 +90,7 @@ spec:
                 - -namespace=orka-system
                 - -provider=copilot
                 - -model=claude-sonnet-4.5
+                - -api-mode=auto
                 - -version=v1
                 # Enable event-driven ingestion (apply 71-ingestor-webhook.yaml first):
                 # - -webhook-url=http://orka-ingestor.orka-system.svc:8080/webhook

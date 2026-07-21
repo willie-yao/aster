@@ -258,7 +258,7 @@ func writeOrkaAcceptedEvents(w http.ResponseWriter) {
 		{"seq": 5, "type": "ToolCallCompleted", "toolName": "required-evidence", "toolCallID": "call-3", "content": map[string]any{"resultLength": 120}, "createdAt": base.Add(4 * time.Second)},
 		{"seq": 6, "type": "ToolCallStarted", "toolName": "validate-analysis", "toolCallID": "call-4", "createdAt": base.Add(5 * time.Second)},
 		{"seq": 7, "type": "ToolCallCompleted", "toolName": "validate-analysis", "toolCallID": "call-4", "content": map[string]any{"resultLength": 80}, "createdAt": base.Add(6 * time.Second)},
-		{"seq": 8, "type": "ModelRequestCompleted", "provider": "copilot", "model": "claude-sonnet-4.5", "inputTokens": 100, "outputTokens": 20, "createdAt": base.Add(7 * time.Second)},
+		{"seq": 8, "type": "ModelRequestCompleted", "provider": "copilot", "model": "claude-sonnet-4.5", "inputTokens": 100, "outputTokens": 20, "content": map[string]any{"apiMode": "chat_completions", "responseID": "chatcmpl-e2e"}, "createdAt": base.Add(7 * time.Second)},
 		{"seq": 9, "type": "TaskSucceeded", "createdAt": base.Add(8 * time.Second)},
 	}
 	_ = json.NewEncoder(w).Encode(map[string]any{"latestSeq": 9, "events": events})
