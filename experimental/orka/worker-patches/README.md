@@ -25,7 +25,8 @@ The patch keeps dashboard analysis policy inside the dashboard-owned worker:
 - removes completed timeline Tools and re-prompts malformed, empty, or
   unvalidated final responses;
 - keeps a bounded evidence ledger containing successful Tool arguments,
-  evidence tokens, and result excerpts;
+  byte-exact evidence tokens, and result excerpts; when necessary it removes
+  non-token context or evicts whole older entries rather than truncating tokens;
 - proactively compacts old Tool-call/result blocks before provider rejection,
   then restores the evidence ledger and finalization prompt.
 
