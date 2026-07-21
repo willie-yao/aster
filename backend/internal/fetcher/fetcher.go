@@ -10,9 +10,11 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +25,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixruntime"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/issues"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/junit"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
@@ -32,9 +35,11 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prow/jobconfig"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prowbuild"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediation"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/repotemplate"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/resolve"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
 
@@ -70,6 +75,7 @@ type pipeline struct {
 	aiSystemPrompt    string
 	aiSkillSet        *skills.Set
 	includePresubmits bool
+	jobCatalog        *jobconfig.Catalog
 	aiRuntime         *analysisRuntime
 }
 
@@ -213,7 +219,8 @@ func (p *pipeline) discover(ctx context.Context) ([]models.ProwJob, error) {
 		}
 	default:
 		log.Println("Fetching job configs from test-infra...")
-		jobs, err = jobconfig.FetchJobConfigs(ctx, p.client, cfg)
+		targetRepo := configuredFixRepo(cfg)
+		jobs, p.jobCatalog, err = jobconfig.FetchJobConfigsAndCatalog(ctx, p.client, cfg, targetRepo)
 		if err != nil {
 			return nil, fmt.Errorf("fetching job configs: %w", err)
 		}
@@ -411,11 +418,36 @@ func (p *pipeline) runSideEffects(ctx context.Context, res *refreshResult) error
 		log.Println("Notifications: skipped (email disabled)")
 	}
 
-	if err := processIssues(ctx, cfg, flakinessReport, details, p.aiToken, p.enableAI, opts.OutDir); err != nil {
+	// Recover existing fix state before issue recovery or new automatic writes.
+	remediationReady := true
+	if err := p.processRemediations(ctx, flakinessReport.RecurringPatterns, details); err != nil {
 		sideEffectErrs = append(sideEffectErrs, err)
+		remediationReady = false
 	}
-
-	if err := processFixPRs(ctx, cfg, flakinessReport.RecurringPatterns, p.aiToken, opts.OutDir); err != nil {
+	fixStateChanged := false
+	if remediationReady {
+		ledger, err := remediation.LoadForRepo(opts.OutDir, configuredFixRepo(cfg))
+		if err != nil {
+			sideEffectErrs = append(sideEffectErrs, fmt.Errorf("load remediation state for fix PRs: %w", err))
+		} else {
+			fixPatterns := remediation.UntrackedPatterns(ledger, flakinessReport.RecurringPatterns, details)
+			if skipped := len(flakinessReport.RecurringPatterns) - len(fixPatterns); skipped > 0 {
+				log.Printf("Fix PRs: %d pattern(s) already have remediation history; skipping duplicate proposals", skipped)
+			}
+			var fixErr error
+			fixStateChanged, fixErr = processFixPRs(ctx, cfg, fixPatterns, p.aiToken, opts.OutDir)
+			if fixErr != nil {
+				sideEffectErrs = append(sideEffectErrs, fixErr)
+			}
+		}
+	}
+	// Adopt a PR created in this pass before issues evaluate recovery.
+	if fixStateChanged {
+		if err := p.processRemediations(ctx, flakinessReport.RecurringPatterns, details); err != nil {
+			sideEffectErrs = append(sideEffectErrs, err)
+		}
+	}
+	if err := processIssues(ctx, cfg, flakinessReport, details, p.aiToken, p.enableAI, opts.OutDir); err != nil {
 		sideEffectErrs = append(sideEffectErrs, err)
 	}
 	return errors.Join(sideEffectErrs...)
@@ -526,11 +558,18 @@ func processIssues(ctx context.Context, cfg *project.Config, report models.Flaki
 
 	client := issues.NewClient(token, eff.Repo.Owner, eff.Repo.Name)
 	targetRepo := eff.Repo.Owner + "/" + eff.Repo.Name
+	ledger, err := remediation.LoadForRepo(outDir, configuredFixRepo(cfg))
+	if err != nil {
+		return fmt.Errorf("load remediation state for issues: %w", err)
+	}
+	keepOpen, retire := remediationIssueLifecycleKeys(ledger, targetRepo)
 	mgr := issues.NewManager(client, filepath.Join(outDir, "issue_state.json"), targetRepo, issues.Options{
 		CommentOnRecovery: eff.CommentOnRecovery == nil || *eff.CommentOnRecovery,
 		CloseOnRecovery:   eff.CloseOnRecovery,
 		MaxNewPerRun:      eff.MaxNewPerRun,
 		RecoverPrefixes:   issues.RecoverPrefixesFor(eff.Triggers),
+		KeepOpenKeys:      keepOpen,
+		RetireKeys:        retire,
 		TemplateFiller:    filler,
 	})
 	stats, err := mgr.Reconcile(ctx, specs)
@@ -556,22 +595,22 @@ var newBatchFixManager = func(token, stateFile string, opts fixpr.Options) *fixp
 // recurring patterns. Gated on ai.fix_prs.enabled and FIX_TOKEN (a CLA-signed
 // operator PAT). In dry-run it writes previews instead of opening PRs. Any
 // missing piece is a no-op.
-func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.PatternAnalysis, aiToken, outDir string) error {
+func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.PatternAnalysis, aiToken, outDir string) (bool, error) {
 	if cfg.AI == nil || cfg.AI.FixPRs == nil || !cfg.AI.FixPRs.Enabled {
-		return nil
+		return false, nil
 	}
 	if len(patterns) == 0 {
-		return nil
+		return false, nil
 	}
 	eff := cfg.EffectiveFixPRs()
 	if eff.Repo == nil || eff.Repo.Owner == "" || eff.Repo.Name == "" {
 		log.Println("Fix PRs: no source repo resolved (set ai.fix_prs.repo or branding.source_repo); skipping")
-		return fmt.Errorf("fix PRs: no source repo resolved")
+		return false, fmt.Errorf("fix PRs: no source repo resolved")
 	}
 	fixToken := os.Getenv("FIX_TOKEN")
 	if fixToken == "" {
 		log.Println("Fix PRs: enabled but FIX_TOKEN is unset; skipping")
-		return fmt.Errorf("fix PRs: FIX_TOKEN is unset")
+		return false, fmt.Errorf("fix PRs: FIX_TOKEN is unset")
 	}
 
 	provider := cfg.ResolveAIProvider(os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"))
@@ -581,13 +620,13 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 	}
 	if eff.AgentRuntime.Type != "orka" && aiClient == nil {
 		log.Println("Fix PRs: local runtime requires AI_TOKEN, endpoint, and model; skipping")
-		return fmt.Errorf("fix PRs: local runtime requires AI_TOKEN, endpoint, and model")
+		return false, fmt.Errorf("fix PRs: local runtime requires AI_TOKEN, endpoint, and model")
 	}
 
 	critique, critiqueRetries, err := fixruntime.Critique(aiClient, eff.CritiqueRetries)
 	if err != nil {
 		log.Printf("Fix PRs: %v; skipping", err)
-		return fmt.Errorf("fix PR critique: %w", err)
+		return false, fmt.Errorf("fix PR critique: %w", err)
 	}
 	var prFiller fixpr.PRBodyFiller
 	if aiClient != nil {
@@ -624,7 +663,7 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 	agentRuntime, err := newBatchFixRuntime(ar)
 	if err != nil {
 		log.Printf("Fix PRs: %v; skipping", err)
-		return fmt.Errorf("fix PR runtime: %w", err)
+		return false, fmt.Errorf("fix PR runtime: %w", err)
 	}
 	model := ar.Model
 	if model == "" {
@@ -656,7 +695,8 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 			log.Printf("Warning: failed to save fix-PR state: %v", saveErr)
 		}
 	}
-	return errors.Join(wrapOptional("fix-PR processing", err), wrapOptional("save fix-PR state", saveErr))
+	changed := !eff.DryRun && saveErr == nil && stats.Proposed+stats.Adopted > 0
+	return changed, errors.Join(wrapOptional("fix-PR processing", err), wrapOptional("save fix-PR state", saveErr))
 }
 
 func wrapOptional(operation string, err error) error {
@@ -689,8 +729,8 @@ func loadCachedJobDetails(outDir string) map[string]map[string]models.BuildResul
 		}
 		builds := make(map[string]models.BuildResult, len(detail.Runs))
 		for _, r := range detail.Runs {
-			// Only cache completed builds.
-			if r.Result != "PENDING" && r.Result != "" {
+			// Incomplete JUnit may become available after the build finishes.
+			if r.Result != "PENDING" && r.Result != "" && (r.JUnitComplete || r.JUnitTruncated) {
 				builds[r.BuildID] = r
 			}
 		}
@@ -749,8 +789,12 @@ func fetchBuildResult(ctx context.Context, backend storage.Backend, job *models.
 
 	result := &models.BuildResult{BuildInfo: *info, TestCases: []models.TestCase{}}
 
-	junitPaths, err := prowbuild.DiscoverJUnitPaths(ctx, backend, loc)
+	junitPaths, complete, truncated, err := prowbuild.DiscoverJUnitPathsWithStatus(ctx, backend, loc)
+	result.JUnitComplete = complete
+	result.JUnitTruncated = truncated
 	if err != nil {
+		result.JUnitComplete = false
+		result.JUnitTruncated = false
 		log.Printf("    ⚠ %s/%s: discovering junit files: %v", job.Name, build.ID, err)
 		return result, nil
 	}
@@ -762,11 +806,15 @@ func fetchBuildResult(ctx context.Context, backend storage.Backend, job *models.
 		result.JUnitURLs = append(result.JUnitURLs, backend.WebURL(junitPath))
 		junitData, err := storage.ReadAll(ctx, backend, junitPath)
 		if err != nil {
+			result.JUnitComplete = false
+			result.JUnitTruncated = false
 			log.Printf("    ⚠ %s/%s: fetching %s: %v", job.Name, build.ID, path.Base(junitPath), err)
 			continue
 		}
 		testCases, err := junit.ParseFile(junitData, path.Base(junitPath))
 		if err != nil {
+			result.JUnitComplete = false
+			result.JUnitTruncated = false
 			log.Printf("    ⚠ %s/%s: parsing %s: %v", job.Name, build.ID, path.Base(junitPath), err)
 			continue
 		}
@@ -786,4 +834,261 @@ func fetchBuildResult(ctx context.Context, backend storage.Backend, job *models.
 	}
 
 	return result, nil
+}
+
+func configuredFixRepo(cfg *project.Config) string {
+	if cfg == nil || cfg.AI == nil || cfg.AI.FixPRs == nil {
+		return ""
+	}
+	eff := cfg.EffectiveFixPRs()
+	if eff.Repo == nil || eff.Repo.Owner == "" || eff.Repo.Name == "" {
+		return ""
+	}
+	return eff.Repo.Owner + "/" + eff.Repo.Name
+}
+
+func removeRemediationPublicState(dataDir string) error {
+	err := os.Remove(filepath.Join(dataDir, remediation.PublicFileName))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
+}
+
+func (p *pipeline) processRemediations(ctx context.Context, patterns []models.PatternAnalysis, details []models.JobDetail) error {
+	targetRepo := configuredFixRepo(p.cfg)
+	if targetRepo == "" {
+		return removeRemediationPublicState(p.opts.OutDir)
+	}
+	if p.cfg.EffectiveFixPRs().DryRun {
+		return removeRemediationPublicState(p.opts.OutDir)
+	}
+	fixState := statefile.Load[fixpr.TrackedFix](filepath.Join(p.opts.OutDir, "fix_pr_state.json"), targetRepo, "fix PRs")
+	ledger, err := remediation.LoadForRepo(p.opts.OutDir, targetRepo)
+	if err != nil {
+		return err
+	}
+	if len(fixState.Tracked) == 0 && len(ledger.Remediations) == 0 && len(patterns) == 0 {
+		return ledger.Save(p.opts.OutDir)
+	}
+	fixes := make(map[string]remediation.FixReference, len(fixState.Tracked))
+	for key, fix := range fixState.Tracked {
+		if !fix.HasPatternSnapshot() {
+			continue
+		}
+		pattern := fix.Pattern
+		fixes[key] = remediation.FixReference{URL: fix.URL, OpenedAt: fix.OpenedAt, Pattern: &pattern}
+	}
+	if p.jobCatalog == nil && p.cfg.TestGrid.Dashboard != "" {
+		_, catalog, err := jobconfig.FetchJobConfigsAndCatalog(ctx, p.client, p.cfg, targetRepo)
+		if err != nil {
+			log.Printf("Warning: test-infra verification metadata unavailable: %v", err)
+		} else {
+			p.jobCatalog = catalog
+		}
+	}
+	if p.jobCatalog == nil && p.cfg.EffectiveDiscoverySource() == project.DiscoveryBucket {
+		jobs, err := prowbuild.DiscoverJobs(ctx, p.backend, true, nil)
+		if err != nil {
+			log.Printf("Warning: bucket verification metadata unavailable: %v", err)
+		} else {
+			p.jobCatalog = jobconfig.CatalogFromJobs(jobs, "bucket")
+		}
+	}
+	var coverage *remediation.CoverageCatalog
+	if p.jobCatalog != nil {
+		coverageRepos := remediationCoverageRepos(targetRepo, patterns, details, ledger)
+		coverage = remediation.LoadCoverageCatalog(p.opts.OutDir, p.jobCatalog.Revision, coverageRepos, time.Now().UTC())
+		if coverage == nil {
+			built, err := remediation.BuildCoverageCatalog(ctx, p.backend, p.jobCatalog, coverageRepos)
+			coverage = built
+			if err != nil {
+				log.Printf("Warning: Prow verification catalog is partial: %v", err)
+			} else if coverage != nil {
+				if err := coverage.Save(p.opts.OutDir); err != nil {
+					log.Printf("Warning: failed to save Prow verification catalog: %v", err)
+				}
+			}
+		}
+	}
+	token := os.Getenv("FIX_TOKEN")
+	if token == "" {
+		token = os.Getenv("BOT_TOKEN")
+	}
+	if token == "" {
+		token = os.Getenv("GITHUB_TOKEN")
+	}
+	if token == "" {
+		token = os.Getenv("ISSUE_TOKEN")
+	}
+	client := ghpr.NewClient(p.client, token)
+	reconciler := remediation.NewReconciler(client, p.opts.OutDir)
+	reconciler.SetVerification(p.backend, p.jobCatalog, coverage, client)
+	reconciler.SetRecovery(targetRepo, client)
+	issueConfig := p.cfg.EffectiveIssues()
+	issueRepo := ""
+	if p.cfg.Issues != nil && p.cfg.Issues.Enabled && issueConfig.Repo != nil && issueConfig.Repo.Owner != "" && issueConfig.Repo.Name != "" {
+		issueRepo = issueConfig.Repo.Owner + "/" + issueConfig.Repo.Name
+		issueState := statefile.Load[issues.TrackedIssue](filepath.Join(p.opts.OutDir, "issue_state.json"), issueRepo, "issues")
+		trackedIssues := map[string]remediation.IssueRef{}
+		for key, tracked := range issueState.Tracked {
+			if !strings.HasPrefix(key, issues.KeyPrefixPattern) {
+				continue
+			}
+			jobID := strings.TrimPrefix(key, issues.KeyPrefixPattern)
+			trackedIssues[jobID] = remediation.IssueRef{Number: tracked.Number, URL: tracked.URL, Repo: issueRepo}
+		}
+		var issueClient remediation.IssueLifecycleClient
+		if issueToken := os.Getenv("ISSUE_TOKEN"); issueToken != "" {
+			issueClient = issues.NewClient(issueToken, issueConfig.Repo.Owner, issueConfig.Repo.Name)
+		}
+		reconciler.SetIssues(issueRepo, trackedIssues, issueClient)
+	}
+	state, err := reconciler.Reconcile(ctx, patterns, details, fixes, fixpr.KeyFor)
+	if err != nil {
+		log.Printf("Warning: remediation reconciliation failed: %v", err)
+	}
+	emailErr := p.sendRemediationEmails(ctx, state)
+	if emailErr != nil {
+		log.Printf("Warning: remediation email failed: %v", emailErr)
+	}
+	return errors.Join(wrapOptional("remediation reconciliation", err), wrapOptional("remediation email", emailErr))
+}
+
+func remediationIssueLifecycleKeys(state *remediation.State, issueRepo string) (map[string]bool, map[string]bool) {
+	keepOpen := map[string]bool{}
+	retire := map[string]bool{}
+	if state == nil || issueRepo == "" {
+		return keepOpen, retire
+	}
+	for _, entry := range state.Remediations {
+		if entry == nil || entry.Issue == nil || entry.Issue.Repo != issueRepo || len(entry.Attempts) == 0 {
+			continue
+		}
+		key := issues.KeyPrefixPattern + entry.JobID
+		latest := entry.Attempts[len(entry.Attempts)-1]
+		if latest.Status == remediation.StatusVerifiedFixed {
+			retire[key] = true
+			continue
+		}
+		keepOpen[key] = true
+	}
+	for key := range keepOpen {
+		delete(retire, key)
+	}
+	return keepOpen, retire
+}
+
+func remediationCoverageRepos(targetRepo string, patterns []models.PatternAnalysis, details []models.JobDetail, ledger *remediation.State) []string {
+	repos := map[string]bool{targetRepo: targetRepo != ""}
+	jobs := map[string]bool{}
+	for _, pattern := range patterns {
+		jobs[pattern.JobID] = true
+	}
+	if ledger != nil {
+		for _, entry := range ledger.Remediations {
+			if entry != nil {
+				jobs[entry.JobID] = true
+				if entry.SourceRepo != "" {
+					repos[entry.SourceRepo] = true
+				}
+			}
+		}
+	}
+	for _, detail := range details {
+		if !jobs[detail.JobID] {
+			continue
+		}
+		if detail.Repo != "" {
+			repos[detail.Repo] = true
+		}
+		for _, run := range detail.Runs {
+			for repo := range run.RepoRefs {
+				repos[repo] = true
+			}
+		}
+	}
+	out := make([]string, 0, len(repos))
+	for repo, include := range repos {
+		if include && strings.Contains(repo, "/") {
+			out = append(out, repo)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+var newRemediationEmailSender = func(config notify.SMTPConfig) (notify.Sender, error) {
+	return notify.NewSMTPSender(config)
+}
+
+func (p *pipeline) sendRemediationEmails(ctx context.Context, state *remediation.State) error {
+	email, enabled := p.cfg.EffectiveEmailNotifications()
+	if !enabled || state == nil {
+		return nil
+	}
+	password := os.Getenv("EMAIL_SMTP_PASSWORD")
+	if email.SMTP.Username != "" && password == "" {
+		return fmt.Errorf("EMAIL_SMTP_PASSWORD is unset")
+	}
+	from, recipients, err := notify.ParseAddresses(email.From, email.To)
+	if err != nil {
+		return err
+	}
+	sender, err := newRemediationEmailSender(notify.SMTPConfig{
+		Host: email.SMTP.Host, Port: email.SMTP.Port, Username: email.SMTP.Username,
+		Password: password, TLSMode: email.SMTP.TLS,
+	})
+	if err != nil {
+		return err
+	}
+	ids := make([]string, 0, len(state.Remediations))
+	for id := range state.Remediations {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	var errs []error
+	changed := false
+	for _, id := range ids {
+		entry := state.Remediations[id]
+		if entry == nil || len(entry.Attempts) == 0 {
+			continue
+		}
+		attempt := &entry.Attempts[len(entry.Attempts)-1]
+		if attempt.LastTransition == "" || attempt.TransitionIndex == attempt.LastEmailedTransitionIndex || !remediationEmailStatus(attempt.Status) {
+			continue
+		}
+		dashboardURL := strings.TrimRight(p.cfg.Branding.SiteURL, "/") + "/job/" + url.PathEscape(entry.JobID)
+		message := notify.RemediationUpdateMessage(notify.RemediationUpdate{
+			From: from, To: recipients, ProjectName: p.cfg.Name, JobName: entry.JobName,
+			Status: attempt.Status, Reason: attempt.OutcomeReason, PullURL: attempt.URL,
+			DashboardURL: dashboardURL,
+		})
+		if err := sender.Send(ctx, message); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", id, err))
+			continue
+		}
+		attempt.LastEmailedTransition = attempt.LastTransition
+		attempt.LastEmailedTransitionIndex = attempt.TransitionIndex
+		changed = true
+	}
+	if changed {
+		if err := state.Save(p.opts.OutDir); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func remediationEmailStatus(status string) bool {
+	switch status {
+	case remediation.StatusAwaitingPresubmit, remediation.StatusPresubmitRunning,
+		remediation.StatusPremergeVerified, remediation.StatusPresubmitFailedSameCause,
+		remediation.StatusPresubmitFailedDifferentCause, remediation.StatusObserving,
+		remediation.StatusVerifiedFixed, remediation.StatusStillFailingSameCause,
+		remediation.StatusFailingDifferentCause, remediation.StatusInconclusive:
+		return true
+	default:
+		return false
+	}
 }

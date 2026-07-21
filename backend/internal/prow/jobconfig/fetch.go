@@ -32,34 +32,35 @@ const configJobsPrefix = "config/jobs/"
 const downloadWorkers = 10
 
 // FetchJobConfigs discovers all of a project's Prow job YAMLs from the
-// kubernetes/test-infra repository and returns the parsed jobs. Discovery is
-// snapshot-consistent: the engine resolves kubernetes/test-infra's HEAD
-// commit once, lists every YAML under config/jobs/ in that commit's tree,
-// and downloads each at that pinned SHA. The testgrid-dashboards annotation
-// on each parsed job is the final membership filter, so jobs are discovered
-// regardless of directory or filename convention.
+// kubernetes/test-infra repository and returns the parsed jobs.
 func FetchJobConfigs(ctx context.Context, client *http.Client, cfg *project.Config) ([]models.ProwJob, error) {
+	jobs, _, err := FetchJobConfigsAndCatalog(ctx, client, cfg, "")
+	return jobs, err
+}
+
+// FetchJobConfigsAndCatalog returns dashboard jobs plus definitions that test
+// targetRepo. Both results come from one pinned test-infra snapshot.
+func FetchJobConfigsAndCatalog(ctx context.Context, client *http.Client, cfg *project.Config, targetRepo string) ([]models.ProwJob, *Catalog, error) {
 	sha, err := resolveMasterSHA(ctx, client)
 	if err != nil {
-		return nil, fmt.Errorf("resolving kubernetes/test-infra master SHA: %w", err)
+		return nil, nil, fmt.Errorf("resolving kubernetes/test-infra master SHA: %w", err)
 	}
 
 	files, err := listConfigJobsYAMLs(ctx, client, sha)
 	if err != nil {
-		return nil, fmt.Errorf("listing config/jobs/ at %s: %w", sha[:7], err)
+		return nil, nil, fmt.Errorf("listing config/jobs/ at %s: %w", sha[:7], err)
 	}
 	log.Printf("  discovered %d candidate YAMLs under %s at test-infra@%s", len(files), configJobsPrefix, sha[:7])
 
-	allJobs, err := downloadAndParseAll(ctx, client, sha, files, cfg)
+	allJobs, catalog, err := downloadAndParseAll(ctx, client, sha, files, cfg, targetRepo)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-
 	if len(allJobs) == 0 {
-		return nil, fmt.Errorf("no jobs labeled with dashboard %q found across %d candidate YAML(s) at test-infra@%s",
+		return nil, nil, fmt.Errorf("no jobs labeled with dashboard %q found across %d candidate YAML(s) at test-infra@%s",
 			cfg.TestGrid.Dashboard, len(files), sha[:7])
 	}
-	return allJobs, nil
+	return allJobs, catalog, nil
 }
 
 // resolveMasterSHA returns the current commit SHA of kubernetes/test-infra's
@@ -159,11 +160,12 @@ func listConfigJobsYAMLs(ctx context.Context, client *http.Client, sha string) (
 // ParseJobConfig, which keeps only jobs whose testgrid-dashboards annotation
 // contains cfg.TestGrid.Dashboard. The first file-level error cancels every
 // in-flight goroutine and is returned to the caller.
-func downloadAndParseAll(ctx context.Context, client *http.Client, sha string, files []string, cfg *project.Config) ([]models.ProwJob, error) {
+func downloadAndParseAll(ctx context.Context, client *http.Client, sha string, files []string, cfg *project.Config, targetRepo string) ([]models.ProwJob, *Catalog, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	perFile := make([][]models.ProwJob, len(files))
+	catalogPerFile := make([][]JobDefinition, len(files))
 	sem := make(chan struct{}, downloadWorkers)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -201,20 +203,46 @@ func downloadAndParseAll(ctx context.Context, client *http.Client, sha string, f
 				recordErr(fmt.Errorf("parsing %s: %w", f, err))
 				return
 			}
+			definitions, err := ParseCatalog(body, f)
+			if err != nil {
+				recordErr(fmt.Errorf("parsing catalog %s: %w", f, err))
+				return
+			}
 			perFile[idx] = jobs
+			catalogPerFile[idx] = definitions
 		}(i, file)
 	}
 	wg.Wait()
 
 	if firstErr != nil {
-		return nil, firstErr
+		return nil, nil, firstErr
 	}
 
 	var all []models.ProwJob
-	for _, jobs := range perFile {
+	catalog := &Catalog{Revision: sha, Jobs: map[string]JobDefinition{}}
+	for i, jobs := range perFile {
 		all = append(all, jobs...)
+		for _, definition := range catalogPerFile[i] {
+			matchesDashboard := definitionMatchesDashboard(definition, cfg.TestGrid.Dashboard)
+			matchesTarget := targetRepo != "" && definition.TestsRepo(targetRepo)
+			if !matchesDashboard && !matchesTarget {
+				continue
+			}
+			id := definition.ID()
+			key := id
+			if _, exists := catalog.Jobs[key]; exists {
+				key = id + "::" + definition.ConfigFile
+				for n := 2; ; n++ {
+					if _, exists := catalog.Jobs[key]; !exists {
+						break
+					}
+					key = fmt.Sprintf("%s::%s::%d", id, definition.ConfigFile, n)
+				}
+			}
+			catalog.Jobs[key] = definition
+		}
 	}
-	return all, nil
+	return all, catalog, nil
 }
 
 // downloadRaw fetches a single file from raw.githubusercontent.com pinned to
@@ -299,4 +327,13 @@ func DerivePeriodicPrefix(jobs []models.ProwJob) string {
 		}
 	}
 	return best
+}
+
+func definitionMatchesDashboard(definition JobDefinition, dashboard string) bool {
+	for _, value := range strings.Split(definition.Annotations["testgrid-dashboards"], ",") {
+		if strings.TrimSpace(value) == dashboard {
+			return true
+		}
+	}
+	return false
 }

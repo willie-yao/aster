@@ -58,14 +58,23 @@ type BuildInfo struct {
 	Passed          bool      `json:"passed"`
 	Result          string    `json:"result"`
 	DurationSeconds float64   `json:"duration_seconds"`
-	Commit          string    `json:"commit"`
-	RepoVersion     string    `json:"repo_version,omitempty"`
-	ProwURL         string    `json:"prow_url"`
-	BuildLogURL     string    `json:"build_log_url"`
+	// Commit is the decorated checkout commit. For presubmits it may be a
+	// synthetic merge commit rather than the pull request head.
+	Commit      string `json:"commit"`
+	Revision    string `json:"revision,omitempty"`
+	RepoVersion string `json:"repo_version,omitempty"`
+	// RepoRefs preserves started.json's repository revision strings.
+	RepoRefs    map[string]string `json:"repo_refs,omitempty"`
+	ProwURL     string            `json:"prow_url"`
+	BuildLogURL string            `json:"build_log_url"`
 	// JUnitURLs lists every junit*.xml under the build's artifacts/ dir,
 	// discovered at fetch time. Empty when discovery failed or the build
 	// has no junit output. Stable ordering keeps cache reuse deterministic.
-	JUnitURLs []string `json:"junit_urls,omitempty"`
+	JUnitURLs     []string `json:"junit_urls,omitempty"`
+	JUnitComplete bool     `json:"junit_complete"`
+	// JUnitTruncated means discovery hit the stable object cap. The partial
+	// result is cacheable but remains unusable as complete verification evidence.
+	JUnitTruncated bool `json:"junit_truncated,omitempty"`
 	// PullNumber is the PR number that triggered this build for presubmits.
 	// Empty for periodics. Required for reconstructing presubmit GCS paths
 	// from cached BuildResults without reparsing the job config.
@@ -176,6 +185,8 @@ type AIAnalysis struct {
 // TestCase represents a single test case from JUnit XML.
 type TestCase struct {
 	Name            string  `json:"name"`
+	SuiteName       string  `json:"suite_name,omitempty"`
+	ClassName       string  `json:"class_name,omitempty"`
 	Status          string  `json:"status"` // "passed", "failed", "skipped"
 	DurationSeconds float64 `json:"duration_seconds"`
 	FailureMessage  string  `json:"failure_message,omitempty"`

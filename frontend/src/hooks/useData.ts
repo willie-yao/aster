@@ -1,5 +1,12 @@
 import { useState, useEffect } from "react";
-import type { Dashboard, FlakinessReport, JobDetail, ResolvedState, SearchIndex } from "../types/dashboard";
+import type {
+  Dashboard,
+  FlakinessReport,
+  JobDetail,
+  RemediationState,
+  ResolvedState,
+  SearchIndex,
+} from "../types/dashboard";
 import { jobDataFilename } from "../lib/utils";
 
 const DATA_BASE =
@@ -89,4 +96,26 @@ export function useResolved() {
   }, [nonce]);
 
   return { data, loading, refetch: () => setNonce((n) => n + 1) };
+}
+
+
+export function useRemediations() {
+  const [data, setData] = useState<RemediationState>({ remediations: {} });
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${DATA_BASE}/remediations.json`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : { remediations: {} }))
+      .then((value: RemediationState) => {
+        if (!cancelled) setData(value?.remediations ? value : { remediations: {} });
+      })
+      .catch(() => {
+        if (!cancelled) setData({ remediations: {} });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return { data };
 }

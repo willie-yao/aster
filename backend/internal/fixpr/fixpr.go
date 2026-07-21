@@ -158,8 +158,18 @@ type State = statefile.State[TrackedFix]
 
 // TrackedFix records the fix PR opened for a pattern key.
 type TrackedFix struct {
-	URL      string `json:"url"`
-	OpenedAt string `json:"opened_at"`
+	URL      string                 `json:"url"`
+	OpenedAt string                 `json:"opened_at"`
+	Pattern  models.PatternAnalysis `json:"pattern"`
+}
+
+// HasPatternSnapshot reports whether the fix can be reconciled.
+func (f TrackedFix) HasPatternSnapshot() bool {
+	return f.Pattern.JobID != "" || f.Pattern.Subject != ""
+}
+
+func trackedFix(url string, pattern models.PatternAnalysis) TrackedFix {
+	return TrackedFix{URL: url, OpenedAt: now(), Pattern: pattern}
 }
 
 // Preview is a dry-run proposed fix (no PR opened).
@@ -195,12 +205,14 @@ func NewClients(token string) *ghpr.Client {
 // NewManager builds a Manager and loads prior state from stateFile if present.
 func NewManager(pr prClient, stateFile string, opts Options) *Manager {
 	repo := opts.SourceOwner + "/" + opts.SourceName
-	return &Manager{
-		pr:        pr,
-		stateFile: stateFile,
-		opts:      opts,
-		state:     statefile.Load[TrackedFix](stateFile, repo, "fix PRs"),
+	state := statefile.Load[TrackedFix](stateFile, repo, "fix PRs")
+	for key, tracked := range state.Tracked {
+		if !tracked.HasPatternSnapshot() {
+			delete(state.Tracked, key)
+			log.Printf("Fix PRs: discarded unsupported state entry %s without a pattern snapshot", key)
+		}
 	}
+	return &Manager{pr: pr, stateFile: stateFile, opts: opts, state: state}
 }
 
 // SaveState writes the tracking state to disk.
@@ -230,7 +242,7 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 	}
 
 	for _, p := range work {
-		key := keyFor(p)
+		key := KeyFor(p)
 
 		// Dry-run: propose without GitHub writes or state, capped per run.
 		if m.opts.DryRun {
@@ -261,7 +273,7 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 			reconcileErrs = append(reconcileErrs, fmt.Errorf("search fix PR for %q: %w", p.Subject, err))
 			continue
 		} else if found {
-			m.state.Tracked[key] = TrackedFix{URL: url, OpenedAt: now()}
+			m.state.Tracked[key] = trackedFix(url, p)
 			stats.Adopted++
 			log.Printf("  🔗 adopted existing fix PR for %q", p.Subject)
 			continue
@@ -299,7 +311,7 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 			log.Printf("  ⚠ fix PR opened with a warning for %q: %v", p.Subject, err)
 			reconcileErrs = append(reconcileErrs, fmt.Errorf("finish fix PR for %q: %w", p.Subject, err))
 		}
-		m.state.Tracked[key] = TrackedFix{URL: url, OpenedAt: now()}
+		m.state.Tracked[key] = trackedFix(url, p)
 		stats.Proposed++
 		log.Printf("  🛠️ opened draft fix PR for %q: %s", p.Subject, url)
 	}
@@ -487,7 +499,7 @@ func (m *Manager) GeneratePreview(ctx context.Context, p models.PatternAnalysis,
 	if err != nil {
 		return nil, err
 	}
-	key := keyFor(p)
+	key := KeyFor(p)
 	v := m.verify(ctx, base, fix.files)
 	description, body := m.renderBody(ctx, p, fix, v, key)
 	return &GeneratedFix{
@@ -516,7 +528,7 @@ func (m *Manager) OpenFromPreview(ctx context.Context, gf *GeneratedFix) (string
 	if _, url, found, err := m.pr.SearchOpenPR(ctx, m.opts.SourceOwner, m.opts.SourceName, markerToken(key), markerFor(key)); err != nil {
 		return "", fmt.Errorf("fix-PR search failed: %w", err)
 	} else if found {
-		m.state.Tracked[key] = TrackedFix{URL: url, OpenedAt: now()}
+		m.state.Tracked[key] = trackedFix(url, gf.pattern)
 		return url, nil
 	}
 	url, err := m.openPR(ctx, gf.Title, gf.Body, gf.Preview.Files, gf.base)
@@ -527,7 +539,7 @@ func (m *Manager) OpenFromPreview(ctx context.Context, gf *GeneratedFix) (string
 		// PR opened but a follow-up (e.g. labeling) failed; still track it.
 		log.Printf("  ⚠ fix PR opened with a warning for %q: %v", gf.pattern.Subject, err)
 	}
-	m.state.Tracked[key] = TrackedFix{URL: url, OpenedAt: now()}
+	m.state.Tracked[key] = trackedFix(url, gf.pattern)
 	return url, nil
 }
 
@@ -551,9 +563,13 @@ func eligible(patterns []models.PatternAnalysis, minConfidence string) []models.
 	return out
 }
 
-// keyFor is the dedup identity of a pattern: the job plus a fingerprint of the
+// KeyFor is the dedup identity of a pattern: the job plus a fingerprint of the
 // shared root cause, so distinct causes on one job dedupe separately.
 func keyFor(p models.PatternAnalysis) string {
+	return KeyFor(p)
+}
+
+func KeyFor(p models.PatternAnalysis) string {
 	job := p.JobID
 	if strings.TrimSpace(job) == "" {
 		job = p.Subject
@@ -566,6 +582,12 @@ func keyFor(p models.PatternAnalysis) string {
 func markerFor(key string) string {
 	return fmt.Sprintf("<!-- %s:%s -->", markerPrefix, markerToken(key))
 }
+
+// MarkerFor returns the hidden GitHub marker for a fix key.
+func MarkerFor(key string) string { return markerFor(key) }
+
+// MarkerToken returns the search token for a fix key.
+func MarkerToken(key string) string { return markerToken(key) }
 
 func markerToken(key string) string {
 	sum := sha256.Sum256([]byte(key))

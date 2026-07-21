@@ -158,3 +158,21 @@ func isNumeric(s string) bool {
 	}
 	return true
 }
+
+// ListPullBuilds lists recent builds for one presubmit job on one pull request.
+func ListPullBuilds(ctx context.Context, b storage.Backend, repo, pullNumber, jobName string, count int) ([]Build, error) {
+	if repo == "" || pullNumber == "" || jobName == "" {
+		return nil, fmt.Errorf("prowbuild: repo, pull number, and job name are required")
+	}
+	loc := JobLocation{JobType: models.JobTypePresubmit, Repo: repo}
+	prefix := loc.jobPath(jobName, pullNumber)
+	ids, err := listPeriodicBuildIDs(ctx, b, prefix, count)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Build, len(ids))
+	for i, id := range ids {
+		out[i] = Build{ID: id, PullNumber: pullNumber}
+	}
+	return out, nil
+}

@@ -267,8 +267,10 @@ with `server.actions.oauth.existingSecret` (keys `OAUTH_CLIENT_SECRET`,
 
 `/data/*` serves the public dashboard files that the static Pages path exposes.
 The server rejects operational files such as `ai_cache.json`, issue state,
-fix-PR state, previews, and notification state. Pages strips the same files
-before publication. `resolved.json` remains public because the frontend uses it.
+fix-PR state, previews, notification state, remediation state, and the private
+Prow coverage catalog. Pages strips the same files before publication.
+`resolved.json` and the redacted `remediations.json` remain public because the
+frontend uses them.
 
 ## Email notifications
 
@@ -348,6 +350,10 @@ If a feature is enabled but its token is missing, the fetcher logs a skip and
 continues, so a misconfigured token never fails the pass. See
 [github-issues.md](github-issues.md) and [fix-prs.md](fix-prs.md) for the
 triggers, guardrails, and the rest of the per-feature `project.yaml` fields.
+
+Remediation verification observes existing Prow jobs. It does not run repository
+E2E commands inside the dashboard cluster. Project tests keep using their normal
+Prow build cluster, credentials, quotas, artifact upload, and cleanup behavior.
 
 This is the scheduled, unattended path. To let an admin file one issue or draft
 one fix PR on demand from the dashboard UI, enable the interactive server

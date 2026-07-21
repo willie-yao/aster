@@ -53,6 +53,7 @@ func FetchBuildInfo(ctx context.Context, b storage.Backend, loc BuildLocation) (
 		Started:     time.Unix(s.Timestamp, 0).UTC(),
 		Commit:      s.RepoCommit,
 		RepoVersion: s.RepoVer,
+		RepoRefs:    s.Repos,
 	}
 
 	// finished.json is absent while the build is still running.
@@ -68,6 +69,7 @@ func FetchBuildInfo(ctx context.Context, b storage.Backend, loc BuildLocation) (
 	info.Finished = time.Unix(f.Timestamp, 0).UTC()
 	info.Passed = f.Passed
 	info.Result = f.Result
+	info.Revision = f.Revision
 	info.DurationSeconds = float64(f.Timestamp - s.Timestamp)
 	return info, nil
 }
@@ -75,21 +77,39 @@ func FetchBuildInfo(ctx context.Context, b storage.Backend, loc BuildLocation) (
 // junitFileRe matches JUnit XML basenames from common Prow test frameworks.
 var junitFileRe = regexp.MustCompile(`^junit[._-].*\.xml$|^junit\.xml$`)
 
-// DiscoverJUnitPaths lists the build's artifacts/ directory and returns the
-// bucket-relative path of every JUnit XML file, sorted for cache stability.
-// Subtrees under artifacts/ are not walked.
+// DiscoverJUnitPaths returns usable JUnit paths for normal ingestion.
 func DiscoverJUnitPaths(ctx context.Context, b storage.Backend, loc BuildLocation) ([]string, error) {
+	paths, _, err := DiscoverJUnitPathsWithCompleteness(ctx, b, loc)
+	return paths, err
+}
+
+// DiscoverJUnitPathsWithCompleteness also reports whether the full tree was scanned.
+func DiscoverJUnitPathsWithCompleteness(ctx context.Context, b storage.Backend, loc BuildLocation) ([]string, bool, error) {
+	paths, complete, _, err := DiscoverJUnitPathsWithStatus(ctx, b, loc)
+	return paths, complete, err
+}
+
+// DiscoverJUnitPathsWithStatus distinguishes capped trees from retryable listing failures.
+func DiscoverJUnitPathsWithStatus(ctx context.Context, b storage.Backend, loc BuildLocation) ([]string, bool, bool, error) {
 	artifactsDir := loc.BuildPath() + "artifacts/"
-	listing, err := b.List(ctx, artifactsDir)
+	objects, truncated, err := b.ListTree(ctx, artifactsDir, 2000)
+	complete := err == nil && !truncated
+	permanentlyTruncated := err == nil && truncated
 	if err != nil {
-		return nil, err
+		listing, listErr := b.List(ctx, artifactsDir)
+		if listErr != nil {
+			return nil, false, false, err
+		}
+		for _, object := range listing.Files {
+			objects = append(objects, object.Name)
+		}
 	}
 	var paths []string
-	for _, f := range listing.Files {
-		if junitFileRe.MatchString(path.Base(f.Name)) {
-			paths = append(paths, artifactsDir+f.Name)
+	for _, object := range objects {
+		if junitFileRe.MatchString(path.Base(object)) {
+			paths = append(paths, artifactsDir+object)
 		}
 	}
 	sort.Strings(paths)
-	return paths, nil
+	return paths, complete, permanentlyTruncated, nil
 }

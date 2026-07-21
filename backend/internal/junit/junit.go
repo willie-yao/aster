@@ -98,15 +98,17 @@ func convertSuites(suites []xmlTestSuite) []models.TestCase {
 	var results []models.TestCase
 	for _, suite := range suites {
 		for _, tc := range suite.TestCases {
-			results = append(results, convertTestCase(tc))
+			results = append(results, convertTestCase(suite.Name, tc))
 		}
 	}
 	return results
 }
 
-func convertTestCase(tc xmlTestCase) models.TestCase {
+func convertTestCase(suiteName string, tc xmlTestCase) models.TestCase {
 	m := models.TestCase{
 		Name:            tc.Name,
+		SuiteName:       suiteName,
+		ClassName:       tc.ClassName,
 		DurationSeconds: parseFloat(tc.Time),
 	}
 
@@ -125,6 +127,31 @@ func convertTestCase(tc xmlTestCase) models.TestCase {
 	}
 
 	return m
+}
+
+// Identity returns the strongest available cross-build test identity.
+func Identity(tc models.TestCase) string {
+	suite := strings.TrimSpace(tc.SuiteName)
+	class := strings.TrimSpace(tc.ClassName)
+	if suite == "" && class == "" {
+		return NameIdentity(tc.Name)
+	}
+	return strings.Join([]string{suite, class, strings.TrimSpace(tc.Name)}, "\x00")
+}
+
+// NameIdentity is the exact-name fallback for cache entries without suite metadata.
+func NameIdentity(name string) string {
+	return "name\x00" + strings.TrimSpace(name)
+}
+
+// Identities returns the strong identity plus its exact-name fallback.
+func Identities(tc models.TestCase) []string {
+	strong := Identity(tc)
+	fallback := NameIdentity(tc.Name)
+	if strong == fallback {
+		return []string{strong}
+	}
+	return []string{strong, fallback}
 }
 
 func parseFloat(s string) float64 {

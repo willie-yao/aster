@@ -117,6 +117,7 @@ export interface BuildResult {
   web_url: string;
   build_log_url: string;
   junit_urls?: string[];
+  junit_complete?: boolean;
   test_cases: TestCase[];
   tests_total: number;
   tests_passed: number;
@@ -211,4 +212,45 @@ export interface ResolvedEntry {
 
 export interface ResolvedState {
   resolved: Record<string, ResolvedEntry>;
+}
+
+export interface RemediationObservation {
+  build_id: string;
+  job_name: string;
+  job_type: "periodic" | "presubmit";
+  result: string;
+  outcome: string;
+  reason?: string;
+  prow_url?: string;
+  started_at?: string;
+  completed_at?: string;
+}
+
+export interface RemediationAttempt {
+  number: number;
+  pr_number: number;
+  url: string;
+  target_repo: string;
+  head_sha?: string;
+  merge_sha?: string;
+  status: string;
+  pr_state?: string;
+  outcome?: string;
+  outcome_reason?: string;
+  observations?: RemediationObservation[];
+}
+
+export interface RemediationEntry {
+  id: string;
+  subject: string;
+  job_id: string;
+  job_name: string;
+  job_type: "periodic" | "presubmit";
+  issue?: { number: number; url: string; state?: string };
+  attempt?: RemediationAttempt;
+  updated_at: string;
+}
+
+export interface RemediationState {
+  remediations: Record<string, RemediationEntry>;
 }

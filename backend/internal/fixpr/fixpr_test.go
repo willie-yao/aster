@@ -11,6 +11,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
 )
 
 // fakeCompleter is the reviewer (critique) stand-in. Only the critique step
@@ -300,5 +301,37 @@ func TestGeneratedFixSnapshotRoundTrip(t *testing.T) {
 	restored.Preview.Files["a.go"] = "changed"
 	if decoded.Files["a.go"] != "package a" {
 		t.Fatal("restore did not deep copy files")
+	}
+}
+
+func TestTrackedFixStoresPatternSnapshot(t *testing.T) {
+	pattern := systemicPattern("etcd")
+	fix := trackedFix("https://github.com/up/stream/pull/5", pattern)
+	if fix.Pattern.JobID != pattern.JobID || fix.Pattern.SharedRootCause != pattern.SharedRootCause {
+		t.Fatalf("tracked fix = %+v", fix)
+	}
+}
+
+func TestTrackedFixHasPatternSnapshot(t *testing.T) {
+	if (TrackedFix{}).HasPatternSnapshot() {
+		t.Fatal("empty tracked fix must be unsupported")
+	}
+	if !(TrackedFix{Pattern: models.PatternAnalysis{JobID: "job"}}).HasPatternSnapshot() {
+		t.Fatal("job snapshot must be supported")
+	}
+}
+
+func TestNewManagerDiscardsStateWithoutPatternSnapshot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	legacy := statefile.State[TrackedFix]{
+		Repo:    "up/stream",
+		Tracked: map[string]TrackedFix{"legacy": {URL: "https://github.com/up/stream/pull/1"}},
+	}
+	if err := legacy.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager(&fakePR{}, path, Options{SourceOwner: "up", SourceName: "stream"})
+	if len(manager.state.Tracked) != 0 {
+		t.Fatalf("tracked = %+v", manager.state.Tracked)
 	}
 }

@@ -13,12 +13,16 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 )
 
 const maxWholeObjectBytes = 64 * 1024 * 1024
+
+// ErrNotFound identifies a missing storage object across providers.
+var ErrNotFound = errors.New("storage object not found")
 
 // Provider names a storage backend implementation.
 type Provider string

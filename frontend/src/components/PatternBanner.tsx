@@ -5,13 +5,30 @@ import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
 import { Link as RouterLink } from "react-router-dom";
 import { Insights } from "@mui/icons-material";
-import type { PatternAnalysis } from "../types/dashboard";
+import type { PatternAnalysis, RemediationObservation } from "../types/dashboard";
 import { confidenceColor } from "../lib/utils";
 import { RichText } from "./RichText";
 import { LabeledBlock } from "./LabeledBlock";
 import { FailureActions } from "./FailureActions";
-import { useResolved } from "../hooks/useData";
+import { useRemediations, useResolved } from "../hooks/useData";
 import { soft } from "../theme";
+
+function remediationStatusLabel(status: string): string {
+  return status.replaceAll("_", " ");
+}
+
+function remediationStatusColor(status: string): "success" | "warning" | "error" | "info" {
+  if (status === "verified_fixed" || status === "premerge_verified") return "success";
+  if (
+    status === "still_failing_same_cause" ||
+    status === "failing_different_cause" ||
+    status === "presubmit_failed_same_cause" ||
+    status === "presubmit_failed_different_cause"
+  )
+    return "error";
+  if (status === "inconclusive") return "warning";
+  return "info";
+}
 
 export function PatternBanner({
   pattern,
@@ -24,7 +41,18 @@ export function PatternBanner({
   const confColor = confidenceColor(pattern.confidence, color);
 
   const { data: resolved } = useResolved();
+  const { data: remediations } = useRemediations();
   const resolvedEntry = pattern.id ? resolved.resolved[pattern.id] : undefined;
+  const remediation = pattern.id ? remediations.remediations[pattern.id] : undefined;
+  const attempt = remediation?.attempt;
+  const latestObservation = attempt?.observations?.reduce((latest, observation) => {
+    if (!latest) return observation;
+    const buildOrder = observation.build_id.localeCompare(latest.build_id, undefined, { numeric: true });
+    if (buildOrder !== 0) return buildOrder > 0 ? observation : latest;
+    const observedAt = observation.completed_at ?? observation.started_at ?? "";
+    const latestObservedAt = latest.completed_at ?? latest.started_at ?? "";
+    return observedAt > latestObservedAt ? observation : latest;
+  }, undefined as RemediationObservation | undefined);
 
   return (
     <Box
@@ -69,6 +97,17 @@ export function PatternBanner({
               }}
             />
           )}
+          {attempt && (
+            <Chip
+              size="small"
+              label={remediationStatusLabel(attempt.status)}
+              sx={{
+                fontWeight: 600,
+                bgcolor: (t) => soft(t, remediationStatusColor(attempt.status), 0.2),
+                color: `${remediationStatusColor(attempt.status)}.main`,
+              }}
+            />
+          )}
         </Stack>
 
         {resolvedEntry && (
@@ -77,6 +116,30 @@ export function PatternBanner({
             {resolvedEntry.note ? ` — ${resolvedEntry.note}` : ""}. Re-opens
             automatically if it recurs.
           </Typography>
+        )}
+
+        {attempt && (
+          <Stack spacing={0.5}>
+            <Typography variant="caption" color="text.secondary">
+              Remediation attempt {attempt.number}: {remediationStatusLabel(attempt.status)}
+              {attempt.outcome_reason ? `. ${attempt.outcome_reason}` : ""}
+            </Typography>
+            <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap", rowGap: 0.5 }}>
+              <Link href={attempt.url} target="_blank" rel="noreferrer" variant="caption">
+                Pull request #{attempt.pr_number}
+              </Link>
+              {remediation?.issue && (
+                <Link href={remediation.issue.url} target="_blank" rel="noreferrer" variant="caption">
+                  Issue #{remediation.issue.number}
+                </Link>
+              )}
+              {latestObservation?.prow_url && (
+                <Link href={latestObservation.prow_url} target="_blank" rel="noreferrer" variant="caption">
+                  Latest Prow observation
+                </Link>
+              )}
+            </Stack>
+          </Stack>
         )}
 
         <Typography variant="body2" sx={{ whiteSpace: "pre-line", lineHeight: 1.6 }}>

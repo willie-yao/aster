@@ -220,6 +220,13 @@ ai:
 These features also require their write tokens and deployment prerequisites. See
 [GitHub issues](github-issues.md) and [Fix PRs](fix-prs.md).
 
+Prow fix verification needs no additional project fields. The engine
+reads job type, repository refs, trigger commands, pull request revisions,
+build status, and JUnit test identities from Prow metadata. It also discovers
+which presubmit jobs execute a periodic's failing test from recent JUnit
+coverage. Optional jobs without JUnit or a discoverable Prow configuration
+remain inconclusive rather than requiring guessed mappings.
+
 ## Validate a config
 
 A discovery-only fetch validates the strict schema and confirms that jobs are

@@ -15,12 +15,24 @@ import (
 // rawJob is the intermediate representation used to unmarshal a single job
 // entry from the Prow YAML before converting it to a models.ProwJob.
 type rawJob struct {
-	Name             string            `yaml:"name"`
-	MinimumInterval  string            `yaml:"minimum_interval"`
-	Interval         string            `yaml:"interval"`
-	DecorationConfig *decorationConfig `yaml:"decoration_config"`
-	ExtraRefs        []extraRef        `yaml:"extra_refs"`
-	Annotations      map[string]string `yaml:"annotations"`
+	Name              string            `yaml:"name"`
+	Context           string            `yaml:"context"`
+	Cluster           string            `yaml:"cluster"`
+	Cron              string            `yaml:"cron"`
+	MinimumInterval   string            `yaml:"minimum_interval"`
+	Interval          string            `yaml:"interval"`
+	AlwaysRun         *bool             `yaml:"always_run"`
+	Optional          bool              `yaml:"optional"`
+	RunBeforeMerge    bool              `yaml:"run_before_merge"`
+	Trigger           string            `yaml:"trigger"`
+	RerunCommand      string            `yaml:"rerun_command"`
+	Branches          []string          `yaml:"branches"`
+	SkipBranches      []string          `yaml:"skip_branches"`
+	RunIfChanged      string            `yaml:"run_if_changed"`
+	SkipIfOnlyChanged string            `yaml:"skip_if_only_changed"`
+	DecorationConfig  *decorationConfig `yaml:"decoration_config"`
+	ExtraRefs         []extraRef        `yaml:"extra_refs"`
+	Annotations       map[string]string `yaml:"annotations"`
 }
 
 type decorationConfig struct {
@@ -28,7 +40,10 @@ type decorationConfig struct {
 }
 
 type extraRef struct {
-	BaseRef string `yaml:"base_ref"`
+	Org       string `yaml:"org"`
+	Repo      string `yaml:"repo"`
+	BaseRef   string `yaml:"base_ref"`
+	PathAlias string `yaml:"path_alias"`
 }
 
 // periodicsFile represents the top-level structure of a periodics YAML file.

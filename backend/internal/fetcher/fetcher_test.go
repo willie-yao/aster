@@ -2,6 +2,9 @@ package fetcher
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -70,6 +73,34 @@ func TestAIModel_NilAIBlock(t *testing.T) {
 	cfg := &project.Config{}
 	if got := aiModel(cfg); got != "env-model" {
 		t.Errorf("aiModel: got %q, want env value when AI block is nil", got)
+	}
+}
+
+func TestLoadCachedJobDetailsCachesCompleteOrTruncatedJUnit(t *testing.T) {
+	dir := t.TempDir()
+	jobsDir := filepath.Join(dir, "jobs")
+	if err := os.MkdirAll(jobsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	detail := models.JobDetail{
+		JobID: "job",
+		Runs: []models.BuildResult{
+			{BuildInfo: models.BuildInfo{BuildID: "3", Result: "SUCCESS", JUnitComplete: true}},
+			{BuildInfo: models.BuildInfo{BuildID: "2", Result: "SUCCESS", JUnitTruncated: true}},
+			{BuildInfo: models.BuildInfo{BuildID: "1", Result: "SUCCESS"}},
+		},
+	}
+	data, err := json.Marshal(detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(jobsDir, models.JobDataFilename(detail.JobID)), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cached := loadCachedJobDetails(dir)[detail.JobID]
+	if len(cached) != 2 || cached["3"].BuildID != "3" || cached["2"].BuildID != "2" {
+		t.Fatalf("cached = %+v", cached)
 	}
 }
 

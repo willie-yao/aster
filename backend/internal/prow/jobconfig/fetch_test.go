@@ -396,3 +396,22 @@ func TestDerivePeriodicPrefix(t *testing.T) {
 		})
 	}
 }
+
+func TestFetchCatalogWithoutTargetKeepsOnlyDashboardJobs(t *testing.T) {
+	const dashboard = "d"
+	tf := &fakeTestInfra{files: map[string]string{
+		"config/jobs/a.yaml": periodicJob("included", dashboard),
+		"config/jobs/b.yaml": periodicJob("excluded", "other"),
+	}}
+	raw, api, stop := tf.start(t)
+	defer stop()
+	setURLs(t, raw, api)
+	cfg := &project.Config{TestGrid: project.TestGrid{Dashboard: dashboard}}
+	_, catalog, err := FetchJobConfigsAndCatalog(context.Background(), http.DefaultClient, cfg, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog.Jobs) != 1 {
+		t.Fatalf("catalog = %+v", catalog.Jobs)
+	}
+}

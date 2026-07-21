@@ -218,6 +218,48 @@ build resolves the repo's dependencies, so the runner needs network access (or a
 warmed module cache); a fetch failure surfaces as a "failed" verdict, so set a
 `timeout` that accommodates the first cold build.
 
+
+## Closed-loop Prow verification
+
+After the dashboard opens a fix pull request, it keeps a private remediation
+ledger and follows the pull request through Prow and GitHub. Consumers do not
+configure test names, trigger commands, pull numbers, or periodic-to-presubmit
+mappings.
+
+The engine reads this metadata automatically:
+
+- Prow job definitions from the pinned `kubernetes/test-infra` configuration.
+- Pull request refs, head SHA, base SHA, rerun command, status, and build URL
+  from `prowjob.json`.
+- Checkout metadata from `started.json` and `finished.json`.
+- Test names, results, and failure signatures from JUnit XML.
+- Pull request merge state and commit ancestry from GitHub.
+
+For a presubmit finding, only a run of the same job on the current pull request
+head counts. A new commit invalidates older results. For a periodic finding, the
+engine builds a private coverage index from recent presubmit JUnit reports. An
+exact matching test can provide pre-merge evidence without a hand-written job
+mapping. The original periodic remains authoritative after merge.
+
+A periodic build counts only when its tested source commit contains the merged
+change. A later timestamp alone is not sufficient. Persistent findings require
+two clean post-merge runs by default. Flaky findings require ten clean
+opportunities. Missing JUnit, missing source SHAs, or repository mismatches stay
+in an inconclusive state.
+
+The pull request must target a repository tested by the Prow job. For an
+upstream community project, configure the upstream repository with `fork: true`.
+Pointing `repo` at a personal fork creates a pull request that upstream Prow does
+not test.
+
+When the same failure signature recurs after merge, the remediation returns to a
+failed state and the linked issue remains open. Follow-up fix generation is a
+separate feature and is not part of this verification lifecycle.
+
+`remediation_state.json` and `remediation_prow_catalog.json` are private
+operational files. `remediations.json` is a redacted public projection used by
+the dashboard to show pull request and verification status.
+
 Wire the token into the deploy workflow:
 
 ```yaml

@@ -137,6 +137,20 @@ func (c *Client) CommentIssue(ctx context.Context, number int, body string) erro
 	return nil
 }
 
+// ReopenIssue reopens an existing issue.
+func (c *Client) ReopenIssue(ctx context.Context, number int) error {
+	resp, rb, err := c.do(ctx, http.MethodPatch,
+		fmt.Sprintf("/repos/%s/%s/issues/%d", c.owner, c.repo, number),
+		map[string]any{"state": "open"})
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("reopen issue #%d: %s: %s", number, resp.Status, textutil.Truncate(string(rb), 300))
+	}
+	return nil
+}
+
 // CloseIssue closes an existing issue.
 func (c *Client) CloseIssue(ctx context.Context, number int) error {
 	resp, rb, err := c.do(ctx, http.MethodPatch,

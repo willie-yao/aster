@@ -4,6 +4,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
 func loadFixture(t *testing.T) []byte {
@@ -215,5 +217,29 @@ func TestParseFile_PropagatesParseError(t *testing.T) {
 	_, err := ParseFile([]byte("<not-valid-xml"), "junit_runner.xml")
 	if err == nil {
 		t.Fatal("expected error from malformed XML")
+	}
+}
+
+func TestIdentity(t *testing.T) {
+	xml := `<testsuite name="suite"><testcase name=" test " classname="class"/></testsuite>`
+	cases, err := Parse([]byte(xml))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := Identity(cases[0]), "suite\x00class\x00test"; got != want {
+		t.Fatalf("Identity = %q, want %q", got, want)
+	}
+	if cases[0].SuiteName != "suite" || cases[0].ClassName != "class" {
+		t.Fatalf("case metadata = %+v", cases[0])
+	}
+}
+
+func TestIdentityFallsBackToExactName(t *testing.T) {
+	tc := models.TestCase{Name: " test "}
+	if got, want := Identity(tc), "name\x00test"; got != want {
+		t.Fatalf("Identity = %q, want %q", got, want)
+	}
+	if got := Identities(models.TestCase{Name: "test", SuiteName: "suite", ClassName: "class"}); len(got) != 2 || got[1] != "name\x00test" {
+		t.Fatalf("Identities = %q", got)
 	}
 }

@@ -173,6 +173,14 @@ refresh the stored pattern metadata without sending a message:
 - Delivery failures are logged and do not fail the fetch or block other side
   effects.
 
+Remediation lifecycle emails are deduplicated separately in
+`remediation_state.json`. They are sent only when a tracked pull request changes
+state, such as waiting for a presubmit, passing pre-merge verification, entering
+post-merge observation, being verified fixed, or reproducing the same failure.
+A same-cause recurrence links to the remediation status and prior pull request.
+Failed delivery does not advance the emailed transition, so the next finalized
+pass retries it.
+
 The email implementation uses the state channel `email-v1`. On the first run
 after upgrading from Slack notifications, old channel-less state is reset. Each
 currently persistent failure therefore receives one initial email.
@@ -194,6 +202,7 @@ currently persistent failure therefore receives one initial email.
 ## Implementation reference
 
 - `backend/internal/notify/notify.go`: triggers, deduplication, recovery, state.
-- `backend/internal/notify/email.go`: plain-text and HTML rendering.
+- `backend/internal/notify/email.go`: failure and recovery email rendering.
+- `backend/internal/notify/remediation.go`: remediation transition rendering.
 - `backend/internal/notify/smtp.go`: SMTP, authentication, TLS, MIME delivery.
 - `backend/internal/fetcher/fetcher.go`: configuration and side-effect wiring.

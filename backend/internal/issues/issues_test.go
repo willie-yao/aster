@@ -296,6 +296,65 @@ func TestReconcile_RecoveryCloses(t *testing.T) {
 	}
 }
 
+func TestReconcile_RetiresTrackedIssueAfterFindingDisappears(t *testing.T) {
+	f := newFakeGitHub(t)
+	opts := defaultOpts()
+	key := "pattern::job-retired"
+	opts.RetireKeys = map[string]bool{key: true}
+	m := newTestManager(t, f, opts)
+
+	if _, err := m.Reconcile(context.Background(), []IssueSpec{spec(key)}); err != nil {
+		t.Fatalf("file: %v", err)
+	}
+	num := m.state.Tracked[key].Number
+	f.issues[num].State = "closed"
+	if _, err := m.Reconcile(context.Background(), []IssueSpec{spec(key)}); err != nil {
+		t.Fatalf("active: %v", err)
+	}
+	if _, ok := m.state.Tracked[key]; !ok {
+		t.Fatal("active finding must remain tracked")
+	}
+	if f.createCalls != 1 {
+		t.Fatalf("create calls = %d, want 1", f.createCalls)
+	}
+
+	stats, err := m.Reconcile(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("retire: %v", err)
+	}
+	if stats.Recovered != 0 {
+		t.Fatalf("Recovered = %d, want 0", stats.Recovered)
+	}
+	if _, ok := m.state.Tracked[key]; ok {
+		t.Fatal("retired finding must be removed from tracking")
+	}
+	if len(f.comments[num]) != 0 {
+		t.Fatalf("comments on #%d = %d, want 0", num, len(f.comments[num]))
+	}
+	if f.issues[num].State != "closed" {
+		t.Fatalf("issue #%d state = %q, want unchanged", num, f.issues[num].State)
+	}
+}
+
+func TestReconcile_KeepOpenTakesPriorityOverRetire(t *testing.T) {
+	f := newFakeGitHub(t)
+	opts := defaultOpts()
+	key := "pattern::job-pending"
+	opts.KeepOpenKeys = map[string]bool{key: true}
+	opts.RetireKeys = map[string]bool{key: true}
+	m := newTestManager(t, f, opts)
+
+	if _, err := m.Reconcile(context.Background(), []IssueSpec{spec(key)}); err != nil {
+		t.Fatalf("file: %v", err)
+	}
+	if _, err := m.Reconcile(context.Background(), nil); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if _, ok := m.state.Tracked[key]; !ok {
+		t.Fatal("pending remediation must remain tracked")
+	}
+}
+
 func TestReconcile_MaxNewPerRun(t *testing.T) {
 	f := newFakeGitHub(t)
 	opts := defaultOpts()

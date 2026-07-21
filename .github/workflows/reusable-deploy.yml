@@ -260,7 +260,8 @@ jobs:
           d=engine/frontend/dist/data
           [ -d "$d" ] && rm -f "$d"/ai_cache.json "$d"/issue_state.json \
             "$d"/fix_pr_state.json "$d"/fix_previews.json \
-            "$d"/notification_state.json "$d"/orka_analysis.json \
+            "$d"/notification_state.json "$d"/remediation_state.json \
+            "$d"/remediation_prow_catalog.json "$d"/orka_analysis.json \
             "$d"/action_request_state.json || true
 
       # --- Deploy to GitHub Pages ---

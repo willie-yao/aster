@@ -71,6 +71,9 @@ func (b *localBackend) Open(_ context.Context, path string) (io.ReadCloser, int6
 	}
 	f, err := os.Open(full)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, 0, fmt.Errorf("open %s: %w", path, ErrNotFound)
+		}
 		return nil, 0, err
 	}
 	info, err := f.Stat()

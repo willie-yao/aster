@@ -40,12 +40,11 @@ func RunFinalizedSideEffects(ctx context.Context, opts FinalizedSideEffectsOptio
 	provider := cfg.ResolveAIProvider(os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"))
 	aiToken := os.Getenv("AI_TOKEN")
 	enableAI := aiToken != "" && provider.Endpoint != "" && provider.Model != ""
+	client := &http.Client{Timeout: 30 * time.Second}
 	p := &pipeline{
-		opts:     Options{ProjectDir: opts.ProjectDir, OutDir: opts.DataDir},
-		cfg:      cfg,
-		backend:  backend,
-		enableAI: enableAI,
-		aiToken:  aiToken,
+		opts: Options{ProjectDir: opts.ProjectDir, OutDir: opts.DataDir},
+		cfg:  cfg, client: client, backend: backend,
+		enableAI: enableAI, aiToken: aiToken,
 	}
 	return p.runSideEffects(ctx, &refreshResult{details: details, flakiness: flakiness})
 }

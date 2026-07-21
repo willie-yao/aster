@@ -112,6 +112,9 @@ func (b *gcswebBackend) get(ctx context.Context, path string) (*http.Response, i
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		resp.Body.Close()
+		if resp.StatusCode == http.StatusNotFound {
+			return nil, 0, fmt.Errorf("fetch %s: %w", path, ErrNotFound)
+		}
 		return nil, 0, fmt.Errorf("fetch %s: HTTP %d", path, resp.StatusCode)
 	}
 	total := int64(-1)

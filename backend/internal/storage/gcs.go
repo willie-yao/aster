@@ -65,6 +65,9 @@ func (b *gcsBackend) Open(ctx context.Context, path string) (io.ReadCloser, int6
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		resp.Body.Close()
+		if resp.StatusCode == http.StatusNotFound {
+			return nil, 0, fmt.Errorf("open %s: %w", path, ErrNotFound)
+		}
 		return nil, 0, fmt.Errorf("open %s: HTTP %d", path, resp.StatusCode)
 	}
 	size := int64(-1)
