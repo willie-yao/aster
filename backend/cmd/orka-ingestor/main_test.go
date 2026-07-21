@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -196,6 +199,108 @@ func TestIngestThenFinalizePatterns(t *testing.T) {
 		if !analysis.CritiquePassed || analysis.CritiqueVersion != orkaapi.AcceptanceVersion {
 			t.Fatalf("build %s acceptance metadata = %+v", run.BuildID, analysis)
 		}
+	}
+}
+
+func TestIngestLogsSortedRejectionSummary(t *testing.T) {
+	const namespace = "orka-system"
+	manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "test-model", "v1", 2)
+	manifest.ValidationKey = testValidationKey
+	detail := models.JobDetail{Name: "periodic-controller", JobID: "periodic-controller"}
+	results := map[string]string{}
+	invalidResults := []string{
+		"not JSON",
+		"not JSON",
+		`{"summary":"present"}`,
+		"",
+	}
+	for i, result := range invalidResults {
+		buildID := fmt.Sprintf("%d", i+1)
+		tc := models.TestCase{Name: "should reconcile", Status: "failed", FailureMessage: "boom"}
+		run := models.BuildResult{
+			BuildInfo: models.BuildInfo{BuildID: buildID, Result: "FAILURE"},
+			TestCases: []models.TestCase{tc},
+		}
+		detail.Runs = append(detail.Runs, run)
+		manifest.SetBuild(detail.JobID, buildID, "build-"+buildID, "tool-"+buildID, "logs/job/"+buildID+"/")
+		ref, err := manifest.TaskRef(detail.JobID, run, 0, tc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		results[ref.Name] = result
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		name := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/v1/tasks/"), "/result")
+		result, ok := results[name]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"result": result})
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	if err := output.WriteJobDetail(dir, detail); err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	oldWriter, oldFlags, oldPrefix := log.Writer(), log.Flags(), log.Prefix()
+	log.SetOutput(&logs)
+	log.SetFlags(0)
+	log.SetPrefix("")
+	t.Cleanup(func() {
+		log.SetOutput(oldWriter)
+		log.SetFlags(oldFlags)
+		log.SetPrefix(oldPrefix)
+	})
+
+	patched, failed, missing := ingestPass(
+		&orkaClient{base: server.URL, http: server.Client()}, nil, namespace, dir, manifest, "test-model", true, map[string]bool{},
+	)
+	if patched != 0 || failed != 4 || missing != 4 {
+		t.Fatalf("ingest = patched %d, failed %d, missing %d", patched, failed, missing)
+	}
+	want := strings.Join([]string{
+		"⚠ Orka rejection summary: 2 x analysis Task produced an invalid result: no analysis JSON object found",
+		"⚠ Orka rejection summary: 1 x analysis Task produced an invalid result: root_cause is required",
+		"⚠ Orka rejection summary: 1 x analysis did not complete before the deadline",
+	}, "\n")
+	if got := strings.TrimSpace(logs.String()); got != want {
+		t.Fatalf("rejection summary:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestApplyResultRedactsTelemetryURL(t *testing.T) {
+	nonTransient := false
+	result := validatedAnalysisJSON(t, analysis{
+		Summary: "summary", RootCause: "cause", Severity: "High",
+		IsTransient: &nonTransient, SuggestedFix: "fix",
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/events") {
+			panic(http.ErrAbortHandler)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"result": result})
+	}))
+	defer server.Close()
+
+	tc := models.TestCase{Name: "test", Status: "failed"}
+	accepted, rejection := applyResult(
+		&tc, &orkaClient{base: server.URL, http: server.Client()}, "orka-system", "task", "model", "contract", 0, 0, "", testValidationKey,
+	)
+	if accepted {
+		t.Fatal("applyResult accepted analysis without telemetry")
+	}
+	if strings.Contains(rejection, server.URL) || !strings.Contains(rejection, "[redacted-url]") {
+		t.Fatalf("rejection = %q, want redacted telemetry URL", rejection)
+	}
+	if !setUnavailable(&tc, rejection) {
+		t.Fatal("setUnavailable did not publish the rejection")
+	}
+	if strings.Contains(tc.AISummary.Summary, server.URL) {
+		t.Fatalf("published summary contains telemetry URL: %q", tc.AISummary.Summary)
 	}
 }
 
@@ -526,5 +631,34 @@ func TestParseAnalysisRequiresRelevantFilesArray(t *testing.T) {
 		if _, err := parseAnalysis(input); err == nil || !strings.Contains(err.Error(), "relevant_files") {
 			t.Fatalf("parse error = %v, want relevant_files rejection for %s", err, input)
 		}
+	}
+}
+
+func TestParseAnalysisIgnoresBracesInsideStrings(t *testing.T) {
+	input := `prefix {"summary":"summary","root_cause":"cause","severity":"High","is_transient":false,"suggested_fix":"inspect unmatched { marker","relevant_files":[],"gcs_bytes":1,"validation_token":"token"} suffix`
+	got, err := parseAnalysis(input)
+	if err != nil {
+		t.Fatalf("parseAnalysis() error = %v", err)
+	}
+	if got.SuggestedFix != "inspect unmatched { marker" {
+		t.Fatalf("suggested_fix = %q", got.SuggestedFix)
+	}
+}
+
+func TestSetUnavailableReplacesOnlyEnginePlaceholder(t *testing.T) {
+	tc := &models.TestCase{AISummary: &models.AISummary{Summary: unavailablePrefix + "analysis did not complete before the deadline"}}
+	if !setUnavailable(tc, "analysis Task failed acceptance: validation token mismatch") {
+		t.Fatal("setUnavailable() did not replace the stale placeholder")
+	}
+	if got := tc.AISummary.Summary; got != unavailablePrefix+"analysis Task failed acceptance: validation token mismatch" {
+		t.Fatalf("summary = %q", got)
+	}
+	if setUnavailable(tc, "analysis Task failed acceptance: validation token mismatch") {
+		t.Fatal("setUnavailable() rewrote an identical placeholder")
+	}
+
+	real := &models.TestCase{AISummary: &models.AISummary{Summary: "real analysis"}}
+	if setUnavailable(real, "new reason") {
+		t.Fatal("setUnavailable() replaced a real analysis summary")
 	}
 }
