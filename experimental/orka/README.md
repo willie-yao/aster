@@ -21,6 +21,8 @@ that run alongside your inference stack.
   critique, skills) is reconstructed out of Kubernetes objects.
 - **[worker-patches/](worker-patches/)** - the pinned, tested Orka AI-worker
   compatibility image, patch, version matrix, and measured convergence results.
+- **[`orka-ops.sh`](orka-ops.sh)** - installation preflight, a disposable
+  Provider smoke Task, batch status, and a project-scoped Task and Tool GC preview.
 
 ## Headline finding
 

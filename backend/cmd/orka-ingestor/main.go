@@ -940,7 +940,11 @@ func (a *patternTaskAnalyzer) AnalyzePattern(ctx context.Context, jobID, subject
 		Name: name, Namespace: a.namespace, Provider: a.provider, Model: a.model,
 		Timeout: a.timeout, MaxRetries: a.retries,
 		SystemPrompt: input.SystemPrompt, Prompt: input.UserPrompt,
-		Labels:    map[string]string{orka.ManagedByLabel: orka.ManagedByValue},
+		Labels: map[string]string{
+			orka.ManagedByLabel: orka.ManagedByValue,
+			orka.ProjectLabel:   a.projectScope,
+			orka.TaskTypeLabel:  "pattern",
+		},
 		Execution: a.execution,
 	})
 	poll := a.poll

@@ -74,6 +74,14 @@ grep -Fq 'suspend: false' "$tmp/owned.yaml"
 grep -Fq -- '- -max-concurrent-tasks=2' "$tmp/owned.yaml"
 grep -Fq -- '- -task-poll=5s' "$tmp/owned.yaml"
 grep -Fq -- '- -wave-timeout=30m' "$tmp/owned.yaml"
+helm install test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set mode=cron \
+  --set analysis=orka \
+  --set orka.namespace=orka-test \
+  --dry-run=client > "$tmp/owned-notes.txt"
+grep -Fq 'orka-ops.sh --namespace orka-test preflight' "$tmp/owned-notes.txt"
+grep -Fq -- '--service-account dashboard-test/test-prow-ai-dashboard-orka' "$tmp/owned-notes.txt"
+grep -Fq 'orka-ops.sh --namespace orka-test status' "$tmp/owned-notes.txt"
 if [[ $(container_command produce "$tmp/owned.yaml") != /app ]]; then
   echo 'specialized Orka producer command is not /app' >&2
   exit 1

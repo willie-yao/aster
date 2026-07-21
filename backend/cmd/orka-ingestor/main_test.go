@@ -359,7 +359,12 @@ func TestPatternTaskAnalyzerAppliesTaskAndParsesResult(t *testing.T) {
 	if execution["nodeSelector"].(map[string]any)["agentpool"] != "cpu" {
 		t.Fatalf("applied execution = %+v", execution)
 	}
-	baseName := kube.applied["metadata"].(map[string]any)["name"].(string)
+	metadata := kube.applied["metadata"].(map[string]any)
+	baseName := metadata["name"].(string)
+	labels := metadata["labels"].(map[string]any)
+	if labels[orkaapi.ProjectLabel] != analyzer.projectScope || labels[orkaapi.TaskTypeLabel] != "pattern" {
+		t.Fatalf("pattern labels = %+v", labels)
+	}
 	variants := []struct {
 		name    string
 		timeout string

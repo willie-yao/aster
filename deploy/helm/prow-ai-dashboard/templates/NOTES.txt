@@ -21,6 +21,16 @@ a Provider, and the ai-worker patches must already be installed in namespace
 service and {{ include "prow-ai-dashboard.orkaBaseToolsConfigMap" . }} ConfigMap
 unless existing resources were configured. See
 experimental/orka/QUICKSTART.md.
+
+From the engine checkout, verify the installed Provider and pipeline RBAC:
+
+  experimental/orka/orka-ops.sh --namespace {{ .Values.orka.namespace }} preflight \
+    --provider {{ .Values.orka.provider }} \
+    --service-account {{ .Release.Namespace }}/{{ include "prow-ai-dashboard.orkaServiceAccountName" . }}
+
+Report the dashboard-managed Task and Tool batches:
+
+  experimental/orka/orka-ops.sh --namespace {{ .Values.orka.namespace }} status
 {{- if not .Values.orka.sideEffects.enabled }}
 Scheduled side effects are disabled. Analysis and pattern data are written, but
 notifications, issues, and fix PRs are skipped.

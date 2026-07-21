@@ -58,13 +58,18 @@ func TestCloneSkillAwareToolsCarrySkillContract(t *testing.T) {
 				"metadata": map[string]any{"name": tool},
 				"spec":     map[string]any{"http": map[string]any{"url": "http://artifact-tool/tool/" + tool}},
 			}
-			got := cloneToolForBuild(base, tool, "scope", "logs/job/1/", "bucket", "orka-system", nil, "encoded-skills", "validation-key", 123, "artifact-tool-auth", "token")
+			got := cloneToolForBuild(base, tool, "project", "scope", "logs/job/1/", "bucket", "orka-system", nil, "encoded-skills", "validation-key", 123, "artifact-tool-auth", "token")
 			spec := got["spec"].(map[string]any)
 			headers := spec["http"].(map[string]any)["headers"].(map[string]any)
 			if headers[orka.ToolScopeHeader] != "scope" {
 				t.Fatalf("scope header = %+v", headers)
 			}
-			annotations := got["metadata"].(map[string]any)["annotations"].(map[string]any)
+			metadata := got["metadata"].(map[string]any)
+			labels := metadata["labels"].(map[string]any)
+			if labels[orka.ProjectLabel] != "project" || labels[orka.BuildLabel] != "scope" {
+				t.Fatalf("labels = %+v", labels)
+			}
+			annotations := metadata["annotations"].(map[string]any)
 			if annotations["orka.ai/tool-alias"] != strings.ReplaceAll(tool, "-", "_") {
 				t.Fatalf("tool alias = %+v", annotations)
 			}

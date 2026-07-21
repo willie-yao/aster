@@ -250,7 +250,9 @@ func main() {
 					Prompt:       ref.Prompt,
 					Labels: map[string]string{
 						orka.ManagedByLabel: orka.ManagedByValue,
+						orka.ProjectLabel:   projectScope,
 						orka.BuildLabel:     ref.ToolScope,
+						orka.TaskTypeLabel:  "analysis",
 					},
 					Execution: taskExecution,
 				})
@@ -268,7 +270,7 @@ func main() {
 				continue
 			}
 			doc := baseTools[base]
-			clone := cloneToolForBuild(doc, base, build.scope, build.prefix, bucket, *namespace, storageMeta, skillHeader, validationKey, agentic.MinGCSBytes, *toolAuthSecret, *toolAuthKey)
+			clone := cloneToolForBuild(doc, base, projectScope, build.scope, build.prefix, bucket, *namespace, storageMeta, skillHeader, validationKey, agentic.MinGCSBytes, *toolAuthSecret, *toolAuthKey)
 			toolName := buildToolName(base, build.scope)
 			writeYAML(filepath.Join(*toolsOut, toolName+".yaml"), clone)
 			toolObjs = append(toolObjs, namedObj{toolName, clone})
@@ -276,7 +278,7 @@ func main() {
 	}
 	for taskName, build := range validationTasks {
 		doc := baseTools["submit-analysis"]
-		clone := cloneToolForBuild(doc, "submit-analysis", build.scope, build.prefix, bucket, *namespace, storageMeta, skillHeader, validationKey, agentic.MinGCSBytes, *toolAuthSecret, *toolAuthKey)
+		clone := cloneToolForBuild(doc, "submit-analysis", projectScope, build.scope, build.prefix, bucket, *namespace, storageMeta, skillHeader, validationKey, agentic.MinGCSBytes, *toolAuthSecret, *toolAuthKey)
 		meta := clone["metadata"].(map[string]any)
 		toolName := submissionToolName(taskName)
 		meta["name"] = toolName
@@ -509,7 +511,7 @@ func loadBaseTools(dir string, want []string) (map[string]map[string]any, error)
 // cloneToolForBuild copies a base Tool CRD, renames it per build, and injects the
 // build/bucket/storage headers so the shim serves this build from the right
 // bucket and provider.
-func cloneToolForBuild(base map[string]any, baseName, buildScope, prefix, bucket, namespace string, storageMeta map[string]string, skillContract, validationKey string, minGCSBytes int, authSecret, authKey string) map[string]any {
+func cloneToolForBuild(base map[string]any, baseName, projectScope, buildScope, prefix, bucket, namespace string, storageMeta map[string]string, skillContract, validationKey string, minGCSBytes int, authSecret, authKey string) map[string]any {
 	doc := deepCopy(base).(map[string]any)
 	meta, _ := doc["metadata"].(map[string]any)
 	if meta == nil {
@@ -520,6 +522,7 @@ func cloneToolForBuild(base map[string]any, baseName, buildScope, prefix, bucket
 	meta["namespace"] = namespace
 	meta["labels"] = map[string]any{
 		orka.ManagedByLabel: orka.ManagedByValue,
+		orka.ProjectLabel:   projectScope,
 		orka.BuildLabel:     buildScope,
 	}
 	annotations, _ := meta["annotations"].(map[string]any)

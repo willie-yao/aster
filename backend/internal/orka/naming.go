@@ -20,7 +20,9 @@ func PatternTaskName(jobID, prompt, version string) string {
 const (
 	ManagedByLabel = "app.kubernetes.io/managed-by"
 	ManagedByValue = "orka-producer"
+	ProjectLabel   = "orka.dashboard/project"
 	BuildLabel     = "orka.dashboard/build"
+	TaskTypeLabel  = "orka.dashboard/task-type"
 )
 
 var nameUnsafe = strings.NewReplacer("_", "-", ".", "-", "/", "-", " ", "-", ":", "-")

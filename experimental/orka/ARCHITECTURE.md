@@ -164,8 +164,12 @@ is disabled, batch mode still runs the shared side effects directly. Finalizatio
 cluster setup, and side-effect errors make the batch exit non-zero. The optional
 webhook receiver patches per-test results only.
 
-Per-build Tool + Task garbage collection is `gcTools`, selecting
-by the `orka.dashboard/build` label.
+The ingestor's immediate `gcTools` pass deletes scoped Tools after every Task
+for a build becomes terminal. The producer also labels per-test Tasks, pattern
+Tasks, and Tools with `orka.dashboard/project`; per-test resources carry
+`orka.dashboard/build`, and Tasks carry `orka.dashboard/task-type`. The operator
+helper uses those labels for project and batch status plus an age-bounded,
+read-only garbage-collection preview.
 
 After per-test ingestion, the ingestor runs the same bounded cross-build pattern
 contract as the in-process backend. It applies one content-addressed, tool-free

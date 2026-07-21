@@ -1,5 +1,5 @@
 .PHONY: all build build-server build-worker serve dev-actions image fixer-image test test-v e2e lint fmt tidy helm-check \
-       fetch-data fetch-data-quick fetch-data-ai fetch-data-ai-quick orka-compat-check orka-compat-image \
+       fetch-data fetch-data-quick fetch-data-ai fetch-data-ai-quick orka-ops-check orka-compat-check orka-compat-image \
        fe-install dev fe-build fe-check fe-lint \
        dist dist-ai clean clean-cache clean-all help
 
@@ -82,8 +82,12 @@ fmt:
 tidy:
 	cd backend && go mod tidy
 
+# Validate the Orka operator helper.
+orka-ops-check:
+	bash experimental/orka/test-orka-ops.sh
+
 # Lint and render the Helm chart, including the owned Orka resources.
-helm-check:
+helm-check: orka-ops-check
 	bash deploy/helm/prow-ai-dashboard/test-render.sh
 	bash deploy/helm/prow-ai-dashboard/test-operations.sh
 
@@ -172,6 +176,7 @@ help:
 	@echo "  fmt                Format Go code"
 	@echo "  tidy               Tidy Go modules"
 	@echo "  helm-check         Lint and validate Helm chart renders"
+	@echo "  orka-ops-check     Validate the Orka operator helper"
 	@echo "  orka-compat-check  Validate Orka compatibility metadata and scripts"
 	@echo "  orka-compat-image  Test and build the pinned patched Orka AI worker"
 	@echo ""

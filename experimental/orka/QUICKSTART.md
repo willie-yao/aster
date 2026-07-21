@@ -140,6 +140,28 @@ kubectl apply -f experimental/orka/manifests/50-copilot-proxy.yaml
 kubectl apply -f experimental/orka/manifests/11-copilot-provider.yaml
 ```
 
+Validate the installed CRDs, controller, API Service, Provider, and configured
+compatibility worker before installing the dashboard. Use the exact image
+reference from the compatibility workflow summary:
+
+```bash
+WORKER_IMAGE='ghcr.io/willie-yao/prow-ai-dashboard/orka-ai-worker:<immutable-compatibility-tag>'
+
+experimental/orka/orka-ops.sh --namespace orka-system preflight \
+  --provider copilot \
+  --worker-image "$WORKER_IMAGE"
+
+# Exercise the complete controller, worker, and Provider path. The Task is
+# deleted after a successful result unless --keep is passed.
+experimental/orka/orka-ops.sh --namespace orka-system smoke \
+  --provider copilot \
+  --model claude-sonnet-4.5
+```
+
+For a non-Copilot Provider, substitute its name and model. The smoke command
+requires `status.phase=Succeeded` and `status.resultRef.available=true`; a
+controller that is merely running is not enough.
+
 ## Step 3: choose artifact Tool ownership
 
 The shim exposes the engine's artifact tools over HTTP for the Orka Tasks to call.
@@ -190,6 +212,20 @@ helm install dash deploy/helm/prow-ai-dashboard \
   --set-file project.config=<consumer>/project.yaml \
   --set-file project.systemPrompt=<consumer>/prompts/system.md
 ```
+
+After the release exists, repeat the preflight with its pipeline ServiceAccount.
+This verifies the cross-namespace Task and Tool permissions that Helm created:
+
+```bash
+experimental/orka/orka-ops.sh --namespace orka-system preflight \
+  --provider copilot \
+  --worker-image "$WORKER_IMAGE" \
+  --service-account dashboards/dash-prow-ai-dashboard-orka
+```
+
+If `fullnameOverride` or `orka.rbac.serviceAccountName` changes the generated
+name, pass the actual ServiceAccount shown by
+`kubectl get serviceaccounts -n dashboards`.
 
 On heterogeneous clusters, configure the dashboard components and dynamic Orka
 workers independently. `orka.artifactTool.nodeSelector` places the shim, while
@@ -257,8 +293,8 @@ kubectl create job -n dashboards --from=cronjob/dash-prow-ai-dashboard-fetcher o
 kubectl logs -n dashboards job/orka-run-1 -c produce
 kubectl logs -n dashboards job/orka-run-1 -c ingest | tail
 
-# Per-Task state.
-kubectl get tasks -n orka-system -l app.kubernetes.io/managed-by=orka-producer
+# Per-project and per-build Task phase and Tool counts.
+experimental/orka/orka-ops.sh --namespace orka-system status
 ```
 
 The server serves the dashboard from the shared volume at
@@ -266,7 +302,7 @@ The server serves the dashboard from the shared volume at
 `ingress` values:
 
 ```bash
-kubectl port-forward -n orka-system svc/dash-prow-ai-dashboard-server 8080:80
+kubectl port-forward -n dashboards svc/dash-prow-ai-dashboard-server 8080:80
 # open http://localhost:8080
 ```
 
@@ -408,10 +444,52 @@ pinned Orka compatibility worker, not in project config. See
 
 ## Operate
 
+The operator helper reports both a project summary and one row per build-scoped
+batch. The project value is the producer's collision-resistant project scope,
+not the display name from `project.yaml`:
+
+```bash
+# Show every dashboard project sharing the Orka namespace.
+experimental/orka/orka-ops.sh --namespace orka-system status
+
+# Limit the report after copying one project scope from the first table.
+experimental/orka/orka-ops.sh --namespace orka-system status \
+  --project <32-character-project-scope>
+```
+
+New per-test Tasks, pattern Tasks, and scoped Tools carry the project label.
+Resources produced before this labeling contract appear as `<unlabeled>` and are
+never selected by project-scoped garbage collection.
+
+The garbage-collection preview is age-bounded and read-only. It reports only
+terminal Tasks for one exact project scope. A Tool is eligible only when it is
+older than the retention window and no Task for its build is active.
+
+```bash
+# Preview the default 168-hour retention plan.
+experimental/orka/orka-ops.sh --namespace orka-system gc \
+  --project <32-character-project-scope>
+
+# Use another retention window, still without deleting anything.
+experimental/orka/orka-ops.sh --namespace orka-system gc \
+  --project <32-character-project-scope> \
+  --older-than 30d
+
+```
+
+The command never deletes resources. Its Task candidates are Kubernetes-backed
+analysis cache entries, so deleting them through another process would force a
+later producer run to perform the analysis again. Review the preview through the
+cluster's normal change-control process before any manual deletion.
+
+The ingestor still performs immediate per-build Tool cleanup after completed
+batches. The preview identifies abandoned Tools and old Task cache entries when
+a batch failed before that cleanup ran.
+
 ```bash
 # Coverage: the ingestor logs failing-test coverage, then the number of
 # job-level pattern analyses and systemic recurring patterns it finalized.
-kubectl logs -n orka-system job/orka-run-1 -c ingest | tail
+kubectl logs -n dashboards job/orka-run-1 -c ingest | tail
 
 # Prompt, provider/model, timeout/retry, and Tool-definition changes create new
 # content-addressed Tasks automatically. Bump orka.version (Helm) or -version
