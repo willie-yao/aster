@@ -241,6 +241,7 @@ func (r *buildResolver) toolEnvFor(bucket, prefix, scope string, override storag
 	}
 	return &toolEnv{
 		backend:     &budgetBackend{Backend: bb.backend, budget: budget},
+		rawBackend:  bb.backend,
 		bucket:      bb.bucket,
 		buildPrefix: p,
 		webURLBase:  web,
@@ -277,6 +278,7 @@ func requestScope(r *http.Request) string {
 // so cross-build tools (recurrence, diff_last_passing) can reach other builds.
 type toolEnv struct {
 	backend     storage.Backend
+	rawBackend  storage.Backend
 	bucket      string
 	buildPrefix string
 	webURLBase  string

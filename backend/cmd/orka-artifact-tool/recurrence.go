@@ -2,27 +2,31 @@ package main
 
 import (
 	"context"
-	"errors"
+	"encoding/xml"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"path"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/junit"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prowbuild"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
 
 const (
-	recurrenceDefaultCount = 10
-	recurrenceMaxCount     = 15
-	recurrenceMaxReads     = 150
+	recurrenceDefaultCount   = 10
+	recurrenceMaxCount       = 15
+	recurrenceMaxReads       = 150
+	recurrenceMaxObjectBytes = 16 << 20
+	recurrenceMaxTotalBytes  = 96 << 20
 )
 
 type recurrenceRecentBuild struct {
-	Build  string `json:"build"`
-	Failed bool   `json:"failed"`
+	Build   string `json:"build"`
+	Checked bool   `json:"checked"`
+	Failed  bool   `json:"failed"`
 }
 
 func init() {
@@ -61,9 +65,12 @@ func recurrence(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := requestCtx(r)
 	defer cancel()
-
+	backend := env.rawBackend
+	if backend == nil {
+		backend = env.backend
+	}
 	job := &models.ProwJob{Name: jobName, JobType: models.JobTypePeriodic}
-	builds, err := prowbuild.ListRecentBuilds(ctx, env.backend, job, count)
+	builds, err := prowbuild.ListRecentBuilds(ctx, backend, job, count)
 	if err != nil {
 		writeToolError(w, http.StatusBadGateway, err.Error())
 		return
@@ -71,25 +78,49 @@ func recurrence(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 
 	recent := make([]recurrenceRecentBuild, 0, len(builds))
 	failedIn := 0
+	checked := 0
 	reads := 0
+	bytesScanned := int64(0)
+	truncated := false
 	for _, build := range builds {
-		failed, err := recurrenceBuildFailed(ctx, env, jobName, build.ID, args.TestName, &reads)
+		failed, complete, err := recurrenceBuildFailed(
+			ctx,
+			backend,
+			jobName,
+			build.ID,
+			args.TestName,
+			&reads,
+			&bytesScanned,
+		)
 		if err != nil {
-			writeToolError(w, http.StatusUnprocessableEntity, err.Error())
-			return
+			truncated = true
+			log.Printf("⚠ recurrence build=%s: %v", build.ID, err)
+		}
+		if complete {
+			checked++
 		}
 		if failed {
 			failedIn++
 		}
-		recent = append(recent, recurrenceRecentBuild{Build: build.ID, Failed: failed})
+		recent = append(recent, recurrenceRecentBuild{Build: build.ID, Checked: complete, Failed: failed})
 	}
 
-	log.Printf("♻ recurrence test=%q builds=%d failed_in=%d", args.TestName, len(recent), failedIn)
+	log.Printf(
+		"♻ recurrence test=%q builds=%d checked=%d failed_in=%d bytes=%d truncated=%t",
+		args.TestName,
+		len(recent),
+		checked,
+		failedIn,
+		bytesScanned,
+		truncated,
+	)
 	writeJSON(w, map[string]any{
 		"test_name":      args.TestName,
 		"job":            jobName,
-		"builds_checked": len(recent),
+		"builds_checked": checked,
 		"failed_in":      failedIn,
+		"bytes_scanned":  bytesScanned,
+		"truncated":      truncated,
 		"recent":         recent,
 	})
 }
@@ -104,40 +135,114 @@ func recurrenceJobName(buildPrefix string) (string, bool) {
 	return parts[0], true
 }
 
-func recurrenceBuildFailed(ctx context.Context, env *toolEnv, jobName, buildID, testName string, reads *int) (bool, error) {
+func recurrenceBuildFailed(
+	ctx context.Context,
+	backend storage.Backend,
+	jobName, buildID, testName string,
+	reads *int,
+	bytesScanned *int64,
+) (failed, complete bool, err error) {
 	loc := prowbuild.BuildLocation{
 		JobLocation: prowbuild.JobLocation{JobType: models.JobTypePeriodic},
 		JobName:     jobName,
 		BuildID:     buildID,
 	}
 	buildPrefix := loc.BuildPath()
-	junitPaths, err := prowbuild.DiscoverJUnitPaths(ctx, env.backend, loc)
+	junitPaths, err := prowbuild.DiscoverJUnitPaths(ctx, backend, loc)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	for _, junitPath := range junitPaths {
-		if *reads >= recurrenceMaxReads {
-			return false, nil
+		if *reads >= recurrenceMaxReads || *bytesScanned >= recurrenceMaxTotalBytes {
+			return false, false, fmt.Errorf("recurrence scan limit reached")
 		}
 		*reads++
-		data, err := storage.ReadAll(ctx, env.backend, recurrenceJUnitPath(buildPrefix, junitPath))
+		failed, _, err := recurrenceJUnitFailed(
+			ctx,
+			backend,
+			recurrenceJUnitPath(buildPrefix, junitPath),
+			testName,
+			bytesScanned,
+		)
 		if err != nil {
-			if errors.Is(err, errArtifactBudget) {
-				return false, err
-			}
-			continue
+			return false, false, err
 		}
-		cases, err := junit.Parse(data)
-		if err != nil {
-			continue
-		}
-		for _, tc := range cases {
-			if tc.Name == testName && tc.Status == "failed" {
-				return true, nil
-			}
+		if failed {
+			return true, true, nil
 		}
 	}
-	return false, nil
+	return false, true, nil
+}
+
+func recurrenceJUnitFailed(
+	ctx context.Context,
+	backend storage.Backend,
+	object, testName string,
+	bytesScanned *int64,
+) (failed, matched bool, err error) {
+	remaining := int64(recurrenceMaxTotalBytes) - *bytesScanned
+	if remaining <= 0 {
+		return false, false, fmt.Errorf("recurrence total byte limit reached")
+	}
+	limit := min(int64(recurrenceMaxObjectBytes), remaining)
+	reader, size, err := backend.Open(ctx, object)
+	if err != nil {
+		return false, false, err
+	}
+	defer reader.Close()
+	if size > limit {
+		return false, false, fmt.Errorf("JUnit object is %d bytes, limit is %d", size, limit)
+	}
+	counter := &countingReader{Reader: io.LimitReader(reader, limit+1)}
+	defer func() { *bytesScanned += counter.n }()
+	decoder := xml.NewDecoder(counter)
+	found := false
+	for {
+		token, err := decoder.Token()
+		if err == io.EOF {
+			if counter.n > limit {
+				return false, found, fmt.Errorf("JUnit object exceeded %d-byte limit", limit)
+			}
+			return false, found, nil
+		}
+		if err != nil {
+			return false, found, err
+		}
+		start, ok := token.(xml.StartElement)
+		if !ok || start.Name.Local != "testcase" || xmlAttr(start.Attr, "name") != testName {
+			continue
+		}
+		found = true
+		var testCase struct {
+			Failure *struct{} `xml:"failure"`
+		}
+		if err := decoder.DecodeElement(&testCase, &start); err != nil {
+			return false, found, err
+		}
+		if testCase.Failure != nil {
+			return true, true, nil
+		}
+	}
+}
+
+type countingReader struct {
+	io.Reader
+	n int64
+}
+
+func (r *countingReader) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	r.n += int64(n)
+	return n, err
+}
+
+func xmlAttr(attrs []xml.Attr, name string) string {
+	for _, attr := range attrs {
+		if attr.Name.Local == name {
+			return attr.Value
+		}
+	}
+	return ""
 }
 
 func recurrenceJUnitPath(buildPrefix, junitPath string) string {

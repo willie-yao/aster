@@ -201,7 +201,7 @@ func (t *analysisTelemetry) recordQualityToolOutcome(name, outcome string) {
 	switch base {
 	case "verify_timeline":
 		t.TimelineVerified = outcome == "completed"
-	case "validate_analysis":
+	case "validate_analysis", "submit_analysis":
 		t.ValidationPassed = outcome == "completed"
 	}
 }
@@ -209,6 +209,7 @@ func (t *analysisTelemetry) recordQualityToolOutcome(name, outcome string) {
 func qualityToolBase(name string) string {
 	for _, base := range []string{
 		"validate_analysis",
+		"submit_analysis",
 		"verify_timeline",
 		"check_transient_signatures",
 		"recurrence",
@@ -238,5 +239,6 @@ func normalizeToolName(name string) string {
 
 func matchesScopedTool(name, base string) bool {
 	return name == base || strings.HasPrefix(name, base+"_b") ||
-		(base == "validate_analysis" && strings.HasPrefix(name, base+"_az_analysis_"))
+		((base == "validate_analysis" || base == "submit_analysis") &&
+			(strings.HasPrefix(name, base+"_az_analysis_") || strings.HasPrefix(name, base+"_cmp_")))
 }

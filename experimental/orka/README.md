@@ -50,11 +50,13 @@ also carries the configured Orka retry policy.
 ## Known constraints
 
 - **Execution events are required.** The ingestor reads each Task's event stream
-  to enforce the tool-call floor, terminal outcome, successful quality tools,
-  consumer recipe lookup, a `validate_analysis` token bound to the exact final
+  to enforce the tool-call floor, terminal outcome, successful required quality tools,
+  consumer recipe lookup, a `submit_analysis` token bound to the exact final
   JSON, and transient timeline evidence before publishing a result. Successful
-  artifact content reads return scoped evidence tokens, and `validate_analysis`
+  artifact content reads return scoped evidence tokens, and `submit_analysis`
   requires those tokens for every cited path and recipe evidence group.
+  Recurrence, diff, and transient-signature checks are advisory; failures remain
+  visible in telemetry without discarding a validated analysis.
 - **Scheduled side effects run in batch mode.** The skeleton fetch disables
   side effects. The ingestor runs the same notifications, issue reconciliation,
   and fix-PR reconciliation as the in-process fetcher after job-level pattern

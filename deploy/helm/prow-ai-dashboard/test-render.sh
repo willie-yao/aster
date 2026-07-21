@@ -39,7 +39,7 @@ project:
   systemPrompt: test prompt
 VALUES
 
-for file in 30-tools.yaml 35-k8s-tools.yaml 36-validate-tool.yaml \
+for file in 30-tools.yaml 35-k8s-tools.yaml 36-submit-tool.yaml \
   37-verify-timeline.yaml 38-transient-signatures.yaml 39-recurrence.yaml \
   40-diff-last-passing.yaml 41-required-evidence.yaml; do
   cmp "$root/experimental/orka/manifests/$file" "$chart/files/orka-tools/$file"
@@ -67,6 +67,8 @@ grep -Fq 'image: ghcr.io/willie-yao/prow-ai-dashboard/orka-ingestor:sha-test' "$
 grep -Eq 'http://test-prow-ai-dashboard-artifact-tool-[0-9a-f]{8}\.orka-test\.svc:8080/tool/read_artifact' "$tmp/owned.yaml"
 grep -Eq -- '-tool-auth-secret=test-prow-ai-dashboard-artifact-tool-[0-9a-f]{8}-auth' "$tmp/owned.yaml"
 grep -Fq 'name: test-prow-ai-dashboard-orka-tools' "$tmp/owned.yaml"
+grep -Fq 'name: submit-analysis' "$tmp/owned.yaml"
+grep -Fq '/tool/submit_analysis' "$tmp/owned.yaml"
 grep -Fq 'agentpool: nodepool1' "$tmp/owned.yaml"
 grep -Fq 'suspend: false' "$tmp/owned.yaml"
 grep -Fq -- '- -max-concurrent-tasks=2' "$tmp/owned.yaml"

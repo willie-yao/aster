@@ -134,14 +134,14 @@ produces. Each analysis stores the contract hash, so a cached result is reused
 only while it matches the current producer manifest. The ingestor also reads the
 Task's durable execution-event stream. It rejects incomplete response schemas,
 analyses below `ai.min_tool_calls` or `ai.min_gcs_bytes`, results without a successful terminal Task
-event, quality tools whose last attempt failed, results without a completed
-`validate_analysis` call whose token binds the exact final result and verifies
+event, required quality tools whose last attempt failed, results without a completed
+`submit_analysis` call whose token binds the exact final result and verifies
 scoped evidence tokens from successful artifact content reads, and transient
 verdicts without a successful `verify_timeline` call. Quality-tool error paths
 return non-success HTTP statuses so Orka records failed calls rather than
 successful error payloads. The producer keeps a private validation key in the
 non-published analysis manifest, fingerprints its hash in Task identity, and
-creates one validate Tool per analysis Task, injects the key and expected Task name only into its hidden HTTP headers, and has the ingestor verify both the Task identity and final result in the HMAC token. Accepted results carry Tool/model failures, retries,
+creates one submit Tool per analysis Task, injects the key and expected Task name only into its hidden HTTP headers, and has the ingestor verify both the Task identity and final result in the HMAC token. Accepted results carry Tool/model failures, retries,
 context truncations, elapsed time, tokens, stop reason, and quality-tool
 telemetry. Failing/absent results get the engine's `unavailable`
 placeholder via
@@ -189,10 +189,10 @@ reconstructed out of Kubernetes objects and deterministic tool endpoints:
 | Per-failure build isolation (fetcher scopes each analysis to one build) | Contract-versioned Tool clones with static `X-Build-Prefix` / `X-Bucket` headers; old and new Task contracts cannot share mutable Tool objects. | `ToolScopeID`, `cloneToolForBuild`, shim `toolenv.go` |
 | Prompt composition (BasePrompt + system.md + footer) | The producer calls the same `ai.ComposeSystemPrompt` and appends a tool-usage/self-critique addendum. | `toolUsageAddendum` |
 | Convergence (loop always yields a final verdict) | Worker patches: forced tools-free finalization near the budget + re-prompt on an empty final message. | `worker-patches/` (2,3) |
-| Critique gate: hallucinated-citation guard | Successful `read_artifact`, `tail_artifact`, and `grep_artifact` calls return scoped HMAC evidence tokens. `validate_analysis` requires those tokens for every cited path and matching recipe group, pruning groups absent from a complete 5,000-path build listing. Its final validation token is keyed and bound to the current Task so the model cannot recompute it for a changed answer or replay it across failures. | `orka-artifact-tool/evidence.go`, `validate.go` |
+| Critique gate: hallucinated-citation guard | Successful `read_artifact`, `tail_artifact`, and `grep_artifact` calls return scoped HMAC evidence tokens. `submit_analysis` requires those tokens for every cited path and matching recipe group, pruning groups absent from a complete 5,000-path build listing. Its final validation token is keyed and bound to the current Task so the model cannot recompute it for a changed answer or replay it across failures. | `orka-artifact-tool/evidence.go`, `validate.go` |
 | Critique gate: transient discipline | The worker re-prompts an unsupported transient verdict, and the ingestor independently rejects any final transient result without a completed `verify_timeline` event. | `worker-patches/` (4), `timeline.go`, ingestor event acceptance |
 | Investigation floor | The producer fingerprints `ai.min_tool_calls`; the ingestor counts `ToolCallStarted` events and rejects shallower results. | `AnalysisManifest.MinToolCalls`, Task events API |
-| Per-test recurrence evidence | `check_recurrence` reports whether one test recurs across recent builds. | `orka-artifact-tool/recurrence.go` |
+| Per-test recurrence evidence | `recurrence` reports whether one test recurs across recent builds. | `orka-artifact-tool/recurrence.go` |
 | Job-level cross-build correlation | After per-test ingestion, one content-addressed pattern Task correlates representative failures and writes `PatternAnalysis` + recurring patterns. | `orka-ingestor` + `orka.FinalizePatterns` |
 | Skill-driven required evidence | The producer compiles consumer `skills/*.yaml` recipes into the scoped `required_evidence` Tool; the ingestor requires that lookup when recipes exist. | `ai/skills`, `orka-producer`, `orka-artifact-tool/requiredevidence.go` |
 | Transient-signature background-noise filter | `check_transient_signatures` tool tails build logs for known-noise patterns. | `orka-artifact-tool/transient.go` |

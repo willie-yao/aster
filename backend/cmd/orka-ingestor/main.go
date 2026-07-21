@@ -812,20 +812,33 @@ func validateAnalysisAcceptance(a analysis, telemetry analysisTelemetry, taskNam
 		return fmt.Errorf("only %d GCS byte(s), need at least %d", *a.GCSBytes, minGCSBytes)
 	}
 	for name, outcome := range telemetry.qualityToolOutcomes {
-		if outcome == "failed" {
-			return fmt.Errorf("quality tool %s failed without a successful retry", name)
+		if outcome == "failed" && requiredQualityTool(name, *a.IsTransient, skillSetHash != "") {
+			return fmt.Errorf("required quality tool %s failed without a successful retry", name)
 		}
 	}
 	if skillSetHash != "" && telemetry.qualityToolOutcomes["required_evidence"] != "completed" {
 		return fmt.Errorf("analysis did not consult consumer required_evidence")
 	}
 	if !telemetry.ValidationPassed {
-		return fmt.Errorf("analysis did not successfully complete validate_analysis")
+		return fmt.Errorf("analysis did not successfully complete submit_analysis")
 	}
 	if *a.IsTransient && !telemetry.TimelineVerified {
 		return fmt.Errorf("transient verdict did not complete verify_timeline")
 	}
 	return nil
+}
+
+func requiredQualityTool(name string, transient, hasSkills bool) bool {
+	switch name {
+	case "validate_analysis", "submit_analysis":
+		return true
+	case "verify_timeline":
+		return transient
+	case "required_evidence":
+		return hasSkills
+	default:
+		return false
+	}
 }
 
 func (a analysis) validationInput() orka.AnalysisValidation {

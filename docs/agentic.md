@@ -629,15 +629,19 @@ cached result after a placement change. Non-successful Tasks with stale placemen
 are deleted and recreated after Orka finishes cleaning their result and event
 state. Before publishing a
 result, the ingestor reads Orka's durable execution events, enforces the JSON
-schema, `min_tool_calls`, and `min_gcs_bytes`, requires a successful terminal Task event, rejects
+schema, `min_tool_calls`, and `min_gcs_bytes`, requires a successful terminal Task event, rejects required
 quality tools whose last attempt failed, requires a successful
-`validate_analysis` call whose token matches the exact final JSON and whose
+`submit_analysis` call whose token matches the exact final JSON and whose
 scoped evidence tokens prove every cited artifact was returned by a successful
 content read. The final token is keyed by a producer-generated secret carried
-only in the private manifest and a per-Task validate Tool's hidden headers, so it cannot be recomputed for a different final object or replayed by another Task. Recipe groups absent from a complete bounded
+only in the private manifest and a per-Task submit Tool's hidden headers, so it cannot be recomputed for a different final object or replayed by another Task. Recipe groups absent from a complete bounded
 artifact-tree listing are treated as inapplicable, matching the in-process
 critique path. Signed evidence tokens carry the successful artifact-read byte count, which is enforced and published as `AIAnalysis.GCSBytes`. Acceptance also requires a completed `verify_timeline` call for
-every transient verdict. Accepted analyses publish Tool/model failures, retry
+every transient verdict. `submit_analysis`, conditional timeline verification,
+and matched-skill `required_evidence` are required quality gates. Failures from
+`recurrence`, `diff_last_passing`, and `check_transient_signatures` remain visible
+in telemetry but are advisory and do not discard an otherwise valid analysis.
+Accepted analyses publish Tool/model failures, retry
 count, context truncations, duration, provider token usage, stop reason, and
 quality-tool evidence alongside the result. Consumer `skills/*.yaml` recipes are
 compiled into the scoped `required_evidence` Tool, and their hash participates

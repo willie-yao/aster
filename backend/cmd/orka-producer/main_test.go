@@ -34,7 +34,7 @@ func TestResolveToolsKeepsQualityToolsForExplicitNames(t *testing.T) {
 	for _, name := range names {
 		seen[name] = true
 	}
-	if !seen["read-artifact"] || !seen["validate-analysis"] || !seen["verify-timeline"] {
+	if !seen["read-artifact"] || !seen["submit-analysis"] || !seen["verify-timeline"] {
 		t.Fatalf("resolved tools = %v, want explicit and mandatory quality tools", names)
 	}
 }
@@ -52,7 +52,7 @@ func TestBuildToolNameSeparatesConsumerScopes(t *testing.T) {
 }
 
 func TestCloneSkillAwareToolsCarrySkillContract(t *testing.T) {
-	for _, tool := range []string{"required-evidence", "validate-analysis"} {
+	for _, tool := range []string{"required-evidence", "submit-analysis"} {
 		t.Run(tool, func(t *testing.T) {
 			base := map[string]any{
 				"metadata": map[string]any{"name": tool},
@@ -64,13 +64,25 @@ func TestCloneSkillAwareToolsCarrySkillContract(t *testing.T) {
 			if headers[orka.ToolScopeHeader] != "scope" {
 				t.Fatalf("scope header = %+v", headers)
 			}
+			annotations := got["metadata"].(map[string]any)["annotations"].(map[string]any)
+			if annotations["orka.ai/tool-alias"] != strings.ReplaceAll(tool, "-", "_") {
+				t.Fatalf("tool alias = %+v", annotations)
+			}
+			if tool == "required-evidence" && annotations["orka.ai/cache-identical-calls"] != "true" {
+				t.Fatalf("cache annotation = %+v", annotations)
+			}
+			if tool == "submit-analysis" {
+				if _, found := annotations["orka.ai/cache-identical-calls"]; found {
+					t.Fatalf("submission Tool must not be cached: %+v", annotations)
+				}
+			}
 			if headers["X-Prow-AI-Skills"] != "encoded-skills" {
 				t.Fatalf("headers = %+v", headers)
 			}
-			if tool == "validate-analysis" && headers[orka.ValidationKeyHeader] != "validation-key" {
+			if tool == "submit-analysis" && headers[orka.ValidationKeyHeader] != "validation-key" {
 				t.Fatalf("validation key header = %+v", headers)
 			}
-			if tool == "validate-analysis" && headers[orka.MinGCSBytesHeader] != "123" {
+			if tool == "submit-analysis" && headers[orka.MinGCSBytesHeader] != "123" {
 				t.Fatalf("minimum GCS byte header = %+v", headers)
 			}
 			auth := spec["http"].(map[string]any)["authSecretRef"].(map[string]any)
@@ -109,13 +121,13 @@ func TestLoadOrCreateValidationKeyReusesManifestKey(t *testing.T) {
 	}
 }
 
-func TestTaskToolNamesUseTaskSpecificValidator(t *testing.T) {
-	got := taskToolNames([]string{"read-artifact", "validate-analysis", "recurrence"}, "build-scope", "az-analysis-task")
+func TestTaskToolNamesUseTaskSpecificSubmission(t *testing.T) {
+	got := taskToolNames([]string{"read-artifact", "submit-analysis", "recurrence"}, "build-scope", "az-analysis-task")
 	if got[0] != buildToolName("read-artifact", "build-scope") || got[2] != buildToolName("recurrence", "build-scope") {
 		t.Fatalf("build-scoped tools = %v", got)
 	}
-	if got[1] != validationToolName("az-analysis-task") {
-		t.Fatalf("validation tool = %q, want task-specific name", got[1])
+	if got[1] != submissionToolName("az-analysis-task") {
+		t.Fatalf("submission tool = %q, want task-specific name", got[1])
 	}
 }
 

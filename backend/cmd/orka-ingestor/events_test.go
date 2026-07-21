@@ -149,30 +149,26 @@ func TestSummarizeEventsRecordsFailuresRetriesAndContext(t *testing.T) {
 	}
 }
 
-func TestValidateAnalysisAcceptanceRejectsFailedQualityTool(t *testing.T) {
+func TestValidateAnalysisAcceptanceQualityToolPolicy(t *testing.T) {
 	transient := false
-	a := withValidation(analysis{Summary: "summary", RootCause: "cause", Severity: "High", IsTransient: &transient, SuggestedFix: "fix"})
-	events := []executionEvent{
-		{Seq: 1, Type: "TaskStarted"},
-		{Seq: 2, Type: "ToolCallStarted", ToolName: "recurrence-bscope", ToolCallID: "call-1"},
-		{Seq: 3, Type: "ToolCallFailed", ToolName: "recurrence-bscope", ToolCallID: "call-1"},
-		{Seq: 4, Type: "ToolCallStarted", ToolName: "validate-analysis-bscope", ToolCallID: "call-2"},
-		{Seq: 5, Type: "ToolCallCompleted", ToolName: "validate-analysis-bscope", ToolCallID: "call-2"},
-		{Seq: 6, Type: "TaskSucceeded"},
+	a := withValidation(analysis{
+		Summary: "summary", RootCause: "cause", Severity: "High",
+		IsTransient: &transient, SuggestedFix: "fix",
+	})
+	advisory := analysisTelemetry{
+		EventCount: 4, ToolCalls: 2, ValidationPassed: true, TaskOutcome: "succeeded",
+		qualityToolOutcomes: map[string]string{"recurrence": "failed", "submit_analysis": "completed"},
 	}
-	telemetry := summarizeEvents(events)
-	if err := validateAnalysisAcceptance(a, telemetry, "task", 2, 0, "", testValidationKey); err == nil || !strings.Contains(err.Error(), "recurrence") {
-		t.Fatalf("acceptance error = %v, want failed recurrence rejection", err)
+	if err := validateAnalysisAcceptance(a, advisory, "task", 2, 0, "", testValidationKey); err != nil {
+		t.Fatalf("advisory quality-tool failure rejected: %v", err)
 	}
-	events = append(events[:3],
-		executionEvent{Seq: 4, Type: "ToolCallStarted", ToolName: "recurrence-bscope", ToolCallID: "call-3"},
-		executionEvent{Seq: 5, Type: "ToolCallCompleted", ToolName: "recurrence-bscope", ToolCallID: "call-3"},
-		executionEvent{Seq: 6, Type: "ToolCallStarted", ToolName: "validate-analysis-bscope", ToolCallID: "call-2"},
-		executionEvent{Seq: 7, Type: "ToolCallCompleted", ToolName: "validate-analysis-bscope", ToolCallID: "call-2"},
-		executionEvent{Seq: 8, Type: "TaskSucceeded"},
-	)
-	if err := validateAnalysisAcceptance(a, summarizeEvents(events), "task", 2, 0, "", testValidationKey); err != nil {
-		t.Fatalf("successful quality-tool retry rejected: %v", err)
+	required := advisory
+	required.qualityToolOutcomes = map[string]string{
+		"required_evidence": "failed",
+		"submit_analysis":   "completed",
+	}
+	if err := validateAnalysisAcceptance(a, required, "task", 2, 0, "skills", testValidationKey); err == nil || !strings.Contains(err.Error(), "required_evidence") {
+		t.Fatalf("required quality-tool failure error = %v", err)
 	}
 }
 
@@ -258,5 +254,19 @@ func TestQualityToolBaseRecognizesTaskScopedValidator(t *testing.T) {
 	name := "validate-analysis-az-analysis-3929c1698d436de980b5888747ca973f"
 	if got := qualityToolBase(normalizeToolName(name)); got != "validate_analysis" {
 		t.Fatalf("qualityToolBase(%q) = %q, want validate_analysis", name, got)
+	}
+}
+
+func TestSubmitAnalysisCountsAsValidation(t *testing.T) {
+	events := []executionEvent{
+		{Seq: 1, Type: "ToolCallStarted", ToolName: "submit-analysis-cmp-task", ToolCallID: "call-1"},
+		{Seq: 2, Type: "ToolCallCompleted", ToolName: "submit-analysis-cmp-task", ToolCallID: "call-1"},
+	}
+	got := summarizeEvents(events)
+	if !got.ValidationPassed || got.qualityToolOutcomes["submit_analysis"] != "completed" {
+		t.Fatalf("submission telemetry = %+v", got)
+	}
+	if base := qualityToolBase(normalizeToolName("submit-analysis-cmp-task")); base != "submit_analysis" {
+		t.Fatalf("qualityToolBase() = %q", base)
 	}
 }

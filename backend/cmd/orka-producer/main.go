@@ -53,7 +53,7 @@ var engineToolGroups = map[string][]string{
 // qualityTools are the deterministic shim tools added to every analysis. They
 // degrade gracefully on non-CAPZ projects (return "no match" when their patterns
 // do not apply), so they are safe to always include.
-var qualityTools = []string{"validate-analysis", "verify-timeline", "check-transient-signatures", "recurrence", "required-evidence", "diff-last-passing"}
+var qualityTools = []string{"submit-analysis", "verify-timeline", "check-transient-signatures", "recurrence", "required-evidence", "diff-last-passing"}
 
 const maxTaskWaveSize = 1000
 
@@ -264,7 +264,7 @@ func main() {
 	var toolObjs []namedObj
 	for _, build := range builds {
 		for _, base := range toolNames {
-			if base == "validate-analysis" {
+			if base == "submit-analysis" {
 				continue
 			}
 			doc := baseTools[base]
@@ -275,10 +275,10 @@ func main() {
 		}
 	}
 	for taskName, build := range validationTasks {
-		doc := baseTools["validate-analysis"]
-		clone := cloneToolForBuild(doc, "validate-analysis", build.scope, build.prefix, bucket, *namespace, storageMeta, skillHeader, validationKey, agentic.MinGCSBytes, *toolAuthSecret, *toolAuthKey)
+		doc := baseTools["submit-analysis"]
+		clone := cloneToolForBuild(doc, "submit-analysis", build.scope, build.prefix, bucket, *namespace, storageMeta, skillHeader, validationKey, agentic.MinGCSBytes, *toolAuthSecret, *toolAuthKey)
 		meta := clone["metadata"].(map[string]any)
-		toolName := validationToolName(taskName)
+		toolName := submissionToolName(taskName)
 		meta["name"] = toolName
 		httpCfg := clone["spec"].(map[string]any)["http"].(map[string]any)
 		headers := httpCfg["headers"].(map[string]any)
@@ -441,11 +441,10 @@ verify_timeline (did the expected operation actually register?) and
 check_transient_signatures, and consult recurrence. Default to is_transient=false
 unless a known transient class is proven from the evidence. Every successful
 read_artifact, tail_artifact, and grep_artifact call returns an evidence_token.
-Keep those tokens. Before finalizing, call validate_analysis with the exact JSON
-fields you will return, including every relevant_file, plus all evidence_tokens
-from the artifact reads that support the analysis. Copy its validation_token into
-the final JSON, copy its gcs_bytes value into the final JSON, and do not change
-any analysis field afterward.
+Keep those tokens. When the evidence is sufficient, call submit_analysis exactly
+once with every final analysis field and all evidence_tokens from the artifact
+reads that support it. A successful submission becomes the Task result; do not
+emit a separate final JSON response before or after the tool call.
 
 ## Tool budget: converge, do not exhaust it
 You have a limited tool-call budget (aim for ~20 calls) and you WILL be forced to
@@ -470,12 +469,10 @@ revise if any applies:
    infrastructure operation, upstream flakiness) and set is_transient=true, did
    verify_timeline actually show the expected operation never registered? If you
    did not confirm it, treat the failure as a real bug (is_transient=false).
-3. Grounding: is every claim tied to evidence you actually read (validate_analysis
-   passed), not plausible-sounding speculation?
+3. Grounding: is every claim tied to evidence you actually read (submit_analysis
+   will verify it), not plausible-sounding speculation?
 4. Fix validity: would suggested_fix actually resolve the stated root_cause?
-The final JSON must also include "gcs_bytes":<value from validate_analysis> and
-"validation_token":"<token from validate_analysis>".
-Respond with ONLY the required JSON object.`
+Call submit_analysis with the final fields. Do not return a separate final answer.`
 }
 
 // loadBaseTools parses Tool CRDs from every YAML doc under dir and returns the
@@ -525,6 +522,15 @@ func cloneToolForBuild(base map[string]any, baseName, buildScope, prefix, bucket
 		orka.ManagedByLabel: orka.ManagedByValue,
 		orka.BuildLabel:     buildScope,
 	}
+	annotations, _ := meta["annotations"].(map[string]any)
+	if annotations == nil {
+		annotations = map[string]any{}
+		meta["annotations"] = annotations
+	}
+	annotations["orka.ai/tool-alias"] = strings.ReplaceAll(baseName, "-", "_")
+	if baseName != "submit-analysis" {
+		annotations["orka.ai/cache-identical-calls"] = "true"
+	}
 
 	spec, _ := doc["spec"].(map[string]any)
 	if spec == nil {
@@ -549,10 +555,10 @@ func cloneToolForBuild(base map[string]any, baseName, buildScope, prefix, bucket
 	for k, v := range storageMeta {
 		headers[k] = v
 	}
-	if (baseName == "required-evidence" || baseName == "validate-analysis") && skillContract != "" {
+	if (baseName == "required-evidence" || baseName == "submit-analysis") && skillContract != "" {
 		headers[skills.ContractHeader] = skillContract
 	}
-	if baseName == "validate-analysis" {
+	if baseName == "submit-analysis" {
 		headers[orka.ValidationKeyHeader] = validationKey
 		headers[orka.MinGCSBytesHeader] = strconv.Itoa(minGCSBytes)
 	}
@@ -632,15 +638,15 @@ func buildToolNames(base []string, buildScope string) []string {
 func taskToolNames(base []string, buildScope, taskName string) []string {
 	out := buildToolNames(base, buildScope)
 	for i, name := range base {
-		if name == "validate-analysis" {
-			out[i] = validationToolName(taskName)
+		if name == "submit-analysis" {
+			out[i] = submissionToolName(taskName)
 		}
 	}
 	return out
 }
 
-func validationToolName(taskName string) string {
-	return orka.Sanitize("validate-analysis-" + taskName)
+func submissionToolName(taskName string) string {
+	return orka.Sanitize("submit-analysis-" + taskName)
 }
 
 func buildToolName(base, buildScope string) string { return orka.Sanitize(base + "-b" + buildScope) }
