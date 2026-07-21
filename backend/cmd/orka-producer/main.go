@@ -27,6 +27,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -37,9 +38,11 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
@@ -55,7 +58,11 @@ var engineToolGroups = map[string][]string{
 // do not apply), so they are safe to always include.
 var qualityTools = []string{"submit-analysis", "verify-timeline", "check-transient-signatures", "recurrence", "required-evidence", "diff-last-passing"}
 
-const maxTaskWaveSize = 1000
+const (
+	maxTaskWaveSize          = 1000
+	artifactSeedBuildTimeout = 10 * time.Second
+	artifactSeedRunBudget    = 45 * time.Second
+)
 
 // resolveTools maps a consumer's ai.tools group selection to the Orka Tool CRD
 // names, always appending the quality tools. Group names expand; anything else
@@ -188,6 +195,14 @@ func main() {
 		log.Fatalf("analysis contract: %v", err)
 	}
 	storageCfg := cfg.StorageConfig()
+	storageCfg.Bucket = bucket
+	artifactBackend, backendErr := storage.New(storageCfg, &http.Client{Timeout: 30 * time.Second})
+	if backendErr != nil {
+		log.Printf("⚠ artifact-tree seed unavailable: %v", backendErr)
+	}
+	artifactSeedCtx, cancelArtifactSeeds := context.WithTimeout(context.Background(), artifactSeedRunBudget)
+	defer cancelArtifactSeeds()
+	artifactSeedBudgetLogged := false
 	projectScope := orka.ProjectScopeID(cfg.ID, string(storageCfg.Provider), bucket, storageCfg.Base, storageCfg.WebBase, storageCfg.ProwBase)
 	manifest := orka.NewAnalysisManifest(projectScope, projectLabel, contractHash, *provider, *model, *version, agentic.MinToolCalls)
 	manifest.SkillSetHash = skillSet.Hash()
@@ -222,15 +237,34 @@ func main() {
 			buildScope := orka.BuildScopeID(projectScope, detail.JobID, run.BuildID, buildPrefix)
 			toolScope := orka.ToolScopeID(buildScope, contractHash)
 			registered := false
+			artifactSeed := ""
 			for ti := range run.TestCases {
 				tc := run.TestCases[ti]
 				if tc.Status != "failed" {
 					continue
 				}
 				if !registered {
-					manifest.SetBuild(detail.JobID, run.BuildID, buildScope, toolScope, buildPrefix)
-					builds[orka.BuildKey(detail.JobID, run.BuildID)] = buildPlan{scope: toolScope, prefix: buildPrefix}
 					registered = true
+					if artifactBackend != nil {
+						if artifactSeedCtx.Err() != nil {
+							if !artifactSeedBudgetLogged {
+								log.Printf("⚠ artifact-tree seed budget exhausted; remaining builds will use failure evidence only")
+								artifactSeedBudgetLogged = true
+							}
+						} else {
+							seedCtx, cancel := context.WithTimeout(artifactSeedCtx, artifactSeedBuildTimeout)
+							browser := artifacts.NewUncachedBackendBrowser(artifactBackend, bucket, buildPrefix, detail.JobID+"/"+run.BuildID)
+							seed, seedErr := orka.ArtifactTreeSeed(seedCtx, browser)
+							cancel()
+							if seedErr != nil {
+								log.Printf("⚠ artifact-tree seed skipped for %s/%s: %v", detail.JobID, run.BuildID, seedErr)
+							} else {
+								artifactSeed = seed
+							}
+						}
+					}
+					manifest.SetBuild(detail.JobID, run.BuildID, buildScope, toolScope, buildPrefix, artifactSeed)
+					builds[orka.BuildKey(detail.JobID, run.BuildID)] = buildPlan{scope: toolScope, prefix: buildPrefix}
 				}
 				ref, err := manifest.TaskRef(detail.JobID, run, ti, tc)
 				if err != nil {
@@ -247,7 +281,7 @@ func main() {
 					WebhookURL:   *webhookURL,
 					Tools:        taskToolNames(toolNames, ref.ToolScope, ref.Name),
 					SystemPrompt: systemPrompt,
-					Prompt:       ref.Prompt,
+					Prompt:       orka.WithArtifactTreeSeed(ref.Prompt, artifactSeed),
 					Labels: map[string]string{
 						orka.ManagedByLabel: orka.ManagedByValue,
 						orka.ProjectLabel:   projectScope,

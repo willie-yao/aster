@@ -6,13 +6,13 @@ commit. Moving tags are not published.
 
 ## Current contract
 
-| Field | Compatibility v1 |
+| Field | Compatibility v2 |
 | --- | --- |
 | Orka repository | `https://github.com/orka-agents/orka.git` |
 | Orka commit | `1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254` |
 | Orka Go version | `1.26.2` |
 | Patch | `ai-worker-convergence.patch` |
-| Patch SHA-256 | `8d1ef0cee484b6b93a9460aa0de5156f4d4c62e0d44b289dfa478f532ba4e324` |
+| Patch SHA-256 | `083e05515360a7594bfbad7faf8703f22fe3830e1a765b422ca389b3557ca476` |
 | Worker Dockerfile | `workers/ai/Dockerfile` from the pinned Orka commit |
 | Published platform | `linux/amd64` |
 | Workflow | `.github/workflows/orka-compat-image.yml` |
@@ -25,7 +25,7 @@ build fails when its patch checksum, source commit, or tag inputs do not match.
 The workflow publishes this tag shape:
 
 ```text
-v1-orka-<full-orka-commit>-dashboard-<full-dashboard-commit>
+v2-orka-<full-orka-commit>-dashboard-<full-dashboard-commit>
 ```
 
 For this contract the image repository is:
@@ -59,7 +59,7 @@ Every pull request that changes the compatibility files:
 1. Checks out the exact Orka commit.
 2. Verifies and applies the patch to a clean checkout.
 3. Runs the focused compatibility tests.
-4. Runs the focused tests with the race detector.
+4. Runs the complete `./workers/ai` package with the race detector.
 5. Runs the complete `./workers/ai` package test suite.
 6. Renders the pinned Orka chart with both immutable-tag and digest overrides.
 7. Builds `workers/ai/Dockerfile` for `linux/amd64` without publishing.
@@ -95,7 +95,7 @@ workers:
   ai:
     image:
       repository: ghcr.io/willie-yao/prow-ai-dashboard/orka-ai-worker
-      tag: v1-orka-1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254-dashboard-<dashboard-commit>
+      tag: v2-orka-1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254-dashboard-<dashboard-commit>
       pullPolicy: IfNotPresent
 ```
 
@@ -125,11 +125,11 @@ Do not move an existing compatibility tag to new content. For an Orka update:
 
 1. Bump `COMPATIBILITY_VERSION` and update the pinned values in
    `compatibility.env`.
-2. Rebase the patch onto the new pinned Orka commit.
+2. Recreate the patch against the new pinned Orka commit.
 3. Update the patch SHA-256 and this matrix.
 4. Run the complete compatibility workflow.
 5. Deploy the new tag or digest as an explicit Orka Helm change.
 6. Keep the prior image available for rollback.
 
 If the worker changes merge upstream, create a new contract without the obsolete
-patch rather than silently changing v1.
+patch rather than silently changing v2.

@@ -14,7 +14,7 @@ import (
 const identityDigestBytes = 16
 
 // AcceptanceVersion identifies the Orka result acceptance contract.
-const AcceptanceVersion = 6
+const AcceptanceVersion = 7
 
 // ToolScopeHeader binds artifact-tool caches and budgets to one Tool contract.
 const ToolScopeHeader = "X-Prow-AI-Scope"
@@ -88,6 +88,11 @@ func AnalysisTaskName(projectScope, buildScope, contractHash string, testIndex i
 	return Sanitize("az-analysis-" + hash)
 }
 
+const (
+	failureMessagePromptBytes = 16 * 1024
+	failureBodyPromptBytes    = 8 * 1024
+)
+
 // FailurePrompt renders the per-test prompt shared by the producer and ingestor.
 func FailurePrompt(projectLabel, jobID, buildPrefix string, tc models.TestCase) string {
 	var b strings.Builder
@@ -101,15 +106,37 @@ func FailurePrompt(projectLabel, jobID, buildPrefix string, tc models.TestCase) 
 	if tc.JUnitFile != "" {
 		fmt.Fprintf(&b, "JUnit file: %s\n", tc.JUnitFile)
 	}
-	msg := tc.FailureMessage
-	if len(msg) > 1200 {
-		msg = msg[:1200]
+	message := strings.TrimSpace(tc.FailureMessage)
+	body := strings.TrimSpace(tc.FailureBody)
+	if message != "" || body != "" {
+		b.WriteString("\nDeterministic pre-triage evidence:\n")
 	}
-	if msg != "" {
-		fmt.Fprintf(&b, "Failure output:\n%s\n", msg)
+	if message != "" {
+		b.WriteString("Failure message:\n")
+		b.WriteString(clampPromptHeadTail(message, failureMessagePromptBytes))
+		b.WriteByte('\n')
+	}
+	if body != "" {
+		b.WriteString("Failure body (truncated to last 8KB):\n")
+		if len(body) > failureBodyPromptBytes {
+			body = strings.ToValidUTF8(body[len(body)-failureBodyPromptBytes:], "")
+		}
+		b.WriteString(body)
+		b.WriteByte('\n')
 	}
 	b.WriteString("\nInvestigate the build's artifacts with the tools and conclude with your JSON.")
 	return b.String()
+}
+
+func clampPromptHeadTail(value string, maxBytes int) string {
+	if maxBytes <= 0 || len(value) <= maxBytes {
+		return value
+	}
+	headBytes := maxBytes * 3 / 4
+	tailBytes := maxBytes - headBytes
+	head := strings.ToValidUTF8(value[:headBytes], "")
+	tail := strings.ToValidUTF8(value[len(value)-tailBytes:], "")
+	return head + fmt.Sprintf("\n... [%d bytes elided; read the JUnit artifact for the complete failure] ...\n", len(value)-len(head)-len(tail)) + tail
 }
 
 func digest(parts ...string) string {

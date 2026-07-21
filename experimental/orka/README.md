@@ -28,14 +28,17 @@ that run alongside your inference stack.
 
 Orka + a strong model (claude-sonnet-4.5) produces excellent, artifact-grounded
 analyses that match or beat the engine's reference labels on the hardest CAPZ
-cases. But that edge is the MODEL, not the harness: on the engine's own cheap model
-(gemini-3.5-flash) Orka is no better at classification, and it needed the worker
-patches just to converge. After those patches Orka is at process parity with the
-engine on a cheap model (converges 15/15, grounds every transient verdict), and the
-residual quality gap is pure model capability. Recommendation: adopt Orka as an
-optional, co-located, strong-model backend; keep the engine as the default
-cheap-model path; do not decommission. Convergence and discipline numbers are in
-[worker-patches/README.md](worker-patches/README.md).
+cases. The first weak-model pass closed protocol convergence and transient-check
+discipline, but a Kimi DRA spike still followed later teardown symptoms because
+the Orka seed omitted the JUnit failure body containing the initiating cache
+error. The current path closes that harness gap by seeding the bounded failure
+message, failure body, and filtered artifact tree, then preserving successful
+Tool observations in an evidence ledger across proactive context compaction.
+Model capability still bounds the final reasoning, but the weak model now starts
+with and retains the same deterministic evidence as the in-process path.
+Recommendation: keep Orka optional while these parity improvements are evaluated
+against the cheaper models operators are likely to run. Convergence and discipline
+numbers are in [worker-patches/README.md](worker-patches/README.md).
 
 ## Fix-PR generation runtime
 

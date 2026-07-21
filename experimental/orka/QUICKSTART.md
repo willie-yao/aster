@@ -58,7 +58,7 @@ source rather than this repository's Go module:
 
 ```text
 ghcr.io/willie-yao/prow-ai-dashboard/orka-ai-worker:
-  v1-orka-<full-orka-commit>-dashboard-<full-dashboard-commit>
+  v2-orka-<full-orka-commit>-dashboard-<full-dashboard-commit>
 ```
 
 Use the exact tag or digest from the latest [successful main-branch
@@ -80,7 +80,7 @@ workers:
   ai:
     image:
       repository: ghcr.io/willie-yao/prow-ai-dashboard/orka-ai-worker
-      tag: v1-orka-1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254-dashboard-<dashboard-commit>
+      tag: v2-orka-1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254-dashboard-<dashboard-commit>
       pullPolicy: IfNotPresent
 ```
 

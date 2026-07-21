@@ -13,7 +13,7 @@ import (
 // AnalysisManifestFile is the private producer-to-ingestor identity contract.
 const AnalysisManifestFile = "orka_analysis.json"
 
-const analysisManifestVersion = 3
+const analysisManifestVersion = 4
 
 // AnalysisManifest records the exact Task identity contract for one fetch pass.
 type AnalysisManifest struct {
@@ -34,9 +34,10 @@ type AnalysisManifest struct {
 
 // AnalysisBuild holds the content-addressed Tool scope for one job build.
 type AnalysisBuild struct {
-	BuildScope string `json:"build_scope"`
-	ToolScope  string `json:"tool_scope"`
-	Prefix     string `json:"prefix"`
+	BuildScope     string `json:"build_scope"`
+	ToolScope      string `json:"tool_scope"`
+	Prefix         string `json:"prefix"`
+	PromptSeedHash string `json:"prompt_seed_hash,omitempty"`
 }
 
 // AnalysisTaskRef is the Task and Tool identity for one failed test.
@@ -63,9 +64,15 @@ func NewAnalysisManifest(projectScope, projectLabel, contractHash, provider, mod
 }
 
 // SetBuild records the build scope needed to re-derive Task names.
-func (m *AnalysisManifest) SetBuild(jobID, buildID, buildScope, toolScope, prefix string) {
+func (m *AnalysisManifest) SetBuild(jobID, buildID, buildScope, toolScope, prefix, promptSeed string) {
+	promptSeedHash := ""
+	if promptSeed != "" {
+		promptSeedHash = digest(promptSeed)
+	}
 	m.Jobs[jobID] = true
-	m.Builds[BuildKey(jobID, buildID)] = AnalysisBuild{BuildScope: buildScope, ToolScope: toolScope, Prefix: prefix}
+	m.Builds[BuildKey(jobID, buildID)] = AnalysisBuild{
+		BuildScope: buildScope, ToolScope: toolScope, Prefix: prefix, PromptSeedHash: promptSeedHash,
+	}
 }
 
 // TaskRef re-derives the exact Task name emitted by the producer.
@@ -75,8 +82,12 @@ func (m *AnalysisManifest) TaskRef(jobID string, run models.BuildResult, testInd
 		return AnalysisTaskRef{}, fmt.Errorf("build identity not found for %s/%s", jobID, run.BuildID)
 	}
 	prompt := FailurePrompt(m.ProjectLabel, jobID, build.Prefix, tc)
+	identityPrompt := prompt
+	if build.PromptSeedHash != "" {
+		identityPrompt += "\nartifact-tree-seed:" + build.PromptSeedHash
+	}
 	return AnalysisTaskRef{
-		Name:      AnalysisTaskName(m.ProjectScope, build.BuildScope, m.ContractHash, testIndex, prompt),
+		Name:      AnalysisTaskName(m.ProjectScope, build.BuildScope, m.ContractHash, testIndex, identityPrompt),
 		ToolScope: build.ToolScope,
 		Prompt:    prompt,
 	}, nil

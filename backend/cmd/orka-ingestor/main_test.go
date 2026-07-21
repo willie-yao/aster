@@ -116,7 +116,7 @@ func TestIngestThenFinalizePatterns(t *testing.T) {
 			TestCases: []models.TestCase{tc},
 		}
 		detail.Runs = append(detail.Runs, run)
-		manifest.SetBuild(detail.JobID, buildID, "build-"+buildID, "tool-"+buildID, "logs/job/"+buildID+"/")
+		manifest.SetBuild(detail.JobID, buildID, "build-"+buildID, "tool-"+buildID, "logs/job/"+buildID+"/", "")
 		ref, err := manifest.TaskRef(detail.JobID, run, 0, tc)
 		if err != nil {
 			t.Fatal(err)
@@ -222,7 +222,7 @@ func TestIngestLogsSortedRejectionSummary(t *testing.T) {
 			TestCases: []models.TestCase{tc},
 		}
 		detail.Runs = append(detail.Runs, run)
-		manifest.SetBuild(detail.JobID, buildID, "build-"+buildID, "tool-"+buildID, "logs/job/"+buildID+"/")
+		manifest.SetBuild(detail.JobID, buildID, "build-"+buildID, "tool-"+buildID, "logs/job/"+buildID+"/", "")
 		ref, err := manifest.TaskRef(detail.JobID, run, 0, tc)
 		if err != nil {
 			t.Fatal(err)
@@ -428,7 +428,7 @@ func TestWebhookIndexTargetsOneJobFile(t *testing.T) {
 	}
 	manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "m", "v1", 2)
 	manifest.ValidationKey = testValidationKey
-	manifest.SetBuild("job", "1", "build-1", "tool-1", "logs/job/1/")
+	manifest.SetBuild("job", "1", "build-1", "tool-1", "logs/job/1/", "")
 	s := &webhookServer{dataDir: dir, namespace: "orka-system"}
 	s.rebuildIndex()
 	if len(s.index) != 0 {
@@ -480,7 +480,7 @@ func TestIngestRefreshesMismatchedContractHash(t *testing.T) {
 	}
 	run := models.BuildResult{BuildInfo: models.BuildInfo{BuildID: "1", Result: "FAILURE"}, TestCases: []models.TestCase{tc}}
 	detail := models.JobDetail{Name: "job", JobID: "job", Runs: []models.BuildResult{run}}
-	manifest.SetBuild("job", "1", "build-1", "tool-1", "logs/job/1/")
+	manifest.SetBuild("job", "1", "build-1", "tool-1", "logs/job/1/", "")
 	ref, err := manifest.TaskRef("job", run, 0, tc)
 	if err != nil {
 		t.Fatal(err)
@@ -533,7 +533,7 @@ func TestIngestKeepsMatchingContractHash(t *testing.T) {
 	}
 	run := models.BuildResult{BuildInfo: models.BuildInfo{BuildID: "1", Result: "FAILURE"}, TestCases: []models.TestCase{tc}}
 	detail := models.JobDetail{Name: "job", JobID: "job", Runs: []models.BuildResult{run}}
-	manifest.SetBuild("job", "1", "build-1", "tool-1", "logs/job/1/")
+	manifest.SetBuild("job", "1", "build-1", "tool-1", "logs/job/1/", "")
 
 	dir := t.TempDir()
 	if err := output.WriteJobDetail(dir, detail); err != nil {

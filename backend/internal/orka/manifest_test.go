@@ -11,7 +11,7 @@ func TestAnalysisManifestRoundTripAndTaskIdentity(t *testing.T) {
 	manifest.SkillSetHash = "skills-hash"
 	manifest.ValidationKey = "validation-key"
 	manifest.MinGCSBytes = 123
-	manifest.SetBuild("job", "1", "build-scope", "tool-scope", "logs/job/1/")
+	manifest.SetBuild("job", "1", "build-scope", "tool-scope", "logs/job/1/", "")
 	run := models.BuildResult{BuildInfo: models.BuildInfo{BuildID: "1"}}
 	tc := models.TestCase{Name: "test", JUnitFile: "junit.xml", FailureMessage: "boom"}
 	first, err := manifest.TaskRef("job", run, 0, tc)
@@ -43,5 +43,30 @@ func TestAnalysisManifestRoundTripAndTaskIdentity(t *testing.T) {
 	}
 	if got != first || !loaded.Jobs["job"] || loaded.MinToolCalls != 2 || loaded.MinGCSBytes != 123 || loaded.SkillSetHash != "skills-hash" || loaded.ValidationKey != "validation-key" {
 		t.Fatalf("loaded task ref = %+v, jobs = %+v, min_tool_calls = %d", got, loaded.Jobs, loaded.MinToolCalls)
+	}
+}
+
+func TestAnalysisManifestPromptSeedChangesTaskIdentity(t *testing.T) {
+	run := models.BuildResult{BuildInfo: models.BuildInfo{BuildID: "1"}}
+	tc := models.TestCase{Name: "test", FailureBody: "failure"}
+	first := NewAnalysisManifest("project", "Project", "contract", "models", "model", "v1", 2)
+	first.ValidationKey = "key"
+	first.SetBuild("job", "1", "build-scope", "tool-scope", "logs/job/1/", "tree-a")
+	firstRef, err := first.TaskRef("job", run, 0, tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := NewAnalysisManifest("project", "Project", "contract", "models", "model", "v1", 2)
+	second.ValidationKey = "key"
+	second.SetBuild("job", "1", "build-scope", "tool-scope", "logs/job/1/", "tree-b")
+	secondRef, err := second.TaskRef("job", run, 0, tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstRef.Name == secondRef.Name {
+		t.Fatalf("different artifact seeds produced the same Task %q", firstRef.Name)
+	}
+	if firstRef.Prompt != secondRef.Prompt {
+		t.Fatalf("artifact seed changed the base failure prompt")
 	}
 }

@@ -613,11 +613,22 @@ Cached agentic entries are scoped to a specific build because answers cite
 build-specific paths and line numbers; the same test failing in two different
 builds gets two separate agentic analyses.
 
-On the Orka backend the cache is the Kubernetes object store itself. Each Task
-name fingerprints project, storage, job, build, exact test index, rendered
-prompt, provider/model, timeout/retry, and Tool definitions. Re-applying an
-unchanged Task is a no-op. `-version` remains a manual override for semantic
-changes outside that fingerprint. There is no on-disk response cache file; a
+On the Orka backend the cache is the Kubernetes object store itself. Before a
+Task is created, the producer includes the bounded JUnit failure message and
+failure body and prepends a filtered, byte-capped artifact path tree. This gives
+the first model turn the same exact failure and path evidence as the in-process
+seed. Each artifact listing is capped at 10 seconds, and the producer stops
+optional seed work after a 45-second run-wide budget so storage stalls cannot
+delay Task creation indefinitely. The validated-analysis worker retains a
+compact ledger of successful Tool observations and evidence tokens, and
+proactively compacts old message blocks before the provider rejects an oversized
+request.
+
+Each Task name fingerprints project, storage, job, build, exact test index,
+rendered failure prompt, artifact-tree seed hash, provider/model, timeout/retry,
+and Tool definitions.
+Re-applying an unchanged Task is a no-op. `-version` remains a manual override
+for semantic changes outside that fingerprint. There is no on-disk response cache file; a
 private `orka_analysis.json` manifest carries the producer identity contract to
 the ingestor and is never served or published. Ingested analyses store that
 contract hash, so cached job JSON is refreshed whenever the current contract

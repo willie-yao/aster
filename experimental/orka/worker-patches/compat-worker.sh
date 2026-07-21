@@ -114,15 +114,16 @@ prepare_source() {
 
 test_source() {
   local source=$1
-  [[ -f $source/workers/ai/compatibility_test.go ]] || {
+  [[ -f $source/workers/ai/validated_analysis.go && -f $source/workers/ai/analysis_context.go ]] || {
     echo "compatibility patch is not applied in $source" >&2
     return 1
   }
   (
     cd "$source"
-    test -z "$(gofmt -l workers/ai/main.go workers/ai/compatibility_test.go)"
-    go test ./workers/ai -run 'TestExecuteAgentLoop(RepromptsEmptyFinal|RepromptsUnsupportedTransient|RepromptsAfterFailedTimeline|RepromptsAfterFailedTimelineRetry|RejectsRepeatedEmptyFinal|RejectsRepeatedUnsupportedTransient)|TestTransientWithoutTimeline' -count=1
-    go test -race ./workers/ai -run 'TestExecuteAgentLoop(RepromptsEmptyFinal|RepromptsUnsupportedTransient|RepromptsAfterFailedTimeline|RepromptsAfterFailedTimelineRetry|RejectsRepeatedEmptyFinal|RejectsRepeatedUnsupportedTransient)|TestTransientWithoutTimeline' -count=1
+    test -z "$(gofmt -l workers/ai/*.go)"
+    focused_tests='Test(Analysis|Validated|ToolAlias|CachedToolResult|PrepareAnalysisRequest|RequestApproval|ExplicitApproval|MalformedAliasedApproval|VerifiedTimeline|SkippedApprovedTimeline|ExecuteAgentLoop(FinalizesValidatedAnalysis|RequiresValidation|StopsRepeatedValidationFailure)|OrdinaryTaskFinalization|TimelineToolEnablesLegacyTransientCritique|ValidationPromptCanBeReappliedAfterCompaction)'
+    go test ./workers/ai -run "$focused_tests" -count=1
+    go test -race ./workers/ai -count=1
     go test ./workers/ai -count=1
   )
 }

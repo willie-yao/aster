@@ -99,3 +99,23 @@ func TestFailurePromptIncludesShardAndLocation(t *testing.T) {
 		}
 	}
 }
+
+func TestFailurePromptIncludesBoundedFailureEvidence(t *testing.T) {
+	message := "message-head-" + strings.Repeat("m", failureMessagePromptBytes) + "-message-tail"
+	body := strings.Repeat("b", failureBodyPromptBytes+1000) + "endpoint not found in cache"
+	prompt := FailurePrompt("project", "job", "logs/job/1/", models.TestCase{
+		Name: "test", FailureMessage: message, FailureBody: body,
+	})
+	for _, want := range []string{
+		"Deterministic pre-triage evidence:",
+		"Failure message:", "message-head-", "-message-tail",
+		"Failure body (truncated to last 8KB):", "endpoint not found in cache",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("prompt missing %q", want)
+		}
+	}
+	if len(prompt) > failureMessagePromptBytes+failureBodyPromptBytes+2000 {
+		t.Fatalf("failure evidence was not bounded: %d bytes", len(prompt))
+	}
+}
