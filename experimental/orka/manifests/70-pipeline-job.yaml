@@ -89,7 +89,7 @@ spec:
                 - -apply
                 - -namespace=orka-system
                 - -provider=copilot
-                - -model=claude-sonnet-4.5
+                - -model=claude-sonnet-4.6
                 - -api-mode=auto
                 - -version=v1
                 # Enable event-driven ingestion (apply 71-ingestor-webhook.yaml first):
@@ -110,7 +110,7 @@ spec:
                 - -poll=20s
                 - -version=v1
                 - -provider=copilot
-                - -model=claude-sonnet-4.5
+                - -model=claude-sonnet-4.6
                 - -namespace=orka-system
                 - -pattern-wait=25m
                 - -pattern-timeout=10m

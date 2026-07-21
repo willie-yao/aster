@@ -132,8 +132,9 @@ kubectl apply -f experimental/orka/manifests/12-kimi-provider.yaml
 ### GitHub Copilot
 
 Copilot's non-streaming endpoint returns null tool calls for Claude, so it needs
-the de-streaming proxy. Create the Secret from a `copilot_chat` PAT, deploy the
-proxy, then the Provider:
+the de-streaming proxy. The proxy also normalizes bare `/responses` errors so a
+model reported as `model_not_supported` can fall back to Chat Completions. Create
+the Secret from a `copilot_chat` PAT, deploy the proxy, then the Provider:
 
 ```bash
 kubectl create secret generic copilot-secret -n orka-system \
@@ -155,10 +156,17 @@ experimental/orka/orka-ops.sh --namespace orka-system preflight \
 
 # Exercise the complete controller, worker, and Provider path. The Task is
 # deleted after a successful result unless --keep is passed.
+# A current Claude model exercises Copilot's Chat Completions fallback.
 experimental/orka/orka-ops.sh --namespace orka-system smoke \
   --provider copilot \
-  --model claude-sonnet-4.5 \
+  --model claude-sonnet-4.6 \
   --expect-api chat_completions
+
+# If your plan exposes a Responses-capable model, verify that path separately.
+experimental/orka/orka-ops.sh --namespace orka-system smoke \
+  --provider copilot \
+  --model gpt-5.4-mini \
+  --expect-api responses
 ```
 
 For a non-Copilot Provider, substitute its name and model. Use
@@ -216,7 +224,7 @@ dashboard:
 helm install dash deploy/helm/prow-ai-dashboard \
   --namespace dashboards --create-namespace \
   --set mode=cron --set analysis=orka \
-  --set orka.provider=copilot --set orka.model=claude-sonnet-4.5 \
+  --set orka.provider=copilot --set orka.model=claude-sonnet-4.6 \
   --set orka.apiMode=chat_completions \
   --set-file project.config=<consumer>/project.yaml \
   --set-file project.systemPrompt=<consumer>/prompts/system.md
@@ -438,7 +446,7 @@ The equivalent Orka knobs are producer flags, surfaced as Helm `orka.*` values:
 
 | Knob | Helm value | Producer flag | Default |
 |---|---|---|---|
-| model | `orka.model` | `-model` | `claude-sonnet-4.5` |
+| model | `orka.model` | `-model` | `claude-sonnet-4.6` |
 | provider | `orka.provider` | `-provider` | `copilot` |
 | expected API | `orka.apiMode` | `-api-mode` | `auto` |
 | per-Task timeout | `orka.taskTimeout` | `-timeout` | `10m` |

@@ -15,14 +15,16 @@
 //     returns a single normal non-streaming ChatCompletion the worker can parse.
 //
 // The bearer is passed through from Orka (from the Provider secretRef); the proxy
-// holds no secret of its own. Requests without tools, and any non-chat path
-// (e.g. the /responses probe), are proxied through unchanged.
+// holds no secret of its own. Requests without tools and non-chat paths are
+// passed through; bare Copilot JSON errors are wrapped in the OpenAI error
+// envelope so Orka can apply per-model API fallback.
 package main
 
 import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -30,6 +32,7 @@ import (
 	"net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -61,6 +64,9 @@ func main() {
 			req.Header.Set("Copilot-Integration-Id", integrationID)
 		},
 		ModifyResponse: func(resp *http.Response) error {
+			if err := normalizeCopilotErrorResponse(resp); err != nil {
+				return err
+			}
 			log.Printf("↗ %s -> %d", resp.Request.URL.Path, resp.StatusCode)
 			return nil
 		},
@@ -89,6 +95,49 @@ func main() {
 	log.Printf("orka-copilot-proxy on %s -> %s (integration-id=%s)", addr, upstream, integrationID)
 	server := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 120 * time.Second}
 	log.Fatal(server.ListenAndServe())
+}
+
+const maxCopilotErrorBytes = 1 << 20
+
+// normalizeCopilotErrorResponse wraps Copilot's bare JSON errors in the
+// OpenAI error envelope so provider fallback logic can read the error code.
+func normalizeCopilotErrorResponse(resp *http.Response) error {
+	if resp.StatusCode < http.StatusBadRequest || resp.Body == nil {
+		return nil
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxCopilotErrorBytes+1))
+	_ = resp.Body.Close()
+	if err != nil {
+		return err
+	}
+	if len(raw) > maxCopilotErrorBytes {
+		return fmt.Errorf("copilot error response exceeds %d bytes", maxCopilotErrorBytes)
+	}
+	var payload map[string]any
+	if json.Unmarshal(raw, &payload) != nil {
+		replaceResponseBody(resp, raw)
+		return nil
+	}
+	if _, wrapped := payload["error"]; wrapped {
+		replaceResponseBody(resp, raw)
+		return nil
+	}
+	if payload["code"] == nil && payload["message"] == nil {
+		replaceResponseBody(resp, raw)
+		return nil
+	}
+	wrapped, err := json.Marshal(map[string]any{"error": payload})
+	if err != nil {
+		return err
+	}
+	replaceResponseBody(resp, wrapped)
+	return nil
+}
+
+func replaceResponseBody(resp *http.Response, body []byte) {
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	resp.ContentLength = int64(len(body))
+	resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
 }
 
 func normalizePath(p string) string {

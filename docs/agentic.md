@@ -233,7 +233,7 @@ default floors, and the provider is shared and rate-limited, so leave
 ```yaml
 ai:
   endpoint: "https://api.githubcopilot.com/chat/completions"
-  model: "claude-sonnet-4.5"
+  model: "claude-sonnet-4.6"
   tools: [filesystem, k8s]
   # everything else defaults: min_tool_calls 2, concurrency 1,
   # single_tool_call off.

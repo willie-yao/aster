@@ -40,7 +40,7 @@ orka:
   namespace: orka-system
     # Provider CRD name and the model the Tasks request.
   provider: copilot
-  model: claude-sonnet-4.5
+  model: claude-sonnet-4.6
   # Expected API selected by the compatibility worker. auto accepts either; an
   # explicit mode is included in Task identity and enforced during ingestion.
   apiMode: auto

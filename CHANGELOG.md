@@ -24,9 +24,10 @@ for how to pin a release.
 
 - **Orka Responses API observability.** The pinned compatibility worker now uses
   the Responses API when supported, sends `store: false`, and records API mode
-  plus response ID in Task events, logs, and OpenTelemetry. `orka.apiMode` makes
-  the expected protocol part of Task identity and fails ingestion or smoke
-  validation when the worker negotiates a different API.
+  plus response ID in Task events, logs, and OpenTelemetry. The Copilot proxy
+  normalizes per-model Responses errors so Chat-only models can fall back safely.
+  `orka.apiMode` makes the expected protocol part of Task identity and fails
+  ingestion or smoke validation when the worker negotiates a different API.
 - **Pinned Orka compatibility worker.** A dedicated workflow now checks out a
   fixed Orka commit, verifies and applies the dashboard worker patch, runs
   focused normal and race tests plus the full worker package, builds the worker

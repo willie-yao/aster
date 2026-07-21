@@ -95,7 +95,7 @@ for anyone reading the repo:
 ```yaml
 ai:
   endpoint: "https://api.githubcopilot.com/chat/completions"
-  model: "claude-sonnet-4.5"
+  model: "claude-sonnet-4.6"
 ```
 
 Copilot is metered, not free: it requires a subscription, and a full cold

@@ -44,7 +44,7 @@ spec:
             - -api=http://orka.orka-system.svc:8080
             - -token-file=/var/run/secrets/kubernetes.io/serviceaccount/token
             - -version=v1
-            - -model=claude-sonnet-4.5
+            - -model=claude-sonnet-4.6
           ports:
             - containerPort: 8080
           readinessProbe:

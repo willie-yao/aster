@@ -26,6 +26,7 @@ spec:
   secretRef:
     name: copilot-secret
     key: api-key
-  # A model your Copilot plan exposes. The live CAPZ dashboard uses
-  # claude-sonnet-4.5; gpt-5-family ids also work depending on your plan.
-  defaultModel: claude-sonnet-4.5
+  # A model your Copilot plan exposes. Model availability changes over time;
+  # claude-sonnet-4.6 exercises Chat Completions fallback, while supported GPT
+  # models can exercise Responses depending on your plan.
+  defaultModel: claude-sonnet-4.6

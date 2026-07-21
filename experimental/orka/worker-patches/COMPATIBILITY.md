@@ -12,7 +12,7 @@ commit. Moving tags are not published.
 | Orka commit | `1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254` |
 | Orka Go version | `1.26.2` |
 | Patch | `ai-worker-convergence.patch` |
-| Patch SHA-256 | `7847f028d25d4a11c3e9f07548569de8771e43ada401187f689b0edee6b4bdf3` |
+| Patch SHA-256 | `1f9e75a8c6faaa6918723e79c757fd681c944bb050663eab39cf2e67fae2c5dc` |
 | Worker Dockerfile | `workers/ai/Dockerfile` from the pinned Orka commit |
 | Published platform | `linux/amd64` |
 | Workflow | `.github/workflows/orka-compat-image.yml` |

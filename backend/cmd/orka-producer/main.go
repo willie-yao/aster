@@ -142,7 +142,7 @@ func main() {
 	toolsOut := flag.String("tools-out", "build-tools", "output dir for generated per-build Tool YAMLs")
 	namespace := flag.String("namespace", "orka-system", "namespace for the Tasks and Tools")
 	provider := flag.String("provider", "copilot", "Orka Provider name")
-	model := flag.String("model", "claude-sonnet-4.5", "model id")
+	model := flag.String("model", "claude-sonnet-4.6", "model id")
 	apiModeFlag := flag.String("api-mode", orka.APIModeAuto, "expected provider API: auto, responses, or chat_completions")
 	version := flag.String("version", "v1", "manual cache-bust version included in the automatic analysis fingerprint")
 	timeout := flag.String("timeout", "10m", "per-Task timeout")

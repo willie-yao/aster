@@ -30,7 +30,8 @@ The patch keeps dashboard analysis policy inside the dashboard-owned worker:
 - proactively compacts old Tool-call/result blocks before provider rejection,
   then restores the evidence ledger and finalization prompt;
 - uses the Responses API when the Provider supports it and retains Chat
-  Completions fallback for compatible endpoints;
+  Completions fallback for compatible endpoints, including Copilot models that
+  reject `/responses` with `model_not_supported`;
 - sends `store: false` on Responses requests;
 - records the negotiated API mode and response ID in completion events, worker
   logs, and OpenTelemetry spans.

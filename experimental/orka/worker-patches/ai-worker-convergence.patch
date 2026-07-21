@@ -1,5 +1,5 @@
 diff --git a/internal/llm/openai/provider.go b/internal/llm/openai/provider.go
-index fbed0c07d10d3fd3173ce895afcaaa5ee91e9eff..afa2834fedb6519dd59a23c6f57c51b19ed96298 100644
+index fbed0c07d10d3fd3173ce895afcaaa5ee91e9eff..758502c75c5d8408178c4a3e4e8f89e197311182 100644
 --- a/internal/llm/openai/provider.go
 +++ b/internal/llm/openai/provider.go
 @@ -35,9 +35,11 @@ const (
@@ -17,7 +17,24 @@ index fbed0c07d10d3fd3173ce895afcaaa5ee91e9eff..afa2834fedb6519dd59a23c6f57c51b1
  )
  
  func init() {
-@@ -371,6 +373,7 @@ func (p *Provider) completeResponses(ctx context.Context, req *llm.CompletionReq
+@@ -125,7 +127,7 @@ func isUnsupportedAPIError(err error) bool {
+ 				return true
+ 			}
+ 		}
+-		if isUnsupportedAPIMessage(apiErr.Code) {
++		if isUnsupportedAPIMessage(apiErr.Code) || isUnsupportedAPIMessage(apiErr.Message) || isUnsupportedAPIMessage(apiErr.Error()) {
+ 			return true
+ 		}
+ 		if apiErr.StatusCode != 0 {
+@@ -238,6 +240,7 @@ func hasUnsupportedAPICode(msg string) bool {
+ 	return strings.Contains(msg, "unsupported_api") ||
+ 		strings.Contains(msg, "invalid_url") ||
+ 		strings.Contains(msg, "unsupported_api_for_model") ||
++		strings.Contains(msg, "model_not_supported") ||
+ 		strings.Contains(msg, "does not support /responses") ||
+ 		strings.Contains(msg, "does not support responses") ||
+ 		strings.Contains(msg, "responses api is not supported") ||
+@@ -371,6 +374,7 @@ func (p *Provider) completeResponses(ctx context.Context, req *llm.CompletionReq
  		InputTokens:  int(resp.Usage.InputTokens),
  		OutputTokens: int(resp.Usage.OutputTokens),
  		Model:        resp.Model,
@@ -25,7 +42,7 @@ index fbed0c07d10d3fd3173ce895afcaaa5ee91e9eff..afa2834fedb6519dd59a23c6f57c51b1
  	}
  	for _, item := range resp.Output {
  		if item.Type == eventTypeFunctionCall {
-@@ -408,6 +411,7 @@ func buildResponsesParams(req *llm.CompletionRequest) responses.ResponseNewParam
+@@ -408,6 +412,7 @@ func buildResponsesParams(req *llm.CompletionRequest) responses.ResponseNewParam
  		Input: responses.ResponseNewParamsInputUnion{
  			OfInputItemList: convertInputItems(req.Messages),
  		},
@@ -33,7 +50,7 @@ index fbed0c07d10d3fd3173ce895afcaaa5ee91e9eff..afa2834fedb6519dd59a23c6f57c51b1
  	}
  	if req.SystemPrompt != "" {
  		params.Instructions = openai.String(req.SystemPrompt)
-@@ -849,7 +853,10 @@ func (p *Provider) completeChatCompletions(ctx context.Context, req *llm.Complet
+@@ -849,7 +854,10 @@ func (p *Provider) completeChatCompletions(ctx context.Context, req *llm.Complet
  		return nil, toProviderError(err)
  	}
  
@@ -46,7 +63,7 @@ index fbed0c07d10d3fd3173ce895afcaaa5ee91e9eff..afa2834fedb6519dd59a23c6f57c51b1
  	result.OutputTokens = int(resp.Usage.CompletionTokens)
  	if len(resp.Choices) > 0 {
 diff --git a/internal/llm/openai/provider_test.go b/internal/llm/openai/provider_test.go
-index a15f2e78cc2ee97e169ccca2bf240f95911c5b68..c67840e0751b6a85fae9f659878d595b99c37a45 100644
+index a15f2e78cc2ee97e169ccca2bf240f95911c5b68..ed62a14f2060116ef5074d11e7bf2c7b1227db28 100644
 --- a/internal/llm/openai/provider_test.go
 +++ b/internal/llm/openai/provider_test.go
 @@ -502,6 +502,9 @@ func TestComplete_ChatCompletions_Success(t *testing.T) {
@@ -59,7 +76,54 @@ index a15f2e78cc2ee97e169ccca2bf240f95911c5b68..c67840e0751b6a85fae9f659878d595b
  }
  
  func TestComplete_ChatCompletions_ServerError(t *testing.T) {
-@@ -1045,6 +1048,9 @@ func TestComplete_ResponsesAPI_Success(t *testing.T) {
+@@ -637,6 +640,46 @@ func TestComplete_AutoDetect_FallbackToChatCompletions(t *testing.T) {
+ 	}
+ }
+ 
++func TestComplete_AutoDetect_FallbackToChatCompletions_OnModelNotSupported(t *testing.T) {
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		w.Header().Set("Content-Type", "application/json")
++		if r.URL.Path == testResponsesPath {
++			w.WriteHeader(http.StatusBadRequest)
++			fmt.Fprint(w, `{"error":{"message":"The requested model is not supported.","code":"model_not_supported","param":"model","type":"invalid_request_error"}}`) //nolint:errcheck
++			return
++		}
++		fmt.Fprintf(w, `{
++			"id": "chatcmpl-model-fallback",
++			"object": "chat.completion",
++			"model": "claude-sonnet",
++			"choices": [{
++				"index": 0,
++				"message": {"role": "assistant", "content": %q},
++				"finish_reason": "stop"
++			}],
++			"usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}
++		}`, testFallbackWorks) //nolint:errcheck
++	}))
++	defer server.Close()
++
++	provider, err := NewProvider(llm.ProviderConfig{APIKey: "test-key", BaseURL: server.URL})
++	if err != nil {
++		t.Fatalf("NewProvider() error = %v", err)
++	}
++	resp, err := provider.Complete(context.Background(), &llm.CompletionRequest{
++		Model: "claude-sonnet", Messages: []llm.Message{{Role: "user", Content: "hi"}},
++	})
++	if err != nil {
++		t.Fatalf("Complete() error = %v", err)
++	}
++	if resp.Content != testFallbackWorks || resp.APIMode != apiModeNameChatCompletions {
++		t.Fatalf("response = %+v, want Chat Completions fallback", resp)
++	}
++	if apiMode(provider.mode.Load()) != apiModeChatCompletions {
++		t.Fatal("expected Chat Completions mode after model_not_supported fallback")
++	}
++}
++
+ func TestComplete_AutoDetect_FallbackToChatCompletions_OnUnsupported403(t *testing.T) {
+ 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+ 		w.Header().Set("Content-Type", "application/json")
+@@ -1045,6 +1088,9 @@ func TestComplete_ResponsesAPI_Success(t *testing.T) {
  	if resp.OutputTokens != 5 {
  		t.Errorf("expected 5 output tokens, got %d", resp.OutputTokens)
  	}
@@ -69,7 +133,7 @@ index a15f2e78cc2ee97e169ccca2bf240f95911c5b68..c67840e0751b6a85fae9f659878d595b
  }
  
  func TestComplete_ResponsesAPI_WithToolCalls(t *testing.T) {
-@@ -1143,6 +1149,9 @@ func TestComplete_ResponsesAPI_WithAllOptions(t *testing.T) {
+@@ -1143,6 +1189,9 @@ func TestComplete_ResponsesAPI_WithAllOptions(t *testing.T) {
  	if receivedBody["tools"] == nil {
  		t.Error("expected tools to be set")
  	}

@@ -47,7 +47,7 @@ func main() {
 	tokenFile := flag.String("token-file", "", "file holding the bearer token")
 	version := flag.String("version", "v1", "manual cache-bust version (must match the producer manifest)")
 	provider := flag.String("provider", "copilot", "Orka Provider name for job-level pattern analysis")
-	model := flag.String("model", "claude-sonnet-4.5", "model label recorded on each analysis")
+	model := flag.String("model", "claude-sonnet-4.6", "model label recorded on each analysis")
 	wait := flag.Duration("wait", 0, "keep polling until every failing test is patched or this deadline elapses (0 = single pass)")
 	poll := flag.Duration("poll", 15*time.Second, "interval between passes when -wait is set")
 	patternWait := flag.Duration("pattern-wait", 25*time.Minute, "total deadline for job-level pattern analysis (0 disables it)")
