@@ -626,3 +626,36 @@ func TestInitialEvidenceHeaderRejectsOversizedValue(t *testing.T) {
 		t.Fatalf("oversized header error = %v", err)
 	}
 }
+
+func TestPlanCandidateOrderIsDeterministic(t *testing.T) {
+	set, err := ParseContract([]byte(`{
+		"skills":[{
+			"id":"logs",
+			"triggers":["timeout"],
+			"required_evidence":[{"id":"machine","any_of":["machine/.*\\.log$"]}]
+		}]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	signal := "timeout on worker-special"
+	forward := []string{
+		"artifacts/machine/unrelated.log",
+		"artifacts/machine/worker-special.log",
+		"artifacts/machine/another-worker-special.log",
+	}
+	reversed := []string{forward[2], forward[1], forward[0]}
+	first := set.Plan(signal, forward, 3)[0].RequiredEvidence[0].CandidatePaths
+	second := set.Plan(signal, reversed, 3)[0].RequiredEvidence[0].CandidatePaths
+	if strings.Join(first, "\n") != strings.Join(second, "\n") {
+		t.Fatalf("candidate order depends on tree order:\nforward=%v\nreversed=%v", first, second)
+	}
+	want := []string{
+		"artifacts/machine/another-worker-special.log",
+		"artifacts/machine/worker-special.log",
+		"artifacts/machine/unrelated.log",
+	}
+	if strings.Join(first, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("candidate order = %v, want %v", first, want)
+	}
+}

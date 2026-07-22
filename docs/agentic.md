@@ -302,7 +302,7 @@ loop.
 
 ```mermaid
 flowchart TD
-    A[Test failure] --> B["Seed prompt:<br/>system + project knowledge<br/>+ artifact-tree listing + failing test"]
+    A[Test failure] --> B["Seed prompt:<br/>system + project knowledge<br/>+ ranked evidence plan<br/>+ artifact-tree listing + failing test"]
     B --> C["Call model<br/>(chat/completions)"]
     C --> D{"Did the model<br/>call tools?"}
     D -->|"Yes: more evidence wanted"| E["Engine executes against GCS:<br/>list / read / tail / grep"]
@@ -349,10 +349,11 @@ tool-result bodies to a short stub (head + a "re-call the tool if you need
 this" note). This keeps a long, critique-heavy investigation from
 overflowing the window mid-loop and failing with an empty analysis.
 
-### Artifact-tree seeding (always on)
+### Artifact-tree seeding and evidence planning (always on)
 
-The engine always fetches the build's full artifact path list (one recursive
-GCS listing) and prepends it to the analysis prompt, so the model starts with
+The engine fetches one bounded artifact-tree snapshot per uncached failure. It
+uses that same snapshot for the ranked evidence plan, the prompt's path seed,
+and complete-tree absence checks. The path seed lets the model start with
 the **exact** paths to pass to `read_artifact` / `tail_artifact` /
 `grep_artifact` instead of guessing leaf filenames. On weaker models,
 guessed-and-wrong paths are a leading cause of failed deep reads: the model
@@ -360,19 +361,25 @@ navigates to the right directory but invents a filename that does not exist, so
 it never reaches the controller/machine log holding the upstream cause. Seeding
 the real tree removes the guessing. It is not configurable.
 
-The listing is bounded two ways so it can't overflow the model's context
-window on the first request: a path-count cap (currently 500 paths) **and** a
-byte cap sized to a fraction (~15%) of the detected context budget, or a
-conservative static fallback (~48 KB) when the endpoint doesn't report a window
-(e.g. GitHub Copilot). Whichever binds first truncates the list, with a note
+The shared snapshot is bounded at 5,000 paths. The model-visible seed is bounded
+again by a path-count cap (currently 500 paths) **and** a byte cap sized to a
+fraction (~15%) of the detected context budget, or a conservative static
+fallback (~48 KB) when the endpoint doesn't report a window (e.g. GitHub
+Copilot). Whichever seed limit binds first truncates the visible list, with a note
 pointing the model at `list_artifacts` for the rest. Before capping, the engine
-over-fetches and drops non-text noise (images and archives such as `.png`,
+filters out non-text noise (images and archives such as `.png`,
 `.svg`, `.gz`, `.tar`, `.zip`) the model cannot usefully read, leaving more of
 the budget for diagnostic logs. The seed header also tells the model to read
 from the list directly and **not** spend tool calls on `list_artifacts` /
-`find_artifacts` rediscovering paths it already has. Degrades to a no-op if the
-listing is empty or fails (the loop proceeds with its normal prompt). One extra
-listing per uncached failure; no cache-version interaction.
+`find_artifacts` rediscovering paths it already has. The path seed degrades to a
+no-op if the listing is empty or fails, while the loop proceeds with normal tools.
+
+Before iteration one, the engine also matches the bounded failure signal against
+the merged skill set and calls `skills.Set.Plan` with the same snapshot. The
+result is prepended as a bounded checklist in recipe, evidence-group, and ranked
+candidate order. Groups without candidates remain visible as unresolved. A
+truncated or failed snapshot marks the plan incomplete and never prevents the
+model from using normal artifact tools.
 
 The per-failure task prompt is bounded for the same reason: the failing test's
 junit **failure message** is clamped (head + tail, ~16 KB) before it is
@@ -495,6 +502,14 @@ evidence appends a per-recipe feedback block and dynamically extends the retry
 budget. Procedures are diagnostic guidance only. They cannot override the
 system prompt, Tool constraints, result schema, or tool budget.
 
+For a missing group present in the initial plan, deterministic repair reads the
+highest-ranked usable candidate. It reads at most one artifact per group,
+de-duplicates paths across groups, and counts only non-empty successful reads.
+A group absent from the initial plan, or one without a usable candidate, falls
+back to one bounded artifact-tree walk. These are direct engine reads added to
+critique feedback, not synthetic model Tool calls. Strong-model drafts that
+already read the planned evidence do not trigger repair reads.
+
 Prow knowledge is engine-owned because every analyzed run follows the Prow
 artifact contract. Kubernetes knowledge is conditional because filesystem-only
 consumers may not have cluster dumps. Provider and project behavior remains in
@@ -513,10 +528,9 @@ to that build: the agent cannot read evidence the run never produced. When a
 matched recipe has a missing evidence group, the engine does one bounded
 recursive listing of the build tree and drops any group whose `any_of`
 patterns match no path in it. Only groups whose evidence **exists but was not
-read** remain a genuine miss. The listing is cached per analysis and only
-fetched when a skill miss actually occurs; a truncated listing disables the
-check (the engine cannot prove a path is absent), preserving the stricter
-behavior.
+read** remain a genuine miss. This check reuses the initial bounded tree
+snapshot. A truncated or failed snapshot disables the check because the engine
+cannot prove a path is absent, preserving the stricter behavior.
 
 See [`docs/skills.md`](skills.md) for the full schema, authoring guidance, and
 observability notes.

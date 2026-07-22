@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/evidenceplan"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
@@ -82,6 +84,10 @@ type AgenticOptions struct {
 // artifactTreeMaxPaths caps how many artifact paths the seed lists, bounding
 // the prompt size on builds with very large artifact trees.
 const artifactTreeMaxPaths = 500
+
+// initialArtifactTreeMaxPaths bounds the one recursive listing shared by the
+// initial prompt seed, evidence plan, and complete-tree absence checks.
+const initialArtifactTreeMaxPaths = 5000
 
 // Bound the artifact-tree seed by bytes, not just path count: a few hundred
 // deeply-nested paths can still overflow the window on iter 1. Budget is this
@@ -314,6 +320,11 @@ type agentState struct {
 	// stamp the hash without re-threading it.
 	skillSet *skills.Set
 
+	// initialEvidencePlan is matched against the bounded failure signal before
+	// iteration one. Critique repair uses its ranked paths before falling back to
+	// a tree walk when the final diagnosis needs a different or unresolved group.
+	initialEvidencePlan []skills.PlannedSkill
+
 	// consecutiveFailures is how many consecutive builds this test has failed.
 	// Passed to the critique gate to contradict an is_transient=true verdict on
 	// a persistent failure.
@@ -332,41 +343,37 @@ type agentState struct {
 	judgeObjected bool
 	judgeRevised  bool
 
-	// artifactTreeSetCache is the normalized set of every artifact path
-	// in the build, fetched lazily the first time a skill-evidence miss
-	// needs to know whether the required evidence even exists in this
-	// build. Drops recipe requirements that are unsatisfiable
-	// because the evidence is absent and the recipe is inapplicable, so an
-	// otherwise-grounded draft is not blocked from caching forever.
-	// nil after artifactTreeChecked means no usable tree from fetch error or
-	// truncated listing, so the absence check is skipped.
+	// initialArtifactTree is the single bounded listing shared by the seed and
+	// ranked plan. A complete snapshot also supports absence pruning without a
+	// second full tree walk.
+	initialArtifactTree artifactTreeSnapshot
+
+	// artifactTreeSetCache is the normalized form of a complete initial tree.
+	// nil after artifactTreeChecked means the listing failed or was truncated,
+	// so the absence check is skipped.
 	artifactTreeSetCache map[string]bool
 	artifactTreeChecked  bool
 }
 
-// skillAbsenceTreeCap bounds the recursive listing that decides whether a
-// skill's required evidence exists anywhere in the build. Set well above a
-// typical build's artifact count so the listing is not truncated; a truncated
-// listing disables the absence check because absence cannot be proven.
-const skillAbsenceTreeCap = 5000
+type artifactTreeSnapshot struct {
+	paths     []string
+	truncated bool
+	failed    bool
+}
 
-// artifactTreeSet returns the normalized set of every artifact path in the
-// build, fetched once and cached. Returns nil when the tree cannot be listed
-// or was truncated, so callers conservatively skip the absence optimization.
-func (s *agentState) artifactTreeSet(ctx context.Context) map[string]bool {
+// artifactTreeSet returns the normalized complete initial tree. Returns nil
+// when the listing failed or was truncated, so absence is never inferred from
+// incomplete data.
+func (s *agentState) artifactTreeSet() map[string]bool {
 	if s.artifactTreeChecked {
 		return s.artifactTreeSetCache
 	}
 	s.artifactTreeChecked = true
-	if s.browser == nil {
+	if s.initialArtifactTree.failed || s.initialArtifactTree.truncated {
 		return nil
 	}
-	paths, truncated, err := s.browser.ListTree(ctx, skillAbsenceTreeCap)
-	if err != nil || truncated {
-		return nil
-	}
-	set := make(map[string]bool, len(paths))
-	for _, p := range paths {
+	set := make(map[string]bool, len(s.initialArtifactTree.paths))
+	for _, p := range s.initialArtifactTree.paths {
 		if norm := NormalizeArtifactCitation(p); norm != "" {
 			set[norm] = true
 		}
@@ -437,6 +444,10 @@ type AgenticInputs struct {
 	// used by the critique gate to contradict an is_transient=true verdict on a
 	// persistent failure. 1 (or 0) means not persistent.
 	ConsecutiveFailures int
+
+	// FailureSignal is bounded test-failure evidence used only for initial skill
+	// matching. It excludes module and backend instructions.
+	FailureSignal string
 }
 
 const (
@@ -671,12 +682,19 @@ func (c *Client) doAnalyzeAgentic(
 	state.readArtifactsBase = map[string]bool{}
 
 	fullSysPrompt := sysPrompt + agToolDocs
-	// Always seed the build's artifact path list into the prompt so the
-	// model reads exact paths instead of guessing leaf filenames, the dominant
-	// cause of failed deep reads. Deterministic, capped, and a no-op when the
-	// listing is empty or fails.
-	if seed := c.buildArtifactTreeSeed(ctx, in.Browser, artifactTreeSeedBytes(in.Opts)); seed != "" {
-		userPrompt = seed + "\n\n---\n\n" + userPrompt
+	state.initialArtifactTree = listInitialArtifactTree(ctx, in.Browser)
+	if seed := buildArtifactTreeSeed(state.initialArtifactTree.paths, state.initialArtifactTree.truncated, artifactTreeSeedBytes(in.Opts)); seed != "" {
+		userPrompt = prependPrompt(userPrompt, seed)
+	}
+	if in.Skills != nil && strings.TrimSpace(in.FailureSignal) != "" {
+		state.initialEvidencePlan = in.Skills.Plan(in.FailureSignal, state.initialArtifactTree.paths, evidenceplan.CandidatePathLimit)
+		plan, _ := evidenceplan.Render(state.initialEvidencePlan, evidenceplan.ScanStatus{
+			Truncated: state.initialArtifactTree.truncated,
+			Failed:    state.initialArtifactTree.failed,
+		}, evidenceplan.InProcess)
+		if plan != "" {
+			userPrompt = prependPrompt(userPrompt, plan)
+		}
 	}
 	messages := []modelMessage{
 		{Role: "system", Content: strPtr(fullSysPrompt)},
@@ -797,7 +815,7 @@ func (c *Client) doAnalyzeAgentic(
 				matchedSkills := matchSkillsForDraft(state, parsed)
 				out := critiqueDraft(parsed, state.readArtifactsFull, state.readArtifactsBase, matchedSkills, state.consecutiveFailures)
 				if len(out.MissingSkillEvidence) > 0 {
-					if treeSet := state.artifactTreeSet(loopCtx); treeSet != nil {
+					if treeSet := state.artifactTreeSet(); treeSet != nil {
 						if n := pruneAbsentSkillEvidence(parsed, &out, treeSet); n > 0 {
 							log.Printf("  ⓘ skill-evidence: %d required group(s) absent from this build's artifacts; not held against the draft", n)
 						}
@@ -956,7 +974,7 @@ func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, m
 	}
 	out := critiqueDraft(parsed, state.readArtifactsFull, state.readArtifactsBase, matchSkillsForDraft(state, parsed), state.consecutiveFailures)
 	if len(out.MissingSkillEvidence) > 0 {
-		if treeSet := state.artifactTreeSet(ctx); treeSet != nil {
+		if treeSet := state.artifactTreeSet(); treeSet != nil {
 			pruneAbsentSkillEvidence(parsed, &out, treeSet)
 		}
 	}
@@ -994,7 +1012,7 @@ func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, m
 	}
 	out = critiqueDraft(next, state.readArtifactsFull, state.readArtifactsBase, matchSkillsForDraft(state, next), state.consecutiveFailures)
 	if len(out.MissingSkillEvidence) > 0 {
-		if treeSet := state.artifactTreeSet(ctx); treeSet != nil {
+		if treeSet := state.artifactTreeSet(); treeSet != nil {
 			pruneAbsentSkillEvidence(next, &out, treeSet)
 		}
 	}
@@ -1008,31 +1026,30 @@ func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, m
 	return next
 }
 
-// buildArtifactTreeSeed returns a prompt addendum listing the build's
-// artifact path tree, capped, so the model reads exact paths instead of
-// guessing leaf filenames. Over-fetches, drops non-text noise, then caps to
-// artifactTreeMaxPaths and maxBytes. Tells the model to read from the list
-// directly rather than rediscover paths with list_artifacts or find_artifacts.
-// Uses one recursive listing and degrades to "" if the listing is empty or
-// fails.
-func (c *Client) buildArtifactTreeSeed(ctx context.Context, browser artifacts.Browser, maxBytes int) string {
+// listInitialArtifactTree fetches the one bounded tree snapshot shared by the
+// initial seed, ranked evidence plan, and complete-tree absence checks.
+func listInitialArtifactTree(ctx context.Context, browser artifacts.Browser) artifactTreeSnapshot {
 	if browser == nil {
-		return ""
+		return artifactTreeSnapshot{failed: true}
 	}
-	// Over-fetch so the noise filter below can reclaim budget for real logs.
-	raw, rawTruncated, err := browser.ListTree(ctx, artifactTreeMaxPaths*2)
-	if err != nil || len(raw) == 0 {
-		if err != nil {
-			log.Printf("  ⓘ artifact-tree seed skipped: %v", err)
-		}
-		return ""
+	paths, truncated, err := browser.ListTree(ctx, initialArtifactTreeMaxPaths)
+	if err != nil {
+		log.Printf("  ⓘ artifact-tree seed and evidence plan skipped: %v", err)
+		return artifactTreeSnapshot{failed: true}
 	}
+	return artifactTreeSnapshot{paths: paths, truncated: truncated}
+}
+
+// buildArtifactTreeSeed returns a prompt addendum listing the build's artifact
+// paths from a prior tree snapshot. It drops non-text noise, then caps the seed
+// by path count and bytes.
+func buildArtifactTreeSeed(raw []string, rawTruncated bool, maxBytes int) string {
 	paths := make([]string, 0, len(raw))
-	for _, p := range raw {
-		if artifactTreeNoiseExt[strings.ToLower(path.Ext(p))] {
+	for _, artifactPath := range raw {
+		if artifactTreeNoiseExt[strings.ToLower(path.Ext(artifactPath))] {
 			continue
 		}
-		paths = append(paths, p)
+		paths = append(paths, artifactPath)
 	}
 	if len(paths) == 0 {
 		return ""
@@ -1043,16 +1060,14 @@ func (c *Client) buildArtifactTreeSeed(ctx context.Context, browser artifacts.Br
 		paths = paths[:artifactTreeMaxPaths]
 		truncated = true
 	}
-	// Append paths until the path cap or byte budget binds. maxBytes covers the
-	// path lines; the header and note add a few hundred bytes.
 	var lines strings.Builder
 	kept := 0
-	for _, p := range paths {
-		if maxBytes > 0 && lines.Len()+len(p)+1 > maxBytes {
+	for _, artifactPath := range paths {
+		if maxBytes > 0 && lines.Len()+len(artifactPath)+1 > maxBytes {
 			truncated = true
 			break
 		}
-		lines.WriteString(p)
+		lines.WriteString(artifactPath)
 		lines.WriteByte('\n')
 		kept++
 	}
@@ -1069,28 +1084,48 @@ func (c *Client) buildArtifactTreeSeed(ctx context.Context, browser artifacts.Br
 	return b.String()
 }
 
+func prependPrompt(prompt, section string) string {
+	section = strings.TrimSpace(section)
+	if section == "" {
+		return prompt
+	}
+	return section + "\n\n---\n\n" + prompt
+}
+
 // buildEvidenceInjection fetches evidence a critique-failing draft needed but
-// did not read, and returns a feedback addendum embedding it. It covers unread
-// cited artifacts and matched-skill evidence for the claimed failure class.
-// Full-path citations are fetched directly. Bare basenames and skill-required
-// patterns are resolved with one bounded tree walk, so cost does not scale with
-// the number of targets. Fetched paths are marked read so the next critique pass
-// does not re-flag them. Returns "" when nothing could be fetched. It is not
-// gated on the model byte budget because this is the highest-value content once
-// the investigation has spent that budget; per-artifact and count caps bound
-// the addition.
+// did not read, and returns a feedback addendum embedding it. Ranked initial
+// candidates direct skill repair; unresolved groups and unread basenames share
+// one bounded fallback tree walk. At most one artifact is read for each missing
+// group, and duplicate paths are fetched once.
 func (c *Client) buildEvidenceInjection(ctx context.Context, state *agentState, out critiqueOutcome) string {
+	if state == nil || state.browser == nil {
+		return ""
+	}
 	var sections []string
 	fetched := 0
-	tail := func(p string) string {
+	attempted := map[string]bool{}
+	fetchTail := func(rawPath string) (string, bool) {
 		if fetched >= evidenceInjectionMaxArtifacts {
-			return ""
+			return "", false
 		}
-		res, err := state.browser.Tail(ctx, p, 200, evidenceInjectionPerArtifactBytes)
-		if err != nil || res == nil || len(res.Content) == 0 {
-			return ""
+		realPath, err := artifacts.SafePath(strings.TrimSpace(rawPath))
+		if err != nil || realPath == "" {
+			return "", false
 		}
-		return string(res.Content)
+		norm := NormalizeArtifactCitation(realPath)
+		if norm == "" || attempted[norm] {
+			return "", false
+		}
+		attempted[norm] = true
+		res, err := state.browser.Tail(ctx, realPath, 200, evidenceInjectionPerArtifactBytes)
+		if err != nil || res == nil || len(bytes.TrimSpace(res.Content)) == 0 {
+			return "", false
+		}
+		content := res.Content
+		if len(content) > evidenceInjectionPerArtifactBytes {
+			content = content[len(content)-evidenceInjectionPerArtifactBytes:]
+		}
+		return string(content), true
 	}
 	add := func(realPath, label, content string) {
 		state.gcsBytes += len(content)
@@ -1100,25 +1135,29 @@ func (c *Client) buildEvidenceInjection(ctx context.Context, state *agentState, 
 		fetched++
 	}
 
-	// walkTarget pairs a path predicate with the label to use when it matches.
 	type walkTarget struct {
 		match func(string) bool
-		label func(real string) string
+		label func(string) string
 	}
-	var targets []walkTarget
+	var walkTargets []walkTarget
+	type unreadWalk struct {
+		target int
+	}
+	var unreadWalks []unreadWalk
 
-	// Bucket 1: cited-but-unread artifacts. Fetch full paths directly; queue
-	// bare basenames and full paths that fail to fetch for the walk.
+	// Fetch exact unread citations first. Bare names and failed exact reads use
+	// the shared fallback walk without retrying the same path.
 	for _, cited := range out.UnreadCitations {
 		if strings.Contains(cited, "/") {
-			if content := tail(cited); content != "" {
+			if content, ok := fetchTail(cited); ok {
 				add(cited, cited+" (tail)", content)
 				continue
 			}
 		}
 		base := path.Base(cited)
 		citedCopy := cited
-		targets = append(targets, walkTarget{
+		unreadWalks = append(unreadWalks, unreadWalk{target: len(walkTargets)})
+		walkTargets = append(walkTargets, walkTarget{
 			match: func(p string) bool { return strings.EqualFold(path.Base(p), base) },
 			label: func(real string) string {
 				return fmt.Sprintf("%s (tail; nearest match for cited %q)", real, citedCopy)
@@ -1126,35 +1165,84 @@ func (c *Client) buildEvidenceInjection(ctx context.Context, state *agentState, 
 		})
 	}
 
-	// Bucket 2: skill-required evidence groups the agent did not satisfy.
-	for _, m := range out.MissingSkillEvidence {
-		skillID := m.Skill.ID
-		for _, g := range m.Missing {
-			group := g
-			targets = append(targets, walkTarget{
-				match: func(p string) bool { return group.Satisfied(map[string]bool{strings.ToLower(p): true}) },
-				label: func(real string) string {
-					return fmt.Sprintf("%s (tail; required evidence %q for skill %q)", real, group.ID, skillID)
-				},
-			})
+	type groupTarget struct {
+		skillID   string
+		group     skills.EvidenceGroup
+		path      string
+		walkIndex int
+	}
+	var groups []groupTarget
+	for _, miss := range out.MissingSkillEvidence {
+		for _, group := range miss.Missing {
+			if group.Satisfied(state.readArtifactsFull) {
+				continue
+			}
+			target := groupTarget{skillID: miss.Skill.ID, group: group, walkIndex: -1}
+			candidates, planned := initialPlanCandidates(state.initialEvidencePlan, miss.Skill.ID, group.ID)
+			if planned {
+				for _, candidate := range candidates {
+					realPath, err := artifacts.SafePath(strings.TrimSpace(candidate))
+					norm := NormalizeArtifactCitation(realPath)
+					if err == nil && realPath != "" && norm != "" && !attempted[norm] && group.Satisfied(map[string]bool{norm: true}) {
+						target.path = realPath
+						break
+					}
+				}
+			}
+			if target.path == "" {
+				groupCopy := group
+				target.walkIndex = len(walkTargets)
+				walkTargets = append(walkTargets, walkTarget{
+					match: func(p string) bool {
+						norm := NormalizeArtifactCitation(p)
+						return norm != "" && groupCopy.Satisfied(map[string]bool{norm: true})
+					},
+				})
+			}
+			groups = append(groups, target)
 		}
 	}
 
-	// Single bounded walk resolves every remaining target's first match.
-	if len(targets) > 0 && fetched < evidenceInjectionMaxArtifacts {
-		preds := make([]func(string) bool, len(targets))
-		for i := range targets {
-			preds[i] = targets[i].match
+	var walked []string
+	if len(walkTargets) > 0 && fetched < evidenceInjectionMaxArtifacts {
+		preds := make([]func(string) bool, len(walkTargets))
+		for i := range walkTargets {
+			preds[i] = walkTargets[i].match
 		}
-		matches := resolveEvidenceByWalk(ctx, state.browser, preds)
-		for i, real := range matches {
-			if real == "" || fetched >= evidenceInjectionMaxArtifacts {
-				continue
-			}
-			if content := tail(real); content != "" {
-				add(real, targets[i].label(real), content)
-			}
+		walked = resolveEvidenceByWalk(ctx, state.browser, preds)
+	}
+	for _, target := range unreadWalks {
+		if target.target >= len(walked) || walked[target.target] == "" || fetched >= evidenceInjectionMaxArtifacts {
+			continue
 		}
+		realPath := walked[target.target]
+		if content, ok := fetchTail(realPath); ok {
+			add(realPath, walkTargets[target.target].label(realPath), content)
+		}
+	}
+	for i := range groups {
+		if fetched >= evidenceInjectionMaxArtifacts {
+			break
+		}
+		target := &groups[i]
+		if target.group.Satisfied(state.readArtifactsFull) {
+			continue
+		}
+		if target.path == "" && target.walkIndex >= 0 && target.walkIndex < len(walked) {
+			target.path = walked[target.walkIndex]
+		}
+		if target.path == "" {
+			continue
+		}
+		norm := NormalizeArtifactCitation(target.path)
+		if norm == "" || !target.group.Satisfied(map[string]bool{norm: true}) {
+			continue
+		}
+		content, ok := fetchTail(target.path)
+		if !ok {
+			continue
+		}
+		add(target.path, fmt.Sprintf("%s (tail; required evidence %q for skill %q)", target.path, target.group.ID, target.skillID), content)
 	}
 
 	if fetched == 0 {
@@ -1164,12 +1252,30 @@ func (c *Client) buildEvidenceInjection(ctx context.Context, state *agentState, 
 	return "The engine fetched evidence you cited but had not read, and/or evidence required for this failure class. Ground your root_cause in what these artifacts ACTUALLY show below; correct or drop any claim they do not support.\n\n" + strings.Join(sections, "\n\n")
 }
 
+func initialPlanCandidates(plan []skills.PlannedSkill, skillID, groupID string) ([]string, bool) {
+	for _, plannedSkill := range plan {
+		if plannedSkill.ID != skillID {
+			continue
+		}
+		for _, group := range plannedSkill.RequiredEvidence {
+			if group.ID == groupID {
+				return group.CandidatePaths, true
+			}
+		}
+		return nil, false
+	}
+	return nil, false
+}
+
 // resolveEvidenceByWalk lists the build's artifact tree once and returns the
 // first matching real path for each predicate, or "" if unmatched. Bounded by
 // evidenceTreeMaxPaths to cap GCS list cost. Stops early once every predicate
 // has a match.
 func resolveEvidenceByWalk(ctx context.Context, browser artifacts.Browser, preds []func(string) bool) []string {
 	found := make([]string, len(preds))
+	if browser == nil || len(preds) == 0 {
+		return found
+	}
 	remaining := len(preds)
 	paths, _, err := browser.ListTree(ctx, evidenceTreeMaxPaths)
 	if err != nil {

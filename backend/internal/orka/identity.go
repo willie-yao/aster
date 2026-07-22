@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/evidenceplan"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
@@ -97,25 +98,7 @@ const (
 
 // FailureEvidenceSignal renders only the bounded test failure evidence used for recipe matching.
 func FailureEvidenceSignal(tc models.TestCase) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "Failed test: %s\n", tc.Name)
-	if tc.FailureLocation != "" {
-		fmt.Fprintf(&b, "Failure location: %s\n", tc.FailureLocation)
-	}
-	if tc.JUnitFile != "" {
-		fmt.Fprintf(&b, "JUnit file: %s\n", tc.JUnitFile)
-	}
-	if message := strings.TrimSpace(tc.FailureMessage); message != "" {
-		b.WriteString("Failure message:\n")
-		b.WriteString(clampPromptHeadTail(message, failureMessagePromptBytes))
-		b.WriteByte('\n')
-	}
-	if body := boundedFailureBody(tc.FailureBody); body != "" {
-		b.WriteString("Failure body (truncated to last 8KB):\n")
-		b.WriteString(body)
-		b.WriteByte('\n')
-	}
-	return strings.TrimSpace(b.String())
+	return evidenceplan.FailureSignal(tc)
 }
 
 // FailurePrompt renders the per-test prompt shared by the producer and ingestor.

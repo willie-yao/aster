@@ -46,11 +46,15 @@ constraints, the result schema, or the tool budget. The in-process critique
 wraps procedures with this boundary, and Orka returns the same boundary from
 `required_evidence`.
 
-When a recipe matches and evidence is missing, the in-process gate re-prompts
-the model with the missing groups. Orka prepends a complete initial evidence plan
-when every matched group has a candidate. Truncated, unmatched, or no-candidate
-plans still require `required_evidence`, and `submit_analysis` validates the same
-groups in either path.
+Both backends match the bounded failure signal before iteration one, resolve
+ranked candidates with `skills.Set.Plan`, and prepend the shared bounded plan
+format. The in-process gate uses those candidates for deterministic critique
+repair, with a bounded tree-walk fallback for unresolved or newly matched groups.
+Orka treats a complete initial plan as satisfying its recipe lookup gate.
+Truncated, failed, omitted, unmatched, or no-candidate plans remain incomplete;
+the in-process model can continue with normal tools, while Orka still requires
+`required_evidence`. `submit_analysis` validates the same Orka groups in either
+path.
 
 ## When to author a skill
 
@@ -251,9 +255,10 @@ loop unbounded budget.
 
 Skills don't have their own schema version. Changes to a recipe
 change the SkillSetHash, which invalidates affected cache entries.
-Engine-side contract changes (e.g. adding a new check inside the
-critique gate) bump `currentCritiqueVersion` instead, which also
-invalidates all entries on the next run.
+Engine-side contract changes (e.g. adding a new check inside the critique gate,
+or changing deterministic evidence repair) bump `currentCritiqueVersion`
+instead, which also invalidates all entries on the next run without changing the
+cache-key shape.
 
 ## Authoring checklist
 

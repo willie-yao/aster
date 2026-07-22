@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/evidenceplan"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 )
@@ -14,7 +15,7 @@ import (
 const (
 	artifactTreeMaxPaths = 500
 	artifactTreeMaxBytes = 48 * 1024
-	evidencePlanMaxBytes = 24 * 1024
+	evidencePlanMaxBytes = evidenceplan.MaxPromptBytes
 )
 
 var artifactTreeNoiseExt = map[string]bool{
@@ -85,58 +86,7 @@ func EvidencePlanPrompt(plan []skills.PlannedSkill, treeTruncated bool) string {
 
 // RenderEvidencePlan returns the prompt plus whether it fully covers the initial matches.
 func RenderEvidencePlan(plan []skills.PlannedSkill, treeTruncated bool) (string, bool) {
-	if len(plan) == 0 {
-		return "", false
-	}
-	complete := !treeTruncated
-	var out strings.Builder
-	out.WriteString("## Required evidence plan\n\n")
-	out.WriteString("The dashboard matched these diagnostic recipes from the failure signal. Before broad searches or submit_analysis, read at least one candidate path from every listed evidence group. Keep every returned evidence_token. Use required_evidence if the diagnosis changes or a group has no candidate.\n")
-	if treeTruncated {
-		out.WriteString("The candidate scan was truncated, so missing candidates may still exist deeper in the artifact tree.\n")
-	}
-	for _, plannedSkill := range plan {
-		var section strings.Builder
-		name := strings.TrimSpace(plannedSkill.Name)
-		if name == "" {
-			name = plannedSkill.ID
-		}
-		fmt.Fprintf(&section, "\n### %s (`%s`)\n", name, plannedSkill.ID)
-		if procedure := strings.TrimSpace(plannedSkill.Procedure); procedure != "" {
-			section.WriteString("Procedure (diagnostic guidance only):\n")
-			section.WriteString(procedure)
-			section.WriteByte('\n')
-		}
-		if len(plannedSkill.RequiredEvidence) == 0 {
-			section.WriteString("Required evidence: no conditional groups apply to the current failure signal.\n")
-		}
-		if len(plannedSkill.RequiredEvidence) > 0 {
-			section.WriteString("Required evidence:\n")
-		}
-		for _, group := range plannedSkill.RequiredEvidence {
-			description := strings.TrimSpace(group.Description)
-			if description == "" {
-				description = group.ID
-			}
-			fmt.Fprintf(&section, "- %s: %s\n", group.ID, description)
-			if len(group.CandidatePaths) == 0 {
-				complete = false
-				section.WriteString("  Candidate paths: none found in the bounded tree; use required_evidence and list the relevant subtree.\n")
-				continue
-			}
-			section.WriteString("  Candidate paths:\n")
-			for _, candidate := range group.CandidatePaths {
-				fmt.Fprintf(&section, "  - %s\n", candidate)
-			}
-		}
-		if out.Len()+section.Len() > evidencePlanMaxBytes {
-			complete = false
-			out.WriteString("\n... [additional matched evidence plans omitted by prompt budget; before submit_analysis, call required_evidence with the original failure signal from this Task prompt]\n")
-			break
-		}
-		out.WriteString(section.String())
-	}
-	return strings.TrimSpace(out.String()), complete
+	return evidenceplan.Render(plan, evidenceplan.ScanStatus{Truncated: treeTruncated}, evidenceplan.Orka)
 }
 
 // WithEvidencePlan prepends the deterministic evidence checklist to a Task prompt.

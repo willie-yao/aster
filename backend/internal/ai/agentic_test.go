@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/evidenceplan"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/filesystem"
@@ -53,6 +54,50 @@ func newTestAgenticInputs(t *testing.T, browser artifacts.Browser, opts AgenticO
 type fakeBrowser struct {
 	files map[string][]byte
 	dirs  map[string][]string
+}
+
+type treeResponse struct {
+	paths     []string
+	truncated bool
+	err       error
+}
+
+type trackingBrowser struct {
+	*fakeBrowser
+	treeResponses []treeResponse
+	listTreeCalls int
+	tailCalls     []string
+	tailMaxBytes  []int
+	tailErrors    map[string]error
+	emptyTails    map[string]bool
+}
+
+func (b *trackingBrowser) ListTree(ctx context.Context, maxPaths int) ([]string, bool, error) {
+	b.listTreeCalls++
+	if len(b.treeResponses) > 0 {
+		response := b.treeResponses[0]
+		b.treeResponses = b.treeResponses[1:]
+		return append([]string(nil), response.paths...), response.truncated, response.err
+	}
+	return b.fakeBrowser.ListTree(ctx, maxPaths)
+}
+
+func (b *trackingBrowser) Tail(ctx context.Context, p string, lines, maxBytes int) (*artifacts.TailResult, error) {
+	b.tailCalls = append(b.tailCalls, p)
+	b.tailMaxBytes = append(b.tailMaxBytes, maxBytes)
+	if err := b.tailErrors[p]; err != nil {
+		return nil, err
+	}
+	if b.emptyTails[p] {
+		return &artifacts.TailResult{}, nil
+	}
+	result, err := b.fakeBrowser.Tail(ctx, p, lines, maxBytes)
+	if err != nil || result == nil || maxBytes <= 0 || len(result.Content) <= maxBytes {
+		return result, err
+	}
+	copy := *result
+	copy.Content = append([]byte(nil), result.Content[len(result.Content)-maxBytes:]...)
+	return &copy, nil
 }
 
 func (b *fakeBrowser) BuildRoot() string { return "fake/build/1" }
@@ -1087,8 +1132,8 @@ func TestAgentic_HallucinationRetry(t *testing.T) {
 	}
 }
 
-// TestAgentic_CacheInvalidatedByCritiqueVersionBump verifies cache entries with
-// stale critique versions are invalidated.
+// TestAgentic_CacheInvalidatedByCritiqueVersionBump verifies entries accepted
+// before ranked planning and candidate-directed repair are re-analyzed.
 func TestAgentic_CacheInvalidatedByCritiqueVersionBump(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
@@ -1116,7 +1161,7 @@ func TestAgentic_CacheInvalidatedByCritiqueVersionBump(t *testing.T) {
 		t.Fatalf("first call: CritiquePassed=%v CritiqueVersion=%d, want %d", analysis.CritiquePassed, analysis.CritiqueVersion, currentCritiqueVersion)
 	}
 
-	// Simulate a stale cache entry by rewriting CritiqueVersion to 0.
+	// Simulate an entry accepted under the immediately preceding contract.
 	raw, ok := client.Cache().Get(key)
 	if !ok {
 		t.Fatalf("first call should have written cache entry")
@@ -1125,12 +1170,12 @@ func TestAgentic_CacheInvalidatedByCritiqueVersionBump(t *testing.T) {
 	if err := json.Unmarshal(raw, &cached); err != nil {
 		t.Fatalf("unmarshal cache: %v", err)
 	}
-	cached.CritiqueVersion = 0
+	cached.CritiqueVersion = currentCritiqueVersion - 1
 	if err := client.Cache().Set(key, cached); err != nil {
 		t.Fatalf("re-write cache: %v", err)
 	}
 
-	// Second call rejects the v0 entry and re-analyzes.
+	// Second call rejects the pre-ranked-plan entry and re-analyzes.
 	srv.push(200, chatRespFinal(noCitations))
 	before := atomic.LoadInt32(&srv.calls)
 	_, analysis2, err := client.doAnalyzeAgentic(context.Background(),
@@ -1801,5 +1846,288 @@ func TestChatClient_BoundedByContextNotFixedTimeout(t *testing.T) {
 	}
 	if !resp.HasMessage || resp.Message.Content == nil {
 		t.Fatal("expected a final content message")
+	}
+}
+
+func TestAgentic_InitialEvidencePlanUsesOneTreeListing(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal(`{"summary":"s","is_transient":false,"root_cause":"independent bug","severity":"Low","suggested_fix":"Update config.yaml and redeploy.","relevant_files":[]}`))
+
+	set := loadAgenticSkillsForTest(t, map[string]string{
+		"ranked": `
+id: ranked
+triggers: ["ranked failure"]
+required_evidence:
+  - id: logs
+    description: Ranked logs
+    any_of: ["logs/.*\\.log$"]
+procedure: Read the ranked logs.
+`,
+	})
+	browser := &trackingBrowser{fakeBrowser: &fakeBrowser{files: map[string][]byte{
+		"logs/other.log":     []byte("other"),
+		"logs/preferred.log": []byte("preferred"),
+	}}}
+	in := newTestAgenticInputs(t, browser, AgenticOptions{
+		MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
+	})
+	in.Skills = set
+	in.FailureSignal = "ranked failure preferred"
+	_, _, err := newAgenticTestClient(t, srv.URL).doAnalyzeAgentic(
+		context.Background(), in, "agentic:test:initial-plan", "sys", "ORIGINAL_USER_PROMPT",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if browser.listTreeCalls != 1 {
+		t.Fatalf("ListTree calls = %d, want 1 for seed and plan", browser.listTreeCalls)
+	}
+	srv.mu.Lock()
+	request := string(srv.requests[0])
+	srv.mu.Unlock()
+	for _, want := range []string{"Required evidence plan", "Read the ranked logs", "logs/preferred.log", "Artifact paths for this build", "ORIGINAL_USER_PROMPT"} {
+		if !strings.Contains(request, want) {
+			t.Errorf("initial request missing %q", want)
+		}
+	}
+	if strings.Index(request, "Required evidence plan") > strings.Index(request, "Artifact paths for this build") || strings.Index(request, "Artifact paths for this build") > strings.Index(request, "ORIGINAL_USER_PROMPT") {
+		t.Errorf("initial request sections are out of order: %s", request)
+	}
+	if strings.Index(request, "logs/preferred.log") > strings.Index(request, "logs/other.log") {
+		t.Errorf("ranked candidate was not first: %s", request)
+	}
+	for _, forbidden := range []string{"submit_analysis", "evidence_token", "required_evidence"} {
+		if strings.Contains(request, forbidden) {
+			t.Errorf("in-process request contains Orka term %q", forbidden)
+		}
+	}
+}
+
+func TestBuildEvidenceInjectionUsesRankedCandidatesInGroupOrder(t *testing.T) {
+	set := loadAgenticSkillsForTest(t, map[string]string{
+		"ranked": `
+id: ranked
+triggers: ["ranked failure"]
+required_evidence:
+  - id: first
+    any_of: ["first/.*\\.log$"]
+  - id: second
+    any_of: ["second/.*\\.log$"]
+`,
+	})
+	signal := "ranked failure alpha beta"
+	paths := []string{
+		"first/unrelated.log", "first/alpha.log",
+		"second/unrelated.log", "second/beta.log",
+	}
+	browser := &trackingBrowser{fakeBrowser: &fakeBrowser{files: map[string][]byte{
+		"first/unrelated.log":  []byte("WRONG_FIRST"),
+		"first/alpha.log":      []byte("FIRST_MARKER"),
+		"second/unrelated.log": []byte("WRONG_SECOND"),
+		"second/beta.log":      []byte("SECOND_MARKER"),
+	}}}
+	matched := set.Match(signal)[0]
+	state := &agentState{
+		browser: browser, initialEvidencePlan: set.Plan(signal, paths, evidenceplan.CandidatePathLimit),
+		readArtifactsFull: map[string]bool{}, readArtifactsBase: map[string]bool{},
+	}
+	out := critiqueOutcome{MissingSkillEvidence: []skillEvidenceMiss{{Skill: matched, Missing: matched.RequiredEvidence}}}
+	injection := (&Client{}).buildEvidenceInjection(context.Background(), state, out)
+	wantCalls := []string{"first/alpha.log", "second/beta.log"}
+	if strings.Join(browser.tailCalls, "\n") != strings.Join(wantCalls, "\n") {
+		t.Fatalf("tail calls = %v, want %v", browser.tailCalls, wantCalls)
+	}
+	if strings.Index(injection, "FIRST_MARKER") > strings.Index(injection, "SECOND_MARKER") {
+		t.Fatalf("group order was not preserved: %s", injection)
+	}
+	if strings.Contains(injection, "WRONG_") {
+		t.Fatalf("repair ignored ranked candidates: %s", injection)
+	}
+}
+
+func TestBuildEvidenceInjectionDeduplicatesCandidatePaths(t *testing.T) {
+	set := loadAgenticSkillsForTest(t, map[string]string{
+		"shared": `
+id: shared
+triggers: ["shared failure"]
+required_evidence:
+  - id: first
+    any_of: ["shared\\.log$"]
+  - id: second
+    any_of: ["shared\\.log$"]
+`,
+	})
+	signal := "shared failure"
+	path := "artifacts/shared.log"
+	browser := &trackingBrowser{fakeBrowser: &fakeBrowser{files: map[string][]byte{path: []byte("SHARED_MARKER")}}}
+	matched := set.Match(signal)[0]
+	state := &agentState{
+		browser: browser, initialEvidencePlan: set.Plan(signal, []string{path}, evidenceplan.CandidatePathLimit),
+		readArtifactsFull: map[string]bool{}, readArtifactsBase: map[string]bool{},
+	}
+	out := critiqueOutcome{MissingSkillEvidence: []skillEvidenceMiss{{Skill: matched, Missing: matched.RequiredEvidence}}}
+	injection := (&Client{}).buildEvidenceInjection(context.Background(), state, out)
+	if len(browser.tailCalls) != 1 || browser.tailCalls[0] != path {
+		t.Fatalf("tail calls = %v, want one %q read", browser.tailCalls, path)
+	}
+	if strings.Count(injection, "SHARED_MARKER") != 1 {
+		t.Fatalf("shared candidate was injected more than once: %s", injection)
+	}
+}
+
+func TestBuildEvidenceInjectionFallsBackForMissingCandidate(t *testing.T) {
+	set := loadAgenticSkillsForTest(t, map[string]string{
+		"fallback": `
+id: fallback
+triggers: ["fallback failure"]
+required_evidence:
+  - id: controller
+    any_of: ["controller\\.log$"]
+`,
+	})
+	signal := "fallback failure"
+	path := "artifacts/controller.log"
+	browser := &trackingBrowser{
+		fakeBrowser:   &fakeBrowser{files: map[string][]byte{path: []byte("FALLBACK_MARKER")}},
+		treeResponses: []treeResponse{{paths: []string{path}}},
+	}
+	matched := set.Match(signal)[0]
+	state := &agentState{
+		browser: browser, initialEvidencePlan: set.Plan(signal, []string{"build-log.txt"}, evidenceplan.CandidatePathLimit),
+		readArtifactsFull: map[string]bool{}, readArtifactsBase: map[string]bool{},
+	}
+	out := critiqueOutcome{MissingSkillEvidence: []skillEvidenceMiss{{Skill: matched, Missing: matched.RequiredEvidence}}}
+	injection := (&Client{}).buildEvidenceInjection(context.Background(), state, out)
+	if browser.listTreeCalls != 1 || len(browser.tailCalls) != 1 || browser.tailCalls[0] != path {
+		t.Fatalf("fallback calls: ListTree=%d Tail=%v", browser.listTreeCalls, browser.tailCalls)
+	}
+	if !strings.Contains(injection, "FALLBACK_MARKER") {
+		t.Fatalf("fallback evidence missing: %s", injection)
+	}
+}
+
+func TestBuildEvidenceInjectionRejectsErrorAndEmptyReads(t *testing.T) {
+	set := loadAgenticSkillsForTest(t, map[string]string{
+		"read": `
+id: read
+triggers: ["read failure"]
+required_evidence:
+  - id: log
+    any_of: ["failure\\.log$"]
+`,
+	})
+	signal := "read failure"
+	path := "artifacts/failure.log"
+	matched := set.Match(signal)[0]
+	for _, tc := range []struct {
+		name  string
+		err   error
+		empty bool
+	}{
+		{name: "error", err: errors.New("read failed")},
+		{name: "empty", empty: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			browser := &trackingBrowser{
+				fakeBrowser: &fakeBrowser{files: map[string][]byte{path: []byte("content")}},
+				tailErrors:  map[string]error{path: tc.err},
+				emptyTails:  map[string]bool{path: tc.empty},
+			}
+			state := &agentState{
+				browser: browser, initialEvidencePlan: set.Plan(signal, []string{path}, evidenceplan.CandidatePathLimit),
+				readArtifactsFull: map[string]bool{}, readArtifactsBase: map[string]bool{},
+			}
+			out := critiqueOutcome{MissingSkillEvidence: []skillEvidenceMiss{{Skill: matched, Missing: matched.RequiredEvidence}}}
+			if injection := (&Client{}).buildEvidenceInjection(context.Background(), state, out); injection != "" {
+				t.Fatalf("invalid read produced injection: %s", injection)
+			}
+			if len(state.readArtifactsFull) != 0 || state.gcsBytes != 0 || state.modelBytes != 0 {
+				t.Fatalf("invalid read counted as repaired: reads=%v gcs=%d model=%d", state.readArtifactsFull, state.gcsBytes, state.modelBytes)
+			}
+			if len(browser.tailCalls) != 1 {
+				t.Fatalf("tail calls = %v, want one bounded attempt", browser.tailCalls)
+			}
+		})
+	}
+}
+
+func TestBuildEvidenceInjectionRespectsArtifactAndByteBounds(t *testing.T) {
+	var groups []skills.EvidenceGroup
+	var plannedGroups []skills.PlannedEvidenceGroup
+	files := map[string][]byte{}
+	for i := 0; i < evidenceInjectionMaxArtifacts+2; i++ {
+		path := fmt.Sprintf("logs/group-%d.log", i)
+		groups = append(groups, skills.EvidenceGroup{ID: fmt.Sprintf("group-%d", i), AnyOf: []string{fmt.Sprintf("group-%d\\.log$", i)}})
+		plannedGroups = append(plannedGroups, skills.PlannedEvidenceGroup{ID: fmt.Sprintf("group-%d", i), CandidatePaths: []string{path}})
+		files[path] = []byte(strings.Repeat(fmt.Sprintf("MARKER_%d", i), evidenceInjectionPerArtifactBytes))
+	}
+	contract, err := json.Marshal(skills.Contract{Skills: []skills.Skill{{ID: "bounded", Triggers: []string{"bounded"}, RequiredEvidence: groups}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, err := skills.ParseContract(contract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	matched := set.Match("bounded")[0]
+	browser := &trackingBrowser{fakeBrowser: &fakeBrowser{files: files}}
+	state := &agentState{
+		browser:             browser,
+		initialEvidencePlan: []skills.PlannedSkill{{ID: "bounded", RequiredEvidence: plannedGroups}},
+		readArtifactsFull:   map[string]bool{}, readArtifactsBase: map[string]bool{},
+	}
+	out := critiqueOutcome{MissingSkillEvidence: []skillEvidenceMiss{{Skill: matched, Missing: matched.RequiredEvidence}}}
+	injection := (&Client{}).buildEvidenceInjection(context.Background(), state, out)
+	if len(browser.tailCalls) != evidenceInjectionMaxArtifacts {
+		t.Fatalf("tail calls = %d, want %d", len(browser.tailCalls), evidenceInjectionMaxArtifacts)
+	}
+	for _, maxBytes := range browser.tailMaxBytes {
+		if maxBytes != evidenceInjectionPerArtifactBytes {
+			t.Errorf("tail max bytes = %d, want %d", maxBytes, evidenceInjectionPerArtifactBytes)
+		}
+	}
+	if state.gcsBytes > evidenceInjectionMaxArtifacts*evidenceInjectionPerArtifactBytes || state.modelBytes > evidenceInjectionMaxArtifacts*evidenceInjectionPerArtifactBytes {
+		t.Fatalf("injection bytes exceed bound: gcs=%d model=%d", state.gcsBytes, state.modelBytes)
+	}
+	if strings.Contains(injection, fmt.Sprintf("group-%d.log", evidenceInjectionMaxArtifacts)) {
+		t.Fatalf("injection exceeded artifact count bound: %s", injection)
+	}
+}
+
+func TestAgentic_StrongModelReadsPlannedEvidenceWithoutRepair(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	path := "artifacts/issuer.yaml"
+	srv.push(200, chatRespToolCall("call_1", "tail_artifact", map[string]interface{}{"path": path, "lines": 200}))
+	srv.push(200, chatRespFinal(`{"summary":"x509","is_transient":false,"root_cause":"x509 issuer mismatch shown in artifacts/issuer.yaml","severity":"High","suggested_fix":"Update issuer.yaml with the correct CA and redeploy.","relevant_files":["artifacts/issuer.yaml"]}`))
+	set := loadAgenticSkillsForTest(t, map[string]string{
+		"x509": `
+id: x509
+triggers: ["x509"]
+required_evidence:
+  - id: issuer
+    any_of: ["issuer\\.yaml$"]
+`,
+	})
+	browser := &trackingBrowser{fakeBrowser: &fakeBrowser{files: map[string][]byte{path: []byte("kind: Issuer\n")}}}
+	in := newTestAgenticInputs(t, browser, AgenticOptions{
+		MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
+		CritiqueMaxRetries: 2,
+	})
+	in.Skills = set
+	in.FailureSignal = "x509 failure"
+	_, analysis, err := newAgenticTestClient(t, srv.URL).doAnalyzeAgentic(context.Background(), in, "agentic:test:strong-plan", "sys", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !analysis.CritiquePassed {
+		t.Fatalf("strong-model draft did not pass critique: %+v", analysis)
+	}
+	if browser.listTreeCalls != 1 || len(browser.tailCalls) != 1 || browser.tailCalls[0] != path {
+		t.Fatalf("unexpected planning or repair reads: ListTree=%d Tail=%v", browser.listTreeCalls, browser.tailCalls)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 2 {
+		t.Fatalf("model calls = %d, want tool plus final only", got)
 	}
 }

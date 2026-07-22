@@ -37,6 +37,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/evidenceplan"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
@@ -332,6 +333,8 @@ func main() {
 			artifactSeed := ""
 			var artifactPaths []string
 			artifactTreeTruncated := false
+			artifactTreeFailed := artifactBackend == nil
+			artifactTreeUnavailable := false
 			for ti := range run.TestCases {
 				tc := run.TestCases[ti]
 				if tc.Status != "failed" {
@@ -341,6 +344,7 @@ func main() {
 					registered = true
 					if artifactBackend != nil {
 						if artifactSeedCtx.Err() != nil {
+							artifactTreeUnavailable = true
 							if !artifactSeedBudgetLogged {
 								log.Printf("⚠ artifact-tree seed budget exhausted; remaining builds will use failure evidence only")
 								artifactSeedBudgetLogged = true
@@ -351,6 +355,7 @@ func main() {
 							paths, truncated, seedErr := browser.ListTree(seedCtx, evidencePlanTreeMaxPaths)
 							cancel()
 							if seedErr != nil {
+								artifactTreeFailed = true
 								log.Printf("⚠ artifact-tree seed skipped for %s/%s: %v", detail.JobID, run.BuildID, seedErr)
 							} else {
 								artifactPaths = paths
@@ -362,7 +367,11 @@ func main() {
 					manifest.SetBuild(detail.JobID, run.BuildID, buildScope, toolScope, buildPrefix, artifactSeed)
 					builds[orka.BuildKey(detail.JobID, run.BuildID)] = buildPlan{scope: toolScope, prefix: buildPrefix}
 				}
-				evidencePlan, evidencePlanComplete, initialEvidenceHeader, planErr := initialEvidencePlan(skillSet, tc, artifactPaths, artifactTreeTruncated)
+				evidencePlan, evidencePlanComplete, initialEvidenceHeader, planErr := initialEvidencePlanForScan(skillSet, tc, artifactPaths, evidenceplan.ScanStatus{
+					Truncated:   artifactTreeTruncated,
+					Failed:      artifactTreeFailed,
+					Unavailable: artifactTreeUnavailable,
+				})
 				if planErr != nil {
 					log.Printf("⚠ initial evidence plan skipped for %s/%s test %d: %v", detail.JobID, run.BuildID, ti, planErr)
 					evidencePlan, evidencePlanComplete, initialEvidenceHeader = "", false, ""
@@ -655,9 +664,13 @@ Call submit_analysis with the final fields. Do not return a separate final answe
 }
 
 func initialEvidencePlan(set *skills.Set, tc models.TestCase, artifactPaths []string, treeTruncated bool) (string, bool, string, error) {
+	return initialEvidencePlanForScan(set, tc, artifactPaths, evidenceplan.ScanStatus{Truncated: treeTruncated})
+}
+
+func initialEvidencePlanForScan(set *skills.Set, tc models.TestCase, artifactPaths []string, scan evidenceplan.ScanStatus) (string, bool, string, error) {
 	signal := orka.FailureEvidenceSignal(tc)
 	planned := set.Plan(signal, artifactPaths, evidencePlanCandidatePathLimit)
-	prompt, complete := orka.RenderEvidencePlan(planned, treeTruncated)
+	prompt, complete := evidenceplan.Render(planned, scan, evidenceplan.Orka)
 	header, err := skills.InitialEvidenceHeaderValue(planned)
 	if err != nil {
 		return "", false, "", err

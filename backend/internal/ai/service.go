@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/evidenceplan"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
@@ -161,6 +162,7 @@ func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, b
 
 	log.Printf("  🔍 Analyzing: %s [%s]", tc.Name, AgenticMode)
 
+	failureSignal := evidenceplan.FailureSignal(*tc)
 	userPrompt := s.module.AnalysisPrompt(ctx, httpClient, run, tc, consecutiveFailures)
 
 	// Surface endpoints without function-calling as unavailable. There is no
@@ -171,7 +173,7 @@ func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, b
 		trace.Finish("unavailable", err)
 		return err
 	}
-	summary, analysis, err := s.runAgentic(ctx, jobID, buildPrefix, run, tc, userPrompt, consecutiveFailures)
+	summary, analysis, err := s.runAgentic(ctx, jobID, buildPrefix, run, tc, userPrompt, failureSignal, consecutiveFailures)
 	if err != nil {
 		if errors.Is(err, ErrToolsUnsupported) {
 			s.toolsUnsupported.Store(true)
@@ -202,7 +204,7 @@ func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, b
 
 // runAgentic does the per-failure agentic call setup. Kept separate so
 // Analyze stays readable.
-func (s *Service) runAgentic(ctx context.Context, jobID, buildPrefix string, run *models.BuildResult, tc *models.TestCase, userPrompt string, consecutiveFailures int) (*models.AISummary, *models.AIAnalysis, error) {
+func (s *Service) runAgentic(ctx context.Context, jobID, buildPrefix string, run *models.BuildResult, tc *models.TestCase, userPrompt, failureSignal string, consecutiveFailures int) (*models.AISummary, *models.AIAnalysis, error) {
 	if s.browserFactory == nil {
 		return nil, nil, fmt.Errorf("agentic mode enabled but no browser factory configured")
 	}
@@ -222,6 +224,7 @@ func (s *Service) runAgentic(ctx context.Context, jobID, buildPrefix string, run
 		Mode:                AgenticMode,
 		Skills:              s.skillSet,
 		ConsecutiveFailures: consecutiveFailures,
+		FailureSignal:       failureSignal,
 	}
 	return s.client.doAnalyzeAgentic(ctx, in, cacheKey, s.systemPrompt, userPrompt)
 }

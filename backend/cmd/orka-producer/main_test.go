@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/evidenceplan"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
@@ -110,6 +111,32 @@ func TestInitialEvidencePlanFallsBackWhenHeaderIsOversized(t *testing.T) {
 	}
 	if prompt != "" || complete || header != "" {
 		t.Fatalf("failed plan = prompt %q complete %t header %q", prompt, complete, header)
+	}
+}
+
+func TestInitialEvidencePlanFailedScanRemainsIncomplete(t *testing.T) {
+	set, err := skills.ParseContract([]byte(`{
+		"skills":[{
+			"id":"conditional",
+			"triggers":["failure"],
+			"required_evidence":[{"id":"dns","when":["dns"],"any_of":["resolv\\.conf$"]}],
+			"procedure":"Inspect the matching subtype."
+		}]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt, complete, _, err := initialEvidencePlanForScan(set, models.TestCase{
+		Name: "failure without dns",
+	}, nil, evidenceplan.ScanStatus{Failed: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if complete {
+		t.Fatal("failed artifact scan produced a complete plan")
+	}
+	if !strings.Contains(prompt, "candidate scan failed") {
+		t.Fatalf("failed scan marker missing: %s", prompt)
 	}
 }
 
