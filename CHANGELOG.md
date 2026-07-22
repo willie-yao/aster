@@ -89,6 +89,14 @@ for how to pin a release.
 
 ### Changed
 
+- **Orka evidence-repair budget.** Compatibility worker v5 reserves four of the
+  existing 20 evidence Tool calls for validation repair. A rejected submission
+  with complete missing-evidence candidates re-enables only artifact readers and
+  finalization Tools, prioritizing targeted reads before another submission.
+  Broad investigation does not resume after finalization starts, and the focus
+  window preserves timeline verification and one final submission turn after
+  all four repair calls.
+
 - **Deterministic Orka evidence plans.** The producer now matches diagnostic
   recipes against each bounded failure-evidence signal and prepends a bounded checklist with
   ranked exact artifact candidates. `required_evidence` and rejected final

@@ -8,14 +8,15 @@ PR or a patched controller, CRD, API server, or UI.
 See [COMPATIBILITY.md](COMPATIBILITY.md) for the exact source revision, patch
 checksum, image identity, and deployment instructions.
 
-## Compatibility v4 behavior
+## Compatibility v5 behavior
 
 The patch keeps dashboard analysis policy inside the dashboard-owned worker:
 
 - recognizes `validate_analysis`, `submit_analysis`, and `verify_timeline`
   finalization Tools, including content-addressed resource names;
 - constructs the final Task result only from a successful validated submission;
-- bounds validated runs to 25 model iterations and 20 investigation Tool calls;
+- bounds validated runs to 25 model iterations, reserving four of the 20
+  evidence Tool calls for targeted validation repair;
 - selects one Tool call per turn, prioritizing timeline verification and final
   submission;
 - supports short model-facing Tool aliases while keeping approval and policy
@@ -24,6 +25,13 @@ The patch keeps dashboard analysis policy inside the dashboard-owned worker:
 - checks the request-scoped Tool allowlist before duplicate-result reuse;
 - removes completed timeline Tools and re-prompts malformed, empty, or
   unvalidated final responses;
+- when final validation reports complete `missing_evidence_candidates`, restores
+  only the artifact readers plus finalization Tools, prioritizes a reader over a
+  repeated submission, and allows up to four targeted evidence-repair calls;
+- starts finalization early enough to allow timeline verification, an initial
+  submission, all four repair calls, and one final submission turn, then directs
+  the model to use ledger tokens instead of readers
+  that are no longer advertised;
 - tells weak models to preserve applicable source paths and use
   `"relevant_files": []` only when that required array has no entries, without
   weakening deterministic validation;
@@ -49,8 +57,9 @@ selected remain worker-local and do not require a `ToolCallSkipped` event.
 
 A Phase 2 run used `moonshotai/Kimi-K2-Instruct-0905` against the same DRA
 failure from build `2078833416211533824`. The prompt included the bounded JUnit
-failure body and filtered artifact tree. Compatibility v4 retains the v2 evidence
-behavior and v3 API-mode telemetry through two proactive compactions.
+failure body and filtered artifact tree. Compatibility v5 retains the prior
+evidence and API-mode behavior while reserving final Tool capacity for targeted
+validation repair.
 
 | Metric | Phase 1c | Compatibility v2 baseline |
 |---|---:|---:|
@@ -60,6 +69,16 @@ behavior and v3 API-mode telemetry through two proactive compactions.
 | Input tokens | 644,937 | **286,833** |
 | Context compactions | 0 | 2 |
 | Runtime | 5m39s | 6m02s |
+
+
+A pre-v5 Flatcar benchmark confirmed the deterministic evidence plan directed
+Kimi to the affected MachineDeployment, Machine, and Node, but the model consumed
+all 20 investigation calls before its first rejected submission. In a v5 run,
+the first missing-evidence response re-enabled the readers and allowed exactly
+four targeted calls before returning permanently to finalization. Kimi spent
+those calls on repeated JUnit reads rather than covering every missing group and
+still failed after two attempts. This verifies the reserved budget and no-resume
+state machine; candidate selection within that budget remains model-bound.
 
 Phase 1c described only a pod timeout and generic resource-allocation delay.
 The v2 baseline traced the actual chain: the device-plugin stream ended with
