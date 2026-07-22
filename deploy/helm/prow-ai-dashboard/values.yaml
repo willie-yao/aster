@@ -229,6 +229,13 @@ fetcher:
   suspend: false
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
+  # CronJob pod restart policy. Empty selects Never for Orka and OnFailure for
+  # in-process fetches. Orka retries belong to Task retryPolicy, not init containers.
+  restartPolicy: ""
+  # Job retry limit. -1 uses 0 for Orka and the Kubernetes default otherwise.
+  backoffLimit: -1
+  # Hard Job deadline in seconds. Set 0 to omit the deadline.
+  activeDeadlineSeconds: 36000
   # watch mode: how often to refresh data reusing the cached job list, and how
   # often to rediscover jobs and run a full pass with side effects.
   watchInterval: 5m

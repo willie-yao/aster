@@ -3,14 +3,15 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: run-cronjob-now.sh [--wait] [--timeout <duration>] <namespace> <cronjob>
+Usage: run-cronjob-now.sh [--wait] [--timeout <duration>] [--keep-on-timeout] <namespace> <cronjob>
 
 Create a uniquely named Job from a suspended dashboard CronJob. The command
 checks for active scheduled and manual Jobs before creating another one. This is
 a preflight check, not a distributed lock; do not invoke the helper concurrently.
 
 Timeout uses one base-10 integer and unit, for example 90m, 2h, or 300s.
-Leading zeros remain decimal, so 08h is the same as 8h.
+Leading zeros remain decimal, so 08h is the same as 8h. A timed-out Job is
+deleted by default. Use --keep-on-timeout to leave it running.
 USAGE
 }
 
@@ -31,6 +32,7 @@ parse_duration_seconds() {
 }
 
 wait_for_job=false
+keep_on_timeout=false
 timeout=90m
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -42,6 +44,10 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || { usage >&2; exit 2; }
       timeout=$2
       shift 2
+      ;;
+    --keep-on-timeout)
+      keep_on_timeout=true
+      shift
       ;;
     -h|--help)
       usage
@@ -128,6 +134,12 @@ if [[ $wait_for_job == true ]]; then
     if (( SECONDS >= deadline )); then
       echo "Job $namespace/$job_name did not finish within $timeout" >&2
       $kubectl_bin -n "$namespace" describe "job/$job_name" >&2 || true
+      if [[ $keep_on_timeout == true ]]; then
+        echo "Leaving timed-out Job $namespace/$job_name running" >&2
+      else
+        echo "Deleting timed-out Job $namespace/$job_name" >&2
+        $kubectl_bin -n "$namespace" delete "job/$job_name" --wait=true >&2 || true
+      fi
       exit 1
     fi
     sleep 5

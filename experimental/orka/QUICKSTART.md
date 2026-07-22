@@ -304,12 +304,12 @@ loop and none of the Orka path is deployed.
 ## Step 5: run it and view the dashboard
 
 ```bash
-# Trigger a run now instead of waiting for the schedule.
-kubectl create job -n dashboards --from=cronjob/dash-prow-ai-dashboard-fetcher orka-run-1
+# Trigger a bounded run now instead of waiting for the schedule.
+deploy/helm/prow-ai-dashboard/run-cronjob-now.sh --wait --timeout 8h \
+  dashboards dash-prow-ai-dashboard-fetcher
 
-# Watch the steps: fetch skeleton, produce Tasks, ingest results.
-kubectl logs -n dashboards job/orka-run-1 -c produce
-kubectl logs -n dashboards job/orka-run-1 -c ingest | tail
+# The helper prints the exact Job log and status commands. The phases are
+# fetch skeleton, produce Tasks, then ingest results.
 
 # Per-project and per-build Task phase and Tool counts.
 experimental/orka/orka-ops.sh --namespace orka-system status
@@ -454,13 +454,18 @@ The equivalent Orka knobs are producer flags, surfaced as Helm `orka.*` values:
 | per-test wave size | `orka.producer.maxConcurrentTasks` | `-max-concurrent-tasks` | `2` |
 | wave poll interval | `orka.producer.taskPoll` | `-task-poll` | `5s` |
 | placement recovery and intermediate-wave deadline | `orka.producer.waveTimeout` | `-wave-timeout` | `30m` |
+| CronJob restart policy | `fetcher.restartPolicy` | Kubernetes Pod field | empty, selects `Never` for Orka |
+| Job retry limit | `fetcher.backoffLimit` | Kubernetes Job field | `-1`, selects `0` for Orka |
+| total Job deadline | `fetcher.activeDeadlineSeconds` | Kubernetes Job field | `36000` |
 | worker placement | `orka.taskExecution` | `-task-execution` | empty |
 | manual cache-bust version | `orka.version` | `-version` | `v1` |
 | job-pattern finalization wait | `orka.patternWait` | ingestor `-pattern-wait` | `25m` |
 
 Iteration budget, forced finalization, and the transient-critique gate live in the
 pinned Orka compatibility worker, not in project config. See
-[worker-patches/COMPATIBILITY.md](worker-patches/COMPATIBILITY.md).
+[worker-patches/COMPATIBILITY.md](worker-patches/COMPATIBILITY.md). For bounded
+waves, `orka.producer.waveTimeout` must cover every Task attempt: at least
+`orka.taskTimeout * (orka.retries + 1)` plus scheduling margin equal to the greater of one minute or twice the poll interval.
 
 ## Operate
 
@@ -522,8 +527,9 @@ kubectl logs -n dashboards job/orka-run-1 -c ingest | tail
 ## Troubleshoot
 
 - **Results stay `pending`.** Tasks are not finishing: check `kubectl get tasks`
-  for `Running`/`Failed` and the ai-worker logs. Confirm the pinned compatibility worker is
-  configured.
+  for `Running`/`Failed` and the ai-worker logs. Confirm the pinned compatibility
+  worker is configured. If the producer exits before ingestion starts, verify
+  that the wave timeout covers the complete retry budget.
 - **`AI analysis unavailable: analysis Task ...`.** Honest surfacing of a
   `Failed`/`Cancelled`/missing Task, not a silent blank. Inspect that Task, fix the
   cause. Fix the dependency or bump the version when retrying an external

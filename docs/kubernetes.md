@@ -88,8 +88,11 @@ The Orka skeleton fetch uses `-skip-side-effects`; notifications and GitHub
 reconciliation run once, after final analysis and pattern output exist. Set
 `orka.sideEffects.enabled=false` to suppress that final external reconciliation
 for an evaluation run. Per-test Tasks are applied in bounded producer waves by
-default. `orka.taskExecution` copies node selectors, tolerations, and affinity to
-both per-test and pattern Task worker pods.
+default. The producer rejects a wave timeout that cannot cover every configured
+Task attempt plus scheduling margin. Orka CronJobs use `restartPolicy: Never`
+and `backoffLimit: 0`, so a failed producer does not restart inside the same Pod
+and replay every wave. `orka.taskExecution` copies node selectors, tolerations,
+and affinity to both per-test and pattern Task worker pods.
 
 The chart deploys the analysis pipeline, not Orka itself, so the default stays
 `inprocess` and a fresh install always works. Opt into Orka only after those
@@ -183,7 +186,9 @@ kubectl -n dashboards create job \
 ```
 
 For a suspended evaluation CronJob, `run-cronjob-now.sh` checks for active
-scheduled or manual Jobs and can wait for completion. The check is not a
+scheduled or manual Jobs and can wait for completion. When its wait timeout
+expires, it deletes the still-running Job by default. Use `--keep-on-timeout`
+only when another operator will continue monitoring it. The check is not a
 distributed lock, so do not invoke the helper concurrently.
 
 For the Orka backend, `experimental/orka/orka-ops.sh` validates the control
@@ -210,9 +215,10 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | `image.repository`, `image.tag` | Engine image; tag defaults to the chart `appVersion`. |
 | `mode` | `watch` (continuous worker Deployment, default) or `cron` (scheduled CronJob). |
 | `analysis` | `inprocess` for the self-contained backend or `orka` for the strategic preview. Orka currently requires `mode: cron`, a compatible control plane, Provider, and worker. |
+| `fetcher.restartPolicy`, `fetcher.backoffLimit`, `fetcher.activeDeadlineSeconds` | Bound CronJob container restarts, Job retries, and total wall time. Empty restart policy selects `Never` for Orka and `OnFailure` otherwise; the default deadline is 10 hours. |
 | `orka.artifactTool.*` | Release-scoped artifact Tool image, authentication, network policy, resources, and scheduling. |
 | `orka.baseTools.*` | Create the synchronized producer ConfigMap or reference an existing ConfigMap in the release namespace. |
-| `orka.producer.maxConcurrentTasks`, `taskPoll`, `waveTimeout` | Apply per-test Tasks in bounded waves (`0` through `1000`) and bound placement recovery and intermediate-wave polling. |
+| `orka.producer.maxConcurrentTasks`, `taskPoll`, `waveTimeout` | Apply per-test Tasks in bounded waves (`0` through `1000`) and bound placement recovery and intermediate-wave polling. The timeout must cover `taskTimeout * (retries + 1)` plus scheduling margin equal to the greater of one minute or twice the poll interval. |
 | `orka.taskExecution.*` | Copy node selectors, tolerations, and affinity to Orka per-test and pattern worker pods. |
 | `orka.sideEffects.enabled` | Run post-analysis notifications and GitHub reconciliation. Disable for an Orka evaluation. |
 | `orka.fixRuntime.enabled` | Mount a ServiceAccount token and grant Orka Task RBAC for `agent_runtime.type: orka` fix generation. |

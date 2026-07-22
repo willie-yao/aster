@@ -83,6 +83,7 @@ helm upgrade --install capz-orka-eval deploy/helm/prow-ai-dashboard \
   --set mode=cron \
   --set analysis=orka \
   --set fetcher.suspend=true \
+  --set fetcher.activeDeadlineSeconds=36000 \
   --set orka.sideEffects.enabled=false \
   --set server.actions.enabled=false \
   --set persistence.enabled=false \
@@ -107,7 +108,14 @@ deploy/helm/prow-ai-dashboard/run-cronjob-now.sh --wait \
 Without `--wait`, the helper prints commands for following logs and checking the
 Job. The CronJob can remain suspended while manually created Jobs run.
 `--timeout` accepts one base-10 integer followed by `s`, `m`, or `h`; leading
-zeros remain decimal, so `08h` is the same as `8h`.
+zeros remain decimal, so `08h` is the same as `8h`. A timeout deletes the manual
+Job so it cannot continue unnoticed. Use `--keep-on-timeout` only when another
+operator will own the remaining run.
+
+Set `orka.producer.waveTimeout` to at least `orka.taskTimeout *
+(orka.retries + 1)` plus scheduling margin equal to the greater of one minute
+or twice `orka.producer.taskPoll`. The producer rejects an unsafe budget before
+creating Tasks.
 
 Inspect the isolated server after the Job completes:
 

@@ -205,6 +205,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("task execution: %v", err)
 	}
+	if err := validateTaskWaveBudget(*timeout, *retries, *maxConcurrentTasks, *taskPoll, *waveTimeout); err != nil {
+		log.Fatal(err)
+	}
 
 	cfg, addendum, err := project.LoadDir(*projectDir)
 	if err != nil {
@@ -469,6 +472,37 @@ func applyAll(namespace, kubeContext string, tools, tasks []namedObj, maxConcurr
 		return err
 	}
 	return applyObjects(context.Background(), kc, namespace, tools, tasks, maxConcurrent, poll, waveTimeout)
+}
+
+func validateTaskWaveBudget(taskTimeoutValue string, retries, maxConcurrent int, poll, waveTimeout time.Duration) error {
+	if retries < 0 {
+		return fmt.Errorf("retries must be non-negative")
+	}
+	taskTimeout, err := time.ParseDuration(taskTimeoutValue)
+	if err != nil || taskTimeout <= 0 {
+		return fmt.Errorf("timeout must be a positive duration, got %q", taskTimeoutValue)
+	}
+	if maxConcurrent == 0 {
+		return nil
+	}
+	attempts := int64(retries + 1)
+	maxDuration := int64(1<<63 - 1)
+	if int64(taskTimeout) > maxDuration/attempts {
+		return fmt.Errorf("timeout %s with %d attempts exceeds the supported duration range", taskTimeout, attempts)
+	}
+	attemptBudget := taskTimeout * time.Duration(attempts)
+	if poll > time.Duration(maxDuration/2) {
+		return fmt.Errorf("task-poll %s exceeds the supported duration range", poll)
+	}
+	margin := max(time.Minute, 2*poll)
+	if int64(attemptBudget) > maxDuration-int64(margin) {
+		return fmt.Errorf("timeout %s with %d attempts and margin %s exceeds the supported duration range", taskTimeout, attempts, margin)
+	}
+	minimum := attemptBudget + margin
+	if waveTimeout < minimum {
+		return fmt.Errorf("wave-timeout %s must be at least %s for timeout %s, %d attempts, and scheduling margin %s", waveTimeout, minimum, taskTimeout, attempts, margin)
+	}
+	return nil
 }
 
 func applyObjects(ctx context.Context, client taskApplyClient, namespace string, tools, tasks []namedObj, maxConcurrent int, poll, waveTimeout time.Duration) error {

@@ -59,7 +59,7 @@ if [[ "\$*" == *' get jobs '* ]]; then
   exit 0
 fi
 if [[ "\$*" == *' get job/'* ]]; then
-  printf '%s' "\${FAKE_JOB_CONDITIONS:-Complete=True}"
+  printf '%s' "\${FAKE_JOB_CONDITIONS-Complete=True}"
   exit 0
 fi
 if [[ "\$*" == *' create job '* && "\$*" == *' --dry-run=client '* ]]; then
@@ -82,6 +82,10 @@ if [[ "\$*" == *' create -f -'* ]]; then
 fi
 if [[ "\$*" == *' describe job/'* ]]; then
   printf 'job description\n'
+  exit 0
+fi
+if [[ "\$*" == *' delete job/'* ]]; then
+  printf 'job deleted\n'
   exit 0
 fi
 if [[ "\$*" == *' logs job/'* ]]; then
@@ -107,6 +111,32 @@ grep -Fq 'Created Job dashboards/' "$tmp/run-now.txt"
 KUBECTL="$tmp/kubectl-job" "$chart/run-cronjob-now.sh" --wait --timeout 08h \
   dashboards "$long_cronjob" > "$tmp/completed-job.txt"
 grep -Fq 'job logs' "$tmp/completed-job.txt"
+
+delete_calls_before=$(grep -Fc ' delete job/' "$tmp/job-calls" || true)
+if FAKE_JOB_CONDITIONS='' KUBECTL="$tmp/kubectl-job" \
+  "$chart/run-cronjob-now.sh" --wait --timeout 0s dashboards "$long_cronjob" \
+  > "$tmp/timed-out-job.txt" 2>&1; then
+  echo 'run helper accepted a timed-out Job' >&2
+  exit 1
+fi
+grep -Fq 'Deleting timed-out Job' "$tmp/timed-out-job.txt"
+delete_calls_after=$(grep -Fc ' delete job/' "$tmp/job-calls" || true)
+if [[ $delete_calls_after -ne $((delete_calls_before + 1)) ]]; then
+  echo 'run helper did not delete the timed-out Job' >&2
+  exit 1
+fi
+
+if FAKE_JOB_CONDITIONS='' KUBECTL="$tmp/kubectl-job" \
+  "$chart/run-cronjob-now.sh" --wait --timeout 0s --keep-on-timeout \
+  dashboards "$long_cronjob" > "$tmp/kept-timed-out-job.txt" 2>&1; then
+  echo 'run helper accepted a kept timed-out Job' >&2
+  exit 1
+fi
+grep -Fq 'Leaving timed-out Job' "$tmp/kept-timed-out-job.txt"
+if [[ $(grep -Fc ' delete job/' "$tmp/job-calls" || true) -ne $delete_calls_after ]]; then
+  echo 'run helper deleted a Job despite --keep-on-timeout' >&2
+  exit 1
+fi
 
 if FAKE_JOB_CONDITIONS=Failed=True KUBECTL="$tmp/kubectl-job" \
   "$chart/run-cronjob-now.sh" --wait --timeout 5s dashboards "$long_cronjob" \

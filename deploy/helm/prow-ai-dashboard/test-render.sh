@@ -71,9 +71,50 @@ grep -Fq 'name: submit-analysis' "$tmp/owned.yaml"
 grep -Fq '/tool/submit_analysis' "$tmp/owned.yaml"
 grep -Fq 'agentpool: nodepool1' "$tmp/owned.yaml"
 grep -Fq 'suspend: false' "$tmp/owned.yaml"
+grep -Fq 'backoffLimit: 0' "$tmp/owned.yaml"
+grep -Fq 'activeDeadlineSeconds: 36000' "$tmp/owned.yaml"
+grep -Fq 'restartPolicy: Never' "$tmp/owned.yaml"
 grep -Fq -- '- -max-concurrent-tasks=2' "$tmp/owned.yaml"
 grep -Fq -- '- -task-poll=5s' "$tmp/owned.yaml"
 grep -Fq -- '- -wave-timeout=30m' "$tmp/owned.yaml"
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set mode=cron \
+  --show-only templates/fetcher-cronjob.yaml > "$tmp/inprocess-cron.yaml"
+grep -Fq 'activeDeadlineSeconds: 36000' "$tmp/inprocess-cron.yaml"
+grep -Fq 'restartPolicy: OnFailure' "$tmp/inprocess-cron.yaml"
+if grep -Fq 'backoffLimit:' "$tmp/inprocess-cron.yaml"; then
+  echo 'in-process CronJob unexpectedly set a backoff limit' >&2
+  exit 1
+fi
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set mode=cron --set analysis=orka \
+  --set fetcher.restartPolicy=OnFailure \
+  --set fetcher.backoffLimit=2 \
+  --set fetcher.activeDeadlineSeconds=7200 \
+  --show-only templates/fetcher-cronjob.yaml > "$tmp/custom-job-lifecycle.yaml"
+grep -Fq 'backoffLimit: 2' "$tmp/custom-job-lifecycle.yaml"
+grep -Fq 'activeDeadlineSeconds: 7200' "$tmp/custom-job-lifecycle.yaml"
+grep -Fq 'restartPolicy: OnFailure' "$tmp/custom-job-lifecycle.yaml"
+
+for invalid in restart backoff negative-backoff oversized-backoff deadline negative-deadline; do
+  case $invalid in
+    restart) lifecycle_args=(--set-string fetcher.restartPolicy=Always); want='fetcher.restartPolicy must be Never or OnFailure' ;;
+    backoff) lifecycle_args=(--set-string fetcher.backoffLimit=many); want='fetcher.backoffLimit must be -1 or a non-negative integer' ;;
+    negative-backoff) lifecycle_args=(--set fetcher.backoffLimit=-2); want='fetcher.backoffLimit must be -1 or a non-negative integer' ;;
+    oversized-backoff) lifecycle_args=(--set-string fetcher.backoffLimit=2147483648); want='fetcher.backoffLimit must not exceed 2147483647' ;;
+    deadline) lifecycle_args=(--set-string fetcher.activeDeadlineSeconds=soon); want='fetcher.activeDeadlineSeconds must be a non-negative integer' ;;
+    negative-deadline) lifecycle_args=(--set fetcher.activeDeadlineSeconds=-1); want='fetcher.activeDeadlineSeconds must be a non-negative integer' ;;
+  esac
+  if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+    --set mode=cron --set analysis=orka "${lifecycle_args[@]}" \
+    > "$tmp/invalid-lifecycle-$invalid.yaml" 2>&1; then
+    echo "$invalid lifecycle value was accepted" >&2
+    exit 1
+  fi
+  grep -Fq "$want" "$tmp/invalid-lifecycle-$invalid.yaml"
+done
+
 helm install test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set mode=cron \
   --set analysis=orka \

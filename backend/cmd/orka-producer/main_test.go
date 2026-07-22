@@ -546,6 +546,39 @@ func TestApplyObjectsReusesSuccessfulTaskAfterPlacementChange(t *testing.T) {
 	}
 }
 
+func TestValidateTaskWaveBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		taskTimeout   string
+		retries       int
+		maxConcurrent int
+		poll          time.Duration
+		waveTimeout   time.Duration
+		wantErr       string
+	}{
+		{name: "valid", taskTimeout: "10m", retries: 1, maxConcurrent: 2, poll: 5 * time.Second, waveTimeout: 30 * time.Minute},
+		{name: "unlimited skips wave budget", taskTimeout: "10m", retries: 1, maxConcurrent: 0, poll: 5 * time.Second, waveTimeout: time.Second},
+		{name: "negative retries", taskTimeout: "10m", retries: -1, maxConcurrent: 2, poll: 5 * time.Second, waveTimeout: 30 * time.Minute, wantErr: "retries must be non-negative"},
+		{name: "invalid timeout", taskTimeout: "bad", retries: 1, maxConcurrent: 2, poll: 5 * time.Second, waveTimeout: 30 * time.Minute, wantErr: "timeout must be a positive duration"},
+		{name: "zero timeout", taskTimeout: "0s", retries: 1, maxConcurrent: 2, poll: 5 * time.Second, waveTimeout: 30 * time.Minute, wantErr: "timeout must be a positive duration"},
+		{name: "no scheduling margin", taskTimeout: "40m", retries: 2, maxConcurrent: 2, poll: 10 * time.Second, waveTimeout: 120 * time.Minute, wantErr: "must be at least 2h1m0s"},
+		{name: "poll margin", taskTimeout: "1m", retries: 0, maxConcurrent: 2, poll: 2 * time.Minute, waveTimeout: 4*time.Minute - time.Second, wantErr: "must be at least 5m0s"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateTaskWaveBudget(tc.taskTimeout, tc.retries, tc.maxConcurrent, tc.poll, tc.waveTimeout)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error = %v, want %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestApplyObjectsValidatesWaveSettings(t *testing.T) {
 	for _, tc := range []struct {
 		name       string

@@ -22,6 +22,11 @@ for how to pin a release.
 
 ### Added
 
+- **Bounded Orka CronJob lifecycle.** Orka producer waves now reject retry budgets
+  that cannot fit within the wave deadline. Chart-managed CronJobs use Job-level
+  deadlines, disable in-Pod producer restarts by default, and avoid automatic
+  Job retries. The manual trigger deletes timed-out Jobs unless the operator
+  explicitly keeps them.
 - **Authenticated analysis-trace console.** Server mode now exposes the private
   trace snapshot through admin-gated filtered and download endpoints and a
   dedicated operator page. Static Pages remains unchanged, and direct

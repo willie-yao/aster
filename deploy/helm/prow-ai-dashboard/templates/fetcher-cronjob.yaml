@@ -6,6 +6,30 @@
 {{- $orka := eq .Values.analysis "orka" }}
 {{- $orkaAccess := or $orka .Values.orka.fixRuntime.enabled }}
 {{- $hasTaskExecution := or (not (empty .Values.orka.taskExecution.nodeSelector)) (not (empty .Values.orka.taskExecution.tolerations)) (not (empty .Values.orka.taskExecution.affinity)) }}
+{{- $restartPolicy := .Values.fetcher.restartPolicy }}
+{{- if empty $restartPolicy }}
+  {{- if $orka }}
+    {{- $restartPolicy = "Never" }}
+  {{- else }}
+    {{- $restartPolicy = "OnFailure" }}
+  {{- end }}
+{{- end }}
+{{- if not (or (eq $restartPolicy "Never") (eq $restartPolicy "OnFailure")) }}
+  {{- fail "fetcher.restartPolicy must be Never or OnFailure" }}
+{{- end }}
+{{- $backoffLimitValue := printf "%v" .Values.fetcher.backoffLimit }}
+{{- if not (regexMatch "^(-1|0|[1-9][0-9]{0,17})$" $backoffLimitValue) }}
+  {{- fail "fetcher.backoffLimit must be -1 or a non-negative integer" }}
+{{- end }}
+{{- $backoffLimit := int64 $backoffLimitValue }}
+{{- if gt $backoffLimit 2147483647 }}
+  {{- fail "fetcher.backoffLimit must not exceed 2147483647" }}
+{{- end }}
+{{- $activeDeadlineValue := printf "%v" .Values.fetcher.activeDeadlineSeconds }}
+{{- if not (regexMatch "^(0|[1-9][0-9]{0,17})$" $activeDeadlineValue) }}
+  {{- fail "fetcher.activeDeadlineSeconds must be a non-negative integer" }}
+{{- end }}
+{{- $activeDeadlineSeconds := int64 $activeDeadlineValue }}
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -21,13 +45,21 @@ spec:
   failedJobsHistoryLimit: {{ .Values.fetcher.failedJobsHistoryLimit }}
   jobTemplate:
     spec:
+      {{- if ge $backoffLimit 0 }}
+      backoffLimit: {{ $backoffLimit }}
+      {{- else if $orka }}
+      backoffLimit: 0
+      {{- end }}
+      {{- if gt $activeDeadlineSeconds 0 }}
+      activeDeadlineSeconds: {{ $activeDeadlineSeconds }}
+      {{- end }}
       template:
         metadata:
           labels:
             {{- include "prow-ai-dashboard.selectorLabels" . | nindent 12 }}
             app.kubernetes.io/component: fetcher
         spec:
-          restartPolicy: OnFailure
+          restartPolicy: {{ $restartPolicy }}
           {{- if $orkaAccess }}
           serviceAccountName: {{ include "prow-ai-dashboard.orkaServiceAccountName" . }}
           automountServiceAccountToken: true
