@@ -81,6 +81,9 @@ func TestTraceStoreSaveUsesPrivateSchema(t *testing.T) {
 	if got.Version != analysisTraceVersion || len(got.Traces) != 2 {
 		t.Fatalf("snapshot = %+v", got)
 	}
+	if got.Traces[0].Backend != "inprocess" || got.Traces[1].Backend != "inprocess" {
+		t.Fatalf("backends = %+v", got.Traces)
+	}
 	if got.Traces[0].JobID != "job-a" || got.Traces[1].JobID != "job-b" {
 		t.Fatalf("trace order = %+v", got.Traces)
 	}

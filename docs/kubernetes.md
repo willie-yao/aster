@@ -230,14 +230,16 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | `fetcher.buildsPerJob`, `fetcher.workers`, `fetcher.timeout` | Fetch depth and budget. |
 | `fetcher.extraEnv` | Extra env such as `GITHUB_TOKEN`, `EMAIL_SMTP_PASSWORD`, or the `ISSUE_TOKEN` / `FIX_TOKEN` write tokens (see [Automatic issues and fix PRs](#automatic-issues-and-fix-prs)). |
 | `ingress.enabled`, `ingress.hosts`, `ingress.tls` | Public read path. |
-| `server.actions.enabled`, `server.actions.mode` | Turn on write actions; `oauth` (GitHub sign-in) or `proxy` (SSO proxy + bot token). |
-| `server.actions.admins` | Required allowlist for write actions. An empty list fails closed. |
+| `server.actions.enabled`, `server.actions.mode` | Turn on admin authentication, write actions, and private trace access; `oauth` (GitHub sign-in) or `proxy` (SSO proxy + bot token). |
+| `server.actions.admins` | Required allowlist for admin actions and trace access. An empty list fails closed. |
 
 The public read endpoints (`/data/*`, `/api/capabilities`, `/healthz`) are
-unauthenticated. Admin write actions are opt-in: set `server.actions.enabled`
-and choose `server.actions.mode` (`oauth` for GitHub sign-in with per-user
+unauthenticated. Admin features are opt-in: set `server.actions.enabled` and
+choose `server.actions.mode` (`oauth` for GitHub sign-in with per-user
 attribution, or `proxy` for an upstream SSO proxy plus a bot token), then list
 the allowed GitHub logins in `server.actions.admins` (see [server.md](server.md)).
+The same authenticated session protects write actions and the private analysis
+trace page.
 
 ### Enabling actions with Helm
 

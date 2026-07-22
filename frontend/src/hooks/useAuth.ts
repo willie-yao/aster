@@ -1,7 +1,7 @@
 import { createContext, useContext } from "react";
 
-// AuthStatus is the admin sign-in state for write actions.
-//   unavailable: no actions capability (static Pages or read-only server).
+// AuthStatus is the admin sign-in state for operator features.
+//   unavailable: no authenticated capability (static Pages or read-only server).
 //   loading:     still checking the session.
 //   anonymous:   actions available, not signed in (oauth mode).
 //   authenticated: signed in (oauth), or authenticated upstream (proxy).

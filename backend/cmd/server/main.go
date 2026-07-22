@@ -48,7 +48,7 @@ func main() {
 	flag.StringVar(&addr, "addr", ":8080", "listen address")
 	flag.StringVar(&dataDir, "data-dir", "data", "directory of fetcher JSON output served at /data")
 	flag.StringVar(&staticDir, "static-dir", "", "optional built frontend (dist) served at / with SPA fallback")
-	flag.StringVar(&projectDir, "project-dir", "", "project.yaml directory; enables admin actions when set with AUTH_MODE")
+	flag.StringVar(&projectDir, "project-dir", "", "project.yaml directory; enables admin features when set with AUTH_MODE")
 	flag.Parse()
 
 	opts := server.Options{
@@ -57,13 +57,13 @@ func main() {
 		Capabilities: server.DefaultCapabilities(),
 	}
 
-	// Enable admin-gated actions only when a project config and an auth mode are
+	// Enable admin-gated features only when a project config and an auth mode are
 	// both provided. Otherwise the server stays read-only.
 	if projectDir != "" && os.Getenv("AUTH_MODE") != "" {
 		if err := enableActions(&opts, projectDir, dataDir); err != nil {
 			log.Fatalf("server: enabling actions: %v", err)
 		}
-		log.Printf("🔐 admin actions enabled (auth mode: %s)", opts.AuthMode)
+		log.Printf("🔐 admin features enabled (auth mode: %s)", opts.AuthMode)
 	} else {
 		log.Println("actions disabled (set -project-dir and AUTH_MODE to enable)")
 	}

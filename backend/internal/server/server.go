@@ -59,14 +59,14 @@ type Options struct {
 	StaticDir string
 	// Capabilities is the descriptor returned at /api/capabilities.
 	Capabilities Capabilities
-	// Auth and Actions enable the admin-gated write endpoints. Both must be set;
-	// when either is nil the server is read-only and advertises no actions.
+	// Auth enables admin-gated operator features. Actions additionally enables
+	// write endpoints. With no Auth the server stays read-only.
 	Auth    auth.Authenticator
 	Actions ActionRunner
 	// ActionTimeout bounds a single action. Zero uses defaultActionTimeout.
 	ActionTimeout time.Duration
-	// AuthMode is advertised to the frontend: "oauth" (show a sign-in button) or
-	// "proxy" (auth handled upstream; the UI just calls the actions).
+	// AuthMode is advertised to the frontend: "oauth" (show a sign-in button),
+	// "proxy" (auth handled upstream), or "dev" for local use.
 	AuthMode string
 	// LoginURL is where the frontend sends admins to sign in (oauth mode).
 	LoginURL string
@@ -86,14 +86,14 @@ type Capabilities struct {
 	Mode string `json:"mode"`
 	// Features gates additive interactive UI. All false at read parity.
 	Features Features `json:"features"`
-	// Auth describes how the frontend should authenticate for write actions.
-	// Nil when actions are unavailable.
+	// Auth describes how the frontend should authenticate for operator features.
+	// Nil when no authenticated feature is available.
 	Auth *AuthInfo `json:"auth,omitempty"`
 }
 
-// AuthInfo tells the frontend how admins sign in for write actions.
+// AuthInfo tells the frontend how admins sign in for operator features.
 type AuthInfo struct {
-	// Mode is "oauth" (redirect to LoginURL) or "proxy" (upstream SSO).
+	// Mode is "oauth", "proxy", or local-only "dev".
 	Mode string `json:"mode"`
 	// LoginURL is the sign-in redirect for oauth mode.
 	LoginURL string `json:"login_url,omitempty"`
@@ -105,6 +105,8 @@ type Features struct {
 	Actions bool `json:"actions"`
 	// ActionRequests enables persisted asynchronous draft generation.
 	ActionRequests bool `json:"action_requests,omitempty"`
+	// AnalysisTraces enables the private analysis-trace API and UI.
+	AnalysisTraces bool `json:"analysis_traces,omitempty"`
 }
 
 // authRegistrar is implemented by authenticators that need their own routes
@@ -136,20 +138,26 @@ func Handler(opts Options) (http.Handler, error) {
 		fmt.Fprintln(w, "ok")
 	})
 
-	// Admin-gated write actions, enabled only when both auth and an action
-	// runner are configured. Advertise the capability so the frontend lights up
-	// the buttons.
+	// Authenticated operator features share one identity and auth-route setup.
 	caps := opts.Capabilities
+	if opts.Auth != nil {
+		caps.Auth = &AuthInfo{Mode: opts.AuthMode, LoginURL: opts.LoginURL}
+		caps.Features.AnalysisTraces = true
+		if reg, ok := opts.Auth.(authRegistrar); ok {
+			reg.Register(mux)
+		}
+		mux.Handle("GET /api/analysis-traces",
+			auth.Middleware(opts.Auth, analysisTracesHandler(opts.DataDir, false)))
+		mux.Handle("GET /api/analysis-traces/download",
+			auth.Middleware(opts.Auth, analysisTracesHandler(opts.DataDir, true)))
+	}
+
+	// Write actions require both auth and an action runner.
 	if opts.Auth != nil && opts.Actions != nil {
 		caps.Features.Actions = true
-		caps.Auth = &AuthInfo{Mode: opts.AuthMode, LoginURL: opts.LoginURL}
 		timeout := opts.ActionTimeout
 		if timeout <= 0 {
 			timeout = defaultActionTimeout
-		}
-		// Register the authenticator's own routes (OAuth login/callback/etc).
-		if reg, ok := opts.Auth.(authRegistrar); ok {
-			reg.Register(mux)
 		}
 		trusted := trustedOriginSet(opts.TrustedOrigins)
 		guard := func(next http.Handler) http.Handler { return csrfGuard(trusted, next) }

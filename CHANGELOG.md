@@ -22,6 +22,10 @@ for how to pin a release.
 
 ### Added
 
+- **Authenticated analysis-trace console.** Server mode now exposes the private
+  trace snapshot through admin-gated filtered and download endpoints and a
+  dedicated operator page. Static Pages remains unchanged, and direct
+  `/data/ai_traces.json` access still returns 404.
 - **Private in-process analysis traces.** Each AI pass writes a bounded,
   sanitized `ai_traces.json` operational snapshot with model request metadata,
   response IDs, usage, tool names, compaction, critique, and finalization

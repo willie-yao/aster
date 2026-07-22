@@ -26,6 +26,8 @@ backend choice.
 | --- | --- |
 | `GET /data/*` | The fetcher output tree at read parity: `manifest.json`, `dashboard.json`, `jobs/*.json`, `flakiness.json`, `search-index.json`. |
 | `GET /api/capabilities` | Deploy descriptor, for example `{"mode":"server","features":{"actions":false}}`. |
+| `GET /api/analysis-traces` | Admin-gated private trace snapshot. Exact filters: `job_id`, `build_id`, `test_name`, `backend`, `outcome`, and `response_id`. |
+| `GET /api/analysis-traces/download` | Admin-gated attachment form of the same filtered trace snapshot. |
 | `GET /healthz` | Liveness and readiness probe. |
 | `GET /` | The built SPA, when `-static-dir` is set, with deep-link fallback to `index.html`. |
 | `POST /api/failures/{id}/create-issue/preview` | Admin-gated: render the exact GitHub issue for one failure without filing it. Enabled only when actions are configured. |
@@ -49,6 +51,24 @@ The frontend discovers its mode by probing `/api/capabilities`:
 
 Interactive features are additive and gated behind this descriptor, so the same
 build serves both targets. All `/data/*.json` schemas stay byte-compatible.
+
+## Private analysis traces
+
+When admin authentication is configured, the server advertises
+`features.analysis_traces: true` and adds a **Traces** page. The page shows the
+bounded, content-free metadata from `ai_traces.json`, including response IDs,
+provider API mode, request duration and usage, tool names, compaction, critique,
+and finalization decisions. Each trace links back to the matching test and build.
+
+The API decodes the known trace schema rather than serving the file directly.
+Requests are capped at 64 MiB, responses use `Cache-Control: no-store`, and both
+endpoints require the same admin identity used by actions. A missing trace file
+returns 404 and the page renders an empty state. Static Pages deployments never
+advertise the feature and continue stripping `ai_traces.json` before publication.
+
+The current trace producer is the in-process analysis backend. Orka Task events
+remain available through Orka logs and OpenTelemetry; importing those event
+sequences into this private view is a separate integration.
 
 ## Admin-gated actions
 

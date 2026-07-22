@@ -14,6 +14,7 @@ import { Link as RouterLink, Outlet, useLocation } from "react-router-dom";
 import { SearchBar } from "./SearchBar";
 import { ProfileMenu } from "./ProfileMenu";
 import { useManifest } from "../hooks/useManifest";
+import { useCapabilities } from "../hooks/useCapabilities";
 import { soft } from "../theme";
 
 // Primary top-nav tab: pill highlight for the active section, with aria-current
@@ -61,11 +62,13 @@ function NavTab({
 
 export function Layout() {
   const manifest = useManifest();
+  const { features } = useCapabilities();
   const location = useLocation();
   const { mode, setMode } = useColorScheme();
   const isDark = mode === "dark";
   const flakyActive = location.pathname === "/flaky" || location.pathname.startsWith("/flaky/");
-  const overviewActive = !flakyActive;
+  const tracesActive = location.pathname === "/analysis-traces";
+  const overviewActive = !flakyActive && !tracesActive;
 
   return (
     <Box sx={{ minHeight: "100vh", bgcolor: "background.default", color: "text.primary" }}>
@@ -172,6 +175,14 @@ export function Layout() {
               active={flakyActive}
               current={location.pathname === "/flaky"}
             />
+            {features.analysis_traces && (
+              <NavTab
+                to="/analysis-traces"
+                label="Traces"
+                active={tracesActive}
+                current={tracesActive}
+              />
+            )}
           </Box>
 
           <Box

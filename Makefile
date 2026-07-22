@@ -35,9 +35,9 @@ build-worker:
 serve: build-server
 	./bin/server -data-dir=frontend/public/data
 
-# Server-mode preview WITH admin actions (File issue / Propose fix / Mark
-# resolved). Builds the SPA and serves it from the API server so the capability
-# descriptor advertises actions and the buttons render. AUTH_MODE=dev
+# Server-mode preview WITH admin features (traces, File issue / Propose fix /
+# Mark resolved). Builds the SPA and serves it from the API server so the
+# capability descriptor advertises them. AUTH_MODE=dev
 # authenticates every request as an admin, so no OAuth or proxy setup is needed
 # (dev only; never expose this server). Set BOT_TOKEN to a GitHub token for the
 # writes to actually reach GitHub. Unlike `make dev` (Vite + HMR), this serves a

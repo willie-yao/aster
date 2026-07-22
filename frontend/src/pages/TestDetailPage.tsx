@@ -23,6 +23,7 @@ import {
   OpenInNew,
 } from "@mui/icons-material";
 import { useJobDetail } from "../hooks/useData";
+import { useCapabilities } from "../hooks/useCapabilities";
 import { formatDuration, highlightStackTrace, timeAgo } from "../lib/utils";
 import { RichText } from "../components/RichText";
 import { RunTimeline } from "../components/RunTimeline";
@@ -151,6 +152,7 @@ function RunMetaPanel({
 
 export function TestDetailPage() {
   const theme = useTheme();
+  const { features } = useCapabilities();
   const { jobName: jobID, testName: encodedTestName } = useParams<{
     jobName: string;
     testName: string;
@@ -441,6 +443,13 @@ export function TestDetailPage() {
               <AiAnalysisPanel
                 analysis={selectedTc.ai_analysis}
                 fileCtx={fileCtx(selectedRun, selectedTc)}
+                traceHref={
+                  features.analysis_traces && !selectedTc.ai_analysis.contract_hash
+                    ? `/analysis-traces?job_id=${encodeURIComponent(jobID ?? "")}` +
+                      `&build_id=${encodeURIComponent(selectedRun.build_id)}` +
+                      `&test_name=${encodeURIComponent(testName)}`
+                    : undefined
+                }
               />
               <Box
                 sx={{

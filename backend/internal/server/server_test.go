@@ -12,7 +12,10 @@ import (
 	"testing"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actions"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/auth"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
 )
 
 // writeFile writes content under dir, creating parents.
@@ -101,6 +104,97 @@ func TestHandler_HidesOperationalFiles(t *testing.T) {
 	}
 }
 
+func TestHandler_AnalysisTracesAuthenticatedAndFiltered(t *testing.T) {
+	dataDir := t.TempDir()
+	traces := ai.AnalysisTraceFile{Version: 1, GeneratedAt: "2026-07-22T00:00:00Z", Traces: []ai.AnalysisTrace{
+		{Backend: "inprocess", JobID: "job-a", BuildID: "1", TestName: "Test A", Outcome: "success", Events: []ai.TraceEvent{{Sequence: 1, Kind: "model_request", ResponseID: "resp-a"}}},
+		{JobID: "job-b", BuildID: "2", TestName: "Test B", Outcome: "error", Events: []ai.TraceEvent{{Sequence: 1, Kind: "model_request", ResponseID: "resp-b"}}},
+	}}
+	if err := statefile.WriteJSON(filepath.Join(dataDir, output.AITraceFilename), traces); err != nil {
+		t.Fatal(err)
+	}
+	h, err := Handler(Options{DataDir: dataDir, Capabilities: DefaultCapabilities(), Auth: fakeAuth{}, AuthMode: "dev"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/analysis-traces")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated status = %d", resp.StatusCode)
+	}
+	_ = resp.Body.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/analysis-traces?job_id=job-b&backend=inprocess&response_id=resp-b", nil)
+	req.Header.Set("Authorization", "ok")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Cache-Control") != "no-store" {
+		t.Fatalf("filtered status=%d cache=%q", resp.StatusCode, resp.Header.Get("Cache-Control"))
+	}
+	var got ai.AnalysisTraceFile
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if len(got.Traces) != 1 || got.Traces[0].JobID != "job-b" || got.Traces[0].Backend != "inprocess" {
+		t.Fatalf("filtered traces = %+v", got.Traces)
+	}
+
+	req, _ = http.NewRequest(http.MethodGet, srv.URL+"/api/analysis-traces/download", nil)
+	req.Header.Set("Authorization", "ok")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := resp.Header.Get("Content-Disposition"); got != `attachment; filename="analysis-traces.json"` {
+		t.Fatalf("Content-Disposition = %q", got)
+	}
+	_ = resp.Body.Close()
+
+	resp, err = http.Get(srv.URL + "/api/capabilities")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var caps Capabilities
+	if err := json.NewDecoder(resp.Body).Decode(&caps); err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if !caps.Features.AnalysisTraces || caps.Features.Actions || caps.Auth == nil {
+		t.Fatalf("capabilities = %+v", caps)
+	}
+}
+
+func TestHandler_AnalysisTracesMissing(t *testing.T) {
+	dataDir := t.TempDir()
+	h, err := Handler(Options{DataDir: dataDir, Capabilities: DefaultCapabilities(), Auth: fakeAuth{}, AuthMode: "dev"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/analysis-traces", nil)
+	req.Header.Set("Authorization", "ok")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q", got)
+	}
+	_ = resp.Body.Close()
+}
+
 // TestHandler_Capabilities verifies the descriptor shape served in server mode.
 func TestHandler_Capabilities(t *testing.T) {
 	dataDir := t.TempDir()
@@ -128,7 +222,7 @@ func TestHandler_Capabilities(t *testing.T) {
 	if got.Mode != "server" {
 		t.Errorf("Mode = %q, want server", got.Mode)
 	}
-	if got.Features.Actions {
+	if got.Features.Actions || got.Features.AnalysisTraces {
 		t.Errorf("Features = %+v, want all false at read parity", got.Features)
 	}
 }

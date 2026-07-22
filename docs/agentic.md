@@ -638,8 +638,10 @@ traces.
 `ai_traces.json` is listed in `output.NonPublishedFiles`. The API server returns
 404 for it under `/data`, and the Pages workflow removes it before publication.
 Inspect it directly in a local output directory or on the Kubernetes shared
-volume. An authenticated trace API and dashboard view are separate follow-up
-work.
+volume. When admin authentication is enabled, server mode also exposes the
+decoded snapshot through `GET /api/analysis-traces` and the private **Traces**
+page. Exact query filters can correlate a response ID or a job/build/test tuple
+without exposing prompt or tool content.
 
 ### Cache semantics
 

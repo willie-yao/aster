@@ -31,6 +31,7 @@ type AnalysisTraceFile struct {
 
 // AnalysisTrace records sanitized control-flow metadata for one failure.
 type AnalysisTrace struct {
+	Backend   string       `json:"backend"`
 	JobID     string       `json:"job_id"`
 	BuildID   string       `json:"build_id"`
 	TestName  string       `json:"test_name"`
@@ -69,6 +70,7 @@ type TraceEvent struct {
 
 // TraceMetadata identifies one analysis without model or endpoint details.
 type TraceMetadata struct {
+	Backend  string
 	JobID    string
 	BuildID  string
 	TestName string
@@ -91,10 +93,15 @@ func (s *TraceStore) Start(meta TraceMetadata) *TraceSession {
 		return nil
 	}
 	now := time.Now().UTC()
+	backend := strings.TrimSpace(meta.Backend)
+	if backend == "" {
+		backend = "inprocess"
+	}
 	return &TraceSession{
 		store: s,
 		start: now,
 		trace: AnalysisTrace{
+			Backend:   traceText(backend),
 			JobID:     traceText(meta.JobID),
 			BuildID:   traceText(meta.BuildID),
 			TestName:  traceText(meta.TestName),

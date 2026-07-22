@@ -1,9 +1,11 @@
 import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
 import Chip from "@mui/material/Chip";
 import Link from "@mui/material/Link";
 import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
-import { AutoAwesome } from "@mui/icons-material";
+import { AutoAwesome, Terminal } from "@mui/icons-material";
+import { Link as RouterLink } from "react-router-dom";
 import type { AIAnalysis } from "../types/dashboard";
 import { RichText } from "./RichText";
 import { LabeledBlock } from "./LabeledBlock";
@@ -24,9 +26,11 @@ function severityAccent(sev: string): "error" | "warning" | "primary" {
 export function AiAnalysisPanel({
   analysis,
   fileCtx,
+  traceHref,
 }: {
   analysis: AIAnalysis;
   fileCtx: FileToUrlContext;
+  traceHref?: string;
 }) {
   const sevColor = severityAccent(analysis.severity);
   return (
@@ -55,6 +59,17 @@ export function AiAnalysisPanel({
                 : { bgcolor: "action.selected", color: "text.secondary" }),
             }}
           />
+          {traceHref && (
+            <Button
+              component={RouterLink}
+              to={traceHref}
+              size="small"
+              startIcon={<Terminal sx={{ fontSize: 16 }} />}
+              sx={{ ml: { sm: "auto" }, textTransform: "none" }}
+            >
+              Inspect trace
+            </Button>
+          )}
         </Stack>
 
         <LabeledBlock label="Root Cause" accent={sevColor}>
