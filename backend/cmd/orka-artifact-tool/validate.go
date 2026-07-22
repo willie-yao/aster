@@ -176,11 +176,15 @@ func validateSubmission(
 		}
 	}
 	missingEvidence := []string{}
-	matchedSkills := set.Match(analysis.EvidenceText())
+	evidenceText := analysis.EvidenceText()
+	matchedSkills := set.Match(evidenceText)
 	var treePaths map[string]bool
 	treeChecked := false
 	for _, skill := range matchedSkills {
 		for _, group := range skill.RequiredEvidence {
+			if !group.Applies(evidenceText) {
+				continue
+			}
 			if group.Satisfied(readPaths) {
 				continue
 			}

@@ -1,37 +1,54 @@
-# Authoring AI skills (recipes) for your project
+# AI diagnostic skills and project recipes
 
-> Status: Consumer-side opt-in. Skills extend the always-on critique gate, so
-> you only need this doc if you want to harden the gate against the specific
-> failure patterns your CI hits.
+> Status: Engine profiles plus consumer extensions. Skills extend the always-on
+> critique gate and the Orka required-evidence contract.
 
-This doc explains how to author and ship diagnostic recipes (called
-"skills" in the engine) that bias the AI loop toward reading the
-evidence your project considers canonical for known failure modes.
+Skills are YAML diagnostic recipes that steer the analysis toward canonical
+evidence. A recipe contains trigger regexes, required artifact-path groups, and
+a short investigation procedure.
+
+The engine composes one merged set for both analysis backends:
+
+1. **Engine Prow profile.** Always enabled because the product analyzes Prow
+   runs. It teaches the distinction between `build-log.txt` and JUnit details,
+   the roles of Prow metadata files, artifact-tree navigation, timeline
+   ordering, cleanup noise, and last-passing comparisons.
+2. **Engine Kubernetes profile.** Enabled when the effective `ai.tools`
+   selection includes `k8s` or an individual `k8s.*` tool. It contains
+   provider-neutral procedures for Machine and Node initialization, Pod
+   startup, cluster provisioning, and Service, API, DNS, and kube-proxy
+   connectivity.
+3. **Consumer recipes.** Loaded from
+   `<project-dir>/skills/*.{yaml,yml}` for project and provider knowledge.
+
+These are composition sources, not precedence layers. The complete merged set
+is sorted by priority descending and ID ascending, and only recipes whose
+triggers match a model draft are surfaced for that draft.
+
+The universal system prompt stays small. The Prow profile is engine-owned
+because Prow artifacts are part of the product contract. Kubernetes knowledge
+is conditional because some Prow consumers do not produce Kubernetes cluster
+dumps or use the cluster-navigation tools. Provider details such as CAPZ,
+Azure resources, ASO, and project flavor behavior remain consumer-owned.
 
 ## What a skill is
 
-A skill is a YAML file at `<your-project-dir>/skills/<name>.yaml`
-that declares:
+Each recipe declares:
 
-1. **Triggers:** regex patterns that, when any matches the model's
-   draft analysis (root_cause + summary + suggested_fix + relevant_files),
-   marks the recipe as "applicable" to this failure.
-2. **Required evidence:** one or more groups of regex patterns. For
-   each group, the agent must have successfully read at least one
-   artifact whose path matches one of the group's patterns. A group
-   is satisfied by any single match.
-3. **Procedure:** markdown guidance quoted back to the model when
-   the recipe matches but evidence is still missing. Treated as
-   *consumer guidance*; the engine wraps it with a disclaimer when
-   injecting it so the recipe cannot accidentally override the
-   system prompt or response schema.
+1. **Triggers:** regex patterns matched against the model draft
+   (`root_cause`, `summary`, `suggested_fix`, and `relevant_files`).
+2. **Required evidence:** groups of artifact-path regexes. Each group is
+   satisfied when the agent successfully reads one matching path.
+3. **Procedure:** short diagnostic guidance returned when a recipe matches.
 
-The critique gate consults the loaded skill set on every draft. When
-a recipe matches and any of its evidence groups is unsatisfied, the
-gate appends a feedback message naming the recipe, listing the
-missing groups, and quoting the procedure. The agentic loop then
-re-prompts the model and dynamically extends its retry budget so the
-model has room to actually go read the missing artifacts.
+Procedures are untrusted guidance. They cannot override the system prompt, Tool
+constraints, the result schema, or the tool budget. The in-process critique
+wraps procedures with this boundary, and Orka returns the same boundary from
+`required_evidence`.
+
+When a recipe matches and evidence is missing, the in-process gate re-prompts
+the model with the missing groups. Orka requires `required_evidence` lookup and
+validates the same groups again in `submit_analysis`.
 
 ## When to author a skill
 
@@ -51,8 +68,9 @@ hash and invalidate cache for no benefit.
 ## Schema
 
 ```yaml
-# REQUIRED. Unique identifier within your project's skill set.
-# Kebab-case, e.g. webhook-tls-failure, machine-bootstrap-empty-logs.
+# REQUIRED. Unique consumer identifier within the merged skill set.
+# Do not use the reserved engine. prefix. Kebab-case is recommended,
+# e.g. webhook-tls-failure or machine-bootstrap-empty-logs.
 id: webhook-tls-failure
 
 # Optional human-readable label. Defaults to id. Surfaced in feedback.
@@ -79,10 +97,13 @@ triggers:
 # Optional but usually present. Evidence groups the agent must satisfy
 # before critique accepts a draft that matched this recipe. Each group
 # is satisfied if any single regex matches any path the agent
-# successfully read.
+# successfully read. An optional when list limits a group to matching
+# drafts, so one recipe can require different evidence by failure class.
 required_evidence:
   - id: cert-manager-config
     description: cert-manager Certificate or Issuer config
+    when:
+      - "(?i)certificate|issuer|x509"
     any_of:
       - "config/certmanager/.*\\.ya?ml"
       - ".*certificate\\.ya?ml"
@@ -94,9 +115,9 @@ required_evidence:
 # Optional markdown guidance quoted back to the model on retry. Keep
 # short and tool-oriented: name the canonical artifacts and the
 # specific signals to look for. Do NOT issue blanket instructions
-# that contradict the engine system prompt (the engine wraps this
-# block with a "consumer guidance, not engine instruction" disclaimer
-# but a well-scoped procedure is still better).
+# that contradict the engine system prompt. The engine wraps this block
+# with a guidance-only disclaimer, but a well-scoped procedure is still
+# better.
 procedure: |
   1. List cert-manager Certificate objects:
      kubectl get certificate -A
@@ -106,55 +127,66 @@ procedure: |
      name from the webhook configuration manifest.
 ```
 
-## Loading semantics
+## Loading and composition
 
-Skills are loaded once at fetcher startup from
-`<project-dir>/skills/*.yaml`:
+Skills are loaded once at startup. The fetcher and Orka producer call the same
+merged loader with the same effective tool selection.
 
-- Missing directory → empty set, no error. Skills are opt-in.
-- Empty directory → empty set, no error.
-- Any present `.yaml` file must parse cleanly with strict YAML
-  (unknown fields are errors). Any failure aborts fetcher startup.
-- Every regex must compile. Compile failures abort startup.
-- Duplicate IDs across files abort startup.
+Loading is strict:
 
-The engine logs a one-line summary on load:
+- Every selected engine recipe is embedded in the binary and parsed with the
+  same schema as consumer recipes. A malformed built-in is a startup error.
+- A missing or empty consumer `skills/` directory is allowed.
+- Every present `.yaml` or `.yml` file must parse with strict YAML. Unknown
+  fields, invalid regexes, and read errors abort startup.
+- IDs must be unique across the complete merged set. The `engine.` prefix is
+  reserved for built-ins, so consumers cannot silently replace engine recipes.
+- The final order is deterministic: priority descending, then ID ascending.
+  Source filename and profile load order do not affect the result.
+
+The engine logs the selected profiles and merged hash:
+
+```text
+Loaded 6 AI skill recipe(s) (profiles=prow,kubernetes, hash=a1b2c3d4)
 ```
-Loaded 7 AI skill recipe(s) from ./skills/ (hash=a1b2c3d4)
-```
 
-## Enabling
+## Profile selection and Kubernetes opt-out
 
-Skills are loaded regardless of any flag (so a parse error catches a
-broken recipe before runtime). There is no `skills.enabled` flag:
-shipping recipe files under `<project_dir>/skills/*.yaml` is the opt-in.
-Skills extend the always-on critique gate when recipes are present:
+The Prow profile is always active. The Kubernetes profile follows `ai.tools`:
 
 ```yaml
-# project.yaml
 ai:
-  critique:
-    max_retries: 2  # optional; default 2
+  tools: [filesystem, k8s]  # Prow plus Kubernetes profiles
 ```
 
-Skills extend critique; they don't replace it. If you ship recipes, the
-gate uses them to require the evidence paths they describe.
+For a consumer where Kubernetes recipes are inappropriate, keep only the
+filesystem group:
 
-## Cache invalidation
+```yaml
+ai:
+  tools: [filesystem]       # Prow profile only
+```
 
-Each cache entry is stamped with the SHA-256 fingerprint of the
-loaded skill set at write time (`SkillSetHash` field). On the next
-fetcher run:
+No separate profile field is needed. This keeps the diagnostic contract aligned
+with the tools the model can actually call. Consumer recipes still load in both
+cases.
 
-- If no skills are loaded, the hash check is skipped (cache unaffected
-  by recipe set changes).
-- If skills are loaded, cache entries whose stored hash differs from the
-  currently-loaded set's hash are invalidated and re-analyzed.
+## Cache and Task invalidation
 
-Editing a recipe, even a single character in a trigger regex or procedure,
-invalidates every cache entry on the next run.
-The fingerprint is whitespace- and comment-insensitive, so reformatting
-a YAML file does not bust the cache.
+Each in-process cache entry is stamped with the SHA-256 fingerprint of the
+complete merged set in `skill_set_hash`. Orka includes the same hash in the
+analysis contract used for Tool scope and Task identity.
+
+The hash changes when any selected built-in or consumer recipe changes, or when
+the selected profile set changes. The result is:
+
+- Existing in-process entries with the prior hash are re-analyzed.
+- Orka emits a different contract hash, Tool scope, and Task name.
+- Consumer-only whitespace and YAML comment changes do not change the hash.
+
+Changing an engine recipe therefore invalidates consumers that select that
+profile. Switching from `[filesystem]` to `[filesystem, k8s]` also invalidates
+prior results because the model-visible evidence contract changed.
 
 ## Writing good triggers
 
@@ -189,6 +221,9 @@ canonical artifact for it lives at one of these paths":
   (e.g. `clusters/.*/machines/`).
 - Use `any_of` to handle natural variation: different namespaces,
   different generated filenames, different controller pod names.
+- Use `when` only when one recipe spans distinct failure classes. Its regexes
+  match the same draft text as skill triggers and keep unrelated groups out of
+  critique and final validation.
 - Prefer 2-3 evidence groups over a single sprawling group: smaller
   groups give more precise feedback to the model.
 - Keep `description` short and human-readable; the engine surfaces
@@ -238,13 +273,15 @@ Before merging a new recipe:
 
 ## Orka backend
 
-The Orka producer loads the same consumer recipes and includes their hash in the
-analysis contract. It exposes the recipes through the scoped
-`required_evidence` Tool. When recipes are present, every accepted Orka analysis
-must consult that Tool before finalizing. The Tool matches the supplied failure
-signal against recipe triggers and returns the consumer procedure plus every
-required-evidence group. Recipe edits therefore invalidate both in-process cache
-entries and Orka Tasks.
+The Orka producer loads the same merged set as the in-process fetcher and sends
+the complete contract to the scoped `required_evidence` and `submit_analysis`
+Tools. `required_evidence` matches the supplied failure signal and returns every
+matched engine or consumer procedure plus its evidence groups.
+
+The merged hash participates in the Orka analysis contract. Recipe edits and
+profile-selection changes therefore invalidate both in-process cache entries
+and Orka Tasks. Final Orka validation checks the same evidence-path groups as
+the in-process critique gate.
 
 ## Observability
 
@@ -260,8 +297,8 @@ After the run, every `AIAnalysis` in `data/jobs/*.json` carries:
 - `critique_version`: which engine contract version did it clear?
 - `skill_set_hash`: fingerprint of the recipe set at the time.
 
-Grouping analyses by `skill_set_hash` lets you compare runs from
-before and after a recipe change without re-fetching unchanged entries.
+Grouping analyses by `skill_set_hash` lets you compare runs before and after
+a recipe or profile change.
 
 ## Auto-suggesting recipes
 

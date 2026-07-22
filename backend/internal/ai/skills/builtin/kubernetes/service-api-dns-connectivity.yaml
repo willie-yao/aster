@@ -1,0 +1,35 @@
+id: engine.kubernetes.service-api-dns-connectivity
+name: Service, API, DNS, and kube-proxy connectivity
+priority: 230
+triggers:
+  - '(?i)\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,160}\b(unreachable|timeout|timed out|refused|connect|dial|lookup|resolve|no route)\b'
+  - '(?i)\b(kube-proxy|dns|resolver|nameserver)\b.{0,160}\b(sync|watch|list|lookup|resolve|refused|timeout|failed|error)\b'
+  - '(?i)\b(cloud-node-manager|cloud-controller-manager)\b.{0,160}\b(api|cluster.?ip|service|reach|connect|timeout|refused)\b'
+required_evidence:
+  - id: affected-client
+    description: component log that records the connectivity failure
+    any_of:
+      - '(?i)^artifacts/clusters/[^/]+/(?:logs/)?[^/]+/(?:[^/]+/){1,2}(?:manager|controller|cloud-node-manager|cloud-controller-manager|kubelet|apiserver)\.log$'
+      - '(?i)^artifacts/clusters/[^/]+/(?:logs/)?kube-system/kube-proxy-[^/]+/kube-proxy\.log$'
+      - '(?i)^artifacts/clusters/[^/]+/(?:machines|nodes)/[^/]+/(?:kubelet|journal)\.log$'
+  - id: service-routing
+    description: kube-proxy or Kubernetes Service endpoint state
+    when:
+      - '(?i)\b(cluster.?ip|service)\b.{0,160}\b(unreachable|timeout|timed out|refused|connect|dial|no route)\b'
+      - '(?i)\bkube-proxy\b.{0,160}\b(sync|watch|list|api|service)\b'
+      - '(?i)\b(cloud-node-manager|cloud-controller-manager)\b.{0,160}\b(api|cluster.?ip|service|reach|connect|timeout|refused)\b'
+    any_of:
+      - '(?i)^artifacts/clusters/[^/]+/(?:logs/)?kube-system/kube-proxy-[^/]+/(?:kube-proxy\.log|pod-describe\.txt)$'
+      - '(?i)^artifacts/clusters/[^/]+/resources/[^/]+/(?:service|endpoints|endpointslice)/.*\.ya?ml$'
+  - id: dns-resolution
+    description: DNS server or resolver configuration and logs
+    when:
+      - '(?i)\b(dns|resolver|nameserver|resolv\.conf|coredns|node-local-dns)\b.{0,160}\b(lookup|resolve|refused|timeout|failed|error|unreachable)\b'
+      - '(?i)\b(lookup|resolve|resolution)\b.{0,160}\b(host|hostname|api|server|refused|timeout|failed|error)\b'
+    any_of:
+      - '(?i)^artifacts/clusters/[^/]+/(?:logs/)?kube-system/(?:coredns|node-local-dns)-[^/]+/.*\.(?:log|txt)$'
+      - '(?i)^artifacts/clusters/[^/]+/(?:machines|nodes)/[^/]+/(?:resolv\.conf|systemd-resolved\.log)$'
+procedure: |
+  1. Compare direct API endpoint access with Kubernetes Service ClusterIP access when both signals exist. This separates endpoint availability from Service routing.
+  2. Inspect kube-proxy synchronization before broadly blaming CNI. Identify list, watch, sync, or API failures that prevented Service programming.
+  3. For hostname failures, quote the resolver address and lookup error, then inspect resolver configuration or DNS component logs. Distinguish the initiating failure from downstream CrashLoopBackOff restarts.

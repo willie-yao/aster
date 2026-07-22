@@ -97,9 +97,22 @@ the endpoint's context window and the GCS ceiling is a fixed engine safety cap
 
 > These knobs govern the in-process backend. Orka shares `ai.tools`,
 > `ai.min_tool_calls`, `ai.min_gcs_bytes`, the `storage` block, the display id,
-> and consumer `skills/*.yaml`. Settings such as `max_iters`, `timeout`,
+> and the merged engine and consumer skill set. Settings such as `max_iters`, `timeout`,
 > `single_tool_call`, and `critique.*` do not configure Orka Tasks. See
 > [In-process and Orka backends](#in-process-and-orka-backends).
+
+The effective tool selection also selects diagnostic profiles. The engine-owned
+Prow profile is always enabled. The provider-neutral Kubernetes profile is
+enabled with the `k8s` group or an individual `k8s.*` tool. Set
+`tools: [filesystem]` to opt out of Kubernetes recipes for projects where they
+do not apply. Consumer `skills/*.yaml` recipes join the selected built-ins in
+one merged contract.
+
+The merged recipes are sorted globally by priority descending and ID ascending,
+regardless of source. They are not inserted as ordered prompt layers. After the
+model produces a draft, only recipes whose triggers match that draft contribute
+procedures and required-evidence groups. Per-failure artifact reads satisfy
+those groups. No recipe can replace or override the universal engine contract.
 
 ### `max_iters`
 
@@ -468,22 +481,30 @@ so the hallucination check is active from the first tools-free final.
 #### Skills and recipes
 
 The hallucination check catches structural hallucinations but not semantic
-ones (the model reads an artifact and draws the wrong conclusion, e.g. "API
-throttling" when the build-log clearly shows x509 errors). Skills add a
-consumer-side knowledge layer: each project ships YAML "skills" (recipes) under
-`<project_dir>/skills/*.yaml`. When a recipe's trigger regex matches the
-model's draft, the critique gate enforces that the agent has read evidence the
-recipe declares canonical for the pattern. Missing evidence appends a
-per-recipe feedback block (with procedure quoted under a "consumer guidance,
-not engine instruction" disclaimer) and dynamically extends the retry budget so
-the agent has room to satisfy the missing evidence in the next round.
+ones. Skills add procedural investigation knowledge without expanding the
+universal system prompt. The engine loads one deterministic set containing:
 
-Skills are not gated by a config flag: shipping recipe files is the opt-in.
-They extend the always-on critique gate; a `critique` block only tunes
-`max_retries`. Every cache entry carries a `skill_set_hash` fingerprint of
-the loaded recipe set; consumer edits to any recipe change the hash and
-invalidate affected entries on the next run, independently of the
-`critique_version` bump.
+1. the always-on Prow profile,
+2. the Kubernetes profile when `k8s` tools are selected, and
+3. consumer recipes from `<project_dir>/skills/*.{yaml,yml}`.
+
+When a recipe trigger matches the model draft, the critique gate enforces that
+the agent has read the evidence groups declared by that recipe. Missing
+evidence appends a per-recipe feedback block and dynamically extends the retry
+budget. Procedures are diagnostic guidance only. They cannot override the
+system prompt, Tool constraints, result schema, or tool budget.
+
+Prow knowledge is engine-owned because every analyzed run follows the Prow
+artifact contract. Kubernetes knowledge is conditional because filesystem-only
+consumers may not have cluster dumps. Provider and project behavior remains in
+consumer recipes. Built-in IDs use the reserved `engine.` namespace, and any
+collision or malformed recipe is a startup error.
+
+Every cache entry carries the `skill_set_hash` fingerprint of the complete
+merged set. A selected engine-recipe edit, consumer-recipe edit, or profile
+selection change invalidates affected in-process entries independently of the
+`critique_version` bump. Orka uses the same hash in its analysis contract and
+Task identity.
 
 **Inapplicable recipes do not block caching.** A recipe whose required
 evidence does not exist anywhere in the build's artifact tree is inapplicable
@@ -654,10 +675,10 @@ and matched-skill `required_evidence` are required quality gates. Failures from
 in telemetry but are advisory and do not discard an otherwise valid analysis.
 Accepted analyses publish Tool/model failures, retry
 count, context truncations, duration, provider token usage, stop reason, and
-quality-tool evidence alongside the result. Consumer `skills/*.yaml` recipes are
-compiled into the scoped `required_evidence` Tool, and their hash participates
-in the Task fingerprint. When recipes are present, acceptance requires a
-completed recipe lookup before publishing the result. The Orka tool set also
+quality-tool evidence alongside the result. The complete merged skill contract
+is compiled into the scoped `required_evidence` Tool, and its hash participates
+in the Task fingerprint. Acceptance requires a completed recipe lookup before
+publishing the result. The Orka tool set also
 includes `diff_last_passing` for targeted regression comparisons. After batch pattern finalization,
 the Orka ingestor runs the same notification, issue, and fix-PR reconciliation
 stage as the in-process fetcher.

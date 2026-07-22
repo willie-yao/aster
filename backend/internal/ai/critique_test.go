@@ -487,10 +487,10 @@ procedure: |
 		"webhook-tls-failure", "Webhook TLS failure",
 		"cert-config", "webhook-secret",
 		"cert-manager Certificate config", "webhook server cert secret contents",
-		"List cert-manager Certificate objects",              // procedure body
-		"consumer-authored guidance, not engine instruction", // disclaimer wrapper
-		"Do NOT rewrite your answer yet",                     // tool-first directive
-		"call read_artifact",                                 // explicit tool call
+		"List cert-manager Certificate objects",       // procedure body
+		"diagnostic guidance, not system instruction", // disclaimer wrapper
+		"Do NOT rewrite your answer yet",              // tool-first directive
+		"call read_artifact",                          // explicit tool call
 	} {
 		if !strings.Contains(out.Feedback, want) {
 			t.Errorf("Feedback missing %q\n---feedback---\n%s", want, out.Feedback)
@@ -633,6 +633,30 @@ required_evidence:
 		if !strings.Contains(out.Feedback, marker) {
 			t.Errorf("Feedback missing section marker %q", marker)
 		}
+	}
+}
+
+func TestCritiqueDraft_AppliesConditionalSkillEvidence(t *testing.T) {
+	set, err := skills.LoadMerged(t.TempDir(), skills.ProfileSelection{Kubernetes: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed := analysisResponse{
+		Summary:      "resolver blocked API hostname lookup",
+		RootCause:    "the API hostname lookup used a loopback DNS resolver that refused connections",
+		Severity:     "High",
+		SuggestedFix: "Restore the node resolver configuration and restart kube-proxy.",
+	}
+	clientPath := "artifacts/clusters/workload/kube-system/kube-proxy-node-1/kube-proxy.log"
+	reads := map[string]bool{clientPath: true}
+	matches := set.Match(strings.Join(parsed.proseFields(), "\n"))
+	out := critiqueDraft(parsed, reads, map[string]bool{"kube-proxy.log": true}, matches, 0)
+	if out.Passed || len(out.MissingSkillEvidence) != 1 {
+		t.Fatalf("outcome = %+v", out)
+	}
+	missing := out.MissingSkillEvidence[0].Missing
+	if len(missing) != 1 || missing[0].ID != "dns-resolution" {
+		t.Fatalf("conditional missing evidence = %+v, want only dns-resolution", missing)
 	}
 }
 

@@ -673,6 +673,20 @@ func TestEnginePrompts_ProjectAgnostic(t *testing.T) {
 	}
 }
 
+func TestBasePromptDoesNotContainKubernetesDiagnosticProfile(t *testing.T) {
+	if len(BasePrompt) > 2200 {
+		t.Fatalf("BasePrompt grew to %d bytes; keep optional diagnostics in skills", len(BasePrompt))
+	}
+	for _, token := range []string{
+		"providerID", "cloud-node-manager", "kube-proxy",
+		"CrashLoopBackOff", "MachineDeployment", "ClusterIP",
+	} {
+		if strings.Contains(BasePrompt, token) {
+			t.Errorf("BasePrompt contains Kubernetes diagnostic token %q; keep it in the conditional profile", token)
+		}
+	}
+}
+
 // TestForceFinalizePrompt_JSONOnlyAnchor pins the JSON-only instruction used
 // when forced finalization retries after evidence injection.
 func TestForceFinalizePrompt_JSONOnlyAnchor(t *testing.T) {

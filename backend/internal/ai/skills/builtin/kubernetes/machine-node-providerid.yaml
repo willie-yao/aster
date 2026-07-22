@@ -1,0 +1,37 @@
+id: engine.kubernetes.machine-node-providerid
+name: Machine, Node, and providerID initialization
+priority: 240
+triggers:
+  - '(?i)\b(machine(?:deployment)?|worker|node)\b.{0,160}\b(timeout|timed out|not ready|unready|boot|bootstrap|register|provider.?id|uninitialized|provision)\b'
+  - '(?i)\b(timeout|timed out|not ready|unready|boot|bootstrap|register|provision)\b.{0,240}\b(machine(?:deployment)?|worker|node)\b'
+  - '(?i)\b(provider.?id|cloud.?provider.{0,40}uninitialized|uninitialized.{0,40}cloud.?provider)\b'
+required_evidence:
+  - id: machine-state
+    description: CAPI Machine or MachineDeployment state
+    any_of:
+      - '(?i)^artifacts/clusters/(?:bootstrap|[^/]+)/resources/[^/]+/(?:machine|machinedeployment)/.*\.ya?ml$'
+  - id: node-state
+    description: workload Node state, providerID, and taints
+    any_of:
+      - '(?i)^artifacts/clusters/[^/]+/nodes/[^/]+/(?:node-describe\.txt|node\.ya?ml)$'
+      - '(?i)^artifacts/clusters/[^/]+/resources/[^/]+/node/.*\.ya?ml$'
+  - id: cloud-provider-controller
+    description: external cloud-provider node controller state
+    when:
+      - '(?i)\b(provider.?id|cloud.?provider.{0,80}uninitialized|uninitialized.{0,80}cloud.?provider)\b'
+      - '(?i)\b(cloud-node-manager|cloud-controller-manager)\b'
+    any_of:
+      - '(?i)^artifacts/clusters/[^/]+/(?:logs/)?kube-system/(?:cloud-node-manager|cloud-controller-manager)-[^/]+/(?:cloud-node-manager|cloud-controller-manager|manager)\.log$'
+      - '(?i)^artifacts/clusters/[^/]+/(?:logs/)?kube-system/(?:cloud-node-manager|cloud-controller-manager)-[^/]+/pod-describe\.txt$'
+  - id: kube-proxy
+    description: kube-proxy API and Service synchronization on the affected node
+    when:
+      - '(?i)\b(cloud-node-manager|cloud-controller-manager)\b.{0,160}\b(api|cluster.?ip|service|reach|connect|timeout|refused|unreachable)\b'
+      - '(?i)\bkube-proxy\b.{0,160}\b(sync|watch|list|api|service|dns|lookup|resolve|failed|error)\b'
+      - '(?i)\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,160}\b(unreachable|timeout|timed out|refused|connect|dial|no route)\b'
+    any_of:
+      - '(?i)^artifacts/clusters/[^/]+/(?:logs/)?kube-system/kube-proxy-[^/]+/(?:kube-proxy\.log|pod-describe\.txt)$'
+procedure: |
+  1. Compare the CAPI Machine or MachineDeployment state with the workload Node state. A Node that exists or is Ready rules out a generic VM creation or kubelet-registration explanation.
+  2. Check spec.providerID, status.nodeRef, and the external cloud-provider uninitialized taint. If the Machine is waiting for providerID, read cloud-node-manager or cloud-controller-manager on that Node.
+  3. If the cloud-provider controller cannot reach the Kubernetes API Service, inspect kube-proxy synchronization on the same Node. Inspect DNS next when the API hostname lookup fails.

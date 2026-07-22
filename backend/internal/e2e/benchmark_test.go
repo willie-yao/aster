@@ -84,7 +84,6 @@ type benchCase struct {
 	// report; the benchmark feeds it so the analysis (and the critique gate's
 	// transient-vs-persistent check) see the real persistence signal.
 	consecutiveFailures int
-	skillYAML           string
 	oppositeDiagnosis   string
 	signals             []benchSignal
 }
@@ -161,36 +160,7 @@ var benchCases = []benchCase{
 		junitFile:           "junit.e2e_suite.1.xml",
 		failureMsg:          `Timed out after 1500.000s. Timed out waiting for 1 nodes to be created for MachineDeployment capz-e2e-asfxe1/capz-e2e-asfxe1-flatcar-sysext-md-0. Expected 0 to equal 1`,
 		consecutiveFailures: 1,
-		skillYAML: `
-id: flatcar-node-providerid
-name: Flatcar node cloud-provider initialization
-priority: 200
-triggers:
-  - '(?i)\bflatcar\b'
-  - '(?i)(worker|machine|node).*(not ready|never became ready|registration|provider.?id|uninitialized)'
-required_evidence:
-  - id: machine-state
-    description: CAPI Machine or MachineDeployment state
-    any_of:
-      - '(?i)^artifacts/clusters/bootstrap/resources/[^/]+/Machine(?:Deployment)?/.*\.yaml$'
-  - id: node-state
-    description: workload Node state including providerID and taints
-    any_of:
-      - '(?i)^artifacts/clusters/[^/]+/nodes/[^/]+/node-describe\.txt$'
-  - id: cloud-node-manager
-    description: cloud-node-manager state on the affected node
-    any_of:
-      - '(?i)^artifacts/clusters/[^/]+/kube-system/cloud-node-manager-[^/]+/(cloud-node-manager\.log|pod-describe\.txt)$'
-  - id: kube-proxy
-    description: kube-proxy API and Service synchronization on the affected node
-    any_of:
-      - '(?i)^artifacts/clusters/[^/]+/kube-system/kube-proxy-[^/]+/kube-proxy\.log$'
-procedure: |
-  Do not stop at Azure VM provisioning, an early kubelet error, or a generic Flatcar boot hypothesis.
-  Compare the CAPI Machine state with the workload Node describe. If the Node exists or is Ready while the Machine waits for a matching providerID, investigate external cloud-provider initialization.
-  Read cloud-node-manager on the affected Node. If it cannot reach the Kubernetes API Service, read kube-proxy on that same Node and identify why Service or API synchronization failed.
-`,
-		oppositeDiagnosis: "The worker Node did not exist. Its providerID was set. cloud-node-manager reached the API Service.",
+		oppositeDiagnosis:   "The worker Node did not exist. Its providerID was set. cloud-node-manager reached the API Service.",
 		signals: []benchSignal{
 			{name: "recognizes the worker Node existed or registered", re: mustRE(`(?is)(?:worker\s+)?node(?:\s+object)?\s+(?:exist(?:ed|s)?|registered|became\s+ready|was\s+(?:created|registered|ready))|(?:exist(?:ed|s)?|registered)\s+(?:as\s+)?(?:a\s+)?(?:worker\s+)?node`), must: true},
 			{name: "identifies missing providerID or cloud-provider initialization", re: mustRE(`(?is)(?:missing|empty|unset|absent|lacked?|without|no)\s+(?:the\s+)?provider.?id|provider.?id.{0,40}(?:missing|empty|unset|absent|not\s+(?:set|populated|assigned))|cloud.?provider.{0,80}uninitialized|uninitialized.{0,80}cloud.?provider`), must: true},
@@ -238,6 +208,13 @@ procedure: |
 }
 
 func TestFlatcarBenchmarkSkillRequiresProviderIDChain(t *testing.T) {
+	set, selection, err := skills.LoadForTools(t.TempDir(), []string{"filesystem", "k8s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !selection.Kubernetes {
+		t.Fatal("Kubernetes profile was not selected")
+	}
 	var flatcar *benchCase
 	for i := range benchCases {
 		if benchCases[i].name == "flatcar-worker-dns-providerid" {
@@ -248,16 +225,26 @@ func TestFlatcarBenchmarkSkillRequiresProviderIDChain(t *testing.T) {
 	if flatcar == nil {
 		t.Fatal("Flatcar benchmark case is missing")
 	}
-	set := loadBenchCaseSkills(t, *flatcar)
-	matched := set.Match("Flatcar sysext worker machine never became ready")
-	if len(matched) != 1 || matched[0].ID != "flatcar-node-providerid" {
+	matched := set.Match(flatcar.failureMsg)
+	var machineSkill *skills.Skill
+	for i := range matched {
+		if matched[i].ID == "engine.kubernetes.machine-node-providerid" {
+			machineSkill = &matched[i]
+			break
+		}
+	}
+	if machineSkill == nil {
 		t.Fatalf("matched skills = %+v", matched)
 	}
+	benchmarkDraft := "The worker Node existed and is Ready but has no providerID; cloud-node-manager cannot reach the API Service ClusterIP"
 	groups := map[string]bool{}
-	for _, group := range matched[0].RequiredEvidence {
+	for _, group := range machineSkill.RequiredEvidence {
 		groups[group.ID] = true
+		if !group.Applies(benchmarkDraft) {
+			t.Errorf("benchmark evidence group %q did not apply to the providerID/API chain", group.ID)
+		}
 	}
-	for _, want := range []string{"machine-state", "node-state", "cloud-node-manager", "kube-proxy"} {
+	for _, want := range []string{"machine-state", "node-state", "cloud-provider-controller", "kube-proxy"} {
 		if !groups[want] {
 			t.Errorf("missing evidence group %q", want)
 		}
@@ -300,7 +287,7 @@ func TestAIBenchmark(t *testing.T) {
 	// matches that live deploy. Otherwise use the built-in prompt and defaults.
 	systemPrompt := ComposeBenchPrompt()
 	agentic := defaultBenchAgentic()
-	var projectSkills *skills.Set
+	skillProjectDir := t.TempDir()
 	if dir := os.Getenv("BENCH_PROJECT_DIR"); dir != "" {
 		cfg, prompt, err := project.LoadDir(dir)
 		if err != nil {
@@ -308,10 +295,11 @@ func TestAIBenchmark(t *testing.T) {
 		}
 		systemPrompt = ai.ComposeSystemPrompt(prompt)
 		agentic = cfg.AI.EffectiveAgentic()
-		projectSkills, err = skills.Load(dir)
-		if err != nil {
-			t.Fatalf("load BENCH_PROJECT_DIR skills: %v", err)
-		}
+		skillProjectDir = dir
+	}
+	projectSkills, _, err := skills.LoadForTools(skillProjectDir, agentic.Tools)
+	if err != nil {
+		t.Fatalf("load benchmark skills: %v", err)
 	}
 
 	for _, bc := range benchCases {
@@ -335,7 +323,11 @@ func runBenchCase(t *testing.T, bc benchCase, endpoint, model, token, systemProm
 	registry := tools.NewRegistry()
 	filesystem.Register(registry)
 	k8s.Register(registry)
-	enabled, err := registry.Enable([]string{"filesystem", "k8s"})
+	toolNames := agentic.Tools
+	if len(toolNames) == 0 {
+		toolNames = []string{"filesystem", "k8s"}
+	}
+	enabled, err := registry.Enable(toolNames)
 	if err != nil {
 		t.Fatalf("enable tools: %v", err)
 	}
@@ -349,11 +341,7 @@ func runBenchCase(t *testing.T, bc benchCase, endpoint, model, token, systemProm
 	}
 
 	service := ai.NewService(client, universal.New(), systemPrompt, consecutiveMap)
-	if projectSkills != nil {
-		service.SetSkills(projectSkills)
-	} else if caseSkills := loadBenchCaseSkills(t, bc); caseSkills != nil {
-		service.SetSkills(caseSkills)
-	}
+	service.SetSkills(projectSkills)
 	service.SetSourceRepo(bc.sourceRepo[0], bc.sourceRepo[1])
 
 	// Size the model/context budgets from the endpoint's window, matching the
@@ -404,26 +392,6 @@ func TestBenchCasesRejectOppositeDiagnoses(t *testing.T) {
 			}
 		}
 	}
-}
-
-func loadBenchCaseSkills(t *testing.T, bc benchCase) *skills.Set {
-	t.Helper()
-	if strings.TrimSpace(bc.skillYAML) == "" {
-		return nil
-	}
-	dir := t.TempDir()
-	skillsDir := filepath.Join(dir, "skills")
-	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(skillsDir, bc.name+".yaml"), []byte(strings.TrimSpace(bc.skillYAML)+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	set, err := skills.Load(dir)
-	if err != nil {
-		t.Fatalf("load benchmark skills: %v", err)
-	}
-	return set
 }
 
 func benchTestCase(bc benchCase) *models.TestCase {

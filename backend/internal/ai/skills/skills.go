@@ -1,21 +1,23 @@
-// Package skills implements the consumer-owned diagnostic recipe registry.
+// Package skills implements engine-owned and consumer-owned diagnostic recipes.
 //
 // A Skill is a YAML recipe with regex triggers, required-evidence groups, and a
 // human-readable procedure quoted back to the model when evidence is missing.
-//
-// Recipes live in <project_dir>/skills/*.yaml. The directory is optional;
-// any present recipe must parse and compile cleanly or Load returns an error.
+// Engine profiles are embedded in this package. Consumer recipes live in
+// <project_dir>/skills/*.yaml. Every selected recipe must parse and compile
+// cleanly.
 package skills
 
 import (
 	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
+	"embed"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -33,10 +35,75 @@ const (
 	maxSkillContractHeaderBytes = 48 << 10
 )
 
-// ContractHeader carries a serialized consumer skill set to external tools.
+// ContractHeader carries a serialized merged skill set to external tools.
 const ContractHeader = "X-Prow-AI-Skills"
 
-// Skill is one consumer-owned diagnostic recipe.
+// Profile identifies one engine-owned diagnostic recipe pack.
+type Profile string
+
+const (
+	// ProfileProw contains product-level Prow artifact investigation procedures.
+	ProfileProw Profile = "prow"
+	// ProfileKubernetes contains provider-neutral Kubernetes investigation procedures.
+	ProfileKubernetes Profile = "kubernetes"
+)
+
+// ProfileSelection controls which engine profiles join consumer recipes.
+// Prow is always selected. Kubernetes follows the effective k8s tool selection.
+type ProfileSelection struct {
+	Kubernetes bool
+}
+
+//go:embed builtin/*/*.yaml
+var builtinRecipes embed.FS
+
+// ProfilesForTools derives engine profiles from an effective tool selection.
+// An empty selection keeps the engine default of filesystem plus k8s.
+func ProfilesForTools(entries []string) ProfileSelection {
+	selection := ProfileSelection{Kubernetes: len(entries) == 0}
+	for _, entry := range entries {
+		if isKubernetesToolSelection(entry) {
+			selection.Kubernetes = true
+			break
+		}
+	}
+	return selection
+}
+
+// Profiles returns selected profiles in composition order.
+func (s ProfileSelection) Profiles() []Profile {
+	profiles := []Profile{ProfileProw}
+	if s.Kubernetes {
+		profiles = append(profiles, ProfileKubernetes)
+	}
+	return profiles
+}
+
+// String returns selected profile names in composition order.
+func (s ProfileSelection) String() string {
+	profiles := s.Profiles()
+	names := make([]string, 0, len(profiles))
+	for _, profile := range profiles {
+		names = append(names, string(profile))
+	}
+	return strings.Join(names, ",")
+}
+
+func isKubernetesToolSelection(entry string) bool {
+	entry = strings.ToLower(strings.TrimSpace(entry))
+	if entry == "k8s" || strings.HasPrefix(entry, "k8s.") {
+		return true
+	}
+	switch strings.ReplaceAll(entry, "_", "-") {
+	case "discover-clusters", "find-my-cluster", "list-cluster-machines",
+		"list-machine-logs", "discover-controllers", "resolve-controller-log":
+		return true
+	default:
+		return false
+	}
+}
+
+// Skill is one diagnostic recipe.
 type Skill struct {
 	// ID is the recipe identifier; must be unique within a Set. Surfaced
 	// in critique feedback, so pick something human-meaningful.
@@ -64,7 +131,7 @@ type Skill struct {
 
 	// Procedure is markdown guidance quoted back to the model when the
 	// recipe fires and evidence is missing. Treated as untrusted prose;
-	// the engine wraps it with "consumer guidance only" framing.
+	// the engine wraps it with guidance-only framing.
 	Procedure string `yaml:"procedure,omitempty" json:"procedure,omitempty"`
 
 	// compiled triggers. Not serialized.
@@ -83,11 +150,16 @@ type EvidenceGroup struct {
 	// Defaults to ID if empty.
 	Description string `yaml:"description,omitempty" json:"description,omitempty"`
 
+	// When optionally limits this group to drafts that match one of these
+	// patterns. An empty list makes the group apply whenever its skill matches.
+	When []string `yaml:"when,omitempty" json:"when,omitempty"`
+
 	// AnyOf is the list of regex patterns. Any single match satisfies
 	// the group.
 	AnyOf []string `yaml:"any_of" json:"any_of"`
 
 	// compiled patterns. Not serialized.
+	whenREs  []*regexp.Regexp
 	anyOfREs []*regexp.Regexp
 }
 
@@ -234,6 +306,20 @@ func (s *Set) Match(text string) []Skill {
 	return out
 }
 
+// Applies reports whether this evidence group applies to the supplied draft.
+// Groups without when patterns apply whenever their parent skill matches.
+func (g EvidenceGroup) Applies(text string) bool {
+	if len(g.whenREs) == 0 {
+		return true
+	}
+	for _, re := range g.whenREs {
+		if re.MatchString(text) {
+			return true
+		}
+	}
+	return false
+}
+
 // Satisfied reports whether the evidence group is met by the set of
 // successfully-read artifact paths. reads is the same path set the
 // critique gate uses for findUnreadArtifactCitations: lowercase,
@@ -250,6 +336,95 @@ func (g EvidenceGroup) Satisfied(reads map[string]bool) bool {
 		}
 	}
 	return false
+}
+
+// LoadForTools selects profiles from the effective tools and loads the merged set.
+// Both analysis backends use this entry point to keep their contracts identical.
+func LoadForTools(dir string, toolSelection []string) (*Set, ProfileSelection, error) {
+	selection := ProfilesForTools(toolSelection)
+	set, err := LoadMerged(dir, selection)
+	return set, selection, err
+}
+
+// LoadMerged composes selected engine profiles with consumer recipes.
+// Built-ins are ordered before consumers for validation, then the complete set
+// is sorted by priority descending and ID ascending.
+func LoadMerged(dir string, selection ProfileSelection) (*Set, error) {
+	var entries []sourcedSkill
+	for _, profile := range selection.Profiles() {
+		loaded, err := loadBuiltinProfile(profile)
+		if err != nil {
+			return nil, err
+		}
+		for _, skill := range loaded {
+			entries = append(entries, sourcedSkill{skill: skill, source: "engine profile " + string(profile)})
+		}
+	}
+
+	consumer, err := Load(dir)
+	if err != nil {
+		return nil, err
+	}
+	for _, skill := range consumer.Skills() {
+		if strings.HasPrefix(skill.ID, "engine.") {
+			return nil, fmt.Errorf("consumer skill id %q uses reserved engine. namespace", skill.ID)
+		}
+		entries = append(entries, sourcedSkill{skill: skill, source: "consumer skills"})
+	}
+	return setFromSources(entries)
+}
+
+type sourcedSkill struct {
+	skill  Skill
+	source string
+}
+
+func loadBuiltinProfile(profile Profile) ([]Skill, error) {
+	pattern := fmt.Sprintf("builtin/%s/*.yaml", profile)
+	paths, err := fs.Glob(builtinRecipes, pattern)
+	if err != nil {
+		return nil, fmt.Errorf("load engine profile %s: %w", profile, err)
+	}
+	if len(paths) == 0 {
+		return nil, fmt.Errorf("engine profile %s has no recipes", profile)
+	}
+	sort.Strings(paths)
+	loaded := make([]Skill, 0, len(paths))
+	prefix := "engine." + string(profile) + "."
+	for _, path := range paths {
+		data, err := builtinRecipes.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("load engine recipe %s: %w", path, err)
+		}
+		skill, err := ParseAndValidate(data)
+		if err != nil {
+			return nil, fmt.Errorf("load engine recipe %s: %w", path, err)
+		}
+		if !strings.HasPrefix(skill.ID, prefix) {
+			return nil, fmt.Errorf("engine recipe %s id %q must start with %q", path, skill.ID, prefix)
+		}
+		loaded = append(loaded, skill)
+	}
+	return loaded, nil
+}
+
+func setFromSources(entries []sourcedSkill) (*Set, error) {
+	seen := map[string]string{}
+	loaded := make([]Skill, 0, len(entries))
+	for _, entry := range entries {
+		if previous, ok := seen[entry.skill.ID]; ok {
+			return nil, fmt.Errorf("duplicate skill id %q in %s and %s", entry.skill.ID, previous, entry.source)
+		}
+		seen[entry.skill.ID] = entry.source
+		loaded = append(loaded, entry.skill)
+	}
+	sort.SliceStable(loaded, func(i, j int) bool {
+		if loaded[i].Priority != loaded[j].Priority {
+			return loaded[i].Priority > loaded[j].Priority
+		}
+		return loaded[i].ID < loaded[j].ID
+	})
+	return &Set{skills: loaded, hash: computeHash(loaded)}, nil
 }
 
 // Load reads <dir>/skills/*.{yaml,yml}, parses each as a single Skill,
@@ -368,6 +543,15 @@ func validateAndCompile(sk *Skill) error {
 		if len(g.AnyOf) == 0 {
 			return fmt.Errorf("skill %q evidence %q has empty any_of", sk.ID, g.ID)
 		}
+		g.whenREs = make([]*regexp.Regexp, 0, len(g.When))
+		for i, pat := range g.When {
+			re, err := regexp.Compile(pat)
+			if err != nil {
+				return fmt.Errorf("skill %q evidence %q when[%d] %q: %w",
+					sk.ID, g.ID, i, pat, err)
+			}
+			g.whenREs = append(g.whenREs, re)
+		}
 		g.anyOfREs = make([]*regexp.Regexp, 0, len(g.AnyOf))
 		for i, pat := range g.AnyOf {
 			re, err := regexp.Compile(pat)
@@ -406,6 +590,9 @@ func computeHash(loaded []Skill) string {
 		for _, g := range sk.RequiredEvidence {
 			fmt.Fprintf(h, "evidence-id:%s\n", g.ID)
 			fmt.Fprintf(h, "evidence-desc:%s\n", g.Description)
+			for _, p := range g.When {
+				fmt.Fprintf(h, "evidence-when:%s\n", p)
+			}
 			for _, p := range g.AnyOf {
 				fmt.Fprintf(h, "evidence-anyof:%s\n", p)
 			}

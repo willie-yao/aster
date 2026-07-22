@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aitest"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fetcher"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
@@ -169,11 +170,11 @@ func TestPipeline_NoAI(t *testing.T) {
 // the tool call actually exercised the local storage backend.
 func TestPipeline_WithAI(t *testing.T) {
 	script := aitest.NewScriptServer(t)
-	// Iters 0-1: the model reads the build log twice (exercises the local
-	// backend and clears the min_tool_calls floor); iter 2: it returns the
-	// final analysis JSON with a concrete remediation.
+	// The model reads the build log and JUnit evidence required by the Prow
+	// profile, then returns final analysis JSON with a concrete remediation.
 	script.PushToolCall("c1", "read_artifact", map[string]any{"path": "build-log.txt"})
 	script.PushToolCall("c2", "tail_artifact", map[string]any{"path": "build-log.txt"})
+	script.PushToolCall("c3", "read_artifact", map[string]any{"path": "artifacts/junit.xml"})
 	script.PushFinal(`{"summary":"Control plane provisioning timed out","is_transient":false,` +
 		`"root_cause":"Only 2 of 3 control plane machines registered before the 600s timeout",` +
 		`"severity":"High","suggested_fix":"Raise the control-plane bootstrap timeout above 600s so all three machines have time to register",` +
@@ -184,7 +185,15 @@ func TestPipeline_WithAI(t *testing.T) {
 
 	t.Setenv("AI_TOKEN", "test-token")
 	aiBlock := "  endpoint: \"" + script.URL + "\"\n  model: \"script-model\"\n  tools: [filesystem]\n"
-	out := runPipeline(t, writeProject(t, aiBlock), true)
+	projectDir := writeProject(t, aiBlock)
+	expectedSkills, selection, err := skills.LoadForTools(projectDir, []string{"filesystem"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selection.Kubernetes {
+		t.Fatal("filesystem-only pipeline selected Kubernetes recipes")
+	}
+	out := runPipeline(t, projectDir, true)
 
 	matches, _ := filepath.Glob(filepath.Join(out, "jobs", "*.json"))
 	if len(matches) != 1 {
@@ -201,6 +210,9 @@ func TestPipeline_WithAI(t *testing.T) {
 			}
 			if tc.AISummary == nil || tc.AIAnalysis == nil {
 				t.Fatalf("failed test %q missing AI summary/analysis", tc.Name)
+			}
+			if tc.AIAnalysis.SkillSetHash != expectedSkills.Hash() {
+				t.Errorf("skill hash = %q, want merged filesystem contract %q", tc.AIAnalysis.SkillSetHash, expectedSkills.Hash())
 			}
 			analyzed++
 			if !strings.Contains(tc.AIAnalysis.RootCause, "control plane") {

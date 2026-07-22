@@ -146,18 +146,15 @@ func setupPipeline(opts Options) (*pipeline, error) {
 		}
 		aiSystemPrompt = ai.ComposeSystemPrompt(prompt)
 
-		// Load consumer-owned recipes from <project_dir>/skills/*.yaml.
-		// A missing directory returns an empty Set.
-		// Parse or regex compile errors are hard startup errors.
-		set, err := skills.Load(opts.ProjectDir)
+		// Compose engine profiles with consumer recipes. Parse or regex compile
+		// errors are hard startup errors for every selected source.
+		set, profileSelection, err := skills.LoadForTools(opts.ProjectDir, cfg.AI.EffectiveAgentic().Tools)
 		if err != nil {
 			return nil, fmt.Errorf("loading AI skills: %w", err)
 		}
 		aiSkillSet = set
-		if n := len(aiSkillSet.Skills()); n > 0 {
-			log.Printf("Loaded %d AI skill recipe(s) from %s/skills/ (hash=%s)",
-				n, opts.ProjectDir, shortHash(aiSkillSet.Hash()))
-		}
+		log.Printf("Loaded %d AI skill recipe(s) (profiles=%s, hash=%s)",
+			len(aiSkillSet.Skills()), profileSelection.String(), shortHash(aiSkillSet.Hash()))
 	}
 
 	client := &http.Client{Timeout: 30 * time.Second}

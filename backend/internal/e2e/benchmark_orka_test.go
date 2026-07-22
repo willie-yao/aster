@@ -305,15 +305,6 @@ func writeOrkaBenchProject(t *testing.T, bc benchCase, agentic project.Agentic) 
 	if err := os.WriteFile(filepath.Join(promptDir, "system.md"), []byte(benchPromptAddendum+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if strings.TrimSpace(bc.skillYAML) != "" {
-		skillsDir := filepath.Join(dir, "skills")
-		if err := os.MkdirAll(skillsDir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(skillsDir, bc.name+".yaml"), []byte(strings.TrimSpace(bc.skillYAML)+"\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
 	return dir
 }
 
@@ -414,12 +405,23 @@ func TestWriteOrkaBenchProject(t *testing.T) {
 	if prompt != benchPromptAddendum {
 		t.Fatalf("prompt = %q", prompt)
 	}
-	set, err := skills.Load(dir)
+	set, selection, err := skills.LoadForTools(dir, cfg.AI.EffectiveAgentic().Tools)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if set.Hash() == "" || len(set.Match("Flatcar worker never became ready")) != 1 {
-		t.Fatalf("generated benchmark skills were not loaded")
+	if !selection.Kubernetes || set.Hash() == "" {
+		t.Fatalf("generated benchmark profiles were not loaded: selection=%+v hash=%q", selection, set.Hash())
+	}
+	matched := set.Match("MachineDeployment timed out while the Flatcar worker Node lacked providerID")
+	found := false
+	for _, skill := range matched {
+		if skill.ID == "engine.kubernetes.machine-node-providerid" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("generated benchmark profiles did not include the Machine/Node recipe: %+v", matched)
 	}
 }
 

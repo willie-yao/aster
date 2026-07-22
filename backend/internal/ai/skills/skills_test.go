@@ -131,6 +131,17 @@ triggers:
 			wantSubstr: "bad-regex",
 		},
 		{
+			name: "bad evidence when regex",
+			body: `
+id: bad-when-regex
+triggers: ["foo"]
+required_evidence:
+  - id: g1
+    when: ["[unclosed"]
+    any_of: ["path"]
+`,
+		},
+		{
 			name: "bad evidence regex",
 			body: `
 id: bad-ev-regex
@@ -321,6 +332,33 @@ required_evidence:
 	}
 }
 
+func TestEvidenceGroup_Applies(t *testing.T) {
+	set, err := ParseContract([]byte(`{
+		"skills":[{
+			"id":"connectivity",
+			"triggers":["connectivity"],
+			"required_evidence":[
+				{"id":"always","any_of":["always"]},
+				{"id":"dns","when":["(?i)dns|resolver"],"any_of":["resolv\\.conf"]}
+			]
+		}]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	skill := set.Skills()[0]
+	if !skill.RequiredEvidence[0].Applies("service timeout") {
+		t.Fatal("unconditional evidence group did not apply")
+	}
+	dns := skill.RequiredEvidence[1]
+	if !dns.Applies("DNS resolver refused the lookup") {
+		t.Fatal("conditional evidence group did not apply to DNS draft")
+	}
+	if dns.Applies("Service ClusterIP timed out") {
+		t.Fatal("conditional evidence group applied to unrelated draft")
+	}
+}
+
 func TestHash_Properties(t *testing.T) {
 	// Build two recipe sets identical in content; assert hash properties.
 	t.Run("deterministic across filename order", func(t *testing.T) {
@@ -356,6 +394,17 @@ func TestHash_Properties(t *testing.T) {
 		set2, _ := Load(dir2)
 		if set1.Hash() == set2.Hash() {
 			t.Error("expected hash to change after evidence edit")
+		}
+	})
+	t.Run("changes on evidence condition edit", func(t *testing.T) {
+		dir1 := t.TempDir()
+		writeSkill(t, dir1, "x", "id: connectivity\ntriggers: [\"x\"]\nrequired_evidence:\n  - id: g\n    when: [\"dns\"]\n    any_of: [\"a\"]\n")
+		dir2 := t.TempDir()
+		writeSkill(t, dir2, "x", "id: connectivity\ntriggers: [\"x\"]\nrequired_evidence:\n  - id: g\n    when: [\"resolver\"]\n    any_of: [\"a\"]\n")
+		set1, _ := Load(dir1)
+		set2, _ := Load(dir2)
+		if set1.Hash() == set2.Hash() {
+			t.Error("expected hash to change after evidence condition edit")
 		}
 	})
 	t.Run("stable on whitespace/comment-only edits", func(t *testing.T) {

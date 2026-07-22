@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
@@ -98,6 +99,98 @@ func TestResolveToolsKeepsQualityToolsForExplicitNames(t *testing.T) {
 	}
 }
 
+func TestResolveToolsNormalizesKnownUnqualifiedAliases(t *testing.T) {
+	names, k8sEnabled := resolveTools([]string{"resolve_controller_log", "custom_extension_tool"})
+	if !k8sEnabled {
+		t.Fatal("known k8s alias did not enable the Kubernetes profile")
+	}
+	seen := map[string]bool{}
+	for _, name := range names {
+		seen[name] = true
+	}
+	if !seen["resolve-controller-log"] || seen["resolve_controller_log"] {
+		t.Fatalf("known alias was not normalized: %v", names)
+	}
+	if !seen["custom_extension_tool"] || seen["custom-extension-tool"] {
+		t.Fatalf("unknown extension alias was changed: %v", names)
+	}
+}
+
+func TestResolveToolsAddsEvidenceReadersForIndividualK8sOnly(t *testing.T) {
+	names, k8sEnabled := resolveTools([]string{"k8s.discover_clusters"})
+	if !k8sEnabled {
+		t.Fatal("individual k8s tool did not enable the Kubernetes profile")
+	}
+	seen := map[string]bool{}
+	for _, name := range names {
+		seen[name] = true
+	}
+	for _, want := range evidenceReaderTools {
+		if !seen[want] {
+			t.Fatalf("resolved tools = %v, missing evidence reader %q", names, want)
+		}
+	}
+	if !seen["discover-clusters"] {
+		t.Fatalf("resolved tools = %v, missing requested k8s tool", names)
+	}
+}
+
+func TestOrkaAnalysisIdentityChangesWithSelectedProfiles(t *testing.T) {
+	filesystemSet, filesystemSelection, err := skills.LoadForTools(t.TempDir(), []string{"filesystem"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	kubernetesSet, kubernetesSelection, err := skills.LoadForTools(t.TempDir(), []string{"filesystem", "k8s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filesystemSelection.Kubernetes || !kubernetesSelection.Kubernetes {
+		t.Fatalf("profile selections = filesystem:%+v kubernetes:%+v", filesystemSelection, kubernetesSelection)
+	}
+	if filesystemSet.Hash() == kubernetesSet.Hash() {
+		t.Fatal("selected profile change did not change the skill hash")
+	}
+
+	contract := orka.AnalysisContract{Provider: "provider", Model: "model", SystemPrompt: "prompt"}
+	contract.SkillSetHash = filesystemSet.Hash()
+	filesystemContract, err := orka.AnalysisContractHash(contract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contract.SkillSetHash = kubernetesSet.Hash()
+	kubernetesContract, err := orka.AnalysisContractHash(contract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filesystemContract == kubernetesContract {
+		t.Fatal("selected profile change did not change the Orka contract hash")
+	}
+	filesystemTask := orka.AnalysisTaskName("project", "build", filesystemContract, 0, "failure prompt")
+	kubernetesTask := orka.AnalysisTaskName("project", "build", kubernetesContract, 0, "failure prompt")
+	if filesystemTask == kubernetesTask {
+		t.Fatalf("selected profile change did not change Task identity: %q", filesystemTask)
+	}
+}
+
+func TestResolveToolsMapsSharedIndividualSyntax(t *testing.T) {
+	names, k8sEnabled := resolveTools([]string{"filesystem.read_artifact", "k8s.discover_clusters"})
+	if !k8sEnabled {
+		t.Fatal("individual k8s tool did not enable the Kubernetes profile")
+	}
+	seen := map[string]bool{}
+	for _, name := range names {
+		seen[name] = true
+	}
+	for _, want := range []string{"read-artifact", "discover-clusters", "required-evidence", "submit-analysis"} {
+		if !seen[want] {
+			t.Fatalf("resolved tools = %v, want %q", names, want)
+		}
+	}
+	if seen["filesystem.read_artifact"] || seen["k8s.discover_clusters"] {
+		t.Fatalf("shared individual syntax was not normalized: %v", names)
+	}
+}
+
 func TestBuildToolNameSeparatesConsumerScopes(t *testing.T) {
 	projectA := orka.ProjectScopeID("a", "gcs", "bucket", "", "", "")
 	projectB := orka.ProjectScopeID("b", "gcs", "bucket", "", "", "")
@@ -154,6 +247,46 @@ func TestCloneSkillAwareToolsCarrySkillContract(t *testing.T) {
 				t.Fatalf("authSecretRef = %+v", auth)
 			}
 		})
+	}
+}
+
+func TestCloneToolsCarryCompleteMergedSkillContract(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "skills"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "skills", "consumer.yaml"), []byte("id: consumer-contract\ntriggers: ['consumer']\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	merged, _, err := skills.LoadForTools(dir, []string{"filesystem", "k8s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	header, err := merged.HeaderValue()
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := map[string]any{
+		"metadata": map[string]any{"name": "required-evidence"},
+		"spec":     map[string]any{"http": map[string]any{"url": "http://artifact-tool/tool/required_evidence"}},
+	}
+	clone := cloneToolForBuild(base, "required-evidence", "project", "scope", "logs/job/1/", "bucket", "orka-system", nil, header, "validation-key", 0, "", "")
+	headers := clone["spec"].(map[string]any)["http"].(map[string]any)["headers"].(map[string]any)
+	transported, err := skills.ParseHeader(headers[skills.ContractHeader].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transported.Hash() != merged.Hash() {
+		t.Fatalf("transported hash = %q, want %q", transported.Hash(), merged.Hash())
+	}
+	ids := map[string]bool{}
+	for _, skill := range transported.Skills() {
+		ids[skill.ID] = true
+	}
+	for _, want := range []string{"engine.prow.failure-evidence", "engine.kubernetes.machine-node-providerid", "consumer-contract"} {
+		if !ids[want] {
+			t.Fatalf("transported contract missing %q: %v", want, ids)
+		}
 	}
 }
 

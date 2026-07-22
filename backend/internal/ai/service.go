@@ -39,7 +39,7 @@ type Service struct {
 	registry     *tools.Registry
 	enabledTools []string
 
-	// skillSet is the loaded project recipe set. nil when no recipes are loaded.
+	// skillSet is the merged engine and consumer recipe set.
 	skillSet *skills.Set
 
 	// toolCaches memoizes a *tools.Cache per buildPrefix so all failures
@@ -103,7 +103,7 @@ func (s *Service) EnableAgentic(opts AgenticOptions, factory artifacts.Factory, 
 	s.enabledTools = enabledTools
 }
 
-// SetSkills installs the consumer's loaded recipe set. Safe to call once
+// SetSkills installs the merged diagnostic recipe set. Safe to call once
 // during fetcher startup, after EnableAgentic. The agentic loop honors the
 // set only when critique is enabled, because recipes feed the critique gate.
 func (s *Service) SetSkills(set *skills.Set) {
@@ -268,8 +268,8 @@ func (s *Service) belowCurrentAgenticFloor(tc *models.TestCase) bool {
 		return true
 	}
 	// Invalidate entries whose SkillSetHash doesn't match the loaded set so
-	// consumer recipe edits trigger re-analysis. Skills feed the critique
-	// gate, so the hash is part of the contract. Empty wantHash matches an
+	// engine or consumer recipe edits trigger re-analysis. Skills feed the
+	// critique gate, so the hash is part of the contract. Empty wantHash matches an
 	// entry stamped with no recipes.
 	wantHash := ""
 	if s.skillSet != nil {

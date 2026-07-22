@@ -241,12 +241,11 @@ type agenticCacheData struct {
 	// the weaker contract.
 	CritiqueVersion int `json:"critique_version,omitempty"`
 
-	// SkillSetHash is the fingerprint of the consumer's loaded skill
+	// SkillSetHash is the fingerprint of the merged diagnostic skill
 	// set at the time this draft was accepted. Empty when skills were
 	// disabled or no recipes were loaded. Used independently of
-	// CritiqueVersion to invalidate cached entries when the consumer
-	// edits recipes. The engine-side contract may be unchanged while the
-	// effective evidence requirements differ.
+	// CritiqueVersion to invalidate cached entries when a selected engine
+	// profile or consumer recipe changes.
 	SkillSetHash string `json:"skill_set_hash,omitempty"`
 
 	// ModelHash is the fingerprint of the model + endpoint that produced
@@ -308,7 +307,7 @@ type agentState struct {
 	readArtifactsFull map[string]bool
 	readArtifactsBase map[string]bool
 
-	// skillSet is the loaded project recipe set. nil when skills are disabled
+	// skillSet is the merged diagnostic recipe set. nil disables recipes
 	// or no recipes are configured. Held on state
 	// so in-loop and post-loop critique paths both consult the same
 	// set, and so cacheAcceptedAnalysis / stampAgenticTelemetry can
@@ -428,11 +427,10 @@ type AgenticInputs struct {
 	WebURLBase   string
 	Mode         string
 
-	// Skills is the consumer's loaded recipe set. nil disables skill
+	// Skills is the merged diagnostic recipe set. nil disables skill
 	// matching entirely. Critique-disabled runs also skip recipes because recipes
 	// are consulted only inside the critique gate. Skills.Hash is stamped onto
-	// cached entries so consumer-side recipe edits invalidate cache without an
-	// engine version bump.
+	// cached entries so profile and consumer-recipe changes invalidate cache.
 	Skills *skills.Set
 
 	// ConsecutiveFailures is how many consecutive builds this test has failed,
