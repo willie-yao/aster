@@ -6,13 +6,13 @@ commit. Moving tags are not published.
 
 ## Current contract
 
-| Field | Compatibility v5 |
+| Field | Compatibility v6 |
 | --- | --- |
 | Orka repository | `https://github.com/orka-agents/orka.git` |
 | Orka commit | `1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254` |
 | Orka Go version | `1.26.2` |
 | Patch | `ai-worker-convergence.patch` |
-| Patch SHA-256 | `9d614316bb518ed5204052bedfd1c27e8b7e03af742cf381e1624a97f223bc8d` |
+| Patch SHA-256 | `b118176958f647207291bbcb5ec9d470e06dc1c31776e2f509a8a74dfca6b44d` |
 | Worker Dockerfile | `workers/ai/Dockerfile` from the pinned Orka commit |
 | Published platform | `linux/amd64` |
 | Workflow | `.github/workflows/orka-compat-image.yml` |
@@ -20,16 +20,20 @@ commit. Moving tags are not published.
 `compatibility.env` is the machine-readable source for the pinned values. The
 build fails when its patch checksum, source commit, or tag inputs do not match.
 
-Compatibility v5 retains the provider API observability, Copilot model fallback,
-strict final schema, and premature-final retry reset from v4. It splits the
-20-call evidence budget into 16 initial investigation calls plus four calls
-reserved for validation repair. A validation response activates repair only when
-every missing evidence group has exact candidates; the worker then exposes the
-artifact readers with finalization Tools and prioritizes reading over a repeated
-submission. Once finalization begins, broad investigation never resumes. The focus window leaves room for pending timeline verification plus one final
-submission turn after all four repair calls; once they are
-exhausted, the repair prompt directs the model to use ledger tokens because only
-finalization Tools remain.
+Compatibility v6 retains the provider API observability, Copilot model fallback,
+strict final schema, and bounded repair budget from v5. It splits the 20-call
+evidence budget into 16 initial investigation calls plus four calls reserved for
+validation repair. When every missing evidence group has exact candidates, a
+resolved `read_artifact` Tool is available, and the queue fits the remaining call
+and iteration budgets, the worker stores the groups in validation order. It then
+advertises only `read_artifact` for the current group and selects one normalized
+candidate path. A correct model-generated read is preserved. Empty responses,
+premature finalization, wrong readers, wrong paths, and repeated paths are
+replaced with a synthetic call through the normal guarded Tool execution path.
+Each successful or cached read advances exactly one group. Finalization Tools
+return only after the queue is complete, leaving a final repaired-submission
+turn. Incomplete or impossible plans retain the existing validation failure
+behavior, and broad investigation never resumes after finalization starts.
 
 Responses requests set `store: false`; completed model events and worker logs
 include the negotiated API mode and response ID. The dashboard ingestor can
@@ -41,7 +45,7 @@ Orka's Provider CRD.
 The workflow publishes this tag shape:
 
 ```text
-v5-orka-<full-orka-commit>-dashboard-<full-dashboard-commit>
+v6-orka-<full-orka-commit>-dashboard-<full-dashboard-commit>
 ```
 
 For this contract the image repository is:
@@ -112,7 +116,7 @@ workers:
   ai:
     image:
       repository: ghcr.io/willie-yao/prow-ai-dashboard/orka-ai-worker
-      tag: v5-orka-1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254-dashboard-<dashboard-commit>
+      tag: v6-orka-1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254-dashboard-<dashboard-commit>
       pullPolicy: IfNotPresent
 ```
 

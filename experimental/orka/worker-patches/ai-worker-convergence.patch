@@ -171,10 +171,10 @@ index 76c1745..9011f8d 100644
  	}
 diff --git a/workers/ai/analysis_budget.go b/workers/ai/analysis_budget.go
 new file mode 100644
-index 0000000..1360127
+index 0000000..fd29ed1
 --- /dev/null
 +++ b/workers/ai/analysis_budget.go
-@@ -0,0 +1,104 @@
+@@ -0,0 +1,113 @@
 +package main
 +
 +import (
@@ -195,19 +195,20 @@ index 0000000..1360127
 +)
 +
 +func (g *analysisLoopGuard) selectToolCalls(calls []llm.ToolCall) []llm.ToolCall {
++	if g.evidenceRepairActive {
++		if call, ok := g.correctEvidenceRepairCall(calls); ok {
++			return []llm.ToolCall{call}
++		}
++		if call, ok := g.syntheticEvidenceRepairCall(); ok {
++			return []llm.ToolCall{call}
++		}
++	}
 +	if !g.validationRequired || len(calls) <= 1 {
 +		return calls
 +	}
 +	for _, call := range calls {
 +		if !g.timelineVerified && g.isTimelineTool(call.Name) {
 +			return []llm.ToolCall{call}
-+		}
-+	}
-+	if g.evidenceRepairActive {
-+		for _, call := range calls {
-+			if g.isEvidenceRepairTool(call.Name) {
-+				return []llm.ToolCall{call}
-+			}
 +		}
 +	}
 +	for _, call := range calls {
@@ -222,7 +223,7 @@ index 0000000..1360127
 +	if g.validationRequired {
 +		g.validationFinalRetries = 0
 +	}
-+	if !g.validationRequired || g.isFinalizationTool(name) {
++	if !g.validationRequired {
 +		return nil
 +	}
 +	if g.evidenceRepairActive {
@@ -232,7 +233,15 @@ index 0000000..1360127
 +		if g.evidenceRepairToolCalls >= analysisMaxEvidenceRepairToolCalls {
 +			return fmt.Errorf("analysis evidence-repair tool-call budget exhausted")
 +		}
++		group, ok := g.currentEvidenceRepairGroup()
++		if !ok || g.evidenceRepairAttemptedGroups[group.ID] {
++			return fmt.Errorf("analysis evidence-repair group %q was already attempted", group.ID)
++		}
++		g.evidenceRepairAttemptedGroups[group.ID] = true
 +		g.evidenceRepairToolCalls++
++		return nil
++	}
++	if g.isFinalizationTool(name) {
 +		return nil
 +	}
 +	if g.investigationToolCalls >= analysisMaxInvestigationToolCalls {
@@ -281,16 +290,17 @@ index 0000000..1360127
 +}
 diff --git a/workers/ai/analysis_budget_test.go b/workers/ai/analysis_budget_test.go
 new file mode 100644
-index 0000000..7329c0f
+index 0000000..deb0de7
 --- /dev/null
 +++ b/workers/ai/analysis_budget_test.go
-@@ -0,0 +1,279 @@
+@@ -0,0 +1,470 @@
 +package main
 +
 +import (
 +	"context"
 +	"encoding/json"
 +	"fmt"
++	"slices"
 +	"strings"
 +	"testing"
 +
@@ -302,6 +312,38 @@ index 0000000..7329c0f
 +)
 +
 +const testSubmissionToolName = "submit_analysis"
++
++func evidenceRepairFailure(groups ...string) string {
++	candidates := map[string][]string{}
++	for _, group := range groups {
++		candidates[group] = []string{"logs/" + group + ".log"}
++	}
++	body, _ := json.Marshal(validationEvidenceFailure{
++		MissingEvidence:           groups,
++		MissingEvidenceCandidates: candidates,
++	})
++	return "tool returned HTTP 422: " + string(body)
++}
++
++func evidenceRepairCallPath(t *testing.T, call llm.ToolCall) string {
++	t.Helper()
++	candidate, ok := readArtifactCallPath(call.Arguments)
++	if !ok {
++		t.Fatalf("repair call arguments = %s", call.Arguments)
++	}
++	return candidate
++}
++
++func completeEvidenceRepairCall(t *testing.T, guard *analysisLoopGuard, call llm.ToolCall) {
++	t.Helper()
++	if err := guard.beginToolCall(call.Name); err != nil {
++		t.Fatal(err)
++	}
++	inspection := guard.inspectTool(call.Name, call.Arguments, `{"evidence_token":"signed"}`, nil, true)
++	if inspection.execErr != nil {
++		t.Fatal(inspection.execErr)
++	}
++}
 +
 +func TestAnalysisLoopGuardSelectsOneToolCall(t *testing.T) {
 +	guard := newAnalysisLoopGuard([]llm.Tool{
@@ -367,49 +409,35 @@ index 0000000..7329c0f
 +	}
 +}
 +
-+func TestAnalysisLoopGuardReservesEvidenceRepairBudget(t *testing.T) {
++func TestAnalysisLoopGuardRepairsMissingGroupsInOrder(t *testing.T) {
 +	guard := newAnalysisLoopGuard([]llm.Tool{
 +		{Name: "read_artifact"},
-+		{Name: "tail_artifact"},
 +		{Name: testSubmissionToolName},
 +	}, nil)
-+	for range 2 {
-+		if err := guard.beginToolCall("read_artifact"); err != nil {
-+			t.Fatal(err)
-+		}
-+	}
-+	failure := `tool returned HTTP 422: {"missing_evidence":["skill:logs"],"missing_evidence_candidates":{"skill:logs":["logs/controller.log"]}}`
++	failure := evidenceRepairFailure("machine-state", "node-state", "controller-log")
 +	inspection := guard.inspectTool(testSubmissionToolName, nil, "", fmt.Errorf("%s", failure), false)
 +	if inspection.repair == "" || !guard.evidenceRepairActive || !guard.finalizationStarted {
 +		t.Fatalf("inspection = %+v repair active=%t finalization started=%t", inspection, guard.evidenceRepairActive, guard.finalizationStarted)
 +	}
-+	req := &llm.CompletionRequest{Tools: []llm.Tool{
-+		{Name: "read_artifact"},
-+		{Name: "tail_artifact"},
-+		{Name: testSubmissionToolName},
-+	}}
-+	guard.prepareRequest(req, nil, 1, analysisLoopMaxIterations)
-+	allowed := advertisedToolNames(req.Tools)
-+	for _, name := range []string{"read_artifact", "tail_artifact", testSubmissionToolName} {
-+		if _, ok := allowed[name]; !ok {
-+			t.Fatalf("repair tools = %+v, missing %s", req.Tools, name)
++	var got []string
++	for range 3 {
++		selected := guard.selectToolCalls(nil)
++		if len(selected) != 1 {
++			t.Fatalf("selected repair calls = %+v", selected)
 +		}
++		got = append(got, evidenceRepairCallPath(t, selected[0]))
++		completeEvidenceRepairCall(t, guard, selected[0])
 +	}
-+	for range analysisMaxEvidenceRepairToolCalls {
-+		if err := guard.beginToolCall("read_artifact"); err != nil {
-+			t.Fatal(err)
-+		}
++	want := []string{"logs/machine-state.log", "logs/node-state.log", "logs/controller-log.log"}
++	if !slices.Equal(got, want) {
++		t.Fatalf("repair paths = %v, want %v", got, want)
 +	}
-+	if err := guard.beginToolCall("read_artifact"); err == nil || !strings.Contains(err.Error(), "evidence-repair") {
-+		t.Fatalf("repair budget error = %v", err)
-+	}
-+	guard.prepareRequest(req, nil, 1, analysisLoopMaxIterations)
-+	if len(req.Tools) != 1 || req.Tools[0].Name != testSubmissionToolName {
-+		t.Fatalf("post-repair tools = %+v", req.Tools)
++	if guard.evidenceRepairActive {
++		t.Fatal("repair remained active after every group was covered")
 +	}
 +}
 +
-+func TestAnalysisLoopGuardFocusLeavesTimelineRepairAndSubmissionRounds(t *testing.T) {
++func TestAnalysisLoopGuardFocusLeavesTimelineFourRepairsAndSubmissionRounds(t *testing.T) {
 +	guard := newAnalysisLoopGuard([]llm.Tool{
 +		{Name: "read_artifact"},
 +		{Name: "verify_timeline"},
@@ -426,50 +454,222 @@ index 0000000..7329c0f
 +	if _, ok := allowed["verify_timeline"]; !ok {
 +		t.Fatalf("first focus tools = %+v, missing timeline", req.Tools)
 +	}
-+	if _, ok := allowed[testSubmissionToolName]; !ok {
-+		t.Fatalf("first focus tools = %+v, missing submission", req.Tools)
-+	}
 +	guard.inspectTool("verify_timeline", nil, "verified", nil, true)
++
 +	req.Tools = []llm.Tool{{Name: "read_artifact"}, {Name: "verify_timeline"}, {Name: testSubmissionToolName}}
 +	guard.prepareRequest(req, nil, firstFocusIteration+1, analysisLoopMaxIterations)
 +	if len(req.Tools) != 1 || req.Tools[0].Name != testSubmissionToolName {
-+		t.Fatalf("post-timeline tools = %+v", req.Tools)
++		t.Fatalf("initial submission tools = %+v", req.Tools)
 +	}
-+	failure := `tool returned HTTP 422: {"missing_evidence":["skill:logs"],"missing_evidence_candidates":{"skill:logs":["logs/controller.log"]}}`
++	failure := evidenceRepairFailure("one", "two", "three", "four")
 +	guard.inspectTool(testSubmissionToolName, nil, "", fmt.Errorf("%s", failure), false)
++	if !guard.evidenceRepairActive {
++		t.Fatal("four-group repair did not activate")
++	}
++
 +	for repair := range analysisMaxEvidenceRepairToolCalls {
-+		req.Tools = []llm.Tool{{Name: "read_artifact"}, {Name: testSubmissionToolName}}
-+		guard.prepareRequest(req, nil, firstFocusIteration+2+repair, analysisLoopMaxIterations)
-+		if _, ok := advertisedToolNames(req.Tools)["read_artifact"]; !ok {
++		iteration := firstFocusIteration + 2 + repair
++		req.Tools = []llm.Tool{{Name: "read_artifact"}, {Name: "verify_timeline"}, {Name: testSubmissionToolName}}
++		guard.prepareRequest(req, nil, iteration, analysisLoopMaxIterations)
++		if len(req.Tools) != 1 || req.Tools[0].Name != "read_artifact" {
 +			t.Fatalf("repair round %d tools = %+v", repair+1, req.Tools)
 +		}
-+		if err := guard.beginToolCall("read_artifact"); err != nil {
-+			t.Fatal(err)
-+		}
++		selected := guard.selectToolCalls(nil)
++		completeEvidenceRepairCall(t, guard, selected[0])
 +	}
-+	req.Tools = []llm.Tool{{Name: "read_artifact"}, {Name: testSubmissionToolName}}
++
 +	finalIteration := firstFocusIteration + 2 + analysisMaxEvidenceRepairToolCalls
 +	if finalIteration != analysisLoopMaxIterations-1 {
 +		t.Fatalf("final iteration = %d, want %d", finalIteration, analysisLoopMaxIterations-1)
 +	}
++	req.Tools = []llm.Tool{{Name: "read_artifact"}, {Name: "verify_timeline"}, {Name: testSubmissionToolName}}
 +	guard.prepareRequest(req, nil, finalIteration, analysisLoopMaxIterations)
 +	if len(req.Tools) != 1 || req.Tools[0].Name != testSubmissionToolName {
-+		t.Fatalf("final submission tools = %+v", req.Tools)
++		t.Fatalf("final repaired submission tools = %+v", req.Tools)
 +	}
 +}
 +
-+func TestAnalysisLoopGuardSelectsRepairBeforeSubmission(t *testing.T) {
-+	guard := newAnalysisLoopGuard([]llm.Tool{
-+		{Name: "read_artifact"},
-+		{Name: testSubmissionToolName},
-+	}, nil)
-+	guard.evidenceRepairActive = true
-+	selected := guard.selectToolCalls([]llm.ToolCall{
-+		{Name: testSubmissionToolName},
-+		{Name: "read_artifact"},
-+	})
-+	if len(selected) != 1 || selected[0].Name != "read_artifact" {
++func TestAnalysisLoopGuardSynthesizesRepairWhenModelReturnsNoTools(t *testing.T) {
++	guard := newAnalysisLoopGuard([]llm.Tool{{Name: "read_artifact"}, {Name: testSubmissionToolName}}, nil)
++	guard.inspectTool(testSubmissionToolName, nil, "", fmt.Errorf("%s", evidenceRepairFailure("logs")), false)
++	selected := guard.selectToolCalls(nil)
++	if len(selected) != 1 || selected[0].Name != "read_artifact" || evidenceRepairCallPath(t, selected[0]) != "logs/logs.log" {
 +		t.Fatalf("selected repair call = %+v", selected)
++	}
++}
++
++func TestAnalysisLoopGuardReplacesPrematureSubmissionWithRepair(t *testing.T) {
++	guard := newAnalysisLoopGuard([]llm.Tool{{Name: "read_artifact"}, {Name: testSubmissionToolName}}, nil)
++	guard.inspectTool(testSubmissionToolName, nil, "", fmt.Errorf("%s", evidenceRepairFailure("logs")), false)
++	selected := guard.selectToolCalls([]llm.ToolCall{{ID: "submit", Name: testSubmissionToolName}})
++	if len(selected) != 1 || selected[0].Name != "read_artifact" || evidenceRepairCallPath(t, selected[0]) != "logs/logs.log" {
++		t.Fatalf("selected repair call = %+v", selected)
++	}
++}
++
++func TestAnalysisLoopGuardReplacesRepeatedOrWrongRepairPath(t *testing.T) {
++	guard := newAnalysisLoopGuard([]llm.Tool{{Name: "read_artifact"}, {Name: testSubmissionToolName}}, nil)
++	guard.inspectTool(testSubmissionToolName, nil, "", fmt.Errorf("%s", evidenceRepairFailure("first", "second")), false)
++	first := guard.selectToolCalls(nil)[0]
++	completeEvidenceRepairCall(t, guard, first)
++
++	calls := []llm.ToolCall{
++		{ID: "repeated-read", Name: "read_artifact", Arguments: json.RawMessage(`{"path":"logs/first.log"}`)},
++		{ID: "wrong-path", Name: "read_artifact", Arguments: json.RawMessage(`{"path":"logs/wrong.log"}`)},
++		{ID: "wrong-reader", Name: "tail_artifact", Arguments: json.RawMessage(`{"path":"logs/second.log"}`)},
++	}
++	for _, call := range calls {
++		selected := guard.selectToolCalls([]llm.ToolCall{call})
++		if len(selected) != 1 || evidenceRepairCallPath(t, selected[0]) != "logs/second.log" || selected[0].ID == call.ID {
++			t.Fatalf("selected call for %+v = %+v", call, selected)
++		}
++	}
++	if guard.evidenceRepairToolCalls != 1 || guard.evidenceRepairGroupIndex != 1 {
++		t.Fatalf("repair calls=%d group=%d", guard.evidenceRepairToolCalls, guard.evidenceRepairGroupIndex)
++	}
++}
++
++func TestAnalysisLoopGuardPreservesCorrectModelRepairCall(t *testing.T) {
++	guard := newAnalysisLoopGuard([]llm.Tool{{Name: "read_artifact"}, {Name: testSubmissionToolName}}, nil)
++	guard.inspectTool(testSubmissionToolName, nil, "", fmt.Errorf("%s", evidenceRepairFailure("logs")), false)
++	call := llm.ToolCall{
++		ID: "model-read", Name: "read_artifact", Arguments: json.RawMessage(`{"path":"./logs/logs.log","offset":10}`),
++	}
++	selected := guard.selectToolCalls([]llm.ToolCall{call})
++	if len(selected) != 1 || selected[0].ID != call.ID || string(selected[0].Arguments) != string(call.Arguments) {
++		t.Fatalf("selected repair call = %+v", selected)
++	}
++}
++
++func TestAnalysisLoopGuardSupportsScopedAndAliasedRepairReaders(t *testing.T) {
++	tests := []struct {
++		name        string
++		tool        llm.Tool
++		customTools map[string]*corev1alpha1.Tool
++	}{
++		{name: "scoped", tool: llm.Tool{Name: "read-artifact-build"}},
++		{
++			name: "alias",
++			tool: llm.Tool{Name: "reader"},
++			customTools: map[string]*corev1alpha1.Tool{
++				"reader": {ObjectMeta: metav1.ObjectMeta{Name: "read-artifact-build"}},
++			},
++		},
++	}
++	for _, tc := range tests {
++		t.Run(tc.name, func(t *testing.T) {
++			guard := newAnalysisLoopGuard([]llm.Tool{tc.tool, {Name: testSubmissionToolName}}, tc.customTools)
++			guard.inspectTool(testSubmissionToolName, nil, "", fmt.Errorf("%s", evidenceRepairFailure("logs")), false)
++			selected := guard.selectToolCalls(nil)
++			if len(selected) != 1 || selected[0].Name != tc.tool.Name || evidenceRepairCallPath(t, selected[0]) != "logs/logs.log" {
++				t.Fatalf("selected repair call = %+v", selected)
++			}
++		})
++	}
++}
++
++func TestAnalysisLoopGuardCachedRepairAdvancesQueue(t *testing.T) {
++	reader := &corev1alpha1.Tool{ObjectMeta: metav1.ObjectMeta{
++		Name:        "read-artifact-build",
++		Annotations: map[string]string{toolCacheIdenticalCallsAnnotation: "true"},
++	}}
++	customTools := map[string]*corev1alpha1.Tool{"read-artifact-build": reader}
++	guard := newAnalysisLoopGuard([]llm.Tool{{Name: "read-artifact-build"}, {Name: testSubmissionToolName}}, customTools)
++	guard.inspectTool(testSubmissionToolName, nil, "", fmt.Errorf("%s", evidenceRepairFailure("logs")), false)
++	call := guard.selectToolCalls(nil)[0]
++	guard.rememberToolResult(call.Name, call.Arguments, `{"evidence_token":"cached"}`, reader)
++	result, cached, completed, err := executeGuardedLoopTool(
++		context.Background(),
++		call,
++		call.Name,
++		map[string]struct{}{call.Name: {}},
++		customTools,
++		worker.NewToolExecutor(),
++		&approvalGate{firedKeys: map[string]bool{}},
++		nil,
++		guard,
++	)
++	if err != nil || !cached || !completed {
++		t.Fatalf("result=%q cached=%t completed=%t error=%v", result, cached, completed, err)
++	}
++	guard.inspectTool(call.Name, call.Arguments, result, err, completed)
++	if guard.evidenceRepairActive {
++		t.Fatal("cached repair did not finish the queue")
++	}
++}
++
++func TestAnalysisLoopGuardRejectsUnsuccessfulRepairResult(t *testing.T) {
++	tests := []struct {
++		name   string
++		result string
++	}{
++		{name: "error payload", result: `{"error":"not found"}`},
++		{name: "missing token", result: `{"path":"logs/logs.log"}`},
++		{name: "empty token", result: `{"evidence_token":" "}`},
++		{name: "malformed", result: `{`},
++	}
++	for _, tc := range tests {
++		t.Run(tc.name, func(t *testing.T) {
++			guard := newAnalysisLoopGuard([]llm.Tool{{Name: "read_artifact"}, {Name: testSubmissionToolName}}, nil)
++			guard.inspectTool(testSubmissionToolName, nil, "", fmt.Errorf("%s", evidenceRepairFailure("logs")), false)
++			call := guard.selectToolCalls(nil)[0]
++			if err := guard.beginToolCall(call.Name); err != nil {
++				t.Fatal(err)
++			}
++			guard.inspectTool(call.Name, call.Arguments, tc.result, nil, true)
++			if guard.evidenceRepairActive {
++				t.Fatal("unsuccessful evidence result kept repair active")
++			}
++			if !guard.evidenceRepairAttemptedGroups["logs"] {
++				t.Fatal("unsuccessful evidence result did not consume the attempted group")
++			}
++		})
++	}
++}
++
++func TestAnalysisLoopGuardDoesNotRetryFailedRepairGroup(t *testing.T) {
++	guard := newAnalysisLoopGuard([]llm.Tool{{Name: "read_artifact"}, {Name: testSubmissionToolName}}, nil)
++	guard.inspectTool(testSubmissionToolName, nil, "", fmt.Errorf("%s", evidenceRepairFailure("logs")), false)
++	call := guard.selectToolCalls(nil)[0]
++	if err := guard.beginToolCall(call.Name); err != nil {
++		t.Fatal(err)
++	}
++	guard.inspectTool(call.Name, call.Arguments, "", fmt.Errorf("read failed"), false)
++	if guard.evidenceRepairActive {
++		t.Fatal("failed repair remained active for another call")
++	}
++	if guard.evidenceRepairToolCalls != 1 {
++		t.Fatalf("repair calls = %d, want 1", guard.evidenceRepairToolCalls)
++	}
++	guard.inspectTool(testSubmissionToolName, nil, "", fmt.Errorf("%s", evidenceRepairFailure("logs")), false)
++	if guard.evidenceRepairActive {
++		t.Fatal("failed repair group was activated a second time")
++	}
++}
++
++func TestAnalysisLoopGuardRejectsRepairPlanBeyondRemainingBudget(t *testing.T) {
++	guard := newAnalysisLoopGuard([]llm.Tool{{Name: "read_artifact"}, {Name: testSubmissionToolName}}, nil)
++	guard.evidenceRepairToolCalls = 2
++	failure := evidenceRepairFailure("one", "two", "three")
++	guard.inspectTool(testSubmissionToolName, nil, "", fmt.Errorf("%s", failure), false)
++	if guard.evidenceRepairActive {
++		t.Fatal("impossible repair plan activated")
++	}
++}
++
++func TestAnalysisLoopGuardNeverResumesBroadInvestigationAfterRepair(t *testing.T) {
++	guard := newAnalysisLoopGuard([]llm.Tool{
++		{Name: "read_artifact"}, {Name: "grep_artifact"}, {Name: testSubmissionToolName},
++	}, nil)
++	guard.inspectTool(testSubmissionToolName, nil, "", fmt.Errorf("%s", evidenceRepairFailure("logs")), false)
++	call := guard.selectToolCalls(nil)[0]
++	completeEvidenceRepairCall(t, guard, call)
++	req := &llm.CompletionRequest{Tools: []llm.Tool{
++		{Name: "read_artifact"}, {Name: "grep_artifact"}, {Name: testSubmissionToolName},
++	}}
++	guard.prepareRequest(req, nil, 5, analysisLoopMaxIterations)
++	if len(req.Tools) != 1 || req.Tools[0].Name != testSubmissionToolName {
++		t.Fatalf("post-repair tools = %+v", req.Tools)
 +	}
 +}
 +
@@ -2071,15 +2271,16 @@ index 0000000..0b44bdd
 +}
 diff --git a/workers/ai/validated_analysis.go b/workers/ai/validated_analysis.go
 new file mode 100644
-index 0000000..a8d6cb2
+index 0000000..97a7838
 --- /dev/null
 +++ b/workers/ai/validated_analysis.go
-@@ -0,0 +1,611 @@
+@@ -0,0 +1,792 @@
 +package main
 +
 +import (
 +	"encoding/json"
 +	"fmt"
++	"path"
 +	"strings"
 +
 +	corev1alpha1 "github.com/orka-agents/orka/api/v1alpha1"
@@ -2123,14 +2324,9 @@ index 0000000..a8d6cb2
 +	return normalized == "verify-timeline" || strings.HasPrefix(normalized, "verify-timeline-")
 +}
 +
-+func isAnalysisEvidenceReaderTool(name string) bool {
++func isAnalysisReadArtifactTool(name string) bool {
 +	normalized := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(name)), "_", "-")
-+	for _, base := range []string{"read-artifact", "tail-artifact", "grep-artifact"} {
-+		if normalized == base || strings.HasPrefix(normalized, base+"-") {
-+			return true
-+		}
-+	}
-+	return false
++	return normalized == "read-artifact" || strings.HasPrefix(normalized, "read-artifact-")
 +}
 +
 +func validatedAnalysisResult(toolName string, args json.RawMessage, result string) (string, bool, error) {
@@ -2211,20 +2407,17 @@ index 0000000..a8d6cb2
 +	return validation, timeline, finalization
 +}
 +
-+func analysisEvidenceRepairTools(
++func analysisEvidenceRepairReader(
 +	tools []llm.Tool,
 +	customTools map[string]*corev1alpha1.Tool,
-+) (map[string]bool, []llm.Tool) {
-+	names := map[string]bool{}
-+	var repairTools []llm.Tool
++) (llm.Tool, bool) {
 +	for _, tool := range tools {
 +		actual := resolvedCustomToolName(tool.Name, customTools)
-+		if isAnalysisEvidenceReaderTool(actual) {
-+			names[tool.Name] = true
-+			repairTools = append(repairTools, tool)
++		if isAnalysisReadArtifactTool(actual) {
++			return tool, true
 +		}
 +	}
-+	return names, repairTools
++	return llm.Tool{}, false
 +}
 +
 +func normalizedValidationFailure(err error) string {
@@ -2267,35 +2460,49 @@ index 0000000..a8d6cb2
 +	transientValidationPrompt = "The validated analysis sets is_transient=true " +
 +		"without a successful verify_timeline call. " +
 +		"Call verify_timeline for the specific failing operation, then call validate_analysis again."
-+	evidenceRepairPrompt          = "Validation found required evidence that has not been read. Use the exact missing_evidence_candidates paths with read_artifact, tail_artifact, or grep_artifact. Preserve every prior evidence token and add the new tokens. Do not resubmit before reading the missing groups."
-+	evidenceRepairExhaustedPrompt = "The reserved evidence-reader calls are exhausted. Do not call artifact readers. Use the evidence tokens already preserved in the Engine evidence ledger, correct evidence_tokens and relevant_files, then retry the validation Tool."
-+	invalidAnalysisPrompt         = "The final analysis JSON is malformed. Correct the JSON syntax and required field types, " +
++	evidenceRepairPrompt = "Validation found required evidence that has not been read. " +
++		"The worker will repair one missing evidence group at a time with read_artifact. " +
++		"Preserve every prior evidence token and add the repaired tokens."
++	evidenceRepairExhaustedPrompt = "Deterministic evidence repair is unavailable or exhausted. " +
++		"Do not call artifact readers. Use the evidence tokens already preserved in the Engine evidence ledger, " +
++		"correct evidence_tokens and relevant_files, then retry the validation Tool."
++	invalidAnalysisPrompt = "The final analysis JSON is malformed. Correct the JSON syntax and required field types, " +
 +		"then return the complete final JSON object."
 +)
 +
++type evidenceRepairGroup struct {
++	ID             string
++	CandidatePaths []string
++}
++
 +type analysisLoopGuard struct {
-+	validationRequired       bool
-+	validationToolNames      map[string]bool
-+	timelineToolNames        map[string]bool
-+	finalizationTools        []llm.Tool
-+	evidenceRepairToolNames  map[string]bool
-+	evidenceRepairTools      []llm.Tool
-+	customTools              map[string]*corev1alpha1.Tool
-+	submissionToolName       string
-+	timelineToolName         string
-+	validationFailures       map[string]int
-+	validationFinalRetries   int
-+	transientCritiqueRetries int
-+	emptyFinalRetries        int
-+	timelineVerified         bool
-+	transientCritiqueEnabled bool
-+	investigationToolCalls   int
-+	evidenceRepairToolCalls  int
-+	evidenceRepairActive     bool
-+	finalizationStarted      bool
-+	toolResults              map[string]string
-+	evidenceEntries          []analysisEvidenceEntry
-+	evidenceSeen             map[string]bool
++	validationRequired            bool
++	validationToolNames           map[string]bool
++	timelineToolNames             map[string]bool
++	finalizationTools             []llm.Tool
++	evidenceRepairReader          llm.Tool
++	evidenceRepairReaderOK        bool
++	evidenceRepairGroups          []evidenceRepairGroup
++	evidenceRepairGroupIndex      int
++	evidenceRepairAttemptedGroups map[string]bool
++	customTools                   map[string]*corev1alpha1.Tool
++	submissionToolName            string
++	timelineToolName              string
++	validationFailures            map[string]int
++	validationFinalRetries        int
++	transientCritiqueRetries      int
++	emptyFinalRetries             int
++	timelineVerified              bool
++	transientCritiqueEnabled      bool
++	investigationToolCalls        int
++	evidenceRepairToolCalls       int
++	evidenceRepairActive          bool
++	finalizationStarted           bool
++	currentIteration              int
++	maxIterations                 int
++	toolResults                   map[string]string
++	evidenceEntries               []analysisEvidenceEntry
++	evidenceSeen                  map[string]bool
 +}
 +
 +type finalResponseDecision struct {
@@ -2331,7 +2538,7 @@ index 0000000..a8d6cb2
 +	customTools map[string]*corev1alpha1.Tool,
 +) *analysisLoopGuard {
 +	validation, timeline, finalization := analysisToolNames(tools, customTools)
-+	repairNames, repairTools := analysisEvidenceRepairTools(tools, customTools)
++	repairReader, repairReaderOK := analysisEvidenceRepairReader(tools, customTools)
 +	submissionToolName := defaultSubmissionToolName
 +	timelineToolName := defaultTimelineToolName
 +	for _, tool := range tools {
@@ -2343,19 +2550,22 @@ index 0000000..a8d6cb2
 +		}
 +	}
 +	return &analysisLoopGuard{
-+		validationRequired:       len(validation) > 0,
-+		validationToolNames:      validation,
-+		timelineToolNames:        timeline,
-+		transientCritiqueEnabled: len(timeline) > 0,
-+		finalizationTools:        finalization,
-+		evidenceRepairToolNames:  repairNames,
-+		evidenceRepairTools:      repairTools,
-+		customTools:              customTools,
-+		submissionToolName:       submissionToolName,
-+		timelineToolName:         timelineToolName,
-+		validationFailures:       map[string]int{},
-+		toolResults:              map[string]string{},
-+		evidenceSeen:             map[string]bool{},
++		validationRequired:            len(validation) > 0,
++		validationToolNames:           validation,
++		timelineToolNames:             timeline,
++		transientCritiqueEnabled:      len(timeline) > 0,
++		finalizationTools:             finalization,
++		evidenceRepairReader:          repairReader,
++		evidenceRepairReaderOK:        repairReaderOK,
++		customTools:                   customTools,
++		submissionToolName:            submissionToolName,
++		timelineToolName:              timelineToolName,
++		validationFailures:            map[string]int{},
++		toolResults:                   map[string]string{},
++		evidenceSeen:                  map[string]bool{},
++		evidenceRepairAttemptedGroups: map[string]bool{},
++		currentIteration:              -1,
++		maxIterations:                 analysisLoopMaxIterations,
 +	}
 +}
 +
@@ -2372,7 +2582,7 @@ index 0000000..a8d6cb2
 +}
 +
 +func (g *analysisLoopGuard) isEvidenceRepairTool(name string) bool {
-+	return g.evidenceRepairToolNames[strings.TrimSpace(name)]
++	return g.evidenceRepairReaderOK && strings.TrimSpace(name) == g.evidenceRepairReader.Name
 +}
 +
 +func (g *analysisLoopGuard) prepareRequest(
@@ -2380,14 +2590,17 @@ index 0000000..a8d6cb2
 +	messages []llm.Message,
 +	iteration, maxIterations int,
 +) {
++	g.currentIteration = iteration
++	g.maxIterations = maxIterations
 +	requestMessages := g.withEvidenceLedger(messages)
 +	req.Messages = requestMessages
 +	if g.timelineVerified {
 +		req.Tools = g.withoutTimelineTools(req.Tools)
 +	}
 +	if g.validationRequired && g.finalizationStarted {
-+		if g.evidenceRepairActive && g.evidenceRepairToolCalls < analysisMaxEvidenceRepairToolCalls {
++		if g.evidenceRepairActive && g.evidenceRepairCanContinue(maxIterations-iteration) {
 +			req.Tools = g.activeEvidenceRepairTools()
++			req.Messages = appendPrompt(requestMessages, g.currentEvidenceRepairPrompt())
 +			return
 +		}
 +		g.evidenceRepairActive = false
@@ -2480,6 +2693,9 @@ index 0000000..a8d6cb2
 +	completed bool,
 +) validationInspection {
 +	inspection := validationInspection{execErr: execErr}
++	if g.evidenceRepairActive && g.isEvidenceRepairTool(toolName) {
++		g.completeEvidenceRepairCall(toolName, args, result, completed, execErr)
++	}
 +	if g.isValidationTool(toolName) {
 +		g.finalizationStarted = true
 +	}
@@ -2498,9 +2714,7 @@ index 0000000..a8d6cb2
 +		return inspection
 +	}
 +	failure := normalizedValidationFailure(inspection.execErr)
-+	g.evidenceRepairActive = validationNeedsEvidenceRepair(failure) &&
-+		len(g.evidenceRepairTools) > 0 &&
-+		g.evidenceRepairToolCalls < analysisMaxEvidenceRepairToolCalls
++	g.evidenceRepairActive = g.activateEvidenceRepair(failure)
 +	g.validationFailures[failure]++
 +	inspection.repair = validationRepairPrompt(toolName, failure, g.evidenceRepairActive)
 +	if g.validationFailures[failure] >= maxValidationFailures {
@@ -2518,21 +2732,194 @@ index 0000000..a8d6cb2
 +	MissingEvidenceCandidates map[string][]string `json:"missing_evidence_candidates"`
 +}
 +
-+func validationNeedsEvidenceRepair(failure string) bool {
++func validationEvidenceRepairPlan(failure string) ([]evidenceRepairGroup, bool) {
 +	candidate, found := lastJSONObject(failure)
 +	if !found {
-+		return false
++		return nil, false
 +	}
 +	var details validationEvidenceFailure
 +	if json.Unmarshal([]byte(candidate), &details) != nil || len(details.MissingEvidence) == 0 {
++		return nil, false
++	}
++	seen := map[string]bool{}
++	groups := make([]evidenceRepairGroup, 0, len(details.MissingEvidence))
++	for _, rawGroup := range details.MissingEvidence {
++		group := strings.TrimSpace(rawGroup)
++		if group == "" || seen[group] {
++			continue
++		}
++		seen[group] = true
++		seenPaths := map[string]bool{}
++		paths := make([]string, 0, len(details.MissingEvidenceCandidates[rawGroup]))
++		for _, rawPath := range details.MissingEvidenceCandidates[rawGroup] {
++			candidatePath, ok := normalizeEvidenceCandidatePath(rawPath)
++			if !ok || seenPaths[candidatePath] {
++				continue
++			}
++			seenPaths[candidatePath] = true
++			paths = append(paths, candidatePath)
++		}
++		if len(paths) == 0 {
++			return nil, false
++		}
++		groups = append(groups, evidenceRepairGroup{ID: group, CandidatePaths: paths})
++	}
++	return groups, len(groups) > 0
++}
++
++func normalizeEvidenceCandidatePath(raw string) (string, bool) {
++	normalized := path.Clean(strings.ReplaceAll(strings.TrimSpace(raw), `\`, "/"))
++	if normalized == "." || normalized == ".." || strings.HasPrefix(normalized, "../") || strings.HasPrefix(normalized, "/") {
++		return "", false
++	}
++	return normalized, true
++}
++
++func validationNeedsEvidenceRepair(failure string) bool {
++	_, ok := validationEvidenceRepairPlan(failure)
++	return ok
++}
++
++func (g *analysisLoopGuard) activateEvidenceRepair(failure string) bool {
++	groups, ok := validationEvidenceRepairPlan(failure)
++	remainingCalls := analysisMaxEvidenceRepairToolCalls - g.evidenceRepairToolCalls
++	availableTurns := g.maxIterations - g.currentIteration - 1
++	if !ok || !g.evidenceRepairReaderOK || len(groups) > remainingCalls ||
++		len(groups)+g.repairFinalizationTurns() > availableTurns || g.repairPlanRepeatsGroup(groups) {
++		g.clearEvidenceRepairPlan()
 +		return false
 +	}
-+	for _, missing := range details.MissingEvidence {
-+		if len(details.MissingEvidenceCandidates[missing]) == 0 {
-+			return false
++	g.evidenceRepairGroups = groups
++	g.evidenceRepairGroupIndex = 0
++	return true
++}
++
++func (g *analysisLoopGuard) repairPlanRepeatsGroup(groups []evidenceRepairGroup) bool {
++	for _, group := range groups {
++		if g.evidenceRepairAttemptedGroups[group.ID] {
++			return true
 +		}
 +	}
-+	return true
++	return false
++}
++
++func (g *analysisLoopGuard) clearEvidenceRepairPlan() {
++	g.evidenceRepairActive = false
++	g.evidenceRepairGroups = nil
++	g.evidenceRepairGroupIndex = 0
++}
++
++func (g *analysisLoopGuard) repairFinalizationTurns() int {
++	turns := 1
++	if !g.timelineVerified && len(g.timelineToolNames) > 0 {
++		turns++
++	}
++	return turns
++}
++
++func (g *analysisLoopGuard) remainingEvidenceRepairGroups() int {
++	return len(g.evidenceRepairGroups) - g.evidenceRepairGroupIndex
++}
++
++func (g *analysisLoopGuard) evidenceRepairCanContinue(availableTurns int) bool {
++	groups := g.remainingEvidenceRepairGroups()
++	remainingCalls := analysisMaxEvidenceRepairToolCalls - g.evidenceRepairToolCalls
++	return g.evidenceRepairReaderOK && groups > 0 && groups <= remainingCalls &&
++		groups+g.repairFinalizationTurns() <= availableTurns
++}
++
++func (g *analysisLoopGuard) currentEvidenceRepairGroup() (evidenceRepairGroup, bool) {
++	if !g.evidenceRepairActive || g.evidenceRepairGroupIndex >= len(g.evidenceRepairGroups) {
++		return evidenceRepairGroup{}, false
++	}
++	return g.evidenceRepairGroups[g.evidenceRepairGroupIndex], true
++}
++
++func (g *analysisLoopGuard) currentEvidenceRepairPrompt() string {
++	group, ok := g.currentEvidenceRepairGroup()
++	if !ok {
++		return g.modelPrompt(validationFocusPrompt)
++	}
++	args, _ := json.Marshal(map[string]string{"path": group.CandidatePaths[0]})
++	return fmt.Sprintf(
++		"Repair missing evidence group %q now. Call %s exactly once with arguments %s. "+
++			"Do not call finalization or another reader. Preserve every evidence token.",
++		group.ID,
++		g.evidenceRepairReader.Name,
++		args,
++	)
++}
++
++func (g *analysisLoopGuard) correctEvidenceRepairCall(calls []llm.ToolCall) (llm.ToolCall, bool) {
++	group, ok := g.currentEvidenceRepairGroup()
++	if !ok {
++		return llm.ToolCall{}, false
++	}
++	for _, call := range calls {
++		if strings.TrimSpace(call.Name) != g.evidenceRepairReader.Name {
++			continue
++		}
++		callPath, ok := readArtifactCallPath(call.Arguments)
++		if ok && callPath == group.CandidatePaths[0] {
++			return call, true
++		}
++	}
++	return llm.ToolCall{}, false
++}
++
++func (g *analysisLoopGuard) syntheticEvidenceRepairCall() (llm.ToolCall, bool) {
++	group, ok := g.currentEvidenceRepairGroup()
++	if !ok {
++		return llm.ToolCall{}, false
++	}
++	args, err := json.Marshal(map[string]string{"path": group.CandidatePaths[0]})
++	if err != nil {
++		return llm.ToolCall{}, false
++	}
++	return llm.ToolCall{
++		ID:        fmt.Sprintf("analysis-evidence-repair-%d", g.evidenceRepairToolCalls+1),
++		Name:      g.evidenceRepairReader.Name,
++		Arguments: args,
++	}, true
++}
++
++func readArtifactCallPath(args json.RawMessage) (string, bool) {
++	var call struct {
++		Path string `json:"path"`
++	}
++	if json.Unmarshal(args, &call) != nil {
++		return "", false
++	}
++	return normalizeEvidenceCandidatePath(call.Path)
++}
++
++func (g *analysisLoopGuard) completeEvidenceRepairCall(
++	toolName string,
++	args json.RawMessage,
++	result string,
++	completed bool,
++	execErr error,
++) {
++	group, ok := g.currentEvidenceRepairGroup()
++	callPath, pathOK := readArtifactCallPath(args)
++	if !ok || !g.isEvidenceRepairTool(toolName) || !pathOK || callPath != group.CandidatePaths[0] ||
++		execErr != nil || !completed || !successfulEvidenceRepairResult(result) {
++		g.clearEvidenceRepairPlan()
++		return
++	}
++	g.evidenceRepairGroupIndex++
++	if g.evidenceRepairGroupIndex >= len(g.evidenceRepairGroups) {
++		g.clearEvidenceRepairPlan()
++	}
++}
++
++func successfulEvidenceRepairResult(result string) bool {
++	var payload struct {
++		Error         any    `json:"error"`
++		EvidenceToken string `json:"evidence_token"`
++	}
++	return json.Unmarshal([]byte(result), &payload) == nil && payload.Error == nil &&
++		strings.TrimSpace(payload.EvidenceToken) != ""
 +}
 +
 +func validationRepairPrompt(toolName, failure string, evidenceRepairActive bool) string {
@@ -2595,16 +2982,10 @@ index 0000000..a8d6cb2
 +}
 +
 +func (g *analysisLoopGuard) activeEvidenceRepairTools() []llm.Tool {
-+	seen := map[string]bool{}
-+	out := make([]llm.Tool, 0, len(g.evidenceRepairTools)+len(g.finalizationTools))
-+	for _, tool := range append(append([]llm.Tool{}, g.evidenceRepairTools...), g.activeFinalizationTools()...) {
-+		if seen[tool.Name] {
-+			continue
-+		}
-+		seen[tool.Name] = true
-+		out = append(out, tool)
++	if !g.evidenceRepairActive || !g.evidenceRepairReaderOK {
++		return nil
 +	}
-+	return out
++	return []llm.Tool{g.evidenceRepairReader}
 +}
 +
 +func (g *analysisLoopGuard) modelPrompt(prompt string) string {
@@ -2688,10 +3069,10 @@ index 0000000..a8d6cb2
 +}
 diff --git a/workers/ai/validated_analysis_test.go b/workers/ai/validated_analysis_test.go
 new file mode 100644
-index 0000000..d8578c9
+index 0000000..950845f
 --- /dev/null
 +++ b/workers/ai/validated_analysis_test.go
-@@ -0,0 +1,478 @@
+@@ -0,0 +1,590 @@
 +package main
 +
 +import (
@@ -2816,7 +3197,7 @@ index 0000000..d8578c9
 +func TestValidationRepairPromptTargetsMissingEvidenceCandidates(t *testing.T) {
 +	failure := `tool returned HTTP 422: {"missing_evidence":["skill:logs"],"missing_evidence_candidates":{"skill:logs":["logs/controller.log"]}}`
 +	prompt := validationRepairPrompt(testSubmissionToolName, failure, true)
-+	for _, want := range []string{"missing_evidence_candidates", "read_artifact", "Preserve every prior evidence token", "Do not resubmit"} {
++	for _, want := range []string{"missing_evidence_candidates", "one missing evidence group at a time", "read_artifact", "Preserve every prior evidence token"} {
 +		if !strings.Contains(prompt, want) {
 +			t.Errorf("repair prompt missing %q: %s", want, prompt)
 +		}
@@ -2832,15 +3213,28 @@ index 0000000..d8578c9
 +	if validationNeedsEvidenceRepair(incomplete) {
 +		t.Fatal("incomplete candidate response activated repair")
 +	}
++	guard := newAnalysisLoopGuard([]llm.Tool{{Name: "read_artifact"}, {Name: testSubmissionToolName}}, nil)
++	guard.inspectTool(testSubmissionToolName, nil, "", fmt.Errorf("%s", incomplete), false)
++	if guard.evidenceRepairActive {
++		t.Fatal("incomplete candidate map created a repair queue")
++	}
 +	if validationNeedsEvidenceRepair(`tool returned HTTP 400: {"missing_evidence":[]}`) {
 +		t.Fatal("empty evidence response activated repair")
++	}
++}
++
++func TestAnalysisLoopGuardRequiresResolvedReadArtifactForRepair(t *testing.T) {
++	guard := newAnalysisLoopGuard([]llm.Tool{{Name: "tail_artifact"}, {Name: testSubmissionToolName}}, nil)
++	guard.inspectTool(testSubmissionToolName, nil, "", fmt.Errorf("%s", evidenceRepairFailure("logs")), false)
++	if guard.evidenceRepairActive {
++		t.Fatal("repair activated without read_artifact")
 +	}
 +}
 +
 +func TestValidationRepairPromptUsesLedgerAfterRepairBudget(t *testing.T) {
 +	failure := `tool returned HTTP 422: {"missing_evidence":["skill:logs"],"missing_evidence_candidates":{"skill:logs":["logs/controller.log"]}}`
 +	prompt := validationRepairPrompt(testSubmissionToolName, failure, false)
-+	for _, want := range []string{"reserved evidence-reader calls are exhausted", "Engine evidence ledger", "Do not call artifact readers"} {
++	for _, want := range []string{"unavailable or exhausted", "Engine evidence ledger", "Do not call artifact readers"} {
 +		if !strings.Contains(prompt, want) {
 +			t.Errorf("exhausted repair prompt missing %q: %s", want, prompt)
 +		}
@@ -2854,6 +3248,105 @@ index 0000000..d8578c9
 +	prompt := validationRepairPrompt(testSubmissionToolName, "analysis.root_cause is required", false)
 +	if !strings.Contains(prompt, "root_cause") || strings.Contains(prompt, "relevant_files") {
 +		t.Fatalf("repair prompt = %q", prompt)
++	}
++}
++
++func TestExecuteAgentLoopSynthesizesMissingRepairReader(t *testing.T) {
++	testExecuteAgentLoopEvidenceRepair(t, false)
++}
++
++func TestExecuteAgentLoopPreservesCorrectRepairReader(t *testing.T) {
++	testExecuteAgentLoopEvidenceRepair(t, true)
++}
++
++func testExecuteAgentLoopEvidenceRepair(t *testing.T, modelReads bool) {
++	t.Helper()
++	validationCalls := 0
++	validationServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
++		validationCalls++
++		w.Header().Set("Content-Type", "application/json")
++		if validationCalls == 1 {
++			w.WriteHeader(http.StatusUnprocessableEntity)
++			_, _ = fmt.Fprint(w, evidenceRepairFailure("group-a"))
++			return
++		}
++		_, _ = fmt.Fprint(w, `{"gcs_bytes":123,"validation_token":"signed"}`)
++	}))
++	defer validationServer.Close()
++
++	var readerPaths []string
++	readerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		var args struct {
++			Path string `json:"path"`
++		}
++		if err := json.NewDecoder(r.Body).Decode(&args); err != nil {
++			t.Errorf("decode reader arguments: %v", err)
++			w.WriteHeader(http.StatusBadRequest)
++			return
++		}
++		readerPaths = append(readerPaths, args.Path)
++		w.Header().Set("Content-Type", "application/json")
++		_, _ = fmt.Fprint(w, `{"evidence_token":"reader-token","content":"evidence"}`)
++	}))
++	defer readerServer.Close()
++
++	readerCall := &llm.CompletionResponse{Content: `{"summary":"premature"}`, StopReason: "stop"}
++	if modelReads {
++		readerCall = &llm.CompletionResponse{
++			ToolCalls: []llm.ToolCall{{
++				ID: "model-reader", Name: "read-artifact-build",
++				Arguments: json.RawMessage(`{"path":"logs/group-a.log"}`),
++			}},
++			StopReason: "tool_calls",
++		}
++	}
++	provider := &repairRecordingProvider{responses: []*llm.CompletionResponse{
++		{
++			ToolCalls:  []llm.ToolCall{{ID: "submit-1", Name: testValidationToolName, Arguments: validAnalysisArguments()}},
++			StopReason: "tool_calls",
++		},
++		readerCall,
++		{
++			ToolCalls:  []llm.ToolCall{{ID: "submit-2", Name: testValidationToolName, Arguments: validAnalysisArguments()}},
++			StopReason: "tool_calls",
++		},
++	}}
++	customTools := validationCustomToolsNamed(testValidationToolName, validationServer.URL)
++	customTools["read-artifact-build"] = &corev1alpha1.Tool{
++		ObjectMeta: metav1.ObjectMeta{
++			Name:        "read-artifact-build",
++			Annotations: map[string]string{toolCacheIdenticalCallsAnnotation: "true"},
++		},
++		Spec: corev1alpha1.ToolSpec{
++			Description: "read artifact",
++			HTTP:        &corev1alpha1.HTTPExecution{URL: readerServer.URL, Method: http.MethodPost},
++		},
++	}
++	result, err := executeAgentLoop(
++		context.Background(), provider, []llm.Message{{Role: "user", Content: "analyze"}}, "", "model",
++		[]llm.Tool{{Name: "read-artifact-build"}, {Name: testValidationToolName}}, customTools, worker.NewToolExecutor(),
++	)
++	if err != nil {
++		t.Fatalf("executeAgentLoop() error = %v", err)
++	}
++	if !strings.Contains(result, `"validation_token":"signed"`) {
++		t.Fatalf("result = %s", result)
++	}
++	if validationCalls != 2 || len(readerPaths) != 1 || readerPaths[0] != "logs/group-a.log" {
++		t.Fatalf("validation calls=%d reader paths=%v", validationCalls, readerPaths)
++	}
++	if len(provider.requests) != 3 {
++		t.Fatalf("provider requests = %d, want 3", len(provider.requests))
++	}
++	if len(provider.requests[1].Tools) != 1 || provider.requests[1].Tools[0].Name != "read-artifact-build" {
++		t.Fatalf("repair request tools = %+v", provider.requests[1].Tools)
++	}
++	if !strings.Contains(provider.requests[1].Messages[len(provider.requests[1].Messages)-1].Content, `group-a`) ||
++		!strings.Contains(provider.requests[1].Messages[len(provider.requests[1].Messages)-1].Content, `logs/group-a.log`) {
++		t.Fatalf("repair prompt = %+v", provider.requests[1].Messages)
++	}
++	if len(provider.requests[2].Tools) != 1 || provider.requests[2].Tools[0].Name != testValidationToolName {
++		t.Fatalf("post-repair tools = %+v", provider.requests[2].Tools)
 +	}
 +}
 +

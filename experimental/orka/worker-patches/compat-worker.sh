@@ -125,7 +125,7 @@ test_source() {
   (
     cd "$source"
     test -z "$(gofmt -l workers/ai/*.go)"
-    focused_tests='Test(Analysis|Validated|ToolAlias|CachedToolResult|PrepareAnalysisRequest|RequestApproval|ExplicitApproval|MalformedAliasedApproval|VerifiedTimeline|SkippedApprovedTimeline|ExecuteAgentLoop(FinalizesValidatedAnalysis|RequiresValidation|StopsRepeatedValidationFailure)|OrdinaryTaskFinalization|TimelineToolEnablesLegacyTransientCritique|ValidationPromptCanBeReappliedAfterCompaction)'
+    focused_tests='Test(Analysis|Validated|ToolAlias|CachedToolResult|PrepareAnalysisRequest|RequestApproval|ExplicitApproval|MalformedAliasedApproval|VerifiedTimeline|SkippedApprovedTimeline|ExecuteAgentLoop(FinalizesValidatedAnalysis|RequiresValidation|StopsRepeatedValidationFailure|SynthesizesMissingRepairReader|PreservesCorrectRepairReader)|OrdinaryTaskFinalization|TimelineToolEnablesLegacyTransientCritique|ValidationPromptCanBeReappliedAfterCompaction)'
     go test ./workers/ai -run "$focused_tests" -count=1
     go test ./internal/llm ./internal/llm/openai -count=1
     go test -race ./workers/ai -count=1

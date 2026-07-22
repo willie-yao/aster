@@ -8,7 +8,7 @@ PR or a patched controller, CRD, API server, or UI.
 See [COMPATIBILITY.md](COMPATIBILITY.md) for the exact source revision, patch
 checksum, image identity, and deployment instructions.
 
-## Compatibility v5 behavior
+## Compatibility v6 behavior
 
 The patch keeps dashboard analysis policy inside the dashboard-owned worker:
 
@@ -25,13 +25,20 @@ The patch keeps dashboard analysis policy inside the dashboard-owned worker:
 - checks the request-scoped Tool allowlist before duplicate-result reuse;
 - removes completed timeline Tools and re-prompts malformed, empty, or
   unvalidated final responses;
-- when final validation reports complete `missing_evidence_candidates`, restores
-  only the artifact readers plus finalization Tools, prioritizes a reader over a
-  repeated submission, and allows up to four targeted evidence-repair calls;
+- when final validation reports complete `missing_evidence_candidates`, stores
+  the ordered missing groups and selects one normalized candidate per group;
+- activates deterministic repair only when a resolved `read_artifact` Tool is
+  available and every unresolved group fits the remaining call and iteration
+  budgets;
+- advertises only the selected `read_artifact` Tool during repair and hides all
+  finalization Tools until the queue is complete;
+- preserves a correct model-generated read, but substitutes a guarded synthetic
+  read when the model returns no Tool call, finalizes early, selects another
+  reader or path, or repeats covered evidence;
+- advances one group after each successful or cached read so multiple reserved
+  calls cannot be spent on the same group;
 - starts finalization early enough to allow timeline verification, an initial
-  submission, all four repair calls, and one final submission turn, then directs
-  the model to use ledger tokens instead of readers
-  that are no longer advertised;
+  submission, all four repair reads, and one final repaired submission turn;
 - tells weak models to preserve applicable source paths and use
   `"relevant_files": []` only when that required array has no entries, without
   weakening deterministic validation;
@@ -57,7 +64,7 @@ selected remain worker-local and do not require a `ToolCallSkipped` event.
 
 A Phase 2 run used `moonshotai/Kimi-K2-Instruct-0905` against the same DRA
 failure from build `2078833416211533824`. The prompt included the bounded JUnit
-failure body and filtered artifact tree. Compatibility v5 retains the prior
+failure body and filtered artifact tree. Compatibility v6 retains the prior
 evidence and API-mode behavior while reserving final Tool capacity for targeted
 validation repair.
 
@@ -73,12 +80,23 @@ validation repair.
 
 A pre-v5 Flatcar benchmark confirmed the deterministic evidence plan directed
 Kimi to the affected MachineDeployment, Machine, and Node, but the model consumed
-all 20 investigation calls before its first rejected submission. In a v5 run,
-the first missing-evidence response re-enabled the readers and allowed exactly
-four targeted calls before returning permanently to finalization. Kimi spent
-those calls on repeated JUnit reads rather than covering every missing group and
-still failed after two attempts. This verifies the reserved budget and no-resume
-state machine; candidate selection within that budget remains model-bound.
+all 20 investigation calls before its first rejected submission. A post-v5 run
+used the final timeline boundary and correct validator candidates. On the first
+attempt Kimi used one repair call for the missing Node state, then spent the
+remaining three on already-covered Machine state and never read the missing
+cloud-provider controller logs. On the retry it entered repair mode but emitted
+no reader calls. No repaired submission was accepted, and the final rejected
+diagnosis scored 2/5 benchmark signals. Compatibility v6 removes that selection
+from the model by advancing one validator-provided group per guarded reader call.
+
+A post-v6 Flatcar benchmark then exercised the deterministic queue. Its clean
+retry used 25 model requests and 23 Tool calls. Validation returned four missing
+groups, and Kimi read one exact candidate for each in order: the responsible
+controller log, `started.json`, `finished.json`, and `clone-records.json`. No
+repair call repeated or crossed groups, and the final repaired submission ran
+within the 25-iteration boundary. Validation still rejected that submission
+because its `evidence_tokens` omitted the repaired paths. This confirms v6 fixes
+repair selection; repaired-token propagation remains model-bound.
 
 Phase 1c described only a pod timeout and generic resource-allocation delay.
 The v2 baseline traced the actual chain: the device-plugin stream ended with

@@ -89,6 +89,14 @@ for how to pin a release.
 
 ### Changed
 
+- **Deterministic Orka evidence repair.** Compatibility worker v6 stores
+  validator-provided missing-evidence groups in order and repairs one group per
+  reserved call. It advertises only the selected `read_artifact` Tool, preserves
+  a correct model read, and substitutes a guarded synthetic read for empty,
+  premature, repeated, or wrong Tool calls. Successful and cached reads advance
+  the queue, finalization remains hidden until all groups are covered, and
+  incomplete or impossible plans keep the prior validation failure behavior.
+
 - **Orka evidence-repair budget.** Compatibility worker v5 reserves four of the
   existing 20 evidence Tool calls for validation repair. A rejected submission
   with complete missing-evidence candidates re-enables only artifact readers and

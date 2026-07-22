@@ -11,10 +11,10 @@ bash -n "$script"
 "$script" verify
 metadata=$("$script" metadata 0123456789abcdef0123456789abcdef01234567)
 grep -Fq 'orka_commit=1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254' <<< "$metadata"
-grep -Fq 'patch_sha256=9d614316bb518ed5204052bedfd1c27e8b7e03af742cf381e1624a97f223bc8d' <<< "$metadata"
+grep -Fq 'patch_sha256=b118176958f647207291bbcb5ec9d470e06dc1c31776e2f509a8a74dfca6b44d' <<< "$metadata"
 backtick='`'
 grep -Fq "${backtick}1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254${backtick}" "$script_dir/COMPATIBILITY.md"
-grep -Fq "${backtick}9d614316bb518ed5204052bedfd1c27e8b7e03af742cf381e1624a97f223bc8d${backtick}" "$script_dir/COMPATIBILITY.md"
+grep -Fq "${backtick}b118176958f647207291bbcb5ec9d470e06dc1c31776e2f509a8a74dfca6b44d${backtick}" "$script_dir/COMPATIBILITY.md"
 for patch_file in \
   analysis_budget.go \
   analysis_context.go \
@@ -39,9 +39,21 @@ for test_name in \
   TestExecuteAgentLoopSendsRelevantFilesRepairToModel \
   TestAnalysisLoopGuardToolCallResetsValidationFinalRetries \
   TestExecuteAgentLoopAllowsToolCallsAfterPrematureFinals \
-  TestAnalysisLoopGuardReservesEvidenceRepairBudget \
-  TestAnalysisLoopGuardSelectsRepairBeforeSubmission \
-  TestAnalysisLoopGuardFocusLeavesTimelineRepairAndSubmissionRounds \
+  TestAnalysisLoopGuardRepairsMissingGroupsInOrder \
+  TestAnalysisLoopGuardFocusLeavesTimelineFourRepairsAndSubmissionRounds \
+  TestAnalysisLoopGuardSynthesizesRepairWhenModelReturnsNoTools \
+  TestAnalysisLoopGuardReplacesPrematureSubmissionWithRepair \
+  TestAnalysisLoopGuardReplacesRepeatedOrWrongRepairPath \
+  TestAnalysisLoopGuardPreservesCorrectModelRepairCall \
+  TestAnalysisLoopGuardSupportsScopedAndAliasedRepairReaders \
+  TestAnalysisLoopGuardCachedRepairAdvancesQueue \
+  TestAnalysisLoopGuardRejectsUnsuccessfulRepairResult \
+  TestAnalysisLoopGuardDoesNotRetryFailedRepairGroup \
+  TestAnalysisLoopGuardRejectsRepairPlanBeyondRemainingBudget \
+  TestAnalysisLoopGuardNeverResumesBroadInvestigationAfterRepair \
+  TestExecuteAgentLoopSynthesizesMissingRepairReader \
+  TestExecuteAgentLoopPreservesCorrectRepairReader \
+  TestAnalysisLoopGuardRequiresResolvedReadArtifactForRepair \
   TestValidationRepairPromptTargetsMissingEvidenceCandidates \
   TestValidationRepairPromptUsesLedgerAfterRepairBudget \
   TestValidationNeedsEvidenceRepairRequiresCandidatesForEveryGroup \
@@ -62,7 +74,7 @@ if [[ $(grep -Fc 'packages: write' "$workflow") -ne 1 ]]; then
   exit 1
 fi
 tag=$(awk -F= '$1 == "image_tag" { print $2 }' <<< "$metadata")
-[[ $tag == v5-orka-1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254-dashboard-0123456789abcdef0123456789abcdef01234567 ]]
+[[ $tag == v6-orka-1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254-dashboard-0123456789abcdef0123456789abcdef01234567 ]]
 (( ${#tag} <= 128 ))
 if "$script" metadata short > /dev/null 2>&1; then
   echo 'short dashboard commit was accepted' >&2
@@ -104,7 +116,7 @@ chmod +x "$tmp/bin/docker"
 
 dashboard=0123456789abcdef0123456789abcdef01234567
 orka=1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254
-patch=9d614316bb518ed5204052bedfd1c27e8b7e03af742cf381e1624a97f223bc8d
+patch=b118176958f647207291bbcb5ec9d470e06dc1c31776e2f509a8a74dfca6b44d
 published=$(FAKE_REGISTRY_RESULT=exact EXPECTED_DASHBOARD=$dashboard EXPECTED_ORKA=$orka EXPECTED_PATCH=$patch PATH="$tmp/bin:$PATH"   "$script" inspect-published ghcr.io/example/worker:test "$dashboard")
 grep -Fq '"digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"' <<< "$published"
 grep -Fq '"recovered": true' <<< "$published"
