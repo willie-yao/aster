@@ -31,10 +31,11 @@ const API_BASE = import.meta.env.BASE_URL;
 
 function tone(outcome?: string): "success" | "warning" | "error" | "default" {
   const value = outcome?.toLowerCase() ?? "";
-  if (/(success|passed|hit|completed|revised)/.test(value)) return "success";
+  if (/(success|succeeded|passed|hit|completed|revised)/.test(value))
+    return "success";
   if (/(retry|objected|truncated|over_budget|uncached)/.test(value))
     return "warning";
-  if (/(error|failed|unavailable|rejected|exhausted)/.test(value))
+  if (/(error|failed|cancelled|unavailable|rejected|exhausted)/.test(value))
     return "error";
   return "default";
 }
@@ -191,6 +192,16 @@ function TraceCard({ trace }: { trace: AnalysisTrace }) {
           >
             {trace.job_id} / {trace.build_id}
           </Typography>
+          {trace.task_name && (
+            <Typography
+              variant="caption"
+              color="text.disabled"
+              sx={{ fontFamily: "monospace", overflowWrap: "anywhere" }}
+            >
+              Task {trace.task_namespace ? `${trace.task_namespace}/` : ""}
+              {trace.task_name}
+            </Typography>
+          )}
         </Stack>
       </AccordionSummary>
       <AccordionDetails sx={{ px: 2, pt: 0, pb: 2 }}>
@@ -217,6 +228,15 @@ function TraceCard({ trace }: { trace: AnalysisTrace }) {
           )}
           {trace.truncated && (
             <Chip size="small" color="warning" label="Trace truncated" />
+          )}
+          {trace.contract_hash && (
+            <Typography
+              variant="caption"
+              color="text.disabled"
+              sx={{ fontFamily: "monospace", overflowWrap: "anywhere" }}
+            >
+              contract {trace.contract_hash}
+            </Typography>
           )}
         </Stack>
         <Box
@@ -310,7 +330,14 @@ export function AnalysisTracesPage() {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const next = new URLSearchParams();
-    for (const key of ["job_id", "build_id", "test_name", "response_id"]) {
+    for (const key of [
+      "backend",
+      "task_name",
+      "job_id",
+      "build_id",
+      "test_name",
+      "response_id",
+    ]) {
       const value = String(form.get(key) ?? "").trim();
       if (value) next.set(key, value);
     }
@@ -365,8 +392,8 @@ export function AnalysisTracesPage() {
             </Typography>
           </Stack>
           <Typography color="text.secondary" sx={{ mt: 0.5 }}>
-            Private, content-free execution metadata from the latest in-process
-            AI pass.
+            Private, content-free execution metadata from in-process and Orka
+            analysis backends.
           </Typography>
         </Box>
         <Button
@@ -380,19 +407,35 @@ export function AnalysisTracesPage() {
       </Stack>
 
       <Panel key={query} component="form" onSubmit={applyFilters} sx={{ p: 2 }}>
-        <Stack
-          direction={{ xs: "column", lg: "row" }}
-          spacing={1.5}
-          sx={{ alignItems: { lg: "center" } }}
+        <Box
+          sx={{
+            display: "grid",
+            gridTemplateColumns: {
+              xs: "1fr",
+              md: "repeat(2, minmax(0, 1fr))",
+              xl: "repeat(3, minmax(0, 1fr))",
+            },
+            gap: 1.5,
+          }}
         >
-          {(["job_id", "build_id", "test_name", "response_id"] as const).map(
-            (key) => (
+          {(
+            [
+              "backend",
+              "task_name",
+              "job_id",
+              "build_id",
+              "test_name",
+              "response_id",
+            ] as const
+          ).map((key) => (
               <TextField
                 key={key}
                 size="small"
                 name={key}
                 label={
                   {
+                    backend: "Backend",
+                    task_name: "Task name",
                     job_id: "Job ID",
                     build_id: "Build ID",
                     test_name: "Test name",
@@ -402,15 +445,16 @@ export function AnalysisTracesPage() {
                 defaultValue={searchParams.get(key) ?? ""}
                 sx={{ flex: 1, minWidth: 0 }}
               />
-            ),
-          )}
-          <Button type="submit" variant="contained" startIcon={<FilterAlt />}>
-            Filter
-          </Button>
-          <Button onClick={() => setSearchParams(new URLSearchParams())}>
-            Clear
-          </Button>
-        </Stack>
+            ))}
+          <Stack direction="row" spacing={1} sx={{ gridColumn: "1 / -1" }}>
+            <Button type="submit" variant="contained" startIcon={<FilterAlt />}>
+              Filter
+            </Button>
+            <Button onClick={() => setSearchParams(new URLSearchParams())}>
+              Clear
+            </Button>
+          </Stack>
+        </Box>
       </Panel>
 
       <Box
@@ -440,6 +484,9 @@ export function AnalysisTracesPage() {
       {data?.dropped_traces ? (
         <Alert severity="warning">
           {data.dropped_traces} traces were dropped by the bounded recorder.
+          {data.retained_since
+            ? ` Entries recorded before ${new Date(data.retained_since).toLocaleString()} are outside the retained window.`
+            : ""}
         </Alert>
       ) : null}
       {error && <Alert severity="error">Failed to load traces: {error}</Alert>}

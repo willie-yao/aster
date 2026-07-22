@@ -190,6 +190,25 @@ procedure: Inspect the controller configuration and its update ordering.
 		"-wait=0",
 		"-pattern-wait=0",
 	)
+	var traces ai.AnalysisTraceFile
+	loadJSON(t, filepath.Join(dataDir, output.AITraceFilename), &traces)
+	if len(traces.Traces) != 3 {
+		t.Fatalf("Orka traces = %d, want 3", len(traces.Traces))
+	}
+	for _, trace := range traces.Traces {
+		if trace.Backend != "orka" || trace.TaskNamespace != "orka-system" || trace.TaskName == "" || trace.ContractHash != manifest.ContractHash {
+			t.Fatalf("Orka trace identity = %+v", trace)
+		}
+		foundResponse := false
+		for _, event := range trace.Events {
+			if event.ResponseID == "chatcmpl-e2e" {
+				foundResponse = true
+			}
+		}
+		if !foundResponse {
+			t.Fatalf("Orka trace has no model response ID: %+v", trace)
+		}
+	}
 
 	previewFile := filepath.Join(dataDir, "fix_previews.json")
 	stats, err := orka.FinalizePatternsAndRun(context.Background(), dataDir, orkaPatternAnalyzer{}, func(ctx context.Context) error {

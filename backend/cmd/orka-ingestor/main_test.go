@@ -19,6 +19,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	orkaapi "github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
@@ -165,6 +166,31 @@ func TestIngestThenFinalizePatterns(t *testing.T) {
 	if patched != 3 || failed != 3 || missing != 0 {
 		t.Fatalf("ingest = patched %d, failed %d, missing %d", patched, failed, missing)
 	}
+	tracePath := filepath.Join(dir, output.AITraceFilename)
+	traceStore, err := ai.LoadTraceStore(tracePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	traces := traceStore.Snapshot().Traces
+	if len(traces) != 3 {
+		t.Fatalf("Orka traces = %d, want 3", len(traces))
+	}
+	for _, trace := range traces {
+		if trace.Backend != "orka" || trace.TaskName == "" || trace.ContractHash != manifest.ContractHash || trace.APIMode != "responses" {
+			t.Fatalf("Orka trace metadata = %+v", trace)
+		}
+	}
+	if err := os.Remove(tracePath); err != nil {
+		t.Fatal(err)
+	}
+	patched, failed, missing = ingestPass(client, nil, namespace, dir, manifest, "test-model", false, builds)
+	if patched != 0 || failed != 3 || missing != 0 {
+		t.Fatalf("trace restore ingest = patched %d, failed %d, missing %d", patched, failed, missing)
+	}
+	traceStore, err = ai.LoadTraceStore(tracePath)
+	if err != nil || len(traceStore.Snapshot().Traces) != 3 {
+		t.Fatalf("restored traces = %+v, err=%v", traceStore.Snapshot().Traces, err)
+	}
 
 	stats, err := orkaapi.FinalizePatterns(context.Background(), dir, staticPatternAnalyzer{})
 	if err != nil {
@@ -199,6 +225,63 @@ func TestIngestThenFinalizePatterns(t *testing.T) {
 		if !analysis.CritiquePassed || analysis.CritiqueVersion != orkaapi.AcceptanceVersion {
 			t.Fatalf("build %s acceptance metadata = %+v", run.BuildID, analysis)
 		}
+	}
+}
+
+func TestIngestCountsTraceWriteFailureAsMissing(t *testing.T) {
+	const namespace = "orka-system"
+	detail := models.JobDetail{JobID: "job", Runs: []models.BuildResult{{
+		BuildInfo: models.BuildInfo{BuildID: "1", Result: "FAILURE"},
+		TestCases: []models.TestCase{{Name: "test", Status: "failed", FailureMessage: "boom"}},
+	}}}
+	manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "model", orkaapi.APIModeAuto, "v1", 2)
+	manifest.ValidationKey = testValidationKey
+	manifest.SetBuild("job", "1", "build-1", "tool-1", "logs/job/1/", "")
+	ref, err := manifest.TaskRef("job", detail.Runs[0], 0, detail.Runs[0].TestCases[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonTransient := false
+	result := validatedAnalysisJSON(t, analysis{Summary: "summary", RootCause: "cause", Severity: "High", IsTransient: &nonTransient, SuggestedFix: "fix"}, ref.Name)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/events") {
+			writeAcceptedEvents(w, false)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"result": result})
+	}))
+	defer server.Close()
+	dir := t.TempDir()
+	if err := output.WriteJobDetail(dir, detail); err != nil {
+		t.Fatal(err)
+	}
+	oldSave := saveTraceSnapshot
+	saveTraceSnapshot = func(*ai.TraceStore, string) error { return errors.New("disk full") }
+	t.Cleanup(func() { saveTraceSnapshot = oldSave })
+	patched, failed, missing := ingestPass(&orkaClient{base: server.URL, http: server.Client()}, nil, namespace, dir, manifest, "model", false, map[string]bool{})
+	if patched != 1 || failed != 1 || missing != 1 {
+		t.Fatalf("ingest = patched %d, failed %d, missing %d", patched, failed, missing)
+	}
+}
+
+func TestIngestPreservesUnreadableTraceSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, output.AITraceFilename)
+	want := []byte(`{"version":999,"traces":[]}`)
+	if err := os.WriteFile(path, want, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "model", orkaapi.APIModeAuto, "v1", 2)
+	patched, failed, missing := ingestPass(nil, nil, "orka-system", dir, manifest, "model", false, map[string]bool{})
+	if patched != 0 || failed != 0 || missing != 1 {
+		t.Fatalf("ingest = patched %d, failed %d, missing %d", patched, failed, missing)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("unreadable trace snapshot was overwritten: %s", got)
 	}
 }
 
@@ -287,7 +370,7 @@ func TestApplyResultRedactsTelemetryURL(t *testing.T) {
 	defer server.Close()
 
 	tc := models.TestCase{Name: "test", Status: "failed"}
-	accepted, rejection := applyResult(
+	accepted, rejection, _ := applyResult(
 		&tc, &orkaClient{base: server.URL, http: server.Client()}, "orka-system", "task", "model", "contract", orkaapi.APIModeAuto, 0, 0, "", false, testValidationKey,
 	)
 	if accepted {
@@ -569,6 +652,7 @@ func TestWebhookAcknowledgesSupersededTask(t *testing.T) {
 	}
 	manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "m", orkaapi.APIModeAuto, "v1", 2)
 	manifest.ValidationKey = testValidationKey
+	manifest.ValidationKey = testValidationKey
 	manifest.SetBuild("job", "1", "build-1", "tool-1", "logs/job/1/", "current-tree")
 	if err := manifest.Write(dir); err != nil {
 		t.Fatal(err)
@@ -618,12 +702,18 @@ func TestWebhookIndexTargetsOneJobFile(t *testing.T) {
 		t.Fatalf("index[%q] = %q, want %q", name, got, path)
 	}
 	transient := false
-	s.patchTask(webhookPayload{TaskName: name, Phase: "Succeeded"}, preparedPatch{
-		analysis:     &analysis{Summary: "root", RootCause: "root", Severity: "High", IsTransient: &transient, SuggestedFix: "fix"},
-		telemetry:    analysisTelemetry{APIMode: orkaapi.APIModeResponses, EventCount: 1, ToolCalls: 2},
+	if err := s.patchTask(webhookPayload{TaskName: name, Phase: "Succeeded"}, preparedPatch{
+		analysis: &analysis{Summary: "root", RootCause: "root", Severity: "High", IsTransient: &transient, SuggestedFix: "fix"},
+		telemetry: summarizeEvents([]executionEvent{
+			{Seq: 1, Type: "TaskStarted", CreatedAt: time.Date(2026, 7, 22, 8, 0, 0, 0, time.UTC)},
+			{Seq: 2, Type: "ModelRequestCompleted", InputTokens: 10, OutputTokens: 5, Content: json.RawMessage(`{"apiMode":"responses","responseID":"resp-webhook"}`), CreatedAt: time.Date(2026, 7, 22, 8, 0, 1, 0, time.UTC)},
+			{Seq: 3, Type: "TaskSucceeded", CreatedAt: time.Date(2026, 7, 22, 8, 0, 2, 0, time.UTC)},
+		}),
 		model:        manifest.Model,
 		contractHash: manifest.ContractHash,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -637,6 +727,125 @@ func TestWebhookIndexTargetsOneJobFile(t *testing.T) {
 	gotAnalysis := detail.Runs[0].TestCases[0].AIAnalysis
 	if gotAnalysis.ContractHash != manifest.ContractHash || gotAnalysis.TaskName != name {
 		t.Fatalf("analysis identity = contract %q task %q, want contract %q task %q", gotAnalysis.ContractHash, gotAnalysis.TaskName, manifest.ContractHash, name)
+	}
+	traceStore, err := ai.LoadTraceStore(filepath.Join(dir, output.AITraceFilename))
+	if err != nil {
+		t.Fatal(err)
+	}
+	traces := traceStore.Snapshot().Traces
+	if len(traces) != 1 || traces[0].TaskName != name || traces[0].Events[1].ResponseID != "resp-webhook" {
+		t.Fatalf("webhook traces = %+v", traces)
+	}
+	if err := s.patchTask(webhookPayload{TaskName: name, Phase: "Succeeded"}, preparedPatch{
+		analysis: &analysis{Summary: "root", RootCause: "root", Severity: "High", IsTransient: &transient, SuggestedFix: "fix"},
+		telemetry: summarizeEvents([]executionEvent{
+			{Seq: 1, Type: "TaskStarted"}, {Seq: 2, Type: "TaskSucceeded"},
+		}),
+		contractHash: manifest.ContractHash,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	traceStore, err = ai.LoadTraceStore(filepath.Join(dir, output.AITraceFilename))
+	traces = traceStore.Snapshot().Traces
+	if err != nil || len(traces) != 1 || len(traces[0].Events) != 3 || traces[0].Events[1].ResponseID != "resp-webhook" {
+		t.Fatalf("duplicate webhook traces = %+v, err=%v", traces, err)
+	}
+}
+
+func TestWebhookPersistsFailedTaskTrace(t *testing.T) {
+	dir := t.TempDir()
+	detail := models.JobDetail{JobID: "job", Runs: []models.BuildResult{{
+		BuildInfo: models.BuildInfo{BuildID: "1"},
+		TestCases: []models.TestCase{{Name: "test", Status: "failed", FailureMessage: "boom"}},
+	}}}
+	if err := output.WriteJobDetail(dir, detail); err != nil {
+		t.Fatal(err)
+	}
+	manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "m", orkaapi.APIModeAuto, "v1", 2)
+	manifest.ValidationKey = testValidationKey
+	manifest.SetBuild("job", "1", "build-1", "tool-1", "logs/job/1/", "")
+	if err := manifest.Write(dir); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := manifest.TaskRef("job", detail.Runs[0], 0, detail.Runs[0].TestCases[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &webhookServer{dataDir: dir, namespace: "orka-system"}
+	s.rebuildIndex()
+	if err := s.patchTask(webhookPayload{TaskName: ref.Name, Phase: "Failed"}, preparedPatch{
+		reason: "analysis Task failed", contractHash: manifest.ContractHash,
+		telemetry: summarizeEvents([]executionEvent{
+			{Seq: 1, Type: "TaskStarted", CreatedAt: time.Date(2026, 7, 22, 8, 0, 0, 0, time.UTC)},
+			{Seq: 2, Type: "ModelRequestFailed", InputTokens: 10, OutputTokens: 2, CreatedAt: time.Date(2026, 7, 22, 8, 0, 1, 0, time.UTC)},
+			{Seq: 3, Type: "TaskFailed", CreatedAt: time.Date(2026, 7, 22, 8, 0, 2, 0, time.UTC)},
+		}),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	traceStore, err := ai.LoadTraceStore(filepath.Join(dir, output.AITraceFilename))
+	if err != nil {
+		t.Fatal(err)
+	}
+	traces := traceStore.Snapshot().Traces
+	if len(traces) != 1 || traces[0].Outcome != "failed" || traces[0].ErrorCode != "task_failed" || traces[0].Events[1].ErrorCode != "model_request_failed" {
+		t.Fatalf("failed webhook traces = %+v", traces)
+	}
+}
+
+func TestWebhookTraceWriteFailureReturnsRetryableStatus(t *testing.T) {
+	const namespace = "orka-system"
+	dir := t.TempDir()
+	detail := models.JobDetail{JobID: "job", Runs: []models.BuildResult{{
+		BuildInfo: models.BuildInfo{BuildID: "1"},
+		TestCases: []models.TestCase{{Name: "test", Status: "failed", FailureMessage: "boom"}},
+	}}}
+	if err := output.WriteJobDetail(dir, detail); err != nil {
+		t.Fatal(err)
+	}
+	manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "model", orkaapi.APIModeAuto, "v1", 2)
+	manifest.ValidationKey = testValidationKey
+	manifest.SetBuild("job", "1", "build-1", "tool-1", "logs/job/1/", "")
+	if err := manifest.Write(dir); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := manifest.TaskRef("job", detail.Runs[0], 0, detail.Runs[0].TestCases[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonTransient := false
+	result := validatedAnalysisJSON(t, analysis{Summary: "summary", RootCause: "cause", Severity: "High", IsTransient: &nonTransient, SuggestedFix: "fix"}, ref.Name)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/events") {
+			writeAcceptedEvents(w, false)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"result": result})
+	}))
+	defer server.Close()
+	s := &webhookServer{
+		client: &orkaClient{base: server.URL, http: server.Client()}, dataDir: dir, namespace: namespace,
+		saveTrace: func(string, ai.AnalysisTrace) error { return errors.New("disk full") },
+	}
+	s.rebuildIndex()
+	body, _ := json.Marshal(webhookPayload{TaskName: ref.Name, Phase: "Succeeded"})
+	recorder := httptest.NewRecorder()
+	s.handle(recorder, httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewReader(body)))
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("first webhook status = %d, want 503", recorder.Code)
+	}
+	s.saveTrace = nil
+	recorder = httptest.NewRecorder()
+	s.handle(recorder, httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewReader(body)))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("retry webhook status = %d, want 200", recorder.Code)
+	}
+	traceStore, err := ai.LoadTraceStore(filepath.Join(dir, output.AITraceFilename))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !traceStore.HasTerminalTask(namespace, ref.Name, manifest.ContractHash) {
+		t.Fatalf("trace was not recovered: %+v", traceStore.Snapshot().Traces)
 	}
 }
 
@@ -744,7 +953,7 @@ func TestIngestRefreshesMismatchedTaskIdentity(t *testing.T) {
 	}
 }
 
-func TestIngestKeepsMatchingTaskIdentity(t *testing.T) {
+func TestIngestRetriesMissingTraceForMatchingTaskIdentity(t *testing.T) {
 	manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "model", orkaapi.APIModeAuto, "v1", 2)
 	manifest.ValidationKey = testValidationKey
 	tc := models.TestCase{
@@ -763,6 +972,43 @@ func TestIngestKeepsMatchingTaskIdentity(t *testing.T) {
 
 	dir := t.TempDir()
 	if err := output.WriteJobDetail(dir, detail); err != nil {
+		t.Fatal(err)
+	}
+	client := &orkaClient{base: "http://127.0.0.1:1", http: &http.Client{}}
+	patched, failed, missing := ingestPass(client, nil, "orka-system", dir, manifest, "model", false, map[string]bool{})
+	if patched != 0 || failed != 1 || missing != 1 {
+		t.Fatalf("ingest = patched %d, failed %d, missing %d", patched, failed, missing)
+	}
+}
+
+func TestIngestSkipsTraceBeforeRetentionBoundary(t *testing.T) {
+	manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "model", orkaapi.APIModeAuto, "v1", 2)
+	manifest.ValidationKey = testValidationKey
+	tc := models.TestCase{
+		Name: "test", Status: "failed", FailureMessage: "boom",
+		AISummary: &models.AISummary{Summary: "current"},
+		AIAnalysis: &models.AIAnalysis{
+			GeneratedAt: "2026-07-22T08:00:00Z", RootCause: "current root", Mode: "agentic", ContractHash: manifest.ContractHash,
+		},
+	}
+	run := models.BuildResult{BuildInfo: models.BuildInfo{BuildID: "1", Result: "FAILURE"}, TestCases: []models.TestCase{tc}}
+	detail := models.JobDetail{Name: "job", JobID: "job", Runs: []models.BuildResult{run}}
+	manifest.SetBuild("job", "1", "build-1", "tool-1", "logs/job/1/", "")
+	ref, err := manifest.TaskRef("job", run, 0, tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail.Runs[0].TestCases[0].AIAnalysis.TaskName = ref.Name
+	dir := t.TempDir()
+	if err := output.WriteJobDetail(dir, detail); err != nil {
+		t.Fatal(err)
+	}
+	if err := statefile.WriteJSON(filepath.Join(dir, output.AITraceFilename), ai.AnalysisTraceFile{
+		Version: 1, DroppedTraces: 1, Traces: []ai.AnalysisTrace{{
+			Backend: "orka", TaskNamespace: "orka-system", TaskName: "new-task", ContractHash: "contract",
+			RecordedAt: "2026-07-22T09:00:00Z", Outcome: "succeeded",
+		}},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	client := &orkaClient{base: "http://127.0.0.1:1", http: &http.Client{}}
@@ -820,6 +1066,37 @@ func TestWebhookMissingTerminalEventIsRetryable(t *testing.T) {
 	patch := s.preparePatch(webhookPayload{TaskName: "task", Phase: "Succeeded"}, manifest)
 	if !patch.retry || !strings.Contains(patch.reason, "no terminal") {
 		t.Fatalf("patch = %+v, want retryable terminal-event lag", patch)
+	}
+}
+
+func TestWebhookRetriesWhenRejectedTaskTelemetryIsUnavailable(t *testing.T) {
+	tests := []struct {
+		name    string
+		phase   string
+		result  string
+		wantErr string
+	}{
+		{name: "failed Task", phase: "Failed", wantErr: "telemetry unavailable"},
+		{name: "invalid result", phase: "Succeeded", result: "not JSON", wantErr: "telemetry unavailable"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasSuffix(r.URL.Path, "/events") {
+					http.Error(w, "events not ready", http.StatusServiceUnavailable)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(map[string]string{"result": tc.result})
+			}))
+			defer server.Close()
+			manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "model", orkaapi.APIModeAuto, "v1", 2)
+			manifest.ValidationKey = testValidationKey
+			s := &webhookServer{client: &orkaClient{base: server.URL, http: server.Client()}, namespace: "orka-system"}
+			patch := s.preparePatch(webhookPayload{TaskName: "task", Phase: tc.phase}, manifest)
+			if !patch.retry || !strings.Contains(patch.reason, tc.wantErr) {
+				t.Fatalf("patch = %+v, want retryable telemetry failure", patch)
+			}
+		})
 	}
 }
 

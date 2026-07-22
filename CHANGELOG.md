@@ -27,6 +27,10 @@ for how to pin a release.
   deadlines, disable in-Pod producer restarts by default, and avoid automatic
   Job retries. The manual trigger deletes timed-out Jobs unless the operator
   explicitly keeps them.
+- **Orka trace-console correlation.** Polling and webhook ingestion now translate
+  content-free Orka Task events into the private trace schema, upsert by Task
+  identity, and expose Task namespace/name, contract, retries, response IDs,
+  usage, tools, truncation, and outcome in the authenticated console.
 - **Authenticated analysis-trace console.** Server mode now exposes the private
   trace snapshot through admin-gated filtered and download endpoints and a
   dedicated operator page. Static Pages remains unchanged, and direct

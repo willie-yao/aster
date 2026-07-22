@@ -23,6 +23,9 @@ export interface AnalysisTraceEvent {
 
 export interface AnalysisTrace {
   backend: string;
+  task_namespace?: string;
+  task_name?: string;
+  contract_hash?: string;
   job_id: string;
   build_id: string;
   test_name: string;
@@ -38,6 +41,7 @@ export interface AnalysisTrace {
 export interface AnalysisTraceFile {
   version: number;
   generated_at: string;
+  retained_since?: string;
   dropped_traces?: number;
   traces: AnalysisTrace[];
 }

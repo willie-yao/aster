@@ -71,12 +71,17 @@ func filterAnalysisTraces(traces []ai.AnalysisTrace, r *http.Request) []ai.Analy
 	buildID := query.Get("build_id")
 	testName := query.Get("test_name")
 	backend := query.Get("backend")
+	taskNamespace := query.Get("task_namespace")
+	taskName := query.Get("task_name")
+	contractHash := query.Get("contract_hash")
 	outcome := query.Get("outcome")
 	responseID := query.Get("response_id")
 	filtered := make([]ai.AnalysisTrace, 0, len(traces))
 	for _, trace := range traces {
 		if jobID != "" && trace.JobID != jobID || buildID != "" && trace.BuildID != buildID ||
 			testName != "" && trace.TestName != testName || backend != "" && trace.Backend != backend ||
+			taskNamespace != "" && trace.TaskNamespace != taskNamespace || taskName != "" && trace.TaskName != taskName ||
+			contractHash != "" && trace.ContractHash != contractHash ||
 			outcome != "" && trace.Outcome != outcome || responseID != "" && !traceHasResponseID(trace, responseID) {
 			continue
 		}

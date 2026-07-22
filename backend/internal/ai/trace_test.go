@@ -3,6 +3,7 @@ package ai
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,6 +64,7 @@ func TestTraceStoreSaveUsesPrivateSchema(t *testing.T) {
 	store.mu.Lock()
 	for i := range store.traces {
 		store.traces[i].StartedAt = "2026-07-22T00:00:00Z"
+		store.traces[i].RecordedAt = "2026-07-22T00:00:00Z"
 	}
 	store.mu.Unlock()
 
@@ -95,11 +97,142 @@ func TestTraceStoreSaveUsesPrivateSchema(t *testing.T) {
 func TestTraceStoreCapsCompletedTraces(t *testing.T) {
 	store := NewTraceStore()
 	for i := 0; i < analysisTraceMaxTraces+2; i++ {
-		trace := store.Start(TraceMetadata{JobID: "job"})
+		trace := store.Start(TraceMetadata{JobID: "job", BuildID: fmt.Sprintf("%d", i)})
 		trace.Finish("success", nil)
 	}
 	got := store.Snapshot()
 	if len(got.Traces) != analysisTraceMaxTraces || got.DroppedTraces != 2 {
 		t.Fatalf("traces=%d dropped=%d", len(got.Traces), got.DroppedTraces)
+	}
+	builds := map[string]bool{}
+	for _, trace := range got.Traces {
+		builds[trace.BuildID] = true
+	}
+	if builds["0"] || builds["1"] || !builds[fmt.Sprintf("%d", analysisTraceMaxTraces+1)] {
+		t.Fatalf("rolling trace window kept wrong builds: first=%v second=%v newest=%v", builds["0"], builds["1"], builds[fmt.Sprintf("%d", analysisTraceMaxTraces+1)])
+	}
+	old := AnalysisTrace{Backend: "inprocess", JobID: "old", BuildID: "old", TestName: "old", StartedAt: "2000-01-01T00:00:00Z", Outcome: "success"}
+	if store.Upsert(old) {
+		t.Fatal("delayed old trace displaced the rolling window")
+	}
+	got = store.Snapshot()
+	if len(got.Traces) != analysisTraceMaxTraces || got.DroppedTraces != 3 {
+		t.Fatalf("after delayed trace: traces=%d dropped=%d", len(got.Traces), got.DroppedTraces)
+	}
+}
+
+func TestTraceStoreSnapshotWithinLimitEvictsOldest(t *testing.T) {
+	older := AnalysisTrace{
+		Backend: "inprocess", JobID: "old", BuildID: "1", TestName: "test", StartedAt: "2026-07-22T08:00:00Z", Outcome: "success",
+		Events: []TraceEvent{{Kind: "model_request", ResponseID: strings.Repeat("a", 1000)}},
+	}
+	newer := AnalysisTrace{
+		Backend: "inprocess", JobID: "new", BuildID: "2", TestName: "test", StartedAt: "2026-07-22T08:01:00Z", Outcome: "success",
+		Events: []TraceEvent{{Kind: "model_request", ResponseID: strings.Repeat("b", 1000)}},
+	}
+	one := NewTraceStore()
+	one.Upsert(newer)
+	oneEncoded, err := json.MarshalIndent(one.Snapshot(), "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewTraceStore()
+	store.Upsert(older)
+	store.Upsert(newer)
+	limit := len(oneEncoded) + 256
+	snapshot, err := store.snapshotWithinLimit(limit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.MarshalIndent(snapshot, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) > limit || len(snapshot.Traces) != 1 || snapshot.Traces[0].JobID != "new" || snapshot.DroppedTraces != 1 {
+		t.Fatalf("bounded snapshot = traces:%+v dropped:%d bytes:%d limit:%d", snapshot.Traces, snapshot.DroppedTraces, len(encoded), limit)
+	}
+}
+
+func TestTraceStoreRetentionBoundary(t *testing.T) {
+	store := NewTraceStore()
+	store.traces = []AnalysisTrace{{
+		Backend: "orka", TaskName: "newest-window-start", RecordedAt: "2026-07-22T09:00:00Z", Outcome: "succeeded",
+	}}
+	store.dropped = 3
+	if !store.BeforeRetention("2026-07-22T08:59:59Z") {
+		t.Fatal("analysis older than the retention boundary was not recognized")
+	}
+	if store.BeforeRetention("2026-07-22T09:00:01Z") {
+		t.Fatal("analysis newer than the retention boundary was treated as evicted")
+	}
+	if got := store.Snapshot().RetainedSince; got != "2026-07-22T09:00:00Z" {
+		t.Fatalf("retained_since = %q", got)
+	}
+}
+
+func TestTraceStoreRejectsStaleTaskReplacement(t *testing.T) {
+	store := NewTraceStore()
+	current := AnalysisTrace{
+		Backend: "orka", TaskNamespace: "orka-system", TaskName: "task", Outcome: "succeeded", ElapsedMs: 2000,
+		Events: []TraceEvent{{Kind: "task", Outcome: "started"}, {Kind: "model_request", Outcome: "success", ResponseID: "resp"}, {Kind: "task", Outcome: "succeeded", ElapsedMs: 2000}},
+	}
+	if !store.Upsert(current) {
+		t.Fatal("initial trace was not stored")
+	}
+	stale := AnalysisTrace{
+		Backend: "orka", TaskNamespace: "orka-system", TaskName: "task", Outcome: "unknown", ElapsedMs: 1000,
+		Events: []TraceEvent{{Kind: "task", Outcome: "started"}, {Kind: "model_request", Outcome: "success"}},
+	}
+	if store.Upsert(stale) {
+		t.Fatal("stale Task trace replaced a terminal trace")
+	}
+	got := store.Snapshot().Traces[0]
+	if got.Outcome != "succeeded" || got.Events[1].ResponseID != "resp" || len(got.Events) != 3 {
+		t.Fatalf("stored trace regressed: %+v", got)
+	}
+}
+
+func TestTraceStoreLoadAndUpsertOrkaTask(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ai_traces.json")
+	store := NewTraceStore()
+	if !store.Upsert(AnalysisTrace{Backend: "orka", TaskName: "task-a", ContractHash: "contract", JobID: "job", BuildID: "1", TestName: "test", Outcome: "succeeded", Events: []TraceEvent{{Kind: "model_request", ResponseID: "resp-old"}}}) {
+		t.Fatal("initial upsert failed")
+	}
+	if err := store.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadTraceStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.HasTerminalTask("", "task-a", "contract") {
+		t.Fatal("loaded store lost task identity")
+	}
+	loaded.Upsert(AnalysisTrace{Backend: "orka", TaskName: "task-a", JobID: "job", BuildID: "1", TestName: "test", Outcome: "succeeded", Events: []TraceEvent{{Kind: "model_request", ResponseID: "resp-new"}}})
+	got := loaded.Snapshot()
+	if len(got.Traces) != 1 || got.Traces[0].Events[0].ResponseID != "resp-new" || got.Traces[0].Events[0].Sequence != 1 {
+		t.Fatalf("upserted traces = %+v", got.Traces)
+	}
+}
+
+func TestTraceStoreKeepsDistinctInProcessSessions(t *testing.T) {
+	store := NewTraceStore()
+	for _, startedAt := range []string{"2026-07-22T08:00:00Z", "2026-07-22T08:01:00Z"} {
+		store.Upsert(AnalysisTrace{Backend: "inprocess", JobID: "job", BuildID: "1", TestName: "same", StartedAt: startedAt, Outcome: "success"})
+	}
+	if got := len(store.Snapshot().Traces); got != 2 {
+		t.Fatalf("in-process sessions = %d, want 2", got)
+	}
+}
+
+func TestTraceStorePreservesLongResponseID(t *testing.T) {
+	responseID := strings.Repeat("Ab+/", 300)
+	store := NewTraceStore()
+	trace := store.Start(TraceMetadata{JobID: "job"})
+	trace.Record(TraceEvent{Kind: "model_request", ResponseID: responseID})
+	trace.Finish("success", nil)
+	got := store.Snapshot().Traces[0].Events[0].ResponseID
+	if got != responseID {
+		t.Fatalf("response ID length = %d, want exact %d-byte value", len(got), len(responseID))
 	}
 }

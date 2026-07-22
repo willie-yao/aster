@@ -224,6 +224,13 @@ requires the worker to report a mode and rejects a mismatch when the value is
 `responses` or `chat_completions`; `auto` accepts either. This makes protocol
 changes observable and cache-safe without changing Orka's Provider CRD.
 
+The ingestor also translates the Task event sequence into the engine's private
+analysis-trace schema. It persists event type, timing, tool name, result length,
+response ID, stop reason, token usage, retry, and Task outcome, but never event
+content, prompt text, arguments, tool output, provider, or model. Task name is
+the stable upsert key, so repeated polling and duplicate webhooks replace one
+trace instead of appending duplicates.
+
 Responses support for Ray Serve, vLLM, Dynamo/NIM, Ollama, and other
 OpenAI-compatible deployments depends on the installed version and server
 configuration. Start with `orka.apiMode: auto`, run `orka-ops.sh smoke` to

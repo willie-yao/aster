@@ -80,6 +80,11 @@ also carries the configured Orka retry policy.
   falls back to Chat Completions when unsupported, sends `store: false` on
   Responses requests, and records API mode plus response ID for debugging.
   `orka.apiMode` makes the expected mode part of Task identity and ingestion.
+- **Accepted and failed Tasks produce private dashboard traces.** The ingestor
+  translates Task/model/tool/context events into the content-free
+  `ai_traces.json` schema used by the in-process harness. Polling upserts by Task
+  name, webhook delivery writes under its existing serialization lock, and the
+  authenticated trace console links each Task back to its job/build/test.
 - **Copilot needs the de-streaming proxy.** Copilot's non-streaming endpoint
   returns null tool_calls for Claude (the calls only arrive over streaming SSE).
   manifests/50-copilot-proxy.yaml de-streams so the worker sees real tool calls.

@@ -245,7 +245,9 @@ choose `server.actions.mode` (`oauth` for GitHub sign-in with per-user
 attribution, or `proxy` for an upstream SSO proxy plus a bot token), then list
 the allowed GitHub logins in `server.actions.admins` (see [server.md](server.md)).
 The same authenticated session protects write actions and the private analysis
-trace page.
+trace page. With `analysis: orka`, the ingestor adds Task identity, lifecycle,
+model requests, tool calls, and context truncation to the same trace view used
+by in-process analysis.
 
 ### Enabling actions with Helm
 

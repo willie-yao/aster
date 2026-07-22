@@ -621,19 +621,23 @@ tools-unsupported flag are all internally synchronized.
 
 ### Private analysis traces
 
-Each in-process AI pass writes `ai_traces.json` next to the AI cache. This is a
-private operational snapshot for debugging model and harness behavior. Each
-failure records bounded control-flow events for model requests, tool calls,
-context compaction, floor nudges, deterministic critique, semantic judging, and
-forced finalization. Model events include response IDs, finish status, retry
-count, duration, and provider-reported token usage when available.
+The in-process harness and Orka ingestor write `ai_traces.json` next to the AI
+cache. This is a private operational snapshot for debugging model and harness
+behavior. Each failure records bounded control-flow events for model requests,
+tool calls, context compaction, retries, and completion. In-process traces also
+record floor nudges, deterministic critique, semantic judging, and forced
+finalization. Orka traces add Task namespace/name, contract hash, Task lifecycle,
+and the model/tool events already fetched for result acceptance.
 
 The trace intentionally excludes prompts, assistant text, reasoning items, tool
 arguments, tool output, and configured endpoint or model fields. Provider and
 harness failures are stored as fixed error codes, never free-form response
 bodies. Identifiers are URL- and credential-redacted and byte-capped. A trace
-keeps at most 128 events, and one fetch keeps at most 500 completed failure
-traces.
+keeps at most 128 events, and the private store keeps a rolling window of up to
+500 completed failure traces. It admits only entries newer than the retained
+oldest trace and evicts oldest-first as needed to keep the saved file within the
+64 MiB loader limit. The persisted `retained_since` watermark prevents polling
+from reconstructing Task traces that were intentionally aged out.
 
 `ai_traces.json` is listed in `output.NonPublishedFiles`. The API server returns
 404 for it under `/data`, and the Pages workflow removes it before publication.
@@ -641,7 +645,8 @@ Inspect it directly in a local output directory or on the Kubernetes shared
 volume. When admin authentication is enabled, server mode also exposes the
 decoded snapshot through `GET /api/analysis-traces` and the private **Traces**
 page. Exact query filters can correlate a response ID or a job/build/test tuple
-without exposing prompt or tool content.
+without exposing prompt or tool content. Orka traces can additionally be
+filtered by Task namespace, Task name, and contract hash.
 
 ### Cache semantics
 

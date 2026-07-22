@@ -42,6 +42,7 @@ type analysisTelemetry struct {
 	ValidationPassed    bool
 	BudgetExhausted     bool
 	qualityToolOutcomes map[string]string
+	events              []executionEvent
 }
 
 type eventListResponse struct {
@@ -122,7 +123,10 @@ func (c *orkaClient) analysisTelemetry(ctx context.Context, namespace, taskName 
 }
 
 func summarizeEvents(events []executionEvent) analysisTelemetry {
-	out := analysisTelemetry{EventCount: len(events), qualityToolOutcomes: map[string]string{}}
+	out := analysisTelemetry{
+		EventCount: len(events), qualityToolOutcomes: map[string]string{},
+		events: append([]executionEvent(nil), events...),
+	}
 	toolCalls := map[string]bool{}
 	apiModes := map[string]bool{}
 	var earliest, latest, started, completed time.Time

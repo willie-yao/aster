@@ -444,7 +444,7 @@ export function TestDetailPage() {
                 analysis={selectedTc.ai_analysis}
                 fileCtx={fileCtx(selectedRun, selectedTc)}
                 traceHref={
-                  features.analysis_traces && !selectedTc.ai_analysis.contract_hash
+                  features.analysis_traces
                     ? `/analysis-traces?job_id=${encodeURIComponent(jobID ?? "")}` +
                       `&build_id=${encodeURIComponent(selectedRun.build_id)}` +
                       `&test_name=${encodeURIComponent(testName)}`
