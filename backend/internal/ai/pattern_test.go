@@ -137,12 +137,12 @@ func TestAnalyzePattern_IncompleteVerdictRejected(t *testing.T) {
 func TestPatternCacheKey_TracksModelInput(t *testing.T) {
 	base := patternFailures(3)
 	p1 := buildPatternUserPrompt("job", base)
-	k1 := patternCacheKey("kubernetes", "job", "job", p1, "toolfree")
+	k1 := patternCacheKey("kubernetes", "job", "job", p1, "toolfree", "model-fingerprint")
 
 	// A changed root cause changes the rendered prompt, so the key changes.
 	changed := patternFailures(3)
 	changed[0].RootCause = "different cause"
-	k2 := patternCacheKey("kubernetes", "job", "job", buildPatternUserPrompt("job", changed), "toolfree")
+	k2 := patternCacheKey("kubernetes", "job", "job", buildPatternUserPrompt("job", changed), "toolfree", "model-fingerprint")
 	if k1 == k2 {
 		t.Error("expected cache key to change when the evidence changes")
 	}
@@ -150,13 +150,13 @@ func TestPatternCacheKey_TracksModelInput(t *testing.T) {
 	// A changed failure message also changes the key because evidence differs.
 	msgChanged := patternFailures(3)
 	msgChanged[0].FailureMessage = "a totally different symptom"
-	k3 := patternCacheKey("kubernetes", "job", "job", buildPatternUserPrompt("job", msgChanged), "toolfree")
+	k3 := patternCacheKey("kubernetes", "job", "job", buildPatternUserPrompt("job", msgChanged), "toolfree", "model-fingerprint")
 	if k1 == k3 {
 		t.Error("expected cache key to change when a failure message changes")
 	}
 
 	// Same inputs produce a stable key.
-	if patternCacheKey("kubernetes", "job", "job", p1, "toolfree") != k1 {
+	if patternCacheKey("kubernetes", "job", "job", p1, "toolfree", "model-fingerprint") != k1 {
 		t.Error("expected stable cache key for identical inputs")
 	}
 }
@@ -186,8 +186,8 @@ func TestCollectRelevantFiles_NotInCacheKey(t *testing.T) {
 	withLoc := patternFailures(2)
 	withLoc[0].LocationFile = "test/e2e/foo_test.go"
 
-	k1 := patternCacheKey("kubernetes", "job", "job", buildPatternUserPrompt("job", base), "toolfree")
-	k2 := patternCacheKey("kubernetes", "job", "job", buildPatternUserPrompt("job", withLoc), "toolfree")
+	k1 := patternCacheKey("kubernetes", "job", "job", buildPatternUserPrompt("job", base), "toolfree", "model-fingerprint")
+	k2 := patternCacheKey("kubernetes", "job", "job", buildPatternUserPrompt("job", withLoc), "toolfree", "model-fingerprint")
 	if k1 != k2 {
 		t.Error("LocationFile must not change the pattern cache key (kept out of the prompt)")
 	}
@@ -213,8 +213,8 @@ func TestBuildPatternUserPrompt_RendersFixAndFiles(t *testing.T) {
 	}
 
 	// A changed per-build suggested fix is new evidence, so the cache key moves.
-	base := patternCacheKey("kubernetes", "job", "job", buildPatternUserPrompt("job", patternFailures(2)), "toolfree")
-	withFix := patternCacheKey("kubernetes", "job", "job", prompt, "toolfree")
+	base := patternCacheKey("kubernetes", "job", "job", buildPatternUserPrompt("job", patternFailures(2)), "toolfree", "model-fingerprint")
+	withFix := patternCacheKey("kubernetes", "job", "job", prompt, "toolfree", "model-fingerprint")
 	if base == withFix {
 		t.Error("expected cache key to change when a per-build suggested_fix is added")
 	}

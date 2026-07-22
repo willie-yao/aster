@@ -138,7 +138,7 @@ func (s *Service) AnalyzePattern(ctx context.Context, jobID, subject string, fai
 	// Key the verdict to the exact model input, including prompt version, the
 	// grounding mode, and the rendered user prompt, so any evidence change or a
 	// switch between grounded and tool-free invalidates the entry.
-	key := patternCacheKey(s.module.Name(), jobID, subject, userPrompt, groundKey)
+	key := patternCacheKey(s.module.Name(), jobID, subject, userPrompt, groundKey, s.client.modelFingerprint())
 	if raw, ok := s.client.cache.Get(key); ok {
 		var cached patternResponse
 		if json.Unmarshal(raw, &cached) == nil && validPatternResponse(cached) {
@@ -353,9 +353,9 @@ func buildPatternUserPrompt(subject string, failures []PatternFailure) string {
 // the grounding namespace (mode plus, when grounded, the source repo), and the
 // rendered model input, so the verdict is reused only while the exact evidence
 // the model saw is unchanged.
-func patternCacheKey(module, jobID, subject, userPrompt, groundKey string) string {
+func patternCacheKey(module, jobID, subject, userPrompt, groundKey, modelFingerprint string) string {
 	h := sha256.New()
-	fmt.Fprintf(h, "v%d\x00%s\x00%s\x00%s\x00%s", patternPromptVersion, groundKey, jobID, subject, userPrompt)
+	fmt.Fprintf(h, "v%d\x00%s\x00%s\x00%s\x00%s\x00%s", patternPromptVersion, groundKey, modelFingerprint, jobID, subject, userPrompt)
 	return fmt.Sprintf("pattern:%s:%s", module, hex.EncodeToString(h.Sum(nil)[:12]))
 }
 

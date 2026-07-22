@@ -204,6 +204,7 @@ project:
 # Secret you manage (it must hold the key named by tokenSecretKey).
 ai:
   enabled: false
+  api: chat_completions
   endpoint: ""
   model: ""
   token: ""

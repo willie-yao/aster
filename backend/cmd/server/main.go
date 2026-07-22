@@ -111,9 +111,13 @@ func enableActions(opts *server.Options, projectDir, dataDir string) error {
 	if err != nil {
 		return fmt.Errorf("loading project config: %w", err)
 	}
-	provider := cfg.ResolveAIProvider(os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"))
+	provider := cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"))
+	if err := project.ValidateAIAPI(provider.API); err != nil {
+		return err
+	}
 	actionService := actions.NewService(cfg, dataDir, actions.AIConfig{
 		Token:    os.Getenv("AI_TOKEN"),
+		API:      provider.API,
 		Endpoint: provider.Endpoint,
 		Model:    provider.Model,
 		Headers:  provider.Headers,

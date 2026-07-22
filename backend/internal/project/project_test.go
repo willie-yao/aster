@@ -974,3 +974,23 @@ func TestEffectiveFixPRsPreservesZeroOrkaRetries(t *testing.T) {
 		t.Fatalf("OrkaRetries = %v, want explicit zero", got.OrkaRetries)
 	}
 }
+
+func TestResolveAIProviderAPI(t *testing.T) {
+	cfg := &Config{AI: &AI{API: AIAPIResponses, Endpoint: "https://example/v1/responses", Model: "m"}}
+	got := cfg.ResolveAIProvider(AIAPIChatCompletions, "fallback", "fallback-model")
+	if got.API != AIAPIResponses || got.Endpoint != cfg.AI.Endpoint || got.Model != "m" {
+		t.Fatalf("provider = %+v", got)
+	}
+	defaults := (&Config{}).ResolveAIProvider("", "endpoint", "model")
+	if defaults.API != AIAPIChatCompletions {
+		t.Fatalf("default API = %q", defaults.API)
+	}
+}
+
+func TestValidateRejectsUnknownAIAPI(t *testing.T) {
+	cfg := validConfig()
+	cfg.AI = &AI{API: "unknown"}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ai.api") {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}

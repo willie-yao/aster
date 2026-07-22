@@ -213,6 +213,7 @@ func (p *pipeline) ensureAnalysisRuntime(ctx context.Context) (*analysisRuntime,
 	client := ai.NewClientWithOptions(ai.Options{
 		Token:        p.aiToken,
 		CacheDir:     p.opts.OutDir,
+		API:          aiAPI(p.cfg),
 		Endpoint:     aiEndpoint(p.cfg),
 		Model:        aiModel(p.cfg),
 		ExtraHeaders: aiHeaders(p.cfg),
@@ -265,10 +266,15 @@ func failureLocationFile(loc string) string {
 	return patterns.FailureLocationFile(loc)
 }
 
+// aiAPI returns the configured model API. project.yaml wins over AI_API.
+func aiAPI(cfg *project.Config) string {
+	return cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL")).API
+}
+
 // aiEndpoint returns the configured AI chat-completions URL.
 // project.yaml wins over AI_ENDPOINT.
 func aiEndpoint(cfg *project.Config) string {
-	return cfg.ResolveAIProvider(os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL")).Endpoint
+	return cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL")).Endpoint
 }
 
 // githubReadToken returns the token for read-only GitHub API access (the
@@ -299,10 +305,10 @@ func shortHash(h string) string {
 // aiModel returns the configured AI model identifier.
 // project.yaml wins over AI_MODEL.
 func aiModel(cfg *project.Config) string {
-	return cfg.ResolveAIProvider(os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL")).Model
+	return cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL")).Model
 }
 
 // aiHeaders returns the extra HTTP headers to attach to AI provider requests.
 func aiHeaders(cfg *project.Config) map[string]string {
-	return cfg.ResolveAIProvider(os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL")).Headers
+	return cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL")).Headers
 }

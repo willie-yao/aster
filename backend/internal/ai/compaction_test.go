@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -159,5 +160,47 @@ func TestRequestSizeEstimate_IncludesSchemaBytes(t *testing.T) {
 	withSchema := requestSizeEstimate(msgs, 1000)
 	if withSchema-base != 1000 {
 		t.Errorf("schema bytes should add to the estimate: delta=%d want 1000", withSchema-base)
+	}
+}
+
+func TestRequestSizeEstimateCountsProviderItems(t *testing.T) {
+	small := []modelMessage{{Role: "assistant"}}
+	large := []modelMessage{{Role: "assistant", ToolCalls: []modelToolCall{{ID: "c", Type: "function", Function: modelFunction{Name: "read", Arguments: "{}"}}}, ProviderItems: []json.RawMessage{json.RawMessage(strings.Repeat("x", 1024))}}}
+	if requestSizeEstimate(large, 0) < requestSizeEstimate(small, 0)+1024 {
+		t.Fatal("provider items were not counted")
+	}
+	compacted, _ := compactMessages(large, 0, 1)
+	if len(compacted[0].ProviderItems) != 1 {
+		t.Fatal("compaction dropped provider state")
+	}
+}
+
+func TestCompactMessagesRemovesResponsesRoundAtomically(t *testing.T) {
+	messages := []modelMessage{
+		{Role: "system", Content: strPtr("system")}, {Role: "user", Content: strPtr("user")},
+		{Role: "assistant", ToolCalls: []modelToolCall{{ID: "call-1"}}, ProviderItems: []json.RawMessage{json.RawMessage(`{"type":"reasoning","encrypted_content":"` + strings.Repeat("x", 2000) + `"}`)}},
+		{Role: "tool", ToolCallID: "call-1", Content: strPtr(strings.Repeat("y", 1000))},
+		{Role: "user", Content: strPtr("continue")},
+	}
+	got, _ := compactMessages(messages, 0, 300)
+	for _, message := range got {
+		if message.ToolCallID == "call-1" || (message.Role == "assistant" && len(message.ProviderItems) > 0) {
+			t.Fatalf("orphaned Responses round: %+v", got)
+		}
+	}
+}
+
+func TestCompactMessagesDropsNoToolResponsesState(t *testing.T) {
+	messages := []modelMessage{
+		{Role: "system", Content: strPtr("system")}, {Role: "user", Content: strPtr("user")},
+		{Role: "assistant", Content: strPtr("draft"), ProviderItems: []json.RawMessage{json.RawMessage(`{"type":"reasoning","encrypted_content":"` + strings.Repeat("x", 2000) + `"}`)}},
+		{Role: "user", Content: strPtr("revise")},
+	}
+	got, elided := compactMessages(messages, 0, 600)
+	if elided != 1 {
+		t.Fatalf("elided = %d, want 1", elided)
+	}
+	if len(got[2].ProviderItems) != 0 || got[2].Content == nil || *got[2].Content != "draft" {
+		t.Fatalf("tools-free Responses turn was not reduced to text: %+v", got[2])
 	}
 }

@@ -25,6 +25,7 @@ type scaffoldData struct {
 	IncludePresubmits bool
 	EngineRef         string
 	Mode              string // "pages" or "k8s"
+	AIAPI             string // seeds deploy/values.yaml ai.api (k8s mode)
 	AIEndpoint        string // seeds deploy/values.yaml ai.endpoint (k8s mode)
 	AIModel           string // seeds deploy/values.yaml ai.model (k8s mode)
 	Namespace         string // k8s namespace / helm release name (k8s mode)
@@ -102,6 +103,7 @@ jobs:
     uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@{{.EngineRef}}
     with:
       # Repository variables keep provider coordinates out of project.yaml.
+      ai-api: ${{"{{"}} vars.AI_API {{"}}"}}
       ai-model: ${{"{{"}} vars.AI_MODEL {{"}}"}}
       ai-endpoint: ${{"{{"}} vars.AI_ENDPOINT {{"}}"}}
     secrets:
@@ -128,7 +130,8 @@ persistence:
 
 ai:
   enabled: true
-  endpoint: "{{if .AIEndpoint}}{{.AIEndpoint}}{{else}}http://<your-model-svc>.<ns>.svc.cluster.local:8000/v1/chat/completions{{end}}"
+  api: "{{if .AIAPI}}{{.AIAPI}}{{else}}chat_completions{{end}}"
+  endpoint: "{{if .AIEndpoint}}{{.AIEndpoint}}{{else if eq .AIAPI "responses"}}http://<your-model-svc>.<ns>.svc.cluster.local:8000/v1/responses{{else}}http://<your-model-svc>.<ns>.svc.cluster.local:8000/v1/chat/completions{{end}}"
   model: "{{if .AIModel}}{{.AIModel}}{{else}}<your-model-id>{{end}}"
 
 # Give a cold analysis pass room to finish on a self-hosted model.
@@ -240,7 +243,8 @@ gh api -X POST repos/{{.DashboardOwner}}/{{.DashboardName}}/pages \
   -f build_type=workflow
 
 # Set the required provider coordinates and token. You may instead commit
-# ai.endpoint and ai.model under project.yaml.
+# ai.api, ai.endpoint, and ai.model under project.yaml.
+gh variable set AI_API --body chat_completions --repo {{.DashboardOwner}}/{{.DashboardName}}
 gh variable set AI_ENDPOINT --repo {{.DashboardOwner}}/{{.DashboardName}}
 gh variable set AI_MODEL --repo {{.DashboardOwner}}/{{.DashboardName}}
 gh secret set AI_TOKEN --repo {{.DashboardOwner}}/{{.DashboardName}}

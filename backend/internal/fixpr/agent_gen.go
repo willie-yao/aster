@@ -17,6 +17,9 @@ import (
 // The accepted fix flows through the verify / open-PR / preview path.
 func generateWithAgent(ctx context.Context, gp genParams, p models.PatternAnalysis) (*proposedFix, error) {
 	a := gp.agent
+	if a != nil && a.SharedModelEndpoint && a.API == "responses" {
+		return nil, fmt.Errorf("agent fix generation with the local OpenCode runtime requires Chat Completions; use ai.api=chat_completions or select the Orka fix runtime")
+	}
 	if a == nil || a.Runtime == nil {
 		return nil, fmt.Errorf("agent fix generation: no agent runtime configured")
 	}

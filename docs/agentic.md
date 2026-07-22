@@ -38,7 +38,7 @@ loop runs and how the guardrails are enforced:
 | Quality gates | Enforced in Go code | Enforced as tools the agent must call plus ai-worker re-prompts |
 | Cache | On-disk JSON keyed by mode + hash | The Kubernetes object store: Task names fingerprint project/build/test identity and the model-visible analysis contract; `-version` is a manual override |
 | Config surface | Every `ai.*` knob | Shared prompt, skills, storage, `ai.tools`, `ai.min_tool_calls`, and `ai.min_gcs_bytes`; execution settings live under Helm `orka.*` |
-| Endpoint | Any OpenAI-compatible chat-completions | Orka tries Responses first and falls back to Chat Completions through its Provider; Copilot needs a de-streaming proxy |
+| Endpoint | OpenAI-compatible Chat Completions or Responses | Orka tries Responses first and falls back to Chat Completions through its Provider; Copilot needs a de-streaming proxy |
 
 The trade-off from the evaluation: Orka with a strong co-located model matches or
 beats the engine's reference labels on the hardest cases, while cheaper models
@@ -50,9 +50,10 @@ setup, [experimental/orka/QUICKSTART.md](../experimental/orka/QUICKSTART.md).
 
 ## Endpoint requirements
 
-Agentic analysis requires an OpenAI-compatible chat-completions endpoint with
-function calling (`tools` field on the request, `tool_calls` field on
-the response). Verified endpoints:
+Agentic analysis requires an OpenAI-compatible Chat Completions or Responses
+endpoint with function calling. Chat uses `tools` and `tool_calls`; Responses
+uses function-call and `function_call_output` items. Select the wire contract with
+`ai.api`. Verified providers:
 
 - **GitHub Copilot** (`api.githubcopilot.com`) — supported.
 - **OpenAI**: supported on models that expose function calling.

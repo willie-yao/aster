@@ -10,8 +10,8 @@ and you do not need interactive admin actions.
 
 - A host repository that does not already publish another Pages site.
 - `project.yaml` and `prompts/system.md` in the repository root or one subdirectory.
-- An OpenAI-compatible chat-completions endpoint with function calling.
-- The endpoint URL, model id, and bearer token.
+- An OpenAI-compatible Chat Completions or Responses endpoint with function calling.
+- The API selector, endpoint URL, model id, and bearer token.
 
 Run [`fetcher onboard`](onboarding-a-new-project.md) to generate the files, or
 create the workflow below manually.
@@ -41,6 +41,7 @@ jobs:
   deploy:
     uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
     with:
+      ai-api: ${{ vars.AI_API }}
       ai-model: ${{ vars.AI_MODEL }}
       ai-endpoint: ${{ vars.AI_ENDPOINT }}
     secrets:
@@ -60,6 +61,7 @@ are not at the repository root.
 gh api repos/my-org/my-dashboard/pages -X POST -F build_type=workflow
 
 # Required unless project.yaml contains ai.endpoint and ai.model.
+gh variable set AI_API --body chat_completions --repo my-org/my-dashboard
 gh variable set AI_ENDPOINT --repo my-org/my-dashboard
 gh variable set AI_MODEL --repo my-org/my-dashboard
 

@@ -299,5 +299,6 @@ func writeOpencodeConfig(home string, spec GenerateSpec) error {
 func openAIBase(endpoint string) string {
 	e := strings.TrimRight(strings.TrimSpace(endpoint), "/")
 	e = strings.TrimSuffix(e, "/chat/completions")
+	e = strings.TrimSuffix(e, "/responses")
 	return e
 }

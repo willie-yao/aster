@@ -118,7 +118,7 @@ func (s *agentState) readPathList() []string {
 // than re-investigating. The revised draft is used only if it still clears the
 // deterministic critique, so the judge can never downgrade an answer below the
 // gate it already passed. Returns the draft to publish.
-func (c *Client) applySemanticJudgePostLoop(ctx context.Context, state *agentState, messages []modelMessage, finalContent string, parsed analysisResponse, budget int) analysisResponse {
+func (c *Client) applySemanticJudgePostLoop(ctx context.Context, state *agentState, messages []modelMessage, finalContent string, finalProviderItems []json.RawMessage, parsed analysisResponse, budget int) analysisResponse {
 	state.judgeRan = true
 	objs, err := c.semanticCritique(ctx, parsed, state.readPathList())
 	if err != nil {
@@ -131,9 +131,9 @@ func (c *Client) applySemanticJudgePostLoop(ctx context.Context, state *agentSta
 	}
 	state.judgeObjected = true
 	msgs := append(messages,
-		modelMessage{Role: "assistant", Content: strPtr(finalContent)},
+		modelMessage{Role: "assistant", Content: strPtr(finalContent), ProviderItems: finalProviderItems},
 		modelMessage{Role: "user", Content: strPtr(formatSemanticObjections(objs))})
-	revised := c.runFinalizeRound(ctx, msgs, budget)
+	revised, _ := c.runFinalizeRound(ctx, msgs, budget)
 	rp, ok := tryParseAnalysis(revised)
 	if !ok {
 		log.Printf("  ✗ semantic judge (post-loop): %d objection(s); refinalize did not parse, keeping draft", len(objs))

@@ -190,6 +190,9 @@ because Helm release names are unique only within their own namespace.
 Validate the analysis backend selection and its constraints.
 */}}
 {{- define "prow-ai-dashboard.validateAnalysis" -}}
+{{- if not (has .Values.ai.api (list "chat_completions" "responses")) -}}
+{{- fail "ai.api must be chat_completions or responses" -}}
+{{- end -}}
 {{- if not (or (eq .Values.analysis "inprocess") (eq .Values.analysis "orka")) -}}
 {{- fail (printf "analysis must be \"inprocess\" or \"orka\", got %q" .Values.analysis) -}}
 {{- end -}}

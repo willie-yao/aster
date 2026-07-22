@@ -100,7 +100,7 @@ func (c *Client) ToolLoop(
 			if opts.MinToolCalls > 0 && calls < opts.MinToolCalls && !nudged {
 				nudged = true
 				if msg.Content != nil {
-					messages = append(messages, modelMessage{Role: "assistant", Content: msg.Content})
+					messages = append(messages, modelMessage{Role: "assistant", Content: msg.Content, ProviderItems: msg.ProviderItems})
 				}
 				messages = append(messages, modelMessage{
 					Role:    "user",
@@ -118,11 +118,14 @@ func (c *Client) ToolLoop(
 		if dropped > 0 {
 			log.Printf("  ⤵ single_tool_call: executing 1 of %d tool calls, dropping %d", len(msg.ToolCalls), dropped)
 		}
-		echo := modelMessage{Role: "assistant", ToolCalls: toolCalls}
+		echoCalls, skippedOutputs := continuationCalls(c.apiMode, msg, toolCalls)
+		echo := modelMessage{Role: "assistant", ToolCalls: echoCalls, ProviderItems: msg.ProviderItems}
 		if msg.Content != nil {
 			echo.Content = msg.Content
 		}
 		messages = append(messages, echo)
+
+		messages = append(messages, skippedOutputs...)
 
 		for _, tc := range toolCalls {
 			result := dispatchToolLoop(ctx, reg, env, tc)
@@ -137,7 +140,8 @@ func (c *Client) ToolLoop(
 
 	// The model never returned a tools-free answer within the budget. Force one
 	// finalize round with tools omitted so the caller still gets a response.
-	return c.runFinalizeRound(ctx, messages, opts.ContextByteBudget), nil
+	final, _ := c.runFinalizeRound(ctx, messages, opts.ContextByteBudget)
+	return final, nil
 }
 
 // dispatchToolLoop routes one tool call through the registry and returns the

@@ -306,10 +306,26 @@ func (i Issues) HasTrigger(name string) bool {
 	return false
 }
 
+const (
+	AIAPIChatCompletions = "chat_completions"
+	AIAPIResponses       = "responses"
+)
+
+func ValidateAIAPI(api string) error {
+	api = strings.ToLower(strings.TrimSpace(api))
+	if api == "" || api == AIAPIChatCompletions || api == AIAPIResponses {
+		return nil
+	}
+	return fmt.Errorf("AI API %q is invalid (want %q or %q)", api, AIAPIChatCompletions, AIAPIResponses)
+}
+
 // AI configures the agentic failure-analysis pipeline: the endpoint and model
 // to call, optional request headers, analysis concurrency, and the inlined
 // agentic loop tuning.
 type AI struct {
+	// API selects chat_completions (default) or responses.
+	API string `yaml:"api,omitempty" json:"-"`
+
 	// Endpoint is the OpenAI-compatible chat-completions URL. Required when AI is
 	// enabled because the engine has no default provider. Falls back to
 	// AI_ENDPOINT when unset here. Excluded from manifest.json.
@@ -348,16 +364,24 @@ type AI struct {
 
 // AIProvider is the resolved provider configuration used to construct clients.
 type AIProvider struct {
+	API      string
 	Endpoint string
 	Model    string
 	Headers  map[string]string
 }
 
 // ResolveAIProvider applies environment fallbacks to the project configuration.
-func (c *Config) ResolveAIProvider(endpointFallback, modelFallback string) AIProvider {
-	out := AIProvider{Endpoint: endpointFallback, Model: modelFallback}
+func (c *Config) ResolveAIProvider(apiFallback, endpointFallback, modelFallback string) AIProvider {
+	api := strings.ToLower(strings.TrimSpace(apiFallback))
+	if api == "" {
+		api = AIAPIChatCompletions
+	}
+	out := AIProvider{API: api, Endpoint: endpointFallback, Model: modelFallback}
 	if c == nil || c.AI == nil {
 		return out
+	}
+	if value := strings.ToLower(strings.TrimSpace(c.AI.API)); value != "" {
+		out.API = value
 	}
 	if c.AI.Endpoint != "" {
 		out.Endpoint = c.AI.Endpoint
@@ -793,6 +817,13 @@ func (c *Config) Validate() error {
 	default:
 		missing = append(missing, fmt.Sprintf("storage.provider %q (want %q, %q, or %q)",
 			c.Storage.Provider, storage.ProviderGCS, storage.ProviderGCSWeb, storage.ProviderLocal))
+	}
+
+	if c.AI != nil {
+		api := strings.ToLower(strings.TrimSpace(c.AI.API))
+		if api != "" && api != AIAPIChatCompletions && api != AIAPIResponses {
+			return fmt.Errorf("ai.api %q is invalid (want %q or %q)", c.AI.API, AIAPIChatCompletions, AIAPIResponses)
+		}
 	}
 
 	if len(missing) > 0 {

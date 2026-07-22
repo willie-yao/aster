@@ -152,6 +152,8 @@ spec:
                     secretKeyRef:
                       name: {{ include "prow-ai-dashboard.aiSecret" . }}
                       key: {{ .Values.ai.tokenSecretKey }}
+                - name: AI_API
+                  value: {{ .Values.ai.api | quote }}
                 {{- if .Values.ai.endpoint }}
                 - name: AI_ENDPOINT
                   value: {{ .Values.ai.endpoint | quote }}
@@ -203,6 +205,8 @@ spec:
                     secretKeyRef:
                       name: {{ include "prow-ai-dashboard.aiSecret" . }}
                       key: {{ .Values.ai.tokenSecretKey }}
+                - name: AI_API
+                  value: {{ .Values.ai.api | quote }}
                 {{- if .Values.ai.endpoint }}
                 - name: AI_ENDPOINT
                   value: {{ .Values.ai.endpoint | quote }}

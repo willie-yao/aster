@@ -1,10 +1,11 @@
 # AI providers
 
-The dashboard's AI analysis is provider-agnostic. The fetcher speaks OpenAI
-chat-completions over HTTPS and requires function calling: the endpoint must
-accept `tools` in the request and return `tool_calls`. GitHub Copilot, OpenAI,
-Nvidia Dynamo / NIMs, vLLM, Ollama, and compatible proxies can work when the
-selected model supports that contract. There is **no default provider**: you
+The dashboard's AI analysis is provider-agnostic. The fetcher supports OpenAI
+Chat Completions and Responses over HTTPS. Both paths require function calling:
+Chat endpoints exchange `tools` and `tool_calls`, while Responses endpoints
+exchange function-call items and `function_call_output` items. GitHub Copilot,
+OpenAI, Nvidia Dynamo / NIMs, vLLM, Ollama, and compatible proxies can work when
+the selected model supports the configured API contract. There is **no default provider**: you
 must configure an endpoint and model explicitly (in `project.yaml` or via env),
 or AI analysis fails fast with a clear error.
 
@@ -12,7 +13,8 @@ Configure your provider in your consumer repo's `project.yaml` under `ai:`:
 
 ```yaml
 ai:
-  endpoint: "..."         # Required. Chat-completions URL (e.g. Copilot, OpenAI, vLLM).
+  api: "chat_completions"  # or responses
+  endpoint: "..."         # Required. URL for the selected API.
   model: "..."            # Required. Model identifier the endpoint expects.
   headers:                # Optional. Extra HTTP headers merged into every call.
     Some-Header: "value"
@@ -110,6 +112,17 @@ The fetcher automatically sends `Copilot-Integration-Id: copilot-developer-cli`
 when (and only when) the endpoint's host is `*.githubcopilot.com`.
 
 ## OpenAI
+
+Responses example:
+
+```yaml
+ai:
+  api: responses
+  endpoint: "https://api.openai.com/v1/responses"
+  model: "<model-id>"
+```
+
+Responses requests use `store: false` and preserve reasoning items across tool calls.
 
 ```yaml
 ai:

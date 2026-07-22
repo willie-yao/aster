@@ -281,6 +281,7 @@ func TestModelsURLFor(t *testing.T) {
 		{"http://host:8000/v1/chat/completions", "http://host:8000/v1/models", true},
 		{"https://api.example.com/v1/chat/completions", "https://api.example.com/v1/models", true},
 		{"https://api.githubcopilot.com/chat/completions", "https://api.githubcopilot.com/models", true},
+		{"http://host:8000/v1/responses", "http://host:8000/v1/models", true},
 		{"http://host:8000/v1/embeddings", "", false},
 		{"http://host:8000/something", "", false},
 	}
@@ -373,4 +374,16 @@ func TestDetectContextWindowTokens(t *testing.T) {
 			t.Error("expected ok=false when endpoint isn't a chat-completions URL")
 		}
 	})
+}
+
+func TestModelFingerprintSeparatesResponsesWithoutChangingChat(t *testing.T) {
+	chat := NewClientWithOptions(Options{Endpoint: "https://example/v1/chat/completions", Model: "m"})
+	explicitChat := NewClientWithOptions(Options{API: APIChatCompletions, Endpoint: "https://example/v1/chat/completions", Model: "m"})
+	responses := NewClientWithOptions(Options{API: APIResponses, Endpoint: "https://example/v1/chat/completions", Model: "m"})
+	if chat.modelFingerprint() != explicitChat.modelFingerprint() {
+		t.Fatal("explicit Chat mode changed the existing fingerprint")
+	}
+	if chat.modelFingerprint() == responses.modelFingerprint() {
+		t.Fatal("Responses mode reused the Chat fingerprint")
+	}
 }

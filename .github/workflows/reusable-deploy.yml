@@ -49,13 +49,18 @@ on:
         required: false
         type: boolean
         default: true
+      ai-api:
+        description: "Optional. AI API: chat_completions (default) or responses. The yaml ai.api field wins if set."
+        required: false
+        type: string
+        default: ""
       ai-model:
         description: "Optional. AI model identifier passed to the fetcher as AI_MODEL. Use this with a repo variable (vars.AI_MODEL) to keep private or preview model labels out of the public project.yaml. The yaml ai.model field wins if set."
         required: false
         type: string
         default: ""
       ai-endpoint:
-        description: "Optional. AI chat-completions URL passed to the fetcher as AI_ENDPOINT. Use this with a repo variable (vars.AI_ENDPOINT) to keep private endpoint URLs out of the public project.yaml. The yaml ai.endpoint field wins if set."
+        description: "Optional. URL for the selected AI API, passed to the fetcher as AI_ENDPOINT. Use this with a repo variable (vars.AI_ENDPOINT) to keep private endpoint URLs out of the public project.yaml. The yaml ai.endpoint field wins if set."
         required: false
         type: string
         default: ""
@@ -190,6 +195,7 @@ jobs:
         if: ${{ !inputs.skip-fetch }}
         env:
           AI_TOKEN: ${{ secrets.AI_TOKEN }}
+          AI_API: ${{ inputs.ai-api }}
           AI_MODEL: ${{ inputs.ai-model }}
           AI_ENDPOINT: ${{ inputs.ai-endpoint }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

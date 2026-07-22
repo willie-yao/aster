@@ -41,7 +41,9 @@ type Options struct {
 	// AIToken authenticates the chat-completions endpoint used to draft
 	// prompts/system.md. When empty, onboard writes the stub instead.
 	AIToken string
-	// AIEndpoint / AIModel are the chat-completions URL and model id of the
+	// AIAPI selects chat_completions (default) or responses.
+	AIAPI string
+	// AIEndpoint / AIModel are the endpoint URL and model id of the
 	// provider used to draft prompts/system.md. Both are required when AIToken
 	// is set; the engine assumes no default provider.
 	AIEndpoint string

@@ -501,6 +501,9 @@ func requestSizeEstimate(messages []modelMessage, schemaBytes int) int {
 		for _, tc := range messages[i].ToolCalls {
 			total += len(tc.Function.Name) + len(tc.Function.Arguments) + 32
 		}
+		for _, item := range messages[i].ProviderItems {
+			total += len(item)
+		}
 	}
 	return total
 }
@@ -544,10 +547,49 @@ func compactMessages(messages []modelMessage, schemaBytes, budgetBytes int) ([]m
 	// the tool_calls wiring intact.
 	for i := 2; i < len(messages) && requestSizeEstimate(messages, schemaBytes) > target; i++ {
 		m := &messages[i]
-		if m.Role == "assistant" && len(m.ToolCalls) > 0 && m.Content != nil &&
-			!isStubbed(m.Content) && len(*m.Content) > compactionStubHead {
-			stub(i)
+		if m.Role != "assistant" || len(m.ToolCalls) == 0 {
+			continue
 		}
+		elidedMessage := false
+		if m.Content != nil && !isStubbed(m.Content) && len(*m.Content) > compactionStubHead {
+			m.Content = strPtr(stubContent(*m.Content))
+			elidedMessage = true
+		}
+		if elidedMessage {
+			elided++
+		}
+	}
+	// Stage 4: replace tools-free Responses turns with replayable text.
+	for i := 2; i < len(messages) && requestSizeEstimate(messages, schemaBytes) > target; i++ {
+		m := &messages[i]
+		if m.Role != "assistant" || len(m.ProviderItems) == 0 || len(m.ToolCalls) > 0 || m.Content == nil {
+			continue
+		}
+		m.ProviderItems = nil
+		elided++
+	}
+	// Stage 5: remove older Responses assistant turns and their paired tool
+	// outputs atomically when continuation state keeps the request over budget.
+	for i := 2; i < len(messages) && requestSizeEstimate(messages, schemaBytes) > target; {
+		m := messages[i]
+		if m.Role != "assistant" || len(m.ProviderItems) == 0 || len(m.ToolCalls) == 0 {
+			i++
+			continue
+		}
+		ids := map[string]bool{}
+		for _, call := range m.ToolCalls {
+			ids[call.ID] = true
+		}
+		end := i + 1
+		for end < len(messages) && messages[end].Role == "tool" && ids[messages[end].ToolCallID] {
+			end++
+		}
+		if end == i+1 {
+			i++
+			continue
+		}
+		elided += end - i
+		messages = append(messages[:i], messages[end:]...)
 	}
 	return messages, elided
 }
@@ -646,6 +688,7 @@ func (c *Client) doAnalyzeAgentic(
 	defer cancel()
 
 	var finalContent string
+	var finalProviderItems []json.RawMessage
 	// Per-floor anti-thrash: track the calls + gcsBytes counters at the
 	// time we last nudged so we can detect whether the model has made
 	// progress on the unmet axis since then. A model that keeps coming
@@ -724,7 +767,7 @@ func (c *Client) doAnalyzeAgentic(
 					progressed = true
 				}
 				if progressed {
-					echo := modelMessage{Role: "assistant"}
+					echo := modelMessage{Role: "assistant", ProviderItems: msg.ProviderItems}
 					if msg.Content != nil {
 						echo.Content = msg.Content
 					}
@@ -772,7 +815,7 @@ func (c *Client) doAnalyzeAgentic(
 							log.Printf("  ⓘ semantic judge: skipped (%v)", err)
 						case len(objs) > 0:
 							state.judgeObjected = true
-							echo := modelMessage{Role: "assistant"}
+							echo := modelMessage{Role: "assistant", ProviderItems: msg.ProviderItems}
 							if msg.Content != nil {
 								echo.Content = msg.Content
 							}
@@ -794,7 +837,7 @@ func (c *Client) doAnalyzeAgentic(
 					}
 					state.critiquePassed = true
 				} else if critiqueRetriesUsed < in.Opts.CritiqueMaxRetries {
-					echo := modelMessage{Role: "assistant"}
+					echo := modelMessage{Role: "assistant", ProviderItems: msg.ProviderItems}
 					if msg.Content != nil {
 						echo.Content = msg.Content
 					}
@@ -836,6 +879,7 @@ func (c *Client) doAnalyzeAgentic(
 			}
 
 			finalContent = candidate
+			finalProviderItems = msg.ProviderItems
 			break
 		}
 
@@ -845,11 +889,14 @@ func (c *Client) doAnalyzeAgentic(
 				len(msg.ToolCalls), dropped)
 		}
 
-		echo := modelMessage{Role: "assistant", ToolCalls: toolCalls}
+		echoCalls, skippedOutputs := continuationCalls(c.apiMode, msg, toolCalls)
+		echo := modelMessage{Role: "assistant", ToolCalls: echoCalls, ProviderItems: msg.ProviderItems}
 		if msg.Content != nil {
 			echo.Content = msg.Content
 		}
 		messages = append(messages, echo)
+
+		messages = append(messages, skippedOutputs...)
 
 		for _, tc := range toolCalls {
 			result := dispatchAgenticTool(loopCtx, state, tc)
@@ -866,7 +913,7 @@ func (c *Client) doAnalyzeAgentic(
 	// without parseable JSON, force a finalize round with tools omitted.
 	parsed, ok := tryParseAnalysis(finalContent)
 	if !ok {
-		finalContent = c.runFinalizeRound(loopCtx, messages, in.Opts.ContextByteBudget)
+		finalContent, finalProviderItems = c.runFinalizeRound(loopCtx, messages, in.Opts.ContextByteBudget)
 		parsed, ok = tryParseAnalysis(finalContent)
 	}
 	if !ok {
@@ -884,7 +931,7 @@ func (c *Client) doAnalyzeAgentic(
 		return summary, analysis, nil
 	}
 
-	parsed = c.applyPostLoopCritique(loopCtx, state, messages, finalContent, parsed, in.Opts)
+	parsed = c.applyPostLoopCritique(loopCtx, state, messages, finalContent, finalProviderItems, parsed, in.Opts)
 
 	c.cacheAcceptedAnalysis(cacheKey, parsed, state, in.Opts, state.critiquePassed)
 	summary, analysis := c.buildOutputs(parsed)
@@ -892,7 +939,7 @@ func (c *Client) doAnalyzeAgentic(
 	return summary, analysis, nil
 }
 
-func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, messages []modelMessage, finalContent string, parsed analysisResponse, opts AgenticOptions) analysisResponse {
+func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, messages []modelMessage, finalContent string, finalProviderItems []json.RawMessage, parsed analysisResponse, opts AgenticOptions) analysisResponse {
 	if state.critiquePassed {
 		return parsed
 	}
@@ -904,7 +951,7 @@ func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, m
 	}
 	if out.Passed {
 		if opts.SemanticJudge {
-			parsed = c.applySemanticJudgePostLoop(ctx, state, messages, finalContent, parsed, opts.ContextByteBudget)
+			parsed = c.applySemanticJudgePostLoop(ctx, state, messages, finalContent, finalProviderItems, parsed, opts.ContextByteBudget)
 		}
 		state.critiquePassed = true
 		return parsed
@@ -918,11 +965,11 @@ func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, m
 		log.Printf("  ⚠ agentic critique: post-loop draft still failing %v; no fetchable evidence to inject; accepting but not caching", out.Matches())
 		return parsed
 	}
-	messages = append(messages, modelMessage{Role: "assistant", Content: strPtr(finalContent)}, modelMessage{Role: "user", Content: strPtr(out.Feedback + "\n\n" + injection)})
-	revised := c.runFinalizeRound(ctx, messages, opts.ContextByteBudget)
+	messages = append(messages, modelMessage{Role: "assistant", Content: strPtr(finalContent), ProviderItems: finalProviderItems}, modelMessage{Role: "user", Content: strPtr(out.Feedback + "\n\n" + injection)})
+	revised, _ := c.runFinalizeRound(ctx, messages, opts.ContextByteBudget)
 	next, ok := tryParseAnalysis(revised)
 	if !ok {
-		revised = c.runFinalizeRound(ctx, messages, opts.ContextByteBudget)
+		revised, _ = c.runFinalizeRound(ctx, messages, opts.ContextByteBudget)
 		next, ok = tryParseAnalysis(revised)
 	}
 	if !ok {
@@ -1169,7 +1216,7 @@ func (c *Client) cacheAcceptedAnalysis(cacheKey string, parsed analysisResponse,
 // just the final JSON. Used when the agent ran out of iterations or returned
 // prose without parseable JSON. Returns raw content; callers handle unparseable
 // responses.
-func (c *Client) runFinalizeRound(ctx context.Context, messages []modelMessage, contextByteBudget int) string {
+func (c *Client) runFinalizeRound(ctx context.Context, messages []modelMessage, contextByteBudget int) (string, []json.RawMessage) {
 	messages = append(messages, modelMessage{Role: "user", Content: strPtr(agForceFinalizePrompt)})
 	if contextByteBudget > 0 {
 		// The finalize round sends no tool schemas, so estimate against
@@ -1179,12 +1226,12 @@ func (c *Client) runFinalizeRound(ctx context.Context, messages []modelMessage, 
 	resp, err := c.callModel(ctx, messages, nil, nil)
 	if err != nil {
 		log.Printf("  ⚠ agentic finalize round failed: %v", err)
-		return ""
+		return "", nil
 	}
 	if !resp.HasMessage || resp.Message.Content == nil {
-		return ""
+		return "", resp.Message.ProviderItems
 	}
-	return *resp.Message.Content
+	return *resp.Message.Content, resp.Message.ProviderItems
 }
 
 // tryParseAnalysis extracts and unmarshals the JSON answer, returning ok=false

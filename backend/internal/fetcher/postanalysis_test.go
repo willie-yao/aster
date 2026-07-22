@@ -201,6 +201,23 @@ func TestProcessFixPRsReportsPersistedReference(t *testing.T) {
 	}
 }
 
+func TestProcessFixPRsRejectsInvalidAIAPI(t *testing.T) {
+	cfg := &project.Config{AI: &project.AI{FixPRs: &project.FixPRs{
+		Enabled: true, Repo: &project.SourceRepo{Owner: "example", Name: "repo"},
+		AgentRuntime: &project.FixAgentRuntime{Type: "orka"},
+	}}}
+	t.Setenv("FIX_TOKEN", "test-token")
+	t.Setenv("AI_API", "invalid")
+	pattern := models.PatternAnalysis{ID: "pattern", Systemic: true, Confidence: "high"}
+	changed, err := processFixPRs(context.Background(), cfg, []models.PatternAnalysis{pattern}, "", t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), `AI API "invalid" is invalid`) {
+		t.Fatalf("err = %v, want invalid AI API error", err)
+	}
+	if changed {
+		t.Fatal("invalid AI API changed fix state")
+	}
+}
+
 type failingFinalizedAgent struct{}
 
 func (failingFinalizedAgent) Generate(context.Context, runtime.GenerateSpec) (runtime.GenerateResult, error) {

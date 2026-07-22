@@ -22,6 +22,7 @@ for how to pin a release.
 
 ### Added
 
+- **Regular-harness Responses API.** In-process analysis can select `ai.api: responses`, preserves reasoning items across function calls, and sends `store: false`.
 - **Orka Responses API observability.** The pinned compatibility worker now uses
   the Responses API when supported, sends `store: false`, and records API mode
   plus response ID in Task events, logs, and OpenTelemetry. The Copilot proxy

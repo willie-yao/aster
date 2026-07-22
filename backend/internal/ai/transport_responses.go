@@ -1,0 +1,205 @@
+package ai
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"time"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/textutil"
+)
+
+type responsesTransport struct {
+	api *httpAPIClient
+}
+
+func newResponsesTransport(api *httpAPIClient) *responsesTransport {
+	return &responsesTransport{api: api}
+}
+
+type responsesRequest struct {
+	Model             string          `json:"model"`
+	Input             []any           `json:"input"`
+	Tools             []responsesTool `json:"tools,omitempty"`
+	ParallelToolCalls *bool           `json:"parallel_tool_calls,omitempty"`
+	Store             bool            `json:"store"`
+	Include           []string        `json:"include,omitempty"`
+}
+
+type responsesTool struct {
+	Type        string         `json:"type"`
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	Parameters  map[string]any `json:"parameters"`
+	Strict      bool           `json:"strict"`
+}
+
+type responsesResponse struct {
+	ID     string            `json:"id"`
+	Status string            `json:"status"`
+	Output []json.RawMessage `json:"output"`
+}
+
+type responsesOutputItem struct {
+	Type      string `json:"type"`
+	CallID    string `json:"call_id"`
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+	Content   []struct {
+		Type    string `json:"type"`
+		Text    string `json:"text"`
+		Refusal string `json:"refusal"`
+	} `json:"content"`
+}
+
+func (t *responsesTransport) Complete(ctx context.Context, req modelRequest) (*modelResponse, error) {
+	time.Sleep(callDelay)
+	body, err := json.Marshal(responsesRequest{
+		Model: req.Model, Input: encodeResponsesInput(req.Messages),
+		Tools: encodeResponsesTools(req.Tools), ParallelToolCalls: req.ParallelToolCalls,
+		Store: false, Include: []string{"reasoning.encrypted_content"},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
+
+	var resp *http.Response
+	for attempt := 0; attempt < 3; attempt++ {
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, t.api.endpoint, bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("build request: %w", err)
+		}
+		t.api.setRequestHeaders(httpReq)
+		resp, err = t.api.httpClient.Do(httpReq)
+		if err != nil {
+			return nil, fmt.Errorf("post: %w", err)
+		}
+		if resp.StatusCode == http.StatusTooManyRequests {
+			if attempt == 2 {
+				break
+			}
+			wait := retryAfter(resp.Header.Get("Retry-After"), time.Duration(2<<attempt)*time.Second)
+			_ = resp.Body.Close()
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(wait):
+			}
+			continue
+		}
+		break
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("responses returned %d: %s", resp.StatusCode, textutil.Truncate(string(raw), 500))
+	}
+	var wire responsesResponse
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		return nil, fmt.Errorf("decode response: %w; body=%s", err, textutil.Truncate(string(raw), 500))
+	}
+	if wire.Status != "completed" {
+		return nil, fmt.Errorf("responses status %q: %s", wire.Status, textutil.Truncate(string(raw), 500))
+	}
+	return decodeResponsesResponse(wire), nil
+}
+
+func encodeResponsesInput(messages []modelMessage) []any {
+	if messages == nil {
+		return nil
+	}
+	items := make([]any, 0, len(messages))
+	for _, message := range messages {
+		for _, raw := range message.ProviderItems {
+			items = append(items, raw)
+		}
+		if message.Role == "assistant" && len(message.ProviderItems) > 0 {
+			continue
+		}
+		switch message.Role {
+		case "tool":
+			output := ""
+			if message.Content != nil {
+				output = *message.Content
+			}
+			items = append(items, map[string]any{
+				"type": "function_call_output", "call_id": message.ToolCallID, "output": output,
+			})
+		case "assistant":
+			for _, call := range message.ToolCalls {
+				items = append(items, map[string]any{
+					"type": "function_call", "call_id": call.ID,
+					"name": call.Function.Name, "arguments": call.Function.Arguments,
+				})
+			}
+			if message.Content != nil {
+				items = append(items, map[string]any{"role": "assistant", "content": *message.Content})
+			}
+		default:
+			if message.Content != nil {
+				items = append(items, map[string]any{"role": message.Role, "content": *message.Content})
+			}
+		}
+	}
+	return items
+}
+
+func encodeResponsesTools(schemas []tools.Schema) []responsesTool {
+	if schemas == nil {
+		return nil
+	}
+	out := make([]responsesTool, len(schemas))
+	for i, schema := range schemas {
+		out[i] = responsesTool{
+			Type: "function", Name: schema.Function.Name,
+			Description: schema.Function.Description, Parameters: schema.Function.Parameters,
+			Strict: false,
+		}
+	}
+	return out
+}
+
+func decodeResponsesResponse(resp responsesResponse) *modelResponse {
+	message := modelMessage{Role: "assistant"}
+	var text string
+	for _, raw := range resp.Output {
+		message.ProviderItems = append(message.ProviderItems, append(json.RawMessage(nil), raw...))
+		var item responsesOutputItem
+		if json.Unmarshal(raw, &item) != nil {
+			continue
+		}
+		switch item.Type {
+		case "function_call":
+			message.ToolCalls = append(message.ToolCalls, modelToolCall{
+				ID: item.CallID, Type: "function",
+				Function: modelFunction{Name: item.Name, Arguments: item.Arguments},
+			})
+		case "message":
+			for _, content := range item.Content {
+				if content.Type == "output_text" {
+					text += content.Text
+				}
+				if content.Type == "refusal" {
+					text += content.Refusal
+				}
+			}
+		}
+	}
+	if text != "" {
+		message.Content = strPtr(text)
+	}
+	finish := resp.Status
+	if len(message.ToolCalls) > 0 {
+		finish = "tool_calls"
+	} else if finish == "completed" {
+		finish = "stop"
+	}
+	return &modelResponse{
+		Message: message, FinishReason: finish,
+		HasMessage: len(resp.Output) > 0,
+	}
+}

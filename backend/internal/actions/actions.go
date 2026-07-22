@@ -42,6 +42,7 @@ const previewTTL = 15 * time.Minute
 // AIConfig is the resolved chat-completions configuration used to draft fixes.
 type AIConfig struct {
 	Token    string
+	API      string
 	Endpoint string
 	Model    string
 	Headers  map[string]string
@@ -119,6 +120,7 @@ func (s *Service) aiClient() *ai.Client {
 	}
 	return ai.NewClientWithOptions(ai.Options{
 		Token:        s.ai.Token,
+		API:          s.ai.API,
 		Endpoint:     s.ai.Endpoint,
 		Model:        s.ai.Model,
 		ExtraHeaders: s.ai.Headers,
@@ -203,6 +205,9 @@ func (s *Service) buildFixManager(userToken string) (*fixpr.Manager, error) {
 	}
 	aiClient := s.aiClient()
 	ar := eff.AgentRuntime
+	if ar.Type != "orka" && s.ai.API == ai.APIResponses {
+		return nil, fmt.Errorf("local fix runtime requires chat_completions or an Orka fix runtime")
+	}
 	if aiClient == nil && ar.Type != "orka" {
 		return nil, fmt.Errorf("AI is not configured on the server; cannot draft a local fix")
 	}
@@ -249,14 +254,16 @@ func (s *Service) buildFixManager(userToken string) (*fixpr.Manager, error) {
 		model = s.ai.Model
 	}
 	opts.Agent = &fixpr.AgentConfig{
-		Runtime:    agentRuntime,
-		Model:      model,
-		Endpoint:   s.ai.Endpoint,
-		ModelToken: s.ai.Token,
-		MaxTurns:   ar.MaxTurns,
-		AllowBash:  allowBash,
-		Timeout:    ar.ParsedTimeout(),
-		GitToken:   userToken,
+		Runtime:             agentRuntime,
+		API:                 s.ai.API,
+		SharedModelEndpoint: ar.Type != "orka",
+		Model:               model,
+		Endpoint:            s.ai.Endpoint,
+		ModelToken:          s.ai.Token,
+		MaxTurns:            ar.MaxTurns,
+		AllowBash:           allowBash,
+		Timeout:             ar.ParsedTimeout(),
+		GitToken:            userToken,
 	}
 	mgr := fixpr.NewManager(prClient,
 		filepath.Join(s.dataDir, "fix_pr_state.json"), opts)

@@ -87,9 +87,11 @@ type AgentConfig struct {
 	Runtime runtime.AgentRuntime
 	// Model, Endpoint, and ModelToken point the agent at the model. Empty Model
 	// uses the CLI default.
-	Model      string
-	Endpoint   string
-	ModelToken string
+	API                 string
+	SharedModelEndpoint bool
+	Model               string
+	Endpoint            string
+	ModelToken          string
 	// MaxTurns bounds the agent loop; zero uses the CLI default.
 	MaxTurns int
 	// AllowBash lets the agent run build/tests while fixing.

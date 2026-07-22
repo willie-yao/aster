@@ -73,3 +73,15 @@ func TestChatEncodingPreservesNilMessages(t *testing.T) {
 		t.Fatalf("decodeChatToolCalls(nil) = %#v, want nil", got)
 	}
 }
+
+func TestContinuationCallsPairsSkippedResponsesCalls(t *testing.T) {
+	msg := modelMessage{ToolCalls: []modelToolCall{{ID: "a"}, {ID: "b"}}}
+	echo, skipped := continuationCalls(APIResponses, msg, msg.ToolCalls[:1])
+	if len(echo) != 2 || len(skipped) != 1 || skipped[0].ToolCallID != "b" {
+		t.Fatalf("echo=%+v skipped=%+v", echo, skipped)
+	}
+	chatEcho, chatSkipped := continuationCalls(APIChatCompletions, msg, msg.ToolCalls[:1])
+	if len(chatEcho) != 1 || len(chatSkipped) != 0 {
+		t.Fatalf("chat echo=%+v skipped=%+v", chatEcho, chatSkipped)
+	}
+}

@@ -69,6 +69,7 @@ func runOnboard(args []string) {
 	// AI_TOKEN authenticates the chat-completions endpoint for prompt drafting.
 	// GITHUB_TOKEN reads the source repo's docs.
 	opts.AIToken = os.Getenv("AI_TOKEN")
+	opts.AIAPI = os.Getenv("AI_API")
 	opts.AIEndpoint = os.Getenv("AI_ENDPOINT")
 	opts.AIModel = os.Getenv("AI_MODEL")
 	opts.GitHubToken = os.Getenv("GITHUB_TOKEN")

@@ -176,6 +176,7 @@ func buildSystemPrompt(ctx context.Context, opts Options, data scaffoldData) (st
 
 	client := ai.NewClientWithOptions(ai.Options{
 		Token:    opts.AIToken,
+		API:      opts.AIAPI,
 		Endpoint: opts.AIEndpoint,
 		Model:    opts.AIModel,
 	})
@@ -192,6 +193,13 @@ func buildSystemPrompt(ctx context.Context, opts Options, data scaffoldData) (st
 const promptDraftTimeout = 3 * time.Minute
 
 func validateOptions(opts *Options) error {
+	if err := project.ValidateAIAPI(opts.AIAPI); err != nil {
+		return err
+	}
+	opts.AIAPI = strings.ToLower(strings.TrimSpace(opts.AIAPI))
+	if opts.AIAPI == "" {
+		opts.AIAPI = project.AIAPIChatCompletions
+	}
 	if (opts.TestGrid == "") == (opts.Bucket == "") {
 		return fmt.Errorf("provide exactly one of --testgrid or --bucket")
 	}
@@ -295,6 +303,7 @@ func buildScaffoldData(opts Options, cats []project.CategoryRule) scaffoldData {
 		IncludePresubmits: opts.IncludePresubmits,
 		EngineRef:         opts.EngineRef,
 		Mode:              mode,
+		AIAPI:             opts.AIAPI,
 		AIEndpoint:        opts.AIEndpoint,
 		AIModel:           opts.AIModel,
 		Namespace:         k8sName(derivedID(opts)),

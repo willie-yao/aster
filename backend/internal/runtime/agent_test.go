@@ -161,3 +161,9 @@ func TestWriteOpencodeConfig_BashDeniedByDefault(t *testing.T) {
 		t.Errorf("bash permission = %q, want deny (AllowBash=false)", cfg.Permission["bash"])
 	}
 }
+
+func TestOpenAIBaseResponses(t *testing.T) {
+	if got := openAIBase("https://api.example.test/v1/responses"); got != "https://api.example.test/v1" {
+		t.Fatalf("openAIBase = %q", got)
+	}
+}

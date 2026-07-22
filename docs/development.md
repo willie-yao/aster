@@ -42,7 +42,7 @@ For AI analysis:
 
 ```bash
 export AI_TOKEN=<token>
-export AI_ENDPOINT=<chat-completions-url>
+export AI_API=chat_completions AI_ENDPOINT=<provider-api-url>
 export AI_MODEL=<model-id>
 make fetch-data-ai-quick PROJECT_DIR=../my-consumer
 make dev

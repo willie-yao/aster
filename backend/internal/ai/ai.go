@@ -25,6 +25,7 @@ var callDelay = 500 * time.Millisecond
 type Client struct {
 	api       *httpAPIClient
 	transport modelTransport
+	apiMode   string
 	apiURL    string
 	model     string
 	cache     *Cache
@@ -35,6 +36,8 @@ type Client struct {
 type Options struct {
 	Token    string
 	CacheDir string
+	// API selects chat_completions (default) or responses.
+	API string
 	// Endpoint is the chat-completions URL the provider serves.
 	Endpoint string
 	// Model is the model identifier the provider expects.
@@ -49,12 +52,22 @@ type Options struct {
 // Model are used verbatim; callers are responsible for setting them.
 func NewClientWithOptions(opts Options) *Client {
 	api := newHTTPAPIClient(opts.Endpoint, opts.Token, opts.ExtraHeaders)
+	apiMode := strings.ToLower(strings.TrimSpace(opts.API))
+	if apiMode == "" {
+		apiMode = APIChatCompletions
+	}
+	var transport modelTransport
+	switch apiMode {
+	case APIChatCompletions:
+		transport = newChatCompletionsTransport(api)
+	case APIResponses:
+		transport = newResponsesTransport(api)
+	default:
+		transport = unsupportedTransport{api: apiMode}
+	}
 	return &Client{
-		api:       api,
-		transport: newChatCompletionsTransport(api),
-		apiURL:    opts.Endpoint,
-		model:     opts.Model,
-		cache:     NewCache(opts.CacheDir),
+		api: api, transport: transport, apiMode: apiMode,
+		apiURL: opts.Endpoint, model: opts.Model, cache: NewCache(opts.CacheDir),
 	}
 }
 
@@ -67,7 +80,11 @@ func (c *Client) ModelName() string { return c.model }
 // modelFingerprint hashes the model + endpoint so a provider or model swap
 // invalidates cached analyses produced by the prior model.
 func (c *Client) modelFingerprint() string {
-	sum := sha256.Sum256([]byte(c.model + "\x00" + c.apiURL))
+	fingerprint := c.model + "\x00" + c.apiURL
+	if c.apiMode != "" && c.apiMode != APIChatCompletions {
+		fingerprint += "\x00" + c.apiMode
+	}
+	sum := sha256.Sum256([]byte(fingerprint))
 	return hex.EncodeToString(sum[:8])
 }
 
@@ -182,12 +199,12 @@ func (c *Client) DetectContextWindowTokens(ctx context.Context) (int, bool) {
 // swapping the trailing "/chat/completions" for "/models". Returns ok=false
 // when the URL doesn't look like a chat-completions endpoint.
 func modelsURLFor(chatURL string) (string, bool) {
-	const suffix = "/chat/completions"
-	base, found := strings.CutSuffix(chatURL, suffix)
-	if !found {
-		return "", false
+	for _, suffix := range []string{"/chat/completions", "/responses"} {
+		if base, found := strings.CutSuffix(chatURL, suffix); found {
+			return base + "/models", true
+		}
 	}
-	return base + "/models", true
+	return "", false
 }
 
 // analysisResponse is the expected JSON structure from the analysis model.
