@@ -134,28 +134,34 @@ func (s *Service) SetTraceStore(store *TraceStore) {
 }
 
 // Analyze fills tc.AISummary and tc.AIAnalysis for a single failed test case
-// using the agentic tool-calling loop. Skips if already analyzed and still
-// meets the current quality floors. On API failure or endpoints without
-// function-calling, it leaves an "AI analysis unavailable" summary.
+// using the shared single-failure contract.
 func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, jobID, buildPrefix string, run *models.BuildResult, tc *models.TestCase) {
-	consec := s.consecutiveMap[consecutiveKey(jobID, tc.Name)]
-	if consec < 1 {
-		consec = 1
-	}
+	result, _ := s.AnalyzeFailure(ctx, httpClient, FailureAnalysisRequest{
+		JobID:               jobID,
+		BuildPrefix:         buildPrefix,
+		Build:               run.BuildInfo,
+		TestCase:            *tc,
+		ConsecutiveFailures: s.consecutiveMap[consecutiveKey(jobID, tc.Name)],
+	})
+	tc.AISummary = result.Summary
+	tc.AIAnalysis = result.Analysis
+}
+
+func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, buildPrefix string, run *models.BuildResult, tc *models.TestCase, consecutiveFailures int) error {
 	var trace *TraceSession
 	if s.traceStore != nil {
 		trace = s.traceStore.Start(TraceMetadata{JobID: jobID, BuildID: run.BuildID, TestName: tc.Name, APIMode: s.client.APIMode()})
 		ctx = withAnalysisTrace(ctx, trace)
 	}
-	if tc.AISummary != nil && tc.AIAnalysis != nil && !s.shouldReanalyze(tc) && !staleTransientVerdict(tc, consec) {
+	if tc.AISummary != nil && tc.AIAnalysis != nil && !s.shouldReanalyze(tc) && !staleTransientVerdict(tc, consecutiveFailures) {
 		recordTrace(ctx, TraceEvent{Kind: "cache", Outcome: "build_hit"})
 		trace.Finish("build_cache_hit", nil)
-		return
+		return nil
 	}
 
 	log.Printf("  🔍 Analyzing: %s [%s]", tc.Name, AgenticMode)
 
-	userPrompt := s.module.AnalysisPrompt(ctx, httpClient, run, tc, consec)
+	userPrompt := s.module.AnalysisPrompt(ctx, httpClient, run, tc, consecutiveFailures)
 
 	// Surface endpoints without function-calling as unavailable. There is no
 	// tools-free analysis path to degrade to.
@@ -163,21 +169,22 @@ func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, jobID, b
 		err := fmt.Errorf("AI endpoint requires function-calling support")
 		s.setUnavailable(tc, err)
 		trace.Finish("unavailable", err)
-		return
+		return err
 	}
-	summary, analysis, err := s.runAgentic(ctx, jobID, buildPrefix, run, tc, userPrompt, consec)
+	summary, analysis, err := s.runAgentic(ctx, jobID, buildPrefix, run, tc, userPrompt, consecutiveFailures)
 	if err != nil {
 		if errors.Is(err, ErrToolsUnsupported) {
 			s.toolsUnsupported.Store(true)
 			log.Printf("  ⚠ AI endpoint rejected tools; analysis unavailable: %v", err)
-			s.setUnavailable(tc, fmt.Errorf("AI endpoint requires function-calling support: %w", err))
+			unavailableErr := fmt.Errorf("AI endpoint requires function-calling support: %w", err)
+			s.setUnavailable(tc, unavailableErr)
 			trace.Finish("unavailable", err)
-			return
+			return unavailableErr
 		}
 		log.Printf("  ⚠ Agentic AI analysis failed for %s: %v", tc.Name, err)
 		s.setUnavailable(tc, err)
 		trace.Finish("error", err)
-		return
+		return err
 	}
 	tc.AISummary = summary
 	tc.AIAnalysis = analysis
@@ -190,6 +197,7 @@ func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, jobID, b
 	} else {
 		trace.Finish("success", nil)
 	}
+	return nil
 }
 
 // runAgentic does the per-failure agentic call setup. Kept separate so
