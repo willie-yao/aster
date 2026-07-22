@@ -108,6 +108,9 @@ type AIAnalysis struct {
 	// ContractHash identifies the Orka analysis contract that produced this
 	// result. The ingestor refreshes cached results when the current hash differs.
 	ContractHash string `json:"contract_hash,omitempty"`
+	// TaskName identifies the exact content-addressed Orka Task that produced
+	// this result. Empty for in-process analyses.
+	TaskName string `json:"task_name,omitempty"`
 
 	// ToolCalls is the number of agent tool invocations made during this
 	// analysis.

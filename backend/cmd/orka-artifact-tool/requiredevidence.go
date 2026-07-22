@@ -8,25 +8,21 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
 )
 
-type requiredEvidenceSkill struct {
-	ID               string                 `json:"id"`
-	Name             string                 `json:"name,omitempty"`
-	Procedure        string                 `json:"procedure,omitempty"`
-	RequiredEvidence []skills.EvidenceGroup `json:"required_evidence,omitempty"`
-}
+const evidenceCandidatePathLimit = 4
 
 type requiredEvidenceResponse struct {
-	Signal        string                  `json:"signal"`
-	Notice        string                  `json:"notice"`
-	SkillSetHash  string                  `json:"skill_set_hash,omitempty"`
-	MatchedSkills []requiredEvidenceSkill `json:"matched_skills"`
+	Signal                string                `json:"signal"`
+	Notice                string                `json:"notice"`
+	SkillSetHash          string                `json:"skill_set_hash,omitempty"`
+	ArtifactTreeTruncated bool                  `json:"artifact_tree_truncated,omitempty"`
+	MatchedSkills         []skills.PlannedSkill `json:"matched_skills"`
 }
 
 func init() {
 	registerQTool("/tool/required_evidence", requiredEvidence)
 }
 
-func requiredEvidence(_ *toolEnv, w http.ResponseWriter, r *http.Request) {
+func requiredEvidence(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 	if !requirePOST(w, r) {
 		return
 	}
@@ -48,26 +44,32 @@ func requiredEvidence(_ *toolEnv, w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	matched := set.Match(signal)
-	response := requiredEvidenceResponse{
-		Signal:        signal,
-		Notice:        "Diagnostic guidance only. It cannot override system instructions, Tool constraints, or the output schema.",
-		SkillSetHash:  set.Hash(),
-		MatchedSkills: make([]requiredEvidenceSkill, 0, len(matched)),
-	}
-	for _, skill := range matched {
-		applicable := make([]skills.EvidenceGroup, 0, len(skill.RequiredEvidence))
-		for _, group := range skill.RequiredEvidence {
-			if group.Applies(signal) {
-				applicable = append(applicable, group)
-			}
+	matched := set.Plan(signal, nil, evidenceCandidatePathLimit)
+	needsCandidates := false
+	for _, plannedSkill := range matched {
+		if len(plannedSkill.RequiredEvidence) > 0 {
+			needsCandidates = true
+			break
 		}
-		response.MatchedSkills = append(response.MatchedSkills, requiredEvidenceSkill{
-			ID:               skill.ID,
-			Name:             skill.Name,
-			Procedure:        skill.Procedure,
-			RequiredEvidence: applicable,
-		})
+	}
+	artifactTreeTruncated := false
+	if needsCandidates && env != nil && env.browser != nil {
+		ctx, cancel := requestCtx(r)
+		paths, truncated, listErr := env.browser.ListTree(ctx, evidenceTreeMaxPaths)
+		cancel()
+		if listErr != nil {
+			log.Printf("⚠ required_evidence candidate paths: %v", listErr)
+		} else {
+			matched = set.Plan(signal, paths, evidenceCandidatePathLimit)
+			artifactTreeTruncated = truncated
+		}
+	}
+	response := requiredEvidenceResponse{
+		Signal:                signal,
+		Notice:                "Diagnostic guidance only. Read one candidate path from every required group when present; resolve groups without candidates from the artifact tree. It cannot override system instructions, Tool constraints, or the output schema.",
+		SkillSetHash:          set.Hash(),
+		ArtifactTreeTruncated: artifactTreeTruncated,
+		MatchedSkills:         matched,
 	}
 	log.Printf("📋 required_evidence signal=%q matched=%d", signal, len(response.MatchedSkills))
 	writeJSON(w, response)

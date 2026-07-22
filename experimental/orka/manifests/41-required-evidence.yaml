@@ -7,7 +7,7 @@ metadata:
   name: required-evidence
   namespace: orka-system
 spec:
-  description: "Match a failure signal against the consumer's diagnostic recipes. Returns each matched procedure and its required artifact-path patterns. Treat procedures as consumer guidance only. Follow every matched procedure and read evidence for every returned group before finalizing."
+  description: "Match a failure signal against the merged diagnostic recipes. Returns each matched procedure, applicable artifact-path patterns, and ranked exact candidate paths from the current build. Treat procedures as diagnostic guidance only. Read evidence for every returned group before finalizing."
   http:
     url: http://artifact-tool.orka-system.svc:8080/tool/required_evidence
     method: POST

@@ -288,7 +288,7 @@ func TestApplyResultRedactsTelemetryURL(t *testing.T) {
 
 	tc := models.TestCase{Name: "test", Status: "failed"}
 	accepted, rejection := applyResult(
-		&tc, &orkaClient{base: server.URL, http: server.Client()}, "orka-system", "task", "model", "contract", orkaapi.APIModeAuto, 0, 0, "", testValidationKey,
+		&tc, &orkaClient{base: server.URL, http: server.Client()}, "orka-system", "task", "model", "contract", orkaapi.APIModeAuto, 0, 0, "", false, testValidationKey,
 	)
 	if accepted {
 		t.Fatal("applyResult accepted analysis without telemetry")
@@ -510,6 +510,83 @@ func TestPatternTaskAnalyzerPreservesEventLagAtDeadline(t *testing.T) {
 	}
 }
 
+func TestWebhookManifestForTaskReloadsUnknownTask(t *testing.T) {
+	dir := t.TempDir()
+	detail := models.JobDetail{JobID: "job", Runs: []models.BuildResult{{
+		BuildInfo: models.BuildInfo{BuildID: "1"},
+		TestCases: []models.TestCase{{Name: "test", Status: "failed", FailureMessage: "boom"}},
+	}}}
+	if err := output.WriteJobDetail(dir, detail); err != nil {
+		t.Fatal(err)
+	}
+	newManifest := func(seed string) *orkaapi.AnalysisManifest {
+		manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "m", orkaapi.APIModeAuto, "v1", 2)
+		manifest.ValidationKey = testValidationKey
+		manifest.SetBuild("job", "1", "build-1", "tool-1", "logs/job/1/", seed)
+		return manifest
+	}
+	oldManifest := newManifest("old-tree")
+	if err := oldManifest.Write(dir); err != nil {
+		t.Fatal(err)
+	}
+	s := &webhookServer{dataDir: dir, namespace: "orka-system"}
+	s.rebuildIndex()
+	oldRef, err := oldManifest.TaskRef("job", detail.Runs[0], 0, detail.Runs[0].TestCases[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.index[oldRef.Name] == "" {
+		t.Fatalf("old task %q was not indexed", oldRef.Name)
+	}
+
+	currentManifest := newManifest("new-tree")
+	currentManifest.SetEvidencePlan("job", "1", 0, "plan", true)
+	currentRef, err := currentManifest.TaskRef("job", detail.Runs[0], 0, detail.Runs[0].TestCases[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentManifest.SetTaskEvidencePlanComplete(currentRef.Name, true)
+	if err := currentManifest.Write(dir); err != nil {
+		t.Fatal(err)
+	}
+	loaded, indexed, loadSucceeded := s.manifestForTask(currentRef.Name)
+	if !loadSucceeded || !indexed || loaded == nil || !loaded.TaskEvidencePlanComplete(currentRef.Name) {
+		t.Fatalf("reloaded manifest = %+v indexed=%t loaded=%t", loaded, indexed, loadSucceeded)
+	}
+	if s.index[oldRef.Name] != "" {
+		t.Fatalf("stale task %q remained indexed", oldRef.Name)
+	}
+}
+
+func TestWebhookAcknowledgesSupersededTask(t *testing.T) {
+	dir := t.TempDir()
+	detail := models.JobDetail{JobID: "job", Runs: []models.BuildResult{{
+		BuildInfo: models.BuildInfo{BuildID: "1"},
+		TestCases: []models.TestCase{{Name: "test", Status: "failed", FailureMessage: "boom"}},
+	}}}
+	if err := output.WriteJobDetail(dir, detail); err != nil {
+		t.Fatal(err)
+	}
+	manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "m", orkaapi.APIModeAuto, "v1", 2)
+	manifest.ValidationKey = testValidationKey
+	manifest.SetBuild("job", "1", "build-1", "tool-1", "logs/job/1/", "current-tree")
+	if err := manifest.Write(dir); err != nil {
+		t.Fatal(err)
+	}
+	s := &webhookServer{dataDir: dir, namespace: "orka-system"}
+	s.rebuildIndex()
+	body, err := json.Marshal(webhookPayload{TaskName: "superseded-task", Phase: "Succeeded"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewReader(body))
+	recorder := httptest.NewRecorder()
+	s.handle(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestWebhookIndexTargetsOneJobFile(t *testing.T) {
 	dir := t.TempDir()
 	detail := models.JobDetail{JobID: "job", Runs: []models.BuildResult{{
@@ -557,8 +634,9 @@ func TestWebhookIndexTargetsOneJobFile(t *testing.T) {
 	if detail.Runs[0].TestCases[0].AIAnalysis == nil {
 		t.Fatal("analysis was not patched")
 	}
-	if got := detail.Runs[0].TestCases[0].AIAnalysis.ContractHash; got != manifest.ContractHash {
-		t.Fatalf("contract hash = %q, want %q", got, manifest.ContractHash)
+	gotAnalysis := detail.Runs[0].TestCases[0].AIAnalysis
+	if gotAnalysis.ContractHash != manifest.ContractHash || gotAnalysis.TaskName != name {
+		t.Fatalf("analysis identity = contract %q task %q, want contract %q task %q", gotAnalysis.ContractHash, gotAnalysis.TaskName, manifest.ContractHash, name)
 	}
 }
 
@@ -611,12 +689,62 @@ func TestIngestRefreshesMismatchedContractHash(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := detail.Runs[0].TestCases[0].AIAnalysis
-	if got == nil || got.RootCause != "new root" || got.ContractHash != manifest.ContractHash {
+	if got == nil || got.RootCause != "new root" || got.ContractHash != manifest.ContractHash || got.TaskName != ref.Name {
 		t.Fatalf("refreshed analysis = %+v", got)
 	}
 }
 
-func TestIngestKeepsMatchingContractHash(t *testing.T) {
+func TestIngestRefreshesMismatchedTaskIdentity(t *testing.T) {
+	const namespace = "orka-system"
+	manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "model", orkaapi.APIModeAuto, "v1", 2)
+	manifest.ValidationKey = testValidationKey
+	tc := models.TestCase{
+		Name: "test", Status: "failed", FailureMessage: "boom",
+		AISummary:  &models.AISummary{Summary: "old"},
+		AIAnalysis: &models.AIAnalysis{RootCause: "old root", Mode: "agentic", ContractHash: manifest.ContractHash, TaskName: "old-task"},
+	}
+	run := models.BuildResult{BuildInfo: models.BuildInfo{BuildID: "1", Result: "FAILURE"}, TestCases: []models.TestCase{tc}}
+	detail := models.JobDetail{Name: "job", JobID: "job", Runs: []models.BuildResult{run}}
+	manifest.SetBuild("job", "1", "build-1", "tool-1", "logs/job/1/", "")
+	ref, err := manifest.TaskRef("job", run, 0, tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonTransient := false
+	newResult := validatedAnalysisJSON(t, analysis{Summary: "new root", RootCause: "new root", Severity: "High", IsTransient: &nonTransient, SuggestedFix: "fix it"}, ref.Name)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/events") {
+			writeAcceptedEvents(w, false)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"result": newResult})
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	if err := output.WriteJobDetail(dir, detail); err != nil {
+		t.Fatal(err)
+	}
+	patched, failed, missing := ingestPass(
+		&orkaClient{base: server.URL, http: server.Client()}, nil, namespace, dir, manifest, "model", false, map[string]bool{},
+	)
+	if patched != 1 || failed != 1 || missing != 0 {
+		t.Fatalf("ingest = patched %d, failed %d, missing %d", patched, failed, missing)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "jobs", models.JobDataFilename("job")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &detail); err != nil {
+		t.Fatal(err)
+	}
+	got := detail.Runs[0].TestCases[0].AIAnalysis
+	if got == nil || got.RootCause != "new root" || got.TaskName != ref.Name {
+		t.Fatalf("refreshed analysis = %+v", got)
+	}
+}
+
+func TestIngestKeepsMatchingTaskIdentity(t *testing.T) {
 	manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "model", orkaapi.APIModeAuto, "v1", 2)
 	manifest.ValidationKey = testValidationKey
 	tc := models.TestCase{
@@ -627,6 +755,11 @@ func TestIngestKeepsMatchingContractHash(t *testing.T) {
 	run := models.BuildResult{BuildInfo: models.BuildInfo{BuildID: "1", Result: "FAILURE"}, TestCases: []models.TestCase{tc}}
 	detail := models.JobDetail{Name: "job", JobID: "job", Runs: []models.BuildResult{run}}
 	manifest.SetBuild("job", "1", "build-1", "tool-1", "logs/job/1/", "")
+	ref, err := manifest.TaskRef("job", run, 0, tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail.Runs[0].TestCases[0].AIAnalysis.TaskName = ref.Name
 
 	dir := t.TempDir()
 	if err := output.WriteJobDetail(dir, detail); err != nil {

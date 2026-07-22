@@ -90,6 +90,24 @@ func TestToolScopeTracksContract(t *testing.T) {
 	}
 }
 
+func TestFailureEvidenceSignalExcludesProducerInstructions(t *testing.T) {
+	body := strings.Repeat("b", failureBodyPromptBytes+100) + "body-tail"
+	signal := FailureEvidenceSignal(models.TestCase{
+		Name: "worker node timeout", FailureLocation: "test/e2e.go:42", JUnitFile: "junit.xml",
+		FailureMessage: "MachineDeployment did not create a node", FailureBody: body,
+	})
+	for _, want := range []string{"worker node timeout", "test/e2e.go:42", "junit.xml", "MachineDeployment", "body-tail"} {
+		if !strings.Contains(signal, want) {
+			t.Errorf("failure signal missing %q: %s", want, signal)
+		}
+	}
+	for _, forbidden := range []string{"classify transient", "Investigate the build", "CI test FAILED"} {
+		if strings.Contains(signal, forbidden) {
+			t.Errorf("failure signal contains producer instruction %q: %s", forbidden, signal)
+		}
+	}
+}
+
 func TestFailurePromptIncludesShardAndLocation(t *testing.T) {
 	prompt := FailurePrompt("project", "job", "logs/job/1/", models.TestCase{
 		Name: "test", FailureLocation: "test/e2e/foo.go:42", JUnitFile: "junit-03.xml", FailureMessage: "boom",

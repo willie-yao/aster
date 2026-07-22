@@ -68,6 +68,7 @@ export interface AIAnalysis {
   file_links?: Record<string, string>;
   mode?: string;
   contract_hash?: string;
+  task_name?: string;
   // Optional per-analysis telemetry emitted by the backend. Cached analyses may
   // omit metrics or record zero when a metric is unavailable.
   tool_calls?: number;

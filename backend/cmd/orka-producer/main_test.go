@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +18,109 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
+
+func TestInitialEvidencePlanUsesProfileCandidates(t *testing.T) {
+	set, selection, err := skills.LoadForTools(t.TempDir(), []string{"filesystem", "k8s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !selection.Kubernetes {
+		t.Fatal("Kubernetes profile was not selected")
+	}
+	tc := models.TestCase{
+		Name:           "Creating a Flatcar sysext cluster with worker nodes",
+		FailureMessage: "Timed out waiting for nodes to be created for MachineDeployment capz-e2e-asfxe1-flatcar-sysext-md-0",
+	}
+	paths := []string{
+		"build-log.txt",
+		"artifacts/junit.e2e_suite.1.xml",
+		"artifacts/clusters/bootstrap/resources/capz-e2e-asfxe1/Machine/capz-e2e-asfxe1-flatcar-sysext-md-0-q6m8d.yaml",
+		"artifacts/clusters/capz-e2e-asfxe1-flatcar-sysext/nodes/node-1/node-describe.txt",
+	}
+	plan, complete, initialHeader, err := initialEvidencePlan(set, tc, paths, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if initialHeader == "" {
+		t.Fatal("initial evidence header is empty")
+	}
+	initialContract, err := skills.ParseInitialEvidenceHeader(initialHeader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initialGroups := map[string]bool{}
+	for _, requirement := range initialContract.Requirements {
+		initialGroups[requirement.SkillID+":"+requirement.Group.ID] = true
+	}
+	for _, want := range []string{
+		"engine.kubernetes.machine-node-providerid:machine-state",
+		"engine.kubernetes.machine-node-providerid:node-state",
+		"engine.prow.failure-evidence:build-log",
+		"engine.prow.failure-evidence:junit-failure",
+	} {
+		if !initialGroups[want] {
+			t.Errorf("initial evidence header missing %q: %+v", want, initialGroups)
+		}
+	}
+	if complete {
+		t.Fatal("truncated evidence tree produced a complete plan")
+	}
+	for _, want := range []string{
+		"Required evidence plan", "engine.kubernetes.machine-node-providerid",
+		"machine-state", paths[2], "node-state", paths[3], "scan was truncated",
+	} {
+		if !strings.Contains(plan, want) {
+			t.Errorf("evidence plan missing %q: %s", want, plan)
+		}
+	}
+	if strings.Contains(plan, "engine.prow.run-context") {
+		t.Fatalf("producer boilerplate selected run-context profile: %s", plan)
+	}
+	if matched := set.Match(orka.FailurePrompt("BENCH", "job", "logs/job/1/", tc, 0)); !hasSkill(matched, "engine.prow.run-context") {
+		t.Fatalf("test fixture no longer proves full-prompt boilerplate can match run-context: %+v", matched)
+	}
+	_, complete, _, err = initialEvidencePlan(set, tc, paths, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !complete {
+		t.Fatal("fully resolved initial evidence plan was marked incomplete")
+	}
+}
+
+func TestInitialEvidencePlanFallsBackWhenHeaderIsOversized(t *testing.T) {
+	patterns := make([]string, 600)
+	for i := range patterns {
+		patterns[i] = fmt.Sprintf("path/%x", sha256.Sum256([]byte(fmt.Sprintf("pattern-%d", i))))
+	}
+	data, err := json.Marshal(skills.Contract{Skills: []skills.Skill{{
+		ID: "large", Triggers: []string{"Failed test"},
+		RequiredEvidence: []skills.EvidenceGroup{{ID: "logs", AnyOf: patterns}},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, err := skills.ParseContract(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt, complete, header, err := initialEvidencePlan(set, models.TestCase{Name: "test"}, nil, false)
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("initial evidence error = %v", err)
+	}
+	if prompt != "" || complete || header != "" {
+		t.Fatalf("failed plan = prompt %q complete %t header %q", prompt, complete, header)
+	}
+}
+
+func hasSkill(matched []skills.Skill, id string) bool {
+	for _, skill := range matched {
+		if skill.ID == id {
+			return true
+		}
+	}
+	return false
+}
 
 func TestLoadConsecutiveFailures(t *testing.T) {
 	dir := t.TempDir()

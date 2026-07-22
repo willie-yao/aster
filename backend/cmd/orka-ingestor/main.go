@@ -289,9 +289,10 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir st
 			continue
 		}
 		type pendingTest struct {
-			tc    *models.TestCase
-			name  string
-			stale bool
+			tc                   *models.TestCase
+			name                 string
+			stale                bool
+			evidencePlanComplete bool
 		}
 		var pending []pendingTest
 		var changed atomic.Bool
@@ -313,10 +314,13 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir st
 					continue
 				}
 				builds[ref.ToolScope] = true
-				if tc.AIAnalysis != nil && tc.AIAnalysis.ContractHash == manifest.ContractHash {
+				if analysisCurrent(tc.AIAnalysis, manifest.ContractHash, ref.Name) {
 					continue // already patched by an earlier pass
 				}
-				pending = append(pending, pendingTest{tc: tc, name: ref.Name, stale: tc.AIAnalysis != nil})
+				pending = append(pending, pendingTest{
+					tc: tc, name: ref.Name, stale: tc.AIAnalysis != nil,
+					evidencePlanComplete: manifest.TaskEvidencePlanComplete(ref.Name),
+				})
 			}
 		}
 		var patchedCount, missingCount atomic.Int64
@@ -328,7 +332,7 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir st
 			go func(item pendingTest) {
 				defer wg.Done()
 				defer func() { <-sem }()
-				accepted, rejection := applyResult(item.tc, client, namespace, item.name, model, manifest.ContractHash, manifest.APIMode, manifest.MinToolCalls, manifest.MinGCSBytes, manifest.SkillSetHash, manifest.ValidationKey)
+				accepted, rejection := applyResult(item.tc, client, namespace, item.name, model, manifest.ContractHash, manifest.APIMode, manifest.MinToolCalls, manifest.MinGCSBytes, manifest.SkillSetHash, item.evidencePlanComplete, manifest.ValidationKey)
 				if accepted {
 					patchedCount.Add(1)
 					changed.Store(true)
@@ -380,7 +384,7 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir st
 
 // applyResult fetches taskName's result, parses the analysis, and patches it
 // onto tc. Returns true if it patched (result available and parseable).
-func applyResult(tc *models.TestCase, client *orkaClient, namespace, taskName, model, contractHash, apiMode string, minToolCalls, minGCSBytes int, skillSetHash, validationKey string) (bool, string) {
+func applyResult(tc *models.TestCase, client *orkaClient, namespace, taskName, model, contractHash, apiMode string, minToolCalls, minGCSBytes int, skillSetHash string, evidencePlanComplete bool, validationKey string) (bool, string) {
 	result, ok := client.result(namespace, taskName)
 	if !ok {
 		return false, ""
@@ -393,14 +397,14 @@ func applyResult(tc *models.TestCase, client *orkaClient, namespace, taskName, m
 	if err != nil {
 		return false, rejectionReason("analysis Task telemetry unavailable: ", err)
 	}
-	if err := validateAnalysisAcceptance(a, telemetry, taskName, apiMode, minToolCalls, minGCSBytes, skillSetHash, validationKey); err != nil {
+	if err := validateAnalysisAcceptance(a, telemetry, taskName, apiMode, minToolCalls, minGCSBytes, skillSetHash, evidencePlanComplete, validationKey); err != nil {
 		return false, rejectionReason("analysis Task failed acceptance: ", err)
 	}
-	applyParsedAnalysis(tc, a, telemetry, model, contractHash, skillSetHash)
+	applyParsedAnalysis(tc, a, telemetry, model, contractHash, skillSetHash, taskName)
 	return true, ""
 }
 
-func applyParsedAnalysis(tc *models.TestCase, a analysis, telemetry analysisTelemetry, model, contractHash, skillSetHash string) {
+func applyParsedAnalysis(tc *models.TestCase, a analysis, telemetry analysisTelemetry, model, contractHash, skillSetHash, taskName string) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	gcsBytes := 0
 	if a.GCSBytes != nil {
@@ -419,6 +423,7 @@ func applyParsedAnalysis(tc *models.TestCase, a analysis, telemetry analysisTele
 		RelevantFiles:          a.RelevantFiles,
 		Mode:                   "agentic",
 		ContractHash:           contractHash,
+		TaskName:               taskName,
 		ToolCalls:              telemetry.ToolCalls,
 		ToolFailures:           telemetry.ToolFailures,
 		ModelRequests:          telemetry.ModelRequests,
@@ -554,14 +559,14 @@ func (s *webhookServer) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if orka.TerminalPhase(p.Phase) {
-		s.mu.Lock()
-		if s.manifest == nil {
-			s.rebuildIndex()
-		}
-		manifest := s.manifest
-		s.mu.Unlock()
-		if manifest == nil {
+		manifest, indexed, loaded := s.manifestForTask(p.TaskName)
+		if !loaded || manifest == nil {
 			http.Error(w, "analysis manifest unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if !indexed {
+			log.Printf("ⓘ ignoring superseded analysis Task webhook %s", p.TaskName)
+			w.WriteHeader(http.StatusOK)
 			return
 		}
 		patch := s.preparePatch(p, manifest)
@@ -578,12 +583,23 @@ func (s *webhookServer) handle(w http.ResponseWriter, r *http.Request) {
 
 type preparedPatch struct {
 	analysis     *analysis
+	taskName     string
 	telemetry    analysisTelemetry
 	model        string
 	contractHash string
 	skillSetHash string
 	reason       string
 	retry        bool
+}
+
+func (s *webhookServer) manifestForTask(taskName string) (*orka.AnalysisManifest, bool, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	loaded := true
+	if s.manifest == nil || s.index[taskName] == "" {
+		loaded = s.rebuildIndex()
+	}
+	return s.manifest, s.index[taskName] != "", loaded
 }
 
 func (s *webhookServer) preparePatch(p webhookPayload, manifest *orka.AnalysisManifest) preparedPatch {
@@ -602,18 +618,18 @@ func (s *webhookServer) preparePatch(p webhookPayload, manifest *orka.AnalysisMa
 	if err != nil {
 		return preparedPatch{reason: rejectionReason("analysis Task telemetry unavailable: ", err), retry: true}
 	}
-	if err := validateAnalysisAcceptance(parsed, telemetry, p.TaskName, manifest.APIMode, manifest.MinToolCalls, manifest.MinGCSBytes, manifest.SkillSetHash, manifest.ValidationKey); err != nil {
+	if err := validateAnalysisAcceptance(parsed, telemetry, p.TaskName, manifest.APIMode, manifest.MinToolCalls, manifest.MinGCSBytes, manifest.SkillSetHash, manifest.TaskEvidencePlanComplete(p.TaskName), manifest.ValidationKey); err != nil {
 		retry := telemetry.EventCount == 0 || telemetry.TaskOutcome == ""
 		return preparedPatch{reason: rejectionReason("analysis Task failed acceptance: ", err), retry: retry}
 	}
 	return preparedPatch{analysis: &parsed, telemetry: telemetry, model: manifest.Model, contractHash: manifest.ContractHash, skillSetHash: manifest.SkillSetHash}
 }
 
-func (s *webhookServer) rebuildIndex() {
+func (s *webhookServer) rebuildIndex() bool {
 	manifest, err := orka.LoadAnalysisManifest(s.dataDir)
 	if err != nil {
 		log.Printf("load analysis manifest for webhook index: %v", err)
-		return
+		return false
 	}
 	s.manifest = manifest
 	s.index = map[string]string{}
@@ -643,9 +659,11 @@ func (s *webhookServer) rebuildIndex() {
 			}
 		}
 	}
+	return true
 }
 
 func (s *webhookServer) patchTask(p webhookPayload, patch preparedPatch) {
+	patch.taskName = p.TaskName
 	jf := s.index[p.TaskName]
 	if jf == "" {
 		s.rebuildIndex()
@@ -686,16 +704,20 @@ func (s *webhookServer) patchTask(p webhookPayload, patch preparedPatch) {
 }
 
 func (s *webhookServer) applyPrepared(tc *models.TestCase, patch preparedPatch) bool {
-	if tc.AIAnalysis != nil && tc.AIAnalysis.ContractHash == patch.contractHash {
+	if analysisCurrent(tc.AIAnalysis, patch.contractHash, patch.taskName) {
 		return false
 	}
 	if patch.analysis != nil {
-		applyParsedAnalysis(tc, *patch.analysis, patch.telemetry, patch.model, patch.contractHash, patch.skillSetHash)
+		applyParsedAnalysis(tc, *patch.analysis, patch.telemetry, patch.model, patch.contractHash, patch.skillSetHash, patch.taskName)
 		return true
 	}
 	tc.AISummary = nil
 	tc.AIAnalysis = nil
 	return setUnavailable(tc, patch.reason)
+}
+
+func analysisCurrent(a *models.AIAnalysis, contractHash, taskName string) bool {
+	return a != nil && a.ContractHash == contractHash && a.TaskName == taskName
 }
 
 // analysis is the model's output JSON shape.
@@ -790,7 +812,7 @@ func validateAnalysisShape(a analysis) error {
 	return nil
 }
 
-func validateAnalysisAcceptance(a analysis, telemetry analysisTelemetry, taskName, expectedAPIMode string, minToolCalls, minGCSBytes int, skillSetHash, validationKey string) error {
+func validateAnalysisAcceptance(a analysis, telemetry analysisTelemetry, taskName, expectedAPIMode string, minToolCalls, minGCSBytes int, skillSetHash string, evidencePlanComplete bool, validationKey string) error {
 	if a.GCSBytes == nil || *a.GCSBytes < 0 {
 		return fmt.Errorf("gcs_bytes is required and must be non-negative")
 	}
@@ -815,13 +837,14 @@ func validateAnalysisAcceptance(a analysis, telemetry analysisTelemetry, taskNam
 	if *a.GCSBytes < minGCSBytes {
 		return fmt.Errorf("only %d GCS byte(s), need at least %d", *a.GCSBytes, minGCSBytes)
 	}
+	requireEvidenceLookup := skillSetHash != "" && !evidencePlanComplete
 	for name, outcome := range telemetry.qualityToolOutcomes {
-		if outcome == "failed" && requiredQualityTool(name, *a.IsTransient, skillSetHash != "") {
+		if outcome == "failed" && requiredQualityTool(name, *a.IsTransient, requireEvidenceLookup) {
 			return fmt.Errorf("required quality tool %s failed without a successful retry", name)
 		}
 	}
-	if skillSetHash != "" && telemetry.qualityToolOutcomes["required_evidence"] != "completed" {
-		return fmt.Errorf("analysis did not consult consumer required_evidence")
+	if requireEvidenceLookup && telemetry.qualityToolOutcomes["required_evidence"] != "completed" {
+		return fmt.Errorf("analysis did not consult required_evidence for an incomplete initial plan")
 	}
 	if !telemetry.ValidationPassed {
 		return fmt.Errorf("analysis did not successfully complete submit_analysis")
@@ -832,14 +855,14 @@ func validateAnalysisAcceptance(a analysis, telemetry analysisTelemetry, taskNam
 	return nil
 }
 
-func requiredQualityTool(name string, transient, hasSkills bool) bool {
+func requiredQualityTool(name string, transient, requireEvidenceLookup bool) bool {
 	switch name {
 	case "validate_analysis", "submit_analysis":
 		return true
 	case "verify_timeline":
 		return transient
 	case "required_evidence":
-		return hasSkills
+		return requireEvidenceLookup
 	default:
 		return false
 	}

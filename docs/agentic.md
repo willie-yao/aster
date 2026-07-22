@@ -659,24 +659,29 @@ builds gets two separate agentic analyses.
 
 On the Orka backend the cache is the Kubernetes object store itself. Before a
 Task is created, the producer includes the bounded JUnit failure message and
-failure body and prepends a filtered, byte-capped artifact path tree. This gives
-the first model turn the same exact failure and path evidence as the in-process
-seed. Each artifact listing is capped at 10 seconds, and the producer stops
-optional seed work after a 45-second run-wide budget so storage stalls cannot
-delay Task creation indefinitely. The validated-analysis worker retains a
-compact ledger of successful Tool observations and evidence tokens, and
+failure body and prepends a filtered, byte-capped artifact path tree. It also
+matches diagnostic recipes against bounded failure evidence without producer instructions and prepends a bounded
+required-evidence plan with ranked exact artifact candidates. This gives weaker
+models a direct investigation checklist instead of relying on a voluntary first
+`required_evidence` call. Each artifact listing is capped at 10 seconds, and the
+producer stops optional seed work after a 45-second run-wide budget so storage
+stalls cannot delay Task creation indefinitely. The validated-analysis worker
+retains a compact ledger of successful Tool observations and evidence tokens, and
 proactively compacts old message blocks before the provider rejects an oversized
 request.
 
 Each Task name fingerprints project, storage, job, build, exact test index,
-rendered failure prompt, artifact-tree seed hash, provider/model, timeout/retry,
-and Tool definitions.
+rendered failure prompt, artifact-tree seed hash, evidence-plan hash,
+provider/model, timeout/retry, and Tool definitions.
 Re-applying an unchanged Task is a no-op. `-version` remains a manual override
 for semantic changes outside that fingerprint. There is no on-disk response cache file; a
 private `orka_analysis.json` manifest carries the producer identity contract to
-the ingestor and is never served or published. Ingested analyses store that
-contract hash, so cached job JSON is refreshed whenever the current contract
-changes. Tool resources use a contract-versioned scope as well, preventing an
+the ingestor and is never served or published. Ingested analyses store both the
+contract hash and exact Task name, so cached job JSON is refreshed whenever the
+contract or per-test evidence plan changes. Event-driven ingestion reloads the
+private manifest before validating a Task absent from its current index. A load
+failure returns 503; a successfully loaded manifest that excludes the Task
+acknowledges it as superseded. Tool resources use a contract-versioned scope as well, preventing an
 old Task from observing a newly applied Tool definition. Producer waves bound
 per-test submissions, and `Task.spec.execution` places both per-test and pattern
 worker pods without changing semantic cache identity. Successful Tasks keep their
@@ -692,16 +697,21 @@ content read. The final token is keyed by a producer-generated secret carried
 only in the private manifest and a per-Task submit Tool's hidden headers, so it cannot be recomputed for a different final object or replayed by another Task. Recipe groups absent from a complete bounded
 artifact-tree listing are treated as inapplicable, matching the in-process
 critique path. Signed evidence tokens carry the successful artifact-read byte count, which is enforced and published as `AIAnalysis.GCSBytes`. Acceptance also requires a completed `verify_timeline` call for
-every transient verdict. `submit_analysis`, conditional timeline verification,
-and matched-skill `required_evidence` are required quality gates. Failures from
+every transient verdict. `submit_analysis` and conditional timeline verification
+are required quality gates. `required_evidence` remains required when the initial
+evidence plan is truncated, omitted, unmatched, or lacks a candidate. Failures from
 `recurrence`, `diff_last_passing`, and `check_transient_signatures` remain visible
 in telemetry but are advisory and do not discard an otherwise valid analysis.
 Accepted analyses publish Tool/model failures, retry
 count, context truncations, duration, provider token usage, stop reason, and
 quality-tool evidence alongside the result. The complete merged skill contract
 is compiled into the scoped `required_evidence` Tool, and its hash participates
-in the Task fingerprint. Acceptance requires a completed recipe lookup before
-publishing the result. The Orka tool set also
+in the Task fingerprint. A complete precomputed plan satisfies recipe lookup; an
+incomplete plan requires a completed Tool call before publishing the result.
+Regardless of lookup, `submit_analysis` validates the initially planned groups
+together with groups matched from the final diagnosis and preserves their
+original ranked candidates in rejection responses. An oversized per-Task header
+falls back to mandatory lookup rather than blocking Task production. The Orka tool set also
 includes `diff_last_passing` for targeted regression comparisons. After batch pattern finalization,
 the Orka ingestor runs the same notification, issue, and fix-PR reconciliation
 stage as the in-process fetcher.

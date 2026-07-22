@@ -71,24 +71,24 @@ func TestSummarizeEventsRequiresCompletedValidation(t *testing.T) {
 func TestValidateAnalysisAcceptance(t *testing.T) {
 	transient, nonTransient := true, false
 	valid := withValidation(analysis{Summary: "summary", RootCause: "cause", Severity: "High", IsTransient: &nonTransient, SuggestedFix: "fix"})
-	if err := validateAnalysisAcceptance(valid, analysisTelemetry{APIMode: orkaapi.APIModeResponses, EventCount: 4, ToolCalls: 2, ValidationPassed: true, TaskOutcome: "succeeded"}, "task", orkaapi.APIModeAuto, 2, 0, "", testValidationKey); err != nil {
+	if err := validateAnalysisAcceptance(valid, analysisTelemetry{APIMode: orkaapi.APIModeResponses, EventCount: 4, ToolCalls: 2, ValidationPassed: true, TaskOutcome: "succeeded"}, "task", orkaapi.APIModeAuto, 2, 0, "", false, testValidationKey); err != nil {
 		t.Fatalf("valid non-transient analysis rejected: %v", err)
 	}
-	if err := validateAnalysisAcceptance(valid, analysisTelemetry{APIMode: orkaapi.APIModeChatCompletions, EventCount: 4, ToolCalls: 2, ValidationPassed: true, TaskOutcome: "succeeded"}, "task", orkaapi.APIModeResponses, 2, 0, "", testValidationKey); err == nil || !strings.Contains(err.Error(), "expected responses") {
+	if err := validateAnalysisAcceptance(valid, analysisTelemetry{APIMode: orkaapi.APIModeChatCompletions, EventCount: 4, ToolCalls: 2, ValidationPassed: true, TaskOutcome: "succeeded"}, "task", orkaapi.APIModeResponses, 2, 0, "", false, testValidationKey); err == nil || !strings.Contains(err.Error(), "expected responses") {
 		t.Fatalf("API mode mismatch error = %v", err)
 	}
-	if err := validateAnalysisAcceptance(valid, analysisTelemetry{APIMode: orkaapi.APIModeResponses, EventCount: 4, ToolCalls: 1, ValidationPassed: true, TaskOutcome: "succeeded"}, "task", orkaapi.APIModeAuto, 2, 0, "", testValidationKey); err == nil {
+	if err := validateAnalysisAcceptance(valid, analysisTelemetry{APIMode: orkaapi.APIModeResponses, EventCount: 4, ToolCalls: 1, ValidationPassed: true, TaskOutcome: "succeeded"}, "task", orkaapi.APIModeAuto, 2, 0, "", false, testValidationKey); err == nil {
 		t.Fatal("analysis below the tool-call floor was accepted")
 	}
-	if err := validateAnalysisAcceptance(valid, analysisTelemetry{APIMode: orkaapi.APIModeResponses, EventCount: 4, ToolCalls: 2, TaskOutcome: "succeeded"}, "task", orkaapi.APIModeAuto, 2, 0, "", testValidationKey); err == nil {
+	if err := validateAnalysisAcceptance(valid, analysisTelemetry{APIMode: orkaapi.APIModeResponses, EventCount: 4, ToolCalls: 2, TaskOutcome: "succeeded"}, "task", orkaapi.APIModeAuto, 2, 0, "", false, testValidationKey); err == nil {
 		t.Fatal("analysis without validate_analysis was accepted")
 	}
 	valid.IsTransient = &transient
 	valid = withValidation(valid)
-	if err := validateAnalysisAcceptance(valid, analysisTelemetry{APIMode: orkaapi.APIModeResponses, EventCount: 4, ToolCalls: 2, ValidationPassed: true, TaskOutcome: "succeeded"}, "task", orkaapi.APIModeAuto, 2, 0, "", testValidationKey); err == nil {
+	if err := validateAnalysisAcceptance(valid, analysisTelemetry{APIMode: orkaapi.APIModeResponses, EventCount: 4, ToolCalls: 2, ValidationPassed: true, TaskOutcome: "succeeded"}, "task", orkaapi.APIModeAuto, 2, 0, "", false, testValidationKey); err == nil {
 		t.Fatal("transient analysis without verify_timeline was accepted")
 	}
-	if err := validateAnalysisAcceptance(valid, analysisTelemetry{APIMode: orkaapi.APIModeResponses, EventCount: 4, ToolCalls: 2, ValidationPassed: true, TimelineVerified: true, TaskOutcome: "succeeded"}, "task", orkaapi.APIModeAuto, 2, 0, "", testValidationKey); err != nil {
+	if err := validateAnalysisAcceptance(valid, analysisTelemetry{APIMode: orkaapi.APIModeResponses, EventCount: 4, ToolCalls: 2, ValidationPassed: true, TimelineVerified: true, TaskOutcome: "succeeded"}, "task", orkaapi.APIModeAuto, 2, 0, "", false, testValidationKey); err != nil {
 		t.Fatalf("timeline-verified transient analysis rejected: %v", err)
 	}
 }
@@ -163,7 +163,7 @@ func TestValidateAnalysisAcceptanceQualityToolPolicy(t *testing.T) {
 		EventCount: 4, ToolCalls: 2, ValidationPassed: true, TaskOutcome: "succeeded",
 		qualityToolOutcomes: map[string]string{"recurrence": "failed", "submit_analysis": "completed"},
 	}
-	if err := validateAnalysisAcceptance(a, advisory, "task", orkaapi.APIModeAuto, 2, 0, "", testValidationKey); err != nil {
+	if err := validateAnalysisAcceptance(a, advisory, "task", orkaapi.APIModeAuto, 2, 0, "", false, testValidationKey); err != nil {
 		t.Fatalf("advisory quality-tool failure rejected: %v", err)
 	}
 	required := advisory
@@ -171,7 +171,7 @@ func TestValidateAnalysisAcceptanceQualityToolPolicy(t *testing.T) {
 		"required_evidence": "failed",
 		"submit_analysis":   "completed",
 	}
-	if err := validateAnalysisAcceptance(a, required, "task", orkaapi.APIModeAuto, 2, 0, "skills", testValidationKey); err == nil || !strings.Contains(err.Error(), "required_evidence") {
+	if err := validateAnalysisAcceptance(a, required, "task", orkaapi.APIModeAuto, 2, 0, "skills", false, testValidationKey); err == nil || !strings.Contains(err.Error(), "required_evidence") {
 		t.Fatalf("required quality-tool failure error = %v", err)
 	}
 }
@@ -180,11 +180,11 @@ func TestValidateAnalysisAcceptanceRequiresSucceededEvent(t *testing.T) {
 	transient := false
 	a := withValidation(analysis{Summary: "summary", RootCause: "cause", Severity: "High", IsTransient: &transient, SuggestedFix: "fix"})
 	base := analysisTelemetry{APIMode: orkaapi.APIModeResponses, EventCount: 4, ToolCalls: 2, ValidationPassed: true}
-	if err := validateAnalysisAcceptance(a, base, "task", orkaapi.APIModeAuto, 2, 0, "", testValidationKey); err == nil || !strings.Contains(err.Error(), "no terminal") {
+	if err := validateAnalysisAcceptance(a, base, "task", orkaapi.APIModeAuto, 2, 0, "", false, testValidationKey); err == nil || !strings.Contains(err.Error(), "no terminal") {
 		t.Fatalf("missing terminal error = %v", err)
 	}
 	base.TaskOutcome = "failed"
-	if err := validateAnalysisAcceptance(a, base, "task", orkaapi.APIModeAuto, 2, 0, "", testValidationKey); err == nil || !strings.Contains(err.Error(), "failed") {
+	if err := validateAnalysisAcceptance(a, base, "task", orkaapi.APIModeAuto, 2, 0, "", false, testValidationKey); err == nil || !strings.Contains(err.Error(), "failed") {
 		t.Fatalf("failed task error = %v", err)
 	}
 }
@@ -201,8 +201,11 @@ func TestValidateAnalysisAcceptanceRequiresConsumerEvidence(t *testing.T) {
 	}
 	telemetry := summarizeEvents(events)
 	telemetry.APIMode = orkaapi.APIModeResponses
-	if err := validateAnalysisAcceptance(a, telemetry, "task", orkaapi.APIModeAuto, 2, 0, "skills-hash", testValidationKey); err == nil || !strings.Contains(err.Error(), "required_evidence") {
+	if err := validateAnalysisAcceptance(a, telemetry, "task", orkaapi.APIModeAuto, 2, 0, "skills-hash", false, testValidationKey); err == nil || !strings.Contains(err.Error(), "required_evidence") {
 		t.Fatalf("acceptance error = %v", err)
+	}
+	if err := validateAnalysisAcceptance(a, telemetry, "task", orkaapi.APIModeAuto, 2, 0, "skills-hash", true, testValidationKey); err != nil {
+		t.Fatalf("complete evidence plan was rejected: %v", err)
 	}
 	events = append(events[:4],
 		executionEvent{Seq: 5, Type: "ToolCallStarted", ToolName: "required-evidence-bscope", ToolCallID: "call-3"},
@@ -211,7 +214,7 @@ func TestValidateAnalysisAcceptanceRequiresConsumerEvidence(t *testing.T) {
 	)
 	telemetry = summarizeEvents(events)
 	telemetry.APIMode = orkaapi.APIModeResponses
-	if err := validateAnalysisAcceptance(a, telemetry, "task", orkaapi.APIModeAuto, 2, 0, "skills-hash", testValidationKey); err != nil {
+	if err := validateAnalysisAcceptance(a, telemetry, "task", orkaapi.APIModeAuto, 2, 0, "skills-hash", false, testValidationKey); err != nil {
 		t.Fatalf("consumer evidence call rejected: %v", err)
 	}
 }
@@ -221,7 +224,7 @@ func TestValidateAnalysisAcceptanceRejectsMismatchedValidationToken(t *testing.T
 	a := withValidation(analysis{Summary: "summary", RootCause: "cause", Severity: "High", IsTransient: &transient, SuggestedFix: "fix"})
 	a.RootCause = "changed after validation"
 	telemetry := analysisTelemetry{APIMode: orkaapi.APIModeResponses, EventCount: 4, ToolCalls: 2, ValidationPassed: true, TaskOutcome: "succeeded"}
-	if err := validateAnalysisAcceptance(a, telemetry, "task", orkaapi.APIModeAuto, 2, 0, "", testValidationKey); err == nil || !strings.Contains(err.Error(), "validation_token") {
+	if err := validateAnalysisAcceptance(a, telemetry, "task", orkaapi.APIModeAuto, 2, 0, "", false, testValidationKey); err == nil || !strings.Contains(err.Error(), "validation_token") {
 		t.Fatalf("acceptance error = %v", err)
 	}
 }
@@ -233,7 +236,7 @@ func TestValidateAnalysisAcceptanceRejectsTokenRecomputedWithoutKey(t *testing.T
 	a.GCSBytes = &zero
 	a.ValidationToken = orkaapi.AnalysisValidationToken("attacker-key", "task", a.validationInput(), 0)
 	telemetry := analysisTelemetry{APIMode: orkaapi.APIModeResponses, EventCount: 4, ToolCalls: 2, ValidationPassed: true, TaskOutcome: "succeeded"}
-	if err := validateAnalysisAcceptance(a, telemetry, "task", orkaapi.APIModeAuto, 2, 0, "", testValidationKey); err == nil || !strings.Contains(err.Error(), "validation_token") {
+	if err := validateAnalysisAcceptance(a, telemetry, "task", orkaapi.APIModeAuto, 2, 0, "", false, testValidationKey); err == nil || !strings.Contains(err.Error(), "validation_token") {
 		t.Fatalf("acceptance error = %v, want keyed validation rejection", err)
 	}
 }
@@ -253,7 +256,7 @@ func TestValidateAnalysisAcceptanceEnforcesMinimumGCSBytes(t *testing.T) {
 	transient := false
 	a := withValidation(analysis{Summary: "summary", RootCause: "cause", Severity: "High", IsTransient: &transient, SuggestedFix: "fix"})
 	telemetry := analysisTelemetry{APIMode: orkaapi.APIModeResponses, EventCount: 4, ToolCalls: 2, ValidationPassed: true, TaskOutcome: "succeeded"}
-	if err := validateAnalysisAcceptance(a, telemetry, "task", orkaapi.APIModeAuto, 2, 1, "", testValidationKey); err == nil || !strings.Contains(err.Error(), "GCS byte") {
+	if err := validateAnalysisAcceptance(a, telemetry, "task", orkaapi.APIModeAuto, 2, 1, "", false, testValidationKey); err == nil || !strings.Contains(err.Error(), "GCS byte") {
 		t.Fatalf("acceptance error = %v, want minimum GCS byte rejection", err)
 	}
 }

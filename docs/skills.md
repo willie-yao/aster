@@ -47,8 +47,10 @@ wraps procedures with this boundary, and Orka returns the same boundary from
 `required_evidence`.
 
 When a recipe matches and evidence is missing, the in-process gate re-prompts
-the model with the missing groups. Orka requires `required_evidence` lookup and
-validates the same groups again in `submit_analysis`.
+the model with the missing groups. Orka prepends a complete initial evidence plan
+when every matched group has a candidate. Truncated, unmatched, or no-candidate
+plans still require `required_evidence`, and `submit_analysis` validates the same
+groups in either path.
 
 ## When to author a skill
 
@@ -214,7 +216,8 @@ widen on speculation.
 ## Writing good evidence groups
 
 Each group should encode "if this failure pattern is real, the
-canonical artifact for it lives at one of these paths":
+canonical artifact for it lives at one of these paths." Group IDs must be unique
+within a recipe:
 
 - Patterns are matched against the agent's successfully-read paths
   (full path, lowercase, slash-normalized). Use slash-style globs
@@ -275,13 +278,26 @@ Before merging a new recipe:
 
 The Orka producer loads the same merged set as the in-process fetcher and sends
 the complete contract to the scoped `required_evidence` and `submit_analysis`
-Tools. `required_evidence` matches the supplied failure signal and returns every
-matched engine or consumer procedure plus its evidence groups.
+Tools. Before creating each Task, it matches a bounded failure-evidence signal without producer instructions, resolves
+ranked exact artifact candidates for every applicable evidence group, and
+prepends that bounded evidence plan to the Task prompt. `required_evidence`
+returns the same candidate shape when the diagnosis changes or a group was not
+resolved in the initial bounded tree. A complete initial plan satisfies the
+recipe-lookup acceptance gate; truncated, omitted, unmatched, and no-candidate
+plans retain the mandatory `required_evidence` call. The per-Task submit Tool
+receives the initially applicable groups and their ranked candidates through a
+hidden bounded header, so final validation requires their evidence tokens and
+returns the same candidate paths even if the model's final wording no longer
+matches the initial recipe. If that header cannot fit, the producer omits the
+plan and retains the mandatory lookup path instead of aborting the run.
 
-The merged hash participates in the Orka analysis contract. Recipe edits and
-profile-selection changes therefore invalidate both in-process cache entries
-and Orka Tasks. Final Orka validation checks the same evidence-path groups as
-the in-process critique gate.
+The merged hash and evidence-plan hash participate in Orka Task identity. Recipe
+edits, profile-selection changes, and a materially different candidate plan
+therefore invalidate the affected Task. The ingested analysis records that exact
+Task name so a changed plan cannot retain an older result with the same broader
+contract hash. Final Orka validation checks the union of initially planned and
+final-diagnosis evidence groups and includes
+candidate paths when rejecting a submission with missing evidence.
 
 ## Observability
 

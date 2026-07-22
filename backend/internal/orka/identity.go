@@ -95,6 +95,29 @@ const (
 	persistentFailurePromptFloor = 3
 )
 
+// FailureEvidenceSignal renders only the bounded test failure evidence used for recipe matching.
+func FailureEvidenceSignal(tc models.TestCase) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Failed test: %s\n", tc.Name)
+	if tc.FailureLocation != "" {
+		fmt.Fprintf(&b, "Failure location: %s\n", tc.FailureLocation)
+	}
+	if tc.JUnitFile != "" {
+		fmt.Fprintf(&b, "JUnit file: %s\n", tc.JUnitFile)
+	}
+	if message := strings.TrimSpace(tc.FailureMessage); message != "" {
+		b.WriteString("Failure message:\n")
+		b.WriteString(clampPromptHeadTail(message, failureMessagePromptBytes))
+		b.WriteByte('\n')
+	}
+	if body := boundedFailureBody(tc.FailureBody); body != "" {
+		b.WriteString("Failure body (truncated to last 8KB):\n")
+		b.WriteString(body)
+		b.WriteByte('\n')
+	}
+	return strings.TrimSpace(b.String())
+}
+
 // FailurePrompt renders the per-test prompt shared by the producer and ingestor.
 func FailurePrompt(projectLabel, jobID, buildPrefix string, tc models.TestCase, consecutiveFailures int) string {
 	var b strings.Builder
@@ -114,7 +137,7 @@ func FailurePrompt(projectLabel, jobID, buildPrefix string, tc models.TestCase, 
 		fmt.Fprintf(&b, "JUnit file: %s\n", tc.JUnitFile)
 	}
 	message := strings.TrimSpace(tc.FailureMessage)
-	body := strings.TrimSpace(tc.FailureBody)
+	body := boundedFailureBody(tc.FailureBody)
 	if message != "" || body != "" {
 		b.WriteString("\nDeterministic pre-triage evidence:\n")
 	}
@@ -125,14 +148,19 @@ func FailurePrompt(projectLabel, jobID, buildPrefix string, tc models.TestCase, 
 	}
 	if body != "" {
 		b.WriteString("Failure body (truncated to last 8KB):\n")
-		if len(body) > failureBodyPromptBytes {
-			body = strings.ToValidUTF8(body[len(body)-failureBodyPromptBytes:], "")
-		}
 		b.WriteString(body)
 		b.WriteByte('\n')
 	}
 	b.WriteString("\nInvestigate the build's artifacts with the tools and conclude with your JSON.")
 	return b.String()
+}
+
+func boundedFailureBody(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) > failureBodyPromptBytes {
+		value = strings.ToValidUTF8(value[len(value)-failureBodyPromptBytes:], "")
+	}
+	return value
 }
 
 func clampPromptHeadTail(value string, maxBytes int) string {

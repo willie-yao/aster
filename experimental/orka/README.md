@@ -34,10 +34,11 @@ cases. The first weak-model pass closed protocol convergence and transient-check
 discipline, but a Kimi DRA spike still followed later teardown symptoms because
 the Orka seed omitted the JUnit failure body containing the initiating cache
 error. The current path closes that harness gap by seeding the bounded failure
-message, failure body, and filtered artifact tree, then preserving successful
-Tool observations in an evidence ledger across proactive context compaction.
-Model capability still bounds the final reasoning, but the weak model now starts
-with and retains the same deterministic evidence as the in-process path.
+message, failure body, filtered artifact tree, and a matched evidence plan with
+ranked exact candidate paths, then preserving successful Tool observations in an
+evidence ledger across proactive context compaction. Model capability still
+bounds the final reasoning, but the weak model now starts with a deterministic
+investigation checklist instead of depending on a voluntary recipe lookup.
 Orka remains opt-in during preview while these parity improvements are evaluated
 against the cheaper models operators are likely to run. This preserves a working
 self-contained path while the managed Orka deployment experience is built.
@@ -60,10 +61,12 @@ also carries the configured Orka retry policy.
 
 - **Execution events are required.** The ingestor reads each Task's event stream
   to enforce the tool-call floor, terminal outcome, successful required quality tools,
-  consumer recipe lookup, a `submit_analysis` token bound to the exact final
+  recipe lookup when the initial evidence plan is incomplete, a `submit_analysis`
+  token bound to the exact final
   JSON, and transient timeline evidence before publishing a result. Successful
   artifact content reads return scoped evidence tokens, and `submit_analysis`
-  requires those tokens for every cited path and recipe evidence group.
+  requires those tokens for every cited path plus the union of initially planned
+  and final-diagnosis recipe groups.
   Recurrence, diff, and transient-signature checks are advisory; failures remain
   visible in telemetry without discarding a validated analysis.
 - **Scheduled side effects run in batch mode.** The skeleton fetch disables

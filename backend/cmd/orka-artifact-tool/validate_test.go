@@ -123,6 +123,121 @@ func TestValidateAnalysisEnforcesMatchedSkillReadEvidence(t *testing.T) {
 	}
 }
 
+func TestValidateAnalysisReturnsMissingEvidenceCandidates(t *testing.T) {
+	set, err := skills.ParseContract([]byte(`{
+		"skills":[{
+			"id":"quota",
+			"triggers":["(?i)quota"],
+			"required_evidence":[{"id":"events","any_of":["events/.*quota"]}]
+		}]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	header, err := set.HeaderValue()
+	if err != nil {
+		t.Fatal(err)
+	}
+	attestor := newEvidenceAttestor("secret")
+	env := &toolEnv{
+		evidence: attestor,
+		browser: validationTreeBrowser{
+			paths: []string{"events/other.log", "events/workload-quota.log"}, truncated: true,
+		},
+	}
+	analysis := orka.AnalysisValidation{
+		Summary: "summary", RootCause: "resource quota exceeded", Severity: "High",
+		SuggestedFix: "increase quota", RelevantFiles: []string{"build-log.txt"},
+	}
+	response := runValidation(t, env, analysis, []string{attestor.issue("scope", "build-log.txt")}, "scope", header)
+	if response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("response = %d %s", response.Code, response.Body.String())
+	}
+	for _, want := range []string{"quota:events", "missing_evidence_candidates", "events/workload-quota.log", "artifact_tree_truncated"} {
+		if !strings.Contains(response.Body.String(), want) {
+			t.Errorf("response missing %q: %s", want, response.Body.String())
+		}
+	}
+}
+
+func TestValidateAnalysisEnforcesInitialEvidenceAgainstGenericFinalText(t *testing.T) {
+	set, err := skills.ParseContract([]byte(`{
+		"skills":[{
+			"id":"quota",
+			"triggers":["(?i)quota"],
+			"required_evidence":[{"id":"events","any_of":["events/.*quota"]}]
+		}]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	skillHeader, err := set.HeaderValue()
+	if err != nil {
+		t.Fatal(err)
+	}
+	signal := "resource quota exceeded"
+	plannedPaths := []string{"events/workload-quota.log"}
+	initialHeader, err := skills.InitialEvidenceHeaderValue(set.Plan(signal, plannedPaths, 3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	attestor := newEvidenceAttestor("secret")
+	env := &toolEnv{evidence: attestor, browser: validationTreeBrowser{
+		paths: []string{"events/aaa-quota.log", "events/workload-quota.log"},
+	}}
+	analysis := orka.AnalysisValidation{
+		Summary: "workload setup failed", RootCause: "the workload could not start", Severity: "High",
+		SuggestedFix: "correct the environment", RelevantFiles: []string{"build-log.txt"},
+	}
+	missing := runValidationWithInitialEvidence(
+		t, env, analysis, []string{attestor.issue("scope", "build-log.txt")}, "scope", skillHeader, initialHeader,
+	)
+	if missing.Code != http.StatusUnprocessableEntity || !strings.Contains(missing.Body.String(), "quota:events") {
+		t.Fatalf("missing initial evidence response = %d %s", missing.Code, missing.Body.String())
+	}
+	if !strings.Contains(missing.Body.String(), "events/workload-quota.log") || strings.Contains(missing.Body.String(), "events/aaa-quota.log") {
+		t.Fatalf("initial candidate paths changed during validation: %s", missing.Body.String())
+	}
+	valid := runValidationWithInitialEvidence(t, env, analysis, []string{
+		attestor.issue("scope", "build-log.txt"),
+		attestor.issue("scope", "events/workload-quota.log"),
+	}, "scope", skillHeader, initialHeader)
+	if valid.Code != http.StatusOK {
+		t.Fatalf("valid initial evidence response = %d %s", valid.Code, valid.Body.String())
+	}
+}
+
+func TestValidateAnalysisKeepsDelimiterCollidingRequirementsDistinct(t *testing.T) {
+	set, err := skills.ParseContract([]byte(`{
+		"skills":[
+			{"id":"a:b","triggers":["cause"],"required_evidence":[{"id":"c","any_of":["one\\.log$"]}]},
+			{"id":"a","triggers":["cause"],"required_evidence":[{"id":"b:c","any_of":["two\\.log$"]}]}
+		]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	header, err := set.HeaderValue()
+	if err != nil {
+		t.Fatal(err)
+	}
+	attestor := newEvidenceAttestor("secret")
+	env := &toolEnv{evidence: attestor, browser: validationTreeBrowser{paths: []string{"one.log", "two.log"}}}
+	analysis := orka.AnalysisValidation{
+		Summary: "summary", RootCause: "cause", Severity: "High", SuggestedFix: "fix", RelevantFiles: []string{},
+	}
+	oneRead := runValidation(t, env, analysis, []string{attestor.issue("scope", "one.log")}, "scope", header)
+	if oneRead.Code != http.StatusUnprocessableEntity || !strings.Contains(oneRead.Body.String(), "a:b:c") {
+		t.Fatalf("one-read response = %d %s", oneRead.Code, oneRead.Body.String())
+	}
+	bothRead := runValidation(t, env, analysis, []string{
+		attestor.issue("scope", "one.log"), attestor.issue("scope", "two.log"),
+	}, "scope", header)
+	if bothRead.Code != http.StatusOK {
+		t.Fatalf("both-read response = %d %s", bothRead.Code, bothRead.Body.String())
+	}
+}
+
 func TestValidateAnalysisEnforcesMergedEngineEvidencePaths(t *testing.T) {
 	set, _, err := skills.LoadForTools(t.TempDir(), []string{"filesystem", "k8s"})
 	if err != nil {
@@ -242,6 +357,11 @@ func TestValidateAnalysisPrunesRecipeEvidenceAbsentFromBuild(t *testing.T) {
 
 func runValidation(t *testing.T, env *toolEnv, analysis orka.AnalysisValidation, tokens []string, scope, skillHeader string) *httptest.ResponseRecorder {
 	t.Helper()
+	return runValidationWithInitialEvidence(t, env, analysis, tokens, scope, skillHeader, "")
+}
+
+func runValidationWithInitialEvidence(t *testing.T, env *toolEnv, analysis orka.AnalysisValidation, tokens []string, scope, skillHeader, initialEvidenceHeader string) *httptest.ResponseRecorder {
+	t.Helper()
 	body, err := json.Marshal(map[string]any{"analysis": analysis, "evidence_tokens": tokens})
 	if err != nil {
 		t.Fatal(err)
@@ -253,6 +373,9 @@ func runValidation(t *testing.T, env *toolEnv, analysis orka.AnalysisValidation,
 	req.Header.Set(orka.MinGCSBytesHeader, "0")
 	if skillHeader != "" {
 		req.Header.Set(skills.ContractHeader, skillHeader)
+	}
+	if initialEvidenceHeader != "" {
+		req.Header.Set(skills.InitialEvidenceHeader, initialEvidenceHeader)
 	}
 	recorder := httptest.NewRecorder()
 	validateAnalysis(env, recorder, req)
