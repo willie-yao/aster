@@ -619,6 +619,28 @@ parallelizes the artifact *fetch* phase, not analysis. Concurrency does not
 change results or cache semantics; the AI cache, per-build tool caches, and the
 tools-unsupported flag are all internally synchronized.
 
+### Private analysis traces
+
+Each in-process AI pass writes `ai_traces.json` next to the AI cache. This is a
+private operational snapshot for debugging model and harness behavior. Each
+failure records bounded control-flow events for model requests, tool calls,
+context compaction, floor nudges, deterministic critique, semantic judging, and
+forced finalization. Model events include response IDs, finish status, retry
+count, duration, and provider-reported token usage when available.
+
+The trace intentionally excludes prompts, assistant text, reasoning items, tool
+arguments, tool output, and configured endpoint or model fields. Provider and
+harness failures are stored as fixed error codes, never free-form response
+bodies. Identifiers are URL- and credential-redacted and byte-capped. A trace
+keeps at most 128 events, and one fetch keeps at most 500 completed failure
+traces.
+
+`ai_traces.json` is listed in `output.NonPublishedFiles`. The API server returns
+404 for it under `/data`, and the Pages workflow removes it before publication.
+Inspect it directly in a local output directory or on the Kubernetes shared
+volume. An authenticated trace API and dashboard view are separate follow-up
+work.
+
 ### Cache semantics
 
 Agentic analyses are cached under `agentic:<module>:<job>:<build>:<hash>`. The

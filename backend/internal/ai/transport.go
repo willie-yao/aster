@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 )
@@ -24,12 +25,32 @@ type modelTransport interface {
 }
 
 func (c *Client) callModel(ctx context.Context, messages []modelMessage, toolDefs []tools.Schema, parallelToolCalls *bool) (*modelResponse, error) {
-	return c.transport.Complete(ctx, modelRequest{
+	start := time.Now()
+	resp, err := c.transport.Complete(ctx, modelRequest{
 		Model:             c.model,
 		Messages:          messages,
 		Tools:             toolDefs,
 		ParallelToolCalls: parallelToolCalls,
 	})
+	event := TraceEvent{Kind: "model_request", DurationMs: int(time.Since(start) / time.Millisecond), MessageCount: len(messages)}
+	if resp != nil {
+		event.ResponseID = resp.ResponseID
+		event.Status = resp.Status
+		event.FinishReason = resp.FinishReason
+		event.Attempts = resp.Attempts
+		event.HTTPStatus = resp.HTTPStatus
+		event.InputTokens = resp.InputTokens
+		event.OutputTokens = resp.OutputTokens
+		event.ToolCallCount = len(resp.Message.ToolCalls)
+	}
+	if err != nil {
+		event.Outcome = "error"
+		event.ErrorCode = traceErrorCode(err)
+	} else {
+		event.Outcome = "success"
+	}
+	recordTrace(ctx, event)
+	return resp, err
 }
 
 type unsupportedTransport struct {
@@ -51,6 +72,12 @@ type modelResponse struct {
 	Message      modelMessage
 	FinishReason string
 	HasMessage   bool
+	ResponseID   string
+	Status       string
+	Attempts     int
+	HTTPStatus   int
+	InputTokens  int
+	OutputTokens int
 }
 
 // The JSON tags preserve the existing compaction size estimate. API adapters

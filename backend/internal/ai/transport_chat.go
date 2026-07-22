@@ -51,7 +51,16 @@ type chatCompletionsRequest struct {
 }
 
 type chatCompletionsResponse struct {
+	ID      string                  `json:"id"`
 	Choices []chatCompletionsChoice `json:"choices"`
+	Usage   chatCompletionsUsage    `json:"usage"`
+}
+
+type chatCompletionsUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	InputTokens      int `json:"input_tokens"`
+	OutputTokens     int `json:"output_tokens"`
 }
 
 type chatCompletionsChoice struct {
@@ -73,15 +82,17 @@ func (t *chatCompletionsTransport) Complete(ctx context.Context, req modelReques
 	}
 
 	var resp *http.Response
+	attempts := 0
 	for attempt := 0; attempt < 3; attempt++ {
+		attempts = attempt + 1
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, t.api.endpoint, bytes.NewReader(body))
 		if err != nil {
-			return nil, fmt.Errorf("build request: %w", err)
+			return &modelResponse{Attempts: attempts}, fmt.Errorf("build request: %w", err)
 		}
 		t.api.setRequestHeaders(httpReq)
 		resp, err = t.api.httpClient.Do(httpReq)
 		if err != nil {
-			return nil, fmt.Errorf("post: %w", err)
+			return &modelResponse{Attempts: attempts}, fmt.Errorf("post: %w", err)
 		}
 		if resp.StatusCode == http.StatusTooManyRequests {
 			if attempt == 2 {
@@ -91,7 +102,7 @@ func (t *chatCompletionsTransport) Complete(ctx context.Context, req modelReques
 			_ = resp.Body.Close()
 			select {
 			case <-ctx.Done():
-				return nil, ctx.Err()
+				return &modelResponse{Attempts: attempts}, ctx.Err()
 			case <-time.After(wait):
 			}
 			continue
@@ -101,13 +112,16 @@ func (t *chatCompletionsTransport) Complete(ctx context.Context, req modelReques
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("chat returned %d: %s", resp.StatusCode, textutil.Truncate(string(raw), 500))
+		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode}, fmt.Errorf("chat returned %d: %s", resp.StatusCode, textutil.Truncate(string(raw), 500))
 	}
 	var wire chatCompletionsResponse
 	if err := json.Unmarshal(raw, &wire); err != nil {
-		return nil, fmt.Errorf("decode response: %w; body=%s", err, textutil.Truncate(string(raw), 500))
+		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode}, fmt.Errorf("decode response: %w; body=%s", err, textutil.Truncate(string(raw), 500))
 	}
-	return decodeChatResponse(wire), nil
+	out := decodeChatResponse(wire)
+	out.Attempts = attempts
+	out.HTTPStatus = resp.StatusCode
+	return out, nil
 }
 
 func encodeChatMessages(messages []modelMessage) []chatCompletionsMessage {
@@ -147,12 +161,15 @@ func encodeChatToolCalls(calls []modelToolCall) []chatCompletionsToolCall {
 
 func decodeChatResponse(resp chatCompletionsResponse) *modelResponse {
 	if len(resp.Choices) == 0 {
-		return &modelResponse{}
+		return &modelResponse{ResponseID: resp.ID, InputTokens: chatInputTokens(resp.Usage), OutputTokens: chatOutputTokens(resp.Usage)}
 	}
 	choice := resp.Choices[0]
 	return &modelResponse{
 		HasMessage:   true,
 		FinishReason: choice.FinishReason,
+		ResponseID:   resp.ID,
+		InputTokens:  chatInputTokens(resp.Usage),
+		OutputTokens: chatOutputTokens(resp.Usage),
 		Message: modelMessage{
 			Role:       choice.Message.Role,
 			Content:    choice.Message.Content,
@@ -161,6 +178,20 @@ func decodeChatResponse(resp chatCompletionsResponse) *modelResponse {
 			ToolCalls:  decodeChatToolCalls(choice.Message.ToolCalls),
 		},
 	}
+}
+
+func chatInputTokens(usage chatCompletionsUsage) int {
+	if usage.InputTokens > 0 {
+		return usage.InputTokens
+	}
+	return usage.PromptTokens
+}
+
+func chatOutputTokens(usage chatCompletionsUsage) int {
+	if usage.OutputTokens > 0 {
+		return usage.OutputTokens
+	}
+	return usage.CompletionTokens
 }
 
 func decodeChatToolCalls(calls []chatCompletionsToolCall) []modelToolCall {

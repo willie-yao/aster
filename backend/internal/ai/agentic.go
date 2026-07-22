@@ -724,10 +724,14 @@ func (c *Client) doAnalyzeAgentic(
 
 	for iter := 0; iter < maxIters; iter++ {
 		if in.Opts.ContextByteBudget > 0 {
+			before := requestSizeEstimate(messages, schemaBytes)
 			var elided int
 			messages, elided = compactMessages(messages, schemaBytes, in.Opts.ContextByteBudget)
 			if elided > 0 {
+				recordTrace(loopCtx, TraceEvent{Kind: "context_compaction", Outcome: "applied", Elided: elided, Bytes: requestSizeEstimate(messages, schemaBytes), MessageCount: len(messages)})
 				log.Printf("  ✂ context compaction: elided %d message(s) to fit ~%d-byte window", elided, in.Opts.ContextByteBudget)
+			} else if before > in.Opts.ContextByteBudget {
+				recordTrace(loopCtx, TraceEvent{Kind: "context_compaction", Outcome: "over_budget", Bytes: before, MessageCount: len(messages)})
 			}
 		}
 		resp, err := c.callModel(loopCtx, messages, schemas, parallelToolCalls)
@@ -777,6 +781,7 @@ func (c *Client) doAnalyzeAgentic(
 					})
 					nudgedAtCalls = state.calls
 					nudgedAtGCSBytes = state.gcsBytes
+					recordTrace(loopCtx, TraceEvent{Kind: "floor_nudge", Outcome: "retry", ToolCallCount: state.calls, Bytes: state.gcsBytes})
 					log.Printf("  ↻ agentic nudge: tool_calls=%d/min=%d, gcs_kb=%d/min=%d, asking model to investigate further",
 						state.calls, in.Opts.MinToolCalls, state.gcsBytes/1024, in.Opts.MinGCSBytes/1024)
 					continue
@@ -799,6 +804,7 @@ func (c *Client) doAnalyzeAgentic(
 					}
 				}
 				if out.Passed {
+					recordTrace(loopCtx, TraceEvent{Kind: "critique", Outcome: "passed"})
 					// Second-line semantic judge: a focused LLM review that
 					// catches a fluent-but-wrong root cause the deterministic
 					// gate accepts. Runs at most once per analysis (its own
@@ -812,8 +818,10 @@ func (c *Client) doAnalyzeAgentic(
 						objs, err := c.semanticCritique(loopCtx, parsed, state.readPathList())
 						switch {
 						case err != nil:
+							recordTrace(loopCtx, TraceEvent{Kind: "semantic_judge", Outcome: "error", ErrorCode: "semantic_judge_error"})
 							log.Printf("  ⓘ semantic judge: skipped (%v)", err)
 						case len(objs) > 0:
+							recordTrace(loopCtx, TraceEvent{Kind: "semantic_judge", Outcome: "objected", IssueCount: len(objs)})
 							state.judgeObjected = true
 							echo := modelMessage{Role: "assistant", ProviderItems: msg.ProviderItems}
 							if msg.Content != nil {
@@ -827,6 +835,7 @@ func (c *Client) doAnalyzeAgentic(
 							log.Printf("  ✗ semantic judge: %d objection(s); re-prompting (+%d iters)", len(objs), critiqueRetryIters)
 							continue
 						default:
+							recordTrace(loopCtx, TraceEvent{Kind: "semantic_judge", Outcome: "passed"})
 							log.Printf("  ✓ semantic judge: no objections")
 						}
 					}
@@ -854,6 +863,7 @@ func (c *Client) doAnalyzeAgentic(
 						Content: strPtr(feedback),
 					})
 					critiqueRetriesUsed++
+					recordTrace(loopCtx, TraceEvent{Kind: "critique", Outcome: "retry", Retry: critiqueRetriesUsed, IssueCount: len(out.Matches())})
 					// Extend the retry budget proportional to the
 					// number of missing evidence groups. Plain
 					// re-prompts stay at critiqueRetryIters; skill-
@@ -873,6 +883,7 @@ func (c *Client) doAnalyzeAgentic(
 						out.Matches(), critiqueRetriesUsed, in.Opts.CritiqueMaxRetries, extra)
 					continue
 				} else {
+					recordTrace(loopCtx, TraceEvent{Kind: "critique", Outcome: "accepted_uncached", Retry: critiqueRetriesUsed, IssueCount: len(out.Matches())})
 					log.Printf("  ⚠ agentic critique: still failing after %d retries %v; accepting but not caching",
 						in.Opts.CritiqueMaxRetries, out.Matches())
 				}
@@ -950,6 +961,7 @@ func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, m
 		}
 	}
 	if out.Passed {
+		recordTrace(ctx, TraceEvent{Kind: "critique", Outcome: "passed"})
 		if opts.SemanticJudge {
 			parsed = c.applySemanticJudgePostLoop(ctx, state, messages, finalContent, finalProviderItems, parsed, opts.ContextByteBudget)
 		}
@@ -957,18 +969,22 @@ func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, m
 		return parsed
 	}
 	if len(out.UnreadCitations) == 0 && len(out.MissingSkillEvidence) == 0 {
+		recordTrace(ctx, TraceEvent{Kind: "critique", Outcome: "accepted_uncached", IssueCount: len(out.Matches())})
 		log.Printf("  ⚠ agentic critique: post-loop draft still failing %v; accepting but not caching", out.Matches())
 		return parsed
 	}
 	injection := c.buildEvidenceInjection(ctx, state, out)
 	if injection == "" {
+		recordTrace(ctx, TraceEvent{Kind: "critique", Outcome: "accepted_uncached", IssueCount: len(out.Matches())})
 		log.Printf("  ⚠ agentic critique: post-loop draft still failing %v; no fetchable evidence to inject; accepting but not caching", out.Matches())
 		return parsed
 	}
 	messages = append(messages, modelMessage{Role: "assistant", Content: strPtr(finalContent), ProviderItems: finalProviderItems}, modelMessage{Role: "user", Content: strPtr(out.Feedback + "\n\n" + injection)})
+	recordTrace(ctx, TraceEvent{Kind: "critique", Outcome: "evidence_retry", IssueCount: len(out.Matches())})
 	revised, _ := c.runFinalizeRound(ctx, messages, opts.ContextByteBudget)
 	next, ok := tryParseAnalysis(revised)
 	if !ok {
+		recordTrace(ctx, TraceEvent{Kind: "critique", Outcome: "retry_unparseable"})
 		revised, _ = c.runFinalizeRound(ctx, messages, opts.ContextByteBudget)
 		next, ok = tryParseAnalysis(revised)
 	}
@@ -983,8 +999,10 @@ func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, m
 		}
 	}
 	if out.Passed {
+		recordTrace(ctx, TraceEvent{Kind: "critique", Outcome: "passed_after_retry"})
 		state.critiquePassed = true
 	} else {
+		recordTrace(ctx, TraceEvent{Kind: "critique", Outcome: "accepted_uncached", IssueCount: len(out.Matches())})
 		log.Printf("  ⚠ agentic critique: post-injection draft still failing %v; accepting but not caching", out.Matches())
 	}
 	return next
@@ -1221,16 +1239,24 @@ func (c *Client) runFinalizeRound(ctx context.Context, messages []modelMessage, 
 	if contextByteBudget > 0 {
 		// The finalize round sends no tool schemas, so estimate against
 		// messages alone.
-		messages, _ = compactMessages(messages, 0, contextByteBudget)
+		var elided int
+		messages, elided = compactMessages(messages, 0, contextByteBudget)
+		if elided > 0 {
+			recordTrace(ctx, TraceEvent{Kind: "context_compaction", Outcome: "finalize", Elided: elided, Bytes: requestSizeEstimate(messages, 0), MessageCount: len(messages)})
+		}
 	}
+	recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "requested"})
 	resp, err := c.callModel(ctx, messages, nil, nil)
 	if err != nil {
+		recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "error", ErrorCode: "model_request_error"})
 		log.Printf("  ⚠ agentic finalize round failed: %v", err)
 		return "", nil
 	}
 	if !resp.HasMessage || resp.Message.Content == nil {
+		recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "empty"})
 		return "", resp.Message.ProviderItems
 	}
+	recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "success"})
 	return *resp.Message.Content, resp.Message.ProviderItems
 }
 
@@ -1271,10 +1297,12 @@ func dispatchAgenticTool(ctx context.Context, s *agentState, tc modelToolCall) s
 	s.calls++
 	if s.modelRemaining() <= 0 {
 		s.budgetExhausted = true
+		recordTrace(ctx, TraceEvent{Kind: "tool_call", Tool: tc.Function.Name, Outcome: "model_budget_exhausted"})
 		return toolErrJSON("model byte budget exhausted; produce final JSON now")
 	}
 	if s.gcsRemaining() <= 0 {
 		s.budgetExhausted = true
+		recordTrace(ctx, TraceEvent{Kind: "tool_call", Tool: tc.Function.Name, Outcome: "gcs_budget_exhausted"})
 		return toolErrJSON("GCS byte budget exhausted; produce final JSON now")
 	}
 
@@ -1295,6 +1323,12 @@ func dispatchAgenticTool(ctx context.Context, s *agentState, tc modelToolCall) s
 		// edge case. Empty map is safer than a nil deref in toolEnvelopeJSON.
 		result.Payload = map[string]interface{}{}
 	}
+	_, toolFailed := result.Payload["error"]
+	toolOutcome := "success"
+	if toolFailed {
+		toolOutcome = "error"
+	}
+	recordTrace(ctx, TraceEvent{Kind: "tool_call", Tool: tc.Function.Name, Outcome: toolOutcome, Bytes: result.BytesFetched})
 
 	// Record successful artifact reads so critiqueDraft can flag prose
 	// citations of files the agent never opened. Only content-fetching
@@ -1302,7 +1336,7 @@ func dispatchAgenticTool(ctx context.Context, s *agentState, tc modelToolCall) s
 	// "error" key check prevents a failed read from silently satisfying
 	// the hallucination gate.
 	if isContentFetchingTool(tc.Function.Name) {
-		if _, hasErr := result.Payload["error"]; !hasErr {
+		if !toolFailed {
 			if p := extractToolPathArg(tc.Function.Arguments); p != "" {
 				s.recordSuccessfulRead(p)
 			}
@@ -1313,7 +1347,7 @@ func dispatchAgenticTool(ctx context.Context, s *agentState, tc modelToolCall) s
 	// Off unless AGENTIC_TRACE_TOOLS is set, so production logs stay clean.
 	if os.Getenv("AGENTIC_TRACE_TOOLS") != "" {
 		flag := "ok"
-		if _, hasErr := result.Payload["error"]; hasErr {
+		if toolFailed {
 			flag = "ERROR"
 		}
 		log.Printf("    🔧 %s(%s) -> %d gcs bytes [%s]", tc.Function.Name, textutil.Truncate(tc.Function.Arguments, 140), result.BytesFetched, flag)

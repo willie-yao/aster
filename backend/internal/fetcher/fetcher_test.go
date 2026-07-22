@@ -9,8 +9,26 @@ import (
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 )
+
+func TestClearAnalysisTrace(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, output.AITraceFilename)
+	if err := os.WriteFile(path, []byte(`{"traces":[]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := clearAnalysisTrace(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("trace file still exists: %v", err)
+	}
+	if err := clearAnalysisTrace(dir); err != nil {
+		t.Fatalf("missing trace file: %v", err)
+	}
+}
 
 func TestAIEndpoint_PrefersYAMLOverEnv(t *testing.T) {
 	t.Setenv("AI_ENDPOINT", "https://env.example/v1/chat")

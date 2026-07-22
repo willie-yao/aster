@@ -60,7 +60,7 @@ make build
 
 Copy the public JSON files from a deployed dashboard into
 `frontend/public/data`, then run `make dev`. Do not copy operational files such
-as `ai_cache.json` or issue and fix state.
+as `ai_cache.json`, `ai_traces.json`, or issue and fix state.
 
 ## Preview admin actions
 

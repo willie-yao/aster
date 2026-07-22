@@ -122,13 +122,16 @@ func (c *Client) applySemanticJudgePostLoop(ctx context.Context, state *agentSta
 	state.judgeRan = true
 	objs, err := c.semanticCritique(ctx, parsed, state.readPathList())
 	if err != nil {
+		recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Outcome: "error", ErrorCode: "semantic_judge_error"})
 		log.Printf("  ⓘ semantic judge (post-loop): skipped (%v)", err)
 		return parsed
 	}
 	if len(objs) == 0 {
+		recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Outcome: "passed"})
 		log.Printf("  ✓ semantic judge (post-loop): no objections")
 		return parsed
 	}
+	recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Outcome: "objected", IssueCount: len(objs)})
 	state.judgeObjected = true
 	msgs := append(messages,
 		modelMessage{Role: "assistant", Content: strPtr(finalContent), ProviderItems: finalProviderItems},
@@ -136,15 +139,18 @@ func (c *Client) applySemanticJudgePostLoop(ctx context.Context, state *agentSta
 	revised, _ := c.runFinalizeRound(ctx, msgs, budget)
 	rp, ok := tryParseAnalysis(revised)
 	if !ok {
+		recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Outcome: "revision_unparseable", IssueCount: len(objs)})
 		log.Printf("  ✗ semantic judge (post-loop): %d objection(s); refinalize did not parse, keeping draft", len(objs))
 		return parsed
 	}
 	out := critiqueDraft(rp, state.readArtifactsFull, state.readArtifactsBase, matchSkillsForDraft(state, rp), state.consecutiveFailures)
 	if !out.Passed {
+		recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Outcome: "revision_rejected", IssueCount: len(out.Matches())})
 		log.Printf("  ✗ semantic judge (post-loop): %d objection(s); revised draft failed critique %v, keeping original", len(objs), out.Matches())
 		return parsed
 	}
 	state.judgeRevised = true
+	recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Outcome: "revised", IssueCount: len(objs)})
 	log.Printf("  ✗ semantic judge (post-loop): %d objection(s); accepted refinalized draft", len(objs))
 	return rp
 }

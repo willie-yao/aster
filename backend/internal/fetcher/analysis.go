@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/k8s"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/patterns"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prowbuild"
@@ -44,6 +46,7 @@ const (
 // analyzeFailuresWithAI runs the agentic AI analysis on every failed test
 // case. The agentic tool-calling loop is the only analysis path.
 func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.JobDetail, flakinessReport models.FlakinessReport) {
+	tracePath := filepath.Join(p.opts.OutDir, output.AITraceFilename)
 	runtime, err := p.ensureAnalysisRuntime(ctx)
 	if err != nil {
 		log.Printf("⚠ AI runtime setup failed: %v", err)
@@ -64,6 +67,13 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 
 	module := universal.New()
 	service := ai.NewService(aiClient, module, p.aiSystemPrompt, consecutiveMap)
+	traceStore := ai.NewTraceStore()
+	service.SetTraceStore(traceStore)
+	defer func() {
+		if err := traceStore.Save(tracePath); err != nil {
+			log.Printf("Warning: failed to save AI traces: %v", err)
+		}
+	}()
 	// Resolve and verify repo-relative file citations against branding.source_repo.
 	service.SetSourceRepo(cfg.Branding.SourceRepo.Owner, cfg.Branding.SourceRepo.Name)
 	// Ground the recurring-pattern agent on the real source tree when a repo is

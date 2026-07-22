@@ -1,6 +1,9 @@
 package redact
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestURLs(t *testing.T) {
 	tests := []struct {
@@ -40,5 +43,15 @@ func TestURLs(t *testing.T) {
 				t.Errorf("URLs(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestCredentials(t *testing.T) {
+	in := `Authorization: Bearer abc.def token=hidden api_key:also-hidden password=secret {"token":"json-hidden"}`
+	got := Credentials(in)
+	for _, secret := range []string{"abc.def", "hidden", "also-hidden", "secret", "json-hidden"} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("Credentials leaked %q: %q", secret, got)
+		}
 	}
 }

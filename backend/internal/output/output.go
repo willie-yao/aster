@@ -11,6 +11,9 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
 )
 
+// AITraceFilename is the private per-analysis trace snapshot.
+const AITraceFilename = "ai_traces.json"
+
 // NonPublishedFiles are operational files written into the output directory that
 // must not be served by the API server or deployed to the public Pages site:
 // the AI cache, Orka identity manifest, and operational side-effect state. The
@@ -19,6 +22,7 @@ import (
 // the frontend serves it to render resolved-failure state.
 var NonPublishedFiles = []string{
 	"ai_cache.json",
+	AITraceFilename,
 	"issue_state.json",
 	"fix_pr_state.json",
 	"fix_previews.json",

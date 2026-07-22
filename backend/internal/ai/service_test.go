@@ -46,7 +46,6 @@ func TestService_Agentic_TagsModeAgentic(t *testing.T) {
 	registry, enabled := newServiceTestRegistry(t)
 	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
 	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}, &fakeFactory{}, registry, enabled)
-
 	tc := newFailedTC("Test A", "failure msg")
 	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
 
@@ -93,6 +92,8 @@ func TestService_SkipWhenAlreadyAnalyzedSameMode(t *testing.T) {
 	registry, enabled := newServiceTestRegistry(t)
 	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
 	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}, &fakeFactory{}, registry, enabled)
+	traces := NewTraceStore()
+	s.SetTraceStore(traces)
 
 	tc := newFailedTC("Test A", "msg")
 	tc.AISummary = &models.AISummary{Summary: "cached"}
@@ -105,6 +106,10 @@ func TestService_SkipWhenAlreadyAnalyzedSameMode(t *testing.T) {
 	}
 	if tc.AIAnalysis.RootCause != "cached" {
 		t.Errorf("expected cached root cause to be preserved, got %q", tc.AIAnalysis.RootCause)
+	}
+	got := traces.Snapshot()
+	if len(got.Traces) != 1 || got.Traces[0].Outcome != "build_cache_hit" || len(got.Traces[0].Events) != 1 || got.Traces[0].Events[0].Outcome != "build_hit" {
+		t.Fatalf("trace = %+v", got)
 	}
 }
 

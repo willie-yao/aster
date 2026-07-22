@@ -77,6 +77,9 @@ func (c *Client) Endpoint() string { return c.apiURL }
 // ModelName returns the configured model identifier.
 func (c *Client) ModelName() string { return c.model }
 
+// APIMode returns the selected provider API contract.
+func (c *Client) APIMode() string { return c.apiMode }
+
 // modelFingerprint hashes the model + endpoint so a provider or model swap
 // invalidates cached analyses produced by the prior model.
 func (c *Client) modelFingerprint() string {

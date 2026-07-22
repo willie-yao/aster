@@ -42,6 +42,12 @@ type responsesResponse struct {
 	ID     string            `json:"id"`
 	Status string            `json:"status"`
 	Output []json.RawMessage `json:"output"`
+	Usage  responsesUsage    `json:"usage"`
+}
+
+type responsesUsage struct {
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
 }
 
 type responsesOutputItem struct {
@@ -68,15 +74,17 @@ func (t *responsesTransport) Complete(ctx context.Context, req modelRequest) (*m
 	}
 
 	var resp *http.Response
+	attempts := 0
 	for attempt := 0; attempt < 3; attempt++ {
+		attempts = attempt + 1
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, t.api.endpoint, bytes.NewReader(body))
 		if err != nil {
-			return nil, fmt.Errorf("build request: %w", err)
+			return &modelResponse{Attempts: attempts}, fmt.Errorf("build request: %w", err)
 		}
 		t.api.setRequestHeaders(httpReq)
 		resp, err = t.api.httpClient.Do(httpReq)
 		if err != nil {
-			return nil, fmt.Errorf("post: %w", err)
+			return &modelResponse{Attempts: attempts}, fmt.Errorf("post: %w", err)
 		}
 		if resp.StatusCode == http.StatusTooManyRequests {
 			if attempt == 2 {
@@ -86,7 +94,7 @@ func (t *responsesTransport) Complete(ctx context.Context, req modelRequest) (*m
 			_ = resp.Body.Close()
 			select {
 			case <-ctx.Done():
-				return nil, ctx.Err()
+				return &modelResponse{Attempts: attempts}, ctx.Err()
 			case <-time.After(wait):
 			}
 			continue
@@ -96,16 +104,19 @@ func (t *responsesTransport) Complete(ctx context.Context, req modelRequest) (*m
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("responses returned %d: %s", resp.StatusCode, textutil.Truncate(string(raw), 500))
+		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode}, fmt.Errorf("responses returned %d: %s", resp.StatusCode, textutil.Truncate(string(raw), 500))
 	}
 	var wire responsesResponse
 	if err := json.Unmarshal(raw, &wire); err != nil {
-		return nil, fmt.Errorf("decode response: %w; body=%s", err, textutil.Truncate(string(raw), 500))
+		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode}, fmt.Errorf("decode response: %w; body=%s", err, textutil.Truncate(string(raw), 500))
 	}
 	if wire.Status != "completed" {
-		return nil, fmt.Errorf("responses status %q: %s", wire.Status, textutil.Truncate(string(raw), 500))
+		return &modelResponse{ResponseID: wire.ID, Status: wire.Status, Attempts: attempts, HTTPStatus: resp.StatusCode, InputTokens: wire.Usage.InputTokens, OutputTokens: wire.Usage.OutputTokens}, fmt.Errorf("responses status %q: %s", wire.Status, textutil.Truncate(string(raw), 500))
 	}
-	return decodeResponsesResponse(wire), nil
+	out := decodeResponsesResponse(wire)
+	out.Attempts = attempts
+	out.HTTPStatus = resp.StatusCode
+	return out, nil
 }
 
 func encodeResponsesInput(messages []modelMessage) []any {
@@ -199,7 +210,8 @@ func decodeResponsesResponse(resp responsesResponse) *modelResponse {
 		finish = "stop"
 	}
 	return &modelResponse{
-		Message: message, FinishReason: finish,
+		Message: message, FinishReason: finish, ResponseID: resp.ID, Status: resp.Status,
+		InputTokens: resp.Usage.InputTokens, OutputTokens: resp.Usage.OutputTokens,
 		HasMessage: len(resp.Output) > 0,
 	}
 }

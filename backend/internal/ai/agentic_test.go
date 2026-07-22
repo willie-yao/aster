@@ -289,6 +289,35 @@ func TestAgentic_HappyPath_ToolThenFinalJSON(t *testing.T) {
 	}
 }
 
+func TestAgenticTraceRecordsModelToolAndCritique(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespToolCall("call_1", "read_artifact", map[string]interface{}{"path": "build-log.txt", "offset": 0, "length": 1024}))
+	srv.push(200, chatRespFinal(`{"summary":"failure","is_transient":false,"root_cause":"build-log.txt contains the initiating error","severity":"High","suggested_fix":"fix the configuration","relevant_files":["build-log.txt"]}`))
+
+	store := NewTraceStore()
+	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIChatCompletions})
+	ctx := withAnalysisTrace(context.Background(), trace)
+	client := newAgenticTestClient(t, srv.URL)
+	browser := &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("initiating error\n")}}
+	opts := AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}
+	if _, _, err := client.doAnalyzeAgentic(ctx, newTestAgenticInputs(t, browser, opts), "agentic:test:trace", "sys", "user"); err != nil {
+		t.Fatal(err)
+	}
+	trace.Finish("success", nil)
+
+	counts := map[string]int{}
+	for _, event := range store.Snapshot().Traces[0].Events {
+		counts[event.Kind]++
+		if event.Kind == "tool_call" && (event.Tool != "read_artifact" || event.Outcome != "success" || event.Bytes == 0) {
+			t.Fatalf("tool event = %+v", event)
+		}
+	}
+	if counts["model_request"] != 2 || counts["tool_call"] != 1 || counts["critique"] != 1 {
+		t.Fatalf("event counts = %+v", counts)
+	}
+}
+
 func TestAgentic_CacheHit(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)

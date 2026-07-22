@@ -75,6 +75,9 @@ type Service struct {
 	// linkVerifyCache memoizes GitHub file-existence checks across all
 	// analyses in a run, keyed by "owner/repo/path" to existence.
 	linkVerifyCache sync.Map
+
+	// traceStore collects private, sanitized per-analysis control flow.
+	traceStore *TraceStore
 }
 
 // NewService constructs a Service. systemPrompt is the full composed prompt and
@@ -125,6 +128,11 @@ func (s *Service) SetPatternRepoReader(reader tools.RepoReader) {
 	s.patternRepo = reader
 }
 
+// SetTraceStore enables private per-analysis trace collection.
+func (s *Service) SetTraceStore(store *TraceStore) {
+	s.traceStore = store
+}
+
 // Analyze fills tc.AISummary and tc.AIAnalysis for a single failed test case
 // using the agentic tool-calling loop. Skips if already analyzed and still
 // meets the current quality floors. On API failure or endpoints without
@@ -134,7 +142,14 @@ func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, jobID, b
 	if consec < 1 {
 		consec = 1
 	}
+	var trace *TraceSession
+	if s.traceStore != nil {
+		trace = s.traceStore.Start(TraceMetadata{JobID: jobID, BuildID: run.BuildID, TestName: tc.Name, APIMode: s.client.APIMode()})
+		ctx = withAnalysisTrace(ctx, trace)
+	}
 	if tc.AISummary != nil && tc.AIAnalysis != nil && !s.shouldReanalyze(tc) && !staleTransientVerdict(tc, consec) {
+		recordTrace(ctx, TraceEvent{Kind: "cache", Outcome: "build_hit"})
+		trace.Finish("build_cache_hit", nil)
 		return
 	}
 
@@ -145,7 +160,9 @@ func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, jobID, b
 	// Surface endpoints without function-calling as unavailable. There is no
 	// tools-free analysis path to degrade to.
 	if s.toolsUnsupported.Load() {
-		s.setUnavailable(tc, fmt.Errorf("AI endpoint requires function-calling support"))
+		err := fmt.Errorf("AI endpoint requires function-calling support")
+		s.setUnavailable(tc, err)
+		trace.Finish("unavailable", err)
 		return
 	}
 	summary, analysis, err := s.runAgentic(ctx, jobID, buildPrefix, run, tc, userPrompt, consec)
@@ -154,16 +171,24 @@ func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, jobID, b
 			s.toolsUnsupported.Store(true)
 			log.Printf("  ⚠ AI endpoint rejected tools; analysis unavailable: %v", err)
 			s.setUnavailable(tc, fmt.Errorf("AI endpoint requires function-calling support: %w", err))
+			trace.Finish("unavailable", err)
 			return
 		}
 		log.Printf("  ⚠ Agentic AI analysis failed for %s: %v", tc.Name, err)
 		s.setUnavailable(tc, err)
+		trace.Finish("error", err)
 		return
 	}
 	tc.AISummary = summary
 	tc.AIAnalysis = analysis
 	if analysis != nil {
 		analysis.FileLinks = s.resolveFileLinks(ctx, httpClient, tc)
+	}
+	if analysis != nil && analysis.CacheHit {
+		recordTrace(ctx, TraceEvent{Kind: "cache", Outcome: "ai_hit"})
+		trace.Finish("ai_cache_hit", nil)
+	} else {
+		trace.Finish("success", nil)
 	}
 }
 

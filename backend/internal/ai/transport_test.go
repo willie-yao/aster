@@ -39,6 +39,26 @@ func TestClientCompleteUsesModelTransport(t *testing.T) {
 	}
 }
 
+func TestClientCallModelRecordsTrace(t *testing.T) {
+	transport := &recordingTransport{result: &modelResponse{
+		HasMessage: true, Message: modelMessage{Role: "assistant", ToolCalls: []modelToolCall{{ID: "call"}}},
+		ResponseID: "resp-1", Status: "completed", FinishReason: "tool_calls",
+		Attempts: 2, HTTPStatus: 200, InputTokens: 11, OutputTokens: 7,
+	}}
+	client := &Client{model: "model-a", transport: transport}
+	store := NewTraceStore()
+	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIResponses})
+	ctx := withAnalysisTrace(context.Background(), trace)
+	if _, err := client.callModel(ctx, []modelMessage{{Role: "user", Content: strPtr("user")}}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	trace.Finish("success", nil)
+	event := store.Snapshot().Traces[0].Events[0]
+	if event.Kind != "model_request" || event.ResponseID != "resp-1" || event.Attempts != 2 || event.InputTokens != 11 || event.OutputTokens != 7 || event.ToolCallCount != 1 {
+		t.Fatalf("event = %+v", event)
+	}
+}
+
 func TestChatCompletionsMessageRoundTrip(t *testing.T) {
 	messages := []modelMessage{
 		{
@@ -52,13 +72,16 @@ func TestChatCompletionsMessageRoundTrip(t *testing.T) {
 		{Role: "tool", ToolCallID: "call-1", Name: "read_artifact", Content: strPtr(`{"ok":true}`)},
 	}
 
-	wire := chatCompletionsResponse{}
+	wire := chatCompletionsResponse{ID: "chat-1", Usage: chatCompletionsUsage{PromptTokens: 12, CompletionTokens: 4}}
 	wire.Choices = append(wire.Choices, chatCompletionsChoice{
 		FinishReason: "tool_calls", Message: encodeChatMessages(messages)[0],
 	})
 	decoded := decodeChatResponse(wire)
 	if !decoded.HasMessage || decoded.FinishReason != "tool_calls" || !reflect.DeepEqual(decoded.Message, messages[0]) {
 		t.Fatalf("decoded response = %+v", decoded)
+	}
+	if decoded.ResponseID != "chat-1" || decoded.InputTokens != 12 || decoded.OutputTokens != 4 {
+		t.Fatalf("decoded metadata = %+v", decoded)
 	}
 	if got := encodeChatMessages(messages); len(got) != 2 || got[1].ToolCallID != "call-1" || got[1].Name != "read_artifact" {
 		t.Fatalf("encoded messages = %+v", got)

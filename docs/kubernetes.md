@@ -274,9 +274,10 @@ with `server.actions.oauth.existingSecret` (keys `OAUTH_CLIENT_SECRET`,
 `SESSION_KEY`) or `server.actions.proxy.existingSecret` (key `BOT_TOKEN`).
 
 `/data/*` serves the public dashboard files that the static Pages path exposes.
-The server rejects operational files such as `ai_cache.json`, issue state,
-fix-PR state, previews, notification state, remediation state, and the private
-Prow coverage catalog. Pages strips the same files before publication.
+The server rejects operational files such as `ai_cache.json`, `ai_traces.json`,
+issue state, fix-PR state, previews, notification state, remediation state, and
+the private Prow coverage catalog. Pages strips the same files before
+publication.
 `resolved.json` and the redacted `remediations.json` remain public because the
 frontend uses them.
 

@@ -259,13 +259,13 @@ jobs:
         run: npm run build
 
       # Keep operational files out of the public site. Vite copies public/data/
-      # into dist/data/ at build; strip the AI cache and operational side-effect
+      # into dist/data/ at build; strip AI traces, the cache, and side-effect
       # state (they carry operational metadata, never dashboard data). Kept in sync
       # with output.NonPublishedFiles in the backend.
       - name: Strip non-published data files
         run: |
           d=engine/frontend/dist/data
-          [ -d "$d" ] && rm -f "$d"/ai_cache.json "$d"/issue_state.json \
+          [ -d "$d" ] && rm -f "$d"/ai_cache.json "$d"/ai_traces.json "$d"/issue_state.json \
             "$d"/fix_pr_state.json "$d"/fix_previews.json \
             "$d"/notification_state.json "$d"/remediation_state.json \
             "$d"/remediation_prow_catalog.json "$d"/orka_analysis.json \

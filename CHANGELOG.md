@@ -22,6 +22,11 @@ for how to pin a release.
 
 ### Added
 
+- **Private in-process analysis traces.** Each AI pass writes a bounded,
+  sanitized `ai_traces.json` operational snapshot with model request metadata,
+  response IDs, usage, tool names, compaction, critique, and finalization
+  events. The server denies the file under `/data`, and Pages strips it before
+  publication.
 - **Regular-harness Responses API.** In-process analysis can select `ai.api: responses`, preserves reasoning items across function calls, and sends `store: false`.
 - **Orka Responses API observability.** The pinned compatibility worker now uses
   the Responses API when supported, sends `store: false`, and records API mode

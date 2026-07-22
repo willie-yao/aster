@@ -248,6 +248,9 @@ func (p *pipeline) discover(ctx context.Context) ([]models.ProwJob, error) {
 // repeated passes only fetch new or still-running builds.
 func (p *pipeline) refresh(ctx context.Context, jobs []models.ProwJob) (*refreshResult, error) {
 	cfg, opts := p.cfg, p.opts
+	if err := clearAnalysisTrace(opts.OutDir); err != nil {
+		log.Printf("Warning: failed to clear stale AI traces: %v", err)
+	}
 
 	// Fetch each job's builds. Cached completed builds are reused.
 	cachedJobs := loadCachedJobDetails(opts.OutDir)
@@ -358,6 +361,14 @@ func (p *pipeline) refresh(ctx context.Context, jobs []models.ProwJob) (*refresh
 	}
 
 	return &refreshResult{details: details, flakiness: flakinessReport}, nil
+}
+
+func clearAnalysisTrace(outDir string) error {
+	err := os.Remove(filepath.Join(outDir, output.AITraceFilename))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
 }
 
 // runSideEffects handles notifications, issue filing, and draft PRs. These are

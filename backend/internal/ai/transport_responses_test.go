@@ -15,7 +15,7 @@ func TestResponsesTransportToolRoundTrip(t *testing.T) {
 	shrinkCallDelay(t)
 	var requests []map[string]any
 	responses := []string{
-		`{"id":"resp-1","status":"completed","output":[{"id":"rs-1","type":"reasoning","encrypted_content":"encrypted-state","summary":[]},{"type":"function_call","call_id":"call-1","name":"read_artifact","arguments":"{\"path\":\"log.txt\"}"}]}`,
+		`{"id":"resp-1","status":"completed","usage":{"input_tokens":21,"output_tokens":8},"output":[{"id":"rs-1","type":"reasoning","encrypted_content":"encrypted-state","summary":[]},{"type":"function_call","call_id":"call-1","name":"read_artifact","arguments":"{\"path\":\"log.txt\"}"}]}`,
 		`{"id":"resp-2","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}]}`,
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -36,6 +36,9 @@ func TestResponsesTransportToolRoundTrip(t *testing.T) {
 	}
 	if len(first.Message.ToolCalls) != 1 || len(first.Message.ProviderItems) != 2 {
 		t.Fatalf("first response = %+v", first)
+	}
+	if first.ResponseID != "resp-1" || first.Status != "completed" || first.InputTokens != 21 || first.OutputTokens != 8 || first.Attempts != 1 {
+		t.Fatalf("first metadata = %+v", first)
 	}
 	messages = append(messages, first.Message, modelMessage{Role: "tool", ToolCallID: "call-1", Content: strPtr(`{"ok":true}`)})
 	second, err := client.callModel(context.Background(), messages, nil, nil)
@@ -84,5 +87,32 @@ func TestResponsesTransportRejectsIncomplete(t *testing.T) {
 	c := NewClientWithOptions(Options{API: APIResponses, Endpoint: s.URL, Model: "m"})
 	if _, err := c.callModel(context.Background(), nil, nil, nil); err == nil || !strings.Contains(err.Error(), "incomplete") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestResponsesTraceRecordsRetryCount(t *testing.T) {
+	shrinkCallDelay(t)
+	calls := 0
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		if calls == 1 {
+			w.Header().Set("Retry-After", "0")
+			http.Error(w, "rate limited", http.StatusTooManyRequests)
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"resp-retry","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}]}`))
+	}))
+	defer s.Close()
+	c := NewClientWithOptions(Options{API: APIResponses, Endpoint: s.URL, Model: "m"})
+	store := NewTraceStore()
+	trace := store.Start(TraceMetadata{JobID: "job", APIMode: APIResponses})
+	ctx := withAnalysisTrace(context.Background(), trace)
+	if _, err := c.callModel(ctx, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	trace.Finish("success", nil)
+	event := store.Snapshot().Traces[0].Events[0]
+	if event.Attempts != 2 || event.ResponseID != "resp-retry" {
+		t.Fatalf("event = %+v", event)
 	}
 }
