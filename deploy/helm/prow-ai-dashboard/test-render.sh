@@ -197,6 +197,20 @@ grep -Fq 'name: proxy-auth' "$tmp/chat-existing-auth.yaml"
 grep -Fq 'optional: true' "$tmp/chat-existing-auth.yaml"
 
 if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.chat.enabled=true \
+  --set server.replicaCount=2 \
+  --set server.actions.mode=proxy \
+  --set server.actions.admins[0]=alice \
+  --set ai.enabled=true \
+  --set ai.token=test-token \
+  --set ai.endpoint=http://model.test/v1/chat/completions \
+  --set ai.model=test-model > "$tmp/chat-multiple-replicas.yaml" 2>&1; then
+  echo 'server.chat.enabled accepted multiple replicas' >&2
+  exit 1
+fi
+grep -Fq 'server.chat.enabled requires server.replicaCount=1' "$tmp/chat-multiple-replicas.yaml"
+
+if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set server.chat.enabled=true > "$tmp/chat-without-ai.yaml" 2>&1; then
   echo 'server.chat.enabled was accepted without ai.enabled' >&2
   exit 1

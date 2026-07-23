@@ -5,6 +5,9 @@
 {{- if and $chat (not .Values.ai.enabled) -}}
 {{- fail "server.chat.enabled requires ai.enabled" -}}
 {{- end -}}
+{{- if and $chat (ne (int .Values.server.replicaCount) 1) -}}
+{{- fail "server.chat.enabled requires server.replicaCount=1 until sessions use shared persistence" -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

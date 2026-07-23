@@ -145,7 +145,8 @@ server:
   extraEnv: []
   # Admin-gated read-only conversations about a published AI analysis.
   # Uses the authentication settings under actions, but does not enable writes
-  # or require BOT_TOKEN. Requires ai.enabled.
+  # or require BOT_TOKEN. Requires ai.enabled and replicaCount=1 until sessions
+  # use shared persistence.
   chat:
     enabled: false
   # Admin authentication and write actions: file an issue or draft a fix PR.
