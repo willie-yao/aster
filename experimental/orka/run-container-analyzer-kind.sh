@@ -2,7 +2,8 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-source "$repo_root/experimental/orka/worker-patches/compatibility.env"
+# shellcheck source=experimental/orka/orka.env
+source "$repo_root/experimental/orka/orka.env"
 
 cluster=${ORKA_CONTAINER_CLUSTER:-orka-container-analyzer}
 context="kind-$cluster"

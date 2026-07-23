@@ -125,9 +125,14 @@ private Orka trace through the shared state store.
 
 ## Next evaluation
 
-Run the clean in-process and container Kimi comparison, then the bounded
-multi-failure load test. Use those results to decide whether to productize the
-container lifecycle path or remove Orka analysis.
+Run repeated in-process and container comparisons with one or two mid-tier
+models. Use identical requests, fixtures, prompts, skills, floors, and cold-cache
+state. Treat diagnosis quality as a parity check, not as evidence that Orka
+improves the model.
+
+Separately verify cancellation and operator-visible Task history against an
+ordinary Kubernetes Job baseline. The retention decision should weigh those
+lifecycle benefits against the maintenance cost of the container contracts.
 
 ## Kimi parity result
 
@@ -159,13 +164,15 @@ Separate cases proved retry and persistent cache reuse.
 
 ## Decision
 
-Do not productize Orka failure analysis. The lifecycle works, but robust result,
-bundle, persistence, concurrency, RBAC, retention, and encryption contracts make
-Orka a second control plane around ordinary dashboard Jobs. Kimi quality remains
-below the acceptance bar, and the operational benefits do not justify this
-complexity for the current consumers.
+Keep the container analyzer as an internal experiment through the next model and
+lifecycle evaluation. Do not add a supported Helm mode or new container transport
+features during that evaluation.
 
-Keep the in-process analyzer canonical. Retain Orka fix generation, which is an
-independent runtime boundary. Freeze compatibility v6 as already decided, then
-remove the frozen analysis mode and container prototype after confirming no
-supported deployment depends on them.
+Keep the in-process analyzer canonical. Remove the patched `type: ai` analysis
+mode and compatibility v6 without compatibility scaffolding. Retain Orka fix
+generation, which is an independent runtime boundary.
+
+After repeated parity and lifecycle tests, retain the container experiment only
+if Task cancellation, history, placement, retry, or durable results provide
+enough operational value to justify its bundle, state, RBAC, retention, and
+ingestion maintenance surface.

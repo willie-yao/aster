@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-07-23
+- Amended: 2026-07-23
 
 ## Context
 
@@ -66,35 +67,27 @@ reimplement analysis policy.
 
 ### Patched Orka AI worker
 
-The patched `type: ai` compatibility worker is frozen at compatibility v6.
+The patched `type: ai` compatibility worker will be removed without a
+compatibility period. It duplicates dashboard analysis policy and is not part of
+the retained Orka lifecycle experiment.
 
-Allowed changes are limited to:
-
-- Security fixes
-- Critical correctness fixes for existing v6 users
-- Build, provenance, or dependency maintenance needed to keep the frozen image
-  reproducible
-
-The project will not add compatibility v7 or new weak-model convergence policy
-to the patched Orka AI worker.
-
-Compatibility v6 remains available only as an experimental fallback and
-comparison baseline while the container lifecycle path is evaluated.
+The project will not add compatibility v7, preserve the v6 Helm mode, or carry
+configuration fields that exist only for the patched worker.
 
 ### Container analyzer status
 
-The Orka container analyzer remains experimental until all of these are proven:
+The Orka container analyzer remains an internal experiment. Result framing,
+immutable bundles, encrypted state transport, repeated cache use, CPU placement,
+retry, cleanup, and bounded concurrent execution have been demonstrated.
 
-1. A first-class structured result contract that does not depend on mixed pod
-   log framing.
-2. An immutable content-addressed request and consumer project bundle.
-3. Persistent cache and private trace transport across one-shot Tasks.
-4. Clean in-process and container benchmarks against the same model, request,
-   configuration, and artifacts.
-5. A bounded multi-failure load test covering scheduling, retries, cancellation,
-   ingestion, and cleanup.
+The experiment will remain separate from supported Helm analysis configuration
+while repeated parity tests run against one or two mid-tier models. Those tests
+measure whether the container preserves dashboard behavior. A quality difference
+between two stochastic model runs does not establish Orka lifecycle value.
 
-No supported Helm analysis mode will be added before these gates pass.
+The retention decision will instead weigh Task retry, cancellation, history,
+placement, and durable results against the maintenance cost of the bundle, state,
+RBAC, retention, and ingestion contracts.
 
 ### Placement
 
@@ -123,7 +116,7 @@ analysis backend. This decision does not remove or constrain
 - The container path still needs request, result, cache, and trace transport
 - One-shot Jobs add scheduling and image startup overhead
 - Orka remains an additional control plane when container execution is enabled
-- Compatibility v6 must be maintained until it is retired or removed
+- The experimental container transport remains a significant maintenance surface
 
 ## Alternatives considered
 
@@ -139,19 +132,18 @@ Deferred. AgentRuntime provides a richer protocol but adds a long-running
 service, authentication, cancellation, and harness versioning for a one-shot
 analysis that maps naturally to a Job.
 
-### Remove Orka analysis immediately
+### Remove all Orka analysis immediately
 
-Deferred until the container lifecycle evaluation finishes. Per-failure
-isolation, retry, placement, Task history, and durable result lifecycle may
-justify the control plane.
+Rejected for the container experiment until the additional model and lifecycle
+evaluation is complete. The patched AI worker does not share that deferral and
+will be removed.
 
 ## Follow-up work
 
-1. Replace mixed-log final-line parsing with a dashboard-owned structured result
-   marker or authenticated result channel.
-2. Add an immutable content-addressed request and project bundle.
-3. Persist cache and private traces across container Tasks.
-4. Run clean in-process and container Kimi benchmarks.
-5. Run a small multi-failure load test.
-6. Decide whether to productize the container path or remove Orka analysis.
-7. Retire the compatibility worker after no supported deployment depends on it.
+1. Decouple the container experiment from patched-worker assets.
+2. Remove the patched `type: ai` analysis mode and its configuration.
+3. Run repeated in-process and container parity tests with one or two mid-tier
+   models.
+4. Verify cancellation and operator-visible history against an ordinary
+   Kubernetes Job baseline.
+5. Decide whether lifecycle value justifies retaining the container experiment.

@@ -2,8 +2,16 @@
 set -euo pipefail
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=experimental/orka/orka.env
+source "$script_dir/orka.env"
+export ORKA_TEST_COMMIT=$ORKA_COMMIT
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/test-container-analyzer-kind.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
+
+if grep -Fq "worker-patches" "$script_dir/run-container-analyzer-kind.sh"; then
+  echo "container analyzer still depends on worker-patch assets" >&2
+  exit 1
+fi
 
 stub_dir="$tmp/bin"
 runtime_tmp="$tmp/runtime"
@@ -78,7 +86,7 @@ if [[ ${1:-} == clone ]]; then
   exit 0
 fi
 if [[ ${1:-} == -C && ${3:-} == rev-parse ]]; then
-  printf '%s\n' '1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254'
+  printf '%s\n' "$ORKA_TEST_COMMIT"
 fi
 STUB
 chmod +x "$stub_dir/git"
