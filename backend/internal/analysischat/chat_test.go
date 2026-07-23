@@ -408,3 +408,31 @@ func TestServiceResolvesTrimmedPublishedTestName(t *testing.T) {
 		t.Fatalf("canonical test name = %q", created.Analysis.TestName)
 	}
 }
+
+func TestServiceRunnerFailuresReachTurnLimit(t *testing.T) {
+	dir := t.TempDir()
+	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
+	runner := &fakeRunner{err: errors.New("model unavailable")}
+	service, err := NewService(dir, runner, Options{MaxTurns: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := service.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := service.Send(context.Background(), created.ID, "alice", "retry"); err == nil || errors.Is(err, ErrTurnLimit) {
+			t.Fatalf("attempt %d error = %v", i+1, err)
+		}
+	}
+	if _, err := service.Send(context.Background(), created.ID, "alice", "retry again"); !errors.Is(err, ErrTurnLimit) {
+		t.Fatalf("third attempt error = %v", err)
+	}
+	runner.mu.Lock()
+	attempts := len(runner.turns)
+	runner.mu.Unlock()
+	if attempts != 2 {
+		t.Fatalf("runner attempts = %d, want 2", attempts)
+	}
+}

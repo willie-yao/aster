@@ -129,9 +129,10 @@ type Options struct {
 	SessionTTL          time.Duration
 	MaxSessions         int
 	MaxSessionsPerOwner int
-	MaxTurns            int
-	MaxQuestionBytes    int
-	Now                 func() time.Time
+	// MaxTurns bounds admitted model attempts, including failed turns.
+	MaxTurns         int
+	MaxQuestionBytes int
+	Now              func() time.Time
 }
 
 func (o Options) normalized() Options {
@@ -283,6 +284,7 @@ func (s *Service) Send(ctx context.Context, id, owner, question string) (Session
 		s.mu.Unlock()
 		return SessionView{}, ErrTurnLimit
 	}
+	current.turns++
 	current.busy = true
 	turn := Turn{
 		SessionID:   id,
@@ -317,7 +319,6 @@ func (s *Service) Send(ctx context.Context, id, owner, question string) (Session
 			CreatedAt: stamp,
 		},
 	)
-	current.turns++
 	current.view.UpdatedAt = stamp
 	return cloneSessionView(current.view), nil
 }

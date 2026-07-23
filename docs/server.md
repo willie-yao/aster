@@ -90,7 +90,8 @@ an `assessment` of `explains`, `supports`, `challenges`, or `inconclusive`, plus
 verified artifact paths and an optional proposed revision. A proposed revision
 does not alter `jobs/*.json` or the published analysis.
 
-Sessions are in memory, bound to the authenticated login, limited to ten turns,
+Sessions are in memory, bound to the authenticated login, limited to ten model
+attempts including failed turns,
 and expire after two hours. The process also caps global and per-owner session
 counts. Restarting the server clears them. An in-flight turn may finish after its
 session expires; the next access removes that session and releases its capacity.

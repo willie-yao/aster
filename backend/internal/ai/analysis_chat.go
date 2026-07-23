@@ -250,7 +250,10 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 		messages = append(messages, skippedOutputs...)
 		for _, toolCall := range toolCalls {
 			envelope, payload := dispatchAgenticToolWithPayload(loopCtx, state, toolCall)
-			recordAnalysisChatEvidence(evidence, toolCall, payload)
+			if !recordAnalysisChatEvidence(evidence, toolCall, payload) {
+				state.budgetExhausted = true
+				envelope = toolErrJSON("analysis chat evidence budget exhausted; stop reading and finalize")
+			}
 			state.modelBytes += len(envelope)
 			messages = append(messages, modelMessage{Role: "tool", ToolCallID: toolCall.ID, Content: strPtr(envelope)})
 		}
@@ -483,6 +486,8 @@ func parseAnalysisChatReply(raw string, evidence map[string]*analysisChatEvidenc
 	return reply, nil
 }
 
+const analysisChatEvidenceMaxBytes = 128 << 10
+
 type analysisChatEvidence struct {
 	Segments []string
 	Lines    map[int]string
@@ -491,23 +496,22 @@ type analysisChatEvidence struct {
 
 var analysisChatContextLineRE = regexp.MustCompile(`^[> ]\s*(\d+):\s?(.*)$`)
 
-func recordAnalysisChatEvidence(evidence map[string]*analysisChatEvidence, toolCall modelToolCall, payload map[string]interface{}) {
+func recordAnalysisChatEvidence(evidence map[string]*analysisChatEvidence, toolCall modelToolCall, payload map[string]interface{}) bool {
 	if evidence == nil || !isContentFetchingTool(toolCall.Function.Name) {
-		return
+		return true
+	}
+	if _, failed := payload["error"]; failed {
+		return true
 	}
 	path, err := artifacts.SafePath(extractToolPathArg(toolCall.Function.Arguments))
 	if err != nil || path == "" {
-		return
+		return true
 	}
-	entry := evidence[path]
-	if entry == nil {
-		entry = &analysisChatEvidence{Lines: map[int]string{}}
-		evidence[path] = entry
-	}
+	candidate := &analysisChatEvidence{Lines: map[int]string{}}
 	switch toolCall.Function.Name {
 	case "read_artifact", "tail_artifact":
 		if content, ok := payload["content"].(string); ok {
-			appendAnalysisChatEvidenceSegment(entry, content)
+			appendAnalysisChatEvidenceCandidate(candidate, content)
 		}
 	case "grep_artifact":
 		for _, match := range analysisChatEvidenceMatches(payload["matches"]) {
@@ -522,12 +526,41 @@ func recordAnalysisChatEvidence(evidence map[string]*analysisChatEvidence, toolC
 				if err != nil || line <= 0 {
 					continue
 				}
-				entry.Lines[line] = parts[2]
+				candidate.Lines[line] = parts[2]
 				segment = append(segment, parts[2])
 			}
-			appendAnalysisChatEvidenceSegment(entry, strings.Join(segment, "\n"))
+			appendAnalysisChatEvidenceCandidate(candidate, strings.Join(segment, "\n"))
 		}
 	}
+	if candidate.Bytes == 0 {
+		return true
+	}
+	entry := evidence[path]
+	existingBytes := 0
+	if entry != nil {
+		existingBytes = entry.Bytes
+	}
+	if existingBytes+candidate.Bytes > analysisChatEvidenceMaxBytes {
+		return false
+	}
+	if entry == nil {
+		entry = &analysisChatEvidence{Lines: map[int]string{}}
+		evidence[path] = entry
+	}
+	entry.Segments = append(entry.Segments, candidate.Segments...)
+	entry.Bytes += candidate.Bytes
+	for line, text := range candidate.Lines {
+		entry.Lines[line] = text
+	}
+	return true
+}
+
+func appendAnalysisChatEvidenceCandidate(evidence *analysisChatEvidence, text string) {
+	if evidence == nil || text == "" {
+		return
+	}
+	evidence.Segments = append(evidence.Segments, text)
+	evidence.Bytes += len(text)
 }
 
 func analysisChatEvidenceMatches(value any) []map[string]interface{} {
@@ -562,22 +595,6 @@ func analysisChatEvidenceContexts(value any) []string {
 	default:
 		return nil
 	}
-}
-
-func appendAnalysisChatEvidenceSegment(evidence *analysisChatEvidence, text string) {
-	if evidence == nil || text == "" {
-		return
-	}
-	const maxEvidenceBytes = 128 << 10
-	remaining := maxEvidenceBytes - evidence.Bytes
-	if remaining <= 0 {
-		return
-	}
-	if len(text) > remaining {
-		text = text[:remaining]
-	}
-	evidence.Segments = append(evidence.Segments, text)
-	evidence.Bytes += len(text)
 }
 
 func analysisChatEvidenceContains(evidence *analysisChatEvidence, quote string) bool {

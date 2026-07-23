@@ -415,3 +415,21 @@ func TestParseAnalysisChatReplyRejectsTrailingJSON(t *testing.T) {
 		t.Fatalf("trailing response error = %v", err)
 	}
 }
+
+func TestAnalysisChatEvidenceOverflowIsAtomic(t *testing.T) {
+	evidence := map[string]*analysisChatEvidence{
+		"build-log.txt": {Segments: []string{strings.Repeat("a", analysisChatEvidenceMaxBytes-3)}, Bytes: analysisChatEvidenceMaxBytes - 3, Lines: map[int]string{}},
+	}
+	beforeSegments := len(evidence["build-log.txt"].Segments)
+	beforeBytes := evidence["build-log.txt"].Bytes
+	ok := recordAnalysisChatEvidence(evidence, modelToolCall{Function: modelFunction{
+		Name: "read_artifact", Arguments: `{"path":"build-log.txt"}`,
+	}}, map[string]interface{}{"content": "four"})
+	if ok {
+		t.Fatal("overflowing evidence read was accepted")
+	}
+	entry := evidence["build-log.txt"]
+	if entry.Bytes != beforeBytes || len(entry.Segments) != beforeSegments {
+		t.Fatalf("overflow mutated evidence: bytes=%d segments=%d", entry.Bytes, len(entry.Segments))
+	}
+}
