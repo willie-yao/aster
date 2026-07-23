@@ -105,9 +105,9 @@ Orka controller and analyzer image, and runs scripted lifecycle checks:
 experimental/orka/run-container-analyzer-kind.sh
 ```
 
-The harness covers a scored 5/5 result, analyzer retry, persistent cache reuse,
-a bounded five-Task wave, encrypted result and state parsing, CPU placement, and
-cleanup. It does not contact a live GPU cluster unless the explicit
+The harness covers a scored 5/5 result, analyzer retry, failed-Task private
+trace transport, persistent cache reuse, a bounded five-Task wave, encrypted
+result and state parsing, CPU placement, and cleanup. It does not contact a live GPU cluster unless the explicit
 `ORKA_CONTAINER_LIVE_*` variables are set. The shell ownership regression is:
 
 ```bash

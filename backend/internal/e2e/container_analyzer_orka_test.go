@@ -125,6 +125,24 @@ func TestOrkaContainerAnalyzerKind(t *testing.T) {
 		cleanupContainerBundle(t, kubeContext, resources)
 	})
 
+	t.Run("failed-task-preserves-private-trace", func(t *testing.T) {
+		resources := buildKindContainerTask(t, namespace, image, id+"-failed", endpoint, "script-fail", secretName, request, labels, nil, "2m", false)
+		name := applyContainerResources(t, kubeContext, resources)
+		status := waitContainerTask(t, kubeContext, namespace, name, 5*time.Minute)
+		if status.Phase != "Failed" || status.Attempts < 2 {
+			t.Fatalf("failed Task status = %+v", status)
+		}
+		raw := fetchContainerTaskResult(t, kubeContext, namespace, name)
+		if strings.Contains(raw, analysisruntime.FailureAnalysisResultMarker) {
+			t.Fatalf("failed Task emitted a public result:\n%s", raw)
+		}
+		state, err := analysisruntime.ParseEncryptedContainerAnalysisState(raw, containerAnalyzerStateKey(), containerStateIdentity(resources, request))
+		if err != nil || len(state.Traces) != 1 || state.Traces[0].Outcome != "error" {
+			t.Fatalf("failed Task state = %+v, error = %v", state, err)
+		}
+		cleanupContainerBundle(t, kubeContext, resources)
+	})
+
 	t.Run("persistent-cache-hit", func(t *testing.T) {
 		store, err := analysisruntime.NewContainerStateStore(t.TempDir())
 		if err != nil {
@@ -719,6 +737,8 @@ class Handler(BaseHTTPRequestHandler):
         with lock:
             count = counts.get(model, 0)
             counts[model] = count + 1
+        if model == "script-fail":
+            self.send_response(500); self.end_headers(); self.wfile.write(b"forced failure"); return
         if model == "script-retry" and count < 1:
             self.send_response(500); self.end_headers(); self.wfile.write(b"retry failure"); return
         offset = 1 if model == "script-retry" else 0

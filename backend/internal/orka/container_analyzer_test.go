@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -34,11 +34,11 @@ func (f *fakeContainerAnalyzerKube) TaskState(context.Context, string, string) (
 	}, nil
 }
 
-func (f *fakeContainerAnalyzerKube) DeleteTask(_ context.Context, namespace, name, resourceVersion string) error {
+func (f *fakeContainerAnalyzerKube) DeleteTaskIfIdentity(_ context.Context, namespace, name, uid, resourceVersion string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.deletedTask = append(f.deletedTask, namespace+"/"+name+"@"+resourceVersion)
-	return nil
+	f.deletedTask = append(f.deletedTask, namespace+"/"+name+"@"+uid+"@"+resourceVersion)
+	return true, nil
 }
 
 type generatedContainerResult struct {
@@ -51,13 +51,15 @@ type generatedContainerResult struct {
 
 func (r *generatedContainerResult) Result(_ context.Context, namespace, taskName string) (string, bool, error) {
 	r.calls++
-	if r.failed {
-		return "", false, fmt.Errorf("result should not be read")
-	}
 	identity := analysisruntime.NewContainerStateIdentity(namespace, taskName, r.request)
 	state := analysisruntime.ContainerAnalysisState{
 		Version: analysisruntime.ContainerStateVersion, TaskNamespace: namespace,
 		TaskName: taskName, CacheKey: identity.CacheKey, CacheEntries: r.entry,
+		Traces: []ai.AnalysisTrace{{
+			JobID: r.request.JobID, BuildID: r.request.Build.BuildID, TestName: r.request.TestCase.Name,
+			APIMode: "chat_completions", StartedAt: time.Now().UTC().Format(time.RFC3339Nano),
+			RecordedAt: time.Now().UTC().Format(time.RFC3339Nano), Outcome: "unavailable",
+		}},
 	}
 	result := ai.FailureAnalysisResult{
 		Summary: &models.AISummary{GeneratedAt: time.Now().UTC().Format(time.RFC3339), Summary: "container result"},
@@ -70,8 +72,10 @@ func (r *generatedContainerResult) Result(_ context.Context, namespace, taskName
 	if err := analysisruntime.WriteEncryptedContainerAnalysisState(&logs, state, r.key, identity); err != nil {
 		return "", false, err
 	}
-	if err := analysisruntime.WriteFailureAnalysisResult(&logs, result); err != nil {
-		return "", false, err
+	if !r.failed {
+		if err := analysisruntime.WriteFailureAnalysisResult(&logs, result); err != nil {
+			return "", false, err
+		}
 	}
 	return logs.String(), true, nil
 }
@@ -79,7 +83,7 @@ func (r *generatedContainerResult) Result(_ context.Context, namespace, taskName
 func containerAnalyzerTestOptions(t *testing.T, key []byte) ContainerAnalyzerOptions {
 	t.Helper()
 	return ContainerAnalyzerOptions{
-		Namespace: "orka-system", Image: "dashboard-analyzer:sha", ProjectDir: containerTaskProject(t), DataDir: t.TempDir(),
+		Namespace: "orka-system", Image: "dashboard-analyzer:sha-deadbeef", ProjectDir: containerTaskProject(t), DataDir: t.TempDir(),
 		API: "chat_completions", Endpoint: "https://model.invalid/v1/chat/completions", Model: "model",
 		ModelSecretName: "model-secret", ModelTokenKey: "token", StateSecretName: "state-secret", StateSecretKey: "state-key", StateKey: key,
 		TaskTimeout: time.Minute, PollInterval: time.Millisecond, MaxRetries: 1, MaxConcurrentTasks: 2,
@@ -144,7 +148,10 @@ func TestContainerAnalyzerFailedTaskDoesNotReplaceAcceptedCache(t *testing.T) {
 	}
 	resources := &fakeContainerResourceClient{}
 	kube := &fakeContainerAnalyzerKube{fakeContainerResourceClient: resources, phase: "Failed"}
-	results := &generatedContainerResult{request: request, key: key, failed: true}
+	failedEntry := map[string]ai.CacheEntry{cacheKey: {
+		Key: cacheKey, CreatedAt: time.Now().UTC().Add(time.Minute), Data: json.RawMessage(`{"summary":"must-not-merge"}`),
+	}}
+	results := &generatedContainerResult{request: request, key: key, entry: failedEntry, failed: true}
 	analyzer, err := newContainerAnalyzer(containerAnalyzerTestOptions(t, key), kube, results, store)
 	if err != nil {
 		t.Fatal(err)
@@ -153,11 +160,26 @@ func TestContainerAnalyzerFailedTaskDoesNotReplaceAcceptedCache(t *testing.T) {
 	if err == nil || result.Summary == nil || result.Summary.Summary != "accepted published result" || result.Analysis == nil || result.Analysis.RootCause != "accepted cause" {
 		t.Fatalf("result = %+v, error = %v", result, err)
 	}
-	if results.calls != 0 {
-		t.Fatalf("failed Task result calls = %d, want 0", results.calls)
+	if results.calls != 1 {
+		t.Fatalf("failed Task result calls = %d, want 1", results.calls)
 	}
 	got := store.CacheSeed(request)[cacheKey]
 	if !bytes.Contains(got.Data, []byte(`"accepted"`)) {
 		t.Fatalf("accepted cache was replaced: %s", got.Data)
+	}
+	if traces := store.TraceStore().Snapshot().Traces; len(traces) != 1 || traces[0].Outcome != "unavailable" {
+		t.Fatalf("failed Task traces = %+v", traces)
+	}
+}
+
+func TestValidateContainerAnalyzerOptionsRejectsMutableImageTag(t *testing.T) {
+	opts := containerAnalyzerTestOptions(t, bytes.Repeat([]byte{0x61}, 32))
+	opts.Image = "ghcr.io/example/analyzer:main"
+	if err := ValidateContainerAnalyzerOptions(opts); err == nil || !strings.Contains(err.Error(), "immutable") {
+		t.Fatalf("error = %v", err)
+	}
+	opts.Image = "ghcr.io/example/analyzer:v1.2.3"
+	if err := ValidateContainerAnalyzerOptions(opts); err != nil {
+		t.Fatalf("semantic version rejected: %v", err)
 	}
 }

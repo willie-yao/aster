@@ -153,7 +153,8 @@ because Helm release names are unique only within their own namespace.
 {{- if .Values.analysisRuntime.orkaContainer.state.existingSecret -}}
 {{- .Values.analysisRuntime.orkaContainer.state.existingSecret -}}
 {{- else -}}
-{{- printf "%s-analysis-state" (include "prow-ai-dashboard.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- $base := include "prow-ai-dashboard.fullname" . | trunc 39 | trimSuffix "-" -}}
+{{- printf "%s-analysis-state-%s" $base (include "prow-ai-dashboard.orkaReleaseScope" .) -}}
 {{- end -}}
 {{- end -}}
 
@@ -188,7 +189,9 @@ Validate AI provider configuration.
   {{- if not .Values.ai.model -}}{{- fail "analysisRuntime.type=orka-container requires ai.model" -}}{{- end -}}
   {{- if not $cfg.namespace -}}{{- fail "analysisRuntime.orkaContainer.namespace is required" -}}{{- end -}}
   {{- if not $cfg.image.repository -}}{{- fail "analysisRuntime.orkaContainer.image.repository is required" -}}{{- end -}}
-  {{- if not ($cfg.image.tag | default .Chart.AppVersion) -}}{{- fail "analysisRuntime.orkaContainer.image.tag or Chart.appVersion is required" -}}{{- end -}}
+  {{- $imageTag := $cfg.image.tag | default .Chart.AppVersion -}}
+  {{- if not $imageTag -}}{{- fail "analysisRuntime.orkaContainer.image.tag or Chart.appVersion is required" -}}{{- end -}}
+  {{- if not (regexMatch "^(sha-[0-9a-fA-F]{7,64}|v?[0-9]+[.][0-9]+[.][0-9]+(-[0-9A-Za-z.-]+)?([+][0-9A-Za-z.-]+)?)$" $imageTag) -}}{{- fail "analysisRuntime.orkaContainer.image tag must be an immutable sha-<hex> or full semantic version" -}}{{- end -}}
   {{- if ne $cfg.image.pullPolicy "IfNotPresent" -}}{{- fail "analysisRuntime.orkaContainer.image.pullPolicy must be IfNotPresent for the pinned Orka controller" -}}{{- end -}}
   {{- if not $cfg.modelAuth.existingSecret -}}{{- fail "analysisRuntime.orkaContainer.modelAuth.existingSecret is required" -}}{{- end -}}
   {{- if not $cfg.modelAuth.tokenKey -}}{{- fail "analysisRuntime.orkaContainer.modelAuth.tokenKey is required" -}}{{- end -}}
@@ -199,9 +202,9 @@ Validate AI provider configuration.
   {{- if not (regexMatch "^(0|[1-9][0-9]?)$" $retries) -}}{{- fail "analysisRuntime.orkaContainer.retries must be an integer from 0 to 99" -}}{{- end -}}
   {{- if not (regexMatch "^[1-9][0-9]*(ms|s|m|h)$" (printf "%v" $cfg.pollInterval)) -}}{{- fail "analysisRuntime.orkaContainer.pollInterval must be a positive Go duration" -}}{{- end -}}
   {{- if not (regexMatch "^[1-9][0-9]*(ms|s|m|h)$" (printf "%v" $cfg.taskTimeout)) -}}{{- fail "analysisRuntime.orkaContainer.taskTimeout must be a positive Go duration" -}}{{- end -}}
-  {{- if eq (len $cfg.nodeSelector) 0 -}}{{- fail "analysisRuntime.orkaContainer.nodeSelector must select CPU nodes" -}}{{- end -}}
+  {{- if not (index $cfg.nodeSelector "agentpool") -}}{{- fail "analysisRuntime.orkaContainer.nodeSelector.agentpool must select an explicit CPU pool" -}}{{- end -}}
   {{- $placement := printf "%s %s %s" (toJson $cfg.nodeSelector) (toJson $cfg.tolerations) (toJson $cfg.affinity) -}}
-  {{- if regexMatch "(?i)(a100|h100|nvidia[.]com/gpu|[^a-z]gpu[^a-z])" $placement -}}{{- fail "analysisRuntime.orkaContainer placement must not select or tolerate GPU nodes" -}}{{- end -}}
+  {{- if regexMatch "(?i)(accelerator|nvidia|tesla|radeon|(^|[^a-z0-9])(gpu|a10|a100|h100|v100|p100|t4|l4|mi250|mi300)([^a-z0-9]|$))" $placement -}}{{- fail "analysisRuntime.orkaContainer placement must not select or tolerate GPU nodes" -}}{{- end -}}
 {{- end -}}
 {{- end -}}
 

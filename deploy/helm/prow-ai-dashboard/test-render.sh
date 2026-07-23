@@ -76,12 +76,12 @@ container_args=(
   --set ai.model=script-model
   --set ai.token=dashboard-token
   --set analysisRuntime.type=orka-container
-  --set analysisRuntime.orkaContainer.image.tag=sha-analyzer
+  --set analysisRuntime.orkaContainer.image.tag=sha-deadbeef
   --set analysisRuntime.orkaContainer.modelAuth.existingSecret=orka-model
 )
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" "${container_args[@]}" > "$tmp/container-analysis.yaml"
 grep -Fq -- '-analysis-runtime=orka-container' "$tmp/container-analysis.yaml"
-grep -Fq -- '-orka-analysis-image=ghcr.io/willie-yao/prow-ai-dashboard/analyzer:sha-analyzer' "$tmp/container-analysis.yaml"
+grep -Fq -- '-orka-analysis-image=ghcr.io/willie-yao/prow-ai-dashboard/analyzer:sha-deadbeef' "$tmp/container-analysis.yaml"
 grep -Fq 'restartPolicy: Never' "$tmp/container-analysis.yaml"
 grep -Fq 'backoffLimit: 0' "$tmp/container-analysis.yaml"
 grep -Fq 'resources: ["tasks"]' "$tmp/container-analysis.yaml"
@@ -97,6 +97,17 @@ if [[ $(grep -Fc 'app.kubernetes.io/component: orka-container-analysis-state' "$
   exit 1
 fi
 
+for namespace in dashboard-a dashboard-b; do
+  helm template test "$chart" -n "$namespace" -f "$tmp/values.yaml" "${container_args[@]}" \
+    --show-only templates/orka-analysis-state-secret.yaml > "$tmp/state-$namespace.yaml"
+done
+state_name_a=$(awk '$1 == "name:" { name=$2 } $1 == "namespace:" && $2 == "orka-system" { print name; exit }' "$tmp/state-dashboard-a.yaml")
+state_name_b=$(awk '$1 == "name:" { name=$2 } $1 == "namespace:" && $2 == "orka-system" { print name; exit }' "$tmp/state-dashboard-b.yaml")
+if [[ -z $state_name_a || -z $state_name_b || $state_name_a == "$state_name_b" ]]; then
+  echo 'chart-managed cross-namespace state Secret names are not release-scoped' >&2
+  exit 1
+fi
+
 # A supplied state Secret is referenced in both namespaces but never copied.
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" "${container_args[@]}" \
   --set analysisRuntime.orkaContainer.state.existingSecret=shared-state > "$tmp/container-existing-state.yaml"
@@ -106,7 +117,7 @@ if grep -Fq 'orka-container-analysis-state' "$tmp/container-existing-state.yaml"
 fi
 grep -Fq -- '-orka-analysis-state-secret=shared-state' "$tmp/container-existing-state.yaml"
 
-for invalid in type watch endpoint model namespace image model-secret token-key state-key concurrency poll timeout retries gpu; do
+for invalid in type watch endpoint model namespace image mutable-image model-secret token-key state-key concurrency poll timeout retries cpu-selector gpu accelerator; do
   case $invalid in
     type) invalid_args=(--set analysisRuntime.type=remote); want='analysisRuntime.type must be inprocess or orka-container' ;;
     watch) invalid_args=("${container_args[@]}" --set mode=watch); want='analysisRuntime.type=orka-container requires mode=cron' ;;
@@ -114,14 +125,17 @@ for invalid in type watch endpoint model namespace image model-secret token-key 
     model) invalid_args=("${container_args[@]}" --set-string ai.model=); want='analysisRuntime.type=orka-container requires ai.model' ;;
     namespace) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.namespace=); want='analysisRuntime.orkaContainer.namespace is required' ;;
     image) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.image.repository=); want='analysisRuntime.orkaContainer.image.repository is required' ;;
-    model-secret) invalid_args=(--set mode=cron --set ai.enabled=true --set ai.endpoint=http://model --set ai.model=model --set analysisRuntime.type=orka-container); want='analysisRuntime.orkaContainer.modelAuth.existingSecret is required' ;;
+    mutable-image) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.image.tag=main); want='analysisRuntime.orkaContainer.image tag must be an immutable sha-<hex> or full semantic version' ;;
+    model-secret) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.modelAuth.existingSecret=); want='analysisRuntime.orkaContainer.modelAuth.existingSecret is required' ;;
     token-key) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.modelAuth.tokenKey=); want='analysisRuntime.orkaContainer.modelAuth.tokenKey is required' ;;
     state-key) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.state.key=); want='analysisRuntime.orkaContainer.state.key is required' ;;
     concurrency) invalid_args=("${container_args[@]}" --set analysisRuntime.orkaContainer.maxConcurrentTasks=0); want='analysisRuntime.orkaContainer.maxConcurrentTasks must be an integer from 1 to 999' ;;
     poll) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.pollInterval=soon); want='analysisRuntime.orkaContainer.pollInterval must be a positive Go duration' ;;
     timeout) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.taskTimeout=0s); want='analysisRuntime.orkaContainer.taskTimeout must be a positive Go duration' ;;
     retries) invalid_args=("${container_args[@]}" --set analysisRuntime.orkaContainer.retries=-1); want='analysisRuntime.orkaContainer.retries must be an integer from 0 to 99' ;;
+    cpu-selector) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.nodeSelector.agentpool=); want='analysisRuntime.orkaContainer.nodeSelector.agentpool must select an explicit CPU pool' ;;
     gpu) invalid_args=("${container_args[@]}" --set analysisRuntime.orkaContainer.nodeSelector.agentpool=h100); want='analysisRuntime.orkaContainer placement must not select or tolerate GPU nodes' ;;
+    accelerator) invalid_args=("${container_args[@]}" --set analysisRuntime.orkaContainer.nodeSelector.cloud\.google\.com/gke-accelerator=nvidia-tesla-t4); want='analysisRuntime.orkaContainer placement must not select or tolerate GPU nodes' ;;
   esac
   if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" "${invalid_args[@]}" > "$tmp/invalid-analysis-$invalid.yaml" 2>&1; then
     echo "$invalid analysis runtime value was accepted" >&2

@@ -118,15 +118,19 @@ func run(ctx context.Context, args []string, getenv envGetter, stdout, stderr io
 	log.Printf("starting failure analysis bundle=%s", bundle.Digest[:12])
 	result, analyzeErr := runtime.analyzer.AnalyzeFailure(ctx, runtime.httpClient, bundle.Request)
 	state, stateErr := runtime.snapshot(bundle.Request)
+	identity := analysisruntime.NewContainerStateIdentity(getenv(analysisruntime.ContainerTaskNamespaceEnv), getenv(analysisruntime.ContainerTaskNameEnv), bundle.Request)
+	var stateWriteErr error
+	if stateErr == nil {
+		stateWriteErr = analysisruntime.WriteEncryptedContainerAnalysisState(stdout, state, stateKey, identity)
+	}
 	if analyzeErr != nil {
-		return errors.Join(fmt.Errorf("AnalyzeFailure: %w", analyzeErr), stateErr)
+		return errors.Join(fmt.Errorf("AnalyzeFailure: %w", analyzeErr), stateErr, stateWriteErr)
 	}
 	if stateErr != nil {
 		return fmt.Errorf("snapshot private analysis state: %w", stateErr)
 	}
-	identity := analysisruntime.NewContainerStateIdentity(getenv(analysisruntime.ContainerTaskNamespaceEnv), getenv(analysisruntime.ContainerTaskNameEnv), bundle.Request)
-	if err := analysisruntime.WriteEncryptedContainerAnalysisState(stdout, state, stateKey, identity); err != nil {
-		return err
+	if stateWriteErr != nil {
+		return stateWriteErr
 	}
 	if err := analysisruntime.WriteFailureAnalysisResult(stdout, result); err != nil {
 		return err

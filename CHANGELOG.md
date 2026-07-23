@@ -43,7 +43,8 @@ for how to pin a release.
   and only recommendation. The adapter includes a dedicated analyzer image,
   Task-only RBAC, immutable sanitized bundles, framed results, encrypted raw
   cache and trace state, evidence-coverage round-trip protection, bounded
-  cleanup, CPU placement, and an isolated kind lifecycle test. It has no Pages
+  bundle and terminal Task cleanup, failed-Task trace retention, explicit CPU
+  pool placement, and an isolated kind lifecycle test. It has no Pages
   or watch-mode support and no backward compatibility guarantee.
 - **SMTP email notifications.** Consumers can configure persistent-failure,
   changed-error, and recovery email alerts under `notifications.email`. SMTP

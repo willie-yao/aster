@@ -305,6 +305,22 @@ func (s *ContainerStateStore) Save() error {
 	return errors.Join(s.cache.Save(), s.traces.Save(filepath.Join(s.dataDir, output.AITraceFilename)))
 }
 
+// MergeTraces persists authenticated traces without accepting cache entries.
+func (s *ContainerStateStore) MergeTraces(state ContainerAnalysisState) error {
+	if s == nil {
+		return fmt.Errorf("container state store is required")
+	}
+	if err := validateContainerAnalysisState(state); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, trace := range state.Traces {
+		s.traces.Upsert(trace)
+	}
+	return s.traces.Save(filepath.Join(s.dataDir, output.AITraceFilename))
+}
+
 // Merge persists one authenticated cache and trace delta.
 func (s *ContainerStateStore) Merge(state ContainerAnalysisState) error {
 	if s == nil {

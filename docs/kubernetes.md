@@ -105,7 +105,7 @@ analysisRuntime:
     retries: 1
     image:
       repository: ghcr.io/willie-yao/prow-ai-dashboard/analyzer
-      tag: main
+      tag: sha-deadbeef
       pullPolicy: IfNotPresent
     modelAuth:
       existingSecret: orka-model
@@ -118,6 +118,8 @@ analysisRuntime:
     tolerations: []
     affinity: {}
 ```
+
+Because the pinned Orka controller uses `IfNotPresent`, the chart rejects mutable analyzer tags such as `main`, `latest`, `dev`, and moving major tags. Use a `sha-<hex>` tag or a full semantic version.
 
 The normal fetcher still needs its `AI_TOKEN` in the dashboard namespace for the
 cross-build pattern pass. Create `analysisRuntime.orkaContainer.modelAuth.existingSecret`
@@ -139,15 +141,20 @@ including evidence coverage fields added by newer engine versions, without
 enumerating their schema. Task identity remains in the encrypted wrapper and
 Orka Task, not the private analysis trace schema.
 
+A bounded maintenance pass removes old terminal analyzer Tasks and stale input
+bundles by exact UID and resource version. Failed Tasks transport authenticated
+private traces, but their cache entries are never merged.
+
 The immutable ConfigMap bundle contains the sanitized project policy, prompt,
 skill files, request, and a bounded raw cache seed. It never contains model
 credentials. Projects using `ai.headers` are rejected for this experimental
 runtime because the adapter has no secure cross-namespace header transport. Use
 bearer-token authentication or a trusted proxy.
 
-Analyzer Tasks default to `agentpool: nodepool1`. Helm rejects GPU selectors and
-GPU tolerations. Install the Orka controller and helper workloads on CPU nodes as
-well. The pinned Orka controller already applies a non-root, read-only-root
+Analyzer Tasks default to `agentpool: nodepool1`. Helm requires an explicit
+`agentpool` CPU pool and rejects accelerator selectors, affinity, and tolerations,
+including vendor accelerator labels. Install the Orka controller and helper
+workloads on CPU nodes as well. The pinned Orka controller already applies a non-root, read-only-root
 container security context. Only the model-serving workload may select GPU
 nodes.
 

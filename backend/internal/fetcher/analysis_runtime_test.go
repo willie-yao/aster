@@ -3,6 +3,7 @@ package fetcher
 import (
 	"bytes"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,7 +18,7 @@ func validContainerAnalysisOptions() Options {
 		AnalysisRuntime: AnalysisRuntimeOptions{
 			Type: AnalysisRuntimeOrkaContainer,
 			OrkaContainer: OrkaContainerAnalysisOptions{
-				Namespace: "orka-system", Image: "analyzer:sha",
+				Namespace: "orka-system", Image: "analyzer:sha-deadbeef",
 				ModelSecretName: "model-secret", ModelTokenKey: "token",
 				StateSecretName: "state-secret", StateSecretKey: "state-key",
 				MaxConcurrent: 2, PollInterval: time.Second, TaskTimeout: time.Minute, Retries: 1,
@@ -43,6 +44,11 @@ func TestValidateAnalysisRuntimeOptions(t *testing.T) {
 	gpu.AnalysisRuntime.OrkaContainer.NodeSelector = map[string]string{"agentpool": "h100"}
 	if err := validateAnalysisRuntimeOptions(gpu); err == nil || !strings.Contains(err.Error(), "GPU") {
 		t.Fatalf("GPU placement error = %v", err)
+	}
+	accelerator := validContainerAnalysisOptions()
+	accelerator.AnalysisRuntime.OrkaContainer.NodeSelector["cloud.google.com/gke-accelerator"] = "nvidia-tesla-t4"
+	if err := validateAnalysisRuntimeOptions(accelerator); err == nil || !strings.Contains(err.Error(), "GPU") {
+		t.Fatalf("accelerator placement error = %v", err)
 	}
 	missing := validContainerAnalysisOptions()
 	missing.AnalysisRuntime.OrkaContainer.ModelSecretName = ""
@@ -115,5 +121,16 @@ ai:
 	provider := pipeline.aiProject.Provider
 	if provider.API != "chat_completions" || provider.Endpoint != "https://helm.invalid/v1/chat/completions" || provider.Model != "helm-model" {
 		t.Fatalf("provider = %+v", provider)
+	}
+}
+
+func TestWarnOnAnalysisPersistenceIsBestEffort(t *testing.T) {
+	called := 0
+	warnOnAnalysisPersistence("test state", func() error {
+		called++
+		return errors.New("disk full")
+	})
+	if called != 1 {
+		t.Fatalf("save calls = %d, want 1", called)
 	}
 }

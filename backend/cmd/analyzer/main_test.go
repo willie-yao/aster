@@ -182,7 +182,7 @@ func TestAnalyzerRedactsProviderURLsFromDurableStderr(t *testing.T) {
 	}
 }
 
-func TestRunAnalyzeFailureErrorReturnsWithoutResult(t *testing.T) {
+func TestRunAnalyzeFailureErrorWritesStateWithoutResult(t *testing.T) {
 	fake := &fakeAnalyzer{err: errors.New("provider failed")}
 	factory := func(context.Context, commandOptions, envGetter) (*analyzerRuntime, error) {
 		return &analyzerRuntime{analyzer: fake, httpClient: http.DefaultClient, snapshot: fakeSnapshot}, nil
@@ -192,8 +192,12 @@ func TestRunAnalyzeFailureErrorReturnsWithoutResult(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "provider failed") {
 		t.Fatalf("run error = %v", err)
 	}
-	if stdout.Len() != 0 {
-		t.Fatalf("stdout = %q, want empty", stdout.String())
+	if !strings.Contains(stdout.String(), analysisruntime.ContainerStateMarker) || strings.Contains(stdout.String(), analysisruntime.FailureAnalysisResultMarker) {
+		t.Fatalf("stdout = %q, want state without result", stdout.String())
+	}
+	identity := analysisruntime.NewContainerStateIdentity("orka-system", "test-task", analyzerTestRequest())
+	if _, stateErr := analysisruntime.ParseEncryptedContainerAnalysisState(stdout.String(), analyzerStateKey(), identity); stateErr != nil {
+		t.Fatalf("parse failure state: %v", stateErr)
 	}
 }
 

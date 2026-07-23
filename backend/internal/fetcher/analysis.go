@@ -149,9 +149,7 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 	}
 
 	if container != nil {
-		if err := container.StateStore().Save(); err != nil {
-			return fmt.Errorf("save container analysis state: %w", err)
-		}
+		warnOnAnalysisPersistence("container analysis state", container.StateStore().Save)
 		runtime, err = p.ensureAnalysisRuntime(ctx)
 		if err != nil {
 			return fmt.Errorf("cross-build analysis runtime setup: %w", err)
@@ -170,13 +168,17 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 	}
 
 	analyzePatternsAcrossBuilds(ctx, service, details)
-	if err := runtime.SaveCache(); err != nil {
-		return fmt.Errorf("save AI cache: %w", err)
-	}
-	if err := traceStore.Save(filepath.Join(p.opts.OutDir, output.AITraceFilename)); err != nil {
-		return fmt.Errorf("save AI traces: %w", err)
-	}
+	warnOnAnalysisPersistence("AI cache", runtime.SaveCache)
+	warnOnAnalysisPersistence("AI traces", func() error {
+		return traceStore.Save(filepath.Join(p.opts.OutDir, output.AITraceFilename))
+	})
 	return nil
+}
+
+func warnOnAnalysisPersistence(name string, save func() error) {
+	if err := save(); err != nil {
+		log.Printf("Warning: failed to save %s: %v", name, err)
+	}
 }
 
 func (p *pipeline) ensureAnalysisRuntime(ctx context.Context) (*analysisruntime.Runtime, error) {

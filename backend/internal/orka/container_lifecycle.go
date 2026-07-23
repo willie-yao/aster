@@ -18,6 +18,7 @@ var configMapsGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resour
 const (
 	containerAnalysisBundleLabel         = "prow-ai-dashboard/bundle"
 	containerAnalysisBundleSelector      = containerAnalysisBundleLabel + "=true"
+	containerAnalysisTaskSelector        = "prow-ai-dashboard/adapter=container-analyzer"
 	containerAnalysisTaskNameAnnotation  = "prow-ai-dashboard/task-name"
 	containerAnalysisClaimAnnotation     = "prow-ai-dashboard/bundle-claim"
 	containerAnalysisClaimTimeAnnotation = "prow-ai-dashboard/bundle-claimed-at"
@@ -27,6 +28,10 @@ const (
 	ContainerAnalysisClaimTTL = 10 * time.Minute
 	// ContainerAnalysisBundlePruneLimit bounds cleanup work per fetch run.
 	ContainerAnalysisBundlePruneLimit = 100
+	// ContainerAnalysisTaskRetention bounds terminal Task history.
+	ContainerAnalysisTaskRetention = 24 * time.Hour
+	// ContainerAnalysisTaskPruneLimit bounds terminal Task cleanup per fetch run.
+	ContainerAnalysisTaskPruneLimit = 100
 )
 
 // ContainerAnalysisResourceClient applies and removes analyzer resources.
@@ -38,6 +43,12 @@ type ContainerAnalysisResourceClient interface {
 	DeleteIfResourceVersion(context.Context, schema.GroupVersionResource, string, string, string) (bool, error)
 	ListByLabel(context.Context, schema.GroupVersionResource, string, string) ([]unstructured.Unstructured, error)
 	TaskState(context.Context, string, string) (TaskState, error)
+}
+
+// ContainerAnalysisMaintenanceClient also deletes exact Task identities.
+type ContainerAnalysisMaintenanceClient interface {
+	ContainerAnalysisResourceClient
+	DeleteTaskIfIdentity(context.Context, string, string, string, string) (bool, error)
 }
 
 // ReconcileContainerAnalysisResources applies one bundle and Task without batch GC.
@@ -255,6 +266,52 @@ func PruneContainerAnalysisBundles(ctx context.Context, client ContainerAnalysis
 		removed, err := client.DeleteIfResourceVersion(ctx, configMapsGVR, namespace, items[i].GetName(), resourceVersion)
 		if err != nil {
 			return deleted, fmt.Errorf("delete expired container analysis bundle %s: %w", items[i].GetName(), err)
+		}
+		if removed {
+			deleted++
+		}
+	}
+	return deleted, nil
+}
+
+// PruneContainerAnalysisTasks removes old terminal Tasks owned by this adapter.
+func PruneContainerAnalysisTasks(ctx context.Context, client ContainerAnalysisMaintenanceClient, namespace string, now time.Time) (int, error) {
+	if namespace == "" {
+		return 0, fmt.Errorf("container analysis Task namespace is required")
+	}
+	items, err := client.ListByLabel(ctx, TasksGVR, namespace, containerAnalysisTaskSelector)
+	if err != nil {
+		return 0, fmt.Errorf("list container analysis Tasks: %w", err)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		left, right := items[i].GetCreationTimestamp().Time, items[j].GetCreationTimestamp().Time
+		if left.Equal(right) {
+			return items[i].GetName() < items[j].GetName()
+		}
+		return left.Before(right)
+	})
+	cutoff := now.Add(-ContainerAnalysisTaskRetention)
+	deleted := 0
+	processed := 0
+	for i := range items {
+		if processed >= ContainerAnalysisTaskPruneLimit {
+			break
+		}
+		created := items[i].GetCreationTimestamp()
+		if created.IsZero() || created.Time.After(cutoff) {
+			continue
+		}
+		processed++
+		state, err := taskStateFromObject(&items[i])
+		if err != nil {
+			return deleted, fmt.Errorf("read expired container analysis Task %s: %w", items[i].GetName(), err)
+		}
+		if state.Deleting || !TerminalPhase(state.Phase) || state.UID == "" || state.ResourceVersion == "" {
+			continue
+		}
+		removed, err := client.DeleteTaskIfIdentity(ctx, namespace, items[i].GetName(), state.UID, state.ResourceVersion)
+		if err != nil {
+			return deleted, fmt.Errorf("delete expired container analysis Task %s: %w", items[i].GetName(), err)
 		}
 		if removed {
 			deleted++

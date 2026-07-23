@@ -22,7 +22,10 @@ const (
 	ContainerAnalysisContractVersion = analysisruntime.ContainerAnalyzerContractVersion
 )
 
-var invalidTaskNameChars = regexp.MustCompile(`[^a-z0-9-]+`)
+var (
+	invalidTaskNameChars = regexp.MustCompile(`[^a-z0-9-]+`)
+	gpuPlacementPattern  = regexp.MustCompile(`(?i)(accelerator|nvidia|tesla|radeon|(^|[^a-z0-9])(gpu|a10|a100|h100|v100|p100|t4|l4|mi250|mi300)([^a-z0-9]|$))`)
+)
 
 // SecretEnvVar maps one analyzer environment variable to a Kubernetes Secret key.
 type SecretEnvVar struct {
@@ -73,6 +76,9 @@ func BuildContainerAnalysisResources(in ContainerAnalysisTaskSpec) (ContainerAna
 	}
 	if strings.TrimSpace(in.ProjectDir) == "" {
 		return ContainerAnalysisResources{}, fmt.Errorf("container analysis project directory is required")
+	}
+	if len(in.NodeSelector) == 0 {
+		in.NodeSelector = map[string]string{"agentpool": "nodepool1"}
 	}
 	if err := validateContainerAnalysisPlacement(in.NodeSelector, in.Tolerations, in.Affinity); err != nil {
 		return ContainerAnalysisResources{}, err
@@ -304,6 +310,9 @@ func safeInlineEnvironmentName(name string) bool {
 }
 
 func validateContainerAnalysisPlacement(nodeSelector map[string]string, tolerations []map[string]any, affinity map[string]any) error {
+	if strings.TrimSpace(nodeSelector["agentpool"]) == "" {
+		return fmt.Errorf("container analysis placement requires an explicit agentpool CPU selector")
+	}
 	payload, err := json.Marshal(struct {
 		NodeSelector map[string]string `json:"nodeSelector"`
 		Tolerations  []map[string]any  `json:"tolerations"`
@@ -312,8 +321,7 @@ func validateContainerAnalysisPlacement(nodeSelector map[string]string, tolerati
 	if err != nil {
 		return fmt.Errorf("marshal container analysis placement: %w", err)
 	}
-	lower := strings.ToLower(string(payload))
-	if strings.Contains(lower, "a100") || strings.Contains(lower, "h100") || strings.Contains(lower, "/gpu") || strings.Contains(lower, `"gpu"`) {
+	if gpuPlacementPattern.Match(payload) {
 		return fmt.Errorf("container analysis placement must not select or tolerate GPU nodes")
 	}
 	return nil

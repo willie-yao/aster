@@ -12,6 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 type fakeContainerResourceClient struct {
@@ -25,6 +26,7 @@ type fakeContainerResourceClient struct {
 	deleteErr                 error
 	deleteVersionErr          error
 	deleteVersionConflict     bool
+	deleteTaskConflict        bool
 	listErr                   error
 	taskErr                   error
 	applied                   []string
@@ -32,7 +34,9 @@ type fakeContainerResourceClient struct {
 	claimed                   []string
 	deleted                   []string
 	deletedVersion            []string
+	deletedTasks              []string
 	listed                    []unstructured.Unstructured
+	listedTasks               []unstructured.Unstructured
 	existing                  *unstructured.Unstructured
 	taskStates                map[string]TaskState
 	taskStateSequences        map[string][]TaskState
@@ -104,10 +108,22 @@ func (f *fakeContainerResourceClient) DeleteIfResourceVersion(_ context.Context,
 }
 
 func (f *fakeContainerResourceClient) ListByLabel(_ context.Context, gvr schema.GroupVersionResource, _ string, selector string) ([]unstructured.Unstructured, error) {
-	if gvr != configMapsGVR || selector != containerAnalysisBundleSelector {
+	switch {
+	case gvr == configMapsGVR && selector == containerAnalysisBundleSelector:
+		return f.listed, f.listErr
+	case gvr == TasksGVR && selector == containerAnalysisTaskSelector:
+		return f.listedTasks, f.listErr
+	default:
 		return nil, errors.New("unexpected list")
 	}
-	return f.listed, f.listErr
+}
+
+func (f *fakeContainerResourceClient) DeleteTaskIfIdentity(_ context.Context, _, name, uid, resourceVersion string) (bool, error) {
+	f.deletedTasks = append(f.deletedTasks, name+"@"+uid+"@"+resourceVersion)
+	if f.deleteVersionErr != nil {
+		return false, f.deleteVersionErr
+	}
+	return !f.deleteTaskConflict, nil
 }
 
 func (f *fakeContainerResourceClient) TaskState(_ context.Context, _, name string) (TaskState, error) {
@@ -390,6 +406,23 @@ func bundleObject(name, taskName string, created time.Time) unstructured.Unstruc
 	return object
 }
 
+func taskObject(name, phase string, created time.Time) unstructured.Unstructured {
+	object := unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "core.orka.ai/v1alpha1", "kind": "Task",
+		"metadata": map[string]any{
+			"name": name, "namespace": "orka-system",
+			"labels": map[string]any{"prow-ai-dashboard/adapter": "container-analyzer"},
+		},
+		"status": map[string]any{"phase": phase},
+	}}
+	object.SetUID(types.UID("uid-" + name))
+	object.SetResourceVersion("rv-" + name)
+	if !created.IsZero() {
+		object.SetCreationTimestamp(metav1.NewTime(created))
+	}
+	return object
+}
+
 func deepCopyMap(in map[string]any) map[string]any {
 	return (&unstructured.Unstructured{Object: in}).DeepCopy().Object
 }
@@ -407,5 +440,58 @@ func TestPruneContainerAnalysisBundlesIsBounded(t *testing.T) {
 	}
 	if deleted != ContainerAnalysisBundlePruneLimit || len(client.deletedVersion) != ContainerAnalysisBundlePruneLimit {
 		t.Fatalf("deleted=%d calls=%d, want %d", deleted, len(client.deletedVersion), ContainerAnalysisBundlePruneLimit)
+	}
+}
+
+func TestPruneContainerAnalysisTasksRemovesOnlyOldTerminalTasks(t *testing.T) {
+	now := time.Now().UTC()
+	client := &fakeContainerResourceClient{listedTasks: []unstructured.Unstructured{
+		taskObject("succeeded", "Succeeded", now.Add(-2*ContainerAnalysisTaskRetention)),
+		taskObject("failed", "Failed", now.Add(-2*ContainerAnalysisTaskRetention)),
+		taskObject("running", "Running", now.Add(-2*ContainerAnalysisTaskRetention)),
+		taskObject("recent", "Succeeded", now.Add(-time.Hour)),
+		taskObject("unknown", "Succeeded", time.Time{}),
+	}}
+	deleted, err := PruneContainerAnalysisTasks(context.Background(), client, "orka-system", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"failed@uid-failed@rv-failed",
+		"succeeded@uid-succeeded@rv-succeeded",
+	}
+	if deleted != 2 || !reflect.DeepEqual(client.deletedTasks, want) {
+		t.Fatalf("deleted=%d Tasks=%v, want %v", deleted, client.deletedTasks, want)
+	}
+}
+
+func TestPruneContainerAnalysisTasksUsesIdentityPreconditions(t *testing.T) {
+	now := time.Now().UTC()
+	client := &fakeContainerResourceClient{
+		listedTasks:        []unstructured.Unstructured{taskObject("replaced", "Succeeded", now.Add(-2*ContainerAnalysisTaskRetention))},
+		deleteTaskConflict: true,
+	}
+	deleted, err := PruneContainerAnalysisTasks(context.Background(), client, "orka-system", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 0 || !reflect.DeepEqual(client.deletedTasks, []string{"replaced@uid-replaced@rv-replaced"}) {
+		t.Fatalf("deleted=%d Tasks=%v", deleted, client.deletedTasks)
+	}
+}
+
+func TestPruneContainerAnalysisTasksIsBounded(t *testing.T) {
+	now := time.Now().UTC()
+	items := make([]unstructured.Unstructured, 0, ContainerAnalysisTaskPruneLimit+20)
+	for i := 0; i < ContainerAnalysisTaskPruneLimit+20; i++ {
+		items = append(items, taskObject(fmt.Sprintf("old-%03d", i), "Succeeded", now.Add(-2*ContainerAnalysisTaskRetention-time.Duration(i)*time.Minute)))
+	}
+	client := &fakeContainerResourceClient{listedTasks: items}
+	deleted, err := PruneContainerAnalysisTasks(context.Background(), client, "orka-system", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != ContainerAnalysisTaskPruneLimit || len(client.deletedTasks) != ContainerAnalysisTaskPruneLimit {
+		t.Fatalf("deleted=%d calls=%d, want %d", deleted, len(client.deletedTasks), ContainerAnalysisTaskPruneLimit)
 	}
 }

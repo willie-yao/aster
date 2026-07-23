@@ -161,14 +161,18 @@ func taskStateFromObject(u *unstructured.Unstructured) (TaskState, error) {
 	}, nil
 }
 
-// DeleteTask deletes one Task only if its resourceVersion still matches.
-func (k *KubeClient) DeleteTask(ctx context.Context, ns, name, resourceVersion string) error {
-	preconditions := &metav1.Preconditions{ResourceVersion: &resourceVersion}
+// DeleteTaskIfIdentity deletes only the exact observed Task identity.
+func (k *KubeClient) DeleteTaskIfIdentity(ctx context.Context, ns, name, uid, resourceVersion string) (bool, error) {
+	uidValue := types.UID(uid)
+	preconditions := &metav1.Preconditions{UID: &uidValue, ResourceVersion: &resourceVersion}
 	err := k.dyn.Resource(TasksGVR).Namespace(ns).Delete(ctx, name, metav1.DeleteOptions{Preconditions: preconditions})
-	if apierrors.IsNotFound(err) {
-		return nil
+	if apierrors.IsNotFound(err) || apierrors.IsConflict(err) {
+		return false, nil
 	}
-	return err
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // TaskPhase returns a Task's status.phase, or "" if unset.

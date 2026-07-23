@@ -37,7 +37,8 @@ analysisRuntime:
     retries: 1
     image:
       repository: ghcr.io/willie-yao/prow-ai-dashboard/analyzer
-      # Defaults to .Chart.AppVersion when empty.
+      # Defaults to .Chart.AppVersion when empty. Container mode accepts only
+      # immutable sha-<hex> or full semantic-version tags.
       tag: ""
       # The pinned Orka controller uses IfNotPresent for container Tasks.
       pullPolicy: IfNotPresent
@@ -52,8 +53,8 @@ analysisRuntime:
     state:
       existingSecret: ""
       key: state-key
-    # Analyzer Tasks must stay on CPU nodes. GPU selectors and tolerations fail
-    # chart rendering.
+    # Analyzer Tasks must stay on CPU nodes. An explicit agentpool selector is
+    # required, and accelerator selectors, affinity, or tolerations fail render.
     nodeSelector:
       agentpool: nodepool1
     tolerations: []

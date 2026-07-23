@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -15,7 +16,12 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 )
 
-const containerAnalyzerFieldManager = "prow-ai-dashboard-container-analysis"
+const (
+	containerAnalyzerFieldManager = "prow-ai-dashboard-container-analysis"
+	failedTaskStateTimeout        = 30 * time.Second
+)
+
+var immutableAnalyzerTagPattern = regexp.MustCompile(`^(sha-[0-9a-fA-F]{7,64}|v?[0-9]+[.][0-9]+[.][0-9]+(-[0-9A-Za-z.-]+)?([+][0-9A-Za-z.-]+)?)$`)
 
 // ContainerAnalyzerOptions configures the experimental Orka container runtime.
 type ContainerAnalyzerOptions struct {
@@ -46,7 +52,7 @@ type ContainerAnalyzerOptions struct {
 
 type containerAnalyzerKube interface {
 	ContainerAnalysisResourceClient
-	DeleteTask(context.Context, string, string, string) error
+	DeleteTaskIfIdentity(context.Context, string, string, string, string) (bool, error)
 }
 
 type containerAnalyzerResults interface {
@@ -114,6 +120,13 @@ func ValidateContainerAnalyzerOptions(opts ContainerAnalyzerOptions) error {
 	return validateContainerAnalyzerOptions(opts)
 }
 
+func immutableContainerAnalyzerImage(image string) bool {
+	image = strings.TrimSpace(image)
+	colon := strings.LastIndex(image, ":")
+	slash := strings.LastIndex(image, "/")
+	return colon > slash && immutableAnalyzerTagPattern.MatchString(image[colon+1:])
+}
+
 func validateContainerAnalyzerOptions(opts ContainerAnalyzerOptions) error {
 	if err := project.ValidateAIAPI(strings.ToLower(strings.TrimSpace(opts.API))); err != nil {
 		return err
@@ -126,6 +139,8 @@ func validateContainerAnalyzerOptions(opts ContainerAnalyzerOptions) error {
 		return fmt.Errorf("container analysis namespace is required")
 	case strings.TrimSpace(opts.Image) == "":
 		return fmt.Errorf("container analysis image is required")
+	case !immutableContainerAnalyzerImage(opts.Image):
+		return fmt.Errorf("container analysis image tag must be an immutable sha-<hex> or full semantic version")
 	case strings.TrimSpace(opts.ProjectDir) == "":
 		return fmt.Errorf("container analysis project directory is required")
 	case strings.TrimSpace(opts.DataDir) == "":
@@ -173,7 +188,12 @@ func (a *ContainerAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, 
 	}
 
 	a.pruneOnce.Do(func() {
-		_, a.pruneErr = PruneContainerAnalysisBundles(ctx, a.kube, a.opts.Namespace, time.Now().UTC())
+		now := time.Now().UTC()
+		if _, err := PruneContainerAnalysisBundles(ctx, a.kube, a.opts.Namespace, now); err != nil {
+			a.pruneErr = err
+			return
+		}
+		_, a.pruneErr = PruneContainerAnalysisTasks(ctx, a.kube, a.opts.Namespace, now)
 	})
 	if a.pruneErr != nil {
 		err := fmt.Errorf("prune stale container analysis bundles: %w", a.pruneErr)
@@ -221,8 +241,20 @@ func (a *ContainerAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, 
 	}
 	defer a.cleanupTerminal(resources, state)
 	if state.Phase != "Succeeded" {
-		err = fmt.Errorf("container analysis Task %s ended %s", taskName, state.Phase)
-		return ai.UnavailableFailureAnalysisResult(request.TestCase, err), err
+		taskErr := fmt.Errorf("container analysis Task %s ended %s", taskName, state.Phase)
+		stateCtx, stateCancel := context.WithTimeout(ctx, failedTaskStateTimeout)
+		defer stateCancel()
+		if raw, resultErr := a.waitResult(stateCtx, taskName); resultErr != nil {
+			log.Printf("Warning: failed to read private state from %s: %v", taskName, resultErr)
+		} else {
+			identity := analysisruntime.NewContainerStateIdentity(a.opts.Namespace, taskName, request)
+			if delta, stateErr := analysisruntime.ParseEncryptedContainerAnalysisState(raw, a.opts.StateKey, identity); stateErr != nil {
+				log.Printf("Warning: failed to parse private state from %s: %v", taskName, stateErr)
+			} else if stateErr := a.state.MergeTraces(delta); stateErr != nil {
+				log.Printf("Warning: failed to merge private traces from %s: %v", taskName, stateErr)
+			}
+		}
+		return ai.UnavailableFailureAnalysisResult(request.TestCase, taskErr), taskErr
 	}
 
 	raw, err := a.waitResult(taskCtx, taskName)
@@ -293,7 +325,7 @@ func (a *ContainerAnalyzer) cleanupTerminal(resources ContainerAnalysisResources
 	}
 	_, taskName, err := containerResourceRef(resources.Task)
 	if err == nil {
-		err = a.kube.DeleteTask(ctx, a.opts.Namespace, taskName, state.ResourceVersion)
+		_, err = a.kube.DeleteTaskIfIdentity(ctx, a.opts.Namespace, taskName, state.UID, state.ResourceVersion)
 	}
 	if err != nil {
 		log.Printf("Warning: container analysis Task cleanup failed: %v", err)

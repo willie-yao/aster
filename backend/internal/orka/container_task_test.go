@@ -536,10 +536,15 @@ func TestBuildContainerAnalysisResourcesUsesConfiguredCPUPlacement(t *testing.T)
 func TestBuildContainerAnalysisResourcesRejectsGPUPlacement(t *testing.T) {
 	for name, mutate := range map[string]func(*ContainerAnalysisTaskSpec){
 		"selector": func(spec *ContainerAnalysisTaskSpec) { spec.NodeSelector = map[string]string{"agentpool": "h100"} },
+		"gke accelerator": func(spec *ContainerAnalysisTaskSpec) {
+			spec.NodeSelector = map[string]string{"agentpool": "cpu", "cloud.google.com/gke-accelerator": "nvidia-tesla-t4"}
+		},
 		"toleration": func(spec *ContainerAnalysisTaskSpec) {
+			spec.NodeSelector = map[string]string{"agentpool": "cpu"}
 			spec.Tolerations = []map[string]any{{"key": "nvidia.com/gpu", "operator": "Exists"}}
 		},
 		"affinity": func(spec *ContainerAnalysisTaskSpec) {
+			spec.NodeSelector = map[string]string{"agentpool": "cpu"}
 			spec.Affinity = map[string]any{"nodeAffinity": map[string]any{"gpu": "required"}}
 		},
 	} {

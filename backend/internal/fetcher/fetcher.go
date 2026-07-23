@@ -14,6 +14,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -280,8 +281,10 @@ func validateAnalysisRuntimeOptions(opts Options) error {
 		if err != nil {
 			return fmt.Errorf("orka-container placement: %w", err)
 		}
-		lowerPlacement := strings.ToLower(string(placement))
-		if strings.Contains(lowerPlacement, "a100") || strings.Contains(lowerPlacement, "h100") || strings.Contains(lowerPlacement, "/gpu") || strings.Contains(lowerPlacement, `"gpu"`) {
+		if strings.TrimSpace(cfg.NodeSelector["agentpool"]) == "" {
+			return fmt.Errorf("orka-container placement requires an explicit agentpool CPU selector")
+		}
+		if regexp.MustCompile(`(?i)(accelerator|nvidia|tesla|radeon|(^|[^a-z0-9])(gpu|a10|a100|h100|v100|p100|t4|l4|mi250|mi300)([^a-z0-9]|$))`).Match(placement) {
 			return fmt.Errorf("orka-container placement must not select or tolerate GPU nodes")
 		}
 		return nil
