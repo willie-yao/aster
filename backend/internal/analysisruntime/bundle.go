@@ -28,7 +28,7 @@ const (
 	// ProjectBundleSchemaVersion identifies the JSON bundle schema.
 	ProjectBundleSchemaVersion = 1
 	// ContainerAnalyzerContractVersion is implemented by the analyzer binary.
-	ContainerAnalyzerContractVersion = "dashboard-failure-analyzer-v3"
+	ContainerAnalyzerContractVersion = "dashboard-failure-analyzer-v4"
 	// MaxProjectBundleBytes stays below the Linux per-environment-value limit.
 	MaxProjectBundleBytes = 96 << 10
 )
@@ -45,11 +45,17 @@ type ProjectBundle struct {
 	ContractVersion string                    `json:"contract_version"`
 	Digest          string                    `json:"digest"`
 	Request         ai.FailureAnalysisRequest `json:"request"`
+	CacheSeed       map[string]ai.CacheEntry  `json:"cache_seed,omitempty"`
 	Files           []ProjectBundleFile       `json:"files"`
 }
 
-// BuildProjectBundle loads, sanitizes, and encodes one consumer project bundle.
+// BuildProjectBundle loads and encodes a project bundle without a cache seed.
 func BuildProjectBundle(projectDir, contractVersion string, request ai.FailureAnalysisRequest) ([]byte, string, error) {
+	return BuildProjectBundleWithCache(projectDir, contractVersion, request, nil)
+}
+
+// BuildProjectBundleWithCache includes one bounded relevant cache entry.
+func BuildProjectBundleWithCache(projectDir, contractVersion string, request ai.FailureAnalysisRequest, cacheSeed map[string]ai.CacheEntry) ([]byte, string, error) {
 	if strings.TrimSpace(contractVersion) == "" {
 		return nil, "", fmt.Errorf("project bundle contract version is required")
 	}
@@ -90,7 +96,7 @@ func BuildProjectBundle(projectDir, contractVersion string, request ai.FailureAn
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	bundle := ProjectBundle{
 		SchemaVersion: ProjectBundleSchemaVersion, ContractVersion: contractVersion,
-		Request: request, Files: files,
+		Request: request, CacheSeed: cloneCacheEntries(cacheSeed), Files: files,
 	}
 	digest, err := projectBundleDigest(bundle)
 	if err != nil {
@@ -103,6 +109,21 @@ func BuildProjectBundle(projectDir, contractVersion string, request ai.FailureAn
 	data, err := json.Marshal(bundle)
 	if err != nil {
 		return nil, "", fmt.Errorf("marshal project bundle: %w", err)
+	}
+	if len(data) > MaxProjectBundleBytes && len(bundle.CacheSeed) > 0 {
+		bundle.CacheSeed = nil
+		digest, err = projectBundleDigest(bundle)
+		if err != nil {
+			return nil, "", err
+		}
+		bundle.Digest = digest
+		if err := validateProjectBundle(bundle); err != nil {
+			return nil, "", err
+		}
+		data, err = json.Marshal(bundle)
+		if err != nil {
+			return nil, "", fmt.Errorf("marshal project bundle without cache seed: %w", err)
+		}
 	}
 	if len(data) > MaxProjectBundleBytes {
 		return nil, "", fmt.Errorf("project bundle is %d bytes, exceeds %d-byte ConfigMap environment limit", len(data), MaxProjectBundleBytes)
@@ -333,6 +354,15 @@ func validateProjectBundle(bundle ProjectBundle) error {
 	if err := validateRequest(bundle.Request); err != nil {
 		return err
 	}
+	if len(bundle.CacheSeed) > 0 {
+		if err := validateContainerCacheEntries(FailureCacheKey(bundle.Request), bundle.CacheSeed); err != nil {
+			return fmt.Errorf("validate project bundle cache seed: %w", err)
+		}
+		data, err := json.Marshal(bundle.CacheSeed)
+		if err != nil || len(data) > maxContainerCacheSeedBytes {
+			return fmt.Errorf("project bundle cache seed exceeds %d bytes", maxContainerCacheSeedBytes)
+		}
+	}
 	if len(bundle.Files) < 2 {
 		return fmt.Errorf("project bundle is missing required project files")
 	}
@@ -409,14 +439,27 @@ func projectBundleDigest(bundle ProjectBundle) (string, error) {
 		SchemaVersion   int                       `json:"schema_version"`
 		ContractVersion string                    `json:"contract_version"`
 		Request         ai.FailureAnalysisRequest `json:"request"`
+		CacheSeed       map[string]ai.CacheEntry  `json:"cache_seed,omitempty"`
 		Files           []ProjectBundleFile       `json:"files"`
-	}{bundle.SchemaVersion, bundle.ContractVersion, bundle.Request, bundle.Files}
+	}{bundle.SchemaVersion, bundle.ContractVersion, bundle.Request, bundle.CacheSeed, bundle.Files}
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return "", fmt.Errorf("marshal project bundle digest payload: %w", err)
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+func cloneCacheEntries(entries map[string]ai.CacheEntry) map[string]ai.CacheEntry {
+	if len(entries) == 0 {
+		return nil
+	}
+	out := make(map[string]ai.CacheEntry, len(entries))
+	for key, entry := range entries {
+		entry.Data = append(json.RawMessage(nil), entry.Data...)
+		out[key] = entry
+	}
+	return out
 }
 
 func validateRequest(request ai.FailureAnalysisRequest) error {

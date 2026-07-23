@@ -23,9 +23,9 @@ ready.
 
 | Gate | Status |
 | --- | --- |
-| Structured result framing | Implemented in v2 and retained by `dashboard-failure-analyzer-v3` |
-| Immutable request and project bundle | Implemented by `dashboard-failure-analyzer-v3` |
-| Persistent cache and private traces | Pending |
+| Structured result framing | Implemented in v2 and retained by `dashboard-failure-analyzer-v4` |
+| Immutable request and project bundle | Implemented in v3 and retained by `dashboard-failure-analyzer-v4` |
+| Persistent cache and private traces | Implemented by `dashboard-failure-analyzer-v4` |
 | Clean in-process and container Kimi comparison | Pending |
 | Bounded multi-failure load test | Pending |
 
@@ -91,14 +91,33 @@ available without retaining the private input ConfigMap.
 The pipeline ServiceAccount has only create, get, list, patch, and delete access
 to ConfigMaps.
 
+## Persistent state contract
+
+Contract v4 adds a dashboard-owned encrypted state marker:
+
+```text
+PROW_AI_STATE_B64:<base64 AES-GCM ciphertext>
+```
+
+The Task receives a 256-bit state key through a Secret reference. The encrypted
+payload contains only the accepted cache entry for that failure and its bounded,
+content-free private trace. Orka stores ciphertext and cannot read the cache or
+trace. The public `FailureAnalysisResult` marker remains unchanged.
+
+Before a Task is created, the dashboard state store selects at most one relevant
+cache entry and includes it in the private immutable bundle. After Task success,
+the dashboard decrypts the state marker and merges cache entries by creation time
+and traces by their existing backend identity. Cache and trace files retain their
+current schemas and atomic writers. A live kind run proved a second Task reused
+the first Task's cache without making another model request, and persisted the
+private Orka trace through the shared state store.
+
 ## Remaining design risks
 
 - Consumers whose request, prompt, and skills exceed 96 KiB need an immutable
   object-storage transport instead of the ConfigMap path.
 - Bundle ConfigMaps contain private failure and prompt context, so namespace
   access remains part of the deployment trust boundary.
-- One-shot Tasks lose local cache and trace files unless the dashboard adds an
-  explicit persistence transport.
 - Orka adds scheduling and image startup overhead for every failure.
 - The container adapter is useful only if operators value Task retry, history,
   placement, cancellation, and durable lifecycle state enough to justify the
@@ -106,6 +125,6 @@ to ConfigMaps.
 
 ## Next evaluation
 
-Add cache and trace persistence before running the Kimi parity and load tests.
-If those steps require several custom services or sidecars, remove Orka analysis
-and keep the in-process path.
+Run the clean in-process and container Kimi comparison, then the bounded
+multi-failure load test. Use those results to decide whether to productize the
+container lifecycle path or remove Orka analysis.

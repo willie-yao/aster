@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisruntime"
@@ -81,6 +82,7 @@ func containerTaskSpec(t *testing.T) ContainerAnalysisTaskSpec {
 		},
 		SecretEnv: []SecretEnvVar{
 			{Name: "AI_TOKEN", SecretName: "analyzer-model", SecretKey: "token"},
+			{Name: analysisruntime.ContainerStateKeyEnv, SecretName: "analyzer-model", SecretKey: "state-key"},
 		},
 	}
 }
@@ -171,6 +173,8 @@ func TestBuildContainerAnalysisResources(t *testing.T) {
 	var digestValue string
 	bundleRefFound := false
 	secretFound := false
+	stateSecretFound := false
+	derived := map[string]string{}
 	for _, raw := range env {
 		entry := raw.(map[string]any)
 		switch entry["name"] {
@@ -188,10 +192,18 @@ func TestBuildContainerAnalysisResources(t *testing.T) {
 			if _, ok := entry["value"]; ok {
 				t.Fatal("AI_TOKEN was inlined instead of using a Secret reference")
 			}
+		case analysisruntime.ContainerStateKeyEnv:
+			secret := entry["valueFrom"].(map[string]any)["secretKeyRef"].(map[string]any)
+			stateSecretFound = secret["name"] == "analyzer-model" && secret["key"] == "state-key"
+		case analysisruntime.ContainerTaskNamespaceEnv, analysisruntime.ContainerTaskNameEnv, analysisruntime.ContainerContractVersionEnv:
+			derived[entry["name"].(string)] = entry["value"].(string)
 		}
 	}
-	if !bundleRefFound || digestValue != bundle.Digest || !secretFound {
+	if !bundleRefFound || digestValue != bundle.Digest || !secretFound || !stateSecretFound {
 		t.Fatalf("env = %+v", env)
+	}
+	if derived[analysisruntime.ContainerTaskNamespaceEnv] != "orka-system" || derived[analysisruntime.ContainerTaskNameEnv] != metadata["name"] || derived[analysisruntime.ContainerContractVersionEnv] != ContainerAnalysisContractVersion {
+		t.Fatalf("derived env = %+v", derived)
 	}
 }
 
@@ -209,6 +221,10 @@ func TestContainerAnalysisResourceIdentityChangesWithInputs(t *testing.T) {
 	}{
 		{name: "request", changeBundle: true, mutate: func(spec *ContainerAnalysisTaskSpec) { spec.Request.TestCase.FailureMessage = "changed" }},
 		{name: "image", changeBundle: true, mutate: func(spec *ContainerAnalysisTaskSpec) { spec.Image = "dashboard-analyzer:other" }},
+		{name: "cache seed", changeBundle: true, mutate: func(spec *ContainerAnalysisTaskSpec) {
+			key := analysisruntime.FailureCacheKey(spec.Request)
+			spec.CacheSeed = map[string]ai.CacheEntry{key: {Key: key, CreatedAt: time.Now().UTC(), Data: json.RawMessage(`{"cached":true}`)}}
+		}},
 		{name: "prompt", changeBundle: true, mutate: func(spec *ContainerAnalysisTaskSpec) {
 			if err := os.WriteFile(filepath.Join(spec.ProjectDir, "prompts", "system.md"), []byte("Changed prompt.\n"), 0o644); err != nil {
 				t.Fatal(err)
@@ -240,7 +256,12 @@ func TestBuildContainerAnalysisResourcesRequiresProviderAndToken(t *testing.T) {
 		"api":      func(spec *ContainerAnalysisTaskSpec) { delete(spec.Environment, "AI_API") },
 		"endpoint": func(spec *ContainerAnalysisTaskSpec) { delete(spec.Environment, "AI_ENDPOINT") },
 		"model":    func(spec *ContainerAnalysisTaskSpec) { delete(spec.Environment, "AI_MODEL") },
-		"token":    func(spec *ContainerAnalysisTaskSpec) { spec.SecretEnv = nil },
+		"token": func(spec *ContainerAnalysisTaskSpec) {
+			spec.SecretEnv = spec.SecretEnv[1:]
+		},
+		"state key": func(spec *ContainerAnalysisTaskSpec) {
+			spec.SecretEnv = spec.SecretEnv[:1]
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			spec := containerTaskSpec(t)

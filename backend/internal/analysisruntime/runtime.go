@@ -141,6 +141,7 @@ type ServiceOptions struct {
 	Backend             storage.Backend
 	ConsecutiveFailures map[string]int
 	TraceStore          *ai.TraceStore
+	TraceMetadata       ai.TraceMetadata
 	GitHubReadToken     string
 }
 
@@ -156,6 +157,7 @@ func (r *Runtime) NewService(opts ServiceOptions) (*ai.Service, error) {
 	service := ai.NewService(r.Client, universal.New(), r.Project.SystemPrompt, opts.ConsecutiveFailures)
 	if opts.TraceStore != nil {
 		service.SetTraceStore(opts.TraceStore)
+		service.SetTraceMetadata(opts.TraceMetadata)
 	}
 	service.SetSourceRepo(cfg.Branding.SourceRepo.Owner, cfg.Branding.SourceRepo.Name)
 	if cfg.Branding.SourceRepo.Owner != "" && cfg.Branding.SourceRepo.Name != "" && opts.GitHubReadToken != "" {

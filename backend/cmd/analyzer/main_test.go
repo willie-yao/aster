@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"log"
@@ -40,6 +41,22 @@ func analyzerTestRequest() ai.FailureAnalysisRequest {
 	}
 }
 
+func analyzerStateKey() []byte {
+	return bytes.Repeat([]byte{0x42}, 32)
+}
+
+func analyzerStateKeyEnv() string {
+	return base64.StdEncoding.EncodeToString(analyzerStateKey())
+}
+
+func fakeSnapshot(request ai.FailureAnalysisRequest) (analysisruntime.ContainerAnalysisState, error) {
+	identity := analysisruntime.NewContainerStateIdentity("orka-system", "test-task", request)
+	return analysisruntime.ContainerAnalysisState{
+		Version: analysisruntime.ContainerStateVersion, TaskNamespace: identity.TaskNamespace, TaskName: identity.TaskName, CacheKey: analysisruntime.FailureCacheKey(request),
+		CacheEntries: map[string]ai.CacheEntry{}, Traces: []ai.AnalysisTrace{},
+	}, nil
+}
+
 func bundleValues(t *testing.T, request ai.FailureAnalysisRequest, projectDir string) map[string]string {
 	t.Helper()
 	return bundleValuesForContract(t, request, projectDir, analysisruntime.ContainerAnalyzerContractVersion)
@@ -55,8 +72,12 @@ func bundleValuesForContract(t *testing.T, request ai.FailureAnalysisRequest, pr
 		t.Fatal(err)
 	}
 	return map[string]string{
-		analysisruntime.ProjectBundleEnv:       string(data),
-		analysisruntime.ProjectBundleDigestEnv: digest,
+		analysisruntime.ProjectBundleEnv:            string(data),
+		analysisruntime.ProjectBundleDigestEnv:      digest,
+		analysisruntime.ContainerStateKeyEnv:        analyzerStateKeyEnv(),
+		analysisruntime.ContainerTaskNamespaceEnv:   "orka-system",
+		analysisruntime.ContainerTaskNameEnv:        "test-task",
+		analysisruntime.ContainerContractVersionEnv: analysisruntime.ContainerAnalyzerContractVersion,
 	}
 }
 
@@ -100,7 +121,7 @@ func TestRunWritesOnlyResultToStdout(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(opts.projectDir, "project.yaml")); err != nil {
 			return nil, err
 		}
-		return &analyzerRuntime{analyzer: fake, httpClient: http.DefaultClient, save: func() error { return nil }}, nil
+		return &analyzerRuntime{analyzer: fake, httpClient: http.DefaultClient, snapshot: fakeSnapshot}, nil
 	}
 	var stdout, stderr bytes.Buffer
 	if err := run(context.Background(), nil, bundleEnv(t, request), &stdout, &stderr, factory); err != nil {
@@ -112,8 +133,12 @@ func TestRunWritesOnlyResultToStdout(t *testing.T) {
 	if strings.Contains(stdout.String(), "starting failure analysis") || !strings.Contains(stderr.String(), "starting failure analysis") {
 		t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
-	if !strings.HasPrefix(stdout.String(), analysisruntime.FailureAnalysisResultMarker) {
-		t.Fatalf("stdout is not a framed result: %q", stdout.String())
+	if !strings.Contains(stdout.String(), analysisruntime.ContainerStateMarker) || !strings.Contains(stdout.String(), analysisruntime.FailureAnalysisResultMarker) {
+		t.Fatalf("stdout is missing framed state or result: %q", stdout.String())
+	}
+	state, err := analysisruntime.ParseEncryptedContainerAnalysisState(stdout.String(), analyzerStateKey(), analysisruntime.NewContainerStateIdentity("orka-system", "test-task", request))
+	if err != nil || state.CacheKey != analysisruntime.FailureCacheKey(request) {
+		t.Fatalf("state = %+v, error = %v", state, err)
 	}
 	result, err := analysisruntime.ParseFailureAnalysisResult("controller log\n" + stdout.String() + "trailing log\n")
 	if err != nil {
@@ -136,9 +161,9 @@ func TestAnalyzerRedactsProviderURLsFromDurableStderr(t *testing.T) {
 	factory := func(context.Context, commandOptions, envGetter) (*analyzerRuntime, error) {
 		return &analyzerRuntime{
 			analyzer: fake, httpClient: http.DefaultClient,
-			save: func() error {
+			snapshot: func(request ai.FailureAnalysisRequest) (analysisruntime.ContainerAnalysisState, error) {
 				log.Printf("service failure: post %s: timeout", privateURL)
-				return nil
+				return fakeSnapshot(request)
 			},
 		}, nil
 	}
@@ -160,7 +185,7 @@ func TestAnalyzerRedactsProviderURLsFromDurableStderr(t *testing.T) {
 func TestRunAnalyzeFailureErrorReturnsWithoutResult(t *testing.T) {
 	fake := &fakeAnalyzer{err: errors.New("provider failed")}
 	factory := func(context.Context, commandOptions, envGetter) (*analyzerRuntime, error) {
-		return &analyzerRuntime{analyzer: fake, httpClient: http.DefaultClient, save: func() error { return nil }}, nil
+		return &analyzerRuntime{analyzer: fake, httpClient: http.DefaultClient, snapshot: fakeSnapshot}, nil
 	}
 	var stdout, stderr bytes.Buffer
 	err := run(context.Background(), nil, bundleEnv(t, analyzerTestRequest()), &stdout, &stderr, factory)
@@ -178,7 +203,7 @@ func TestRunRejectsMalformedOrMismatchedBundle(t *testing.T) {
 		return nil, nil
 	}
 	valid := bundleValues(t, analyzerTestRequest(), "")
-	future := bundleValuesForContract(t, analyzerTestRequest(), "", "dashboard-failure-analyzer-v4")
+	future := bundleValuesForContract(t, analyzerTestRequest(), "", "dashboard-failure-analyzer-v5")
 	for _, values := range []map[string]string{
 		{analysisruntime.ProjectBundleEnv: "not json", analysisruntime.ProjectBundleDigestEnv: strings.Repeat("0", 64)},
 		{analysisruntime.ProjectBundleEnv: valid[analysisruntime.ProjectBundleEnv]},
@@ -219,6 +244,7 @@ func TestRunWithScriptedModelEndpoint(t *testing.T) {
 	request := analyzerTestRequest()
 	values := bundleValues(t, request, projectDir)
 	values["AI_TOKEN"] = "script-token"
+	values["AI_API"] = "chat_completions"
 	values["AI_ENDPOINT"] = script.URL
 	values["AI_MODEL"] = "script-model"
 	var stdout, stderr bytes.Buffer
@@ -229,6 +255,10 @@ func TestRunWithScriptedModelEndpoint(t *testing.T) {
 	result, err := analysisruntime.ParseFailureAnalysisResult(stdout.String())
 	if err != nil {
 		t.Fatal(err)
+	}
+	state, err := analysisruntime.ParseEncryptedContainerAnalysisState(stdout.String(), analyzerStateKey(), analysisruntime.NewContainerStateIdentity("orka-system", "test-task", request))
+	if err != nil || len(state.Traces) != 1 || state.Traces[0].Backend != "orka" || state.Traces[0].TaskName != "test-task" {
+		t.Fatalf("state = %+v, error = %v", state, err)
 	}
 	if result.Analysis == nil || result.Analysis.RootCause == "" || result.Analysis.ToolCalls < 3 {
 		t.Fatalf("result = %+v", result)

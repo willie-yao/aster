@@ -3,6 +3,7 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -22,6 +23,12 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prowbuild"
 	"k8s.io/client-go/rest"
 )
+
+func containerAnalyzerStateKey() []byte { return bytes.Repeat([]byte{0x5a}, 32) }
+
+func containerAnalyzerStateKeyText() string {
+	return base64.StdEncoding.EncodeToString(containerAnalyzerStateKey())
+}
 
 func TestOrkaContainerAnalyzerKind(t *testing.T) {
 	if os.Getenv("RUN_ORKA_CONTAINER_ANALYZER_KIND") == "" {
@@ -57,7 +64,7 @@ func TestOrkaContainerAnalyzerKind(t *testing.T) {
 	endpoint := "http://" + modelName + "." + namespace + ".svc.cluster.local/v1/chat/completions"
 
 	t.Run("scripted-flatcar-result", func(t *testing.T) {
-		resources := buildKindContainerTask(t, namespace, image, id+"-flatcar", endpoint, "script-success", secretName, request, labels)
+		resources := buildKindContainerTask(t, namespace, image, id+"-flatcar", endpoint, "script-success", secretName, request, labels, nil)
 		name := applyContainerResources(t, kubeContext, resources)
 		status := waitContainerTask(t, kubeContext, namespace, name, 4*time.Minute)
 		if status.Phase != "Succeeded" || status.Attempts != 1 || status.JobName == "" {
@@ -81,12 +88,16 @@ func TestOrkaContainerAnalyzerKind(t *testing.T) {
 		if !strings.Contains(raw, analysisruntime.FailureAnalysisResultMarker) {
 			t.Fatal("Task result did not contain the framed dashboard result")
 		}
+		state, err := analysisruntime.ParseEncryptedContainerAnalysisState(raw, containerAnalyzerStateKey(), containerStateIdentity(resources, request))
+		if err != nil || len(state.Traces) != 1 || state.Traces[0].Backend != "orka" || state.Traces[0].TaskName != name {
+			t.Fatalf("container state = %+v, error = %v", state, err)
+		}
 		cleanupContainerBundle(t, kubeContext, resources)
 		assertTerminalReconcileDoesNotRecreateBundle(t, kubeContext, resources)
 	})
 
 	t.Run("retry-after-analyzer-failure", func(t *testing.T) {
-		resources := buildKindContainerTask(t, namespace, image, id+"-retry", endpoint, "script-retry", secretName, request, labels)
+		resources := buildKindContainerTask(t, namespace, image, id+"-retry", endpoint, "script-retry", secretName, request, labels, nil)
 		name := applyContainerResources(t, kubeContext, resources)
 		status := waitContainerTask(t, kubeContext, namespace, name, 5*time.Minute)
 		if status.Phase != "Succeeded" || status.Attempts < 2 {
@@ -98,7 +109,56 @@ func TestOrkaContainerAnalyzerKind(t *testing.T) {
 		if _, err := orka.ParseContainerAnalysisResult(raw); err != nil {
 			t.Fatalf("parse retried Task result: %v\n%s", err, raw)
 		}
+		if _, err := analysisruntime.ParseEncryptedContainerAnalysisState(raw, containerAnalyzerStateKey(), containerStateIdentity(resources, request)); err != nil {
+			t.Fatalf("parse retried Task state: %v", err)
+		}
 		cleanupContainerBundle(t, kubeContext, resources)
+	})
+
+	t.Run("persistent-cache-hit", func(t *testing.T) {
+		store, err := analysisruntime.NewContainerStateStore(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		first := buildKindContainerTask(t, namespace, image, id+"-cache-a", endpoint, "script-cache", secretName, request, labels, store.CacheSeed(request))
+		firstName := applyContainerResources(t, kubeContext, first)
+		firstStatus := waitContainerTask(t, kubeContext, namespace, firstName, 4*time.Minute)
+		if firstStatus.Phase != "Succeeded" {
+			t.Fatalf("first cache Task status = %+v", firstStatus)
+		}
+		firstRaw := fetchContainerTaskResult(t, kubeContext, namespace, firstName)
+		firstState, err := analysisruntime.ParseEncryptedContainerAnalysisState(firstRaw, containerAnalyzerStateKey(), containerStateIdentity(first, request))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Merge(firstState); err != nil {
+			t.Fatal(err)
+		}
+		cleanupContainerBundle(t, kubeContext, first)
+		seed := store.CacheSeed(request)
+		if len(seed) != 1 {
+			t.Fatalf("cache seed entries = %d, want 1", len(seed))
+		}
+		second := buildKindContainerTask(t, namespace, image, id+"-cache-b", endpoint, "script-cache", secretName, request, labels, seed)
+		secondName := applyContainerResources(t, kubeContext, second)
+		secondStatus := waitContainerTask(t, kubeContext, namespace, secondName, 4*time.Minute)
+		if secondStatus.Phase != "Succeeded" {
+			raw := fetchContainerTaskResult(t, kubeContext, namespace, secondName)
+			t.Fatalf("cached Task status = %+v\n%s", secondStatus, raw)
+		}
+		secondRaw := fetchContainerTaskResult(t, kubeContext, namespace, secondName)
+		result, err := orka.ParseContainerAnalysisResult(secondRaw)
+		if err != nil || result.Analysis == nil || !result.Analysis.CacheHit {
+			t.Fatalf("cached result = %+v, error = %v", result, err)
+		}
+		secondState, err := analysisruntime.ParseEncryptedContainerAnalysisState(secondRaw, containerAnalyzerStateKey(), containerStateIdentity(second, request))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Merge(secondState); err != nil {
+			t.Fatal(err)
+		}
+		cleanupContainerBundle(t, kubeContext, second)
 	})
 	assertNoPodsOnGPUNode(t, kubeContext, namespace)
 	cleanup()
@@ -132,14 +192,22 @@ func flatcarFailureRequest(bc benchCase) ai.FailureAnalysisRequest {
 	}
 }
 
-func buildKindContainerTask(t *testing.T, namespace, image, prefix, endpoint, model, secretName string, request ai.FailureAnalysisRequest, labels map[string]string) orka.ContainerAnalysisResources {
+func containerStateIdentity(resources orka.ContainerAnalysisResources, request ai.FailureAnalysisRequest) analysisruntime.ContainerStateIdentity {
+	name := resources.Task["metadata"].(map[string]any)["name"].(string)
+	return analysisruntime.NewContainerStateIdentity("orka-system", name, request)
+}
+
+func buildKindContainerTask(t *testing.T, namespace, image, prefix, endpoint, model, secretName string, request ai.FailureAnalysisRequest, labels map[string]string, cacheSeed map[string]ai.CacheEntry) orka.ContainerAnalysisResources {
 	t.Helper()
 	resources, err := orka.BuildContainerAnalysisResources(orka.ContainerAnalysisTaskSpec{
 		Namespace: namespace, NamePrefix: prefix, Image: image,
 		Command: []string{"/app"}, Args: []string{"-data-dir=/tmp/analyzer"},
-		Timeout: "2m", MaxRetries: 1, ProjectDir: containerAnalyzerProject(t), Request: request, Labels: labels,
+		Timeout: "2m", MaxRetries: 1, ProjectDir: containerAnalyzerProject(t), Request: request, CacheSeed: cacheSeed, Labels: labels,
 		Environment: map[string]string{"AI_API": "chat_completions", "AI_ENDPOINT": endpoint, "AI_MODEL": model},
-		SecretEnv:   []orka.SecretEnvVar{{Name: "AI_TOKEN", SecretName: secretName, SecretKey: "token"}},
+		SecretEnv: []orka.SecretEnvVar{
+			{Name: "AI_TOKEN", SecretName: secretName, SecretKey: "token"},
+			{Name: analysisruntime.ContainerStateKeyEnv, SecretName: secretName, SecretKey: "state-key"},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -600,7 +668,7 @@ func applyContainerSecret(t *testing.T, kubeContext, namespace, name, id string)
 	secret := map[string]any{
 		"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
 		"metadata":   map[string]any{"name": name, "namespace": namespace, "labels": map[string]any{"prow-ai-dashboard/smoke": id}},
-		"stringData": map[string]any{"token": "script-token"},
+		"stringData": map[string]any{"token": "script-token", "state-key": containerAnalyzerStateKeyText()},
 	}
 	data, err := json.Marshal(secret)
 	if err != nil {

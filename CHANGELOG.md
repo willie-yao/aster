@@ -22,6 +22,11 @@ for how to pin a release.
 
 ### Added
 
+- **Encrypted container analysis state.** The experimental dashboard analyzer
+  now seeds the one relevant cache entry into each immutable Task bundle and
+  returns cache and content-free private trace deltas through an AES-GCM
+  encrypted state marker. A dashboard-owned state store merges the authenticated
+  delta into the existing atomic `ai_cache.json` and `ai_traces.json` files.
 - **Immutable container analysis bundles.** The experimental dashboard-owned
   analyzer now receives its failure request, sanitized project config, prompt,
   and consumer skills from an immutable content-addressed ConfigMap. Tasks use a

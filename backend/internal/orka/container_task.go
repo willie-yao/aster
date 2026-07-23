@@ -42,6 +42,7 @@ type ContainerAnalysisTaskSpec struct {
 	MaxRetries  int
 	ProjectDir  string
 	Request     ai.FailureAnalysisRequest
+	CacheSeed   map[string]ai.CacheEntry
 	Environment map[string]string
 	SecretEnv   []SecretEnvVar
 	Labels      map[string]string
@@ -93,7 +94,7 @@ func BuildContainerAnalysisResources(in ContainerAnalysisTaskSpec) (ContainerAna
 	environment["AI_ENDPOINT"] = endpoint
 	environment["AI_MODEL"] = model
 	in.Environment = environment
-	bundleJSON, bundleDigest, err := analysisruntime.BuildProjectBundle(in.ProjectDir, ContainerAnalysisContractVersion, in.Request)
+	bundleJSON, bundleDigest, err := analysisruntime.BuildProjectBundleWithCache(in.ProjectDir, ContainerAnalysisContractVersion, in.Request, in.CacheSeed)
 	if err != nil {
 		return ContainerAnalysisResources{}, err
 	}
@@ -108,8 +109,11 @@ func BuildContainerAnalysisResources(in ContainerAnalysisTaskSpec) (ContainerAna
 		return secretEnv[i].SecretKey < secretEnv[j].SecretKey
 	})
 	seenEnv := map[string]bool{
-		analysisruntime.ProjectBundleEnv:       true,
-		analysisruntime.ProjectBundleDigestEnv: true,
+		analysisruntime.ProjectBundleEnv:            true,
+		analysisruntime.ProjectBundleDigestEnv:      true,
+		analysisruntime.ContainerTaskNamespaceEnv:   true,
+		analysisruntime.ContainerTaskNameEnv:        true,
+		analysisruntime.ContainerContractVersionEnv: true,
 	}
 	for name := range in.Environment {
 		if strings.TrimSpace(name) == "" {
@@ -124,6 +128,7 @@ func BuildContainerAnalysisResources(in ContainerAnalysisTaskSpec) (ContainerAna
 		seenEnv[name] = true
 	}
 	tokenSecretFound := false
+	stateSecretFound := false
 	for _, secret := range secretEnv {
 		if strings.TrimSpace(secret.Name) == "" || strings.TrimSpace(secret.SecretName) == "" || strings.TrimSpace(secret.SecretKey) == "" {
 			return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task secret environment references require name, Secret name, and key")
@@ -135,9 +140,15 @@ func BuildContainerAnalysisResources(in ContainerAnalysisTaskSpec) (ContainerAna
 		if secret.Name == "AI_TOKEN" {
 			tokenSecretFound = true
 		}
+		if secret.Name == analysisruntime.ContainerStateKeyEnv {
+			stateSecretFound = true
+		}
 	}
 	if !tokenSecretFound {
 		return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task requires an AI_TOKEN Secret reference")
+	}
+	if !stateSecretFound {
+		return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task requires a %s Secret reference", analysisruntime.ContainerStateKeyEnv)
 	}
 	in.SecretEnv = secretEnv
 
@@ -154,6 +165,9 @@ func BuildContainerAnalysisResources(in ContainerAnalysisTaskSpec) (ContainerAna
 			},
 		},
 		map[string]any{"name": analysisruntime.ProjectBundleDigestEnv, "value": bundleDigest},
+		map[string]any{"name": analysisruntime.ContainerTaskNamespaceEnv, "value": in.Namespace},
+		map[string]any{"name": analysisruntime.ContainerTaskNameEnv, "value": name},
+		map[string]any{"name": analysisruntime.ContainerContractVersionEnv, "value": ContainerAnalysisContractVersion},
 	}
 	environmentNames := make([]string, 0, len(in.Environment))
 	for name := range in.Environment {

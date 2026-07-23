@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
@@ -179,6 +180,29 @@ triggers: ["changed"]
 		if got == base {
 			t.Fatalf("%s change kept bundle digest %s", name, got)
 		}
+	}
+}
+
+func TestProjectBundleDropsOptionalCacheSeedWhenCombinedBundleIsTooLarge(t *testing.T) {
+	dir := writeBundleProject(t, "https://model.invalid/v1/chat/completions", "model")
+	writeBundleTestFile(t, filepath.Join(dir, "prompts", "system.md"), strings.Repeat("p", 70<<10))
+	request := testBundleRequest()
+	key := FailureCacheKey(request)
+	entryData, err := json.Marshal(map[string]string{"value": strings.Repeat("c", 30<<10)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed := map[string]ai.CacheEntry{key: {Key: key, CreatedAt: time.Now().UTC(), Data: entryData}}
+	data, _, err := BuildProjectBundleWithCache(dir, "contract-v4", request, seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := DecodeProjectBundle(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bundle.CacheSeed) != 0 {
+		t.Fatalf("oversized optional cache seed entries = %d, want 0", len(bundle.CacheSeed))
 	}
 }
 
