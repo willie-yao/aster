@@ -1482,7 +1482,7 @@ func tryParseAnalysis(s string) (analysisResponse, bool) {
 	return out, true
 }
 
-var toolsUnsupportedRe = regexp.MustCompile(`(?i)tool[s_]?call|function[s_]?call|tools_choice|tools provided|function calling`)
+var toolsUnsupportedRe = regexp.MustCompile(`(?i)tool[s_]?call|function[s_]?call|tools_choice|tools provided|tools?\s+(?:are\s+)?not supported|function calling`)
 
 func isToolsUnsupportedError(err error) bool {
 	if err == nil {

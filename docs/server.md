@@ -26,6 +26,9 @@ remains identical.
 | `GET /api/capabilities` | Deploy descriptor, for example `{"mode":"server","features":{"actions":false}}`. |
 | `GET /api/analysis-traces` | Admin-gated private trace snapshot. Exact filters: `job_id`, `build_id`, `test_name`, `outcome`, and `response_id`. |
 | `GET /api/analysis-traces/download` | Admin-gated attachment form of the same filtered trace snapshot. |
+| `POST /api/analysis-chat/sessions` | Start an owner-bound conversation for one published test analysis. |
+| `GET /api/analysis-chat/sessions/{id}` | Read the owning admin's current in-memory conversation. |
+| `POST /api/analysis-chat/sessions/{id}/messages` | Ask one bounded follow-up question about the selected analysis. |
 | `GET /healthz` | Liveness and readiness probe. |
 | `GET /` | The built SPA, when `-static-dir` is set, with deep-link fallback to `index.html`. |
 | `POST /api/failures/{id}/create-issue/preview` | Admin-gated: render the exact GitHub issue for one failure without filing it. Enabled only when actions are configured. |
@@ -49,6 +52,46 @@ The frontend discovers its mode by probing `/api/capabilities`:
 
 Interactive features are additive and gated behind this descriptor, so the same
 build serves both targets. All `/data/*.json` schemas stay byte-compatible.
+
+## Analysis chat API
+
+The server can expose an authenticated, read-only conversation API for a single
+published test analysis. Set `ANALYSIS_CHAT_ENABLED=1` with `-project-dir`,
+`AUTH_MODE`, `AI_TOKEN`, and the normal AI provider configuration. The server
+then advertises `features.analysis_chat: true`. Static Pages deployments do not
+advertise or serve the API.
+
+Create a session by posting the selected analysis identity:
+
+```json
+{
+  "job_id": "periodic-demo",
+  "build_id": "123",
+  "test_name": "TestCluster",
+  "junit_file": "junit_01.xml",
+  "analysis_generated_at": "2026-07-23T12:00:00Z"
+}
+```
+
+`junit_file` disambiguates duplicate test names. `analysis_generated_at` is
+optional, but including it prevents a conversation from silently attaching to a
+newer analysis after the page was loaded. A mismatch returns `409 Conflict`.
+
+Post `{"message":"What evidence supports this?"}` to the session's `messages`
+endpoint. The response contains the full transcript. Assistant messages include
+an `assessment` of `explains`, `supports`, `challenges`, or `inconclusive`, plus
+verified artifact paths and an optional proposed revision. A proposed revision
+does not alter `jobs/*.json` or the published analysis.
+
+Sessions are in memory, bound to the authenticated login, limited to ten turns,
+and expire after two hours. The process also caps global and per-owner session
+counts. Restarting the server clears them. Persistence, streaming, cancellation,
+and deployment-specific rate limits are separate operational additions.
+
+One model turn defaults to a two-minute timeout. Set `ANALYSIS_CHAT_TIMEOUT` to
+apply a shorter HTTP bound. The agent uses only the configured read-only
+filesystem and Kubernetes artifact tools. It has no shell, repository write, or
+GitHub action capability.
 
 ## Private analysis traces
 

@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/modules/universal"
@@ -19,7 +20,12 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
 
-const gcsByteBudget = 1_000_000_000
+const (
+	gcsByteBudget              = 1_000_000_000
+	analysisChatGCSByteBudget  = 128 << 20
+	analysisChatMaxIters       = 8
+	analysisChatDefaultTimeout = 2 * time.Minute
+)
 
 // ProviderFallbacks are used when project.yaml omits provider fields.
 type ProviderFallbacks struct {
@@ -33,6 +39,7 @@ type Project struct {
 	Config           *project.Config
 	Provider         project.AIProvider
 	SystemPrompt     string
+	ConsumerPrompt   string
 	SkillSet         *skills.Set
 	ProfileSelection skills.ProfileSelection
 }
@@ -65,6 +72,7 @@ func LoadProject(projectDir string, cfg *project.Config, fallbacks ProviderFallb
 		Config:           cfg,
 		Provider:         provider,
 		SystemPrompt:     ai.ComposeSystemPrompt(prompt),
+		ConsumerPrompt:   prompt,
 		SkillSet:         set,
 		ProfileSelection: selection,
 	}, nil
@@ -140,6 +148,46 @@ type ServiceOptions struct {
 	ConsecutiveFailures map[string]int
 	TraceStore          *ai.TraceStore
 	GitHubReadToken     string
+}
+
+type analysisChatBrowserFactory struct {
+	backend storage.Backend
+	bucket  string
+}
+
+func (f analysisChatBrowserFactory) ForBuild(buildPrefix, displayName string) artifacts.Browser {
+	return artifacts.NewUncachedBackendBrowser(f.backend, f.bucket, buildPrefix, displayName)
+}
+
+// NewAnalysisChatAgent creates the interactive read-only conversation runner.
+func (r *Runtime) NewAnalysisChatAgent(backend storage.Backend) (*ai.AnalysisChatAgent, error) {
+	if r == nil || r.Project == nil || r.Project.Config == nil || r.Client == nil {
+		return nil, fmt.Errorf("analysis runtime is not initialized")
+	}
+	if backend == nil {
+		return nil, fmt.Errorf("analysis chat storage backend is required")
+	}
+	effective := r.Project.Config.AI.EffectiveAgentic()
+	maxIters := min(effective.MaxIters, analysisChatMaxIters)
+	if maxIters <= 0 {
+		maxIters = analysisChatMaxIters
+	}
+	timeout := effective.Timeout
+	if timeout <= 0 || timeout > analysisChatDefaultTimeout {
+		timeout = analysisChatDefaultTimeout
+	}
+	return ai.NewAnalysisChatAgent(
+		r.Client,
+		ai.ComposeAnalysisChatSystemPrompt(r.Project.ConsumerPrompt),
+		r.Registry,
+		r.EnabledTools,
+		analysisChatBrowserFactory{backend: backend, bucket: r.Project.Config.Storage.Bucket},
+		ai.AnalysisChatOptions{
+			MaxIters: maxIters, ModelByteBudget: r.ModelByteBudget,
+			GCSByteBudget: analysisChatGCSByteBudget, ContextByteBudget: r.ContextByteBudget,
+			Timeout: timeout, SingleToolCall: effective.SingleToolCall,
+		},
+	)
 }
 
 // NewService creates the canonical dashboard analysis service.
