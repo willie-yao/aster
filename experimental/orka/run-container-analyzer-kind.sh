@@ -79,7 +79,6 @@ owned_images+=("$controller_image")
 echo "Building dashboard analyzer"
 docker build -q \
   -f "$repo_root/experimental/orka/Dockerfile" \
-  --build-arg CMD=analyzer \
   -t "$base_image" \
   "$repo_root/backend" >/dev/null
 owned_images+=("$base_image")

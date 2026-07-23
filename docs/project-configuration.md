@@ -123,7 +123,7 @@ Unmatched jobs use the reserved `other` category.
 AI is optional at the fetcher level. When enabled, it needs a token, a non-empty
 `prompts/system.md`, and a function-calling model.
 
-For in-process analysis, provider coordinates can come from YAML:
+Provider coordinates can come from YAML:
 
 ```yaml
 ai:
@@ -155,43 +155,11 @@ Do not commit credentials under `ai.headers`. `AI_TOKEN` is the supported bearer
 token channel. Use a trusted proxy or custom deployment for providers that need
 a secret in another header.
 
-### In-process and Orka compatibility
-
-The Kubernetes skeleton fetch still uses discovery, storage, branding, and
-categories before Orka begins. The Orka ingestor runs configured notifications
-and GitHub reconciliation after analysis completes.
-
-| Configuration | In-process | Orka preview |
-| --- | --- | --- |
-| `id`, `name`, `short_name` | Yes | Yes |
-| `source`, `testgrid`, `discovery` | Yes | Yes |
-| `storage.*` | Yes | Yes |
-| `branding`, categories | Yes | Yes |
-| `prompts/system.md` | Yes | Yes |
-| `skills/*.yaml` | Yes | Yes |
-| `ai.tools` | Yes | Yes |
-| `ai.min_tool_calls` | Yes | Yes |
-| `ai.min_gcs_bytes` | Yes | Yes |
-| `ai.endpoint`, `ai.model`, `ai.headers` for per-failure analysis | Yes | No, use an Orka Provider and `orka.model` |
-| `ai.concurrency`, `max_iters`, `timeout` | Yes | No, use `orka.*` execution settings where applicable |
-| `ai.single_tool_call`, `ai.critique.*` | Yes | No, the compatibility worker and validation tools own convergence and acceptance |
-| `notifications`, `issues`, `ai.fix_prs` | Yes | Yes, after Orka ingestion |
-
-Provider values under `ai.*` may still be used by optional post-analysis AI
-review, but they do not configure Orka's per-failure Tasks.
-
-Orka is an optional experimental backend. The current Helm mode uses the frozen
-compatibility-v6 `type: ai` worker, and its Provider, model, timeout, retry,
-placement, and load controls live in Helm `orka.*` values. The dashboard-owned
-`type: container` successor is being evaluated separately. See the
-[analysis runtime ownership decision](architecture-decisions/0001-analysis-runtime-ownership.md)
-and [Orka quickstart](../experimental/orka/QUICKSTART.md).
-
 ## Custom skills
 
 Diagnostic recipes live under `skills/*.yaml`. Their presence is the opt-in.
-Both analysis backends load the same recipes, enforce their required evidence,
-and include the skill-set hash in cache or Task identity. See
+The analyzer loads these recipes, enforces their required evidence, and includes
+the skill-set hash in cache acceptance. See
 [Custom diagnostic skills](skills.md).
 
 ## Optional features

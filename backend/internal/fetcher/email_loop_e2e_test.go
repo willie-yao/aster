@@ -15,14 +15,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/notify"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/patterns"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prow/jobconfig"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediation"
@@ -590,101 +586,3 @@ func (s *emailLoopScenario) runRecurrenceTwice(t *testing.T, details []models.Jo
 	}
 	return attempt
 }
-
-type emailLoopOrkaAnalyzer struct{}
-
-func (emailLoopOrkaAnalyzer) AnalyzePattern(_ context.Context, _, subject string, failures []ai.PatternFailure) (*models.PatternAnalysis, error) {
-	builds := make([]string, 0, len(failures))
-	for _, failure := range failures {
-		builds = append(builds, failure.BuildID)
-	}
-	return &models.PatternAnalysis{
-		Subject: subject, GeneratedAt: "2026-07-21T00:00:00Z", BuildsAnalyzed: len(failures),
-		Systemic: true, Confidence: "high", SharedRootCause: "the Orka-analyzed controller repeatedly times out",
-		SharedBuilds: builds, SuggestedFix: "serialize controller updates", Summary: "The same Orka-analyzed failure recurred.",
-	}, nil
-}
-
-func TestOrkaFinalizationTriggersEmailSideEffects(t *testing.T) {
-	for _, key := range []string{"AI_TOKEN", "AI_ENDPOINT", "AI_MODEL", "ISSUE_TOKEN", "FIX_TOKEN", "GITHUB_TOKEN", "EMAIL_SMTP_PASSWORD"} {
-		t.Setenv(key, "")
-	}
-	dataDir := t.TempDir()
-	bucketDir := t.TempDir()
-	backend, err := storage.NewLocalBackend(bucketDir, "https://prow.test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sender := &emailLoopSender{}
-	oldEmail := newEmailSender
-	newEmailSender = func(notify.SMTPConfig) (notify.Sender, error) { return sender, nil }
-	t.Cleanup(func() { newEmailSender = oldEmail })
-	cfg := &project.Config{
-		ID: "orka-email-loop", Name: "Orka Email Loop",
-		Branding: project.Branding{SiteURL: "https://dashboard.test", SourceRepo: project.SourceRepo{Owner: "example", Name: "repo"}},
-		Notifications: &project.Notifications{Email: &project.EmailNotifications{
-			Enabled: true, ActionLinks: true, From: "dashboard@example.test", To: []string{"maintainer@example.test"},
-			SMTP: project.EmailSMTP{Host: "smtp.example.test", Port: 25, TLS: project.EmailTLSNone},
-		}},
-	}
-	detail := models.JobDetail{Name: "periodic-orka-email", JobID: "periodic-orka-email", JobType: models.JobTypePeriodic, Repo: emailLoopRepo}
-	for _, buildID := range []string{"203", "202", "201"} {
-		detail.Runs = append(detail.Runs, models.BuildResult{
-			BuildInfo: models.BuildInfo{BuildID: buildID, Result: "FAILURE"},
-			TestCases: []models.TestCase{{
-				Name: "should reconcile", Status: "failed", FailureMessage: "timed out waiting for Orka controller",
-				AIAnalysis: &models.AIAnalysis{RootCause: "stale Orka controller configuration", Severity: "High", SuggestedFix: "serialize controller updates"},
-			}},
-		})
-	}
-	if err := output.WriteJobDetail(dataDir, detail); err != nil {
-		t.Fatal(err)
-	}
-	if err := output.WriteDashboard(dataDir, models.Dashboard{Jobs: []models.JobSummary{{ProwJob: models.ProwJob{Name: detail.Name, JobID: detail.JobID}}}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := output.WriteFlakinessReport(dataDir, models.FlakinessReport{}); err != nil {
-		t.Fatal(err)
-	}
-	callback := func(ctx context.Context) error {
-		details, report, err := loadFinalizedData(dataDir)
-		if err != nil {
-			return err
-		}
-		p := &pipeline{opts: Options{OutDir: dataDir}, cfg: cfg, backend: backend}
-		return p.runSideEffects(ctx, &refreshResult{details: details, flakiness: report})
-	}
-	stats, err := orka.FinalizePatternsAndRun(context.Background(), dataDir, emailLoopOrkaAnalyzer{}, callback)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stats.RecurringPatterns != 1 || len(sender.snapshot()) != 1 {
-		t.Fatalf("stats=%+v messages=%v", stats, sender.subjects())
-	}
-	var report models.FlakinessReport
-	data, err := os.ReadFile(filepath.Join(dataDir, "flakiness.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(data, &report); err != nil {
-		t.Fatal(err)
-	}
-	if len(report.RecurringPatterns) != 1 || report.RecurringPatterns[0].ID == "" {
-		t.Fatalf("recurring patterns = %+v", report.RecurringPatterns)
-	}
-	if err := callback(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if len(sender.snapshot()) != 1 {
-		t.Fatalf("duplicate Orka email: %v", sender.subjects())
-	}
-	message := sender.snapshot()[0]
-	if !strings.Contains(message.Subject, detail.Name) {
-		t.Fatalf("Orka email subject missing job: %s", message.Subject)
-	}
-	if !strings.Contains(message.TextBody, "action=create-issue") || !strings.Contains(message.TextBody, "action=propose-fix") {
-		t.Fatalf("Orka email action links missing: %s", message.TextBody)
-	}
-}
-
-var _ patterns.Analyzer = emailLoopOrkaAnalyzer{}

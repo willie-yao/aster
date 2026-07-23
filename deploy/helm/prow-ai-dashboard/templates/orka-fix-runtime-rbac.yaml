@@ -1,8 +1,7 @@
-{{- include "prow-ai-dashboard.validateAnalysis" . -}}
-{{- if and (or (eq .Values.analysis "orka") .Values.orka.fixRuntime.enabled) .Values.orka.rbac.create }}
-# The pipeline pod runs in the release namespace but creates Tasks, Tools, and
-# private analyzer bundle ConfigMaps in the Orka namespace. The ServiceAccount
-# lives here while the Role and RoleBinding grant cross-namespace access there.
+{{- include "prow-ai-dashboard.validateAI" . -}}
+{{- if and .Values.orka.fixRuntime.enabled .Values.orka.rbac.create }}
+# The dashboard pod runs in the release namespace and creates fix-generation
+# Tasks in the Orka namespace.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -10,7 +9,7 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "prow-ai-dashboard.labels" . | nindent 4 }}
-    app.kubernetes.io/component: orka-pipeline
+    app.kubernetes.io/component: orka-fix-runtime
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -19,23 +18,11 @@ metadata:
   namespace: {{ .Values.orka.namespace }}
   labels:
     {{- include "prow-ai-dashboard.labels" . | nindent 4 }}
-    app.kubernetes.io/component: orka-pipeline
+    app.kubernetes.io/component: orka-fix-runtime
 rules:
-  {{- if eq .Values.analysis "orka" }}
-  # Analysis applies Tasks and Tools and garbage-collects scoped Tool resources.
-  - apiGroups: ["core.orka.ai"]
-    resources: ["tasks", "tools"]
-    verbs: ["create", "get", "list", "watch", "patch", "update", "delete"]
-  # Container analyzer bundles are immutable and deleted after result handling.
-  - apiGroups: [""]
-    resources: ["configmaps"]
-    verbs: ["create", "get", "list", "patch", "delete"]
-  {{- else }}
-  # Fix generation only creates and polls Tasks.
   - apiGroups: ["core.orka.ai"]
     resources: ["tasks"]
     verbs: ["create", "get", "patch", "delete"]
-  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -44,7 +31,7 @@ metadata:
   namespace: {{ .Values.orka.namespace }}
   labels:
     {{- include "prow-ai-dashboard.labels" . | nindent 4 }}
-    app.kubernetes.io/component: orka-pipeline
+    app.kubernetes.io/component: orka-fix-runtime
 subjects:
   - kind: ServiceAccount
     name: {{ include "prow-ai-dashboard.orkaServiceAccountName" . }}

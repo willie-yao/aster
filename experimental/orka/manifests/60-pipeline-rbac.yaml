@@ -1,9 +1,4 @@
-# RBAC for the in-cluster Orka pipeline. The orka-producer applies Tasks and
-# per-build Tools. Container analysis also creates private bundle ConfigMaps.
-# The orka-ingestor reads Task status and
-# garbage-collects completed builds' Tools. Both run under this ServiceAccount,
-# whose token also authenticates the ingestor to the Orka result API (via
-# TokenReview), so no separate credential is needed.
+# RBAC for the isolated container analyzer lifecycle experiment.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -16,11 +11,9 @@ metadata:
   name: orka-pipeline
   namespace: orka-system
 rules:
-  # create/patch to apply, get/list to poll status, delete for per-build Tool GC (H4).
   - apiGroups: ["core.orka.ai"]
-    resources: ["tasks", "tools"]
-    verbs: ["create", "get", "list", "watch", "patch", "update", "delete"]
-  # Immutable container analyzer bundles use create/get/list/patch/delete only.
+    resources: ["tasks"]
+    verbs: ["create", "get", "list", "watch", "patch", "delete"]
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["create", "get", "list", "patch", "delete"]

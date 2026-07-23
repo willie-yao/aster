@@ -1,6 +1,6 @@
 # Multi-stage build producing the default minimal engine image plus an optional
-# fixer-runtime target with git. Both targets include the server,
-# fetcher, worker, and SPA; the fixer target also includes orka-ingestor.
+# fixer-runtime target with git. Both targets include the server, fetcher, worker,
+# and SPA.
 
 # Stage 1: build the SPA. Default base path "/" suits server mode.
 FROM node:20-alpine AS web
@@ -19,8 +19,7 @@ COPY backend/ ./
 ARG VERSION=dev
 RUN CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION}" -o /out/fetcher ./cmd/fetcher \
  && CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION}" -o /out/worker ./cmd/worker \
- && CGO_ENABLED=0 go build -o /out/server ./cmd/server \
- && CGO_ENABLED=0 go build -o /out/orka-ingestor ./cmd/orka-ingestor
+ && CGO_ENABLED=0 go build -o /out/server ./cmd/server
 
 # Optional drop-in chart image with git for Orka diff reconstruction.
 FROM debian:bookworm-slim AS fixer-runtime
@@ -30,7 +29,6 @@ RUN apt-get update \
 COPY --from=build /out/fetcher /usr/local/bin/fetcher
 COPY --from=build /out/worker /usr/local/bin/worker
 COPY --from=build /out/server /usr/local/bin/server
-COPY --from=build /out/orka-ingestor /usr/local/bin/orka-ingestor
 COPY --from=web /src/frontend/dist /app/web
 ENV HOME=/tmp
 USER 65532:65532

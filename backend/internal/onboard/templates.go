@@ -117,9 +117,7 @@ var k8sValuesTmpl = template.Must(template.New("values.yaml").Parse(
 image:
   tag: main
 
-# The self-contained backend is the safest first install. Orka is the strategic
-# orchestration backend and can be selected after its preview prerequisites are ready.
-analysis: inprocess
+# The dashboard-owned analyzer runs inside the worker.
 mode: watch
 
 persistence:

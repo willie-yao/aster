@@ -15,13 +15,10 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
-// GroupVersionResources for the Orka CRDs the pipeline creates.
-var (
-	TasksGVR = schema.GroupVersionResource{Group: "core.orka.ai", Version: "v1alpha1", Resource: "tasks"}
-	ToolsGVR = schema.GroupVersionResource{Group: "core.orka.ai", Version: "v1alpha1", Resource: "tools"}
-)
+// TasksGVR identifies the Orka Task resource.
+var TasksGVR = schema.GroupVersionResource{Group: "core.orka.ai", Version: "v1alpha1", Resource: "tasks"}
 
-const fieldManager = "orka-producer"
+const fieldManager = "prow-ai-dashboard"
 
 // RESTConfig returns in-cluster config when running in a pod, otherwise the
 // default kubeconfig loading rules (KUBECONFIG / ~/.kube/config). A non-empty
@@ -38,8 +35,7 @@ func RESTConfig(context string) (*rest.Config, error) {
 	return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, overrides).ClientConfig()
 }
 
-// KubeClient applies Orka objects and reads Task status via the dynamic client,
-// so the pipeline needs no Orka Go types.
+// KubeClient applies Orka Tasks and reads their status through the dynamic client.
 type KubeClient struct {
 	dyn     dynamic.Interface
 	Manager string
@@ -55,7 +51,7 @@ func NewKubeClient(cfg *rest.Config) (*KubeClient, error) {
 }
 
 // Apply server-side applies an unstructured object (create or update).
-// Idempotent, which matches the content-addressed run-once Task contract.
+// It is idempotent for content-addressed Tasks and immutable bundle ownership.
 func (k *KubeClient) Apply(ctx context.Context, gvr schema.GroupVersionResource, ns string, obj map[string]any) error {
 	u := &unstructured.Unstructured{Object: obj}
 	data, err := json.Marshal(obj)

@@ -6,12 +6,11 @@
 
 ## Context
 
-`prow-ai-dashboard` supports two analysis execution paths:
+`prow-ai-dashboard` originally supported two analysis execution paths:
 
-- The in-process analyzer runs the dashboard-owned agentic loop inside the
+- The in-process analyzer ran the dashboard-owned agentic loop inside the
   fetcher or worker.
-- The original Orka preview creates `type: ai` Tasks that run Orka's generic AI
-  worker.
+- The Orka preview created `type: ai` Tasks that ran Orka's generic AI worker.
 
 The dashboard requires a stricter analysis contract than the generic Orka AI
 worker provides for weaker models. Compatibility versions through v6 added
@@ -67,12 +66,13 @@ reimplement analysis policy.
 
 ### Patched Orka AI worker
 
-The patched `type: ai` compatibility worker will be removed without a
-compatibility period. It duplicates dashboard analysis policy and is not part of
-the retained Orka lifecycle experiment.
+The patched `type: ai` runtime and its Helm mode have been removed without a
+compatibility period. They duplicated dashboard analysis policy and were not
+part of the retained Orka lifecycle experiment. The unreferenced compatibility
+build assets are removed separately.
 
-The project will not add compatibility v7, preserve the v6 Helm mode, or carry
-configuration fields that exist only for the patched worker.
+The project will not add compatibility v7 or restore configuration fields that
+existed only for the patched worker.
 
 ### Container analyzer status
 
@@ -105,7 +105,7 @@ analysis backend. This decision does not remove or constrain
 ### Benefits
 
 - One canonical implementation and home for new analysis policy
-- No new dashboard policy in patched Orka internals
+- No dashboard policy in patched Orka internals
 - In-process and container execution share results, cache rules, skills, and
   quality gates
 - Orka upgrades can remain independent from model-loop behavior
@@ -135,15 +135,13 @@ analysis that maps naturally to a Job.
 ### Remove all Orka analysis immediately
 
 Rejected for the container experiment until the additional model and lifecycle
-evaluation is complete. The patched AI worker does not share that deferral and
-will be removed.
+evaluation is complete. The patched AI worker did not share that deferral and was
+removed.
 
 ## Follow-up work
 
-1. Decouple the container experiment from patched-worker assets.
-2. Remove the patched `type: ai` analysis mode and its configuration.
-3. Run repeated in-process and container parity tests with one or two mid-tier
+1. Run repeated in-process and container parity tests with one or two mid-tier
    models.
-4. Verify cancellation and operator-visible history against an ordinary
+2. Verify cancellation and operator-visible history against an ordinary
    Kubernetes Job baseline.
-5. Decide whether lifecycle value justifies retaining the container experiment.
+3. Decide whether lifecycle value justifies retaining the container experiment.

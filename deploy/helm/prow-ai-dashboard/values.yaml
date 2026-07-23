@@ -24,141 +24,20 @@ fullnameOverride: ""
 # release at the same existingClaim.
 mode: watch
 
-# Analysis backend selects HOW failures are analyzed.
-#   inprocess: (default) the fetcher/worker runs the engine's in-process agentic
-#              loop (governed by ai.enabled). No change to existing behavior.
-#   orka:      the frozen compatibility-v6 preview. The producer creates one
-#              observable Orka type: ai Task per failure and the ingestor publishes
-#              accepted results. New analysis work targets a dashboard-owned
-#              type: container analyzer instead of extending this worker path.
-#              Today this mode requires cron, Orka, a Provider, and the v6 worker.
-#              See experimental/orka/QUICKSTART.md.
-analysis: inprocess
-
-# Orka analysis backend settings. Only used when analysis: orka.
+# Orka is optional and used only for fix generation. Failure analysis always
+# runs through the dashboard-owned in-process analyzer.
 orka:
   namespace: orka-system
-    # Provider CRD name and the model the Tasks request.
-  provider: copilot
-  model: claude-sonnet-4.6
-  # Expected API selected by the compatibility worker. auto accepts either; an
-  # explicit mode is included in Task identity and enforced during ingestion.
-  apiMode: auto
-  # Orka result API Service.
-  apiBase: http://orka.orka-system.svc:8080
-  # Manual cache-bust version. Prompt, model, timeout, retry, and Tool-definition
-  # changes invalidate Tasks automatically; bump this for external semantic changes.
-  version: v1
-  # Per-Task timeout, retryPolicy, and result/finalization wait budgets.
-  taskTimeout: 10m
-  retries: 1
-  ingestWait: 45m
-  patternWait: 25m
-  # Post-finalization notifications and GitHub writes. Disable this for a safe
-  # evaluation run while still producing complete dashboard and pattern data.
-  sideEffects:
-    enabled: true
-  # Producer + ingestor images are published alongside the engine image. Empty
-  # tags inherit image.tag, then Chart.appVersion.
-  producer:
-    # Apply per-test Tasks in bounded waves (0-1000). Set 0 to apply every Task at once.
-    maxConcurrentTasks: 2
-    taskPoll: 5s
-    # Deadline for placement recovery in every wave and Task completion in each
-    # intermediate wave. Final-wave Task execution is left to the ingestor.
-    waveTimeout: 30m
-    image:
-      repository: ghcr.io/willie-yao/prow-ai-dashboard/orka-producer
-      tag: ""
-      pullPolicy: IfNotPresent
-  ingestor:
-    image:
-      repository: ghcr.io/willie-yao/prow-ai-dashboard/orka-ingestor
-      tag: ""
-      pullPolicy: IfNotPresent
-
-  # Placement copied to spec.execution on per-test and pattern Tasks. These
-  # fields schedule Orka's dynamic AI-worker pods, not the dashboard CronJob.
-  taskExecution:
-    nodeSelector: {}
-    tolerations: []
-    affinity: {}
-
-  # Base Tool definitions are mounted into the producer in the dashboard
-  # release namespace. Set create=false and existingConfigMap to use an
-  # operator-managed ConfigMap instead.
-  baseTools:
-    create: true
-    existingConfigMap: ""
-
-  # Per-release artifact Tool service. The Service and authentication Secret
-  # live in orka.namespace beside the Orka AI-worker pods. The producer-owned
-  # base Tool definitions are rewritten to this Service automatically.
-  artifactTool:
-    enabled: true
-    # Required only when enabled=false. Include the scheme and port, with no
-    # trailing slash, for example http://artifact-tool.orka-system.svc:8080.
-    baseURL: ""
-    replicas: 1
-    image:
-      repository: ghcr.io/willie-yao/prow-ai-dashboard/orka-artifact-tool
-      tag: ""
-      pullPolicy: IfNotPresent
-    imagePullSecrets: []
-    auth:
-      # When existingSecret is empty, the chart creates a release-scoped Secret
-      # and preserves its token across upgrades.
-      existingSecret: ""
-      tokenKey: token
-      token: ""
-    service:
-      port: 8080
-    # Defaults used only when a Tool request lacks producer-owned routing
-    # headers. Scoped production Tools always provide the real build route.
-    defaultBucket: kubernetes-ci-logs
-    defaultBuildPrefix: logs/periodic-cluster-api-provider-azure-e2e-main/2073230525962653696/
-    modelByteBudget: 8388608
-    gcsByteBudget: 67108864
-    extraEnv: []
-    podSecurityContext:
-      runAsNonRoot: true
-      runAsUser: 65532
-      runAsGroup: 65532
-      fsGroup: 65532
-      seccompProfile:
-        type: RuntimeDefault
-    securityContext:
-      allowPrivilegeEscalation: false
-      readOnlyRootFilesystem: true
-      capabilities:
-        drop: ["ALL"]
-    resources:
-      requests:
-        cpu: 50m
-        memory: 64Mi
-      limits:
-        cpu: "1"
-        memory: 512Mi
-    nodeSelector: {}
-    tolerations: []
-    affinity: {}
-    networkPolicy:
-      enabled: true
-      # Additional ingress peers appended beside the default Orka AI-worker
-      # pod selector. Each entry is a standard NetworkPolicyPeer.
-      from: []
-  # Enable the Orka ServiceAccount and RBAC for scheduled and interactive
-  # agent_runtime.type: orka fix generation even when analysis is inprocess.
   fixRuntime:
     # Enables Task RBAC, ServiceAccount token mounts, and the git-capable fixer
-    # image. The Agent/API are set in project.yaml under ai.fix_prs.agent_runtime.
+    # image. The Agent and API are configured in project.yaml under
+    # ai.fix_prs.agent_runtime.
     enabled: false
     image:
       repository: ghcr.io/willie-yao/prow-ai-dashboard/fixer
       tag: ""
       pullPolicy: IfNotPresent
-  # RBAC: create a ServiceAccount + Role/RoleBinding for the pipeline (create/patch
-  # Tasks+Tools, read status, GC Tools). Disable to reuse an existing SA.
+  # Disable this when an operator provides the ServiceAccount and Orka Role.
   rbac:
     create: true
     serviceAccountName: ""

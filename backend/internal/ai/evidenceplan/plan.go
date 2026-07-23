@@ -20,16 +20,6 @@ const (
 	MaxPromptBytes = 24 * 1024
 )
 
-// Backend selects backend-specific instructions around the shared plan body.
-type Backend string
-
-const (
-	// InProcess renders instructions for the dashboard-owned tool loop.
-	InProcess Backend = "in-process"
-	// Orka renders instructions for the external Orka worker contract.
-	Orka Backend = "orka"
-)
-
 // ScanStatus describes whether the candidate scan can prove plan completeness.
 type ScanStatus struct {
 	Truncated   bool
@@ -62,11 +52,11 @@ func FailureSignal(tc models.TestCase) string {
 
 // Render returns a bounded plan prompt plus whether every initial group has a
 // candidate from a complete scan.
-func Render(plan []skills.PlannedSkill, scan ScanStatus, backend Backend) (string, bool) {
+func Render(plan []skills.PlannedSkill, scan ScanStatus) (string, bool) {
 	if len(plan) == 0 {
 		return "", false
 	}
-	text := renderTextFor(backend)
+	text := inProcessRenderText
 	complete := !scan.Truncated && !scan.Failed && !scan.Unavailable
 	var out strings.Builder
 	out.WriteString("## Required evidence plan\n\n")
@@ -130,19 +120,10 @@ type renderText struct {
 	omitted          string
 }
 
-func renderTextFor(backend Backend) renderText {
-	if backend == Orka {
-		return renderText{
-			intro:            "The dashboard matched these diagnostic recipes from the failure signal. Before broad searches or submit_analysis, read at least one candidate path from every listed evidence group. Keep every returned evidence_token. Use required_evidence if the diagnosis changes or a group has no candidate.",
-			missingCandidate: "  Candidate paths: none found in the bounded tree; use required_evidence and list the relevant subtree.\n",
-			omitted:          "\n... [additional matched evidence plans omitted by prompt budget; before submit_analysis, call required_evidence with the original failure signal from this Task prompt]\n",
-		}
-	}
-	return renderText{
-		intro:            "The dashboard matched these diagnostic recipes from the failure signal. Before broad searches, read at least one candidate path from every listed evidence group with read_artifact, tail_artifact, or grep_artifact. If the diagnosis changes or a group has no candidate, continue investigating with the normal artifact tools.",
-		missingCandidate: "  Candidate paths: none found in the bounded tree; use list_artifacts or find_artifacts on the relevant subtree.\n",
-		omitted:          "\n... [additional matched evidence plans omitted by prompt budget; use the normal artifact tools to investigate unresolved groups from the original failure signal]\n",
-	}
+var inProcessRenderText = renderText{
+	intro:            "The dashboard matched these diagnostic recipes from the failure signal. Before broad searches, read at least one candidate path from every listed evidence group with read_artifact, tail_artifact, or grep_artifact. If the diagnosis changes or a group has no candidate, continue investigating with the normal artifact tools.",
+	missingCandidate: "  Candidate paths: none found in the bounded tree; use list_artifacts or find_artifacts on the relevant subtree.\n",
+	omitted:          "\n... [additional matched evidence plans omitted by prompt budget; use the normal artifact tools to investigate unresolved groups from the original failure signal]\n",
 }
 
 func boundedFailureBody(value string) string {

@@ -14,41 +14,16 @@ function calling, every failure is analyzed by the agentic loop. The model
 browses everything itself via the registered tools; the per-failure prompt
 is just the failing test's context.
 
-## In-process and Orka backends
+## Runtime ownership
 
-The agentic loop is one analysis approach, but it runs in one of two backends:
+The fetcher and worker run the dashboard-owned `FailureAnalyzer` directly. The
+same Go implementation owns provider behavior, tools, evidence planning,
+critique, cache acceptance, private traces, and result schemas on Pages and
+Kubernetes.
 
-- **In-process** (default): the fetcher runs the loop itself, as goroutines,
-  enforcing every quality gate in Go. This is the backend the rest of this doc
-  describes, and the only one the GitHub Actions + Pages path uses.
-- **Orka preview** (Kubernetes-native): the current `analysis: orka` mode uses
-  a compatibility v6 `type: ai` worker that is frozen for maintenance. The
-  experimental successor schedules the dashboard-owned analyzer as a
-  `type: container` Task so Orka owns lifecycle while the dashboard owns model
-  policy. See the [analysis runtime ownership decision](architecture-decisions/0001-analysis-runtime-ownership.md).
-
-The current backends publish the same `jobs/*.json` wire shape with
-`Mode: "agentic"`, but they do not run the same implementation. The in-process
-backend calls the dashboard-owned `FailureAnalyzer`. The frozen `type: ai` path
-reconstructs its policy through the patched Orka worker, Tools, and ingestion
-checks. Only the experimental `type: container` successor calls the same
-`FailureAnalyzer` inside an Orka Task.
-
-| | In-process | Frozen Orka `type: ai` preview |
-| --- | --- | --- |
-| Orchestration | Goroutines in the fetcher | One Task per failure, applied to the cluster |
-| Quality gates | Enforced in dashboard Go code | Reconstructed through validation Tools, worker re-prompts, and ingestor checks |
-| Cache | On-disk JSON keyed by mode + hash | The Kubernetes object store: Task names fingerprint project/build/test identity and the model-visible analysis contract; `-version` is a manual override |
-| Config surface | Every `ai.*` knob | Shared prompt, skills, storage, `ai.tools`, `ai.min_tool_calls`, and `ai.min_gcs_bytes`; execution settings live under Helm `orka.*` |
-| Endpoint | OpenAI-compatible Chat Completions or Responses | Orka tries Responses first and falls back to Chat Completions through its Provider; Copilot needs a de-streaming proxy |
-
-The trade-off from the evaluation: Orka with a strong co-located model matches or
-beats the engine's reference labels on the hardest cases, while cheaper models
-remain bounded by their reasoning capability. The in-process backend stays the
-self-contained first install during the Orka preview. For the code-level
-mechanics of how each harness piece is reconstructed out of Kubernetes objects,
-see [experimental/orka/ARCHITECTURE.md](../experimental/orka/ARCHITECTURE.md); for
-setup, [experimental/orka/QUICKSTART.md](../experimental/orka/QUICKSTART.md).
+The experimental Orka container analyzer calls this same contract inside a
+`type: container` Task to evaluate lifecycle behavior. It is not a supported
+analysis backend and does not own model policy.
 
 ## Endpoint requirements
 
@@ -97,12 +72,6 @@ and copy-paste presets. Each field below is the one-line summary; see
 the GCS fetch ceiling) are **not** configurable: the first two auto-size from
 the endpoint's context window and the GCS ceiling is a fixed engine safety cap
 (see [Automatic budget sizing](#automatic-budget-sizing)).
-
-> These knobs govern the in-process backend. Orka shares `ai.tools`,
-> `ai.min_tool_calls`, `ai.min_gcs_bytes`, the `storage` block, the display id,
-> and the merged engine and consumer skill set. Settings such as `max_iters`, `timeout`,
-> `single_tool_call`, and `critique.*` do not configure Orka Tasks. See
-> [In-process and Orka backends](#in-process-and-orka-backends).
 
 The effective tool selection also selects diagnostic profiles. The engine-owned
 Prow profile is always enabled. The provider-neutral Kubernetes profile is
@@ -289,10 +258,8 @@ ai:
 
 ## How it works
 
-The mechanics below are the in-process backend. The Orka backend runs the same
-loop but reconstructs each gate as a tool the agent must call or an ai-worker
-re-prompt; the piece-by-piece mapping is tabulated in
-[experimental/orka/ARCHITECTURE.md](../experimental/orka/ARCHITECTURE.md#how-the-harness-is-replicated).
+The mechanics below are the dashboard-owned analyzer used by both Pages and
+Kubernetes deployments.
 
 ### The loop at a glance
 
@@ -520,9 +487,8 @@ collision or malformed recipe is a startup error.
 
 Every cache entry carries the `skill_set_hash` fingerprint of the complete
 merged set. A selected engine-recipe edit, consumer-recipe edit, or profile
-selection change invalidates affected in-process entries independently of the
-`critique_version` bump. Orka uses the same hash in its analysis contract and
-Task identity.
+selection change invalidates affected entries independently of the
+`critique_version` bump.
 
 **Inapplicable recipes do not block caching.** A recipe whose required
 evidence does not exist anywhere in the build's artifact tree is inapplicable
@@ -679,65 +645,6 @@ succeeds. A manual cache clear is only for an immediate full rebaseline.
 Cached agentic entries are scoped to a specific build because answers cite
 build-specific paths and line numbers; the same test failing in two different
 builds gets two separate agentic analyses.
-
-On the Orka backend the cache is the Kubernetes object store itself. Before a
-Task is created, the producer includes the bounded JUnit failure message and
-failure body and prepends a filtered, byte-capped artifact path tree. It also
-matches diagnostic recipes against bounded failure evidence without producer instructions and prepends a bounded
-required-evidence plan with ranked exact artifact candidates. This gives weaker
-models a direct investigation checklist instead of relying on a voluntary first
-`required_evidence` call. Each artifact listing is capped at 10 seconds, and the
-producer stops optional seed work after a 45-second run-wide budget so storage
-stalls cannot delay Task creation indefinitely. The validated-analysis worker
-retains a compact ledger of successful Tool observations and evidence tokens, and
-proactively compacts old message blocks before the provider rejects an oversized
-request.
-
-Each Task name fingerprints project, storage, job, build, exact test index,
-rendered failure prompt, artifact-tree seed hash, evidence-plan hash,
-provider/model, timeout/retry, and Tool definitions.
-Re-applying an unchanged Task is a no-op. `-version` remains a manual override
-for semantic changes outside that fingerprint. There is no on-disk response cache file; a
-private `orka_analysis.json` manifest carries the producer identity contract to
-the ingestor and is never served or published. Ingested analyses store both the
-contract hash and exact Task name, so cached job JSON is refreshed whenever the
-contract or per-test evidence plan changes. Event-driven ingestion reloads the
-private manifest before validating a Task absent from its current index. A load
-failure returns 503; a successfully loaded manifest that excludes the Task
-acknowledges it as superseded. Tool resources use a contract-versioned scope as well, preventing an
-old Task from observing a newly applied Tool definition. Producer waves bound
-per-test submissions, and `Task.spec.execution` places both per-test and pattern
-worker pods without changing semantic cache identity. Successful Tasks keep their
-cached result after a placement change. Non-successful Tasks with stale placement
-are deleted and recreated after Orka finishes cleaning their result and event
-state. Before publishing a
-result, the ingestor reads Orka's durable execution events, enforces the JSON
-schema, `min_tool_calls`, and `min_gcs_bytes`, requires a successful terminal Task event, rejects required
-quality tools whose last attempt failed, requires a successful
-`submit_analysis` call whose token matches the exact final JSON and whose
-scoped evidence tokens prove every cited artifact was returned by a successful
-content read. The final token is keyed by a producer-generated secret carried
-only in the private manifest and a per-Task submit Tool's hidden headers, so it cannot be recomputed for a different final object or replayed by another Task. Recipe groups absent from a complete bounded
-artifact-tree listing are treated as inapplicable, matching the in-process
-critique path. Signed evidence tokens carry the successful artifact-read byte count, which is enforced and published as `AIAnalysis.GCSBytes`. Acceptance also requires a completed `verify_timeline` call for
-every transient verdict. `submit_analysis` and conditional timeline verification
-are required quality gates. `required_evidence` remains required when the initial
-evidence plan is truncated, omitted, unmatched, or lacks a candidate. Failures from
-`recurrence`, `diff_last_passing`, and `check_transient_signatures` remain visible
-in telemetry but are advisory and do not discard an otherwise valid analysis.
-Accepted analyses publish Tool/model failures, retry
-count, context truncations, duration, provider token usage, stop reason, and
-quality-tool evidence alongside the result. The complete merged skill contract
-is compiled into the scoped `required_evidence` Tool, and its hash participates
-in the Task fingerprint. A complete precomputed plan satisfies recipe lookup; an
-incomplete plan requires a completed Tool call before publishing the result.
-Regardless of lookup, `submit_analysis` validates the initially planned groups
-together with groups matched from the final diagnosis and preserves their
-original ranked candidates in rejection responses. An oversized per-Task header
-falls back to mandatory lookup rather than blocking Task production. The Orka tool set also
-includes `diff_last_passing` for targeted regression comparisons. After batch pattern finalization,
-the Orka ingestor runs the same notification, issue, and fix-PR reconciliation
-stage as the in-process fetcher.
 
 ### Pattern analysis
 

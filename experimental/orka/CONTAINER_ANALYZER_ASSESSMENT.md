@@ -168,9 +168,9 @@ Keep the container analyzer as an internal experiment through the next model and
 lifecycle evaluation. Do not add a supported Helm mode or new container transport
 features during that evaluation.
 
-Keep the in-process analyzer canonical. Remove the patched `type: ai` analysis
-mode and compatibility v6 without compatibility scaffolding. Retain Orka fix
-generation, which is an independent runtime boundary.
+Keep the in-process analyzer canonical. The patched `type: ai` analysis mode has been removed without compatibility
+scaffolding. Its unreferenced worker build assets are removed separately. Retain
+Orka fix generation, which is an independent runtime boundary.
 
 After repeated parity and lifecycle tests, retain the container experiment only
 if Task cancellation, history, placement, retry, or durable results provide

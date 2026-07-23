@@ -691,7 +691,7 @@ func (c *Client) doAnalyzeAgentic(
 		plan, _ := evidenceplan.Render(state.initialEvidencePlan, evidenceplan.ScanStatus{
 			Truncated: state.initialArtifactTree.truncated,
 			Failed:    state.initialArtifactTree.failed,
-		}, evidenceplan.InProcess)
+		})
 		if plan != "" {
 			userPrompt = prependPrompt(userPrompt, plan)
 		}

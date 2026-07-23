@@ -62,54 +62,22 @@ the same `existingClaim`. A `Recreate` rollout keeps a single worker across
 updates, and Helm-managed config or secret changes trigger a rollout
 automatically.
 
-## Analysis backend: in-process or Orka
+## Analysis and Orka fix generation
 
-The `analysis` value selects how failing tests are analyzed. Both backends write
-the same `jobs/*.json`, so the server, the SPA, and the `/data` contract are
-identical either way.
+The worker or CronJob always runs the dashboard-owned in-process analyzer,
+governed by `ai.enabled`. No separate analysis backend is configured.
 
-- `analysis: inprocess` (default): the worker or CronJob runs the engine's
-  in-process agentic loop, governed by `ai.enabled`. It is self-contained, so a
-  fresh `helm install` works with no extra components.
-- `analysis: orka` (frozen preview): the fetch step writes the dashboard
-  skeleton and Orka runs one observable `type: ai` Task per failure. This adds
-  native retries and per-Task telemetry, but reconstructs dashboard policy in a
-  compatibility worker that is frozen at v6. A dashboard-owned `type: container`
-  successor is being evaluated separately and is not a supported Helm mode.
+Orka can be used only for fix generation. Set `orka.fixRuntime.enabled=true`,
+then configure `ai.fix_prs.agent_runtime.type: orka` in the consumer project.
+This selects the git-capable fixer image and enables Task RBAC for scheduled
+generation. The server receives the ServiceAccount token only when interactive
+actions are also enabled.
 
-Orka currently requires `mode: cron`, the Orka control plane, a Provider, and the
-pinned [compatibility AI worker](../experimental/orka/worker-patches/COMPATIBILITY.md).
-The dashboard chart creates a
-release-scoped artifact Tool Deployment, Service, authentication Secret,
-NetworkPolicy, and base Tool ConfigMap by default. Configure an external shared
-shim only when the operator intentionally owns those resources separately.
-The Orka skeleton fetch uses `-skip-side-effects`; notifications and GitHub
-reconciliation run once, after final analysis and pattern output exist. Set
-`orka.sideEffects.enabled=false` to suppress that final external reconciliation
-for an evaluation run. Per-test Tasks are applied in bounded producer waves by
-default. The producer rejects a wave timeout that cannot cover every configured
-Task attempt plus scheduling margin. Orka CronJobs use `restartPolicy: Never`
-and `backoffLimit: 0`, so a failed producer does not restart inside the same Pod
-and replay every wave. `orka.taskExecution` copies node selectors, tolerations,
-and affinity to both per-test and pattern Task worker pods.
-
-The chart deploys the analysis pipeline, not Orka itself, so the default stays
-`inprocess` and a fresh install always works. Opt into Orka only after those
-prerequisites are in place. See
-[experimental/orka/QUICKSTART.md](../experimental/orka/QUICKSTART.md) for the full setup
-and [experimental/orka/ARCHITECTURE.md](../experimental/orka/ARCHITECTURE.md) for
-how it works. For a fresh, side-effect-free comparison and a reversible PVC
-cutover, follow [Evaluating Orka safely](../experimental/orka/EVALUATION.md).
-
-Orka can also be used only for fix generation while analysis remains
-`inprocess`. Set `orka.fixRuntime.enabled=true`, then configure
-`ai.fix_prs.agent_runtime.type: orka` in the consumer project. This selects the
-git-capable fixer image and enables Task RBAC for scheduled generation. The
-server receives the ServiceAccount token only when interactive actions are also
-enabled.
 When the release namespace differs from `orka.namespace`, provide an
-`ORKA_API_TOKEN` authorized for the Orka namespace if the API's namespace policy
-does not accept the release ServiceAccount token.
+`ORKA_API_TOKEN` authorized for the Orka namespace if the API namespace policy
+does not accept the release ServiceAccount token. The dashboard-owned container
+analyzer remains an isolated development experiment and is not installed by the
+chart.
 
 ## Build and push the image
 
@@ -190,14 +158,6 @@ expires, it deletes the still-running Job by default. Use `--keep-on-timeout`
 only when another operator will continue monitoring it. The check is not a
 distributed lock, so do not invoke the helper concurrently.
 
-For the Orka backend, `experimental/orka/orka-ops.sh` validates the control
-plane and Provider, runs a disposable smoke Task, reports Task and Tool state by
-project and build, and previews age-bounded garbage collection. The preview is
-project-scoped and never deletes resources. The smoke command checks the Orka
-controller, worker, Provider, and negotiated API mode; use a complete dashboard
-Job to validate artifact Tools, Task events, and ingestion. See the
-[Orka quickstart](../experimental/orka/QUICKSTART.md#operate).
-
 Then reach the server:
 
 ```bash
@@ -213,13 +173,7 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | --- | --- |
 | `image.repository`, `image.tag` | Engine image; tag defaults to the chart `appVersion`. |
 | `mode` | `watch` (continuous worker Deployment, default) or `cron` (scheduled CronJob). |
-| `analysis` | `inprocess` for the canonical self-contained backend or `orka` for the frozen compatibility-v6 preview. Orka currently requires `mode: cron`, a compatible control plane, Provider, and worker. |
-| `fetcher.restartPolicy`, `fetcher.backoffLimit`, `fetcher.activeDeadlineSeconds` | Bound CronJob container restarts, Job retries, and total wall time. Empty restart policy selects `Never` for Orka and `OnFailure` otherwise; the default deadline is 10 hours. |
-| `orka.artifactTool.*` | Release-scoped artifact Tool image, authentication, network policy, resources, and scheduling. |
-| `orka.baseTools.*` | Create the synchronized producer ConfigMap or reference an existing ConfigMap in the release namespace. |
-| `orka.producer.maxConcurrentTasks`, `taskPoll`, `waveTimeout` | Apply per-test Tasks in bounded waves (`0` through `1000`) and bound placement recovery and intermediate-wave polling. The timeout must cover `taskTimeout * (retries + 1)` plus scheduling margin equal to the greater of one minute or twice the poll interval. |
-| `orka.taskExecution.*` | Copy node selectors, tolerations, and affinity to Orka per-test and pattern worker pods. |
-| `orka.sideEffects.enabled` | Run post-analysis notifications and GitHub reconciliation. Disable for an Orka evaluation. |
+| `fetcher.restartPolicy`, `fetcher.backoffLimit`, `fetcher.activeDeadlineSeconds` | Bound CronJob container restarts, Job retries, and total wall time. Empty restart policy selects `OnFailure`; the default deadline is 10 hours. |
 | `orka.fixRuntime.enabled` | Mount a ServiceAccount token and grant Orka Task RBAC for `agent_runtime.type: orka` fix generation. |
 | `persistence.accessMode` | Must be `ReadWriteMany`. |
 | `persistence.storageClass`, `persistence.size` | The shared volume's class and size. |
@@ -244,9 +198,7 @@ choose `server.actions.mode` (`oauth` for GitHub sign-in with per-user
 attribution, or `proxy` for an upstream SSO proxy plus a bot token), then list
 the allowed GitHub logins in `server.actions.admins` (see [server.md](server.md)).
 The same authenticated session protects write actions and the private analysis
-trace page. With `analysis: orka`, the ingestor adds Task identity, lifecycle,
-model requests, tool calls, and context truncation to the same trace view used
-by in-process analysis.
+trace page.
 
 ### Enabling actions with Helm
 

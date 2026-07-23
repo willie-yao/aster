@@ -498,7 +498,7 @@ func TestScaffold_K8sStaysFocused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"analysis: inprocess", "mode: watch", "Orka is the strategic"} {
+	for _, want := range []string{"mode: watch", "dashboard-owned analyzer"} {
 		if !strings.Contains(values+readme, want) {
 			t.Errorf("Kubernetes scaffold missing %q:\n%s\n%s", want, values, readme)
 		}

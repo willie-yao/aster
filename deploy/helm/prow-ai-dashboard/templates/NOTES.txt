@@ -11,37 +11,6 @@ Shared volume:    {{ include "prow-ai-dashboard.pvcName" . }} ({{ .Values.persis
 The server serves the SPA at / and the JSON contract at /data/*, with a
 capability descriptor at /api/capabilities.
 
-{{- if eq .Values.analysis "orka" }}
-
-Analysis backend: orka (strategic preview). The fetcher CronJob writes the skeleton (-ai=false), the
-orka-producer applies one Orka Task per failing test, and the orka-ingestor patches
-the results and finalizes job-level recurring patterns. The Orka control plane,
-a Provider, and the ai-worker patches must already be installed in namespace
-{{ .Values.orka.namespace }}. The chart owns the release-scoped artifact Tool
-service and {{ include "prow-ai-dashboard.orkaBaseToolsConfigMap" . }} ConfigMap
-unless existing resources were configured. See
-experimental/orka/QUICKSTART.md.
-
-From the engine checkout, verify the installed Provider and pipeline RBAC:
-
-  experimental/orka/orka-ops.sh --namespace {{ .Values.orka.namespace }} preflight \
-    --provider {{ .Values.orka.provider }} \
-    --service-account {{ .Release.Namespace }}/{{ include "prow-ai-dashboard.orkaServiceAccountName" . }}
-
-  experimental/orka/orka-ops.sh --namespace {{ .Values.orka.namespace }} smoke \
-    --provider {{ .Values.orka.provider }} \
-    --model {{ .Values.orka.model }} \
-    --expect-api {{ .Values.orka.apiMode }}
-
-Report the dashboard-managed Task and Tool batches:
-
-  experimental/orka/orka-ops.sh --namespace {{ .Values.orka.namespace }} status
-{{- if not .Values.orka.sideEffects.enabled }}
-Scheduled side effects are disabled. Analysis and pattern data are written, but
-notifications, issues, and fix PRs are skipped.
-{{- end }}
-{{- end }}
-
 {{- if .Values.ingress.enabled }}
 Reach it at:
 {{- range .Values.ingress.hosts }}

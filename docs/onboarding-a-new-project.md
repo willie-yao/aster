@@ -1,8 +1,8 @@
 # Onboarding a project
 
 The `fetcher onboard` command verifies Prow job discovery and creates a small
-consumer scaffold. The project schema supports both analysis backends, while the
-command sets deployment-specific branding and files for Pages or Kubernetes.
+consumer scaffold. The command sets deployment-specific branding and files for Pages or
+Kubernetes.
 
 ## Choose the environment
 
@@ -10,14 +10,10 @@ command sets deployment-specific branding and files for Pages or Kubernetes.
 | --- | --- | --- |
 | Fastest evaluation or public read-only site | GitHub Actions and Pages | In-process |
 | Private in-cluster model endpoint | Kubernetes with Helm | In-process initially |
-| Authenticated server actions | Kubernetes with Helm | In-process or Orka |
-| Per-failure Tasks and Orka observability | Kubernetes with Helm | Orka preview |
+| Authenticated server actions | Kubernetes with Helm | In-process |
 
-Orka is an optional experimental lifecycle backend. The current `type: ai`
-preview is frozen at compatibility v6 and requires a compatible Orka
-installation, Provider, and worker. A dashboard-owned `type: container`
-successor is being evaluated separately. The first Kubernetes scaffold uses the
-canonical in-process analyzer so it works by itself.
+The dashboard-owned container analyzer is an internal lifecycle experiment, not
+a deployment choice. Orka remains optional for fix generation.
 
 ## What the scaffold creates
 
@@ -123,7 +119,7 @@ first fetch publishes the expected jobs.
 
 - [GitHub Actions and Pages](github-pages.md)
 - [Kubernetes with Helm](kubernetes.md)
-- [Orka preview quickstart](../experimental/orka/QUICKSTART.md)
+- [Orka fix generation and container experiment](../experimental/orka/README.md)
 
 The Pages workflow uses repository variables `AI_ENDPOINT` and `AI_MODEL` plus
 the `AI_TOKEN` secret. The Kubernetes scaffold stores endpoint and model in

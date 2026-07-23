@@ -58,62 +58,10 @@ Git-capable engine image used by the opt-in fix runtime.
 {{- end -}}
 
 {{/*
-Resolve an Orka component image tag through component, engine, and chart defaults.
-*/}}
-{{- define "prow-ai-dashboard.orkaProducerImage" -}}
-{{- $tag := .Values.orka.producer.image.tag | default .Values.image.tag | default .Chart.AppVersion -}}
-{{- printf "%s:%s" .Values.orka.producer.image.repository $tag -}}
-{{- end -}}
-
-{{- define "prow-ai-dashboard.orkaIngestorImage" -}}
-{{- $tag := .Values.orka.ingestor.image.tag | default .Values.image.tag | default .Chart.AppVersion -}}
-{{- printf "%s:%s" .Values.orka.ingestor.image.repository $tag -}}
-{{- end -}}
-
-{{- define "prow-ai-dashboard.orkaArtifactToolImage" -}}
-{{- $tag := .Values.orka.artifactTool.image.tag | default .Values.image.tag | default .Chart.AppVersion -}}
-{{- printf "%s:%s" .Values.orka.artifactTool.image.repository $tag -}}
-{{- end -}}
-
-{{/*
-Release-scoped Orka artifact Tool resources.
+Release scope for cross-namespace Orka RBAC names.
 */}}
 {{- define "prow-ai-dashboard.orkaReleaseScope" -}}
 {{- printf "%s/%s" .Release.Namespace .Release.Name | sha256sum | trunc 8 -}}
-{{- end -}}
-
-{{- define "prow-ai-dashboard.orkaArtifactToolName" -}}
-{{- $base := include "prow-ai-dashboard.fullname" . | trunc 40 | trimSuffix "-" -}}
-{{- printf "%s-artifact-tool-%s" $base (include "prow-ai-dashboard.orkaReleaseScope" .) -}}
-{{- end -}}
-
-{{- define "prow-ai-dashboard.orkaArtifactToolSelectorLabels" -}}
-{{ include "prow-ai-dashboard.selectorLabels" . }}
-prow-ai-dashboard.io/release-scope: {{ include "prow-ai-dashboard.orkaReleaseScope" . }}
-{{- end -}}
-
-{{- define "prow-ai-dashboard.orkaArtifactToolSecret" -}}
-{{- if .Values.orka.artifactTool.auth.existingSecret -}}
-{{- .Values.orka.artifactTool.auth.existingSecret -}}
-{{- else -}}
-{{- printf "%s-auth" (include "prow-ai-dashboard.orkaArtifactToolName" .) | trunc 63 | trimSuffix "-" -}}
-{{- end -}}
-{{- end -}}
-
-{{- define "prow-ai-dashboard.orkaArtifactToolBaseURL" -}}
-{{- if .Values.orka.artifactTool.enabled -}}
-{{- printf "http://%s.%s.svc:%v" (include "prow-ai-dashboard.orkaArtifactToolName" .) .Values.orka.namespace .Values.orka.artifactTool.service.port -}}
-{{- else -}}
-{{- trimSuffix "/" .Values.orka.artifactTool.baseURL -}}
-{{- end -}}
-{{- end -}}
-
-{{- define "prow-ai-dashboard.orkaBaseToolsConfigMap" -}}
-{{- if .Values.orka.baseTools.existingConfigMap -}}
-{{- .Values.orka.baseTools.existingConfigMap -}}
-{{- else -}}
-{{- printf "%s-orka-tools" (include "prow-ai-dashboard.fullname" .) | trunc 63 | trimSuffix "-" -}}
-{{- end -}}
 {{- end -}}
 
 {{/*
@@ -167,7 +115,7 @@ Name of the Secret holding the AI token.
 {{- end -}}
 
 {{/*
-Name of the ServiceAccount the Orka analysis pipeline runs as.
+Name of the ServiceAccount used by Orka fix generation.
 */}}
 {{- define "prow-ai-dashboard.orkaServiceAccountName" -}}
 {{- if .Values.orka.rbac.serviceAccountName -}}
@@ -187,41 +135,11 @@ because Helm release names are unique only within their own namespace.
 {{- end -}}
 
 {{/*
-Validate the analysis backend selection and its constraints.
+Validate AI provider configuration.
 */}}
-{{- define "prow-ai-dashboard.validateAnalysis" -}}
+{{- define "prow-ai-dashboard.validateAI" -}}
 {{- if not (has .Values.ai.api (list "chat_completions" "responses")) -}}
 {{- fail "ai.api must be chat_completions or responses" -}}
-{{- end -}}
-{{- if not (or (eq .Values.analysis "inprocess") (eq .Values.analysis "orka")) -}}
-{{- fail (printf "analysis must be \"inprocess\" or \"orka\", got %q" .Values.analysis) -}}
-{{- end -}}
-{{- if and (eq .Values.analysis "orka") (ne .Values.mode "cron") -}}
-{{- fail "analysis: orka requires mode: cron (the produce->ingest flow is batch-oriented)" -}}
-{{- end -}}
-{{- if eq .Values.analysis "orka" -}}
-{{- if not (has .Values.orka.apiMode (list "auto" "responses" "chat_completions")) -}}
-{{- fail "orka.apiMode must be auto, responses, or chat_completions" -}}
-{{- end -}}
-{{- $maxConcurrentTasks := printf "%v" .Values.orka.producer.maxConcurrentTasks -}}
-{{- if not (regexMatch "^(0|[1-9][0-9]{0,2}|1000)$" $maxConcurrentTasks) -}}
-{{- fail "orka.producer.maxConcurrentTasks must be an integer between 0 and 1000" -}}
-{{- end -}}
-{{- if and .Values.orka.baseTools.create .Values.orka.baseTools.existingConfigMap -}}
-{{- fail "orka.baseTools.create and orka.baseTools.existingConfigMap are mutually exclusive" -}}
-{{- end -}}
-{{- if and (not .Values.orka.baseTools.create) (not .Values.orka.baseTools.existingConfigMap) -}}
-{{- fail "analysis: orka requires orka.baseTools.create=true or orka.baseTools.existingConfigMap" -}}
-{{- end -}}
-{{- if and (not .Values.orka.artifactTool.enabled) (not .Values.orka.artifactTool.baseURL) -}}
-{{- fail "analysis: orka with artifactTool.enabled=false requires orka.artifactTool.baseURL" -}}
-{{- end -}}
-{{- if and (not .Values.orka.artifactTool.enabled) (not .Values.orka.artifactTool.auth.existingSecret) -}}
-{{- fail "analysis: orka with artifactTool.enabled=false requires orka.artifactTool.auth.existingSecret" -}}
-{{- end -}}
-{{- if not .Values.orka.artifactTool.auth.tokenKey -}}
-{{- fail "analysis: orka requires orka.artifactTool.auth.tokenKey" -}}
-{{- end -}}
 {{- end -}}
 {{- end -}}
 

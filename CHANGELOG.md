@@ -46,15 +46,6 @@ for how to pin a release.
   logs are parsed for the last valid marker instead of treating the final line
   as JSON, with strict rejection of missing, malformed, oversized, conflicting,
   or empty results.
-- **Bounded Orka CronJob lifecycle.** Orka producer waves now reject retry budgets
-  that cannot fit within the wave deadline. Chart-managed CronJobs use Job-level
-  deadlines, disable in-Pod producer restarts by default, and avoid automatic
-  Job retries. The manual trigger deletes timed-out Jobs unless the operator
-  explicitly keeps them.
-- **Orka trace-console correlation.** Polling and webhook ingestion now translate
-  content-free Orka Task events into the private trace schema, upsert by Task
-  identity, and expose Task namespace/name, contract, retries, response IDs,
-  usage, tools, truncation, and outcome in the authenticated console.
 - **Authenticated analysis-trace console.** Server mode now exposes the private
   trace snapshot through admin-gated filtered and download endpoints and a
   dedicated operator page. Static Pages remains unchanged, and direct
@@ -65,44 +56,10 @@ for how to pin a release.
   events. The server denies the file under `/data`, and Pages strips it before
   publication.
 - **Regular-harness Responses API.** In-process analysis can select `ai.api: responses`, preserves reasoning items across function calls, and sends `store: false`.
-- **Orka Responses API observability.** The pinned compatibility worker now uses
-  the Responses API when supported, sends `store: false`, and records API mode
-  plus response ID in Task events, logs, and OpenTelemetry. The Copilot proxy
-  normalizes per-model Responses errors so Chat-only models can fall back safely.
-  `orka.apiMode` makes the expected protocol part of Task identity and fails
-  ingestion or smoke validation when the worker negotiates a different API.
-- **Pinned Orka compatibility worker.** A dedicated workflow now checks out a
-  fixed Orka commit, verifies and applies the dashboard worker patch, runs
-  focused normal and race tests plus the full worker package, builds the worker
-  image on pull requests, and publishes a combined immutable tag, SBOM,
-  provenance, and digest record from `main`.
-- **Chart-owned Orka artifact tools.** `analysis: orka` now creates a
-  release-scoped authenticated artifact Tool service in the Orka namespace and
-  a synchronized base Tool ConfigMap in the dashboard namespace. Producer,
-  ingestor, and artifact-tool image tags inherit the pinned engine tag, while
-  existing external services and ConfigMaps remain configurable.
 - **Orka fix generation runtime.** Fix PRs can opt into a generation-only Orka
   Agent Task while keeping base pinning, diff reconstruction, review,
   verification, previews, credentials, and PR creation inside the engine. The
   chart automatically selects a git-capable engine image for this mode.
-- **Orka artifact-tool hardening.** Artifact Tools now use bearer-token
-  authentication, producer-owned routing headers, fail-closed storage routes,
-  bounded contract-scoped caches, enforced request/response byte ceilings,
-  scoped evidence attestations for successful content reads, keyed final-result
-  validation, a restrictive NetworkPolicy, and a non-root read-only deployment.
-- **Orka consumer recipe parity.** The Orka producer now loads consumer
-  `skills/*.yaml`, fingerprints them, exposes matches through
-  `required_evidence`, enforces the lookup during ingestion, and enables the
-  existing `diff_last_passing` regression tool.
-- **Orka post-finalization automation.** Batch Orka ingestion now runs the same
-  notification, issue, and fix-PR reconciliation stage after recurring patterns
-  have been finalized.
-- **Orka result acceptance and telemetry.** The Orka ingestor now validates the
-  complete analysis schema against durable Task events, enforces
-  `ai.min_tool_calls`, requires successful quality tools, and requires
-  `verify_timeline` for transient verdicts. Published analyses add optional
-  model/tool failure, retry, truncation, token-usage, completion-outcome,
-  timeline-verification, and final-result-bound artifact-validation telemetry.
 - **SMTP email notifications.** Consumers can configure persistent-failure,
   changed-error, and recovery email alerts under `notifications.email`. SMTP
   passwords are supplied through the `EMAIL_SMTP_PASSWORD` deployment secret;
@@ -111,53 +68,14 @@ for how to pin a release.
   systemic recurring patterns. Draft generation can run asynchronously with
   persisted 24-hour review requests and draft-ready email links.
 
-### Changed
-
-- **Deterministic Orka evidence repair.** Compatibility worker v6 stores
-  validator-provided missing-evidence groups in order and repairs one group per
-  reserved call. It advertises only the selected `read_artifact` Tool, preserves
-  a correct model read, and substitutes a guarded synthetic read for empty,
-  premature, repeated, or wrong Tool calls. Successful and cached reads advance
-  the queue, finalization remains hidden until all groups are covered, and
-  incomplete or impossible plans keep the prior validation failure behavior.
-
-- **Orka evidence-repair budget.** Compatibility worker v5 reserves four of the
-  existing 20 evidence Tool calls for validation repair. A rejected submission
-  with complete missing-evidence candidates re-enables only artifact readers and
-  finalization Tools, prioritizing targeted reads before another submission.
-  Broad investigation does not resume after finalization starts, and the focus
-  window preserves timeline verification and one final submission turn after
-  all four repair calls.
-
-- **Deterministic Orka evidence plans.** The producer now matches diagnostic
-  recipes against each bounded failure-evidence signal and prepends a bounded checklist with
-  ranked exact artifact candidates. `required_evidence` and rejected final
-  submissions return the same candidate paths, helping weaker models follow
-  required evidence without broad artifact searches. `submit_analysis` validates
-  the union of initially planned and final-diagnosis groups. Complete plans
-  satisfy the recipe-lookup gate, while incomplete plans retain the mandatory
-  Tool call.
-
-- **Orka weak-model final repair.** The compatibility worker keeps
-  `relevant_files` required, while finalization prompts, the Tool schema, and
-  validation retries show the exact `"relevant_files": []` argument when no
-  source files apply. Tool calls also reset premature-final retry state so an
-  early tools-free response cannot prevent later validated submission. Orka Task
-  prompts preserve persistent consecutive-failure evidence from the flakiness
-  report, and quality benchmarks pin fixture archives by SHA-256.
-
-- Pattern email deduplication is now job-scoped and tolerates AI wording drift.
-  A materially different recurring root cause on the same job sends a changed-
-  pattern email with the previous and current causes.
-- Email links and in-page issue/fix buttons now share the asynchronous draft
-  request flow and polished review UI, avoiding reverse-proxy timeouts during
-  long generation.
-- Job detail filenames now use a collision-free base64url encoding of `job_id`.
-  Consumers must rebuild the frontend and data together.
-- AI analysis telemetry renames `model_bytes` to `context_bytes` to describe the
-  tool-result and evidence bytes added to the model conversation.
-
 ### Removed
+
+- **Frozen Orka AI analysis backend.** The patched `type: ai` worker, Helm
+  analysis selector, producer, ingestor, artifact Tool service, Provider proxy,
+  manifests and private analysis manifest are removed. The now-unreferenced
+  worker compatibility assets are removed separately.
+  Failure analysis now always uses the dashboard-owned in-process analyzer. Orka
+  fix generation and the isolated container lifecycle experiment remain.
 
 - **Slack webhook notifications.** `SLACK_WEBHOOK_URL` and Slack Block Kit
   delivery are removed. Consumers that need notifications must configure the new

@@ -1,5 +1,5 @@
 .PHONY: all build build-server build-worker serve dev-actions image fixer-image test test-v e2e lint fmt tidy helm-check \
-       fetch-data fetch-data-quick fetch-data-ai fetch-data-ai-quick orka-ops-check orka-compat-check orka-compat-image \
+       fetch-data fetch-data-quick fetch-data-ai fetch-data-ai-quick orka-compat-check orka-compat-image \
        fe-install dev fe-build fe-check fe-lint \
        dist dist-ai clean clean-cache clean-all help
 
@@ -69,7 +69,7 @@ test-v:
 # Run the hermetic pipeline and email-remediation end-to-end tests.
 e2e:
 	cd backend && go test ./internal/e2e/... -count=1 -v
-	cd backend && go test ./internal/fetcher -run '^(TestEmailRemediationLoopE2E|TestOrkaFinalizationTriggersEmailSideEffects)$$' -count=1 -v
+	cd backend && go test ./internal/fetcher -run '^TestEmailRemediationLoopE2E$$' -count=1 -v
 
 # Run Go linter (requires golangci-lint)
 lint:
@@ -83,15 +83,6 @@ fmt:
 tidy:
 	cd backend && go mod tidy
 
-# Validate the Orka operator helper.
-orka-ops-check:
-	bash experimental/orka/test-orka-ops.sh
-
-# Lint and render the Helm chart, including the owned Orka resources.
-helm-check: orka-ops-check
-	bash deploy/helm/prow-ai-dashboard/test-render.sh
-	bash deploy/helm/prow-ai-dashboard/test-operations.sh
-
 # Validate compatibility metadata and local helper behavior without cloning Orka.
 orka-compat-check:
 	bash experimental/orka/worker-patches/test-compat-worker.sh
@@ -100,6 +91,11 @@ orka-compat-check:
 # Clone the pinned Orka source, apply and test the patch, then build the worker.
 orka-compat-image:
 	bash experimental/orka/worker-patches/compat-worker.sh build $(ORKA_COMPAT_IMAGE)
+
+# Lint and render the Helm chart.
+helm-check:
+	bash deploy/helm/prow-ai-dashboard/test-render.sh
+	bash deploy/helm/prow-ai-dashboard/test-operations.sh
 
 ## ─── Data Fetching ────────────────────────────────────────────
 
@@ -177,9 +173,8 @@ help:
 	@echo "  fmt                Format Go code"
 	@echo "  tidy               Tidy Go modules"
 	@echo "  helm-check         Lint and validate Helm chart renders"
-	@echo "  orka-ops-check     Validate the Orka operator helper"
-	@echo "  orka-compat-check  Validate Orka compatibility metadata and scripts"
-	@echo "  orka-compat-image  Test and build the pinned patched Orka AI worker"
+	@echo "  orka-compat-check  Validate frozen Orka worker assets"
+	@echo "  orka-compat-image  Test and build the frozen Orka worker"
 	@echo ""
 	@echo "  fetch-data         Fetch data from GCS (8 builds/job)"
 	@echo "  fetch-data-quick   Fetch minimal data (3 builds/job)"

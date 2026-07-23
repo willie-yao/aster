@@ -1,116 +1,61 @@
-# Orka backend preview
+# Orka integrations
 
-Runs the dashboard's AI failure analysis through
-[Orka](https://github.com/orka-agents/orka), a Kubernetes-native agent
-orchestration platform, instead of the engine's in-process agentic loop. Discovery
-and output are unchanged; only the per-failure analysis step moves to Orka Tasks
-that run alongside your inference stack.
+The dashboard has two independent Orka integrations:
 
-> **Experimental lifecycle backend.** The in-process analyzer is canonical. The
-> patched Orka `type: ai` worker is frozen at compatibility v6 and receives only
-> security, critical correctness, and reproducibility maintenance. Future Orka
-> analysis work uses a dashboard-owned `type: container` analyzer so Orka owns
-> lifecycle rather than model policy. See the
-> [analysis runtime ownership decision](../../docs/architecture-decisions/0001-analysis-runtime-ownership.md).
+- `ai.fix_prs.agent_runtime.type: orka` delegates fix generation to an Orka
+  Agent workspace. This is the supported Orka integration.
+- The container analyzer is an internal lifecycle experiment. It runs the
+  dashboard-owned `FailureAnalyzer` in an Orka `type: container` Task without
+  using Orka Providers, Tools, or the generic AI worker.
 
-## Docs
+Failure analysis in supported deployments always uses the in-process analyzer.
+The former patched `type: ai` analysis mode has been removed.
 
-- **[QUICKSTART.md](QUICKSTART.md)** - how to deploy and run the Orka path, the config it
-  reads, and the knobs. Start here.
-- **[EVALUATION.md](EVALUATION.md)** - how to compare Orka safely with a separate release and data claim.
-- **[CONTAINER_ANALYZER_ASSESSMENT.md](CONTAINER_ANALYZER_ASSESSMENT.md)** - the
-  dashboard-owned container prototype, production gates, and current status.
-- **[ARCHITECTURE.md](ARCHITECTURE.md)** - how it works: where each Orka resource
-  is created, the CRD shapes, and how the engine's harness (cache, convergence,
-  critique, skills) is reconstructed out of Kubernetes objects.
-- **[worker-patches/](worker-patches/)** - the pinned, tested Orka AI-worker
-  compatibility image, patch, version matrix, and measured convergence results.
-- **[`orka-ops.sh`](orka-ops.sh)** - installation preflight, a disposable
-  Provider smoke Task, batch status, and a project-scoped Task and Tool GC preview.
+## Container lifecycle experiment
 
-## Headline finding
+The experiment evaluates whether Task retry, cancellation, placement, attempt
+history, and durable results justify the additional control plane. It does not
+move prompts, tools, evidence policy, critique, cache acceptance, or result
+schemas into Orka.
 
-Orka + a strong model (claude-sonnet-4.5) produces excellent, artifact-grounded
-analyses that match or beat the engine's reference labels on the hardest CAPZ
-cases. The first weak-model pass closed protocol convergence and transient-check
-discipline, but a Kimi DRA spike still followed later teardown symptoms because
-the Orka seed omitted the JUnit failure body containing the initiating cache
-error. The current path closes that harness gap by seeding the bounded failure
-message, failure body, filtered artifact tree, and a matched evidence plan with
-ranked exact candidate paths, then preserving successful Tool observations in an
-evidence ledger across proactive context compaction. Model capability still
-bounds the final reasoning, but the weak model now starts with a deterministic
-investigation checklist instead of depending on a voluntary recipe lookup.
-The patched AI-worker path remains opt-in as a frozen experimental fallback and
-comparison baseline. New analysis work targets the dashboard-owned container
-analyzer and does not extend the compatibility patch.
-Convergence and discipline numbers are in
-[worker-patches/README.md](worker-patches/README.md).
+The implementation includes:
 
-## Fix-PR generation runtime
+- a content-addressed immutable request and project bundle
+- framed dashboard result output
+- encrypted cache and private trace state
+- CPU-only placement and bounded Task execution
+- retry, cache reuse, concurrent merge, and cleanup checks
 
-`ai.fix_prs.agent_runtime.type: orka` moves only coding-agent generation into an
-Orka Agent workspace. The engine still pins the base SHA, reconstructs and
-validates the diff, runs critique and independent verification, and opens the
-PR. Enable chart RBAC with `orka.fixRuntime.enabled: true`; private repositories
-should use a separate read-only `git_secret` for the Orka workspace. The
-referenced Agent runtime must support workspace diff capture and structured
-results, such as the OpenCode runtime implementation maintained in Orka. Failed
-or cancelled content-addressed Tasks are deleted and recreated, while each Task
-also carries the configured Orka retry policy.
+See [CONTAINER_ANALYZER_ASSESSMENT.md](CONTAINER_ANALYZER_ASSESSMENT.md) for the
+evidence and current decision boundary.
 
-## Known constraints
-
-- **Execution events are required.** The ingestor reads each Task's event stream
-  to enforce the tool-call floor, terminal outcome, successful required quality tools,
-  recipe lookup when the initial evidence plan is incomplete, a `submit_analysis`
-  token bound to the exact final
-  JSON, and transient timeline evidence before publishing a result. Successful
-  artifact content reads return scoped evidence tokens, and `submit_analysis`
-  requires those tokens for every cited path plus the union of initially planned
-  and final-diagnosis recipe groups.
-  Recurrence, diff, and transient-signature checks are advisory; failures remain
-  visible in telemetry without discarding a validated analysis.
-- **Scheduled side effects run in batch mode.** The skeleton fetch disables
-  side effects. The ingestor runs the same notifications, issue reconciliation,
-  and fix-PR reconciliation as the in-process fetcher after job-level pattern
-  finalization, or directly after ingestion when pattern analysis is disabled.
-  Finalization and side-effect errors fail the batch so the CronJob retries.
-  Mount the consumer project config and provide the same side-effect credentials
-  to the ingestor. Webhook mode patches per-test results only.
-- **The pinned worker supports both OpenAI APIs.** It tries Responses first,
-  falls back to Chat Completions when unsupported, sends `store: false` on
-  Responses requests, and records API mode plus response ID for debugging.
-  `orka.apiMode` makes the expected mode part of Task identity and ingestion.
-- **Accepted and failed Tasks produce private dashboard traces.** The ingestor
-  translates Task/model/tool/context events into the content-free
-  `ai_traces.json` schema used by the in-process harness. Polling upserts by Task
-  name, webhook delivery writes under its existing serialization lock, and the
-  authenticated trace console links each Task back to its job/build/test.
-- **Copilot needs the de-streaming proxy.** Copilot's non-streaming endpoint
-  returns null tool_calls for Claude (the calls only arrive over streaming SSE).
-  manifests/50-copilot-proxy.yaml de-streams so the worker sees real tool calls.
-  Standard OpenAI-compatible endpoints (vLLM, Ray Serve, Dynamo/NIM, Ollama) do NOT
-  need it - point a Provider straight at them.
-- **The compatibility worker is required.** Small models otherwise fail to
-  converge and skip the verify_timeline discipline. Pin the published worker tag
-  or digest from the [compatibility matrix](worker-patches/COMPATIBILITY.md).
-- **Artifact-tool authentication is required.** The Helm chart creates and
-  preserves a release-scoped bearer Secret by default. External shim deployments
-  must provide `orka.artifactTool.auth.existingSecret`. The service accepts
-  routing only from producer-owned headers and the included NetworkPolicy limits
-  ingress to Orka AI-worker pods.
-- **SSRF guard.** Orka marks tools whose URL resolves to a private/loopback IP as
-  Available=false. In-cluster ClusterIPs are private, so the tools show unavailable
-  but still work (the worker does not gate on availability).
-- **Cluster mapping (CAPZ).** A CAPZ e2e build runs many specs, each with its own
-  cluster. The k8s tool group (35-k8s-tools.yaml, discover-clusters /
-  find-my-cluster) lets the agent map a failing test to its cluster; enable it via
-  ai.tools: [filesystem, k8s]. Filesystem-only consumers (e.g. non-CAPI projects)
-  set ai.tools: [filesystem].
-
-## Teardown
+Run the isolated kind test from the repository root:
 
 ```bash
-kind delete cluster --name orka-spike
+experimental/orka/run-container-analyzer-kind.sh
 ```
+
+The default run uses a scripted model and does not touch Ray or GPU nodes. Set
+`ORKA_CONTAINER_LIVE_ENDPOINT`, `ORKA_CONTAINER_LIVE_MODEL`, and optionally
+`ORKA_CONTAINER_LIVE_TOKEN` to add a live Flatcar benchmark.
+
+The local ownership and cleanup regression check is:
+
+```bash
+experimental/orka/test-container-analyzer-kind.sh
+```
+
+The experiment is not a Helm analysis mode and has no compatibility guarantee.
+Analyzer and helper workloads must remain on CPU nodes.
+
+## Fix generation
+
+`ai.fix_prs.agent_runtime.type: orka` moves only coding-agent generation into an
+Orka Agent workspace. The dashboard still pins the base SHA, validates the
+returned files and diff, runs critique and verification, and opens the pull
+request.
+
+Set `orka.fixRuntime.enabled: true` in Helm values to mount the Orka Task
+ServiceAccount and use the git-capable fixer image. Configure the Agent reference,
+namespace, API, and retry policy in `project.yaml`. Private repositories should
+use a separate read-only repository credential for the Orka workspace.

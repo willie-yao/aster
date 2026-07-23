@@ -1,13 +1,13 @@
 # AI diagnostic skills and project recipes
 
 > Status: Engine profiles plus consumer extensions. Skills extend the always-on
-> critique gate and the Orka required-evidence contract.
+> critique gate and deterministic evidence planner.
 
 Skills are YAML diagnostic recipes that steer the analysis toward canonical
 evidence. A recipe contains trigger regexes, required artifact-path groups, and
 a short investigation procedure.
 
-The engine composes one merged set for both analysis backends:
+The engine composes one merged set for the dashboard-owned analyzer:
 
 1. **Engine Prow profile.** Always enabled because the product analyzes Prow
    runs. It teaches the distinction between `build-log.txt` and JUnit details,
@@ -42,19 +42,13 @@ Each recipe declares:
 3. **Procedure:** short diagnostic guidance returned when a recipe matches.
 
 Procedures are untrusted guidance. They cannot override the system prompt, Tool
-constraints, the result schema, or the tool budget. The in-process critique
-wraps procedures with this boundary, and Orka returns the same boundary from
-`required_evidence`.
+constraints, the result schema, or the tool budget. The critique gate wraps
+procedures with this boundary.
 
-Both backends match the bounded failure signal before iteration one, resolve
-ranked candidates with `skills.Set.Plan`, and prepend the shared bounded plan
-format. The in-process gate uses those candidates for deterministic critique
-repair, with a bounded tree-walk fallback for unresolved or newly matched groups.
-Orka treats a complete initial plan as satisfying its recipe lookup gate.
-Truncated, failed, omitted, unmatched, or no-candidate plans remain incomplete;
-the in-process model can continue with normal tools, while Orka still requires
-`required_evidence`. `submit_analysis` validates the same Orka groups in either
-path.
+The analyzer matches the bounded failure signal before iteration one, resolves
+ranked candidates with `skills.Set.Plan`, and prepends the bounded plan. The gate
+uses those candidates for deterministic critique repair, with a bounded tree-walk
+fallback for unresolved or newly matched groups.
 
 ## When to author a skill
 
@@ -177,17 +171,15 @@ No separate profile field is needed. This keeps the diagnostic contract aligned
 with the tools the model can actually call. Consumer recipes still load in both
 cases.
 
-## Cache and Task invalidation
+## Cache invalidation
 
-Each in-process cache entry is stamped with the SHA-256 fingerprint of the
-complete merged set in `skill_set_hash`. Orka includes the same hash in the
-analysis contract used for Tool scope and Task identity.
+Each cache entry is stamped with the SHA-256 fingerprint of the complete merged
+set in `skill_set_hash`.
 
 The hash changes when any selected built-in or consumer recipe changes, or when
 the selected profile set changes. The result is:
 
-- Existing in-process entries with the prior hash are re-analyzed.
-- Orka emits a different contract hash, Tool scope, and Task name.
+- Existing entries with the prior hash are re-analyzed.
 - Consumer-only whitespace and YAML comment changes do not change the hash.
 
 Changing an engine recipe therefore invalidates consumers that select that
@@ -278,31 +270,6 @@ Before merging a new recipe:
 5. **Validated before promotion.** Refetch with the recipe present
    and confirm the recipe-matched cases gain evidence reads and
    substantive root-cause depth versus the prior run.
-
-## Orka backend
-
-The Orka producer loads the same merged set as the in-process fetcher and sends
-the complete contract to the scoped `required_evidence` and `submit_analysis`
-Tools. Before creating each Task, it matches a bounded failure-evidence signal without producer instructions, resolves
-ranked exact artifact candidates for every applicable evidence group, and
-prepends that bounded evidence plan to the Task prompt. `required_evidence`
-returns the same candidate shape when the diagnosis changes or a group was not
-resolved in the initial bounded tree. A complete initial plan satisfies the
-recipe-lookup acceptance gate; truncated, omitted, unmatched, and no-candidate
-plans retain the mandatory `required_evidence` call. The per-Task submit Tool
-receives the initially applicable groups and their ranked candidates through a
-hidden bounded header, so final validation requires their evidence tokens and
-returns the same candidate paths even if the model's final wording no longer
-matches the initial recipe. If that header cannot fit, the producer omits the
-plan and retains the mandatory lookup path instead of aborting the run.
-
-The merged hash and evidence-plan hash participate in Orka Task identity. Recipe
-edits, profile-selection changes, and a materially different candidate plan
-therefore invalidate the affected Task. The ingested analysis records that exact
-Task name so a changed plan cannot retain an older result with the same broader
-contract hash. Final Orka validation checks the union of initially planned and
-final-diagnosis evidence groups and includes
-candidate paths when rejecting a submission with missing evidence.
 
 ## Observability
 
