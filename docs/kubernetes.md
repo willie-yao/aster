@@ -98,8 +98,11 @@ ai:
 analysisRuntime:
   type: orka-container
   orkaContainer:
-    namespace: prow-ai-analysis
+    namespace: "" # chart creates a retained release-scoped namespace
     api: http://orka.orka-system.svc.cluster.local:8080
+    apiAuth:
+      existingSecret: orka-analysis-api
+      tokenKey: token
     maxConcurrentTasks: 2
     pollInterval: 2s
     taskTimeout: 20m
@@ -122,24 +125,31 @@ analysisRuntime:
 
 Set `orkaContainer.api` to the REST Service of the installed Orka release; the
 Service name is not derived from the namespace.
+Provide `apiAuth.existingSecret` in the dashboard release namespace with an
+Orka API token authorized to read results from the generated analysis namespace.
+This is separate from the model token stored in the analysis namespace.
 
 Because the pinned Orka controller uses `IfNotPresent`, the chart rejects mutable analyzer tags such as `main`, `latest`, `dev`, and moving major tags. Use a `sha-<hex>` tag or a full semantic version.
 
 The normal fetcher still needs its `AI_TOKEN` in the dashboard namespace for the
 cross-build pattern pass. Create `analysisRuntime.orkaContainer.modelAuth.existingSecret`
-in the Orka namespace for per-failure Tasks. The chart never copies provider
+in the analysis namespace for per-failure Tasks. The chart never copies provider
 credentials across namespaces. For example:
 
 ```bash
 kubectl -n dashboards create secret generic dashboard-model \
   --from-literal=AI_TOKEN='<token>'
-kubectl create namespace prow-ai-analysis
-kubectl -n prow-ai-analysis create secret generic orka-model \
+kubectl -n dashboards create secret generic orka-analysis-api \
+  --from-literal=token='<Orka API token authorized for the analysis namespace>'
+ANALYSIS_NS=$(kubectl get namespace \
+  -l app.kubernetes.io/instance=capz,app.kubernetes.io/component=orka-container-analysis \
+  -o jsonpath='{.items[0].metadata.name}')
+kubectl -n "$ANALYSIS_NS" create secret generic orka-model \
   --from-literal=token='<token>'
 ```
 
 When `state.existingSecret` is empty, Helm creates matching release-scoped
-AES-256 state key Secrets in the dashboard and Orka namespaces and marks them to
+AES-256 state key Secrets in the dashboard and analysis namespaces and marks them to
 be retained. If you supply `state.existingSecret`, create the same Secret name
 and key in both namespaces. The mounted value must itself be standard base64 for
 exactly 32 random bytes. `kubectl --from-literal` performs the outer Kubernetes
@@ -149,7 +159,7 @@ Secret encoding, so generate one shared literal and use it in both namespaces:
 STATE_KEY=$(openssl rand -base64 32)
 kubectl -n dashboards create secret generic shared-analysis-state \
   --from-literal=state-key="$STATE_KEY"
-kubectl -n prow-ai-analysis create secret generic shared-analysis-state \
+kubectl -n "$ANALYSIS_NS" create secret generic shared-analysis-state \
   --from-literal=state-key="$STATE_KEY"
 ```
 
@@ -163,9 +173,12 @@ available for identical in-flight callers and are removed by a bounded retention
 pass using exact UID and resource version. Failed Tasks transport authenticated
 private traces, but their cache entries are never merged.
 
-The analysis namespace must be dedicated and must not be the Orka controller,
-fix-runtime, or dashboard release namespace. Keep only the analyzer model and
-state Secrets there. Container mode also installs a fail-closed
+The chart creates and retains a namespace dedicated to each Helm release when
+`orkaContainer.namespace` is empty. A custom namespace must end in the chart's
+release-scope hash, which prevents releases from sharing Task RBAC, maintenance,
+or admission policy. It must not be the Orka controller, fix-runtime, or
+dashboard release namespace. Keep only the analyzer model and state Secrets
+there. Container mode also installs a fail-closed
 `ValidatingAdmissionPolicy` that pins the analyzer image, arguments, model
 coordinates, CPU placement, bundle reference, and exact model/state Secret
 references. Installing this experimental mode therefore requires permission to

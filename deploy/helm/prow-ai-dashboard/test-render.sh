@@ -76,8 +76,8 @@ container_args=(
   --set ai.model=script-model
   --set ai.token=dashboard-token
   --set analysisRuntime.type=orka-container
-  --set analysisRuntime.orkaContainer.namespace=prow-ai-analysis
   --set analysisRuntime.orkaContainer.image.tag=sha-deadbeef
+  --set analysisRuntime.orkaContainer.apiAuth.existingSecret=orka-api
   --set analysisRuntime.orkaContainer.modelAuth.existingSecret=orka-model
 )
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" "${container_args[@]}" > "$tmp/container-analysis.yaml"
@@ -92,8 +92,10 @@ grep -Fq 'resources: ["configmaps"]' "$tmp/container-analysis.yaml"
 grep -Fq 'kind: ValidatingAdmissionPolicy' "$tmp/container-analysis.yaml"
 grep -Fq 'object.spec.image ==' "$tmp/container-analysis.yaml"
 grep -Fq 'analysis Tasks must use only the configured model Secret' "$tmp/container-analysis.yaml"
-grep -Fq 'namespace: prow-ai-analysis' "$tmp/container-analysis.yaml"
+grep -Fq 'kind: Namespace' "$tmp/container-analysis.yaml"
+grep -Eq 'namespace: test-prow-ai-dashboard-analysis-[0-9a-f]{8}' "$tmp/container-analysis.yaml"
 grep -Fq 'name: PROW_AI_STATE_KEY' "$tmp/container-analysis.yaml"
+grep -Fq 'name: ORKA_API_TOKEN' "$tmp/container-analysis.yaml"
 if grep -Eq 'resources: \["(tools|providers|agents|agentruntimes)"\]|type: ai|orka-producer|orka-ingestor|orka-artifact-tool' "$tmp/container-analysis.yaml"; then
   echo 'container analysis render contains a forbidden patched-worker resource' >&2
   exit 1
@@ -107,8 +109,8 @@ for namespace in dashboard-a dashboard-b; do
   helm template test "$chart" -n "$namespace" -f "$tmp/values.yaml" "${container_args[@]}" \
     --show-only templates/orka-analysis-state-secret.yaml > "$tmp/state-$namespace.yaml"
 done
-state_name_a=$(awk '$1 == "name:" { name=$2 } $1 == "namespace:" && $2 == "prow-ai-analysis" { print name; exit }' "$tmp/state-dashboard-a.yaml")
-state_name_b=$(awk '$1 == "name:" { name=$2 } $1 == "namespace:" && $2 == "prow-ai-analysis" { print name; exit }' "$tmp/state-dashboard-b.yaml")
+state_name_a=$(awk '$1 == "name:" { name=$2 } $1 == "namespace:" && $2 != "dashboard-a" { print name; exit }' "$tmp/state-dashboard-a.yaml")
+state_name_b=$(awk '$1 == "name:" { name=$2 } $1 == "namespace:" && $2 != "dashboard-b" { print name; exit }' "$tmp/state-dashboard-b.yaml")
 if [[ -z $state_name_a || -z $state_name_b || $state_name_a == "$state_name_b" ]]; then
   echo 'chart-managed cross-namespace state Secret names are not release-scoped' >&2
   exit 1
@@ -133,16 +135,18 @@ helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" "${container
   --set-string analysisRuntime.orkaContainer.taskTimeout=1h > "$tmp/container-microsecond-duration.yaml"
 grep -Fq -- '-orka-analysis-poll-interval=500us' "$tmp/container-microsecond-duration.yaml"
 
-for invalid in type watch endpoint model namespace shared-namespace release-namespace api image mutable-image build-metadata model-secret token-key state-key concurrency poll timeout retries cpu-selector gpu accelerator; do
+for invalid in type watch endpoint model custom-namespace shared-namespace release-namespace api api-secret api-token-key image mutable-image build-metadata model-secret token-key state-key concurrency poll timeout retries cpu-selector gpu accelerator; do
   case $invalid in
     type) invalid_args=(--set analysisRuntime.type=remote); want='analysisRuntime.type must be inprocess or orka-container' ;;
     watch) invalid_args=("${container_args[@]}" --set mode=watch); want='analysisRuntime.type=orka-container requires mode=cron' ;;
     endpoint) invalid_args=("${container_args[@]}" --set-string ai.endpoint=); want='analysisRuntime.type=orka-container requires ai.endpoint' ;;
     model) invalid_args=("${container_args[@]}" --set-string ai.model=); want='analysisRuntime.type=orka-container requires ai.model' ;;
-    namespace) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.namespace=); want='analysisRuntime.orkaContainer.namespace is required' ;;
+    custom-namespace) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.namespace=custom-analysis); want='analysisRuntime.orkaContainer.namespace must be dedicated to this release and end with its release scope' ;;
     shared-namespace) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.namespace=orka-system); want='analysisRuntime.orkaContainer.namespace must be dedicated and differ from orka.namespace' ;;
     release-namespace) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.namespace=dashboard-test); want='analysisRuntime.orkaContainer.namespace must differ from the dashboard release namespace' ;;
     api) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.api='http://user:secret@orka'); want='analysisRuntime.orkaContainer.api must be an absolute http or https URL without credentials' ;;
+    api-secret) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.apiAuth.existingSecret=); want='analysisRuntime.orkaContainer.apiAuth.existingSecret is required' ;;
+    api-token-key) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.apiAuth.tokenKey=); want='analysisRuntime.orkaContainer.apiAuth.tokenKey is required' ;;
     image) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.image.repository=); want='analysisRuntime.orkaContainer.image.repository is required' ;;
     mutable-image) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.image.tag=main); want='analysisRuntime.orkaContainer.image tag must be an immutable sha-<hex> or full semantic version' ;;
     build-metadata) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.image.tag=v1.2.3+build.4); want='analysisRuntime.orkaContainer.image tag must be an immutable sha-<hex> or full semantic version' ;;

@@ -5,7 +5,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: {{ include "prow-ai-dashboard.orkaAnalysisRBACName" . }}
-  namespace: {{ .Values.analysisRuntime.orkaContainer.namespace }}
+  namespace: {{ include "prow-ai-dashboard.orkaAnalysisNamespace" . }}
   labels:
     {{- include "prow-ai-dashboard.labels" . | nindent 4 }}
     app.kubernetes.io/component: orka-container-analysis
@@ -21,7 +21,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: {{ include "prow-ai-dashboard.orkaAnalysisRBACName" . }}
-  namespace: {{ .Values.analysisRuntime.orkaContainer.namespace }}
+  namespace: {{ include "prow-ai-dashboard.orkaAnalysisNamespace" . }}
   labels:
     {{- include "prow-ai-dashboard.labels" . | nindent 4 }}
     app.kubernetes.io/component: orka-container-analysis

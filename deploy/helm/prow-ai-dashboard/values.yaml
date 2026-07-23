@@ -30,11 +30,18 @@ mode: watch
 analysisRuntime:
   type: inprocess
   orkaContainer:
-    # Dedicated namespace for analyzer Tasks and only their model/state Secrets.
-    namespace: prow-ai-analysis
+    # Leave empty to create a retained release-scoped namespace for analyzer
+    # Tasks and only their model/state Secrets. Custom names must end in the
+    # release scope hash rendered by the chart.
+    namespace: ""
     # Orka REST API used to retrieve durable Task results. Set this to the
     # Service name of the installed Orka release.
     api: http://orka.orka-system.svc.cluster.local:8080
+    # Token accepted by the Orka result API for this analysis namespace. The
+    # Secret lives in the dashboard release namespace.
+    apiAuth:
+      existingSecret: ""
+      tokenKey: token
     maxConcurrentTasks: 2
     pollInterval: 2s
     taskTimeout: 20m
@@ -46,13 +53,13 @@ analysisRuntime:
       tag: ""
       # The pinned Orka controller uses IfNotPresent for container Tasks.
       pullPolicy: IfNotPresent
-    # This Secret must already exist in the Orka namespace. The chart never
+    # This Secret must already exist in the analysis namespace. The chart never
     # copies provider credentials across namespaces.
     modelAuth:
       existingSecret: ""
       tokenKey: token
     # With existingSecret, create the same named Secret and key in both the
-    # dashboard and Orka namespaces. When empty, the chart creates and retains
+    # dashboard and analysis namespaces. When empty, the chart creates and retains
     # matching release-scoped AES-256 state key Secrets in both namespaces.
     state:
       existingSecret: ""

@@ -72,6 +72,15 @@ Release scope for cross-namespace Orka RBAC names.
 {{- printf "%s/%s" .Release.Namespace .Release.Name | sha256sum | trunc 8 -}}
 {{- end -}}
 
+{{- define "prow-ai-dashboard.orkaAnalysisNamespace" -}}
+{{- if .Values.analysisRuntime.orkaContainer.namespace -}}
+{{- .Values.analysisRuntime.orkaContainer.namespace -}}
+{{- else -}}
+{{- $base := include "prow-ai-dashboard.fullname" . | trunc 44 | trimSuffix "-" -}}
+{{- printf "%s-analysis-%s" $base (include "prow-ai-dashboard.orkaReleaseScope" .) -}}
+{{- end -}}
+{{- end -}}
+
 {{/*
 Name of the PVC the fetcher and server share.
 */}}
@@ -192,10 +201,13 @@ Validate AI provider configuration.
   {{- if not .Values.ai.enabled -}}{{- fail "analysisRuntime.type=orka-container requires ai.enabled=true" -}}{{- end -}}
   {{- if not .Values.ai.endpoint -}}{{- fail "analysisRuntime.type=orka-container requires ai.endpoint" -}}{{- end -}}
   {{- if not .Values.ai.model -}}{{- fail "analysisRuntime.type=orka-container requires ai.model" -}}{{- end -}}
-  {{- if not $cfg.namespace -}}{{- fail "analysisRuntime.orkaContainer.namespace is required" -}}{{- end -}}
-  {{- if eq $cfg.namespace .Values.orka.namespace -}}{{- fail "analysisRuntime.orkaContainer.namespace must be dedicated and differ from orka.namespace" -}}{{- end -}}
-  {{- if eq $cfg.namespace .Release.Namespace -}}{{- fail "analysisRuntime.orkaContainer.namespace must differ from the dashboard release namespace" -}}{{- end -}}
+  {{- $analysisNamespace := include "prow-ai-dashboard.orkaAnalysisNamespace" . -}}
+  {{- if eq $analysisNamespace .Values.orka.namespace -}}{{- fail "analysisRuntime.orkaContainer.namespace must be dedicated and differ from orka.namespace" -}}{{- end -}}
+  {{- if eq $analysisNamespace .Release.Namespace -}}{{- fail "analysisRuntime.orkaContainer.namespace must differ from the dashboard release namespace" -}}{{- end -}}
+  {{- if and $cfg.namespace (not (hasSuffix (printf "-%s" (include "prow-ai-dashboard.orkaReleaseScope" .)) $cfg.namespace)) -}}{{- fail "analysisRuntime.orkaContainer.namespace must be dedicated to this release and end with its release scope" -}}{{- end -}}
   {{- if not (regexMatch "^https?://[^/@?#]+(/[^?#]*)?$" $cfg.api) -}}{{- fail "analysisRuntime.orkaContainer.api must be an absolute http or https URL without credentials" -}}{{- end -}}
+  {{- if not $cfg.apiAuth.existingSecret -}}{{- fail "analysisRuntime.orkaContainer.apiAuth.existingSecret is required" -}}{{- end -}}
+  {{- if not $cfg.apiAuth.tokenKey -}}{{- fail "analysisRuntime.orkaContainer.apiAuth.tokenKey is required" -}}{{- end -}}
   {{- if not $cfg.image.repository -}}{{- fail "analysisRuntime.orkaContainer.image.repository is required" -}}{{- end -}}
   {{- $imageTag := $cfg.image.tag | default .Chart.AppVersion -}}
   {{- if not $imageTag -}}{{- fail "analysisRuntime.orkaContainer.image.tag or Chart.appVersion is required" -}}{{- end -}}
