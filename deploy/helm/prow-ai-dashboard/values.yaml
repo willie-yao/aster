@@ -186,7 +186,8 @@ server:
       # botToken is the GitHub PAT that performs writes (in a Secret).
       botToken: ""
       # secret, when set, is a shared value the proxy must inject in the
-      # X-Proxy-Secret header; the backend rejects requests without it. This
+      # X-Proxy-Secret header; the backend rejects requests without it. An
+      # existingSecret may provide AUTH_PROXY_SECRET as an optional key. This
       # defends against a client reaching the server directly and spoofing the
       # identity header if network isolation is imperfect. Held in a Secret.
       secret: ""

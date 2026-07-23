@@ -1504,6 +1504,12 @@ func dispatchAgenticTool(ctx context.Context, s *agentState, tc modelToolCall) s
 // dispatchAgenticToolWithPayload also returns the uncapped structured payload.
 func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc modelToolCall) (string, map[string]interface{}) {
 	s.calls++
+	if !agenticToolEnabled(s.enabledTools, tc.Function.Name) {
+		message := fmt.Sprintf("tool %q is not enabled for this analysis", tc.Function.Name)
+		payload := map[string]interface{}{"error": message}
+		recordTrace(ctx, TraceEvent{Kind: "tool_call", Tool: tc.Function.Name, Outcome: "disabled"})
+		return toolErrJSON(message), payload
+	}
 	if s.modelRemaining() <= 0 {
 		s.budgetExhausted = true
 		recordTrace(ctx, TraceEvent{Kind: "tool_call", Tool: tc.Function.Name, Outcome: "model_budget_exhausted"})
@@ -1570,6 +1576,15 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc model
 	}
 
 	return toolEnvelopeJSON(s, result.Payload), result.Payload
+}
+
+func agenticToolEnabled(enabledTools []string, name string) bool {
+	for _, enabled := range enabledTools {
+		if enabled == name {
+			return true
+		}
+	}
+	return false
 }
 
 // isContentFetchingTool reports whether a tool name is one of the three

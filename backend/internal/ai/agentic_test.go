@@ -2406,3 +2406,21 @@ required_evidence:
 		t.Fatalf("model calls = %d, want tool plus final only", got)
 	}
 }
+
+func TestDispatchAgenticToolRejectsRegisteredButDisabledTool(t *testing.T) {
+	registry, _ := newTestRegistry(t)
+	state := &agentState{
+		browser:  &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("secret evidence")}},
+		registry: registry, enabledTools: []string{"list_artifacts"},
+		opts: AgenticOptions{ModelByteBudget: 100_000, GCSByteBudget: 100_000},
+	}
+	envelope, payload := dispatchAgenticToolWithPayload(context.Background(), state, modelToolCall{
+		ID: "call", Type: "function", Function: modelFunction{Name: "read_artifact", Arguments: `{"path":"build-log.txt"}`},
+	})
+	if _, ok := payload["error"]; !ok || !strings.Contains(envelope, "not enabled") {
+		t.Fatalf("disabled tool result: envelope=%q payload=%v", envelope, payload)
+	}
+	if state.gcsBytes != 0 {
+		t.Fatalf("disabled tool fetched %d bytes", state.gcsBytes)
+	}
+}

@@ -166,6 +166,20 @@ if grep -Fq 'name: ACTIONS_ENABLED' "$tmp/chat-server.yaml" || grep -Fq 'name: B
   exit 1
 fi
 
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.chat.enabled=true \
+  --set server.actions.mode=proxy \
+  --set server.actions.admins[0]=alice \
+  --set server.actions.proxy.existingSecret=proxy-auth \
+  --set ai.enabled=true \
+  --set ai.token=test-token \
+  --set ai.endpoint=http://model.test/v1/chat/completions \
+  --set ai.model=test-model \
+  --show-only templates/server-deployment.yaml > "$tmp/chat-existing-auth.yaml"
+grep -A5 -Fq 'name: AUTH_PROXY_SECRET' "$tmp/chat-existing-auth.yaml"
+grep -Fq 'name: proxy-auth' "$tmp/chat-existing-auth.yaml"
+grep -Fq 'optional: true' "$tmp/chat-existing-auth.yaml"
+
 if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set server.chat.enabled=true > "$tmp/chat-without-ai.yaml" 2>&1; then
   echo 'server.chat.enabled was accepted without ai.enabled' >&2
