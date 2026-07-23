@@ -89,6 +89,23 @@ for invalid in restart backoff negative-backoff oversized-backoff deadline negat
   grep -Fq "$want" "$tmp/invalid-$invalid.yaml"
 done
 
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set ai.enabled=true \
+  --set ai.endpoint=https://ai.example.test/v1/chat/completions \
+  --set ai.model=test-model \
+  --set ai.token=test-token \
+  --set ai.contextWindowTokens=128000 > "$tmp/context-window.yaml"
+grep -Fq 'name: AI_CONTEXT_WINDOW_TOKENS' "$tmp/context-window.yaml"
+grep -Fq 'value: "128000"' "$tmp/context-window.yaml"
+
+if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set-string ai.contextWindowTokens=many > "$tmp/invalid-context-window.yaml" 2>&1; then
+  echo 'chart accepted an invalid AI context window' >&2
+  exit 1
+fi
+grep -Fq 'ai.contextWindowTokens must be a non-negative integer' "$tmp/invalid-context-window.yaml"
+
 if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set-string ai.api=legacy > "$tmp/invalid-ai-api.yaml" 2>&1; then
   echo 'chart accepted an invalid AI API' >&2

@@ -311,6 +311,13 @@ quality gates pass; otherwise it returns an AI-unavailable result. If an
 endpoint does not expose a context window, the engine uses a bounded fallback
 rather than disabling compaction.
 
+An operator with independent endpoint evidence can set
+`AI_CONTEXT_WINDOW_TOKENS` to the provider's total context limit. This takes
+precedence over `/v1/models` metadata without maintaining a model-name table or
+probing an overflow. For example, the current Copilot GPT-5 mini deployment
+uses `AI_CONTEXT_WINDOW_TOKENS=128000`. Leave it unset when the true limit is
+not known so the bounded fallback remains in force.
+
 The budgets are client-side on purpose: an OpenAI-compatible server
 (Dynamo / vLLM / TRT-LLM) enforces its window as a hard limit and can reject
 an oversized request, so the loop must compact or finalize before reaching it.
@@ -336,8 +343,8 @@ the real tree removes the guessing. It is not configurable.
 
 The shared snapshot is bounded at 5,000 paths. The model-visible seed is bounded
 again by a path-count cap (currently 500 paths) **and** a byte cap sized to a
-fraction (~15%) of the detected context budget, or a conservative static
-fallback (~48 KB) when the endpoint doesn't report a window (e.g. GitHub
+fraction (~15%) of the conservative request budget. The same bounded fallback
+applies when the endpoint does not report a window (e.g. GitHub
 Copilot). Whichever seed limit binds first truncates the visible list, with a note
 pointing the model at `list_artifacts` for the rest. Before capping, the engine
 filters out non-text noise (images and archives such as `.png`,

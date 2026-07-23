@@ -112,6 +112,7 @@ helm install capz oci://ghcr.io/willie-yao/charts/prow-ai-dashboard \
   --set ai.enabled=true \
   --set ai.endpoint=http://vllm.inference.svc.cluster.local/v1/chat/completions \
   --set ai.model=<model-id> \
+  --set ai.contextWindowTokens=128000 \
   --set ai.token=<token>
 ```
 
@@ -134,6 +135,7 @@ helm install capz deploy/helm/prow-ai-dashboard \
   --set ai.enabled=true \
   --set ai.endpoint=http://vllm.inference.svc.cluster.local/v1/chat/completions \
   --set ai.model=<model-id> \
+  --set ai.contextWindowTokens=128000 \
   --set ai.token=<token>
 ```
 
@@ -180,6 +182,7 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | `project.config`, `project.systemPrompt` | Consumer config, via `--set-file`. |
 | `project.existingConfigMap` | Reuse a ConfigMap with keys `project.yaml` and `system.md`. |
 | `ai.enabled`, `ai.endpoint`, `ai.model`, `ai.token` | AI analysis and its OpenAI-compatible endpoint. |
+| `ai.contextWindowTokens` | Optional operator-provided total provider context window. Set only with endpoint evidence, such as `128000` for the current Copilot GPT-5 mini deployment. |
 | `ai.existingSecret`, `ai.tokenSecretKey` | Reuse a Secret holding the token. |
 | `fetcher.schedule` | Cron schedule (default every 6 hours). `mode: cron`. |
 | `fetcher.suspend` | Suspend scheduled CronJob starts while allowing manual Jobs. `mode: cron`. |

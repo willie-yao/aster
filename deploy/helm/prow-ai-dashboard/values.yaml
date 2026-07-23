@@ -86,6 +86,10 @@ ai:
   api: chat_completions
   endpoint: ""
   model: ""
+  # Optional operator-provided total provider context window. Leave 0 to use
+  # /v1/models metadata or the engine's bounded fallback. For the current
+  # Copilot GPT-5 mini deployment, set 128000.
+  contextWindowTokens: 0
   token: ""
   existingSecret: ""
   tokenSecretKey: AI_TOKEN

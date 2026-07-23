@@ -1,6 +1,11 @@
 package ai
 
-import "context"
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"strings"
+)
 
 // Context limits are expressed in tokens. The request estimator deliberately
 // treats each serialized byte as one token, which is conservative for logs,
@@ -28,6 +33,21 @@ type ContextBudgets struct {
 	ContextByteBudget   int
 	ModelByteBudget     int
 	UsedFallback        bool
+}
+
+// ParseContextWindowTokens parses an optional operator-supplied total context
+// window. The override is provider-neutral and takes precedence over metadata
+// only when the operator has independent endpoint evidence.
+func ParseContextWindowTokens(raw string) (int, bool, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, false, nil
+	}
+	tokens, err := strconv.Atoi(raw)
+	if err != nil || tokens <= 0 {
+		return 0, false, fmt.Errorf("AI_CONTEXT_WINDOW_TOKENS must be a positive integer")
+	}
+	return tokens, true, nil
 }
 
 // DeriveContextBudgets returns bounded request and tool budgets. When a
