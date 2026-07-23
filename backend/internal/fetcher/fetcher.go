@@ -21,8 +21,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aggregator"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisruntime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixruntime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
@@ -72,19 +71,10 @@ type pipeline struct {
 	backend           storage.Backend
 	enableAI          bool
 	aiToken           string
-	aiSystemPrompt    string
-	aiSkillSet        *skills.Set
+	aiProject         *analysisruntime.Project
 	includePresubmits bool
 	jobCatalog        *jobconfig.Catalog
-	aiRuntime         *analysisRuntime
-}
-
-type analysisRuntime struct {
-	client            *ai.Client
-	registry          *tools.Registry
-	enabledTools      []string
-	modelByteBudget   int
-	contextByteBudget int
+	aiRuntime         *analysisruntime.Runtime
 }
 
 // refreshResult carries the outputs a pass needs for its side effects.
@@ -127,37 +117,16 @@ func setupPipeline(opts Options) (*pipeline, error) {
 		log.Println("Warning: -ai enabled but AI_TOKEN is not set, disabling AI analysis")
 		enableAI = false
 	}
-	// AI needs an explicit endpoint and model. Fail fast rather than publishing a
-	// dashboard with missing analysis.
+	var aiProject *analysisruntime.Project
 	if enableAI {
-		if err := project.ValidateAIAPI(aiAPI(cfg)); err != nil {
+		aiProject, err = analysisruntime.LoadProject(opts.ProjectDir, cfg, analysisruntime.ProviderFallbacks{
+			API: os.Getenv("AI_API"), Endpoint: os.Getenv("AI_ENDPOINT"), Model: os.Getenv("AI_MODEL"),
+		})
+		if err != nil {
 			return nil, err
 		}
-		if aiEndpoint(cfg) == "" || aiModel(cfg) == "" {
-			return nil, fmt.Errorf("AI is enabled but no provider is configured: set ai.endpoint and ai.model in project.yaml, or the AI_ENDPOINT and AI_MODEL env vars")
-		}
-	}
-
-	// Load the prompt and skills only once AI is confirmed enabled and
-	// configured, so a config error surfaces before any content errors.
-	var aiSystemPrompt string
-	var aiSkillSet *skills.Set
-	if enableAI {
-		prompt, err := project.LoadPrompt(opts.ProjectDir)
-		if err != nil {
-			return nil, fmt.Errorf("loading AI prompt: %w", err)
-		}
-		aiSystemPrompt = ai.ComposeSystemPrompt(prompt)
-
-		// Compose engine profiles with consumer recipes. Parse or regex compile
-		// errors are hard startup errors for every selected source.
-		set, profileSelection, err := skills.LoadForTools(opts.ProjectDir, cfg.AI.EffectiveAgentic().Tools)
-		if err != nil {
-			return nil, fmt.Errorf("loading AI skills: %w", err)
-		}
-		aiSkillSet = set
 		log.Printf("Loaded %d AI skill recipe(s) (profiles=%s, hash=%s)",
-			len(aiSkillSet.Skills()), profileSelection.String(), shortHash(aiSkillSet.Hash()))
+			len(aiProject.SkillSet.Skills()), aiProject.ProfileSelection.String(), analysisruntime.ShortHash(aiProject.SkillSet.Hash()))
 	}
 
 	client := &http.Client{Timeout: 30 * time.Second}
@@ -173,8 +142,7 @@ func setupPipeline(opts Options) (*pipeline, error) {
 		backend:           backend,
 		enableAI:          enableAI,
 		aiToken:           aiToken,
-		aiSystemPrompt:    aiSystemPrompt,
-		aiSkillSet:        aiSkillSet,
+		aiProject:         aiProject,
 		includePresubmits: opts.IncludePresubmits || cfg.Source.IncludePresubmits,
 	}, nil
 }

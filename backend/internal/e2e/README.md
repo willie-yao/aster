@@ -175,3 +175,24 @@ plus the root-cause signals a correct analysis should contain.
   finds it by reading the logs. Persistent (7+ consecutive builds); the real fix
   is partly upstream in cluster-api's clusterctl upgrade sequencing. This is the
   achievable case: a strong analysis scores full marks.
+
+## Orka container analyzer kind smoke test
+
+The container analyzer spike has a separate scripted local kind test. It builds
+the pinned Orka controller, builds a dashboard analyzer image, downloads the
+pinned Flatcar fixture, creates CPU and mock GPU node pools, tests Task retry and
+result collection, then deletes the cluster and temporary resources.
+
+Run it from the repository root:
+
+```bash
+experimental/orka/run-container-analyzer-kind.sh
+```
+
+The cluster ownership and image cleanup regression check is available separately:
+
+```bash
+experimental/orka/test-container-analyzer-kind.sh
+```
+
+The test does not call a live model and does not touch H100 or Ray resources.
