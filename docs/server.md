@@ -90,10 +90,10 @@ an `assessment` of `explains`, `supports`, `challenges`, or `inconclusive`, plus
 verified artifact paths and an optional proposed revision. A proposed revision
 does not alter `jobs/*.json` or the published analysis.
 
-Sessions are in memory, bound to the authenticated login, limited to ten model
-attempts including failed turns, and require one server replica. The Helm chart
-rejects chat with multiple replicas until sessions use shared persistence. They
-and expire after two hours. The process also caps global and per-owner session
+Sessions are in memory, bound to the authenticated login, limited to ten
+conversation-turn attempts including failed turns, and expire after two hours.
+They require one server replica; the Helm chart rejects multiple replicas until
+sessions use shared persistence. The process also caps global and per-owner session
 counts. Restarting the server clears them. An in-flight turn may finish after its
 session expires; the next access removes that session and releases its capacity.
 Persistence, streaming, cancellation, and deployment-specific rate limits are
