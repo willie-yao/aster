@@ -21,6 +21,7 @@ const (
 	containerAnalyzerFieldManager = "prow-ai-dashboard-container-analysis"
 	failedTaskStateTimeout        = 30 * time.Second
 	containerTaskSchedulingGrace  = 2 * time.Minute
+	containerTaskRetryDelay       = 10 * time.Second
 	containerResultReadTimeout    = 30 * time.Second
 )
 
@@ -260,7 +261,7 @@ func (a *ContainerAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, 
 		return ai.UnavailableFailureAnalysisResult(request.TestCase, err), err
 	}
 
-	taskCtx, cancel := context.WithTimeout(ctx, a.opts.TaskTimeout+containerTaskSchedulingGrace)
+	taskCtx, cancel := context.WithTimeout(ctx, containerTaskWaitTimeout(a.opts.TaskTimeout, a.opts.MaxRetries))
 	defer cancel()
 	state, err := a.waitTerminal(taskCtx, taskName)
 	if err != nil {
@@ -308,6 +309,22 @@ func (a *ContainerAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, 
 	}
 	a.cleanupConsumedBundle(resources, state)
 	return result, nil
+}
+
+func containerTaskWaitTimeout(taskTimeout time.Duration, retries int) time.Duration {
+	const maxDuration = time.Duration(1<<63 - 1)
+	total := containerTaskSchedulingGrace
+	if retries > 0 {
+		if time.Duration(retries) > (maxDuration-total)/containerTaskRetryDelay {
+			return maxDuration
+		}
+		total += time.Duration(retries) * containerTaskRetryDelay
+	}
+	attempts := time.Duration(retries + 1)
+	if taskTimeout > (maxDuration-total)/attempts {
+		return maxDuration
+	}
+	return total + attempts*taskTimeout
 }
 
 func (a *ContainerAnalyzer) waitTerminal(ctx context.Context, taskName string) (TaskState, error) {

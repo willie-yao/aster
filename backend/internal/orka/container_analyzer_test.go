@@ -319,3 +319,14 @@ func TestContainerAnalyzerReturnsValidResultWhenStatePersistenceFails(t *testing
 		t.Fatalf("persistence failure cleaned resources: Tasks=%v bundles=%v", kube.deletedTask, resources.deletedVersion)
 	}
 }
+
+func TestContainerTaskWaitTimeoutIncludesRetries(t *testing.T) {
+	got := containerTaskWaitTimeout(20*time.Minute, 1)
+	want := 42*time.Minute + 10*time.Second
+	if got != want {
+		t.Fatalf("wait timeout = %s, want %s", got, want)
+	}
+	if got := containerTaskWaitTimeout(time.Duration(1<<62), 99); got != time.Duration(1<<63-1) {
+		t.Fatalf("overflow wait timeout = %s", got)
+	}
+}
