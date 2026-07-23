@@ -37,6 +37,24 @@ Options:
   floors distort a strong model that answers concisely. Example for a strong
   hosted model: `BENCH_MIN_TOOL_CALLS=3 BENCH_MIN_GCS_BYTES=0`.
 
+## Telemetry
+
+Each completed analysis reports the configured quality-gate result and bounded
+usage counters. The output includes evidence-plan coverage, GCS-floor bypass,
+critique status and version, a short skill-set hash prefix, budget exhaustion,
+semantic-judge flags, context truncations, model and Tool failures, model
+requests, and provider-reported input and output tokens.
+
+The trace summary reports the floor-nudge count and ordered reasons, context
+compaction and over-budget counts, the final semantic-judge event outcome,
+critique and evidence retries, and accepted-uncached events. Successful Tool
+names and per-Tool counts remain sorted. If an analysis fails before producing
+`AIAnalysis`, the benchmark prints the available trace and Tool summaries before
+failing the test.
+
+The telemetry never prints prompts, model response text, Tool arguments, Tool
+output, endpoints, model coordinates, credentials, or full hashes.
+
 ## Signal tiers
 
 Each case's `signals` are regexes checked against the model's summary, root

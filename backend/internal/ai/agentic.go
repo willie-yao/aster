@@ -278,6 +278,19 @@ type floorStatus struct {
 
 func (fs floorStatus) anyUnmet() bool { return fs.callsUnmet || fs.gcsUnmet }
 
+func (fs floorStatus) traceStatus() string {
+	switch {
+	case fs.callsUnmet && fs.gcsUnmet:
+		return "tool_calls+gcs_bytes"
+	case fs.callsUnmet:
+		return "tool_calls"
+	case fs.gcsUnmet:
+		return "gcs_bytes"
+	default:
+		return ""
+	}
+}
+
 func gcsFloorUnmet(gcsBytes, minGCSBytes int, evidencePlanCovered bool) bool {
 	return gcsBytes < minGCSBytes && !evidencePlanCovered
 }
@@ -827,7 +840,7 @@ func (c *Client) doAnalyzeAgentic(
 					})
 					nudgedAtCalls = state.calls
 					nudgedAtGCSBytes = state.gcsBytes
-					recordTrace(loopCtx, TraceEvent{Kind: "floor_nudge", Outcome: "retry", ToolCallCount: state.calls, Bytes: state.gcsBytes})
+					recordTrace(loopCtx, TraceEvent{Kind: "floor_nudge", Outcome: "retry", Status: floors.traceStatus(), ToolCallCount: state.calls, Bytes: state.gcsBytes})
 					log.Printf("  ↻ agentic nudge: tool_calls=%d/min=%d, gcs_kb=%d/min=%d, asking model to investigate further",
 						state.calls, in.Opts.MinToolCalls, state.gcsBytes/1024, in.Opts.MinGCSBytes/1024)
 					continue

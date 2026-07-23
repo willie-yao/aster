@@ -896,6 +896,26 @@ required_evidence:
 	}
 }
 
+func TestFloorStatusTraceStatus(t *testing.T) {
+	tests := []struct {
+		name string
+		in   floorStatus
+		want string
+	}{
+		{name: "met", in: floorStatus{}, want: ""},
+		{name: "tool calls", in: floorStatus{callsUnmet: true}, want: "tool_calls"},
+		{name: "GCS bytes", in: floorStatus{gcsUnmet: true}, want: "gcs_bytes"},
+		{name: "both", in: floorStatus{callsUnmet: true, gcsUnmet: true}, want: "tool_calls+gcs_bytes"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.in.traceStatus(); got != tc.want {
+				t.Fatalf("traceStatus() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestDispatchAgenticToolEvidenceReadsRequireNonEmptyContent(t *testing.T) {
 	registry, enabled := newTestRegistry(t)
 	browser := &fakeBrowser{files: map[string][]byte{
