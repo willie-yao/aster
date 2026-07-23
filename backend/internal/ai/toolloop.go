@@ -140,7 +140,10 @@ func (c *Client) ToolLoop(
 
 	// The model never returned a tools-free answer within the budget. Force one
 	// finalize round with tools omitted so the caller still gets a response.
-	final, _ := c.runFinalizeRound(ctx, messages, opts.ContextByteBudget)
+	final, _, safe := c.runFinalizeRound(ctx, messages, contextHeadroomFor(AgenticOptions{ContextByteBudget: opts.ContextByteBudget}))
+	if !safe {
+		return "", ErrContextHeadroom
+	}
 	return final, nil
 }
 

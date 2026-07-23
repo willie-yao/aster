@@ -16,7 +16,7 @@ func TestSemanticCritique_ParsesObjections(t *testing.T) {
 
 	objs, err := client.semanticCritique(context.Background(),
 		analysisResponse{RootCause: "credential expiry", SuggestedFix: "re-run"},
-		[]string{"build-log.txt"})
+		[]string{"build-log.txt"}, contextHeadroomFor(AgenticOptions{ContextByteBudget: 100_000}))
 	if err != nil {
 		t.Fatalf("semanticCritique: %v", err)
 	}
@@ -34,7 +34,7 @@ func TestSemanticCritique_EmptyMeansSound(t *testing.T) {
 	srv.push(200, chatRespFinal(`{"objections":[]}`))
 	client := newAgenticTestClient(t, srv.URL)
 
-	objs, err := client.semanticCritique(context.Background(), analysisResponse{RootCause: "x"}, nil)
+	objs, err := client.semanticCritique(context.Background(), analysisResponse{RootCause: "x"}, nil, contextHeadroomFor(AgenticOptions{ContextByteBudget: 100_000}))
 	if err != nil {
 		t.Fatalf("semanticCritique: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestApplySemanticJudgePostLoop_RefinalizesOnObjection(t *testing.T) {
 
 	state := &agentState{readArtifactsFull: map[string]bool{}, readArtifactsBase: map[string]bool{}}
 	orig := analysisResponse{Summary: "shallow", RootCause: "the PR broke it", SuggestedFix: "revert it"}
-	got := client.applySemanticJudgePostLoop(context.Background(), state, []modelMessage{{Role: "user", Content: strPtr("u")}}, "shallow-final", nil, orig, 0)
+	got := client.applySemanticJudgePostLoop(context.Background(), state, []modelMessage{{Role: "user", Content: strPtr("u")}}, "shallow-final", nil, orig, contextHeadroomFor(AgenticOptions{ContextByteBudget: 100_000}))
 
 	if !strings.Contains(got.RootCause, "route table") {
 		t.Errorf("expected the refinalized draft, got root_cause=%q", got.RootCause)
@@ -115,7 +115,7 @@ func TestApplySemanticJudgePostLoop_NoObjectionsKeepsDraft(t *testing.T) {
 
 	state := &agentState{readArtifactsFull: map[string]bool{}, readArtifactsBase: map[string]bool{}}
 	orig := analysisResponse{Summary: "sound", RootCause: "real cause", SuggestedFix: "real fix"}
-	got := client.applySemanticJudgePostLoop(context.Background(), state, nil, "final", nil, orig, 0)
+	got := client.applySemanticJudgePostLoop(context.Background(), state, nil, "final", nil, orig, contextHeadroomFor(AgenticOptions{ContextByteBudget: 100_000}))
 
 	if got.RootCause != "real cause" {
 		t.Errorf("sound draft should be unchanged, got %q", got.RootCause)
