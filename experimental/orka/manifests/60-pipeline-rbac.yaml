@@ -1,5 +1,6 @@
-# RBAC for the in-cluster Orka pipeline. The orka-producer applies Tasks +
-# per-build Tools via server-side apply. The orka-ingestor reads Task status and
+# RBAC for the in-cluster Orka pipeline. The orka-producer applies Tasks and
+# per-build Tools. Container analysis also creates private bundle ConfigMaps.
+# The orka-ingestor reads Task status and
 # garbage-collects completed builds' Tools. Both run under this ServiceAccount,
 # whose token also authenticates the ingestor to the Orka result API (via
 # TokenReview), so no separate credential is needed.
@@ -19,6 +20,10 @@ rules:
   - apiGroups: ["core.orka.ai"]
     resources: ["tasks", "tools"]
     verbs: ["create", "get", "list", "watch", "patch", "update", "delete"]
+  # Immutable container analyzer bundles use create/get/list/patch/delete only.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create", "get", "list", "patch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

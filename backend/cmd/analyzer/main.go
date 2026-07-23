@@ -3,7 +3,6 @@ package main
 
 import (
 	"context"
-	"crypto/subtle"
 	"errors"
 	"flag"
 	"fmt"
@@ -12,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
@@ -75,7 +73,6 @@ func run(ctx context.Context, args []string, getenv envGetter, stdout, stderr io
 	var opts commandOptions
 	flags := flag.NewFlagSet("analyzer", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	flags.StringVar(&opts.projectDir, "project-dir", "/project", "directory containing project.yaml and prompts/system.md")
 	flags.StringVar(&opts.dataDir, "data-dir", "/tmp/prow-ai-analyzer", "private cache and trace directory")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -84,25 +81,29 @@ func run(ctx context.Context, args []string, getenv envGetter, stdout, stderr io
 		return fmt.Errorf("unexpected positional arguments")
 	}
 
-	raw := []byte(getenv(analysisruntime.InlineRequestEnv))
-	request, digest, err := analysisruntime.DecodeInlineRequest(raw)
+	bundle, err := analysisruntime.DecodeProjectBundle([]byte(getenv(analysisruntime.ProjectBundleEnv)))
 	if err != nil {
 		return err
 	}
-	expected := strings.TrimSpace(getenv(analysisruntime.InlineRequestDigestEnv))
-	if expected == "" {
-		return fmt.Errorf("%s is required", analysisruntime.InlineRequestDigestEnv)
+	if err := analysisruntime.VerifyProjectBundleDigest(bundle, getenv(analysisruntime.ProjectBundleDigestEnv)); err != nil {
+		return err
 	}
-	if len(expected) != len(digest) || subtle.ConstantTimeCompare([]byte(strings.ToLower(expected)), []byte(digest)) != 1 {
-		return fmt.Errorf("failure analysis request digest mismatch")
+	if err := analysisruntime.VerifyProjectBundleContract(bundle); err != nil {
+		return err
 	}
+	projectDir, cleanup, err := analysisruntime.MaterializeProjectBundle(bundle)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	opts.projectDir = projectDir
 
 	runtime, err := factory(ctx, opts, getenv)
 	if err != nil {
 		return err
 	}
-	log.Printf("starting failure analysis request=%s", digest[:12])
-	result, analyzeErr := runtime.analyzer.AnalyzeFailure(ctx, runtime.httpClient, request)
+	log.Printf("starting failure analysis bundle=%s", bundle.Digest[:12])
+	result, analyzeErr := runtime.analyzer.AnalyzeFailure(ctx, runtime.httpClient, bundle.Request)
 	saveErr := runtime.save()
 	if analyzeErr != nil {
 		if saveErr != nil {

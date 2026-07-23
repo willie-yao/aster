@@ -22,6 +22,20 @@ for how to pin a release.
 
 ### Added
 
+- **Immutable container analysis bundles.** The experimental dashboard-owned
+  analyzer now receives its failure request, sanitized project config, prompt,
+  and consumer skills from an immutable content-addressed ConfigMap. Tasks use a
+  ConfigMap key reference, verify the full digest before materializing private
+  temporary files, keep credentials in Secret references, reject credential-
+  bearing endpoint URLs and unsafe YAML graphs, and bound the environment
+  transport. Terminal
+  result handling
+  deletes private Task-scoped bundles immediately, while failed Task application
+  leaves inputs for one batch-level GC pass to prune after 24 hours under
+  least-privilege ConfigMap RBAC. Short-lived claims and resource-version deletes
+  prevent GC from deleting a bundle concurrently adopted by another reconciler.
+  Terminal cleanup is bound to the
+  observed Task UID so delayed handling cannot delete a replacement Task input.
 - **Dashboard container result framing.** The experimental dashboard-owned
   analyzer now emits a bounded base64 result marker on stdout. Mixed Orka Task
   logs are parsed for the last valid marker instead of treating the final line

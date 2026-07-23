@@ -40,24 +40,38 @@ func analyzerTestRequest() ai.FailureAnalysisRequest {
 	}
 }
 
-func requestEnv(t *testing.T, request ai.FailureAnalysisRequest) envGetter {
+func bundleValues(t *testing.T, request ai.FailureAnalysisRequest, projectDir string) map[string]string {
 	t.Helper()
-	data, digest, err := analysisruntime.EncodeInlineRequest(request)
+	return bundleValuesForContract(t, request, projectDir, analysisruntime.ContainerAnalyzerContractVersion)
+}
+
+func bundleValuesForContract(t *testing.T, request ai.FailureAnalysisRequest, projectDir, contractVersion string) map[string]string {
+	t.Helper()
+	if projectDir == "" {
+		projectDir = writeAnalyzerProject(t, t.TempDir(), "https://model.invalid/v1/chat/completions")
+	}
+	data, digest, err := analysisruntime.BuildProjectBundle(projectDir, contractVersion, request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	values := map[string]string{
-		analysisruntime.InlineRequestEnv:       string(data),
-		analysisruntime.InlineRequestDigestEnv: digest,
+	return map[string]string{
+		analysisruntime.ProjectBundleEnv:       string(data),
+		analysisruntime.ProjectBundleDigestEnv: digest,
 	}
+}
+
+func bundleEnv(t *testing.T, request ai.FailureAnalysisRequest) envGetter {
+	t.Helper()
+	values := bundleValues(t, request, "")
 	return func(name string) string { return values[name] }
 }
 
-func TestAnalyzerProcessExitsNonzeroOnMalformedRequest(t *testing.T) {
+func TestAnalyzerProcessExitsNonzeroOnMalformedBundle(t *testing.T) {
 	cmd := exec.Command(os.Args[0], "-test.run=TestAnalyzerHelperProcess")
 	cmd.Env = append(os.Environ(),
 		"GO_WANT_ANALYZER_HELPER=1",
-		analysisruntime.InlineRequestEnv+"=not-json",
+		analysisruntime.ProjectBundleEnv+"=not-json",
+		analysisruntime.ProjectBundleDigestEnv+"="+strings.Repeat("0", 64),
 	)
 	err := cmd.Run()
 	var exitErr *exec.ExitError
@@ -80,12 +94,20 @@ func TestRunWritesOnlyResultToStdout(t *testing.T) {
 		Summary:  &models.AISummary{Summary: "summary"},
 		Analysis: &models.AIAnalysis{RootCause: "cause", Severity: "Low"},
 	}}
-	factory := func(context.Context, commandOptions, envGetter) (*analyzerRuntime, error) {
+	var materializedProject string
+	factory := func(_ context.Context, opts commandOptions, _ envGetter) (*analyzerRuntime, error) {
+		materializedProject = opts.projectDir
+		if _, err := os.Stat(filepath.Join(opts.projectDir, "project.yaml")); err != nil {
+			return nil, err
+		}
 		return &analyzerRuntime{analyzer: fake, httpClient: http.DefaultClient, save: func() error { return nil }}, nil
 	}
 	var stdout, stderr bytes.Buffer
-	if err := run(context.Background(), nil, requestEnv(t, request), &stdout, &stderr, factory); err != nil {
+	if err := run(context.Background(), nil, bundleEnv(t, request), &stdout, &stderr, factory); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := os.Stat(materializedProject); !os.IsNotExist(err) {
+		t.Fatalf("materialized project still exists: %v", err)
 	}
 	if strings.Contains(stdout.String(), "starting failure analysis") || !strings.Contains(stderr.String(), "starting failure analysis") {
 		t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
@@ -121,7 +143,7 @@ func TestAnalyzerRedactsProviderURLsFromDurableStderr(t *testing.T) {
 		}, nil
 	}
 	var stdout, stderr bytes.Buffer
-	err := run(context.Background(), nil, requestEnv(t, analyzerTestRequest()), &stdout, &stderr, factory)
+	err := run(context.Background(), nil, bundleEnv(t, analyzerTestRequest()), &stdout, &stderr, factory)
 	if err == nil {
 		t.Fatal("run succeeded")
 	}
@@ -141,7 +163,7 @@ func TestRunAnalyzeFailureErrorReturnsWithoutResult(t *testing.T) {
 		return &analyzerRuntime{analyzer: fake, httpClient: http.DefaultClient, save: func() error { return nil }}, nil
 	}
 	var stdout, stderr bytes.Buffer
-	err := run(context.Background(), nil, requestEnv(t, analyzerTestRequest()), &stdout, &stderr, factory)
+	err := run(context.Background(), nil, bundleEnv(t, analyzerTestRequest()), &stdout, &stderr, factory)
 	if err == nil || !strings.Contains(err.Error(), "provider failed") {
 		t.Fatalf("run error = %v", err)
 	}
@@ -150,20 +172,23 @@ func TestRunAnalyzeFailureErrorReturnsWithoutResult(t *testing.T) {
 	}
 }
 
-func TestRunRejectsMalformedOrMismatchedRequest(t *testing.T) {
+func TestRunRejectsMalformedOrMismatchedBundle(t *testing.T) {
 	factory := func(context.Context, commandOptions, envGetter) (*analyzerRuntime, error) {
-		t.Fatal("factory called for invalid request")
+		t.Fatal("factory called for invalid bundle")
 		return nil, nil
 	}
+	valid := bundleValues(t, analyzerTestRequest(), "")
+	future := bundleValuesForContract(t, analyzerTestRequest(), "", "dashboard-failure-analyzer-v4")
 	for _, values := range []map[string]string{
-		{analysisruntime.InlineRequestEnv: "not json"},
-		{analysisruntime.InlineRequestEnv: string(mustRequestJSON(t, analyzerTestRequest()))},
-		{analysisruntime.InlineRequestEnv: string(mustRequestJSON(t, analyzerTestRequest())), analysisruntime.InlineRequestDigestEnv: strings.Repeat("0", 64)},
+		{analysisruntime.ProjectBundleEnv: "not json", analysisruntime.ProjectBundleDigestEnv: strings.Repeat("0", 64)},
+		{analysisruntime.ProjectBundleEnv: valid[analysisruntime.ProjectBundleEnv]},
+		{analysisruntime.ProjectBundleEnv: valid[analysisruntime.ProjectBundleEnv], analysisruntime.ProjectBundleDigestEnv: strings.Repeat("0", 64)},
+		future,
 	} {
 		var stdout, stderr bytes.Buffer
 		err := run(context.Background(), nil, func(name string) string { return values[name] }, &stdout, &stderr, factory)
 		if err == nil {
-			t.Fatal("run succeeded for invalid request")
+			t.Fatal("run succeeded for invalid bundle")
 		}
 		if stdout.Len() != 0 {
 			t.Fatalf("stdout = %q, want empty", stdout.String())
@@ -192,15 +217,12 @@ func TestRunWithScriptedModelEndpoint(t *testing.T) {
 	}
 	projectDir := writeAnalyzerProject(t, root, script.URL)
 	request := analyzerTestRequest()
-	values := map[string]string{"AI_TOKEN": "script-token"}
-	data, digest, err := analysisruntime.EncodeInlineRequest(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	values[analysisruntime.InlineRequestEnv] = string(data)
-	values[analysisruntime.InlineRequestDigestEnv] = digest
+	values := bundleValues(t, request, projectDir)
+	values["AI_TOKEN"] = "script-token"
+	values["AI_ENDPOINT"] = script.URL
+	values["AI_MODEL"] = "script-model"
 	var stdout, stderr bytes.Buffer
-	err = run(context.Background(), []string{"-project-dir", projectDir, "-data-dir", t.TempDir()}, func(name string) string { return values[name] }, &stdout, &stderr, loadRuntime)
+	err := run(context.Background(), []string{"-data-dir", t.TempDir()}, func(name string) string { return values[name] }, &stdout, &stderr, loadRuntime)
 	if err != nil {
 		t.Fatalf("run error = %v\nstderr:\n%s", err, stderr.String())
 	}
@@ -217,15 +239,6 @@ func TestRunWithScriptedModelEndpoint(t *testing.T) {
 	if strings.Contains(stdout.String(), "script-token") || strings.Contains(stderr.String(), "script-token") {
 		t.Fatal("AI token leaked to output")
 	}
-}
-
-func mustRequestJSON(t *testing.T, request ai.FailureAnalysisRequest) []byte {
-	t.Helper()
-	data, _, err := analysisruntime.EncodeInlineRequest(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return data
 }
 
 func writeAnalyzerProject(t *testing.T, storageRoot, endpoint string) string {

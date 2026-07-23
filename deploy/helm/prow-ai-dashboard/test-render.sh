@@ -271,6 +271,18 @@ if [[ -z "$rbac_name_a" || -z "$rbac_name_b" || "$rbac_name_a" == "$rbac_name_b"
   echo 'Orka RBAC names are not isolated by source release namespace' >&2
   exit 1
 fi
+for file in "$tmp/rbac-dashboard-a.yaml" "$tmp/rbac-dashboard-b.yaml"; do
+  grep -Fq 'resources: ["configmaps"]' "$file"
+  grep -Fq 'verbs: ["create", "get", "list", "patch", "delete"]' "$file"
+done
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set orka.fixRuntime.enabled=true \
+  --show-only templates/orka-pipeline-rbac.yaml \
+  > "$tmp/fix-only-rbac.yaml"
+if grep -Fq 'resources: ["configmaps"]' "$tmp/fix-only-rbac.yaml"; then
+  echo 'fix-runtime-only RBAC unexpectedly grants ConfigMap access' >&2
+  exit 1
+fi
 
 for token in alpha beta; do
   helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
