@@ -83,9 +83,6 @@ func TestTraceStoreSaveUsesPrivateSchema(t *testing.T) {
 	if got.Version != analysisTraceVersion || len(got.Traces) != 2 {
 		t.Fatalf("snapshot = %+v", got)
 	}
-	if got.Traces[0].Backend != "inprocess" || got.Traces[1].Backend != "inprocess" {
-		t.Fatalf("backends = %+v", got.Traces)
-	}
 	if got.Traces[0].JobID != "job-a" || got.Traces[1].JobID != "job-b" {
 		t.Fatalf("trace order = %+v", got.Traces)
 	}
@@ -111,7 +108,7 @@ func TestTraceStoreCapsCompletedTraces(t *testing.T) {
 	if builds["0"] || builds["1"] || !builds[fmt.Sprintf("%d", analysisTraceMaxTraces+1)] {
 		t.Fatalf("rolling trace window kept wrong builds: first=%v second=%v newest=%v", builds["0"], builds["1"], builds[fmt.Sprintf("%d", analysisTraceMaxTraces+1)])
 	}
-	old := AnalysisTrace{Backend: "inprocess", JobID: "old", BuildID: "old", TestName: "old", StartedAt: "2000-01-01T00:00:00Z", Outcome: "success"}
+	old := AnalysisTrace{JobID: "old", BuildID: "old", TestName: "old", StartedAt: "2000-01-01T00:00:00Z", Outcome: "success"}
 	if store.Upsert(old) {
 		t.Fatal("delayed old trace displaced the rolling window")
 	}
@@ -123,11 +120,11 @@ func TestTraceStoreCapsCompletedTraces(t *testing.T) {
 
 func TestTraceStoreSnapshotWithinLimitEvictsOldest(t *testing.T) {
 	older := AnalysisTrace{
-		Backend: "inprocess", JobID: "old", BuildID: "1", TestName: "test", StartedAt: "2026-07-22T08:00:00Z", Outcome: "success",
+		JobID: "old", BuildID: "1", TestName: "test", StartedAt: "2026-07-22T08:00:00Z", Outcome: "success",
 		Events: []TraceEvent{{Kind: "model_request", ResponseID: strings.Repeat("a", 1000)}},
 	}
 	newer := AnalysisTrace{
-		Backend: "inprocess", JobID: "new", BuildID: "2", TestName: "test", StartedAt: "2026-07-22T08:01:00Z", Outcome: "success",
+		JobID: "new", BuildID: "2", TestName: "test", StartedAt: "2026-07-22T08:01:00Z", Outcome: "success",
 		Events: []TraceEvent{{Kind: "model_request", ResponseID: strings.Repeat("b", 1000)}},
 	}
 	one := NewTraceStore()
@@ -156,7 +153,7 @@ func TestTraceStoreSnapshotWithinLimitEvictsOldest(t *testing.T) {
 func TestTraceStoreRetentionBoundary(t *testing.T) {
 	store := NewTraceStore()
 	store.traces = []AnalysisTrace{{
-		Backend: "orka", TaskName: "newest-window-start", RecordedAt: "2026-07-22T09:00:00Z", Outcome: "succeeded",
+		JobID: "newest-window-start", RecordedAt: "2026-07-22T09:00:00Z", Outcome: "succeeded",
 	}}
 	store.dropped = 3
 	if !store.BeforeRetention("2026-07-22T08:59:59Z") {
@@ -170,58 +167,13 @@ func TestTraceStoreRetentionBoundary(t *testing.T) {
 	}
 }
 
-func TestTraceStoreRejectsStaleTaskReplacement(t *testing.T) {
-	store := NewTraceStore()
-	current := AnalysisTrace{
-		Backend: "orka", TaskNamespace: "orka-system", TaskName: "task", Outcome: "succeeded", ElapsedMs: 2000,
-		Events: []TraceEvent{{Kind: "task", Outcome: "started"}, {Kind: "model_request", Outcome: "success", ResponseID: "resp"}, {Kind: "task", Outcome: "succeeded", ElapsedMs: 2000}},
-	}
-	if !store.Upsert(current) {
-		t.Fatal("initial trace was not stored")
-	}
-	stale := AnalysisTrace{
-		Backend: "orka", TaskNamespace: "orka-system", TaskName: "task", Outcome: "unknown", ElapsedMs: 1000,
-		Events: []TraceEvent{{Kind: "task", Outcome: "started"}, {Kind: "model_request", Outcome: "success"}},
-	}
-	if store.Upsert(stale) {
-		t.Fatal("stale Task trace replaced a terminal trace")
-	}
-	got := store.Snapshot().Traces[0]
-	if got.Outcome != "succeeded" || got.Events[1].ResponseID != "resp" || len(got.Events) != 3 {
-		t.Fatalf("stored trace regressed: %+v", got)
-	}
-}
-
-func TestTraceStoreLoadAndUpsertOrkaTask(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "ai_traces.json")
-	store := NewTraceStore()
-	if !store.Upsert(AnalysisTrace{Backend: "orka", TaskName: "task-a", ContractHash: "contract", JobID: "job", BuildID: "1", TestName: "test", Outcome: "succeeded", Events: []TraceEvent{{Kind: "model_request", ResponseID: "resp-old"}}}) {
-		t.Fatal("initial upsert failed")
-	}
-	if err := store.Save(path); err != nil {
-		t.Fatal(err)
-	}
-	loaded, err := LoadTraceStore(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !loaded.HasTerminalTask("", "task-a", "contract") {
-		t.Fatal("loaded store lost task identity")
-	}
-	loaded.Upsert(AnalysisTrace{Backend: "orka", TaskName: "task-a", JobID: "job", BuildID: "1", TestName: "test", Outcome: "succeeded", Events: []TraceEvent{{Kind: "model_request", ResponseID: "resp-new"}}})
-	got := loaded.Snapshot()
-	if len(got.Traces) != 1 || got.Traces[0].Events[0].ResponseID != "resp-new" || got.Traces[0].Events[0].Sequence != 1 {
-		t.Fatalf("upserted traces = %+v", got.Traces)
-	}
-}
-
 func TestTraceStoreKeepsDistinctInProcessSessions(t *testing.T) {
 	store := NewTraceStore()
 	for _, startedAt := range []string{"2026-07-22T08:00:00Z", "2026-07-22T08:01:00Z"} {
-		store.Upsert(AnalysisTrace{Backend: "inprocess", JobID: "job", BuildID: "1", TestName: "same", StartedAt: startedAt, Outcome: "success"})
+		store.Upsert(AnalysisTrace{JobID: "job", BuildID: "1", TestName: "same", StartedAt: startedAt, Outcome: "success"})
 	}
 	if got := len(store.Snapshot().Traces); got != 2 {
-		t.Fatalf("in-process sessions = %d, want 2", got)
+		t.Fatalf("analysis sessions = %d, want 2", got)
 	}
 }
 

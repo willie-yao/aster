@@ -62,7 +62,8 @@ function eventDetails(event: AnalysisTraceEvent): string[] {
       `${event.input_tokens ?? 0} in / ${event.output_tokens ?? 0} out`,
     );
   if (event.message_count) details.push(`${event.message_count} messages`);
-  if (event.tool_call_count) details.push(`${event.tool_call_count} tool calls`);
+  if (event.tool_call_count)
+    details.push(`${event.tool_call_count} tool calls`);
   if (event.bytes) details.push(`${event.bytes.toLocaleString()} bytes`);
   if (event.elided) details.push(`${event.elided} elided`);
   if (event.retry) details.push(`retry ${event.retry}`);
@@ -162,7 +163,6 @@ function TraceCard({ trace }: { trace: AnalysisTrace }) {
             spacing={1}
             sx={{ alignItems: "center", flexWrap: "wrap" }}
           >
-            <Chip size="small" label={trace.backend} variant="outlined" />
             <Chip
               size="small"
               label={trace.outcome}
@@ -192,16 +192,6 @@ function TraceCard({ trace }: { trace: AnalysisTrace }) {
           >
             {trace.job_id} / {trace.build_id}
           </Typography>
-          {trace.task_name && (
-            <Typography
-              variant="caption"
-              color="text.disabled"
-              sx={{ fontFamily: "monospace", overflowWrap: "anywhere" }}
-            >
-              Task {trace.task_namespace ? `${trace.task_namespace}/` : ""}
-              {trace.task_name}
-            </Typography>
-          )}
         </Stack>
       </AccordionSummary>
       <AccordionDetails sx={{ px: 2, pt: 0, pb: 2 }}>
@@ -228,15 +218,6 @@ function TraceCard({ trace }: { trace: AnalysisTrace }) {
           )}
           {trace.truncated && (
             <Chip size="small" color="warning" label="Trace truncated" />
-          )}
-          {trace.contract_hash && (
-            <Typography
-              variant="caption"
-              color="text.disabled"
-              sx={{ fontFamily: "monospace", overflowWrap: "anywhere" }}
-            >
-              contract {trace.contract_hash}
-            </Typography>
           )}
         </Stack>
         <Box
@@ -330,14 +311,7 @@ export function AnalysisTracesPage() {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const next = new URLSearchParams();
-    for (const key of [
-      "backend",
-      "task_name",
-      "job_id",
-      "build_id",
-      "test_name",
-      "response_id",
-    ]) {
+    for (const key of ["job_id", "build_id", "test_name", "response_id"]) {
       const value = String(form.get(key) ?? "").trim();
       if (value) next.set(key, value);
     }
@@ -392,8 +366,7 @@ export function AnalysisTracesPage() {
             </Typography>
           </Stack>
           <Typography color="text.secondary" sx={{ mt: 0.5 }}>
-            Private, content-free execution metadata from in-process and Orka
-            analysis backends.
+            Private, content-free execution metadata from the analysis runtime.
           </Typography>
         </Box>
         <Button
@@ -418,24 +391,14 @@ export function AnalysisTracesPage() {
             gap: 1.5,
           }}
         >
-          {(
-            [
-              "backend",
-              "task_name",
-              "job_id",
-              "build_id",
-              "test_name",
-              "response_id",
-            ] as const
-          ).map((key) => (
+          {(["job_id", "build_id", "test_name", "response_id"] as const).map(
+            (key) => (
               <TextField
                 key={key}
                 size="small"
                 name={key}
                 label={
                   {
-                    backend: "Backend",
-                    task_name: "Task name",
                     job_id: "Job ID",
                     build_id: "Build ID",
                     test_name: "Test name",
@@ -445,7 +408,8 @@ export function AnalysisTracesPage() {
                 defaultValue={searchParams.get(key) ?? ""}
                 sx={{ flex: 1, minWidth: 0 }}
               />
-            ))}
+            ),
+          )}
           <Stack direction="row" spacing={1} sx={{ gridColumn: "1 / -1" }}>
             <Button type="submit" variant="contained" startIcon={<FilterAlt />}>
               Filter

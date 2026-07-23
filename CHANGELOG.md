@@ -22,30 +22,6 @@ for how to pin a release.
 
 ### Added
 
-- **Encrypted container analysis state.** The experimental dashboard analyzer
-  now seeds the one relevant cache entry into each immutable Task bundle and
-  returns cache and content-free private trace deltas through an AES-GCM
-  encrypted state marker. A dashboard-owned state store merges the authenticated
-  delta into the existing atomic `ai_cache.json` and `ai_traces.json` files.
-- **Immutable container analysis bundles.** The experimental dashboard-owned
-  analyzer now receives its failure request, sanitized project config, prompt,
-  and consumer skills from an immutable content-addressed ConfigMap. Tasks use a
-  ConfigMap key reference, verify the full digest before materializing private
-  temporary files, keep credentials in Secret references, reject credential-
-  bearing endpoint URLs and unsafe YAML graphs, and bound the environment
-  transport. Terminal
-  result handling
-  deletes private Task-scoped bundles immediately, while failed Task application
-  leaves inputs for one batch-level GC pass to prune after 24 hours under
-  least-privilege ConfigMap RBAC. Short-lived claims and resource-version deletes
-  prevent GC from deleting a bundle concurrently adopted by another reconciler.
-  Terminal cleanup is bound to the
-  observed Task UID so delayed handling cannot delete a replacement Task input.
-- **Dashboard container result framing.** The experimental dashboard-owned
-  analyzer now emits a bounded base64 result marker on stdout. Mixed Orka Task
-  logs are parsed for the last valid marker instead of treating the final line
-  as JSON, with strict rejection of missing, malformed, oversized, conflicting,
-  or empty results.
 - **Authenticated analysis-trace console.** Server mode now exposes the private
   trace snapshot through admin-gated filtered and download endpoints and a
   dedicated operator page. Static Pages remains unchanged, and direct
@@ -70,12 +46,14 @@ for how to pin a release.
 
 ### Removed
 
-- **Frozen Orka AI analysis backend.** The patched `type: ai` worker, Helm
-  analysis selector, producer, ingestor, artifact Tool service, Provider proxy,
-  compatibility workflow, manifests, private analysis manifest, and worker
-  patch assets are removed.
-  Failure analysis now always uses the dashboard-owned in-process analyzer. Orka
-  fix generation and the isolated container lifecycle experiment remain.
+- **Orka failure-analysis runtimes.** The patched `type: ai` worker and the
+  dashboard-owned `type: container` experiment are removed with their Helm
+  selector, producer, ingestor, artifact Tool service, Provider proxy, worker
+  patch, analyzer image, bundle and state transports, RBAC, manifests, live
+  harness, and Task-specific trace fields. Repeated `gpt-5-mini` and
+  `claude-haiku-4.5` parity trials showed model-run variance rather than a stable
+  runtime advantage. Failure analysis now always uses the in-process analyzer.
+  Orka fix generation remains supported.
 
 - **Slack webhook notifications.** `SLACK_WEBHOOK_URL` and Slack Block Kit
   delivery are removed. Consumers that need notifications must configure the new

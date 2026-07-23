@@ -168,8 +168,7 @@ func (s *Service) AnalyzePattern(ctx context.Context, jobID, subject string, fai
 	return buildPatternAnalysis(subject, len(failures), parsed, collectRelevantFiles(failures)), nil
 }
 
-// BuildPatternInput renders the shared pattern-analysis contract used by the
-// in-process and Orka backends.
+// BuildPatternInput renders the pattern-analysis contract.
 func BuildPatternInput(subject string, failures []PatternFailure) PatternInput {
 	prepared := append([]PatternFailure(nil), failures...)
 	sort.Slice(prepared, func(i, j int) bool { return prepared[i].BuildID > prepared[j].BuildID })

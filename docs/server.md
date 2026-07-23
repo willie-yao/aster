@@ -24,7 +24,7 @@ remains identical.
 | --- | --- |
 | `GET /data/*` | The fetcher output tree at read parity: `manifest.json`, `dashboard.json`, `jobs/*.json`, `flakiness.json`, `search-index.json`. |
 | `GET /api/capabilities` | Deploy descriptor, for example `{"mode":"server","features":{"actions":false}}`. |
-| `GET /api/analysis-traces` | Admin-gated private trace snapshot. Exact filters: `job_id`, `build_id`, `test_name`, `backend`, `task_namespace`, `task_name`, `contract_hash`, `outcome`, and `response_id`. |
+| `GET /api/analysis-traces` | Admin-gated private trace snapshot. Exact filters: `job_id`, `build_id`, `test_name`, `outcome`, and `response_id`. |
 | `GET /api/analysis-traces/download` | Admin-gated attachment form of the same filtered trace snapshot. |
 | `GET /healthz` | Liveness and readiness probe. |
 | `GET /` | The built SPA, when `-static-dir` is set, with deep-link fallback to `index.html`. |
@@ -63,13 +63,6 @@ Requests are capped at 64 MiB, responses use `Cache-Control: no-store`, and both
 endpoints require the same admin identity used by actions. A missing trace file
 returns 404 and the page renders an empty state. Static Pages deployments never
 advertise the feature and continue stripping `ai_traces.json` before publication.
-
-The in-process harness and Orka ingestor both write this shared schema. Orka
-traces include the Task namespace, Task name, contract hash, Task retries and
-outcome, model request response IDs and usage, tool lifecycle, and context
-truncation. Exact `backend`, `task_namespace`, `task_name`, and `contract_hash`
-filters correlate a console entry with the Kubernetes Task and its matching test
-run.
 
 ## Admin-gated actions
 

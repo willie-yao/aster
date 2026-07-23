@@ -45,24 +45,6 @@ func LoadTraceStore(path string) (*TraceStore, error) {
 	return store, nil
 }
 
-// HasTerminalTask reports whether an Orka Task has a completed persisted trace.
-func (s *TraceStore) HasTerminalTask(namespace, taskName, contractHash string) bool {
-	if s == nil || strings.TrimSpace(taskName) == "" {
-		return false
-	}
-	namespace = traceText(namespace)
-	taskName = traceText(taskName)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, trace := range s.traces {
-		if trace.Backend == "orka" && trace.TaskNamespace == namespace && trace.TaskName == taskName &&
-			(contractHash == "" || trace.ContractHash == contractHash) && terminalTraceOutcome(trace.Outcome) {
-			return true
-		}
-	}
-	return false
-}
-
 // BeforeRetention reports whether a completed analysis is older than the
 // persisted rolling-window boundary and should not be restored.
 func (s *TraceStore) BeforeRetention(generatedAt string) bool {
@@ -82,7 +64,7 @@ func (s *TraceStore) BeforeRetention(generatedAt string) bool {
 	return ok && !analysisTime.After(boundary)
 }
 
-// Upsert adds or replaces one completed trace using its backend identity.
+// Upsert adds or replaces one completed trace using its analysis identity.
 func (s *TraceStore) Upsert(trace AnalysisTrace) bool {
 	if s == nil {
 		return false
@@ -276,23 +258,13 @@ func traceOrderTime(trace AnalysisTrace) (time.Time, bool) {
 }
 
 func analysisTraceIdentity(trace AnalysisTrace) string {
-	if trace.Backend == "orka" && trace.TaskName != "" {
-		return "orka\x00" + trace.TaskNamespace + "\x00" + trace.TaskName
-	}
 	if trace.JobID == "" && trace.BuildID == "" && trace.TestName == "" {
 		return ""
 	}
-	return trace.Backend + "\x00" + trace.JobID + "\x00" + trace.BuildID + "\x00" + trace.TestName + "\x00" + trace.StartedAt
+	return trace.JobID + "\x00" + trace.BuildID + "\x00" + trace.TestName + "\x00" + trace.StartedAt
 }
 
 func normalizeAnalysisTrace(trace AnalysisTrace) AnalysisTrace {
-	trace.Backend = traceText(trace.Backend)
-	if trace.Backend == "" {
-		trace.Backend = "inprocess"
-	}
-	trace.TaskName = traceText(trace.TaskName)
-	trace.TaskNamespace = traceText(trace.TaskNamespace)
-	trace.ContractHash = traceText(trace.ContractHash)
 	trace.JobID = traceText(trace.JobID)
 	trace.BuildID = traceText(trace.BuildID)
 	trace.TestName = traceText(trace.TestName)

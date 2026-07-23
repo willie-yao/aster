@@ -33,21 +33,17 @@ type AnalysisTraceFile struct {
 
 // AnalysisTrace records sanitized control-flow metadata for one failure.
 type AnalysisTrace struct {
-	Backend       string       `json:"backend"`
-	TaskNamespace string       `json:"task_namespace,omitempty"`
-	TaskName      string       `json:"task_name,omitempty"`
-	ContractHash  string       `json:"contract_hash,omitempty"`
-	JobID         string       `json:"job_id"`
-	BuildID       string       `json:"build_id"`
-	TestName      string       `json:"test_name"`
-	APIMode       string       `json:"api_mode"`
-	StartedAt     string       `json:"started_at"`
-	RecordedAt    string       `json:"recorded_at,omitempty"`
-	ElapsedMs     int          `json:"elapsed_ms"`
-	Outcome       string       `json:"outcome"`
-	ErrorCode     string       `json:"error_code,omitempty"`
-	Truncated     bool         `json:"truncated,omitempty"`
-	Events        []TraceEvent `json:"events"`
+	JobID      string       `json:"job_id"`
+	BuildID    string       `json:"build_id"`
+	TestName   string       `json:"test_name"`
+	APIMode    string       `json:"api_mode"`
+	StartedAt  string       `json:"started_at"`
+	RecordedAt string       `json:"recorded_at,omitempty"`
+	ElapsedMs  int          `json:"elapsed_ms"`
+	Outcome    string       `json:"outcome"`
+	ErrorCode  string       `json:"error_code,omitempty"`
+	Truncated  bool         `json:"truncated,omitempty"`
+	Events     []TraceEvent `json:"events"`
 }
 
 // TraceEvent is one bounded, content-free analysis event.
@@ -76,14 +72,10 @@ type TraceEvent struct {
 
 // TraceMetadata identifies one analysis without model or endpoint details.
 type TraceMetadata struct {
-	Backend       string
-	TaskNamespace string
-	TaskName      string
-	ContractHash  string
-	JobID         string
-	BuildID       string
-	TestName      string
-	APIMode       string
+	JobID    string
+	BuildID  string
+	TestName string
+	APIMode  string
 }
 
 // TraceStore collects completed traces for one fetch run.
@@ -102,24 +94,16 @@ func (s *TraceStore) Start(meta TraceMetadata) *TraceSession {
 		return nil
 	}
 	now := time.Now().UTC()
-	backend := strings.TrimSpace(meta.Backend)
-	if backend == "" {
-		backend = "inprocess"
-	}
 	return &TraceSession{
 		store: s,
 		start: now,
 		trace: AnalysisTrace{
-			Backend:       traceText(backend),
-			TaskNamespace: traceText(meta.TaskNamespace),
-			TaskName:      traceText(meta.TaskName),
-			ContractHash:  traceText(meta.ContractHash),
-			JobID:         traceText(meta.JobID),
-			BuildID:       traceText(meta.BuildID),
-			TestName:      traceText(meta.TestName),
-			APIMode:       traceText(meta.APIMode),
-			StartedAt:     now.Format(time.RFC3339Nano),
-			Events:        []TraceEvent{},
+			JobID:     traceText(meta.JobID),
+			BuildID:   traceText(meta.BuildID),
+			TestName:  traceText(meta.TestName),
+			APIMode:   traceText(meta.APIMode),
+			StartedAt: now.Format(time.RFC3339Nano),
+			Events:    []TraceEvent{},
 		},
 	}
 }

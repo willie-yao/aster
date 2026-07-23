@@ -21,10 +21,6 @@ same Go implementation owns provider behavior, tools, evidence planning,
 critique, cache acceptance, private traces, and result schemas on Pages and
 Kubernetes.
 
-The experimental Orka container analyzer calls this same contract inside a
-`type: container` Task to evaluate lifecycle behavior. It is not a supported
-analysis backend and does not own model policy.
-
 ## Endpoint requirements
 
 Agentic analysis requires an OpenAI-compatible Chat Completions or Responses
@@ -603,13 +599,11 @@ tools-unsupported flag are all internally synchronized.
 
 ### Private analysis traces
 
-The in-process harness and Orka ingestor write `ai_traces.json` next to the AI
-cache. This is a private operational snapshot for debugging model and harness
-behavior. Each failure records bounded control-flow events for model requests,
-tool calls, context compaction, retries, and completion. In-process traces also
-record floor nudges, deterministic critique, semantic judging, and forced
-finalization. Orka traces add Task namespace/name, contract hash, Task lifecycle,
-and the model/tool events already fetched for result acceptance.
+The analysis harness writes `ai_traces.json` next to the AI cache. This is a
+private operational snapshot for debugging model and harness behavior. Each
+failure records bounded control-flow events for model requests, tool calls,
+context compaction, retries, floor nudges, deterministic critique, semantic
+judging, forced finalization, and completion.
 
 The trace intentionally excludes prompts, assistant text, reasoning items, tool
 arguments, tool output, and configured endpoint or model fields. Provider and
@@ -627,8 +621,7 @@ Inspect it directly in a local output directory or on the Kubernetes shared
 volume. When admin authentication is enabled, server mode also exposes the
 decoded snapshot through `GET /api/analysis-traces` and the private **Traces**
 page. Exact query filters can correlate a response ID or a job/build/test tuple
-without exposing prompt or tool content. Orka traces can additionally be
-filtered by Task namespace, Task name, and contract hash.
+without exposing prompt or tool content.
 
 ### Cache semantics
 

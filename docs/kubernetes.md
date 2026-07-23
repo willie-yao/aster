@@ -75,9 +75,7 @@ actions are also enabled.
 
 When the release namespace differs from `orka.namespace`, provide an
 `ORKA_API_TOKEN` authorized for the Orka namespace if the API namespace policy
-does not accept the release ServiceAccount token. The dashboard-owned container
-analyzer remains an isolated development experiment and is not installed by the
-chart.
+does not accept the release ServiceAccount token.
 
 ## Build and push the image
 

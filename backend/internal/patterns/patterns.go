@@ -1,5 +1,5 @@
 // Package patterns correlates analyzed failures across builds and prepares the
-// recurring-pattern data shared by the in-process and Orka backends.
+// recurring-pattern data produced by the analysis runtime.
 package patterns
 
 import (

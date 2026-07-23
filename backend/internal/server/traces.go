@@ -57,11 +57,6 @@ func readAnalysisTraces(path string) (ai.AnalysisTraceFile, error) {
 	if traces.Traces == nil {
 		traces.Traces = []ai.AnalysisTrace{}
 	}
-	for i := range traces.Traces {
-		if traces.Traces[i].Backend == "" {
-			traces.Traces[i].Backend = "inprocess"
-		}
-	}
 	return traces, nil
 }
 
@@ -70,19 +65,13 @@ func filterAnalysisTraces(traces []ai.AnalysisTrace, r *http.Request) []ai.Analy
 	jobID := query.Get("job_id")
 	buildID := query.Get("build_id")
 	testName := query.Get("test_name")
-	backend := query.Get("backend")
-	taskNamespace := query.Get("task_namespace")
-	taskName := query.Get("task_name")
-	contractHash := query.Get("contract_hash")
 	outcome := query.Get("outcome")
 	responseID := query.Get("response_id")
 	filtered := make([]ai.AnalysisTrace, 0, len(traces))
 	for _, trace := range traces {
 		if jobID != "" && trace.JobID != jobID || buildID != "" && trace.BuildID != buildID ||
-			testName != "" && trace.TestName != testName || backend != "" && trace.Backend != backend ||
-			taskNamespace != "" && trace.TaskNamespace != taskNamespace || taskName != "" && trace.TaskName != taskName ||
-			contractHash != "" && trace.ContractHash != contractHash ||
-			outcome != "" && trace.Outcome != outcome || responseID != "" && !traceHasResponseID(trace, responseID) {
+			testName != "" && trace.TestName != testName || outcome != "" && trace.Outcome != outcome ||
+			responseID != "" && !traceHasResponseID(trace, responseID) {
 			continue
 		}
 		filtered = append(filtered, trace)

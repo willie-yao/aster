@@ -12,8 +12,7 @@ Kubernetes.
 | Private in-cluster model endpoint | Kubernetes with Helm | In-process initially |
 | Authenticated server actions | Kubernetes with Helm | In-process |
 
-The dashboard-owned container analyzer is an internal lifecycle experiment, not
-a deployment choice. Orka remains optional for fix generation.
+Orka remains optional for fix generation.
 
 ## What the scaffold creates
 
@@ -119,7 +118,7 @@ first fetch publishes the expected jobs.
 
 - [GitHub Actions and Pages](github-pages.md)
 - [Kubernetes with Helm](kubernetes.md)
-- [Orka fix generation and container experiment](../experimental/orka/README.md)
+- [Orka fix generation](fix-prs.md)
 
 The Pages workflow uses repository variables `AI_ENDPOINT` and `AI_MODEL` plus
 the `AI_TOKEN` secret. The Kubernetes scaffold stores endpoint and model in

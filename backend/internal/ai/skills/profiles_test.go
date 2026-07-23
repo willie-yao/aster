@@ -411,33 +411,3 @@ triggers: ["filesystem"]
 		}
 	}
 }
-
-func TestLoadForToolsProducesBackendIndependentContract(t *testing.T) {
-	dir := t.TempDir()
-	writeSkill(t, dir, "consumer", `
-id: consumer-contract
-triggers: ["contract"]
-required_evidence:
-  - id: log
-    any_of: ["build-log\\.txt"]
-`)
-	inProcess, inSelection, err := LoadForTools(dir, []string{"filesystem", "k8s"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	orka, orkaSelection, err := LoadForTools(dir, []string{"filesystem", "k8s"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	inContract, err := inProcess.MarshalContract()
-	if err != nil {
-		t.Fatal(err)
-	}
-	orkaContract, err := orka.MarshalContract()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(inSelection, orkaSelection) || !reflect.DeepEqual(inContract, orkaContract) {
-		t.Fatalf("backend contracts differ:\nin-process=%s\norka=%s", inContract, orkaContract)
-	}
-}

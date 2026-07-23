@@ -132,14 +132,6 @@ type AIAnalysis struct {
 	// BudgetExhausted reports whether the agentic loop hit one of its
 	// budget caps and was forced to finalize on best-effort evidence.
 	BudgetExhausted bool `json:"budget_exhausted,omitempty"`
-	// TaskRetries, TaskOutcome, and StopReason describe backend completion.
-	TaskRetries int    `json:"task_retries,omitempty"`
-	TaskOutcome string `json:"task_outcome,omitempty"`
-	StopReason  string `json:"stop_reason,omitempty"`
-	// TimelineVerified and ArtifactPathsValidated record deterministic Orka
-	// quality-tool evidence used by the result acceptance gate.
-	TimelineVerified       bool `json:"timeline_verified,omitempty"`
-	ArtifactPathsValidated bool `json:"artifact_paths_validated,omitempty"`
 
 	// CritiquePassed reports whether this analysis cleared the critique gate.
 	CritiquePassed bool `json:"critique_passed,omitempty"`

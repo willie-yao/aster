@@ -49,10 +49,10 @@ Failure analysis always runs through the dashboard-owned in-process analyzer on
 both Pages and Kubernetes. This keeps prompts, tools, evidence policy, critique,
 cache acceptance, traces, and result schemas in one implementation.
 
-Orka remains available for fix generation. A separate dashboard-owned container
-analyzer is retained as an internal lifecycle experiment, not as a supported
-deployment mode. See the [analysis runtime ownership decision](docs/architecture-decisions/0001-analysis-runtime-ownership.md)
-and [Orka integrations](experimental/orka/README.md).
+Orka remains available for fix generation through
+`ai.fix_prs.agent_runtime.type: orka`. See the
+[analysis runtime ownership decision](docs/architecture-decisions/0001-analysis-runtime-ownership.md)
+and [fix PR documentation](docs/fix-prs.md).
 
 ## What a project owns
 
@@ -120,11 +120,10 @@ The Kubernetes server serves the same `/data/*.json` contract as Pages and adds
 - [Agent-proposed fix PRs](docs/fix-prs.md)
 - [Server and authenticated actions](docs/server.md)
 
-### Orka integrations
+### Orka fix generation
 
 - [Analysis runtime ownership decision](docs/architecture-decisions/0001-analysis-runtime-ownership.md)
-- [Container experiment and fix runtime](experimental/orka/README.md)
-- [Container analyzer assessment](experimental/orka/CONTAINER_ANALYZER_ASSESSMENT.md)
+- [Agent-proposed fix PRs](docs/fix-prs.md)
 
 ### Development
 

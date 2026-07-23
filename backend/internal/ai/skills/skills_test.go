@@ -1,13 +1,34 @@
 package skills
 
 import (
-	"crypto/sha256"
-	"fmt"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func mustSkillSetJSON(t *testing.T, raw string) *Set {
+	t.Helper()
+	var contract struct {
+		Skills []Skill `json:"skills"`
+	}
+	if err := json.Unmarshal([]byte(raw), &contract); err != nil {
+		t.Fatal(err)
+	}
+	entries := make([]sourcedSkill, 0, len(contract.Skills))
+	for i := range contract.Skills {
+		if err := validateAndCompile(&contract.Skills[i]); err != nil {
+			t.Fatal(err)
+		}
+		entries = append(entries, sourcedSkill{skill: contract.Skills[i], source: "test"})
+	}
+	set, err := setFromSources(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return set
+}
 
 // writeSkill writes a single recipe file into <dir>/skills/<name>.yaml.
 func writeSkill(t *testing.T, dir, name, body string) string {
@@ -348,7 +369,7 @@ required_evidence:
 }
 
 func TestEvidenceGroup_Applies(t *testing.T) {
-	set, err := ParseContract([]byte(`{
+	set := mustSkillSetJSON(t, `{
 		"skills":[{
 			"id":"connectivity",
 			"triggers":["connectivity"],
@@ -357,10 +378,7 @@ func TestEvidenceGroup_Applies(t *testing.T) {
 				{"id":"dns","when":["(?i)dns|resolver"],"any_of":["resolv\\.conf"]}
 			]
 		}]
-	}`))
-	if err != nil {
-		t.Fatal(err)
-	}
+	}`)
 	skill := set.Skills()[0]
 	if !skill.RequiredEvidence[0].Applies("service timeout") {
 		t.Fatal("unconditional evidence group did not apply")
@@ -453,47 +471,8 @@ required_evidence:
 	})
 }
 
-func TestContractHeaderRoundTrip(t *testing.T) {
-	dir := t.TempDir()
-	writeSkill(t, dir, "quota", `
-id: quota
-priority: 200
-triggers: ["(?i)quota"]
-required_evidence:
-  - id: events
-    description: quota events
-    any_of: ["events/.*quota"]
-procedure: Inspect the quota event before changing limits.
-`)
-	original, err := Load(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	header, err := original.HeaderValue()
-	if err != nil {
-		t.Fatal(err)
-	}
-	decoded, err := ParseHeader(header)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if decoded.Hash() != original.Hash() {
-		t.Fatalf("hash = %q, want %q", decoded.Hash(), original.Hash())
-	}
-	matched := decoded.Match("resource quota exceeded")
-	if len(matched) != 1 || matched[0].ID != "quota" || len(matched[0].RequiredEvidence) != 1 {
-		t.Fatalf("matched skills = %+v", matched)
-	}
-}
-
-func TestParseHeaderRejectsOversizedValue(t *testing.T) {
-	if _, err := ParseHeader(strings.Repeat("a", maxSkillContractHeaderBytes+1)); err == nil {
-		t.Fatal("oversized skill header was accepted")
-	}
-}
-
 func TestPlanResolvesRankedCandidatePaths(t *testing.T) {
-	set, err := ParseContract([]byte(`{
+	set := mustSkillSetJSON(t, `{
 		"skills":[{
 			"id":"flatcar",
 			"name":"Flatcar provider initialization",
@@ -506,10 +485,7 @@ func TestPlanResolvesRankedCandidatePaths(t *testing.T) {
 			],
 			"procedure":"Compare the Machine and Node."
 		}]
-	}`))
-	if err != nil {
-		t.Fatal(err)
-	}
+	}`)
 	signal := "Flatcar sysext worker capz-e2e-asfxe1 has no providerID"
 	paths := []string{
 		"artifacts/clusters/bootstrap/resources/other/Machine/unrelated.yaml",
@@ -542,16 +518,13 @@ func TestPlanResolvesRankedCandidatePaths(t *testing.T) {
 }
 
 func TestPlanKeepsGroupsWithoutCandidatePaths(t *testing.T) {
-	set, err := ParseContract([]byte(`{
+	set := mustSkillSetJSON(t, `{
 		"skills":[{
 			"id":"quota",
 			"triggers":["quota"],
 			"required_evidence":[{"id":"events","any_of":["events/.*quota"]}]
 		}]
-	}`))
-	if err != nil {
-		t.Fatal(err)
-	}
+	}`)
 	plan := set.Plan("quota exceeded", []string{"build-log.txt"}, 3)
 	if len(plan) != 1 || len(plan[0].RequiredEvidence) != 1 || len(plan[0].RequiredEvidence[0].CandidatePaths) != 0 {
 		t.Fatalf("plan = %+v", plan)
@@ -559,85 +532,28 @@ func TestPlanKeepsGroupsWithoutCandidatePaths(t *testing.T) {
 }
 
 func TestPlanPreservesMatchedProcedureWithoutApplicableGroups(t *testing.T) {
-	set, err := ParseContract([]byte(`{
+	set := mustSkillSetJSON(t, `{
 		"skills":[{
 			"id":"connectivity",
 			"triggers":["connectivity"],
 			"required_evidence":[{"id":"dns","when":["dns"],"any_of":["resolv\\.conf"]}],
 			"procedure":"Inspect the relevant connectivity layer."
 		}]
-	}`))
-	if err != nil {
-		t.Fatal(err)
-	}
+	}`)
 	plan := set.Plan("service connectivity failed", []string{"resolv.conf"}, 3)
 	if len(plan) != 1 || plan[0].ID != "connectivity" || plan[0].Procedure == "" || len(plan[0].RequiredEvidence) != 0 {
 		t.Fatalf("plan = %+v", plan)
 	}
 }
 
-func TestInitialEvidenceHeaderRoundTrip(t *testing.T) {
-	plan := []PlannedSkill{{
-		ID: "quota",
-		RequiredEvidence: []PlannedEvidenceGroup{{
-			ID: "events", Description: "quota events", AnyOf: []string{"events/.*quota"},
-		}},
-	}}
-	header, err := InitialEvidenceHeaderValue(plan)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if header == "" {
-		t.Fatal("initial evidence header is empty")
-	}
-	contract, err := ParseInitialEvidenceHeader(header)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(contract.Requirements) != 1 {
-		t.Fatalf("contract = %+v", contract)
-	}
-	requirement := contract.Requirements[0]
-	if requirement.SkillID != "quota" || requirement.Group.ID != "events" || len(requirement.CandidatePaths) != 0 || !requirement.Group.Satisfied(map[string]bool{"events/workload-quota.log": true}) {
-		t.Fatalf("requirement = %+v", requirement)
-	}
-}
-
-func TestInitialEvidenceHeaderOmitsProcedureOnlyPlan(t *testing.T) {
-	header, err := InitialEvidenceHeaderValue([]PlannedSkill{{ID: "conditional", Procedure: "inspect"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if header != "" {
-		t.Fatalf("header = %q, want empty", header)
-	}
-}
-
-func TestInitialEvidenceHeaderRejectsOversizedValue(t *testing.T) {
-	patterns := make([]string, 600)
-	for i := range patterns {
-		patterns[i] = fmt.Sprintf("path/%x", sha256.Sum256([]byte(fmt.Sprintf("pattern-%d", i))))
-	}
-	_, err := InitialEvidenceHeaderValue([]PlannedSkill{{
-		ID:               "large",
-		RequiredEvidence: []PlannedEvidenceGroup{{ID: "logs", AnyOf: patterns}},
-	}})
-	if err == nil || !strings.Contains(err.Error(), "exceeds") {
-		t.Fatalf("oversized header error = %v", err)
-	}
-}
-
 func TestPlanCandidateOrderIsDeterministic(t *testing.T) {
-	set, err := ParseContract([]byte(`{
+	set := mustSkillSetJSON(t, `{
 		"skills":[{
 			"id":"logs",
 			"triggers":["timeout"],
 			"required_evidence":[{"id":"machine","any_of":["machine/.*\\.log$"]}]
 		}]
-	}`))
-	if err != nil {
-		t.Fatal(err)
-	}
+	}`)
 	signal := "timeout on worker-special"
 	forward := []string{
 		"artifacts/machine/unrelated.log",

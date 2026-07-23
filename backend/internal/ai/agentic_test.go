@@ -2062,14 +2062,12 @@ func TestBuildEvidenceInjectionRespectsArtifactAndByteBounds(t *testing.T) {
 		plannedGroups = append(plannedGroups, skills.PlannedEvidenceGroup{ID: fmt.Sprintf("group-%d", i), CandidatePaths: []string{path}})
 		files[path] = []byte(strings.Repeat(fmt.Sprintf("MARKER_%d", i), evidenceInjectionPerArtifactBytes))
 	}
-	contract, err := json.Marshal(skills.Contract{Skills: []skills.Skill{{ID: "bounded", Triggers: []string{"bounded"}, RequiredEvidence: groups}}})
-	if err != nil {
-		t.Fatal(err)
+	var recipe strings.Builder
+	recipe.WriteString("id: bounded\ntriggers: [bounded]\nrequired_evidence:\n")
+	for _, group := range groups {
+		fmt.Fprintf(&recipe, "  - id: %s\n    any_of: [%q]\n", group.ID, group.AnyOf[0])
 	}
-	set, err := skills.ParseContract(contract)
-	if err != nil {
-		t.Fatal(err)
-	}
+	set := loadAgenticSkillsForTest(t, map[string]string{"bounded": recipe.String()})
 	matched := set.Match("bounded")[0]
 	browser := &trackingBrowser{fakeBrowser: &fakeBrowser{files: files}}
 	state := &agentState{

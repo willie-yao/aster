@@ -78,8 +78,7 @@ type Service struct {
 	linkVerifyCache sync.Map
 
 	// traceStore collects private, sanitized per-analysis control flow.
-	traceStore    *TraceStore
-	traceMetadata TraceMetadata
+	traceStore *TraceStore
 }
 
 // NewService constructs a Service. systemPrompt is the full composed prompt and
@@ -135,11 +134,6 @@ func (s *Service) SetTraceStore(store *TraceStore) {
 	s.traceStore = store
 }
 
-// SetTraceMetadata sets backend-owned identity fields for every analysis trace.
-func (s *Service) SetTraceMetadata(meta TraceMetadata) {
-	s.traceMetadata = meta
-}
-
 // Analyze fills tc.AISummary and tc.AIAnalysis for a single failed test case
 // using the shared single-failure contract.
 func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, jobID, buildPrefix string, run *models.BuildResult, tc *models.TestCase) {
@@ -157,12 +151,9 @@ func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, jobID, b
 func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, buildPrefix string, run *models.BuildResult, tc *models.TestCase, consecutiveFailures int) error {
 	var trace *TraceSession
 	if s.traceStore != nil {
-		meta := s.traceMetadata
-		meta.JobID = jobID
-		meta.BuildID = run.BuildID
-		meta.TestName = tc.Name
-		meta.APIMode = s.client.APIMode()
-		trace = s.traceStore.Start(meta)
+		trace = s.traceStore.Start(TraceMetadata{
+			JobID: jobID, BuildID: run.BuildID, TestName: tc.Name, APIMode: s.client.APIMode(),
+		})
 		ctx = withAnalysisTrace(ctx, trace)
 	}
 	if tc.AISummary != nil && tc.AIAnalysis != nil && !s.shouldReanalyze(tc) && !staleTransientVerdict(tc, consecutiveFailures) {

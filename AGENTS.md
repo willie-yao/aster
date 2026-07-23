@@ -38,7 +38,6 @@ backend/                       Go 1.25
     fetcher/                   Main entrypoint; one binary per deploy
     server/                    Kubernetes-native API server (read parity + capabilities)
     worker/                    Continuous watch worker (in-cluster incremental fetch)
-    analyzer/                  Experimental dashboard analyzer container entrypoint
   internal/
     ai/                        AI orchestration (most active area)
       ai.go                    Chat client, JSON parsing, header handling
@@ -69,7 +68,7 @@ backend/                       Go 1.25
     auth/                      Admin auth seam (PAT allowlist; OAuth-swappable)
     actions/                   On-demand single-failure issue / fix-PR service
     fixruntime/                Selects local OpenCode or generation-only Orka fixes
-    orka/                      Orka container lifecycle and fix runtime helpers
+    orka/                      Orka fix runtime helpers
 
 frontend/                      React 19 + Vite 8 + MUI 9
   public/data/                 Fetcher writes JSON here; Vite serves it
@@ -78,7 +77,6 @@ frontend/                      React 19 + Vite 8 + MUI 9
     components/ManifestProvider.tsx   Loads manifest.json
 configs/example/               Docs-only minimal project.yaml + prompts/
 deploy/helm/                   Helm chart for the Kubernetes-native mode
-experimental/orka/             Container lifecycle experiment and Orka fix runtime docs
 Dockerfile                     Multi-stage image: fetcher + server + SPA
 docs/                          onboarding, deployment, configuration, AI,
                                feature, troubleshooting, and contributor guides
