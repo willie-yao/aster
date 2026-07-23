@@ -18,6 +18,7 @@ name: Reusable Deploy
 #         # if set.
 #         ai-model: ${{ vars.AI_MODEL }}
 #         ai-endpoint: ${{ vars.AI_ENDPOINT }}
+#         ai-context-window-tokens: ${{ vars.AI_CONTEXT_WINDOW_TOKENS }}
 #       secrets:
 #         AI_TOKEN: ${{ secrets.AI_TOKEN }}
 
@@ -61,6 +62,11 @@ on:
         default: ""
       ai-endpoint:
         description: "Optional. URL for the selected AI API, passed to the fetcher as AI_ENDPOINT. Use this with a repo variable (vars.AI_ENDPOINT) to keep private endpoint URLs out of the public project.yaml. The yaml ai.endpoint field wins if set."
+        required: false
+        type: string
+        default: ""
+      ai-context-window-tokens:
+        description: "Optional. Total provider context window passed to the fetcher as AI_CONTEXT_WINDOW_TOKENS. Set only with independent endpoint evidence; it overrides /v1/models metadata."
         required: false
         type: string
         default: ""
@@ -198,6 +204,7 @@ jobs:
           AI_API: ${{ inputs.ai-api }}
           AI_MODEL: ${{ inputs.ai-model }}
           AI_ENDPOINT: ${{ inputs.ai-endpoint }}
+          AI_CONTEXT_WINDOW_TOKENS: ${{ inputs.ai-context-window-tokens }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EMAIL_SMTP_PASSWORD: ${{ secrets.EMAIL_SMTP_PASSWORD }}
           ISSUE_TOKEN: ${{ secrets.ISSUE_TOKEN }}

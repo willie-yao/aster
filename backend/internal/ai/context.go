@@ -13,6 +13,7 @@ import (
 // provider tokenizer.
 const (
 	fallbackContextWindowTokens = 64 * 1024
+	maxContextWindowTokens      = 1_000_000_000
 
 	completionHeadroomTokens      = 2 * 1024
 	finalizationHeadroomTokens    = 1 * 1024
@@ -44,8 +45,8 @@ func ParseContextWindowTokens(raw string) (int, bool, error) {
 		return 0, false, nil
 	}
 	tokens, err := strconv.Atoi(raw)
-	if err != nil || tokens <= 0 {
-		return 0, false, fmt.Errorf("AI_CONTEXT_WINDOW_TOKENS must be a positive integer")
+	if err != nil || tokens <= 0 || tokens > maxContextWindowTokens {
+		return 0, false, fmt.Errorf("AI_CONTEXT_WINDOW_TOKENS must be an integer from 1 to %d", maxContextWindowTokens)
 	}
 	return tokens, true, nil
 }

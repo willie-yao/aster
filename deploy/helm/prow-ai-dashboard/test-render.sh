@@ -99,12 +99,36 @@ helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
 grep -Fq 'name: AI_CONTEXT_WINDOW_TOKENS' "$tmp/context-window.yaml"
 grep -Fq 'value: "128000"' "$tmp/context-window.yaml"
 
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set mode=cron \
+  --set ai.enabled=true \
+  --set ai.endpoint=https://ai.example.test/v1/chat/completions \
+  --set ai.model=test-model \
+  --set ai.token=test-token \
+  --set ai.contextWindowTokens=128000 \
+  --show-only templates/fetcher-cronjob.yaml > "$tmp/context-window-cron.yaml"
+grep -Fq 'name: AI_CONTEXT_WINDOW_TOKENS' "$tmp/context-window-cron.yaml"
+grep -Fq 'value: "128000"' "$tmp/context-window-cron.yaml"
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.actions.enabled=true \
+  --set server.actions.mode=proxy \
+  --set server.actions.proxy.botToken=test-token \
+  --set ai.enabled=true \
+  --set ai.endpoint=https://ai.example.test/v1/chat/completions \
+  --set ai.model=test-model \
+  --set ai.token=test-token \
+  --set ai.contextWindowTokens=128000 \
+  --show-only templates/server-deployment.yaml > "$tmp/context-window-server.yaml"
+grep -Fq 'name: AI_CONTEXT_WINDOW_TOKENS' "$tmp/context-window-server.yaml"
+grep -Fq 'value: "128000"' "$tmp/context-window-server.yaml"
+
 if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set-string ai.contextWindowTokens=many > "$tmp/invalid-context-window.yaml" 2>&1; then
   echo 'chart accepted an invalid AI context window' >&2
   exit 1
 fi
-grep -Fq 'ai.contextWindowTokens must be a non-negative integer' "$tmp/invalid-context-window.yaml"
+grep -Fq 'ai.contextWindowTokens must be an integer from 0 to 1000000000' "$tmp/invalid-context-window.yaml"
 
 if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set-string ai.api=legacy > "$tmp/invalid-ai-api.yaml" 2>&1; then

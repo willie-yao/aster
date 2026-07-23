@@ -112,7 +112,6 @@ helm install capz oci://ghcr.io/willie-yao/charts/prow-ai-dashboard \
   --set ai.enabled=true \
   --set ai.endpoint=http://vllm.inference.svc.cluster.local/v1/chat/completions \
   --set ai.model=<model-id> \
-  --set ai.contextWindowTokens=128000 \
   --set ai.token=<token>
 ```
 
@@ -135,13 +134,17 @@ helm install capz deploy/helm/prow-ai-dashboard \
   --set ai.enabled=true \
   --set ai.endpoint=http://vllm.inference.svc.cluster.local/v1/chat/completions \
   --set ai.model=<model-id> \
-  --set ai.contextWindowTokens=128000 \
   --set ai.token=<token>
 ```
 
 For production, provide the token via `ai.existingSecret` (see [Reusing
 existing config](#reusing-existing-config)) rather than `--set ai.token`, which
 lands in shell history and Helm release metadata.
+
+When the provider's total context window is independently known, add
+`--set ai.contextWindowTokens=<tokens>`. For the current Copilot GPT-5 mini
+deployment, use `--set ai.contextWindowTokens=128000`. Leave it unset for a
+generic endpoint so provider metadata or the bounded fallback remains active.
 
 To populate data immediately rather than waiting for the schedule, run the
 fetcher once:

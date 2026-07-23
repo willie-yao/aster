@@ -23,6 +23,7 @@ func TestParseContextWindowTokens(t *testing.T) {
 		{name: "zero", raw: "0", wantErr: true},
 		{name: "negative", raw: "-1", wantErr: true},
 		{name: "text", raw: "many", wantErr: true},
+		{name: "too large", raw: "1000000001", wantErr: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
