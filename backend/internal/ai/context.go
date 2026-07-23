@@ -1,6 +1,11 @@
 package ai
 
-import "context"
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"strings"
+)
 
 // Context limits are expressed in tokens. The request estimator deliberately
 // treats each serialized byte as one token, which is conservative for logs,
@@ -8,6 +13,7 @@ import "context"
 // provider tokenizer.
 const (
 	fallbackContextWindowTokens = 64 * 1024
+	maxContextWindowTokens      = 1_000_000_000
 
 	completionHeadroomTokens      = 2 * 1024
 	finalizationHeadroomTokens    = 1 * 1024
@@ -19,6 +25,8 @@ const (
 
 const contextReservedTokens = completionHeadroomTokens + finalizationHeadroomTokens + evidenceLedgerHeadroomTokens + providerFramingHeadroomTokens
 
+const minContextWindowTokens = contextReservedTokens + requestSerializationReserveTokens + 1
+
 // ContextBudgets are the internal budgets derived from a provider context
 // window. RequestTokenBudget is deliberately smaller than the advertised
 // window so retries retain room to finalize safely.
@@ -28,6 +36,21 @@ type ContextBudgets struct {
 	ContextByteBudget   int
 	ModelByteBudget     int
 	UsedFallback        bool
+}
+
+// ParseContextWindowTokens parses an optional operator-supplied total context
+// window. The override is provider-neutral and takes precedence over metadata
+// only when the operator has independent endpoint evidence.
+func ParseContextWindowTokens(raw string) (int, bool, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, false, nil
+	}
+	tokens, err := strconv.Atoi(raw)
+	if err != nil || tokens < minContextWindowTokens || tokens > maxContextWindowTokens {
+		return 0, false, fmt.Errorf("AI_CONTEXT_WINDOW_TOKENS must be an integer from %d to %d", minContextWindowTokens, maxContextWindowTokens)
+	}
+	return tokens, true, nil
 }
 
 // DeriveContextBudgets returns bounded request and tool budgets. When a

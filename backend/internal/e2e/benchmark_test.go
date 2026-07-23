@@ -994,11 +994,23 @@ func extractTarGz(r io.Reader, dest string) error {
 const benchGCSByteBudget = 1_000_000_000
 
 func benchBudgets(t *testing.T, client *ai.Client) ai.ContextBudgets {
-	tokens, detected := client.DetectContextWindowTokens(context.Background())
+	t.Helper()
+	overrideTokens, overridden, err := ai.ParseContextWindowTokens(os.Getenv("AI_CONTEXT_WINDOW_TOKENS"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokens := overrideTokens
+	detected := false
+	if !overridden {
+		tokens, detected = client.DetectContextWindowTokens(context.Background())
+	}
 	budgets := ai.DeriveContextBudgets(tokens)
-	if detected {
+	switch {
+	case overridden:
+		t.Logf("operator context window override: %d tokens; request_token_budget=%d reserved_tokens=%d", budgets.ContextWindowTokens, budgets.RequestTokenBudget, budgets.ContextWindowTokens-budgets.RequestTokenBudget)
+	case detected:
 		t.Logf("detected context window: %d tokens; request_token_budget=%d reserved_tokens=%d", budgets.ContextWindowTokens, budgets.RequestTokenBudget, budgets.ContextWindowTokens-budgets.RequestTokenBudget)
-	} else {
+	default:
 		t.Logf("context window unavailable; bounded fallback=%d tokens request_token_budget=%d", budgets.ContextWindowTokens, budgets.RequestTokenBudget)
 	}
 	return budgets

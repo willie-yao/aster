@@ -135,6 +135,10 @@ spec:
             - name: AI_MODEL
               value: {{ .Values.ai.model | quote }}
             {{- end }}
+            {{- if gt (int .Values.ai.contextWindowTokens) 0 }}
+            - name: AI_CONTEXT_WINDOW_TOKENS
+              value: {{ .Values.ai.contextWindowTokens | quote }}
+            {{- end }}
             {{- end }}
             {{- end }}
             {{- with .Values.server.extraEnv }}

@@ -141,6 +141,14 @@ Validate AI provider configuration.
 {{- if not (has .Values.ai.api (list "chat_completions" "responses")) -}}
 {{- fail "ai.api must be chat_completions or responses" -}}
 {{- end -}}
+{{- $contextWindow := printf "%v" .Values.ai.contextWindowTokens -}}
+{{- if not (regexMatch "^(0|[1-9][0-9]{0,9})$" $contextWindow) -}}
+{{- fail "ai.contextWindowTokens must be 0 or an integer from 9217 to 1000000000" -}}
+{{- end -}}
+{{- $contextWindowInt := int64 $contextWindow -}}
+{{- if or (gt $contextWindowInt 1000000000) (and (gt $contextWindowInt 0) (lt $contextWindowInt 9217)) -}}
+{{- fail "ai.contextWindowTokens must be 0 or an integer from 9217 to 1000000000" -}}
+{{- end -}}
 {{- end -}}
 
 {{/*

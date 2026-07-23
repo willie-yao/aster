@@ -9,6 +9,37 @@ import (
 	"time"
 )
 
+func TestParseContextWindowTokens(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		want    int
+		present bool
+		wantErr bool
+	}{
+		{name: "unset", raw: "", present: false},
+		{name: "valid", raw: "128000", want: 128000, present: true},
+		{name: "whitespace", raw: " 65536 ", want: 65536, present: true},
+		{name: "zero", raw: "0", wantErr: true},
+		{name: "too small", raw: "9216", wantErr: true},
+		{name: "minimum", raw: "9217", want: 9217, present: true},
+		{name: "negative", raw: "-1", wantErr: true},
+		{name: "text", raw: "many", wantErr: true},
+		{name: "too large", raw: "1000000001", wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, present, err := ParseContextWindowTokens(tc.raw)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("error=%v, wantErr=%v", err, tc.wantErr)
+			}
+			if got != tc.want || present != tc.present {
+				t.Fatalf("ParseContextWindowTokens(%q)=(%d,%v), want (%d,%v)", tc.raw, got, present, tc.want, tc.present)
+			}
+		})
+	}
+}
+
 func TestDeriveContextBudgets_ReservesHeadroom(t *testing.T) {
 	budgets := DeriveContextBudgets(128_000)
 	if budgets.ContextWindowTokens != 128_000 {

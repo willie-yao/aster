@@ -110,12 +110,18 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 		Model:        opts.Project.Provider.Model,
 		ExtraHeaders: opts.Project.Provider.Headers,
 	})
-	providerTokens, detected := client.DetectContextWindowTokens(ctx)
-	budgets := ai.DeriveContextBudgets(providerTokens)
-	if detected {
+	budgets, contextSource, err := resolveContextBudgets(ctx, client)
+	if err != nil {
+		return nil, err
+	}
+	switch contextSource {
+	case "operator":
+		log.Printf("🪟 operator context window override: %d tokens; request_token_budget=%d, reserved_tokens=%d, model_byte_budget=%d KB",
+			budgets.ContextWindowTokens, budgets.RequestTokenBudget, budgets.ContextWindowTokens-budgets.RequestTokenBudget, budgets.ModelByteBudget/1024)
+	case "detected":
 		log.Printf("🪟 detected context window: %d tokens; request_token_budget=%d, reserved_tokens=%d, model_byte_budget=%d KB",
 			budgets.ContextWindowTokens, budgets.RequestTokenBudget, budgets.ContextWindowTokens-budgets.RequestTokenBudget, budgets.ModelByteBudget/1024)
-	} else {
+	default:
 		log.Printf("🪟 context window unavailable; using bounded fallback: %d tokens, request_token_budget=%d",
 			budgets.ContextWindowTokens, budgets.RequestTokenBudget)
 	}
@@ -140,6 +146,22 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 		RequestTokenBudget:  budgets.RequestTokenBudget,
 		Project:             opts.Project,
 	}, nil
+}
+
+// resolveContextBudgets prefers an operator-provided total window over
+// endpoint metadata, then uses the bounded fallback when neither is available.
+func resolveContextBudgets(ctx context.Context, client *ai.Client) (ai.ContextBudgets, string, error) {
+	overrideTokens, overridden, err := ai.ParseContextWindowTokens(os.Getenv("AI_CONTEXT_WINDOW_TOKENS"))
+	if err != nil {
+		return ai.ContextBudgets{}, "", err
+	}
+	if overridden {
+		return ai.DeriveContextBudgets(overrideTokens), "operator", nil
+	}
+	if tokens, detected := client.DetectContextWindowTokens(ctx); detected {
+		return ai.DeriveContextBudgets(tokens), "detected", nil
+	}
+	return ai.DeriveContextBudgets(0), "fallback", nil
 }
 
 // ServiceOptions configure one dashboard analysis Service.
