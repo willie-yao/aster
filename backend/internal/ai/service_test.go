@@ -261,22 +261,24 @@ func TestService_ShouldReanalyze_FloorTable(t *testing.T) {
 		cachedMode   string
 		cachedCalls  int
 		cachedGCS    int
+		covered      bool
 		minToolCalls int
 		minGCSBytes  int
 		want         bool
 	}{
-		{"agentic_below_calls_floor", AgenticMode, 0, 0, 3, 0, true},
-		{"agentic_at_calls_floor", AgenticMode, 3, 0, 3, 0, false},
-		{"agentic_above_calls_floor", AgenticMode, 5, 0, 3, 0, false},
-		{"agentic_zero_floors_no_invalidation", AgenticMode, 0, 0, 0, 0, false},
-		{"stale_mode_always_reanalyzes", "old-mode", 5, 200_000, 0, 0, true},
-		{"empty_mode_always_reanalyzes", "", 5, 200_000, 0, 0, true},
-		{"agentic_below_gcs_floor_only", AgenticMode, 10, 1_000, 0, 50_000, true},
-		{"agentic_at_gcs_floor_only", AgenticMode, 10, 50_000, 0, 50_000, false},
-		{"agentic_above_gcs_floor_only", AgenticMode, 10, 200_000, 0, 50_000, false},
-		{"agentic_meets_calls_misses_gcs", AgenticMode, 5, 10_000, 5, 50_000, true},
-		{"agentic_misses_calls_meets_gcs", AgenticMode, 1, 200_000, 5, 50_000, true},
-		{"agentic_meets_both", AgenticMode, 5, 50_000, 5, 50_000, false},
+		{name: "agentic_below_calls_floor", cachedMode: AgenticMode, cachedCalls: 0, minToolCalls: 3, want: true},
+		{name: "agentic_at_calls_floor", cachedMode: AgenticMode, cachedCalls: 3, minToolCalls: 3},
+		{name: "agentic_above_calls_floor", cachedMode: AgenticMode, cachedCalls: 5, minToolCalls: 3},
+		{name: "agentic_zero_floors_no_invalidation", cachedMode: AgenticMode},
+		{name: "stale_mode_always_reanalyzes", cachedMode: "old-mode", cachedCalls: 5, cachedGCS: 200_000, want: true},
+		{name: "empty_mode_always_reanalyzes", cachedCalls: 5, cachedGCS: 200_000, want: true},
+		{name: "agentic_below_gcs_floor_only", cachedMode: AgenticMode, cachedCalls: 10, cachedGCS: 1_000, minGCSBytes: 50_000, want: true},
+		{name: "agentic_below_gcs_with_covered_plan", cachedMode: AgenticMode, cachedCalls: 10, cachedGCS: 1_000, covered: true, minGCSBytes: 50_000},
+		{name: "agentic_at_gcs_floor_only", cachedMode: AgenticMode, cachedCalls: 10, cachedGCS: 50_000, minGCSBytes: 50_000},
+		{name: "agentic_above_gcs_floor_only", cachedMode: AgenticMode, cachedCalls: 10, cachedGCS: 200_000, minGCSBytes: 50_000},
+		{name: "agentic_meets_calls_misses_gcs", cachedMode: AgenticMode, cachedCalls: 5, cachedGCS: 10_000, minToolCalls: 5, minGCSBytes: 50_000, want: true},
+		{name: "agentic_misses_calls_meets_gcs", cachedMode: AgenticMode, cachedCalls: 1, cachedGCS: 200_000, minToolCalls: 5, minGCSBytes: 50_000, want: true},
+		{name: "agentic_meets_both", cachedMode: AgenticMode, cachedCalls: 5, cachedGCS: 50_000, minToolCalls: 5, minGCSBytes: 50_000},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -284,11 +286,51 @@ func TestService_ShouldReanalyze_FloorTable(t *testing.T) {
 			testCase := &models.TestCase{
 				// Critique is always on, so a reusable entry must be
 				// critique-passing; this table isolates the floor behavior.
-				AIAnalysis: &models.AIAnalysis{Mode: tc.cachedMode, ToolCalls: tc.cachedCalls, GCSBytes: tc.cachedGCS, PromptHash: PromptFingerprint("sys"), CritiquePassed: true, CritiqueVersion: currentCritiqueVersion},
+				AIAnalysis: &models.AIAnalysis{Mode: tc.cachedMode, ToolCalls: tc.cachedCalls, GCSBytes: tc.cachedGCS, EvidencePlanCovered: tc.covered, PromptHash: PromptFingerprint("sys"), CritiquePassed: true, CritiqueVersion: currentCritiqueVersion},
 			}
 			if got := s.shouldReanalyze(testCase); got != tc.want {
 				t.Errorf("shouldReanalyze cached(mode=%q, calls=%d, gcs=%d) floors(calls=%d, gcs=%d) = %v, want %v",
 					tc.cachedMode, tc.cachedCalls, tc.cachedGCS, tc.minToolCalls, tc.minGCSBytes, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestService_EvidencePlanCoverageOnlyBypassesGCSFloor(t *testing.T) {
+	client := newAgenticTestClient(t, "http://example.invalid")
+	set := loadAgenticSkillsForTest(t, map[string]string{
+		"profiled": "id: profiled\ntriggers: [profiled]\nrequired_evidence:\n  - id: log\n    any_of: [failure\\.log$]\n",
+	})
+	s := &Service{
+		client: client, systemPrompt: "sys", skillSet: set,
+		agenticOpts: AgenticOptions{MinToolCalls: 2, MinGCSBytes: 50_000},
+	}
+	base := models.AIAnalysis{
+		Mode: AgenticMode, ToolCalls: 2, GCSBytes: 1_000, EvidencePlanCovered: true,
+		CritiquePassed: true, CritiqueVersion: currentCritiqueVersion,
+		SkillSetHash: set.Hash(), ModelHash: client.modelFingerprint(), PromptHash: PromptFingerprint("sys"),
+	}
+	cases := []struct {
+		name   string
+		mutate func(*models.AIAnalysis)
+		want   bool
+	}{
+		{name: "current marked entry"},
+		{name: "tool floor", mutate: func(analysis *models.AIAnalysis) { analysis.ToolCalls = 1 }, want: true},
+		{name: "critique pass", mutate: func(analysis *models.AIAnalysis) { analysis.CritiquePassed = false }, want: true},
+		{name: "critique version", mutate: func(analysis *models.AIAnalysis) { analysis.CritiqueVersion-- }, want: true},
+		{name: "skill hash", mutate: func(analysis *models.AIAnalysis) { analysis.SkillSetHash = "stale" }, want: true},
+		{name: "model hash", mutate: func(analysis *models.AIAnalysis) { analysis.ModelHash = "stale" }, want: true},
+		{name: "prompt hash", mutate: func(analysis *models.AIAnalysis) { analysis.PromptHash = "stale" }, want: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			analysis := base
+			if tc.mutate != nil {
+				tc.mutate(&analysis)
+			}
+			if got := s.shouldReanalyze(&models.TestCase{AIAnalysis: &analysis}); got != tc.want {
+				t.Fatalf("shouldReanalyze = %t, want %t", got, tc.want)
 			}
 		})
 	}

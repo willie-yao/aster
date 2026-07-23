@@ -76,6 +76,7 @@ export interface AIAnalysis {
   context_bytes?: number;
   context_truncations?: number;
   gcs_bytes?: number;
+  evidence_plan_covered?: boolean;
   elapsed_ms?: number;
   input_tokens?: number;
   output_tokens?: number;

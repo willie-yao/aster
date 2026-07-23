@@ -240,6 +240,54 @@ func (s *Set) Plan(text string, artifactPaths []string, maxCandidates int) []Pla
 	return planned
 }
 
+// CoversPlan reports whether every applicable group in the matched initial
+// plan had a valid candidate and was satisfied by a matching content read.
+// At least one applicable evidence group is required.
+func (s *Set) CoversPlan(text string, plan []PlannedSkill, reads map[string]bool) bool {
+	if s == nil || strings.TrimSpace(text) == "" || len(plan) == 0 || len(reads) == 0 {
+		return false
+	}
+	matched := s.Match(text)
+	if len(matched) == 0 {
+		return false
+	}
+	plannedSkills := make(map[string]PlannedSkill, len(plan))
+	for _, planned := range plan {
+		plannedSkills[planned.ID] = planned
+	}
+	applicableGroups := 0
+	for _, skill := range matched {
+		planned, ok := plannedSkills[skill.ID]
+		if !ok {
+			return false
+		}
+		plannedGroups := make(map[string]PlannedEvidenceGroup, len(planned.RequiredEvidence))
+		for _, group := range planned.RequiredEvidence {
+			plannedGroups[group.ID] = group
+		}
+		for _, group := range skill.RequiredEvidence {
+			if !group.Applies(text) {
+				continue
+			}
+			applicableGroups++
+			plannedGroup, ok := plannedGroups[group.ID]
+			if !ok || len(plannedGroup.CandidatePaths) == 0 {
+				return false
+			}
+			candidates := make(map[string]bool, len(plannedGroup.CandidatePaths))
+			for _, candidate := range plannedGroup.CandidatePaths {
+				if normalized := normalizeEvidencePath(candidate); normalized != "" {
+					candidates[normalized] = true
+				}
+			}
+			if !group.Satisfied(candidates) || !group.Satisfied(reads) {
+				return false
+			}
+		}
+	}
+	return applicableGroups > 0
+}
+
 // CandidatePaths returns the highest-signal artifact paths matching this group.
 func (g EvidenceGroup) CandidatePaths(signal string, artifactPaths []string, limit int) []string {
 	if len(g.anyOfREs) == 0 || len(artifactPaths) == 0 || limit <= 0 {

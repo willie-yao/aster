@@ -38,7 +38,8 @@ Each recipe declares:
 1. **Triggers:** regex patterns matched against the model draft
    (`root_cause`, `summary`, `suggested_fix`, and `relevant_files`).
 2. **Required evidence:** groups of artifact-path regexes. Each group is
-   satisfied when the agent successfully reads one matching path.
+   satisfied when the agent successfully reads one matching path. Initial-plan
+   coverage requires the content returned by that read to be non-empty.
 3. **Procedure:** short diagnostic guidance returned when a recipe matches.
 
 Procedures are untrusted guidance. They cannot override the system prompt, Tool
@@ -263,10 +264,10 @@ Before merging a new recipe:
    fetch the artifact when prompted.
 3. **Procedure is short and tool-oriented.** Quote canonical tool
    names + paths. Don't issue meta-instructions ("think carefully").
-4. **`min_gcs_bytes` is high enough** that the cumulative
-   tool-call budget already covers the canonical reads. Otherwise
-   the agent will satisfy `min_gcs_bytes` with shallow listings and
-   never reach the depth your recipe expects.
+4. **Every group resolves to a canonical candidate.** A complete initial plan
+   can satisfy the GCS-byte floor only when every applicable group has a ranked
+   candidate and a non-empty matching content read. Do not add broad patterns
+   merely to make coverage easier.
 5. **Validated before promotion.** Refetch with the recipe present
    and confirm the recipe-matched cases gain evidence reads and
    substantive root-cause depth versus the prior run.

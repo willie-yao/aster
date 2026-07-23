@@ -111,8 +111,9 @@ See [Investigation floors](#investigation-floors).
 Minimum bytes fetched from GCS before a final answer is accepted. Default `0`
 (no floor). Complements `min_tool_calls` because call count alone is gameable
 (a model can satisfy it with cheap `list_artifacts` calls or tiny reads).
-`200000` (200 KB) is a reasonable starting value for weaker models. See
-[Investigation floors](#investigation-floors).
+Complete coverage of a matched initial evidence plan also satisfies this floor,
+without relaxing any other gate. `200000` (200 KB) is a reasonable starting
+value for weaker models. See [Investigation floors](#investigation-floors).
 
 ### `critique`
 
@@ -346,6 +347,16 @@ candidate order. Groups without candidates remain visible as unresolved. A
 truncated or failed snapshot marks the plan incomplete and never prevents the
 model from using normal artifact tools.
 
+The completed plan also provides a more direct depth signal than raw byte
+volume. The engine records `evidence_plan_covered` only when the initial tree
+scan succeeded without truncation, at least one recipe matched the bounded
+failure signal, every applicable group had a ranked candidate, and every group
+was satisfied by a successful non-empty `read_artifact`, `tail_artifact`, or
+`grep_artifact` result whose path matches that group's evidence regex. A path
+may satisfy multiple groups only when it matches each group. Listing calls,
+failed reads, empty reads, unmatched failures, and unavailable skills never set
+the marker.
+
 The per-failure task prompt is bounded for the same reason: the failing test's
 junit **failure message** is clamped (head + tail, ~16 KB) before it is
 embedded, because some test families (e.g. AKS KubeRay) emit multi-hundred-KB
@@ -360,8 +371,10 @@ the model returns a final answer below a floor, the loop appends a nudge
 ("you have only made N tool calls / fetched N KB, investigate further before
 finalizing") and re-prompts. Below-floor finals are still published (so
 triage always shows SOMETHING) but are NOT written to the AI cache, so the
-next fetcher run retries the analysis fresh. The two floors are combined with
-AND: an analysis must meet BOTH to be cached and to bypass re-analysis.
+next fetcher run retries the analysis fresh. `min_tool_calls` always applies.
+The byte floor is satisfied either by reaching `min_gcs_bytes` or by complete
+initial evidence-plan coverage. Coverage does not bypass critique, semantic
+review, prompt/model hashes, skill hashes, or any other acceptance gate.
 
 Why two floors: tool-call count alone is gameable. A weaker model can satisfy
 a calls floor with cheap `list_artifacts` calls or `read_artifact` requests on
@@ -372,7 +385,9 @@ cert mismatch from 9 MB of logs). The byte floor is measured against bytes
 actually pulled from GCS by `read_artifact`, `tail_artifact`, and
 `grep_artifact`; `list_artifacts` contributes 0. Bytes are a proxy for depth,
 not a guarantee of quality (a 500 KB grep with zero useful matches still
-satisfies the floor), so raise gradually rather than over-tuning.
+satisfies the raw byte floor), so raise gradually rather than over-tuning.
+Evidence-plan coverage is narrower: a grep with no returned content does not
+cover a group even when it scanned many bytes.
 
 **Anti-thrash.** Progress is tracked per floor. A model that calls
 `list_artifacts` in a loop raises `tool_calls` but never `gcs_bytes`. The loop
@@ -386,12 +401,15 @@ invalidates cached entries below it on the next fetcher run:
 
 - The agentic AI cache (`data/ai_cache.json`) is re-validated on each read;
   pre-floor entries (no `tool_calls`/`gcs_bytes` field, default zero) are
-  treated as a miss for any non-zero floor.
+  treated as a miss for any non-zero floor. Entries below `min_gcs_bytes` are
+  reusable only when they carry `evidence_plan_covered: true` under the current
+  critique and skill contract. Old entries without the marker keep the byte
+  floor behavior.
 - The build-cache test data (`data/jobs/*.json`) carries the prior run's
   `AIAnalysis` on each failure. When the cached analysis falls below the
-  current floor, the build-cache entry is also re-analyzed rather than served
-  as-is. Without this layer, pre-floor per-test analyses would bypass the
-  floor forever.
+  current floor and lacks the marker, the build-cache entry is also re-analyzed
+  rather than served as-is. Without this layer, pre-floor per-test analyses
+  would bypass the floor forever.
 
 ### The critique gate
 
@@ -631,9 +649,11 @@ pipeline (or one below the current quality floors) is detected as stale on the
 next fetcher run and re-analyzed.
 
 Entries also carry fingerprints for the composed prompt, model and endpoint,
-and loaded skill set. Changing any of them triggers incremental re-analysis on
-the next fetch. The last usable result stays published until its replacement
-succeeds. A manual cache clear is only for an immediate full rebaseline.
+and loaded skill set, plus the factual `evidence_plan_covered` marker. Changing
+any fingerprint triggers incremental re-analysis on the next fetch. The marker
+only substitutes for the GCS-byte floor. The last usable result stays published
+until its replacement succeeds. A manual cache clear is only for an immediate
+full rebaseline.
 
 Cached agentic entries are scoped to a specific build because answers cite
 build-specific paths and line numbers; the same test failing in two different

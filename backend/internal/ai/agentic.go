@@ -57,8 +57,8 @@ type AgenticOptions struct {
 	// MinGCSBytes is the minimum cumulative GCS bytes fetched via tool
 	// calls before a tools-free final answer is accepted. Complements
 	// MinToolCalls because tool-call count alone is gameable: weak models
-	// can satisfy a calls floor with cheap list calls or tiny reads. The
-	// floor invalidates calls-only finalization. Defaults to 0.
+	// can satisfy a calls floor with cheap list calls or tiny reads. Complete
+	// initial evidence-plan coverage also satisfies this floor. Defaults to 0.
 	MinGCSBytes int
 
 	// CritiqueMaxRetries caps the extra re-prompt rounds the loop spends
@@ -205,10 +205,11 @@ Your entire response must start with { and end with }.`
 // MinToolCalls doesn't see a misleading "0 KB" complaint.
 func formatFloorsNudge(state *agentState, opts AgenticOptions) string {
 	var unmet []string
-	if state.calls < opts.MinToolCalls {
+	floors := evalFloors(state, opts)
+	if floors.callsUnmet {
 		unmet = append(unmet, fmt.Sprintf("only %d tool call(s) but need at least %d", state.calls, opts.MinToolCalls))
 	}
-	if state.gcsBytes < opts.MinGCSBytes {
+	if floors.gcsUnmet {
 		unmet = append(unmet, fmt.Sprintf("only %d KB of GCS evidence but need at least %d KB", state.gcsBytes/1024, opts.MinGCSBytes/1024))
 	}
 	return fmt.Sprintf(`You attempted to finalize after %s, which this project requires before a final answer is accepted. Before responding:
@@ -228,10 +229,11 @@ If after this investigation the evidence is genuinely inconclusive, say so expli
 // project's current floors.
 type agenticCacheData struct {
 	analysisResponse
-	ToolCalls       int  `json:"tool_calls,omitempty"`
-	ModelBytes      int  `json:"model_bytes,omitempty"`
-	GCSBytes        int  `json:"gcs_bytes,omitempty"`
-	BudgetExhausted bool `json:"budget_exhausted,omitempty"`
+	ToolCalls           int  `json:"tool_calls,omitempty"`
+	ModelBytes          int  `json:"model_bytes,omitempty"`
+	GCSBytes            int  `json:"gcs_bytes,omitempty"`
+	EvidencePlanCovered bool `json:"evidence_plan_covered,omitempty"`
+	BudgetExhausted     bool `json:"budget_exhausted,omitempty"`
 
 	// CritiquePassed marks entries that cleared the critique gate.
 	// Defaults to false on pre-critique entries and on entries written
@@ -276,12 +278,16 @@ type floorStatus struct {
 
 func (fs floorStatus) anyUnmet() bool { return fs.callsUnmet || fs.gcsUnmet }
 
+func gcsFloorUnmet(gcsBytes, minGCSBytes int, evidencePlanCovered bool) bool {
+	return gcsBytes < minGCSBytes && !evidencePlanCovered
+}
+
 // evalFloors returns which per-project floors the current agent state
 // fails to meet. A floor configured as 0 is never reported as unmet.
 func evalFloors(state *agentState, opts AgenticOptions) floorStatus {
 	return floorStatus{
 		callsUnmet: state.calls < opts.MinToolCalls,
-		gcsUnmet:   state.gcsBytes < opts.MinGCSBytes,
+		gcsUnmet:   gcsFloorUnmet(state.gcsBytes, opts.MinGCSBytes, state.evidencePlanCovered()),
 	}
 }
 
@@ -313,6 +319,11 @@ type agentState struct {
 	readArtifactsFull map[string]bool
 	readArtifactsBase map[string]bool
 
+	// evidenceArtifactsFull tracks successful non-empty content reads for
+	// evaluating coverage of the initial ranked evidence plan. Listing calls,
+	// failed reads, and empty reads do not enter this set.
+	evidenceArtifactsFull map[string]bool
+
 	// skillSet is the merged diagnostic recipe set. nil disables recipes
 	// or no recipes are configured. Held on state
 	// so in-loop and post-loop critique paths both consult the same
@@ -323,7 +334,8 @@ type agentState struct {
 	// initialEvidencePlan is matched against the bounded failure signal before
 	// iteration one. Critique repair uses its ranked paths before falling back to
 	// a tree walk when the final diagnosis needs a different or unresolved group.
-	initialEvidencePlan []skills.PlannedSkill
+	initialEvidencePlan  []skills.PlannedSkill
+	initialFailureSignal string
 
 	// consecutiveFailures is how many consecutive builds this test has failed.
 	// Passed to the critique gate to contradict an is_transient=true verdict on
@@ -382,6 +394,16 @@ func (s *agentState) artifactTreeSet() map[string]bool {
 	return set
 }
 
+// evidencePlanCovered reports whether the complete initial ranked plan was
+// satisfied by non-empty content reads. It is deliberately narrower than the
+// critique gate, which may match additional recipes against the final draft.
+func (s *agentState) evidencePlanCovered() bool {
+	if s == nil || s.skillSet == nil || s.initialArtifactTree.failed || s.initialArtifactTree.truncated {
+		return false
+	}
+	return s.skillSet.CoversPlan(s.initialFailureSignal, s.initialEvidencePlan, s.evidenceArtifactsFull)
+}
+
 func (s *agentState) modelRemaining() int { return s.opts.ModelByteBudget - s.modelBytes }
 func (s *agentState) gcsRemaining() int   { return s.opts.GCSByteBudget - s.gcsBytes }
 
@@ -403,6 +425,7 @@ func stampAgenticTelemetry(analysis *models.AIAnalysis, state *agentState, mode 
 		analysis.ToolCalls = state.calls
 		analysis.ContextBytes = state.modelBytes
 		analysis.GCSBytes = state.gcsBytes
+		analysis.EvidencePlanCovered = state.evidencePlanCovered()
 		analysis.BudgetExhausted = state.budgetExhausted
 		analysis.CritiquePassed = state.critiquePassed
 		if state.critiquePassed {
@@ -624,7 +647,7 @@ func (c *Client) cachedAgenticAnalysis(in AgenticInputs, cacheKey, sysPrompt str
 	if cached.IsTransient && in.ConsecutiveFailures >= transientPersistThreshold {
 		critiqueOK = false
 	}
-	if cached.ToolCalls < in.Opts.MinToolCalls || cached.GCSBytes < in.Opts.MinGCSBytes || !critiqueOK || cached.PromptHash != PromptFingerprint(sysPrompt) {
+	if cached.ToolCalls < in.Opts.MinToolCalls || gcsFloorUnmet(cached.GCSBytes, in.Opts.MinGCSBytes, cached.EvidencePlanCovered) || !critiqueOK || cached.PromptHash != PromptFingerprint(sysPrompt) {
 		return nil, nil, false
 	}
 	summary, analysis := c.buildOutputs(cached.analysisResponse)
@@ -632,6 +655,7 @@ func (c *Client) cachedAgenticAnalysis(in AgenticInputs, cacheKey, sysPrompt str
 	analysis.ToolCalls = cached.ToolCalls
 	analysis.ContextBytes = cached.ModelBytes
 	analysis.GCSBytes = cached.GCSBytes
+	analysis.EvidencePlanCovered = cached.EvidencePlanCovered
 	analysis.BudgetExhausted = cached.BudgetExhausted
 	analysis.CritiquePassed = cached.CritiquePassed
 	analysis.CritiqueVersion = cached.CritiqueVersion
@@ -674,12 +698,16 @@ func (c *Client) doAnalyzeAgentic(
 	// Skills are consulted inside the always-on critique gate. Recipe presence
 	// is the opt-in; an empty set is a no-op.
 	state.skillSet = in.Skills
+	state.initialFailureSignal = in.FailureSignal
 	state.consecutiveFailures = in.ConsecutiveFailures
 	// Pre-init the read-tracking maps so findUnreadArtifactCitations runs the
 	// check even when the model has made zero successful reads. Otherwise the
 	// nil-disables contract would skip the worst-case hallucination scenario.
 	state.readArtifactsFull = map[string]bool{}
 	state.readArtifactsBase = map[string]bool{}
+	if in.Skills != nil {
+		state.evidenceArtifactsFull = map[string]bool{}
+	}
 
 	fullSysPrompt := sysPrompt + agToolDocs
 	state.initialArtifactTree = listInitialArtifactTree(ctx, in.Browser)
@@ -1131,6 +1159,7 @@ func (c *Client) buildEvidenceInjection(ctx context.Context, state *agentState, 
 		state.gcsBytes += len(content)
 		state.modelBytes += len(content)
 		state.recordSuccessfulRead(realPath)
+		state.recordEvidenceRead(realPath)
 		sections = append(sections, fmt.Sprintf("### %s\n%s", label, content))
 		fetched++
 	}
@@ -1323,16 +1352,17 @@ func (c *Client) cacheAcceptedAnalysis(cacheKey string, parsed analysisResponse,
 		skillHash = state.skillSet.Hash()
 	}
 	_ = c.cache.Set(cacheKey, agenticCacheData{
-		analysisResponse: parsed,
-		ToolCalls:        state.calls,
-		ModelBytes:       state.modelBytes,
-		GCSBytes:         state.gcsBytes,
-		BudgetExhausted:  state.budgetExhausted,
-		CritiquePassed:   critiquePassed,
-		CritiqueVersion:  version,
-		SkillSetHash:     skillHash,
-		ModelHash:        c.modelFingerprint(),
-		PromptHash:       state.promptHash,
+		analysisResponse:    parsed,
+		ToolCalls:           state.calls,
+		ModelBytes:          state.modelBytes,
+		GCSBytes:            state.gcsBytes,
+		EvidencePlanCovered: state.evidencePlanCovered(),
+		BudgetExhausted:     state.budgetExhausted,
+		CritiquePassed:      critiquePassed,
+		CritiqueVersion:     version,
+		SkillSetHash:        skillHash,
+		ModelHash:           c.modelFingerprint(),
+		PromptHash:          state.promptHash,
 	})
 }
 
@@ -1445,6 +1475,9 @@ func dispatchAgenticTool(ctx context.Context, s *agentState, tc modelToolCall) s
 		if !toolFailed {
 			if p := extractToolPathArg(tc.Function.Arguments); p != "" {
 				s.recordSuccessfulRead(p)
+				if toolResultHasContent(tc.Function.Name, result.Payload) {
+					s.recordEvidenceRead(p)
+				}
 			}
 		}
 	}
@@ -1489,6 +1522,78 @@ func extractToolPathArg(raw string) string {
 	return strings.TrimSpace(args.Path)
 }
 
+// toolResultHasContent reports whether a successful filesystem read returned
+// non-empty content. grep_artifact counts only when at least one non-empty
+// match context was returned, not merely when it scanned bytes.
+func toolResultHasContent(name string, payload map[string]interface{}) bool {
+	switch name {
+	case "read_artifact", "tail_artifact":
+		return nonEmptyContent(payload["content"])
+	case "grep_artifact":
+		switch matches := payload["matches"].(type) {
+		case []map[string]interface{}:
+			for _, match := range matches {
+				if nonEmptyGrepContext(match["context"]) {
+					return true
+				}
+			}
+		case []interface{}:
+			for _, raw := range matches {
+				match, _ := raw.(map[string]interface{})
+				if nonEmptyGrepContext(match["context"]) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+var grepContextLineRE = regexp.MustCompile(`^[> ]\s*\d+:\s?(.*)$`)
+
+func nonEmptyGrepContext(value interface{}) bool {
+	switch context := value.(type) {
+	case string:
+		if match := grepContextLineRE.FindStringSubmatch(context); len(match) == 2 {
+			return strings.TrimSpace(match[1]) != ""
+		}
+		return strings.TrimSpace(context) != ""
+	case []string:
+		for _, line := range context {
+			if nonEmptyGrepContext(line) {
+				return true
+			}
+		}
+	case []interface{}:
+		for _, item := range context {
+			if nonEmptyGrepContext(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func nonEmptyContent(value interface{}) bool {
+	switch content := value.(type) {
+	case string:
+		return strings.TrimSpace(content) != ""
+	case []string:
+		for _, line := range content {
+			if strings.TrimSpace(line) != "" {
+				return true
+			}
+		}
+	case []interface{}:
+		for _, item := range content {
+			if nonEmptyContent(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // recordSuccessfulRead normalizes a successfully-read path and adds it to
 // both the full-path and basename indices. Silent no-op when critique is
 // disabled because the maps are nil. Uses the same NormalizeArtifactCitation as
@@ -1503,6 +1608,17 @@ func (s *agentState) recordSuccessfulRead(rawPath string) {
 	}
 	s.readArtifactsFull[norm] = true
 	s.readArtifactsBase[path.Base(norm)] = true
+}
+
+// recordEvidenceRead adds a successful non-empty content read to the set used
+// for initial evidence-plan coverage.
+func (s *agentState) recordEvidenceRead(rawPath string) {
+	if s.evidenceArtifactsFull == nil {
+		return
+	}
+	if norm := NormalizeArtifactCitation(rawPath); norm != "" {
+		s.evidenceArtifactsFull[norm] = true
+	}
 }
 
 func toolEnvelopeJSON(s *agentState, payload map[string]interface{}) string {

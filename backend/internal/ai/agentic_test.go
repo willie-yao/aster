@@ -687,6 +687,262 @@ func TestAgentic_MinGCSBytes_NudgeForcesMoreReading(t *testing.T) {
 	}
 }
 
+func TestAgentic_EvidencePlanCoverageSatisfiesGCSFloorAndSurvivesReload(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	path := "artifacts/issuer.yaml"
+	srv.push(200, chatRespToolCall("call_1", "tail_artifact", map[string]interface{}{"path": path, "lines": 200}))
+	srv.push(200, chatRespFinal(`{"summary":"x509","is_transient":false,"root_cause":"x509 issuer mismatch shown in artifacts/issuer.yaml","severity":"High","suggested_fix":"Update the issuer with the correct CA and redeploy.","relevant_files":["artifacts/issuer.yaml"]}`))
+
+	set := loadAgenticSkillsForTest(t, map[string]string{
+		"x509": `
+id: x509
+triggers: ["x509"]
+required_evidence:
+  - id: issuer
+    any_of: ["issuer\\.yaml$"]
+`,
+	})
+	browser := &trackingBrowser{fakeBrowser: &fakeBrowser{files: map[string][]byte{path: []byte("kind: Issuer\n")}}}
+	opts := AgenticOptions{
+		MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
+		MinToolCalls: 1, MinGCSBytes: 50_000, CritiqueMaxRetries: 2,
+	}
+	cacheDir := t.TempDir()
+	newClient := func() *Client {
+		return NewClientWithOptions(Options{Token: "test-token", CacheDir: cacheDir, Endpoint: srv.URL, Model: "claude-test"})
+	}
+	input := func() AgenticInputs {
+		in := newTestAgenticInputs(t, browser, opts)
+		in.Skills = set
+		in.FailureSignal = "x509 failure"
+		return in
+	}
+
+	client := newClient()
+	const key = "agentic:test:evidence-coverage"
+	_, analysis, err := client.doAnalyzeAgentic(context.Background(), input(), key, "sys", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !analysis.EvidencePlanCovered {
+		t.Fatalf("EvidencePlanCovered = false: %+v", analysis)
+	}
+	if analysis.GCSBytes >= opts.MinGCSBytes {
+		t.Fatalf("GCSBytes = %d, want below floor %d", analysis.GCSBytes, opts.MinGCSBytes)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 2 {
+		t.Fatalf("model calls = %d, want tool plus final only", got)
+	}
+	if err := client.Cache().Save(); err != nil {
+		t.Fatalf("save cache: %v", err)
+	}
+
+	reloaded := newClient()
+	_, cached, err := reloaded.doAnalyzeAgentic(context.Background(), input(), key, "sys", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cached.CacheHit || !cached.EvidencePlanCovered {
+		t.Fatalf("reloaded analysis = %+v, want marked cache hit", cached)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 2 {
+		t.Fatalf("model calls after reload = %d, want 2", got)
+	}
+}
+
+func TestAgentic_OldCacheWithoutEvidenceMarkerRetainsGCSFloor(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespToolCall("call_1", "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
+	srv.push(200, chatRespFinal(`{"summary":"fresh","is_transient":false,"root_cause":"build-log.txt contains the initiating failure","severity":"High","suggested_fix":"Correct the failing configuration and rerun the job.","relevant_files":["build-log.txt"]}`))
+
+	cacheDir := t.TempDir()
+	newClient := func() *Client {
+		return NewClientWithOptions(Options{Token: "test-token", CacheDir: cacheDir, Endpoint: srv.URL, Model: "claude-test"})
+	}
+	client := newClient()
+	const key = "agentic:test:old-evidence-marker"
+	if err := client.Cache().Set(key, agenticCacheData{
+		analysisResponse: analysisResponse{
+			Summary: "old", RootCause: "old", Severity: "Low", SuggestedFix: "Retry.",
+		},
+		ToolCalls: 1, GCSBytes: 1,
+		CritiquePassed: true, CritiqueVersion: currentCritiqueVersion,
+		ModelHash: client.modelFingerprint(), PromptHash: PromptFingerprint("sys"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Cache().Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded := newClient()
+	browser := &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("initiating failure\n")}}
+	opts := AgenticOptions{
+		MaxIters: 4, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
+		MinGCSBytes: 10,
+	}
+	_, analysis, err := reloaded.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), key, "sys", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if analysis.CacheHit {
+		t.Fatal("old unmarked cache entry unexpectedly bypassed byte floor")
+	}
+	if analysis.EvidencePlanCovered {
+		t.Fatal("unprofiled analysis unexpectedly marked evidence coverage")
+	}
+	if analysis.GCSBytes < opts.MinGCSBytes {
+		t.Fatalf("GCSBytes = %d, want at least %d", analysis.GCSBytes, opts.MinGCSBytes)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 2 {
+		t.Fatalf("model calls = %d, want reanalysis", got)
+	}
+}
+
+func TestAgentic_EvidencePlanCoverageDoesNotBypassMinToolCalls(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	path := "artifacts/issuer.yaml"
+	final := `{"summary":"x509","is_transient":false,"root_cause":"x509 issuer mismatch shown in artifacts/issuer.yaml","severity":"High","suggested_fix":"Update the issuer with the correct CA and redeploy.","relevant_files":["artifacts/issuer.yaml"]}`
+	srv.push(200, chatRespToolCall("call_1", "tail_artifact", map[string]interface{}{"path": path, "lines": 200}))
+	srv.push(200, chatRespFinal(final))
+	srv.push(200, chatRespToolCall("call_2", "list_artifacts", map[string]interface{}{"path": ""}))
+	srv.push(200, chatRespFinal(final))
+
+	set := loadAgenticSkillsForTest(t, map[string]string{
+		"x509": `
+id: x509
+triggers: ["x509"]
+required_evidence:
+  - id: issuer
+    any_of: ["issuer\\.yaml$"]
+`,
+	})
+	browser := &trackingBrowser{fakeBrowser: &fakeBrowser{files: map[string][]byte{path: []byte("kind: Issuer\n")}}}
+	in := newTestAgenticInputs(t, browser, AgenticOptions{
+		MaxIters: 6, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
+		MinToolCalls: 2, MinGCSBytes: 50_000, CritiqueMaxRetries: 2,
+	})
+	in.Skills = set
+	in.FailureSignal = "x509 failure"
+	_, analysis, err := newAgenticTestClient(t, srv.URL).doAnalyzeAgentic(context.Background(), in, "agentic:test:evidence-coverage-calls", "sys", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !analysis.EvidencePlanCovered || analysis.ToolCalls != 2 {
+		t.Fatalf("analysis = %+v, want covered plan and two calls", analysis)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 4 {
+		t.Fatalf("model calls = %d, want read, premature final, list, final", got)
+	}
+	srv.mu.Lock()
+	nudgeRequest := append([]byte(nil), srv.requests[2]...)
+	srv.mu.Unlock()
+	if !strings.Contains(string(nudgeRequest), "only 1 tool call(s)") {
+		t.Fatalf("nudge did not preserve tool-call floor: %s", nudgeRequest)
+	}
+	if strings.Contains(string(nudgeRequest), "GCS evidence") {
+		t.Fatalf("covered byte floor was included in nudge: %s", nudgeRequest)
+	}
+}
+
+func TestEvidencePlanCoverageRequiresCompleteInitialScan(t *testing.T) {
+	set := loadAgenticSkillsForTest(t, map[string]string{
+		"profiled": `
+id: profiled
+triggers: ["profiled"]
+required_evidence:
+  - id: log
+    any_of: ["failure\\.log$"]
+`,
+	})
+	signal := "profiled failure"
+	paths := []string{"logs/failure.log"}
+	plan := set.Plan(signal, paths, evidenceplan.CandidatePathLimit)
+	base := agentState{
+		skillSet: set, initialFailureSignal: signal, initialEvidencePlan: plan,
+		initialArtifactTree:   artifactTreeSnapshot{paths: paths},
+		evidenceArtifactsFull: map[string]bool{"logs/failure.log": true},
+	}
+	if !base.evidencePlanCovered() {
+		t.Fatal("complete initial scan and read should cover plan")
+	}
+	cases := []struct {
+		name   string
+		mutate func(*agentState)
+	}{
+		{name: "skills unavailable", mutate: func(state *agentState) { state.skillSet = nil }},
+		{name: "no matched recipe", mutate: func(state *agentState) {
+			state.initialFailureSignal = "unrelated failure"
+			state.initialEvidencePlan = set.Plan(state.initialFailureSignal, paths, evidenceplan.CandidatePathLimit)
+		}},
+		{name: "empty plan", mutate: func(state *agentState) { state.initialEvidencePlan = nil }},
+		{name: "scan failed", mutate: func(state *agentState) { state.initialArtifactTree.failed = true }},
+		{name: "scan truncated", mutate: func(state *agentState) { state.initialArtifactTree.truncated = true }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			state := base
+			tc.mutate(&state)
+			if state.evidencePlanCovered() {
+				t.Fatal("incomplete plan state unexpectedly covered")
+			}
+			if !evalFloors(&state, AgenticOptions{MinGCSBytes: 1}).gcsUnmet {
+				t.Fatal("incomplete plan state unexpectedly bypassed GCS floor")
+			}
+		})
+	}
+}
+
+func TestDispatchAgenticToolEvidenceReadsRequireNonEmptyContent(t *testing.T) {
+	registry, enabled := newTestRegistry(t)
+	browser := &fakeBrowser{files: map[string][]byte{
+		"logs/content.log":    []byte("failure\n"),
+		"logs/empty.log":      {},
+		"logs/whitespace.log": []byte(" \n\t"),
+		"logs/grep.log":       []byte("healthy\n"),
+		"logs/blank.log":      []byte("\n"),
+	}}
+	cases := []struct {
+		name string
+		tool string
+		args map[string]interface{}
+		want bool
+	}{
+		{name: "non-empty read", tool: "read_artifact", args: map[string]interface{}{"path": "logs/content.log"}, want: true},
+		{name: "empty read", tool: "read_artifact", args: map[string]interface{}{"path": "logs/empty.log"}},
+		{name: "whitespace read", tool: "tail_artifact", args: map[string]interface{}{"path": "logs/whitespace.log"}},
+		{name: "failed read", tool: "read_artifact", args: map[string]interface{}{"path": "logs/missing.log"}},
+		{name: "grep with matches", tool: "grep_artifact", args: map[string]interface{}{"path": "logs/grep.log", "pattern": "healthy"}, want: true},
+		{name: "grep without matches", tool: "grep_artifact", args: map[string]interface{}{"path": "logs/grep.log", "pattern": "failure"}},
+		{name: "grep blank match", tool: "grep_artifact", args: map[string]interface{}{"path": "logs/blank.log", "pattern": "^$", "context_lines": 0}},
+		{name: "listing only", tool: "list_artifacts", args: map[string]interface{}{"path": ""}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			arguments, err := json.Marshal(tc.args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state := &agentState{
+				browser: browser, registry: registry, enabledTools: enabled,
+				opts:                  AgenticOptions{ModelByteBudget: 100_000, GCSByteBudget: 100_000},
+				evidenceArtifactsFull: map[string]bool{},
+			}
+			dispatchAgenticTool(context.Background(), state, modelToolCall{
+				ID: "call", Type: "function", Function: modelFunction{Name: tc.tool, Arguments: string(arguments)},
+			})
+			path, _ := tc.args["path"].(string)
+			got := state.evidenceArtifactsFull[NormalizeArtifactCitation(path)]
+			if got != tc.want {
+				t.Fatalf("evidence read recorded = %t, want %t; reads=%v", got, tc.want, state.evidenceArtifactsFull)
+			}
+		})
+	}
+}
+
 // TestAgToolDocs_AntiPuntAnchors pins the anti-punt language in agToolDocs
 // that drives weaker models to investigate via tools rather than emit
 // investigation TODOs in suggested_fix.

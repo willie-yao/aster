@@ -575,3 +575,44 @@ func TestPlanCandidateOrderIsDeterministic(t *testing.T) {
 		t.Fatalf("candidate order = %v, want %v", first, want)
 	}
 }
+
+func TestCoversPlanRequiresCompleteMatchingContentReads(t *testing.T) {
+	set := mustSkillSetJSON(t, `{
+		"skills":[{
+			"id":"profiled",
+			"triggers":["profiled"],
+			"required_evidence":[
+				{"id":"first","any_of":["logs/(?:first|shared)\\.log$"]},
+				{"id":"second","any_of":["logs/(?:second|shared)\\.log$"]}
+			]
+		}]
+	}`)
+	signal := "profiled failure"
+	completePlan := set.Plan(signal, []string{"logs/first.log", "logs/second.log"}, 3)
+	sharedPlan := set.Plan(signal, []string{"logs/shared.log"}, 3)
+	missingCandidatePlan := set.Plan(signal, []string{"logs/first.log"}, 3)
+
+	cases := []struct {
+		name    string
+		text    string
+		plan    []PlannedSkill
+		reads   map[string]bool
+		covered bool
+	}{
+		{name: "complete", text: signal, plan: completePlan, reads: map[string]bool{"logs/first.log": true, "logs/second.log": true}, covered: true},
+		{name: "shared path matches both groups", text: signal, plan: sharedPlan, reads: map[string]bool{"logs/shared.log": true}, covered: true},
+		{name: "missing group", text: signal, plan: completePlan, reads: map[string]bool{"logs/first.log": true}},
+		{name: "read path must match group", text: signal, plan: completePlan, reads: map[string]bool{"logs/first.log": true, "logs/unrelated.log": true}},
+		{name: "group without candidate", text: signal, plan: missingCandidatePlan, reads: map[string]bool{"logs/first.log": true, "logs/second.log": true}},
+		{name: "no matched recipe", text: "unrelated failure", plan: completePlan, reads: map[string]bool{"logs/first.log": true, "logs/second.log": true}},
+		{name: "empty plan", text: signal, reads: map[string]bool{"logs/first.log": true, "logs/second.log": true}},
+		{name: "empty reads", text: signal, plan: completePlan},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := set.CoversPlan(tc.text, tc.plan, tc.reads); got != tc.covered {
+				t.Fatalf("CoversPlan = %t, want %t", got, tc.covered)
+			}
+		})
+	}
+}

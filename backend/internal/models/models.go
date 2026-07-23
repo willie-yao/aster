@@ -121,6 +121,9 @@ type AIAnalysis struct {
 	// GCSBytes is the cumulative bytes fetched from GCS via agent tool
 	// calls.
 	GCSBytes int `json:"gcs_bytes,omitempty"`
+	// EvidencePlanCovered reports whether every applicable group in a complete
+	// initial evidence plan was satisfied by a non-empty content read.
+	EvidencePlanCovered bool `json:"evidence_plan_covered,omitempty"`
 	// ElapsedMs is the wall-clock duration of the analysis in milliseconds.
 	ElapsedMs int `json:"elapsed_ms,omitempty"`
 	// InputTokens and OutputTokens are provider-reported usage totals when the

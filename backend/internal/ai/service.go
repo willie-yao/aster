@@ -289,14 +289,13 @@ func (s *Service) shouldReanalyze(tc *models.TestCase) bool {
 }
 
 // belowCurrentAgenticFloor returns true when the cached analysis fails any
-// current quality gate: tool-call or GCS-byte floor, critique-not-passed when
-// critique is on, critique version older than the engine's current version, or
-// skill-set hash mismatch.
+// current quality gate: tool-call floor, GCS-byte floor without complete
+// evidence-plan coverage, critique failure or stale version, or hash mismatch.
 func (s *Service) belowCurrentAgenticFloor(tc *models.TestCase) bool {
 	if tc.AIAnalysis.ToolCalls < s.agenticOpts.MinToolCalls {
 		return true
 	}
-	if tc.AIAnalysis.GCSBytes < s.agenticOpts.MinGCSBytes {
+	if gcsFloorUnmet(tc.AIAnalysis.GCSBytes, s.agenticOpts.MinGCSBytes, tc.AIAnalysis.EvidencePlanCovered) {
 		return true
 	}
 	if !tc.AIAnalysis.CritiquePassed {
