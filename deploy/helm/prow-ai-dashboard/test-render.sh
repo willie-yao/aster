@@ -128,7 +128,14 @@ if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   echo 'chart accepted an invalid AI context window' >&2
   exit 1
 fi
-grep -Fq 'ai.contextWindowTokens must be an integer from 0 to 1000000000' "$tmp/invalid-context-window.yaml"
+grep -Fq 'ai.contextWindowTokens must be 0 or an integer from 9217 to 1000000000' "$tmp/invalid-context-window.yaml"
+
+if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set ai.contextWindowTokens=9216 > "$tmp/too-small-context-window.yaml" 2>&1; then
+  echo 'chart accepted an unusable AI context window' >&2
+  exit 1
+fi
+grep -Fq 'ai.contextWindowTokens must be 0 or an integer from 9217 to 1000000000' "$tmp/too-small-context-window.yaml"
 
 if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set-string ai.api=legacy > "$tmp/invalid-ai-api.yaml" 2>&1; then

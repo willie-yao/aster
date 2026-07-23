@@ -21,6 +21,8 @@ func TestParseContextWindowTokens(t *testing.T) {
 		{name: "valid", raw: "128000", want: 128000, present: true},
 		{name: "whitespace", raw: " 65536 ", want: 65536, present: true},
 		{name: "zero", raw: "0", wantErr: true},
+		{name: "too small", raw: "9216", wantErr: true},
+		{name: "minimum", raw: "9217", want: 9217, present: true},
 		{name: "negative", raw: "-1", wantErr: true},
 		{name: "text", raw: "many", wantErr: true},
 		{name: "too large", raw: "1000000001", wantErr: true},

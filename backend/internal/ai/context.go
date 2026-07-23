@@ -25,6 +25,8 @@ const (
 
 const contextReservedTokens = completionHeadroomTokens + finalizationHeadroomTokens + evidenceLedgerHeadroomTokens + providerFramingHeadroomTokens
 
+const minContextWindowTokens = contextReservedTokens + requestSerializationReserveTokens + 1
+
 // ContextBudgets are the internal budgets derived from a provider context
 // window. RequestTokenBudget is deliberately smaller than the advertised
 // window so retries retain room to finalize safely.
@@ -45,8 +47,8 @@ func ParseContextWindowTokens(raw string) (int, bool, error) {
 		return 0, false, nil
 	}
 	tokens, err := strconv.Atoi(raw)
-	if err != nil || tokens <= 0 || tokens > maxContextWindowTokens {
-		return 0, false, fmt.Errorf("AI_CONTEXT_WINDOW_TOKENS must be an integer from 1 to %d", maxContextWindowTokens)
+	if err != nil || tokens < minContextWindowTokens || tokens > maxContextWindowTokens {
+		return 0, false, fmt.Errorf("AI_CONTEXT_WINDOW_TOKENS must be an integer from %d to %d", minContextWindowTokens, maxContextWindowTokens)
 	}
 	return tokens, true, nil
 }

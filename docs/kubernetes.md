@@ -142,7 +142,7 @@ existing config](#reusing-existing-config)) rather than `--set ai.token`, which
 lands in shell history and Helm release metadata.
 
 When the provider's total context window is independently known, add
-`--set ai.contextWindowTokens=<tokens>`. For the current Copilot GPT-5 mini
+`--set ai.contextWindowTokens=<tokens>` with at least `9217` tokens. For the current Copilot GPT-5 mini
 deployment, use `--set ai.contextWindowTokens=128000`. Leave it unset for a
 generic endpoint so provider metadata or the bounded fallback remains active.
 
@@ -185,7 +185,7 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | `project.config`, `project.systemPrompt` | Consumer config, via `--set-file`. |
 | `project.existingConfigMap` | Reuse a ConfigMap with keys `project.yaml` and `system.md`. |
 | `ai.enabled`, `ai.endpoint`, `ai.model`, `ai.token` | AI analysis and its OpenAI-compatible endpoint. |
-| `ai.contextWindowTokens` | Optional operator-provided total provider context window. Set only with endpoint evidence, such as `128000` for the current Copilot GPT-5 mini deployment. |
+| `ai.contextWindowTokens` | Optional operator-provided total provider context window. Set only with endpoint evidence. Values must be at least `9217`; use `128000` for the current Copilot GPT-5 mini deployment. |
 | `ai.existingSecret`, `ai.tokenSecretKey` | Reuse a Secret holding the token. |
 | `fetcher.schedule` | Cron schedule (default every 6 hours). `mode: cron`. |
 | `fetcher.suspend` | Suspend scheduled CronJob starts while allowing manual Jobs. `mode: cron`. |
