@@ -296,14 +296,17 @@ func (s *ContainerStateStore) TraceStore() *ai.TraceStore {
 	return s.traces
 }
 
-// Save persists the current shared cache and trace state.
+// Save persists the current shared trace and cache generation.
 func (s *ContainerStateStore) Save() error {
 	if s == nil {
 		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return errors.Join(s.cache.Save(), s.traces.Save(filepath.Join(s.dataDir, output.AITraceFilename)))
+	if err := s.traces.Save(filepath.Join(s.dataDir, output.AITraceFilename)); err != nil {
+		return err
+	}
+	return s.cache.Save()
 }
 
 // MergeTraces persists authenticated traces without accepting cache entries.
@@ -316,10 +319,20 @@ func (s *ContainerStateStore) MergeTraces(state ContainerAnalysisState) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	traces, err := ai.LoadTraceStore(filepath.Join(s.dataDir, output.AITraceFilename))
+	if err != nil {
+		return err
+	}
+	for _, trace := range state.Traces {
+		traces.Upsert(trace)
+	}
+	if err := traces.Save(filepath.Join(s.dataDir, output.AITraceFilename)); err != nil {
+		return err
+	}
 	for _, trace := range state.Traces {
 		s.traces.Upsert(trace)
 	}
-	return s.traces.Save(filepath.Join(s.dataDir, output.AITraceFilename))
+	return nil
 }
 
 // Merge persists one authenticated cache and trace delta.
@@ -332,11 +345,26 @@ func (s *ContainerStateStore) Merge(state ContainerAnalysisState) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.cache.Merge(state.CacheEntries)
+	traces, err := ai.LoadTraceStore(filepath.Join(s.dataDir, output.AITraceFilename))
+	if err != nil {
+		return err
+	}
+	cache := ai.NewCache(s.dataDir)
+	cache.Merge(state.CacheEntries)
+	for _, trace := range state.Traces {
+		traces.Upsert(trace)
+	}
+	if err := traces.Save(filepath.Join(s.dataDir, output.AITraceFilename)); err != nil {
+		return err
+	}
+	if err := cache.Save(); err != nil {
+		return err
+	}
+	s.cache = cache
 	for _, trace := range state.Traces {
 		s.traces.Upsert(trace)
 	}
-	return errors.Join(s.cache.Save(), s.traces.Save(filepath.Join(s.dataDir, output.AITraceFilename)))
+	return nil
 }
 
 func containerStateAssociatedData(identity ContainerStateIdentity) []byte {

@@ -157,6 +157,50 @@ func TestContainerStateStorePersistsCacheAndPrivateTrace(t *testing.T) {
 	}
 }
 
+func TestContainerStateStoreDoesNotAdvanceCacheWhenTracePersistenceFails(t *testing.T) {
+	dir := t.TempDir()
+	request := stateTestRequest()
+	identity := stateTestIdentity(request)
+	state := ContainerAnalysisState{
+		Version: ContainerStateVersion, TaskNamespace: identity.TaskNamespace, TaskName: identity.TaskName, CacheKey: identity.CacheKey,
+		CacheEntries: stateTestEntry(request, time.Now().UTC(), `{"summary":"recovered"}`),
+		Traces:       []ai.AnalysisTrace{stateTestTrace("resp-recovered")},
+	}
+	store, err := NewContainerStateStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracePath := filepath.Join(dir, output.AITraceFilename)
+	if err := os.Mkdir(tracePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Merge(state); err == nil {
+		t.Fatal("merge succeeded with an unreadable trace path")
+	}
+	if got := store.CacheSeed(request); len(got) != 0 {
+		t.Fatalf("in-memory cache advanced after trace failure: %+v", got)
+	}
+	if got := ai.NewCache(dir).Entries(identity.CacheKey); len(got) != 0 {
+		t.Fatalf("persisted cache advanced after trace failure: %+v", got)
+	}
+	if err := os.RemoveAll(tracePath); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Merge(state); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.CacheSeed(request); len(got) != 1 {
+		t.Fatalf("cache entries after recovery = %d, want 1", len(got))
+	}
+	persisted, err := ai.LoadTraceStore(tracePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := persisted.Snapshot().Traces; len(got) != 1 || got[0].Events[0].ResponseID != "resp-recovered" {
+		t.Fatalf("persisted traces = %+v", got)
+	}
+}
+
 func jsonMessagesEqual(a, b json.RawMessage) bool {
 	var left, right any
 	return json.Unmarshal(a, &left) == nil && json.Unmarshal(b, &right) == nil && reflect.DeepEqual(left, right)

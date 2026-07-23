@@ -44,7 +44,7 @@ func main() {
 }
 
 func writeAnalyzerError(w io.Writer, err error) {
-	fmt.Fprintf(w, "analyzer: %s\n", redact.URLs(err.Error()))
+	fmt.Fprintf(w, "analyzer: %s\n", redact.Credentials(redact.URLs(err.Error())))
 }
 
 type redactingWriter struct {
@@ -52,7 +52,7 @@ type redactingWriter struct {
 }
 
 func (w redactingWriter) Write(data []byte) (int, error) {
-	sanitized := []byte(redact.URLs(string(data)))
+	sanitized := []byte(redact.Credentials(redact.URLs(string(data))))
 	if _, err := w.w.Write(sanitized); err != nil {
 		return 0, err
 	}

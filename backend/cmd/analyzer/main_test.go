@@ -155,14 +155,16 @@ func TestRunWritesOnlyResultToStdout(t *testing.T) {
 	}
 }
 
-func TestAnalyzerRedactsProviderURLsFromDurableStderr(t *testing.T) {
+func TestAnalyzerRedactsProviderDiagnosticsFromDurableStderr(t *testing.T) {
 	const privateURL = "https://private-model.example/v1/chat/completions?token=secret"
-	fake := &fakeAnalyzer{err: errors.New("post " + privateURL + ": timeout")}
+	const bearer = "Bearer live-secret-token"
+	const inlineToken = "token=body-secret"
+	fake := &fakeAnalyzer{err: errors.New("post " + privateURL + ": Authorization: " + bearer + " " + inlineToken)}
 	factory := func(context.Context, commandOptions, envGetter) (*analyzerRuntime, error) {
 		return &analyzerRuntime{
 			analyzer: fake, httpClient: http.DefaultClient,
 			snapshot: func(request ai.FailureAnalysisRequest) (analysisruntime.ContainerAnalysisState, error) {
-				log.Printf("service failure: post %s: timeout", privateURL)
+				log.Printf("service failure: post %s: Authorization: %s %s", privateURL, bearer, inlineToken)
 				return fakeSnapshot(request)
 			},
 		}, nil
@@ -172,12 +174,12 @@ func TestAnalyzerRedactsProviderURLsFromDurableStderr(t *testing.T) {
 	if err == nil {
 		t.Fatal("run succeeded")
 	}
-	if strings.Contains(stderr.String(), privateURL) || !strings.Contains(stderr.String(), "[redacted-url]") {
+	if strings.Contains(stderr.String(), privateURL) || strings.Contains(stderr.String(), "live-secret-token") || strings.Contains(stderr.String(), "body-secret") || !strings.Contains(stderr.String(), "[redacted-url]") {
 		t.Fatalf("stderr = %q", stderr.String())
 	}
 	var rendered bytes.Buffer
 	writeAnalyzerError(&rendered, err)
-	if strings.Contains(rendered.String(), privateURL) || !strings.Contains(rendered.String(), "[redacted-url]") {
+	if strings.Contains(rendered.String(), privateURL) || strings.Contains(rendered.String(), "live-secret-token") || strings.Contains(rendered.String(), "body-secret") || !strings.Contains(rendered.String(), "[redacted-url]") {
 		t.Fatalf("rendered error = %q", rendered.String())
 	}
 }
