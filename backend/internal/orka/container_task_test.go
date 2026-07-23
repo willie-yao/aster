@@ -559,3 +559,23 @@ func TestBuildContainerAnalysisResourcesRejectsGPUPlacement(t *testing.T) {
 		})
 	}
 }
+
+func TestContainerAnalysisIdentityIgnoresPriorPublishedAI(t *testing.T) {
+	baseSpec := containerTaskSpec(t)
+	base, err := BuildContainerAnalysisResources(baseSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := containerTaskSpec(t)
+	changed.Request.TestCase.AISummary = &models.AISummary{Summary: strings.Repeat("changed", 20_000)}
+	changed.Request.TestCase.AIAnalysis = &models.AIAnalysis{RootCause: strings.Repeat("changed", 20_000), Mode: ai.AgenticMode}
+	withPrior, err := BuildContainerAnalysisResources(changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseName := base.Task["metadata"].(map[string]any)["name"]
+	changedName := withPrior.Task["metadata"].(map[string]any)["name"]
+	if changedName != baseName {
+		t.Fatalf("prior AI output changed Task identity: %v != %v", changedName, baseName)
+	}
+}

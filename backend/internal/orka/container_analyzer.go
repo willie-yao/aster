@@ -234,6 +234,7 @@ func (a *ContainerAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, 
 	if err := a.Maintain(ctx); err != nil {
 		return ai.UnavailableFailureAnalysisResult(request.TestCase, err), err
 	}
+	taskRequest := analysisruntime.CanonicalFailureAnalysisRequest(request)
 
 	resources, err := BuildContainerAnalysisResources(ContainerAnalysisTaskSpec{
 		Namespace:           a.opts.Namespace,
@@ -243,8 +244,8 @@ func (a *ContainerAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, 
 		Timeout:             a.opts.TaskTimeout.String(),
 		MaxRetries:          a.opts.MaxRetries,
 		ProjectDir:          a.opts.ProjectDir,
-		Request:             request,
-		CacheSeed:           a.state.CacheSeed(request),
+		Request:             taskRequest,
+		CacheSeed:           a.state.CacheSeed(taskRequest),
 		StateKeyFingerprint: containerStateKeyFingerprint(a.opts.StateKey),
 		Environment: map[string]string{
 			"AI_API": a.opts.API, "AI_ENDPOINT": a.opts.Endpoint, "AI_MODEL": a.opts.Model,
@@ -282,7 +283,7 @@ func (a *ContainerAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, 
 		if raw, resultErr := a.waitResult(stateCtx, taskName); resultErr != nil {
 			log.Printf("Warning: failed to read private state from %s: %v", taskName, resultErr)
 		} else {
-			identity := analysisruntime.NewContainerStateIdentity(a.opts.Namespace, taskName, request)
+			identity := analysisruntime.NewContainerStateIdentity(a.opts.Namespace, taskName, taskRequest)
 			if delta, stateErr := analysisruntime.ParseEncryptedContainerAnalysisState(raw, a.opts.StateKey, identity); stateErr != nil {
 				log.Printf("Warning: failed to parse private state from %s: %v", taskName, stateErr)
 			} else if stateErr := a.state.MergeTraces(delta); stateErr != nil {
@@ -305,7 +306,7 @@ func (a *ContainerAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, 
 	if err != nil {
 		return ai.UnavailableFailureAnalysisResult(request.TestCase, err), err
 	}
-	identity := analysisruntime.NewContainerStateIdentity(a.opts.Namespace, taskName, request)
+	identity := analysisruntime.NewContainerStateIdentity(a.opts.Namespace, taskName, taskRequest)
 	delta, err := analysisruntime.ParseEncryptedContainerAnalysisState(raw, a.opts.StateKey, identity)
 	if err != nil {
 		return ai.UnavailableFailureAnalysisResult(request.TestCase, err), err

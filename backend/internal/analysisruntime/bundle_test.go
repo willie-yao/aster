@@ -366,3 +366,32 @@ func TestDecodeProjectBundleRejectsMalformedOrTamperedInput(t *testing.T) {
 		t.Fatalf("VerifyProjectBundleContract error = %v", err)
 	}
 }
+
+func TestProjectBundleCanonicalizesLargeFailureAndPriorAI(t *testing.T) {
+	request := testBundleRequest()
+	request.TestCase.FailureMessage = strings.Repeat("message", 10_000)
+	request.TestCase.FailureBody = strings.Repeat("body", 30_000)
+	request.TestCase.AISummary = &models.AISummary{Summary: strings.Repeat("summary", 20_000)}
+	request.TestCase.AIAnalysis = &models.AIAnalysis{RootCause: strings.Repeat("cause", 20_000), Mode: ai.AgenticMode}
+	before := request
+	data, _, err := BuildProjectBundle(writeBundleProject(t, "https://model.invalid/v1/chat/completions", "model"), ContainerAnalyzerContractVersion, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) > MaxProjectBundleBytes {
+		t.Fatalf("bundle bytes = %d", len(data))
+	}
+	bundle, err := DecodeProjectBundle(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bundle.Request.TestCase.FailureMessage) > 17*1024 || len(bundle.Request.TestCase.FailureBody) > 8*1024 {
+		t.Fatalf("canonical failure sizes = message:%d body:%d", len(bundle.Request.TestCase.FailureMessage), len(bundle.Request.TestCase.FailureBody))
+	}
+	if bundle.Request.TestCase.AISummary != nil || bundle.Request.TestCase.AIAnalysis != nil {
+		t.Fatalf("bundle retained prior AI output: %+v", bundle.Request.TestCase)
+	}
+	if request.TestCase.AISummary != before.TestCase.AISummary || request.TestCase.AIAnalysis != before.TestCase.AIAnalysis || request.TestCase.FailureMessage != before.TestCase.FailureMessage {
+		t.Fatal("BuildProjectBundle mutated the caller request")
+	}
+}

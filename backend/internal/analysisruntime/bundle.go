@@ -10,10 +10,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/evidenceplan"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"gopkg.in/yaml.v3"
 )
@@ -56,6 +58,7 @@ func BuildProjectBundle(projectDir, contractVersion string, request ai.FailureAn
 
 // BuildProjectBundleWithCache includes one bounded relevant cache entry.
 func BuildProjectBundleWithCache(projectDir, contractVersion string, request ai.FailureAnalysisRequest, cacheSeed map[string]ai.CacheEntry) ([]byte, string, error) {
+	request = CanonicalFailureAnalysisRequest(request)
 	if strings.TrimSpace(contractVersion) == "" {
 		return nil, "", fmt.Errorf("project bundle contract version is required")
 	}
@@ -354,6 +357,9 @@ func validateProjectBundle(bundle ProjectBundle) error {
 	if err := validateRequest(bundle.Request); err != nil {
 		return err
 	}
+	if !reflect.DeepEqual(bundle.Request, CanonicalFailureAnalysisRequest(bundle.Request)) {
+		return fmt.Errorf("project bundle failure request is not canonical")
+	}
 	if len(bundle.CacheSeed) > 0 {
 		if err := validateContainerCacheEntries(FailureCacheKey(bundle.Request), bundle.CacheSeed); err != nil {
 			return fmt.Errorf("validate project bundle cache seed: %w", err)
@@ -448,6 +454,12 @@ func projectBundleDigest(bundle ProjectBundle) (string, error) {
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// CanonicalFailureAnalysisRequest applies the current prompt bounds and removes published AI output from Task identity.
+func CanonicalFailureAnalysisRequest(request ai.FailureAnalysisRequest) ai.FailureAnalysisRequest {
+	request.TestCase = evidenceplan.CanonicalTestCase(request.TestCase)
+	return request
 }
 
 func cloneCacheEntries(entries map[string]ai.CacheEntry) map[string]ai.CacheEntry {

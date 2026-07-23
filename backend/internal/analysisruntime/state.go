@@ -60,6 +60,7 @@ func NewContainerStateIdentity(namespace, taskName string, request ai.FailureAna
 
 // FailureCacheKey returns the canonical cache key for one request.
 func FailureCacheKey(request ai.FailureAnalysisRequest) string {
+	request = CanonicalFailureAnalysisRequest(request)
 	return ai.AgenticCacheKey("universal", request.JobID, request.Build.BuildID, request.TestCase.Name, request.TestCase.FailureMessage)
 }
 
