@@ -90,9 +90,12 @@ func TestRunWritesOnlyResultToStdout(t *testing.T) {
 	if strings.Contains(stdout.String(), "starting failure analysis") || !strings.Contains(stderr.String(), "starting failure analysis") {
 		t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
-	var result ai.FailureAnalysisResult
-	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &result); err != nil {
-		t.Fatalf("stdout is not one result JSON object: %v\n%s", err, stdout.String())
+	if !strings.HasPrefix(stdout.String(), analysisruntime.FailureAnalysisResultMarker) {
+		t.Fatalf("stdout is not a framed result: %q", stdout.String())
+	}
+	result, err := analysisruntime.ParseFailureAnalysisResult("controller log\n" + stdout.String() + "trailing log\n")
+	if err != nil {
+		t.Fatalf("parse stdout result: %v\n%s", err, stdout.String())
 	}
 	if result.Summary == nil || result.Summary.Summary != "summary" {
 		t.Fatalf("result = %+v", result)
@@ -201,8 +204,8 @@ func TestRunWithScriptedModelEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run error = %v\nstderr:\n%s", err, stderr.String())
 	}
-	var result ai.FailureAnalysisResult
-	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &result); err != nil {
+	result, err := analysisruntime.ParseFailureAnalysisResult(stdout.String())
+	if err != nil {
 		t.Fatal(err)
 	}
 	if result.Analysis == nil || result.Analysis.RootCause == "" || result.Analysis.ToolCalls < 3 {

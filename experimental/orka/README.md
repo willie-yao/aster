@@ -18,6 +18,8 @@ that run alongside your inference stack.
 - **[QUICKSTART.md](QUICKSTART.md)** - how to deploy and run the Orka path, the config it
   reads, and the knobs. Start here.
 - **[EVALUATION.md](EVALUATION.md)** - how to compare Orka safely with a separate release and data claim.
+- **[CONTAINER_ANALYZER_ASSESSMENT.md](CONTAINER_ANALYZER_ASSESSMENT.md)** - the
+  dashboard-owned container prototype, production gates, and current status.
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** - how it works: where each Orka resource
   is created, the CRD shapes, and how the engine's harness (cache, convergence,
   critique, skills) is reconstructed out of Kubernetes objects.

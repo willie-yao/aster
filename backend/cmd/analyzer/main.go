@@ -4,7 +4,6 @@ package main
 import (
 	"context"
 	"crypto/subtle"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -114,15 +113,8 @@ func run(ctx context.Context, args []string, getenv envGetter, stdout, stderr io
 	if saveErr != nil {
 		return fmt.Errorf("save private analysis state: %w", saveErr)
 	}
-	if result.Summary == nil {
-		return fmt.Errorf("AnalyzeFailure returned no summary")
-	}
-	encoded, err := json.Marshal(result)
-	if err != nil {
-		return fmt.Errorf("encode failure analysis result: %w", err)
-	}
-	if _, err := fmt.Fprintf(stdout, "%s\n", encoded); err != nil {
-		return fmt.Errorf("write failure analysis result: %w", err)
+	if err := analysisruntime.WriteFailureAnalysisResult(stdout, result); err != nil {
+		return err
 	}
 	return nil
 }

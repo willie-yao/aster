@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"regexp"
 	"sort"
 	"strings"
@@ -17,8 +16,7 @@ import (
 
 const (
 	// ContainerAnalysisContractVersion identifies the experimental adapter contract.
-	ContainerAnalysisContractVersion = "dashboard-failure-analyzer-v1"
-	containerResultMaxBytes          = 2 << 20
+	ContainerAnalysisContractVersion = "dashboard-failure-analyzer-v2"
 )
 
 var invalidTaskNameChars = regexp.MustCompile(`[^a-z0-9-]+`)
@@ -201,39 +199,14 @@ func containerAnalysisTaskName(in ContainerAnalysisTaskSpec, requestDigest strin
 	return prefix + "-" + hex.EncodeToString(sum[:8]), nil
 }
 
-// ParseContainerAnalysisResult extracts the analyzer's final JSON line from the
-// combined pod log result stored by the pinned Orka controller.
+// ParseContainerAnalysisResult extracts the dashboard-owned result marker from
+// the combined pod logs stored by the Orka controller.
 func ParseContainerAnalysisResult(raw string) (ai.FailureAnalysisResult, error) {
-	var result ai.FailureAnalysisResult
-	if len(raw) > containerResultMaxBytes {
-		return result, fmt.Errorf("container analysis result exceeds %d bytes", containerResultMaxBytes)
+	result, err := analysisruntime.ParseFailureAnalysisResult(raw)
+	if err != nil {
+		return result, fmt.Errorf("parse container analysis result: %w", err)
 	}
-	lines := strings.Split(raw, "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
-		if line == "" {
-			continue
-		}
-		decoder := json.NewDecoder(strings.NewReader(line))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&result); err != nil {
-			return result, fmt.Errorf("decode final container analysis result line: %w", err)
-		}
-		var extra any
-		if err := decoder.Decode(&extra); err == nil {
-			return result, fmt.Errorf("container analysis result line contains multiple JSON values")
-		} else if err != io.EOF {
-			return result, fmt.Errorf("decode trailing container analysis result data: %w", err)
-		}
-		if result.Summary == nil {
-			return result, fmt.Errorf("container analysis result has no ai_summary")
-		}
-		if strings.TrimSpace(result.Summary.Summary) == "" {
-			return result, fmt.Errorf("container analysis result has an empty ai_summary.summary")
-		}
-		return result, nil
-	}
-	return result, fmt.Errorf("container analysis result is empty")
+	return result, nil
 }
 
 // ApplyContainerAnalysisResult maps the authoritative dashboard result onto a test case.

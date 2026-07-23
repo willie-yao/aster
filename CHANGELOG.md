@@ -22,6 +22,11 @@ for how to pin a release.
 
 ### Added
 
+- **Dashboard container result framing.** The experimental dashboard-owned
+  analyzer now emits a bounded base64 result marker on stdout. Mixed Orka Task
+  logs are parsed for the last valid marker instead of treating the final line
+  as JSON, with strict rejection of missing, malformed, oversized, conflicting,
+  or empty results.
 - **Bounded Orka CronJob lifecycle.** Orka producer waves now reject retry budgets
   that cannot fit within the wave deadline. Chart-managed CronJobs use Job-level
   deadlines, disable in-Pod producer restarts by default, and avoid automatic

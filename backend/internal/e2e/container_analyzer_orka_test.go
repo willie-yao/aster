@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisruntime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prowbuild"
@@ -73,6 +74,9 @@ func TestOrkaContainerAnalyzerKind(t *testing.T) {
 		scoreBenchCase(t, bc, &tc, 0, "Orka container")
 		if !strings.Contains(raw, "starting failure analysis") {
 			t.Fatal("Task result did not demonstrate pinned-controller combined log capture")
+		}
+		if !strings.Contains(raw, analysisruntime.FailureAnalysisResultMarker) {
+			t.Fatal("Task result did not contain the framed dashboard result")
 		}
 	})
 

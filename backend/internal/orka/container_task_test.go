@@ -1,6 +1,7 @@
 package orka
 
 import (
+	"bytes"
 	"encoding/json"
 	"reflect"
 	"strings"
@@ -47,6 +48,10 @@ func TestBuildContainerAnalysisTask(t *testing.T) {
 	metadata := task["metadata"].(map[string]any)
 	if !strings.HasPrefix(metadata["name"].(string), "flatcar-analyzer-") || metadata["namespace"] != "orka-system" {
 		t.Fatalf("metadata = %+v", metadata)
+	}
+	annotations := metadata["annotations"].(map[string]any)
+	if annotations["prow-ai-dashboard/contract-version"] != ContainerAnalysisContractVersion {
+		t.Fatalf("annotations = %+v", annotations)
 	}
 	spec := task["spec"].(map[string]any)
 	if spec["type"] != "container" || spec["image"] != "dashboard-analyzer:sha" {
@@ -142,11 +147,11 @@ func TestParseAndApplyContainerAnalysisResult(t *testing.T) {
 		Summary:  &models.AISummary{GeneratedAt: "2026-07-22T12:00:00Z", Summary: "summary"},
 		Analysis: &models.AIAnalysis{RootCause: "cause", Severity: "High", Mode: "agentic"},
 	}
-	data, err := json.Marshal(want)
-	if err != nil {
+	var framed bytes.Buffer
+	if err := analysisruntime.WriteFailureAnalysisResult(&framed, want); err != nil {
 		t.Fatal(err)
 	}
-	got, err := ParseContainerAnalysisResult("runtime log on stderr\n" + string(data) + "\n")
+	got, err := ParseContainerAnalysisResult("runtime log before\n" + framed.String() + "runtime log after\n")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,10 +171,8 @@ func TestParseContainerAnalysisResultRejectsMalformedOrAbsentResult(t *testing.T
 	for _, raw := range []string{
 		"",
 		"runtime log only\n",
-		`{"ai_summary":null}`,
-		`{"ai_summary":{}}`,
-		`{"ai_summary":{"summary":"   "}}`,
-		`{"ai_summary":{"summary":"ok"}} trailing`,
+		`{"ai_summary":{"summary":"plain JSON is not framed"}}`,
+		analysisruntime.FailureAnalysisResultMarker + "not-base64",
 	} {
 		if _, err := ParseContainerAnalysisResult(raw); err == nil {
 			t.Fatalf("ParseContainerAnalysisResult(%q) succeeded", raw)
