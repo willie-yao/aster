@@ -92,6 +92,12 @@ type Options struct {
 	Version string
 }
 
+type containerFailureAnalyzer interface {
+	ai.FailureAnalyzer
+	Maintain(context.Context) error
+	StateStore() *analysisruntime.ContainerStateStore
+}
+
 // pipeline holds the resolved, reusable state for a run: config, storage, and
 // AI settings. It is built once by setupPipeline and drives one
 // or many passes (one-shot Run, or repeated passes in RunWatch).
@@ -106,7 +112,7 @@ type pipeline struct {
 	includePresubmits bool
 	jobCatalog        *jobconfig.Catalog
 	aiRuntime         *analysisruntime.Runtime
-	containerAnalyzer *orka.ContainerAnalyzer
+	containerAnalyzer containerFailureAnalyzer
 }
 
 // refreshResult carries the outputs a pass needs for its side effects.

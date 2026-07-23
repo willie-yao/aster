@@ -52,6 +52,17 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 			}
 		}
 	}
+	var container containerFailureAnalyzer
+	var err error
+	if p.opts.AnalysisRuntime.Type == AnalysisRuntimeOrkaContainer {
+		container, err = p.ensureContainerAnalyzer()
+		if err != nil {
+			return fmt.Errorf("container analysis runtime setup: %w", err)
+		}
+		if err := container.Maintain(ctx); err != nil {
+			return err
+		}
+	}
 	if len(work) == 0 {
 		log.Println("🤖 No failures to analyze")
 		return nil
@@ -62,14 +73,8 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 	var runtime *analysisruntime.Runtime
 	var service *ai.Service
 	var traceStore *ai.TraceStore
-	var container *orka.ContainerAnalyzer
-	var err error
 
-	if p.opts.AnalysisRuntime.Type == AnalysisRuntimeOrkaContainer {
-		container, err = p.ensureContainerAnalyzer()
-		if err != nil {
-			return fmt.Errorf("container analysis runtime setup: %w", err)
-		}
+	if container != nil {
 		analyzer = container
 	} else {
 		runtime, err = p.ensureAnalysisRuntime(ctx)
@@ -195,7 +200,7 @@ func (p *pipeline) ensureAnalysisRuntime(ctx context.Context) (*analysisruntime.
 	return p.aiRuntime, nil
 }
 
-func (p *pipeline) ensureContainerAnalyzer() (*orka.ContainerAnalyzer, error) {
+func (p *pipeline) ensureContainerAnalyzer() (containerFailureAnalyzer, error) {
 	if p.containerAnalyzer != nil {
 		return p.containerAnalyzer, nil
 	}

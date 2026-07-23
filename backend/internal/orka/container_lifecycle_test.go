@@ -247,11 +247,16 @@ func TestApplyContainerAnalysisResourcesDoesNotDeleteOnTaskFailure(t *testing.T)
 	}
 }
 
-func TestApplyContainerAnalysisResourcesStopsWhenClaimIsSuperseded(t *testing.T) {
-	client := &fakeContainerResourceClient{supersedeClaimOnSecondGet: true}
-	err := ApplyContainerAnalysisResources(context.Background(), client, lifecycleResources())
-	if err == nil || !strings.Contains(err.Error(), "claim was superseded") {
-		t.Fatalf("ApplyContainerAnalysisResources error = %v", err)
+func TestApplyContainerAnalysisResourcesObservesWinningClaim(t *testing.T) {
+	client := &fakeContainerResourceClient{
+		supersedeClaimOnSecondGet: true,
+		taskStateSequences: map[string][]TaskState{"task": {
+			{},
+			{Exists: true},
+		}},
+	}
+	if err := ApplyContainerAnalysisResources(context.Background(), client, lifecycleResources()); err != nil {
+		t.Fatal(err)
 	}
 	if len(client.applied) != 0 || len(client.deletedVersion) != 0 {
 		t.Fatalf("superseded claimant changed resources: applied=%v deleted=%v", client.applied, client.deletedVersion)
@@ -493,5 +498,42 @@ func TestPruneContainerAnalysisTasksIsBounded(t *testing.T) {
 	}
 	if deleted != ContainerAnalysisTaskPruneLimit || len(client.deletedTasks) != ContainerAnalysisTaskPruneLimit {
 		t.Fatalf("deleted=%d calls=%d, want %d", deleted, len(client.deletedTasks), ContainerAnalysisTaskPruneLimit)
+	}
+}
+
+func TestPruneContainerAnalysisBundlesSkipsIneligibleWithoutStarvingOrphans(t *testing.T) {
+	now := time.Now().UTC()
+	items := make([]unstructured.Unstructured, 0, ContainerAnalysisBundlePruneLimit+1)
+	states := map[string]TaskState{}
+	for i := 0; i < ContainerAnalysisBundlePruneLimit; i++ {
+		name := fmt.Sprintf("running-%03d", i)
+		items = append(items, bundleObject(name, name+"-task", now.Add(-3*ContainerAnalysisBundleRetention-time.Duration(i)*time.Minute)))
+		states[name+"-task"] = TaskState{Exists: true, Phase: "Running"}
+	}
+	items = append(items, bundleObject("orphan", "", now.Add(-2*ContainerAnalysisBundleRetention)))
+	client := &fakeContainerResourceClient{listed: items, taskStates: states}
+	deleted, err := PruneContainerAnalysisBundles(context.Background(), client, "orka-system", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 1 || !reflect.DeepEqual(client.deletedVersion, []string{"configmaps/orphan@rv-orphan"}) {
+		t.Fatalf("deleted=%d calls=%v", deleted, client.deletedVersion)
+	}
+}
+
+func TestPruneContainerAnalysisTasksSkipsRunningWithoutStarvingTerminal(t *testing.T) {
+	now := time.Now().UTC()
+	items := make([]unstructured.Unstructured, 0, ContainerAnalysisTaskPruneLimit+1)
+	for i := 0; i < ContainerAnalysisTaskPruneLimit; i++ {
+		items = append(items, taskObject(fmt.Sprintf("running-%03d", i), "Running", now.Add(-3*ContainerAnalysisTaskRetention-time.Duration(i)*time.Minute)))
+	}
+	items = append(items, taskObject("terminal", "Succeeded", now.Add(-2*ContainerAnalysisTaskRetention)))
+	client := &fakeContainerResourceClient{listedTasks: items}
+	deleted, err := PruneContainerAnalysisTasks(context.Background(), client, "orka-system", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 1 || !reflect.DeepEqual(client.deletedTasks, []string{"terminal@uid-terminal@rv-terminal"}) {
+		t.Fatalf("deleted=%d calls=%v", deleted, client.deletedTasks)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"maps"
+	"reflect"
 	"sort"
 	"time"
 
@@ -83,7 +84,7 @@ func ApplyContainerAnalysisResources(ctx context.Context, client ContainerAnalys
 	if err != nil {
 		return err
 	}
-	taskNamespace, _, err := containerResourceRef(resources.Task)
+	taskNamespace, taskName, err := containerResourceRef(resources.Task)
 	if err != nil {
 		return err
 	}
@@ -118,12 +119,40 @@ func ApplyContainerAnalysisResources(ctx context.Context, client ContainerAnalys
 		return err
 	}
 	if claimed.GetAnnotations()[containerAnalysisClaimAnnotation] != claim {
-		return fmt.Errorf("container analysis bundle %s claim was superseded", bundleName)
+		return waitForClaimedContainerAnalysisTask(ctx, client, taskNamespace, taskName, resources.Task)
 	}
 	if err := client.Apply(ctx, TasksGVR, taskNamespace, resources.Task); err != nil {
 		return fmt.Errorf("apply container analysis Task: %w", err)
 	}
 	return nil
+}
+
+func waitForClaimedContainerAnalysisTask(ctx context.Context, client ContainerAnalysisResourceClient, namespace, taskName string, expected map[string]any) error {
+	waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	expectedExecution, _, err := unstructured.NestedMap(expected, "spec", "execution")
+	if err != nil {
+		return fmt.Errorf("read expected container analysis Task execution: %w", err)
+	}
+	for {
+		state, err := client.TaskState(waitCtx, namespace, taskName)
+		if err != nil {
+			return fmt.Errorf("observe claimed container analysis Task %s: %w", taskName, err)
+		}
+		if state.Exists {
+			if !reflect.DeepEqual(state.Execution, expectedExecution) {
+				return fmt.Errorf("claimed container analysis Task %s has mismatched execution", taskName)
+			}
+			return nil
+		}
+		select {
+		case <-waitCtx.Done():
+			return fmt.Errorf("observe claimed container analysis Task %s: %w", taskName, waitCtx.Err())
+		case <-ticker.C:
+		}
+	}
 }
 
 func newContainerAnalysisBundleClaim() (string, error) {
@@ -234,16 +263,12 @@ func PruneContainerAnalysisBundles(ctx context.Context, client ContainerAnalysis
 	})
 	cutoff := now.Add(-ContainerAnalysisBundleRetention)
 	deleted := 0
-	processed := 0
+	deleteCandidates := 0
 	for i := range items {
-		if processed >= ContainerAnalysisBundlePruneLimit {
-			break
-		}
 		created := items[i].GetCreationTimestamp()
 		if created.IsZero() || created.Time.After(cutoff) {
 			continue
 		}
-		processed++
 		taskName := items[i].GetAnnotations()[containerAnalysisTaskNameAnnotation]
 		terminalTask := false
 		if taskName != "" {
@@ -263,6 +288,10 @@ func PruneContainerAnalysisBundles(ctx context.Context, client ContainerAnalysis
 		if resourceVersion == "" {
 			continue
 		}
+		if deleteCandidates >= ContainerAnalysisBundlePruneLimit {
+			break
+		}
+		deleteCandidates++
 		removed, err := client.DeleteIfResourceVersion(ctx, configMapsGVR, namespace, items[i].GetName(), resourceVersion)
 		if err != nil {
 			return deleted, fmt.Errorf("delete expired container analysis bundle %s: %w", items[i].GetName(), err)
@@ -292,16 +321,12 @@ func PruneContainerAnalysisTasks(ctx context.Context, client ContainerAnalysisMa
 	})
 	cutoff := now.Add(-ContainerAnalysisTaskRetention)
 	deleted := 0
-	processed := 0
+	deleteCandidates := 0
 	for i := range items {
-		if processed >= ContainerAnalysisTaskPruneLimit {
-			break
-		}
 		created := items[i].GetCreationTimestamp()
 		if created.IsZero() || created.Time.After(cutoff) {
 			continue
 		}
-		processed++
 		state, err := taskStateFromObject(&items[i])
 		if err != nil {
 			return deleted, fmt.Errorf("read expired container analysis Task %s: %w", items[i].GetName(), err)
@@ -309,6 +334,10 @@ func PruneContainerAnalysisTasks(ctx context.Context, client ContainerAnalysisMa
 		if state.Deleting || !TerminalPhase(state.Phase) || state.UID == "" || state.ResourceVersion == "" {
 			continue
 		}
+		if deleteCandidates >= ContainerAnalysisTaskPruneLimit {
+			break
+		}
+		deleteCandidates++
 		removed, err := client.DeleteTaskIfIdentity(ctx, namespace, items[i].GetName(), state.UID, state.ResourceVersion)
 		if err != nil {
 			return deleted, fmt.Errorf("delete expired container analysis Task %s: %w", items[i].GetName(), err)

@@ -2,14 +2,20 @@ package fetcher
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisruntime"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
 func validContainerAnalysisOptions() Options {
@@ -132,5 +138,34 @@ func TestWarnOnAnalysisPersistenceIsBestEffort(t *testing.T) {
 	})
 	if called != 1 {
 		t.Fatalf("save calls = %d, want 1", called)
+	}
+}
+
+type maintenanceOnlyAnalyzer struct {
+	called bool
+}
+
+func (a *maintenanceOnlyAnalyzer) Maintain(context.Context) error {
+	a.called = true
+	return nil
+}
+
+func (a *maintenanceOnlyAnalyzer) AnalyzeFailure(context.Context, *http.Client, ai.FailureAnalysisRequest) (ai.FailureAnalysisResult, error) {
+	return ai.FailureAnalysisResult{}, nil
+}
+
+func (a *maintenanceOnlyAnalyzer) StateStore() *analysisruntime.ContainerStateStore { return nil }
+
+func TestAnalyzeFailuresNoWorkStillRunsContainerMaintenance(t *testing.T) {
+	analyzer := &maintenanceOnlyAnalyzer{}
+	pipeline := &pipeline{
+		opts:              Options{AnalysisRuntime: AnalysisRuntimeOptions{Type: AnalysisRuntimeOrkaContainer}},
+		containerAnalyzer: analyzer,
+	}
+	if err := pipeline.analyzeFailuresWithAI(t.Context(), nil, models.FlakinessReport{}); err != nil {
+		t.Fatal(err)
+	}
+	if !analyzer.called {
+		t.Fatal("container maintenance was skipped")
 	}
 }

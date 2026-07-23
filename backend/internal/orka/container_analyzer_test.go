@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisruntime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 type fakeContainerAnalyzerKube struct {
@@ -46,11 +48,15 @@ type generatedContainerResult struct {
 	key     []byte
 	entry   map[string]ai.CacheEntry
 	failed  bool
+	err     error
 	calls   int
 }
 
 func (r *generatedContainerResult) Result(_ context.Context, namespace, taskName string) (string, bool, error) {
 	r.calls++
+	if r.err != nil {
+		return "", false, r.err
+	}
 	identity := analysisruntime.NewContainerStateIdentity(namespace, taskName, r.request)
 	state := analysisruntime.ContainerAnalysisState{
 		Version: analysisruntime.ContainerStateVersion, TaskNamespace: namespace,
@@ -181,5 +187,48 @@ func TestValidateContainerAnalyzerOptionsRejectsMutableImageTag(t *testing.T) {
 	opts.Image = "ghcr.io/example/analyzer:v1.2.3"
 	if err := ValidateContainerAnalyzerOptions(opts); err != nil {
 		t.Fatalf("semantic version rejected: %v", err)
+	}
+}
+
+func TestContainerAnalyzerRetainsResourcesUntilResultIsConsumed(t *testing.T) {
+	request := containerTaskRequest()
+	key := bytes.Repeat([]byte{0x73}, 32)
+	store, err := analysisruntime.NewContainerStateStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources := &fakeContainerResourceClient{}
+	kube := &fakeContainerAnalyzerKube{fakeContainerResourceClient: resources, phase: "Succeeded"}
+	results := &generatedContainerResult{request: request, key: key, err: errors.New("result unavailable")}
+	analyzer, err := newContainerAnalyzer(containerAnalyzerTestOptions(t, key), kube, results, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := analyzer.AnalyzeFailure(context.Background(), nil, request); err == nil {
+		t.Fatal("AnalyzeFailure succeeded")
+	}
+	if len(kube.deletedTask) != 0 || len(resources.deletedVersion) != 0 {
+		t.Fatalf("unconsumed result cleanup: Tasks=%v bundles=%v", kube.deletedTask, resources.deletedVersion)
+	}
+}
+
+func TestContainerAnalyzerMaintainPrunesWithoutAnalysisWork(t *testing.T) {
+	key := bytes.Repeat([]byte{0x74}, 32)
+	store, err := analysisruntime.NewContainerStateStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := taskObject("old-terminal", "Succeeded", time.Now().UTC().Add(-2*ContainerAnalysisTaskRetention))
+	resources := &fakeContainerResourceClient{listedTasks: []unstructured.Unstructured{old}}
+	kube := &fakeContainerAnalyzerKube{fakeContainerResourceClient: resources, phase: "Succeeded"}
+	analyzer, err := newContainerAnalyzer(containerAnalyzerTestOptions(t, key), kube, &generatedContainerResult{}, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := analyzer.Maintain(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(kube.deletedTask) != 1 {
+		t.Fatalf("maintenance deleted Tasks = %v", kube.deletedTask)
 	}
 }

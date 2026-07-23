@@ -174,6 +174,25 @@ func validateContainerAnalyzerOptions(opts ContainerAnalyzerOptions) error {
 	}
 }
 
+// Maintain runs bounded bundle and terminal Task retention once per fetch pass.
+func (a *ContainerAnalyzer) Maintain(ctx context.Context) error {
+	if a == nil {
+		return fmt.Errorf("container analysis runtime is not configured")
+	}
+	a.pruneOnce.Do(func() {
+		now := time.Now().UTC()
+		if _, err := PruneContainerAnalysisBundles(ctx, a.kube, a.opts.Namespace, now); err != nil {
+			a.pruneErr = err
+			return
+		}
+		_, a.pruneErr = PruneContainerAnalysisTasks(ctx, a.kube, a.opts.Namespace, now)
+	})
+	if a.pruneErr != nil {
+		return fmt.Errorf("prune stale container analysis resources: %w", a.pruneErr)
+	}
+	return nil
+}
+
 // AnalyzeFailure implements ai.FailureAnalyzer using one content-addressed Task.
 func (a *ContainerAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, request ai.FailureAnalysisRequest) (ai.FailureAnalysisResult, error) {
 	if a == nil {
@@ -187,16 +206,7 @@ func (a *ContainerAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, 
 		return ai.UnavailableFailureAnalysisResult(request.TestCase, ctx.Err()), ctx.Err()
 	}
 
-	a.pruneOnce.Do(func() {
-		now := time.Now().UTC()
-		if _, err := PruneContainerAnalysisBundles(ctx, a.kube, a.opts.Namespace, now); err != nil {
-			a.pruneErr = err
-			return
-		}
-		_, a.pruneErr = PruneContainerAnalysisTasks(ctx, a.kube, a.opts.Namespace, now)
-	})
-	if a.pruneErr != nil {
-		err := fmt.Errorf("prune stale container analysis bundles: %w", a.pruneErr)
+	if err := a.Maintain(ctx); err != nil {
 		return ai.UnavailableFailureAnalysisResult(request.TestCase, err), err
 	}
 
@@ -239,7 +249,6 @@ func (a *ContainerAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, 
 		err = fmt.Errorf("wait for container analysis Task %s: %w", taskName, err)
 		return ai.UnavailableFailureAnalysisResult(request.TestCase, err), err
 	}
-	defer a.cleanupTerminal(resources, state)
 	if state.Phase != "Succeeded" {
 		taskErr := fmt.Errorf("container analysis Task %s ended %s", taskName, state.Phase)
 		stateCtx, stateCancel := context.WithTimeout(ctx, failedTaskStateTimeout)
@@ -252,6 +261,8 @@ func (a *ContainerAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, 
 				log.Printf("Warning: failed to parse private state from %s: %v", taskName, stateErr)
 			} else if stateErr := a.state.MergeTraces(delta); stateErr != nil {
 				log.Printf("Warning: failed to merge private traces from %s: %v", taskName, stateErr)
+			} else {
+				a.cleanupTerminal(resources, state)
 			}
 		}
 		return ai.UnavailableFailureAnalysisResult(request.TestCase, taskErr), taskErr
@@ -275,6 +286,7 @@ func (a *ContainerAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, 
 		err = fmt.Errorf("merge container analysis Task %s state: %w", taskName, err)
 		return ai.UnavailableFailureAnalysisResult(request.TestCase, err), err
 	}
+	a.cleanupTerminal(resources, state)
 	return result, nil
 }
 
