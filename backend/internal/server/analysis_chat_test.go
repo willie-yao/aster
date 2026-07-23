@@ -189,3 +189,15 @@ func TestWriteAnalysisChatErrorMapping(t *testing.T) {
 }
 
 var _ AnalysisChatRunner = (*fakeAnalysisChatRunner)(nil)
+
+func TestSafeAnalysisChatErrorHidesProviderBodies(t *testing.T) {
+	for _, reason := range []string{
+		`chat returned 500: private prompt body`,
+		`responses status 500: private artifact body`,
+		`decode response: invalid character; body=private analysis data`,
+	} {
+		if got := safeAnalysisChatError(errors.New(reason)); got != "model request failed" {
+			t.Errorf("safe error for %q = %q", reason, got)
+		}
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -378,5 +379,31 @@ func TestAnalysisChatEvidenceSurvivesCappedModelEnvelope(t *testing.T) {
 	}
 	if len(reply.Citations) != 1 || reply.Citations[0].LineStart != 100 {
 		t.Fatalf("reply = %+v", reply)
+	}
+}
+
+func TestPrepareAnalysisChatFinalizeMessagesCompactsCompleteRequest(t *testing.T) {
+	toolContent := strings.Repeat("x", 12<<10)
+	messages := []modelMessage{
+		{Role: "system", Content: strPtr("system")},
+		{Role: "user", Content: strPtr("question")},
+		{Role: "assistant", ToolCalls: []modelToolCall{{ID: "call-1", Type: "function", Function: modelFunction{Name: "read_artifact", Arguments: `{}`}}}},
+		{Role: "tool", ToolCallID: "call-1", Content: &toolContent},
+	}
+	before := requestSizeEstimate(messages, 0)
+	budget := before + len(analysisChatFinalizePrompt)/2
+	complete := append(slices.Clone(messages), modelMessage{Role: "user", Content: strPtr(analysisChatFinalizePrompt)})
+	if requestSizeEstimate(complete, 0) <= budget {
+		t.Fatal("test setup did not cross the context budget")
+	}
+	prepared, err := prepareAnalysisChatFinalizeMessages(messages, budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if size := requestSizeEstimate(prepared, 0); size > budget {
+		t.Fatalf("finalize request size = %d, budget = %d", size, budget)
+	}
+	if prepared[len(prepared)-1].Content == nil || *prepared[len(prepared)-1].Content != analysisChatFinalizePrompt {
+		t.Fatal("finalize prompt was not preserved")
 	}
 }

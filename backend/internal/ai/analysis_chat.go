@@ -255,10 +255,9 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 		}
 	}
 
-	messages, _ = compactMessages(messages, 0, a.opts.ContextByteBudget)
-	messages = append(messages, modelMessage{Role: "user", Content: strPtr(analysisChatFinalizePrompt)})
-	if size := requestSizeEstimate(messages, 0); size > a.opts.ContextByteBudget {
-		return analysischat.Reply{}, fmt.Errorf("analysis chat finalize request exceeds the %d-byte context budget after compaction", a.opts.ContextByteBudget)
+	messages, err = prepareAnalysisChatFinalizeMessages(messages, a.opts.ContextByteBudget)
+	if err != nil {
+		return analysischat.Reply{}, err
 	}
 	response, err := a.client.callModel(loopCtx, messages, nil, nil)
 	if err != nil {
@@ -276,6 +275,15 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 	reply.GCSBytes = state.gcsBytes
 	reply.ElapsedMs = int(time.Since(start) / time.Millisecond)
 	return reply, nil
+}
+
+func prepareAnalysisChatFinalizeMessages(messages []modelMessage, budget int) ([]modelMessage, error) {
+	messages = append(messages, modelMessage{Role: "user", Content: strPtr(analysisChatFinalizePrompt)})
+	messages, _ = compactMessages(messages, 0, budget)
+	if size := requestSizeEstimate(messages, 0); size > budget {
+		return nil, fmt.Errorf("analysis chat finalize request exceeds the %d-byte context budget after compaction", budget)
+	}
+	return messages, nil
 }
 
 func buildAnalysisChatMessages(systemPrompt, contextMessage string, history []analysischat.Message, question string, schemaBytes, budget int) ([]modelMessage, error) {

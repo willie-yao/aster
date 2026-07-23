@@ -138,7 +138,9 @@ func safeAnalysisChatError(err error) string {
 	reason := redact.URLs(strings.TrimSpace(err.Error()))
 	lower := strings.ToLower(reason)
 	if strings.Contains(lower, "chat returned") || strings.Contains(lower, "responses returned") ||
-		strings.Contains(lower, "status code") || strings.Contains(lower, "unauthorized") {
+		strings.Contains(lower, "responses status") || strings.Contains(lower, "decode response") ||
+		strings.Contains(lower, "body=") || strings.Contains(lower, "status code") ||
+		strings.Contains(lower, "unauthorized") {
 		return "model request failed"
 	}
 	const maxReasonBytes = 300
