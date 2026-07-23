@@ -139,4 +139,82 @@ if grep -Fq 'helm.sh/resource-policy: keep' "$tmp/pvc-deletable.yaml"; then
   exit 1
 fi
 
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.actions.enabled=true \
+  --set server.actions.mode=proxy \
+  --set server.actions.admins[0]=alice \
+  --set server.actions.proxy.botToken=test-token \
+  --show-only templates/server-deployment.yaml > "$tmp/actions-server.yaml"
+grep -A1 -Fq 'name: ACTIONS_ENABLED' "$tmp/actions-server.yaml"
+grep -Fq 'value: "true"' "$tmp/actions-server.yaml"
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.chat.enabled=true \
+  --set server.actions.mode=proxy \
+  --set server.actions.admins[0]=alice \
+  --set ai.enabled=true \
+  --set ai.token=test-token \
+  --set ai.endpoint=http://model.test/v1/chat/completions \
+  --set ai.model=test-model \
+  --show-only templates/server-deployment.yaml > "$tmp/chat-server.yaml"
+grep -A1 -Fq 'name: ANALYSIS_CHAT_ENABLED' "$tmp/chat-server.yaml"
+grep -Fq 'value: "true"' "$tmp/chat-server.yaml"
+grep -Fq -- '- -project-dir=/config' "$tmp/chat-server.yaml"
+grep -Fq 'name: project' "$tmp/chat-server.yaml"
+if grep -Fq 'name: ACTIONS_ENABLED' "$tmp/chat-server.yaml" || grep -Fq 'name: BOT_TOKEN' "$tmp/chat-server.yaml"; then
+  echo 'chat-only server rendered write-action credentials' >&2
+  exit 1
+fi
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.chat.enabled=true \
+  --set server.actions.mode=oauth \
+  --set server.actions.admins[0]=alice \
+  --set server.actions.oauth.clientId=client \
+  --set server.actions.oauth.clientSecret=secret \
+  --set server.actions.oauth.sessionKey=session-key \
+  --set server.actions.oauth.redirectUrl=https://dashboard.test/api/auth/callback \
+  --set ai.enabled=true \
+  --set ai.token=test-token \
+  --set ai.endpoint=http://model.test/v1/chat/completions \
+  --set ai.model=test-model \
+  --show-only templates/server-deployment.yaml > "$tmp/chat-oauth.yaml"
+grep -A1 -Fq 'name: OAUTH_SCOPE' "$tmp/chat-oauth.yaml"
+grep -Fq 'value: "read:user"' "$tmp/chat-oauth.yaml"
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.chat.enabled=true \
+  --set server.actions.mode=proxy \
+  --set server.actions.admins[0]=alice \
+  --set server.actions.proxy.existingSecret=proxy-auth \
+  --set ai.enabled=true \
+  --set ai.token=test-token \
+  --set ai.endpoint=http://model.test/v1/chat/completions \
+  --set ai.model=test-model \
+  --show-only templates/server-deployment.yaml > "$tmp/chat-existing-auth.yaml"
+grep -A5 -Fq 'name: AUTH_PROXY_SECRET' "$tmp/chat-existing-auth.yaml"
+grep -Fq 'name: proxy-auth' "$tmp/chat-existing-auth.yaml"
+grep -Fq 'optional: true' "$tmp/chat-existing-auth.yaml"
+
+if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.chat.enabled=true \
+  --set server.replicaCount=2 \
+  --set server.actions.mode=proxy \
+  --set server.actions.admins[0]=alice \
+  --set ai.enabled=true \
+  --set ai.token=test-token \
+  --set ai.endpoint=http://model.test/v1/chat/completions \
+  --set ai.model=test-model > "$tmp/chat-multiple-replicas.yaml" 2>&1; then
+  echo 'server.chat.enabled accepted multiple replicas' >&2
+  exit 1
+fi
+grep -Fq 'server.chat.enabled requires server.replicaCount=1' "$tmp/chat-multiple-replicas.yaml"
+
+if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.chat.enabled=true > "$tmp/chat-without-ai.yaml" 2>&1; then
+  echo 'server.chat.enabled was accepted without ai.enabled' >&2
+  exit 1
+fi
+grep -Fq 'server.chat.enabled requires ai.enabled' "$tmp/chat-without-ai.yaml"
+
 echo 'Helm render checks passed.'

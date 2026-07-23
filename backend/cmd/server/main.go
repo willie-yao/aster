@@ -3,17 +3,11 @@
 // static Pages site reads, plus /api/capabilities so the frontend can light up
 // server-only features. The static Pages mode keeps working unchanged.
 //
-// Admin-gated write actions (create-issue, propose-fix) are enabled when
-// -project-dir is set and AUTH_MODE selects an auth mechanism:
-//
-//	oauth: GitHub OAuth App login; each admin's own token performs the write.
-//	       Needs OAUTH_CLIENT_ID, OAUTH_CLIENT_SECRET, OAUTH_REDIRECT_URL,
-//	       SESSION_KEY, and ADMIN_LOGINS.
-//	proxy: an upstream SSO proxy authenticates and passes AUTH_PROXY_HEADER;
-//	       a bot token (BOT_TOKEN) performs the write. Requires ADMIN_LOGINS.
-//	dev:   local development only; authenticates every request as an admin.
-//	       Needs BOT_TOKEN (the write credential); DEV_LOGIN sets the identity.
-//	       Never use in a deployment reachable by untrusted clients.
+// Admin-gated interactive features are enabled when -project-dir is set and
+// AUTH_MODE selects an auth mechanism. ANALYSIS_CHAT_ENABLED enables read-only
+// chat. ACTIONS_ENABLED controls GitHub writes and defaults off when chat is
+// enabled, otherwise on for backward compatibility. BOT_TOKEN is required only
+// when write actions are enabled.
 package main
 
 import (
@@ -27,15 +21,19 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actions"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysischat"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisruntime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/auth"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/notify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/server"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
 
 func main() {
@@ -60,12 +58,12 @@ func main() {
 	// Enable admin-gated features only when a project config and an auth mode are
 	// both provided. Otherwise the server stays read-only.
 	if projectDir != "" && os.Getenv("AUTH_MODE") != "" {
-		if err := enableActions(&opts, projectDir, dataDir); err != nil {
-			log.Fatalf("server: enabling actions: %v", err)
+		if err := enableInteractiveFeatures(&opts, projectDir, dataDir); err != nil {
+			log.Fatalf("server: enabling interactive features: %v", err)
 		}
 		log.Printf("🔐 admin features enabled (auth mode: %s)", opts.AuthMode)
 	} else {
-		log.Println("actions disabled (set -project-dir and AUTH_MODE to enable)")
+		log.Println("interactive features disabled (set -project-dir and AUTH_MODE to enable)")
 	}
 
 	handler, err := server.Handler(opts)
@@ -104,51 +102,75 @@ func main() {
 	}
 }
 
-// enableActions loads the project config, builds the action service, and wires
-// the authenticator selected by AUTH_MODE onto opts.
-func enableActions(opts *server.Options, projectDir, dataDir string) error {
+// enableInteractiveFeatures loads the project config and authenticated services.
+func enableInteractiveFeatures(opts *server.Options, projectDir, dataDir string) error {
 	cfg, err := project.Load(filepath.Join(projectDir, "project.yaml"))
 	if err != nil {
 		return fmt.Errorf("loading project config: %w", err)
 	}
-	provider := cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"))
-	if err := project.ValidateAIAPI(provider.API); err != nil {
+	features, err := interactiveFeaturesFromEnv()
+	if err != nil {
 		return err
 	}
-	actionService := actions.NewService(cfg, dataDir, actions.AIConfig{
-		Token:    os.Getenv("AI_TOKEN"),
-		API:      provider.API,
-		Endpoint: provider.Endpoint,
-		Model:    provider.Model,
-		Headers:  provider.Headers,
-	})
-	opts.Actions = actionService
-
-	// A single fix draft runs locate + edit + critique against the model; the
-	// 5-minute default is tight for slow self-hosted endpoints, so allow an
-	// override (e.g. ACTION_TIMEOUT=15m).
-	if v := os.Getenv("ACTION_TIMEOUT"); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			return fmt.Errorf("invalid ACTION_TIMEOUT %q: %w", v, err)
+	if err := configureAuthenticator(opts, features.Actions); err != nil {
+		return err
+	}
+	opts.TrustedOrigins = trustedOrigins(os.Getenv("OAUTH_REDIRECT_URL"), os.Getenv("TRUSTED_ORIGINS"))
+	if features.Actions {
+		if err := enableActions(opts, cfg, dataDir); err != nil {
+			return err
 		}
-		opts.ActionTimeout = d
 	}
-
-	requestTimeout := opts.ActionTimeout
-	if requestTimeout <= 0 {
-		requestTimeout = 10 * time.Minute
+	if features.AnalysisChat {
+		if err := enableAnalysisChat(opts, cfg, projectDir, dataDir); err != nil {
+			return err
+		}
 	}
-	actionService.ConfigureAsyncRequests(requestTimeout, actionRequestNotifier(cfg))
+	return nil
+}
 
+type interactiveFeatures struct {
+	Actions      bool
+	AnalysisChat bool
+}
+
+func interactiveFeaturesFromEnv() (interactiveFeatures, error) {
+	chat, err := optionalBoolEnv("ANALYSIS_CHAT_ENABLED", false)
+	if err != nil {
+		return interactiveFeatures{}, err
+	}
+	actions, err := optionalBoolEnv("ACTIONS_ENABLED", !chat)
+	if err != nil {
+		return interactiveFeatures{}, err
+	}
+	return interactiveFeatures{Actions: actions, AnalysisChat: chat}, nil
+}
+
+func optionalBoolEnv(name string, fallback bool) (bool, error) {
+	value, ok := os.LookupEnv(name)
+	if !ok || strings.TrimSpace(value) == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.ParseBool(strings.TrimSpace(value))
+	if err != nil {
+		return false, fmt.Errorf("invalid %s %q: %w", name, value, err)
+	}
+	return parsed, nil
+}
+
+func configureAuthenticator(opts *server.Options, actionsEnabled bool) error {
 	admins := splitList(os.Getenv("ADMIN_LOGINS"))
 	switch mode := os.Getenv("AUTH_MODE"); mode {
 	case "oauth":
+		scope := strings.TrimSpace(os.Getenv("OAUTH_SCOPE"))
+		if scope == "" && !actionsEnabled {
+			scope = "read:user"
+		}
 		o, err := auth.NewOAuth(auth.OAuthConfig{
 			ClientID:      os.Getenv("OAUTH_CLIENT_ID"),
 			ClientSecret:  os.Getenv("OAUTH_CLIENT_SECRET"),
 			RedirectURL:   os.Getenv("OAUTH_REDIRECT_URL"),
-			Scope:         os.Getenv("OAUTH_SCOPE"),
+			Scope:         scope,
 			Admins:        admins,
 			SessionKey:    os.Getenv("SESSION_KEY"),
 			SecureCookies: os.Getenv("COOKIE_INSECURE") != "1",
@@ -161,8 +183,8 @@ func enableActions(opts *server.Options, projectDir, dataDir string) error {
 		opts.LoginURL = "/api/auth/login"
 	case "proxy":
 		botToken := os.Getenv("BOT_TOKEN")
-		if botToken == "" {
-			return fmt.Errorf("proxy auth mode requires BOT_TOKEN")
+		if actionsEnabled && botToken == "" {
+			return fmt.Errorf("proxy auth mode requires BOT_TOKEN when actions are enabled")
 		}
 		header := os.Getenv("AUTH_PROXY_HEADER")
 		if header == "" {
@@ -175,8 +197,8 @@ func enableActions(opts *server.Options, projectDir, dataDir string) error {
 		opts.AuthMode = "proxy"
 	case "dev":
 		botToken := os.Getenv("BOT_TOKEN")
-		if botToken == "" {
-			return fmt.Errorf("dev auth mode requires BOT_TOKEN (the write credential)")
+		if actionsEnabled && botToken == "" {
+			return fmt.Errorf("dev auth mode requires BOT_TOKEN when actions are enabled")
 		}
 		login := os.Getenv("DEV_LOGIN")
 		if login == "" {
@@ -188,13 +210,75 @@ func enableActions(opts *server.Options, projectDir, dataDir string) error {
 	default:
 		return fmt.Errorf("unknown AUTH_MODE %q (want oauth, proxy, or dev)", mode)
 	}
+	return nil
+}
 
-	// Behind a reverse proxy that terminates the public hostname (e.g. Azure
-	// Front Door), the browser's Origin is the public host but r.Host is the
-	// forwarded origin host, so the CSRF guard needs the public origin(s). The
-	// OAuth redirect URL's host is exactly that public origin; TRUSTED_ORIGINS
-	// adds any extra hosts (and covers proxy auth mode, which has no redirect).
-	opts.TrustedOrigins = trustedOrigins(os.Getenv("OAUTH_REDIRECT_URL"), os.Getenv("TRUSTED_ORIGINS"))
+func enableActions(opts *server.Options, cfg *project.Config, dataDir string) error {
+	provider := cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"))
+	if err := project.ValidateAIAPI(provider.API); err != nil {
+		return err
+	}
+	actionService := actions.NewService(cfg, dataDir, actions.AIConfig{
+		Token: os.Getenv("AI_TOKEN"), API: provider.API, Endpoint: provider.Endpoint,
+		Model: provider.Model, Headers: provider.Headers,
+	})
+	opts.Actions = actionService
+	if value := os.Getenv("ACTION_TIMEOUT"); value != "" {
+		timeout, err := time.ParseDuration(value)
+		if err != nil {
+			return fmt.Errorf("invalid ACTION_TIMEOUT %q: %w", value, err)
+		}
+		opts.ActionTimeout = timeout
+	}
+	requestTimeout := opts.ActionTimeout
+	if requestTimeout <= 0 {
+		requestTimeout = 10 * time.Minute
+	}
+	actionService.ConfigureAsyncRequests(requestTimeout, actionRequestNotifier(cfg))
+	return nil
+}
+
+func enableAnalysisChat(opts *server.Options, cfg *project.Config, projectDir, dataDir string) error {
+	token := os.Getenv("AI_TOKEN")
+	if token == "" {
+		return fmt.Errorf("analysis chat requires AI_TOKEN")
+	}
+	projectRuntime, err := analysisruntime.LoadProject(projectDir, cfg, analysisruntime.ProviderFallbacks{
+		API: os.Getenv("AI_API"), Endpoint: os.Getenv("AI_ENDPOINT"), Model: os.Getenv("AI_MODEL"),
+	})
+	if err != nil {
+		return fmt.Errorf("loading analysis chat project: %w", err)
+	}
+	runtime, err := analysisruntime.New(context.Background(), analysisruntime.Options{
+		Token: token, DataDir: dataDir, Project: projectRuntime,
+	})
+	if err != nil {
+		return fmt.Errorf("configuring analysis chat runtime: %w", err)
+	}
+	backend, err := storage.New(cfg.StorageConfig(), &http.Client{Timeout: 30 * time.Second})
+	if err != nil {
+		return fmt.Errorf("configuring analysis chat storage: %w", err)
+	}
+	agent, err := runtime.NewAnalysisChatAgent(backend)
+	if err != nil {
+		return fmt.Errorf("configuring analysis chat agent: %w", err)
+	}
+	service, err := analysischat.NewService(dataDir, agent, analysischat.Options{})
+	if err != nil {
+		return err
+	}
+	opts.AnalysisChat = service
+	if value := os.Getenv("ANALYSIS_CHAT_TIMEOUT"); value != "" {
+		timeout, err := time.ParseDuration(value)
+		if err != nil {
+			return fmt.Errorf("invalid ANALYSIS_CHAT_TIMEOUT %q: %w", value, err)
+		}
+		if timeout <= 0 || timeout > 2*time.Minute {
+			return fmt.Errorf("ANALYSIS_CHAT_TIMEOUT must be greater than zero and at most 2m")
+		}
+		opts.AnalysisChatTimeout = timeout
+	}
+	log.Printf("💬 analysis chat enabled")
 	return nil
 }
 

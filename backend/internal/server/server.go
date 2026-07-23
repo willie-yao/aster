@@ -61,10 +61,13 @@ type Options struct {
 	Capabilities Capabilities
 	// Auth enables admin-gated operator features. Actions additionally enables
 	// write endpoints. With no Auth the server stays read-only.
-	Auth    auth.Authenticator
-	Actions ActionRunner
+	Auth         auth.Authenticator
+	Actions      ActionRunner
+	AnalysisChat AnalysisChatRunner
 	// ActionTimeout bounds a single action. Zero uses defaultActionTimeout.
 	ActionTimeout time.Duration
+	// AnalysisChatTimeout bounds one conversation turn.
+	AnalysisChatTimeout time.Duration
 	// AuthMode is advertised to the frontend: "oauth" (show a sign-in button),
 	// "proxy" (auth handled upstream), or "dev" for local use.
 	AuthMode string
@@ -107,6 +110,8 @@ type Features struct {
 	ActionRequests bool `json:"action_requests,omitempty"`
 	// AnalysisTraces enables the private analysis-trace API and UI.
 	AnalysisTraces bool `json:"analysis_traces,omitempty"`
+	// AnalysisChat enables authenticated conversations about one published analysis.
+	AnalysisChat bool `json:"analysis_chat,omitempty"`
 }
 
 // authRegistrar is implemented by authenticators that need their own routes
@@ -150,6 +155,22 @@ func Handler(opts Options) (http.Handler, error) {
 			auth.Middleware(opts.Auth, analysisTracesHandler(opts.DataDir, false)))
 		mux.Handle("GET /api/analysis-traces/download",
 			auth.Middleware(opts.Auth, analysisTracesHandler(opts.DataDir, true)))
+	}
+
+	if opts.Auth != nil && opts.AnalysisChat != nil {
+		caps.Features.AnalysisChat = true
+		timeout := opts.AnalysisChatTimeout
+		if timeout <= 0 {
+			timeout = defaultAnalysisChatTimeout
+		}
+		trusted := trustedOriginSet(opts.TrustedOrigins)
+		guard := func(next http.Handler) http.Handler { return csrfGuard(trusted, next) }
+		mux.Handle("POST /api/analysis-chat/sessions",
+			auth.Middleware(opts.Auth, guard(createAnalysisChatSessionHandler(opts.AnalysisChat))))
+		mux.Handle("GET /api/analysis-chat/sessions/{id}",
+			auth.Middleware(opts.Auth, getAnalysisChatSessionHandler(opts.AnalysisChat)))
+		mux.Handle("POST /api/analysis-chat/sessions/{id}/messages",
+			auth.Middleware(opts.Auth, guard(sendAnalysisChatMessageHandler(timeout, opts.AnalysisChat))))
 	}
 
 	// Write actions require both auth and an action runner.

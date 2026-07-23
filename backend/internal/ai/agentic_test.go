@@ -512,6 +512,7 @@ func TestIsToolsUnsupportedError(t *testing.T) {
 		{"plain 500", fmt.Errorf("chat returned 500: server error"), false},
 		{"400 no tools msg", fmt.Errorf("chat returned 400: bad request"), false},
 		{"400 + tools", fmt.Errorf("chat returned 400: tools_choice not supported"), true},
+		{"400 + tools are unsupported", fmt.Errorf("chat returned 400: tools are not supported by this model"), true},
 		{"400 + function calling", fmt.Errorf("chat returned 400: function calling not supported"), true},
 		{"422 + function_call", fmt.Errorf("chat returned 422: function_call invalid"), true},
 	}
@@ -2403,5 +2404,23 @@ required_evidence:
 	}
 	if got := atomic.LoadInt32(&srv.calls); got != 2 {
 		t.Fatalf("model calls = %d, want tool plus final only", got)
+	}
+}
+
+func TestDispatchAgenticToolRejectsRegisteredButDisabledTool(t *testing.T) {
+	registry, _ := newTestRegistry(t)
+	state := &agentState{
+		browser:  &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("secret evidence")}},
+		registry: registry, enabledTools: []string{"list_artifacts"},
+		opts: AgenticOptions{ModelByteBudget: 100_000, GCSByteBudget: 100_000},
+	}
+	envelope, payload := dispatchAgenticToolWithPayload(context.Background(), state, modelToolCall{
+		ID: "call", Type: "function", Function: modelFunction{Name: "read_artifact", Arguments: `{"path":"build-log.txt"}`},
+	})
+	if _, ok := payload["error"]; !ok || !strings.Contains(envelope, "not enabled") {
+		t.Fatalf("disabled tool result: envelope=%q payload=%v", envelope, payload)
+	}
+	if state.gcsBytes != 0 {
+		t.Fatalf("disabled tool fetched %d bytes", state.gcsBytes)
 	}
 }
