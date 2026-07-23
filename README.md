@@ -51,7 +51,8 @@ cache acceptance, traces, and result schemas in one implementation.
 
 Orka remains available for fix generation through
 `ai.fix_prs.agent_runtime.type: orka`. See the
-[analysis runtime ownership decision](docs/architecture-decisions/0001-analysis-runtime-ownership.md)
+[analysis runtime evaluation](docs/analysis-runtime-evaluation.md),
+[ownership decision](docs/architecture-decisions/0001-analysis-runtime-ownership.md),
 and [fix PR documentation](docs/fix-prs.md).
 
 ## What a project owns
@@ -122,6 +123,7 @@ The Kubernetes server serves the same `/data/*.json` contract as Pages and adds
 
 ### Orka fix generation
 
+- [Failure analysis runtime evaluation](docs/analysis-runtime-evaluation.md)
 - [Analysis runtime ownership decision](docs/architecture-decisions/0001-analysis-runtime-ownership.md)
 - [Agent-proposed fix PRs](docs/fix-prs.md)
 
