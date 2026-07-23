@@ -35,7 +35,9 @@ for how to pin a release.
 - **Orka fix generation runtime.** Fix PRs can opt into a generation-only Orka
   Agent Task while keeping base pinning, diff reconstruction, review,
   verification, previews, credentials, and PR creation inside the engine. The
-  chart automatically selects a git-capable engine image for this mode.
+  chart automatically selects a git-capable engine image for this mode. The
+  runtime is documented and tested with Orka Agents that select the OpenCode
+  CLI while preserving the generic `orka` dashboard backend.
 - **Experimental Orka container analysis runtime.** Kubernetes Helm deployments
   can opt into `analysisRuntime.type: orka-container` with `mode: cron`. One
   content-addressed `type: container` Task per failure runs the current

@@ -67,13 +67,21 @@ func resultServer(t *testing.T, sr StructuredResult) (*ResultClient, func()) {
 	if sr.Version == 0 {
 		sr.Version = 1
 	}
+	inner, err := json.Marshal(sr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rawResultServer(t, string(inner))
+}
+
+func rawResultServer(t *testing.T, raw string) (*ResultClient, func()) {
+	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasSuffix(r.URL.Path, "/result") {
 			http.NotFound(w, r)
 			return
 		}
-		inner, _ := json.Marshal(sr)
-		json.NewEncoder(w).Encode(map[string]string{"result": string(inner)}) //nolint:errcheck
+		json.NewEncoder(w).Encode(map[string]string{"result": raw}) //nolint:errcheck
 	}))
 	return NewResultClient(srv.URL, ""), srv.Close
 }
@@ -131,14 +139,14 @@ func TestAgentRuntime_HappyPath(t *testing.T) {
 	}
 
 	// The applied Task is generation-only: type agent, no pushBranch, pinned ref.
-	spec, _ := kube.applied["spec"].(map[string]any)
-	if spec["type"] != "agent" {
-		t.Errorf("task type = %v, want agent", spec["type"])
+	taskSpec, _ := kube.applied["spec"].(map[string]any)
+	if taskSpec["type"] != "agent" {
+		t.Errorf("task type = %v, want agent", taskSpec["type"])
 	}
-	if spec["prompt"] != "fix the etcd disk type" {
-		t.Errorf("prompt not set: %v", spec["prompt"])
+	if taskSpec["prompt"] != "fix the etcd disk type" {
+		t.Errorf("original instruction not preserved: %q", taskSpec["prompt"])
 	}
-	ar, _ := spec["agentRuntime"].(map[string]any)
+	ar, _ := taskSpec["agentRuntime"].(map[string]any)
 	ws, _ := ar["workspace"].(map[string]any)
 	if ws["ref"] != "pinned-sha" {
 		t.Errorf("workspace ref = %v, want pinned-sha", ws["ref"])
@@ -153,7 +161,7 @@ func TestAgentRuntime_HappyPath(t *testing.T) {
 
 func TestAgentRuntime_NoDiffIsNotFixable(t *testing.T) {
 	kube := &fakeTaskAPI{phases: []string{"Succeeded"}}
-	results, done := resultServer(t, StructuredResult{Summary: "no code change needed", BaseSHA: "pinned-sha", Diff: ""})
+	results, done := resultServer(t, StructuredResult{Summary: "no code change needed", BaseSHA: "pinned-sha", Diff: "", Files: []string{}})
 	defer done()
 	r := &AgentRuntime{kube: kube, results: results, opts: AgentOptions{AgentRef: "codex-fixer", PollEvery: time.Millisecond},
 		applyDiff: stubApply(nil, nil)}
@@ -167,6 +175,31 @@ func TestAgentRuntime_NoDiffIsNotFixable(t *testing.T) {
 	}
 	if res.Output != "no code change needed" {
 		t.Errorf("summary should still surface: %q", res.Output)
+	}
+}
+
+func TestAgentRuntimeRejectsNonJSONResult(t *testing.T) {
+	valid := `{"version":1,"summary":"fix","baseSHA":"pinned-sha","diff":"","files":[]}`
+	for _, tc := range []struct {
+		name string
+		raw  string
+	}{
+		{name: "malformed", raw: `{"version":`},
+		{name: "prose", raw: "Here is the result: " + valid},
+		{name: "code fence", raw: "```json\n" + valid + "\n```"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			results, done := rawResultServer(t, tc.raw)
+			defer done()
+			r := &AgentRuntime{
+				kube:    &fakeTaskAPI{phases: []string{"Succeeded"}},
+				results: results,
+				opts:    AgentOptions{AgentRef: "opencode-fixer", PollEvery: time.Millisecond},
+			}
+			if _, err := r.Generate(context.Background(), spec()); err == nil || !strings.Contains(err.Error(), "parsing result") {
+				t.Fatalf("error = %v, want strict JSON parse failure", err)
+			}
+		})
 	}
 }
 
@@ -249,6 +282,7 @@ func TestAgentRuntimeRejectsMismatchedResultIdentity(t *testing.T) {
 	}{
 		{name: "version", result: StructuredResult{Version: 2, BaseSHA: "pinned-sha", Diff: "x", Files: []string{"x"}}, want: "version"},
 		{name: "base", result: StructuredResult{BaseSHA: "other", Diff: "x", Files: []string{"x"}}, want: "baseSHA"},
+		{name: "push", result: StructuredResult{BaseSHA: "pinned-sha", Diff: "x", Files: []string{"x"}, PushBranch: "automation/fix"}, want: "pushed branch"},
 		{name: "files", result: StructuredResult{BaseSHA: "pinned-sha", Diff: "x", Files: []string{"other"}}, want: "reported files"},
 		{name: "unsafe", result: StructuredResult{BaseSHA: "pinned-sha", Diff: "x", Files: []string{"../x"}}, want: "unsafe"},
 	} {
