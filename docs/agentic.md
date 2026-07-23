@@ -317,7 +317,8 @@ precedence over `/v1/models` metadata without maintaining a model-name table or
 probing an overflow. For example, the current Copilot GPT-5 mini deployment
 uses `AI_CONTEXT_WINDOW_TOKENS=128000`. A supplied value must be at least
 9,217 tokens to leave usable request capacity after fixed headroom. Leave it
-unset when the true limit is not known so the bounded fallback remains in force.
+unset when the true limit is not known so the runtime uses endpoint metadata
+when available, then the bounded fallback only when metadata is unavailable.
 
 The budgets are client-side on purpose: an OpenAI-compatible server
 (Dynamo / vLLM / TRT-LLM) enforces its window as a hard limit and can reject
