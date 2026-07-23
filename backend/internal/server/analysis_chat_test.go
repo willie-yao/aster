@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -200,4 +201,56 @@ func TestSafeAnalysisChatErrorHidesProviderBodies(t *testing.T) {
 			t.Errorf("safe error for %q = %q", reason, got)
 		}
 	}
+}
+
+func TestHandlerAnalysisChatAcceptsWorstCaseEncodedBodies(t *testing.T) {
+	dataDir := t.TempDir()
+	runner := &fakeAnalysisChatRunner{}
+	handler, err := Handler(Options{
+		DataDir: dataDir, Capabilities: DefaultCapabilities(), Auth: fakeAuth{}, AuthMode: "dev",
+		AnalysisChat: runner,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	refBody, err := json.Marshal(analysischat.AnalysisRef{
+		JobID: strings.Repeat(`"`, 1024), BuildID: strings.Repeat(`\`, 256),
+		TestName: strings.Repeat(`"`, 4096), SuiteName: strings.Repeat(`\`, 4096),
+		ClassName: strings.Repeat(`"`, 4096), JUnitFile: strings.Repeat(`\`, 1024),
+		AnalysisGeneratedAt: strings.Repeat(`"`, 128),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := func(path string, body []byte) *http.Response {
+		req, err := http.NewRequest(http.MethodPost, server.URL+path, strings.NewReader(string(body)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "ok")
+		req.Header.Set("Content-Type", "application/json")
+		response, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+	created := request("/api/analysis-chat/sessions", refBody)
+	if created.StatusCode != http.StatusCreated {
+		t.Fatalf("large encoded reference status=%d body=%s", created.StatusCode, readBody(t, created))
+	}
+	_ = created.Body.Close()
+
+	messageBody, err := json.Marshal(map[string]string{"message": strings.Repeat(`\`, 4096)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sent := request("/api/analysis-chat/sessions/session-1/messages", messageBody)
+	if sent.StatusCode != http.StatusOK {
+		t.Fatalf("large encoded message status=%d body=%s", sent.StatusCode, readBody(t, sent))
+	}
+	_ = sent.Body.Close()
 }

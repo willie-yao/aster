@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"regexp"
 	"slices"
 	"strconv"
@@ -408,6 +409,10 @@ func parseAnalysisChatReply(raw string, evidence map[string]*analysisChatEvidenc
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&reply); err != nil {
 		return analysischat.Reply{}, fmt.Errorf("response is not valid analysis-chat JSON: %w", err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return analysischat.Reply{}, errors.New("response contains trailing JSON")
 	}
 	reply.Answer = strings.TrimSpace(reply.Answer)
 	reply.Assessment = strings.TrimSpace(reply.Assessment)

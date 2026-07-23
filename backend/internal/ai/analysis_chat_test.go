@@ -407,3 +407,11 @@ func TestPrepareAnalysisChatFinalizeMessagesCompactsCompleteRequest(t *testing.T
 		t.Fatal("finalize prompt was not preserved")
 	}
 }
+
+func TestParseAnalysisChatReplyRejectsTrailingJSON(t *testing.T) {
+	raw := `{"answer":"first","assessment":"explains","citations":[],"proposed_revision":null}` +
+		`{"answer":"second","assessment":"explains","citations":[],"proposed_revision":null}`
+	if _, err := parseAnalysisChatReply(raw, nil); err == nil || !strings.Contains(err.Error(), "trailing JSON") {
+		t.Fatalf("trailing response error = %v", err)
+	}
+}

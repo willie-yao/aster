@@ -22,7 +22,11 @@ type AnalysisChatRunner interface {
 	Send(context.Context, string, string, string) (analysischat.SessionView, error)
 }
 
-const defaultAnalysisChatTimeout = 2 * time.Minute
+const (
+	defaultAnalysisChatTimeout        = 2 * time.Minute
+	maxAnalysisChatReferenceBodyBytes = 128 << 10
+	maxAnalysisChatMessageBodyBytes   = 32 << 10
+)
 
 func createAnalysisChatSessionHandler(run AnalysisChatRunner) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -32,7 +36,7 @@ func createAnalysisChatSessionHandler(run AnalysisChatRunner) http.Handler {
 			return
 		}
 		var ref analysischat.AnalysisRef
-		if err := decodeAnalysisChatBody(w, r, &ref, 8192); err != nil {
+		if err := decodeAnalysisChatBody(w, r, &ref, maxAnalysisChatReferenceBodyBytes); err != nil {
 			http.Error(w, "invalid analysis reference", http.StatusBadRequest)
 			return
 		}
@@ -71,7 +75,7 @@ func sendAnalysisChatMessageHandler(timeout time.Duration, run AnalysisChatRunne
 		var body struct {
 			Message string `json:"message"`
 		}
-		if err := decodeAnalysisChatBody(w, r, &body, 8192); err != nil || strings.TrimSpace(body.Message) == "" {
+		if err := decodeAnalysisChatBody(w, r, &body, maxAnalysisChatMessageBodyBytes); err != nil || strings.TrimSpace(body.Message) == "" {
 			http.Error(w, "invalid message", http.StatusBadRequest)
 			return
 		}
