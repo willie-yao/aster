@@ -180,9 +180,12 @@ and GitHub reconciliation after analysis completes.
 Provider values under `ai.*` may still be used by optional post-analysis AI
 review, but they do not configure Orka's per-failure Tasks.
 
-Orka is a strategic backend that is still in preview. Its current Provider,
-model, task timeout, retry, placement, and load controls live in Helm `orka.*`
-values. See the [Orka quickstart](../experimental/orka/QUICKSTART.md).
+Orka is an optional experimental backend. The current Helm mode uses the frozen
+compatibility-v6 `type: ai` worker, and its Provider, model, timeout, retry,
+placement, and load controls live in Helm `orka.*` values. The dashboard-owned
+`type: container` successor is being evaluated separately. See the
+[analysis runtime ownership decision](architecture-decisions/0001-analysis-runtime-ownership.md)
+and [Orka quickstart](../experimental/orka/QUICKSTART.md).
 
 ## Custom skills
 

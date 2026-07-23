@@ -50,13 +50,15 @@ server-side actions. See [Kubernetes deployment](docs/kubernetes.md).
 | In-process | Pages and Kubernetes | You want the self-contained default |
 | Orka preview | Kubernetes | You want per-failure Tasks, retries, observability, and agent-runtime integration |
 
-The in-process backend is the safest first install. **Orka is the strategic
-Kubernetes orchestration backend** and remains under heavy development. Today it
-requires a compatible Orka control plane, Provider, and worker. The intended
-product experience is for the dashboard deployment to manage those dependencies
-rather than requiring a separate Orka installation. See [Orka preview](experimental/orka/README.md).
+The in-process backend is canonical and is the safest first install. The
+current `analysis: orka` preview is a frozen compatibility-v6 `type: ai` path.
+A separate dashboard-owned `type: container` prototype is being evaluated as an
+optional lifecycle backend and will be productized or removed after its
+production gates are tested. Both Orka paths require a compatible Orka control
+plane today. See the [analysis runtime ownership decision](docs/architecture-decisions/0001-analysis-runtime-ownership.md)
+and [Orka preview](experimental/orka/README.md).
 
-Both backends produce the same `jobs/*.json` and dashboard UI.
+Both analysis choices publish the same `jobs/*.json` and dashboard UI.
 
 ## What a project owns
 
@@ -128,6 +130,7 @@ The Kubernetes server serves the same `/data/*.json` contract as Pages and adds
 
 ### Orka preview
 
+- [Analysis runtime ownership decision](docs/architecture-decisions/0001-analysis-runtime-ownership.md)
 - [Product status and constraints](experimental/orka/README.md)
 - [Quickstart](experimental/orka/QUICKSTART.md)
 - [Safe evaluation](experimental/orka/EVALUATION.md)

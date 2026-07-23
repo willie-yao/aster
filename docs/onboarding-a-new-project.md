@@ -13,10 +13,11 @@ command sets deployment-specific branding and files for Pages or Kubernetes.
 | Authenticated server actions | Kubernetes with Helm | In-process or Orka |
 | Per-failure Tasks and Orka observability | Kubernetes with Helm | Orka preview |
 
-Orka is the strategic Kubernetes orchestration backend. It currently requires a
-compatible Orka installation, Provider, and worker. The intended product
-experience is for the dashboard deployment to manage those dependencies. The
-first Kubernetes scaffold uses in-process analysis so it works by itself.
+Orka is an optional experimental lifecycle backend. The current `type: ai`
+preview is frozen at compatibility v6 and requires a compatible Orka
+installation, Provider, and worker. A dashboard-owned `type: container`
+successor is being evaluated separately. The first Kubernetes scaffold uses the
+canonical in-process analyzer so it works by itself.
 
 ## What the scaffold creates
 

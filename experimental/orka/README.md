@@ -6,12 +6,12 @@ orchestration platform, instead of the engine's in-process agentic loop. Discove
 and output are unchanged; only the per-failure analysis step moves to Orka Tasks
 that run alongside your inference stack.
 
-> **Strategic preview.** Orka is the long-term Kubernetes orchestration backend
-> for per-failure Tasks, retries, telemetry, and agent runtimes. It is still under
-> heavy development. Today `analysis: orka` requires a compatible Orka control
-> plane, Provider, and worker. The intended product experience is for the
-> dashboard deployment to manage those dependencies. The in-process backend
-> remains the self-contained first install while that integration is completed.
+> **Experimental lifecycle backend.** The in-process analyzer is canonical. The
+> patched Orka `type: ai` worker is frozen at compatibility v6 and receives only
+> security, critical correctness, and reproducibility maintenance. Future Orka
+> analysis work uses a dashboard-owned `type: container` analyzer so Orka owns
+> lifecycle rather than model policy. See the
+> [analysis runtime ownership decision](../../docs/architecture-decisions/0001-analysis-runtime-ownership.md).
 
 ## Docs
 
@@ -39,9 +39,9 @@ ranked exact candidate paths, then preserving successful Tool observations in an
 evidence ledger across proactive context compaction. Model capability still
 bounds the final reasoning, but the weak model now starts with a deterministic
 investigation checklist instead of depending on a voluntary recipe lookup.
-Orka remains opt-in during preview while these parity improvements are evaluated
-against the cheaper models operators are likely to run. This preserves a working
-self-contained path while the managed Orka deployment experience is built.
+The patched AI-worker path remains opt-in as a frozen experimental fallback and
+comparison baseline. New analysis work targets the dashboard-owned container
+analyzer and does not extend the compatibility patch.
 Convergence and discipline numbers are in
 [worker-patches/README.md](worker-patches/README.md).
 

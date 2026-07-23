@@ -71,12 +71,11 @@ identical either way.
 - `analysis: inprocess` (default): the worker or CronJob runs the engine's
   in-process agentic loop, governed by `ai.enabled`. It is self-contained, so a
   fresh `helm install` works with no extra components.
-- `analysis: orka` (strategic preview): the fetch step writes the dashboard
-  skeleton and Orka runs one observable Kubernetes Task per failure. This adds
-  native retries, per-Task telemetry, and the orchestration foundation for agent
-  runtimes. Orka remains under heavy development. Today it requires external
-  prerequisites; the intended product experience is for the dashboard deployment
-  to manage them.
+- `analysis: orka` (frozen preview): the fetch step writes the dashboard
+  skeleton and Orka runs one observable `type: ai` Task per failure. This adds
+  native retries and per-Task telemetry, but reconstructs dashboard policy in a
+  compatibility worker that is frozen at v6. A dashboard-owned `type: container`
+  successor is being evaluated separately and is not a supported Helm mode.
 
 Orka currently requires `mode: cron`, the Orka control plane, a Provider, and the
 pinned [compatibility AI worker](../experimental/orka/worker-patches/COMPATIBILITY.md).
@@ -214,7 +213,7 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | --- | --- |
 | `image.repository`, `image.tag` | Engine image; tag defaults to the chart `appVersion`. |
 | `mode` | `watch` (continuous worker Deployment, default) or `cron` (scheduled CronJob). |
-| `analysis` | `inprocess` for the self-contained backend or `orka` for the strategic preview. Orka currently requires `mode: cron`, a compatible control plane, Provider, and worker. |
+| `analysis` | `inprocess` for the canonical self-contained backend or `orka` for the frozen compatibility-v6 preview. Orka currently requires `mode: cron`, a compatible control plane, Provider, and worker. |
 | `fetcher.restartPolicy`, `fetcher.backoffLimit`, `fetcher.activeDeadlineSeconds` | Bound CronJob container restarts, Job retries, and total wall time. Empty restart policy selects `Never` for Orka and `OnFailure` otherwise; the default deadline is 10 hours. |
 | `orka.artifactTool.*` | Release-scoped artifact Tool image, authentication, network policy, resources, and scheduling. |
 | `orka.baseTools.*` | Create the synchronized producer ConfigMap or reference an existing ConfigMap in the release namespace. |

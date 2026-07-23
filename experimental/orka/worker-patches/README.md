@@ -1,5 +1,10 @@
 # Orka AI-worker compatibility image
 
+> **Frozen at compatibility v6.** This path receives security, critical
+> correctness, and reproducibility maintenance only. New analysis policy belongs
+> in the dashboard-owned analyzer. See the
+> [analysis runtime ownership decision](../../../docs/architecture-decisions/0001-analysis-runtime-ownership.md).
+
 The dashboard publishes a worker-only Orka compatibility image for the
 Orka backend preview. The image is built from a pinned upstream Orka
 commit plus `ai-worker-convergence.patch`; it does not require an upstream Orka
