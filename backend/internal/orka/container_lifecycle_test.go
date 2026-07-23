@@ -205,7 +205,7 @@ func TestReconcileContainerAnalysisResourcesAppliesOneTaskWithoutListingBundles(
 	}
 }
 
-func TestReconcileContainerAnalysisResourcesSkipsTerminalTask(t *testing.T) {
+func TestReconcileContainerAnalysisResourcesRetainsTerminalResources(t *testing.T) {
 	resources := lifecycleResources()
 	existing := (&unstructured.Unstructured{Object: resources.BundleConfigMap}).DeepCopy()
 	existing.SetResourceVersion("rv-terminal")
@@ -216,11 +216,8 @@ func TestReconcileContainerAnalysisResourcesSkipsTerminalTask(t *testing.T) {
 	if err := ReconcileContainerAnalysisResources(context.Background(), client, resources); err != nil {
 		t.Fatal(err)
 	}
-	if len(client.created) != 0 || len(client.claimed) != 0 || len(client.applied) != 0 {
-		t.Fatalf("terminal Task recreated resources: created=%v claimed=%v applied=%v", client.created, client.claimed, client.applied)
-	}
-	if !reflect.DeepEqual(client.deletedVersion, []string{"configmaps/bundle@rv-terminal"}) {
-		t.Fatalf("versioned deletes = %v", client.deletedVersion)
+	if len(client.created) != 0 || len(client.claimed) != 0 || len(client.applied) != 0 || len(client.deletedVersion) != 0 {
+		t.Fatalf("terminal resources changed: created=%v claimed=%v applied=%v deleted=%v", client.created, client.claimed, client.applied, client.deletedVersion)
 	}
 }
 

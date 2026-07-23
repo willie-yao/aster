@@ -280,7 +280,7 @@ func (a *ContainerAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, 
 			} else if stateErr := a.state.MergeTraces(delta); stateErr != nil {
 				log.Printf("Warning: failed to merge private traces from %s: %v", taskName, stateErr)
 			} else {
-				a.cleanupTerminal(resources, state)
+				a.cleanupConsumedBundle(resources, state)
 			}
 		}
 		return ai.UnavailableFailureAnalysisResult(request.TestCase, taskErr), taskErr
@@ -306,7 +306,7 @@ func (a *ContainerAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, 
 		log.Printf("Warning: failed to persist state from %s: %v", taskName, err)
 		return result, nil
 	}
-	a.cleanupTerminal(resources, state)
+	a.cleanupConsumedBundle(resources, state)
 	return result, nil
 }
 
@@ -348,19 +348,11 @@ func (a *ContainerAnalyzer) waitResult(ctx context.Context, taskName string) (st
 	}
 }
 
-func (a *ContainerAnalyzer) cleanupTerminal(resources ContainerAnalysisResources, state TaskState) {
+func (a *ContainerAnalyzer) cleanupConsumedBundle(resources ContainerAnalysisResources, state TaskState) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := CleanupContainerAnalysisBundle(ctx, a.kube, resources, state.UID); err != nil {
 		log.Printf("Warning: container analysis bundle cleanup failed: %v", err)
-		return
-	}
-	_, taskName, err := containerResourceRef(resources.Task)
-	if err == nil {
-		_, err = a.kube.DeleteTaskIfIdentity(ctx, a.opts.Namespace, taskName, state.UID, state.ResourceVersion)
-	}
-	if err != nil {
-		log.Printf("Warning: container analysis Task cleanup failed: %v", err)
 	}
 }
 

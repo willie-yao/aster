@@ -140,13 +140,26 @@ kubectl -n orka-system create secret generic orka-model \
 When `state.existingSecret` is empty, Helm creates matching release-scoped
 AES-256 state key Secrets in the dashboard and Orka namespaces and marks them to
 be retained. If you supply `state.existingSecret`, create the same Secret name
-and key in both namespaces. The encrypted state preserves raw cache entries,
-including evidence coverage fields added by newer engine versions, without
-enumerating their schema. Task identity remains in the encrypted wrapper and
-Orka Task, not the private analysis trace schema.
+and key in both namespaces. The mounted value must itself be standard base64 for
+exactly 32 random bytes. `kubectl --from-literal` performs the outer Kubernetes
+Secret encoding, so generate one shared literal and use it in both namespaces:
 
-A bounded maintenance pass removes old terminal analyzer Tasks and stale input
-bundles by exact UID and resource version. Failed Tasks transport authenticated
+```bash
+STATE_KEY=$(openssl rand -base64 32)
+kubectl -n dashboards create secret generic shared-analysis-state \
+  --from-literal=state-key="$STATE_KEY"
+kubectl -n orka-system create secret generic shared-analysis-state \
+  --from-literal=state-key="$STATE_KEY"
+```
+
+The encrypted state preserves raw cache entries, including evidence coverage
+fields added by newer engine versions, without enumerating their schema. Task
+identity remains in the encrypted wrapper and Orka Task, not the private
+analysis trace schema.
+
+Consumed input bundles are removed immediately. Terminal analyzer Tasks remain
+available for identical in-flight callers and are removed by a bounded retention
+pass using exact UID and resource version. Failed Tasks transport authenticated
 private traces, but their cache entries are never merged.
 
 The immutable ConfigMap bundle contains the sanitized project policy, prompt,

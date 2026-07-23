@@ -150,7 +150,7 @@ func TestContainerAnalyzerMergesSuccessfulTaskStateAndCleansUp(t *testing.T) {
 	if got := store.CacheSeed(request); len(got) != 1 {
 		t.Fatalf("cache seed = %+v", got)
 	}
-	if results.calls != 1 || len(kube.deletedTask) != 1 || len(resources.deletedVersion) != 1 {
+	if results.calls != 1 || len(kube.deletedTask) != 0 || len(resources.deletedVersion) != 1 {
 		t.Fatalf("result calls=%d deleted Tasks=%v deleted bundles=%v", results.calls, kube.deletedTask, resources.deletedVersion)
 	}
 }

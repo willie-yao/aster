@@ -70,7 +70,7 @@ func ReconcileContainerAnalysisResources(ctx context.Context, client ContainerAn
 		return fmt.Errorf("read container analysis Task %s: %w", taskName, err)
 	}
 	if state.Exists && TerminalPhase(state.Phase) {
-		return CleanupContainerAnalysisBundle(ctx, client, resources, state.UID)
+		return nil
 	}
 	if err := ApplyContainerAnalysisResources(ctx, client, resources); err != nil {
 		return err
