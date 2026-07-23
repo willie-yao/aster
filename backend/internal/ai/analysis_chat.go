@@ -248,10 +248,10 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 		messages = append(messages, echo)
 		messages = append(messages, skippedOutputs...)
 		for _, toolCall := range toolCalls {
-			result := dispatchAgenticTool(loopCtx, state, toolCall)
-			recordAnalysisChatEvidence(evidence, toolCall, result)
-			state.modelBytes += len(result)
-			messages = append(messages, modelMessage{Role: "tool", ToolCallID: toolCall.ID, Content: strPtr(result)})
+			envelope, payload := dispatchAgenticToolWithPayload(loopCtx, state, toolCall)
+			recordAnalysisChatEvidence(evidence, toolCall, payload)
+			state.modelBytes += len(envelope)
+			messages = append(messages, modelMessage{Role: "tool", ToolCallID: toolCall.ID, Content: strPtr(envelope)})
 		}
 	}
 
@@ -478,16 +478,12 @@ type analysisChatEvidence struct {
 
 var analysisChatContextLineRE = regexp.MustCompile(`^[> ]\s*(\d+):\s?(.*)$`)
 
-func recordAnalysisChatEvidence(evidence map[string]*analysisChatEvidence, toolCall modelToolCall, result string) {
+func recordAnalysisChatEvidence(evidence map[string]*analysisChatEvidence, toolCall modelToolCall, payload map[string]interface{}) {
 	if evidence == nil || !isContentFetchingTool(toolCall.Function.Name) {
 		return
 	}
 	path, err := artifacts.SafePath(extractToolPathArg(toolCall.Function.Arguments))
 	if err != nil || path == "" {
-		return
-	}
-	var payload map[string]any
-	if json.Unmarshal([]byte(result), &payload) != nil {
 		return
 	}
 	entry := evidence[path]
@@ -501,13 +497,10 @@ func recordAnalysisChatEvidence(evidence map[string]*analysisChatEvidence, toolC
 			appendAnalysisChatEvidenceSegment(entry, content)
 		}
 	case "grep_artifact":
-		matches, _ := payload["matches"].([]any)
-		for _, rawMatch := range matches {
-			match, _ := rawMatch.(map[string]any)
-			contexts, _ := match["context"].([]any)
+		for _, match := range analysisChatEvidenceMatches(payload["matches"]) {
+			contexts := analysisChatEvidenceContexts(match["context"])
 			segment := make([]string, 0, len(contexts))
-			for _, rawContext := range contexts {
-				contextLine, _ := rawContext.(string)
+			for _, contextLine := range contexts {
 				parts := analysisChatContextLineRE.FindStringSubmatch(contextLine)
 				if len(parts) != 3 {
 					continue
@@ -521,6 +514,40 @@ func recordAnalysisChatEvidence(evidence map[string]*analysisChatEvidence, toolC
 			}
 			appendAnalysisChatEvidenceSegment(entry, strings.Join(segment, "\n"))
 		}
+	}
+}
+
+func analysisChatEvidenceMatches(value any) []map[string]interface{} {
+	switch matches := value.(type) {
+	case []map[string]interface{}:
+		return matches
+	case []interface{}:
+		out := make([]map[string]interface{}, 0, len(matches))
+		for _, raw := range matches {
+			if match, ok := raw.(map[string]interface{}); ok {
+				out = append(out, match)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func analysisChatEvidenceContexts(value any) []string {
+	switch contexts := value.(type) {
+	case []string:
+		return contexts
+	case []interface{}:
+		out := make([]string, 0, len(contexts))
+		for _, raw := range contexts {
+			if contextLine, ok := raw.(string); ok {
+				out = append(out, contextLine)
+			}
+		}
+		return out
+	default:
+		return nil
 	}
 }
 

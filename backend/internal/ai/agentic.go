@@ -1495,20 +1495,28 @@ func isToolsUnsupportedError(err error) bool {
 	return toolsUnsupportedRe.MatchString(msg)
 }
 
-// dispatchAgenticTool routes one tool call through the registry, accumulates
-// bytes/budget telemetry on the agent state, and returns the model-bound
-// envelope JSON.
+// dispatchAgenticTool routes one tool call and returns its model-bound envelope.
 func dispatchAgenticTool(ctx context.Context, s *agentState, tc modelToolCall) string {
+	envelope, _ := dispatchAgenticToolWithPayload(ctx, s, tc)
+	return envelope
+}
+
+// dispatchAgenticToolWithPayload also returns the uncapped structured payload.
+func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc modelToolCall) (string, map[string]interface{}) {
 	s.calls++
 	if s.modelRemaining() <= 0 {
 		s.budgetExhausted = true
 		recordTrace(ctx, TraceEvent{Kind: "tool_call", Tool: tc.Function.Name, Outcome: "model_budget_exhausted"})
-		return toolErrJSON("model byte budget exhausted; produce final JSON now")
+		message := "model byte budget exhausted; produce final JSON now"
+		payload := map[string]interface{}{"error": message}
+		return toolErrJSON(message), payload
 	}
 	if s.gcsRemaining() <= 0 {
 		s.budgetExhausted = true
 		recordTrace(ctx, TraceEvent{Kind: "tool_call", Tool: tc.Function.Name, Outcome: "gcs_budget_exhausted"})
-		return toolErrJSON("GCS byte budget exhausted; produce final JSON now")
+		message := "GCS byte budget exhausted; produce final JSON now"
+		payload := map[string]interface{}{"error": message}
+		return toolErrJSON(message), payload
 	}
 
 	env := &tools.Env{
@@ -1561,7 +1569,7 @@ func dispatchAgenticTool(ctx context.Context, s *agentState, tc modelToolCall) s
 		log.Printf("    🔧 %s(%s) -> %d gcs bytes [%s]", tc.Function.Name, textutil.Truncate(tc.Function.Arguments, 140), result.BytesFetched, flag)
 	}
 
-	return toolEnvelopeJSON(s, result.Payload)
+	return toolEnvelopeJSON(s, result.Payload), result.Payload
 }
 
 // isContentFetchingTool reports whether a tool name is one of the three

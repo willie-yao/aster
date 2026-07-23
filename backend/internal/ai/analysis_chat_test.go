@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -299,7 +300,9 @@ func TestAnalysisChatCitationLineValidation(t *testing.T) {
 	evidence := map[string]*analysisChatEvidence{}
 	recordAnalysisChatEvidence(evidence, modelToolCall{Function: modelFunction{
 		Name: "grep_artifact", Arguments: `{"path":"build-log.txt"}`,
-	}}, `{"matches":[{"line":42,"context":["  41: before","> 42: controller stopped","  43: after"]}]}`)
+	}}, map[string]interface{}{"matches": []interface{}{map[string]interface{}{
+		"line": float64(42), "context": []interface{}{"  41: before", "> 42: controller stopped", "  43: after"},
+	}}})
 	valid := `{"answer":"The controller stopped.","assessment":"supports","citations":[{"path":"build-log.txt","line_start":42,"line_end":42,"quote":"controller stopped"}],"proposed_revision":null}`
 	reply, err := parseAnalysisChatReply(valid, evidence)
 	if err != nil {
@@ -348,5 +351,32 @@ func TestAnalysisChatEvidenceRequiresContiguousSegmentsAndLines(t *testing.T) {
 	}
 	if analysisChatQuoteInRange(evidence.Lines, 10, 12, "first snippet\nsecond snippet") {
 		t.Fatal("line range with an unobserved gap was accepted")
+	}
+}
+
+func TestAnalysisChatEvidenceSurvivesCappedModelEnvelope(t *testing.T) {
+	shrinkCallDelay(t)
+	server := newScriptedChatServer(t)
+	server.push(200, chatRespToolCall("call-1", "grep_artifact", map[string]interface{}{
+		"path": "build-log.txt", "pattern": "match", "max_matches": 100,
+	}))
+	server.push(200, chatRespFinal(`{
+		"answer":"The last matching line confirms the failure.",
+		"assessment":"supports",
+		"citations":[{"path":"build-log.txt","line_start":100,"line_end":100,"quote":"match-099-marker"}],
+		"proposed_revision":null
+	}`))
+	var lines []string
+	for i := 0; i < 100; i++ {
+		lines = append(lines, fmt.Sprintf("match-%03d-marker %s", i, strings.Repeat("x", 500)))
+	}
+	browser := &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte(strings.Join(lines, "\n"))}}
+	agent := newAnalysisChatAgentForTest(t, server.URL, browser, AnalysisChatOptions{MaxIters: 3, Timeout: time.Second})
+	reply, err := agent.Reply(context.Background(), analysisChatTurn())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reply.Citations) != 1 || reply.Citations[0].LineStart != 100 {
+		t.Fatalf("reply = %+v", reply)
 	}
 }
