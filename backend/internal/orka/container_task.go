@@ -62,9 +62,6 @@ func BuildContainerAnalysisResources(in ContainerAnalysisTaskSpec) (ContainerAna
 	if strings.TrimSpace(in.Image) == "" {
 		return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task image is required")
 	}
-	if len(in.Command) == 0 {
-		return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task command is required")
-	}
 	if strings.TrimSpace(in.Timeout) == "" {
 		return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task timeout is required")
 	}
@@ -190,6 +187,20 @@ func BuildContainerAnalysisResources(in ContainerAnalysisTaskSpec) (ContainerAna
 	bundleAnnotations := containerAnalysisAnnotations(ContainerAnalysisContractVersion, bundleDigest)
 	bundleAnnotations[containerAnalysisTaskNameAnnotation] = name
 	taskLabels := containerAnalysisLabels(in.Labels)
+	containerSpec := map[string]any{
+		"type":        "container",
+		"image":       in.Image,
+		"args":        append([]string(nil), in.Args...),
+		"env":         env,
+		"timeout":     in.Timeout,
+		"retryPolicy": map[string]any{"maxRetries": in.MaxRetries},
+		"execution": map[string]any{
+			"nodeSelector": map[string]any{"agentpool": "nodepool1"},
+		},
+	}
+	if len(in.Command) > 0 {
+		containerSpec["command"] = append([]string(nil), in.Command...)
+	}
 	return ContainerAnalysisResources{
 		BundleConfigMap: map[string]any{
 			"apiVersion": "v1",
@@ -206,18 +217,7 @@ func BuildContainerAnalysisResources(in ContainerAnalysisTaskSpec) (ContainerAna
 			"metadata": map[string]any{
 				"name": name, "namespace": in.Namespace, "labels": taskLabels, "annotations": containerAnalysisAnnotations(ContainerAnalysisContractVersion, bundleDigest),
 			},
-			"spec": map[string]any{
-				"type":        "container",
-				"image":       in.Image,
-				"command":     append([]string(nil), in.Command...),
-				"args":        append([]string(nil), in.Args...),
-				"env":         env,
-				"timeout":     in.Timeout,
-				"retryPolicy": map[string]any{"maxRetries": in.MaxRetries},
-				"execution": map[string]any{
-					"nodeSelector": map[string]any{"agentpool": "nodepool1"},
-				},
-			},
+			"spec": containerSpec,
 		},
 	}, nil
 }

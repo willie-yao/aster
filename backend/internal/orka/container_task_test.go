@@ -207,6 +207,22 @@ func TestBuildContainerAnalysisResources(t *testing.T) {
 	}
 }
 
+func TestBuildContainerAnalysisResourcesUsesImageEntrypoint(t *testing.T) {
+	spec := containerTaskSpec(t)
+	spec.Command = nil
+	resources, err := BuildContainerAnalysisResources(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskSpec := resources.Task["spec"].(map[string]any)
+	if _, ok := taskSpec["command"]; ok {
+		t.Fatalf("Task overrides image entrypoint: %+v", taskSpec)
+	}
+	if !reflect.DeepEqual(taskSpec["args"], []string{"-data-dir=/tmp/analyzer"}) {
+		t.Fatalf("args = %+v", taskSpec["args"])
+	}
+}
+
 func TestContainerAnalysisResourceIdentityChangesWithInputs(t *testing.T) {
 	base, err := BuildContainerAnalysisResources(containerTaskSpec(t))
 	if err != nil {

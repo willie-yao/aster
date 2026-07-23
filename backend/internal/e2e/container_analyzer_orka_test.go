@@ -322,7 +322,7 @@ func buildKindContainerTask(t *testing.T, namespace, image, prefix, endpoint, mo
 	t.Helper()
 	resources, err := orka.BuildContainerAnalysisResources(orka.ContainerAnalysisTaskSpec{
 		Namespace: namespace, NamePrefix: prefix, Image: image,
-		Command: []string{"/app"}, Args: []string{"-data-dir=/tmp/analyzer"},
+		Args:    []string{"-data-dir=/tmp/analyzer"},
 		Timeout: taskTimeout, MaxRetries: 1, ProjectDir: containerAnalyzerProject(t, benchmarkProject), Request: request, CacheSeed: cacheSeed, Labels: labels,
 		Environment: map[string]string{"AI_API": "chat_completions", "AI_ENDPOINT": endpoint, "AI_MODEL": model},
 		SecretEnv: []orka.SecretEnvVar{
