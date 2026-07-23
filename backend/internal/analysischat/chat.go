@@ -375,9 +375,10 @@ func (s *Service) resolve(ref AnalysisRef) (resolvedAnalysis, error) {
 
 	var matches []models.TestCase
 	for _, testCase := range run.TestCases {
+		testName := strings.TrimSpace(testCase.Name)
 		suiteName := strings.TrimSpace(testCase.SuiteName)
 		className := strings.TrimSpace(testCase.ClassName)
-		if testCase.Name != ref.TestName ||
+		if testName != ref.TestName ||
 			ref.SuiteName != "" && suiteName != ref.SuiteName ||
 			ref.ClassName != "" && className != ref.ClassName ||
 			ref.JUnitFile != "" && testCase.JUnitFile != ref.JUnitFile {
@@ -397,6 +398,7 @@ func (s *Service) resolve(ref AnalysisRef) (resolvedAnalysis, error) {
 	if ref.AnalysisGeneratedAt != "" && ref.AnalysisGeneratedAt != testCase.AIAnalysis.GeneratedAt {
 		return resolvedAnalysis{}, ErrAnalysisChanged
 	}
+	ref.TestName = strings.TrimSpace(testCase.Name)
 	ref.SuiteName = strings.TrimSpace(testCase.SuiteName)
 	ref.ClassName = strings.TrimSpace(testCase.ClassName)
 	ref.JUnitFile = testCase.JUnitFile

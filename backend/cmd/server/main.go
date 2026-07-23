@@ -3,17 +3,11 @@
 // static Pages site reads, plus /api/capabilities so the frontend can light up
 // server-only features. The static Pages mode keeps working unchanged.
 //
-// Admin-gated interactive features are enabled when
-// -project-dir is set and AUTH_MODE selects an auth mechanism:
-//
-//	oauth: GitHub OAuth App login; each admin's own token performs the write.
-//	       Needs OAUTH_CLIENT_ID, OAUTH_CLIENT_SECRET, OAUTH_REDIRECT_URL,
-//	       SESSION_KEY, and ADMIN_LOGINS.
-//	proxy: an upstream SSO proxy authenticates and passes AUTH_PROXY_HEADER;
-//	       a bot token (BOT_TOKEN) performs the write. Requires ADMIN_LOGINS.
-//	dev:   local development only; authenticates every request as an admin.
-//	       Needs BOT_TOKEN (the write credential); DEV_LOGIN sets the identity.
-//	       Never use in a deployment reachable by untrusted clients.
+// Admin-gated interactive features are enabled when -project-dir is set and
+// AUTH_MODE selects an auth mechanism. ANALYSIS_CHAT_ENABLED enables read-only
+// chat. ACTIONS_ENABLED controls GitHub writes and defaults off when chat is
+// enabled, otherwise on for backward compatibility. BOT_TOKEN is required only
+// when write actions are enabled.
 package main
 
 import (
@@ -27,6 +21,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -113,36 +108,57 @@ func enableInteractiveFeatures(opts *server.Options, projectDir, dataDir string)
 	if err != nil {
 		return fmt.Errorf("loading project config: %w", err)
 	}
-	provider := cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"))
-	if err := project.ValidateAIAPI(provider.API); err != nil {
+	features, err := interactiveFeaturesFromEnv()
+	if err != nil {
 		return err
 	}
-	actionService := actions.NewService(cfg, dataDir, actions.AIConfig{
-		Token:    os.Getenv("AI_TOKEN"),
-		API:      provider.API,
-		Endpoint: provider.Endpoint,
-		Model:    provider.Model,
-		Headers:  provider.Headers,
-	})
-	opts.Actions = actionService
-
-	// A single fix draft runs locate + edit + critique against the model; the
-	// 5-minute default is tight for slow self-hosted endpoints, so allow an
-	// override (e.g. ACTION_TIMEOUT=15m).
-	if v := os.Getenv("ACTION_TIMEOUT"); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			return fmt.Errorf("invalid ACTION_TIMEOUT %q: %w", v, err)
+	if err := configureAuthenticator(opts, features.Actions); err != nil {
+		return err
+	}
+	opts.TrustedOrigins = trustedOrigins(os.Getenv("OAUTH_REDIRECT_URL"), os.Getenv("TRUSTED_ORIGINS"))
+	if features.Actions {
+		if err := enableActions(opts, cfg, dataDir); err != nil {
+			return err
 		}
-		opts.ActionTimeout = d
 	}
-
-	requestTimeout := opts.ActionTimeout
-	if requestTimeout <= 0 {
-		requestTimeout = 10 * time.Minute
+	if features.AnalysisChat {
+		if err := enableAnalysisChat(opts, cfg, projectDir, dataDir); err != nil {
+			return err
+		}
 	}
-	actionService.ConfigureAsyncRequests(requestTimeout, actionRequestNotifier(cfg))
+	return nil
+}
 
+type interactiveFeatures struct {
+	Actions      bool
+	AnalysisChat bool
+}
+
+func interactiveFeaturesFromEnv() (interactiveFeatures, error) {
+	chat, err := optionalBoolEnv("ANALYSIS_CHAT_ENABLED", false)
+	if err != nil {
+		return interactiveFeatures{}, err
+	}
+	actions, err := optionalBoolEnv("ACTIONS_ENABLED", !chat)
+	if err != nil {
+		return interactiveFeatures{}, err
+	}
+	return interactiveFeatures{Actions: actions, AnalysisChat: chat}, nil
+}
+
+func optionalBoolEnv(name string, fallback bool) (bool, error) {
+	value, ok := os.LookupEnv(name)
+	if !ok || strings.TrimSpace(value) == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.ParseBool(strings.TrimSpace(value))
+	if err != nil {
+		return false, fmt.Errorf("invalid %s %q: %w", name, value, err)
+	}
+	return parsed, nil
+}
+
+func configureAuthenticator(opts *server.Options, actionsEnabled bool) error {
 	admins := splitList(os.Getenv("ADMIN_LOGINS"))
 	switch mode := os.Getenv("AUTH_MODE"); mode {
 	case "oauth":
@@ -163,8 +179,8 @@ func enableInteractiveFeatures(opts *server.Options, projectDir, dataDir string)
 		opts.LoginURL = "/api/auth/login"
 	case "proxy":
 		botToken := os.Getenv("BOT_TOKEN")
-		if botToken == "" {
-			return fmt.Errorf("proxy auth mode requires BOT_TOKEN")
+		if actionsEnabled && botToken == "" {
+			return fmt.Errorf("proxy auth mode requires BOT_TOKEN when actions are enabled")
 		}
 		header := os.Getenv("AUTH_PROXY_HEADER")
 		if header == "" {
@@ -177,8 +193,8 @@ func enableInteractiveFeatures(opts *server.Options, projectDir, dataDir string)
 		opts.AuthMode = "proxy"
 	case "dev":
 		botToken := os.Getenv("BOT_TOKEN")
-		if botToken == "" {
-			return fmt.Errorf("dev auth mode requires BOT_TOKEN (the write credential)")
+		if actionsEnabled && botToken == "" {
+			return fmt.Errorf("dev auth mode requires BOT_TOKEN when actions are enabled")
 		}
 		login := os.Getenv("DEV_LOGIN")
 		if login == "" {
@@ -190,18 +206,31 @@ func enableInteractiveFeatures(opts *server.Options, projectDir, dataDir string)
 	default:
 		return fmt.Errorf("unknown AUTH_MODE %q (want oauth, proxy, or dev)", mode)
 	}
+	return nil
+}
 
-	// Behind a reverse proxy that terminates the public hostname (e.g. Azure
-	// Front Door), the browser's Origin is the public host but r.Host is the
-	// forwarded origin host, so the CSRF guard needs the public origin(s). The
-	// OAuth redirect URL's host is exactly that public origin; TRUSTED_ORIGINS
-	// adds any extra hosts (and covers proxy auth mode, which has no redirect).
-	opts.TrustedOrigins = trustedOrigins(os.Getenv("OAUTH_REDIRECT_URL"), os.Getenv("TRUSTED_ORIGINS"))
-	if os.Getenv("ANALYSIS_CHAT_ENABLED") == "1" {
-		if err := enableAnalysisChat(opts, cfg, projectDir, dataDir); err != nil {
-			return err
-		}
+func enableActions(opts *server.Options, cfg *project.Config, dataDir string) error {
+	provider := cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"))
+	if err := project.ValidateAIAPI(provider.API); err != nil {
+		return err
 	}
+	actionService := actions.NewService(cfg, dataDir, actions.AIConfig{
+		Token: os.Getenv("AI_TOKEN"), API: provider.API, Endpoint: provider.Endpoint,
+		Model: provider.Model, Headers: provider.Headers,
+	})
+	opts.Actions = actionService
+	if value := os.Getenv("ACTION_TIMEOUT"); value != "" {
+		timeout, err := time.ParseDuration(value)
+		if err != nil {
+			return fmt.Errorf("invalid ACTION_TIMEOUT %q: %w", value, err)
+		}
+		opts.ActionTimeout = timeout
+	}
+	requestTimeout := opts.ActionTimeout
+	if requestTimeout <= 0 {
+		requestTimeout = 10 * time.Minute
+	}
+	actionService.ConfigureAsyncRequests(requestTimeout, actionRequestNotifier(cfg))
 	return nil
 }
 

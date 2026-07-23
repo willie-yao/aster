@@ -57,7 +57,9 @@ build serves both targets. All `/data/*.json` schemas stay byte-compatible.
 
 The server can expose an authenticated, read-only conversation API for a single
 published test analysis. Set `ANALYSIS_CHAT_ENABLED=1` with `-project-dir`,
-`AUTH_MODE`, `AI_TOKEN`, and the normal AI provider configuration. The server
+`AUTH_MODE`, `AI_TOKEN`, and the normal AI provider configuration. Chat mode
+disables GitHub actions by default and does not require `BOT_TOKEN`. Set
+`ACTIONS_ENABLED=1` only when the same server should expose write actions. The server
 then advertises `features.analysis_chat: true`. Static Pages deployments do not
 advertise or serve the API.
 

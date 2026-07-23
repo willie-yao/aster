@@ -51,6 +51,8 @@ spec:
           {{- if or $actions .Values.server.extraEnv }}
           env:
             {{- if $actions }}
+            - name: ACTIONS_ENABLED
+              value: "true"
             - name: AUTH_MODE
               value: {{ $a.mode | quote }}
             {{- if $a.admins }}

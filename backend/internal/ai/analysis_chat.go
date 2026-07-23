@@ -159,7 +159,6 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 		},
 		registry: a.registry, enabledTools: a.enabledTools, cache: tools.NewBoundedCache(128, 4<<20),
 		webURLBase: turn.Build.WebURL, startTime: start,
-		readArtifactsFull: map[string]bool{}, readArtifactsBase: map[string]bool{},
 	}
 
 	contextMessage, err := analysisChatContext(turn)
@@ -203,7 +202,7 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 			if message.Content != nil {
 				lastContent = *message.Content
 			}
-			reply, validationErr := parseAnalysisChatReply(lastContent, state, evidence)
+			reply, validationErr := parseAnalysisChatReply(lastContent, evidence)
 			if validationErr == nil {
 				reply.ToolCalls = state.calls
 				reply.GCSBytes = state.gcsBytes
@@ -258,7 +257,7 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 		return analysischat.Reply{}, fmt.Errorf("analysis chat finalize: empty model response")
 	}
 	lastContent = *response.Message.Content
-	reply, err := parseAnalysisChatReply(lastContent, state, evidence)
+	reply, err := parseAnalysisChatReply(lastContent, evidence)
 	if err != nil {
 		return analysischat.Reply{}, fmt.Errorf("analysis chat finalize: %w", err)
 	}
@@ -381,7 +380,7 @@ func analysisChatContext(turn analysischat.Turn) (string, error) {
 		"\n\nAnswer follow-up questions only about this selected analysis and build.", nil
 }
 
-func parseAnalysisChatReply(raw string, state *agentState, evidence map[string]*analysisChatEvidence) (analysischat.Reply, error) {
+func parseAnalysisChatReply(raw string, evidence map[string]*analysisChatEvidence) (analysischat.Reply, error) {
 	if strings.TrimSpace(raw) == "" {
 		return analysischat.Reply{}, errors.New("empty answer")
 	}
@@ -412,8 +411,8 @@ func parseAnalysisChatReply(raw string, state *agentState, evidence map[string]*
 		if err != nil || safe == "" {
 			return analysischat.Reply{}, fmt.Errorf("citation %d has an unsafe path", i+1)
 		}
-		normalized := NormalizeArtifactCitation(safe)
-		if normalized == "" || !state.readArtifactsFull[normalized] {
+		artifactEvidence := evidence[safe]
+		if artifactEvidence == nil {
 			return analysischat.Reply{}, fmt.Errorf("citation %d names an artifact not read during this turn", i+1)
 		}
 		citation.Path = safe
@@ -428,8 +427,7 @@ func parseAnalysisChatReply(raw string, state *agentState, evidence map[string]*
 		if len(citation.Quote) > 1000 {
 			return analysischat.Reply{}, fmt.Errorf("citation %d quote exceeds 1000 bytes", i+1)
 		}
-		artifactEvidence := evidence[normalized]
-		if artifactEvidence == nil || !strings.Contains(artifactEvidence.Text, citation.Quote) {
+		if !strings.Contains(artifactEvidence.Text, citation.Quote) {
 			return analysischat.Reply{}, fmt.Errorf("citation %d quote was not returned by the cited artifact read", i+1)
 		}
 		if citation.LineStart > 0 {
@@ -472,8 +470,8 @@ func recordAnalysisChatEvidence(evidence map[string]*analysisChatEvidence, toolC
 	if evidence == nil || !isContentFetchingTool(toolCall.Function.Name) {
 		return
 	}
-	path := NormalizeArtifactCitation(extractToolPathArg(toolCall.Function.Arguments))
-	if path == "" {
+	path, err := artifacts.SafePath(extractToolPathArg(toolCall.Function.Arguments))
+	if err != nil || path == "" {
 		return
 	}
 	var payload map[string]any

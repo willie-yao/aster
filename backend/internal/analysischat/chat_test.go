@@ -389,3 +389,22 @@ func TestServiceBusySessionCompletesAcrossExpiry(t *testing.T) {
 		t.Fatalf("completed expired session did not release capacity: %v", err)
 	}
 }
+
+func TestServiceResolvesTrimmedPublishedTestName(t *testing.T) {
+	dir := t.TempDir()
+	testCase := analyzedTest(" TestCluster ", "junit.xml", "2026-07-23T12:00:00Z")
+	writeJobDetail(t, dir, testDetail(testCase))
+	service, err := NewService(dir, &fakeRunner{}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := service.Create(AnalysisRef{
+		JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster",
+	}, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Analysis.TestName != "TestCluster" {
+		t.Fatalf("canonical test name = %q", created.Analysis.TestName)
+	}
+}

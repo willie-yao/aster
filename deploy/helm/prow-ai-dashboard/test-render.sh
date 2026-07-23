@@ -139,4 +139,13 @@ if grep -Fq 'helm.sh/resource-policy: keep' "$tmp/pvc-deletable.yaml"; then
   exit 1
 fi
 
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.actions.enabled=true \
+  --set server.actions.mode=proxy \
+  --set server.actions.admins[0]=alice \
+  --set server.actions.proxy.botToken=test-token \
+  --show-only templates/server-deployment.yaml > "$tmp/actions-server.yaml"
+grep -A1 -Fq 'name: ACTIONS_ENABLED' "$tmp/actions-server.yaml"
+grep -Fq 'value: "true"' "$tmp/actions-server.yaml"
+
 echo 'Helm render checks passed.'

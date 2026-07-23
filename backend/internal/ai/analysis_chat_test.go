@@ -136,7 +136,6 @@ func TestAnalysisChatAgentRepairsUnreadCitation(t *testing.T) {
 }
 
 func TestParseAnalysisChatReplyRejectsUnsafeAndUnverifiedClaims(t *testing.T) {
-	state := &agentState{readArtifactsFull: map[string]bool{"build-log.txt": true}}
 	cases := []string{
 		`{"answer":"x","assessment":"challenges","citations":[],"proposed_revision":{"root_cause":"r","suggested_fix":"f"}}`,
 		`{"answer":"x","assessment":"supports","citations":[{"path":"../secret"}],"proposed_revision":null}`,
@@ -145,7 +144,7 @@ func TestParseAnalysisChatReplyRejectsUnsafeAndUnverifiedClaims(t *testing.T) {
 		`{"answer":"x","assessment":"supports","citations":[],"proposed_revision":{"root_cause":"r","suggested_fix":"f"}}`,
 	}
 	for _, raw := range cases {
-		if _, err := parseAnalysisChatReply(raw, state, map[string]*analysisChatEvidence{"build-log.txt": {Text: "controller stopped"}}); err == nil {
+		if _, err := parseAnalysisChatReply(raw, map[string]*analysisChatEvidence{"build-log.txt": {Text: "controller stopped"}}); err == nil {
 			t.Errorf("invalid reply accepted: %s", raw)
 		}
 	}
@@ -297,13 +296,12 @@ func TestAnalysisChatOptionsUseFallbackContextBudget(t *testing.T) {
 }
 
 func TestAnalysisChatCitationLineValidation(t *testing.T) {
-	state := &agentState{readArtifactsFull: map[string]bool{"build-log.txt": true}}
 	evidence := map[string]*analysisChatEvidence{}
 	recordAnalysisChatEvidence(evidence, modelToolCall{Function: modelFunction{
 		Name: "grep_artifact", Arguments: `{"path":"build-log.txt"}`,
 	}}, `{"matches":[{"line":42,"context":["  41: before","> 42: controller stopped","  43: after"]}]}`)
 	valid := `{"answer":"The controller stopped.","assessment":"supports","citations":[{"path":"build-log.txt","line_start":42,"line_end":42,"quote":"controller stopped"}],"proposed_revision":null}`
-	reply, err := parseAnalysisChatReply(valid, state, evidence)
+	reply, err := parseAnalysisChatReply(valid, evidence)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +309,19 @@ func TestAnalysisChatCitationLineValidation(t *testing.T) {
 		t.Fatalf("verified line range was not retained: %+v", reply.Citations[0])
 	}
 	invalid := `{"answer":"The controller stopped.","assessment":"supports","citations":[{"path":"build-log.txt","line_start":41,"line_end":41,"quote":"controller stopped"}],"proposed_revision":null}`
-	if _, err := parseAnalysisChatReply(invalid, state, evidence); err == nil {
+	if _, err := parseAnalysisChatReply(invalid, evidence); err == nil {
 		t.Fatal("fabricated line range was accepted")
+	}
+}
+
+func TestAnalysisChatCitationUsesExactSafePath(t *testing.T) {
+	evidence := map[string]*analysisChatEvidence{"foo.log": {Text: "controller stopped"}}
+	caseMismatch := `{"answer":"x","assessment":"supports","citations":[{"path":"FOO.log","quote":"controller stopped"}],"proposed_revision":null}`
+	if _, err := parseAnalysisChatReply(caseMismatch, evidence); err == nil {
+		t.Fatal("case-mismatched artifact citation was accepted")
+	}
+	suffixMismatch := `{"answer":"x","assessment":"supports","citations":[{"path":"foo","quote":"controller stopped"}],"proposed_revision":null}`
+	if _, err := parseAnalysisChatReply(suffixMismatch, evidence); err == nil {
+		t.Fatal("suffix-stripped artifact citation was accepted")
 	}
 }

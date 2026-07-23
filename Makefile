@@ -43,7 +43,7 @@ serve: build-server
 # static build, so rebuild to pick up frontend changes. Override PROJECT_DIR to
 # resolve issue/fix repos.
 dev-actions: build-server fe-build
-	AUTH_MODE=dev BOT_TOKEN=$${BOT_TOKEN:-dev-token} ./bin/server \
+	AUTH_MODE=dev ACTIONS_ENABLED=1 BOT_TOKEN=$${BOT_TOKEN:-dev-token} ./bin/server \
 		-data-dir=frontend/public/data \
 		-static-dir=frontend/dist \
 		-project-dir=$(PROJECT_DIR)
