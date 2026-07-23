@@ -88,28 +88,6 @@ settings. The benchmark also accepts `BENCH_MAX_ITERS`, `BENCH_TIMEOUT`,
 `BENCH_MIN_TOOL_CALLS`, `BENCH_MIN_GCS_BYTES`, and
 `BENCH_CRITIQUE_RETRIES` overrides.
 
-The same case catalog and scorer can run through a live Orka deployment:
-
-```bash
-cd backend
-RUN_ORKA_BENCHMARK=1 \
-BENCH_ORKA_PROVIDER=<provider-name> \
-BENCH_ORKA_MODEL=<model-id> \
-BENCH_ORKA_API=http://127.0.0.1:18099 \
-BENCH_ORKA_TOKEN=<short-lived-Orka-API-token> \
-BENCH_ORKA_CONTEXT=<kube-context> \
-  go test ./internal/e2e \
-    -run 'TestOrkaAIBenchmark/flatcar-worker-dns-providerid$' \
-    -v -timeout 60m
-```
-
-Start the API endpoint with `kubectl -n orka-system port-forward svc/orka
-18099:8080` and create a token with `kubectl -n orka-system create token orka
---duration=30m`. The opt-in test applies uniquely identified Tasks and Tools and
-does not delete them. It uses live GCS by default because the in-cluster artifact
-Tool cannot read a fixture extracted only on the local test host. See
-`backend/internal/e2e/README.md` for the full configuration and storage options.
-
 There is no checked-in A/B comparison command. Compare benchmark logs or saved
 results when evaluating two models or configurations.
 
@@ -120,9 +98,5 @@ When editing Markdown:
 - Verify local links and heading anchors.
 - Validate generated scaffold text with `go test ./internal/onboard`.
 - Run `make helm-check` when Helm templates, packaged files, examples, or values
-  change. It lints the chart, verifies Orka Tool synchronization, exercises
-  owned and external artifact Tool renders, and tests the operational helpers.
-- Run `make orka-compat-check` when the pinned Orka worker metadata, patch,
-  scripts, or workflow changes. The dedicated compatibility workflow applies the
-  patch to the pinned source, runs focused normal and race tests plus the full
-  worker package, and builds the image on pull requests without publishing it.
+  change. It lints the chart, verifies the in-process fetcher and Orka fix-runtime
+  RBAC renders, and tests the operational helpers.

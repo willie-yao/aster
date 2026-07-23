@@ -1,5 +1,5 @@
 .PHONY: all build build-server build-worker serve dev-actions image fixer-image test test-v e2e lint fmt tidy helm-check \
-       fetch-data fetch-data-quick fetch-data-ai fetch-data-ai-quick orka-compat-check orka-compat-image \
+       fetch-data fetch-data-quick fetch-data-ai fetch-data-ai-quick \
        fe-install dev fe-build fe-check fe-lint \
        dist dist-ai clean clean-cache clean-all help
 
@@ -11,7 +11,6 @@ PROJECT_DIR ?= configs/example
 # Container image coordinates for `make image`.
 IMAGE ?= ghcr.io/willie-yao/prow-ai-dashboard
 VERSION ?= dev
-ORKA_COMPAT_IMAGE ?= ghcr.io/willie-yao/prow-ai-dashboard/orka-ai-worker:local
 
 # Default target
 all: build
@@ -82,15 +81,6 @@ fmt:
 # Tidy Go modules
 tidy:
 	cd backend && go mod tidy
-
-# Validate compatibility metadata and local helper behavior without cloning Orka.
-orka-compat-check:
-	bash experimental/orka/worker-patches/test-compat-worker.sh
-	shellcheck -x experimental/orka/worker-patches/*.sh
-
-# Clone the pinned Orka source, apply and test the patch, then build the worker.
-orka-compat-image:
-	bash experimental/orka/worker-patches/compat-worker.sh build $(ORKA_COMPAT_IMAGE)
 
 # Lint and render the Helm chart.
 helm-check:
@@ -173,8 +163,6 @@ help:
 	@echo "  fmt                Format Go code"
 	@echo "  tidy               Tidy Go modules"
 	@echo "  helm-check         Lint and validate Helm chart renders"
-	@echo "  orka-compat-check  Validate frozen Orka worker assets"
-	@echo "  orka-compat-image  Test and build the frozen Orka worker"
 	@echo ""
 	@echo "  fetch-data         Fetch data from GCS (8 builds/job)"
 	@echo "  fetch-data-quick   Fetch minimal data (3 builds/job)"
