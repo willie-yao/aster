@@ -161,21 +161,26 @@ func TestHandlerAnalysisChatRejectsMalformedAndCrossOriginRequests(t *testing.T)
 
 func TestWriteAnalysisChatErrorMapping(t *testing.T) {
 	cases := []struct {
-		err  error
-		want int
+		err      error
+		want     int
+		wantBody string
 	}{
-		{analysischat.ErrAnalysisNotFound, http.StatusNotFound},
-		{analysischat.ErrAnalysisChanged, http.StatusConflict},
-		{analysischat.ErrInvalidRequest, http.StatusBadRequest},
-		{analysischat.ErrSessionLimit, http.StatusTooManyRequests},
-		{context.DeadlineExceeded, http.StatusGatewayTimeout},
-		{errors.New("provider secret https://private.example/v1"), http.StatusBadGateway},
+		{analysischat.ErrAnalysisNotFound, http.StatusNotFound, "analysis not found"},
+		{analysischat.ErrSessionNotFound, http.StatusNotFound, "analysis chat session not found"},
+		{analysischat.ErrAnalysisChanged, http.StatusConflict, "analysis changed"},
+		{analysischat.ErrInvalidRequest, http.StatusBadRequest, "invalid analysis chat request"},
+		{analysischat.ErrSessionLimit, http.StatusTooManyRequests, "analysis chat session limit reached"},
+		{context.DeadlineExceeded, http.StatusGatewayTimeout, "analysis chat request timed out"},
+		{errors.New("provider secret https://private.example/v1"), http.StatusBadGateway, "analysis chat could not complete the request"},
 	}
 	for _, testCase := range cases {
 		recorder := httptest.NewRecorder()
 		writeAnalysisChatError(recorder, "session", "alice", testCase.err)
 		if recorder.Code != testCase.want {
 			t.Errorf("error %v status=%d want=%d", testCase.err, recorder.Code, testCase.want)
+		}
+		if !strings.Contains(recorder.Body.String(), testCase.wantBody) {
+			t.Errorf("error %v body=%q want substring %q", testCase.err, recorder.Body.String(), testCase.wantBody)
 		}
 		if strings.Contains(recorder.Body.String(), "private.example") {
 			t.Fatal("provider URL leaked to response")

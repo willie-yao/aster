@@ -61,7 +61,9 @@ published test analysis. Set `ANALYSIS_CHAT_ENABLED=1` with `-project-dir`,
 disables GitHub actions by default and does not require `BOT_TOKEN`. Set
 `ACTIONS_ENABLED=1` only when the same server should expose write actions. The server
 then advertises `features.analysis_chat: true`. Static Pages deployments do not
-advertise or serve the API.
+advertise or serve the API. In the Helm chart, set `server.chat.enabled=true`
+alongside `ai.enabled=true`; authentication uses the settings under
+`server.actions`, but write actions remain disabled.
 
 Create a session by posting the selected analysis identity:
 

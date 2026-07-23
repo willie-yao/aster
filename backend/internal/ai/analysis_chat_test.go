@@ -144,7 +144,7 @@ func TestParseAnalysisChatReplyRejectsUnsafeAndUnverifiedClaims(t *testing.T) {
 		`{"answer":"x","assessment":"supports","citations":[],"proposed_revision":{"root_cause":"r","suggested_fix":"f"}}`,
 	}
 	for _, raw := range cases {
-		if _, err := parseAnalysisChatReply(raw, map[string]*analysisChatEvidence{"build-log.txt": {Text: "controller stopped"}}); err == nil {
+		if _, err := parseAnalysisChatReply(raw, map[string]*analysisChatEvidence{"build-log.txt": {Segments: []string{"controller stopped"}}}); err == nil {
 			t.Errorf("invalid reply accepted: %s", raw)
 		}
 	}
@@ -315,7 +315,7 @@ func TestAnalysisChatCitationLineValidation(t *testing.T) {
 }
 
 func TestAnalysisChatCitationUsesExactSafePath(t *testing.T) {
-	evidence := map[string]*analysisChatEvidence{"foo.log": {Text: "controller stopped"}}
+	evidence := map[string]*analysisChatEvidence{"foo.log": {Segments: []string{"controller stopped"}}}
 	caseMismatch := `{"answer":"x","assessment":"supports","citations":[{"path":"FOO.log","quote":"controller stopped"}],"proposed_revision":null}`
 	if _, err := parseAnalysisChatReply(caseMismatch, evidence); err == nil {
 		t.Fatal("case-mismatched artifact citation was accepted")
@@ -323,5 +323,30 @@ func TestAnalysisChatCitationUsesExactSafePath(t *testing.T) {
 	suffixMismatch := `{"answer":"x","assessment":"supports","citations":[{"path":"foo","quote":"controller stopped"}],"proposed_revision":null}`
 	if _, err := parseAnalysisChatReply(suffixMismatch, evidence); err == nil {
 		t.Fatal("suffix-stripped artifact citation was accepted")
+	}
+}
+
+func TestNewAnalysisChatAgentRequiresContentReader(t *testing.T) {
+	registry, _ := newTestRegistry(t)
+	_, err := NewAnalysisChatAgent(
+		newAgenticTestClient(t, "http://example.test"),
+		ComposeAnalysisChatSystemPrompt("project"), registry,
+		[]string{"discover_clusters"}, &fixedBrowserFactory{browser: &fakeBrowser{}}, AnalysisChatOptions{},
+	)
+	if err == nil || !strings.Contains(err.Error(), "read_artifact") {
+		t.Fatalf("constructor error = %v", err)
+	}
+}
+
+func TestAnalysisChatEvidenceRequiresContiguousSegmentsAndLines(t *testing.T) {
+	evidence := &analysisChatEvidence{
+		Segments: []string{"first snippet", "second snippet"},
+		Lines:    map[int]string{10: "first snippet", 12: "second snippet"},
+	}
+	if analysisChatEvidenceContains(evidence, "first snippet\nsecond snippet") {
+		t.Fatal("quote spanning separate reads was accepted")
+	}
+	if analysisChatQuoteInRange(evidence.Lines, 10, 12, "first snippet\nsecond snippet") {
+		t.Fatal("line range with an unobserved gap was accepted")
 	}
 }

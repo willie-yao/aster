@@ -1,5 +1,10 @@
 {{- $actions := .Values.server.actions.enabled -}}
+{{- $chat := .Values.server.chat.enabled -}}
+{{- $interactive := or $actions $chat -}}
 {{- $a := .Values.server.actions -}}
+{{- if and $chat (not .Values.ai.enabled) -}}
+{{- fail "server.chat.enabled requires ai.enabled" -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -45,14 +50,20 @@ spec:
             - -addr=:{{ .Values.server.port }}
             - -data-dir={{ .Values.persistence.mountPath }}
             - -static-dir={{ .Values.server.staticDir }}
-            {{- if $actions }}
+            {{- if $interactive }}
             - -project-dir={{ .Values.project.mountPath }}
             {{- end }}
-          {{- if or $actions .Values.server.extraEnv }}
+          {{- if or $interactive .Values.server.extraEnv }}
           env:
+            {{- if $interactive }}
             {{- if $actions }}
             - name: ACTIONS_ENABLED
               value: "true"
+            {{- end }}
+            {{- if $chat }}
+            - name: ANALYSIS_CHAT_ENABLED
+              value: "true"
+            {{- end }}
             - name: AUTH_MODE
               value: {{ $a.mode | quote }}
             {{- if $a.admins }}
@@ -79,11 +90,13 @@ spec:
             {{- else if eq $a.mode "proxy" }}
             - name: AUTH_PROXY_HEADER
               value: {{ $a.proxy.header | quote }}
+            {{- if $actions }}
             - name: BOT_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ include "prow-ai-dashboard.authSecret" . }}
                   key: BOT_TOKEN
+            {{- end }}
             {{- if $a.proxy.secret }}
             - name: AUTH_PROXY_SECRET
               valueFrom:
@@ -134,13 +147,14 @@ spec:
           volumeMounts:
             - name: data
               mountPath: {{ .Values.persistence.mountPath }}
-              # Read-write when actions are enabled: the server persists issue
-              # and fix-PR dedup state next to the data it serves.
+              # Read-write only for actions, which persist dedup state.
               readOnly: {{ not $actions }}
-            {{- if $actions }}
+            {{- if $interactive }}
             - name: project
               mountPath: {{ .Values.project.mountPath }}
               readOnly: true
+            {{- end }}
+            {{- if $actions }}
             - name: tmp
               mountPath: /tmp
             {{- end }}
@@ -162,12 +176,14 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: {{ include "prow-ai-dashboard.pvcName" . }}
-        {{- if $actions }}
+        {{- if $interactive }}
         - name: project
           configMap:
             name: {{ include "prow-ai-dashboard.projectConfigMap" . }}
             items:
               {{- include "prow-ai-dashboard.projectVolumeItems" . | nindent 14 }}
+        {{- end }}
+        {{- if $actions }}
         - name: tmp
           emptyDir: {}
         {{- end }}

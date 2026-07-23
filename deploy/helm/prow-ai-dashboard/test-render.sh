@@ -148,4 +148,29 @@ helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
 grep -A1 -Fq 'name: ACTIONS_ENABLED' "$tmp/actions-server.yaml"
 grep -Fq 'value: "true"' "$tmp/actions-server.yaml"
 
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.chat.enabled=true \
+  --set server.actions.mode=proxy \
+  --set server.actions.admins[0]=alice \
+  --set ai.enabled=true \
+  --set ai.token=test-token \
+  --set ai.endpoint=http://model.test/v1/chat/completions \
+  --set ai.model=test-model \
+  --show-only templates/server-deployment.yaml > "$tmp/chat-server.yaml"
+grep -A1 -Fq 'name: ANALYSIS_CHAT_ENABLED' "$tmp/chat-server.yaml"
+grep -Fq 'value: "true"' "$tmp/chat-server.yaml"
+grep -Fq -- '- -project-dir=/config' "$tmp/chat-server.yaml"
+grep -Fq 'name: project' "$tmp/chat-server.yaml"
+if grep -Fq 'name: ACTIONS_ENABLED' "$tmp/chat-server.yaml" || grep -Fq 'name: BOT_TOKEN' "$tmp/chat-server.yaml"; then
+  echo 'chat-only server rendered write-action credentials' >&2
+  exit 1
+fi
+
+if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.chat.enabled=true > "$tmp/chat-without-ai.yaml" 2>&1; then
+  echo 'server.chat.enabled was accepted without ai.enabled' >&2
+  exit 1
+fi
+grep -Fq 'server.chat.enabled requires ai.enabled' "$tmp/chat-without-ai.yaml"
+
 echo 'Helm render checks passed.'

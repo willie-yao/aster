@@ -143,7 +143,14 @@ server:
   # Example: COOKIE_INSECURE=1 to allow the session cookie over
   # plain http when testing behind a local port-forward.
   extraEnv: []
-  # Admin-gated write actions: file an issue or draft a fix PR for a failure.
+  # Admin-gated read-only conversations about a published AI analysis.
+  # Uses the authentication settings under actions, but does not enable writes
+  # or require BOT_TOKEN. Requires ai.enabled.
+  chat:
+    enabled: false
+  # Admin authentication and write actions: file an issue or draft a fix PR.
+  # The mode, admins, oauth, proxy, and trustedOrigins settings are shared with
+  # chat when server.chat.enabled is true.
   # Enabling actions mounts the project config and AI secret into the server and
   # gives it write access to the shared volume (issue/fix-PR dedup state).
   actions:

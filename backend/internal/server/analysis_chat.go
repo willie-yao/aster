@@ -110,7 +110,9 @@ func writeAnalysisChatError(w http.ResponseWriter, id, login string, err error) 
 	status := http.StatusBadGateway
 	message := "analysis chat could not complete the request"
 	switch {
-	case errors.Is(err, analysischat.ErrAnalysisNotFound), errors.Is(err, analysischat.ErrSessionNotFound):
+	case errors.Is(err, analysischat.ErrAnalysisNotFound):
+		status, message = http.StatusNotFound, "analysis not found"
+	case errors.Is(err, analysischat.ErrSessionNotFound):
 		status, message = http.StatusNotFound, "analysis chat session not found"
 	case errors.Is(err, analysischat.ErrAnalysisChanged), errors.Is(err, analysischat.ErrSessionBusy):
 		status, message = http.StatusConflict, err.Error()

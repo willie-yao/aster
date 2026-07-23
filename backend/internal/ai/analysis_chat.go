@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -133,11 +132,23 @@ func NewAnalysisChatAgent(client *Client, systemPrompt string, registry *tools.R
 	if len(enabledTools) == 0 {
 		return nil, fmt.Errorf("analysis chat requires at least one read-only tool")
 	}
+	if !hasAnalysisChatContentReader(enabledTools) {
+		return nil, fmt.Errorf("analysis chat requires read_artifact, tail_artifact, or grep_artifact")
+	}
 	return &AnalysisChatAgent{
 		client: client, systemPrompt: systemPrompt, registry: registry,
 		enabledTools: slices.Clone(enabledTools), browserFactory: browserFactory,
 		opts: opts.normalized(),
 	}, nil
+}
+
+func hasAnalysisChatContentReader(enabledTools []string) bool {
+	for _, name := range enabledTools {
+		if isContentFetchingTool(name) {
+			return true
+		}
+	}
+	return false
 }
 
 // Reply runs one bounded tool-calling turn.
@@ -427,8 +438,8 @@ func parseAnalysisChatReply(raw string, evidence map[string]*analysisChatEvidenc
 		if len(citation.Quote) > 1000 {
 			return analysischat.Reply{}, fmt.Errorf("citation %d quote exceeds 1000 bytes", i+1)
 		}
-		if !strings.Contains(artifactEvidence.Text, citation.Quote) {
-			return analysischat.Reply{}, fmt.Errorf("citation %d quote was not returned by the cited artifact read", i+1)
+		if !analysisChatEvidenceContains(artifactEvidence, citation.Quote) {
+			return analysischat.Reply{}, fmt.Errorf("citation %d quote was not returned contiguously by the cited artifact read", i+1)
 		}
 		if citation.LineStart > 0 {
 			if len(artifactEvidence.Lines) == 0 {
@@ -460,8 +471,9 @@ func parseAnalysisChatReply(raw string, evidence map[string]*analysisChatEvidenc
 }
 
 type analysisChatEvidence struct {
-	Text  string
-	Lines map[int]string
+	Segments []string
+	Lines    map[int]string
+	Bytes    int
 }
 
 var analysisChatContextLineRE = regexp.MustCompile(`^[> ]\s*(\d+):\s?(.*)$`)
@@ -486,13 +498,14 @@ func recordAnalysisChatEvidence(evidence map[string]*analysisChatEvidence, toolC
 	switch toolCall.Function.Name {
 	case "read_artifact", "tail_artifact":
 		if content, ok := payload["content"].(string); ok {
-			appendAnalysisChatEvidence(entry, content)
+			appendAnalysisChatEvidenceSegment(entry, content)
 		}
 	case "grep_artifact":
 		matches, _ := payload["matches"].([]any)
 		for _, rawMatch := range matches {
 			match, _ := rawMatch.(map[string]any)
 			contexts, _ := match["context"].([]any)
+			segment := make([]string, 0, len(contexts))
 			for _, rawContext := range contexts {
 				contextLine, _ := rawContext.(string)
 				parts := analysisChatContextLineRE.FindStringSubmatch(contextLine)
@@ -504,41 +517,49 @@ func recordAnalysisChatEvidence(evidence map[string]*analysisChatEvidence, toolC
 					continue
 				}
 				entry.Lines[line] = parts[2]
-				appendAnalysisChatEvidence(entry, parts[2])
+				segment = append(segment, parts[2])
 			}
+			appendAnalysisChatEvidenceSegment(entry, strings.Join(segment, "\n"))
 		}
 	}
 }
 
-func appendAnalysisChatEvidence(evidence *analysisChatEvidence, text string) {
+func appendAnalysisChatEvidenceSegment(evidence *analysisChatEvidence, text string) {
 	if evidence == nil || text == "" {
 		return
 	}
 	const maxEvidenceBytes = 128 << 10
-	remaining := maxEvidenceBytes - len(evidence.Text)
+	remaining := maxEvidenceBytes - evidence.Bytes
 	if remaining <= 0 {
 		return
 	}
 	if len(text) > remaining {
 		text = text[:remaining]
 	}
-	if evidence.Text != "" {
-		evidence.Text += "\n"
+	evidence.Segments = append(evidence.Segments, text)
+	evidence.Bytes += len(text)
+}
+
+func analysisChatEvidenceContains(evidence *analysisChatEvidence, quote string) bool {
+	if evidence == nil {
+		return false
 	}
-	evidence.Text += text
+	for _, segment := range evidence.Segments {
+		if strings.Contains(segment, quote) {
+			return true
+		}
+	}
+	return false
 }
 
 func analysisChatQuoteInRange(lines map[int]string, start, end int, quote string) bool {
-	lineNumbers := make([]int, 0, len(lines))
-	for line := range lines {
-		if line >= start && line <= end {
-			lineNumbers = append(lineNumbers, line)
+	parts := make([]string, 0, end-start+1)
+	for line := start; line <= end; line++ {
+		text, ok := lines[line]
+		if !ok {
+			return false
 		}
-	}
-	sort.Ints(lineNumbers)
-	parts := make([]string, 0, len(lineNumbers))
-	for _, line := range lineNumbers {
-		parts = append(parts, lines[line])
+		parts = append(parts, text)
 	}
 	return strings.Contains(strings.Join(parts, "\n"), quote)
 }
