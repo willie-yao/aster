@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -50,8 +52,9 @@ import (
 
 // benchSignal is one scored expectation against the model's root cause text.
 type benchSignal struct {
-	name string
-	re   *regexp.Regexp
+	name    string
+	re      *regexp.Regexp
+	negated *regexp.Regexp
 	// must marks a signal whose absence fails the benchmark. Non-must signals
 	// are informational, tracking how deep the analysis got.
 	must bool
@@ -92,6 +95,52 @@ type benchCase struct {
 const fixtureReleaseBase = "https://github.com/willie-yao/prow-ai-dashboard/releases/download/benchmark-fixtures/"
 
 func mustRE(s string) *regexp.Regexp { return regexp.MustCompile(s) }
+
+const flatcarNodePresencePattern = `(?:worker\s+)?node(?:\s+object)?\s+(?:exist(?:ed|s)?|registered|created|ready|became\s+ready|(?:is|was)\s+(?:created|registered|ready)|(?:has|had)(?:\s+been)?\s+(?:created|registered|ready)|(?:has|had)\s+existed|(?:did|does)\s+(?:exist|register))|(?:vm|machine|kubelet|it)\s+(?:did\s+)?register(?:ed)?\s+(?:as\s+)?(?:(?:a|the)\s+)?(?:worker\s+)?node(?:\s+object)?`
+
+var (
+	benchmarkClauseBoundaryRE = mustRE(`(?i)[.!?:;\n]+|(?:,\s*)?\b(?:but|however|yet|nevertheless|instead)\b\s*,?|\bnot\s+only\b`)
+	flatcarNodePresenceRE     = mustRE(`(?is)` + flatcarNodePresencePattern)
+	flatcarNodeNegationRE     = mustRE(`(?is)(?:\b(?:no|neither|nor|without)\b.*?(?:` + flatcarNodePresencePattern + `)|\b(?:not|never)\b[^,]*?(?:` + flatcarNodePresencePattern + `)|(?:` + flatcarNodePresencePattern + `)\s+(?:nowhere|not\s+anywhere|neither\b|in\s+(?:no|neither)\b))`)
+)
+
+func (s benchSignal) matches(text string) bool {
+	if s.negated == nil {
+		return s.re.MatchString(text)
+	}
+	for _, clause := range benchmarkSignalClauses(text) {
+		negated := s.negated.FindAllStringIndex(clause, -1)
+		for _, match := range s.re.FindAllStringIndex(clause, -1) {
+			rejected := false
+			for _, negative := range negated {
+				if match[0] < negative[1] && negative[0] < match[1] {
+					rejected = true
+					break
+				}
+			}
+			if !rejected {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func benchmarkSignalClauses(text string) []string {
+	boundaries := benchmarkClauseBoundaryRE.FindAllStringIndex(text, -1)
+	clauses := make([]string, 0, len(boundaries)+1)
+	start := 0
+	for _, boundary := range boundaries {
+		if start < boundary[0] {
+			clauses = append(clauses, text[start:boundary[0]])
+		}
+		start = boundary[1]
+	}
+	if start < len(text) {
+		clauses = append(clauses, text[start:])
+	}
+	return clauses
+}
 
 // benchCases is the growing catalog of hard failures to benchmark against.
 var benchCases = []benchCase{
@@ -162,7 +211,7 @@ var benchCases = []benchCase{
 		consecutiveFailures: 1,
 		oppositeDiagnosis:   "The worker Node did not exist. Its providerID was set. cloud-node-manager reached the API Service.",
 		signals: []benchSignal{
-			{name: "recognizes the worker Node existed or registered", re: mustRE(`(?is)(?:worker\s+)?node(?:\s+object)?\s+(?:exist(?:ed|s)?|registered|became\s+ready|was\s+(?:created|registered|ready))|(?:exist(?:ed|s)?|registered)\s+(?:as\s+)?(?:a\s+)?(?:worker\s+)?node`), must: true},
+			{name: "recognizes the worker Node existed or registered", re: flatcarNodePresenceRE, negated: flatcarNodeNegationRE, must: true},
 			{name: "identifies missing providerID or cloud-provider initialization", re: mustRE(`(?is)(?:missing|empty|unset|absent|lacked?|without|no)\s+(?:the\s+)?provider.?id|provider.?id.{0,40}(?:missing|empty|unset|absent|not\s+(?:set|populated|assigned))|cloud.?provider.{0,80}uninitialized|uninitialized.{0,80}cloud.?provider`), must: true},
 			{name: "identifies cloud-node-manager API reachability as the blocking failure", re: mustRE(`(?is)cloud-node-manager.{0,200}(?:could\s+not|couldn't|cannot|can't|failed|unable|unreachable|refus|timed?\s*out|timeout|crash).{0,120}(?:10\.96\.0\.1|api(?:server)?|cluster.?ip|kubernetes\s+service)|cloud-node-manager.{0,200}(?:10\.96\.0\.1|api(?:server)?|cluster.?ip|kubernetes\s+service).{0,120}(?:could\s+not|couldn't|cannot|can't|failed|unable|unreachable|refus|timed?\s*out|timeout|crash)|(?:10\.96\.0\.1|cluster.?ip).{0,120}(?:refus|timeout|unreachable|failed).{0,120}cloud-node-manager`), must: true},
 			{name: "STRETCH: traces kube-proxy failing to synchronize", re: mustRE(`(?is)kube-proxy.*(?:sync|watch|list|api|dns|lookup|resolve|service)`)},
@@ -251,6 +300,57 @@ func TestFlatcarBenchmarkSkillRequiresProviderIDChain(t *testing.T) {
 	}
 }
 
+func TestFlatcarNodeExistenceSignal(t *testing.T) {
+	var signal *benchSignal
+	for i := range benchCases {
+		if benchCases[i].name != "flatcar-worker-dns-providerid" {
+			continue
+		}
+		for j := range benchCases[i].signals {
+			if benchCases[i].signals[j].name == "recognizes the worker Node existed or registered" {
+				signal = &benchCases[i].signals[j]
+				break
+			}
+		}
+	}
+	if signal == nil {
+		t.Fatal("Flatcar Node-existence signal is missing")
+	}
+
+	tests := []struct {
+		text string
+		want bool
+	}{
+		{text: "Node is registered and Ready.", want: true},
+		{text: "The VM did register a Node object.", want: true},
+		{text: "The worker Node exists.", want: true},
+		{text: "The worker Node did exist.", want: true},
+		{text: "The worker Node does exist.", want: true},
+		{text: "The worker Node has existed.", want: true},
+		{text: "The worker Node never registered.", want: false},
+		{text: "No Node is registered.", want: false},
+		{text: "No worker Node exists.", want: false},
+		{text: "The VM did not register a Node object.", want: false},
+		{text: "Neither the worker Node existed nor did the VM register a Node object.", want: false},
+		{text: "No worker Node existed. The Node is registered and Ready.", want: true},
+		{text: "No worker Node existed. Node is registered and Ready.", want: true},
+		{text: "No VM, machine, or kubelet registered as a Node object.", want: false},
+		{text: "No VM existed, but the Node registered.", want: true},
+		{text: "Although the VM was not ready, the worker Node existed.", want: true},
+		{text: "The worker Node existed nowhere in the cluster.", want: false},
+		{text: "There is not a Node registered.", want: false},
+		{text: "Never did the worker Node exist.", want: false},
+		{text: "Not only did the VM register a Node object, the Node became Ready.", want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.text, func(t *testing.T) {
+			if got := signal.matches(tt.text); got != tt.want {
+				t.Errorf("MatchString(%q) = %v, want %v", tt.text, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestFlatcarBenchmarkSignalsMatchReferenceDiagnosis(t *testing.T) {
 	var flatcar *benchCase
 	for i := range benchCases {
@@ -264,7 +364,7 @@ func TestFlatcarBenchmarkSignalsMatchReferenceDiagnosis(t *testing.T) {
 	}
 	reference := `The worker Node existed and registered Ready, but it retained the cloud-provider uninitialized taint and had no providerID. cloud-node-manager crash-looped because it could not reach the API Service ClusterIP 10.96.0.1. kube-proxy never synchronized because the API hostname lookup used [::1]:53 and DNS returned connection refused.`
 	for _, signal := range flatcar.signals {
-		if !signal.re.MatchString(reference) {
+		if !signal.matches(reference) {
 			t.Errorf("reference diagnosis missed %q", signal.name)
 		}
 	}
@@ -343,6 +443,8 @@ func runBenchCase(t *testing.T, bc benchCase, endpoint, model, token, systemProm
 	service := ai.NewService(client, universal.New(), systemPrompt, consecutiveMap)
 	service.SetSkills(projectSkills)
 	service.SetSourceRepo(bc.sourceRepo[0], bc.sourceRepo[1])
+	traceStore := ai.NewTraceStore()
+	service.SetTraceStore(traceStore)
 
 	// Size the model/context budgets from the endpoint's window, matching the
 	// fetcher. Fall back to a static budget with compaction off when absent.
@@ -378,7 +480,60 @@ func runBenchCase(t *testing.T, bc benchCase, endpoint, model, token, systemProm
 	service.Analyze(context.Background(), &http.Client{Timeout: 60 * time.Second}, jobID, loc.BuildPath(), run, tc)
 	elapsed := time.Since(start).Round(time.Second)
 
-	scoreBenchCase(t, bc, tc, elapsed, "in-process")
+	toolUsage := successfulBenchmarkToolUsage(traceStore.Snapshot())
+	scoreBenchCase(t, bc, tc, elapsed, "in-process", toolUsage)
+}
+
+type benchmarkToolUsage struct {
+	names  []string
+	counts []string
+}
+
+func successfulBenchmarkToolUsage(snapshot ai.AnalysisTraceFile) benchmarkToolUsage {
+	counts := map[string]int{}
+	for _, trace := range snapshot.Traces {
+		for _, event := range trace.Events {
+			if event.Kind == "tool_call" && event.Outcome == "success" && event.Tool != "" {
+				counts[event.Tool]++
+			}
+		}
+	}
+
+	names := make([]string, 0, len(counts))
+	for name := range counts {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	formattedCounts := make([]string, 0, len(names))
+	for _, name := range names {
+		formattedCounts = append(formattedCounts, fmt.Sprintf("%s=%d", name, counts[name]))
+	}
+	return benchmarkToolUsage{names: names, counts: formattedCounts}
+}
+
+func TestSuccessfulBenchmarkToolUsage(t *testing.T) {
+	snapshot := ai.AnalysisTraceFile{Traces: []ai.AnalysisTrace{
+		{Events: []ai.TraceEvent{
+			{Kind: "tool_call", Tool: "read_artifact", Outcome: "success"},
+			{Kind: "tool_call", Tool: "grep_artifact", Outcome: "success"},
+			{Kind: "tool_call", Tool: "read_artifact", Outcome: "success"},
+			{Kind: "tool_call", Tool: "list_artifacts", Outcome: "error"},
+			{Kind: "model_request", Tool: "ignored", Outcome: "success"},
+		}},
+		{Events: []ai.TraceEvent{
+			{Kind: "tool_call", Tool: "discover_clusters", Outcome: "success"},
+			{Kind: "tool_call", Outcome: "success"},
+		}},
+	}}
+
+	got := successfulBenchmarkToolUsage(snapshot)
+	if want := []string{"discover_clusters", "grep_artifact", "read_artifact"}; !slices.Equal(got.names, want) {
+		t.Errorf("names = %v, want %v", got.names, want)
+	}
+	if want := []string{"discover_clusters=1", "grep_artifact=1", "read_artifact=2"}; !slices.Equal(got.counts, want) {
+		t.Errorf("counts = %v, want %v", got.counts, want)
+	}
 }
 
 func TestBenchCasesRejectOppositeDiagnoses(t *testing.T) {
@@ -387,7 +542,7 @@ func TestBenchCasesRejectOppositeDiagnoses(t *testing.T) {
 			continue
 		}
 		for _, signal := range bc.signals {
-			if signal.must && signal.re.MatchString(bc.oppositeDiagnosis) {
+			if signal.must && signal.matches(bc.oppositeDiagnosis) {
 				t.Errorf("benchmark %s required signal %q accepts opposite diagnosis %q", bc.name, signal.name, bc.oppositeDiagnosis)
 			}
 		}
@@ -403,7 +558,7 @@ func benchTestCase(bc benchCase) *models.TestCase {
 	}
 }
 
-func scoreBenchCase(t *testing.T, bc benchCase, tc *models.TestCase, elapsed time.Duration, backend string) {
+func scoreBenchCase(t *testing.T, bc benchCase, tc *models.TestCase, elapsed time.Duration, backend string, toolUsage benchmarkToolUsage) {
 	t.Helper()
 	if tc.AIAnalysis == nil {
 		summary := "<none>"
@@ -420,8 +575,8 @@ func scoreBenchCase(t *testing.T, bc benchCase, tc *models.TestCase, elapsed tim
 	scored := strings.ToLower(strings.Join([]string{tc.AISummary.Summary, a.RootCause, a.SuggestedFix}, "\n"))
 
 	t.Logf("\n===== %s (%s) =====", bc.name, backend)
-	t.Logf("elapsed=%s tool_calls=%d gcs_bytes=%d context_bytes=%d critique_passed=%v budget_exhausted=%v",
-		elapsed, a.ToolCalls, a.GCSBytes, a.ContextBytes, a.CritiquePassed, a.BudgetExhausted)
+	t.Logf("elapsed=%s tool_calls=%d tool_names=%v tool_counts=%v gcs_bytes=%d context_bytes=%d critique_passed=%v budget_exhausted=%v",
+		elapsed, a.ToolCalls, toolUsage.names, toolUsage.counts, a.GCSBytes, a.ContextBytes, a.CritiquePassed, a.BudgetExhausted)
 	t.Logf("severity=%s transient=%v", a.Severity, tc.AISummary.IsTransient)
 	t.Logf("SUMMARY:\n%s", tc.AISummary.Summary)
 	t.Logf("ROOT CAUSE:\n%s", a.RootCause)
@@ -430,7 +585,7 @@ func scoreBenchCase(t *testing.T, bc benchCase, tc *models.TestCase, elapsed tim
 	var missedMust []string
 	hit, total := 0, len(bc.signals)
 	for _, s := range bc.signals {
-		ok := s.re.MatchString(scored)
+		ok := s.matches(scored)
 		if ok {
 			hit++
 		}
