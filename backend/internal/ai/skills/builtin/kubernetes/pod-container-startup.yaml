@@ -2,7 +2,8 @@ id: engine.kubernetes.pod-container-startup
 name: Pod and container startup failures
 priority: 220
 triggers:
-  - '(?i)\b(pending|containercreating|crashloopbackoff|imagepullbackoff|errimagepull|failedmount|failedscheduling|unschedulable)\b'
+  - '(?i)\b(pod|container)\b.{0,120}\b(pending|containercreating|crashloopbackoff|imagepullbackoff|errimagepull|failedmount|failedscheduling|unschedulable)\b'
+  - '(?i)\b(pending|containercreating|crashloopbackoff|imagepullbackoff|errimagepull|failedmount|failedscheduling|unschedulable)\b.{0,120}\b(pod|container)\b'
   - '(?i)\b(pod|container)\b.{0,120}\b(start|startup|schedule|pull|mount|sandbox|device plugin|cni|csi|runtime)\b'
 required_evidence:
   - id: pod-state-events

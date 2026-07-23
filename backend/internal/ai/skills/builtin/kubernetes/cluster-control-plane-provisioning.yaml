@@ -2,8 +2,14 @@ id: engine.kubernetes.cluster-control-plane-provisioning
 name: Cluster and control-plane provisioning
 priority: 210
 triggers:
-  - '(?i)\b(cluster|control.?plane|kubeadmcontrolplane|kcp|machinedeployment|machine|infrastructure)\b.{0,160}\b(provision|reconcile|not ready|unready|timeout|timed out|bootstrap|failed)\b'
-  - '(?i)\b(provision|reconcile)\b.{0,120}\b(cluster|control.?plane|machine|infrastructure)\b'
+  - '(?i)\b(cluster|control.?plane|kubeadmcontrolplane|kcp|machinedeployment|machine|infrastructure)\b.{0,160}\b(provision(?:s|ed|ing)?|reconcil(?:e[ds]?|ing|iation)|bootstrap)\b.{0,80}\b(failed|failure|error|stalled|timeout|timed out|not ready|unready)\b'
+  - '(?i)\b(cluster|control.?plane|kubeadmcontrolplane|kcp|machinedeployment|machine|infrastructure)\b.{0,160}\b(failed|failure|error|stalled|timeout|timed out|not ready|unready)\b.{0,80}\b(provision(?:s|ed|ing)?|reconcil(?:e[ds]?|ing|iation)|bootstrap)\b'
+  - '(?i)\b(provision(?:s|ed|ing)?|reconcil(?:e[ds]?|ing|iation)|bootstrap)\b.{0,120}\b(cluster|control.?plane|kubeadmcontrolplane|kcp|machinedeployment|machine|infrastructure)\b.{0,80}\b(failed|failure|error|stalled|timeout|timed out|not ready|unready)\b'
+  - '(?i)\b(provision(?:s|ed|ing)?|reconcil(?:e[ds]?|ing|iation)|bootstrap)\b.{0,80}\b(failed|failure|error|stalled|timeout|timed out|not ready|unready)\b.{0,120}\b(cluster|control.?plane|kubeadmcontrolplane|kcp|machinedeployment|machine|infrastructure)\b'
+  - '(?i)\b(failed|failure|error|stalled|timeout|timed out|not ready|unready)\b.{0,80}\b(provision(?:s|ed|ing)?|reconcil(?:e[ds]?|ing|iation)|bootstrap)\b.{0,120}\b(cluster|control.?plane|kubeadmcontrolplane|kcp|machinedeployment|machine|infrastructure)\b'
+  - '(?i)\b(failed|failure|error|stalled|timeout|timed out|not ready|unready)\b.{0,120}\b(cluster|control.?plane|kubeadmcontrolplane|kcp|machinedeployment|machine|infrastructure)\b.{0,80}\b(provision(?:s|ed|ing)?|reconcil(?:e[ds]?|ing|iation)|bootstrap)\b'
+  - '(?i)\b(cluster|control.?plane|kubeadmcontrolplane|kcp|machinedeployment|machine|infrastructure)\b.{0,160}\b(cannot|could not|failed to|unable to)\s+be\s+(provisioned|reconciled|bootstrapped)\b'
+  - '(?i)\b(cannot|could not|failed to|unable to)\s+(provision|reconcile|bootstrap)\b.{0,120}\b(cluster|control.?plane|kubeadmcontrolplane|kcp|machinedeployment|machine|infrastructure)\b'
   - '(?i)\bbootstrap\b.{0,120}\b(failed|error|timeout|timed out|stalled)\b'
 required_evidence:
   - id: provisioning-object-state

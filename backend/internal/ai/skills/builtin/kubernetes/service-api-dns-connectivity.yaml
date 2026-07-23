@@ -2,9 +2,26 @@ id: engine.kubernetes.service-api-dns-connectivity
 name: Service, API, DNS, and kube-proxy connectivity
 priority: 230
 triggers:
-  - '(?i)\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,160}\b(unreachable|timeout|timed out|refused|connect|dial|lookup|resolve|no route)\b'
-  - '(?i)\b(kube-proxy|dns|resolver|nameserver)\b.{0,160}\b(sync|watch|list|lookup|resolve|refused|timeout|failed|error)\b'
-  - '(?i)\b(cloud-node-manager|cloud-controller-manager)\b.{0,160}\b(api|cluster.?ip|service|reach|connect|timeout|refused)\b'
+  - '(?i)\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,160}\b(unreachable|refused|no route)\b'
+  - '(?i)\b(cannot|could not|failed to|unable to)\s+(reach|connect(?: to)?|dial|access|lookup|resolve)\b.{0,80}\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b'
+  - '(?i)\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,160}\b(cannot|could not|failed to|unable to)\s+be\s+(reached|connected|accessed)\b'
+  - '(?i)\b(host|hostname|api hostname|kubernetes api hostname)\b.{0,160}\b(cannot|could not|failed to|unable to)\s+be\s+(resolved|looked up)\b'
+  - '(?i)\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,160}\b(reach|connect(?:ion|ing|ed|ivity)?|dial(?:ing)?|access|lookup|resolve|resolution)\b.{0,80}\b(timeout|timed out|refused|failed|failure|error|no route)\b'
+  - '(?i)\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,160}\brequest\b.{0,80}\b(unreachable|timeout|timed out|refused|no route)\b'
+  - '(?i)\b(reach|connect(?:ion|ing|ed|ivity)?|dial(?:ing)?|access|lookup|resolve|resolution)\b.{0,80}\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,80}\b(timeout|timed out|refused|failed|failure|error|no route)\b'
+  - '(?i)\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,80}\b(failed|failure)\b.{0,80}\b(reach|connect(?:ion|ing|ed|ivity)?|dial(?:ing)?|access)\b'
+  - '(?i)\b(reach|connect(?:ion|ing|ed|ivity)?|dial(?:ing)?|access)\b.{0,80}\b(failed|failure)\b.{0,80}\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b'
+  - '(?i)\b(failed|failure)\b.{0,80}\b(reach|connect(?:ion|ing|ed|ivity)?|dial(?:ing)?|access)\b.{0,80}\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b'
+  - '(?i)\b(failed|failure)\b.{0,80}\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,80}\b(reach|connect(?:ion|ing|ed|ivity)?|dial(?:ing)?|access)\b'
+  - '(?i)\b(host|hostname|api hostname|kubernetes api hostname)\b.{0,80}\b(failed|failure)\b.{0,80}\b(lookup|resolve|resolution)\b'
+  - '(?i)\b(lookup|resolve|resolution)\b.{0,80}\b(failed|failure)\b.{0,80}\b(host|hostname|api hostname|kubernetes api hostname)\b'
+  - '(?i)\b(failed|failure)\b.{0,80}\b(lookup|resolve|resolution)\b.{0,80}\b(host|hostname|api hostname|kubernetes api hostname)\b'
+  - '(?i)\b(failed|failure)\b.{0,80}\b(host|hostname|api hostname|kubernetes api hostname)\b.{0,80}\b(lookup|resolve|resolution)\b'
+  - '(?i)\brequest\b.{0,80}\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,80}\b(unreachable|timeout|timed out|refused|no route)\b'
+  - '(?i)\b(kube-proxy|dns|resolver|nameserver)\b.{0,160}\b(unreachable|refused|no route)\b'
+  - '(?i)\b(kube-proxy|dns|resolver|nameserver)\b.{0,160}\b(sync|synchroniz(?:e[ds]?|ing|ation)|watch|list|reach|connect(?:ion|ing|ed|ivity)?|dial(?:ing)?|lookup|resolve|resolution)\b.{0,80}\b(timeout|timed out|refused|failed|failure|error|no route)\b'
+  - '(?i)\b(kube-proxy|dns|resolver|nameserver)\b.{0,160}\brequest\b.{0,80}\b(unreachable|timeout|timed out|refused|no route)\b'
+  - '(?i)\b(kube-proxy|dns|resolver|nameserver)\b.{0,160}\b(never|did not|failed to)\s+(sync|synchroniz(?:e[ds]?|ing|ation)|watch|list|lookup|resolv(?:e[ds]?|ing))\b'
 required_evidence:
   - id: affected-client
     description: component log that records the connectivity failure
@@ -15,17 +32,37 @@ required_evidence:
   - id: service-routing
     description: kube-proxy or Kubernetes Service endpoint state
     when:
-      - '(?i)\b(cluster.?ip|service)\b.{0,160}\b(unreachable|timeout|timed out|refused|connect|dial|no route)\b'
-      - '(?i)\bkube-proxy\b.{0,160}\b(sync|watch|list|api|service)\b'
-      - '(?i)\b(cloud-node-manager|cloud-controller-manager)\b.{0,160}\b(api|cluster.?ip|service|reach|connect|timeout|refused)\b'
+      - '(?i)\b(cluster.?ip|service)\b.{0,160}\b(unreachable|refused|no route)\b'
+      - '(?i)\b(cannot|could not|failed to|unable to)\s+(reach|connect(?: to)?|dial|access)\b.{0,80}\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b'
+      - '(?i)\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,160}\b(cannot|could not|failed to|unable to)\s+be\s+(reached|connected|accessed)\b'
+      - '(?i)\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,160}\b(reach|connect(?:ion|ing|ed|ivity)?|dial(?:ing)?|access)\b.{0,80}\b(timeout|timed out|refused|failed|failure|error|no route)\b'
+      - '(?i)\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,160}\brequest\b.{0,80}\b(unreachable|timeout|timed out|refused|no route)\b'
+      - '(?i)\b(reach|connect(?:ion|ing|ed|ivity)?|dial(?:ing)?|access)\b.{0,80}\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,80}\b(timeout|timed out|refused|failed|failure|error|no route)\b'
+      - '(?i)\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,80}\b(failed|failure)\b.{0,80}\b(reach|connect(?:ion|ing|ed|ivity)?|dial(?:ing)?|access)\b'
+      - '(?i)\b(reach|connect(?:ion|ing|ed|ivity)?|dial(?:ing)?|access)\b.{0,80}\b(failed|failure)\b.{0,80}\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b'
+      - '(?i)\b(failed|failure)\b.{0,80}\b(reach|connect(?:ion|ing|ed|ivity)?|dial(?:ing)?|access)\b.{0,80}\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b'
+      - '(?i)\b(failed|failure)\b.{0,80}\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,80}\b(reach|connect(?:ion|ing|ed|ivity)?|dial(?:ing)?|access)\b'
+      - '(?i)\brequest\b.{0,80}\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,80}\b(unreachable|timeout|timed out|refused|no route)\b'
+      - '(?i)\bkube-proxy\b.{0,160}\b(unreachable|refused|no route)\b'
+      - '(?i)\bkube-proxy\b.{0,160}\b(sync|synchroniz(?:e[ds]?|ing|ation)|watch|list|reach|connect(?:ion|ing|ed|ivity)?|dial(?:ing)?|lookup|resolve)\b.{0,80}\b(timeout|timed out|refused|failed|failure|error|no route)\b'
+      - '(?i)\bkube-proxy\b.{0,160}\brequest\b.{0,80}\b(unreachable|timeout|timed out|refused|no route)\b'
+      - '(?i)\bkube-proxy\b.{0,160}\b(never|did not|failed to)\s+(sync|synchroniz(?:e[ds]?|ing|ation)|watch|list)\b'
     any_of:
       - '(?i)^artifacts/clusters/[^/]+/(?:logs/)?kube-system/kube-proxy-[^/]+/(?:kube-proxy\.log|pod-describe\.txt)$'
       - '(?i)^artifacts/clusters/[^/]+/resources/[^/]+/(?:service|endpoints|endpointslice)/.*\.ya?ml$'
   - id: dns-resolution
     description: DNS server or resolver configuration and logs
     when:
-      - '(?i)\b(dns|resolver|nameserver|resolv\.conf|coredns|node-local-dns)\b.{0,160}\b(lookup|resolve|refused|timeout|failed|error|unreachable)\b'
-      - '(?i)\b(lookup|resolve|resolution)\b.{0,160}\b(host|hostname|api|server|refused|timeout|failed|error)\b'
+      - '(?i)\b(dns|resolver|nameserver|resolv\.conf|coredns|node-local-dns)\b.{0,160}\b(unreachable|refused|no route)\b'
+      - '(?i)\b(dns|resolver|nameserver|resolv\.conf|coredns|node-local-dns)\b.{0,160}\b(lookup|resolve|resolution|request)\b.{0,80}\b(timeout|timed out|refused|failed|failure|error|unreachable|no route)\b'
+      - '(?i)\b(dns|resolver|nameserver|resolv\.conf|coredns|node-local-dns)\b.{0,160}\b(never|did not|failed to)\s+(lookup|resolv(?:e[ds]?|ing))\b'
+      - '(?i)\b(cannot|could not|failed to|unable to)\s+(lookup|resolve)\b.{0,80}\b(host|hostname|api|server)\b'
+      - '(?i)\b(host|hostname|api hostname|kubernetes api hostname)\b.{0,160}\b(cannot|could not|failed to|unable to)\s+be\s+(resolved|looked up)\b'
+      - '(?i)\b(lookup|resolve|resolution)\b.{0,160}\b(timeout|timed out|refused|failed|failure|error|unreachable|no route)\b'
+      - '(?i)\b(host|hostname|api hostname|kubernetes api hostname)\b.{0,80}\b(failed|failure)\b.{0,80}\b(lookup|resolve|resolution)\b'
+      - '(?i)\b(lookup|resolve|resolution)\b.{0,80}\b(failed|failure)\b.{0,80}\b(host|hostname|api hostname|kubernetes api hostname)\b'
+      - '(?i)\b(failed|failure)\b.{0,80}\b(lookup|resolve|resolution)\b.{0,80}\b(host|hostname|api hostname|kubernetes api hostname)\b'
+      - '(?i)\b(failed|failure)\b.{0,80}\b(host|hostname|api hostname|kubernetes api hostname)\b.{0,80}\b(lookup|resolve|resolution)\b'
     any_of:
       - '(?i)^artifacts/clusters/[^/]+/(?:logs/)?kube-system/(?:coredns|node-local-dns)-[^/]+/.*\.(?:log|txt)$'
       - '(?i)^artifacts/clusters/[^/]+/(?:machines|nodes)/[^/]+/(?:resolv\.conf|systemd-resolved\.log)$'

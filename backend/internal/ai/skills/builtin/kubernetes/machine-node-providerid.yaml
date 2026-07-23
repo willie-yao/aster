@@ -26,9 +26,28 @@ required_evidence:
   - id: kube-proxy
     description: kube-proxy API and Service synchronization on the affected node
     when:
-      - '(?i)\b(cloud-node-manager|cloud-controller-manager)\b.{0,160}\b(api|cluster.?ip|service|reach|connect|timeout|refused|unreachable)\b'
-      - '(?i)\bkube-proxy\b.{0,160}\b(sync|watch|list|api|service|dns|lookup|resolve|failed|error)\b'
-      - '(?i)\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,160}\b(unreachable|timeout|timed out|refused|connect|dial|no route)\b'
+      - '(?i)\b(cloud-node-manager|cloud-controller-manager)\b.{0,160}\b(cannot|could not|failed to|unable to)\s+(reach|connect(?: to)?|dial|access)\b.{0,80}\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b'
+      - '(?i)\b(cloud-node-manager|cloud-controller-manager)\b.{0,160}\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,80}\b(cannot|could not|failed to|unable to)\s+be\s+(reached|connected|accessed)\b'
+      - '(?i)\b(cloud-node-manager|cloud-controller-manager)\b.{0,160}\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,80}\b(unreachable|refused|no route)\b'
+      - '(?i)\b(cloud-node-manager|cloud-controller-manager)\b.{0,160}\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,80}\b(reach|connect(?:ion|ing|ed|ivity)?|dial(?:ing)?|access)\b.{0,80}\b(timeout|timed out|refused|failed|failure|error|no route)\b'
+      - '(?i)\b(cloud-node-manager|cloud-controller-manager)\b.{0,160}\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,80}\brequest\b.{0,80}\b(unreachable|timeout|timed out|refused|no route)\b'
+      - '(?i)\b(cloud-node-manager|cloud-controller-manager)\b.{0,160}\b(reach|connect(?:ion|ing|ed|ivity)?|dial(?:ing)?|access)\b.{0,80}\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,80}\b(timeout|timed out|refused|failed|failure|error|no route)\b'
+      - '(?i)\b(cloud-node-manager|cloud-controller-manager)\b.{0,160}\b(failed|failure)\b.{0,80}\b(reach|connect(?:ion|ing|ed|ivity)?|dial(?:ing)?|access)\b.{0,80}\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b'
+      - '(?i)\b(cloud-node-manager|cloud-controller-manager)\b.{0,160}\brequest\b.{0,80}\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,80}\b(unreachable|timeout|timed out|refused|no route)\b'
+      - '(?i)\bkube-proxy\b.{0,160}\b(unreachable|refused|no route)\b'
+      - '(?i)\bkube-proxy\b.{0,160}\b(sync|synchroniz(?:e[ds]?|ing|ation)|watch|list|reach|connect(?:ion|ing|ed|ivity)?|dial(?:ing)?|lookup|resolve)\b.{0,80}\b(timeout|timed out|refused|failed|failure|error|no route)\b'
+      - '(?i)\bkube-proxy\b.{0,160}\brequest\b.{0,80}\b(unreachable|timeout|timed out|refused|no route)\b'
+      - '(?i)\bkube-proxy\b.{0,160}\b(never|did not|failed to)\s+(sync|synchroniz(?:e[ds]?|ing|ation)|watch|list)\b'
+      - '(?i)\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,160}\b(unreachable|refused|no route)\b'
+      - '(?i)\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,160}\b(cannot|could not|failed to|unable to)\s+be\s+(reached|connected|accessed)\b'
+      - '(?i)\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,160}\b(reach|connect(?:ion|ing|ed|ivity)?|dial(?:ing)?|access)\b.{0,80}\b(timeout|timed out|refused|failed|failure|error|no route)\b'
+      - '(?i)\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,160}\brequest\b.{0,80}\b(unreachable|timeout|timed out|refused|no route)\b'
+      - '(?i)\b(reach|connect(?:ion|ing|ed|ivity)?|dial(?:ing)?|access)\b.{0,80}\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,80}\b(timeout|timed out|refused|failed|failure|error|no route)\b'
+      - '(?i)\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,80}\b(failed|failure)\b.{0,80}\b(reach|connect(?:ion|ing|ed|ivity)?|dial(?:ing)?|access)\b'
+      - '(?i)\b(reach|connect(?:ion|ing|ed|ivity)?|dial(?:ing)?|access)\b.{0,80}\b(failed|failure)\b.{0,80}\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b'
+      - '(?i)\b(failed|failure)\b.{0,80}\b(reach|connect(?:ion|ing|ed|ivity)?|dial(?:ing)?|access)\b.{0,80}\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b'
+      - '(?i)\b(failed|failure)\b.{0,80}\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,80}\b(reach|connect(?:ion|ing|ed|ivity)?|dial(?:ing)?|access)\b'
+      - '(?i)\brequest\b.{0,80}\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,80}\b(unreachable|timeout|timed out|refused|no route)\b'
     any_of:
       - '(?i)^artifacts/clusters/[^/]+/(?:logs/)?kube-system/kube-proxy-[^/]+/(?:kube-proxy\.log|pod-describe\.txt)$'
 procedure: |
