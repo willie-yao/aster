@@ -168,6 +168,22 @@ fi
 
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set server.chat.enabled=true \
+  --set server.actions.mode=oauth \
+  --set server.actions.admins[0]=alice \
+  --set server.actions.oauth.clientId=client \
+  --set server.actions.oauth.clientSecret=secret \
+  --set server.actions.oauth.sessionKey=session-key \
+  --set server.actions.oauth.redirectUrl=https://dashboard.test/api/auth/callback \
+  --set ai.enabled=true \
+  --set ai.token=test-token \
+  --set ai.endpoint=http://model.test/v1/chat/completions \
+  --set ai.model=test-model \
+  --show-only templates/server-deployment.yaml > "$tmp/chat-oauth.yaml"
+grep -A1 -Fq 'name: OAUTH_SCOPE' "$tmp/chat-oauth.yaml"
+grep -Fq 'value: "read:user"' "$tmp/chat-oauth.yaml"
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.chat.enabled=true \
   --set server.actions.mode=proxy \
   --set server.actions.admins[0]=alice \
   --set server.actions.proxy.existingSecret=proxy-auth \

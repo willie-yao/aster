@@ -205,7 +205,7 @@ oauth mode the `OAUTH_REDIRECT_URL` host is trusted automatically, and
    | `OAUTH_REDIRECT_URL` | The callback URL registered above. |
    | `SESSION_KEY` | Random secret seeding the session-cookie encryption. |
    | `ADMIN_LOGINS` | Comma-separated GitHub logins allowed to act. |
-   | `OAUTH_SCOPE` | Optional; defaults to `repo`. Use `public_repo` for public-only. |
+   | `OAUTH_SCOPE` | Optional; defaults to `repo` with actions and `read:user` for chat-only. |
    | `COOKIE_INSECURE=1` | Optional; allow the cookie over plain http for local testing only. |
    | `TRUSTED_ORIGINS` | Optional; extra public origins the CSRF guard accepts (comma-separated) when behind a proxy. The `OAUTH_REDIRECT_URL` host is trusted automatically. |
 

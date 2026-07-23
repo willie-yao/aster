@@ -162,11 +162,15 @@ func configureAuthenticator(opts *server.Options, actionsEnabled bool) error {
 	admins := splitList(os.Getenv("ADMIN_LOGINS"))
 	switch mode := os.Getenv("AUTH_MODE"); mode {
 	case "oauth":
+		scope := strings.TrimSpace(os.Getenv("OAUTH_SCOPE"))
+		if scope == "" && !actionsEnabled {
+			scope = "read:user"
+		}
 		o, err := auth.NewOAuth(auth.OAuthConfig{
 			ClientID:      os.Getenv("OAUTH_CLIENT_ID"),
 			ClientSecret:  os.Getenv("OAUTH_CLIENT_SECRET"),
 			RedirectURL:   os.Getenv("OAUTH_REDIRECT_URL"),
-			Scope:         os.Getenv("OAUTH_SCOPE"),
+			Scope:         scope,
 			Admins:        admins,
 			SessionKey:    os.Getenv("SESSION_KEY"),
 			SecureCookies: os.Getenv("COOKIE_INSECURE") != "1",

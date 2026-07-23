@@ -76,7 +76,11 @@ spec:
             - name: OAUTH_REDIRECT_URL
               value: {{ $a.oauth.redirectUrl | quote }}
             - name: OAUTH_SCOPE
+              {{- if $actions }}
               value: {{ $a.oauth.scope | quote }}
+              {{- else }}
+              value: {{ $a.oauth.chatScope | quote }}
+              {{- end }}
             - name: OAUTH_CLIENT_SECRET
               valueFrom:
                 secretKeyRef:
