@@ -7,8 +7,10 @@ import Typography from "@mui/material/Typography";
 import { AutoAwesome, Terminal } from "@mui/icons-material";
 import { Link as RouterLink } from "react-router-dom";
 import type { AIAnalysis } from "../types/dashboard";
+import type { AnalysisChatReference } from "../types/analysisChat";
 import { RichText } from "./RichText";
 import { LabeledBlock } from "./LabeledBlock";
+import { AnalysisChat } from "./AnalysisChat";
 import { soft } from "../theme";
 import { fileToUrl, fileSortKey, type FileToUrlContext } from "../lib/utils";
 
@@ -27,10 +29,12 @@ export function AiAnalysisPanel({
   analysis,
   fileCtx,
   traceHref,
+  chatRef,
 }: {
   analysis: AIAnalysis;
   fileCtx: FileToUrlContext;
   traceHref?: string;
+  chatRef?: AnalysisChatReference;
 }) {
   const sevColor = severityAccent(analysis.severity);
   return (
@@ -117,6 +121,22 @@ export function AiAnalysisPanel({
                 })}
             </Stack>
           </Box>
+        )}
+
+        {chatRef && (
+          <AnalysisChat
+            key={[
+              chatRef.job_id,
+              chatRef.build_id,
+              chatRef.test_name,
+              chatRef.suite_name,
+              chatRef.class_name,
+              chatRef.junit_file,
+              chatRef.analysis_generated_at,
+            ].join("\u0000")}
+            analysisRef={chatRef}
+            fileCtx={fileCtx}
+          />
         )}
       </Stack>
     </Box>

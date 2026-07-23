@@ -5,13 +5,15 @@ import { useCapabilities } from "../hooks/useCapabilities";
 const API_BASE = import.meta.env.BASE_URL;
 
 // AuthProvider tracks the admin sign-in state for operator features so the
-// navbar, actions, and trace view share one source of truth. In oauth mode it
+// navbar, actions, traces, and analysis chat share one source of truth. In
+// oauth mode it
 // probes /api/auth/user; in proxy mode the upstream SSO already authenticated
 // the request, so it reports authenticated without an in-app login.
 export function AuthProvider({ children }: { children: ReactNode }) {
   const { features, auth } = useCapabilities();
   const authAvailable =
-    Boolean(auth) && (features.actions || Boolean(features.analysis_traces));
+    Boolean(auth) &&
+    (features.actions || Boolean(features.analysis_traces) || Boolean(features.analysis_chat));
   const mode = auth?.mode ?? null;
   const loginUrl = auth?.login_url;
 

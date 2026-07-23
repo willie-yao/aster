@@ -1,0 +1,48 @@
+export type AnalysisChatAssessment =
+  | "explains"
+  | "supports"
+  | "challenges"
+  | "inconclusive";
+
+export interface AnalysisChatReference {
+  job_id: string;
+  build_id: string;
+  test_name: string;
+  suite_name?: string;
+  class_name?: string;
+  junit_file?: string;
+  analysis_generated_at?: string;
+}
+
+export interface AnalysisChatCitation {
+  path: string;
+  line_start?: number;
+  line_end?: number;
+  quote?: string;
+}
+
+export interface AnalysisChatRevision {
+  root_cause: string;
+  suggested_fix: string;
+}
+
+export interface AnalysisChatMessage {
+  role: "user" | "assistant";
+  content: string;
+  assessment?: AnalysisChatAssessment;
+  citations?: AnalysisChatCitation[];
+  proposed_revision?: AnalysisChatRevision;
+  tool_calls?: number;
+  gcs_bytes?: number;
+  elapsed_ms?: number;
+  created_at: string;
+}
+
+export interface AnalysisChatSession {
+  id: string;
+  analysis: AnalysisChatReference;
+  created_at: string;
+  updated_at: string;
+  expires_at: string;
+  messages: AnalysisChatMessage[];
+}

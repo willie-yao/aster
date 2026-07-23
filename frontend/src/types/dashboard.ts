@@ -38,6 +38,8 @@ export interface Dashboard {
 
 export interface TestCase {
   name: string;
+  suite_name?: string;
+  class_name?: string;
   status: "passed" | "failed" | "skipped";
   duration_seconds: number;
   failure_message?: string;
