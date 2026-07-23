@@ -30,7 +30,8 @@ mode: watch
 analysisRuntime:
   type: inprocess
   orkaContainer:
-    namespace: orka-system
+    # Dedicated namespace for analyzer Tasks and only their model/state Secrets.
+    namespace: prow-ai-analysis
     # Orka REST API used to retrieve durable Task results. Set this to the
     # Service name of the installed Orka release.
     api: http://orka.orka-system.svc.cluster.local:8080

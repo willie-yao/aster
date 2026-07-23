@@ -288,8 +288,8 @@ func (a *ContainerAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, 
 				log.Printf("Warning: failed to parse private state from %s: %v", taskName, stateErr)
 			} else if stateErr := a.state.MergeTraces(delta); stateErr != nil {
 				log.Printf("Warning: failed to merge private traces from %s: %v", taskName, stateErr)
-			} else {
-				a.cleanupConsumedBundle(resources, state)
+			} else if markErr := MarkContainerAnalysisFailureConsumed(stateCtx, a.kube, resources, state.UID); markErr != nil {
+				log.Printf("Warning: failed to mark consumed failure %s: %v", taskName, markErr)
 			}
 		}
 		return ai.UnavailableFailureAnalysisResult(request.TestCase, taskErr), taskErr

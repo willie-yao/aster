@@ -199,6 +199,9 @@ func TestContainerAnalyzerFailedTaskDoesNotReplaceAcceptedCache(t *testing.T) {
 	if traces := store.TraceStore().Snapshot().Traces; len(traces) != 1 || traces[0].Outcome != "unavailable" {
 		t.Fatalf("failed Task traces = %+v", traces)
 	}
+	if len(resources.deletedVersion) != 0 || resources.existing.GetAnnotations()[containerAnalysisConsumedAtAnnotation] == "" {
+		t.Fatalf("failed result cleanup=%v annotations=%v", resources.deletedVersion, resources.existing.GetAnnotations())
+	}
 }
 
 func TestValidateContainerAnalyzerOptionsRejectsMutableImageTag(t *testing.T) {

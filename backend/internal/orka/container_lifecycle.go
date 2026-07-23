@@ -17,17 +17,20 @@ import (
 var configMapsGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"}
 
 const (
-	containerAnalysisBundleLabel         = "prow-ai-dashboard/bundle"
-	containerAnalysisBundleSelector      = containerAnalysisBundleLabel + "=true"
-	containerAnalysisTaskSelector        = "prow-ai-dashboard/adapter=container-analyzer"
-	containerAnalysisTaskNameAnnotation  = "prow-ai-dashboard/task-name"
-	containerAnalysisClaimAnnotation     = "prow-ai-dashboard/bundle-claim"
-	containerAnalysisClaimTimeAnnotation = "prow-ai-dashboard/bundle-claimed-at"
+	containerAnalysisBundleLabel          = "prow-ai-dashboard/bundle"
+	containerAnalysisBundleSelector       = containerAnalysisBundleLabel + "=true"
+	containerAnalysisTaskSelector         = "prow-ai-dashboard/adapter=container-analyzer"
+	containerAnalysisTaskNameAnnotation   = "prow-ai-dashboard/task-name"
+	containerAnalysisClaimAnnotation      = "prow-ai-dashboard/bundle-claim"
+	containerAnalysisClaimTimeAnnotation  = "prow-ai-dashboard/bundle-claimed-at"
+	containerAnalysisConsumedAtAnnotation = "prow-ai-dashboard/failure-consumed-at"
 	// ContainerAnalysisBundleRetention bounds orphaned private input bundles.
 	ContainerAnalysisBundleRetention = 24 * time.Hour
 	// ContainerAnalysisClaimTTL protects an active resource-application claim.
-	ContainerAnalysisClaimTTL = 10 * time.Minute
-	containerTaskDeleteWait   = 30 * time.Second
+	ContainerAnalysisClaimTTL     = 10 * time.Minute
+	containerTaskDeleteWait       = 30 * time.Second
+	containerFailureReuseGrace    = 30 * time.Second
+	containerStaleActiveTaskGrace = 10 * time.Minute
 	// ContainerAnalysisBundlePruneLimit bounds cleanup work per fetch run.
 	ContainerAnalysisBundlePruneLimit = 100
 	// ContainerAnalysisTaskRetention bounds terminal Task history.
@@ -54,7 +57,7 @@ type ContainerAnalysisMaintenanceClient interface {
 }
 
 // ReconcileContainerAnalysisResources applies one bundle and Task without batch GC.
-func ReconcileContainerAnalysisResources(ctx context.Context, client ContainerAnalysisResourceClient, resources ContainerAnalysisResources) error {
+func ReconcileContainerAnalysisResources(ctx context.Context, client ContainerAnalysisMaintenanceClient, resources ContainerAnalysisResources) error {
 	namespace, _, err := containerResourceRef(resources.BundleConfigMap)
 	if err != nil {
 		return err
@@ -79,7 +82,30 @@ func ReconcileContainerAnalysisResources(ctx context.Context, client ContainerAn
 			return nil
 		}
 	} else if state.Exists && TerminalPhase(state.Phase) {
-		return nil
+		if state.Phase == "Succeeded" {
+			return nil
+		}
+		replace, err := consumedFailureReadyForReplacement(ctx, client, resources, time.Now().UTC())
+		if err != nil {
+			return err
+		}
+		if !replace {
+			return nil
+		}
+		removed, err := client.DeleteTaskIfIdentity(ctx, taskNamespace, taskName, state.UID, state.ResourceVersion)
+		if err != nil {
+			return fmt.Errorf("delete consumed container analysis Task %s: %w", taskName, err)
+		}
+		if !removed {
+			return nil
+		}
+		disappeared, err := waitForDeletingContainerAnalysisTask(ctx, client, taskNamespace, taskName, state.UID)
+		if err != nil {
+			return err
+		}
+		if !disappeared {
+			return nil
+		}
 	}
 	if err := ApplyContainerAnalysisResources(ctx, client, resources); err != nil {
 		return err
@@ -111,6 +137,67 @@ func waitForDeletingContainerAnalysisTask(ctx context.Context, client ContainerA
 	}
 }
 
+func consumedFailureReadyForReplacement(ctx context.Context, client ContainerAnalysisResourceClient, resources ContainerAnalysisResources, now time.Time) (bool, error) {
+	namespace, name, err := containerResourceRef(resources.BundleConfigMap)
+	if err != nil {
+		return false, err
+	}
+	existing, err := client.Get(ctx, configMapsGVR, namespace, name)
+	if IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read consumed container analysis bundle %s: %w", name, err)
+	}
+	if err := validateExistingContainerAnalysisBundle(existing, resources.BundleConfigMap); err != nil {
+		return false, err
+	}
+	consumedAt, err := time.Parse(time.RFC3339Nano, existing.GetAnnotations()[containerAnalysisConsumedAtAnnotation])
+	if err != nil {
+		return false, nil
+	}
+	return !now.Before(consumedAt.Add(containerFailureReuseGrace)), nil
+}
+
+// MarkContainerAnalysisFailureConsumed marks a failed result safe to replace on a later pass.
+func MarkContainerAnalysisFailureConsumed(ctx context.Context, client ContainerAnalysisResourceClient, resources ContainerAnalysisResources, expectedTaskUID string) error {
+	namespace, name, err := containerResourceRef(resources.BundleConfigMap)
+	if err != nil {
+		return err
+	}
+	taskNamespace, taskName, err := containerResourceRef(resources.Task)
+	if err != nil {
+		return err
+	}
+	state, err := client.TaskState(ctx, taskNamespace, taskName)
+	if err != nil {
+		return fmt.Errorf("read consumed container analysis Task %s: %w", taskName, err)
+	}
+	if !state.Exists || state.UID != expectedTaskUID || (state.Phase != "Failed" && state.Phase != "Cancelled") {
+		return nil
+	}
+	existing, err := client.Get(ctx, configMapsGVR, namespace, name)
+	if err != nil {
+		return fmt.Errorf("read consumed container analysis bundle %s: %w", name, err)
+	}
+	if err := validateExistingContainerAnalysisBundle(existing, resources.BundleConfigMap); err != nil {
+		return err
+	}
+	if _, err := client.PatchAnnotations(ctx, configMapsGVR, namespace, name, map[string]string{
+		containerAnalysisConsumedAtAnnotation: time.Now().UTC().Format(time.RFC3339Nano),
+	}); err != nil {
+		return fmt.Errorf("mark container analysis failure consumed: %w", err)
+	}
+	state, err = client.TaskState(ctx, taskNamespace, taskName)
+	if err != nil {
+		return fmt.Errorf("recheck consumed container analysis Task %s: %w", taskName, err)
+	}
+	if !state.Exists || state.UID != expectedTaskUID {
+		return fmt.Errorf("container analysis Task %s changed while marking failure consumed", taskName)
+	}
+	return nil
+}
+
 // ApplyContainerAnalysisResources claims the bundle before applying its Task.
 func ApplyContainerAnalysisResources(ctx context.Context, client ContainerAnalysisResourceClient, resources ContainerAnalysisResources) error {
 	bundleNamespace, bundleName, err := containerResourceRef(resources.BundleConfigMap)
@@ -139,8 +226,9 @@ func ApplyContainerAnalysisResources(ctx context.Context, client ContainerAnalys
 		return err
 	}
 	if _, err := client.PatchAnnotations(ctx, configMapsGVR, bundleNamespace, bundleName, map[string]string{
-		containerAnalysisClaimAnnotation:     claim,
-		containerAnalysisClaimTimeAnnotation: time.Now().UTC().Format(time.RFC3339Nano),
+		containerAnalysisClaimAnnotation:      claim,
+		containerAnalysisClaimTimeAnnotation:  time.Now().UTC().Format(time.RFC3339Nano),
+		containerAnalysisConsumedAtAnnotation: "",
 	}); err != nil {
 		return fmt.Errorf("claim container analysis bundle %s: %w", bundleName, err)
 	}
@@ -357,14 +445,19 @@ func PruneContainerAnalysisTasks(ctx context.Context, client ContainerAnalysisMa
 	deleteCandidates := 0
 	for i := range items {
 		created := items[i].GetCreationTimestamp()
-		if created.IsZero() || created.Time.After(cutoff) {
+		if created.IsZero() {
 			continue
 		}
 		state, err := taskStateFromObject(&items[i])
 		if err != nil {
 			return deleted, fmt.Errorf("read expired container analysis Task %s: %w", items[i].GetName(), err)
 		}
-		if state.Deleting || !TerminalPhase(state.Phase) || state.UID == "" || state.ResourceVersion == "" {
+		if state.Deleting || state.UID == "" || state.ResourceVersion == "" {
+			continue
+		}
+		terminalExpired := TerminalPhase(state.Phase) && !created.Time.After(cutoff)
+		activeExpired := !TerminalPhase(state.Phase) && staleActiveContainerAnalysisTask(&items[i], now)
+		if !terminalExpired && !activeExpired {
 			continue
 		}
 		if deleteCandidates >= ContainerAnalysisTaskPruneLimit {
@@ -380,6 +473,30 @@ func PruneContainerAnalysisTasks(ctx context.Context, client ContainerAnalysisMa
 		}
 	}
 	return deleted, nil
+}
+
+func staleActiveContainerAnalysisTask(task *unstructured.Unstructured, now time.Time) bool {
+	created := task.GetCreationTimestamp()
+	if created.IsZero() {
+		return false
+	}
+	timeoutText, found, err := unstructured.NestedString(task.Object, "spec", "timeout")
+	if err != nil || !found {
+		return false
+	}
+	taskTimeout, err := time.ParseDuration(timeoutText)
+	if err != nil || taskTimeout <= 0 {
+		return false
+	}
+	retries, found, err := unstructured.NestedInt64(task.Object, "spec", "retryPolicy", "maxRetries")
+	if err != nil || !found {
+		retries = 0
+	}
+	if retries < 0 || retries > 1<<31-1 {
+		return false
+	}
+	deadline := created.Time.Add(containerTaskWaitTimeout(taskTimeout, int(retries))).Add(containerStaleActiveTaskGrace)
+	return !now.Before(deadline)
 }
 
 func activeContainerAnalysisClaim(annotations map[string]string, now time.Time) bool {

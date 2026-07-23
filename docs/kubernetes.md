@@ -98,7 +98,7 @@ ai:
 analysisRuntime:
   type: orka-container
   orkaContainer:
-    namespace: orka-system
+    namespace: prow-ai-analysis
     api: http://orka.orka-system.svc.cluster.local:8080
     maxConcurrentTasks: 2
     pollInterval: 2s
@@ -133,7 +133,8 @@ credentials across namespaces. For example:
 ```bash
 kubectl -n dashboards create secret generic dashboard-model \
   --from-literal=AI_TOKEN='<token>'
-kubectl -n orka-system create secret generic orka-model \
+kubectl create namespace prow-ai-analysis
+kubectl -n prow-ai-analysis create secret generic orka-model \
   --from-literal=token='<token>'
 ```
 
@@ -148,7 +149,7 @@ Secret encoding, so generate one shared literal and use it in both namespaces:
 STATE_KEY=$(openssl rand -base64 32)
 kubectl -n dashboards create secret generic shared-analysis-state \
   --from-literal=state-key="$STATE_KEY"
-kubectl -n orka-system create secret generic shared-analysis-state \
+kubectl -n prow-ai-analysis create secret generic shared-analysis-state \
   --from-literal=state-key="$STATE_KEY"
 ```
 
@@ -161,6 +162,14 @@ Consumed input bundles are removed immediately. Terminal analyzer Tasks remain
 available for identical in-flight callers and are removed by a bounded retention
 pass using exact UID and resource version. Failed Tasks transport authenticated
 private traces, but their cache entries are never merged.
+
+The analysis namespace must be dedicated and must not be the Orka controller,
+fix-runtime, or dashboard release namespace. Keep only the analyzer model and
+state Secrets there. Container mode also installs a fail-closed
+`ValidatingAdmissionPolicy` that pins the analyzer image, arguments, model
+coordinates, CPU placement, bundle reference, and exact model/state Secret
+references. Installing this experimental mode therefore requires permission to
+create cluster-scoped admission policies.
 
 The immutable ConfigMap bundle contains the sanitized project policy, prompt,
 skill files, request, and a bounded raw cache seed. It never contains model

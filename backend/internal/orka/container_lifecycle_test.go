@@ -564,3 +564,62 @@ func TestReconcileContainerAnalysisResourcesObservesDeletingReplacement(t *testi
 		t.Fatalf("replacement Task was overwritten: %v", client.applied)
 	}
 }
+
+func TestReconcileContainerAnalysisResourcesRetriesConsumedFailure(t *testing.T) {
+	resources := lifecycleResources()
+	existing := (&unstructured.Unstructured{Object: resources.BundleConfigMap}).DeepCopy()
+	existing.SetResourceVersion("rv-existing")
+	annotations := existing.GetAnnotations()
+	annotations[containerAnalysisConsumedAtAnnotation] = time.Now().UTC().Add(-2 * containerFailureReuseGrace).Format(time.RFC3339Nano)
+	existing.SetAnnotations(annotations)
+	client := &fakeContainerResourceClient{
+		createExists: true,
+		existing:     existing,
+		taskStateSequences: map[string][]TaskState{"task": {
+			{Exists: true, Phase: "Failed", UID: "uid-failed", ResourceVersion: "rv-failed"},
+			{},
+		}},
+	}
+	if err := ReconcileContainerAnalysisResources(context.Background(), client, resources); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(client.deletedTasks, []string{"task@uid-failed@rv-failed"}) || !reflect.DeepEqual(client.applied, []string{"tasks/task"}) {
+		t.Fatalf("deleted=%v applied=%v", client.deletedTasks, client.applied)
+	}
+}
+
+func TestReconcileContainerAnalysisResourcesSharesFreshConsumedFailure(t *testing.T) {
+	resources := lifecycleResources()
+	existing := (&unstructured.Unstructured{Object: resources.BundleConfigMap}).DeepCopy()
+	existing.SetResourceVersion("rv-existing")
+	annotations := existing.GetAnnotations()
+	annotations[containerAnalysisConsumedAtAnnotation] = time.Now().UTC().Format(time.RFC3339Nano)
+	existing.SetAnnotations(annotations)
+	client := &fakeContainerResourceClient{
+		existing:   existing,
+		taskStates: map[string]TaskState{"task": {Exists: true, Phase: "Failed", UID: "uid-failed", ResourceVersion: "rv-failed"}},
+	}
+	if err := ReconcileContainerAnalysisResources(context.Background(), client, resources); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.deletedTasks) != 0 || len(client.applied) != 0 {
+		t.Fatalf("fresh consumed failure changed resources: deleted=%v applied=%v", client.deletedTasks, client.applied)
+	}
+}
+
+func TestPruneContainerAnalysisTasksExpiresStaleActiveTask(t *testing.T) {
+	now := time.Now().UTC()
+	stale := taskObject("stale-running", "Running", now.Add(-time.Hour))
+	stale.Object["spec"] = map[string]any{
+		"timeout":     "1m",
+		"retryPolicy": map[string]any{"maxRetries": int64(1)},
+	}
+	client := &fakeContainerResourceClient{listedTasks: []unstructured.Unstructured{stale}}
+	deleted, err := PruneContainerAnalysisTasks(context.Background(), client, "orka-system", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 1 || !reflect.DeepEqual(client.deletedTasks, []string{"stale-running@uid-stale-running@rv-stale-running"}) {
+		t.Fatalf("deleted=%d calls=%v", deleted, client.deletedTasks)
+	}
+}

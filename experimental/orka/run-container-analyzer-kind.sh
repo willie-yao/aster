@@ -112,6 +112,21 @@ kubectl --context "$context" create namespace orka-system
 kubectl --context "$context" apply -f "$orka_source/config/crd/bases/"
 kubectl --context "$context" apply -f "$repo_root/experimental/orka/manifests/10-controller-rbac.yaml"
 kubectl --context "$context" apply -f "$repo_root/experimental/orka/manifests/60-pipeline-rbac.yaml"
+echo "Validating Helm admission policy"
+helm template dashboard "$repo_root/deploy/helm/prow-ai-dashboard" \
+  --namespace dashboard-test \
+  --show-only templates/orka-analysis-admission.yaml \
+  --set mode=cron \
+  --set ai.enabled=true \
+  --set ai.endpoint=http://script-model.prow-ai-analysis.svc.cluster.local/v1/chat/completions \
+  --set ai.model=script-model \
+  --set ai.token=unused \
+  --set project.existingConfigMap=unused \
+  --set analysisRuntime.type=orka-container \
+  --set analysisRuntime.orkaContainer.namespace=prow-ai-analysis \
+  --set analysisRuntime.orkaContainer.image.tag=sha-deadbeef \
+  --set analysisRuntime.orkaContainer.modelAuth.existingSecret=analyzer-model \
+  | kubectl --context "$context" apply --dry-run=server -f - >/dev/null
 helm upgrade --install orka "$orka_source/charts/orka" \
   --kube-context "$context" \
   --namespace orka-system \

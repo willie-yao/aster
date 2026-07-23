@@ -148,6 +148,11 @@ because Helm release names are unique only within their own namespace.
 {{- printf "%s-analysis-%s" $base (include "prow-ai-dashboard.orkaReleaseScope" .) -}}
 {{- end -}}
 
+{{- define "prow-ai-dashboard.orkaAnalysisAdmissionName" -}}
+{{- $base := include "prow-ai-dashboard.fullname" . | trunc 34 | trimSuffix "-" -}}
+{{- printf "%s-analysis-guard-%s" $base (include "prow-ai-dashboard.orkaReleaseScope" .) -}}
+{{- end -}}
+
 {{/* State key Secret shared by the dashboard and Orka namespaces. */}}
 {{- define "prow-ai-dashboard.orkaAnalysisStateSecret" -}}
 {{- if .Values.analysisRuntime.orkaContainer.state.existingSecret -}}
@@ -188,6 +193,8 @@ Validate AI provider configuration.
   {{- if not .Values.ai.endpoint -}}{{- fail "analysisRuntime.type=orka-container requires ai.endpoint" -}}{{- end -}}
   {{- if not .Values.ai.model -}}{{- fail "analysisRuntime.type=orka-container requires ai.model" -}}{{- end -}}
   {{- if not $cfg.namespace -}}{{- fail "analysisRuntime.orkaContainer.namespace is required" -}}{{- end -}}
+  {{- if eq $cfg.namespace .Values.orka.namespace -}}{{- fail "analysisRuntime.orkaContainer.namespace must be dedicated and differ from orka.namespace" -}}{{- end -}}
+  {{- if eq $cfg.namespace .Release.Namespace -}}{{- fail "analysisRuntime.orkaContainer.namespace must differ from the dashboard release namespace" -}}{{- end -}}
   {{- if not (regexMatch "^https?://[^/@?#]+(/[^?#]*)?$" $cfg.api) -}}{{- fail "analysisRuntime.orkaContainer.api must be an absolute http or https URL without credentials" -}}{{- end -}}
   {{- if not $cfg.image.repository -}}{{- fail "analysisRuntime.orkaContainer.image.repository is required" -}}{{- end -}}
   {{- $imageTag := $cfg.image.tag | default .Chart.AppVersion -}}
