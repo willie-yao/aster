@@ -54,6 +54,7 @@ const (
 // OrkaContainerAnalysisOptions configure the experimental Helm analysis runtime.
 type OrkaContainerAnalysisOptions struct {
 	Namespace       string
+	ResultAPI       string
 	Image           string
 	ModelSecretName string
 	ModelTokenKey   string
@@ -191,7 +192,7 @@ func setupPipeline(opts Options) (*pipeline, error) {
 			stateKey, _ := analysisruntime.ParseContainerStateKey(os.Getenv(analysisruntime.ContainerStateKeyEnv))
 			container := opts.AnalysisRuntime.OrkaContainer
 			if err := orka.ValidateContainerAnalyzerOptions(orka.ContainerAnalyzerOptions{
-				Namespace: container.Namespace, Image: container.Image, ProjectDir: opts.ProjectDir, DataDir: opts.OutDir,
+				Namespace: container.Namespace, OrkaAPI: container.ResultAPI, Image: container.Image, ProjectDir: opts.ProjectDir, DataDir: opts.OutDir,
 				API: aiProject.Provider.API, Endpoint: aiProject.Provider.Endpoint, Model: aiProject.Provider.Model,
 				ModelSecretName: container.ModelSecretName, ModelTokenKey: container.ModelTokenKey,
 				StateSecretName: container.StateSecretName, StateSecretKey: container.StateSecretKey, StateKey: stateKey,
@@ -226,23 +227,31 @@ func setupPipeline(opts Options) (*pipeline, error) {
 // fullPass runs discovery, a data refresh, and side effects under the run
 // timeout. It returns the discovered jobs so callers can reuse them.
 func (p *pipeline) fullPass(ctx context.Context) ([]models.ProwJob, error) {
-	ctx, cancel := context.WithTimeout(ctx, p.opts.Timeout)
+	fetchCtx, cancel := context.WithTimeout(ctx, p.opts.Timeout)
 	defer cancel()
 
-	jobs, err := p.discover(ctx)
+	jobs, err := p.discover(fetchCtx)
 	if err != nil {
 		return nil, err
 	}
-	res, err := p.refresh(ctx, jobs)
+	analysisCtx, sideEffectCtx := passExecutionContexts(ctx, fetchCtx, p.opts.AnalysisRuntime.Type)
+	res, err := p.refreshWithAnalysisContext(fetchCtx, analysisCtx, jobs)
 	if err != nil {
 		return nil, err
 	}
 	if !p.opts.SkipSideEffects {
-		if err := p.runSideEffects(ctx, res); err != nil {
+		if err := p.runSideEffects(sideEffectCtx, res); err != nil {
 			return nil, err
 		}
 	}
 	return jobs, nil
+}
+
+func passExecutionContexts(root, bounded context.Context, runtimeType string) (context.Context, context.Context) {
+	if runtimeType == AnalysisRuntimeOrkaContainer {
+		return root, root
+	}
+	return bounded, bounded
 }
 
 func validateAnalysisRuntimeOptions(opts Options) error {
@@ -257,6 +266,8 @@ func validateAnalysisRuntimeOptions(opts Options) error {
 		switch {
 		case strings.TrimSpace(cfg.Namespace) == "":
 			return fmt.Errorf("orka-container analysis namespace is required")
+		case strings.TrimSpace(cfg.ResultAPI) == "":
+			return fmt.Errorf("orka-container result API is required")
 		case strings.TrimSpace(cfg.Image) == "":
 			return fmt.Errorf("orka-container analyzer image is required")
 		case strings.TrimSpace(cfg.ModelSecretName) == "":
@@ -345,6 +356,10 @@ func (p *pipeline) discover(ctx context.Context) ([]models.ProwJob, error) {
 // the output JSON. Completed builds are reused from the on-disk cache, so
 // repeated passes only fetch new or still-running builds.
 func (p *pipeline) refresh(ctx context.Context, jobs []models.ProwJob) (*refreshResult, error) {
+	return p.refreshWithAnalysisContext(ctx, ctx, jobs)
+}
+
+func (p *pipeline) refreshWithAnalysisContext(fetchCtx, analysisCtx context.Context, jobs []models.ProwJob) (*refreshResult, error) {
 	cfg, opts := p.cfg, p.opts
 	if err := clearAnalysisTrace(opts.OutDir); err != nil {
 		log.Printf("Warning: failed to clear stale AI traces: %v", err)
@@ -371,7 +386,7 @@ func (p *pipeline) refresh(ctx context.Context, jobs []models.ProwJob) (*refresh
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			runs, err := fetchJobRunsCached(ctx, p.backend, cfg, &j, opts.BuildsPerJob, cachedJobs[j.JobID])
+			runs, err := fetchJobRunsCached(fetchCtx, p.backend, cfg, &j, opts.BuildsPerJob, cachedJobs[j.JobID])
 			if err != nil {
 				mu.Lock()
 				fetchErrors = append(fetchErrors, fmt.Errorf("job %s: %w", j.Name, err))
@@ -429,7 +444,7 @@ func (p *pipeline) refresh(ctx context.Context, jobs []models.ProwJob) (*refresh
 	log.Printf("Search index: %d entries", len(searchIndex.Entries))
 
 	if p.enableAI {
-		if err := p.analyzeFailuresWithAI(ctx, details, flakinessReport); err != nil {
+		if err := p.analyzeFailuresWithAI(analysisCtx, details, flakinessReport); err != nil {
 			return nil, err
 		}
 		patterns.AssignIDs(details)

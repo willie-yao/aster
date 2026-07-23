@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -19,9 +20,11 @@ import (
 const (
 	containerAnalyzerFieldManager = "prow-ai-dashboard-container-analysis"
 	failedTaskStateTimeout        = 30 * time.Second
+	containerTaskSchedulingGrace  = 2 * time.Minute
+	containerResultReadTimeout    = 30 * time.Second
 )
 
-var immutableAnalyzerTagPattern = regexp.MustCompile(`^(sha-[0-9a-fA-F]{7,64}|v?[0-9]+[.][0-9]+[.][0-9]+(-[0-9A-Za-z.-]+)?([+][0-9A-Za-z.-]+)?)$`)
+var immutableAnalyzerTagPattern = regexp.MustCompile(`^(sha-[0-9a-fA-F]{7,64}|v?[0-9]+[.][0-9]+[.][0-9]+(-[0-9A-Za-z.-]+)?)$`)
 
 // ContainerAnalyzerOptions configures the experimental Orka container runtime.
 type ContainerAnalyzerOptions struct {
@@ -89,9 +92,6 @@ func NewContainerAnalyzer(opts ContainerAnalyzerOptions) (*ContainerAnalyzer, er
 		return nil, fmt.Errorf("container analysis state: %w", err)
 	}
 	base := strings.TrimSpace(opts.OrkaAPI)
-	if base == "" {
-		base = fmt.Sprintf("http://orka.%s.svc.cluster.local:8080", opts.Namespace)
-	}
 	token := strings.TrimSpace(opts.OrkaAPIToken)
 	if token == "" {
 		token = strings.TrimSpace(os.Getenv("ORKA_API_TOKEN"))
@@ -120,6 +120,21 @@ func ValidateContainerAnalyzerOptions(opts ContainerAnalyzerOptions) error {
 	return validateContainerAnalyzerOptions(opts)
 }
 
+func validateOrkaResultAPI(raw string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fmt.Errorf("container analysis Orka result API is required")
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return fmt.Errorf("container analysis Orka result API must be an absolute http or https URL")
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return fmt.Errorf("container analysis Orka result API must not contain credentials, a query, or a fragment")
+	}
+	return nil
+}
+
 func immutableContainerAnalyzerImage(image string) bool {
 	image = strings.TrimSpace(image)
 	colon := strings.LastIndex(image, ":")
@@ -128,6 +143,9 @@ func immutableContainerAnalyzerImage(image string) bool {
 }
 
 func validateContainerAnalyzerOptions(opts ContainerAnalyzerOptions) error {
+	if err := validateOrkaResultAPI(opts.OrkaAPI); err != nil {
+		return err
+	}
 	if err := project.ValidateAIAPI(strings.ToLower(strings.TrimSpace(opts.API))); err != nil {
 		return err
 	}
@@ -242,7 +260,7 @@ func (a *ContainerAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, 
 		return ai.UnavailableFailureAnalysisResult(request.TestCase, err), err
 	}
 
-	taskCtx, cancel := context.WithTimeout(ctx, a.opts.TaskTimeout)
+	taskCtx, cancel := context.WithTimeout(ctx, a.opts.TaskTimeout+containerTaskSchedulingGrace)
 	defer cancel()
 	state, err := a.waitTerminal(taskCtx, taskName)
 	if err != nil {
@@ -268,7 +286,9 @@ func (a *ContainerAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, 
 		return ai.UnavailableFailureAnalysisResult(request.TestCase, taskErr), taskErr
 	}
 
-	raw, err := a.waitResult(taskCtx, taskName)
+	resultCtx, resultCancel := context.WithTimeout(ctx, containerResultReadTimeout)
+	defer resultCancel()
+	raw, err := a.waitResult(resultCtx, taskName)
 	if err != nil {
 		err = fmt.Errorf("read container analysis Task %s result: %w", taskName, err)
 		return ai.UnavailableFailureAnalysisResult(request.TestCase, err), err
@@ -283,8 +303,8 @@ func (a *ContainerAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, 
 		return ai.UnavailableFailureAnalysisResult(request.TestCase, err), err
 	}
 	if err := a.state.Merge(delta); err != nil {
-		err = fmt.Errorf("merge container analysis Task %s state: %w", taskName, err)
-		return ai.UnavailableFailureAnalysisResult(request.TestCase, err), err
+		log.Printf("Warning: failed to persist state from %s: %v", taskName, err)
+		return result, nil
 	}
 	a.cleanupTerminal(resources, state)
 	return result, nil

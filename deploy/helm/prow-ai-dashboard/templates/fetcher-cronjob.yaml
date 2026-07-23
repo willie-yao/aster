@@ -88,6 +88,7 @@ spec:
                 {{- if $containerAnalysis }}
                 - -analysis-runtime=orka-container
                 - -orka-analysis-namespace={{ .Values.analysisRuntime.orkaContainer.namespace }}
+                - -orka-analysis-api={{ .Values.analysisRuntime.orkaContainer.api }}
                 - -orka-analysis-image={{ include "prow-ai-dashboard.analyzerImage" . }}
                 - -orka-analysis-model-secret={{ .Values.analysisRuntime.orkaContainer.modelAuth.existingSecret }}
                 - -orka-analysis-model-token-key={{ .Values.analysisRuntime.orkaContainer.modelAuth.tokenKey }}

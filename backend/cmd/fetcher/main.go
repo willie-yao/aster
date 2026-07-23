@@ -41,6 +41,7 @@ func main() {
 	flag.StringVar(&opts.AnalysisRuntime.Type, "analysis-runtime", fetcher.AnalysisRuntimeInProcess, "single-failure analysis runtime: inprocess or orka-container")
 	container := &opts.AnalysisRuntime.OrkaContainer
 	flag.StringVar(&container.Namespace, "orka-analysis-namespace", "", "Orka namespace for container analysis Tasks")
+	flag.StringVar(&container.ResultAPI, "orka-analysis-api", "", "Orka result API base URL")
 	flag.StringVar(&container.Image, "orka-analysis-image", "", "analyzer image for Orka container Tasks")
 	flag.StringVar(&container.ModelSecretName, "orka-analysis-model-secret", "", "model token Secret in the Orka namespace")
 	flag.StringVar(&container.ModelTokenKey, "orka-analysis-model-token-key", "token", "model token Secret key")

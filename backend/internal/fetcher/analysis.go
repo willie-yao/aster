@@ -211,6 +211,7 @@ func (p *pipeline) ensureContainerAnalyzer() (containerFailureAnalyzer, error) {
 	cfg := p.opts.AnalysisRuntime.OrkaContainer
 	container, err := orka.NewContainerAnalyzer(orka.ContainerAnalyzerOptions{
 		Namespace:          cfg.Namespace,
+		OrkaAPI:            cfg.ResultAPI,
 		Image:              cfg.Image,
 		ProjectDir:         p.opts.ProjectDir,
 		DataDir:            p.opts.OutDir,

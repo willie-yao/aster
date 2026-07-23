@@ -81,6 +81,7 @@ container_args=(
 )
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" "${container_args[@]}" > "$tmp/container-analysis.yaml"
 grep -Fq -- '-analysis-runtime=orka-container' "$tmp/container-analysis.yaml"
+grep -Fq -- '-orka-analysis-api=http://orka.orka-system.svc.cluster.local:8080' "$tmp/container-analysis.yaml"
 grep -Fq -- '-orka-analysis-image=ghcr.io/willie-yao/prow-ai-dashboard/analyzer:sha-deadbeef' "$tmp/container-analysis.yaml"
 grep -Fq 'restartPolicy: Never' "$tmp/container-analysis.yaml"
 grep -Fq 'backoffLimit: 0' "$tmp/container-analysis.yaml"
@@ -117,15 +118,17 @@ if grep -Fq 'orka-container-analysis-state' "$tmp/container-existing-state.yaml"
 fi
 grep -Fq -- '-orka-analysis-state-secret=shared-state' "$tmp/container-existing-state.yaml"
 
-for invalid in type watch endpoint model namespace image mutable-image model-secret token-key state-key concurrency poll timeout retries cpu-selector gpu accelerator; do
+for invalid in type watch endpoint model namespace api image mutable-image build-metadata model-secret token-key state-key concurrency poll timeout retries cpu-selector gpu accelerator; do
   case $invalid in
     type) invalid_args=(--set analysisRuntime.type=remote); want='analysisRuntime.type must be inprocess or orka-container' ;;
     watch) invalid_args=("${container_args[@]}" --set mode=watch); want='analysisRuntime.type=orka-container requires mode=cron' ;;
     endpoint) invalid_args=("${container_args[@]}" --set-string ai.endpoint=); want='analysisRuntime.type=orka-container requires ai.endpoint' ;;
     model) invalid_args=("${container_args[@]}" --set-string ai.model=); want='analysisRuntime.type=orka-container requires ai.model' ;;
     namespace) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.namespace=); want='analysisRuntime.orkaContainer.namespace is required' ;;
+    api) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.api='http://user:secret@orka'); want='analysisRuntime.orkaContainer.api must be an absolute http or https URL without credentials' ;;
     image) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.image.repository=); want='analysisRuntime.orkaContainer.image.repository is required' ;;
     mutable-image) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.image.tag=main); want='analysisRuntime.orkaContainer.image tag must be an immutable sha-<hex> or full semantic version' ;;
+    build-metadata) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.image.tag=v1.2.3+build.4); want='analysisRuntime.orkaContainer.image tag must be an immutable sha-<hex> or full semantic version' ;;
     model-secret) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.modelAuth.existingSecret=); want='analysisRuntime.orkaContainer.modelAuth.existingSecret is required' ;;
     token-key) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.modelAuth.tokenKey=); want='analysisRuntime.orkaContainer.modelAuth.tokenKey is required' ;;
     state-key) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.state.key=); want='analysisRuntime.orkaContainer.state.key is required' ;;

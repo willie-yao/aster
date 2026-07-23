@@ -99,6 +99,7 @@ analysisRuntime:
   type: orka-container
   orkaContainer:
     namespace: orka-system
+    api: http://orka.orka-system.svc.cluster.local:8080
     maxConcurrentTasks: 2
     pollInterval: 2s
     taskTimeout: 20m
@@ -118,6 +119,9 @@ analysisRuntime:
     tolerations: []
     affinity: {}
 ```
+
+Set `orkaContainer.api` to the REST Service of the installed Orka release; the
+Service name is not derived from the namespace.
 
 Because the pinned Orka controller uses `IfNotPresent`, the chart rejects mutable analyzer tags such as `main`, `latest`, `dev`, and moving major tags. Use a `sha-<hex>` tag or a full semantic version.
 
@@ -274,7 +278,7 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | `image.repository`, `image.tag` | Engine image; tag defaults to the chart `appVersion`. |
 | `mode` | `watch` (continuous worker Deployment, default) or `cron` (scheduled CronJob). |
 | `analysisRuntime.type` | `inprocess` by default; `orka-container` is experimental and requires `mode: cron`. |
-| `analysisRuntime.orkaContainer.*` | Analyzer image, Orka namespace, bounded Task lifecycle, Secret references, encrypted state key, and CPU placement. |
+| `analysisRuntime.orkaContainer.*` | Orka result API, analyzer image, namespace, bounded Task lifecycle, Secret references, encrypted state key, and CPU placement. |
 | `fetcher.restartPolicy`, `fetcher.backoffLimit`, `fetcher.activeDeadlineSeconds` | Bound CronJob container restarts, Job retries, and total wall time. Empty restart policy selects `OnFailure` for in-process and `Never` for Orka container analysis; the default deadline is 10 hours. |
 | `orka.fixRuntime.enabled` | Mount a ServiceAccount token and grant Orka Task RBAC for `agent_runtime.type: orka` fix generation. |
 | `persistence.accessMode` | Must be `ReadWriteMany`. |
@@ -289,7 +293,7 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | `fetcher.schedule` | Cron schedule (default every 6 hours). `mode: cron`. |
 | `fetcher.suspend` | Suspend scheduled CronJob starts while allowing manual Jobs. `mode: cron`. |
 | `fetcher.watchInterval`, `fetcher.reconcileInterval` | Refresh and full-pass cadence. `mode: watch`. |
-| `fetcher.buildsPerJob`, `fetcher.workers`, `fetcher.timeout` | Fetch depth and budget. |
+| `fetcher.buildsPerJob`, `fetcher.workers`, `fetcher.timeout` | Fetch depth and discovery/artifact budget. Orka Task waves use `taskTimeout` and the CronJob deadline. |
 | `fetcher.extraEnv` | Extra env such as `GITHUB_TOKEN`, `EMAIL_SMTP_PASSWORD`, or the `ISSUE_TOKEN` / `FIX_TOKEN` write tokens (see [Automatic issues and fix PRs](#automatic-issues-and-fix-prs)). |
 | `ingress.enabled`, `ingress.hosts`, `ingress.tls` | Public read path. |
 | `server.actions.enabled`, `server.actions.mode` | Turn on admin authentication, write actions, and private trace access; `oauth` (GitHub sign-in) or `proxy` (SSO proxy + bot token). |

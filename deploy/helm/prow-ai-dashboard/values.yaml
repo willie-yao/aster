@@ -31,6 +31,9 @@ analysisRuntime:
   type: inprocess
   orkaContainer:
     namespace: orka-system
+    # Orka REST API used to retrieve durable Task results. Set this to the
+    # Service name of the installed Orka release.
+    api: http://orka.orka-system.svc.cluster.local:8080
     maxConcurrentTasks: 2
     pollInterval: 2s
     taskTimeout: 20m
@@ -160,6 +163,8 @@ fetcher:
   reconcileInterval: 1h
   buildsPerJob: 10
   workers: 5
+  # Bounds discovery and artifact fetching. Orka container analysis uses its
+  # per-Task timeout and the CronJob activeDeadlineSeconds across Task waves.
   timeout: 30m
   includePresubmits: false
   # Extra environment variables (e.g. ISSUE_TOKEN, FIX_TOKEN,

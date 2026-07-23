@@ -24,7 +24,7 @@ func validContainerAnalysisOptions() Options {
 		AnalysisRuntime: AnalysisRuntimeOptions{
 			Type: AnalysisRuntimeOrkaContainer,
 			OrkaContainer: OrkaContainerAnalysisOptions{
-				Namespace: "orka-system", Image: "analyzer:sha-deadbeef",
+				Namespace: "orka-system", ResultAPI: "http://orka.orka-system.svc.cluster.local:8080", Image: "analyzer:sha-deadbeef",
 				ModelSecretName: "model-secret", ModelTokenKey: "token",
 				StateSecretName: "state-secret", StateSecretKey: "state-key",
 				MaxConcurrent: 2, PollInterval: time.Second, TaskTimeout: time.Minute, Retries: 1,
@@ -167,5 +167,25 @@ func TestAnalyzeFailuresNoWorkStillRunsContainerMaintenance(t *testing.T) {
 	}
 	if !analyzer.called {
 		t.Fatal("container maintenance was skipped")
+	}
+}
+
+func TestPassExecutionContextsDetachDurableContainerWork(t *testing.T) {
+	root := context.Background()
+	bounded, cancel := context.WithTimeout(root, time.Second)
+	defer cancel()
+	analysis, sideEffects := passExecutionContexts(root, bounded, AnalysisRuntimeOrkaContainer)
+	if _, ok := analysis.Deadline(); ok {
+		t.Fatal("container analysis inherited the fetch deadline")
+	}
+	if _, ok := sideEffects.Deadline(); ok {
+		t.Fatal("container side effects inherited the fetch deadline")
+	}
+	analysis, sideEffects = passExecutionContexts(root, bounded, AnalysisRuntimeInProcess)
+	if _, ok := analysis.Deadline(); !ok {
+		t.Fatal("in-process analysis lost the pass deadline")
+	}
+	if _, ok := sideEffects.Deadline(); !ok {
+		t.Fatal("in-process side effects lost the pass deadline")
 	}
 }

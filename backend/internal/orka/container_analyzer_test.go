@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -18,18 +19,30 @@ import (
 
 type fakeContainerAnalyzerKube struct {
 	*fakeContainerResourceClient
-	mu          sync.Mutex
-	taskCalls   int
-	phase       string
-	deletedTask []string
+	mu            sync.Mutex
+	taskCalls     int
+	phase         string
+	terminalDelay time.Duration
+	deletedTask   []string
 }
 
-func (f *fakeContainerAnalyzerKube) TaskState(context.Context, string, string) (TaskState, error) {
+func (f *fakeContainerAnalyzerKube) TaskState(ctx context.Context, _ string, _ string) (TaskState, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.taskCalls++
-	if f.taskCalls == 1 {
+	call := f.taskCalls
+	delay := f.terminalDelay
+	f.mu.Unlock()
+	if call == 1 {
 		return TaskState{}, nil
+	}
+	if call == 2 && delay > 0 {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return TaskState{}, ctx.Err()
+		case <-timer.C:
+		}
 	}
 	return TaskState{
 		Exists: true, Phase: f.phase, UID: "task-uid", ResourceVersion: "task-rv",
@@ -49,11 +62,21 @@ type generatedContainerResult struct {
 	entry   map[string]ai.CacheEntry
 	failed  bool
 	err     error
+	delay   time.Duration
 	calls   int
 }
 
-func (r *generatedContainerResult) Result(_ context.Context, namespace, taskName string) (string, bool, error) {
+func (r *generatedContainerResult) Result(ctx context.Context, namespace, taskName string) (string, bool, error) {
 	r.calls++
+	if r.delay > 0 {
+		timer := time.NewTimer(r.delay)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return "", false, ctx.Err()
+		case <-timer.C:
+		}
+	}
 	if r.err != nil {
 		return "", false, r.err
 	}
@@ -89,7 +112,7 @@ func (r *generatedContainerResult) Result(_ context.Context, namespace, taskName
 func containerAnalyzerTestOptions(t *testing.T, key []byte) ContainerAnalyzerOptions {
 	t.Helper()
 	return ContainerAnalyzerOptions{
-		Namespace: "orka-system", Image: "dashboard-analyzer:sha-deadbeef", ProjectDir: containerTaskProject(t), DataDir: t.TempDir(),
+		Namespace: "orka-system", OrkaAPI: "http://orka.orka-system.svc.cluster.local:8080", Image: "dashboard-analyzer:sha-deadbeef", ProjectDir: containerTaskProject(t), DataDir: t.TempDir(),
 		API: "chat_completions", Endpoint: "https://model.invalid/v1/chat/completions", Model: "model",
 		ModelSecretName: "model-secret", ModelTokenKey: "token", StateSecretName: "state-secret", StateSecretKey: "state-key", StateKey: key,
 		TaskTimeout: time.Minute, PollInterval: time.Millisecond, MaxRetries: 1, MaxConcurrentTasks: 2,
@@ -184,6 +207,10 @@ func TestValidateContainerAnalyzerOptionsRejectsMutableImageTag(t *testing.T) {
 	if err := ValidateContainerAnalyzerOptions(opts); err == nil || !strings.Contains(err.Error(), "immutable") {
 		t.Fatalf("error = %v", err)
 	}
+	opts.Image = "ghcr.io/example/analyzer:v1.2.3+build.4"
+	if err := ValidateContainerAnalyzerOptions(opts); err == nil || !strings.Contains(err.Error(), "immutable") {
+		t.Fatalf("build metadata error = %v", err)
+	}
 	opts.Image = "ghcr.io/example/analyzer:v1.2.3"
 	if err := ValidateContainerAnalyzerOptions(opts); err != nil {
 		t.Fatalf("semantic version rejected: %v", err)
@@ -230,5 +257,65 @@ func TestContainerAnalyzerMaintainPrunesWithoutAnalysisWork(t *testing.T) {
 	}
 	if len(kube.deletedTask) != 1 {
 		t.Fatalf("maintenance deleted Tasks = %v", kube.deletedTask)
+	}
+}
+
+func TestContainerAnalyzerAllowsSchedulingAndFreshResultGrace(t *testing.T) {
+	request := containerTaskRequest()
+	key := bytes.Repeat([]byte{0x75}, 32)
+	cacheKey := analysisruntime.FailureCacheKey(request)
+	entry := map[string]ai.CacheEntry{cacheKey: {
+		Key: cacheKey, CreatedAt: time.Now().UTC(), Data: json.RawMessage(`{"summary":"ok"}`),
+	}}
+	store, err := analysisruntime.NewContainerStateStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources := &fakeContainerResourceClient{}
+	kube := &fakeContainerAnalyzerKube{fakeContainerResourceClient: resources, phase: "Succeeded", terminalDelay: 15 * time.Millisecond}
+	results := &generatedContainerResult{request: request, key: key, entry: entry, delay: 20 * time.Millisecond}
+	opts := containerAnalyzerTestOptions(t, key)
+	opts.TaskTimeout = 5 * time.Millisecond
+	analyzer, err := newContainerAnalyzer(opts, kube, results, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := analyzer.AnalyzeFailure(context.Background(), nil, request)
+	if err != nil || result.Summary == nil {
+		t.Fatalf("result = %+v, error = %v", result, err)
+	}
+}
+
+func TestContainerAnalyzerReturnsValidResultWhenStatePersistenceFails(t *testing.T) {
+	request := containerTaskRequest()
+	key := bytes.Repeat([]byte{0x76}, 32)
+	cacheKey := analysisruntime.FailureCacheKey(request)
+	entry := map[string]ai.CacheEntry{cacheKey: {
+		Key: cacheKey, CreatedAt: time.Now().UTC(), Data: json.RawMessage(`{"summary":"ok"}`),
+	}}
+	stateDir := t.TempDir()
+	store, err := analysisruntime.NewContainerStateStore(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(stateDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stateDir, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resources := &fakeContainerResourceClient{}
+	kube := &fakeContainerAnalyzerKube{fakeContainerResourceClient: resources, phase: "Succeeded"}
+	results := &generatedContainerResult{request: request, key: key, entry: entry}
+	analyzer, err := newContainerAnalyzer(containerAnalyzerTestOptions(t, key), kube, results, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := analyzer.AnalyzeFailure(context.Background(), nil, request)
+	if err != nil || result.Summary == nil || result.Summary.Summary != "container result" {
+		t.Fatalf("result = %+v, error = %v", result, err)
+	}
+	if len(kube.deletedTask) != 0 || len(resources.deletedVersion) != 0 {
+		t.Fatalf("persistence failure cleaned resources: Tasks=%v bundles=%v", kube.deletedTask, resources.deletedVersion)
 	}
 }
