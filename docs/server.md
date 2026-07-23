@@ -68,12 +68,15 @@ Create a session by posting the selected analysis identity:
   "job_id": "periodic-demo",
   "build_id": "123",
   "test_name": "TestCluster",
+  "suite_name": "cluster lifecycle",
+  "class_name": "e2e",
   "junit_file": "junit_01.xml",
   "analysis_generated_at": "2026-07-23T12:00:00Z"
 }
 ```
 
-`junit_file` disambiguates duplicate test names. `analysis_generated_at` is
+`suite_name`, `class_name`, and `junit_file` disambiguate duplicate test
+names. `analysis_generated_at` is
 optional, but including it prevents a conversation from silently attaching to a
 newer analysis after the page was loaded. A mismatch returns `409 Conflict`.
 
@@ -85,8 +88,10 @@ does not alter `jobs/*.json` or the published analysis.
 
 Sessions are in memory, bound to the authenticated login, limited to ten turns,
 and expire after two hours. The process also caps global and per-owner session
-counts. Restarting the server clears them. Persistence, streaming, cancellation,
-and deployment-specific rate limits are separate operational additions.
+counts. Restarting the server clears them. An in-flight turn may finish after its
+session expires; the next access removes that session and releases its capacity.
+Persistence, streaming, cancellation, and deployment-specific rate limits are
+separate operational additions.
 
 One model turn defaults to a two-minute timeout. Set `ANALYSIS_CHAT_TIMEOUT` to
 apply a shorter HTTP bound. The agent uses only the configured read-only

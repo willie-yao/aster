@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -76,6 +77,9 @@ func TestAnalysisChatAgentChallengesAfterReadingArtifact(t *testing.T) {
 	if len(reply.Citations) != 1 || reply.Citations[0].Path != "build-log.txt" || reply.GCSBytes == 0 {
 		t.Fatalf("reply citations = %+v", reply)
 	}
+	if reply.Citations[0].LineStart != 0 || reply.Citations[0].LineEnd != 0 {
+		t.Fatalf("tail citation retained unverifiable lines: %+v", reply.Citations[0])
+	}
 }
 
 func TestAnalysisChatAgentAllowsExplanationWithoutTools(t *testing.T) {
@@ -141,7 +145,7 @@ func TestParseAnalysisChatReplyRejectsUnsafeAndUnverifiedClaims(t *testing.T) {
 		`{"answer":"x","assessment":"supports","citations":[],"proposed_revision":{"root_cause":"r","suggested_fix":"f"}}`,
 	}
 	for _, raw := range cases {
-		if _, err := parseAnalysisChatReply(raw, state, map[string]string{"build-log.txt": "controller stopped"}); err == nil {
+		if _, err := parseAnalysisChatReply(raw, state, map[string]*analysisChatEvidence{"build-log.txt": {Text: "controller stopped"}}); err == nil {
 			t.Errorf("invalid reply accepted: %s", raw)
 		}
 	}
@@ -210,5 +214,104 @@ func TestAnalysisChatAgentCapsToolCalls(t *testing.T) {
 	}
 	if reply.ToolCalls != 1 {
 		t.Fatalf("tool calls = %d, want 1", reply.ToolCalls)
+	}
+}
+
+func TestAnalysisChatAgentReplaysStructuredAssistantHistory(t *testing.T) {
+	server := newScriptedChatServer(t)
+	server.push(200, chatRespFinal(`{
+		"answer":"The revision followed the later API server evidence.",
+		"assessment":"explains",
+		"citations":[],
+		"proposed_revision":null
+	}`))
+	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{}, AnalysisChatOptions{MaxIters: 2, Timeout: time.Second})
+	turn := analysisChatTurn()
+	turn.History = []analysischat.Message{
+		{Role: "user", Content: "Could the original conclusion be wrong?"},
+		{
+			Role: "assistant", Content: "The evidence supports a revision.", Assessment: "challenges",
+			ProposedRevision: &analysischat.Revision{
+				RootCause: "revised-root-marker", SuggestedFix: "revised-fix-marker",
+			},
+		},
+	}
+	turn.Question = "Why that revision?"
+	if _, err := agent.Reply(context.Background(), turn); err != nil {
+		t.Fatal(err)
+	}
+	server.mu.Lock()
+	request := string(server.requests[0])
+	server.mu.Unlock()
+	for _, want := range []string{"revised-root-marker", "revised-fix-marker", "proposed_revision", "challenges"} {
+		if !strings.Contains(request, want) {
+			t.Errorf("request omitted structured history %q", want)
+		}
+	}
+}
+
+func TestBuildAnalysisChatMessagesDropsOldestHistoryWithinBudget(t *testing.T) {
+	var history []analysischat.Message
+	for i := 0; i < 8; i++ {
+		marker := "middle-marker"
+		if i == 0 {
+			marker = "oldest-marker"
+		}
+		if i == 7 {
+			marker = "latest-marker"
+		}
+		history = append(history,
+			analysischat.Message{Role: "user", Content: marker + strings.Repeat("u", 3000)},
+			analysischat.Message{Role: "assistant", Content: marker + strings.Repeat("a", 10_000), Assessment: "explains"},
+		)
+	}
+	const budget = 48 << 10
+	messages, err := buildAnalysisChatMessages("system", "context", history, "question", 1024, budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	if strings.Contains(text, "oldest-marker") {
+		t.Fatal("oldest history was not removed")
+	}
+	if !strings.Contains(text, "latest-marker") {
+		t.Fatal("latest history was not retained")
+	}
+	if size := requestSizeEstimate(messages, 1024); size > budget {
+		t.Fatalf("request size = %d, budget = %d", size, budget)
+	}
+}
+
+func TestAnalysisChatOptionsUseFallbackContextBudget(t *testing.T) {
+	opts := (AnalysisChatOptions{}).normalized()
+	if opts.ContextByteBudget != analysisChatFallbackContextBytes {
+		t.Fatalf("context budget = %d", opts.ContextByteBudget)
+	}
+	if _, err := buildAnalysisChatMessages(strings.Repeat("x", 1024), "context", nil, "question", 0, 100); err == nil {
+		t.Fatal("oversized base context was accepted")
+	}
+}
+
+func TestAnalysisChatCitationLineValidation(t *testing.T) {
+	state := &agentState{readArtifactsFull: map[string]bool{"build-log.txt": true}}
+	evidence := map[string]*analysisChatEvidence{}
+	recordAnalysisChatEvidence(evidence, modelToolCall{Function: modelFunction{
+		Name: "grep_artifact", Arguments: `{"path":"build-log.txt"}`,
+	}}, `{"matches":[{"line":42,"context":["  41: before","> 42: controller stopped","  43: after"]}]}`)
+	valid := `{"answer":"The controller stopped.","assessment":"supports","citations":[{"path":"build-log.txt","line_start":42,"line_end":42,"quote":"controller stopped"}],"proposed_revision":null}`
+	reply, err := parseAnalysisChatReply(valid, state, evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply.Citations[0].LineStart != 42 || reply.Citations[0].LineEnd != 42 {
+		t.Fatalf("verified line range was not retained: %+v", reply.Citations[0])
+	}
+	invalid := `{"answer":"The controller stopped.","assessment":"supports","citations":[{"path":"build-log.txt","line_start":41,"line_end":41,"quote":"controller stopped"}],"proposed_revision":null}`
+	if _, err := parseAnalysisChatReply(invalid, state, evidence); err == nil {
+		t.Fatal("fabricated line range was accepted")
 	}
 }

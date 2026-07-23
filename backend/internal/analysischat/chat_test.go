@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -279,5 +280,112 @@ func TestServiceRejectsOversizedAnalysisReference(t *testing.T) {
 	_, err = service.Create(AnalysisRef{JobID: strings.Repeat("x", maxJobIDBytes+1), BuildID: "1", TestName: "Test"}, "alice")
 	if !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("oversized reference error = %v", err)
+	}
+}
+
+func TestServiceResolvesStrongJUnitIdentity(t *testing.T) {
+	dir := t.TempDir()
+	first := analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")
+	first.SuiteName, first.ClassName = "suite", "first"
+	second := analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")
+	second.SuiteName, second.ClassName = "suite", "second"
+	second.AIAnalysis.RootCause = "the second class failed"
+	writeJobDetail(t, dir, testDetail(first, second))
+	service, err := NewService(dir, &fakeRunner{}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := service.Create(AnalysisRef{
+		JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster", JUnitFile: "junit.xml",
+	}, "alice"); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("weak identity Create error = %v", err)
+	}
+	created, err := service.Create(AnalysisRef{
+		JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster",
+		SuiteName: "suite", ClassName: "second", JUnitFile: "junit.xml",
+	}, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Analysis.SuiteName != "suite" || created.Analysis.ClassName != "second" {
+		t.Fatalf("canonical analysis ref = %+v", created.Analysis)
+	}
+}
+
+func TestServiceExpiryReleasesCapacity(t *testing.T) {
+	dir := t.TempDir()
+	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
+	var nowNanos atomic.Int64
+	start := time.Date(2026, 7, 23, 13, 0, 0, 0, time.UTC)
+	nowNanos.Store(start.UnixNano())
+	now := func() time.Time { return time.Unix(0, nowNanos.Load()) }
+	service, err := NewService(dir, &fakeRunner{reply: Reply{Answer: "answer", Assessment: "explains"}}, Options{
+		SessionTTL: time.Minute, MaxSessions: 1, MaxSessionsPerOwner: 1, Now: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}
+	created, err := service.Create(ref, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nowNanos.Store(start.Add(time.Minute).UnixNano())
+	if _, err := service.Get(created.ID, "alice"); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("Get at expiry error = %v", err)
+	}
+	if _, err := service.Send(context.Background(), created.ID, "alice", "expired"); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("Send at expiry error = %v", err)
+	}
+	if _, err := service.Create(ref, "alice"); err != nil {
+		t.Fatalf("expired session did not release capacity: %v", err)
+	}
+}
+
+func TestServiceBusySessionCompletesAcrossExpiry(t *testing.T) {
+	dir := t.TempDir()
+	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
+	var nowNanos atomic.Int64
+	start := time.Date(2026, 7, 23, 13, 0, 0, 0, time.UTC)
+	nowNanos.Store(start.UnixNano())
+	now := func() time.Time { return time.Unix(0, nowNanos.Load()) }
+	runner := &fakeRunner{
+		reply:   Reply{Answer: "answer", Assessment: "explains"},
+		started: make(chan struct{}, 1), release: make(chan struct{}),
+	}
+	service, err := NewService(dir, runner, Options{
+		SessionTTL: time.Minute, MaxSessions: 1, MaxSessionsPerOwner: 1, Now: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}
+	created, err := service.Create(ref, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := service.Send(context.Background(), created.ID, "alice", "in flight")
+		done <- err
+	}()
+	<-runner.started
+	nowNanos.Store(start.Add(time.Minute).UnixNano())
+	if _, err := service.Get(created.ID, "alice"); err != nil {
+		t.Fatalf("busy expired session should remain readable: %v", err)
+	}
+	if _, err := service.Create(ref, "alice"); !errors.Is(err, ErrSessionLimit) {
+		t.Fatalf("busy expired session should retain capacity, got %v", err)
+	}
+	close(runner.release)
+	if err := <-done; err != nil {
+		t.Fatalf("in-flight turn did not complete across expiry: %v", err)
+	}
+	if _, err := service.Get(created.ID, "alice"); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("completed expired session was not evicted: %v", err)
+	}
+	if _, err := service.Create(ref, "alice"); err != nil {
+		t.Fatalf("completed expired session did not release capacity: %v", err)
 	}
 }

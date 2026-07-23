@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -47,13 +50,20 @@ new evidence verdict. Use "supports" after evidence confirms it, "challenges"
 when evidence supports a materially different conclusion, and "inconclusive"
 when the available evidence cannot decide. Set proposed_revision only for a
 "challenges" response. Citations must name artifacts you read during this turn.
-Output JSON only.`
+Use line_start and line_end only when a tool returned source line numbers; otherwise
+omit both fields. Output JSON only.`
 
 const analysisChatToolDocs = `
 
 Available tools inspect the selected Prow build only. Use the tool schemas to
 list, read, tail, search, or inspect Kubernetes-shaped artifacts as available.
 Cite the artifact paths and line numbers that support the answer.`
+
+const (
+	analysisChatFallbackContextBytes = 192 << 10
+	analysisChatHistoryTargetPct     = 65
+	analysisChatMaxQuestionBytes     = 4096
+)
 
 const analysisChatFinalizePrompt = `Stop calling tools. Return the final analysis-conversation JSON now using only evidence already gathered. Follow the Analysis conversation schema exactly. Output JSON only.`
 
@@ -92,6 +102,9 @@ func (o AnalysisChatOptions) normalized() AnalysisChatOptions {
 	}
 	if o.GCSByteBudget <= 0 {
 		o.GCSByteBudget = 128 << 20
+	}
+	if o.ContextByteBudget <= 0 {
+		o.ContextByteBudget = analysisChatFallbackContextBytes
 	}
 	if o.Timeout <= 0 {
 		o.Timeout = 2 * time.Minute
@@ -132,8 +145,9 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 	if turn.TestCase.AIAnalysis == nil {
 		return analysischat.Reply{}, fmt.Errorf("analysis chat requires a published analysis")
 	}
-	if strings.TrimSpace(turn.Question) == "" {
-		return analysischat.Reply{}, fmt.Errorf("analysis chat question is required")
+	turn.Question = strings.TrimSpace(turn.Question)
+	if turn.Question == "" || len(turn.Question) > analysisChatMaxQuestionBytes {
+		return analysischat.Reply{}, fmt.Errorf("analysis chat question must be 1-%d bytes", analysisChatMaxQuestionBytes)
 	}
 	start := time.Now()
 	browser := a.browserFactory.ForBuild(turn.BuildPrefix, turn.Build.JobName+"/"+turn.Build.BuildID)
@@ -152,25 +166,12 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 	if err != nil {
 		return analysischat.Reply{}, err
 	}
-	messages := []modelMessage{
-		{Role: "system", Content: strPtr(a.systemPrompt)},
-		{Role: "user", Content: strPtr(contextMessage)},
-	}
-	for _, message := range turn.History {
-		role := strings.TrimSpace(message.Role)
-		if role != "user" && role != "assistant" {
-			continue
-		}
-		content := strings.TrimSpace(message.Content)
-		if content == "" {
-			continue
-		}
-		messages = append(messages, modelMessage{Role: role, Content: strPtr(content)})
-	}
-	messages = append(messages, modelMessage{Role: "user", Content: strPtr(turn.Question)})
-
 	schemas := state.registry.Schemas(state.enabledTools)
 	schemaBytes := schemaPayloadBytes(schemas)
+	messages, err := buildAnalysisChatMessages(a.systemPrompt, contextMessage, turn.History, turn.Question, schemaBytes, a.opts.ContextByteBudget)
+	if err != nil {
+		return analysischat.Reply{}, err
+	}
 	loopCtx, cancel := context.WithTimeout(ctx, a.opts.Timeout)
 	defer cancel()
 	var parallelToolCalls *bool
@@ -179,10 +180,13 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 		parallelToolCalls = &value
 	}
 
-	evidence := map[string]string{}
+	evidence := map[string]*analysisChatEvidence{}
 	var lastContent string
 	for iter := 0; iter < a.opts.MaxIters; iter++ {
 		messages, _ = compactMessages(messages, schemaBytes, a.opts.ContextByteBudget)
+		if size := requestSizeEstimate(messages, schemaBytes); size > a.opts.ContextByteBudget {
+			return analysischat.Reply{}, fmt.Errorf("analysis chat request exceeds the %d-byte context budget after compaction", a.opts.ContextByteBudget)
+		}
 		response, err := a.client.callModel(loopCtx, messages, schemas, parallelToolCalls)
 		if err != nil {
 			if iter == 0 && isToolsUnsupportedError(err) {
@@ -243,6 +247,9 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 
 	messages, _ = compactMessages(messages, 0, a.opts.ContextByteBudget)
 	messages = append(messages, modelMessage{Role: "user", Content: strPtr(analysisChatFinalizePrompt)})
+	if size := requestSizeEstimate(messages, 0); size > a.opts.ContextByteBudget {
+		return analysischat.Reply{}, fmt.Errorf("analysis chat finalize request exceeds the %d-byte context budget after compaction", a.opts.ContextByteBudget)
+	}
 	response, err := a.client.callModel(loopCtx, messages, nil, nil)
 	if err != nil {
 		return analysischat.Reply{}, fmt.Errorf("analysis chat finalize: %w", err)
@@ -261,6 +268,85 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 	return reply, nil
 }
 
+func buildAnalysisChatMessages(systemPrompt, contextMessage string, history []analysischat.Message, question string, schemaBytes, budget int) ([]modelMessage, error) {
+	base := []modelMessage{
+		{Role: "system", Content: strPtr(systemPrompt)},
+		{Role: "user", Content: strPtr(contextMessage)},
+	}
+	historyMessages := make([]modelMessage, 0, len(history))
+	for _, message := range history {
+		switch strings.TrimSpace(message.Role) {
+		case "user":
+			content := clampAnalysisChatText(message.Content, analysisChatMaxQuestionBytes)
+			if content != "" {
+				historyMessages = append(historyMessages, modelMessage{Role: "user", Content: strPtr(content)})
+			}
+		case "assistant":
+			content, err := analysisChatAssistantHistory(message)
+			if err != nil {
+				return nil, err
+			}
+			if content != "" {
+				historyMessages = append(historyMessages, modelMessage{Role: "assistant", Content: strPtr(content)})
+			}
+		}
+	}
+	questionMessage := modelMessage{Role: "user", Content: strPtr(question)}
+	target := budget * analysisChatHistoryTargetPct / 100
+	for {
+		messages := append(slices.Clone(base), historyMessages...)
+		messages = append(messages, questionMessage)
+		if requestSizeEstimate(messages, schemaBytes) <= target || len(historyMessages) == 0 {
+			if size := requestSizeEstimate(messages, schemaBytes); size > budget {
+				return nil, fmt.Errorf("analysis chat base context is %d bytes, exceeding the %d-byte context budget", size, budget)
+			}
+			return messages, nil
+		}
+		drop := 1
+		if len(historyMessages) >= 2 && historyMessages[0].Role == "user" && historyMessages[1].Role == "assistant" {
+			drop = 2
+		}
+		historyMessages = historyMessages[drop:]
+	}
+}
+
+func analysisChatAssistantHistory(message analysischat.Message) (string, error) {
+	citations := slices.Clone(message.Citations)
+	if len(citations) > 8 {
+		citations = citations[:8]
+	}
+	for i := range citations {
+		citations[i].Path = clampAnalysisChatText(citations[i].Path, 1024)
+		citations[i].Quote = clampAnalysisChatText(citations[i].Quote, 500)
+	}
+	var revision *analysischat.Revision
+	if message.ProposedRevision != nil {
+		revision = &analysischat.Revision{
+			RootCause:    clampAnalysisChatText(message.ProposedRevision.RootCause, 8<<10),
+			SuggestedFix: clampAnalysisChatText(message.ProposedRevision.SuggestedFix, 4<<10),
+		}
+	}
+	payload := struct {
+		Answer           string                  `json:"answer"`
+		Assessment       string                  `json:"assessment,omitempty"`
+		Citations        []analysischat.Citation `json:"citations,omitempty"`
+		ProposedRevision *analysischat.Revision  `json:"proposed_revision,omitempty"`
+	}{
+		Answer:           clampAnalysisChatText(message.Content, 12<<10),
+		Assessment:       strings.TrimSpace(message.Assessment),
+		Citations:        citations,
+		ProposedRevision: revision,
+	}
+	if payload.Answer == "" {
+		return "", nil
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("encoding analysis chat history: %w", err)
+	}
+	return string(encoded), nil
+}
+
 func analysisChatContext(turn analysischat.Turn) (string, error) {
 	analysis := turn.TestCase.AIAnalysis
 	payload := struct {
@@ -268,6 +354,8 @@ func analysisChatContext(turn analysischat.Turn) (string, error) {
 		BuildID       string   `json:"build_id"`
 		JobName       string   `json:"job_name"`
 		TestName      string   `json:"test_name"`
+		SuiteName     string   `json:"suite_name,omitempty"`
+		ClassName     string   `json:"class_name,omitempty"`
 		JUnitFile     string   `json:"junit_file,omitempty"`
 		Failure       string   `json:"failure_message,omitempty"`
 		FailureBody   string   `json:"failure_body,omitempty"`
@@ -277,7 +365,8 @@ func analysisChatContext(turn analysischat.Turn) (string, error) {
 		RelevantFiles []string `json:"published_relevant_files,omitempty"`
 	}{
 		JobID: turn.JobID, BuildID: turn.Build.BuildID, JobName: turn.Build.JobName,
-		TestName: turn.TestCase.Name, JUnitFile: turn.TestCase.JUnitFile,
+		TestName: turn.TestCase.Name, SuiteName: turn.TestCase.SuiteName,
+		ClassName: turn.TestCase.ClassName, JUnitFile: turn.TestCase.JUnitFile,
 		Failure:     clampAnalysisChatText(turn.TestCase.FailureMessage, 12<<10),
 		FailureBody: clampAnalysisChatText(turn.TestCase.FailureBody, 8<<10),
 		RootCause:   clampAnalysisChatText(analysis.RootCause, 32<<10), Severity: analysis.Severity,
@@ -292,7 +381,7 @@ func analysisChatContext(turn analysischat.Turn) (string, error) {
 		"\n\nAnswer follow-up questions only about this selected analysis and build.", nil
 }
 
-func parseAnalysisChatReply(raw string, state *agentState, evidence map[string]string) (analysischat.Reply, error) {
+func parseAnalysisChatReply(raw string, state *agentState, evidence map[string]*analysisChatEvidence) (analysischat.Reply, error) {
 	if strings.TrimSpace(raw) == "" {
 		return analysischat.Reply{}, errors.New("empty answer")
 	}
@@ -328,7 +417,9 @@ func parseAnalysisChatReply(raw string, state *agentState, evidence map[string]s
 			return analysischat.Reply{}, fmt.Errorf("citation %d names an artifact not read during this turn", i+1)
 		}
 		citation.Path = safe
-		if citation.LineStart < 0 || citation.LineEnd < 0 || citation.LineEnd > 0 && citation.LineStart > citation.LineEnd {
+		if citation.LineStart < 0 || citation.LineEnd < 0 ||
+			(citation.LineStart == 0) != (citation.LineEnd == 0) ||
+			citation.LineEnd > 0 && (citation.LineStart > citation.LineEnd || citation.LineEnd-citation.LineStart > 50) {
 			return analysischat.Reply{}, fmt.Errorf("citation %d has an invalid line range", i+1)
 		}
 		if len(citation.Quote) < 4 {
@@ -337,8 +428,16 @@ func parseAnalysisChatReply(raw string, state *agentState, evidence map[string]s
 		if len(citation.Quote) > 1000 {
 			return analysischat.Reply{}, fmt.Errorf("citation %d quote exceeds 1000 bytes", i+1)
 		}
-		if citation.Quote != "" && !strings.Contains(evidence[normalized], citation.Quote) {
+		artifactEvidence := evidence[normalized]
+		if artifactEvidence == nil || !strings.Contains(artifactEvidence.Text, citation.Quote) {
 			return analysischat.Reply{}, fmt.Errorf("citation %d quote was not returned by the cited artifact read", i+1)
+		}
+		if citation.LineStart > 0 {
+			if len(artifactEvidence.Lines) == 0 {
+				citation.LineStart, citation.LineEnd = 0, 0
+			} else if !analysisChatQuoteInRange(artifactEvidence.Lines, citation.LineStart, citation.LineEnd, citation.Quote) {
+				return analysischat.Reply{}, fmt.Errorf("citation %d quote does not occur in the claimed line range", i+1)
+			}
 		}
 	}
 	if (reply.Assessment == "supports" || reply.Assessment == "challenges") && len(reply.Citations) == 0 {
@@ -362,7 +461,14 @@ func parseAnalysisChatReply(raw string, state *agentState, evidence map[string]s
 	return reply, nil
 }
 
-func recordAnalysisChatEvidence(evidence map[string]string, toolCall modelToolCall, result string) {
+type analysisChatEvidence struct {
+	Text  string
+	Lines map[int]string
+}
+
+var analysisChatContextLineRE = regexp.MustCompile(`^[> ]\s*(\d+):\s?(.*)$`)
+
+func recordAnalysisChatEvidence(evidence map[string]*analysisChatEvidence, toolCall modelToolCall, result string) {
 	if evidence == nil || !isContentFetchingTool(toolCall.Function.Name) {
 		return
 	}
@@ -374,34 +480,69 @@ func recordAnalysisChatEvidence(evidence map[string]string, toolCall modelToolCa
 	if json.Unmarshal([]byte(result), &payload) != nil {
 		return
 	}
-	var values []string
+	entry := evidence[path]
+	if entry == nil {
+		entry = &analysisChatEvidence{Lines: map[int]string{}}
+		evidence[path] = entry
+	}
 	switch toolCall.Function.Name {
 	case "read_artifact", "tail_artifact":
-		collectAnalysisChatStrings(payload["content"], &values)
+		if content, ok := payload["content"].(string); ok {
+			appendAnalysisChatEvidence(entry, content)
+		}
 	case "grep_artifact":
-		collectAnalysisChatStrings(payload["matches"], &values)
+		matches, _ := payload["matches"].([]any)
+		for _, rawMatch := range matches {
+			match, _ := rawMatch.(map[string]any)
+			contexts, _ := match["context"].([]any)
+			for _, rawContext := range contexts {
+				contextLine, _ := rawContext.(string)
+				parts := analysisChatContextLineRE.FindStringSubmatch(contextLine)
+				if len(parts) != 3 {
+					continue
+				}
+				line, err := strconv.Atoi(parts[1])
+				if err != nil || line <= 0 {
+					continue
+				}
+				entry.Lines[line] = parts[2]
+				appendAnalysisChatEvidence(entry, parts[2])
+			}
+		}
 	}
-	text := strings.Join(values, "\n")
-	const maxEvidenceBytes = 128 << 10
-	if len(text) > maxEvidenceBytes {
-		text = text[:maxEvidenceBytes]
-	}
-	evidence[path] += "\n" + text
 }
 
-func collectAnalysisChatStrings(value any, out *[]string) {
-	switch typed := value.(type) {
-	case string:
-		*out = append(*out, typed)
-	case []any:
-		for _, item := range typed {
-			collectAnalysisChatStrings(item, out)
-		}
-	case map[string]any:
-		for _, item := range typed {
-			collectAnalysisChatStrings(item, out)
+func appendAnalysisChatEvidence(evidence *analysisChatEvidence, text string) {
+	if evidence == nil || text == "" {
+		return
+	}
+	const maxEvidenceBytes = 128 << 10
+	remaining := maxEvidenceBytes - len(evidence.Text)
+	if remaining <= 0 {
+		return
+	}
+	if len(text) > remaining {
+		text = text[:remaining]
+	}
+	if evidence.Text != "" {
+		evidence.Text += "\n"
+	}
+	evidence.Text += text
+}
+
+func analysisChatQuoteInRange(lines map[int]string, start, end int, quote string) bool {
+	lineNumbers := make([]int, 0, len(lines))
+	for line := range lines {
+		if line >= start && line <= end {
+			lineNumbers = append(lineNumbers, line)
 		}
 	}
+	sort.Ints(lineNumbers)
+	parts := make([]string, 0, len(lineNumbers))
+	for _, line := range lineNumbers {
+		parts = append(parts, lines[line])
+	}
+	return strings.Contains(strings.Join(parts, "\n"), quote)
 }
 
 func boundedAnalysisChatFiles(files []string) []string {

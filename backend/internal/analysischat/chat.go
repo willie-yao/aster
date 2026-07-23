@@ -43,6 +43,8 @@ const (
 	maxJobIDBytes     = 1024
 	maxBuildIDBytes   = 256
 	maxTestNameBytes  = 4096
+	maxSuiteNameBytes = 4096
+	maxClassNameBytes = 4096
 	maxJUnitFileBytes = 1024
 	maxTimestampBytes = 128
 )
@@ -52,6 +54,8 @@ type AnalysisRef struct {
 	JobID               string `json:"job_id"`
 	BuildID             string `json:"build_id"`
 	TestName            string `json:"test_name"`
+	SuiteName           string `json:"suite_name,omitempty"`
+	ClassName           string `json:"class_name,omitempty"`
 	JUnitFile           string `json:"junit_file,omitempty"`
 	AnalysisGeneratedAt string `json:"analysis_generated_at,omitempty"`
 }
@@ -322,12 +326,15 @@ func (s *Service) resolve(ref AnalysisRef) (resolvedAnalysis, error) {
 	ref.JobID = strings.TrimSpace(ref.JobID)
 	ref.BuildID = strings.TrimSpace(ref.BuildID)
 	ref.TestName = strings.TrimSpace(ref.TestName)
+	ref.SuiteName = strings.TrimSpace(ref.SuiteName)
+	ref.ClassName = strings.TrimSpace(ref.ClassName)
 	ref.JUnitFile = strings.TrimSpace(ref.JUnitFile)
 	ref.AnalysisGeneratedAt = strings.TrimSpace(ref.AnalysisGeneratedAt)
 	if ref.JobID == "" || ref.BuildID == "" || ref.TestName == "" {
 		return resolvedAnalysis{}, fmt.Errorf("%w: job_id, build_id, and test_name are required", ErrInvalidRequest)
 	}
 	if len(ref.JobID) > maxJobIDBytes || len(ref.BuildID) > maxBuildIDBytes || len(ref.TestName) > maxTestNameBytes ||
+		len(ref.SuiteName) > maxSuiteNameBytes || len(ref.ClassName) > maxClassNameBytes ||
 		len(ref.JUnitFile) > maxJUnitFileBytes || len(ref.AnalysisGeneratedAt) > maxTimestampBytes {
 		return resolvedAnalysis{}, fmt.Errorf("%w: analysis reference field exceeds its size limit", ErrInvalidRequest)
 	}
@@ -368,7 +375,12 @@ func (s *Service) resolve(ref AnalysisRef) (resolvedAnalysis, error) {
 
 	var matches []models.TestCase
 	for _, testCase := range run.TestCases {
-		if testCase.Name != ref.TestName || ref.JUnitFile != "" && testCase.JUnitFile != ref.JUnitFile {
+		suiteName := strings.TrimSpace(testCase.SuiteName)
+		className := strings.TrimSpace(testCase.ClassName)
+		if testCase.Name != ref.TestName ||
+			ref.SuiteName != "" && suiteName != ref.SuiteName ||
+			ref.ClassName != "" && className != ref.ClassName ||
+			ref.JUnitFile != "" && testCase.JUnitFile != ref.JUnitFile {
 			continue
 		}
 		if testCase.AIAnalysis != nil {
@@ -379,12 +391,14 @@ func (s *Service) resolve(ref AnalysisRef) (resolvedAnalysis, error) {
 		return resolvedAnalysis{}, ErrAnalysisNotFound
 	}
 	if len(matches) > 1 {
-		return resolvedAnalysis{}, fmt.Errorf("%w: junit_file is required for duplicate test names", ErrInvalidRequest)
+		return resolvedAnalysis{}, fmt.Errorf("%w: suite_name, class_name, or junit_file is required to disambiguate the test", ErrInvalidRequest)
 	}
 	testCase := cloneTestCase(matches[0])
 	if ref.AnalysisGeneratedAt != "" && ref.AnalysisGeneratedAt != testCase.AIAnalysis.GeneratedAt {
 		return resolvedAnalysis{}, ErrAnalysisChanged
 	}
+	ref.SuiteName = strings.TrimSpace(testCase.SuiteName)
+	ref.ClassName = strings.TrimSpace(testCase.ClassName)
 	ref.JUnitFile = testCase.JUnitFile
 	ref.AnalysisGeneratedAt = testCase.AIAnalysis.GeneratedAt
 
@@ -420,6 +434,8 @@ func (s *Service) ownerSessionsLocked(owner string) int {
 	return count
 }
 
+// evictExpiredLocked keeps an expired busy session until its in-flight turn returns.
+// The next session access removes it and releases its capacity.
 func (s *Service) evictExpiredLocked(now time.Time) {
 	for id, current := range s.sessions {
 		if !now.Before(current.expires) && !current.busy {
