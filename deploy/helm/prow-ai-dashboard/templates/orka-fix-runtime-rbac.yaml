@@ -1,16 +1,7 @@
+{{- include "prow-ai-dashboard.validateAnalysisRuntime" . -}}
 {{- include "prow-ai-dashboard.validateAI" . -}}
 {{- if and .Values.orka.fixRuntime.enabled .Values.orka.rbac.create }}
-# The dashboard pod runs in the release namespace and creates fix-generation
-# Tasks in the Orka namespace.
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: {{ include "prow-ai-dashboard.orkaServiceAccountName" . }}
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "prow-ai-dashboard.labels" . | nindent 4 }}
-    app.kubernetes.io/component: orka-fix-runtime
----
+# Fix generation keeps its own Task-only Role.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:

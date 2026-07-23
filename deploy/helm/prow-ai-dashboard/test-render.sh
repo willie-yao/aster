@@ -62,6 +62,74 @@ if [[ $(container_command fetcher "$tmp/cron.yaml") != /usr/local/bin/fetcher ]]
   exit 1
 fi
 
+# The experimental selector is Helm-only and leaves existing consumers on the
+# in-process path until explicitly selected.
+if grep -Fq -- '-analysis-runtime=orka-container' "$tmp/default.yaml"; then
+  echo 'default render enabled Orka container analysis' >&2
+  exit 1
+fi
+
+container_args=(
+  --set mode=cron
+  --set ai.enabled=true
+  --set ai.endpoint=http://model.orka-system.svc.cluster.local/v1/chat/completions
+  --set ai.model=script-model
+  --set ai.token=dashboard-token
+  --set analysisRuntime.type=orka-container
+  --set analysisRuntime.orkaContainer.image.tag=sha-analyzer
+  --set analysisRuntime.orkaContainer.modelAuth.existingSecret=orka-model
+)
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" "${container_args[@]}" > "$tmp/container-analysis.yaml"
+grep -Fq -- '-analysis-runtime=orka-container' "$tmp/container-analysis.yaml"
+grep -Fq -- '-orka-analysis-image=ghcr.io/willie-yao/prow-ai-dashboard/analyzer:sha-analyzer' "$tmp/container-analysis.yaml"
+grep -Fq 'restartPolicy: Never' "$tmp/container-analysis.yaml"
+grep -Fq 'backoffLimit: 0' "$tmp/container-analysis.yaml"
+grep -Fq 'resources: ["tasks"]' "$tmp/container-analysis.yaml"
+grep -Fq 'verbs: ["create", "get", "list", "watch", "patch", "delete"]' "$tmp/container-analysis.yaml"
+grep -Fq 'resources: ["configmaps"]' "$tmp/container-analysis.yaml"
+grep -Fq 'name: PROW_AI_STATE_KEY' "$tmp/container-analysis.yaml"
+if grep -Eq 'resources: \["(tools|providers|agents|agentruntimes)"\]|type: ai|orka-producer|orka-ingestor|orka-artifact-tool' "$tmp/container-analysis.yaml"; then
+  echo 'container analysis render contains a forbidden patched-worker resource' >&2
+  exit 1
+fi
+if [[ $(grep -Fc 'app.kubernetes.io/component: orka-container-analysis-state' "$tmp/container-analysis.yaml") -ne 2 ]]; then
+  echo 'chart-managed state key was not rendered in both namespaces' >&2
+  exit 1
+fi
+
+# A supplied state Secret is referenced in both namespaces but never copied.
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" "${container_args[@]}" \
+  --set analysisRuntime.orkaContainer.state.existingSecret=shared-state > "$tmp/container-existing-state.yaml"
+if grep -Fq 'orka-container-analysis-state' "$tmp/container-existing-state.yaml"; then
+  echo 'existing state Secret unexpectedly rendered chart-managed state data' >&2
+  exit 1
+fi
+grep -Fq -- '-orka-analysis-state-secret=shared-state' "$tmp/container-existing-state.yaml"
+
+for invalid in type watch endpoint model namespace image model-secret token-key state-key concurrency poll timeout retries gpu; do
+  case $invalid in
+    type) invalid_args=(--set analysisRuntime.type=remote); want='analysisRuntime.type must be inprocess or orka-container' ;;
+    watch) invalid_args=("${container_args[@]}" --set mode=watch); want='analysisRuntime.type=orka-container requires mode=cron' ;;
+    endpoint) invalid_args=("${container_args[@]}" --set-string ai.endpoint=); want='analysisRuntime.type=orka-container requires ai.endpoint' ;;
+    model) invalid_args=("${container_args[@]}" --set-string ai.model=); want='analysisRuntime.type=orka-container requires ai.model' ;;
+    namespace) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.namespace=); want='analysisRuntime.orkaContainer.namespace is required' ;;
+    image) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.image.repository=); want='analysisRuntime.orkaContainer.image.repository is required' ;;
+    model-secret) invalid_args=(--set mode=cron --set ai.enabled=true --set ai.endpoint=http://model --set ai.model=model --set analysisRuntime.type=orka-container); want='analysisRuntime.orkaContainer.modelAuth.existingSecret is required' ;;
+    token-key) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.modelAuth.tokenKey=); want='analysisRuntime.orkaContainer.modelAuth.tokenKey is required' ;;
+    state-key) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.state.key=); want='analysisRuntime.orkaContainer.state.key is required' ;;
+    concurrency) invalid_args=("${container_args[@]}" --set analysisRuntime.orkaContainer.maxConcurrentTasks=0); want='analysisRuntime.orkaContainer.maxConcurrentTasks must be an integer from 1 to 999' ;;
+    poll) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.pollInterval=soon); want='analysisRuntime.orkaContainer.pollInterval must be a positive Go duration' ;;
+    timeout) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.taskTimeout=0s); want='analysisRuntime.orkaContainer.taskTimeout must be a positive Go duration' ;;
+    retries) invalid_args=("${container_args[@]}" --set analysisRuntime.orkaContainer.retries=-1); want='analysisRuntime.orkaContainer.retries must be an integer from 0 to 99' ;;
+    gpu) invalid_args=("${container_args[@]}" --set analysisRuntime.orkaContainer.nodeSelector.agentpool=h100); want='analysisRuntime.orkaContainer placement must not select or tolerate GPU nodes' ;;
+  esac
+  if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" "${invalid_args[@]}" > "$tmp/invalid-analysis-$invalid.yaml" 2>&1; then
+    echo "$invalid analysis runtime value was accepted" >&2
+    exit 1
+  fi
+  grep -Fq "$want" "$tmp/invalid-analysis-$invalid.yaml"
+done
+
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set mode=cron \
   --set fetcher.restartPolicy=Never \

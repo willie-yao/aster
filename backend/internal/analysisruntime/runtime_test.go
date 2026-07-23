@@ -4,10 +4,13 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 )
 
 func TestResolveContextBudgets(t *testing.T) {
@@ -58,4 +61,61 @@ func TestResolveContextBudgets(t *testing.T) {
 			t.Fatal("expected invalid override error")
 		}
 	})
+}
+
+func TestLoadProjectUsesCurrentToolSelectedSkills(t *testing.T) {
+	dir := t.TempDir()
+	write := func(path, content string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(dir, "project.yaml"), `id: test
+name: Test
+testgrid:
+  dashboard: test
+storage:
+  provider: local
+  base: /fixtures
+branding:
+  title: Test
+  base_path: /
+  site_url: https://example.invalid
+  source_repo:
+    owner: example
+    name: project
+ai:
+  tools: [filesystem]
+`)
+	write(filepath.Join(dir, "prompts", "system.md"), "Investigate artifacts.\n")
+	write(filepath.Join(dir, "skills", "consumer.yaml"), `id: consumer.recipe
+triggers: ["boom"]
+`)
+	cfg, err := project.Load(filepath.Join(dir, "project.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadProject(dir, cfg, ProviderFallbacks{
+		API: "chat_completions", Endpoint: "https://model.invalid/v1/chat/completions", Model: "model",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.ProfileSelection.Kubernetes {
+		t.Fatal("filesystem-only project selected Kubernetes skills")
+	}
+	ids := map[string]bool{}
+	for _, skill := range loaded.SkillSet.Skills() {
+		ids[skill.ID] = true
+	}
+	if !ids["consumer.recipe"] || !ids["engine.prow.failure-evidence"] {
+		t.Fatalf("loaded skill ids = %v", ids)
+	}
+	if ids["engine.kubernetes.machine-node-providerid"] {
+		t.Fatal("filesystem-only project loaded Kubernetes skills")
+	}
 }

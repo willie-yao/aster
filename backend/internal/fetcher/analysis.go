@@ -2,6 +2,7 @@ package fetcher
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -11,70 +12,20 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisruntime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/patterns"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prowbuild"
 )
 
-// analyzeFailuresWithAI runs the agentic AI analysis on every failed test
-// case. The agentic tool-calling loop is the only analysis path.
-func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.JobDetail, flakinessReport models.FlakinessReport) {
-	tracePath := filepath.Join(p.opts.OutDir, output.AITraceFilename)
-	runtime, err := p.ensureAnalysisRuntime(ctx)
-	if err != nil {
-		log.Printf("⚠ AI runtime setup failed: %v", err)
-		return
-	}
-	cfg := p.cfg
-	defer func() {
-		if err := runtime.SaveCache(); err != nil {
-			log.Printf("Warning: failed to save AI cache: %v", err)
-		}
-	}()
-
+// analyzeFailuresWithAI runs the dashboard-owned analyzer on every failed test.
+func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.JobDetail, flakinessReport models.FlakinessReport) error {
 	consecutiveMap := make(map[string]int)
 	for _, tf := range flakinessReport.PersistentFailures {
 		consecutiveMap[tf.JobID+"::"+tf.TestName] = tf.ConsecutiveFailures
 	}
 
-	traceStore := ai.NewTraceStore()
-	service, err := runtime.NewService(analysisruntime.ServiceOptions{
-		Backend:             p.backend,
-		ConsecutiveFailures: consecutiveMap,
-		TraceStore:          traceStore,
-		GitHubReadToken:     githubReadToken(),
-	})
-	if err != nil {
-		log.Printf("⚠ AI service setup failed: %v", err)
-		return
-	}
-	defer func() {
-		if err := traceStore.Save(tracePath); err != nil {
-			log.Printf("Warning: failed to save AI traces: %v", err)
-		}
-	}()
-	runtime.LogConfiguration()
-
-	var totalFailures int
-	for _, d := range details {
-		for _, run := range d.Runs {
-			for _, tc := range run.TestCases {
-				if tc.Status == "failed" {
-					totalFailures++
-				}
-			}
-		}
-	}
-
-	if totalFailures == 0 {
-		log.Println("🤖 No failures to analyze")
-		return
-	}
-	log.Printf("🤖 Analyzing %d failures...", totalFailures)
-
-	// Flatten failed test cases into independent work for a bounded worker pool.
-	// Shared AI state is internally synchronized; transientSkipped is atomic.
 	type aiWork struct {
 		jobID       string
 		buildPrefix string
@@ -93,18 +44,58 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 				BuildID:     run.BuildID,
 				PullNumber:  run.PullNumber,
 			}
-			buildPrefix := loc.BuildPath()
 			for j := range run.TestCases {
 				tc := &run.TestCases[j]
-				if tc.Status != "failed" {
-					continue
+				if tc.Status == "failed" {
+					work = append(work, aiWork{jobID: d.JobID, buildPrefix: loc.BuildPath(), run: run, tc: tc})
 				}
-				work = append(work, aiWork{jobID: d.JobID, buildPrefix: buildPrefix, run: run, tc: tc})
 			}
 		}
 	}
+	if len(work) == 0 {
+		log.Println("🤖 No failures to analyze")
+		return nil
+	}
+	log.Printf("🤖 Analyzing %d failures with %s...", len(work), p.opts.AnalysisRuntime.Type)
 
-	concurrency := cfg.AnalysisConcurrency()
+	var analyzer ai.FailureAnalyzer
+	var runtime *analysisruntime.Runtime
+	var service *ai.Service
+	var traceStore *ai.TraceStore
+	var container *orka.ContainerAnalyzer
+	var err error
+
+	if p.opts.AnalysisRuntime.Type == AnalysisRuntimeOrkaContainer {
+		container, err = p.ensureContainerAnalyzer()
+		if err != nil {
+			return fmt.Errorf("container analysis runtime setup: %w", err)
+		}
+		analyzer = container
+	} else {
+		runtime, err = p.ensureAnalysisRuntime(ctx)
+		if err != nil {
+			log.Printf("⚠ AI runtime setup failed: %v", err)
+			return nil
+		}
+		traceStore = ai.NewTraceStore()
+		service, err = runtime.NewService(analysisruntime.ServiceOptions{
+			Backend:             p.backend,
+			ConsecutiveFailures: consecutiveMap,
+			TraceStore:          traceStore,
+			GitHubReadToken:     githubReadToken(),
+		})
+		if err != nil {
+			log.Printf("⚠ AI service setup failed: %v", err)
+			return nil
+		}
+		runtime.LogConfiguration()
+		analyzer = service
+	}
+
+	concurrency := p.cfg.AnalysisConcurrency()
+	if container != nil {
+		concurrency = p.opts.AnalysisRuntime.OrkaContainer.MaxConcurrent
+	}
 	if concurrency > len(work) {
 		concurrency = len(work)
 	}
@@ -123,7 +114,18 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 			defer wg.Done()
 			defer func() { <-sem }()
 			before := w.tc.AISummary
-			service.Analyze(ctx, p.client, w.jobID, w.buildPrefix, w.run, w.tc)
+			result, analyzeErr := analyzer.AnalyzeFailure(ctx, p.client, ai.FailureAnalysisRequest{
+				JobID:               w.jobID,
+				BuildPrefix:         w.buildPrefix,
+				Build:               w.run.BuildInfo,
+				TestCase:            *w.tc,
+				ConsecutiveFailures: consecutiveMap[w.jobID+"::"+w.tc.Name],
+			})
+			w.tc.AISummary = result.Summary
+			w.tc.AIAnalysis = result.Analysis
+			if analyzeErr != nil {
+				log.Printf("  ⚠ analysis unavailable for %s/%s: %v", w.jobID, w.tc.Name, analyzeErr)
+			}
 			if before == nil && w.tc.AISummary != nil && w.tc.AISummary.IsTransient && w.tc.AIAnalysis == nil {
 				transientSkipped.Add(1)
 			}
@@ -146,9 +148,35 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 		log.Printf("⚖️ semantic judge: ran on %d, objected on %d, revised %d", n, judgeObjected.Load(), judgeRevised.Load())
 	}
 
-	// Always run the job-level pattern pass. It self-gates on failed build count
-	// and is cached.
+	if container != nil {
+		if err := container.StateStore().Save(); err != nil {
+			return fmt.Errorf("save container analysis state: %w", err)
+		}
+		runtime, err = p.ensureAnalysisRuntime(ctx)
+		if err != nil {
+			return fmt.Errorf("cross-build analysis runtime setup: %w", err)
+		}
+		traceStore = container.StateStore().TraceStore()
+		service, err = runtime.NewService(analysisruntime.ServiceOptions{
+			Backend:             p.backend,
+			ConsecutiveFailures: consecutiveMap,
+			TraceStore:          traceStore,
+			GitHubReadToken:     githubReadToken(),
+		})
+		if err != nil {
+			return fmt.Errorf("cross-build analysis service setup: %w", err)
+		}
+		runtime.LogConfiguration()
+	}
+
 	analyzePatternsAcrossBuilds(ctx, service, details)
+	if err := runtime.SaveCache(); err != nil {
+		return fmt.Errorf("save AI cache: %w", err)
+	}
+	if err := traceStore.Save(filepath.Join(p.opts.OutDir, output.AITraceFilename)); err != nil {
+		return fmt.Errorf("save AI traces: %w", err)
+	}
+	return nil
 }
 
 func (p *pipeline) ensureAnalysisRuntime(ctx context.Context) (*analysisruntime.Runtime, error) {
@@ -165,8 +193,43 @@ func (p *pipeline) ensureAnalysisRuntime(ctx context.Context) (*analysisruntime.
 	return p.aiRuntime, nil
 }
 
-// analyzePatternsAcrossBuilds correlates representative failures across failed
-// builds into one systemic-vs-transient verdict per job.
+func (p *pipeline) ensureContainerAnalyzer() (*orka.ContainerAnalyzer, error) {
+	if p.containerAnalyzer != nil {
+		return p.containerAnalyzer, nil
+	}
+	stateKey, err := analysisruntime.ParseContainerStateKey(os.Getenv(analysisruntime.ContainerStateKeyEnv))
+	if err != nil {
+		return nil, err
+	}
+	cfg := p.opts.AnalysisRuntime.OrkaContainer
+	container, err := orka.NewContainerAnalyzer(orka.ContainerAnalyzerOptions{
+		Namespace:          cfg.Namespace,
+		Image:              cfg.Image,
+		ProjectDir:         p.opts.ProjectDir,
+		DataDir:            p.opts.OutDir,
+		API:                p.aiProject.Provider.API,
+		Endpoint:           p.aiProject.Provider.Endpoint,
+		Model:              p.aiProject.Provider.Model,
+		ModelSecretName:    cfg.ModelSecretName,
+		ModelTokenKey:      cfg.ModelTokenKey,
+		StateSecretName:    cfg.StateSecretName,
+		StateSecretKey:     cfg.StateSecretKey,
+		StateKey:           stateKey,
+		TaskTimeout:        cfg.TaskTimeout,
+		PollInterval:       cfg.PollInterval,
+		MaxRetries:         cfg.Retries,
+		MaxConcurrentTasks: cfg.MaxConcurrent,
+		NodeSelector:       cfg.NodeSelector,
+		Tolerations:        cfg.Tolerations,
+		Affinity:           cfg.Affinity,
+	})
+	if err != nil {
+		return nil, err
+	}
+	p.containerAnalyzer = container
+	return p.containerAnalyzer, nil
+}
+
 func analyzePatternsAcrossBuilds(ctx context.Context, service *ai.Service, details []models.JobDetail) {
 	patterns.Analyze(ctx, service, details)
 }

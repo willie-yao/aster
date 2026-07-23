@@ -1,0 +1,311 @@
+package orka
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisruntime"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+)
+
+const containerAnalyzerFieldManager = "prow-ai-dashboard-container-analysis"
+
+// ContainerAnalyzerOptions configures the experimental Orka container runtime.
+type ContainerAnalyzerOptions struct {
+	Namespace          string
+	Image              string
+	ProjectDir         string
+	DataDir            string
+	API                string
+	Endpoint           string
+	Model              string
+	ModelSecretName    string
+	ModelTokenKey      string
+	StateSecretName    string
+	StateSecretKey     string
+	StateKey           []byte
+	TaskTimeout        time.Duration
+	PollInterval       time.Duration
+	MaxRetries         int
+	MaxConcurrentTasks int
+	NodeSelector       map[string]string
+	Tolerations        []map[string]any
+	Affinity           map[string]any
+	Labels             map[string]string
+	KubeContext        string
+	OrkaAPI            string
+	OrkaAPIToken       string
+}
+
+type containerAnalyzerKube interface {
+	ContainerAnalysisResourceClient
+	DeleteTask(context.Context, string, string, string) error
+}
+
+type containerAnalyzerResults interface {
+	Result(context.Context, string, string) (string, bool, error)
+}
+
+// ContainerAnalyzer runs the dashboard-owned FailureAnalyzer in Orka container Tasks.
+type ContainerAnalyzer struct {
+	opts      ContainerAnalyzerOptions
+	kube      containerAnalyzerKube
+	results   containerAnalyzerResults
+	state     *analysisruntime.ContainerStateStore
+	sem       chan struct{}
+	pruneOnce sync.Once
+	pruneErr  error
+}
+
+// NewContainerAnalyzer builds the Kubernetes, Orka API, and encrypted-state clients.
+func NewContainerAnalyzer(opts ContainerAnalyzerOptions) (*ContainerAnalyzer, error) {
+	if err := validateContainerAnalyzerOptions(opts); err != nil {
+		return nil, err
+	}
+	rc, err := RESTConfig(opts.KubeContext)
+	if err != nil {
+		return nil, fmt.Errorf("container analysis kube config: %w", err)
+	}
+	kube, err := NewKubeClient(rc)
+	if err != nil {
+		return nil, fmt.Errorf("container analysis kube client: %w", err)
+	}
+	kube.Manager = containerAnalyzerFieldManager
+	state, err := analysisruntime.NewContainerStateStore(opts.DataDir)
+	if err != nil {
+		return nil, fmt.Errorf("container analysis state: %w", err)
+	}
+	base := strings.TrimSpace(opts.OrkaAPI)
+	if base == "" {
+		base = fmt.Sprintf("http://orka.%s.svc.cluster.local:8080", opts.Namespace)
+	}
+	token := strings.TrimSpace(opts.OrkaAPIToken)
+	if token == "" {
+		token = strings.TrimSpace(os.Getenv("ORKA_API_TOKEN"))
+	}
+	if token == "" {
+		token = resolveOrkaAPIToken("")
+	}
+	return newContainerAnalyzer(opts, kube, NewResultClient(base, token), state)
+}
+
+func newContainerAnalyzer(opts ContainerAnalyzerOptions, kube containerAnalyzerKube, results containerAnalyzerResults, state *analysisruntime.ContainerStateStore) (*ContainerAnalyzer, error) {
+	if err := validateContainerAnalyzerOptions(opts); err != nil {
+		return nil, err
+	}
+	if kube == nil || results == nil || state == nil {
+		return nil, fmt.Errorf("container analysis clients and state store are required")
+	}
+	return &ContainerAnalyzer{
+		opts: opts, kube: kube, results: results, state: state,
+		sem: make(chan struct{}, opts.MaxConcurrentTasks),
+	}, nil
+}
+
+// ValidateContainerAnalyzerOptions validates a complete execution plan without creating clients.
+func ValidateContainerAnalyzerOptions(opts ContainerAnalyzerOptions) error {
+	return validateContainerAnalyzerOptions(opts)
+}
+
+func validateContainerAnalyzerOptions(opts ContainerAnalyzerOptions) error {
+	if err := project.ValidateAIAPI(strings.ToLower(strings.TrimSpace(opts.API))); err != nil {
+		return err
+	}
+	if _, err := validateContainerAnalysisEndpoint(opts.Endpoint); err != nil {
+		return err
+	}
+	switch {
+	case strings.TrimSpace(opts.Namespace) == "":
+		return fmt.Errorf("container analysis namespace is required")
+	case strings.TrimSpace(opts.Image) == "":
+		return fmt.Errorf("container analysis image is required")
+	case strings.TrimSpace(opts.ProjectDir) == "":
+		return fmt.Errorf("container analysis project directory is required")
+	case strings.TrimSpace(opts.DataDir) == "":
+		return fmt.Errorf("container analysis data directory is required")
+	case strings.TrimSpace(opts.API) == "":
+		return fmt.Errorf("container analysis API mode is required")
+	case strings.TrimSpace(opts.Endpoint) == "":
+		return fmt.Errorf("container analysis endpoint is required")
+	case strings.TrimSpace(opts.Model) == "":
+		return fmt.Errorf("container analysis model is required")
+	case strings.TrimSpace(opts.ModelSecretName) == "":
+		return fmt.Errorf("container analysis model Secret is required")
+	case strings.TrimSpace(opts.ModelTokenKey) == "":
+		return fmt.Errorf("container analysis model token key is required")
+	case strings.TrimSpace(opts.StateSecretName) == "":
+		return fmt.Errorf("container analysis state Secret is required")
+	case strings.TrimSpace(opts.StateSecretKey) == "":
+		return fmt.Errorf("container analysis state key name is required")
+	case len(opts.StateKey) != 32:
+		return fmt.Errorf("container analysis state key must be 32 bytes")
+	case opts.TaskTimeout <= 0:
+		return fmt.Errorf("container analysis task timeout must be positive")
+	case opts.PollInterval <= 0:
+		return fmt.Errorf("container analysis poll interval must be positive")
+	case opts.MaxRetries < 0:
+		return fmt.Errorf("container analysis retries must not be negative")
+	case opts.MaxConcurrentTasks < 1:
+		return fmt.Errorf("container analysis max concurrent Tasks must be positive")
+	default:
+		return validateContainerAnalysisPlacement(opts.NodeSelector, opts.Tolerations, opts.Affinity)
+	}
+}
+
+// AnalyzeFailure implements ai.FailureAnalyzer using one content-addressed Task.
+func (a *ContainerAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, request ai.FailureAnalysisRequest) (ai.FailureAnalysisResult, error) {
+	if a == nil {
+		err := fmt.Errorf("container analysis runtime is not configured")
+		return ai.UnavailableFailureAnalysisResult(request.TestCase, err), err
+	}
+	select {
+	case a.sem <- struct{}{}:
+		defer func() { <-a.sem }()
+	case <-ctx.Done():
+		return ai.UnavailableFailureAnalysisResult(request.TestCase, ctx.Err()), ctx.Err()
+	}
+
+	a.pruneOnce.Do(func() {
+		_, a.pruneErr = PruneContainerAnalysisBundles(ctx, a.kube, a.opts.Namespace, time.Now().UTC())
+	})
+	if a.pruneErr != nil {
+		err := fmt.Errorf("prune stale container analysis bundles: %w", a.pruneErr)
+		return ai.UnavailableFailureAnalysisResult(request.TestCase, err), err
+	}
+
+	resources, err := BuildContainerAnalysisResources(ContainerAnalysisTaskSpec{
+		Namespace:  a.opts.Namespace,
+		NamePrefix: "dashboard-analyzer",
+		Image:      a.opts.Image,
+		Args:       []string{"-data-dir=/tmp/prow-ai-analyzer"},
+		Timeout:    a.opts.TaskTimeout.String(),
+		MaxRetries: a.opts.MaxRetries,
+		ProjectDir: a.opts.ProjectDir,
+		Request:    request,
+		CacheSeed:  a.state.CacheSeed(request),
+		Environment: map[string]string{
+			"AI_API": a.opts.API, "AI_ENDPOINT": a.opts.Endpoint, "AI_MODEL": a.opts.Model,
+		},
+		SecretEnv: []SecretEnvVar{
+			{Name: "AI_TOKEN", SecretName: a.opts.ModelSecretName, SecretKey: a.opts.ModelTokenKey},
+			{Name: analysisruntime.ContainerStateKeyEnv, SecretName: a.opts.StateSecretName, SecretKey: a.opts.StateSecretKey},
+		},
+		Labels: a.opts.Labels, NodeSelector: a.opts.NodeSelector,
+		Tolerations: a.opts.Tolerations, Affinity: a.opts.Affinity,
+	})
+	if err != nil {
+		return ai.UnavailableFailureAnalysisResult(request.TestCase, err), err
+	}
+	_, taskName, err := containerResourceRef(resources.Task)
+	if err != nil {
+		return ai.UnavailableFailureAnalysisResult(request.TestCase, err), err
+	}
+	if err := ReconcileContainerAnalysisResources(ctx, a.kube, resources); err != nil {
+		err = fmt.Errorf("reconcile container analysis Task %s: %w", taskName, err)
+		return ai.UnavailableFailureAnalysisResult(request.TestCase, err), err
+	}
+
+	taskCtx, cancel := context.WithTimeout(ctx, a.opts.TaskTimeout)
+	defer cancel()
+	state, err := a.waitTerminal(taskCtx, taskName)
+	if err != nil {
+		err = fmt.Errorf("wait for container analysis Task %s: %w", taskName, err)
+		return ai.UnavailableFailureAnalysisResult(request.TestCase, err), err
+	}
+	defer a.cleanupTerminal(resources, state)
+	if state.Phase != "Succeeded" {
+		err = fmt.Errorf("container analysis Task %s ended %s", taskName, state.Phase)
+		return ai.UnavailableFailureAnalysisResult(request.TestCase, err), err
+	}
+
+	raw, err := a.waitResult(taskCtx, taskName)
+	if err != nil {
+		err = fmt.Errorf("read container analysis Task %s result: %w", taskName, err)
+		return ai.UnavailableFailureAnalysisResult(request.TestCase, err), err
+	}
+	result, err := ParseContainerAnalysisResult(raw)
+	if err != nil {
+		return ai.UnavailableFailureAnalysisResult(request.TestCase, err), err
+	}
+	identity := analysisruntime.NewContainerStateIdentity(a.opts.Namespace, taskName, request)
+	delta, err := analysisruntime.ParseEncryptedContainerAnalysisState(raw, a.opts.StateKey, identity)
+	if err != nil {
+		return ai.UnavailableFailureAnalysisResult(request.TestCase, err), err
+	}
+	if err := a.state.Merge(delta); err != nil {
+		err = fmt.Errorf("merge container analysis Task %s state: %w", taskName, err)
+		return ai.UnavailableFailureAnalysisResult(request.TestCase, err), err
+	}
+	return result, nil
+}
+
+func (a *ContainerAnalyzer) waitTerminal(ctx context.Context, taskName string) (TaskState, error) {
+	ticker := time.NewTicker(a.opts.PollInterval)
+	defer ticker.Stop()
+	for {
+		state, err := a.kube.TaskState(ctx, a.opts.Namespace, taskName)
+		if err != nil {
+			return TaskState{}, err
+		}
+		if state.Exists && TerminalPhase(state.Phase) {
+			return state, nil
+		}
+		select {
+		case <-ctx.Done():
+			return TaskState{}, ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func (a *ContainerAnalyzer) waitResult(ctx context.Context, taskName string) (string, error) {
+	ticker := time.NewTicker(a.opts.PollInterval)
+	defer ticker.Stop()
+	for {
+		raw, ok, err := a.results.Result(ctx, a.opts.Namespace, taskName)
+		if err != nil {
+			return "", err
+		}
+		if ok {
+			return raw, nil
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func (a *ContainerAnalyzer) cleanupTerminal(resources ContainerAnalysisResources, state TaskState) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := CleanupContainerAnalysisBundle(ctx, a.kube, resources, state.UID); err != nil {
+		log.Printf("Warning: container analysis bundle cleanup failed: %v", err)
+		return
+	}
+	_, taskName, err := containerResourceRef(resources.Task)
+	if err == nil {
+		err = a.kube.DeleteTask(ctx, a.opts.Namespace, taskName, state.ResourceVersion)
+	}
+	if err != nil {
+		log.Printf("Warning: container analysis Task cleanup failed: %v", err)
+	}
+}
+
+// StateStore exposes the shared cache and trace store for final pattern analysis.
+func (a *ContainerAnalyzer) StateStore() *analysisruntime.ContainerStateStore {
+	if a == nil {
+		return nil
+	}
+	return a.state
+}
+
+var _ ai.FailureAnalyzer = (*ContainerAnalyzer)(nil)

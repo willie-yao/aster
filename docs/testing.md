@@ -91,6 +91,31 @@ settings. The benchmark also accepts `BENCH_MAX_ITERS`, `BENCH_TIMEOUT`,
 There is no checked-in A/B comparison command. Compare benchmark logs or saved
 results when evaluating two models or configurations.
 
+The benchmark reports the unique successful filesystem and Kubernetes Tool names
+and per-Tool call counts for each trial. The Orka container kind test passes its
+transported private trace through the same scorer and reporting path.
+
+## Orka container analyzer kind test
+
+The experimental runtime has an isolated kind harness. It creates a fresh
+three-node cluster with a CPU pool and a tainted mock GPU pool, builds the pinned
+Orka controller and analyzer image, and runs scripted lifecycle checks:
+
+```bash
+experimental/orka/run-container-analyzer-kind.sh
+```
+
+The harness covers a scored 5/5 result, analyzer retry, persistent cache reuse,
+a bounded five-Task wave, encrypted result and state parsing, CPU placement, and
+cleanup. It does not contact a live GPU cluster unless the explicit
+`ORKA_CONTAINER_LIVE_*` variables are set. The shell ownership regression is:
+
+```bash
+experimental/orka/test-container-analyzer-kind.sh
+```
+
+Build the dedicated image independently with `make analyzer-image`.
+
 ## Documentation validation
 
 When editing Markdown:
@@ -98,5 +123,6 @@ When editing Markdown:
 - Verify local links and heading anchors.
 - Validate generated scaffold text with `go test ./internal/onboard`.
 - Run `make helm-check` when Helm templates, packaged files, examples, or values
-  change. It lints the chart, verifies the in-process fetcher and Orka fix-runtime
-  RBAC renders, and tests the operational helpers.
+  change. It lints the chart, verifies the default in-process render, the
+  experimental Orka container selector and Task-only RBAC, independent Orka fix
+  RBAC, invalid-value failures, and the operational helpers.

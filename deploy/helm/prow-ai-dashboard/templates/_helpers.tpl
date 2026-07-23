@@ -50,6 +50,14 @@ Image reference, defaulting the tag to the chart appVersion.
 {{- end -}}
 
 {{/*
+Analyzer image used only by the experimental Orka container runtime.
+*/}}
+{{- define "prow-ai-dashboard.analyzerImage" -}}
+{{- $tag := .Values.analysisRuntime.orkaContainer.image.tag | default .Chart.AppVersion -}}
+{{- printf "%s:%s" .Values.analysisRuntime.orkaContainer.image.repository $tag -}}
+{{- end -}}
+
+{{/*
 Git-capable engine image used by the opt-in fix runtime.
 */}}
 {{- define "prow-ai-dashboard.fixerImage" -}}
@@ -134,6 +142,21 @@ because Helm release names are unique only within their own namespace.
 {{- printf "%s-orka-%s" $base (include "prow-ai-dashboard.orkaReleaseScope" .) -}}
 {{- end -}}
 
+{{/* Analysis RBAC stays separate from fix-generation RBAC. */}}
+{{- define "prow-ai-dashboard.orkaAnalysisRBACName" -}}
+{{- $base := include "prow-ai-dashboard.fullname" . | trunc 40 | trimSuffix "-" -}}
+{{- printf "%s-analysis-%s" $base (include "prow-ai-dashboard.orkaReleaseScope" .) -}}
+{{- end -}}
+
+{{/* State key Secret shared by the dashboard and Orka namespaces. */}}
+{{- define "prow-ai-dashboard.orkaAnalysisStateSecret" -}}
+{{- if .Values.analysisRuntime.orkaContainer.state.existingSecret -}}
+{{- .Values.analysisRuntime.orkaContainer.state.existingSecret -}}
+{{- else -}}
+{{- printf "%s-analysis-state" (include "prow-ai-dashboard.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+{{- end -}}
+
 {{/*
 Validate AI provider configuration.
 */}}
@@ -148,6 +171,37 @@ Validate AI provider configuration.
 {{- $contextWindowInt := int64 $contextWindow -}}
 {{- if or (gt $contextWindowInt 1000000000) (and (gt $contextWindowInt 0) (lt $contextWindowInt 9217)) -}}
 {{- fail "ai.contextWindowTokens must be 0 or an integer from 9217 to 1000000000" -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Validate the Helm-only failure analysis runtime. */}}
+{{- define "prow-ai-dashboard.validateAnalysisRuntime" -}}
+{{- $runtime := .Values.analysisRuntime.type -}}
+{{- if not (has $runtime (list "inprocess" "orka-container")) -}}
+{{- fail "analysisRuntime.type must be inprocess or orka-container" -}}
+{{- end -}}
+{{- if eq $runtime "orka-container" -}}
+  {{- $cfg := .Values.analysisRuntime.orkaContainer -}}
+  {{- if ne .Values.mode "cron" -}}{{- fail "analysisRuntime.type=orka-container requires mode=cron" -}}{{- end -}}
+  {{- if not .Values.ai.enabled -}}{{- fail "analysisRuntime.type=orka-container requires ai.enabled=true" -}}{{- end -}}
+  {{- if not .Values.ai.endpoint -}}{{- fail "analysisRuntime.type=orka-container requires ai.endpoint" -}}{{- end -}}
+  {{- if not .Values.ai.model -}}{{- fail "analysisRuntime.type=orka-container requires ai.model" -}}{{- end -}}
+  {{- if not $cfg.namespace -}}{{- fail "analysisRuntime.orkaContainer.namespace is required" -}}{{- end -}}
+  {{- if not $cfg.image.repository -}}{{- fail "analysisRuntime.orkaContainer.image.repository is required" -}}{{- end -}}
+  {{- if not ($cfg.image.tag | default .Chart.AppVersion) -}}{{- fail "analysisRuntime.orkaContainer.image.tag or Chart.appVersion is required" -}}{{- end -}}
+  {{- if ne $cfg.image.pullPolicy "IfNotPresent" -}}{{- fail "analysisRuntime.orkaContainer.image.pullPolicy must be IfNotPresent for the pinned Orka controller" -}}{{- end -}}
+  {{- if not $cfg.modelAuth.existingSecret -}}{{- fail "analysisRuntime.orkaContainer.modelAuth.existingSecret is required" -}}{{- end -}}
+  {{- if not $cfg.modelAuth.tokenKey -}}{{- fail "analysisRuntime.orkaContainer.modelAuth.tokenKey is required" -}}{{- end -}}
+  {{- if not $cfg.state.key -}}{{- fail "analysisRuntime.orkaContainer.state.key is required" -}}{{- end -}}
+  {{- $maxConcurrent := printf "%v" $cfg.maxConcurrentTasks -}}
+  {{- if not (regexMatch "^[1-9][0-9]{0,2}$" $maxConcurrent) -}}{{- fail "analysisRuntime.orkaContainer.maxConcurrentTasks must be an integer from 1 to 999" -}}{{- end -}}
+  {{- $retries := printf "%v" $cfg.retries -}}
+  {{- if not (regexMatch "^(0|[1-9][0-9]?)$" $retries) -}}{{- fail "analysisRuntime.orkaContainer.retries must be an integer from 0 to 99" -}}{{- end -}}
+  {{- if not (regexMatch "^[1-9][0-9]*(ms|s|m|h)$" (printf "%v" $cfg.pollInterval)) -}}{{- fail "analysisRuntime.orkaContainer.pollInterval must be a positive Go duration" -}}{{- end -}}
+  {{- if not (regexMatch "^[1-9][0-9]*(ms|s|m|h)$" (printf "%v" $cfg.taskTimeout)) -}}{{- fail "analysisRuntime.orkaContainer.taskTimeout must be a positive Go duration" -}}{{- end -}}
+  {{- if eq (len $cfg.nodeSelector) 0 -}}{{- fail "analysisRuntime.orkaContainer.nodeSelector must select CPU nodes" -}}{{- end -}}
+  {{- $placement := printf "%s %s %s" (toJson $cfg.nodeSelector) (toJson $cfg.tolerations) (toJson $cfg.affinity) -}}
+  {{- if regexMatch "(?i)(a100|h100|nvidia[.]com/gpu|[^a-z]gpu[^a-z])" $placement -}}{{- fail "analysisRuntime.orkaContainer placement must not select or tolerate GPU nodes" -}}{{- end -}}
 {{- end -}}
 {{- end -}}
 

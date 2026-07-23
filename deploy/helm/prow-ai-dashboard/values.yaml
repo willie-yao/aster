@@ -24,8 +24,42 @@ fullnameOverride: ""
 # release at the same existingClaim.
 mode: watch
 
-# Orka is optional and used only for fix generation. Failure analysis always
-# runs through the dashboard-owned in-process analyzer.
+# Failure analysis runs in-process by default. The Orka container runtime is an
+# experimental Helm-only cron option. It is a lifecycle sidegrade, not the
+# recommended production mode, and has no backward compatibility guarantee.
+analysisRuntime:
+  type: inprocess
+  orkaContainer:
+    namespace: orka-system
+    maxConcurrentTasks: 2
+    pollInterval: 2s
+    taskTimeout: 20m
+    retries: 1
+    image:
+      repository: ghcr.io/willie-yao/prow-ai-dashboard/analyzer
+      # Defaults to .Chart.AppVersion when empty.
+      tag: ""
+      # The pinned Orka controller uses IfNotPresent for container Tasks.
+      pullPolicy: IfNotPresent
+    # This Secret must already exist in the Orka namespace. The chart never
+    # copies provider credentials across namespaces.
+    modelAuth:
+      existingSecret: ""
+      tokenKey: token
+    # With existingSecret, create the same named Secret and key in both the
+    # dashboard and Orka namespaces. When empty, the chart creates and retains
+    # matching release-scoped AES-256 state key Secrets in both namespaces.
+    state:
+      existingSecret: ""
+      key: state-key
+    # Analyzer Tasks must stay on CPU nodes. GPU selectors and tolerations fail
+    # chart rendering.
+    nodeSelector:
+      agentpool: nodepool1
+    tolerations: []
+    affinity: {}
+
+# Orka fix generation is independent from the analysis runtime selector.
 orka:
   namespace: orka-system
   fixRuntime:
@@ -112,10 +146,10 @@ fetcher:
   suspend: false
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
-  # CronJob pod restart policy. Empty selects Never for Orka and OnFailure for
-  # in-process fetches. Orka retries belong to Task retryPolicy, not init containers.
+  # CronJob pod restart policy. Empty selects Never for orka-container and
+  # OnFailure for in-process analysis. Task retries belong to Orka.
   restartPolicy: ""
-  # Job retry limit. -1 uses 0 for Orka and the Kubernetes default otherwise.
+  # Job retry limit. -1 uses 0 for orka-container and the Kubernetes default otherwise.
   backoffLimit: -1
   # Hard Job deadline in seconds. Set 0 to omit the deadline.
   activeDeadlineSeconds: 36000

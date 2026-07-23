@@ -59,4 +59,11 @@ func cloneTestCase(tc models.TestCase) models.TestCase {
 	return tc
 }
 
+// UnavailableFailureAnalysisResult applies the standard error behavior without replacing an accepted result.
+func UnavailableFailureAnalysisResult(testCase models.TestCase, err error) FailureAnalysisResult {
+	tc := cloneTestCase(testCase)
+	(&Service{}).setUnavailable(&tc, err)
+	return FailureAnalysisResult{Summary: tc.AISummary, Analysis: tc.AIAnalysis}
+}
+
 var _ FailureAnalyzer = (*Service)(nil)

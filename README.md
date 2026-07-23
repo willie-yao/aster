@@ -45,12 +45,20 @@ server-side actions. See [Kubernetes deployment](docs/kubernetes.md).
 
 ### Analysis runtime
 
-Failure analysis always runs through the dashboard-owned in-process analyzer on
-both Pages and Kubernetes. This keeps prompts, tools, evidence policy, critique,
-cache acceptance, traces, and result schemas in one implementation.
+The dashboard-owned in-process analyzer remains the default and the only
+recommended production mode on Pages and Kubernetes. It keeps prompts, Tools,
+evidence policy, critique, cache acceptance, traces, and result schemas in one
+implementation.
 
-Orka remains available for fix generation through
-`ai.fix_prs.agent_runtime.type: orka`. See the
+Helm deployments can opt into `analysisRuntime.type: orka-container` in
+`mode: cron`. This experimental sidegrade runs the same dashboard
+`FailureAnalyzer` in one Orka `type: container` Task per failure. It has no Pages
+or watch-mode support and no backward compatibility guarantee. Use it only when
+a concrete Task lifecycle or per-failure isolation requirement justifies the
+extra control plane.
+
+The patched Orka AI worker remains removed. Orka fix generation is independent
+through `ai.fix_prs.agent_runtime.type: orka`. See the
 [analysis runtime evaluation](docs/analysis-runtime-evaluation.md),
 [ownership decision](docs/architecture-decisions/0001-analysis-runtime-ownership.md),
 and [fix PR documentation](docs/fix-prs.md).
@@ -85,7 +93,8 @@ Prow job configuration and artifact storage
                   |
             fetcher or worker
                   |
-          in-process analysis
+ in-process analysis (default)
+     or Orka container Tasks (experimental Helm cron)
                   |
  dashboard.json, jobs/*.json, flakiness.json
                   |
@@ -121,7 +130,7 @@ The Kubernetes server serves the same `/data/*.json` contract as Pages and adds
 - [Agent-proposed fix PRs](docs/fix-prs.md)
 - [Server and authenticated actions](docs/server.md)
 
-### Orka fix generation
+### Orka runtimes
 
 - [Failure analysis runtime evaluation](docs/analysis-runtime-evaluation.md)
 - [Analysis runtime ownership decision](docs/architecture-decisions/0001-analysis-runtime-ownership.md)

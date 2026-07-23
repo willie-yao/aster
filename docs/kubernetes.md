@@ -62,29 +62,119 @@ the same `existingClaim`. A `Recreate` rollout keeps a single worker across
 updates, and Helm-managed config or secret changes trigger a rollout
 automatically.
 
-## Analysis and Orka fix generation
+## Analysis runtimes and Orka fix generation
 
-The worker or CronJob always runs the dashboard-owned in-process analyzer,
-governed by `ai.enabled`. No separate analysis backend is configured.
+### In-process analysis
 
-Orka can be used only for fix generation. Set `orka.fixRuntime.enabled=true`,
+`analysisRuntime.type: inprocess` is the default and the only recommended
+production mode. It works with both `mode: watch` and `mode: cron`. Pages also
+uses this runtime.
+
+### Experimental Orka container analysis
+
+`analysisRuntime.type: orka-container` is an opt-in, Helm-only, cron-only
+sidegrade. It submits one content-addressed Orka `type: container` Task per
+failure. The analyzer image runs the current dashboard `FailureAnalyzer`, so
+prompts, Tool schemas, skills loaded through `LoadForTools`, ranked evidence
+planning, evidence coverage, critique, semantic review, cache acceptance, traces,
+and `FailureAnalysisResult` stay dashboard-owned. The patched Orka AI worker,
+Provider resources, dynamic Tool resources, and analysis worker patches remain
+removed.
+
+Use this mode only for a concrete lifecycle requirement such as per-failure Task
+isolation or Task retry history. It has no Pages support, no watch-mode support,
+no backward compatibility guarantee, and is not recommended over in-process
+analysis.
+
+```yaml
+mode: cron
+
+ai:
+  enabled: true
+  endpoint: http://model.model-system.svc.cluster.local/v1/chat/completions
+  model: model-id
+  existingSecret: dashboard-model
+
+analysisRuntime:
+  type: orka-container
+  orkaContainer:
+    namespace: orka-system
+    maxConcurrentTasks: 2
+    pollInterval: 2s
+    taskTimeout: 20m
+    retries: 1
+    image:
+      repository: ghcr.io/willie-yao/prow-ai-dashboard/analyzer
+      tag: main
+      pullPolicy: IfNotPresent
+    modelAuth:
+      existingSecret: orka-model
+      tokenKey: token
+    state:
+      existingSecret: ""
+      key: state-key
+    nodeSelector:
+      agentpool: nodepool1
+    tolerations: []
+    affinity: {}
+```
+
+The normal fetcher still needs its `AI_TOKEN` in the dashboard namespace for the
+cross-build pattern pass. Create `analysisRuntime.orkaContainer.modelAuth.existingSecret`
+in the Orka namespace for per-failure Tasks. The chart never copies provider
+credentials across namespaces. For example:
+
+```bash
+kubectl -n dashboards create secret generic dashboard-model \
+  --from-literal=AI_TOKEN='<token>'
+kubectl -n orka-system create secret generic orka-model \
+  --from-literal=token='<token>'
+```
+
+When `state.existingSecret` is empty, Helm creates matching release-scoped
+AES-256 state key Secrets in the dashboard and Orka namespaces and marks them to
+be retained. If you supply `state.existingSecret`, create the same Secret name
+and key in both namespaces. The encrypted state preserves raw cache entries,
+including evidence coverage fields added by newer engine versions, without
+enumerating their schema. Task identity remains in the encrypted wrapper and
+Orka Task, not the private analysis trace schema.
+
+The immutable ConfigMap bundle contains the sanitized project policy, prompt,
+skill files, request, and a bounded raw cache seed. It never contains model
+credentials. Projects using `ai.headers` are rejected for this experimental
+runtime because the adapter has no secure cross-namespace header transport. Use
+bearer-token authentication or a trusted proxy.
+
+Analyzer Tasks default to `agentpool: nodepool1`. Helm rejects GPU selectors and
+GPU tolerations. Install the Orka controller and helper workloads on CPU nodes as
+well. The pinned Orka controller already applies a non-root, read-only-root
+container security context. Only the model-serving workload may select GPU
+nodes.
+
+### Orka fix generation
+
+Orka fix generation remains independent. Set `orka.fixRuntime.enabled=true`,
 then configure `ai.fix_prs.agent_runtime.type: orka` in the consumer project.
-This selects the git-capable fixer image and enables Task RBAC for scheduled
-generation. The server receives the ServiceAccount token only when interactive
-actions are also enabled.
+This selects the git-capable fixer image and enables a separate Task-only Role.
+Enabling container analysis does not enable, configure, or change the fix
+runtime.
 
-When the release namespace differs from `orka.namespace`, provide an
-`ORKA_API_TOKEN` authorized for the Orka namespace if the API namespace policy
-does not accept the release ServiceAccount token.
+When the release namespace differs from the fix runtime namespace, provide an
+`ORKA_API_TOKEN` authorized for that namespace if the Orka API policy does not
+accept the release ServiceAccount token.
 
 ## Build and push the image
 
 ```bash
 make image IMAGE=ghcr.io/you/prow-ai-dashboard VERSION=v1.0.0
+make analyzer-image IMAGE=ghcr.io/you/prow-ai-dashboard VERSION=v1.0.0
+make fixer-image IMAGE=ghcr.io/you/prow-ai-dashboard VERSION=v1.0.0
 docker push ghcr.io/you/prow-ai-dashboard:v1.0.0
+docker push ghcr.io/you/prow-ai-dashboard/analyzer:v1.0.0
+docker push ghcr.io/you/prow-ai-dashboard/fixer:v1.0.0
 ```
 
-Pushes to `main` and `vX.Y.Z` tags publish the image automatically via
+Pushes to `main` and `vX.Y.Z` tags publish the engine, analyzer, and fixer images automatically via
 `.github/workflows/image.yml` to `ghcr.io/<owner>/prow-ai-dashboard`. A `vX.Y.Z`
 tag additionally publishes the Helm chart to
 `oci://ghcr.io/<owner>/charts/prow-ai-dashboard` and attaches the packaged
@@ -176,7 +266,9 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | --- | --- |
 | `image.repository`, `image.tag` | Engine image; tag defaults to the chart `appVersion`. |
 | `mode` | `watch` (continuous worker Deployment, default) or `cron` (scheduled CronJob). |
-| `fetcher.restartPolicy`, `fetcher.backoffLimit`, `fetcher.activeDeadlineSeconds` | Bound CronJob container restarts, Job retries, and total wall time. Empty restart policy selects `OnFailure`; the default deadline is 10 hours. |
+| `analysisRuntime.type` | `inprocess` by default; `orka-container` is experimental and requires `mode: cron`. |
+| `analysisRuntime.orkaContainer.*` | Analyzer image, Orka namespace, bounded Task lifecycle, Secret references, encrypted state key, and CPU placement. |
+| `fetcher.restartPolicy`, `fetcher.backoffLimit`, `fetcher.activeDeadlineSeconds` | Bound CronJob container restarts, Job retries, and total wall time. Empty restart policy selects `OnFailure` for in-process and `Never` for Orka container analysis; the default deadline is 10 hours. |
 | `orka.fixRuntime.enabled` | Mount a ServiceAccount token and grant Orka Task RBAC for `agent_runtime.type: orka` fix generation. |
 | `persistence.accessMode` | Must be `ReadWriteMany`. |
 | `persistence.storageClass`, `persistence.size` | The shared volume's class and size. |
