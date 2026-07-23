@@ -62,15 +62,16 @@ ai:
 func containerTaskSpec(t *testing.T) ContainerAnalysisTaskSpec {
 	t.Helper()
 	return ContainerAnalysisTaskSpec{
-		Namespace:  "orka-system",
-		NamePrefix: "flatcar-analyzer",
-		Image:      "dashboard-analyzer:sha",
-		Command:    []string{"/usr/local/bin/analyzer"},
-		Args:       []string{"-data-dir=/tmp/analyzer"},
-		Timeout:    "5m",
-		MaxRetries: 1,
-		ProjectDir: containerTaskProject(t),
-		Request:    containerTaskRequest(),
+		Namespace:           "orka-system",
+		NamePrefix:          "flatcar-analyzer",
+		Image:               "dashboard-analyzer:sha",
+		Command:             []string{"/usr/local/bin/analyzer"},
+		Args:                []string{"-data-dir=/tmp/analyzer"},
+		Timeout:             "5m",
+		MaxRetries:          1,
+		ProjectDir:          containerTaskProject(t),
+		Request:             containerTaskRequest(),
+		StateKeyFingerprint: strings.Repeat("a", 64),
 		Environment: map[string]string{
 			"AI_API":      "chat_completions",
 			"AI_ENDPOINT": "https://model.invalid/v1/chat/completions",
@@ -102,7 +103,7 @@ func TestBuildContainerAnalysisResources(t *testing.T) {
 		t.Fatalf("metadata = %+v", metadata)
 	}
 	annotations := metadata["annotations"].(map[string]any)
-	if annotations["prow-ai-dashboard/contract-version"] != ContainerAnalysisContractVersion {
+	if annotations["prow-ai-dashboard/contract-version"] != ContainerAnalysisContractVersion || annotations["prow-ai-dashboard/state-key-fingerprint"] != strings.Repeat("a", 64) {
 		t.Fatalf("annotations = %+v", annotations)
 	}
 	configMetadata := configMap["metadata"].(map[string]any)
@@ -237,6 +238,7 @@ func TestContainerAnalysisResourceIdentityChangesWithInputs(t *testing.T) {
 	}{
 		{name: "request", changeBundle: true, mutate: func(spec *ContainerAnalysisTaskSpec) { spec.Request.TestCase.FailureMessage = "changed" }},
 		{name: "image", changeBundle: true, mutate: func(spec *ContainerAnalysisTaskSpec) { spec.Image = "dashboard-analyzer:other" }},
+		{name: "state key", changeBundle: true, mutate: func(spec *ContainerAnalysisTaskSpec) { spec.StateKeyFingerprint = strings.Repeat("b", 64) }},
 		{name: "cache seed", changeBundle: true, mutate: func(spec *ContainerAnalysisTaskSpec) {
 			key := analysisruntime.FailureCacheKey(spec.Request)
 			spec.CacheSeed = map[string]ai.CacheEntry{key: {Key: key, CreatedAt: time.Now().UTC(), Data: json.RawMessage(`{"cached":true}`)}}

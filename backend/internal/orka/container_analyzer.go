@@ -2,6 +2,7 @@ package orka
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"log"
 	"net/http"
@@ -114,6 +115,11 @@ func newContainerAnalyzer(opts ContainerAnalyzerOptions, kube containerAnalyzerK
 		opts: opts, kube: kube, results: results, state: state,
 		sem: make(chan struct{}, opts.MaxConcurrentTasks),
 	}, nil
+}
+
+func containerStateKeyFingerprint(key []byte) string {
+	sum := sha256.Sum256(key)
+	return fmt.Sprintf("%x", sum[:])
 }
 
 // ValidateContainerAnalyzerOptions validates a complete execution plan without creating clients.
@@ -230,15 +236,16 @@ func (a *ContainerAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, 
 	}
 
 	resources, err := BuildContainerAnalysisResources(ContainerAnalysisTaskSpec{
-		Namespace:  a.opts.Namespace,
-		NamePrefix: "dashboard-analyzer",
-		Image:      a.opts.Image,
-		Args:       []string{"-data-dir=/tmp/prow-ai-analyzer"},
-		Timeout:    a.opts.TaskTimeout.String(),
-		MaxRetries: a.opts.MaxRetries,
-		ProjectDir: a.opts.ProjectDir,
-		Request:    request,
-		CacheSeed:  a.state.CacheSeed(request),
+		Namespace:           a.opts.Namespace,
+		NamePrefix:          "dashboard-analyzer",
+		Image:               a.opts.Image,
+		Args:                []string{"-data-dir=/tmp/prow-ai-analyzer"},
+		Timeout:             a.opts.TaskTimeout.String(),
+		MaxRetries:          a.opts.MaxRetries,
+		ProjectDir:          a.opts.ProjectDir,
+		Request:             request,
+		CacheSeed:           a.state.CacheSeed(request),
+		StateKeyFingerprint: containerStateKeyFingerprint(a.opts.StateKey),
 		Environment: map[string]string{
 			"AI_API": a.opts.API, "AI_ENDPOINT": a.opts.Endpoint, "AI_MODEL": a.opts.Model,
 		},

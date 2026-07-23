@@ -3,6 +3,7 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -346,7 +347,8 @@ func buildKindContainerTask(t *testing.T, namespace, image, prefix, endpoint, mo
 		Namespace: namespace, NamePrefix: prefix, Image: image,
 		Args:    []string{"-data-dir=/tmp/analyzer"},
 		Timeout: taskTimeout, MaxRetries: 1, ProjectDir: containerAnalyzerProject(t, benchmarkProject), Request: request, CacheSeed: cacheSeed, Labels: labels,
-		Environment: map[string]string{"AI_API": "chat_completions", "AI_ENDPOINT": endpoint, "AI_MODEL": model},
+		StateKeyFingerprint: fmt.Sprintf("%x", sha256.Sum256(containerAnalyzerStateKey())),
+		Environment:         map[string]string{"AI_API": "chat_completions", "AI_ENDPOINT": endpoint, "AI_MODEL": model},
 		SecretEnv: []orka.SecretEnvVar{
 			{Name: "AI_TOKEN", SecretName: secretName, SecretKey: "token"},
 			{Name: analysisruntime.ContainerStateKeyEnv, SecretName: secretName, SecretKey: "state-key"},

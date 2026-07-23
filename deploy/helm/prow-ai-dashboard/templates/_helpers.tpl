@@ -201,8 +201,11 @@ Validate AI provider configuration.
   {{- if not (regexMatch "^[1-9][0-9]{0,2}$" $maxConcurrent) -}}{{- fail "analysisRuntime.orkaContainer.maxConcurrentTasks must be an integer from 1 to 999" -}}{{- end -}}
   {{- $retries := printf "%v" $cfg.retries -}}
   {{- if not (regexMatch "^(0|[1-9][0-9]?)$" $retries) -}}{{- fail "analysisRuntime.orkaContainer.retries must be an integer from 0 to 99" -}}{{- end -}}
-  {{- if not (regexMatch "^[1-9][0-9]*(ms|s|m|h)$" (printf "%v" $cfg.pollInterval)) -}}{{- fail "analysisRuntime.orkaContainer.pollInterval must be a positive Go duration" -}}{{- end -}}
-  {{- if not (regexMatch "^[1-9][0-9]*(ms|s|m|h)$" (printf "%v" $cfg.taskTimeout)) -}}{{- fail "analysisRuntime.orkaContainer.taskTimeout must be a positive Go duration" -}}{{- end -}}
+  {{- $goDurationPattern := "^(([0-9]+([.][0-9]+)?)|([.][0-9]+))(ns|us|µs|μs|ms|s|m|h)((([0-9]+([.][0-9]+)?)|([.][0-9]+))(ns|us|µs|μs|ms|s|m|h))*$" -}}
+  {{- $pollInterval := printf "%v" $cfg.pollInterval -}}
+  {{- if or (not (regexMatch $goDurationPattern $pollInterval)) (not (regexMatch "[1-9]" $pollInterval)) -}}{{- fail "analysisRuntime.orkaContainer.pollInterval must be a positive Go duration" -}}{{- end -}}
+  {{- $taskTimeout := printf "%v" $cfg.taskTimeout -}}
+  {{- if or (not (regexMatch $goDurationPattern $taskTimeout)) (not (regexMatch "[1-9]" $taskTimeout)) -}}{{- fail "analysisRuntime.orkaContainer.taskTimeout must be a positive Go duration" -}}{{- end -}}
   {{- if not (index $cfg.nodeSelector "agentpool") -}}{{- fail "analysisRuntime.orkaContainer.nodeSelector.agentpool must select an explicit CPU pool" -}}{{- end -}}
   {{- $placement := printf "%s %s %s" (toJson $cfg.nodeSelector) (toJson $cfg.tolerations) (toJson $cfg.affinity) -}}
   {{- if regexMatch "(?i)(accelerator|nvidia|tesla|radeon|(^|[^a-z0-9])(gpu|a10|a100|h100|v100|p100|t4|l4|mi250|mi300)([^a-z0-9]|$))" $placement -}}{{- fail "analysisRuntime.orkaContainer placement must not select or tolerate GPU nodes" -}}{{- end -}}

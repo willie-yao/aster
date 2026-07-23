@@ -118,6 +118,16 @@ if grep -Fq 'orka-container-analysis-state' "$tmp/container-existing-state.yaml"
 fi
 grep -Fq -- '-orka-analysis-state-secret=shared-state' "$tmp/container-existing-state.yaml"
 
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" "${container_args[@]}" \
+  --set-string analysisRuntime.orkaContainer.pollInterval=1.5s \
+  --set-string analysisRuntime.orkaContainer.taskTimeout=1m30s > "$tmp/container-compound-duration.yaml"
+grep -Fq -- '-orka-analysis-poll-interval=1.5s' "$tmp/container-compound-duration.yaml"
+grep -Fq -- '-orka-analysis-task-timeout=1m30s' "$tmp/container-compound-duration.yaml"
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" "${container_args[@]}" \
+  --set-string analysisRuntime.orkaContainer.pollInterval=500us \
+  --set-string analysisRuntime.orkaContainer.taskTimeout=1h > "$tmp/container-microsecond-duration.yaml"
+grep -Fq -- '-orka-analysis-poll-interval=500us' "$tmp/container-microsecond-duration.yaml"
+
 for invalid in type watch endpoint model namespace api image mutable-image build-metadata model-secret token-key state-key concurrency poll timeout retries cpu-selector gpu accelerator; do
   case $invalid in
     type) invalid_args=(--set analysisRuntime.type=remote); want='analysisRuntime.type must be inprocess or orka-container' ;;

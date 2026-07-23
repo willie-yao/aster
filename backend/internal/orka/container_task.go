@@ -36,22 +36,23 @@ type SecretEnvVar struct {
 
 // ContainerAnalysisTaskSpec is the dashboard-owned container Task contract.
 type ContainerAnalysisTaskSpec struct {
-	Namespace    string
-	NamePrefix   string
-	Image        string
-	Command      []string
-	Args         []string
-	Timeout      string
-	MaxRetries   int
-	ProjectDir   string
-	Request      ai.FailureAnalysisRequest
-	CacheSeed    map[string]ai.CacheEntry
-	Environment  map[string]string
-	SecretEnv    []SecretEnvVar
-	Labels       map[string]string
-	NodeSelector map[string]string
-	Tolerations  []map[string]any
-	Affinity     map[string]any
+	Namespace           string
+	NamePrefix          string
+	Image               string
+	Command             []string
+	Args                []string
+	Timeout             string
+	MaxRetries          int
+	ProjectDir          string
+	Request             ai.FailureAnalysisRequest
+	CacheSeed           map[string]ai.CacheEntry
+	StateKeyFingerprint string
+	Environment         map[string]string
+	SecretEnv           []SecretEnvVar
+	Labels              map[string]string
+	NodeSelector        map[string]string
+	Tolerations         []map[string]any
+	Affinity            map[string]any
 }
 
 // ContainerAnalysisResources are the immutable bundle and its Orka Task.
@@ -76,6 +77,9 @@ func BuildContainerAnalysisResources(in ContainerAnalysisTaskSpec) (ContainerAna
 	}
 	if strings.TrimSpace(in.ProjectDir) == "" {
 		return ContainerAnalysisResources{}, fmt.Errorf("container analysis project directory is required")
+	}
+	if !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(in.StateKeyFingerprint) {
+		return ContainerAnalysisResources{}, fmt.Errorf("container analysis state key fingerprint must be a lowercase SHA-256")
 	}
 	if len(in.NodeSelector) == 0 {
 		in.NodeSelector = map[string]string{"agentpool": "nodepool1"}
@@ -245,7 +249,10 @@ func BuildContainerAnalysisResources(in ContainerAnalysisTaskSpec) (ContainerAna
 			"apiVersion": "core.orka.ai/v1alpha1",
 			"kind":       "Task",
 			"metadata": map[string]any{
-				"name": name, "namespace": in.Namespace, "labels": taskLabels, "annotations": containerAnalysisAnnotations(ContainerAnalysisContractVersion, bundleDigest),
+				"name": name, "namespace": in.Namespace, "labels": taskLabels, "annotations": map[string]any{
+					"prow-ai-dashboard/bundle-digest": bundleDigest, "prow-ai-dashboard/contract-version": ContainerAnalysisContractVersion,
+					"prow-ai-dashboard/state-key-fingerprint": in.StateKeyFingerprint,
+				},
 			},
 			"spec": containerSpec,
 		},
@@ -329,18 +336,19 @@ func validateContainerAnalysisPlacement(nodeSelector map[string]string, tolerati
 
 func containerAnalysisTaskName(in ContainerAnalysisTaskSpec, bundleDigest string) (string, error) {
 	identity := struct {
-		BundleDigest string
-		Image        string
-		Command      []string
-		Args         []string
-		Timeout      string
-		MaxRetries   int
-		Environment  map[string]string
-		SecretEnv    []SecretEnvVar
-		NodeSelector map[string]string
-		Tolerations  []map[string]any
-		Affinity     map[string]any
-	}{bundleDigest, in.Image, in.Command, in.Args, in.Timeout, in.MaxRetries, in.Environment, in.SecretEnv, in.NodeSelector, in.Tolerations, in.Affinity}
+		BundleDigest        string
+		Image               string
+		Command             []string
+		Args                []string
+		Timeout             string
+		MaxRetries          int
+		Environment         map[string]string
+		SecretEnv           []SecretEnvVar
+		StateKeyFingerprint string
+		NodeSelector        map[string]string
+		Tolerations         []map[string]any
+		Affinity            map[string]any
+	}{bundleDigest, in.Image, in.Command, in.Args, in.Timeout, in.MaxRetries, in.Environment, in.SecretEnv, in.StateKeyFingerprint, in.NodeSelector, in.Tolerations, in.Affinity}
 	data, err := json.Marshal(identity)
 	if err != nil {
 		return "", fmt.Errorf("marshal container analysis Task identity: %w", err)

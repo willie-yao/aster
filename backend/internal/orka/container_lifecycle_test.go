@@ -534,3 +534,33 @@ func TestPruneContainerAnalysisTasksSkipsRunningWithoutStarvingTerminal(t *testi
 		t.Fatalf("deleted=%d calls=%v", deleted, client.deletedTasks)
 	}
 }
+
+func TestReconcileContainerAnalysisResourcesRecreatesDeletingTask(t *testing.T) {
+	client := &fakeContainerResourceClient{taskStateSequences: map[string][]TaskState{
+		"task": {
+			{Exists: true, Phase: "Succeeded", UID: "uid-old", Deleting: true},
+			{},
+		},
+	}}
+	if err := ReconcileContainerAnalysisResources(context.Background(), client, lifecycleResources()); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(client.applied, []string{"tasks/task"}) {
+		t.Fatalf("applied = %v", client.applied)
+	}
+}
+
+func TestReconcileContainerAnalysisResourcesObservesDeletingReplacement(t *testing.T) {
+	client := &fakeContainerResourceClient{taskStateSequences: map[string][]TaskState{
+		"task": {
+			{Exists: true, Phase: "Succeeded", UID: "uid-old", Deleting: true},
+			{Exists: true, Phase: "Running", UID: "uid-new"},
+		},
+	}}
+	if err := ReconcileContainerAnalysisResources(context.Background(), client, lifecycleResources()); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.applied) != 0 {
+		t.Fatalf("replacement Task was overwritten: %v", client.applied)
+	}
+}

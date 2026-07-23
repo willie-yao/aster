@@ -27,6 +27,7 @@ const (
 	ContainerAnalysisBundleRetention = 24 * time.Hour
 	// ContainerAnalysisClaimTTL protects an active resource-application claim.
 	ContainerAnalysisClaimTTL = 10 * time.Minute
+	containerTaskDeleteWait   = 30 * time.Second
 	// ContainerAnalysisBundlePruneLimit bounds cleanup work per fetch run.
 	ContainerAnalysisBundlePruneLimit = 100
 	// ContainerAnalysisTaskRetention bounds terminal Task history.
@@ -69,13 +70,45 @@ func ReconcileContainerAnalysisResources(ctx context.Context, client ContainerAn
 	if err != nil {
 		return fmt.Errorf("read container analysis Task %s: %w", taskName, err)
 	}
-	if state.Exists && TerminalPhase(state.Phase) {
+	if state.Exists && state.Deleting {
+		disappeared, err := waitForDeletingContainerAnalysisTask(ctx, client, taskNamespace, taskName, state.UID)
+		if err != nil {
+			return err
+		}
+		if !disappeared {
+			return nil
+		}
+	} else if state.Exists && TerminalPhase(state.Phase) {
 		return nil
 	}
 	if err := ApplyContainerAnalysisResources(ctx, client, resources); err != nil {
 		return err
 	}
 	return nil
+}
+
+func waitForDeletingContainerAnalysisTask(ctx context.Context, client ContainerAnalysisResourceClient, namespace, taskName, expectedUID string) (bool, error) {
+	waitCtx, cancel := context.WithTimeout(ctx, containerTaskDeleteWait)
+	defer cancel()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		state, err := client.TaskState(waitCtx, namespace, taskName)
+		if err != nil {
+			return false, fmt.Errorf("wait for deleting container analysis Task %s: %w", taskName, err)
+		}
+		if !state.Exists {
+			return true, nil
+		}
+		if state.UID != expectedUID {
+			return false, nil
+		}
+		select {
+		case <-waitCtx.Done():
+			return false, fmt.Errorf("wait for deleting container analysis Task %s: %w", taskName, waitCtx.Err())
+		case <-ticker.C:
+		}
+	}
 }
 
 // ApplyContainerAnalysisResources claims the bundle before applying its Task.
