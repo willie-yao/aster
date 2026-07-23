@@ -19,13 +19,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
 
-const (
-	avgBytesPerToken        = 3
-	modelBudgetWindowPct    = 50
-	contextBudgetWindowPct  = 75
-	fallbackModelByteBudget = 300_000
-	gcsByteBudget           = 1_000_000_000
-)
+const gcsByteBudget = 1_000_000_000
 
 // ProviderFallbacks are used when project.yaml omits provider fields.
 type ProviderFallbacks struct {
@@ -85,12 +79,14 @@ type Options struct {
 
 // Runtime holds reusable model, cache, budget, and Tool registry state.
 type Runtime struct {
-	Client            *ai.Client
-	Registry          *tools.Registry
-	EnabledTools      []string
-	ModelByteBudget   int
-	ContextByteBudget int
-	Project           *Project
+	Client              *ai.Client
+	Registry            *tools.Registry
+	EnabledTools        []string
+	ModelByteBudget     int
+	ContextByteBudget   int
+	ContextWindowTokens int
+	RequestTokenBudget  int
+	Project             *Project
 }
 
 // New creates the reusable dashboard analysis runtime.
@@ -106,14 +102,14 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 		Model:        opts.Project.Provider.Model,
 		ExtraHeaders: opts.Project.Provider.Headers,
 	})
-	modelByteBudget := fallbackModelByteBudget
-	contextByteBudget := 0
-	if tokens, ok := client.DetectContextWindowTokens(ctx); ok {
-		windowBytes := tokens * avgBytesPerToken
-		modelByteBudget = windowBytes * modelBudgetWindowPct / 100
-		contextByteBudget = windowBytes * contextBudgetWindowPct / 100
-		log.Printf("🪟 detected context window: %d tokens (~%d KB); model_byte_budget=%d KB, context_byte_budget=%d KB",
-			tokens, windowBytes/1024, modelByteBudget/1024, contextByteBudget/1024)
+	providerTokens, detected := client.DetectContextWindowTokens(ctx)
+	budgets := ai.DeriveContextBudgets(providerTokens)
+	if detected {
+		log.Printf("🪟 detected context window: %d tokens; request_token_budget=%d, reserved_tokens=%d, model_byte_budget=%d KB",
+			budgets.ContextWindowTokens, budgets.RequestTokenBudget, budgets.ContextWindowTokens-budgets.RequestTokenBudget, budgets.ModelByteBudget/1024)
+	} else {
+		log.Printf("🪟 context window unavailable; using bounded fallback: %d tokens, request_token_budget=%d",
+			budgets.ContextWindowTokens, budgets.RequestTokenBudget)
 	}
 	registry := tools.NewRegistry()
 	filesystem.Register(registry)
@@ -127,12 +123,14 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 		return nil, fmt.Errorf("AI tool configuration: %w", err)
 	}
 	return &Runtime{
-		Client:            client,
-		Registry:          registry,
-		EnabledTools:      enabled,
-		ModelByteBudget:   modelByteBudget,
-		ContextByteBudget: contextByteBudget,
-		Project:           opts.Project,
+		Client:              client,
+		Registry:            registry,
+		EnabledTools:        enabled,
+		ModelByteBudget:     budgets.ModelByteBudget,
+		ContextByteBudget:   budgets.ContextByteBudget,
+		ContextWindowTokens: budgets.ContextWindowTokens,
+		RequestTokenBudget:  budgets.RequestTokenBudget,
+		Project:             opts.Project,
 	}, nil
 }
 
@@ -168,16 +166,18 @@ func (r *Runtime) NewService(opts ServiceOptions) (*ai.Service, error) {
 	eff := cfg.AI.EffectiveAgentic()
 	factory := artifacts.NewBackendFactory(opts.Backend, cfg.Storage.Bucket)
 	service.EnableAgentic(ai.AgenticOptions{
-		MaxIters:           eff.MaxIters,
-		ModelByteBudget:    r.ModelByteBudget,
-		GCSByteBudget:      gcsByteBudget,
-		Timeout:            eff.Timeout,
-		ContextByteBudget:  r.ContextByteBudget,
-		MinToolCalls:       eff.MinToolCalls,
-		MinGCSBytes:        eff.MinGCSBytes,
-		CritiqueMaxRetries: *eff.Critique.MaxRetries,
-		SingleToolCall:     eff.SingleToolCall,
-		SemanticJudge:      true,
+		MaxIters:            eff.MaxIters,
+		ModelByteBudget:     r.ModelByteBudget,
+		GCSByteBudget:       gcsByteBudget,
+		Timeout:             eff.Timeout,
+		ContextByteBudget:   r.ContextByteBudget,
+		ContextWindowTokens: r.ContextWindowTokens,
+		RequestTokenBudget:  r.RequestTokenBudget,
+		MinToolCalls:        eff.MinToolCalls,
+		MinGCSBytes:         eff.MinGCSBytes,
+		CritiqueMaxRetries:  *eff.Critique.MaxRetries,
+		SingleToolCall:      eff.SingleToolCall,
+		SemanticJudge:       true,
 	}, factory, r.Registry, r.EnabledTools)
 	service.SetSkills(r.Project.SkillSet)
 	return service, nil

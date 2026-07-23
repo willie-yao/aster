@@ -48,26 +48,29 @@ type AnalysisTrace struct {
 
 // TraceEvent is one bounded, content-free analysis event.
 type TraceEvent struct {
-	Sequence      int    `json:"sequence"`
-	ElapsedMs     int    `json:"elapsed_ms"`
-	Kind          string `json:"kind"`
-	Outcome       string `json:"outcome,omitempty"`
-	ResponseID    string `json:"response_id,omitempty"`
-	Status        string `json:"status,omitempty"`
-	FinishReason  string `json:"finish_reason,omitempty"`
-	Tool          string `json:"tool,omitempty"`
-	DurationMs    int    `json:"duration_ms,omitempty"`
-	Attempts      int    `json:"attempts,omitempty"`
-	HTTPStatus    int    `json:"http_status,omitempty"`
-	InputTokens   int    `json:"input_tokens,omitempty"`
-	OutputTokens  int    `json:"output_tokens,omitempty"`
-	MessageCount  int    `json:"message_count,omitempty"`
-	ToolCallCount int    `json:"tool_call_count,omitempty"`
-	Bytes         int    `json:"bytes,omitempty"`
-	Elided        int    `json:"elided,omitempty"`
-	Retry         int    `json:"retry,omitempty"`
-	IssueCount    int    `json:"issue_count,omitempty"`
-	ErrorCode     string `json:"error_code,omitempty"`
+	Sequence              int    `json:"sequence"`
+	ElapsedMs             int    `json:"elapsed_ms"`
+	Kind                  string `json:"kind"`
+	Outcome               string `json:"outcome,omitempty"`
+	ResponseID            string `json:"response_id,omitempty"`
+	Status                string `json:"status,omitempty"`
+	FinishReason          string `json:"finish_reason,omitempty"`
+	Tool                  string `json:"tool,omitempty"`
+	DurationMs            int    `json:"duration_ms,omitempty"`
+	Attempts              int    `json:"attempts,omitempty"`
+	HTTPStatus            int    `json:"http_status,omitempty"`
+	InputTokens           int    `json:"input_tokens,omitempty"`
+	OutputTokens          int    `json:"output_tokens,omitempty"`
+	EstimatedPromptTokens int    `json:"estimated_prompt_tokens,omitempty"`
+	ContextLimitTokens    int    `json:"context_limit_tokens,omitempty"`
+	ReservedTokens        int    `json:"reserved_tokens,omitempty"`
+	MessageCount          int    `json:"message_count,omitempty"`
+	ToolCallCount         int    `json:"tool_call_count,omitempty"`
+	Bytes                 int    `json:"bytes,omitempty"`
+	Elided                int    `json:"elided,omitempty"`
+	Retry                 int    `json:"retry,omitempty"`
+	IssueCount            int    `json:"issue_count,omitempty"`
+	ErrorCode             string `json:"error_code,omitempty"`
 }
 
 // TraceMetadata identifies one analysis without model or endpoint details.

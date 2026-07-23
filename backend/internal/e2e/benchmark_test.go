@@ -448,18 +448,20 @@ func runBenchCase(t *testing.T, bc benchCase, endpoint, model, token, systemProm
 
 	// Size the model/context budgets from the endpoint's window, matching the
 	// fetcher. Fall back to a static budget with compaction off when absent.
-	modelByteBudget, contextByteBudget := benchByteBudgets(t, client)
+	budgets := benchBudgets(t, client)
 	service.EnableAgentic(ai.AgenticOptions{
-		MaxIters:           agentic.MaxIters,
-		ModelByteBudget:    modelByteBudget,
-		GCSByteBudget:      benchGCSByteBudget,
-		Timeout:            agentic.Timeout,
-		ContextByteBudget:  contextByteBudget,
-		MinToolCalls:       agentic.MinToolCalls,
-		MinGCSBytes:        agentic.MinGCSBytes,
-		CritiqueMaxRetries: *agentic.Critique.MaxRetries,
-		SingleToolCall:     agentic.SingleToolCall,
-		SemanticJudge:      true,
+		MaxIters:            agentic.MaxIters,
+		ModelByteBudget:     budgets.ModelByteBudget,
+		GCSByteBudget:       benchGCSByteBudget,
+		Timeout:             agentic.Timeout,
+		ContextByteBudget:   budgets.ContextByteBudget,
+		ContextWindowTokens: budgets.ContextWindowTokens,
+		RequestTokenBudget:  budgets.RequestTokenBudget,
+		MinToolCalls:        agentic.MinToolCalls,
+		MinGCSBytes:         agentic.MinGCSBytes,
+		CritiqueMaxRetries:  *agentic.Critique.MaxRetries,
+		SingleToolCall:      agentic.SingleToolCall,
+		SemanticJudge:       true,
 	}, factory, registry, enabled)
 
 	loc := prowbuild.BuildLocation{
@@ -987,25 +989,19 @@ func extractTarGz(r io.Reader, dest string) error {
 	}
 }
 
-// Budget knobs mirrored from the fetcher so the benchmark sizes context the
-// same way a live analysis does.
-const (
-	benchAvgBytesPerToken        = 3
-	benchModelBudgetWindowPct    = 50
-	benchContextBudgetWindowPct  = 75
-	benchFallbackModelByteBudget = 300_000
-	benchGCSByteBudget           = 1_000_000_000
-)
+// Budget knobs mirrored from the fetcher so the benchmark uses the same
+// bounded request headroom as dashboard analysis.
+const benchGCSByteBudget = 1_000_000_000
 
-func benchByteBudgets(t *testing.T, client *ai.Client) (modelByteBudget, contextByteBudget int) {
-	modelByteBudget = benchFallbackModelByteBudget
-	if tokens, ok := client.DetectContextWindowTokens(context.Background()); ok {
-		windowBytes := tokens * benchAvgBytesPerToken
-		modelByteBudget = windowBytes * benchModelBudgetWindowPct / 100
-		contextByteBudget = windowBytes * benchContextBudgetWindowPct / 100
-		t.Logf("detected context window: %d tokens; model_budget=%dKB context_budget=%dKB", tokens, modelByteBudget/1024, contextByteBudget/1024)
+func benchBudgets(t *testing.T, client *ai.Client) ai.ContextBudgets {
+	tokens, detected := client.DetectContextWindowTokens(context.Background())
+	budgets := ai.DeriveContextBudgets(tokens)
+	if detected {
+		t.Logf("detected context window: %d tokens; request_token_budget=%d reserved_tokens=%d", budgets.ContextWindowTokens, budgets.RequestTokenBudget, budgets.ContextWindowTokens-budgets.RequestTokenBudget)
+	} else {
+		t.Logf("context window unavailable; bounded fallback=%d tokens request_token_budget=%d", budgets.ContextWindowTokens, budgets.RequestTokenBudget)
 	}
-	return modelByteBudget, contextByteBudget
+	return budgets
 }
 
 // defaultBenchAgentic mirrors the live CAPZ-Dynamo tuning so a default run

@@ -36,11 +36,24 @@ Answer with one line of JSON and nothing else. An empty array means the reasonin
 // skeptical reviewer and returns concrete objections. An empty slice means the
 // reasoning is sound. A transport or parse error is returned so the caller can
 // fail open (publish the draft) rather than block a good answer on a flaky judge.
-func (c *Client) semanticCritique(ctx context.Context, parsed analysisResponse, readPaths []string) ([]string, error) {
-	out, err := c.Complete(ctx, semanticJudgeSystemPrompt, formatSemanticJudgeInput(parsed, readPaths))
+func (c *Client) semanticCritique(ctx context.Context, parsed analysisResponse, readPaths []string, headroom contextHeadroom) ([]string, error) {
+	messages := []modelMessage{
+		{Role: "system", Content: strPtr(semanticJudgeSystemPrompt)},
+		{Role: "user", Content: strPtr(formatSemanticJudgeInput(parsed, readPaths))},
+	}
+	var safe bool
+	messages, safe = prepareContextRequest(ctx, messages, 0, headroom, "semantic_judge")
+	if !safe {
+		return nil, ErrContextHeadroom
+	}
+	resp, err := c.callModel(ctx, messages, nil, nil)
 	if err != nil {
 		return nil, err
 	}
+	if !resp.HasMessage || resp.Message.Content == nil {
+		return nil, fmt.Errorf("empty completion response")
+	}
+	out := *resp.Message.Content
 	var v struct {
 		Objections []string `json:"objections"`
 	}
@@ -118,9 +131,9 @@ func (s *agentState) readPathList() []string {
 // than re-investigating. The revised draft is used only if it still clears the
 // deterministic critique, so the judge can never downgrade an answer below the
 // gate it already passed. Returns the draft to publish.
-func (c *Client) applySemanticJudgePostLoop(ctx context.Context, state *agentState, messages []modelMessage, finalContent string, finalProviderItems []json.RawMessage, parsed analysisResponse, budget int) analysisResponse {
+func (c *Client) applySemanticJudgePostLoop(ctx context.Context, state *agentState, messages []modelMessage, finalContent string, finalProviderItems []json.RawMessage, parsed analysisResponse, headroom contextHeadroom) analysisResponse {
 	state.judgeRan = true
-	objs, err := c.semanticCritique(ctx, parsed, state.readPathList())
+	objs, err := c.semanticCritique(ctx, parsed, state.readPathList(), headroom)
 	if err != nil {
 		recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Outcome: "error", ErrorCode: "semantic_judge_error"})
 		log.Printf("  ⓘ semantic judge (post-loop): skipped (%v)", err)
@@ -136,7 +149,10 @@ func (c *Client) applySemanticJudgePostLoop(ctx context.Context, state *agentSta
 	msgs := append(messages,
 		modelMessage{Role: "assistant", Content: strPtr(finalContent), ProviderItems: finalProviderItems},
 		modelMessage{Role: "user", Content: strPtr(formatSemanticObjections(objs))})
-	revised, _ := c.runFinalizeRound(ctx, msgs, budget)
+	revised, _, safe := c.runFinalizeRound(ctx, msgs, headroom)
+	if !safe {
+		return parsed
+	}
 	rp, ok := tryParseAnalysis(revised)
 	if !ok {
 		recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Outcome: "revision_unparseable", IssueCount: len(objs)})

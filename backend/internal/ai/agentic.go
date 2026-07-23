@@ -31,6 +31,9 @@ const AgenticMode = "agentic"
 // fallback, so the affected failure is marked AI-unavailable for the run.
 var ErrToolsUnsupported = errors.New("ai endpoint does not support function calling")
 
+// ErrContextHeadroom means no safe provider request could be formed after compaction.
+var ErrContextHeadroom = errors.New("agentic request exceeds context headroom")
+
 // AgenticOptions is the resolved per-failure budget config. Build it once per
 // fetcher run via project.AI.EffectiveAgentic and reuse it.
 type AgenticOptions struct {
@@ -39,13 +42,14 @@ type AgenticOptions struct {
 	GCSByteBudget   int
 	Timeout         time.Duration
 
-	// ContextByteBudget caps the estimated serialized request size: system
-	// prompt, task, accumulated tool results, reasoning, and tool schemas.
-	// When the conversation approaches it, the oldest tool-result bodies are
-	// elided to a stub so a small-context model does not overflow its window
-	// mid-loop. 0 disables compaction. Set it to roughly the model's context
-	// window in bytes, about 3.5 to 4 bytes per token.
+	// ContextByteBudget is the legacy compaction ceiling. Runtime wiring sets
+	// it to RequestTokenBudget so request sizing remains conservative.
 	ContextByteBudget int
+
+	// ContextWindowTokens is the provider-advertised total context window.
+	// RequestTokenBudget is the request-side share after fixed headroom.
+	ContextWindowTokens int
+	RequestTokenBudget  int
 
 	// MinToolCalls is the minimum number of tool calls before a tools-free
 	// final answer is accepted as cacheable. Defaults to 0 for no floor. The
@@ -771,6 +775,10 @@ func (c *Client) doAnalyzeAgentic(
 	// Fixed schema cost added to every size estimate so compaction budgets
 	// against the real request, not just message content.
 	schemaBytes := schemaPayloadBytes(schemas)
+	headroom := contextHeadroomFor(in.Opts)
+
+	var bestDraftContent string
+	var bestDraftProviderItems []json.RawMessage
 
 	// When single_tool_call is on, request parallel_tool_calls=false so
 	// compliant endpoints emit a single call. The client-side cap below still
@@ -781,17 +789,20 @@ func (c *Client) doAnalyzeAgentic(
 		parallelToolCalls = &f
 	}
 
+agentLoop:
 	for iter := 0; iter < maxIters; iter++ {
-		if in.Opts.ContextByteBudget > 0 {
-			before := requestSizeEstimate(messages, schemaBytes)
-			var elided int
-			messages, elided = compactMessages(messages, schemaBytes, in.Opts.ContextByteBudget)
-			if elided > 0 {
-				recordTrace(loopCtx, TraceEvent{Kind: "context_compaction", Outcome: "applied", Elided: elided, Bytes: requestSizeEstimate(messages, schemaBytes), MessageCount: len(messages)})
-				log.Printf("  ✂ context compaction: elided %d message(s) to fit ~%d-byte window", elided, in.Opts.ContextByteBudget)
-			} else if before > in.Opts.ContextByteBudget {
-				recordTrace(loopCtx, TraceEvent{Kind: "context_compaction", Outcome: "over_budget", Bytes: before, MessageCount: len(messages)})
+		var fits bool
+		messages, fits = prepareContextRequest(loopCtx, messages, schemaBytes, headroom, "applied")
+		if !fits {
+			if bestDraftContent != "" {
+				finalContent = bestDraftContent
+				finalProviderItems = bestDraftProviderItems
+				recordTrace(loopCtx, TraceEvent{Kind: "context_headroom", Outcome: "best_draft", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
+				log.Printf("  ⚠ agentic context headroom exhausted; publishing the best prior draft without another provider request")
+				break agentLoop
 			}
+			recordTrace(loopCtx, TraceEvent{Kind: "context_headroom", Outcome: "unavailable", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
+			return nil, nil, ErrContextHeadroom
 		}
 		resp, err := c.callModel(loopCtx, messages, schemas, parallelToolCalls)
 		if err != nil {
@@ -820,6 +831,12 @@ func (c *Client) doAnalyzeAgentic(
 			// covers the pathological list-only loop: a model calling
 			// list_artifacts repeatedly raises calls but never gcsBytes
 			// and would otherwise be re-nudged every iteration.
+			parsedCandidate, parsedOK := tryParseAnalysis(candidate)
+			if parsedOK {
+				bestDraftContent = candidate
+				bestDraftProviderItems = msg.ProviderItems
+			}
+
 			floors := evalFloors(state, in.Opts)
 			if floors.anyUnmet() && !state.budgetExhausted {
 				progressed := false
@@ -838,6 +855,15 @@ func (c *Client) doAnalyzeAgentic(
 						Role:    "user",
 						Content: strPtr(formatFloorsNudge(state, in.Opts)),
 					})
+					var fits bool
+					messages, fits = prepareContextRequest(loopCtx, messages, schemaBytes, headroom, "floor_nudge")
+					if !fits {
+						finalContent = candidate
+						finalProviderItems = msg.ProviderItems
+						recordTrace(loopCtx, TraceEvent{Kind: "context_headroom", Outcome: "retry_denied", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
+						recordTrace(loopCtx, TraceEvent{Kind: "context_headroom", Outcome: "best_draft", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
+						break agentLoop
+					}
 					nudgedAtCalls = state.calls
 					nudgedAtGCSBytes = state.gcsBytes
 					recordTrace(loopCtx, TraceEvent{Kind: "floor_nudge", Outcome: "retry", Status: floors.traceStatus(), ToolCallCount: state.calls, Bytes: state.gcsBytes})
@@ -852,7 +878,7 @@ func (c *Client) doAnalyzeAgentic(
 			// path, or fails recipe-driven evidence. Only fires on parseable
 			// candidates; unparseable finals fall through to runFinalizeRound
 			// below.
-			if parsed, ok := tryParseAnalysis(candidate); ok {
+			if parsed, ok := parsedCandidate, parsedOK; ok {
 				matchedSkills := matchSkillsForDraft(state, parsed)
 				out := critiqueDraft(parsed, state.readArtifactsFull, state.readArtifactsBase, matchedSkills, state.consecutiveFailures)
 				if len(out.MissingSkillEvidence) > 0 {
@@ -874,7 +900,7 @@ func (c *Client) doAnalyzeAgentic(
 					if in.Opts.SemanticJudge && !semanticJudged {
 						semanticJudged = true
 						state.judgeRan = true
-						objs, err := c.semanticCritique(loopCtx, parsed, state.readPathList())
+						objs, err := c.semanticCritique(loopCtx, parsed, state.readPathList(), headroom)
 						switch {
 						case err != nil:
 							recordTrace(loopCtx, TraceEvent{Kind: "semantic_judge", Outcome: "error", ErrorCode: "semantic_judge_error"})
@@ -890,6 +916,14 @@ func (c *Client) doAnalyzeAgentic(
 								Role:    "user",
 								Content: strPtr(formatSemanticObjections(objs)),
 							})
+							var fits bool
+							messages, fits = prepareContextRequest(loopCtx, messages, schemaBytes, headroom, "semantic_retry")
+							if !fits {
+								finalContent = candidate
+								finalProviderItems = msg.ProviderItems
+								recordTrace(loopCtx, TraceEvent{Kind: "context_headroom", Outcome: "retry_denied", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
+								break agentLoop
+							}
 							maxIters += critiqueRetryIters
 							log.Printf("  ✗ semantic judge: %d objection(s); re-prompting (+%d iters)", len(objs), critiqueRetryIters)
 							continue
@@ -921,6 +955,15 @@ func (c *Client) doAnalyzeAgentic(
 						Role:    "user",
 						Content: strPtr(feedback),
 					})
+					var fits bool
+					messages, fits = prepareContextRequest(loopCtx, messages, schemaBytes, headroom, "critique_retry")
+					if !fits {
+						finalContent = candidate
+						finalProviderItems = msg.ProviderItems
+						recordTrace(loopCtx, TraceEvent{Kind: "context_headroom", Outcome: "retry_denied", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
+						recordTrace(loopCtx, TraceEvent{Kind: "context_headroom", Outcome: "best_draft", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
+						break agentLoop
+					}
 					critiqueRetriesUsed++
 					recordTrace(loopCtx, TraceEvent{Kind: "critique", Outcome: "retry", Retry: critiqueRetriesUsed, IssueCount: len(out.Matches())})
 					// Extend the retry budget proportional to the
@@ -983,7 +1026,11 @@ func (c *Client) doAnalyzeAgentic(
 	// without parseable JSON, force a finalize round with tools omitted.
 	parsed, ok := tryParseAnalysis(finalContent)
 	if !ok {
-		finalContent, finalProviderItems = c.runFinalizeRound(loopCtx, messages, in.Opts.ContextByteBudget)
+		var safe bool
+		finalContent, finalProviderItems, safe = c.runFinalizeRound(loopCtx, messages, headroom)
+		if !safe {
+			return nil, nil, ErrContextHeadroom
+		}
 		parsed, ok = tryParseAnalysis(finalContent)
 	}
 	if !ok {
@@ -1022,7 +1069,7 @@ func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, m
 	if out.Passed {
 		recordTrace(ctx, TraceEvent{Kind: "critique", Outcome: "passed"})
 		if opts.SemanticJudge {
-			parsed = c.applySemanticJudgePostLoop(ctx, state, messages, finalContent, finalProviderItems, parsed, opts.ContextByteBudget)
+			parsed = c.applySemanticJudgePostLoop(ctx, state, messages, finalContent, finalProviderItems, parsed, contextHeadroomFor(opts))
 		}
 		state.critiquePassed = true
 		return parsed
@@ -1040,11 +1087,18 @@ func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, m
 	}
 	messages = append(messages, modelMessage{Role: "assistant", Content: strPtr(finalContent), ProviderItems: finalProviderItems}, modelMessage{Role: "user", Content: strPtr(out.Feedback + "\n\n" + injection)})
 	recordTrace(ctx, TraceEvent{Kind: "critique", Outcome: "evidence_retry", IssueCount: len(out.Matches())})
-	revised, _ := c.runFinalizeRound(ctx, messages, opts.ContextByteBudget)
+	headroom := contextHeadroomFor(opts)
+	revised, _, safe := c.runFinalizeRound(ctx, messages, headroom)
+	if !safe {
+		return parsed
+	}
 	next, ok := tryParseAnalysis(revised)
 	if !ok {
 		recordTrace(ctx, TraceEvent{Kind: "critique", Outcome: "retry_unparseable"})
-		revised, _ = c.runFinalizeRound(ctx, messages, opts.ContextByteBudget)
+		revised, _, safe = c.runFinalizeRound(ctx, messages, headroom)
+		if !safe {
+			return parsed
+		}
 		next, ok = tryParseAnalysis(revised)
 	}
 	if !ok {
@@ -1359,6 +1413,9 @@ func (c *Client) cacheAcceptedAnalysis(cacheKey string, parsed analysisResponse,
 	if !critiquePassed {
 		return
 	}
+	if state.judgeObjected && !state.judgeRevised {
+		return
+	}
 	version := currentCritiqueVersion
 	skillHash := ""
 	if state.skillSet != nil {
@@ -1383,30 +1440,29 @@ func (c *Client) cacheAcceptedAnalysis(cacheKey string, parsed analysisResponse,
 // just the final JSON. Used when the agent ran out of iterations or returned
 // prose without parseable JSON. Returns raw content; callers handle unparseable
 // responses.
-func (c *Client) runFinalizeRound(ctx context.Context, messages []modelMessage, contextByteBudget int) (string, []json.RawMessage) {
+func (c *Client) runFinalizeRound(ctx context.Context, messages []modelMessage, headroom contextHeadroom) (string, []json.RawMessage, bool) {
 	messages = append(messages, modelMessage{Role: "user", Content: strPtr(agForceFinalizePrompt)})
-	if contextByteBudget > 0 {
-		// The finalize round sends no tool schemas, so estimate against
-		// messages alone.
-		var elided int
-		messages, elided = compactMessages(messages, 0, contextByteBudget)
-		if elided > 0 {
-			recordTrace(ctx, TraceEvent{Kind: "context_compaction", Outcome: "finalize", Elided: elided, Bytes: requestSizeEstimate(messages, 0), MessageCount: len(messages)})
-		}
+	var safe bool
+	messages, safe = prepareContextRequest(ctx, messages, 0, headroom, "finalize")
+	if !safe {
+		recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "headroom_denied", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
+		recordTrace(ctx, TraceEvent{Kind: "context_headroom", Outcome: "unavailable", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
+		log.Printf("  ⚠ agentic finalize round skipped: request exceeds context headroom")
+		return "", nil, false
 	}
 	recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "requested"})
 	resp, err := c.callModel(ctx, messages, nil, nil)
 	if err != nil {
 		recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "error", ErrorCode: "model_request_error"})
 		log.Printf("  ⚠ agentic finalize round failed: %v", err)
-		return "", nil
+		return "", nil, true
 	}
 	if !resp.HasMessage || resp.Message.Content == nil {
 		recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "empty"})
-		return "", resp.Message.ProviderItems
+		return "", resp.Message.ProviderItems, true
 	}
 	recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "success"})
-	return *resp.Message.Content, resp.Message.ProviderItems
+	return *resp.Message.Content, resp.Message.ProviderItems, true
 }
 
 // tryParseAnalysis extracts and unmarshals the JSON answer, returning ok=false

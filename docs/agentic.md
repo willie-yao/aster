@@ -292,25 +292,32 @@ The sections below detail each box.
 ### Automatic budget sizing
 
 The agentic loop bounds how much tool output the model accumulates (the
-evidence cap) and compacts old tool results before the request would
-overflow the model's context window (the compaction guard). **Neither is
-configurable** — the engine sizes them automatically: at startup it GETs
-the endpoint's `/v1/models`, reads the served model's `context_window`
-(tokens), converts it to bytes (~4 bytes/token), and sets the evidence cap
-to ~50% and the compaction guard to ~75% of the window. The same config
-therefore works against a 40K, 128K, or 256K deployment with no tuning. If
-the endpoint doesn't expose `/v1/models` or omits `context_window` (e.g.
-GitHub Copilot), the engine falls back to a static evidence cap (300000
-bytes) with compaction off.
+evidence cap) and reserves request headroom before every provider call.
+**Neither is configurable**. At startup it GETs the endpoint's `/v1/models`
+and reads the served model's `context_window` in tokens. The engine reserves
+space for provider framing, completion output, a finalization response, and
+evidence-ledger restoration. It then uses a deliberately conservative
+one-token-per-serialized-byte estimate for the request body, including Tool
+schemas. This overestimates normal prose and dense CI data rather than relying
+on a provider-specific tokenizer or an unsafe bytes-per-token average.
+
+The same guard applies to investigation turns, floor nudges, deterministic
+critique retries, evidence injection, semantic-judge retries, and forced
+finalization. Old tool-result bodies are compacted to recover room while
+preserving Tool-call/result pairs and the most recent repair instructions. If
+compaction cannot make a request fit, the loop does not send it. It publishes
+the best parseable draft when one exists, without caching it unless all current
+quality gates pass; otherwise it returns an AI-unavailable result. If an
+endpoint does not expose a context window, the engine uses a bounded fallback
+rather than disabling compaction.
 
 The budgets are client-side on purpose: an OpenAI-compatible server
-(Dynamo / vLLM / TRT-LLM) enforces its window as a *hard* limit and 500s on
-overflow rather than degrading, so the loop must compact *before* reaching
-it. Auto-sizing just removes the per-deployment hand-tuning.
+(Dynamo / vLLM / TRT-LLM) enforces its window as a hard limit and can reject
+an oversized request, so the loop must compact or finalize before reaching it.
+Auto-sizing removes per-deployment hand-tuning.
 
-The compaction guard works by estimating each request's serialized size
-(system prompt + task + accumulated tool results + reasoning + tool
-schemas) and, before it would exceed the budget, eliding the oldest
+The compaction guard estimates each request from the system prompt, task,
+accumulated tool results, reasoning, and Tool schemas. It elides the oldest
 tool-result bodies to a short stub (head + a "re-call the tool if you need
 this" note). This keeps a long, critique-heavy investigation from
 overflowing the window mid-loop and failing with an empty analysis.
