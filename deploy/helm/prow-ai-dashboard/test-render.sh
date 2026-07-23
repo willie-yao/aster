@@ -263,8 +263,8 @@ for namespace in dashboard-a dashboard-b; do
   grep -Fq 'namespace: orka-test' "$tmp/rbac-$namespace.yaml"
   grep -Fq 'resources: ["tasks"]' "$tmp/rbac-$namespace.yaml"
   grep -Fq 'verbs: ["create", "get", "patch", "delete"]' "$tmp/rbac-$namespace.yaml"
-  if grep -Eq 'resources: \["(tools|configmaps|agents|secrets|agentruntimes|substrateactorpools)"\]' "$tmp/rbac-$namespace.yaml"; then
-    echo 'fix runtime RBAC includes resources beyond Tasks' >&2
+  if [[ $(grep -Ec '^[[:space:]]+resources:' "$tmp/rbac-$namespace.yaml") -ne 1 ]]; then
+    echo 'fix runtime RBAC includes a resource rule beyond Tasks' >&2
     exit 1
   fi
 done
