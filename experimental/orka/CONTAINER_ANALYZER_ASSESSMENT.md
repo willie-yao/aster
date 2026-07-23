@@ -26,8 +26,8 @@ ready.
 | Structured result framing | Implemented in v2 and retained by `dashboard-failure-analyzer-v4` |
 | Immutable request and project bundle | Implemented in v3 and retained by `dashboard-failure-analyzer-v4` |
 | Persistent cache and private traces | Implemented by `dashboard-failure-analyzer-v4` |
-| Clean in-process and container Kimi comparison | Pending |
-| Bounded multi-failure load test | Pending |
+| Clean in-process and container Kimi comparison | Complete: 0/5 in-process, 2/5 container |
+| Bounded multi-failure load test | Complete: five distinct Tasks, five persisted cache and trace identities |
 
 No supported Helm analysis mode should use the container path until every gate
 passes.
@@ -128,3 +128,44 @@ private Orka trace through the shared state store.
 Run the clean in-process and container Kimi comparison, then the bounded
 multi-failure load test. Use those results to decide whether to productize the
 container lifecycle path or remove Orka analysis.
+
+## Kimi parity result
+
+On July 23, 2026, merged-main in-process and container runs used the same
+Flatcar request, fixture, prompt, skills, floors, and
+`moonshotai/Kimi-K2-Instruct-0905` model.
+
+| Metric | In-process | Container |
+| --- | ---: | ---: |
+| Benchmark signals | 0/5 | 2/5 |
+| Runtime | 6m10s | 5m51s |
+| Tool calls | 14 | 15 |
+| Artifact bytes | 32,927,513 | 12,912,713 |
+| Context bytes | 137,759 | 112,534 |
+
+The container run recognized the registered Node and missing providerID but
+still missed the required cloud-node-manager API reachability, kube-proxy, and
+loopback DNS chain. Lifecycle isolation did not make Kimi's diagnosis acceptable.
+
+## Load result
+
+An isolated kind wave applied five Tasks in 565 ms and completed all five in
+11.6 seconds. Every analyzer Job used the CPU node pool and the same local image.
+All results and encrypted state deltas parsed. The five Tasks used distinct
+failure and cache identities; concurrent merges were reloaded from disk and all
+five cache entries and all five Task trace identities were present. Every Task,
+Job, Pod, ConfigMap, Secret, image, and cluster owned by the run was removed.
+Separate cases proved retry and persistent cache reuse.
+
+## Decision
+
+Do not productize Orka failure analysis. The lifecycle works, but robust result,
+bundle, persistence, concurrency, RBAC, retention, and encryption contracts make
+Orka a second control plane around ordinary dashboard Jobs. Kimi quality remains
+below the acceptance bar, and the operational benefits do not justify this
+complexity for the current consumers.
+
+Keep the in-process analyzer canonical. Retain Orka fix generation, which is an
+independent runtime boundary. Freeze compatibility v6 as already decided, then
+remove the frozen analysis mode and container prototype after confirming no
+supported deployment depends on them.
