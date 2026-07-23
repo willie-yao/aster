@@ -94,8 +94,9 @@ func TestOrkaContainerAnalyzerKind(t *testing.T) {
 		if err != nil || len(state.Traces) != 1 || state.TaskNamespace != namespace || state.TaskName != name {
 			t.Fatalf("container state = %+v, error = %v", state, err)
 		}
-		toolUsage := successfulBenchmarkToolUsage(ai.AnalysisTraceFile{Traces: state.Traces})
-		scoreBenchCase(t, bc, &tc, 0, "Orka container", toolUsage)
+		traceSnapshot := ai.AnalysisTraceFile{Traces: state.Traces}
+		toolUsage := successfulBenchmarkToolUsage(traceSnapshot)
+		scoreBenchCase(t, bc, &tc, 0, "Orka container", 0, toolUsage, summarizeBenchmarkTrace(traceSnapshot))
 		if !strings.Contains(raw, "starting failure analysis") {
 			t.Fatal("Task result did not demonstrate pinned-controller combined log capture")
 		}
@@ -294,8 +295,9 @@ func TestOrkaContainerAnalyzerKind(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			toolUsage := successfulBenchmarkToolUsage(ai.AnalysisTraceFile{Traces: state.Traces})
-			scoreBenchCase(t, bc, &tc, elapsed, "Orka container Kimi", toolUsage)
+			traceSnapshot := ai.AnalysisTraceFile{Traces: state.Traces}
+			toolUsage := successfulBenchmarkToolUsage(traceSnapshot)
+			scoreBenchCase(t, bc, &tc, elapsed, "Orka container Kimi", 500_000, toolUsage, summarizeBenchmarkTrace(traceSnapshot))
 			t.Logf("container state: cache_entries=%d traces=%d task_attempts=%d", len(state.CacheEntries), len(state.Traces), status.Attempts)
 			cleanupContainerBundle(t, kubeContext, resources)
 		})
