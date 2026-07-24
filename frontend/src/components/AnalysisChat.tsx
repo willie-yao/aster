@@ -350,8 +350,8 @@ export function AnalysisChat({
   const userTurns = session?.messages.filter((message) => message.role === "user").length ?? 0;
   const turnLimitReached = turnLimitExhausted || userTurns >= 10;
 
-  async function submit(nextQuestion = question) {
-    const value = nextQuestion.trim();
+  async function submit(nextQuestion?: string) {
+    const value = (nextQuestion ?? pendingTurn?.question ?? question).trim();
     if (!value || busy || turnLimitReached) return;
     if (pendingTurn && pendingTurn.question !== value) {
       setError("The previous question may still be running. Retry it before asking another question.");
@@ -386,6 +386,7 @@ export function AnalysisChat({
           question: value,
         };
         setPendingTurn(activeTurn);
+        setQuestion(value);
       }
       const updated = await sendAnalysisChatMessage(
         activeTurn.sessionID,
@@ -661,7 +662,7 @@ export function AnalysisChat({
                         color="primary"
                         aria-label={pendingTurn ? "Retry question" : "Send question"}
                         onClick={() => void submit()}
-                        disabled={busy || question.trim() === ""}
+                        disabled={busy || (pendingTurn?.question ?? question).trim() === ""}
                         sx={{
                           width: 48,
                           height: 48,
