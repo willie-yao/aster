@@ -10,7 +10,8 @@ type fixBenchmarkCase struct {
 	Instruction    string
 	RequiredFiles  []string
 	ReferenceFiles map[string]string
-	HiddenFiles    map[string]string
+	Module         string
+	VerifierSource string
 }
 
 func fixBenchmarkCases() []fixBenchmarkCase {
@@ -65,30 +66,34 @@ func TestDefaultControlPlaneRouteTable(t *testing.T) {
 }
 `,
 			},
-			HiddenFiles: map[string]string{
-				fixBenchmarkFixtureRoot + "/route_table/benchmark_hidden_test.go": `package routetable
+			Module: "fixbench/route_table",
+			VerifierSource: `package verifier
 
-import "testing"
+import (
+	"testing"
 
-func TestBenchmarkHiddenRouteTableBehavior(t *testing.T) {
-	spec := &NetworkSpec{NodeRouteTable: "shared-node-table"}
-	DefaultControlPlaneRouteTable(spec)
+	routetable "fixbench/route_table"
+)
+
+func TestBenchmarkVerifier(t *testing.T) {
+	spec := &routetable.NetworkSpec{NodeRouteTable: "shared-node-table"}
+	routetable.DefaultControlPlaneRouteTable(spec)
 	if spec.ControlPlaneRouteTable != "shared-node-table" {
 		t.Fatalf("control-plane route table = %q", spec.ControlPlaneRouteTable)
 	}
-	explicit := &NetworkSpec{ControlPlaneRouteTable: "dedicated", NodeRouteTable: "shared"}
-	DefaultControlPlaneRouteTable(explicit)
+	explicit := &routetable.NetworkSpec{ControlPlaneRouteTable: "dedicated", NodeRouteTable: "shared"}
+	routetable.DefaultControlPlaneRouteTable(explicit)
 	if explicit.ControlPlaneRouteTable != "dedicated" {
 		t.Fatalf("explicit route table changed to %q", explicit.ControlPlaneRouteTable)
 	}
-	empty := &NetworkSpec{}
-	DefaultControlPlaneRouteTable(empty)
+	empty := &routetable.NetworkSpec{}
+	routetable.DefaultControlPlaneRouteTable(empty)
 	if empty.ControlPlaneRouteTable != "" {
 		t.Fatalf("empty route table changed to %q", empty.ControlPlaneRouteTable)
 	}
+	t.Log("FIX_BENCHMARK_VERIFIER_EXECUTED")
 }
 `,
-			},
 		},
 		{
 			Name:        "retry-validation",
@@ -146,27 +151,31 @@ func TestParse(t *testing.T) {
 }
 `,
 			},
-			HiddenFiles: map[string]string{
-				fixBenchmarkFixtureRoot + "/retry/benchmark_hidden_test.go": `package retry
+			Module: "fixbench/retry",
+			VerifierSource: `package verifier
 
-import "testing"
+import (
+	"testing"
 
-func TestBenchmarkHiddenRetryBehavior(t *testing.T) {
-	if _, err := Parse("-7"); err == nil {
+	retry "fixbench/retry"
+)
+
+func TestBenchmarkVerifier(t *testing.T) {
+	if _, err := retry.Parse("-7"); err == nil {
 		t.Fatal("negative retries were accepted")
 	}
 	for value, want := range map[string]int{"0": 0, "8": 8} {
-		got, err := Parse(value)
+		got, err := retry.Parse(value)
 		if err != nil || got != want {
 			t.Fatalf("Parse(%q) = %d, %v", value, got, err)
 		}
 	}
-	if _, err := Parse("many"); err == nil {
+	if _, err := retry.Parse("many"); err == nil {
 		t.Fatal("nonnumeric retries were accepted")
 	}
+	t.Log("FIX_BENCHMARK_VERIFIER_EXECUTED")
 }
 `,
-			},
 		},
 		{
 			Name:        "generated-manifest-sync",
@@ -210,13 +219,17 @@ spec:
           restartPolicy: Never
 `,
 			},
-			HiddenFiles: map[string]string{
-				fixBenchmarkFixtureRoot + "/generated_manifest/benchmark_hidden_test.go": `package manifest
+			Module: "fixbench/generated_manifest",
+			VerifierSource: `package verifier
 
-import "testing"
+import (
+	"testing"
 
-func TestBenchmarkHiddenGeneratedManifest(t *testing.T) {
-	got := RenderCronJob("hidden")
+	manifest "fixbench/generated_manifest"
+)
+
+func TestBenchmarkVerifier(t *testing.T) {
+	got := manifest.RenderCronJob("hidden")
 	want := ` + "`" + `apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -232,9 +245,9 @@ spec:
 	if got != want {
 		t.Fatalf("generated manifest differs:\n%s", got)
 	}
+	t.Log("FIX_BENCHMARK_VERIFIER_EXECUTED")
 }
 `,
-			},
 		},
 	}
 }

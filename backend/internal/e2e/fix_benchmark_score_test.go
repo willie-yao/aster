@@ -112,12 +112,8 @@ func scoreFixBenchmarkResult(ctx context.Context, sourceRoot string, benchmarkCa
 	verificationOK := false
 	verificationDetail := "diff did not apply"
 	if contractOK {
-		if err := writeFixBenchmarkFiles(repoRoot, benchmarkCase.HiddenFiles); err != nil {
-			verificationDetail = err.Error()
-		} else {
-			verificationDetail, err = runFixBenchmarkCommand(ctx, filepath.Join(repoRoot, filepath.FromSlash(benchmarkCase.Dir)), nil, "go", "test", "./...")
-			verificationOK = err == nil
-		}
+		verificationDetail, err = runFixBenchmarkVerifier(ctx, repoRoot, benchmarkCase)
+		verificationOK = err == nil
 	}
 	score.add("verification", true, verificationOK, verificationDetail)
 	return score
@@ -281,12 +277,59 @@ func runFixBenchmarkCommandRaw(ctx context.Context, dir string, stdin []byte, na
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
 	cmd.Stdin = bytes.NewReader(stdin)
-	cmd.Env = append(os.Environ(),
+	cmd.Env = fixBenchmarkCommandEnv()
+	return cmd.CombinedOutput()
+}
+
+func fixBenchmarkCommandEnv() []string {
+	blocked := map[string]bool{
+		"GIT_CONFIG_GLOBAL": true, "GIT_CONFIG_SYSTEM": true, "GIT_TERMINAL_PROMPT": true,
+		"GOENV": true, "GOFLAGS": true, "GOWORK": true,
+	}
+	env := make([]string, 0, len(os.Environ())+6)
+	for _, entry := range os.Environ() {
+		name, _, ok := strings.Cut(entry, "=")
+		if !ok || blocked[name] {
+			continue
+		}
+		env = append(env, entry)
+	}
+	return append(env,
 		"GIT_CONFIG_GLOBAL="+os.DevNull,
 		"GIT_CONFIG_SYSTEM="+os.DevNull,
 		"GIT_TERMINAL_PROMPT=0",
+		"GOENV=off",
+		"GOFLAGS=",
+		"GOWORK=off",
 	)
-	return cmd.CombinedOutput()
+}
+
+func runFixBenchmarkVerifier(ctx context.Context, repoRoot string, benchmarkCase fixBenchmarkCase) (string, error) {
+	fixtureDir := filepath.Join(repoRoot, filepath.FromSlash(benchmarkCase.Dir))
+	publicOutput, err := runFixBenchmarkCommand(ctx, fixtureDir, nil, "go", "test", "-count=1", "./...")
+	if err != nil {
+		return publicOutput, fmt.Errorf("candidate tests: %w", err)
+	}
+
+	verifierDir := filepath.Join(repoRoot, ".fix-benchmark-verifier", benchmarkCase.Name)
+	if err := os.MkdirAll(verifierDir, 0o755); err != nil {
+		return "", err
+	}
+	goMod := fmt.Sprintf("module fixbench/verifier\n\ngo 1.25\n\nrequire %s v0.0.0\n\nreplace %s => %s\n", benchmarkCase.Module, benchmarkCase.Module, filepath.ToSlash(fixtureDir))
+	if err := os.WriteFile(filepath.Join(verifierDir, "go.mod"), []byte(goMod), 0o644); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(verifierDir, "verifier_test.go"), []byte(benchmarkCase.VerifierSource), 0o644); err != nil {
+		return "", err
+	}
+	verifierOutput, err := runFixBenchmarkCommand(ctx, verifierDir, nil, "go", "test", "-count=1", "-run", "^TestBenchmarkVerifier$", "-v", ".")
+	if err != nil {
+		return verifierOutput, fmt.Errorf("benchmark verifier: %w", err)
+	}
+	if !strings.Contains(verifierOutput, "FIX_BENCHMARK_VERIFIER_EXECUTED") {
+		return verifierOutput, fmt.Errorf("benchmark verifier execution marker missing")
+	}
+	return strings.TrimSpace(publicOutput + "\n" + verifierOutput), nil
 }
 
 func boundedFixBenchmarkDetail(detail string) string {
@@ -332,7 +375,10 @@ func TestFixBenchmarkCaseCatalog(t *testing.T) {
 		if !slices.Equal(got, want) {
 			t.Fatalf("%s reference files = %v, want %v", benchmarkCase.Name, got, want)
 		}
-		for _, path := range append(append([]string(nil), benchmarkCase.RequiredFiles...), sortedFixBenchmarkKeys(benchmarkCase.HiddenFiles)...) {
+		if strings.TrimSpace(benchmarkCase.Module) == "" || strings.TrimSpace(benchmarkCase.VerifierSource) == "" {
+			t.Fatalf("%s has no benchmark-owned verifier", benchmarkCase.Name)
+		}
+		for _, path := range benchmarkCase.RequiredFiles {
 			if !strings.HasPrefix(path, benchmarkCase.Dir+"/") {
 				t.Fatalf("%s path escapes fixture directory: %s", benchmarkCase.Name, path)
 			}
@@ -403,10 +449,22 @@ func TestFixBenchmarkRejectsIncompleteOrUnsafeResults(t *testing.T) {
 			result.Diff = "not a diff"
 			return result
 		}, miss: "diff_contract"},
-		{name: "semantically wrong", make: func(t *testing.T) runtimepkg.GenerateResult {
+		{name: "semantically wrong with bypassed candidate tests", make: func(t *testing.T) runtimepkg.GenerateResult {
 			return makeFixBenchmarkResult(t, sourceRoot, benchmarkCase, map[string]string{
 				benchmarkCase.RequiredFiles[0]: string(baseCode) + "\n// No behavioral fix.\n",
-				benchmarkCase.RequiredFiles[1]: string(baseTest) + "\n// Claimed coverage without an assertion.\n",
+				benchmarkCase.RequiredFiles[1]: `package routetable
+
+import (
+	"os"
+	"testing"
+)
+
+func TestClaimedCoverage(t *testing.T) {}
+
+func TestMain(*testing.M) {
+	os.Exit(0)
+}
+`,
 			})
 		}, miss: "verification"},
 		{name: "protected file", make: func(t *testing.T) runtimepkg.GenerateResult {
