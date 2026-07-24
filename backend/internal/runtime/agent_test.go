@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -172,6 +174,49 @@ func TestWriteOpencodeConfig_BashDeniedByDefault(t *testing.T) {
 	}
 	if _, ok := cfg.Agent["build"]; ok {
 		t.Errorf("build agent steps should use the OpenCode default when MaxTurns is zero: %v", cfg.Agent)
+	}
+}
+
+func TestOpencodeCmdPinsRuntimeConfig(t *testing.T) {
+	home, workdir := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(workdir, "opencode.json"), []byte(`{"default_agent":"other","agent":{"build":{"steps":999}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(opencodeConfigEnv, "/tmp/ambient.json")
+	t.Setenv("OPENCODE_CONFIG_CONTENT", `{"default_agent":"other"}`)
+	t.Setenv(opencodeDisableProjectEnv, "false")
+
+	cmd, err := opencodeCmd("opencode")(context.Background(), GenerateSpec{
+		Instruction: "fix it", Endpoint: "https://host/v1", Token: "tok", MaxTurns: 30,
+	}, workdir, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(cmd.Args, "--agent") {
+		t.Fatalf("args missing --agent: %v", cmd.Args)
+	}
+	for i, arg := range cmd.Args {
+		if arg == "--agent" && (i+1 >= len(cmd.Args) || cmd.Args[i+1] != "build") {
+			t.Fatalf("agent args = %v, want build", cmd.Args)
+		}
+	}
+	env := map[string]string{}
+	for _, entry := range cmd.Env {
+		name, value, ok := strings.Cut(entry, "=")
+		if ok {
+			env[name] = value
+		}
+	}
+	if got := env[opencodeConfigEnv]; got != filepath.Join(home, ".config", "opencode", "opencode.json") {
+		t.Fatalf("%s = %q", opencodeConfigEnv, got)
+	}
+	for _, name := range []string{opencodeDisableProjectEnv, opencodeDisableUpdateEnv, opencodeDisableSkillsEnv} {
+		if env[name] != "true" {
+			t.Errorf("%s = %q, want true", name, env[name])
+		}
+	}
+	if _, ok := env["OPENCODE_CONFIG_CONTENT"]; ok {
+		t.Error("ambient OPENCODE_CONFIG_CONTENT was preserved")
 	}
 }
 
