@@ -7,6 +7,7 @@ const API_BASE = import.meta.env.BASE_URL;
 const maxQuestionBytes = 4096;
 const utf8Encoder = new TextEncoder();
 
+export const analysisChatSessionBusyMessage = "analysis chat session is busy";
 export const analysisChatTurnLimitMessage = "analysis chat turn limit reached";
 
 export class AnalysisChatAPIError extends Error {

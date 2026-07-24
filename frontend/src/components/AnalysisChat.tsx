@@ -23,6 +23,7 @@ import {
 import { useAuth } from "../hooks/useAuth";
 import { useCapabilities } from "../hooks/useCapabilities";
 import {
+  analysisChatSessionBusyMessage,
   analysisChatTurnLimitMessage,
   AnalysisChatAPIError,
   createAnalysisChatSession,
@@ -63,7 +64,9 @@ function readableError(error: unknown): string {
       case 404:
         return "This analysis or conversation is no longer available. Refresh the page to load the latest data.";
       case 409:
-        return "The published analysis changed while this page was open. Refresh before starting a new conversation.";
+        return error.message === analysisChatSessionBusyMessage
+          ? "Another answer is still running for this conversation. Try again shortly."
+          : "The published analysis changed while this page was open. Refresh before starting a new conversation.";
       case 429:
         return error.message === analysisChatTurnLimitMessage
           ? "This conversation reached its limit. Start again from the latest analysis."
@@ -543,7 +546,7 @@ export function AnalysisChat({
                     value={question}
                     onChange={(event) => setQuestion(limitAnalysisChatQuestion(event.target.value))}
                     onKeyDown={(event) => {
-                      if (event.key === "Enter" && !event.shiftKey) {
+                      if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                         event.preventDefault();
                         void submit();
                       }
@@ -590,7 +593,7 @@ export function AnalysisChat({
                   color="text.secondary"
                   sx={{ display: "block", mt: 0.75, textAlign: "right" }}
                 >
-                  {userTurns}/10 turns
+                  {turnLimitExhausted ? "10/10 attempts" : `${userTurns}/10 turns`}
                 </Typography>
               )}
             </Box>
