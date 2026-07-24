@@ -16,8 +16,6 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
-var syncPrivateFile = func(file *os.File) error { return file.Sync() }
-
 const (
 	stateVersion    = 1
 	stateFileName   = "sessions.json"
@@ -200,6 +198,10 @@ func writePrivateJSON(path string, value any) error {
 }
 
 func writePrivateJSONLimit(path string, value any, maxBytes int) error {
+	return writePrivateJSONLimitWithSync(path, value, maxBytes, func(file *os.File) error { return file.Sync() })
+}
+
+func writePrivateJSONLimitWithSync(path string, value any, maxBytes int, syncFile func(*os.File) error) error {
 	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return err
@@ -219,7 +221,7 @@ func writePrivateJSONLimit(path string, value any, maxBytes int) error {
 		tmp.Close()
 		return err
 	}
-	if err := syncPrivateFile(tmp); err != nil {
+	if err := syncFile(tmp); err != nil {
 		tmp.Close()
 		return err
 	}

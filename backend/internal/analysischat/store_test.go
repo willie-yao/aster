@@ -38,10 +38,9 @@ func TestWritePrivateJSONSyncFailurePreservesReadableState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	original := syncPrivateFile
-	syncPrivateFile = func(*os.File) error { return errors.New("sync failed") }
-	t.Cleanup(func() { syncPrivateFile = original })
-	if err := writePrivateJSONLimit(path, map[string]string{"value": "new"}, 128); err == nil {
+	if err := writePrivateJSONLimitWithSync(path, map[string]string{"value": "new"}, 128, func(*os.File) error {
+		return errors.New("sync failed")
+	}); err == nil {
 		t.Fatal("sync failure was ignored")
 	}
 	after, err := os.ReadFile(path)
