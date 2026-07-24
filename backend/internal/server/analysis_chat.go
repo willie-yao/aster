@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -20,6 +21,8 @@ type AnalysisChatRunner interface {
 	Create(analysischat.AnalysisRef, string, string) (analysischat.SessionView, error)
 	Get(string, string) (analysischat.SessionView, error)
 	Send(context.Context, string, string, string, string) (analysischat.SessionView, error)
+	Stream(context.Context, string, string, string, string, func(analysischat.Progress) error) (analysischat.SessionView, error)
+	Cancel(string, string, string) error
 }
 
 const (
@@ -102,6 +105,86 @@ func sendAnalysisChatMessageHandler(timeout time.Duration, run AnalysisChatRunne
 	})
 }
 
+func streamAnalysisChatMessageHandler(timeout time.Duration, run AnalysisChatRunner) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		identity, ok := auth.IdentityFrom(r.Context())
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		var body struct {
+			Message string `json:"message"`
+		}
+		if err := decodeAnalysisChatBody(w, r, &body, maxAnalysisChatMessageBodyBytes); err != nil || strings.TrimSpace(body.Message) == "" {
+			http.Error(w, "invalid message", http.StatusBadRequest)
+			return
+		}
+		requestID := strings.TrimSpace(r.Header.Get(analysisChatIdempotencyHeader))
+		if requestID == "" {
+			http.Error(w, "missing idempotency key", http.StatusBadRequest)
+			return
+		}
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("X-Accel-Buffering", "no")
+		w.WriteHeader(http.StatusOK)
+		flusher.Flush()
+
+		ctx, cancel := context.WithTimeout(r.Context(), timeout+15*time.Second)
+		defer cancel()
+		emit := func(progress analysischat.Progress) error {
+			return writeAnalysisChatSSE(w, flusher, "progress", progress)
+		}
+		session, err := run.Stream(ctx, r.PathValue("id"), identity.Login, requestID, body.Message, emit)
+		if err != nil {
+			status, message, outcome := analysisChatErrorDetails(err)
+			if status >= 500 {
+				log.Printf("analysis chat %s for %s: %s", r.PathValue("id"), identity.Login, safeAnalysisChatError(err))
+			}
+			payload := map[string]any{"status": status, "message": message}
+			if outcome != "" {
+				payload["outcome"] = outcome
+			}
+			_ = writeAnalysisChatSSE(w, flusher, "error", payload)
+			return
+		}
+		_ = writeAnalysisChatSSE(w, flusher, "session", session)
+	})
+}
+
+func cancelAnalysisChatMessageHandler(run AnalysisChatRunner) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		identity, ok := auth.IdentityFrom(r.Context())
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if err := run.Cancel(r.PathValue("id"), identity.Login, r.PathValue("requestID")); err != nil {
+			writeAnalysisChatError(w, r.PathValue("id"), identity.Login, err)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
+func writeAnalysisChatSSE(w io.Writer, flusher http.Flusher, event string, value any) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data); err != nil {
+		return err
+	}
+	flusher.Flush()
+	return nil
+}
+
 func decodeAnalysisChatBody(w http.ResponseWriter, r *http.Request, target any, maxBytes int64) error {
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBytes))
 	decoder.DisallowUnknownFields()
@@ -123,6 +206,17 @@ func writeAnalysisChatJSON(w http.ResponseWriter, status int, value any) {
 }
 
 func writeAnalysisChatError(w http.ResponseWriter, id, login string, err error) {
+	status, message, outcome := analysisChatErrorDetails(err)
+	if outcome != "" {
+		w.Header().Set(analysisChatOutcomeHeader, outcome)
+	}
+	if status >= 500 {
+		log.Printf("analysis chat %s for %s: %s", id, login, safeAnalysisChatError(err))
+	}
+	http.Error(w, message, status)
+}
+
+func analysisChatErrorDetails(err error) (int, string, string) {
 	status := http.StatusBadGateway
 	message := "analysis chat could not complete the request"
 	outcome := ""
@@ -131,17 +225,22 @@ func writeAnalysisChatError(w http.ResponseWriter, id, login string, err error) 
 		status, message, outcome = http.StatusNotFound, "analysis not found", "rejected"
 	case errors.Is(err, analysischat.ErrSessionNotFound):
 		status, message, outcome = http.StatusNotFound, "analysis chat session not found", "rejected"
+	case errors.Is(err, analysischat.ErrRequestNotFound):
+		status, message, outcome = http.StatusNotFound, "analysis chat request not found", "rejected"
 	case errors.Is(err, analysischat.ErrAnalysisChanged):
 		status, message, outcome = http.StatusConflict, err.Error(), "rejected"
 	case errors.Is(err, analysischat.ErrSessionBusy):
-		status, message, outcome = http.StatusConflict, err.Error(), "pending"
+		status, message, outcome = http.StatusConflict, analysischat.ErrSessionBusy.Error(), "pending"
+	case errors.Is(err, analysischat.ErrRequestPending):
+		status, message, outcome = http.StatusConflict, analysischat.ErrRequestPending.Error(), "pending"
 	case errors.Is(err, analysischat.ErrIdempotencyConflict):
 		status, message, outcome = http.StatusConflict, err.Error(), "rejected"
 	case errors.Is(err, analysischat.ErrRequestOutcomeUnknown):
 		status, message, outcome = http.StatusConflict, err.Error(), "unknown"
 	case errors.Is(err, analysischat.ErrInvalidRequest):
 		status, message, outcome = http.StatusBadRequest, err.Error(), "rejected"
-	case errors.Is(err, analysischat.ErrSessionLimit), errors.Is(err, analysischat.ErrTurnLimit):
+	case errors.Is(err, analysischat.ErrSessionLimit), errors.Is(err, analysischat.ErrTurnLimit),
+		errors.Is(err, analysischat.ErrActiveTurnLimit), errors.Is(err, analysischat.ErrRateLimit):
 		status, message, outcome = http.StatusTooManyRequests, err.Error(), "rejected"
 	case errors.Is(err, analysischat.ErrRequestFailed):
 		outcome = "failed"
@@ -150,13 +249,7 @@ func writeAnalysisChatError(w http.ResponseWriter, id, login string, err error) 
 	case errors.Is(err, context.Canceled):
 		status, message, outcome = 499, "analysis chat request cancelled", "failed"
 	}
-	if outcome != "" {
-		w.Header().Set(analysisChatOutcomeHeader, outcome)
-	}
-	if status >= 500 {
-		log.Printf("analysis chat %s for %s: %s", id, login, safeAnalysisChatError(err))
-	}
-	http.Error(w, message, status)
+	return status, message, outcome
 }
 
 func safeAnalysisChatError(err error) string {

@@ -28,7 +28,9 @@ remains identical.
 | `GET /api/analysis-traces/download` | Admin-gated attachment form of the same filtered trace snapshot. |
 | `POST /api/analysis-chat/sessions` | Start an owner-bound conversation for one published test analysis. |
 | `GET /api/analysis-chat/sessions/{id}` | Read the owning admin's current persisted conversation. |
-| `POST /api/analysis-chat/sessions/{id}/messages` | Ask one bounded follow-up question about the selected analysis. |
+| `POST /api/analysis-chat/sessions/{id}/messages` | Ask one bounded follow-up question and wait for the final transcript. |
+| `POST /api/analysis-chat/sessions/{id}/messages/stream` | Start or reconnect to a turn over SSE progress events. |
+| `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/cancel` | Cancel one active owner-bound turn. |
 | `GET /healthz` | Liveness and readiness probe. |
 | `GET /` | The built SPA, when `-static-dir` is set, with deep-link fallback to `index.html`. |
 | `POST /api/failures/{id}/create-issue/preview` | Admin-gated: render the exact GitHub issue for one failure without filing it. Enabled only when actions are configured. |
@@ -91,6 +93,12 @@ with the same key and the same body returns the original session state without
 creating another session or model turn. Reusing a key for different input
 returns `409 Conflict`.
 
+The JSON endpoint waits for the final transcript. The streaming endpoint emits
+`progress` events with `queued`, `investigating`, `reading_evidence`,
+`evaluating`, `finalizing`, or `cancelling`, followed by a `session` event. It
+streams validated phases rather than unreviewed model tokens. Reconnecting with
+the same idempotency key follows the already-running turn on any replica.
+
 The response contains the full transcript. User messages include the accepted
 request ID so the frontend can reconcile a response lost after the server
 committed it. Assistant messages include
@@ -100,7 +108,8 @@ does not alter `jobs/*.json` or the published analysis.
 
 Sessions are persisted under `ANALYSIS_CHAT_STATE_DIR`, bound to the
 authenticated login, limited to ten admitted attempts including failed turns,
-and expire after two hours by default. The state file is private and excluded
+and expire after two hours of inactivity by default. A completed or failed turn
+refreshes the expiry. The state file is private and excluded
 from `/data/*`. Replicas coordinate short state transitions with an advisory
 lock on the shared filesystem, while model calls run without holding that lock.
 The shared RWX volume must support advisory file locking, atomic rename, and file and directory synchronization.
@@ -126,12 +135,16 @@ Operational settings:
 | `ANALYSIS_CHAT_SESSION_TTL` | `2h` | Conversation retention. |
 | `ANALYSIS_CHAT_MAX_SESSIONS` | `128` | Deployment-wide live-session cap. |
 | `ANALYSIS_CHAT_MAX_SESSIONS_PER_OWNER` | `8` | Per-login live-session cap. |
-| `ANALYSIS_CHAT_TIMEOUT` | `2m` | Per-turn HTTP and model bound; may only be shortened. |
+| `ANALYSIS_CHAT_MAX_ACTIVE_TURNS_PER_OWNER` | `2` | Concurrent background turns per login. |
+| `ANALYSIS_CHAT_REQUESTS_PER_MINUTE` | `10` | Newly admitted turns per login in a rolling minute. |
+| `ANALYSIS_CHAT_TIMEOUT` | `2m` | Background turn bound; may only be shortened. |
 
 The agent uses only the configured read-only filesystem and Kubernetes artifact
 tools. It has no shell, repository write, or GitHub action capability.
-Streaming, cancellation, and deployment-specific rate limits remain separate
-operational additions.
+Cancellation is idempotent for completed requests. A disconnected streaming
+client does not cancel the server-owned turn; it can reconnect with the same
+request ID. Server shutdown and explicit cancellation stop the background model
+context and persist a terminal cancelled outcome.
 
 ## Private analysis traces
 

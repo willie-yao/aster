@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
@@ -31,8 +32,16 @@ var (
 	ErrSessionNotFound = errors.New("analysis chat session not found")
 	// ErrSessionBusy means another turn is already running for the session.
 	ErrSessionBusy = errors.New("analysis chat session is busy")
+	// ErrRequestPending means this idempotent request is still running.
+	ErrRequestPending = errors.New("analysis chat request is pending")
+	// ErrRequestNotFound means the session has no request with this ID.
+	ErrRequestNotFound = errors.New("analysis chat request not found")
 	// ErrSessionLimit means the deployment or owner has too many live sessions.
 	ErrSessionLimit = errors.New("analysis chat session limit reached")
+	// ErrActiveTurnLimit means an owner has too many concurrent turns.
+	ErrActiveTurnLimit = errors.New("analysis chat active turn limit reached")
+	// ErrRateLimit means an owner exceeded the admitted turn rate.
+	ErrRateLimit = errors.New("analysis chat rate limit reached")
 	// ErrIdempotencyConflict means a request key was reused for different input.
 	ErrIdempotencyConflict = errors.New("analysis chat idempotency key conflict")
 	// ErrRequestOutcomeUnknown means a replica died before recording a turn result.
@@ -117,6 +126,22 @@ type SessionView struct {
 	Messages  []Message   `json:"messages"`
 }
 
+// Progress is a persisted, owner-safe turn phase.
+type Progress struct {
+	RequestID string `json:"request_id"`
+	Phase     string `json:"phase"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+const (
+	PhaseQueued          = "queued"
+	PhaseInvestigating   = "investigating"
+	PhaseReadingEvidence = "reading_evidence"
+	PhaseEvaluating      = "evaluating"
+	PhaseFinalizing      = "finalizing"
+	PhaseCancelling      = "cancelling"
+)
+
 // Turn is the immutable analysis snapshot and transcript for one model call.
 type Turn struct {
 	SessionID   string
@@ -126,6 +151,14 @@ type Turn struct {
 	TestCase    models.TestCase
 	History     []Message
 	Question    string
+	Progress    func(string)
+}
+
+// ReportProgress records a non-sensitive phase when a turn observer is set.
+func (t Turn) ReportProgress(phase string) {
+	if t.Progress != nil {
+		t.Progress(phase)
+	}
 }
 
 // Runner answers one turn using the selected analysis and build artifacts.
@@ -143,10 +176,14 @@ type Options struct {
 	MaxTurns         int
 	MaxQuestionBytes int
 	// TurnLeaseTTL bounds an in-flight turn owned by one replica.
-	TurnLeaseTTL     time.Duration
-	StoreLockTimeout time.Duration
-	CleanupInterval  time.Duration
-	Now              func() time.Time
+	TurnLeaseTTL                 time.Duration
+	StoreLockTimeout             time.Duration
+	CleanupInterval              time.Duration
+	TurnTimeout                  time.Duration
+	PollInterval                 time.Duration
+	MaxActiveTurnsPerOwner       int
+	MaxRequestsPerOwnerPerMinute int
+	Now                          func() time.Time
 }
 
 func (o Options) normalized(dataDir string) Options {
@@ -183,6 +220,18 @@ func (o Options) normalized(dataDir string) Options {
 			o.CleanupInterval = time.Second
 		}
 	}
+	if o.TurnTimeout <= 0 {
+		o.TurnTimeout = 2 * time.Minute
+	}
+	if o.PollInterval <= 0 {
+		o.PollInterval = 250 * time.Millisecond
+	}
+	if o.MaxActiveTurnsPerOwner <= 0 {
+		o.MaxActiveTurnsPerOwner = 2
+	}
+	if o.MaxRequestsPerOwnerPerMinute <= 0 {
+		o.MaxRequestsPerOwnerPerMinute = 10
+	}
 	if o.Now == nil {
 		o.Now = time.Now
 	}
@@ -199,10 +248,13 @@ type resolvedAnalysis struct {
 
 // Service resolves published analyses and owns durable chat sessions.
 type Service struct {
-	dataDir string
-	runner  Runner
-	opts    Options
-	store   *sessionStore
+	dataDir   string
+	runner    Runner
+	opts      Options
+	store     *sessionStore
+	lifecycle context.Context
+	activeMu  sync.Mutex
+	active    map[string]context.CancelFunc
 }
 
 // NewService creates a durable analysis chat service.
@@ -224,12 +276,15 @@ func NewService(ctx context.Context, dataDir string, runner Runner, opts Options
 	if err := store.validate(); err != nil {
 		return nil, fmt.Errorf("validating analysis chat state: %w", err)
 	}
-	service := &Service{dataDir: dataDir, runner: runner, opts: opts, store: store}
-	if err := service.cleanupPersisted(); err != nil {
-		return nil, fmt.Errorf("cleaning analysis chat state: %w", err)
-	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	service := &Service{
+		dataDir: dataDir, runner: runner, opts: opts, store: store,
+		lifecycle: ctx, active: map[string]context.CancelFunc{},
+	}
+	if err := service.cleanupPersisted(); err != nil {
+		return nil, fmt.Errorf("cleaning analysis chat state: %w", err)
 	}
 	go service.cleanupLoop(ctx)
 	return service, nil
@@ -368,129 +423,22 @@ func (s *Service) Get(id, owner string) (SessionView, error) {
 	return view, err
 }
 
-// Send appends one question and runs a single serialized model turn.
-func (s *Service) Send(ctx context.Context, id, owner, requestID, question string) (SessionView, error) {
-	question = strings.TrimSpace(question)
-	if question == "" || len(question) > s.opts.MaxQuestionBytes {
-		return SessionView{}, fmt.Errorf("%w: question must be 1-%d bytes", ErrInvalidRequest, s.opts.MaxQuestionBytes)
-	}
-	requestID, err := normalizeRequestID(requestID)
-	if err != nil {
-		return SessionView{}, err
-	}
-	owner = normalizeOwner(owner)
-	questionHash := hashText(question)
-	now := s.opts.Now().UTC()
-	leaseID, err := newSessionID()
-	if err != nil {
-		return SessionView{}, fmt.Errorf("creating analysis chat turn lease: %w", err)
-	}
-
-	var turn Turn
-	var immediate SessionView
-	storeCtx, cancel := context.WithTimeout(ctx, s.opts.StoreLockTimeout)
-	storeErr := s.store.update(storeCtx, func(state *persistedState) (bool, error) {
-		changed := s.cleanup(state, now)
-		current := state.Sessions[strings.TrimSpace(id)]
-		if current == nil || current.Owner != owner {
-			return changed, ErrSessionNotFound
-		}
-		if current.Requests == nil {
-			current.Requests = map[string]persistedRequest{}
-			changed = true
-		}
-		if previous, ok := current.Requests[requestID]; ok {
-			if previous.QuestionHash != questionHash {
-				return changed, ErrIdempotencyConflict
-			}
-			switch previous.Status {
-			case requestSucceeded:
-				immediate = cloneSessionView(current.View)
-				return changed, nil
-			case requestFailed:
-				return changed, persistedRequestError(previous.FailureKind)
-			case requestUnknown:
-				return changed, ErrRequestOutcomeUnknown
-			default:
-				return changed, ErrSessionBusy
-			}
-		}
-		if current.Active != nil {
-			return changed, ErrSessionBusy
-		}
-		if current.Turns >= s.opts.MaxTurns {
-			return changed, ErrTurnLimit
-		}
-		current.Turns++
-		current.Requests[requestID] = persistedRequest{QuestionHash: questionHash, Status: requestPending}
-		current.Active = &persistedActiveTurn{
-			RequestID: requestID,
-			LeaseID:   leaseID,
-			ExpiresAt: now.Add(s.opts.TurnLeaseTTL),
-		}
-		resolved := restoreResolved(current.Resolved)
-		turn = Turn{
-			SessionID:   current.View.ID,
-			JobID:       resolved.jobID,
-			BuildPrefix: resolved.buildPrefix,
-			Build:       cloneBuildInfo(resolved.build),
-			TestCase:    cloneTestCase(resolved.testCase),
-			History:     cloneSessionView(current.View).Messages,
-			Question:    question,
-		}
-		return true, nil
-	})
-	cancel()
-	if storeErr != nil || immediate.ID != "" {
-		return immediate, storeErr
-	}
-
-	reply, runErr := s.runner.Reply(ctx, turn)
-	finishedAt := s.opts.Now().UTC()
-	finalCtx, cancel := s.store.context()
-	defer cancel()
-	var view SessionView
-	finalErr := s.store.update(finalCtx, func(state *persistedState) (bool, error) {
-		changed := s.cleanup(state, finishedAt)
-		current := state.Sessions[strings.TrimSpace(id)]
-		if current == nil || current.Owner != owner {
-			return changed, ErrSessionNotFound
-		}
-		if current.Active == nil || current.Active.RequestID != requestID || current.Active.LeaseID != leaseID {
-			return changed, ErrRequestOutcomeUnknown
-		}
-		previous := current.Requests[requestID]
-		current.Active = nil
-		if runErr != nil {
-			previous.Status = requestFailed
-			previous.FailureKind = requestFailureKind(runErr)
-			current.Requests[requestID] = previous
-			if errors.Is(runErr, context.DeadlineExceeded) || errors.Is(runErr, context.Canceled) {
-				return true, runErr
-			}
-			return true, fmt.Errorf("%w: %v", ErrRequestFailed, runErr)
-		}
-		stamp := finishedAt.Format(time.RFC3339)
-		current.View.Messages = append(current.View.Messages,
-			Message{Role: "user", RequestID: requestID, Content: question, CreatedAt: stamp},
-			Message{
-				Role: "assistant", Content: reply.Answer, Assessment: reply.Assessment,
-				Citations: slices.Clone(reply.Citations), ProposedRevision: cloneRevision(reply.ProposedRevision),
-				ToolCalls: reply.ToolCalls, GCSBytes: reply.GCSBytes, ElapsedMs: reply.ElapsedMs,
-				CreatedAt: stamp,
-			},
-		)
-		current.View.UpdatedAt = stamp
-		previous.Status = requestSucceeded
-		current.Requests[requestID] = previous
-		view = cloneSessionView(current.View)
-		return true, nil
-	})
-	return view, finalErr
-}
-
 func (s *Service) cleanup(state *persistedState, now time.Time) bool {
 	changed := false
+	if state.OwnerRequests == nil {
+		state.OwnerRequests = map[string][]time.Time{}
+		changed = true
+	}
+	for owner, requests := range state.OwnerRequests {
+		pruned := pruneOwnerRequestTimes(requests, now)
+		if len(pruned) == 0 {
+			delete(state.OwnerRequests, owner)
+			changed = true
+		} else if len(pruned) != len(requests) {
+			state.OwnerRequests[owner] = pruned
+			changed = true
+		}
+	}
 	for id, current := range state.Sessions {
 		if current.Requests == nil {
 			current.Requests = map[string]persistedRequest{}

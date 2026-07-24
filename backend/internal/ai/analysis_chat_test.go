@@ -84,6 +84,32 @@ func TestAnalysisChatAgentChallengesAfterReadingArtifact(t *testing.T) {
 	}
 }
 
+func TestAnalysisChatAgentReportsProgressPhases(t *testing.T) {
+	shrinkCallDelay(t)
+	server := newScriptedChatServer(t)
+	server.push(200, chatRespToolCall("call-1", "tail_artifact", map[string]interface{}{"path": "build-log.txt", "lines": 20}))
+	server.push(200, chatRespFinal(`{
+		"answer":"The controller exit supports the current analysis.",
+		"assessment":"supports",
+		"citations":[{"path":"build-log.txt","quote":"controller stopped"}],
+		"proposed_revision":null
+	}`))
+	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{files: map[string][]byte{
+		"build-log.txt": []byte("controller stopped\n"),
+	}}, AnalysisChatOptions{MaxIters: 3, Timeout: time.Second})
+	turn := analysisChatTurn()
+	var phases []string
+	turn.Progress = func(phase string) { phases = append(phases, phase) }
+	if _, err := agent.Reply(context.Background(), turn); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{analysischat.PhaseReadingEvidence, analysischat.PhaseEvaluating, analysischat.PhaseFinalizing} {
+		if !slices.Contains(phases, want) {
+			t.Fatalf("progress phases %v missing %q", phases, want)
+		}
+	}
+}
+
 func TestAnalysisChatAgentAllowsExplanationWithoutTools(t *testing.T) {
 	server := newScriptedChatServer(t)
 	server.push(200, chatRespFinal(`{

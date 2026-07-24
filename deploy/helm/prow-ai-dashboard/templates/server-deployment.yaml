@@ -11,6 +11,12 @@
 {{- if and $chat (le (int .Values.server.chat.maxSessionsPerOwner) 0) -}}
 {{- fail "server.chat.maxSessionsPerOwner must be positive" -}}
 {{- end -}}
+{{- if and $chat (le (int .Values.server.chat.maxActiveTurnsPerOwner) 0) -}}
+{{- fail "server.chat.maxActiveTurnsPerOwner must be positive" -}}
+{{- end -}}
+{{- if and $chat (le (int .Values.server.chat.requestsPerMinute) 0) -}}
+{{- fail "server.chat.requestsPerMinute must be positive" -}}
+{{- end -}}
 {{- if and $chat (gt (int .Values.server.chat.maxSessionsPerOwner) (int .Values.server.chat.maxSessions)) -}}
 {{- fail "server.chat.maxSessionsPerOwner cannot exceed server.chat.maxSessions" -}}
 {{- end -}}
@@ -83,6 +89,10 @@ spec:
               value: {{ .Values.server.chat.maxSessions | quote }}
             - name: ANALYSIS_CHAT_MAX_SESSIONS_PER_OWNER
               value: {{ .Values.server.chat.maxSessionsPerOwner | quote }}
+            - name: ANALYSIS_CHAT_MAX_ACTIVE_TURNS_PER_OWNER
+              value: {{ .Values.server.chat.maxActiveTurnsPerOwner | quote }}
+            - name: ANALYSIS_CHAT_REQUESTS_PER_MINUTE
+              value: {{ .Values.server.chat.requestsPerMinute | quote }}
             {{- end }}
             - name: AUTH_MODE
               value: {{ $a.mode | quote }}

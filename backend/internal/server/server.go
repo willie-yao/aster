@@ -171,6 +171,10 @@ func Handler(opts Options) (http.Handler, error) {
 			auth.Middleware(opts.Auth, getAnalysisChatSessionHandler(opts.AnalysisChat)))
 		mux.Handle("POST /api/analysis-chat/sessions/{id}/messages",
 			auth.Middleware(opts.Auth, guard(sendAnalysisChatMessageHandler(timeout, opts.AnalysisChat))))
+		mux.Handle("POST /api/analysis-chat/sessions/{id}/messages/stream",
+			auth.Middleware(opts.Auth, guard(streamAnalysisChatMessageHandler(timeout, opts.AnalysisChat))))
+		mux.Handle("POST /api/analysis-chat/sessions/{id}/requests/{requestID}/cancel",
+			auth.Middleware(opts.Auth, guard(cancelAnalysisChatMessageHandler(opts.AnalysisChat))))
 	}
 
 	// Write actions require both auth and an action runner.

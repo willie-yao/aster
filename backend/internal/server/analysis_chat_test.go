@@ -24,6 +24,10 @@ type fakeAnalysisChatRunner struct {
 	createErr        error
 	getErr           error
 	sendErr          error
+	cancelErr        error
+	cancelID         string
+	cancelOwner      string
+	cancelRequestID  string
 }
 
 func (f *fakeAnalysisChatRunner) Create(ref analysischat.AnalysisRef, owner, requestID string) (analysischat.SessionView, error) {
@@ -48,6 +52,24 @@ func (f *fakeAnalysisChatRunner) Send(_ context.Context, id, owner, requestID, m
 		return analysischat.SessionView{}, f.sendErr
 	}
 	return analysischat.SessionView{ID: id, Messages: []analysischat.Message{{Role: "user", Content: message}}}, nil
+}
+
+func (f *fakeAnalysisChatRunner) Stream(
+	ctx context.Context,
+	id, owner, requestID, message string,
+	emit func(analysischat.Progress) error,
+) (analysischat.SessionView, error) {
+	if emit != nil {
+		if err := emit(analysischat.Progress{RequestID: requestID, Phase: analysischat.PhaseInvestigating}); err != nil {
+			return analysischat.SessionView{}, err
+		}
+	}
+	return f.Send(ctx, id, owner, requestID, message)
+}
+
+func (f *fakeAnalysisChatRunner) Cancel(id, owner, requestID string) error {
+	f.cancelID, f.cancelOwner, f.cancelRequestID = id, owner, requestID
+	return f.cancelErr
 }
 
 func TestHandlerAnalysisChatFlow(t *testing.T) {
@@ -124,6 +146,25 @@ func TestHandlerAnalysisChatFlow(t *testing.T) {
 	if runner.gotMessage != "What proves this?" || runner.gotRequestID != "request-flow" {
 		t.Fatalf("message = %q", runner.gotMessage)
 	}
+
+	streamed := request(http.MethodPost, "/api/analysis-chat/sessions/session-1/messages/stream", `{"message":"Stream this"}`)
+	if streamed.StatusCode != http.StatusOK {
+		t.Fatalf("stream status=%d body=%s", streamed.StatusCode, readBody(t, streamed))
+	}
+	streamBody := readBody(t, streamed)
+	if !strings.Contains(streamBody, "event: progress") || !strings.Contains(streamBody, `"phase":"investigating"`) ||
+		!strings.Contains(streamBody, "event: session") {
+		t.Fatalf("stream body = %q", streamBody)
+	}
+
+	cancelled := request(http.MethodPost, "/api/analysis-chat/sessions/session-1/requests/request-flow/cancel", "")
+	if cancelled.StatusCode != http.StatusNoContent {
+		t.Fatalf("cancel status=%d body=%s", cancelled.StatusCode, readBody(t, cancelled))
+	}
+	_ = cancelled.Body.Close()
+	if runner.cancelID != "session-1" || runner.cancelOwner != "alice" || runner.cancelRequestID != "request-flow" {
+		t.Fatalf("cancel runner id=%q owner=%q request=%q", runner.cancelID, runner.cancelOwner, runner.cancelRequestID)
+	}
 }
 
 func TestHandlerAnalysisChatRequiresIdempotencyKey(t *testing.T) {
@@ -191,6 +232,61 @@ func TestHandlerAnalysisChatRejectsMalformedAndCrossOriginRequests(t *testing.T)
 	}
 }
 
+func TestHandlerAnalysisChatStreamingRoutesRejectCrossOrigin(t *testing.T) {
+	handler, err := Handler(Options{
+		DataDir: t.TempDir(), Capabilities: DefaultCapabilities(), Auth: fakeAuth{}, AuthMode: "dev",
+		AnalysisChat: &fakeAnalysisChatRunner{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, testCase := range []struct {
+		path string
+		body string
+	}{
+		{path: "/api/analysis-chat/sessions/session-1/messages/stream", body: `{"message":"question"}`},
+		{path: "/api/analysis-chat/sessions/session-1/requests/request-1/cancel"},
+	} {
+		req := httptest.NewRequest(http.MethodPost, "https://dashboard.example"+testCase.path, strings.NewReader(testCase.body))
+		req.Header.Set("Authorization", "ok")
+		req.Header.Set("Origin", "https://evil.example")
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set(analysisChatIdempotencyHeader, "request-1")
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, req)
+		if recorder.Code != http.StatusForbidden {
+			t.Fatalf("POST %s status=%d body=%q", testCase.path, recorder.Code, recorder.Body.String())
+		}
+	}
+}
+
+func TestHandlerAnalysisChatStreamErrorIsSanitized(t *testing.T) {
+	runner := &fakeAnalysisChatRunner{sendErr: errors.New("provider secret https://private.example/v1")}
+	handler, err := Handler(Options{
+		DataDir: t.TempDir(), Capabilities: DefaultCapabilities(), Auth: fakeAuth{}, AuthMode: "dev",
+		AnalysisChat: runner,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/analysis-chat/sessions/session-1/messages/stream", strings.NewReader(`{"message":"question"}`))
+	req.Header.Set("Authorization", "ok")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(analysisChatIdempotencyHeader, "request-1")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "event: error") ||
+		!strings.Contains(recorder.Body.String(), "analysis chat could not complete the request") {
+		t.Fatalf("stream status=%d body=%q", recorder.Code, recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), "private.example") {
+		t.Fatal("provider URL leaked to stream")
+	}
+	if strings.Contains(recorder.Body.String(), `"outcome":""`) {
+		t.Fatal("ambiguous stream error carried a false terminal outcome")
+	}
+}
+
 func TestWriteAnalysisChatErrorMapping(t *testing.T) {
 	cases := []struct {
 		err         error
@@ -200,12 +296,16 @@ func TestWriteAnalysisChatErrorMapping(t *testing.T) {
 	}{
 		{analysischat.ErrAnalysisNotFound, http.StatusNotFound, "analysis not found", "rejected"},
 		{analysischat.ErrSessionNotFound, http.StatusNotFound, "analysis chat session not found", "rejected"},
+		{analysischat.ErrRequestNotFound, http.StatusNotFound, "analysis chat request not found", "rejected"},
 		{analysischat.ErrAnalysisChanged, http.StatusConflict, "analysis changed", "rejected"},
 		{analysischat.ErrSessionBusy, http.StatusConflict, "analysis chat session is busy", "pending"},
+		{analysischat.ErrRequestPending, http.StatusConflict, "analysis chat request is pending", "pending"},
 		{analysischat.ErrIdempotencyConflict, http.StatusConflict, "analysis chat idempotency key conflict", "rejected"},
 		{analysischat.ErrRequestOutcomeUnknown, http.StatusConflict, "analysis chat request outcome unknown", "unknown"},
 		{analysischat.ErrInvalidRequest, http.StatusBadRequest, "invalid analysis chat request", "rejected"},
 		{analysischat.ErrSessionLimit, http.StatusTooManyRequests, "analysis chat session limit reached", "rejected"},
+		{analysischat.ErrActiveTurnLimit, http.StatusTooManyRequests, "analysis chat active turn limit reached", "rejected"},
+		{analysischat.ErrRateLimit, http.StatusTooManyRequests, "analysis chat rate limit reached", "rejected"},
 		{analysischat.ErrRequestFailed, http.StatusBadGateway, "analysis chat could not complete the request", "failed"},
 		{context.DeadlineExceeded, http.StatusGatewayTimeout, "analysis chat request timed out", "failed"},
 		{errors.New("provider secret https://private.example/v1"), http.StatusBadGateway, "analysis chat could not complete the request", ""},

@@ -31,6 +31,7 @@ type fakeRunner struct {
 	err     error
 	started chan struct{}
 	release chan struct{}
+	phases  []string
 }
 
 func (f *fakeRunner) Reply(ctx context.Context, turn Turn) (Reply, error) {
@@ -39,6 +40,9 @@ func (f *fakeRunner) Reply(ctx context.Context, turn Turn) (Reply, error) {
 	started, release := f.started, f.release
 	reply, err := f.reply, f.err
 	f.mu.Unlock()
+	for _, phase := range f.phases {
+		turn.ReportProgress(phase)
+	}
 	if started != nil {
 		select {
 		case started <- struct{}{}:
@@ -397,11 +401,15 @@ func TestServiceBusySessionCompletesAcrossExpiry(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatalf("in-flight turn did not complete across expiry: %v", err)
 	}
+	if _, err := service.Get(created.ID, "alice"); err != nil {
+		t.Fatalf("completed turn did not refresh session expiry: %v", err)
+	}
+	nowNanos.Store(start.Add(2 * time.Minute).UnixNano())
 	if _, err := service.Get(created.ID, "alice"); !errors.Is(err, ErrSessionNotFound) {
-		t.Fatalf("completed expired session was not evicted: %v", err)
+		t.Fatalf("refreshed session was not evicted: %v", err)
 	}
 	if _, err := service.Create(ref, "alice", testRequestID(t)); err != nil {
-		t.Fatalf("completed expired session did not release capacity: %v", err)
+		t.Fatalf("expired refreshed session did not release capacity: %v", err)
 	}
 }
 
@@ -742,4 +750,237 @@ func persistedSessionCount(t *testing.T, dir string) int {
 		t.Fatal(err)
 	}
 	return len(state.Sessions)
+}
+
+func TestServiceTurnContinuesAfterWaiterDisconnect(t *testing.T) {
+	dir := t.TempDir()
+	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
+	runner := &fakeRunner{
+		reply:   Reply{Answer: "answer", Assessment: "supports"},
+		started: make(chan struct{}, 1), release: make(chan struct{}),
+	}
+	service, err := NewService(t.Context(), dir, runner, Options{PollInterval: 10 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := service.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", "create-disconnect")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := service.Send(waitCtx, created.ID, "alice", "turn-disconnect", "question")
+		done <- err
+	}()
+	<-runner.started
+	if err := <-done; !errors.Is(err, ErrRequestPending) {
+		t.Fatalf("disconnected waiter error = %v", err)
+	}
+	close(runner.release)
+	deadline := time.Now().Add(time.Second)
+	for {
+		got, err := service.Get(created.ID, "alice")
+		if err == nil && len(got.Messages) == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("background turn did not finish: session=%+v err=%v", got, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestServiceStreamReconnectsToPendingTurn(t *testing.T) {
+	dir := t.TempDir()
+	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
+	runner := &fakeRunner{
+		reply:   Reply{Answer: "answer", Assessment: "supports"},
+		started: make(chan struct{}, 1), release: make(chan struct{}),
+		phases: []string{PhaseReadingEvidence, PhaseEvaluating},
+	}
+	service, err := NewService(t.Context(), dir, runner, Options{PollInterval: 10 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := service.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", "create-stream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := service.Stream(firstCtx, created.ID, "alice", "turn-stream", "question", nil)
+		firstDone <- err
+	}()
+	<-runner.started
+	if err := <-firstDone; !errors.Is(err, ErrRequestPending) {
+		t.Fatalf("first stream error = %v", err)
+	}
+
+	var phases []string
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := service.Stream(t.Context(), created.ID, "alice", "turn-stream", "question", func(progress Progress) error {
+			phases = append(phases, progress.Phase)
+			return nil
+		})
+		secondDone <- err
+	}()
+	time.Sleep(20 * time.Millisecond)
+	close(runner.release)
+	if err := <-secondDone; err != nil {
+		t.Fatal(err)
+	}
+	if len(phases) == 0 {
+		t.Fatal("reconnected stream received no persisted progress")
+	}
+	runner.mu.Lock()
+	calls := len(runner.turns)
+	runner.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("runner calls = %d, want 1", calls)
+	}
+}
+
+func TestServiceCancelAcrossInstances(t *testing.T) {
+	dir := t.TempDir()
+	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
+	runner := &fakeRunner{
+		started: make(chan struct{}, 1), release: make(chan struct{}),
+	}
+	opts := Options{PollInterval: 10 * time.Millisecond}
+	first, err := NewService(t.Context(), dir, runner, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewService(t.Context(), dir, runner, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := first.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", "create-cancel")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := first.Stream(t.Context(), created.ID, "alice", "turn-cancel", "question", nil)
+		done <- err
+	}()
+	<-runner.started
+	if err := second.Cancel(created.ID, "bob", "turn-cancel"); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("cross-owner cancel error = %v", err)
+	}
+	if err := second.Cancel(created.ID, "alice", "turn-cancel"); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled stream error = %v", err)
+	}
+	if err := second.Cancel(created.ID, "alice", "turn-cancel"); err != nil {
+		t.Fatalf("idempotent terminal cancel = %v", err)
+	}
+}
+
+func TestServiceOwnerActiveTurnAndRateLimits(t *testing.T) {
+	dir := t.TempDir()
+	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
+	runner := &fakeRunner{
+		reply:   Reply{Answer: "answer", Assessment: "supports"},
+		started: make(chan struct{}, 1), release: make(chan struct{}),
+	}
+	opts := Options{
+		PollInterval:                 10 * time.Millisecond,
+		MaxActiveTurnsPerOwner:       1,
+		MaxRequestsPerOwnerPerMinute: 2,
+	}
+	service, err := NewService(t.Context(), dir, runner, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}
+	first, err := service.Create(ref, "alice", "create-limit-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.Create(ref, "alice", "create-limit-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := service.Stream(t.Context(), first.ID, "alice", "turn-limit-1", "question", nil)
+		done <- err
+	}()
+	<-runner.started
+	if _, err := service.Send(context.Background(), second.ID, "alice", "turn-limit-2", "question"); !errors.Is(err, ErrActiveTurnLimit) {
+		t.Fatalf("active turn limit error = %v", err)
+	}
+	close(runner.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Send(context.Background(), second.ID, "alice", "turn-limit-3", "question"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Send(context.Background(), second.ID, "alice", "turn-limit-4", "question"); !errors.Is(err, ErrRateLimit) {
+		t.Fatalf("rate limit error = %v", err)
+	}
+}
+
+func TestServiceLifecycleCancelsActiveTurn(t *testing.T) {
+	dir := t.TempDir()
+	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
+	runner := &fakeRunner{started: make(chan struct{}, 1), release: make(chan struct{})}
+	lifecycle, cancelLifecycle := context.WithCancel(t.Context())
+	service, err := NewService(lifecycle, dir, runner, Options{PollInterval: 10 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := service.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", "create-lifecycle")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := service.Stream(t.Context(), created.ID, "alice", "turn-lifecycle", "question", nil)
+		done <- err
+	}()
+	<-runner.started
+	cancelLifecycle()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("lifecycle cancellation error = %v", err)
+	}
+}
+
+func TestServiceRateLimitWindowExpires(t *testing.T) {
+	dir := t.TempDir()
+	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
+	var nowNanos atomic.Int64
+	start := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
+	nowNanos.Store(start.UnixNano())
+	now := func() time.Time { return time.Unix(0, nowNanos.Load()) }
+	runner := &fakeRunner{reply: Reply{Answer: "answer", Assessment: "supports"}}
+	service, err := NewService(t.Context(), dir, runner, Options{
+		Now: now, PollInterval: 10 * time.Millisecond, MaxRequestsPerOwnerPerMinute: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := service.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", "create-rate-window")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Send(context.Background(), created.ID, "alice", "turn-rate-window-1", "question"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Send(context.Background(), created.ID, "alice", "turn-rate-window-2", "question"); !errors.Is(err, ErrRateLimit) {
+		t.Fatalf("rate limit error = %v", err)
+	}
+	nowNanos.Store(start.Add(time.Minute + time.Second).UnixNano())
+	if _, err := service.Send(context.Background(), created.ID, "alice", "turn-rate-window-3", "question"); err != nil {
+		t.Fatalf("expired rate window error = %v", err)
+	}
 }

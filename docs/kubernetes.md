@@ -366,6 +366,8 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | `server.chat.enabled` | Enable authenticated analysis conversations. Requires `ai.enabled`. |
 | `server.chat.sessionTTL` | Persisted conversation retention. Defaults to `2h`. |
 | `server.chat.maxSessions`, `server.chat.maxSessionsPerOwner` | Deployment-wide and per-login live-session caps. |
+| `server.chat.maxActiveTurnsPerOwner` | Concurrent background turns per login. Defaults to `2`. |
+| `server.chat.requestsPerMinute` | Newly admitted turns per login in a rolling minute. Defaults to `10`. |
 | `server.replicaCount` | Server replicas. Chat sessions are shared through the RWX volume. |
 | `server.actions.enabled`, `server.actions.mode` | Turn on admin authentication, write actions, and private trace access; `oauth` (GitHub sign-in) or `proxy` (SSO proxy + bot token). |
 | `server.actions.admins` | Required allowlist for admin actions, chat, and trace access. An empty list fails closed. |
@@ -405,9 +407,11 @@ helm upgrade --install capz deploy/helm/prow-ai-dashboard \
 
 The chart stores chat state at `<persistence.mountPath>/.analysis-chat`, mounts
 the shared volume read-write in the server, and keeps the directory unavailable
-through `/data/*`. Tune retention and capacity with
-`server.chat.sessionTTL`, `server.chat.maxSessions`, and
-`server.chat.maxSessionsPerOwner`.
+through `/data/*`. Turns continue when a browser stream disconnects, persist
+non-sensitive investigation phases, and can be cancelled from any replica.
+Tune retention and capacity with `server.chat.sessionTTL`,
+`server.chat.maxSessions`, `server.chat.maxSessionsPerOwner`,
+`server.chat.maxActiveTurnsPerOwner`, and `server.chat.requestsPerMinute`.
 
 ### Enabling actions with Helm
 
