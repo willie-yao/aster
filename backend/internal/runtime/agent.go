@@ -14,6 +14,13 @@ import (
 	"time"
 )
 
+const (
+	opencodeConfigEnv         = "OPENCODE_CONFIG"
+	opencodeDisableProjectEnv = "OPENCODE_DISABLE_PROJECT_CONFIG"
+	opencodeDisableUpdateEnv  = "OPENCODE_DISABLE_AUTOUPDATE"
+	opencodeDisableSkillsEnv  = "OPENCODE_DISABLE_EXTERNAL_SKILLS"
+)
+
 // GenerateSpec is a one-shot code-generation run: materialize Repo at its ref,
 // run a coding-agent CLI with Instruction in the workspace, and return the files
 // the agent changed. It is the generative counterpart to Spec (which runs a
@@ -219,18 +226,14 @@ func opencodeCmd(bin string) func(ctx context.Context, spec GenerateSpec, workdi
 		// --dir pins opencode's project root to the clone. opencode's `run` can
 		// otherwise attach to an ambient server and ignore the process cwd,
 		// writing edits outside the workspace.
-		args := []string{"run", "--dir", workdir, "--format", "json"}
+		args := []string{"run", "--dir", workdir, "--format", "json", "--agent", "build"}
 		if spec.Model != "" {
 			args = append(args, "--model", "engine/"+spec.Model)
 		}
 		args = append(args, spec.Instruction)
 		cmd := exec.CommandContext(ctx, bin, args...)
 		cmd.Dir = workdir
-		cmd.Env = append(os.Environ(),
-			"HOME="+home,
-			"XDG_CONFIG_HOME="+filepath.Join(home, ".config"),
-			"XDG_DATA_HOME="+filepath.Join(home, ".local", "share"),
-		)
+		cmd.Env = isolatedOpencodeEnv(home)
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		cmd.WaitDelay = waitDelay
 		cmd.Cancel = func() error {
@@ -241,6 +244,32 @@ func opencodeCmd(bin string) func(ctx context.Context, spec GenerateSpec, workdi
 		}
 		return cmd, nil
 	}
+}
+
+func isolatedOpencodeEnv(home string) []string {
+	env := make([]string, 0, len(os.Environ())+9)
+	for _, entry := range os.Environ() {
+		name, _, ok := strings.Cut(entry, "=")
+		if !ok || strings.HasPrefix(name, "OPENCODE_") {
+			continue
+		}
+		switch name {
+		case "HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME":
+			continue
+		}
+		env = append(env, entry)
+	}
+	return append(env,
+		"HOME="+home,
+		"XDG_CONFIG_HOME="+filepath.Join(home, ".config"),
+		"XDG_DATA_HOME="+filepath.Join(home, ".local", "share"),
+		"XDG_CACHE_HOME="+filepath.Join(home, ".cache"),
+		"XDG_STATE_HOME="+filepath.Join(home, ".local", "state"),
+		opencodeConfigEnv+"="+filepath.Join(home, ".config", "opencode", "opencode.json"),
+		opencodeDisableProjectEnv+"=true",
+		opencodeDisableUpdateEnv+"=true",
+		opencodeDisableSkillsEnv+"=true",
+	)
 }
 
 // writeOpencodeConfig writes an opencode config to home's XDG config dir defining
@@ -266,8 +295,15 @@ func writeOpencodeConfig(home string, spec GenerateSpec) error {
 			"limit": map[string]any{"context": 128000, "output": 8192},
 		}
 	}
+	agents := map[string]any{}
+	if spec.MaxTurns > 0 {
+		agents["build"] = map[string]any{"steps": spec.MaxTurns}
+	}
 	cfg := map[string]any{
-		"$schema": "https://opencode.ai/config.json",
+		"$schema":    "https://opencode.ai/config.json",
+		"share":      "disabled",
+		"autoupdate": false,
+		"snapshot":   false,
 		"provider": map[string]any{
 			"engine": map[string]any{
 				"npm":  "@ai-sdk/openai-compatible",
@@ -279,6 +315,7 @@ func writeOpencodeConfig(home string, spec GenerateSpec) error {
 				"models": models,
 			},
 		},
+		"agent": agents,
 		"permission": map[string]any{
 			"edit": "allow",
 			"bash": bashPerm,
