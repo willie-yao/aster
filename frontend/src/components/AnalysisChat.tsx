@@ -570,7 +570,7 @@ export function AnalysisChat({
       setCorrectionOpen(true);
     } catch (previewError) {
       if (previewError instanceof Error && previewError.name === "AbortError") return;
-      if (identityRef.current === requestIdentity) setCorrectionError(previewError instanceof Error ? previewError.message : "Could not prepare the correction.");
+      if (identityRef.current === requestIdentity) setError(previewError instanceof Error ? previewError.message : "Could not prepare the correction.");
     } finally {
       if (correctionControllerRef.current === controller) {
         correctionControllerRef.current = null;

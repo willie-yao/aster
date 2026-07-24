@@ -433,7 +433,7 @@ func compactState(state *state, now time.Time) bool {
 }
 
 func validateJSONSize(value any, maxBytes int) error {
-	data, err := json.Marshal(value)
+	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return err
 	}
