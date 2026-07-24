@@ -4,6 +4,10 @@ import type {
 } from "../types/analysisChat";
 
 const API_BASE = import.meta.env.BASE_URL;
+const maxQuestionBytes = 4096;
+const utf8Encoder = new TextEncoder();
+
+export const analysisChatTurnLimitMessage = "analysis chat turn limit reached";
 
 export class AnalysisChatAPIError extends Error {
   readonly status: number;
@@ -13,6 +17,18 @@ export class AnalysisChatAPIError extends Error {
     this.name = "AnalysisChatAPIError";
     this.status = status;
   }
+}
+
+export function limitAnalysisChatQuestion(value: string): string {
+  let bytes = 0;
+  let end = 0;
+  for (const character of value) {
+    const characterBytes = utf8Encoder.encode(character).byteLength;
+    if (bytes + characterBytes > maxQuestionBytes) break;
+    bytes += characterBytes;
+    end += character.length;
+  }
+  return value.slice(0, end);
 }
 
 async function parseResponse(response: Response): Promise<AnalysisChatSession> {

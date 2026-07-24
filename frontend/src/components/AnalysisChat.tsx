@@ -23,8 +23,10 @@ import {
 import { useAuth } from "../hooks/useAuth";
 import { useCapabilities } from "../hooks/useCapabilities";
 import {
+  analysisChatTurnLimitMessage,
   AnalysisChatAPIError,
   createAnalysisChatSession,
+  limitAnalysisChatQuestion,
   sendAnalysisChatMessage,
 } from "../lib/analysisChat";
 import { fileToUrl, type FileToUrlContext } from "../lib/utils";
@@ -63,7 +65,9 @@ function readableError(error: unknown): string {
       case 409:
         return "The published analysis changed while this page was open. Refresh before starting a new conversation.";
       case 429:
-        return "This conversation reached its limit. Start again from the latest analysis.";
+        return error.message === analysisChatTurnLimitMessage
+          ? "This conversation reached its limit. Start again from the latest analysis."
+          : "The analysis chat service is at capacity. Try again later.";
       case 504:
         return "The analysis agent timed out before it could answer. Try a narrower question.";
       default:
@@ -280,6 +284,7 @@ export function AnalysisChat({
   const [session, setSession] = useState<AnalysisChatSession | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [turnLimitExhausted, setTurnLimitExhausted] = useState(false);
   const controllerRef = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
 
@@ -304,6 +309,7 @@ export function AnalysisChat({
     setSession(null);
     setBusy(false);
     setError(null);
+    setTurnLimitExhausted(false);
   }, [identity]);
 
   useEffect(() => {
@@ -317,7 +323,7 @@ export function AnalysisChat({
   if (!features.analysis_chat) return null;
 
   const userTurns = session?.messages.filter((message) => message.role === "user").length ?? 0;
-  const turnLimitReached = userTurns >= 10;
+  const turnLimitReached = turnLimitExhausted || userTurns >= 10;
 
   async function submit(nextQuestion = question) {
     const value = nextQuestion.trim();
@@ -342,7 +348,16 @@ export function AnalysisChat({
       setQuestion("");
     } catch (requestError) {
       if (!(requestError instanceof Error && requestError.name === "AbortError")) {
-        setError(readableError(requestError));
+        const exhausted =
+          requestError instanceof AnalysisChatAPIError &&
+          requestError.status === 429 &&
+          requestError.message === analysisChatTurnLimitMessage;
+        if (exhausted) {
+          setTurnLimitExhausted(true);
+          setError(null);
+        } else {
+          setError(readableError(requestError));
+        }
       }
     } finally {
       if (controllerRef.current === controller) {
@@ -519,7 +534,7 @@ export function AnalysisChat({
                     minRows={1}
                     maxRows={5}
                     value={question}
-                    onChange={(event) => setQuestion(event.target.value.slice(0, 4096))}
+                    onChange={(event) => setQuestion(limitAnalysisChatQuestion(event.target.value))}
                     onKeyDown={(event) => {
                       if (event.key === "Enter" && !event.shiftKey) {
                         event.preventDefault();
@@ -536,7 +551,7 @@ export function AnalysisChat({
                           fontSize: "0.875rem",
                         },
                       },
-                      htmlInput: { maxLength: 4096, "aria-label": "Ask about this analysis" },
+                      htmlInput: { "aria-label": "Ask about this analysis" },
                     }}
                   />
                   <Tooltip title="Send question">
