@@ -365,6 +365,9 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | `ingress.enabled`, `ingress.hosts`, `ingress.tls` | Public read path. |
 | `server.chat.enabled` | Enable authenticated analysis conversations. Requires `ai.enabled`. |
 | `server.chat.correctionsEnabled` | Enable explicit promotion and revocation of evidence-backed correction overlays. |
+| `server.chat.sourceInvestigation.enabled` | Enable owner-bound read-only source investigation through Orka OpenCode Tasks. |
+| `server.chat.sourceInvestigation.maxPerSession` | Persisted source requests per session. Defaults to `8`. |
+| `server.chat.sourceInvestigation.maxActivePerOwner` | Concurrent source Tasks per login. Defaults to `1`. |
 | `server.chat.sessionTTL` | Persisted conversation retention. Defaults to `2h`. |
 | `server.chat.maxSessions`, `server.chat.maxSessionsPerOwner` | Deployment-wide and per-login live-session caps. |
 | `server.chat.maxActiveTurnsPerOwner` | Concurrent background turns per login. Defaults to `2`. |
@@ -399,6 +402,7 @@ helm upgrade --install capz deploy/helm/prow-ai-dashboard \
   --set server.replicaCount=2 \
   --set server.chat.enabled=true \
   --set server.chat.correctionsEnabled=true \
+  --set server.chat.sourceInvestigation.enabled=true \
   --set server.actions.mode=oauth \
   --set 'server.actions.admins={alice,bob}' \
   --set server.actions.oauth.clientId=<client-id> \
@@ -417,6 +421,30 @@ Tune retention and capacity with `server.chat.sessionTTL`,
 Correction promotion is disabled by default. When enabled, the server writes a
 private audit ledger and the public `analysis_corrections.json` overlay to the
 same shared volume; it never rewrites fetched job JSON.
+
+Source investigation is also disabled by default. Configure its independent
+read-only runtime in `project.yaml`:
+
+```yaml
+ai:
+  source_investigation:
+    agent_ref: opencode-source-reader
+    api: http://orka.orka-system.svc.cluster.local:8080
+    namespace: orka-system
+    git_secret: source-repo-readonly
+    max_turns: 30
+    timeout: 10m
+    retries: 1
+```
+
+The Agent named by `agent_ref` must use the merged Orka OpenCode runtime. Create
+`git_secret` in the Orka namespace with read-only repository credentials. The
+Task-level policy disables Bash, write, edit, and web tools, and the chart grants
+the dashboard only Task create, get, patch, and delete permissions. The server
+uses the normal dashboard image, never the git-capable fixer image. If the source
+repository is private, put a read-only GitHub token in the AI Secret under
+`GITHUB_READ_TOKEN` so the server can verify returned quotes against the pinned
+commit.
 
 ### Enabling actions with Helm
 

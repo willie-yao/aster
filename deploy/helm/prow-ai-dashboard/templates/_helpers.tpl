@@ -151,6 +151,12 @@ because Helm release names are unique only within their own namespace.
 {{- printf "%s-orka-%s" $base (include "prow-ai-dashboard.orkaReleaseScope" .) -}}
 {{- end -}}
 
+{{/* Source investigation RBAC stays separate from fix-generation RBAC. */}}
+{{- define "prow-ai-dashboard.orkaSourceRBACName" -}}
+{{- $base := include "prow-ai-dashboard.fullname" . | trunc 39 | trimSuffix "-" -}}
+{{- printf "%s-source-%s" $base (include "prow-ai-dashboard.orkaReleaseScope" .) -}}
+{{- end -}}
+
 {{/* Analysis RBAC stays separate from fix-generation RBAC. */}}
 {{- define "prow-ai-dashboard.orkaAnalysisRBACName" -}}
 {{- $base := include "prow-ai-dashboard.fullname" . | trunc 40 | trimSuffix "-" -}}

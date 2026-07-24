@@ -21,6 +21,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prowbuild"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 )
 
 var (
@@ -42,6 +43,10 @@ var (
 	ErrActiveTurnLimit = errors.New("analysis chat active turn limit reached")
 	// ErrRateLimit means an owner exceeded the admitted turn rate.
 	ErrRateLimit = errors.New("analysis chat rate limit reached")
+	// ErrSourceInvestigationLimit means a session has too many source requests.
+	ErrSourceInvestigationLimit = errors.New("source investigation session limit reached")
+	// ErrSourceInvestigationActiveLimit means an owner has too many source Tasks.
+	ErrSourceInvestigationActiveLimit = errors.New("source investigation active limit reached")
 	// ErrIdempotencyConflict means a request key was reused for different input.
 	ErrIdempotencyConflict = errors.New("analysis chat idempotency key conflict")
 	// ErrRequestOutcomeUnknown means a replica died before recording a turn result.
@@ -248,16 +253,19 @@ type resolvedAnalysis struct {
 
 // Service resolves published analyses and owns durable chat sessions.
 type Service struct {
-	dataDir   string
-	runner    Runner
-	opts      Options
-	store     *sessionStore
-	lifecycle context.Context
-	activeMu  sync.Mutex
-	active    map[string]context.CancelFunc
-	activeWG  sync.WaitGroup
-	notifyMu  sync.Mutex
-	notify    map[string]map[chan struct{}]struct{}
+	dataDir      string
+	runner       Runner
+	investigator sourceinvestigation.Runner
+	sourceRepo   sourceinvestigation.Repository
+	sourceOpts   SourceInvestigationOptions
+	opts         Options
+	store        *sessionStore
+	lifecycle    context.Context
+	activeMu     sync.Mutex
+	active       map[string]context.CancelFunc
+	activeWG     sync.WaitGroup
+	notifyMu     sync.Mutex
+	notify       map[string]map[chan struct{}]struct{}
 }
 
 // NewService creates a durable analysis chat service.
@@ -371,11 +379,12 @@ func (s *Service) Create(ref AnalysisRef, owner, requestID string) (SessionView,
 	expires := now.Add(s.opts.SessionTTL)
 	created := &persistedSession{
 		Owner:             owner,
-		Resolved:          persistResolved(resolved),
+		Resolved:          persistResolved(resolved, sourceRepositoryName(s.sourceRepo)),
 		ExpiresAt:         expires,
 		CreateRequestID:   requestID,
 		CreateRequestHash: requestHash,
 		Requests:          map[string]persistedRequest{},
+		Investigations:    map[string]persistedInvestigation{},
 		View: SessionView{
 			ID:        id,
 			Analysis:  resolved.ref,
@@ -448,6 +457,10 @@ func (s *Service) cleanup(state *persistedState, now time.Time) bool {
 			current.Requests = map[string]persistedRequest{}
 			changed = true
 		}
+		if current.Investigations == nil {
+			current.Investigations = map[string]persistedInvestigation{}
+			changed = true
+		}
 		if current.Active != nil && !now.Before(current.Active.ExpiresAt) {
 			previous := current.Requests[current.Active.RequestID]
 			previous.Status = requestUnknown
@@ -456,7 +469,24 @@ func (s *Service) cleanup(state *persistedState, now time.Time) bool {
 			current.Active = nil
 			changed = true
 		}
-		if !now.Before(current.ExpiresAt) && current.Active == nil {
+		activeInvestigation := false
+		for requestID, record := range current.Investigations {
+			if activeSourceInvestigation(record) && !now.Before(record.LeaseExpires) {
+				record.View.Status = sourceinvestigation.StatusUnknown
+				record.View.Phase = ""
+				record.View.UpdatedAt = now.Format(time.RFC3339)
+				record.LeaseID = ""
+				record.LeaseExpires = time.Time{}
+				record.CancelRequest = false
+				record.Subject = sourceinvestigation.Subject{}
+				current.Investigations[requestID] = record
+				changed = true
+			}
+			if activeSourceInvestigation(record) {
+				activeInvestigation = true
+			}
+		}
+		if !now.Before(current.ExpiresAt) && current.Active == nil && !activeInvestigation {
 			delete(state.Sessions, id)
 			changed = true
 		}
@@ -527,6 +557,8 @@ func requestFailureKind(err error) string {
 		return failureTimeout
 	case errors.Is(err, context.Canceled):
 		return failureCancelled
+	case errors.Is(err, sourceinvestigation.ErrInvalidResult), errors.Is(err, sourceinvestigation.ErrUnavailable):
+		return failureSource
 	default:
 		return failureModel
 	}
@@ -538,6 +570,8 @@ func persistedRequestError(kind string) error {
 		return context.DeadlineExceeded
 	case failureCancelled:
 		return context.Canceled
+	case failureSource:
+		return sourceinvestigation.ErrUnavailable
 	default:
 		return ErrRequestFailed
 	}

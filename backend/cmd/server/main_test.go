@@ -40,6 +40,7 @@ func TestInteractiveFeaturesFromEnv(t *testing.T) {
 	t.Run("legacy actions default", func(t *testing.T) {
 		t.Setenv("ANALYSIS_CHAT_ENABLED", "")
 		t.Setenv("ANALYSIS_CORRECTIONS_ENABLED", "")
+		t.Setenv("ANALYSIS_SOURCE_INVESTIGATION_ENABLED", "")
 		t.Setenv("ACTIONS_ENABLED", "")
 		features, err := interactiveFeaturesFromEnv()
 		if err != nil {
@@ -52,6 +53,7 @@ func TestInteractiveFeaturesFromEnv(t *testing.T) {
 	t.Run("chat defaults writes off", func(t *testing.T) {
 		t.Setenv("ANALYSIS_CHAT_ENABLED", "true")
 		t.Setenv("ANALYSIS_CORRECTIONS_ENABLED", "")
+		t.Setenv("ANALYSIS_SOURCE_INVESTIGATION_ENABLED", "")
 		t.Setenv("ACTIONS_ENABLED", "")
 		features, err := interactiveFeaturesFromEnv()
 		if err != nil {
@@ -76,6 +78,7 @@ func TestInteractiveFeaturesFromEnv(t *testing.T) {
 	t.Run("chat corrections", func(t *testing.T) {
 		t.Setenv("ANALYSIS_CHAT_ENABLED", "true")
 		t.Setenv("ANALYSIS_CORRECTIONS_ENABLED", "true")
+		t.Setenv("ANALYSIS_SOURCE_INVESTIGATION_ENABLED", "")
 		t.Setenv("ACTIONS_ENABLED", "")
 		features, err := interactiveFeaturesFromEnv()
 		if err != nil {
@@ -83,6 +86,27 @@ func TestInteractiveFeaturesFromEnv(t *testing.T) {
 		}
 		if !features.AnalysisChat || !features.AnalysisCorrections || features.Actions {
 			t.Fatalf("features = %+v", features)
+		}
+	})
+	t.Run("source investigation", func(t *testing.T) {
+		t.Setenv("ANALYSIS_CHAT_ENABLED", "true")
+		t.Setenv("ANALYSIS_CORRECTIONS_ENABLED", "")
+		t.Setenv("ANALYSIS_SOURCE_INVESTIGATION_ENABLED", "true")
+		t.Setenv("ACTIONS_ENABLED", "")
+		features, err := interactiveFeaturesFromEnv()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !features.AnalysisChat || !features.SourceInvestigation || features.Actions {
+			t.Fatalf("features = %+v", features)
+		}
+	})
+	t.Run("source investigation requires chat", func(t *testing.T) {
+		t.Setenv("ANALYSIS_CHAT_ENABLED", "false")
+		t.Setenv("ANALYSIS_CORRECTIONS_ENABLED", "")
+		t.Setenv("ANALYSIS_SOURCE_INVESTIGATION_ENABLED", "true")
+		if _, err := interactiveFeaturesFromEnv(); err == nil {
+			t.Fatal("source investigation was accepted without chat")
 		}
 	})
 	t.Run("corrections require chat", func(t *testing.T) {

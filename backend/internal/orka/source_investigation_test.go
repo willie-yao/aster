@@ -1,0 +1,170 @@
+package orka
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
+)
+
+type fakeSourceReader struct {
+	files map[string]string
+	err   error
+}
+
+func (f fakeSourceReader) ReadFile(_ context.Context, _ sourceinvestigation.Repository, file string) (string, error) {
+	if f.err != nil {
+		return "", f.err
+	}
+	content, ok := f.files[file]
+	if !ok {
+		return "", errors.New("not found")
+	}
+	return content, nil
+}
+
+func sourceRequest() sourceinvestigation.Request {
+	return sourceinvestigation.Request{
+		ID: "source-1", Timeout: time.Minute,
+		Subject: sourceinvestigation.Subject{
+			SessionID: "session-1", ChatRequestID: "chat-1",
+			Repository: sourceinvestigation.Repository{
+				Owner: "example", Name: "repo", Revision: "0123456789abcdef0123456789abcdef01234567",
+			},
+			JobID: "periodic-demo", Build: models.BuildInfo{BuildID: "123"},
+			TestCase: models.TestCase{Name: "TestCluster", FailureMessage: "timed out", AIAnalysis: &models.AIAnalysis{
+				GeneratedAt: "2026-07-24T12:00:00Z", RootCause: "retry loop stalled", SuggestedFix: "bound retries",
+			}},
+			Question: "Could the retry loop be responsible?", Answer: "The artifacts suggest it is.",
+			AnalysisGeneratedAt: "2026-07-24T12:00:00Z",
+		},
+	}
+}
+
+func sourceOuterResult(t *testing.T, summary string) StructuredResult {
+	t.Helper()
+	return StructuredResult{
+		Version: 1, Summary: summary,
+		BaseSHA: sourceRequest().Subject.Repository.Revision,
+	}
+}
+
+func TestSourceInvestigatorHappyPath(t *testing.T) {
+	inner, err := json.Marshal(map[string]any{
+		"version": 1, "finding": "The loop retries the same terminal error.",
+		"confidence": "high", "relationship": "supports",
+		"direction": "Stop retrying after the terminal error.",
+		"citations": []map[string]any{{
+			"path": "pkg/retry.go", "line_start": 2, "line_end": 3,
+			"quote": "if terminal(err)",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, done := resultServer(t, sourceOuterResult(t, string(inner)))
+	defer done()
+	kube := &fakeTaskAPI{phases: []string{"Running", "Succeeded"}}
+	runner := &SourceInvestigator{
+		kube: kube, results: results,
+		reader: fakeSourceReader{files: map[string]string{"pkg/retry.go": "func retry(err error) {\n\tif terminal(err) {\n\t\treturn\n\t}\n}\n"}},
+		opts:   SourceInvestigationOptions{Namespace: "orka-system", AgentRef: "source-reader", MaxTurns: 20, PollEvery: time.Millisecond},
+	}
+
+	result, err := runner.Investigate(t.Context(), sourceRequest())
+	if err != nil {
+		t.Fatalf("Investigate: %v", err)
+	}
+	if len(result.Citations) != 1 || !result.Citations[0].Verified {
+		t.Fatalf("citations = %+v", result.Citations)
+	}
+	taskSpec := kube.applied["spec"].(map[string]any)
+	agentRuntime := taskSpec["agentRuntime"].(map[string]any)
+	workspace := agentRuntime["workspace"].(map[string]any)
+	if workspace["ref"] != sourceRequest().Subject.Repository.Revision {
+		t.Fatalf("workspace ref = %v", workspace["ref"])
+	}
+	if agentRuntime["allowBash"] != false {
+		t.Fatalf("allowBash = %v", agentRuntime["allowBash"])
+	}
+	metadata := kube.applied["metadata"].(map[string]any)
+	annotations := metadata["annotations"].(map[string]any)
+	if annotations[orkaWorkspaceInitAnnotation] != "true" {
+		t.Fatalf("annotations = %+v", annotations)
+	}
+	if strings.Contains(taskSpec["prompt"].(string), "BOT_TOKEN") {
+		t.Fatalf("prompt contains a write credential name")
+	}
+}
+
+func TestSourceInvestigatorRejectsUnverifiedCitationAndWorkspaceChanges(t *testing.T) {
+	inner := `{"version":1,"finding":"finding","confidence":"medium","relationship":"refines","direction":"inspect","citations":[{"path":"pkg/retry.go","line_start":1,"line_end":1,"quote":"missing"}]}`
+	for _, tc := range []struct {
+		name   string
+		outer  StructuredResult
+		reader SourceReader
+	}{
+		{name: "quote", outer: sourceOuterResult(t, inner), reader: fakeSourceReader{files: map[string]string{"pkg/retry.go": "different\n"}}},
+		{name: "diff", outer: func() StructuredResult {
+			r := sourceOuterResult(t, inner)
+			r.Diff = "diff"
+			r.Files = []string{"x"}
+			return r
+		}(), reader: fakeSourceReader{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			results, done := resultServer(t, tc.outer)
+			defer done()
+			runner := &SourceInvestigator{
+				kube: &fakeTaskAPI{phases: []string{"Succeeded"}}, results: results, reader: tc.reader,
+				opts: SourceInvestigationOptions{AgentRef: "reader", PollEvery: time.Millisecond},
+			}
+			if _, err := runner.Investigate(t.Context(), sourceRequest()); !errors.Is(err, sourceinvestigation.ErrInvalidResult) {
+				t.Fatalf("Investigate = %v", err)
+			}
+		})
+	}
+}
+
+func TestParseSourceResultRejectsProse(t *testing.T) {
+	_, err := parseSourceResult("result: " + `{"version":1}`)
+	if !errors.Is(err, sourceinvestigation.ErrInvalidResult) {
+		t.Fatalf("parseSourceResult = %v", err)
+	}
+}
+
+func TestGitHubSourceReaderPinsPathAndStripsCrossHostAuthorization(t *testing.T) {
+	var redirectedAuth string
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		redirectedAuth = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte("line one\nline two\n"))
+	}))
+	defer target.Close()
+	var requestedPath, initialAuth string
+	front := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedPath = r.URL.Path
+		initialAuth = r.Header.Get("Authorization")
+		http.Redirect(w, r, target.URL+r.URL.Path, http.StatusFound)
+	}))
+	defer front.Close()
+	reader := NewGitHubSourceReader(front.URL, "read-token")
+	repo := sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: "0123456789abcdef0123456789abcdef01234567"}
+	content, err := reader.ReadFile(t.Context(), repo, "pkg/retry.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPath := "/example/repo/0123456789abcdef0123456789abcdef01234567/pkg/retry.go"
+	if requestedPath != wantPath || content != "line one\nline two\n" {
+		t.Fatalf("path=%q content=%q", requestedPath, content)
+	}
+	if initialAuth != "Bearer read-token" || redirectedAuth != "" {
+		t.Fatalf("authorization initial=%q redirected=%q", initialAuth, redirectedAuth)
+	}
+}

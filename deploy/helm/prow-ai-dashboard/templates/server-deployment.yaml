@@ -1,6 +1,7 @@
 {{- $actions := .Values.server.actions.enabled -}}
 {{- $chat := .Values.server.chat.enabled -}}
 {{- $corrections := .Values.server.chat.correctionsEnabled -}}
+{{- $source := .Values.server.chat.sourceInvestigation.enabled -}}
 {{- $interactive := or $actions $chat -}}
 {{- $a := .Values.server.actions -}}
 {{- if and $chat (not .Values.ai.enabled) -}}
@@ -8,6 +9,15 @@
 {{- end -}}
 {{- if and $corrections (not $chat) -}}
 {{- fail "server.chat.correctionsEnabled requires server.chat.enabled" -}}
+{{- end -}}
+{{- if and $source (not $chat) -}}
+{{- fail "server.chat.sourceInvestigation.enabled requires server.chat.enabled" -}}
+{{- end -}}
+{{- if and $source (le (int .Values.server.chat.sourceInvestigation.maxPerSession) 0) -}}
+{{- fail "server.chat.sourceInvestigation.maxPerSession must be positive" -}}
+{{- end -}}
+{{- if and $source (le (int .Values.server.chat.sourceInvestigation.maxActivePerOwner) 0) -}}
+{{- fail "server.chat.sourceInvestigation.maxActivePerOwner must be positive" -}}
 {{- end -}}
 {{- if and $chat (le (int .Values.server.chat.maxSessions) 0) -}}
 {{- fail "server.chat.maxSessions must be positive" -}}
@@ -50,7 +60,7 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- if and .Values.orka.fixRuntime.enabled $actions }}
+      {{- if or (and .Values.orka.fixRuntime.enabled $actions) $source }}
       serviceAccountName: {{ include "prow-ai-dashboard.orkaServiceAccountName" . }}
       automountServiceAccountToken: true
       {{- else }}
@@ -88,6 +98,20 @@ spec:
             {{- if $corrections }}
             - name: ANALYSIS_CORRECTIONS_ENABLED
               value: "true"
+            {{- end }}
+            {{- if $source }}
+            - name: ANALYSIS_SOURCE_INVESTIGATION_ENABLED
+              value: "true"
+            - name: ANALYSIS_SOURCE_INVESTIGATION_MAX_PER_SESSION
+              value: {{ .Values.server.chat.sourceInvestigation.maxPerSession | quote }}
+            - name: ANALYSIS_SOURCE_INVESTIGATION_MAX_ACTIVE_PER_OWNER
+              value: {{ .Values.server.chat.sourceInvestigation.maxActivePerOwner | quote }}
+            - name: SOURCE_INVESTIGATION_GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "prow-ai-dashboard.aiSecret" . }}
+                  key: {{ .Values.ai.githubReadTokenSecretKey }}
+                  optional: true
             {{- end }}
             - name: ANALYSIS_CHAT_STATE_DIR
               value: {{ printf "%s/.analysis-chat" .Values.persistence.mountPath | quote }}

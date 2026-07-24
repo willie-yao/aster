@@ -179,6 +179,7 @@ publishes the expected jobs:
 - `notifications.email`: [Email notifications](notifications.md)
 - `issues`: [GitHub issues](github-issues.md)
 - `ai.fix_prs`: [Agent-proposed fix PRs](fix-prs.md)
+- `ai.source_investigation`: optional read-only Orka source runtime for analysis chat
 
 These features require deployment secrets and, in some cases, additional writer
 runtime dependencies. Their focused guides contain complete examples.
@@ -187,6 +188,30 @@ For Orka fix generation, `agent_runtime.type: orka` selects the dashboard
 backend. The operator-managed Orka Agent selects its CLI with
 `spec.runtime.type: opencode` and owns the model endpoint, model ID, and model
 Secret. Keep those settings out of `project.yaml`.
+
+Source investigation is a separate read-only contract and does not inherit
+`ai.fix_prs`. Configure it only for Kubernetes-native analysis chat:
+
+```yaml
+ai:
+  source_investigation:
+    agent_ref: opencode-source-reader
+    api: http://orka.orka-system.svc.cluster.local:8080
+    namespace: orka-system
+    git_secret: source-repo-readonly
+    version: v1
+    retries: 1
+    max_turns: 30
+    timeout: 10m
+```
+
+`agent_ref` and `api` are required when the block is present. `timeout` must be
+positive and at most 30 minutes. `git_secret` belongs to Orka and must provide
+read-only clone credentials. Provider and model credentials remain owned by the
+Agent. The dashboard uses `branding.source_repo` and the selected build's exact
+`repo_refs` commit, so there is no repository override or branch fallback. Bare
+full SHAs and unambiguous `ref:fullSHA` values are supported. Composite
+presubmit refs are rejected rather than guessing which commit was tested.
 
 ## Validate a config
 

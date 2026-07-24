@@ -31,6 +31,10 @@ remains identical.
 | `POST /api/analysis-chat/sessions/{id}/messages` | Ask one bounded follow-up question and wait for the final transcript. |
 | `POST /api/analysis-chat/sessions/{id}/messages/stream` | Start or reconnect to a turn over SSE progress events. |
 | `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/cancel` | Cancel one active owner-bound turn. |
+| `POST /api/analysis-chat/sessions/{id}/source-investigations` | Run one source investigation for a completed chat request and wait for the result. |
+| `POST /api/analysis-chat/sessions/{id}/source-investigations/stream` | Start or reconnect to a source investigation over SSE progress events. |
+| `GET /api/analysis-chat/sessions/{id}/source-investigations/{requestID}` | Read the persisted owner-bound investigation state. |
+| `POST /api/analysis-chat/sessions/{id}/source-investigations/{requestID}/cancel` | Cancel one active source investigation. |
 | `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/correction/preview` | Preview an evidence-backed proposed correction. |
 | `POST /api/analysis-corrections/confirm` | Explicitly confirm a preview token and publish the correction overlay. |
 | `POST /api/analysis-corrections/{id}/revoke` | Revoke a correction and restore the original analysis. |
@@ -148,6 +152,64 @@ Cancellation is idempotent for completed requests. A disconnected streaming
 client does not cancel the server-owned turn; it can reconnect with the same
 request ID. Server shutdown and explicit cancellation stop the background model
 context and persist a terminal cancelled outcome.
+
+## Source investigation API
+
+Source investigation is an optional Kubernetes-native extension to analysis
+chat. Set `ANALYSIS_SOURCE_INVESTIGATION_ENABLED=1` and configure
+`ai.source_investigation` in `project.yaml`. The server then advertises
+`features.source_investigation: true`. Static Pages mode never serves or
+advertises this capability.
+
+A source request starts from one completed chat request, not an arbitrary prompt.
+Post the chat request ID with a new `Idempotency-Key`:
+
+```json
+{"chat_request_id":"chat-request-123"}
+```
+
+The server binds the request to the authenticated session owner and snapshots the
+selected build, published analysis generation timestamp, chat question, and chat
+answer. It resolves `branding.source_repo` only from that build's exact
+`repo_refs` entry. The revision must be a full commit SHA. The server never falls
+back to the decorated build commit, a branch name, or current `main`. It accepts a
+bare full SHA or Prow's unambiguous `ref:fullSHA` form. Composite presubmit refs
+are rejected because they do not identify the exact merged checkout. For sessions
+created before repository refs were persisted, the server re-reads the same job
+and build while requiring the original analysis timestamp to still match.
+
+The runtime creates an Orka agent Task at the pinned revision. The Task exposes
+only OpenCode Read, Glob, and Grep tools, disables Bash and edit tools, and uses
+a workspace initializer so the read-only Git credential is not mounted into the
+agent container. The dashboard ServiceAccount receives Task-only create, get,
+patch, and delete permissions. The runtime rejects any result that contains a
+workspace diff or push branch. It never receives `BOT_TOKEN` or `FIX_TOKEN`.
+
+The agent returns a bounded finding, confidence, relationship to the published
+analysis, investigation direction, and source citations. Every citation path and
+line range is validated and its quote is checked against the same pinned GitHub
+revision before `verified: true` is persisted. Public repositories need no extra
+credential. Private repositories require a read-only token in
+`SOURCE_INVESTIGATION_GITHUB_TOKEN`; the Helm chart can reuse the AI Secret's
+`GITHUB_READ_TOKEN` key. A missing file, changed quote, unsafe path, mutable
+revision, or unavailable verification source fails the request instead of
+presenting an unverified citation.
+
+Requests share the private analysis chat state file, owner binding, rolling rate
+limit, advisory lock, expiry, and replica-safe lease behavior. They continue
+after an SSE disconnect and expose only `queued`, `cloning_source`,
+`investigating_source`, `verifying_citations`, `finalizing`, or `cancelling`
+progress. Cancellation is idempotent and deletes the active Task on timeout or
+client cancellation.
+
+Additional settings:
+
+| Environment variable | Default | Purpose |
+| --- | --- | --- |
+| `ANALYSIS_SOURCE_INVESTIGATION_ENABLED` | `false` | Advertise and serve source investigation. Requires analysis chat. |
+| `ANALYSIS_SOURCE_INVESTIGATION_MAX_PER_SESSION` | `8` | Persisted source requests per chat session. |
+| `ANALYSIS_SOURCE_INVESTIGATION_MAX_ACTIVE_PER_OWNER` | `1` | Concurrent source Tasks per login. |
+| `SOURCE_INVESTIGATION_GITHUB_TOKEN` | empty | Optional read-only token for pinned citation verification in private GitHub repositories. |
 
 ## Analysis correction overlays
 
