@@ -124,8 +124,11 @@ func scoreFixBenchmarkResult(ctx context.Context, sourceRoot string, benchmarkCa
 	verificationOK := false
 	verificationDetail := "diff did not apply"
 	if contractOK {
-		verificationDetail, err = runFixBenchmarkVerifier(ctx, repoRoot, benchmarkCase)
+		verificationDetail, err = runFixBenchmarkVerifier(ctx, sourceRoot, repoRoot, benchmarkCase)
 		verificationOK = err == nil
+		if err != nil {
+			verificationDetail = strings.TrimSpace(verificationDetail + "\n" + err.Error())
+		}
 	}
 	score.add("verification", true, verificationOK, verificationDetail)
 	return score
@@ -316,7 +319,10 @@ func fixBenchmarkCommandEnv() []string {
 	)
 }
 
-func runFixBenchmarkVerifier(ctx context.Context, repoRoot string, benchmarkCase fixBenchmarkCase) (string, error) {
+func runFixBenchmarkVerifier(ctx context.Context, sourceRoot, repoRoot string, benchmarkCase fixBenchmarkCase) (string, error) {
+	if err := validateFixBenchmarkProductionSafety(sourceRoot, repoRoot, benchmarkCase); err != nil {
+		return "", err
+	}
 	fixtureDir := filepath.Join(repoRoot, filepath.FromSlash(benchmarkCase.Dir))
 	verifierDir := filepath.Join(repoRoot, ".fix-benchmark-verifier", benchmarkCase.Name)
 	if err := os.MkdirAll(verifierDir, 0o755); err != nil {
@@ -357,6 +363,7 @@ func main() {
 		os.Exit(1)
 	}
 }
+
 `, proofToken)
 	if err := os.WriteFile(filepath.Join(verifierDir, "main.go"), []byte(mainSource), 0o600); err != nil {
 		return "", err
@@ -401,6 +408,50 @@ func main() {
 		return strings.TrimSpace(verifierOutput + "\n" + publicOutput), fmt.Errorf("candidate tests: %w", err)
 	}
 	return strings.TrimSpace(buildOutput + "\n" + verifierOutput + "\n" + publicOutput), nil
+}
+
+func validateFixBenchmarkProductionSafety(sourceRoot, repoRoot string, benchmarkCase fixBenchmarkCase) error {
+	for _, path := range benchmarkCase.RequiredFiles {
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		baseline, err := parser.ParseFile(token.NewFileSet(), filepath.Join(sourceRoot, filepath.FromSlash(path)), nil, parser.ParseComments)
+		if err != nil {
+			return fmt.Errorf("parse baseline production file %s: %w", path, err)
+		}
+		candidate, err := parser.ParseFile(token.NewFileSet(), filepath.Join(repoRoot, filepath.FromSlash(path)), nil, parser.ParseComments)
+		if err != nil {
+			return fmt.Errorf("parse candidate production file %s: %w", path, err)
+		}
+		if baseline.Name.Name != candidate.Name.Name {
+			return fmt.Errorf("candidate production file %s changed package name", path)
+		}
+		baselineImports := fixBenchmarkImportPaths(baseline)
+		candidateImports := fixBenchmarkImportPaths(candidate)
+		if !slices.Equal(baselineImports, candidateImports) {
+			return fmt.Errorf("candidate production file %s changed imports: got=%v want=%v", path, candidateImports, baselineImports)
+		}
+		for _, declaration := range candidate.Decls {
+			if fn, ok := declaration.(*ast.FuncDecl); ok && fn.Name.Name == "init" {
+				return fmt.Errorf("candidate production file %s defines init", path)
+			}
+		}
+		for _, group := range candidate.Comments {
+			if strings.Contains(group.Text(), "go:linkname") {
+				return fmt.Errorf("candidate production file %s uses go:linkname", path)
+			}
+		}
+	}
+	return nil
+}
+
+func fixBenchmarkImportPaths(file *ast.File) []string {
+	paths := make([]string, 0, len(file.Imports))
+	for _, spec := range file.Imports {
+		paths = append(paths, spec.Path.Value)
+	}
+	sort.Strings(paths)
+	return paths
 }
 
 func runFixBenchmarkRegressionTests(ctx context.Context, sourceRoot string, benchmarkCase fixBenchmarkCase, result runtimepkg.GenerateResult) (bool, string) {
