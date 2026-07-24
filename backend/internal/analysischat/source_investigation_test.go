@@ -193,13 +193,17 @@ func TestBoundedRepoRefsRetainsConfiguredSource(t *testing.T) {
 	}
 }
 
-func TestServiceSourceInvestigationExpiredLeaseClearsSubject(t *testing.T) {
+func TestServiceSourceInvestigationExpiredLeaseRetainsUnknownOutcome(t *testing.T) {
 	dir := t.TempDir()
 	service, session, chatRequestID := sourceReadyService(t, dir, &fakeSourceInvestigator{result: sourceResult()})
 	requestID := testRequestID(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	service.opts.Now = func() time.Time { return now }
 	ctx, cancel := service.store.context()
 	err := service.store.update(ctx, func(state *persistedState) (bool, error) {
-		stamp := time.Now().Add(-time.Minute)
+		stamp := now.Add(-time.Minute)
+		state.Sessions[session.ID].ExpiresAt = stamp
+		state.Sessions[session.ID].View.ExpiresAt = stamp.Format(time.RFC3339)
 		if state.Sessions[session.ID].Investigations == nil {
 			state.Sessions[session.ID].Investigations = map[string]persistedInvestigation{}
 		}
@@ -218,7 +222,8 @@ func TestServiceSourceInvestigationExpiredLeaseClearsSubject(t *testing.T) {
 		t.Fatal(err)
 	}
 	view, err := service.GetSourceInvestigation(session.ID, "Alice", requestID)
-	if err != nil || view.Status != sourceinvestigation.StatusUnknown || view.Phase != "" {
+	expectedExpiry := now.Add(service.opts.SessionTTL).Format(time.RFC3339)
+	if err != nil || view.Status != sourceinvestigation.StatusUnknown || view.Phase != "" || view.ExpiresAt != expectedExpiry {
 		t.Fatalf("expired view = %+v, %v", view, err)
 	}
 	ctx, cancel = service.store.context()

@@ -56,6 +56,29 @@ func sourceOuterResult(t *testing.T, summary string) StructuredResult {
 	}
 }
 
+func TestValidateSourceInvestigationAPI(t *testing.T) {
+	for _, raw := range []string{"http://orka:8080", "https://orka.example/api"} {
+		if err := validateSourceInvestigationAPI(raw); err != nil {
+			t.Errorf("valid API %q: %v", raw, err)
+		}
+	}
+	for _, raw := range []string{
+		"orka:8080", "ftp://orka.example", "https://user:pass@orka.example",
+		"https://orka.example?token=secret", "https://orka.example#fragment",
+	} {
+		if err := validateSourceInvestigationAPI(raw); err == nil {
+			t.Errorf("invalid API %q was accepted", raw)
+		}
+	}
+}
+
+func TestNewSourceInvestigatorFromEnvRejectsInvalidAPI(t *testing.T) {
+	_, err := NewSourceInvestigatorFromEnv(SourceInvestigationFromEnvConfig{AgentRef: "reader", API: "orka:8080"})
+	if err == nil || !strings.Contains(err.Error(), "absolute http or https URL") {
+		t.Fatalf("NewSourceInvestigatorFromEnv error = %v", err)
+	}
+}
+
 func TestSourceInvestigatorHappyPath(t *testing.T) {
 	inner, err := json.Marshal(map[string]any{
 		"version": 1, "finding": "The loop retries the same terminal error.",

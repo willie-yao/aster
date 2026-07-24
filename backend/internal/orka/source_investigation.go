@@ -91,6 +91,9 @@ func NewSourceInvestigatorFromEnv(cfg SourceInvestigationFromEnvConfig) (*Source
 	if cfg.AgentRef == "" || cfg.API == "" {
 		return nil, fmt.Errorf("source investigation requires agent_ref and api")
 	}
+	if err := validateSourceInvestigationAPI(cfg.API); err != nil {
+		return nil, err
+	}
 	rc, err := RESTConfig(cfg.KubeContext)
 	if err != nil {
 		return nil, fmt.Errorf("source investigation: kube config: %w", err)
@@ -110,6 +113,10 @@ func NewSourceInvestigatorFromEnv(cfg SourceInvestigationFromEnvConfig) (*Source
 			MaxRetries: cfg.MaxRetries, MaxTurns: cfg.MaxTurns,
 		},
 	), nil
+}
+
+func validateSourceInvestigationAPI(raw string) error {
+	return validateResultAPI(raw, "source investigation Orka result API")
 }
 
 func normalizeSourceInvestigationOptions(opts SourceInvestigationOptions) SourceInvestigationOptions {

@@ -470,6 +470,7 @@ func (s *Service) cleanup(state *persistedState, now time.Time) bool {
 			changed = true
 		}
 		activeInvestigation := false
+		retainedUnknown := false
 		for requestID, record := range current.Investigations {
 			if activeSourceInvestigation(record) && !now.Before(record.LeaseExpires) {
 				record.View.Status = sourceinvestigation.StatusUnknown
@@ -480,10 +481,17 @@ func (s *Service) cleanup(state *persistedState, now time.Time) bool {
 				record.CancelRequest = false
 				record.Subject = sourceinvestigation.Subject{}
 				current.Investigations[requestID] = record
+				retainedUnknown = true
 				changed = true
 			}
 			if activeSourceInvestigation(record) {
 				activeInvestigation = true
+			}
+		}
+		if retainedUnknown {
+			retainedUntil := now.Add(s.opts.SessionTTL)
+			if current.ExpiresAt.Before(retainedUntil) {
+				extendSessionExpiry(current, retainedUntil)
 			}
 		}
 		if !now.Before(current.ExpiresAt) && current.Active == nil && !activeInvestigation {

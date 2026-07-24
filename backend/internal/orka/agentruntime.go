@@ -375,6 +375,21 @@ type ResultClient struct {
 	http  *http.Client
 }
 
+func validateResultAPI(raw, field string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fmt.Errorf("%s is required", field)
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return fmt.Errorf("%s must be an absolute http or https URL", field)
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return fmt.Errorf("%s must not contain credentials, a query, or a fragment", field)
+	}
+	return nil
+}
+
 // NewResultClient builds an Orka result client.
 func NewResultClient(base, token string) *ResultClient {
 	return &ResultClient{base: strings.TrimRight(base, "/"), token: token, http: &http.Client{Timeout: 30 * time.Second}}
