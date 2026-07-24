@@ -385,9 +385,19 @@ export function SourceInvestigationPanel({
   }, [identity, storageKey]);
 
   useEffect(() => {
-    if (auth.status === "loading") return;
     if (auth.status !== "authenticated") {
+      const activeController = controllerRef.current;
+      const activeCancelController = cancelControllerRef.current;
+      controllerRef.current = null;
+      cancelControllerRef.current = null;
+      activeController?.abort();
+      activeCancelController?.abort();
+      setView(null);
+      setPhase("queued");
+      setBusy(false);
       setRecovering(false);
+      setCancelling(false);
+      setError(null);
       return;
     }
     const requestID = readStoredSourceRequestID(storageKey);
