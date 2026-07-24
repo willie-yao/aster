@@ -72,7 +72,7 @@ func TestServicePreviewConfirmAndRevoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if confirmed.Status != StatusActive || confirmed.Revision.RootCause != "new cause" || confirmed.CorrectedBy != "alice" {
+	if confirmed.Status != StatusActive || confirmed.Revision.RootCause != "new cause" {
 		t.Fatalf("confirmed = %+v", confirmed)
 	}
 	confirmedAgain, err := service.Confirm(preview.Token, "alice")
@@ -90,7 +90,7 @@ func TestServicePreviewConfirmAndRevoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if revoked.Status != StatusRevoked || revoked.RevokedBy != "bob" || revoked.RevokedAt == "" {
+	if revoked.Status != StatusRevoked || revoked.RevokedAt == "" {
 		t.Fatalf("revoked = %+v", revoked)
 	}
 	public = readPublicState(t, dir)

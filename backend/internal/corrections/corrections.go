@@ -34,6 +34,7 @@ const (
 	StatusRevoked      = "revoked"
 	statusSuperseded   = "superseded"
 	defaultPreviewTTL  = 15 * time.Minute
+	previewRetention   = 24 * time.Hour
 	maxPendingPreviews = 50
 	maxCorrections     = 500
 	maxPrivateBytes    = 16 << 20
@@ -76,9 +77,7 @@ type PublicCorrection struct {
 	Analysis    analysischat.AnalysisRef `json:"analysis"`
 	Revision    analysischat.Revision    `json:"revision"`
 	Citations   []analysischat.Citation  `json:"citations"`
-	CorrectedBy string                   `json:"corrected_by"`
 	CorrectedAt string                   `json:"corrected_at"`
-	RevokedBy   string                   `json:"revoked_by,omitempty"`
 	RevokedAt   string                   `json:"revoked_at,omitempty"`
 }
 
@@ -244,7 +243,7 @@ func (s *Service) Confirm(token, owner string) (PublicCorrection, error) {
 			PublicCorrection: PublicCorrection{
 				ID: id, Status: StatusActive, Analysis: preview.Candidate.Analysis,
 				Revision: preview.Candidate.Proposed, Citations: cloneCitations(preview.Candidate.Citations),
-				CorrectedBy: owner, CorrectedAt: now.Format(time.RFC3339),
+				CorrectedAt: now.Format(time.RFC3339),
 			},
 			Original: preview.Candidate.Original, SessionID: preview.Candidate.SessionID,
 			RequestID: preview.Candidate.RequestID, ProposedBy: preview.Owner,
@@ -282,7 +281,6 @@ func (s *Service) Revoke(id, owner string) (PublicCorrection, error) {
 			return false, ErrCorrectionState
 		}
 		current.Status = StatusRevoked
-		current.RevokedBy = owner
 		current.RevokedAt = now.Format(time.RFC3339)
 		current.Audit = append(current.Audit, auditEvent{Action: StatusRevoked, Actor: owner, At: current.RevokedAt})
 		out = current.PublicCorrection
@@ -318,12 +316,16 @@ func (s *Service) update(ctx context.Context, fn func(*state) (bool, error)) (bo
 	}
 	fnChanged, opErr := fn(state)
 	changed = changed || fnChanged
+	public := publicState(state)
 	if changed {
+		if err := validateJSONSize(public, maxPublicBytes); err != nil {
+			return false, ErrCorrectionLimit
+		}
 		if err := writeJSONDurable(filepath.Join(s.dataDir, FileName), state, maxPrivateBytes, 0o600); err != nil {
 			return false, err
 		}
 	}
-	if err := writeJSONDurable(filepath.Join(s.dataDir, PublicFileName), publicState(state), maxPublicBytes, 0o644); err != nil {
+	if err := writeJSONDurable(filepath.Join(s.dataDir, PublicFileName), public, maxPublicBytes, 0o644); err != nil {
 		return false, err
 	}
 	return changed, opErr
@@ -377,7 +379,13 @@ func initializeState(state *state) {
 
 func expirePreviews(state *state, now time.Time) bool {
 	changed := false
-	for _, preview := range state.Previews {
+	for token, preview := range state.Previews {
+		created, _ := time.Parse(time.RFC3339, preview.CreatedAt)
+		if preview.Status != previewPending && !created.IsZero() && !now.Before(created.Add(previewRetention)) {
+			delete(state.Previews, token)
+			changed = true
+			continue
+		}
 		if preview.Status != previewPending {
 			continue
 		}
@@ -388,6 +396,17 @@ func expirePreviews(state *state, now time.Time) bool {
 		}
 	}
 	return changed
+}
+
+func validateJSONSize(value any, maxBytes int) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	if len(data) > maxBytes {
+		return ErrCorrectionLimit
+	}
+	return nil
 }
 
 func publicState(state *state) PublicState {

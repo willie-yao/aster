@@ -43,7 +43,7 @@ import {
   streamAnalysisChatMessage,
 } from "../lib/analysisChat";
 import { fileToUrl, type FileToUrlContext } from "../lib/utils";
-import { confirmAnalysisCorrection, previewAnalysisCorrection } from "../lib/analysisCorrections";
+import { AnalysisCorrectionAPIError, confirmAnalysisCorrection, previewAnalysisCorrection } from "../lib/analysisCorrections";
 import { soft } from "../theme";
 import type {
   AnalysisChatAssessment,
@@ -382,6 +382,7 @@ export function AnalysisChat({
   const createRequestIDRef = useRef(newAnalysisChatRequestID());
   const controllerRef = useRef<AbortController | null>(null);
   const cancelControllerRef = useRef<AbortController | null>(null);
+  const correctionControllerRef = useRef<AbortController | null>(null);
   const identityRef = useRef("");
   const endRef = useRef<HTMLDivElement | null>(null);
 
@@ -403,6 +404,7 @@ export function AnalysisChat({
   useEffect(() => {
     controllerRef.current?.abort();
     cancelControllerRef.current?.abort();
+    correctionControllerRef.current?.abort();
     setExpanded(false);
     setQuestion("");
     setSession(null);
@@ -427,6 +429,7 @@ export function AnalysisChat({
   useEffect(() => () => {
     controllerRef.current?.abort();
     cancelControllerRef.current?.abort();
+    correctionControllerRef.current?.abort();
   }, []);
 
   if (!features.analysis_chat) return null;
@@ -552,31 +555,56 @@ export function AnalysisChat({
 
   async function reviewCorrection(requestID: string) {
     if (!session) return;
+    const requestIdentity = identity;
+    correctionControllerRef.current?.abort();
+    const controller = new AbortController();
+    correctionControllerRef.current = controller;
     setCorrectionBusy(true);
     setError(null);
     try {
-      const preview = await previewAnalysisCorrection(session.id, requestID);
+      const preview = await previewAnalysisCorrection(session.id, requestID, controller.signal);
+      if (identityRef.current !== requestIdentity || correctionControllerRef.current !== controller) return;
       setCorrectionPreview(preview);
       setCorrectionOpen(true);
     } catch (previewError) {
-      setError(previewError instanceof Error ? previewError.message : "Could not prepare the correction.");
+      if (previewError instanceof Error && previewError.name === "AbortError") return;
+      if (identityRef.current === requestIdentity) setError(previewError instanceof Error ? previewError.message : "Could not prepare the correction.");
     } finally {
-      setCorrectionBusy(false);
+      if (correctionControllerRef.current === controller) {
+        correctionControllerRef.current = null;
+        if (identityRef.current === requestIdentity) setCorrectionBusy(false);
+      }
     }
   }
 
   async function publishCorrection() {
     if (!correctionPreview) return;
+    const requestIdentity = identity;
+    correctionControllerRef.current?.abort();
+    const controller = new AbortController();
+    correctionControllerRef.current = controller;
     setCorrectionBusy(true);
     try {
-      await confirmAnalysisCorrection(correctionPreview.token);
+      await confirmAnalysisCorrection(correctionPreview.token, controller.signal);
+      if (identityRef.current !== requestIdentity) return;
       setCorrectionOpen(false);
       setCorrectionPreview(null);
       onCorrectionChanged?.();
     } catch (confirmError) {
-      setError(confirmError instanceof Error ? confirmError.message : "Could not publish the correction.");
+      if (confirmError instanceof Error && confirmError.name === "AbortError") return;
+      if (identityRef.current !== requestIdentity) return;
+      if (!(confirmError instanceof AnalysisCorrectionAPIError)) {
+        setCorrectionOpen(false);
+        setCorrectionPreview(null);
+        onCorrectionChanged?.();
+      } else {
+        setError(confirmError.message);
+      }
     } finally {
-      setCorrectionBusy(false);
+      if (correctionControllerRef.current === controller) {
+        correctionControllerRef.current = null;
+        if (identityRef.current === requestIdentity) setCorrectionBusy(false);
+      }
     }
   }
 

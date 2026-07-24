@@ -149,6 +149,7 @@ func TestWriteAnalysisCorrectionErrorMapping(t *testing.T) {
 		{corrections.ErrPreviewExpired, http.StatusConflict},
 		{corrections.ErrCorrectionState, http.StatusConflict},
 		{analysischat.ErrAnalysisChanged, http.StatusConflict},
+		{analysischat.ErrAnalysisNotFound, http.StatusNotFound},
 		{analysischat.ErrInvalidRequest, http.StatusBadRequest},
 		{corrections.ErrCorrectionLimit, http.StatusTooManyRequests},
 		{errors.New("private provider body"), http.StatusInternalServerError},

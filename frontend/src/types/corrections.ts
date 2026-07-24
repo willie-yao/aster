@@ -17,9 +17,7 @@ export interface AnalysisCorrection {
   analysis: AnalysisChatReference;
   revision: AnalysisChatRevision;
   citations: AnalysisChatCitation[];
-  corrected_by: string;
   corrected_at: string;
-  revoked_by?: string;
   revoked_at?: string;
 }
 

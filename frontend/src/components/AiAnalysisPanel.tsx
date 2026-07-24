@@ -1,4 +1,5 @@
 import { useState } from "react";
+import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Chip from "@mui/material/Chip";
@@ -46,6 +47,7 @@ export function AiAnalysisPanel({
   const auth = useAuth();
   const [showOriginal, setShowOriginal] = useState(false);
   const [revokeBusy, setRevokeBusy] = useState(false);
+  const [correctionError, setCorrectionError] = useState<string | null>(null);
   const correction = chatRef ? findAnalysisCorrection(corrections, chatRef) : undefined;
   const correctionStale = Boolean(
     correction?.status === "active" && correction.analysis.analysis_generated_at !== chatRef?.analysis_generated_at,
@@ -59,10 +61,13 @@ export function AiAnalysisPanel({
   async function revokeCorrection() {
     if (!correction || revokeBusy) return;
     setRevokeBusy(true);
+    setCorrectionError(null);
     try {
       await revokeAnalysisCorrection(correction.id);
-      refetch();
+    } catch (error) {
+      setCorrectionError(error instanceof Error ? error.message : "Could not revoke the correction.");
     } finally {
+      refetch();
       setRevokeBusy(false);
     }
   }
@@ -109,13 +114,14 @@ export function AiAnalysisPanel({
           )}
         </Stack>
 
+        {correctionError && <Alert severity="error" variant="outlined">{correctionError}</Alert>}
         {correction && (
           <Box sx={{ border: "1px solid", borderColor: correctionActive ? "success.main" : "divider", borderRadius: "10px", p: 1.25, bgcolor: (theme) => soft(theme, correctionActive ? "success" : "primary", 0.045) }}>
             <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap" }}>
               <PublishedWithChangesOutlined sx={{ fontSize: 18, color: correctionActive ? "success.main" : "text.secondary" }} />
               <Typography variant="body2" sx={{ fontWeight: 650 }}>
                 {correctionActive
-                  ? `Correction confirmed by ${correction.corrected_by}`
+                  ? "Maintainer correction confirmed"
                   : correctionStale
                     ? "This correction targets an older generated analysis and is not applied."
                     : "This correction was revoked and the original analysis is restored."}

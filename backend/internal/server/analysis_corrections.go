@@ -78,7 +78,8 @@ func writeAnalysisCorrectionError(w http.ResponseWriter, id, login string, err e
 	message := "analysis correction request failed"
 	switch {
 	case errors.Is(err, corrections.ErrPreviewNotFound), errors.Is(err, corrections.ErrCorrectionNotFound),
-		errors.Is(err, analysischat.ErrSessionNotFound), errors.Is(err, analysischat.ErrRequestNotFound):
+		errors.Is(err, analysischat.ErrSessionNotFound), errors.Is(err, analysischat.ErrRequestNotFound),
+		errors.Is(err, analysischat.ErrAnalysisNotFound):
 		status, message = http.StatusNotFound, "analysis correction not found"
 	case errors.Is(err, corrections.ErrPreviewExpired), errors.Is(err, corrections.ErrCorrectionState),
 		errors.Is(err, analysischat.ErrAnalysisChanged):
