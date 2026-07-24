@@ -1,4 +1,4 @@
-.PHONY: all build build-server build-worker serve dev-actions image fixer-image test test-v e2e lint fmt tidy helm-check \
+.PHONY: all build build-server build-worker serve dev-actions image analyzer-image fixer-image test test-v e2e lint fmt tidy helm-check \
        fetch-data fetch-data-quick fetch-data-ai fetch-data-ai-quick \
        fe-install dev fe-build fe-check fe-lint \
        dist dist-ai clean clean-cache clean-all help
@@ -52,6 +52,10 @@ dev-actions: build-server fe-build
 #   make image IMAGE=ghcr.io/you/prow-ai-dashboard VERSION=v1.2.3
 image:
 	docker build --build-arg VERSION=$(VERSION) -t $(IMAGE):$(VERSION) .
+
+# Build the one-shot analyzer image used by experimental Orka container Tasks.
+analyzer-image:
+	docker build -f deploy/analyzer.Dockerfile -t $(IMAGE)/analyzer:$(VERSION) .
 
 # Build the drop-in engine image with git for fix generation.
 fixer-image:
@@ -182,6 +186,7 @@ help:
 	@echo "  dist               Full pipeline: build + fetch + frontend"
 	@echo "  dist-ai            Full pipeline with AI analysis"
 	@echo "  image              Build the container image (fetcher + server + SPA)"
+	@echo "  analyzer-image     Build the one-shot Orka container analyzer image"
 	@echo "  fixer-image        Build the git-capable drop-in Orka fix image"
 	@echo "  clean              Remove build artifacts and data"
 	@echo "  clean-cache        Clear AI analysis cache"

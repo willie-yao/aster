@@ -46,10 +46,10 @@ The recommended portfolio is:
   experimental option for repeated evaluation, lifecycle demonstrations, and
   manager-facing prototypes.
 
-The supported main branch currently ships the in-process analyzer and Orka fix
-runtime, not the container adapter. The container option can be kept reproducible
-through a named evaluation branch or tag without making it a supported product
-mode.
+The supported main branch ships the in-process analyzer, the independent Orka
+fix runtime, and an explicitly experimental Helm `orka-container` option. The
+container selector is off by default, cron-only, Kubernetes-only, and carries no
+backward compatibility guarantee.
 
 This is not a conclusion that Orka is generally unsuitable. Orka did not provide
 enough additional value to become the supported failure-analysis runtime, but
@@ -332,15 +332,15 @@ the Task still overrode it with `/app`. Every container Task failed before model
 execution. Unit and shell tests passed; the live kind run found the mismatch.
 
 The issue was fixed by allowing the image entrypoint to own the command, but the
-incident demonstrated the ongoing integration cost of a path that was not a
-supported product mode.
+incident demonstrated the ongoing integration cost of a path that must remain
+experimental and separately validated.
 
 ### Assessment
 
 The container version was much better designed than the patched worker. It was
 also a sidegrade from in-process analysis rather than a clear product
-improvement. It should not replace the in-process analyzer or become a supported
-Helm mode today.
+improvement. It should not replace the in-process analyzer or become a
+recommended production mode.
 
 It is still useful to keep the containerized design available as an experimental
 option:
@@ -353,8 +353,8 @@ option:
 - It gives the project a controlled comparison target for new models or Orka
   lifecycle capabilities.
 
-Keeping the option should not imply production support. It should remain off by
-default, outside the supported Helm configuration, and free of compatibility
+Keeping the option does not imply production support. It remains off by default
+inside the Helm chart, supports only `mode: cron`, and is free of compatibility
 promises. New analysis policy must continue to land in the dashboard-owned
 `FailureAnalyzer`, not in the container adapter.
 
@@ -382,8 +382,8 @@ analyzer:
 - Private content-free traces
 - Cache acceptance tied to current quality floors and skill hashes
 
-These improvements benefit both Pages and Kubernetes deployments without
-requiring a second runtime.
+These improvements remain canonical for Pages and both Kubernetes execution
+placements because the container adapter calls the same implementation.
 
 ## Where Orka still fits
 
@@ -404,33 +404,32 @@ clean lifecycle boundary without making Orka the policy owner.
 
 ## Current repository state and evaluation option
 
-The supported main branch no longer ships the container adapter. The last
-working mainline prototype, including the analyzer-entrypoint fix, is preserved
-in Git history at commit `a34e2ae` and in the benchmark and pull-request history.
+The container adapter is available through Helm only when
+`analysisRuntime.type: orka-container` and `mode: cron` are selected. It uses a
+dedicated analyzer image, Task-only RBAC, immutable request bundles, framed
+results, and encrypted raw cache and trace state. The cache transport preserves
+new fields such as `evidence_plan_covered` without manually enumerating the
+private cache schema. Orka Task identity stays in the encrypted wrapper and Task
+resource rather than expanding the private analysis trace schema.
 
-If the team wants the containerized Orka option readily demonstrable, keep a
-named evaluation branch or tag based on that working prototype. Treat it as a
-reproducible lab rather than a product mode:
+The isolated kind harness remains the reproducible evaluation path:
 
-- Run it only in isolated kind or evaluation namespaces.
-- Schedule analyzer and helper workloads on CPU nodes.
+- Run it only in an invocation-owned kind cluster or evaluation namespace.
+- Schedule the analyzer, Orka controller, and helpers on CPU nodes.
 - Reserve GPU nodes for model serving.
-- Do not add new user-facing configuration or compatibility guarantees.
-- Do not let experimental transport changes block in-process improvements.
+- Use the current benchmark scorer and report unique successful filesystem and
+  Kubernetes Tool names for each trial.
 - Use repeated cold trials rather than a favorable single run.
-- Require a concrete lifecycle or operator benefit before proposing
-  productization.
-
-This gives the team something tangible to evaluate and show without restoring
-the patched worker or committing to a second supported runtime.
+- Require a concrete lifecycle or operator benefit before recommending the
+  runtime for production.
 
 ## Recommendation
 
-1. Keep the in-process analyzer as the only supported failure-analysis runtime.
+1. Keep the in-process analyzer as the default and only recommended production runtime.
 2. Keep analysis policy in dashboard-owned Go code.
 3. Permanently avoid worker patches for dashboard-specific model-loop policy.
-4. Keep the containerized Orka design available as an explicitly experimental
-   evaluation and manager-demo option.
+4. Keep the Helm containerized Orka option explicitly experimental, cron-only,
+   and free of compatibility guarantees.
 5. Retain Orka for `ai.fix_prs.agent_runtime.type: orka` fix generation.
 6. Continue improving model quality with repeated benchmarks rather than
    single-run comparisons.

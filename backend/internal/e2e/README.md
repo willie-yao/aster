@@ -9,7 +9,9 @@ failures as prompts, tools, and the harness change. It is separate from
 For each case in `benchCases`, the benchmark runs `ai.Service` with the
 filesystem and Kubernetes tools against a real build's artifact tree. It checks
 the model output against `must` and `nice` signal regexes. A missed `must` signal
-fails the test.
+fails the test. Each trial also reports the unique successful filesystem and
+Kubernetes Tool names and their call counts from the current private trace
+format. The Orka container test uses the same scorer and Tool-use reporting.
 
 ## Running it
 

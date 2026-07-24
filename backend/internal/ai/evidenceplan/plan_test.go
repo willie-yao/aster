@@ -1,6 +1,7 @@
 package evidenceplan
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -59,5 +60,25 @@ func TestFailureSignalIsBoundedAndInstructionFree(t *testing.T) {
 		if strings.Contains(signal, forbidden) {
 			t.Errorf("failure signal contains backend instruction %q: %s", forbidden, signal)
 		}
+	}
+}
+
+func TestCanonicalTestCaseBoundsFailureAndDropsPriorAI(t *testing.T) {
+	tc := models.TestCase{
+		Name: "Test A", Status: "failed",
+		FailureMessage: strings.Repeat("message", 10_000),
+		FailureBody:    strings.Repeat("body", 30_000),
+		AISummary:      &models.AISummary{Summary: "old"},
+		AIAnalysis:     &models.AIAnalysis{RootCause: "old"},
+	}
+	got := CanonicalTestCase(tc)
+	if len(got.FailureMessage) > FailureMessageBytes || len(got.FailureBody) > FailureBodyBytes {
+		t.Fatalf("sizes = message:%d body:%d", len(got.FailureMessage), len(got.FailureBody))
+	}
+	if got.AISummary != nil || got.AIAnalysis != nil {
+		t.Fatalf("prior AI output retained: %+v", got)
+	}
+	if twice := CanonicalTestCase(got); !reflect.DeepEqual(twice, got) {
+		t.Fatalf("canonicalization is not idempotent: first=%+v second=%+v", got, twice)
 	}
 }

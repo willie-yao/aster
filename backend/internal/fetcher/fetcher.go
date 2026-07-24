@@ -14,6 +14,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -29,6 +30,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/junit"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/notify"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/patterns"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
@@ -44,12 +46,43 @@ import (
 
 // Options is the parsed invocation for a single fetcher run.
 // cmd/fetcher constructs it from flags before Run.
+const (
+	AnalysisRuntimeInProcess     = "inprocess"
+	AnalysisRuntimeOrkaContainer = "orka-container"
+)
+
+// OrkaContainerAnalysisOptions configure the experimental Helm analysis runtime.
+type OrkaContainerAnalysisOptions struct {
+	Namespace           string
+	ResultAPI           string
+	Image               string
+	ModelSecretName     string
+	ModelTokenKey       string
+	StateSecretName     string
+	StateSecretKey      string
+	MaxConcurrent       int
+	PollInterval        time.Duration
+	TaskTimeout         time.Duration
+	Retries             int
+	ContextWindowTokens int
+	NodeSelector        map[string]string
+	Tolerations         []map[string]any
+	Affinity            map[string]any
+}
+
+// AnalysisRuntimeOptions select where single-failure analysis runs.
+type AnalysisRuntimeOptions struct {
+	Type          string
+	OrkaContainer OrkaContainerAnalysisOptions
+}
+
 type Options struct {
-	ProjectDir   string
-	OutDir       string
-	BuildsPerJob int
-	Workers      int
-	Timeout      time.Duration
+	ProjectDir      string
+	OutDir          string
+	BuildsPerJob    int
+	Workers         int
+	Timeout         time.Duration
+	AnalysisRuntime AnalysisRuntimeOptions
 	// IncludePresubmits fetches presubmit jobs in addition to periodics.
 	// It is combined with cfg.Source.IncludePresubmits, so either source can
 	// enable presubmits.
@@ -59,6 +92,12 @@ type Options struct {
 	SkipSideEffects bool
 	// Version is the engine version embedded at build time, logged at startup.
 	Version string
+}
+
+type containerFailureAnalyzer interface {
+	ai.FailureAnalyzer
+	Maintain(context.Context) error
+	StateStore() *analysisruntime.ContainerStateStore
 }
 
 // pipeline holds the resolved, reusable state for a run: config, storage, and
@@ -75,6 +114,7 @@ type pipeline struct {
 	includePresubmits bool
 	jobCatalog        *jobconfig.Catalog
 	aiRuntime         *analysisruntime.Runtime
+	containerAnalyzer containerFailureAnalyzer
 }
 
 // refreshResult carries the outputs a pass needs for its side effects.
@@ -100,6 +140,12 @@ func Run(ctx context.Context, opts Options) error {
 
 // setupPipeline loads config and resolves storage and AI settings.
 func setupPipeline(opts Options) (*pipeline, error) {
+	if opts.AnalysisRuntime.Type == "" {
+		opts.AnalysisRuntime.Type = AnalysisRuntimeInProcess
+	}
+	if err := validateAnalysisRuntimeOptions(opts); err != nil {
+		return nil, err
+	}
 	cfg, err := project.Load(filepath.Join(opts.ProjectDir, "project.yaml"))
 	if err != nil {
 		return nil, fmt.Errorf("loading project config: %w", err)
@@ -114,16 +160,55 @@ func setupPipeline(opts Options) (*pipeline, error) {
 	enableAI := opts.EnableAI
 	aiToken := os.Getenv("AI_TOKEN")
 	if enableAI && aiToken == "" {
+		if opts.AnalysisRuntime.Type == AnalysisRuntimeOrkaContainer {
+			return nil, fmt.Errorf("orka-container analysis requires AI_TOKEN for the in-process cross-build pattern pass")
+		}
 		log.Println("Warning: -ai enabled but AI_TOKEN is not set, disabling AI analysis")
 		enableAI = false
 	}
 	var aiProject *analysisruntime.Project
 	if enableAI {
-		aiProject, err = analysisruntime.LoadProject(opts.ProjectDir, cfg, analysisruntime.ProviderFallbacks{
+		fallbacks := analysisruntime.ProviderFallbacks{
 			API: os.Getenv("AI_API"), Endpoint: os.Getenv("AI_ENDPOINT"), Model: os.Getenv("AI_MODEL"),
-		})
+		}
+		aiProject, err = analysisruntime.LoadProject(opts.ProjectDir, cfg, fallbacks)
 		if err != nil {
 			return nil, err
+		}
+		if opts.AnalysisRuntime.Type == AnalysisRuntimeOrkaContainer {
+			api := strings.ToLower(strings.TrimSpace(fallbacks.API))
+			if api == "" {
+				api = project.AIAPIChatCompletions
+			}
+			if strings.TrimSpace(fallbacks.Endpoint) == "" || strings.TrimSpace(fallbacks.Model) == "" {
+				return nil, fmt.Errorf("orka-container analysis requires AI_ENDPOINT and AI_MODEL from Helm ai settings")
+			}
+			if err := project.ValidateAIAPI(api); err != nil {
+				return nil, err
+			}
+			aiProject.Provider = project.AIProvider{API: api, Endpoint: fallbacks.Endpoint, Model: fallbacks.Model}
+			if cfg.AI != nil && len(cfg.AI.Headers) > 0 {
+				return nil, fmt.Errorf("orka-container analysis does not transport ai.headers; use bearer-token modelAuth or a trusted proxy")
+			}
+			stateKey, _ := analysisruntime.ParseContainerStateKey(os.Getenv(analysisruntime.ContainerStateKeyEnv))
+			contextWindowTokens, _, err := ai.ParseContextWindowTokens(os.Getenv("AI_CONTEXT_WINDOW_TOKENS"))
+			if err != nil {
+				return nil, err
+			}
+			opts.AnalysisRuntime.OrkaContainer.ContextWindowTokens = contextWindowTokens
+			container := opts.AnalysisRuntime.OrkaContainer
+			if err := orka.ValidateContainerAnalyzerOptions(orka.ContainerAnalyzerOptions{
+				Namespace: container.Namespace, OrkaAPI: container.ResultAPI, Image: container.Image, ProjectDir: opts.ProjectDir, DataDir: opts.OutDir,
+				API: aiProject.Provider.API, Endpoint: aiProject.Provider.Endpoint, Model: aiProject.Provider.Model,
+				ModelSecretName: container.ModelSecretName, ModelTokenKey: container.ModelTokenKey,
+				StateSecretName: container.StateSecretName, StateSecretKey: container.StateSecretKey, StateKey: stateKey,
+				ContextWindowTokens: container.ContextWindowTokens,
+				AnalysisTimeout:     cfg.AI.EffectiveAgentic().Timeout,
+				TaskTimeout:         container.TaskTimeout, PollInterval: container.PollInterval, MaxRetries: container.Retries,
+				MaxConcurrentTasks: container.MaxConcurrent, NodeSelector: container.NodeSelector, Tolerations: container.Tolerations, Affinity: container.Affinity,
+			}); err != nil {
+				return nil, fmt.Errorf("orka-container analysis: %w", err)
+			}
 		}
 		log.Printf("Loaded %d AI skill recipe(s) (profiles=%s, hash=%s)",
 			len(aiProject.SkillSet.Skills()), aiProject.ProfileSelection.String(), analysisruntime.ShortHash(aiProject.SkillSet.Hash()))
@@ -150,23 +235,89 @@ func setupPipeline(opts Options) (*pipeline, error) {
 // fullPass runs discovery, a data refresh, and side effects under the run
 // timeout. It returns the discovered jobs so callers can reuse them.
 func (p *pipeline) fullPass(ctx context.Context) ([]models.ProwJob, error) {
-	ctx, cancel := context.WithTimeout(ctx, p.opts.Timeout)
+	fetchCtx, cancel := context.WithTimeout(ctx, p.opts.Timeout)
 	defer cancel()
 
-	jobs, err := p.discover(ctx)
+	jobs, err := p.discover(fetchCtx)
 	if err != nil {
 		return nil, err
 	}
-	res, err := p.refresh(ctx, jobs)
+	analysisCtx, sideEffectCtx := passExecutionContexts(ctx, fetchCtx, p.opts.AnalysisRuntime.Type)
+	res, err := p.refreshWithAnalysisContext(fetchCtx, analysisCtx, jobs)
 	if err != nil {
 		return nil, err
 	}
 	if !p.opts.SkipSideEffects {
-		if err := p.runSideEffects(ctx, res); err != nil {
+		if err := p.runSideEffects(sideEffectCtx, res); err != nil {
 			return nil, err
 		}
 	}
 	return jobs, nil
+}
+
+func passExecutionContexts(root, bounded context.Context, runtimeType string) (context.Context, context.Context) {
+	if runtimeType == AnalysisRuntimeOrkaContainer {
+		return root, root
+	}
+	return bounded, bounded
+}
+
+func validateAnalysisRuntimeOptions(opts Options) error {
+	switch opts.AnalysisRuntime.Type {
+	case AnalysisRuntimeInProcess:
+		return nil
+	case AnalysisRuntimeOrkaContainer:
+		if !opts.EnableAI {
+			return fmt.Errorf("orka-container analysis requires -ai")
+		}
+		cfg := opts.AnalysisRuntime.OrkaContainer
+		switch {
+		case strings.TrimSpace(cfg.Namespace) == "":
+			return fmt.Errorf("orka-container analysis namespace is required")
+		case strings.TrimSpace(cfg.ResultAPI) == "":
+			return fmt.Errorf("orka-container result API is required")
+		case strings.TrimSpace(cfg.Image) == "":
+			return fmt.Errorf("orka-container analyzer image is required")
+		case strings.TrimSpace(cfg.ModelSecretName) == "":
+			return fmt.Errorf("orka-container model Secret is required")
+		case strings.TrimSpace(cfg.ModelTokenKey) == "":
+			return fmt.Errorf("orka-container model token key is required")
+		case strings.TrimSpace(cfg.StateSecretName) == "":
+			return fmt.Errorf("orka-container state Secret is required")
+		case strings.TrimSpace(cfg.StateSecretKey) == "":
+			return fmt.Errorf("orka-container state key is required")
+		case cfg.MaxConcurrent < 1:
+			return fmt.Errorf("orka-container max concurrent Tasks must be positive")
+		case cfg.PollInterval <= 0:
+			return fmt.Errorf("orka-container poll interval must be positive")
+		case cfg.PollInterval >= 30*time.Second:
+			return fmt.Errorf("orka-container poll interval must be less than 30s")
+		case cfg.TaskTimeout <= 0:
+			return fmt.Errorf("orka-container task timeout must be positive")
+		case cfg.Retries < 0:
+			return fmt.Errorf("orka-container retries must not be negative")
+		}
+		if _, err := analysisruntime.ParseContainerStateKey(os.Getenv(analysisruntime.ContainerStateKeyEnv)); err != nil {
+			return fmt.Errorf("orka-container state key: %w", err)
+		}
+		placement, err := json.Marshal(struct {
+			NodeSelector map[string]string `json:"nodeSelector"`
+			Tolerations  []map[string]any  `json:"tolerations"`
+			Affinity     map[string]any    `json:"affinity"`
+		}{cfg.NodeSelector, cfg.Tolerations, cfg.Affinity})
+		if err != nil {
+			return fmt.Errorf("orka-container placement: %w", err)
+		}
+		if strings.TrimSpace(cfg.NodeSelector["agentpool"]) == "" {
+			return fmt.Errorf("orka-container placement requires an explicit agentpool CPU selector")
+		}
+		if regexp.MustCompile(`(?i)(accelerator|nvidia|tesla|radeon|(^|[^a-z0-9])(gpu|a10|a100|h100|v100|p100|t4|l4|mi250|mi300)([^a-z0-9]|$))`).Match(placement) {
+			return fmt.Errorf("orka-container placement must not select or tolerate GPU nodes")
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported analysis runtime %q", opts.AnalysisRuntime.Type)
+	}
 }
 
 // discover lists the project's jobs from test-infra or the artifact bucket.
@@ -215,6 +366,10 @@ func (p *pipeline) discover(ctx context.Context) ([]models.ProwJob, error) {
 // the output JSON. Completed builds are reused from the on-disk cache, so
 // repeated passes only fetch new or still-running builds.
 func (p *pipeline) refresh(ctx context.Context, jobs []models.ProwJob) (*refreshResult, error) {
+	return p.refreshWithAnalysisContext(ctx, ctx, jobs)
+}
+
+func (p *pipeline) refreshWithAnalysisContext(fetchCtx, analysisCtx context.Context, jobs []models.ProwJob) (*refreshResult, error) {
 	cfg, opts := p.cfg, p.opts
 	if err := clearAnalysisTrace(opts.OutDir); err != nil {
 		log.Printf("Warning: failed to clear stale AI traces: %v", err)
@@ -241,7 +396,7 @@ func (p *pipeline) refresh(ctx context.Context, jobs []models.ProwJob) (*refresh
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			runs, err := fetchJobRunsCached(ctx, p.backend, cfg, &j, opts.BuildsPerJob, cachedJobs[j.JobID])
+			runs, err := fetchJobRunsCached(fetchCtx, p.backend, cfg, &j, opts.BuildsPerJob, cachedJobs[j.JobID])
 			if err != nil {
 				mu.Lock()
 				fetchErrors = append(fetchErrors, fmt.Errorf("job %s: %w", j.Name, err))
@@ -299,7 +454,9 @@ func (p *pipeline) refresh(ctx context.Context, jobs []models.ProwJob) (*refresh
 	log.Printf("Search index: %d entries", len(searchIndex.Entries))
 
 	if p.enableAI {
-		p.analyzeFailuresWithAI(ctx, details, flakinessReport)
+		if err := p.analyzeFailuresWithAI(analysisCtx, details, flakinessReport); err != nil {
+			return nil, err
+		}
 		patterns.AssignIDs(details)
 		// Fold systemic job-level verdicts into flakiness.json for the home page.
 		flakinessReport.RecurringPatterns = collectRecurringPatterns(details)
@@ -440,6 +597,9 @@ func (p *pipeline) runSideEffects(ctx context.Context, res *refreshResult) error
 func RunWatch(ctx context.Context, opts Options, watchInterval, reconcileInterval time.Duration) error {
 	if watchInterval <= 0 || reconcileInterval <= 0 {
 		return fmt.Errorf("watch and reconcile intervals must be positive (got watch=%s reconcile=%s)", watchInterval, reconcileInterval)
+	}
+	if opts.AnalysisRuntime.Type == AnalysisRuntimeOrkaContainer {
+		return fmt.Errorf("orka-container analysis does not support watch mode")
 	}
 	p, err := setupPipeline(opts)
 	if err != nil {

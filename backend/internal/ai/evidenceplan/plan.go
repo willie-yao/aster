@@ -27,6 +27,15 @@ type ScanStatus struct {
 	Unavailable bool
 }
 
+// CanonicalTestCase returns the bounded failure identity used by prompts and external execution transports.
+func CanonicalTestCase(tc models.TestCase) models.TestCase {
+	tc.FailureMessage = canonicalFailureMessage(tc.FailureMessage)
+	tc.FailureBody = boundedFailureBody(tc.FailureBody)
+	tc.AISummary = nil
+	tc.AIAnalysis = nil
+	return tc
+}
+
 // FailureSignal renders only bounded test-failure evidence for recipe matching.
 func FailureSignal(tc models.TestCase) string {
 	var b strings.Builder
@@ -124,6 +133,20 @@ var inProcessRenderText = renderText{
 	intro:            "The dashboard matched these diagnostic recipes from the failure signal. Before broad searches, read at least one candidate path from every listed evidence group with read_artifact, tail_artifact, or grep_artifact. If the diagnosis changes or a group has no candidate, continue investigating with the normal artifact tools.",
 	missingCandidate: "  Candidate paths: none found in the bounded tree; use list_artifacts or find_artifacts on the relevant subtree.\n",
 	omitted:          "\n... [additional matched evidence plans omitted by prompt budget; use the normal artifact tools to investigate unresolved groups from the original failure signal]\n",
+}
+
+func canonicalFailureMessage(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) <= FailureMessageBytes {
+		return value
+	}
+	const marker = "\n... [failure message truncated; read the JUnit artifact for the complete failure] ...\n"
+	contentBytes := FailureMessageBytes - len(marker)
+	headBytes := contentBytes * 3 / 4
+	tailBytes := contentBytes - headBytes
+	head := strings.ToValidUTF8(value[:headBytes], "")
+	tail := strings.ToValidUTF8(value[len(value)-tailBytes:], "")
+	return head + marker + tail
 }
 
 func boundedFailureBody(value string) string {

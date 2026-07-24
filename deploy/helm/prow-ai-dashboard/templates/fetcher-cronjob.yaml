@@ -1,9 +1,12 @@
+{{- include "prow-ai-dashboard.validateAnalysisRuntime" . -}}
 {{- include "prow-ai-dashboard.validateAI" . -}}
 {{- if not (or (eq .Values.mode "cron") (eq .Values.mode "watch")) }}
 {{- fail (printf "mode must be \"cron\" or \"watch\", got %q" .Values.mode) }}
 {{- end }}
 {{- if eq .Values.mode "cron" }}
-{{- $restartPolicy := .Values.fetcher.restartPolicy | default "OnFailure" }}
+{{- $containerAnalysis := eq .Values.analysisRuntime.type "orka-container" }}
+{{- $defaultRestartPolicy := ternary "Never" "OnFailure" $containerAnalysis }}
+{{- $restartPolicy := .Values.fetcher.restartPolicy | default $defaultRestartPolicy }}
 {{- if not (or (eq $restartPolicy "Never") (eq $restartPolicy "OnFailure")) }}
   {{- fail "fetcher.restartPolicy must be Never or OnFailure" }}
 {{- end }}
@@ -35,8 +38,8 @@ spec:
   failedJobsHistoryLimit: {{ .Values.fetcher.failedJobsHistoryLimit }}
   jobTemplate:
     spec:
-      {{- if ge $backoffLimit 0 }}
-      backoffLimit: {{ $backoffLimit }}
+      {{- if or (ge $backoffLimit 0) $containerAnalysis }}
+      backoffLimit: {{ if ge $backoffLimit 0 }}{{ $backoffLimit }}{{ else }}0{{ end }}
       {{- end }}
       {{- if gt $activeDeadlineSeconds 0 }}
       activeDeadlineSeconds: {{ $activeDeadlineSeconds }}
@@ -48,7 +51,7 @@ spec:
             app.kubernetes.io/component: fetcher
         spec:
           restartPolicy: {{ $restartPolicy }}
-          {{- if .Values.orka.fixRuntime.enabled }}
+          {{- if or .Values.orka.fixRuntime.enabled $containerAnalysis }}
           serviceAccountName: {{ include "prow-ai-dashboard.orkaServiceAccountName" . }}
           automountServiceAccountToken: true
           {{- else }}
@@ -82,6 +85,23 @@ spec:
                 {{- if .Values.ai.enabled }}
                 - -ai
                 {{- end }}
+                {{- if $containerAnalysis }}
+                - -analysis-runtime=orka-container
+                - -orka-analysis-namespace={{ include "prow-ai-dashboard.orkaAnalysisNamespace" . }}
+                - -orka-analysis-api={{ .Values.analysisRuntime.orkaContainer.api }}
+                - -orka-analysis-image={{ include "prow-ai-dashboard.analyzerImage" . }}
+                - -orka-analysis-model-secret={{ .Values.analysisRuntime.orkaContainer.modelAuth.existingSecret }}
+                - -orka-analysis-model-token-key={{ .Values.analysisRuntime.orkaContainer.modelAuth.tokenKey }}
+                - -orka-analysis-state-secret={{ include "prow-ai-dashboard.orkaAnalysisStateSecret" . }}
+                - -orka-analysis-state-key={{ .Values.analysisRuntime.orkaContainer.state.key }}
+                - -orka-analysis-max-concurrent-tasks={{ .Values.analysisRuntime.orkaContainer.maxConcurrentTasks }}
+                - -orka-analysis-poll-interval={{ .Values.analysisRuntime.orkaContainer.pollInterval }}
+                - -orka-analysis-task-timeout={{ .Values.analysisRuntime.orkaContainer.taskTimeout }}
+                - -orka-analysis-retries={{ .Values.analysisRuntime.orkaContainer.retries }}
+                - {{ printf "-orka-analysis-node-selector-json=%s" (toJson .Values.analysisRuntime.orkaContainer.nodeSelector) | quote }}
+                - {{ printf "-orka-analysis-tolerations-json=%s" (toJson .Values.analysisRuntime.orkaContainer.tolerations) | quote }}
+                - {{ printf "-orka-analysis-affinity-json=%s" (toJson .Values.analysisRuntime.orkaContainer.affinity) | quote }}
+                {{- end }}
               env:
                 {{- if .Values.ai.enabled }}
                 - name: AI_TOKEN
@@ -111,6 +131,18 @@ spec:
                       key: {{ .Values.ai.githubReadTokenSecretKey }}
                       optional: true
                 {{- end }}
+                {{- end }}
+                {{- if $containerAnalysis }}
+                - name: PROW_AI_STATE_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "prow-ai-dashboard.orkaAnalysisStateSecret" . }}
+                      key: {{ .Values.analysisRuntime.orkaContainer.state.key }}
+                - name: ORKA_API_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.analysisRuntime.orkaContainer.apiAuth.existingSecret }}
+                      key: {{ .Values.analysisRuntime.orkaContainer.apiAuth.tokenKey }}
                 {{- end }}
                 {{- with .Values.fetcher.extraEnv }}
                 {{- toYaml . | nindent 16 }}

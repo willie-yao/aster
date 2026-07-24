@@ -1,3 +1,4 @@
+{{- include "prow-ai-dashboard.validateAnalysisRuntime" . -}}
 {{- if not .Values.project.existingConfigMap }}
 {{- if not .Values.project.config }}
 {{- fail "project.config is required: pass --set-file project.config=project.yaml or set project.existingConfigMap" }}

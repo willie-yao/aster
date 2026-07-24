@@ -24,8 +24,56 @@ fullnameOverride: ""
 # release at the same existingClaim.
 mode: watch
 
-# Orka is optional and used only for fix generation. Failure analysis always
-# runs through the dashboard-owned in-process analyzer.
+# Failure analysis runs in-process by default. The Orka container runtime is an
+# experimental Helm-only cron option. It is a lifecycle sidegrade, not the
+# recommended production mode, and has no backward compatibility guarantee.
+analysisRuntime:
+  type: inprocess
+  orkaContainer:
+    # Leave empty to create a retained release-scoped namespace for analyzer
+    # Tasks and only their model/state Secrets. Custom names must end in the
+    # release scope hash rendered by the chart.
+    namespace: ""
+    # Orka REST API used to retrieve durable Task results. Set this to the
+    # Service name of the installed Orka release.
+    api: http://orka.orka-system.svc.cluster.local:8080
+    # Token accepted by the Orka result API for this analysis namespace. The
+    # Secret lives in the dashboard release namespace.
+    apiAuth:
+      existingSecret: ""
+      tokenKey: token
+    maxConcurrentTasks: 2
+    pollInterval: 2s
+    # Must be at least the project ai.timeout plus two minutes for Task startup
+    # and encrypted result finalization. The fetcher validates this at startup.
+    taskTimeout: 20m
+    retries: 1
+    image:
+      repository: ghcr.io/willie-yao/prow-ai-dashboard/analyzer
+      # Defaults to .Chart.AppVersion when empty. Container mode accepts only
+      # immutable sha-<hex> or full semantic-version tags.
+      tag: ""
+      # The pinned Orka controller uses IfNotPresent for container Tasks.
+      pullPolicy: IfNotPresent
+    # This Secret must already exist in the analysis namespace. The chart never
+    # copies provider credentials across namespaces.
+    modelAuth:
+      existingSecret: ""
+      tokenKey: token
+    # With existingSecret, create the same named Secret and key in both the
+    # dashboard and analysis namespaces. When empty, the chart creates and retains
+    # matching release-scoped AES-256 state key Secrets in both namespaces.
+    state:
+      existingSecret: ""
+      key: state-key
+    # Analyzer Tasks must stay on CPU nodes. An explicit agentpool selector is
+    # required, and accelerator selectors, affinity, or tolerations fail render.
+    nodeSelector:
+      agentpool: nodepool1
+    tolerations: []
+    affinity: {}
+
+# Orka fix generation is independent from the analysis runtime selector.
 orka:
   namespace: orka-system
   fixRuntime:
@@ -112,10 +160,10 @@ fetcher:
   suspend: false
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
-  # CronJob pod restart policy. Empty selects Never for Orka and OnFailure for
-  # in-process fetches. Orka retries belong to Task retryPolicy, not init containers.
+  # CronJob pod restart policy. Empty selects Never for orka-container and
+  # OnFailure for in-process analysis. Task retries belong to Orka.
   restartPolicy: ""
-  # Job retry limit. -1 uses 0 for Orka and the Kubernetes default otherwise.
+  # Job retry limit. -1 uses 0 for orka-container and the Kubernetes default otherwise.
   backoffLimit: -1
   # Hard Job deadline in seconds. Set 0 to omit the deadline.
   activeDeadlineSeconds: 36000
@@ -125,6 +173,8 @@ fetcher:
   reconcileInterval: 1h
   buildsPerJob: 10
   workers: 5
+  # Bounds discovery and artifact fetching. Orka container analysis uses its
+  # per-Task timeout and the CronJob activeDeadlineSeconds across Task waves.
   timeout: 30m
   includePresubmits: false
   # Extra environment variables (e.g. ISSUE_TOKEN, FIX_TOKEN,

@@ -18,6 +18,12 @@ Three files have different owners:
 Do not copy Helm or workflow tuning into `project.yaml`. Do not put project
 identity or artifact routing into Helm values.
 
+Failure-analysis placement follows the same boundary. The default in-process
+runtime and the experimental Helm `analysisRuntime.type: orka-container`
+selector are deployment infrastructure. Do not add an analysis runtime field to
+`project.yaml`. The `ai:` block continues to own analysis policy for both
+runtimes.
+
 ## Minimal configuration
 
 ```yaml
@@ -133,6 +139,9 @@ ai:
 
 Public consumers normally omit those values and use `AI_ENDPOINT`, `AI_MODEL`,
 and `AI_TOKEN` from the deployment. YAML wins when both are set.
+The experimental Helm `orka-container` runtime is the exception: its API mode,
+endpoint, and model come from Helm `ai.api`, `ai.endpoint`, and `ai.model` so the
+fetcher pattern pass and analyzer Tasks use the same deployment coordinates.
 
 Most projects do not need analysis tuning. The defaults are designed to work
 without an `ai:` block. Add only the setting that a measured model or artifact

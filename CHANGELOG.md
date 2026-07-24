@@ -36,6 +36,16 @@ for how to pin a release.
   Agent Task while keeping base pinning, diff reconstruction, review,
   verification, previews, credentials, and PR creation inside the engine. The
   chart automatically selects a git-capable engine image for this mode.
+- **Experimental Orka container analysis runtime.** Kubernetes Helm deployments
+  can opt into `analysisRuntime.type: orka-container` with `mode: cron`. One
+  content-addressed `type: container` Task per failure runs the current
+  dashboard-owned `FailureAnalyzer`; the in-process runtime remains the default
+  and only recommendation. The adapter includes a dedicated analyzer image,
+  Task-only RBAC, immutable sanitized bundles, framed results, encrypted raw
+  cache and trace state, evidence-coverage round-trip protection, bounded
+  bundle and terminal Task cleanup, failed-Task trace retention, explicit CPU
+  pool placement, and an isolated kind lifecycle test. It has no Pages
+  or watch-mode support and no backward compatibility guarantee.
 - **SMTP email notifications.** Consumers can configure persistent-failure,
   changed-error, and recovery email alerts under `notifications.email`. SMTP
   passwords are supplied through the `EMAIL_SMTP_PASSWORD` deployment secret;
@@ -46,14 +56,12 @@ for how to pin a release.
 
 ### Removed
 
-- **Orka failure-analysis runtimes.** The patched `type: ai` worker and the
-  dashboard-owned `type: container` experiment are removed with their Helm
-  selector, producer, ingestor, artifact Tool service, Provider proxy, worker
-  patch, analyzer image, bundle and state transports, RBAC, manifests, live
-  harness, and Task-specific trace fields. Repeated `gpt-5-mini` and
-  `claude-haiku-4.5` parity trials showed model-run variance rather than a stable
-  runtime advantage. Failure analysis now always uses the in-process analyzer.
-  Orka fix generation remains supported.
+- **Patched Orka AI analysis runtime.** The generic `type: ai` worker path stays
+  removed with its producer, ingestor, artifact Tool service, Provider proxy,
+  worker patch, compatibility versions, and alternate submission and validation
+  protocols. Repeated parity trials showed model-run variance rather than a
+  stable runtime advantage. The optional container runtime does not restore any
+  of those components or add Orka-specific fields to the private trace schema.
 
 - **Slack webhook notifications.** `SLACK_WEBHOOK_URL` and Slack Block Kit
   delivery are removed. Consumers that need notifications must configure the new
