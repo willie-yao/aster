@@ -212,3 +212,47 @@ func TestServiceFixCandidateRejectsSameTimestampAnalysisContentReplacement(t *te
 		})
 	}
 }
+
+func TestLegacySourceRefreshCannotReplaceFixCandidateAnalysis(t *testing.T) {
+	service, session, chatRequestID, _ := fixCandidateReadyService(t)
+	ctx, cancel := service.store.context()
+	err := service.store.update(ctx, func(state *persistedState) (bool, error) {
+		state.Sessions[session.ID].Resolved.Build.RepoRefs = nil
+		return true, nil
+	})
+	cancel()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	detail := testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-24T12:00:00Z"))
+	detail.Runs[0].RepoRefs = map[string]string{
+		"example/repo": "main:0123456789abcdef0123456789abcdef01234567",
+	}
+	detail.Runs[0].TestCases[0].AIAnalysis.Severity = "Low"
+	detail.PatternAnalyses = []models.PatternAnalysis{fixCandidatePattern()}
+	writeJobDetail(t, service.dataDir, detail)
+
+	if _, err := service.SourceInvestigation(
+		t.Context(), session.ID, "Alice", testRequestID(t), chatRequestID,
+	); !errors.Is(err, ErrAnalysisChanged) {
+		t.Fatalf("legacy source refresh error = %v", err)
+	}
+	if _, err := service.FixCandidate(
+		session.ID, "Alice", chatRequestID, fixCandidatePattern().ID, "",
+	); !errors.Is(err, ErrAnalysisChanged) {
+		t.Fatalf("fix candidate after rejected refresh error = %v", err)
+	}
+
+	ctx, cancel = service.store.context()
+	defer cancel()
+	if err := service.store.update(ctx, func(state *persistedState) (bool, error) {
+		analysis := state.Sessions[session.ID].Resolved.TestCase.AIAnalysis
+		if analysis == nil || analysis.Severity != "High" || len(state.Sessions[session.ID].Resolved.Build.RepoRefs) != 0 {
+			t.Fatalf("legacy refresh mutated original snapshot: %+v", state.Sessions[session.ID].Resolved)
+		}
+		return false, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

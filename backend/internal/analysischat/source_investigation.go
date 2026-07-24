@@ -477,12 +477,19 @@ func (s *Service) sourceInvestigationSubject(
 			if err != nil {
 				return changed, err
 			}
-			resolved = refreshed
+			if !sameAnalysisSnapshot(
+				analysisSnapshot(resolved.testCase.AIAnalysis),
+				analysisSnapshot(refreshed.testCase.AIAnalysis),
+			) {
+				return changed, ErrAnalysisChanged
+			}
+			refreshedPersisted := persistResolved(refreshed, sourceRepositoryName(s.sourceRepo))
+			current.Resolved.Build.RepoRefs = refreshedPersisted.Build.RepoRefs
+			resolved = restoreResolved(current.Resolved)
 			revision, ok = repoRevision(resolved.build.RepoRefs, s.sourceRepo.Owner, s.sourceRepo.Name)
 			if !ok {
 				return changed, fmt.Errorf("%w: build has no revision for %s/%s", sourceinvestigation.ErrUnavailable, s.sourceRepo.Owner, s.sourceRepo.Name)
 			}
-			current.Resolved = persistResolved(resolved, sourceRepositoryName(s.sourceRepo))
 			changed = true
 		}
 		repo := sourceinvestigation.Repository{Owner: s.sourceRepo.Owner, Name: s.sourceRepo.Name, Revision: revision}
