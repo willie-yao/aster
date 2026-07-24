@@ -22,6 +22,7 @@ const (
 	containerAnalyzerFieldManager = "prow-ai-dashboard-container-analysis"
 	failedTaskStateTimeout        = 30 * time.Second
 	containerTaskSchedulingGrace  = 2 * time.Minute
+	containerTaskExecutionGrace   = 2 * time.Minute
 	containerTaskRetryDelay       = 10 * time.Second
 	containerResultReadTimeout    = 30 * time.Second
 )
@@ -42,6 +43,7 @@ type ContainerAnalyzerOptions struct {
 	StateSecretName    string
 	StateSecretKey     string
 	StateKey           []byte
+	AnalysisTimeout    time.Duration
 	TaskTimeout        time.Duration
 	PollInterval       time.Duration
 	MaxRetries         int
@@ -186,8 +188,12 @@ func validateContainerAnalyzerOptions(opts ContainerAnalyzerOptions) error {
 		return fmt.Errorf("container analysis state key name is required")
 	case len(opts.StateKey) != 32:
 		return fmt.Errorf("container analysis state key must be 32 bytes")
+	case opts.AnalysisTimeout <= 0:
+		return fmt.Errorf("container analysis inner timeout must be positive")
 	case opts.TaskTimeout <= 0:
 		return fmt.Errorf("container analysis task timeout must be positive")
+	case opts.AnalysisTimeout > time.Duration(1<<63-1)-containerTaskExecutionGrace || opts.TaskTimeout < opts.AnalysisTimeout+containerTaskExecutionGrace:
+		return fmt.Errorf("container analysis task timeout %s must be at least ai.timeout %s plus %s execution grace", opts.TaskTimeout, opts.AnalysisTimeout, containerTaskExecutionGrace)
 	case opts.PollInterval <= 0:
 		return fmt.Errorf("container analysis poll interval must be positive")
 	case opts.MaxRetries < 0:

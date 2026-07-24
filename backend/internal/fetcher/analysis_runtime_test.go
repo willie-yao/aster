@@ -27,7 +27,7 @@ func validContainerAnalysisOptions() Options {
 				Namespace: "orka-system", ResultAPI: "http://orka.orka-system.svc.cluster.local:8080", Image: "analyzer:sha-deadbeef",
 				ModelSecretName: "model-secret", ModelTokenKey: "token",
 				StateSecretName: "state-secret", StateSecretKey: "state-key",
-				MaxConcurrent: 2, PollInterval: time.Second, TaskTimeout: time.Minute, Retries: 1,
+				MaxConcurrent: 2, PollInterval: time.Second, TaskTimeout: 10 * time.Minute, Retries: 1,
 				NodeSelector: map[string]string{"agentpool": "nodepool1"},
 			},
 		},
@@ -101,6 +101,7 @@ ai:
   api: responses
   endpoint: https://project.invalid/v1/responses
   model: project-model
+  timeout: 30m
   tools: [filesystem]
 `, dir)
 	if err := os.WriteFile(filepath.Join(dir, "project.yaml"), []byte(config), 0o644); err != nil {
@@ -120,6 +121,7 @@ ai:
 	opts.BuildsPerJob = 1
 	opts.Workers = 1
 	opts.Timeout = time.Minute
+	opts.AnalysisRuntime.OrkaContainer.TaskTimeout = 32 * time.Minute
 	pipeline, err := setupPipeline(opts)
 	if err != nil {
 		t.Fatal(err)
@@ -127,6 +129,10 @@ ai:
 	provider := pipeline.aiProject.Provider
 	if provider.API != "chat_completions" || provider.Endpoint != "https://helm.invalid/v1/chat/completions" || provider.Model != "helm-model" {
 		t.Fatalf("provider = %+v", provider)
+	}
+	opts.AnalysisRuntime.OrkaContainer.TaskTimeout = 32*time.Minute - time.Second
+	if _, err := setupPipeline(opts); err == nil || !strings.Contains(err.Error(), "ai.timeout") {
+		t.Fatalf("short task timeout error = %v", err)
 	}
 }
 

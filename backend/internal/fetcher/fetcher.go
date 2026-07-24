@@ -196,7 +196,8 @@ func setupPipeline(opts Options) (*pipeline, error) {
 				API: aiProject.Provider.API, Endpoint: aiProject.Provider.Endpoint, Model: aiProject.Provider.Model,
 				ModelSecretName: container.ModelSecretName, ModelTokenKey: container.ModelTokenKey,
 				StateSecretName: container.StateSecretName, StateSecretKey: container.StateSecretKey, StateKey: stateKey,
-				TaskTimeout: container.TaskTimeout, PollInterval: container.PollInterval, MaxRetries: container.Retries,
+				AnalysisTimeout: cfg.AI.EffectiveAgentic().Timeout,
+				TaskTimeout:     container.TaskTimeout, PollInterval: container.PollInterval, MaxRetries: container.Retries,
 				MaxConcurrentTasks: container.MaxConcurrent, NodeSelector: container.NodeSelector, Tolerations: container.Tolerations, Affinity: container.Affinity,
 			}); err != nil {
 				return nil, fmt.Errorf("orka-container analysis: %w", err)

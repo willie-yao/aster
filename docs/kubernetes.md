@@ -129,6 +129,11 @@ Provide `apiAuth.existingSecret` in the dashboard release namespace with an
 Orka API token authorized to read results from the generated analysis namespace.
 This is separate from the model token stored in the analysis namespace.
 
+`taskTimeout` must be at least the project `ai.timeout` plus two minutes for
+Task startup and encrypted result finalization. The fetcher rejects a shorter
+outer timeout at startup instead of allowing Orka to kill the analyzer before
+it can emit recoverable state.
+
 Because the pinned Orka controller uses `IfNotPresent`, the chart rejects mutable analyzer tags such as `main`, `latest`, `dev`, and moving major tags. Use a `sha-<hex>` tag or a full semantic version.
 
 The normal fetcher still needs its `AI_TOKEN` in the dashboard namespace for the

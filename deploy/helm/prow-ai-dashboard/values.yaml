@@ -44,6 +44,8 @@ analysisRuntime:
       tokenKey: token
     maxConcurrentTasks: 2
     pollInterval: 2s
+    # Must be at least the project ai.timeout plus two minutes for Task startup
+    # and encrypted result finalization. The fetcher validates this at startup.
     taskTimeout: 20m
     retries: 1
     image:

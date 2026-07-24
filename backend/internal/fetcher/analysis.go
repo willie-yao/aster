@@ -223,6 +223,7 @@ func (p *pipeline) ensureContainerAnalyzer() (containerFailureAnalyzer, error) {
 		StateSecretName:    cfg.StateSecretName,
 		StateSecretKey:     cfg.StateSecretKey,
 		StateKey:           stateKey,
+		AnalysisTimeout:    p.aiProject.Config.AI.EffectiveAgentic().Timeout,
 		TaskTimeout:        cfg.TaskTimeout,
 		PollInterval:       cfg.PollInterval,
 		MaxRetries:         cfg.Retries,

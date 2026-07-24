@@ -115,7 +115,7 @@ func containerAnalyzerTestOptions(t *testing.T, key []byte) ContainerAnalyzerOpt
 		Namespace: "orka-system", OrkaAPI: "http://orka.orka-system.svc.cluster.local:8080", Image: "dashboard-analyzer:sha-deadbeef", ProjectDir: containerTaskProject(t), DataDir: t.TempDir(),
 		API: "chat_completions", Endpoint: "https://model.invalid/v1/chat/completions", Model: "model",
 		ModelSecretName: "model-secret", ModelTokenKey: "token", StateSecretName: "state-secret", StateSecretKey: "state-key", StateKey: key,
-		TaskTimeout: time.Minute, PollInterval: time.Millisecond, MaxRetries: 1, MaxConcurrentTasks: 2,
+		AnalysisTimeout: 30 * time.Second, TaskTimeout: 3 * time.Minute, PollInterval: time.Millisecond, MaxRetries: 1, MaxConcurrentTasks: 2,
 		NodeSelector: map[string]string{"agentpool": "nodepool1"},
 	}
 }
@@ -220,6 +220,19 @@ func TestValidateContainerAnalyzerOptionsRejectsMutableImageTag(t *testing.T) {
 	}
 }
 
+func TestValidateContainerAnalyzerOptionsRejectsShortTaskTimeout(t *testing.T) {
+	opts := containerAnalyzerTestOptions(t, bytes.Repeat([]byte{0x62}, 32))
+	opts.AnalysisTimeout = 5 * time.Minute
+	opts.TaskTimeout = 7*time.Minute - time.Second
+	if err := ValidateContainerAnalyzerOptions(opts); err == nil || !strings.Contains(err.Error(), "ai.timeout") {
+		t.Fatalf("short task timeout error = %v", err)
+	}
+	opts.TaskTimeout = 7 * time.Minute
+	if err := ValidateContainerAnalyzerOptions(opts); err != nil {
+		t.Fatalf("bounded task timeout rejected: %v", err)
+	}
+}
+
 func TestContainerAnalyzerRetainsResourcesUntilResultIsConsumed(t *testing.T) {
 	request := containerTaskRequest()
 	key := bytes.Repeat([]byte{0x73}, 32)
@@ -278,7 +291,7 @@ func TestContainerAnalyzerAllowsSchedulingAndFreshResultGrace(t *testing.T) {
 	kube := &fakeContainerAnalyzerKube{fakeContainerResourceClient: resources, phase: "Succeeded", terminalDelay: 15 * time.Millisecond}
 	results := &generatedContainerResult{request: request, key: key, entry: entry, delay: 20 * time.Millisecond}
 	opts := containerAnalyzerTestOptions(t, key)
-	opts.TaskTimeout = 5 * time.Millisecond
+	opts.TaskTimeout = opts.AnalysisTimeout + containerTaskExecutionGrace
 	analyzer, err := newContainerAnalyzer(opts, kube, results, store)
 	if err != nil {
 		t.Fatal(err)
