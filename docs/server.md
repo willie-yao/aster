@@ -178,12 +178,14 @@ are rejected because they do not identify the exact merged checkout. For session
 created before repository refs were persisted, the server re-reads the same job
 and build while requiring the original analysis timestamp to still match.
 
-The runtime creates an Orka agent Task at the pinned revision. The Task exposes
-only OpenCode Read, Glob, and Grep tools, disables Bash and edit tools, and uses
-a workspace initializer so the read-only Git credential is not mounted into the
-agent container. The dashboard ServiceAccount receives Task-only create, get,
-patch, and delete permissions. The runtime rejects any result that contains a
-workspace diff or push branch. It never receives `BOT_TOKEN` or `FIX_TOKEN`.
+The runtime creates an Orka agent Task at the pinned revision with Orka's enforced
+`orka.ai/agent-read-only` guard. Unsupported guarded runtimes fail before agent
+execution. The Task permits repository read tools, disables Bash and edit tools,
+and uses a workspace initializer so the read-only Git credential is not mounted
+into the agent container. A dedicated server ServiceAccount receives Task-only
+create, get, patch, and delete permissions. The runtime rejects any result that
+contains a workspace diff or push branch. It never receives `BOT_TOKEN` or
+`FIX_TOKEN`.
 
 The agent returns a bounded finding, confidence, relationship to the published
 analysis, investigation direction, and source citations. Every citation path and

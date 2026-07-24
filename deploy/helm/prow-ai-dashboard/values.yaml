@@ -207,6 +207,7 @@ server:
     correctionsEnabled: false
     sourceInvestigation:
       enabled: false
+      serviceAccountName: ""
       maxPerSession: 8
       maxActivePerOwner: 1
     sessionTTL: 2h

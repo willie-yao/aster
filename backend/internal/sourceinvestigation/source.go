@@ -175,7 +175,7 @@ func ValidateResult(result Result) error {
 	seen := map[string]struct{}{}
 	for i, citation := range result.Citations {
 		clean := path.Clean(strings.TrimSpace(citation.Path))
-		if clean == "." || clean != citation.Path || strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "/") || strings.Contains(clean, "\\") {
+		if clean == "." || clean == ".." || clean != citation.Path || strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "/") || strings.Contains(clean, "\\") {
 			return fmt.Errorf("%w: citation %d has unsafe path %q", ErrInvalidResult, i, citation.Path)
 		}
 		if citation.LineStart < 1 || citation.LineEnd < citation.LineStart || citation.LineEnd-citation.LineStart+1 > 200 {

@@ -157,6 +157,15 @@ because Helm release names are unique only within their own namespace.
 {{- printf "%s-source-%s" $base (include "prow-ai-dashboard.orkaReleaseScope" .) -}}
 {{- end -}}
 
+{{/* ServiceAccount used only by the web-facing source investigation runtime. */}}
+{{- define "prow-ai-dashboard.orkaSourceServiceAccountName" -}}
+{{- if .Values.server.chat.sourceInvestigation.serviceAccountName -}}
+{{- .Values.server.chat.sourceInvestigation.serviceAccountName -}}
+{{- else -}}
+{{- printf "%s-source" (include "prow-ai-dashboard.fullname" .) -}}
+{{- end -}}
+{{- end -}}
+
 {{/* Analysis RBAC stays separate from fix-generation RBAC. */}}
 {{- define "prow-ai-dashboard.orkaAnalysisRBACName" -}}
 {{- $base := include "prow-ai-dashboard.fullname" . | trunc 40 | trimSuffix "-" -}}

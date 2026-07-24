@@ -21,6 +21,7 @@ import (
 const (
 	SourceInvestigatorManagedByValue = "orka-source-investigator"
 	orkaWorkspaceInitAnnotation      = "orka.ai/workspace-init-container"
+	orkaAgentReadOnlyAnnotation      = "orka.ai/agent-read-only"
 	maxSourceResultBytes             = 1 << 20
 	maxSourceFileBytes               = 4 << 20
 )
@@ -322,6 +323,7 @@ func (r *SourceInvestigator) buildSourceTask(name string, request sourceinvestig
 			"labels": map[string]any{ManagedByLabel: SourceInvestigatorManagedByValue},
 			"annotations": map[string]any{
 				orkaWorkspaceInitAnnotation:                   "true",
+				orkaAgentReadOnlyAnnotation:                   "true",
 				"orka.ai/disable-coordination-tool-injection": "true",
 			},
 		},
@@ -550,7 +552,7 @@ func (r *GitHubSourceReader) ReadFile(
 		return "", fmt.Errorf("source reader is not configured")
 	}
 	clean := path.Clean(strings.TrimSpace(file))
-	if clean == "." || clean != file || strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "/") || strings.Contains(clean, "\\") {
+	if clean == "." || clean == ".." || clean != file || strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "/") || strings.Contains(clean, "\\") {
 		return "", fmt.Errorf("unsafe source path")
 	}
 	endpoint := *r.base

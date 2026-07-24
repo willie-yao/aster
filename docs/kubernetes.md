@@ -365,7 +365,8 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | `ingress.enabled`, `ingress.hosts`, `ingress.tls` | Public read path. |
 | `server.chat.enabled` | Enable authenticated analysis conversations. Requires `ai.enabled`. |
 | `server.chat.correctionsEnabled` | Enable explicit promotion and revocation of evidence-backed correction overlays. |
-| `server.chat.sourceInvestigation.enabled` | Enable owner-bound read-only source investigation through Orka OpenCode Tasks. |
+| `server.chat.sourceInvestigation.enabled` | Enable the backend API for owner-bound read-only source investigation through Orka agent Tasks. |
+| `server.chat.sourceInvestigation.serviceAccountName` | Operator-managed dedicated ServiceAccount name when `orka.rbac.create=false`. |
 | `server.chat.sourceInvestigation.maxPerSession` | Persisted source requests per session. Defaults to `8`. |
 | `server.chat.sourceInvestigation.maxActivePerOwner` | Concurrent source Tasks per login. Defaults to `1`. |
 | `server.chat.sessionTTL` | Persisted conversation retention. Defaults to `2h`. |
@@ -437,19 +438,24 @@ ai:
     retries: 1
 ```
 
-The Agent named by `agent_ref` must use the merged Orka OpenCode runtime. Create
-`git_secret` in the Orka namespace with read-only repository credentials. The
-Task-level policy disables Bash, write, edit, and web tools, and the chart grants
-the dashboard only Task create, get, patch, and delete permissions. The server
-uses the normal dashboard image, never the git-capable fixer image. If the source
-repository is private, put a read-only GitHub token in the AI Secret under
-`GITHUB_READ_TOKEN` so the server can verify returned quotes against the pinned
-commit.
+The Agent named by `agent_ref` must use a runtime supported by Orka's enforced
+`orka.ai/agent-read-only` contract. Orka releases that reject OpenCode in guarded
+mode cannot use an OpenCode Agent for this feature. Do not remove the guard to
+make an unsupported runtime start. Create `git_secret` in the Orka namespace with
+read-only repository credentials. The chart gives the web-facing server a
+dedicated ServiceAccount with only Task create, get, patch, and delete permissions.
+The server uses the normal dashboard image, never the git-capable fixer image. If
+the source repository is private, put a read-only GitHub token in the AI Secret
+under `GITHUB_READ_TOKEN` so the server can verify returned quotes against the
+pinned commit.
 
 With chart-managed RBAC, `ai.source_investigation.namespace` must match the
 chart's `orka.namespace` value. If the runtime uses another namespace, disable
 `orka.rbac.create` and provide a ServiceAccount with the same Task-only
 permissions in that namespace.
+
+This phase exposes the authenticated backend API and capability. SPA controls to
+start, reconnect, view, and cancel investigations are planned separately.
 
 ### Enabling actions with Helm
 

@@ -99,6 +99,9 @@ func TestSourceInvestigatorHappyPath(t *testing.T) {
 	if annotations[orkaWorkspaceInitAnnotation] != "true" {
 		t.Fatalf("annotations = %+v", annotations)
 	}
+	if annotations[orkaAgentReadOnlyAnnotation] != "true" {
+		t.Fatalf("read-only annotations = %+v", annotations)
+	}
 	if strings.Contains(taskSpec["prompt"].(string), "BOT_TOKEN") {
 		t.Fatalf("prompt contains a write credential name")
 	}
@@ -228,5 +231,8 @@ func TestGitHubSourceReaderPinsPathAndStripsCrossHostAuthorization(t *testing.T)
 	}
 	if initialAuth != "Bearer read-token" || redirectedAuth != "" {
 		t.Fatalf("authorization initial=%q redirected=%q", initialAuth, redirectedAuth)
+	}
+	if _, err := reader.ReadFile(t.Context(), repo, ".."); err == nil {
+		t.Fatal("ReadFile accepted the repository parent path")
 	}
 }

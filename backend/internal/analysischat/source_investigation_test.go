@@ -183,6 +183,14 @@ func TestBoundedRepoRefsRetainsConfiguredSource(t *testing.T) {
 	if len(got) != 20 || got[source] == "" {
 		t.Fatalf("bounded refs omitted configured source: len=%d refs=%+v", len(got), got)
 	}
+	refs["ZZZZ/Source"] = "main:fedcba9876543210fedcba9876543210fedcba98"
+	got = boundedRepoRefs(refs, source)
+	if len(got) != 20 {
+		t.Fatalf("ambiguous bounded refs len = %d", len(got))
+	}
+	if revision, ok := repoRevision(got, "zzzz", "source"); ok {
+		t.Fatalf("ambiguous bounded refs resolved to %q", revision)
+	}
 }
 
 func TestServiceSourceInvestigationExpiredLeaseClearsSubject(t *testing.T) {

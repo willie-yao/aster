@@ -315,25 +315,34 @@ func boundedRepoRefs(refs map[string]string, requiredRepo string) map[string]str
 	if len(refs) == 0 {
 		return nil
 	}
+	wanted := strings.ToLower(strings.TrimSpace(requiredRepo))
+	requiredFound := false
+	requiredValid := true
+	requiredRevision := ""
 	keys := make([]string, 0, len(refs))
-	for repo := range refs {
+	for repo, value := range refs {
+		if wanted != "" && strings.ToLower(strings.TrimSpace(repo)) == wanted {
+			candidate, ok := exactRepoRevision(value)
+			if !ok || requiredRevision != "" && requiredRevision != candidate {
+				requiredValid = false
+			}
+			if ok && requiredRevision == "" {
+				requiredRevision = candidate
+			}
+			requiredFound = true
+			continue
+		}
 		keys = append(keys, repo)
 	}
 	slices.Sort(keys)
-	if len(keys) > 20 {
-		bounded := slices.Clone(keys[:20])
-		wanted := strings.ToLower(strings.TrimSpace(requiredRepo))
-		if wanted != "" {
-			for _, key := range keys[20:] {
-				if strings.ToLower(strings.TrimSpace(key)) == wanted {
-					bounded[len(bounded)-1] = key
-					break
-				}
-			}
-		}
-		keys = bounded
+	limit := 20
+	if requiredFound {
+		limit--
 	}
-	out := make(map[string]string, len(keys))
+	if len(keys) > limit {
+		keys = keys[:limit]
+	}
+	out := make(map[string]string, len(keys)+1)
 	for _, key := range keys {
 		repo := strings.TrimSpace(key)
 		revision := strings.TrimSpace(refs[key])
@@ -341,6 +350,12 @@ func boundedRepoRefs(refs map[string]string, requiredRepo string) map[string]str
 			continue
 		}
 		out[repo] = revision
+	}
+	if requiredFound {
+		if !requiredValid || requiredRevision == "" {
+			requiredRevision = "ambiguous"
+		}
+		out[wanted] = requiredRevision
 	}
 	return out
 }

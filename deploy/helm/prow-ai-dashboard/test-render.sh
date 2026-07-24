@@ -373,6 +373,8 @@ grep -A6 -Fq 'name: SOURCE_INVESTIGATION_GITHUB_TOKEN' "$tmp/source-investigatio
 grep -Fq 'optional: true' "$tmp/source-investigation.yaml"
 grep -Fq 'automountServiceAccountToken: true' "$tmp/source-investigation.yaml"
 grep -Fq 'app.kubernetes.io/component: orka-source-investigation' "$tmp/source-investigation.yaml"
+grep -Fq 'app.kubernetes.io/component: orka-source-investigation-runtime' "$tmp/source-investigation.yaml"
+grep -Fq 'serviceAccountName: test-prow-ai-dashboard-source' "$tmp/source-investigation.yaml"
 grep -Fq 'resources: ["tasks"]' "$tmp/source-investigation.yaml"
 grep -Fq 'verbs: ["create", "get", "patch", "delete"]' "$tmp/source-investigation.yaml"
 if grep -Eq 'resources: \["(secrets|pods|agents|agentruntimes)"\]|name: BOT_TOKEN|image: .*fixer' "$tmp/source-investigation.yaml"; then
@@ -391,6 +393,17 @@ if [[ $(grep -Fc '  - apiGroups:' "$tmp/source-investigation-rbac.yaml") -ne 1 ]
    [[ $(grep -Fc '    resources: ["tasks"]' "$tmp/source-investigation-rbac.yaml") -ne 1 ]] ||
    [[ $(grep -Fc '    verbs: ["create", "get", "patch", "delete"]' "$tmp/source-investigation-rbac.yaml") -ne 1 ]]; then
   echo 'source investigation Role is not exactly Task-only create/get/patch/delete' >&2
+  exit 1
+fi
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" "${container_args[@]}" \
+  --set server.chat.enabled=true \
+  --set server.chat.sourceInvestigation.enabled=true \
+  --set server.actions.mode=proxy \
+  --set server.actions.admins[0]=alice \
+  --show-only templates/server-deployment.yaml > "$tmp/source-with-container-analysis-server.yaml"
+grep -Fq 'serviceAccountName: test-prow-ai-dashboard-source' "$tmp/source-with-container-analysis-server.yaml"
+if grep -Fq 'serviceAccountName: test-prow-ai-dashboard-orka' "$tmp/source-with-container-analysis-server.yaml"; then
+  echo 'source server shares the broader Orka analysis ServiceAccount' >&2
   exit 1
 fi
 

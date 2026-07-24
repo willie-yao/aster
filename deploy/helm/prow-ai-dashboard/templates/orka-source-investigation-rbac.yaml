@@ -24,7 +24,7 @@ metadata:
     app.kubernetes.io/component: orka-source-investigation
 subjects:
   - kind: ServiceAccount
-    name: {{ include "prow-ai-dashboard.orkaServiceAccountName" . }}
+    name: {{ include "prow-ai-dashboard.orkaSourceServiceAccountName" . }}
     namespace: {{ .Release.Namespace }}
 roleRef:
   kind: Role

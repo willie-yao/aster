@@ -60,7 +60,10 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- if or (and .Values.orka.fixRuntime.enabled $actions) $source }}
+      {{- if $source }}
+      serviceAccountName: {{ include "prow-ai-dashboard.orkaSourceServiceAccountName" . }}
+      automountServiceAccountToken: true
+      {{- else if and .Values.orka.fixRuntime.enabled $actions }}
       serviceAccountName: {{ include "prow-ai-dashboard.orkaServiceAccountName" . }}
       automountServiceAccountToken: true
       {{- else }}

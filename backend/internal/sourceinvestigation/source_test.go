@@ -23,9 +23,11 @@ func TestValidateResultRejectsUnsafeCitations(t *testing.T) {
 	if err := ValidateResult(base); err != nil {
 		t.Fatalf("ValidateResult(valid) = %v", err)
 	}
-	unsafe := base
-	unsafe.Citations = []Citation{{Path: "../secret", LineStart: 1, LineEnd: 1, Quote: "x"}}
-	if err := ValidateResult(unsafe); !errors.Is(err, ErrInvalidResult) {
-		t.Fatalf("ValidateResult(unsafe) = %v", err)
+	for _, value := range []string{"..", "../secret"} {
+		unsafe := base
+		unsafe.Citations = []Citation{{Path: value, LineStart: 1, LineEnd: 1, Quote: "x"}}
+		if err := ValidateResult(unsafe); !errors.Is(err, ErrInvalidResult) {
+			t.Fatalf("ValidateResult(%q) = %v", value, err)
+		}
 	}
 }

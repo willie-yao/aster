@@ -208,7 +208,9 @@ ai:
 `agent_ref` and `api` are required when the block is present. `timeout` must be
 positive and at most 30 minutes. `git_secret` belongs to Orka and must provide
 read-only clone credentials. Provider and model credentials remain owned by the
-Agent. The dashboard uses `branding.source_repo` and the selected build's exact
+Agent. The Agent runtime must support Orka's enforced `orka.ai/agent-read-only`
+contract; an Orka release that rejects guarded OpenCode cannot use OpenCode here.
+The dashboard uses `branding.source_repo` and the selected build's exact
 `repo_refs` commit, so there is no repository override or branch fallback. Bare
 full SHAs and unambiguous `ref:fullSHA` values are supported. Composite
 presubmit refs are rejected rather than guessing which commit was tested.
