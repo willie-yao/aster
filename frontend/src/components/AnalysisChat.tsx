@@ -503,7 +503,7 @@ export function AnalysisChat({
                   This conversation reached its ten-turn limit.
                 </Alert>
               ) : (
-                <Stack direction="row" spacing={0.75} sx={{ alignItems: "flex-end" }}>
+                <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
                   <TextField
                     fullWidth
                     multiline
@@ -538,8 +538,8 @@ export function AnalysisChat({
                         onClick={() => void submit()}
                         disabled={busy || question.trim() === ""}
                         sx={{
-                          width: 42,
-                          height: 42,
+                          width: 48,
+                          height: 48,
                           borderRadius: "10px",
                           bgcolor: "primary.main",
                           color: "primary.contrastText",
