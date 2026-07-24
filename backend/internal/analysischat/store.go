@@ -198,10 +198,17 @@ func writePrivateJSON(path string, value any) error {
 }
 
 func writePrivateJSONLimit(path string, value any, maxBytes int) error {
-	return writePrivateJSONLimitWithSync(path, value, maxBytes, func(file *os.File) error { return file.Sync() })
+	sync := func(file *os.File) error { return file.Sync() }
+	return writePrivateJSONLimitWithSync(path, value, maxBytes, sync, sync)
 }
 
-func writePrivateJSONLimitWithSync(path string, value any, maxBytes int, syncFile func(*os.File) error) error {
+func writePrivateJSONLimitWithSync(
+	path string,
+	value any,
+	maxBytes int,
+	syncFile func(*os.File) error,
+	syncDir func(*os.File) error,
+) error {
 	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return err
@@ -228,7 +235,18 @@ func writePrivateJSONLimitWithSync(path string, value any, maxBytes int, syncFil
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, path)
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+	dir, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	if err := syncDir(dir); err != nil {
+		return fmt.Errorf("syncing analysis chat state directory: %w", err)
+	}
+	return nil
 }
 
 func persistResolved(resolved resolvedAnalysis) persistedResolvedAnalysis {

@@ -383,7 +383,7 @@ chat, and the private analysis trace page.
 
 Analysis chat is Kubernetes-native and uses the shared RWX volume for private,
 owner-bound session state. Multiple server replicas can serve the same session.
-The storage class must support advisory file locking and atomic rename. The
+The storage class must support advisory file locking, atomic rename, and file and directory synchronization. The
 volume contains private transcripts and selected failure context, so restrict
 PVC access and backups to dashboard operators. Authentication reuses
 `server.actions` settings, but chat alone does not enable

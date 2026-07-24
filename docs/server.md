@@ -103,7 +103,7 @@ authenticated login, limited to ten admitted attempts including failed turns,
 and expire after two hours by default. The state file is private and excluded
 from `/data/*`. Replicas coordinate short state transitions with an advisory
 lock on the shared filesystem, while model calls run without holding that lock.
-The shared RWX volume must support advisory file locking and atomic rename.
+The shared RWX volume must support advisory file locking, atomic rename, and file and directory synchronization.
 The persisted file contains private transcripts and selected failure context, so
 volume access and backups must be treated as operator-private data.
 
