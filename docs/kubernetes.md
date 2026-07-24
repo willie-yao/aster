@@ -364,6 +364,7 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | `fetcher.extraEnv` | Extra env such as `GITHUB_TOKEN`, `EMAIL_SMTP_PASSWORD`, or the `ISSUE_TOKEN` / `FIX_TOKEN` write tokens (see [Automatic issues and fix PRs](#automatic-issues-and-fix-prs)). |
 | `ingress.enabled`, `ingress.hosts`, `ingress.tls` | Public read path. |
 | `server.chat.enabled` | Enable authenticated analysis conversations. Requires `ai.enabled`. |
+| `server.chat.correctionsEnabled` | Enable explicit promotion and revocation of evidence-backed correction overlays. |
 | `server.chat.sessionTTL` | Persisted conversation retention. Defaults to `2h`. |
 | `server.chat.maxSessions`, `server.chat.maxSessionsPerOwner` | Deployment-wide and per-login live-session caps. |
 | `server.chat.maxActiveTurnsPerOwner` | Concurrent background turns per login. Defaults to `2`. |
@@ -397,6 +398,7 @@ helm upgrade --install capz deploy/helm/prow-ai-dashboard \
   --set ai.enabled=true \
   --set server.replicaCount=2 \
   --set server.chat.enabled=true \
+  --set server.chat.correctionsEnabled=true \
   --set server.actions.mode=oauth \
   --set 'server.actions.admins={alice,bob}' \
   --set server.actions.oauth.clientId=<client-id> \
@@ -412,6 +414,9 @@ non-sensitive investigation phases, and can be cancelled from any replica.
 Tune retention and capacity with `server.chat.sessionTTL`,
 `server.chat.maxSessions`, `server.chat.maxSessionsPerOwner`,
 `server.chat.maxActiveTurnsPerOwner`, and `server.chat.requestsPerMinute`.
+Correction promotion is disabled by default. When enabled, the server writes a
+private audit ledger and the public `analysis_corrections.json` overlay to the
+same shared volume; it never rewrites fetched job JSON.
 
 ### Enabling actions with Helm
 

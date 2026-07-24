@@ -1,9 +1,13 @@
 {{- $actions := .Values.server.actions.enabled -}}
 {{- $chat := .Values.server.chat.enabled -}}
+{{- $corrections := .Values.server.chat.correctionsEnabled -}}
 {{- $interactive := or $actions $chat -}}
 {{- $a := .Values.server.actions -}}
 {{- if and $chat (not .Values.ai.enabled) -}}
 {{- fail "server.chat.enabled requires ai.enabled" -}}
+{{- end -}}
+{{- if and $corrections (not $chat) -}}
+{{- fail "server.chat.correctionsEnabled requires server.chat.enabled" -}}
 {{- end -}}
 {{- if and $chat (le (int .Values.server.chat.maxSessions) 0) -}}
 {{- fail "server.chat.maxSessions must be positive" -}}
@@ -81,6 +85,10 @@ spec:
             {{- if $chat }}
             - name: ANALYSIS_CHAT_ENABLED
               value: "true"
+            {{- if $corrections }}
+            - name: ANALYSIS_CORRECTIONS_ENABLED
+              value: "true"
+            {{- end }}
             - name: ANALYSIS_CHAT_STATE_DIR
               value: {{ printf "%s/.analysis-chat" .Values.persistence.mountPath | quote }}
             - name: ANALYSIS_CHAT_SESSION_TTL

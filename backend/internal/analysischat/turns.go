@@ -258,7 +258,7 @@ func (s *Service) finishTurn(id, owner, requestID, leaseID, question string, rep
 		current.View.Messages = append(current.View.Messages,
 			Message{Role: "user", RequestID: requestID, Content: question, CreatedAt: stamp},
 			Message{
-				Role: "assistant", Content: reply.Answer, Assessment: reply.Assessment,
+				Role: "assistant", RequestID: requestID, Content: reply.Answer, Assessment: reply.Assessment,
 				Citations: slices.Clone(reply.Citations), ProposedRevision: cloneRevision(reply.ProposedRevision),
 				ToolCalls: reply.ToolCalls, GCSBytes: reply.GCSBytes, ElapsedMs: reply.ElapsedMs,
 				CreatedAt: stamp,

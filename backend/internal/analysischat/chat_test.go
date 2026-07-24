@@ -1063,3 +1063,39 @@ func TestServiceLocalNotificationAvoidsPollDelay(t *testing.T) {
 		t.Fatal("local waiter slept until the cross-replica poll interval")
 	}
 }
+
+func TestServiceCorrectionCandidateAndValidation(t *testing.T) {
+	dir := t.TempDir()
+	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-24T12:00:00Z")))
+	runner := &fakeRunner{reply: Reply{
+		Answer: "evidence challenges it", Assessment: "challenges",
+		Citations:        []Citation{{Path: "build-log.txt", Quote: "first failure"}},
+		ProposedRevision: &Revision{RootCause: "new cause", SuggestedFix: "new fix"},
+	}}
+	service, err := NewService(t.Context(), dir, runner, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := service.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", "create-correction")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Send(context.Background(), created.ID, "alice", "turn-correction", "check another cause"); err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := service.CorrectionCandidate(created.ID, "alice", "turn-correction")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidate.Proposed.RootCause != "new cause" || candidate.Original.RootCause != "the controller stopped" || len(candidate.Citations) != 1 {
+		t.Fatalf("candidate = %+v", candidate)
+	}
+	if err := service.ValidateCorrectionCandidate(candidate); err != nil {
+		t.Fatal(err)
+	}
+	changed := analyzedTest("TestCluster", "junit.xml", "2026-07-24T13:00:00Z")
+	writeJobDetail(t, dir, testDetail(changed))
+	if err := service.ValidateCorrectionCandidate(candidate); !errors.Is(err, ErrAnalysisChanged) {
+		t.Fatalf("changed analysis validation error = %v", err)
+	}
+}

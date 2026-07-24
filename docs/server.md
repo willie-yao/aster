@@ -31,6 +31,9 @@ remains identical.
 | `POST /api/analysis-chat/sessions/{id}/messages` | Ask one bounded follow-up question and wait for the final transcript. |
 | `POST /api/analysis-chat/sessions/{id}/messages/stream` | Start or reconnect to a turn over SSE progress events. |
 | `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/cancel` | Cancel one active owner-bound turn. |
+| `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/correction/preview` | Preview an evidence-backed proposed correction. |
+| `POST /api/analysis-corrections/confirm` | Explicitly confirm a preview token and publish the correction overlay. |
+| `POST /api/analysis-corrections/{id}/revoke` | Revoke a correction and restore the original analysis. |
 | `GET /healthz` | Liveness and readiness probe. |
 | `GET /` | The built SPA, when `-static-dir` is set, with deep-link fallback to `index.html`. |
 | `POST /api/failures/{id}/create-issue/preview` | Admin-gated: render the exact GitHub issue for one failure without filing it. Enabled only when actions are configured. |
@@ -145,6 +148,21 @@ Cancellation is idempotent for completed requests. A disconnected streaming
 client does not cancel the server-owned turn; it can reconnect with the same
 request ID. Server shutdown and explicit cancellation stop the background model
 context and persist a terminal cancelled outcome.
+
+## Analysis correction overlays
+
+Set `ANALYSIS_CORRECTIONS_ENABLED=1` together with analysis chat to allow
+administrators to promote a structured `challenges` response. Only the agent's
+validated `proposed_revision` and verified citations are eligible. The server
+persists a private 15-minute preview, requires an explicit confirmation request,
+and writes active or revoked corrections to `analysis_corrections.json`.
+
+Corrections never modify `jobs/*.json`. The frontend applies an active correction
+only while the exact job, build, test identity, and `analysis_generated_at`
+still match. A newer generated analysis makes the overlay visibly stale and
+restores the generated conclusion. Revocation also restores the original while
+the private ledger retains proposer, confirmer, revoker, session, request, and
+audit timestamps.
 
 ## Private analysis traces
 

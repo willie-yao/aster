@@ -347,6 +347,28 @@ grep -Fq 'name: ANALYSIS_CHAT_SESSION_TTL' "$tmp/chat-server.yaml"
 grep -Fq 'value: "2h"' "$tmp/chat-server.yaml"
 grep -Fq 'name: ANALYSIS_CHAT_MAX_ACTIVE_TURNS_PER_OWNER' "$tmp/chat-server.yaml"
 grep -Fq 'name: ANALYSIS_CHAT_REQUESTS_PER_MINUTE' "$tmp/chat-server.yaml"
+if grep -Fq 'name: ANALYSIS_CORRECTIONS_ENABLED' "$tmp/chat-server.yaml"; then
+  echo 'analysis corrections enabled without explicit opt-in' >&2
+  exit 1
+fi
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.chat.enabled=true \
+  --set server.chat.correctionsEnabled=true \
+  --set server.actions.mode=proxy \
+  --set server.actions.admins[0]=alice \
+  --set ai.enabled=true \
+  --set ai.token=test-token \
+  --show-only templates/server-deployment.yaml > "$tmp/chat-corrections.yaml"
+grep -A1 -Fq 'name: ANALYSIS_CORRECTIONS_ENABLED' "$tmp/chat-corrections.yaml"
+grep -Fq 'value: "true"' "$tmp/chat-corrections.yaml"
+
+if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.chat.correctionsEnabled=true > "$tmp/corrections-without-chat.yaml" 2>&1; then
+  echo 'analysis corrections accepted without analysis chat' >&2
+  exit 1
+fi
+grep -Fq 'server.chat.correctionsEnabled requires server.chat.enabled' "$tmp/corrections-without-chat.yaml"
 grep -Fq 'readOnly: false' "$tmp/chat-server.yaml"
 grep -Fq -- '- -project-dir=/config' "$tmp/chat-server.yaml"
 grep -Fq 'name: project' "$tmp/chat-server.yaml"

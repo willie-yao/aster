@@ -19,6 +19,7 @@ import {
   FactCheckOutlined,
   HelpOutlined,
   PsychologyAltOutlined,
+  PublishedWithChangesOutlined,
   ReportProblemOutlined,
   StopCircleOutlined,
 } from "@mui/icons-material";
@@ -42,6 +43,7 @@ import {
   streamAnalysisChatMessage,
 } from "../lib/analysisChat";
 import { fileToUrl, type FileToUrlContext } from "../lib/utils";
+import { confirmAnalysisCorrection, previewAnalysisCorrection } from "../lib/analysisCorrections";
 import { soft } from "../theme";
 import type {
   AnalysisChatAssessment,
@@ -52,6 +54,8 @@ import type {
   AnalysisChatSession,
 } from "../types/analysisChat";
 import { RichText } from "./RichText";
+import { AnalysisCorrectionDialog } from "./AnalysisCorrectionDialog";
+import type { AnalysisCorrectionPreview } from "../types/corrections";
 
 interface PendingTurn {
   sessionID: string;
@@ -126,9 +130,13 @@ function formatLines(citation: AnalysisChatCitation) {
 function AssistantMessage({
   message,
   fileCtx,
+  correctionEnabled,
+  onReviewCorrection,
 }: {
   message: AnalysisChatMessage;
   fileCtx: FileToUrlContext;
+  correctionEnabled: boolean;
+  onReviewCorrection: (requestID: string) => void;
 }) {
   const assessment = message.assessment
     ? assessmentConfig[message.assessment]
@@ -254,6 +262,18 @@ function AssistantMessage({
             <Typography variant="body2" sx={{ mt: 0.25, lineHeight: 1.6 }}>
               <RichText text={message.proposed_revision.suggested_fix} steps fileCtx={fileCtx} />
             </Typography>
+            {correctionEnabled && message.request_id && (
+              <Button
+                size="small"
+                variant="outlined"
+                color="warning"
+                startIcon={<PublishedWithChangesOutlined />}
+                onClick={() => onReviewCorrection(message.request_id!)}
+                sx={{ mt: 1.5 }}
+              >
+                Review correction
+              </Button>
+            )}
           </Box>
         )}
       </Stack>
@@ -339,9 +359,11 @@ function ThinkingState({
 export function AnalysisChat({
   analysisRef,
   fileCtx,
+  onCorrectionChanged,
 }: {
   analysisRef: AnalysisChatReference;
   fileCtx: FileToUrlContext;
+  onCorrectionChanged?: () => void;
 }) {
   const { features } = useCapabilities();
   const auth = useAuth();
@@ -354,6 +376,9 @@ export function AnalysisChat({
   const [pendingTurn, setPendingTurn] = useState<PendingTurn | null>(null);
   const [progressPhase, setProgressPhase] = useState<AnalysisChatProgressPhase>("queued");
   const [cancelling, setCancelling] = useState(false);
+  const [correctionPreview, setCorrectionPreview] = useState<AnalysisCorrectionPreview | null>(null);
+  const [correctionOpen, setCorrectionOpen] = useState(false);
+  const [correctionBusy, setCorrectionBusy] = useState(false);
   const createRequestIDRef = useRef(newAnalysisChatRequestID());
   const controllerRef = useRef<AbortController | null>(null);
   const cancelControllerRef = useRef<AbortController | null>(null);
@@ -387,6 +412,9 @@ export function AnalysisChat({
     setPendingTurn(null);
     setProgressPhase("queued");
     setCancelling(false);
+    setCorrectionPreview(null);
+    setCorrectionOpen(false);
+    setCorrectionBusy(false);
     createRequestIDRef.current = newAnalysisChatRequestID();
   }, [identity]);
 
@@ -519,6 +547,36 @@ export function AnalysisChat({
         setBusy(false);
         setCancelling(false);
       }
+    }
+  }
+
+  async function reviewCorrection(requestID: string) {
+    if (!session) return;
+    setCorrectionBusy(true);
+    setError(null);
+    try {
+      const preview = await previewAnalysisCorrection(session.id, requestID);
+      setCorrectionPreview(preview);
+      setCorrectionOpen(true);
+    } catch (previewError) {
+      setError(previewError instanceof Error ? previewError.message : "Could not prepare the correction.");
+    } finally {
+      setCorrectionBusy(false);
+    }
+  }
+
+  async function publishCorrection() {
+    if (!correctionPreview) return;
+    setCorrectionBusy(true);
+    try {
+      await confirmAnalysisCorrection(correctionPreview.token);
+      setCorrectionOpen(false);
+      setCorrectionPreview(null);
+      onCorrectionChanged?.();
+    } catch (confirmError) {
+      setError(confirmError instanceof Error ? confirmError.message : "Could not publish the correction.");
+    } finally {
+      setCorrectionBusy(false);
     }
   }
 
@@ -699,7 +757,13 @@ export function AnalysisChat({
                     </Typography>
                   </Box>
                 ) : (
-                  <AssistantMessage key={`${message.created_at}-${index}`} message={message} fileCtx={fileCtx} />
+                  <AssistantMessage
+                    key={`${message.created_at}-${index}`}
+                    message={message}
+                    fileCtx={fileCtx}
+                    correctionEnabled={Boolean(features.analysis_corrections)}
+                    onReviewCorrection={(requestID) => void reviewCorrection(requestID)}
+                  />
                 ),
               )}
 
@@ -804,6 +868,13 @@ export function AnalysisChat({
           </Box>
         </Collapse>
       </Box>
+      <AnalysisCorrectionDialog
+        preview={correctionPreview}
+        open={correctionOpen}
+        busy={correctionBusy}
+        onClose={() => setCorrectionOpen(false)}
+        onConfirm={() => void publishCorrection()}
+      />
     </Box>
   );
 }

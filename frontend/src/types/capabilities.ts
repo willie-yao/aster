@@ -8,6 +8,7 @@ export interface CapabilityFeatures {
   action_requests?: boolean;
   analysis_traces?: boolean;
   analysis_chat?: boolean;
+  analysis_corrections?: boolean;
 }
 
 // AuthInfo tells the frontend how admins sign in for operator features.

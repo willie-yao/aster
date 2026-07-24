@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import type { AnalysisCorrectionState } from "../types/corrections";
 import type {
   Dashboard,
   FlakinessReport,
@@ -118,4 +119,21 @@ export function useRemediations() {
   }, []);
 
   return { data };
+}
+
+
+export function useAnalysisCorrections() {
+  const [nonce, setNonce] = useState(0);
+  const [data, setData] = useState<AnalysisCorrectionState>({ corrections: {} });
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${DATA_BASE}/analysis_corrections.json`, { cache: "no-store" })
+      .then((response) => response.ok ? response.json() : { corrections: {} })
+      .then((value: AnalysisCorrectionState) => {
+        if (!cancelled) setData(value?.corrections ? value : { corrections: {} });
+      })
+      .catch(() => { if (!cancelled) setData({ corrections: {} }); });
+    return () => { cancelled = true; };
+  }, [nonce]);
+  return { data, refetch: () => setNonce((value) => value + 1) };
 }
