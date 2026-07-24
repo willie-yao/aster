@@ -85,7 +85,7 @@ orka:
       repository: ghcr.io/willie-yao/prow-ai-dashboard/fixer
       tag: ""
       pullPolicy: IfNotPresent
-  # Disable this when an operator provides the ServiceAccount and Orka Role.
+  # Disable this when an operator provides the ServiceAccount and Orka Roles.
   rbac:
     create: true
     serviceAccountName: ""
@@ -205,6 +205,11 @@ server:
     enabled: false
     # Enables explicit review/confirmation of evidence-backed chat revisions.
     correctionsEnabled: false
+    sourceInvestigation:
+      enabled: false
+      serviceAccountName: ""
+      maxPerSession: 8
+      maxActivePerOwner: 1
     sessionTTL: 2h
     maxSessions: 128
     maxSessionsPerOwner: 8

@@ -32,8 +32,10 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/auth"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/corrections"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/notify"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/server"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
 
@@ -135,6 +137,11 @@ func enableInteractiveFeatures(ctx context.Context, opts *server.Options, projec
 			return err
 		}
 	}
+	if features.SourceInvestigation {
+		if err := enableSourceInvestigation(opts, cfg, chatService); err != nil {
+			return err
+		}
+	}
 	if features.AnalysisCorrections {
 		correctionService, err := corrections.NewService(dataDir, chatService, corrections.Options{})
 		if err != nil {
@@ -150,6 +157,7 @@ type interactiveFeatures struct {
 	Actions             bool
 	AnalysisChat        bool
 	AnalysisCorrections bool
+	SourceInvestigation bool
 }
 
 func interactiveFeaturesFromEnv() (interactiveFeatures, error) {
@@ -164,12 +172,20 @@ func interactiveFeaturesFromEnv() (interactiveFeatures, error) {
 	if correctionsEnabled && !chat {
 		return interactiveFeatures{}, fmt.Errorf("ANALYSIS_CORRECTIONS_ENABLED requires ANALYSIS_CHAT_ENABLED")
 	}
+	sourceEnabled, err := optionalBoolEnv("ANALYSIS_SOURCE_INVESTIGATION_ENABLED", false)
+	if err != nil {
+		return interactiveFeatures{}, err
+	}
+	if sourceEnabled && !chat {
+		return interactiveFeatures{}, fmt.Errorf("ANALYSIS_SOURCE_INVESTIGATION_ENABLED requires ANALYSIS_CHAT_ENABLED")
+	}
 	actions, err := optionalBoolEnv("ACTIONS_ENABLED", !chat)
 	if err != nil {
 		return interactiveFeatures{}, err
 	}
 	return interactiveFeatures{
 		Actions: actions, AnalysisChat: chat, AnalysisCorrections: correctionsEnabled,
+		SourceInvestigation: sourceEnabled,
 	}, nil
 }
 
@@ -306,6 +322,57 @@ func enableAnalysisChat(ctx context.Context, opts *server.Options, cfg *project.
 	opts.AnalysisChatTimeout = timeout
 	log.Printf("💬 analysis chat enabled (state=%s ttl=%s)", serviceOpts.StateDir, serviceOpts.SessionTTL)
 	return service, nil
+}
+
+func sourceInvestigationKubeContext() string {
+	return os.Getenv("ORKA_KUBE_CONTEXT")
+}
+
+func enableSourceInvestigation(
+	opts *server.Options,
+	cfg *project.Config,
+	chatService *analysischat.Service,
+) error {
+	if chatService == nil {
+		return fmt.Errorf("source investigation requires analysis chat")
+	}
+	if cfg.AI == nil || cfg.AI.SourceInvestigation == nil {
+		return fmt.Errorf("source investigation requires ai.source_investigation in project.yaml")
+	}
+	runtimeConfig := cfg.EffectiveSourceInvestigation()
+	timeout, err := time.ParseDuration(runtimeConfig.Timeout)
+	if err != nil {
+		return fmt.Errorf("configuring source investigation timeout: %w", err)
+	}
+	runner, err := orka.NewSourceInvestigatorFromEnv(orka.SourceInvestigationFromEnvConfig{
+		Namespace: runtimeConfig.Namespace, AgentRef: runtimeConfig.AgentRef, API: runtimeConfig.API,
+		APIToken: os.Getenv("ORKA_API_TOKEN"), GitSecret: runtimeConfig.GitSecret,
+		Version: runtimeConfig.Version, MaxRetries: *runtimeConfig.Retries, MaxTurns: runtimeConfig.MaxTurns,
+		KubeContext: sourceInvestigationKubeContext(), GitHubToken: os.Getenv("SOURCE_INVESTIGATION_GITHUB_TOKEN"),
+	})
+	if err != nil {
+		return fmt.Errorf("configuring source investigation runtime: %w", err)
+	}
+	serviceOpts := analysischat.SourceInvestigationOptions{
+		Timeout: timeout, LeaseTTL: timeout + 30*time.Second, MaxPerSession: 8, MaxActivePerOwner: 1,
+	}
+	serviceOpts.MaxPerSession, err = positiveIntEnv("ANALYSIS_SOURCE_INVESTIGATION_MAX_PER_SESSION", serviceOpts.MaxPerSession)
+	if err != nil {
+		return err
+	}
+	serviceOpts.MaxActivePerOwner, err = positiveIntEnv("ANALYSIS_SOURCE_INVESTIGATION_MAX_ACTIVE_PER_OWNER", serviceOpts.MaxActivePerOwner)
+	if err != nil {
+		return err
+	}
+	if err := chatService.ConfigureSourceInvestigation(runner, sourceinvestigation.Repository{
+		Owner: cfg.Branding.SourceRepo.Owner, Name: cfg.Branding.SourceRepo.Name,
+	}, serviceOpts); err != nil {
+		return fmt.Errorf("configuring source investigation service: %w", err)
+	}
+	opts.SourceInvestigation = chatService
+	opts.SourceInvestigationTimeout = timeout
+	log.Printf("🔎 source investigation enabled (repo=%s/%s timeout=%s)", cfg.Branding.SourceRepo.Owner, cfg.Branding.SourceRepo.Name, timeout)
+	return nil
 }
 
 func analysisChatTimeoutFromEnv() (time.Duration, error) {

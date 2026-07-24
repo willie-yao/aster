@@ -14,6 +14,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysischat"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/auth"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/redact"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 )
 
 // AnalysisChatRunner manages authenticated conversations about published analyses.
@@ -240,8 +241,11 @@ func analysisChatErrorDetails(err error) (int, string, string) {
 	case errors.Is(err, analysischat.ErrInvalidRequest):
 		status, message, outcome = http.StatusBadRequest, err.Error(), "rejected"
 	case errors.Is(err, analysischat.ErrSessionLimit), errors.Is(err, analysischat.ErrTurnLimit),
-		errors.Is(err, analysischat.ErrActiveTurnLimit), errors.Is(err, analysischat.ErrRateLimit):
+		errors.Is(err, analysischat.ErrActiveTurnLimit), errors.Is(err, analysischat.ErrRateLimit),
+		errors.Is(err, analysischat.ErrSourceInvestigationLimit), errors.Is(err, analysischat.ErrSourceInvestigationActiveLimit):
 		status, message, outcome = http.StatusTooManyRequests, err.Error(), "rejected"
+	case errors.Is(err, sourceinvestigation.ErrInvalidResult), errors.Is(err, sourceinvestigation.ErrUnavailable):
+		status, message, outcome = http.StatusBadGateway, "source investigation could not complete the request", "failed"
 	case errors.Is(err, analysischat.ErrRequestFailed):
 		outcome = "failed"
 	case errors.Is(err, context.DeadlineExceeded):
@@ -258,6 +262,9 @@ func safeAnalysisChatError(err error) string {
 	}
 	if errors.Is(err, analysischat.ErrRequestFailed) {
 		return "model request failed"
+	}
+	if errors.Is(err, sourceinvestigation.ErrInvalidResult) || errors.Is(err, sourceinvestigation.ErrUnavailable) {
+		return "source investigation failed"
 	}
 	reason := redact.URLs(strings.TrimSpace(err.Error()))
 	lower := strings.ToLower(reason)

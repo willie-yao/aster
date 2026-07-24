@@ -351,6 +351,123 @@ if grep -Fq 'name: ANALYSIS_CORRECTIONS_ENABLED' "$tmp/chat-server.yaml"; then
   echo 'analysis corrections enabled without explicit opt-in' >&2
   exit 1
 fi
+if grep -Fq 'name: ANALYSIS_SOURCE_INVESTIGATION_ENABLED' "$tmp/chat-server.yaml"; then
+  echo 'source investigation enabled without explicit opt-in' >&2
+  exit 1
+fi
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.chat.enabled=true \
+  --set server.chat.sourceInvestigation.enabled=true \
+  --set server.actions.mode=proxy \
+  --set server.actions.admins[0]=alice \
+  --set ai.enabled=true \
+  --set ai.token=test-token \
+  --set ai.githubReadToken=read-token \
+  --set ai.endpoint=http://model.test/v1/chat/completions \
+  --set ai.model=test-model > "$tmp/source-investigation.yaml"
+grep -A1 -Fq 'name: ANALYSIS_SOURCE_INVESTIGATION_ENABLED' "$tmp/source-investigation.yaml"
+grep -Fq 'name: ANALYSIS_SOURCE_INVESTIGATION_MAX_PER_SESSION' "$tmp/source-investigation.yaml"
+grep -Fq 'name: ANALYSIS_SOURCE_INVESTIGATION_MAX_ACTIVE_PER_OWNER' "$tmp/source-investigation.yaml"
+grep -A6 -Fq 'name: SOURCE_INVESTIGATION_GITHUB_TOKEN' "$tmp/source-investigation.yaml"
+grep -Fq 'optional: true' "$tmp/source-investigation.yaml"
+grep -Fq 'automountServiceAccountToken: true' "$tmp/source-investigation.yaml"
+grep -Fq 'app.kubernetes.io/component: orka-source-investigation' "$tmp/source-investigation.yaml"
+grep -Fq 'app.kubernetes.io/component: orka-source-investigation-runtime' "$tmp/source-investigation.yaml"
+grep -Fq 'serviceAccountName: test-prow-ai-dashboard-source' "$tmp/source-investigation.yaml"
+grep -Fq 'resources: ["tasks"]' "$tmp/source-investigation.yaml"
+grep -Fq 'verbs: ["create", "get", "patch", "delete"]' "$tmp/source-investigation.yaml"
+if grep -Eq 'resources: \["(secrets|pods|agents|agentruntimes)"\]|name: BOT_TOKEN|image: .*fixer' "$tmp/source-investigation.yaml"; then
+  echo 'source investigation render contains write credentials or broad runtime access' >&2
+  exit 1
+fi
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.chat.enabled=true \
+  --set server.chat.sourceInvestigation.enabled=true \
+  --set server.actions.mode=proxy \
+  --set server.actions.admins[0]=alice \
+  --set ai.enabled=true \
+  --set ai.token=test-token \
+  --show-only templates/orka-source-investigation-rbac.yaml > "$tmp/source-investigation-rbac.yaml"
+if [[ $(grep -Fc '  - apiGroups:' "$tmp/source-investigation-rbac.yaml") -ne 1 ]] ||
+   [[ $(grep -Fc '    resources: ["tasks"]' "$tmp/source-investigation-rbac.yaml") -ne 1 ]] ||
+   [[ $(grep -Fc '    verbs: ["create", "get", "patch", "delete"]' "$tmp/source-investigation-rbac.yaml") -ne 1 ]]; then
+  echo 'source investigation Role is not exactly Task-only create/get/patch/delete' >&2
+  exit 1
+fi
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" "${container_args[@]}" \
+  --set server.chat.enabled=true \
+  --set server.chat.sourceInvestigation.enabled=true \
+  --set server.actions.mode=proxy \
+  --set server.actions.admins[0]=alice \
+  --show-only templates/server-deployment.yaml > "$tmp/source-with-container-analysis-server.yaml"
+grep -Fq 'serviceAccountName: test-prow-ai-dashboard-source' "$tmp/source-with-container-analysis-server.yaml"
+if grep -Fq 'serviceAccountName: test-prow-ai-dashboard-orka' "$tmp/source-with-container-analysis-server.yaml"; then
+  echo 'source server shares the broader Orka analysis ServiceAccount' >&2
+  exit 1
+fi
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.chat.enabled=true \
+  --set server.chat.sourceInvestigation.enabled=true \
+  --set server.actions.enabled=true \
+  --set server.actions.mode=proxy \
+  --set server.actions.admins[0]=alice \
+  --set server.actions.proxy.botToken=test-token \
+  --set orka.fixRuntime.enabled=true \
+  --set orka.fixRuntime.image.tag=sha-test \
+  --set ai.enabled=true \
+  --set ai.token=test-token > "$tmp/source-with-fix-actions.yaml"
+grep -Fq 'serviceAccountName: test-prow-ai-dashboard-source' "$tmp/source-with-fix-actions.yaml"
+grep -Fq 'image: ghcr.io/willie-yao/prow-ai-dashboard/fixer:sha-test' "$tmp/source-with-fix-actions.yaml"
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.chat.enabled=true \
+  --set server.chat.sourceInvestigation.enabled=true \
+  --set server.actions.enabled=true \
+  --set server.actions.mode=proxy \
+  --set server.actions.admins[0]=alice \
+  --set server.actions.proxy.botToken=test-token \
+  --set orka.fixRuntime.enabled=true \
+  --set ai.enabled=true \
+  --set ai.token=test-token \
+  --show-only templates/orka-fix-runtime-rbac.yaml > "$tmp/source-with-fix-rbac.yaml"
+grep -Fq 'name: test-prow-ai-dashboard-orka' "$tmp/source-with-fix-rbac.yaml"
+grep -Fq 'name: test-prow-ai-dashboard-source' "$tmp/source-with-fix-rbac.yaml"
+
+long_fullname=$(printf 'a%.0s' {1..63})
+long_source_name="${long_fullname:0:56}-source"
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set fullnameOverride="$long_fullname" \
+  --set server.chat.enabled=true \
+  --set server.chat.sourceInvestigation.enabled=true \
+  --set server.actions.mode=proxy \
+  --set server.actions.admins[0]=alice \
+  --set ai.enabled=true \
+  --set ai.token=test-token > "$tmp/source-investigation-long-name.yaml"
+grep -Fq "serviceAccountName: $long_source_name" "$tmp/source-investigation-long-name.yaml"
+grep -Fq "name: $long_source_name" "$tmp/source-investigation-long-name.yaml"
+if [[ ${#long_source_name} -ne 63 ]]; then
+  echo 'generated source ServiceAccount name is not a 63-character DNS label' >&2
+  exit 1
+fi
+
+if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.chat.sourceInvestigation.enabled=true > "$tmp/source-without-chat.yaml" 2>&1; then
+  echo 'source investigation accepted without analysis chat' >&2
+  exit 1
+fi
+grep -Fq 'server.chat.sourceInvestigation.enabled requires server.chat.enabled' "$tmp/source-without-chat.yaml"
+
+if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.chat.enabled=true \
+  --set server.chat.sourceInvestigation.enabled=true \
+  --set server.chat.sourceInvestigation.maxActivePerOwner=0 \
+  --set ai.enabled=true \
+  --set ai.token=test-token > "$tmp/source-invalid-limit.yaml" 2>&1; then
+  echo 'source investigation accepted a non-positive active limit' >&2
+  exit 1
+fi
+grep -Fq 'server.chat.sourceInvestigation.maxActivePerOwner must be positive' "$tmp/source-invalid-limit.yaml"
 
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set server.chat.enabled=true \

@@ -22,6 +22,12 @@ for how to pin a release.
 
 ### Added
 
+- **Read-only source investigation for analysis chat.** Kubernetes-native chat
+  can opt into owner-bound Orka read-only agent Tasks pinned to the selected Prow
+  build's exact repository commit. Requests persist across replicas, support
+  reconnect and cancellation, reject workspace changes, and return only bounded
+  source citations verified against the pinned revision. The capability uses
+  a dedicated Task-only ServiceAccount and no GitHub write token.
 - **Authenticated analysis-trace console.** Server mode now exposes the private
   trace snapshot through admin-gated filtered and download endpoints and a
   dedicated operator page. Static Pages remains unchanged, and direct

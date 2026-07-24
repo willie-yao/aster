@@ -365,6 +365,10 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | `ingress.enabled`, `ingress.hosts`, `ingress.tls` | Public read path. |
 | `server.chat.enabled` | Enable authenticated analysis conversations. Requires `ai.enabled`. |
 | `server.chat.correctionsEnabled` | Enable explicit promotion and revocation of evidence-backed correction overlays. |
+| `server.chat.sourceInvestigation.enabled` | Enable the backend API for owner-bound read-only source investigation through Orka agent Tasks. |
+| `server.chat.sourceInvestigation.serviceAccountName` | Operator-managed dedicated ServiceAccount name when `orka.rbac.create=false`. |
+| `server.chat.sourceInvestigation.maxPerSession` | Persisted source requests per session. Defaults to `8`. |
+| `server.chat.sourceInvestigation.maxActivePerOwner` | Concurrent source Tasks per login. Defaults to `1`. |
 | `server.chat.sessionTTL` | Persisted conversation retention. Defaults to `2h`. |
 | `server.chat.maxSessions`, `server.chat.maxSessionsPerOwner` | Deployment-wide and per-login live-session caps. |
 | `server.chat.maxActiveTurnsPerOwner` | Concurrent background turns per login. Defaults to `2`. |
@@ -399,6 +403,7 @@ helm upgrade --install capz deploy/helm/prow-ai-dashboard \
   --set server.replicaCount=2 \
   --set server.chat.enabled=true \
   --set server.chat.correctionsEnabled=true \
+  --set server.chat.sourceInvestigation.enabled=true \
   --set server.actions.mode=oauth \
   --set 'server.actions.admins={alice,bob}' \
   --set server.actions.oauth.clientId=<client-id> \
@@ -417,6 +422,48 @@ Tune retention and capacity with `server.chat.sessionTTL`,
 Correction promotion is disabled by default. When enabled, the server writes a
 private audit ledger and the public `analysis_corrections.json` overlay to the
 same shared volume; it never rewrites fetched job JSON.
+
+Source investigation is also disabled by default. Configure its independent
+read-only runtime in `project.yaml`:
+
+```yaml
+ai:
+  source_investigation:
+    agent_ref: guarded-source-reader
+    api: http://orka.orka-system.svc.cluster.local:8080
+    namespace: orka-system
+    git_secret: source-repo-readonly
+    max_turns: 30
+    timeout: 10m
+    retries: 1
+```
+
+The Agent named by `agent_ref` must use a runtime supported by Orka's enforced
+`orka.ai/agent-read-only` contract. Orka releases that reject OpenCode in guarded
+mode cannot use an OpenCode Agent for this feature. Do not remove the guard to
+make an unsupported runtime start. Create `git_secret` in the Orka namespace with
+read-only repository credentials. The chart gives the web-facing server a
+dedicated ServiceAccount with only Task create, get, patch, and delete
+permissions. Source investigation alone does not require the git-capable fixer
+image. When write actions and `orka.fixRuntime.enabled=true` are also enabled,
+the existing fixer image selection still applies. If the source repository is
+private, put a read-only GitHub token in the AI Secret under `GITHUB_READ_TOKEN`
+so the server can verify returned quotes against the pinned commit.
+
+`retries` must be between `0` and `2`. A nonzero `max_turns` must be between `1`
+and `1000`, matching the Orka Task CRD.
+
+With chart-managed RBAC, `ai.source_investigation.namespace` must match the
+chart's `orka.namespace` value. If Orka-backed write actions are also enabled,
+the chart binds the server's source investigation ServiceAccount to both
+Task-only Roles. With operator-managed RBAC, bind that ServiceAccount in every
+namespace used by source investigation or fix Tasks.
+
+If the source runtime uses another namespace, disable `orka.rbac.create` and
+provide the same Task-only permissions there.
+
+This phase exposes the authenticated backend API and capability. SPA controls to
+start, reconnect, view, and cancel investigations are planned separately.
 
 ### Enabling actions with Helm
 

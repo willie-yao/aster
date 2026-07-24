@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysischat"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 )
 
 type fakeAnalysisChatRunner struct {
@@ -335,6 +336,9 @@ func TestWriteAnalysisChatErrorMapping(t *testing.T) {
 		{analysischat.ErrSessionLimit, http.StatusTooManyRequests, "analysis chat session limit reached", "rejected"},
 		{analysischat.ErrActiveTurnLimit, http.StatusTooManyRequests, "analysis chat active turn limit reached", "rejected"},
 		{analysischat.ErrRateLimit, http.StatusTooManyRequests, "analysis chat rate limit reached", "rejected"},
+		{analysischat.ErrSourceInvestigationLimit, http.StatusTooManyRequests, "source investigation session limit reached", "rejected"},
+		{analysischat.ErrSourceInvestigationActiveLimit, http.StatusTooManyRequests, "source investigation active limit reached", "rejected"},
+		{sourceinvestigation.ErrInvalidResult, http.StatusBadGateway, "source investigation could not complete the request", "failed"},
 		{analysischat.ErrRequestFailed, http.StatusBadGateway, "analysis chat could not complete the request", "failed"},
 		{context.DeadlineExceeded, http.StatusGatewayTimeout, "analysis chat request timed out", "failed"},
 		{errors.New("provider secret https://private.example/v1"), http.StatusBadGateway, "analysis chat could not complete the request", ""},

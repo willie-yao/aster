@@ -360,6 +360,10 @@ type AI struct {
 	// repo for systemic recurring patterns. Off by default. Excluded from
 	// manifest.json.
 	FixPRs *FixPRs `yaml:"fix_prs,omitempty" json:"-"`
+
+	// SourceInvestigation configures optional read-only source inspection for
+	// authenticated analysis chat requests.
+	SourceInvestigation *AnalysisSourceInvestigation `yaml:"source_investigation,omitempty" json:"-"`
 }
 
 // AIProvider is the resolved provider configuration used to construct clients.
@@ -390,6 +394,52 @@ func (c *Config) ResolveAIProvider(apiFallback, endpointFallback, modelFallback 
 		out.Model = c.AI.Model
 	}
 	out.Headers = c.AI.Headers
+	return out
+}
+
+// AnalysisSourceInvestigation configures read-only source inspection for analysis chat.
+type AnalysisSourceInvestigation struct {
+	AgentRef  string `yaml:"agent_ref,omitempty" json:"-"`
+	API       string `yaml:"api,omitempty" json:"-"`
+	Namespace string `yaml:"namespace,omitempty" json:"-"`
+	GitSecret string `yaml:"git_secret,omitempty" json:"-"`
+	Version   string `yaml:"version,omitempty" json:"-"`
+	Retries   *int   `yaml:"retries,omitempty" json:"-"`
+	MaxTurns  int    `yaml:"max_turns,omitempty" json:"-"`
+	Timeout   string `yaml:"timeout,omitempty" json:"-"`
+}
+
+const (
+	maxSourceInvestigationRetries = 2
+	maxSourceInvestigationTurns   = 1000
+)
+
+// EffectiveSourceInvestigation resolves read-only source runtime defaults.
+func (c *Config) EffectiveSourceInvestigation() AnalysisSourceInvestigation {
+	out := AnalysisSourceInvestigation{}
+	if c != nil && c.AI != nil && c.AI.SourceInvestigation != nil {
+		out = *c.AI.SourceInvestigation
+	}
+	out.AgentRef = strings.TrimSpace(out.AgentRef)
+	out.API = strings.TrimSpace(out.API)
+	out.Namespace = strings.TrimSpace(out.Namespace)
+	out.GitSecret = strings.TrimSpace(out.GitSecret)
+	out.Version = strings.TrimSpace(out.Version)
+	if out.Namespace == "" {
+		out.Namespace = "orka-system"
+	}
+	if out.Version == "" {
+		out.Version = "v1"
+	}
+	if out.Retries == nil {
+		out.Retries = intPtr(1)
+	}
+	if out.MaxTurns <= 0 {
+		out.MaxTurns = 30
+	}
+	if strings.TrimSpace(out.Timeout) == "" {
+		out.Timeout = "10m"
+	}
 	return out
 }
 
@@ -909,6 +959,28 @@ func (c *Config) Validate() error {
 		// branding.source_repo, risking issues on the wrong repo.
 		if r := c.Issues.Repo; r != nil && (r.Owner == "" || r.Name == "") {
 			return fmt.Errorf("issues.repo requires both owner and name (omit issues.repo entirely to default to branding.source_repo)")
+		}
+	}
+
+	if c.AI != nil && c.AI.SourceInvestigation != nil {
+		source := c.AI.SourceInvestigation
+		if strings.TrimSpace(source.AgentRef) == "" || strings.TrimSpace(source.API) == "" {
+			return fmt.Errorf("ai.source_investigation requires agent_ref and api")
+		}
+		if source.Retries != nil && (*source.Retries < 0 || *source.Retries > maxSourceInvestigationRetries) {
+			return fmt.Errorf("ai.source_investigation.retries must be between 0 and %d", maxSourceInvestigationRetries)
+		}
+		if source.MaxTurns < 0 || source.MaxTurns > maxSourceInvestigationTurns {
+			return fmt.Errorf("ai.source_investigation.max_turns must be 0 or between 1 and %d", maxSourceInvestigationTurns)
+		}
+		if value := strings.TrimSpace(source.Timeout); value != "" {
+			timeout, err := time.ParseDuration(value)
+			if err != nil {
+				return fmt.Errorf("ai.source_investigation.timeout %q is not a valid duration", source.Timeout)
+			}
+			if timeout <= 0 || timeout > 30*time.Minute {
+				return fmt.Errorf("ai.source_investigation.timeout must be greater than zero and at most 30m")
+			}
 		}
 	}
 

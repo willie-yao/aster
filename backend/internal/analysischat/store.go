@@ -8,12 +8,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"golang.org/x/sys/unix"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 )
 
 const (
@@ -31,15 +33,16 @@ type persistedState struct {
 }
 
 type persistedSession struct {
-	View              SessionView                 `json:"view"`
-	Owner             string                      `json:"owner"`
-	Resolved          persistedResolvedAnalysis   `json:"resolved"`
-	Turns             int                         `json:"turns"`
-	ExpiresAt         time.Time                   `json:"expires_at"`
-	CreateRequestID   string                      `json:"create_request_id"`
-	CreateRequestHash string                      `json:"create_request_hash"`
-	Requests          map[string]persistedRequest `json:"requests,omitempty"`
-	Active            *persistedActiveTurn        `json:"active,omitempty"`
+	View              SessionView                       `json:"view"`
+	Owner             string                            `json:"owner"`
+	Resolved          persistedResolvedAnalysis         `json:"resolved"`
+	Turns             int                               `json:"turns"`
+	ExpiresAt         time.Time                         `json:"expires_at"`
+	CreateRequestID   string                            `json:"create_request_id"`
+	CreateRequestHash string                            `json:"create_request_hash"`
+	Requests          map[string]persistedRequest       `json:"requests,omitempty"`
+	Active            *persistedActiveTurn              `json:"active,omitempty"`
+	Investigations    map[string]persistedInvestigation `json:"investigations,omitempty"`
 }
 
 type persistedResolvedAnalysis struct {
@@ -54,6 +57,16 @@ type persistedRequest struct {
 	QuestionHash string `json:"question_hash"`
 	Status       string `json:"status"`
 	FailureKind  string `json:"failure_kind,omitempty"`
+}
+
+type persistedInvestigation struct {
+	View          sourceinvestigation.View    `json:"view"`
+	InputHash     string                      `json:"input_hash"`
+	Subject       sourceinvestigation.Subject `json:"subject"`
+	FailureKind   string                      `json:"failure_kind,omitempty"`
+	LeaseID       string                      `json:"lease_id,omitempty"`
+	LeaseExpires  time.Time                   `json:"lease_expires,omitempty"`
+	CancelRequest bool                        `json:"cancel_requested,omitempty"`
 }
 
 type persistedActiveTurn struct {
@@ -74,6 +87,7 @@ const (
 	failureModel     = "model"
 	failureTimeout   = "timeout"
 	failureCancelled = "cancelled"
+	failureSource    = "source"
 )
 
 type sessionStore struct {
@@ -259,11 +273,20 @@ func writePrivateJSONLimitWithSync(
 	return nil
 }
 
-func persistResolved(resolved resolvedAnalysis) persistedResolvedAnalysis {
+func persistResolved(resolved resolvedAnalysis, requiredRepo string) persistedResolvedAnalysis {
 	build := models.BuildInfo{
-		BuildID: resolved.build.BuildID,
-		JobName: resolved.build.JobName,
-		WebURL:  resolved.build.WebURL,
+		BuildID:     resolved.build.BuildID,
+		JobName:     resolved.build.JobName,
+		Started:     resolved.build.Started,
+		Finished:    resolved.build.Finished,
+		Passed:      resolved.build.Passed,
+		Result:      resolved.build.Result,
+		Commit:      resolved.build.Commit,
+		Revision:    resolved.build.Revision,
+		RepoVersion: resolved.build.RepoVersion,
+		RepoRefs:    boundedRepoRefs(resolved.build.RepoRefs, requiredRepo),
+		PullNumber:  resolved.build.PullNumber,
+		WebURL:      resolved.build.WebURL,
 	}
 	testCase := models.TestCase{
 		Name:           resolved.testCase.Name,
@@ -286,6 +309,55 @@ func persistResolved(resolved resolvedAnalysis) persistedResolvedAnalysis {
 		Ref: resolved.ref, JobID: resolved.jobID, BuildPrefix: resolved.buildPrefix,
 		Build: build, TestCase: testCase,
 	}
+}
+
+func boundedRepoRefs(refs map[string]string, requiredRepo string) map[string]string {
+	if len(refs) == 0 {
+		return nil
+	}
+	wanted := strings.ToLower(strings.TrimSpace(requiredRepo))
+	requiredFound := false
+	requiredValid := true
+	requiredRevision := ""
+	keys := make([]string, 0, len(refs))
+	for repo, value := range refs {
+		if wanted != "" && strings.ToLower(strings.TrimSpace(repo)) == wanted {
+			candidate, ok := exactRepoRevision(value)
+			if !ok || requiredRevision != "" && requiredRevision != candidate {
+				requiredValid = false
+			}
+			if ok && requiredRevision == "" {
+				requiredRevision = candidate
+			}
+			requiredFound = true
+			continue
+		}
+		keys = append(keys, repo)
+	}
+	slices.Sort(keys)
+	limit := 20
+	if requiredFound {
+		limit--
+	}
+	if len(keys) > limit {
+		keys = keys[:limit]
+	}
+	out := make(map[string]string, len(keys)+1)
+	for _, key := range keys {
+		repo := strings.TrimSpace(key)
+		revision := strings.TrimSpace(refs[key])
+		if repo == "" || revision == "" || len(repo) > 512 || len(revision) > 256 {
+			continue
+		}
+		out[repo] = revision
+	}
+	if requiredFound {
+		if !requiredValid || requiredRevision == "" {
+			requiredRevision = "ambiguous"
+		}
+		out[wanted] = requiredRevision
+	}
+	return out
 }
 
 func boundedPersistedFiles(files []string) []string {

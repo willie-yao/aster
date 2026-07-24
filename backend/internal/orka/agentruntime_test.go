@@ -28,6 +28,7 @@ type fakeTaskAPI struct {
 	calls       int
 	deleted     bool
 	deleteCalls int
+	deleteErrs  []error
 }
 
 func (f *fakeTaskAPI) Apply(_ context.Context, _ schema.GroupVersionResource, _ string, obj map[string]any) error {
@@ -37,8 +38,15 @@ func (f *fakeTaskAPI) Apply(_ context.Context, _ schema.GroupVersionResource, _ 
 }
 
 func (f *fakeTaskAPI) Delete(context.Context, schema.GroupVersionResource, string, string) error {
-	f.deleted = true
 	f.deleteCalls++
+	if len(f.deleteErrs) > 0 {
+		err := f.deleteErrs[0]
+		f.deleteErrs = f.deleteErrs[1:]
+		if err != nil {
+			return err
+		}
+	}
+	f.deleted = true
 	return nil
 }
 

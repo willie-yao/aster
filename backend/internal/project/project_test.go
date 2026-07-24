@@ -994,3 +994,47 @@ func TestValidateRejectsUnknownAIAPI(t *testing.T) {
 		t.Fatalf("Validate() error = %v", err)
 	}
 }
+
+func TestEffectiveSourceInvestigationDefaults(t *testing.T) {
+	cfg := &Config{AI: &AI{SourceInvestigation: &AnalysisSourceInvestigation{
+		AgentRef: " source-reader ", API: " http://orka:8080 ",
+	}}}
+	got := cfg.EffectiveSourceInvestigation()
+	if got.AgentRef != "source-reader" || got.API != "http://orka:8080" || got.Namespace != "orka-system" ||
+		got.Version != "v1" || got.Retries == nil || *got.Retries != 1 || got.MaxTurns != 30 || got.Timeout != "10m" {
+		t.Fatalf("source investigation defaults = %+v", got)
+	}
+}
+
+func TestValidateSourceInvestigation(t *testing.T) {
+	cfg := validConfig()
+	cfg.AI = &AI{SourceInvestigation: &AnalysisSourceInvestigation{}}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "agent_ref and api") {
+		t.Fatalf("missing source config error = %v", err)
+	}
+	cfg.AI.SourceInvestigation.AgentRef = "reader"
+	cfg.AI.SourceInvestigation.API = "http://orka:8080"
+	cfg.AI.SourceInvestigation.Timeout = "15m"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid source config rejected: %v", err)
+	}
+	cfg.AI.SourceInvestigation.Timeout = "31m"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "at most 30m") {
+		t.Fatalf("oversized timeout error = %v", err)
+	}
+	cfg.AI.SourceInvestigation.Timeout = "15m"
+	retries := 3
+	cfg.AI.SourceInvestigation.Retries = &retries
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "between 0 and 2") {
+		t.Fatalf("oversized retries error = %v", err)
+	}
+	retries = 2
+	cfg.AI.SourceInvestigation.MaxTurns = 1001
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "between 1 and 1000") {
+		t.Fatalf("oversized max turns error = %v", err)
+	}
+	cfg.AI.SourceInvestigation.MaxTurns = 1000
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("source config boundary rejected: %v", err)
+	}
+}

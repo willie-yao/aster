@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -131,18 +130,7 @@ func ValidateContainerAnalyzerOptions(opts ContainerAnalyzerOptions) error {
 }
 
 func validateOrkaResultAPI(raw string) error {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return fmt.Errorf("container analysis Orka result API is required")
-	}
-	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-		return fmt.Errorf("container analysis Orka result API must be an absolute http or https URL")
-	}
-	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return fmt.Errorf("container analysis Orka result API must not contain credentials, a query, or a fragment")
-	}
-	return nil
+	return validateResultAPI(raw, "container analysis Orka result API")
 }
 
 func immutableContainerAnalyzerImage(image string) bool {
