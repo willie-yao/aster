@@ -109,12 +109,14 @@ volume access and backups must be treated as operator-private data.
 
 Application-generated terminal errors carry a private outcome header so the
 frontend can distinguish them from an ingress-generated `502` or `504` after a
-committed response. An in-flight turn carries a lease longer than the HTTP model timeout. If a pod
+committed response. An in-flight turn carries a lease longer than the HTTP model
+timeout. If a pod
 dies before recording the result, another replica marks that request outcome
 unknown instead of running the same idempotency key twice. The client reloads
-the authoritative session before allowing an explicit retry. Expired sessions
-are removed lazily on session access or creation and release global and
-per-owner capacity.
+the authoritative session before allowing an explicit retry. Startup cleanup,
+a lifecycle-bound periodic cleanup loop, and request-time cleanup remove
+expired sessions from the persisted file and release global and per-owner
+capacity.
 
 Operational settings:
 

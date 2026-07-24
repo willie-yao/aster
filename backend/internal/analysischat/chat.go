@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"maps"
 	"os"
 	"path/filepath"
@@ -144,6 +145,7 @@ type Options struct {
 	// TurnLeaseTTL bounds an in-flight turn owned by one replica.
 	TurnLeaseTTL     time.Duration
 	StoreLockTimeout time.Duration
+	CleanupInterval  time.Duration
 	Now              func() time.Time
 }
 
@@ -172,6 +174,15 @@ func (o Options) normalized(dataDir string) Options {
 	if o.StoreLockTimeout <= 0 {
 		o.StoreLockTimeout = 5 * time.Second
 	}
+	if o.CleanupInterval <= 0 {
+		o.CleanupInterval = time.Minute
+		if quarter := o.SessionTTL / 4; quarter < o.CleanupInterval {
+			o.CleanupInterval = quarter
+		}
+		if o.CleanupInterval < time.Second {
+			o.CleanupInterval = time.Second
+		}
+	}
 	if o.Now == nil {
 		o.Now = time.Now
 	}
@@ -195,7 +206,7 @@ type Service struct {
 }
 
 // NewService creates a durable analysis chat service.
-func NewService(dataDir string, runner Runner, opts Options) (*Service, error) {
+func NewService(ctx context.Context, dataDir string, runner Runner, opts Options) (*Service, error) {
 	if strings.TrimSpace(dataDir) == "" {
 		return nil, fmt.Errorf("analysis chat data directory is required")
 	}
@@ -213,7 +224,39 @@ func NewService(dataDir string, runner Runner, opts Options) (*Service, error) {
 	if err := store.validate(); err != nil {
 		return nil, fmt.Errorf("validating analysis chat state: %w", err)
 	}
-	return &Service{dataDir: dataDir, runner: runner, opts: opts, store: store}, nil
+	service := &Service{dataDir: dataDir, runner: runner, opts: opts, store: store}
+	if err := service.cleanupPersisted(); err != nil {
+		return nil, fmt.Errorf("cleaning analysis chat state: %w", err)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	go service.cleanupLoop(ctx)
+	return service, nil
+}
+
+func (s *Service) cleanupLoop(ctx context.Context) {
+	ticker := time.NewTicker(s.opts.CleanupInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := s.cleanupPersisted(); err != nil {
+				log.Printf("analysis chat cleanup: %v", err)
+			}
+		}
+	}
+}
+
+func (s *Service) cleanupPersisted() error {
+	ctx, cancel := s.store.context()
+	defer cancel()
+	now := s.opts.Now().UTC()
+	return s.store.update(ctx, func(state *persistedState) (bool, error) {
+		return s.cleanup(state, now), nil
+	})
 }
 
 // Create resolves an analysis snapshot and starts an owner-bound session.
@@ -422,7 +465,10 @@ func (s *Service) Send(ctx context.Context, id, owner, requestID, question strin
 			previous.Status = requestFailed
 			previous.FailureKind = requestFailureKind(runErr)
 			current.Requests[requestID] = previous
-			return true, runErr
+			if errors.Is(runErr, context.DeadlineExceeded) || errors.Is(runErr, context.Canceled) {
+				return true, runErr
+			}
+			return true, fmt.Errorf("%w: %v", ErrRequestFailed, runErr)
 		}
 		stamp := finishedAt.Format(time.RFC3339)
 		current.View.Messages = append(current.View.Messages,

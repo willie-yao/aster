@@ -2,6 +2,7 @@ package analysischat
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -93,7 +94,7 @@ func TestServiceCreateAndSend(t *testing.T) {
 		ToolCalls: 2, GCSBytes: 1024, ElapsedMs: 50,
 	}}
 	now := time.Date(2026, 7, 23, 13, 0, 0, 0, time.UTC)
-	service, err := NewService(dir, runner, Options{Now: func() time.Time { return now }})
+	service, err := NewService(t.Context(), dir, runner, Options{Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +150,7 @@ func TestServiceResolveRejectsAmbiguousAndChangedAnalysis(t *testing.T) {
 		analyzedTest("TestCluster", "junit_01.xml", "2026-07-23T12:00:00Z"),
 		analyzedTest("TestCluster", "junit_02.xml", "2026-07-23T12:00:00Z"),
 	))
-	service, err := NewService(dir, &fakeRunner{}, Options{})
+	service, err := NewService(t.Context(), dir, &fakeRunner{}, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,9 +173,10 @@ func TestServiceBoundsSessionsTurnsAndQuestions(t *testing.T) {
 	dir := t.TempDir()
 	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
 	runner := &fakeRunner{reply: Reply{Answer: "answer", Assessment: "explains"}}
-	service, err := NewService(dir, runner, Options{
+	service, err := NewService(t.Context(), dir, runner, Options{
 		MaxSessions: 2, MaxSessionsPerOwner: 1, MaxTurns: 1, MaxQuestionBytes: 8,
 	})
+
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +206,7 @@ func TestServiceSerializesTurns(t *testing.T) {
 		reply:   Reply{Answer: "answer", Assessment: "explains"},
 		started: make(chan struct{}, 1), release: make(chan struct{}),
 	}
-	service, err := NewService(dir, runner, Options{})
+	service, err := NewService(t.Context(), dir, runner, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +241,7 @@ func TestServiceResolvesPresubmitBuildPrefix(t *testing.T) {
 	detail.Runs[0].PullNumber = "42"
 	writeJobDetail(t, dir, detail)
 	runner := &fakeRunner{reply: Reply{Answer: "answer", Assessment: "explains"}}
-	service, err := NewService(dir, runner, Options{})
+	service, err := NewService(t.Context(), dir, runner, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +264,7 @@ func TestServiceRunnerErrorClearsBusy(t *testing.T) {
 	dir := t.TempDir()
 	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
 	runner := &fakeRunner{err: errors.New("model unavailable")}
-	service, err := NewService(dir, runner, Options{})
+	service, err := NewService(t.Context(), dir, runner, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +285,7 @@ func TestServiceRunnerErrorClearsBusy(t *testing.T) {
 }
 
 func TestServiceRejectsOversizedAnalysisReference(t *testing.T) {
-	service, err := NewService(t.TempDir(), &fakeRunner{}, Options{})
+	service, err := NewService(t.Context(), t.TempDir(), &fakeRunner{}, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +303,7 @@ func TestServiceResolvesStrongJUnitIdentity(t *testing.T) {
 	second.SuiteName, second.ClassName = "suite", "second"
 	second.AIAnalysis.RootCause = "the second class failed"
 	writeJobDetail(t, dir, testDetail(first, second))
-	service, err := NewService(dir, &fakeRunner{}, Options{})
+	service, err := NewService(t.Context(), dir, &fakeRunner{}, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,9 +333,10 @@ func TestServiceExpiryReleasesCapacity(t *testing.T) {
 	start := time.Date(2026, 7, 23, 13, 0, 0, 0, time.UTC)
 	nowNanos.Store(start.UnixNano())
 	now := func() time.Time { return time.Unix(0, nowNanos.Load()) }
-	service, err := NewService(dir, &fakeRunner{reply: Reply{Answer: "answer", Assessment: "explains"}}, Options{
+	service, err := NewService(t.Context(), dir, &fakeRunner{reply: Reply{Answer: "answer", Assessment: "explains"}}, Options{
 		SessionTTL: time.Minute, MaxSessions: 1, MaxSessionsPerOwner: 1, Now: now,
 	})
+
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,9 +368,10 @@ func TestServiceBusySessionCompletesAcrossExpiry(t *testing.T) {
 		reply:   Reply{Answer: "answer", Assessment: "explains"},
 		started: make(chan struct{}, 1), release: make(chan struct{}),
 	}
-	service, err := NewService(dir, runner, Options{
+	service, err := NewService(t.Context(), dir, runner, Options{
 		SessionTTL: time.Minute, MaxSessions: 1, MaxSessionsPerOwner: 1, Now: now,
 	})
+
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -405,7 +409,7 @@ func TestServiceResolvesTrimmedPublishedTestName(t *testing.T) {
 	dir := t.TempDir()
 	testCase := analyzedTest(" TestCluster ", "junit.xml", "2026-07-23T12:00:00Z")
 	writeJobDetail(t, dir, testDetail(testCase))
-	service, err := NewService(dir, &fakeRunner{}, Options{})
+	service, err := NewService(t.Context(), dir, &fakeRunner{}, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -425,7 +429,7 @@ func TestServiceRunnerFailuresReachTurnLimit(t *testing.T) {
 	dir := t.TempDir()
 	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
 	runner := &fakeRunner{err: errors.New("model unavailable")}
-	service, err := NewService(dir, runner, Options{MaxTurns: 2})
+	service, err := NewService(t.Context(), dir, runner, Options{MaxTurns: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -452,13 +456,13 @@ func TestServiceRunnerFailuresReachTurnLimit(t *testing.T) {
 func TestServiceRejectsPublicStateDirectory(t *testing.T) {
 	dataDir := t.TempDir()
 	writeJobDetail(t, dataDir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
-	if _, err := NewService(dataDir, &fakeRunner{}, Options{StateDir: filepath.Join(dataDir, "chat")}); err == nil || !strings.Contains(err.Error(), "dot-prefixed") {
+	if _, err := NewService(t.Context(), dataDir, &fakeRunner{}, Options{StateDir: filepath.Join(dataDir, "chat")}); err == nil || !strings.Contains(err.Error(), "dot-prefixed") {
 		t.Fatalf("visible state directory error = %v", err)
 	}
-	if _, err := NewService(dataDir, &fakeRunner{}, Options{StateDir: filepath.Join(dataDir, ".private", "chat")}); err != nil {
+	if _, err := NewService(t.Context(), dataDir, &fakeRunner{}, Options{StateDir: filepath.Join(dataDir, ".private", "chat")}); err != nil {
 		t.Fatalf("hidden state directory: %v", err)
 	}
-	if _, err := NewService(dataDir, &fakeRunner{}, Options{StateDir: t.TempDir()}); err != nil {
+	if _, err := NewService(t.Context(), dataDir, &fakeRunner{}, Options{StateDir: t.TempDir()}); err != nil {
 		t.Fatalf("external state directory: %v", err)
 	}
 }
@@ -468,7 +472,7 @@ func TestServicePersistsSessionsAndIdempotentResults(t *testing.T) {
 	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
 	ref := AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}
 	firstRunner := &fakeRunner{reply: Reply{Answer: "answer", Assessment: "supports"}}
-	first, err := NewService(dir, firstRunner, Options{})
+	first, err := NewService(t.Context(), dir, firstRunner, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -481,7 +485,7 @@ func TestServicePersistsSessionsAndIdempotentResults(t *testing.T) {
 	}
 
 	secondRunner := &fakeRunner{reply: Reply{Answer: "duplicate", Assessment: "explains"}}
-	second, err := NewService(dir, secondRunner, Options{})
+	second, err := NewService(t.Context(), dir, secondRunner, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -531,11 +535,11 @@ func TestServiceSerializesTurnsAcrossInstances(t *testing.T) {
 		reply:   Reply{Answer: "answer", Assessment: "supports"},
 		started: make(chan struct{}, 1), release: make(chan struct{}),
 	}
-	first, err := NewService(dir, runner, Options{})
+	first, err := NewService(t.Context(), dir, runner, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := NewService(dir, runner, Options{})
+	second, err := NewService(t.Context(), dir, runner, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -578,7 +582,7 @@ func TestServicePersistsFailedRequestOutcome(t *testing.T) {
 	dir := t.TempDir()
 	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
 	failing := &fakeRunner{err: errors.New("model unavailable")}
-	first, err := NewService(dir, failing, Options{})
+	first, err := NewService(t.Context(), dir, failing, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -586,12 +590,12 @@ func TestServicePersistsFailedRequestOutcome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := first.Send(context.Background(), created.ID, "alice", "turn-failure", "question"); err == nil {
-		t.Fatal("failed turn returned nil error")
+	if _, err := first.Send(context.Background(), created.ID, "alice", "turn-failure", "question"); !errors.Is(err, ErrRequestFailed) {
+		t.Fatalf("failed turn error = %v", err)
 	}
 
 	succeeding := &fakeRunner{reply: Reply{Answer: "answer", Assessment: "supports"}}
-	second, err := NewService(dir, succeeding, Options{})
+	second, err := NewService(t.Context(), dir, succeeding, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -624,11 +628,11 @@ func TestServiceRecoversExpiredTurnLease(t *testing.T) {
 		started: make(chan struct{}, 1), release: make(chan struct{}),
 	}
 	opts := Options{Now: now, SessionTTL: time.Hour, TurnLeaseTTL: time.Minute}
-	first, err := NewService(dir, runner, opts)
+	first, err := NewService(t.Context(), dir, runner, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := NewService(dir, runner, opts)
+	second, err := NewService(t.Context(), dir, runner, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -659,4 +663,72 @@ func TestServiceRecoversExpiredTurnLease(t *testing.T) {
 	if calls != 2 {
 		t.Fatalf("runner calls = %d, want abandoned plus explicit retry", calls)
 	}
+}
+
+func TestServiceStartupCleanupRemovesExpiredPersistence(t *testing.T) {
+	dir := t.TempDir()
+	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
+	var nowNanos atomic.Int64
+	start := time.Date(2026, 7, 23, 13, 0, 0, 0, time.UTC)
+	nowNanos.Store(start.UnixNano())
+	now := func() time.Time { return time.Unix(0, nowNanos.Load()) }
+	firstCtx, cancel := context.WithCancel(t.Context())
+	first, err := NewService(firstCtx, dir, &fakeRunner{}, Options{
+		Now: now, SessionTTL: time.Minute, CleanupInterval: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", "create-startup-cleanup"); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	nowNanos.Store(start.Add(2 * time.Minute).UnixNano())
+	if _, err := NewService(t.Context(), dir, &fakeRunner{}, Options{
+		Now: now, SessionTTL: time.Minute, CleanupInterval: time.Hour,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := persistedSessionCount(t, dir); got != 0 {
+		t.Fatalf("persisted sessions after startup cleanup = %d", got)
+	}
+}
+
+func TestServicePeriodicCleanupBoundsPersistenceRetention(t *testing.T) {
+	dir := t.TempDir()
+	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
+	var nowNanos atomic.Int64
+	start := time.Date(2026, 7, 23, 13, 0, 0, 0, time.UTC)
+	nowNanos.Store(start.UnixNano())
+	now := func() time.Time { return time.Unix(0, nowNanos.Load()) }
+	service, err := NewService(t.Context(), dir, &fakeRunner{}, Options{
+		Now: now, SessionTTL: time.Minute, CleanupInterval: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", "create-periodic-cleanup"); err != nil {
+		t.Fatal(err)
+	}
+	nowNanos.Store(start.Add(2 * time.Minute).UnixNano())
+	deadline := time.Now().Add(time.Second)
+	for persistedSessionCount(t, dir) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("periodic cleanup did not remove expired persisted session")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func persistedSessionCount(t *testing.T, dir string) int {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, ".analysis-chat", stateFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state persistedState
+	if err := json.Unmarshal(data, &state); err != nil {
+		t.Fatal(err)
+	}
+	return len(state.Sessions)
 }

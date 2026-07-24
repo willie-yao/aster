@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -230,6 +231,9 @@ func TestWriteAnalysisChatErrorMapping(t *testing.T) {
 var _ AnalysisChatRunner = (*fakeAnalysisChatRunner)(nil)
 
 func TestSafeAnalysisChatErrorHidesProviderBodies(t *testing.T) {
+	if got := safeAnalysisChatError(fmt.Errorf("%w: private provider body", analysischat.ErrRequestFailed)); got != "model request failed" {
+		t.Fatalf("persisted request failure log = %q", got)
+	}
 	for _, reason := range []string{
 		`chat returned 500: private prompt body`,
 		`responses status 500: private artifact body`,

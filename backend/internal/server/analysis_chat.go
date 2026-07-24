@@ -163,6 +163,9 @@ func safeAnalysisChatError(err error) string {
 	if err == nil {
 		return "unknown error"
 	}
+	if errors.Is(err, analysischat.ErrRequestFailed) {
+		return "model request failed"
+	}
 	reason := redact.URLs(strings.TrimSpace(err.Error()))
 	lower := strings.ToLower(reason)
 	if strings.Contains(lower, "chat returned") || strings.Contains(lower, "responses returned") ||

@@ -49,6 +49,9 @@ func main() {
 	flag.StringVar(&projectDir, "project-dir", "", "project.yaml directory; enables admin features when set with AUTH_MODE")
 	flag.Parse()
 
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
 	opts := server.Options{
 		DataDir:      dataDir,
 		StaticDir:    staticDir,
@@ -58,7 +61,7 @@ func main() {
 	// Enable admin-gated features only when a project config and an auth mode are
 	// both provided. Otherwise the server stays read-only.
 	if projectDir != "" && os.Getenv("AUTH_MODE") != "" {
-		if err := enableInteractiveFeatures(&opts, projectDir, dataDir); err != nil {
+		if err := enableInteractiveFeatures(ctx, &opts, projectDir, dataDir); err != nil {
 			log.Fatalf("server: enabling interactive features: %v", err)
 		}
 		log.Printf("🔐 admin features enabled (auth mode: %s)", opts.AuthMode)
@@ -83,10 +86,6 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	// Shut down gracefully on SIGINT/SIGTERM so K8s rollouts drain cleanly.
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
 	go func() {
 		log.Printf("🌐 serving %s -> data=%s static=%q", addr, dataDir, staticDir)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -103,7 +102,7 @@ func main() {
 }
 
 // enableInteractiveFeatures loads the project config and authenticated services.
-func enableInteractiveFeatures(opts *server.Options, projectDir, dataDir string) error {
+func enableInteractiveFeatures(ctx context.Context, opts *server.Options, projectDir, dataDir string) error {
 	cfg, err := project.Load(filepath.Join(projectDir, "project.yaml"))
 	if err != nil {
 		return fmt.Errorf("loading project config: %w", err)
@@ -122,7 +121,7 @@ func enableInteractiveFeatures(opts *server.Options, projectDir, dataDir string)
 		}
 	}
 	if features.AnalysisChat {
-		if err := enableAnalysisChat(opts, cfg, projectDir, dataDir); err != nil {
+		if err := enableAnalysisChat(ctx, opts, cfg, projectDir, dataDir); err != nil {
 			return err
 		}
 	}
@@ -238,7 +237,7 @@ func enableActions(opts *server.Options, cfg *project.Config, dataDir string) er
 	return nil
 }
 
-func enableAnalysisChat(opts *server.Options, cfg *project.Config, projectDir, dataDir string) error {
+func enableAnalysisChat(ctx context.Context, opts *server.Options, cfg *project.Config, projectDir, dataDir string) error {
 	timeout, err := analysisChatTimeoutFromEnv()
 	if err != nil {
 		return err
@@ -271,7 +270,7 @@ func enableAnalysisChat(opts *server.Options, cfg *project.Config, projectDir, d
 	if err != nil {
 		return fmt.Errorf("configuring analysis chat agent: %w", err)
 	}
-	service, err := analysischat.NewService(dataDir, agent, serviceOpts)
+	service, err := analysischat.NewService(ctx, dataDir, agent, serviceOpts)
 	if err != nil {
 		return err
 	}
