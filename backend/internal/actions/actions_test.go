@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -222,5 +223,18 @@ func TestPreviewFixWithContextRejectsMismatchedPatternTarget(t *testing.T) {
 		); !errors.Is(err, ErrPatternMismatch) {
 			t.Fatalf("target %+v error = %v", target, err)
 		}
+	}
+}
+
+func TestSafeFixPreviewErrorPreservesContextSentinels(t *testing.T) {
+	for _, cause := range []error{context.Canceled, context.DeadlineExceeded} {
+		wrapped := fmt.Errorf("agent generation: %w", cause)
+		if got := safeFixPreviewError(wrapped); !errors.Is(got, cause) {
+			t.Errorf("safeFixPreviewError(%v) = %v", wrapped, got)
+		}
+	}
+	got := safeFixPreviewError(errors.New("chat returned 500: private provider body"))
+	if strings.Contains(got.Error(), "private provider body") {
+		t.Fatalf("provider body leaked: %v", got)
 	}
 }

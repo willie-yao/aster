@@ -341,13 +341,20 @@ func (s *Service) generateFixPreviewForPattern(
 		gf, err = mgr.GeneratePreviewWithContext(ctx, pattern, instruction, *generationContext)
 	}
 	if err != nil {
-		return PreviewResult{}, nil, fmt.Errorf("%s", safeReason(err.Error()))
+		return PreviewResult{}, nil, safeFixPreviewError(err)
 	}
 	return PreviewResult{
 		Kind: gfKind, Title: gf.Title, Body: gf.Description, Diff: gf.Preview.Diff,
 		VerifyStatus: string(gf.Preview.Verify.Status), VerifySummary: gf.Preview.Verify.Summary,
 		VerifyOutput: gf.Preview.Verify.Output,
 	}, &previewEntry{kind: gfKind, fix: gf}, nil
+}
+
+func safeFixPreviewError(err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	return fmt.Errorf("%s", safeReason(err.Error()))
 }
 
 const gfKind = "fix"
