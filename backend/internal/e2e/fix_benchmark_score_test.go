@@ -289,7 +289,7 @@ func runFixBenchmarkCommandRaw(ctx context.Context, dir string, stdin []byte, na
 func fixBenchmarkCommandEnv() []string {
 	blocked := map[string]bool{
 		"GIT_CONFIG_GLOBAL": true, "GIT_CONFIG_SYSTEM": true, "GIT_TERMINAL_PROMPT": true,
-		"GOENV": true, "GOFLAGS": true, "GOWORK": true,
+		"GO111MODULE": true, "GOENV": true, "GOFLAGS": true, "GOWORK": true,
 	}
 	env := make([]string, 0, len(os.Environ())+6)
 	for _, entry := range os.Environ() {
@@ -305,6 +305,7 @@ func fixBenchmarkCommandEnv() []string {
 		"GIT_TERMINAL_PROMPT=0",
 		"GOENV=off",
 		"GOFLAGS=",
+		"GO111MODULE=on",
 		"GOWORK=off",
 	)
 }
@@ -492,6 +493,38 @@ func TestFixBenchmarkRejectsIncompleteOrUnsafeResults(t *testing.T) {
 				benchmarkCase.RequiredFiles[1]: string(baseTest) + "\n// Comment-only test change.\n",
 			})
 		}, miss: "regression_test"},
+		{name: "semantically wrong but well formed", make: func(t *testing.T) runtimepkg.GenerateResult {
+			return makeFixBenchmarkResult(t, sourceRoot, benchmarkCase, map[string]string{
+				benchmarkCase.RequiredFiles[0]: `package routetable
+
+// NetworkSpec contains the route table names used by the control-plane and node subnets.
+type NetworkSpec struct {
+	ControlPlaneRouteTable string
+	NodeRouteTable         string
+}
+
+// DefaultControlPlaneRouteTable applies network defaults without replacing explicit values.
+func DefaultControlPlaneRouteTable(spec *NetworkSpec) {
+	if spec == nil || spec.ControlPlaneRouteTable != "" {
+		return
+	}
+	spec.ControlPlaneRouteTable = "some-default"
+}
+`,
+				benchmarkCase.RequiredFiles[1]: `package routetable
+
+import "testing"
+
+func TestDefaultControlPlaneRouteTableSetsAValue(t *testing.T) {
+	spec := &NetworkSpec{NodeRouteTable: "node"}
+	DefaultControlPlaneRouteTable(spec)
+	if spec.ControlPlaneRouteTable == "" {
+		t.Fatal("control-plane route table was not defaulted")
+	}
+}
+`,
+			})
+		}, miss: "verification"},
 		{name: "protected file", make: func(t *testing.T) runtimepkg.GenerateResult {
 			files := map[string]string{}
 			for path, contents := range benchmarkCase.ReferenceFiles {
@@ -508,5 +541,19 @@ func TestFixBenchmarkRejectsIncompleteOrUnsafeResults(t *testing.T) {
 				t.Fatalf("missed = %v, want %s; checks=%+v", score.MissedMust, tc.miss, score.Checks)
 			}
 		})
+	}
+}
+
+func TestFixBenchmarkCommandEnvForcesModuleMode(t *testing.T) {
+	t.Setenv("GO111MODULE", "off")
+	env := map[string]string{}
+	for _, entry := range fixBenchmarkCommandEnv() {
+		name, value, ok := strings.Cut(entry, "=")
+		if ok {
+			env[name] = value
+		}
+	}
+	if env["GO111MODULE"] != "on" {
+		t.Fatalf("GO111MODULE = %q, want on", env["GO111MODULE"])
 	}
 }
