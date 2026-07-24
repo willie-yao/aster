@@ -384,6 +384,7 @@ export function AnalysisChat({
           }}
         >
           <ButtonBase
+            disableRipple
             onClick={toggleChat}
             disabled={auth.status === "loading" || auth.status === "unavailable"}
             aria-expanded={expanded}
@@ -422,6 +423,7 @@ export function AnalysisChat({
             <HelpOutlined sx={{ color: "text.secondary", fontSize: 17 }} />
           </Tooltip>
           <IconButton
+            disableRipple
             size="small"
             aria-label={expanded ? "Collapse analysis chat" : "Expand analysis chat"}
             aria-expanded={expanded}
@@ -560,16 +562,15 @@ export function AnalysisChat({
                   </Tooltip>
                 </Stack>
               )}
-              <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", mt: 0.75 }}>
-                <Typography variant="caption" color="text.secondary" sx={{ flex: 1 }}>
-                  Enter to send, Shift+Enter for a new line
+              {session && (
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ display: "block", mt: 0.75, textAlign: "right" }}
+                >
+                  {userTurns}/10 turns
                 </Typography>
-                {session && (
-                  <Typography variant="caption" color="text.secondary">
-                    {userTurns}/10 turns
-                  </Typography>
-                )}
-              </Stack>
+              )}
             </Box>
           </Box>
         </Collapse>
