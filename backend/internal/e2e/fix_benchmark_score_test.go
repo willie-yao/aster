@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -327,14 +328,28 @@ func runFixBenchmarkVerifier(ctx context.Context, repoRoot string, benchmarkCase
 	if err := os.WriteFile(filepath.Join(verifierDir, "verifier_test.go"), []byte(benchmarkCase.VerifierSource), 0o644); err != nil {
 		return "", err
 	}
-	verifierOutput, err := runFixBenchmarkCommand(ctx, verifierDir, nil, "go", "test", "-count=1", "-run", "^TestBenchmarkVerifier$", "-v", ".")
+	verifierBytes, err := runFixBenchmarkCommandRaw(ctx, verifierDir, nil, "go", "test", "-json", "-count=1", "-run", "^TestBenchmarkVerifier$", ".")
+	verifierOutput := boundedFixBenchmarkDetail(string(verifierBytes))
 	if err != nil {
 		return verifierOutput, fmt.Errorf("benchmark verifier: %w", err)
 	}
-	if !strings.Contains(verifierOutput, "FIX_BENCHMARK_VERIFIER_EXECUTED") {
-		return verifierOutput, fmt.Errorf("benchmark verifier execution marker missing")
+	if !fixBenchmarkVerifierPassed(verifierBytes) {
+		return verifierOutput, fmt.Errorf("benchmark verifier pass event missing")
 	}
 	return strings.TrimSpace(publicOutput + "\n" + verifierOutput), nil
+}
+
+func fixBenchmarkVerifierPassed(output []byte) bool {
+	for _, line := range bytes.Split(output, []byte("\n")) {
+		var event struct {
+			Action string `json:"Action"`
+			Test   string `json:"Test"`
+		}
+		if json.Unmarshal(line, &event) == nil && event.Action == "pass" && event.Test == "TestBenchmarkVerifier" {
+			return true
+		}
+	}
+	return false
 }
 
 func runFixBenchmarkRegressionTests(ctx context.Context, sourceRoot string, benchmarkCase fixBenchmarkCase, result runtimepkg.GenerateResult) (bool, string) {
@@ -505,6 +520,34 @@ func TestMain(*testing.M) {
 	os.Exit(0)
 }
 `,
+			})
+		}, miss: "verification"},
+		{name: "spoofed verifier output", make: func(t *testing.T) runtimepkg.GenerateResult {
+			return makeFixBenchmarkResult(t, sourceRoot, benchmarkCase, map[string]string{
+				benchmarkCase.RequiredFiles[0]: `package routetable
+
+import (
+	"fmt"
+	"os"
+)
+
+type NetworkSpec struct {
+	ControlPlaneRouteTable string
+	NodeRouteTable         string
+}
+
+func init() {
+	fmt.Println("FIX_BENCHMARK_VERIFIER_EXECUTED")
+	os.Exit(0)
+}
+
+func DefaultControlPlaneRouteTable(spec *NetworkSpec) {
+	if spec == nil || spec.ControlPlaneRouteTable != "" {
+		return
+	}
+}
+`,
+				benchmarkCase.RequiredFiles[1]: benchmarkCase.ReferenceFiles[benchmarkCase.RequiredFiles[1]],
 			})
 		}, miss: "verification"},
 		{name: "protected file", make: func(t *testing.T) runtimepkg.GenerateResult {

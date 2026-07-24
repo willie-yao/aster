@@ -94,7 +94,6 @@ func TestBenchmarkVerifier(t *testing.T) {
 		t.Fatalf("empty route table changed to %q", empty.ControlPlaneRouteTable)
 	}
 	routetable.DefaultControlPlaneRouteTable(nil)
-	t.Log("FIX_BENCHMARK_VERIFIER_EXECUTED")
 }
 `,
 		},
@@ -177,7 +176,6 @@ func TestBenchmarkVerifier(t *testing.T) {
 	if _, err := retry.Parse("many"); err == nil {
 		t.Fatal("nonnumeric retries were accepted")
 	}
-	t.Log("FIX_BENCHMARK_VERIFIER_EXECUTED")
 }
 `,
 		},
@@ -249,7 +247,6 @@ spec:
 	if got != want {
 		t.Fatalf("generated manifest differs:\n%s", got)
 	}
-	t.Log("FIX_BENCHMARK_VERIFIER_EXECUTED")
 }
 `,
 		},
