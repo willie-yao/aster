@@ -454,9 +454,13 @@ so the server can verify returned quotes against the pinned commit.
 and `1000`, matching the Orka Task CRD.
 
 With chart-managed RBAC, `ai.source_investigation.namespace` must match the
-chart's `orka.namespace` value. If the runtime uses another namespace, disable
-`orka.rbac.create` and provide a ServiceAccount with the same Task-only
-permissions in that namespace.
+chart's `orka.namespace` value. If Orka-backed write actions are also enabled,
+the chart binds the server's source investigation ServiceAccount to both
+Task-only Roles. With operator-managed RBAC, bind that ServiceAccount in every
+namespace used by source investigation or fix Tasks.
+
+If the source runtime uses another namespace, disable `orka.rbac.create` and
+provide the same Task-only permissions there.
 
 This phase exposes the authenticated backend API and capability. SPA controls to
 start, reconnect, view, and cancel investigations are planned separately.

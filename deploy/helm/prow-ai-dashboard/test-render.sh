@@ -407,6 +407,33 @@ if grep -Fq 'serviceAccountName: test-prow-ai-dashboard-orka' "$tmp/source-with-
   exit 1
 fi
 
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.chat.enabled=true \
+  --set server.chat.sourceInvestigation.enabled=true \
+  --set server.actions.enabled=true \
+  --set server.actions.mode=proxy \
+  --set server.actions.admins[0]=alice \
+  --set server.actions.proxy.botToken=test-token \
+  --set orka.fixRuntime.enabled=true \
+  --set orka.fixRuntime.image.tag=sha-test \
+  --set ai.enabled=true \
+  --set ai.token=test-token > "$tmp/source-with-fix-actions.yaml"
+grep -Fq 'serviceAccountName: test-prow-ai-dashboard-source' "$tmp/source-with-fix-actions.yaml"
+grep -Fq 'image: ghcr.io/willie-yao/prow-ai-dashboard/fixer:sha-test' "$tmp/source-with-fix-actions.yaml"
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.chat.enabled=true \
+  --set server.chat.sourceInvestigation.enabled=true \
+  --set server.actions.enabled=true \
+  --set server.actions.mode=proxy \
+  --set server.actions.admins[0]=alice \
+  --set server.actions.proxy.botToken=test-token \
+  --set orka.fixRuntime.enabled=true \
+  --set ai.enabled=true \
+  --set ai.token=test-token \
+  --show-only templates/orka-fix-runtime-rbac.yaml > "$tmp/source-with-fix-rbac.yaml"
+grep -Fq 'name: test-prow-ai-dashboard-orka' "$tmp/source-with-fix-rbac.yaml"
+grep -Fq 'name: test-prow-ai-dashboard-source' "$tmp/source-with-fix-rbac.yaml"
+
 long_fullname=$(printf 'a%.0s' {1..63})
 long_source_name="${long_fullname:0:56}-source"
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \

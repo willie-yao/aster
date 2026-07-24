@@ -1,5 +1,7 @@
 {{- include "prow-ai-dashboard.validateAnalysisRuntime" . -}}
 {{- include "prow-ai-dashboard.validateAI" . -}}
+{{- $fixServiceAccount := include "prow-ai-dashboard.orkaServiceAccountName" . -}}
+{{- $sourceServiceAccount := include "prow-ai-dashboard.orkaSourceServiceAccountName" . -}}
 {{- if and .Values.orka.fixRuntime.enabled .Values.orka.rbac.create }}
 # Fix generation keeps its own Task-only Role.
 apiVersion: rbac.authorization.k8s.io/v1
@@ -25,8 +27,13 @@ metadata:
     app.kubernetes.io/component: orka-fix-runtime
 subjects:
   - kind: ServiceAccount
-    name: {{ include "prow-ai-dashboard.orkaServiceAccountName" . }}
+    name: {{ $fixServiceAccount }}
     namespace: {{ .Release.Namespace }}
+  {{- if and .Values.server.chat.sourceInvestigation.enabled .Values.server.actions.enabled (ne $sourceServiceAccount $fixServiceAccount) }}
+  - kind: ServiceAccount
+    name: {{ $sourceServiceAccount }}
+    namespace: {{ .Release.Namespace }}
+  {{- end }}
 roleRef:
   kind: Role
   name: {{ include "prow-ai-dashboard.orkaRBACName" . }}
