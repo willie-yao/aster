@@ -1,0 +1,10 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: fixture
+spec:
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
