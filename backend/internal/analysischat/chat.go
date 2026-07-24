@@ -686,14 +686,30 @@ func (s *Service) resolve(ref AnalysisRef) (resolvedAnalysis, error) {
 }
 
 func validateStateDirPrivacy(dataDir, stateDir string) error {
-	dataRoot, err := filepath.EvalSymlinks(dataDir)
+	dataAbs, err := filepath.Abs(dataDir)
+	if err != nil {
+		return fmt.Errorf("resolving analysis chat data directory path: %w", err)
+	}
+	stateAbs, err := filepath.Abs(stateDir)
+	if err != nil {
+		return fmt.Errorf("resolving analysis chat state directory path: %w", err)
+	}
+	if err := validateStateDirRelation(dataAbs, stateAbs); err != nil {
+		return err
+	}
+
+	dataRoot, err := filepath.EvalSymlinks(dataAbs)
 	if err != nil {
 		return fmt.Errorf("resolving analysis chat data directory: %w", err)
 	}
-	stateRoot, err := filepath.EvalSymlinks(stateDir)
+	stateRoot, err := filepath.EvalSymlinks(stateAbs)
 	if err != nil {
 		return fmt.Errorf("resolving analysis chat state directory: %w", err)
 	}
+	return validateStateDirRelation(dataRoot, stateRoot)
+}
+
+func validateStateDirRelation(dataRoot, stateRoot string) error {
 	rel, err := filepath.Rel(dataRoot, stateRoot)
 	if err != nil {
 		return fmt.Errorf("comparing analysis chat state directory: %w", err)

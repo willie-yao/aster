@@ -462,6 +462,17 @@ func TestServiceRejectsPublicStateDirectory(t *testing.T) {
 	if _, err := NewService(t.Context(), dataDir, &fakeRunner{}, Options{StateDir: filepath.Join(dataDir, ".private", "chat")}); err != nil {
 		t.Fatalf("hidden state directory: %v", err)
 	}
+	hiddenTarget := filepath.Join(dataDir, ".hidden-target")
+	if err := os.MkdirAll(hiddenTarget, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	visibleLink := filepath.Join(dataDir, "chat-link")
+	if err := os.Symlink(hiddenTarget, visibleLink); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewService(t.Context(), dataDir, &fakeRunner{}, Options{StateDir: visibleLink}); err == nil || !strings.Contains(err.Error(), "dot-prefixed") {
+		t.Fatalf("visible symlink state directory error = %v", err)
+	}
 	if _, err := NewService(t.Context(), dataDir, &fakeRunner{}, Options{StateDir: t.TempDir()}); err != nil {
 		t.Fatalf("external state directory: %v", err)
 	}
