@@ -19,6 +19,7 @@ import {
   FactCheckOutlined,
   HelpOutlined,
   PsychologyAltOutlined,
+  PublishedWithChangesOutlined,
   ReportProblemOutlined,
   StopCircleOutlined,
 } from "@mui/icons-material";
@@ -42,6 +43,7 @@ import {
   streamAnalysisChatMessage,
 } from "../lib/analysisChat";
 import { fileToUrl, type FileToUrlContext } from "../lib/utils";
+import { AnalysisCorrectionAPIError, confirmAnalysisCorrection, previewAnalysisCorrection } from "../lib/analysisCorrections";
 import { soft } from "../theme";
 import type {
   AnalysisChatAssessment,
@@ -52,6 +54,8 @@ import type {
   AnalysisChatSession,
 } from "../types/analysisChat";
 import { RichText } from "./RichText";
+import { AnalysisCorrectionDialog } from "./AnalysisCorrectionDialog";
+import type { AnalysisCorrectionPreview } from "../types/corrections";
 
 interface PendingTurn {
   sessionID: string;
@@ -126,9 +130,13 @@ function formatLines(citation: AnalysisChatCitation) {
 function AssistantMessage({
   message,
   fileCtx,
+  correctionEnabled,
+  onReviewCorrection,
 }: {
   message: AnalysisChatMessage;
   fileCtx: FileToUrlContext;
+  correctionEnabled: boolean;
+  onReviewCorrection: (requestID: string) => void;
 }) {
   const assessment = message.assessment
     ? assessmentConfig[message.assessment]
@@ -254,6 +262,18 @@ function AssistantMessage({
             <Typography variant="body2" sx={{ mt: 0.25, lineHeight: 1.6 }}>
               <RichText text={message.proposed_revision.suggested_fix} steps fileCtx={fileCtx} />
             </Typography>
+            {correctionEnabled && message.request_id && (
+              <Button
+                size="small"
+                variant="outlined"
+                color="warning"
+                startIcon={<PublishedWithChangesOutlined />}
+                onClick={() => onReviewCorrection(message.request_id!)}
+                sx={{ mt: 1.5 }}
+              >
+                Review correction
+              </Button>
+            )}
           </Box>
         )}
       </Stack>
@@ -339,9 +359,11 @@ function ThinkingState({
 export function AnalysisChat({
   analysisRef,
   fileCtx,
+  onCorrectionChanged,
 }: {
   analysisRef: AnalysisChatReference;
   fileCtx: FileToUrlContext;
+  onCorrectionChanged?: () => void;
 }) {
   const { features } = useCapabilities();
   const auth = useAuth();
@@ -354,9 +376,14 @@ export function AnalysisChat({
   const [pendingTurn, setPendingTurn] = useState<PendingTurn | null>(null);
   const [progressPhase, setProgressPhase] = useState<AnalysisChatProgressPhase>("queued");
   const [cancelling, setCancelling] = useState(false);
+  const [correctionPreview, setCorrectionPreview] = useState<AnalysisCorrectionPreview | null>(null);
+  const [correctionOpen, setCorrectionOpen] = useState(false);
+  const [correctionBusy, setCorrectionBusy] = useState(false);
+  const [correctionError, setCorrectionError] = useState<string | null>(null);
   const createRequestIDRef = useRef(newAnalysisChatRequestID());
   const controllerRef = useRef<AbortController | null>(null);
   const cancelControllerRef = useRef<AbortController | null>(null);
+  const correctionControllerRef = useRef<AbortController | null>(null);
   const identityRef = useRef("");
   const endRef = useRef<HTMLDivElement | null>(null);
 
@@ -378,6 +405,7 @@ export function AnalysisChat({
   useEffect(() => {
     controllerRef.current?.abort();
     cancelControllerRef.current?.abort();
+    correctionControllerRef.current?.abort();
     setExpanded(false);
     setQuestion("");
     setSession(null);
@@ -387,6 +415,10 @@ export function AnalysisChat({
     setPendingTurn(null);
     setProgressPhase("queued");
     setCancelling(false);
+    setCorrectionPreview(null);
+    setCorrectionOpen(false);
+    setCorrectionBusy(false);
+    setCorrectionError(null);
     createRequestIDRef.current = newAnalysisChatRequestID();
   }, [identity]);
 
@@ -399,6 +431,7 @@ export function AnalysisChat({
   useEffect(() => () => {
     controllerRef.current?.abort();
     cancelControllerRef.current?.abort();
+    correctionControllerRef.current?.abort();
   }, []);
 
   if (!features.analysis_chat) return null;
@@ -518,6 +551,62 @@ export function AnalysisChat({
         controllerRef.current = null;
         setBusy(false);
         setCancelling(false);
+      }
+    }
+  }
+
+  async function reviewCorrection(requestID: string) {
+    if (!session) return;
+    const requestIdentity = identity;
+    correctionControllerRef.current?.abort();
+    const controller = new AbortController();
+    correctionControllerRef.current = controller;
+    setCorrectionBusy(true);
+    setCorrectionError(null);
+    try {
+      const preview = await previewAnalysisCorrection(session.id, requestID, controller.signal);
+      if (identityRef.current !== requestIdentity || correctionControllerRef.current !== controller) return;
+      setCorrectionPreview(preview);
+      setCorrectionOpen(true);
+    } catch (previewError) {
+      if (previewError instanceof Error && previewError.name === "AbortError") return;
+      if (identityRef.current === requestIdentity) setError(previewError instanceof Error ? previewError.message : "Could not prepare the correction.");
+    } finally {
+      if (correctionControllerRef.current === controller) {
+        correctionControllerRef.current = null;
+        if (identityRef.current === requestIdentity) setCorrectionBusy(false);
+      }
+    }
+  }
+
+  async function publishCorrection() {
+    if (!correctionPreview) return;
+    const requestIdentity = identity;
+    correctionControllerRef.current?.abort();
+    const controller = new AbortController();
+    correctionControllerRef.current = controller;
+    setCorrectionBusy(true);
+    setCorrectionError(null);
+    try {
+      await confirmAnalysisCorrection(correctionPreview.token, controller.signal);
+      if (identityRef.current !== requestIdentity) return;
+      setCorrectionOpen(false);
+      setCorrectionPreview(null);
+      onCorrectionChanged?.();
+    } catch (confirmError) {
+      if (confirmError instanceof Error && confirmError.name === "AbortError") return;
+      if (identityRef.current !== requestIdentity) return;
+      if (!(confirmError instanceof AnalysisCorrectionAPIError)) {
+        setCorrectionOpen(false);
+        setCorrectionPreview(null);
+        onCorrectionChanged?.();
+      } else {
+        setCorrectionError(confirmError.message);
+      }
+    } finally {
+      if (correctionControllerRef.current === controller) {
+        correctionControllerRef.current = null;
+        if (identityRef.current === requestIdentity) setCorrectionBusy(false);
       }
     }
   }
@@ -699,7 +788,13 @@ export function AnalysisChat({
                     </Typography>
                   </Box>
                 ) : (
-                  <AssistantMessage key={`${message.created_at}-${index}`} message={message} fileCtx={fileCtx} />
+                  <AssistantMessage
+                    key={`${message.created_at}-${index}`}
+                    message={message}
+                    fileCtx={fileCtx}
+                    correctionEnabled={Boolean(features.analysis_corrections)}
+                    onReviewCorrection={(requestID) => void reviewCorrection(requestID)}
+                  />
                 ),
               )}
 
@@ -804,6 +899,14 @@ export function AnalysisChat({
           </Box>
         </Collapse>
       </Box>
+      <AnalysisCorrectionDialog
+        preview={correctionPreview}
+        open={correctionOpen}
+        busy={correctionBusy}
+        error={correctionError}
+        onClose={() => setCorrectionOpen(false)}
+        onConfirm={() => void publishCorrection()}
+      />
     </Box>
   );
 }

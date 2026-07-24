@@ -61,9 +61,10 @@ type Options struct {
 	Capabilities Capabilities
 	// Auth enables admin-gated operator features. Actions additionally enables
 	// write endpoints. With no Auth the server stays read-only.
-	Auth         auth.Authenticator
-	Actions      ActionRunner
-	AnalysisChat AnalysisChatRunner
+	Auth                auth.Authenticator
+	Actions             ActionRunner
+	AnalysisChat        AnalysisChatRunner
+	AnalysisCorrections AnalysisCorrectionRunner
 	// ActionTimeout bounds a single action. Zero uses defaultActionTimeout.
 	ActionTimeout time.Duration
 	// AnalysisChatTimeout bounds one conversation turn.
@@ -111,7 +112,8 @@ type Features struct {
 	// AnalysisTraces enables the private analysis-trace API and UI.
 	AnalysisTraces bool `json:"analysis_traces,omitempty"`
 	// AnalysisChat enables authenticated conversations about one published analysis.
-	AnalysisChat bool `json:"analysis_chat,omitempty"`
+	AnalysisChat        bool `json:"analysis_chat,omitempty"`
+	AnalysisCorrections bool `json:"analysis_corrections,omitempty"`
 }
 
 // authRegistrar is implemented by authenticators that need their own routes
@@ -175,6 +177,18 @@ func Handler(opts Options) (http.Handler, error) {
 			auth.Middleware(opts.Auth, guard(streamAnalysisChatMessageHandler(timeout, opts.AnalysisChat))))
 		mux.Handle("POST /api/analysis-chat/sessions/{id}/requests/{requestID}/cancel",
 			auth.Middleware(opts.Auth, guard(cancelAnalysisChatMessageHandler(opts.AnalysisChat))))
+	}
+
+	if opts.Auth != nil && opts.AnalysisCorrections != nil {
+		caps.Features.AnalysisCorrections = true
+		trusted := trustedOriginSet(opts.TrustedOrigins)
+		guard := func(next http.Handler) http.Handler { return csrfGuard(trusted, next) }
+		mux.Handle("POST /api/analysis-chat/sessions/{id}/requests/{requestID}/correction/preview",
+			auth.Middleware(opts.Auth, guard(previewAnalysisCorrectionHandler(opts.AnalysisCorrections))))
+		mux.Handle("POST /api/analysis-corrections/confirm",
+			auth.Middleware(opts.Auth, guard(confirmAnalysisCorrectionHandler(opts.AnalysisCorrections))))
+		mux.Handle("POST /api/analysis-corrections/{id}/revoke",
+			auth.Middleware(opts.Auth, guard(revokeAnalysisCorrectionHandler(opts.AnalysisCorrections))))
 	}
 
 	// Write actions require both auth and an action runner.

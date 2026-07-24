@@ -203,6 +203,8 @@ server:
   # replicas can serve the same conversation.
   chat:
     enabled: false
+    # Enables explicit review/confirmation of evidence-backed chat revisions.
+    correctionsEnabled: false
     sessionTTL: 2h
     maxSessions: 128
     maxSessionsPerOwner: 8

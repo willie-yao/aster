@@ -30,6 +30,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysischat"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisruntime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/auth"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/corrections"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/notify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/server"
@@ -127,17 +128,28 @@ func enableInteractiveFeatures(ctx context.Context, opts *server.Options, projec
 			return err
 		}
 	}
+	var chatService *analysischat.Service
 	if features.AnalysisChat {
-		if err := enableAnalysisChat(ctx, opts, cfg, projectDir, dataDir); err != nil {
+		chatService, err = enableAnalysisChat(ctx, opts, cfg, projectDir, dataDir)
+		if err != nil {
 			return err
 		}
+	}
+	if features.AnalysisCorrections {
+		correctionService, err := corrections.NewService(dataDir, chatService, corrections.Options{})
+		if err != nil {
+			return fmt.Errorf("configuring analysis corrections: %w", err)
+		}
+		opts.AnalysisCorrections = correctionService
+		log.Printf("📝 analysis correction promotion enabled")
 	}
 	return nil
 }
 
 type interactiveFeatures struct {
-	Actions      bool
-	AnalysisChat bool
+	Actions             bool
+	AnalysisChat        bool
+	AnalysisCorrections bool
 }
 
 func interactiveFeaturesFromEnv() (interactiveFeatures, error) {
@@ -145,11 +157,20 @@ func interactiveFeaturesFromEnv() (interactiveFeatures, error) {
 	if err != nil {
 		return interactiveFeatures{}, err
 	}
+	correctionsEnabled, err := optionalBoolEnv("ANALYSIS_CORRECTIONS_ENABLED", false)
+	if err != nil {
+		return interactiveFeatures{}, err
+	}
+	if correctionsEnabled && !chat {
+		return interactiveFeatures{}, fmt.Errorf("ANALYSIS_CORRECTIONS_ENABLED requires ANALYSIS_CHAT_ENABLED")
+	}
 	actions, err := optionalBoolEnv("ACTIONS_ENABLED", !chat)
 	if err != nil {
 		return interactiveFeatures{}, err
 	}
-	return interactiveFeatures{Actions: actions, AnalysisChat: chat}, nil
+	return interactiveFeatures{
+		Actions: actions, AnalysisChat: chat, AnalysisCorrections: correctionsEnabled,
+	}, nil
 }
 
 func optionalBoolEnv(name string, fallback bool) (bool, error) {
@@ -244,47 +265,47 @@ func enableActions(opts *server.Options, cfg *project.Config, dataDir string) er
 	return nil
 }
 
-func enableAnalysisChat(ctx context.Context, opts *server.Options, cfg *project.Config, projectDir, dataDir string) error {
+func enableAnalysisChat(ctx context.Context, opts *server.Options, cfg *project.Config, projectDir, dataDir string) (*analysischat.Service, error) {
 	timeout, err := analysisChatTimeoutFromEnv()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	serviceOpts, err := analysisChatServiceOptionsFromEnv(dataDir, timeout)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	token := os.Getenv("AI_TOKEN")
 	if token == "" {
-		return fmt.Errorf("analysis chat requires AI_TOKEN")
+		return nil, fmt.Errorf("analysis chat requires AI_TOKEN")
 	}
 	projectRuntime, err := analysisruntime.LoadProject(projectDir, cfg, analysisruntime.ProviderFallbacks{
 		API: os.Getenv("AI_API"), Endpoint: os.Getenv("AI_ENDPOINT"), Model: os.Getenv("AI_MODEL"),
 	})
 	if err != nil {
-		return fmt.Errorf("loading analysis chat project: %w", err)
+		return nil, fmt.Errorf("loading analysis chat project: %w", err)
 	}
 	runtime, err := analysisruntime.New(context.Background(), analysisruntime.Options{
 		Token: token, DataDir: dataDir, Project: projectRuntime,
 	})
 	if err != nil {
-		return fmt.Errorf("configuring analysis chat runtime: %w", err)
+		return nil, fmt.Errorf("configuring analysis chat runtime: %w", err)
 	}
 	backend, err := storage.New(cfg.StorageConfig(), &http.Client{Timeout: 30 * time.Second})
 	if err != nil {
-		return fmt.Errorf("configuring analysis chat storage: %w", err)
+		return nil, fmt.Errorf("configuring analysis chat storage: %w", err)
 	}
 	agent, err := runtime.NewAnalysisChatAgent(backend)
 	if err != nil {
-		return fmt.Errorf("configuring analysis chat agent: %w", err)
+		return nil, fmt.Errorf("configuring analysis chat agent: %w", err)
 	}
 	service, err := analysischat.NewService(ctx, dataDir, agent, serviceOpts)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	opts.AnalysisChat = service
 	opts.AnalysisChatTimeout = timeout
 	log.Printf("💬 analysis chat enabled (state=%s ttl=%s)", serviceOpts.StateDir, serviceOpts.SessionTTL)
-	return nil
+	return service, nil
 }
 
 func analysisChatTimeoutFromEnv() (time.Duration, error) {
