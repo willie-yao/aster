@@ -116,6 +116,7 @@ func TestWriteChatFixErrorMapping(t *testing.T) {
 		err  error
 		want int
 	}{
+		{analysischat.ErrAnalysisNotFound, http.StatusNotFound},
 		{analysischat.ErrSessionNotFound, http.StatusNotFound},
 		{actions.ErrPatternMismatch, http.StatusConflict},
 		{analysischat.ErrAnalysisChanged, http.StatusConflict},
