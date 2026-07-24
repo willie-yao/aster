@@ -423,6 +423,11 @@ Correction promotion is disabled by default. When enabled, the server writes a
 private audit ledger and the public `analysis_corrections.json` overlay to the
 same shared volume; it never rewrites fetched job JSON.
 
+When `server.chat.enabled=true` and `server.actions.enabled=true`, the server also
+advertises the backend-only chat-to-fix bridge. It rebuilds one selected
+evidence-backed response from private session state and returns the existing fix
+preview contract. The frontend control is added separately.
+
 Source investigation is also disabled by default. Configure its independent
 read-only runtime in `project.yaml`:
 

@@ -30,6 +30,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysischat"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisruntime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/auth"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/chatfix"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/corrections"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/notify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
@@ -125,8 +126,10 @@ func enableInteractiveFeatures(ctx context.Context, opts *server.Options, projec
 		return err
 	}
 	opts.TrustedOrigins = trustedOrigins(os.Getenv("OAUTH_REDIRECT_URL"), os.Getenv("TRUSTED_ORIGINS"))
+	var actionService *actions.Service
 	if features.Actions {
-		if err := enableActions(opts, cfg, dataDir); err != nil {
+		actionService, err = enableActions(opts, cfg, dataDir)
+		if err != nil {
 			return err
 		}
 	}
@@ -141,6 +144,10 @@ func enableInteractiveFeatures(ctx context.Context, opts *server.Options, projec
 		if err := enableSourceInvestigation(opts, cfg, chatService); err != nil {
 			return err
 		}
+	}
+	if actionService != nil && chatService != nil {
+		opts.ChatFix = chatfix.NewService(chatService, actionService)
+		log.Printf("🛠️ analysis chat fix previews enabled")
 	}
 	if features.AnalysisCorrections {
 		correctionService, err := corrections.NewService(dataDir, chatService, corrections.Options{})
@@ -256,10 +263,10 @@ func configureAuthenticator(opts *server.Options, actionsEnabled bool) error {
 	return nil
 }
 
-func enableActions(opts *server.Options, cfg *project.Config, dataDir string) error {
+func enableActions(opts *server.Options, cfg *project.Config, dataDir string) (*actions.Service, error) {
 	provider := cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"))
 	if err := project.ValidateAIAPI(provider.API); err != nil {
-		return err
+		return nil, err
 	}
 	actionService := actions.NewService(cfg, dataDir, actions.AIConfig{
 		Token: os.Getenv("AI_TOKEN"), API: provider.API, Endpoint: provider.Endpoint,
@@ -269,7 +276,7 @@ func enableActions(opts *server.Options, cfg *project.Config, dataDir string) er
 	if value := os.Getenv("ACTION_TIMEOUT"); value != "" {
 		timeout, err := time.ParseDuration(value)
 		if err != nil {
-			return fmt.Errorf("invalid ACTION_TIMEOUT %q: %w", value, err)
+			return nil, fmt.Errorf("invalid ACTION_TIMEOUT %q: %w", value, err)
 		}
 		opts.ActionTimeout = timeout
 	}
@@ -278,7 +285,7 @@ func enableActions(opts *server.Options, cfg *project.Config, dataDir string) er
 		requestTimeout = 10 * time.Minute
 	}
 	actionService.ConfigureAsyncRequests(requestTimeout, actionRequestNotifier(cfg))
-	return nil
+	return actionService, nil
 }
 
 func enableAnalysisChat(ctx context.Context, opts *server.Options, cfg *project.Config, projectDir, dataDir string) (*analysischat.Service, error) {

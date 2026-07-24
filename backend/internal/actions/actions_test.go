@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/resolve"
@@ -196,5 +197,30 @@ func TestSafeReason_Truncates(t *testing.T) {
 	got := safeReason(long)
 	if len([]rune(got)) > 302 { // 300 + ellipsis
 		t.Errorf("safeReason did not truncate: len=%d", len([]rune(got)))
+	}
+}
+
+func TestPreviewFixWithContextRejectsMismatchedPatternTarget(t *testing.T) {
+	dataDir := t.TempDir()
+	pattern := systemicPattern()
+	pattern.SharedBuilds = []string{"123"}
+	pattern.SuggestedFix = "bound retries"
+	writeJobDetail(t, dataDir, "periodic-x.json", models.JobDetail{
+		JobID: "periodic-x", PatternAnalyses: []models.PatternAnalysis{pattern},
+	})
+	service := NewService(&project.Config{}, dataDir, AIConfig{})
+	generationContext := fixpr.GenerationContext{
+		AssistantAnswer:   "selected answer",
+		ArtifactCitations: []fixpr.Evidence{{Path: "build-log.txt", Quote: "failure"}},
+	}
+	for _, target := range []FixTarget{
+		{JobID: "other-job", BuildID: "123"},
+		{JobID: "periodic-x", BuildID: "other-build"},
+	} {
+		if _, err := service.PreviewFixWithContext(
+			t.Context(), pattern.ID, "token", "", target, generationContext,
+		); !errors.Is(err, ErrPatternMismatch) {
+			t.Fatalf("target %+v error = %v", target, err)
+		}
 	}
 }
