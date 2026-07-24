@@ -159,7 +159,10 @@ Source investigation is an optional Kubernetes-native extension to analysis
 chat. Set `ANALYSIS_SOURCE_INVESTIGATION_ENABLED=1` and configure
 `ai.source_investigation` in `project.yaml`. The server then advertises
 `features.source_investigation: true`. Static Pages mode never serves or
-advertises this capability.
+advertises this capability. The dashboard adds an **Investigate source** control
+to completed assistant responses and follows persisted progress over SSE. Users
+can reconnect to an interrupted stream, cancel an active Task, and review the
+verified finding and citations in the conversation.
 
 A source request starts from one completed chat request, not an arbitrary prompt.
 Post the chat request ID with a new `Idempotency-Key`:

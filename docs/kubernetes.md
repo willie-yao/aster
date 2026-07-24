@@ -365,7 +365,7 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | `ingress.enabled`, `ingress.hosts`, `ingress.tls` | Public read path. |
 | `server.chat.enabled` | Enable authenticated analysis conversations. Requires `ai.enabled`. |
 | `server.chat.correctionsEnabled` | Enable explicit promotion and revocation of evidence-backed correction overlays. |
-| `server.chat.sourceInvestigation.enabled` | Enable the backend API for owner-bound read-only source investigation through Orka agent Tasks. |
+| `server.chat.sourceInvestigation.enabled` | Enable owner-bound read-only source investigation controls and Orka agent Tasks. |
 | `server.chat.sourceInvestigation.serviceAccountName` | Operator-managed dedicated ServiceAccount name when `orka.rbac.create=false`. |
 | `server.chat.sourceInvestigation.maxPerSession` | Persisted source requests per session. Defaults to `8`. |
 | `server.chat.sourceInvestigation.maxActivePerOwner` | Concurrent source Tasks per login. Defaults to `1`. |
@@ -462,8 +462,9 @@ namespace used by source investigation or fix Tasks.
 If the source runtime uses another namespace, disable `orka.rbac.create` and
 provide the same Task-only permissions there.
 
-This phase exposes the authenticated backend API and capability. SPA controls to
-start, reconnect, view, and cancel investigations are planned separately.
+Completed assistant responses expose an **Investigate source** control. The
+dashboard streams persisted progress, reconnects with the same request ID, allows
+cancellation, and renders only independently verified source citations.
 
 ### Enabling actions with Helm
 
