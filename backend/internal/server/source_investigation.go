@@ -2,11 +2,13 @@ package server
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysischat"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/auth"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 )
@@ -36,7 +38,7 @@ func sourceInvestigationHandler(timeout time.Duration, run SourceInvestigationRu
 		defer cancel()
 		view, err := run.SourceInvestigation(ctx, r.PathValue("id"), identity.Login, requestID, chatRequestID)
 		if err != nil {
-			writeAnalysisChatError(w, r.PathValue("id"), identity.Login, err)
+			writeSourceInvestigationError(w, r.PathValue("id"), identity.Login, err)
 			return
 		}
 		writeAnalysisChatJSON(w, http.StatusOK, view)
@@ -72,9 +74,9 @@ func streamSourceInvestigationHandler(timeout time.Duration, run SourceInvestiga
 		}
 		view, err := run.StreamSourceInvestigation(ctx, r.PathValue("id"), identity.Login, requestID, chatRequestID, emit)
 		if err != nil {
-			status, message, outcome := analysisChatErrorDetails(err)
+			status, message, outcome := sourceInvestigationErrorDetails(err)
 			if status >= 500 {
-				log.Printf("source investigation %s for %s: %s", r.PathValue("id"), identity.Login, safeAnalysisChatError(err))
+				log.Printf("source investigation %s for %s: %s", r.PathValue("id"), identity.Login, safeSourceInvestigationError(err))
 			}
 			payload := map[string]any{"status": status, "message": message}
 			if outcome != "" {
@@ -96,7 +98,7 @@ func getSourceInvestigationHandler(run SourceInvestigationRunner) http.Handler {
 		}
 		view, err := run.GetSourceInvestigation(r.PathValue("id"), identity.Login, r.PathValue("requestID"))
 		if err != nil {
-			writeAnalysisChatError(w, r.PathValue("id"), identity.Login, err)
+			writeSourceInvestigationError(w, r.PathValue("id"), identity.Login, err)
 			return
 		}
 		writeAnalysisChatJSON(w, http.StatusOK, view)
@@ -111,7 +113,7 @@ func cancelSourceInvestigationHandler(run SourceInvestigationRunner) http.Handle
 			return
 		}
 		if err := run.CancelSourceInvestigation(r.PathValue("id"), identity.Login, r.PathValue("requestID")); err != nil {
-			writeAnalysisChatError(w, r.PathValue("id"), identity.Login, err)
+			writeSourceInvestigationError(w, r.PathValue("id"), identity.Login, err)
 			return
 		}
 		w.Header().Set("Cache-Control", "no-store")
@@ -133,4 +135,47 @@ func decodeSourceInvestigationRequest(w http.ResponseWriter, r *http.Request) (s
 		return "", "", false
 	}
 	return strings.TrimSpace(body.ChatRequestID), requestID, true
+}
+
+func writeSourceInvestigationError(w http.ResponseWriter, id, login string, err error) {
+	status, message, outcome := sourceInvestigationErrorDetails(err)
+	if outcome != "" {
+		w.Header().Set(analysisChatOutcomeHeader, outcome)
+	}
+	if status >= 500 {
+		log.Printf("source investigation %s for %s: %s", id, login, safeSourceInvestigationError(err))
+	}
+	http.Error(w, message, status)
+}
+
+func sourceInvestigationErrorDetails(err error) (int, string, string) {
+	status, message, outcome := analysisChatErrorDetails(err)
+	if message == "analysis chat could not complete the request" {
+		message = "source investigation could not complete the request"
+	}
+	switch {
+	case errors.Is(err, analysischat.ErrRequestNotFound):
+		message = "source investigation not found"
+	case errors.Is(err, analysischat.ErrRequestPending):
+		message = "source investigation is pending"
+	case errors.Is(err, analysischat.ErrIdempotencyConflict):
+		message = "source investigation idempotency key conflict"
+	case errors.Is(err, analysischat.ErrRequestOutcomeUnknown):
+		message = "source investigation outcome unknown"
+	case errors.Is(err, analysischat.ErrInvalidRequest):
+		message = "invalid source investigation request"
+	case errors.Is(err, context.DeadlineExceeded):
+		message = "source investigation timed out"
+	case errors.Is(err, context.Canceled):
+		message = "source investigation cancelled"
+	}
+	return status, message, outcome
+}
+
+func safeSourceInvestigationError(err error) string {
+	reason := safeAnalysisChatError(err)
+	if reason == "model request failed" {
+		return "source investigation failed"
+	}
+	return reason
 }

@@ -407,6 +407,23 @@ if grep -Fq 'serviceAccountName: test-prow-ai-dashboard-orka' "$tmp/source-with-
   exit 1
 fi
 
+long_fullname=$(printf 'a%.0s' {1..63})
+long_source_name="${long_fullname:0:56}-source"
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set fullnameOverride="$long_fullname" \
+  --set server.chat.enabled=true \
+  --set server.chat.sourceInvestigation.enabled=true \
+  --set server.actions.mode=proxy \
+  --set server.actions.admins[0]=alice \
+  --set ai.enabled=true \
+  --set ai.token=test-token > "$tmp/source-investigation-long-name.yaml"
+grep -Fq "serviceAccountName: $long_source_name" "$tmp/source-investigation-long-name.yaml"
+grep -Fq "name: $long_source_name" "$tmp/source-investigation-long-name.yaml"
+if [[ ${#long_source_name} -ne 63 ]]; then
+  echo 'generated source ServiceAccount name is not a 63-character DNS label' >&2
+  exit 1
+fi
+
 if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set server.chat.sourceInvestigation.enabled=true > "$tmp/source-without-chat.yaml" 2>&1; then
   echo 'source investigation accepted without analysis chat' >&2

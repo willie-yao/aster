@@ -2,11 +2,13 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysischat"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 )
 
@@ -127,6 +129,38 @@ func TestHandlerSourceInvestigationRequiresBoundedInput(t *testing.T) {
 		handler.ServeHTTP(recorder, req)
 		if recorder.Code != http.StatusBadRequest {
 			t.Fatalf("body %q status=%d", body, recorder.Code)
+		}
+	}
+}
+
+func TestSourceInvestigationErrorMapping(t *testing.T) {
+	cases := []struct {
+		err         error
+		want        int
+		wantBody    string
+		wantOutcome string
+	}{
+		{analysischat.ErrRequestNotFound, http.StatusNotFound, "source investigation not found", "rejected"},
+		{analysischat.ErrRequestPending, http.StatusConflict, "source investigation is pending", "pending"},
+		{analysischat.ErrIdempotencyConflict, http.StatusConflict, "source investigation idempotency key conflict", "rejected"},
+		{analysischat.ErrRequestOutcomeUnknown, http.StatusConflict, "source investigation outcome unknown", "unknown"},
+		{analysischat.ErrInvalidRequest, http.StatusBadRequest, "invalid source investigation request", "rejected"},
+		{analysischat.ErrRequestFailed, http.StatusBadGateway, "source investigation could not complete the request", "failed"},
+		{context.DeadlineExceeded, http.StatusGatewayTimeout, "source investigation timed out", "failed"},
+		{context.Canceled, 499, "source investigation cancelled", "failed"},
+		{errors.New("private source runtime failure"), http.StatusBadGateway, "source investigation could not complete the request", ""},
+	}
+	for _, testCase := range cases {
+		recorder := httptest.NewRecorder()
+		writeSourceInvestigationError(recorder, "session", "alice", testCase.err)
+		if recorder.Code != testCase.want {
+			t.Errorf("error %v status=%d want=%d", testCase.err, recorder.Code, testCase.want)
+		}
+		if !strings.Contains(recorder.Body.String(), testCase.wantBody) {
+			t.Errorf("error %v body=%q want substring %q", testCase.err, recorder.Body.String(), testCase.wantBody)
+		}
+		if got := recorder.Header().Get(analysisChatOutcomeHeader); got != testCase.wantOutcome {
+			t.Errorf("error %v outcome=%q want=%q", testCase.err, got, testCase.wantOutcome)
 		}
 	}
 }

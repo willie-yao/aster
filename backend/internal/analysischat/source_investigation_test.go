@@ -329,10 +329,16 @@ func TestServiceSourceInvestigationRejectsMutableRevision(t *testing.T) {
 	}
 }
 
-func TestServiceSourceInvestigationCancellation(t *testing.T) {
+func TestServiceSourceInvestigationCancellationAcrossReplicas(t *testing.T) {
 	dir := t.TempDir()
 	runner := &fakeSourceInvestigator{result: sourceResult(), started: make(chan struct{}, 1), release: make(chan struct{})}
 	service, session, chatRequestID := sourceReadyService(t, dir, runner)
+	canceller, err := NewService(t.Context(), dir, &fakeRunner{}, Options{
+		StateDir: service.opts.StateDir, PollInterval: time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	requestID := testRequestID(t)
 	done := make(chan error, 1)
 	go func() {
@@ -344,7 +350,7 @@ func TestServiceSourceInvestigationCancellation(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("investigation did not start")
 	}
-	if err := service.CancelSourceInvestigation(session.ID, "Alice", requestID); err != nil {
+	if err := canceller.CancelSourceInvestigation(session.ID, "Alice", requestID); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -355,8 +361,8 @@ func TestServiceSourceInvestigationCancellation(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("investigation did not cancel")
 	}
-	view, err := service.GetSourceInvestigation(session.ID, "Alice", requestID)
+	view, err := canceller.GetSourceInvestigation(session.ID, "Alice", requestID)
 	if err != nil || view.Status != sourceinvestigation.StatusFailed {
-		t.Fatalf("cancelled view = %+v, %v", view, err)
+		t.Fatalf("persisted cancelled view = %+v, %v", view, err)
 	}
 }

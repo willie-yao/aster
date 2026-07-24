@@ -162,7 +162,8 @@ because Helm release names are unique only within their own namespace.
 {{- if .Values.server.chat.sourceInvestigation.serviceAccountName -}}
 {{- .Values.server.chat.sourceInvestigation.serviceAccountName -}}
 {{- else -}}
-{{- printf "%s-source" (include "prow-ai-dashboard.fullname" .) -}}
+{{- $base := include "prow-ai-dashboard.fullname" . | trunc 56 | trimSuffix "-" -}}
+{{- printf "%s-source" $base -}}
 {{- end -}}
 {{- end -}}
 
