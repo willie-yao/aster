@@ -26,19 +26,20 @@ const (
 	// PublicFileName is the active/revoked correction overlay consumed by the frontend.
 	PublicFileName = "analysis_corrections.json"
 
-	stateVersion       = 1
-	previewPending     = "pending"
-	previewConfirmed   = "confirmed"
-	previewExpired     = "expired"
-	StatusActive       = "active"
-	StatusRevoked      = "revoked"
-	statusSuperseded   = "superseded"
-	defaultPreviewTTL  = 15 * time.Minute
-	previewRetention   = 24 * time.Hour
-	maxPendingPreviews = 50
-	maxCorrections     = 500
-	maxPrivateBytes    = 16 << 20
-	maxPublicBytes     = 4 << 20
+	stateVersion                = 1
+	previewPending              = "pending"
+	previewConfirmed            = "confirmed"
+	previewExpired              = "expired"
+	StatusActive                = "active"
+	StatusRevoked               = "revoked"
+	statusSuperseded            = "superseded"
+	defaultPreviewTTL           = 15 * time.Minute
+	previewRetention            = 24 * time.Hour
+	maxPendingPreviews          = 50
+	terminalCorrectionRetention = 180 * 24 * time.Hour
+	maxArchivedCorrections      = 2000
+	maxPrivateBytes             = 16 << 20
+	maxPublicBytes              = 4 << 20
 )
 
 var (
@@ -86,6 +87,7 @@ type state struct {
 	Previews    map[string]*proposal   `json:"previews"`
 	Corrections map[string]*correction `json:"corrections"`
 	Current     map[string]string      `json:"current"`
+	Archived    []archivedCorrection   `json:"archived,omitempty"`
 }
 
 type proposal struct {
@@ -105,6 +107,13 @@ type correction struct {
 	RequestID  string                `json:"request_id"`
 	ProposedBy string                `json:"proposed_by"`
 	Audit      []auditEvent          `json:"audit"`
+}
+
+type archivedCorrection struct {
+	ID       string                   `json:"id"`
+	Status   string                   `json:"status"`
+	Analysis analysischat.AnalysisRef `json:"analysis"`
+	Audit    []auditEvent             `json:"audit"`
 }
 
 type auditEvent struct {
@@ -229,9 +238,6 @@ func (s *Service) Confirm(token, owner string) (PublicCorrection, error) {
 		if err := s.source.ValidateCorrectionCandidate(preview.Candidate); err != nil {
 			return false, err
 		}
-		if len(state.Corrections) >= maxCorrections {
-			return false, ErrCorrectionLimit
-		}
 		key := analysisKey(preview.Candidate.Analysis)
 		if previousID := state.Current[key]; previousID != "" {
 			if previous := state.Corrections[previousID]; previous != nil && previous.Status == StatusActive {
@@ -311,7 +317,7 @@ func (s *Service) update(ctx context.Context, fn func(*state) (bool, error)) (bo
 	if err != nil {
 		return false, err
 	}
-	if expirePreviews(state, s.opts.Now().UTC()) {
+	if compactState(state, s.opts.Now().UTC()) {
 		changed = true
 	}
 	fnChanged, opErr := fn(state)
@@ -377,7 +383,7 @@ func initializeState(state *state) {
 	}
 }
 
-func expirePreviews(state *state, now time.Time) bool {
+func compactState(state *state, now time.Time) bool {
 	changed := false
 	for token, preview := range state.Previews {
 		created, _ := time.Parse(time.RFC3339, preview.CreatedAt)
@@ -394,6 +400,34 @@ func expirePreviews(state *state, now time.Time) bool {
 			preview.Status = previewExpired
 			changed = true
 		}
+	}
+	for id, correction := range state.Corrections {
+		if correction.Status != StatusRevoked && correction.Status != statusSuperseded {
+			continue
+		}
+		terminalAt := correction.RevokedAt
+		if terminalAt == "" && len(correction.Audit) > 0 {
+			terminalAt = correction.Audit[len(correction.Audit)-1].At
+		}
+		stamp, err := time.Parse(time.RFC3339, terminalAt)
+		if err != nil || now.Before(stamp.Add(terminalCorrectionRetention)) {
+			continue
+		}
+		state.Archived = append(state.Archived, archivedCorrection{
+			ID: id, Status: correction.Status, Analysis: correction.Analysis,
+			Audit: append([]auditEvent(nil), correction.Audit...),
+		})
+		delete(state.Corrections, id)
+		for key, currentID := range state.Current {
+			if currentID == id {
+				delete(state.Current, key)
+			}
+		}
+		changed = true
+	}
+	if len(state.Archived) > maxArchivedCorrections {
+		state.Archived = append([]archivedCorrection(nil), state.Archived[len(state.Archived)-maxArchivedCorrections:]...)
+		changed = true
 	}
 	return changed
 }

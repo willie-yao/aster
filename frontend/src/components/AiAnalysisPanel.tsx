@@ -129,7 +129,7 @@ export function AiAnalysisPanel({
               <Button size="small" startIcon={<HistoryOutlined />} onClick={() => setShowOriginal((value) => !value)} sx={{ ml: { sm: "auto" } }}>
                 {showOriginal ? "Hide original" : "View original"}
               </Button>
-              {correctionActive && features.analysis_corrections && auth.status === "authenticated" && (
+              {correction.status === "active" && features.analysis_corrections && auth.status === "authenticated" && (
                 <Button size="small" color="inherit" startIcon={<UndoOutlined />} onClick={() => void revokeCorrection()} disabled={revokeBusy}>
                   {revokeBusy ? "Revoking" : "Revoke"}
                 </Button>
