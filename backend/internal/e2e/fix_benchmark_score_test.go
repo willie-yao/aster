@@ -3,13 +3,19 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -320,16 +326,66 @@ func runFixBenchmarkVerifier(ctx context.Context, repoRoot string, benchmarkCase
 	if err := os.WriteFile(filepath.Join(verifierDir, "go.mod"), []byte(goMod), 0o644); err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(filepath.Join(verifierDir, "verifier_test.go"), []byte(benchmarkCase.VerifierSource), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(verifierDir, "verifier.go"), []byte(benchmarkCase.VerifierSource), 0o644); err != nil {
 		return "", err
 	}
-	verifierBytes, err := runFixBenchmarkCommandRaw(ctx, verifierDir, nil, "go", "test", "-json", "-count=1", "-run", "^TestBenchmarkVerifier$", ".")
-	verifierOutput := boundedFixBenchmarkDetail(string(verifierBytes))
+	proofBytes := make([]byte, 32)
+	if _, err := rand.Read(proofBytes); err != nil {
+		return "", err
+	}
+	proofToken := hex.EncodeToString(proofBytes)
+	mainSource := fmt.Sprintf(`package main
+
+import (
+	"fmt"
+	"os"
+)
+
+const proofToken = %q
+
+func main() {
+	if err := verify(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if len(os.Args) != 2 {
+		fmt.Fprintln(os.Stderr, "proof path is required")
+		os.Exit(1)
+	}
+	if err := os.WriteFile(os.Args[1], []byte(proofToken), 0o600); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+`, proofToken)
+	if err := os.WriteFile(filepath.Join(verifierDir, "main.go"), []byte(mainSource), 0o600); err != nil {
+		return "", err
+	}
+	execDir, err := os.MkdirTemp("", "fix-benchmark-verifier-exec-")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(execDir) //nolint:errcheck
+	binaryName := "verifier"
+	if goruntime.GOOS == "windows" {
+		binaryName += ".exe"
+	}
+	binaryPath := filepath.Join(execDir, binaryName)
+	buildOutput, err := runFixBenchmarkCommand(ctx, verifierDir, nil, "go", "build", "-o", binaryPath, ".")
+	if err != nil {
+		return buildOutput, fmt.Errorf("build benchmark verifier: %w", err)
+	}
+	if err := os.RemoveAll(verifierDir); err != nil {
+		return buildOutput, err
+	}
+	proofPath := filepath.Join(execDir, "proof")
+	verifierOutput, err := runFixBenchmarkCommand(ctx, execDir, nil, binaryPath, proofPath)
 	if err != nil {
 		return verifierOutput, fmt.Errorf("benchmark verifier: %w", err)
 	}
-	if !fixBenchmarkVerifierPassed(verifierBytes) {
-		return verifierOutput, fmt.Errorf("benchmark verifier pass event missing")
+	proof, err := os.ReadFile(proofPath)
+	if err != nil || string(proof) != proofToken {
+		return verifierOutput, fmt.Errorf("benchmark verifier proof missing or invalid: %v", err)
 	}
 
 	publicDir, err := os.MkdirTemp("", "fix-benchmark-public-tests-")
@@ -344,20 +400,7 @@ func runFixBenchmarkVerifier(ctx context.Context, repoRoot string, benchmarkCase
 	if err != nil {
 		return strings.TrimSpace(verifierOutput + "\n" + publicOutput), fmt.Errorf("candidate tests: %w", err)
 	}
-	return strings.TrimSpace(publicOutput + "\n" + verifierOutput), nil
-}
-
-func fixBenchmarkVerifierPassed(output []byte) bool {
-	for _, line := range bytes.Split(output, []byte("\n")) {
-		var event struct {
-			Action string `json:"Action"`
-			Test   string `json:"Test"`
-		}
-		if json.Unmarshal(line, &event) == nil && event.Action == "pass" && event.Test == "TestBenchmarkVerifier" {
-			return true
-		}
-	}
-	return false
+	return strings.TrimSpace(buildOutput + "\n" + verifierOutput + "\n" + publicOutput), nil
 }
 
 func runFixBenchmarkRegressionTests(ctx context.Context, sourceRoot string, benchmarkCase fixBenchmarkCase, result runtimepkg.GenerateResult) (bool, string) {
@@ -374,6 +417,9 @@ func runFixBenchmarkRegressionTests(ctx context.Context, sourceRoot string, benc
 		}
 		testFiles[path] = contents
 	}
+	if err := validateFixBenchmarkRegressionTests(testFiles); err != nil {
+		return false, err.Error()
+	}
 	if err := writeFixBenchmarkFiles(repoRoot, testFiles); err != nil {
 		return false, err.Error()
 	}
@@ -386,6 +432,50 @@ func runFixBenchmarkRegressionTests(ctx context.Context, sourceRoot string, benc
 		return false, "candidate regression tests failed before executing a test: " + output
 	}
 	return true, "candidate regression tests rejected the original broken implementation: " + output
+}
+
+func validateFixBenchmarkRegressionTests(files map[string]string) error {
+	for path, contents := range files {
+		file, err := parser.ParseFile(token.NewFileSet(), path, contents, 0)
+		if err != nil {
+			return fmt.Errorf("parse candidate regression test %s: %w", path, err)
+		}
+		for _, spec := range file.Imports {
+			if spec.Path.Value != `"testing"` {
+				return fmt.Errorf("candidate regression test %s imports unsafe package %s", path, spec.Path.Value)
+			}
+		}
+		tests := 0
+		for _, declaration := range file.Decls {
+			fn, ok := declaration.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+			if fn.Name.Name == "init" || fn.Name.Name == "TestMain" {
+				return fmt.Errorf("candidate regression test %s defines %s", path, fn.Name.Name)
+			}
+			if strings.HasPrefix(fn.Name.Name, "Test") {
+				tests++
+			}
+			ast.Inspect(fn.Body, func(node ast.Node) bool {
+				call, ok := node.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				if ident, ok := call.Fun.(*ast.Ident); ok && (ident.Name == "print" || ident.Name == "println" || ident.Name == "panic") {
+					tests = -1
+				}
+				return true
+			})
+		}
+		if tests < 0 {
+			return fmt.Errorf("candidate regression test %s uses unsafe output or panic", path)
+		}
+		if tests == 0 {
+			return fmt.Errorf("candidate regression test %s defines no Test function", path)
+		}
+	}
+	return nil
 }
 
 func fixBenchmarkHasFailingTest(output []byte) bool {
@@ -577,7 +667,8 @@ type NetworkSpec struct {
 }
 
 func init() {
-	fmt.Println("FIX_BENCHMARK_VERIFIER_EXECUTED")
+	fmt.Println("=== RUN   TestBenchmarkVerifier")
+	fmt.Println("--- PASS: TestBenchmarkVerifier (0.00s)")
 	os.Exit(0)
 }
 
@@ -590,6 +681,27 @@ func DefaultControlPlaneRouteTable(spec *NetworkSpec) {
 				benchmarkCase.RequiredFiles[1]: benchmarkCase.ReferenceFiles[benchmarkCase.RequiredFiles[1]],
 			})
 		}, miss: "verification"},
+		{name: "forged regression failure event", make: func(t *testing.T) runtimepkg.GenerateResult {
+			return makeFixBenchmarkResult(t, sourceRoot, benchmarkCase, map[string]string{
+				benchmarkCase.RequiredFiles[0]: benchmarkCase.ReferenceFiles[benchmarkCase.RequiredFiles[0]],
+				benchmarkCase.RequiredFiles[1]: `package routetable
+
+import (
+	"fmt"
+	"os"
+	"testing"
+)
+
+func init() {
+	fmt.Println("=== RUN   TestForged")
+	fmt.Println("--- FAIL: TestForged (0.00s)")
+	os.Exit(1)
+}
+
+func TestForged(t *testing.T) {}
+`,
+			})
+		}, miss: "regression_test"},
 		{name: "protected file", make: func(t *testing.T) runtimepkg.GenerateResult {
 			files := map[string]string{}
 			for path, contents := range benchmarkCase.ReferenceFiles {
