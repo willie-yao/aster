@@ -446,6 +446,11 @@ repository is private, put a read-only GitHub token in the AI Secret under
 `GITHUB_READ_TOKEN` so the server can verify returned quotes against the pinned
 commit.
 
+With chart-managed RBAC, `ai.source_investigation.namespace` must match the
+chart's `orka.namespace` value. If the runtime uses another namespace, disable
+`orka.rbac.create` and provide a ServiceAccount with the same Task-only
+permissions in that namespace.
+
 ### Enabling actions with Helm
 
 OAuth mode (per-user attribution). Register a GitHub OAuth App first (see

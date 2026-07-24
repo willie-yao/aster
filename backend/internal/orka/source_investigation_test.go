@@ -133,6 +133,44 @@ func TestSourceInvestigatorRejectsUnverifiedCitationAndWorkspaceChanges(t *testi
 	}
 }
 
+func TestSourceInvestigatorCleansUpAmbiguousApplyFailure(t *testing.T) {
+	kube := &fakeTaskAPI{
+		applyErr:   errors.New("request timed out"),
+		phases:     []string{"Running"},
+		deleteErrs: []error{errors.New("temporary delete failure")},
+	}
+	runner := &SourceInvestigator{
+		kube: kube, results: &ResultClient{}, reader: fakeSourceReader{},
+		opts: SourceInvestigationOptions{AgentRef: "reader", PollEvery: time.Millisecond},
+	}
+	_, err := runner.Investigate(t.Context(), sourceRequest())
+	if !errors.Is(err, sourceinvestigation.ErrUnavailable) {
+		t.Fatalf("Investigate = %v", err)
+	}
+	if kube.deleteCalls < 3 || !kube.deleted {
+		t.Fatalf("cleanup calls=%d deleted=%v", kube.deleteCalls, kube.deleted)
+	}
+}
+
+func TestSourceInvestigatorRecordsCleanupFailure(t *testing.T) {
+	deleteErrs := make([]error, 10)
+	for i := range deleteErrs {
+		deleteErrs[i] = errors.New("delete denied")
+	}
+	kube := &fakeTaskAPI{applyErr: errors.New("request timed out"), phases: []string{"Running"}, deleteErrs: deleteErrs}
+	runner := &SourceInvestigator{
+		kube: kube, results: &ResultClient{}, reader: fakeSourceReader{},
+		opts: SourceInvestigationOptions{AgentRef: "reader", PollEvery: time.Millisecond},
+	}
+	_, err := runner.Investigate(t.Context(), sourceRequest())
+	if !errors.Is(err, sourceinvestigation.ErrUnavailable) || !strings.Contains(err.Error(), "cleaning up source Task") {
+		t.Fatalf("Investigate = %v", err)
+	}
+	if kube.deleteCalls != 10 {
+		t.Fatalf("cleanup calls = %d, want 10", kube.deleteCalls)
+	}
+}
+
 func TestParseSourceResultRejectsProse(t *testing.T) {
 	_, err := parseSourceResult("result: " + `{"version":1}`)
 	if !errors.Is(err, sourceinvestigation.ErrInvalidResult) {

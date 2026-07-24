@@ -156,21 +156,20 @@ func (r *SourceInvestigator) Investigate(
 		return sourceinvestigation.Result{}, fmt.Errorf("%w: reading prior source Task: %v", sourceinvestigation.ErrUnavailable, err)
 	}
 	if err := r.kube.Apply(ctx, TasksGVR, r.opts.Namespace, r.buildSourceTask(name, request)); err != nil {
-		return sourceinvestigation.Result{}, fmt.Errorf("%w: applying source Task: %v", sourceinvestigation.ErrUnavailable, err)
+		runErr := fmt.Errorf("%w: applying source Task: %v", sourceinvestigation.ErrUnavailable, err)
+		return sourceinvestigation.Result{}, r.withSourceTaskCleanup(name, runErr)
 	}
 	request.ReportProgress(sourceinvestigation.PhaseInvestigating)
 	phase, err := r.waitSourceTerminal(ctx, name)
 	if err != nil {
-		r.cancelSourceTask(name)
-		return sourceinvestigation.Result{}, err
+		return sourceinvestigation.Result{}, r.withSourceTaskCleanup(name, err)
 	}
 	if phase != "Succeeded" {
 		return sourceinvestigation.Result{}, fmt.Errorf("source investigation Task %s ended %s", name, phase)
 	}
 	raw, err := r.waitSourceResult(ctx, name)
 	if err != nil {
-		r.cancelSourceTask(name)
-		return sourceinvestigation.Result{}, err
+		return sourceinvestigation.Result{}, r.withSourceTaskCleanup(name, err)
 	}
 	var outer StructuredResult
 	if err := json.Unmarshal([]byte(raw), &outer); err != nil {
@@ -464,10 +463,55 @@ func (r *SourceInvestigator) deleteSourceTask(ctx context.Context, name string) 
 	}
 }
 
-func (r *SourceInvestigator) cancelSourceTask(name string) {
+func (r *SourceInvestigator) withSourceTaskCleanup(name string, runErr error) error {
+	if cleanupErr := r.cleanupSourceTask(name); cleanupErr != nil {
+		return fmt.Errorf("%w: cleaning up source Task after %v: %v", sourceinvestigation.ErrUnavailable, runErr, cleanupErr)
+	}
+	return runErr
+}
+
+func (r *SourceInvestigator) cleanupSourceTask(name string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_ = r.kube.Delete(ctx, TasksGVR, r.opts.Namespace, name)
+	every := r.opts.PollEvery
+	if every <= 0 || every > 250*time.Millisecond {
+		every = 250 * time.Millisecond
+	}
+	absentChecks := 0
+	var lastErr error
+	for attempt := 0; attempt < 10; attempt++ {
+		if err := r.kube.Delete(ctx, TasksGVR, r.opts.Namespace, name); err != nil && !IsNotFound(err) {
+			lastErr = err
+		}
+		_, err := r.kube.TaskPhase(ctx, r.opts.Namespace, name)
+		switch {
+		case IsNotFound(err):
+			absentChecks++
+			if absentChecks >= 2 {
+				return nil
+			}
+		case err != nil:
+			absentChecks = 0
+			lastErr = err
+		default:
+			absentChecks = 0
+			lastErr = fmt.Errorf("source Task still exists")
+		}
+		if attempt == 9 {
+			break
+		}
+		timer := time.NewTimer(every)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("source Task absence could not be confirmed")
+	}
+	return lastErr
 }
 
 // GitHubSourceReader reads exact public or token-authenticated GitHub source.
