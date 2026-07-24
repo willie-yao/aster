@@ -450,6 +450,15 @@ export function TestDetailPage() {
                       `&test_name=${encodeURIComponent(testName)}`
                     : undefined
                 }
+                chatRef={{
+                  job_id: jobID ?? "",
+                  build_id: selectedRun.build_id,
+                  test_name: selectedTc.name,
+                  suite_name: selectedTc.suite_name,
+                  class_name: selectedTc.class_name,
+                  junit_file: selectedTc.junit_file,
+                  analysis_generated_at: selectedTc.ai_analysis.generated_at,
+                }}
               />
               <Box
                 sx={{
