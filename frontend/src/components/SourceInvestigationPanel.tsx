@@ -114,6 +114,37 @@ function elapsedLabel(elapsedMs?: number): string | null {
   return `${(elapsedMs / 1000).toFixed(elapsedMs < 10000 ? 1 : 0)}s`;
 }
 
+const storedRequestIDPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+
+function sourceRequestStorageKey(sessionID: string, chatRequestID: string): string {
+  return `prow-ai-dashboard:source-investigation:${encodeURIComponent(sessionID)}:${encodeURIComponent(chatRequestID)}`;
+}
+
+function readStoredSourceRequestID(key: string): string | null {
+  try {
+    const value = window.sessionStorage.getItem(key)?.trim() ?? "";
+    return storedRequestIDPattern.test(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function storeSourceRequestID(key: string, requestID: string) {
+  try {
+    window.sessionStorage.setItem(key, requestID);
+  } catch {
+    // The active component still retains the request ID when storage is unavailable.
+  }
+}
+
+function clearStoredSourceRequestID(key: string) {
+  try {
+    window.sessionStorage.removeItem(key);
+  } catch {
+    // Storage is optional.
+  }
+}
+
 function SourceProgress({
   phase,
   cancelling,
@@ -312,10 +343,13 @@ export function SourceInvestigationPanel({
   const auth = useAuth();
   const [view, setView] = useState<SourceInvestigationView | null>(null);
   const [phase, setPhase] = useState<SourceInvestigationPhase>("queued");
+  const storageKey = sourceRequestStorageKey(sessionID, chatRequestID);
+  const initialStoredRequestID = readStoredSourceRequestID(storageKey);
   const [busy, setBusy] = useState(false);
+  const [recovering, setRecovering] = useState(Boolean(initialStoredRequestID));
   const [cancelling, setCancelling] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const requestIDRef = useRef(newAnalysisChatRequestID());
+  const requestIDRef = useRef(initialStoredRequestID ?? newAnalysisChatRequestID());
   const controllerRef = useRef<AbortController | null>(null);
   const cancelControllerRef = useRef<AbortController | null>(null);
   const identity = `${sessionID}\u0000${chatRequestID}`;
@@ -325,13 +359,68 @@ export function SourceInvestigationPanel({
   useEffect(() => {
     controllerRef.current?.abort();
     cancelControllerRef.current?.abort();
-    requestIDRef.current = newAnalysisChatRequestID();
+    const storedRequestID = readStoredSourceRequestID(storageKey);
+    requestIDRef.current = storedRequestID ?? newAnalysisChatRequestID();
     setView(null);
     setPhase("queued");
     setBusy(false);
+    setRecovering(Boolean(storedRequestID));
     setCancelling(false);
     setError(null);
-  }, [identity]);
+  }, [identity, storageKey]);
+
+  useEffect(() => {
+    if (auth.status === "loading") return;
+    if (auth.status !== "authenticated") {
+      setRecovering(false);
+      return;
+    }
+    const requestID = readStoredSourceRequestID(storageKey);
+    if (!requestID) {
+      setRecovering(false);
+      return;
+    }
+    const recoverIdentity = identity;
+    const controller = new AbortController();
+    controllerRef.current?.abort();
+    controllerRef.current = controller;
+    setRecovering(true);
+    getSourceInvestigation(sessionID, requestID, controller.signal)
+      .then((recovered) => {
+        if (identityRef.current !== recoverIdentity || controllerRef.current !== controller) return;
+        requestIDRef.current = requestID;
+        setView(recovered);
+        setPhase(recovered.phase ?? "queued");
+        if (recovered.status === "pending") {
+          setError("The source investigation is still running. Reconnect to continue following it.");
+        } else if (recovered.status === "unknown") {
+          setError("The source task ended without a durable result after a server interruption. Run it again.");
+        } else if (recovered.status === "failed") {
+          setError("The previous source investigation did not complete. Run it again.");
+        } else {
+          setError(null);
+        }
+      })
+      .catch((recoverError) => {
+        if (recoverError instanceof Error && recoverError.name === "AbortError") return;
+        if (identityRef.current !== recoverIdentity || controllerRef.current !== controller) return;
+        if (recoverError instanceof AnalysisChatAPIError && recoverError.status === 404) {
+          clearStoredSourceRequestID(storageKey);
+          requestIDRef.current = newAnalysisChatRequestID();
+          setView(null);
+          setError(null);
+          return;
+        }
+        setError(sourceErrorMessage(recoverError));
+      })
+      .finally(() => {
+        if (controllerRef.current === controller) {
+          controllerRef.current = null;
+          if (identityRef.current === recoverIdentity) setRecovering(false);
+        }
+      });
+    return () => controller.abort();
+  }, [auth.status, identity, sessionID, storageKey]);
 
   useEffect(() => () => {
     controllerRef.current?.abort();
@@ -349,6 +438,7 @@ export function SourceInvestigationPanel({
 
     const runIdentity = identity;
     const requestID = requestIDRef.current;
+    storeSourceRequestID(storageKey, requestID);
     controllerRef.current?.abort();
     const controller = new AbortController();
     controllerRef.current = controller;
@@ -436,6 +526,14 @@ export function SourceInvestigationPanel({
   }
 
   const pending = busy || view?.status === "pending";
+  if (recovering) {
+    return (
+      <Stack role="status" direction="row" spacing={0.8} sx={{ alignItems: "center", color: "text.secondary", py: 0.35 }}>
+        <ManageSearchOutlined sx={{ fontSize: 16 }} />
+        <Typography variant="caption">Restoring source investigation...</Typography>
+      </Stack>
+    );
+  }
   if (!view && !busy && !error) {
     return (
       <Stack direction={{ xs: "column", sm: "row" }} spacing={0.8} sx={{ alignItems: { sm: "center" }, pt: 0.15 }}>
