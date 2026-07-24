@@ -197,6 +197,8 @@ func validateContainerAnalyzerOptions(opts ContainerAnalyzerOptions) error {
 		return fmt.Errorf("container analysis task timeout %s must be at least ai.timeout %s plus %s execution grace", opts.TaskTimeout, opts.AnalysisTimeout, containerTaskExecutionGrace)
 	case opts.PollInterval <= 0:
 		return fmt.Errorf("container analysis poll interval must be positive")
+	case opts.PollInterval >= containerResultReadTimeout:
+		return fmt.Errorf("container analysis poll interval must be less than %s", containerResultReadTimeout)
 	case opts.MaxRetries < 0:
 		return fmt.Errorf("container analysis retries must not be negative")
 	case opts.MaxConcurrentTasks < 1:

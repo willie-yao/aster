@@ -233,6 +233,14 @@ func TestValidateContainerAnalyzerOptionsRejectsShortTaskTimeout(t *testing.T) {
 	}
 }
 
+func TestValidateContainerAnalyzerOptionsRejectsSlowResultPolling(t *testing.T) {
+	opts := containerAnalyzerTestOptions(t, bytes.Repeat([]byte{0x64}, 32))
+	opts.PollInterval = containerResultReadTimeout
+	if err := ValidateContainerAnalyzerOptions(opts); err == nil || !strings.Contains(err.Error(), "less than") {
+		t.Fatalf("slow poll error = %v", err)
+	}
+}
+
 func TestContainerAnalyzerEnvironmentIncludesContextWindowOverride(t *testing.T) {
 	opts := containerAnalyzerTestOptions(t, bytes.Repeat([]byte{0x63}, 32))
 	opts.ContextWindowTokens = 128000

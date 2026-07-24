@@ -458,6 +458,7 @@ func projectBundleDigest(bundle ProjectBundle) (string, error) {
 
 // CanonicalFailureAnalysisRequest applies the current prompt bounds and removes published AI output from Task identity.
 func CanonicalFailureAnalysisRequest(request ai.FailureAnalysisRequest) ai.FailureAnalysisRequest {
+	request.Build.JUnitURLs = nil
 	request.TestCase = evidenceplan.CanonicalTestCase(request.TestCase)
 	return request
 }

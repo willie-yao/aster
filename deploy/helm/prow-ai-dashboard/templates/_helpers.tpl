@@ -223,6 +223,8 @@ Validate AI provider configuration.
   {{- $goDurationPattern := "^(([0-9]+([.][0-9]+)?)|([.][0-9]+))(ns|us|µs|μs|ms|s|m|h)((([0-9]+([.][0-9]+)?)|([.][0-9]+))(ns|us|µs|μs|ms|s|m|h))*$" -}}
   {{- $pollInterval := printf "%v" $cfg.pollInterval -}}
   {{- if or (not (regexMatch $goDurationPattern $pollInterval)) (not (regexMatch "[1-9]" $pollInterval)) -}}{{- fail "analysisRuntime.orkaContainer.pollInterval must be a positive Go duration" -}}{{- end -}}
+  {{- $roundedPoll := durationRound $pollInterval -}}
+  {{- if regexMatch "(^([3-9][0-9]|[1-9][0-9]{2,})s$|[mh]$)" $roundedPoll -}}{{- fail "analysisRuntime.orkaContainer.pollInterval must be less than 30s" -}}{{- end -}}
   {{- $taskTimeout := printf "%v" $cfg.taskTimeout -}}
   {{- if or (not (regexMatch $goDurationPattern $taskTimeout)) (not (regexMatch "[1-9]" $taskTimeout)) -}}{{- fail "analysisRuntime.orkaContainer.taskTimeout must be a positive Go duration" -}}{{- end -}}
   {{- if not (index $cfg.nodeSelector "agentpool") -}}{{- fail "analysisRuntime.orkaContainer.nodeSelector.agentpool must select an explicit CPU pool" -}}{{- end -}}

@@ -61,6 +61,11 @@ func TestValidateAnalysisRuntimeOptions(t *testing.T) {
 	if err := validateAnalysisRuntimeOptions(missing); err == nil || !strings.Contains(err.Error(), "model Secret") {
 		t.Fatalf("missing model Secret error = %v", err)
 	}
+	slowPoll := validContainerAnalysisOptions()
+	slowPoll.AnalysisRuntime.OrkaContainer.PollInterval = 30 * time.Second
+	if err := validateAnalysisRuntimeOptions(slowPoll); err == nil || !strings.Contains(err.Error(), "less than 30s") {
+		t.Fatalf("slow poll error = %v", err)
+	}
 }
 
 func TestValidateContainerAnalysisStateKey(t *testing.T) {

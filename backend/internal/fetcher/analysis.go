@@ -157,7 +157,8 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 		warnOnAnalysisPersistence("container analysis state", container.StateStore().Save)
 		runtime, err = p.ensureAnalysisRuntime(ctx)
 		if err != nil {
-			return fmt.Errorf("cross-build analysis runtime setup: %w", err)
+			log.Printf("Warning: cross-build analysis runtime setup failed: %v", err)
+			return nil
 		}
 		traceStore = container.StateStore().TraceStore()
 		service, err = runtime.NewService(analysisruntime.ServiceOptions{
@@ -167,7 +168,8 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 			GitHubReadToken:     githubReadToken(),
 		})
 		if err != nil {
-			return fmt.Errorf("cross-build analysis service setup: %w", err)
+			log.Printf("Warning: cross-build analysis service setup failed: %v", err)
+			return nil
 		}
 		runtime.LogConfiguration()
 	}

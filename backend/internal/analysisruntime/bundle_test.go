@@ -3,6 +3,7 @@ package analysisruntime
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -105,7 +106,7 @@ func TestProjectBundleRoundTripAndMaterialize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bundle.Digest != digest || bundle.ContractVersion != "contract-v3" || !reflect.DeepEqual(bundle.Request, request) {
+	if bundle.Digest != digest || bundle.ContractVersion != "contract-v3" || !reflect.DeepEqual(bundle.Request, CanonicalFailureAnalysisRequest(request)) {
 		t.Fatalf("bundle = %+v", bundle)
 	}
 	paths := make([]string, 0, len(bundle.Files))
@@ -373,6 +374,11 @@ func TestProjectBundleCanonicalizesLargeFailureAndPriorAI(t *testing.T) {
 	request.TestCase.FailureBody = strings.Repeat("body", 30_000)
 	request.TestCase.AISummary = &models.AISummary{Summary: strings.Repeat("summary", 20_000)}
 	request.TestCase.AIAnalysis = &models.AIAnalysis{RootCause: strings.Repeat("cause", 20_000), Mode: ai.AgenticMode}
+	request.Build.JUnitURLs = make([]string, 2000)
+	for i := range request.Build.JUnitURLs {
+		request.Build.JUnitURLs[i] = fmt.Sprintf("https://storage.invalid/artifacts/shard-%d/junit.xml", i)
+	}
+	request.Build.JUnitComplete = true
 	before := request
 	data, _, err := BuildProjectBundle(writeBundleProject(t, "https://model.invalid/v1/chat/completions", "model"), ContainerAnalyzerContractVersion, request)
 	if err != nil {
@@ -387,6 +393,9 @@ func TestProjectBundleCanonicalizesLargeFailureAndPriorAI(t *testing.T) {
 	}
 	if len(bundle.Request.TestCase.FailureMessage) > 17*1024 || len(bundle.Request.TestCase.FailureBody) > 8*1024 {
 		t.Fatalf("canonical failure sizes = message:%d body:%d", len(bundle.Request.TestCase.FailureMessage), len(bundle.Request.TestCase.FailureBody))
+	}
+	if len(bundle.Request.Build.JUnitURLs) != 0 || !bundle.Request.Build.JUnitComplete {
+		t.Fatalf("canonical JUnit metadata = %+v", bundle.Request.Build)
 	}
 	if bundle.Request.TestCase.AISummary != nil || bundle.Request.TestCase.AIAnalysis != nil {
 		t.Fatalf("bundle retained prior AI output: %+v", bundle.Request.TestCase)

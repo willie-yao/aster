@@ -290,6 +290,8 @@ func validateAnalysisRuntimeOptions(opts Options) error {
 			return fmt.Errorf("orka-container max concurrent Tasks must be positive")
 		case cfg.PollInterval <= 0:
 			return fmt.Errorf("orka-container poll interval must be positive")
+		case cfg.PollInterval >= 30*time.Second:
+			return fmt.Errorf("orka-container poll interval must be less than 30s")
 		case cfg.TaskTimeout <= 0:
 			return fmt.Errorf("orka-container task timeout must be positive")
 		case cfg.Retries < 0:
