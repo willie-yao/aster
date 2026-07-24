@@ -81,6 +81,11 @@ func TestBenchmarkHiddenRouteTableBehavior(t *testing.T) {
 	if explicit.ControlPlaneRouteTable != "dedicated" {
 		t.Fatalf("explicit route table changed to %q", explicit.ControlPlaneRouteTable)
 	}
+	empty := &NetworkSpec{}
+	DefaultControlPlaneRouteTable(empty)
+	if empty.ControlPlaneRouteTable != "" {
+		t.Fatalf("empty route table changed to %q", empty.ControlPlaneRouteTable)
+	}
 }
 `,
 			},
@@ -156,6 +161,9 @@ func TestBenchmarkHiddenRetryBehavior(t *testing.T) {
 			t.Fatalf("Parse(%q) = %d, %v", value, got, err)
 		}
 	}
+	if _, err := Parse("many"); err == nil {
+		t.Fatal("nonnumeric retries were accepted")
+	}
 }
 `,
 			},
@@ -205,20 +213,24 @@ spec:
 			HiddenFiles: map[string]string{
 				fixBenchmarkFixtureRoot + "/generated_manifest/benchmark_hidden_test.go": `package manifest
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
 func TestBenchmarkHiddenGeneratedManifest(t *testing.T) {
 	got := RenderCronJob("hidden")
-	for _, want := range []string{"name: hidden", "activeDeadlineSeconds: 900", "restartPolicy: Never"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("generated manifest missing %q:\n%s", want, got)
-		}
-	}
-	if strings.Count(got, "activeDeadlineSeconds:") != 1 {
-		t.Fatalf("active deadline count = %d", strings.Count(got, "activeDeadlineSeconds:"))
+	want := ` + "`" + `apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: hidden
+spec:
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 900
+      template:
+        spec:
+          restartPolicy: Never
+` + "`" + `
+	if got != want {
+		t.Fatalf("generated manifest differs:\n%s", got)
 	}
 }
 `,

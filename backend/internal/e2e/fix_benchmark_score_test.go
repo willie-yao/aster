@@ -79,6 +79,15 @@ func scoreFixBenchmarkResult(ctx context.Context, sourceRoot string, benchmarkCa
 		contractDetail = applyOutput
 	}
 	if contractOK {
+		changedOutput, changedErr := runFixBenchmarkCommandRaw(ctx, repoRoot, nil, "git", "status", "--porcelain", "--untracked-files=all")
+		changedFiles := fixBenchmarkStatusPaths(string(changedOutput))
+		sort.Strings(changedFiles)
+		if changedErr != nil || !slices.Equal(changedFiles, gotFiles) {
+			contractOK = false
+			contractDetail = fmt.Sprintf("diff paths=%v reported files=%v: %v", changedFiles, gotFiles, changedErr)
+		}
+	}
+	if contractOK {
 		for path, want := range result.Files {
 			got, readErr := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(path)))
 			if readErr != nil || string(got) != want {
@@ -114,6 +123,22 @@ func scoreFixBenchmarkResult(ctx context.Context, sourceRoot string, benchmarkCa
 	return score
 }
 
+func fixBenchmarkStatusPaths(status string) []string {
+	var paths []string
+	for _, line := range strings.Split(status, "\n") {
+		if len(line) < 4 {
+			continue
+		}
+		path := strings.TrimSpace(line[3:])
+		if _, renamed, ok := strings.Cut(path, " -> "); ok {
+			path = renamed
+		}
+		paths = append(paths, filepath.ToSlash(path))
+	}
+	sort.Strings(paths)
+	return paths
+}
+
 func prepareFixBenchmarkRepo(sourceRoot string, benchmarkCase fixBenchmarkCase) (string, func(), error) {
 	repoRoot, err := os.MkdirTemp("", "fix-benchmark-")
 	if err != nil {
@@ -147,6 +172,9 @@ func makeFixBenchmarkResult(t *testing.T, sourceRoot string, benchmarkCase fixBe
 	defer cleanup()
 	if err := writeFixBenchmarkFiles(repoRoot, files); err != nil {
 		t.Fatal(err)
+	}
+	if output, err := runFixBenchmarkCommand(context.Background(), repoRoot, nil, "git", "add", "-N", "."); err != nil {
+		t.Fatalf("git add -N: %v: %s", err, output)
 	}
 	diff, err := runFixBenchmarkCommandRaw(context.Background(), repoRoot, nil, "git", "diff", "--binary", "--full-index")
 	if err != nil {
@@ -253,6 +281,11 @@ func runFixBenchmarkCommandRaw(ctx context.Context, dir string, stdin []byte, na
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
 	cmd.Stdin = bytes.NewReader(stdin)
+	cmd.Env = append(os.Environ(),
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_CONFIG_SYSTEM=/dev/null",
+		"GIT_TERMINAL_PROMPT=0",
+	)
 	return cmd.CombinedOutput()
 }
 
@@ -354,6 +387,17 @@ func TestFixBenchmarkRejectsIncompleteOrUnsafeResults(t *testing.T) {
 			files[benchmarkCase.Dir+"/README.md"] = "unrelated\n"
 			return makeFixBenchmarkResult(t, sourceRoot, benchmarkCase, files)
 		}, miss: "file_scope"},
+		{name: "unreported diff file", make: func(t *testing.T) runtimepkg.GenerateResult {
+			files := map[string]string{}
+			for path, contents := range benchmarkCase.ReferenceFiles {
+				files[path] = contents
+			}
+			extra := benchmarkCase.Dir + "/README.md"
+			files[extra] = "unreported\n"
+			result := makeFixBenchmarkResult(t, sourceRoot, benchmarkCase, files)
+			delete(result.Files, extra)
+			return result
+		}, miss: "diff_contract"},
 		{name: "unapplicable diff", make: func(t *testing.T) runtimepkg.GenerateResult {
 			result := makeFixBenchmarkResult(t, sourceRoot, benchmarkCase, benchmarkCase.ReferenceFiles)
 			result.Diff = "not a diff"
