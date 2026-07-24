@@ -195,7 +195,7 @@ Source investigation is a separate read-only contract and does not inherit
 ```yaml
 ai:
   source_investigation:
-    agent_ref: opencode-source-reader
+    agent_ref: guarded-source-reader
     api: http://orka.orka-system.svc.cluster.local:8080
     namespace: orka-system
     git_secret: source-repo-readonly
