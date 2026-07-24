@@ -107,7 +107,9 @@ The shared RWX volume must support advisory file locking and atomic rename.
 The persisted file contains private transcripts and selected failure context, so
 volume access and backups must be treated as operator-private data.
 
-An in-flight turn carries a lease longer than the HTTP model timeout. If a pod
+Application-generated terminal errors carry a private outcome header so the
+frontend can distinguish them from an ingress-generated `502` or `504` after a
+committed response. An in-flight turn carries a lease longer than the HTTP model timeout. If a pod
 dies before recording the result, another replica marks that request outcome
 unknown instead of running the same idempotency key twice. The client reloads
 the authoritative session before allowing an explicit retry. Expired sessions
@@ -118,7 +120,7 @@ Operational settings:
 
 | Environment variable | Default | Purpose |
 | --- | --- | --- |
-| `ANALYSIS_CHAT_STATE_DIR` | `<data-dir>/.analysis-chat` | Private persisted session state and lock file. |
+| `ANALYSIS_CHAT_STATE_DIR` | `<data-dir>/.analysis-chat` | Private persisted session state and lock file. A path beneath the public data root must use a dot-prefixed top-level directory. |
 | `ANALYSIS_CHAT_SESSION_TTL` | `2h` | Conversation retention. |
 | `ANALYSIS_CHAT_MAX_SESSIONS` | `128` | Deployment-wide live-session cap. |
 | `ANALYSIS_CHAT_MAX_SESSIONS_PER_OWNER` | `8` | Per-login live-session cap. |

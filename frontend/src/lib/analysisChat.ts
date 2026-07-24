@@ -14,12 +14,19 @@ export const analysisChatTurnLimitMessage = "analysis chat turn limit reached";
 
 export class AnalysisChatAPIError extends Error {
   readonly status: number;
+  readonly outcome: string | null;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, outcome: string | null = null) {
     super(message);
     this.name = "AnalysisChatAPIError";
     this.status = status;
+    this.outcome = outcome;
   }
+}
+
+export function isAmbiguousAnalysisChatFailure(error: unknown): boolean {
+  return !(error instanceof AnalysisChatAPIError) ||
+    (error.status >= 500 && error.outcome === null);
 }
 
 export function newAnalysisChatRequestID(): string {
@@ -49,6 +56,7 @@ async function parseResponse(response: Response): Promise<AnalysisChatSession> {
     throw new AnalysisChatAPIError(
       response.status,
       body || `Analysis chat request failed with HTTP ${response.status}`,
+      response.headers.get("X-Analysis-Chat-Outcome"),
     );
   }
   return response.json() as Promise<AnalysisChatSession>;

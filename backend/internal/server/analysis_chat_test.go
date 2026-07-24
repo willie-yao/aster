@@ -192,19 +192,22 @@ func TestHandlerAnalysisChatRejectsMalformedAndCrossOriginRequests(t *testing.T)
 
 func TestWriteAnalysisChatErrorMapping(t *testing.T) {
 	cases := []struct {
-		err      error
-		want     int
-		wantBody string
+		err         error
+		want        int
+		wantBody    string
+		wantOutcome string
 	}{
-		{analysischat.ErrAnalysisNotFound, http.StatusNotFound, "analysis not found"},
-		{analysischat.ErrSessionNotFound, http.StatusNotFound, "analysis chat session not found"},
-		{analysischat.ErrAnalysisChanged, http.StatusConflict, "analysis changed"},
-		{analysischat.ErrIdempotencyConflict, http.StatusConflict, "analysis chat idempotency key conflict"},
-		{analysischat.ErrRequestOutcomeUnknown, http.StatusConflict, "analysis chat request outcome unknown"},
-		{analysischat.ErrInvalidRequest, http.StatusBadRequest, "invalid analysis chat request"},
-		{analysischat.ErrSessionLimit, http.StatusTooManyRequests, "analysis chat session limit reached"},
-		{context.DeadlineExceeded, http.StatusGatewayTimeout, "analysis chat request timed out"},
-		{errors.New("provider secret https://private.example/v1"), http.StatusBadGateway, "analysis chat could not complete the request"},
+		{analysischat.ErrAnalysisNotFound, http.StatusNotFound, "analysis not found", "rejected"},
+		{analysischat.ErrSessionNotFound, http.StatusNotFound, "analysis chat session not found", "rejected"},
+		{analysischat.ErrAnalysisChanged, http.StatusConflict, "analysis changed", "rejected"},
+		{analysischat.ErrSessionBusy, http.StatusConflict, "analysis chat session is busy", "pending"},
+		{analysischat.ErrIdempotencyConflict, http.StatusConflict, "analysis chat idempotency key conflict", "rejected"},
+		{analysischat.ErrRequestOutcomeUnknown, http.StatusConflict, "analysis chat request outcome unknown", "unknown"},
+		{analysischat.ErrInvalidRequest, http.StatusBadRequest, "invalid analysis chat request", "rejected"},
+		{analysischat.ErrSessionLimit, http.StatusTooManyRequests, "analysis chat session limit reached", "rejected"},
+		{analysischat.ErrRequestFailed, http.StatusBadGateway, "analysis chat could not complete the request", "failed"},
+		{context.DeadlineExceeded, http.StatusGatewayTimeout, "analysis chat request timed out", "failed"},
+		{errors.New("provider secret https://private.example/v1"), http.StatusBadGateway, "analysis chat could not complete the request", ""},
 	}
 	for _, testCase := range cases {
 		recorder := httptest.NewRecorder()
@@ -214,6 +217,9 @@ func TestWriteAnalysisChatErrorMapping(t *testing.T) {
 		}
 		if !strings.Contains(recorder.Body.String(), testCase.wantBody) {
 			t.Errorf("error %v body=%q want substring %q", testCase.err, recorder.Body.String(), testCase.wantBody)
+		}
+		if got := recorder.Header().Get(analysisChatOutcomeHeader); got != testCase.wantOutcome {
+			t.Errorf("error %v outcome=%q want=%q", testCase.err, got, testCase.wantOutcome)
 		}
 		if strings.Contains(recorder.Body.String(), "private.example") {
 			t.Fatal("provider URL leaked to response")

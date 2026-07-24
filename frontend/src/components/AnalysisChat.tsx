@@ -30,6 +30,7 @@ import {
   AnalysisChatAPIError,
   createAnalysisChatSession,
   getAnalysisChatSession,
+  isAmbiguousAnalysisChatFailure,
   limitAnalysisChatQuestion,
   newAnalysisChatRequestID,
   sendAnalysisChatMessage,
@@ -406,7 +407,8 @@ export function AnalysisChat({
         return;
       }
 
-      if (activeSession && activeTurn && !(requestError instanceof AnalysisChatAPIError)) {
+      const ambiguousFailure = isAmbiguousAnalysisChatFailure(requestError);
+      if (activeSession && activeTurn && ambiguousFailure) {
         try {
           const reconciled = await getAnalysisChatSession(activeSession.id, controller.signal);
           setSession(reconciled);
@@ -430,7 +432,7 @@ export function AnalysisChat({
         setError("The question may still be running. Retry shortly to reconnect to the same request.");
         return;
       }
-      if (!activeSession && !(requestError instanceof AnalysisChatAPIError)) {
+      if (!activeSession && ambiguousFailure) {
         setError("The conversation may have been created. Retry to reconnect to the same session.");
         return;
       }

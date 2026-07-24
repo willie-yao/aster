@@ -16,6 +16,8 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
+var syncPrivateFile = func(file *os.File) error { return file.Sync() }
+
 const (
 	stateVersion    = 1
 	stateFileName   = "sessions.json"
@@ -194,9 +196,16 @@ func freshPersistedState() *persistedState {
 }
 
 func writePrivateJSON(path string, value any) error {
+	return writePrivateJSONLimit(path, value, maxStateBytes)
+}
+
+func writePrivateJSONLimit(path string, value any, maxBytes int) error {
 	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return err
+	}
+	if len(data) > maxBytes {
+		return fmt.Errorf("analysis chat state exceeds %d bytes", maxBytes)
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
 	if err != nil {
@@ -210,7 +219,10 @@ func writePrivateJSON(path string, value any) error {
 		tmp.Close()
 		return err
 	}
-	_ = tmp.Sync()
+	if err := syncPrivateFile(tmp); err != nil {
+		tmp.Close()
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}

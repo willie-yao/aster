@@ -449,6 +449,20 @@ func TestServiceRunnerFailuresReachTurnLimit(t *testing.T) {
 	}
 }
 
+func TestServiceRejectsPublicStateDirectory(t *testing.T) {
+	dataDir := t.TempDir()
+	writeJobDetail(t, dataDir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
+	if _, err := NewService(dataDir, &fakeRunner{}, Options{StateDir: filepath.Join(dataDir, "chat")}); err == nil || !strings.Contains(err.Error(), "dot-prefixed") {
+		t.Fatalf("visible state directory error = %v", err)
+	}
+	if _, err := NewService(dataDir, &fakeRunner{}, Options{StateDir: filepath.Join(dataDir, ".private", "chat")}); err != nil {
+		t.Fatalf("hidden state directory: %v", err)
+	}
+	if _, err := NewService(dataDir, &fakeRunner{}, Options{StateDir: t.TempDir()}); err != nil {
+		t.Fatalf("external state directory: %v", err)
+	}
+}
+
 func TestServicePersistsSessionsAndIdempotentResults(t *testing.T) {
 	dir := t.TempDir()
 	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))

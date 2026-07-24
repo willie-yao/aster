@@ -207,6 +207,9 @@ func NewService(dataDir string, runner Runner, opts Options) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := validateStateDirPrivacy(dataDir, opts.StateDir); err != nil {
+		return nil, err
+	}
 	if err := store.validate(); err != nil {
 		return nil, fmt.Errorf("validating analysis chat state: %w", err)
 	}
@@ -634,6 +637,32 @@ func (s *Service) resolve(ref AnalysisRef) (resolvedAnalysis, error) {
 		build:       cloneBuildInfo(run.BuildInfo),
 		testCase:    testCase,
 	}, nil
+}
+
+func validateStateDirPrivacy(dataDir, stateDir string) error {
+	dataRoot, err := filepath.EvalSymlinks(dataDir)
+	if err != nil {
+		return fmt.Errorf("resolving analysis chat data directory: %w", err)
+	}
+	stateRoot, err := filepath.EvalSymlinks(stateDir)
+	if err != nil {
+		return fmt.Errorf("resolving analysis chat state directory: %w", err)
+	}
+	rel, err := filepath.Rel(dataRoot, stateRoot)
+	if err != nil {
+		return fmt.Errorf("comparing analysis chat state directory: %w", err)
+	}
+	if rel == "." {
+		return fmt.Errorf("analysis chat state directory must not equal the public data directory")
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return nil
+	}
+	first := strings.Split(rel, string(filepath.Separator))[0]
+	if !strings.HasPrefix(first, ".") {
+		return fmt.Errorf("analysis chat state beneath the public data directory must use a dot-prefixed top-level directory")
+	}
+	return nil
 }
 
 func normalizeAnalysisRef(ref AnalysisRef) (AnalysisRef, error) {
