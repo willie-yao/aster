@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
@@ -42,12 +42,22 @@ export function AiAnalysisPanel({
   traceHref?: string;
   chatRef?: AnalysisChatReference;
 }) {
-  const { data: corrections, refetch } = useAnalysisCorrections();
+  const { data: corrections, error: correctionsLoadError, refetch } = useAnalysisCorrections();
   const { features } = useCapabilities();
   const auth = useAuth();
   const [showOriginal, setShowOriginal] = useState(false);
   const [revokeBusy, setRevokeBusy] = useState(false);
   const [correctionError, setCorrectionError] = useState<string | null>(null);
+  const revokeControllerRef = useRef<AbortController | null>(null);
+  const analysisIdentity = [chatRef?.job_id, chatRef?.build_id, chatRef?.test_name, chatRef?.suite_name, chatRef?.class_name, chatRef?.junit_file, chatRef?.analysis_generated_at].join("\u0000");
+  const identityRef = useRef(analysisIdentity);
+  identityRef.current = analysisIdentity;
+  useEffect(() => {
+    revokeControllerRef.current?.abort();
+    setShowOriginal(false);
+    setRevokeBusy(false);
+    setCorrectionError(null);
+  }, [analysisIdentity]);
   const correction = chatRef ? findAnalysisCorrection(corrections, chatRef) : undefined;
   const correctionStale = Boolean(
     correction?.status === "active" && correction.analysis.analysis_generated_at !== chatRef?.analysis_generated_at,
@@ -60,15 +70,24 @@ export function AiAnalysisPanel({
 
   async function revokeCorrection() {
     if (!correction || revokeBusy) return;
+    const requestIdentity = analysisIdentity;
+    revokeControllerRef.current?.abort();
+    const controller = new AbortController();
+    revokeControllerRef.current = controller;
     setRevokeBusy(true);
     setCorrectionError(null);
     try {
-      await revokeAnalysisCorrection(correction.id);
+      await revokeAnalysisCorrection(correction.id, controller.signal);
     } catch (error) {
-      setCorrectionError(error instanceof Error ? error.message : "Could not revoke the correction.");
+      if (!(error instanceof Error && error.name === "AbortError") && identityRef.current === requestIdentity) {
+        setCorrectionError(error instanceof Error ? error.message : "Could not revoke the correction.");
+      }
     } finally {
-      refetch();
-      setRevokeBusy(false);
+      if (identityRef.current === requestIdentity) refetch();
+      if (revokeControllerRef.current === controller) {
+        revokeControllerRef.current = null;
+        if (identityRef.current === requestIdentity) setRevokeBusy(false);
+      }
     }
   }
 
@@ -114,7 +133,7 @@ export function AiAnalysisPanel({
           )}
         </Stack>
 
-        {correctionError && <Alert severity="error" variant="outlined">{correctionError}</Alert>}
+        {(correctionError || correctionsLoadError) && <Alert severity="error" variant="outlined">{correctionError ?? correctionsLoadError}</Alert>}
         {correction && (
           <Box sx={{ border: "1px solid", borderColor: correctionActive ? "success.main" : "divider", borderRadius: "10px", p: 1.25, bgcolor: (theme) => soft(theme, correctionActive ? "success" : "primary", 0.045) }}>
             <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap" }}>
@@ -127,7 +146,7 @@ export function AiAnalysisPanel({
                     : "This correction was revoked and the original analysis is restored."}
               </Typography>
               <Button size="small" startIcon={<HistoryOutlined />} onClick={() => setShowOriginal((value) => !value)} sx={{ ml: { sm: "auto" } }}>
-                {showOriginal ? "Hide original" : "View original"}
+                {showOriginal ? "Hide details" : correctionActive ? "View original" : "View correction"}
               </Button>
               {correction.status === "active" && features.analysis_corrections && auth.status === "authenticated" && (
                 <Button size="small" color="inherit" startIcon={<UndoOutlined />} onClick={() => void revokeCorrection()} disabled={revokeBusy}>
@@ -137,10 +156,10 @@ export function AiAnalysisPanel({
             </Stack>
             {showOriginal && (
               <Box sx={{ mt: 1.25, pt: 1.25, borderTop: "1px solid", borderColor: "divider" }}>
-                <Typography variant="caption" color="text.secondary">Original root cause</Typography>
-                <Typography variant="body2" sx={{ mt: 0.25, whiteSpace: "pre-line" }}>{analysis.root_cause}</Typography>
-                <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1 }}>Original suggested fix</Typography>
-                <Typography variant="body2" sx={{ mt: 0.25, whiteSpace: "pre-line" }}>{analysis.suggested_fix}</Typography>
+                <Typography variant="caption" color="text.secondary">{correctionActive ? "Original root cause" : "Corrected root cause"}</Typography>
+                <Typography variant="body2" sx={{ mt: 0.25, whiteSpace: "pre-line" }}>{correctionActive ? analysis.root_cause : correction.revision.root_cause}</Typography>
+                <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1 }}>{correctionActive ? "Original suggested fix" : "Corrected suggested fix"}</Typography>
+                <Typography variant="body2" sx={{ mt: 0.25, whiteSpace: "pre-line" }}>{correctionActive ? analysis.suggested_fix : correction.revision.suggested_fix}</Typography>
               </Box>
             )}
           </Box>

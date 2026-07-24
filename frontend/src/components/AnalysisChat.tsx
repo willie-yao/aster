@@ -379,6 +379,7 @@ export function AnalysisChat({
   const [correctionPreview, setCorrectionPreview] = useState<AnalysisCorrectionPreview | null>(null);
   const [correctionOpen, setCorrectionOpen] = useState(false);
   const [correctionBusy, setCorrectionBusy] = useState(false);
+  const [correctionError, setCorrectionError] = useState<string | null>(null);
   const createRequestIDRef = useRef(newAnalysisChatRequestID());
   const controllerRef = useRef<AbortController | null>(null);
   const cancelControllerRef = useRef<AbortController | null>(null);
@@ -417,6 +418,7 @@ export function AnalysisChat({
     setCorrectionPreview(null);
     setCorrectionOpen(false);
     setCorrectionBusy(false);
+    setCorrectionError(null);
     createRequestIDRef.current = newAnalysisChatRequestID();
   }, [identity]);
 
@@ -560,7 +562,7 @@ export function AnalysisChat({
     const controller = new AbortController();
     correctionControllerRef.current = controller;
     setCorrectionBusy(true);
-    setError(null);
+    setCorrectionError(null);
     try {
       const preview = await previewAnalysisCorrection(session.id, requestID, controller.signal);
       if (identityRef.current !== requestIdentity || correctionControllerRef.current !== controller) return;
@@ -568,7 +570,7 @@ export function AnalysisChat({
       setCorrectionOpen(true);
     } catch (previewError) {
       if (previewError instanceof Error && previewError.name === "AbortError") return;
-      if (identityRef.current === requestIdentity) setError(previewError instanceof Error ? previewError.message : "Could not prepare the correction.");
+      if (identityRef.current === requestIdentity) setCorrectionError(previewError instanceof Error ? previewError.message : "Could not prepare the correction.");
     } finally {
       if (correctionControllerRef.current === controller) {
         correctionControllerRef.current = null;
@@ -584,6 +586,7 @@ export function AnalysisChat({
     const controller = new AbortController();
     correctionControllerRef.current = controller;
     setCorrectionBusy(true);
+    setCorrectionError(null);
     try {
       await confirmAnalysisCorrection(correctionPreview.token, controller.signal);
       if (identityRef.current !== requestIdentity) return;
@@ -598,7 +601,7 @@ export function AnalysisChat({
         setCorrectionPreview(null);
         onCorrectionChanged?.();
       } else {
-        setError(confirmError.message);
+        setCorrectionError(confirmError.message);
       }
     } finally {
       if (correctionControllerRef.current === controller) {
@@ -900,6 +903,7 @@ export function AnalysisChat({
         preview={correctionPreview}
         open={correctionOpen}
         busy={correctionBusy}
+        error={correctionError}
         onClose={() => setCorrectionOpen(false)}
         onConfirm={() => void publishCorrection()}
       />

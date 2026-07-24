@@ -1,3 +1,4 @@
+import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Dialog from "@mui/material/Dialog";
@@ -11,10 +12,11 @@ import { FactCheckOutlined, PublishedWithChangesOutlined } from "@mui/icons-mate
 import type { AnalysisCorrectionPreview } from "../types/corrections";
 import { soft } from "../theme";
 
-export function AnalysisCorrectionDialog({ preview, open, busy, onClose, onConfirm }: {
+export function AnalysisCorrectionDialog({ preview, open, busy, error, onClose, onConfirm }: {
   preview: AnalysisCorrectionPreview | null;
   open: boolean;
   busy: boolean;
+  error: string | null;
   onClose: () => void;
   onConfirm: () => void;
 }) {
@@ -26,6 +28,7 @@ export function AnalysisCorrectionDialog({ preview, open, busy, onClose, onConfi
         Confirm analysis correction
       </DialogTitle>
       <DialogContent>
+        {error && <Alert severity="error" variant="outlined" sx={{ mb: 2 }}>{error}</Alert>}
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
           This publishes a dashboard overlay. The original generated analysis remains preserved and can be restored.
         </Typography>
