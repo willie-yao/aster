@@ -361,12 +361,16 @@ func containerStateIdentity(resources orka.ContainerAnalysisResources, request a
 
 func buildKindContainerTask(t *testing.T, namespace, image, prefix, endpoint, model, secretName string, request ai.FailureAnalysisRequest, labels map[string]string, cacheSeed map[string]ai.CacheEntry, taskTimeout string, benchmarkProject bool) orka.ContainerAnalysisResources {
 	t.Helper()
+	environment := map[string]string{"AI_API": "chat_completions", "AI_ENDPOINT": endpoint, "AI_MODEL": model}
+	if contextWindow := strings.TrimSpace(os.Getenv("ORKA_CONTAINER_CONTEXT_WINDOW_TOKENS")); contextWindow != "" {
+		environment["AI_CONTEXT_WINDOW_TOKENS"] = contextWindow
+	}
 	resources, err := orka.BuildContainerAnalysisResources(orka.ContainerAnalysisTaskSpec{
 		Namespace: namespace, NamePrefix: prefix, Image: image,
 		Args:    []string{"-data-dir=/tmp/prow-ai-analyzer"},
 		Timeout: taskTimeout, MaxRetries: 1, ProjectDir: containerAnalyzerProject(t, benchmarkProject), Request: request, CacheSeed: cacheSeed, Labels: labels,
 		StateKeyFingerprint: fmt.Sprintf("%x", sha256.Sum256(containerAnalyzerStateKey())),
-		Environment:         map[string]string{"AI_API": "chat_completions", "AI_ENDPOINT": endpoint, "AI_MODEL": model},
+		Environment:         environment,
 		SecretEnv: []orka.SecretEnvVar{
 			{Name: "AI_TOKEN", SecretName: secretName, SecretKey: "token"},
 			{Name: analysisruntime.ContainerStateKeyEnv, SecretName: secretName, SecretKey: "state-key"},

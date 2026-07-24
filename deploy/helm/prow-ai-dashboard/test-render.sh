@@ -96,6 +96,10 @@ grep -Fq 'kind: Namespace' "$tmp/container-analysis.yaml"
 grep -Eq 'namespace: test-prow-ai-dashboard-analysis-[0-9a-f]{8}' "$tmp/container-analysis.yaml"
 grep -Fq 'name: PROW_AI_STATE_KEY' "$tmp/container-analysis.yaml"
 grep -Fq 'name: ORKA_API_TOKEN' "$tmp/container-analysis.yaml"
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" "${container_args[@]}" \
+  --set ai.contextWindowTokens=128000 --show-only templates/orka-analysis-admission.yaml > "$tmp/container-context-window.yaml"
+grep -Fq "AI_CONTEXT_WINDOW_TOKENS" "$tmp/container-context-window.yaml"
+grep -Fq 'e.value == \"128000\"' "$tmp/container-context-window.yaml"
 if grep -Eq 'resources: \["(tools|providers|agents|agentruntimes)"\]|type: ai|orka-producer|orka-ingestor|orka-artifact-tool' "$tmp/container-analysis.yaml"; then
   echo 'container analysis render contains a forbidden patched-worker resource' >&2
   exit 1

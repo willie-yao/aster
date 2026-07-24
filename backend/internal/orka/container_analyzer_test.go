@@ -233,6 +233,19 @@ func TestValidateContainerAnalyzerOptionsRejectsShortTaskTimeout(t *testing.T) {
 	}
 }
 
+func TestContainerAnalyzerEnvironmentIncludesContextWindowOverride(t *testing.T) {
+	opts := containerAnalyzerTestOptions(t, bytes.Repeat([]byte{0x63}, 32))
+	opts.ContextWindowTokens = 128000
+	environment := containerAnalyzerEnvironment(opts)
+	if environment["AI_CONTEXT_WINDOW_TOKENS"] != "128000" {
+		t.Fatalf("environment = %+v", environment)
+	}
+	opts.ContextWindowTokens = 0
+	if _, ok := containerAnalyzerEnvironment(opts)["AI_CONTEXT_WINDOW_TOKENS"]; ok {
+		t.Fatal("unset context window was transported")
+	}
+}
+
 func TestContainerAnalyzerRetainsResourcesUntilResultIsConsumed(t *testing.T) {
 	request := containerTaskRequest()
 	key := bytes.Repeat([]byte{0x73}, 32)

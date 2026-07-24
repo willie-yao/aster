@@ -238,6 +238,7 @@ func TestContainerAnalysisResourceIdentityChangesWithInputs(t *testing.T) {
 	}{
 		{name: "request", changeBundle: true, mutate: func(spec *ContainerAnalysisTaskSpec) { spec.Request.TestCase.FailureMessage = "changed" }},
 		{name: "image", changeBundle: true, mutate: func(spec *ContainerAnalysisTaskSpec) { spec.Image = "dashboard-analyzer:other" }},
+		{name: "context window", changeBundle: true, mutate: func(spec *ContainerAnalysisTaskSpec) { spec.Environment["AI_CONTEXT_WINDOW_TOKENS"] = "128000" }},
 		{name: "state key", changeBundle: true, mutate: func(spec *ContainerAnalysisTaskSpec) { spec.StateKeyFingerprint = strings.Repeat("b", 64) }},
 		{name: "cache seed", changeBundle: true, mutate: func(spec *ContainerAnalysisTaskSpec) {
 			key := analysisruntime.FailureCacheKey(spec.Request)

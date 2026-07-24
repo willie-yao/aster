@@ -53,20 +53,21 @@ const (
 
 // OrkaContainerAnalysisOptions configure the experimental Helm analysis runtime.
 type OrkaContainerAnalysisOptions struct {
-	Namespace       string
-	ResultAPI       string
-	Image           string
-	ModelSecretName string
-	ModelTokenKey   string
-	StateSecretName string
-	StateSecretKey  string
-	MaxConcurrent   int
-	PollInterval    time.Duration
-	TaskTimeout     time.Duration
-	Retries         int
-	NodeSelector    map[string]string
-	Tolerations     []map[string]any
-	Affinity        map[string]any
+	Namespace           string
+	ResultAPI           string
+	Image               string
+	ModelSecretName     string
+	ModelTokenKey       string
+	StateSecretName     string
+	StateSecretKey      string
+	MaxConcurrent       int
+	PollInterval        time.Duration
+	TaskTimeout         time.Duration
+	Retries             int
+	ContextWindowTokens int
+	NodeSelector        map[string]string
+	Tolerations         []map[string]any
+	Affinity            map[string]any
 }
 
 // AnalysisRuntimeOptions select where single-failure analysis runs.
@@ -190,14 +191,20 @@ func setupPipeline(opts Options) (*pipeline, error) {
 				return nil, fmt.Errorf("orka-container analysis does not transport ai.headers; use bearer-token modelAuth or a trusted proxy")
 			}
 			stateKey, _ := analysisruntime.ParseContainerStateKey(os.Getenv(analysisruntime.ContainerStateKeyEnv))
+			contextWindowTokens, _, err := ai.ParseContextWindowTokens(os.Getenv("AI_CONTEXT_WINDOW_TOKENS"))
+			if err != nil {
+				return nil, err
+			}
+			opts.AnalysisRuntime.OrkaContainer.ContextWindowTokens = contextWindowTokens
 			container := opts.AnalysisRuntime.OrkaContainer
 			if err := orka.ValidateContainerAnalyzerOptions(orka.ContainerAnalyzerOptions{
 				Namespace: container.Namespace, OrkaAPI: container.ResultAPI, Image: container.Image, ProjectDir: opts.ProjectDir, DataDir: opts.OutDir,
 				API: aiProject.Provider.API, Endpoint: aiProject.Provider.Endpoint, Model: aiProject.Provider.Model,
 				ModelSecretName: container.ModelSecretName, ModelTokenKey: container.ModelTokenKey,
 				StateSecretName: container.StateSecretName, StateSecretKey: container.StateSecretKey, StateKey: stateKey,
-				AnalysisTimeout: cfg.AI.EffectiveAgentic().Timeout,
-				TaskTimeout:     container.TaskTimeout, PollInterval: container.PollInterval, MaxRetries: container.Retries,
+				ContextWindowTokens: container.ContextWindowTokens,
+				AnalysisTimeout:     cfg.AI.EffectiveAgentic().Timeout,
+				TaskTimeout:         container.TaskTimeout, PollInterval: container.PollInterval, MaxRetries: container.Retries,
 				MaxConcurrentTasks: container.MaxConcurrent, NodeSelector: container.NodeSelector, Tolerations: container.Tolerations, Affinity: container.Affinity,
 			}); err != nil {
 				return nil, fmt.Errorf("orka-container analysis: %w", err)

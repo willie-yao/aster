@@ -31,30 +31,31 @@ var immutableAnalyzerTagPattern = regexp.MustCompile(`^(sha-[0-9a-fA-F]{7,64}|v?
 
 // ContainerAnalyzerOptions configures the experimental Orka container runtime.
 type ContainerAnalyzerOptions struct {
-	Namespace          string
-	Image              string
-	ProjectDir         string
-	DataDir            string
-	API                string
-	Endpoint           string
-	Model              string
-	ModelSecretName    string
-	ModelTokenKey      string
-	StateSecretName    string
-	StateSecretKey     string
-	StateKey           []byte
-	AnalysisTimeout    time.Duration
-	TaskTimeout        time.Duration
-	PollInterval       time.Duration
-	MaxRetries         int
-	MaxConcurrentTasks int
-	NodeSelector       map[string]string
-	Tolerations        []map[string]any
-	Affinity           map[string]any
-	Labels             map[string]string
-	KubeContext        string
-	OrkaAPI            string
-	OrkaAPIToken       string
+	Namespace           string
+	Image               string
+	ProjectDir          string
+	DataDir             string
+	API                 string
+	Endpoint            string
+	Model               string
+	ModelSecretName     string
+	ModelTokenKey       string
+	StateSecretName     string
+	StateSecretKey      string
+	StateKey            []byte
+	ContextWindowTokens int
+	AnalysisTimeout     time.Duration
+	TaskTimeout         time.Duration
+	PollInterval        time.Duration
+	MaxRetries          int
+	MaxConcurrentTasks  int
+	NodeSelector        map[string]string
+	Tolerations         []map[string]any
+	Affinity            map[string]any
+	Labels              map[string]string
+	KubeContext         string
+	OrkaAPI             string
+	OrkaAPIToken        string
 }
 
 type containerAnalyzerKube interface {
@@ -253,9 +254,7 @@ func (a *ContainerAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, 
 		Request:             taskRequest,
 		CacheSeed:           a.state.CacheSeed(taskRequest),
 		StateKeyFingerprint: containerStateKeyFingerprint(a.opts.StateKey),
-		Environment: map[string]string{
-			"AI_API": a.opts.API, "AI_ENDPOINT": a.opts.Endpoint, "AI_MODEL": a.opts.Model,
-		},
+		Environment:         containerAnalyzerEnvironment(a.opts),
 		SecretEnv: []SecretEnvVar{
 			{Name: "AI_TOKEN", SecretName: a.opts.ModelSecretName, SecretKey: a.opts.ModelTokenKey},
 			{Name: analysisruntime.ContainerStateKeyEnv, SecretName: a.opts.StateSecretName, SecretKey: a.opts.StateSecretKey},
@@ -323,6 +322,14 @@ func (a *ContainerAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, 
 	}
 	a.cleanupConsumedBundle(resources, state)
 	return result, nil
+}
+
+func containerAnalyzerEnvironment(opts ContainerAnalyzerOptions) map[string]string {
+	environment := map[string]string{"AI_API": opts.API, "AI_ENDPOINT": opts.Endpoint, "AI_MODEL": opts.Model}
+	if opts.ContextWindowTokens > 0 {
+		environment["AI_CONTEXT_WINDOW_TOKENS"] = fmt.Sprintf("%d", opts.ContextWindowTokens)
+	}
+	return environment
 }
 
 func containerTaskWaitTimeout(taskTimeout time.Duration, retries int) time.Duration {

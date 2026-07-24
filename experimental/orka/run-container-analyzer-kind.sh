@@ -160,6 +160,7 @@ helm template dashboard "$repo_root/deploy/helm/prow-ai-dashboard" \
   --set ai.enabled=true \
   --set ai.endpoint="http://$analysis_model.$analysis_namespace.svc.cluster.local/v1/chat/completions" \
   --set ai.model=script-model \
+  --set ai.contextWindowTokens=128000 \
   --set ai.token=unused \
   --set project.existingConfigMap=unused \
   --set analysisRuntime.type=orka-container \
@@ -197,6 +198,7 @@ ORKA_CONTAINER_CONTEXT="$context" \
 ORKA_CONTAINER_NAMESPACE="$analysis_namespace" \
 ORKA_CONTAINER_SECRET="$analysis_secret" \
 ORKA_CONTAINER_MODEL_NAME="$analysis_model" \
+ORKA_CONTAINER_CONTEXT_WINDOW_TOKENS=128000 \
 ORKA_CONTAINER_ADMISSION="$admission_enabled" \
 ORKA_CONTAINER_IMAGE="$analyzer_image" \
 ORKA_CONTAINER_MODEL_IMAGE="$model_image" \

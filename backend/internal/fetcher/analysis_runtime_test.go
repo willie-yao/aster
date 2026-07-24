@@ -114,6 +114,7 @@ ai:
 	t.Setenv("AI_API", "chat_completions")
 	t.Setenv("AI_ENDPOINT", "https://helm.invalid/v1/chat/completions")
 	t.Setenv("AI_MODEL", "helm-model")
+	t.Setenv("AI_CONTEXT_WINDOW_TOKENS", "128000")
 	t.Setenv("PROW_AI_STATE_KEY", base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x22}, 32)))
 	opts := validContainerAnalysisOptions()
 	opts.ProjectDir = dir
@@ -129,6 +130,9 @@ ai:
 	provider := pipeline.aiProject.Provider
 	if provider.API != "chat_completions" || provider.Endpoint != "https://helm.invalid/v1/chat/completions" || provider.Model != "helm-model" {
 		t.Fatalf("provider = %+v", provider)
+	}
+	if got := pipeline.opts.AnalysisRuntime.OrkaContainer.ContextWindowTokens; got != 128000 {
+		t.Fatalf("context window tokens = %d, want 128000", got)
 	}
 	opts.AnalysisRuntime.OrkaContainer.TaskTimeout = 32*time.Minute - time.Second
 	if _, err := setupPipeline(opts); err == nil || !strings.Contains(err.Error(), "ai.timeout") {

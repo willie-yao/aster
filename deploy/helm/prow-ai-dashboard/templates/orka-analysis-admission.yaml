@@ -58,9 +58,9 @@ spec:
     - expression: "!has(object.spec.execution.affinity) || object.spec.execution.affinity == {}"
       message: "analysis Tasks must not add affinity"
     {{- end }}
-    - expression: "size(object.spec.env) == 10"
+    - expression: {{ printf "size(object.spec.env) == %d" (ternary 11 10 (gt (int .Values.ai.contextWindowTokens) 0)) | quote }}
       message: "analysis Tasks must use the exact analyzer environment"
-    - expression: "object.spec.env.all(e, e.name in ['PROW_AI_ANALYSIS_BUNDLE', 'PROW_AI_ANALYSIS_BUNDLE_SHA256', 'PROW_AI_TASK_NAMESPACE', 'PROW_AI_TASK_NAME', 'PROW_AI_CONTRACT_VERSION', 'AI_API', 'AI_ENDPOINT', 'AI_MODEL', 'AI_TOKEN', 'PROW_AI_STATE_KEY'])"
+    - expression: "object.spec.env.all(e, e.name in ['PROW_AI_ANALYSIS_BUNDLE', 'PROW_AI_ANALYSIS_BUNDLE_SHA256', 'PROW_AI_TASK_NAMESPACE', 'PROW_AI_TASK_NAME', 'PROW_AI_CONTRACT_VERSION', 'AI_API', 'AI_ENDPOINT', 'AI_MODEL', 'AI_CONTEXT_WINDOW_TOKENS', 'AI_TOKEN', 'PROW_AI_STATE_KEY'])"
       message: "analysis Tasks contain an unauthorized environment variable"
     - expression: "object.spec.env.exists(e, e.name == 'PROW_AI_ANALYSIS_BUNDLE' && has(e.valueFrom) && has(e.valueFrom.configMapKeyRef) && e.valueFrom.configMapKeyRef.name == object.metadata.name + '-input' && e.valueFrom.configMapKeyRef.key == 'bundle.json')"
       message: "analysis Tasks must use their content-addressed bundle"
@@ -78,6 +78,13 @@ spec:
       message: "analysis Tasks must use the configured model endpoint"
     - expression: {{ printf "object.spec.env.exists(e, e.name == 'AI_MODEL' && has(e.value) && e.value == %s)" (toJson .Values.ai.model) | quote }}
       message: "analysis Tasks must use the configured model"
+    {{- if gt (int .Values.ai.contextWindowTokens) 0 }}
+    - expression: {{ printf "object.spec.env.exists(e, e.name == 'AI_CONTEXT_WINDOW_TOKENS' && has(e.value) && e.value == %s)" (toJson (printf "%v" .Values.ai.contextWindowTokens)) | quote }}
+      message: "analysis Tasks must use the configured context window"
+    {{- else }}
+    - expression: "!object.spec.env.exists(e, e.name == 'AI_CONTEXT_WINDOW_TOKENS')"
+      message: "analysis Tasks must not add a context window override"
+    {{- end }}
     - expression: {{ printf "object.spec.env.exists(e, e.name == 'AI_TOKEN' && has(e.valueFrom) && has(e.valueFrom.secretKeyRef) && e.valueFrom.secretKeyRef.name == %s && e.valueFrom.secretKeyRef.key == %s)" (toJson $cfg.modelAuth.existingSecret) (toJson $cfg.modelAuth.tokenKey) | quote }}
       message: "analysis Tasks must use only the configured model Secret"
     - expression: {{ printf "object.spec.env.exists(e, e.name == 'PROW_AI_STATE_KEY' && has(e.valueFrom) && has(e.valueFrom.secretKeyRef) && e.valueFrom.secretKeyRef.name == %s && e.valueFrom.secretKeyRef.key == %s)" (toJson $stateSecret) (toJson $cfg.state.key) | quote }}

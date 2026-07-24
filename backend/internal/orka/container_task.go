@@ -309,7 +309,7 @@ func validateContainerAnalysisEndpoint(raw string) (string, error) {
 
 func safeInlineEnvironmentName(name string) bool {
 	switch name {
-	case "AI_API", "AI_ENDPOINT", "AI_MODEL":
+	case "AI_API", "AI_ENDPOINT", "AI_MODEL", "AI_CONTEXT_WINDOW_TOKENS":
 		return true
 	default:
 		return false
