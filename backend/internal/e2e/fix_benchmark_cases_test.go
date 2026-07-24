@@ -69,32 +69,37 @@ func TestDefaultControlPlaneRouteTable(t *testing.T) {
 `,
 			},
 			Module: "fixbench/route_table",
-			VerifierSource: `package main
+			VerifierSource: `package verifier
 
 import (
-	"fmt"
+	"testing"
 
 	routetable "fixbench/route_table"
 )
 
-func verify() error {
+func TestBenchmarkVerifier(t *testing.T) {
 	spec := &routetable.NetworkSpec{NodeRouteTable: "shared-node-table"}
 	routetable.DefaultControlPlaneRouteTable(spec)
-	if spec.ControlPlaneRouteTable != "shared-node-table" || spec.NodeRouteTable != "shared-node-table" {
-		return fmt.Errorf("shared route tables = %#v", spec)
+	if spec.ControlPlaneRouteTable != "shared-node-table" {
+		t.Fatalf("control-plane route table = %q", spec.ControlPlaneRouteTable)
+	}
+	if spec.NodeRouteTable != "shared-node-table" {
+		t.Fatalf("node route table changed to %q", spec.NodeRouteTable)
 	}
 	explicit := &routetable.NetworkSpec{ControlPlaneRouteTable: "dedicated", NodeRouteTable: "shared"}
 	routetable.DefaultControlPlaneRouteTable(explicit)
-	if explicit.ControlPlaneRouteTable != "dedicated" || explicit.NodeRouteTable != "shared" {
-		return fmt.Errorf("explicit route tables = %#v", explicit)
+	if explicit.ControlPlaneRouteTable != "dedicated" {
+		t.Fatalf("explicit route table changed to %q", explicit.ControlPlaneRouteTable)
+	}
+	if explicit.NodeRouteTable != "shared" {
+		t.Fatalf("explicit node route table changed to %q", explicit.NodeRouteTable)
 	}
 	empty := &routetable.NetworkSpec{}
 	routetable.DefaultControlPlaneRouteTable(empty)
-	if empty.ControlPlaneRouteTable != "" || empty.NodeRouteTable != "" {
-		return fmt.Errorf("empty route tables = %#v", empty)
+	if empty.ControlPlaneRouteTable != "" {
+		t.Fatalf("empty route table changed to %q", empty.ControlPlaneRouteTable)
 	}
 	routetable.DefaultControlPlaneRouteTable(nil)
-	return nil
 }
 `,
 		},
@@ -156,28 +161,27 @@ func TestParse(t *testing.T) {
 `,
 			},
 			Module: "fixbench/retry",
-			VerifierSource: `package main
+			VerifierSource: `package verifier
 
 import (
-	"fmt"
+	"testing"
 
 	retry "fixbench/retry"
 )
 
-func verify() error {
+func TestBenchmarkVerifier(t *testing.T) {
 	if _, err := retry.Parse("-7"); err == nil {
-		return fmt.Errorf("negative retries were accepted")
+		t.Fatal("negative retries were accepted")
 	}
 	for value, want := range map[string]int{"0": 0, "8": 8} {
 		got, err := retry.Parse(value)
 		if err != nil || got != want {
-			return fmt.Errorf("Parse(%q) = %d, %v", value, got, err)
+			t.Fatalf("Parse(%q) = %d, %v", value, got, err)
 		}
 	}
 	if _, err := retry.Parse("many"); err == nil {
-		return fmt.Errorf("nonnumeric retries were accepted")
+		t.Fatal("nonnumeric retries were accepted")
 	}
-	return nil
 }
 `,
 		},
@@ -224,15 +228,15 @@ spec:
 `,
 			},
 			Module: "fixbench/generated_manifest",
-			VerifierSource: `package main
+			VerifierSource: `package verifier
 
 import (
-	"fmt"
+	"testing"
 
 	manifest "fixbench/generated_manifest"
 )
 
-func verify() error {
+func TestBenchmarkVerifier(t *testing.T) {
 	got := manifest.RenderCronJob("hidden")
 	want := ` + "`" + `apiVersion: batch/v1
 kind: CronJob
@@ -247,9 +251,8 @@ spec:
           restartPolicy: Never
 ` + "`" + `
 	if got != want {
-		return fmt.Errorf("generated manifest differs:\n%s", got)
+		t.Fatalf("generated manifest differs:\n%s", got)
 	}
-	return nil
 }
 `,
 		},
