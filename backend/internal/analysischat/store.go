@@ -25,8 +25,9 @@ const (
 )
 
 type persistedState struct {
-	Version  int                          `json:"version"`
-	Sessions map[string]*persistedSession `json:"sessions"`
+	Version       int                          `json:"version"`
+	Sessions      map[string]*persistedSession `json:"sessions"`
+	OwnerRequests map[string][]time.Time       `json:"owner_requests,omitempty"`
 }
 
 type persistedSession struct {
@@ -56,9 +57,12 @@ type persistedRequest struct {
 }
 
 type persistedActiveTurn struct {
-	RequestID string    `json:"request_id"`
-	LeaseID   string    `json:"lease_id"`
-	ExpiresAt time.Time `json:"expires_at"`
+	RequestID       string    `json:"request_id"`
+	LeaseID         string    `json:"lease_id"`
+	ExpiresAt       time.Time `json:"expires_at"`
+	Phase           string    `json:"phase"`
+	UpdatedAt       time.Time `json:"updated_at"`
+	CancelRequested bool      `json:"cancel_requested,omitempty"`
 }
 
 const (
@@ -186,11 +190,17 @@ func (s *sessionStore) load() (*persistedState, error) {
 	if state.Sessions == nil {
 		state.Sessions = map[string]*persistedSession{}
 	}
+	if state.OwnerRequests == nil {
+		state.OwnerRequests = map[string][]time.Time{}
+	}
 	return &state, nil
 }
 
 func freshPersistedState() *persistedState {
-	return &persistedState{Version: stateVersion, Sessions: map[string]*persistedSession{}}
+	return &persistedState{
+		Version: stateVersion, Sessions: map[string]*persistedSession{},
+		OwnerRequests: map[string][]time.Time{},
+	}
 }
 
 func writePrivateJSON(path string, value any) error {

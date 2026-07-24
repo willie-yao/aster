@@ -345,6 +345,8 @@ grep -Fq 'name: ANALYSIS_CHAT_STATE_DIR' "$tmp/chat-server.yaml"
 grep -Fq 'value: "/data/.analysis-chat"' "$tmp/chat-server.yaml"
 grep -Fq 'name: ANALYSIS_CHAT_SESSION_TTL' "$tmp/chat-server.yaml"
 grep -Fq 'value: "2h"' "$tmp/chat-server.yaml"
+grep -Fq 'name: ANALYSIS_CHAT_MAX_ACTIVE_TURNS_PER_OWNER' "$tmp/chat-server.yaml"
+grep -Fq 'name: ANALYSIS_CHAT_REQUESTS_PER_MINUTE' "$tmp/chat-server.yaml"
 grep -Fq 'readOnly: false' "$tmp/chat-server.yaml"
 grep -Fq -- '- -project-dir=/config' "$tmp/chat-server.yaml"
 grep -Fq 'name: project' "$tmp/chat-server.yaml"
@@ -407,6 +409,18 @@ if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   exit 1
 fi
 grep -Fq 'server.chat.maxSessionsPerOwner cannot exceed server.chat.maxSessions' "$tmp/chat-invalid-capacity.yaml"
+
+if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.chat.enabled=true \
+  --set server.chat.maxActiveTurnsPerOwner=0 \
+  --set server.actions.mode=proxy \
+  --set server.actions.admins[0]=alice \
+  --set ai.enabled=true \
+  --set ai.token=test-token > "$tmp/chat-invalid-active-limit.yaml" 2>&1; then
+  echo 'chat accepted a non-positive active turn limit' >&2
+  exit 1
+fi
+grep -Fq 'server.chat.maxActiveTurnsPerOwner must be positive' "$tmp/chat-invalid-active-limit.yaml"
 
 if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set server.chat.enabled=true > "$tmp/chat-without-ai.yaml" 2>&1; then

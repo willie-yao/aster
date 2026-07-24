@@ -194,6 +194,9 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 	evidence := map[string]*analysisChatEvidence{}
 	var lastContent string
 	for iter := 0; iter < a.opts.MaxIters; iter++ {
+		if iter > 0 {
+			turn.ReportProgress(analysischat.PhaseEvaluating)
+		}
 		messages, _ = compactMessages(messages, schemaBytes, a.opts.ContextByteBudget)
 		if size := requestSizeEstimate(messages, schemaBytes); size > a.opts.ContextByteBudget {
 			return analysischat.Reply{}, fmt.Errorf("analysis chat request exceeds the %d-byte context budget after compaction", a.opts.ContextByteBudget)
@@ -210,6 +213,7 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 		}
 		message := response.Message
 		if len(message.ToolCalls) == 0 {
+			turn.ReportProgress(analysischat.PhaseFinalizing)
 			lastContent = ""
 			if message.Content != nil {
 				lastContent = *message.Content
@@ -231,6 +235,7 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 			break
 		}
 
+		turn.ReportProgress(analysischat.PhaseReadingEvidence)
 		toolCalls, _ := limitToolCalls(message.ToolCalls, a.opts.SingleToolCall)
 		remainingToolCalls := a.opts.MaxToolCalls - state.calls
 		if remainingToolCalls <= 0 {
@@ -259,6 +264,7 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 		}
 	}
 
+	turn.ReportProgress(analysischat.PhaseFinalizing)
 	messages, err = prepareAnalysisChatFinalizeMessages(messages, a.opts.ContextByteBudget)
 	if err != nil {
 		return analysischat.Reply{}, err

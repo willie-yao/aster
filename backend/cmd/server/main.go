@@ -99,6 +99,13 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Printf("server: graceful shutdown: %v", err)
 	}
+	if waiter, ok := opts.AnalysisChat.(interface{ Wait(context.Context) error }); ok {
+		waitCtx, waitCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer waitCancel()
+		if err := waiter.Wait(waitCtx); err != nil {
+			log.Printf("server: waiting for analysis chat turns: %v", err)
+		}
+	}
 }
 
 // enableInteractiveFeatures loads the project config and authenticated services.
@@ -297,11 +304,14 @@ func analysisChatTimeoutFromEnv() (time.Duration, error) {
 
 func analysisChatServiceOptionsFromEnv(dataDir string, timeout time.Duration) (analysischat.Options, error) {
 	opts := analysischat.Options{
-		StateDir:            strings.TrimSpace(os.Getenv("ANALYSIS_CHAT_STATE_DIR")),
-		SessionTTL:          2 * time.Hour,
-		MaxSessions:         128,
-		MaxSessionsPerOwner: 8,
-		TurnLeaseTTL:        timeout + 30*time.Second,
+		StateDir:                     strings.TrimSpace(os.Getenv("ANALYSIS_CHAT_STATE_DIR")),
+		SessionTTL:                   2 * time.Hour,
+		MaxSessions:                  128,
+		MaxSessionsPerOwner:          8,
+		TurnLeaseTTL:                 timeout + 30*time.Second,
+		TurnTimeout:                  timeout,
+		MaxActiveTurnsPerOwner:       2,
+		MaxRequestsPerOwnerPerMinute: 10,
 	}
 	if opts.StateDir == "" {
 		opts.StateDir = filepath.Join(dataDir, ".analysis-chat")
@@ -322,6 +332,14 @@ func analysisChatServiceOptionsFromEnv(dataDir string, timeout time.Duration) (a
 		return analysischat.Options{}, err
 	}
 	opts.MaxSessionsPerOwner, err = positiveIntEnv("ANALYSIS_CHAT_MAX_SESSIONS_PER_OWNER", opts.MaxSessionsPerOwner)
+	if err != nil {
+		return analysischat.Options{}, err
+	}
+	opts.MaxActiveTurnsPerOwner, err = positiveIntEnv("ANALYSIS_CHAT_MAX_ACTIVE_TURNS_PER_OWNER", opts.MaxActiveTurnsPerOwner)
+	if err != nil {
+		return analysischat.Options{}, err
+	}
+	opts.MaxRequestsPerOwnerPerMinute, err = positiveIntEnv("ANALYSIS_CHAT_REQUESTS_PER_MINUTE", opts.MaxRequestsPerOwnerPerMinute)
 	if err != nil {
 		return analysischat.Options{}, err
 	}

@@ -206,6 +206,8 @@ server:
     sessionTTL: 2h
     maxSessions: 128
     maxSessionsPerOwner: 8
+    maxActiveTurnsPerOwner: 2
+    requestsPerMinute: 10
   # Admin authentication and write actions: file an issue or draft a fix PR.
   # The mode, admins, oauth, proxy, and trustedOrigins settings are shared with
   # chat when server.chat.enabled is true.

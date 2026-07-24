@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
 import ButtonBase from "@mui/material/ButtonBase";
 import Chip from "@mui/material/Chip";
 import Collapse from "@mui/material/Collapse";
@@ -19,21 +20,26 @@ import {
   HelpOutlined,
   PsychologyAltOutlined,
   ReportProblemOutlined,
+  StopCircleOutlined,
 } from "@mui/icons-material";
 import { useAuth } from "../hooks/useAuth";
 import { useCapabilities } from "../hooks/useCapabilities";
 import {
+  analysisChatActiveTurnLimitMessage,
   analysisChatIdempotencyConflictMessage,
+  analysisChatRateLimitMessage,
   analysisChatRequestOutcomeUnknownMessage,
+  analysisChatRequestPendingMessage,
   analysisChatSessionBusyMessage,
   analysisChatTurnLimitMessage,
   AnalysisChatAPIError,
+  cancelAnalysisChatRequest,
   createAnalysisChatSession,
   getAnalysisChatSession,
   isAmbiguousAnalysisChatFailure,
   limitAnalysisChatQuestion,
   newAnalysisChatRequestID,
-  sendAnalysisChatMessage,
+  streamAnalysisChatMessage,
 } from "../lib/analysisChat";
 import { fileToUrl, type FileToUrlContext } from "../lib/utils";
 import { soft } from "../theme";
@@ -41,6 +47,7 @@ import type {
   AnalysisChatAssessment,
   AnalysisChatCitation,
   AnalysisChatMessage,
+  AnalysisChatProgressPhase,
   AnalysisChatReference,
   AnalysisChatSession,
 } from "../types/analysisChat";
@@ -75,7 +82,7 @@ function readableError(error: unknown): string {
       case 404:
         return "This analysis or conversation is no longer available. Refresh the page to load the latest data.";
       case 409:
-        if (error.message === analysisChatSessionBusyMessage) {
+        if (error.message === analysisChatSessionBusyMessage || error.message === analysisChatRequestPendingMessage) {
           return "Another answer is still running for this conversation. Retry shortly to reconnect.";
         }
         if (error.message === analysisChatRequestOutcomeUnknownMessage) {
@@ -86,9 +93,18 @@ function readableError(error: unknown): string {
         }
         return "The published analysis changed while this page was open. Refresh before starting a new conversation.";
       case 429:
-        return error.message === analysisChatTurnLimitMessage
-          ? "This conversation reached its limit. Start again from the latest analysis."
-          : "The analysis chat service is at capacity. Try again later.";
+        if (error.message === analysisChatTurnLimitMessage) {
+          return "This conversation reached its limit. Start again from the latest analysis.";
+        }
+        if (error.message === analysisChatActiveTurnLimitMessage) {
+          return "You already have the maximum number of active analysis turns. Wait for one to finish.";
+        }
+        if (error.message === analysisChatRateLimitMessage) {
+          return "Too many analysis questions were started recently. Try again in a minute.";
+        }
+        return "The analysis chat service is at capacity. Try again later.";
+      case 499:
+        return "The analysis request was cancelled.";
       case 504:
         return "The analysis agent timed out before it could answer. Try a narrower question.";
       default:
@@ -245,7 +261,25 @@ function AssistantMessage({
   );
 }
 
-function ThinkingState() {
+const progressLabels: Record<AnalysisChatProgressPhase, { title: string; detail: string }> = {
+  queued: { title: "Queued", detail: "Waiting for an analysis turn to start." },
+  investigating: { title: "Investigating the analysis", detail: "Reviewing the published conclusion and failure context." },
+  reading_evidence: { title: "Reading build evidence", detail: "Reopening relevant artifacts before answering." },
+  evaluating: { title: "Evaluating the evidence", detail: "Comparing the artifacts with the published conclusion." },
+  finalizing: { title: "Finalizing the answer", detail: "Validating the response and its citations." },
+  cancelling: { title: "Cancelling the request", detail: "Stopping the active analysis turn." },
+};
+
+function ThinkingState({
+  phase,
+  cancelling,
+  onCancel,
+}: {
+  phase: AnalysisChatProgressPhase;
+  cancelling: boolean;
+  onCancel: () => void;
+}) {
+  const copy = progressLabels[phase];
   return (
     <Stack
       role="status"
@@ -279,14 +313,25 @@ function ThinkingState() {
           />
         ))}
       </Stack>
-      <Box>
+      <Box sx={{ minWidth: 0, flex: 1 }}>
         <Typography variant="body2" sx={{ fontWeight: 650 }}>
-          Working through the evidence
+          {copy.title}
         </Typography>
         <Typography variant="caption" color="text.secondary">
-          The agent may reopen artifacts before answering.
+          {copy.detail}
         </Typography>
       </Box>
+      <Button
+        size="small"
+        variant="outlined"
+        color="inherit"
+        startIcon={<StopCircleOutlined />}
+        onClick={onCancel}
+        disabled={cancelling}
+        sx={{ flexShrink: 0 }}
+      >
+        {cancelling ? "Cancelling" : "Cancel"}
+      </Button>
     </Stack>
   );
 }
@@ -307,8 +352,12 @@ export function AnalysisChat({
   const [error, setError] = useState<string | null>(null);
   const [turnLimitExhausted, setTurnLimitExhausted] = useState(false);
   const [pendingTurn, setPendingTurn] = useState<PendingTurn | null>(null);
+  const [progressPhase, setProgressPhase] = useState<AnalysisChatProgressPhase>("queued");
+  const [cancelling, setCancelling] = useState(false);
   const createRequestIDRef = useRef(newAnalysisChatRequestID());
   const controllerRef = useRef<AbortController | null>(null);
+  const cancelControllerRef = useRef<AbortController | null>(null);
+  const identityRef = useRef("");
   const endRef = useRef<HTMLDivElement | null>(null);
 
   const identity = useMemo(
@@ -324,9 +373,11 @@ export function AnalysisChat({
       ].join("\u0000"),
     [analysisRef],
   );
+  identityRef.current = identity;
 
   useEffect(() => {
     controllerRef.current?.abort();
+    cancelControllerRef.current?.abort();
     setExpanded(false);
     setQuestion("");
     setSession(null);
@@ -334,6 +385,8 @@ export function AnalysisChat({
     setError(null);
     setTurnLimitExhausted(false);
     setPendingTurn(null);
+    setProgressPhase("queued");
+    setCancelling(false);
     createRequestIDRef.current = newAnalysisChatRequestID();
   }, [identity]);
 
@@ -343,7 +396,10 @@ export function AnalysisChat({
     }
   }, [busy, expanded, session?.messages.length]);
 
-  useEffect(() => () => controllerRef.current?.abort(), []);
+  useEffect(() => () => {
+    controllerRef.current?.abort();
+    cancelControllerRef.current?.abort();
+  }, []);
 
   if (!features.analysis_chat) return null;
 
@@ -388,10 +444,12 @@ export function AnalysisChat({
         setPendingTurn(activeTurn);
         setQuestion(value);
       }
-      const updated = await sendAnalysisChatMessage(
+      setProgressPhase("queued");
+      const updated = await streamAnalysisChatMessage(
         activeTurn.sessionID,
         activeTurn.question,
         activeTurn.requestID,
+        (progress) => setProgressPhase(progress.phase),
         controller.signal,
       );
       setSession(updated);
@@ -450,7 +508,8 @@ export function AnalysisChat({
         const stillRunning =
           requestError instanceof AnalysisChatAPIError &&
           requestError.status === 409 &&
-          requestError.message === analysisChatSessionBusyMessage;
+          (requestError.message === analysisChatSessionBusyMessage ||
+            requestError.message === analysisChatRequestPendingMessage);
         if (!stillRunning) setPendingTurn(null);
         setError(readableError(requestError));
       }
@@ -458,6 +517,32 @@ export function AnalysisChat({
       if (controllerRef.current === controller) {
         controllerRef.current = null;
         setBusy(false);
+        setCancelling(false);
+      }
+    }
+  }
+
+  async function cancelTurn() {
+    if (!pendingTurn || cancelling) return;
+    const cancelIdentity = identity;
+    const turn = pendingTurn;
+    cancelControllerRef.current?.abort();
+    const controller = new AbortController();
+    cancelControllerRef.current = controller;
+    setCancelling(true);
+    setProgressPhase("cancelling");
+    try {
+      await cancelAnalysisChatRequest(turn.sessionID, turn.requestID, controller.signal);
+      if (identityRef.current !== cancelIdentity) return;
+      if (!busy) await submit(turn.question);
+    } catch (cancelError) {
+      if (cancelError instanceof Error && cancelError.name === "AbortError") return;
+      if (identityRef.current !== cancelIdentity) return;
+      setError(readableError(cancelError));
+    } finally {
+      if (cancelControllerRef.current === controller) {
+        cancelControllerRef.current = null;
+        if (identityRef.current === cancelIdentity) setCancelling(false);
       }
     }
   }
@@ -618,7 +703,13 @@ export function AnalysisChat({
                 ),
               )}
 
-              {busy && <ThinkingState />}
+              {busy && pendingTurn && (
+                <ThinkingState
+                  phase={progressPhase}
+                  cancelling={cancelling}
+                  onCancel={() => void cancelTurn()}
+                />
+              )}
               {error && <Alert severity="error" variant="outlined">{error}</Alert>}
               <div ref={endRef} />
             </Stack>
@@ -677,6 +768,27 @@ export function AnalysisChat({
                       </IconButton>
                     </span>
                   </Tooltip>
+                  {pendingTurn && !busy && (
+                    <Tooltip title="Cancel pending question">
+                      <span>
+                        <IconButton
+                          aria-label="Cancel pending question"
+                          onClick={() => void cancelTurn()}
+                          disabled={cancelling}
+                          sx={{
+                            width: 48,
+                            height: 48,
+                            borderRadius: "10px",
+                            border: "1px solid",
+                            borderColor: "divider",
+                            color: "text.secondary",
+                          }}
+                        >
+                          <StopCircleOutlined fontSize="small" />
+                        </IconButton>
+                      </span>
+                    </Tooltip>
+                  )}
                 </Stack>
               )}
               {session && (

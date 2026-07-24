@@ -47,3 +47,17 @@ export interface AnalysisChatSession {
   expires_at: string;
   messages: AnalysisChatMessage[];
 }
+
+export type AnalysisChatProgressPhase =
+  | "queued"
+  | "investigating"
+  | "reading_evidence"
+  | "evaluating"
+  | "finalizing"
+  | "cancelling";
+
+export interface AnalysisChatProgress {
+  request_id: string;
+  phase: AnalysisChatProgressPhase;
+  updated_at: string;
+}
