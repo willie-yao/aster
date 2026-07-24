@@ -55,6 +55,7 @@ import type {
 } from "../types/analysisChat";
 import { RichText } from "./RichText";
 import { AnalysisCorrectionDialog } from "./AnalysisCorrectionDialog";
+import { SourceInvestigationPanel } from "./SourceInvestigationPanel";
 import type { AnalysisCorrectionPreview } from "../types/corrections";
 
 interface PendingTurn {
@@ -131,11 +132,15 @@ function AssistantMessage({
   message,
   fileCtx,
   correctionEnabled,
+  sourceInvestigationEnabled,
+  sessionID,
   onReviewCorrection,
 }: {
   message: AnalysisChatMessage;
   fileCtx: FileToUrlContext;
   correctionEnabled: boolean;
+  sourceInvestigationEnabled: boolean;
+  sessionID: string;
   onReviewCorrection: (requestID: string) => void;
 }) {
   const assessment = message.assessment
@@ -275,6 +280,14 @@ function AssistantMessage({
               </Button>
             )}
           </Box>
+        )}
+
+        {sourceInvestigationEnabled && message.request_id && (
+          <SourceInvestigationPanel
+            sessionID={sessionID}
+            chatRequestID={message.request_id}
+            fileCtx={fileCtx}
+          />
         )}
       </Stack>
     </Box>
@@ -793,6 +806,8 @@ export function AnalysisChat({
                     message={message}
                     fileCtx={fileCtx}
                     correctionEnabled={Boolean(features.analysis_corrections)}
+                    sourceInvestigationEnabled={Boolean(features.source_investigation)}
+                    sessionID={session.id}
                     onReviewCorrection={(requestID) => void reviewCorrection(requestID)}
                   />
                 ),
