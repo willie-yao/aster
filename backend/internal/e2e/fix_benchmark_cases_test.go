@@ -83,10 +83,16 @@ func TestBenchmarkVerifier(t *testing.T) {
 	if spec.ControlPlaneRouteTable != "shared-node-table" {
 		t.Fatalf("control-plane route table = %q", spec.ControlPlaneRouteTable)
 	}
+	if spec.NodeRouteTable != "shared-node-table" {
+		t.Fatalf("node route table changed to %q", spec.NodeRouteTable)
+	}
 	explicit := &routetable.NetworkSpec{ControlPlaneRouteTable: "dedicated", NodeRouteTable: "shared"}
 	routetable.DefaultControlPlaneRouteTable(explicit)
 	if explicit.ControlPlaneRouteTable != "dedicated" {
 		t.Fatalf("explicit route table changed to %q", explicit.ControlPlaneRouteTable)
+	}
+	if explicit.NodeRouteTable != "shared" {
+		t.Fatalf("explicit node route table changed to %q", explicit.NodeRouteTable)
 	}
 	empty := &routetable.NetworkSpec{}
 	routetable.DefaultControlPlaneRouteTable(empty)

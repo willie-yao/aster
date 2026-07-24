@@ -312,11 +312,6 @@ func fixBenchmarkCommandEnv() []string {
 
 func runFixBenchmarkVerifier(ctx context.Context, repoRoot string, benchmarkCase fixBenchmarkCase) (string, error) {
 	fixtureDir := filepath.Join(repoRoot, filepath.FromSlash(benchmarkCase.Dir))
-	publicOutput, err := runFixBenchmarkCommand(ctx, fixtureDir, nil, "go", "test", "-count=1", "./...")
-	if err != nil {
-		return publicOutput, fmt.Errorf("candidate tests: %w", err)
-	}
-
 	verifierDir := filepath.Join(repoRoot, ".fix-benchmark-verifier", benchmarkCase.Name)
 	if err := os.MkdirAll(verifierDir, 0o755); err != nil {
 		return "", err
@@ -335,6 +330,19 @@ func runFixBenchmarkVerifier(ctx context.Context, repoRoot string, benchmarkCase
 	}
 	if !fixBenchmarkVerifierPassed(verifierBytes) {
 		return verifierOutput, fmt.Errorf("benchmark verifier pass event missing")
+	}
+
+	publicDir, err := os.MkdirTemp("", "fix-benchmark-public-tests-")
+	if err != nil {
+		return verifierOutput, err
+	}
+	defer os.RemoveAll(publicDir) //nolint:errcheck
+	if err := copyFixBenchmarkTree(fixtureDir, publicDir); err != nil {
+		return verifierOutput, err
+	}
+	publicOutput, err := runFixBenchmarkCommand(ctx, publicDir, nil, "go", "test", "-count=1", "./...")
+	if err != nil {
+		return strings.TrimSpace(verifierOutput + "\n" + publicOutput), fmt.Errorf("candidate tests: %w", err)
 	}
 	return strings.TrimSpace(publicOutput + "\n" + verifierOutput), nil
 }
@@ -369,11 +377,28 @@ func runFixBenchmarkRegressionTests(ctx context.Context, sourceRoot string, benc
 	if err := writeFixBenchmarkFiles(repoRoot, testFiles); err != nil {
 		return false, err.Error()
 	}
-	output, testErr := runFixBenchmarkCommand(ctx, filepath.Join(repoRoot, filepath.FromSlash(benchmarkCase.Dir)), nil, "go", "test", "-count=1", "./...")
+	outputBytes, testErr := runFixBenchmarkCommandRaw(ctx, filepath.Join(repoRoot, filepath.FromSlash(benchmarkCase.Dir)), nil, "go", "test", "-json", "-count=1", "./...")
+	output := boundedFixBenchmarkDetail(string(outputBytes))
 	if testErr == nil {
 		return false, "candidate regression tests passed against the original broken implementation"
 	}
+	if !fixBenchmarkHasFailingTest(outputBytes) {
+		return false, "candidate regression tests failed before executing a test: " + output
+	}
 	return true, "candidate regression tests rejected the original broken implementation: " + output
+}
+
+func fixBenchmarkHasFailingTest(output []byte) bool {
+	for _, line := range bytes.Split(output, []byte("\n")) {
+		var event struct {
+			Action string `json:"Action"`
+			Test   string `json:"Test"`
+		}
+		if json.Unmarshal(line, &event) == nil && event.Action == "fail" && event.Test != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func boundedFixBenchmarkDetail(detail string) string {
@@ -502,6 +527,21 @@ func TestFixBenchmarkRejectsIncompleteOrUnsafeResults(t *testing.T) {
 			return makeFixBenchmarkResult(t, sourceRoot, benchmarkCase, map[string]string{
 				benchmarkCase.RequiredFiles[0]: benchmarkCase.ReferenceFiles[benchmarkCase.RequiredFiles[0]],
 				benchmarkCase.RequiredFiles[1]: string(baseTest) + "\n// Comment-only test change.\n",
+			})
+		}, miss: "regression_test"},
+		{name: "regression test fails only to compile on baseline", make: func(t *testing.T) runtimepkg.GenerateResult {
+			return makeFixBenchmarkResult(t, sourceRoot, benchmarkCase, map[string]string{
+				benchmarkCase.RequiredFiles[0]: benchmarkCase.ReferenceFiles[benchmarkCase.RequiredFiles[0]] + "\nfunc AddedHelper() bool { return true }\n",
+				benchmarkCase.RequiredFiles[1]: `package routetable
+
+import "testing"
+
+func TestAddedHelper(t *testing.T) {
+	if !AddedHelper() {
+		t.Fatal("helper returned false")
+	}
+}
+`,
 			})
 		}, miss: "regression_test"},
 		{name: "semantically wrong with bypassed candidate tests", make: func(t *testing.T) runtimepkg.GenerateResult {
