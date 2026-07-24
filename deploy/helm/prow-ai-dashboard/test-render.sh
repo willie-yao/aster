@@ -299,6 +299,17 @@ if [[ $(container_command fetcher "$tmp/fix-cron.yaml") != /usr/local/bin/fetche
   exit 1
 fi
 
+# Container analysis and Orka fix generation are independent options that may
+# share the runtime ServiceAccount while retaining separate Roles.
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  "${container_args[@]}" \
+  --set orka.fixRuntime.enabled=true \
+  --set orka.fixRuntime.image.tag=sha-test > "$tmp/combined-orka-runtimes.yaml"
+grep -Fq 'app.kubernetes.io/component: orka-container-analysis' "$tmp/combined-orka-runtimes.yaml"
+grep -Fq 'app.kubernetes.io/component: orka-fix-runtime' "$tmp/combined-orka-runtimes.yaml"
+grep -Fq 'app.kubernetes.io/component: orka-runtime' "$tmp/combined-orka-runtimes.yaml"
+grep -Fq 'image: ghcr.io/willie-yao/prow-ai-dashboard/fixer:sha-test' "$tmp/combined-orka-runtimes.yaml"
+
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --show-only templates/pvc.yaml > "$tmp/pvc-retained.yaml"
 grep -Fq 'helm.sh/resource-policy: keep' "$tmp/pvc-retained.yaml"

@@ -203,9 +203,10 @@ only by the engine-owned PR-opening path.
 
 For Helm deployments, set `orka.fixRuntime.enabled=true`. The chart then uses the
 published git-capable fixer image, mounts a ServiceAccount token only into the
-workloads that generate fixes, and grants a separate Task-only fix Role. REST authentication uses
-`ORKA_API_TOKEN`, `ORKA_API_TOKEN_FILE`, or the pod ServiceAccount token. Local
-kubeconfig testing can select a context through `ORKA_KUBE_CONTEXT`.
+workloads that generate fixes, and grants a separate Task-only fix Role. REST
+authentication uses `ORKA_API_TOKEN`, `ORKA_API_TOKEN_FILE`, or the pod
+ServiceAccount token. Local kubeconfig testing can select a context through
+`ORKA_KUBE_CONTEXT`.
 
 OpenCode support requires an Orka build containing upstream PR #289. As of July
 24, 2026, Orka had not published a tagged release containing that change. Build
