@@ -397,7 +397,7 @@ export function AnalysisChat({
   const cancelControllerRef = useRef<AbortController | null>(null);
   const correctionControllerRef = useRef<AbortController | null>(null);
   const identityRef = useRef("");
-  const endRef = useRef<HTMLDivElement | null>(null);
+  const messageListRef = useRef<HTMLDivElement | null>(null);
 
   const identity = useMemo(
     () =>
@@ -435,9 +435,10 @@ export function AnalysisChat({
   }, [identity]);
 
   useEffect(() => {
-    if (expanded && (session?.messages.length || busy)) {
-      endRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    }
+    if (!expanded || (!session?.messages.length && !busy)) return;
+    const list = messageListRef.current;
+    if (!list) return;
+    list.scrollTo({ top: list.scrollHeight, behavior: "smooth" });
   }, [busy, expanded, session?.messages.length]);
 
   useEffect(() => () => {
@@ -748,9 +749,27 @@ export function AnalysisChat({
         <Collapse in={expanded} appear>
           <Box id="analysis-chat-content">
             <Stack
+              ref={messageListRef}
               spacing={1.25}
               aria-live="polite"
-              sx={{ p: { xs: 1.25, sm: 1.5 }, maxHeight: 520, overflowY: "auto" }}
+              sx={{
+                p: { xs: 1.25, sm: 1.5 },
+                maxHeight: { xs: "min(62vh, 560px)", sm: "min(70vh, 680px)" },
+                minHeight: 0,
+                overflowY: "auto",
+                overscrollBehavior: "contain",
+                scrollbarGutter: "stable",
+                scrollbarWidth: "thin",
+                scrollbarColor: (theme) => `${theme.palette.divider} transparent`,
+                "& > *": { flexShrink: 0 },
+                "&::-webkit-scrollbar": { width: 8 },
+                "&::-webkit-scrollbar-thumb": {
+                  borderRadius: 999,
+                  border: "2px solid transparent",
+                  backgroundClip: "padding-box",
+                  bgcolor: "action.disabled",
+                },
+              }}
             >
               {!session?.messages.length && !busy && !pendingTurn && !turnLimitReached && (
                 <Box sx={{ py: 0.5 }}>
@@ -820,7 +839,6 @@ export function AnalysisChat({
                 />
               )}
               {error && <Alert severity="error" variant="outlined">{error}</Alert>}
-              <div ref={endRef} />
             </Stack>
 
             <Box sx={{ px: { xs: 1.25, sm: 1.5 }, pb: 1.5 }}>
