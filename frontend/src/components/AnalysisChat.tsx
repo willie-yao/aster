@@ -316,10 +316,10 @@ export function AnalysisChat({
   }, [identity]);
 
   useEffect(() => {
-    if (session?.messages.length || busy) {
+    if (expanded && (session?.messages.length || busy)) {
       endRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
     }
-  }, [busy, session?.messages.length]);
+  }, [busy, expanded, session?.messages.length]);
 
   useEffect(() => () => controllerRef.current?.abort(), []);
 
@@ -482,7 +482,7 @@ export function AnalysisChat({
               aria-live="polite"
               sx={{ p: { xs: 1.25, sm: 1.5 }, maxHeight: 520, overflowY: "auto" }}
             >
-              {!session?.messages.length && !busy && (
+              {!session?.messages.length && !busy && !turnLimitReached && (
                 <Box sx={{ py: 0.5 }}>
                   <Typography variant="body2" sx={{ fontWeight: 650 }}>
                     Interrogate the conclusion, not just the summary.
