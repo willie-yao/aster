@@ -109,6 +109,11 @@ func scoreFixBenchmarkResult(ctx context.Context, sourceRoot string, benchmarkCa
 	}
 	score.add("protected_files", true, protectedOK, protectedDetail)
 
+	if len(benchmarkCase.RegressionTestFiles) > 0 {
+		regressionOK, regressionDetail := runFixBenchmarkRegressionTests(ctx, sourceRoot, benchmarkCase, result)
+		score.add("regression_test", true, regressionOK, regressionDetail)
+	}
+
 	verificationOK := false
 	verificationDetail := "diff did not apply"
 	if contractOK {
@@ -315,7 +320,7 @@ func runFixBenchmarkVerifier(ctx context.Context, repoRoot string, benchmarkCase
 	if err := os.MkdirAll(verifierDir, 0o755); err != nil {
 		return "", err
 	}
-	goMod := fmt.Sprintf("module fixbench/verifier\n\ngo 1.25\n\nrequire %s v0.0.0\n\nreplace %s => %s\n", benchmarkCase.Module, benchmarkCase.Module, filepath.ToSlash(fixtureDir))
+	goMod := fmt.Sprintf("module fixbench/verifier\n\ngo 1.25\n\nrequire %s v0.0.0\n\nreplace %s => %q\n", benchmarkCase.Module, benchmarkCase.Module, filepath.ToSlash(fixtureDir))
 	if err := os.WriteFile(filepath.Join(verifierDir, "go.mod"), []byte(goMod), 0o644); err != nil {
 		return "", err
 	}
@@ -330,6 +335,30 @@ func runFixBenchmarkVerifier(ctx context.Context, repoRoot string, benchmarkCase
 		return verifierOutput, fmt.Errorf("benchmark verifier execution marker missing")
 	}
 	return strings.TrimSpace(publicOutput + "\n" + verifierOutput), nil
+}
+
+func runFixBenchmarkRegressionTests(ctx context.Context, sourceRoot string, benchmarkCase fixBenchmarkCase, result runtimepkg.GenerateResult) (bool, string) {
+	repoRoot, cleanup, err := prepareFixBenchmarkRepo(sourceRoot, benchmarkCase)
+	if err != nil {
+		return false, err.Error()
+	}
+	defer cleanup()
+	testFiles := make(map[string]string, len(benchmarkCase.RegressionTestFiles))
+	for _, path := range benchmarkCase.RegressionTestFiles {
+		contents, ok := result.Files[path]
+		if !ok {
+			return false, fmt.Sprintf("candidate did not report regression test %s", path)
+		}
+		testFiles[path] = contents
+	}
+	if err := writeFixBenchmarkFiles(repoRoot, testFiles); err != nil {
+		return false, err.Error()
+	}
+	output, testErr := runFixBenchmarkCommand(ctx, filepath.Join(repoRoot, filepath.FromSlash(benchmarkCase.Dir)), nil, "go", "test", "-count=1", "./...")
+	if testErr == nil {
+		return false, "candidate regression tests passed against the original broken implementation"
+	}
+	return true, "candidate regression tests rejected the original broken implementation: " + output
 }
 
 func boundedFixBenchmarkDetail(detail string) string {
@@ -381,6 +410,11 @@ func TestFixBenchmarkCaseCatalog(t *testing.T) {
 		for _, path := range benchmarkCase.RequiredFiles {
 			if !strings.HasPrefix(path, benchmarkCase.Dir+"/") {
 				t.Fatalf("%s path escapes fixture directory: %s", benchmarkCase.Name, path)
+			}
+		}
+		for _, path := range benchmarkCase.RegressionTestFiles {
+			if !slices.Contains(benchmarkCase.RequiredFiles, path) || !strings.HasSuffix(path, "_test.go") {
+				t.Fatalf("%s invalid regression test path: %s", benchmarkCase.Name, path)
 			}
 		}
 	}
@@ -449,6 +483,12 @@ func TestFixBenchmarkRejectsIncompleteOrUnsafeResults(t *testing.T) {
 			result.Diff = "not a diff"
 			return result
 		}, miss: "diff_contract"},
+		{name: "nondiscriminating regression test", make: func(t *testing.T) runtimepkg.GenerateResult {
+			return makeFixBenchmarkResult(t, sourceRoot, benchmarkCase, map[string]string{
+				benchmarkCase.RequiredFiles[0]: benchmarkCase.ReferenceFiles[benchmarkCase.RequiredFiles[0]],
+				benchmarkCase.RequiredFiles[1]: string(baseTest) + "\n// Comment-only test change.\n",
+			})
+		}, miss: "regression_test"},
 		{name: "semantically wrong with bypassed candidate tests", make: func(t *testing.T) runtimepkg.GenerateResult {
 			return makeFixBenchmarkResult(t, sourceRoot, benchmarkCase, map[string]string{
 				benchmarkCase.RequiredFiles[0]: string(baseCode) + "\n// No behavioral fix.\n",

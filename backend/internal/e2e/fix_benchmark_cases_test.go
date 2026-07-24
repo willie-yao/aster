@@ -5,13 +5,14 @@ import "strings"
 const fixBenchmarkFixtureRoot = "backend/internal/e2e/testdata/fixbench"
 
 type fixBenchmarkCase struct {
-	Name           string
-	Dir            string
-	Instruction    string
-	RequiredFiles  []string
-	ReferenceFiles map[string]string
-	Module         string
-	VerifierSource string
+	Name                string
+	Dir                 string
+	Instruction         string
+	RequiredFiles       []string
+	RegressionTestFiles []string
+	ReferenceFiles      map[string]string
+	Module              string
+	VerifierSource      string
 }
 
 func fixBenchmarkCases() []fixBenchmarkCase {
@@ -24,6 +25,7 @@ func fixBenchmarkCases() []fixBenchmarkCase {
 				fixBenchmarkFixtureRoot + "/route_table/default.go",
 				fixBenchmarkFixtureRoot + "/route_table/default_test.go",
 			},
+			RegressionTestFiles: []string{fixBenchmarkFixtureRoot + "/route_table/default_test.go"},
 			ReferenceFiles: map[string]string{
 				fixBenchmarkFixtureRoot + "/route_table/default.go": `package routetable
 
@@ -91,6 +93,7 @@ func TestBenchmarkVerifier(t *testing.T) {
 	if empty.ControlPlaneRouteTable != "" {
 		t.Fatalf("empty route table changed to %q", empty.ControlPlaneRouteTable)
 	}
+	routetable.DefaultControlPlaneRouteTable(nil)
 	t.Log("FIX_BENCHMARK_VERIFIER_EXECUTED")
 }
 `,
@@ -103,6 +106,7 @@ func TestBenchmarkVerifier(t *testing.T) {
 				fixBenchmarkFixtureRoot + "/retry/retry.go",
 				fixBenchmarkFixtureRoot + "/retry/retry_test.go",
 			},
+			RegressionTestFiles: []string{fixBenchmarkFixtureRoot + "/retry/retry_test.go"},
 			ReferenceFiles: map[string]string{
 				fixBenchmarkFixtureRoot + "/retry/retry.go": `package retry
 
