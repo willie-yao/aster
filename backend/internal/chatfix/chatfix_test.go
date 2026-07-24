@@ -9,30 +9,32 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actions"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysischat"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 )
 
 type fakeChatStore struct {
 	candidate       analysischat.FixCandidate
 	candidateErr    error
-	validateErr     error
+	onReturn        func()
 	sessionID       string
 	owner           string
 	requestID       string
+	patternID       string
 	sourceRequestID string
 }
 
-func (f *fakeChatStore) FixCandidate(sessionID, owner, requestID, sourceRequestID string) (analysischat.FixCandidate, error) {
-	f.sessionID, f.owner, f.requestID, f.sourceRequestID = sessionID, owner, requestID, sourceRequestID
+func (f *fakeChatStore) FixCandidate(sessionID, owner, requestID, patternID, sourceRequestID string) (analysischat.FixCandidate, error) {
+	f.sessionID, f.owner, f.requestID = sessionID, owner, requestID
+	f.patternID, f.sourceRequestID = patternID, sourceRequestID
+	if f.onReturn != nil {
+		f.onReturn()
+	}
 	return f.candidate, f.candidateErr
 }
 
-func (f *fakeChatStore) ValidateFixCandidate(candidate analysischat.FixCandidate) error {
-	return f.validateErr
-}
-
 type fakeFixPreviewer struct {
-	patternID         string
+	pattern           models.PatternAnalysis
 	userToken         string
 	instruction       string
 	target            actions.FixTarget
@@ -41,16 +43,19 @@ type fakeFixPreviewer struct {
 }
 
 func (f *fakeFixPreviewer) PreviewFixWithContext(
-	_ context.Context, patternID, userToken, instruction string, target actions.FixTarget, generationContext fixpr.GenerationContext,
+	_ context.Context, pattern models.PatternAnalysis, userToken, instruction string, target actions.FixTarget, generationContext fixpr.GenerationContext,
 ) (actions.PreviewResult, error) {
-	f.patternID, f.userToken, f.instruction = patternID, userToken, instruction
+	f.pattern, f.userToken, f.instruction = pattern, userToken, instruction
 	f.target, f.generationContext, f.called = target, generationContext, true
 	return actions.PreviewResult{Token: "preview", Kind: "fix"}, nil
 }
 
 func TestPreviewChatFixBuildsSelectedContext(t *testing.T) {
 	chat := &fakeChatStore{candidate: analysischat.FixCandidate{
-		Analysis:          analysischat.AnalysisRef{JobID: "periodic-x", BuildID: "123"},
+		Analysis: analysischat.AnalysisRef{JobID: "periodic-x", BuildID: "123"},
+		Pattern: models.PatternAnalysis{
+			ID: "pattern", JobID: "periodic-x", SharedBuilds: []string{"123"}, SharedRootCause: "snapshot cause",
+		},
 		AssistantAnswer:   "selected answer",
 		ProposedRevision:  &analysischat.Revision{RootCause: "new cause", SuggestedFix: "new fix"},
 		ArtifactCitations: []analysischat.Citation{{Path: "build-log.txt", LineStart: 4, LineEnd: 5, Quote: "failure"}},
@@ -67,13 +72,15 @@ func TestPreviewChatFixBuildsSelectedContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if preview.Token != "preview" || !fixes.called || fixes.patternID != "pattern" || fixes.userToken != "user-token" {
+	if preview.Token != "preview" || !fixes.called || fixes.pattern.ID != "pattern" || fixes.userToken != "user-token" {
 		t.Fatalf("preview=%+v fixes=%+v", preview, fixes)
 	}
-	if chat.sessionID != "session" || chat.owner != "Alice" || chat.requestID != "chat-request" || chat.sourceRequestID != "source-request" {
+	if chat.sessionID != "session" || chat.owner != "Alice" || chat.requestID != "chat-request" ||
+		chat.patternID != "pattern" || chat.sourceRequestID != "source-request" {
 		t.Fatalf("chat call = %+v", chat)
 	}
-	if fixes.target.JobID != "periodic-x" || fixes.target.BuildID != "123" || fixes.instruction != "keep compatibility" {
+	if fixes.pattern.SharedRootCause != "snapshot cause" || fixes.target.JobID != "periodic-x" ||
+		fixes.target.BuildID != "123" || fixes.instruction != "keep compatibility" {
 		t.Fatalf("target=%+v instruction=%q", fixes.target, fixes.instruction)
 	}
 	context := fixes.generationContext
@@ -85,21 +92,17 @@ func TestPreviewChatFixBuildsSelectedContext(t *testing.T) {
 
 func TestPreviewChatFixStopsBeforeGenerationOnChatErrors(t *testing.T) {
 	for _, testCase := range []struct {
-		name         string
-		candidateErr error
-		validateErr  error
+		name string
+		err  error
 	}{
-		{name: "ownership", candidateErr: analysischat.ErrSessionNotFound},
-		{name: "stale", validateErr: analysischat.ErrAnalysisChanged},
+		{name: "ownership", err: analysischat.ErrSessionNotFound},
+		{name: "stale", err: analysischat.ErrAnalysisChanged},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			chat := &fakeChatStore{
-				candidate:    analysischat.FixCandidate{Analysis: analysischat.AnalysisRef{JobID: "job", BuildID: "build"}},
-				candidateErr: testCase.candidateErr, validateErr: testCase.validateErr,
-			}
+			chat := &fakeChatStore{candidateErr: testCase.err}
 			fixes := &fakeFixPreviewer{}
 			_, err := NewService(chat, fixes).PreviewChatFix(t.Context(), "session", "alice", "request", "pattern", "", "token", "")
-			if !errors.Is(err, testCase.candidateErr) && !errors.Is(err, testCase.validateErr) {
+			if !errors.Is(err, testCase.err) {
 				t.Fatalf("error = %v", err)
 			}
 			if fixes.called {
@@ -131,5 +134,31 @@ func TestPreviewChatFixRejectsInvalidSelectionBeforeReadingChat(t *testing.T) {
 				t.Fatal("invalid selection reached chat or fix generation")
 			}
 		})
+	}
+}
+
+func TestPreviewChatFixKeepsAtomicPatternSnapshotAfterPublishedReplacement(t *testing.T) {
+	original := models.PatternAnalysis{
+		ID: "stable-pattern", JobID: "periodic-x", SharedBuilds: []string{"123"}, SharedRootCause: "original cause",
+	}
+	published := original
+	chat := &fakeChatStore{
+		candidate: analysischat.FixCandidate{
+			Analysis: analysischat.AnalysisRef{JobID: "periodic-x", BuildID: "123"},
+			Pattern:  original, AssistantAnswer: "selected answer",
+			ArtifactCitations: []analysischat.Citation{{Path: "build-log.txt", Quote: "failure"}},
+		},
+		onReturn: func() {
+			published.SharedRootCause = "replacement cause"
+		},
+	}
+	fixes := &fakeFixPreviewer{}
+	if _, err := NewService(chat, fixes).PreviewChatFix(
+		t.Context(), "session", "alice", "request", original.ID, "", "token", "",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if published.SharedRootCause != "replacement cause" || fixes.pattern.SharedRootCause != "original cause" {
+		t.Fatalf("published=%+v generated=%+v", published, fixes.pattern)
 	}
 }

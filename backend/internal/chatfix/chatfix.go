@@ -9,17 +9,17 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actions"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysischat"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 )
 
 type chatStore interface {
-	FixCandidate(sessionID, owner, requestID, sourceRequestID string) (analysischat.FixCandidate, error)
-	ValidateFixCandidate(analysischat.FixCandidate) error
+	FixCandidate(sessionID, owner, requestID, patternID, sourceRequestID string) (analysischat.FixCandidate, error)
 }
 
 type fixPreviewer interface {
 	PreviewFixWithContext(
-		context.Context, string, string, string, actions.FixTarget, fixpr.GenerationContext,
+		context.Context, models.PatternAnalysis, string, string, actions.FixTarget, fixpr.GenerationContext,
 	) (actions.PreviewResult, error)
 }
 
@@ -45,11 +45,8 @@ func (s *Service) PreviewChatFix(
 	if patternID == "" || len(instruction) > 4096 {
 		return actions.PreviewResult{}, fmt.Errorf("%w: pattern_id is required and instruction must not exceed 4096 bytes", analysischat.ErrInvalidRequest)
 	}
-	candidate, err := s.chat.FixCandidate(sessionID, owner, requestID, sourceRequestID)
+	candidate, err := s.chat.FixCandidate(sessionID, owner, requestID, patternID, sourceRequestID)
 	if err != nil {
-		return actions.PreviewResult{}, err
-	}
-	if err := s.chat.ValidateFixCandidate(candidate); err != nil {
 		return actions.PreviewResult{}, err
 	}
 	generationContext := fixpr.GenerationContext{
@@ -69,7 +66,7 @@ func (s *Service) PreviewChatFix(
 	}
 	return s.fixes.PreviewFixWithContext(
 		ctx,
-		patternID,
+		candidate.Pattern,
 		userToken,
 		instruction,
 		actions.FixTarget{JobID: candidate.Analysis.JobID, BuildID: candidate.Analysis.BuildID},

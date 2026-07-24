@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 )
 
@@ -19,11 +20,16 @@ type FixCandidate struct {
 	ArtifactCitations []Citation
 	SourceRequestID   string
 	SourceResult      *sourceinvestigation.Result
+	Pattern           models.PatternAnalysis
 }
 
 // FixCandidate returns one owner-bound evidence-backed assistant response.
-func (s *Service) FixCandidate(sessionID, owner, requestID, sourceRequestID string) (FixCandidate, error) {
+func (s *Service) FixCandidate(sessionID, owner, requestID, patternID, sourceRequestID string) (FixCandidate, error) {
 	owner = normalizeOwner(owner)
+	patternID = strings.TrimSpace(patternID)
+	if patternID == "" {
+		return FixCandidate{}, fmt.Errorf("%w: pattern_id is required", ErrInvalidRequest)
+	}
 	requestID, err := normalizeRequestID(requestID)
 	if err != nil {
 		return FixCandidate{}, err
@@ -93,21 +99,25 @@ func (s *Service) FixCandidate(sessionID, owner, requestID, sourceRequestID stri
 			return changed, fmt.Errorf("%w: source investigation has invalid status", ErrInvalidRequest)
 		}
 	})
-	return candidate, err
-}
-
-// ValidateFixCandidate rejects generation after the published analysis changes.
-func (s *Service) ValidateFixCandidate(candidate FixCandidate) error {
+	if err != nil {
+		return FixCandidate{}, err
+	}
 	resolved, err := s.resolve(candidate.Analysis)
 	if err != nil {
-		return err
+		return FixCandidate{}, err
 	}
 	analysis := resolved.testCase.AIAnalysis
 	if analysis == nil || strings.TrimSpace(analysis.RootCause) != candidate.Original.RootCause ||
 		strings.TrimSpace(analysis.SuggestedFix) != candidate.Original.SuggestedFix {
-		return ErrAnalysisChanged
+		return FixCandidate{}, ErrAnalysisChanged
 	}
-	return nil
+	for _, pattern := range resolved.patterns {
+		if pattern.ID == patternID {
+			candidate.Pattern = pattern
+			return candidate, nil
+		}
+	}
+	return FixCandidate{}, ErrPatternNotFound
 }
 
 func assistantResponse(messages []Message, requestID string) *Message {

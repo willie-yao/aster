@@ -269,6 +269,7 @@ reconstructs those fields from the owner-bound private chat state and requires:
 
 - a successful assistant response with verified artifact citations,
 - the original published analysis generation and content to remain current,
+- analysis freshness and the recurring pattern to come from one job-detail snapshot,
 - the recurring pattern to belong to the same job and include the selected build,
 - an optional source request to belong to that response and have a successful,
   independently verified result.

@@ -218,7 +218,7 @@ func TestPreviewFixWithContextRejectsMismatchedPatternTarget(t *testing.T) {
 		{JobID: "periodic-x", BuildID: "other-build"},
 	} {
 		if _, err := service.PreviewFixWithContext(
-			t.Context(), pattern.ID, "token", "", target, generationContext,
+			t.Context(), pattern, "token", "", target, generationContext,
 		); !errors.Is(err, ErrPatternMismatch) {
 			t.Fatalf("target %+v error = %v", target, err)
 		}

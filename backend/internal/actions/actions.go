@@ -368,17 +368,13 @@ func (s *Service) PreviewFix(ctx context.Context, failureID, userToken, instruct
 
 // PreviewFixWithContext generates a fix from one validated selected chat response.
 func (s *Service) PreviewFixWithContext(
-	ctx context.Context, failureID, userToken, instruction string, target FixTarget, generationContext fixpr.GenerationContext,
+	ctx context.Context, pattern models.PatternAnalysis, userToken, instruction string, target FixTarget, generationContext fixpr.GenerationContext,
 ) (PreviewResult, error) {
-	pattern, err := s.findPattern(failureID)
-	if err != nil {
-		return PreviewResult{}, err
-	}
 	if strings.TrimSpace(target.JobID) == "" || strings.TrimSpace(target.BuildID) == "" ||
 		pattern.JobID != target.JobID || !slices.Contains(pattern.SharedBuilds, target.BuildID) {
 		return PreviewResult{}, ErrPatternMismatch
 	}
-	preview, entry, err := s.generateFixPreviewForPattern(ctx, *pattern, userToken, instruction, &generationContext)
+	preview, entry, err := s.generateFixPreviewForPattern(ctx, pattern, userToken, instruction, &generationContext)
 	if err != nil {
 		return PreviewResult{}, err
 	}

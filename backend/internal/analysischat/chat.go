@@ -29,6 +29,8 @@ var (
 	ErrAnalysisNotFound = errors.New("analysis not found")
 	// ErrAnalysisChanged means the selected analysis was replaced after the client loaded it.
 	ErrAnalysisChanged = errors.New("analysis changed")
+	// ErrPatternNotFound means the selected recurring pattern is absent.
+	ErrPatternNotFound = errors.New("recurring pattern not found")
 	// ErrSessionNotFound means the session is absent, expired, or owned by another user.
 	ErrSessionNotFound = errors.New("analysis chat session not found")
 	// ErrSessionBusy means another turn is already running for the session.
@@ -249,6 +251,7 @@ type resolvedAnalysis struct {
 	buildPrefix string
 	build       models.BuildInfo
 	testCase    models.TestCase
+	patterns    []models.PatternAnalysis
 }
 
 // Service resolves published analyses and owns durable chat sessions.
@@ -676,7 +679,17 @@ func (s *Service) resolve(ref AnalysisRef) (resolvedAnalysis, error) {
 		buildPrefix: buildPrefix,
 		build:       cloneBuildInfo(run.BuildInfo),
 		testCase:    testCase,
+		patterns:    clonePatternAnalyses(detail.PatternAnalyses),
 	}, nil
+}
+
+func clonePatternAnalyses(patterns []models.PatternAnalysis) []models.PatternAnalysis {
+	out := slices.Clone(patterns)
+	for i := range out {
+		out[i].SharedBuilds = slices.Clone(out[i].SharedBuilds)
+		out[i].RelevantFiles = slices.Clone(out[i].RelevantFiles)
+	}
+	return out
 }
 
 func validateStateDirPrivacy(dataDir, stateDir string) error {

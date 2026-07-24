@@ -79,8 +79,8 @@ func previewChatFixHandler(timeout time.Duration, run ChatFixRunner) http.Handle
 func writeChatFixError(w http.ResponseWriter, sessionID, login string, err error) {
 	status, message := http.StatusUnprocessableEntity, "fix proposal could not be generated"
 	switch {
-	case errors.Is(err, actions.ErrNotFound), errors.Is(err, analysischat.ErrSessionNotFound),
-		errors.Is(err, analysischat.ErrRequestNotFound):
+	case errors.Is(err, actions.ErrNotFound), errors.Is(err, analysischat.ErrPatternNotFound),
+		errors.Is(err, analysischat.ErrSessionNotFound), errors.Is(err, analysischat.ErrRequestNotFound):
 		status, message = http.StatusNotFound, "not found"
 	case errors.Is(err, actions.ErrPatternMismatch):
 		status, message = http.StatusConflict, actions.ErrPatternMismatch.Error()

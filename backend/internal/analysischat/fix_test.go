@@ -6,8 +6,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 )
+
+func fixCandidatePattern() models.PatternAnalysis {
+	pattern := models.PatternAnalysis{
+		Subject: "retry failure", JobID: "periodic-demo", Systemic: true, Confidence: "high",
+		SharedRootCause: "the controller retries terminal failures", SharedBuilds: []string{"123"},
+		SuggestedFix: "bound the retry path",
+	}
+	pattern.ID = models.PatternID(pattern)
+	return pattern
+}
 
 func fixCandidateReadyService(t *testing.T) (*Service, SessionView, string, string) {
 	t.Helper()
@@ -16,6 +27,7 @@ func fixCandidateReadyService(t *testing.T) (*Service, SessionView, string, stri
 	detail.Runs[0].RepoRefs = map[string]string{
 		"example/repo": "main:0123456789abcdef0123456789abcdef01234567",
 	}
+	detail.PatternAnalyses = []models.PatternAnalysis{fixCandidatePattern()}
 	writeJobDetail(t, dir, detail)
 	chatRunner := &fakeRunner{reply: Reply{
 		Answer:     "The retry path keeps treating the terminal condition as recoverable.",
@@ -62,12 +74,13 @@ func fixCandidateReadyService(t *testing.T) (*Service, SessionView, string, stri
 
 func TestServiceFixCandidateSelectsBoundedAnswerAndSource(t *testing.T) {
 	service, session, chatRequestID, sourceRequestID := fixCandidateReadyService(t)
-	candidate, err := service.FixCandidate(session.ID, "Alice", chatRequestID, sourceRequestID)
+	candidate, err := service.FixCandidate(session.ID, "Alice", chatRequestID, fixCandidatePattern().ID, sourceRequestID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if candidate.SessionID != session.ID || candidate.RequestID != chatRequestID ||
-		candidate.Analysis.JobID != "periodic-demo" || candidate.Analysis.BuildID != "123" {
+		candidate.Analysis.JobID != "periodic-demo" || candidate.Analysis.BuildID != "123" ||
+		candidate.Pattern.ID != fixCandidatePattern().ID || candidate.Pattern.SharedBuilds[0] != "123" {
 		t.Fatalf("candidate identity = %+v", candidate)
 	}
 	if candidate.AssistantAnswer != "The retry path keeps treating the terminal condition as recoverable." ||
@@ -78,7 +91,7 @@ func TestServiceFixCandidateSelectsBoundedAnswerAndSource(t *testing.T) {
 		len(candidate.SourceResult.Citations) != 1 || !candidate.SourceResult.Citations[0].Verified {
 		t.Fatalf("candidate source = %+v", candidate.SourceResult)
 	}
-	if _, err := service.FixCandidate(session.ID, "Bob", chatRequestID, sourceRequestID); !errors.Is(err, ErrSessionNotFound) {
+	if _, err := service.FixCandidate(session.ID, "Bob", chatRequestID, fixCandidatePattern().ID, sourceRequestID); !errors.Is(err, ErrSessionNotFound) {
 		t.Fatalf("cross-owner error = %v", err)
 	}
 }
@@ -89,7 +102,7 @@ func TestServiceFixCandidateValidatesSourceStateAndAttachment(t *testing.T) {
 	if _, err := service.Send(t.Context(), session.ID, "Alice", secondRequestID, "What else supports it?"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.FixCandidate(session.ID, "Alice", secondRequestID, sourceRequestID); !errors.Is(err, ErrRequestNotFound) {
+	if _, err := service.FixCandidate(session.ID, "Alice", secondRequestID, fixCandidatePattern().ID, sourceRequestID); !errors.Is(err, ErrRequestNotFound) {
 		t.Fatalf("cross-turn source error = %v", err)
 	}
 
@@ -105,27 +118,23 @@ func TestServiceFixCandidateValidatesSourceStateAndAttachment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.FixCandidate(session.ID, "Alice", chatRequestID, sourceRequestID); !errors.Is(err, ErrRequestPending) {
+	if _, err := service.FixCandidate(session.ID, "Alice", chatRequestID, fixCandidatePattern().ID, sourceRequestID); !errors.Is(err, ErrRequestPending) {
 		t.Fatalf("pending source error = %v", err)
 	}
 }
 
 func TestServiceFixCandidateRejectsUngroundedAndStaleAnswers(t *testing.T) {
 	service, session, chatRequestID, _ := fixCandidateReadyService(t)
-	candidate, err := service.FixCandidate(session.ID, "Alice", chatRequestID, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	detail := testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-24T12:00:00Z"))
 	detail.Runs[0].TestCases[0].AIAnalysis.RootCause = "a replacement analysis"
+	detail.PatternAnalyses = []models.PatternAnalysis{fixCandidatePattern()}
 	writeJobDetail(t, service.dataDir, detail)
-	if err := service.ValidateFixCandidate(candidate); !errors.Is(err, ErrAnalysisChanged) {
+	if _, err := service.FixCandidate(session.ID, "Alice", chatRequestID, fixCandidatePattern().ID, ""); !errors.Is(err, ErrAnalysisChanged) {
 		t.Fatalf("stale analysis error = %v", err)
 	}
 
 	ctx, cancel := service.store.context()
-	err = service.store.update(ctx, func(state *persistedState) (bool, error) {
+	err := service.store.update(ctx, func(state *persistedState) (bool, error) {
 		for i := range state.Sessions[session.ID].View.Messages {
 			message := &state.Sessions[session.ID].View.Messages[i]
 			if message.Role == "assistant" && message.RequestID == chatRequestID {
@@ -138,7 +147,7 @@ func TestServiceFixCandidateRejectsUngroundedAndStaleAnswers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.FixCandidate(session.ID, "Alice", chatRequestID, ""); !errors.Is(err, ErrInvalidRequest) {
+	if _, err := service.FixCandidate(session.ID, "Alice", chatRequestID, fixCandidatePattern().ID, ""); !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("ungrounded answer error = %v", err)
 	}
 }
@@ -174,7 +183,7 @@ func TestServiceFixCandidateRejectsTerminalSourceFailures(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := service.FixCandidate(session.ID, "Alice", chatRequestID, sourceRequestID); !errors.Is(err, testCase.want) {
+			if _, err := service.FixCandidate(session.ID, "Alice", chatRequestID, fixCandidatePattern().ID, sourceRequestID); !errors.Is(err, testCase.want) {
 				t.Fatalf("source state error = %v, want %v", err, testCase.want)
 			}
 		})
