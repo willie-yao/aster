@@ -356,6 +356,8 @@ export function AnalysisChat({
   const [cancelling, setCancelling] = useState(false);
   const createRequestIDRef = useRef(newAnalysisChatRequestID());
   const controllerRef = useRef<AbortController | null>(null);
+  const cancelControllerRef = useRef<AbortController | null>(null);
+  const identityRef = useRef("");
   const endRef = useRef<HTMLDivElement | null>(null);
 
   const identity = useMemo(
@@ -371,9 +373,11 @@ export function AnalysisChat({
       ].join("\u0000"),
     [analysisRef],
   );
+  identityRef.current = identity;
 
   useEffect(() => {
     controllerRef.current?.abort();
+    cancelControllerRef.current?.abort();
     setExpanded(false);
     setQuestion("");
     setSession(null);
@@ -392,7 +396,10 @@ export function AnalysisChat({
     }
   }, [busy, expanded, session?.messages.length]);
 
-  useEffect(() => () => controllerRef.current?.abort(), []);
+  useEffect(() => () => {
+    controllerRef.current?.abort();
+    cancelControllerRef.current?.abort();
+  }, []);
 
   if (!features.analysis_chat) return null;
 
@@ -517,14 +524,26 @@ export function AnalysisChat({
 
   async function cancelTurn() {
     if (!pendingTurn || cancelling) return;
+    const cancelIdentity = identity;
+    const turn = pendingTurn;
+    cancelControllerRef.current?.abort();
+    const controller = new AbortController();
+    cancelControllerRef.current = controller;
     setCancelling(true);
     setProgressPhase("cancelling");
     try {
-      await cancelAnalysisChatRequest(pendingTurn.sessionID, pendingTurn.requestID);
-      if (!busy) await submit(pendingTurn.question);
+      await cancelAnalysisChatRequest(turn.sessionID, turn.requestID, controller.signal);
+      if (identityRef.current !== cancelIdentity) return;
+      if (!busy) await submit(turn.question);
     } catch (cancelError) {
-      setCancelling(false);
+      if (cancelError instanceof Error && cancelError.name === "AbortError") return;
+      if (identityRef.current !== cancelIdentity) return;
       setError(readableError(cancelError));
+    } finally {
+      if (cancelControllerRef.current === controller) {
+        cancelControllerRef.current = null;
+        if (identityRef.current === cancelIdentity) setCancelling(false);
+      }
     }
   }
 

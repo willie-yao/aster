@@ -25,13 +25,14 @@ func testRequestID(t *testing.T) string {
 }
 
 type fakeRunner struct {
-	mu      sync.Mutex
-	turns   []Turn
-	reply   Reply
-	err     error
-	started chan struct{}
-	release chan struct{}
-	phases  []string
+	mu            sync.Mutex
+	turns         []Turn
+	reply         Reply
+	err           error
+	started       chan struct{}
+	release       chan struct{}
+	phases        []string
+	ignoreContext bool
 }
 
 func (f *fakeRunner) Reply(ctx context.Context, turn Turn) (Reply, error) {
@@ -50,10 +51,14 @@ func (f *fakeRunner) Reply(ctx context.Context, turn Turn) (Reply, error) {
 		}
 	}
 	if release != nil {
-		select {
-		case <-release:
-		case <-ctx.Done():
-			return Reply{}, ctx.Err()
+		if f.ignoreContext {
+			<-release
+		} else {
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return Reply{}, ctx.Err()
+			}
 		}
 	}
 	return reply, err
@@ -953,6 +958,11 @@ func TestServiceLifecycleCancelsActiveTurn(t *testing.T) {
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("lifecycle cancellation error = %v", err)
 	}
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), time.Second)
+	defer waitCancel()
+	if err := service.Wait(waitCtx); err != nil {
+		t.Fatalf("waiting for lifecycle-cancelled turn: %v", err)
+	}
 }
 
 func TestServiceRateLimitWindowExpires(t *testing.T) {
@@ -982,5 +992,74 @@ func TestServiceRateLimitWindowExpires(t *testing.T) {
 	nowNanos.Store(start.Add(time.Minute + time.Second).UnixNano())
 	if _, err := service.Send(context.Background(), created.ID, "alice", "turn-rate-window-3", "question"); err != nil {
 		t.Fatalf("expired rate window error = %v", err)
+	}
+}
+
+func TestServicePersistedCancellationWinsOverSuccessfulReply(t *testing.T) {
+	dir := t.TempDir()
+	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
+	runner := &fakeRunner{
+		reply:   Reply{Answer: "answer", Assessment: "supports"},
+		started: make(chan struct{}, 1), release: make(chan struct{}), ignoreContext: true,
+	}
+	service, err := NewService(t.Context(), dir, runner, Options{PollInterval: 10 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := service.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", "create-cancel-race")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := service.Stream(t.Context(), created.ID, "alice", "turn-cancel-race", "question", nil)
+		done <- err
+	}()
+	<-runner.started
+	if err := service.Cancel(created.ID, "alice", "turn-cancel-race"); err != nil {
+		t.Fatal(err)
+	}
+	close(runner.release)
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancel-versus-success result = %v", err)
+	}
+	got, err := service.Get(created.ID, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Messages) != 0 {
+		t.Fatalf("cancelled reply was published: %+v", got.Messages)
+	}
+}
+
+func TestServiceLocalNotificationAvoidsPollDelay(t *testing.T) {
+	dir := t.TempDir()
+	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
+	runner := &fakeRunner{
+		reply:   Reply{Answer: "answer", Assessment: "supports"},
+		started: make(chan struct{}, 1), release: make(chan struct{}),
+	}
+	service, err := NewService(t.Context(), dir, runner, Options{PollInterval: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := service.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", "create-local-notify")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := service.Stream(t.Context(), created.ID, "alice", "turn-local-notify", "question", nil)
+		done <- err
+	}()
+	<-runner.started
+	close(runner.release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("local waiter slept until the cross-replica poll interval")
 	}
 }

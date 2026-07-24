@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysischat"
 )
@@ -28,6 +29,7 @@ type fakeAnalysisChatRunner struct {
 	cancelID         string
 	cancelOwner      string
 	cancelRequestID  string
+	sendDelay        time.Duration
 }
 
 func (f *fakeAnalysisChatRunner) Create(ref analysischat.AnalysisRef, owner, requestID string) (analysischat.SessionView, error) {
@@ -46,8 +48,15 @@ func (f *fakeAnalysisChatRunner) Get(id, owner string) (analysischat.SessionView
 	return analysischat.SessionView{ID: id, Messages: []analysischat.Message{}}, nil
 }
 
-func (f *fakeAnalysisChatRunner) Send(_ context.Context, id, owner, requestID, message string) (analysischat.SessionView, error) {
+func (f *fakeAnalysisChatRunner) Send(ctx context.Context, id, owner, requestID, message string) (analysischat.SessionView, error) {
 	f.gotID, f.gotOwner, f.gotRequestID, f.gotMessage = id, owner, requestID, message
+	if f.sendDelay > 0 {
+		select {
+		case <-time.After(f.sendDelay):
+		case <-ctx.Done():
+			return analysischat.SessionView{}, ctx.Err()
+		}
+	}
 	if f.sendErr != nil {
 		return analysischat.SessionView{}, f.sendErr
 	}
@@ -284,6 +293,26 @@ func TestHandlerAnalysisChatStreamErrorIsSanitized(t *testing.T) {
 	}
 	if strings.Contains(recorder.Body.String(), `"outcome":""`) {
 		t.Fatal("ambiguous stream error carried a false terminal outcome")
+	}
+}
+
+func TestHandlerAnalysisChatJSONWaiterHasTurnCompletionGrace(t *testing.T) {
+	runner := &fakeAnalysisChatRunner{sendDelay: 50 * time.Millisecond}
+	handler, err := Handler(Options{
+		DataDir: t.TempDir(), Capabilities: DefaultCapabilities(), Auth: fakeAuth{}, AuthMode: "dev",
+		AnalysisChat: runner, AnalysisChatTimeout: 20 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/analysis-chat/sessions/session-1/messages", strings.NewReader(`{"message":"question"}`))
+	req.Header.Set("Authorization", "ok")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(analysisChatIdempotencyHeader, "request-grace")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("JSON waiter status=%d body=%q", recorder.Code, recorder.Body.String())
 	}
 }
 

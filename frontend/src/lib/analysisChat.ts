@@ -243,6 +243,7 @@ function reconnectDelay(milliseconds: number, signal?: AbortSignal): Promise<voi
 export async function cancelAnalysisChatRequest(
   sessionID: string,
   requestID: string,
+  signal?: AbortSignal,
 ): Promise<void> {
   const response = await fetch(
     `${API_BASE}api/analysis-chat/sessions/${encodeURIComponent(sessionID)}/requests/${encodeURIComponent(requestID)}/cancel`,
@@ -250,6 +251,7 @@ export async function cancelAnalysisChatRequest(
       method: "POST",
       credentials: "same-origin",
       cache: "no-store",
+      signal,
     },
   );
   if (!response.ok) throw await apiError(response);

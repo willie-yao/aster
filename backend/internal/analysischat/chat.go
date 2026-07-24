@@ -224,7 +224,7 @@ func (o Options) normalized(dataDir string) Options {
 		o.TurnTimeout = 2 * time.Minute
 	}
 	if o.PollInterval <= 0 {
-		o.PollInterval = 250 * time.Millisecond
+		o.PollInterval = 2 * time.Second
 	}
 	if o.MaxActiveTurnsPerOwner <= 0 {
 		o.MaxActiveTurnsPerOwner = 2
@@ -255,6 +255,9 @@ type Service struct {
 	lifecycle context.Context
 	activeMu  sync.Mutex
 	active    map[string]context.CancelFunc
+	activeWG  sync.WaitGroup
+	notifyMu  sync.Mutex
+	notify    map[string]map[chan struct{}]struct{}
 }
 
 // NewService creates a durable analysis chat service.
@@ -282,6 +285,7 @@ func NewService(ctx context.Context, dataDir string, runner Runner, opts Options
 	service := &Service{
 		dataDir: dataDir, runner: runner, opts: opts, store: store,
 		lifecycle: ctx, active: map[string]context.CancelFunc{},
+		notify: map[string]map[chan struct{}]struct{}{},
 	}
 	if err := service.cleanupPersisted(); err != nil {
 		return nil, fmt.Errorf("cleaning analysis chat state: %w", err)

@@ -89,7 +89,7 @@ func sendAnalysisChatMessageHandler(timeout time.Duration, run AnalysisChatRunne
 			http.Error(w, "invalid message", http.StatusBadRequest)
 			return
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), timeout)
+		ctx, cancel := context.WithTimeout(r.Context(), timeout+15*time.Second)
 		defer cancel()
 		requestID := strings.TrimSpace(r.Header.Get(analysisChatIdempotencyHeader))
 		if requestID == "" {

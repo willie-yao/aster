@@ -92,9 +92,25 @@ func (s *Service) Cancel(id, owner, requestID string) error {
 		return err
 	}
 	if active {
+		s.notifyLocal(activeTurnKey(id, requestID))
 		s.cancelLocal(id, requestID)
 	}
 	return nil
+}
+
+// Wait blocks until all server-owned turns have persisted a terminal outcome.
+func (s *Service) Wait(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		s.activeWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (s *Service) startTurn(ctx context.Context, id, owner, requestID, question string) (startTurnResult, error) {
@@ -180,7 +196,11 @@ func (s *Service) startTurn(ctx context.Context, id, owner, requestID, question 
 		return startTurnResult{}, err
 	}
 	if result.Started {
-		go s.runTurn(id, owner, requestID, leaseID, result.Turn)
+		s.activeWG.Add(1)
+		go func() {
+			defer s.activeWG.Done()
+			s.runTurn(id, owner, requestID, leaseID, result.Turn)
+		}()
 	}
 	return result, nil
 }
@@ -212,7 +232,7 @@ func (s *Service) finishTurn(id, owner, requestID, leaseID, question string, rep
 	finishedAt := s.opts.Now().UTC()
 	ctx, cancel := s.store.context()
 	defer cancel()
-	return s.store.update(ctx, func(state *persistedState) (bool, error) {
+	err := s.store.update(ctx, func(state *persistedState) (bool, error) {
 		changed := s.cleanup(state, finishedAt)
 		current := state.Sessions[strings.TrimSpace(id)]
 		if current == nil || current.Owner != owner {
@@ -222,6 +242,9 @@ func (s *Service) finishTurn(id, owner, requestID, leaseID, question string, rep
 			return changed, ErrRequestOutcomeUnknown
 		}
 		previous := current.Requests[requestID]
+		if current.Active.CancelRequested {
+			runErr = context.Canceled
+		}
 		current.Active = nil
 		current.ExpiresAt = finishedAt.Add(s.opts.SessionTTL)
 		current.View.ExpiresAt = current.ExpiresAt.Format(time.RFC3339)
@@ -246,6 +269,8 @@ func (s *Service) finishTurn(id, owner, requestID, leaseID, question string, rep
 		current.Requests[requestID] = previous
 		return true, nil
 	})
+	s.notifyLocal(activeTurnKey(id, requestID))
+	return err
 }
 
 func (s *Service) waitForRequest(
@@ -258,6 +283,8 @@ func (s *Service) waitForRequest(
 	if err != nil {
 		return SessionView{}, err
 	}
+	updates, unsubscribe := s.subscribe(activeTurnKey(id, requestID))
+	defer unsubscribe()
 	lastPhase := ""
 	lastEmit := time.Time{}
 	for {
@@ -283,10 +310,14 @@ func (s *Service) waitForRequest(
 		case requestUnknown:
 			return SessionView{}, ErrRequestOutcomeUnknown
 		}
+		timer := time.NewTimer(s.opts.PollInterval)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return SessionView{}, fmt.Errorf("%w: %v", ErrRequestPending, ctx.Err())
-		case <-time.After(s.opts.PollInterval):
+		case <-updates:
+			timer.Stop()
+		case <-timer.C:
 		}
 	}
 }
@@ -329,7 +360,8 @@ func (s *Service) updateProgress(id, owner, requestID, leaseID, phase string) er
 	now := s.opts.Now().UTC()
 	ctx, cancel := s.store.context()
 	defer cancel()
-	return s.store.update(ctx, func(state *persistedState) (bool, error) {
+	changed := false
+	err := s.store.update(ctx, func(state *persistedState) (bool, error) {
 		current := state.Sessions[id]
 		if current == nil || current.Owner != owner || current.Active == nil ||
 			current.Active.RequestID != requestID || current.Active.LeaseID != leaseID {
@@ -343,8 +375,13 @@ func (s *Service) updateProgress(id, owner, requestID, leaseID, phase string) er
 		}
 		current.Active.Phase = phase
 		current.Active.UpdatedAt = now
+		changed = true
 		return true, nil
 	})
+	if err == nil && changed {
+		s.notifyLocal(activeTurnKey(id, requestID))
+	}
+	return err
 }
 
 func (s *Service) watchCancellation(
@@ -402,6 +439,37 @@ func (s *Service) activeTurnsForOwner(state *persistedState, owner string) int {
 		}
 	}
 	return count
+}
+
+func (s *Service) subscribe(key string) (<-chan struct{}, func()) {
+	updates := make(chan struct{}, 1)
+	s.notifyMu.Lock()
+	listeners := s.notify[key]
+	if listeners == nil {
+		listeners = map[chan struct{}]struct{}{}
+		s.notify[key] = listeners
+	}
+	listeners[updates] = struct{}{}
+	s.notifyMu.Unlock()
+	return updates, func() {
+		s.notifyMu.Lock()
+		delete(s.notify[key], updates)
+		if len(s.notify[key]) == 0 {
+			delete(s.notify, key)
+		}
+		s.notifyMu.Unlock()
+	}
+}
+
+func (s *Service) notifyLocal(key string) {
+	s.notifyMu.Lock()
+	defer s.notifyMu.Unlock()
+	for listener := range s.notify[key] {
+		select {
+		case listener <- struct{}{}:
+		default:
+		}
+	}
 }
 
 func activeTurnKey(id, requestID string) string {
