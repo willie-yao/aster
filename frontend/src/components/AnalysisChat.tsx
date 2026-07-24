@@ -23,11 +23,15 @@ import {
 import { useAuth } from "../hooks/useAuth";
 import { useCapabilities } from "../hooks/useCapabilities";
 import {
+  analysisChatIdempotencyConflictMessage,
+  analysisChatRequestOutcomeUnknownMessage,
   analysisChatSessionBusyMessage,
   analysisChatTurnLimitMessage,
   AnalysisChatAPIError,
   createAnalysisChatSession,
+  getAnalysisChatSession,
   limitAnalysisChatQuestion,
+  newAnalysisChatRequestID,
   sendAnalysisChatMessage,
 } from "../lib/analysisChat";
 import { fileToUrl, type FileToUrlContext } from "../lib/utils";
@@ -40,6 +44,12 @@ import type {
   AnalysisChatSession,
 } from "../types/analysisChat";
 import { RichText } from "./RichText";
+
+interface PendingTurn {
+  sessionID: string;
+  requestID: string;
+  question: string;
+}
 
 const suggestedQuestions = [
   "What evidence supports this conclusion?",
@@ -64,9 +74,16 @@ function readableError(error: unknown): string {
       case 404:
         return "This analysis or conversation is no longer available. Refresh the page to load the latest data.";
       case 409:
-        return error.message === analysisChatSessionBusyMessage
-          ? "Another answer is still running for this conversation. Try again shortly."
-          : "The published analysis changed while this page was open. Refresh before starting a new conversation.";
+        if (error.message === analysisChatSessionBusyMessage) {
+          return "Another answer is still running for this conversation. Retry shortly to reconnect.";
+        }
+        if (error.message === analysisChatRequestOutcomeUnknownMessage) {
+          return "The previous answer could not be confirmed after a server interruption. Submit again to retry.";
+        }
+        if (error.message === analysisChatIdempotencyConflictMessage) {
+          return "This request changed while it was being retried. Refresh the page before continuing.";
+        }
+        return "The published analysis changed while this page was open. Refresh before starting a new conversation.";
       case 429:
         return error.message === analysisChatTurnLimitMessage
           ? "This conversation reached its limit. Start again from the latest analysis."
@@ -288,6 +305,8 @@ export function AnalysisChat({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [turnLimitExhausted, setTurnLimitExhausted] = useState(false);
+  const [pendingTurn, setPendingTurn] = useState<PendingTurn | null>(null);
+  const createRequestIDRef = useRef(newAnalysisChatRequestID());
   const controllerRef = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
 
@@ -313,6 +332,8 @@ export function AnalysisChat({
     setBusy(false);
     setError(null);
     setTurnLimitExhausted(false);
+    setPendingTurn(null);
+    createRequestIDRef.current = newAnalysisChatRequestID();
   }, [identity]);
 
   useEffect(() => {
@@ -331,6 +352,10 @@ export function AnalysisChat({
   async function submit(nextQuestion = question) {
     const value = nextQuestion.trim();
     if (!value || busy || turnLimitReached) return;
+    if (pendingTurn && pendingTurn.question !== value) {
+      setError("The previous question may still be running. Retry it before asking another question.");
+      return;
+    }
     if (auth.status === "anonymous") {
       auth.signIn();
       return;
@@ -342,33 +367,89 @@ export function AnalysisChat({
     controllerRef.current = controller;
     setBusy(true);
     setError(null);
+    let activeSession = session;
+    let activeTurn = pendingTurn;
     try {
-      const activeSession =
-        session ?? (await createAnalysisChatSession(analysisRef, controller.signal));
-      if (!session) setSession(activeSession);
-      const updated = await sendAnalysisChatMessage(activeSession.id, value, controller.signal);
+      if (!activeSession) {
+        activeSession = await createAnalysisChatSession(
+          analysisRef,
+          createRequestIDRef.current,
+          controller.signal,
+        );
+        setSession(activeSession);
+      }
+      if (!activeTurn) {
+        activeTurn = {
+          sessionID: activeSession.id,
+          requestID: newAnalysisChatRequestID(),
+          question: value,
+        };
+        setPendingTurn(activeTurn);
+      }
+      const updated = await sendAnalysisChatMessage(
+        activeTurn.sessionID,
+        activeTurn.question,
+        activeTurn.requestID,
+        controller.signal,
+      );
       setSession(updated);
       setQuestion("");
+      setPendingTurn(null);
     } catch (requestError) {
-      if (!(requestError instanceof Error && requestError.name === "AbortError")) {
-        if (
-          requestError instanceof AnalysisChatAPIError &&
-          requestError.status === 401 &&
-          auth.mode === "oauth"
-        ) {
-          auth.signIn();
-          return;
+      if (requestError instanceof Error && requestError.name === "AbortError") return;
+      if (
+        requestError instanceof AnalysisChatAPIError &&
+        requestError.status === 401 &&
+        auth.mode === "oauth"
+      ) {
+        auth.signIn();
+        return;
+      }
+
+      if (activeSession && activeTurn && !(requestError instanceof AnalysisChatAPIError)) {
+        try {
+          const reconciled = await getAnalysisChatSession(activeSession.id, controller.signal);
+          setSession(reconciled);
+          if (reconciled.messages.some((message) => message.request_id === activeTurn?.requestID)) {
+            setQuestion("");
+            setPendingTurn(null);
+            return;
+          }
+        } catch (reconcileError) {
+          if (reconcileError instanceof Error && reconcileError.name === "AbortError") return;
+          if (
+            reconcileError instanceof AnalysisChatAPIError &&
+            reconcileError.status === 401 &&
+            auth.mode === "oauth"
+          ) {
+            auth.signIn();
+            return;
+          }
         }
-        const exhausted =
+        setPendingTurn(activeTurn);
+        setError("The question may still be running. Retry shortly to reconnect to the same request.");
+        return;
+      }
+      if (!activeSession && !(requestError instanceof AnalysisChatAPIError)) {
+        setError("The conversation may have been created. Retry to reconnect to the same session.");
+        return;
+      }
+
+      const exhausted =
+        requestError instanceof AnalysisChatAPIError &&
+        requestError.status === 429 &&
+        requestError.message === analysisChatTurnLimitMessage;
+      if (exhausted) {
+        setTurnLimitExhausted(true);
+        setPendingTurn(null);
+        setError(null);
+      } else {
+        const stillRunning =
           requestError instanceof AnalysisChatAPIError &&
-          requestError.status === 429 &&
-          requestError.message === analysisChatTurnLimitMessage;
-        if (exhausted) {
-          setTurnLimitExhausted(true);
-          setError(null);
-        } else {
-          setError(readableError(requestError));
-        }
+          requestError.status === 409 &&
+          requestError.message === analysisChatSessionBusyMessage;
+        if (!stillRunning) setPendingTurn(null);
+        setError(readableError(requestError));
       }
     } finally {
       if (controllerRef.current === controller) {
@@ -482,7 +563,7 @@ export function AnalysisChat({
               aria-live="polite"
               sx={{ p: { xs: 1.25, sm: 1.5 }, maxHeight: 520, overflowY: "auto" }}
             >
-              {!session?.messages.length && !busy && !turnLimitReached && (
+              {!session?.messages.length && !busy && !pendingTurn && !turnLimitReached && (
                 <Box sx={{ py: 0.5 }}>
                   <Typography variant="body2" sx={{ fontWeight: 650 }}>
                     Interrogate the conclusion, not just the summary.
@@ -559,7 +640,7 @@ export function AnalysisChat({
                         void submit();
                       }
                     }}
-                    disabled={busy}
+                    disabled={busy || pendingTurn !== null}
                     placeholder="Ask why, challenge the cause, or test another hypothesis..."
                     slotProps={{
                       input: {
@@ -572,11 +653,11 @@ export function AnalysisChat({
                       htmlInput: { "aria-label": "Ask about this analysis" },
                     }}
                   />
-                  <Tooltip title="Send question">
+                  <Tooltip title={pendingTurn ? "Retry question" : "Send question"}>
                     <span>
                       <IconButton
                         color="primary"
-                        aria-label="Send question"
+                        aria-label={pendingTurn ? "Retry question" : "Send question"}
                         onClick={() => void submit()}
                         disabled={busy || question.trim() === ""}
                         sx={{

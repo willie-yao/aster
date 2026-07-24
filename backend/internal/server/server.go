@@ -564,7 +564,7 @@ func noCache(next http.Handler) http.Handler {
 type noListFS struct{ fs http.FileSystem }
 
 func (f noListFS) Open(name string) (http.File, error) {
-	if hidden[path.Base(name)] {
+	if hiddenDataPath(name) || hidden[path.Base(name)] {
 		return nil, os.ErrNotExist
 	}
 	file, err := f.fs.Open(name)
@@ -581,6 +581,15 @@ func (f noListFS) Open(name string) (http.File, error) {
 		return nil, os.ErrNotExist
 	}
 	return file, nil
+}
+
+func hiddenDataPath(name string) bool {
+	for _, segment := range strings.Split(path.Clean("/"+name), "/") {
+		if strings.HasPrefix(segment, ".") && segment != "." && segment != ".." {
+			return true
+		}
+	}
+	return false
 }
 
 // hidden is the set of operational files noListFS refuses to serve, keyed by

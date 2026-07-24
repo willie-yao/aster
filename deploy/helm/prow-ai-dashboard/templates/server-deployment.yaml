@@ -5,8 +5,17 @@
 {{- if and $chat (not .Values.ai.enabled) -}}
 {{- fail "server.chat.enabled requires ai.enabled" -}}
 {{- end -}}
-{{- if and $chat (ne (int .Values.server.replicaCount) 1) -}}
-{{- fail "server.chat.enabled requires server.replicaCount=1 until sessions use shared persistence" -}}
+{{- if and $chat (le (int .Values.server.chat.maxSessions) 0) -}}
+{{- fail "server.chat.maxSessions must be positive" -}}
+{{- end -}}
+{{- if and $chat (le (int .Values.server.chat.maxSessionsPerOwner) 0) -}}
+{{- fail "server.chat.maxSessionsPerOwner must be positive" -}}
+{{- end -}}
+{{- if and $chat (gt (int .Values.server.chat.maxSessionsPerOwner) (int .Values.server.chat.maxSessions)) -}}
+{{- fail "server.chat.maxSessionsPerOwner cannot exceed server.chat.maxSessions" -}}
+{{- end -}}
+{{- if and $chat (not .Values.server.chat.sessionTTL) -}}
+{{- fail "server.chat.sessionTTL is required" -}}
 {{- end -}}
 apiVersion: apps/v1
 kind: Deployment
@@ -66,6 +75,14 @@ spec:
             {{- if $chat }}
             - name: ANALYSIS_CHAT_ENABLED
               value: "true"
+            - name: ANALYSIS_CHAT_STATE_DIR
+              value: {{ printf "%s/.analysis-chat" .Values.persistence.mountPath | quote }}
+            - name: ANALYSIS_CHAT_SESSION_TTL
+              value: {{ .Values.server.chat.sessionTTL | quote }}
+            - name: ANALYSIS_CHAT_MAX_SESSIONS
+              value: {{ .Values.server.chat.maxSessions | quote }}
+            - name: ANALYSIS_CHAT_MAX_SESSIONS_PER_OWNER
+              value: {{ .Values.server.chat.maxSessionsPerOwner | quote }}
             {{- end }}
             - name: AUTH_MODE
               value: {{ $a.mode | quote }}
@@ -161,8 +178,8 @@ spec:
           volumeMounts:
             - name: data
               mountPath: {{ .Values.persistence.mountPath }}
-              # Read-write only for actions, which persist dedup state.
-              readOnly: {{ not $actions }}
+              # Interactive features persist private operational state.
+              readOnly: {{ not $interactive }}
             {{- if $interactive }}
             - name: project
               mountPath: {{ .Values.project.mountPath }}

@@ -5,8 +5,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/server"
 )
@@ -143,4 +145,69 @@ func TestConfigureAuthenticatorOAuthScopeByFeature(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAnalysisChatServiceOptionsFromEnv(t *testing.T) {
+	for _, name := range []string{
+		"ANALYSIS_CHAT_STATE_DIR",
+		"ANALYSIS_CHAT_SESSION_TTL",
+		"ANALYSIS_CHAT_MAX_SESSIONS",
+		"ANALYSIS_CHAT_MAX_SESSIONS_PER_OWNER",
+	} {
+		t.Setenv(name, "")
+	}
+	opts, err := analysisChatServiceOptionsFromEnv("/data", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.StateDir != filepath.Join("/data", ".analysis-chat") || opts.SessionTTL != 2*time.Hour ||
+		opts.MaxSessions != 128 || opts.MaxSessionsPerOwner != 8 || opts.TurnLeaseTTL != 90*time.Second {
+		t.Fatalf("default options = %+v", opts)
+	}
+
+	t.Setenv("ANALYSIS_CHAT_STATE_DIR", "/state/chat")
+	t.Setenv("ANALYSIS_CHAT_SESSION_TTL", "45m")
+	t.Setenv("ANALYSIS_CHAT_MAX_SESSIONS", "24")
+	t.Setenv("ANALYSIS_CHAT_MAX_SESSIONS_PER_OWNER", "3")
+	opts, err = analysisChatServiceOptionsFromEnv("/data", 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.StateDir != "/state/chat" || opts.SessionTTL != 45*time.Minute ||
+		opts.MaxSessions != 24 || opts.MaxSessionsPerOwner != 3 || opts.TurnLeaseTTL != time.Minute {
+		t.Fatalf("configured options = %+v", opts)
+	}
+}
+
+func TestAnalysisChatServiceOptionsRejectInvalidEnv(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		value string
+	}{
+		{name: "ANALYSIS_CHAT_SESSION_TTL", value: "zero"},
+		{name: "ANALYSIS_CHAT_MAX_SESSIONS", value: "0"},
+		{name: "ANALYSIS_CHAT_MAX_SESSIONS_PER_OWNER", value: "many"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			for _, name := range []string{
+				"ANALYSIS_CHAT_SESSION_TTL",
+				"ANALYSIS_CHAT_MAX_SESSIONS",
+				"ANALYSIS_CHAT_MAX_SESSIONS_PER_OWNER",
+			} {
+				t.Setenv(name, "")
+			}
+			t.Setenv(testCase.name, testCase.value)
+			if _, err := analysisChatServiceOptionsFromEnv("/data", time.Minute); err == nil {
+				t.Fatal("invalid analysis chat setting was accepted")
+			}
+		})
+	}
+	t.Run("owner exceeds total", func(t *testing.T) {
+		t.Setenv("ANALYSIS_CHAT_SESSION_TTL", "")
+		t.Setenv("ANALYSIS_CHAT_MAX_SESSIONS", "2")
+		t.Setenv("ANALYSIS_CHAT_MAX_SESSIONS_PER_OWNER", "3")
+		if _, err := analysisChatServiceOptionsFromEnv("/data", time.Minute); err == nil {
+			t.Fatal("owner limit above total was accepted")
+		}
+	})
 }

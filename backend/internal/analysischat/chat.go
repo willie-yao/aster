@@ -4,6 +4,7 @@ package analysischat
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -14,7 +15,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
@@ -32,6 +32,12 @@ var (
 	ErrSessionBusy = errors.New("analysis chat session is busy")
 	// ErrSessionLimit means the deployment or owner has too many live sessions.
 	ErrSessionLimit = errors.New("analysis chat session limit reached")
+	// ErrIdempotencyConflict means a request key was reused for different input.
+	ErrIdempotencyConflict = errors.New("analysis chat idempotency key conflict")
+	// ErrRequestOutcomeUnknown means a replica died before recording a turn result.
+	ErrRequestOutcomeUnknown = errors.New("analysis chat request outcome unknown")
+	// ErrRequestFailed means an earlier idempotent attempt failed before answering.
+	ErrRequestFailed = errors.New("analysis chat request failed")
 	// ErrTurnLimit means the session has used its allowed turns.
 	ErrTurnLimit = errors.New("analysis chat turn limit reached")
 	// ErrInvalidRequest means a request field is missing, ambiguous, or too large.
@@ -47,6 +53,7 @@ const (
 	maxClassNameBytes = 4096
 	maxJUnitFileBytes = 1024
 	maxTimestampBytes = 128
+	maxRequestIDBytes = 128
 )
 
 // AnalysisRef addresses one published test analysis.
@@ -88,6 +95,7 @@ type Reply struct {
 // Message is one user or assistant entry in a session transcript.
 type Message struct {
 	Role             string     `json:"role"`
+	RequestID        string     `json:"request_id,omitempty"`
 	Content          string     `json:"content"`
 	Assessment       string     `json:"assessment,omitempty"`
 	Citations        []Citation `json:"citations,omitempty"`
@@ -124,18 +132,25 @@ type Runner interface {
 	Reply(context.Context, Turn) (Reply, error)
 }
 
-// Options bounds in-memory session use.
+// Options bounds persisted session use.
 type Options struct {
+	StateDir            string
 	SessionTTL          time.Duration
 	MaxSessions         int
 	MaxSessionsPerOwner int
 	// MaxTurns bounds admitted model attempts, including failed turns.
 	MaxTurns         int
 	MaxQuestionBytes int
+	// TurnLeaseTTL bounds an in-flight turn owned by one replica.
+	TurnLeaseTTL     time.Duration
+	StoreLockTimeout time.Duration
 	Now              func() time.Time
 }
 
-func (o Options) normalized() Options {
+func (o Options) normalized(dataDir string) Options {
+	if strings.TrimSpace(o.StateDir) == "" {
+		o.StateDir = filepath.Join(dataDir, ".analysis-chat")
+	}
 	if o.SessionTTL <= 0 {
 		o.SessionTTL = 2 * time.Hour
 	}
@@ -151,6 +166,12 @@ func (o Options) normalized() Options {
 	if o.MaxQuestionBytes <= 0 {
 		o.MaxQuestionBytes = 4096
 	}
+	if o.TurnLeaseTTL <= 0 {
+		o.TurnLeaseTTL = 3 * time.Minute
+	}
+	if o.StoreLockTimeout <= 0 {
+		o.StoreLockTimeout = 5 * time.Second
+	}
 	if o.Now == nil {
 		o.Now = time.Now
 	}
@@ -165,26 +186,15 @@ type resolvedAnalysis struct {
 	testCase    models.TestCase
 }
 
-type session struct {
-	view     SessionView
-	owner    string
-	resolved resolvedAnalysis
-	turns    int
-	busy     bool
-	expires  time.Time
-}
-
-// Service resolves published analyses and owns short-lived chat sessions.
+// Service resolves published analyses and owns durable chat sessions.
 type Service struct {
 	dataDir string
 	runner  Runner
 	opts    Options
-
-	mu       sync.Mutex
-	sessions map[string]*session
+	store   *sessionStore
 }
 
-// NewService creates an in-memory analysis chat service.
+// NewService creates a durable analysis chat service.
 func NewService(dataDir string, runner Runner, opts Options) (*Service, error) {
 	if strings.TrimSpace(dataDir) == "" {
 		return nil, fmt.Errorf("analysis chat data directory is required")
@@ -192,28 +202,59 @@ func NewService(dataDir string, runner Runner, opts Options) (*Service, error) {
 	if runner == nil {
 		return nil, fmt.Errorf("analysis chat runner is required")
 	}
-	return &Service{
-		dataDir:  dataDir,
-		runner:   runner,
-		opts:     opts.normalized(),
-		sessions: map[string]*session{},
-	}, nil
+	opts = opts.normalized(dataDir)
+	store, err := newSessionStore(opts.StateDir, opts.StoreLockTimeout)
+	if err != nil {
+		return nil, err
+	}
+	if err := store.validate(); err != nil {
+		return nil, fmt.Errorf("validating analysis chat state: %w", err)
+	}
+	return &Service{dataDir: dataDir, runner: runner, opts: opts, store: store}, nil
 }
 
 // Create resolves an analysis snapshot and starts an owner-bound session.
-func (s *Service) Create(ref AnalysisRef, owner string) (SessionView, error) {
+func (s *Service) Create(ref AnalysisRef, owner, requestID string) (SessionView, error) {
 	owner = normalizeOwner(owner)
 	if owner == "" {
 		return SessionView{}, fmt.Errorf("%w: owner is required", ErrInvalidRequest)
 	}
-	now := s.opts.Now().UTC()
-	s.mu.Lock()
-	s.evictExpiredLocked(now)
-	limitReached := len(s.sessions) >= s.opts.MaxSessions || s.ownerSessionsLocked(owner) >= s.opts.MaxSessionsPerOwner
-	s.mu.Unlock()
-	if limitReached {
-		return SessionView{}, ErrSessionLimit
+	requestID, err := normalizeRequestID(requestID)
+	if err != nil {
+		return SessionView{}, err
 	}
+	ref, err = normalizeAnalysisRef(ref)
+	if err != nil {
+		return SessionView{}, err
+	}
+	requestHash, err := hashAnalysisRef(ref)
+	if err != nil {
+		return SessionView{}, err
+	}
+	now := s.opts.Now().UTC()
+
+	var existing SessionView
+	ctx, cancel := s.store.context()
+	err = s.store.update(ctx, func(state *persistedState) (bool, error) {
+		changed := s.cleanup(state, now)
+		current, err := findCreateRequest(state, owner, requestID, requestHash)
+		if err != nil {
+			return changed, err
+		}
+		if current != nil {
+			existing = cloneSessionView(current.View)
+			return changed, nil
+		}
+		if s.sessionLimitReached(state, owner) {
+			return changed, ErrSessionLimit
+		}
+		return changed, nil
+	})
+	cancel()
+	if err != nil || existing.ID != "" {
+		return existing, err
+	}
+
 	resolved, err := s.resolve(ref)
 	if err != nil {
 		return SessionView{}, err
@@ -223,11 +264,14 @@ func (s *Service) Create(ref AnalysisRef, owner string) (SessionView, error) {
 		return SessionView{}, fmt.Errorf("creating analysis chat session: %w", err)
 	}
 	expires := now.Add(s.opts.SessionTTL)
-	created := &session{
-		owner:    owner,
-		resolved: resolved,
-		expires:  expires,
-		view: SessionView{
+	created := &persistedSession{
+		Owner:             owner,
+		Resolved:          persistResolved(resolved),
+		ExpiresAt:         expires,
+		CreateRequestID:   requestID,
+		CreateRequestHash: requestHash,
+		Requests:          map[string]persistedRequest{},
+		View: SessionView{
 			ID:        id,
 			Analysis:  resolved.ref,
 			CreatedAt: now.Format(time.RFC3339),
@@ -237,107 +281,272 @@ func (s *Service) Create(ref AnalysisRef, owner string) (SessionView, error) {
 		},
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.evictExpiredLocked(now)
-	if len(s.sessions) >= s.opts.MaxSessions || s.ownerSessionsLocked(owner) >= s.opts.MaxSessionsPerOwner {
-		return SessionView{}, ErrSessionLimit
-	}
-	s.sessions[id] = created
-	return cloneSessionView(created.view), nil
+	ctx, cancel = s.store.context()
+	defer cancel()
+	err = s.store.update(ctx, func(state *persistedState) (bool, error) {
+		changed := s.cleanup(state, now)
+		current, err := findCreateRequest(state, owner, requestID, requestHash)
+		if err != nil {
+			return changed, err
+		}
+		if current != nil {
+			existing = cloneSessionView(current.View)
+			return changed, nil
+		}
+		if s.sessionLimitReached(state, owner) {
+			return changed, ErrSessionLimit
+		}
+		state.Sessions[id] = created
+		existing = cloneSessionView(created.View)
+		return true, nil
+	})
+	return existing, err
 }
 
 // Get returns an owner-bound session.
 func (s *Service) Get(id, owner string) (SessionView, error) {
+	owner = normalizeOwner(owner)
 	now := s.opts.Now().UTC()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.evictExpiredLocked(now)
-	current := s.sessions[id]
-	if current == nil || current.owner != normalizeOwner(owner) {
-		return SessionView{}, ErrSessionNotFound
-	}
-	return cloneSessionView(current.view), nil
+	var view SessionView
+	ctx, cancel := s.store.context()
+	defer cancel()
+	err := s.store.update(ctx, func(state *persistedState) (bool, error) {
+		changed := s.cleanup(state, now)
+		current := state.Sessions[strings.TrimSpace(id)]
+		if current == nil || current.Owner != owner {
+			return changed, ErrSessionNotFound
+		}
+		view = cloneSessionView(current.View)
+		return changed, nil
+	})
+	return view, err
 }
 
 // Send appends one question and runs a single serialized model turn.
-func (s *Service) Send(ctx context.Context, id, owner, question string) (SessionView, error) {
+func (s *Service) Send(ctx context.Context, id, owner, requestID, question string) (SessionView, error) {
 	question = strings.TrimSpace(question)
 	if question == "" || len(question) > s.opts.MaxQuestionBytes {
 		return SessionView{}, fmt.Errorf("%w: question must be 1-%d bytes", ErrInvalidRequest, s.opts.MaxQuestionBytes)
 	}
+	requestID, err := normalizeRequestID(requestID)
+	if err != nil {
+		return SessionView{}, err
+	}
 	owner = normalizeOwner(owner)
+	questionHash := hashText(question)
 	now := s.opts.Now().UTC()
+	leaseID, err := newSessionID()
+	if err != nil {
+		return SessionView{}, fmt.Errorf("creating analysis chat turn lease: %w", err)
+	}
 
-	s.mu.Lock()
-	s.evictExpiredLocked(now)
-	current := s.sessions[id]
-	if current == nil || current.owner != owner {
-		s.mu.Unlock()
-		return SessionView{}, ErrSessionNotFound
+	var turn Turn
+	var immediate SessionView
+	storeCtx, cancel := context.WithTimeout(ctx, s.opts.StoreLockTimeout)
+	storeErr := s.store.update(storeCtx, func(state *persistedState) (bool, error) {
+		changed := s.cleanup(state, now)
+		current := state.Sessions[strings.TrimSpace(id)]
+		if current == nil || current.Owner != owner {
+			return changed, ErrSessionNotFound
+		}
+		if current.Requests == nil {
+			current.Requests = map[string]persistedRequest{}
+			changed = true
+		}
+		if previous, ok := current.Requests[requestID]; ok {
+			if previous.QuestionHash != questionHash {
+				return changed, ErrIdempotencyConflict
+			}
+			switch previous.Status {
+			case requestSucceeded:
+				immediate = cloneSessionView(current.View)
+				return changed, nil
+			case requestFailed:
+				return changed, persistedRequestError(previous.FailureKind)
+			case requestUnknown:
+				return changed, ErrRequestOutcomeUnknown
+			default:
+				return changed, ErrSessionBusy
+			}
+		}
+		if current.Active != nil {
+			return changed, ErrSessionBusy
+		}
+		if current.Turns >= s.opts.MaxTurns {
+			return changed, ErrTurnLimit
+		}
+		current.Turns++
+		current.Requests[requestID] = persistedRequest{QuestionHash: questionHash, Status: requestPending}
+		current.Active = &persistedActiveTurn{
+			RequestID: requestID,
+			LeaseID:   leaseID,
+			ExpiresAt: now.Add(s.opts.TurnLeaseTTL),
+		}
+		resolved := restoreResolved(current.Resolved)
+		turn = Turn{
+			SessionID:   current.View.ID,
+			JobID:       resolved.jobID,
+			BuildPrefix: resolved.buildPrefix,
+			Build:       cloneBuildInfo(resolved.build),
+			TestCase:    cloneTestCase(resolved.testCase),
+			History:     cloneSessionView(current.View).Messages,
+			Question:    question,
+		}
+		return true, nil
+	})
+	cancel()
+	if storeErr != nil || immediate.ID != "" {
+		return immediate, storeErr
 	}
-	if current.busy {
-		s.mu.Unlock()
-		return SessionView{}, ErrSessionBusy
-	}
-	if current.turns >= s.opts.MaxTurns {
-		s.mu.Unlock()
-		return SessionView{}, ErrTurnLimit
-	}
-	current.turns++
-	current.busy = true
-	turn := Turn{
-		SessionID:   id,
-		JobID:       current.resolved.jobID,
-		BuildPrefix: current.resolved.buildPrefix,
-		Build:       cloneBuildInfo(current.resolved.build),
-		TestCase:    cloneTestCase(current.resolved.testCase),
-		History:     slices.Clone(current.view.Messages),
-		Question:    question,
-	}
-	s.mu.Unlock()
 
 	reply, runErr := s.runner.Reply(ctx, turn)
+	finishedAt := s.opts.Now().UTC()
+	finalCtx, cancel := s.store.context()
+	defer cancel()
+	var view SessionView
+	finalErr := s.store.update(finalCtx, func(state *persistedState) (bool, error) {
+		changed := s.cleanup(state, finishedAt)
+		current := state.Sessions[strings.TrimSpace(id)]
+		if current == nil || current.Owner != owner {
+			return changed, ErrSessionNotFound
+		}
+		if current.Active == nil || current.Active.RequestID != requestID || current.Active.LeaseID != leaseID {
+			return changed, ErrRequestOutcomeUnknown
+		}
+		previous := current.Requests[requestID]
+		current.Active = nil
+		if runErr != nil {
+			previous.Status = requestFailed
+			previous.FailureKind = requestFailureKind(runErr)
+			current.Requests[requestID] = previous
+			return true, runErr
+		}
+		stamp := finishedAt.Format(time.RFC3339)
+		current.View.Messages = append(current.View.Messages,
+			Message{Role: "user", RequestID: requestID, Content: question, CreatedAt: stamp},
+			Message{
+				Role: "assistant", Content: reply.Answer, Assessment: reply.Assessment,
+				Citations: slices.Clone(reply.Citations), ProposedRevision: cloneRevision(reply.ProposedRevision),
+				ToolCalls: reply.ToolCalls, GCSBytes: reply.GCSBytes, ElapsedMs: reply.ElapsedMs,
+				CreatedAt: stamp,
+			},
+		)
+		current.View.UpdatedAt = stamp
+		previous.Status = requestSucceeded
+		current.Requests[requestID] = previous
+		view = cloneSessionView(current.View)
+		return true, nil
+	})
+	return view, finalErr
+}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	current = s.sessions[id]
-	if current == nil || current.owner != owner {
-		return SessionView{}, ErrSessionNotFound
+func (s *Service) cleanup(state *persistedState, now time.Time) bool {
+	changed := false
+	for id, current := range state.Sessions {
+		if current.Requests == nil {
+			current.Requests = map[string]persistedRequest{}
+			changed = true
+		}
+		if current.Active != nil && !now.Before(current.Active.ExpiresAt) {
+			previous := current.Requests[current.Active.RequestID]
+			previous.Status = requestUnknown
+			previous.FailureKind = ""
+			current.Requests[current.Active.RequestID] = previous
+			current.Active = nil
+			changed = true
+		}
+		if !now.Before(current.ExpiresAt) && current.Active == nil {
+			delete(state.Sessions, id)
+			changed = true
+		}
 	}
-	current.busy = false
-	if runErr != nil {
-		return SessionView{}, runErr
+	return changed
+}
+
+func (s *Service) sessionLimitReached(state *persistedState, owner string) bool {
+	if len(state.Sessions) >= s.opts.MaxSessions {
+		return true
 	}
-	stamp := s.opts.Now().UTC().Format(time.RFC3339)
-	current.view.Messages = append(current.view.Messages,
-		Message{Role: "user", Content: question, CreatedAt: stamp},
-		Message{
-			Role: "assistant", Content: reply.Answer, Assessment: reply.Assessment,
-			Citations: slices.Clone(reply.Citations), ProposedRevision: cloneRevision(reply.ProposedRevision),
-			ToolCalls: reply.ToolCalls, GCSBytes: reply.GCSBytes, ElapsedMs: reply.ElapsedMs,
-			CreatedAt: stamp,
-		},
-	)
-	current.view.UpdatedAt = stamp
-	return cloneSessionView(current.view), nil
+	count := 0
+	for _, current := range state.Sessions {
+		if current.Owner == owner {
+			count++
+		}
+	}
+	return count >= s.opts.MaxSessionsPerOwner
+}
+
+func findCreateRequest(state *persistedState, owner, requestID, requestHash string) (*persistedSession, error) {
+	for _, current := range state.Sessions {
+		if current.Owner != owner || current.CreateRequestID != requestID {
+			continue
+		}
+		if current.CreateRequestHash != requestHash {
+			return nil, ErrIdempotencyConflict
+		}
+		return current, nil
+	}
+	return nil, nil
+}
+
+func normalizeRequestID(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > maxRequestIDBytes {
+		return "", fmt.Errorf("%w: idempotency key must be 1-%d bytes", ErrInvalidRequest, maxRequestIDBytes)
+	}
+	for _, r := range value {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("-_.:", r) {
+			continue
+		}
+		return "", fmt.Errorf("%w: idempotency key contains unsupported characters", ErrInvalidRequest)
+	}
+	return value, nil
+}
+
+func hashAnalysisRef(ref AnalysisRef) (string, error) {
+	data, err := json.Marshal(ref)
+	if err != nil {
+		return "", fmt.Errorf("encoding analysis chat idempotency input: %w", err)
+	}
+	return hashBytes(data), nil
+}
+
+func hashText(value string) string {
+	return hashBytes([]byte(value))
+}
+
+func hashBytes(value []byte) string {
+	digest := sha256.Sum256(value)
+	return hex.EncodeToString(digest[:])
+}
+
+func requestFailureKind(err error) string {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return failureTimeout
+	case errors.Is(err, context.Canceled):
+		return failureCancelled
+	default:
+		return failureModel
+	}
+}
+
+func persistedRequestError(kind string) error {
+	switch kind {
+	case failureTimeout:
+		return context.DeadlineExceeded
+	case failureCancelled:
+		return context.Canceled
+	default:
+		return ErrRequestFailed
+	}
 }
 
 func (s *Service) resolve(ref AnalysisRef) (resolvedAnalysis, error) {
-	ref.JobID = strings.TrimSpace(ref.JobID)
-	ref.BuildID = strings.TrimSpace(ref.BuildID)
-	ref.TestName = strings.TrimSpace(ref.TestName)
-	ref.SuiteName = strings.TrimSpace(ref.SuiteName)
-	ref.ClassName = strings.TrimSpace(ref.ClassName)
-	ref.JUnitFile = strings.TrimSpace(ref.JUnitFile)
-	ref.AnalysisGeneratedAt = strings.TrimSpace(ref.AnalysisGeneratedAt)
-	if ref.JobID == "" || ref.BuildID == "" || ref.TestName == "" {
-		return resolvedAnalysis{}, fmt.Errorf("%w: job_id, build_id, and test_name are required", ErrInvalidRequest)
-	}
-	if len(ref.JobID) > maxJobIDBytes || len(ref.BuildID) > maxBuildIDBytes || len(ref.TestName) > maxTestNameBytes ||
-		len(ref.SuiteName) > maxSuiteNameBytes || len(ref.ClassName) > maxClassNameBytes ||
-		len(ref.JUnitFile) > maxJUnitFileBytes || len(ref.AnalysisGeneratedAt) > maxTimestampBytes {
-		return resolvedAnalysis{}, fmt.Errorf("%w: analysis reference field exceeds its size limit", ErrInvalidRequest)
+	var err error
+	ref, err = normalizeAnalysisRef(ref)
+	if err != nil {
+		return resolvedAnalysis{}, err
 	}
 
 	file, err := os.Open(filepath.Join(s.dataDir, "jobs", models.JobDataFilename(ref.JobID)))
@@ -427,24 +636,23 @@ func (s *Service) resolve(ref AnalysisRef) (resolvedAnalysis, error) {
 	}, nil
 }
 
-func (s *Service) ownerSessionsLocked(owner string) int {
-	count := 0
-	for _, current := range s.sessions {
-		if current.owner == owner {
-			count++
-		}
+func normalizeAnalysisRef(ref AnalysisRef) (AnalysisRef, error) {
+	ref.JobID = strings.TrimSpace(ref.JobID)
+	ref.BuildID = strings.TrimSpace(ref.BuildID)
+	ref.TestName = strings.TrimSpace(ref.TestName)
+	ref.SuiteName = strings.TrimSpace(ref.SuiteName)
+	ref.ClassName = strings.TrimSpace(ref.ClassName)
+	ref.JUnitFile = strings.TrimSpace(ref.JUnitFile)
+	ref.AnalysisGeneratedAt = strings.TrimSpace(ref.AnalysisGeneratedAt)
+	if ref.JobID == "" || ref.BuildID == "" || ref.TestName == "" {
+		return AnalysisRef{}, fmt.Errorf("%w: job_id, build_id, and test_name are required", ErrInvalidRequest)
 	}
-	return count
-}
-
-// evictExpiredLocked keeps an expired busy session until its in-flight turn returns.
-// The next session access removes it and releases its capacity.
-func (s *Service) evictExpiredLocked(now time.Time) {
-	for id, current := range s.sessions {
-		if !now.Before(current.expires) && !current.busy {
-			delete(s.sessions, id)
-		}
+	if len(ref.JobID) > maxJobIDBytes || len(ref.BuildID) > maxBuildIDBytes || len(ref.TestName) > maxTestNameBytes ||
+		len(ref.SuiteName) > maxSuiteNameBytes || len(ref.ClassName) > maxClassNameBytes ||
+		len(ref.JUnitFile) > maxJUnitFileBytes || len(ref.AnalysisGeneratedAt) > maxTimestampBytes {
+		return AnalysisRef{}, fmt.Errorf("%w: analysis reference field exceeds its size limit", ErrInvalidRequest)
 	}
+	return ref, nil
 }
 
 func normalizeOwner(owner string) string {

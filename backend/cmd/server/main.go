@@ -239,6 +239,14 @@ func enableActions(opts *server.Options, cfg *project.Config, dataDir string) er
 }
 
 func enableAnalysisChat(opts *server.Options, cfg *project.Config, projectDir, dataDir string) error {
+	timeout, err := analysisChatTimeoutFromEnv()
+	if err != nil {
+		return err
+	}
+	serviceOpts, err := analysisChatServiceOptionsFromEnv(dataDir, timeout)
+	if err != nil {
+		return err
+	}
 	token := os.Getenv("AI_TOKEN")
 	if token == "" {
 		return fmt.Errorf("analysis chat requires AI_TOKEN")
@@ -263,23 +271,77 @@ func enableAnalysisChat(opts *server.Options, cfg *project.Config, projectDir, d
 	if err != nil {
 		return fmt.Errorf("configuring analysis chat agent: %w", err)
 	}
-	service, err := analysischat.NewService(dataDir, agent, analysischat.Options{})
+	service, err := analysischat.NewService(dataDir, agent, serviceOpts)
 	if err != nil {
 		return err
 	}
 	opts.AnalysisChat = service
-	if value := os.Getenv("ANALYSIS_CHAT_TIMEOUT"); value != "" {
-		timeout, err := time.ParseDuration(value)
-		if err != nil {
-			return fmt.Errorf("invalid ANALYSIS_CHAT_TIMEOUT %q: %w", value, err)
-		}
-		if timeout <= 0 || timeout > 2*time.Minute {
-			return fmt.Errorf("ANALYSIS_CHAT_TIMEOUT must be greater than zero and at most 2m")
-		}
-		opts.AnalysisChatTimeout = timeout
-	}
-	log.Printf("💬 analysis chat enabled")
+	opts.AnalysisChatTimeout = timeout
+	log.Printf("💬 analysis chat enabled (state=%s ttl=%s)", serviceOpts.StateDir, serviceOpts.SessionTTL)
 	return nil
+}
+
+func analysisChatTimeoutFromEnv() (time.Duration, error) {
+	timeout := 2 * time.Minute
+	if value := os.Getenv("ANALYSIS_CHAT_TIMEOUT"); value != "" {
+		parsed, err := time.ParseDuration(value)
+		if err != nil {
+			return 0, fmt.Errorf("invalid ANALYSIS_CHAT_TIMEOUT %q: %w", value, err)
+		}
+		timeout = parsed
+	}
+	if timeout <= 0 || timeout > 2*time.Minute {
+		return 0, fmt.Errorf("ANALYSIS_CHAT_TIMEOUT must be greater than zero and at most 2m")
+	}
+	return timeout, nil
+}
+
+func analysisChatServiceOptionsFromEnv(dataDir string, timeout time.Duration) (analysischat.Options, error) {
+	opts := analysischat.Options{
+		StateDir:            strings.TrimSpace(os.Getenv("ANALYSIS_CHAT_STATE_DIR")),
+		SessionTTL:          2 * time.Hour,
+		MaxSessions:         128,
+		MaxSessionsPerOwner: 8,
+		TurnLeaseTTL:        timeout + 30*time.Second,
+	}
+	if opts.StateDir == "" {
+		opts.StateDir = filepath.Join(dataDir, ".analysis-chat")
+	}
+	if value := os.Getenv("ANALYSIS_CHAT_SESSION_TTL"); value != "" {
+		ttl, err := time.ParseDuration(value)
+		if err != nil {
+			return analysischat.Options{}, fmt.Errorf("invalid ANALYSIS_CHAT_SESSION_TTL %q: %w", value, err)
+		}
+		if ttl <= 0 {
+			return analysischat.Options{}, fmt.Errorf("ANALYSIS_CHAT_SESSION_TTL must be greater than zero")
+		}
+		opts.SessionTTL = ttl
+	}
+	var err error
+	opts.MaxSessions, err = positiveIntEnv("ANALYSIS_CHAT_MAX_SESSIONS", opts.MaxSessions)
+	if err != nil {
+		return analysischat.Options{}, err
+	}
+	opts.MaxSessionsPerOwner, err = positiveIntEnv("ANALYSIS_CHAT_MAX_SESSIONS_PER_OWNER", opts.MaxSessionsPerOwner)
+	if err != nil {
+		return analysischat.Options{}, err
+	}
+	if opts.MaxSessionsPerOwner > opts.MaxSessions {
+		return analysischat.Options{}, fmt.Errorf("ANALYSIS_CHAT_MAX_SESSIONS_PER_OWNER cannot exceed ANALYSIS_CHAT_MAX_SESSIONS")
+	}
+	return opts, nil
+}
+
+func positiveIntEnv(name string, fallback int) (int, error) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		return 0, fmt.Errorf("%s must be a positive integer", name)
+	}
+	return parsed, nil
 }
 
 func actionRequestNotifier(cfg *project.Config) actions.RequestReadyNotifier {

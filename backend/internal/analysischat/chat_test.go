@@ -3,6 +3,7 @@ package analysischat
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,13 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
 )
+
+var testRequestCounter atomic.Int64
+
+func testRequestID(t *testing.T) string {
+	t.Helper()
+	return fmt.Sprintf("test-%d", testRequestCounter.Add(1))
+}
 
 type fakeRunner struct {
 	mu      sync.Mutex
@@ -93,7 +101,8 @@ func TestServiceCreateAndSend(t *testing.T) {
 	created, err := service.Create(AnalysisRef{
 		JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster",
 		AnalysisGeneratedAt: "2026-07-23T12:00:00Z",
-	}, "Alice")
+	}, "Alice", testRequestID(t))
+
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +110,7 @@ func TestServiceCreateAndSend(t *testing.T) {
 		t.Fatalf("created session = %+v", created)
 	}
 
-	got, err := service.Send(context.Background(), created.ID, "alice", "  What proves this?  ")
+	got, err := service.Send(context.Background(), created.ID, "alice", testRequestID(t), "  What proves this?  ")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +122,7 @@ func TestServiceCreateAndSend(t *testing.T) {
 		t.Fatalf("assistant = %+v", assistant)
 	}
 
-	if _, err := service.Send(context.Background(), created.ID, "alice", "What should I check next?"); err != nil {
+	if _, err := service.Send(context.Background(), created.ID, "alice", testRequestID(t), "What should I check next?"); err != nil {
 		t.Fatal(err)
 	}
 	runner.mu.Lock()
@@ -145,14 +154,15 @@ func TestServiceResolveRejectsAmbiguousAndChangedAnalysis(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = service.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice")
+	_, err = service.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", testRequestID(t))
 	if !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("ambiguous Create error = %v", err)
 	}
 	_, err = service.Create(AnalysisRef{
 		JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster", JUnitFile: "junit_01.xml",
 		AnalysisGeneratedAt: "2026-07-23T11:00:00Z",
-	}, "alice")
+	}, "alice", testRequestID(t))
+
 	if !errors.Is(err, ErrAnalysisChanged) {
 		t.Fatalf("changed Create error = %v", err)
 	}
@@ -169,20 +179,20 @@ func TestServiceBoundsSessionsTurnsAndQuestions(t *testing.T) {
 		t.Fatal(err)
 	}
 	ref := AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}
-	created, err := service.Create(ref, "alice")
+	created, err := service.Create(ref, "alice", testRequestID(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.Create(ref, "alice"); !errors.Is(err, ErrSessionLimit) {
+	if _, err := service.Create(ref, "alice", testRequestID(t)); !errors.Is(err, ErrSessionLimit) {
 		t.Fatalf("owner session limit error = %v", err)
 	}
-	if _, err := service.Send(context.Background(), created.ID, "alice", "123456789"); !errors.Is(err, ErrInvalidRequest) {
+	if _, err := service.Send(context.Background(), created.ID, "alice", testRequestID(t), "123456789"); !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("question bound error = %v", err)
 	}
-	if _, err := service.Send(context.Background(), created.ID, "alice", "question"); err != nil {
+	if _, err := service.Send(context.Background(), created.ID, "alice", testRequestID(t), "question"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.Send(context.Background(), created.ID, "alice", "again"); !errors.Is(err, ErrTurnLimit) {
+	if _, err := service.Send(context.Background(), created.ID, "alice", testRequestID(t), "again"); !errors.Is(err, ErrTurnLimit) {
 		t.Fatalf("turn limit error = %v", err)
 	}
 }
@@ -198,18 +208,18 @@ func TestServiceSerializesTurns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	created, err := service.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice")
+	created, err := service.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", testRequestID(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := service.Send(context.Background(), created.ID, "alice", "first")
+		_, err := service.Send(context.Background(), created.ID, "alice", testRequestID(t), "first")
 		done <- err
 	}()
 	<-runner.started
-	if _, err := service.Send(context.Background(), created.ID, "alice", "second"); !errors.Is(err, ErrSessionBusy) {
+	if _, err := service.Send(context.Background(), created.ID, "alice", testRequestID(t), "second"); !errors.Is(err, ErrSessionBusy) {
 		t.Fatalf("concurrent Send error = %v", err)
 	}
 	close(runner.release)
@@ -233,11 +243,11 @@ func TestServiceResolvesPresubmitBuildPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	created, err := service.Create(AnalysisRef{JobID: detail.JobID, BuildID: "123", TestName: "TestCluster"}, "alice")
+	created, err := service.Create(AnalysisRef{JobID: detail.JobID, BuildID: "123", TestName: "TestCluster"}, "alice", testRequestID(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.Send(context.Background(), created.ID, "alice", "explain"); err != nil {
+	if _, err := service.Send(context.Background(), created.ID, "alice", testRequestID(t), "explain"); err != nil {
 		t.Fatal(err)
 	}
 	runner.mu.Lock()
@@ -256,18 +266,18 @@ func TestServiceRunnerErrorClearsBusy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	created, err := service.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice")
+	created, err := service.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", testRequestID(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.Send(context.Background(), created.ID, "alice", "first"); err == nil {
+	if _, err := service.Send(context.Background(), created.ID, "alice", testRequestID(t), "first"); err == nil {
 		t.Fatal("runner error was not returned")
 	}
 	runner.mu.Lock()
 	runner.err = nil
 	runner.reply = Reply{Answer: "recovered", Assessment: "explains"}
 	runner.mu.Unlock()
-	if _, err := service.Send(context.Background(), created.ID, "alice", "retry"); err != nil {
+	if _, err := service.Send(context.Background(), created.ID, "alice", testRequestID(t), "retry"); err != nil {
 		t.Fatalf("retry after runner error: %v", err)
 	}
 }
@@ -277,7 +287,7 @@ func TestServiceRejectsOversizedAnalysisReference(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = service.Create(AnalysisRef{JobID: strings.Repeat("x", maxJobIDBytes+1), BuildID: "1", TestName: "Test"}, "alice")
+	_, err = service.Create(AnalysisRef{JobID: strings.Repeat("x", maxJobIDBytes+1), BuildID: "1", TestName: "Test"}, "alice", testRequestID(t))
 	if !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("oversized reference error = %v", err)
 	}
@@ -298,13 +308,14 @@ func TestServiceResolvesStrongJUnitIdentity(t *testing.T) {
 
 	if _, err := service.Create(AnalysisRef{
 		JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster", JUnitFile: "junit.xml",
-	}, "alice"); !errors.Is(err, ErrInvalidRequest) {
+	}, "alice", testRequestID(t)); !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("weak identity Create error = %v", err)
 	}
 	created, err := service.Create(AnalysisRef{
 		JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster",
 		SuiteName: "suite", ClassName: "second", JUnitFile: "junit.xml",
-	}, "alice")
+	}, "alice", testRequestID(t))
+
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -327,7 +338,7 @@ func TestServiceExpiryReleasesCapacity(t *testing.T) {
 		t.Fatal(err)
 	}
 	ref := AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}
-	created, err := service.Create(ref, "alice")
+	created, err := service.Create(ref, "alice", testRequestID(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,10 +346,10 @@ func TestServiceExpiryReleasesCapacity(t *testing.T) {
 	if _, err := service.Get(created.ID, "alice"); !errors.Is(err, ErrSessionNotFound) {
 		t.Fatalf("Get at expiry error = %v", err)
 	}
-	if _, err := service.Send(context.Background(), created.ID, "alice", "expired"); !errors.Is(err, ErrSessionNotFound) {
+	if _, err := service.Send(context.Background(), created.ID, "alice", testRequestID(t), "expired"); !errors.Is(err, ErrSessionNotFound) {
 		t.Fatalf("Send at expiry error = %v", err)
 	}
-	if _, err := service.Create(ref, "alice"); err != nil {
+	if _, err := service.Create(ref, "alice", testRequestID(t)); err != nil {
 		t.Fatalf("expired session did not release capacity: %v", err)
 	}
 }
@@ -361,13 +372,13 @@ func TestServiceBusySessionCompletesAcrossExpiry(t *testing.T) {
 		t.Fatal(err)
 	}
 	ref := AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}
-	created, err := service.Create(ref, "alice")
+	created, err := service.Create(ref, "alice", testRequestID(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
 	go func() {
-		_, err := service.Send(context.Background(), created.ID, "alice", "in flight")
+		_, err := service.Send(context.Background(), created.ID, "alice", testRequestID(t), "in flight")
 		done <- err
 	}()
 	<-runner.started
@@ -375,7 +386,7 @@ func TestServiceBusySessionCompletesAcrossExpiry(t *testing.T) {
 	if _, err := service.Get(created.ID, "alice"); err != nil {
 		t.Fatalf("busy expired session should remain readable: %v", err)
 	}
-	if _, err := service.Create(ref, "alice"); !errors.Is(err, ErrSessionLimit) {
+	if _, err := service.Create(ref, "alice", testRequestID(t)); !errors.Is(err, ErrSessionLimit) {
 		t.Fatalf("busy expired session should retain capacity, got %v", err)
 	}
 	close(runner.release)
@@ -385,7 +396,7 @@ func TestServiceBusySessionCompletesAcrossExpiry(t *testing.T) {
 	if _, err := service.Get(created.ID, "alice"); !errors.Is(err, ErrSessionNotFound) {
 		t.Fatalf("completed expired session was not evicted: %v", err)
 	}
-	if _, err := service.Create(ref, "alice"); err != nil {
+	if _, err := service.Create(ref, "alice", testRequestID(t)); err != nil {
 		t.Fatalf("completed expired session did not release capacity: %v", err)
 	}
 }
@@ -400,7 +411,8 @@ func TestServiceResolvesTrimmedPublishedTestName(t *testing.T) {
 	}
 	created, err := service.Create(AnalysisRef{
 		JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster",
-	}, "alice")
+	}, "alice", testRequestID(t))
+
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -417,16 +429,16 @@ func TestServiceRunnerFailuresReachTurnLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	created, err := service.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice")
+	created, err := service.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", testRequestID(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 2; i++ {
-		if _, err := service.Send(context.Background(), created.ID, "alice", "retry"); err == nil || errors.Is(err, ErrTurnLimit) {
+		if _, err := service.Send(context.Background(), created.ID, "alice", testRequestID(t), "retry"); err == nil || errors.Is(err, ErrTurnLimit) {
 			t.Fatalf("attempt %d error = %v", i+1, err)
 		}
 	}
-	if _, err := service.Send(context.Background(), created.ID, "alice", "retry again"); !errors.Is(err, ErrTurnLimit) {
+	if _, err := service.Send(context.Background(), created.ID, "alice", testRequestID(t), "retry again"); !errors.Is(err, ErrTurnLimit) {
 		t.Fatalf("third attempt error = %v", err)
 	}
 	runner.mu.Lock()
@@ -434,5 +446,203 @@ func TestServiceRunnerFailuresReachTurnLimit(t *testing.T) {
 	runner.mu.Unlock()
 	if attempts != 2 {
 		t.Fatalf("runner attempts = %d, want 2", attempts)
+	}
+}
+
+func TestServicePersistsSessionsAndIdempotentResults(t *testing.T) {
+	dir := t.TempDir()
+	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
+	ref := AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}
+	firstRunner := &fakeRunner{reply: Reply{Answer: "answer", Assessment: "supports"}}
+	first, err := NewService(dir, firstRunner, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := first.Create(ref, "alice", "create-persist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.Send(context.Background(), created.ID, "alice", "turn-persist", "question"); err != nil {
+		t.Fatal(err)
+	}
+
+	secondRunner := &fakeRunner{reply: Reply{Answer: "duplicate", Assessment: "explains"}}
+	second, err := NewService(dir, secondRunner, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := second.Get(created.ID, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Messages) != 2 || got.Messages[0].RequestID != "turn-persist" || got.Messages[1].Content != "answer" {
+		t.Fatalf("persisted messages = %+v", got.Messages)
+	}
+	recreated, err := second.Create(ref, "alice", "create-persist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recreated.ID != created.ID {
+		t.Fatalf("idempotent create ID = %q, want %q", recreated.ID, created.ID)
+	}
+	if _, err := second.Create(AnalysisRef{JobID: "other", BuildID: "123", TestName: "TestCluster"}, "alice", "create-persist"); !errors.Is(err, ErrIdempotencyConflict) {
+		t.Fatalf("create key conflict error = %v", err)
+	}
+	replayed, err := second.Send(context.Background(), created.ID, "alice", "turn-persist", "question")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replayed.Messages) != 2 {
+		t.Fatalf("replayed messages = %+v", replayed.Messages)
+	}
+	secondRunner.mu.Lock()
+	calls := len(secondRunner.turns)
+	secondRunner.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("replayed request ran model %d times", calls)
+	}
+	info, err := os.Stat(filepath.Join(dir, ".analysis-chat", stateFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("state mode = %o, want 600", got)
+	}
+}
+
+func TestServiceSerializesTurnsAcrossInstances(t *testing.T) {
+	dir := t.TempDir()
+	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
+	runner := &fakeRunner{
+		reply:   Reply{Answer: "answer", Assessment: "supports"},
+		started: make(chan struct{}, 1), release: make(chan struct{}),
+	}
+	first, err := NewService(dir, runner, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewService(dir, runner, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := first.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", "create-shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := first.Send(context.Background(), created.ID, "alice", "turn-shared", "question")
+		done <- err
+	}()
+	<-runner.started
+	if _, err := second.Send(context.Background(), created.ID, "alice", "turn-shared", "question"); !errors.Is(err, ErrSessionBusy) {
+		t.Fatalf("same request while active error = %v", err)
+	}
+	if _, err := second.Send(context.Background(), created.ID, "alice", "turn-other", "other question"); !errors.Is(err, ErrSessionBusy) {
+		t.Fatalf("different request while active error = %v", err)
+	}
+	close(runner.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	got, err := second.Send(context.Background(), created.ID, "alice", "turn-shared", "question")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Messages) != 2 {
+		t.Fatalf("messages = %+v", got.Messages)
+	}
+	runner.mu.Lock()
+	calls := len(runner.turns)
+	runner.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("runner calls = %d, want 1", calls)
+	}
+}
+
+func TestServicePersistsFailedRequestOutcome(t *testing.T) {
+	dir := t.TempDir()
+	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
+	failing := &fakeRunner{err: errors.New("model unavailable")}
+	first, err := NewService(dir, failing, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := first.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", "create-failure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.Send(context.Background(), created.ID, "alice", "turn-failure", "question"); err == nil {
+		t.Fatal("failed turn returned nil error")
+	}
+
+	succeeding := &fakeRunner{reply: Reply{Answer: "answer", Assessment: "supports"}}
+	second, err := NewService(dir, succeeding, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.Send(context.Background(), created.ID, "alice", "turn-failure", "question"); !errors.Is(err, ErrRequestFailed) {
+		t.Fatalf("replayed failed request error = %v", err)
+	}
+	if _, err := second.Send(context.Background(), created.ID, "alice", "turn-failure", "different"); !errors.Is(err, ErrIdempotencyConflict) {
+		t.Fatalf("message key conflict error = %v", err)
+	}
+	if _, err := second.Send(context.Background(), created.ID, "alice", "turn-retry", "question"); err != nil {
+		t.Fatal(err)
+	}
+	succeeding.mu.Lock()
+	calls := len(succeeding.turns)
+	succeeding.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("runner calls = %d, want 1 explicit retry", calls)
+	}
+}
+
+func TestServiceRecoversExpiredTurnLease(t *testing.T) {
+	dir := t.TempDir()
+	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
+	var nowNanos atomic.Int64
+	start := time.Date(2026, 7, 23, 13, 0, 0, 0, time.UTC)
+	nowNanos.Store(start.UnixNano())
+	now := func() time.Time { return time.Unix(0, nowNanos.Load()) }
+	runner := &fakeRunner{
+		reply:   Reply{Answer: "answer", Assessment: "supports"},
+		started: make(chan struct{}, 1), release: make(chan struct{}),
+	}
+	opts := Options{Now: now, SessionTTL: time.Hour, TurnLeaseTTL: time.Minute}
+	first, err := NewService(dir, runner, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewService(dir, runner, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := first.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", "create-lease")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := first.Send(context.Background(), created.ID, "alice", "turn-stale", "question")
+		done <- err
+	}()
+	<-runner.started
+	nowNanos.Store(start.Add(2 * time.Minute).UnixNano())
+	if _, err := second.Send(context.Background(), created.ID, "alice", "turn-stale", "question"); !errors.Is(err, ErrRequestOutcomeUnknown) {
+		t.Fatalf("expired lease replay error = %v", err)
+	}
+	close(runner.release)
+	if err := <-done; !errors.Is(err, ErrRequestOutcomeUnknown) {
+		t.Fatalf("expired lease completion error = %v", err)
+	}
+	if _, err := second.Send(context.Background(), created.ID, "alice", "turn-after-stale", "question"); err != nil {
+		t.Fatal(err)
+	}
+	runner.mu.Lock()
+	calls := len(runner.turns)
+	runner.mu.Unlock()
+	if calls != 2 {
+		t.Fatalf("runner calls = %d, want abandoned plus explicit retry", calls)
 	}
 }

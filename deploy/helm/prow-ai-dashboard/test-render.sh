@@ -341,6 +341,11 @@ helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --show-only templates/server-deployment.yaml > "$tmp/chat-server.yaml"
 grep -A1 -Fq 'name: ANALYSIS_CHAT_ENABLED' "$tmp/chat-server.yaml"
 grep -Fq 'value: "true"' "$tmp/chat-server.yaml"
+grep -Fq 'name: ANALYSIS_CHAT_STATE_DIR' "$tmp/chat-server.yaml"
+grep -Fq 'value: "/data/.analysis-chat"' "$tmp/chat-server.yaml"
+grep -Fq 'name: ANALYSIS_CHAT_SESSION_TTL' "$tmp/chat-server.yaml"
+grep -Fq 'value: "2h"' "$tmp/chat-server.yaml"
+grep -Fq 'readOnly: false' "$tmp/chat-server.yaml"
 grep -Fq -- '- -project-dir=/config' "$tmp/chat-server.yaml"
 grep -Fq 'name: project' "$tmp/chat-server.yaml"
 if grep -Fq 'name: ACTIONS_ENABLED' "$tmp/chat-server.yaml" || grep -Fq 'name: BOT_TOKEN' "$tmp/chat-server.yaml"; then
@@ -378,7 +383,7 @@ grep -A5 -Fq 'name: AUTH_PROXY_SECRET' "$tmp/chat-existing-auth.yaml"
 grep -Fq 'name: proxy-auth' "$tmp/chat-existing-auth.yaml"
 grep -Fq 'optional: true' "$tmp/chat-existing-auth.yaml"
 
-if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set server.chat.enabled=true \
   --set server.replicaCount=2 \
   --set server.actions.mode=proxy \
@@ -386,11 +391,22 @@ if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set ai.enabled=true \
   --set ai.token=test-token \
   --set ai.endpoint=http://model.test/v1/chat/completions \
-  --set ai.model=test-model > "$tmp/chat-multiple-replicas.yaml" 2>&1; then
-  echo 'server.chat.enabled accepted multiple replicas' >&2
+  --set ai.model=test-model > "$tmp/chat-multiple-replicas.yaml"
+grep -Fq 'replicas: 2' "$tmp/chat-multiple-replicas.yaml"
+grep -Fq 'name: ANALYSIS_CHAT_STATE_DIR' "$tmp/chat-multiple-replicas.yaml"
+
+if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.chat.enabled=true \
+  --set server.chat.maxSessions=2 \
+  --set server.chat.maxSessionsPerOwner=3 \
+  --set server.actions.mode=proxy \
+  --set server.actions.admins[0]=alice \
+  --set ai.enabled=true \
+  --set ai.token=test-token > "$tmp/chat-invalid-capacity.yaml" 2>&1; then
+  echo 'chat accepted a per-owner session limit above the total' >&2
   exit 1
 fi
-grep -Fq 'server.chat.enabled requires server.replicaCount=1' "$tmp/chat-multiple-replicas.yaml"
+grep -Fq 'server.chat.maxSessionsPerOwner cannot exceed server.chat.maxSessions' "$tmp/chat-invalid-capacity.yaml"
 
 if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set server.chat.enabled=true > "$tmp/chat-without-ai.yaml" 2>&1; then

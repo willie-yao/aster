@@ -17,12 +17,13 @@ import (
 
 // AnalysisChatRunner manages authenticated conversations about published analyses.
 type AnalysisChatRunner interface {
-	Create(analysischat.AnalysisRef, string) (analysischat.SessionView, error)
+	Create(analysischat.AnalysisRef, string, string) (analysischat.SessionView, error)
 	Get(string, string) (analysischat.SessionView, error)
-	Send(context.Context, string, string, string) (analysischat.SessionView, error)
+	Send(context.Context, string, string, string, string) (analysischat.SessionView, error)
 }
 
 const (
+	analysisChatIdempotencyHeader     = "Idempotency-Key"
 	defaultAnalysisChatTimeout        = 2 * time.Minute
 	maxAnalysisChatReferenceBodyBytes = 128 << 10
 	maxAnalysisChatMessageBodyBytes   = 32 << 10
@@ -40,7 +41,12 @@ func createAnalysisChatSessionHandler(run AnalysisChatRunner) http.Handler {
 			http.Error(w, "invalid analysis reference", http.StatusBadRequest)
 			return
 		}
-		session, err := run.Create(ref, identity.Login)
+		requestID := strings.TrimSpace(r.Header.Get(analysisChatIdempotencyHeader))
+		if requestID == "" {
+			http.Error(w, "missing idempotency key", http.StatusBadRequest)
+			return
+		}
+		session, err := run.Create(ref, identity.Login, requestID)
 		if err != nil {
 			writeAnalysisChatError(w, "create", identity.Login, err)
 			return
@@ -81,7 +87,12 @@ func sendAnalysisChatMessageHandler(timeout time.Duration, run AnalysisChatRunne
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
-		session, err := run.Send(ctx, r.PathValue("id"), identity.Login, body.Message)
+		requestID := strings.TrimSpace(r.Header.Get(analysisChatIdempotencyHeader))
+		if requestID == "" {
+			http.Error(w, "missing idempotency key", http.StatusBadRequest)
+			return
+		}
+		session, err := run.Send(ctx, r.PathValue("id"), identity.Login, requestID, body.Message)
 		if err != nil {
 			writeAnalysisChatError(w, r.PathValue("id"), identity.Login, err)
 			return
@@ -118,7 +129,8 @@ func writeAnalysisChatError(w http.ResponseWriter, id, login string, err error) 
 		status, message = http.StatusNotFound, "analysis not found"
 	case errors.Is(err, analysischat.ErrSessionNotFound):
 		status, message = http.StatusNotFound, "analysis chat session not found"
-	case errors.Is(err, analysischat.ErrAnalysisChanged), errors.Is(err, analysischat.ErrSessionBusy):
+	case errors.Is(err, analysischat.ErrAnalysisChanged), errors.Is(err, analysischat.ErrSessionBusy),
+		errors.Is(err, analysischat.ErrIdempotencyConflict), errors.Is(err, analysischat.ErrRequestOutcomeUnknown):
 		status, message = http.StatusConflict, err.Error()
 	case errors.Is(err, analysischat.ErrInvalidRequest):
 		status, message = http.StatusBadRequest, err.Error()

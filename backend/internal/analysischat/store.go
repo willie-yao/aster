@@ -1,0 +1,285 @@
+package analysischat
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"golang.org/x/sys/unix"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+)
+
+const (
+	stateVersion    = 1
+	stateFileName   = "sessions.json"
+	stateLockName   = "sessions.lock"
+	maxStateBytes   = 64 << 20
+	lockRetryPeriod = 10 * time.Millisecond
+)
+
+type persistedState struct {
+	Version  int                          `json:"version"`
+	Sessions map[string]*persistedSession `json:"sessions"`
+}
+
+type persistedSession struct {
+	View              SessionView                 `json:"view"`
+	Owner             string                      `json:"owner"`
+	Resolved          persistedResolvedAnalysis   `json:"resolved"`
+	Turns             int                         `json:"turns"`
+	ExpiresAt         time.Time                   `json:"expires_at"`
+	CreateRequestID   string                      `json:"create_request_id"`
+	CreateRequestHash string                      `json:"create_request_hash"`
+	Requests          map[string]persistedRequest `json:"requests,omitempty"`
+	Active            *persistedActiveTurn        `json:"active,omitempty"`
+}
+
+type persistedResolvedAnalysis struct {
+	Ref         AnalysisRef      `json:"ref"`
+	JobID       string           `json:"job_id"`
+	BuildPrefix string           `json:"build_prefix"`
+	Build       models.BuildInfo `json:"build"`
+	TestCase    models.TestCase  `json:"test_case"`
+}
+
+type persistedRequest struct {
+	QuestionHash string `json:"question_hash"`
+	Status       string `json:"status"`
+	FailureKind  string `json:"failure_kind,omitempty"`
+}
+
+type persistedActiveTurn struct {
+	RequestID string    `json:"request_id"`
+	LeaseID   string    `json:"lease_id"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+const (
+	requestPending   = "pending"
+	requestSucceeded = "succeeded"
+	requestFailed    = "failed"
+	requestUnknown   = "unknown"
+
+	failureModel     = "model"
+	failureTimeout   = "timeout"
+	failureCancelled = "cancelled"
+)
+
+type sessionStore struct {
+	statePath   string
+	lockPath    string
+	lockTimeout time.Duration
+	local       chan struct{}
+}
+
+func newSessionStore(dir string, lockTimeout time.Duration) (*sessionStore, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("creating analysis chat state directory: %w", err)
+	}
+	_ = os.Chmod(dir, 0o700)
+	return &sessionStore{
+		statePath:   filepath.Join(dir, stateFileName),
+		lockPath:    filepath.Join(dir, stateLockName),
+		lockTimeout: lockTimeout,
+		local:       make(chan struct{}, 1),
+	}, nil
+}
+
+func (s *sessionStore) context() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), s.lockTimeout)
+}
+
+func (s *sessionStore) validate() error {
+	ctx, cancel := s.context()
+	defer cancel()
+	return s.update(ctx, func(*persistedState) (bool, error) { return false, nil })
+}
+
+// update serializes a short state transition across local goroutines and server
+// replicas. The callback's changes are saved even when it returns an operation
+// error, so cleanup and terminal request outcomes are not lost.
+func (s *sessionStore) update(ctx context.Context, fn func(*persistedState) (bool, error)) error {
+	select {
+	case s.local <- struct{}{}:
+		defer func() { <-s.local }()
+	case <-ctx.Done():
+		return fmt.Errorf("locking local analysis chat state: %w", ctx.Err())
+	}
+
+	lock, err := os.OpenFile(s.lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return fmt.Errorf("opening analysis chat state lock: %w", err)
+	}
+	defer lock.Close()
+	_ = os.Chmod(s.lockPath, 0o600)
+
+	if err := lockFile(ctx, lock); err != nil {
+		return err
+	}
+	defer func() { _ = unix.Flock(int(lock.Fd()), unix.LOCK_UN) }()
+
+	state, err := s.load()
+	if err != nil {
+		return err
+	}
+	changed, opErr := fn(state)
+	if changed {
+		if err := writePrivateJSON(s.statePath, state); err != nil {
+			return fmt.Errorf("writing analysis chat state: %w", err)
+		}
+	}
+	return opErr
+}
+
+func lockFile(ctx context.Context, file *os.File) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("locking analysis chat state: %w", err)
+		}
+		err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, unix.EWOULDBLOCK) && !errors.Is(err, unix.EAGAIN) {
+			return fmt.Errorf("locking analysis chat state: %w", err)
+		}
+		timer := time.NewTimer(lockRetryPeriod)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("locking analysis chat state: %w", ctx.Err())
+		case <-timer.C:
+		}
+	}
+}
+
+func (s *sessionStore) load() (*persistedState, error) {
+	file, err := os.Open(s.statePath)
+	if errors.Is(err, os.ErrNotExist) {
+		return freshPersistedState(), nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("opening analysis chat state: %w", err)
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, maxStateBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("reading analysis chat state: %w", err)
+	}
+	if len(data) > maxStateBytes {
+		return nil, fmt.Errorf("analysis chat state exceeds %d bytes", maxStateBytes)
+	}
+	var state persistedState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return nil, fmt.Errorf("decoding analysis chat state: %w", err)
+	}
+	if state.Version != stateVersion {
+		return nil, fmt.Errorf("unsupported analysis chat state version %d", state.Version)
+	}
+	if state.Sessions == nil {
+		state.Sessions = map[string]*persistedSession{}
+	}
+	return &state, nil
+}
+
+func freshPersistedState() *persistedState {
+	return &persistedState{Version: stateVersion, Sessions: map[string]*persistedSession{}}
+}
+
+func writePrivateJSON(path string, value any) error {
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	// Some RWX filesystems use mount-level modes and reject chmod.
+	_ = tmp.Chmod(0o600)
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	_ = tmp.Sync()
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
+}
+
+func persistResolved(resolved resolvedAnalysis) persistedResolvedAnalysis {
+	build := models.BuildInfo{
+		BuildID: resolved.build.BuildID,
+		JobName: resolved.build.JobName,
+		WebURL:  resolved.build.WebURL,
+	}
+	testCase := models.TestCase{
+		Name:           resolved.testCase.Name,
+		SuiteName:      resolved.testCase.SuiteName,
+		ClassName:      resolved.testCase.ClassName,
+		JUnitFile:      resolved.testCase.JUnitFile,
+		FailureMessage: clampPersistedText(resolved.testCase.FailureMessage, 12<<10),
+		FailureBody:    clampPersistedText(resolved.testCase.FailureBody, 8<<10),
+	}
+	if analysis := resolved.testCase.AIAnalysis; analysis != nil {
+		testCase.AIAnalysis = &models.AIAnalysis{
+			GeneratedAt:   analysis.GeneratedAt,
+			RootCause:     clampPersistedText(analysis.RootCause, 32<<10),
+			Severity:      analysis.Severity,
+			SuggestedFix:  clampPersistedText(analysis.SuggestedFix, 16<<10),
+			RelevantFiles: boundedPersistedFiles(analysis.RelevantFiles),
+		}
+	}
+	return persistedResolvedAnalysis{
+		Ref: resolved.ref, JobID: resolved.jobID, BuildPrefix: resolved.buildPrefix,
+		Build: build, TestCase: testCase,
+	}
+}
+
+func boundedPersistedFiles(files []string) []string {
+	if len(files) > 50 {
+		files = files[:50]
+	}
+	out := make([]string, 0, len(files))
+	for _, file := range files {
+		file = strings.TrimSpace(file)
+		if file == "" {
+			continue
+		}
+		if len(file) > 1024 {
+			file = file[:1024]
+		}
+		out = append(out, file)
+	}
+	return out
+}
+
+func clampPersistedText(value string, maxBytes int) string {
+	value = strings.TrimSpace(value)
+	if maxBytes <= 0 || len(value) <= maxBytes {
+		return value
+	}
+	head := maxBytes * 3 / 4
+	tail := maxBytes - head
+	return strings.ToValidUTF8(value[:head], "") + "\n...[content elided]...\n" + strings.ToValidUTF8(value[len(value)-tail:], "")
+}
+
+func restoreResolved(resolved persistedResolvedAnalysis) resolvedAnalysis {
+	return resolvedAnalysis{
+		ref:         resolved.Ref,
+		jobID:       resolved.JobID,
+		buildPrefix: resolved.BuildPrefix,
+		build:       cloneBuildInfo(resolved.Build),
+		testCase:    cloneTestCase(resolved.TestCase),
+	}
+}
