@@ -189,3 +189,26 @@ func TestServiceFixCandidateRejectsTerminalSourceFailures(t *testing.T) {
 		})
 	}
 }
+
+func TestServiceFixCandidateRejectsSameTimestampAnalysisContentReplacement(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		mutate func(*models.AIAnalysis)
+	}{
+		{name: "severity", mutate: func(analysis *models.AIAnalysis) { analysis.Severity = "Low" }},
+		{name: "relevant files", mutate: func(analysis *models.AIAnalysis) { analysis.RelevantFiles = []string{"different.go"} }},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			service, session, chatRequestID, _ := fixCandidateReadyService(t)
+			detail := testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-24T12:00:00Z"))
+			testCase.mutate(detail.Runs[0].TestCases[0].AIAnalysis)
+			detail.PatternAnalyses = []models.PatternAnalysis{fixCandidatePattern()}
+			writeJobDetail(t, service.dataDir, detail)
+			if _, err := service.FixCandidate(
+				session.ID, "Alice", chatRequestID, fixCandidatePattern().ID, "",
+			); !errors.Is(err, ErrAnalysisChanged) {
+				t.Fatalf("same-timestamp replacement error = %v", err)
+			}
+		})
+	}
+}

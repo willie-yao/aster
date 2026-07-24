@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -123,11 +125,16 @@ func TestWriteChatFixErrorMapping(t *testing.T) {
 		{analysischat.ErrRequestPending, http.StatusConflict},
 		{analysischat.ErrInvalidRequest, http.StatusBadRequest},
 		{context.DeadlineExceeded, http.StatusGatewayTimeout},
+		{fmt.Errorf("%w: no code change", actions.ErrPreviewRejected), http.StatusUnprocessableEntity},
+		{errors.New("opening /private/chat/state.json: denied"), http.StatusInternalServerError},
 	} {
 		recorder := httptest.NewRecorder()
 		writeChatFixError(recorder, "session", "alice", testCase.err)
 		if recorder.Code != testCase.want {
 			t.Errorf("error %v status = %d, want %d", testCase.err, recorder.Code, testCase.want)
+		}
+		if testCase.want == http.StatusInternalServerError && strings.Contains(recorder.Body.String(), "/private/chat") {
+			t.Fatalf("private path leaked: %q", recorder.Body.String())
 		}
 	}
 }

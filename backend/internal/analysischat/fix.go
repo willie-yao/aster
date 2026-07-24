@@ -9,12 +9,21 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 )
 
+// AnalysisSnapshot is the complete published analysis context shown to chat.
+type AnalysisSnapshot struct {
+	GeneratedAt   string
+	RootCause     string
+	Severity      string
+	SuggestedFix  string
+	RelevantFiles []string
+}
+
 // FixCandidate is one selected successful answer and optional source result.
 type FixCandidate struct {
 	SessionID         string
 	RequestID         string
 	Analysis          AnalysisRef
-	Original          Revision
+	Original          AnalysisSnapshot
 	AssistantAnswer   string
 	ProposedRevision  *Revision
 	ArtifactCitations []Citation
@@ -63,13 +72,10 @@ func (s *Service) FixCandidate(sessionID, owner, requestID, patternID, sourceReq
 			return changed, ErrAnalysisNotFound
 		}
 		candidate = FixCandidate{
-			SessionID: current.View.ID,
-			RequestID: requestID,
-			Analysis:  current.View.Analysis,
-			Original: Revision{
-				RootCause:    strings.TrimSpace(analysis.RootCause),
-				SuggestedFix: strings.TrimSpace(analysis.SuggestedFix),
-			},
+			SessionID:         current.View.ID,
+			RequestID:         requestID,
+			Analysis:          current.View.Analysis,
+			Original:          analysisSnapshot(analysis),
 			AssistantAnswer:   strings.TrimSpace(answer.Content),
 			ProposedRevision:  cloneRevision(answer.ProposedRevision),
 			ArtifactCitations: slices.Clone(answer.Citations),
@@ -107,8 +113,7 @@ func (s *Service) FixCandidate(sessionID, owner, requestID, patternID, sourceReq
 		return FixCandidate{}, err
 	}
 	analysis := resolved.testCase.AIAnalysis
-	if analysis == nil || strings.TrimSpace(analysis.RootCause) != candidate.Original.RootCause ||
-		strings.TrimSpace(analysis.SuggestedFix) != candidate.Original.SuggestedFix {
+	if analysis == nil || !sameAnalysisSnapshot(candidate.Original, analysisSnapshot(analysis)) {
 		return FixCandidate{}, ErrAnalysisChanged
 	}
 	for _, pattern := range resolved.patterns {
@@ -118,6 +123,25 @@ func (s *Service) FixCandidate(sessionID, owner, requestID, patternID, sourceReq
 		}
 	}
 	return FixCandidate{}, ErrPatternNotFound
+}
+
+func analysisSnapshot(analysis *models.AIAnalysis) AnalysisSnapshot {
+	if analysis == nil {
+		return AnalysisSnapshot{}
+	}
+	return AnalysisSnapshot{
+		GeneratedAt:   strings.TrimSpace(analysis.GeneratedAt),
+		RootCause:     strings.TrimSpace(analysis.RootCause),
+		Severity:      strings.TrimSpace(analysis.Severity),
+		SuggestedFix:  strings.TrimSpace(analysis.SuggestedFix),
+		RelevantFiles: slices.Clone(analysis.RelevantFiles),
+	}
+}
+
+func sameAnalysisSnapshot(left, right AnalysisSnapshot) bool {
+	return left.GeneratedAt == right.GeneratedAt && left.RootCause == right.RootCause &&
+		left.Severity == right.Severity && left.SuggestedFix == right.SuggestedFix &&
+		slices.Equal(left.RelevantFiles, right.RelevantFiles)
 }
 
 func assistantResponse(messages []Message, requestID string) *Message {

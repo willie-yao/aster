@@ -33,6 +33,9 @@ import (
 // ErrNotFound means no pattern in the published data matched the given id.
 var ErrNotFound = errors.New("failure not found")
 
+// ErrPreviewRejected means generation safely declined an actionable fix preview.
+var ErrPreviewRejected = errors.New("fix preview rejected")
+
 // ErrPatternMismatch means the selected recurring pattern does not include the chat analysis.
 var ErrPatternMismatch = errors.New("pattern does not include selected analysis")
 
@@ -354,7 +357,7 @@ func safeFixPreviewError(err error) error {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
-	return fmt.Errorf("%s", safeReason(err.Error()))
+	return fmt.Errorf("%w: %s", ErrPreviewRejected, safeReason(err.Error()))
 }
 
 const gfKind = "fix"

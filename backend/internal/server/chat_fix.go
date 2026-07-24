@@ -77,7 +77,7 @@ func previewChatFixHandler(timeout time.Duration, run ChatFixRunner) http.Handle
 }
 
 func writeChatFixError(w http.ResponseWriter, sessionID, login string, err error) {
-	status, message := http.StatusUnprocessableEntity, "fix proposal could not be generated"
+	status, message := http.StatusInternalServerError, "fix proposal could not be generated"
 	switch {
 	case errors.Is(err, actions.ErrNotFound), errors.Is(err, analysischat.ErrAnalysisNotFound),
 		errors.Is(err, analysischat.ErrPatternNotFound), errors.Is(err, analysischat.ErrSessionNotFound),
@@ -100,8 +100,12 @@ func writeChatFixError(w http.ResponseWriter, sessionID, login string, err error
 	case errors.Is(err, sourceinvestigation.ErrInvalidResult), errors.Is(err, sourceinvestigation.ErrUnavailable),
 		errors.Is(err, analysischat.ErrRequestFailed):
 		status, message = http.StatusUnprocessableEntity, "selected source investigation is not usable"
-	default:
-		message = err.Error()
+	case errors.Is(err, actions.ErrPreviewRejected):
+		status = http.StatusUnprocessableEntity
+		message = strings.TrimSpace(strings.TrimPrefix(err.Error(), actions.ErrPreviewRejected.Error()+":"))
+		if message == "" {
+			message = "fix proposal could not be generated"
+		}
 	}
 	if status >= 500 || status == http.StatusUnprocessableEntity {
 		log.Printf("chat fix preview failed for %s (by %s): %v", sessionID, login, err)

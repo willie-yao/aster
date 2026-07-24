@@ -234,7 +234,7 @@ func TestSafeFixPreviewErrorPreservesContextSentinels(t *testing.T) {
 		}
 	}
 	got := safeFixPreviewError(errors.New("chat returned 500: private provider body"))
-	if strings.Contains(got.Error(), "private provider body") {
-		t.Fatalf("provider body leaked: %v", got)
+	if !errors.Is(got, ErrPreviewRejected) || strings.Contains(got.Error(), "private provider body") {
+		t.Fatalf("provider body leaked or rejection untyped: %v", got)
 	}
 }
