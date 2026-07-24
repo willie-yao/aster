@@ -27,7 +27,7 @@ remains identical.
 | `GET /api/analysis-traces` | Admin-gated private trace snapshot. Exact filters: `job_id`, `build_id`, `test_name`, `outcome`, and `response_id`. |
 | `GET /api/analysis-traces/download` | Admin-gated attachment form of the same filtered trace snapshot. |
 | `POST /api/analysis-chat/sessions` | Start an owner-bound conversation for one published test analysis. |
-| `GET /api/analysis-chat/sessions/{id}` | Read the owning admin's current in-memory conversation. |
+| `GET /api/analysis-chat/sessions/{id}` | Read the owning admin's current persisted conversation. |
 | `POST /api/analysis-chat/sessions/{id}/messages` | Ask one bounded follow-up question about the selected analysis. |
 | `GET /healthz` | Liveness and readiness probe. |
 | `GET /` | The built SPA, when `-static-dir` is set, with deep-link fallback to `index.html`. |
@@ -65,7 +65,8 @@ advertise or serve the API. In the Helm chart, set `server.chat.enabled=true`
 alongside `ai.enabled=true`; authentication uses the settings under
 `server.actions`, but write actions remain disabled.
 
-Create a session by posting the selected analysis identity:
+Create a session by posting the selected analysis identity with a unique
+`Idempotency-Key` header:
 
 ```json
 {
@@ -85,24 +86,52 @@ optional, but including it prevents a conversation from silently attaching to a
 newer analysis after the page was loaded. A mismatch returns `409 Conflict`.
 
 Post `{"message":"What evidence supports this?"}` to the session's `messages`
-endpoint. The response contains the full transcript. Assistant messages include
+endpoint with a new `Idempotency-Key` for that question. Retrying either POST
+with the same key and the same body returns the original session state without
+creating another session or model turn. Reusing a key for different input
+returns `409 Conflict`.
+
+The response contains the full transcript. User messages include the accepted
+request ID so the frontend can reconcile a response lost after the server
+committed it. Assistant messages include
 an `assessment` of `explains`, `supports`, `challenges`, or `inconclusive`, plus
 verified artifact paths and an optional proposed revision. A proposed revision
 does not alter `jobs/*.json` or the published analysis.
 
-Sessions are in memory, bound to the authenticated login, limited to ten
-conversation-turn attempts including failed turns, and expire after two hours.
-They require one server replica; the Helm chart rejects multiple replicas until
-sessions use shared persistence. The process also caps global and per-owner session
-counts. Restarting the server clears them. An in-flight turn may finish after its
-session expires; the next access removes that session and releases its capacity.
-Persistence, streaming, cancellation, and deployment-specific rate limits are
-separate operational additions.
+Sessions are persisted under `ANALYSIS_CHAT_STATE_DIR`, bound to the
+authenticated login, limited to ten admitted attempts including failed turns,
+and expire after two hours by default. The state file is private and excluded
+from `/data/*`. Replicas coordinate short state transitions with an advisory
+lock on the shared filesystem, while model calls run without holding that lock.
+The shared RWX volume must support advisory file locking, atomic rename, and file and directory synchronization.
+The persisted file contains private transcripts and selected failure context, so
+volume access and backups must be treated as operator-private data.
 
-One model turn defaults to a two-minute timeout. Set `ANALYSIS_CHAT_TIMEOUT` to
-apply a shorter HTTP bound. The agent uses only the configured read-only
-filesystem and Kubernetes artifact tools. It has no shell, repository write, or
-GitHub action capability.
+Application-generated terminal errors carry a private outcome header so the
+frontend can distinguish them from an ingress-generated `502` or `504` after a
+committed response. An in-flight turn carries a lease longer than the HTTP model
+timeout. If a pod
+dies before recording the result, another replica marks that request outcome
+unknown instead of running the same idempotency key twice. The client reloads
+the authoritative session before allowing an explicit retry. Startup cleanup,
+a lifecycle-bound periodic cleanup loop, and request-time cleanup remove
+expired sessions from the persisted file and release global and per-owner
+capacity.
+
+Operational settings:
+
+| Environment variable | Default | Purpose |
+| --- | --- | --- |
+| `ANALYSIS_CHAT_STATE_DIR` | `<data-dir>/.analysis-chat` | Private persisted session state and lock file. A path beneath the public data root must use a dot-prefixed top-level directory. |
+| `ANALYSIS_CHAT_SESSION_TTL` | `2h` | Conversation retention. |
+| `ANALYSIS_CHAT_MAX_SESSIONS` | `128` | Deployment-wide live-session cap. |
+| `ANALYSIS_CHAT_MAX_SESSIONS_PER_OWNER` | `8` | Per-login live-session cap. |
+| `ANALYSIS_CHAT_TIMEOUT` | `2m` | Per-turn HTTP and model bound; may only be shortened. |
+
+The agent uses only the configured read-only filesystem and Kubernetes artifact
+tools. It has no shell, repository write, or GitHub action capability.
+Streaming, cancellation, and deployment-specific rate limits remain separate
+operational additions.
 
 ## Private analysis traces
 

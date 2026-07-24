@@ -363,16 +363,51 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | `fetcher.buildsPerJob`, `fetcher.workers`, `fetcher.timeout` | Fetch depth and discovery/artifact budget. Orka Task waves use `taskTimeout` and the CronJob deadline. |
 | `fetcher.extraEnv` | Extra env such as `GITHUB_TOKEN`, `EMAIL_SMTP_PASSWORD`, or the `ISSUE_TOKEN` / `FIX_TOKEN` write tokens (see [Automatic issues and fix PRs](#automatic-issues-and-fix-prs)). |
 | `ingress.enabled`, `ingress.hosts`, `ingress.tls` | Public read path. |
+| `server.chat.enabled` | Enable authenticated analysis conversations. Requires `ai.enabled`. |
+| `server.chat.sessionTTL` | Persisted conversation retention. Defaults to `2h`. |
+| `server.chat.maxSessions`, `server.chat.maxSessionsPerOwner` | Deployment-wide and per-login live-session caps. |
+| `server.replicaCount` | Server replicas. Chat sessions are shared through the RWX volume. |
 | `server.actions.enabled`, `server.actions.mode` | Turn on admin authentication, write actions, and private trace access; `oauth` (GitHub sign-in) or `proxy` (SSO proxy + bot token). |
-| `server.actions.admins` | Required allowlist for admin actions and trace access. An empty list fails closed. |
+| `server.actions.admins` | Required allowlist for admin actions, chat, and trace access. An empty list fails closed. |
 
 The public read endpoints (`/data/*`, `/api/capabilities`, `/healthz`) are
-unauthenticated. Admin features are opt-in: set `server.actions.enabled` and
-choose `server.actions.mode` (`oauth` for GitHub sign-in with per-user
-attribution, or `proxy` for an upstream SSO proxy plus a bot token), then list
-the allowed GitHub logins in `server.actions.admins` (see [server.md](server.md)).
-The same authenticated session protects write actions and the private analysis
-trace page.
+unauthenticated. Admin features are opt-in. Set `server.chat.enabled` for
+read-only conversations or `server.actions.enabled` for GitHub writes, choose
+`server.actions.mode` (`oauth` for GitHub sign-in or `proxy` for upstream SSO),
+and list the allowed logins in `server.actions.admins` (see
+[server.md](server.md)). Proxy mode needs a bot token only when write actions
+are enabled. The same authenticated session protects write actions, analysis
+chat, and the private analysis trace page.
+
+### Enabling analysis chat with Helm
+
+Analysis chat is Kubernetes-native and uses the shared RWX volume for private,
+owner-bound session state. Multiple server replicas can serve the same session.
+The storage class must support advisory file locking, atomic rename, and file and directory synchronization. The
+volume contains private transcripts and selected failure context, so restrict
+PVC access and backups to dashboard operators. Authentication reuses
+`server.actions` settings, but chat alone does not enable
+GitHub writes or require `BOT_TOKEN`.
+
+```bash
+helm upgrade --install capz deploy/helm/prow-ai-dashboard \
+  ... \
+  --set ai.enabled=true \
+  --set server.replicaCount=2 \
+  --set server.chat.enabled=true \
+  --set server.actions.mode=oauth \
+  --set 'server.actions.admins={alice,bob}' \
+  --set server.actions.oauth.clientId=<client-id> \
+  --set server.actions.oauth.clientSecret=<client-secret> \
+  --set server.actions.oauth.redirectUrl=https://dashboard.example.com/api/auth/callback \
+  --set server.actions.oauth.sessionKey="$(openssl rand -base64 32)"
+```
+
+The chart stores chat state at `<persistence.mountPath>/.analysis-chat`, mounts
+the shared volume read-write in the server, and keeps the directory unavailable
+through `/data/*`. Tune retention and capacity with
+`server.chat.sessionTTL`, `server.chat.maxSessions`, and
+`server.chat.maxSessionsPerOwner`.
 
 ### Enabling actions with Helm
 
@@ -410,8 +445,9 @@ with `server.actions.oauth.existingSecret` (keys `OAUTH_CLIENT_SECRET`,
 
 `/data/*` serves the public dashboard files that the static Pages path exposes.
 The server rejects operational files such as `ai_cache.json`, `ai_traces.json`,
-issue state, fix-PR state, previews, notification state, remediation state, and
-the private Prow coverage catalog. Pages strips the same files before
+issue state, fix-PR state, previews, notification state, remediation state,
+chat sessions, and the private Prow coverage catalog. Static Pages deployments
+do not create chat session state; the other operational files are stripped before
 publication.
 `resolved.json` and the redacted `remediations.json` remain public because the
 frontend uses them.

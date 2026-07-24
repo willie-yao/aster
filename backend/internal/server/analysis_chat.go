@@ -17,12 +17,14 @@ import (
 
 // AnalysisChatRunner manages authenticated conversations about published analyses.
 type AnalysisChatRunner interface {
-	Create(analysischat.AnalysisRef, string) (analysischat.SessionView, error)
+	Create(analysischat.AnalysisRef, string, string) (analysischat.SessionView, error)
 	Get(string, string) (analysischat.SessionView, error)
-	Send(context.Context, string, string, string) (analysischat.SessionView, error)
+	Send(context.Context, string, string, string, string) (analysischat.SessionView, error)
 }
 
 const (
+	analysisChatIdempotencyHeader     = "Idempotency-Key"
+	analysisChatOutcomeHeader         = "X-Analysis-Chat-Outcome"
 	defaultAnalysisChatTimeout        = 2 * time.Minute
 	maxAnalysisChatReferenceBodyBytes = 128 << 10
 	maxAnalysisChatMessageBodyBytes   = 32 << 10
@@ -40,7 +42,12 @@ func createAnalysisChatSessionHandler(run AnalysisChatRunner) http.Handler {
 			http.Error(w, "invalid analysis reference", http.StatusBadRequest)
 			return
 		}
-		session, err := run.Create(ref, identity.Login)
+		requestID := strings.TrimSpace(r.Header.Get(analysisChatIdempotencyHeader))
+		if requestID == "" {
+			http.Error(w, "missing idempotency key", http.StatusBadRequest)
+			return
+		}
+		session, err := run.Create(ref, identity.Login, requestID)
 		if err != nil {
 			writeAnalysisChatError(w, "create", identity.Login, err)
 			return
@@ -81,7 +88,12 @@ func sendAnalysisChatMessageHandler(timeout time.Duration, run AnalysisChatRunne
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
-		session, err := run.Send(ctx, r.PathValue("id"), identity.Login, body.Message)
+		requestID := strings.TrimSpace(r.Header.Get(analysisChatIdempotencyHeader))
+		if requestID == "" {
+			http.Error(w, "missing idempotency key", http.StatusBadRequest)
+			return
+		}
+		session, err := run.Send(ctx, r.PathValue("id"), identity.Login, requestID, body.Message)
 		if err != nil {
 			writeAnalysisChatError(w, r.PathValue("id"), identity.Login, err)
 			return
@@ -113,21 +125,33 @@ func writeAnalysisChatJSON(w http.ResponseWriter, status int, value any) {
 func writeAnalysisChatError(w http.ResponseWriter, id, login string, err error) {
 	status := http.StatusBadGateway
 	message := "analysis chat could not complete the request"
+	outcome := ""
 	switch {
 	case errors.Is(err, analysischat.ErrAnalysisNotFound):
-		status, message = http.StatusNotFound, "analysis not found"
+		status, message, outcome = http.StatusNotFound, "analysis not found", "rejected"
 	case errors.Is(err, analysischat.ErrSessionNotFound):
-		status, message = http.StatusNotFound, "analysis chat session not found"
-	case errors.Is(err, analysischat.ErrAnalysisChanged), errors.Is(err, analysischat.ErrSessionBusy):
-		status, message = http.StatusConflict, err.Error()
+		status, message, outcome = http.StatusNotFound, "analysis chat session not found", "rejected"
+	case errors.Is(err, analysischat.ErrAnalysisChanged):
+		status, message, outcome = http.StatusConflict, err.Error(), "rejected"
+	case errors.Is(err, analysischat.ErrSessionBusy):
+		status, message, outcome = http.StatusConflict, err.Error(), "pending"
+	case errors.Is(err, analysischat.ErrIdempotencyConflict):
+		status, message, outcome = http.StatusConflict, err.Error(), "rejected"
+	case errors.Is(err, analysischat.ErrRequestOutcomeUnknown):
+		status, message, outcome = http.StatusConflict, err.Error(), "unknown"
 	case errors.Is(err, analysischat.ErrInvalidRequest):
-		status, message = http.StatusBadRequest, err.Error()
+		status, message, outcome = http.StatusBadRequest, err.Error(), "rejected"
 	case errors.Is(err, analysischat.ErrSessionLimit), errors.Is(err, analysischat.ErrTurnLimit):
-		status, message = http.StatusTooManyRequests, err.Error()
+		status, message, outcome = http.StatusTooManyRequests, err.Error(), "rejected"
+	case errors.Is(err, analysischat.ErrRequestFailed):
+		outcome = "failed"
 	case errors.Is(err, context.DeadlineExceeded):
-		status, message = http.StatusGatewayTimeout, "analysis chat request timed out"
+		status, message, outcome = http.StatusGatewayTimeout, "analysis chat request timed out", "failed"
 	case errors.Is(err, context.Canceled):
-		status, message = 499, "analysis chat request cancelled"
+		status, message, outcome = 499, "analysis chat request cancelled", "failed"
+	}
+	if outcome != "" {
+		w.Header().Set(analysisChatOutcomeHeader, outcome)
 	}
 	if status >= 500 {
 		log.Printf("analysis chat %s for %s: %s", id, login, safeAnalysisChatError(err))
@@ -138,6 +162,9 @@ func writeAnalysisChatError(w http.ResponseWriter, id, login string, err error) 
 func safeAnalysisChatError(err error) string {
 	if err == nil {
 		return "unknown error"
+	}
+	if errors.Is(err, analysischat.ErrRequestFailed) {
+		return "model request failed"
 	}
 	reason := redact.URLs(strings.TrimSpace(err.Error()))
 	lower := strings.ToLower(reason)

@@ -199,10 +199,13 @@ server:
   extraEnv: []
   # Admin-gated read-only conversations about a published AI analysis.
   # Uses the authentication settings under actions, but does not enable writes
-  # or require BOT_TOKEN. Requires ai.enabled and replicaCount=1 until sessions
-  # use shared persistence.
+  # or require BOT_TOKEN. Sessions are persisted on the shared volume so server
+  # replicas can serve the same conversation.
   chat:
     enabled: false
+    sessionTTL: 2h
+    maxSessions: 128
+    maxSessionsPerOwner: 8
   # Admin authentication and write actions: file an issue or draft a fix PR.
   # The mode, admins, oauth, proxy, and trustedOrigins settings are shared with
   # chat when server.chat.enabled is true.

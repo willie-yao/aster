@@ -28,6 +28,7 @@ export interface AnalysisChatRevision {
 
 export interface AnalysisChatMessage {
   role: "user" | "assistant";
+  request_id?: string;
   content: string;
   assessment?: AnalysisChatAssessment;
   citations?: AnalysisChatCitation[];
