@@ -286,7 +286,6 @@ function AssistantMessage({
           <SourceInvestigationPanel
             sessionID={sessionID}
             chatRequestID={message.request_id}
-            fileCtx={fileCtx}
           />
         )}
       </Stack>

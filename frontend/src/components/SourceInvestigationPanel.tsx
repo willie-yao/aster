@@ -3,14 +3,12 @@ import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Chip from "@mui/material/Chip";
-import Link from "@mui/material/Link";
 import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
 import {
   CodeOutlined,
   FactCheckOutlined,
   ManageSearchOutlined,
-  OpenInNewOutlined,
   RefreshOutlined,
   StopCircleOutlined,
   VerifiedOutlined,
@@ -28,7 +26,6 @@ import {
   sourceInvestigationPendingMessage,
   streamSourceInvestigation,
 } from "../lib/sourceInvestigation";
-import { fileToUrl, type FileToUrlContext } from "../lib/utils";
 import { soft } from "../theme";
 import type {
   SourceInvestigationCitation,
@@ -192,7 +189,7 @@ function SourceProgress({
   );
 }
 
-function SourceResult({ view, fileCtx }: { view: SourceInvestigationView; fileCtx: FileToUrlContext }) {
+function SourceResult({ view }: { view: SourceInvestigationView }) {
   const result = view.result;
   if (!result) return null;
   const relationship = relationshipConfig[result.relationship];
@@ -226,7 +223,7 @@ function SourceResult({ view, fileCtx }: { view: SourceInvestigationView; fileCt
       </Stack>
       <Stack spacing={1.4} sx={{ p: 1.35 }}>
         <Typography variant="body2" sx={{ lineHeight: 1.65 }}>
-          <RichText text={result.finding} steps fileCtx={fileCtx} />
+          <RichText text={result.finding} steps />
         </Typography>
 
         <Box
@@ -243,7 +240,7 @@ function SourceResult({ view, fileCtx }: { view: SourceInvestigationView; fileCt
             What to inspect next
           </Typography>
           <Typography variant="body2" sx={{ lineHeight: 1.55 }}>
-            <RichText text={result.direction} steps fileCtx={fileCtx} />
+            <RichText text={result.direction} steps />
           </Typography>
         </Box>
 
@@ -257,7 +254,6 @@ function SourceResult({ view, fileCtx }: { view: SourceInvestigationView; fileCt
             </Stack>
             <Stack spacing={0.75}>
               {result.citations.map((citation, index) => {
-                const url = fileToUrl(citation.path, fileCtx);
                 return (
                   <Box
                     key={`${citation.path}-${citation.line_start}-${citation.line_end}-${index}`}
@@ -271,21 +267,9 @@ function SourceResult({ view, fileCtx }: { view: SourceInvestigationView; fileCt
                     }}
                   >
                     <Stack direction="row" spacing={0.7} useFlexGap sx={{ alignItems: "baseline", flexWrap: "wrap" }}>
-                      {url ? (
-                        <Link
-                          href={url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          sx={{ display: "inline-flex", alignItems: "center", gap: 0.4, fontFamily: "monospace", fontSize: "0.75rem", fontWeight: 700 }}
-                        >
-                          {citation.path}
-                          <OpenInNewOutlined sx={{ fontSize: 12 }} />
-                        </Link>
-                      ) : (
-                        <Typography component="span" sx={{ fontFamily: "monospace", fontSize: "0.75rem", fontWeight: 700 }}>
-                          {citation.path}
-                        </Typography>
-                      )}
+                      <Typography component="span" sx={{ fontFamily: "monospace", fontSize: "0.75rem", fontWeight: 700 }}>
+                        {citation.path}
+                      </Typography>
                       <Typography component="span" variant="caption" color="text.secondary">
                         {citationLines(citation)}
                       </Typography>
@@ -321,11 +305,9 @@ function SourceResult({ view, fileCtx }: { view: SourceInvestigationView; fileCt
 export function SourceInvestigationPanel({
   sessionID,
   chatRequestID,
-  fileCtx,
 }: {
   sessionID: string;
   chatRequestID: string;
-  fileCtx: FileToUrlContext;
 }) {
   const auth = useAuth();
   const [view, setView] = useState<SourceInvestigationView | null>(null);
@@ -477,7 +459,7 @@ export function SourceInvestigationPanel({
   return (
     <Stack spacing={0.9}>
       {pending && <SourceProgress phase={phase} cancelling={cancelling} onCancel={() => void cancel()} />}
-      {view?.status === "succeeded" && <SourceResult view={view} fileCtx={fileCtx} />}
+      {view?.status === "succeeded" && <SourceResult view={view} />}
       {error && (
         <Alert
           severity={view?.status === "unknown" ? "warning" : "error"}
