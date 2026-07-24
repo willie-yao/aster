@@ -435,7 +435,14 @@ export function AnalysisChat({
             </Typography>
           </ButtonBase>
           <Tooltip title="This conversation does not change the published analysis">
-            <HelpOutlined sx={{ color: "text.secondary", fontSize: 17 }} />
+            <IconButton
+              disableRipple
+              size="small"
+              aria-label="This conversation does not change the published analysis"
+              sx={{ p: 0.5 }}
+            >
+              <HelpOutlined sx={{ color: "text.secondary", fontSize: 17 }} />
+            </IconButton>
           </Tooltip>
           <IconButton
             disableRipple
