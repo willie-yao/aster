@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/apimachinery/pkg/util/validation"
+
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 )
@@ -62,6 +64,24 @@ func sourceOuterResult(t *testing.T, summary string) StructuredResult {
 	return StructuredResult{
 		Version: 1, Summary: summary,
 		BaseSHA: sourceRequest().Subject.Repository.Revision,
+	}
+}
+
+func TestSourceInvestigationTaskNameUsesSafeDigest(t *testing.T) {
+	request := sourceRequest()
+	var previous string
+	for _, version := range []string{"v1+guard@prod", strings.Repeat("x", 400)} {
+		name := SourceInvestigationTaskName(request, SourceInvestigationOptions{Version: version})
+		if problems := validation.IsDNS1123Subdomain(name); len(problems) != 0 {
+			t.Errorf("version %q produced invalid Task name %q: %v", version, name, problems)
+		}
+		if len(name) != len("source-")+16 {
+			t.Errorf("Task name %q length = %d", name, len(name))
+		}
+		if name == previous {
+			t.Fatalf("different versions produced the same Task name %q", name)
+		}
+		previous = name
 	}
 }
 

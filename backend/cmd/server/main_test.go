@@ -193,6 +193,14 @@ func TestConfigureAuthenticatorOAuthScopeByFeature(t *testing.T) {
 	}
 }
 
+func TestSourceInvestigationKubeContextUsesOrkaSelector(t *testing.T) {
+	t.Setenv("KUBECONTEXT", "wrong-cluster")
+	t.Setenv("ORKA_KUBE_CONTEXT", "source-cluster")
+	if got := sourceInvestigationKubeContext(); got != "source-cluster" {
+		t.Fatalf("source investigation kube context = %q", got)
+	}
+}
+
 func TestAnalysisChatServiceOptionsFromEnv(t *testing.T) {
 	for _, name := range []string{
 		"ANALYSIS_CHAT_STATE_DIR",

@@ -409,7 +409,7 @@ func SourceInvestigationTaskName(request sourceinvestigation.Request, opts Sourc
 		fmt.Sprintf("%d", opts.MaxRetries), fmt.Sprintf("%d", opts.MaxTurns), request.Timeout.String(),
 	}, "\x00")
 	sum := sha256.Sum256([]byte(data))
-	return Sanitize("source-" + hex.EncodeToString(sum[:8]) + "-" + opts.Version)
+	return "source-" + hex.EncodeToString(sum[:8])
 }
 
 func sourcePollingError(operation string, err error) error {

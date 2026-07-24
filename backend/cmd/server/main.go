@@ -324,6 +324,10 @@ func enableAnalysisChat(ctx context.Context, opts *server.Options, cfg *project.
 	return service, nil
 }
 
+func sourceInvestigationKubeContext() string {
+	return os.Getenv("ORKA_KUBE_CONTEXT")
+}
+
 func enableSourceInvestigation(
 	opts *server.Options,
 	cfg *project.Config,
@@ -344,7 +348,7 @@ func enableSourceInvestigation(
 		Namespace: runtimeConfig.Namespace, AgentRef: runtimeConfig.AgentRef, API: runtimeConfig.API,
 		APIToken: os.Getenv("ORKA_API_TOKEN"), GitSecret: runtimeConfig.GitSecret,
 		Version: runtimeConfig.Version, MaxRetries: *runtimeConfig.Retries, MaxTurns: runtimeConfig.MaxTurns,
-		KubeContext: os.Getenv("KUBECONTEXT"), GitHubToken: os.Getenv("SOURCE_INVESTIGATION_GITHUB_TOKEN"),
+		KubeContext: sourceInvestigationKubeContext(), GitHubToken: os.Getenv("SOURCE_INVESTIGATION_GITHUB_TOKEN"),
 	})
 	if err != nil {
 		return fmt.Errorf("configuring source investigation runtime: %w", err)
