@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
-import Button from "@mui/material/Button";
+import ButtonBase from "@mui/material/ButtonBase";
 import Chip from "@mui/material/Chip";
 import Collapse from "@mui/material/Collapse";
 import Divider from "@mui/material/Divider";
@@ -14,12 +14,9 @@ import Typography from "@mui/material/Typography";
 import {
   ArrowUpward,
   AutoAwesome,
-  ChatBubbleOutlined,
-  Close,
+  ExpandMore,
   FactCheckOutlined,
-  GitHub,
   HelpOutlined,
-  LockOutlined,
   PsychologyAltOutlined,
   ReportProblemOutlined,
 } from "@mui/icons-material";
@@ -355,86 +352,96 @@ export function AnalysisChat({
     }
   }
 
-  function openChat() {
+  function toggleChat() {
     if (auth.status === "anonymous") {
       auth.signIn();
       return;
     }
-    setExpanded(true);
+    setExpanded((value) => !value);
   }
 
   return (
     <Box sx={{ mt: 0.5 }}>
       <Divider sx={{ mb: 1.5 }} />
-      {!expanded ? (
-        <Button
-          fullWidth
-          variant="outlined"
-          startIcon={auth.status === "anonymous" ? <GitHub /> : <ChatBubbleOutlined />}
-          onClick={openChat}
-          disabled={auth.status === "loading" || auth.status === "unavailable"}
+      <Box
+        sx={{
+          borderRadius: "14px",
+          border: "1px solid",
+          borderColor: (theme) => soft(theme, "primary", 0.3),
+          bgcolor: (theme) => soft(theme, "primary", 0.025),
+          overflow: "hidden",
+        }}
+      >
+        <Stack
+          direction="row"
+          spacing={0.25}
           sx={{
-            justifyContent: "flex-start",
-            borderRadius: "10px",
-            py: 1.1,
-            px: 1.5,
-            borderColor: (theme) => soft(theme, "primary", 0.3),
-            bgcolor: (theme) => soft(theme, "primary", 0.035),
-            "&:hover": { bgcolor: (theme) => soft(theme, "primary", 0.08) },
+            alignItems: "center",
+            px: 1,
+            py: 0.5,
+            borderBottom: expanded ? "1px solid" : 0,
+            borderColor: "divider",
           }}
         >
-          {auth.status === "anonymous" ? "Sign in to ask about this analysis" : "Ask about this analysis"}
-        </Button>
-      ) : (
-        <Collapse in={expanded} appear>
-          <Box
+          <ButtonBase
+            onClick={toggleChat}
+            disabled={auth.status === "loading" || auth.status === "unavailable"}
+            aria-expanded={expanded}
+            aria-controls="analysis-chat-content"
             sx={{
-              borderRadius: "14px",
-              border: "1px solid",
-              borderColor: (theme) => soft(theme, "primary", 0.3),
-              bgcolor: (theme) => soft(theme, "primary", 0.025),
-              overflow: "hidden",
+              minWidth: 0,
+              flex: 1,
+              justifyContent: "flex-start",
+              gap: 1,
+              borderRadius: "10px",
+              px: 0.5,
+              py: 0.75,
+              textAlign: "left",
+              "&.Mui-disabled": { opacity: 0.5 },
             }}
           >
-            <Stack
-              direction="row"
-              spacing={1}
-              sx={{ alignItems: "center", px: 1.5, py: 1.25, borderBottom: "1px solid", borderColor: "divider" }}
+            <Box
+              sx={{
+                width: 30,
+                height: 30,
+                display: "grid",
+                placeItems: "center",
+                borderRadius: "9px",
+                bgcolor: (theme) => soft(theme, "primary", 0.14),
+                color: "primary.main",
+                flexShrink: 0,
+              }}
             >
-              <Box
-                sx={{
-                  width: 30,
-                  height: 30,
-                  display: "grid",
-                  placeItems: "center",
-                  borderRadius: "9px",
-                  bgcolor: (theme) => soft(theme, "primary", 0.14),
-                  color: "primary.main",
-                }}
-              >
-                <PsychologyAltOutlined sx={{ fontSize: 19 }} />
-              </Box>
-              <Box sx={{ minWidth: 0, flex: 1 }}>
-                <Typography variant="body2" sx={{ fontWeight: 750, lineHeight: 1.2 }}>
-                  Analysis desk
-                </Typography>
-                <Stack direction="row" spacing={0.5} sx={{ alignItems: "center", mt: 0.25 }}>
-                  <LockOutlined sx={{ fontSize: 11, color: "text.secondary" }} />
-                  <Typography variant="caption" color="text.secondary">
-                    Private, read-only conversation
-                  </Typography>
-                </Stack>
-              </Box>
-              <Stack direction="row" spacing={0.25} sx={{ alignItems: "center" }}>
-                <Tooltip title="This conversation does not change the published analysis">
-                  <HelpOutlined sx={{ color: "text.secondary", fontSize: 17 }} />
-                </Tooltip>
-                <IconButton size="small" aria-label="Close analysis chat" onClick={() => setExpanded(false)}>
-                  <Close fontSize="small" />
-                </IconButton>
-              </Stack>
-            </Stack>
+              <PsychologyAltOutlined sx={{ fontSize: 19 }} />
+            </Box>
+            <Typography variant="body2" sx={{ fontWeight: 750 }}>
+              Chat with agent
+            </Typography>
+          </ButtonBase>
+          <Tooltip title="This conversation does not change the published analysis">
+            <HelpOutlined sx={{ color: "text.secondary", fontSize: 17 }} />
+          </Tooltip>
+          <IconButton
+            size="small"
+            aria-label={expanded ? "Collapse analysis chat" : "Expand analysis chat"}
+            aria-expanded={expanded}
+            aria-controls="analysis-chat-content"
+            onClick={toggleChat}
+            disabled={auth.status === "loading" || auth.status === "unavailable"}
+          >
+            <ExpandMore
+              fontSize="small"
+              sx={{
+                transition: (theme) =>
+                  theme.transitions.create("transform", { duration: theme.transitions.duration.short }),
+                transform: expanded ? "rotate(180deg)" : "rotate(0deg)",
+              }}
+            />
+          </IconButton>
+        </Stack>
 
+        <Collapse in={expanded} appear>
+          <Box id="analysis-chat-content">
             <Stack
               spacing={1.25}
               aria-live="polite"
@@ -566,7 +573,7 @@ export function AnalysisChat({
             </Box>
           </Box>
         </Collapse>
-      )}
+      </Box>
     </Box>
   );
 }
