@@ -249,6 +249,51 @@ func TestServiceSourceInvestigationRefreshesLegacySnapshot(t *testing.T) {
 	}
 }
 
+func TestSourceProgressDueIncludesHeartbeat(t *testing.T) {
+	now := time.Now()
+	if sourceProgressDue(sourceinvestigation.PhaseInvestigating, sourceinvestigation.PhaseInvestigating, now) {
+		t.Fatal("unchanged recent progress was due")
+	}
+	if !sourceProgressDue(sourceinvestigation.PhaseInvestigating, sourceinvestigation.PhaseInvestigating, now.Add(-progressHeartbeat-time.Second)) {
+		t.Fatal("unchanged stale progress was not due")
+	}
+	if !sourceProgressDue(sourceinvestigation.PhaseVerifying, sourceinvestigation.PhaseInvestigating, now) {
+		t.Fatal("changed progress was not due")
+	}
+}
+
+func TestServiceSourceInvestigationExpiryTracksSession(t *testing.T) {
+	dir := t.TempDir()
+	runner := &fakeSourceInvestigator{result: sourceResult()}
+	service, session, firstChatRequestID := sourceReadyService(t, dir, runner)
+	firstSourceRequestID := testRequestID(t)
+	if _, err := service.SourceInvestigation(t.Context(), session.ID, "Alice", firstSourceRequestID, firstChatRequestID); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().UTC().Add(time.Hour).Truncate(time.Second)
+	service.opts.Now = func() time.Time { return now }
+	secondChatRequestID := testRequestID(t)
+	updatedSession, err := service.Send(t.Context(), session.ID, "Alice", secondChatRequestID, "Does the source support another explanation?")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := service.GetSourceInvestigation(session.ID, "Alice", firstSourceRequestID)
+	if err != nil || first.ExpiresAt != updatedSession.ExpiresAt {
+		t.Fatalf("expiry after chat turn: investigation=%q session=%q err=%v", first.ExpiresAt, updatedSession.ExpiresAt, err)
+	}
+
+	now = now.Add(time.Minute)
+	second, err := service.SourceInvestigation(t.Context(), session.ID, "Alice", testRequestID(t), secondChatRequestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err = service.GetSourceInvestigation(session.ID, "Alice", firstSourceRequestID)
+	if err != nil || first.ExpiresAt != second.ExpiresAt {
+		t.Fatalf("expiry after source request: first=%q second=%q err=%v", first.ExpiresAt, second.ExpiresAt, err)
+	}
+}
+
 func TestServiceSourceInvestigationRejectsMutableRevision(t *testing.T) {
 	dir := t.TempDir()
 	runner := &fakeSourceInvestigator{result: sourceResult()}

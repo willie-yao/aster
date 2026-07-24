@@ -295,8 +295,7 @@ func (s *Service) finishSourceInvestigation(
 		record.Subject = sourceinvestigation.Subject{}
 		record.View.Phase = ""
 		record.View.UpdatedAt = finishedAt.Format(time.RFC3339)
-		current.ExpiresAt = finishedAt.Add(s.opts.SessionTTL)
-		current.View.ExpiresAt = current.ExpiresAt.Format(time.RFC3339)
+		extendSessionExpiry(current, finishedAt.Add(s.opts.SessionTTL))
 		record.View.ExpiresAt = current.View.ExpiresAt
 		if runErr != nil {
 			record.View.Status = sourceinvestigation.StatusFailed
@@ -329,6 +328,7 @@ func (s *Service) waitForSourceInvestigation(
 	updates, unsubscribe := s.subscribe(sourceInvestigationKey(sessionID, requestID))
 	defer unsubscribe()
 	lastPhase := ""
+	lastEmit := time.Time{}
 	for {
 		view, err := s.GetSourceInvestigation(sessionID, owner, requestID)
 		if err != nil {
@@ -337,11 +337,14 @@ func (s *Service) waitForSourceInvestigation(
 		if view.Status != sourceinvestigation.StatusPending {
 			return view, s.sourceInvestigationTerminalError(sessionID, owner, requestID)
 		}
-		if emit != nil && view.Phase != "" && view.Phase != lastPhase {
-			if err := emit(sourceinvestigation.Progress{RequestID: requestID, Phase: view.Phase, UpdatedAt: view.UpdatedAt}); err != nil {
-				return sourceinvestigation.View{}, err
-			}
+		if sourceProgressDue(view.Phase, lastPhase, lastEmit) {
 			lastPhase = view.Phase
+			lastEmit = time.Now()
+			if emit != nil {
+				if err := emit(sourceinvestigation.Progress{RequestID: requestID, Phase: view.Phase, UpdatedAt: view.UpdatedAt}); err != nil {
+					return sourceinvestigation.View{}, err
+				}
+			}
 		}
 		timer := time.NewTimer(s.opts.PollInterval)
 		select {
@@ -352,6 +355,19 @@ func (s *Service) waitForSourceInvestigation(
 			timer.Stop()
 		case <-timer.C:
 		}
+	}
+}
+
+func sourceProgressDue(phase, lastPhase string, lastEmit time.Time) bool {
+	return phase != "" && (phase != lastPhase || time.Since(lastEmit) >= progressHeartbeat)
+}
+
+func extendSessionExpiry(current *persistedSession, expires time.Time) {
+	current.ExpiresAt = expires
+	current.View.ExpiresAt = expires.Format(time.RFC3339)
+	for requestID, record := range current.Investigations {
+		record.View.ExpiresAt = current.View.ExpiresAt
+		current.Investigations[requestID] = record
 	}
 }
 

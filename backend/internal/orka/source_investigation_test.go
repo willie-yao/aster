@@ -171,6 +171,30 @@ func TestSourceInvestigatorRecordsCleanupFailure(t *testing.T) {
 	}
 }
 
+func TestSourceInvestigatorClassifiesTaskAndEnvelopeFailures(t *testing.T) {
+	t.Run("terminal task", func(t *testing.T) {
+		runner := &SourceInvestigator{
+			kube: &fakeTaskAPI{phases: []string{"Running", "Failed"}}, results: &ResultClient{}, reader: fakeSourceReader{},
+			opts: SourceInvestigationOptions{AgentRef: "reader", PollEvery: time.Millisecond},
+		}
+		if _, err := runner.Investigate(t.Context(), sourceRequest()); !errors.Is(err, sourceinvestigation.ErrUnavailable) {
+			t.Fatalf("Investigate = %v", err)
+		}
+	})
+
+	t.Run("malformed envelope", func(t *testing.T) {
+		results, done := rawResultServer(t, "{")
+		defer done()
+		runner := &SourceInvestigator{
+			kube: &fakeTaskAPI{phases: []string{"Succeeded"}}, results: results, reader: fakeSourceReader{},
+			opts: SourceInvestigationOptions{AgentRef: "reader", PollEvery: time.Millisecond},
+		}
+		if _, err := runner.Investigate(t.Context(), sourceRequest()); !errors.Is(err, sourceinvestigation.ErrInvalidResult) {
+			t.Fatalf("Investigate = %v", err)
+		}
+	})
+}
+
 func TestParseSourceResultRejectsProse(t *testing.T) {
 	_, err := parseSourceResult("result: " + `{"version":1}`)
 	if !errors.Is(err, sourceinvestigation.ErrInvalidResult) {

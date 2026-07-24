@@ -246,8 +246,7 @@ func (s *Service) finishTurn(id, owner, requestID, leaseID, question string, rep
 			runErr = context.Canceled
 		}
 		current.Active = nil
-		current.ExpiresAt = finishedAt.Add(s.opts.SessionTTL)
-		current.View.ExpiresAt = current.ExpiresAt.Format(time.RFC3339)
+		extendSessionExpiry(current, finishedAt.Add(s.opts.SessionTTL))
 		if runErr != nil {
 			previous.Status = requestFailed
 			previous.FailureKind = requestFailureKind(runErr)

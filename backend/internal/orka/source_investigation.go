@@ -165,7 +165,7 @@ func (r *SourceInvestigator) Investigate(
 		return sourceinvestigation.Result{}, r.withSourceTaskCleanup(name, err)
 	}
 	if phase != "Succeeded" {
-		return sourceinvestigation.Result{}, fmt.Errorf("source investigation Task %s ended %s", name, phase)
+		return sourceinvestigation.Result{}, fmt.Errorf("%w: source Task %s ended %s", sourceinvestigation.ErrUnavailable, name, phase)
 	}
 	raw, err := r.waitSourceResult(ctx, name)
 	if err != nil {
@@ -173,7 +173,7 @@ func (r *SourceInvestigator) Investigate(
 	}
 	var outer StructuredResult
 	if err := json.Unmarshal([]byte(raw), &outer); err != nil {
-		return sourceinvestigation.Result{}, fmt.Errorf("source investigation Task %s: parsing result envelope: %w", name, err)
+		return sourceinvestigation.Result{}, fmt.Errorf("source investigation Task %s: %w: parsing result envelope: %v", name, sourceinvestigation.ErrInvalidResult, err)
 	}
 	if err := validateSourceEnvelope(outer, request.Subject.Repository.Revision); err != nil {
 		return sourceinvestigation.Result{}, fmt.Errorf("source investigation Task %s: %w", name, err)
