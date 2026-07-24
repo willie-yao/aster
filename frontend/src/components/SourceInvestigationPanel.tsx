@@ -230,44 +230,73 @@ function SourceResult({ view }: { view: SourceInvestigationView }) {
     <Box
       sx={{
         border: "1px solid",
-        borderColor: (theme) => soft(theme, relationship.color === "default" ? "primary" : relationship.color, 0.34),
-        bgcolor: (theme) => soft(theme, relationship.color === "default" ? "primary" : relationship.color, 0.045),
+        borderColor: "divider",
+        bgcolor: (theme) => soft(theme, "primary", 0.025),
         borderRadius: "11px",
         overflow: "hidden",
       }}
     >
       <Stack
         direction="row"
-        spacing={0.75}
+        spacing={0.8}
         useFlexGap
-        sx={{ alignItems: "center", flexWrap: "wrap", px: 1.35, py: 1, borderBottom: "1px solid", borderColor: "divider" }}
+        sx={{
+          alignItems: "center",
+          flexWrap: "wrap",
+          px: 1.5,
+          py: 1.15,
+          borderBottom: "1px solid",
+          borderColor: "divider",
+        }}
       >
         <CodeOutlined sx={{ fontSize: 17, color: "primary.main" }} />
         <Typography variant="label" sx={{ fontWeight: 750 }}>
           Source investigation
         </Typography>
-        <Chip size="small" icon={<VerifiedOutlined />} label="Verified" color="success" variant="outlined" sx={{ height: 23 }} />
-        <Stack direction="row" spacing={0.5} sx={{ ml: { sm: "auto" } }}>
-          <Chip size="small" label={relationship.label} color={relationship.color} variant="outlined" sx={{ height: 23 }} />
-          <Chip size="small" label={confidence.label} color={confidence.color} variant="outlined" sx={{ height: 23 }} />
+        <Stack
+          direction="row"
+          spacing={0.45}
+          sx={{ alignItems: "center", ml: { sm: "auto" }, color: "success.main" }}
+        >
+          <VerifiedOutlined sx={{ fontSize: 15 }} />
+          <Typography variant="caption" sx={{ fontWeight: 700 }}>
+            Verified at pinned revision
+          </Typography>
         </Stack>
       </Stack>
-      <Stack spacing={1.4} sx={{ p: 1.35 }}>
+      <Stack spacing={1.65} sx={{ p: 1.5 }}>
         <Typography variant="body2" sx={{ lineHeight: 1.65 }}>
           <RichText text={result.finding} steps />
         </Typography>
 
+        <Stack direction="row" spacing={0.75} useFlexGap sx={{ flexWrap: "wrap" }}>
+          <Chip
+            size="small"
+            label={relationship.label}
+            color={relationship.color}
+            variant="outlined"
+            sx={{ height: 26, "& .MuiChip-label": { px: 1.15 } }}
+          />
+          <Chip
+            size="small"
+            label={confidence.label}
+            color={confidence.color}
+            variant="outlined"
+            sx={{ height: 26, "& .MuiChip-label": { px: 1.15 } }}
+          />
+        </Stack>
+
         <Box
           sx={{
-            borderLeft: "3px solid",
+            borderLeft: "2px solid",
             borderColor: "primary.main",
-            bgcolor: (theme) => soft(theme, "primary", 0.06),
+            bgcolor: (theme) => soft(theme, "primary", 0.035),
             borderRadius: "0 8px 8px 0",
-            px: 1.2,
-            py: 0.85,
+            px: 1.25,
+            py: 0.95,
           }}
         >
-          <Typography variant="caption" color="text.secondary" sx={{ display: "block", fontWeight: 750, mb: 0.2 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", fontWeight: 750, mb: 0.25 }}>
             What to inspect next
           </Typography>
           <Typography variant="body2" sx={{ lineHeight: 1.55 }}>
@@ -277,56 +306,42 @@ function SourceResult({ view }: { view: SourceInvestigationView }) {
 
         {result.citations && result.citations.length > 0 && (
           <Box>
-            <Stack direction="row" spacing={0.7} sx={{ alignItems: "center", mb: 0.8 }}>
+            <Stack direction="row" spacing={0.7} sx={{ alignItems: "center", mb: 1 }}>
               <FactCheckOutlined sx={{ fontSize: 16, color: "success.main" }} />
               <Typography variant="label" color="text.secondary" sx={{ fontWeight: 700 }}>
                 Verified source evidence
               </Typography>
             </Stack>
-            <Stack spacing={0.75}>
-              {result.citations.map((citation, index) => {
-                return (
-                  <Box
-                    key={`${citation.path}-${citation.line_start}-${citation.line_end}-${index}`}
-                    sx={{
-                      border: "1px solid",
-                      borderColor: "divider",
-                      bgcolor: "background.paper",
-                      borderRadius: "8px",
-                      px: 1.1,
-                      py: 0.85,
-                    }}
-                  >
-                    <Stack direction="row" spacing={0.7} useFlexGap sx={{ alignItems: "baseline", flexWrap: "wrap" }}>
-                      <Typography component="span" sx={{ fontFamily: "monospace", fontSize: "0.75rem", fontWeight: 700 }}>
-                        {citation.path}
-                      </Typography>
-                      <Typography component="span" variant="caption" color="text.secondary">
-                        {citationLines(citation)}
-                      </Typography>
-                      {citation.verified && (
-                        <Typography component="span" variant="caption" color="success.main" sx={{ fontWeight: 700 }}>
-                          verified
-                        </Typography>
-                      )}
-                    </Stack>
-                    <Typography
-                      component="blockquote"
-                      variant="caption"
-                      color="text.secondary"
-                      sx={{ m: 0, mt: 0.45, fontFamily: "monospace", lineHeight: 1.55, whiteSpace: "pre-wrap" }}
-                    >
-                      “{citation.quote}”
+            <Stack spacing={1.1}>
+              {result.citations.map((citation, index) => (
+                <Box
+                  key={`${citation.path}-${citation.line_start}-${citation.line_end}-${index}`}
+                  sx={{ borderLeft: "2px solid", borderColor: "success.main", pl: 1.2, py: 0.15 }}
+                >
+                  <Stack direction="row" spacing={0.7} useFlexGap sx={{ alignItems: "baseline", flexWrap: "wrap" }}>
+                    <Typography component="span" sx={{ fontFamily: "monospace", fontSize: "0.75rem", fontWeight: 700 }}>
+                      {citation.path}
                     </Typography>
-                  </Box>
-                );
-              })}
+                    <Typography component="span" variant="caption" color="text.secondary">
+                      {citationLines(citation)}
+                    </Typography>
+                  </Stack>
+                  <Typography
+                    component="blockquote"
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{ m: 0, mt: 0.4, fontFamily: "monospace", lineHeight: 1.55, whiteSpace: "pre-wrap" }}
+                  >
+                    “{citation.quote}”
+                  </Typography>
+                </Box>
+              ))}
             </Stack>
           </Box>
         )}
 
         <Typography variant="caption" color="text.secondary">
-          Read-only source review at the exact Prow revision{elapsed ? `, completed in ${elapsed}` : ""}.
+          Read-only source review{elapsed ? `, completed in ${elapsed}` : ""}.
         </Typography>
       </Stack>
     </Box>
