@@ -263,8 +263,8 @@ for namespace in dashboard-a dashboard-b; do
   grep -Fq 'namespace: orka-test' "$tmp/rbac-$namespace.yaml"
   grep -Fq 'resources: ["tasks"]' "$tmp/rbac-$namespace.yaml"
   grep -Fq 'verbs: ["create", "get", "patch", "delete"]' "$tmp/rbac-$namespace.yaml"
-  if grep -Eq 'resources: \["(tools|configmaps)"\]' "$tmp/rbac-$namespace.yaml"; then
-    echo 'fix runtime RBAC includes analysis resources' >&2
+  if [[ $(grep -Ec '^[[:space:]]+resources:' "$tmp/rbac-$namespace.yaml") -ne 1 ]]; then
+    echo 'fix runtime RBAC includes a resource rule beyond Tasks' >&2
     exit 1
   fi
 done
@@ -272,6 +272,18 @@ rbac_name_a=$(awk '$1 == "kind:" { kind=$2 } kind == "Role" && $1 == "name:" { p
 rbac_name_b=$(awk '$1 == "kind:" { kind=$2 } kind == "Role" && $1 == "name:" { print $2; exit }' "$tmp/rbac-dashboard-b.yaml")
 if [[ -z "$rbac_name_a" || -z "$rbac_name_b" || "$rbac_name_a" == "$rbac_name_b" ]]; then
   echo 'Orka fix-runtime RBAC names are not isolated by release namespace' >&2
+  exit 1
+fi
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set mode=watch \
+  --set orka.fixRuntime.enabled=true \
+  --set orka.fixRuntime.image.tag=sha-test \
+  --show-only templates/worker-deployment.yaml > "$tmp/fix-watch.yaml"
+grep -Fq 'serviceAccountName: test-prow-ai-dashboard-orka' "$tmp/fix-watch.yaml"
+grep -Fq 'image: ghcr.io/willie-yao/prow-ai-dashboard/fixer:sha-test' "$tmp/fix-watch.yaml"
+if [[ $(container_command worker "$tmp/fix-watch.yaml") != /usr/local/bin/worker ]]; then
+  echo 'fix-enabled worker does not run the in-process analyzer' >&2
   exit 1
 fi
 
@@ -286,6 +298,17 @@ if [[ $(container_command fetcher "$tmp/fix-cron.yaml") != /usr/local/bin/fetche
   echo 'fix-enabled CronJob does not run the in-process fetcher' >&2
   exit 1
 fi
+
+# Container analysis and Orka fix generation are independent options that may
+# share the runtime ServiceAccount while retaining separate Roles.
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  "${container_args[@]}" \
+  --set orka.fixRuntime.enabled=true \
+  --set orka.fixRuntime.image.tag=sha-test > "$tmp/combined-orka-runtimes.yaml"
+grep -Fq 'app.kubernetes.io/component: orka-container-analysis' "$tmp/combined-orka-runtimes.yaml"
+grep -Fq 'app.kubernetes.io/component: orka-fix-runtime' "$tmp/combined-orka-runtimes.yaml"
+grep -Fq 'app.kubernetes.io/component: orka-runtime' "$tmp/combined-orka-runtimes.yaml"
+grep -Fq 'image: ghcr.io/willie-yao/prow-ai-dashboard/fixer:sha-test' "$tmp/combined-orka-runtimes.yaml"
 
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --show-only templates/pvc.yaml > "$tmp/pvc-retained.yaml"

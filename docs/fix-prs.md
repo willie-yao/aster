@@ -155,12 +155,20 @@ reconstructs diffs returned by an Orka Agent; it does not support the local
 
 #### `orka` (in-cluster)
 
-The Orka backend creates a generation-only `type: agent` Task in an isolated
-workspace. The Task edits a clone and returns a structured diff. It does not
-receive `FIX_TOKEN`, push a branch, or open a PR. The engine verifies the reported
-base SHA and file list, reapplies the diff to the pinned base, rejects deletions,
-binary files, symlinks, submodules, and `.gitmodules` edits, then runs the normal
-review, verification, preview, and PR-opening stages.
+The dashboard runtime type `orka` selects the execution backend. The referenced
+Orka `Agent` selects its coding CLI independently. For example,
+`spec.runtime.type: opencode` selects OpenCode without adding a dashboard runtime
+type such as `orka-opencode`.
+
+The backend creates a generation-only `type: agent` Task in an isolated
+workspace. Orka captures the final workspace and returns its structured result
+with `version`, `summary`, the pinned `baseSHA`, a unified `diff`, and the changed
+`files`. The model's final message remains the human-readable summary. The Task
+does not receive `FIX_TOKEN`, push a branch, or open a PR. The engine strictly
+decodes that result, verifies the reported base SHA and file list, reapplies the
+diff to the pinned base, rejects deletions, binary files, symlinks, submodules,
+and `.gitmodules` edits, then runs the normal review, verification, preview, and
+PR-opening stages.
 
 ```yaml
 ai:
@@ -181,16 +189,40 @@ ai:
       timeout: 15m
 ```
 
-The referenced Orka `Agent` owns the model configuration. For a private source
-repository, `git_secret` must be a separate read-only clone credential. Keep the
-write-capable contributor token in `FIX_TOKEN`; it remains inside the engine.
+The Orka `Agent` and its model Secret are operator-owned. Start from
+[`configs/example/orka-opencode-agent.yaml`](../configs/example/orka-opencode-agent.yaml).
+The Secret must contain `OPENAI_BASE_URL`; add `OPENAI_API_KEY` only when the
+endpoint requires authentication. Set `spec.model.name` to the endpoint-specific
+model ID and `spec.runtime.type` to `opencode`. Do not copy the endpoint, model,
+or model credential into `project.yaml`.
+
+For a private source repository, `git_secret` must be a separate read-only clone
+credential. It is mounted only into the Orka workspace. Keep the write-capable
+contributor token in `FIX_TOKEN`; it remains inside the dashboard and is used
+only by the engine-owned PR-opening path.
 
 For Helm deployments, set `orka.fixRuntime.enabled=true`. The chart then uses the
 published git-capable fixer image, mounts a ServiceAccount token only into the
-workloads that generate fixes, and grants Task-only RBAC when analysis remains
-in-process. REST authentication uses
-`ORKA_API_TOKEN`, `ORKA_API_TOKEN_FILE`, or the pod ServiceAccount token. Local
-kubeconfig testing can select a context through `ORKA_KUBE_CONTEXT`.
+workloads that generate fixes, and grants a separate Task-only fix Role. REST
+authentication uses `ORKA_API_TOKEN`, `ORKA_API_TOKEN_FILE`, or the pod
+ServiceAccount token. Local kubeconfig testing can select a context through
+`ORKA_KUBE_CONTEXT`.
+
+OpenCode support requires an Orka build containing upstream PR #289. As of July
+24, 2026, Orka had not published a tagged release containing that change. Build
+and pin Orka from a verified source commit until a later release is confirmed.
+Orka currently labels the entire project experimental, so treat this
+integration accordingly.
+
+The Orka Helm chart at merge commit `d03acb99` omits controller permissions for
+`agentruntimes` and `substrateactorpools` even though the generated controller
+RBAC includes them. Use source manifests or a later chart that fixes those
+permissions. Do not compensate by broadening the dashboard ServiceAccount,
+which must remain limited to Orka Tasks.
+
+Fix generation remains independent from failure analysis. Failure analysis runs
+in-process by default; Helm deployments may separately select the experimental
+`orka-container` analysis runtime without configuring or changing fix generation.
 
 The Orka runtime can generate without the engine chat-completions client only
 when `critique_retries: 0` is explicitly configured. A positive retry count fails

@@ -183,6 +183,11 @@ publishes the expected jobs:
 These features require deployment secrets and, in some cases, additional writer
 runtime dependencies. Their focused guides contain complete examples.
 
+For Orka fix generation, `agent_runtime.type: orka` selects the dashboard
+backend. The operator-managed Orka Agent selects its CLI with
+`spec.runtime.type: opencode` and owns the model endpoint, model ID, and model
+Secret. Keep those settings out of `project.yaml`.
+
 ## Validate a config
 
 A one-build, discovery-only fetch validates the strict schema without making AI

@@ -210,9 +210,36 @@ This selects the git-capable fixer image and enables a separate Task-only Role.
 Enabling container analysis does not enable, configure, or change the fix
 runtime.
 
-When the release namespace differs from the fix runtime namespace, provide an
-`ORKA_API_TOKEN` authorized for that namespace if the Orka API policy does not
-accept the release ServiceAccount token.
+The dashboard type and the Orka Agent runtime are separate settings:
+
+- `ai.fix_prs.agent_runtime.type: orka` selects Orka as the generation backend.
+- `Agent.spec.runtime.type: opencode` selects OpenCode inside Orka.
+
+The operator owns the Agent and its model Secret. The Secret must contain
+`OPENAI_BASE_URL`; `OPENAI_API_KEY` is optional for endpoints that do not require
+authentication. The Agent's `model.name` is the endpoint-specific model ID. See
+[`configs/example/orka-opencode-agent.yaml`](../configs/example/orka-opencode-agent.yaml)
+for a complete manifest and [Agent-proposed fix PRs](fix-prs.md#orka-in-cluster)
+for the matching `project.yaml` configuration.
+
+Do not place model settings or model credentials in `project.yaml`. A private
+repository may use `git_secret`, but that Secret must contain only a read-only
+clone credential. `FIX_TOKEN` remains in the dashboard workload and is never
+passed to the Orka Agent, Task, workspace, or model Secret.
+
+OpenCode requires an Orka build containing upstream PR #289. No tagged Orka
+release contained that change as of July 24, 2026, so verify and pin the Orka
+source and harness image before enabling it. Orka labels the entire project
+experimental.
+
+At Orka merge commit `d03acb99`, the Helm controller ClusterRole omits
+`agentruntimes` and `substrateactorpools`. Use source manifests or a later chart
+with the corrected Orka controller RBAC. Do not add those permissions to the
+dashboard ServiceAccount; it needs Orka Task access only.
+
+When the release namespace differs from `orka.namespace`, provide an
+`ORKA_API_TOKEN` authorized for the Orka namespace if the API namespace policy
+does not accept the release ServiceAccount token.
 
 ## Build and push the image
 
