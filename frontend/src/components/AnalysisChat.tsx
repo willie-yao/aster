@@ -351,6 +351,14 @@ export function AnalysisChat({
       setQuestion("");
     } catch (requestError) {
       if (!(requestError instanceof Error && requestError.name === "AbortError")) {
+        if (
+          requestError instanceof AnalysisChatAPIError &&
+          requestError.status === 401 &&
+          auth.mode === "oauth"
+        ) {
+          auth.signIn();
+          return;
+        }
         const exhausted =
           requestError instanceof AnalysisChatAPIError &&
           requestError.status === 429 &&
