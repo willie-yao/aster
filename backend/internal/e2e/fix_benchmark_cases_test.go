@@ -96,8 +96,8 @@ func TestBenchmarkVerifier(t *testing.T) {
 	}
 	empty := &routetable.NetworkSpec{}
 	routetable.DefaultControlPlaneRouteTable(empty)
-	if empty.ControlPlaneRouteTable != "" {
-		t.Fatalf("empty route table changed to %q", empty.ControlPlaneRouteTable)
+	if empty.ControlPlaneRouteTable != "" || empty.NodeRouteTable != "" {
+		t.Fatalf("empty route tables changed to %#v", empty)
 	}
 	routetable.DefaultControlPlaneRouteTable(nil)
 }
