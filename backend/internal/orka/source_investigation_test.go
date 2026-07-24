@@ -85,6 +85,9 @@ func TestSourceInvestigatorHappyPath(t *testing.T) {
 	if len(result.Citations) != 1 || !result.Citations[0].Verified {
 		t.Fatalf("citations = %+v", result.Citations)
 	}
+	if kube.deleteCalls < 2 || !kube.deleted {
+		t.Fatalf("successful Task cleanup calls=%d deleted=%v", kube.deleteCalls, kube.deleted)
+	}
 	taskSpec := kube.applied["spec"].(map[string]any)
 	agentRuntime := taskSpec["agentRuntime"].(map[string]any)
 	workspace := agentRuntime["workspace"].(map[string]any)
@@ -174,14 +177,40 @@ func TestSourceInvestigatorRecordsCleanupFailure(t *testing.T) {
 	}
 }
 
+func TestSourceInvestigatorRecordsVerifiedResultCleanupFailure(t *testing.T) {
+	inner := `{"version":1,"finding":"finding","confidence":"medium","relationship":"refines","direction":"inspect","citations":[{"path":"pkg/retry.go","line_start":1,"line_end":1,"quote":"retry"}]}`
+	results, done := resultServer(t, sourceOuterResult(t, inner))
+	defer done()
+	deleteErrs := make([]error, 10)
+	for i := range deleteErrs {
+		deleteErrs[i] = errors.New("delete denied")
+	}
+	kube := &fakeTaskAPI{phases: []string{"Running", "Succeeded"}, deleteErrs: deleteErrs}
+	runner := &SourceInvestigator{
+		kube: kube, results: results, reader: fakeSourceReader{files: map[string]string{"pkg/retry.go": "retry\n"}},
+		opts: SourceInvestigationOptions{AgentRef: "reader", PollEvery: time.Millisecond},
+	}
+	result, err := runner.Investigate(t.Context(), sourceRequest())
+	if !errors.Is(err, sourceinvestigation.ErrUnavailable) || !strings.Contains(err.Error(), "after verified result") {
+		t.Fatalf("Investigate = %+v, %v", result, err)
+	}
+	if result.Finding != "" || kube.deleteCalls != 10 {
+		t.Fatalf("result=%+v cleanup calls=%d", result, kube.deleteCalls)
+	}
+}
+
 func TestSourceInvestigatorClassifiesTaskAndEnvelopeFailures(t *testing.T) {
 	t.Run("terminal task", func(t *testing.T) {
+		kube := &fakeTaskAPI{phases: []string{"Running", "Failed"}}
 		runner := &SourceInvestigator{
-			kube: &fakeTaskAPI{phases: []string{"Running", "Failed"}}, results: &ResultClient{}, reader: fakeSourceReader{},
+			kube: kube, results: &ResultClient{}, reader: fakeSourceReader{},
 			opts: SourceInvestigationOptions{AgentRef: "reader", PollEvery: time.Millisecond},
 		}
 		if _, err := runner.Investigate(t.Context(), sourceRequest()); !errors.Is(err, sourceinvestigation.ErrUnavailable) {
 			t.Fatalf("Investigate = %v", err)
+		}
+		if kube.deleteCalls < 2 || !kube.deleted {
+			t.Fatalf("terminal cleanup calls=%d deleted=%v", kube.deleteCalls, kube.deleted)
 		}
 	})
 

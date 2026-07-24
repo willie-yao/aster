@@ -132,7 +132,7 @@ func normalizeSourceInvestigationOptions(opts SourceInvestigationOptions) Source
 func (r *SourceInvestigator) Investigate(
 	ctx context.Context,
 	request sourceinvestigation.Request,
-) (sourceinvestigation.Result, error) {
+) (result sourceinvestigation.Result, err error) {
 	if r == nil || r.kube == nil || r.results == nil || r.reader == nil {
 		return sourceinvestigation.Result{}, fmt.Errorf("%w: Orka runtime is not configured", sourceinvestigation.ErrUnavailable)
 	}
@@ -160,17 +160,29 @@ func (r *SourceInvestigator) Investigate(
 		runErr := fmt.Errorf("%w: applying source Task: %v", sourceinvestigation.ErrUnavailable, err)
 		return sourceinvestigation.Result{}, r.withSourceTaskCleanup(name, runErr)
 	}
+	defer func() {
+		cleanupErr := r.cleanupSourceTask(name)
+		if cleanupErr == nil {
+			return
+		}
+		result = sourceinvestigation.Result{}
+		if err != nil {
+			err = fmt.Errorf("%w: cleaning up source Task after %v: %v", sourceinvestigation.ErrUnavailable, err, cleanupErr)
+			return
+		}
+		err = fmt.Errorf("%w: cleaning up source Task after verified result: %v", sourceinvestigation.ErrUnavailable, cleanupErr)
+	}()
 	request.ReportProgress(sourceinvestigation.PhaseInvestigating)
 	phase, err := r.waitSourceTerminal(ctx, name)
 	if err != nil {
-		return sourceinvestigation.Result{}, r.withSourceTaskCleanup(name, err)
+		return sourceinvestigation.Result{}, err
 	}
 	if phase != "Succeeded" {
 		return sourceinvestigation.Result{}, fmt.Errorf("%w: source Task %s ended %s", sourceinvestigation.ErrUnavailable, name, phase)
 	}
 	raw, err := r.waitSourceResult(ctx, name)
 	if err != nil {
-		return sourceinvestigation.Result{}, r.withSourceTaskCleanup(name, err)
+		return sourceinvestigation.Result{}, err
 	}
 	var outer StructuredResult
 	if err := json.Unmarshal([]byte(raw), &outer); err != nil {
@@ -179,7 +191,7 @@ func (r *SourceInvestigator) Investigate(
 	if err := validateSourceEnvelope(outer, request.Subject.Repository.Revision); err != nil {
 		return sourceinvestigation.Result{}, fmt.Errorf("source investigation Task %s: %w", name, err)
 	}
-	result, err := parseSourceResult(outer.Summary)
+	result, err = parseSourceResult(outer.Summary)
 	if err != nil {
 		return sourceinvestigation.Result{}, fmt.Errorf("source investigation Task %s: %w", name, err)
 	}

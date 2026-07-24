@@ -1022,4 +1022,19 @@ func TestValidateSourceInvestigation(t *testing.T) {
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "at most 30m") {
 		t.Fatalf("oversized timeout error = %v", err)
 	}
+	cfg.AI.SourceInvestigation.Timeout = "15m"
+	retries := 3
+	cfg.AI.SourceInvestigation.Retries = &retries
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "between 0 and 2") {
+		t.Fatalf("oversized retries error = %v", err)
+	}
+	retries = 2
+	cfg.AI.SourceInvestigation.MaxTurns = 1001
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "between 1 and 1000") {
+		t.Fatalf("oversized max turns error = %v", err)
+	}
+	cfg.AI.SourceInvestigation.MaxTurns = 1000
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("source config boundary rejected: %v", err)
+	}
 }

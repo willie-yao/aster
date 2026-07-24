@@ -409,6 +409,11 @@ type AnalysisSourceInvestigation struct {
 	Timeout   string `yaml:"timeout,omitempty" json:"-"`
 }
 
+const (
+	maxSourceInvestigationRetries = 2
+	maxSourceInvestigationTurns   = 1000
+)
+
 // EffectiveSourceInvestigation resolves read-only source runtime defaults.
 func (c *Config) EffectiveSourceInvestigation() AnalysisSourceInvestigation {
 	out := AnalysisSourceInvestigation{}
@@ -962,11 +967,11 @@ func (c *Config) Validate() error {
 		if strings.TrimSpace(source.AgentRef) == "" || strings.TrimSpace(source.API) == "" {
 			return fmt.Errorf("ai.source_investigation requires agent_ref and api")
 		}
-		if source.Retries != nil && *source.Retries < 0 {
-			return fmt.Errorf("ai.source_investigation.retries must be >= 0")
+		if source.Retries != nil && (*source.Retries < 0 || *source.Retries > maxSourceInvestigationRetries) {
+			return fmt.Errorf("ai.source_investigation.retries must be between 0 and %d", maxSourceInvestigationRetries)
 		}
-		if source.MaxTurns < 0 {
-			return fmt.Errorf("ai.source_investigation.max_turns must be >= 0")
+		if source.MaxTurns < 0 || source.MaxTurns > maxSourceInvestigationTurns {
+			return fmt.Errorf("ai.source_investigation.max_turns must be 0 or between 1 and %d", maxSourceInvestigationTurns)
 		}
 		if value := strings.TrimSpace(source.Timeout); value != "" {
 			timeout, err := time.ParseDuration(value)

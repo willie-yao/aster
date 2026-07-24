@@ -443,11 +443,14 @@ The Agent named by `agent_ref` must use a runtime supported by Orka's enforced
 mode cannot use an OpenCode Agent for this feature. Do not remove the guard to
 make an unsupported runtime start. Create `git_secret` in the Orka namespace with
 read-only repository credentials. The chart gives the web-facing server a
-dedicated ServiceAccount with only Task create, get, patch, and delete permissions.
-The server uses the normal dashboard image, never the git-capable fixer image. If
-the source repository is private, put a read-only GitHub token in the AI Secret
-under `GITHUB_READ_TOKEN` so the server can verify returned quotes against the
-pinned commit.
+dedicated ServiceAccount with only Task create, get, patch, and delete
+permissions. The server uses the normal dashboard image, never the git-capable
+fixer image. If the source repository is private, put a read-only GitHub token in
+the AI Secret under `GITHUB_READ_TOKEN` so the server can verify returned quotes
+against the pinned commit.
+
+`retries` must be between `0` and `2`. A nonzero `max_turns` must be between `1`
+and `1000`, matching the Orka Task CRD.
 
 With chart-managed RBAC, `ai.source_investigation.namespace` must match the
 chart's `orka.namespace` value. If the runtime uses another namespace, disable

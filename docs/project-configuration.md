@@ -206,9 +206,11 @@ ai:
 ```
 
 `agent_ref` and `api` are required when the block is present. `timeout` must be
-positive and at most 30 minutes. `git_secret` belongs to Orka and must provide
-read-only clone credentials. Provider and model credentials remain owned by the
-Agent. The Agent runtime must support Orka's enforced `orka.ai/agent-read-only`
+positive and at most 30 minutes. `retries` must be `0` through `2`. A nonzero
+`max_turns` must be `1` through `1000`; zero uses the default. `git_secret`
+belongs to Orka and must provide read-only clone credentials. Provider and model
+credentials remain owned by the Agent. The Agent runtime must support Orka's
+enforced `orka.ai/agent-read-only`
 contract; an Orka release that rejects guarded OpenCode cannot use OpenCode here.
 The dashboard uses `branding.source_repo` and the selected build's exact
 `repo_refs` commit, so there is no repository override or branch fallback. Bare
