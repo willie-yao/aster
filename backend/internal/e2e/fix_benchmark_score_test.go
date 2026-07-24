@@ -282,8 +282,8 @@ func runFixBenchmarkCommandRaw(ctx context.Context, dir string, stdin []byte, na
 	cmd.Dir = dir
 	cmd.Stdin = bytes.NewReader(stdin)
 	cmd.Env = append(os.Environ(),
-		"GIT_CONFIG_GLOBAL=/dev/null",
-		"GIT_CONFIG_SYSTEM=/dev/null",
+		"GIT_CONFIG_GLOBAL="+os.DevNull,
+		"GIT_CONFIG_SYSTEM="+os.DevNull,
 		"GIT_TERMINAL_PROMPT=0",
 	)
 	return cmd.CombinedOutput()
