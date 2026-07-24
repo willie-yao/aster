@@ -14,7 +14,7 @@ import {
   VerifiedOutlined,
 } from "@mui/icons-material";
 import { useAuth } from "../hooks/useAuth";
-import { AnalysisChatAPIError, newAnalysisChatRequestID } from "../lib/analysisChat";
+import { AnalysisChatAPIError, isAmbiguousAnalysisChatFailure, newAnalysisChatRequestID } from "../lib/analysisChat";
 import {
   cancelSourceInvestigation,
   getSourceInvestigation,
@@ -419,7 +419,11 @@ export function SourceInvestigationPanel({
       .catch((recoverError) => {
         if (recoverError instanceof Error && recoverError.name === "AbortError") return;
         if (identityRef.current !== recoverIdentity || controllerRef.current !== controller) return;
-        if (recoverError instanceof AnalysisChatAPIError && recoverError.status === 404) {
+        if (
+          recoverError instanceof AnalysisChatAPIError &&
+          recoverError.status === 404 &&
+          recoverError.message === sourceInvestigationNotFoundMessage
+        ) {
           clearStoredSourceRequestID(storageKey);
           requestIDRef.current = newAnalysisChatRequestID();
           setView(null);
@@ -528,10 +532,13 @@ export function SourceInvestigationPanel({
       }
     } catch (cancelError) {
       if (cancelError instanceof Error && cancelError.name === "AbortError") return;
-      if (identityRef.current === cancelIdentity) {
-        setCancelling(false);
-        setError(sourceErrorMessage(cancelError));
+      if (identityRef.current !== cancelIdentity) return;
+      if (!busy && isAmbiguousAnalysisChatFailure(cancelError)) {
+        await run(false, "cancelling");
+        return;
       }
+      setCancelling(false);
+      setError(sourceErrorMessage(cancelError));
     } finally {
       if (cancelControllerRef.current === controller) {
         cancelControllerRef.current = null;
