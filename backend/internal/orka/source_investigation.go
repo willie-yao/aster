@@ -412,6 +412,13 @@ func SourceInvestigationTaskName(request sourceinvestigation.Request, opts Sourc
 	return Sanitize("source-" + hex.EncodeToString(sum[:8]) + "-" + opts.Version)
 }
 
+func sourcePollingError(operation string, err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("%s: %w", operation, err)
+	}
+	return fmt.Errorf("%w: %s: %v", sourceinvestigation.ErrUnavailable, operation, err)
+}
+
 func (r *SourceInvestigator) waitSourceTerminal(ctx context.Context, name string) (string, error) {
 	every := r.opts.PollEvery
 	if every <= 0 {
@@ -422,7 +429,7 @@ func (r *SourceInvestigator) waitSourceTerminal(ctx context.Context, name string
 	for {
 		phase, err := r.kube.TaskPhase(ctx, r.opts.Namespace, name)
 		if err != nil && !IsNotFound(err) {
-			return "", fmt.Errorf("%w: reading source Task phase: %v", sourceinvestigation.ErrUnavailable, err)
+			return "", sourcePollingError("reading source Task phase", err)
 		}
 		if TerminalPhase(phase) {
 			return phase, nil
@@ -445,7 +452,7 @@ func (r *SourceInvestigator) waitSourceResult(ctx context.Context, name string) 
 	for {
 		raw, ok, err := r.results.Result(ctx, r.opts.Namespace, name)
 		if err != nil {
-			return "", fmt.Errorf("%w: reading source Task result: %v", sourceinvestigation.ErrUnavailable, err)
+			return "", sourcePollingError("reading source Task result", err)
 		}
 		if ok {
 			return raw, nil

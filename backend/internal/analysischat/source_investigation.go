@@ -363,6 +363,9 @@ func sourceProgressDue(phase, lastPhase string, lastEmit time.Time) bool {
 }
 
 func extendSessionExpiry(current *persistedSession, expires time.Time) {
+	if current.ExpiresAt.After(expires) {
+		expires = current.ExpiresAt
+	}
 	current.ExpiresAt = expires
 	current.View.ExpiresAt = expires.Format(time.RFC3339)
 	for requestID, record := range current.Investigations {

@@ -262,6 +262,22 @@ func TestServiceSourceInvestigationRefreshesLegacySnapshot(t *testing.T) {
 	}
 }
 
+func TestExtendSessionExpiryPreservesLatestRetention(t *testing.T) {
+	later := time.Now().UTC().Add(2 * time.Hour).Truncate(time.Second)
+	current := &persistedSession{
+		ExpiresAt: later,
+		View:      SessionView{ExpiresAt: later.Add(-time.Hour).Format(time.RFC3339)},
+		Investigations: map[string]persistedInvestigation{
+			"source": {View: sourceinvestigation.View{ExpiresAt: later.Add(-time.Hour).Format(time.RFC3339)}},
+		},
+	}
+	extendSessionExpiry(current, later.Add(-time.Minute))
+	want := later.Format(time.RFC3339)
+	if !current.ExpiresAt.Equal(later) || current.View.ExpiresAt != want || current.Investigations["source"].View.ExpiresAt != want {
+		t.Fatalf("expiry moved backward: %+v", current)
+	}
+}
+
 func TestSourceProgressDueIncludesHeartbeat(t *testing.T) {
 	now := time.Now()
 	if sourceProgressDue(sourceinvestigation.PhaseInvestigating, sourceinvestigation.PhaseInvestigating, now) {

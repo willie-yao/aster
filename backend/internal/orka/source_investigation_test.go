@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,6 +18,14 @@ import (
 type fakeSourceReader struct {
 	files map[string]string
 	err   error
+}
+
+type errorSourceResultAPI struct {
+	err error
+}
+
+func (r errorSourceResultAPI) Result(context.Context, string, string) (string, bool, error) {
+	return "", false, r.err
 }
 
 func (f fakeSourceReader) ReadFile(_ context.Context, _ sourceinvestigation.Repository, file string) (string, error) {
@@ -76,6 +85,31 @@ func TestNewSourceInvestigatorFromEnvRejectsInvalidAPI(t *testing.T) {
 	_, err := NewSourceInvestigatorFromEnv(SourceInvestigationFromEnvConfig{AgentRef: "reader", API: "orka:8080"})
 	if err == nil || !strings.Contains(err.Error(), "absolute http or https URL") {
 		t.Fatalf("NewSourceInvestigatorFromEnv error = %v", err)
+	}
+}
+
+func TestSourceInvestigatorPreservesPollingContextErrors(t *testing.T) {
+	for _, cause := range []error{context.Canceled, context.DeadlineExceeded} {
+		t.Run(cause.Error()+"/phase", func(t *testing.T) {
+			runner := &SourceInvestigator{
+				kube: &fakeTaskAPI{phaseErr: fmt.Errorf("kubernetes request: %w", cause)},
+				opts: SourceInvestigationOptions{PollEvery: time.Millisecond},
+			}
+			_, err := runner.waitSourceTerminal(t.Context(), "source-task")
+			if !errors.Is(err, cause) || errors.Is(err, sourceinvestigation.ErrUnavailable) {
+				t.Fatalf("waitSourceTerminal error = %v", err)
+			}
+		})
+		t.Run(cause.Error()+"/result", func(t *testing.T) {
+			runner := &SourceInvestigator{
+				results: errorSourceResultAPI{err: fmt.Errorf("result request: %w", cause)},
+				opts:    SourceInvestigationOptions{PollEvery: time.Millisecond},
+			}
+			_, err := runner.waitSourceResult(t.Context(), "source-task")
+			if !errors.Is(err, cause) || errors.Is(err, sourceinvestigation.ErrUnavailable) {
+				t.Fatalf("waitSourceResult error = %v", err)
+			}
+		})
 	}
 }
 
