@@ -104,6 +104,7 @@ func TestWriteOpencodeConfig(t *testing.T) {
 		Model:     "moonshotai/Kimi-K2",
 		Endpoint:  "https://host/v1/chat/completions",
 		Token:     "tok",
+		MaxTurns:  30,
 		AllowBash: true,
 	}
 	if err := writeOpencodeConfig(home, spec); err != nil {
@@ -122,6 +123,9 @@ func TestWriteOpencodeConfig(t *testing.T) {
 			Models map[string]any `json:"models"`
 		} `json:"provider"`
 		Permission map[string]string `json:"permission"`
+		Agent      map[string]struct {
+			Steps int `json:"steps"`
+		} `json:"agent"`
 	}
 	if err := json.Unmarshal(b, &cfg); err != nil {
 		t.Fatalf("unmarshal config: %v", err)
@@ -145,6 +149,9 @@ func TestWriteOpencodeConfig(t *testing.T) {
 	if cfg.Permission["bash"] != "allow" {
 		t.Errorf("bash permission = %q, want allow (AllowBash=true)", cfg.Permission["bash"])
 	}
+	if cfg.Agent["build"].Steps != 30 {
+		t.Errorf("build agent steps = %d, want 30", cfg.Agent["build"].Steps)
+	}
 }
 
 func TestWriteOpencodeConfig_BashDeniedByDefault(t *testing.T) {
@@ -155,10 +162,16 @@ func TestWriteOpencodeConfig_BashDeniedByDefault(t *testing.T) {
 	b, _ := os.ReadFile(filepath.Join(home, ".config", "opencode", "opencode.json"))
 	var cfg struct {
 		Permission map[string]string `json:"permission"`
+		Agent      map[string]struct {
+			Steps int `json:"steps"`
+		} `json:"agent"`
 	}
 	_ = json.Unmarshal(b, &cfg)
 	if cfg.Permission["bash"] != "deny" {
 		t.Errorf("bash permission = %q, want deny (AllowBash=false)", cfg.Permission["bash"])
+	}
+	if _, ok := cfg.Agent["build"]; ok {
+		t.Errorf("build agent steps should use the OpenCode default when MaxTurns is zero: %v", cfg.Agent)
 	}
 }
 

@@ -11,10 +11,11 @@ ARG VERSION=fixer
 RUN CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION}" -o /out/fetcher ./cmd/fetcher
 
 FROM node:20-slim
+ARG OPENCODE_VERSION=1.18.2
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
-    && npm install -g opencode-ai \
+    && npm install -g "opencode-ai@${OPENCODE_VERSION}" \
     && opencode --version
 COPY --from=build /out/fetcher /usr/local/bin/fetcher
 # opencode writes config/data under HOME; the runtime uses isolated temp HOMEs,

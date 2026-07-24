@@ -266,6 +266,10 @@ func writeOpencodeConfig(home string, spec GenerateSpec) error {
 			"limit": map[string]any{"context": 128000, "output": 8192},
 		}
 	}
+	agents := map[string]any{}
+	if spec.MaxTurns > 0 {
+		agents["build"] = map[string]any{"steps": spec.MaxTurns}
+	}
 	cfg := map[string]any{
 		"$schema": "https://opencode.ai/config.json",
 		"provider": map[string]any{
@@ -279,6 +283,7 @@ func writeOpencodeConfig(home string, spec GenerateSpec) error {
 				"models": models,
 			},
 		},
+		"agent": agents,
 		"permission": map[string]any{
 			"edit": "allow",
 			"bash": bashPerm,
