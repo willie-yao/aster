@@ -114,7 +114,8 @@ Pattern conversations cannot be promoted as test-analysis corrections or start
 source investigation, but an evidence-backed response can still use the existing
 chat-to-fix flow.
 In the dashboard, a systemic recurring-pattern card with a published content
-hash renders the same **Chat with agent** control as a test analysis. Pattern
+hash renders the same **Chat with agent** control as a test analysis when at
+least one affected build remains in the current job data window. Pattern
 conversations use cross-build suggested questions, hide test-only correction
 and source-investigation controls, and link build-qualified citations back to
 the matching affected run when a web URL is available.
