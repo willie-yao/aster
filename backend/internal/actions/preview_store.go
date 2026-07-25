@@ -72,7 +72,8 @@ func (s *previewStore) stash(userToken string, entry *previewEntry) (string, err
 	}
 	err = s.updateProtected(key, func(state *previewState, now time.Time) (bool, error) {
 		for _, existing := range state.Previews {
-			if samePreviewAction(existing, record) && existing.Status != previewStatusDone {
+			if samePreviewAction(existing, record) &&
+				(existing.Status == previewStatusRunning || existing.Status == previewStatusUnknown) {
 				return false, ErrPreviewPending
 			}
 		}

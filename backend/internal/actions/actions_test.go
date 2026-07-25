@@ -469,7 +469,14 @@ func TestUnknownPreviewBecomesRetryableAfterConsistencyWindow(t *testing.T) {
 func TestPreviewStoreRejectsDuplicateActionWhilePending(t *testing.T) {
 	service := NewService(&project.Config{}, t.TempDir(), AIConfig{})
 	entry := &previewEntry{kind: "issue", spec: issues.IssueSpec{Key: "same-action"}}
-	if _, err := service.stash("owner-token", entry); err != nil {
+	firstToken, err := service.stash("owner-token", entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.stash("other-owner", entry); err != nil {
+		t.Fatalf("ready replacement was blocked: %v", err)
+	}
+	if _, _, _, _, err := service.beginConfirm("owner-token", firstToken, time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := service.stash("other-owner", entry); !errors.Is(err, ErrPreviewPending) {

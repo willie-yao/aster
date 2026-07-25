@@ -469,7 +469,7 @@ func (s *Service) reconcileEntry(ctx context.Context, entry *previewEntry, userT
 			return "", false, ErrPreviewTargetChanged
 		}
 		client := issues.NewClient(userToken, eff.Repo.Owner, eff.Repo.Name)
-		_, url, found, err := client.SearchOpenIssue(ctx, issues.MarkerToken(entry.spec.Key), issues.MarkerFor(entry.spec.Key))
+		_, url, found, err := client.SearchIssue(ctx, issues.MarkerToken(entry.spec.Key), issues.MarkerFor(entry.spec.Key))
 		return url, found, err
 	case gfKind:
 		eff := s.cfg.EffectiveFixPRs()
@@ -480,7 +480,7 @@ func (s *Service) reconcileEntry(ctx context.Context, entry *previewEntry, userT
 			return "", false, ErrPreviewTargetChanged
 		}
 		key := entry.fix.Snapshot().Key
-		_, url, found, err := fixpr.NewClients(userToken).SearchOpenPR(ctx, eff.Repo.Owner, eff.Repo.Name, fixpr.MarkerToken(key), fixpr.MarkerFor(key))
+		_, url, found, err := fixpr.NewClients(userToken).SearchAnyPR(ctx, eff.Repo.Owner, eff.Repo.Name, fixpr.MarkerToken(key), fixpr.MarkerFor(key))
 		return url, found, err
 	default:
 		return "", false, ErrPreviewNotFound
