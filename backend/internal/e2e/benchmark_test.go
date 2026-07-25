@@ -746,9 +746,11 @@ func selectedBenchmarkDraftAttempt(observations []benchmarkDraftObservation, tc 
 	}
 	for i := len(observations) - 1; i >= 0; i-- {
 		observation := observations[i]
-		if observation.RootCause == tc.AIAnalysis.RootCause &&
+		if observation.Summary == tc.AISummary.Summary &&
+			observation.RootCause == tc.AIAnalysis.RootCause &&
 			observation.SuggestedFix == tc.AIAnalysis.SuggestedFix &&
 			observation.Severity == tc.AIAnalysis.Severity &&
+			slices.Equal(observation.RelevantFiles, tc.AIAnalysis.RelevantFiles) &&
 			observation.IsTransient == tc.AISummary.IsTransient {
 			return observation.Attempt
 		}
@@ -883,6 +885,28 @@ func TestBenchmarkDraftScoringProducesPairedDeltas(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("paired draft telemetry missing %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestSelectedBenchmarkDraftAttemptUsesPublishedIdentity(t *testing.T) {
+	observations := []benchmarkDraftObservation{
+		{DraftObservation: ai.DraftObservation{
+			Attempt: 1, Summary: "accepted summary", RootCause: "same cause", SuggestedFix: "same fix",
+			Severity: "High", RelevantFiles: []string{"accepted.go"},
+		}},
+		{DraftObservation: ai.DraftObservation{
+			Attempt: 2, Phase: "semantic_retry", Summary: "rejected summary", RootCause: "same cause", SuggestedFix: "same fix",
+			Severity: "High", RelevantFiles: []string{"rejected.go"},
+		}},
+	}
+	tc := &models.TestCase{
+		AISummary: &models.AISummary{Summary: "accepted summary"},
+		AIAnalysis: &models.AIAnalysis{
+			RootCause: "same cause", SuggestedFix: "same fix", Severity: "High", RelevantFiles: []string{"accepted.go"},
+		},
+	}
+	if got := selectedBenchmarkDraftAttempt(observations, tc); got != 1 {
+		t.Fatalf("selected attempt = %d, want 1", got)
 	}
 }
 

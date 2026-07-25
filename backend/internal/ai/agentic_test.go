@@ -1221,9 +1221,14 @@ func TestAgentic_DraftObserverReceivesCopiesInOrder(t *testing.T) {
 	var observations []DraftObservation
 	in := newTestAgenticInputs(t, &fakeBrowser{}, opts)
 	in.DraftObserver = func(observation DraftObservation) {
-		observations = append(observations, observation)
+		snapshot := observation
+		snapshot.RelevantFiles = append([]string(nil), observation.RelevantFiles...)
+		observations = append(observations, snapshot)
 		observation.RootCause = "observer mutation"
 		observation.SuggestedFix = "observer mutation"
+		if len(observation.RelevantFiles) > 0 {
+			observation.RelevantFiles[0] = "observer mutation"
+		}
 	}
 	_, analysis, err := client.doAnalyzeAgentic(context.Background(), in,
 		"agentic:test:draft-observer-order", "sys", "user")
@@ -1241,6 +1246,9 @@ func TestAgentic_DraftObserverReceivesCopiesInOrder(t *testing.T) {
 	}
 	if analysis.RootCause != observations[1].RootCause || analysis.SuggestedFix != observations[1].SuggestedFix {
 		t.Fatalf("observer mutation affected runtime: analysis=%+v observation=%+v", analysis, observations[1])
+	}
+	if len(analysis.RelevantFiles) != 1 || analysis.RelevantFiles[0] != "kustomize/cluster-template.yaml" {
+		t.Fatalf("observer mutated relevant files: %v", analysis.RelevantFiles)
 	}
 
 	_, hit, err := client.doAnalyzeAgentic(context.Background(), in,

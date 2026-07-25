@@ -96,6 +96,7 @@ type DraftObservation struct {
 	SuggestedFix        string
 	IsTransient         bool
 	Severity            string
+	RelevantFiles       []string
 	PuntCount           int
 	UnreadCitationCount int
 	MissingGroupCount   int
@@ -1189,14 +1190,19 @@ func (s *agentState) observeDraft(phase string, parsed analysisResponse, out cri
 		return
 	}
 	s.draftAttempt++
+	summary := parsed.Summary
+	if summary == "" {
+		summary = firstSentence(parsed.RootCause)
+	}
 	s.draftObserver(DraftObservation{
 		Attempt:             s.draftAttempt,
 		Phase:               phase,
-		Summary:             parsed.Summary,
+		Summary:             summary,
 		RootCause:           parsed.RootCause,
 		SuggestedFix:        parsed.SuggestedFix,
 		IsTransient:         parsed.IsTransient,
 		Severity:            parsed.Severity,
+		RelevantFiles:       append([]string(nil), parsed.RelevantFiles...),
 		PuntCount:           len(out.PuntMatches),
 		UnreadCitationCount: len(out.UnreadCitations),
 		MissingGroupCount:   out.MissingEvidenceCount(),
