@@ -315,6 +315,33 @@ export function ChatFixDialog({
                       Direction: {selectedPattern.suggested_fix}
                     </Typography>
                   )}
+                  {selectedPattern.relevant_files && selectedPattern.relevant_files.length > 0 && (
+                    <Box sx={{ mt: 1 }}>
+                      <Typography variant="caption" color="text.secondary" sx={{ display: "block", fontWeight: 700, mb: 0.45 }}>
+                        Agent starting files
+                      </Typography>
+                      <Box
+                        sx={{
+                          borderRadius: "8px",
+                          bgcolor: "background.paper",
+                          border: "1px solid",
+                          borderColor: "divider",
+                          px: 1,
+                          py: 0.65,
+                        }}
+                      >
+                        {selectedPattern.relevant_files.map((path) => (
+                          <Typography
+                            key={path}
+                            variant="caption"
+                            sx={{ display: "block", fontFamily: "monospace", overflowWrap: "anywhere" }}
+                          >
+                            {path}
+                          </Typography>
+                        ))}
+                      </Box>
+                    </Box>
+                  )}
                 </Box>
               )}
             </ContextSection>

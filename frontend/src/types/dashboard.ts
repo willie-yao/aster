@@ -169,6 +169,7 @@ export interface PatternAnalysis {
   shared_root_cause?: string;
   shared_builds?: string[];
   suggested_fix?: string;
+  relevant_files?: string[];
   summary: string;
 }
 
