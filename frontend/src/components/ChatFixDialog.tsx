@@ -279,7 +279,7 @@ export function ChatFixDialog({
         {!preview && !url && (
           <Stack spacing={2.5}>
             <Alert severity="info" variant="outlined">
-              Only this response, its verified evidence, the selected recurring pattern, and your optional instruction are sent. The complete conversation is excluded.
+              Only this response, its verified evidence, the selected recurring pattern, any enabled verified source finding, and your optional instruction are sent. The complete conversation is excluded.
             </Alert>
 
             <ContextSection title="Recurring pattern" icon={<BuildOutlined sx={{ fontSize: 17, color: "warning.main" }} />}>

@@ -428,3 +428,180 @@ func TestPreviewStoreEvictsOldestNonRunningPreviewToFit(t *testing.T) {
 		t.Fatalf("newest preview was not retained: %v", err)
 	}
 }
+
+func TestPreviewStoreRejectsCountPressureWithoutEvictingConfirmedResults(t *testing.T) {
+	dataDir := t.TempDir()
+	service := NewService(&project.Config{}, dataDir, AIConfig{})
+	token, err := service.stash("owner-token", &previewEntry{kind: "issue"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, attemptID, err := service.beginConfirm("owner-token", token, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultURL := "https://github.com/o/r/issues/confirmed"
+	if err := service.finishConfirm("owner-token", token, attemptID, resultURL, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.previewStore.update(func(state *previewState, now time.Time) (bool, error) {
+		for i := 1; i < maxPersistedPreviews; i++ {
+			state.Previews[fmt.Sprintf("confirmed-%03d", i)] = &persistedPreview{
+				Owner:     "owner",
+				Kind:      "issue",
+				CreatedAt: now.Format(time.RFC3339Nano),
+				Status:    previewStatusDone,
+				ResultURL: fmt.Sprintf("https://github.com/o/r/issues/%d", i),
+			}
+		}
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(dataDir, "action_preview_state.json")
+	before, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.stash("owner-token", &previewEntry{kind: "issue"}); err == nil {
+		t.Fatal("preview count pressure was accepted")
+	}
+	after, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("rejected write replaced confirmed preview state")
+	}
+	_, recoveredURL, _, err := NewService(&project.Config{}, dataDir, AIConfig{}).beginConfirm("owner-token", token, time.Hour)
+	if err != nil || recoveredURL != resultURL {
+		t.Fatalf("confirmed result = %q err=%v", recoveredURL, err)
+	}
+}
+
+func TestPreviewStoreRejectsSizePressureWithoutEvictingConfirmedResult(t *testing.T) {
+	dataDir := t.TempDir()
+	service := NewService(&project.Config{}, dataDir, AIConfig{})
+	token, err := service.stash("owner-token", &previewEntry{kind: "issue"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, attemptID, err := service.beginConfirm("owner-token", token, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultURL := "https://github.com/o/r/issues/confirmed"
+	if err := service.finishConfirm("owner-token", token, attemptID, resultURL, nil); err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(dataDir, "action_preview_state.json")
+	before, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.previewStore.maxBytes = len(before) + 256
+	if _, err := service.stash("owner-token", &previewEntry{
+		kind: "issue", spec: issues.IssueSpec{Key: "large", Title: "Large", Body: strings.Repeat("x", len(before)*4)},
+	}); err == nil {
+		t.Fatal("preview size pressure was accepted")
+	}
+	after, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("rejected write replaced confirmed preview state")
+	}
+	_, recoveredURL, _, err := NewService(&project.Config{}, dataDir, AIConfig{}).beginConfirm("owner-token", token, time.Hour)
+	if err != nil || recoveredURL != resultURL {
+		t.Fatalf("confirmed result = %q err=%v", recoveredURL, err)
+	}
+}
+
+func TestFitPreviewStateProtectsInsertedPreview(t *testing.T) {
+	protected := &persistedPreview{
+		Kind: "issue", CreatedAt: "2026-01-01T00:00:00Z", Status: previewStatusReady,
+		Issue: &issues.IssueSpec{Key: "protected", Body: strings.Repeat("p", 600)},
+	}
+	existing := &persistedPreview{
+		Kind: "issue", CreatedAt: "2026-01-01T00:00:01Z", Status: previewStatusReady,
+		Issue: &issues.IssueSpec{Key: "existing", Body: strings.Repeat("e", 600)},
+	}
+	state := &previewState{
+		Version: previewStateVersion,
+		Previews: map[string]*persistedPreview{
+			"protected": protected,
+			"existing":  existing,
+		},
+	}
+	single := &previewState{Version: previewStateVersion, Previews: map[string]*persistedPreview{"protected": protected}}
+	encoded, err := json.MarshalIndent(single, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fitPreviewState(state, len(encoded)+16, "protected"); err != nil {
+		t.Fatal(err)
+	}
+	if state.Previews["protected"] == nil {
+		t.Fatal("protected preview was evicted")
+	}
+	if state.Previews["existing"] != nil {
+		t.Fatal("existing preview was retained instead of the protected preview")
+	}
+}
+
+func TestFitPreviewStateOrdersTimestampsChronologically(t *testing.T) {
+	newState := func() *previewState {
+		return &previewState{
+			Version: previewStateVersion,
+			Previews: map[string]*persistedPreview{
+				"oldest": {
+					Kind: "issue", CreatedAt: "2026-01-01T00:00:00Z", Status: previewStatusReady,
+					Issue: &issues.IssueSpec{Key: "oldest", Body: strings.Repeat("o", 600)},
+				},
+				"newer": {
+					Kind: "issue", CreatedAt: "2026-01-01T00:00:00.1Z", Status: previewStatusReady,
+					Issue: &issues.IssueSpec{Key: "newer", Body: strings.Repeat("n", 600)},
+				},
+			},
+		}
+	}
+
+	t.Run("count", func(t *testing.T) {
+		state := newState()
+		for i := 0; i < maxPersistedPreviews-1; i++ {
+			key := fmt.Sprintf("later-%03d", i)
+			state.Previews[key] = &persistedPreview{
+				Kind: "issue", CreatedAt: "2026-01-01T00:00:01Z", Status: previewStatusReady,
+				Issue: &issues.IssueSpec{Key: key},
+			}
+		}
+		if err := fitPreviewState(state, maxPreviewStateBytes, ""); err != nil {
+			t.Fatal(err)
+		}
+		if state.Previews["oldest"] != nil || state.Previews["newer"] == nil {
+			t.Fatalf("remaining timestamps = oldest:%t newer:%t", state.Previews["oldest"] != nil, state.Previews["newer"] != nil)
+		}
+	})
+
+	t.Run("size", func(t *testing.T) {
+		state := newState()
+		oldestOnly := &previewState{Version: previewStateVersion, Previews: map[string]*persistedPreview{"oldest": state.Previews["oldest"]}}
+		newerOnly := &previewState{Version: previewStateVersion, Previews: map[string]*persistedPreview{"newer": state.Previews["newer"]}}
+		oldestBytes, err := json.MarshalIndent(oldestOnly, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		newerBytes, err := json.MarshalIndent(newerOnly, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		maxBytes := max(len(oldestBytes), len(newerBytes)) + 16
+		if err := fitPreviewState(state, maxBytes, ""); err != nil {
+			t.Fatal(err)
+		}
+		if state.Previews["oldest"] != nil || state.Previews["newer"] == nil {
+			t.Fatalf("remaining timestamps = oldest:%t newer:%t", state.Previews["oldest"] != nil, state.Previews["newer"] != nil)
+		}
+	})
+}

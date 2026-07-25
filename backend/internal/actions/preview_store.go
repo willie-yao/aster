@@ -61,13 +61,14 @@ func (s *previewStore) stash(userToken string, entry *previewEntry) (string, err
 	if err != nil {
 		return "", fmt.Errorf("generating preview token: %w", err)
 	}
+	key := tokenHash(token)
 	record, err := persistPreview(entry, tokenHash(userToken), time.Now().UTC())
 	if err != nil {
 		return "", err
 	}
-	err = s.update(func(state *previewState, now time.Time) (bool, error) {
-		evictPersistedPreviews(state, now)
-		state.Previews[tokenHash(token)] = record
+	err = s.updateProtected(key, func(state *previewState, now time.Time) (bool, error) {
+		record.CreatedAt = now.Format(time.RFC3339Nano)
+		state.Previews[key] = record
 		return true, nil
 	})
 	if err != nil {
@@ -87,25 +88,24 @@ func (s *previewStore) begin(userToken, token string, lease time.Duration) (*pre
 	var entry *previewEntry
 	var resultURL string
 	err = s.update(func(state *previewState, now time.Time) (bool, error) {
-		changed := evictPersistedPreviews(state, now)
 		record := state.Previews[tokenHash(token)]
 		if record == nil || record.Owner != tokenHash(userToken) {
-			return changed, ErrPreviewNotFound
+			return false, ErrPreviewNotFound
 		}
 		if record.Status == previewStatusDone && record.ResultURL != "" {
 			resultURL = record.ResultURL
-			return changed, nil
+			return false, nil
 		}
 		if record.Status == previewStatusRunning {
 			lease, leaseErr := time.Parse(time.RFC3339, record.LeaseExpires)
 			if leaseErr == nil && now.Before(lease) {
-				return changed, ErrPreviewPending
+				return false, ErrPreviewPending
 			}
 		}
 		var err error
 		entry, err = restorePreview(record)
 		if err != nil {
-			return changed, err
+			return false, err
 		}
 		record.Status = previewStatusRunning
 		record.LeaseExpires = now.Add(lease).Format(time.RFC3339Nano)
@@ -145,16 +145,15 @@ func (s *previewStore) finish(userToken, token, attemptID, resultURL string, con
 func (s *previewStore) take(userToken, token string) (*previewEntry, error) {
 	var entry *previewEntry
 	err := s.update(func(state *previewState, now time.Time) (bool, error) {
-		changed := evictPersistedPreviews(state, now)
 		key := tokenHash(token)
 		record := state.Previews[key]
 		if record == nil || record.Owner != tokenHash(userToken) {
-			return changed, ErrPreviewNotFound
+			return false, ErrPreviewNotFound
 		}
 		var err error
 		entry, err = restorePreview(record)
 		if err != nil {
-			return changed, err
+			return false, err
 		}
 		delete(state.Previews, key)
 		return true, nil
@@ -163,6 +162,10 @@ func (s *previewStore) take(userToken, token string) (*previewEntry, error) {
 }
 
 func (s *previewStore) update(fn func(*previewState, time.Time) (bool, error)) error {
+	return s.updateProtected("", fn)
+}
+
+func (s *previewStore) updateProtected(protectedKey string, fn func(*previewState, time.Time) (bool, error)) error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
 		return err
 	}
@@ -181,9 +184,12 @@ func (s *previewStore) update(fn func(*previewState, time.Time) (bool, error)) e
 	if err != nil {
 		return err
 	}
-	changed, opErr := fn(state, time.Now().UTC())
+	now := time.Now().UTC()
+	changed := evictPersistedPreviews(state, now)
+	opChanged, opErr := fn(state, now)
+	changed = changed || opChanged
 	if changed {
-		if err := fitPreviewState(state, s.maxBytes); err != nil {
+		if err := fitPreviewState(state, s.maxBytes, protectedKey); err != nil {
 			return err
 		}
 		if err := statefile.WriteJSON(s.path, state); err != nil {
@@ -288,57 +294,54 @@ func evictPersistedPreviews(state *previewState, now time.Time) bool {
 			changed = true
 			continue
 		}
-		created, err := time.Parse(time.RFC3339, record.CreatedAt)
+		created, err := time.Parse(time.RFC3339Nano, record.CreatedAt)
 		if err != nil || created.Before(cutoff) {
 			delete(state.Previews, key)
 			changed = true
 		}
 	}
-	if len(state.Previews) <= maxPersistedPreviews {
-		return changed
-	}
-	type item struct{ key, created string }
-	items := make([]item, 0, len(state.Previews))
-	for key, record := range state.Previews {
-		if record.Status != previewStatusRunning {
-			items = append(items, item{key: key, created: record.CreatedAt})
-		}
-	}
-	sort.Slice(items, func(i, j int) bool { return items[i].created < items[j].created })
-	for len(state.Previews) > maxPersistedPreviews && len(items) > 0 {
-		delete(state.Previews, items[0].key)
-		items = items[1:]
-		changed = true
-	}
 	return changed
 }
 
-func fitPreviewState(state *previewState, maxBytes int) error {
+func fitPreviewState(state *previewState, maxBytes int, protectedKey string) error {
 	if maxBytes <= 0 {
 		maxBytes = maxPreviewStateBytes
 	}
+	type item struct {
+		key     string
+		created time.Time
+	}
+	items := make([]item, 0, len(state.Previews))
+	for key, record := range state.Previews {
+		if key == protectedKey || record.Status == previewStatusRunning || record.Status == previewStatusDone {
+			continue
+		}
+		created, err := time.Parse(time.RFC3339Nano, record.CreatedAt)
+		if err != nil {
+			created = time.Time{}
+		}
+		items = append(items, item{key: key, created: created})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].created.Equal(items[j].created) {
+			return items[i].key < items[j].key
+		}
+		return items[i].created.Before(items[j].created)
+	})
 	encoded, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encoding preview state: %w", err)
 	}
-	if len(encoded) <= maxBytes {
-		return nil
-	}
-	type item struct{ key, created string }
-	items := make([]item, 0, len(state.Previews))
-	for key, record := range state.Previews {
-		if record.Status != previewStatusRunning {
-			items = append(items, item{key: key, created: record.CreatedAt})
-		}
-	}
-	sort.Slice(items, func(i, j int) bool { return items[i].created < items[j].created })
-	for len(encoded) > maxBytes && len(items) > 1 {
+	for (len(state.Previews) > maxPersistedPreviews || len(encoded) > maxBytes) && len(items) > 0 {
 		delete(state.Previews, items[0].key)
 		items = items[1:]
 		encoded, err = json.MarshalIndent(state, "", "  ")
 		if err != nil {
 			return fmt.Errorf("encoding preview state: %w", err)
 		}
+	}
+	if len(state.Previews) > maxPersistedPreviews {
+		return fmt.Errorf("preview state exceeds %d records", maxPersistedPreviews)
 	}
 	if len(encoded) > maxBytes {
 		return fmt.Errorf("preview state exceeds %d bytes", maxBytes)
