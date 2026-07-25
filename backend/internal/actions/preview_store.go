@@ -46,6 +46,7 @@ type previewState struct {
 type previewStore struct {
 	path     string
 	lockPath string
+	maxBytes int
 }
 
 func newPreviewStore(dataDir string) *previewStore {
@@ -107,9 +108,9 @@ func (s *previewStore) begin(userToken, token string, lease time.Duration) (*pre
 			return changed, err
 		}
 		record.Status = previewStatusRunning
-		record.LeaseExpires = now.Add(lease).Format(time.RFC3339)
+		record.LeaseExpires = now.Add(lease).Format(time.RFC3339Nano)
 		record.AttemptID = attemptID
-		record.CreatedAt = now.Format(time.RFC3339)
+		record.CreatedAt = now.Format(time.RFC3339Nano)
 		return true, nil
 	})
 	return entry, resultURL, attemptID, err
@@ -136,7 +137,7 @@ func (s *previewStore) finish(userToken, token, attemptID, resultURL string, con
 		}
 		record.Status = previewStatusDone
 		record.ResultURL = resultURL
-		record.CreatedAt = now.Format(time.RFC3339)
+		record.CreatedAt = now.Format(time.RFC3339Nano)
 		return true, nil
 	})
 }
@@ -182,6 +183,9 @@ func (s *previewStore) update(fn func(*previewState, time.Time) (bool, error)) e
 	}
 	changed, opErr := fn(state, time.Now().UTC())
 	if changed {
+		if err := fitPreviewState(state, s.maxBytes); err != nil {
+			return err
+		}
 		if err := statefile.WriteJSON(s.path, state); err != nil {
 			return fmt.Errorf("writing preview state: %w", err)
 		}
@@ -199,12 +203,16 @@ func (s *previewStore) load() (*previewState, error) {
 		return nil, fmt.Errorf("opening preview state: %w", err)
 	}
 	defer file.Close()
-	data, err := io.ReadAll(io.LimitReader(file, maxPreviewStateBytes+1))
+	maxBytes := s.maxBytes
+	if maxBytes <= 0 {
+		maxBytes = maxPreviewStateBytes
+	}
+	data, err := io.ReadAll(io.LimitReader(file, int64(maxBytes)+1))
 	if err != nil {
 		return nil, fmt.Errorf("reading preview state: %w", err)
 	}
-	if len(data) > maxPreviewStateBytes {
-		return nil, fmt.Errorf("preview state exceeds %d bytes", maxPreviewStateBytes)
+	if len(data) > maxBytes {
+		return nil, fmt.Errorf("preview state exceeds %d bytes", maxBytes)
 	}
 	state := freshPreviewState()
 	if err := json.Unmarshal(data, state); err != nil {
@@ -225,7 +233,7 @@ func persistPreview(entry *previewEntry, owner string, now time.Time) (*persiste
 		return nil, ErrPreviewNotFound
 	}
 	record := &persistedPreview{
-		Owner: owner, Kind: entry.kind, CreatedAt: now.Format(time.RFC3339), Status: previewStatusReady,
+		Owner: owner, Kind: entry.kind, CreatedAt: now.Format(time.RFC3339Nano), Status: previewStatusReady,
 	}
 	switch entry.kind {
 	case "issue":
@@ -276,7 +284,7 @@ func evictPersistedPreviews(state *previewState, now time.Time) bool {
 			record.Status = previewStatusReady
 			record.LeaseExpires = ""
 			record.AttemptID = ""
-			record.CreatedAt = now.Format(time.RFC3339)
+			record.CreatedAt = now.Format(time.RFC3339Nano)
 			changed = true
 			continue
 		}
@@ -303,4 +311,37 @@ func evictPersistedPreviews(state *previewState, now time.Time) bool {
 		changed = true
 	}
 	return changed
+}
+
+func fitPreviewState(state *previewState, maxBytes int) error {
+	if maxBytes <= 0 {
+		maxBytes = maxPreviewStateBytes
+	}
+	encoded, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encoding preview state: %w", err)
+	}
+	if len(encoded) <= maxBytes {
+		return nil
+	}
+	type item struct{ key, created string }
+	items := make([]item, 0, len(state.Previews))
+	for key, record := range state.Previews {
+		if record.Status != previewStatusRunning {
+			items = append(items, item{key: key, created: record.CreatedAt})
+		}
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].created < items[j].created })
+	for len(encoded) > maxBytes && len(items) > 1 {
+		delete(state.Previews, items[0].key)
+		items = items[1:]
+		encoded, err = json.MarshalIndent(state, "", "  ")
+		if err != nil {
+			return fmt.Errorf("encoding preview state: %w", err)
+		}
+	}
+	if len(encoded) > maxBytes {
+		return fmt.Errorf("preview state exceeds %d bytes", maxBytes)
+	}
+	return nil
 }

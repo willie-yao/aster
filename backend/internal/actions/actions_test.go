@@ -1,6 +1,7 @@
 package actions
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/issues"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/resolve"
@@ -364,5 +366,65 @@ func TestPreviewConfirmationLeaseFencesStaleAttempt(t *testing.T) {
 	_, resultURL, _, err := NewService(&project.Config{}, dataDir, AIConfig{}).beginConfirm("owner-token", token, time.Hour)
 	if err != nil || resultURL != "https://github.com/o/r/issues/new" {
 		t.Fatalf("fenced result = %q err=%v", resultURL, err)
+	}
+}
+
+func TestPreviewStoreRejectsOversizedWriteWithoutReplacingState(t *testing.T) {
+	dataDir := t.TempDir()
+	service := NewService(&project.Config{}, dataDir, AIConfig{})
+	firstToken, err := service.stash("owner-token", &previewEntry{
+		kind: "issue", spec: issues.IssueSpec{Key: "first", Title: "First", Body: "small"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(dataDir, "action_preview_state.json")
+	before, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.previewStore.maxBytes = len(before) + 256
+	if _, err := service.stash("owner-token", &previewEntry{
+		kind: "issue", spec: issues.IssueSpec{Key: "large", Title: "Large", Body: strings.Repeat("x", len(before)*4)},
+	}); err == nil {
+		t.Fatal("oversized preview state write was accepted")
+	}
+	after, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("oversized write replaced the last valid preview state")
+	}
+	if _, err := NewService(&project.Config{}, dataDir, AIConfig{}).take("owner-token", firstToken); err != nil {
+		t.Fatalf("valid preview was not recoverable: %v", err)
+	}
+}
+
+func TestPreviewStoreEvictsOldestNonRunningPreviewToFit(t *testing.T) {
+	dataDir := t.TempDir()
+	service := NewService(&project.Config{}, dataDir, AIConfig{})
+	firstToken, err := service.stash("owner-token", &previewEntry{
+		kind: "issue", spec: issues.IssueSpec{Key: "first", Title: "First", Body: strings.Repeat("a", 600)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(dataDir, "action_preview_state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.previewStore.maxBytes = int(info.Size()) + 256
+	secondToken, err := service.stash("owner-token", &previewEntry{
+		kind: "issue", spec: issues.IssueSpec{Key: "second", Title: "Second", Body: strings.Repeat("b", 600)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.take("owner-token", firstToken); !errors.Is(err, ErrPreviewNotFound) {
+		t.Fatalf("oldest preview was not evicted: %v", err)
+	}
+	if _, err := service.take("owner-token", secondToken); err != nil {
+		t.Fatalf("newest preview was not retained: %v", err)
 	}
 }
