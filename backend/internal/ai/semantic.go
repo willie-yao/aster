@@ -160,6 +160,12 @@ func (c *Client) applySemanticJudgePostLoop(ctx context.Context, state *agentSta
 		return parsed
 	}
 	out := critiqueDraft(rp, state.readArtifactsFull, state.readArtifactsBase, matchSkillsForDraft(state, rp), state.consecutiveFailures)
+	if len(out.MissingSkillEvidence) > 0 {
+		if treeSet := state.artifactTreeSet(); treeSet != nil {
+			pruneAbsentSkillEvidence(rp, &out, treeSet)
+		}
+	}
+	state.observeDraft("semantic_retry", rp, out)
 	if !out.Passed {
 		recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Outcome: "revision_rejected", IssueCount: len(out.Matches())})
 		log.Printf("  ✗ semantic judge (post-loop): %d objection(s); revised draft failed critique %v, keeping original", len(objs), out.Matches())
