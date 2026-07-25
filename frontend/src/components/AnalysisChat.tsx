@@ -15,6 +15,7 @@ import Typography from "@mui/material/Typography";
 import {
   ArrowUpward,
   AutoAwesome,
+  BuildOutlined,
   ExpandMore,
   FactCheckOutlined,
   HelpOutlined,
@@ -57,6 +58,9 @@ import { RichText } from "./RichText";
 import { AnalysisCorrectionDialog } from "./AnalysisCorrectionDialog";
 import { SourceInvestigationPanel } from "./SourceInvestigationPanel";
 import type { AnalysisCorrectionPreview } from "../types/corrections";
+import type { PatternAnalysis } from "../types/dashboard";
+import type { SourceInvestigationView } from "../types/sourceInvestigation";
+import { ChatFixDialog, type ChatFixSourceSelection } from "./ChatFixDialog";
 
 interface PendingTurn {
   sessionID: string;
@@ -133,15 +137,23 @@ function AssistantMessage({
   fileCtx,
   correctionEnabled,
   sourceInvestigationEnabled,
+  chatFixEnabled,
+  fixEligible,
   sessionID,
   onReviewCorrection,
+  onUseForFix,
+  onSourceInvestigationChange,
 }: {
   message: AnalysisChatMessage;
   fileCtx: FileToUrlContext;
   correctionEnabled: boolean;
   sourceInvestigationEnabled: boolean;
+  chatFixEnabled: boolean;
+  fixEligible: boolean;
   sessionID: string;
   onReviewCorrection: (requestID: string) => void;
+  onUseForFix: () => void;
+  onSourceInvestigationChange: (requestID: string | null, view: SourceInvestigationView | null) => void;
 }) {
   const assessment = message.assessment
     ? assessmentConfig[message.assessment]
@@ -286,7 +298,21 @@ function AssistantMessage({
           <SourceInvestigationPanel
             sessionID={sessionID}
             chatRequestID={message.request_id}
+            onInvestigationChange={onSourceInvestigationChange}
           />
+        )}
+
+        {chatFixEnabled && fixEligible && message.request_id && (
+          <Button
+            size="small"
+            variant="outlined"
+            color="warning"
+            startIcon={<BuildOutlined />}
+            onClick={onUseForFix}
+            sx={{ alignSelf: "flex-start" }}
+          >
+            Use this finding in a fix proposal
+          </Button>
         )}
       </Stack>
     </Box>
@@ -371,10 +397,12 @@ function ThinkingState({
 export function AnalysisChat({
   analysisRef,
   fileCtx,
+  fixPatterns = [],
   onCorrectionChanged,
 }: {
   analysisRef: AnalysisChatReference;
   fileCtx: FileToUrlContext;
+  fixPatterns?: PatternAnalysis[];
   onCorrectionChanged?: () => void;
 }) {
   const { features } = useCapabilities();
@@ -392,6 +420,9 @@ export function AnalysisChat({
   const [correctionOpen, setCorrectionOpen] = useState(false);
   const [correctionBusy, setCorrectionBusy] = useState(false);
   const [correctionError, setCorrectionError] = useState<string | null>(null);
+  const [fixMessage, setFixMessage] = useState<AnalysisChatMessage | null>(null);
+  const [fixOpen, setFixOpen] = useState(false);
+  const [sourceSelections, setSourceSelections] = useState<Record<string, ChatFixSourceSelection>>({});
   const createRequestIDRef = useRef(newAnalysisChatRequestID());
   const controllerRef = useRef<AbortController | null>(null);
   const cancelControllerRef = useRef<AbortController | null>(null);
@@ -431,6 +462,9 @@ export function AnalysisChat({
     setCorrectionOpen(false);
     setCorrectionBusy(false);
     setCorrectionError(null);
+    setFixMessage(null);
+    setFixOpen(false);
+    setSourceSelections({});
     createRequestIDRef.current = newAnalysisChatRequestID();
   }, [identity]);
 
@@ -649,6 +683,32 @@ export function AnalysisChat({
     }
   }
 
+  function sourceInvestigationChanged(
+    chatRequestID: string,
+    requestID: string | null,
+    view: SourceInvestigationView | null,
+  ) {
+    setSourceSelections((current) => {
+      if (!requestID || !view) {
+        if (!(chatRequestID in current)) return current;
+        const next = { ...current };
+        delete next[chatRequestID];
+        return next;
+      }
+      return { ...current, [chatRequestID]: { requestID, view } };
+    });
+  }
+
+  function openFix(message: AnalysisChatMessage) {
+    if (auth.status === "anonymous") {
+      auth.signIn();
+      return;
+    }
+    if (auth.status !== "authenticated") return;
+    setFixMessage(message);
+    setFixOpen(true);
+  }
+
   function toggleChat() {
     if (auth.status === "anonymous") {
       auth.signIn();
@@ -825,8 +885,14 @@ export function AnalysisChat({
                     fileCtx={fileCtx}
                     correctionEnabled={Boolean(features.analysis_corrections)}
                     sourceInvestigationEnabled={Boolean(features.source_investigation)}
+                    chatFixEnabled={Boolean(features.chat_fix)}
+                    fixEligible={Boolean(message.request_id && message.citations?.length && fixPatterns.length)}
                     sessionID={session.id}
                     onReviewCorrection={(requestID) => void reviewCorrection(requestID)}
+                    onUseForFix={() => openFix(message)}
+                    onSourceInvestigationChange={(requestID, view) =>
+                      sourceInvestigationChanged(message.request_id ?? "", requestID, view)
+                    }
                   />
                 ),
               )}
@@ -938,6 +1004,14 @@ export function AnalysisChat({
         error={correctionError}
         onClose={() => setCorrectionOpen(false)}
         onConfirm={() => void publishCorrection()}
+      />
+      <ChatFixDialog
+        open={fixOpen}
+        sessionID={session?.id ?? ""}
+        message={fixMessage}
+        patterns={fixPatterns}
+        source={fixMessage?.request_id ? sourceSelections[fixMessage.request_id] ?? null : null}
+        onClose={() => setFixOpen(false)}
       />
     </Box>
   );

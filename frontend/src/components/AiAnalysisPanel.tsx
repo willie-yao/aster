@@ -8,7 +8,7 @@ import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
 import { AutoAwesome, HistoryOutlined, PublishedWithChangesOutlined, Terminal, UndoOutlined } from "@mui/icons-material";
 import { Link as RouterLink } from "react-router-dom";
-import type { AIAnalysis } from "../types/dashboard";
+import type { AIAnalysis, PatternAnalysis } from "../types/dashboard";
 import type { AnalysisChatReference } from "../types/analysisChat";
 import { RichText } from "./RichText";
 import { LabeledBlock } from "./LabeledBlock";
@@ -36,11 +36,13 @@ export function AiAnalysisPanel({
   fileCtx,
   traceHref,
   chatRef,
+  fixPatterns = [],
 }: {
   analysis: AIAnalysis;
   fileCtx: FileToUrlContext;
   traceHref?: string;
   chatRef?: AnalysisChatReference;
+  fixPatterns?: PatternAnalysis[];
 }) {
   const { data: corrections, error: correctionsLoadError, refetch } = useAnalysisCorrections();
   const { features } = useCapabilities();
@@ -225,6 +227,7 @@ export function AiAnalysisPanel({
             ].join("\u0000")}
             analysisRef={chatRef}
             fileCtx={fileCtx}
+            fixPatterns={fixPatterns}
             onCorrectionChanged={refetch}
           />
         )}

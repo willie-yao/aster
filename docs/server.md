@@ -281,6 +281,13 @@ instruction. It never receives the complete transcript. The response is the
 normal fix `PreviewResult`; post its token to `/api/actions/confirm` to open the
 exact reviewed draft through the existing confirmation workflow.
 
+The dashboard exposes **Use this finding in a fix proposal** only for completed
+evidence-backed responses whose selected build belongs to an actionable recurring
+pattern. Before generation, the user reviews the selected pattern, assistant
+answer, proposed revision, artifact citations, optional successful source result,
+and maintainer instruction. The generated draft then uses the existing preview and
+confirmation UI.
+
 ## Admin-gated actions
 
 The write endpoints let an admin file an issue or draft a fix PR for a specific

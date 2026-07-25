@@ -351,9 +351,11 @@ function SourceResult({ view }: { view: SourceInvestigationView }) {
 export function SourceInvestigationPanel({
   sessionID,
   chatRequestID,
+  onInvestigationChange,
 }: {
   sessionID: string;
   chatRequestID: string;
+  onInvestigationChange?: (requestID: string | null, view: SourceInvestigationView | null) => void;
 }) {
   const auth = useAuth();
   const [view, setView] = useState<SourceInvestigationView | null>(null);
@@ -370,6 +372,8 @@ export function SourceInvestigationPanel({
   const identity = `${sessionID}\u0000${chatRequestID}`;
   const identityRef = useRef(identity);
   identityRef.current = identity;
+  const onInvestigationChangeRef = useRef(onInvestigationChange);
+  onInvestigationChangeRef.current = onInvestigationChange;
 
   useEffect(() => {
     controllerRef.current?.abort();
@@ -415,6 +419,7 @@ export function SourceInvestigationPanel({
         if (identityRef.current !== recoverIdentity || controllerRef.current !== controller) return;
         requestIDRef.current = requestID;
         setView(recovered);
+        onInvestigationChangeRef.current?.(requestID, recovered);
         setPhase(recovered.phase ?? "queued");
         if (recovered.status === "pending") {
           setError("The source investigation is still running. Reconnect to continue following it.");
@@ -437,6 +442,7 @@ export function SourceInvestigationPanel({
           clearStoredSourceRequestID(storageKey);
           requestIDRef.current = newAnalysisChatRequestID();
           setView(null);
+          onInvestigationChangeRef.current?.(null, null);
           setError(null);
           return;
         }
@@ -463,7 +469,10 @@ export function SourceInvestigationPanel({
       return;
     }
     if (auth.status !== "authenticated") return;
-    if (fresh) requestIDRef.current = newAnalysisChatRequestID();
+    if (fresh) {
+      requestIDRef.current = newAnalysisChatRequestID();
+      onInvestigationChangeRef.current?.(null, null);
+    }
 
     const runIdentity = identity;
     const requestID = requestIDRef.current;
@@ -488,6 +497,7 @@ export function SourceInvestigationPanel({
       );
       if (identityRef.current !== runIdentity || controllerRef.current !== controller) return;
       setView(updated);
+      onInvestigationChangeRef.current?.(requestID, updated);
       setPhase(updated.phase ?? "finalizing");
     } catch (runError) {
       if (runError instanceof Error && runError.name === "AbortError") return;
@@ -500,6 +510,7 @@ export function SourceInvestigationPanel({
         const reconciled = await getSourceInvestigation(sessionID, requestID, controller.signal);
         if (identityRef.current !== runIdentity || controllerRef.current !== controller) return;
         setView(reconciled);
+        onInvestigationChangeRef.current?.(requestID, reconciled);
         setPhase(reconciled.phase ?? phase);
         if (reconciled.status === "succeeded") {
           setError(null);
