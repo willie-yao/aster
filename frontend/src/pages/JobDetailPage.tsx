@@ -360,7 +360,7 @@ export function JobDetailPage() {
         <>
           {pattern && (
             <Box sx={{ maxWidth: 860 }}>
-              <PatternBanner pattern={pattern} jobID={jobID} />
+              <PatternBanner pattern={pattern} jobID={jobID} runs={runs} />
             </Box>
           )}
           {statsRow}
@@ -384,7 +384,7 @@ export function JobDetailPage() {
                 alignItems: "start",
               }}
             >
-              <PatternBanner pattern={pattern} jobID={jobID} />
+              <PatternBanner pattern={pattern} jobID={jobID} runs={runs} />
               <Box
                 sx={{
                   display: "flex",

@@ -75,6 +75,13 @@ const suggestedQuestions = [
   "Check a different hypothesis",
 ] as const;
 
+const patternSuggestedQuestions = [
+  "Which affected builds provide the strongest evidence?",
+  "What would disprove this shared root cause?",
+  "Do the failures differ across builds?",
+  "Check a different cross-build hypothesis",
+] as const;
+
 const assessmentConfig: Record<
   AnalysisChatAssessment,
   { label: string; color: "primary" | "success" | "warning" | "default" }
@@ -429,17 +436,21 @@ export function AnalysisChat({
   const correctionControllerRef = useRef<AbortController | null>(null);
   const identityRef = useRef("");
   const messageListRef = useRef<HTMLDivElement | null>(null);
+  const patternScope = analysisRef.scope === "pattern";
 
   const identity = useMemo(
     () =>
       [
         analysisRef.job_id,
+        analysisRef.scope,
         analysisRef.build_id,
         analysisRef.test_name,
         analysisRef.suite_name,
         analysisRef.class_name,
         analysisRef.junit_file,
         analysisRef.analysis_generated_at,
+        analysisRef.pattern_id,
+        analysisRef.pattern_hash,
       ].join("\u0000"),
     [analysisRef],
   );
@@ -485,6 +496,7 @@ export function AnalysisChat({
 
   const userTurns = session?.messages.filter((message) => message.role === "user").length ?? 0;
   const turnLimitReached = turnLimitExhausted || userTurns >= 10;
+  const questions = patternScope ? patternSuggestedQuestions : suggestedQuestions;
 
   async function submit(nextQuestion?: string) {
     const value = (nextQuestion ?? pendingTurn?.question ?? question).trim();
@@ -834,13 +846,15 @@ export function AnalysisChat({
               {!session?.messages.length && !busy && !pendingTurn && !turnLimitReached && (
                 <Box sx={{ py: 0.5 }}>
                   <Typography variant="body2" sx={{ fontWeight: 650 }}>
-                    Interrogate the conclusion, not just the summary.
+                    {patternScope ? "Interrogate the pattern across builds." : "Interrogate the conclusion, not just the summary."}
                   </Typography>
                   <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.35, mb: 1.25 }}>
-                    Ask for evidence, test another cause, or challenge what the agent missed.
+                    {patternScope
+                      ? "Ask which builds agree, where they differ, or whether the shared cause holds up."
+                      : "Ask for evidence, test another cause, or challenge what the agent missed."}
                   </Typography>
                   <Stack direction="row" spacing={0.75} useFlexGap sx={{ flexWrap: "wrap" }}>
-                    {suggestedQuestions.map((suggestion) => (
+                    {questions.map((suggestion) => (
                       <Chip
                         key={suggestion}
                         label={suggestion}
@@ -883,8 +897,8 @@ export function AnalysisChat({
                     key={`${message.created_at}-${index}`}
                     message={message}
                     fileCtx={fileCtx}
-                    correctionEnabled={Boolean(features.analysis_corrections)}
-                    sourceInvestigationEnabled={Boolean(features.source_investigation)}
+                    correctionEnabled={!patternScope && Boolean(features.analysis_corrections)}
+                    sourceInvestigationEnabled={!patternScope && Boolean(features.source_investigation)}
                     chatFixEnabled={Boolean(features.chat_fix)}
                     fixEligible={Boolean(message.request_id && message.citations?.length && fixPatterns.length)}
                     sessionID={session.id}

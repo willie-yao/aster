@@ -4,15 +4,35 @@ export type AnalysisChatAssessment =
   | "challenges"
   | "inconclusive";
 
-export interface AnalysisChatReference {
+interface AnalysisChatReferenceBase {
   job_id: string;
+}
+
+export interface TestAnalysisChatReference extends AnalysisChatReferenceBase {
+  scope?: "test";
   build_id: string;
   test_name: string;
   suite_name?: string;
   class_name?: string;
   junit_file?: string;
   analysis_generated_at?: string;
+  pattern_id?: never;
+  pattern_hash?: never;
 }
+
+export interface PatternAnalysisChatReference extends AnalysisChatReferenceBase {
+  scope: "pattern";
+  pattern_id: string;
+  pattern_hash: string;
+  build_id?: never;
+  test_name?: never;
+  suite_name?: never;
+  class_name?: never;
+  junit_file?: never;
+  analysis_generated_at?: never;
+}
+
+export type AnalysisChatReference = TestAnalysisChatReference | PatternAnalysisChatReference;
 
 export interface AnalysisChatCitation {
   path: string;
