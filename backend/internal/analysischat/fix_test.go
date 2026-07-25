@@ -371,3 +371,30 @@ func TestServicePatternFixCandidateUsesBoundPattern(t *testing.T) {
 		t.Fatalf("candidate = %+v", candidate)
 	}
 }
+
+func TestServicePatternFixCandidateRejectsDifferentPattern(t *testing.T) {
+	dir := t.TempDir()
+	writeJobDetail(t, dir, patternDetail())
+	runner := &fakeRunner{reply: Reply{
+		Answer: "The retry controller should stop after terminal failures.", Assessment: "supports",
+		Citations: []Citation{{Path: "builds/104/build-log.txt", Quote: "terminal failure"}},
+	}}
+	service, err := NewService(t.Context(), dir, runner, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pattern := recurringPattern()
+	session, err := service.Create(AnalysisRef{
+		Scope: ScopePattern, JobID: "periodic-demo", PatternID: pattern.ID, PatternHash: pattern.ContentHash,
+	}, "Alice", testRequestID(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestID := testRequestID(t)
+	if _, err := service.Send(t.Context(), session.ID, "Alice", requestID, "What should change?"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.FixCandidate(session.ID, "Alice", requestID, "other-pattern", "other-hash", ""); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("different pattern error = %v", err)
+	}
+}
