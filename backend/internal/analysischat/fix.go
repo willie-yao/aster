@@ -126,6 +126,9 @@ func (s *Service) FixCandidate(sessionID, owner, requestID, patternID, patternHa
 			if models.PatternHash(pattern) != patternHash {
 				return FixCandidate{}, ErrPatternChanged
 			}
+			if candidate.Analysis.Scope == ScopePattern {
+				candidate.Analysis.BuildID = resolved.build.BuildID
+			}
 			candidate.Pattern = pattern
 			return candidate, nil
 		}

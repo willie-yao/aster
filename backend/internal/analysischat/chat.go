@@ -757,7 +757,6 @@ func resolvePatternAnalysis(ref AnalysisRef, detail models.JobDetail) (resolvedA
 		return resolvedAnalysis{}, ErrAnalysisNotFound
 	}
 	pattern := clonePatternAnalyses([]models.PatternAnalysis{*selected})[0]
-	ref.BuildID = builds[0].Build.BuildID
 	ref.PatternHash = models.PatternHash(pattern)
 	severity := "Unknown"
 	switch strings.ToLower(strings.TrimSpace(pattern.Confidence)) {
@@ -883,7 +882,7 @@ func normalizeAnalysisRef(ref AnalysisRef) (AnalysisRef, error) {
 			return AnalysisRef{}, fmt.Errorf("%w: test scope requires build_id and test_name only", ErrInvalidRequest)
 		}
 	case ScopePattern:
-		if ref.PatternID == "" || ref.PatternHash == "" || ref.TestName != "" || ref.SuiteName != "" || ref.ClassName != "" || ref.JUnitFile != "" || ref.AnalysisGeneratedAt != "" {
+		if ref.PatternID == "" || ref.PatternHash == "" || ref.BuildID != "" || ref.TestName != "" || ref.SuiteName != "" || ref.ClassName != "" || ref.JUnitFile != "" || ref.AnalysisGeneratedAt != "" {
 			return AnalysisRef{}, fmt.Errorf("%w: pattern scope requires pattern_id and pattern_hash only", ErrInvalidRequest)
 		}
 	default:

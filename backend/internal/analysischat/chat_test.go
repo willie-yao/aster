@@ -1136,7 +1136,7 @@ func TestServicePatternChatUsesBoundedAffectedBuilds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.Analysis.Scope != ScopePattern || created.Analysis.BuildID != "104" || created.Analysis.PatternHash != pattern.ContentHash {
+	if created.Analysis.Scope != ScopePattern || created.Analysis.BuildID != "" || created.Analysis.PatternHash != pattern.ContentHash {
 		t.Fatalf("created pattern session = %+v", created.Analysis)
 	}
 	if _, err := service.Send(t.Context(), created.ID, "alice", testRequestID(t), "What builds support this?"); err != nil {
@@ -1241,6 +1241,7 @@ func TestPatternChatRejectsTestOnlyExtensions(t *testing.T) {
 	}
 	for _, ref := range []AnalysisRef{
 		{Scope: ScopePattern, JobID: "job", PatternID: "pattern"},
+		{Scope: ScopePattern, JobID: "job", BuildID: "123", PatternID: "pattern", PatternHash: "hash"},
 		{Scope: ScopePattern, JobID: "job", PatternID: "pattern", PatternHash: "hash", TestName: "test"},
 		{Scope: "other", JobID: "job", PatternID: "pattern", PatternHash: "hash"},
 	} {
