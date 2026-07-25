@@ -5,13 +5,16 @@ export type AnalysisChatAssessment =
   | "inconclusive";
 
 export interface AnalysisChatReference {
+  scope?: "test" | "pattern";
   job_id: string;
-  build_id: string;
-  test_name: string;
+  build_id?: string;
+  test_name?: string;
   suite_name?: string;
   class_name?: string;
   junit_file?: string;
   analysis_generated_at?: string;
+  pattern_id?: string;
+  pattern_hash?: string;
 }
 
 export interface AnalysisChatCitation {

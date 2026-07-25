@@ -28,6 +28,8 @@ for how to pin a release.
   read-only artifact tools for at most the three newest affected builds under
   build-qualified paths. Pattern findings remain eligible for the existing
   chat-to-fix flow, while test-analysis correction promotion stays disabled.
+  Recurring-pattern cards expose the existing **Chat with agent** experience
+  with pattern-specific prompts and build-qualified evidence links.
 - **Analysis-chat fix context bridge.** Kubernetes-native deployments with both
   analysis chat and write actions can generate an existing fix preview from one
   selected evidence-backed assistant response. The server reconstructs bounded

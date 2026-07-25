@@ -5,13 +5,16 @@ import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
 import { Link as RouterLink } from "react-router-dom";
 import { Insights } from "@mui/icons-material";
-import type { PatternAnalysis, RemediationObservation } from "../types/dashboard";
-import { confidenceColor } from "../lib/utils";
+import type { BuildResult, PatternAnalysis, RemediationObservation } from "../types/dashboard";
+import type { AnalysisChatReference } from "../types/analysisChat";
+import { confidenceColor, meetsConfidenceFloor, type FileToUrlContext } from "../lib/utils";
 import { RichText } from "./RichText";
 import { LabeledBlock } from "./LabeledBlock";
 import { FailureActions } from "./FailureActions";
 import { useRemediations, useResolved } from "../hooks/useData";
 import { soft } from "../theme";
+import { AnalysisChat } from "./AnalysisChat";
+import { useCapabilities } from "../hooks/useCapabilities";
 
 function remediationStatusLabel(status: string): string {
   return status.replaceAll("_", " ");
@@ -33,15 +36,18 @@ function remediationStatusColor(status: string): "success" | "warning" | "error"
 export function PatternBanner({
   pattern,
   jobID,
+  runs = [],
 }: {
   pattern: PatternAnalysis;
   jobID?: string;
+  runs?: BuildResult[];
 }) {
   const color = pattern.systemic ? "warning" : "success";
   const confColor = confidenceColor(pattern.confidence, color);
 
   const { data: resolved } = useResolved();
   const { data: remediations } = useRemediations();
+  const { features } = useCapabilities();
   const resolvedEntry = pattern.id ? resolved.resolved[pattern.id] : undefined;
   const remediation = pattern.id ? remediations.remediations[pattern.id] : undefined;
   const attempt = remediation?.attempt;
@@ -53,6 +59,26 @@ export function PatternBanner({
     const latestObservedAt = latest.completed_at ?? latest.started_at ?? "";
     return observedAt > latestObservedAt ? observation : latest;
   }, undefined as RemediationObservation | undefined);
+  const chatRef: AnalysisChatReference | null =
+    pattern.systemic && pattern.id && pattern.content_hash && jobID
+      ? {
+          scope: "pattern",
+          job_id: jobID,
+          pattern_id: pattern.id,
+          pattern_hash: pattern.content_hash,
+        }
+      : null;
+  const buildContexts = Object.fromEntries(
+    runs.map((run) => [
+      run.build_id,
+      { buildLogUrl: run.build_log_url, webUrl: run.web_url } satisfies FileToUrlContext,
+    ]),
+  );
+  const fixPatterns =
+    pattern.id && pattern.content_hash && pattern.suggested_fix &&
+    meetsConfidenceFloor(pattern.confidence, features.chat_fix_min_confidence ?? "high")
+      ? [pattern]
+      : [];
 
   return (
     <Box
@@ -190,6 +216,15 @@ export function PatternBanner({
               ))}
             </Stack>
           </Box>
+        )}
+
+        {chatRef && (
+          <AnalysisChat
+            key={`${chatRef.job_id}\u0000${chatRef.pattern_id}\u0000${chatRef.pattern_hash}`}
+            analysisRef={chatRef}
+            fileCtx={{ builds: buildContexts }}
+            fixPatterns={fixPatterns}
+          />
         )}
 
         {pattern.systemic && pattern.id && <FailureActions failureID={pattern.id} />}

@@ -214,6 +214,8 @@ export interface FileToUrlContext {
    * Source citations link only when present here, so absent files stay plain.
    */
   fileLinks?: Record<string, string>;
+  /** Build-qualified contexts used by recurring-pattern chat citations. */
+  builds?: Record<string, FileToUrlContext>;
 }
 
 /** Turn a file path from AI analysis into a URL if possible. */
@@ -223,6 +225,11 @@ export function fileToUrl(
 ): string | null {
   const clean = filePath.replace(/\s*\(.*\)$/, "").trim();
   const lower = clean.toLowerCase();
+
+  const patternPath = clean.match(/^builds\/([^/]+)\/(.+)$/);
+  if (patternPath && context?.builds?.[patternPath[1]]) {
+    return fileToUrl(patternPath[2], context.builds[patternPath[1]]);
+  }
 
   // Match artifact/log references to actual URLs from context.
   if (context) {
