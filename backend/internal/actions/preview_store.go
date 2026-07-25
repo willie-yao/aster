@@ -18,12 +18,14 @@ import (
 )
 
 const (
-	previewStateVersion  = 1
-	maxPreviewStateBytes = 64 << 20
-	maxPersistedPreviews = 128
-	previewStatusReady   = "ready"
-	previewStatusRunning = "confirming"
-	previewStatusDone    = "confirmed"
+	previewStateVersion     = 1
+	maxPreviewStateBytes    = 64 << 20
+	maxPersistedPreviews    = 128
+	previewStatusReady      = "ready"
+	previewStatusRunning    = "confirming"
+	previewStatusDone       = "confirmed"
+	previewStatusUnknown    = "unknown"
+	previewAttemptReconcile = "reconcile"
 )
 
 type persistedPreview struct {
@@ -34,6 +36,7 @@ type persistedPreview struct {
 	ResultURL    string                      `json:"result_url,omitempty"`
 	LeaseExpires string                      `json:"lease_expires,omitempty"`
 	AttemptID    string                      `json:"attempt_id,omitempty"`
+	AttemptMode  string                      `json:"attempt_mode,omitempty"`
 	Issue        *issues.IssueSpec           `json:"issue,omitempty"`
 	Fix          *fixpr.GeneratedFixSnapshot `json:"fix,omitempty"`
 }
@@ -67,6 +70,11 @@ func (s *previewStore) stash(userToken string, entry *previewEntry) (string, err
 		return "", err
 	}
 	err = s.updateProtected(key, func(state *previewState, now time.Time) (bool, error) {
+		for _, existing := range state.Previews {
+			if samePreviewAction(existing, record) && existing.Status != previewStatusDone {
+				return false, ErrPreviewPending
+			}
+		}
 		record.CreatedAt = now.Format(time.RFC3339Nano)
 		state.Previews[key] = record
 		return true, nil
@@ -77,16 +85,17 @@ func (s *previewStore) stash(userToken string, entry *previewEntry) (string, err
 	return token, nil
 }
 
-func (s *previewStore) begin(userToken, token string, lease time.Duration) (*previewEntry, string, string, error) {
+func (s *previewStore) begin(userToken, token string, lease time.Duration) (*previewEntry, string, string, bool, error) {
 	if lease <= 0 {
 		lease = defaultRequestTimeout
 	}
 	attemptID, err := newToken()
 	if err != nil {
-		return nil, "", "", fmt.Errorf("generating confirmation attempt id: %w", err)
+		return nil, "", "", false, fmt.Errorf("generating confirmation attempt id: %w", err)
 	}
 	var entry *previewEntry
 	var resultURL string
+	var reconcile bool
 	err = s.update(func(state *previewState, now time.Time) (bool, error) {
 		record := state.Previews[tokenHash(token)]
 		if record == nil || record.Owner != tokenHash(userToken) {
@@ -95,6 +104,12 @@ func (s *previewStore) begin(userToken, token string, lease time.Duration) (*pre
 		if record.Status == previewStatusDone && record.ResultURL != "" {
 			resultURL = record.ResultURL
 			return false, nil
+		}
+		for otherKey, other := range state.Previews {
+			if otherKey != tokenHash(token) && samePreviewAction(other, record) &&
+				(other.Status == previewStatusRunning || other.Status == previewStatusUnknown) {
+				return false, ErrPreviewPending
+			}
 		}
 		if record.Status == previewStatusRunning {
 			lease, leaseErr := time.Parse(time.RFC3339, record.LeaseExpires)
@@ -107,13 +122,19 @@ func (s *previewStore) begin(userToken, token string, lease time.Duration) (*pre
 		if err != nil {
 			return false, err
 		}
+		reconcile = record.Status == previewStatusUnknown
 		record.Status = previewStatusRunning
 		record.LeaseExpires = now.Add(lease).Format(time.RFC3339Nano)
 		record.AttemptID = attemptID
-		record.CreatedAt = now.Format(time.RFC3339Nano)
+		if reconcile {
+			record.AttemptMode = previewAttemptReconcile
+		} else {
+			record.AttemptMode = ""
+			record.CreatedAt = now.Format(time.RFC3339Nano)
+		}
 		return true, nil
 	})
-	return entry, resultURL, attemptID, err
+	return entry, resultURL, attemptID, reconcile, err
 }
 
 func (s *previewStore) finish(userToken, token, attemptID, resultURL string, confirmErr error) error {
@@ -127,14 +148,20 @@ func (s *previewStore) finish(userToken, token, attemptID, resultURL string, con
 		}
 		record.LeaseExpires = ""
 		record.AttemptID = ""
+		reconciling := record.AttemptMode == previewAttemptReconcile
+		record.AttemptMode = ""
 		if confirmErr != nil {
-			record.Status = previewStatusReady
-			record.CreatedAt = now.Format(time.RFC3339Nano)
+			record.Status = previewStatusUnknown
+			if !reconciling {
+				record.CreatedAt = now.Format(time.RFC3339Nano)
+			}
 			return true, nil
 		}
 		if resultURL == "" {
-			record.Status = previewStatusReady
-			record.CreatedAt = now.Format(time.RFC3339Nano)
+			record.Status = previewStatusUnknown
+			if !reconciling {
+				record.CreatedAt = now.Format(time.RFC3339Nano)
+			}
 			return true, fmt.Errorf("confirmation returned an empty result URL")
 		}
 		record.Status = previewStatusDone
@@ -280,6 +307,20 @@ func restorePreview(record *persistedPreview) (*previewEntry, error) {
 	return entry, nil
 }
 
+func samePreviewAction(left, right *persistedPreview) bool {
+	if left == nil || right == nil || left.Kind != right.Kind {
+		return false
+	}
+	switch left.Kind {
+	case "issue":
+		return left.Issue != nil && right.Issue != nil && left.Issue.Key != "" && left.Issue.Key == right.Issue.Key
+	case gfKind:
+		return left.Fix != nil && right.Fix != nil && left.Fix.Key != "" && left.Fix.Key == right.Fix.Key
+	default:
+		return false
+	}
+}
+
 func evictPersistedPreviews(state *previewState, now time.Time) bool {
 	changed := false
 	cutoff := now.Add(-previewTTL)
@@ -289,11 +330,28 @@ func evictPersistedPreviews(state *previewState, now time.Time) bool {
 			if err == nil && now.Before(lease) {
 				continue
 			}
-			record.Status = previewStatusReady
+			if record.AttemptMode == previewAttemptReconcile {
+				record.Status = previewStatusUnknown
+			} else {
+				record.Status = previewStatusUnknown
+				record.CreatedAt = now.Format(time.RFC3339Nano)
+			}
 			record.LeaseExpires = ""
 			record.AttemptID = ""
-			record.CreatedAt = now.Format(time.RFC3339Nano)
+			record.AttemptMode = ""
 			changed = true
+			continue
+		}
+		if record.Status == previewStatusUnknown {
+			created, err := time.Parse(time.RFC3339Nano, record.CreatedAt)
+			if err != nil {
+				delete(state.Previews, key)
+				changed = true
+			} else if created.Before(cutoff) {
+				record.Status = previewStatusReady
+				record.CreatedAt = now.Format(time.RFC3339Nano)
+				changed = true
+			}
 			continue
 		}
 		created, err := time.Parse(time.RFC3339Nano, record.CreatedAt)
@@ -315,7 +373,7 @@ func fitPreviewState(state *previewState, maxBytes int, protectedKey string) err
 	}
 	items := make([]item, 0, len(state.Previews))
 	for key, record := range state.Previews {
-		if key == protectedKey || record.Status == previewStatusRunning || record.Status == previewStatusDone {
+		if key == protectedKey || record.Status == previewStatusRunning || record.Status == previewStatusDone || record.Status == previewStatusUnknown {
 			continue
 		}
 		created, err := time.Parse(time.RFC3339Nano, record.CreatedAt)

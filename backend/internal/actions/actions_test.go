@@ -277,22 +277,22 @@ func TestPreviewConfirmationLifecycleIsRecoverableAcrossServices(t *testing.T) {
 		t.Fatal(err)
 	}
 	second := NewService(&project.Config{}, dataDir, AIConfig{})
-	entry, resultURL, attemptID, err := second.beginConfirm("owner-token", token, time.Hour)
+	entry, resultURL, attemptID, _, err := second.beginConfirm("owner-token", token, time.Hour)
 	if err != nil || entry == nil || resultURL != "" {
 		t.Fatalf("begin confirmation = %+v, %q, %v", entry, resultURL, err)
 	}
-	if _, _, _, err := first.beginConfirm("owner-token", token, time.Hour); !errors.Is(err, ErrPreviewPending) {
+	if _, _, _, _, err := first.beginConfirm("owner-token", token, time.Hour); !errors.Is(err, ErrPreviewPending) {
 		t.Fatalf("cross-service concurrent confirmation error = %v", err)
 	}
 	if err := second.finishConfirm("owner-token", token, attemptID, "https://github.com/o/r/issues/1", nil); err != nil {
 		t.Fatal(err)
 	}
 	restarted := NewService(&project.Config{}, dataDir, AIConfig{})
-	entry, resultURL, _, err = restarted.beginConfirm("owner-token", token, time.Hour)
+	entry, resultURL, _, _, err = restarted.beginConfirm("owner-token", token, time.Hour)
 	if err != nil || entry != nil || resultURL != "https://github.com/o/r/issues/1" {
 		t.Fatalf("recovered confirmation = %+v, %q, %v", entry, resultURL, err)
 	}
-	if _, _, _, err := restarted.beginConfirm("other-token", token, time.Hour); !errors.Is(err, ErrPreviewNotFound) {
+	if _, _, _, _, err := restarted.beginConfirm("other-token", token, time.Hour); !errors.Is(err, ErrPreviewNotFound) {
 		t.Fatalf("cross-owner confirmation error = %v", err)
 	}
 }
@@ -304,7 +304,7 @@ func TestPreviewConfirmationFailureCanRetryAcrossServices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _, attemptID, err := first.beginConfirm("owner-token", token, time.Hour)
+	_, _, attemptID, _, err := first.beginConfirm("owner-token", token, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,9 +312,12 @@ func TestPreviewConfirmationFailureCanRetryAcrossServices(t *testing.T) {
 		t.Fatal(err)
 	}
 	restarted := NewService(&project.Config{}, dataDir, AIConfig{})
-	retry, resultURL, _, err := restarted.beginConfirm("owner-token", token, time.Hour)
-	if err != nil || retry == nil || resultURL != "" {
-		t.Fatalf("retry confirmation = %+v, %q, %v", retry, resultURL, err)
+	retry, resultURL, attemptID, reconcile, err := restarted.beginConfirm("owner-token", token, time.Hour)
+	if err != nil || retry == nil || resultURL != "" || !reconcile {
+		t.Fatalf("reconcile confirmation = %+v, %q, reconcile=%t, %v", retry, resultURL, reconcile, err)
+	}
+	if err := restarted.finishConfirm("owner-token", token, attemptID, "", ErrPreviewOutcomeUnknown); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -332,7 +335,7 @@ func TestFixPreviewSnapshotPersistsAcrossServices(t *testing.T) {
 		t.Fatal(err)
 	}
 	restarted := NewService(&project.Config{}, dataDir, AIConfig{})
-	entry, _, _, err := restarted.beginConfirm("owner-token", token, time.Hour)
+	entry, _, _, _, err := restarted.beginConfirm("owner-token", token, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -355,7 +358,7 @@ func TestPreviewConfirmationLeaseFencesStaleAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _, firstAttempt, err := first.beginConfirm("owner-token", token, 30*time.Minute)
+	_, _, firstAttempt, _, err := first.beginConfirm("owner-token", token, 30*time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,7 +370,7 @@ func TestPreviewConfirmationLeaseFencesStaleAttempt(t *testing.T) {
 		t.Fatal(err)
 	}
 	second := NewService(&project.Config{}, dataDir, AIConfig{})
-	if _, _, _, err := second.beginConfirm("owner-token", token, 30*time.Minute); !errors.Is(err, ErrPreviewPending) {
+	if _, _, _, _, err := second.beginConfirm("owner-token", token, 30*time.Minute); !errors.Is(err, ErrPreviewPending) {
 		t.Fatalf("active long confirmation error = %v", err)
 	}
 	if err := first.previewStore.update(func(state *previewState, now time.Time) (bool, error) {
@@ -377,7 +380,7 @@ func TestPreviewConfirmationLeaseFencesStaleAttempt(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	_, _, secondAttempt, err := second.beginConfirm("owner-token", token, 30*time.Minute)
+	_, _, secondAttempt, _, err := second.beginConfirm("owner-token", token, 30*time.Minute)
 	if err != nil || secondAttempt == firstAttempt {
 		t.Fatalf("second attempt = %q err=%v", secondAttempt, err)
 	}
@@ -387,7 +390,7 @@ func TestPreviewConfirmationLeaseFencesStaleAttempt(t *testing.T) {
 	if err := second.finishConfirm("owner-token", token, secondAttempt, "https://github.com/o/r/issues/new", nil); err != nil {
 		t.Fatal(err)
 	}
-	_, resultURL, _, err := NewService(&project.Config{}, dataDir, AIConfig{}).beginConfirm("owner-token", token, time.Hour)
+	_, resultURL, _, _, err := NewService(&project.Config{}, dataDir, AIConfig{}).beginConfirm("owner-token", token, time.Hour)
 	if err != nil || resultURL != "https://github.com/o/r/issues/new" {
 		t.Fatalf("fenced result = %q err=%v", resultURL, err)
 	}
@@ -408,7 +411,7 @@ func TestFailedPreviewConfirmationRefreshesRetryWindow(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, _, attemptID, err := service.beginConfirm("owner-token", token, time.Hour)
+			_, _, attemptID, _, err := service.beginConfirm("owner-token", token, time.Hour)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -427,10 +430,50 @@ func TestFailedPreviewConfirmationRefreshesRetryWindow(t *testing.T) {
 			if testCase.confirmErr == nil && finishErr == nil {
 				t.Fatal("empty result completion was accepted")
 			}
-			if _, _, _, err := service.beginConfirm("owner-token", token, time.Hour); err != nil {
+			_, _, reconcileAttempt, reconcile, err := service.beginConfirm("owner-token", token, time.Hour)
+			if err != nil || !reconcile {
 				t.Fatalf("failed confirmation was not retryable: %v", err)
 			}
+			if err := service.finishConfirm("owner-token", token, reconcileAttempt, "", ErrPreviewOutcomeUnknown); err != nil {
+				t.Fatal(err)
+			}
 		})
+	}
+}
+
+func TestUnknownPreviewBecomesRetryableAfterConsistencyWindow(t *testing.T) {
+	service := NewService(&project.Config{}, t.TempDir(), AIConfig{})
+	token, err := service.stash("owner-token", &previewEntry{kind: "issue"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, attemptID, _, err := service.beginConfirm("owner-token", token, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.finishConfirm("owner-token", token, attemptID, "", errors.New("lost response")); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.previewStore.update(func(state *previewState, now time.Time) (bool, error) {
+		state.Previews[tokenHash(token)].CreatedAt = now.Add(-previewTTL - time.Minute).Format(time.RFC3339Nano)
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, reconcile, err := service.beginConfirm("owner-token", token, time.Hour)
+	if err != nil || reconcile {
+		t.Fatalf("expired unknown preview reconcile=%t err=%v", reconcile, err)
+	}
+}
+
+func TestPreviewStoreRejectsDuplicateActionWhilePending(t *testing.T) {
+	service := NewService(&project.Config{}, t.TempDir(), AIConfig{})
+	entry := &previewEntry{kind: "issue", spec: issues.IssueSpec{Key: "same-action"}}
+	if _, err := service.stash("owner-token", entry); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.stash("other-owner", entry); !errors.Is(err, ErrPreviewPending) {
+		t.Fatalf("duplicate action error = %v", err)
 	}
 }
 
@@ -501,7 +544,7 @@ func TestPreviewStoreRejectsCountPressureWithoutEvictingConfirmedResults(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _, attemptID, err := service.beginConfirm("owner-token", token, time.Hour)
+	_, _, attemptID, _, err := service.beginConfirm("owner-token", token, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -538,7 +581,7 @@ func TestPreviewStoreRejectsCountPressureWithoutEvictingConfirmedResults(t *test
 	if !bytes.Equal(before, after) {
 		t.Fatal("rejected write replaced confirmed preview state")
 	}
-	_, recoveredURL, _, err := NewService(&project.Config{}, dataDir, AIConfig{}).beginConfirm("owner-token", token, time.Hour)
+	_, recoveredURL, _, _, err := NewService(&project.Config{}, dataDir, AIConfig{}).beginConfirm("owner-token", token, time.Hour)
 	if err != nil || recoveredURL != resultURL {
 		t.Fatalf("confirmed result = %q err=%v", recoveredURL, err)
 	}
@@ -551,7 +594,7 @@ func TestPreviewStoreRejectsSizePressureWithoutEvictingConfirmedResult(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _, attemptID, err := service.beginConfirm("owner-token", token, time.Hour)
+	_, _, attemptID, _, err := service.beginConfirm("owner-token", token, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -577,7 +620,7 @@ func TestPreviewStoreRejectsSizePressureWithoutEvictingConfirmedResult(t *testin
 	if !bytes.Equal(before, after) {
 		t.Fatal("rejected write replaced confirmed preview state")
 	}
-	_, recoveredURL, _, err := NewService(&project.Config{}, dataDir, AIConfig{}).beginConfirm("owner-token", token, time.Hour)
+	_, recoveredURL, _, _, err := NewService(&project.Config{}, dataDir, AIConfig{}).beginConfirm("owner-token", token, time.Hour)
 	if err != nil || recoveredURL != resultURL {
 		t.Fatalf("confirmed result = %q err=%v", recoveredURL, err)
 	}

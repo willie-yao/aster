@@ -65,6 +65,12 @@ func markerToken(key string) string {
 	return hex.EncodeToString(sum[:8])
 }
 
+// MarkerFor returns the hidden GitHub marker for an issue key.
+func MarkerFor(key string) string { return markerFor(key) }
+
+// MarkerToken returns the search token for an issue key.
+func MarkerToken(key string) string { return markerToken(key) }
+
 // State persists filed issues so an active tracked finding needs no API calls.
 type State = statefile.State[TrackedIssue]
 

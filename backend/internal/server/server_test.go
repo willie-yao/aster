@@ -793,4 +793,9 @@ func TestWriteActionErrorMapsPendingConfirmation(t *testing.T) {
 	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), actions.ErrPreviewPending.Error()) {
 		t.Fatalf("status=%d body=%q", recorder.Code, recorder.Body.String())
 	}
+	recorder = httptest.NewRecorder()
+	writeActionError(recorder, "confirm", "alice", actions.ErrPreviewOutcomeUnknown)
+	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), actions.ErrPreviewOutcomeUnknown.Error()) {
+		t.Fatalf("unknown outcome response = %d %q", recorder.Code, recorder.Body.String())
+	}
 }

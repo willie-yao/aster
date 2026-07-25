@@ -45,6 +45,10 @@ var ErrPreviewPending = errors.New("preview confirmation is pending")
 // ErrPreviewSuperseded means a newer confirmation attempt owns the preview.
 var ErrPreviewSuperseded = errors.New("preview confirmation was superseded")
 
+// ErrPreviewOutcomeUnknown means GitHub may have accepted the write. Retrying
+// checks for the marked object without creating another one.
+var ErrPreviewOutcomeUnknown = errors.New("preview confirmation outcome unknown; retry to check GitHub")
+
 // ErrPreviewNotFound means the confirm token is unknown, expired, or belongs to
 // a different admin.
 var ErrPreviewNotFound = errors.New("preview not found or expired")
@@ -404,12 +408,34 @@ func (s *Service) PreviewFixWithContext(
 // Confirm files the issue or opens the PR previously cached under token.
 func (s *Service) Confirm(ctx context.Context, token, userToken string) (string, error) {
 	lease := s.requestTimeout + 30*time.Second
-	entry, resultURL, attemptID, err := s.beginConfirm(userToken, token, lease)
+	entry, resultURL, attemptID, reconcile, err := s.beginConfirm(userToken, token, lease)
 	if err != nil || resultURL != "" {
 		return resultURL, err
 	}
+	if reconcile {
+		resultURL, found, reconcileErr := s.reconcileEntry(ctx, entry, userToken)
+		if reconcileErr != nil {
+			_ = s.finishConfirm(userToken, token, attemptID, "", reconcileErr)
+			return "", reconcileErr
+		}
+		if !found {
+			_ = s.finishConfirm(userToken, token, attemptID, "", ErrPreviewOutcomeUnknown)
+			return "", ErrPreviewOutcomeUnknown
+		}
+		if err := s.finishConfirm(userToken, token, attemptID, resultURL, nil); err != nil {
+			return resultURL, err
+		}
+		return resultURL, nil
+	}
 	resultURL, confirmErr := s.confirmEntry(ctx, entry, userToken)
-	finishErr := s.finishConfirm(userToken, token, attemptID, resultURL, confirmErr)
+	finishInputErr := confirmErr
+	if resultURL != "" {
+		finishInputErr = nil
+	}
+	finishErr := s.finishConfirm(userToken, token, attemptID, resultURL, finishInputErr)
+	if resultURL != "" && finishErr == nil {
+		return resultURL, nil
+	}
 	if confirmErr != nil {
 		return resultURL, confirmErr
 	}
@@ -419,12 +445,35 @@ func (s *Service) Confirm(ctx context.Context, token, userToken string) (string,
 	return resultURL, nil
 }
 
-func (s *Service) beginConfirm(userToken, token string, lease time.Duration) (*previewEntry, string, string, error) {
+func (s *Service) beginConfirm(userToken, token string, lease time.Duration) (*previewEntry, string, string, bool, error) {
 	return s.previewStore.begin(userToken, token, lease)
 }
 
 func (s *Service) finishConfirm(userToken, token, attemptID, resultURL string, confirmErr error) error {
 	return s.previewStore.finish(userToken, token, attemptID, resultURL, confirmErr)
+}
+
+func (s *Service) reconcileEntry(ctx context.Context, entry *previewEntry, userToken string) (string, bool, error) {
+	switch entry.kind {
+	case "issue":
+		eff := s.cfg.EffectiveIssues()
+		if eff.Repo == nil || eff.Repo.Owner == "" || eff.Repo.Name == "" {
+			return "", false, fmt.Errorf("no target repo resolved (set issues.repo or branding.source_repo)")
+		}
+		client := issues.NewClient(userToken, eff.Repo.Owner, eff.Repo.Name)
+		_, url, found, err := client.SearchOpenIssue(ctx, issues.MarkerToken(entry.spec.Key), issues.MarkerFor(entry.spec.Key))
+		return url, found, err
+	case gfKind:
+		eff := s.cfg.EffectiveFixPRs()
+		if eff.Repo == nil || eff.Repo.Owner == "" || eff.Repo.Name == "" || entry.fix == nil {
+			return "", false, fmt.Errorf("no source repo resolved (set ai.fix_prs.repo or branding.source_repo)")
+		}
+		key := entry.fix.Snapshot().Key
+		_, url, found, err := fixpr.NewClients(userToken).SearchOpenPR(ctx, eff.Repo.Owner, eff.Repo.Name, fixpr.MarkerToken(key), fixpr.MarkerFor(key))
+		return url, found, err
+	default:
+		return "", false, ErrPreviewNotFound
+	}
 }
 
 func (s *Service) confirmEntry(ctx context.Context, entry *previewEntry, userToken string) (string, error) {
@@ -443,12 +492,12 @@ func (s *Service) confirmEntry(ctx context.Context, entry *previewEntry, userTok
 		if _, err := mgr.Reconcile(ctx, []issues.IssueSpec{entry.spec}); err != nil {
 			return "", fmt.Errorf("filing issue: %w", err)
 		}
-		if err := mgr.SaveState(); err != nil {
-			return "", fmt.Errorf("saving issue state: %w", err)
-		}
 		url, ok := mgr.TrackedURL(entry.spec.Key)
 		if !ok {
 			return "", fmt.Errorf("issue was not filed")
+		}
+		if err := mgr.SaveState(); err != nil {
+			return url, fmt.Errorf("saving issue state: %w", err)
 		}
 		return url, nil
 	case gfKind:
@@ -461,7 +510,7 @@ func (s *Service) confirmEntry(ctx context.Context, entry *previewEntry, userTok
 			return "", fmt.Errorf("%s", safeReason(err.Error()))
 		}
 		if err := mgr.SaveState(); err != nil {
-			return "", fmt.Errorf("saving fix-PR state: %w", err)
+			return url, fmt.Errorf("saving fix-PR state: %w", err)
 		}
 		return url, nil
 	}
