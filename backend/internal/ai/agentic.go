@@ -85,6 +85,30 @@ type AgenticOptions struct {
 	SemanticJudge bool
 }
 
+// DraftObservation is a value-only snapshot of one parseable analysis draft.
+// The quality benchmark uses it to compare retries from the same investigation
+// without persisting model content in analysis traces.
+type DraftObservation struct {
+	Attempt             int
+	Phase               string
+	Summary             string
+	RootCause           string
+	SuggestedFix        string
+	IsTransient         bool
+	Severity            string
+	RelevantFiles       []string
+	PuntCount           int
+	UnreadCitationCount int
+	MissingGroupCount   int
+	TransientConflict   bool
+	ToolCalls           int
+	EvidenceReads       int
+}
+
+// DraftObserver receives parseable draft snapshots in attempt order. It is nil
+// outside the opt-in quality benchmark.
+type DraftObserver func(DraftObservation)
+
 // artifactTreeMaxPaths caps how many artifact paths the seed lists, bounding
 // the prompt size on builds with very large artifact trees.
 const artifactTreeMaxPaths = 500
@@ -320,6 +344,8 @@ type agentState struct {
 	gcsBytes        int
 	calls           int
 	budgetExhausted bool
+	draftObserver   DraftObserver
+	draftAttempt    int
 
 	// critiquePassed records whether the accepted answer cleared the
 	// always-on critique gate. Stamped onto the published AIAnalysis so the
@@ -488,6 +514,10 @@ type AgenticInputs struct {
 	// FailureSignal is bounded test-failure evidence used only for initial skill
 	// matching. It excludes module and backend instructions.
 	FailureSignal string
+
+	// DraftObserver is an optional in-memory benchmark hook. It is disabled in
+	// production and receives value-only copies that cannot mutate runtime state.
+	DraftObserver DraftObserver
 }
 
 const (
@@ -703,14 +733,15 @@ func (c *Client) doAnalyzeAgentic(
 	}
 
 	state := &agentState{
-		browser:      in.Browser,
-		opts:         in.Opts,
-		registry:     in.Registry,
-		enabledTools: in.EnabledTools,
-		cache:        in.Cache,
-		webURLBase:   in.WebURLBase,
-		startTime:    time.Now(),
-		promptHash:   PromptFingerprint(sysPrompt),
+		browser:       in.Browser,
+		opts:          in.Opts,
+		registry:      in.Registry,
+		enabledTools:  in.EnabledTools,
+		cache:         in.Cache,
+		webURLBase:    in.WebURLBase,
+		startTime:     time.Now(),
+		promptHash:    PromptFingerprint(sysPrompt),
+		draftObserver: in.DraftObserver,
 	}
 	// Skills are consulted inside the always-on critique gate. Recipe presence
 	// is the opt-in; an empty set is a no-op.
@@ -779,6 +810,8 @@ func (c *Client) doAnalyzeAgentic(
 
 	var bestDraftContent string
 	var bestDraftProviderItems []json.RawMessage
+	finalDraftObserved := false
+	draftPhase := "initial"
 
 	// When single_tool_call is on, request parallel_tool_calls=false so
 	// compliant endpoints emit a single call. The client-side cap below still
@@ -797,6 +830,7 @@ agentLoop:
 			if bestDraftContent != "" {
 				finalContent = bestDraftContent
 				finalProviderItems = bestDraftProviderItems
+				finalDraftObserved = true
 				recordTrace(loopCtx, TraceEvent{Kind: "context_headroom", Outcome: "best_draft", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
 				log.Printf("  ⚠ agentic context headroom exhausted; publishing the best prior draft without another provider request")
 				break agentLoop
@@ -832,7 +866,21 @@ agentLoop:
 			// list_artifacts repeatedly raises calls but never gcsBytes
 			// and would otherwise be re-nudged every iteration.
 			parsedCandidate, parsedOK := tryParseAnalysis(candidate)
+			var candidateCritique critiqueOutcome
+			candidateCritiqued := false
 			if parsedOK {
+				if state.draftObserver != nil {
+					candidateCritique = critiqueDraft(parsedCandidate, state.readArtifactsFull, state.readArtifactsBase, matchSkillsForDraft(state, parsedCandidate), state.consecutiveFailures)
+					candidateCritiqued = true
+					if len(candidateCritique.MissingSkillEvidence) > 0 {
+						if treeSet := state.artifactTreeSet(); treeSet != nil {
+							if n := pruneAbsentSkillEvidence(parsedCandidate, &candidateCritique, treeSet); n > 0 {
+								log.Printf("  ⓘ skill-evidence: %d required group(s) absent from this build's artifacts; not held against the draft", n)
+							}
+						}
+					}
+					state.observeDraft(draftPhase, parsedCandidate, candidateCritique)
+				}
 				bestDraftContent = candidate
 				bestDraftProviderItems = msg.ProviderItems
 			}
@@ -860,12 +908,14 @@ agentLoop:
 					if !fits {
 						finalContent = candidate
 						finalProviderItems = msg.ProviderItems
+						finalDraftObserved = parsedOK
 						recordTrace(loopCtx, TraceEvent{Kind: "context_headroom", Outcome: "retry_denied", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
 						recordTrace(loopCtx, TraceEvent{Kind: "context_headroom", Outcome: "best_draft", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
 						break agentLoop
 					}
 					nudgedAtCalls = state.calls
 					nudgedAtGCSBytes = state.gcsBytes
+					draftPhase = "floor_retry"
 					recordTrace(loopCtx, TraceEvent{Kind: "floor_nudge", Outcome: "retry", Status: floors.traceStatus(), ToolCallCount: state.calls, Bytes: state.gcsBytes})
 					log.Printf("  ↻ agentic nudge: tool_calls=%d/min=%d, gcs_kb=%d/min=%d, asking model to investigate further",
 						state.calls, in.Opts.MinToolCalls, state.gcsBytes/1024, in.Opts.MinGCSBytes/1024)
@@ -879,15 +929,17 @@ agentLoop:
 			// candidates; unparseable finals fall through to runFinalizeRound
 			// below.
 			if parsed, ok := parsedCandidate, parsedOK; ok {
-				matchedSkills := matchSkillsForDraft(state, parsed)
-				out := critiqueDraft(parsed, state.readArtifactsFull, state.readArtifactsBase, matchedSkills, state.consecutiveFailures)
-				if len(out.MissingSkillEvidence) > 0 {
-					if treeSet := state.artifactTreeSet(); treeSet != nil {
-						if n := pruneAbsentSkillEvidence(parsed, &out, treeSet); n > 0 {
-							log.Printf("  ⓘ skill-evidence: %d required group(s) absent from this build's artifacts; not held against the draft", n)
+				if !candidateCritiqued {
+					candidateCritique = critiqueDraft(parsed, state.readArtifactsFull, state.readArtifactsBase, matchSkillsForDraft(state, parsed), state.consecutiveFailures)
+					if len(candidateCritique.MissingSkillEvidence) > 0 {
+						if treeSet := state.artifactTreeSet(); treeSet != nil {
+							if n := pruneAbsentSkillEvidence(parsed, &candidateCritique, treeSet); n > 0 {
+								log.Printf("  ⓘ skill-evidence: %d required group(s) absent from this build's artifacts; not held against the draft", n)
+							}
 						}
 					}
 				}
+				out := candidateCritique
 				if out.Passed {
 					recordTrace(loopCtx, TraceEvent{Kind: "critique", Outcome: "passed"})
 					// Second-line semantic judge: a focused LLM review that
@@ -921,10 +973,12 @@ agentLoop:
 							if !fits {
 								finalContent = candidate
 								finalProviderItems = msg.ProviderItems
+								finalDraftObserved = true
 								recordTrace(loopCtx, TraceEvent{Kind: "context_headroom", Outcome: "retry_denied", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
 								break agentLoop
 							}
 							maxIters += critiqueRetryIters
+							draftPhase = "semantic_retry"
 							log.Printf("  ✗ semantic judge: %d objection(s); re-prompting (+%d iters)", len(objs), critiqueRetryIters)
 							continue
 						default:
@@ -960,11 +1014,13 @@ agentLoop:
 					if !fits {
 						finalContent = candidate
 						finalProviderItems = msg.ProviderItems
+						finalDraftObserved = true
 						recordTrace(loopCtx, TraceEvent{Kind: "context_headroom", Outcome: "retry_denied", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
 						recordTrace(loopCtx, TraceEvent{Kind: "context_headroom", Outcome: "best_draft", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
 						break agentLoop
 					}
 					critiqueRetriesUsed++
+					draftPhase = "critique_retry"
 					recordTrace(loopCtx, TraceEvent{Kind: "critique", Outcome: "retry", Retry: critiqueRetriesUsed, IssueCount: len(out.Matches())})
 					// Extend the retry budget proportional to the
 					// number of missing evidence groups. Plain
@@ -993,6 +1049,7 @@ agentLoop:
 
 			finalContent = candidate
 			finalProviderItems = msg.ProviderItems
+			finalDraftObserved = parsedOK
 			break
 		}
 
@@ -1048,7 +1105,7 @@ agentLoop:
 		return summary, analysis, nil
 	}
 
-	parsed = c.applyPostLoopCritique(loopCtx, state, messages, finalContent, finalProviderItems, parsed, in.Opts)
+	parsed = c.applyPostLoopCritique(loopCtx, state, messages, finalContent, finalProviderItems, parsed, in.Opts, finalDraftObserved, draftPhase)
 
 	c.cacheAcceptedAnalysis(cacheKey, parsed, state, in.Opts, state.critiquePassed)
 	summary, analysis := c.buildOutputs(parsed)
@@ -1056,7 +1113,7 @@ agentLoop:
 	return summary, analysis, nil
 }
 
-func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, messages []modelMessage, finalContent string, finalProviderItems []json.RawMessage, parsed analysisResponse, opts AgenticOptions) analysisResponse {
+func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, messages []modelMessage, finalContent string, finalProviderItems []json.RawMessage, parsed analysisResponse, opts AgenticOptions, draftObserved bool, draftPhase string) analysisResponse {
 	if state.critiquePassed {
 		return parsed
 	}
@@ -1065,6 +1122,12 @@ func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, m
 		if treeSet := state.artifactTreeSet(); treeSet != nil {
 			pruneAbsentSkillEvidence(parsed, &out, treeSet)
 		}
+	}
+	if !draftObserved {
+		if draftPhase == "initial" {
+			draftPhase = "finalize"
+		}
+		state.observeDraft(draftPhase, parsed, out)
 	}
 	if out.Passed {
 		recordTrace(ctx, TraceEvent{Kind: "critique", Outcome: "passed"})
@@ -1111,6 +1174,7 @@ func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, m
 			pruneAbsentSkillEvidence(next, &out, treeSet)
 		}
 	}
+	state.observeDraft("evidence_retry", next, out)
 	if out.Passed {
 		recordTrace(ctx, TraceEvent{Kind: "critique", Outcome: "passed_after_retry"})
 		state.critiquePassed = true
@@ -1119,6 +1183,33 @@ func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, m
 		log.Printf("  ⚠ agentic critique: post-injection draft still failing %v; accepting but not caching", out.Matches())
 	}
 	return next
+}
+
+func (s *agentState) observeDraft(phase string, parsed analysisResponse, out critiqueOutcome) {
+	if s.draftObserver == nil {
+		return
+	}
+	s.draftAttempt++
+	summary := parsed.Summary
+	if summary == "" {
+		summary = firstSentence(parsed.RootCause)
+	}
+	s.draftObserver(DraftObservation{
+		Attempt:             s.draftAttempt,
+		Phase:               phase,
+		Summary:             summary,
+		RootCause:           parsed.RootCause,
+		SuggestedFix:        parsed.SuggestedFix,
+		IsTransient:         parsed.IsTransient,
+		Severity:            parsed.Severity,
+		RelevantFiles:       append([]string(nil), parsed.RelevantFiles...),
+		PuntCount:           len(out.PuntMatches),
+		UnreadCitationCount: len(out.UnreadCitations),
+		MissingGroupCount:   out.MissingEvidenceCount(),
+		TransientConflict:   out.TransientPersistCount > 0,
+		ToolCalls:           s.calls,
+		EvidenceReads:       len(s.readArtifactsFull),
+	})
 }
 
 // listInitialArtifactTree fetches the one bounded tree snapshot shared by the

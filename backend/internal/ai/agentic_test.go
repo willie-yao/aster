@@ -1183,6 +1183,122 @@ func TestAgentic_Critique_FailRetryPass(t *testing.T) {
 	}
 }
 
+func TestAgentic_DraftObserverAbsentIsNoOp(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal(cleanFinalJSON))
+
+	client := newAgenticTestClient(t, srv.URL)
+	opts := AgenticOptions{
+		MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+		Timeout: 30 * time.Second, CritiqueMaxRetries: 2,
+	}
+	_, analysis, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, &fakeBrowser{}, opts),
+		"agentic:test:draft-observer-absent", "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 1 {
+		t.Fatalf("call count = %d, want 1", got)
+	}
+	if !analysis.CritiquePassed {
+		t.Fatal("observer absence changed critique acceptance")
+	}
+}
+
+func TestAgentic_DraftObserverReceivesCopiesInOrder(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal(puntyFinalJSON))
+	srv.push(200, chatRespFinal(cleanFinalJSON))
+
+	client := newAgenticTestClient(t, srv.URL)
+	opts := AgenticOptions{
+		MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+		Timeout: 30 * time.Second, CritiqueMaxRetries: 2,
+	}
+	var observations []DraftObservation
+	in := newTestAgenticInputs(t, &fakeBrowser{}, opts)
+	in.DraftObserver = func(observation DraftObservation) {
+		snapshot := observation
+		snapshot.RelevantFiles = append([]string(nil), observation.RelevantFiles...)
+		observations = append(observations, snapshot)
+		observation.RootCause = "observer mutation"
+		observation.SuggestedFix = "observer mutation"
+		if len(observation.RelevantFiles) > 0 {
+			observation.RelevantFiles[0] = "observer mutation"
+		}
+	}
+	_, analysis, err := client.doAnalyzeAgentic(context.Background(), in,
+		"agentic:test:draft-observer-order", "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	if len(observations) != 2 {
+		t.Fatalf("observations = %d, want 2: %+v", len(observations), observations)
+	}
+	if observations[0].Attempt != 1 || observations[0].Phase != "initial" || observations[0].PuntCount == 0 {
+		t.Fatalf("initial observation = %+v", observations[0])
+	}
+	if observations[1].Attempt != 2 || observations[1].Phase != "critique_retry" || observations[1].PuntCount != 0 {
+		t.Fatalf("revised observation = %+v", observations[1])
+	}
+	if analysis.RootCause != observations[1].RootCause || analysis.SuggestedFix != observations[1].SuggestedFix {
+		t.Fatalf("observer mutation affected runtime: analysis=%+v observation=%+v", analysis, observations[1])
+	}
+	if len(analysis.RelevantFiles) != 1 || analysis.RelevantFiles[0] != "kustomize/cluster-template.yaml" {
+		t.Fatalf("observer mutated relevant files: %v", analysis.RelevantFiles)
+	}
+
+	_, hit, err := client.doAnalyzeAgentic(context.Background(), in,
+		"agentic:test:draft-observer-order", "sys", "user")
+	if err != nil {
+		t.Fatalf("cache hit: %v", err)
+	}
+	if !hit.CacheHit || len(observations) != 2 || atomic.LoadInt32(&srv.calls) != 2 {
+		t.Fatalf("observer changed cache behavior: hit=%v observations=%d calls=%d", hit.CacheHit, len(observations), atomic.LoadInt32(&srv.calls))
+	}
+}
+
+func TestAgentic_DraftObserverContentIsNotTraced(t *testing.T) {
+	shrinkCallDelay(t)
+	const secret = "DRAFT_ONLY_SENTINEL_42f974"
+	final := `{"summary":"` + secret + `","is_transient":false,"root_cause":"` + secret + `","severity":"Low","suggested_fix":"Replace the invalid setting.","relevant_files":[]}`
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal(final))
+
+	store := NewTraceStore()
+	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIChatCompletions})
+	ctx := withAnalysisTrace(context.Background(), trace)
+	in := newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
+		MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+		Timeout: 30 * time.Second, CritiqueMaxRetries: 2,
+	})
+	in.DraftObserver = func(observation DraftObservation) {
+		if !strings.Contains(observation.RootCause, secret) {
+			t.Errorf("observer root cause = %q, want sentinel", observation.RootCause)
+		}
+	}
+	_, _, err := newAgenticTestClient(t, srv.URL).doAnalyzeAgentic(ctx, in,
+		"agentic:test:draft-observer-trace", "sys", "user")
+	trace.Finish("success", err)
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "ai_traces.json")
+	if err := store.Save(path); err != nil {
+		t.Fatalf("save trace: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read trace: %v", err)
+	}
+	if strings.Contains(string(data), secret) {
+		t.Fatalf("trace persisted draft content: %s", data)
+	}
+}
+
 // TestAgentic_Critique_ExhaustedAcceptedNotCached verifies repeated punt
 // drafts publish the last answer but skip caching.
 func TestAgentic_Critique_ExhaustedAcceptedNotCached(t *testing.T) {
@@ -2074,6 +2190,10 @@ required_evidence:
 	}
 	in := newTestAgenticInputs(t, browser, opts)
 	in.Skills = set
+	var observations []DraftObservation
+	in.DraftObserver = func(observation DraftObservation) {
+		observations = append(observations, observation)
+	}
 
 	_, analysis, err := client.doAnalyzeAgentic(context.Background(), in,
 		"agentic:test:skill-present-unread", "sys", "user")
@@ -2082,6 +2202,15 @@ required_evidence:
 	}
 	if !analysis.CritiquePassed {
 		t.Errorf("present-but-unread required evidence should be injected and rescue the draft (CritiquePassed=true)")
+	}
+	if len(observations) != 2 {
+		t.Fatalf("observations = %d, want initial and evidence retry: %+v", len(observations), observations)
+	}
+	if observations[0].Phase != "initial" || observations[0].MissingGroupCount != 1 || observations[0].EvidenceReads != 0 {
+		t.Errorf("initial observation = %+v", observations[0])
+	}
+	if observations[1].Phase != "evidence_retry" || observations[1].MissingGroupCount != 0 || observations[1].EvidenceReads != 1 {
+		t.Errorf("evidence retry observation = %+v", observations[1])
 	}
 }
 

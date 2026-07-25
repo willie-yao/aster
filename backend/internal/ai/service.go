@@ -79,6 +79,10 @@ type Service struct {
 
 	// traceStore collects private, sanitized per-analysis control flow.
 	traceStore *TraceStore
+
+	// draftObserver is an optional in-memory hook used only by the quality
+	// benchmark to compare parseable drafts from the same investigation.
+	draftObserver DraftObserver
 }
 
 // NewService constructs a Service. systemPrompt is the full composed prompt and
@@ -132,6 +136,11 @@ func (s *Service) SetPatternRepoReader(reader tools.RepoReader) {
 // SetTraceStore enables private per-analysis trace collection.
 func (s *Service) SetTraceStore(store *TraceStore) {
 	s.traceStore = store
+}
+
+// SetDraftObserver installs the optional in-memory quality benchmark hook.
+func (s *Service) SetDraftObserver(observer DraftObserver) {
+	s.draftObserver = observer
 }
 
 // Analyze fills tc.AISummary and tc.AIAnalysis for a single failed test case
@@ -227,6 +236,7 @@ func (s *Service) runAgentic(ctx context.Context, jobID, buildPrefix string, run
 		Skills:              s.skillSet,
 		ConsecutiveFailures: consecutiveFailures,
 		FailureSignal:       failureSignal,
+		DraftObserver:       s.draftObserver,
 	}
 	return s.client.doAnalyzeAgentic(ctx, in, cacheKey, s.systemPrompt, userPrompt)
 }

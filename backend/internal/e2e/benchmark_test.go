@@ -445,6 +445,13 @@ func runBenchCase(t *testing.T, bc benchCase, endpoint, model, token, systemProm
 	service.SetSourceRepo(bc.sourceRepo[0], bc.sourceRepo[1])
 	traceStore := ai.NewTraceStore()
 	service.SetTraceStore(traceStore)
+	var draftObservations []benchmarkDraftObservation
+	service.SetDraftObserver(func(observation ai.DraftObservation) {
+		draftObservations = append(draftObservations, benchmarkDraftObservation{
+			DraftObservation: observation,
+			observedAt:       time.Now(),
+		})
+	})
 
 	// Size the model/context budgets from the endpoint's window, matching the
 	// fetcher. Fall back to a static budget with compaction off when absent.
@@ -485,7 +492,20 @@ func runBenchCase(t *testing.T, bc benchCase, endpoint, model, token, systemProm
 	snapshot := traceStore.Snapshot()
 	toolUsage := successfulBenchmarkToolUsage(snapshot)
 	traceSummary := summarizeBenchmarkTrace(snapshot)
-	scoreBenchCase(t, bc, tc, elapsed, "in-process", agentic.MinGCSBytes, toolUsage, traceSummary)
+	scoreBenchCase(t, bc, tc, elapsed, "in-process", agentic.MinGCSBytes, toolUsage, traceSummary, draftObservations)
+}
+
+type benchmarkDraftObservation struct {
+	ai.DraftObservation
+	observedAt time.Time
+}
+
+type benchmarkDraftScore struct {
+	observation benchmarkDraftObservation
+	hit         int
+	total       int
+	requiredHit int
+	required    int
 }
 
 type benchmarkToolUsage struct {
@@ -642,6 +662,102 @@ func benchmarkTelemetryLines(elapsed time.Duration, analysis *models.AIAnalysis,
 	return lines
 }
 
+func scoreBenchmarkDraft(bc benchCase, observation benchmarkDraftObservation) benchmarkDraftScore {
+	text := strings.ToLower(strings.Join([]string{observation.Summary, observation.RootCause, observation.SuggestedFix}, "\n"))
+	score := benchmarkDraftScore{observation: observation, total: len(bc.signals)}
+	for _, signal := range bc.signals {
+		matched := signal.matches(text)
+		if matched {
+			score.hit++
+		}
+		if signal.must {
+			score.required++
+			if matched {
+				score.requiredHit++
+			}
+		}
+	}
+	return score
+}
+
+func benchmarkDraftTelemetryLines(bc benchCase, observations []benchmarkDraftObservation, tc *models.TestCase) []string {
+	if len(observations) == 0 {
+		return nil
+	}
+	scores := make([]benchmarkDraftScore, 0, len(observations))
+	for _, observation := range observations {
+		scores = append(scores, scoreBenchmarkDraft(bc, observation))
+	}
+	selected := selectedBenchmarkDraftAttempt(observations, tc)
+	lines := make([]string, 0, len(scores)*2)
+	for _, score := range scores {
+		lines = append(lines, fmt.Sprintf(
+			"draft attempt=%d phase=%s score=%d/%d required_signals=%d/%d issue_vector=%s tool_calls=%d evidence_reads=%d selected=%v",
+			score.observation.Attempt, score.observation.Phase, score.hit, score.total, score.requiredHit, score.required,
+			benchmarkDraftIssueVector(score.observation.DraftObservation), score.observation.ToolCalls, score.observation.EvidenceReads,
+			score.observation.Attempt == selected))
+	}
+	for i := 1; i < len(scores); i++ {
+		revised := scores[i]
+		if !benchmarkRepairPhase(revised.observation.Phase) {
+			continue
+		}
+		initial := scores[i-1]
+		duration := revised.observation.observedAt.Sub(initial.observation.observedAt)
+		if duration < 0 {
+			duration = 0
+		}
+		newEvidenceReads := revised.observation.EvidenceReads - initial.observation.EvidenceReads
+		if newEvidenceReads < 0 {
+			newEvidenceReads = 0
+		}
+		lines = append(lines, fmt.Sprintf(
+			"draft_pair initial_attempt=%d revised_attempt=%d initial_score=%d/%d revised_score=%d/%d score_delta=%d initial_required_signals=%d/%d revised_required_signals=%d/%d initial_issue_vector=%s revised_issue_vector=%s root_cause_changed=%v new_evidence_reads=%d retry_duration_ms=%d selected_attempt=%d",
+			initial.observation.Attempt, revised.observation.Attempt, initial.hit, initial.total, revised.hit, revised.total, revised.hit-initial.hit,
+			initial.requiredHit, initial.required, revised.requiredHit, revised.required,
+			benchmarkDraftIssueVector(initial.observation.DraftObservation), benchmarkDraftIssueVector(revised.observation.DraftObservation),
+			normalizeBenchmarkRootCause(initial.observation.RootCause) != normalizeBenchmarkRootCause(revised.observation.RootCause),
+			newEvidenceReads, duration.Milliseconds(), selected))
+	}
+	return lines
+}
+
+func benchmarkRepairPhase(phase string) bool {
+	switch phase {
+	case "critique_retry", "evidence_retry", "semantic_retry":
+		return true
+	default:
+		return false
+	}
+}
+
+func benchmarkDraftIssueVector(observation ai.DraftObservation) string {
+	return fmt.Sprintf("punt=%d,unread=%d,missing=%d,transient=%v",
+		observation.PuntCount, observation.UnreadCitationCount, observation.MissingGroupCount, observation.TransientConflict)
+}
+
+func normalizeBenchmarkRootCause(rootCause string) string {
+	return strings.ToLower(strings.Join(strings.Fields(rootCause), " "))
+}
+
+func selectedBenchmarkDraftAttempt(observations []benchmarkDraftObservation, tc *models.TestCase) int {
+	if tc == nil || tc.AISummary == nil || tc.AIAnalysis == nil {
+		return 0
+	}
+	for i := len(observations) - 1; i >= 0; i-- {
+		observation := observations[i]
+		if observation.Summary == tc.AISummary.Summary &&
+			observation.RootCause == tc.AIAnalysis.RootCause &&
+			observation.SuggestedFix == tc.AIAnalysis.SuggestedFix &&
+			observation.Severity == tc.AIAnalysis.Severity &&
+			slices.Equal(observation.RelevantFiles, tc.AIAnalysis.RelevantFiles) &&
+			observation.IsTransient == tc.AISummary.IsTransient {
+			return observation.Attempt
+		}
+	}
+	return 0
+}
+
 func TestSuccessfulBenchmarkToolUsage(t *testing.T) {
 	snapshot := ai.AnalysisTraceFile{Traces: []ai.AnalysisTrace{
 		{Events: []ai.TraceEvent{
@@ -727,6 +843,73 @@ func TestBenchmarkTelemetryQualityFields(t *testing.T) {
 	}
 }
 
+func TestBenchmarkDraftScoringProducesPairedDeltas(t *testing.T) {
+	bc := benchCase{signals: []benchSignal{
+		{name: "required cause", re: mustRE(`correct cause`), must: true},
+		{name: "supporting detail", re: mustRE(`providerid`)},
+	}}
+	start := time.Unix(0, 0)
+	observations := []benchmarkDraftObservation{
+		{
+			DraftObservation: ai.DraftObservation{
+				Attempt: 1, Phase: "initial", Summary: "correct cause", RootCause: "correct cause",
+				SuggestedFix: "Check the controller.", PuntCount: 1, ToolCalls: 4, EvidenceReads: 2,
+			},
+			observedAt: start,
+		},
+		{
+			DraftObservation: ai.DraftObservation{
+				Attempt: 2, Phase: "critique_retry", Summary: "correct cause", RootCause: "correct cause from missing providerID",
+				SuggestedFix: "Set spec.providerID from the Azure resource ID.", ToolCalls: 5, EvidenceReads: 3,
+			},
+			observedAt: start.Add(1500 * time.Millisecond),
+		},
+	}
+	tc := &models.TestCase{
+		AISummary: &models.AISummary{Summary: observations[1].Summary},
+		AIAnalysis: &models.AIAnalysis{
+			RootCause: observations[1].RootCause, SuggestedFix: observations[1].SuggestedFix,
+			Severity: observations[1].Severity,
+		},
+	}
+	got := strings.Join(benchmarkDraftTelemetryLines(bc, observations, tc), "\n")
+	for _, want := range []string{
+		"draft attempt=1 phase=initial score=1/2",
+		"draft attempt=2 phase=critique_retry score=2/2",
+		"initial_score=1/2 revised_score=2/2 score_delta=1",
+		"initial_required_signals=1/1 revised_required_signals=1/1",
+		"initial_issue_vector=punt=1,unread=0,missing=0,transient=false",
+		"revised_issue_vector=punt=0,unread=0,missing=0,transient=false",
+		"root_cause_changed=true new_evidence_reads=1 retry_duration_ms=1500 selected_attempt=2",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("paired draft telemetry missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestSelectedBenchmarkDraftAttemptUsesPublishedIdentity(t *testing.T) {
+	observations := []benchmarkDraftObservation{
+		{DraftObservation: ai.DraftObservation{
+			Attempt: 1, Summary: "accepted summary", RootCause: "same cause", SuggestedFix: "same fix",
+			Severity: "High", RelevantFiles: []string{"accepted.go"},
+		}},
+		{DraftObservation: ai.DraftObservation{
+			Attempt: 2, Phase: "semantic_retry", Summary: "rejected summary", RootCause: "same cause", SuggestedFix: "same fix",
+			Severity: "High", RelevantFiles: []string{"rejected.go"},
+		}},
+	}
+	tc := &models.TestCase{
+		AISummary: &models.AISummary{Summary: "accepted summary"},
+		AIAnalysis: &models.AIAnalysis{
+			RootCause: "same cause", SuggestedFix: "same fix", Severity: "High", RelevantFiles: []string{"accepted.go"},
+		},
+	}
+	if got := selectedBenchmarkDraftAttempt(observations, tc); got != 1 {
+		t.Fatalf("selected attempt = %d, want 1", got)
+	}
+}
+
 func TestBenchmarkGCSFloorBypassed(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -806,10 +989,13 @@ func benchTestCase(bc benchCase) *models.TestCase {
 	}
 }
 
-func scoreBenchCase(t *testing.T, bc benchCase, tc *models.TestCase, elapsed time.Duration, backend string, minGCSBytes int, toolUsage benchmarkToolUsage, traceSummary benchmarkTraceSummary) {
+func scoreBenchCase(t *testing.T, bc benchCase, tc *models.TestCase, elapsed time.Duration, backend string, minGCSBytes int, toolUsage benchmarkToolUsage, traceSummary benchmarkTraceSummary, draftObservations []benchmarkDraftObservation) {
 	t.Helper()
 	t.Logf("\n===== %s (%s) =====", bc.name, backend)
 	for _, line := range benchmarkTelemetryLines(elapsed, tc.AIAnalysis, minGCSBytes, toolUsage, traceSummary) {
+		t.Log(line)
+	}
+	for _, line := range benchmarkDraftTelemetryLines(bc, draftObservations, tc) {
 		t.Log(line)
 	}
 	if tc.AIAnalysis == nil {
