@@ -426,7 +426,9 @@ same shared volume; it never rewrites fetched job JSON.
 When `server.chat.enabled=true` and `server.actions.enabled=true`, the server also
 advertises the chat-to-fix bridge. Eligible completed responses expose **Use
 this finding in a fix proposal**, followed by an explicit context review, the
-existing fix preview, and final confirmation before any GitHub write.
+existing fix preview, and final confirmation before any GitHub write. Preview
+and confirmation state is persisted on the shared private volume so retries can
+recover across server replicas and restarts.
 
 Source investigation is also disabled by default. Configure its independent
 read-only runtime in `project.yaml`:

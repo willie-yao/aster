@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/resolve"
@@ -167,9 +168,12 @@ func TestPreviewCache_Expiry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.pmu.Lock()
-	s.previews[tok].createdAt = time.Now().Add(-previewTTL - time.Minute)
-	s.pmu.Unlock()
+	if err := s.previewStore.update(func(state *previewState, _ time.Time) (bool, error) {
+		state.Previews[tokenHash(tok)].CreatedAt = time.Now().Add(-previewTTL - time.Minute).UTC().Format(time.RFC3339)
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := s.take("owner-token", tok); !errors.Is(err, ErrPreviewNotFound) {
 		t.Fatalf("expired take: want ErrPreviewNotFound, got %v", err)
 	}
@@ -239,42 +243,80 @@ func TestSafeFixPreviewErrorPreservesContextSentinels(t *testing.T) {
 	}
 }
 
-func TestPreviewConfirmationLifecycleIsRecoverable(t *testing.T) {
-	service := NewService(&project.Config{}, t.TempDir(), AIConfig{})
-	token, err := service.stash("owner-token", &previewEntry{kind: "fix"})
+func TestPreviewConfirmationLifecycleIsRecoverableAcrossServices(t *testing.T) {
+	dataDir := t.TempDir()
+	first := NewService(&project.Config{}, dataDir, AIConfig{})
+	token, err := first.stash("owner-token", &previewEntry{kind: "issue"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	entry, resultURL, err := service.beginConfirm("owner-token", token)
+	second := NewService(&project.Config{}, dataDir, AIConfig{})
+	entry, resultURL, err := second.beginConfirm("owner-token", token)
 	if err != nil || entry == nil || resultURL != "" {
 		t.Fatalf("begin confirmation = %+v, %q, %v", entry, resultURL, err)
 	}
-	if _, _, err := service.beginConfirm("owner-token", token); !errors.Is(err, ErrPreviewPending) {
-		t.Fatalf("concurrent confirmation error = %v", err)
+	if _, _, err := first.beginConfirm("owner-token", token); !errors.Is(err, ErrPreviewPending) {
+		t.Fatalf("cross-service concurrent confirmation error = %v", err)
 	}
-	service.finishConfirm(token, entry, "https://github.com/o/r/pull/1", nil)
-	entry, resultURL, err = service.beginConfirm("owner-token", token)
-	if err != nil || entry != nil || resultURL != "https://github.com/o/r/pull/1" {
+	if err := second.finishConfirm("owner-token", token, "https://github.com/o/r/issues/1", nil); err != nil {
+		t.Fatal(err)
+	}
+	restarted := NewService(&project.Config{}, dataDir, AIConfig{})
+	entry, resultURL, err = restarted.beginConfirm("owner-token", token)
+	if err != nil || entry != nil || resultURL != "https://github.com/o/r/issues/1" {
 		t.Fatalf("recovered confirmation = %+v, %q, %v", entry, resultURL, err)
 	}
-	if _, _, err := service.beginConfirm("other-token", token); !errors.Is(err, ErrPreviewNotFound) {
+	if _, _, err := restarted.beginConfirm("other-token", token); !errors.Is(err, ErrPreviewNotFound) {
 		t.Fatalf("cross-owner confirmation error = %v", err)
 	}
 }
 
-func TestPreviewConfirmationFailureCanRetry(t *testing.T) {
-	service := NewService(&project.Config{}, t.TempDir(), AIConfig{})
-	token, err := service.stash("owner-token", &previewEntry{kind: "fix"})
+func TestPreviewConfirmationFailureCanRetryAcrossServices(t *testing.T) {
+	dataDir := t.TempDir()
+	first := NewService(&project.Config{}, dataDir, AIConfig{})
+	token, err := first.stash("owner-token", &previewEntry{kind: "issue"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	entry, _, err := service.beginConfirm("owner-token", token)
-	if err != nil {
+	if _, _, err := first.beginConfirm("owner-token", token); err != nil {
 		t.Fatal(err)
 	}
-	service.finishConfirm(token, entry, "", errors.New("temporary failure"))
-	retry, resultURL, err := service.beginConfirm("owner-token", token)
-	if err != nil || retry != entry || resultURL != "" {
+	if err := first.finishConfirm("owner-token", token, "", errors.New("temporary failure")); err != nil {
+		t.Fatal(err)
+	}
+	restarted := NewService(&project.Config{}, dataDir, AIConfig{})
+	retry, resultURL, err := restarted.beginConfirm("owner-token", token)
+	if err != nil || retry == nil || resultURL != "" {
 		t.Fatalf("retry confirmation = %+v, %q, %v", retry, resultURL, err)
+	}
+}
+
+func TestFixPreviewSnapshotPersistsAcrossServices(t *testing.T) {
+	dataDir := t.TempDir()
+	generated := fixpr.RestoreGeneratedFix(&fixpr.GeneratedFixSnapshot{
+		Subject: "retry failure", Rationale: "bound retries", Diff: "diff",
+		Files: map[string]string{"retry.go": "fixed\n"}, Title: "Fix retry", Description: "description", Body: "body",
+		Pattern: models.PatternAnalysis{Subject: "retry failure", JobID: "periodic-x"},
+		Key:     "fix-key", Base: ghpr.Base{Branch: "main", HeadSHA: "abc", TreeSHA: "tree"},
+	})
+	first := NewService(&project.Config{}, dataDir, AIConfig{})
+	token, err := first.stash("owner-token", &previewEntry{kind: gfKind, fix: generated})
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted := NewService(&project.Config{}, dataDir, AIConfig{})
+	entry, _, err := restarted.beginConfirm("owner-token", token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry.fix == nil || entry.fix.Preview.Diff != "diff" || entry.fix.Preview.Files["retry.go"] != "fixed\n" {
+		t.Fatalf("restored fix = %+v", entry.fix)
+	}
+	info, err := os.Stat(filepath.Join(dataDir, "action_preview_state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		t.Fatalf("preview state permissions = %o", info.Mode().Perm())
 	}
 }

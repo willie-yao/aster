@@ -85,13 +85,9 @@ type PreviewResult struct {
 // previewEntry is a cached draft awaiting confirmation. Exactly one of spec or
 // fix is set, per kind. owner binds the draft to the admin who generated it.
 type previewEntry struct {
-	owner      string
-	kind       string
-	spec       issues.IssueSpec    // issue drafts
-	fix        *fixpr.GeneratedFix // fix drafts
-	createdAt  time.Time
-	confirming bool
-	resultURL  string
+	kind string
+	spec issues.IssueSpec    // issue drafts
+	fix  *fixpr.GeneratedFix // fix drafts
 }
 
 // Service runs on-demand actions against the data written to DataDir. It reads
@@ -106,8 +102,7 @@ type Service struct {
 	ai      AIConfig
 	mu      sync.Mutex
 
-	pmu      sync.Mutex
-	previews map[string]*previewEntry
+	previewStore *previewStore
 
 	rmu             sync.Mutex
 	requests        *actionRequestState
@@ -122,7 +117,8 @@ type Service struct {
 func NewService(cfg *project.Config, dataDir string, ai AIConfig) *Service {
 	s := &Service{
 		cfg: cfg, dataDir: dataDir, ai: ai,
-		previews: map[string]*previewEntry{}, requestCancels: map[string]context.CancelFunc{}, requestConfirms: map[string]struct{}{},
+		previewStore:   newPreviewStore(dataDir),
+		requestCancels: map[string]context.CancelFunc{}, requestConfirms: map[string]struct{}{},
 		requestTimeout: defaultRequestTimeout,
 	}
 	s.loadActionRequests()
@@ -407,41 +403,23 @@ func (s *Service) Confirm(ctx context.Context, token, userToken string) (string,
 	if err != nil || resultURL != "" {
 		return resultURL, err
 	}
-	resultURL, err = s.confirmEntry(ctx, entry, userToken)
-	s.finishConfirm(token, entry, resultURL, err)
-	return resultURL, err
+	resultURL, confirmErr := s.confirmEntry(ctx, entry, userToken)
+	finishErr := s.finishConfirm(userToken, token, resultURL, confirmErr)
+	if confirmErr != nil {
+		return resultURL, confirmErr
+	}
+	if finishErr != nil {
+		return resultURL, finishErr
+	}
+	return resultURL, nil
 }
 
 func (s *Service) beginConfirm(userToken, token string) (*previewEntry, string, error) {
-	s.pmu.Lock()
-	defer s.pmu.Unlock()
-	s.evictExpiredLocked()
-	entry, ok := s.previews[token]
-	if !ok || entry.owner != tokenHash(userToken) {
-		return nil, "", ErrPreviewNotFound
-	}
-	if entry.resultURL != "" {
-		return nil, entry.resultURL, nil
-	}
-	if entry.confirming {
-		return nil, "", ErrPreviewPending
-	}
-	entry.confirming = true
-	return entry, "", nil
+	return s.previewStore.begin(userToken, token)
 }
 
-func (s *Service) finishConfirm(token string, entry *previewEntry, resultURL string, confirmErr error) {
-	s.pmu.Lock()
-	defer s.pmu.Unlock()
-	current := s.previews[token]
-	if current == nil || current != entry {
-		return
-	}
-	current.confirming = false
-	if confirmErr == nil && resultURL != "" {
-		current.resultURL = resultURL
-		current.createdAt = time.Now()
-	}
+func (s *Service) finishConfirm(userToken, token, resultURL string, confirmErr error) error {
+	return s.previewStore.finish(userToken, token, resultURL, confirmErr)
 }
 
 func (s *Service) confirmEntry(ctx context.Context, entry *previewEntry, userToken string) (string, error) {
@@ -534,43 +512,14 @@ func (s *Service) Unresolve(failureID string) error {
 	return nil
 }
 
-// stash caches a draft under a fresh token bound to the admin's identity and
-// returns the token, evicting expired entries first.
-func (s *Service) stash(userToken string, e *previewEntry) (string, error) {
-	e.owner = tokenHash(userToken)
-	e.createdAt = time.Now()
-	token, err := newToken()
-	if err != nil {
-		return "", fmt.Errorf("generating preview token: %w", err)
-	}
-	s.pmu.Lock()
-	defer s.pmu.Unlock()
-	s.evictExpiredLocked()
-	s.previews[token] = e
-	return token, nil
+// stash persists a draft under a fresh token bound to the admin identity.
+func (s *Service) stash(userToken string, entry *previewEntry) (string, error) {
+	return s.previewStore.stash(userToken, entry)
 }
 
-// take removes and returns the draft cached under token if it exists, has not
-// expired, and belongs to the same admin.
+// take removes one persisted preview for compatibility with direct callers.
 func (s *Service) take(userToken, token string) (*previewEntry, error) {
-	s.pmu.Lock()
-	defer s.pmu.Unlock()
-	s.evictExpiredLocked()
-	e, ok := s.previews[token]
-	if !ok || e.owner != tokenHash(userToken) {
-		return nil, ErrPreviewNotFound
-	}
-	delete(s.previews, token)
-	return e, nil
-}
-
-func (s *Service) evictExpiredLocked() {
-	cutoff := time.Now().Add(-previewTTL)
-	for k, e := range s.previews {
-		if e.createdAt.Before(cutoff) {
-			delete(s.previews, k)
-		}
-	}
+	return s.previewStore.take(userToken, token)
 }
 
 // tokenHash binds a preview to the admin who generated it without retaining the
