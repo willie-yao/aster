@@ -59,8 +59,11 @@ export function PatternBanner({
     const latestObservedAt = latest.completed_at ?? latest.started_at ?? "";
     return observedAt > latestObservedAt ? observation : latest;
   }, undefined as RemediationObservation | undefined);
+  const hasEvidenceBuild = Boolean(
+    pattern.shared_builds?.some((buildID) => runs.some((run) => run.build_id === buildID)),
+  );
   const chatRef: AnalysisChatReference | null =
-    pattern.systemic && pattern.id && pattern.content_hash && jobID
+    pattern.systemic && pattern.id && pattern.content_hash && jobID && hasEvidenceBuild
       ? {
           scope: "pattern",
           job_id: jobID,
