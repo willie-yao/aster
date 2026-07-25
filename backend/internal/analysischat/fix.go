@@ -131,10 +131,10 @@ func analysisSnapshot(analysis *models.AIAnalysis) AnalysisSnapshot {
 	}
 	return AnalysisSnapshot{
 		GeneratedAt:   strings.TrimSpace(analysis.GeneratedAt),
-		RootCause:     strings.TrimSpace(analysis.RootCause),
+		RootCause:     clampPersistedText(analysis.RootCause, 32<<10),
 		Severity:      strings.TrimSpace(analysis.Severity),
-		SuggestedFix:  strings.TrimSpace(analysis.SuggestedFix),
-		RelevantFiles: slices.Clone(analysis.RelevantFiles),
+		SuggestedFix:  clampPersistedText(analysis.SuggestedFix, 16<<10),
+		RelevantFiles: boundedPersistedFiles(analysis.RelevantFiles),
 	}
 }
 

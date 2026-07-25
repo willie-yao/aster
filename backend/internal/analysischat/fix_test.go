@@ -2,7 +2,9 @@ package analysischat
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -254,5 +256,48 @@ func TestLegacySourceRefreshCannotReplaceFixCandidateAnalysis(t *testing.T) {
 		return false, nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestServiceFixCandidateAcceptsUnchangedCanonicalizedAnalysis(t *testing.T) {
+	dir := t.TempDir()
+	testCase := analyzedTest("TestCluster", "junit.xml", "2026-07-24T12:00:00Z")
+	testCase.AIAnalysis.RootCause = strings.Repeat("root ", 9000)
+	testCase.AIAnalysis.SuggestedFix = strings.Repeat("fix ", 5000)
+	for i := 0; i < 55; i++ {
+		testCase.AIAnalysis.RelevantFiles = append(testCase.AIAnalysis.RelevantFiles, fmt.Sprintf("  pkg/file-%02d.go  ", i))
+	}
+	detail := testDetail(testCase)
+	detail.PatternAnalyses = []models.PatternAnalysis{fixCandidatePattern()}
+	writeJobDetail(t, dir, detail)
+	runner := &fakeRunner{reply: Reply{
+		Answer: "selected answer", Assessment: "supports",
+		Citations: []Citation{{Path: "build-log.txt", Quote: "failure"}},
+	}}
+	service, err := NewService(t.Context(), dir, runner, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := service.Create(AnalysisRef{
+		JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster",
+		AnalysisGeneratedAt: "2026-07-24T12:00:00Z",
+	}, "Alice", testRequestID(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestID := testRequestID(t)
+	if _, err := service.Send(t.Context(), session.ID, "Alice", requestID, "What should change?"); err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := service.FixCandidate(session.ID, "Alice", requestID, fixCandidatePattern().ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRootCause := clampPersistedText(testCase.AIAnalysis.RootCause, 32<<10)
+	wantSuggestedFix := clampPersistedText(testCase.AIAnalysis.SuggestedFix, 16<<10)
+	if candidate.Original.RootCause != wantRootCause || candidate.Original.SuggestedFix != wantSuggestedFix ||
+		len(candidate.Original.RelevantFiles) != 50 || candidate.Original.RelevantFiles[0] != "build-log.txt" ||
+		candidate.Original.RelevantFiles[1] != "pkg/file-00.go" {
+		t.Fatalf("canonical snapshot was not preserved")
 	}
 }
