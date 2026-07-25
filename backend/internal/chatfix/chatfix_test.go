@@ -21,12 +21,13 @@ type fakeChatStore struct {
 	owner           string
 	requestID       string
 	patternID       string
+	patternHash     string
 	sourceRequestID string
 }
 
-func (f *fakeChatStore) FixCandidate(sessionID, owner, requestID, patternID, sourceRequestID string) (analysischat.FixCandidate, error) {
+func (f *fakeChatStore) FixCandidate(sessionID, owner, requestID, patternID, patternHash, sourceRequestID string) (analysischat.FixCandidate, error) {
 	f.sessionID, f.owner, f.requestID = sessionID, owner, requestID
-	f.patternID, f.sourceRequestID = patternID, sourceRequestID
+	f.patternID, f.patternHash, f.sourceRequestID = patternID, patternHash, sourceRequestID
 	if f.onReturn != nil {
 		f.onReturn()
 	}
@@ -67,7 +68,7 @@ func TestPreviewChatFixBuildsSelectedContext(t *testing.T) {
 	fixes := &fakeFixPreviewer{}
 	service := NewService(chat, fixes)
 	preview, err := service.PreviewChatFix(
-		t.Context(), "session", "Alice", "chat-request", "pattern", "source-request", "user-token", "keep compatibility",
+		t.Context(), "session", "Alice", "chat-request", "pattern", "pattern-hash", "source-request", "user-token", "keep compatibility",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -76,7 +77,7 @@ func TestPreviewChatFixBuildsSelectedContext(t *testing.T) {
 		t.Fatalf("preview=%+v fixes=%+v", preview, fixes)
 	}
 	if chat.sessionID != "session" || chat.owner != "Alice" || chat.requestID != "chat-request" ||
-		chat.patternID != "pattern" || chat.sourceRequestID != "source-request" {
+		chat.patternID != "pattern" || chat.patternHash != "pattern-hash" || chat.sourceRequestID != "source-request" {
 		t.Fatalf("chat call = %+v", chat)
 	}
 	if fixes.pattern.SharedRootCause != "snapshot cause" || fixes.target.JobID != "periodic-x" ||
@@ -101,7 +102,7 @@ func TestPreviewChatFixStopsBeforeGenerationOnChatErrors(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			chat := &fakeChatStore{candidateErr: testCase.err}
 			fixes := &fakeFixPreviewer{}
-			_, err := NewService(chat, fixes).PreviewChatFix(t.Context(), "session", "alice", "request", "pattern", "", "token", "")
+			_, err := NewService(chat, fixes).PreviewChatFix(t.Context(), "session", "alice", "request", "pattern", "pattern-hash", "", "token", "")
 			if !errors.Is(err, testCase.err) {
 				t.Fatalf("error = %v", err)
 			}
@@ -116,16 +117,18 @@ func TestPreviewChatFixRejectsInvalidSelectionBeforeReadingChat(t *testing.T) {
 	for _, testCase := range []struct {
 		name        string
 		patternID   string
+		patternHash string
 		instruction string
 	}{
-		{name: "missing pattern"},
-		{name: "oversized instruction", patternID: "pattern", instruction: strings.Repeat("x", 4097)},
+		{name: "missing pattern", patternHash: "pattern-hash"},
+		{name: "missing pattern hash", patternID: "pattern"},
+		{name: "oversized instruction", patternID: "pattern", patternHash: "pattern-hash", instruction: strings.Repeat("x", 4097)},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			chat := &fakeChatStore{}
 			fixes := &fakeFixPreviewer{}
 			_, err := NewService(chat, fixes).PreviewChatFix(
-				t.Context(), "session", "alice", "request", testCase.patternID, "", "token", testCase.instruction,
+				t.Context(), "session", "alice", "request", testCase.patternID, testCase.patternHash, "", "token", testCase.instruction,
 			)
 			if !errors.Is(err, analysischat.ErrInvalidRequest) {
 				t.Fatalf("error = %v", err)
@@ -141,6 +144,7 @@ func TestPreviewChatFixKeepsAtomicPatternSnapshotAfterPublishedReplacement(t *te
 	original := models.PatternAnalysis{
 		ID: "stable-pattern", JobID: "periodic-x", SharedBuilds: []string{"123"}, SharedRootCause: "original cause",
 	}
+	original.ContentHash = models.PatternHash(original)
 	published := original
 	chat := &fakeChatStore{
 		candidate: analysischat.FixCandidate{
@@ -154,7 +158,7 @@ func TestPreviewChatFixKeepsAtomicPatternSnapshotAfterPublishedReplacement(t *te
 	}
 	fixes := &fakeFixPreviewer{}
 	if _, err := NewService(chat, fixes).PreviewChatFix(
-		t.Context(), "session", "alice", "request", original.ID, "", "token", "",
+		t.Context(), "session", "alice", "request", original.ID, original.ContentHash, "", "token", "",
 	); err != nil {
 		t.Fatal(err)
 	}

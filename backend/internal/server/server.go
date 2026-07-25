@@ -121,7 +121,8 @@ type Features struct {
 	AnalysisCorrections bool `json:"analysis_corrections,omitempty"`
 	SourceInvestigation bool `json:"source_investigation,omitempty"`
 	// ChatFix enables server-validated chat context for fix previews.
-	ChatFix bool `json:"chat_fix,omitempty"`
+	ChatFix              bool   `json:"chat_fix,omitempty"`
+	ChatFixMinConfidence string `json:"chat_fix_min_confidence,omitempty"`
 }
 
 // authRegistrar is implemented by authenticators that need their own routes
@@ -214,6 +215,9 @@ func Handler(opts Options) (http.Handler, error) {
 
 	if opts.Auth != nil && opts.ChatFix != nil {
 		caps.Features.ChatFix = true
+		if strings.TrimSpace(caps.Features.ChatFixMinConfidence) == "" {
+			caps.Features.ChatFixMinConfidence = "high"
+		}
 		timeout := opts.ActionTimeout
 		if timeout <= 0 {
 			timeout = defaultActionTimeout
@@ -435,6 +439,14 @@ func decodeInstruction(r *http.Request) string {
 func writeActionError(w http.ResponseWriter, id, login string, err error) {
 	if errors.Is(err, actions.ErrNotFound) || errors.Is(err, actions.ErrPreviewNotFound) || errors.Is(err, actions.ErrRequestNotFound) {
 		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if errors.Is(err, actions.ErrPreviewPending) || errors.Is(err, actions.ErrPreviewSuperseded) || errors.Is(err, actions.ErrPreviewOutcomeUnknown) {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	if errors.Is(err, actions.ErrPreviewTargetChanged) {
+		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
 	log.Printf("action failed for %s (by %s): %v", id, login, err)

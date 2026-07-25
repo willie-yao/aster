@@ -1,8 +1,10 @@
 package statefile
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -30,6 +32,66 @@ func TestWriteJSON_AtomicAndParents(t *testing.T) {
 		if e.Name() != "out.json" {
 			t.Errorf("unexpected leftover file %q", e.Name())
 		}
+	}
+}
+
+func TestWriteJSONDurableSyncsFileAndDirectory(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	fileSynced := false
+	dirSynced := false
+	err := writeJSON(
+		path,
+		map[string]int{"a": 1},
+		0o600,
+		func(*os.File) error {
+			fileSynced = true
+			return nil
+		},
+		func(*os.File) error {
+			dirSynced = true
+			if _, err := os.Stat(path); err != nil {
+				return err
+			}
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fileSynced || !dirSynced {
+		t.Fatalf("sync calls = file:%t dir:%t", fileSynced, dirSynced)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode = %o, want 600", info.Mode().Perm())
+	}
+}
+
+func TestWriteJSONDurableSyncFailurePreservesPriorState(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	if err := WriteJSON(path, map[string]string{"value": "old"}); err != nil {
+		t.Fatal(err)
+	}
+	err := writeJSON(
+		path,
+		map[string]string{"value": "new"},
+		0o600,
+		func(*os.File) error { return errors.New("sync failed") },
+		nil,
+	)
+	if err == nil {
+		t.Fatal("sync failure was accepted")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"old"`) {
+		t.Fatalf("prior state was replaced: %s", data)
 	}
 }
 

@@ -424,9 +424,11 @@ private audit ledger and the public `analysis_corrections.json` overlay to the
 same shared volume; it never rewrites fetched job JSON.
 
 When `server.chat.enabled=true` and `server.actions.enabled=true`, the server also
-advertises the backend-only chat-to-fix bridge. It rebuilds one selected
-evidence-backed response from private session state and returns the existing fix
-preview contract. The frontend control is added separately.
+advertises the chat-to-fix bridge. Eligible completed responses expose **Use
+this finding in a fix proposal**, followed by an explicit context review, the
+existing fix preview, and final confirmation before any GitHub write. Preview
+and confirmation state is persisted on the shared private volume so retries can
+recover across server replicas and restarts.
 
 Source investigation is also disabled by default. Configure its independent
 read-only runtime in `project.yaml`:

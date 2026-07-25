@@ -67,3 +67,17 @@ func eligibleJob(jobID string) models.JobDetail {
 	}
 	return detail
 }
+
+func TestAssignIDsBindsPatternContent(t *testing.T) {
+	details := []models.JobDetail{{
+		JobID: "periodic-x",
+		PatternAnalyses: []models.PatternAnalysis{{
+			JobID: "periodic-x", SharedRootCause: "retry failure", SuggestedFix: "bound retries",
+		}},
+	}}
+	AssignIDs(details)
+	pattern := details[0].PatternAnalyses[0]
+	if pattern.ID != models.PatternID(pattern) || pattern.ContentHash != models.PatternHash(pattern) {
+		t.Fatalf("assigned pattern identity = %+v", pattern)
+	}
+}

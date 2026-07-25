@@ -27,7 +27,10 @@ for how to pin a release.
   selected evidence-backed assistant response. The server reconstructs bounded
   context from the owner-bound session, validates the current analysis and target
   recurring pattern, optionally includes one successful verified source
-  investigation, and never forwards the complete transcript.
+  investigation, and never forwards the complete transcript. Eligible completed
+  responses expose a **Use this finding in a fix proposal** control with an
+  explicit context-review step, the existing draft preview, and final GitHub
+  confirmation.
 - **Read-only source investigation for analysis chat.** Kubernetes-native chat
   can opt into owner-bound Orka read-only agent Tasks pinned to the selected Prow
   build's exact repository commit. Requests persist across replicas, support

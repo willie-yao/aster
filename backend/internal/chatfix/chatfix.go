@@ -14,7 +14,7 @@ import (
 )
 
 type chatStore interface {
-	FixCandidate(sessionID, owner, requestID, patternID, sourceRequestID string) (analysischat.FixCandidate, error)
+	FixCandidate(sessionID, owner, requestID, patternID, patternHash, sourceRequestID string) (analysischat.FixCandidate, error)
 }
 
 type fixPreviewer interface {
@@ -37,15 +37,16 @@ func NewService(chat chatStore, fixes fixPreviewer) *Service {
 // PreviewChatFix generates an existing fix preview from one selected answer.
 func (s *Service) PreviewChatFix(
 	ctx context.Context,
-	sessionID, owner, requestID, patternID, sourceRequestID, userToken, instruction string,
+	sessionID, owner, requestID, patternID, patternHash, sourceRequestID, userToken, instruction string,
 ) (actions.PreviewResult, error) {
 	patternID = strings.TrimSpace(patternID)
+	patternHash = strings.TrimSpace(patternHash)
 	sourceRequestID = strings.TrimSpace(sourceRequestID)
 	instruction = strings.TrimSpace(instruction)
-	if patternID == "" || len(instruction) > 4096 {
-		return actions.PreviewResult{}, fmt.Errorf("%w: pattern_id is required and instruction must not exceed 4096 bytes", analysischat.ErrInvalidRequest)
+	if patternID == "" || patternHash == "" || len(instruction) > 4096 {
+		return actions.PreviewResult{}, fmt.Errorf("%w: pattern_id and pattern_hash are required and instruction must not exceed 4096 bytes", analysischat.ErrInvalidRequest)
 	}
-	candidate, err := s.chat.FixCandidate(sessionID, owner, requestID, patternID, sourceRequestID)
+	candidate, err := s.chat.FixCandidate(sessionID, owner, requestID, patternID, patternHash, sourceRequestID)
 	if err != nil {
 		return actions.PreviewResult{}, err
 	}

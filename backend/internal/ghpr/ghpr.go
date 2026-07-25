@@ -385,7 +385,20 @@ func (c *Client) do(ctx context.Context, method, url string, body, out any, okSt
 // queryToken narrows the search. The full confirmMarker is checked to avoid
 // token-level false positives when local state is lost.
 func (c *Client) SearchOpenPR(ctx context.Context, owner, repo, queryToken, confirmMarker string) (number int, htmlURL string, found bool, err error) {
-	q := fmt.Sprintf("repo:%s/%s is:pr is:open %s in:body", owner, repo, queryToken)
+	return c.searchPR(ctx, owner, repo, queryToken, confirmMarker, true)
+}
+
+// SearchAnyPR finds a PR in any state whose body contains confirmMarker.
+func (c *Client) SearchAnyPR(ctx context.Context, owner, repo, queryToken, confirmMarker string) (number int, htmlURL string, found bool, err error) {
+	return c.searchPR(ctx, owner, repo, queryToken, confirmMarker, false)
+}
+
+func (c *Client) searchPR(ctx context.Context, owner, repo, queryToken, confirmMarker string, openOnly bool) (number int, htmlURL string, found bool, err error) {
+	state := ""
+	if openOnly {
+		state = " is:open"
+	}
+	q := fmt.Sprintf("repo:%s/%s is:pr%s %s in:body", owner, repo, state, queryToken)
 	searchURL := c.base + "/search/issues?per_page=5&q=" + url.QueryEscape(q)
 	var out struct {
 		Items []struct {

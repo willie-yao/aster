@@ -72,7 +72,20 @@ func (c *Client) do(ctx context.Context, method, path string, body any) (*http.R
 // queryToken narrows the search, and the full marker check avoids token-level
 // false positives when local state is lost.
 func (c *Client) SearchOpenIssue(ctx context.Context, queryToken, confirmMarker string) (number int, htmlURL string, found bool, err error) {
-	q := fmt.Sprintf("repo:%s/%s is:issue is:open %s in:body", c.owner, c.repo, queryToken)
+	return c.searchIssue(ctx, queryToken, confirmMarker, true)
+}
+
+// SearchIssue finds an issue in any state whose body contains confirmMarker.
+func (c *Client) SearchIssue(ctx context.Context, queryToken, confirmMarker string) (number int, htmlURL string, found bool, err error) {
+	return c.searchIssue(ctx, queryToken, confirmMarker, false)
+}
+
+func (c *Client) searchIssue(ctx context.Context, queryToken, confirmMarker string, openOnly bool) (number int, htmlURL string, found bool, err error) {
+	state := ""
+	if openOnly {
+		state = " is:open"
+	}
+	q := fmt.Sprintf("repo:%s/%s is:issue%s %s in:body", c.owner, c.repo, state, queryToken)
 	path := "/search/issues?per_page=5&q=" + url.QueryEscape(q)
 	resp, rb, err := c.do(ctx, http.MethodGet, path, nil)
 	if err != nil {

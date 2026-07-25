@@ -24,7 +24,12 @@ import {
 } from "@mui/icons-material";
 import { useJobDetail } from "../hooks/useData";
 import { useCapabilities } from "../hooks/useCapabilities";
-import { formatDuration, highlightStackTrace, timeAgo } from "../lib/utils";
+import {
+  formatDuration,
+  highlightStackTrace,
+  meetsConfidenceFloor,
+  timeAgo,
+} from "../lib/utils";
 import { RichText } from "../components/RichText";
 import { RunTimeline } from "../components/RunTimeline";
 import { Panel } from "../components/Panel";
@@ -34,7 +39,7 @@ import { AiAnalysisPanel } from "../components/AiAnalysisPanel";
 import { LoadingState } from "../components/LoadingState";
 import { ErrorState } from "../components/ErrorState";
 import { soft } from "../theme";
-import type { BuildResult, TestCase } from "../types/dashboard";
+import type { BuildResult, PatternAnalysis, TestCase } from "../types/dashboard";
 
 /** Strip numbers and hex strings to normalize error messages for grouping. */
 function normalizeMessage(msg: string): string {
@@ -309,6 +314,18 @@ export function TestDetailPage() {
         : undefined
     : undefined;
 
+  const fixPatterns: PatternAnalysis[] = selectedRun
+    ? (data.pattern_analyses ?? []).filter(
+        (pattern) =>
+          pattern.systemic &&
+          Boolean(pattern.id) &&
+          Boolean(pattern.content_hash) &&
+          Boolean(pattern.suggested_fix) &&
+          meetsConfidenceFloor(pattern.confidence, features.chat_fix_min_confidence ?? "high") &&
+          Boolean(pattern.shared_builds?.includes(selectedRun.build_id)),
+      )
+    : [];
+
   const fileCtx = (run: BuildResult | null, tc: TestCase) => ({
     buildLogUrl: run?.build_log_url,
     clusterArtifacts: tc.cluster_artifacts,
@@ -450,6 +467,7 @@ export function TestDetailPage() {
                       `&test_name=${encodeURIComponent(testName)}`
                     : undefined
                 }
+                fixPatterns={fixPatterns}
                 chatRef={{
                   job_id: jobID ?? "",
                   build_id: selectedRun.build_id,

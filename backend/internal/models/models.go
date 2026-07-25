@@ -249,6 +249,8 @@ type PatternAnalysis struct {
 	// ID is a stable, URL-safe identifier for this pattern, used to address it
 	// from the frontend and the actions API. See models.PatternID.
 	ID string `json:"id,omitempty"`
+	// ContentHash binds actions to the complete pattern shown to the maintainer.
+	ContentHash string `json:"content_hash,omitempty"`
 	// Subject is what the correlated failures belong to.
 	Subject string `json:"subject"`
 	// JobID lets home-page aggregations link back to the job page.

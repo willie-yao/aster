@@ -39,6 +39,20 @@ var ErrPreviewRejected = errors.New("fix preview rejected")
 // ErrPatternMismatch means the selected recurring pattern does not include the chat analysis.
 var ErrPatternMismatch = errors.New("pattern does not include selected analysis")
 
+// ErrPreviewPending means confirmation is already running for this preview.
+var ErrPreviewPending = errors.New("preview confirmation is pending")
+
+// ErrPreviewSuperseded means a newer confirmation attempt owns the preview.
+var ErrPreviewSuperseded = errors.New("preview confirmation was superseded")
+
+// ErrPreviewOutcomeUnknown means GitHub may have accepted the write. Retrying
+// checks for the marked object without creating another one.
+var ErrPreviewOutcomeUnknown = errors.New("preview confirmation outcome unknown; retry to check GitHub")
+
+// ErrPreviewTargetChanged means the configured write repository no longer
+// matches the repository used to generate the preview.
+var ErrPreviewTargetChanged = errors.New("preview target repository changed; generate a new preview")
+
 // ErrPreviewNotFound means the confirm token is unknown, expired, or belongs to
 // a different admin.
 var ErrPreviewNotFound = errors.New("preview not found or expired")
@@ -82,11 +96,11 @@ type PreviewResult struct {
 // previewEntry is a cached draft awaiting confirmation. Exactly one of spec or
 // fix is set, per kind. owner binds the draft to the admin who generated it.
 type previewEntry struct {
-	owner     string
-	kind      string
-	spec      issues.IssueSpec    // issue drafts
-	fix       *fixpr.GeneratedFix // fix drafts
-	createdAt time.Time
+	kind         string
+	targetRepo   string
+	targetConfig string
+	spec         issues.IssueSpec    // issue drafts
+	fix          *fixpr.GeneratedFix // fix drafts
 }
 
 // Service runs on-demand actions against the data written to DataDir. It reads
@@ -101,8 +115,7 @@ type Service struct {
 	ai      AIConfig
 	mu      sync.Mutex
 
-	pmu      sync.Mutex
-	previews map[string]*previewEntry
+	previewStore *previewStore
 
 	rmu             sync.Mutex
 	requests        *actionRequestState
@@ -117,7 +130,8 @@ type Service struct {
 func NewService(cfg *project.Config, dataDir string, ai AIConfig) *Service {
 	s := &Service{
 		cfg: cfg, dataDir: dataDir, ai: ai,
-		previews: map[string]*previewEntry{}, requestCancels: map[string]context.CancelFunc{}, requestConfirms: map[string]struct{}{},
+		previewStore:   newPreviewStore(dataDir),
+		requestCancels: map[string]context.CancelFunc{}, requestConfirms: map[string]struct{}{},
 		requestTimeout: defaultRequestTimeout,
 	}
 	s.loadActionRequests()
@@ -241,6 +255,7 @@ func (s *Service) buildFixManager(userToken string) (*fixpr.Manager, error) {
 		Fork:            eff.Fork == nil || *eff.Fork,
 		AuthorName:      eff.AuthorName,
 		AuthorEmail:     eff.AuthorEmail,
+		MinConfidence:   eff.MinConfidence,
 		MaxFiles:        eff.MaxFiles,
 		MaxNewPerRun:    1,
 		Labels:          eff.Labels,
@@ -285,7 +300,7 @@ func (s *Service) buildFixManager(userToken string) (*fixpr.Manager, error) {
 
 // generateIssuePreview renders an issue draft without caching or posting it.
 func (s *Service) generateIssuePreview(ctx context.Context, failureID, userToken, instruction string) (PreviewResult, *previewEntry, error) {
-	spec, _, err := s.buildIssueSpec(failureID)
+	spec, targetRepo, err := s.buildIssueSpec(failureID)
 	if err != nil {
 		return PreviewResult{}, nil, err
 	}
@@ -302,7 +317,7 @@ func (s *Service) generateIssuePreview(ctx context.Context, failureID, userToken
 		}
 	}
 	return PreviewResult{Kind: "issue", Title: final.Title, Body: final.Body},
-		&previewEntry{kind: "issue", spec: final}, nil
+		&previewEntry{kind: "issue", targetRepo: targetRepo, spec: final}, nil
 }
 
 // PreviewIssue renders the exact issue that would be filed for the failure,
@@ -347,10 +362,11 @@ func (s *Service) generateFixPreviewForPattern(
 		return PreviewResult{}, nil, safeFixPreviewError(err)
 	}
 	return PreviewResult{
-		Kind: gfKind, Title: gf.Title, Body: gf.Description, Diff: gf.Preview.Diff,
-		VerifyStatus: string(gf.Preview.Verify.Status), VerifySummary: gf.Preview.Verify.Summary,
-		VerifyOutput: gf.Preview.Verify.Output,
-	}, &previewEntry{kind: gfKind, fix: gf}, nil
+			Kind: gfKind, Title: gf.Title, Body: gf.Description, Diff: gf.Preview.Diff,
+			VerifyStatus: string(gf.Preview.Verify.Status), VerifySummary: gf.Preview.Verify.Summary,
+			VerifyOutput: gf.Preview.Verify.Output,
+		}, &previewEntry{kind: gfKind, targetRepo: s.cfg.EffectiveFixPRs().Repo.Owner + "/" + s.cfg.EffectiveFixPRs().Repo.Name,
+			targetConfig: fixTargetFingerprint(s.cfg.EffectiveFixPRs()), fix: gf}, nil
 }
 
 func safeFixPreviewError(err error) error {
@@ -398,11 +414,90 @@ func (s *Service) PreviewFixWithContext(
 
 // Confirm files the issue or opens the PR previously cached under token.
 func (s *Service) Confirm(ctx context.Context, token, userToken string) (string, error) {
-	entry, err := s.take(userToken, token)
-	if err != nil {
-		return "", err
+	lease := s.requestTimeout + 30*time.Second
+	entry, resultURL, attemptID, reconcile, err := s.beginConfirm(userToken, token, lease)
+	if err != nil || resultURL != "" {
+		return resultURL, err
 	}
-	return s.confirmEntry(ctx, entry, userToken)
+	if reconcile {
+		resultURL, found, reconcileErr := s.reconcileEntry(ctx, entry, userToken)
+		if reconcileErr != nil {
+			if errors.Is(reconcileErr, ErrPreviewTargetChanged) {
+				_ = s.previewStore.discard(userToken, token, attemptID)
+				return "", reconcileErr
+			}
+			_ = s.finishConfirm(userToken, token, attemptID, "", reconcileErr)
+			return "", reconcileErr
+		}
+		if !found {
+			_ = s.finishConfirm(userToken, token, attemptID, "", ErrPreviewOutcomeUnknown)
+			return "", ErrPreviewOutcomeUnknown
+		}
+		if err := s.finishConfirm(userToken, token, attemptID, resultURL, nil); err != nil {
+			return resultURL, err
+		}
+		return resultURL, nil
+	}
+	resultURL, confirmErr := s.confirmEntry(ctx, entry, userToken)
+	if errors.Is(confirmErr, ErrPreviewTargetChanged) {
+		_ = s.previewStore.discard(userToken, token, attemptID)
+		return "", confirmErr
+	}
+	finishInputErr := confirmErr
+	if resultURL != "" {
+		finishInputErr = nil
+	}
+	finishErr := s.finishConfirm(userToken, token, attemptID, resultURL, finishInputErr)
+	if resultURL != "" && finishErr == nil {
+		return resultURL, nil
+	}
+	if confirmErr != nil {
+		return resultURL, confirmErr
+	}
+	if finishErr != nil {
+		return resultURL, finishErr
+	}
+	return resultURL, nil
+}
+
+func (s *Service) beginConfirm(userToken, token string, lease time.Duration) (*previewEntry, string, string, bool, error) {
+	return s.previewStore.begin(userToken, token, lease)
+}
+
+func (s *Service) finishConfirm(userToken, token, attemptID, resultURL string, confirmErr error) error {
+	return s.previewStore.finish(userToken, token, attemptID, resultURL, confirmErr)
+}
+
+func (s *Service) reconcileEntry(ctx context.Context, entry *previewEntry, userToken string) (string, bool, error) {
+	switch entry.kind {
+	case "issue":
+		eff := s.cfg.EffectiveIssues()
+		if eff.Repo == nil || eff.Repo.Owner == "" || eff.Repo.Name == "" {
+			return "", false, fmt.Errorf("no target repo resolved (set issues.repo or branding.source_repo)")
+		}
+		if entry.targetRepo != eff.Repo.Owner+"/"+eff.Repo.Name {
+			return "", false, ErrPreviewTargetChanged
+		}
+		client := issues.NewClient(userToken, eff.Repo.Owner, eff.Repo.Name)
+		_, url, found, err := client.SearchIssue(ctx, issues.MarkerToken(entry.spec.Key), issues.MarkerFor(entry.spec.Key))
+		return url, found, err
+	case gfKind:
+		eff := s.cfg.EffectiveFixPRs()
+		if eff.Repo == nil || eff.Repo.Owner == "" || eff.Repo.Name == "" || entry.fix == nil {
+			return "", false, fmt.Errorf("no source repo resolved (set ai.fix_prs.repo or branding.source_repo)")
+		}
+		if entry.targetRepo != eff.Repo.Owner+"/"+eff.Repo.Name {
+			return "", false, ErrPreviewTargetChanged
+		}
+		if entry.targetConfig != fixTargetFingerprint(eff) {
+			return "", false, ErrPreviewTargetChanged
+		}
+		key := entry.fix.Snapshot().Key
+		_, url, found, err := fixpr.NewClients(userToken).SearchAnyPR(ctx, eff.Repo.Owner, eff.Repo.Name, fixpr.MarkerToken(key), fixpr.MarkerFor(key))
+		return url, found, err
+	default:
+		return "", false, ErrPreviewNotFound
+	}
 }
 
 func (s *Service) confirmEntry(ctx context.Context, entry *previewEntry, userToken string) (string, error) {
@@ -415,21 +510,31 @@ func (s *Service) confirmEntry(ctx context.Context, entry *previewEntry, userTok
 		if eff.Repo == nil || eff.Repo.Owner == "" || eff.Repo.Name == "" {
 			return "", fmt.Errorf("no target repo resolved (set issues.repo or branding.source_repo)")
 		}
+		if entry.targetRepo != eff.Repo.Owner+"/"+eff.Repo.Name {
+			return "", ErrPreviewTargetChanged
+		}
 		client := issues.NewClient(userToken, eff.Repo.Owner, eff.Repo.Name)
 		targetRepo := eff.Repo.Owner + "/" + eff.Repo.Name
 		mgr := issues.NewManager(client, filepath.Join(s.dataDir, "issue_state.json"), targetRepo, issues.Options{MaxNewPerRun: 1})
 		if _, err := mgr.Reconcile(ctx, []issues.IssueSpec{entry.spec}); err != nil {
 			return "", fmt.Errorf("filing issue: %w", err)
 		}
-		if err := mgr.SaveState(); err != nil {
-			return "", fmt.Errorf("saving issue state: %w", err)
-		}
 		url, ok := mgr.TrackedURL(entry.spec.Key)
 		if !ok {
 			return "", fmt.Errorf("issue was not filed")
 		}
+		if err := mgr.SaveState(); err != nil {
+			return url, fmt.Errorf("saving issue state: %w", err)
+		}
 		return url, nil
 	case gfKind:
+		eff := s.cfg.EffectiveFixPRs()
+		if eff.Repo == nil || entry.targetRepo != eff.Repo.Owner+"/"+eff.Repo.Name {
+			return "", ErrPreviewTargetChanged
+		}
+		if entry.targetConfig != fixTargetFingerprint(eff) {
+			return "", ErrPreviewTargetChanged
+		}
 		mgr, err := s.buildFixManager(userToken)
 		if err != nil {
 			return "", err
@@ -439,11 +544,23 @@ func (s *Service) confirmEntry(ctx context.Context, entry *previewEntry, userTok
 			return "", fmt.Errorf("%s", safeReason(err.Error()))
 		}
 		if err := mgr.SaveState(); err != nil {
-			return "", fmt.Errorf("saving fix-PR state: %w", err)
+			return url, fmt.Errorf("saving fix-PR state: %w", err)
 		}
 		return url, nil
 	}
 	return "", ErrPreviewNotFound
+}
+
+func fixTargetFingerprint(eff project.FixPRs) string {
+	fork := eff.Fork == nil || *eff.Fork
+	payload, _ := json.Marshal(struct {
+		Fork        bool     `json:"fork"`
+		AuthorName  string   `json:"author_name"`
+		AuthorEmail string   `json:"author_email"`
+		Labels      []string `json:"labels"`
+	}{fork, eff.AuthorName, eff.AuthorEmail, eff.Labels})
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:])
 }
 
 // Resolve marks a systemic pattern as resolved: it is hidden from the active
@@ -495,43 +612,14 @@ func (s *Service) Unresolve(failureID string) error {
 	return nil
 }
 
-// stash caches a draft under a fresh token bound to the admin's identity and
-// returns the token, evicting expired entries first.
-func (s *Service) stash(userToken string, e *previewEntry) (string, error) {
-	e.owner = tokenHash(userToken)
-	e.createdAt = time.Now()
-	token, err := newToken()
-	if err != nil {
-		return "", fmt.Errorf("generating preview token: %w", err)
-	}
-	s.pmu.Lock()
-	defer s.pmu.Unlock()
-	s.evictExpiredLocked()
-	s.previews[token] = e
-	return token, nil
+// stash persists a draft under a fresh token bound to the admin identity.
+func (s *Service) stash(userToken string, entry *previewEntry) (string, error) {
+	return s.previewStore.stash(userToken, entry)
 }
 
-// take removes and returns the draft cached under token if it exists, has not
-// expired, and belongs to the same admin.
+// take removes one persisted preview for compatibility with direct callers.
 func (s *Service) take(userToken, token string) (*previewEntry, error) {
-	s.pmu.Lock()
-	defer s.pmu.Unlock()
-	s.evictExpiredLocked()
-	e, ok := s.previews[token]
-	if !ok || e.owner != tokenHash(userToken) {
-		return nil, ErrPreviewNotFound
-	}
-	delete(s.previews, token)
-	return e, nil
-}
-
-func (s *Service) evictExpiredLocked() {
-	cutoff := time.Now().Add(-previewTTL)
-	for k, e := range s.previews {
-		if e.createdAt.Before(cutoff) {
-			delete(s.previews, k)
-		}
-	}
+	return s.previewStore.take(userToken, token)
 }
 
 // tokenHash binds a preview to the admin who generated it without retaining the

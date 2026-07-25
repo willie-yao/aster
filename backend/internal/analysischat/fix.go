@@ -33,11 +33,12 @@ type FixCandidate struct {
 }
 
 // FixCandidate returns one owner-bound evidence-backed assistant response.
-func (s *Service) FixCandidate(sessionID, owner, requestID, patternID, sourceRequestID string) (FixCandidate, error) {
+func (s *Service) FixCandidate(sessionID, owner, requestID, patternID, patternHash, sourceRequestID string) (FixCandidate, error) {
 	owner = normalizeOwner(owner)
 	patternID = strings.TrimSpace(patternID)
-	if patternID == "" {
-		return FixCandidate{}, fmt.Errorf("%w: pattern_id is required", ErrInvalidRequest)
+	patternHash = strings.TrimSpace(patternHash)
+	if patternID == "" || patternHash == "" {
+		return FixCandidate{}, fmt.Errorf("%w: pattern_id and pattern_hash are required", ErrInvalidRequest)
 	}
 	requestID, err := normalizeRequestID(requestID)
 	if err != nil {
@@ -118,6 +119,9 @@ func (s *Service) FixCandidate(sessionID, owner, requestID, patternID, sourceReq
 	}
 	for _, pattern := range resolved.patterns {
 		if pattern.ID == patternID {
+			if models.PatternHash(pattern) != patternHash {
+				return FixCandidate{}, ErrPatternChanged
+			}
 			candidate.Pattern = pattern
 			return candidate, nil
 		}

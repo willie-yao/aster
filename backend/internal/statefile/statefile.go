@@ -16,6 +16,23 @@ import (
 // concurrent reader (the server in Kubernetes-native mode) never observes a
 // half-written file. Parent directories are created as needed.
 func WriteJSON(path string, v any) error {
+	return writeJSON(path, v, 0o644, nil, nil)
+}
+
+// WriteJSONDurable writes private JSON atomically and syncs the file and parent
+// directory before returning.
+func WriteJSONDurable(path string, v any) error {
+	sync := func(file *os.File) error { return file.Sync() }
+	return writeJSON(path, v, 0o600, sync, sync)
+}
+
+func writeJSON(
+	path string,
+	v any,
+	perm os.FileMode,
+	syncFile func(*os.File) error,
+	syncDir func(*os.File) error,
+) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -29,17 +46,36 @@ func WriteJSON(path string, v any) error {
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
+	// Some RWX filesystems use mount-level modes and reject chmod.
+	_ = tmp.Chmod(perm)
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
 		return err
 	}
+	if syncFile != nil {
+		if err := syncFile(tmp); err != nil {
+			tmp.Close()
+			return err
+		}
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	// Best-effort: some filesystems (SMB/azurefile RWX) don't support chmod and
-	// return EPERM, where the mount's file_mode governs readability instead.
-	_ = os.Chmod(tmpName, 0o644)
-	return os.Rename(tmpName, path)
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+	if syncDir == nil {
+		return nil
+	}
+	dir, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	if err := syncDir(dir); err != nil {
+		return err
+	}
+	return nil
 }
 
 // State is the on-disk tracking state for a repo-scoped manager: a set of

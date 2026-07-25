@@ -107,6 +107,7 @@ func AssignIDs(details []models.JobDetail) {
 	for i := range details {
 		for j := range details[i].PatternAnalyses {
 			details[i].PatternAnalyses[j].ID = models.PatternID(details[i].PatternAnalyses[j])
+			details[i].PatternAnalyses[j].ContentHash = models.PatternHash(details[i].PatternAnalyses[j])
 		}
 	}
 }
