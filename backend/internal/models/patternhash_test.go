@@ -16,6 +16,11 @@ func TestPatternHashBindsReviewedContent(t *testing.T) {
 	if got := PatternHash(identityOnly); got != want {
 		t.Fatalf("identity fields changed hash: %q != %q", got, want)
 	}
+	timestampOnly := base
+	timestampOnly.GeneratedAt = "2026-07-25T01:00:00Z"
+	if got := PatternHash(timestampOnly); got != want {
+		t.Fatalf("generated timestamp changed hash: %q != %q", got, want)
+	}
 	emptySlices := PatternAnalysis{SharedBuilds: []string{}, RelevantFiles: []string{}}
 	if PatternHash(emptySlices) != PatternHash(PatternAnalysis{}) {
 		t.Fatal("empty and omitted slices produced different hashes")

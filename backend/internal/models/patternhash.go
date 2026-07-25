@@ -11,7 +11,6 @@ func PatternHash(p PatternAnalysis) string {
 	snapshot := struct {
 		Subject         string   `json:"subject"`
 		JobID           string   `json:"job_id"`
-		GeneratedAt     string   `json:"generated_at"`
 		BuildsAnalyzed  int      `json:"builds_analyzed"`
 		Systemic        bool     `json:"systemic"`
 		Confidence      string   `json:"confidence"`
@@ -23,7 +22,6 @@ func PatternHash(p PatternAnalysis) string {
 	}{
 		Subject:         p.Subject,
 		JobID:           p.JobID,
-		GeneratedAt:     p.GeneratedAt,
 		BuildsAnalyzed:  p.BuildsAnalyzed,
 		Systemic:        p.Systemic,
 		Confidence:      p.Confidence,

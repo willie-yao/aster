@@ -192,7 +192,7 @@ func (s *previewStore) updateProtected(protectedKey string, fn func(*previewStat
 		if err := fitPreviewState(state, s.maxBytes, protectedKey); err != nil {
 			return err
 		}
-		if err := statefile.WriteJSON(s.path, state); err != nil {
+		if err := statefile.WriteJSONDurable(s.path, state); err != nil {
 			return fmt.Errorf("writing preview state: %w", err)
 		}
 		_ = os.Chmod(s.path, 0o600)
