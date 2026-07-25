@@ -32,6 +32,7 @@ type persistedPreview struct {
 	Owner        string                      `json:"owner"`
 	Kind         string                      `json:"kind"`
 	TargetRepo   string                      `json:"target_repo"`
+	TargetConfig string                      `json:"target_config,omitempty"`
 	CreatedAt    string                      `json:"created_at"`
 	Status       string                      `json:"status"`
 	ResultURL    string                      `json:"result_url,omitempty"`
@@ -192,6 +193,18 @@ func (s *previewStore) take(userToken, token string) (*previewEntry, error) {
 	return entry, err
 }
 
+func (s *previewStore) discard(userToken, token, attemptID string) error {
+	return s.update(func(state *previewState, _ time.Time) (bool, error) {
+		key := tokenHash(token)
+		record := state.Previews[key]
+		if record == nil || record.Owner != tokenHash(userToken) || record.AttemptID != attemptID {
+			return false, ErrPreviewSuperseded
+		}
+		delete(state.Previews, key)
+		return true, nil
+	})
+}
+
 func (s *previewStore) update(fn func(*previewState, time.Time) (bool, error)) error {
 	return s.updateProtected("", fn)
 }
@@ -270,7 +283,8 @@ func persistPreview(entry *previewEntry, owner string, now time.Time) (*persiste
 		return nil, ErrPreviewNotFound
 	}
 	record := &persistedPreview{
-		Owner: owner, Kind: entry.kind, TargetRepo: entry.targetRepo, CreatedAt: now.Format(time.RFC3339Nano), Status: previewStatusReady,
+		Owner: owner, Kind: entry.kind, TargetRepo: entry.targetRepo, TargetConfig: entry.targetConfig,
+		CreatedAt: now.Format(time.RFC3339Nano), Status: previewStatusReady,
 	}
 	switch entry.kind {
 	case "issue":
@@ -291,7 +305,7 @@ func restorePreview(record *persistedPreview) (*previewEntry, error) {
 	if record == nil {
 		return nil, ErrPreviewNotFound
 	}
-	entry := &previewEntry{kind: record.Kind, targetRepo: record.TargetRepo}
+	entry := &previewEntry{kind: record.Kind, targetRepo: record.TargetRepo, targetConfig: record.TargetConfig}
 	switch record.Kind {
 	case "issue":
 		if record.Issue == nil {

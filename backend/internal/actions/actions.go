@@ -96,10 +96,11 @@ type PreviewResult struct {
 // previewEntry is a cached draft awaiting confirmation. Exactly one of spec or
 // fix is set, per kind. owner binds the draft to the admin who generated it.
 type previewEntry struct {
-	kind       string
-	targetRepo string
-	spec       issues.IssueSpec    // issue drafts
-	fix        *fixpr.GeneratedFix // fix drafts
+	kind         string
+	targetRepo   string
+	targetConfig string
+	spec         issues.IssueSpec    // issue drafts
+	fix          *fixpr.GeneratedFix // fix drafts
 }
 
 // Service runs on-demand actions against the data written to DataDir. It reads
@@ -361,10 +362,11 @@ func (s *Service) generateFixPreviewForPattern(
 		return PreviewResult{}, nil, safeFixPreviewError(err)
 	}
 	return PreviewResult{
-		Kind: gfKind, Title: gf.Title, Body: gf.Description, Diff: gf.Preview.Diff,
-		VerifyStatus: string(gf.Preview.Verify.Status), VerifySummary: gf.Preview.Verify.Summary,
-		VerifyOutput: gf.Preview.Verify.Output,
-	}, &previewEntry{kind: gfKind, targetRepo: s.cfg.EffectiveFixPRs().Repo.Owner + "/" + s.cfg.EffectiveFixPRs().Repo.Name, fix: gf}, nil
+			Kind: gfKind, Title: gf.Title, Body: gf.Description, Diff: gf.Preview.Diff,
+			VerifyStatus: string(gf.Preview.Verify.Status), VerifySummary: gf.Preview.Verify.Summary,
+			VerifyOutput: gf.Preview.Verify.Output,
+		}, &previewEntry{kind: gfKind, targetRepo: s.cfg.EffectiveFixPRs().Repo.Owner + "/" + s.cfg.EffectiveFixPRs().Repo.Name,
+			targetConfig: fixTargetFingerprint(s.cfg.EffectiveFixPRs()), fix: gf}, nil
 }
 
 func safeFixPreviewError(err error) error {
@@ -420,6 +422,10 @@ func (s *Service) Confirm(ctx context.Context, token, userToken string) (string,
 	if reconcile {
 		resultURL, found, reconcileErr := s.reconcileEntry(ctx, entry, userToken)
 		if reconcileErr != nil {
+			if errors.Is(reconcileErr, ErrPreviewTargetChanged) {
+				_ = s.previewStore.discard(userToken, token, attemptID)
+				return "", reconcileErr
+			}
 			_ = s.finishConfirm(userToken, token, attemptID, "", reconcileErr)
 			return "", reconcileErr
 		}
@@ -433,6 +439,10 @@ func (s *Service) Confirm(ctx context.Context, token, userToken string) (string,
 		return resultURL, nil
 	}
 	resultURL, confirmErr := s.confirmEntry(ctx, entry, userToken)
+	if errors.Is(confirmErr, ErrPreviewTargetChanged) {
+		_ = s.previewStore.discard(userToken, token, attemptID)
+		return "", confirmErr
+	}
 	finishInputErr := confirmErr
 	if resultURL != "" {
 		finishInputErr = nil
@@ -479,6 +489,9 @@ func (s *Service) reconcileEntry(ctx context.Context, entry *previewEntry, userT
 		if entry.targetRepo != eff.Repo.Owner+"/"+eff.Repo.Name {
 			return "", false, ErrPreviewTargetChanged
 		}
+		if entry.targetConfig != fixTargetFingerprint(eff) {
+			return "", false, ErrPreviewTargetChanged
+		}
 		key := entry.fix.Snapshot().Key
 		_, url, found, err := fixpr.NewClients(userToken).SearchAnyPR(ctx, eff.Repo.Owner, eff.Repo.Name, fixpr.MarkerToken(key), fixpr.MarkerFor(key))
 		return url, found, err
@@ -519,6 +532,9 @@ func (s *Service) confirmEntry(ctx context.Context, entry *previewEntry, userTok
 		if eff.Repo == nil || entry.targetRepo != eff.Repo.Owner+"/"+eff.Repo.Name {
 			return "", ErrPreviewTargetChanged
 		}
+		if entry.targetConfig != fixTargetFingerprint(eff) {
+			return "", ErrPreviewTargetChanged
+		}
 		mgr, err := s.buildFixManager(userToken)
 		if err != nil {
 			return "", err
@@ -533,6 +549,18 @@ func (s *Service) confirmEntry(ctx context.Context, entry *previewEntry, userTok
 		return url, nil
 	}
 	return "", ErrPreviewNotFound
+}
+
+func fixTargetFingerprint(eff project.FixPRs) string {
+	fork := eff.Fork == nil || *eff.Fork
+	payload, _ := json.Marshal(struct {
+		Fork        bool     `json:"fork"`
+		AuthorName  string   `json:"author_name"`
+		AuthorEmail string   `json:"author_email"`
+		Labels      []string `json:"labels"`
+	}{fork, eff.AuthorName, eff.AuthorEmail, eff.Labels})
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:])
 }
 
 // Resolve marks a systemic pattern as resolved: it is hidden from the active

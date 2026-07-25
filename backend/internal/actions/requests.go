@@ -59,10 +59,11 @@ type ActionRequestView struct {
 
 type actionRequest struct {
 	ActionRequestView
-	Instruction string                      `json:"instruction,omitempty"`
-	Issue       *issues.IssueSpec           `json:"issue,omitempty"`
-	Fix         *fixpr.GeneratedFixSnapshot `json:"fix,omitempty"`
-	TargetRepo  string                      `json:"target_repo,omitempty"`
+	Instruction  string                      `json:"instruction,omitempty"`
+	Issue        *issues.IssueSpec           `json:"issue,omitempty"`
+	Fix          *fixpr.GeneratedFixSnapshot `json:"fix,omitempty"`
+	TargetRepo   string                      `json:"target_repo,omitempty"`
+	TargetConfig string                      `json:"target_config,omitempty"`
 }
 
 type actionRequestState struct {
@@ -288,6 +289,7 @@ func (s *Service) generateRequestWith(id, userToken string, generate requestPrev
 		request.Status = RequestReady
 		request.Preview = &preview
 		request.TargetRepo = entry.targetRepo
+		request.TargetConfig = entry.targetConfig
 		if entry.kind == "issue" {
 			spec := entry.spec
 			request.Issue = &spec
@@ -405,7 +407,7 @@ func (s *Service) ConfirmRequest(ctx context.Context, id, owner, userToken strin
 		s.rmu.Unlock()
 		return "", fmt.Errorf("action request has no persisted preview")
 	}
-	entry := &previewEntry{kind: request.Preview.Kind, targetRepo: request.TargetRepo}
+	entry := &previewEntry{kind: request.Preview.Kind, targetRepo: request.TargetRepo, targetConfig: request.TargetConfig}
 	switch entry.kind {
 	case "issue":
 		if request.Issue == nil {

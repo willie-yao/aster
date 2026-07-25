@@ -740,3 +740,20 @@ func TestPreviewConfirmationRejectsTargetRepositoryDrift(t *testing.T) {
 		}
 	}
 }
+
+func TestTargetDriftRetiresPreviewForReplacement(t *testing.T) {
+	cfg := &project.Config{Issues: &project.Issues{Repo: &project.SourceRepo{Owner: "new", Name: "issues"}}}
+	service := NewService(cfg, t.TempDir(), AIConfig{})
+	old := &previewEntry{kind: "issue", targetRepo: "old/issues", spec: issues.IssueSpec{Key: "same-action"}}
+	token, err := service.stash("owner-token", old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Confirm(t.Context(), token, "owner-token"); !errors.Is(err, ErrPreviewTargetChanged) {
+		t.Fatalf("confirm error = %v", err)
+	}
+	replacement := &previewEntry{kind: "issue", targetRepo: "new/issues", spec: issues.IssueSpec{Key: "same-action"}}
+	if _, err := service.stash("owner-token", replacement); err != nil {
+		t.Fatalf("replacement preview was blocked: %v", err)
+	}
+}
