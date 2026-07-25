@@ -35,6 +35,7 @@ remains identical.
 | `POST /api/analysis-chat/sessions/{id}/source-investigations/stream` | Start or reconnect to a source investigation over SSE progress events. |
 | `GET /api/analysis-chat/sessions/{id}/source-investigations/{requestID}` | Read the persisted owner-bound investigation state. |
 | `POST /api/analysis-chat/sessions/{id}/source-investigations/{requestID}/cancel` | Cancel one active source investigation. |
+| `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/fix/preview` | Generate an existing fix preview from one selected evidence-backed chat response and optional verified source investigation. |
 | `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/correction/preview` | Preview an evidence-backed proposed correction. |
 | `POST /api/analysis-corrections/confirm` | Explicitly confirm a preview token and publish the correction overlay. |
 | `POST /api/analysis-corrections/{id}/revoke` | Revoke a correction and restore the original analysis. |
@@ -244,6 +245,41 @@ Requests are capped at 64 MiB, responses use `Cache-Control: no-store`, and both
 endpoints require the same admin identity used by actions. A missing trace file
 returns 404 and the page renders an empty state. Static Pages deployments never
 advertise the feature and continue stripping `ai_traces.json` before publication.
+
+## Chat-to-fix bridge
+
+When analysis chat and write actions are both configured, the server advertises
+`features.chat_fix: true`. A client can request a fix preview for one successful
+assistant response:
+
+```http
+POST /api/analysis-chat/sessions/{sessionID}/requests/{chatRequestID}/fix/preview
+Content-Type: application/json
+
+{
+  "pattern_id": "<recurring-pattern-id>",
+  "source_request_id": "<optional-successful-source-request-id>",
+  "instruction": "<optional-maintainer-direction>"
+}
+```
+
+The client selects only identifiers and the optional maintainer instruction. It
+cannot submit answer text, revisions, citations, or source findings. The server
+reconstructs those fields from the owner-bound private chat state and requires:
+
+- a successful assistant response with verified artifact citations,
+- the original published analysis generation and content to remain current,
+- analysis freshness and the recurring pattern to come from one job-detail snapshot,
+- the recurring pattern to belong to the same job and include the selected build,
+- an optional source request to belong to that response and have a successful,
+  independently verified result.
+
+Generation receives the selected assistant answer, optional evidence-backed
+revision, verified artifact citations, optional verified source finding and
+citations, the existing `PatternAnalysis`, and the bounded maintainer
+instruction. It never receives the complete transcript. The response is the
+normal fix `PreviewResult`; post its token to `/api/actions/confirm` to open the
+exact reviewed draft through the existing confirmation workflow.
 
 ## Admin-gated actions
 

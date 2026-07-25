@@ -19,9 +19,12 @@ import (
 type fakeCompleter struct {
 	critique    string // JSON {"issues":[...]}; empty -> approved
 	critiqueErr error
+	lastSystem  string
+	lastUser    string
 }
 
-func (f *fakeCompleter) Complete(_ context.Context, _, _ string) (string, error) {
+func (f *fakeCompleter) Complete(_ context.Context, system, user string) (string, error) {
+	f.lastSystem, f.lastUser = system, user
 	if f.critiqueErr != nil {
 		return "", f.critiqueErr
 	}
@@ -333,5 +336,36 @@ func TestNewManagerDiscardsStateWithoutPatternSnapshot(t *testing.T) {
 	manager := NewManager(&fakePR{}, path, Options{SourceOwner: "up", SourceName: "stream"})
 	if len(manager.state.Tracked) != 0 {
 		t.Fatalf("tracked = %+v", manager.state.Tracked)
+	}
+}
+
+func TestGeneratePreviewWithContextPassesSelectedEvidence(t *testing.T) {
+	agent := goodAgent()
+	reviewer := &fakeCompleter{}
+	manager := newManager(t, &fakePR{}, agent, Options{Critique: reviewer, CritiqueRetries: 1})
+	generationContext := validGenerationContext()
+	fix, err := manager.GeneratePreviewWithContext(t.Context(), systemicPattern("etcd"), "keep compatibility", generationContext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fix == nil || !strings.Contains(agent.spec.Instruction, `"assistant_answer":"The controller keeps retrying after bootstrap fails."`) ||
+		!strings.Contains(agent.spec.Instruction, "Maintainer instruction (follow it): keep compatibility") {
+		t.Fatalf("agent instruction = %q", agent.spec.Instruction)
+	}
+	if !strings.Contains(reviewer.lastUser, `"assistant_answer":"The controller keeps retrying after bootstrap fails."`) {
+		t.Fatalf("review context = %q", reviewer.lastUser)
+	}
+}
+
+func TestGeneratePreviewWithContextRejectsInvalidContextBeforeGeneration(t *testing.T) {
+	agent := goodAgent()
+	manager := newManager(t, &fakePR{}, agent, Options{})
+	generationContext := validGenerationContext()
+	generationContext.ArtifactCitations = nil
+	if _, err := manager.GeneratePreviewWithContext(t.Context(), systemicPattern("etcd"), "", generationContext); err == nil {
+		t.Fatal("invalid context was accepted")
+	}
+	if agent.spec.Instruction != "" {
+		t.Fatal("agent ran before context validation")
 	}
 }

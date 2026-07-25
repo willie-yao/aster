@@ -22,6 +22,12 @@ for how to pin a release.
 
 ### Added
 
+- **Analysis-chat fix context bridge.** Kubernetes-native deployments with both
+  analysis chat and write actions can generate an existing fix preview from one
+  selected evidence-backed assistant response. The server reconstructs bounded
+  context from the owner-bound session, validates the current analysis and target
+  recurring pattern, optionally includes one successful verified source
+  investigation, and never forwards the complete transcript.
 - **Read-only source investigation for analysis chat.** Kubernetes-native chat
   can opt into owner-bound Orka read-only agent Tasks pinned to the selected Prow
   build's exact repository commit. Requests persist across replicas, support

@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -32,6 +33,12 @@ import (
 // ErrNotFound means no pattern in the published data matched the given id.
 var ErrNotFound = errors.New("failure not found")
 
+// ErrPreviewRejected means generation safely declined an actionable fix preview.
+var ErrPreviewRejected = errors.New("fix preview rejected")
+
+// ErrPatternMismatch means the selected recurring pattern does not include the chat analysis.
+var ErrPatternMismatch = errors.New("pattern does not include selected analysis")
+
 // ErrPreviewNotFound means the confirm token is unknown, expired, or belongs to
 // a different admin.
 var ErrPreviewNotFound = errors.New("preview not found or expired")
@@ -46,6 +53,12 @@ type AIConfig struct {
 	Endpoint string
 	Model    string
 	Headers  map[string]string
+}
+
+// FixTarget identifies the published build selected by analysis chat.
+type FixTarget struct {
+	JobID   string
+	BuildID string
 }
 
 // PreviewResult is the draft shown to the admin before they confirm it. Token
@@ -313,13 +326,25 @@ func (s *Service) generateFixPreview(ctx context.Context, failureID, userToken, 
 	if err != nil {
 		return PreviewResult{}, nil, err
 	}
+	return s.generateFixPreviewForPattern(ctx, *pa, userToken, instruction, nil)
+}
+
+func (s *Service) generateFixPreviewForPattern(
+	ctx context.Context, pattern models.PatternAnalysis, userToken, instruction string,
+	generationContext *fixpr.GenerationContext,
+) (PreviewResult, *previewEntry, error) {
 	mgr, err := s.buildFixManager(userToken)
 	if err != nil {
 		return PreviewResult{}, nil, err
 	}
-	gf, err := mgr.GeneratePreview(ctx, *pa, instruction)
+	var gf *fixpr.GeneratedFix
+	if generationContext == nil {
+		gf, err = mgr.GeneratePreview(ctx, pattern, instruction)
+	} else {
+		gf, err = mgr.GeneratePreviewWithContext(ctx, pattern, instruction, *generationContext)
+	}
 	if err != nil {
-		return PreviewResult{}, nil, fmt.Errorf("%s", safeReason(err.Error()))
+		return PreviewResult{}, nil, safeFixPreviewError(err)
 	}
 	return PreviewResult{
 		Kind: gfKind, Title: gf.Title, Body: gf.Description, Diff: gf.Preview.Diff,
@@ -328,11 +353,38 @@ func (s *Service) generateFixPreview(ctx context.Context, failureID, userToken, 
 	}, &previewEntry{kind: gfKind, fix: gf}, nil
 }
 
+func safeFixPreviewError(err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	return fmt.Errorf("%w: %s", ErrPreviewRejected, safeReason(err.Error()))
+}
+
 const gfKind = "fix"
 
 // PreviewFix generates the exact fix PR preview and caches it for confirmation.
 func (s *Service) PreviewFix(ctx context.Context, failureID, userToken, instruction string) (PreviewResult, error) {
 	preview, entry, err := s.generateFixPreview(ctx, failureID, userToken, instruction)
+	if err != nil {
+		return PreviewResult{}, err
+	}
+	token, err := s.stash(userToken, entry)
+	if err != nil {
+		return PreviewResult{}, err
+	}
+	preview.Token = token
+	return preview, nil
+}
+
+// PreviewFixWithContext generates a fix from one validated selected chat response.
+func (s *Service) PreviewFixWithContext(
+	ctx context.Context, pattern models.PatternAnalysis, userToken, instruction string, target FixTarget, generationContext fixpr.GenerationContext,
+) (PreviewResult, error) {
+	if strings.TrimSpace(target.JobID) == "" || strings.TrimSpace(target.BuildID) == "" ||
+		pattern.JobID != target.JobID || !slices.Contains(pattern.SharedBuilds, target.BuildID) {
+		return PreviewResult{}, ErrPatternMismatch
+	}
+	preview, entry, err := s.generateFixPreviewForPattern(ctx, pattern, userToken, instruction, &generationContext)
 	if err != nil {
 		return PreviewResult{}, err
 	}

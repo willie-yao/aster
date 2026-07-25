@@ -38,6 +38,7 @@ type genParams struct {
 	// instruction is an optional maintainer directive that steers the fix
 	// (e.g. "patch the kustomize base instead"). Empty for the batch path.
 	instruction string
+	context     *GenerationContext
 	// agent generates the fix with a coding-agent CLI in a real workspace clone.
 	agent *AgentConfig
 }

@@ -240,7 +240,7 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 		return stats, fmt.Errorf("resolving %s/%s base: %w", m.opts.SourceOwner, m.opts.SourceName, err)
 	}
 	gen := func(ctx context.Context, p models.PatternAnalysis) (*proposedFix, error) {
-		return m.generate(ctx, p, base.HeadSHA, "")
+		return m.generate(ctx, p, base.HeadSHA, "", nil)
 	}
 
 	for _, p := range work {
@@ -330,7 +330,7 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 // generate runs the fix generation for one pattern against ref. instruction is
 // an optional maintainer directive that steers the edit; empty for the batch
 // path.
-func (m *Manager) generate(ctx context.Context, p models.PatternAnalysis, ref, instruction string) (*proposedFix, error) {
+func (m *Manager) generate(ctx context.Context, p models.PatternAnalysis, ref, instruction string, generationContext *GenerationContext) (*proposedFix, error) {
 	return generateWithAgent(ctx, genParams{
 		critique:        m.opts.Critique,
 		owner:           m.opts.SourceOwner,
@@ -339,6 +339,7 @@ func (m *Manager) generate(ctx context.Context, p models.PatternAnalysis, ref, i
 		maxFiles:        m.opts.MaxFiles,
 		critiqueRetries: m.opts.CritiqueRetries,
 		instruction:     instruction,
+		context:         generationContext,
 		agent:           m.opts.Agent,
 	}, p)
 }
@@ -487,6 +488,18 @@ func RestoreGeneratedFix(snapshot *GeneratedFixSnapshot) *GeneratedFix {
 // directive that steers the edit. The returned *GeneratedFix is opaque to
 // callers and is passed back to OpenFromPreview to open the PR.
 func (m *Manager) GeneratePreview(ctx context.Context, p models.PatternAnalysis, instruction string) (*GeneratedFix, error) {
+	return m.generatePreview(ctx, p, instruction, nil)
+}
+
+// GeneratePreviewWithContext adds one bounded selected chat response to generation.
+func (m *Manager) GeneratePreviewWithContext(ctx context.Context, p models.PatternAnalysis, instruction string, generationContext GenerationContext) (*GeneratedFix, error) {
+	if err := generationContext.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid fix context: %w", err)
+	}
+	return m.generatePreview(ctx, p, instruction, &generationContext)
+}
+
+func (m *Manager) generatePreview(ctx context.Context, p models.PatternAnalysis, instruction string, generationContext *GenerationContext) (*GeneratedFix, error) {
 	// Apply the same eligibility gate as the batch path so an on-demand preview
 	// cannot draft a fix for a failure the engine would not consider actionable
 	// (non-systemic or without a suggested fix).
@@ -497,7 +510,7 @@ func (m *Manager) GeneratePreview(ctx context.Context, p models.PatternAnalysis,
 	if err != nil {
 		return nil, fmt.Errorf("resolving %s/%s base: %w", m.opts.SourceOwner, m.opts.SourceName, err)
 	}
-	fix, err := m.generate(ctx, p, base.HeadSHA, instruction)
+	fix, err := m.generate(ctx, p, base.HeadSHA, instruction, generationContext)
 	if err != nil {
 		return nil, err
 	}
