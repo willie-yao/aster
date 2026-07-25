@@ -39,8 +39,10 @@ func (f *fakeChatFixRunner) PreviewChatFix(
 
 func TestHandlerChatFixPreview(t *testing.T) {
 	runner := &fakeChatFixRunner{}
+	capabilities := DefaultCapabilities()
+	capabilities.Features.ChatFixMinConfidence = "medium"
 	handler, err := Handler(Options{
-		DataDir: t.TempDir(), Capabilities: DefaultCapabilities(), Auth: fakeAuth{}, AuthMode: "dev",
+		DataDir: t.TempDir(), Capabilities: capabilities, Auth: fakeAuth{}, AuthMode: "dev",
 		Actions: &fakeRunner{}, AnalysisChat: &fakeAnalysisChatRunner{}, ChatFix: runner,
 	})
 	if err != nil {
@@ -49,11 +51,12 @@ func TestHandlerChatFixPreview(t *testing.T) {
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
-	capabilities, err := http.Get(server.URL + "/api/capabilities")
+	capabilitiesResponse, err := http.Get(server.URL + "/api/capabilities")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if body := readBody(t, capabilities); !strings.Contains(body, `"chat_fix":true`) {
+	body := readBody(t, capabilitiesResponse)
+	if !strings.Contains(body, `"chat_fix":true`) || !strings.Contains(body, `"chat_fix_min_confidence":"medium"`) {
 		t.Fatalf("capabilities = %s", body)
 	}
 

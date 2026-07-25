@@ -245,6 +245,7 @@ func (s *Service) buildFixManager(userToken string) (*fixpr.Manager, error) {
 		Fork:            eff.Fork == nil || *eff.Fork,
 		AuthorName:      eff.AuthorName,
 		AuthorEmail:     eff.AuthorEmail,
+		MinConfidence:   eff.MinConfidence,
 		MaxFiles:        eff.MaxFiles,
 		MaxNewPerRun:    1,
 		Labels:          eff.Labels,

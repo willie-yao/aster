@@ -41,6 +41,16 @@ export function confidenceColor(
   return undefined;
 }
 
+export function meetsConfidenceFloor(
+  confidence: PatternAnalysis["confidence"],
+  minimum: string,
+): boolean {
+  const ranks: Record<string, number> = { low: 1, medium: 2, high: 3 };
+  const rank = ranks[confidence] ?? 0;
+  const floor = ranks[minimum.trim().toLowerCase()] ?? 0;
+  return rank >= floor;
+}
+
 export function jobDataFilename(jobID: string): string {
   const bytes = new TextEncoder().encode(jobID);
   let binary = "";

@@ -24,7 +24,12 @@ import {
 } from "@mui/icons-material";
 import { useJobDetail } from "../hooks/useData";
 import { useCapabilities } from "../hooks/useCapabilities";
-import { formatDuration, highlightStackTrace, timeAgo } from "../lib/utils";
+import {
+  formatDuration,
+  highlightStackTrace,
+  meetsConfidenceFloor,
+  timeAgo,
+} from "../lib/utils";
 import { RichText } from "../components/RichText";
 import { RunTimeline } from "../components/RunTimeline";
 import { Panel } from "../components/Panel";
@@ -315,6 +320,7 @@ export function TestDetailPage() {
           pattern.systemic &&
           Boolean(pattern.id) &&
           Boolean(pattern.suggested_fix) &&
+          meetsConfidenceFloor(pattern.confidence, features.chat_fix_min_confidence ?? "high") &&
           Boolean(pattern.shared_builds?.includes(selectedRun.build_id)),
       )
     : [];

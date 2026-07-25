@@ -232,6 +232,30 @@ func TestPreviewFixWithContextRejectsMismatchedPatternTarget(t *testing.T) {
 	}
 }
 
+func TestPreviewFixWithContextHonorsMinConfidence(t *testing.T) {
+	pattern := systemicPattern()
+	pattern.Confidence = "medium"
+	pattern.SuggestedFix = "bound retries"
+	pattern.SharedBuilds = []string{"123"}
+	cfg := &project.Config{AI: &project.AI{FixPRs: &project.FixPRs{
+		Repo: &project.SourceRepo{Owner: "o", Name: "r"}, MinConfidence: "high",
+	}}}
+	service := NewService(cfg, t.TempDir(), AIConfig{
+		API: "chat_completions", Endpoint: "https://ai.example/v1/chat/completions", Model: "model", Token: "token",
+	})
+	_, err := service.PreviewFixWithContext(
+		t.Context(), pattern, "token", "", FixTarget{JobID: "periodic-x", BuildID: "123"}, fixpr.GenerationContext{
+			AssistantAnswer: "selected answer",
+			ArtifactCitations: []fixpr.Evidence{{
+				Path: "build-log.txt", Quote: "failure",
+			}},
+		},
+	)
+	if !errors.Is(err, ErrPreviewRejected) || !strings.Contains(err.Error(), "not auto-fixable") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestSafeFixPreviewErrorPreservesContextSentinels(t *testing.T) {
 	for _, cause := range []error{context.Canceled, context.DeadlineExceeded} {
 		wrapped := fmt.Errorf("agent generation: %w", cause)
