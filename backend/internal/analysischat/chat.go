@@ -369,16 +369,21 @@ func (s *Service) Create(ref AnalysisRef, owner, requestID string) (SessionView,
 	if err != nil {
 		return SessionView{}, err
 	}
+	legacyHash, err := hashLegacyTestAnalysisRef(ref)
+	if err != nil {
+		return SessionView{}, err
+	}
 	now := s.opts.Now().UTC()
 
 	var existing SessionView
 	ctx, cancel := s.store.context()
 	err = s.store.update(ctx, func(state *persistedState) (bool, error) {
 		changed := s.cleanup(state, now)
-		current, err := findCreateRequest(state, owner, requestID, requestHash)
+		current, migrated, err := findCreateRequest(state, owner, requestID, requestHash, legacyHash)
 		if err != nil {
 			return changed, err
 		}
+		changed = changed || migrated
 		if current != nil {
 			existing = cloneSessionView(current.View)
 			return changed, nil
@@ -403,13 +408,14 @@ func (s *Service) Create(ref AnalysisRef, owner, requestID string) (SessionView,
 	}
 	expires := now.Add(s.opts.SessionTTL)
 	created := &persistedSession{
-		Owner:             owner,
-		Resolved:          persistResolved(resolved, sourceRepositoryName(s.sourceRepo)),
-		ExpiresAt:         expires,
-		CreateRequestID:   requestID,
-		CreateRequestHash: requestHash,
-		Requests:          map[string]persistedRequest{},
-		Investigations:    map[string]persistedInvestigation{},
+		Owner:                owner,
+		Resolved:             persistResolved(resolved, sourceRepositoryName(s.sourceRepo)),
+		ExpiresAt:            expires,
+		CreateRequestID:      requestID,
+		CreateRequestHash:    requestHash,
+		CreateRequestVersion: stateVersion,
+		Requests:             map[string]persistedRequest{},
+		Investigations:       map[string]persistedInvestigation{},
 		View: SessionView{
 			ID:        id,
 			Analysis:  resolved.ref,
@@ -424,10 +430,11 @@ func (s *Service) Create(ref AnalysisRef, owner, requestID string) (SessionView,
 	defer cancel()
 	err = s.store.update(ctx, func(state *persistedState) (bool, error) {
 		changed := s.cleanup(state, now)
-		current, err := findCreateRequest(state, owner, requestID, requestHash)
+		current, migrated, err := findCreateRequest(state, owner, requestID, requestHash, legacyHash)
 		if err != nil {
 			return changed, err
 		}
+		changed = changed || migrated
 		if current != nil {
 			existing = cloneSessionView(current.View)
 			return changed, nil
@@ -540,17 +547,22 @@ func (s *Service) sessionLimitReached(state *persistedState, owner string) bool 
 	return count >= s.opts.MaxSessionsPerOwner
 }
 
-func findCreateRequest(state *persistedState, owner, requestID, requestHash string) (*persistedSession, error) {
+func findCreateRequest(state *persistedState, owner, requestID, requestHash, legacyHash string) (*persistedSession, bool, error) {
 	for _, current := range state.Sessions {
 		if current.Owner != owner || current.CreateRequestID != requestID {
 			continue
 		}
 		if current.CreateRequestHash != requestHash {
-			return nil, ErrIdempotencyConflict
+			if current.CreateRequestVersion == 1 && current.CreateRequestHash == legacyHash {
+				current.CreateRequestHash = requestHash
+				current.CreateRequestVersion = stateVersion
+				return current, true, nil
+			}
+			return nil, false, ErrIdempotencyConflict
 		}
-		return current, nil
+		return current, false, nil
 	}
-	return nil, nil
+	return nil, false, nil
 }
 
 func normalizeRequestID(value string) (string, error) {
@@ -573,6 +585,14 @@ func hashAnalysisRef(ref AnalysisRef) (string, error) {
 		return "", fmt.Errorf("encoding analysis chat idempotency input: %w", err)
 	}
 	return hashBytes(data), nil
+}
+
+func hashLegacyTestAnalysisRef(ref AnalysisRef) (string, error) {
+	if ref.Scope != ScopeTest {
+		return "", nil
+	}
+	ref.Scope = ""
+	return hashAnalysisRef(ref)
 }
 
 func hashText(value string) string {

@@ -124,8 +124,20 @@ func TestSessionStoreMigratesVersionOneTestSessions(t *testing.T) {
 }
 
 func TestPersistResolvedBoundsPatternEvidenceBuilds(t *testing.T) {
+	pattern := recurringPattern()
+	pattern.Subject = strings.Repeat("s", 8<<10)
+	pattern.SharedRootCause = strings.Repeat("r", 64<<10)
+	pattern.SuggestedFix = strings.Repeat("f", 32<<10)
+	pattern.Summary = strings.Repeat("m", 32<<10)
+	pattern.SharedBuilds = make([]string, 100)
+	pattern.RelevantFiles = make([]string, 100)
+	for i := range 100 {
+		pattern.SharedBuilds[i] = strings.Repeat("b", 300)
+		pattern.RelevantFiles[i] = strings.Repeat("p", 1200)
+	}
 	resolved := resolvedAnalysis{
-		ref: AnalysisRef{Scope: ScopePattern, JobID: "job", PatternID: "pattern", PatternHash: "hash"},
+		ref:     AnalysisRef{Scope: ScopePattern, JobID: "job", PatternID: "pattern", PatternHash: "hash"},
+		pattern: &pattern,
 		evidenceBuilds: []ArtifactBuild{{
 			BuildPrefix: "logs/job/1/",
 			Build: models.BuildInfo{
@@ -135,6 +147,11 @@ func TestPersistResolvedBoundsPatternEvidenceBuilds(t *testing.T) {
 		}},
 	}
 	persisted := persistResolved(resolved, "")
+	if persisted.Pattern == nil || len(persisted.Pattern.Subject) > 4<<10 || len(persisted.Pattern.SharedRootCause) > 32<<10 ||
+		len(persisted.Pattern.SuggestedFix) > 16<<10 || len(persisted.Pattern.Summary) > 16<<10 ||
+		len(persisted.Pattern.SharedBuilds) != 50 || len(persisted.Pattern.RelevantFiles) != 50 {
+		t.Fatalf("bounded pattern = %+v", persisted.Pattern)
+	}
 	encoded, err := json.Marshal(persisted.EvidenceBuilds)
 	if err != nil {
 		t.Fatal(err)

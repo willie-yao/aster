@@ -33,16 +33,17 @@ type persistedState struct {
 }
 
 type persistedSession struct {
-	View              SessionView                       `json:"view"`
-	Owner             string                            `json:"owner"`
-	Resolved          persistedResolvedAnalysis         `json:"resolved"`
-	Turns             int                               `json:"turns"`
-	ExpiresAt         time.Time                         `json:"expires_at"`
-	CreateRequestID   string                            `json:"create_request_id"`
-	CreateRequestHash string                            `json:"create_request_hash"`
-	Requests          map[string]persistedRequest       `json:"requests,omitempty"`
-	Active            *persistedActiveTurn              `json:"active,omitempty"`
-	Investigations    map[string]persistedInvestigation `json:"investigations,omitempty"`
+	View                 SessionView                       `json:"view"`
+	Owner                string                            `json:"owner"`
+	Resolved             persistedResolvedAnalysis         `json:"resolved"`
+	Turns                int                               `json:"turns"`
+	ExpiresAt            time.Time                         `json:"expires_at"`
+	CreateRequestID      string                            `json:"create_request_id"`
+	CreateRequestHash    string                            `json:"create_request_hash"`
+	CreateRequestVersion int                               `json:"create_request_version,omitempty"`
+	Requests             map[string]persistedRequest       `json:"requests,omitempty"`
+	Active               *persistedActiveTurn              `json:"active,omitempty"`
+	Investigations       map[string]persistedInvestigation `json:"investigations,omitempty"`
 }
 
 type persistedResolvedAnalysis struct {
@@ -233,6 +234,9 @@ func migrateStateV1(state *persistedState) {
 		if session.Resolved.Ref.Scope == "" {
 			session.Resolved.Ref.Scope = ScopeTest
 		}
+		if session.CreateRequestVersion == 0 {
+			session.CreateRequestVersion = 1
+		}
 	}
 }
 
@@ -333,9 +337,44 @@ func persistResolved(resolved resolvedAnalysis, requiredRepo string) persistedRe
 	}
 	return persistedResolvedAnalysis{
 		Ref: resolved.ref, JobID: resolved.jobID, BuildPrefix: resolved.buildPrefix,
-		Build: build, TestCase: testCase, Pattern: clonePattern(resolved.pattern),
+		Build: build, TestCase: testCase, Pattern: boundedPersistedPattern(resolved.pattern),
 		EvidenceBuilds: persistArtifactBuilds(resolved.evidenceBuilds),
 	}
+}
+
+func boundedPersistedPattern(pattern *models.PatternAnalysis) *models.PatternAnalysis {
+	if pattern == nil {
+		return nil
+	}
+	return &models.PatternAnalysis{
+		ID: pattern.ID, ContentHash: pattern.ContentHash,
+		Subject: clampPersistedText(pattern.Subject, 4<<10), JobID: clampPersistedText(pattern.JobID, maxJobIDBytes),
+		GeneratedAt: clampPersistedText(pattern.GeneratedAt, maxTimestampBytes), BuildsAnalyzed: pattern.BuildsAnalyzed,
+		Systemic: pattern.Systemic, Confidence: clampPersistedText(pattern.Confidence, 32),
+		SharedRootCause: clampPersistedText(pattern.SharedRootCause, 32<<10),
+		SharedBuilds:    boundedPersistedBuildIDs(pattern.SharedBuilds),
+		SuggestedFix:    clampPersistedText(pattern.SuggestedFix, 16<<10),
+		RelevantFiles:   boundedPersistedFiles(pattern.RelevantFiles),
+		Summary:         clampPersistedText(pattern.Summary, 16<<10),
+	}
+}
+
+func boundedPersistedBuildIDs(builds []string) []string {
+	if len(builds) > 50 {
+		builds = builds[:50]
+	}
+	out := make([]string, 0, len(builds))
+	for _, build := range builds {
+		build = strings.TrimSpace(build)
+		if build == "" {
+			continue
+		}
+		if len(build) > maxBuildIDBytes {
+			build = build[:maxBuildIDBytes]
+		}
+		out = append(out, build)
+	}
+	return out
 }
 
 func boundedRepoRefs(refs map[string]string, requiredRepo string) map[string]string {
@@ -410,9 +449,14 @@ func clampPersistedText(value string, maxBytes int) string {
 	if maxBytes <= 0 || len(value) <= maxBytes {
 		return value
 	}
-	head := maxBytes * 3 / 4
-	tail := maxBytes - head
-	return strings.ToValidUTF8(value[:head], "") + "\n...[content elided]...\n" + strings.ToValidUTF8(value[len(value)-tail:], "")
+	const marker = "\n...[content elided]...\n"
+	if maxBytes <= len(marker) {
+		return strings.ToValidUTF8(value[:maxBytes], "")
+	}
+	available := maxBytes - len(marker)
+	head := available * 3 / 4
+	tail := available - head
+	return strings.ToValidUTF8(value[:head], "") + marker + strings.ToValidUTF8(value[len(value)-tail:], "")
 }
 
 func restoreResolved(resolved persistedResolvedAnalysis) resolvedAnalysis {

@@ -1274,3 +1274,55 @@ func TestPatternChatRejectsSourceInvestigation(t *testing.T) {
 		t.Fatalf("source investigation error = %v", err)
 	}
 }
+
+func TestVersionOneCreateIdempotencyMigratesOnRetry(t *testing.T) {
+	dir := t.TempDir()
+	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
+	stateDir := filepath.Join(dir, ".migration-chat")
+	service, err := NewService(t.Context(), dir, &fakeRunner{}, Options{StateDir: stateDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyRef := AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}
+	resolved, err := service.resolve(legacyRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyHash, err := hashAnalysisRef(legacyRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	persisted := persistResolved(resolved, "")
+	persisted.Ref.Scope = ""
+	expires := time.Now().UTC().Add(time.Hour)
+	legacy := &persistedState{
+		Version: 1,
+		Sessions: map[string]*persistedSession{
+			"legacy-session": {
+				Owner: "alice", Resolved: persisted, ExpiresAt: expires,
+				CreateRequestID: "legacy-create", CreateRequestHash: legacyHash,
+				View: SessionView{ID: "legacy-session", Analysis: legacyRef, ExpiresAt: expires.Format(time.RFC3339)},
+			},
+		},
+		OwnerRequests: map[string][]time.Time{},
+	}
+	if err := writePrivateJSON(service.store.statePath, legacy); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := NewService(t.Context(), dir, &fakeRunner{}, Options{StateDir: stateDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := restarted.Create(legacyRef, "Alice", "legacy-create")
+	if err != nil || got.ID != "legacy-session" {
+		t.Fatalf("retry session=%+v err=%v", got, err)
+	}
+	state, err := restarted.store.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	migrated := state.Sessions["legacy-session"]
+	if migrated.CreateRequestVersion != stateVersion || migrated.CreateRequestHash == legacyHash {
+		t.Fatalf("create migration = %+v", migrated)
+	}
+}
