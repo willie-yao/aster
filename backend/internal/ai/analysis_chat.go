@@ -165,7 +165,12 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 	}
 	start := time.Now()
 	var browser artifacts.Browser
+	enabledTools := a.enabledTools
 	if turn.Pattern != nil {
+		enabledTools = patternAnalysisChatTools(enabledTools)
+		if !hasAnalysisChatContentReader(enabledTools) {
+			return analysischat.Reply{}, fmt.Errorf("analysis chat pattern sessions require filesystem content tools")
+		}
 		factory, ok := a.browserFactory.(interface {
 			ForBuilds([]analysischat.ArtifactBuild) artifacts.Browser
 		})
@@ -182,7 +187,7 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 			GCSByteBudget: a.opts.GCSByteBudget, ContextByteBudget: a.opts.ContextByteBudget,
 			Timeout: a.opts.Timeout, SingleToolCall: a.opts.SingleToolCall,
 		},
-		registry: a.registry, enabledTools: a.enabledTools, cache: tools.NewBoundedCache(128, 4<<20),
+		registry: a.registry, enabledTools: enabledTools, cache: tools.NewBoundedCache(128, 4<<20),
 		webURLBase: turn.Build.WebURL, startTime: start,
 	}
 
@@ -298,6 +303,20 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 	reply.GCSBytes = state.gcsBytes
 	reply.ElapsedMs = int(time.Since(start) / time.Millisecond)
 	return reply, nil
+}
+
+func patternAnalysisChatTools(enabled []string) []string {
+	allowed := map[string]bool{
+		"list_artifacts": true, "read_artifact": true, "tail_artifact": true,
+		"grep_artifact": true, "find_artifacts": true,
+	}
+	out := make([]string, 0, len(enabled))
+	for _, name := range enabled {
+		if allowed[name] {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 func prepareAnalysisChatFinalizeMessages(messages []modelMessage, budget int) ([]modelMessage, error) {

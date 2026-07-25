@@ -481,3 +481,12 @@ func TestAnalysisChatContextDescribesRecurringPatternBuilds(t *testing.T) {
 		}
 	}
 }
+
+func TestPatternAnalysisChatToolsExcludeSingleBuildHelpers(t *testing.T) {
+	got := patternAnalysisChatTools([]string{
+		"discover_clusters", "find_my_cluster", "list_artifacts", "read_artifact", "timeline_artifacts",
+	})
+	if !slices.Equal(got, []string{"list_artifacts", "read_artifact"}) {
+		t.Fatalf("pattern tools = %v", got)
+	}
+}
