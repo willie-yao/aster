@@ -49,6 +49,10 @@ var ErrPreviewSuperseded = errors.New("preview confirmation was superseded")
 // checks for the marked object without creating another one.
 var ErrPreviewOutcomeUnknown = errors.New("preview confirmation outcome unknown; retry to check GitHub")
 
+// ErrPreviewTargetChanged means the configured write repository no longer
+// matches the repository used to generate the preview.
+var ErrPreviewTargetChanged = errors.New("preview target repository changed; generate a new preview")
+
 // ErrPreviewNotFound means the confirm token is unknown, expired, or belongs to
 // a different admin.
 var ErrPreviewNotFound = errors.New("preview not found or expired")
@@ -92,9 +96,10 @@ type PreviewResult struct {
 // previewEntry is a cached draft awaiting confirmation. Exactly one of spec or
 // fix is set, per kind. owner binds the draft to the admin who generated it.
 type previewEntry struct {
-	kind string
-	spec issues.IssueSpec    // issue drafts
-	fix  *fixpr.GeneratedFix // fix drafts
+	kind       string
+	targetRepo string
+	spec       issues.IssueSpec    // issue drafts
+	fix        *fixpr.GeneratedFix // fix drafts
 }
 
 // Service runs on-demand actions against the data written to DataDir. It reads
@@ -294,7 +299,7 @@ func (s *Service) buildFixManager(userToken string) (*fixpr.Manager, error) {
 
 // generateIssuePreview renders an issue draft without caching or posting it.
 func (s *Service) generateIssuePreview(ctx context.Context, failureID, userToken, instruction string) (PreviewResult, *previewEntry, error) {
-	spec, _, err := s.buildIssueSpec(failureID)
+	spec, targetRepo, err := s.buildIssueSpec(failureID)
 	if err != nil {
 		return PreviewResult{}, nil, err
 	}
@@ -311,7 +316,7 @@ func (s *Service) generateIssuePreview(ctx context.Context, failureID, userToken
 		}
 	}
 	return PreviewResult{Kind: "issue", Title: final.Title, Body: final.Body},
-		&previewEntry{kind: "issue", spec: final}, nil
+		&previewEntry{kind: "issue", targetRepo: targetRepo, spec: final}, nil
 }
 
 // PreviewIssue renders the exact issue that would be filed for the failure,
@@ -359,7 +364,7 @@ func (s *Service) generateFixPreviewForPattern(
 		Kind: gfKind, Title: gf.Title, Body: gf.Description, Diff: gf.Preview.Diff,
 		VerifyStatus: string(gf.Preview.Verify.Status), VerifySummary: gf.Preview.Verify.Summary,
 		VerifyOutput: gf.Preview.Verify.Output,
-	}, &previewEntry{kind: gfKind, fix: gf}, nil
+	}, &previewEntry{kind: gfKind, targetRepo: s.cfg.EffectiveFixPRs().Repo.Owner + "/" + s.cfg.EffectiveFixPRs().Repo.Name, fix: gf}, nil
 }
 
 func safeFixPreviewError(err error) error {
@@ -460,6 +465,9 @@ func (s *Service) reconcileEntry(ctx context.Context, entry *previewEntry, userT
 		if eff.Repo == nil || eff.Repo.Owner == "" || eff.Repo.Name == "" {
 			return "", false, fmt.Errorf("no target repo resolved (set issues.repo or branding.source_repo)")
 		}
+		if entry.targetRepo != eff.Repo.Owner+"/"+eff.Repo.Name {
+			return "", false, ErrPreviewTargetChanged
+		}
 		client := issues.NewClient(userToken, eff.Repo.Owner, eff.Repo.Name)
 		_, url, found, err := client.SearchOpenIssue(ctx, issues.MarkerToken(entry.spec.Key), issues.MarkerFor(entry.spec.Key))
 		return url, found, err
@@ -467,6 +475,9 @@ func (s *Service) reconcileEntry(ctx context.Context, entry *previewEntry, userT
 		eff := s.cfg.EffectiveFixPRs()
 		if eff.Repo == nil || eff.Repo.Owner == "" || eff.Repo.Name == "" || entry.fix == nil {
 			return "", false, fmt.Errorf("no source repo resolved (set ai.fix_prs.repo or branding.source_repo)")
+		}
+		if entry.targetRepo != eff.Repo.Owner+"/"+eff.Repo.Name {
+			return "", false, ErrPreviewTargetChanged
 		}
 		key := entry.fix.Snapshot().Key
 		_, url, found, err := fixpr.NewClients(userToken).SearchOpenPR(ctx, eff.Repo.Owner, eff.Repo.Name, fixpr.MarkerToken(key), fixpr.MarkerFor(key))
@@ -486,6 +497,9 @@ func (s *Service) confirmEntry(ctx context.Context, entry *previewEntry, userTok
 		if eff.Repo == nil || eff.Repo.Owner == "" || eff.Repo.Name == "" {
 			return "", fmt.Errorf("no target repo resolved (set issues.repo or branding.source_repo)")
 		}
+		if entry.targetRepo != eff.Repo.Owner+"/"+eff.Repo.Name {
+			return "", ErrPreviewTargetChanged
+		}
 		client := issues.NewClient(userToken, eff.Repo.Owner, eff.Repo.Name)
 		targetRepo := eff.Repo.Owner + "/" + eff.Repo.Name
 		mgr := issues.NewManager(client, filepath.Join(s.dataDir, "issue_state.json"), targetRepo, issues.Options{MaxNewPerRun: 1})
@@ -501,6 +515,10 @@ func (s *Service) confirmEntry(ctx context.Context, entry *previewEntry, userTok
 		}
 		return url, nil
 	case gfKind:
+		eff := s.cfg.EffectiveFixPRs()
+		if eff.Repo == nil || entry.targetRepo != eff.Repo.Owner+"/"+eff.Repo.Name {
+			return "", ErrPreviewTargetChanged
+		}
 		mgr, err := s.buildFixManager(userToken)
 		if err != nil {
 			return "", err

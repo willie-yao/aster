@@ -445,6 +445,10 @@ func writeActionError(w http.ResponseWriter, id, login string, err error) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
+	if errors.Is(err, actions.ErrPreviewTargetChanged) {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	log.Printf("action failed for %s (by %s): %v", id, login, err)
 	http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 }

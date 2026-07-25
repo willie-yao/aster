@@ -713,3 +713,23 @@ func TestFitPreviewStateOrdersTimestampsChronologically(t *testing.T) {
 		}
 	})
 }
+
+func TestPreviewConfirmationRejectsTargetRepositoryDrift(t *testing.T) {
+	cfg := &project.Config{
+		Issues: &project.Issues{Repo: &project.SourceRepo{Owner: "new", Name: "issues"}},
+		AI:     &project.AI{FixPRs: &project.FixPRs{Repo: &project.SourceRepo{Owner: "new", Name: "fixes"}}},
+	}
+	service := NewService(cfg, t.TempDir(), AIConfig{})
+	entries := []*previewEntry{
+		{kind: "issue", targetRepo: "old/issues", spec: issues.IssueSpec{Key: "issue-key"}},
+		{kind: gfKind, targetRepo: "old/fixes", fix: fixpr.RestoreGeneratedFix(&fixpr.GeneratedFixSnapshot{Key: "fix-key"})},
+	}
+	for _, entry := range entries {
+		if _, err := service.confirmEntry(t.Context(), entry, "token"); !errors.Is(err, ErrPreviewTargetChanged) {
+			t.Fatalf("confirm %s error = %v", entry.kind, err)
+		}
+		if _, _, err := service.reconcileEntry(t.Context(), entry, "token"); !errors.Is(err, ErrPreviewTargetChanged) {
+			t.Fatalf("reconcile %s error = %v", entry.kind, err)
+		}
+	}
+}

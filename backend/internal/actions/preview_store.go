@@ -31,6 +31,7 @@ const (
 type persistedPreview struct {
 	Owner        string                      `json:"owner"`
 	Kind         string                      `json:"kind"`
+	TargetRepo   string                      `json:"target_repo"`
 	CreatedAt    string                      `json:"created_at"`
 	Status       string                      `json:"status"`
 	ResultURL    string                      `json:"result_url,omitempty"`
@@ -268,7 +269,7 @@ func persistPreview(entry *previewEntry, owner string, now time.Time) (*persiste
 		return nil, ErrPreviewNotFound
 	}
 	record := &persistedPreview{
-		Owner: owner, Kind: entry.kind, CreatedAt: now.Format(time.RFC3339Nano), Status: previewStatusReady,
+		Owner: owner, Kind: entry.kind, TargetRepo: entry.targetRepo, CreatedAt: now.Format(time.RFC3339Nano), Status: previewStatusReady,
 	}
 	switch entry.kind {
 	case "issue":
@@ -289,7 +290,7 @@ func restorePreview(record *persistedPreview) (*previewEntry, error) {
 	if record == nil {
 		return nil, ErrPreviewNotFound
 	}
-	entry := &previewEntry{kind: record.Kind}
+	entry := &previewEntry{kind: record.Kind, targetRepo: record.TargetRepo}
 	switch record.Kind {
 	case "issue":
 		if record.Issue == nil {
