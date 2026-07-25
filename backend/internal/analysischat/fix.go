@@ -60,6 +60,10 @@ func (s *Service) FixCandidate(sessionID, owner, requestID, patternID, patternHa
 		if current == nil || current.Owner != owner {
 			return changed, ErrSessionNotFound
 		}
+		if current.View.Analysis.Scope == ScopePattern &&
+			(patternID != current.View.Analysis.PatternID || patternHash != current.View.Analysis.PatternHash) {
+			return changed, fmt.Errorf("%w: requested pattern does not match the conversation", ErrInvalidRequest)
+		}
 		request, ok := current.Requests[requestID]
 		if !ok || request.Status != requestSucceeded {
 			return changed, ErrRequestNotFound
@@ -114,13 +118,16 @@ func (s *Service) FixCandidate(sessionID, owner, requestID, patternID, patternHa
 		return FixCandidate{}, err
 	}
 	analysis := resolved.testCase.AIAnalysis
-	if analysis == nil || !sameAnalysisSnapshot(candidate.Original, analysisSnapshot(analysis)) {
+	if candidate.Analysis.Scope != ScopePattern && (analysis == nil || !sameAnalysisSnapshot(candidate.Original, analysisSnapshot(analysis))) {
 		return FixCandidate{}, ErrAnalysisChanged
 	}
 	for _, pattern := range resolved.patterns {
 		if pattern.ID == patternID {
 			if models.PatternHash(pattern) != patternHash {
 				return FixCandidate{}, ErrPatternChanged
+			}
+			if candidate.Analysis.Scope == ScopePattern {
+				candidate.Analysis.BuildID = resolved.build.BuildID
 			}
 			candidate.Pattern = pattern
 			return candidate, nil

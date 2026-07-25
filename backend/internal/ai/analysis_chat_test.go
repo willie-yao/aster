@@ -459,3 +459,34 @@ func TestAnalysisChatEvidenceOverflowIsAtomic(t *testing.T) {
 		t.Fatalf("overflow mutated evidence: bytes=%d segments=%d", entry.Bytes, len(entry.Segments))
 	}
 }
+
+func TestAnalysisChatContextDescribesRecurringPatternBuilds(t *testing.T) {
+	pattern := &models.PatternAnalysis{
+		ID: "pattern-1", Subject: "retry failures", BuildsAnalyzed: 4, Confidence: "high",
+		SharedRootCause: "terminal failures retry", SuggestedFix: "stop terminal retries",
+		SharedBuilds: []string{"104", "103", "102", "101"}, RelevantFiles: []string{"pkg/retry.go"},
+	}
+	contextMessage, err := analysisChatContext(analysischat.Turn{
+		JobID: "periodic-demo", Pattern: pattern,
+		EvidenceBuilds: []analysischat.ArtifactBuild{
+			{Build: models.BuildInfo{BuildID: "104"}}, {Build: models.BuildInfo{BuildID: "103"}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"recurring-pattern analysis", `"pattern_id": "pattern-1"`, `"artifact_builds"`, "builds/<build-id>/<path>"} {
+		if !strings.Contains(contextMessage, want) {
+			t.Fatalf("context missing %q: %s", want, contextMessage)
+		}
+	}
+}
+
+func TestPatternAnalysisChatToolsExcludeSingleBuildHelpers(t *testing.T) {
+	got := patternAnalysisChatTools([]string{
+		"discover_clusters", "find_my_cluster", "list_artifacts", "read_artifact", "timeline_artifacts",
+	})
+	if !slices.Equal(got, []string{"list_artifacts", "read_artifact"}) {
+		t.Fatalf("pattern tools = %v", got)
+	}
+}

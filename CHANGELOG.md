@@ -22,6 +22,12 @@ for how to pin a release.
 
 ### Added
 
+- **Recurring-pattern analysis chat backend.** Kubernetes-native analysis chat
+  accepts owner-bound recurring-pattern references, validates the complete
+  published pattern hash, snapshots the pattern across restarts, and exposes
+  read-only artifact tools for at most the three newest affected builds under
+  build-qualified paths. Pattern findings remain eligible for the existing
+  chat-to-fix flow, while test-analysis correction promotion stays disabled.
 - **Analysis-chat fix context bridge.** Kubernetes-native deployments with both
   analysis chat and write actions can generate an existing fix preview from one
   selected evidence-backed assistant response. The server reconstructs bounded

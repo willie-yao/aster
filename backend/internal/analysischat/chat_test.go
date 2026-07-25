@@ -1099,3 +1099,230 @@ func TestServiceCorrectionCandidateAndValidation(t *testing.T) {
 		t.Fatalf("changed analysis validation error = %v", err)
 	}
 }
+
+func recurringPattern() models.PatternAnalysis {
+	pattern := models.PatternAnalysis{
+		Subject: "controller retry failures", JobID: "periodic-demo", GeneratedAt: "2026-07-25T12:00:00Z",
+		BuildsAnalyzed: 4, Systemic: true, Confidence: "high",
+		SharedRootCause: "terminal failures are retried", SharedBuilds: []string{"104", "103", "102", "101"},
+		SuggestedFix: "stop retrying terminal failures", RelevantFiles: []string{"pkg/retry.go"}, Summary: "shared retry failure",
+	}
+	pattern.ID = models.PatternID(pattern)
+	pattern.ContentHash = models.PatternHash(pattern)
+	return pattern
+}
+
+func patternDetail() models.JobDetail {
+	detail := models.JobDetail{Name: "periodic-demo", JobID: "periodic-demo", JobType: models.JobTypePeriodic}
+	for _, id := range []string{"104", "103", "102", "101"} {
+		detail.Runs = append(detail.Runs, models.BuildResult{BuildInfo: models.BuildInfo{BuildID: id, JobName: "periodic-demo"}})
+	}
+	detail.PatternAnalyses = []models.PatternAnalysis{recurringPattern()}
+	return detail
+}
+
+func TestServicePatternChatUsesBoundedAffectedBuilds(t *testing.T) {
+	dir := t.TempDir()
+	writeJobDetail(t, dir, patternDetail())
+	runner := &fakeRunner{reply: Reply{Answer: "The pattern spans the three newest retained builds.", Assessment: "explains"}}
+	service, err := NewService(t.Context(), dir, runner, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pattern := recurringPattern()
+	created, err := service.Create(AnalysisRef{
+		Scope: ScopePattern, JobID: "periodic-demo", PatternID: pattern.ID, PatternHash: pattern.ContentHash,
+	}, "Alice", testRequestID(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Analysis.Scope != ScopePattern || created.Analysis.BuildID != "" || created.Analysis.PatternHash != pattern.ContentHash {
+		t.Fatalf("created pattern session = %+v", created.Analysis)
+	}
+	if _, err := service.Send(t.Context(), created.ID, "alice", testRequestID(t), "What builds support this?"); err != nil {
+		t.Fatal(err)
+	}
+	runner.mu.Lock()
+	turn := runner.turns[0]
+	runner.mu.Unlock()
+	if turn.Pattern == nil || turn.Pattern.ID != pattern.ID || len(turn.EvidenceBuilds) != maxPatternEvidenceBuilds {
+		t.Fatalf("pattern turn = %+v", turn)
+	}
+	for i, want := range []string{"104", "103", "102"} {
+		if turn.EvidenceBuilds[i].Build.BuildID != want {
+			t.Fatalf("evidence builds = %+v", turn.EvidenceBuilds)
+		}
+	}
+}
+
+func TestServicePatternChatRejectsStaleContentHash(t *testing.T) {
+	dir := t.TempDir()
+	detail := patternDetail()
+	pattern := detail.PatternAnalyses[0]
+	writeJobDetail(t, dir, detail)
+	service, err := NewService(t.Context(), dir, &fakeRunner{}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail.PatternAnalyses[0].SuggestedFix = "replace the controller"
+	detail.PatternAnalyses[0].ContentHash = models.PatternHash(detail.PatternAnalyses[0])
+	writeJobDetail(t, dir, detail)
+	_, err = service.Create(AnalysisRef{
+		Scope: ScopePattern, JobID: "periodic-demo", PatternID: pattern.ID, PatternHash: pattern.ContentHash,
+	}, "alice", testRequestID(t))
+	if !errors.Is(err, ErrPatternChanged) {
+		t.Fatalf("stale pattern error = %v", err)
+	}
+}
+
+func TestPatternChatCannotPromoteTestCorrection(t *testing.T) {
+	dir := t.TempDir()
+	writeJobDetail(t, dir, patternDetail())
+	runner := &fakeRunner{reply: Reply{
+		Answer: "The pattern should be revised.", Assessment: "challenges",
+		Citations:        []Citation{{Path: "builds/104/build-log.txt", Quote: "terminal failure"}},
+		ProposedRevision: &Revision{RootCause: "new cause", SuggestedFix: "new fix"},
+	}}
+	service, err := NewService(t.Context(), dir, runner, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pattern := recurringPattern()
+	session, err := service.Create(AnalysisRef{
+		Scope: ScopePattern, JobID: "periodic-demo", PatternID: pattern.ID, PatternHash: pattern.ContentHash,
+	}, "Alice", testRequestID(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestID := testRequestID(t)
+	if _, err := service.Send(t.Context(), session.ID, "Alice", requestID, "Is this conclusion wrong?"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CorrectionCandidate(session.ID, "Alice", requestID); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("correction error = %v", err)
+	}
+}
+
+func TestPatternChatSnapshotPersistsAcrossRestart(t *testing.T) {
+	dir := t.TempDir()
+	writeJobDetail(t, dir, patternDetail())
+	stateDir := filepath.Join(dir, ".pattern-chat")
+	first, err := NewService(t.Context(), dir, &fakeRunner{}, Options{StateDir: stateDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pattern := recurringPattern()
+	created, err := first.Create(AnalysisRef{
+		Scope: ScopePattern, JobID: "periodic-demo", PatternID: pattern.ID, PatternHash: pattern.ContentHash,
+	}, "Alice", testRequestID(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{reply: Reply{Answer: "persisted", Assessment: "explains"}}
+	restarted, err := NewService(t.Context(), dir, runner, Options{StateDir: stateDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restarted.Send(t.Context(), created.ID, "Alice", testRequestID(t), "What persisted?"); err != nil {
+		t.Fatal(err)
+	}
+	runner.mu.Lock()
+	turn := runner.turns[0]
+	runner.mu.Unlock()
+	if turn.Pattern == nil || turn.Pattern.ContentHash != pattern.ContentHash || len(turn.EvidenceBuilds) != 3 {
+		t.Fatalf("restored turn = %+v", turn)
+	}
+}
+
+func TestPatternChatRejectsTestOnlyExtensions(t *testing.T) {
+	service, err := NewService(t.Context(), t.TempDir(), &fakeRunner{}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ref := range []AnalysisRef{
+		{Scope: ScopePattern, JobID: "job", PatternID: "pattern"},
+		{Scope: ScopePattern, JobID: "job", BuildID: "123", PatternID: "pattern", PatternHash: "hash"},
+		{Scope: ScopePattern, JobID: "job", PatternID: "pattern", PatternHash: "hash", TestName: "test"},
+		{Scope: "other", JobID: "job", PatternID: "pattern", PatternHash: "hash"},
+	} {
+		if _, err := service.Create(ref, "alice", testRequestID(t)); !errors.Is(err, ErrInvalidRequest) {
+			t.Fatalf("ref %+v error = %v", ref, err)
+		}
+	}
+}
+
+func TestPatternChatRejectsSourceInvestigation(t *testing.T) {
+	dir := t.TempDir()
+	writeJobDetail(t, dir, patternDetail())
+	runner := &fakeRunner{reply: Reply{Answer: "answer", Assessment: "explains"}}
+	service, err := NewService(t.Context(), dir, runner, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pattern := recurringPattern()
+	session, err := service.Create(AnalysisRef{
+		Scope: ScopePattern, JobID: "periodic-demo", PatternID: pattern.ID, PatternHash: pattern.ContentHash,
+	}, "alice", testRequestID(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestID := testRequestID(t)
+	if _, err := service.Send(t.Context(), session.ID, "alice", requestID, "question"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.sourceInvestigationSubject(session.ID, "alice", requestID); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("source investigation error = %v", err)
+	}
+}
+
+func TestVersionOneCreateIdempotencyMigratesOnRetry(t *testing.T) {
+	dir := t.TempDir()
+	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
+	stateDir := filepath.Join(dir, ".migration-chat")
+	service, err := NewService(t.Context(), dir, &fakeRunner{}, Options{StateDir: stateDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyRef := AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}
+	resolved, err := service.resolve(legacyRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyHash, err := hashAnalysisRef(legacyRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	persisted := persistResolved(resolved, "")
+	persisted.Ref.Scope = ""
+	expires := time.Now().UTC().Add(time.Hour)
+	legacy := &persistedState{
+		Version: 1,
+		Sessions: map[string]*persistedSession{
+			"legacy-session": {
+				Owner: "alice", Resolved: persisted, ExpiresAt: expires,
+				CreateRequestID: "legacy-create", CreateRequestHash: legacyHash,
+				View: SessionView{ID: "legacy-session", Analysis: legacyRef, ExpiresAt: expires.Format(time.RFC3339)},
+			},
+		},
+		OwnerRequests: map[string][]time.Time{},
+	}
+	if err := writePrivateJSON(service.store.statePath, legacy); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := NewService(t.Context(), dir, &fakeRunner{}, Options{StateDir: stateDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := restarted.Create(legacyRef, "Alice", "legacy-create")
+	if err != nil || got.ID != "legacy-session" {
+		t.Fatalf("retry session=%+v err=%v", got, err)
+	}
+	state, err := restarted.store.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	migrated := state.Sessions["legacy-session"]
+	if migrated.CreateRequestVersion != stateVersion || migrated.CreateRequestHash == legacyHash {
+		t.Fatalf("create migration = %+v", migrated)
+	}
+}
