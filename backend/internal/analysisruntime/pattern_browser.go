@@ -38,7 +38,11 @@ func newPatternBrowser(factory buildBrowserFactory, builds []analysischat.Artifa
 func (b *patternBrowser) BuildRoot() string { return b.root }
 
 func (b *patternBrowser) List(ctx context.Context, dir string) (*artifacts.Listing, error) {
-	dir = strings.Trim(strings.TrimSpace(dir), "/")
+	dir = strings.TrimSpace(dir)
+	if strings.HasPrefix(dir, "/") {
+		return nil, fmt.Errorf("pattern artifact path must be relative")
+	}
+	dir = strings.TrimSuffix(dir, "/")
 	if dir == "" {
 		return &artifacts.Listing{Dirs: []string{"builds/"}}, nil
 	}
@@ -109,7 +113,11 @@ func (b *patternBrowser) Grep(ctx context.Context, file string, re *regexp.Regex
 }
 
 func (b *patternBrowser) resolve(value string) (string, string, artifacts.Browser, error) {
-	value = strings.Trim(strings.TrimSpace(value), "/")
+	value = strings.TrimSpace(value)
+	if strings.HasPrefix(value, "/") {
+		return "", "", nil, fmt.Errorf("pattern artifact path must be relative")
+	}
+	value = strings.TrimSuffix(value, "/")
 	parts := strings.SplitN(value, "/", 3)
 	if len(parts) < 2 || parts[0] != "builds" {
 		return "", "", nil, fmt.Errorf("pattern artifact path must be builds/<build-id>/<path>")

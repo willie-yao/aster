@@ -54,6 +54,9 @@ func TestPatternBrowserRoutesBuildPrefixedPaths(t *testing.T) {
 	if err != nil || string(content) != "build 104" {
 		t.Fatalf("content=%q err=%v", content, err)
 	}
+	if _, _, err := browser.Read(t.Context(), "/builds/104/build-log.txt", 0, 100); err == nil {
+		t.Fatal("absolute pattern artifact path was accepted")
+	}
 	listing, err := browser.List(t.Context(), "builds")
 	if err != nil || len(listing.Dirs) != 2 {
 		t.Fatalf("listing=%+v err=%v", listing, err)
