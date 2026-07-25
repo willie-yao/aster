@@ -42,6 +42,9 @@ var ErrPatternMismatch = errors.New("pattern does not include selected analysis"
 // ErrPreviewPending means confirmation is already running for this preview.
 var ErrPreviewPending = errors.New("preview confirmation is pending")
 
+// ErrPreviewSuperseded means a newer confirmation attempt owns the preview.
+var ErrPreviewSuperseded = errors.New("preview confirmation was superseded")
+
 // ErrPreviewNotFound means the confirm token is unknown, expired, or belongs to
 // a different admin.
 var ErrPreviewNotFound = errors.New("preview not found or expired")
@@ -399,12 +402,13 @@ func (s *Service) PreviewFixWithContext(
 
 // Confirm files the issue or opens the PR previously cached under token.
 func (s *Service) Confirm(ctx context.Context, token, userToken string) (string, error) {
-	entry, resultURL, err := s.beginConfirm(userToken, token)
+	lease := s.requestTimeout + 30*time.Second
+	entry, resultURL, attemptID, err := s.beginConfirm(userToken, token, lease)
 	if err != nil || resultURL != "" {
 		return resultURL, err
 	}
 	resultURL, confirmErr := s.confirmEntry(ctx, entry, userToken)
-	finishErr := s.finishConfirm(userToken, token, resultURL, confirmErr)
+	finishErr := s.finishConfirm(userToken, token, attemptID, resultURL, confirmErr)
 	if confirmErr != nil {
 		return resultURL, confirmErr
 	}
@@ -414,12 +418,12 @@ func (s *Service) Confirm(ctx context.Context, token, userToken string) (string,
 	return resultURL, nil
 }
 
-func (s *Service) beginConfirm(userToken, token string) (*previewEntry, string, error) {
-	return s.previewStore.begin(userToken, token)
+func (s *Service) beginConfirm(userToken, token string, lease time.Duration) (*previewEntry, string, string, error) {
+	return s.previewStore.begin(userToken, token, lease)
 }
 
-func (s *Service) finishConfirm(userToken, token, resultURL string, confirmErr error) error {
-	return s.previewStore.finish(userToken, token, resultURL, confirmErr)
+func (s *Service) finishConfirm(userToken, token, attemptID, resultURL string, confirmErr error) error {
+	return s.previewStore.finish(userToken, token, attemptID, resultURL, confirmErr)
 }
 
 func (s *Service) confirmEntry(ctx context.Context, entry *previewEntry, userToken string) (string, error) {

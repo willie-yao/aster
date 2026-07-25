@@ -437,8 +437,8 @@ func writeActionError(w http.ResponseWriter, id, login string, err error) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	if errors.Is(err, actions.ErrPreviewPending) {
-		http.Error(w, actions.ErrPreviewPending.Error(), http.StatusConflict)
+	if errors.Is(err, actions.ErrPreviewPending) || errors.Is(err, actions.ErrPreviewSuperseded) {
+		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
 	log.Printf("action failed for %s (by %s): %v", id, login, err)

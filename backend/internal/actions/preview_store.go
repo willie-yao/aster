@@ -19,7 +19,6 @@ import (
 
 const (
 	previewStateVersion  = 1
-	previewConfirmLease  = 10 * time.Minute
 	maxPreviewStateBytes = 64 << 20
 	maxPersistedPreviews = 128
 	previewStatusReady   = "ready"
@@ -34,6 +33,7 @@ type persistedPreview struct {
 	Status       string                      `json:"status"`
 	ResultURL    string                      `json:"result_url,omitempty"`
 	LeaseExpires string                      `json:"lease_expires,omitempty"`
+	AttemptID    string                      `json:"attempt_id,omitempty"`
 	Issue        *issues.IssueSpec           `json:"issue,omitempty"`
 	Fix          *fixpr.GeneratedFixSnapshot `json:"fix,omitempty"`
 }
@@ -75,10 +75,17 @@ func (s *previewStore) stash(userToken string, entry *previewEntry) (string, err
 	return token, nil
 }
 
-func (s *previewStore) begin(userToken, token string) (*previewEntry, string, error) {
+func (s *previewStore) begin(userToken, token string, lease time.Duration) (*previewEntry, string, string, error) {
+	if lease <= 0 {
+		lease = defaultRequestTimeout
+	}
+	attemptID, err := newToken()
+	if err != nil {
+		return nil, "", "", fmt.Errorf("generating confirmation attempt id: %w", err)
+	}
 	var entry *previewEntry
 	var resultURL string
-	err := s.update(func(state *previewState, now time.Time) (bool, error) {
+	err = s.update(func(state *previewState, now time.Time) (bool, error) {
 		changed := evictPersistedPreviews(state, now)
 		record := state.Previews[tokenHash(token)]
 		if record == nil || record.Owner != tokenHash(userToken) {
@@ -100,20 +107,25 @@ func (s *previewStore) begin(userToken, token string) (*previewEntry, string, er
 			return changed, err
 		}
 		record.Status = previewStatusRunning
-		record.LeaseExpires = now.Add(previewConfirmLease).Format(time.RFC3339)
+		record.LeaseExpires = now.Add(lease).Format(time.RFC3339)
+		record.AttemptID = attemptID
 		record.CreatedAt = now.Format(time.RFC3339)
 		return true, nil
 	})
-	return entry, resultURL, err
+	return entry, resultURL, attemptID, err
 }
 
-func (s *previewStore) finish(userToken, token, resultURL string, confirmErr error) error {
+func (s *previewStore) finish(userToken, token, attemptID, resultURL string, confirmErr error) error {
 	return s.update(func(state *previewState, now time.Time) (bool, error) {
 		record := state.Previews[tokenHash(token)]
 		if record == nil || record.Owner != tokenHash(userToken) {
 			return false, ErrPreviewNotFound
 		}
+		if record.Status != previewStatusRunning || record.AttemptID != attemptID {
+			return false, ErrPreviewSuperseded
+		}
 		record.LeaseExpires = ""
+		record.AttemptID = ""
 		if confirmErr != nil {
 			record.Status = previewStatusReady
 			return true, nil
@@ -256,6 +268,18 @@ func evictPersistedPreviews(state *previewState, now time.Time) bool {
 	changed := false
 	cutoff := now.Add(-previewTTL)
 	for key, record := range state.Previews {
+		if record.Status == previewStatusRunning {
+			lease, err := time.Parse(time.RFC3339, record.LeaseExpires)
+			if err == nil && now.Before(lease) {
+				continue
+			}
+			record.Status = previewStatusReady
+			record.LeaseExpires = ""
+			record.AttemptID = ""
+			record.CreatedAt = now.Format(time.RFC3339)
+			changed = true
+			continue
+		}
 		created, err := time.Parse(time.RFC3339, record.CreatedAt)
 		if err != nil || created.Before(cutoff) {
 			delete(state.Previews, key)
@@ -268,10 +292,12 @@ func evictPersistedPreviews(state *previewState, now time.Time) bool {
 	type item struct{ key, created string }
 	items := make([]item, 0, len(state.Previews))
 	for key, record := range state.Previews {
-		items = append(items, item{key: key, created: record.CreatedAt})
+		if record.Status != previewStatusRunning {
+			items = append(items, item{key: key, created: record.CreatedAt})
+		}
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].created < items[j].created })
-	for len(state.Previews) > maxPersistedPreviews {
+	for len(state.Previews) > maxPersistedPreviews && len(items) > 0 {
 		delete(state.Previews, items[0].key)
 		items = items[1:]
 		changed = true
