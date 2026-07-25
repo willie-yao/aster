@@ -155,8 +155,8 @@ export function ChatFixDialog({
   }, [identity, firstPatternID, open]);
 
   useEffect(() => {
-    if (open && sourceResult && !preview) setIncludeSource(true);
-  }, [open, preview, sourceResult]);
+    if (open && sourceResult) setIncludeSource(true);
+  }, [open, sourceResult]);
 
   useEffect(() => () => controllerRef.current?.abort(), []);
 

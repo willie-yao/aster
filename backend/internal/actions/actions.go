@@ -39,6 +39,9 @@ var ErrPreviewRejected = errors.New("fix preview rejected")
 // ErrPatternMismatch means the selected recurring pattern does not include the chat analysis.
 var ErrPatternMismatch = errors.New("pattern does not include selected analysis")
 
+// ErrPreviewPending means confirmation is already running for this preview.
+var ErrPreviewPending = errors.New("preview confirmation is pending")
+
 // ErrPreviewNotFound means the confirm token is unknown, expired, or belongs to
 // a different admin.
 var ErrPreviewNotFound = errors.New("preview not found or expired")
@@ -82,11 +85,13 @@ type PreviewResult struct {
 // previewEntry is a cached draft awaiting confirmation. Exactly one of spec or
 // fix is set, per kind. owner binds the draft to the admin who generated it.
 type previewEntry struct {
-	owner     string
-	kind      string
-	spec      issues.IssueSpec    // issue drafts
-	fix       *fixpr.GeneratedFix // fix drafts
-	createdAt time.Time
+	owner      string
+	kind       string
+	spec       issues.IssueSpec    // issue drafts
+	fix        *fixpr.GeneratedFix // fix drafts
+	createdAt  time.Time
+	confirming bool
+	resultURL  string
 }
 
 // Service runs on-demand actions against the data written to DataDir. It reads
@@ -398,11 +403,45 @@ func (s *Service) PreviewFixWithContext(
 
 // Confirm files the issue or opens the PR previously cached under token.
 func (s *Service) Confirm(ctx context.Context, token, userToken string) (string, error) {
-	entry, err := s.take(userToken, token)
-	if err != nil {
-		return "", err
+	entry, resultURL, err := s.beginConfirm(userToken, token)
+	if err != nil || resultURL != "" {
+		return resultURL, err
 	}
-	return s.confirmEntry(ctx, entry, userToken)
+	resultURL, err = s.confirmEntry(ctx, entry, userToken)
+	s.finishConfirm(token, entry, resultURL, err)
+	return resultURL, err
+}
+
+func (s *Service) beginConfirm(userToken, token string) (*previewEntry, string, error) {
+	s.pmu.Lock()
+	defer s.pmu.Unlock()
+	s.evictExpiredLocked()
+	entry, ok := s.previews[token]
+	if !ok || entry.owner != tokenHash(userToken) {
+		return nil, "", ErrPreviewNotFound
+	}
+	if entry.resultURL != "" {
+		return nil, entry.resultURL, nil
+	}
+	if entry.confirming {
+		return nil, "", ErrPreviewPending
+	}
+	entry.confirming = true
+	return entry, "", nil
+}
+
+func (s *Service) finishConfirm(token string, entry *previewEntry, resultURL string, confirmErr error) {
+	s.pmu.Lock()
+	defer s.pmu.Unlock()
+	current := s.previews[token]
+	if current == nil || current != entry {
+		return
+	}
+	current.confirming = false
+	if confirmErr == nil && resultURL != "" {
+		current.resultURL = resultURL
+		current.createdAt = time.Now()
+	}
 }
 
 func (s *Service) confirmEntry(ctx context.Context, entry *previewEntry, userToken string) (string, error) {

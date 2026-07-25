@@ -437,6 +437,10 @@ func writeActionError(w http.ResponseWriter, id, login string, err error) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
+	if errors.Is(err, actions.ErrPreviewPending) {
+		http.Error(w, actions.ErrPreviewPending.Error(), http.StatusConflict)
+		return
+	}
 	log.Printf("action failed for %s (by %s): %v", id, login, err)
 	http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 }

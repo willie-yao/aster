@@ -279,7 +279,10 @@ revision, verified artifact citations, optional verified source finding and
 citations, the existing `PatternAnalysis`, and the bounded maintainer
 instruction. It never receives the complete transcript. The response is the
 normal fix `PreviewResult`; post its token to `/api/actions/confirm` to open the
-exact reviewed draft through the existing confirmation workflow.
+exact reviewed draft through the existing confirmation workflow. Confirmation is
+idempotent for the preview retention window: retrying the same token after a lost
+success response returns the original URL, while a concurrent confirmation
+returns 409 until the first attempt finishes.
 
 The dashboard exposes **Use this finding in a fix proposal** only for completed
 evidence-backed responses whose selected build belongs to an actionable recurring

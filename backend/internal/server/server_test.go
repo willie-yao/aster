@@ -785,3 +785,11 @@ func TestHandler_AsyncActionRequestFlow(t *testing.T) {
 		t.Fatalf("capabilities = %+v", caps)
 	}
 }
+
+func TestWriteActionErrorMapsPendingConfirmation(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	writeActionError(recorder, "confirm", "alice", actions.ErrPreviewPending)
+	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), actions.ErrPreviewPending.Error()) {
+		t.Fatalf("status=%d body=%q", recorder.Code, recorder.Body.String())
+	}
+}

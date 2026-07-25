@@ -238,3 +238,43 @@ func TestSafeFixPreviewErrorPreservesContextSentinels(t *testing.T) {
 		t.Fatalf("provider body leaked or rejection untyped: %v", got)
 	}
 }
+
+func TestPreviewConfirmationLifecycleIsRecoverable(t *testing.T) {
+	service := NewService(&project.Config{}, t.TempDir(), AIConfig{})
+	token, err := service.stash("owner-token", &previewEntry{kind: "fix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, resultURL, err := service.beginConfirm("owner-token", token)
+	if err != nil || entry == nil || resultURL != "" {
+		t.Fatalf("begin confirmation = %+v, %q, %v", entry, resultURL, err)
+	}
+	if _, _, err := service.beginConfirm("owner-token", token); !errors.Is(err, ErrPreviewPending) {
+		t.Fatalf("concurrent confirmation error = %v", err)
+	}
+	service.finishConfirm(token, entry, "https://github.com/o/r/pull/1", nil)
+	entry, resultURL, err = service.beginConfirm("owner-token", token)
+	if err != nil || entry != nil || resultURL != "https://github.com/o/r/pull/1" {
+		t.Fatalf("recovered confirmation = %+v, %q, %v", entry, resultURL, err)
+	}
+	if _, _, err := service.beginConfirm("other-token", token); !errors.Is(err, ErrPreviewNotFound) {
+		t.Fatalf("cross-owner confirmation error = %v", err)
+	}
+}
+
+func TestPreviewConfirmationFailureCanRetry(t *testing.T) {
+	service := NewService(&project.Config{}, t.TempDir(), AIConfig{})
+	token, err := service.stash("owner-token", &previewEntry{kind: "fix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, _, err := service.beginConfirm("owner-token", token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.finishConfirm(token, entry, "", errors.New("temporary failure"))
+	retry, resultURL, err := service.beginConfirm("owner-token", token)
+	if err != nil || retry != entry || resultURL != "" {
+		t.Fatalf("retry confirmation = %+v, %q, %v", retry, resultURL, err)
+	}
+}
