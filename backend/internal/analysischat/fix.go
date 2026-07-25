@@ -114,7 +114,7 @@ func (s *Service) FixCandidate(sessionID, owner, requestID, patternID, patternHa
 		return FixCandidate{}, err
 	}
 	analysis := resolved.testCase.AIAnalysis
-	if analysis == nil || !sameAnalysisSnapshot(candidate.Original, analysisSnapshot(analysis)) {
+	if candidate.Analysis.Scope != ScopePattern && (analysis == nil || !sameAnalysisSnapshot(candidate.Original, analysisSnapshot(analysis))) {
 		return FixCandidate{}, ErrAnalysisChanged
 	}
 	for _, pattern := range resolved.patterns {

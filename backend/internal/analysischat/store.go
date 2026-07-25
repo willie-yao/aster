@@ -46,11 +46,13 @@ type persistedSession struct {
 }
 
 type persistedResolvedAnalysis struct {
-	Ref         AnalysisRef      `json:"ref"`
-	JobID       string           `json:"job_id"`
-	BuildPrefix string           `json:"build_prefix"`
-	Build       models.BuildInfo `json:"build"`
-	TestCase    models.TestCase  `json:"test_case"`
+	Ref            AnalysisRef             `json:"ref"`
+	JobID          string                  `json:"job_id"`
+	BuildPrefix    string                  `json:"build_prefix"`
+	Build          models.BuildInfo        `json:"build"`
+	TestCase       models.TestCase         `json:"test_case"`
+	Pattern        *models.PatternAnalysis `json:"pattern,omitempty"`
+	EvidenceBuilds []ArtifactBuild         `json:"evidence_builds,omitempty"`
 }
 
 type persistedRequest struct {
@@ -307,7 +309,8 @@ func persistResolved(resolved resolvedAnalysis, requiredRepo string) persistedRe
 	}
 	return persistedResolvedAnalysis{
 		Ref: resolved.ref, JobID: resolved.jobID, BuildPrefix: resolved.buildPrefix,
-		Build: build, TestCase: testCase,
+		Build: build, TestCase: testCase, Pattern: clonePattern(resolved.pattern),
+		EvidenceBuilds: cloneArtifactBuilds(resolved.evidenceBuilds),
 	}
 }
 
@@ -390,10 +393,20 @@ func clampPersistedText(value string, maxBytes int) string {
 
 func restoreResolved(resolved persistedResolvedAnalysis) resolvedAnalysis {
 	return resolvedAnalysis{
-		ref:         resolved.Ref,
-		jobID:       resolved.JobID,
-		buildPrefix: resolved.BuildPrefix,
-		build:       cloneBuildInfo(resolved.Build),
-		testCase:    cloneTestCase(resolved.TestCase),
+		ref:            resolved.Ref,
+		jobID:          resolved.JobID,
+		buildPrefix:    resolved.BuildPrefix,
+		build:          cloneBuildInfo(resolved.Build),
+		testCase:       cloneTestCase(resolved.TestCase),
+		pattern:        clonePattern(resolved.Pattern),
+		evidenceBuilds: cloneArtifactBuilds(resolved.EvidenceBuilds),
 	}
+}
+
+func clonePattern(pattern *models.PatternAnalysis) *models.PatternAnalysis {
+	if pattern == nil {
+		return nil
+	}
+	copy := clonePatternAnalyses([]models.PatternAnalysis{*pattern})[0]
+	return &copy
 }

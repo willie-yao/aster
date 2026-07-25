@@ -66,7 +66,7 @@ build serves both targets. All `/data/*.json` schemas stay byte-compatible.
 ## Analysis chat API
 
 The server can expose an authenticated, read-only conversation API for a single
-published test analysis. Set `ANALYSIS_CHAT_ENABLED=1` with `-project-dir`,
+published test analysis or recurring failure pattern. Set `ANALYSIS_CHAT_ENABLED=1` with `-project-dir`,
 `AUTH_MODE`, `AI_TOKEN`, and the normal AI provider configuration. Chat mode
 disables GitHub actions by default and does not require `BOT_TOKEN`. Set
 `ACTIONS_ENABLED=1` only when the same server should expose write actions. The server
@@ -94,6 +94,25 @@ Create a session by posting the selected analysis identity with a unique
 names. `analysis_generated_at` is
 optional, but including it prevents a conversation from silently attaching to a
 newer analysis after the page was loaded. A mismatch returns `409 Conflict`.
+
+For a recurring pattern, post its stable ID and complete content hash instead:
+
+```json
+{
+  "scope": "pattern",
+  "job_id": "periodic-demo",
+  "pattern_id": "4d8f...",
+  "pattern_hash": "8f6a..."
+}
+```
+
+Pattern sessions snapshot the published root cause, suggested fix, confidence,
+relevant files, and affected builds. The read-only artifact tools expose at
+most the three most recent affected builds under
+`builds/<build-id>/<artifact-path>`. A changed hash returns `409 Conflict`.
+Pattern conversations cannot be promoted as test-analysis corrections or start
+source investigation, but an evidence-backed response can still use the existing
+chat-to-fix flow.
 
 Post `{"message":"What evidence supports this?"}` to the session's `messages`
 endpoint with a new `Idempotency-Key` for that question. Retrying either POST

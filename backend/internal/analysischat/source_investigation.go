@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 )
 
@@ -96,6 +97,9 @@ func (s *Service) GetSourceInvestigation(sessionID, owner, requestID string) (so
 		current := state.Sessions[strings.TrimSpace(sessionID)]
 		if current == nil || current.Owner != owner {
 			return changed, ErrSessionNotFound
+		}
+		if current.View.Analysis.Scope == ScopePattern {
+			return changed, fmt.Errorf("%w: recurring-pattern source investigation is not supported", ErrInvalidRequest)
 		}
 		record, ok := current.Investigations[requestID]
 		if !ok {
@@ -466,6 +470,9 @@ func (s *Service) sourceInvestigationSubject(
 		if current == nil || current.Owner != owner {
 			return changed, ErrSessionNotFound
 		}
+		if current.View.Analysis.Scope == ScopePattern {
+			return changed, fmt.Errorf("%w: recurring-pattern source investigation is not supported", ErrInvalidRequest)
+		}
 		request, ok := current.Requests[chatRequestID]
 		if !ok || request.Status != requestSucceeded {
 			return changed, ErrRequestNotFound
@@ -477,10 +484,7 @@ func (s *Service) sourceInvestigationSubject(
 			if err != nil {
 				return changed, err
 			}
-			if !sameAnalysisSnapshot(
-				analysisSnapshot(resolved.testCase.AIAnalysis),
-				analysisSnapshot(refreshed.testCase.AIAnalysis),
-			) {
+			if !sameResolvedContext(resolved, refreshed) {
 				return changed, ErrAnalysisChanged
 			}
 			refreshedPersisted := persistResolved(refreshed, sourceRepositoryName(s.sourceRepo))
@@ -511,6 +515,13 @@ func (s *Service) sourceInvestigationSubject(
 		return changed, nil
 	})
 	return subject, err
+}
+
+func sameResolvedContext(left, right resolvedAnalysis) bool {
+	if left.ref.Scope == ScopePattern || right.ref.Scope == ScopePattern {
+		return left.pattern != nil && right.pattern != nil && models.PatternHash(*left.pattern) == models.PatternHash(*right.pattern)
+	}
+	return sameAnalysisSnapshot(analysisSnapshot(left.testCase.AIAnalysis), analysisSnapshot(right.testCase.AIAnalysis))
 }
 
 func repoRevision(refs map[string]string, owner, name string) (string, bool) {

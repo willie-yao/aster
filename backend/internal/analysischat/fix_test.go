@@ -340,3 +340,34 @@ func TestServiceFixCandidateAcceptsUnchangedCanonicalizedAnalysis(t *testing.T) 
 		t.Fatalf("canonical snapshot was not preserved")
 	}
 }
+
+func TestServicePatternFixCandidateUsesBoundPattern(t *testing.T) {
+	dir := t.TempDir()
+	writeJobDetail(t, dir, patternDetail())
+	runner := &fakeRunner{reply: Reply{
+		Answer: "The retry controller should stop after terminal failures.", Assessment: "supports",
+		Citations: []Citation{{Path: "builds/104/build-log.txt", Quote: "terminal failure"}},
+	}}
+	service, err := NewService(t.Context(), dir, runner, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pattern := recurringPattern()
+	session, err := service.Create(AnalysisRef{
+		Scope: ScopePattern, JobID: "periodic-demo", PatternID: pattern.ID, PatternHash: pattern.ContentHash,
+	}, "Alice", testRequestID(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestID := testRequestID(t)
+	if _, err := service.Send(t.Context(), session.ID, "Alice", requestID, "What should change?"); err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := service.FixCandidate(session.ID, "Alice", requestID, pattern.ID, pattern.ContentHash, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidate.Pattern.ID != pattern.ID || candidate.Analysis.Scope != ScopePattern || candidate.Analysis.BuildID != "104" {
+		t.Fatalf("candidate = %+v", candidate)
+	}
+}

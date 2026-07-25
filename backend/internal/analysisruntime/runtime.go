@@ -15,6 +15,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/filesystem"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/k8s"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysischat"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
@@ -179,6 +180,10 @@ type analysisChatBrowserFactory struct {
 
 func (f analysisChatBrowserFactory) ForBuild(buildPrefix, displayName string) artifacts.Browser {
 	return artifacts.NewUncachedBackendBrowser(f.backend, f.bucket, buildPrefix, displayName)
+}
+
+func (f analysisChatBrowserFactory) ForBuilds(builds []analysischat.ArtifactBuild) artifacts.Browser {
+	return newPatternBrowser(f, builds)
 }
 
 // NewAnalysisChatAgent creates the interactive read-only conversation runner.

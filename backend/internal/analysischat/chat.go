@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -64,19 +65,26 @@ var (
 )
 
 const (
-	maxJobDetailBytes = 64 << 20
-	maxJobIDBytes     = 1024
-	maxBuildIDBytes   = 256
-	maxTestNameBytes  = 4096
-	maxSuiteNameBytes = 4096
-	maxClassNameBytes = 4096
-	maxJUnitFileBytes = 1024
-	maxTimestampBytes = 128
-	maxRequestIDBytes = 128
+	ScopeTest    = "test"
+	ScopePattern = "pattern"
+
+	maxJobDetailBytes        = 64 << 20
+	maxJobIDBytes            = 1024
+	maxBuildIDBytes          = 256
+	maxTestNameBytes         = 4096
+	maxSuiteNameBytes        = 4096
+	maxClassNameBytes        = 4096
+	maxJUnitFileBytes        = 1024
+	maxTimestampBytes        = 128
+	maxRequestIDBytes        = 128
+	maxPatternIDBytes        = 512
+	maxPatternHashBytes      = 128
+	maxPatternEvidenceBuilds = 3
 )
 
-// AnalysisRef addresses one published test analysis.
+// AnalysisRef addresses one published test or recurring-pattern analysis.
 type AnalysisRef struct {
+	Scope               string `json:"scope,omitempty"`
 	JobID               string `json:"job_id"`
 	BuildID             string `json:"build_id"`
 	TestName            string `json:"test_name"`
@@ -84,6 +92,8 @@ type AnalysisRef struct {
 	ClassName           string `json:"class_name,omitempty"`
 	JUnitFile           string `json:"junit_file,omitempty"`
 	AnalysisGeneratedAt string `json:"analysis_generated_at,omitempty"`
+	PatternID           string `json:"pattern_id,omitempty"`
+	PatternHash         string `json:"pattern_hash,omitempty"`
 }
 
 // Citation identifies artifact evidence used in one answer.
@@ -153,14 +163,22 @@ const (
 
 // Turn is the immutable analysis snapshot and transcript for one model call.
 type Turn struct {
-	SessionID   string
-	JobID       string
-	BuildPrefix string
-	Build       models.BuildInfo
-	TestCase    models.TestCase
-	History     []Message
-	Question    string
-	Progress    func(string)
+	SessionID      string
+	JobID          string
+	BuildPrefix    string
+	Build          models.BuildInfo
+	TestCase       models.TestCase
+	Pattern        *models.PatternAnalysis
+	EvidenceBuilds []ArtifactBuild
+	History        []Message
+	Question       string
+	Progress       func(string)
+}
+
+// ArtifactBuild identifies one build root available to a pattern conversation.
+type ArtifactBuild struct {
+	BuildPrefix string           `json:"build_prefix"`
+	Build       models.BuildInfo `json:"build"`
 }
 
 // ReportProgress records a non-sensitive phase when a turn observer is set.
@@ -248,12 +266,14 @@ func (o Options) normalized(dataDir string) Options {
 }
 
 type resolvedAnalysis struct {
-	ref         AnalysisRef
-	jobID       string
-	buildPrefix string
-	build       models.BuildInfo
-	testCase    models.TestCase
-	patterns    []models.PatternAnalysis
+	ref            AnalysisRef
+	jobID          string
+	buildPrefix    string
+	build          models.BuildInfo
+	testCase       models.TestCase
+	patterns       []models.PatternAnalysis
+	pattern        *models.PatternAnalysis
+	evidenceBuilds []ArtifactBuild
 }
 
 // Service resolves published analyses and owns durable chat sessions.
@@ -619,6 +639,9 @@ func (s *Service) resolve(ref AnalysisRef) (resolvedAnalysis, error) {
 	if detail.JobID != "" && detail.JobID != ref.JobID {
 		return resolvedAnalysis{}, ErrAnalysisNotFound
 	}
+	if ref.Scope == ScopePattern {
+		return resolvePatternAnalysis(ref, detail)
+	}
 
 	var run *models.BuildResult
 	for i := range detail.Runs {
@@ -662,27 +685,124 @@ func (s *Service) resolve(ref AnalysisRef) (resolvedAnalysis, error) {
 	ref.JUnitFile = testCase.JUnitFile
 	ref.AnalysisGeneratedAt = testCase.AIAnalysis.GeneratedAt
 
-	jobLocation := prowbuild.JobLocation{JobType: detail.JobType, Repo: detail.Repo}
-	if detail.JobType != models.JobTypePeriodic && detail.JobType != models.JobTypePresubmit {
-		return resolvedAnalysis{}, fmt.Errorf("%w: unsupported job type %q", ErrInvalidRequest, detail.JobType)
+	artifactBuild, err := artifactBuildFor(detail, *run)
+	if err != nil {
+		return resolvedAnalysis{}, err
 	}
-	if detail.JobType == models.JobTypePresubmit && (detail.Repo == "" || run.PullNumber == "") {
-		return resolvedAnalysis{}, fmt.Errorf("%w: presubmit build identity is incomplete", ErrInvalidRequest)
-	}
-	buildPrefix := (prowbuild.BuildLocation{
-		JobLocation: jobLocation,
-		JobName:     detail.Name,
-		BuildID:     run.BuildID,
-		PullNumber:  run.PullNumber,
-	}).BuildPath()
 	return resolvedAnalysis{
 		ref:         ref,
 		jobID:       ref.JobID,
-		buildPrefix: buildPrefix,
+		buildPrefix: artifactBuild.BuildPrefix,
 		build:       cloneBuildInfo(run.BuildInfo),
 		testCase:    testCase,
 		patterns:    clonePatternAnalyses(detail.PatternAnalyses),
 	}, nil
+}
+
+func resolvePatternAnalysis(ref AnalysisRef, detail models.JobDetail) (resolvedAnalysis, error) {
+	var selected *models.PatternAnalysis
+	for i := range detail.PatternAnalyses {
+		pattern := &detail.PatternAnalyses[i]
+		if pattern.ID == ref.PatternID {
+			selected = pattern
+			break
+		}
+	}
+	if selected == nil || !selected.Systemic {
+		return resolvedAnalysis{}, ErrPatternNotFound
+	}
+	if models.PatternHash(*selected) != ref.PatternHash {
+		return resolvedAnalysis{}, ErrPatternChanged
+	}
+	shared := make(map[string]struct{}, len(selected.SharedBuilds))
+	for _, buildID := range selected.SharedBuilds {
+		shared[strings.TrimSpace(buildID)] = struct{}{}
+	}
+	matchingRuns := make([]models.BuildResult, 0, len(selected.SharedBuilds))
+	for _, run := range detail.Runs {
+		if _, ok := shared[run.BuildID]; !ok {
+			continue
+		}
+		matchingRuns = append(matchingRuns, run)
+	}
+	slices.SortStableFunc(matchingRuns, func(left, right models.BuildResult) int {
+		if !left.Started.Equal(right.Started) {
+			if left.Started.After(right.Started) {
+				return -1
+			}
+			return 1
+		}
+		leftID, leftErr := strconv.ParseUint(left.BuildID, 10, 64)
+		rightID, rightErr := strconv.ParseUint(right.BuildID, 10, 64)
+		if leftErr == nil && rightErr == nil && leftID != rightID {
+			if leftID > rightID {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(right.BuildID, left.BuildID)
+	})
+	builds := make([]ArtifactBuild, 0, maxPatternEvidenceBuilds)
+	for _, run := range matchingRuns {
+		build, err := artifactBuildFor(detail, run)
+		if err != nil {
+			return resolvedAnalysis{}, err
+		}
+		builds = append(builds, build)
+		if len(builds) == maxPatternEvidenceBuilds {
+			break
+		}
+	}
+	if len(builds) == 0 {
+		return resolvedAnalysis{}, ErrAnalysisNotFound
+	}
+	pattern := clonePatternAnalyses([]models.PatternAnalysis{*selected})[0]
+	ref.BuildID = builds[0].Build.BuildID
+	ref.PatternHash = models.PatternHash(pattern)
+	severity := "Unknown"
+	switch strings.ToLower(strings.TrimSpace(pattern.Confidence)) {
+	case "high":
+		severity = "High"
+	case "medium":
+		severity = "Medium"
+	case "low":
+		severity = "Low"
+	}
+	testCase := models.TestCase{
+		Name: pattern.Subject,
+		AIAnalysis: &models.AIAnalysis{
+			GeneratedAt: pattern.GeneratedAt, RootCause: pattern.SharedRootCause, Severity: severity,
+			SuggestedFix: pattern.SuggestedFix, RelevantFiles: slices.Clone(pattern.RelevantFiles),
+		},
+	}
+	return resolvedAnalysis{
+		ref: ref, jobID: ref.JobID, buildPrefix: builds[0].BuildPrefix,
+		build: cloneBuildInfo(builds[0].Build), testCase: testCase,
+		patterns: clonePatternAnalyses(detail.PatternAnalyses), pattern: &pattern,
+		evidenceBuilds: cloneArtifactBuilds(builds),
+	}, nil
+}
+
+func artifactBuildFor(detail models.JobDetail, run models.BuildResult) (ArtifactBuild, error) {
+	jobLocation := prowbuild.JobLocation{JobType: detail.JobType, Repo: detail.Repo}
+	if detail.JobType != models.JobTypePeriodic && detail.JobType != models.JobTypePresubmit {
+		return ArtifactBuild{}, fmt.Errorf("%w: unsupported job type %q", ErrInvalidRequest, detail.JobType)
+	}
+	if detail.JobType == models.JobTypePresubmit && (detail.Repo == "" || run.PullNumber == "") {
+		return ArtifactBuild{}, fmt.Errorf("%w: presubmit build identity is incomplete", ErrInvalidRequest)
+	}
+	prefix := (prowbuild.BuildLocation{
+		JobLocation: jobLocation, JobName: detail.Name, BuildID: run.BuildID, PullNumber: run.PullNumber,
+	}).BuildPath()
+	return ArtifactBuild{BuildPrefix: prefix, Build: cloneBuildInfo(run.BuildInfo)}, nil
+}
+
+func cloneArtifactBuilds(builds []ArtifactBuild) []ArtifactBuild {
+	out := slices.Clone(builds)
+	for i := range out {
+		out[i].Build = cloneBuildInfo(out[i].Build)
+	}
+	return out
 }
 
 func clonePatternAnalyses(patterns []models.PatternAnalysis) []models.PatternAnalysis {
@@ -737,6 +857,7 @@ func validateStateDirRelation(dataRoot, stateRoot string) error {
 }
 
 func normalizeAnalysisRef(ref AnalysisRef) (AnalysisRef, error) {
+	ref.Scope = strings.ToLower(strings.TrimSpace(ref.Scope))
 	ref.JobID = strings.TrimSpace(ref.JobID)
 	ref.BuildID = strings.TrimSpace(ref.BuildID)
 	ref.TestName = strings.TrimSpace(ref.TestName)
@@ -744,12 +865,34 @@ func normalizeAnalysisRef(ref AnalysisRef) (AnalysisRef, error) {
 	ref.ClassName = strings.TrimSpace(ref.ClassName)
 	ref.JUnitFile = strings.TrimSpace(ref.JUnitFile)
 	ref.AnalysisGeneratedAt = strings.TrimSpace(ref.AnalysisGeneratedAt)
-	if ref.JobID == "" || ref.BuildID == "" || ref.TestName == "" {
-		return AnalysisRef{}, fmt.Errorf("%w: job_id, build_id, and test_name are required", ErrInvalidRequest)
+	ref.PatternID = strings.TrimSpace(ref.PatternID)
+	ref.PatternHash = strings.TrimSpace(ref.PatternHash)
+	if ref.Scope == "" {
+		if ref.PatternID != "" || ref.PatternHash != "" {
+			ref.Scope = ScopePattern
+		} else {
+			ref.Scope = ScopeTest
+		}
+	}
+	if ref.JobID == "" {
+		return AnalysisRef{}, fmt.Errorf("%w: job_id is required", ErrInvalidRequest)
+	}
+	switch ref.Scope {
+	case ScopeTest:
+		if ref.BuildID == "" || ref.TestName == "" || ref.PatternID != "" || ref.PatternHash != "" {
+			return AnalysisRef{}, fmt.Errorf("%w: test scope requires build_id and test_name only", ErrInvalidRequest)
+		}
+	case ScopePattern:
+		if ref.PatternID == "" || ref.PatternHash == "" || ref.TestName != "" || ref.SuiteName != "" || ref.ClassName != "" || ref.JUnitFile != "" || ref.AnalysisGeneratedAt != "" {
+			return AnalysisRef{}, fmt.Errorf("%w: pattern scope requires pattern_id and pattern_hash only", ErrInvalidRequest)
+		}
+	default:
+		return AnalysisRef{}, fmt.Errorf("%w: unsupported analysis scope %q", ErrInvalidRequest, ref.Scope)
 	}
 	if len(ref.JobID) > maxJobIDBytes || len(ref.BuildID) > maxBuildIDBytes || len(ref.TestName) > maxTestNameBytes ||
 		len(ref.SuiteName) > maxSuiteNameBytes || len(ref.ClassName) > maxClassNameBytes ||
-		len(ref.JUnitFile) > maxJUnitFileBytes || len(ref.AnalysisGeneratedAt) > maxTimestampBytes {
+		len(ref.JUnitFile) > maxJUnitFileBytes || len(ref.AnalysisGeneratedAt) > maxTimestampBytes ||
+		len(ref.PatternID) > maxPatternIDBytes || len(ref.PatternHash) > maxPatternHashBytes {
 		return AnalysisRef{}, fmt.Errorf("%w: analysis reference field exceeds its size limit", ErrInvalidRequest)
 	}
 	return ref, nil

@@ -222,13 +222,13 @@ func analysisChatErrorDetails(err error) (int, string, string) {
 	message := "analysis chat could not complete the request"
 	outcome := ""
 	switch {
-	case errors.Is(err, analysischat.ErrAnalysisNotFound):
+	case errors.Is(err, analysischat.ErrAnalysisNotFound), errors.Is(err, analysischat.ErrPatternNotFound):
 		status, message, outcome = http.StatusNotFound, "analysis not found", "rejected"
 	case errors.Is(err, analysischat.ErrSessionNotFound):
 		status, message, outcome = http.StatusNotFound, "analysis chat session not found", "rejected"
 	case errors.Is(err, analysischat.ErrRequestNotFound):
 		status, message, outcome = http.StatusNotFound, "analysis chat request not found", "rejected"
-	case errors.Is(err, analysischat.ErrAnalysisChanged):
+	case errors.Is(err, analysischat.ErrAnalysisChanged), errors.Is(err, analysischat.ErrPatternChanged):
 		status, message, outcome = http.StatusConflict, err.Error(), "rejected"
 	case errors.Is(err, analysischat.ErrSessionBusy):
 		status, message, outcome = http.StatusConflict, analysischat.ErrSessionBusy.Error(), "pending"

@@ -430,3 +430,28 @@ func TestHandlerAnalysisChatAcceptsWorstCaseEncodedBodies(t *testing.T) {
 	}
 	_ = sent.Body.Close()
 }
+
+func TestHandlerAnalysisChatAcceptsPatternReference(t *testing.T) {
+	runner := &fakeAnalysisChatRunner{}
+	handler, err := Handler(Options{
+		DataDir: t.TempDir(), Capabilities: DefaultCapabilities(), Auth: fakeAuth{}, AuthMode: "dev",
+		AnalysisChat: runner,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/analysis-chat/sessions", strings.NewReader(
+		`{"scope":"pattern","job_id":"periodic-demo","pattern_id":"pattern-1","pattern_hash":"hash-1"}`,
+	))
+	request.Header.Set("Authorization", "ok")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(analysisChatIdempotencyHeader, "pattern-create")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if runner.createdRef.Scope != analysischat.ScopePattern || runner.createdRef.PatternID != "pattern-1" || runner.createdRef.PatternHash != "hash-1" {
+		t.Fatalf("created ref = %+v", runner.createdRef)
+	}
+}
