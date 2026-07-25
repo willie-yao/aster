@@ -159,6 +159,7 @@ export interface FlakinessReport {
 
 export interface PatternAnalysis {
   id?: string;
+  content_hash?: string;
   subject: string;
   job_id?: string;
   generated_at: string;

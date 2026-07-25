@@ -134,7 +134,10 @@ export function ChatFixDialog({
   identityRef.current = identity;
 
   const eligiblePatterns = useMemo(
-    () => patterns.filter((pattern): pattern is PatternAnalysis & { id: string } => Boolean(pattern.id)),
+    () => patterns.filter(
+      (pattern): pattern is PatternAnalysis & { id: string; content_hash: string } =>
+        Boolean(pattern.id && pattern.content_hash),
+    ),
     [patterns],
   );
   const selectedPattern = eligiblePatterns.find((pattern) => pattern.id === patternID) ?? null;
@@ -161,7 +164,7 @@ export function ChatFixDialog({
   useEffect(() => () => controllerRef.current?.abort(), []);
 
   async function generatePreview() {
-    if (!message?.request_id || !patternID || busy) return;
+    if (!message?.request_id || !selectedPattern || busy) return;
     const requestIdentity = identity;
     controllerRef.current?.abort();
     const controller = new AbortController();
@@ -173,6 +176,7 @@ export function ChatFixDialog({
         sessionID,
         message.request_id,
         patternID,
+        selectedPattern.content_hash,
         includeSource && sourceResult ? source?.requestID ?? null : null,
         instruction,
         controller.signal,

@@ -679,6 +679,14 @@ func TestEffectiveFixPRsDefaults(t *testing.T) {
 	if got.MinConfidence != "high" || got.MaxFiles != 3 || got.MaxNewPerRun != 1 {
 		t.Errorf("defaults wrong: %+v", got)
 	}
+	c.AI.FixPRs.MinConfidence = " Medium "
+	if got2 := c.EffectiveFixPRs(); got2.MinConfidence != "medium" {
+		t.Errorf("normalized min confidence = %q", got2.MinConfidence)
+	}
+	c.AI.FixPRs.MinConfidence = "hgh"
+	if got2 := c.EffectiveFixPRs(); got2.MinConfidence != "high" {
+		t.Errorf("invalid min confidence did not fail closed: %q", got2.MinConfidence)
+	}
 	if len(got.Labels) != 1 || got.Labels[0] != "ai-proposed-fix" {
 		t.Errorf("Labels = %v, want [ai-proposed-fix]", got.Labels)
 	}
@@ -759,6 +767,12 @@ func TestValidateFixPRsRequiresAuthor(t *testing.T) {
 	c.AI = &AI{FixPRs: &FixPRs{Enabled: true, AuthorName: "Jane", AuthorEmail: "jane@example.com"}}
 	if err := c.Validate(); err != nil {
 		t.Errorf("unexpected error with author set: %v", err)
+	}
+	// Invalid confidence fails closed even when batch fix PRs are disabled.
+	c = base()
+	c.AI = &AI{FixPRs: &FixPRs{MinConfidence: "hgh"}}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "min_confidence") {
+		t.Errorf("expected invalid min_confidence error, got %v", err)
 	}
 	// Partial repo is rejected.
 	c = base()

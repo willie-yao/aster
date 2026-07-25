@@ -586,7 +586,10 @@ func (c *Config) EffectiveFixPRs() FixPRs {
 		t := true
 		out.Fork = &t
 	}
-	if strings.TrimSpace(out.MinConfidence) == "" {
+	out.MinConfidence = strings.ToLower(strings.TrimSpace(out.MinConfidence))
+	switch out.MinConfidence {
+	case "low", "medium", "high":
+	default:
 		out.MinConfidence = "high"
 	}
 	if out.MaxFiles <= 0 {
@@ -986,6 +989,14 @@ func (c *Config) Validate() error {
 
 	// fix_prs targets a (usually community) source repo, so an enabled config
 	// must name the CLA-signed commit author and may not carry a partial repo.
+	if c.AI != nil && c.AI.FixPRs != nil {
+		switch strings.ToLower(strings.TrimSpace(c.AI.FixPRs.MinConfidence)) {
+		case "", "low", "medium", "high":
+		default:
+			return fmt.Errorf("ai.fix_prs.min_confidence %q is not valid (want %q, %q, or %q)",
+				c.AI.FixPRs.MinConfidence, "low", "medium", "high")
+		}
+	}
 	if c.AI != nil && c.AI.FixPRs != nil && c.AI.FixPRs.Enabled {
 		f := c.AI.FixPRs
 		if strings.TrimSpace(f.AuthorName) == "" || strings.TrimSpace(f.AuthorEmail) == "" {

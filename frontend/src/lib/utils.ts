@@ -47,7 +47,7 @@ export function meetsConfidenceFloor(
 ): boolean {
   const ranks: Record<string, number> = { low: 1, medium: 2, high: 3 };
   const rank = ranks[confidence] ?? 0;
-  const floor = ranks[minimum.trim().toLowerCase()] ?? 0;
+  const floor = ranks[minimum.trim().toLowerCase()] ?? ranks.high;
   return rank >= floor;
 }
 

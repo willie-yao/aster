@@ -18,6 +18,7 @@ type fakeChatFixRunner struct {
 	owner           string
 	requestID       string
 	patternID       string
+	patternHash     string
 	sourceRequestID string
 	userToken       string
 	instruction     string
@@ -26,10 +27,10 @@ type fakeChatFixRunner struct {
 
 func (f *fakeChatFixRunner) PreviewChatFix(
 	_ context.Context,
-	sessionID, owner, requestID, patternID, sourceRequestID, userToken, instruction string,
+	sessionID, owner, requestID, patternID, patternHash, sourceRequestID, userToken, instruction string,
 ) (actions.PreviewResult, error) {
 	f.sessionID, f.owner, f.requestID = sessionID, owner, requestID
-	f.patternID, f.sourceRequestID = patternID, sourceRequestID
+	f.patternID, f.patternHash, f.sourceRequestID = patternID, patternHash, sourceRequestID
 	f.userToken, f.instruction = userToken, instruction
 	if f.err != nil {
 		return actions.PreviewResult{}, f.err
@@ -63,7 +64,7 @@ func TestHandlerChatFixPreview(t *testing.T) {
 	req, err := http.NewRequest(
 		http.MethodPost,
 		server.URL+"/api/analysis-chat/sessions/session-1/requests/chat-1/fix/preview",
-		strings.NewReader(`{"pattern_id":"pattern-1","source_request_id":"source-1","instruction":"keep compatibility"}`),
+		strings.NewReader(`{"pattern_id":"pattern-1","pattern_hash":"hash-1","source_request_id":"source-1","instruction":"keep compatibility"}`),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -78,7 +79,7 @@ func TestHandlerChatFixPreview(t *testing.T) {
 		t.Fatalf("status = %d", response.StatusCode)
 	}
 	if runner.sessionID != "session-1" || runner.owner != "alice" || runner.requestID != "chat-1" ||
-		runner.patternID != "pattern-1" || runner.sourceRequestID != "source-1" ||
+		runner.patternID != "pattern-1" || runner.patternHash != "hash-1" || runner.sourceRequestID != "source-1" ||
 		runner.userToken != "tok" || runner.instruction != "keep compatibility" {
 		t.Fatalf("runner = %+v", runner)
 	}
@@ -94,12 +95,14 @@ func TestHandlerChatFixRejectsInvalidBodies(t *testing.T) {
 	}
 	for _, body := range []string{
 		`{}`,
-		`{"pattern_id":"pattern","extra":true}`,
-		`{"pattern_id":"pattern"}{}`,
-		`{"pattern_id":"pattern","assistant_answer":"client text is forbidden"}`,
-		`{"pattern_id":"` + strings.Repeat("x", maxChatFixPatternBytes+1) + `"}`,
-		`{"pattern_id":"pattern","source_request_id":"` + strings.Repeat("x", maxChatFixRequestIDBytes+1) + `"}`,
-		`{"pattern_id":"pattern","instruction":"` + strings.Repeat("x", maxChatFixInputBytes+1) + `"}`,
+		`{"pattern_id":"pattern"}`,
+		`{"pattern_id":"pattern","pattern_hash":"hash","extra":true}`,
+		`{"pattern_id":"pattern","pattern_hash":"hash"}{}`,
+		`{"pattern_id":"pattern","pattern_hash":"hash","assistant_answer":"client text is forbidden"}`,
+		`{"pattern_id":"` + strings.Repeat("x", maxChatFixPatternBytes+1) + `","pattern_hash":"hash"}`,
+		`{"pattern_id":"pattern","pattern_hash":"` + strings.Repeat("x", maxChatFixPatternHash+1) + `"}`,
+		`{"pattern_id":"pattern","pattern_hash":"hash","source_request_id":"` + strings.Repeat("x", maxChatFixRequestIDBytes+1) + `"}`,
+		`{"pattern_id":"pattern","pattern_hash":"hash","instruction":"` + strings.Repeat("x", maxChatFixInputBytes+1) + `"}`,
 	} {
 		req := httptest.NewRequest(
 			http.MethodPost,
@@ -125,6 +128,7 @@ func TestWriteChatFixErrorMapping(t *testing.T) {
 		{analysischat.ErrSessionNotFound, http.StatusNotFound},
 		{actions.ErrPatternMismatch, http.StatusConflict},
 		{analysischat.ErrAnalysisChanged, http.StatusConflict},
+		{analysischat.ErrPatternChanged, http.StatusConflict},
 		{analysischat.ErrRequestPending, http.StatusConflict},
 		{analysischat.ErrInvalidRequest, http.StatusBadRequest},
 		{context.DeadlineExceeded, http.StatusGatewayTimeout},

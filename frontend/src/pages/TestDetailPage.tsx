@@ -319,6 +319,7 @@ export function TestDetailPage() {
         (pattern) =>
           pattern.systemic &&
           Boolean(pattern.id) &&
+          Boolean(pattern.content_hash) &&
           Boolean(pattern.suggested_fix) &&
           meetsConfidenceFloor(pattern.confidence, features.chat_fix_min_confidence ?? "high") &&
           Boolean(pattern.shared_builds?.includes(selectedRun.build_id)),

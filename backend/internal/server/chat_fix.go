@@ -18,6 +18,7 @@ import (
 const (
 	maxChatFixBodyBytes      = 16 << 10
 	maxChatFixPatternBytes   = 512
+	maxChatFixPatternHash    = 128
 	maxChatFixRequestIDBytes = 128
 	maxChatFixInputBytes     = 4096
 )
@@ -26,7 +27,7 @@ const (
 type ChatFixRunner interface {
 	PreviewChatFix(
 		context.Context,
-		string, string, string, string, string, string, string,
+		string, string, string, string, string, string, string, string,
 	) (actions.PreviewResult, error)
 }
 
@@ -39,6 +40,7 @@ func previewChatFixHandler(timeout time.Duration, run ChatFixRunner) http.Handle
 		}
 		var body struct {
 			PatternID       string `json:"pattern_id"`
+			PatternHash     string `json:"pattern_hash"`
 			SourceRequestID string `json:"source_request_id"`
 			Instruction     string `json:"instruction"`
 		}
@@ -47,9 +49,11 @@ func previewChatFixHandler(timeout time.Duration, run ChatFixRunner) http.Handle
 			return
 		}
 		body.PatternID = strings.TrimSpace(body.PatternID)
+		body.PatternHash = strings.TrimSpace(body.PatternHash)
 		body.SourceRequestID = strings.TrimSpace(body.SourceRequestID)
 		body.Instruction = strings.TrimSpace(body.Instruction)
 		if body.PatternID == "" || len(body.PatternID) > maxChatFixPatternBytes ||
+			body.PatternHash == "" || len(body.PatternHash) > maxChatFixPatternHash ||
 			len(body.SourceRequestID) > maxChatFixRequestIDBytes || len(body.Instruction) > maxChatFixInputBytes {
 			http.Error(w, "invalid chat fix request", http.StatusBadRequest)
 			return
@@ -62,6 +66,7 @@ func previewChatFixHandler(timeout time.Duration, run ChatFixRunner) http.Handle
 			identity.Login,
 			r.PathValue("requestID"),
 			body.PatternID,
+			body.PatternHash,
 			body.SourceRequestID,
 			identity.Token,
 			body.Instruction,
@@ -87,6 +92,8 @@ func writeChatFixError(w http.ResponseWriter, sessionID, login string, err error
 		status, message = http.StatusConflict, actions.ErrPatternMismatch.Error()
 	case errors.Is(err, analysischat.ErrAnalysisChanged):
 		status, message = http.StatusConflict, analysischat.ErrAnalysisChanged.Error()
+	case errors.Is(err, analysischat.ErrPatternChanged):
+		status, message = http.StatusConflict, analysischat.ErrPatternChanged.Error()
 	case errors.Is(err, analysischat.ErrRequestPending):
 		status, message = http.StatusConflict, "source investigation is pending"
 	case errors.Is(err, analysischat.ErrRequestOutcomeUnknown):

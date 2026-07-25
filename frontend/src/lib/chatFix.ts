@@ -28,6 +28,7 @@ export async function previewChatFix(
   sessionID: string,
   chatRequestID: string,
   patternID: string,
+  patternHash: string,
   sourceRequestID: string | null,
   instruction: string,
   signal?: AbortSignal,
@@ -42,6 +43,7 @@ export async function previewChatFix(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         pattern_id: patternID,
+        pattern_hash: patternHash,
         ...(sourceRequestID ? { source_request_id: sourceRequestID } : {}),
         ...(instruction.trim() ? { instruction: instruction.trim() } : {}),
       }),

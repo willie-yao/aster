@@ -31,6 +31,8 @@ var (
 	ErrAnalysisChanged = errors.New("analysis changed")
 	// ErrPatternNotFound means the selected recurring pattern is absent.
 	ErrPatternNotFound = errors.New("recurring pattern not found")
+	// ErrPatternChanged means the selected recurring pattern was replaced.
+	ErrPatternChanged = errors.New("recurring pattern changed")
 	// ErrSessionNotFound means the session is absent, expired, or owned by another user.
 	ErrSessionNotFound = errors.New("analysis chat session not found")
 	// ErrSessionBusy means another turn is already running for the session.
