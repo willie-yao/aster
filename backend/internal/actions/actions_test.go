@@ -393,6 +393,47 @@ func TestPreviewConfirmationLeaseFencesStaleAttempt(t *testing.T) {
 	}
 }
 
+func TestFailedPreviewConfirmationRefreshesRetryWindow(t *testing.T) {
+	for _, testCase := range []struct {
+		name       string
+		resultURL  string
+		confirmErr error
+	}{
+		{name: "transient error", confirmErr: errors.New("temporary failure")},
+		{name: "empty result"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			service := NewService(&project.Config{}, t.TempDir(), AIConfig{})
+			token, err := service.stash("owner-token", &previewEntry{kind: "issue"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _, attemptID, err := service.beginConfirm("owner-token", token, time.Hour)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := service.previewStore.update(func(state *previewState, now time.Time) (bool, error) {
+				record := state.Previews[tokenHash(token)]
+				record.CreatedAt = now.Add(-previewTTL - time.Minute).Format(time.RFC3339Nano)
+				record.LeaseExpires = now.Add(time.Hour).Format(time.RFC3339Nano)
+				return true, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			finishErr := service.finishConfirm("owner-token", token, attemptID, testCase.resultURL, testCase.confirmErr)
+			if testCase.confirmErr != nil && finishErr != nil {
+				t.Fatal(finishErr)
+			}
+			if testCase.confirmErr == nil && finishErr == nil {
+				t.Fatal("empty result completion was accepted")
+			}
+			if _, _, _, err := service.beginConfirm("owner-token", token, time.Hour); err != nil {
+				t.Fatalf("failed confirmation was not retryable: %v", err)
+			}
+		})
+	}
+}
+
 func TestPreviewStoreRejectsOversizedWriteWithoutReplacingState(t *testing.T) {
 	dataDir := t.TempDir()
 	service := NewService(&project.Config{}, dataDir, AIConfig{})

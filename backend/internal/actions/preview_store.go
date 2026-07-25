@@ -129,10 +129,12 @@ func (s *previewStore) finish(userToken, token, attemptID, resultURL string, con
 		record.AttemptID = ""
 		if confirmErr != nil {
 			record.Status = previewStatusReady
+			record.CreatedAt = now.Format(time.RFC3339Nano)
 			return true, nil
 		}
 		if resultURL == "" {
 			record.Status = previewStatusReady
+			record.CreatedAt = now.Format(time.RFC3339Nano)
 			return true, fmt.Errorf("confirmation returned an empty result URL")
 		}
 		record.Status = previewStatusDone
