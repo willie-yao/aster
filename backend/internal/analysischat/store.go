@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	stateVersion    = 1
+	stateVersion    = 2
 	stateFileName   = "sessions.json"
 	stateLockName   = "sessions.lock"
 	maxStateBytes   = 64 << 20
@@ -46,13 +46,19 @@ type persistedSession struct {
 }
 
 type persistedResolvedAnalysis struct {
-	Ref            AnalysisRef             `json:"ref"`
-	JobID          string                  `json:"job_id"`
-	BuildPrefix    string                  `json:"build_prefix"`
-	Build          models.BuildInfo        `json:"build"`
-	TestCase       models.TestCase         `json:"test_case"`
-	Pattern        *models.PatternAnalysis `json:"pattern,omitempty"`
-	EvidenceBuilds []ArtifactBuild         `json:"evidence_builds,omitempty"`
+	Ref            AnalysisRef              `json:"ref"`
+	JobID          string                   `json:"job_id"`
+	BuildPrefix    string                   `json:"build_prefix"`
+	Build          models.BuildInfo         `json:"build"`
+	TestCase       models.TestCase          `json:"test_case"`
+	Pattern        *models.PatternAnalysis  `json:"pattern,omitempty"`
+	EvidenceBuilds []persistedArtifactBuild `json:"evidence_builds,omitempty"`
+}
+
+type persistedArtifactBuild struct {
+	BuildPrefix string `json:"build_prefix"`
+	BuildID     string `json:"build_id"`
+	JobName     string `json:"job_name"`
 }
 
 type persistedRequest struct {
@@ -200,6 +206,9 @@ func (s *sessionStore) load() (*persistedState, error) {
 	if err := json.Unmarshal(data, &state); err != nil {
 		return nil, fmt.Errorf("decoding analysis chat state: %w", err)
 	}
+	if state.Version == 1 {
+		migrateStateV1(&state)
+	}
 	if state.Version != stateVersion {
 		return nil, fmt.Errorf("unsupported analysis chat state version %d", state.Version)
 	}
@@ -210,6 +219,21 @@ func (s *sessionStore) load() (*persistedState, error) {
 		state.OwnerRequests = map[string][]time.Time{}
 	}
 	return &state, nil
+}
+
+func migrateStateV1(state *persistedState) {
+	state.Version = stateVersion
+	for _, session := range state.Sessions {
+		if session == nil {
+			continue
+		}
+		if session.View.Analysis.Scope == "" {
+			session.View.Analysis.Scope = ScopeTest
+		}
+		if session.Resolved.Ref.Scope == "" {
+			session.Resolved.Ref.Scope = ScopeTest
+		}
+	}
 }
 
 func freshPersistedState() *persistedState {
@@ -310,7 +334,7 @@ func persistResolved(resolved resolvedAnalysis, requiredRepo string) persistedRe
 	return persistedResolvedAnalysis{
 		Ref: resolved.ref, JobID: resolved.jobID, BuildPrefix: resolved.buildPrefix,
 		Build: build, TestCase: testCase, Pattern: clonePattern(resolved.pattern),
-		EvidenceBuilds: cloneArtifactBuilds(resolved.evidenceBuilds),
+		EvidenceBuilds: persistArtifactBuilds(resolved.evidenceBuilds),
 	}
 }
 
@@ -399,8 +423,29 @@ func restoreResolved(resolved persistedResolvedAnalysis) resolvedAnalysis {
 		build:          cloneBuildInfo(resolved.Build),
 		testCase:       cloneTestCase(resolved.TestCase),
 		pattern:        clonePattern(resolved.Pattern),
-		evidenceBuilds: cloneArtifactBuilds(resolved.EvidenceBuilds),
+		evidenceBuilds: restoreArtifactBuilds(resolved.EvidenceBuilds),
 	}
+}
+
+func persistArtifactBuilds(builds []ArtifactBuild) []persistedArtifactBuild {
+	out := make([]persistedArtifactBuild, 0, len(builds))
+	for _, build := range builds {
+		out = append(out, persistedArtifactBuild{
+			BuildPrefix: build.BuildPrefix, BuildID: build.Build.BuildID, JobName: build.Build.JobName,
+		})
+	}
+	return out
+}
+
+func restoreArtifactBuilds(builds []persistedArtifactBuild) []ArtifactBuild {
+	out := make([]ArtifactBuild, 0, len(builds))
+	for _, build := range builds {
+		out = append(out, ArtifactBuild{
+			BuildPrefix: build.BuildPrefix,
+			Build:       models.BuildInfo{BuildID: build.BuildID, JobName: build.JobName},
+		})
+	}
+	return out
 }
 
 func clonePattern(pattern *models.PatternAnalysis) *models.PatternAnalysis {
