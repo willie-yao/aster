@@ -314,14 +314,15 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 	providerAttempts += analysisChatResponseAttempts(response)
 	if err != nil {
 		category := analysisChatRequestErrorCategory(err)
-		recordAnalysisChatResponseFailure(loopCtx, "finalize_request", modelCalls, providerAttempts, response, analysisChatParseStats{}, category)
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			recordAnalysisChatResponseFailure(loopCtx, "finalize_request", modelCalls, providerAttempts, response, analysisChatParseStats{}, category)
 			return analysischat.Reply{}, err
 		}
 		if fallback != nil {
 			recordAnalysisChatResponseFallback(loopCtx, "finalize_request", modelCalls, providerAttempts, response, analysisChatParseStats{}, "provider_request")
 			return completeAnalysisChatReply(*fallback, state, start), nil
 		}
+		recordAnalysisChatResponseFailure(loopCtx, "finalize_request", modelCalls, providerAttempts, response, analysisChatParseStats{}, category)
 		return analysischat.Reply{}, analysischat.ErrProviderRequestFailed
 	}
 	if response == nil || !response.HasMessage || response.Message.Content == nil {
@@ -354,7 +355,10 @@ func completeAnalysisChatReply(reply analysischat.Reply, state *agentState, star
 }
 
 func analysisChatResponseAttempts(response *modelResponse) int {
-	if response != nil && response.Attempts > 0 {
+	if response == nil {
+		return 0
+	}
+	if response.Attempts > 0 {
 		return response.Attempts
 	}
 	return 1

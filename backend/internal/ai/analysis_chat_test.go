@@ -197,13 +197,26 @@ func TestAnalysisChatAgentKeepsValidDraftWhenFinalizeRequestFails(t *testing.T) 
 	server.push(200, chatRespToolCallWithContent(valid, "call-1", "list_artifacts", map[string]interface{}{"path": ""}))
 	server.push(500, `private provider body`)
 	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{}, AnalysisChatOptions{MaxIters: 1, Timeout: time.Second})
+	store := NewTraceStore()
+	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIChatCompletions})
+	ctx := withAnalysisTrace(context.Background(), trace)
 
-	reply, err := agent.Reply(context.Background(), analysisChatTurn())
+	reply, err := agent.Reply(ctx, analysisChatTurn())
 	if err != nil {
 		t.Fatal(err)
 	}
+	trace.Finish("success", nil)
 	if reply.Answer != "The existing conclusion remains plausible." || reply.ToolCalls != 1 {
 		t.Fatalf("reply = %+v", reply)
+	}
+	var responseEvents []TraceEvent
+	for _, event := range store.Snapshot().Traces[0].Events {
+		if event.Kind == "analysis_chat_response" {
+			responseEvents = append(responseEvents, event)
+		}
+	}
+	if len(responseEvents) != 1 || responseEvents[0].Outcome != "fallback" {
+		t.Fatalf("response events = %+v", responseEvents)
 	}
 }
 
@@ -271,6 +284,12 @@ func TestAnalysisChatResponseTelemetryIsContentFree(t *testing.T) {
 	if event.Kind != "analysis_chat_response" || event.Status != "finalize_validation" || event.ModelCallCount != 9 ||
 		event.Attempts != 11 || event.HTTPStatus != 200 || event.CandidateCount != 4 || event.ErrorCode != analysisChatValidationCitation {
 		t.Fatalf("event = %+v", event)
+	}
+	if got := analysisChatResponseAttempts(nil); got != 0 {
+		t.Fatalf("nil response attempts = %d", got)
+	}
+	if got := analysisChatResponseAttempts(&modelResponse{}); got != 1 {
+		t.Fatalf("response without metadata attempts = %d", got)
 	}
 }
 
