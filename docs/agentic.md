@@ -54,7 +54,7 @@ ai:
   min_gcs_bytes: 0              # minimum GCS bytes fetched before a final answer is accepted
   single_tool_call: false       # send at most one tool call per turn (for single-tool-call-only models)
   critique:
-    max_retries: 2              # critique re-prompt rounds before accepting a still-failing draft
+    max_retries: 2              # shared deterministic critique repair budget
   tools: [filesystem, k8s]      # registered tool groups exposed to the model
 ```
 
