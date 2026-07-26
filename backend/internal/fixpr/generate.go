@@ -76,7 +76,6 @@ func parseJSONObject(s string, v any) error {
 
 func decodeJSONObject(value string, target any) error {
 	decoder := json.NewDecoder(strings.NewReader(value))
-	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
 		return err
 	}

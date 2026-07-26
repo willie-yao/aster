@@ -374,7 +374,7 @@ func TestParseJSONObjectSelectsFinalValidReviewObject(t *testing.T) {
 	raw := `The change includes code like if err != nil { return retry() }.
 First draft: {"issues":["stale concern"]}
 Final answer:
-` + "```json\n" + `{"issues":[]}` + "\n```"
+` + "```json\n" + `{"issues":[],"provider_note":"review complete"}` + "\n```"
 	var v struct {
 		Issues *[]string `json:"issues"`
 	}
