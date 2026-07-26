@@ -41,6 +41,16 @@ func newAnalysisChatAgentForTest(t *testing.T, serverURL string, browser artifac
 	return agent
 }
 
+func chatRespToolCallWithContent(content, id, name string, args map[string]interface{}) string {
+	encodedContent, _ := json.Marshal(content)
+	encodedArgs, _ := json.Marshal(args)
+	argumentString, _ := json.Marshal(string(encodedArgs))
+	return fmt.Sprintf(
+		`{"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":%s,"tool_calls":[{"id":%q,"type":"function","function":{"name":%q,"arguments":%s}}]}}]}`,
+		encodedContent, id, name, argumentString,
+	)
+}
+
 func analysisChatTurn() analysischat.Turn {
 	return analysischat.Turn{
 		SessionID: "session-1", JobID: "periodic-demo", BuildPrefix: "logs/periodic-demo/123/",
@@ -163,6 +173,156 @@ func TestAnalysisChatAgentRepairsUnreadCitation(t *testing.T) {
 	}
 }
 
+func TestAnalysisChatAgentKeepsValidDraftWhenFinalizeIsInvalid(t *testing.T) {
+	shrinkCallDelay(t)
+	server := newScriptedChatServer(t)
+	valid := `{"answer":"The existing conclusion remains plausible.","assessment":"explains","citations":[],"proposed_revision":null}`
+	server.push(200, chatRespToolCallWithContent(valid, "call-1", "list_artifacts", map[string]interface{}{"path": ""}))
+	server.push(200, chatRespFinal(`{"answer":"unfinished"`))
+	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{}, AnalysisChatOptions{MaxIters: 1, Timeout: time.Second})
+
+	reply, err := agent.Reply(context.Background(), analysisChatTurn())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply.Answer != "The existing conclusion remains plausible." || reply.ToolCalls != 1 {
+		t.Fatalf("reply = %+v", reply)
+	}
+}
+
+func TestAnalysisChatAgentKeepsValidDraftWhenFinalizeRequestFails(t *testing.T) {
+	shrinkCallDelay(t)
+	server := newScriptedChatServer(t)
+	valid := `{"answer":"The existing conclusion remains plausible.","assessment":"explains","citations":[],"proposed_revision":null}`
+	server.push(200, chatRespToolCallWithContent(valid, "call-1", "list_artifacts", map[string]interface{}{"path": ""}))
+	server.push(500, `private provider body`)
+	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{}, AnalysisChatOptions{MaxIters: 1, Timeout: time.Second})
+	store := NewTraceStore()
+	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIChatCompletions})
+	ctx := withAnalysisTrace(context.Background(), trace)
+
+	reply, err := agent.Reply(ctx, analysisChatTurn())
+	if err != nil {
+		t.Fatal(err)
+	}
+	trace.Finish("success", nil)
+	if reply.Answer != "The existing conclusion remains plausible." || reply.ToolCalls != 1 {
+		t.Fatalf("reply = %+v", reply)
+	}
+	var responseEvents []TraceEvent
+	for _, event := range store.Snapshot().Traces[0].Events {
+		if event.Kind == "analysis_chat_response" {
+			responseEvents = append(responseEvents, event)
+		}
+	}
+	if len(responseEvents) != 1 || responseEvents[0].Outcome != "fallback" {
+		t.Fatalf("response events = %+v", responseEvents)
+	}
+}
+
+func TestAnalysisChatAgentReturnsSafeValidationCategory(t *testing.T) {
+	shrinkCallDelay(t)
+	server := newScriptedChatServer(t)
+	server.push(200, chatRespFinal(`{"answer":"unfinished"`))
+	server.push(200, chatRespFinal(`still not JSON`))
+	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{}, AnalysisChatOptions{MaxIters: 1, Timeout: time.Second})
+
+	_, err := agent.Reply(context.Background(), analysisChatTurn())
+	if !errors.Is(err, analysischat.ErrResponseValidationFailed) {
+		t.Fatalf("Reply error = %v", err)
+	}
+	if strings.Contains(err.Error(), "unfinished") {
+		t.Fatalf("validation error leaked model content: %v", err)
+	}
+}
+
+func TestAnalysisChatAgentReturnsSafeProviderCategory(t *testing.T) {
+	server := newScriptedChatServer(t)
+	server.push(500, `private provider body`)
+	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{}, AnalysisChatOptions{MaxIters: 1, Timeout: time.Second})
+
+	_, err := agent.Reply(context.Background(), analysisChatTurn())
+	if !errors.Is(err, analysischat.ErrProviderRequestFailed) {
+		t.Fatalf("Reply error = %v", err)
+	}
+	if strings.Contains(err.Error(), "private provider body") {
+		t.Fatalf("provider error leaked response content: %v", err)
+	}
+}
+
+func TestAnalysisChatAgentReturnsSafeCitationCategory(t *testing.T) {
+	shrinkCallDelay(t)
+	server := newScriptedChatServer(t)
+	server.push(200, chatRespToolCall("call-1", "tail_artifact", map[string]interface{}{"path": "build-log.txt", "lines": 20}))
+	invalid := `{"answer":"The log proves it.","assessment":"supports","citations":[{"path":"build-log.txt","quote":"different evidence"}],"proposed_revision":null}`
+	server.push(200, chatRespFinal(invalid))
+	server.push(200, chatRespFinal(invalid))
+	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{files: map[string][]byte{
+		"build-log.txt": []byte("controller stopped\n"),
+	}}, AnalysisChatOptions{MaxIters: 2, Timeout: time.Second})
+
+	_, err := agent.Reply(context.Background(), analysisChatTurn())
+	if !errors.Is(err, analysischat.ErrCitationValidationFailed) {
+		t.Fatalf("Reply error = %v", err)
+	}
+}
+
+func TestAnalysisChatResponseTelemetryIsContentFree(t *testing.T) {
+	store := NewTraceStore()
+	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIChatCompletions})
+	ctx := withAnalysisTrace(context.Background(), trace)
+	recordAnalysisChatResponseFailure(ctx, "finalize_validation", 9, 11, &modelResponse{HTTPStatus: 200}, analysisChatParseStats{
+		CandidateCount: 4,
+	}, analysisChatValidationCitation)
+	trace.Finish("error", analysischat.ErrCitationValidationFailed)
+
+	snapshot := store.Snapshot()
+	if len(snapshot.Traces) != 1 || len(snapshot.Traces[0].Events) != 1 {
+		t.Fatalf("snapshot = %+v", snapshot)
+	}
+	event := snapshot.Traces[0].Events[0]
+	if event.Kind != "analysis_chat_response" || event.Status != "finalize_validation" || event.ModelCallCount != 9 ||
+		event.Attempts != 11 || event.HTTPStatus != 200 || event.CandidateCount != 4 || event.ErrorCode != analysisChatValidationCitation {
+		t.Fatalf("event = %+v", event)
+	}
+	if got := analysisChatResponseAttempts(nil); got != 0 {
+		t.Fatalf("nil response attempts = %d", got)
+	}
+	if got := analysisChatResponseAttempts(&modelResponse{}); got != 1 {
+		t.Fatalf("response without metadata attempts = %d", got)
+	}
+}
+
+func TestAnalysisChatAgentRecordsCancelledRequestTelemetry(t *testing.T) {
+	server := newScriptedChatServer(t)
+	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{}, AnalysisChatOptions{MaxIters: 1, Timeout: time.Second})
+	store := NewTraceStore()
+	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIChatCompletions})
+	ctx, cancel := context.WithCancel(withAnalysisTrace(context.Background(), trace))
+	cancel()
+
+	_, err := agent.Reply(ctx, analysisChatTurn())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Reply error = %v", err)
+	}
+	trace.Finish("error", err)
+	var event *TraceEvent
+	snapshot := store.Snapshot()
+	for index := range snapshot.Traces[0].Events {
+		candidate := &snapshot.Traces[0].Events[index]
+		if candidate.Kind == "analysis_chat_response" {
+			event = candidate
+			break
+		}
+	}
+	if event == nil || event.Status != "tool_loop_request" || event.ErrorCode != "request_cancelled" || event.ModelCallCount != 1 {
+		t.Fatalf("event = %+v", event)
+	}
+	if got := analysisChatRequestErrorCategory(context.DeadlineExceeded); got != "request_timeout" {
+		t.Fatalf("deadline category = %q", got)
+	}
+}
+
 func TestParseAnalysisChatReplyRejectsUnsafeAndUnverifiedClaims(t *testing.T) {
 	cases := []string{
 		`{"answer":"x","assessment":"challenges","citations":[],"proposed_revision":{"root_cause":"r","suggested_fix":"f"}}`,
@@ -175,6 +335,81 @@ func TestParseAnalysisChatReplyRejectsUnsafeAndUnverifiedClaims(t *testing.T) {
 		if _, err := parseAnalysisChatReply(raw, map[string]*analysisChatEvidence{"build-log.txt": {Segments: []string{"controller stopped"}}}); err == nil {
 			t.Errorf("invalid reply accepted: %s", raw)
 		}
+	}
+}
+
+func TestParseAnalysisChatReplyScansKimiCandidates(t *testing.T) {
+	valid := `{"answer":"valid answer","assessment":"explains","citations":[],"proposed_revision":null}`
+	cases := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "fenced", raw: "```json\n" + valid + "\n```", want: "valid answer"},
+		{name: "metadata wrapper", raw: `{"metadata":{"finish_reason":"stop"},"result":` + valid + `}`, want: "valid answer"},
+		{name: "final valid draft", raw: valid + `\n{"answer":"final answer","assessment":"explains","citations":[],"proposed_revision":null}`, want: "final answer"},
+		{name: "malformed final draft", raw: valid + `\n{"answer":"unfinished"`, want: "valid answer"},
+		{name: "nested object in malformed final draft", raw: valid + `\n{"answer":"unfinished","citations":[{"path":"x"}]`, want: "valid answer"},
+		{name: "malformed wrapped final draft", raw: valid + `\n{"metadata":{"finish_reason":"stop"},"result":{"answer":"unfinished"}}`, want: "valid answer"},
+		{name: "quoted braces", raw: `{"answer":"value with {nested text}","assessment":"explains","citations":[],"proposed_revision":null}`, want: "value with {nested text}"},
+		{name: "quoted prose brace", raw: `The token "{" was emitted. ` + valid, want: "valid answer"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			reply, stats, err := parseAnalysisChatReplyCandidates(testCase.raw, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reply.Answer != testCase.want || stats.CandidateCount == 0 {
+				t.Fatalf("reply=%+v stats=%+v", reply, stats)
+			}
+		})
+	}
+}
+
+func TestParseAnalysisChatReplyQuotedBracesDoNotEvictOuterCandidate(t *testing.T) {
+	answer := strings.Repeat("{", analysisChatMaxCandidates+20) + "still text"
+	raw, err := json.Marshal(map[string]any{
+		"answer": answer, "assessment": "explains", "citations": []any{}, "proposed_revision": nil,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply, stats, err := parseAnalysisChatReplyCandidates(string(raw), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply.Answer != answer || stats.CandidateCount != 1 {
+		t.Fatalf("reply answer bytes=%d candidates=%d", len(reply.Answer), stats.CandidateCount)
+	}
+}
+
+func TestParseAnalysisChatReplyKeepsEarlierValidCitation(t *testing.T) {
+	evidence := map[string]*analysisChatEvidence{
+		"build-log.txt": {Segments: []string{"controller stopped"}, Lines: map[int]string{}},
+	}
+	valid := `{"answer":"supported","assessment":"supports","citations":[{"path":"build-log.txt","quote":"controller stopped"}],"proposed_revision":null}`
+	invalid := `{"answer":"bad update","assessment":"supports","citations":[{"path":"build-log.txt","quote":"different evidence"}],"proposed_revision":null}`
+	reply, _, err := parseAnalysisChatReplyCandidates(valid+"\n"+invalid, evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply.Answer != "supported" {
+		t.Fatalf("reply = %+v", reply)
+	}
+}
+
+func TestParseAnalysisChatReplyCategorizesCitationMismatch(t *testing.T) {
+	evidence := map[string]*analysisChatEvidence{
+		"build-log.txt": {Segments: []string{"controller stopped"}, Lines: map[int]string{}},
+	}
+	raw := `{"answer":"bad update","assessment":"supports","citations":[{"path":"build-log.txt","quote":"different evidence"}],"proposed_revision":null}`
+	_, stats, err := parseAnalysisChatReplyCandidates(raw, evidence)
+	if err == nil || stats.Category != analysisChatValidationCitation {
+		t.Fatalf("stats=%+v err=%v", stats, err)
+	}
+	if !errors.Is(analysisChatSafeValidationError(err), analysischat.ErrCitationValidationFailed) {
+		t.Fatalf("safe error = %v", analysisChatSafeValidationError(err))
 	}
 }
 
@@ -199,6 +434,9 @@ func TestAnalysisChatAgentReportsUnsupportedTools(t *testing.T) {
 	_, err := agent.Reply(context.Background(), analysisChatTurn())
 	if !errors.Is(err, ErrToolsUnsupported) {
 		t.Fatalf("Reply error = %v", err)
+	}
+	if !errors.Is(err, analysischat.ErrProviderRequestFailed) {
+		t.Fatalf("Reply error missing provider category: %v", err)
 	}
 }
 
@@ -434,11 +672,54 @@ func TestPrepareAnalysisChatFinalizeMessagesCompactsCompleteRequest(t *testing.T
 	}
 }
 
-func TestParseAnalysisChatReplyRejectsTrailingJSON(t *testing.T) {
+func TestParseAnalysisChatReplySelectsFinalDraft(t *testing.T) {
 	raw := `{"answer":"first","assessment":"explains","citations":[],"proposed_revision":null}` +
 		`{"answer":"second","assessment":"explains","citations":[],"proposed_revision":null}`
-	if _, err := parseAnalysisChatReply(raw, nil); err == nil || !strings.Contains(err.Error(), "trailing JSON") {
+	reply, err := parseAnalysisChatReply(raw, nil)
+	if err != nil || reply.Answer != "second" {
+		t.Fatalf("reply=%+v err=%v", reply, err)
+	}
+}
+
+func TestParseAnalysisChatReplyRejectsTrailingUnrelatedJSON(t *testing.T) {
+	raw := `{"answer":"first","assessment":"explains","citations":[],"proposed_revision":null}` +
+		`{"unrelated":true}`
+	if _, err := parseAnalysisChatReply(raw, nil); err == nil || !strings.Contains(err.Error(), "trailing unrelated JSON") {
 		t.Fatalf("trailing response error = %v", err)
+	}
+}
+
+func TestAnalysisChatJSONCandidatesAreBounded(t *testing.T) {
+	raw := strings.Repeat("{not-json}", analysisChatMaxCandidates+20) +
+		`{"answer":"final","assessment":"explains","citations":[],"proposed_revision":null}`
+	candidates := analysisChatJSONCandidates(raw)
+	if len(candidates) != analysisChatMaxCandidates {
+		t.Fatalf("candidate count = %d", len(candidates))
+	}
+	reply, err := parseAnalysisChatReply(raw, nil)
+	if err != nil || reply.Answer != "final" {
+		t.Fatalf("reply=%+v err=%v", reply, err)
+	}
+}
+
+func TestAnalysisChatJSONCandidateScanStaysBoundedForUnclosedObjects(t *testing.T) {
+	raw := strings.Repeat("{", analysisChatMaxCandidates) +
+		strings.Repeat("x", analysisChatMaxResponseBytes-analysisChatMaxCandidates)
+	scan := scanAnalysisChatJSONCandidates(raw)
+	if len(scan.candidates) != 0 || len(scan.incomplete) != analysisChatMaxCandidates {
+		t.Fatalf("candidates=%d incomplete=%d", len(scan.candidates), len(scan.incomplete))
+	}
+}
+
+func TestParseAnalysisChatReplyHandlesDeepMetadataWrapper(t *testing.T) {
+	valid := `{"answer":"valid answer","assessment":"explains","citations":[],"proposed_revision":null}`
+	raw := strings.Repeat(`{"metadata":`, analysisChatMaxCandidates-1) + valid + strings.Repeat("}", analysisChatMaxCandidates-1)
+	reply, stats, err := parseAnalysisChatReplyCandidates(raw, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply.Answer != "valid answer" || stats.CandidateCount != analysisChatMaxCandidates {
+		t.Fatalf("reply=%+v candidates=%d", reply, stats.CandidateCount)
 	}
 }
 

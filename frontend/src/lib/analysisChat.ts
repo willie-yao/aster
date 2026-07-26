@@ -15,6 +15,9 @@ export const analysisChatRequestOutcomeUnknownMessage = "analysis chat request o
 export const analysisChatRequestPendingMessage = "analysis chat request is pending";
 export const analysisChatSessionBusyMessage = "analysis chat session is busy";
 export const analysisChatTurnLimitMessage = "analysis chat turn limit reached";
+export const analysisChatProviderFailureMessage = "analysis chat provider request failed";
+export const analysisChatResponseValidationMessage = "analysis chat model response could not be validated";
+export const analysisChatCitationValidationMessage = "analysis chat evidence citation validation failed";
 
 export class AnalysisChatAPIError extends Error {
   readonly status: number;
@@ -31,6 +34,20 @@ export class AnalysisChatAPIError extends Error {
 export function isAmbiguousAnalysisChatFailure(error: unknown): boolean {
   return !(error instanceof AnalysisChatAPIError) ||
     (error.status >= 500 && error.outcome === null);
+}
+
+export function analysisChatFailureGuidance(error: unknown): string | null {
+  if (!(error instanceof AnalysisChatAPIError)) return null;
+  switch (error.message) {
+    case analysisChatProviderFailureMessage:
+      return "The model provider could not complete the request. Try again in a moment.";
+    case analysisChatResponseValidationMessage:
+      return "The model response could not be validated. Try a narrower question.";
+    case analysisChatCitationValidationMessage:
+      return "The response's evidence citations could not be validated. Try a narrower evidence question.";
+    default:
+      return null;
+  }
 }
 
 export function newAnalysisChatRequestID(): string {

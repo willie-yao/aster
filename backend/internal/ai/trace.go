@@ -65,7 +65,9 @@ type TraceEvent struct {
 	ContextLimitTokens    int    `json:"context_limit_tokens,omitempty"`
 	ReservedTokens        int    `json:"reserved_tokens,omitempty"`
 	MessageCount          int    `json:"message_count,omitempty"`
+	ModelCallCount        int    `json:"model_call_count,omitempty"`
 	ToolCallCount         int    `json:"tool_call_count,omitempty"`
+	CandidateCount        int    `json:"candidate_count,omitempty"`
 	Bytes                 int    `json:"bytes,omitempty"`
 	Elided                int    `json:"elided,omitempty"`
 	Retry                 int    `json:"retry,omitempty"`

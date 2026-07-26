@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 
 import {
+  analysisChatCitationValidationMessage,
+  analysisChatFailureGuidance,
+  analysisChatProviderFailureMessage,
+  analysisChatResponseValidationMessage,
+  AnalysisChatAPIError,
   analysisChatProgressTurnUsage,
   analysisChatTurnLimitReached,
   analysisChatTurnUsage,
@@ -92,6 +97,18 @@ test("turn usage comes only from authoritative session fields", () => {
   assert.equal(analysisChatTurnLimitReached({ ...session, turns_used: 10 }, true, false), false);
   assert.equal(analysisChatTurnLimitReached(session, false, true), true);
   assert.equal(analysisChatTurnLimitReached(session, true, true), false);
+});
+
+test("safe analysis chat failures include recovery guidance", () => {
+  const cases = [
+    [analysisChatProviderFailureMessage, "Try again in a moment"],
+    [analysisChatResponseValidationMessage, "Try a narrower question"],
+    [analysisChatCitationValidationMessage, "Try a narrower evidence question"],
+  ] as const;
+  for (const [message, guidance] of cases) {
+    const rendered = analysisChatFailureGuidance(new AnalysisChatAPIError(502, message, "failed"));
+    assert.ok(rendered?.includes(guidance), rendered ?? "missing guidance");
+  }
 });
 
 test("reload during a turn reconnects the persisted request", async () => {

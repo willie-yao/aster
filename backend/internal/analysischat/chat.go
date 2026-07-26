@@ -58,6 +58,12 @@ var (
 	ErrRequestOutcomeUnknown = errors.New("analysis chat request outcome unknown")
 	// ErrRequestFailed means an earlier idempotent attempt failed before answering.
 	ErrRequestFailed = errors.New("analysis chat request failed")
+	// ErrProviderRequestFailed means the model provider request failed safely.
+	ErrProviderRequestFailed = errors.New("analysis chat provider request failed")
+	// ErrResponseValidationFailed means the model response did not match the contract.
+	ErrResponseValidationFailed = errors.New("analysis chat model response could not be validated")
+	// ErrCitationValidationFailed means the response cited evidence it did not prove.
+	ErrCitationValidationFailed = errors.New("analysis chat evidence citation validation failed")
 	// ErrTurnLimit means the session has used its allowed turns.
 	ErrTurnLimit = errors.New("analysis chat turn limit reached")
 	// ErrInvalidRequest means a request field is missing, ambiguous, or too large.
@@ -673,6 +679,12 @@ func requestFailureKind(err error) string {
 		return failureTimeout
 	case errors.Is(err, context.Canceled):
 		return failureCancelled
+	case errors.Is(err, ErrProviderRequestFailed):
+		return failureProvider
+	case errors.Is(err, ErrResponseValidationFailed):
+		return failureValidation
+	case errors.Is(err, ErrCitationValidationFailed):
+		return failureCitation
 	case errors.Is(err, sourceinvestigation.ErrInvalidResult), errors.Is(err, sourceinvestigation.ErrUnavailable):
 		return failureSource
 	default:
@@ -688,6 +700,12 @@ func persistedRequestError(kind string) error {
 		return context.Canceled
 	case failureSource:
 		return sourceinvestigation.ErrUnavailable
+	case failureProvider:
+		return ErrProviderRequestFailed
+	case failureValidation:
+		return ErrResponseValidationFailed
+	case failureCitation:
+		return ErrCitationValidationFailed
 	default:
 		return ErrRequestFailed
 	}

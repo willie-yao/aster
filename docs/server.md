@@ -176,6 +176,18 @@ the authoritative session before allowing an explicit retry. Startup cleanup,
 a lifecycle-bound periodic cleanup loop, and request-time cleanup remove
 expired sessions from the persisted file and release global and per-owner
 capacity.
+Model response parsing scans a bounded set of complete JSON objects, including
+fenced output and provider metadata wrappers, and validates each candidate
+against the strict response and evidence contracts. A previously validated
+draft may be retained when a later finalization response is unusable. Citation
+paths, quotes, and line ranges still require evidence read during that turn.
+
+Terminal failures use safe categories: provider request failed, model response
+could not be validated, evidence citation validation failed, request timed out,
+or request cancelled. Provider bodies, prompts, tokens, private paths, and
+artifact content are not returned. Content-free logs record the failure stage,
+model-call and provider-attempt counts, HTTP status, JSON candidate count, and
+validation category.
 State version 2 stores the active question as an additive optional field so old
 and new replicas can share the file during a rolling upgrade. An old writer may
 drop that field, in which case the new client follows the request by polling

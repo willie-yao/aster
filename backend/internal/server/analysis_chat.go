@@ -275,6 +275,12 @@ func analysisChatErrorDetails(err error) (int, string, string) {
 		status, message, outcome = http.StatusBadGateway, "source investigation could not complete the request", "failed"
 	case errors.Is(err, analysischat.ErrRequestFailed):
 		outcome = "failed"
+	case errors.Is(err, analysischat.ErrProviderRequestFailed):
+		status, message, outcome = http.StatusBadGateway, analysischat.ErrProviderRequestFailed.Error(), "failed"
+	case errors.Is(err, analysischat.ErrResponseValidationFailed):
+		status, message, outcome = http.StatusBadGateway, analysischat.ErrResponseValidationFailed.Error(), "failed"
+	case errors.Is(err, analysischat.ErrCitationValidationFailed):
+		status, message, outcome = http.StatusBadGateway, analysischat.ErrCitationValidationFailed.Error(), "failed"
 	case errors.Is(err, context.DeadlineExceeded):
 		status, message, outcome = http.StatusGatewayTimeout, "analysis chat request timed out", "failed"
 	case errors.Is(err, context.Canceled):
