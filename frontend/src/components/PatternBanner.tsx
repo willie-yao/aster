@@ -64,7 +64,7 @@ export function PatternBanner({
   const hasEvidenceBuild = Boolean(
     pattern.shared_builds?.some((buildID) => runs.some((run) => run.build_id === buildID)),
   );
-  const chatAvailability = patternChatAvailability(pattern, jobID, hasEvidenceBuild);
+  const chatAvailability = patternChatAvailability(pattern, jobID, hasEvidenceBuild, Boolean(features.analysis_chat));
   const chatRef: AnalysisChatReference | null =
     chatAvailability === "ready" && pattern.id && pattern.content_hash && jobID
       ? {

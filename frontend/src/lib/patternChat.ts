@@ -6,7 +6,8 @@ export function patternChatAvailability(
   pattern: PatternAnalysis,
   jobID: string | undefined,
   hasEvidenceBuild: boolean,
+  chatEnabled: boolean,
 ): PatternChatAvailability {
-  if (!pattern.systemic || !pattern.id || !jobID || !hasEvidenceBuild) return "unavailable";
+  if (!chatEnabled || !pattern.systemic || !pattern.id || !jobID || !hasEvidenceBuild) return "unavailable";
   return pattern.content_hash ? "ready" : "stale";
 }
