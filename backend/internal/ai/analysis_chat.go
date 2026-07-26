@@ -228,10 +228,11 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 		modelCalls++
 		providerAttempts += analysisChatResponseAttempts(response)
 		if err != nil {
+			category := analysisChatRequestErrorCategory(err)
+			recordAnalysisChatResponseFailure(loopCtx, "tool_loop_request", modelCalls, providerAttempts, response, analysisChatParseStats{}, category)
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return analysischat.Reply{}, err
 			}
-			recordAnalysisChatResponseFailure(loopCtx, "tool_loop_request", modelCalls, providerAttempts, response, analysisChatParseStats{}, "provider_request")
 			if iter == 0 && isToolsUnsupportedError(err) {
 				return analysischat.Reply{}, errors.Join(ErrToolsUnsupported, analysischat.ErrProviderRequestFailed)
 			}
@@ -312,6 +313,8 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 	modelCalls++
 	providerAttempts += analysisChatResponseAttempts(response)
 	if err != nil {
+		category := analysisChatRequestErrorCategory(err)
+		recordAnalysisChatResponseFailure(loopCtx, "finalize_request", modelCalls, providerAttempts, response, analysisChatParseStats{}, category)
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return analysischat.Reply{}, err
 		}
@@ -319,7 +322,6 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 			recordAnalysisChatResponseFallback(loopCtx, "finalize_request", modelCalls, providerAttempts, response, analysisChatParseStats{}, "provider_request")
 			return completeAnalysisChatReply(*fallback, state, start), nil
 		}
-		recordAnalysisChatResponseFailure(loopCtx, "finalize_request", modelCalls, providerAttempts, response, analysisChatParseStats{}, "provider_request")
 		return analysischat.Reply{}, analysischat.ErrProviderRequestFailed
 	}
 	if response == nil || !response.HasMessage || response.Message.Content == nil {
@@ -356,6 +358,17 @@ func analysisChatResponseAttempts(response *modelResponse) int {
 		return response.Attempts
 	}
 	return 1
+}
+
+func analysisChatRequestErrorCategory(err error) string {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "request_timeout"
+	case errors.Is(err, context.Canceled):
+		return "request_cancelled"
+	default:
+		return "provider_request"
+	}
 }
 
 func analysisChatSafeValidationError(err error) error {

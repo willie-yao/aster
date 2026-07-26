@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysischat"
@@ -62,6 +63,9 @@ func parseAnalysisChatReplyCandidates(raw string, evidence map[string]*analysisC
 	}
 	scan := scanAnalysisChatJSONCandidates(raw)
 	candidates := scan.candidates
+	for index := range candidates {
+		candidates[index].replyLike = analysisChatCandidateLooksLikeReply(candidates[index].value)
+	}
 	stats.CandidateCount = len(candidates)
 	if len(candidates) == 0 {
 		stats.Category = analysisChatValidationCandidate
@@ -93,28 +97,41 @@ func hasTrailingUnrelatedAnalysisChatCandidate(
 	trailing []analysisChatJSONCandidate,
 	incomplete []analysisChatCandidateState,
 ) bool {
-	for index, candidate := range trailing {
-		if strings.Contains(candidate.value, selected.value) || analysisChatCandidateLooksLikeReply(candidate.value) {
+	type candidateInterval struct {
+		start      int
+		end        int
+		candidate  *analysisChatJSONCandidate
+		incomplete bool
+	}
+	intervals := make([]candidateInterval, 0, len(trailing)+len(incomplete))
+	for index := range trailing {
+		intervals = append(intervals, candidateInterval{
+			start: trailing[index].start, end: trailing[index].end, candidate: &trailing[index],
+		})
+	}
+	for _, candidate := range incomplete {
+		intervals = append(intervals, candidateInterval{
+			start: candidate.start, end: int(^uint(0) >> 1), incomplete: true,
+		})
+	}
+	sort.Slice(intervals, func(i, j int) bool {
+		if intervals[i].start != intervals[j].start {
+			return intervals[i].start < intervals[j].start
+		}
+		return intervals[i].end > intervals[j].end
+	})
+	maxEnd := -1
+	for _, candidateInterval := range intervals {
+		if candidateInterval.end <= maxEnd {
 			continue
 		}
-		related := false
-		for _, container := range trailing[index+1:] {
-			if strings.Contains(container.value, candidate.value) &&
-				(analysisChatCandidateLooksLikeReply(container.value) || strings.Contains(container.value, selected.value)) {
-				related = true
-				break
-			}
+		maxEnd = candidateInterval.end
+		if candidateInterval.incomplete || candidateInterval.candidate == nil {
+			continue
 		}
-		if !related {
-			for _, container := range incomplete {
-				if container.start < candidate.start &&
-					(container.start < selected.start || container.start > selected.end) {
-					related = true
-					break
-				}
-			}
-		}
-		if !related {
+		candidate := candidateInterval.candidate
+		containsSelected := candidate.start <= selected.start && candidate.end >= selected.end
+		if !containsSelected && !candidate.replyLike {
 			return true
 		}
 	}
@@ -253,9 +270,10 @@ type analysisChatCandidateState struct {
 }
 
 type analysisChatJSONCandidate struct {
-	value string
-	start int
-	end   int
+	value     string
+	start     int
+	end       int
+	replyLike bool
 }
 
 type analysisChatCandidateScan struct {

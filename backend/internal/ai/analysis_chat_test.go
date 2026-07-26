@@ -274,6 +274,36 @@ func TestAnalysisChatResponseTelemetryIsContentFree(t *testing.T) {
 	}
 }
 
+func TestAnalysisChatAgentRecordsCancelledRequestTelemetry(t *testing.T) {
+	server := newScriptedChatServer(t)
+	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{}, AnalysisChatOptions{MaxIters: 1, Timeout: time.Second})
+	store := NewTraceStore()
+	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIChatCompletions})
+	ctx, cancel := context.WithCancel(withAnalysisTrace(context.Background(), trace))
+	cancel()
+
+	_, err := agent.Reply(ctx, analysisChatTurn())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Reply error = %v", err)
+	}
+	trace.Finish("error", err)
+	var event *TraceEvent
+	snapshot := store.Snapshot()
+	for index := range snapshot.Traces[0].Events {
+		candidate := &snapshot.Traces[0].Events[index]
+		if candidate.Kind == "analysis_chat_response" {
+			event = candidate
+			break
+		}
+	}
+	if event == nil || event.Status != "tool_loop_request" || event.ErrorCode != "request_cancelled" || event.ModelCallCount != 1 {
+		t.Fatalf("event = %+v", event)
+	}
+	if got := analysisChatRequestErrorCategory(context.DeadlineExceeded); got != "request_timeout" {
+		t.Fatalf("deadline category = %q", got)
+	}
+}
+
 func TestParseAnalysisChatReplyRejectsUnsafeAndUnverifiedClaims(t *testing.T) {
 	cases := []string{
 		`{"answer":"x","assessment":"challenges","citations":[],"proposed_revision":{"root_cause":"r","suggested_fix":"f"}}`,
@@ -658,6 +688,18 @@ func TestAnalysisChatJSONCandidateScanStaysBoundedForUnclosedObjects(t *testing.
 	scan := scanAnalysisChatJSONCandidates(raw)
 	if len(scan.candidates) != 0 || len(scan.incomplete) != analysisChatMaxCandidates {
 		t.Fatalf("candidates=%d incomplete=%d", len(scan.candidates), len(scan.incomplete))
+	}
+}
+
+func TestParseAnalysisChatReplyHandlesDeepMetadataWrapper(t *testing.T) {
+	valid := `{"answer":"valid answer","assessment":"explains","citations":[],"proposed_revision":null}`
+	raw := strings.Repeat(`{"metadata":`, analysisChatMaxCandidates-1) + valid + strings.Repeat("}", analysisChatMaxCandidates-1)
+	reply, stats, err := parseAnalysisChatReplyCandidates(raw, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply.Answer != "valid answer" || stats.CandidateCount != analysisChatMaxCandidates {
+		t.Fatalf("reply=%+v candidates=%d", reply, stats.CandidateCount)
 	}
 }
 
