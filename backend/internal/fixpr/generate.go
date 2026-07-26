@@ -88,38 +88,38 @@ func decodeJSONObject(value string, target any) error {
 
 func balancedJSONObjects(s string) []string {
 	var out []string
-	for start := 0; start < len(s); start++ {
-		if s[start] != '{' {
-			continue
-		}
-		depth := 0
-		inString, escaped := false, false
-		for end := start; end < len(s); end++ {
-			ch := s[end]
-			if inString {
-				if escaped {
-					escaped = false
-					continue
-				}
-				if ch == '\\' {
-					escaped = true
-				} else if ch == '"' {
-					inString = false
-				}
+	var starts []int
+	inString, escaped := false, false
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if len(starts) > 0 && inString {
+			if escaped {
+				escaped = false
 				continue
 			}
-			switch ch {
-			case '"':
+			if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch ch {
+		case '"':
+			if len(starts) > 0 {
 				inString = true
-			case '{':
-				depth++
-			case '}':
-				depth--
-				if depth == 0 {
-					out = append(out, s[start:end+1])
-					start = end
-					end = len(s)
-				}
+			}
+		case '{':
+			starts = append(starts, i)
+		case '}':
+			if len(starts) == 0 {
+				continue
+			}
+			start := starts[len(starts)-1]
+			starts = starts[:len(starts)-1]
+			out = append(out, s[start:i+1])
+			if len(starts) == 0 {
+				inString, escaped = false, false
 			}
 		}
 	}

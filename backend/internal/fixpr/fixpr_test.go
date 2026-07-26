@@ -406,3 +406,29 @@ func TestCritiqueAgentFixRequiresIssuesField(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestParseJSONObjectFallsThroughInvalidOuterWrapper(t *testing.T) {
+	raw := `reasoning { final: {"issues":[]} }`
+	var v struct {
+		Issues *[]string `json:"issues"`
+	}
+	if err := parseJSONObject(raw, &v); err != nil {
+		t.Fatal(err)
+	}
+	if v.Issues == nil || len(*v.Issues) != 0 {
+		t.Fatalf("issues = %#v", v.Issues)
+	}
+}
+
+func TestParseJSONObjectPrefersValidOuterResponse(t *testing.T) {
+	raw := `{"issues":["outer issue contains {nested text}"]}`
+	var v struct {
+		Issues []string `json:"issues"`
+	}
+	if err := parseJSONObject(raw, &v); err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Issues) != 1 || v.Issues[0] != "outer issue contains {nested text}" {
+		t.Fatalf("issues = %#v", v.Issues)
+	}
+}
