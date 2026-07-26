@@ -54,7 +54,7 @@ ai:
   min_gcs_bytes: 0              # minimum GCS bytes fetched before a final answer is accepted
   single_tool_call: false       # send at most one tool call per turn (for single-tool-call-only models)
   critique:
-    max_retries: 2              # 0 disables; positive values enable one bounded repair
+    max_retries: 0              # default; positive values enable one bounded repair
   tools: [filesystem, k8s]      # registered tool groups exposed to the model
 ```
 
@@ -118,7 +118,7 @@ value for weaker models. See [Investigation floors](#investigation-floors).
 ### `critique`
 
 The deterministic critique gate always runs. It rejects punt-shaped and
-ungrounded drafts. `max_retries`, which defaults to `2`, controls eligibility for the single
+ungrounded drafts. `max_retries`, which defaults to `0`, controls eligibility for the single
 bounded deterministic repair operation. `0` evaluates the draft once but makes
 no critique repair model request. Positive values remain subject to context and
 time-headroom guards. A

@@ -509,9 +509,9 @@ func TestAgentic_Effective(t *testing.T) {
 			t.Errorf("MinGCSBytes = %d, want 200000", got.MinGCSBytes)
 		}
 	})
-	t.Run("Critique defaults to max retries 2", func(t *testing.T) {
-		if got := eff(Agentic{}); got.Critique.MaxRetries == nil || *got.Critique.MaxRetries != 2 {
-			t.Errorf("Critique.MaxRetries = %v, want 2 (default)", got.Critique.MaxRetries)
+	t.Run("Critique defaults to zero retries", func(t *testing.T) {
+		if got := eff(Agentic{}); got.Critique.MaxRetries == nil || *got.Critique.MaxRetries != 0 {
+			t.Errorf("Critique.MaxRetries = %v, want 0 (default)", got.Critique.MaxRetries)
 		}
 	})
 	t.Run("Critique.MaxRetries accepts explicit zero", func(t *testing.T) {
@@ -594,7 +594,7 @@ func TestParse_CritiqueMaxRetries(t *testing.T) {
 		yaml string
 		want int
 	}{
-		{name: "omitted", yaml: "", want: 2},
+		{name: "omitted", yaml: "", want: 0},
 		{name: "zero", yaml: "  critique:\n    max_retries: 0\n", want: 0},
 		{name: "positive", yaml: "  critique:\n    max_retries: 4\n", want: 4},
 	} {

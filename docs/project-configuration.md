@@ -157,7 +157,7 @@ ai:
   min_gcs_bytes: 0
   single_tool_call: false
   critique:
-    max_retries: 2
+    max_retries: 0
 ```
 
 Do not commit credentials under `ai.headers`. `AI_TOKEN` is the supported bearer

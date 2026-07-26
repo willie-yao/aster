@@ -1238,7 +1238,7 @@ func benchBudgets(t *testing.T, client *ai.Client) ai.ContextBudgets {
 // BENCH_PROJECT_DIR, since the weak-model floors distort a strong model that
 // answers concisely.
 func defaultBenchAgentic() project.Agentic {
-	critiqueRetries := benchEnvInt("BENCH_CRITIQUE_RETRIES", 2)
+	critiqueRetries := benchEnvInt("BENCH_CRITIQUE_RETRIES", 0)
 	a := project.Agentic{
 		MaxIters:     benchEnvInt("BENCH_MAX_ITERS", 15),
 		Timeout:      benchEnvDuration("BENCH_TIMEOUT", 20*time.Minute),

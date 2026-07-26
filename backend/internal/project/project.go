@@ -730,7 +730,7 @@ var DefaultAgentic = Agentic{
 	MinToolCalls: 2,
 	MinGCSBytes:  0,
 	Critique: AgenticCritique{
-		MaxRetries: intPtr(2),
+		MaxRetries: intPtr(0),
 	},
 }
 
