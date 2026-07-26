@@ -14,6 +14,13 @@ same `/data/*.json` files the SPA already reads, then adds a capability
 descriptor the frontend uses to discover server-only features. The static path
 keeps working unchanged, and all `/data/*.json` schemas stay byte-compatible.
 
+The frontend requests `search-index.json` only after search is focused, opened,
+or used. Server mode negotiates gzip for eligible JSON, JavaScript, CSS, and
+text responses and sends `Vary: Accept-Encoding`. SSE streams, HEAD responses,
+range responses, no-body statuses, `no-transform` responses, and content that
+already has a `Content-Encoding` remain uncompressed. Existing cache headers
+and private-file filtering are preserved.
+
 The server is independent of where the in-process analyzer ran. Pages and
 Kubernetes deployments produce the same `jobs/*.json`, so the server contract
 remains identical.

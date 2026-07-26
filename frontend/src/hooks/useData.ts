@@ -9,6 +9,7 @@ import type {
   SearchIndex,
 } from "../types/dashboard";
 import { jobDataFilename } from "../lib/utils";
+import { searchIndexPath } from "../lib/search";
 
 const DATA_BASE =
   import.meta.env.VITE_DATA_URL ?? `${import.meta.env.BASE_URL}data`;
@@ -27,8 +28,9 @@ function useJSON<T>(path: string | null) {
   useEffect(() => {
     let cancelled = false;
     if (path === null) return;
+    const controller = new AbortController();
 
-    fetch(`${DATA_BASE}/${path}`)
+    fetch(`${DATA_BASE}/${path}`, { signal: controller.signal })
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json() as Promise<T>;
@@ -37,12 +39,14 @@ function useJSON<T>(path: string | null) {
         if (!cancelled) setResult({ path, data: value, error: null });
       })
       .catch((error: unknown) => {
+        if (error instanceof Error && error.name === "AbortError") return;
         if (!cancelled) {
           setResult({ path, data: null, error: errorMessage(error) });
         }
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [path]);
 
@@ -67,8 +71,8 @@ export function useJobDetail(jobName: string | undefined) {
   return useJSON<JobDetail>(jobName ? `jobs/${jobDataFilename(jobName)}` : null);
 }
 
-export function useSearchIndex() {
-  return useJSON<SearchIndex>("search-index.json");
+export function useSearchIndex(activated: boolean) {
+  return useJSON<SearchIndex>(searchIndexPath(activated));
 }
 
 export function useResolved() {

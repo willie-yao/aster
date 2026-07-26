@@ -22,7 +22,8 @@ import type { SearchEntry } from "../types/dashboard";
 export function SearchBar() {
   const manifest = useManifest();
   const filePrefix = manifest.short_name_prefix ?? "";
-  const { data } = useSearchIndex();
+  const [activated, setActivated] = useState(false);
+  const { data, loading, error } = useSearchIndex(activated);
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
@@ -61,8 +62,9 @@ export function SearchBar() {
     function handleKeyDown(e: KeyboardEvent) {
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {
         e.preventDefault();
+        setActivated(true);
         setMobileExpanded(true);
-        inputRef.current?.focus();
+        globalThis.setTimeout(() => inputRef.current?.focus(), 0);
       }
     }
     document.addEventListener("keydown", handleKeyDown);
@@ -110,6 +112,7 @@ export function SearchBar() {
       <IconButton
         type="button"
         onClick={() => {
+          setActivated(true);
           setMobileExpanded(true);
           setTimeout(() => inputRef.current?.focus(), 50);
         }}
@@ -146,10 +149,14 @@ export function SearchBar() {
             type="text"
             value={query}
             onChange={(e) => {
+              setActivated(true);
               setQuery(e.target.value);
               setOpen(true);
             }}
-            onFocus={() => setOpen(true)}
+            onFocus={() => {
+              setActivated(true);
+              setOpen(true);
+            }}
             placeholder="Search tests…"
             size="small"
             variant="outlined"
@@ -240,7 +247,19 @@ export function SearchBar() {
           }}
         >
           <Box sx={{ maxHeight: 400, overflowY: "auto" }}>
-            {results.length === 0 ? (
+            {loading ? (
+              <Box sx={{ px: 4, py: 3, textAlign: "center" }}>
+                <Typography variant="body2" color="text.secondary" role="status">
+                  Loading search index...
+                </Typography>
+              </Box>
+            ) : error ? (
+              <Box sx={{ px: 4, py: 3, textAlign: "center" }}>
+                <Typography variant="body2" color="text.secondary">
+                  Search is temporarily unavailable.
+                </Typography>
+              </Box>
+            ) : results.length === 0 ? (
               <Box sx={{ px: 4, py: 3, textAlign: "center" }}>
                 <Typography variant="body2" color="text.secondary">
                   No results
