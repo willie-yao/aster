@@ -37,7 +37,7 @@ function NavTab({
       size="small"
       aria-current={current ? "page" : undefined}
       sx={{
-        px: { xs: 1, sm: 1.5 },
+        px: { xs: 0.875, sm: 1.5 },
         py: 0.5,
         minWidth: 0,
         borderRadius: 999,
@@ -83,14 +83,28 @@ export function Layout() {
           WebkitBackdropFilter: "blur(12px)",
           borderBottom: "1px solid",
           borderColor: "divider",
+          width: "100%",
+          maxWidth: "100vw",
         }}
       >
         <Toolbar
           disableGutters
           sx={{
-            minHeight: "64px !important",
+            minHeight: { xs: "auto !important", lg: "64px !important" },
             px: { xs: 2, sm: 3 },
-            gap: { xs: 1.5, sm: 2 },
+            py: { xs: 1, lg: 0 },
+            display: "grid",
+            gridTemplateColumns: {
+              xs: "minmax(0, 1fr) auto",
+              lg: "minmax(0, auto) auto minmax(0, 1fr)",
+            },
+            gridTemplateAreas: {
+              xs: '"brand controls" "nav nav"',
+              lg: '"brand nav controls"',
+            },
+            columnGap: { xs: 1.5, sm: 2 },
+            rowGap: { xs: 0.75, lg: 0 },
+            alignItems: "center",
           }}
         >
           <MuiLink
@@ -100,9 +114,11 @@ export function Layout() {
             color="inherit"
             sx={{
               display: "flex",
+              gridArea: "brand",
               alignItems: "center",
               gap: 1.5,
               minWidth: 0,
+              maxWidth: "100%",
               transition: "opacity 150ms ease",
               "&:hover": { opacity: 0.8 },
             }}
@@ -146,6 +162,9 @@ export function Layout() {
                 letterSpacing: "-0.01em",
                 color: "text.primary",
                 whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                maxWidth: { sm: "min(48vw, 28rem)", lg: "min(28vw, 32rem)" },
               }}
             >
               {manifest.branding.title}
@@ -157,9 +176,16 @@ export function Layout() {
             aria-label="Primary"
             sx={{
               display: "flex",
+              gridArea: "nav",
               alignItems: "center",
               gap: 0.5,
-              ml: { xs: 0.5, sm: 1.5 },
+              justifySelf: { xs: "stretch", lg: "start" },
+              justifyContent: { xs: "center", lg: "flex-start" },
+              width: { xs: "100%", lg: "auto" },
+              minWidth: 0,
+              overflowX: "auto",
+              scrollbarWidth: "none",
+              "&::-webkit-scrollbar": { display: "none" },
               flexShrink: 0,
             }}
           >
@@ -187,12 +213,12 @@ export function Layout() {
 
           <Box
             sx={{
-              ml: "auto",
+              gridArea: "controls",
               display: "flex",
               alignItems: "center",
               justifyContent: "flex-end",
+              justifySelf: "end",
               gap: { xs: 1, sm: 2 },
-              flex: { xs: "0 0 auto", sm: "1 1 auto" },
               minWidth: 0,
             }}
           >
@@ -212,7 +238,7 @@ export function Layout() {
         </Toolbar>
       </AppBar>
 
-      <Container component="main" maxWidth="xl" sx={{ py: 3 }}>
+      <Container component="main" maxWidth="xl" sx={{ minWidth: 0, py: 3 }}>
         <Outlet />
       </Container>
     </Box>
