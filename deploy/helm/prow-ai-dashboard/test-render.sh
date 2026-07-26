@@ -523,6 +523,56 @@ helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --show-only templates/server-deployment.yaml > "$tmp/chat-oauth.yaml"
 grep -A1 -Fq 'name: OAUTH_SCOPE' "$tmp/chat-oauth.yaml"
 grep -Fq 'value: "read:user"' "$tmp/chat-oauth.yaml"
+grep -A1 -Fq 'name: HSTS_ENABLED' "$tmp/chat-oauth.yaml"
+grep -Fq 'value: "true"' "$tmp/chat-oauth.yaml"
+if grep -Fq 'name: COOKIE_INSECURE' "$tmp/chat-oauth.yaml"; then
+  echo 'OAuth deployment rendered insecure cookies by default' >&2
+  exit 1
+fi
+
+if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.chat.enabled=true \
+  --set server.actions.mode=oauth \
+  --set server.actions.admins[0]=alice \
+  --set server.actions.oauth.clientId=client \
+  --set server.actions.oauth.clientSecret=secret \
+  --set server.actions.oauth.sessionKey=session-key \
+  --set server.actions.oauth.redirectUrl=http://localhost:8080/api/auth/callback \
+  --set ai.enabled=true \
+  --set ai.token=test-token \
+  --set server.development.allowInsecureCookies=true > "$tmp/insecure-with-hsts.yaml" 2>&1; then
+  echo 'insecure OAuth cookies rendered while HSTS was enabled' >&2
+  exit 1
+fi
+grep -Fq 'server.development.allowInsecureCookies requires server.security.hsts.enabled=false' "$tmp/insecure-with-hsts.yaml"
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.chat.enabled=true \
+  --set server.actions.mode=oauth \
+  --set server.actions.admins[0]=alice \
+  --set server.actions.oauth.clientId=client \
+  --set server.actions.oauth.clientSecret=secret \
+  --set server.actions.oauth.sessionKey=session-key \
+  --set server.actions.oauth.redirectUrl=http://localhost:8080/api/auth/callback \
+  --set ai.enabled=true \
+  --set ai.token=test-token \
+  --set server.security.hsts.enabled=false \
+  --set server.development.allowInsecureCookies=true \
+  --show-only templates/server-deployment.yaml > "$tmp/insecure-local-oauth.yaml"
+grep -A1 -Fq 'name: COOKIE_INSECURE' "$tmp/insecure-local-oauth.yaml"
+grep -Fq 'value: "1"' "$tmp/insecure-local-oauth.yaml"
+if grep -Fq 'name: HSTS_ENABLED' "$tmp/insecure-local-oauth.yaml"; then
+  echo 'local HTTP OAuth rendered HSTS' >&2
+  exit 1
+fi
+
+if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.extraEnv[0].name=COOKIE_INSECURE \
+  --set-string server.extraEnv[0].value=1 > "$tmp/insecure-extra-env.yaml" 2>&1; then
+  echo 'server.extraEnv accepted COOKIE_INSECURE' >&2
+  exit 1
+fi
+grep -Fq 'server.extraEnv must not set COOKIE_INSECURE' "$tmp/insecure-extra-env.yaml"
 
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set server.chat.enabled=true \

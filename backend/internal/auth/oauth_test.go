@@ -24,6 +24,10 @@ func stubTokenEndpoint(t *testing.T) func() {
 }
 
 func testOAuth(t *testing.T, admins []string) *OAuth {
+	return testOAuthWithSecureCookies(t, admins, false)
+}
+
+func testOAuthWithSecureCookies(t *testing.T, admins []string, secure bool) *OAuth {
 	t.Helper()
 	o, err := NewOAuth(OAuthConfig{
 		ClientID:      "cid",
@@ -31,12 +35,53 @@ func testOAuth(t *testing.T, admins []string) *OAuth {
 		RedirectURL:   "http://localhost/api/auth/callback",
 		Admins:        admins,
 		SessionKey:    "k",
-		SecureCookies: false,
+		SecureCookies: secure,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return o
+}
+
+func TestOAuth_SecureTemporaryCookies(t *testing.T) {
+	o := testOAuthWithSecureCookies(t, []string{"alice"}, true)
+	rec := httptest.NewRecorder()
+	o.handleLogin(rec, httptest.NewRequest("GET", "/api/auth/login?redirect=%2Fjob%2Fx", nil))
+
+	var state string
+	seen := map[string]bool{}
+	for _, cookie := range rec.Result().Cookies() {
+		if cookie.Name != stateCookieName && cookie.Name != returnCookieName {
+			continue
+		}
+		seen[cookie.Name] = true
+		if !cookie.Secure || !cookie.HttpOnly || cookie.SameSite != http.SameSiteLaxMode {
+			t.Errorf("%s attributes = Secure:%t HttpOnly:%t SameSite:%v", cookie.Name, cookie.Secure, cookie.HttpOnly, cookie.SameSite)
+		}
+		if cookie.Name == stateCookieName {
+			state = cookie.Value
+		}
+	}
+	if !seen[stateCookieName] || !seen[returnCookieName] {
+		t.Fatalf("temporary cookies = %v, want state and return", seen)
+	}
+
+	callback := httptest.NewRequest("GET", "/api/auth/callback?state="+state, nil)
+	callback.AddCookie(&http.Cookie{Name: stateCookieName, Value: state})
+	clearRec := httptest.NewRecorder()
+	o.handleCallback(clearRec, callback)
+	var cleared bool
+	for _, cookie := range clearRec.Result().Cookies() {
+		if cookie.Name == stateCookieName {
+			cleared = true
+			if !cookie.Secure || !cookie.HttpOnly || cookie.SameSite != http.SameSiteLaxMode || cookie.MaxAge != -1 {
+				t.Errorf("cleared state attributes = Secure:%t HttpOnly:%t SameSite:%v MaxAge:%d", cookie.Secure, cookie.HttpOnly, cookie.SameSite, cookie.MaxAge)
+			}
+		}
+	}
+	if !cleared {
+		t.Fatal("callback did not clear the state cookie")
+	}
 }
 
 func TestOAuth_LoginSetsStateAndRedirects(t *testing.T) {

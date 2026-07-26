@@ -408,6 +408,7 @@ oauth mode the `OAUTH_REDIRECT_URL` host is trusted automatically, and
    | `SESSION_KEY` | Random secret seeding the session-cookie encryption. |
    | `ADMIN_LOGINS` | Comma-separated GitHub logins allowed to act. |
    | `OAUTH_SCOPE` | Optional; defaults to `repo` with actions and `read:user` for chat-only. |
+   | `HSTS_ENABLED=1` | Optional; send `Strict-Transport-Security: max-age=31536000` when HTTPS is deployed. |
    | `COOKIE_INSECURE=1` | Optional; allow the cookie over plain http for local testing only. |
    | `TRUSTED_ORIGINS` | Optional; extra public origins the CSRF guard accepts (comma-separated) when behind a proxy. The `OAUTH_REDIRECT_URL` host is trusted automatically. |
 
@@ -423,6 +424,9 @@ oauth mode the `OAUTH_REDIRECT_URL` host is trusted automatically, and
 
    Open <http://localhost:8080>, go to a failing job's pattern, click **Sign in
    to file issues or fixes**, authorize, and the action buttons appear.
+
+   Helm deployments enable HSTS and secure OAuth cookies by default. The chart
+   accepts insecure cookies only through its explicit local-development value.
 
 ### Setting up proxy mode
 

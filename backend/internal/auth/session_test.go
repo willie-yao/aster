@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -72,5 +73,24 @@ func TestSessionCodec_WriteReadCookie(t *testing.T) {
 	// The cookie must be httpOnly.
 	if !rec.Result().Cookies()[0].HttpOnly {
 		t.Error("session cookie must be HttpOnly")
+	}
+}
+
+func TestSessionCodec_SecureCookieAttributes(t *testing.T) {
+	c, _ := newSessionCodec("secret", true, time.Hour)
+	rec := httptest.NewRecorder()
+	if err := c.write(rec, "alice", "tok"); err != nil {
+		t.Fatal(err)
+	}
+	cookie := rec.Result().Cookies()[0]
+	if !cookie.Secure || !cookie.HttpOnly || cookie.SameSite != http.SameSiteLaxMode {
+		t.Errorf("session attributes = Secure:%t HttpOnly:%t SameSite:%v", cookie.Secure, cookie.HttpOnly, cookie.SameSite)
+	}
+
+	clearRec := httptest.NewRecorder()
+	c.clear(clearRec)
+	cleared := clearRec.Result().Cookies()[0]
+	if !cleared.Secure || !cleared.HttpOnly || cleared.SameSite != http.SameSiteLaxMode || cleared.MaxAge != -1 {
+		t.Errorf("cleared session attributes = Secure:%t HttpOnly:%t SameSite:%v MaxAge:%d", cleared.Secure, cleared.HttpOnly, cleared.SameSite, cleared.MaxAge)
 	}
 }

@@ -231,6 +231,80 @@ func TestHandler_Capabilities(t *testing.T) {
 	}
 }
 
+func TestHandler_ReadOnlyRoutesRejectUnsupportedMethods(t *testing.T) {
+	dataDir := t.TempDir()
+	writeFile(t, dataDir, "manifest.json", `{"version":1}`)
+	h, err := Handler(Options{DataDir: dataDir, Capabilities: DefaultCapabilities()})
+	if err != nil {
+		t.Fatalf("Handler: %v", err)
+	}
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	for _, path := range []string{"/api/capabilities", "/data/manifest.json"} {
+		req, err := http.NewRequest(http.MethodPost, srv.URL+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("POST %s: %v", path, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusMethodNotAllowed {
+			t.Errorf("POST %s status = %d, want 405", path, resp.StatusCode)
+		}
+		if got := resp.Header.Get("Allow"); got != "GET, HEAD" {
+			t.Errorf("POST %s Allow = %q, want GET, HEAD", path, got)
+		}
+	}
+}
+
+func TestHandler_ReadOnlyRoutesPreserveHeadAndRange(t *testing.T) {
+	dataDir := t.TempDir()
+	writeFile(t, dataDir, "manifest.json", `{"version":1}`)
+	h, err := Handler(Options{DataDir: dataDir, Capabilities: DefaultCapabilities()})
+	if err != nil {
+		t.Fatalf("Handler: %v", err)
+	}
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	for _, path := range []string{"/api/capabilities", "/data/manifest.json"} {
+		req, err := http.NewRequest(http.MethodHead, srv.URL+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("HEAD %s: %v", path, err)
+		}
+		body := readBody(t, resp)
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("HEAD %s status = %d, want 200", path, resp.StatusCode)
+		}
+		if body != "" {
+			t.Errorf("HEAD %s body = %q, want empty", path, body)
+		}
+	}
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/data/manifest.json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Range", "bytes=0-3")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("range GET: %v", err)
+	}
+	if resp.StatusCode != http.StatusPartialContent {
+		t.Errorf("range status = %d, want 206", resp.StatusCode)
+	}
+	if got := readBody(t, resp); got != `{"ve` {
+		t.Errorf("range body = %q, want %q", got, `{"ve`)
+	}
+}
+
 // TestHandler_SPAFallback verifies deep links fall back to index.html while
 // real asset files are served directly.
 func TestHandler_SPAFallback(t *testing.T) {
@@ -299,7 +373,7 @@ func TestHandler_DataNoCache(t *testing.T) {
 // every route.
 func TestHandler_SecurityHeaders(t *testing.T) {
 	dataDir := t.TempDir()
-	h, err := Handler(Options{DataDir: dataDir, Capabilities: DefaultCapabilities()})
+	h, err := Handler(Options{DataDir: dataDir, Capabilities: DefaultCapabilities(), HSTSEnabled: true})
 	if err != nil {
 		t.Fatalf("Handler: %v", err)
 	}
@@ -312,14 +386,27 @@ func TestHandler_SecurityHeaders(t *testing.T) {
 	}
 	resp.Body.Close()
 	want := map[string]string{
-		"X-Frame-Options":        "DENY",
-		"X-Content-Type-Options": "nosniff",
-		"Referrer-Policy":        "strict-origin-when-cross-origin",
+		"X-Frame-Options":           "DENY",
+		"X-Content-Type-Options":    "nosniff",
+		"Referrer-Policy":           "strict-origin-when-cross-origin",
+		"Strict-Transport-Security": "max-age=31536000",
 	}
 	for k, v := range want {
 		if got := resp.Header.Get(k); got != v {
 			t.Errorf("%s = %q, want %q", k, got, v)
 		}
+	}
+}
+
+func TestHandler_HSTSDisabledForLocalHTTP(t *testing.T) {
+	h, err := Handler(Options{DataDir: t.TempDir(), Capabilities: DefaultCapabilities()})
+	if err != nil {
+		t.Fatalf("Handler: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if got := rec.Header().Get("Strict-Transport-Security"); got != "" {
+		t.Errorf("Strict-Transport-Security = %q, want empty", got)
 	}
 }
 

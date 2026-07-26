@@ -56,10 +56,15 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	hstsEnabled, err := optionalBoolEnv("HSTS_ENABLED", false)
+	if err != nil {
+		log.Fatalf("server: %v", err)
+	}
 	opts := server.Options{
 		DataDir:      dataDir,
 		StaticDir:    staticDir,
 		Capabilities: server.DefaultCapabilities(),
+		HSTSEnabled:  hstsEnabled,
 	}
 
 	// Enable admin-gated features only when a project config and an auth mode are

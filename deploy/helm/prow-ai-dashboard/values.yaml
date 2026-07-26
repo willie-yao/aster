@@ -194,9 +194,17 @@ server:
   port: 8080
   # Extra environment variables for the server container. Standard core/v1
   # EnvVar entries. Add EMAIL_SMTP_PASSWORD here for async draft-ready emails.
-  # Example: COOKIE_INSECURE=1 to allow the session cookie over
-  # plain http when testing behind a local port-forward.
+  # COOKIE_INSECURE is reserved by the chart.
   extraEnv: []
+  security:
+    hsts:
+      # Sends a one-year Strict-Transport-Security policy. Disable only when
+      # serving the chart directly over local HTTP.
+      enabled: true
+  development:
+    # Allows OAuth cookies over local HTTP. This requires HSTS to be disabled
+    # and must never be enabled on a deployed dashboard.
+    allowInsecureCookies: false
   # Admin-gated read-only conversations about a published AI analysis.
   # Uses the authentication settings under actions, but does not enable writes
   # or require BOT_TOKEN. Sessions are persisted on the shared volume so server

@@ -375,6 +375,8 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | `server.chat.maxActiveTurnsPerOwner` | Concurrent background turns per login. Defaults to `2`. |
 | `server.chat.requestsPerMinute` | Newly admitted turns per login in a rolling minute. Defaults to `10`. |
 | `server.replicaCount` | Server replicas. Chat sessions are shared through the RWX volume. |
+| `server.security.hsts.enabled` | Send a one-year HSTS policy. Defaults to `true` for Helm deployments. |
+| `server.development.allowInsecureCookies` | Allow OAuth cookies over local HTTP. Requires HSTS to be disabled and must not be used for a deployed dashboard. |
 | `server.actions.enabled`, `server.actions.mode` | Turn on admin authentication, write actions, and private trace access; `oauth` (GitHub sign-in) or `proxy` (SSO proxy + bot token). |
 | `server.actions.admins` | Required allowlist for admin actions, chat, and trace access. An empty list fails closed. |
 
@@ -386,6 +388,12 @@ and list the allowed logins in `server.actions.admins` (see
 [server.md](server.md)). Proxy mode needs a bot token only when write actions
 are enabled. The same authenticated session protects write actions, analysis
 chat, and the private analysis trace page.
+
+The chart reserves `COOKIE_INSECURE` and rejects it in `server.extraEnv`.
+For local OAuth testing over HTTP, set
+`server.security.hsts.enabled=false` and
+`server.development.allowInsecureCookies=true`. Deployed OAuth dashboards
+should keep the defaults.
 
 ### Enabling analysis chat with Helm
 

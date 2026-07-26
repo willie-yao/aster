@@ -25,6 +25,18 @@ var (
 const stateCookieName = "pad_oauth_state"
 const returnCookieName = "pad_oauth_return"
 
+func oauthCookie(name, value string, maxAge int, secure bool) *http.Cookie {
+	return &http.Cookie{
+		Name:     name,
+		Value:    value,
+		Path:     "/",
+		MaxAge:   maxAge,
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteLaxMode,
+	}
+}
+
 // OAuthConfig configures the GitHub OAuth App login flow.
 type OAuthConfig struct {
 	ClientID     string
@@ -112,24 +124,8 @@ func (o *OAuth) handleLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     stateCookieName,
-		Value:    state,
-		Path:     "/",
-		MaxAge:   int((10 * time.Minute).Seconds()),
-		HttpOnly: true,
-		Secure:   o.cfg.SecureCookies,
-		SameSite: http.SameSiteLaxMode,
-	})
-	http.SetCookie(w, &http.Cookie{
-		Name:     returnCookieName,
-		Value:    safeRelativePath(r.URL.Query().Get("redirect")),
-		Path:     "/",
-		MaxAge:   int((10 * time.Minute).Seconds()),
-		HttpOnly: true,
-		Secure:   o.cfg.SecureCookies,
-		SameSite: http.SameSiteLaxMode,
-	})
+	http.SetCookie(w, oauthCookie(stateCookieName, state, int((10*time.Minute).Seconds()), o.cfg.SecureCookies))
+	http.SetCookie(w, oauthCookie(returnCookieName, safeRelativePath(r.URL.Query().Get("redirect")), int((10*time.Minute).Seconds()), o.cfg.SecureCookies))
 	q := url.Values{
 		"client_id":    {o.cfg.ClientID},
 		"redirect_uri": {o.cfg.RedirectURL},
@@ -149,7 +145,7 @@ func (o *OAuth) handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The state cookie is single-use.
-	http.SetCookie(w, &http.Cookie{Name: stateCookieName, Value: "", Path: "/", MaxAge: -1})
+	http.SetCookie(w, oauthCookie(stateCookieName, "", -1, o.cfg.SecureCookies))
 
 	code := r.URL.Query().Get("code")
 	if code == "" {
@@ -181,7 +177,7 @@ func (o *OAuth) handleCallback(w http.ResponseWriter, r *http.Request) {
 	if rc, err := r.Cookie(returnCookieName); err == nil {
 		dest = safeRelativePath(rc.Value)
 	}
-	http.SetCookie(w, &http.Cookie{Name: returnCookieName, Value: "", Path: "/", MaxAge: -1})
+	http.SetCookie(w, oauthCookie(returnCookieName, "", -1, o.cfg.SecureCookies))
 	http.Redirect(w, r, dest, http.StatusFound)
 }
 
