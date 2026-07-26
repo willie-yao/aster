@@ -461,6 +461,27 @@ invalidation gates reject entries whose version is below the current engine's,
 so strengthening the gate automatically invalidates entries that passed under
 the older, weaker contract without per-consumer cache clears.
 
+**Best-draft selection.** A repair never replaces an earlier draft merely
+because it arrived later. The engine compares parseable attempts in this order:
+
+1. passing critique beats failing critique;
+2. no transient-versus-persistent conflict beats a conflict;
+3. fewer unread citations wins;
+4. fewer missing evidence groups wins;
+5. fewer punt matches wins;
+6. a tie keeps the earlier draft.
+
+The tie rule has one semantic-review exception: a revision explicitly driven by
+semantic objections may replace an otherwise tied draft so the semantic repair
+can take effect.
+
+A materially different `root_cause` can replace the selected draft only after
+a new non-empty artifact read or when the semantic review explicitly drove the
+revision. Otherwise the retry may improve wording, citations, and the suggested
+fix, but it cannot silently replace the diagnosis. Formatting-only root-cause
+changes are ignored; diagnosis-token additions, deletions, reordering, and
+negation are material. The selected attempt alone controls cache acceptance.
+
 #### Hallucinated citation check
 
 Alongside the punt regex, critique runs a deterministic check that rejects a
