@@ -1,4 +1,5 @@
 import Box from "@mui/material/Box";
+import Alert from "@mui/material/Alert";
 import Chip from "@mui/material/Chip";
 import Link from "@mui/material/Link";
 import Stack from "@mui/material/Stack";
@@ -15,6 +16,7 @@ import { useRemediations, useResolved } from "../hooks/useData";
 import { soft } from "../theme";
 import { AnalysisChat } from "./AnalysisChat";
 import { useCapabilities } from "../hooks/useCapabilities";
+import { patternChatAvailability } from "../lib/patternChat";
 
 function remediationStatusLabel(status: string): string {
   return status.replaceAll("_", " ");
@@ -62,8 +64,9 @@ export function PatternBanner({
   const hasEvidenceBuild = Boolean(
     pattern.shared_builds?.some((buildID) => runs.some((run) => run.build_id === buildID)),
   );
+  const chatAvailability = patternChatAvailability(pattern, jobID, hasEvidenceBuild);
   const chatRef: AnalysisChatReference | null =
-    pattern.systemic && pattern.id && pattern.content_hash && jobID && hasEvidenceBuild
+    chatAvailability === "ready" && pattern.id && pattern.content_hash && jobID
       ? {
           scope: "pattern",
           job_id: jobID,
@@ -219,6 +222,12 @@ export function PatternBanner({
               ))}
             </Stack>
           </Box>
+        )}
+
+        {chatAvailability === "stale" && (
+          <Alert severity="info" variant="outlined">
+            Recurring-pattern chat is unavailable because this dashboard data predates content hashing. Refresh the dashboard data to enable it.
+          </Alert>
         )}
 
         {chatRef && (

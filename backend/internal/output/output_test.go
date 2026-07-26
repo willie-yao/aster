@@ -151,6 +151,93 @@ func TestWriteJobDetail(t *testing.T) {
 	}
 }
 
+func TestWriteJobDetailBackfillsPatternIdentity(t *testing.T) {
+	dir := t.TempDir()
+	detail := sampleJobDetail("periodic-pattern")
+	detail.PatternAnalyses = []models.PatternAnalysis{{
+		ID: "stable-pattern", ContentHash: "", JobID: detail.JobID, Subject: detail.Name,
+		BuildsAnalyzed: 3, Systemic: true, Confidence: "high", SharedRootCause: "shared cause",
+		SharedBuilds: []string{"1", "2"}, SuggestedFix: "fix it", Summary: "summary",
+	}}
+	if err := WriteJobDetail(dir, detail); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "jobs", models.JobDataFilename(detail.JobID)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var written models.JobDetail
+	if err := json.Unmarshal(data, &written); err != nil {
+		t.Fatal(err)
+	}
+	pattern := written.PatternAnalyses[0]
+	if pattern.ID != "stable-pattern" || pattern.ContentHash != models.PatternHash(pattern) {
+		t.Fatalf("written pattern = %+v", pattern)
+	}
+	if detail.PatternAnalyses[0].ContentHash != "" {
+		t.Fatal("WriteJobDetail mutated its input")
+	}
+}
+
+func TestWriteFlakinessReportBackfillsPatternIdentity(t *testing.T) {
+	dir := t.TempDir()
+	report := models.FlakinessReport{RecurringPatterns: []models.PatternAnalysis{{
+		JobID: "job", Subject: "job", BuildsAnalyzed: 3, Systemic: true,
+		Confidence: "high", SharedRootCause: "shared cause", Summary: "summary",
+	}}}
+	if err := WriteFlakinessReport(dir, report); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "flakiness.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var written models.FlakinessReport
+	if err := json.Unmarshal(data, &written); err != nil {
+		t.Fatal(err)
+	}
+	pattern := written.RecurringPatterns[0]
+	if pattern.ID == "" || pattern.ContentHash != models.PatternHash(pattern) {
+		t.Fatalf("written pattern = %+v", pattern)
+	}
+}
+
+func TestWriteAllKeepsPatternIdentityConsistent(t *testing.T) {
+	dir := t.TempDir()
+	pattern := models.PatternAnalysis{
+		ID: "stable-pattern", JobID: "job-alpha", Subject: "job-alpha",
+		BuildsAnalyzed: 3, Systemic: true, Confidence: "high", SharedRootCause: "shared cause",
+		SharedBuilds: []string{"1", "2"}, SuggestedFix: "fix it", Summary: "summary",
+	}
+	detail := sampleJobDetail(pattern.JobID)
+	detail.PatternAnalyses = []models.PatternAnalysis{pattern}
+	report := models.FlakinessReport{RecurringPatterns: []models.PatternAnalysis{pattern}}
+	if err := WriteAll(dir, sampleConfig(), sampleDashboard(), []models.JobDetail{detail}, report, models.SearchIndex{}); err != nil {
+		t.Fatal(err)
+	}
+	jobData, err := os.ReadFile(filepath.Join(dir, "jobs", models.JobDataFilename(detail.JobID)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	flakinessData, err := os.ReadFile(filepath.Join(dir, "flakiness.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var writtenDetail models.JobDetail
+	var writtenReport models.FlakinessReport
+	if err := json.Unmarshal(jobData, &writtenDetail); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(flakinessData, &writtenReport); err != nil {
+		t.Fatal(err)
+	}
+	jobPattern := writtenDetail.PatternAnalyses[0]
+	reportPattern := writtenReport.RecurringPatterns[0]
+	if jobPattern.ID != reportPattern.ID || jobPattern.ContentHash == "" || jobPattern.ContentHash != reportPattern.ContentHash {
+		t.Fatalf("job pattern=%+v report pattern=%+v", jobPattern, reportPattern)
+	}
+}
+
 func TestJobDataFilenameIsInjective(t *testing.T) {
 	a := models.JobDataFilename("foo/bar-baz/qux")
 	b := models.JobDataFilename("foo-bar/baz/qux")

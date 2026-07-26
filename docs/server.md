@@ -123,6 +123,11 @@ least one affected build remains in the current job data window. Pattern
 conversations use cross-build suggested questions, hide test-only correction
 and source-investigation controls, and link build-qualified citations back to
 the matching affected run when a web URL is available.
+Job-detail and flakiness writers always backfill the canonical content hash and
+preserve an existing stable pattern ID. This upgrades cached or older pattern
+results without clearing the analysis cache or rerunning pattern analysis.
+Older deployed JSON that still lacks the hash shows an explicit stale-data
+notice instead of silently hiding chat until the next controlled data refresh.
 
 Post `{"message":"What evidence supports this?"}` to the session's `messages`
 endpoint with a new `Idempotency-Key` for that question. Retrying either POST
