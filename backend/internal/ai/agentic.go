@@ -1375,34 +1375,20 @@ var rootCauseStopwords = map[string]bool{
 	"to": true, "was": true, "were": true, "with": true,
 }
 
-// rootCauseMateriallyChanged ignores formatting and allows only pure supporting
-// detail additions without new evidence.
+// rootCauseMateriallyChanged ignores formatting but treats diagnosis token
+// additions, deletions, reordering, and negation as material.
 func rootCauseMateriallyChanged(a, b string) bool {
-	if strings.EqualFold(strings.Join(strings.Fields(a), " "), strings.Join(strings.Fields(b), " ")) {
-		return false
-	}
-	aTokens := rootCauseTokens(a)
-	bTokens := rootCauseTokens(b)
-	if len(aTokens) == 0 || len(bTokens) == 0 {
-		return true
-	}
-	common := 0
-	for token := range aTokens {
-		if bTokens[token] {
-			common++
-		}
-	}
-	return common != len(aTokens)
+	return rootCauseFingerprint(a) != rootCauseFingerprint(b)
 }
 
-func rootCauseTokens(rootCause string) map[string]bool {
-	out := map[string]bool{}
+func rootCauseFingerprint(rootCause string) string {
+	var tokens []string
 	for _, token := range rootCauseTokenRE.FindAllString(strings.ToLower(rootCause), -1) {
 		if !rootCauseStopwords[token] {
-			out[token] = true
+			tokens = append(tokens, token)
 		}
 	}
-	return out
+	return strings.Join(tokens, " ")
 }
 
 func (s *agentState) newDraftCandidate(phase, content string, providerItems []json.RawMessage, parsed analysisResponse, out critiqueOutcome) *critiqueDraftCandidate {

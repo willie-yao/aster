@@ -1126,7 +1126,7 @@ func TestResponseFormatFooter_DepthAnchors(t *testing.T) {
 // remediation. Critique catches this pattern and re-prompts the model.
 // See critique.go for the regex; these tests exercise the loop integration.
 
-const puntyFinalJSON = `{"summary":"shallow","is_transient":false,"root_cause":"third CP machine cloud-init empty","severity":"High","suggested_fix":"Check the AzureMachine status conditions. Verify cloud-init script execution. Investigate Azure activity logs.","relevant_files":[]}`
+const puntyFinalJSON = `{"summary":"shallow","is_transient":false,"root_cause":"third CP machine cloud-init empty due to vnet peering mismatch","severity":"High","suggested_fix":"Check the AzureMachine status conditions. Verify cloud-init script execution. Investigate Azure activity logs.","relevant_files":[]}`
 
 const cleanFinalJSON = `{"summary":"deep","is_transient":false,"root_cause":"third CP machine cloud-init empty due to vnet peering mismatch","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 142 to match the staging vnet peering name; reapply and retry.","relevant_files":["kustomize/cluster-template.yaml"]}`
 
@@ -1367,8 +1367,8 @@ func TestRootCauseMateriallyChanged(t *testing.T) {
 	if rootCauseMateriallyChanged("cloud-node-manager could not reach the Kubernetes API.", "cloud-node-manager could not reach the Kubernetes API") {
 		t.Fatal("terminal punctuation changed the diagnosis")
 	}
-	if rootCauseMateriallyChanged(base, base+" The controller log confirms the same API reachability failure.") {
-		t.Fatal("supporting detail changed the diagnosis")
+	if !rootCauseMateriallyChanged(base, base+" The controller log confirms the same API reachability failure.") {
+		t.Fatal("diagnosis-token addition was not material")
 	}
 	if !rootCauseMateriallyChanged(base, "Azure subscription quota exhaustion prevented virtual machine creation.") {
 		t.Fatal("different diagnosis was not material")
@@ -1378,6 +1378,12 @@ func TestRootCauseMateriallyChanged(t *testing.T) {
 	}
 	if !rootCauseMateriallyChanged("Azure quota exhaustion prevented virtual machine creation.", "Azure prevented virtual machine creation.") {
 		t.Fatal("diagnosis-token deletion was not material")
+	}
+	if !rootCauseMateriallyChanged("Azure quota exhaustion prevented virtual machine creation.", "Azure quota exhaustion did not prevent virtual machine creation; authentication failure did.") {
+		t.Fatal("diagnosis negation was not material")
+	}
+	if !rootCauseMateriallyChanged("quota exhaustion caused authentication failure", "authentication failure caused quota exhaustion") {
+		t.Fatal("causal reordering was not material")
 	}
 }
 

@@ -478,8 +478,9 @@ can take effect.
 A materially different `root_cause` can replace the selected draft only after
 a new non-empty artifact read or when the semantic review explicitly drove the
 revision. Otherwise the retry may improve wording, citations, and the suggested
-fix, but it cannot silently replace the diagnosis. The selected attempt alone
-controls cache acceptance.
+fix, but it cannot silently replace the diagnosis. Formatting-only root-cause
+changes are ignored; diagnosis-token additions, deletions, reordering, and
+negation are material. The selected attempt alone controls cache acceptance.
 
 #### Hallucinated citation check
 
