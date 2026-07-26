@@ -446,12 +446,14 @@ func runBenchCase(t *testing.T, bc benchCase, endpoint, model, token, systemProm
 	traceStore := ai.NewTraceStore()
 	service.SetTraceStore(traceStore)
 	var draftObservations []benchmarkDraftObservation
+	selectedAttempt := 0
 	service.SetDraftObserver(func(observation ai.DraftObservation) {
 		draftObservations = append(draftObservations, benchmarkDraftObservation{
 			DraftObservation: observation,
 			observedAt:       time.Now(),
 		})
 	})
+	service.SetDraftSelectionObserver(func(attempt int) { selectedAttempt = attempt })
 
 	// Size the model/context budgets from the endpoint's window, matching the
 	// fetcher. Fall back to a static budget with compaction off when absent.
@@ -492,7 +494,7 @@ func runBenchCase(t *testing.T, bc benchCase, endpoint, model, token, systemProm
 	snapshot := traceStore.Snapshot()
 	toolUsage := successfulBenchmarkToolUsage(snapshot)
 	traceSummary := summarizeBenchmarkTrace(snapshot)
-	scoreBenchCase(t, bc, tc, elapsed, "in-process", agentic.MinGCSBytes, toolUsage, traceSummary, draftObservations)
+	scoreBenchCase(t, bc, tc, elapsed, "in-process", agentic.MinGCSBytes, toolUsage, traceSummary, draftObservations, selectedAttempt)
 }
 
 type benchmarkDraftObservation struct {
@@ -616,7 +618,7 @@ func benchmarkFloorNudgeReason(status string) string {
 
 func benchmarkSemanticJudgeOutcome(outcome string) string {
 	switch outcome {
-	case "passed", "error", "objected", "revision_unparseable", "revision_rejected", "revised":
+	case "passed", "error", "objected", "revision_unparseable", "revision_rejected", "revision_not_selected", "revised":
 		return outcome
 	default:
 		return "unknown"
@@ -683,7 +685,7 @@ func scoreBenchmarkDraft(bc benchCase, observation benchmarkDraftObservation) be
 	return score
 }
 
-func benchmarkDraftTelemetryLines(bc benchCase, observations []benchmarkDraftObservation, tc *models.TestCase) []string {
+func benchmarkDraftTelemetryLines(bc benchCase, observations []benchmarkDraftObservation, tc *models.TestCase, selected int) []string {
 	if len(observations) == 0 {
 		return nil
 	}
@@ -691,7 +693,9 @@ func benchmarkDraftTelemetryLines(bc benchCase, observations []benchmarkDraftObs
 	for _, observation := range observations {
 		scores = append(scores, scoreBenchmarkDraft(bc, observation))
 	}
-	selected := selectedBenchmarkDraftAttempt(observations, tc)
+	if selected == 0 {
+		selected = selectedBenchmarkDraftAttempt(observations, tc)
+	}
 	lines := make([]string, 0, len(scores)*2)
 	for _, score := range scores {
 		lines = append(lines, fmt.Sprintf(
@@ -876,7 +880,7 @@ func TestBenchmarkDraftScoringProducesPairedDeltas(t *testing.T) {
 			Severity: observations[1].Severity,
 		},
 	}
-	got := strings.Join(benchmarkDraftTelemetryLines(bc, observations, tc), "\n")
+	got := strings.Join(benchmarkDraftTelemetryLines(bc, observations, tc, 2), "\n")
 	for _, want := range []string{
 		"draft attempt=1 phase=initial score=1/2",
 		"draft attempt=2 phase=critique_retry score=2/2",
@@ -911,6 +915,25 @@ func TestSelectedBenchmarkDraftAttemptUsesPublishedIdentity(t *testing.T) {
 	}
 	if got := selectedBenchmarkDraftAttempt(observations, tc); got != 1 {
 		t.Fatalf("selected attempt = %d, want 1", got)
+	}
+}
+
+func TestBenchmarkDraftTelemetryUsesRuntimeSelection(t *testing.T) {
+	bc := benchCase{signals: []benchSignal{{name: "cause", re: mustRE(`cause`)}}}
+	observations := []benchmarkDraftObservation{
+		{DraftObservation: ai.DraftObservation{Attempt: 1, Phase: "initial", Summary: "cause", RootCause: "cause", SuggestedFix: "fix"}},
+		{DraftObservation: ai.DraftObservation{Attempt: 2, Phase: "critique_retry", Summary: "cause", RootCause: "cause", SuggestedFix: "fix"}},
+	}
+	tc := &models.TestCase{
+		AISummary:  &models.AISummary{Summary: "cause"},
+		AIAnalysis: &models.AIAnalysis{RootCause: "cause", SuggestedFix: "fix"},
+	}
+	got := strings.Join(benchmarkDraftTelemetryLines(bc, observations, tc, 1), "\n")
+	if !strings.Contains(got, "attempt=1 phase=initial score=1/1 required_signals=0/0 issue_vector=punt=0,unread=0,missing=0,transient=false tool_calls=0 evidence_reads=0 selected=true") {
+		t.Fatalf("runtime selection was not reported:\n%s", got)
+	}
+	if strings.Contains(got, "attempt=2 phase=critique_retry score=1/1 required_signals=0/0 issue_vector=punt=0,unread=0,missing=0,transient=false tool_calls=0 evidence_reads=0 selected=true") {
+		t.Fatalf("identity fallback overrode runtime selection:\n%s", got)
 	}
 }
 
@@ -993,13 +1016,13 @@ func benchTestCase(bc benchCase) *models.TestCase {
 	}
 }
 
-func scoreBenchCase(t *testing.T, bc benchCase, tc *models.TestCase, elapsed time.Duration, backend string, minGCSBytes int, toolUsage benchmarkToolUsage, traceSummary benchmarkTraceSummary, draftObservations []benchmarkDraftObservation) {
+func scoreBenchCase(t *testing.T, bc benchCase, tc *models.TestCase, elapsed time.Duration, backend string, minGCSBytes int, toolUsage benchmarkToolUsage, traceSummary benchmarkTraceSummary, draftObservations []benchmarkDraftObservation, selectedAttempt int) {
 	t.Helper()
 	t.Logf("\n===== %s (%s) =====", bc.name, backend)
 	for _, line := range benchmarkTelemetryLines(elapsed, tc.AIAnalysis, minGCSBytes, toolUsage, traceSummary) {
 		t.Log(line)
 	}
-	for _, line := range benchmarkDraftTelemetryLines(bc, draftObservations, tc) {
+	for _, line := range benchmarkDraftTelemetryLines(bc, draftObservations, tc, selectedAttempt) {
 		t.Log(line)
 	}
 	if tc.AIAnalysis == nil {

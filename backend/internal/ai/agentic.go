@@ -109,9 +109,30 @@ type DraftObservation struct {
 // outside the opt-in quality benchmark.
 type DraftObserver func(DraftObservation)
 
+// DraftSelectionObserver receives the selected parseable attempt number. It is
+// nil outside the opt-in quality benchmark.
+type DraftSelectionObserver func(int)
+
 type critiqueRetryBudget struct {
 	max  int
 	used int
+}
+
+type critiqueQuality struct {
+	Passed               bool
+	TransientConflict    bool
+	UnreadCitationCount  int
+	MissingEvidenceCount int
+	PuntCount            int
+}
+
+type critiqueDraftCandidate struct {
+	parsed           analysisResponse
+	content          string
+	providerItems    []json.RawMessage
+	quality          critiqueQuality
+	attempt          int
+	evidenceRevision int
 }
 
 func (b *critiqueRetryBudget) available() bool {
@@ -353,19 +374,22 @@ func evalFloors(state *agentState, opts AgenticOptions) floorStatus {
 }
 
 type agentState struct {
-	browser         artifacts.Browser
-	opts            AgenticOptions
-	registry        *tools.Registry
-	enabledTools    []string
-	cache           *tools.Cache
-	webURLBase      string
-	startTime       time.Time
-	modelBytes      int
-	gcsBytes        int
-	calls           int
-	budgetExhausted bool
-	draftObserver   DraftObserver
-	draftAttempt    int
+	browser           artifacts.Browser
+	opts              AgenticOptions
+	registry          *tools.Registry
+	enabledTools      []string
+	cache             *tools.Cache
+	webURLBase        string
+	startTime         time.Time
+	modelBytes        int
+	gcsBytes          int
+	calls             int
+	budgetExhausted   bool
+	draftObserver     DraftObserver
+	selectionObserver DraftSelectionObserver
+	draftAttempt      int
+	bestDraft         *critiqueDraftCandidate
+	evidenceRevision  int
 
 	// critiquePassed records whether the accepted answer cleared the
 	// always-on critique gate. Stamped onto the published AIAnalysis so the
@@ -538,6 +562,10 @@ type AgenticInputs struct {
 	// DraftObserver is an optional in-memory benchmark hook. It is disabled in
 	// production and receives value-only copies that cannot mutate runtime state.
 	DraftObserver DraftObserver
+
+	// DraftSelectionObserver reports the selected parseable attempt to the
+	// benchmark after production selection completes.
+	DraftSelectionObserver DraftSelectionObserver
 }
 
 const (
@@ -753,15 +781,16 @@ func (c *Client) doAnalyzeAgentic(
 	}
 
 	state := &agentState{
-		browser:       in.Browser,
-		opts:          in.Opts,
-		registry:      in.Registry,
-		enabledTools:  in.EnabledTools,
-		cache:         in.Cache,
-		webURLBase:    in.WebURLBase,
-		startTime:     time.Now(),
-		promptHash:    PromptFingerprint(sysPrompt),
-		draftObserver: in.DraftObserver,
+		browser:           in.Browser,
+		opts:              in.Opts,
+		registry:          in.Registry,
+		enabledTools:      in.EnabledTools,
+		cache:             in.Cache,
+		webURLBase:        in.WebURLBase,
+		startTime:         time.Now(),
+		promptHash:        PromptFingerprint(sysPrompt),
+		draftObserver:     in.DraftObserver,
+		selectionObserver: in.DraftSelectionObserver,
 	}
 	// Skills are consulted inside the always-on critique gate. Recipe presence
 	// is the opt-in; an empty set is a no-op.
@@ -773,9 +802,7 @@ func (c *Client) doAnalyzeAgentic(
 	// nil-disables contract would skip the worst-case hallucination scenario.
 	state.readArtifactsFull = map[string]bool{}
 	state.readArtifactsBase = map[string]bool{}
-	if in.Skills != nil {
-		state.evidenceArtifactsFull = map[string]bool{}
-	}
+	state.evidenceArtifactsFull = map[string]bool{}
 
 	fullSysPrompt := sysPrompt + agToolDocs
 	state.initialArtifactTree = listInitialArtifactTree(ctx, in.Browser)
@@ -828,8 +855,6 @@ func (c *Client) doAnalyzeAgentic(
 	schemaBytes := schemaPayloadBytes(schemas)
 	headroom := contextHeadroomFor(in.Opts)
 
-	var bestDraftContent string
-	var bestDraftProviderItems []json.RawMessage
 	finalDraftObserved := false
 	draftPhase := "initial"
 
@@ -847,9 +872,9 @@ agentLoop:
 		var fits bool
 		messages, fits = prepareContextRequest(loopCtx, messages, schemaBytes, headroom, "applied")
 		if !fits {
-			if bestDraftContent != "" {
-				finalContent = bestDraftContent
-				finalProviderItems = bestDraftProviderItems
+			if state.bestDraft != nil {
+				finalContent = state.bestDraft.content
+				finalProviderItems = state.bestDraft.providerItems
 				finalContentFromToolsFree = true
 				finalDraftObserved = true
 				recordTrace(loopCtx, TraceEvent{Kind: "context_headroom", Outcome: "best_draft", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
@@ -888,22 +913,17 @@ agentLoop:
 			// and would otherwise be re-nudged every iteration.
 			parsedCandidate, parsedOK := tryParseAnalysis(candidate)
 			var candidateCritique critiqueOutcome
-			candidateCritiqued := false
+			var candidateDraft *critiqueDraftCandidate
 			if parsedOK {
-				if state.draftObserver != nil {
-					candidateCritique = critiqueDraft(parsedCandidate, state.readArtifactsFull, state.readArtifactsBase, matchSkillsForDraft(state, parsedCandidate), state.consecutiveFailures)
-					candidateCritiqued = true
-					if len(candidateCritique.MissingSkillEvidence) > 0 {
-						if treeSet := state.artifactTreeSet(); treeSet != nil {
-							if n := pruneAbsentSkillEvidence(parsedCandidate, &candidateCritique, treeSet); n > 0 {
-								log.Printf("  ⓘ skill-evidence: %d required group(s) absent from this build's artifacts; not held against the draft", n)
-							}
+				candidateCritique = critiqueDraft(parsedCandidate, state.readArtifactsFull, state.readArtifactsBase, matchSkillsForDraft(state, parsedCandidate), state.consecutiveFailures)
+				if len(candidateCritique.MissingSkillEvidence) > 0 {
+					if treeSet := state.artifactTreeSet(); treeSet != nil {
+						if n := pruneAbsentSkillEvidence(parsedCandidate, &candidateCritique, treeSet); n > 0 {
+							log.Printf("  ⓘ skill-evidence: %d required group(s) absent from this build's artifacts; not held against the draft", n)
 						}
 					}
-					state.observeDraft(draftPhase, parsedCandidate, candidateCritique)
 				}
-				bestDraftContent = candidate
-				bestDraftProviderItems = msg.ProviderItems
+				candidateDraft = state.newDraftCandidate(draftPhase, candidate, msg.ProviderItems, parsedCandidate, candidateCritique)
 			}
 
 			floors := evalFloors(state, in.Opts)
@@ -927,8 +947,14 @@ agentLoop:
 					var fits bool
 					messages, fits = prepareContextRequest(loopCtx, messages, schemaBytes, headroom, "floor_nudge")
 					if !fits {
-						finalContent = candidate
-						finalProviderItems = msg.ProviderItems
+						if state.bestDraft != nil {
+							finalContent = state.bestDraft.content
+							finalProviderItems = state.bestDraft.providerItems
+						} else {
+							state.considerDraft(candidateDraft, false)
+							finalContent = candidate
+							finalProviderItems = msg.ProviderItems
+						}
 						finalContentFromToolsFree = true
 						finalDraftObserved = parsedOK
 						recordTrace(loopCtx, TraceEvent{Kind: "context_headroom", Outcome: "retry_denied", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
@@ -951,17 +977,11 @@ agentLoop:
 			// candidates; unparseable finals fall through to runFinalizeRound
 			// below.
 			if parsed, ok := parsedCandidate, parsedOK; ok {
-				if !candidateCritiqued {
-					candidateCritique = critiqueDraft(parsed, state.readArtifactsFull, state.readArtifactsBase, matchSkillsForDraft(state, parsed), state.consecutiveFailures)
-					if len(candidateCritique.MissingSkillEvidence) > 0 {
-						if treeSet := state.artifactTreeSet(); treeSet != nil {
-							if n := pruneAbsentSkillEvidence(parsed, &candidateCritique, treeSet); n > 0 {
-								log.Printf("  ⓘ skill-evidence: %d required group(s) absent from this build's artifacts; not held against the draft", n)
-							}
-						}
-					}
-				}
 				out := candidateCritique
+				if !out.Passed || !in.Opts.SemanticJudge || semanticJudged || state.bestDraft == nil {
+					semanticAccepted := draftPhase == "semantic_retry" && state.judgeObjected
+					state.considerDraft(candidateDraft, semanticAccepted)
+				}
 				if out.Passed {
 					recordTrace(loopCtx, TraceEvent{Kind: "critique", Outcome: "passed"})
 					// Second-line semantic judge: a focused LLM review that
@@ -993,8 +1013,10 @@ agentLoop:
 							var fits bool
 							messages, fits = prepareContextRequest(loopCtx, messages, schemaBytes, headroom, "semantic_retry")
 							if !fits {
-								finalContent = candidate
-								finalProviderItems = msg.ProviderItems
+								if state.bestDraft != nil {
+									finalContent = state.bestDraft.content
+									finalProviderItems = state.bestDraft.providerItems
+								}
 								finalContentFromToolsFree = true
 								finalDraftObserved = true
 								recordTrace(loopCtx, TraceEvent{Kind: "context_headroom", Outcome: "retry_denied", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
@@ -1007,14 +1029,15 @@ agentLoop:
 						default:
 							recordTrace(loopCtx, TraceEvent{Kind: "semantic_judge", Outcome: "passed"})
 							log.Printf("  ✓ semantic judge: no objections")
+							state.considerDraft(candidateDraft, true)
 						}
 					}
 					// Reaching acceptance after the judge objected on an earlier
 					// draft means its objections drove an accepted revision.
-					if state.judgeObjected {
+					if state.judgeObjected && state.bestDraft != nil && candidateDraft != nil && state.bestDraft.attempt == candidateDraft.attempt {
 						state.judgeRevised = true
 					}
-					state.critiquePassed = true
+					state.critiquePassed = state.bestDraft != nil && state.bestDraft.quality.Passed
 				} else if critiqueRetries.available() {
 					echo := modelMessage{Role: "assistant", ProviderItems: msg.ProviderItems}
 					if msg.Content != nil {
@@ -1035,8 +1058,10 @@ agentLoop:
 					var fits bool
 					messages, fits = prepareContextRequest(loopCtx, messages, schemaBytes, headroom, "critique_retry")
 					if !fits {
-						finalContent = candidate
-						finalProviderItems = msg.ProviderItems
+						if state.bestDraft != nil {
+							finalContent = state.bestDraft.content
+							finalProviderItems = state.bestDraft.providerItems
+						}
 						finalContentFromToolsFree = true
 						finalDraftObserved = true
 						recordTrace(loopCtx, TraceEvent{Kind: "context_headroom", Outcome: "retry_denied", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
@@ -1071,8 +1096,13 @@ agentLoop:
 				}
 			}
 
-			finalContent = candidate
-			finalProviderItems = msg.ProviderItems
+			if parsedOK && state.bestDraft != nil {
+				finalContent = state.bestDraft.content
+				finalProviderItems = state.bestDraft.providerItems
+			} else {
+				finalContent = candidate
+				finalProviderItems = msg.ProviderItems
+			}
 			finalContentFromToolsFree = true
 			finalDraftObserved = parsedOK
 			break
@@ -1115,9 +1145,9 @@ agentLoop:
 			if retry, admitted := critiqueRetries.admit(); admitted {
 				unparseableRetryAdmitted = true
 				recordTrace(loopCtx, TraceEvent{Kind: "critique", Outcome: "unparseable_retry", Retry: retry})
-			} else if bestDraftContent != "" {
-				finalContent = bestDraftContent
-				finalProviderItems = bestDraftProviderItems
+			} else if state.bestDraft != nil {
+				finalContent = state.bestDraft.content
+				finalProviderItems = state.bestDraft.providerItems
 				finalContentFromToolsFree = true
 				finalDraftObserved = true
 				parsed, ok = tryParseAnalysis(finalContent)
@@ -1134,7 +1164,7 @@ agentLoop:
 		}
 		parsed, ok = tryParseAnalysis(finalContent)
 	}
-	if !ok && draftPhase == "critique_retry" && bestDraftContent != "" {
+	if !ok && draftPhase == "critique_retry" && state.bestDraft != nil {
 		if !unparseableRetryAdmitted {
 			if retry, admitted := critiqueRetries.admit(); admitted {
 				recordTrace(loopCtx, TraceEvent{Kind: "critique", Outcome: "unparseable_retry", Retry: retry})
@@ -1147,9 +1177,9 @@ agentLoop:
 			}
 		}
 	}
-	if !ok && draftPhase == "critique_retry" && bestDraftContent != "" {
-		finalContent = bestDraftContent
-		finalProviderItems = bestDraftProviderItems
+	if !ok && draftPhase == "critique_retry" && state.bestDraft != nil {
+		finalContent = state.bestDraft.content
+		finalProviderItems = state.bestDraft.providerItems
 		finalContentFromToolsFree = true
 		finalDraftObserved = true
 		parsed, ok = tryParseAnalysis(finalContent)
@@ -1172,6 +1202,7 @@ agentLoop:
 
 	parsed = c.applyPostLoopCritique(loopCtx, state, messages, finalContent, finalProviderItems, parsed, in.Opts, critiqueRetries, finalDraftObserved, draftPhase)
 
+	state.notifyDraftSelection()
 	c.cacheAcceptedAnalysis(cacheKey, parsed, state, in.Opts, state.critiquePassed)
 	summary, analysis := c.buildOutputs(parsed)
 	stampAgenticTelemetry(analysis, state, in.Mode, false, start)
@@ -1180,7 +1211,7 @@ agentLoop:
 
 func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, messages []modelMessage, finalContent string, finalProviderItems []json.RawMessage, parsed analysisResponse, opts AgenticOptions, retries *critiqueRetryBudget, draftObserved bool, draftPhase string) analysisResponse {
 	if state.critiquePassed {
-		return parsed
+		return state.bestDraft.parsed
 	}
 	out := critiqueDraft(parsed, state.readArtifactsFull, state.readArtifactsBase, matchSkillsForDraft(state, parsed), state.consecutiveFailures)
 	if len(out.MissingSkillEvidence) > 0 {
@@ -1192,39 +1223,43 @@ func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, m
 		if draftPhase == "initial" {
 			draftPhase = "finalize"
 		}
-		state.observeDraft(draftPhase, parsed, out)
+		candidate := state.newDraftCandidate(draftPhase, finalContent, finalProviderItems, parsed, out)
+		state.considerDraft(candidate, false)
+	} else if state.bestDraft == nil {
+		candidate := state.newDraftCandidate(draftPhase, finalContent, finalProviderItems, parsed, out)
+		state.considerDraft(candidate, false)
 	}
 	if out.Passed {
 		recordTrace(ctx, TraceEvent{Kind: "critique", Outcome: "passed"})
 		if opts.SemanticJudge {
-			parsed = c.applySemanticJudgePostLoop(ctx, state, messages, finalContent, finalProviderItems, parsed, contextHeadroomFor(opts))
+			c.applySemanticJudgePostLoop(ctx, state, messages, finalContent, finalProviderItems, parsed, contextHeadroomFor(opts))
 		}
-		state.critiquePassed = true
-		return parsed
+		state.critiquePassed = state.bestDraft != nil && state.bestDraft.quality.Passed
+		return state.bestDraft.parsed
 	}
 	if len(out.UnreadCitations) == 0 && len(out.MissingSkillEvidence) == 0 {
 		recordTrace(ctx, TraceEvent{Kind: "critique", Outcome: "accepted_uncached", Retry: retries.used, IssueCount: len(out.Matches())})
 		log.Printf("  ⚠ agentic critique: post-loop draft still failing %v; accepting but not caching", out.Matches())
-		return parsed
+		return state.bestDraft.parsed
 	}
 	if !retries.available() {
 		recordTrace(ctx, TraceEvent{Kind: "critique", Outcome: "accepted_uncached", Retry: retries.used, IssueCount: len(out.Matches())})
 		log.Printf("  ⚠ agentic critique: post-loop draft still failing %v; retry budget exhausted; accepting but not caching", out.Matches())
-		return parsed
+		return state.bestDraft.parsed
 	}
 	injection := c.buildEvidenceInjection(ctx, state, out)
 	if injection == "" {
 		recordTrace(ctx, TraceEvent{Kind: "critique", Outcome: "accepted_uncached", IssueCount: len(out.Matches())})
 		log.Printf("  ⚠ agentic critique: post-loop draft still failing %v; no fetchable evidence to inject; accepting but not caching", out.Matches())
-		return parsed
+		return state.bestDraft.parsed
 	}
 	messages = append(messages, modelMessage{Role: "assistant", Content: strPtr(finalContent), ProviderItems: finalProviderItems}, modelMessage{Role: "user", Content: strPtr(out.Feedback + "\n\n" + injection)})
 	retry, _ := retries.admit()
 	recordTrace(ctx, TraceEvent{Kind: "critique", Outcome: "evidence_retry", Retry: retry, IssueCount: len(out.Matches())})
 	headroom := contextHeadroomFor(opts)
-	revised, _, safe := c.runFinalizeRound(ctx, messages, headroom)
+	revised, revisedProviderItems, safe := c.runFinalizeRound(ctx, messages, headroom)
 	if !safe {
-		return parsed
+		return state.bestDraft.parsed
 	}
 	next, ok := tryParseAnalysis(revised)
 	if !ok {
@@ -1232,18 +1267,18 @@ func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, m
 		retry, ok = retries.admit()
 		if !ok {
 			log.Printf("  ⚠ agentic critique: post-injection finalize did not parse; retry budget exhausted, keeping prior draft, not caching")
-			return parsed
+			return state.bestDraft.parsed
 		}
 		recordTrace(ctx, TraceEvent{Kind: "critique", Outcome: "unparseable_retry", Retry: retry})
-		revised, _, safe = c.runFinalizeRound(ctx, messages, headroom)
+		revised, revisedProviderItems, safe = c.runFinalizeRound(ctx, messages, headroom)
 		if !safe {
-			return parsed
+			return state.bestDraft.parsed
 		}
 		next, ok = tryParseAnalysis(revised)
 	}
 	if !ok {
 		log.Printf("  ⚠ agentic critique: post-injection finalize did not parse after retry; keeping prior draft, not caching")
-		return parsed
+		return state.bestDraft.parsed
 	}
 	out = critiqueDraft(next, state.readArtifactsFull, state.readArtifactsBase, matchSkillsForDraft(state, next), state.consecutiveFailures)
 	if len(out.MissingSkillEvidence) > 0 {
@@ -1251,28 +1286,30 @@ func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, m
 			pruneAbsentSkillEvidence(next, &out, treeSet)
 		}
 	}
-	state.observeDraft("evidence_retry", next, out)
-	if out.Passed {
+	candidate := state.newDraftCandidate("evidence_retry", revised, revisedProviderItems, next, out)
+	state.considerDraft(candidate, false)
+	state.critiquePassed = state.bestDraft != nil && state.bestDraft.quality.Passed
+	if state.critiquePassed {
 		recordTrace(ctx, TraceEvent{Kind: "critique", Outcome: "passed_after_retry"})
-		state.critiquePassed = true
 	} else {
 		recordTrace(ctx, TraceEvent{Kind: "critique", Outcome: "accepted_uncached", IssueCount: len(out.Matches())})
 		log.Printf("  ⚠ agentic critique: post-injection draft still failing %v; accepting but not caching", out.Matches())
 	}
-	return next
+	return state.bestDraft.parsed
 }
 
-func (s *agentState) observeDraft(phase string, parsed analysisResponse, out critiqueOutcome) {
-	if s.draftObserver == nil {
-		return
-	}
+func (s *agentState) observeDraft(phase string, parsed analysisResponse, out critiqueOutcome) int {
 	s.draftAttempt++
+	attempt := s.draftAttempt
+	if s.draftObserver == nil {
+		return attempt
+	}
 	summary := parsed.Summary
 	if summary == "" {
 		summary = firstSentence(parsed.RootCause)
 	}
 	s.draftObserver(DraftObservation{
-		Attempt:             s.draftAttempt,
+		Attempt:             attempt,
 		Phase:               phase,
 		Summary:             summary,
 		RootCause:           parsed.RootCause,
@@ -1287,6 +1324,129 @@ func (s *agentState) observeDraft(phase string, parsed analysisResponse, out cri
 		ToolCalls:           s.calls,
 		EvidenceReads:       len(s.readArtifactsFull),
 	})
+	return attempt
+}
+
+func critiqueQualityFor(out critiqueOutcome) critiqueQuality {
+	return critiqueQuality{
+		Passed:               out.Passed,
+		TransientConflict:    out.TransientPersistCount > 0,
+		UnreadCitationCount:  len(out.UnreadCitations),
+		MissingEvidenceCount: out.MissingEvidenceCount(),
+		PuntCount:            len(out.PuntMatches),
+	}
+}
+
+// compareCritiqueQuality returns positive when a is better than b.
+func compareCritiqueQuality(a, b critiqueQuality) int {
+	if a.Passed != b.Passed {
+		if a.Passed {
+			return 1
+		}
+		return -1
+	}
+	if a.TransientConflict != b.TransientConflict {
+		if !a.TransientConflict {
+			return 1
+		}
+		return -1
+	}
+	for _, counts := range [][2]int{
+		{a.UnreadCitationCount, b.UnreadCitationCount},
+		{a.MissingEvidenceCount, b.MissingEvidenceCount},
+		{a.PuntCount, b.PuntCount},
+	} {
+		if counts[0] < counts[1] {
+			return 1
+		}
+		if counts[0] > counts[1] {
+			return -1
+		}
+	}
+	return 0
+}
+
+var rootCauseTokenRE = regexp.MustCompile(`[a-z0-9][a-z0-9._/-]*`)
+
+var rootCauseStopwords = map[string]bool{
+	"a": true, "an": true, "and": true, "are": true, "as": true,
+	"at": true, "because": true, "before": true, "by": true, "caused": true,
+	"causes": true, "due": true, "error": true, "failed": true, "failure": true,
+	"for": true, "from": true, "in": true, "is": true, "of": true,
+	"on": true, "or": true, "that": true, "the": true, "this": true,
+	"to": true, "was": true, "were": true, "with": true,
+}
+
+// rootCauseMateriallyChanged ignores formatting and allows supporting detail
+// when at least half of the smaller diagnosis token set remains shared.
+func rootCauseMateriallyChanged(a, b string) bool {
+	if strings.EqualFold(strings.Join(strings.Fields(a), " "), strings.Join(strings.Fields(b), " ")) {
+		return false
+	}
+	aTokens := rootCauseTokens(a)
+	bTokens := rootCauseTokens(b)
+	if len(aTokens) == 0 || len(bTokens) == 0 {
+		return true
+	}
+	common := 0
+	for token := range aTokens {
+		if bTokens[token] {
+			common++
+		}
+	}
+	denominator := len(aTokens)
+	if len(bTokens) < denominator {
+		denominator = len(bTokens)
+	}
+	return common*2 < denominator
+}
+
+func rootCauseTokens(rootCause string) map[string]bool {
+	out := map[string]bool{}
+	for _, token := range rootCauseTokenRE.FindAllString(strings.ToLower(rootCause), -1) {
+		if !rootCauseStopwords[token] {
+			out[token] = true
+		}
+	}
+	return out
+}
+
+func (s *agentState) newDraftCandidate(phase, content string, providerItems []json.RawMessage, parsed analysisResponse, out critiqueOutcome) *critiqueDraftCandidate {
+	return &critiqueDraftCandidate{
+		parsed:           parsed,
+		content:          content,
+		providerItems:    providerItems,
+		quality:          critiqueQualityFor(out),
+		attempt:          s.observeDraft(phase, parsed, out),
+		evidenceRevision: s.evidenceRevision,
+	}
+}
+
+// considerDraft applies deterministic quality ordering and the root-cause guard.
+func (s *agentState) considerDraft(candidate *critiqueDraftCandidate, semanticAccepted bool) bool {
+	if candidate == nil {
+		return false
+	}
+	if s.bestDraft == nil {
+		s.bestDraft = candidate
+		return true
+	}
+	comparison := compareCritiqueQuality(candidate.quality, s.bestDraft.quality)
+	if comparison < 0 || (comparison == 0 && !semanticAccepted) {
+		return false
+	}
+	if rootCauseMateriallyChanged(s.bestDraft.parsed.RootCause, candidate.parsed.RootCause) &&
+		candidate.evidenceRevision <= s.bestDraft.evidenceRevision && !semanticAccepted {
+		return false
+	}
+	s.bestDraft = candidate
+	return true
+}
+
+func (s *agentState) notifyDraftSelection() {
+	if s.selectionObserver != nil && s.bestDraft != nil {
+		s.selectionObserver(s.bestDraft.attempt)
+	}
 }
 
 // listInitialArtifactTree fetches the one bounded tree snapshot shared by the
@@ -1873,11 +2033,14 @@ func (s *agentState) recordSuccessfulRead(rawPath string) {
 // recordEvidenceRead adds a successful non-empty content read to the set used
 // for initial evidence-plan coverage.
 func (s *agentState) recordEvidenceRead(rawPath string) {
-	if s.evidenceArtifactsFull == nil {
-		return
-	}
 	if norm := NormalizeArtifactCitation(rawPath); norm != "" {
-		s.evidenceArtifactsFull[norm] = true
+		if s.evidenceArtifactsFull == nil {
+			s.evidenceArtifactsFull = map[string]bool{}
+		}
+		if !s.evidenceArtifactsFull[norm] {
+			s.evidenceArtifactsFull[norm] = true
+			s.evidenceRevision++
+		}
 	}
 }
 

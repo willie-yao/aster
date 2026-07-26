@@ -1130,6 +1130,10 @@ const puntyFinalJSON = `{"summary":"shallow","is_transient":false,"root_cause":"
 
 const cleanFinalJSON = `{"summary":"deep","is_transient":false,"root_cause":"third CP machine cloud-init empty due to vnet peering mismatch","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 142 to match the staging vnet peering name; reapply and retry.","relevant_files":["kustomize/cluster-template.yaml"]}`
 
+const providerIDPuntFinalJSON = `{"summary":"providerID blocked","is_transient":false,"root_cause":"The worker Node registered, but providerID remained empty because cloud-node-manager could not reach the Kubernetes API.","severity":"High","suggested_fix":"Check the cloud-node-manager logs and verify the API connection.","relevant_files":[]}`
+
+const quotaCleanFinalJSON = `{"summary":"quota blocked","is_transient":false,"root_cause":"Azure subscription quota exhaustion prevented the worker virtual machine from being created.","severity":"High","suggested_fix":"Increase the regional virtual machine quota and recreate the worker.","relevant_files":[]}`
+
 // TestAgentic_Critique_FailRetryPass exercises the happy retry path: the
 // model returns a punt-shaped final, critique fails, the loop appends
 // feedback and re-prompts, the model returns a clean fix, critique passes,
@@ -1180,6 +1184,201 @@ func TestAgentic_Critique_FailRetryPass(t *testing.T) {
 	}
 	if !hit.CacheHit {
 		t.Errorf("CacheHit = false, want true")
+	}
+}
+
+func TestAgentic_CritiqueRetryCannotReplaceDiagnosisWithoutEvidence(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal(providerIDPuntFinalJSON))
+	srv.push(200, chatRespFinal(quotaCleanFinalJSON))
+
+	client := newAgenticTestClient(t, srv.URL)
+	selected := 0
+	in := newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
+		MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+		Timeout: 30 * time.Second, CritiqueMaxRetries: 1,
+	})
+	in.DraftSelectionObserver = func(attempt int) { selected = attempt }
+	key := "agentic:test:preserve-providerid-diagnosis"
+	_, analysis, err := client.doAnalyzeAgentic(context.Background(), in, key, "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	if !strings.Contains(analysis.RootCause, "providerID") || strings.Contains(analysis.RootCause, "quota") {
+		t.Fatalf("wrong retry replaced the diagnosis: %q", analysis.RootCause)
+	}
+	if analysis.CritiquePassed || selected != 1 {
+		t.Fatalf("selection telemetry = selected:%d critique_passed:%v", selected, analysis.CritiquePassed)
+	}
+	if _, ok := client.Cache().Get(key); ok {
+		t.Fatal("selected failing draft was cached")
+	}
+}
+
+func TestAgentic_CritiqueRetryCanChangeDiagnosisAfterEvidenceRead(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal(providerIDPuntFinalJSON))
+	srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]interface{}{"path": "quota.log"}))
+	srv.push(200, chatRespFinal(quotaCleanFinalJSON))
+
+	client := newAgenticTestClient(t, srv.URL)
+	selected := 0
+	in := newTestAgenticInputs(t, &fakeBrowser{files: map[string][]byte{"quota.log": []byte("regional quota exhausted")}}, AgenticOptions{
+		MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+		Timeout: 30 * time.Second, CritiqueMaxRetries: 1,
+	})
+	in.DraftSelectionObserver = func(attempt int) { selected = attempt }
+	key := "agentic:test:replace-after-evidence"
+	_, analysis, err := client.doAnalyzeAgentic(context.Background(), in, key, "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	if !strings.Contains(analysis.RootCause, "quota") || !analysis.CritiquePassed || selected != 2 {
+		t.Fatalf("evidence-backed retry was not selected: selected=%d analysis=%+v", selected, analysis)
+	}
+	_, hit, err := client.doAnalyzeAgentic(context.Background(), in, key, "sys", "user")
+	if err != nil || !hit.CacheHit {
+		t.Fatalf("selected passing draft was not cached: hit=%v err=%v", hit.CacheHit, err)
+	}
+}
+
+func TestAgentic_CritiqueRetryWithMoreIssuesLoses(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal(providerIDPuntFinalJSON))
+	worse := `{"summary":"providerID blocked","is_transient":false,"root_cause":"The worker Node registered, but providerID remained empty because manager.log shows cloud-node-manager could not reach the Kubernetes API.","severity":"High","suggested_fix":"Check the cloud-node-manager logs.","relevant_files":[]}`
+	srv.push(200, chatRespFinal(worse))
+
+	selected := 0
+	in := newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
+		MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+		Timeout: 30 * time.Second, CritiqueMaxRetries: 1,
+	})
+	in.DraftSelectionObserver = func(attempt int) { selected = attempt }
+	_, analysis, err := newAgenticTestClient(t, srv.URL).doAnalyzeAgentic(context.Background(), in,
+		"agentic:test:more-issues-loses", "sys", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected != 1 || analysis.RootCause != "The worker Node registered, but providerID remained empty because cloud-node-manager could not reach the Kubernetes API." {
+		t.Fatalf("worse retry selected: selected=%d root=%q", selected, analysis.RootCause)
+	}
+}
+
+func TestAgentic_CritiqueRetryTieKeepsInitial(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal(providerIDPuntFinalJSON))
+	tied := `{"summary":"same diagnosis","is_transient":false,"root_cause":"The worker Node registered, but providerID remained empty because cloud-node-manager could not reach the Kubernetes API.","severity":"High","suggested_fix":"Verify the cloud-node-manager API connection.","relevant_files":[]}`
+	srv.push(200, chatRespFinal(tied))
+
+	selected := 0
+	in := newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
+		MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+		Timeout: 30 * time.Second, CritiqueMaxRetries: 1,
+	})
+	in.DraftSelectionObserver = func(attempt int) { selected = attempt }
+	_, analysis, err := newAgenticTestClient(t, srv.URL).doAnalyzeAgentic(context.Background(), in,
+		"agentic:test:tie-keeps-initial", "sys", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected != 1 || analysis.SuggestedFix != "Check the cloud-node-manager logs and verify the API connection." {
+		t.Fatalf("tied retry selected: selected=%d fix=%q", selected, analysis.SuggestedFix)
+	}
+}
+
+func TestAgentic_FailingPostInjectionDraftKeepsInitial(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespToolCall("c1", "list_artifacts", map[string]interface{}{"path": ""}))
+	initial := `{"summary":"webhook cert","is_transient":false,"root_cause":"x509 webhook validation failure prevented cluster creation","severity":"High","suggested_fix":"Regenerate the webhook serving certificate and redeploy the controller.","relevant_files":[]}`
+	revised := `{"summary":"webhook cert","is_transient":false,"root_cause":"manager.log shows an x509 webhook validation failure prevented cluster creation","severity":"High","suggested_fix":"Check the webhook certificate.","relevant_files":[]}`
+	srv.push(200, chatRespFinal(initial))
+	srv.push(200, chatRespFinal(revised))
+
+	set := loadAgenticSkillsForTest(t, map[string]string{
+		"webhook": `
+id: webhook-tls
+triggers: ["x509"]
+required_evidence:
+  - id: webhook-config
+    any_of: ["config/webhook/.*\\.yaml"]
+`,
+	})
+	selected := 0
+	in := newTestAgenticInputs(t, &fakeBrowser{files: map[string][]byte{
+		"config/webhook/manifests.yaml": []byte("webhooks:"),
+		"manager.log":                   []byte("unrelated"),
+	}}, AgenticOptions{
+		MaxIters: 1, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+		Timeout: 30 * time.Second, CritiqueMaxRetries: 1,
+	})
+	in.Skills = set
+	in.DraftSelectionObserver = func(attempt int) { selected = attempt }
+	client := newAgenticTestClient(t, srv.URL)
+	key := "agentic:test:failing-post-injection"
+	_, analysis, err := client.doAnalyzeAgentic(context.Background(), in, key, "sys", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected != 1 || analysis.RootCause != "x509 webhook validation failure prevented cluster creation" {
+		t.Fatalf("failing post-injection draft selected: selected=%d root=%q", selected, analysis.RootCause)
+	}
+	if analysis.CritiquePassed {
+		t.Fatal("selected initial draft unexpectedly passed critique")
+	}
+	if _, ok := client.Cache().Get(key); ok {
+		t.Fatal("selected failing draft was cached")
+	}
+}
+
+func TestCompareCritiqueQuality(t *testing.T) {
+	base := critiqueQuality{PuntCount: 1}
+	tests := []struct {
+		name string
+		a    critiqueQuality
+		b    critiqueQuality
+		want int
+	}{
+		{name: "passing", a: critiqueQuality{Passed: true}, b: base, want: 1},
+		{name: "transient conflict", a: base, b: critiqueQuality{TransientConflict: true}, want: 1},
+		{name: "unread citations", a: base, b: critiqueQuality{UnreadCitationCount: 1}, want: 1},
+		{name: "missing evidence", a: base, b: critiqueQuality{MissingEvidenceCount: 1}, want: 1},
+		{name: "punts", a: critiqueQuality{}, b: base, want: 1},
+		{name: "tie", a: base, b: base, want: 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := compareCritiqueQuality(tc.a, tc.b); got != tc.want {
+				t.Fatalf("compareCritiqueQuality() = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRootCauseMateriallyChanged(t *testing.T) {
+	base := "The worker Node registered, but providerID remained empty because cloud-node-manager could not reach the Kubernetes API."
+	if rootCauseMateriallyChanged(base, "  the worker node registered, but providerID remained empty because cloud-node-manager could not reach the Kubernetes API. ") {
+		t.Fatal("case and whitespace changed the diagnosis")
+	}
+	if rootCauseMateriallyChanged(base, base+" The controller log confirms the same API reachability failure.") {
+		t.Fatal("supporting detail changed the diagnosis")
+	}
+	if !rootCauseMateriallyChanged(base, "Azure subscription quota exhaustion prevented virtual machine creation.") {
+		t.Fatal("different diagnosis was not material")
+	}
+}
+
+func TestRecordEvidenceReadRevisionCountsUniquePaths(t *testing.T) {
+	state := &agentState{}
+	state.recordEvidenceRead("logs/a.log")
+	state.recordEvidenceRead("logs/a.log")
+	state.recordEvidenceRead("logs/b.log")
+	if state.evidenceRevision != 2 || len(state.evidenceArtifactsFull) != 2 {
+		t.Fatalf("evidence ledger = revision:%d paths:%v", state.evidenceRevision, state.evidenceArtifactsFull)
 	}
 }
 

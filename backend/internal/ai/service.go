@@ -83,6 +83,9 @@ type Service struct {
 	// draftObserver is an optional in-memory hook used only by the quality
 	// benchmark to compare parseable drafts from the same investigation.
 	draftObserver DraftObserver
+
+	// draftSelectionObserver reports which parseable attempt production selected.
+	draftSelectionObserver DraftSelectionObserver
 }
 
 // NewService constructs a Service. systemPrompt is the full composed prompt and
@@ -141,6 +144,11 @@ func (s *Service) SetTraceStore(store *TraceStore) {
 // SetDraftObserver installs the optional in-memory quality benchmark hook.
 func (s *Service) SetDraftObserver(observer DraftObserver) {
 	s.draftObserver = observer
+}
+
+// SetDraftSelectionObserver installs the optional benchmark selection hook.
+func (s *Service) SetDraftSelectionObserver(observer DraftSelectionObserver) {
+	s.draftSelectionObserver = observer
 }
 
 // Analyze fills tc.AISummary and tc.AIAnalysis for a single failed test case
@@ -226,17 +234,18 @@ func (s *Service) runAgentic(ctx context.Context, jobID, buildPrefix string, run
 	cache := s.toolCacheFor(buildPrefix)
 	cacheKey := s.agenticCacheKey(jobID, run.BuildID, tc.Name, tc.FailureMessage)
 	in := AgenticInputs{
-		Browser:             browser,
-		Opts:                s.agenticOpts,
-		Registry:            s.registry,
-		EnabledTools:        s.enabledTools,
-		Cache:               cache,
-		WebURLBase:          run.WebURL,
-		Mode:                AgenticMode,
-		Skills:              s.skillSet,
-		ConsecutiveFailures: consecutiveFailures,
-		FailureSignal:       failureSignal,
-		DraftObserver:       s.draftObserver,
+		Browser:                browser,
+		Opts:                   s.agenticOpts,
+		Registry:               s.registry,
+		EnabledTools:           s.enabledTools,
+		Cache:                  cache,
+		WebURLBase:             run.WebURL,
+		Mode:                   AgenticMode,
+		Skills:                 s.skillSet,
+		ConsecutiveFailures:    consecutiveFailures,
+		FailureSignal:          failureSignal,
+		DraftObserver:          s.draftObserver,
+		DraftSelectionObserver: s.draftSelectionObserver,
 	}
 	return s.client.doAnalyzeAgentic(ctx, in, cacheKey, s.systemPrompt, userPrompt)
 }
