@@ -54,7 +54,7 @@ ai:
   min_gcs_bytes: 0              # minimum GCS bytes fetched before a final answer is accepted
   single_tool_call: false       # send at most one tool call per turn (for single-tool-call-only models)
   critique:
-    max_retries: 2              # shared deterministic critique repair budget
+    max_retries: 2              # 0 disables; positive values enable one bounded repair
   tools: [filesystem, k8s]      # registered tool groups exposed to the model
 ```
 
@@ -440,10 +440,10 @@ system prompt forbidding this shape. The check is a deterministic regex (see
 When the regex matches, the loop appends targeted feedback that quotes the
 offending suggested_fix back to the model, lists the exact phrases that
 tripped the gate, and re-states the two allowed shapes (concrete remediation
-OR the strict no-remediation escape hatch). It then re-prompts when the shared
-retry budget has capacity. Repair is bounded to evidence injection, at most one
+OR the strict no-remediation escape hatch). It performs the bounded repair when `max_retries` is positive and the
+headroom guards admit it. Repair is bounded to evidence injection, at most one
 Tool-enabled turn when evidence is unresolved, and one forced finalization. Drafts that still fail after the
-shared budget is exhausted are published but NOT cached, so the next fetcher
+bounded operation are published but NOT cached, so the next fetcher
 run retries with a fresh attempt.
 
 **Coverage.** Critique evaluates parseable drafts in-loop, but deterministic
