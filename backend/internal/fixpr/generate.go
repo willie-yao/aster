@@ -46,35 +46,28 @@ type genParams struct {
 // critiqueSystemPrompt is the reviewer contract shared by the fix critique.
 const critiqueSystemPrompt = `You are a skeptical senior code reviewer checking a proposed fix for a CI failure before it becomes a draft PR. Judge whether the change is a reasonable, correct starting point. Flag concrete defects ONLY: wrong logic, values, or comparisons; references to undefined symbols, fields, or unimported packages; changes that break adjacent code; or a change that does not actually address the stated root cause. Do NOT flag style, formatting, or minor preferences, and remember it is a draft for a human to refine. If the change is a reasonable fix, return no issues.`
 
+const (
+	maxReviewResponseBytes = 1 << 20
+	maxReviewCandidates    = 256
+)
+
 // parseReviewIssues selects the final usable review object from a response,
 // tolerating prose, code snippets, repeated drafts, and code fences.
 func parseReviewIssues(s string) ([]string, error) {
-	bestEnd, bestStart := -1, len(s)+1
-	var best []string
+	if len(s) > maxReviewResponseBytes {
+		return nil, fmt.Errorf("review response exceeds %d bytes", maxReviewResponseBytes)
+	}
+	candidates := reviewJSONCandidates(s)
 	var lastErr error
-	for start := 0; start < len(s); start++ {
-		if s[start] != '{' {
-			continue
-		}
-		escaped, offsets := escapeStringControlCharsWithOffsets(s[start:])
-		for index, candidate := range []string{s[start:], escaped} {
-			issues, consumed, err := decodeReviewIssues(candidate)
+	for i := len(candidates) - 1; i >= 0; i-- {
+		for _, candidate := range []string{candidates[i], escapeStringControlChars(candidates[i])} {
+			issues, err := decodeReviewIssues(candidate)
 			if err != nil {
 				lastErr = err
 				continue
 			}
-			originalConsumed := consumed
-			if index == 1 && consumed < len(offsets) {
-				originalConsumed = offsets[consumed]
-			}
-			end := start + originalConsumed
-			if end > bestEnd || end == bestEnd && start < bestStart {
-				bestEnd, bestStart, best = end, start, issues
-			}
+			return issues, nil
 		}
-	}
-	if bestEnd >= 0 {
-		return best, nil
 	}
 	if lastErr != nil {
 		return nil, lastErr
@@ -82,18 +75,78 @@ func parseReviewIssues(s string) ([]string, error) {
 	return nil, fmt.Errorf("no JSON review object in response")
 }
 
-func decodeReviewIssues(value string) ([]string, int, error) {
+func decodeReviewIssues(value string) ([]string, error) {
 	var response struct {
 		Issues *[]string `json:"issues"`
 	}
 	decoder := json.NewDecoder(strings.NewReader(value))
 	if err := decoder.Decode(&response); err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	if response.Issues == nil {
-		return nil, 0, fmt.Errorf("issues field is required")
+		return nil, fmt.Errorf("issues field is required")
 	}
-	return *response.Issues, int(decoder.InputOffset()), nil
+	return *response.Issues, nil
+}
+
+type reviewCandidateState struct {
+	start    int
+	depth    int
+	inString bool
+	escaped  bool
+}
+
+func reviewJSONCandidates(s string) []string {
+	active := make([]reviewCandidateState, 0, 16)
+	candidates := make([]string, 0, 16)
+	for index := 0; index < len(s); index++ {
+		ch := s[index]
+		closed := make([]reviewCandidateState, 0, 2)
+		next := active[:0]
+		for _, state := range active {
+			if state.inString {
+				if state.escaped {
+					state.escaped = false
+				} else if ch == '\\' {
+					state.escaped = true
+				} else if ch == '"' {
+					state.inString = false
+				}
+				next = append(next, state)
+				continue
+			}
+			switch ch {
+			case '"':
+				state.inString = true
+			case '{':
+				state.depth++
+			case '}':
+				state.depth--
+			}
+			if state.depth == 0 {
+				closed = append(closed, state)
+			} else {
+				next = append(next, state)
+			}
+		}
+		active = next
+		if len(closed) > 0 {
+			sort.Slice(closed, func(i, j int) bool { return closed[i].start > closed[j].start })
+			for _, state := range closed {
+				candidates = append(candidates, s[state.start:index+1])
+				if len(candidates) > maxReviewCandidates {
+					candidates = candidates[len(candidates)-maxReviewCandidates:]
+				}
+			}
+		}
+		if ch == '{' {
+			if len(active) == maxReviewCandidates {
+				active = active[1:]
+			}
+			active = append(active, reviewCandidateState{start: index, depth: 1})
+		}
+	}
+	return candidates
 }
 
 // escapeStringControlChars escapes raw control characters (tab, newline, and
@@ -101,55 +154,42 @@ func decodeReviewIssues(value string) ([]string, int, error) {
 // structural whitespace between tokens untouched. Already-escaped sequences and
 // characters outside strings pass through unchanged.
 func escapeStringControlChars(s string) string {
-	escaped, _ := escapeStringControlCharsWithOffsets(s)
-	return escaped
-}
-
-func escapeStringControlCharsWithOffsets(s string) (string, []int) {
 	var b strings.Builder
 	b.Grow(len(s))
-	offsets := []int{0}
 	inString, escaped := false, false
-	write := func(value string, originalEnd int) {
-		b.WriteString(value)
-		for range len(value) {
-			offsets = append(offsets, originalEnd)
-		}
-	}
-	for start, r := range s {
-		originalEnd := start + len(string(r))
+	for _, r := range s {
 		if !inString {
 			if r == '"' {
 				inString = true
 			}
-			write(string(r), originalEnd)
+			b.WriteRune(r)
 			continue
 		}
 		if escaped {
-			write(string(r), originalEnd)
+			b.WriteRune(r)
 			escaped = false
 			continue
 		}
 		switch {
 		case r == '\\':
-			write(string(r), originalEnd)
+			b.WriteRune(r)
 			escaped = true
 		case r == '"':
-			write(string(r), originalEnd)
+			b.WriteRune(r)
 			inString = false
 		case r == '\t':
-			write(`\t`, originalEnd)
+			b.WriteString(`\t`)
 		case r == '\n':
-			write(`\n`, originalEnd)
+			b.WriteString(`\n`)
 		case r == '\r':
-			write(`\r`, originalEnd)
+			b.WriteString(`\r`)
 		case r < 0x20:
-			write(fmt.Sprintf(`\u%04x`, r), originalEnd)
+			fmt.Fprintf(&b, `\u%04x`, r)
 		default:
-			write(string(r), originalEnd)
+			b.WriteRune(r)
 		}
 	}
-	return b.String(), offsets
+	return b.String()
 }
 
 func dedupeNonEmpty(in []string) []string {

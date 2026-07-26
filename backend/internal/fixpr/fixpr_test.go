@@ -444,3 +444,22 @@ func TestParseReviewIssuesOrdersEscapedDraftByOriginalOffset(t *testing.T) {
 		t.Fatalf("earlier escaped draft won: %#v", issues)
 	}
 }
+
+func TestParseReviewIssuesRejectsOversizedResponse(t *testing.T) {
+	raw := strings.Repeat("x", maxReviewResponseBytes+1) + `{"issues":[]}`
+	if _, err := parseReviewIssues(raw); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestReviewJSONCandidatesCapsVerboseBraceOutput(t *testing.T) {
+	raw := strings.Repeat("{not-json}", maxReviewCandidates+20) + `{"issues":[]}`
+	candidates := reviewJSONCandidates(raw)
+	if len(candidates) != maxReviewCandidates {
+		t.Fatalf("candidate count = %d", len(candidates))
+	}
+	issues, err := parseReviewIssues(raw)
+	if err != nil || len(issues) != 0 {
+		t.Fatalf("issues=%v err=%v", issues, err)
+	}
+}
