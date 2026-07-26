@@ -70,6 +70,15 @@ type TraceEvent struct {
 	Elided                int    `json:"elided,omitempty"`
 	Retry                 int    `json:"retry,omitempty"`
 	IssueCount            int    `json:"issue_count,omitempty"`
+	RetryAdmitted         bool   `json:"retry_admitted,omitempty"`
+	RetryDeniedReason     string `json:"retry_denied_reason,omitempty"`
+	InitialIssueCount     int    `json:"initial_issue_count,omitempty"`
+	RevisedIssueCount     int    `json:"revised_issue_count,omitempty"`
+	NewEvidenceReads      int    `json:"new_evidence_reads,omitempty"`
+	RootCauseChanged      bool   `json:"root_cause_changed,omitempty"`
+	SelectedAttempt       int    `json:"selected_attempt,omitempty"`
+	RetryDurationMs       int    `json:"retry_duration_ms,omitempty"`
+	RemainingTimeMs       int    `json:"remaining_time_ms,omitempty"`
 	ErrorCode             string `json:"error_code,omitempty"`
 }
 

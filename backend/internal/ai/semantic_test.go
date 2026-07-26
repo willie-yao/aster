@@ -116,7 +116,6 @@ func TestAgentic_UnparseableSemanticRepairKeepsSelectedDraft(t *testing.T) {
 	srv.push(200, chatRespFinal(initial))
 	srv.push(200, chatRespFinal(`{"objections":["verify the diagnosis"]}`))
 	srv.push(200, chatRespFinal("not json"))
-	srv.push(200, chatRespFinal("still not json"))
 
 	client := newAgenticTestClient(t, srv.URL)
 	_, analysis, err := client.doAnalyzeAgentic(context.Background(),
@@ -130,8 +129,8 @@ func TestAgentic_UnparseableSemanticRepairKeepsSelectedDraft(t *testing.T) {
 	if analysis.RootCause != "control-plane subnet route table missing" || analysis.SuggestedFix == "Unable to parse structured response" {
 		t.Fatalf("semantic parse failure discarded selected draft: %+v", analysis)
 	}
-	if got := atomic.LoadInt32(&srv.calls); got != 4 {
-		t.Fatalf("call count = %d, want 4", got)
+	if got := atomic.LoadInt32(&srv.calls); got != 3 {
+		t.Fatalf("call count = %d, want 3", got)
 	}
 }
 
@@ -141,7 +140,6 @@ func TestAgentic_ForcedFinalizeSemanticRepairCanBeSelected(t *testing.T) {
 	initial := `{"summary":"initial","is_transient":false,"root_cause":"the PR broke it","severity":"High","suggested_fix":"Revert the PR.","relevant_files":[]}`
 	srv.push(200, chatRespFinal(initial))
 	srv.push(200, chatRespFinal(`{"objections":["check the cluster network config"]}`))
-	srv.push(200, chatRespFinal("not json"))
 	revised := `{"summary":"revised","is_transient":false,"root_cause":"control-plane subnet route table missing","severity":"High","suggested_fix":"Set the control-plane subnet route table.","relevant_files":[]}`
 	srv.push(200, chatRespFinal(revised))
 
@@ -157,8 +155,8 @@ func TestAgentic_ForcedFinalizeSemanticRepairCanBeSelected(t *testing.T) {
 	if analysis.RootCause != "control-plane subnet route table missing" || !analysis.JudgeRevised {
 		t.Fatalf("forced-finalize semantic repair not selected: %+v", analysis)
 	}
-	if got := atomic.LoadInt32(&srv.calls); got != 4 {
-		t.Fatalf("call count = %d, want 4", got)
+	if got := atomic.LoadInt32(&srv.calls); got != 3 {
+		t.Fatalf("call count = %d, want 3", got)
 	}
 }
 

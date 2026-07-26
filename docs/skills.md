@@ -229,25 +229,15 @@ within a recipe:
 - Keep `description` short and human-readable; the engine surfaces
   it verbatim in critique feedback.
 
-## Dynamic retry budget
+## Bounded critique repair
 
-When a recipe matches and the agent has missing evidence, an admitted in-loop
-critique repair appends:
+When a recipe matches and evidence is missing, the critique gate performs at
+most one bounded repair operation. It injects ranked evidence first. If evidence
+is still unresolved, the model gets at most one batched Tool turn, followed by
+one forced finalization. The general agent loop is not reopened.
 
-- The standard `critiqueRetryIters` budget (3 extra iterations).
-- A skill-driven bonus: `1 + 2*N` extra iterations, where N is the
-  total number of missing evidence groups, capped at
-  `critiqueMissingEvidenceBonusCap` (6 by default).
-
-So a recipe with 1 missing group gets `3 + 3 = 6` extra iters per
-retry; a recipe with 3 missing groups gets `3 + 6 = 9` extra iters.
-The cap prevents pathological recipes (10+ groups) from giving the
-loop unbounded budget.
-
-`ai.critique.max_retries` is a separate shared cap on repair admissions across
-in-loop critique, post-loop evidence repair, and another finalize after an
-unparseable repair. A value of `0` still evaluates recipe evidence but does not
-make a repair model request or fetch evidence for a retry.
+`ai.critique.max_retries: 0` still evaluates recipe evidence but performs no
+repair. Any positive value admits the bounded repair operation.
 
 ## Schema versioning
 
@@ -282,7 +272,7 @@ Before merging a new recipe:
 When a recipe fires, the fetcher logs (per analysis):
 
 ```
-  ✗ agentic critique: [skill:webhook-tls-failure(missing:cert-manager-config,webhook-secret)]; re-prompting (retry 1/2, +9 iters)
+  ✗ agentic critique: [skill:webhook-tls-failure(missing:cert-manager-config,webhook-secret)]; bounded repair admitted
 ```
 
 After the run, every `AIAnalysis` in `data/jobs/*.json` carries:

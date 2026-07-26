@@ -215,18 +215,6 @@ const evidenceInjectionPerArtifactBytes = 8 * 1024
 // 32 KB leaves room for a useful log excerpt plus the JSON envelope.
 const agenticToolBudget = 32 * 1024
 
-// critiqueRetryIters is the per-retry budget granted when a critique
-// re-prompt is appended. Generous enough for 1-2 follow-up tool calls
-// plus the new tools-free final plus slack. Tighter values starve the
-// retry where the model elects to investigate before re-emitting.
-const critiqueRetryIters = 3
-
-// critiqueMissingEvidenceBonusCap caps the extra iters granted on top of
-// critiqueRetryIters for a single missing-evidence retry. Sized to absorb
-// realistic recipes with three to four evidence groups without giving large
-// recipes unbounded budget.
-const critiqueMissingEvidenceBonusCap = 6
-
 // agToolDocs is the tool-usage strategy section appended to the system
 // prompt by the agentic loop. Tool names + descriptions reach the model
 // via the schema array; this section adds investigation strategy: drill
@@ -374,23 +362,25 @@ func evalFloors(state *agentState, opts AgenticOptions) floorStatus {
 }
 
 type agentState struct {
-	browser           artifacts.Browser
-	opts              AgenticOptions
-	registry          *tools.Registry
-	enabledTools      []string
-	cache             *tools.Cache
-	webURLBase        string
-	startTime         time.Time
-	modelBytes        int
-	gcsBytes          int
-	calls             int
-	budgetExhausted   bool
-	draftObserver     DraftObserver
-	selectionObserver DraftSelectionObserver
-	draftAttempt      int
-	bestDraft         *critiqueDraftCandidate
-	fallbackDraft     *critiqueDraftCandidate
-	evidenceRevision  int
+	browser            artifacts.Browser
+	opts               AgenticOptions
+	registry           *tools.Registry
+	enabledTools       []string
+	cache              *tools.Cache
+	webURLBase         string
+	startTime          time.Time
+	modelBytes         int
+	gcsBytes           int
+	calls              int
+	budgetExhausted    bool
+	draftObserver      DraftObserver
+	selectionObserver  DraftSelectionObserver
+	draftAttempt       int
+	bestDraft          *critiqueDraftCandidate
+	fallbackDraft      *critiqueDraftCandidate
+	evidenceRevision   int
+	recentModelRequest time.Duration
+	deadline           time.Time
 
 	// critiquePassed records whether the accepted answer cleared the
 	// always-on critique gate. Stamped onto the published AIAnalysis so the
@@ -826,7 +816,8 @@ func (c *Client) doAnalyzeAgentic(
 	}
 	schemas := state.registry.Schemas(state.enabledTools)
 
-	loopCtx, cancel := context.WithDeadline(ctx, state.startTime.Add(in.Opts.Timeout))
+	state.deadline = state.startTime.Add(in.Opts.Timeout)
+	loopCtx, cancel := context.WithDeadline(ctx, state.deadline)
 	defer cancel()
 
 	var finalContent string
@@ -885,7 +876,9 @@ agentLoop:
 			recordTrace(loopCtx, TraceEvent{Kind: "context_headroom", Outcome: "unavailable", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
 			return nil, nil, ErrContextHeadroom
 		}
+		requestStart := time.Now()
 		resp, err := c.callModel(loopCtx, messages, schemas, parallelToolCalls)
+		state.recentModelRequest = time.Since(requestStart)
 		if err != nil {
 			// Detect "tools not supported" on the first call only.
 			if iter == 0 && isToolsUnsupportedError(err) {
@@ -1006,26 +999,28 @@ agentLoop:
 							if msg.Content != nil {
 								echo.Content = msg.Content
 							}
-							messages = append(messages, echo, modelMessage{
+							repairMessages := append(messages, echo, modelMessage{
 								Role:    "user",
 								Content: strPtr(formatSemanticObjections(objs)),
 							})
-							var fits bool
-							messages, fits = prepareContextRequest(loopCtx, messages, schemaBytes, headroom, "semantic_retry")
-							if !fits {
-								if fallback := state.promoteFallbackDraft(); fallback != nil {
-									finalContent = fallback.content
-									finalProviderItems = fallback.providerItems
+							revised, revisedItems, safe := c.runFinalizeRound(loopCtx, repairMessages, headroom)
+							if safe {
+								if rp, ok := tryParseAnalysis(revised); ok {
+									revisedCritique := critiqueDraft(rp, state.readArtifactsFull, state.readArtifactsBase, matchSkillsForDraft(state, rp), state.consecutiveFailures)
+									semanticCandidate := state.newDraftCandidate("semantic_retry", revised, revisedItems, rp, revisedCritique)
+									state.considerFallbackDraft(semanticCandidate, true)
+									if state.considerDraft(semanticCandidate, true) {
+										state.judgeRevised = true
+									}
 								}
-								finalContentFromToolsFree = true
-								finalDraftObserved = true
-								recordTrace(loopCtx, TraceEvent{Kind: "context_headroom", Outcome: "retry_denied", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
-								break agentLoop
 							}
-							maxIters += critiqueRetryIters
-							draftPhase = "semantic_retry"
-							log.Printf("  ✗ semantic judge: %d objection(s); re-prompting (+%d iters)", len(objs), critiqueRetryIters)
-							continue
+							fallback := state.promoteFallbackDraft()
+							finalContent = fallback.content
+							finalProviderItems = fallback.providerItems
+							finalContentFromToolsFree = true
+							finalDraftObserved = true
+							state.critiquePassed = fallback.quality.Passed
+							break agentLoop
 						default:
 							recordTrace(loopCtx, TraceEvent{Kind: "semantic_judge", Outcome: "passed"})
 							log.Printf("  ✓ semantic judge: no objections")
@@ -1039,61 +1034,8 @@ agentLoop:
 						state.judgeRevised = true
 					}
 					state.critiquePassed = state.bestDraft != nil && state.bestDraft.quality.Passed
-				} else if critiqueRetries.available() {
-					echo := modelMessage{Role: "assistant", ProviderItems: msg.ProviderItems}
-					if msg.Content != nil {
-						echo.Content = msg.Content
-					}
-					// A critique retry fetches evidence the draft cited but
-					// never read and skill-required evidence it skipped, giving
-					// the bytes to models that ignore "go read X". Best-effort;
-					// failures fall back to the plain text feedback.
-					feedback := out.Feedback
-					if inj := c.buildEvidenceInjection(loopCtx, state, out); inj != "" {
-						feedback = feedback + "\n\n" + inj
-					}
-					messages = append(messages, echo, modelMessage{
-						Role:    "user",
-						Content: strPtr(feedback),
-					})
-					var fits bool
-					messages, fits = prepareContextRequest(loopCtx, messages, schemaBytes, headroom, "critique_retry")
-					if !fits {
-						if fallback := state.promoteFallbackDraft(); fallback != nil {
-							finalContent = fallback.content
-							finalProviderItems = fallback.providerItems
-						}
-						finalContentFromToolsFree = true
-						finalDraftObserved = true
-						recordTrace(loopCtx, TraceEvent{Kind: "context_headroom", Outcome: "retry_denied", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
-						recordTrace(loopCtx, TraceEvent{Kind: "context_headroom", Outcome: "best_draft", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
-						break agentLoop
-					}
-					critiqueRetry, _ := critiqueRetries.admit()
-					draftPhase = "critique_retry"
-					recordTrace(loopCtx, TraceEvent{Kind: "critique", Outcome: "retry", Retry: critiqueRetry, IssueCount: len(out.Matches())})
-					// Extend the retry budget proportional to the
-					// number of missing evidence groups. Plain
-					// re-prompts stay at critiqueRetryIters; skill-
-					// driven re-prompts get a bonus capped at
-					// critiqueMissingEvidenceBonusCap so 10-group
-					// recipes don't unbound the loop.
-					extra := critiqueRetryIters
-					if missing := out.MissingEvidenceCount(); missing > 0 {
-						bonus := 1 + 2*missing
-						if bonus > critiqueMissingEvidenceBonusCap {
-							bonus = critiqueMissingEvidenceBonusCap
-						}
-						extra += bonus
-					}
-					maxIters += extra
-					log.Printf("  ✗ agentic critique: %v; re-prompting (retry %d/%d, +%d iters)",
-						out.Matches(), critiqueRetry, in.Opts.CritiqueMaxRetries, extra)
-					continue
 				} else {
-					recordTrace(loopCtx, TraceEvent{Kind: "critique", Outcome: "accepted_uncached", Retry: critiqueRetries.used, IssueCount: len(out.Matches())})
-					log.Printf("  ⚠ agentic critique: still failing after %d retries %v; accepting but not caching",
-						in.Opts.CritiqueMaxRetries, out.Matches())
+					state.critiquePassed = false
 				}
 			}
 
@@ -1249,66 +1191,105 @@ func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, m
 		state.critiquePassed = state.bestDraft != nil && state.bestDraft.quality.Passed
 		return state.bestDraft.parsed
 	}
-	if len(out.UnreadCitations) == 0 && len(out.MissingSkillEvidence) == 0 {
-		recordTrace(ctx, TraceEvent{Kind: "critique", Outcome: "accepted_uncached", Retry: retries.used, IssueCount: len(out.Matches())})
-		log.Printf("  ⚠ agentic critique: post-loop draft still failing %v; accepting but not caching", out.Matches())
-		return state.bestDraft.parsed
-	}
+	return c.runBoundedCritiqueRepair(ctx, state, messages, finalContent, finalProviderItems, parsed, out, opts, retries)
+}
+
+const critiqueFinalizationReserve = 5 * time.Second
+
+func (c *Client) runBoundedCritiqueRepair(ctx context.Context, state *agentState, messages []modelMessage, finalContent string, finalProviderItems []json.RawMessage, parsed analysisResponse, initial critiqueOutcome, opts AgenticOptions, retries *critiqueRetryBudget) analysisResponse {
 	if !retries.available() {
-		recordTrace(ctx, TraceEvent{Kind: "critique", Outcome: "accepted_uncached", Retry: retries.used, IssueCount: len(out.Matches())})
-		log.Printf("  ⚠ agentic critique: post-loop draft still failing %v; retry budget exhausted; accepting but not caching", out.Matches())
+		recordTrace(ctx, TraceEvent{Kind: "critique_retry_denied", Outcome: "retry_budget", RetryDeniedReason: "retry_budget", InitialIssueCount: len(initial.Matches())})
 		return state.bestDraft.parsed
 	}
-	injection := c.buildEvidenceInjection(ctx, state, out)
-	if injection == "" {
-		recordTrace(ctx, TraceEvent{Kind: "critique", Outcome: "accepted_uncached", IssueCount: len(out.Matches())})
-		log.Printf("  ⚠ agentic critique: post-loop draft still failing %v; no fetchable evidence to inject; accepting but not caching", out.Matches())
+	remaining := time.Until(state.deadline)
+	required := 2*state.recentModelRequest + critiqueFinalizationReserve
+	if remaining < required {
+		recordTrace(ctx, TraceEvent{Kind: "critique_retry_denied", Outcome: "time_headroom", RetryDeniedReason: "time_headroom", InitialIssueCount: len(initial.Matches()), RemainingTimeMs: int(remaining / time.Millisecond)})
 		return state.bestDraft.parsed
 	}
-	messages = append(messages, modelMessage{Role: "assistant", Content: strPtr(finalContent), ProviderItems: finalProviderItems}, modelMessage{Role: "user", Content: strPtr(out.Feedback + "\n\n" + injection)})
+
+	started := time.Now()
+	initialEvidenceRevision := state.evidenceRevision
+	injection := c.buildEvidenceInjection(ctx, state, initial)
+	feedback := initial.Feedback
+	if injection != "" {
+		feedback += "\n\n" + injection
+	}
+	repairMessages := append(messages,
+		modelMessage{Role: "assistant", Content: strPtr(finalContent), ProviderItems: finalProviderItems},
+		modelMessage{Role: "user", Content: strPtr(feedback)})
 	retry, _ := retries.admit()
-	recordTrace(ctx, TraceEvent{Kind: "critique", Outcome: "evidence_retry", Retry: retry, IssueCount: len(out.Matches())})
-	headroom := contextHeadroomFor(opts)
-	revised, revisedProviderItems, safe := c.runFinalizeRound(ctx, messages, headroom)
+
+	updated := critiqueDraft(parsed, state.readArtifactsFull, state.readArtifactsBase, matchSkillsForDraft(state, parsed), state.consecutiveFailures)
+	if critiqueRepairNeedsTools(updated) {
+		schemas := state.registry.Schemas(state.enabledTools)
+		var parallelToolCalls *bool
+		if opts.SingleToolCall {
+			f := false
+			parallelToolCalls = &f
+		}
+		var fits bool
+		repairMessages, fits = prepareContextRequest(ctx, repairMessages, schemaPayloadBytes(schemas), contextHeadroomFor(opts), "critique_repair")
+		if !fits {
+			recordTrace(ctx, TraceEvent{Kind: "critique_retry_denied", Outcome: "context_headroom", Retry: retry, RetryAdmitted: true, RetryDeniedReason: "context_headroom", InitialIssueCount: len(initial.Matches()), RemainingTimeMs: int(time.Until(state.deadline) / time.Millisecond)})
+			return state.bestDraft.parsed
+		}
+		requestStart := time.Now()
+		resp, err := c.callModel(ctx, repairMessages, schemas, parallelToolCalls)
+		state.recentModelRequest = time.Since(requestStart)
+		if err != nil || !resp.HasMessage {
+			recordTrace(ctx, TraceEvent{Kind: "critique_retry", Outcome: "tool_turn_error", Retry: retry, RetryAdmitted: true, InitialIssueCount: len(initial.Matches()), RetryDurationMs: int(time.Since(started) / time.Millisecond)})
+			return state.bestDraft.parsed
+		}
+		msg := resp.Message
+		toolCalls, _ := limitToolCalls(msg.ToolCalls, opts.SingleToolCall)
+		echoCalls, skippedOutputs := continuationCalls(c.apiMode, msg, toolCalls)
+		echo := modelMessage{Role: "assistant", ToolCalls: echoCalls, ProviderItems: msg.ProviderItems}
+		if msg.Content != nil {
+			echo.Content = msg.Content
+		}
+		repairMessages = append(repairMessages, echo)
+		repairMessages = append(repairMessages, skippedOutputs...)
+		for _, tc := range toolCalls {
+			result := dispatchAgenticTool(ctx, state, tc)
+			state.modelBytes += len(result)
+			repairMessages = append(repairMessages, modelMessage{Role: "tool", ToolCallID: tc.ID, Content: strPtr(result)})
+		}
+	}
+
+	revised, revisedItems, safe := c.runFinalizeRound(ctx, repairMessages, contextHeadroomFor(opts))
 	if !safe {
+		recordTrace(ctx, TraceEvent{Kind: "critique_retry_denied", Outcome: "context_headroom", Retry: retry, RetryAdmitted: true, RetryDeniedReason: "context_headroom", InitialIssueCount: len(initial.Matches()), RetryDurationMs: int(time.Since(started) / time.Millisecond), RemainingTimeMs: int(time.Until(state.deadline) / time.Millisecond)})
 		return state.bestDraft.parsed
 	}
 	next, ok := tryParseAnalysis(revised)
 	if !ok {
-		recordTrace(ctx, TraceEvent{Kind: "critique", Outcome: "retry_unparseable", Retry: retry})
-		retry, ok = retries.admit()
-		if !ok {
-			log.Printf("  ⚠ agentic critique: post-injection finalize did not parse; retry budget exhausted, keeping prior draft, not caching")
-			return state.bestDraft.parsed
-		}
-		recordTrace(ctx, TraceEvent{Kind: "critique", Outcome: "unparseable_retry", Retry: retry})
-		revised, revisedProviderItems, safe = c.runFinalizeRound(ctx, messages, headroom)
-		if !safe {
-			return state.bestDraft.parsed
-		}
-		next, ok = tryParseAnalysis(revised)
-	}
-	if !ok {
-		log.Printf("  ⚠ agentic critique: post-injection finalize did not parse after retry; keeping prior draft, not caching")
+		recordTrace(ctx, TraceEvent{Kind: "critique_retry", Outcome: "unparseable", Retry: retry, RetryAdmitted: true, InitialIssueCount: len(initial.Matches()), NewEvidenceReads: state.evidenceRevision - initialEvidenceRevision, RetryDurationMs: int(time.Since(started) / time.Millisecond), RemainingTimeMs: int(time.Until(state.deadline) / time.Millisecond), SelectedAttempt: state.bestDraft.attempt})
 		return state.bestDraft.parsed
 	}
-	out = critiqueDraft(next, state.readArtifactsFull, state.readArtifactsBase, matchSkillsForDraft(state, next), state.consecutiveFailures)
+	out := critiqueDraft(next, state.readArtifactsFull, state.readArtifactsBase, matchSkillsForDraft(state, next), state.consecutiveFailures)
 	if len(out.MissingSkillEvidence) > 0 {
 		if treeSet := state.artifactTreeSet(); treeSet != nil {
 			pruneAbsentSkillEvidence(next, &out, treeSet)
 		}
 	}
-	candidate := state.newDraftCandidate("evidence_retry", revised, revisedProviderItems, next, out)
+	candidate := state.newDraftCandidate("critique_retry", revised, revisedItems, next, out)
 	state.considerFallbackDraft(candidate, false)
 	state.considerDraft(candidate, false)
-	state.critiquePassed = state.bestDraft != nil && state.bestDraft.quality.Passed
-	if state.critiquePassed {
-		recordTrace(ctx, TraceEvent{Kind: "critique", Outcome: "passed_after_retry"})
-	} else {
-		recordTrace(ctx, TraceEvent{Kind: "critique", Outcome: "accepted_uncached", IssueCount: len(out.Matches())})
-		log.Printf("  ⚠ agentic critique: post-injection draft still failing %v; accepting but not caching", out.Matches())
-	}
+	state.critiquePassed = state.bestDraft.quality.Passed
+	recordTrace(ctx, TraceEvent{
+		Kind: "critique_retry", Outcome: "completed", Retry: retry, RetryAdmitted: true,
+		InitialIssueCount: len(initial.Matches()), RevisedIssueCount: len(out.Matches()),
+		NewEvidenceReads: state.evidenceRevision - initialEvidenceRevision,
+		RootCauseChanged: rootCauseMateriallyChanged(parsed.RootCause, next.RootCause),
+		SelectedAttempt:  state.bestDraft.attempt, RetryDurationMs: int(time.Since(started) / time.Millisecond),
+		RemainingTimeMs: int(time.Until(state.deadline) / time.Millisecond),
+	})
 	return state.bestDraft.parsed
+}
+
+func critiqueRepairNeedsTools(out critiqueOutcome) bool {
+	return len(out.UnreadCitations) > 0 || len(out.MissingSkillEvidence) > 0
 }
 
 func (s *agentState) observeDraft(phase string, parsed analysisResponse, out critiqueOutcome) int {

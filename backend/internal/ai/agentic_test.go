@@ -1214,6 +1214,37 @@ func TestAgentic_Critique_FailRetryPass(t *testing.T) {
 	}
 }
 
+func TestBoundedCritiqueRepairDeniesWithoutTimeHeadroom(t *testing.T) {
+	store := NewTraceStore()
+	trace := store.Start(TraceMetadata{JobID: "job"})
+	ctx := withAnalysisTrace(context.Background(), trace)
+	parsed, ok := tryParseAnalysis(providerIDPuntFinalJSON)
+	if !ok {
+		t.Fatal("test draft did not parse")
+	}
+	out := critiqueDraft(parsed, map[string]bool{}, map[string]bool{}, nil, 0)
+	state := &agentState{
+		deadline: time.Now().Add(100 * time.Millisecond), recentModelRequest: 100 * time.Millisecond,
+		readArtifactsFull: map[string]bool{}, readArtifactsBase: map[string]bool{}, evidenceArtifactsFull: map[string]bool{},
+		bestDraft: &critiqueDraftCandidate{parsed: parsed, content: providerIDPuntFinalJSON, quality: critiqueQualityFor(out), attempt: 1},
+	}
+	retries := &critiqueRetryBudget{max: 1}
+	got := (&Client{}).runBoundedCritiqueRepair(ctx, state, nil, providerIDPuntFinalJSON, nil, parsed, out, AgenticOptions{}, retries)
+	trace.Finish("success", nil)
+	if got.RootCause != parsed.RootCause || retries.used != 0 {
+		t.Fatalf("time denial changed draft or spent retry: got=%+v retries=%d", got, retries.used)
+	}
+	found := false
+	for _, event := range store.Snapshot().Traces[0].Events {
+		if event.Kind == "critique_retry_denied" && event.RetryDeniedReason == "time_headroom" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("missing time_headroom denial trace")
+	}
+}
+
 func TestAgentic_CritiqueRetryCannotReplaceDiagnosisWithoutEvidence(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
@@ -1246,8 +1277,8 @@ func TestAgentic_CritiqueRetryCannotReplaceDiagnosisWithoutEvidence(t *testing.T
 func TestAgentic_CritiqueRetryCanChangeDiagnosisAfterEvidenceRead(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	srv.push(200, chatRespFinal(providerIDPuntFinalJSON))
-	srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]interface{}{"path": "quota.log"}))
+	initial := `{"summary":"providerID blocked","is_transient":false,"root_cause":"quota.log may show why providerID remained empty","severity":"High","suggested_fix":"Check quota.log before changing the deployment.","relevant_files":[]}`
+	srv.push(200, chatRespFinal(initial))
 	srv.push(200, chatRespFinal(quotaCleanFinalJSON))
 
 	client := newAgenticTestClient(t, srv.URL)
@@ -1546,9 +1577,7 @@ func TestAgentic_Critique_ExhaustedAcceptedNotCached(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 
-	// Three punts: original plus 2 retries. All fail critique, so the last
-	// answer is accepted without a cache write.
-	srv.push(200, chatRespFinal(puntyFinalJSON))
+	// One bounded repair follows the original. The selected failing draft is not cached.
 	srv.push(200, chatRespFinal(puntyFinalJSON))
 	srv.push(200, chatRespFinal(puntyFinalJSON))
 
@@ -1566,16 +1595,15 @@ func TestAgentic_Critique_ExhaustedAcceptedNotCached(t *testing.T) {
 	if err != nil {
 		t.Fatalf("doAnalyzeAgentic: %v", err)
 	}
-	if got := atomic.LoadInt32(&srv.calls); got != 3 {
-		t.Errorf("call count = %d, want 3 (original + 2 retries)", got)
+	if got := atomic.LoadInt32(&srv.calls); got != 2 {
+		t.Errorf("call count = %d, want 2 (original + bounded repair)", got)
 	}
 	if summary.Summary != "shallow" {
 		t.Errorf("expected punt-shaped final to be published, got %q", summary.Summary)
 	}
 
 	// Critique-failing answers are not cached. A second analysis consumes
-	// all three new server responses.
-	srv.push(200, chatRespFinal(puntyFinalJSON))
+	// two new server responses.
 	srv.push(200, chatRespFinal(puntyFinalJSON))
 	srv.push(200, chatRespFinal(puntyFinalJSON))
 	before := atomic.LoadInt32(&srv.calls)
@@ -1707,7 +1735,7 @@ required_evidence:
 	if !analysis.CritiquePassed || !analysis.EvidencePlanCovered {
 		t.Fatalf("repaired analysis = %+v", analysis)
 	}
-	if len(observations) != 2 || observations[0].Phase != "finalize" || observations[1].Phase != "evidence_retry" {
+	if len(observations) != 2 || observations[0].Phase != "finalize" || observations[1].Phase != "critique_retry" {
 		t.Fatalf("observations = %+v", observations)
 	}
 	_, hit, err := client.doAnalyzeAgentic(context.Background(), in, key, "sys", "user")
@@ -1835,8 +1863,8 @@ func TestAgentic_TwoUnparseableInLoopRepairsRetainPriorDraft(t *testing.T) {
 	if err != nil {
 		t.Fatalf("doAnalyzeAgentic: %v", err)
 	}
-	if got := atomic.LoadInt32(&srv.calls); got != 3 {
-		t.Fatalf("call count = %d, want 3", got)
+	if got := atomic.LoadInt32(&srv.calls); got != 2 {
+		t.Fatalf("call count = %d, want 2", got)
 	}
 	if summary.Summary != "shallow" || analysis.CritiquePassed {
 		t.Fatalf("two unparseable repairs did not retain prior draft: summary=%+v analysis=%+v", summary, analysis)
@@ -1868,11 +1896,11 @@ func TestAgentic_ToolRepairUsesRemainingBudgetAfterUnparseableFinalize(t *testin
 	if err != nil {
 		t.Fatalf("doAnalyzeAgentic: %v", err)
 	}
-	if got := atomic.LoadInt32(&srv.calls); got != 6 {
-		t.Fatalf("call count = %d, want 6", got)
+	if got := atomic.LoadInt32(&srv.calls); got != 2 {
+		t.Fatalf("call count = %d, want 2", got)
 	}
-	if summary.Summary != "deep" || !analysis.CritiquePassed {
-		t.Fatalf("remaining retry did not recover the tool repair: summary=%+v analysis=%+v", summary, analysis)
+	if summary.Summary != "shallow" || analysis.CritiquePassed {
+		t.Fatalf("bounded repair unexpectedly reopened the tool loop: summary=%+v analysis=%+v", summary, analysis)
 	}
 }
 
@@ -1974,14 +2002,14 @@ func TestAgentic_Critique_RetryAllowsToolCallThenFinal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("doAnalyzeAgentic: %v", err)
 	}
-	if summary.Summary != "deep" {
-		t.Errorf("expected clean re-emit after tool call, got %q", summary.Summary)
+	if summary.Summary != "shallow" {
+		t.Errorf("expected prior draft after non-evidence tool response, got %q", summary.Summary)
 	}
-	if !analysis.CritiquePassed {
-		t.Errorf("CritiquePassed = false, want true (critique should have passed after tool-call retry)")
+	if analysis.CritiquePassed {
+		t.Errorf("CritiquePassed = true, want false")
 	}
-	if got := atomic.LoadInt32(&srv.calls); got != 3 {
-		t.Errorf("call count = %d, want 3 (punt + tool + clean)", got)
+	if got := atomic.LoadInt32(&srv.calls); got != 2 {
+		t.Errorf("call count = %d, want 2 (punt + bounded finalize)", got)
 	}
 }
 

@@ -181,7 +181,7 @@ func TestAgentic_ContextHeadroomDeniesCritiqueExpansionAndKeepsDraft(t *testing.
 	}
 	var denied bool
 	for _, event := range store.Snapshot().Traces[0].Events {
-		if event.Kind == "context_headroom" && event.Outcome == "retry_denied" {
+		if event.Kind == "critique_retry_denied" && event.Outcome == "context_headroom" {
 			denied = true
 		}
 	}

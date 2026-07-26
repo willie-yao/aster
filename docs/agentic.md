@@ -441,8 +441,8 @@ When the regex matches, the loop appends targeted feedback that quotes the
 offending suggested_fix back to the model, lists the exact phrases that
 tripped the gate, and re-states the two allowed shapes (concrete remediation
 OR the strict no-remediation escape hatch). It then re-prompts when the shared
-retry budget has capacity. An in-loop repair can extend the agentic iteration
-limit so the model can use Tools and re-emit. Drafts that still fail after the
+retry budget has capacity. Repair is bounded to evidence injection, at most one
+Tool-enabled turn when evidence is unresolved, and one forced finalization. Drafts that still fail after the
 shared budget is exhausted are published but NOT cached, so the next fetcher
 run retries with a fresh attempt.
 
