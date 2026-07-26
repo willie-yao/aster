@@ -78,6 +78,16 @@ export function markAnalysisChatTurnLimitReached(
   return { ...session, turns_used: usage.max };
 }
 
+export function analysisChatTurnLimitReached(
+  session: AnalysisChatSession | null,
+  hasPendingRequest: boolean,
+  rejected: boolean,
+): boolean {
+  if (hasPendingRequest) return false;
+  const usage = session ? analysisChatTurnUsage(session) : null;
+  return rejected || usage !== null && usage.used >= usage.max;
+}
+
 async function apiError(response: Response): Promise<AnalysisChatAPIError> {
   const body = (await response.text()).trim();
   return new AnalysisChatAPIError(

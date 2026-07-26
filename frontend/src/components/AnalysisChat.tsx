@@ -33,6 +33,7 @@ import {
   analysisChatRequestOutcomeUnknownMessage,
   analysisChatRequestPendingMessage,
   analysisChatSessionBusyMessage,
+  analysisChatTurnLimitReached,
   analysisChatProgressTurnUsage,
   analysisChatTurnLimitMessage,
   analysisChatTurnUsage,
@@ -603,7 +604,7 @@ export function AnalysisChat({
   if (!features.analysis_chat) return null;
 
   const turnUsage = session ? analysisChatTurnUsage(session) : null;
-  const turnLimitReached = turnLimitRejected || turnUsage !== null && turnUsage.used >= turnUsage.max;
+  const turnLimitReached = analysisChatTurnLimitReached(session, pendingTurn !== null, turnLimitRejected);
   const questions = patternScope ? patternSuggestedQuestions : suggestedQuestions;
 
   async function submit(nextQuestion?: string) {

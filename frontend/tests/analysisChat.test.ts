@@ -3,6 +3,7 @@ import { afterEach, test } from "node:test";
 
 import {
   analysisChatProgressTurnUsage,
+  analysisChatTurnLimitReached,
   analysisChatTurnUsage,
   findAnalysisChatSession,
   markAnalysisChatTurnLimitReached,
@@ -87,6 +88,10 @@ test("turn usage comes only from authoritative session fields", () => {
   }), null);
   assert.equal(markAnalysisChatTurnLimitReached({ ...session, turns_used: 9 }).turns_used, 10);
   assert.equal(markAnalysisChatTurnLimitReached({ ...session, turns_used: 12 }).turns_used, 12);
+  assert.equal(analysisChatTurnLimitReached({ ...session, turns_used: 10 }, false, false), true);
+  assert.equal(analysisChatTurnLimitReached({ ...session, turns_used: 10 }, true, false), false);
+  assert.equal(analysisChatTurnLimitReached(session, false, true), true);
+  assert.equal(analysisChatTurnLimitReached(session, true, true), false);
 });
 
 test("reload during a turn reconnects the persisted request", async () => {
