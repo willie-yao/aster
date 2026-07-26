@@ -42,6 +42,7 @@ import {
   isAmbiguousAnalysisChatFailure,
   limitAnalysisChatQuestion,
   newAnalysisChatRequestID,
+  resumeAnalysisChatTurn,
   streamAnalysisChatMessage,
 } from "../lib/analysisChat";
 import { fileToUrl, type FileToUrlContext } from "../lib/utils";
@@ -501,22 +502,59 @@ export function AnalysisChat({
     restoreControllerRef.current = controller;
     setRestoring(true);
     setError(null);
-    void findAnalysisChatSession(analysisRefRef.current, controller.signal)
-      .then((restored) => {
+    void (async () => {
+      let restoredTurn: PendingTurn | null = null;
+      try {
+        const restored = await findAnalysisChatSession(analysisRefRef.current, controller.signal);
         if (identityRef.current !== restoreIdentity) return;
         setSession(restored);
-      })
-      .catch((restoreError) => {
+        setRestoring(false);
+        if (!restored?.active) return;
+
+        restoredTurn = {
+          sessionID: restored.id,
+          requestID: restored.active.request_id,
+          question: restored.active.question ?? "",
+        };
+        setPendingTurn(restoredTurn);
+        setQuestion(restoredTurn.question);
+        setProgressPhase(restored.active.phase);
+        setBusy(true);
+        const updated = await resumeAnalysisChatTurn(
+          restored,
+          (progress) => setProgressPhase(progress.phase),
+          controller.signal,
+        );
+        if (identityRef.current !== restoreIdentity) return;
+        setSession(updated);
+        if (updated.messages.some((message) => message.request_id === restoredTurn?.requestID)) {
+          setQuestion("");
+          setPendingTurn(null);
+          setError(null);
+        } else {
+          setPendingTurn(null);
+          setError("The restored question ended without an answer. Submit it again to retry.");
+        }
+      } catch (restoreError) {
         if (restoreError instanceof Error && restoreError.name === "AbortError") return;
         if (identityRef.current !== restoreIdentity) return;
-        setError(readableError(restoreError));
-      })
-      .finally(() => {
+        if (restoredTurn && isAmbiguousAnalysisChatFailure(restoreError)) {
+          setPendingTurn(restoredTurn);
+          setError("The restored question may still be running. Retry shortly to reconnect.");
+        } else {
+          setPendingTurn(null);
+          setError(readableError(restoreError));
+        }
+      } finally {
         if (restoreControllerRef.current === controller) {
           restoreControllerRef.current = null;
-          if (identityRef.current === restoreIdentity) setRestoring(false);
+          if (identityRef.current === restoreIdentity) {
+            setRestoring(false);
+            setBusy(false);
+          }
         }
-      });
+      }
+    })();
     return () => controller.abort();
   }, [auth.status, features.analysis_chat, identity]);
 

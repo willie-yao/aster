@@ -113,13 +113,57 @@ func TestSessionStoreMigratesVersionOneTestSessions(t *testing.T) {
 	if err := writePrivateJSON(store.statePath, legacy); err != nil {
 		t.Fatal(err)
 	}
-	state, err := store.load()
+	state, migrated, err := store.load()
 	if err != nil {
 		t.Fatal(err)
 	}
 	session := state.Sessions["session"]
-	if state.Version != stateVersion || session.View.Analysis.Scope != ScopeTest || session.Resolved.Ref.Scope != ScopeTest {
+	if !migrated || state.Version != stateVersion || session.View.Analysis.Scope != ScopeTest || session.Resolved.Ref.Scope != ScopeTest {
 		t.Fatalf("migrated state = %+v", state)
+	}
+}
+
+func TestSessionStoreMigratesVersionTwoActiveSessions(t *testing.T) {
+	dir := t.TempDir()
+	store, err := newSessionStore(dir, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	legacy := &persistedState{
+		Version: 2,
+		Sessions: map[string]*persistedSession{
+			"session": {
+				Owner: "alice", ExpiresAt: now.Add(time.Hour),
+				View: SessionView{
+					ID: "session", Analysis: AnalysisRef{Scope: ScopeTest, JobID: "job", BuildID: "1", TestName: "test"},
+				},
+				Active: &persistedActiveTurn{
+					RequestID: "request", LeaseID: "lease", ExpiresAt: now.Add(time.Minute),
+					Phase: PhaseInvestigating, UpdatedAt: now,
+				},
+			},
+		},
+	}
+	if err := writePrivateJSON(store.statePath, legacy); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := store.context()
+	defer cancel()
+	if err := store.update(ctx, func(*persistedState) (bool, error) { return false, nil }); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(store.statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persisted persistedState
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	active := persisted.Sessions["session"].Active
+	if persisted.Version != stateVersion || active == nil || active.RequestID != "request" || active.Question != "" {
+		t.Fatalf("migrated state = %+v", persisted)
 	}
 }
 

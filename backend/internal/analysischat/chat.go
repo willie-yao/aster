@@ -143,6 +143,15 @@ type SessionView struct {
 	UpdatedAt string      `json:"updated_at"`
 	ExpiresAt string      `json:"expires_at"`
 	Messages  []Message   `json:"messages"`
+	Active    *ActiveTurn `json:"active,omitempty"`
+}
+
+// ActiveTurn is the owner-safe state needed to resume an in-flight request.
+type ActiveTurn struct {
+	RequestID string `json:"request_id"`
+	Question  string `json:"question,omitempty"`
+	Phase     string `json:"phase"`
+	UpdatedAt string `json:"updated_at"`
 }
 
 // Progress is a persisted, owner-safe turn phase.
@@ -385,7 +394,7 @@ func (s *Service) Create(ref AnalysisRef, owner, requestID string) (SessionView,
 		}
 		changed = changed || migrated
 		if current != nil {
-			existing = cloneSessionView(current.View)
+			existing = sessionView(current)
 			return changed, nil
 		}
 		if s.sessionLimitReached(state, owner) {
@@ -413,7 +422,7 @@ func (s *Service) Create(ref AnalysisRef, owner, requestID string) (SessionView,
 		ExpiresAt:            expires,
 		CreateRequestID:      requestID,
 		CreateRequestHash:    requestHash,
-		CreateRequestVersion: stateVersion,
+		CreateRequestVersion: createVersion,
 		Requests:             map[string]persistedRequest{},
 		Investigations:       map[string]persistedInvestigation{},
 		View: SessionView{
@@ -436,14 +445,14 @@ func (s *Service) Create(ref AnalysisRef, owner, requestID string) (SessionView,
 		}
 		changed = changed || migrated
 		if current != nil {
-			existing = cloneSessionView(current.View)
+			existing = sessionView(current)
 			return changed, nil
 		}
 		if s.sessionLimitReached(state, owner) {
 			return changed, ErrSessionLimit
 		}
 		state.Sessions[id] = created
-		existing = cloneSessionView(created.View)
+		existing = sessionView(created)
 		return true, nil
 	})
 	return existing, err
@@ -462,7 +471,7 @@ func (s *Service) Get(id, owner string) (SessionView, error) {
 		if current == nil || current.Owner != owner {
 			return changed, ErrSessionNotFound
 		}
-		view = cloneSessionView(current.View)
+		view = sessionView(current)
 		return changed, nil
 	})
 	return view, err
@@ -488,7 +497,7 @@ func (s *Service) Find(ref AnalysisRef, owner string) (SessionView, error) {
 		if current == nil {
 			return changed, ErrSessionNotFound
 		}
-		view = cloneSessionView(current.View)
+		view = sessionView(current)
 		return changed, nil
 	})
 	return view, err
@@ -605,7 +614,7 @@ func findCreateRequest(state *persistedState, owner, requestID, requestHash, leg
 		if current.CreateRequestHash != requestHash {
 			if current.CreateRequestVersion == 1 && current.CreateRequestHash == legacyHash {
 				current.CreateRequestHash = requestHash
-				current.CreateRequestVersion = stateVersion
+				current.CreateRequestVersion = createVersion
 				return current, true, nil
 			}
 			return nil, false, ErrIdempotencyConflict
@@ -981,9 +990,26 @@ func newSessionID() (string, error) {
 
 func cloneSessionView(view SessionView) SessionView {
 	view.Messages = slices.Clone(view.Messages)
+	if view.Active != nil {
+		active := *view.Active
+		view.Active = &active
+	}
 	for i := range view.Messages {
 		view.Messages[i].Citations = slices.Clone(view.Messages[i].Citations)
 		view.Messages[i].ProposedRevision = cloneRevision(view.Messages[i].ProposedRevision)
+	}
+	return view
+}
+
+func sessionView(current *persistedSession) SessionView {
+	view := cloneSessionView(current.View)
+	if current.Active != nil {
+		view.Active = &ActiveTurn{
+			RequestID: current.Active.RequestID,
+			Question:  current.Active.Question,
+			Phase:     current.Active.Phase,
+			UpdatedAt: current.Active.UpdatedAt.Format(time.RFC3339),
+		}
 	}
 	return view
 }

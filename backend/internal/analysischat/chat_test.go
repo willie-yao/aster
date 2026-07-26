@@ -227,6 +227,20 @@ func TestServiceFindPrefersRecentlyActiveSession(t *testing.T) {
 	if found.ID != first.ID || found.ID == second.ID {
 		t.Fatalf("found active session = %q, want %q", found.ID, first.ID)
 	}
+	if found.Active == nil || found.Active.RequestID != "turn-first-active" || found.Active.Question != "question" || found.Active.Phase == "" {
+		t.Fatalf("active turn = %+v", found.Active)
+	}
+	replica, err := NewService(t.Context(), dir, &fakeRunner{}, Options{Now: now, PollInterval: 10 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromReplica, err := replica.Get(first.ID, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fromReplica.Active == nil || fromReplica.Active.RequestID != found.Active.RequestID || fromReplica.Active.Question != found.Active.Question {
+		t.Fatalf("replica active turn = %+v", fromReplica.Active)
+	}
 	close(runner.release)
 	if err := <-done; err != nil {
 		t.Fatal(err)
@@ -1496,12 +1510,12 @@ func TestVersionOneCreateIdempotencyMigratesOnRetry(t *testing.T) {
 	if err != nil || got.ID != "legacy-session" {
 		t.Fatalf("retry session=%+v err=%v", got, err)
 	}
-	state, err := restarted.store.load()
+	state, _, err := restarted.store.load()
 	if err != nil {
 		t.Fatal(err)
 	}
 	migrated := state.Sessions["legacy-session"]
-	if migrated.CreateRequestVersion != stateVersion || migrated.CreateRequestHash == legacyHash {
+	if migrated.CreateRequestVersion != createVersion || migrated.CreateRequestHash == legacyHash {
 		t.Fatalf("create migration = %+v", migrated)
 	}
 }

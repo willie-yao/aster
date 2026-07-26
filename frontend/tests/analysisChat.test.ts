@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 
-import { findAnalysisChatSession } from "../src/lib/analysisChat.js";
+import { findAnalysisChatSession, resumeAnalysisChatTurn } from "../src/lib/analysisChat.js";
 import type { AnalysisChatReference, AnalysisChatSession } from "../src/types/analysisChat.js";
 
 const originalFetch = globalThis.fetch;
@@ -62,4 +62,69 @@ test("missing or expired server sessions restore as empty", async () => {
   globalThis.fetch = async () => new Response(null, { status: 204 });
 
   assert.equal(await findAnalysisChatSession(analysis), null);
+});
+
+test("reload during a turn reconnects the persisted request", async () => {
+  const active: AnalysisChatSession = {
+    ...session,
+    messages: [],
+    active: {
+      request_id: "request-active",
+      question: "What is still running?",
+      phase: "reading_evidence",
+      updated_at: "2026-07-26T12:03:00Z",
+    },
+  };
+  const completed: AnalysisChatSession = {
+    ...session,
+    messages: [
+      { role: "user", request_id: "request-active", content: "What is still running?", created_at: "2026-07-26T12:04:00Z" },
+      { role: "assistant", request_id: "request-active", content: "The request completed.", created_at: "2026-07-26T12:04:00Z" },
+    ],
+  };
+  const progress = {
+    request_id: "request-active",
+    phase: "finalizing",
+    updated_at: "2026-07-26T12:03:30Z",
+  };
+  const events = `event: progress\ndata: ${JSON.stringify(progress)}\n\nevent: session\ndata: ${JSON.stringify(completed)}\n\n`;
+  globalThis.fetch = async (input, init) => {
+    assert.equal(String(input), "/api/analysis-chat/sessions/session-1/messages/stream");
+    assert.equal(init?.method, "POST");
+    assert.equal(new Headers(init?.headers).get("Idempotency-Key"), "request-active");
+    assert.deepEqual(JSON.parse(String(init?.body)), { message: "What is still running?" });
+    return new Response(events, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+  };
+  const phases: string[] = [];
+
+  const restored = await resumeAnalysisChatTurn(active, (value) => phases.push(value.phase));
+
+  assert.equal(restored.active, undefined);
+  assert.equal(restored.messages[1]?.request_id, "request-active");
+  assert.deepEqual(phases, ["reading_evidence", "finalizing"]);
+});
+
+test("version two active sessions poll without a recoverable question", async () => {
+  const active: AnalysisChatSession = {
+    ...session,
+    messages: [],
+    active: {
+      request_id: "request-legacy",
+      phase: "investigating",
+      updated_at: "2026-07-26T12:03:00Z",
+    },
+  };
+  globalThis.fetch = async (input, init) => {
+    assert.equal(String(input), "/api/analysis-chat/sessions/session-1");
+    assert.equal(init?.method, undefined);
+    return new Response(JSON.stringify(session), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+
+  const restored = await resumeAnalysisChatTurn(active, () => {}, undefined, 0);
+
+  assert.equal(restored.id, session.id);
+  assert.equal(restored.active, undefined);
 });

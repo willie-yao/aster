@@ -19,7 +19,8 @@ import (
 )
 
 const (
-	stateVersion    = 2
+	stateVersion    = 3
+	createVersion   = 2
 	stateFileName   = "sessions.json"
 	stateLockName   = "sessions.lock"
 	maxStateBytes   = 64 << 20
@@ -80,6 +81,7 @@ type persistedInvestigation struct {
 
 type persistedActiveTurn struct {
 	RequestID       string    `json:"request_id"`
+	Question        string    `json:"question,omitempty"`
 	LeaseID         string    `json:"lease_id"`
 	ExpiresAt       time.Time `json:"expires_at"`
 	Phase           string    `json:"phase"`
@@ -152,12 +154,12 @@ func (s *sessionStore) update(ctx context.Context, fn func(*persistedState) (boo
 	}
 	defer func() { _ = unix.Flock(int(lock.Fd()), unix.LOCK_UN) }()
 
-	state, err := s.load()
+	state, migrated, err := s.load()
 	if err != nil {
 		return err
 	}
 	changed, opErr := fn(state)
-	if changed {
+	if changed || migrated {
 		if err := writePrivateJSON(s.statePath, state); err != nil {
 			return fmt.Errorf("writing analysis chat state: %w", err)
 		}
@@ -187,31 +189,37 @@ func lockFile(ctx context.Context, file *os.File) error {
 	}
 }
 
-func (s *sessionStore) load() (*persistedState, error) {
+func (s *sessionStore) load() (*persistedState, bool, error) {
 	file, err := os.Open(s.statePath)
 	if errors.Is(err, os.ErrNotExist) {
-		return freshPersistedState(), nil
+		return freshPersistedState(), false, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("opening analysis chat state: %w", err)
+		return nil, false, fmt.Errorf("opening analysis chat state: %w", err)
 	}
 	defer file.Close()
 	data, err := io.ReadAll(io.LimitReader(file, maxStateBytes+1))
 	if err != nil {
-		return nil, fmt.Errorf("reading analysis chat state: %w", err)
+		return nil, false, fmt.Errorf("reading analysis chat state: %w", err)
 	}
 	if len(data) > maxStateBytes {
-		return nil, fmt.Errorf("analysis chat state exceeds %d bytes", maxStateBytes)
+		return nil, false, fmt.Errorf("analysis chat state exceeds %d bytes", maxStateBytes)
 	}
 	var state persistedState
 	if err := json.Unmarshal(data, &state); err != nil {
-		return nil, fmt.Errorf("decoding analysis chat state: %w", err)
+		return nil, false, fmt.Errorf("decoding analysis chat state: %w", err)
 	}
+	migrated := false
 	if state.Version == 1 {
 		migrateStateV1(&state)
+		migrated = true
+	}
+	if state.Version == 2 {
+		migrateStateV2(&state)
+		migrated = true
 	}
 	if state.Version != stateVersion {
-		return nil, fmt.Errorf("unsupported analysis chat state version %d", state.Version)
+		return nil, false, fmt.Errorf("unsupported analysis chat state version %d", state.Version)
 	}
 	if state.Sessions == nil {
 		state.Sessions = map[string]*persistedSession{}
@@ -219,11 +227,11 @@ func (s *sessionStore) load() (*persistedState, error) {
 	if state.OwnerRequests == nil {
 		state.OwnerRequests = map[string][]time.Time{}
 	}
-	return &state, nil
+	return &state, migrated, nil
 }
 
 func migrateStateV1(state *persistedState) {
-	state.Version = stateVersion
+	state.Version = 2
 	for _, session := range state.Sessions {
 		if session == nil {
 			continue
@@ -238,6 +246,10 @@ func migrateStateV1(state *persistedState) {
 			session.CreateRequestVersion = 1
 		}
 	}
+}
+
+func migrateStateV2(state *persistedState) {
+	state.Version = stateVersion
 }
 
 func freshPersistedState() *persistedState {

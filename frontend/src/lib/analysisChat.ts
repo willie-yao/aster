@@ -165,6 +165,28 @@ export async function streamAnalysisChatMessage(
   throw lastError instanceof Error ? lastError : new Error("Analysis chat stream disconnected");
 }
 
+export async function resumeAnalysisChatTurn(
+  session: AnalysisChatSession,
+  onProgress: (progress: AnalysisChatProgress) => void,
+  signal?: AbortSignal,
+  pollDelayMs = 1000,
+): Promise<AnalysisChatSession> {
+  const active = session.active;
+  if (!active) return session;
+  onProgress(active);
+  if (active.question?.trim()) {
+    return streamAnalysisChatMessage(session.id, active.question, active.request_id, onProgress, signal);
+  }
+
+  let current = session;
+  while (current.active?.request_id === active.request_id) {
+    await reconnectDelay(pollDelayMs, signal);
+    current = await getAnalysisChatSession(session.id, signal);
+    if (current.active?.request_id === active.request_id) onProgress(current.active);
+  }
+  return current;
+}
+
 async function streamAnalysisChatMessageOnce(
   sessionID: string,
   message: string,
@@ -245,10 +267,10 @@ function reconnectDelay(milliseconds: number, signal?: AbortSignal): Promise<voi
       return;
     }
     const onAbort = () => {
-      window.clearTimeout(timer);
+      globalThis.clearTimeout(timer);
       reject(new DOMException("Aborted", "AbortError"));
     };
-    const timer = window.setTimeout(() => {
+    const timer = globalThis.setTimeout(() => {
       signal?.removeEventListener("abort", onAbort);
       resolve();
     }, milliseconds);

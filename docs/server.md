@@ -142,6 +142,9 @@ committed it. Assistant messages include
 an `assessment` of `explains`, `supports`, `challenges`, or `inconclusive`, plus
 verified artifact paths and an optional proposed revision. A proposed revision
 does not alter `jobs/*.json` or the published analysis.
+While a turn is running, the owner-safe response also includes its request ID,
+question, phase, and update time. A reloaded client reconnects with the same
+request ID, and can still cancel it from another server replica.
 
 Sessions are persisted under `ANALYSIS_CHAT_STATE_DIR`, bound to the
 authenticated login, limited to ten admitted attempts including failed turns,
@@ -166,6 +169,10 @@ the authoritative session before allowing an explicit retry. Startup cleanup,
 a lifecycle-bound periodic cleanup loop, and request-time cleanup remove
 expired sessions from the persisted file and release global and per-owner
 capacity.
+State version 3 persists the active question needed for stream reconnection.
+Version 1 and version 2 files migrate in place without dropping completed
+transcripts. A version 2 active request without a stored question is followed
+by polling until it completes or becomes terminal.
 
 Operational settings:
 
