@@ -1510,7 +1510,7 @@ func TestVersionOneCreateIdempotencyMigratesOnRetry(t *testing.T) {
 	if err != nil || got.ID != "legacy-session" {
 		t.Fatalf("retry session=%+v err=%v", got, err)
 	}
-	state, _, err := restarted.store.load()
+	state, err := restarted.store.load()
 	if err != nil {
 		t.Fatal(err)
 	}

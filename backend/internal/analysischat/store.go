@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	stateVersion    = 3
+	stateVersion    = 2
 	createVersion   = 2
 	stateFileName   = "sessions.json"
 	stateLockName   = "sessions.lock"
@@ -154,12 +154,12 @@ func (s *sessionStore) update(ctx context.Context, fn func(*persistedState) (boo
 	}
 	defer func() { _ = unix.Flock(int(lock.Fd()), unix.LOCK_UN) }()
 
-	state, migrated, err := s.load()
+	state, err := s.load()
 	if err != nil {
 		return err
 	}
 	changed, opErr := fn(state)
-	if changed || migrated {
+	if changed {
 		if err := writePrivateJSON(s.statePath, state); err != nil {
 			return fmt.Errorf("writing analysis chat state: %w", err)
 		}
@@ -189,37 +189,31 @@ func lockFile(ctx context.Context, file *os.File) error {
 	}
 }
 
-func (s *sessionStore) load() (*persistedState, bool, error) {
+func (s *sessionStore) load() (*persistedState, error) {
 	file, err := os.Open(s.statePath)
 	if errors.Is(err, os.ErrNotExist) {
-		return freshPersistedState(), false, nil
+		return freshPersistedState(), nil
 	}
 	if err != nil {
-		return nil, false, fmt.Errorf("opening analysis chat state: %w", err)
+		return nil, fmt.Errorf("opening analysis chat state: %w", err)
 	}
 	defer file.Close()
 	data, err := io.ReadAll(io.LimitReader(file, maxStateBytes+1))
 	if err != nil {
-		return nil, false, fmt.Errorf("reading analysis chat state: %w", err)
+		return nil, fmt.Errorf("reading analysis chat state: %w", err)
 	}
 	if len(data) > maxStateBytes {
-		return nil, false, fmt.Errorf("analysis chat state exceeds %d bytes", maxStateBytes)
+		return nil, fmt.Errorf("analysis chat state exceeds %d bytes", maxStateBytes)
 	}
 	var state persistedState
 	if err := json.Unmarshal(data, &state); err != nil {
-		return nil, false, fmt.Errorf("decoding analysis chat state: %w", err)
+		return nil, fmt.Errorf("decoding analysis chat state: %w", err)
 	}
-	migrated := false
 	if state.Version == 1 {
 		migrateStateV1(&state)
-		migrated = true
-	}
-	if state.Version == 2 {
-		migrateStateV2(&state)
-		migrated = true
 	}
 	if state.Version != stateVersion {
-		return nil, false, fmt.Errorf("unsupported analysis chat state version %d", state.Version)
+		return nil, fmt.Errorf("unsupported analysis chat state version %d", state.Version)
 	}
 	if state.Sessions == nil {
 		state.Sessions = map[string]*persistedSession{}
@@ -227,11 +221,11 @@ func (s *sessionStore) load() (*persistedState, bool, error) {
 	if state.OwnerRequests == nil {
 		state.OwnerRequests = map[string][]time.Time{}
 	}
-	return &state, migrated, nil
+	return &state, nil
 }
 
 func migrateStateV1(state *persistedState) {
-	state.Version = 2
+	state.Version = stateVersion
 	for _, session := range state.Sessions {
 		if session == nil {
 			continue
@@ -246,10 +240,6 @@ func migrateStateV1(state *persistedState) {
 			session.CreateRequestVersion = 1
 		}
 	}
-}
-
-func migrateStateV2(state *persistedState) {
-	state.Version = stateVersion
 }
 
 func freshPersistedState() *persistedState {
