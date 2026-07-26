@@ -1009,6 +1009,11 @@ agentLoop:
 							if safe {
 								if rp, ok := tryParseAnalysis(revised); ok {
 									revisedCritique := critiqueDraft(rp, state.readArtifactsFull, state.readArtifactsBase, matchSkillsForDraft(state, rp), state.consecutiveFailures)
+									if len(revisedCritique.MissingSkillEvidence) > 0 {
+										if treeSet := state.artifactTreeSet(); treeSet != nil {
+											pruneAbsentSkillEvidence(rp, &revisedCritique, treeSet)
+										}
+									}
 									semanticCandidate := state.newDraftCandidate("semantic_retry", revised, revisedItems, rp, revisedCritique)
 									state.considerFallbackDraft(semanticCandidate, true)
 									if state.considerDraft(semanticCandidate, true) {
