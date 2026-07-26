@@ -389,6 +389,7 @@ type agentState struct {
 	selectionObserver DraftSelectionObserver
 	draftAttempt      int
 	bestDraft         *critiqueDraftCandidate
+	fallbackDraft     *critiqueDraftCandidate
 	evidenceRevision  int
 
 	// critiquePassed records whether the accepted answer cleared the
@@ -872,9 +873,9 @@ agentLoop:
 		var fits bool
 		messages, fits = prepareContextRequest(loopCtx, messages, schemaBytes, headroom, "applied")
 		if !fits {
-			if state.bestDraft != nil {
-				finalContent = state.bestDraft.content
-				finalProviderItems = state.bestDraft.providerItems
+			if fallback := state.promoteFallbackDraft(); fallback != nil {
+				finalContent = fallback.content
+				finalProviderItems = fallback.providerItems
 				finalContentFromToolsFree = true
 				finalDraftObserved = true
 				recordTrace(loopCtx, TraceEvent{Kind: "context_headroom", Outcome: "best_draft", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
@@ -924,6 +925,8 @@ agentLoop:
 					}
 				}
 				candidateDraft = state.newDraftCandidate(draftPhase, candidate, msg.ProviderItems, parsedCandidate, candidateCritique)
+				semanticAccepted := draftPhase == "semantic_retry" && state.judgeObjected
+				state.considerFallbackDraft(candidateDraft, semanticAccepted)
 			}
 
 			floors := evalFloors(state, in.Opts)
@@ -947,11 +950,10 @@ agentLoop:
 					var fits bool
 					messages, fits = prepareContextRequest(loopCtx, messages, schemaBytes, headroom, "floor_nudge")
 					if !fits {
-						if state.bestDraft != nil {
-							finalContent = state.bestDraft.content
-							finalProviderItems = state.bestDraft.providerItems
+						if fallback := state.promoteFallbackDraft(); fallback != nil {
+							finalContent = fallback.content
+							finalProviderItems = fallback.providerItems
 						} else {
-							state.considerDraft(candidateDraft, false)
 							finalContent = candidate
 							finalProviderItems = msg.ProviderItems
 						}
@@ -1011,9 +1013,9 @@ agentLoop:
 							var fits bool
 							messages, fits = prepareContextRequest(loopCtx, messages, schemaBytes, headroom, "semantic_retry")
 							if !fits {
-								if state.bestDraft != nil {
-									finalContent = state.bestDraft.content
-									finalProviderItems = state.bestDraft.providerItems
+								if fallback := state.promoteFallbackDraft(); fallback != nil {
+									finalContent = fallback.content
+									finalProviderItems = fallback.providerItems
 								}
 								finalContentFromToolsFree = true
 								finalDraftObserved = true
@@ -1028,6 +1030,7 @@ agentLoop:
 							recordTrace(loopCtx, TraceEvent{Kind: "semantic_judge", Outcome: "passed"})
 							log.Printf("  ✓ semantic judge: no objections")
 							state.considerDraft(candidateDraft, true)
+							state.considerFallbackDraft(candidateDraft, true)
 						}
 					}
 					// Reaching acceptance after the judge objected on an earlier
@@ -1056,9 +1059,9 @@ agentLoop:
 					var fits bool
 					messages, fits = prepareContextRequest(loopCtx, messages, schemaBytes, headroom, "critique_retry")
 					if !fits {
-						if state.bestDraft != nil {
-							finalContent = state.bestDraft.content
-							finalProviderItems = state.bestDraft.providerItems
+						if fallback := state.promoteFallbackDraft(); fallback != nil {
+							finalContent = fallback.content
+							finalProviderItems = fallback.providerItems
 						}
 						finalContentFromToolsFree = true
 						finalDraftObserved = true
@@ -1143,9 +1146,9 @@ agentLoop:
 			if retry, admitted := critiqueRetries.admit(); admitted {
 				unparseableRetryAdmitted = true
 				recordTrace(loopCtx, TraceEvent{Kind: "critique", Outcome: "unparseable_retry", Retry: retry})
-			} else if state.bestDraft != nil {
-				finalContent = state.bestDraft.content
-				finalProviderItems = state.bestDraft.providerItems
+			} else if fallback := state.promoteFallbackDraft(); fallback != nil {
+				finalContent = fallback.content
+				finalProviderItems = fallback.providerItems
 				finalContentFromToolsFree = true
 				finalDraftObserved = true
 				parsed, ok = tryParseAnalysis(finalContent)
@@ -1162,7 +1165,7 @@ agentLoop:
 		}
 		parsed, ok = tryParseAnalysis(finalContent)
 	}
-	if !ok && draftPhase == "critique_retry" && state.bestDraft != nil {
+	if !ok && draftPhase == "critique_retry" && state.fallbackDraft != nil {
 		if !unparseableRetryAdmitted {
 			if retry, admitted := critiqueRetries.admit(); admitted {
 				recordTrace(loopCtx, TraceEvent{Kind: "critique", Outcome: "unparseable_retry", Retry: retry})
@@ -1175,9 +1178,10 @@ agentLoop:
 			}
 		}
 	}
-	if !ok && state.bestDraft != nil {
-		finalContent = state.bestDraft.content
-		finalProviderItems = state.bestDraft.providerItems
+	if !ok && state.fallbackDraft != nil {
+		fallback := state.promoteFallbackDraft()
+		finalContent = fallback.content
+		finalProviderItems = fallback.providerItems
 		finalContentFromToolsFree = true
 		finalDraftObserved = true
 		parsed, ok = tryParseAnalysis(finalContent)
@@ -1222,10 +1226,20 @@ func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, m
 			draftPhase = "finalize"
 		}
 		candidate := state.newDraftCandidate(draftPhase, finalContent, finalProviderItems, parsed, out)
-		state.considerDraft(candidate, false)
+		semanticAccepted := draftPhase == "semantic_retry" && state.judgeObjected
+		state.considerFallbackDraft(candidate, semanticAccepted)
+		if state.considerDraft(candidate, semanticAccepted) && semanticAccepted {
+			state.judgeRevised = true
+			recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Outcome: "revised"})
+		}
 	} else if state.bestDraft == nil {
 		candidate := state.newDraftCandidate(draftPhase, finalContent, finalProviderItems, parsed, out)
-		state.considerDraft(candidate, false)
+		semanticAccepted := draftPhase == "semantic_retry" && state.judgeObjected
+		state.considerFallbackDraft(candidate, semanticAccepted)
+		if state.considerDraft(candidate, semanticAccepted) && semanticAccepted {
+			state.judgeRevised = true
+			recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Outcome: "revised"})
+		}
 	}
 	if out.Passed {
 		recordTrace(ctx, TraceEvent{Kind: "critique", Outcome: "passed"})
@@ -1285,6 +1299,7 @@ func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, m
 		}
 	}
 	candidate := state.newDraftCandidate("evidence_retry", revised, revisedProviderItems, next, out)
+	state.considerFallbackDraft(candidate, false)
 	state.considerDraft(candidate, false)
 	state.critiquePassed = state.bestDraft != nil && state.bestDraft.quality.Passed
 	if state.critiquePassed {
@@ -1404,23 +1419,44 @@ func (s *agentState) newDraftCandidate(phase, content string, providerItems []js
 
 // considerDraft applies deterministic quality ordering and the root-cause guard.
 func (s *agentState) considerDraft(candidate *critiqueDraftCandidate, semanticAccepted bool) bool {
-	if candidate == nil {
-		return false
-	}
-	if s.bestDraft == nil {
-		s.bestDraft = candidate
-		return true
-	}
-	comparison := compareCritiqueQuality(candidate.quality, s.bestDraft.quality)
-	if comparison < 0 || (comparison == 0 && !semanticAccepted) {
-		return false
-	}
-	if rootCauseMateriallyChanged(s.bestDraft.parsed.RootCause, candidate.parsed.RootCause) &&
-		candidate.evidenceRevision <= s.bestDraft.evidenceRevision && !semanticAccepted {
+	if !draftShouldReplace(s.bestDraft, candidate, semanticAccepted) {
 		return false
 	}
 	s.bestDraft = candidate
 	return true
+}
+
+func (s *agentState) considerFallbackDraft(candidate *critiqueDraftCandidate, semanticAccepted bool) bool {
+	if !draftShouldReplace(s.fallbackDraft, candidate, semanticAccepted) {
+		return false
+	}
+	s.fallbackDraft = candidate
+	return true
+}
+
+func draftShouldReplace(current, candidate *critiqueDraftCandidate, semanticAccepted bool) bool {
+	if candidate == nil {
+		return false
+	}
+	if current == nil {
+		return true
+	}
+	comparison := compareCritiqueQuality(candidate.quality, current.quality)
+	if comparison < 0 || (comparison == 0 && !semanticAccepted) {
+		return false
+	}
+	if rootCauseMateriallyChanged(current.parsed.RootCause, candidate.parsed.RootCause) &&
+		candidate.evidenceRevision <= current.evidenceRevision && !semanticAccepted {
+		return false
+	}
+	return true
+}
+
+func (s *agentState) promoteFallbackDraft() *critiqueDraftCandidate {
+	if s.fallbackDraft != nil {
+		s.bestDraft = s.fallbackDraft
+	}
+	return s.bestDraft
 }
 
 func (s *agentState) notifyDraftSelection() {

@@ -135,6 +135,33 @@ func TestAgentic_UnparseableSemanticRepairKeepsSelectedDraft(t *testing.T) {
 	}
 }
 
+func TestAgentic_ForcedFinalizeSemanticRepairCanBeSelected(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	initial := `{"summary":"initial","is_transient":false,"root_cause":"the PR broke it","severity":"High","suggested_fix":"Revert the PR.","relevant_files":[]}`
+	srv.push(200, chatRespFinal(initial))
+	srv.push(200, chatRespFinal(`{"objections":["check the cluster network config"]}`))
+	srv.push(200, chatRespFinal("not json"))
+	revised := `{"summary":"revised","is_transient":false,"root_cause":"control-plane subnet route table missing","severity":"High","suggested_fix":"Set the control-plane subnet route table.","relevant_files":[]}`
+	srv.push(200, chatRespFinal(revised))
+
+	client := newAgenticTestClient(t, srv.URL)
+	_, analysis, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
+			MaxIters: 4, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+			Timeout: 30 * time.Second, CritiqueMaxRetries: 1, SemanticJudge: true,
+		}), "agentic:test:semantic-forced-finalize", "sys", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if analysis.RootCause != "control-plane subnet route table missing" || !analysis.JudgeRevised {
+		t.Fatalf("forced-finalize semantic repair not selected: %+v", analysis)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 4 {
+		t.Fatalf("call count = %d, want 4", got)
+	}
+}
+
 // TestApplySemanticJudgePostLoop_RefinalizesOnObjection verifies the post-loop
 // judge: on objections it refinalizes, and accepts the revised draft only when
 // it still clears the deterministic critique.

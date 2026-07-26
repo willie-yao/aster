@@ -135,6 +135,7 @@ func (c *Client) applySemanticJudgePostLoop(ctx context.Context, state *agentSta
 	if state.bestDraft == nil {
 		out := critiqueDraft(parsed, state.readArtifactsFull, state.readArtifactsBase, matchSkillsForDraft(state, parsed), state.consecutiveFailures)
 		candidate := state.newDraftCandidate("finalize", finalContent, finalProviderItems, parsed, out)
+		state.considerFallbackDraft(candidate, false)
 		state.considerDraft(candidate, false)
 	}
 	state.judgeRan = true
@@ -171,6 +172,7 @@ func (c *Client) applySemanticJudgePostLoop(ctx context.Context, state *agentSta
 		}
 	}
 	candidate := state.newDraftCandidate("semantic_retry", revised, revisedProviderItems, rp, out)
+	state.considerFallbackDraft(candidate, true)
 	selected := state.considerDraft(candidate, true)
 	if !out.Passed {
 		recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Outcome: "revision_rejected", IssueCount: len(out.Matches())})

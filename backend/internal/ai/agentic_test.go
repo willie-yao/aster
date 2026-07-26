@@ -631,6 +631,33 @@ func TestAgentic_MinToolCalls_RejectedFinalNotReusedAfterMaxIters(t *testing.T) 
 	}
 }
 
+func TestAgentic_UnmetFloorDraftIsFallbackAfterUnparseableFinalize(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	fallback := `{"summary":"fallback","is_transient":false,"root_cause":"controller configuration mismatch","severity":"High","suggested_fix":"Update the controller configuration.","relevant_files":[]}`
+	srv.push(200, chatRespFinal(fallback))
+	srv.push(200, chatRespFinal("not json"))
+
+	selected := 0
+	in := newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
+		MaxIters: 1, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+		Timeout: 30 * time.Second, MinToolCalls: 2,
+	})
+	in.DraftSelectionObserver = func(attempt int) { selected = attempt }
+	client := newAgenticTestClient(t, srv.URL)
+	key := "agentic:test:floor-fallback"
+	_, analysis, err := client.doAnalyzeAgentic(context.Background(), in, key, "sys", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if analysis.RootCause != "controller configuration mismatch" || selected != 1 {
+		t.Fatalf("unmet-floor fallback lost: selected=%d analysis=%+v", selected, analysis)
+	}
+	if _, ok := client.Cache().Get(key); ok {
+		t.Fatal("below-floor fallback was cached")
+	}
+}
+
 // bigPayload returns deterministic bytes for MinGCSBytes floor tests.
 func bigPayload(n int) []byte {
 	out := make([]byte, n)
