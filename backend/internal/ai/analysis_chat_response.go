@@ -277,11 +277,26 @@ func scanAnalysisChatJSONCandidates(raw string) analysisChatCandidateScan {
 	candidates := make([]analysisChatJSONCandidate, 0, 16)
 	inString := false
 	escaped := false
+	outsideString := false
+	outsideEscaped := false
 	overflowDepth := 0
 	for index := 0; index < len(raw); index++ {
 		ch := raw[index]
 		if len(stack) == 0 {
-			if ch == '{' {
+			if outsideString {
+				if outsideEscaped {
+					outsideEscaped = false
+				} else if ch == '\\' {
+					outsideEscaped = true
+				} else if ch == '"' {
+					outsideString = false
+				}
+				continue
+			}
+			switch ch {
+			case '"':
+				outsideString = true
+			case '{':
 				stack = append(stack, index)
 			}
 			continue
@@ -321,6 +336,8 @@ func scanAnalysisChatJSONCandidates(raw string) analysisChatCandidateScan {
 			if len(stack) == 0 {
 				inString = false
 				escaped = false
+				outsideString = false
+				outsideEscaped = false
 			}
 		}
 	}

@@ -28,6 +28,7 @@ import { useAuth } from "../hooks/useAuth";
 import { useCapabilities } from "../hooks/useCapabilities";
 import {
   analysisChatActiveTurnLimitMessage,
+  analysisChatFailureGuidance,
   analysisChatIdempotencyConflictMessage,
   analysisChatRateLimitMessage,
   analysisChatRequestOutcomeUnknownMessage,
@@ -100,6 +101,8 @@ const assessmentConfig: Record<
 };
 
 function readableError(error: unknown): string {
+  const guidance = analysisChatFailureGuidance(error);
+  if (guidance) return guidance;
   if (error instanceof AnalysisChatAPIError) {
     switch (error.status) {
       case 404:
