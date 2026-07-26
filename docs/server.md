@@ -173,7 +173,10 @@ State version 2 stores the active question as an additive optional field so old
 and new replicas can share the file during a rolling upgrade. An old writer may
 drop that field, in which case the new client follows the request by polling
 until it completes or becomes terminal. Version 1 files still migrate without
-dropping completed transcripts.
+dropping completed transcripts. The bridge also accepts the short-lived version
+3 format from the preceding release and rewrites it as version 2 without
+dropping the active question. Version 3 replicas already accept version 2, so
+the mixed rollout remains readable in both directions.
 
 Operational settings:
 
