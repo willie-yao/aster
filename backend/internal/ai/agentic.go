@@ -1364,7 +1364,7 @@ func compareCritiqueQuality(a, b critiqueQuality) int {
 	return 0
 }
 
-var rootCauseTokenRE = regexp.MustCompile(`[a-z0-9][a-z0-9._/-]*`)
+var rootCauseTokenRE = regexp.MustCompile(`[a-z0-9]+(?:[._/-][a-z0-9]+)*`)
 
 var rootCauseStopwords = map[string]bool{
 	"a": true, "an": true, "and": true, "are": true, "as": true,
@@ -1392,11 +1392,7 @@ func rootCauseMateriallyChanged(a, b string) bool {
 			common++
 		}
 	}
-	denominator := len(aTokens)
-	if len(bTokens) < denominator {
-		denominator = len(bTokens)
-	}
-	return common != denominator
+	return common != len(aTokens)
 }
 
 func rootCauseTokens(rootCause string) map[string]bool {

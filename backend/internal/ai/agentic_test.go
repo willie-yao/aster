@@ -1364,6 +1364,9 @@ func TestRootCauseMateriallyChanged(t *testing.T) {
 	if rootCauseMateriallyChanged(base, "  the worker node registered, but providerID remained empty because cloud-node-manager could not reach the Kubernetes API. ") {
 		t.Fatal("case and whitespace changed the diagnosis")
 	}
+	if rootCauseMateriallyChanged("cloud-node-manager could not reach the Kubernetes API.", "cloud-node-manager could not reach the Kubernetes API") {
+		t.Fatal("terminal punctuation changed the diagnosis")
+	}
 	if rootCauseMateriallyChanged(base, base+" The controller log confirms the same API reachability failure.") {
 		t.Fatal("supporting detail changed the diagnosis")
 	}
@@ -1372,6 +1375,9 @@ func TestRootCauseMateriallyChanged(t *testing.T) {
 	}
 	if !rootCauseMateriallyChanged("Azure quota exhaustion prevented virtual machine creation.", "Azure authentication failure prevented virtual machine creation.") {
 		t.Fatal("near-overlap diagnosis replacement was not material")
+	}
+	if !rootCauseMateriallyChanged("Azure quota exhaustion prevented virtual machine creation.", "Azure prevented virtual machine creation.") {
+		t.Fatal("diagnosis-token deletion was not material")
 	}
 }
 

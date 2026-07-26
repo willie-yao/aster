@@ -471,6 +471,10 @@ because it arrived later. The engine compares parseable attempts in this order:
 5. fewer punt matches wins;
 6. a tie keeps the earlier draft.
 
+The tie rule has one semantic-review exception: a revision explicitly driven by
+semantic objections may replace an otherwise tied draft so the semantic repair
+can take effect.
+
 A materially different `root_cause` can replace the selected draft only after
 a new non-empty artifact read or when the semantic review explicitly drove the
 revision. Otherwise the retry may improve wording, citations, and the suggested
