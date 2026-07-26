@@ -144,6 +144,8 @@ type SessionView struct {
 	ExpiresAt string      `json:"expires_at"`
 	Messages  []Message   `json:"messages"`
 	Active    *ActiveTurn `json:"active,omitempty"`
+	TurnsUsed int         `json:"turns_used"`
+	MaxTurns  int         `json:"max_turns"`
 }
 
 // ActiveTurn is the owner-safe state needed to resume an in-flight request.
@@ -394,7 +396,7 @@ func (s *Service) Create(ref AnalysisRef, owner, requestID string) (SessionView,
 		}
 		changed = changed || migrated
 		if current != nil {
-			existing = sessionView(current)
+			existing = s.sessionView(current)
 			return changed, nil
 		}
 		if s.sessionLimitReached(state, owner) {
@@ -445,14 +447,14 @@ func (s *Service) Create(ref AnalysisRef, owner, requestID string) (SessionView,
 		}
 		changed = changed || migrated
 		if current != nil {
-			existing = sessionView(current)
+			existing = s.sessionView(current)
 			return changed, nil
 		}
 		if s.sessionLimitReached(state, owner) {
 			return changed, ErrSessionLimit
 		}
 		state.Sessions[id] = created
-		existing = sessionView(created)
+		existing = s.sessionView(created)
 		return true, nil
 	})
 	return existing, err
@@ -471,7 +473,7 @@ func (s *Service) Get(id, owner string) (SessionView, error) {
 		if current == nil || current.Owner != owner {
 			return changed, ErrSessionNotFound
 		}
-		view = sessionView(current)
+		view = s.sessionView(current)
 		return changed, nil
 	})
 	return view, err
@@ -497,7 +499,7 @@ func (s *Service) Find(ref AnalysisRef, owner string) (SessionView, error) {
 		if current == nil {
 			return changed, ErrSessionNotFound
 		}
-		view = sessionView(current)
+		view = s.sessionView(current)
 		return changed, nil
 	})
 	return view, err
@@ -1001,8 +1003,10 @@ func cloneSessionView(view SessionView) SessionView {
 	return view
 }
 
-func sessionView(current *persistedSession) SessionView {
+func (s *Service) sessionView(current *persistedSession) SessionView {
 	view := cloneSessionView(current.View)
+	view.TurnsUsed = current.Turns
+	view.MaxTurns = s.opts.MaxTurns
 	if current.Active != nil {
 		view.Active = &ActiveTurn{
 			RequestID: current.Active.RequestID,

@@ -41,7 +41,7 @@ func (f *fakeAnalysisChatRunner) Find(ref analysischat.AnalysisRef, owner string
 	if f.findErr != nil {
 		return analysischat.SessionView{}, f.findErr
 	}
-	return analysischat.SessionView{ID: "session-1", Analysis: ref, Messages: []analysischat.Message{}}, nil
+	return analysischat.SessionView{ID: "session-1", Analysis: ref, Messages: []analysischat.Message{}, TurnsUsed: 2, MaxTurns: 10}, nil
 }
 
 func (f *fakeAnalysisChatRunner) Create(ref analysischat.AnalysisRef, owner, requestID string) (analysischat.SessionView, error) {
@@ -49,7 +49,7 @@ func (f *fakeAnalysisChatRunner) Create(ref analysischat.AnalysisRef, owner, req
 	if f.createErr != nil {
 		return analysischat.SessionView{}, f.createErr
 	}
-	return analysischat.SessionView{ID: "session-1", Analysis: ref, Messages: []analysischat.Message{}}, nil
+	return analysischat.SessionView{ID: "session-1", Analysis: ref, Messages: []analysischat.Message{}, TurnsUsed: 2, MaxTurns: 10}, nil
 }
 
 func (f *fakeAnalysisChatRunner) Get(id, owner string) (analysischat.SessionView, error) {
@@ -57,7 +57,7 @@ func (f *fakeAnalysisChatRunner) Get(id, owner string) (analysischat.SessionView
 	if f.getErr != nil {
 		return analysischat.SessionView{}, f.getErr
 	}
-	return analysischat.SessionView{ID: id, Messages: []analysischat.Message{}}, nil
+	return analysischat.SessionView{ID: id, Messages: []analysischat.Message{}, TurnsUsed: 2, MaxTurns: 10}, nil
 }
 
 func (f *fakeAnalysisChatRunner) Send(ctx context.Context, id, owner, requestID, message string) (analysischat.SessionView, error) {
@@ -72,7 +72,7 @@ func (f *fakeAnalysisChatRunner) Send(ctx context.Context, id, owner, requestID,
 	if f.sendErr != nil {
 		return analysischat.SessionView{}, f.sendErr
 	}
-	return analysischat.SessionView{ID: id, Messages: []analysischat.Message{{Role: "user", Content: message}}}, nil
+	return analysischat.SessionView{ID: id, Messages: []analysischat.Message{{Role: "user", Content: message}}, TurnsUsed: 3, MaxTurns: 10}, nil
 }
 
 func (f *fakeAnalysisChatRunner) Stream(
@@ -142,10 +142,13 @@ func TestHandlerAnalysisChatFlow(t *testing.T) {
 	}
 
 	created := request(http.MethodPost, "/api/analysis-chat/sessions", `{"job_id":"job","build_id":"1","test_name":"Test","analysis_generated_at":"2026-07-23T12:00:00Z"}`)
+	createdBody := readBody(t, created)
 	if created.StatusCode != http.StatusCreated {
-		t.Fatalf("create status=%d body=%s", created.StatusCode, readBody(t, created))
+		t.Fatalf("create status=%d body=%s", created.StatusCode, createdBody)
 	}
-	_ = created.Body.Close()
+	if !strings.Contains(createdBody, `"turns_used":2`) || !strings.Contains(createdBody, `"max_turns":10`) {
+		t.Fatalf("create body missing turn usage: %s", createdBody)
+	}
 	if runner.createdOwner != "alice" || runner.createdRef.BuildID != "1" || runner.createdRequestID != "request-flow" {
 		t.Fatalf("create runner state = %+v owner=%q", runner.createdRef, runner.createdOwner)
 	}

@@ -54,6 +54,14 @@ export function limitAnalysisChatQuestion(value: string): string {
   return value.slice(0, end);
 }
 
+export function analysisChatTurnUsage(
+  session: AnalysisChatSession,
+): { used: number; max: number } | null {
+  if (!Number.isInteger(session.turns_used) || session.turns_used < 0) return null;
+  if (!Number.isInteger(session.max_turns) || session.max_turns <= 0) return null;
+  return { used: session.turns_used, max: session.max_turns };
+}
+
 async function apiError(response: Response): Promise<AnalysisChatAPIError> {
   const body = (await response.text()).trim();
   return new AnalysisChatAPIError(

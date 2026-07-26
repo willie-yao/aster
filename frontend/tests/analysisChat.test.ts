@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 
-import { findAnalysisChatSession, resumeAnalysisChatTurn } from "../src/lib/analysisChat.js";
+import {
+  analysisChatTurnUsage,
+  findAnalysisChatSession,
+  resumeAnalysisChatTurn,
+} from "../src/lib/analysisChat.js";
 import type { AnalysisChatReference, AnalysisChatSession } from "../src/types/analysisChat.js";
 
 const originalFetch = globalThis.fetch;
@@ -23,6 +27,8 @@ const session: AnalysisChatSession = {
   created_at: "2026-07-26T12:01:00Z",
   updated_at: "2026-07-26T12:02:00Z",
   expires_at: "2026-07-26T14:01:00Z",
+  turns_used: 2,
+  max_turns: 10,
   messages: [
     { role: "user", content: "What proves this?", created_at: "2026-07-26T12:01:30Z" },
     { role: "assistant", content: "The log does.", created_at: "2026-07-26T12:02:00Z" },
@@ -62,6 +68,14 @@ test("missing or expired server sessions restore as empty", async () => {
   globalThis.fetch = async () => new Response(null, { status: 204 });
 
   assert.equal(await findAnalysisChatSession(analysis), null);
+});
+
+test("turn usage comes only from authoritative session fields", () => {
+  assert.deepEqual(analysisChatTurnUsage(session), { used: 2, max: 10 });
+  assert.deepEqual(analysisChatTurnUsage({ ...session, turns_used: 10 }), { used: 10, max: 10 });
+  assert.equal(analysisChatTurnUsage({ ...session, turns_used: Number.NaN }), null);
+  assert.equal(analysisChatTurnUsage({ ...session, max_turns: 0 }), null);
+  assert.equal(analysisChatTurnUsage({ ...session, turns_used: undefined } as unknown as AnalysisChatSession), null);
 });
 
 test("reload during a turn reconnects the persisted request", async () => {

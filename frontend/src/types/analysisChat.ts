@@ -67,6 +67,8 @@ export interface AnalysisChatSession {
   expires_at: string;
   messages: AnalysisChatMessage[];
   active?: AnalysisChatActiveTurn;
+  turns_used: number;
+  max_turns: number;
 }
 
 export type AnalysisChatProgressPhase =

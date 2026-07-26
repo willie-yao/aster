@@ -145,6 +145,11 @@ does not alter `jobs/*.json` or the published analysis.
 While a turn is running, the owner-safe response also includes its request ID,
 question, phase, and update time. A reloaded client reconnects with the same
 request ID, and can still cancel it from another server replica.
+Every session response also includes `turns_used` and `max_turns`. These are the
+same admitted-attempt values used by server enforcement. Pending, successful,
+failed, cancelled, and unknown-outcome requests consume an attempt once. An
+idempotent replay does not consume another attempt, while an explicit retry with
+a new request ID does.
 
 Sessions are persisted under `ANALYSIS_CHAT_STATE_DIR`, bound to the
 authenticated login, limited to ten admitted attempts including failed turns,
