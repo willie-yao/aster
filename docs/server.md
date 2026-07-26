@@ -170,7 +170,7 @@ Operational settings:
 | `ANALYSIS_CHAT_MAX_SESSIONS_PER_OWNER` | `8` | Per-login live-session cap. |
 | `ANALYSIS_CHAT_MAX_ACTIVE_TURNS_PER_OWNER` | `2` | Concurrent background turns per login. |
 | `ANALYSIS_CHAT_REQUESTS_PER_MINUTE` | `10` | Newly admitted turns per login in a rolling minute. |
-| `ANALYSIS_CHAT_TIMEOUT` | `2m` | Background turn bound; may only be shortened. |
+| `ANALYSIS_CHAT_TIMEOUT` | `2m` | Background turn bound. Slow local providers may increase it up to `30m`. |
 
 The agent uses only the configured read-only filesystem and Kubernetes artifact
 tools. It has no shell, repository write, or GitHub action capability.

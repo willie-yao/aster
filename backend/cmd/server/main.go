@@ -318,7 +318,7 @@ func enableAnalysisChat(ctx context.Context, opts *server.Options, cfg *project.
 	if err != nil {
 		return nil, fmt.Errorf("configuring analysis chat storage: %w", err)
 	}
-	agent, err := runtime.NewAnalysisChatAgent(backend)
+	agent, err := runtime.NewAnalysisChatAgentWithTimeout(backend, timeout)
 	if err != nil {
 		return nil, fmt.Errorf("configuring analysis chat agent: %w", err)
 	}
@@ -384,6 +384,7 @@ func enableSourceInvestigation(
 }
 
 func analysisChatTimeoutFromEnv() (time.Duration, error) {
+	const maxTimeout = 30 * time.Minute
 	timeout := 2 * time.Minute
 	if value := os.Getenv("ANALYSIS_CHAT_TIMEOUT"); value != "" {
 		parsed, err := time.ParseDuration(value)
@@ -392,8 +393,8 @@ func analysisChatTimeoutFromEnv() (time.Duration, error) {
 		}
 		timeout = parsed
 	}
-	if timeout <= 0 || timeout > 2*time.Minute {
-		return 0, fmt.Errorf("ANALYSIS_CHAT_TIMEOUT must be greater than zero and at most 2m")
+	if timeout <= 0 || timeout > maxTimeout {
+		return 0, fmt.Errorf("ANALYSIS_CHAT_TIMEOUT must be greater than zero and at most %s", maxTimeout)
 	}
 	return timeout, nil
 }

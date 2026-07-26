@@ -369,3 +369,40 @@ func TestGeneratePreviewWithContextRejectsInvalidContextBeforeGeneration(t *test
 		t.Fatal("agent ran before context validation")
 	}
 }
+
+func TestParseJSONObjectSelectsFinalValidReviewObject(t *testing.T) {
+	raw := `The change includes code like if err != nil { return retry() }.
+First draft: {"issues":["stale concern"]}
+Final answer:
+` + "```json\n" + `{"issues":[]}` + "\n```"
+	var v struct {
+		Issues *[]string `json:"issues"`
+	}
+	if err := parseJSONObject(raw, &v); err != nil {
+		t.Fatal(err)
+	}
+	if v.Issues == nil || len(*v.Issues) != 0 {
+		t.Fatalf("issues = %#v", v.Issues)
+	}
+}
+
+func TestParseJSONObjectHandlesBracesInsideStrings(t *testing.T) {
+	raw := `reasoning {not JSON} then {"issues":["check map[string]any{\"key\": \"value\"}"]}`
+	var v struct {
+		Issues []string `json:"issues"`
+	}
+	if err := parseJSONObject(raw, &v); err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Issues) != 1 || !strings.Contains(v.Issues[0], "map[string]") {
+		t.Fatalf("issues = %#v", v.Issues)
+	}
+}
+
+func TestCritiqueAgentFixRequiresIssuesField(t *testing.T) {
+	completer := &fakeCompleter{critique: `{}`}
+	_, err := critiqueAgentFix(t.Context(), completer, systemicPattern("etcd"), map[string]string{"a.go": "package a\n"}, "diff", nil)
+	if err == nil || !strings.Contains(err.Error(), "issues field is required") {
+		t.Fatalf("error = %v", err)
+	}
+}

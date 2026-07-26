@@ -188,6 +188,19 @@ func (f analysisChatBrowserFactory) ForBuilds(builds []analysischat.ArtifactBuil
 
 // NewAnalysisChatAgent creates the interactive read-only conversation runner.
 func (r *Runtime) NewAnalysisChatAgent(backend storage.Backend) (*ai.AnalysisChatAgent, error) {
+	return r.newAnalysisChatAgent(backend, 0)
+}
+
+// NewAnalysisChatAgentWithTimeout creates the conversation runner with an
+// operator-selected per-turn timeout.
+func (r *Runtime) NewAnalysisChatAgentWithTimeout(backend storage.Backend, timeout time.Duration) (*ai.AnalysisChatAgent, error) {
+	if timeout <= 0 {
+		return nil, fmt.Errorf("analysis chat timeout must be greater than zero")
+	}
+	return r.newAnalysisChatAgent(backend, timeout)
+}
+
+func (r *Runtime) newAnalysisChatAgent(backend storage.Backend, requestedTimeout time.Duration) (*ai.AnalysisChatAgent, error) {
 	if r == nil || r.Project == nil || r.Project.Config == nil || r.Client == nil {
 		return nil, fmt.Errorf("analysis runtime is not initialized")
 	}
@@ -199,10 +212,7 @@ func (r *Runtime) NewAnalysisChatAgent(backend storage.Backend) (*ai.AnalysisCha
 	if maxIters <= 0 {
 		maxIters = analysisChatMaxIters
 	}
-	timeout := effective.Timeout
-	if timeout <= 0 || timeout > analysisChatDefaultTimeout {
-		timeout = analysisChatDefaultTimeout
-	}
+	timeout := analysisChatAgentTimeout(effective.Timeout, requestedTimeout)
 	return ai.NewAnalysisChatAgent(
 		r.Client,
 		ai.ComposeAnalysisChatSystemPrompt(r.Project.ConsumerPrompt),
@@ -215,6 +225,16 @@ func (r *Runtime) NewAnalysisChatAgent(backend storage.Backend) (*ai.AnalysisCha
 			Timeout: timeout, SingleToolCall: effective.SingleToolCall,
 		},
 	)
+}
+
+func analysisChatAgentTimeout(projectTimeout, requestedTimeout time.Duration) time.Duration {
+	if requestedTimeout > 0 {
+		return requestedTimeout
+	}
+	if projectTimeout <= 0 || projectTimeout > analysisChatDefaultTimeout {
+		return analysisChatDefaultTimeout
+	}
+	return projectTimeout
 }
 
 // NewService creates the canonical dashboard analysis service.

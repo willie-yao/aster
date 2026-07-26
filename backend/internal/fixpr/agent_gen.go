@@ -101,12 +101,15 @@ Does this change have concrete defects (not style)? Answer with one line of JSON
 		return "", err
 	}
 	var v struct {
-		Issues []string `json:"issues"`
+		Issues *[]string `json:"issues"`
 	}
 	if err := parseJSONObject(out, &v); err != nil {
 		return "", fmt.Errorf("review response: %w", err)
 	}
-	return strings.Join(dedupeNonEmpty(v.Issues), "; "), nil
+	if v.Issues == nil {
+		return "", fmt.Errorf("review response: issues field is required")
+	}
+	return strings.Join(dedupeNonEmpty(*v.Issues), "; "), nil
 }
 
 // agentInstruction composes the fix task for the coding agent from the pattern,

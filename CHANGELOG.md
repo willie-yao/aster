@@ -216,6 +216,10 @@ for how to pin a release.
 
 ### Fixed
 
+- Fix-review parsing now selects the final valid balanced JSON object instead
+  of combining reasoning prose and code braces into one invalid payload.
+- Analysis chat exposes a Helm-configurable per-turn timeout up to 30 minutes,
+  while retaining the two-minute default for existing deployments.
 - The Helm chart tolerates chmod-less RWX volumes (SMB/azurefile return EPERM on
   chmod; the mount's file mode governs readability), and gained `server.extraEnv`
   for injecting extra configuration.

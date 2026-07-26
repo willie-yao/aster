@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"reflect"
 	"sort"
 	"strings"
 )
@@ -46,22 +48,83 @@ type genParams struct {
 // critiqueSystemPrompt is the reviewer contract shared by the fix critique.
 const critiqueSystemPrompt = `You are a skeptical senior code reviewer checking a proposed fix for a CI failure before it becomes a draft PR. Judge whether the change is a reasonable, correct starting point. Flag concrete defects ONLY: wrong logic, values, or comparisons; references to undefined symbols, fields, or unimported packages; changes that break adjacent code; or a change that does not actually address the stated root cause. Do NOT flag style, formatting, or minor preferences, and remember it is a draft for a human to refine. If the change is a reasonable fix, return no issues.`
 
-// parseJSONObject extracts the first {...} object from s and unmarshals it,
-// tolerating prose or code fences around the JSON.
+// parseJSONObject selects the final valid JSON object from a response,
+// tolerating prose, code snippets, repeated drafts, and code fences.
 func parseJSONObject(s string, v any) error {
-	start := strings.Index(s, "{")
-	end := strings.LastIndex(s, "}")
-	if start < 0 || end < start {
+	target := reflect.ValueOf(v)
+	if target.Kind() != reflect.Pointer || target.IsNil() {
+		return fmt.Errorf("JSON target must be a non-nil pointer")
+	}
+	candidates := balancedJSONObjects(s)
+	if len(candidates) == 0 {
 		return fmt.Errorf("no JSON object in response")
 	}
-	obj := s[start : end+1]
-	if err := json.Unmarshal([]byte(obj), v); err == nil {
-		return nil
+	var lastErr error
+	for i := len(candidates) - 1; i >= 0; i-- {
+		for _, candidate := range []string{candidates[i], escapeStringControlChars(candidates[i])} {
+			tmp := reflect.New(target.Elem().Type())
+			if err := decodeJSONObject(candidate, tmp.Interface()); err != nil {
+				lastErr = err
+				continue
+			}
+			target.Elem().Set(tmp.Elem())
+			return nil
+		}
 	}
-	// Models copying verbatim code snippets into string values often emit
-	// literal tabs and newlines inside JSON strings, which strict JSON rejects.
-	// Escape raw control characters inside string literals and retry.
-	return json.Unmarshal([]byte(escapeStringControlChars(obj)), v)
+	return lastErr
+}
+
+func decodeJSONObject(value string, target any) error {
+	decoder := json.NewDecoder(strings.NewReader(value))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return fmt.Errorf("JSON object contains trailing data")
+	}
+	return nil
+}
+
+func balancedJSONObjects(s string) []string {
+	var out []string
+	for start := 0; start < len(s); start++ {
+		if s[start] != '{' {
+			continue
+		}
+		depth := 0
+		inString, escaped := false, false
+		for end := start; end < len(s); end++ {
+			ch := s[end]
+			if inString {
+				if escaped {
+					escaped = false
+					continue
+				}
+				if ch == '\\' {
+					escaped = true
+				} else if ch == '"' {
+					inString = false
+				}
+				continue
+			}
+			switch ch {
+			case '"':
+				inString = true
+			case '{':
+				depth++
+			case '}':
+				depth--
+				if depth == 0 {
+					out = append(out, s[start:end+1])
+					start = end
+					end = len(s)
+				}
+			}
+		}
+	}
+	return out
 }
 
 // escapeStringControlChars escapes raw control characters (tab, newline, and
