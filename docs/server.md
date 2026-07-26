@@ -169,10 +169,14 @@ the authoritative session before allowing an explicit retry. Startup cleanup,
 a lifecycle-bound periodic cleanup loop, and request-time cleanup remove
 expired sessions from the persisted file and release global and per-owner
 capacity.
-State version 3 persists the active question needed for stream reconnection.
-Version 1 and version 2 files migrate in place without dropping completed
-transcripts. A version 2 active request without a stored question is followed
-by polling until it completes or becomes terminal.
+State version 2 stores the active question as an additive optional field so old
+and new replicas can share the file during a rolling upgrade. An old writer may
+drop that field, in which case the new client follows the request by polling
+until it completes or becomes terminal. Version 1 files still migrate without
+dropping completed transcripts. The bridge also accepts the short-lived version
+3 format from the preceding release and rewrites it as version 2 without
+dropping the active question. Version 3 replicas already accept version 2, so
+the mixed rollout remains readable in both directions.
 
 Operational settings:
 

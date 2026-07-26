@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	stateVersion    = 3
+	stateVersion    = 2
 	createVersion   = 2
 	stateFileName   = "sessions.json"
 	stateLockName   = "sessions.lock"
@@ -214,8 +214,8 @@ func (s *sessionStore) load() (*persistedState, bool, error) {
 		migrateStateV1(&state)
 		migrated = true
 	}
-	if state.Version == 2 {
-		migrateStateV2(&state)
+	if state.Version == 3 {
+		migrateStateV3(&state)
 		migrated = true
 	}
 	if state.Version != stateVersion {
@@ -231,7 +231,7 @@ func (s *sessionStore) load() (*persistedState, bool, error) {
 }
 
 func migrateStateV1(state *persistedState) {
-	state.Version = 2
+	state.Version = stateVersion
 	for _, session := range state.Sessions {
 		if session == nil {
 			continue
@@ -248,7 +248,7 @@ func migrateStateV1(state *persistedState) {
 	}
 }
 
-func migrateStateV2(state *persistedState) {
+func migrateStateV3(state *persistedState) {
 	state.Version = stateVersion
 }
 

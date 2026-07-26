@@ -123,15 +123,15 @@ func TestSessionStoreMigratesVersionOneTestSessions(t *testing.T) {
 	}
 }
 
-func TestSessionStoreMigratesVersionTwoActiveSessions(t *testing.T) {
+func TestSessionStoreVersionTwoActiveQuestionIsRollingCompatible(t *testing.T) {
 	dir := t.TempDir()
 	store, err := newSessionStore(dir, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
-	legacy := &persistedState{
-		Version: 2,
+	current := &persistedState{
+		Version: stateVersion,
 		Sessions: map[string]*persistedSession{
 			"session": {
 				Owner: "alice", ExpiresAt: now.Add(time.Hour),
@@ -139,18 +139,92 @@ func TestSessionStoreMigratesVersionTwoActiveSessions(t *testing.T) {
 					ID: "session", Analysis: AnalysisRef{Scope: ScopeTest, JobID: "job", BuildID: "1", TestName: "test"},
 				},
 				Active: &persistedActiveTurn{
-					RequestID: "request", LeaseID: "lease", ExpiresAt: now.Add(time.Minute),
+					RequestID: "request", Question: "question", LeaseID: "lease", ExpiresAt: now.Add(time.Minute),
 					Phase: PhaseInvestigating, UpdatedAt: now,
 				},
 			},
 		},
 	}
-	if err := writePrivateJSON(store.statePath, legacy); err != nil {
+	if err := writePrivateJSON(store.statePath, current); err != nil {
+		t.Fatal(err)
+	}
+	loaded, migrated, err := store.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if migrated || loaded.Sessions["session"].Active.Question != "question" {
+		t.Fatalf("active question = %q", loaded.Sessions["session"].Active.Question)
+	}
+	data, err := os.ReadFile(store.statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var oldReader struct {
+		Version  int `json:"version"`
+		Sessions map[string]struct {
+			Active *struct {
+				RequestID string `json:"request_id"`
+			} `json:"active,omitempty"`
+		} `json:"sessions"`
+	}
+	if err := json.Unmarshal(data, &oldReader); err != nil {
+		t.Fatal(err)
+	}
+	if oldReader.Version != stateVersion || oldReader.Sessions["session"].Active.RequestID != "request" {
+		t.Fatalf("old reader state = %+v", oldReader)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	sessions := raw["sessions"].(map[string]any)
+	session := sessions["session"].(map[string]any)
+	active := session["active"].(map[string]any)
+	delete(active, "question")
+	if err := writePrivateJSON(store.statePath, raw); err != nil {
+		t.Fatal(err)
+	}
+	loaded, migrated, err = store.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if migrated || loaded.Version != stateVersion || loaded.Sessions["session"].Active.Question != "" {
+		t.Fatalf("old writer state = %+v", loaded)
+	}
+}
+
+func TestSessionStoreBridgesVersionThreeToVersionTwo(t *testing.T) {
+	dir := t.TempDir()
+	store, err := newSessionStore(dir, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	versionThree := &persistedState{
+		Version: 3,
+		Sessions: map[string]*persistedSession{
+			"session": {
+				Owner: "alice", ExpiresAt: now.Add(time.Hour),
+				View: SessionView{ID: "session", Analysis: AnalysisRef{Scope: ScopeTest, JobID: "job", BuildID: "1", TestName: "test"}},
+				Active: &persistedActiveTurn{
+					RequestID: "request", Question: "question", LeaseID: "lease",
+					ExpiresAt: now.Add(time.Minute), Phase: PhaseInvestigating, UpdatedAt: now,
+				},
+			},
+		},
+	}
+	if err := writePrivateJSON(store.statePath, versionThree); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := store.context()
 	defer cancel()
-	if err := store.update(ctx, func(*persistedState) (bool, error) { return false, nil }); err != nil {
+	if err := store.update(ctx, func(state *persistedState) (bool, error) {
+		active := state.Sessions["session"].Active
+		if state.Version != stateVersion || active == nil || active.Question != "question" {
+			t.Fatalf("bridged state = %+v", state)
+		}
+		return false, nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(store.statePath)
@@ -161,9 +235,8 @@ func TestSessionStoreMigratesVersionTwoActiveSessions(t *testing.T) {
 	if err := json.Unmarshal(data, &persisted); err != nil {
 		t.Fatal(err)
 	}
-	active := persisted.Sessions["session"].Active
-	if persisted.Version != stateVersion || active == nil || active.RequestID != "request" || active.Question != "" {
-		t.Fatalf("migrated state = %+v", persisted)
+	if persisted.Version != stateVersion || persisted.Sessions["session"].Active.Question != "question" {
+		t.Fatalf("persisted bridge state = %+v", persisted)
 	}
 }
 
