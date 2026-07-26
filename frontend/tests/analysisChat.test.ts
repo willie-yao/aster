@@ -5,6 +5,7 @@ import {
   analysisChatProgressTurnUsage,
   analysisChatTurnUsage,
   findAnalysisChatSession,
+  markAnalysisChatTurnLimitReached,
   resumeAnalysisChatTurn,
 } from "../src/lib/analysisChat.js";
 import type { AnalysisChatReference, AnalysisChatSession } from "../src/types/analysisChat.js";
@@ -84,6 +85,8 @@ test("turn usage comes only from authoritative session fields", () => {
   assert.equal(analysisChatProgressTurnUsage({
     request_id: "request", phase: "queued", updated_at: "2026-07-26T12:03:00Z",
   }), null);
+  assert.equal(markAnalysisChatTurnLimitReached({ ...session, turns_used: 9 }).turns_used, 10);
+  assert.equal(markAnalysisChatTurnLimitReached({ ...session, turns_used: 12 }).turns_used, 12);
 });
 
 test("reload during a turn reconnects the persisted request", async () => {

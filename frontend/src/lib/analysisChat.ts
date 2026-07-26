@@ -70,6 +70,14 @@ export function analysisChatProgressTurnUsage(
   return { used: progress.turns_used!, max: progress.max_turns! };
 }
 
+export function markAnalysisChatTurnLimitReached(
+  session: AnalysisChatSession,
+): AnalysisChatSession {
+  const usage = analysisChatTurnUsage(session);
+  if (!usage || usage.used >= usage.max) return session;
+  return { ...session, turns_used: usage.max };
+}
+
 async function apiError(response: Response): Promise<AnalysisChatAPIError> {
   const body = (await response.text()).trim();
   return new AnalysisChatAPIError(

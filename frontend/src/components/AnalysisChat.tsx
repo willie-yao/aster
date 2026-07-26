@@ -43,6 +43,7 @@ import {
   getAnalysisChatSession,
   isAmbiguousAnalysisChatFailure,
   limitAnalysisChatQuestion,
+  markAnalysisChatTurnLimitReached,
   newAnalysisChatRequestID,
   resumeAnalysisChatTurn,
   streamAnalysisChatMessage,
@@ -425,6 +426,7 @@ export function AnalysisChat({
   const [restoring, setRestoring] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [turnLimitRejected, setTurnLimitRejected] = useState(false);
   const [pendingTurn, setPendingTurn] = useState<PendingTurn | null>(null);
   const [progressPhase, setProgressPhase] = useState<AnalysisChatProgressPhase>("queued");
   const [cancelling, setCancelling] = useState(false);
@@ -448,6 +450,7 @@ export function AnalysisChat({
     setProgressPhase(progress.phase);
     const usage = analysisChatProgressTurnUsage(progress);
     if (!usage) return;
+    setTurnLimitRejected(usage.used >= usage.max);
     setSession((current) => current ? { ...current, turns_used: usage.used, max_turns: usage.max } : current);
   }, []);
 
@@ -481,6 +484,7 @@ export function AnalysisChat({
     setRestoring(false);
     setBusy(false);
     setError(null);
+    setTurnLimitRejected(false);
     setPendingTurn(null);
     setProgressPhase("queued");
     setCancelling(false);
@@ -599,7 +603,7 @@ export function AnalysisChat({
   if (!features.analysis_chat) return null;
 
   const turnUsage = session ? analysisChatTurnUsage(session) : null;
-  const turnLimitReached = turnUsage !== null && turnUsage.used >= turnUsage.max;
+  const turnLimitReached = turnLimitRejected || turnUsage !== null && turnUsage.used >= turnUsage.max;
   const questions = patternScope ? patternSuggestedQuestions : suggestedQuestions;
 
   async function submit(nextQuestion?: string) {
@@ -702,6 +706,8 @@ export function AnalysisChat({
         requestError.status === 429 &&
         requestError.message === analysisChatTurnLimitMessage;
       if (exhausted) {
+        setTurnLimitRejected(true);
+        setSession((current) => current ? markAnalysisChatTurnLimitReached(current) : current);
         setPendingTurn(null);
         setError(reconciled ? null : readableError(requestError));
       } else {
