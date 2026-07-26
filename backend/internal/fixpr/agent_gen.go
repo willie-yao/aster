@@ -100,16 +100,11 @@ Does this change have concrete defects (not style)? Answer with one line of JSON
 	if err != nil {
 		return "", err
 	}
-	var v struct {
-		Issues *[]string `json:"issues"`
-	}
-	if err := parseJSONObject(out, &v); err != nil {
+	issues, err := parseReviewIssues(out)
+	if err != nil {
 		return "", fmt.Errorf("review response: %w", err)
 	}
-	if v.Issues == nil {
-		return "", fmt.Errorf("review response: issues field is required")
-	}
-	return strings.Join(dedupeNonEmpty(*v.Issues), "; "), nil
+	return strings.Join(dedupeNonEmpty(issues), "; "), nil
 }
 
 // agentInstruction composes the fix task for the coding agent from the pattern,

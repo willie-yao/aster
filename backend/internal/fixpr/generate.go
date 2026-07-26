@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"reflect"
 	"sort"
 	"strings"
 )
@@ -48,82 +46,49 @@ type genParams struct {
 // critiqueSystemPrompt is the reviewer contract shared by the fix critique.
 const critiqueSystemPrompt = `You are a skeptical senior code reviewer checking a proposed fix for a CI failure before it becomes a draft PR. Judge whether the change is a reasonable, correct starting point. Flag concrete defects ONLY: wrong logic, values, or comparisons; references to undefined symbols, fields, or unimported packages; changes that break adjacent code; or a change that does not actually address the stated root cause. Do NOT flag style, formatting, or minor preferences, and remember it is a draft for a human to refine. If the change is a reasonable fix, return no issues.`
 
-// parseJSONObject selects the final valid JSON object from a response,
+// parseReviewIssues selects the final usable review object from a response,
 // tolerating prose, code snippets, repeated drafts, and code fences.
-func parseJSONObject(s string, v any) error {
-	target := reflect.ValueOf(v)
-	if target.Kind() != reflect.Pointer || target.IsNil() {
-		return fmt.Errorf("JSON target must be a non-nil pointer")
-	}
-	candidates := balancedJSONObjects(s)
-	if len(candidates) == 0 {
-		return fmt.Errorf("no JSON object in response")
-	}
+func parseReviewIssues(s string) ([]string, error) {
+	bestEnd, bestStart := -1, len(s)+1
+	var best []string
 	var lastErr error
-	for i := len(candidates) - 1; i >= 0; i-- {
-		for _, candidate := range []string{candidates[i], escapeStringControlChars(candidates[i])} {
-			tmp := reflect.New(target.Elem().Type())
-			if err := decodeJSONObject(candidate, tmp.Interface()); err != nil {
+	for start := 0; start < len(s); start++ {
+		if s[start] != '{' {
+			continue
+		}
+		for _, candidate := range []string{s[start:], escapeStringControlChars(s[start:])} {
+			issues, consumed, err := decodeReviewIssues(candidate)
+			if err != nil {
 				lastErr = err
 				continue
 			}
-			target.Elem().Set(tmp.Elem())
-			return nil
+			end := start + consumed
+			if end > bestEnd || end == bestEnd && start < bestStart {
+				bestEnd, bestStart, best = end, start, issues
+			}
 		}
 	}
-	return lastErr
+	if bestEnd >= 0 {
+		return best, nil
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("no JSON review object in response")
 }
 
-func decodeJSONObject(value string, target any) error {
+func decodeReviewIssues(value string) ([]string, int, error) {
+	var response struct {
+		Issues *[]string `json:"issues"`
+	}
 	decoder := json.NewDecoder(strings.NewReader(value))
-	if err := decoder.Decode(target); err != nil {
-		return err
+	if err := decoder.Decode(&response); err != nil {
+		return nil, 0, err
 	}
-	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF {
-		return fmt.Errorf("JSON object contains trailing data")
+	if response.Issues == nil {
+		return nil, 0, fmt.Errorf("issues field is required")
 	}
-	return nil
-}
-
-func balancedJSONObjects(s string) []string {
-	var out []string
-	var starts []int
-	inString, escaped := false, false
-	for i := 0; i < len(s); i++ {
-		ch := s[i]
-		if len(starts) > 0 && inString {
-			if escaped {
-				escaped = false
-				continue
-			}
-			if ch == '\\' {
-				escaped = true
-			} else if ch == '"' {
-				inString = false
-			}
-			continue
-		}
-		switch ch {
-		case '"':
-			if len(starts) > 0 {
-				inString = true
-			}
-		case '{':
-			starts = append(starts, i)
-		case '}':
-			if len(starts) == 0 {
-				continue
-			}
-			start := starts[len(starts)-1]
-			starts = starts[:len(starts)-1]
-			out = append(out, s[start:i+1])
-			if len(starts) == 0 {
-				inString, escaped = false, false
-			}
-		}
-	}
-	return out
+	return *response.Issues, int(decoder.InputOffset()), nil
 }
 
 // escapeStringControlChars escapes raw control characters (tab, newline, and

@@ -248,19 +248,17 @@ func TestReconcile_PartialSuccessTracksAndCounts(t *testing.T) {
 	}
 }
 
-func TestParseJSONObject_ToleratesLiteralTabsAndNewlines(t *testing.T) {
+func TestParseReviewIssues_ToleratesLiteralTabsAndNewlines(t *testing.T) {
 	// A model copying a code snippet verbatim emits literal tabs/newlines inside
-	// the JSON string values, which strict JSON rejects. parseJSONObject must
+	// the JSON string values, which strict JSON rejects. parseReviewIssues must
 	// recover by escaping them.
 	raw := "{\"issues\": [\"func F() {\n\treturn\n}\"]}"
-	var v struct {
-		Issues []string `json:"issues"`
+	issues, err := parseReviewIssues(raw)
+	if err != nil {
+		t.Fatalf("parseReviewIssues: %v", err)
 	}
-	if err := parseJSONObject(raw, &v); err != nil {
-		t.Fatalf("parseJSONObject: %v", err)
-	}
-	if len(v.Issues) != 1 || !strings.Contains(v.Issues[0], "return") {
-		t.Errorf("parsed issues = %+v", v.Issues)
+	if len(issues) != 1 || !strings.Contains(issues[0], "return") {
+		t.Errorf("parsed issues = %+v", issues)
 	}
 }
 
@@ -375,27 +373,23 @@ func TestParseJSONObjectSelectsFinalValidReviewObject(t *testing.T) {
 First draft: {"issues":["stale concern"]}
 Final answer:
 ` + "```json\n" + `{"issues":[],"provider_note":"review complete"}` + "\n```"
-	var v struct {
-		Issues *[]string `json:"issues"`
-	}
-	if err := parseJSONObject(raw, &v); err != nil {
+	issues, err := parseReviewIssues(raw)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if v.Issues == nil || len(*v.Issues) != 0 {
-		t.Fatalf("issues = %#v", v.Issues)
+	if len(issues) != 0 {
+		t.Fatalf("issues = %#v", issues)
 	}
 }
 
 func TestParseJSONObjectHandlesBracesInsideStrings(t *testing.T) {
 	raw := `reasoning {not JSON} then {"issues":["check map[string]any{\"key\": \"value\"}"]}`
-	var v struct {
-		Issues []string `json:"issues"`
-	}
-	if err := parseJSONObject(raw, &v); err != nil {
+	issues, err := parseReviewIssues(raw)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if len(v.Issues) != 1 || !strings.Contains(v.Issues[0], "map[string]") {
-		t.Fatalf("issues = %#v", v.Issues)
+	if len(issues) != 1 || !strings.Contains(issues[0], "map[string]") {
+		t.Fatalf("issues = %#v", issues)
 	}
 }
 
@@ -407,28 +401,35 @@ func TestCritiqueAgentFixRequiresIssuesField(t *testing.T) {
 	}
 }
 
-func TestParseJSONObjectFallsThroughInvalidOuterWrapper(t *testing.T) {
+func TestParseReviewIssuesFallsThroughInvalidOuterWrapper(t *testing.T) {
 	raw := `reasoning { final: {"issues":[]} }`
-	var v struct {
-		Issues *[]string `json:"issues"`
-	}
-	if err := parseJSONObject(raw, &v); err != nil {
+	issues, err := parseReviewIssues(raw)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if v.Issues == nil || len(*v.Issues) != 0 {
-		t.Fatalf("issues = %#v", v.Issues)
+	if len(issues) != 0 {
+		t.Fatalf("issues = %#v", issues)
 	}
 }
 
-func TestParseJSONObjectPrefersValidOuterResponse(t *testing.T) {
+func TestParseReviewIssuesPrefersValidOuterResponse(t *testing.T) {
 	raw := `{"issues":["outer issue contains {nested text}"]}`
-	var v struct {
-		Issues []string `json:"issues"`
-	}
-	if err := parseJSONObject(raw, &v); err != nil {
+	issues, err := parseReviewIssues(raw)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if len(v.Issues) != 1 || v.Issues[0] != "outer issue contains {nested text}" {
-		t.Fatalf("issues = %#v", v.Issues)
+	if len(issues) != 1 || issues[0] != "outer issue contains {nested text}" {
+		t.Fatalf("issues = %#v", issues)
+	}
+}
+
+func TestParseReviewIssuesIgnoresQuotedProseBrace(t *testing.T) {
+	raw := `The code checks strings.Contains(s, "{"). Final: {"issues":[]}`
+	issues, err := parseReviewIssues(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 0 {
+		t.Fatalf("issues = %#v", issues)
 	}
 }
