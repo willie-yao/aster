@@ -35,3 +35,40 @@ func PatternHash(p PatternAnalysis) string {
 	sum := sha256.Sum256(encoded)
 	return hex.EncodeToString(sum[:])
 }
+
+// AssignPatternIdentity sets the canonical ID and content hash for a newly
+// generated pattern.
+func AssignPatternIdentity(pattern *PatternAnalysis) {
+	if pattern == nil {
+		return
+	}
+	pattern.ID = PatternID(*pattern)
+	pattern.ContentHash = PatternHash(*pattern)
+}
+
+// BackfillPatternIdentity preserves an existing stable ID and refreshes the
+// canonical content hash for published compatibility.
+func BackfillPatternIdentity(pattern *PatternAnalysis) bool {
+	if pattern == nil {
+		return false
+	}
+	beforeID, beforeHash := pattern.ID, pattern.ContentHash
+	if pattern.ID == "" {
+		pattern.ID = PatternID(*pattern)
+	}
+	pattern.ContentHash = PatternHash(*pattern)
+	return pattern.ID != beforeID || pattern.ContentHash != beforeHash
+}
+
+// BackfillPatternIdentities returns a normalized copy of the pattern list.
+func BackfillPatternIdentities(patterns []PatternAnalysis) ([]PatternAnalysis, bool) {
+	if patterns == nil {
+		return nil, false
+	}
+	out := append([]PatternAnalysis(nil), patterns...)
+	changed := false
+	for index := range out {
+		changed = BackfillPatternIdentity(&out[index]) || changed
+	}
+	return out, changed
+}
