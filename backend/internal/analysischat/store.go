@@ -95,10 +95,13 @@ const (
 	requestFailed    = "failed"
 	requestUnknown   = "unknown"
 
-	failureModel     = "model"
-	failureTimeout   = "timeout"
-	failureCancelled = "cancelled"
-	failureSource    = "source"
+	failureModel      = "model"
+	failureProvider   = "provider"
+	failureValidation = "validation"
+	failureCitation   = "citation"
+	failureTimeout    = "timeout"
+	failureCancelled  = "cancelled"
+	failureSource     = "source"
 )
 
 type sessionStore struct {

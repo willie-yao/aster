@@ -387,6 +387,9 @@ func TestWriteAnalysisChatErrorMapping(t *testing.T) {
 		{analysischat.ErrSourceInvestigationActiveLimit, http.StatusTooManyRequests, "source investigation active limit reached", "rejected"},
 		{sourceinvestigation.ErrInvalidResult, http.StatusBadGateway, "source investigation could not complete the request", "failed"},
 		{analysischat.ErrRequestFailed, http.StatusBadGateway, "analysis chat could not complete the request", "failed"},
+		{analysischat.ErrProviderRequestFailed, http.StatusBadGateway, analysischat.ErrProviderRequestFailed.Error(), "failed"},
+		{analysischat.ErrResponseValidationFailed, http.StatusBadGateway, analysischat.ErrResponseValidationFailed.Error(), "failed"},
+		{analysischat.ErrCitationValidationFailed, http.StatusBadGateway, analysischat.ErrCitationValidationFailed.Error(), "failed"},
 		{context.DeadlineExceeded, http.StatusGatewayTimeout, "analysis chat request timed out", "failed"},
 		{errors.New("provider secret https://private.example/v1"), http.StatusBadGateway, "analysis chat could not complete the request", ""},
 	}

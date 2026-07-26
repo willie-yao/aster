@@ -820,6 +820,25 @@ func TestServicePersistsFailedRequestOutcome(t *testing.T) {
 	}
 }
 
+func TestRequestFailureCategoriesRoundTrip(t *testing.T) {
+	cases := []struct {
+		err  error
+		kind string
+	}{
+		{ErrProviderRequestFailed, failureProvider},
+		{ErrResponseValidationFailed, failureValidation},
+		{ErrCitationValidationFailed, failureCitation},
+	}
+	for _, testCase := range cases {
+		if got := requestFailureKind(fmt.Errorf("wrapped: %w", testCase.err)); got != testCase.kind {
+			t.Errorf("requestFailureKind(%v) = %q, want %q", testCase.err, got, testCase.kind)
+		}
+		if got := persistedRequestError(testCase.kind); !errors.Is(got, testCase.err) {
+			t.Errorf("persistedRequestError(%q) = %v", testCase.kind, got)
+		}
+	}
+}
+
 func TestServiceRecoversExpiredTurnLease(t *testing.T) {
 	dir := t.TempDir()
 	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))

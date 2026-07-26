@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
+	"log"
 	"regexp"
 	"slices"
 	"strconv"
@@ -65,6 +65,8 @@ const (
 	analysisChatHistoryTargetPct     = 65
 	analysisChatMaxQuestionBytes     = 4096
 	analysisChatMaxBuildIDBytes      = 256
+	analysisChatMaxResponseBytes     = 1 << 20
+	analysisChatMaxCandidates        = 256
 )
 
 const analysisChatFinalizePrompt = `Stop calling tools. Return the final analysis-conversation JSON now using only evidence already gathered. Follow the Analysis conversation schema exactly. Output JSON only.`
@@ -211,6 +213,9 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 
 	evidence := map[string]*analysisChatEvidence{}
 	var lastContent string
+	var fallback *analysischat.Reply
+	modelCalls := 0
+	providerAttempts := 0
 	for iter := 0; iter < a.opts.MaxIters; iter++ {
 		if iter > 0 {
 			turn.ReportProgress(analysischat.PhaseEvaluating)
@@ -220,29 +225,41 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 			return analysischat.Reply{}, fmt.Errorf("analysis chat request exceeds the %d-byte context budget after compaction", a.opts.ContextByteBudget)
 		}
 		response, err := a.client.callModel(loopCtx, messages, schemas, parallelToolCalls)
+		modelCalls++
+		providerAttempts += analysisChatResponseAttempts(response)
 		if err != nil {
-			if iter == 0 && isToolsUnsupportedError(err) {
-				return analysischat.Reply{}, fmt.Errorf("%w: %v", ErrToolsUnsupported, err)
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return analysischat.Reply{}, err
 			}
-			return analysischat.Reply{}, fmt.Errorf("analysis chat turn %d: %w", iter+1, err)
+			recordAnalysisChatResponseFailure(loopCtx, "tool_loop_request", modelCalls, providerAttempts, response, analysisChatParseStats{}, "provider_request")
+			if iter == 0 && isToolsUnsupportedError(err) {
+				return analysischat.Reply{}, errors.Join(ErrToolsUnsupported, analysischat.ErrProviderRequestFailed)
+			}
+			return analysischat.Reply{}, analysischat.ErrProviderRequestFailed
 		}
 		if response == nil || !response.HasMessage {
-			return analysischat.Reply{}, fmt.Errorf("analysis chat turn %d: empty model response", iter+1)
+			recordAnalysisChatResponseFailure(loopCtx, "tool_loop_response", modelCalls, providerAttempts, response, analysisChatParseStats{}, "empty_response")
+			return analysischat.Reply{}, analysischat.ErrResponseValidationFailed
 		}
 		message := response.Message
+		messageContent := ""
+		if message.Content != nil {
+			messageContent = *message.Content
+		}
+		if len(message.ToolCalls) > 0 && strings.TrimSpace(messageContent) != "" {
+			candidate, _, candidateErr := parseAnalysisChatReplyCandidates(messageContent, evidence)
+			if candidateErr == nil {
+				fallback = &candidate
+			}
+		}
 		if len(message.ToolCalls) == 0 {
 			turn.ReportProgress(analysischat.PhaseFinalizing)
-			lastContent = ""
-			if message.Content != nil {
-				lastContent = *message.Content
-			}
-			reply, validationErr := parseAnalysisChatReply(lastContent, evidence)
+			lastContent = messageContent
+			reply, stats, validationErr := parseAnalysisChatReplyCandidates(lastContent, evidence)
 			if validationErr == nil {
-				reply.ToolCalls = state.calls
-				reply.GCSBytes = state.gcsBytes
-				reply.ElapsedMs = int(time.Since(start) / time.Millisecond)
-				return reply, nil
+				return completeAnalysisChatReply(reply, state, start), nil
 			}
+			recordAnalysisChatResponseFailure(loopCtx, "tool_loop_validation", modelCalls, providerAttempts, response, stats, analysisChatValidationCategory(validationErr))
 			if iter+1 < a.opts.MaxIters {
 				messages = append(messages,
 					modelMessage{Role: "assistant", Content: message.Content, ProviderItems: message.ProviderItems},
@@ -285,24 +302,112 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 	turn.ReportProgress(analysischat.PhaseFinalizing)
 	messages, err = prepareAnalysisChatFinalizeMessages(messages, a.opts.ContextByteBudget)
 	if err != nil {
+		if fallback != nil {
+			recordAnalysisChatResponseFallback(loopCtx, "finalize_context", modelCalls, providerAttempts, nil, analysisChatParseStats{}, "context_budget")
+			return completeAnalysisChatReply(*fallback, state, start), nil
+		}
 		return analysischat.Reply{}, err
 	}
 	response, err := a.client.callModel(loopCtx, messages, nil, nil)
+	modelCalls++
+	providerAttempts += analysisChatResponseAttempts(response)
 	if err != nil {
-		return analysischat.Reply{}, fmt.Errorf("analysis chat finalize: %w", err)
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return analysischat.Reply{}, err
+		}
+		if fallback != nil {
+			recordAnalysisChatResponseFallback(loopCtx, "finalize_request", modelCalls, providerAttempts, response, analysisChatParseStats{}, "provider_request")
+			return completeAnalysisChatReply(*fallback, state, start), nil
+		}
+		recordAnalysisChatResponseFailure(loopCtx, "finalize_request", modelCalls, providerAttempts, response, analysisChatParseStats{}, "provider_request")
+		return analysischat.Reply{}, analysischat.ErrProviderRequestFailed
 	}
 	if response == nil || !response.HasMessage || response.Message.Content == nil {
-		return analysischat.Reply{}, fmt.Errorf("analysis chat finalize: empty model response")
+		if fallback != nil {
+			recordAnalysisChatResponseFallback(loopCtx, "finalize_response", modelCalls, providerAttempts, response, analysisChatParseStats{}, "empty_response")
+			return completeAnalysisChatReply(*fallback, state, start), nil
+		}
+		recordAnalysisChatResponseFailure(loopCtx, "finalize_response", modelCalls, providerAttempts, response, analysisChatParseStats{}, "empty_response")
+		return analysischat.Reply{}, analysischat.ErrResponseValidationFailed
 	}
 	lastContent = *response.Message.Content
-	reply, err := parseAnalysisChatReply(lastContent, evidence)
+	reply, stats, err := parseAnalysisChatReplyCandidates(lastContent, evidence)
 	if err != nil {
-		return analysischat.Reply{}, fmt.Errorf("analysis chat finalize: %w", err)
+		category := analysisChatValidationCategory(err)
+		if fallback != nil {
+			recordAnalysisChatResponseFallback(loopCtx, "finalize_validation", modelCalls, providerAttempts, response, stats, category)
+			return completeAnalysisChatReply(*fallback, state, start), nil
+		}
+		recordAnalysisChatResponseFailure(loopCtx, "finalize_validation", modelCalls, providerAttempts, response, stats, category)
+		return analysischat.Reply{}, analysisChatSafeValidationError(err)
 	}
+	return completeAnalysisChatReply(reply, state, start), nil
+}
+
+func completeAnalysisChatReply(reply analysischat.Reply, state *agentState, start time.Time) analysischat.Reply {
 	reply.ToolCalls = state.calls
 	reply.GCSBytes = state.gcsBytes
 	reply.ElapsedMs = int(time.Since(start) / time.Millisecond)
-	return reply, nil
+	return reply
+}
+
+func analysisChatResponseAttempts(response *modelResponse) int {
+	if response != nil && response.Attempts > 0 {
+		return response.Attempts
+	}
+	return 1
+}
+
+func analysisChatSafeValidationError(err error) error {
+	if analysisChatValidationCategory(err) == analysisChatValidationCitation {
+		return analysischat.ErrCitationValidationFailed
+	}
+	return analysischat.ErrResponseValidationFailed
+}
+
+func recordAnalysisChatResponseFailure(
+	ctx context.Context,
+	stage string,
+	modelCalls, providerAttempts int,
+	response *modelResponse,
+	stats analysisChatParseStats,
+	category string,
+) {
+	recordAnalysisChatResponseTelemetry(ctx, "error", stage, modelCalls, providerAttempts, response, stats, category)
+}
+
+func recordAnalysisChatResponseFallback(
+	ctx context.Context,
+	stage string,
+	modelCalls, providerAttempts int,
+	response *modelResponse,
+	stats analysisChatParseStats,
+	category string,
+) {
+	recordAnalysisChatResponseTelemetry(ctx, "fallback", stage, modelCalls, providerAttempts, response, stats, category)
+}
+
+func recordAnalysisChatResponseTelemetry(
+	ctx context.Context,
+	outcome, stage string,
+	modelCalls, providerAttempts int,
+	response *modelResponse,
+	stats analysisChatParseStats,
+	category string,
+) {
+	httpStatus := 0
+	if response != nil {
+		httpStatus = response.HTTPStatus
+	}
+	log.Printf(
+		"analysis chat response: outcome=%s stage=%s model_calls=%d provider_attempts=%d http_status=%d candidate_count=%d validation=%s",
+		outcome, stage, modelCalls, providerAttempts, httpStatus, stats.CandidateCount, category,
+	)
+	recordTrace(ctx, TraceEvent{
+		Kind: "analysis_chat_response", Outcome: outcome, Status: stage,
+		Attempts: providerAttempts, HTTPStatus: httpStatus, ModelCallCount: modelCalls,
+		CandidateCount: stats.CandidateCount, ErrorCode: category,
+	})
 }
 
 func patternAnalysisChatTools(enabled []string) []string {
@@ -472,89 +577,6 @@ func analysisChatContext(turn analysischat.Turn) (string, error) {
 	}
 	return "Selected published analysis and failure context:\n\n" + string(encoded) +
 		"\n\nAnswer follow-up questions only about this selected analysis and build.", nil
-}
-
-func parseAnalysisChatReply(raw string, evidence map[string]*analysisChatEvidence) (analysischat.Reply, error) {
-	if strings.TrimSpace(raw) == "" {
-		return analysischat.Reply{}, errors.New("empty answer")
-	}
-	var reply analysischat.Reply
-	decoder := json.NewDecoder(strings.NewReader(extractJSON(raw)))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&reply); err != nil {
-		return analysischat.Reply{}, fmt.Errorf("response is not valid analysis-chat JSON: %w", err)
-	}
-	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		return analysischat.Reply{}, errors.New("response contains trailing JSON")
-	}
-	reply.Answer = strings.TrimSpace(reply.Answer)
-	reply.Assessment = strings.TrimSpace(reply.Assessment)
-	if reply.Answer == "" || len(reply.Answer) > 32<<10 {
-		return analysischat.Reply{}, errors.New("answer must be 1-32768 bytes")
-	}
-	switch reply.Assessment {
-	case "explains", "supports", "challenges", "inconclusive":
-	default:
-		return analysischat.Reply{}, errors.New("assessment must be explains, supports, challenges, or inconclusive")
-	}
-	if len(reply.Citations) > 20 {
-		return analysischat.Reply{}, errors.New("citations must contain at most 20 entries")
-	}
-	for i := range reply.Citations {
-		citation := &reply.Citations[i]
-		citation.Path = strings.TrimSpace(citation.Path)
-		citation.Quote = strings.TrimSpace(citation.Quote)
-		safe, err := artifacts.SafePath(citation.Path)
-		if err != nil || safe == "" {
-			return analysischat.Reply{}, fmt.Errorf("citation %d has an unsafe path", i+1)
-		}
-		artifactEvidence := evidence[safe]
-		if artifactEvidence == nil {
-			return analysischat.Reply{}, fmt.Errorf("citation %d names an artifact not read during this turn", i+1)
-		}
-		citation.Path = safe
-		if citation.LineStart < 0 || citation.LineEnd < 0 ||
-			(citation.LineStart == 0) != (citation.LineEnd == 0) ||
-			citation.LineEnd > 0 && (citation.LineStart > citation.LineEnd || citation.LineEnd-citation.LineStart > 50) {
-			return analysischat.Reply{}, fmt.Errorf("citation %d has an invalid line range", i+1)
-		}
-		if len(citation.Quote) < 4 {
-			return analysischat.Reply{}, fmt.Errorf("citation %d requires an exact quote of at least 4 bytes", i+1)
-		}
-		if len(citation.Quote) > 1000 {
-			return analysischat.Reply{}, fmt.Errorf("citation %d quote exceeds 1000 bytes", i+1)
-		}
-		if !analysisChatEvidenceContains(artifactEvidence, citation.Quote) {
-			return analysischat.Reply{}, fmt.Errorf("citation %d quote was not returned contiguously by the cited artifact read", i+1)
-		}
-		if citation.LineStart > 0 {
-			if len(artifactEvidence.Lines) == 0 {
-				citation.LineStart, citation.LineEnd = 0, 0
-			} else if !analysisChatQuoteInRange(artifactEvidence.Lines, citation.LineStart, citation.LineEnd, citation.Quote) {
-				return analysischat.Reply{}, fmt.Errorf("citation %d quote does not occur in the claimed line range", i+1)
-			}
-		}
-	}
-	if (reply.Assessment == "supports" || reply.Assessment == "challenges") && len(reply.Citations) == 0 {
-		return analysischat.Reply{}, fmt.Errorf("a %s response requires artifact citations", reply.Assessment)
-	}
-	if reply.Assessment == "challenges" {
-		if reply.ProposedRevision == nil {
-			return analysischat.Reply{}, errors.New("a challenges response requires a complete proposed_revision")
-		}
-		reply.ProposedRevision.RootCause = strings.TrimSpace(reply.ProposedRevision.RootCause)
-		reply.ProposedRevision.SuggestedFix = strings.TrimSpace(reply.ProposedRevision.SuggestedFix)
-		if reply.ProposedRevision.RootCause == "" || reply.ProposedRevision.SuggestedFix == "" {
-			return analysischat.Reply{}, errors.New("a challenges response requires a complete proposed_revision")
-		}
-		if len(reply.ProposedRevision.RootCause) > 32<<10 || len(reply.ProposedRevision.SuggestedFix) > 16<<10 {
-			return analysischat.Reply{}, errors.New("proposed_revision exceeds its size limit")
-		}
-	} else if reply.ProposedRevision != nil {
-		return analysischat.Reply{}, errors.New("proposed_revision is allowed only for a challenges response")
-	}
-	return reply, nil
 }
 
 const analysisChatEvidenceMaxBytes = 128 << 10
