@@ -81,7 +81,9 @@ func (f *fakeAnalysisChatRunner) Stream(
 	emit func(analysischat.Progress) error,
 ) (analysischat.SessionView, error) {
 	if emit != nil {
-		if err := emit(analysischat.Progress{RequestID: requestID, Phase: analysischat.PhaseInvestigating}); err != nil {
+		if err := emit(analysischat.Progress{
+			RequestID: requestID, Phase: analysischat.PhaseInvestigating, TurnsUsed: 3, MaxTurns: 10,
+		}); err != nil {
 			return analysischat.SessionView{}, err
 		}
 	}
@@ -186,6 +188,7 @@ func TestHandlerAnalysisChatFlow(t *testing.T) {
 	}
 	streamBody := readBody(t, streamed)
 	if !strings.Contains(streamBody, "event: progress") || !strings.Contains(streamBody, `"phase":"investigating"`) ||
+		!strings.Contains(streamBody, `"turns_used":3`) || !strings.Contains(streamBody, `"max_turns":10`) ||
 		!strings.Contains(streamBody, "event: session") {
 		t.Fatalf("stream body = %q", streamBody)
 	}

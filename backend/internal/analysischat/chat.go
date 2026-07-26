@@ -161,6 +161,8 @@ type Progress struct {
 	RequestID string `json:"request_id"`
 	Phase     string `json:"phase"`
 	UpdatedAt string `json:"updated_at"`
+	TurnsUsed int    `json:"turns_used"`
+	MaxTurns  int    `json:"max_turns"`
 }
 
 const (

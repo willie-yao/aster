@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 
 import {
+  analysisChatProgressTurnUsage,
   analysisChatTurnUsage,
   findAnalysisChatSession,
   resumeAnalysisChatTurn,
@@ -76,6 +77,13 @@ test("turn usage comes only from authoritative session fields", () => {
   assert.equal(analysisChatTurnUsage({ ...session, turns_used: Number.NaN }), null);
   assert.equal(analysisChatTurnUsage({ ...session, max_turns: 0 }), null);
   assert.equal(analysisChatTurnUsage({ ...session, turns_used: undefined } as unknown as AnalysisChatSession), null);
+  assert.deepEqual(analysisChatProgressTurnUsage({
+    request_id: "request", phase: "queued", updated_at: "2026-07-26T12:03:00Z",
+    turns_used: 3, max_turns: 10,
+  }), { used: 3, max: 10 });
+  assert.equal(analysisChatProgressTurnUsage({
+    request_id: "request", phase: "queued", updated_at: "2026-07-26T12:03:00Z",
+  }), null);
 });
 
 test("reload during a turn reconnects the persisted request", async () => {
@@ -100,6 +108,8 @@ test("reload during a turn reconnects the persisted request", async () => {
     request_id: "request-active",
     phase: "finalizing",
     updated_at: "2026-07-26T12:03:30Z",
+    turns_used: 3,
+    max_turns: 10,
   };
   const events = `event: progress\ndata: ${JSON.stringify(progress)}\n\nevent: session\ndata: ${JSON.stringify(completed)}\n\n`;
   globalThis.fetch = async (input, init) => {

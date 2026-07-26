@@ -133,8 +133,10 @@ returns `409 Conflict`.
 The JSON endpoint waits for the final transcript. The streaming endpoint emits
 `progress` events with `queued`, `investigating`, `reading_evidence`,
 `evaluating`, `finalizing`, or `cancelling`, followed by a `session` event. It
-streams validated phases rather than unreviewed model tokens. Reconnecting with
-the same idempotency key follows the already-running turn on any replica.
+streams validated phases rather than unreviewed model tokens. Progress events
+also carry the authoritative `turns_used` and `max_turns` values immediately
+after admission. Reconnecting with the same idempotency key follows the
+already-running turn on any replica.
 
 The response contains the full transcript. User messages include the accepted
 request ID so the frontend can reconcile a response lost after the server

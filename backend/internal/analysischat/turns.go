@@ -346,6 +346,7 @@ func (s *Service) requestSnapshot(id, owner, requestID string) (requestSnapshot,
 			snapshot.Progress = Progress{
 				RequestID: requestID, Phase: current.Active.Phase,
 				UpdatedAt: current.Active.UpdatedAt.Format(time.RFC3339),
+				TurnsUsed: current.Turns, MaxTurns: s.opts.MaxTurns,
 			}
 		}
 		return changed, nil

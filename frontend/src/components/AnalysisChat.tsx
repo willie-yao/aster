@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
@@ -33,6 +33,7 @@ import {
   analysisChatRequestOutcomeUnknownMessage,
   analysisChatRequestPendingMessage,
   analysisChatSessionBusyMessage,
+  analysisChatProgressTurnUsage,
   analysisChatTurnLimitMessage,
   analysisChatTurnUsage,
   AnalysisChatAPIError,
@@ -53,6 +54,7 @@ import type {
   AnalysisChatAssessment,
   AnalysisChatCitation,
   AnalysisChatMessage,
+  AnalysisChatProgress,
   AnalysisChatProgressPhase,
   AnalysisChatReference,
   AnalysisChatSession,
@@ -442,6 +444,12 @@ export function AnalysisChat({
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const analysisRefRef = useRef(analysisRef);
   const patternScope = analysisRef.scope === "pattern";
+  const recordProgress = useCallback((progress: AnalysisChatProgress) => {
+    setProgressPhase(progress.phase);
+    const usage = analysisChatProgressTurnUsage(progress);
+    if (!usage) return;
+    setSession((current) => current ? { ...current, turns_used: usage.used, max_turns: usage.max } : current);
+  }, []);
 
   const identity = useMemo(
     () =>
@@ -521,7 +529,7 @@ export function AnalysisChat({
         setBusy(true);
         const updated = await resumeAnalysisChatTurn(
           restored,
-          (progress) => setProgressPhase(progress.phase),
+          recordProgress,
           controller.signal,
         );
         if (identityRef.current !== restoreIdentity) return;
@@ -572,7 +580,7 @@ export function AnalysisChat({
       }
     })();
     return () => controller.abort();
-  }, [auth.status, features.analysis_chat, identity]);
+  }, [auth.status, features.analysis_chat, identity, recordProgress]);
 
   useEffect(() => {
     if (!expanded || (!session?.messages.length && !busy)) return;
@@ -637,7 +645,7 @@ export function AnalysisChat({
         activeTurn.sessionID,
         activeTurn.question,
         activeTurn.requestID,
-        (progress) => setProgressPhase(progress.phase),
+        recordProgress,
         controller.signal,
       );
       setSession(updated);

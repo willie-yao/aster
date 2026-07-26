@@ -874,6 +874,13 @@ func TestServiceRecoversExpiredTurnLease(t *testing.T) {
 	if calls != 2 {
 		t.Fatalf("runner calls = %d, want abandoned plus explicit retry", calls)
 	}
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), time.Second)
+	defer waitCancel()
+	for _, service := range []*Service{first, second} {
+		if err := service.Wait(waitCtx); err != nil {
+			t.Fatalf("waiting for recovered turns: %v", err)
+		}
+	}
 }
 
 func TestServiceStartupCleanupRemovesExpiredPersistence(t *testing.T) {
@@ -1013,11 +1020,13 @@ func TestServiceStreamReconnectsToPendingTurn(t *testing.T) {
 	}
 
 	var phases []string
+	var latestProgress Progress
 	progressed := make(chan struct{}, 1)
 	secondDone := make(chan error, 1)
 	go func() {
 		_, err := service.Stream(t.Context(), created.ID, "alice", "turn-stream", "question", func(progress Progress) error {
 			phases = append(phases, progress.Phase)
+			latestProgress = progress
 			select {
 			case progressed <- struct{}{}:
 			default:
@@ -1037,6 +1046,9 @@ func TestServiceStreamReconnectsToPendingTurn(t *testing.T) {
 	}
 	if len(phases) == 0 {
 		t.Fatal("reconnected stream received no persisted progress")
+	}
+	if latestProgress.TurnsUsed != 1 || latestProgress.MaxTurns != 10 {
+		t.Fatalf("progress usage = %d/%d", latestProgress.TurnsUsed, latestProgress.MaxTurns)
 	}
 	runner.mu.Lock()
 	calls := len(runner.turns)

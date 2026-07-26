@@ -62,6 +62,14 @@ export function analysisChatTurnUsage(
   return { used: session.turns_used, max: session.max_turns };
 }
 
+export function analysisChatProgressTurnUsage(
+  progress: AnalysisChatProgress,
+): { used: number; max: number } | null {
+  if (!Number.isInteger(progress.turns_used) || (progress.turns_used ?? -1) < 0) return null;
+  if (!Number.isInteger(progress.max_turns) || (progress.max_turns ?? 0) <= 0) return null;
+  return { used: progress.turns_used!, max: progress.max_turns! };
+}
+
 async function apiError(response: Response): Promise<AnalysisChatAPIError> {
   const body = (await response.text()).trim();
   return new AnalysisChatAPIError(
