@@ -1124,6 +1124,13 @@ agentLoop:
 		}
 		parsed, ok = tryParseAnalysis(finalContent)
 	}
+	if !ok && draftPhase == "critique_retry" && bestDraftContent != "" {
+		finalContent = bestDraftContent
+		finalProviderItems = bestDraftProviderItems
+		finalDraftObserved = true
+		parsed, ok = tryParseAnalysis(finalContent)
+		log.Printf("  ⚠ agentic critique: counted finalize did not parse; keeping prior draft")
+	}
 	if !ok {
 		// Last resort: synthesize an analysisResponse from the raw text so the
 		// UI still has something to render. Do not cache this because a transient

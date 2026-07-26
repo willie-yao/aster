@@ -1548,6 +1548,38 @@ func TestAgentic_UnparseableInLoopRepairCannotExceedBudget(t *testing.T) {
 	}
 }
 
+func TestAgentic_TwoUnparseableInLoopRepairsRetainPriorDraft(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal(puntyFinalJSON))
+	srv.push(200, chatRespFinal("not json"))
+	srv.push(200, chatRespFinal("still not json"))
+	srv.push(200, chatRespFinal(cleanFinalJSON))
+
+	client := newAgenticTestClient(t, srv.URL)
+	key := "agentic:test:two-unparseable-in-loop-repairs"
+	summary, analysis, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
+			MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+			Timeout: 30 * time.Second, CritiqueMaxRetries: 2,
+		}), key, "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 3 {
+		t.Fatalf("call count = %d, want 3", got)
+	}
+	if summary.Summary != "shallow" || analysis.CritiquePassed {
+		t.Fatalf("two unparseable repairs did not retain prior draft: summary=%+v analysis=%+v", summary, analysis)
+	}
+	if analysis.SuggestedFix == "Unable to parse structured response" {
+		t.Fatalf("published synthesized parse failure instead of prior draft: %+v", analysis)
+	}
+	if _, ok := client.Cache().Get(key); ok {
+		t.Fatal("failing retained draft was cached")
+	}
+}
+
 func TestCritiqueRetryBudgetIsNotCached(t *testing.T) {
 	data, err := json.Marshal(agenticCacheData{})
 	if err != nil {
@@ -2382,8 +2414,7 @@ required_evidence:
     any_of: ["config/webhook/.*\\.yaml"]
 `,
 	})
-	// Build tree contains the required evidence, unread by the draft; injection
-	// fetches it and marks it read so the re-critique passes.
+	// Build tree contains required evidence, but zero retries must leave it unread.
 	browser := &trackingBrowser{fakeBrowser: &fakeBrowser{files: map[string][]byte{
 		"build-log.txt":                 []byte("x509 error"),
 		"config/webhook/manifests.yaml": []byte("webhooks:"),
