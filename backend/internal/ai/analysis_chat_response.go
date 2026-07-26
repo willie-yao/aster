@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sort"
 	"strings"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysischat"
@@ -250,10 +249,7 @@ func decodeAnalysisChatReplyCandidate(candidate string, evidence map[string]*ana
 }
 
 type analysisChatCandidateState struct {
-	start    int
-	depth    int
-	inString bool
-	escaped  bool
+	start int
 }
 
 type analysisChatJSONCandidate struct {
@@ -277,60 +273,60 @@ func analysisChatJSONCandidates(raw string) []string {
 }
 
 func scanAnalysisChatJSONCandidates(raw string) analysisChatCandidateScan {
-	active := make([]analysisChatCandidateState, 0, 16)
+	stack := make([]int, 0, 16)
 	candidates := make([]analysisChatJSONCandidate, 0, 16)
+	inString := false
+	escaped := false
+	overflowDepth := 0
 	for index := 0; index < len(raw); index++ {
 		ch := raw[index]
-		closed := make([]analysisChatCandidateState, 0, 2)
-		next := active[:0]
-		for _, state := range active {
-			if state.inString {
-				if state.escaped {
-					state.escaped = false
-				} else if ch == '\\' {
-					state.escaped = true
-				} else if ch == '"' {
-					state.inString = false
-				}
-				next = append(next, state)
+		if len(stack) == 0 {
+			if ch == '{' {
+				stack = append(stack, index)
+			}
+			continue
+		}
+		if inString {
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch ch {
+		case '"':
+			inString = true
+		case '{':
+			if len(stack) < analysisChatMaxCandidates {
+				stack = append(stack, index)
+			} else {
+				overflowDepth++
+			}
+		case '}':
+			if overflowDepth > 0 {
+				overflowDepth--
 				continue
 			}
-			switch ch {
-			case '"':
-				state.inString = true
-			case '{':
-				state.depth++
-			case '}':
-				state.depth--
+			start := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			candidates = append(candidates, analysisChatJSONCandidate{
+				value: raw[start : index+1], start: start, end: index,
+			})
+			if len(candidates) > analysisChatMaxCandidates {
+				candidates = candidates[len(candidates)-analysisChatMaxCandidates:]
 			}
-			if state.depth == 0 {
-				closed = append(closed, state)
-			} else {
-				next = append(next, state)
+			if len(stack) == 0 {
+				inString = false
+				escaped = false
 			}
-		}
-		active = next
-		if len(closed) > 0 {
-			sort.Slice(closed, func(i, j int) bool { return closed[i].start > closed[j].start })
-			for _, state := range closed {
-				candidates = append(candidates, analysisChatJSONCandidate{
-					value: raw[state.start : index+1], start: state.start, end: index,
-				})
-				if len(candidates) > analysisChatMaxCandidates {
-					candidates = candidates[len(candidates)-analysisChatMaxCandidates:]
-				}
-			}
-		}
-		insideString := len(active) > 0 && active[0].inString
-		if ch == '{' && !insideString {
-			if len(active) == analysisChatMaxCandidates {
-				active = active[1:]
-			}
-			active = append(active, analysisChatCandidateState{start: index, depth: 1})
 		}
 	}
-	return analysisChatCandidateScan{
-		candidates: candidates,
-		incomplete: append([]analysisChatCandidateState(nil), active...),
+	incomplete := make([]analysisChatCandidateState, len(stack))
+	for index, start := range stack {
+		incomplete[index] = analysisChatCandidateState{start: start}
 	}
+	return analysisChatCandidateScan{candidates: candidates, incomplete: incomplete}
 }

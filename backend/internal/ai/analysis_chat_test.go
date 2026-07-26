@@ -190,6 +190,23 @@ func TestAnalysisChatAgentKeepsValidDraftWhenFinalizeIsInvalid(t *testing.T) {
 	}
 }
 
+func TestAnalysisChatAgentKeepsValidDraftWhenFinalizeRequestFails(t *testing.T) {
+	shrinkCallDelay(t)
+	server := newScriptedChatServer(t)
+	valid := `{"answer":"The existing conclusion remains plausible.","assessment":"explains","citations":[],"proposed_revision":null}`
+	server.push(200, chatRespToolCallWithContent(valid, "call-1", "list_artifacts", map[string]interface{}{"path": ""}))
+	server.push(500, `private provider body`)
+	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{}, AnalysisChatOptions{MaxIters: 1, Timeout: time.Second})
+
+	reply, err := agent.Reply(context.Background(), analysisChatTurn())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply.Answer != "The existing conclusion remains plausible." || reply.ToolCalls != 1 {
+		t.Fatalf("reply = %+v", reply)
+	}
+}
+
 func TestAnalysisChatAgentReturnsSafeValidationCategory(t *testing.T) {
 	shrinkCallDelay(t)
 	server := newScriptedChatServer(t)
@@ -631,6 +648,15 @@ func TestAnalysisChatJSONCandidatesAreBounded(t *testing.T) {
 	reply, err := parseAnalysisChatReply(raw, nil)
 	if err != nil || reply.Answer != "final" {
 		t.Fatalf("reply=%+v err=%v", reply, err)
+	}
+}
+
+func TestAnalysisChatJSONCandidateScanStaysBoundedForUnclosedObjects(t *testing.T) {
+	raw := strings.Repeat("{", analysisChatMaxCandidates) +
+		strings.Repeat("x", analysisChatMaxResponseBytes-analysisChatMaxCandidates)
+	scan := scanAnalysisChatJSONCandidates(raw)
+	if len(scan.candidates) != 0 || len(scan.incomplete) != analysisChatMaxCandidates {
+		t.Fatalf("candidates=%d incomplete=%d", len(scan.candidates), len(scan.incomplete))
 	}
 }
 
