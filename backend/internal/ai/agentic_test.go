@@ -1608,6 +1608,33 @@ func TestAgentic_TwoUnparseableInLoopRepairsRetainPriorDraft(t *testing.T) {
 	}
 }
 
+func TestAgentic_ToolRepairUsesRemainingBudgetAfterUnparseableFinalize(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal(puntyFinalJSON))
+	srv.push(200, chatRespToolCall("c1", "list_artifacts", map[string]interface{}{"path": ""}))
+	srv.push(200, chatRespToolCall("c2", "list_artifacts", map[string]interface{}{"path": ""}))
+	srv.push(200, chatRespToolCall("c3", "list_artifacts", map[string]interface{}{"path": ""}))
+	srv.push(200, chatRespFinal("not json"))
+	srv.push(200, chatRespFinal(cleanFinalJSON))
+
+	client := newAgenticTestClient(t, srv.URL)
+	summary, analysis, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, &fakeBrowser{dirs: map[string][]string{"": {"artifacts"}}}, AgenticOptions{
+			MaxIters: 1, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+			Timeout: 30 * time.Second, CritiqueMaxRetries: 2,
+		}), "agentic:test:tool-repair-unparseable-finalize", "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 6 {
+		t.Fatalf("call count = %d, want 6", got)
+	}
+	if summary.Summary != "deep" || !analysis.CritiquePassed {
+		t.Fatalf("remaining retry did not recover the tool repair: summary=%+v analysis=%+v", summary, analysis)
+	}
+}
+
 func TestCritiqueRetryBudgetIsNotCached(t *testing.T) {
 	data, err := json.Marshal(agenticCacheData{})
 	if err != nil {

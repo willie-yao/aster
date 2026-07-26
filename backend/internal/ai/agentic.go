@@ -1107,11 +1107,13 @@ agentLoop:
 	// If the model never returned a tools-free final message, OR returned one
 	// without parseable JSON, force a finalize round with tools omitted.
 	parsed, ok := tryParseAnalysis(finalContent)
+	unparseableRetryAdmitted := false
 	if !ok {
 		// An unparseable response to deterministic critique feedback is another
 		// repair attempt. It must share the same budget as the original re-prompt.
 		if draftPhase == "critique_retry" && finalContentFromToolsFree {
 			if retry, admitted := critiqueRetries.admit(); admitted {
+				unparseableRetryAdmitted = true
 				recordTrace(loopCtx, TraceEvent{Kind: "critique", Outcome: "unparseable_retry", Retry: retry})
 			} else if bestDraftContent != "" {
 				finalContent = bestDraftContent
@@ -1131,6 +1133,19 @@ agentLoop:
 			return nil, nil, ErrContextHeadroom
 		}
 		parsed, ok = tryParseAnalysis(finalContent)
+	}
+	if !ok && draftPhase == "critique_retry" && bestDraftContent != "" {
+		if !unparseableRetryAdmitted {
+			if retry, admitted := critiqueRetries.admit(); admitted {
+				recordTrace(loopCtx, TraceEvent{Kind: "critique", Outcome: "unparseable_retry", Retry: retry})
+				var safe bool
+				finalContent, finalProviderItems, safe = c.runFinalizeRound(loopCtx, messages, headroom)
+				if !safe {
+					return nil, nil, ErrContextHeadroom
+				}
+				parsed, ok = tryParseAnalysis(finalContent)
+			}
+		}
 	}
 	if !ok && draftPhase == "critique_retry" && bestDraftContent != "" {
 		finalContent = bestDraftContent
