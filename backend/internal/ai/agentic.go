@@ -825,7 +825,6 @@ func (c *Client) doAnalyzeAgentic(
 
 	var finalContent string
 	var finalProviderItems []json.RawMessage
-	finalContentFromToolsFree := false
 	// Per-floor anti-thrash: track the calls + gcsBytes counters at the
 	// time we last nudged so we can detect whether the model has made
 	// progress on the unmet axis since then. A model that keeps coming
@@ -870,7 +869,6 @@ agentLoop:
 			if fallback := state.promoteFallbackDraft(); fallback != nil {
 				finalContent = fallback.content
 				finalProviderItems = fallback.providerItems
-				finalContentFromToolsFree = true
 				finalDraftObserved = true
 				recordTrace(loopCtx, TraceEvent{Kind: "context_headroom", Outcome: "best_draft", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
 				log.Printf("  ⚠ agentic context headroom exhausted; publishing the best prior draft without another provider request")
@@ -953,7 +951,6 @@ agentLoop:
 							finalContent = candidate
 							finalProviderItems = msg.ProviderItems
 						}
-						finalContentFromToolsFree = true
 						finalDraftObserved = parsedOK
 						recordTrace(loopCtx, TraceEvent{Kind: "context_headroom", Outcome: "retry_denied", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
 						recordTrace(loopCtx, TraceEvent{Kind: "context_headroom", Outcome: "best_draft", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
@@ -1022,7 +1019,6 @@ agentLoop:
 							fallback := state.promoteFallbackDraft()
 							finalContent = fallback.content
 							finalProviderItems = fallback.providerItems
-							finalContentFromToolsFree = true
 							finalDraftObserved = true
 							state.critiquePassed = fallback.quality.Passed
 							break agentLoop
@@ -1051,7 +1047,6 @@ agentLoop:
 				finalContent = candidate
 				finalProviderItems = msg.ProviderItems
 			}
-			finalContentFromToolsFree = true
 			finalDraftObserved = parsedOK
 			break
 		}
@@ -1085,51 +1080,18 @@ agentLoop:
 	// If the model never returned a tools-free final message, OR returned one
 	// without parseable JSON, force a finalize round with tools omitted.
 	parsed, ok := tryParseAnalysis(finalContent)
-	unparseableRetryAdmitted := false
-	if !ok {
-		// An unparseable response to deterministic critique feedback is another
-		// repair attempt. It must share the same budget as the original re-prompt.
-		if draftPhase == "critique_retry" && finalContentFromToolsFree {
-			if retry, admitted := critiqueRetries.admit(); admitted {
-				unparseableRetryAdmitted = true
-				recordTrace(loopCtx, TraceEvent{Kind: "critique", Outcome: "unparseable_retry", Retry: retry})
-			} else if fallback := state.promoteFallbackDraft(); fallback != nil {
-				finalContent = fallback.content
-				finalProviderItems = fallback.providerItems
-				finalContentFromToolsFree = true
-				finalDraftObserved = true
-				parsed, ok = tryParseAnalysis(finalContent)
-				log.Printf("  ⚠ agentic critique: repair response did not parse; retry budget exhausted, keeping prior draft")
-			}
-		}
-	}
 	if !ok {
 		var safe bool
 		finalContent, finalProviderItems, safe = c.runFinalizeRoundTracked(loopCtx, state, messages, headroom)
-		finalContentFromToolsFree = true
 		if !safe {
 			return nil, nil, ErrContextHeadroom
 		}
 		parsed, ok = tryParseAnalysis(finalContent)
 	}
-	if !ok && draftPhase == "critique_retry" && state.fallbackDraft != nil {
-		if !unparseableRetryAdmitted {
-			if retry, admitted := critiqueRetries.admit(); admitted {
-				recordTrace(loopCtx, TraceEvent{Kind: "critique", Outcome: "unparseable_retry", Retry: retry})
-				var safe bool
-				finalContent, finalProviderItems, safe = c.runFinalizeRound(loopCtx, messages, headroom)
-				if !safe {
-					return nil, nil, ErrContextHeadroom
-				}
-				parsed, ok = tryParseAnalysis(finalContent)
-			}
-		}
-	}
 	if !ok && state.fallbackDraft != nil {
 		fallback := state.promoteFallbackDraft()
 		finalContent = fallback.content
 		finalProviderItems = fallback.providerItems
-		finalContentFromToolsFree = true
 		finalDraftObserved = true
 		parsed, ok = tryParseAnalysis(finalContent)
 		log.Printf("  ⚠ agentic repair: finalize did not parse; keeping selected draft")
@@ -1286,6 +1248,12 @@ func (c *Client) runBoundedCritiqueRepair(ctx context.Context, state *agentState
 			state.modelBytes += len(result)
 			repairMessages = append(repairMessages, modelMessage{Role: "tool", ToolCallID: tc.ID, Content: strPtr(result)})
 		}
+	}
+
+	remaining = time.Until(state.deadline)
+	if remaining < state.recentModelRequest+critiqueFinalizationReserve {
+		recordTrace(ctx, TraceEvent{Kind: "critique_retry_denied", Outcome: "time_headroom", Retry: retry, RetryAdmitted: true, RetryDeniedReason: "time_headroom", InitialIssueCount: len(initial.Matches()), SelectedAttempt: selectedDraftAttempt(state), RetryDurationMs: int(time.Since(started) / time.Millisecond), RemainingTimeMs: int(remaining / time.Millisecond)})
+		return state.bestDraft.parsed
 	}
 
 	revised, revisedItems, safe := c.runFinalizeRoundTracked(ctx, state, repairMessages, contextHeadroomFor(opts))

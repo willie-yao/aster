@@ -2013,6 +2013,32 @@ func TestAgentic_Critique_RetryAllowsToolCallThenFinal(t *testing.T) {
 	}
 }
 
+func TestAgentic_BoundedRepairAllowsOneToolTurnThenFinal(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	initial := `{"summary":"s","is_transient":false,"root_cause":"build-log.txt shows the controller failed","severity":"High","suggested_fix":"Update the controller configuration.","relevant_files":[]}`
+	srv.push(200, chatRespFinal(initial))
+	srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
+	clean := `{"summary":"deep","is_transient":false,"root_cause":"controller configuration mismatch","severity":"High","suggested_fix":"Update the controller configuration.","relevant_files":[]}`
+	srv.push(200, chatRespFinal(clean))
+	browser := &trackingBrowser{fakeBrowser: &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("mismatch")}}, treeResponses: []treeResponse{{truncated: true}, {truncated: true}}}
+	client := newAgenticTestClient(t, srv.URL)
+	key := "agentic:test:bounded-tool-turn"
+	_, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second, CritiqueMaxRetries: 1}), key, "sys", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 3 {
+		t.Fatalf("call count = %d, want 3", got)
+	}
+	if !analysis.CritiquePassed || analysis.RootCause != "controller configuration mismatch" {
+		t.Fatalf("bounded Tool repair failed: %+v", analysis)
+	}
+	if _, ok := client.Cache().Get(key); !ok {
+		t.Fatal("passing bounded repair was not cached")
+	}
+}
+
 // TestCritiqueDraft_FeedbackTruncatesLongFix verifies long quoted fixes are
 // truncated while matched phrases remain listed.
 func TestCritiqueDraft_FeedbackTruncatesLongFix(t *testing.T) {
