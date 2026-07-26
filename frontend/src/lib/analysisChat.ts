@@ -4,7 +4,7 @@ import type {
   AnalysisChatSession,
 } from "../types/analysisChat";
 
-const API_BASE = import.meta.env.BASE_URL;
+const API_BASE = import.meta.env?.BASE_URL ?? "/";
 const maxQuestionBytes = 4096;
 const utf8Encoder = new TextEncoder();
 
@@ -81,6 +81,22 @@ export async function createAnalysisChatSession(
     headers: { "Content-Type": "application/json", "Idempotency-Key": requestID },
     body: JSON.stringify(analysis),
   });
+  return parseResponse(response);
+}
+
+export async function findAnalysisChatSession(
+  analysis: AnalysisChatReference,
+  signal?: AbortSignal,
+): Promise<AnalysisChatSession | null> {
+  const response = await fetch(`${API_BASE}api/analysis-chat/sessions/lookup`, {
+    method: "POST",
+    credentials: "same-origin",
+    cache: "no-store",
+    signal,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(analysis),
+  });
+  if (response.status === 204) return null;
   return parseResponse(response);
 }
 

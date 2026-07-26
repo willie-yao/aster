@@ -37,6 +37,7 @@ import {
   AnalysisChatAPIError,
   cancelAnalysisChatRequest,
   createAnalysisChatSession,
+  findAnalysisChatSession,
   getAnalysisChatSession,
   isAmbiguousAnalysisChatFailure,
   limitAnalysisChatQuestion,
@@ -417,6 +418,7 @@ export function AnalysisChat({
   const [expanded, setExpanded] = useState(false);
   const [question, setQuestion] = useState("");
   const [session, setSession] = useState<AnalysisChatSession | null>(null);
+  const [restoring, setRestoring] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [turnLimitExhausted, setTurnLimitExhausted] = useState(false);
@@ -431,11 +433,13 @@ export function AnalysisChat({
   const [fixOpen, setFixOpen] = useState(false);
   const [sourceSelections, setSourceSelections] = useState<Record<string, ChatFixSourceSelection>>({});
   const createRequestIDRef = useRef(newAnalysisChatRequestID());
+  const restoreControllerRef = useRef<AbortController | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
   const cancelControllerRef = useRef<AbortController | null>(null);
   const correctionControllerRef = useRef<AbortController | null>(null);
   const identityRef = useRef("");
   const messageListRef = useRef<HTMLDivElement | null>(null);
+  const analysisRefRef = useRef(analysisRef);
   const patternScope = analysisRef.scope === "pattern";
 
   const identity = useMemo(
@@ -454,15 +458,18 @@ export function AnalysisChat({
       ].join("\u0000"),
     [analysisRef],
   );
+  analysisRefRef.current = analysisRef;
   identityRef.current = identity;
 
   useEffect(() => {
+    restoreControllerRef.current?.abort();
     controllerRef.current?.abort();
     cancelControllerRef.current?.abort();
     correctionControllerRef.current?.abort();
     setExpanded(false);
     setQuestion("");
     setSession(null);
+    setRestoring(false);
     setBusy(false);
     setError(null);
     setTurnLimitExhausted(false);
@@ -480,6 +487,40 @@ export function AnalysisChat({
   }, [identity]);
 
   useEffect(() => {
+    if (!features.analysis_chat || auth.status !== "authenticated") {
+      restoreControllerRef.current?.abort();
+      if (auth.status !== "loading") {
+        setSession(null);
+        setRestoring(false);
+      }
+      return;
+    }
+    const restoreIdentity = identity;
+    const controller = new AbortController();
+    restoreControllerRef.current?.abort();
+    restoreControllerRef.current = controller;
+    setRestoring(true);
+    setError(null);
+    void findAnalysisChatSession(analysisRefRef.current, controller.signal)
+      .then((restored) => {
+        if (identityRef.current !== restoreIdentity) return;
+        setSession(restored);
+      })
+      .catch((restoreError) => {
+        if (restoreError instanceof Error && restoreError.name === "AbortError") return;
+        if (identityRef.current !== restoreIdentity) return;
+        setError(readableError(restoreError));
+      })
+      .finally(() => {
+        if (restoreControllerRef.current === controller) {
+          restoreControllerRef.current = null;
+          if (identityRef.current === restoreIdentity) setRestoring(false);
+        }
+      });
+    return () => controller.abort();
+  }, [auth.status, features.analysis_chat, identity]);
+
+  useEffect(() => {
     if (!expanded || (!session?.messages.length && !busy)) return;
     const list = messageListRef.current;
     if (!list) return;
@@ -487,6 +528,7 @@ export function AnalysisChat({
   }, [busy, expanded, session?.messages.length]);
 
   useEffect(() => () => {
+    restoreControllerRef.current?.abort();
     controllerRef.current?.abort();
     cancelControllerRef.current?.abort();
     correctionControllerRef.current?.abort();
@@ -500,7 +542,7 @@ export function AnalysisChat({
 
   async function submit(nextQuestion?: string) {
     const value = (nextQuestion ?? pendingTurn?.question ?? question).trim();
-    if (!value || busy || turnLimitReached) return;
+    if (!value || busy || restoring || turnLimitReached) return;
     if (pendingTurn && pendingTurn.question !== value) {
       setError("The previous question may still be running. Retry it before asking another question.");
       return;
@@ -843,7 +885,12 @@ export function AnalysisChat({
                 },
               }}
             >
-              {!session?.messages.length && !busy && !pendingTurn && !turnLimitReached && (
+              {restoring && (
+                <Typography role="status" variant="body2" color="text.secondary" sx={{ py: 0.5 }}>
+                  Restoring conversation...
+                </Typography>
+              )}
+              {!restoring && !session?.messages.length && !busy && !pendingTurn && !turnLimitReached && (
                 <Box sx={{ py: 0.5 }}>
                   <Typography variant="body2" sx={{ fontWeight: 650 }}>
                     {patternScope ? "Interrogate the pattern across builds." : "Interrogate the conclusion, not just the summary."}
@@ -941,7 +988,7 @@ export function AnalysisChat({
                         void submit();
                       }
                     }}
-                    disabled={busy || pendingTurn !== null}
+                    disabled={restoring || busy || pendingTurn !== null}
                     placeholder="Ask why, challenge the cause, or test another hypothesis..."
                     slotProps={{
                       input: {
@@ -960,7 +1007,7 @@ export function AnalysisChat({
                         color="primary"
                         aria-label={pendingTurn ? "Retry question" : "Send question"}
                         onClick={() => void submit()}
-                        disabled={busy || (pendingTurn?.question ?? question).trim() === ""}
+                        disabled={restoring || busy || (pendingTurn?.question ?? question).trim() === ""}
                         sx={{
                           width: 48,
                           height: 48,

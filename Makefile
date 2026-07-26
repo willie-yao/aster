@@ -1,6 +1,6 @@
 .PHONY: all build build-server build-worker serve dev-actions image analyzer-image fixer-image test test-v e2e lint fmt tidy helm-check \
        fetch-data fetch-data-quick fetch-data-ai fetch-data-ai-quick \
-       fe-install dev fe-build fe-check fe-lint \
+       fe-install dev fe-build fe-check fe-test fe-lint \
        dist dist-ai clean clean-cache clean-all help
 
 # Path to a consumer project directory containing project.yaml + prompts/system.md.
@@ -129,6 +129,10 @@ fe-build: fe-install
 fe-check:
 	cd frontend && npx tsc -b
 
+# Run frontend unit tests.
+fe-test: fe-install
+	cd frontend && npm test
+
 # Lint frontend sources
 fe-lint: fe-install
 	cd frontend && npm run lint
@@ -181,6 +185,7 @@ help:
 	@echo "  dev                Start Vite dev server"
 	@echo "  fe-build           Production build of frontend"
 	@echo "  fe-check           TypeScript type check"
+	@echo "  fe-test            Run frontend unit tests"
 	@echo "  fe-lint            Lint frontend sources"
 	@echo ""
 	@echo "  dist               Full pipeline: build + fetch + frontend"

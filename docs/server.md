@@ -27,6 +27,7 @@ remains identical.
 | `GET /api/analysis-traces` | Admin-gated private trace snapshot. Exact filters: `job_id`, `build_id`, `test_name`, `outcome`, and `response_id`. |
 | `GET /api/analysis-traces/download` | Admin-gated attachment form of the same filtered trace snapshot. |
 | `POST /api/analysis-chat/sessions` | Start an owner-bound conversation for one published test analysis. |
+| `POST /api/analysis-chat/sessions/lookup` | Restore the latest non-expired conversation owned by the signed-in admin for an exact analysis reference. |
 | `GET /api/analysis-chat/sessions/{id}` | Read the owning admin's current persisted conversation. |
 | `POST /api/analysis-chat/sessions/{id}/messages` | Ask one bounded follow-up question and wait for the final transcript. |
 | `POST /api/analysis-chat/sessions/{id}/messages/stream` | Start or reconnect to a turn over SSE progress events. |
@@ -94,6 +95,9 @@ Create a session by posting the selected analysis identity with a unique
 names. `analysis_generated_at` is
 optional, but including it prevents a conversation from silently attaching to a
 newer analysis after the page was loaded. A mismatch returns `409 Conflict`.
+The lookup endpoint accepts the same reference and returns `204 No Content`
+when that admin has no live matching session. The dashboard uses it on mount so
+reloads and navigation restore the transcript from shared server storage.
 
 For a recurring pattern, post its stable ID and complete content hash instead:
 
@@ -145,6 +149,9 @@ and expire after two hours of inactivity by default. A completed or failed turn
 refreshes the expiry. The state file is private and excluded
 from `/data/*`. Replicas coordinate short state transitions with an advisory
 lock on the shared filesystem, while model calls run without holding that lock.
+Session lookup resolves the current published analysis before matching the
+owner's latest transcript, so changed test timestamps and pattern hashes do not
+attach an older conversation.
 The shared RWX volume must support advisory file locking, atomic rename, and file and directory synchronization.
 The persisted file contains private transcripts and selected failure context, so
 volume access and backups must be treated as operator-private data.

@@ -20,10 +20,37 @@ import (
 // AnalysisChatRunner manages authenticated conversations about published analyses.
 type AnalysisChatRunner interface {
 	Create(analysischat.AnalysisRef, string, string) (analysischat.SessionView, error)
+	Find(analysischat.AnalysisRef, string) (analysischat.SessionView, error)
 	Get(string, string) (analysischat.SessionView, error)
 	Send(context.Context, string, string, string, string) (analysischat.SessionView, error)
 	Stream(context.Context, string, string, string, string, func(analysischat.Progress) error) (analysischat.SessionView, error)
 	Cancel(string, string, string) error
+}
+
+func findAnalysisChatSessionHandler(run AnalysisChatRunner) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		identity, ok := auth.IdentityFrom(r.Context())
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		var ref analysischat.AnalysisRef
+		if err := decodeAnalysisChatBody(w, r, &ref, maxAnalysisChatReferenceBodyBytes); err != nil {
+			http.Error(w, "invalid analysis reference", http.StatusBadRequest)
+			return
+		}
+		session, err := run.Find(ref, identity.Login)
+		if errors.Is(err, analysischat.ErrSessionNotFound) {
+			w.Header().Set("Cache-Control", "no-store")
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if err != nil {
+			writeAnalysisChatError(w, "find", identity.Login, err)
+			return
+		}
+		writeAnalysisChatJSON(w, http.StatusOK, session)
+	})
 }
 
 const (

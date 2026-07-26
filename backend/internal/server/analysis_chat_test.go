@@ -19,11 +19,14 @@ type fakeAnalysisChatRunner struct {
 	createdRef       analysischat.AnalysisRef
 	createdOwner     string
 	createdRequestID string
+	foundRef         analysischat.AnalysisRef
+	foundOwner       string
 	gotID            string
 	gotOwner         string
 	gotRequestID     string
 	gotMessage       string
 	createErr        error
+	findErr          error
 	getErr           error
 	sendErr          error
 	cancelErr        error
@@ -31,6 +34,14 @@ type fakeAnalysisChatRunner struct {
 	cancelOwner      string
 	cancelRequestID  string
 	sendDelay        time.Duration
+}
+
+func (f *fakeAnalysisChatRunner) Find(ref analysischat.AnalysisRef, owner string) (analysischat.SessionView, error) {
+	f.foundRef, f.foundOwner = ref, owner
+	if f.findErr != nil {
+		return analysischat.SessionView{}, f.findErr
+	}
+	return analysischat.SessionView{ID: "session-1", Analysis: ref, Messages: []analysischat.Message{}}, nil
 }
 
 func (f *fakeAnalysisChatRunner) Create(ref analysischat.AnalysisRef, owner, requestID string) (analysischat.SessionView, error) {
@@ -139,6 +150,15 @@ func TestHandlerAnalysisChatFlow(t *testing.T) {
 		t.Fatalf("create runner state = %+v owner=%q", runner.createdRef, runner.createdOwner)
 	}
 
+	found := request(http.MethodPost, "/api/analysis-chat/sessions/lookup", `{"job_id":"job","build_id":"1","test_name":"Test","analysis_generated_at":"2026-07-23T12:00:00Z"}`)
+	if found.StatusCode != http.StatusOK {
+		t.Fatalf("find status=%d body=%s", found.StatusCode, readBody(t, found))
+	}
+	_ = found.Body.Close()
+	if runner.foundOwner != "alice" || runner.foundRef.BuildID != "1" {
+		t.Fatalf("find runner state = %+v owner=%q", runner.foundRef, runner.foundOwner)
+	}
+
 	got := request(http.MethodGet, "/api/analysis-chat/sessions/session-1", "")
 	if got.StatusCode != http.StatusOK {
 		t.Fatalf("get status=%d body=%s", got.StatusCode, readBody(t, got))
@@ -174,6 +194,27 @@ func TestHandlerAnalysisChatFlow(t *testing.T) {
 	_ = cancelled.Body.Close()
 	if runner.cancelID != "session-1" || runner.cancelOwner != "alice" || runner.cancelRequestID != "request-flow" {
 		t.Fatalf("cancel runner id=%q owner=%q request=%q", runner.cancelID, runner.cancelOwner, runner.cancelRequestID)
+	}
+}
+
+func TestHandlerAnalysisChatLookupMissingSession(t *testing.T) {
+	handler, err := Handler(Options{
+		DataDir: t.TempDir(), Capabilities: DefaultCapabilities(), Auth: fakeAuth{}, AuthMode: "dev",
+		AnalysisChat: &fakeAnalysisChatRunner{findErr: analysischat.ErrSessionNotFound},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/analysis-chat/sessions/lookup", strings.NewReader(`{"job_id":"job","build_id":"1","test_name":"Test"}`))
+	req.Header.Set("Authorization", "ok")
+	req.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("lookup status=%d body=%q", recorder.Code, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", got)
 	}
 }
 

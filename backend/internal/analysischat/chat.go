@@ -468,6 +468,56 @@ func (s *Service) Get(id, owner string) (SessionView, error) {
 	return view, err
 }
 
+// Find returns the latest owner-bound session for the current analysis.
+func (s *Service) Find(ref AnalysisRef, owner string) (SessionView, error) {
+	owner = normalizeOwner(owner)
+	if owner == "" {
+		return SessionView{}, fmt.Errorf("%w: owner is required", ErrInvalidRequest)
+	}
+	resolved, err := s.resolve(ref)
+	if err != nil {
+		return SessionView{}, err
+	}
+	now := s.opts.Now().UTC()
+	var view SessionView
+	ctx, cancel := s.store.context()
+	defer cancel()
+	err = s.store.update(ctx, func(state *persistedState) (bool, error) {
+		changed := s.cleanup(state, now)
+		current := s.latestSessionForAnalysis(state, owner, resolved.ref)
+		if current == nil {
+			return changed, ErrSessionNotFound
+		}
+		view = cloneSessionView(current.View)
+		return changed, nil
+	})
+	return view, err
+}
+
+func (s *Service) latestSessionForAnalysis(state *persistedState, owner string, ref AnalysisRef) *persistedSession {
+	var latest *persistedSession
+	var latestActivity time.Time
+	for _, current := range state.Sessions {
+		if current == nil || current.Owner != owner || current.View.Analysis != ref {
+			continue
+		}
+		activity, err := time.Parse(time.RFC3339, current.View.UpdatedAt)
+		if err != nil {
+			activity, _ = time.Parse(time.RFC3339, current.View.CreatedAt)
+		}
+		if current.Active != nil && current.Active.UpdatedAt.After(activity) {
+			activity = current.Active.UpdatedAt
+		}
+		if latest == nil || activity.After(latestActivity) ||
+			activity.Equal(latestActivity) && current.ExpiresAt.After(latest.ExpiresAt) ||
+			activity.Equal(latestActivity) && current.ExpiresAt.Equal(latest.ExpiresAt) && current.View.ID > latest.View.ID {
+			latest = current
+			latestActivity = activity
+		}
+	}
+	return latest
+}
+
 func (s *Service) cleanup(state *persistedState, now time.Time) bool {
 	changed := false
 	if state.OwnerRequests == nil {
