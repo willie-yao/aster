@@ -65,9 +65,9 @@ type AgenticOptions struct {
 	// initial evidence-plan coverage also satisfies this floor. Defaults to 0.
 	MinGCSBytes int
 
-	// CritiqueMaxRetries is one shared budget for deterministic critique repair.
-	// It covers in-loop re-prompts, post-loop evidence repair, and another
-	// finalize after an unparseable repair. 0 evaluates once but never repairs.
+	// CritiqueMaxRetries controls eligibility for one bounded deterministic repair.
+	// 0 evaluates once without repair; positive values remain subject to context
+	// and time-headroom guards.
 	CritiqueMaxRetries int
 
 	// SingleToolCall caps the loop to one tool call per assistant turn. Extra
@@ -1220,6 +1220,11 @@ func (c *Client) runBoundedCritiqueRepair(ctx context.Context, state *agentState
 		}
 	}
 	if critiqueRepairNeedsTools(updated) {
+		remaining = time.Until(state.deadline)
+		if remaining < 2*state.recentModelRequest+critiqueFinalizationReserve {
+			recordTrace(ctx, TraceEvent{Kind: "critique_retry_denied", Outcome: "time_headroom", Retry: retry, RetryAdmitted: true, RetryDeniedReason: "time_headroom", InitialIssueCount: len(initial.Matches()), SelectedAttempt: selectedDraftAttempt(state), RetryDurationMs: int(time.Since(started) / time.Millisecond), RemainingTimeMs: int(remaining / time.Millisecond)})
+			return state.bestDraft.parsed
+		}
 		schemas := state.registry.Schemas(state.enabledTools)
 		var parallelToolCalls *bool
 		if opts.SingleToolCall {
@@ -1286,12 +1291,19 @@ func (c *Client) runBoundedCritiqueRepair(ctx context.Context, state *agentState
 		c.applySemanticJudgePostLoop(ctx, state, repairMessages, selected.content, selected.providerItems, selected.parsed, contextHeadroomFor(opts))
 		state.critiquePassed = state.bestDraft.quality.Passed
 	}
+	selected := state.bestDraft
+	selectedOut := critiqueDraft(selected.parsed, state.readArtifactsFull, state.readArtifactsBase, matchSkillsForDraft(state, selected.parsed), state.consecutiveFailures)
+	if len(selectedOut.MissingSkillEvidence) > 0 {
+		if treeSet := state.artifactTreeSet(); treeSet != nil {
+			pruneAbsentSkillEvidence(selected.parsed, &selectedOut, treeSet)
+		}
+	}
 	recordTrace(ctx, TraceEvent{
 		Kind: "critique_retry", Outcome: "completed", Retry: retry, RetryAdmitted: true,
-		InitialIssueCount: len(initial.Matches()), RevisedIssueCount: len(out.Matches()),
+		InitialIssueCount: len(initial.Matches()), RevisedIssueCount: len(selectedOut.Matches()),
 		NewEvidenceReads: state.evidenceRevision - initialEvidenceRevision,
-		RootCauseChanged: rootCauseMateriallyChanged(parsed.RootCause, next.RootCause),
-		SelectedAttempt:  state.bestDraft.attempt, RetryDurationMs: int(time.Since(started) / time.Millisecond),
+		RootCauseChanged: rootCauseMateriallyChanged(parsed.RootCause, selected.parsed.RootCause),
+		SelectedAttempt:  selected.attempt, RetryDurationMs: int(time.Since(started) / time.Millisecond),
 		RemainingTimeMs: int(time.Until(state.deadline) / time.Millisecond),
 	})
 	return state.bestDraft.parsed
