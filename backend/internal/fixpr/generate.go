@@ -56,13 +56,18 @@ func parseReviewIssues(s string) ([]string, error) {
 		if s[start] != '{' {
 			continue
 		}
-		for _, candidate := range []string{s[start:], escapeStringControlChars(s[start:])} {
+		escaped, offsets := escapeStringControlCharsWithOffsets(s[start:])
+		for index, candidate := range []string{s[start:], escaped} {
 			issues, consumed, err := decodeReviewIssues(candidate)
 			if err != nil {
 				lastErr = err
 				continue
 			}
-			end := start + consumed
+			originalConsumed := consumed
+			if index == 1 && consumed < len(offsets) {
+				originalConsumed = offsets[consumed]
+			}
+			end := start + originalConsumed
 			if end > bestEnd || end == bestEnd && start < bestStart {
 				bestEnd, bestStart, best = end, start, issues
 			}
@@ -96,42 +101,55 @@ func decodeReviewIssues(value string) ([]string, int, error) {
 // structural whitespace between tokens untouched. Already-escaped sequences and
 // characters outside strings pass through unchanged.
 func escapeStringControlChars(s string) string {
+	escaped, _ := escapeStringControlCharsWithOffsets(s)
+	return escaped
+}
+
+func escapeStringControlCharsWithOffsets(s string) (string, []int) {
 	var b strings.Builder
 	b.Grow(len(s))
+	offsets := []int{0}
 	inString, escaped := false, false
-	for _, r := range s {
+	write := func(value string, originalEnd int) {
+		b.WriteString(value)
+		for range len(value) {
+			offsets = append(offsets, originalEnd)
+		}
+	}
+	for start, r := range s {
+		originalEnd := start + len(string(r))
 		if !inString {
 			if r == '"' {
 				inString = true
 			}
-			b.WriteRune(r)
+			write(string(r), originalEnd)
 			continue
 		}
 		if escaped {
-			b.WriteRune(r)
+			write(string(r), originalEnd)
 			escaped = false
 			continue
 		}
 		switch {
 		case r == '\\':
-			b.WriteRune(r)
+			write(string(r), originalEnd)
 			escaped = true
 		case r == '"':
-			b.WriteRune(r)
+			write(string(r), originalEnd)
 			inString = false
 		case r == '\t':
-			b.WriteString(`\t`)
+			write(`\t`, originalEnd)
 		case r == '\n':
-			b.WriteString(`\n`)
+			write(`\n`, originalEnd)
 		case r == '\r':
-			b.WriteString(`\r`)
+			write(`\r`, originalEnd)
 		case r < 0x20:
-			fmt.Fprintf(&b, `\u%04x`, r)
+			write(fmt.Sprintf(`\u%04x`, r), originalEnd)
 		default:
-			b.WriteRune(r)
+			write(string(r), originalEnd)
 		}
 	}
-	return b.String()
+	return b.String(), offsets
 }
 
 func dedupeNonEmpty(in []string) []string {

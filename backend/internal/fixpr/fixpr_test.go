@@ -433,3 +433,14 @@ func TestParseReviewIssuesIgnoresQuotedProseBrace(t *testing.T) {
 		t.Fatalf("issues = %#v", issues)
 	}
 }
+
+func TestParseReviewIssuesOrdersEscapedDraftByOriginalOffset(t *testing.T) {
+	raw := "{\"issues\":[\"" + strings.Repeat("\n", 50) + "earlier\"]}\n{\"issues\":[]}"
+	issues, err := parseReviewIssues(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 0 {
+		t.Fatalf("earlier escaped draft won: %#v", issues)
+	}
+}
