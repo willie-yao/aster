@@ -331,6 +331,7 @@ func TestParseAnalysisChatReplyScansKimiCandidates(t *testing.T) {
 		{name: "final valid draft", raw: valid + `\n{"answer":"final answer","assessment":"explains","citations":[],"proposed_revision":null}`, want: "final answer"},
 		{name: "malformed final draft", raw: valid + `\n{"answer":"unfinished"`, want: "valid answer"},
 		{name: "nested object in malformed final draft", raw: valid + `\n{"answer":"unfinished","citations":[{"path":"x"}]`, want: "valid answer"},
+		{name: "malformed wrapped final draft", raw: valid + `\n{"metadata":{"finish_reason":"stop"},"result":{"answer":"unfinished"}}`, want: "valid answer"},
 		{name: "quoted braces", raw: `{"answer":"value with {nested text}","assessment":"explains","citations":[],"proposed_revision":null}`, want: "value with {nested text}"},
 		{name: "quoted prose brace", raw: `The token "{" was emitted. ` + valid, want: "valid answer"},
 	}

@@ -120,22 +120,32 @@ func hasTrailingUnrelatedAnalysisChatCandidate(
 		}
 		return intervals[i].end > intervals[j].end
 	})
-	maxEnd := -1
+	type rootInterval struct {
+		end        int
+		incomplete bool
+		related    bool
+	}
+	var root *rootInterval
+	flush := func() bool {
+		return root != nil && !root.incomplete && !root.related
+	}
 	for _, candidateInterval := range intervals {
-		if candidateInterval.end <= maxEnd {
-			continue
+		if root == nil || candidateInterval.start > root.end {
+			if flush() {
+				return true
+			}
+			root = &rootInterval{end: candidateInterval.end, incomplete: candidateInterval.incomplete}
 		}
-		maxEnd = candidateInterval.end
 		if candidateInterval.incomplete || candidateInterval.candidate == nil {
 			continue
 		}
 		candidate := candidateInterval.candidate
 		containsSelected := candidate.start <= selected.start && candidate.end >= selected.end
-		if !containsSelected && !candidate.replyLike {
-			return true
+		if containsSelected || candidate.replyLike {
+			root.related = true
 		}
 	}
-	return false
+	return flush()
 }
 
 func analysisChatCandidateLooksLikeReply(candidate string) bool {
