@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 
-import { findAnalysisChatSession, resumeAnalysisChatTurn } from "../src/lib/analysisChat.js";
+import {
+  analysisChatProgressTurnUsage,
+  analysisChatTurnLimitReached,
+  analysisChatTurnUsage,
+  findAnalysisChatSession,
+  markAnalysisChatTurnLimitReached,
+  resumeAnalysisChatTurn,
+} from "../src/lib/analysisChat.js";
 import type { AnalysisChatReference, AnalysisChatSession } from "../src/types/analysisChat.js";
 
 const originalFetch = globalThis.fetch;
@@ -23,6 +30,8 @@ const session: AnalysisChatSession = {
   created_at: "2026-07-26T12:01:00Z",
   updated_at: "2026-07-26T12:02:00Z",
   expires_at: "2026-07-26T14:01:00Z",
+  turns_used: 2,
+  max_turns: 10,
   messages: [
     { role: "user", content: "What proves this?", created_at: "2026-07-26T12:01:30Z" },
     { role: "assistant", content: "The log does.", created_at: "2026-07-26T12:02:00Z" },
@@ -64,6 +73,27 @@ test("missing or expired server sessions restore as empty", async () => {
   assert.equal(await findAnalysisChatSession(analysis), null);
 });
 
+test("turn usage comes only from authoritative session fields", () => {
+  assert.deepEqual(analysisChatTurnUsage(session), { used: 2, max: 10 });
+  assert.deepEqual(analysisChatTurnUsage({ ...session, turns_used: 10 }), { used: 10, max: 10 });
+  assert.equal(analysisChatTurnUsage({ ...session, turns_used: Number.NaN }), null);
+  assert.equal(analysisChatTurnUsage({ ...session, max_turns: 0 }), null);
+  assert.equal(analysisChatTurnUsage({ ...session, turns_used: undefined } as unknown as AnalysisChatSession), null);
+  assert.deepEqual(analysisChatProgressTurnUsage({
+    request_id: "request", phase: "queued", updated_at: "2026-07-26T12:03:00Z",
+    turns_used: 3, max_turns: 10,
+  }), { used: 3, max: 10 });
+  assert.equal(analysisChatProgressTurnUsage({
+    request_id: "request", phase: "queued", updated_at: "2026-07-26T12:03:00Z",
+  }), null);
+  assert.equal(markAnalysisChatTurnLimitReached({ ...session, turns_used: 9 }).turns_used, 10);
+  assert.equal(markAnalysisChatTurnLimitReached({ ...session, turns_used: 12 }).turns_used, 12);
+  assert.equal(analysisChatTurnLimitReached({ ...session, turns_used: 10 }, false, false), true);
+  assert.equal(analysisChatTurnLimitReached({ ...session, turns_used: 10 }, true, false), false);
+  assert.equal(analysisChatTurnLimitReached(session, false, true), true);
+  assert.equal(analysisChatTurnLimitReached(session, true, true), false);
+});
+
 test("reload during a turn reconnects the persisted request", async () => {
   const active: AnalysisChatSession = {
     ...session,
@@ -86,6 +116,8 @@ test("reload during a turn reconnects the persisted request", async () => {
     request_id: "request-active",
     phase: "finalizing",
     updated_at: "2026-07-26T12:03:30Z",
+    turns_used: 3,
+    max_turns: 10,
   };
   const events = `event: progress\ndata: ${JSON.stringify(progress)}\n\nevent: session\ndata: ${JSON.stringify(completed)}\n\n`;
   globalThis.fetch = async (input, init) => {

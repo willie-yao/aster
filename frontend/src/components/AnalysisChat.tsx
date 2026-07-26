@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
@@ -33,7 +33,10 @@ import {
   analysisChatRequestOutcomeUnknownMessage,
   analysisChatRequestPendingMessage,
   analysisChatSessionBusyMessage,
+  analysisChatTurnLimitReached,
+  analysisChatProgressTurnUsage,
   analysisChatTurnLimitMessage,
+  analysisChatTurnUsage,
   AnalysisChatAPIError,
   cancelAnalysisChatRequest,
   createAnalysisChatSession,
@@ -41,6 +44,7 @@ import {
   getAnalysisChatSession,
   isAmbiguousAnalysisChatFailure,
   limitAnalysisChatQuestion,
+  markAnalysisChatTurnLimitReached,
   newAnalysisChatRequestID,
   resumeAnalysisChatTurn,
   streamAnalysisChatMessage,
@@ -52,6 +56,7 @@ import type {
   AnalysisChatAssessment,
   AnalysisChatCitation,
   AnalysisChatMessage,
+  AnalysisChatProgress,
   AnalysisChatProgressPhase,
   AnalysisChatReference,
   AnalysisChatSession,
@@ -422,7 +427,7 @@ export function AnalysisChat({
   const [restoring, setRestoring] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [turnLimitExhausted, setTurnLimitExhausted] = useState(false);
+  const [turnLimitRejected, setTurnLimitRejected] = useState(false);
   const [pendingTurn, setPendingTurn] = useState<PendingTurn | null>(null);
   const [progressPhase, setProgressPhase] = useState<AnalysisChatProgressPhase>("queued");
   const [cancelling, setCancelling] = useState(false);
@@ -442,6 +447,13 @@ export function AnalysisChat({
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const analysisRefRef = useRef(analysisRef);
   const patternScope = analysisRef.scope === "pattern";
+  const recordProgress = useCallback((progress: AnalysisChatProgress) => {
+    setProgressPhase(progress.phase);
+    const usage = analysisChatProgressTurnUsage(progress);
+    if (!usage) return;
+    setTurnLimitRejected(usage.used >= usage.max);
+    setSession((current) => current ? { ...current, turns_used: usage.used, max_turns: usage.max } : current);
+  }, []);
 
   const identity = useMemo(
     () =>
@@ -473,7 +485,7 @@ export function AnalysisChat({
     setRestoring(false);
     setBusy(false);
     setError(null);
-    setTurnLimitExhausted(false);
+    setTurnLimitRejected(false);
     setPendingTurn(null);
     setProgressPhase("queued");
     setCancelling(false);
@@ -522,7 +534,7 @@ export function AnalysisChat({
         setBusy(true);
         const updated = await resumeAnalysisChatTurn(
           restored,
-          (progress) => setProgressPhase(progress.phase),
+          recordProgress,
           controller.signal,
         );
         if (identityRef.current !== restoreIdentity) return;
@@ -538,6 +550,23 @@ export function AnalysisChat({
       } catch (restoreError) {
         if (restoreError instanceof Error && restoreError.name === "AbortError") return;
         if (identityRef.current !== restoreIdentity) return;
+        let reconciled: AnalysisChatSession | null = null;
+        if (restoredTurn) {
+          try {
+            reconciled = await getAnalysisChatSession(restoredTurn.sessionID, controller.signal);
+            if (identityRef.current !== restoreIdentity) return;
+            setSession(reconciled);
+          } catch (reconcileError) {
+            if (reconcileError instanceof Error && reconcileError.name === "AbortError") return;
+          }
+        }
+        const restoredRequestID = restoredTurn?.requestID;
+        if (restoredRequestID && reconciled?.messages.some((message) => message.request_id === restoredRequestID)) {
+          setQuestion("");
+          setPendingTurn(null);
+          setError(null);
+          return;
+        }
         if (restoredTurn && isAmbiguousAnalysisChatFailure(restoreError)) {
           setPendingTurn(restoredTurn);
           setError("The restored question may still be running. Retry shortly to reconnect.");
@@ -556,7 +585,7 @@ export function AnalysisChat({
       }
     })();
     return () => controller.abort();
-  }, [auth.status, features.analysis_chat, identity]);
+  }, [auth.status, features.analysis_chat, identity, recordProgress]);
 
   useEffect(() => {
     if (!expanded || (!session?.messages.length && !busy)) return;
@@ -574,8 +603,8 @@ export function AnalysisChat({
 
   if (!features.analysis_chat) return null;
 
-  const userTurns = session?.messages.filter((message) => message.role === "user").length ?? 0;
-  const turnLimitReached = turnLimitExhausted || userTurns >= 10;
+  const turnUsage = session ? analysisChatTurnUsage(session) : null;
+  const turnLimitReached = analysisChatTurnLimitReached(session, pendingTurn !== null, turnLimitRejected);
   const questions = patternScope ? patternSuggestedQuestions : suggestedQuestions;
 
   async function submit(nextQuestion?: string) {
@@ -621,7 +650,7 @@ export function AnalysisChat({
         activeTurn.sessionID,
         activeTurn.question,
         activeTurn.requestID,
-        (progress) => setProgressPhase(progress.phase),
+        recordProgress,
         controller.signal,
       );
       setSession(updated);
@@ -638,12 +667,13 @@ export function AnalysisChat({
         return;
       }
 
-      const ambiguousFailure = isAmbiguousAnalysisChatFailure(requestError);
-      if (activeSession && activeTurn && ambiguousFailure) {
+      let reconciled: AnalysisChatSession | null = null;
+      if (activeSession) {
         try {
-          const reconciled = await getAnalysisChatSession(activeSession.id, controller.signal);
+          reconciled = await getAnalysisChatSession(activeSession.id, controller.signal);
           setSession(reconciled);
-          if (reconciled.messages.some((message) => message.request_id === activeTurn?.requestID)) {
+          const activeRequestID = activeTurn?.requestID;
+          if (activeRequestID && reconciled.messages.some((message) => message.request_id === activeRequestID)) {
             setQuestion("");
             setPendingTurn(null);
             return;
@@ -659,6 +689,10 @@ export function AnalysisChat({
             return;
           }
         }
+      }
+
+      const ambiguousFailure = isAmbiguousAnalysisChatFailure(requestError);
+      if (activeSession && activeTurn && ambiguousFailure) {
         setPendingTurn(activeTurn);
         setError("The question may still be running. Retry shortly to reconnect to the same request.");
         return;
@@ -673,9 +707,10 @@ export function AnalysisChat({
         requestError.status === 429 &&
         requestError.message === analysisChatTurnLimitMessage;
       if (exhausted) {
-        setTurnLimitExhausted(true);
+        setTurnLimitRejected(true);
+        setSession((current) => current ? markAnalysisChatTurnLimitReached(current) : current);
         setPendingTurn(null);
-        setError(null);
+        setError(reconciled ? null : readableError(requestError));
       } else {
         const stillRunning =
           requestError instanceof AnalysisChatAPIError &&
@@ -1009,7 +1044,7 @@ export function AnalysisChat({
             <Box sx={{ px: { xs: 1.25, sm: 1.5 }, pb: 1.5 }}>
               {turnLimitReached ? (
                 <Alert severity="info" variant="outlined">
-                  This conversation reached its ten-turn limit.
+                  This conversation reached its attempt limit.
                 </Alert>
               ) : (
                 <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
@@ -1083,13 +1118,13 @@ export function AnalysisChat({
                   )}
                 </Stack>
               )}
-              {session && (
+              {turnUsage && (
                 <Typography
                   variant="caption"
                   color="text.secondary"
                   sx={{ display: "block", mt: 0.75, textAlign: "right" }}
                 >
-                  {turnLimitExhausted ? "10/10 attempts" : `${userTurns}/10 turns`}
+                  {`${turnUsage.used}/${turnUsage.max} attempts`}
                 </Typography>
               )}
             </Box>

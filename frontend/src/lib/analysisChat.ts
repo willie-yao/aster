@@ -54,6 +54,40 @@ export function limitAnalysisChatQuestion(value: string): string {
   return value.slice(0, end);
 }
 
+export function analysisChatTurnUsage(
+  session: AnalysisChatSession,
+): { used: number; max: number } | null {
+  if (!Number.isInteger(session.turns_used) || session.turns_used < 0) return null;
+  if (!Number.isInteger(session.max_turns) || session.max_turns <= 0) return null;
+  return { used: session.turns_used, max: session.max_turns };
+}
+
+export function analysisChatProgressTurnUsage(
+  progress: AnalysisChatProgress,
+): { used: number; max: number } | null {
+  if (!Number.isInteger(progress.turns_used) || (progress.turns_used ?? -1) < 0) return null;
+  if (!Number.isInteger(progress.max_turns) || (progress.max_turns ?? 0) <= 0) return null;
+  return { used: progress.turns_used!, max: progress.max_turns! };
+}
+
+export function markAnalysisChatTurnLimitReached(
+  session: AnalysisChatSession,
+): AnalysisChatSession {
+  const usage = analysisChatTurnUsage(session);
+  if (!usage || usage.used >= usage.max) return session;
+  return { ...session, turns_used: usage.max };
+}
+
+export function analysisChatTurnLimitReached(
+  session: AnalysisChatSession | null,
+  hasPendingRequest: boolean,
+  rejected: boolean,
+): boolean {
+  if (hasPendingRequest) return false;
+  const usage = session ? analysisChatTurnUsage(session) : null;
+  return rejected || usage !== null && usage.used >= usage.max;
+}
+
 async function apiError(response: Response): Promise<AnalysisChatAPIError> {
   const body = (await response.text()).trim();
   return new AnalysisChatAPIError(

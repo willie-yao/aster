@@ -116,7 +116,7 @@ func TestServiceCreateAndSend(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.ID == "" || created.Analysis.JUnitFile != "junit_01.xml" || len(created.Messages) != 0 {
+	if created.ID == "" || created.Analysis.JUnitFile != "junit_01.xml" || len(created.Messages) != 0 || created.TurnsUsed != 0 || created.MaxTurns != 10 {
 		t.Fatalf("created session = %+v", created)
 	}
 
@@ -124,7 +124,7 @@ func TestServiceCreateAndSend(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Messages) != 2 || got.Messages[0].Content != "What proves this?" {
+	if len(got.Messages) != 2 || got.Messages[0].Content != "What proves this?" || got.TurnsUsed != 1 || got.MaxTurns != 10 {
 		t.Fatalf("messages = %+v", got.Messages)
 	}
 	assistant := got.Messages[1]
@@ -229,6 +229,9 @@ func TestServiceFindPrefersRecentlyActiveSession(t *testing.T) {
 	}
 	if found.Active == nil || found.Active.RequestID != "turn-first-active" || found.Active.Question != "question" || found.Active.Phase == "" {
 		t.Fatalf("active turn = %+v", found.Active)
+	}
+	if found.TurnsUsed != 1 || found.MaxTurns != 10 {
+		t.Fatalf("pending usage = %d/%d", found.TurnsUsed, found.MaxTurns)
 	}
 	replica, err := NewService(t.Context(), dir, &fakeRunner{}, Options{Now: now, PollInterval: 10 * time.Millisecond})
 	if err != nil {
@@ -354,6 +357,13 @@ func TestServiceBoundsSessionsTurnsAndQuestions(t *testing.T) {
 	}
 	if _, err := service.Send(context.Background(), created.ID, "alice", testRequestID(t), "again"); !errors.Is(err, ErrTurnLimit) {
 		t.Fatalf("turn limit error = %v", err)
+	}
+	usage, err := service.Get(created.ID, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.TurnsUsed != 1 || usage.MaxTurns != 1 {
+		t.Fatalf("turn usage = %d/%d", usage.TurnsUsed, usage.MaxTurns)
 	}
 }
 
@@ -613,6 +623,13 @@ func TestServiceRunnerFailuresReachTurnLimit(t *testing.T) {
 	if attempts != 2 {
 		t.Fatalf("runner attempts = %d, want 2", attempts)
 	}
+	usage, err := service.Get(created.ID, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.TurnsUsed != 2 || usage.MaxTurns != 2 {
+		t.Fatalf("failure usage = %d/%d", usage.TurnsUsed, usage.MaxTurns)
+	}
 }
 
 func TestServiceRejectsPublicStateDirectory(t *testing.T) {
@@ -766,6 +783,13 @@ func TestServicePersistsFailedRequestOutcome(t *testing.T) {
 	if _, err := first.Send(context.Background(), created.ID, "alice", "turn-failure", "question"); !errors.Is(err, ErrRequestFailed) {
 		t.Fatalf("failed turn error = %v", err)
 	}
+	failed, err := first.Get(created.ID, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.TurnsUsed != 1 || failed.MaxTurns != 10 {
+		t.Fatalf("failed usage = %d/%d", failed.TurnsUsed, failed.MaxTurns)
+	}
 
 	succeeding := &fakeRunner{reply: Reply{Answer: "answer", Assessment: "supports"}}
 	second, err := NewService(t.Context(), dir, succeeding, Options{})
@@ -786,6 +810,13 @@ func TestServicePersistsFailedRequestOutcome(t *testing.T) {
 	succeeding.mu.Unlock()
 	if calls != 1 {
 		t.Fatalf("runner calls = %d, want 1 explicit retry", calls)
+	}
+	retried, err := second.Get(created.ID, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retried.TurnsUsed != 2 || retried.MaxTurns != 10 {
+		t.Fatalf("retry usage = %d/%d", retried.TurnsUsed, retried.MaxTurns)
 	}
 }
 
@@ -827,6 +858,13 @@ func TestServiceRecoversExpiredTurnLease(t *testing.T) {
 	if err := <-done; !errors.Is(err, ErrRequestOutcomeUnknown) {
 		t.Fatalf("expired lease completion error = %v", err)
 	}
+	unknown, err := second.Get(created.ID, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unknown.TurnsUsed != 1 || unknown.MaxTurns != 10 {
+		t.Fatalf("unknown usage = %d/%d", unknown.TurnsUsed, unknown.MaxTurns)
+	}
 	if _, err := second.Send(context.Background(), created.ID, "alice", "turn-after-stale", "question"); err != nil {
 		t.Fatal(err)
 	}
@@ -835,6 +873,13 @@ func TestServiceRecoversExpiredTurnLease(t *testing.T) {
 	runner.mu.Unlock()
 	if calls != 2 {
 		t.Fatalf("runner calls = %d, want abandoned plus explicit retry", calls)
+	}
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), time.Second)
+	defer waitCancel()
+	for _, service := range []*Service{first, second} {
+		if err := service.Wait(waitCtx); err != nil {
+			t.Fatalf("waiting for recovered turns: %v", err)
+		}
 	}
 }
 
@@ -975,11 +1020,13 @@ func TestServiceStreamReconnectsToPendingTurn(t *testing.T) {
 	}
 
 	var phases []string
+	var latestProgress Progress
 	progressed := make(chan struct{}, 1)
 	secondDone := make(chan error, 1)
 	go func() {
 		_, err := service.Stream(t.Context(), created.ID, "alice", "turn-stream", "question", func(progress Progress) error {
 			phases = append(phases, progress.Phase)
+			latestProgress = progress
 			select {
 			case progressed <- struct{}{}:
 			default:
@@ -999,6 +1046,9 @@ func TestServiceStreamReconnectsToPendingTurn(t *testing.T) {
 	}
 	if len(phases) == 0 {
 		t.Fatal("reconnected stream received no persisted progress")
+	}
+	if latestProgress.TurnsUsed != 1 || latestProgress.MaxTurns != 10 {
+		t.Fatalf("progress usage = %d/%d", latestProgress.TurnsUsed, latestProgress.MaxTurns)
 	}
 	runner.mu.Lock()
 	calls := len(runner.turns)
@@ -1044,6 +1094,13 @@ func TestServiceCancelAcrossInstances(t *testing.T) {
 	}
 	if err := second.Cancel(created.ID, "alice", "turn-cancel"); err != nil {
 		t.Fatalf("idempotent terminal cancel = %v", err)
+	}
+	cancelled, err := second.Get(created.ID, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cancelled.TurnsUsed != 1 || cancelled.MaxTurns != 10 {
+		t.Fatalf("cancelled usage = %d/%d", cancelled.TurnsUsed, cancelled.MaxTurns)
 	}
 }
 
