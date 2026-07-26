@@ -283,6 +283,7 @@ func TestParseAnalysisChatReplyScansKimiCandidates(t *testing.T) {
 		{name: "metadata wrapper", raw: `{"metadata":{"finish_reason":"stop"},"result":` + valid + `}`, want: "valid answer"},
 		{name: "final valid draft", raw: valid + `\n{"answer":"final answer","assessment":"explains","citations":[],"proposed_revision":null}`, want: "final answer"},
 		{name: "malformed final draft", raw: valid + `\n{"answer":"unfinished"`, want: "valid answer"},
+		{name: "nested object in malformed final draft", raw: valid + `\n{"answer":"unfinished","citations":[{"path":"x"}]`, want: "valid answer"},
 		{name: "quoted braces", raw: `{"answer":"value with {nested text}","assessment":"explains","citations":[],"proposed_revision":null}`, want: "value with {nested text}"},
 	}
 	for _, testCase := range cases {
@@ -295,6 +296,23 @@ func TestParseAnalysisChatReplyScansKimiCandidates(t *testing.T) {
 				t.Fatalf("reply=%+v stats=%+v", reply, stats)
 			}
 		})
+	}
+}
+
+func TestParseAnalysisChatReplyQuotedBracesDoNotEvictOuterCandidate(t *testing.T) {
+	answer := strings.Repeat("{", analysisChatMaxCandidates+20) + "still text"
+	raw, err := json.Marshal(map[string]any{
+		"answer": answer, "assessment": "explains", "citations": []any{}, "proposed_revision": nil,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply, stats, err := parseAnalysisChatReplyCandidates(string(raw), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply.Answer != answer || stats.CandidateCount != 1 {
+		t.Fatalf("reply answer bytes=%d candidates=%d", len(reply.Answer), stats.CandidateCount)
 	}
 }
 

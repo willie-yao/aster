@@ -61,7 +61,8 @@ func parseAnalysisChatReplyCandidates(raw string, evidence map[string]*analysisC
 			stats.Category, fmt.Errorf("response exceeds %d bytes", analysisChatMaxResponseBytes),
 		)
 	}
-	candidates := analysisChatJSONCandidates(raw)
+	scan := scanAnalysisChatJSONCandidates(raw)
+	candidates := scan.candidates
 	stats.CandidateCount = len(candidates)
 	if len(candidates) == 0 {
 		stats.Category = analysisChatValidationCandidate
@@ -69,9 +70,9 @@ func parseAnalysisChatReplyCandidates(raw string, evidence map[string]*analysisC
 	}
 	var bestErr error
 	for index := len(candidates) - 1; index >= 0; index-- {
-		reply, err := decodeAnalysisChatReplyCandidate(candidates[index], evidence)
+		reply, err := decodeAnalysisChatReplyCandidate(candidates[index].value, evidence)
 		if err == nil {
-			if hasTrailingUnrelatedAnalysisChatCandidate(candidates[index], candidates[index+1:]) {
+			if hasTrailingUnrelatedAnalysisChatCandidate(candidates[index], candidates[index+1:], scan.incomplete) {
 				stats.Category = analysisChatValidationJSON
 				return analysischat.Reply{}, stats, newAnalysisChatValidationError(
 					stats.Category, errors.New("response contains trailing unrelated JSON"),
@@ -88,17 +89,30 @@ func parseAnalysisChatReplyCandidates(raw string, evidence map[string]*analysisC
 	return analysischat.Reply{}, stats, bestErr
 }
 
-func hasTrailingUnrelatedAnalysisChatCandidate(selected string, trailing []string) bool {
+func hasTrailingUnrelatedAnalysisChatCandidate(
+	selected analysisChatJSONCandidate,
+	trailing []analysisChatJSONCandidate,
+	incomplete []analysisChatCandidateState,
+) bool {
 	for index, candidate := range trailing {
-		if strings.Contains(candidate, selected) || analysisChatCandidateLooksLikeReply(candidate) {
+		if strings.Contains(candidate.value, selected.value) || analysisChatCandidateLooksLikeReply(candidate.value) {
 			continue
 		}
 		related := false
 		for _, container := range trailing[index+1:] {
-			if strings.Contains(container, candidate) &&
-				(analysisChatCandidateLooksLikeReply(container) || strings.Contains(container, selected)) {
+			if strings.Contains(container.value, candidate.value) &&
+				(analysisChatCandidateLooksLikeReply(container.value) || strings.Contains(container.value, selected.value)) {
 				related = true
 				break
+			}
+		}
+		if !related {
+			for _, container := range incomplete {
+				if container.start < candidate.start &&
+					(container.start < selected.start || container.start > selected.end) {
+					related = true
+					break
+				}
 			}
 		}
 		if !related {
@@ -242,9 +256,29 @@ type analysisChatCandidateState struct {
 	escaped  bool
 }
 
+type analysisChatJSONCandidate struct {
+	value string
+	start int
+	end   int
+}
+
+type analysisChatCandidateScan struct {
+	candidates []analysisChatJSONCandidate
+	incomplete []analysisChatCandidateState
+}
+
 func analysisChatJSONCandidates(raw string) []string {
+	scan := scanAnalysisChatJSONCandidates(raw)
+	out := make([]string, len(scan.candidates))
+	for index, candidate := range scan.candidates {
+		out[index] = candidate.value
+	}
+	return out
+}
+
+func scanAnalysisChatJSONCandidates(raw string) analysisChatCandidateScan {
 	active := make([]analysisChatCandidateState, 0, 16)
-	candidates := make([]string, 0, 16)
+	candidates := make([]analysisChatJSONCandidate, 0, 16)
 	for index := 0; index < len(raw); index++ {
 		ch := raw[index]
 		closed := make([]analysisChatCandidateState, 0, 2)
@@ -279,18 +313,24 @@ func analysisChatJSONCandidates(raw string) []string {
 		if len(closed) > 0 {
 			sort.Slice(closed, func(i, j int) bool { return closed[i].start > closed[j].start })
 			for _, state := range closed {
-				candidates = append(candidates, raw[state.start:index+1])
+				candidates = append(candidates, analysisChatJSONCandidate{
+					value: raw[state.start : index+1], start: state.start, end: index,
+				})
 				if len(candidates) > analysisChatMaxCandidates {
 					candidates = candidates[len(candidates)-analysisChatMaxCandidates:]
 				}
 			}
 		}
-		if ch == '{' {
+		insideString := len(active) > 0 && active[0].inString
+		if ch == '{' && !insideString {
 			if len(active) == analysisChatMaxCandidates {
 				active = active[1:]
 			}
 			active = append(active, analysisChatCandidateState{start: index, depth: 1})
 		}
 	}
-	return candidates
+	return analysisChatCandidateScan{
+		candidates: candidates,
+		incomplete: append([]analysisChatCandidateState(nil), active...),
+	}
 }
