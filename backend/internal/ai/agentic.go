@@ -803,6 +803,7 @@ func (c *Client) doAnalyzeAgentic(
 
 	var finalContent string
 	var finalProviderItems []json.RawMessage
+	finalContentFromToolsFree := false
 	// Per-floor anti-thrash: track the calls + gcsBytes counters at the
 	// time we last nudged so we can detect whether the model has made
 	// progress on the unmet axis since then. A model that keeps coming
@@ -849,6 +850,7 @@ agentLoop:
 			if bestDraftContent != "" {
 				finalContent = bestDraftContent
 				finalProviderItems = bestDraftProviderItems
+				finalContentFromToolsFree = true
 				finalDraftObserved = true
 				recordTrace(loopCtx, TraceEvent{Kind: "context_headroom", Outcome: "best_draft", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
 				log.Printf("  ⚠ agentic context headroom exhausted; publishing the best prior draft without another provider request")
@@ -927,6 +929,7 @@ agentLoop:
 					if !fits {
 						finalContent = candidate
 						finalProviderItems = msg.ProviderItems
+						finalContentFromToolsFree = true
 						finalDraftObserved = parsedOK
 						recordTrace(loopCtx, TraceEvent{Kind: "context_headroom", Outcome: "retry_denied", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
 						recordTrace(loopCtx, TraceEvent{Kind: "context_headroom", Outcome: "best_draft", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
@@ -992,6 +995,7 @@ agentLoop:
 							if !fits {
 								finalContent = candidate
 								finalProviderItems = msg.ProviderItems
+								finalContentFromToolsFree = true
 								finalDraftObserved = true
 								recordTrace(loopCtx, TraceEvent{Kind: "context_headroom", Outcome: "retry_denied", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
 								break agentLoop
@@ -1033,6 +1037,7 @@ agentLoop:
 					if !fits {
 						finalContent = candidate
 						finalProviderItems = msg.ProviderItems
+						finalContentFromToolsFree = true
 						finalDraftObserved = true
 						recordTrace(loopCtx, TraceEvent{Kind: "context_headroom", Outcome: "retry_denied", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
 						recordTrace(loopCtx, TraceEvent{Kind: "context_headroom", Outcome: "best_draft", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
@@ -1068,6 +1073,7 @@ agentLoop:
 
 			finalContent = candidate
 			finalProviderItems = msg.ProviderItems
+			finalContentFromToolsFree = true
 			finalDraftObserved = parsedOK
 			break
 		}
@@ -1104,12 +1110,13 @@ agentLoop:
 	if !ok {
 		// An unparseable response to deterministic critique feedback is another
 		// repair attempt. It must share the same budget as the original re-prompt.
-		if draftPhase == "critique_retry" && strings.TrimSpace(finalContent) != "" {
+		if draftPhase == "critique_retry" && finalContentFromToolsFree {
 			if retry, admitted := critiqueRetries.admit(); admitted {
 				recordTrace(loopCtx, TraceEvent{Kind: "critique", Outcome: "unparseable_retry", Retry: retry})
 			} else if bestDraftContent != "" {
 				finalContent = bestDraftContent
 				finalProviderItems = bestDraftProviderItems
+				finalContentFromToolsFree = true
 				finalDraftObserved = true
 				parsed, ok = tryParseAnalysis(finalContent)
 				log.Printf("  ⚠ agentic critique: repair response did not parse; retry budget exhausted, keeping prior draft")
@@ -1119,6 +1126,7 @@ agentLoop:
 	if !ok {
 		var safe bool
 		finalContent, finalProviderItems, safe = c.runFinalizeRound(loopCtx, messages, headroom)
+		finalContentFromToolsFree = true
 		if !safe {
 			return nil, nil, ErrContextHeadroom
 		}
@@ -1127,6 +1135,7 @@ agentLoop:
 	if !ok && draftPhase == "critique_retry" && bestDraftContent != "" {
 		finalContent = bestDraftContent
 		finalProviderItems = bestDraftProviderItems
+		finalContentFromToolsFree = true
 		finalDraftObserved = true
 		parsed, ok = tryParseAnalysis(finalContent)
 		log.Printf("  ⚠ agentic critique: counted finalize did not parse; keeping prior draft")

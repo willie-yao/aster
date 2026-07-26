@@ -1548,6 +1548,34 @@ func TestAgentic_UnparseableInLoopRepairCannotExceedBudget(t *testing.T) {
 	}
 }
 
+func TestAgentic_BlankInLoopRepairCannotExceedBudget(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal(puntyFinalJSON))
+	srv.push(200, chatRespFinal(""))
+	srv.push(200, chatRespFinal(cleanFinalJSON))
+
+	client := newAgenticTestClient(t, srv.URL)
+	key := "agentic:test:blank-in-loop-budget"
+	summary, analysis, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
+			MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+			Timeout: 30 * time.Second, CritiqueMaxRetries: 1,
+		}), key, "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 2 {
+		t.Fatalf("call count = %d, want 2", got)
+	}
+	if summary.Summary != "shallow" || analysis.CritiquePassed {
+		t.Fatalf("blank repair did not retain prior draft: summary=%+v analysis=%+v", summary, analysis)
+	}
+	if _, ok := client.Cache().Get(key); ok {
+		t.Fatal("failing retained draft was cached")
+	}
+}
+
 func TestAgentic_TwoUnparseableInLoopRepairsRetainPriorDraft(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
