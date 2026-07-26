@@ -580,7 +580,7 @@ func summarizeBenchmarkTrace(snapshot ai.AnalysisTraceFile) benchmarkTraceSummar
 				switch event.Outcome {
 				case "retry":
 					summary.critiqueRetries++
-				case "evidence_retry":
+				case "evidence_retry", "unparseable_retry":
 					summary.evidenceRetries++
 				case "accepted_uncached":
 					summary.acceptedUncached++
@@ -794,6 +794,7 @@ func TestSummarizeBenchmarkTrace(t *testing.T) {
 		{Kind: "semantic_judge", Outcome: "revised"},
 		{Kind: "critique", Outcome: "retry"},
 		{Kind: "critique", Outcome: "evidence_retry"},
+		{Kind: "critique", Outcome: "unparseable_retry"},
 		{Kind: "critique", Outcome: "accepted_uncached"},
 		{Kind: "model_request", Outcome: "success", InputTokens: 10, OutputTokens: 4},
 		{Kind: "model_request", Outcome: "error", InputTokens: 3, OutputTokens: 1},
@@ -810,7 +811,7 @@ func TestSummarizeBenchmarkTrace(t *testing.T) {
 	if got.semanticJudgeOutcome != "revised" {
 		t.Fatalf("semantic judge outcome = %q", got.semanticJudgeOutcome)
 	}
-	if got.critiqueRetries != 1 || got.evidenceRetries != 1 || got.acceptedUncached != 1 {
+	if got.critiqueRetries != 1 || got.evidenceRetries != 2 || got.acceptedUncached != 1 {
 		t.Fatalf("critique summary = retries:%d evidence:%d uncached:%d", got.critiqueRetries, got.evidenceRetries, got.acceptedUncached)
 	}
 	if got.modelRequests != 2 || got.modelFailures != 1 || got.toolFailures != 1 || got.inputTokens != 13 || got.outputTokens != 5 {
