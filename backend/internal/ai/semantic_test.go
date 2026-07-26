@@ -83,6 +83,58 @@ func TestAgentic_SemanticJudge_ObjectsThenReprompts(t *testing.T) {
 	}
 }
 
+func TestAgentic_SemanticJudgeErrorKeepsPassingRepair(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal(providerIDPuntFinalJSON))
+	passing := `{"summary":"providerID blocked","is_transient":false,"root_cause":"The worker Node registered, but providerID remained empty because cloud-node-manager could not reach the Kubernetes API.","severity":"High","suggested_fix":"Restart cloud-node-manager with the correct Kubernetes API endpoint.","relevant_files":[]}`
+	srv.push(200, chatRespFinal(passing))
+	srv.push(200, chatRespFinal("not json"))
+
+	client := newAgenticTestClient(t, srv.URL)
+	key := "agentic:test:semantic-error-keeps-passing-repair"
+	_, analysis, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
+			MaxIters: 4, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+			Timeout: 30 * time.Second, CritiqueMaxRetries: 1, SemanticJudge: true,
+		}), key, "sys", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !analysis.CritiquePassed || !strings.Contains(analysis.SuggestedFix, "Restart cloud-node-manager") {
+		t.Fatalf("semantic judge error discarded passing repair: %+v", analysis)
+	}
+	if _, ok := client.Cache().Get(key); !ok {
+		t.Fatal("selected passing repair was not cached")
+	}
+}
+
+func TestAgentic_UnparseableSemanticRepairKeepsSelectedDraft(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	initial := `{"summary":"sound fallback","is_transient":false,"root_cause":"control-plane subnet route table missing","severity":"High","suggested_fix":"Set the control-plane subnet route table.","relevant_files":[]}`
+	srv.push(200, chatRespFinal(initial))
+	srv.push(200, chatRespFinal(`{"objections":["verify the diagnosis"]}`))
+	srv.push(200, chatRespFinal("not json"))
+	srv.push(200, chatRespFinal("still not json"))
+
+	client := newAgenticTestClient(t, srv.URL)
+	_, analysis, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
+			MaxIters: 4, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+			Timeout: 30 * time.Second, CritiqueMaxRetries: 1, SemanticJudge: true,
+		}), "agentic:test:semantic-unparseable-fallback", "sys", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if analysis.RootCause != "control-plane subnet route table missing" || analysis.SuggestedFix == "Unable to parse structured response" {
+		t.Fatalf("semantic parse failure discarded selected draft: %+v", analysis)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 4 {
+		t.Fatalf("call count = %d, want 4", got)
+	}
+}
+
 // TestApplySemanticJudgePostLoop_RefinalizesOnObjection verifies the post-loop
 // judge: on objections it refinalizes, and accepts the revised draft only when
 // it still clears the deterministic critique.

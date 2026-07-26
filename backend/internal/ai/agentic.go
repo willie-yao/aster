@@ -978,10 +978,8 @@ agentLoop:
 			// below.
 			if parsed, ok := parsedCandidate, parsedOK; ok {
 				out := candidateCritique
-				if !out.Passed || !in.Opts.SemanticJudge || semanticJudged || state.bestDraft == nil {
-					semanticAccepted := draftPhase == "semantic_retry" && state.judgeObjected
-					state.considerDraft(candidateDraft, semanticAccepted)
-				}
+				semanticAccepted := draftPhase == "semantic_retry" && state.judgeObjected
+				state.considerDraft(candidateDraft, semanticAccepted)
 				if out.Passed {
 					recordTrace(loopCtx, TraceEvent{Kind: "critique", Outcome: "passed"})
 					// Second-line semantic judge: a focused LLM review that
@@ -1177,13 +1175,13 @@ agentLoop:
 			}
 		}
 	}
-	if !ok && draftPhase == "critique_retry" && state.bestDraft != nil {
+	if !ok && state.bestDraft != nil {
 		finalContent = state.bestDraft.content
 		finalProviderItems = state.bestDraft.providerItems
 		finalContentFromToolsFree = true
 		finalDraftObserved = true
 		parsed, ok = tryParseAnalysis(finalContent)
-		log.Printf("  ⚠ agentic critique: counted finalize did not parse; keeping prior draft")
+		log.Printf("  ⚠ agentic repair: finalize did not parse; keeping selected draft")
 	}
 	if !ok {
 		// Last resort: synthesize an analysisResponse from the raw text so the
@@ -1231,7 +1229,7 @@ func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, m
 	}
 	if out.Passed {
 		recordTrace(ctx, TraceEvent{Kind: "critique", Outcome: "passed"})
-		if opts.SemanticJudge {
+		if opts.SemanticJudge && !state.judgeRan {
 			c.applySemanticJudgePostLoop(ctx, state, messages, finalContent, finalProviderItems, parsed, contextHeadroomFor(opts))
 		}
 		state.critiquePassed = state.bestDraft != nil && state.bestDraft.quality.Passed
@@ -1377,8 +1375,8 @@ var rootCauseStopwords = map[string]bool{
 	"to": true, "was": true, "were": true, "with": true,
 }
 
-// rootCauseMateriallyChanged ignores formatting and allows supporting detail
-// when at least half of the smaller diagnosis token set remains shared.
+// rootCauseMateriallyChanged ignores formatting and allows only pure supporting
+// detail additions without new evidence.
 func rootCauseMateriallyChanged(a, b string) bool {
 	if strings.EqualFold(strings.Join(strings.Fields(a), " "), strings.Join(strings.Fields(b), " ")) {
 		return false
@@ -1398,7 +1396,7 @@ func rootCauseMateriallyChanged(a, b string) bool {
 	if len(bTokens) < denominator {
 		denominator = len(bTokens)
 	}
-	return common*2 < denominator
+	return common != denominator
 }
 
 func rootCauseTokens(rootCause string) map[string]bool {

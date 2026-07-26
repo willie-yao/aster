@@ -1370,6 +1370,9 @@ func TestRootCauseMateriallyChanged(t *testing.T) {
 	if !rootCauseMateriallyChanged(base, "Azure subscription quota exhaustion prevented virtual machine creation.") {
 		t.Fatal("different diagnosis was not material")
 	}
+	if !rootCauseMateriallyChanged("Azure quota exhaustion prevented virtual machine creation.", "Azure authentication failure prevented virtual machine creation.") {
+		t.Fatal("near-overlap diagnosis replacement was not material")
+	}
 }
 
 func TestRecordEvidenceReadRevisionCountsUniquePaths(t *testing.T) {
