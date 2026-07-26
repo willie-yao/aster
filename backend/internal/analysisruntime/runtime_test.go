@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
@@ -117,5 +118,17 @@ triggers: ["boom"]
 	}
 	if ids["engine.kubernetes.machine-node-providerid"] {
 		t.Fatal("filesystem-only project loaded Kubernetes skills")
+	}
+}
+
+func TestAnalysisChatAgentTimeout(t *testing.T) {
+	if got := analysisChatAgentTimeout(45*time.Minute, 10*time.Minute); got != 10*time.Minute {
+		t.Fatalf("operator timeout = %v", got)
+	}
+	if got := analysisChatAgentTimeout(time.Minute, 0); got != time.Minute {
+		t.Fatalf("short project timeout = %v", got)
+	}
+	if got := analysisChatAgentTimeout(45*time.Minute, 0); got != analysisChatDefaultTimeout {
+		t.Fatalf("legacy default timeout = %v", got)
 	}
 }

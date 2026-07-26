@@ -364,6 +364,7 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | `fetcher.extraEnv` | Extra env such as `GITHUB_TOKEN`, `EMAIL_SMTP_PASSWORD`, or the `ISSUE_TOKEN` / `FIX_TOKEN` write tokens (see [Automatic issues and fix PRs](#automatic-issues-and-fix-prs)). |
 | `ingress.enabled`, `ingress.hosts`, `ingress.tls` | Public read path. |
 | `server.chat.enabled` | Enable authenticated analysis conversations. Requires `ai.enabled`. |
+| `server.chat.timeout` | Per-turn model timeout. Defaults to `2m`; slow local providers may use up to `30m`. |
 | `server.chat.correctionsEnabled` | Enable explicit promotion and revocation of evidence-backed correction overlays. |
 | `server.chat.sourceInvestigation.enabled` | Enable owner-bound read-only source investigation controls and Orka agent Tasks. |
 | `server.chat.sourceInvestigation.serviceAccountName` | Operator-managed dedicated ServiceAccount name when `orka.rbac.create=false`. |
@@ -402,6 +403,7 @@ helm upgrade --install capz deploy/helm/prow-ai-dashboard \
   --set ai.enabled=true \
   --set server.replicaCount=2 \
   --set server.chat.enabled=true \
+  --set server.chat.timeout=10m \
   --set server.chat.correctionsEnabled=true \
   --set server.chat.sourceInvestigation.enabled=true \
   --set server.actions.mode=oauth \
@@ -416,7 +418,8 @@ The chart stores chat state at `<persistence.mountPath>/.analysis-chat`, mounts
 the shared volume read-write in the server, and keeps the directory unavailable
 through `/data/*`. Turns continue when a browser stream disconnects, persist
 non-sensitive investigation phases, and can be cancelled from any replica.
-Tune retention and capacity with `server.chat.sessionTTL`,
+Tune the provider turn bound with `server.chat.timeout`. Tune retention and
+capacity with `server.chat.sessionTTL`,
 `server.chat.maxSessions`, `server.chat.maxSessionsPerOwner`,
 `server.chat.maxActiveTurnsPerOwner`, and `server.chat.requestsPerMinute`.
 Correction promotion is disabled by default. When enabled, the server writes a

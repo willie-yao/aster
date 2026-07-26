@@ -277,3 +277,28 @@ func TestAnalysisChatServiceOptionsRejectInvalidEnv(t *testing.T) {
 		}
 	})
 }
+
+func TestAnalysisChatTimeoutFromEnv(t *testing.T) {
+	t.Run("default", func(t *testing.T) {
+		t.Setenv("ANALYSIS_CHAT_TIMEOUT", "")
+		got, err := analysisChatTimeoutFromEnv()
+		if err != nil || got != 2*time.Minute {
+			t.Fatalf("timeout=%v err=%v", got, err)
+		}
+	})
+	t.Run("slow provider", func(t *testing.T) {
+		t.Setenv("ANALYSIS_CHAT_TIMEOUT", "10m")
+		got, err := analysisChatTimeoutFromEnv()
+		if err != nil || got != 10*time.Minute {
+			t.Fatalf("timeout=%v err=%v", got, err)
+		}
+	})
+	for _, value := range []string{"0s", "31m", "not-a-duration"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("ANALYSIS_CHAT_TIMEOUT", value)
+			if _, err := analysisChatTimeoutFromEnv(); err == nil {
+				t.Fatalf("invalid timeout %q was accepted", value)
+			}
+		})
+	}
+}

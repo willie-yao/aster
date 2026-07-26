@@ -248,19 +248,17 @@ func TestReconcile_PartialSuccessTracksAndCounts(t *testing.T) {
 	}
 }
 
-func TestParseJSONObject_ToleratesLiteralTabsAndNewlines(t *testing.T) {
+func TestParseReviewIssues_ToleratesLiteralTabsAndNewlines(t *testing.T) {
 	// A model copying a code snippet verbatim emits literal tabs/newlines inside
-	// the JSON string values, which strict JSON rejects. parseJSONObject must
+	// the JSON string values, which strict JSON rejects. parseReviewIssues must
 	// recover by escaping them.
 	raw := "{\"issues\": [\"func F() {\n\treturn\n}\"]}"
-	var v struct {
-		Issues []string `json:"issues"`
+	issues, err := parseReviewIssues(raw)
+	if err != nil {
+		t.Fatalf("parseReviewIssues: %v", err)
 	}
-	if err := parseJSONObject(raw, &v); err != nil {
-		t.Fatalf("parseJSONObject: %v", err)
-	}
-	if len(v.Issues) != 1 || !strings.Contains(v.Issues[0], "return") {
-		t.Errorf("parsed issues = %+v", v.Issues)
+	if len(issues) != 1 || !strings.Contains(issues[0], "return") {
+		t.Errorf("parsed issues = %+v", issues)
 	}
 }
 
@@ -367,5 +365,101 @@ func TestGeneratePreviewWithContextRejectsInvalidContextBeforeGeneration(t *test
 	}
 	if agent.spec.Instruction != "" {
 		t.Fatal("agent ran before context validation")
+	}
+}
+
+func TestParseJSONObjectSelectsFinalValidReviewObject(t *testing.T) {
+	raw := `The change includes code like if err != nil { return retry() }.
+First draft: {"issues":["stale concern"]}
+Final answer:
+` + "```json\n" + `{"issues":[],"provider_note":"review complete"}` + "\n```"
+	issues, err := parseReviewIssues(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 0 {
+		t.Fatalf("issues = %#v", issues)
+	}
+}
+
+func TestParseJSONObjectHandlesBracesInsideStrings(t *testing.T) {
+	raw := `reasoning {not JSON} then {"issues":["check map[string]any{\"key\": \"value\"}"]}`
+	issues, err := parseReviewIssues(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 1 || !strings.Contains(issues[0], "map[string]") {
+		t.Fatalf("issues = %#v", issues)
+	}
+}
+
+func TestCritiqueAgentFixRequiresIssuesField(t *testing.T) {
+	completer := &fakeCompleter{critique: `{}`}
+	_, err := critiqueAgentFix(t.Context(), completer, systemicPattern("etcd"), map[string]string{"a.go": "package a\n"}, "diff", nil)
+	if err == nil || !strings.Contains(err.Error(), "issues field is required") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestParseReviewIssuesFallsThroughInvalidOuterWrapper(t *testing.T) {
+	raw := `reasoning { final: {"issues":[]} }`
+	issues, err := parseReviewIssues(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 0 {
+		t.Fatalf("issues = %#v", issues)
+	}
+}
+
+func TestParseReviewIssuesPrefersValidOuterResponse(t *testing.T) {
+	raw := `{"issues":["outer issue contains {nested text}"]}`
+	issues, err := parseReviewIssues(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 1 || issues[0] != "outer issue contains {nested text}" {
+		t.Fatalf("issues = %#v", issues)
+	}
+}
+
+func TestParseReviewIssuesIgnoresQuotedProseBrace(t *testing.T) {
+	raw := `The code checks strings.Contains(s, "{"). Final: {"issues":[]}`
+	issues, err := parseReviewIssues(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 0 {
+		t.Fatalf("issues = %#v", issues)
+	}
+}
+
+func TestParseReviewIssuesOrdersEscapedDraftByOriginalOffset(t *testing.T) {
+	raw := "{\"issues\":[\"" + strings.Repeat("\n", 50) + "earlier\"]}\n{\"issues\":[]}"
+	issues, err := parseReviewIssues(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 0 {
+		t.Fatalf("earlier escaped draft won: %#v", issues)
+	}
+}
+
+func TestParseReviewIssuesRejectsOversizedResponse(t *testing.T) {
+	raw := strings.Repeat("x", maxReviewResponseBytes+1) + `{"issues":[]}`
+	if _, err := parseReviewIssues(raw); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestReviewJSONCandidatesCapsVerboseBraceOutput(t *testing.T) {
+	raw := strings.Repeat("{not-json}", maxReviewCandidates+20) + `{"issues":[]}`
+	candidates := reviewJSONCandidates(raw)
+	if len(candidates) != maxReviewCandidates {
+		t.Fatalf("candidate count = %d", len(candidates))
+	}
+	issues, err := parseReviewIssues(raw)
+	if err != nil || len(issues) != 0 {
+		t.Fatalf("issues=%v err=%v", issues, err)
 	}
 }

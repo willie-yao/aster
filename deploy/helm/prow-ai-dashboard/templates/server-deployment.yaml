@@ -37,6 +37,9 @@
 {{- if and $chat (not .Values.server.chat.sessionTTL) -}}
 {{- fail "server.chat.sessionTTL is required" -}}
 {{- end -}}
+{{- if and $chat (not .Values.server.chat.timeout) -}}
+{{- fail "server.chat.timeout is required" -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -118,6 +121,8 @@ spec:
             {{- end }}
             - name: ANALYSIS_CHAT_STATE_DIR
               value: {{ printf "%s/.analysis-chat" .Values.persistence.mountPath | quote }}
+            - name: ANALYSIS_CHAT_TIMEOUT
+              value: {{ .Values.server.chat.timeout | quote }}
             - name: ANALYSIS_CHAT_SESSION_TTL
               value: {{ .Values.server.chat.sessionTTL | quote }}
             - name: ANALYSIS_CHAT_MAX_SESSIONS

@@ -46,22 +46,107 @@ type genParams struct {
 // critiqueSystemPrompt is the reviewer contract shared by the fix critique.
 const critiqueSystemPrompt = `You are a skeptical senior code reviewer checking a proposed fix for a CI failure before it becomes a draft PR. Judge whether the change is a reasonable, correct starting point. Flag concrete defects ONLY: wrong logic, values, or comparisons; references to undefined symbols, fields, or unimported packages; changes that break adjacent code; or a change that does not actually address the stated root cause. Do NOT flag style, formatting, or minor preferences, and remember it is a draft for a human to refine. If the change is a reasonable fix, return no issues.`
 
-// parseJSONObject extracts the first {...} object from s and unmarshals it,
-// tolerating prose or code fences around the JSON.
-func parseJSONObject(s string, v any) error {
-	start := strings.Index(s, "{")
-	end := strings.LastIndex(s, "}")
-	if start < 0 || end < start {
-		return fmt.Errorf("no JSON object in response")
+const (
+	maxReviewResponseBytes = 1 << 20
+	maxReviewCandidates    = 256
+)
+
+// parseReviewIssues selects the final usable review object from a response,
+// tolerating prose, code snippets, repeated drafts, and code fences.
+func parseReviewIssues(s string) ([]string, error) {
+	if len(s) > maxReviewResponseBytes {
+		return nil, fmt.Errorf("review response exceeds %d bytes", maxReviewResponseBytes)
 	}
-	obj := s[start : end+1]
-	if err := json.Unmarshal([]byte(obj), v); err == nil {
-		return nil
+	candidates := reviewJSONCandidates(s)
+	var lastErr error
+	for i := len(candidates) - 1; i >= 0; i-- {
+		for _, candidate := range []string{candidates[i], escapeStringControlChars(candidates[i])} {
+			issues, err := decodeReviewIssues(candidate)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			return issues, nil
+		}
 	}
-	// Models copying verbatim code snippets into string values often emit
-	// literal tabs and newlines inside JSON strings, which strict JSON rejects.
-	// Escape raw control characters inside string literals and retry.
-	return json.Unmarshal([]byte(escapeStringControlChars(obj)), v)
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("no JSON review object in response")
+}
+
+func decodeReviewIssues(value string) ([]string, error) {
+	var response struct {
+		Issues *[]string `json:"issues"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(value))
+	if err := decoder.Decode(&response); err != nil {
+		return nil, err
+	}
+	if response.Issues == nil {
+		return nil, fmt.Errorf("issues field is required")
+	}
+	return *response.Issues, nil
+}
+
+type reviewCandidateState struct {
+	start    int
+	depth    int
+	inString bool
+	escaped  bool
+}
+
+func reviewJSONCandidates(s string) []string {
+	active := make([]reviewCandidateState, 0, 16)
+	candidates := make([]string, 0, 16)
+	for index := 0; index < len(s); index++ {
+		ch := s[index]
+		closed := make([]reviewCandidateState, 0, 2)
+		next := active[:0]
+		for _, state := range active {
+			if state.inString {
+				if state.escaped {
+					state.escaped = false
+				} else if ch == '\\' {
+					state.escaped = true
+				} else if ch == '"' {
+					state.inString = false
+				}
+				next = append(next, state)
+				continue
+			}
+			switch ch {
+			case '"':
+				state.inString = true
+			case '{':
+				state.depth++
+			case '}':
+				state.depth--
+			}
+			if state.depth == 0 {
+				closed = append(closed, state)
+			} else {
+				next = append(next, state)
+			}
+		}
+		active = next
+		if len(closed) > 0 {
+			sort.Slice(closed, func(i, j int) bool { return closed[i].start > closed[j].start })
+			for _, state := range closed {
+				candidates = append(candidates, s[state.start:index+1])
+				if len(candidates) > maxReviewCandidates {
+					candidates = candidates[len(candidates)-maxReviewCandidates:]
+				}
+			}
+		}
+		if ch == '{' {
+			if len(active) == maxReviewCandidates {
+				active = active[1:]
+			}
+			active = append(active, reviewCandidateState{start: index, depth: 1})
+		}
+	}
+	return candidates
 }
 
 // escapeStringControlChars escapes raw control characters (tab, newline, and
