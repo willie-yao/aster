@@ -107,6 +107,9 @@ func TestAgentic_SemanticJudgeErrorKeepsPassingRepair(t *testing.T) {
 	if _, ok := client.Cache().Get(key); !ok {
 		t.Fatal("selected passing repair was not cached")
 	}
+	if got := atomic.LoadInt32(&srv.calls); got != 3 {
+		t.Fatalf("call count = %d, want 3 (draft + repair + semantic judge)", got)
+	}
 }
 
 func TestAgentic_UnparseableSemanticRepairKeepsSelectedDraft(t *testing.T) {

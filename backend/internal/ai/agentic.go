@@ -1247,6 +1247,11 @@ func (c *Client) runBoundedCritiqueRepair(ctx context.Context, state *agentState
 	retry, _ := retries.admit()
 
 	updated := critiqueDraft(parsed, state.readArtifactsFull, state.readArtifactsBase, matchSkillsForDraft(state, parsed), state.consecutiveFailures)
+	if len(updated.MissingSkillEvidence) > 0 {
+		if treeSet := state.artifactTreeSet(); treeSet != nil {
+			pruneAbsentSkillEvidence(parsed, &updated, treeSet)
+		}
+	}
 	if critiqueRepairNeedsTools(updated) {
 		schemas := state.registry.Schemas(state.enabledTools)
 		var parallelToolCalls *bool
@@ -1303,6 +1308,11 @@ func (c *Client) runBoundedCritiqueRepair(ctx context.Context, state *agentState
 	state.considerFallbackDraft(candidate, false)
 	state.considerDraft(candidate, false)
 	state.critiquePassed = state.bestDraft.quality.Passed
+	if state.critiquePassed && opts.SemanticJudge && !state.judgeRan {
+		selected := state.bestDraft
+		c.applySemanticJudgePostLoop(ctx, state, repairMessages, selected.content, selected.providerItems, selected.parsed, contextHeadroomFor(opts))
+		state.critiquePassed = state.bestDraft.quality.Passed
+	}
 	recordTrace(ctx, TraceEvent{
 		Kind: "critique_retry", Outcome: "completed", Retry: retry, RetryAdmitted: true,
 		InitialIssueCount: len(initial.Matches()), RevisedIssueCount: len(out.Matches()),
