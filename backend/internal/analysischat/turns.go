@@ -148,7 +148,7 @@ func (s *Service) startTurn(ctx context.Context, id, owner, requestID, question 
 			}
 			switch previous.Status {
 			case requestSucceeded:
-				result.View = cloneSessionView(current.View)
+				result.View = sessionView(current)
 				return changed, nil
 			case requestFailed:
 				return changed, persistedRequestError(previous.FailureKind)
@@ -176,7 +176,7 @@ func (s *Service) startTurn(ctx context.Context, id, owner, requestID, question 
 		state.OwnerRequests[owner] = append(state.OwnerRequests[owner], now)
 		current.Requests[requestID] = persistedRequest{QuestionHash: questionHash, Status: requestPending}
 		current.Active = &persistedActiveTurn{
-			RequestID: requestID, LeaseID: leaseID,
+			RequestID: requestID, Question: question, LeaseID: leaseID,
 			ExpiresAt: now.Add(s.opts.TurnLeaseTTL), Phase: PhaseQueued, UpdatedAt: now,
 		}
 		resolved := restoreResolved(current.Resolved)
@@ -340,7 +340,7 @@ func (s *Service) requestSnapshot(id, owner, requestID string) (requestSnapshot,
 		snapshot.Status = request.Status
 		snapshot.FailureKind = request.FailureKind
 		if request.Status == requestSucceeded {
-			snapshot.View = cloneSessionView(current.View)
+			snapshot.View = sessionView(current)
 		}
 		if current.Active != nil && current.Active.RequestID == requestID {
 			snapshot.Progress = Progress{

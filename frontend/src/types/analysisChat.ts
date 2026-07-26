@@ -66,6 +66,7 @@ export interface AnalysisChatSession {
   updated_at: string;
   expires_at: string;
   messages: AnalysisChatMessage[];
+  active?: AnalysisChatActiveTurn;
 }
 
 export type AnalysisChatProgressPhase =
@@ -80,4 +81,8 @@ export interface AnalysisChatProgress {
   request_id: string;
   phase: AnalysisChatProgressPhase;
   updated_at: string;
+}
+
+export interface AnalysisChatActiveTurn extends AnalysisChatProgress {
+  question?: string;
 }

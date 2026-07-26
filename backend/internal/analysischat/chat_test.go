@@ -153,6 +153,155 @@ func TestServiceCreateAndSend(t *testing.T) {
 	}
 }
 
+func TestServiceFindLatestSessionAcrossInstances(t *testing.T) {
+	dir := t.TempDir()
+	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
+	var nowNanos atomic.Int64
+	start := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	nowNanos.Store(start.UnixNano())
+	now := func() time.Time { return time.Unix(0, nowNanos.Load()) }
+	ref := AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}
+	first, err := NewService(t.Context(), dir, &fakeRunner{}, Options{Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	older, err := first.Create(ref, "alice", "create-older")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nowNanos.Store(start.Add(time.Minute).UnixNano())
+	newer, err := first.Create(ref, "alice", "create-newer")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := NewService(t.Context(), dir, &fakeRunner{}, Options{Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found, err := second.Find(ref, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found.ID != newer.ID || found.ID == older.ID {
+		t.Fatalf("found session = %q, want latest %q", found.ID, newer.ID)
+	}
+	if _, err := second.Find(ref, "bob"); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("cross-owner find error = %v", err)
+	}
+}
+
+func TestServiceFindPrefersRecentlyActiveSession(t *testing.T) {
+	dir := t.TempDir()
+	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
+	var nowNanos atomic.Int64
+	start := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	nowNanos.Store(start.UnixNano())
+	now := func() time.Time { return time.Unix(0, nowNanos.Load()) }
+	runner := &fakeRunner{started: make(chan struct{}, 1), release: make(chan struct{})}
+	service, err := NewService(t.Context(), dir, runner, Options{Now: now, PollInterval: 10 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}
+	first, err := service.Create(ref, "alice", "create-first-active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nowNanos.Store(start.Add(time.Minute).UnixNano())
+	second, err := service.Create(ref, "alice", "create-second-idle")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nowNanos.Store(start.Add(2 * time.Minute).UnixNano())
+	done := make(chan error, 1)
+	go func() {
+		_, err := service.Stream(t.Context(), first.ID, "alice", "turn-first-active", "question", nil)
+		done <- err
+	}()
+	<-runner.started
+	found, err := service.Find(ref, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found.ID != first.ID || found.ID == second.ID {
+		t.Fatalf("found active session = %q, want %q", found.ID, first.ID)
+	}
+	if found.Active == nil || found.Active.RequestID != "turn-first-active" || found.Active.Question != "question" || found.Active.Phase == "" {
+		t.Fatalf("active turn = %+v", found.Active)
+	}
+	replica, err := NewService(t.Context(), dir, &fakeRunner{}, Options{Now: now, PollInterval: 10 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromReplica, err := replica.Get(first.ID, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fromReplica.Active == nil || fromReplica.Active.RequestID != found.Active.RequestID || fromReplica.Active.Question != found.Active.Question {
+		t.Fatalf("replica active turn = %+v", fromReplica.Active)
+	}
+	close(runner.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestServiceFindRejectsChangedAnalysis(t *testing.T) {
+	dir := t.TempDir()
+	oldGenerated := "2026-07-23T12:00:00Z"
+	newGenerated := "2026-07-26T12:00:00Z"
+	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", oldGenerated)))
+	service, err := NewService(t.Context(), dir, &fakeRunner{}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldRef := AnalysisRef{
+		JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster", AnalysisGeneratedAt: oldGenerated,
+	}
+	if _, err := service.Create(oldRef, "alice", "create-old-analysis"); err != nil {
+		t.Fatal(err)
+	}
+	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", newGenerated)))
+	if _, err := service.Find(oldRef, "alice"); !errors.Is(err, ErrAnalysisChanged) {
+		t.Fatalf("stale analysis find error = %v", err)
+	}
+	newRef := oldRef
+	newRef.AnalysisGeneratedAt = newGenerated
+	if _, err := service.Find(newRef, "alice"); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("changed analysis attached old session: %v", err)
+	}
+}
+
+func TestServiceFindExpiresAndCreatesNewSession(t *testing.T) {
+	dir := t.TempDir()
+	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
+	var nowNanos atomic.Int64
+	start := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	nowNanos.Store(start.UnixNano())
+	now := func() time.Time { return time.Unix(0, nowNanos.Load()) }
+	service, err := NewService(t.Context(), dir, &fakeRunner{}, Options{SessionTTL: time.Minute, Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}
+	expired, err := service.Create(ref, "alice", "create-expired")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nowNanos.Store(start.Add(time.Minute).UnixNano())
+	if _, err := service.Find(ref, "alice"); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("expired find error = %v", err)
+	}
+	replacement, err := service.Create(ref, "alice", "create-replacement")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacement.ID == expired.ID {
+		t.Fatalf("replacement reused expired ID %q", replacement.ID)
+	}
+}
+
 func TestServiceResolveRejectsAmbiguousAndChangedAnalysis(t *testing.T) {
 	dir := t.TempDir()
 	writeJobDetail(t, dir, testDetail(
@@ -826,15 +975,24 @@ func TestServiceStreamReconnectsToPendingTurn(t *testing.T) {
 	}
 
 	var phases []string
+	progressed := make(chan struct{}, 1)
 	secondDone := make(chan error, 1)
 	go func() {
 		_, err := service.Stream(t.Context(), created.ID, "alice", "turn-stream", "question", func(progress Progress) error {
 			phases = append(phases, progress.Phase)
+			select {
+			case progressed <- struct{}{}:
+			default:
+			}
 			return nil
 		})
 		secondDone <- err
 	}()
-	time.Sleep(20 * time.Millisecond)
+	select {
+	case <-progressed:
+	case <-time.After(time.Second):
+		t.Fatal("reconnected stream received no persisted progress")
+	}
 	close(runner.release)
 	if err := <-secondDone; err != nil {
 		t.Fatal(err)
@@ -1121,6 +1279,41 @@ func patternDetail() models.JobDetail {
 	return detail
 }
 
+func TestServiceFindSeparatesTestAndPatternSessions(t *testing.T) {
+	dir := t.TempDir()
+	detail := patternDetail()
+	detail.Runs[0].TestCases = []models.TestCase{analyzedTest("TestCluster", "junit.xml", "2026-07-26T12:00:00Z")}
+	writeJobDetail(t, dir, detail)
+	service, err := NewService(t.Context(), dir, &fakeRunner{}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	testRef := AnalysisRef{JobID: "periodic-demo", BuildID: "104", TestName: "TestCluster"}
+	testSession, err := service.Create(testRef, "alice", "create-test-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pattern := recurringPattern()
+	patternRef := AnalysisRef{
+		Scope: ScopePattern, JobID: "periodic-demo", PatternID: pattern.ID, PatternHash: pattern.ContentHash,
+	}
+	patternSession, err := service.Create(patternRef, "alice", "create-pattern-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundTest, err := service.Find(testRef, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundPattern, err := service.Find(patternRef, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if foundTest.ID != testSession.ID || foundPattern.ID != patternSession.ID || foundTest.ID == foundPattern.ID {
+		t.Fatalf("test=%q pattern=%q", foundTest.ID, foundPattern.ID)
+	}
+}
+
 func TestServicePatternChatUsesBoundedAffectedBuilds(t *testing.T) {
 	dir := t.TempDir()
 	writeJobDetail(t, dir, patternDetail())
@@ -1317,12 +1510,12 @@ func TestVersionOneCreateIdempotencyMigratesOnRetry(t *testing.T) {
 	if err != nil || got.ID != "legacy-session" {
 		t.Fatalf("retry session=%+v err=%v", got, err)
 	}
-	state, err := restarted.store.load()
+	state, _, err := restarted.store.load()
 	if err != nil {
 		t.Fatal(err)
 	}
 	migrated := state.Sessions["legacy-session"]
-	if migrated.CreateRequestVersion != stateVersion || migrated.CreateRequestHash == legacyHash {
+	if migrated.CreateRequestVersion != createVersion || migrated.CreateRequestHash == legacyHash {
 		t.Fatalf("create migration = %+v", migrated)
 	}
 }

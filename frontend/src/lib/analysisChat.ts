@@ -4,7 +4,7 @@ import type {
   AnalysisChatSession,
 } from "../types/analysisChat";
 
-const API_BASE = import.meta.env.BASE_URL;
+const API_BASE = import.meta.env?.BASE_URL ?? "/";
 const maxQuestionBytes = 4096;
 const utf8Encoder = new TextEncoder();
 
@@ -84,6 +84,22 @@ export async function createAnalysisChatSession(
   return parseResponse(response);
 }
 
+export async function findAnalysisChatSession(
+  analysis: AnalysisChatReference,
+  signal?: AbortSignal,
+): Promise<AnalysisChatSession | null> {
+  const response = await fetch(`${API_BASE}api/analysis-chat/sessions/lookup`, {
+    method: "POST",
+    credentials: "same-origin",
+    cache: "no-store",
+    signal,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(analysis),
+  });
+  if (response.status === 204) return null;
+  return parseResponse(response);
+}
+
 export async function getAnalysisChatSession(
   sessionID: string,
   signal?: AbortSignal,
@@ -147,6 +163,28 @@ export async function streamAnalysisChatMessage(
     }
   }
   throw lastError instanceof Error ? lastError : new Error("Analysis chat stream disconnected");
+}
+
+export async function resumeAnalysisChatTurn(
+  session: AnalysisChatSession,
+  onProgress: (progress: AnalysisChatProgress) => void,
+  signal?: AbortSignal,
+  pollDelayMs = 1000,
+): Promise<AnalysisChatSession> {
+  const active = session.active;
+  if (!active) return session;
+  onProgress(active);
+  if (active.question?.trim()) {
+    return streamAnalysisChatMessage(session.id, active.question, active.request_id, onProgress, signal);
+  }
+
+  let current = session;
+  while (current.active?.request_id === active.request_id) {
+    await reconnectDelay(pollDelayMs, signal);
+    current = await getAnalysisChatSession(session.id, signal);
+    if (current.active?.request_id === active.request_id) onProgress(current.active);
+  }
+  return current;
 }
 
 async function streamAnalysisChatMessageOnce(
@@ -229,10 +267,10 @@ function reconnectDelay(milliseconds: number, signal?: AbortSignal): Promise<voi
       return;
     }
     const onAbort = () => {
-      window.clearTimeout(timer);
+      globalThis.clearTimeout(timer);
       reject(new DOMException("Aborted", "AbortError"));
     };
-    const timer = window.setTimeout(() => {
+    const timer = globalThis.setTimeout(() => {
       signal?.removeEventListener("abort", onAbort);
       resolve();
     }, milliseconds);
