@@ -4,6 +4,21 @@
 {{- $source := .Values.server.chat.sourceInvestigation.enabled -}}
 {{- $interactive := or $actions $chat -}}
 {{- $a := .Values.server.actions -}}
+{{- $extraInsecureCookies := false -}}
+{{- range .Values.server.extraEnv -}}
+{{- if eq (default "" .name) "COOKIE_INSECURE" -}}
+{{- $extraInsecureCookies = true -}}
+{{- end -}}
+{{- end -}}
+{{- if $extraInsecureCookies -}}
+{{- fail "server.extraEnv must not set COOKIE_INSECURE; use server.development.allowInsecureCookies for local OAuth testing" -}}
+{{- end -}}
+{{- if and .Values.server.development.allowInsecureCookies (not (and $interactive (eq $a.mode "oauth"))) -}}
+{{- fail "server.development.allowInsecureCookies requires interactive OAuth mode" -}}
+{{- end -}}
+{{- if and .Values.server.development.allowInsecureCookies .Values.server.security.hsts.enabled -}}
+{{- fail "server.development.allowInsecureCookies requires server.security.hsts.enabled=false" -}}
+{{- end -}}
 {{- if and $chat (not .Values.ai.enabled) -}}
 {{- fail "server.chat.enabled requires ai.enabled" -}}
 {{- end -}}
@@ -91,8 +106,12 @@ spec:
             {{- if $interactive }}
             - -project-dir={{ .Values.project.mountPath }}
             {{- end }}
-          {{- if or $interactive .Values.server.extraEnv }}
+          {{- if or $interactive .Values.server.security.hsts.enabled .Values.server.extraEnv }}
           env:
+            {{- if .Values.server.security.hsts.enabled }}
+            - name: HSTS_ENABLED
+              value: "true"
+            {{- end }}
             {{- if $interactive }}
             {{- if $actions }}
             - name: ACTIONS_ENABLED
@@ -136,6 +155,10 @@ spec:
             {{- end }}
             - name: AUTH_MODE
               value: {{ $a.mode | quote }}
+            {{- if and (eq $a.mode "oauth") .Values.server.development.allowInsecureCookies }}
+            - name: COOKIE_INSECURE
+              value: "1"
+            {{- end }}
             {{- if $a.admins }}
             - name: ADMIN_LOGINS
               value: {{ join "," $a.admins | quote }}

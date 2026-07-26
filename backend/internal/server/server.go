@@ -85,6 +85,9 @@ type Options struct {
 	// hostname but forwards a different Host to this server, so the browser's
 	// Origin never equals r.Host. Empty keeps strict same-origin behavior.
 	TrustedOrigins []string
+	// HSTSEnabled adds a one-year Strict-Transport-Security policy. Local HTTP
+	// development leaves it disabled.
+	HSTSEnabled bool
 }
 
 // Capabilities tells the frontend which deploy mode it is talking to and which
@@ -271,7 +274,7 @@ func Handler(opts Options) (http.Handler, error) {
 				auth.Middleware(opts.Auth, guard(cancelActionRequestHandler(requests.CancelRequest))))
 		}
 	}
-	mux.HandleFunc("/api/capabilities", capabilitiesHandler(caps))
+	mux.Handle("/api/capabilities", readOnly(capabilitiesHandler(caps)))
 
 	// /data/* serves the fetcher output tree (manifest.json, dashboard.json,
 	// jobs/*.json, flakiness.json, search-index.json) at read parity. Directory
@@ -280,7 +283,7 @@ func Handler(opts Options) (http.Handler, error) {
 	// If-Modified-Since (cheap 304 when unchanged) instead of serving a stale
 	// copy from its heuristic cache.
 	dataFS := http.FileServer(noListFS{http.Dir(opts.DataDir)})
-	mux.Handle("/data/", http.StripPrefix("/data/", noCache(dataFS)))
+	mux.Handle("/data/", readOnly(http.StripPrefix("/data/", noCache(dataFS))))
 
 	if opts.StaticDir != "" {
 		if info, err := os.Stat(opts.StaticDir); err != nil {
@@ -291,19 +294,34 @@ func Handler(opts Options) (http.Handler, error) {
 		mux.Handle("/", spaHandler(opts.StaticDir))
 	}
 
-	return securityHeaders(mux), nil
+	return securityHeaders(opts.HSTSEnabled, mux), nil
 }
 
 // securityHeaders wraps the handler with conservative response headers. It denies
 // framing (clickjacking of the admin action flow), disables MIME sniffing, and
 // limits referrer leakage. No Content-Security-Policy is set here because the SPA
 // relies on inline styles; a nonce-based CSP is a separate frontend change.
-func securityHeaders(next http.Handler) http.Handler {
+func securityHeaders(hsts bool, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		if hsts {
+			h.Set("Strict-Transport-Security", "max-age=31536000")
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// readOnly limits a handler to safe retrieval methods.
+func readOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
 }
