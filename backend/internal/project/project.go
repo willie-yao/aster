@@ -677,13 +677,12 @@ type Agentic struct {
 	// Defaults to 0, which disables the floor.
 	MinGCSBytes int `yaml:"min_gcs_bytes,omitempty" json:"min_gcs_bytes,omitempty"`
 
-	// Critique tunes the always-on critique gate. After the agentic loop
-	// produces a parseable tools-free final, a deterministic regex checks
-	// suggested_fix; punting drafts get targeted feedback and retry up to
-	// MaxRetries times, and a critique retry fetches cited-but-unread artifacts
-	// and injects capped content into the feedback. Drafts that still punt are
-	// published but not cached. Recipes under <project_dir>/skills/*.yaml feed
-	// the gate whenever present.
+	// Critique tunes the always-on deterministic critique gate. MaxRetries is one
+	// shared repair budget across in-loop feedback, post-loop evidence repair,
+	// and another finalize after an unparseable repair. Repair can fetch
+	// cited-but-unread artifacts and inject capped content into feedback. Drafts
+	// that still fail are published but not cached. Recipes under
+	// <project_dir>/skills/*.yaml feed the gate whenever present.
 	Critique AgenticCritique `yaml:"critique,omitempty" json:"critique,omitempty"`
 
 	// SingleToolCall makes the loop execute at most one tool call per assistant
@@ -705,9 +704,10 @@ type Agentic struct {
 // AgenticCritique tunes the always-on critique gate. See Agentic.Critique for
 // the operational semantics.
 type AgenticCritique struct {
-	// MaxRetries caps the number of extra re-prompt rounds the loop
-	// spends per analysis when critique fails. Each retry consumes one
-	// extra agentic iteration on top of MaxIters. Defaults to 2.
+	// MaxRetries caps deterministic repair admissions across in-loop critique,
+	// post-loop evidence repair, and unparseable repair finalization. In-loop
+	// repair can extend the iteration limit. 0 evaluates without repair.
+	// Defaults to 2.
 	MaxRetries *int `yaml:"max_retries,omitempty" json:"max_retries,omitempty"`
 }
 

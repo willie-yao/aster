@@ -231,8 +231,8 @@ within a recipe:
 
 ## Dynamic retry budget
 
-When a recipe matches and the agent has missing evidence, the
-critique gate appends:
+When a recipe matches and the agent has missing evidence, an admitted in-loop
+critique repair appends:
 
 - The standard `critiqueRetryIters` budget (3 extra iterations).
 - A skill-driven bonus: `1 + 2*N` extra iterations, where N is the
@@ -243,6 +243,11 @@ So a recipe with 1 missing group gets `3 + 3 = 6` extra iters per
 retry; a recipe with 3 missing groups gets `3 + 6 = 9` extra iters.
 The cap prevents pathological recipes (10+ groups) from giving the
 loop unbounded budget.
+
+`ai.critique.max_retries` is a separate shared cap on repair admissions across
+in-loop critique, post-loop evidence repair, and another finalize after an
+unparseable repair. A value of `0` still evaluates recipe evidence but does not
+make a repair model request or fetch evidence for a retry.
 
 ## Schema versioning
 

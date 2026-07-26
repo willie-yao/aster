@@ -54,7 +54,7 @@ ai:
   min_gcs_bytes: 0              # minimum GCS bytes fetched before a final answer is accepted
   single_tool_call: false       # send at most one tool call per turn (for single-tool-call-only models)
   critique:
-    max_retries: 2              # critique re-prompt rounds before accepting a still-failing draft
+    max_retries: 2              # shared deterministic critique repair budget
   tools: [filesystem, k8s]      # registered tool groups exposed to the model
 ```
 
@@ -118,9 +118,11 @@ value for weaker models. See [Investigation floors](#investigation-floors).
 ### `critique`
 
 The deterministic critique gate always runs. It rejects punt-shaped and
-ungrounded drafts and re-prompts up to `max_retries` times, which defaults to
-`2`. The only reason to set `max_retries` is to allow more or fewer repair
-rounds before a still-failing draft is published uncached. See
+ungrounded drafts. `max_retries`, which defaults to `2`, is one shared budget
+for every deterministic critique repair, including in-loop re-prompts,
+post-loop evidence repair, and another attempt after an unparseable repair.
+`0` evaluates the draft once but makes no critique repair model request. A
+still-failing draft is published uncached. See
 [The critique gate](#the-critique-gate).
 
 ### `single_tool_call`
@@ -438,19 +440,18 @@ system prompt forbidding this shape. The check is a deterministic regex (see
 When the regex matches, the loop appends targeted feedback that quotes the
 offending suggested_fix back to the model, lists the exact phrases that
 tripped the gate, and re-states the two allowed shapes (concrete remediation
-OR the strict no-remediation escape hatch). It then re-prompts; each retry
-consumes one extra agentic iteration on top of `max_iters`. Drafts that still
-punt after `max_retries` retries are published but NOT cached, so the next
-fetcher run retries with a fresh attempt. Expect 1.0-1.5x baseline iterations
-for the typical failure; most analyses pass on the first try and only the punts
-incur retries.
+OR the strict no-remediation escape hatch). It then re-prompts when the shared
+retry budget has capacity. An in-loop repair can extend the agentic iteration
+limit so the model can use Tools and re-emit. Drafts that still fail after the
+shared budget is exhausted are published but NOT cached, so the next fetcher
+run retries with a fresh attempt.
 
-**Coverage.** Critique runs both in-loop (on tools-free finals that parse on
-the spot, with re-prompt retries) AND post-loop (on outputs from the
-force-finalize round when the loop maxed out without finalizing). The
-post-loop check is single-shot — it gates caching but doesn't re-prompt — so a
-punt-shaped finalize-round result publishes, doesn't cache, and re-analyzes on
-the next run.
+**Coverage.** Critique runs both in-loop on tools-free finals that parse on the
+spot and post-loop on outputs from the force-finalize round. Both paths draw
+from the same `max_retries` budget. A post-loop evidence repair is skipped when
+an in-loop repair already spent the budget. A punt-shaped post-loop result still
+publishes uncached because post-loop repair is limited to fetchable unread or
+required evidence.
 
 **Cache invalidation.** Only critique-passing analyses are cached; a draft that
 still fails after `max_retries` publishes but is not cached, so the next
@@ -572,10 +573,10 @@ number of targets). It runs on both the in-loop critique retry and the
 post-loop force-finalize path (where weak models most often land after
 exhausting their tool-call budget), in the latter case driving one extra
 finalize round with the injected evidence. If that post-injection finalize
-comes back as prose instead of JSON, the engine retries it once before giving
-up, so a one-off formatting slip does not discard an otherwise-cacheable
-answer. It adds the fetched bytes to the conversation, capped at a few
-artifacts per retry so the injection cannot blow the context window.
+comes back as prose instead of JSON, another finalize is allowed only when the
+shared `max_retries` budget still has capacity. It adds the fetched bytes to
+the conversation, capped at a few artifacts per retry so the injection cannot
+blow the context window.
 Best-effort: a path that cannot be resolved or fetched is skipped and the
 plain-text feedback still applies. No cache-version interaction; it only
 changes the retry prompt.

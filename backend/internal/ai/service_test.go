@@ -173,6 +173,10 @@ func TestService_CacheKeyShape(t *testing.T) {
 	if !strings.HasPrefix(a1, "agentic:kubernetes:job1:build1:") {
 		t.Errorf("agentic key shape unexpected: %q", a1)
 	}
+	s.agenticOpts.CritiqueMaxRetries = 2
+	if got := s.agenticCacheKey("job1", "build1", "Test A", "boom"); got != a1 {
+		t.Errorf("critique retry budget changed cache key: %q vs %q", a1, got)
+	}
 }
 
 // TestService_ShouldReanalyze_PromptHash verifies prompt changes invalidate

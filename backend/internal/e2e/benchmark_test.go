@@ -521,6 +521,7 @@ type benchmarkTraceSummary struct {
 	semanticJudgeOutcome     string
 	critiqueRetries          int
 	evidenceRetries          int
+	unparseableRetries       int
 	acceptedUncached         int
 	modelRequests            int
 	modelFailures            int
@@ -582,6 +583,8 @@ func summarizeBenchmarkTrace(snapshot ai.AnalysisTraceFile) benchmarkTraceSummar
 					summary.critiqueRetries++
 				case "evidence_retry":
 					summary.evidenceRetries++
+				case "unparseable_retry":
+					summary.unparseableRetries++
 				case "accepted_uncached":
 					summary.acceptedUncached++
 				}
@@ -656,9 +659,9 @@ func benchmarkTelemetryLines(elapsed time.Duration, analysis *models.AIAnalysis,
 			benchmarkSkillHashPrefix(analysis.SkillSetHash), analysis.BudgetExhausted, analysis.JudgeRan, analysis.JudgeObjected, analysis.JudgeRevised))
 	}
 	lines = append(lines, fmt.Sprintf(
-		"trace floor_nudges=%d floor_nudge_reasons=%v context_compaction_applied=%d context_over_budget=%d semantic_judge_outcome=%s critique_retries=%d evidence_retries=%d accepted_uncached=%d",
+		"trace floor_nudges=%d floor_nudge_reasons=%v context_compaction_applied=%d context_over_budget=%d semantic_judge_outcome=%s critique_retries=%d evidence_retries=%d unparseable_retries=%d accepted_uncached=%d",
 		trace.floorNudges, trace.floorNudgeReasons, trace.contextCompactionApplied, trace.contextOverBudget, trace.semanticJudgeOutcome,
-		trace.critiqueRetries, trace.evidenceRetries, trace.acceptedUncached))
+		trace.critiqueRetries, trace.evidenceRetries, trace.unparseableRetries, trace.acceptedUncached))
 	return lines
 }
 
@@ -794,6 +797,7 @@ func TestSummarizeBenchmarkTrace(t *testing.T) {
 		{Kind: "semantic_judge", Outcome: "revised"},
 		{Kind: "critique", Outcome: "retry"},
 		{Kind: "critique", Outcome: "evidence_retry"},
+		{Kind: "critique", Outcome: "unparseable_retry"},
 		{Kind: "critique", Outcome: "accepted_uncached"},
 		{Kind: "model_request", Outcome: "success", InputTokens: 10, OutputTokens: 4},
 		{Kind: "model_request", Outcome: "error", InputTokens: 3, OutputTokens: 1},
@@ -810,8 +814,8 @@ func TestSummarizeBenchmarkTrace(t *testing.T) {
 	if got.semanticJudgeOutcome != "revised" {
 		t.Fatalf("semantic judge outcome = %q", got.semanticJudgeOutcome)
 	}
-	if got.critiqueRetries != 1 || got.evidenceRetries != 1 || got.acceptedUncached != 1 {
-		t.Fatalf("critique summary = retries:%d evidence:%d uncached:%d", got.critiqueRetries, got.evidenceRetries, got.acceptedUncached)
+	if got.critiqueRetries != 1 || got.evidenceRetries != 1 || got.unparseableRetries != 1 || got.acceptedUncached != 1 {
+		t.Fatalf("critique summary = retries:%d evidence:%d unparseable:%d uncached:%d", got.critiqueRetries, got.evidenceRetries, got.unparseableRetries, got.acceptedUncached)
 	}
 	if got.modelRequests != 2 || got.modelFailures != 1 || got.toolFailures != 1 || got.inputTokens != 13 || got.outputTokens != 5 {
 		t.Fatalf("usage summary = %+v", got)

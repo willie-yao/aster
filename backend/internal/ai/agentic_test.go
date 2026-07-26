@@ -1349,6 +1349,302 @@ func TestAgentic_Critique_ExhaustedAcceptedNotCached(t *testing.T) {
 	}
 }
 
+func TestAgentic_CritiqueZeroRetriesMakesNoRepairRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		final   string
+		browser artifacts.Browser
+	}{
+		{name: "punt", final: puntyFinalJSON, browser: &fakeBrowser{}},
+		{name: "unread citation", final: hallucinatedFinalJSON, browser: &fakeBrowser{files: map[string][]byte{"manager.log": []byte("controller failed")}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			shrinkCallDelay(t)
+			srv := newScriptedChatServer(t)
+			srv.push(200, chatRespFinal(tc.final))
+			client := newAgenticTestClient(t, srv.URL)
+			key := "agentic:test:zero-retry:" + tc.name
+			_, analysis, err := client.doAnalyzeAgentic(context.Background(),
+				newTestAgenticInputs(t, tc.browser, AgenticOptions{
+					MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+					Timeout: 30 * time.Second, CritiqueMaxRetries: 0,
+				}), key, "sys", "user")
+			if err != nil {
+				t.Fatalf("doAnalyzeAgentic: %v", err)
+			}
+			if got := atomic.LoadInt32(&srv.calls); got != 1 {
+				t.Fatalf("call count = %d, want 1", got)
+			}
+			if analysis.CritiquePassed {
+				t.Fatal("critique-failing result unexpectedly passed")
+			}
+			if _, ok := client.Cache().Get(key); ok {
+				t.Fatal("critique-failing result was cached")
+			}
+		})
+	}
+}
+
+func TestAgentic_CritiqueBudgetSharedAcrossLoopAndPostLoop(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal(puntyFinalJSON))
+	final := `{"summary":"webhook cert","is_transient":false,"root_cause":"x509 webhook validation failure prevented cluster creation","severity":"High","suggested_fix":"Regenerate the webhook serving certificate and redeploy the controller.","relevant_files":[]}`
+	srv.push(200, chatRespFinal(final))
+	srv.push(200, chatRespFinal(final))
+
+	set := loadAgenticSkillsForTest(t, map[string]string{
+		"webhook": `
+id: webhook-tls
+triggers: ["x509"]
+required_evidence:
+  - id: webhook-config
+    any_of: ["config/webhook/.*\\.yaml"]
+`,
+	})
+	browser := &trackingBrowser{fakeBrowser: &fakeBrowser{files: map[string][]byte{
+		"config/webhook/manifests.yaml": []byte("webhooks:"),
+	}}}
+	in := newTestAgenticInputs(t, browser, AgenticOptions{
+		MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+		Timeout: 30 * time.Second, CritiqueMaxRetries: 1,
+	})
+	in.Skills = set
+	key := "agentic:test:shared-critique-budget"
+	_, analysis, err := newAgenticTestClient(t, srv.URL).doAnalyzeAgentic(context.Background(), in, key, "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 2 {
+		t.Fatalf("call count = %d, want 2", got)
+	}
+	if len(browser.tailCalls) != 0 {
+		t.Fatalf("post-loop repair ignored exhausted budget: %v", browser.tailCalls)
+	}
+	if analysis.CritiquePassed {
+		t.Fatal("missing-evidence draft unexpectedly passed")
+	}
+}
+
+func TestAgentic_PostLoopEvidenceRepairUsesSharedBudget(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespToolCall("c1", "list_artifacts", map[string]interface{}{"path": ""}))
+	final := `{"summary":"webhook cert","is_transient":false,"root_cause":"x509 webhook validation failure prevented cluster creation","severity":"High","suggested_fix":"Regenerate the webhook serving certificate and redeploy the controller.","relevant_files":[]}`
+	srv.push(200, chatRespFinal(final))
+	srv.push(200, chatRespFinal(final))
+
+	set := loadAgenticSkillsForTest(t, map[string]string{
+		"webhook": `
+id: webhook-tls
+triggers: ["x509"]
+required_evidence:
+  - id: webhook-config
+    any_of: ["config/webhook/.*\\.yaml"]
+`,
+	})
+	browser := &fakeBrowser{files: map[string][]byte{
+		"config/webhook/manifests.yaml": []byte("webhooks:"),
+	}}
+	in := newTestAgenticInputs(t, browser, AgenticOptions{
+		MaxIters: 1, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+		Timeout: 30 * time.Second, CritiqueMaxRetries: 1,
+	})
+	in.Skills = set
+	in.FailureSignal = "x509"
+	var observations []DraftObservation
+	in.DraftObserver = func(observation DraftObservation) { observations = append(observations, observation) }
+	client := newAgenticTestClient(t, srv.URL)
+	key := "agentic:test:post-loop-shared-budget"
+	_, analysis, err := client.doAnalyzeAgentic(context.Background(), in, key, "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 3 {
+		t.Fatalf("call count = %d, want 3", got)
+	}
+	if !analysis.CritiquePassed || !analysis.EvidencePlanCovered {
+		t.Fatalf("repaired analysis = %+v", analysis)
+	}
+	if len(observations) != 2 || observations[0].Phase != "finalize" || observations[1].Phase != "evidence_retry" {
+		t.Fatalf("observations = %+v", observations)
+	}
+	_, hit, err := client.doAnalyzeAgentic(context.Background(), in, key, "sys", "user")
+	if err != nil {
+		t.Fatalf("cache hit: %v", err)
+	}
+	if !hit.CacheHit || atomic.LoadInt32(&srv.calls) != 3 {
+		t.Fatalf("passing repaired result was not cached: hit=%v calls=%d", hit.CacheHit, atomic.LoadInt32(&srv.calls))
+	}
+}
+
+func TestAgentic_UnparseableEvidenceRepairCannotExceedBudget(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespToolCall("c1", "list_artifacts", map[string]interface{}{"path": ""}))
+	final := `{"summary":"webhook cert","is_transient":false,"root_cause":"x509 webhook validation failure prevented cluster creation","severity":"High","suggested_fix":"Regenerate the webhook serving certificate and redeploy the controller.","relevant_files":[]}`
+	srv.push(200, chatRespFinal(final))
+	srv.push(200, chatRespFinal("not json"))
+	srv.push(200, chatRespFinal(final))
+
+	set := loadAgenticSkillsForTest(t, map[string]string{
+		"webhook": `
+id: webhook-tls
+triggers: ["x509"]
+required_evidence:
+  - id: webhook-config
+    any_of: ["config/webhook/.*\\.yaml"]
+`,
+	})
+	in := newTestAgenticInputs(t, &fakeBrowser{files: map[string][]byte{
+		"config/webhook/manifests.yaml": []byte("webhooks:"),
+	}}, AgenticOptions{
+		MaxIters: 1, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+		Timeout: 30 * time.Second, CritiqueMaxRetries: 1,
+	})
+	in.Skills = set
+	client := newAgenticTestClient(t, srv.URL)
+	key := "agentic:test:unparseable-repair-budget"
+	summary, analysis, err := client.doAnalyzeAgentic(context.Background(), in, key, "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 3 {
+		t.Fatalf("call count = %d, want 3", got)
+	}
+	if summary.Summary != "webhook cert" || analysis.CritiquePassed {
+		t.Fatalf("unparseable repair did not retain the prior uncached draft: summary=%+v analysis=%+v", summary, analysis)
+	}
+	if _, ok := client.Cache().Get(key); ok {
+		t.Fatal("failing retained draft was cached")
+	}
+}
+
+func TestAgentic_UnparseableInLoopRepairCannotExceedBudget(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal(puntyFinalJSON))
+	srv.push(200, chatRespFinal("not json"))
+	srv.push(200, chatRespFinal(cleanFinalJSON))
+
+	client := newAgenticTestClient(t, srv.URL)
+	key := "agentic:test:unparseable-in-loop-budget"
+	summary, analysis, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
+			MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+			Timeout: 30 * time.Second, CritiqueMaxRetries: 1,
+		}), key, "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 2 {
+		t.Fatalf("call count = %d, want 2", got)
+	}
+	if summary.Summary != "shallow" || analysis.CritiquePassed {
+		t.Fatalf("unparseable repair did not retain prior draft: summary=%+v analysis=%+v", summary, analysis)
+	}
+	if _, ok := client.Cache().Get(key); ok {
+		t.Fatal("failing retained draft was cached")
+	}
+}
+
+func TestAgentic_BlankInLoopRepairCannotExceedBudget(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal(puntyFinalJSON))
+	srv.push(200, chatRespFinal(""))
+	srv.push(200, chatRespFinal(cleanFinalJSON))
+
+	client := newAgenticTestClient(t, srv.URL)
+	key := "agentic:test:blank-in-loop-budget"
+	summary, analysis, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
+			MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+			Timeout: 30 * time.Second, CritiqueMaxRetries: 1,
+		}), key, "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 2 {
+		t.Fatalf("call count = %d, want 2", got)
+	}
+	if summary.Summary != "shallow" || analysis.CritiquePassed {
+		t.Fatalf("blank repair did not retain prior draft: summary=%+v analysis=%+v", summary, analysis)
+	}
+	if _, ok := client.Cache().Get(key); ok {
+		t.Fatal("failing retained draft was cached")
+	}
+}
+
+func TestAgentic_TwoUnparseableInLoopRepairsRetainPriorDraft(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal(puntyFinalJSON))
+	srv.push(200, chatRespFinal("not json"))
+	srv.push(200, chatRespFinal("still not json"))
+	srv.push(200, chatRespFinal(cleanFinalJSON))
+
+	client := newAgenticTestClient(t, srv.URL)
+	key := "agentic:test:two-unparseable-in-loop-repairs"
+	summary, analysis, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
+			MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+			Timeout: 30 * time.Second, CritiqueMaxRetries: 2,
+		}), key, "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 3 {
+		t.Fatalf("call count = %d, want 3", got)
+	}
+	if summary.Summary != "shallow" || analysis.CritiquePassed {
+		t.Fatalf("two unparseable repairs did not retain prior draft: summary=%+v analysis=%+v", summary, analysis)
+	}
+	if analysis.SuggestedFix == "Unable to parse structured response" {
+		t.Fatalf("published synthesized parse failure instead of prior draft: %+v", analysis)
+	}
+	if _, ok := client.Cache().Get(key); ok {
+		t.Fatal("failing retained draft was cached")
+	}
+}
+
+func TestAgentic_ToolRepairUsesRemainingBudgetAfterUnparseableFinalize(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal(puntyFinalJSON))
+	srv.push(200, chatRespToolCall("c1", "list_artifacts", map[string]interface{}{"path": ""}))
+	srv.push(200, chatRespToolCall("c2", "list_artifacts", map[string]interface{}{"path": ""}))
+	srv.push(200, chatRespToolCall("c3", "list_artifacts", map[string]interface{}{"path": ""}))
+	srv.push(200, chatRespFinal("not json"))
+	srv.push(200, chatRespFinal(cleanFinalJSON))
+
+	client := newAgenticTestClient(t, srv.URL)
+	summary, analysis, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, &fakeBrowser{dirs: map[string][]string{"": {"artifacts"}}}, AgenticOptions{
+			MaxIters: 1, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+			Timeout: 30 * time.Second, CritiqueMaxRetries: 2,
+		}), "agentic:test:tool-repair-unparseable-finalize", "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 6 {
+		t.Fatalf("call count = %d, want 6", got)
+	}
+	if summary.Summary != "deep" || !analysis.CritiquePassed {
+		t.Fatalf("remaining retry did not recover the tool repair: summary=%+v analysis=%+v", summary, analysis)
+	}
+}
+
+func TestCritiqueRetryBudgetIsNotCached(t *testing.T) {
+	data, err := json.Marshal(agenticCacheData{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.ToLower(string(data)), "retry") {
+		t.Fatalf("agentic cache shape contains retry state: %s", data)
+	}
+}
+
 // TestAgentic_Critique_FinalizeRoundOutputCritiqued verifies forced-finalize
 // output is critique-checked before publish and cache.
 func TestAgentic_Critique_FinalizeRoundOutputCritiqued(t *testing.T) {
@@ -2155,17 +2451,12 @@ required_evidence:
 	}
 }
 
-// TestAgentic_SkillEvidencePresentButUnread_InjectionRescues verifies that when
-// required evidence exists but the draft never read it, the always-on critique
-// fetches and injects it, letting the re-grounded draft pass.
-func TestAgentic_SkillEvidencePresentButUnread_InjectionRescues(t *testing.T) {
+// TestAgentic_SkillEvidencePresentButUnread_ZeroRetriesDoesNotRepair verifies
+// that max_retries=0 does not perform a post-loop evidence repair.
+func TestAgentic_SkillEvidencePresentButUnread_ZeroRetriesDoesNotRepair(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 	final := `{"summary":"webhook cert","is_transient":false,"root_cause":"x509 webhook validation failure prevented cluster creation","severity":"High","suggested_fix":"Regenerate the webhook serving certificate and redeploy the controller.","relevant_files":[]}`
-	// Identical finals keep the scripted server deterministic across the
-	// injection-triggered re-finalize rounds.
-	srv.push(200, chatRespFinal(final))
-	srv.push(200, chatRespFinal(final))
 	srv.push(200, chatRespFinal(final))
 
 	client := newAgenticTestClient(t, srv.URL)
@@ -2178,12 +2469,11 @@ required_evidence:
     any_of: ["config/webhook/.*\\.yaml"]
 `,
 	})
-	// Build tree contains the required evidence, unread by the draft; injection
-	// fetches it and marks it read so the re-critique passes.
-	browser := &fakeBrowser{files: map[string][]byte{
+	// Build tree contains required evidence, but zero retries must leave it unread.
+	browser := &trackingBrowser{fakeBrowser: &fakeBrowser{files: map[string][]byte{
 		"build-log.txt":                 []byte("x509 error"),
 		"config/webhook/manifests.yaml": []byte("webhooks:"),
-	}}
+	}}}
 	opts := AgenticOptions{
 		MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
 		Timeout: 30 * time.Second, CritiqueMaxRetries: 0,
@@ -2200,17 +2490,20 @@ required_evidence:
 	if err != nil {
 		t.Fatalf("doAnalyzeAgentic: %v", err)
 	}
-	if !analysis.CritiquePassed {
-		t.Errorf("present-but-unread required evidence should be injected and rescue the draft (CritiquePassed=true)")
+	if analysis.CritiquePassed {
+		t.Error("max_retries=0 unexpectedly repaired missing evidence")
 	}
-	if len(observations) != 2 {
-		t.Fatalf("observations = %d, want initial and evidence retry: %+v", len(observations), observations)
+	if got := atomic.LoadInt32(&srv.calls); got != 1 {
+		t.Fatalf("call count = %d, want 1", got)
+	}
+	if len(browser.tailCalls) != 0 {
+		t.Fatalf("zero retry budget fetched repair evidence: %v", browser.tailCalls)
+	}
+	if len(observations) != 1 {
+		t.Fatalf("observations = %d, want only the initial draft: %+v", len(observations), observations)
 	}
 	if observations[0].Phase != "initial" || observations[0].MissingGroupCount != 1 || observations[0].EvidenceReads != 0 {
 		t.Errorf("initial observation = %+v", observations[0])
-	}
-	if observations[1].Phase != "evidence_retry" || observations[1].MissingGroupCount != 0 || observations[1].EvidenceReads != 1 {
-		t.Errorf("evidence retry observation = %+v", observations[1])
 	}
 }
 
