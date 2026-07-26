@@ -296,7 +296,7 @@ func Handler(opts Options) (http.Handler, error) {
 		mux.Handle("/", spaHandler(opts.StaticDir))
 	}
 
-	return securityHeaders(opts.HSTSEnabled, mux), nil
+	return compressResponses(securityHeaders(opts.HSTSEnabled, mux)), nil
 }
 
 // securityHeaders wraps the handler with conservative response headers. It denies
