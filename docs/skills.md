@@ -237,7 +237,7 @@ is still unresolved, the model gets at most one batched Tool turn, followed by
 one forced finalization. The general agent loop is not reopened.
 
 `ai.critique.max_retries: 0` still evaluates recipe evidence but performs no
-repair. Any positive value admits the bounded repair operation.
+repair. Any positive value makes the bounded repair eligible, subject to context and time-headroom guards.
 
 ## Schema versioning
 
@@ -269,11 +269,10 @@ Before merging a new recipe:
 
 ## Observability
 
-When a recipe fires, the fetcher logs (per analysis):
-
-```
-  ✗ agentic critique: [skill:webhook-tls-failure(missing:cert-manager-config,webhook-secret)]; bounded repair admitted
-```
+Bounded repair control flow is recorded in the private `ai_traces.json` file as
+`critique_retry` and `critique_retry_denied` events. These events contain only
+numeric and enum-like metadata, including admission, denial reason, issue
+counts, evidence-read count, selected attempt, duration, and remaining time.
 
 After the run, every `AIAnalysis` in `data/jobs/*.json` carries:
 

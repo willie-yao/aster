@@ -817,6 +817,9 @@ func (c *Client) doAnalyzeAgentic(
 	schemas := state.registry.Schemas(state.enabledTools)
 
 	state.deadline = state.startTime.Add(in.Opts.Timeout)
+	if parentDeadline, ok := ctx.Deadline(); ok && parentDeadline.Before(state.deadline) {
+		state.deadline = parentDeadline
+	}
 	loopCtx, cancel := context.WithDeadline(ctx, state.deadline)
 	defer cancel()
 
@@ -987,7 +990,9 @@ agentLoop:
 					if in.Opts.SemanticJudge && !semanticJudged {
 						semanticJudged = true
 						state.judgeRan = true
+						requestStart := time.Now()
 						objs, err := c.semanticCritique(loopCtx, parsed, state.readPathList(), headroom)
+						state.recentModelRequest = time.Since(requestStart)
 						switch {
 						case err != nil:
 							recordTrace(loopCtx, TraceEvent{Kind: "semantic_judge", Outcome: "error", ErrorCode: "semantic_judge_error"})
@@ -1003,7 +1008,7 @@ agentLoop:
 								Role:    "user",
 								Content: strPtr(formatSemanticObjections(objs)),
 							})
-							revised, revisedItems, safe := c.runFinalizeRound(loopCtx, repairMessages, headroom)
+							revised, revisedItems, safe := c.runFinalizeRoundTracked(loopCtx, state, repairMessages, headroom)
 							if safe {
 								if rp, ok := tryParseAnalysis(revised); ok {
 									revisedCritique := critiqueDraft(rp, state.readArtifactsFull, state.readArtifactsBase, matchSkillsForDraft(state, rp), state.consecutiveFailures)
@@ -1100,7 +1105,7 @@ agentLoop:
 	}
 	if !ok {
 		var safe bool
-		finalContent, finalProviderItems, safe = c.runFinalizeRound(loopCtx, messages, headroom)
+		finalContent, finalProviderItems, safe = c.runFinalizeRoundTracked(loopCtx, state, messages, headroom)
 		finalContentFromToolsFree = true
 		if !safe {
 			return nil, nil, ErrContextHeadroom
@@ -1196,15 +1201,36 @@ func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, m
 
 const critiqueFinalizationReserve = 5 * time.Second
 
+func (c *Client) runFinalizeRoundTracked(ctx context.Context, state *agentState, messages []modelMessage, headroom contextHeadroom) (string, []json.RawMessage, bool) {
+	started := time.Now()
+	content, items, safe := c.runFinalizeRound(ctx, messages, headroom)
+	state.recentModelRequest = time.Since(started)
+	return content, items, safe
+}
+
+func (c *Client) semanticCritiqueTracked(ctx context.Context, state *agentState, parsed analysisResponse, paths []string, headroom contextHeadroom) ([]string, error) {
+	started := time.Now()
+	objections, err := c.semanticCritique(ctx, parsed, paths, headroom)
+	state.recentModelRequest = time.Since(started)
+	return objections, err
+}
+
+func selectedDraftAttempt(state *agentState) int {
+	if state.bestDraft != nil {
+		return state.bestDraft.attempt
+	}
+	return 0
+}
+
 func (c *Client) runBoundedCritiqueRepair(ctx context.Context, state *agentState, messages []modelMessage, finalContent string, finalProviderItems []json.RawMessage, parsed analysisResponse, initial critiqueOutcome, opts AgenticOptions, retries *critiqueRetryBudget) analysisResponse {
 	if !retries.available() {
-		recordTrace(ctx, TraceEvent{Kind: "critique_retry_denied", Outcome: "retry_budget", RetryDeniedReason: "retry_budget", InitialIssueCount: len(initial.Matches())})
+		recordTrace(ctx, TraceEvent{Kind: "critique_retry_denied", Outcome: "retry_budget", RetryDeniedReason: "retry_budget", InitialIssueCount: len(initial.Matches()), SelectedAttempt: selectedDraftAttempt(state), RemainingTimeMs: int(time.Until(state.deadline) / time.Millisecond)})
 		return state.bestDraft.parsed
 	}
 	remaining := time.Until(state.deadline)
 	required := 2*state.recentModelRequest + critiqueFinalizationReserve
 	if remaining < required {
-		recordTrace(ctx, TraceEvent{Kind: "critique_retry_denied", Outcome: "time_headroom", RetryDeniedReason: "time_headroom", InitialIssueCount: len(initial.Matches()), RemainingTimeMs: int(remaining / time.Millisecond)})
+		recordTrace(ctx, TraceEvent{Kind: "critique_retry_denied", Outcome: "time_headroom", RetryDeniedReason: "time_headroom", InitialIssueCount: len(initial.Matches()), SelectedAttempt: selectedDraftAttempt(state), RemainingTimeMs: int(remaining / time.Millisecond)})
 		return state.bestDraft.parsed
 	}
 
@@ -1231,7 +1257,7 @@ func (c *Client) runBoundedCritiqueRepair(ctx context.Context, state *agentState
 		var fits bool
 		repairMessages, fits = prepareContextRequest(ctx, repairMessages, schemaPayloadBytes(schemas), contextHeadroomFor(opts), "critique_repair")
 		if !fits {
-			recordTrace(ctx, TraceEvent{Kind: "critique_retry_denied", Outcome: "context_headroom", Retry: retry, RetryAdmitted: true, RetryDeniedReason: "context_headroom", InitialIssueCount: len(initial.Matches()), RemainingTimeMs: int(time.Until(state.deadline) / time.Millisecond)})
+			recordTrace(ctx, TraceEvent{Kind: "critique_retry_denied", Outcome: "context_headroom", Retry: retry, RetryAdmitted: true, RetryDeniedReason: "context_headroom", InitialIssueCount: len(initial.Matches()), SelectedAttempt: selectedDraftAttempt(state), RetryDurationMs: int(time.Since(started) / time.Millisecond), RemainingTimeMs: int(time.Until(state.deadline) / time.Millisecond)})
 			return state.bestDraft.parsed
 		}
 		requestStart := time.Now()
@@ -1257,9 +1283,9 @@ func (c *Client) runBoundedCritiqueRepair(ctx context.Context, state *agentState
 		}
 	}
 
-	revised, revisedItems, safe := c.runFinalizeRound(ctx, repairMessages, contextHeadroomFor(opts))
+	revised, revisedItems, safe := c.runFinalizeRoundTracked(ctx, state, repairMessages, contextHeadroomFor(opts))
 	if !safe {
-		recordTrace(ctx, TraceEvent{Kind: "critique_retry_denied", Outcome: "context_headroom", Retry: retry, RetryAdmitted: true, RetryDeniedReason: "context_headroom", InitialIssueCount: len(initial.Matches()), RetryDurationMs: int(time.Since(started) / time.Millisecond), RemainingTimeMs: int(time.Until(state.deadline) / time.Millisecond)})
+		recordTrace(ctx, TraceEvent{Kind: "critique_retry_denied", Outcome: "context_headroom", Retry: retry, RetryAdmitted: true, RetryDeniedReason: "context_headroom", InitialIssueCount: len(initial.Matches()), SelectedAttempt: selectedDraftAttempt(state), RetryDurationMs: int(time.Since(started) / time.Millisecond), RemainingTimeMs: int(time.Until(state.deadline) / time.Millisecond)})
 		return state.bestDraft.parsed
 	}
 	next, ok := tryParseAnalysis(revised)
