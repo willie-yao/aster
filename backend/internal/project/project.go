@@ -677,9 +677,9 @@ type Agentic struct {
 	// Defaults to 0, which disables the floor.
 	MinGCSBytes int `yaml:"min_gcs_bytes,omitempty" json:"min_gcs_bytes,omitempty"`
 
-	// Critique tunes the always-on deterministic critique gate. MaxRetries is one
-	// shared repair budget across in-loop feedback, post-loop evidence repair,
-	// and another finalize after an unparseable repair. Repair can fetch
+	// Critique tunes the always-on deterministic critique gate. A positive
+	// MaxRetries makes one bounded repair eligible, subject to context and time
+	// headroom. Repair can fetch
 	// cited-but-unread artifacts and inject capped content into feedback. Drafts
 	// that still fail are published but not cached. Recipes under
 	// <project_dir>/skills/*.yaml feed the gate whenever present.
@@ -704,9 +704,8 @@ type Agentic struct {
 // AgenticCritique tunes the always-on critique gate. See Agentic.Critique for
 // the operational semantics.
 type AgenticCritique struct {
-	// MaxRetries caps deterministic repair admissions across in-loop critique,
-	// post-loop evidence repair, and unparseable repair finalization. In-loop
-	// repair can extend the iteration limit. 0 evaluates without repair.
+	// MaxRetries controls eligibility for one bounded deterministic repair.
+	// 0 evaluates without repair; positive values remain subject to headroom.
 	// Defaults to 2.
 	MaxRetries *int `yaml:"max_retries,omitempty" json:"max_retries,omitempty"`
 }

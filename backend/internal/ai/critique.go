@@ -305,7 +305,7 @@ func (o critiqueOutcome) Matches() []string {
 }
 
 // MissingEvidenceCount totals the missing evidence groups across all matched
-// skills. Used by the agentic loop to size the dynamic retry budget extension.
+// skills. Used by bounded repair telemetry and evidence decisions.
 func (o critiqueOutcome) MissingEvidenceCount() int {
 	n := 0
 	for _, m := range o.MissingSkillEvidence {

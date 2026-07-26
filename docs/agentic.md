@@ -54,7 +54,7 @@ ai:
   min_gcs_bytes: 0              # minimum GCS bytes fetched before a final answer is accepted
   single_tool_call: false       # send at most one tool call per turn (for single-tool-call-only models)
   critique:
-    max_retries: 2              # shared deterministic critique repair budget
+    max_retries: 2              # 0 disables; positive values enable one bounded repair
   tools: [filesystem, k8s]      # registered tool groups exposed to the model
 ```
 
@@ -118,10 +118,10 @@ value for weaker models. See [Investigation floors](#investigation-floors).
 ### `critique`
 
 The deterministic critique gate always runs. It rejects punt-shaped and
-ungrounded drafts. `max_retries`, which defaults to `2`, is one shared budget
-for every deterministic critique repair, including in-loop re-prompts,
-post-loop evidence repair, and another attempt after an unparseable repair.
-`0` evaluates the draft once but makes no critique repair model request. A
+ungrounded drafts. `max_retries`, which defaults to `2`, controls eligibility for the single
+bounded deterministic repair operation. `0` evaluates the draft once but makes
+no critique repair model request. Positive values remain subject to context and
+time-headroom guards. A
 still-failing draft is published uncached. See
 [The critique gate](#the-critique-gate).
 
@@ -440,18 +440,16 @@ system prompt forbidding this shape. The check is a deterministic regex (see
 When the regex matches, the loop appends targeted feedback that quotes the
 offending suggested_fix back to the model, lists the exact phrases that
 tripped the gate, and re-states the two allowed shapes (concrete remediation
-OR the strict no-remediation escape hatch). It then re-prompts when the shared
-retry budget has capacity. An in-loop repair can extend the agentic iteration
-limit so the model can use Tools and re-emit. Drafts that still fail after the
-shared budget is exhausted are published but NOT cached, so the next fetcher
+OR the strict no-remediation escape hatch). It performs the bounded repair when `max_retries` is positive and the
+headroom guards admit it. Repair is bounded to evidence injection, at most one
+Tool-enabled turn when evidence is unresolved, and one forced finalization. Drafts that still fail after the
+bounded operation are published but NOT cached, so the next fetcher
 run retries with a fresh attempt.
 
-**Coverage.** Critique runs both in-loop on tools-free finals that parse on the
-spot and post-loop on outputs from the force-finalize round. Both paths draw
-from the same `max_retries` budget. A post-loop evidence repair is skipped when
-an in-loop repair already spent the budget. A punt-shaped post-loop result still
-publishes uncached because post-loop repair is limited to fetchable unread or
-required evidence.
+**Coverage.** Critique evaluates parseable drafts in-loop, but deterministic
+repair runs once after draft selection. It injects evidence, optionally allows
+one Tool-enabled turn when evidence remains unresolved, then forces one final
+JSON response. It never reopens the general investigation loop.
 
 **Cache invalidation.** Only critique-passing analyses are cached; a draft that
 still fails after `max_retries` publishes but is not cached, so the next
@@ -590,12 +588,10 @@ artifacts the draft **cited but never read**, and evidence a **matched skill
 requires** for the claimed failure class. Full-path citations are fetched
 directly; bare-basename citations and skill-required patterns are resolved to
 real paths with a single bounded tree walk (so cost does not scale with the
-number of targets). It runs on both the in-loop critique retry and the
-post-loop force-finalize path (where weak models most often land after
-exhausting their tool-call budget), in the latter case driving one extra
-finalize round with the injected evidence. If that post-injection finalize
-comes back as prose instead of JSON, another finalize is allowed only when the
-shared `max_retries` budget still has capacity. It adds the fetched bytes to
+number of targets). The selected failing draft enters the single bounded repair operation. Evidence
+is injected before the optional Tool turn and the one forced finalization. An
+unparseable finalization retains the selected prior draft; it does not trigger
+another repair request. It adds the fetched bytes to
 the conversation, capped at a few artifacts per retry so the injection cannot
 blow the context window.
 Best-effort: a path that cannot be resolved or fetched is skipped and the

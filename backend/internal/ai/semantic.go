@@ -139,7 +139,7 @@ func (c *Client) applySemanticJudgePostLoop(ctx context.Context, state *agentSta
 		state.considerDraft(candidate, false)
 	}
 	state.judgeRan = true
-	objs, err := c.semanticCritique(ctx, parsed, state.readPathList(), headroom)
+	objs, err := c.semanticCritiqueTracked(ctx, state, parsed, state.readPathList(), headroom)
 	if err != nil {
 		recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Outcome: "error", ErrorCode: "semantic_judge_error"})
 		log.Printf("  ⓘ semantic judge (post-loop): skipped (%v)", err)
@@ -155,7 +155,7 @@ func (c *Client) applySemanticJudgePostLoop(ctx context.Context, state *agentSta
 	msgs := append(messages,
 		modelMessage{Role: "assistant", Content: strPtr(finalContent), ProviderItems: finalProviderItems},
 		modelMessage{Role: "user", Content: strPtr(formatSemanticObjections(objs))})
-	revised, revisedProviderItems, safe := c.runFinalizeRound(ctx, msgs, headroom)
+	revised, revisedProviderItems, safe := c.runFinalizeRoundTracked(ctx, state, msgs, headroom)
 	if !safe {
 		return state.bestDraft.parsed
 	}
