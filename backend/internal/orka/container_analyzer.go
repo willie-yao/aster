@@ -267,6 +267,10 @@ func (a *ContainerAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, 
 		stateCtx, stateCancel := context.WithTimeout(ctx, failedTaskStateTimeout)
 		defer stateCancel()
 		if raw, resultErr := a.waitResult(stateCtx, taskName); resultErr != nil {
+			if IsResultAuthorizationError(resultErr) {
+				resultErr = fmt.Errorf("read failed container analysis Task %s result: %w", taskName, resultErr)
+				return ai.UnavailableFailureAnalysisResult(request.TestCase, resultErr), resultErr
+			}
 			log.Printf("Warning: failed to read private state from %s: %v", taskName, resultErr)
 		} else {
 			identity := analysisruntime.NewContainerStateIdentity(a.opts.Namespace, taskName, taskRequest)

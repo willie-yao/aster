@@ -554,7 +554,6 @@ func captureAIRefreshState(outDir string) (*aiRefreshStateSnapshot, error) {
 			return nil, err
 		}
 		backupPath := backup.Name()
-		_ = backup.Chmod(info.Mode().Perm())
 		_, copyErr := io.Copy(backup, source)
 		closeSourceErr := source.Close()
 		closeBackupErr := backup.Close()
