@@ -1,0 +1,92 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { test } from "node:test";
+import * as ts from "typescript";
+
+const source = readFileSync(resolve(process.cwd(), "src/pages/FlakinessPage.tsx"), "utf8");
+const sourceFile = ts.createSourceFile(
+  "FlakinessPage.tsx",
+  source,
+  ts.ScriptTarget.Latest,
+  true,
+  ts.ScriptKind.TSX,
+);
+
+function tagName(node: ts.JsxOpeningLikeElement): string {
+  return node.tagName.getText(sourceFile);
+}
+
+function interactiveKind(node: ts.JsxOpeningLikeElement): "button" | "link" | null {
+  const name = tagName(node);
+  if (name === "IconButton" || name === "Button" || name === "AccordionSummary" || name === "button") {
+    return "button";
+  }
+  if (name === "Link" || name === "RouterLink" || name === "a") {
+    return "link";
+  }
+
+  const component = node.attributes.properties.find(
+    (property): property is ts.JsxAttribute =>
+      ts.isJsxAttribute(property) && property.name.getText(sourceFile) === "component",
+  );
+  const renderedComponent = component?.initializer?.getText(sourceFile) ?? "";
+  if (renderedComponent === '"button"' || renderedComponent === "{Button}") return "button";
+  if (renderedComponent === '"a"' || renderedComponent === "{RouterLink}") return "link";
+  return null;
+}
+
+function collectInteractiveNesting(): string[] {
+  const violations: string[] = [];
+
+  function visit(node: ts.Node, ancestors: Array<"button" | "link">) {
+    if (ts.isJsxElement(node)) {
+      const current = interactiveKind(node.openingElement);
+      if (current && ancestors.length > 0) {
+        violations.push(`${ancestors.at(-1)} contains ${current}`);
+      }
+      const next = current ? [...ancestors, current] : ancestors;
+      node.children.forEach((child) => visit(child, next));
+      return;
+    }
+    if (ts.isJsxSelfClosingElement(node)) {
+      const current = interactiveKind(node);
+      if (current && ancestors.length > 0) {
+        violations.push(`${ancestors.at(-1)} contains ${current}`);
+      }
+      return;
+    }
+    ts.forEachChild(node, (child) => visit(child, ancestors));
+  }
+
+  visit(sourceFile, []);
+  return violations;
+}
+
+test("test and job links stay separate from the disclosure button", () => {
+  assert.deepEqual(collectInteractiveNesting(), []);
+  assert.doesNotMatch(source, /AccordionSummary/);
+  assert.match(source, /to={`\/job\/\$\{encodeURIComponent\(item\.job_id\)\}\/test\//);
+  assert.match(source, /to={`\/job\/\$\{encodeURIComponent\(item\.job_id\)\}`}/);
+  assert.match(source, /<IconButton[\s\S]*aria-controls=\{detailsId\}[\s\S]*aria-expanded=\{expanded\}/);
+  assert.match(source, /<Collapse in=\{expanded\} timeout="auto">/);
+  assert.doesNotMatch(source, /unmountOnExit/);
+});
+
+test("mobile rows reserve the first line for test and job names", () => {
+  assert.match(source, /flex: \{ xs: "1 1 100%", sm: "1 1 auto" \}/);
+  assert.match(source, /width: \{ xs: "100%", sm: "auto" \}/);
+  assert.match(source, /flexWrap: \{ xs: "wrap", sm: "nowrap" \}/);
+});
+
+test("focusable tabs own their visible names and descriptions", () => {
+  assert.match(source, /label: "Most Flaky"/);
+  assert.match(source, /label: "Persistent Failures"/);
+  assert.match(source, /label: "Recently Broken"/);
+  assert.match(source, /aria-describedby={`test-analysis-\$\{t\.value\}-description`}/);
+  assert.match(source, /label=\{t\.label\}/);
+  assert.match(source, /title=\{t\.tooltip\}/);
+  assert.match(source, /height: "1px"[\s\S]*width: "1px"/);
+  assert.doesNotMatch(source, /<Tooltip/);
+  assert.doesNotMatch(source, /<Tab(?=[\s>])[^>]*aria-label=/);
+});
