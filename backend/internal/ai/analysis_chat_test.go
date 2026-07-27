@@ -27,6 +27,10 @@ func (f *fixedBrowserFactory) ForBuild(prefix, displayName string) artifacts.Bro
 	return f.browser
 }
 
+func (f *fixedBrowserFactory) ForBuilds(_ []analysischat.ArtifactBuild) artifacts.Browser {
+	return f.browser
+}
+
 func newAnalysisChatAgentForTest(t *testing.T, serverURL string, browser artifacts.Browser, opts AnalysisChatOptions) *AnalysisChatAgent {
 	t.Helper()
 	registry, enabled := newTestRegistry(t)
@@ -173,20 +177,57 @@ func TestAnalysisChatAgentRepairsUnreadCitation(t *testing.T) {
 	}
 }
 
-func TestAnalysisChatAgentKeepsValidDraftWhenFinalizeIsInvalid(t *testing.T) {
+func TestAnalysisChatAgentKeepsValidatedCitedDraftWhenFinalizeIsInvalid(t *testing.T) {
 	shrinkCallDelay(t)
 	server := newScriptedChatServer(t)
-	valid := `{"answer":"The existing conclusion remains plausible.","assessment":"explains","citations":[],"proposed_revision":null}`
-	server.push(200, chatRespToolCallWithContent(valid, "call-1", "list_artifacts", map[string]interface{}{"path": ""}))
+	server.push(200, chatRespToolCall("call-1", "tail_artifact", map[string]interface{}{"path": "build-log.txt", "lines": 20}))
+	valid := `{"answer":"The controller exit supports the published conclusion.","assessment":"supports","citations":[{"path":"build-log.txt","quote":"controller stopped"}],"proposed_revision":null}`
+	server.push(200, chatRespToolCallWithContent(valid, "call-2", "list_artifacts", map[string]interface{}{"path": ""}))
 	server.push(200, chatRespFinal(`{"answer":"unfinished"`))
-	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{}, AnalysisChatOptions{MaxIters: 1, Timeout: time.Second})
+	browser := &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("controller stopped\n")}}
+	agent := newAnalysisChatAgentForTest(t, server.URL, browser, AnalysisChatOptions{MaxIters: 2, Timeout: time.Second})
 
 	reply, err := agent.Reply(context.Background(), analysisChatTurn())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reply.Answer != "The existing conclusion remains plausible." || reply.ToolCalls != 1 {
+	if reply.Answer != "The controller exit supports the published conclusion." || reply.ToolCalls != 2 || len(reply.Citations) != 1 {
 		t.Fatalf("reply = %+v", reply)
+	}
+}
+
+func TestAnalysisChatAgentRejectsStaleValidatedDraft(t *testing.T) {
+	shrinkCallDelay(t)
+	server := newScriptedChatServer(t)
+	server.push(200, chatRespToolCall("call-1", "tail_artifact", map[string]interface{}{"path": "build-log.txt", "lines": 20}))
+	valid := `{"answer":"The first log supports the published conclusion.","assessment":"supports","citations":[{"path":"build-log.txt","quote":"controller stopped"}],"proposed_revision":null}`
+	server.push(200, chatRespToolCallWithContent(valid, "call-2", "tail_artifact", map[string]interface{}{"path": "later.log", "lines": 20}))
+	server.push(200, chatRespFinal(`{"answer":"unfinished"`))
+	browser := &fakeBrowser{files: map[string][]byte{
+		"build-log.txt": []byte("controller stopped\n"),
+		"later.log":     []byte("new evidence\n"),
+	}}
+	agent := newAnalysisChatAgentForTest(t, server.URL, browser, AnalysisChatOptions{MaxIters: 2, Timeout: time.Second})
+
+	_, err := agent.Reply(context.Background(), analysisChatTurn())
+	if !errors.Is(err, analysischat.ErrResponseValidationFailed) {
+		t.Fatalf("Reply error = %v", err)
+	}
+}
+
+func TestAnalysisChatAgentNeverKeepsDraftWithInvalidCitations(t *testing.T) {
+	shrinkCallDelay(t)
+	server := newScriptedChatServer(t)
+	server.push(200, chatRespToolCall("call-1", "tail_artifact", map[string]interface{}{"path": "build-log.txt", "lines": 20}))
+	invalid := `{"answer":"The log supports the conclusion.","assessment":"supports","citations":[{"path":"build-log.txt","quote":"different evidence"}],"proposed_revision":null}`
+	server.push(200, chatRespToolCallWithContent(invalid, "call-2", "list_artifacts", map[string]interface{}{"path": ""}))
+	server.push(200, chatRespFinal(`{"answer":"unfinished"`))
+	browser := &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("controller stopped\n")}}
+	agent := newAnalysisChatAgentForTest(t, server.URL, browser, AnalysisChatOptions{MaxIters: 2, Timeout: time.Second})
+
+	_, err := agent.Reply(context.Background(), analysisChatTurn())
+	if !errors.Is(err, analysischat.ErrResponseValidationFailed) {
+		t.Fatalf("Reply error = %v", err)
 	}
 }
 
@@ -274,16 +315,32 @@ func TestAnalysisChatResponseTelemetryIsContentFree(t *testing.T) {
 	recordAnalysisChatResponseFailure(ctx, "finalize_validation", 9, 11, &modelResponse{HTTPStatus: 200}, analysisChatParseStats{
 		CandidateCount: 4,
 	}, analysisChatValidationCitation)
+	recordAnalysisChatResponseFailure(ctx, "tool_loop_validation", 2, 2, &modelResponse{HTTPStatus: 200}, analysisChatParseStats{
+		CandidateCount: 2,
+	}, analysisChatValidationReference)
 	trace.Finish("error", analysischat.ErrCitationValidationFailed)
 
 	snapshot := store.Snapshot()
-	if len(snapshot.Traces) != 1 || len(snapshot.Traces[0].Events) != 1 {
+	if len(snapshot.Traces) != 1 || len(snapshot.Traces[0].Events) != 2 {
 		t.Fatalf("snapshot = %+v", snapshot)
 	}
 	event := snapshot.Traces[0].Events[0]
 	if event.Kind != "analysis_chat_response" || event.Status != "finalize_validation" || event.ModelCallCount != 9 ||
 		event.Attempts != 11 || event.HTTPStatus != 200 || event.CandidateCount != 4 || event.ErrorCode != analysisChatValidationCitation {
 		t.Fatalf("event = %+v", event)
+	}
+	referenceEvent := snapshot.Traces[0].Events[1]
+	if referenceEvent.Status != "tool_loop_validation" || referenceEvent.ErrorCode != analysisChatValidationReference || referenceEvent.CandidateCount != 2 {
+		t.Fatalf("reference event = %+v", referenceEvent)
+	}
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"build-log.txt", "different evidence", "controller stopped"} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("telemetry contains provider content %q", forbidden)
+		}
 	}
 	if got := analysisChatResponseAttempts(nil); got != 0 {
 		t.Fatalf("nil response attempts = %d", got)
@@ -343,16 +400,11 @@ func TestParseAnalysisChatReplyScansKimiCandidates(t *testing.T) {
 	cases := []struct {
 		name string
 		raw  string
-		want string
 	}{
-		{name: "fenced", raw: "```json\n" + valid + "\n```", want: "valid answer"},
-		{name: "metadata wrapper", raw: `{"metadata":{"finish_reason":"stop"},"result":` + valid + `}`, want: "valid answer"},
-		{name: "final valid draft", raw: valid + `\n{"answer":"final answer","assessment":"explains","citations":[],"proposed_revision":null}`, want: "final answer"},
-		{name: "malformed final draft", raw: valid + `\n{"answer":"unfinished"`, want: "valid answer"},
-		{name: "nested object in malformed final draft", raw: valid + `\n{"answer":"unfinished","citations":[{"path":"x"}]`, want: "valid answer"},
-		{name: "malformed wrapped final draft", raw: valid + `\n{"metadata":{"finish_reason":"stop"},"result":{"answer":"unfinished"}}`, want: "valid answer"},
-		{name: "quoted braces", raw: `{"answer":"value with {nested text}","assessment":"explains","citations":[],"proposed_revision":null}`, want: "value with {nested text}"},
-		{name: "quoted prose brace", raw: `The token "{" was emitted. ` + valid, want: "valid answer"},
+		{name: "fenced", raw: "```json\n" + valid + "\n```"},
+		{name: "metadata wrapper", raw: `{"metadata":{"finish_reason":"stop"},"result":` + valid + `}`},
+		{name: "quoted braces", raw: `{"answer":"value with {nested text}","assessment":"explains","citations":[],"proposed_revision":null}`},
+		{name: "quoted prose brace", raw: `The token "{" was emitted. ` + valid},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -360,8 +412,30 @@ func TestParseAnalysisChatReplyScansKimiCandidates(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if reply.Answer != testCase.want || stats.CandidateCount == 0 {
+			if reply.Answer == "" || stats.CandidateCount == 0 {
 				t.Fatalf("reply=%+v stats=%+v", reply, stats)
+			}
+		})
+	}
+}
+
+func TestParseAnalysisChatReplyRejectsMalformedAmbiguousAndNestedCandidates(t *testing.T) {
+	valid := `{"answer":"valid answer","assessment":"explains","citations":[],"proposed_revision":null}`
+	cases := []struct {
+		name     string
+		raw      string
+		category string
+	}{
+		{name: "malformed candidate", raw: `{"answer":}`, category: analysisChatValidationJSON},
+		{name: "ambiguous valid candidates", raw: valid + `\n` + valid, category: analysisChatValidationCandidate},
+		{name: "nested contract", raw: `{"answer":{"answer":"nested","assessment":"explains","citations":[],"proposed_revision":null},"assessment":"explains","citations":[],"proposed_revision":null}`, category: analysisChatValidationContract},
+		{name: "valid followed by malformed contract", raw: valid + `\n{"answer":"unfinished"`, category: analysisChatValidationJSON},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, stats, err := parseAnalysisChatReplyCandidates(testCase.raw, nil)
+			if err == nil || stats.Category != testCase.category {
+				t.Fatalf("stats=%+v err=%v", stats, err)
 			}
 		})
 	}
@@ -384,18 +458,15 @@ func TestParseAnalysisChatReplyQuotedBracesDoNotEvictOuterCandidate(t *testing.T
 	}
 }
 
-func TestParseAnalysisChatReplyKeepsEarlierValidCitation(t *testing.T) {
+func TestParseAnalysisChatReplyRejectsLaterInvalidContractCandidate(t *testing.T) {
 	evidence := map[string]*analysisChatEvidence{
 		"build-log.txt": {Segments: []string{"controller stopped"}, Lines: map[int]string{}},
 	}
 	valid := `{"answer":"supported","assessment":"supports","citations":[{"path":"build-log.txt","quote":"controller stopped"}],"proposed_revision":null}`
 	invalid := `{"answer":"bad update","assessment":"supports","citations":[{"path":"build-log.txt","quote":"different evidence"}],"proposed_revision":null}`
-	reply, _, err := parseAnalysisChatReplyCandidates(valid+"\n"+invalid, evidence)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if reply.Answer != "supported" {
-		t.Fatalf("reply = %+v", reply)
+	_, stats, err := parseAnalysisChatReplyCandidates(valid+"\n"+invalid, evidence)
+	if err == nil || stats.Category != analysisChatValidationCitation {
+		t.Fatalf("stats=%+v err=%v", stats, err)
 	}
 }
 
@@ -413,9 +484,54 @@ func TestParseAnalysisChatReplyCategorizesCitationMismatch(t *testing.T) {
 	}
 }
 
+func TestParseAnalysisChatReplyValidatesCrossBuildReferences(t *testing.T) {
+	evidence := map[string]*analysisChatEvidence{
+		"builds/103/build-log.txt": {Segments: []string{"build 103 failed first"}, Lines: map[int]string{}},
+		"builds/104/build-log.txt": {Segments: []string{"build 104 timed out later"}, Lines: map[int]string{}},
+	}
+	valid := `{"answer":"The builds fail at different stages.","assessment":"supports","citations":[{"path":"builds/103/build-log.txt","quote":"build 103 failed first"},{"path":"builds/104/build-log.txt","quote":"build 104 timed out later"}],"proposed_revision":null}`
+	if _, err := parseAnalysisChatReply(valid, evidence); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name     string
+		raw      string
+		category string
+	}{
+		{name: "stripped build prefix", raw: `{"answer":"x","assessment":"supports","citations":[{"path":"build-log.txt","quote":"build 103 failed first"}],"proposed_revision":null}`, category: analysisChatValidationReference},
+		{name: "quote from another build", raw: `{"answer":"x","assessment":"supports","citations":[{"path":"builds/103/build-log.txt","quote":"build 104 timed out later"}],"proposed_revision":null}`, category: analysisChatValidationCitation},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, stats, err := parseAnalysisChatReplyCandidates(testCase.raw, evidence)
+			if err == nil || stats.Category != testCase.category {
+				t.Fatalf("stats=%+v err=%v", stats, err)
+			}
+			if !errors.Is(analysisChatSafeValidationError(err), analysischat.ErrCitationValidationFailed) {
+				t.Fatalf("safe error = %v", analysisChatSafeValidationError(err))
+			}
+		})
+	}
+}
+
+func TestParseAnalysisChatReplyRejectsDuplicateFields(t *testing.T) {
+	cases := []string{
+		`{"answer":"first","answer":"second","assessment":"explains","citations":[],"proposed_revision":null}`,
+		`{"answer":"x","assessment":"supports","citations":[{"path":"build-log.txt","path":"other.log","quote":"controller stopped"}],"proposed_revision":null}`,
+		`{"answer":"x","assessment":"challenges","citations":[{"path":"build-log.txt","quote":"controller stopped"}],"proposed_revision":{"root_cause":"one","root_cause":"two","suggested_fix":"fix"}}`,
+	}
+	evidence := map[string]*analysisChatEvidence{"build-log.txt": {Segments: []string{"controller stopped"}, Lines: map[int]string{}}}
+	for _, raw := range cases {
+		_, stats, err := parseAnalysisChatReplyCandidates(raw, evidence)
+		if err == nil || stats.Category != analysisChatValidationContract {
+			t.Fatalf("stats=%+v err=%v raw=%s", stats, err, raw)
+		}
+	}
+}
+
 func TestComposeAnalysisChatSystemPromptKeepsSeparateSchema(t *testing.T) {
 	prompt := ComposeAnalysisChatSystemPrompt("Consumer fact.")
-	for _, want := range []string{"Consumer fact.", "published AI analysis is a hypothesis", `"assessment": "explains"`} {
+	for _, want := range []string{"Consumer fact.", "published AI analysis is a hypothesis", `"assessment": "explains"`, "preserve the full builds/<build-id>/"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("prompt missing %q", want)
 		}
@@ -672,12 +788,12 @@ func TestPrepareAnalysisChatFinalizeMessagesCompactsCompleteRequest(t *testing.T
 	}
 }
 
-func TestParseAnalysisChatReplySelectsFinalDraft(t *testing.T) {
+func TestParseAnalysisChatReplyRejectsAmbiguousValidDrafts(t *testing.T) {
 	raw := `{"answer":"first","assessment":"explains","citations":[],"proposed_revision":null}` +
 		`{"answer":"second","assessment":"explains","citations":[],"proposed_revision":null}`
-	reply, err := parseAnalysisChatReply(raw, nil)
-	if err != nil || reply.Answer != "second" {
-		t.Fatalf("reply=%+v err=%v", reply, err)
+	_, stats, err := parseAnalysisChatReplyCandidates(raw, nil)
+	if err == nil || stats.Category != analysisChatValidationCandidate {
+		t.Fatalf("stats=%+v err=%v", stats, err)
 	}
 }
 
@@ -689,16 +805,33 @@ func TestParseAnalysisChatReplyRejectsTrailingUnrelatedJSON(t *testing.T) {
 	}
 }
 
-func TestAnalysisChatJSONCandidatesAreBounded(t *testing.T) {
+func TestAnalysisChatJSONCandidatesRejectTruncatedScan(t *testing.T) {
 	raw := strings.Repeat("{not-json}", analysisChatMaxCandidates+20) +
 		`{"answer":"final","assessment":"explains","citations":[],"proposed_revision":null}`
-	candidates := analysisChatJSONCandidates(raw)
-	if len(candidates) != analysisChatMaxCandidates {
-		t.Fatalf("candidate count = %d", len(candidates))
+	scan := scanAnalysisChatJSONCandidates(raw)
+	if len(scan.candidates) != analysisChatMaxCandidates || !scan.truncated {
+		t.Fatalf("candidate count = %d truncated=%t", len(scan.candidates), scan.truncated)
 	}
-	reply, err := parseAnalysisChatReply(raw, nil)
-	if err != nil || reply.Answer != "final" {
-		t.Fatalf("reply=%+v err=%v", reply, err)
+	_, stats, err := parseAnalysisChatReplyCandidates(raw, nil)
+	if err == nil || stats.Category != analysisChatValidationCandidate {
+		t.Fatalf("stats=%+v err=%v", stats, err)
+	}
+}
+
+func TestParseAnalysisChatReplyBoundsAggregateCandidateSpanWork(t *testing.T) {
+	valid := `{"answer":"valid answer","assessment":"explains","citations":[],"proposed_revision":null}`
+	largeWrapper := `{"padding":"` + strings.Repeat("x", analysisChatMaxResponseBytes/2) + `","result":` + valid + `}`
+	raw := strings.Repeat(`{"metadata":`, 10) + largeWrapper + strings.Repeat("}", 10)
+	if len(raw) >= analysisChatMaxResponseBytes {
+		t.Fatalf("test response is %d bytes", len(raw))
+	}
+	scan := scanAnalysisChatJSONCandidates(raw)
+	if scan.truncated || len(scan.candidates) < 10 {
+		t.Fatalf("candidates=%d truncated=%t", len(scan.candidates), scan.truncated)
+	}
+	_, stats, err := parseAnalysisChatReplyCandidates(raw, nil)
+	if err == nil || stats.Category != analysisChatValidationCandidate || !strings.Contains(err.Error(), "work budget") {
+		t.Fatalf("stats=%+v err=%v", stats, err)
 	}
 }
 
@@ -756,7 +889,7 @@ func TestAnalysisChatContextDescribesRecurringPatternBuilds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"recurring-pattern analysis", `"pattern_id": "pattern-1"`, `"artifact_builds"`, "builds/<build-id>/<path>"} {
+	for _, want := range []string{"recurring-pattern analysis", `"pattern_id": "pattern-1"`, `"artifact_builds"`, "Use that exact full path in citations"} {
 		if !strings.Contains(contextMessage, want) {
 			t.Fatalf("context missing %q: %s", want, contextMessage)
 		}

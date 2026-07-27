@@ -13,9 +13,10 @@ import (
 )
 
 const (
-	analysisChatValidationCandidate = "candidate_extraction"
+	analysisChatValidationCandidate = "candidate_selection"
 	analysisChatValidationJSON      = "json_validation"
 	analysisChatValidationContract  = "response_contract"
+	analysisChatValidationReference = "reference_validation"
 	analysisChatValidationCitation  = "citation_validation"
 )
 
@@ -62,95 +63,108 @@ func parseAnalysisChatReplyCandidates(raw string, evidence map[string]*analysisC
 		)
 	}
 	scan := scanAnalysisChatJSONCandidates(raw)
-	candidates := scan.candidates
-	for index := range candidates {
-		candidates[index].replyLike = analysisChatCandidateLooksLikeReply(candidates[index].value)
+	stats.CandidateCount = len(scan.candidates)
+	if scan.truncated {
+		stats.Category = analysisChatValidationCandidate
+		return analysischat.Reply{}, stats, newAnalysisChatValidationError(stats.Category, errors.New("candidate scan was truncated"))
 	}
-	stats.CandidateCount = len(candidates)
-	if len(candidates) == 0 {
+	if len(scan.candidates) == 0 {
 		stats.Category = analysisChatValidationCandidate
 		return analysischat.Reply{}, stats, newAnalysisChatValidationError(stats.Category, errors.New("no JSON response object found"))
 	}
-	var bestErr error
-	for index := len(candidates) - 1; index >= 0; index-- {
-		reply, err := decodeAnalysisChatReplyCandidate(candidates[index].value, evidence)
-		if err == nil {
-			if hasTrailingUnrelatedAnalysisChatCandidate(candidates[index], candidates[index+1:], scan.incomplete) {
-				stats.Category = analysisChatValidationJSON
-				return analysischat.Reply{}, stats, newAnalysisChatValidationError(
-					stats.Category, errors.New("response contains trailing unrelated JSON"),
-				)
-			}
-			return reply, stats, nil
+	candidateSpanBytes := 0
+	for _, candidate := range scan.candidates {
+		if len(candidate.value) > analysisChatMaxCandidateSpanBytes-candidateSpanBytes {
+			stats.Category = analysisChatValidationCandidate
+			return analysischat.Reply{}, stats, newAnalysisChatValidationError(stats.Category, errors.New("candidate span work budget exceeded"))
 		}
-		if bestErr == nil || analysisChatValidationCategory(bestErr) == analysisChatValidationJSON &&
-			analysisChatValidationCategory(err) != analysisChatValidationJSON {
+		candidateSpanBytes += len(candidate.value)
+	}
+
+	type validCandidate struct {
+		reply analysischat.Reply
+		span  analysisChatJSONCandidate
+	}
+	type rejectedCandidate struct {
+		span         analysisChatJSONCandidate
+		category     string
+		contractLike bool
+	}
+	valid := make([]validCandidate, 0, 1)
+	rejected := make([]rejectedCandidate, 0, len(scan.candidates))
+	bestErr := newAnalysisChatValidationError(analysisChatValidationJSON, errors.New("response is not valid analysis-chat JSON"))
+	for _, candidate := range scan.candidates {
+		reply, err := decodeAnalysisChatReplyCandidate(candidate.value, evidence)
+		if err == nil {
+			candidate.replyLike = true
+			valid = append(valid, validCandidate{reply: reply, span: candidate})
+			continue
+		}
+		category := analysisChatValidationCategory(err)
+		rejected = append(rejected, rejectedCandidate{
+			span: candidate, category: category, contractLike: analysisChatCandidateLooksLikeReply(candidate.value),
+		})
+		if analysisChatValidationRank(category) > analysisChatValidationRank(analysisChatValidationCategory(bestErr)) {
 			bestErr = err
 		}
 	}
-	stats.Category = analysisChatValidationCategory(bestErr)
-	return analysischat.Reply{}, stats, bestErr
+
+	switch len(valid) {
+	case 0:
+		stats.Category = analysisChatValidationCategory(bestErr)
+		return analysischat.Reply{}, stats, bestErr
+	case 1:
+		selected := valid[0]
+		for _, incomplete := range scan.incomplete {
+			if incomplete.start > selected.span.end || incomplete.start < selected.span.start {
+				stats.Category = analysisChatValidationJSON
+				return analysischat.Reply{}, stats, newAnalysisChatValidationError(stats.Category, errors.New("response contains an incomplete JSON candidate"))
+			}
+		}
+		for _, candidate := range rejected {
+			enclosesSelected := candidate.span.start < selected.span.start && candidate.span.end > selected.span.end
+			trailsSelected := candidate.span.start > selected.span.end
+			if candidate.contractLike && (enclosesSelected || trailsSelected) {
+				stats.Category = candidate.category
+				return analysischat.Reply{}, stats, newAnalysisChatValidationError(stats.Category, errors.New("response contains a rejected contract candidate"))
+			}
+			if trailsSelected {
+				stats.Category = analysisChatValidationJSON
+				return analysischat.Reply{}, stats, newAnalysisChatValidationError(stats.Category, errors.New("response contains trailing unrelated JSON"))
+			}
+		}
+		return selected.reply, stats, nil
+	default:
+		stats.Category = analysisChatValidationCandidate
+		return analysischat.Reply{}, stats, newAnalysisChatValidationError(stats.Category, errors.New("response contains multiple valid candidates"))
+	}
 }
 
-func hasTrailingUnrelatedAnalysisChatCandidate(
-	selected analysisChatJSONCandidate,
-	trailing []analysisChatJSONCandidate,
-	incomplete []analysisChatCandidateState,
-) bool {
-	type candidateInterval struct {
-		start      int
-		end        int
-		candidate  *analysisChatJSONCandidate
-		incomplete bool
+func analysisChatValidationRank(category string) int {
+	switch category {
+	case analysisChatValidationCitation:
+		return 5
+	case analysisChatValidationReference:
+		return 4
+	case analysisChatValidationContract:
+		return 3
+	case analysisChatValidationJSON:
+		return 2
+	case analysisChatValidationCandidate:
+		return 1
+	default:
+		return 0
 	}
-	intervals := make([]candidateInterval, 0, len(trailing)+len(incomplete))
-	for index := range trailing {
-		intervals = append(intervals, candidateInterval{
-			start: trailing[index].start, end: trailing[index].end, candidate: &trailing[index],
-		})
-	}
-	for _, candidate := range incomplete {
-		intervals = append(intervals, candidateInterval{
-			start: candidate.start, end: int(^uint(0) >> 1), incomplete: true,
-		})
-	}
-	sort.Slice(intervals, func(i, j int) bool {
-		if intervals[i].start != intervals[j].start {
-			return intervals[i].start < intervals[j].start
-		}
-		return intervals[i].end > intervals[j].end
-	})
-	type rootInterval struct {
-		end        int
-		incomplete bool
-		related    bool
-	}
-	var root *rootInterval
-	flush := func() bool {
-		return root != nil && !root.incomplete && !root.related
-	}
-	for _, candidateInterval := range intervals {
-		if root == nil || candidateInterval.start > root.end {
-			if flush() {
-				return true
-			}
-			root = &rootInterval{end: candidateInterval.end, incomplete: candidateInterval.incomplete}
-		}
-		if candidateInterval.incomplete || candidateInterval.candidate == nil {
-			continue
-		}
-		candidate := candidateInterval.candidate
-		containsSelected := candidate.start <= selected.start && candidate.end >= selected.end
-		if containsSelected || candidate.replyLike {
-			root.related = true
-		}
-	}
-	return flush()
 }
 
 func analysisChatCandidateLooksLikeReply(candidate string) bool {
 	var fields map[string]json.RawMessage
 	if json.Unmarshal([]byte(candidate), &fields) != nil {
+		for _, field := range []string{"answer", "assessment", "citations", "proposed_revision"} {
+			if strings.Contains(candidate, `"`+field+`"`) {
+				return true
+			}
+		}
 		return false
 	}
 	for _, field := range []string{"answer", "assessment", "citations", "proposed_revision"} {
@@ -162,12 +176,38 @@ func analysisChatCandidateLooksLikeReply(candidate string) bool {
 }
 
 func decodeAnalysisChatReplyCandidate(candidate string, evidence map[string]*analysisChatEvidence) (analysischat.Reply, error) {
+	fields, err := decodeAnalysisChatObject(candidate)
+	if err != nil {
+		return analysischat.Reply{}, err
+	}
+	required := []string{"answer", "assessment", "citations", "proposed_revision"}
+	if len(fields) != len(required) {
+		return analysischat.Reply{}, newAnalysisChatValidationError(
+			analysisChatValidationContract, errors.New("response must contain exactly the required fields"),
+		)
+	}
+	for _, field := range required {
+		if _, ok := fields[field]; !ok {
+			return analysischat.Reply{}, newAnalysisChatValidationError(
+				analysisChatValidationContract, errors.New("response must contain exactly the required fields"),
+			)
+		}
+	}
+	if err := rejectAnalysisChatDuplicateFields(candidate); err != nil {
+		return analysischat.Reply{}, err
+	}
+
 	var reply analysischat.Reply
 	decoder := json.NewDecoder(strings.NewReader(candidate))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&reply); err != nil {
+		category := analysisChatValidationContract
+		var syntaxErr *json.SyntaxError
+		if errors.As(err, &syntaxErr) {
+			category = analysisChatValidationJSON
+		}
 		return analysischat.Reply{}, newAnalysisChatValidationError(
-			analysisChatValidationJSON, fmt.Errorf("response is not valid analysis-chat JSON: %w", err),
+			category, errors.New("response is not valid analysis-chat JSON"),
 		)
 	}
 	var extra any
@@ -190,6 +230,11 @@ func decodeAnalysisChatReplyCandidate(candidate string, evidence map[string]*ana
 			analysisChatValidationContract, errors.New("assessment must be explains, supports, challenges, or inconclusive"),
 		)
 	}
+	if reply.Citations == nil {
+		return analysischat.Reply{}, newAnalysisChatValidationError(
+			analysisChatValidationContract, errors.New("citations must be an array"),
+		)
+	}
 	if len(reply.Citations) > 20 {
 		return analysischat.Reply{}, newAnalysisChatValidationError(
 			analysisChatValidationCitation, errors.New("citations must contain at most 20 entries"),
@@ -202,13 +247,13 @@ func decodeAnalysisChatReplyCandidate(candidate string, evidence map[string]*ana
 		safe, err := artifacts.SafePath(citation.Path)
 		if err != nil || safe == "" {
 			return analysischat.Reply{}, newAnalysisChatValidationError(
-				analysisChatValidationCitation, fmt.Errorf("citation %d has an unsafe path", i+1),
+				analysisChatValidationReference, fmt.Errorf("citation %d has an unsafe path", i+1),
 			)
 		}
 		artifactEvidence := evidence[safe]
 		if artifactEvidence == nil {
 			return analysischat.Reply{}, newAnalysisChatValidationError(
-				analysisChatValidationCitation, fmt.Errorf("citation %d names an artifact not read during this turn", i+1),
+				analysisChatValidationReference, fmt.Errorf("citation %d names an artifact not read during this turn", i+1),
 			)
 		}
 		citation.Path = safe
@@ -275,6 +320,106 @@ func decodeAnalysisChatReplyCandidate(candidate string, evidence map[string]*ana
 	return reply, nil
 }
 
+func decodeAnalysisChatObject(raw string) (map[string]json.RawMessage, error) {
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('{') {
+		return nil, newAnalysisChatValidationError(analysisChatValidationJSON, errors.New("response is not a JSON object"))
+	}
+	fields := make(map[string]json.RawMessage, 4)
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return nil, newAnalysisChatValidationError(analysisChatValidationJSON, errors.New("response object is malformed"))
+		}
+		name, ok := token.(string)
+		if !ok {
+			return nil, newAnalysisChatValidationError(analysisChatValidationJSON, errors.New("response object is malformed"))
+		}
+		if _, duplicate := fields[name]; duplicate {
+			return nil, newAnalysisChatValidationError(analysisChatValidationContract, errors.New("response contains duplicate fields"))
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return nil, newAnalysisChatValidationError(analysisChatValidationJSON, errors.New("response object is malformed"))
+		}
+		fields[name] = value
+	}
+	if token, err := decoder.Token(); err != nil || token != json.Delim('}') {
+		return nil, newAnalysisChatValidationError(analysisChatValidationJSON, errors.New("response object is malformed"))
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return nil, newAnalysisChatValidationError(analysisChatValidationJSON, errors.New("response contains trailing JSON"))
+	}
+	return fields, nil
+}
+
+func rejectAnalysisChatDuplicateFields(raw string) error {
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	token, err := decoder.Token()
+	if err != nil {
+		return newAnalysisChatValidationError(analysisChatValidationJSON, errors.New("response object is malformed"))
+	}
+	if err := walkAnalysisChatJSONValue(decoder, token); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return newAnalysisChatValidationError(analysisChatValidationJSON, errors.New("response contains trailing JSON"))
+	}
+	return nil
+}
+
+func walkAnalysisChatJSONValue(decoder *json.Decoder, token json.Token) error {
+	delim, ok := token.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch delim {
+	case '{':
+		seen := map[string]struct{}{}
+		for decoder.More() {
+			nameToken, err := decoder.Token()
+			if err != nil {
+				return newAnalysisChatValidationError(analysisChatValidationJSON, errors.New("response object is malformed"))
+			}
+			name, ok := nameToken.(string)
+			if !ok {
+				return newAnalysisChatValidationError(analysisChatValidationJSON, errors.New("response object is malformed"))
+			}
+			if _, duplicate := seen[name]; duplicate {
+				return newAnalysisChatValidationError(analysisChatValidationContract, errors.New("response contains duplicate fields"))
+			}
+			seen[name] = struct{}{}
+			valueToken, err := decoder.Token()
+			if err != nil {
+				return newAnalysisChatValidationError(analysisChatValidationJSON, errors.New("response object is malformed"))
+			}
+			if err := walkAnalysisChatJSONValue(decoder, valueToken); err != nil {
+				return err
+			}
+		}
+		if token, err := decoder.Token(); err != nil || token != json.Delim('}') {
+			return newAnalysisChatValidationError(analysisChatValidationJSON, errors.New("response object is malformed"))
+		}
+	case '[':
+		for decoder.More() {
+			valueToken, err := decoder.Token()
+			if err != nil {
+				return newAnalysisChatValidationError(analysisChatValidationJSON, errors.New("response array is malformed"))
+			}
+			if err := walkAnalysisChatJSONValue(decoder, valueToken); err != nil {
+				return err
+			}
+		}
+		if token, err := decoder.Token(); err != nil || token != json.Delim(']') {
+			return newAnalysisChatValidationError(analysisChatValidationJSON, errors.New("response array is malformed"))
+		}
+	default:
+		return newAnalysisChatValidationError(analysisChatValidationJSON, errors.New("response object is malformed"))
+	}
+	return nil
+}
+
 type analysisChatCandidateState struct {
 	start int
 }
@@ -290,15 +435,6 @@ type analysisChatCandidateScan struct {
 	candidates []analysisChatJSONCandidate
 	incomplete []analysisChatCandidateState
 	truncated  bool
-}
-
-func analysisChatJSONCandidates(raw string) []string {
-	scan := scanAnalysisChatJSONCandidates(raw)
-	out := make([]string, len(scan.candidates))
-	for index, candidate := range scan.candidates {
-		out[index] = candidate.value
-	}
-	return out
 }
 
 func scanAnalysisChatJSONCandidates(raw string) analysisChatCandidateScan {
@@ -377,5 +513,11 @@ func scanAnalysisChatJSONCandidates(raw string) analysisChatCandidateScan {
 	for index, start := range stack {
 		incomplete[index] = analysisChatCandidateState{start: start}
 	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].start != candidates[j].start {
+			return candidates[i].start < candidates[j].start
+		}
+		return candidates[i].end > candidates[j].end
+	})
 	return analysisChatCandidateScan{candidates: candidates, incomplete: incomplete, truncated: truncated}
 }
