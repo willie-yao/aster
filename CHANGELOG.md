@@ -216,6 +216,10 @@ for how to pin a release.
 
 ### Fixed
 
+- **Safe Orka refresh publication.** Orka result API 401 and 403 responses now
+  abort the refresh before public output or notifications, stop additional
+  analysis scheduling, hide response bodies, and restore the prior AI cache and
+  private trace files byte for byte.
 - **Rotating Orka result credentials.** Result clients now reload file-backed
   credentials for every request, and Helm deployments can use projected
   ServiceAccount tokens for container analysis, fix generation, and source

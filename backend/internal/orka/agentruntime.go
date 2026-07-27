@@ -374,6 +374,22 @@ type ResultClient struct {
 	http   *http.Client
 }
 
+// ResultHTTPError identifies a non-success response from the Orka result API.
+type ResultHTTPError struct {
+	StatusCode int
+}
+
+func (e *ResultHTTPError) Error() string {
+	return fmt.Sprintf("orka result: HTTP %d", e.StatusCode)
+}
+
+// IsResultAuthorizationError reports a systemic result API authorization failure.
+func IsResultAuthorizationError(err error) bool {
+	var httpErr *ResultHTTPError
+	return errors.As(err, &httpErr) &&
+		(httpErr.StatusCode == http.StatusUnauthorized || httpErr.StatusCode == http.StatusForbidden)
+}
+
 type resultTokenSource interface {
 	Token() (string, error)
 }
@@ -460,16 +476,13 @@ func (c *ResultClient) Result(ctx context.Context, namespace, taskName string) (
 	if resp.StatusCode == http.StatusNotFound {
 		return "", false, nil
 	}
+	if resp.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
+		return "", false, &ResultHTTPError{StatusCode: resp.StatusCode}
+	}
 	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxFixResultBytes+1))
 	if readErr != nil {
 		return "", false, readErr
-	}
-	if resp.StatusCode != http.StatusOK {
-		message := strings.TrimSpace(string(body))
-		if len(message) > 1024 {
-			message = message[:1024]
-		}
-		return "", false, fmt.Errorf("orka result: HTTP %d: %s", resp.StatusCode, message)
 	}
 	if len(body) > maxFixResultBytes {
 		return "", false, fmt.Errorf("orka result exceeds %d bytes", maxFixResultBytes)

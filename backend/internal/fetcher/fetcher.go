@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -370,6 +371,31 @@ func (p *pipeline) refresh(ctx context.Context, jobs []models.ProwJob) (*refresh
 }
 
 func (p *pipeline) refreshWithAnalysisContext(fetchCtx, analysisCtx context.Context, jobs []models.ProwJob) (*refreshResult, error) {
+	var snapshot *aiRefreshStateSnapshot
+	var err error
+	if p.enableAI && p.opts.AnalysisRuntime.Type == AnalysisRuntimeOrkaContainer {
+		snapshot, err = captureAIRefreshState(p.opts.OutDir)
+		if err != nil {
+			return nil, fmt.Errorf("snapshotting AI refresh state: %w", err)
+		}
+	}
+	result, err := p.refreshDataWithAnalysisContext(fetchCtx, analysisCtx, jobs)
+	if err == nil {
+		if snapshot != nil {
+			snapshot.Discard()
+		}
+		return result, err
+	}
+	if snapshot == nil {
+		return result, err
+	}
+	if restoreErr := snapshot.Restore(); restoreErr != nil {
+		return nil, errors.Join(err, fmt.Errorf("restoring AI refresh state: %w", restoreErr))
+	}
+	return nil, err
+}
+
+func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.Context, jobs []models.ProwJob) (*refreshResult, error) {
 	cfg, opts := p.cfg, p.opts
 	if err := clearAnalysisTrace(opts.OutDir); err != nil {
 		log.Printf("Warning: failed to clear stale AI traces: %v", err)
@@ -486,6 +512,122 @@ func (p *pipeline) refreshWithAnalysisContext(fetchCtx, analysisCtx context.Cont
 	}
 
 	return &refreshResult{details: details, flakiness: flakinessReport}, nil
+}
+
+type aiRefreshFileSnapshot struct {
+	path       string
+	backupPath string
+	mode       os.FileMode
+	exists     bool
+}
+
+type aiRefreshStateSnapshot struct {
+	files []aiRefreshFileSnapshot
+}
+
+func captureAIRefreshState(outDir string) (*aiRefreshStateSnapshot, error) {
+	snapshot := &aiRefreshStateSnapshot{}
+	for _, name := range []string{ai.CacheFilename, output.AITraceFilename} {
+		path := filepath.Join(outDir, name)
+		info, err := os.Stat(path)
+		if os.IsNotExist(err) {
+			snapshot.files = append(snapshot.files, aiRefreshFileSnapshot{path: path})
+			continue
+		}
+		if err != nil {
+			snapshot.Discard()
+			return nil, err
+		}
+		if !info.Mode().IsRegular() {
+			snapshot.Discard()
+			return nil, fmt.Errorf("%s is not a regular file", name)
+		}
+		source, err := os.Open(path)
+		if err != nil {
+			snapshot.Discard()
+			return nil, err
+		}
+		backup, err := os.CreateTemp("", "prow-ai-refresh-state-*")
+		if err != nil {
+			source.Close()
+			snapshot.Discard()
+			return nil, err
+		}
+		backupPath := backup.Name()
+		_ = backup.Chmod(info.Mode().Perm())
+		_, copyErr := io.Copy(backup, source)
+		closeSourceErr := source.Close()
+		closeBackupErr := backup.Close()
+		if err := errors.Join(copyErr, closeSourceErr, closeBackupErr); err != nil {
+			_ = os.Remove(backupPath)
+			snapshot.Discard()
+			return nil, err
+		}
+		snapshot.files = append(snapshot.files, aiRefreshFileSnapshot{
+			path: path, backupPath: backupPath, mode: info.Mode().Perm(), exists: true,
+		})
+	}
+	return snapshot, nil
+}
+
+func (s *aiRefreshStateSnapshot) Restore() error {
+	if s == nil {
+		return nil
+	}
+	var errs []error
+	for _, file := range s.files {
+		if !file.exists {
+			if err := os.Remove(file.path); err != nil && !os.IsNotExist(err) {
+				errs = append(errs, err)
+			}
+			continue
+		}
+		if err := restoreAIRefreshFile(file); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func restoreAIRefreshFile(snapshot aiRefreshFileSnapshot) error {
+	backup, err := os.Open(snapshot.backupPath)
+	if err != nil {
+		return err
+	}
+	defer backup.Close()
+	if err := os.MkdirAll(filepath.Dir(snapshot.path), 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(snapshot.path), filepath.Base(snapshot.path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	// Some RWX filesystems use mount-level modes and reject chmod.
+	_ = tmp.Chmod(snapshot.mode)
+	if _, err := io.Copy(tmp, backup); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, snapshot.path); err != nil {
+		return err
+	}
+	return os.Remove(snapshot.backupPath)
+}
+
+func (s *aiRefreshStateSnapshot) Discard() {
+	if s == nil {
+		return
+	}
+	for _, file := range s.files {
+		if file.backupPath != "" {
+			_ = os.Remove(file.backupPath)
+		}
+	}
 }
 
 func clearAnalysisTrace(outDir string) error {

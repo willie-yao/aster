@@ -3,6 +3,7 @@ package orka
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -314,6 +315,31 @@ func TestResultClient_NotAvailable(t *testing.T) {
 	c := NewResultClient(srv.URL, "")
 	if _, ok, err := c.Result(context.Background(), "orka-system", "t"); ok || err != nil {
 		t.Errorf("404 should be not-available with no error, got ok=%v err=%v", ok, err)
+	}
+}
+
+func TestResultClientClassifiesSafeHTTPErrors(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusInternalServerError} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(status)
+				_, _ = w.Write([]byte("private response material"))
+			}))
+			defer server.Close()
+
+			_, _, err := NewResultClient(server.URL, "token").Result(t.Context(), "orka-system", "task")
+			var httpErr *ResultHTTPError
+			if !errors.As(err, &httpErr) || httpErr.StatusCode != status {
+				t.Fatalf("error = %#v", err)
+			}
+			if strings.Contains(err.Error(), "private response material") {
+				t.Fatalf("error exposed response body: %v", err)
+			}
+			wantAuth := status == http.StatusUnauthorized || status == http.StatusForbidden
+			if got := IsResultAuthorizationError(err); got != wantAuth {
+				t.Fatalf("IsResultAuthorizationError = %v, want %v", got, wantAuth)
+			}
+		})
 	}
 }
 
