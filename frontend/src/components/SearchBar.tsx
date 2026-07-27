@@ -19,6 +19,117 @@ import { soft } from "../theme";
 import { Panel } from "./Panel";
 import type { SearchEntry } from "../types/dashboard";
 
+function searchResultAccessibleName(entry: SearchEntry, filePrefix: string): string {
+  const jobName = entry.job_name;
+  const label =
+    entry.kind === "job" ? entry.tab_name || shortJobName(jobName, filePrefix) : shortTestName(entry.test_name);
+  const parts = [label];
+
+  if (entry.kind === "test" || label !== jobName) {
+    parts.push(`job ${jobName}`);
+  }
+  const repo = entry.repo.trim();
+  if (entry.job_type === "presubmit" && repo) {
+    parts.push(`repository ${repo}`);
+  }
+  const branch = entry.branch.trim();
+  if (branch) {
+    parts.push(`branch ${branch}`);
+  }
+  if (entry.kind === "test" && entry.fail_rate > 0) {
+    parts.push(`${Math.round(entry.fail_rate * 100)}% failure rate`);
+  }
+
+  return parts.join(", ");
+}
+
+function searchResultPath(entry: SearchEntry): string {
+  const jobPath = `/job/${encodeURIComponent(entry.job_id)}`;
+  return entry.kind === "job" ? jobPath : `${jobPath}/test/${encodeURIComponent(entry.test_name)}`;
+}
+
+interface SearchResultButtonProps {
+  entry: SearchEntry;
+  filePrefix: string;
+  onSelect: (entry: SearchEntry) => void;
+}
+
+export function SearchResultButton({ entry, filePrefix, onSelect }: SearchResultButtonProps) {
+  return (
+    <ListItemButton
+      component="button"
+      type="button"
+      aria-label={searchResultAccessibleName(entry, filePrefix)}
+      onClick={() => onSelect(entry)}
+      sx={{
+        width: "100%",
+        display: "flex",
+        alignItems: "center",
+        gap: 1.5,
+        px: 1.5,
+        py: 1,
+        color: "text.primary",
+        textAlign: "left",
+        transition: "background-color 150ms ease",
+        "&:hover": { bgcolor: (theme) => (theme.vars ?? theme).palette.surface.containerHigh },
+      }}
+    >
+      {entry.kind === "job" ? (
+        <>
+          <Box
+            sx={{
+              width: 8,
+              height: 8,
+              borderRadius: "50%",
+              flexShrink: 0,
+              bgcolor: "primary.main",
+            }}
+          />
+          <Typography variant="body2" noWrap sx={{ minWidth: 0, flex: 1, fontWeight: 600 }}>
+            {entry.tab_name || shortJobName(entry.job_name, filePrefix)}
+          </Typography>
+          <Typography variant="label" noWrap sx={{ flexShrink: 0, fontSize: 12, color: "text.secondary" }}>
+            {entry.branch}
+          </Typography>
+        </>
+      ) : (
+        <>
+          <Box
+            sx={{
+              width: 8,
+              height: 8,
+              borderRadius: "50%",
+              flexShrink: 0,
+              bgcolor: entry.status === "passed" ? "success.main" : "error.main",
+            }}
+          />
+          <Typography variant="body2" noWrap sx={{ minWidth: 0, flex: 1 }}>
+            {shortTestName(entry.test_name)}
+          </Typography>
+          {entry.fail_rate > 0 && (
+            <Chip
+              size="small"
+              color="error"
+              label={`${Math.round(entry.fail_rate * 100)}%`}
+              sx={{
+                flexShrink: 0,
+                height: 22,
+                bgcolor: (theme) => soft(theme, "error", 0.18),
+                color: "error.main",
+                fontWeight: 600,
+                "& .MuiChip-label": { px: 1 },
+              }}
+            />
+          )}
+        </>
+      )}
+    </ListItemButton>
+  );
+}
+
+SearchResultButton.accessibleName = searchResultAccessibleName;
+SearchResultButton.path = searchResultPath;
+
 export function SearchBar() {
   const manifest = useManifest();
   const filePrefix = manifest.short_name_prefix ?? "";
@@ -97,11 +208,7 @@ export function SearchBar() {
   }, []);
 
   function handleSelect(entry: SearchEntry) {
-    if (entry.kind === "job") {
-      navigate(`/job/${encodeURIComponent(entry.job_id)}`);
-    } else {
-      navigate(`/job/${encodeURIComponent(entry.job_id)}/test/${encodeURIComponent(entry.test_name)}`);
-    }
+    navigate(searchResultPath(entry));
     setOpen(false);
     setQuery("");
     setMobileExpanded(false);
@@ -290,78 +397,12 @@ export function SearchBar() {
                       {shortJobName(group.jobName, filePrefix)}
                     </ListSubheader>
                     {group.items.map((r) => (
-                      <ListItemButton
+                      <SearchResultButton
                         key={`${r.item.kind}:${r.item.job_id}/${r.item.test_name}`}
-                        component="button"
-                        type="button"
-                        onClick={() => handleSelect(r.item)}
-                        sx={{
-                          width: "100%",
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 1.5,
-                          px: 1.5,
-                          py: 1,
-                          color: "text.primary",
-                          textAlign: "left",
-                          transition: "background-color 150ms ease",
-                          "&:hover": { bgcolor: (theme) => (theme.vars ?? theme).palette.surface.containerHigh },
-                        }}
-                      >
-                        {r.item.kind === "job" ? (
-                          <>
-                            <Box
-                              sx={{
-                                width: 8,
-                                height: 8,
-                                borderRadius: "50%",
-                                flexShrink: 0,
-                                bgcolor: "primary.main",
-                              }}
-                            />
-                            <Typography variant="body2" noWrap sx={{ minWidth: 0, flex: 1, fontWeight: 600 }}>
-                              {r.item.tab_name || shortJobName(r.item.job_name, filePrefix)}
-                            </Typography>
-                            <Typography
-                              variant="label"
-                              noWrap
-                              sx={{ flexShrink: 0, fontSize: 12, color: "text.secondary" }}
-                            >
-                              {r.item.branch}
-                            </Typography>
-                          </>
-                        ) : (
-                          <>
-                            <Box
-                              sx={{
-                                width: 8,
-                                height: 8,
-                                borderRadius: "50%",
-                                flexShrink: 0,
-                                bgcolor: r.item.status === "passed" ? "success.main" : "error.main",
-                              }}
-                            />
-                            <Typography variant="body2" noWrap sx={{ minWidth: 0, flex: 1 }}>
-                              {shortTestName(r.item.test_name)}
-                            </Typography>
-                            {r.item.fail_rate > 0 && (
-                              <Chip
-                                size="small"
-                                color="error"
-                                label={`${Math.round(r.item.fail_rate * 100)}%`}
-                                sx={{
-                                  flexShrink: 0,
-                                  height: 22,
-                                  bgcolor: (theme) => soft(theme, "error", 0.18),
-                                  color: "error.main",
-                                  fontWeight: 600,
-                                  "& .MuiChip-label": { px: 1 },
-                                }}
-                              />
-                            )}
-                          </>
-                        )}
-                      </ListItemButton>
+                        entry={r.item}
+                        filePrefix={filePrefix}
+                        onSelect={handleSelect}
+                      />
                     ))}
                   </Box>
                 ))}
