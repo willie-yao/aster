@@ -61,6 +61,11 @@ if [[ $(container_command fetcher "$tmp/cron.yaml") != /usr/local/bin/fetcher ]]
   echo 'CronJob does not run the in-process fetcher' >&2
   exit 1
 fi
+if grep -Fq 'name: prepare-project' "$tmp/cron.yaml" || grep -Fq 'name: project-runtime' "$tmp/cron.yaml"; then
+  echo 'in-process CronJob unexpectedly materialized the project ConfigMap' >&2
+  exit 1
+fi
+grep -A3 -F 'name: project' "$tmp/cron.yaml" | grep -Fq 'mountPath: /config'
 
 # The experimental selector is Helm-only and leaves existing consumers on the
 # in-process path until explicitly selected.
@@ -81,6 +86,10 @@ container_args=(
   --set analysisRuntime.orkaContainer.modelAuth.existingSecret=orka-model
 )
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" "${container_args[@]}" > "$tmp/container-analysis.yaml"
+awk '/^          initContainers:/{copy=1} /^          containers:/{copy=0} copy' \
+  "$tmp/container-analysis.yaml" > "$tmp/prepare-project.yaml"
+awk '/^          containers:/{copy=1} /^          (nodeSelector|affinity|tolerations|volumes):/{if (copy) exit} copy' \
+  "$tmp/container-analysis.yaml" > "$tmp/fetcher-container.yaml"
 grep -Fq -- '-analysis-runtime=orka-container' "$tmp/container-analysis.yaml"
 grep -Fq -- '-orka-analysis-api=http://orka.orka-system.svc.cluster.local:8080' "$tmp/container-analysis.yaml"
 grep -Fq -- '-orka-analysis-image=ghcr.io/willie-yao/prow-ai-dashboard/analyzer:sha-deadbeef' "$tmp/container-analysis.yaml"
@@ -101,6 +110,49 @@ if grep -Fq 'name: ORKA_API_TOKEN_FILE' "$tmp/container-analysis.yaml"; then
   echo 'Secret-backed container analysis also rendered a token file' >&2
   exit 1
 fi
+grep -Fq 'name: prepare-project' "$tmp/prepare-project.yaml"
+grep -Fq 'image: busybox:1.36.1' "$tmp/prepare-project.yaml"
+grep -Fq 'imagePullPolicy: IfNotPresent' "$tmp/prepare-project.yaml"
+grep -Fq 'set -eu' "$tmp/prepare-project.yaml"
+grep -Fq 'cp -L /source/project.yaml /project/project.yaml' "$tmp/prepare-project.yaml"
+grep -Fq 'cp -L /source/prompts/system.md /project/prompts/system.md' "$tmp/prepare-project.yaml"
+grep -Fq 'for file in /source/skills/*; do' "$tmp/prepare-project.yaml"
+grep -Fq "tr '[:upper:]' '[:lower:]'" "$tmp/prepare-project.yaml"
+grep -Fq 'yaml|yml) cp -L "$file" /project/skills/' "$tmp/prepare-project.yaml"
+grep -A3 -F 'name: project' "$tmp/prepare-project.yaml" | grep -Fq 'mountPath: /source'
+grep -A3 -F 'name: project' "$tmp/prepare-project.yaml" | grep -Fq 'readOnly: true'
+grep -A2 -F 'name: project-runtime' "$tmp/prepare-project.yaml" | grep -Fq 'mountPath: /project'
+if grep -Eq 'secret|token|chmod[[:space:]]+-R' "$tmp/prepare-project.yaml"; then
+  echo 'project materializer contains a Secret mount, token reference, or recursive chmod' >&2
+  exit 1
+fi
+grep -A3 -F 'name: project-runtime' "$tmp/fetcher-container.yaml" | grep -Fq 'mountPath: /config'
+grep -A3 -F 'name: project-runtime' "$tmp/fetcher-container.yaml" | grep -Fq 'readOnly: true'
+if grep -Eq '^[[:space:]]+- name: project$' "$tmp/fetcher-container.yaml"; then
+  echo 'Orka fetcher still mounts the ConfigMap directly at the project path' >&2
+  exit 1
+fi
+grep -A2 -F 'name: project-runtime' "$tmp/container-analysis.yaml" | grep -Fq 'emptyDir: {}'
+
+cat > "$tmp/skills-values.yaml" <<'VALUES'
+project:
+  skills:
+    first.yaml: |
+      id: first
+    Second.YmL: |
+      id: second
+VALUES
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/skills-values.yaml" \
+  "${container_args[@]}" --show-only templates/fetcher-cronjob.yaml > "$tmp/container-skills.yaml"
+grep -Fq 'path: skills/first.yaml' "$tmp/container-skills.yaml"
+grep -Fq 'path: skills/Second.YmL' "$tmp/container-skills.yaml"
+grep -Fq 'for file in /source/skills/*; do' "$tmp/container-skills.yaml"
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" "${container_args[@]}" \
+  --set project.existingConfigMap=existing-project \
+  --show-only templates/fetcher-cronjob.yaml > "$tmp/container-existing-project.yaml"
+grep -Fq 'name: existing-project' "$tmp/container-existing-project.yaml"
+grep -Fq 'name: prepare-project' "$tmp/container-existing-project.yaml"
 
 container_service_account_args=(
   --set mode=cron
@@ -115,9 +167,18 @@ container_service_account_args=(
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   "${container_service_account_args[@]}" > "$tmp/container-service-account.yaml"
 grep -Fq 'serviceAccountName: test-prow-ai-dashboard-orka' "$tmp/container-service-account.yaml"
-grep -Fq 'automountServiceAccountToken: true' "$tmp/container-service-account.yaml"
+grep -Fq 'automountServiceAccountToken: false' "$tmp/container-service-account.yaml"
 grep -Fq 'name: ORKA_API_TOKEN_FILE' "$tmp/container-service-account.yaml"
 grep -Fq 'value: /var/run/secrets/kubernetes.io/serviceaccount/token' "$tmp/container-service-account.yaml"
+grep -A3 -F 'name: orka-api-token' "$tmp/container-service-account.yaml" | grep -Fq 'mountPath: /var/run/secrets/kubernetes.io/serviceaccount'
+grep -A18 -F 'name: orka-api-token' "$tmp/container-service-account.yaml" | grep -Fq 'serviceAccountToken:'
+grep -A18 -F 'name: orka-api-token' "$tmp/container-service-account.yaml" | grep -Fq 'name: kube-root-ca.crt'
+grep -A18 -F 'name: orka-api-token' "$tmp/container-service-account.yaml" | grep -Fq 'path: ca.crt'
+grep -A18 -F 'name: orka-api-token' "$tmp/container-service-account.yaml" | grep -Fq 'fieldPath: metadata.namespace'
+if grep -Fq 'name: orka-api-token' "$tmp/prepare-project.yaml"; then
+  echo 'project materializer received the projected Orka API token' >&2
+  exit 1
+fi
 if grep -Eq '^[[:space:]]*- name: ORKA_API_TOKEN$' "$tmp/container-service-account.yaml"; then
   echo 'ServiceAccount container analysis rendered a static Orka token reference' >&2
   exit 1
@@ -165,12 +226,16 @@ helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" "${container
   --set-string analysisRuntime.orkaContainer.taskTimeout=1h > "$tmp/container-microsecond-duration.yaml"
 grep -Fq -- '-orka-analysis-poll-interval=500us' "$tmp/container-microsecond-duration.yaml"
 
-for invalid in type watch endpoint model custom-namespace shared-namespace release-namespace api api-token-key image mutable-image build-metadata model-secret token-key state-key concurrency poll slow-poll timeout retries cpu-selector gpu accelerator; do
+for invalid in type watch endpoint model materializer-repository materializer-tag materializer-mutable materializer-policy custom-namespace shared-namespace release-namespace api api-token-key image mutable-image build-metadata model-secret token-key state-key concurrency poll slow-poll timeout retries cpu-selector gpu accelerator; do
   case $invalid in
     type) invalid_args=(--set analysisRuntime.type=remote); want='analysisRuntime.type must be inprocess or orka-container' ;;
     watch) invalid_args=("${container_args[@]}" --set mode=watch); want='analysisRuntime.type=orka-container requires mode=cron' ;;
     endpoint) invalid_args=("${container_args[@]}" --set-string ai.endpoint=); want='analysisRuntime.type=orka-container requires ai.endpoint' ;;
     model) invalid_args=("${container_args[@]}" --set-string ai.model=); want='analysisRuntime.type=orka-container requires ai.model' ;;
+    materializer-repository) invalid_args=("${container_args[@]}" --set-string project.materializer.image.repository=); want='project.materializer.image.repository is required for Orka container analysis' ;;
+    materializer-tag) invalid_args=("${container_args[@]}" --set-string project.materializer.image.tag=); want='project.materializer.image.tag is required for Orka container analysis' ;;
+    materializer-mutable) invalid_args=("${container_args[@]}" --set-string project.materializer.image.tag=latest); want='project.materializer.image.tag must be an immutable sha-<hex> or full semantic version' ;;
+    materializer-policy) invalid_args=("${container_args[@]}" --set project.materializer.image.pullPolicy=Always); want='project.materializer.image.pullPolicy must be IfNotPresent' ;;
     custom-namespace) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.namespace=custom-analysis); want='analysisRuntime.orkaContainer.namespace must be dedicated to this release and end with its release scope' ;;
     shared-namespace) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.namespace=orka-system); want='analysisRuntime.orkaContainer.namespace must be dedicated and differ from orka.namespace' ;;
     release-namespace) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.namespace=dashboard-test); want='analysisRuntime.orkaContainer.namespace must differ from the dashboard release namespace' ;;
@@ -320,9 +385,10 @@ helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set orka.fixRuntime.image.tag=sha-test \
   --show-only templates/fetcher-cronjob.yaml > "$tmp/fix-cron.yaml"
 grep -Fq 'serviceAccountName: test-prow-ai-dashboard-orka' "$tmp/fix-cron.yaml"
-grep -Fq 'automountServiceAccountToken: true' "$tmp/fix-cron.yaml"
+grep -Fq 'automountServiceAccountToken: false' "$tmp/fix-cron.yaml"
 grep -Fq 'name: ORKA_API_TOKEN_FILE' "$tmp/fix-cron.yaml"
 grep -Fq 'image: ghcr.io/willie-yao/prow-ai-dashboard/fixer:sha-test' "$tmp/fix-cron.yaml"
+grep -A3 -F 'name: orka-api-token' "$tmp/fix-cron.yaml" | grep -Fq 'mountPath: /var/run/secrets/kubernetes.io/serviceaccount'
 if [[ $(container_command fetcher "$tmp/fix-cron.yaml") != /usr/local/bin/fetcher ]]; then
   echo 'fix-enabled CronJob does not run the in-process fetcher' >&2
   exit 1

@@ -53,16 +53,45 @@ spec:
           restartPolicy: {{ $restartPolicy }}
           {{- if or .Values.orka.fixRuntime.enabled $containerAnalysis }}
           serviceAccountName: {{ include "prow-ai-dashboard.orkaServiceAccountName" . }}
-          automountServiceAccountToken: true
-          {{- else }}
-          automountServiceAccountToken: false
           {{- end }}
+          automountServiceAccountToken: false
           {{- with .Values.imagePullSecrets }}
           imagePullSecrets:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           securityContext:
             {{- toYaml .Values.podSecurityContext | nindent 12 }}
+          {{- if $containerAnalysis }}
+          initContainers:
+            - name: prepare-project
+              image: {{ include "prow-ai-dashboard.projectMaterializerImage" . }}
+              imagePullPolicy: {{ .Values.project.materializer.image.pullPolicy }}
+              command:
+                - sh
+                - -c
+                - |
+                  set -eu
+                  mkdir -p /project/prompts /project/skills
+                  cp -L /source/project.yaml /project/project.yaml
+                  cp -L /source/prompts/system.md /project/prompts/system.md
+                  for file in /source/skills/*; do
+                    if [ -f "$file" ]; then
+                      extension=${file##*.}
+                      extension=$(printf '%s' "$extension" | tr '[:upper:]' '[:lower:]')
+                      case "$extension" in
+                        yaml|yml) cp -L "$file" /project/skills/ ;;
+                      esac
+                    fi
+                  done
+              securityContext:
+                {{- toYaml .Values.securityContext | nindent 16 }}
+              volumeMounts:
+                - name: project
+                  mountPath: /source
+                  readOnly: true
+                - name: project-runtime
+                  mountPath: /project
+          {{- end }}
           containers:
             - name: fetcher
               {{- if .Values.orka.fixRuntime.enabled }}
@@ -170,11 +199,22 @@ spec:
               volumeMounts:
                 - name: data
                   mountPath: {{ .Values.persistence.mountPath }}
+                {{- if $containerAnalysis }}
+                - name: project-runtime
+                  mountPath: {{ .Values.project.mountPath }}
+                  readOnly: true
+                {{- else }}
                 - name: project
                   mountPath: {{ .Values.project.mountPath }}
                   readOnly: true
+                {{- end }}
                 - name: tmp
                   mountPath: /tmp
+                {{- if or .Values.orka.fixRuntime.enabled $containerAnalysis }}
+                - name: orka-api-token
+                  mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+                  readOnly: true
+                {{- end }}
               resources:
                 {{- toYaml .Values.fetcher.resources | nindent 16 }}
           {{- with .Values.fetcher.nodeSelector }}
@@ -198,6 +238,29 @@ spec:
                 name: {{ include "prow-ai-dashboard.projectConfigMap" . }}
                 items:
                   {{- include "prow-ai-dashboard.projectVolumeItems" . | nindent 18 }}
+            {{- if $containerAnalysis }}
+            - name: project-runtime
+              emptyDir: {}
+            {{- end }}
+            {{- if or .Values.orka.fixRuntime.enabled $containerAnalysis }}
+            - name: orka-api-token
+              projected:
+                defaultMode: 420
+                sources:
+                  - serviceAccountToken:
+                      path: token
+                      expirationSeconds: 3600
+                  - configMap:
+                      name: kube-root-ca.crt
+                      items:
+                        - key: ca.crt
+                          path: ca.crt
+                  - downwardAPI:
+                      items:
+                        - path: namespace
+                          fieldRef:
+                            fieldPath: metadata.namespace
+            {{- end }}
             - name: tmp
               emptyDir: {}
 {{- end }}
