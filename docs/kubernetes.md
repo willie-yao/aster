@@ -362,6 +362,7 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | `persistence.retain` | Preserve a chart-managed PVC when it leaves the release. Defaults to `true`. |
 | `project.config`, `project.systemPrompt` | Consumer config, via `--set-file`. |
 | `project.existingConfigMap` | Reuse a ConfigMap with keys `project.yaml` and `system.md`. |
+| `project.materializer.image.*` | Small pinned image used by Orka container analysis to copy ConfigMap-backed project files into a regular-file runtime directory. |
 | `ai.enabled`, `ai.endpoint`, `ai.model`, `ai.token` | AI analysis and its OpenAI-compatible endpoint. |
 | `ai.contextWindowTokens` | Optional operator-provided total provider context window. Set only with endpoint evidence. Values must be at least `9217`; use `128000` for the current Copilot GPT-5 mini deployment. |
 | `ai.existingSecret`, `ai.tokenSecretKey` | Reuse a Secret holding the token. |

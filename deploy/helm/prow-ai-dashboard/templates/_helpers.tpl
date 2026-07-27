@@ -66,6 +66,13 @@ Git-capable engine image used by the opt-in fix runtime.
 {{- end -}}
 
 {{/*
+Small image used to materialize ConfigMap project files for container analysis.
+*/}}
+{{- define "prow-ai-dashboard.projectMaterializerImage" -}}
+{{- printf "%s:%s" .Values.project.materializer.image.repository .Values.project.materializer.image.tag -}}
+{{- end -}}
+
+{{/*
 Release scope for cross-namespace Orka RBAC names.
 */}}
 {{- define "prow-ai-dashboard.orkaReleaseScope" -}}
@@ -213,10 +220,14 @@ Validate AI provider configuration.
 {{- end -}}
 {{- if eq $runtime "orka-container" -}}
   {{- $cfg := .Values.analysisRuntime.orkaContainer -}}
+  {{- $materializer := .Values.project.materializer.image -}}
   {{- if ne .Values.mode "cron" -}}{{- fail "analysisRuntime.type=orka-container requires mode=cron" -}}{{- end -}}
   {{- if not .Values.ai.enabled -}}{{- fail "analysisRuntime.type=orka-container requires ai.enabled=true" -}}{{- end -}}
   {{- if not .Values.ai.endpoint -}}{{- fail "analysisRuntime.type=orka-container requires ai.endpoint" -}}{{- end -}}
   {{- if not .Values.ai.model -}}{{- fail "analysisRuntime.type=orka-container requires ai.model" -}}{{- end -}}
+  {{- if not $materializer.repository -}}{{- fail "project.materializer.image.repository is required for Orka container analysis" -}}{{- end -}}
+  {{- if not $materializer.tag -}}{{- fail "project.materializer.image.tag is required for Orka container analysis" -}}{{- end -}}
+  {{- if eq $materializer.tag "latest" -}}{{- fail "project.materializer.image.tag must not be latest" -}}{{- end -}}
   {{- $analysisNamespace := include "prow-ai-dashboard.orkaAnalysisNamespace" . -}}
   {{- if eq $analysisNamespace .Values.orka.namespace -}}{{- fail "analysisRuntime.orkaContainer.namespace must be dedicated and differ from orka.namespace" -}}{{- end -}}
   {{- if eq $analysisNamespace .Release.Namespace -}}{{- fail "analysisRuntime.orkaContainer.namespace must differ from the dashboard release namespace" -}}{{- end -}}

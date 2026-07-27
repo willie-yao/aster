@@ -63,6 +63,33 @@ spec:
           {{- end }}
           securityContext:
             {{- toYaml .Values.podSecurityContext | nindent 12 }}
+          {{- if $containerAnalysis }}
+          initContainers:
+            - name: prepare-project
+              image: {{ include "prow-ai-dashboard.projectMaterializerImage" . }}
+              imagePullPolicy: {{ .Values.project.materializer.image.pullPolicy }}
+              command:
+                - sh
+                - -c
+                - |
+                  set -eu
+                  mkdir -p /project/prompts /project/skills
+                  cp -L /source/project.yaml /project/project.yaml
+                  cp -L /source/prompts/system.md /project/prompts/system.md
+                  for file in /source/skills/*.yaml /source/skills/*.yml; do
+                    if [ -f "$file" ]; then
+                      cp -L "$file" /project/skills/
+                    fi
+                  done
+              securityContext:
+                {{- toYaml .Values.securityContext | nindent 16 }}
+              volumeMounts:
+                - name: project
+                  mountPath: /source
+                  readOnly: true
+                - name: project-runtime
+                  mountPath: /project
+          {{- end }}
           containers:
             - name: fetcher
               {{- if .Values.orka.fixRuntime.enabled }}
@@ -170,9 +197,15 @@ spec:
               volumeMounts:
                 - name: data
                   mountPath: {{ .Values.persistence.mountPath }}
+                {{- if $containerAnalysis }}
+                - name: project-runtime
+                  mountPath: {{ .Values.project.mountPath }}
+                  readOnly: true
+                {{- else }}
                 - name: project
                   mountPath: {{ .Values.project.mountPath }}
                   readOnly: true
+                {{- end }}
                 - name: tmp
                   mountPath: /tmp
               resources:
@@ -198,6 +231,10 @@ spec:
                 name: {{ include "prow-ai-dashboard.projectConfigMap" . }}
                 items:
                   {{- include "prow-ai-dashboard.projectVolumeItems" . | nindent 18 }}
+            {{- if $containerAnalysis }}
+            - name: project-runtime
+              emptyDir: {}
+            {{- end }}
             - name: tmp
               emptyDir: {}
 {{- end }}

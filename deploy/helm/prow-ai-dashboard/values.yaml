@@ -125,6 +125,13 @@ project:
   skills: {}
   # Mount path the fetcher reads as -project-dir.
   mountPath: /config
+  # Orka container analysis copies ConfigMap-backed symlinks into an emptyDir
+  # so the strict project bundle loader receives regular files.
+  materializer:
+    image:
+      repository: busybox
+      tag: 1.36.1
+      pullPolicy: IfNotPresent
 
 # AI failure analysis. When enabled the fetcher runs with -ai and needs an
 # OpenAI-compatible endpoint, a model id, and a token. The token lives in a
