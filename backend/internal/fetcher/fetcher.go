@@ -373,7 +373,7 @@ func (p *pipeline) refresh(ctx context.Context, jobs []models.ProwJob) (*refresh
 func (p *pipeline) refreshWithAnalysisContext(fetchCtx, analysisCtx context.Context, jobs []models.ProwJob) (*refreshResult, error) {
 	var snapshot *aiRefreshStateSnapshot
 	var err error
-	if p.enableAI && p.opts.AnalysisRuntime.Type == AnalysisRuntimeOrkaContainer {
+	if p.enableAI {
 		snapshot, err = captureAIRefreshState(p.opts.OutDir)
 		if err != nil {
 			return nil, fmt.Errorf("snapshotting AI refresh state: %w", err)

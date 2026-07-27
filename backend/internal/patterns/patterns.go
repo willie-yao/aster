@@ -4,6 +4,7 @@ package patterns
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -29,8 +30,9 @@ type AnalyzeStats struct {
 }
 
 // Analyze correlates eligible jobs and stores each verdict on its JobDetail.
-func Analyze(ctx context.Context, analyzer Analyzer, details []models.JobDetail) AnalyzeStats {
+func Analyze(ctx context.Context, analyzer Analyzer, details []models.JobDetail) (AnalyzeStats, error) {
 	var stats AnalyzeStats
+	var errs []error
 	for i := range details {
 		d := &details[i]
 		failures := GatherFailures(d)
@@ -42,13 +44,14 @@ func Analyze(ctx context.Context, analyzer Analyzer, details []models.JobDetail)
 		if err != nil {
 			stats.Failed++
 			log.Printf("  ⚠ pattern analysis failed for %s: %v", d.Name, err)
+			errs = append(errs, fmt.Errorf("%s: %w", d.Name, err))
 			continue
 		}
 		if applyAnalysis(d, pa) {
 			stats.Completed++
 		}
 	}
-	return stats
+	return stats, errors.Join(errs...)
 }
 
 // AnalyzeConcurrent starts every eligible correlation before waiting for

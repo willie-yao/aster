@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"path"
 	"regexp"
@@ -30,6 +32,8 @@ const maxPatternBuilds = 10
 // patternMaxIters bounds the repotree tool rounds the grounded correlation loop
 // spends verifying file and config paths against the real source repo.
 const patternMaxIters = 6
+
+const maxPatternResponseBytes = 1 << 20
 
 // PatternFailure is one build's analyzed job failure, used as input to
 // cross-failure correlation. FailingTest is the specific test or spec that
@@ -69,6 +73,32 @@ type patternResponse struct {
 	SharedBuilds    []string `json:"shared_builds"`
 	SuggestedFix    string   `json:"suggested_fix"`
 	Summary         string   `json:"summary"`
+}
+
+type patternValidationCategory string
+
+const (
+	patternValidationJSON      patternValidationCategory = "json"
+	patternValidationMissing   patternValidationCategory = "missing"
+	patternValidationSchema    patternValidationCategory = "schema"
+	patternValidationBuilds    patternValidationCategory = "builds"
+	patternValidationAmbiguous patternValidationCategory = "ambiguous"
+)
+
+type patternValidationError struct {
+	category patternValidationCategory
+}
+
+func (e *patternValidationError) Error() string {
+	return fmt.Sprintf("pattern analysis: response validation failed (%s)", e.category)
+}
+
+func patternValidationCategoryOf(err error) patternValidationCategory {
+	var validationErr *patternValidationError
+	if errors.As(err, &validationErr) {
+		return validationErr.category
+	}
+	return ""
 }
 
 // patternSystemPrompt instructs the model to correlate several per-build
@@ -139,9 +169,9 @@ func (s *Service) AnalyzePattern(ctx context.Context, jobID, subject string, fai
 	// grounding mode, and the rendered user prompt, so any evidence change or a
 	// switch between grounded and tool-free invalidates the entry.
 	key := patternCacheKey(s.module.Name(), jobID, subject, userPrompt, groundKey, s.client.modelFingerprint())
+	buildIDs := patternBuildIDs(failures)
 	if raw, ok := s.client.cache.Get(key); ok {
-		var cached patternResponse
-		if json.Unmarshal(raw, &cached) == nil && validPatternResponse(cached) {
+		if cached, err := parsePatternResponse(string(raw), buildIDs); err == nil {
 			return buildPatternAnalysis(subject, len(failures), cached, collectRelevantFiles(failures)), nil
 		}
 	}
@@ -149,15 +179,12 @@ func (s *Service) AnalyzePattern(ctx context.Context, jobID, subject string, fai
 	var parsed patternResponse
 	var err error
 	if grounded {
-		parsed, err = s.groundedPatternVerdict(ctx, userPrompt)
+		parsed, err = s.groundedPatternVerdict(ctx, userPrompt, buildIDs)
 	} else {
-		parsed, err = s.toolFreePatternVerdict(ctx, userPrompt)
+		parsed, err = s.toolFreePatternVerdict(ctx, userPrompt, buildIDs)
 	}
 	if err != nil {
 		return nil, err
-	}
-	if !validPatternResponse(parsed) {
-		return nil, fmt.Errorf("pattern analysis: incomplete verdict (empty summary, or systemic without a root cause)")
 	}
 
 	// Flag any file path the verdict names that does not exist in the source
@@ -185,12 +212,9 @@ func BuildPatternInput(subject string, failures []PatternFailure) PatternInput {
 // ParsePatternResult validates a model correlation result and converts it to
 // the published PatternAnalysis shape.
 func ParsePatternResult(subject string, failures []PatternFailure, result string) (*models.PatternAnalysis, error) {
-	var parsed patternResponse
-	if err := json.Unmarshal([]byte(extractJSON(result)), &parsed); err != nil {
-		return nil, fmt.Errorf("pattern analysis: parse response: %w", err)
-	}
-	if !validPatternResponse(parsed) {
-		return nil, fmt.Errorf("pattern analysis: incomplete verdict (empty summary, or systemic without a root cause)")
+	parsed, err := parsePatternResponse(result, patternBuildIDs(failures))
+	if err != nil {
+		return nil, err
 	}
 	// The Orka correlation task has no source-repository tools. Mark every path
 	// it introduces as unverified rather than presenting a guessed target as fact.
@@ -200,7 +224,7 @@ func ParsePatternResult(subject string, failures []PatternFailure, result string
 
 // toolFreePatternVerdict makes the single correlation call with no tools, used
 // when no source-repo reader is wired.
-func (s *Service) toolFreePatternVerdict(ctx context.Context, userPrompt string) (patternResponse, error) {
+func (s *Service) toolFreePatternVerdict(ctx context.Context, userPrompt string, buildIDs map[string]struct{}) (patternResponse, error) {
 	messages := []modelMessage{
 		{Role: "system", Content: strPtr(patternSystemPrompt)},
 		{Role: "user", Content: strPtr(userPrompt)},
@@ -212,18 +236,14 @@ func (s *Service) toolFreePatternVerdict(ctx context.Context, userPrompt string)
 	if !resp.HasMessage || resp.Message.Content == nil {
 		return patternResponse{}, fmt.Errorf("pattern analysis: empty response")
 	}
-	var parsed patternResponse
-	if err := json.Unmarshal([]byte(extractJSON(*resp.Message.Content)), &parsed); err != nil {
-		return patternResponse{}, fmt.Errorf("pattern analysis: parse response: %w", err)
-	}
-	return parsed, nil
+	return parsePatternResponse(*resp.Message.Content, buildIDs)
 }
 
 // groundedPatternVerdict runs the correlation as a repotree tool loop so the
 // model greps and reads real source files before naming a fix target. It
 // recovers a non-JSON final message with one cheap extraction completion rather
 // than re-running the loop.
-func (s *Service) groundedPatternVerdict(ctx context.Context, userPrompt string) (patternResponse, error) {
+func (s *Service) groundedPatternVerdict(ctx context.Context, userPrompt string, buildIDs map[string]struct{}) (patternResponse, error) {
 	reg := tools.NewRegistry()
 	repotree.Register(reg)
 	enabled, err := reg.Enable([]string{repotree.Group})
@@ -241,20 +261,222 @@ func (s *Service) groundedPatternVerdict(ctx context.Context, userPrompt string)
 	if strings.TrimSpace(out) == "" {
 		return patternResponse{}, fmt.Errorf("pattern analysis: empty tool-loop output")
 	}
-	var parsed patternResponse
-	if perr := json.Unmarshal([]byte(extractJSON(out)), &parsed); perr != nil {
+	parsed, perr := parsePatternResponse(out, buildIDs)
+	if perr != nil {
+		if patternValidationCategoryOf(perr) != patternValidationMissing {
+			return patternResponse{}, perr
+		}
 		extract := "Extract the correlation verdict this investigation reached as JSON with exactly these keys: " +
 			`{"systemic": true|false, "confidence": "high"|"medium"|"low", "shared_root_cause": "...", "shared_builds": ["..."], "suggested_fix": "...", "summary": "..."}. ` +
 			"Reply with ONLY the JSON.\n\nInvestigation:\n" + out
 		out2, ferr := s.client.Complete(ctx, "You output only a JSON object.", extract)
 		if ferr != nil {
-			return patternResponse{}, fmt.Errorf("pattern analysis: parse response: %w", perr)
+			return patternResponse{}, perr
 		}
-		if perr2 := json.Unmarshal([]byte(extractJSON(out2)), &parsed); perr2 != nil {
-			return patternResponse{}, fmt.Errorf("pattern analysis: parse response: %w", perr2)
+		parsed, perr = parsePatternResponse(out2, buildIDs)
+		if perr != nil {
+			return patternResponse{}, perr
 		}
 	}
 	return parsed, nil
+}
+
+func parsePatternResponse(raw string, buildIDs map[string]struct{}) (patternResponse, error) {
+	if len(raw) > maxPatternResponseBytes {
+		return patternResponse{}, &patternValidationError{category: patternValidationJSON}
+	}
+	scan := scanAnalysisChatJSONCandidates(raw)
+	if scan.truncated {
+		return patternResponse{}, &patternValidationError{category: patternValidationAmbiguous}
+	}
+	type validCandidate struct {
+		response patternResponse
+		start    int
+		end      int
+	}
+	type rejectedCandidate struct {
+		start        int
+		end          int
+		category     patternValidationCategory
+		contractLike bool
+	}
+	valid := make([]validCandidate, 0, 1)
+	rejected := make([]rejectedCandidate, 0, len(scan.candidates))
+	contractLikeSeen := false
+	bestCategory := patternValidationJSON
+	for _, candidate := range scan.candidates {
+		parsed, category := decodePatternCandidate(candidate.value, buildIDs)
+		if category == "" {
+			valid = append(valid, validCandidate{response: parsed, start: candidate.start, end: candidate.end})
+			continue
+		}
+		rejected = append(rejected, rejectedCandidate{
+			start: candidate.start, end: candidate.end, category: category, contractLike: patternCandidateIsContractLike(candidate.value),
+		})
+		contractLikeSeen = contractLikeSeen || rejected[len(rejected)-1].contractLike
+		if patternValidationRank(category) > patternValidationRank(bestCategory) {
+			bestCategory = category
+		}
+	}
+	switch len(valid) {
+	case 1:
+		for _, incomplete := range scan.incomplete {
+			if incomplete.start > valid[0].end {
+				return patternResponse{}, &patternValidationError{category: patternValidationJSON}
+			}
+		}
+		for _, candidate := range rejected {
+			if candidate.contractLike && (candidate.start > valid[0].end ||
+				(candidate.start < valid[0].start && candidate.end > valid[0].end)) {
+				return patternResponse{}, &patternValidationError{category: candidate.category}
+			}
+		}
+		return valid[0].response, nil
+	case 0:
+		if !contractLikeSeen && len(scan.incomplete) == 0 {
+			return patternResponse{}, &patternValidationError{category: patternValidationMissing}
+		}
+		return patternResponse{}, &patternValidationError{category: bestCategory}
+	default:
+		return patternResponse{}, &patternValidationError{category: patternValidationAmbiguous}
+	}
+}
+
+func decodePatternCandidate(raw string, buildIDs map[string]struct{}) (patternResponse, patternValidationCategory) {
+	fields, category := decodePatternObject(raw)
+	if category != "" {
+		return patternResponse{}, category
+	}
+	required := []string{"systemic", "confidence", "shared_root_cause", "shared_builds", "suggested_fix", "summary"}
+	if len(fields) != len(required) {
+		return patternResponse{}, patternValidationSchema
+	}
+	for _, field := range required {
+		value, ok := fields[field]
+		if !ok || strings.TrimSpace(string(value)) == "null" {
+			return patternResponse{}, patternValidationSchema
+		}
+	}
+	var parsed patternResponse
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return patternResponse{}, patternValidationSchema
+	}
+	if category := patternResponseValidationCategory(parsed, buildIDs); category != "" {
+		return patternResponse{}, category
+	}
+	for index := range parsed.SharedBuilds {
+		parsed.SharedBuilds[index] = strings.TrimSpace(parsed.SharedBuilds[index])
+	}
+	return parsed, ""
+}
+
+func decodePatternObject(raw string) (map[string]json.RawMessage, patternValidationCategory) {
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('{') {
+		return nil, patternValidationJSON
+	}
+	fields := make(map[string]json.RawMessage, 6)
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return nil, patternValidationJSON
+		}
+		name, ok := token.(string)
+		if !ok {
+			return nil, patternValidationJSON
+		}
+		if _, duplicate := fields[name]; duplicate {
+			return nil, patternValidationSchema
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return nil, patternValidationJSON
+		}
+		fields[name] = value
+	}
+	if token, err := decoder.Token(); err != nil || token != json.Delim('}') {
+		return nil, patternValidationJSON
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return nil, patternValidationJSON
+	}
+	return fields, ""
+}
+
+func patternCandidateIsContractLike(raw string) bool {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal([]byte(raw), &fields) == nil {
+		for _, field := range []string{"systemic", "confidence", "shared_root_cause", "shared_builds", "suggested_fix", "summary"} {
+			if _, ok := fields[field]; ok {
+				return true
+			}
+		}
+		return false
+	}
+	for _, field := range []string{"systemic", "confidence", "shared_root_cause", "shared_builds", "suggested_fix", "summary"} {
+		if strings.Contains(raw, `"`+field+`"`) {
+			return true
+		}
+	}
+	return false
+}
+
+func patternResponseValidationCategory(p patternResponse, buildIDs map[string]struct{}) patternValidationCategory {
+	confidence := strings.ToLower(strings.TrimSpace(p.Confidence))
+	if confidence != "high" && confidence != "medium" && confidence != "low" {
+		return patternValidationSchema
+	}
+	if strings.TrimSpace(p.Summary) == "" {
+		return patternValidationSchema
+	}
+	if p.Systemic {
+		if strings.TrimSpace(p.SharedRootCause) == "" || strings.TrimSpace(p.SuggestedFix) == "" || len(p.SharedBuilds) < 2 {
+			return patternValidationSchema
+		}
+	} else if strings.TrimSpace(p.SharedRootCause) != "" || strings.TrimSpace(p.SuggestedFix) != "" {
+		return patternValidationSchema
+	}
+	seen := make(map[string]struct{}, len(p.SharedBuilds))
+	for _, buildID := range p.SharedBuilds {
+		buildID = strings.TrimSpace(buildID)
+		if buildID == "" {
+			return patternValidationBuilds
+		}
+		if _, duplicate := seen[buildID]; duplicate {
+			return patternValidationBuilds
+		}
+		seen[buildID] = struct{}{}
+		if buildIDs != nil {
+			if _, ok := buildIDs[buildID]; !ok {
+				return patternValidationBuilds
+			}
+		}
+	}
+	return ""
+}
+
+func patternBuildIDs(failures []PatternFailure) map[string]struct{} {
+	ids := make(map[string]struct{}, len(failures))
+	for _, failure := range failures {
+		if id := strings.TrimSpace(failure.BuildID); id != "" {
+			ids[id] = struct{}{}
+		}
+	}
+	return ids
+}
+
+func patternValidationRank(category patternValidationCategory) int {
+	switch category {
+	case patternValidationBuilds:
+		return 3
+	case patternValidationSchema:
+		return 2
+	case patternValidationJSON:
+		return 1
+	default:
+		return 0
+	}
 }
 
 // collectRelevantFiles unions the files each build implicated, in first-seen
@@ -279,18 +501,6 @@ func collectRelevantFiles(failures []PatternFailure) []string {
 		}
 	}
 	return out
-}
-
-// validPatternResponse rejects empty or self-contradictory verdicts so they are
-// neither cached nor published as a misleading banner.
-func validPatternResponse(p patternResponse) bool {
-	if strings.TrimSpace(p.Summary) == "" {
-		return false
-	}
-	if p.Systemic && strings.TrimSpace(p.SharedRootCause) == "" {
-		return false
-	}
-	return true
 }
 
 // buildPatternAnalysis converts a parsed verdict into the published model.

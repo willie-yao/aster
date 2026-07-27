@@ -289,6 +289,7 @@ type analysisChatJSONCandidate struct {
 type analysisChatCandidateScan struct {
 	candidates []analysisChatJSONCandidate
 	incomplete []analysisChatCandidateState
+	truncated  bool
 }
 
 func analysisChatJSONCandidates(raw string) []string {
@@ -308,6 +309,7 @@ func scanAnalysisChatJSONCandidates(raw string) analysisChatCandidateScan {
 	outsideString := false
 	outsideEscaped := false
 	overflowDepth := 0
+	truncated := false
 	for index := 0; index < len(raw); index++ {
 		ch := raw[index]
 		if len(stack) == 0 {
@@ -347,6 +349,7 @@ func scanAnalysisChatJSONCandidates(raw string) analysisChatCandidateScan {
 				stack = append(stack, index)
 			} else {
 				overflowDepth++
+				truncated = true
 			}
 		case '}':
 			if overflowDepth > 0 {
@@ -360,6 +363,7 @@ func scanAnalysisChatJSONCandidates(raw string) analysisChatCandidateScan {
 			})
 			if len(candidates) > analysisChatMaxCandidates {
 				candidates = candidates[len(candidates)-analysisChatMaxCandidates:]
+				truncated = true
 			}
 			if len(stack) == 0 {
 				inString = false
@@ -373,5 +377,5 @@ func scanAnalysisChatJSONCandidates(raw string) analysisChatCandidateScan {
 	for index, start := range stack {
 		incomplete[index] = analysisChatCandidateState{start: start}
 	}
-	return analysisChatCandidateScan{candidates: candidates, incomplete: incomplete}
+	return analysisChatCandidateScan{candidates: candidates, incomplete: incomplete, truncated: truncated}
 }
