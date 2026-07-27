@@ -338,6 +338,12 @@ grep -Fq 'app.kubernetes.io/component: orka-container-analysis' "$tmp/combined-o
 grep -Fq 'app.kubernetes.io/component: orka-fix-runtime' "$tmp/combined-orka-runtimes.yaml"
 grep -Fq 'app.kubernetes.io/component: orka-runtime' "$tmp/combined-orka-runtimes.yaml"
 grep -Fq 'image: ghcr.io/willie-yao/prow-ai-dashboard/fixer:sha-test' "$tmp/combined-orka-runtimes.yaml"
+grep -Fq 'name: ORKA_ANALYSIS_API_TOKEN' "$tmp/combined-orka-runtimes.yaml"
+grep -Fq 'name: ORKA_API_TOKEN_FILE' "$tmp/combined-orka-runtimes.yaml"
+if grep -Eq '^[[:space:]]*- name: ORKA_API_TOKEN$' "$tmp/combined-orka-runtimes.yaml"; then
+  echo 'combined Orka runtimes share the analysis static token' >&2
+  exit 1
+fi
 
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --show-only templates/pvc.yaml > "$tmp/pvc-retained.yaml"
