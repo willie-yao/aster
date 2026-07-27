@@ -1020,8 +1020,9 @@ func loadCachedJobDetails(outDir string) map[string]map[string]models.BuildResul
 		}
 		builds := make(map[string]models.BuildResult, len(detail.Runs))
 		for _, r := range detail.Runs {
-			// Incomplete JUnit may become available after the build finishes.
-			if r.Result != "PENDING" && r.Result != "" && (r.JUnitComplete || r.JUnitTruncated) {
+			// Truncated discovery is reusable only when it retained a JUnit path.
+			cacheableJUnit := r.JUnitComplete || (r.JUnitTruncated && len(r.JUnitURLs) > 0)
+			if r.Result != "PENDING" && r.Result != "" && cacheableJUnit {
 				builds[r.BuildID] = r
 			}
 		}

@@ -3,6 +3,7 @@ package prowbuild
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path"
 	"regexp"
@@ -92,24 +93,38 @@ func DiscoverJUnitPathsWithCompleteness(ctx context.Context, b storage.Backend, 
 // DiscoverJUnitPathsWithStatus distinguishes capped trees from retryable listing failures.
 func DiscoverJUnitPathsWithStatus(ctx context.Context, b storage.Backend, loc BuildLocation) ([]string, bool, bool, error) {
 	artifactsDir := loc.BuildPath() + "artifacts/"
-	objects, truncated, err := b.ListTree(ctx, artifactsDir, 2000)
-	complete := err == nil && !truncated
-	permanentlyTruncated := err == nil && truncated
-	if err != nil {
-		listing, listErr := b.List(ctx, artifactsDir)
-		if listErr != nil {
-			return nil, false, false, err
-		}
+	found := make(map[string]struct{})
+
+	listing, rootErr := b.List(ctx, artifactsDir)
+	if rootErr == nil {
 		for _, object := range listing.Files {
-			objects = append(objects, object.Name)
+			if junitFileRe.MatchString(path.Base(object.Name)) {
+				found[object.Name] = struct{}{}
+			}
 		}
 	}
-	var paths []string
-	for _, object := range objects {
-		if junitFileRe.MatchString(path.Base(object)) {
-			paths = append(paths, artifactsDir+object)
+
+	objects, truncated, treeErr := b.ListTree(ctx, artifactsDir, 2000)
+	if treeErr == nil {
+		for _, object := range objects {
+			if junitFileRe.MatchString(path.Base(object)) {
+				found[object] = struct{}{}
+			}
 		}
+	}
+	if rootErr != nil && treeErr != nil {
+		return nil, false, false, errors.Join(
+			fmt.Errorf("listing root artifacts %s: %w", artifactsDir, rootErr),
+			fmt.Errorf("listing artifact tree %s: %w", artifactsDir, treeErr),
+		)
+	}
+
+	paths := make([]string, 0, len(found))
+	for object := range found {
+		paths = append(paths, artifactsDir+object)
 	}
 	sort.Strings(paths)
+	complete := treeErr == nil && !truncated
+	permanentlyTruncated := treeErr == nil && truncated
 	return paths, complete, permanentlyTruncated, nil
 }
