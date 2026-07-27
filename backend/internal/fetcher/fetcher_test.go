@@ -3,6 +3,7 @@ package fetcher
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,6 +12,8 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prowbuild"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
 
 func TestClearAnalysisTrace(t *testing.T) {
@@ -94,7 +97,43 @@ func TestAIModel_NilAIBlock(t *testing.T) {
 	}
 }
 
-func TestLoadCachedJobDetailsCachesCompleteOrTruncatedJUnit(t *testing.T) {
+func TestFetchBuildResultParsesRootJUnitWhenTreeTruncated(t *testing.T) {
+	root := t.TempDir()
+	write := func(name, contents string) {
+		t.Helper()
+		fullPath := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(fullPath, []byte(contents), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("logs/job/1/started.json", `{"timestamp":1000}`)
+	write("logs/job/1/finished.json", `{"timestamp":1060,"passed":false,"result":"FAILURE"}`)
+	write("logs/job/1/artifacts/junit.e2e_suite.1.xml", `<testsuite name="suite"><testcase name="case" classname="suite" status="passed"/></testsuite>`)
+	for i := 0; i < 2001; i++ {
+		write(fmt.Sprintf("logs/job/1/artifacts/clusters/%04d/log.txt", i), "x")
+	}
+
+	backend, err := storage.New(storage.Config{Provider: storage.ProviderLocal, Base: root}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := fetchBuildResult(context.Background(), backend,
+		&models.ProwJob{Name: "job", JobType: models.JobTypePeriodic}, prowbuild.Build{ID: "1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.JUnitComplete || !result.JUnitTruncated {
+		t.Fatalf("complete=%v truncated=%v, want false true", result.JUnitComplete, result.JUnitTruncated)
+	}
+	if len(result.JUnitURLs) != 1 || result.TestsTotal != 1 || result.TestsPassed != 1 || len(result.TestCases) != 1 {
+		t.Fatalf("result = %+v, want one parsed root JUnit test", result)
+	}
+}
+
+func TestLoadCachedJobDetailsRequiresUsableJUnitDiscovery(t *testing.T) {
 	dir := t.TempDir()
 	jobsDir := filepath.Join(dir, "jobs")
 	if err := os.MkdirAll(jobsDir, 0o755); err != nil {
@@ -103,9 +142,13 @@ func TestLoadCachedJobDetailsCachesCompleteOrTruncatedJUnit(t *testing.T) {
 	detail := models.JobDetail{
 		JobID: "job",
 		Runs: []models.BuildResult{
-			{BuildInfo: models.BuildInfo{BuildID: "3", Result: "SUCCESS", JUnitComplete: true}},
-			{BuildInfo: models.BuildInfo{BuildID: "2", Result: "SUCCESS", JUnitTruncated: true}},
-			{BuildInfo: models.BuildInfo{BuildID: "1", Result: "SUCCESS"}},
+			{BuildInfo: models.BuildInfo{BuildID: "complete", Result: "SUCCESS", JUnitComplete: true}},
+			{BuildInfo: models.BuildInfo{BuildID: "truncated-with-url", Result: "SUCCESS", JUnitTruncated: true, JUnitURLs: []string{"https://web/junit.xml"}}},
+			{BuildInfo: models.BuildInfo{BuildID: "truncated-empty", Result: "SUCCESS", JUnitTruncated: true}},
+			{BuildInfo: models.BuildInfo{BuildID: "zero-tests", Result: "SUCCESS", JUnitTruncated: true, JUnitURLs: []string{"https://web/junit-empty.xml"}}, TestCases: []models.TestCase{}},
+			{BuildInfo: models.BuildInfo{BuildID: "pending", Result: "PENDING", JUnitComplete: true}},
+			{BuildInfo: models.BuildInfo{BuildID: "read-failure", Result: "FAILURE", JUnitURLs: []string{"https://web/junit-read.xml"}}},
+			{BuildInfo: models.BuildInfo{BuildID: "parse-failure", Result: "FAILURE", JUnitURLs: []string{"https://web/junit-parse.xml"}}},
 		},
 	}
 	data, err := json.Marshal(detail)
@@ -117,8 +160,19 @@ func TestLoadCachedJobDetailsCachesCompleteOrTruncatedJUnit(t *testing.T) {
 	}
 
 	cached := loadCachedJobDetails(dir)[detail.JobID]
-	if len(cached) != 2 || cached["3"].BuildID != "3" || cached["2"].BuildID != "2" {
-		t.Fatalf("cached = %+v", cached)
+	want := []string{"complete", "truncated-with-url", "zero-tests"}
+	if len(cached) != len(want) {
+		t.Fatalf("cached = %+v, want build IDs %v", cached, want)
+	}
+	for _, buildID := range want {
+		if cached[buildID].BuildID != buildID {
+			t.Errorf("build %q was not cached", buildID)
+		}
+	}
+	for _, buildID := range []string{"truncated-empty", "pending", "read-failure", "parse-failure"} {
+		if _, ok := cached[buildID]; ok {
+			t.Errorf("build %q should be refetched", buildID)
+		}
 	}
 }
 

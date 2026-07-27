@@ -2,6 +2,7 @@ package prowbuild
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -15,7 +16,9 @@ import (
 // fakeBackend is an in-memory storage.Backend for testing the Prow-layout
 // logic without HTTP.
 type fakeBackend struct {
-	objects map[string]string
+	objects     map[string]string
+	listErr     error
+	listTreeErr error
 }
 
 func (f *fakeBackend) Open(_ context.Context, path string) (io.ReadCloser, int64, error) {
@@ -53,6 +56,9 @@ func (f *fakeBackend) ReadTail(_ context.Context, path string, maxBytes int64) (
 }
 
 func (f *fakeBackend) List(_ context.Context, prefix string) (*storage.Listing, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
 	dirs := map[string]bool{}
 	files := map[string]bool{}
 	for name := range f.objects {
@@ -82,6 +88,9 @@ func (f *fakeBackend) List(_ context.Context, prefix string) (*storage.Listing, 
 }
 
 func (f *fakeBackend) ListTree(_ context.Context, prefix string, max int) ([]string, bool, error) {
+	if f.listTreeErr != nil {
+		return nil, false, f.listTreeErr
+	}
 	var out []string
 	for name := range f.objects {
 		if strings.HasPrefix(name, prefix) {
@@ -134,14 +143,14 @@ func TestFetchBuildInfo_RunningAndFinished(t *testing.T) {
 	}
 }
 
-func TestDiscoverJUnitPaths(t *testing.T) {
+func TestDiscoverJUnitPathsCompleteTree(t *testing.T) {
 	b := &fakeBackend{objects: map[string]string{
 		"logs/job/1/artifacts/junit.xml":          "x",
 		"logs/job/1/artifacts/junit_runner.xml":   "x",
-		"logs/job/1/artifacts/not-junit.txt":      "x",
-		"logs/job/1/artifacts/sub/junit.deep.xml": "x", // nested: not an immediate child
+		"logs/job/1/artifacts/results.xml":        "x",
+		"logs/job/1/artifacts/sub/junit.deep.xml": "x",
 	}}
-	got, err := DiscoverJUnitPaths(context.Background(), b,
+	got, complete, truncated, err := DiscoverJUnitPathsWithStatus(context.Background(), b,
 		BuildLocation{JobLocation: JobLocation{JobType: models.JobTypePeriodic}, JobName: "job", BuildID: "1"})
 	if err != nil {
 		t.Fatal(err)
@@ -149,6 +158,9 @@ func TestDiscoverJUnitPaths(t *testing.T) {
 	want := []string{"logs/job/1/artifacts/junit.xml", "logs/job/1/artifacts/junit_runner.xml", "logs/job/1/artifacts/sub/junit.deep.xml"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("junit paths = %v, want %v", got, want)
+	}
+	if !complete || truncated {
+		t.Errorf("complete=%v truncated=%v, want true false", complete, truncated)
 	}
 }
 
@@ -257,10 +269,13 @@ func TestListPullBuilds(t *testing.T) {
 	}
 }
 
-func TestDiscoverJUnitPathsPreservesPartialResults(t *testing.T) {
-	objects := map[string]string{"logs/job/1/artifacts/junit.xml": "x"}
+func TestDiscoverJUnitPathsFindsRootJUnitBeforeTreeCap(t *testing.T) {
+	objects := map[string]string{
+		"logs/job/1/artifacts/junit.e2e_suite.1.xml": "x",
+		"logs/job/1/artifacts/results.xml":           "x",
+	}
 	for i := 0; i < 2001; i++ {
-		objects[fmt.Sprintf("logs/job/1/artifacts/z-%04d.txt", i)] = "x"
+		objects[fmt.Sprintf("logs/job/1/artifacts/clusters/%04d/log.txt", i)] = "x"
 	}
 	b := &fakeBackend{objects: objects}
 	paths, complete, truncated, err := DiscoverJUnitPathsWithStatus(context.Background(), b,
@@ -268,12 +283,61 @@ func TestDiscoverJUnitPathsPreservesPartialResults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if complete || !truncated || len(paths) != 1 || !strings.HasSuffix(paths[0], "junit.xml") {
-		t.Fatalf("paths=%v complete=%v truncated=%v", paths, complete, truncated)
+	want := []string{"logs/job/1/artifacts/junit.e2e_suite.1.xml"}
+	if strings.Join(paths, ",") != strings.Join(want, ",") || complete || !truncated {
+		t.Fatalf("paths=%v complete=%v truncated=%v, want %v false true", paths, complete, truncated, want)
 	}
 	usable, err := DiscoverJUnitPaths(context.Background(), b,
 		BuildLocation{JobLocation: JobLocation{JobType: models.JobTypePeriodic}, JobName: "job", BuildID: "1"})
-	if err != nil || len(usable) != 1 {
-		t.Fatalf("usable=%v err=%v", usable, err)
+	if err != nil || strings.Join(usable, ",") != strings.Join(want, ",") {
+		t.Fatalf("usable=%v err=%v, want %v", usable, err, want)
 	}
+}
+
+func TestDiscoverJUnitPathsListingFailures(t *testing.T) {
+	loc := BuildLocation{JobLocation: JobLocation{JobType: models.JobTypePeriodic}, JobName: "job", BuildID: "1"}
+	objects := map[string]string{
+		"logs/job/1/artifacts/junit.xml":          "x",
+		"logs/job/1/artifacts/sub/junit.deep.xml": "x",
+	}
+
+	t.Run("root listing", func(t *testing.T) {
+		b := &fakeBackend{objects: objects, listErr: errors.New("root unavailable")}
+		paths, complete, truncated, err := DiscoverJUnitPathsWithStatus(context.Background(), b, loc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"logs/job/1/artifacts/junit.xml", "logs/job/1/artifacts/sub/junit.deep.xml"}
+		if strings.Join(paths, ",") != strings.Join(want, ",") || !complete || truncated {
+			t.Fatalf("paths=%v complete=%v truncated=%v, want %v true false", paths, complete, truncated, want)
+		}
+	})
+
+	t.Run("recursive listing", func(t *testing.T) {
+		b := &fakeBackend{objects: objects, listTreeErr: errors.New("tree unavailable")}
+		paths, complete, truncated, err := DiscoverJUnitPathsWithStatus(context.Background(), b, loc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"logs/job/1/artifacts/junit.xml"}
+		if strings.Join(paths, ",") != strings.Join(want, ",") || complete || truncated {
+			t.Fatalf("paths=%v complete=%v truncated=%v, want %v false false", paths, complete, truncated, want)
+		}
+	})
+
+	t.Run("both listings", func(t *testing.T) {
+		rootErr := errors.New("root unavailable")
+		treeErr := errors.New("tree unavailable")
+		b := &fakeBackend{objects: objects, listErr: rootErr, listTreeErr: treeErr}
+		paths, complete, truncated, err := DiscoverJUnitPathsWithStatus(context.Background(), b, loc)
+		if err == nil {
+			t.Fatal("expected listing error")
+		}
+		if len(paths) != 0 || complete || truncated {
+			t.Fatalf("paths=%v complete=%v truncated=%v", paths, complete, truncated)
+		}
+		if !errors.Is(err, rootErr) || !errors.Is(err, treeErr) || !strings.Contains(err.Error(), "logs/job/1/artifacts/") {
+			t.Fatalf("error = %v, want both causes and artifact path", err)
+		}
+	})
 }
