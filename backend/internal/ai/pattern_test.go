@@ -82,7 +82,7 @@ func TestAnalyzePattern_SystemicVerdict(t *testing.T) {
 func TestAnalyzePattern_CacheHit_NoSecondCall(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	srv.push(200, chatRespFinal(`{"systemic":false,"confidence":"low","summary":"independent flakes"}`))
+	srv.push(200, chatRespFinal(`{"systemic":false,"confidence":"low","shared_root_cause":"","shared_builds":[],"suggested_fix":"","summary":"independent flakes"}`))
 	s := newPatternTestService(t, srv.URL)
 
 	in := patternFailures(3)
@@ -102,18 +102,14 @@ func TestAnalyzePattern_CacheHit_NoSecondCall(t *testing.T) {
 	}
 }
 
-func TestAnalyzePattern_ConfidenceNormalized(t *testing.T) {
+func TestAnalyzePattern_InvalidConfidenceRejected(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	srv.push(200, chatRespFinal(`{"systemic":false,"confidence":"VERY-SURE","summary":"independent flakes"}`))
+	srv.push(200, chatRespFinal(`{"systemic":false,"confidence":"VERY-SURE","shared_root_cause":"","shared_builds":[],"suggested_fix":"","summary":"independent flakes"}`))
 	s := newPatternTestService(t, srv.URL)
 
-	pa, err := s.AnalyzePattern(context.Background(), "job", "job", patternFailures(2))
-	if err != nil {
-		t.Fatalf("AnalyzePattern: %v", err)
-	}
-	if pa.Confidence != "low" {
-		t.Errorf("confidence = %q, want low (normalized fallback)", pa.Confidence)
+	if _, err := s.AnalyzePattern(context.Background(), "job", "job", patternFailures(2)); patternValidationCategoryOf(err) != patternValidationSchema {
+		t.Fatalf("AnalyzePattern error = %v", err)
 	}
 }
 
@@ -223,7 +219,7 @@ func TestBuildPatternUserPrompt_RendersFixAndFiles(t *testing.T) {
 func TestAnalyzePattern_CapsBuilds(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	srv.push(200, chatRespFinal(`{"systemic":true,"confidence":"high","shared_root_cause":"x","summary":"x"}`))
+	srv.push(200, chatRespFinal(`{"systemic":true,"confidence":"high","shared_root_cause":"x","shared_builds":["obuild","nbuild"],"suggested_fix":"fix x","summary":"x"}`))
 	s := newPatternTestService(t, srv.URL)
 
 	pa, err := s.AnalyzePattern(context.Background(), "job", "job", patternFailures(maxPatternBuilds+5))
@@ -256,7 +252,7 @@ func TestParsePatternResultMarksPathsUnverified(t *testing.T) {
 		"systemic": true,
 		"confidence": "high",
 		"shared_root_cause": "the controller writes stale state",
-		"shared_builds": ["2", "1"],
+		"shared_builds": ["abuild", "bbuild"],
 		"suggested_fix": "serialize updates in config/controller.yaml",
 		"summary": "the same controller path failed twice"
 	}`
@@ -266,5 +262,64 @@ func TestParsePatternResultMarksPathsUnverified(t *testing.T) {
 	}
 	if !strings.Contains(pa.SuggestedFix, "config/controller.yaml (unverified path)") {
 		t.Fatalf("suggested fix = %q, want unverified path annotation", pa.SuggestedFix)
+	}
+}
+
+func TestParsePatternResponseCandidates(t *testing.T) {
+	valid := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":["abuild","bbuild"],"suggested_fix":"update config/controller.yaml","summary":"the builds share one cause"}`
+	valid2 := `{"systemic":true,"confidence":"medium","shared_root_cause":"second cause","shared_builds":["abuild","bbuild"],"suggested_fix":"update config/second.yaml","summary":"a different valid verdict"}`
+	missing := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":["abuild","bbuild"],"summary":"missing suggested fix"}`
+	invalidBuild := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":["abuild","unknown-build"],"suggested_fix":"update config/controller.yaml","summary":"bad build reference"}`
+	cases := []struct {
+		name         string
+		raw          string
+		wantSummary  string
+		wantCategory patternValidationCategory
+	}{
+		{name: "plain valid JSON", raw: valid, wantSummary: "the builds share one cause"},
+		{name: "fenced valid JSON", raw: "```json\n" + valid + "\n```", wantSummary: "the builds share one cause"},
+		{name: "metadata wrapper", raw: `{"metadata":{"finish_reason":"stop"},"result":` + valid + `}`, wantSummary: "the builds share one cause"},
+		{name: "one contract candidate", raw: missing + "\n" + valid, wantSummary: "the builds share one cause"},
+		{name: "ambiguous valid candidates", raw: valid + "\n" + valid2, wantCategory: patternValidationAmbiguous},
+		{name: "malformed followed by valid", raw: `{"systemic": tru` + "\n" + valid, wantSummary: "the builds share one cause"},
+		{name: "valid followed by unrelated prose", raw: valid + "\nThis paragraph is unrelated.", wantSummary: "the builds share one cause"},
+		{name: "observed trailing W shape", raw: valid + "\nWhat this means is that the failures recur.", wantSummary: "the builds share one cause"},
+		{name: "missing required field", raw: missing, wantCategory: patternValidationSchema},
+		{name: "invalid affected build", raw: invalidBuild, wantCategory: patternValidationBuilds},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			parsed, err := parsePatternResponse(testCase.raw, patternBuildIDs(patternFailures(3)))
+			if testCase.wantCategory != "" {
+				if got := patternValidationCategoryOf(err); got != testCase.wantCategory {
+					t.Fatalf("category = %q, want %q, error=%v", got, testCase.wantCategory, err)
+				}
+				if err != nil && (strings.Contains(err.Error(), testCase.raw) || strings.Contains(err.Error(), "unknown-build")) {
+					t.Fatalf("error exposed provider content: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if parsed.Summary != testCase.wantSummary {
+				t.Fatalf("summary = %q, want %q", parsed.Summary, testCase.wantSummary)
+			}
+		})
+	}
+}
+
+func TestAnalyzePatternAcceptsKimiTrailingProse(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	verdict := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":["abuild","bbuild"],"suggested_fix":"update config/controller.yaml","summary":"the builds share one cause"}`
+	srv.push(200, chatRespFinal(verdict+"\nWhat this means is recurring configuration drift."))
+	s := newPatternTestService(t, srv.URL)
+	pa, err := s.AnalyzePattern(t.Context(), "job", "job", patternFailures(2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pa == nil || pa.Summary != "the builds share one cause" {
+		t.Fatalf("pattern = %+v", pa)
 	}
 }

@@ -201,7 +201,9 @@ schedule:
 		runtime.LogConfiguration()
 	}
 
-	analyzePatternsAcrossBuilds(ctx, service, details)
+	if err := analyzePatternsAcrossBuilds(ctx, service, details); err != nil {
+		return fmt.Errorf("cross-build pattern analysis: %w", err)
+	}
 	warnOnAnalysisPersistence("AI cache", runtime.SaveCache)
 	warnOnAnalysisPersistence("AI traces", func() error {
 		return traceStore.Save(filepath.Join(p.opts.OutDir, output.AITraceFilename))
@@ -270,8 +272,9 @@ func (p *pipeline) ensureContainerAnalyzer() (containerFailureAnalyzer, error) {
 	return p.containerAnalyzer, nil
 }
 
-func analyzePatternsAcrossBuilds(ctx context.Context, service *ai.Service, details []models.JobDetail) {
-	patterns.Analyze(ctx, service, details)
+var analyzePatternsAcrossBuilds = func(ctx context.Context, service *ai.Service, details []models.JobDetail) error {
+	_, err := patterns.Analyze(ctx, service, details)
+	return err
 }
 
 func collectRecurringPatterns(details []models.JobDetail) []models.PatternAnalysis {

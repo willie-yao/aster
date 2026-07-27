@@ -216,6 +216,10 @@ for how to pin a release.
 
 ### Fixed
 
+- **Bounded recurring-pattern parsing.** Pattern responses now select one
+  unambiguous schema-valid JSON candidate from fenced output, metadata wrappers,
+  or trailing provider prose, reject partial or invalid-build verdicts with safe
+  validation categories, and abort publication when pattern regeneration fails.
 - **Safe Orka refresh publication.** Orka result API 401 and 403 responses now
   abort the refresh before public output or notifications, stop additional
   analysis scheduling, hide response bodies, and restore the prior AI cache and

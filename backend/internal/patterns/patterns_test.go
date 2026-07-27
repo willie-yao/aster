@@ -2,6 +2,8 @@ package patterns
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +14,26 @@ import (
 type concurrentAnalyzer struct {
 	started chan string
 	release chan struct{}
+}
+
+type failingAnalyzer struct{}
+
+func (failingAnalyzer) AnalyzePattern(context.Context, string, string, []ai.PatternFailure) (*models.PatternAnalysis, error) {
+	return nil, errors.New("response validation failed (schema)")
+}
+
+func TestAnalyzeReturnsPatternFailures(t *testing.T) {
+	details := []models.JobDetail{eligibleJob("job-a")}
+	stats, err := Analyze(t.Context(), failingAnalyzer{}, details)
+	if stats.Eligible != 1 || stats.Completed != 0 || stats.Failed != 1 {
+		t.Fatalf("stats = %+v", stats)
+	}
+	if err == nil || !strings.Contains(err.Error(), "job-a") {
+		t.Fatalf("error = %v", err)
+	}
+	if len(details[0].PatternAnalyses) != 0 {
+		t.Fatalf("patterns = %+v", details[0].PatternAnalyses)
+	}
 }
 
 func (a *concurrentAnalyzer) AnalyzePattern(_ context.Context, jobID, subject string, failures []ai.PatternFailure) (*models.PatternAnalysis, error) {

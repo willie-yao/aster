@@ -181,18 +181,7 @@ func TestSuccessfulOrkaResultPublishesRefresh(t *testing.T) {
 	}
 	p := refreshLifecyclePipeline(t, dataDir, bucketDir, analyzer)
 	p.opts.SkipSideEffects = true
-	t.Setenv("AI_CONTEXT_WINDOW_TOKENS", "65536")
-	p.aiProject = &analysisruntime.Project{
-		Config: p.cfg,
-		Provider: project.AIProvider{
-			API: project.AIAPIChatCompletions, Endpoint: "http://model.invalid/v1/chat/completions", Model: "test-model",
-		},
-		SystemPrompt: "test",
-	}
-	p.aiRuntime, err = analysisruntime.New(t.Context(), analysisruntime.Options{DataDir: dataDir, Project: p.aiProject})
-	if err != nil {
-		t.Fatal(err)
-	}
+	configureRefreshLifecycleRuntime(t, p, dataDir)
 
 	if _, err := p.fullPass(t.Context()); err != nil {
 		t.Fatal(err)
@@ -207,6 +196,55 @@ func TestSuccessfulOrkaResultPublishesRefresh(t *testing.T) {
 	}
 	if !strings.Contains(string(jobData), `"root_cause": "configuration drift"`) {
 		t.Fatalf("published job detail does not contain successful analysis: %s", jobData)
+	}
+}
+
+func TestPatternFailurePreservesRefreshState(t *testing.T) {
+	dataDir, bucketDir := installRefreshLifecycleFixture(t)
+	before := hashFileTree(t, dataDir)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"result": `{"version":1}`})
+	}))
+	defer server.Close()
+	state, err := analysisruntime.NewContainerStateStore(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	analyzer := &resultLifecycleAnalyzer{
+		client: orka.NewResultClient(server.URL, "token"), state: state, dataDir: dataDir,
+		result: ai.FailureAnalysisResult{
+			Summary: &models.AISummary{GeneratedAt: "2026-07-27T00:00:00Z", Summary: "analyzed"},
+			Analysis: &models.AIAnalysis{
+				GeneratedAt: "2026-07-27T00:00:00Z", RootCause: "configuration drift", Severity: "High",
+				SuggestedFix: "update the configuration", Mode: "agentic", EvidencePlanCovered: true,
+			},
+		},
+	}
+	p := refreshLifecyclePipeline(t, dataDir, bucketDir, analyzer)
+	configureRefreshLifecycleRuntime(t, p, dataDir)
+	sender := &countingNotifySender{}
+	oldEmailSender := newEmailSender
+	newEmailSender = func(notify.SMTPConfig) (notify.Sender, error) { return sender, nil }
+	oldPatternAnalysis := analyzePatternsAcrossBuilds
+	analyzePatternsAcrossBuilds = func(context.Context, *ai.Service, []models.JobDetail) error {
+		return fmt.Errorf("pattern analysis: response validation failed (schema)")
+	}
+	t.Cleanup(func() {
+		newEmailSender = oldEmailSender
+		analyzePatternsAcrossBuilds = oldPatternAnalysis
+	})
+
+	if _, err := p.fullPass(t.Context()); err == nil || !strings.Contains(err.Error(), "cross-build pattern analysis") {
+		t.Fatalf("fullPass error = %v", err)
+	}
+	if sender.calls.Load() != 0 {
+		t.Fatalf("notification sends = %d, want 0", sender.calls.Load())
+	}
+	if p.aiRuntime != nil || p.containerAnalyzer != nil {
+		t.Fatal("failed pattern refresh retained in-memory AI state")
+	}
+	if after := hashFileTree(t, dataDir); !reflect.DeepEqual(after, before) {
+		t.Fatalf("data directory changed after pattern failure\nbefore=%v\nafter=%v", before, after)
 	}
 }
 
@@ -358,6 +396,23 @@ func refreshLifecyclePipeline(t *testing.T, dataDir, bucketDir string, analyzer 
 			},
 		},
 		cfg: cfg, client: &http.Client{}, backend: backend, enableAI: true, containerAnalyzer: analyzer,
+	}
+}
+
+func configureRefreshLifecycleRuntime(t *testing.T, p *pipeline, dataDir string) {
+	t.Helper()
+	t.Setenv("AI_CONTEXT_WINDOW_TOKENS", "65536")
+	p.aiProject = &analysisruntime.Project{
+		Config: p.cfg,
+		Provider: project.AIProvider{
+			API: project.AIAPIChatCompletions, Endpoint: "http://model.invalid/v1/chat/completions", Model: "test-model",
+		},
+		SystemPrompt: "test",
+	}
+	var err error
+	p.aiRuntime, err = analysisruntime.New(t.Context(), analysisruntime.Options{DataDir: dataDir, Project: p.aiProject})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
