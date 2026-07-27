@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -65,6 +66,107 @@ func TestHandler_DataReadParity(t *testing.T) {
 		}
 		if body != want {
 			t.Errorf("GET %s: body = %q, want %q", rel, body, want)
+		}
+	}
+}
+
+type spyFileSystem struct {
+	opened []string
+}
+
+func (s *spyFileSystem) Open(name string) (http.File, error) {
+	s.opened = append(s.opened, name)
+	return nil, os.ErrNotExist
+}
+
+func mixedCase(name string) string {
+	var b strings.Builder
+	upper := true
+	for _, r := range name {
+		if r >= 'a' && r <= 'z' {
+			if upper {
+				r -= 'a' - 'A'
+			}
+			upper = !upper
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+func encodedUppercaseName(name string) string {
+	upper := strings.ToUpper(name)
+	for i := range len(upper) {
+		if upper[i] >= 'A' && upper[i] <= 'Z' {
+			return upper[:i] + "%" + fmt.Sprintf("%02X", upper[i]) + upper[i+1:]
+		}
+	}
+	return upper
+}
+
+func TestNoListFSRejectsPrivatePathVariantsBeforeOpen(t *testing.T) {
+	for _, name := range output.NonPublishedFiles {
+		name := name
+		t.Run(name, func(t *testing.T) {
+			mixed := mixedCase(name)
+			variants := []struct {
+				name        string
+				method      string
+				path        string
+				rangeHeader string
+			}{
+				{name: "lowercase", method: http.MethodGet, path: "/data/" + strings.ToLower(name)},
+				{name: "uppercase", method: http.MethodGet, path: "/data/" + strings.ToUpper(name)},
+				{name: "mixed_case", method: http.MethodGet, path: "/data/" + mixed},
+				{name: "head", method: http.MethodHead, path: "/data/" + mixed},
+				{name: "range", method: http.MethodGet, path: "/data/" + mixed, rangeHeader: "bytes=0-3"},
+				{name: "encoded_case", method: http.MethodGet, path: "/data/" + encodedUppercaseName(name)},
+				{name: "backslash", method: http.MethodGet, path: "/data/%5C" + mixed},
+				{name: "nested_backslash", method: http.MethodGet, path: "/data/jobs%5C" + mixed},
+				{name: "nested", method: http.MethodGet, path: "/data/jobs/" + mixed},
+				{name: "dot_directory", method: http.MethodGet, path: "/data/.private/" + mixed},
+				{name: "encoded_dot_directory", method: http.MethodGet, path: "/data/%2Eprivate/" + mixed},
+			}
+			for _, variant := range variants {
+				variant := variant
+				t.Run(variant.name, func(t *testing.T) {
+					spy := &spyFileSystem{}
+					handler := http.StripPrefix("/data/", http.FileServer(noListFS{fs: spy}))
+					req := httptest.NewRequest(variant.method, variant.path, nil)
+					if variant.rangeHeader != "" {
+						req.Header.Set("Range", variant.rangeHeader)
+					}
+					recorder := httptest.NewRecorder()
+					handler.ServeHTTP(recorder, req)
+					if recorder.Code != http.StatusNotFound {
+						t.Fatalf("status = %d, want 404", recorder.Code)
+					}
+					if len(spy.opened) != 0 {
+						t.Fatalf("underlying filesystem opened %v", spy.opened)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestNoListFSRejectsMalformedPathsBeforeOpen(t *testing.T) {
+	for _, target := range []string{
+		"/data/%00dashboard.json",
+		"/data/%09dashboard.json",
+		"/data/%7Fdashboard.json",
+		"/data/%FFdashboard.json",
+	} {
+		spy := &spyFileSystem{}
+		handler := http.StripPrefix("/data/", http.FileServer(noListFS{fs: spy}))
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, req)
+		if recorder.Code != http.StatusNotFound && recorder.Code != http.StatusBadRequest {
+			t.Errorf("%s status = %d, want 400 or 404", target, recorder.Code)
+		}
+		if len(spy.opened) != 0 {
+			t.Errorf("%s opened underlying filesystem paths %v", target, spy.opened)
 		}
 	}
 }
