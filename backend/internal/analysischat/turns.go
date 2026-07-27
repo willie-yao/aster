@@ -82,9 +82,13 @@ func (s *Service) Cancel(id, owner, requestID string) error {
 		if current.Active == nil || current.Active.RequestID != requestID {
 			return changed, ErrRequestOutcomeUnknown
 		}
+		stamp := now.Format(time.RFC3339)
+		request.UpdatedAt = stamp
+		current.Requests[requestID] = request
 		current.Active.CancelRequested = true
 		current.Active.Phase = PhaseCancelling
 		current.Active.UpdatedAt = now
+		current.View.UpdatedAt = stamp
 		active = true
 		return true, nil
 	})
@@ -173,12 +177,17 @@ func (s *Service) startTurn(ctx context.Context, id, owner, requestID, question 
 		}
 
 		current.Turns++
+		stamp := now.Format(time.RFC3339)
 		state.OwnerRequests[owner] = append(state.OwnerRequests[owner], now)
-		current.Requests[requestID] = persistedRequest{QuestionHash: questionHash, Status: requestPending}
+		current.Requests[requestID] = persistedRequest{
+			QuestionHash: questionHash, Question: question, Status: requestPending,
+			Turn: current.Turns, CreatedAt: stamp, UpdatedAt: stamp,
+		}
 		current.Active = &persistedActiveTurn{
 			RequestID: requestID, Question: question, LeaseID: leaseID,
 			ExpiresAt: now.Add(s.opts.TurnLeaseTTL), Phase: PhaseQueued, UpdatedAt: now,
 		}
+		current.View.UpdatedAt = stamp
 		resolved := restoreResolved(current.Resolved)
 		result = startTurnResult{
 			LeaseID: leaseID, Started: true, Pending: true,
@@ -242,19 +251,31 @@ func (s *Service) finishTurn(id, owner, requestID, leaseID, question string, rep
 		if current.Active == nil || current.Active.RequestID != requestID || current.Active.LeaseID != leaseID {
 			return changed, ErrRequestOutcomeUnknown
 		}
+		active := current.Active
 		previous := current.Requests[requestID]
 		if current.Active.CancelRequested {
 			runErr = context.Canceled
 		}
 		current.Active = nil
 		extendSessionExpiry(current, finishedAt.Add(s.opts.SessionTTL))
+		stamp := finishedAt.Format(time.RFC3339)
+		if previous.Question == "" {
+			previous.Question = question
+		}
+		if previous.Turn == 0 {
+			previous.Turn = current.Turns
+		}
+		if previous.CreatedAt == "" && active != nil && !active.UpdatedAt.IsZero() {
+			previous.CreatedAt = active.UpdatedAt.UTC().Format(time.RFC3339)
+		}
+		previous.UpdatedAt = stamp
+		current.View.UpdatedAt = stamp
 		if runErr != nil {
 			previous.Status = requestFailed
 			previous.FailureKind = requestFailureKind(runErr)
 			current.Requests[requestID] = previous
 			return true, nil
 		}
-		stamp := finishedAt.Format(time.RFC3339)
 		current.View.Messages = append(current.View.Messages,
 			Message{Role: "user", RequestID: requestID, Content: question, CreatedAt: stamp},
 			Message{

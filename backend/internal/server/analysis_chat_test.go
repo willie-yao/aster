@@ -34,6 +34,7 @@ type fakeAnalysisChatRunner struct {
 	cancelOwner      string
 	cancelRequestID  string
 	sendDelay        time.Duration
+	view             analysischat.SessionView
 }
 
 func (f *fakeAnalysisChatRunner) Find(ref analysischat.AnalysisRef, owner string) (analysischat.SessionView, error) {
@@ -56,6 +57,9 @@ func (f *fakeAnalysisChatRunner) Get(id, owner string) (analysischat.SessionView
 	f.gotID, f.gotOwner = id, owner
 	if f.getErr != nil {
 		return analysischat.SessionView{}, f.getErr
+	}
+	if f.view.ID != "" {
+		return f.view, nil
 	}
 	return analysischat.SessionView{ID: id, Messages: []analysischat.Message{}, TurnsUsed: 2, MaxTurns: 10}, nil
 }
@@ -341,6 +345,47 @@ func TestHandlerAnalysisChatStreamErrorIsSanitized(t *testing.T) {
 	}
 	if strings.Contains(recorder.Body.String(), `"outcome":""`) {
 		t.Fatal("ambiguous stream error carried a false terminal outcome")
+	}
+}
+
+func TestHandlerAnalysisChatReturnsSafeAttemptHistory(t *testing.T) {
+	runner := &fakeAnalysisChatRunner{view: analysischat.SessionView{
+		ID: "session-1", TurnsUsed: 3, MaxTurns: 10,
+		Messages: []analysischat.Message{
+			{Role: "user", RequestID: "success", Content: "successful question", CreatedAt: "2026-07-27T12:00:00Z"},
+			{Role: "assistant", RequestID: "success", Content: "safe answer", CreatedAt: "2026-07-27T12:00:00Z"},
+		},
+		Attempts: []analysischat.Attempt{
+			{RequestID: "success", Question: "successful question", Outcome: "succeeded", Turn: 1},
+			{RequestID: "cancelled", Question: "cancelled question", Outcome: "cancelled", Turn: 2},
+			{RequestID: "provider", Question: "provider question", Outcome: "failed", FailureKind: "provider", Turn: 3},
+		},
+	}}
+	handler, err := Handler(Options{
+		DataDir: t.TempDir(), Capabilities: DefaultCapabilities(), Auth: fakeAuth{}, AuthMode: "dev",
+		AnalysisChat: runner,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/analysis-chat/sessions/session-1", nil)
+	request.Header.Set("Authorization", "ok")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%q", recorder.Code, recorder.Body.String())
+	}
+	var view analysischat.SessionView
+	if err := json.Unmarshal(recorder.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	if view.TurnsUsed != 3 || view.MaxTurns != 10 || len(view.Attempts) != 3 || view.Attempts[2].FailureKind != "provider" {
+		t.Fatalf("attempt response = %+v", view)
+	}
+	for _, private := range []string{"provider error", "system prompt", "provider token", "/private/path"} {
+		if strings.Contains(recorder.Body.String(), private) {
+			t.Fatalf("response leaked %q: %s", private, recorder.Body.String())
+		}
 	}
 }
 

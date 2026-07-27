@@ -1,4 +1,6 @@
 import type {
+  AnalysisChatAttempt,
+  AnalysisChatMessage,
   AnalysisChatProgress,
   AnalysisChatReference,
   AnalysisChatSession,
@@ -103,6 +105,95 @@ export function analysisChatTurnLimitReached(
   if (hasPendingRequest) return false;
   const usage = session ? analysisChatTurnUsage(session) : null;
   return rejected || usage !== null && usage.used >= usage.max;
+}
+
+export type AnalysisChatHistoryEntry =
+  | { kind: "message"; key: string; message: AnalysisChatMessage }
+  | { kind: "attempt"; key: string; attempt: AnalysisChatAttempt };
+
+export function analysisChatHistory(session: AnalysisChatSession): AnalysisChatHistoryEntry[] {
+  const attempts = session.attempts ?? [];
+  const attemptByRequest = new Map(attempts.map((attempt) => [attempt.request_id, attempt]));
+  const representedRequests = new Set(
+    session.messages.flatMap((message) => message.request_id ? [message.request_id] : []),
+  );
+  const entries: Array<{ entry: AnalysisChatHistoryEntry; order: number; turn: number; time: string }> = [];
+  session.messages.forEach((message, index) => {
+    entries.push({
+      entry: {
+        kind: "message",
+        key: `message:${message.request_id ?? "legacy"}:${index}`,
+        message,
+      },
+      order: index,
+      turn: message.request_id ? attemptByRequest.get(message.request_id)?.turn ?? 0 : 0,
+      time: message.created_at,
+    });
+  });
+  attempts.forEach((attempt, index) => {
+    if (attempt.outcome === "succeeded" && representedRequests.has(attempt.request_id)) return;
+    entries.push({
+      entry: {
+        kind: "attempt",
+        key: `attempt:${attempt.request_id}`,
+        attempt,
+      },
+      order: session.messages.length + index,
+      turn: attempt.turn ?? 0,
+      time: attempt.created_at ?? attempt.updated_at ?? "",
+    });
+  });
+  entries.sort((left, right) => {
+    const leftHasTurn = left.turn > 0;
+    const rightHasTurn = right.turn > 0;
+    if (leftHasTurn !== rightHasTurn) return leftHasTurn ? -1 : 1;
+    if (leftHasTurn && left.turn !== right.turn) return left.turn - right.turn;
+    const leftHasTime = left.time !== "";
+    const rightHasTime = right.time !== "";
+    if (leftHasTime !== rightHasTime) return leftHasTime ? -1 : 1;
+    if (left.time !== right.time) return left.time.localeCompare(right.time);
+    return left.order - right.order;
+  });
+  return entries.map(({ entry }) => entry);
+}
+
+export function analysisChatAttemptStatus(attempt: AnalysisChatAttempt): { label: string; detail: string } {
+  switch (attempt.outcome) {
+    case "pending":
+      return { label: "Request pending", detail: "The analysis agent is still working on this question." };
+    case "succeeded":
+      return { label: "Request completed", detail: "The request completed, but its answer is unavailable." };
+    case "cancelled":
+      return { label: "Request cancelled", detail: "This question was cancelled before an answer was published." };
+    case "timed_out":
+      return { label: "Request timed out", detail: "The analysis agent timed out before it could answer." };
+    case "unknown":
+      return { label: "Outcome unknown", detail: "The server could not confirm whether this request completed." };
+    case "failed":
+      switch (attempt.failure_kind) {
+        case "provider":
+          return { label: "Provider request failed", detail: "The model provider could not complete this request." };
+        case "validation":
+          return { label: "Response validation failed", detail: "The model response did not pass validation." };
+        case "citation":
+          return { label: "Evidence citation validation failed", detail: "The response citations did not pass validation." };
+        case "source":
+          return { label: "Source investigation failed", detail: "The source investigation could not complete this request." };
+        default:
+          return { label: "Request failed", detail: "The analysis agent could not complete this request." };
+      }
+  }
+}
+
+export type AnalysisChatRequestState = "answered" | "succeeded" | "terminal" | "pending" | "unresolved";
+
+export function analysisChatRequestState(session: AnalysisChatSession, requestID: string): AnalysisChatRequestState {
+  if (session.messages.some((message) => message.request_id === requestID)) return "answered";
+  const attempt = session.attempts?.find((candidate) => candidate.request_id === requestID);
+  if (attempt?.outcome === "succeeded") return "succeeded";
+  if (attempt && attempt.outcome !== "pending") return "terminal";
+  if (attempt?.outcome === "pending" || session.active?.request_id === requestID) return "pending";
+  return "unresolved";
 }
 
 async function apiError(response: Response): Promise<AnalysisChatAPIError> {

@@ -65,8 +65,12 @@ type persistedArtifactBuild struct {
 
 type persistedRequest struct {
 	QuestionHash string `json:"question_hash"`
+	Question     string `json:"question,omitempty"`
 	Status       string `json:"status"`
 	FailureKind  string `json:"failure_kind,omitempty"`
+	Turn         int    `json:"turn,omitempty"`
+	CreatedAt    string `json:"created_at,omitempty"`
+	UpdatedAt    string `json:"updated_at,omitempty"`
 }
 
 type persistedInvestigation struct {
@@ -230,6 +234,9 @@ func (s *sessionStore) load() (*persistedState, bool, error) {
 	if state.OwnerRequests == nil {
 		state.OwnerRequests = map[string][]time.Time{}
 	}
+	if migrateRequestSummaries(&state) {
+		migrated = true
+	}
 	return &state, migrated, nil
 }
 
@@ -253,6 +260,72 @@ func migrateStateV1(state *persistedState) {
 
 func migrateStateV3(state *persistedState) {
 	state.Version = stateVersion
+}
+
+func migrateRequestSummaries(state *persistedState) bool {
+	changed := false
+	for _, session := range state.Sessions {
+		if session == nil || len(session.Requests) == 0 {
+			continue
+		}
+		turns := map[string]int{}
+		for _, message := range session.View.Messages {
+			requestID := strings.TrimSpace(message.RequestID)
+			if requestID == "" {
+				continue
+			}
+			if turns[requestID] == 0 {
+				turns[requestID] = len(turns) + 1
+			}
+			request, ok := session.Requests[requestID]
+			if !ok {
+				continue
+			}
+			if request.Turn == 0 {
+				request.Turn = turns[requestID]
+				changed = true
+			}
+			if request.Question == "" && message.Role == "user" && strings.TrimSpace(message.Content) != "" {
+				request.Question = message.Content
+				changed = true
+			}
+			if request.CreatedAt == "" && message.CreatedAt != "" {
+				request.CreatedAt = message.CreatedAt
+				changed = true
+			}
+			if request.UpdatedAt == "" && message.CreatedAt != "" {
+				request.UpdatedAt = message.CreatedAt
+				changed = true
+			}
+			session.Requests[requestID] = request
+		}
+		if session.Active == nil {
+			continue
+		}
+		request, ok := session.Requests[session.Active.RequestID]
+		if !ok {
+			continue
+		}
+		if request.Question == "" && session.Active.Question != "" {
+			request.Question = session.Active.Question
+			changed = true
+		}
+		if request.Turn == 0 && session.Turns > 0 {
+			request.Turn = session.Turns
+			changed = true
+		}
+		stamp := session.Active.UpdatedAt.UTC().Format(time.RFC3339)
+		if request.CreatedAt == "" && !session.Active.UpdatedAt.IsZero() {
+			request.CreatedAt = stamp
+			changed = true
+		}
+		if request.UpdatedAt == "" && !session.Active.UpdatedAt.IsZero() {
+			request.UpdatedAt = stamp
+			changed = true
+		}
+		session.Requests[session.Active.RequestID] = request
+	}
+	return changed
 }
 
 func freshPersistedState() *persistedState {

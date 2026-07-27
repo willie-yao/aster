@@ -28,11 +28,14 @@ import { useAuth } from "../hooks/useAuth";
 import { useCapabilities } from "../hooks/useCapabilities";
 import {
   analysisChatActiveTurnLimitMessage,
+  analysisChatAttemptStatus,
   analysisChatFailureGuidance,
+  analysisChatHistory,
   analysisChatIdempotencyConflictMessage,
   analysisChatRateLimitMessage,
   analysisChatRequestOutcomeUnknownMessage,
   analysisChatRequestPendingMessage,
+  analysisChatRequestState,
   analysisChatSessionBusyMessage,
   analysisChatTurnLimitReached,
   analysisChatProgressTurnUsage,
@@ -55,6 +58,7 @@ import { AnalysisCorrectionAPIError, confirmAnalysisCorrection, previewAnalysisC
 import { soft } from "../theme";
 import type {
   AnalysisChatAssessment,
+  AnalysisChatAttempt,
   AnalysisChatCitation,
   AnalysisChatMessage,
   AnalysisChatProgress,
@@ -147,6 +151,52 @@ function formatLines(citation: AnalysisChatCitation) {
     return `line ${citation.line_start}`;
   }
   return `lines ${citation.line_start}-${citation.line_end}`;
+}
+
+function UserMessage({ content }: { content: string }) {
+  return (
+    <Box
+      sx={{
+        ml: { xs: 2, sm: 5 },
+        borderRadius: "10px 10px 3px 10px",
+        bgcolor: (theme) => soft(theme, "primary", 0.12),
+        border: "1px solid",
+        borderColor: (theme) => soft(theme, "primary", 0.22),
+        px: 1.5,
+        py: 1.1,
+      }}
+    >
+      <Typography variant="body2" sx={{ lineHeight: 1.55 }}>
+        {content}
+      </Typography>
+    </Box>
+  );
+}
+
+function AttemptSummary({ attempt }: { attempt: AnalysisChatAttempt }) {
+  const status = analysisChatAttemptStatus(attempt);
+  const severity = attempt.outcome === "succeeded"
+    ? "success"
+    : attempt.outcome === "pending"
+      ? "info"
+      : attempt.outcome === "cancelled" || attempt.outcome === "unknown"
+        ? "warning"
+        : "error";
+  return (
+    <Stack spacing={0.75}>
+      {attempt.question
+        ? <UserMessage content={attempt.question} />
+        : (
+          <Typography variant="caption" color="text.secondary" sx={{ ml: { xs: 2, sm: 5 } }}>
+            Question text is unavailable for this earlier attempt.
+          </Typography>
+        )}
+      <Alert severity={severity} variant="outlined" sx={{ py: 0.25 }}>
+        <Typography variant="body2" sx={{ fontWeight: 700 }}>{status.label}</Typography>
+        <Typography variant="caption" color="text.secondary">{status.detail}</Typography>
+      </Alert>
+    </Stack>
+  );
 }
 
 function AssistantMessage({
@@ -450,6 +500,7 @@ export function AnalysisChat({
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const analysisRefRef = useRef(analysisRef);
   const patternScope = analysisRef.scope === "pattern";
+  const history = useMemo(() => session ? analysisChatHistory(session) : [], [session]);
   const recordProgress = useCallback((progress: AnalysisChatProgress) => {
     setProgressPhase(progress.phase);
     const usage = analysisChatProgressTurnUsage(progress);
@@ -542,8 +593,12 @@ export function AnalysisChat({
         );
         if (identityRef.current !== restoreIdentity) return;
         setSession(updated);
-        if (updated.messages.some((message) => message.request_id === restoredTurn?.requestID)) {
+        const restoredState = restoredTurn ? analysisChatRequestState(updated, restoredTurn.requestID) : "unresolved";
+        if (restoredState === "answered" || restoredState === "succeeded") {
           setQuestion("");
+          setPendingTurn(null);
+          setError(null);
+        } else if (restoredState === "terminal") {
           setPendingTurn(null);
           setError(null);
         } else {
@@ -564,11 +619,19 @@ export function AnalysisChat({
           }
         }
         const restoredRequestID = restoredTurn?.requestID;
-        if (restoredRequestID && reconciled?.messages.some((message) => message.request_id === restoredRequestID)) {
-          setQuestion("");
-          setPendingTurn(null);
-          setError(null);
-          return;
+        if (restoredRequestID && reconciled) {
+          const restoredState = analysisChatRequestState(reconciled, restoredRequestID);
+          if (restoredState === "answered" || restoredState === "succeeded") {
+            setQuestion("");
+            setPendingTurn(null);
+            setError(null);
+            return;
+          }
+          if (restoredState === "terminal") {
+            setPendingTurn(null);
+            setError(null);
+            return;
+          }
         }
         if (restoredTurn && isAmbiguousAnalysisChatFailure(restoreError)) {
           setPendingTurn(restoredTurn);
@@ -591,11 +654,11 @@ export function AnalysisChat({
   }, [auth.status, features.analysis_chat, identity, recordProgress]);
 
   useEffect(() => {
-    if (!expanded || (!session?.messages.length && !busy)) return;
+    if (!expanded || (history.length === 0 && !busy)) return;
     const list = messageListRef.current;
     if (!list) return;
     list.scrollTo({ top: list.scrollHeight, behavior: "smooth" });
-  }, [busy, expanded, session?.messages.length]);
+  }, [busy, expanded, history.length]);
 
   useEffect(() => () => {
     restoreControllerRef.current?.abort();
@@ -676,10 +739,18 @@ export function AnalysisChat({
           reconciled = await getAnalysisChatSession(activeSession.id, controller.signal);
           setSession(reconciled);
           const activeRequestID = activeTurn?.requestID;
-          if (activeRequestID && reconciled.messages.some((message) => message.request_id === activeRequestID)) {
-            setQuestion("");
-            setPendingTurn(null);
-            return;
+          if (activeRequestID) {
+            const requestState = analysisChatRequestState(reconciled, activeRequestID);
+            if (requestState === "answered" || requestState === "succeeded") {
+              setQuestion("");
+              setPendingTurn(null);
+              return;
+            }
+            if (requestState === "terminal") {
+              setPendingTurn(null);
+              setError(null);
+              return;
+            }
           }
         } catch (reconcileError) {
           if (reconcileError instanceof Error && reconcileError.name === "AbortError") return;
@@ -966,7 +1037,7 @@ export function AnalysisChat({
                   Restoring conversation...
                 </Typography>
               )}
-              {!restoring && !session?.messages.length && !busy && !pendingTurn && !turnLimitReached && (
+              {!restoring && history.length === 0 && !busy && !pendingTurn && !turnLimitReached && (
                 <Box sx={{ py: 0.5 }}>
                   <Typography variant="body2" sx={{ fontWeight: 650 }}>
                     {patternScope ? "Interrogate the pattern across builds." : "Interrogate the conclusion, not just the summary."}
@@ -997,42 +1068,32 @@ export function AnalysisChat({
                 </Box>
               )}
 
-              {session?.messages.map((message, index) =>
-                message.role === "user" ? (
-                  <Box
-                    key={`${message.created_at}-${index}`}
-                    sx={{
-                      ml: { xs: 2, sm: 5 },
-                      borderRadius: "10px 10px 3px 10px",
-                      bgcolor: (theme) => soft(theme, "primary", 0.12),
-                      border: "1px solid",
-                      borderColor: (theme) => soft(theme, "primary", 0.22),
-                      px: 1.5,
-                      py: 1.1,
-                    }}
-                  >
-                    <Typography variant="body2" sx={{ lineHeight: 1.55 }}>
-                      {message.content}
-                    </Typography>
-                  </Box>
-                ) : (
+              {history.map((entry) => {
+                if (entry.kind === "attempt") {
+                  return <AttemptSummary key={entry.key} attempt={entry.attempt} />;
+                }
+                const message = entry.message;
+                if (message.role === "user") {
+                  return <UserMessage key={entry.key} content={message.content} />;
+                }
+                return (
                   <AssistantMessage
-                    key={`${message.created_at}-${index}`}
+                    key={entry.key}
                     message={message}
                     fileCtx={fileCtx}
                     correctionEnabled={!patternScope && Boolean(features.analysis_corrections)}
                     sourceInvestigationEnabled={!patternScope && Boolean(features.source_investigation)}
                     chatFixEnabled={Boolean(features.chat_fix)}
                     fixEligible={Boolean(message.request_id && message.citations?.length && fixPatterns.length)}
-                    sessionID={session.id}
+                    sessionID={session?.id ?? ""}
                     onReviewCorrection={(requestID) => void reviewCorrection(requestID)}
                     onUseForFix={() => openFix(message)}
                     onSourceInvestigationChange={(requestID, view) =>
                       sourceInvestigationChanged(message.request_id ?? "", requestID, view)
                     }
                   />
-                ),
-              )}
+                );
+              })}
 
               {busy && pendingTurn && (
                 <ThinkingState
