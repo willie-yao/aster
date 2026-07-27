@@ -1,28 +1,21 @@
 import { useEffect } from "react";
+import { matchPath } from "react-router-dom";
+
+const pageRoutes = [
+  { path: "/", title: "Overview" },
+  { path: "/flaky", title: "Test Analysis" },
+  { path: "/analysis-traces", title: "Analysis Traces" },
+  { path: "/job/:jobName", title: "Job Details" },
+  { path: "/job/:jobName/test/:testName", title: "Test Details" },
+  { path: "/action-request/:requestID", title: "Action Request" },
+] as const;
 
 export function pageTitleForPath(pathname: string): string {
-  const segments = pathname
-    .split("/")
-    .filter(Boolean)
-    .map((segment) => segment.toLowerCase());
-
-  if (segments.length === 0) return "Overview";
-  if (segments.length === 1 && segments[0] === "flaky") return "Test Analysis";
-  if (segments.length === 1 && segments[0] === "analysis-traces") {
-    return "Analysis Traces";
-  }
-  if (segments.length === 2 && segments[0] === "job") return "Job Details";
-  if (
-    segments.length === 4 &&
-    segments[0] === "job" &&
-    segments[2] === "test"
-  ) {
-    return "Test Details";
-  }
-  if (segments.length === 2 && segments[0] === "action-request") {
-    return "Action Request";
-  }
-  return "Page Not Found";
+  return (
+    pageRoutes.find(({ path }) =>
+      matchPath({ path, end: true }, pathname),
+    )?.title ?? "Page Not Found"
+  );
 }
 
 export function documentTitleForPath(pathname: string, brand: string): string {

@@ -31,9 +31,12 @@ test("unknown and malformed routes receive the Not Found title", () => {
   for (const pathname of [
     "/missing",
     "/job",
+    "/job//periodic-capz",
     "/job/example/extra",
     "/job/example/test",
+    "/job/periodic-capz//test/TestCluster",
     "/action-request",
+    "/action-request//request-1",
   ]) {
     assert.equal(pageTitleForPath(pathname), "Page Not Found", pathname);
   }
