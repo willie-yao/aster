@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -31,6 +32,10 @@ type resultLifecycleAnalyzer struct {
 	result  ai.FailureAnalysisResult
 	calls   atomic.Int64
 	mutate  bool
+	merge   bool
+	merged  chan struct{}
+	once    sync.Once
+	seeds   atomic.Int64
 }
 
 func (a *resultLifecycleAnalyzer) Maintain(context.Context) error { return nil }
@@ -39,6 +44,9 @@ func (a *resultLifecycleAnalyzer) StateStore() *analysisruntime.ContainerStateSt
 
 func (a *resultLifecycleAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, request ai.FailureAnalysisRequest) (ai.FailureAnalysisResult, error) {
 	a.calls.Add(1)
+	if a.state != nil {
+		a.seeds.Add(int64(len(a.state.CacheSeed(request))))
+	}
 	if a.mutate {
 		if err := os.WriteFile(filepath.Join(a.dataDir, ai.CacheFilename), []byte(`{"changed":true}`), 0o600); err != nil {
 			return ai.FailureAnalysisResult{}, err
@@ -55,6 +63,22 @@ func (a *resultLifecycleAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Cl
 	if !ok {
 		err := fmt.Errorf("succeeded Task result is unavailable")
 		return ai.UnavailableFailureAnalysisResult(request.TestCase, err), err
+	}
+	if a.merge {
+		identity := analysisruntime.NewContainerStateIdentity("analysis", "succeeded-task-"+request.Build.BuildID, request)
+		entry := ai.CacheEntry{Key: identity.CacheKey, CreatedAt: time.Now().UTC(), Data: json.RawMessage(`{"summary":"aborted"}`)}
+		if err := a.state.Merge(analysisruntime.ContainerAnalysisState{
+			Version: analysisruntime.ContainerStateVersion, TaskNamespace: identity.TaskNamespace,
+			TaskName: identity.TaskName, CacheKey: identity.CacheKey,
+			CacheEntries: map[string]ai.CacheEntry{identity.CacheKey: entry},
+		}); err != nil {
+			return ai.FailureAnalysisResult{}, err
+		}
+		a.once.Do(func() {
+			if a.merged != nil {
+				close(a.merged)
+			}
+		})
 	}
 	return a.result, nil
 }
@@ -109,6 +133,27 @@ func TestOrkaAuthorizationFailurePreservesRefreshState(t *testing.T) {
 	after := hashFileTree(t, dataDir)
 	if !reflect.DeepEqual(after, before) {
 		t.Fatalf("data directory changed after aborted refresh\nbefore=%v\nafter=%v", before, after)
+	}
+}
+
+func TestAIRefreshBackupsRemainPrivate(t *testing.T) {
+	dataDir, _ := installRefreshLifecycleFixture(t)
+	snapshot, err := captureAIRefreshState(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer snapshot.Discard()
+	for _, file := range snapshot.files {
+		if !file.exists {
+			continue
+		}
+		info, err := os.Stat(file.backupPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Fatalf("backup mode = %o, want 600", got)
+		}
 	}
 }
 
@@ -194,6 +239,66 @@ func TestSystemicOrkaAuthorizationStopsScheduling(t *testing.T) {
 	}
 	if got := analyzer.calls.Load(); got != 1 {
 		t.Fatalf("scheduled analyses = %d, want 1", got)
+	}
+}
+
+func TestAuthorizationRollbackInvalidatesMergedContainerState(t *testing.T) {
+	dataDir, bucketDir := installRefreshLifecycleFixture(t)
+	writeFixtureFile(t, bucketDir, "logs/periodic-test/1/artifacts/junit.xml", `<testsuite name="suite"><testcase name="fails-a" classname="suite"><failure message="failed">failed</failure></testcase><testcase name="fails-b" classname="suite"><failure message="failed">failed</failure></testcase></testsuite>`)
+	before := hashFileTree(t, dataDir)
+	merged := make(chan struct{})
+	var calls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) == 1 {
+			_ = json.NewEncoder(w).Encode(map[string]string{"result": `{"version":1}`})
+			return
+		}
+		<-merged
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+	state, err := analysisruntime.NewContainerStateStore(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	analyzer := &resultLifecycleAnalyzer{
+		client: orka.NewResultClient(server.URL, "token"), state: state, dataDir: dataDir,
+		merge: true, merged: merged,
+		result: ai.FailureAnalysisResult{
+			Summary: &models.AISummary{GeneratedAt: "2026-07-27T00:00:00Z", Summary: "analyzed"},
+			Analysis: &models.AIAnalysis{
+				GeneratedAt: "2026-07-27T00:00:00Z", RootCause: "configuration drift", Severity: "High",
+				SuggestedFix: "update configuration", Mode: "agentic", EvidencePlanCovered: true,
+			},
+		},
+	}
+	p := refreshLifecyclePipeline(t, dataDir, bucketDir, analyzer)
+	p.opts.AnalysisRuntime.OrkaContainer.MaxConcurrent = 2
+	if _, err := p.fullPass(t.Context()); err == nil || !orka.IsResultAuthorizationError(err) {
+		t.Fatalf("fullPass error = %v", err)
+	}
+	if p.containerAnalyzer != nil {
+		t.Fatal("aborted container analyzer remained cached")
+	}
+	if after := hashFileTree(t, dataDir); !reflect.DeepEqual(after, before) {
+		t.Fatalf("data directory changed after rollback\nbefore=%v\nafter=%v", before, after)
+	}
+
+	nextServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer nextServer.Close()
+	nextState, err := analysisruntime.NewContainerStateStore(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextAnalyzer := &resultLifecycleAnalyzer{client: orka.NewResultClient(nextServer.URL, "token"), state: nextState, dataDir: dataDir}
+	p.containerAnalyzer = nextAnalyzer
+	if _, err := p.fullPass(t.Context()); err == nil || !orka.IsResultAuthorizationError(err) {
+		t.Fatalf("next fullPass error = %v", err)
+	}
+	if nextAnalyzer.seeds.Load() != 0 {
+		t.Fatalf("next pass reused %d aborted cache entries", nextAnalyzer.seeds.Load())
 	}
 }
 

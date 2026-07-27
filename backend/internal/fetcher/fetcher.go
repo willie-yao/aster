@@ -392,6 +392,8 @@ func (p *pipeline) refreshWithAnalysisContext(fetchCtx, analysisCtx context.Cont
 	if restoreErr := snapshot.Restore(); restoreErr != nil {
 		return nil, errors.Join(err, fmt.Errorf("restoring AI refresh state: %w", restoreErr))
 	}
+	p.containerAnalyzer = nil
+	p.aiRuntime = nil
 	return nil, err
 }
 
