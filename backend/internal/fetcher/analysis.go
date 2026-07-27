@@ -110,22 +110,43 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 
 	var transientSkipped atomic.Int64
 	var judgeRan, judgeObjected, judgeRevised atomic.Int64
+	analysisCtx, cancelAnalysis := context.WithCancel(ctx)
+	defer cancelAnalysis()
+	var systemicOnce sync.Once
+	var systemicErr error
 	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
+
+schedule:
 	for _, w := range work {
+		select {
+		case sem <- struct{}{}:
+		case <-analysisCtx.Done():
+			break schedule
+		}
+		if analysisCtx.Err() != nil {
+			<-sem
+			break
+		}
 		wg.Add(1)
-		sem <- struct{}{}
 		go func(w aiWork) {
 			defer wg.Done()
 			defer func() { <-sem }()
 			before := w.tc.AISummary
-			result, analyzeErr := analyzer.AnalyzeFailure(ctx, p.client, ai.FailureAnalysisRequest{
+			result, analyzeErr := analyzer.AnalyzeFailure(analysisCtx, p.client, ai.FailureAnalysisRequest{
 				JobID:               w.jobID,
 				BuildPrefix:         w.buildPrefix,
 				Build:               w.run.BuildInfo,
 				TestCase:            *w.tc,
 				ConsecutiveFailures: consecutiveMap[w.jobID+"::"+w.tc.Name],
 			})
+			if orka.IsResultAuthorizationError(analyzeErr) {
+				systemicOnce.Do(func() {
+					systemicErr = fmt.Errorf("systemic Orka result API authorization failure: %w", analyzeErr)
+					cancelAnalysis()
+				})
+				return
+			}
 			w.tc.AISummary = result.Summary
 			w.tc.AIAnalysis = result.Analysis
 			if analyzeErr != nil {
@@ -148,6 +169,12 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 		}(w)
 	}
 	wg.Wait()
+	if systemicErr != nil {
+		return systemicErr
+	}
+	if container != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
 	log.Printf("🤖 AI analysis complete (%d transient skipped)", transientSkipped.Load())
 	if n := judgeRan.Load(); n > 0 {
 		log.Printf("⚖️ semantic judge: ran on %d, objected on %d, revised %d", n, judgeObjected.Load(), judgeRevised.Load())

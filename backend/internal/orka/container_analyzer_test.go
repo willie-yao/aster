@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -273,6 +274,32 @@ func TestContainerAnalyzerRetainsResourcesUntilResultIsConsumed(t *testing.T) {
 	}
 	if len(kube.deletedTask) != 0 || len(resources.deletedVersion) != 0 {
 		t.Fatalf("unconsumed result cleanup: Tasks=%v bundles=%v", kube.deletedTask, resources.deletedVersion)
+	}
+}
+
+func TestContainerAnalyzerPropagatesFailedTaskAuthorizationError(t *testing.T) {
+	request := containerTaskRequest()
+	key := bytes.Repeat([]byte{0x72}, 32)
+	store, err := analysisruntime.NewContainerStateStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources := &fakeContainerResourceClient{}
+	kube := &fakeContainerAnalyzerKube{fakeContainerResourceClient: resources, phase: "Failed"}
+	results := &generatedContainerResult{request: request, key: key, err: &ResultHTTPError{StatusCode: http.StatusUnauthorized}}
+	analyzer, err := newContainerAnalyzer(containerAnalyzerTestOptions(t, key), kube, results, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := analyzer.AnalyzeFailure(t.Context(), nil, request)
+	if !IsResultAuthorizationError(err) {
+		t.Fatalf("AnalyzeFailure error = %v", err)
+	}
+	if result.Summary == nil || !strings.Contains(result.Summary.Summary, "unavailable") {
+		t.Fatalf("result = %+v", result)
+	}
+	if len(kube.deletedTask) != 0 || len(resources.deletedVersion) != 0 {
+		t.Fatalf("authorization failure cleanup: Tasks=%v bundles=%v", kube.deletedTask, resources.deletedVersion)
 	}
 }
 
