@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -349,6 +350,21 @@ func TestParsePatternResponseNormalizesBuildIDs(t *testing.T) {
 	}
 	if len(parsed.SharedBuilds) != 2 || parsed.SharedBuilds[0] != "abuild" || parsed.SharedBuilds[1] != "bbuild" {
 		t.Fatalf("shared builds = %q", parsed.SharedBuilds)
+	}
+}
+
+func TestParsePatternResponseRejectsTruncatedCandidateWindow(t *testing.T) {
+	first := `{"systemic":true,"confidence":"high","shared_root_cause":"first cause","shared_builds":["abuild","bbuild"],"suggested_fix":"fix first","summary":"first verdict"}`
+	second := `{"systemic":true,"confidence":"medium","shared_root_cause":"second cause","shared_builds":["abuild","bbuild"],"suggested_fix":"fix second","summary":"second verdict"}`
+	var raw strings.Builder
+	raw.WriteString(first)
+	for index := 0; index < analysisChatMaxCandidates; index++ {
+		fmt.Fprintf(&raw, `\n{"metadata":%d}`, index)
+	}
+	raw.WriteString("\n" + second)
+	_, err := parsePatternResponse(raw.String(), patternBuildIDs(patternFailures(2)))
+	if got := patternValidationCategoryOf(err); got != patternValidationAmbiguous {
+		t.Fatalf("category = %q, error = %v", got, err)
 	}
 }
 

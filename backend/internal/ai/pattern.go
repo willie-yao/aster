@@ -284,6 +284,9 @@ func parsePatternResponse(raw string, buildIDs map[string]struct{}) (patternResp
 		return patternResponse{}, &patternValidationError{category: patternValidationJSON}
 	}
 	scan := scanAnalysisChatJSONCandidates(raw)
+	if scan.truncated {
+		return patternResponse{}, &patternValidationError{category: patternValidationAmbiguous}
+	}
 	type validCandidate struct {
 		response patternResponse
 		end      int
