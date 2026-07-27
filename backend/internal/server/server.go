@@ -295,7 +295,7 @@ func Handler(opts Options) (http.Handler, error) {
 		} else if !info.IsDir() {
 			return nil, fmt.Errorf("server: static dir %q is not a directory", opts.StaticDir)
 		}
-		mux.Handle("/", spaHandler(opts.StaticDir))
+		mux.Handle("/", readOnly(spaHandler(opts.StaticDir)))
 	}
 
 	return compressResponses(securityHeaders(opts.HSTSEnabled, mux)), nil
