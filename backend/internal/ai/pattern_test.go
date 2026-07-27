@@ -102,6 +102,32 @@ func TestAnalyzePattern_CacheHit_NoSecondCall(t *testing.T) {
 	}
 }
 
+func TestAnalyzePatternRejectsPartialCacheEntry(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal(`{"systemic":false,"confidence":"low","shared_root_cause":"","shared_builds":[],"suggested_fix":"","summary":"fresh complete verdict"}`))
+	s := newPatternTestService(t, srv.URL)
+	failures := patternFailures(3)
+	input := BuildPatternInput("job", failures)
+	key := patternCacheKey(s.module.Name(), "job", "job", input.UserPrompt, "toolfree", s.client.modelFingerprint())
+	if err := s.client.cache.Set(key, map[string]any{
+		"systemic": false, "confidence": "low", "summary": "old partial verdict",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	pa, err := s.AnalyzePattern(t.Context(), "job", "job", failures)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pa == nil || pa.Summary != "fresh complete verdict" {
+		t.Fatalf("pattern = %+v", pa)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 1 {
+		t.Fatalf("model calls = %d, want 1", got)
+	}
+}
+
 func TestAnalyzePattern_InvalidConfidenceRejected(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
@@ -284,6 +310,7 @@ func TestParsePatternResponseCandidates(t *testing.T) {
 		{name: "malformed followed by valid", raw: `{"systemic": tru` + "\n" + valid, wantSummary: "the builds share one cause"},
 		{name: "valid followed by unrelated prose", raw: valid + "\nThis paragraph is unrelated.", wantSummary: "the builds share one cause"},
 		{name: "observed trailing W shape", raw: valid + "\nWhat this means is that the failures recur.", wantSummary: "the builds share one cause"},
+		{name: "valid followed by truncated candidate", raw: valid + `\n{"systemic":`, wantCategory: patternValidationJSON},
 		{name: "missing required field", raw: missing, wantCategory: patternValidationSchema},
 		{name: "invalid affected build", raw: invalidBuild, wantCategory: patternValidationBuilds},
 	}
@@ -306,6 +333,17 @@ func TestParsePatternResponseCandidates(t *testing.T) {
 				t.Fatalf("summary = %q, want %q", parsed.Summary, testCase.wantSummary)
 			}
 		})
+	}
+}
+
+func TestParsePatternResponseNormalizesBuildIDs(t *testing.T) {
+	raw := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":[" abuild ","bbuild"],"suggested_fix":"update config/controller.yaml","summary":"the builds share one cause"}`
+	parsed, err := parsePatternResponse(raw, patternBuildIDs(patternFailures(2)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.SharedBuilds) != 2 || parsed.SharedBuilds[0] != "abuild" || parsed.SharedBuilds[1] != "bbuild" {
+		t.Fatalf("shared builds = %q", parsed.SharedBuilds)
 	}
 }
 

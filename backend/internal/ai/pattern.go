@@ -169,8 +169,7 @@ func (s *Service) AnalyzePattern(ctx context.Context, jobID, subject string, fai
 	key := patternCacheKey(s.module.Name(), jobID, subject, userPrompt, groundKey, s.client.modelFingerprint())
 	buildIDs := patternBuildIDs(failures)
 	if raw, ok := s.client.cache.Get(key); ok {
-		var cached patternResponse
-		if json.Unmarshal(raw, &cached) == nil && patternResponseValidationCategory(cached, buildIDs) == "" {
+		if cached, err := parsePatternResponse(string(raw), buildIDs); err == nil {
 			return buildPatternAnalysis(subject, len(failures), cached, collectRelevantFiles(failures)), nil
 		}
 	}
@@ -285,12 +284,16 @@ func parsePatternResponse(raw string, buildIDs map[string]struct{}) (patternResp
 		return patternResponse{}, &patternValidationError{category: patternValidationJSON}
 	}
 	scan := scanAnalysisChatJSONCandidates(raw)
-	valid := make([]patternResponse, 0, 1)
+	type validCandidate struct {
+		response patternResponse
+		end      int
+	}
+	valid := make([]validCandidate, 0, 1)
 	bestCategory := patternValidationJSON
 	for _, candidate := range scan.candidates {
 		parsed, category := decodePatternCandidate(candidate.value, buildIDs)
 		if category == "" {
-			valid = append(valid, parsed)
+			valid = append(valid, validCandidate{response: parsed, end: candidate.end})
 			continue
 		}
 		if patternValidationRank(category) > patternValidationRank(bestCategory) {
@@ -299,7 +302,12 @@ func parsePatternResponse(raw string, buildIDs map[string]struct{}) (patternResp
 	}
 	switch len(valid) {
 	case 1:
-		return valid[0], nil
+		for _, incomplete := range scan.incomplete {
+			if incomplete.start > valid[0].end {
+				return patternResponse{}, &patternValidationError{category: patternValidationJSON}
+			}
+		}
+		return valid[0].response, nil
 	case 0:
 		return patternResponse{}, &patternValidationError{category: bestCategory}
 	default:
@@ -330,6 +338,9 @@ func decodePatternCandidate(raw string, buildIDs map[string]struct{}) (patternRe
 	}
 	if category := patternResponseValidationCategory(parsed, buildIDs); category != "" {
 		return patternResponse{}, category
+	}
+	for index := range parsed.SharedBuilds {
+		parsed.SharedBuilds[index] = strings.TrimSpace(parsed.SharedBuilds[index])
 	}
 	return parsed, ""
 }
