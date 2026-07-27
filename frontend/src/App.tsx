@@ -5,6 +5,7 @@ import { TestDetailPage } from "./pages/TestDetailPage";
 import { FlakinessPage } from "./pages/FlakinessPage";
 import { ActionRequestPage } from "./pages/ActionRequestPage";
 import { AnalysisTracesPage } from "./pages/AnalysisTracesPage";
+import { NotFoundPage } from "./pages/NotFoundPage";
 import { Layout } from "./components/Layout";
 import { ManifestProvider } from "./components/ManifestProvider";
 import { CapabilitiesProvider } from "./components/CapabilitiesProvider";
@@ -33,6 +34,7 @@ export default function App() {
                   path="action-request/:requestID"
                   element={<ActionRequestPage />}
                 />
+                <Route path="*" element={<NotFoundPage />} />
               </Route>
             </Routes>
           </BrowserRouter>

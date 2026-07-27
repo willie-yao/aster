@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import ExpandMore from "@mui/icons-material/ExpandMore";
 import Download from "@mui/icons-material/Download";
 import FilterAlt from "@mui/icons-material/FilterAlt";
@@ -28,6 +34,38 @@ import type {
 import { soft } from "../theme";
 
 const API_BASE = import.meta.env.BASE_URL;
+
+function AnalysisTracesPageFrame({
+  children,
+  action,
+}: {
+  children: ReactNode;
+  action?: ReactNode;
+}) {
+  return (
+    <Stack spacing={2.5}>
+      <Stack
+        direction={{ xs: "column", sm: "row" }}
+        spacing={2}
+        sx={{ alignItems: { sm: "center" }, justifyContent: "space-between" }}
+      >
+        <Box>
+          <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+            <Terminal color="primary" />
+            <Typography variant="h4" component="h1">
+              Analysis Traces
+            </Typography>
+          </Stack>
+          <Typography color="text.secondary" sx={{ mt: 0.5 }}>
+            Private, content-free execution metadata from the analysis runtime.
+          </Typography>
+        </Box>
+        {action}
+      </Stack>
+      {children}
+    </Stack>
+  );
+}
 
 function tone(outcome?: string): "success" | "warning" | "error" | "default" {
   const value = outcome?.toLowerCase() ?? "";
@@ -320,55 +358,46 @@ export function AnalysisTracesPage() {
 
   if (!features.analysis_traces) {
     return (
-      <Alert severity="info">
-        Private analysis traces are not available in this deployment.
-      </Alert>
+      <AnalysisTracesPageFrame>
+        <Alert severity="info">
+          Private analysis traces are not available in this deployment.
+        </Alert>
+      </AnalysisTracesPageFrame>
     );
   }
   if (auth.status === "loading") {
     return (
-      <Box sx={{ display: "grid", placeItems: "center", py: 10 }}>
-        <CircularProgress size={28} />
-      </Box>
+      <AnalysisTracesPageFrame>
+        <Box sx={{ display: "grid", placeItems: "center", py: 10 }}>
+          <CircularProgress size={28} />
+        </Box>
+      </AnalysisTracesPageFrame>
     );
   }
   if (auth.status === "anonymous") {
     return (
-      <Panel sx={{ maxWidth: 620, mx: "auto", p: 4, textAlign: "center" }}>
-        <Terminal sx={{ fontSize: 34, color: "primary.main", mb: 1 }} />
-        <Typography variant="h5" sx={{ mb: 1 }}>
-          Operator sign-in required
-        </Typography>
-        <Typography color="text.secondary" sx={{ mb: 2.5 }}>
-          Analysis traces contain private execution metadata and are restricted
-          to dashboard administrators.
-        </Typography>
-        <Button variant="contained" onClick={auth.signIn}>
-          Sign in to inspect traces
-        </Button>
-      </Panel>
+      <AnalysisTracesPageFrame>
+        <Panel sx={{ maxWidth: 620, mx: "auto", p: 4, textAlign: "center" }}>
+          <Terminal sx={{ fontSize: 34, color: "primary.main", mb: 1 }} />
+          <Typography variant="h5" component="h2" sx={{ mb: 1 }}>
+            Operator sign-in required
+          </Typography>
+          <Typography color="text.secondary" sx={{ mb: 2.5 }}>
+            Analysis traces contain private execution metadata and are restricted
+            to dashboard administrators.
+          </Typography>
+          <Button variant="contained" onClick={auth.signIn}>
+            Sign in to inspect traces
+          </Button>
+        </Panel>
+      </AnalysisTracesPageFrame>
     );
   }
 
   const downloadHref = `${API_BASE}api/analysis-traces/download${query ? `?${query}` : ""}`;
   return (
-    <Stack spacing={2.5}>
-      <Stack
-        direction={{ xs: "column", sm: "row" }}
-        spacing={2}
-        sx={{ alignItems: { sm: "center" }, justifyContent: "space-between" }}
-      >
-        <Box>
-          <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-            <Terminal color="primary" />
-            <Typography variant="h4" component="h1">
-              Analysis Traces
-            </Typography>
-          </Stack>
-          <Typography color="text.secondary" sx={{ mt: 0.5 }}>
-            Private, content-free execution metadata from the analysis runtime.
-          </Typography>
-        </Box>
+    <AnalysisTracesPageFrame
+      action={
         <Button
           component="a"
           href={downloadHref}
@@ -377,8 +406,8 @@ export function AnalysisTracesPage() {
         >
           Download JSON
         </Button>
-      </Stack>
-
+      }
+    >
       <Panel key={query} component="form" onSubmit={applyFilters} sx={{ p: 2 }}>
         <Box
           sx={{
@@ -438,7 +467,11 @@ export function AnalysisTracesPage() {
             <Typography variant="caption" color="text.secondary">
               {label}
             </Typography>
-            <Typography variant="h5" sx={{ mt: 0.4, fontFamily: "monospace" }}>
+            <Typography
+              variant="h5"
+              component="p"
+              sx={{ mt: 0.4, fontFamily: "monospace" }}
+            >
               {value}
             </Typography>
           </Panel>
@@ -470,12 +503,14 @@ export function AnalysisTracesPage() {
       ) : (
         <Panel sx={{ p: 5, textAlign: "center" }}>
           <Terminal sx={{ color: "text.disabled", fontSize: 34, mb: 1 }} />
-          <Typography variant="h6">No matching traces</Typography>
+          <Typography variant="h6" component="h2">
+            No matching traces
+          </Typography>
           <Typography color="text.secondary" sx={{ mt: 0.5 }}>
             Run an in-process AI analysis or clear the current filters.
           </Typography>
         </Panel>
       )}
-    </Stack>
+    </AnalysisTracesPageFrame>
   );
 }

@@ -17,9 +17,6 @@ export function ManifestProvider({ children }: { children: ReactNode }) {
       })
       .then((m) => {
         setManifest(m);
-        if (m.branding?.title) {
-          document.title = m.branding.title;
-        }
       })
       .catch((e) => setError(e instanceof Error ? e.message : String(e)));
   }, []);
@@ -36,7 +33,7 @@ export function ManifestProvider({ children }: { children: ReactNode }) {
         }}
       >
         <Box sx={{ maxWidth: 420, textAlign: "center" }}>
-          <Typography variant="h6" gutterBottom>
+          <Typography variant="h6" component="h1" gutterBottom>
             Failed to load dashboard config
           </Typography>
           <Typography variant="body2" color="text.secondary">

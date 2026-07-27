@@ -15,6 +15,7 @@ import { SearchBar } from "./SearchBar";
 import { ProfileMenu } from "./ProfileMenu";
 import { useManifest } from "../hooks/useManifest";
 import { useCapabilities } from "../hooks/useCapabilities";
+import { usePageDocumentTitle } from "../lib/pageMetadata";
 import { soft } from "../theme";
 
 // Primary top-nav tab: pill highlight for the active section, with aria-current
@@ -66,6 +67,7 @@ export function Layout() {
   const location = useLocation();
   const { mode, setMode } = useColorScheme();
   const isDark = mode === "dark";
+  usePageDocumentTitle(location.pathname, manifest.branding.title);
   const flakyActive = location.pathname === "/flaky" || location.pathname.startsWith("/flaky/");
   const tracesActive = location.pathname === "/analysis-traces";
   const overviewActive = !flakyActive && !tracesActive;
@@ -154,7 +156,7 @@ export function Layout() {
             </Box>
             <Typography
               variant="headline"
-              component="h1"
+              component="span"
               sx={{
                 display: { xs: "none", sm: "block" },
                 fontSize: "1.125rem",
