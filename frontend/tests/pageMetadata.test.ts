@@ -11,10 +11,15 @@ test("known routes receive route-specific page titles", () => {
     ["/", "Overview"],
     ["/flaky", "Test Analysis"],
     ["/flaky/", "Test Analysis"],
+    ["/FLAKY", "Test Analysis"],
     ["/analysis-traces", "Analysis Traces"],
+    ["/ANALYSIS-TRACES", "Analysis Traces"],
     ["/job/periodic-capz", "Job Details"],
+    ["/JOB/periodic-capz", "Job Details"],
     ["/job/periodic-capz/test/TestCluster", "Test Details"],
+    ["/JOB/periodic-capz/TEST/TestCluster", "Test Details"],
     ["/action-request/request-1", "Action Request"],
+    ["/ACTION-REQUEST/request-1", "Action Request"],
   ] as const;
 
   for (const [pathname, expected] of cases) {

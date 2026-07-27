@@ -1,7 +1,10 @@
 import { useEffect } from "react";
 
 export function pageTitleForPath(pathname: string): string {
-  const segments = pathname.split("/").filter(Boolean);
+  const segments = pathname
+    .split("/")
+    .filter(Boolean)
+    .map((segment) => segment.toLowerCase());
 
   if (segments.length === 0) return "Overview";
   if (segments.length === 1 && segments[0] === "flaky") return "Test Analysis";
