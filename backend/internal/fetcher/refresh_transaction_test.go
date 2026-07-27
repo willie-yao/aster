@@ -49,6 +49,7 @@ func (a *resultLifecycleAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Cl
 	}
 	_, ok, err := a.client.Result(ctx, "analysis", "succeeded-task")
 	if err != nil {
+		err = fmt.Errorf("read succeeded Task result: %w", err)
 		return ai.UnavailableFailureAnalysisResult(request.TestCase, err), err
 	}
 	if !ok {
