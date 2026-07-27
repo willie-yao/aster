@@ -58,15 +58,18 @@ const analysisChatToolDocs = `
 Available tools inspect the selected Prow build or the explicitly provided
 recurring-pattern builds only. Use the tool schemas to
 list, read, tail, search, or inspect Kubernetes-shaped artifacts as available.
-Cite the artifact paths and line numbers that support the answer.`
+Cite the exact artifact paths returned by tools and the line numbers that support
+the answer. For recurring-pattern builds, preserve the full builds/<build-id>/
+prefix in every citation.`
 
 const (
-	analysisChatFallbackContextBytes = 192 << 10
-	analysisChatHistoryTargetPct     = 65
-	analysisChatMaxQuestionBytes     = 4096
-	analysisChatMaxBuildIDBytes      = 256
-	analysisChatMaxResponseBytes     = 1 << 20
-	analysisChatMaxCandidates        = 256
+	analysisChatFallbackContextBytes  = 192 << 10
+	analysisChatHistoryTargetPct      = 65
+	analysisChatMaxQuestionBytes      = 4096
+	analysisChatMaxBuildIDBytes       = 256
+	analysisChatMaxResponseBytes      = 1 << 20
+	analysisChatMaxCandidates         = 256
+	analysisChatMaxCandidateSpanBytes = 4 * analysisChatMaxResponseBytes
 )
 
 const analysisChatFinalizePrompt = `Stop calling tools. Return the final analysis-conversation JSON now using only evidence already gathered. Follow the Analysis conversation schema exactly. Output JSON only.`
@@ -213,7 +216,8 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 
 	evidence := map[string]*analysisChatEvidence{}
 	var lastContent string
-	var fallback *analysischat.Reply
+	var fallback *analysisChatFallback
+	evidenceRevision := 0
 	modelCalls := 0
 	providerAttempts := 0
 	for iter := 0; iter < a.opts.MaxIters; iter++ {
@@ -250,7 +254,7 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 		if len(message.ToolCalls) > 0 && strings.TrimSpace(messageContent) != "" {
 			candidate, _, candidateErr := parseAnalysisChatReplyCandidates(messageContent, evidence)
 			if candidateErr == nil {
-				fallback = &candidate
+				fallback = &analysisChatFallback{reply: candidate, evidenceRevision: evidenceRevision}
 			}
 		}
 		if len(message.ToolCalls) == 0 {
@@ -291,9 +295,13 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 		messages = append(messages, skippedOutputs...)
 		for _, toolCall := range toolCalls {
 			envelope, payload := dispatchAgenticToolWithPayload(loopCtx, state, toolCall)
+			before := analysisChatEvidenceBytes(evidence)
 			if !recordAnalysisChatEvidence(evidence, toolCall, payload) {
 				state.budgetExhausted = true
 				envelope = toolErrJSON("analysis chat evidence budget exhausted; stop reading and finalize")
+			}
+			if analysisChatEvidenceBytes(evidence) > before {
+				evidenceRevision++
 			}
 			state.modelBytes += len(envelope)
 			messages = append(messages, modelMessage{Role: "tool", ToolCallID: toolCall.ID, Content: strPtr(envelope)})
@@ -303,9 +311,9 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 	turn.ReportProgress(analysischat.PhaseFinalizing)
 	messages, err = prepareAnalysisChatFinalizeMessages(messages, a.opts.ContextByteBudget)
 	if err != nil {
-		if fallback != nil {
+		if fallback.usable(evidenceRevision) {
 			recordAnalysisChatResponseFallback(loopCtx, "finalize_context", modelCalls, providerAttempts, nil, analysisChatParseStats{}, "context_budget")
-			return completeAnalysisChatReply(*fallback, state, start), nil
+			return completeAnalysisChatReply(fallback.reply, state, start), nil
 		}
 		return analysischat.Reply{}, err
 	}
@@ -318,17 +326,17 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 			recordAnalysisChatResponseFailure(loopCtx, "finalize_request", modelCalls, providerAttempts, response, analysisChatParseStats{}, category)
 			return analysischat.Reply{}, err
 		}
-		if fallback != nil {
+		if fallback.usable(evidenceRevision) {
 			recordAnalysisChatResponseFallback(loopCtx, "finalize_request", modelCalls, providerAttempts, response, analysisChatParseStats{}, "provider_request")
-			return completeAnalysisChatReply(*fallback, state, start), nil
+			return completeAnalysisChatReply(fallback.reply, state, start), nil
 		}
 		recordAnalysisChatResponseFailure(loopCtx, "finalize_request", modelCalls, providerAttempts, response, analysisChatParseStats{}, category)
 		return analysischat.Reply{}, analysischat.ErrProviderRequestFailed
 	}
 	if response == nil || !response.HasMessage || response.Message.Content == nil {
-		if fallback != nil {
+		if fallback.usable(evidenceRevision) {
 			recordAnalysisChatResponseFallback(loopCtx, "finalize_response", modelCalls, providerAttempts, response, analysisChatParseStats{}, "empty_response")
-			return completeAnalysisChatReply(*fallback, state, start), nil
+			return completeAnalysisChatReply(fallback.reply, state, start), nil
 		}
 		recordAnalysisChatResponseFailure(loopCtx, "finalize_response", modelCalls, providerAttempts, response, analysisChatParseStats{}, "empty_response")
 		return analysischat.Reply{}, analysischat.ErrResponseValidationFailed
@@ -337,14 +345,23 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 	reply, stats, err := parseAnalysisChatReplyCandidates(lastContent, evidence)
 	if err != nil {
 		category := analysisChatValidationCategory(err)
-		if fallback != nil {
+		if fallback.usable(evidenceRevision) {
 			recordAnalysisChatResponseFallback(loopCtx, "finalize_validation", modelCalls, providerAttempts, response, stats, category)
-			return completeAnalysisChatReply(*fallback, state, start), nil
+			return completeAnalysisChatReply(fallback.reply, state, start), nil
 		}
 		recordAnalysisChatResponseFailure(loopCtx, "finalize_validation", modelCalls, providerAttempts, response, stats, category)
 		return analysischat.Reply{}, analysisChatSafeValidationError(err)
 	}
 	return completeAnalysisChatReply(reply, state, start), nil
+}
+
+type analysisChatFallback struct {
+	reply            analysischat.Reply
+	evidenceRevision int
+}
+
+func (fallback *analysisChatFallback) usable(evidenceRevision int) bool {
+	return fallback != nil && fallback.evidenceRevision == evidenceRevision
 }
 
 func completeAnalysisChatReply(reply analysischat.Reply, state *agentState, start time.Time) analysischat.Reply {
@@ -376,7 +393,7 @@ func analysisChatRequestErrorCategory(err error) string {
 }
 
 func analysisChatSafeValidationError(err error) error {
-	if analysisChatValidationCategory(err) == analysisChatValidationCitation {
+	if category := analysisChatValidationCategory(err); category == analysisChatValidationReference || category == analysisChatValidationCitation {
 		return analysischat.ErrCitationValidationFailed
 	}
 	return analysischat.ErrResponseValidationFailed
@@ -561,7 +578,7 @@ func analysisChatContext(turn analysischat.Turn) (string, error) {
 			return "", fmt.Errorf("encoding pattern chat context: %w", err)
 		}
 		return "Selected published recurring-pattern analysis:\n\n" + string(encoded) +
-			"\n\nArtifacts are available under builds/<build-id>/<path>. Answer only about this recurring pattern and its listed builds.", nil
+			"\n\nArtifacts are available under builds/<build-id>/<path>. Use that exact full path in citations. Answer only about this recurring pattern and its listed builds.", nil
 	}
 	analysis := turn.TestCase.AIAnalysis
 	payload := struct {
@@ -605,6 +622,16 @@ type analysisChatEvidence struct {
 }
 
 var analysisChatContextLineRE = regexp.MustCompile(`^[> ]\s*(\d+):\s?(.*)$`)
+
+func analysisChatEvidenceBytes(evidence map[string]*analysisChatEvidence) int {
+	total := 0
+	for _, entry := range evidence {
+		if entry != nil {
+			total += entry.Bytes
+		}
+	}
+	return total
+}
 
 func recordAnalysisChatEvidence(evidence map[string]*analysisChatEvidence, toolCall modelToolCall, payload map[string]interface{}) bool {
 	if evidence == nil || !isContentFetchingTool(toolCall.Function.Name) {
