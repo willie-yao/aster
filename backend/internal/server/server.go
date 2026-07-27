@@ -20,6 +20,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actions"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/auth"
@@ -659,7 +661,7 @@ func noCache(next http.Handler) http.Handler {
 type noListFS struct{ fs http.FileSystem }
 
 func (f noListFS) Open(name string) (http.File, error) {
-	if hiddenDataPath(name) || hidden[path.Base(name)] {
+	if invalidDataPath(name) || hiddenDataPath(name) || hiddenDataBasename(name) {
 		return nil, os.ErrNotExist
 	}
 	file, err := f.fs.Open(name)
@@ -678,6 +680,13 @@ func (f noListFS) Open(name string) (http.File, error) {
 	return file, nil
 }
 
+func invalidDataPath(name string) bool {
+	if !utf8.ValidString(name) || strings.ContainsRune(name, '\\') {
+		return true
+	}
+	return strings.IndexFunc(name, unicode.IsControl) >= 0
+}
+
 func hiddenDataPath(name string) bool {
 	for _, segment := range strings.Split(path.Clean("/"+name), "/") {
 		if strings.HasPrefix(segment, ".") && segment != "." && segment != ".." {
@@ -687,13 +696,12 @@ func hiddenDataPath(name string) bool {
 	return false
 }
 
-// hidden is the set of operational files noListFS refuses to serve, keyed by
-// base name. Sourced from output.NonPublishedFiles so the server and the
-// fetcher agree on what is not public.
-var hidden = func() map[string]bool {
-	m := make(map[string]bool, len(output.NonPublishedFiles))
-	for _, n := range output.NonPublishedFiles {
-		m[n] = true
+func hiddenDataBasename(name string) bool {
+	base := path.Base(path.Clean("/" + name))
+	for _, hidden := range output.NonPublishedFiles {
+		if strings.EqualFold(base, hidden) {
+			return true
+		}
 	}
-	return m
-}()
+	return false
+}
