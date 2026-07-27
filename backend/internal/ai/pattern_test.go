@@ -300,6 +300,7 @@ func TestParsePatternResponseCandidates(t *testing.T) {
 	nullFields := `{"systemic":null,"confidence":"low","shared_root_cause":null,"shared_builds":[],"suggested_fix":null,"summary":"null fields"}`
 	partialFinal := `{"systemic":false,"confidence":"low"}`
 	contractWrapper := `{"systemic":` + valid + `,"confidence":"low","shared_root_cause":"","shared_builds":[],"suggested_fix":"","summary":"outer partial verdict"}`
+	duplicateField := `{"systemic":true,"systemic":false,"confidence":"low","shared_root_cause":"","shared_builds":[],"suggested_fix":"","summary":"duplicate verdict"}`
 	cases := []struct {
 		name         string
 		raw          string
@@ -310,6 +311,7 @@ func TestParsePatternResponseCandidates(t *testing.T) {
 		{name: "fenced valid JSON", raw: "```json\n" + valid + "\n```", wantSummary: "the builds share one cause"},
 		{name: "metadata wrapper", raw: `{"metadata":{"finish_reason":"stop"},"result":` + valid + `}`, wantSummary: "the builds share one cause"},
 		{name: "contract-like wrapper", raw: contractWrapper, wantCategory: patternValidationSchema},
+		{name: "duplicate contract field", raw: duplicateField, wantCategory: patternValidationSchema},
 		{name: "one contract candidate", raw: missing + "\n" + valid, wantSummary: "the builds share one cause"},
 		{name: "ambiguous valid candidates", raw: valid + "\n" + valid2, wantCategory: patternValidationAmbiguous},
 		{name: "malformed followed by valid", raw: `{"systemic": tru` + "\n" + valid, wantSummary: "the builds share one cause"},
@@ -341,6 +343,24 @@ func TestParsePatternResponseCandidates(t *testing.T) {
 				t.Fatalf("summary = %q, want %q", parsed.Summary, testCase.wantSummary)
 			}
 		})
+	}
+}
+
+func TestGroundedPatternVerdictDoesNotRecoverRejectedJSON(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespToolCall("call_1", "list_repo_tree", map[string]interface{}{"path": ""}))
+	valid := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":["abuild","bbuild"],"suggested_fix":"update config/controller.yaml","summary":"the builds share one cause"}`
+	srv.push(200, chatRespFinal(valid+`\n{"systemic":`))
+	client := newAgenticTestClient(t, srv.URL)
+	s := NewService(client, &stubModule{name: "kubernetes"}, "sys", nil)
+	s.SetSourceRepo("example", "repo")
+	s.SetPatternRepoReader(&fakeRepoReader{files: map[string]string{"config/controller.yaml": "enabled: true"}})
+	if _, err := s.AnalyzePattern(t.Context(), "job", "job", patternFailures(2)); patternValidationCategoryOf(err) != patternValidationJSON {
+		t.Fatalf("AnalyzePattern error = %v", err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 2 {
+		t.Fatalf("model calls = %d, want 2 without extraction recovery", got)
 	}
 }
 

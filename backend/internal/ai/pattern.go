@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"path"
 	"regexp"
@@ -78,6 +79,7 @@ type patternValidationCategory string
 
 const (
 	patternValidationJSON      patternValidationCategory = "json"
+	patternValidationMissing   patternValidationCategory = "missing"
 	patternValidationSchema    patternValidationCategory = "schema"
 	patternValidationBuilds    patternValidationCategory = "builds"
 	patternValidationAmbiguous patternValidationCategory = "ambiguous"
@@ -261,7 +263,7 @@ func (s *Service) groundedPatternVerdict(ctx context.Context, userPrompt string,
 	}
 	parsed, perr := parsePatternResponse(out, buildIDs)
 	if perr != nil {
-		if patternValidationCategoryOf(perr) != patternValidationJSON {
+		if patternValidationCategoryOf(perr) != patternValidationMissing {
 			return patternResponse{}, perr
 		}
 		extract := "Extract the correlation verdict this investigation reached as JSON with exactly these keys: " +
@@ -300,6 +302,7 @@ func parsePatternResponse(raw string, buildIDs map[string]struct{}) (patternResp
 	}
 	valid := make([]validCandidate, 0, 1)
 	rejected := make([]rejectedCandidate, 0, len(scan.candidates))
+	contractLikeSeen := false
 	bestCategory := patternValidationJSON
 	for _, candidate := range scan.candidates {
 		parsed, category := decodePatternCandidate(candidate.value, buildIDs)
@@ -310,6 +313,7 @@ func parsePatternResponse(raw string, buildIDs map[string]struct{}) (patternResp
 		rejected = append(rejected, rejectedCandidate{
 			start: candidate.start, end: candidate.end, category: category, contractLike: patternCandidateIsContractLike(candidate.value),
 		})
+		contractLikeSeen = contractLikeSeen || rejected[len(rejected)-1].contractLike
 		if patternValidationRank(category) > patternValidationRank(bestCategory) {
 			bestCategory = category
 		}
@@ -329,6 +333,9 @@ func parsePatternResponse(raw string, buildIDs map[string]struct{}) (patternResp
 		}
 		return valid[0].response, nil
 	case 0:
+		if !contractLikeSeen && len(scan.incomplete) == 0 {
+			return patternResponse{}, &patternValidationError{category: patternValidationMissing}
+		}
 		return patternResponse{}, &patternValidationError{category: bestCategory}
 	default:
 		return patternResponse{}, &patternValidationError{category: patternValidationAmbiguous}
@@ -336,9 +343,9 @@ func parsePatternResponse(raw string, buildIDs map[string]struct{}) (patternResp
 }
 
 func decodePatternCandidate(raw string, buildIDs map[string]struct{}) (patternResponse, patternValidationCategory) {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(raw), &fields); err != nil {
-		return patternResponse{}, patternValidationJSON
+	fields, category := decodePatternObject(raw)
+	if category != "" {
+		return patternResponse{}, category
 	}
 	required := []string{"systemic", "confidence", "shared_root_cause", "shared_builds", "suggested_fix", "summary"}
 	if len(fields) != len(required) {
@@ -361,6 +368,40 @@ func decodePatternCandidate(raw string, buildIDs map[string]struct{}) (patternRe
 		parsed.SharedBuilds[index] = strings.TrimSpace(parsed.SharedBuilds[index])
 	}
 	return parsed, ""
+}
+
+func decodePatternObject(raw string) (map[string]json.RawMessage, patternValidationCategory) {
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('{') {
+		return nil, patternValidationJSON
+	}
+	fields := make(map[string]json.RawMessage, 6)
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return nil, patternValidationJSON
+		}
+		name, ok := token.(string)
+		if !ok {
+			return nil, patternValidationJSON
+		}
+		if _, duplicate := fields[name]; duplicate {
+			return nil, patternValidationSchema
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return nil, patternValidationJSON
+		}
+		fields[name] = value
+	}
+	if token, err := decoder.Token(); err != nil || token != json.Delim('}') {
+		return nil, patternValidationJSON
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return nil, patternValidationJSON
+	}
+	return fields, ""
 }
 
 func patternCandidateIsContractLike(raw string) bool {
