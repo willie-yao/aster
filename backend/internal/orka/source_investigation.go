@@ -105,7 +105,7 @@ func NewSourceInvestigatorFromEnv(cfg SourceInvestigationFromEnvConfig) (*Source
 	kube.Manager = SourceInvestigatorManagedByValue
 	return NewSourceInvestigator(
 		kube,
-		NewResultClient(cfg.API, resolveOrkaAPIToken(cfg.APIToken)),
+		newResultClientFromEnv(cfg.API, cfg.APIToken),
 		NewGitHubSourceReader(cfg.GitHubRawBaseURL, cfg.GitHubToken),
 		SourceInvestigationOptions{
 			Namespace: cfg.Namespace, AgentRef: cfg.AgentRef,

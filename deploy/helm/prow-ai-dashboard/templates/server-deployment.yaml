@@ -117,6 +117,10 @@ spec:
             - name: ACTIONS_ENABLED
               value: "true"
             {{- end }}
+            {{- if or $source (and .Values.orka.fixRuntime.enabled $actions) }}
+            - name: ORKA_API_TOKEN_FILE
+              value: /var/run/secrets/kubernetes.io/serviceaccount/token
+            {{- end }}
             {{- if $chat }}
             - name: ANALYSIS_CHAT_ENABLED
               value: "true"

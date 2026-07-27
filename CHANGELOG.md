@@ -216,6 +216,10 @@ for how to pin a release.
 
 ### Fixed
 
+- **Rotating Orka result credentials.** Result clients now reload file-backed
+  credentials for every request, and Helm deployments can use projected
+  ServiceAccount tokens for container analysis, fix generation, and source
+  investigation while retaining explicit static Secret compatibility.
 - Fix-review parsing now selects the final valid balanced JSON object instead
   of combining reasoning prose and code braces into one invalid payload.
 - Analysis chat exposes a Helm-configurable per-turn timeout up to 30 minutes,

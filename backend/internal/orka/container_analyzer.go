@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -95,15 +94,7 @@ func NewContainerAnalyzer(opts ContainerAnalyzerOptions) (*ContainerAnalyzer, er
 	if err != nil {
 		return nil, fmt.Errorf("container analysis state: %w", err)
 	}
-	base := strings.TrimSpace(opts.OrkaAPI)
-	token := strings.TrimSpace(opts.OrkaAPIToken)
-	if token == "" {
-		token = strings.TrimSpace(os.Getenv("ORKA_API_TOKEN"))
-	}
-	if token == "" {
-		token = resolveOrkaAPIToken("")
-	}
-	return newContainerAnalyzer(opts, kube, NewResultClient(base, token), state)
+	return newContainerAnalyzer(opts, kube, newResultClientFromEnv(strings.TrimSpace(opts.OrkaAPI), opts.OrkaAPIToken), state)
 }
 
 func newContainerAnalyzer(opts ContainerAnalyzerOptions, kube containerAnalyzerKube, results containerAnalyzerResults, state *analysisruntime.ContainerStateStore) (*ContainerAnalyzer, error) {

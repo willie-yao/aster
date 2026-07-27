@@ -26,7 +26,6 @@ func New(cfg *project.FixAgentRuntime) (runtime.AgentRuntime, error) {
 		Namespace:   cfg.OrkaNamespace,
 		AgentRef:    cfg.OrkaAgentRef,
 		API:         cfg.OrkaAPI,
-		APIToken:    os.Getenv("ORKA_API_TOKEN"),
 		GitSecret:   cfg.OrkaGitSecret,
 		Version:     cfg.OrkaVersion,
 		MaxRetries:  maxRetries,

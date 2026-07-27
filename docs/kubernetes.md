@@ -101,7 +101,7 @@ analysisRuntime:
     namespace: "" # chart creates a retained release-scoped namespace
     api: http://orka.orka-system.svc.cluster.local:8080
     apiAuth:
-      existingSecret: orka-analysis-api
+      existingSecret: ""
       tokenKey: token
     maxConcurrentTasks: 2
     pollInterval: 2s
@@ -125,9 +125,11 @@ analysisRuntime:
 
 Set `orkaContainer.api` to the REST Service of the installed Orka release; the
 Service name is not derived from the namespace.
-Provide `apiAuth.existingSecret` in the dashboard release namespace with an
-Orka API token authorized to read results from the generated analysis namespace.
-This is separate from the model token stored in the analysis namespace.
+With an empty `apiAuth.existingSecret`, the fetcher uses its projected
+ServiceAccount token and reloads the file for every result request. Set
+`apiAuth.existingSecret` to retain static-token compatibility when the Orka API
+does not accept that ServiceAccount identity. This credential is separate from
+the model token stored in the analysis namespace.
 
 `taskTimeout` must be at least the project `ai.timeout` plus two minutes for
 Task startup and encrypted result finalization. The fetcher rejects a shorter
@@ -144,13 +146,19 @@ credentials across namespaces. For example:
 ```bash
 kubectl -n dashboards create secret generic dashboard-model \
   --from-literal=AI_TOKEN='<token>'
-kubectl -n dashboards create secret generic orka-analysis-api \
-  --from-literal=token='<Orka API token authorized for the analysis namespace>'
 ANALYSIS_NS=$(kubectl get namespace \
   -l app.kubernetes.io/instance=capz,app.kubernetes.io/component=orka-container-analysis \
   -o jsonpath='{.items[0].metadata.name}')
 kubectl -n "$ANALYSIS_NS" create secret generic orka-model \
   --from-literal=token='<token>'
+```
+
+Only when `apiAuth.existingSecret` is set, create that static credential in the
+dashboard namespace:
+
+```bash
+kubectl -n dashboards create secret generic orka-analysis-api \
+  --from-literal=token='<Orka API token authorized for the analysis namespace>'
 ```
 
 When `state.existingSecret` is empty, Helm creates matching release-scoped
@@ -237,9 +245,9 @@ At Orka merge commit `d03acb99`, the Helm controller ClusterRole omits
 with the corrected Orka controller RBAC. Do not add those permissions to the
 dashboard ServiceAccount; it needs Orka Task access only.
 
-When the release namespace differs from `orka.namespace`, provide an
-`ORKA_API_TOKEN` authorized for the Orka namespace if the API namespace policy
-does not accept the release ServiceAccount token.
+When the release namespace differs from `orka.namespace`, grant the dashboard
+ServiceAccount access to the Orka result API. Use a static `ORKA_API_TOKEN` only
+when the API namespace policy cannot accept that ServiceAccount identity.
 
 ## Build and push the image
 
