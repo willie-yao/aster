@@ -299,6 +299,7 @@ func TestParsePatternResponseCandidates(t *testing.T) {
 	invalidBuild := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":["abuild","unknown-build"],"suggested_fix":"update config/controller.yaml","summary":"bad build reference"}`
 	nullFields := `{"systemic":null,"confidence":"low","shared_root_cause":null,"shared_builds":[],"suggested_fix":null,"summary":"null fields"}`
 	partialFinal := `{"systemic":false,"confidence":"low"}`
+	contractWrapper := `{"systemic":` + valid + `,"confidence":"low","shared_root_cause":"","shared_builds":[],"suggested_fix":"","summary":"outer partial verdict"}`
 	cases := []struct {
 		name         string
 		raw          string
@@ -308,6 +309,7 @@ func TestParsePatternResponseCandidates(t *testing.T) {
 		{name: "plain valid JSON", raw: valid, wantSummary: "the builds share one cause"},
 		{name: "fenced valid JSON", raw: "```json\n" + valid + "\n```", wantSummary: "the builds share one cause"},
 		{name: "metadata wrapper", raw: `{"metadata":{"finish_reason":"stop"},"result":` + valid + `}`, wantSummary: "the builds share one cause"},
+		{name: "contract-like wrapper", raw: contractWrapper, wantCategory: patternValidationSchema},
 		{name: "one contract candidate", raw: missing + "\n" + valid, wantSummary: "the builds share one cause"},
 		{name: "ambiguous valid candidates", raw: valid + "\n" + valid2, wantCategory: patternValidationAmbiguous},
 		{name: "malformed followed by valid", raw: `{"systemic": tru` + "\n" + valid, wantSummary: "the builds share one cause"},

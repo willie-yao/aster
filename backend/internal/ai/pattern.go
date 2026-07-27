@@ -289,10 +289,12 @@ func parsePatternResponse(raw string, buildIDs map[string]struct{}) (patternResp
 	}
 	type validCandidate struct {
 		response patternResponse
+		start    int
 		end      int
 	}
 	type rejectedCandidate struct {
 		start        int
+		end          int
 		category     patternValidationCategory
 		contractLike bool
 	}
@@ -302,11 +304,11 @@ func parsePatternResponse(raw string, buildIDs map[string]struct{}) (patternResp
 	for _, candidate := range scan.candidates {
 		parsed, category := decodePatternCandidate(candidate.value, buildIDs)
 		if category == "" {
-			valid = append(valid, validCandidate{response: parsed, end: candidate.end})
+			valid = append(valid, validCandidate{response: parsed, start: candidate.start, end: candidate.end})
 			continue
 		}
 		rejected = append(rejected, rejectedCandidate{
-			start: candidate.start, category: category, contractLike: patternCandidateIsContractLike(candidate.value),
+			start: candidate.start, end: candidate.end, category: category, contractLike: patternCandidateIsContractLike(candidate.value),
 		})
 		if patternValidationRank(category) > patternValidationRank(bestCategory) {
 			bestCategory = category
@@ -320,7 +322,8 @@ func parsePatternResponse(raw string, buildIDs map[string]struct{}) (patternResp
 			}
 		}
 		for _, candidate := range rejected {
-			if candidate.start > valid[0].end && candidate.contractLike {
+			if candidate.contractLike && (candidate.start > valid[0].end ||
+				(candidate.start < valid[0].start && candidate.end > valid[0].end)) {
 				return patternResponse{}, &patternValidationError{category: candidate.category}
 			}
 		}
