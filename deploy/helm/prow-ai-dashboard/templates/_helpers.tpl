@@ -227,7 +227,8 @@ Validate AI provider configuration.
   {{- if not .Values.ai.model -}}{{- fail "analysisRuntime.type=orka-container requires ai.model" -}}{{- end -}}
   {{- if not $materializer.repository -}}{{- fail "project.materializer.image.repository is required for Orka container analysis" -}}{{- end -}}
   {{- if not $materializer.tag -}}{{- fail "project.materializer.image.tag is required for Orka container analysis" -}}{{- end -}}
-  {{- if eq $materializer.tag "latest" -}}{{- fail "project.materializer.image.tag must not be latest" -}}{{- end -}}
+  {{- if not (regexMatch "^(sha-[0-9a-fA-F]{7,64}|v?[0-9]+[.][0-9]+[.][0-9]+(-[0-9A-Za-z.-]+)?)$" $materializer.tag) -}}{{- fail "project.materializer.image.tag must be an immutable sha-<hex> or full semantic version" -}}{{- end -}}
+  {{- if ne $materializer.pullPolicy "IfNotPresent" -}}{{- fail "project.materializer.image.pullPolicy must be IfNotPresent" -}}{{- end -}}
   {{- $analysisNamespace := include "prow-ai-dashboard.orkaAnalysisNamespace" . -}}
   {{- if eq $analysisNamespace .Values.orka.namespace -}}{{- fail "analysisRuntime.orkaContainer.namespace must be dedicated and differ from orka.namespace" -}}{{- end -}}
   {{- if eq $analysisNamespace .Release.Namespace -}}{{- fail "analysisRuntime.orkaContainer.namespace must differ from the dashboard release namespace" -}}{{- end -}}

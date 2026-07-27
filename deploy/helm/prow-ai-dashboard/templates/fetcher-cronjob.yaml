@@ -53,10 +53,8 @@ spec:
           restartPolicy: {{ $restartPolicy }}
           {{- if or .Values.orka.fixRuntime.enabled $containerAnalysis }}
           serviceAccountName: {{ include "prow-ai-dashboard.orkaServiceAccountName" . }}
-          automountServiceAccountToken: true
-          {{- else }}
-          automountServiceAccountToken: false
           {{- end }}
+          automountServiceAccountToken: false
           {{- with .Values.imagePullSecrets }}
           imagePullSecrets:
             {{- toYaml . | nindent 12 }}
@@ -76,9 +74,13 @@ spec:
                   mkdir -p /project/prompts /project/skills
                   cp -L /source/project.yaml /project/project.yaml
                   cp -L /source/prompts/system.md /project/prompts/system.md
-                  for file in /source/skills/*.yaml /source/skills/*.yml; do
+                  for file in /source/skills/*; do
                     if [ -f "$file" ]; then
-                      cp -L "$file" /project/skills/
+                      extension=${file##*.}
+                      extension=$(printf '%s' "$extension" | tr '[:upper:]' '[:lower:]')
+                      case "$extension" in
+                        yaml|yml) cp -L "$file" /project/skills/ ;;
+                      esac
                     fi
                   done
               securityContext:
@@ -208,6 +210,11 @@ spec:
                 {{- end }}
                 - name: tmp
                   mountPath: /tmp
+                {{- if or .Values.orka.fixRuntime.enabled $containerAnalysis }}
+                - name: orka-api-token
+                  mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+                  readOnly: true
+                {{- end }}
               resources:
                 {{- toYaml .Values.fetcher.resources | nindent 16 }}
           {{- with .Values.fetcher.nodeSelector }}
@@ -234,6 +241,25 @@ spec:
             {{- if $containerAnalysis }}
             - name: project-runtime
               emptyDir: {}
+            {{- end }}
+            {{- if or .Values.orka.fixRuntime.enabled $containerAnalysis }}
+            - name: orka-api-token
+              projected:
+                defaultMode: 420
+                sources:
+                  - serviceAccountToken:
+                      path: token
+                      expirationSeconds: 3600
+                  - configMap:
+                      name: kube-root-ca.crt
+                      items:
+                        - key: ca.crt
+                          path: ca.crt
+                  - downwardAPI:
+                      items:
+                        - path: namespace
+                          fieldRef:
+                            fieldPath: metadata.namespace
             {{- end }}
             - name: tmp
               emptyDir: {}
