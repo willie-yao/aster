@@ -288,7 +288,13 @@ func parsePatternResponse(raw string, buildIDs map[string]struct{}) (patternResp
 		response patternResponse
 		end      int
 	}
+	type rejectedCandidate struct {
+		start        int
+		category     patternValidationCategory
+		contractLike bool
+	}
 	valid := make([]validCandidate, 0, 1)
+	rejected := make([]rejectedCandidate, 0, len(scan.candidates))
 	bestCategory := patternValidationJSON
 	for _, candidate := range scan.candidates {
 		parsed, category := decodePatternCandidate(candidate.value, buildIDs)
@@ -296,6 +302,9 @@ func parsePatternResponse(raw string, buildIDs map[string]struct{}) (patternResp
 			valid = append(valid, validCandidate{response: parsed, end: candidate.end})
 			continue
 		}
+		rejected = append(rejected, rejectedCandidate{
+			start: candidate.start, category: category, contractLike: patternCandidateIsContractLike(candidate.value),
+		})
 		if patternValidationRank(category) > patternValidationRank(bestCategory) {
 			bestCategory = category
 		}
@@ -305,6 +314,11 @@ func parsePatternResponse(raw string, buildIDs map[string]struct{}) (patternResp
 		for _, incomplete := range scan.incomplete {
 			if incomplete.start > valid[0].end {
 				return patternResponse{}, &patternValidationError{category: patternValidationJSON}
+			}
+		}
+		for _, candidate := range rejected {
+			if candidate.start > valid[0].end && candidate.contractLike {
+				return patternResponse{}, &patternValidationError{category: candidate.category}
 			}
 		}
 		return valid[0].response, nil
@@ -325,12 +339,10 @@ func decodePatternCandidate(raw string, buildIDs map[string]struct{}) (patternRe
 		return patternResponse{}, patternValidationSchema
 	}
 	for _, field := range required {
-		if _, ok := fields[field]; !ok {
+		value, ok := fields[field]
+		if !ok || strings.TrimSpace(string(value)) == "null" {
 			return patternResponse{}, patternValidationSchema
 		}
-	}
-	if strings.TrimSpace(string(fields["shared_builds"])) == "null" {
-		return patternResponse{}, patternValidationSchema
 	}
 	var parsed patternResponse
 	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
@@ -343,6 +355,24 @@ func decodePatternCandidate(raw string, buildIDs map[string]struct{}) (patternRe
 		parsed.SharedBuilds[index] = strings.TrimSpace(parsed.SharedBuilds[index])
 	}
 	return parsed, ""
+}
+
+func patternCandidateIsContractLike(raw string) bool {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal([]byte(raw), &fields) == nil {
+		for _, field := range []string{"systemic", "confidence", "shared_root_cause", "shared_builds", "suggested_fix", "summary"} {
+			if _, ok := fields[field]; ok {
+				return true
+			}
+		}
+		return false
+	}
+	for _, field := range []string{"systemic", "confidence", "shared_root_cause", "shared_builds", "suggested_fix", "summary"} {
+		if strings.Contains(raw, `"`+field+`"`) {
+			return true
+		}
+	}
+	return false
 }
 
 func patternResponseValidationCategory(p patternResponse, buildIDs map[string]struct{}) patternValidationCategory {

@@ -296,6 +296,8 @@ func TestParsePatternResponseCandidates(t *testing.T) {
 	valid2 := `{"systemic":true,"confidence":"medium","shared_root_cause":"second cause","shared_builds":["abuild","bbuild"],"suggested_fix":"update config/second.yaml","summary":"a different valid verdict"}`
 	missing := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":["abuild","bbuild"],"summary":"missing suggested fix"}`
 	invalidBuild := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":["abuild","unknown-build"],"suggested_fix":"update config/controller.yaml","summary":"bad build reference"}`
+	nullFields := `{"systemic":null,"confidence":"low","shared_root_cause":null,"shared_builds":[],"suggested_fix":null,"summary":"null fields"}`
+	partialFinal := `{"systemic":false,"confidence":"low"}`
 	cases := []struct {
 		name         string
 		raw          string
@@ -310,8 +312,11 @@ func TestParsePatternResponseCandidates(t *testing.T) {
 		{name: "malformed followed by valid", raw: `{"systemic": tru` + "\n" + valid, wantSummary: "the builds share one cause"},
 		{name: "valid followed by unrelated prose", raw: valid + "\nThis paragraph is unrelated.", wantSummary: "the builds share one cause"},
 		{name: "observed trailing W shape", raw: valid + "\nWhat this means is that the failures recur.", wantSummary: "the builds share one cause"},
+		{name: "valid followed by metadata object", raw: valid + `\n{"metadata":{"finish_reason":"stop"}}`, wantSummary: "the builds share one cause"},
 		{name: "valid followed by truncated candidate", raw: valid + `\n{"systemic":`, wantCategory: patternValidationJSON},
+		{name: "valid followed by complete partial candidate", raw: valid + "\n" + partialFinal, wantCategory: patternValidationSchema},
 		{name: "missing required field", raw: missing, wantCategory: patternValidationSchema},
+		{name: "null required fields", raw: nullFields, wantCategory: patternValidationSchema},
 		{name: "invalid affected build", raw: invalidBuild, wantCategory: patternValidationBuilds},
 	}
 	for _, testCase := range cases {
