@@ -146,13 +146,19 @@ credentials across namespaces. For example:
 ```bash
 kubectl -n dashboards create secret generic dashboard-model \
   --from-literal=AI_TOKEN='<token>'
-kubectl -n dashboards create secret generic orka-analysis-api \
-  --from-literal=token='<Orka API token authorized for the analysis namespace>'
 ANALYSIS_NS=$(kubectl get namespace \
   -l app.kubernetes.io/instance=capz,app.kubernetes.io/component=orka-container-analysis \
   -o jsonpath='{.items[0].metadata.name}')
 kubectl -n "$ANALYSIS_NS" create secret generic orka-model \
   --from-literal=token='<token>'
+```
+
+Only when `apiAuth.existingSecret` is set, create that static credential in the
+dashboard namespace:
+
+```bash
+kubectl -n dashboards create secret generic orka-analysis-api \
+  --from-literal=token='<Orka API token authorized for the analysis namespace>'
 ```
 
 When `state.existingSecret` is empty, Helm creates matching release-scoped
