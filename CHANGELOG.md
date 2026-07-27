@@ -20,6 +20,8 @@ for how to pin a release.
 
 ## [Unreleased]
 
+## [1.0.0-beta.6] - 2026-07-27
+
 ### Added
 
 - **Recurring-pattern analysis chat backend.** Kubernetes-native analysis chat
