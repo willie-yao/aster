@@ -94,6 +94,17 @@ func analyzedTest(name, junit, generated string) models.TestCase {
 	}
 }
 
+func requireAttempt(t *testing.T, view SessionView, requestID string) Attempt {
+	t.Helper()
+	for _, attempt := range view.Attempts {
+		if attempt.RequestID == requestID {
+			return attempt
+		}
+	}
+	t.Fatalf("attempt %q missing from %+v", requestID, view.Attempts)
+	return Attempt{}
+}
+
 func TestServiceCreateAndSend(t *testing.T) {
 	dir := t.TempDir()
 	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit_01.xml", "2026-07-23T12:00:00Z")))
@@ -126,6 +137,10 @@ func TestServiceCreateAndSend(t *testing.T) {
 	}
 	if len(got.Messages) != 2 || got.Messages[0].Content != "What proves this?" || got.TurnsUsed != 1 || got.MaxTurns != 10 {
 		t.Fatalf("messages = %+v", got.Messages)
+	}
+	attempt := requireAttempt(t, got, got.Messages[0].RequestID)
+	if attempt.Outcome != requestSucceeded || attempt.Question != "What proves this?" || attempt.Turn != 1 {
+		t.Fatalf("successful attempt = %+v", attempt)
 	}
 	assistant := got.Messages[1]
 	if assistant.Assessment != "supports" || assistant.ToolCalls != 2 || len(assistant.Citations) != 1 {
@@ -262,7 +277,11 @@ func TestServiceFindRejectsChangedAnalysis(t *testing.T) {
 	oldRef := AnalysisRef{
 		JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster", AnalysisGeneratedAt: oldGenerated,
 	}
-	if _, err := service.Create(oldRef, "alice", "create-old-analysis"); err != nil {
+	created, err := service.Create(oldRef, "alice", "create-old-analysis")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Send(t.Context(), created.ID, "alice", "turn-old-analysis", "What did the old analysis say?"); err != nil {
 		t.Fatal(err)
 	}
 	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", newGenerated)))
@@ -630,6 +649,14 @@ func TestServiceRunnerFailuresReachTurnLimit(t *testing.T) {
 	if usage.TurnsUsed != 2 || usage.MaxTurns != 2 {
 		t.Fatalf("failure usage = %d/%d", usage.TurnsUsed, usage.MaxTurns)
 	}
+	if len(usage.Attempts) != 2 {
+		t.Fatalf("exhausted attempts = %+v", usage.Attempts)
+	}
+	for _, attempt := range usage.Attempts {
+		if attempt.Outcome != requestFailed || attempt.FailureKind != failureModel || attempt.Question != "retry" {
+			t.Fatalf("exhausted attempt = %+v", attempt)
+		}
+	}
 }
 
 func TestServiceRejectsPublicStateDirectory(t *testing.T) {
@@ -685,6 +712,10 @@ func TestServicePersistsSessionsAndIdempotentResults(t *testing.T) {
 	}
 	if len(got.Messages) != 2 || got.Messages[0].RequestID != "turn-persist" || got.Messages[1].Content != "answer" {
 		t.Fatalf("persisted messages = %+v", got.Messages)
+	}
+	persistedAttempt := requireAttempt(t, got, "turn-persist")
+	if persistedAttempt.Outcome != requestSucceeded || persistedAttempt.Question != "question" || persistedAttempt.Turn != 1 {
+		t.Fatalf("persisted attempt = %+v", persistedAttempt)
 	}
 	recreated, err := second.Create(ref, "alice", "create-persist")
 	if err != nil {
@@ -818,6 +849,84 @@ func TestServicePersistsFailedRequestOutcome(t *testing.T) {
 	if retried.TurnsUsed != 2 || retried.MaxTurns != 10 {
 		t.Fatalf("retry usage = %d/%d", retried.TurnsUsed, retried.MaxTurns)
 	}
+	failedAttempt := requireAttempt(t, retried, "turn-failure")
+	successAttempt := requireAttempt(t, retried, "turn-retry")
+	if failedAttempt.Outcome != requestFailed || successAttempt.Outcome != requestSucceeded || failedAttempt.Turn != 1 || successAttempt.Turn != 2 {
+		t.Fatalf("retry attempts = %+v", retried.Attempts)
+	}
+}
+
+func TestServiceRestoresSafeFailureAttemptCategories(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want error
+		kind string
+	}{
+		{name: "provider", err: fmt.Errorf("%w: token=provider-secret /private/provider/path", ErrProviderRequestFailed), want: ErrProviderRequestFailed, kind: failureProvider},
+		{name: "validation", err: fmt.Errorf("%w: raw model prompt", ErrResponseValidationFailed), want: ErrResponseValidationFailed, kind: failureValidation},
+		{name: "citation", err: fmt.Errorf("%w: private citation path", ErrCitationValidationFailed), want: ErrCitationValidationFailed, kind: failureCitation},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
+			service, err := NewService(t.Context(), dir, &fakeRunner{err: testCase.err}, Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			created, err := service.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", "create-"+testCase.name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			requestID := "turn-" + testCase.name
+			if _, err := service.Send(t.Context(), created.ID, "alice", requestID, "What failed safely?"); !errors.Is(err, testCase.want) {
+				t.Fatalf("send error = %v", err)
+			}
+			restored, err := service.Get(created.ID, "alice")
+			if err != nil {
+				t.Fatal(err)
+			}
+			attempt := requireAttempt(t, restored, requestID)
+			if attempt.Outcome != requestFailed || attempt.FailureKind != testCase.kind || attempt.Question != "What failed safely?" {
+				t.Fatalf("restored attempt = %+v", attempt)
+			}
+			encoded, err := json.Marshal(restored)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, private := range []string{"provider-secret", "/private/provider/path", "raw model prompt", "private citation path"} {
+				if strings.Contains(string(encoded), private) {
+					t.Fatalf("attempt leaked %q: %s", private, encoded)
+				}
+			}
+		})
+	}
+}
+
+func TestServiceRestoresTimedOutAttempt(t *testing.T) {
+	dir := t.TempDir()
+	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
+	runner := &fakeRunner{started: make(chan struct{}, 1), release: make(chan struct{})}
+	service, err := NewService(t.Context(), dir, runner, Options{TurnTimeout: 20 * time.Millisecond, PollInterval: 5 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := service.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", "create-timeout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Send(t.Context(), created.ID, "alice", "turn-timeout", "Why did this time out?"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("timeout error = %v", err)
+	}
+	restored, err := service.Get(created.ID, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt := requireAttempt(t, restored, "turn-timeout")
+	if attempt.Outcome != "timed_out" || attempt.FailureKind != "" || attempt.Question != "Why did this time out?" {
+		t.Fatalf("timed out attempt = %+v", attempt)
+	}
 }
 
 func TestRequestFailureCategoriesRoundTrip(t *testing.T) {
@@ -850,7 +959,7 @@ func TestServiceRecoversExpiredTurnLease(t *testing.T) {
 		reply:   Reply{Answer: "answer", Assessment: "supports"},
 		started: make(chan struct{}, 1), release: make(chan struct{}),
 	}
-	opts := Options{Now: now, SessionTTL: time.Hour, TurnLeaseTTL: time.Minute}
+	opts := Options{Now: now, SessionTTL: time.Minute, TurnLeaseTTL: time.Minute}
 	first, err := NewService(t.Context(), dir, runner, opts)
 	if err != nil {
 		t.Fatal(err)
@@ -884,6 +993,10 @@ func TestServiceRecoversExpiredTurnLease(t *testing.T) {
 	if unknown.TurnsUsed != 1 || unknown.MaxTurns != 10 {
 		t.Fatalf("unknown usage = %d/%d", unknown.TurnsUsed, unknown.MaxTurns)
 	}
+	unknownAttempt := requireAttempt(t, unknown, "turn-stale")
+	if unknownAttempt.Outcome != requestUnknown || unknownAttempt.Question != "question" {
+		t.Fatalf("unknown attempt = %+v", unknownAttempt)
+	}
 	if _, err := second.Send(context.Background(), created.ID, "alice", "turn-after-stale", "question"); err != nil {
 		t.Fatal(err)
 	}
@@ -899,6 +1012,59 @@ func TestServiceRecoversExpiredTurnLease(t *testing.T) {
 		if err := service.Wait(waitCtx); err != nil {
 			t.Fatalf("waiting for recovered turns: %v", err)
 		}
+	}
+}
+
+func TestServiceExpiredCancelledTurnRestoresCancellation(t *testing.T) {
+	dir := t.TempDir()
+	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
+	var nowNanos atomic.Int64
+	start := time.Date(2026, 7, 23, 13, 0, 0, 0, time.UTC)
+	nowNanos.Store(start.UnixNano())
+	now := func() time.Time { return time.Unix(0, nowNanos.Load()) }
+	runner := &fakeRunner{
+		reply:   Reply{Answer: "answer", Assessment: "supports"},
+		started: make(chan struct{}, 1), release: make(chan struct{}), ignoreContext: true,
+	}
+	opts := Options{Now: now, SessionTTL: time.Minute, TurnLeaseTTL: time.Minute, PollInterval: 10 * time.Millisecond}
+	first, err := NewService(t.Context(), dir, runner, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewService(t.Context(), dir, runner, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := first.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", "create-expired-cancel")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := first.Stream(t.Context(), created.ID, "alice", "turn-expired-cancel", "cancel this question", nil)
+		done <- err
+	}()
+	<-runner.started
+	if err := second.Cancel(created.ID, "alice", "turn-expired-cancel"); err != nil {
+		t.Fatal(err)
+	}
+	nowNanos.Store(start.Add(2 * time.Minute).UnixNano())
+	restored, err := second.Get(created.ID, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt := requireAttempt(t, restored, "turn-expired-cancel")
+	if attempt.Outcome != failureCancelled || attempt.Question != "cancel this question" || len(restored.Messages) != 0 {
+		t.Fatalf("expired cancelled attempt = %+v messages=%+v", attempt, restored.Messages)
+	}
+	close(runner.release)
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("expired cancelled stream error = %v", err)
+	}
+	waitCtx, waitCancel := context.WithTimeout(t.Context(), time.Second)
+	defer waitCancel()
+	if err := first.Wait(waitCtx); err != nil {
+		t.Fatalf("waiting for expired cancelled turn: %v", err)
 	}
 }
 
@@ -1037,6 +1203,14 @@ func TestServiceStreamReconnectsToPendingTurn(t *testing.T) {
 	if err := <-firstDone; !errors.Is(err, ErrRequestPending) {
 		t.Fatalf("first stream error = %v", err)
 	}
+	pending, err := service.Get(created.ID, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pendingAttempt := requireAttempt(t, pending, "turn-stream")
+	if pendingAttempt.Outcome != requestPending || pendingAttempt.Question != "question" || pendingAttempt.Turn != 1 {
+		t.Fatalf("pending attempt = %+v", pendingAttempt)
+	}
 
 	var phases []string
 	var latestProgress Progress
@@ -1120,6 +1294,13 @@ func TestServiceCancelAcrossInstances(t *testing.T) {
 	}
 	if cancelled.TurnsUsed != 1 || cancelled.MaxTurns != 10 {
 		t.Fatalf("cancelled usage = %d/%d", cancelled.TurnsUsed, cancelled.MaxTurns)
+	}
+	cancelledAttempt := requireAttempt(t, cancelled, "turn-cancel")
+	if cancelledAttempt.Outcome != failureCancelled || cancelledAttempt.Question != "question" {
+		t.Fatalf("cancelled attempt = %+v", cancelledAttempt)
+	}
+	if _, err := second.Get(created.ID, "bob"); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("cross-owner attempt history error = %v", err)
 	}
 }
 
@@ -1377,6 +1558,12 @@ func TestServiceFindSeparatesTestAndPatternSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := service.Send(t.Context(), testSession.ID, "alice", "turn-test-session", "test question"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Send(t.Context(), patternSession.ID, "alice", "turn-pattern-session", "pattern question"); err != nil {
+		t.Fatal(err)
+	}
 	foundTest, err := service.Find(testRef, "alice")
 	if err != nil {
 		t.Fatal(err)
@@ -1387,6 +1574,20 @@ func TestServiceFindSeparatesTestAndPatternSessions(t *testing.T) {
 	}
 	if foundTest.ID != testSession.ID || foundPattern.ID != patternSession.ID || foundTest.ID == foundPattern.ID {
 		t.Fatalf("test=%q pattern=%q", foundTest.ID, foundPattern.ID)
+	}
+	if requireAttempt(t, foundTest, "turn-test-session").Question != "test question" ||
+		requireAttempt(t, foundPattern, "turn-pattern-session").Question != "pattern question" {
+		t.Fatalf("test attempts=%+v pattern attempts=%+v", foundTest.Attempts, foundPattern.Attempts)
+	}
+	for _, attempt := range foundTest.Attempts {
+		if attempt.RequestID == "turn-pattern-session" {
+			t.Fatalf("pattern attempt leaked into test session: %+v", foundTest.Attempts)
+		}
+	}
+	for _, attempt := range foundPattern.Attempts {
+		if attempt.RequestID == "turn-test-session" {
+			t.Fatalf("test attempt leaked into pattern session: %+v", foundPattern.Attempts)
+		}
 	}
 }
 

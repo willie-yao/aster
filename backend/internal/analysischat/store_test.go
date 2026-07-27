@@ -193,6 +193,64 @@ func TestSessionStoreVersionTwoActiveQuestionIsRollingCompatible(t *testing.T) {
 	}
 }
 
+func TestSessionStoreBackfillsAttemptSummaries(t *testing.T) {
+	dir := t.TempDir()
+	store, err := newSessionStore(dir, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	legacy := &persistedState{
+		Version: stateVersion,
+		Sessions: map[string]*persistedSession{
+			"session": {
+				Owner: "alice", Turns: 2, ExpiresAt: now.Add(time.Hour),
+				View: SessionView{
+					ID: "session", Analysis: AnalysisRef{Scope: ScopeTest, JobID: "job", BuildID: "1", TestName: "test"},
+					Messages: []Message{
+						{Role: "user", RequestID: "success", Content: "legacy question", CreatedAt: now.Format(time.RFC3339)},
+						{Role: "assistant", RequestID: "success", Content: "legacy answer", CreatedAt: now.Format(time.RFC3339)},
+					},
+				},
+				Requests: map[string]persistedRequest{
+					"success": {QuestionHash: hashText("legacy question"), Status: requestSucceeded},
+					"pending": {QuestionHash: hashText("pending question"), Status: requestPending},
+				},
+				Active: &persistedActiveTurn{
+					RequestID: "pending", Question: "pending question", LeaseID: "lease",
+					ExpiresAt: now.Add(time.Minute), Phase: PhaseInvestigating, UpdatedAt: now.Add(time.Second),
+				},
+			},
+		},
+		OwnerRequests: map[string][]time.Time{},
+	}
+	if err := writePrivateJSON(store.statePath, legacy); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := store.context()
+	defer cancel()
+	if err := store.update(ctx, func(state *persistedState) (bool, error) {
+		success := state.Sessions["session"].Requests["success"]
+		pending := state.Sessions["session"].Requests["pending"]
+		if success.Question != "legacy question" || success.Turn != 1 || success.CreatedAt == "" || success.UpdatedAt == "" {
+			t.Fatalf("migrated success = %+v", success)
+		}
+		if pending.Question != "pending question" || pending.Turn != 2 || pending.CreatedAt == "" || pending.UpdatedAt == "" {
+			t.Fatalf("migrated pending = %+v", pending)
+		}
+		return false, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, migrated, err := store.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if migrated || loaded.Sessions["session"].Requests["success"].Question != "legacy question" {
+		t.Fatalf("persisted migration = %+v", loaded.Sessions["session"].Requests)
+	}
+}
+
 func TestSessionStoreBridgesVersionThreeToVersionTwo(t *testing.T) {
 	dir := t.TempDir()
 	store, err := newSessionStore(dir, time.Second)

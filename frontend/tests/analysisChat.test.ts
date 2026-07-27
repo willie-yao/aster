@@ -3,8 +3,11 @@ import { afterEach, test } from "node:test";
 
 import {
   analysisChatCitationValidationMessage,
+  analysisChatAttemptStatus,
   analysisChatFailureGuidance,
+  analysisChatHistory,
   analysisChatProviderFailureMessage,
+  analysisChatRequestState,
   analysisChatResponseValidationMessage,
   AnalysisChatAPIError,
   analysisChatProgressTurnUsage,
@@ -14,7 +17,11 @@ import {
   markAnalysisChatTurnLimitReached,
   resumeAnalysisChatTurn,
 } from "../src/lib/analysisChat.js";
-import type { AnalysisChatReference, AnalysisChatSession } from "../src/types/analysisChat.js";
+import type {
+  AnalysisChatAttempt,
+  AnalysisChatReference,
+  AnalysisChatSession,
+} from "../src/types/analysisChat.js";
 
 const originalFetch = globalThis.fetch;
 
@@ -97,6 +104,97 @@ test("turn usage comes only from authoritative session fields", () => {
   assert.equal(analysisChatTurnLimitReached({ ...session, turns_used: 10 }, true, false), false);
   assert.equal(analysisChatTurnLimitReached(session, false, true), true);
   assert.equal(analysisChatTurnLimitReached(session, true, true), false);
+  assert.deepEqual(analysisChatTurnUsage({
+    ...session,
+    turns_used: 3,
+    attempts: Array.from({ length: 8 }, (_, index) => ({
+      request_id: `request-${index}`,
+      outcome: "failed" as const,
+    })),
+  }), { used: 3, max: 10 });
+});
+
+test("restored attempt history is safe, ordered, and does not duplicate successful messages", () => {
+  const attempts: AnalysisChatAttempt[] = [
+    { request_id: "success", question: "What proves this?", outcome: "succeeded", turn: 1 },
+    { request_id: "cancelled", question: "Stop this", outcome: "cancelled", turn: 2 },
+    { request_id: "provider", question: "Provider question", outcome: "failed", failure_kind: "provider", turn: 3 },
+    { request_id: "validation", question: "Validation question", outcome: "failed", failure_kind: "validation", turn: 4 },
+    { request_id: "citation", question: "Citation question", outcome: "failed", failure_kind: "citation", turn: 5 },
+    { request_id: "timeout", question: "Timeout question", outcome: "timed_out", turn: 6 },
+    { request_id: "unknown", question: "Unknown question", outcome: "unknown", turn: 7 },
+    { request_id: "pending", question: "Pending question", outcome: "pending", turn: 8 },
+    { request_id: "success-missing", question: "Recovered success", outcome: "succeeded", turn: 9 },
+    { request_id: "legacy-cancelled", outcome: "cancelled" },
+  ];
+  const history = analysisChatHistory({
+    ...session,
+    attempts,
+    messages: session.messages.map((message) => ({ ...message, request_id: "success" })),
+  });
+
+  assert.deepEqual(
+    history.map((entry) => entry.kind === "message" ? `message:${entry.message.role}` : entry.attempt.request_id),
+    [
+      "message:user",
+      "message:assistant",
+      "cancelled",
+      "provider",
+      "validation",
+      "citation",
+      "timeout",
+      "unknown",
+      "pending",
+      "success-missing",
+      "legacy-cancelled",
+    ],
+  );
+  assert.equal(history.some((entry) => entry.kind === "attempt" && entry.attempt.request_id === "success"), false);
+  assert.deepEqual(
+    attempts.slice(1).map((attempt) => analysisChatAttemptStatus(attempt).label),
+    [
+      "Request cancelled",
+      "Provider request failed",
+      "Response validation failed",
+      "Evidence citation validation failed",
+      "Request timed out",
+      "Outcome unknown",
+      "Request pending",
+      "Request completed",
+      "Request cancelled",
+    ],
+  );
+  const rendered = attempts.slice(1).map((attempt) => analysisChatAttemptStatus(attempt)).map((status) => `${status.label} ${status.detail}`).join(" ");
+  for (const privateValue of ["provider error", "system prompt", "provider token", "/private/path"]) {
+    assert.equal(rendered.includes(privateValue), false);
+  }
+});
+
+test("reconciliation releases terminal attempts and retains only pending requests", () => {
+  const base = { ...session, messages: [] };
+  for (const outcome of ["failed", "cancelled", "timed_out", "unknown"] as const) {
+    assert.equal(analysisChatRequestState({
+      ...base,
+      attempts: [{ request_id: "request", outcome }],
+    }, "request"), "terminal");
+  }
+  assert.equal(analysisChatRequestState({
+    ...base,
+    attempts: [{ request_id: "request", outcome: "succeeded" }],
+  }, "request"), "succeeded");
+  assert.equal(analysisChatRequestState({
+    ...base,
+    attempts: [{ request_id: "request", outcome: "pending" }],
+  }, "request"), "pending");
+  assert.equal(analysisChatRequestState({
+    ...base,
+    active: { request_id: "request", phase: "investigating", updated_at: "2026-07-26T12:03:00Z" },
+  }, "request"), "pending");
+  assert.equal(analysisChatRequestState({
+    ...base,
+    messages: [{ role: "assistant", request_id: "request", content: "answer", created_at: "2026-07-26T12:03:00Z" }],
+  }, "request"), "answered");
+  assert.equal(analysisChatRequestState(base, "request"), "unresolved");
 });
 
 test("safe analysis chat failures include recovery guidance", () => {

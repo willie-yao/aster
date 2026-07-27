@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -141,6 +142,17 @@ type Message struct {
 	CreatedAt        string     `json:"created_at"`
 }
 
+// Attempt is one owner-safe admitted model request.
+type Attempt struct {
+	RequestID   string `json:"request_id"`
+	Question    string `json:"question,omitempty"`
+	Outcome     string `json:"outcome"`
+	FailureKind string `json:"failure_kind,omitempty"`
+	Turn        int    `json:"turn,omitempty"`
+	CreatedAt   string `json:"created_at,omitempty"`
+	UpdatedAt   string `json:"updated_at,omitempty"`
+}
+
 // SessionView is the owner-safe session representation returned by the API.
 type SessionView struct {
 	ID        string      `json:"id"`
@@ -149,6 +161,7 @@ type SessionView struct {
 	UpdatedAt string      `json:"updated_at"`
 	ExpiresAt string      `json:"expires_at"`
 	Messages  []Message   `json:"messages"`
+	Attempts  []Attempt   `json:"attempts"`
 	Active    *ActiveTurn `json:"active,omitempty"`
 	TurnsUsed int         `json:"turns_used"`
 	MaxTurns  int         `json:"max_turns"`
@@ -562,16 +575,35 @@ func (s *Service) cleanup(state *persistedState, now time.Time) bool {
 			current.Investigations = map[string]persistedInvestigation{}
 			changed = true
 		}
+		retainedOutcome := false
 		if current.Active != nil && !now.Before(current.Active.ExpiresAt) {
-			previous := current.Requests[current.Active.RequestID]
-			previous.Status = requestUnknown
-			previous.FailureKind = ""
-			current.Requests[current.Active.RequestID] = previous
+			active := current.Active
+			previous := current.Requests[active.RequestID]
+			if active.CancelRequested {
+				previous.Status = requestFailed
+				previous.FailureKind = failureCancelled
+			} else {
+				previous.Status = requestUnknown
+				previous.FailureKind = ""
+			}
+			if previous.Question == "" {
+				previous.Question = active.Question
+			}
+			if previous.Turn == 0 {
+				previous.Turn = current.Turns
+			}
+			if previous.CreatedAt == "" && !active.UpdatedAt.IsZero() {
+				previous.CreatedAt = active.UpdatedAt.UTC().Format(time.RFC3339)
+			}
+			stamp := now.Format(time.RFC3339)
+			previous.UpdatedAt = stamp
+			current.Requests[active.RequestID] = previous
 			current.Active = nil
+			current.View.UpdatedAt = stamp
+			retainedOutcome = true
 			changed = true
 		}
 		activeInvestigation := false
-		retainedUnknown := false
 		for requestID, record := range current.Investigations {
 			if activeSourceInvestigation(record) && !now.Before(record.LeaseExpires) {
 				record.View.Status = sourceinvestigation.StatusUnknown
@@ -582,14 +614,14 @@ func (s *Service) cleanup(state *persistedState, now time.Time) bool {
 				record.CancelRequest = false
 				record.Subject = sourceinvestigation.Subject{}
 				current.Investigations[requestID] = record
-				retainedUnknown = true
+				retainedOutcome = true
 				changed = true
 			}
 			if activeSourceInvestigation(record) {
 				activeInvestigation = true
 			}
 		}
-		if retainedUnknown {
+		if retainedOutcome {
 			retainedUntil := now.Add(s.opts.SessionTTL)
 			if current.ExpiresAt.Before(retainedUntil) {
 				extendSessionExpiry(current, retainedUntil)
@@ -1012,6 +1044,7 @@ func newSessionID() (string, error) {
 
 func cloneSessionView(view SessionView) SessionView {
 	view.Messages = slices.Clone(view.Messages)
+	view.Attempts = slices.Clone(view.Attempts)
 	if view.Active != nil {
 		active := *view.Active
 		view.Active = &active
@@ -1025,6 +1058,7 @@ func cloneSessionView(view SessionView) SessionView {
 
 func (s *Service) sessionView(current *persistedSession) SessionView {
 	view := cloneSessionView(current.View)
+	view.Attempts = attemptViews(current.Requests)
 	view.TurnsUsed = current.Turns
 	view.MaxTurns = s.opts.MaxTurns
 	if current.Active != nil {
@@ -1036,6 +1070,67 @@ func (s *Service) sessionView(current *persistedSession) SessionView {
 		}
 	}
 	return view
+}
+
+func attemptViews(requests map[string]persistedRequest) []Attempt {
+	attempts := make([]Attempt, 0, len(requests))
+	for requestID, request := range requests {
+		outcome, failureKind := safeAttemptOutcome(request.Status, request.FailureKind)
+		attempts = append(attempts, Attempt{
+			RequestID: requestID, Question: request.Question, Outcome: outcome,
+			FailureKind: failureKind, Turn: request.Turn,
+			CreatedAt: safeAttemptTimestamp(request.CreatedAt), UpdatedAt: safeAttemptTimestamp(request.UpdatedAt),
+		})
+	}
+	sort.Slice(attempts, func(i, j int) bool {
+		left, right := attempts[i], attempts[j]
+		if left.Turn != right.Turn {
+			if left.Turn == 0 {
+				return false
+			}
+			if right.Turn == 0 {
+				return true
+			}
+			return left.Turn < right.Turn
+		}
+		if left.CreatedAt != right.CreatedAt {
+			return left.CreatedAt < right.CreatedAt
+		}
+		return left.RequestID < right.RequestID
+	})
+	return attempts
+}
+
+func safeAttemptOutcome(status, failureKind string) (string, string) {
+	switch status {
+	case requestPending:
+		return requestPending, ""
+	case requestSucceeded:
+		return requestSucceeded, ""
+	case requestUnknown:
+		return requestUnknown, ""
+	case requestFailed:
+		switch failureKind {
+		case failureCancelled:
+			return failureCancelled, ""
+		case failureTimeout:
+			return "timed_out", ""
+		case failureProvider, failureValidation, failureCitation, failureSource, failureModel:
+			return requestFailed, failureKind
+		default:
+			return requestFailed, failureModel
+		}
+	default:
+		return requestUnknown, ""
+	}
+}
+
+func safeAttemptTimestamp(value string) string {
+	parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(value))
+	if err != nil {
+		return ""
+	}
+	return parsed.UTC().Format(time.RFC3339)
 }
 
 func cloneRevision(revision *Revision) *Revision {

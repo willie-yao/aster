@@ -59,6 +59,31 @@ export interface AnalysisChatMessage {
   created_at: string;
 }
 
+export type AnalysisChatAttemptOutcome =
+  | "pending"
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | "timed_out"
+  | "unknown";
+
+export type AnalysisChatAttemptFailureKind =
+  | "model"
+  | "provider"
+  | "validation"
+  | "citation"
+  | "source";
+
+export interface AnalysisChatAttempt {
+  request_id: string;
+  question?: string;
+  outcome: AnalysisChatAttemptOutcome;
+  failure_kind?: AnalysisChatAttemptFailureKind;
+  turn?: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface AnalysisChatSession {
   id: string;
   analysis: AnalysisChatReference;
@@ -66,6 +91,7 @@ export interface AnalysisChatSession {
   updated_at: string;
   expires_at: string;
   messages: AnalysisChatMessage[];
+  attempts?: AnalysisChatAttempt[];
   active?: AnalysisChatActiveTurn;
   turns_used: number;
   max_turns: number;
