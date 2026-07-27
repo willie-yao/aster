@@ -96,6 +96,32 @@ grep -Fq 'kind: Namespace' "$tmp/container-analysis.yaml"
 grep -Eq 'namespace: test-prow-ai-dashboard-analysis-[0-9a-f]{8}' "$tmp/container-analysis.yaml"
 grep -Fq 'name: PROW_AI_STATE_KEY' "$tmp/container-analysis.yaml"
 grep -Fq 'name: ORKA_API_TOKEN' "$tmp/container-analysis.yaml"
+grep -Fq 'name: orka-api' "$tmp/container-analysis.yaml"
+if grep -Fq 'name: ORKA_API_TOKEN_FILE' "$tmp/container-analysis.yaml"; then
+  echo 'Secret-backed container analysis also rendered a token file' >&2
+  exit 1
+fi
+
+container_service_account_args=(
+  --set mode=cron
+  --set ai.enabled=true
+  --set ai.endpoint=http://model.orka-system.svc.cluster.local/v1/chat/completions
+  --set ai.model=script-model
+  --set ai.token=dashboard-token
+  --set analysisRuntime.type=orka-container
+  --set analysisRuntime.orkaContainer.image.tag=sha-deadbeef
+  --set analysisRuntime.orkaContainer.modelAuth.existingSecret=orka-model
+)
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  "${container_service_account_args[@]}" > "$tmp/container-service-account.yaml"
+grep -Fq 'serviceAccountName: test-prow-ai-dashboard-orka' "$tmp/container-service-account.yaml"
+grep -Fq 'automountServiceAccountToken: true' "$tmp/container-service-account.yaml"
+grep -Fq 'name: ORKA_API_TOKEN_FILE' "$tmp/container-service-account.yaml"
+grep -Fq 'value: /var/run/secrets/kubernetes.io/serviceaccount/token' "$tmp/container-service-account.yaml"
+if grep -Eq '^[[:space:]]*- name: ORKA_API_TOKEN$' "$tmp/container-service-account.yaml"; then
+  echo 'ServiceAccount container analysis rendered a static Orka token reference' >&2
+  exit 1
+fi
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" "${container_args[@]}" \
   --set ai.contextWindowTokens=128000 --show-only templates/orka-analysis-admission.yaml > "$tmp/container-context-window.yaml"
 grep -Fq "AI_CONTEXT_WINDOW_TOKENS" "$tmp/container-context-window.yaml"
@@ -139,7 +165,7 @@ helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" "${container
   --set-string analysisRuntime.orkaContainer.taskTimeout=1h > "$tmp/container-microsecond-duration.yaml"
 grep -Fq -- '-orka-analysis-poll-interval=500us' "$tmp/container-microsecond-duration.yaml"
 
-for invalid in type watch endpoint model custom-namespace shared-namespace release-namespace api api-secret api-token-key image mutable-image build-metadata model-secret token-key state-key concurrency poll slow-poll timeout retries cpu-selector gpu accelerator; do
+for invalid in type watch endpoint model custom-namespace shared-namespace release-namespace api api-token-key image mutable-image build-metadata model-secret token-key state-key concurrency poll slow-poll timeout retries cpu-selector gpu accelerator; do
   case $invalid in
     type) invalid_args=(--set analysisRuntime.type=remote); want='analysisRuntime.type must be inprocess or orka-container' ;;
     watch) invalid_args=("${container_args[@]}" --set mode=watch); want='analysisRuntime.type=orka-container requires mode=cron' ;;
@@ -149,8 +175,7 @@ for invalid in type watch endpoint model custom-namespace shared-namespace relea
     shared-namespace) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.namespace=orka-system); want='analysisRuntime.orkaContainer.namespace must be dedicated and differ from orka.namespace' ;;
     release-namespace) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.namespace=dashboard-test); want='analysisRuntime.orkaContainer.namespace must differ from the dashboard release namespace' ;;
     api) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.api='http://user:secret@orka'); want='analysisRuntime.orkaContainer.api must be an absolute http or https URL without credentials' ;;
-    api-secret) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.apiAuth.existingSecret=); want='analysisRuntime.orkaContainer.apiAuth.existingSecret is required' ;;
-    api-token-key) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.apiAuth.tokenKey=); want='analysisRuntime.orkaContainer.apiAuth.tokenKey is required' ;;
+    api-token-key) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.apiAuth.tokenKey=); want='analysisRuntime.orkaContainer.apiAuth.tokenKey is required when apiAuth.existingSecret is set' ;;
     image) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.image.repository=); want='analysisRuntime.orkaContainer.image.repository is required' ;;
     mutable-image) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.image.tag=main); want='analysisRuntime.orkaContainer.image tag must be an immutable sha-<hex> or full semantic version' ;;
     build-metadata) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.image.tag=v1.2.3+build.4); want='analysisRuntime.orkaContainer.image tag must be an immutable sha-<hex> or full semantic version' ;;
@@ -281,6 +306,8 @@ helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set orka.fixRuntime.image.tag=sha-test \
   --show-only templates/worker-deployment.yaml > "$tmp/fix-watch.yaml"
 grep -Fq 'serviceAccountName: test-prow-ai-dashboard-orka' "$tmp/fix-watch.yaml"
+grep -Fq 'automountServiceAccountToken: true' "$tmp/fix-watch.yaml"
+grep -Fq 'name: ORKA_API_TOKEN_FILE' "$tmp/fix-watch.yaml"
 grep -Fq 'image: ghcr.io/willie-yao/prow-ai-dashboard/fixer:sha-test' "$tmp/fix-watch.yaml"
 if [[ $(container_command worker "$tmp/fix-watch.yaml") != /usr/local/bin/worker ]]; then
   echo 'fix-enabled worker does not run the in-process analyzer' >&2
@@ -293,6 +320,8 @@ helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set orka.fixRuntime.image.tag=sha-test \
   --show-only templates/fetcher-cronjob.yaml > "$tmp/fix-cron.yaml"
 grep -Fq 'serviceAccountName: test-prow-ai-dashboard-orka' "$tmp/fix-cron.yaml"
+grep -Fq 'automountServiceAccountToken: true' "$tmp/fix-cron.yaml"
+grep -Fq 'name: ORKA_API_TOKEN_FILE' "$tmp/fix-cron.yaml"
 grep -Fq 'image: ghcr.io/willie-yao/prow-ai-dashboard/fixer:sha-test' "$tmp/fix-cron.yaml"
 if [[ $(container_command fetcher "$tmp/fix-cron.yaml") != /usr/local/bin/fetcher ]]; then
   echo 'fix-enabled CronJob does not run the in-process fetcher' >&2
@@ -386,6 +415,8 @@ grep -Fq 'name: ANALYSIS_SOURCE_INVESTIGATION_MAX_ACTIVE_PER_OWNER' "$tmp/source
 grep -A6 -Fq 'name: SOURCE_INVESTIGATION_GITHUB_TOKEN' "$tmp/source-investigation.yaml"
 grep -Fq 'optional: true' "$tmp/source-investigation.yaml"
 grep -Fq 'automountServiceAccountToken: true' "$tmp/source-investigation.yaml"
+grep -Fq 'name: ORKA_API_TOKEN_FILE' "$tmp/source-investigation.yaml"
+grep -Fq 'value: /var/run/secrets/kubernetes.io/serviceaccount/token' "$tmp/source-investigation.yaml"
 grep -Fq 'app.kubernetes.io/component: orka-source-investigation' "$tmp/source-investigation.yaml"
 grep -Fq 'app.kubernetes.io/component: orka-source-investigation-runtime' "$tmp/source-investigation.yaml"
 grep -Fq 'serviceAccountName: test-prow-ai-dashboard-source' "$tmp/source-investigation.yaml"
@@ -433,6 +464,7 @@ helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set ai.enabled=true \
   --set ai.token=test-token > "$tmp/source-with-fix-actions.yaml"
 grep -Fq 'serviceAccountName: test-prow-ai-dashboard-source' "$tmp/source-with-fix-actions.yaml"
+grep -Fq 'name: ORKA_API_TOKEN_FILE' "$tmp/source-with-fix-actions.yaml"
 grep -Fq 'image: ghcr.io/willie-yao/prow-ai-dashboard/fixer:sha-test' "$tmp/source-with-fix-actions.yaml"
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set server.chat.enabled=true \

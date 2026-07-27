@@ -222,8 +222,7 @@ Validate AI provider configuration.
   {{- if eq $analysisNamespace .Release.Namespace -}}{{- fail "analysisRuntime.orkaContainer.namespace must differ from the dashboard release namespace" -}}{{- end -}}
   {{- if and $cfg.namespace (not (hasSuffix (printf "-%s" (include "prow-ai-dashboard.orkaReleaseScope" .)) $cfg.namespace)) -}}{{- fail "analysisRuntime.orkaContainer.namespace must be dedicated to this release and end with its release scope" -}}{{- end -}}
   {{- if not (regexMatch "^https?://[^/@?#]+(/[^?#]*)?$" $cfg.api) -}}{{- fail "analysisRuntime.orkaContainer.api must be an absolute http or https URL without credentials" -}}{{- end -}}
-  {{- if not $cfg.apiAuth.existingSecret -}}{{- fail "analysisRuntime.orkaContainer.apiAuth.existingSecret is required" -}}{{- end -}}
-  {{- if not $cfg.apiAuth.tokenKey -}}{{- fail "analysisRuntime.orkaContainer.apiAuth.tokenKey is required" -}}{{- end -}}
+  {{- if and $cfg.apiAuth.existingSecret (not $cfg.apiAuth.tokenKey) -}}{{- fail "analysisRuntime.orkaContainer.apiAuth.tokenKey is required when apiAuth.existingSecret is set" -}}{{- end -}}
   {{- if not $cfg.image.repository -}}{{- fail "analysisRuntime.orkaContainer.image.repository is required" -}}{{- end -}}
   {{- $imageTag := $cfg.image.tag | default .Chart.AppVersion -}}
   {{- if not $imageTag -}}{{- fail "analysisRuntime.orkaContainer.image.tag or Chart.appVersion is required" -}}{{- end -}}

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -103,7 +104,7 @@ func NewAgentRuntimeFromEnv(cfg FromEnvConfig) (*AgentRuntime, error) {
 		return nil, fmt.Errorf("orka fix runtime: kube client: %w", err)
 	}
 	kube.Manager = FixerManagedByValue
-	return NewAgentRuntime(kube, NewResultClient(cfg.API, resolveOrkaAPIToken(cfg.APIToken)), AgentOptions{
+	return NewAgentRuntime(kube, newResultClientFromEnv(cfg.API, cfg.APIToken), AgentOptions{
 		Namespace:  cfg.Namespace,
 		AgentRef:   cfg.AgentRef,
 		GitSecret:  strings.TrimSpace(cfg.GitSecret),
@@ -112,19 +113,17 @@ func NewAgentRuntimeFromEnv(cfg FromEnvConfig) (*AgentRuntime, error) {
 	}), nil
 }
 
-func resolveOrkaAPIToken(explicit string) string {
+func resultTokenSourceFromEnv(explicit string) resultTokenSource {
 	if token := strings.TrimSpace(explicit); token != "" {
-		return token
+		return staticResultTokenSource(token)
+	}
+	if token := strings.TrimSpace(os.Getenv("ORKA_API_TOKEN")); token != "" {
+		return staticResultTokenSource(token)
 	}
 	if file := strings.TrimSpace(os.Getenv("ORKA_API_TOKEN_FILE")); file != "" {
-		if data, err := os.ReadFile(file); err == nil {
-			return strings.TrimSpace(string(data))
-		}
+		return fileResultTokenSource{path: file}
 	}
-	if data, err := os.ReadFile(serviceAccountToken); err == nil {
-		return strings.TrimSpace(string(data))
-	}
-	return ""
+	return fileResultTokenSource{path: serviceAccountToken}
 }
 
 func normalizeAgentOptions(opts AgentOptions) AgentOptions {
@@ -370,9 +369,35 @@ func FixTaskName(spec runtime.GenerateSpec, opts AgentOptions) string {
 
 // ResultClient reads structured Task results from the Orka REST API.
 type ResultClient struct {
-	base  string
-	token string
-	http  *http.Client
+	base   string
+	tokens resultTokenSource
+	http   *http.Client
+}
+
+type resultTokenSource interface {
+	Token() (string, error)
+}
+
+type staticResultTokenSource string
+
+func (s staticResultTokenSource) Token() (string, error) {
+	return strings.TrimSpace(string(s)), nil
+}
+
+type fileResultTokenSource struct {
+	path string
+}
+
+func (s fileResultTokenSource) Token() (string, error) {
+	data, err := os.ReadFile(s.path)
+	if err != nil {
+		return "", errors.New("read Orka result API token file")
+	}
+	token := strings.TrimSpace(string(data))
+	if token == "" {
+		return "", errors.New("orka result API token file is empty")
+	}
+	return token, nil
 }
 
 func validateResultAPI(raw, field string) error {
@@ -390,9 +415,22 @@ func validateResultAPI(raw, field string) error {
 	return nil
 }
 
-// NewResultClient builds an Orka result client.
+// NewResultClient builds an Orka result client with a static token.
 func NewResultClient(base, token string) *ResultClient {
-	return &ResultClient{base: strings.TrimRight(base, "/"), token: token, http: &http.Client{Timeout: 30 * time.Second}}
+	return newResultClient(base, staticResultTokenSource(token))
+}
+
+// NewFileResultClient builds an Orka result client that reloads its token for every request.
+func NewFileResultClient(base, tokenFile string) *ResultClient {
+	return newResultClient(base, fileResultTokenSource{path: strings.TrimSpace(tokenFile)})
+}
+
+func newResultClientFromEnv(base, explicitToken string) *ResultClient {
+	return newResultClient(base, resultTokenSourceFromEnv(explicitToken))
+}
+
+func newResultClient(base string, tokens resultTokenSource) *ResultClient {
+	return &ResultClient{base: strings.TrimRight(base, "/"), tokens: tokens, http: &http.Client{Timeout: 30 * time.Second}}
 }
 
 // Result fetches one Task result. A missing or empty result returns ok=false.
@@ -405,8 +443,14 @@ func (c *ResultClient) Result(ctx context.Context, namespace, taskName string) (
 	if err != nil {
 		return "", false, err
 	}
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
+	if c.tokens != nil {
+		token, tokenErr := c.tokens.Token()
+		if tokenErr != nil {
+			return "", false, tokenErr
+		}
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {

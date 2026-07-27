@@ -334,17 +334,171 @@ func TestResultClientSendsNamespaceAndToken(t *testing.T) {
 	}
 }
 
-func TestResolveOrkaAPITokenFromFile(t *testing.T) {
+func TestResultClientReloadsFileToken(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(path, []byte("first-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var authorizations []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorizations = append(authorizations, r.Header.Get("Authorization"))
+		_ = json.NewEncoder(w).Encode(map[string]string{"result": `{"baseSHA":"sha"}`})
+	}))
+	defer server.Close()
+
+	client := NewFileResultClient(server.URL, path)
+	if _, ok, err := client.Result(t.Context(), "orka-system", "task"); err != nil || !ok {
+		t.Fatalf("first result ok=%v err=%v", ok, err)
+	}
+	if err := os.WriteFile(path, []byte("second-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := client.Result(t.Context(), "orka-system", "task"); err != nil || !ok {
+		t.Fatalf("second result ok=%v err=%v", ok, err)
+	}
+	want := []string{"Bearer first-token", "Bearer second-token"}
+	if fmt.Sprint(authorizations) != fmt.Sprint(want) {
+		t.Fatalf("authorizations = %q, want %q", authorizations, want)
+	}
+}
+
+func TestResultClientFileTokenErrorsAreSafe(t *testing.T) {
+	t.Run("missing", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "credential-material")
+		client := NewFileResultClient("http://orka.invalid", path)
+		_, _, err := client.Result(t.Context(), "orka-system", "task")
+		if err == nil || !strings.Contains(err.Error(), "read Orka result API token file") {
+			t.Fatalf("error = %v", err)
+		}
+		if strings.Contains(err.Error(), path) || strings.Contains(err.Error(), "credential-material") {
+			t.Fatalf("error exposed token path: %v", err)
+		}
+	})
+
+	t.Run("empty", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "token")
+		if err := os.WriteFile(path, []byte(" \n\t"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		client := NewFileResultClient("http://orka.invalid", path)
+		_, _, err := client.Result(t.Context(), "orka-system", "task")
+		if err == nil || err.Error() != "orka result API token file is empty" {
+			t.Fatalf("error = %v", err)
+		}
+	})
+}
+
+func TestResultTokenSourcePrecedence(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "token")
 	if err := os.WriteFile(path, []byte("file-token\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	t.Setenv("ORKA_API_TOKEN", "environment-token")
 	t.Setenv("ORKA_API_TOKEN_FILE", path)
-	if got := resolveOrkaAPIToken(""); got != "file-token" {
-		t.Fatalf("token = %q", got)
+
+	for _, tc := range []struct {
+		name     string
+		explicit string
+		want     string
+	}{
+		{name: "explicit", explicit: "explicit-token", want: "explicit-token"},
+		{name: "environment", want: "environment-token"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := resultTokenSourceFromEnv(tc.explicit)
+			got, err := source.Token()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("token = %q, want %q", got, tc.want)
+			}
+		})
 	}
-	if got := resolveOrkaAPIToken("explicit"); got != "explicit" {
-		t.Fatalf("explicit token = %q", got)
+
+	t.Setenv("ORKA_API_TOKEN", "")
+	got, err := resultTokenSourceFromEnv("").Token()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "file-token" {
+		t.Fatalf("file token = %q", got)
+	}
+
+	t.Setenv("ORKA_API_TOKEN_FILE", "")
+	standard, ok := resultTokenSourceFromEnv("").(fileResultTokenSource)
+	if !ok || standard.path != serviceAccountToken {
+		t.Fatalf("standard source = %#v", standard)
+	}
+}
+
+func TestRuntimeConstructorsUseFileBackedResultClients(t *testing.T) {
+	configureTestKubeconfig(t)
+	tokenPath := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokenPath, []byte("file-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ORKA_API_TOKEN", "")
+	t.Setenv("ORKA_API_TOKEN_FILE", tokenPath)
+
+	fixRuntime, err := NewAgentRuntimeFromEnv(FromEnvConfig{AgentRef: "fixer", API: "http://orka.invalid"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireFileResultClient(t, fixRuntime.results, tokenPath)
+
+	sourceRuntime, err := NewSourceInvestigatorFromEnv(SourceInvestigationFromEnvConfig{AgentRef: "reader", API: "http://orka.invalid"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireFileResultClient(t, sourceRuntime.results, tokenPath)
+
+	opts := containerAnalyzerTestOptions(t, []byte("01234567890123456789012345678901"))
+	containerRuntime, err := NewContainerAnalyzer(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireFileResultClient(t, containerRuntime.results, tokenPath)
+}
+
+func configureTestKubeconfig(t *testing.T) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "kubeconfig")
+	config := `apiVersion: v1
+kind: Config
+clusters:
+- name: test
+  cluster:
+    server: https://127.0.0.1:65535
+    insecure-skip-tls-verify: true
+users:
+- name: test
+  user:
+    token: test
+contexts:
+- name: test
+  context:
+    cluster: test
+    user: test
+current-context: test
+`
+	if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KUBERNETES_SERVICE_HOST", "")
+	t.Setenv("KUBERNETES_SERVICE_PORT", "")
+	t.Setenv("KUBECONFIG", path)
+}
+
+func requireFileResultClient(t *testing.T, api any, wantPath string) {
+	t.Helper()
+	client, ok := api.(*ResultClient)
+	if !ok {
+		t.Fatalf("result client = %T", api)
+	}
+	source, ok := client.tokens.(fileResultTokenSource)
+	if !ok || source.path != wantPath {
+		t.Fatalf("token source = %#v, want file %q", client.tokens, wantPath)
 	}
 }
 

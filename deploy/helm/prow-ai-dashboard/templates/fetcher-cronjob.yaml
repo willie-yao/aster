@@ -138,11 +138,19 @@ spec:
                     secretKeyRef:
                       name: {{ include "prow-ai-dashboard.orkaAnalysisStateSecret" . }}
                       key: {{ .Values.analysisRuntime.orkaContainer.state.key }}
+                {{- if .Values.analysisRuntime.orkaContainer.apiAuth.existingSecret }}
                 - name: ORKA_API_TOKEN
                   valueFrom:
                     secretKeyRef:
                       name: {{ .Values.analysisRuntime.orkaContainer.apiAuth.existingSecret }}
                       key: {{ .Values.analysisRuntime.orkaContainer.apiAuth.tokenKey }}
+                {{- else }}
+                - name: ORKA_API_TOKEN_FILE
+                  value: /var/run/secrets/kubernetes.io/serviceaccount/token
+                {{- end }}
+                {{- else if .Values.orka.fixRuntime.enabled }}
+                - name: ORKA_API_TOKEN_FILE
+                  value: /var/run/secrets/kubernetes.io/serviceaccount/token
                 {{- end }}
                 {{- with .Values.fetcher.extraEnv }}
                 {{- toYaml . | nindent 16 }}

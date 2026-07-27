@@ -37,8 +37,9 @@ analysisRuntime:
     # Orka REST API used to retrieve durable Task results. Set this to the
     # Service name of the installed Orka release.
     api: http://orka.orka-system.svc.cluster.local:8080
-    # Token accepted by the Orka result API for this analysis namespace. The
-    # Secret lives in the dashboard release namespace.
+    # Set existingSecret to use a static Orka result API token from the
+    # dashboard namespace. Leave it empty to use the rotating projected token
+    # of the Orka runtime ServiceAccount.
     apiAuth:
       existingSecret: ""
       tokenKey: token
