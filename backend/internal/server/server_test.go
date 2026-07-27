@@ -121,6 +121,7 @@ func TestNoListFSRejectsPrivatePathVariantsBeforeOpen(t *testing.T) {
 				{name: "head", method: http.MethodHead, path: "/data/" + mixed},
 				{name: "range", method: http.MethodGet, path: "/data/" + mixed, rangeHeader: "bytes=0-3"},
 				{name: "encoded_case", method: http.MethodGet, path: "/data/" + encodedUppercaseName(name)},
+				{name: "unicode_case_fold", method: http.MethodGet, path: "/data/" + strings.Replace(name, "s", "ſ", 1)},
 				{name: "backslash", method: http.MethodGet, path: "/data/%5C" + mixed},
 				{name: "nested_backslash", method: http.MethodGet, path: "/data/jobs%5C" + mixed},
 				{name: "nested", method: http.MethodGet, path: "/data/jobs/" + mixed},
