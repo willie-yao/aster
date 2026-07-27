@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link as RouterLink, useNavigate, useParams } from "react-router-dom";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
@@ -28,6 +28,36 @@ import {
 import { soft } from "../theme";
 
 const API_BASE = import.meta.env.BASE_URL;
+
+function ActionRequestPageFrame({
+  children,
+  breadcrumbs = false,
+}: {
+  children: ReactNode;
+  breadcrumbs?: boolean;
+}) {
+  return (
+    <Stack spacing={2.5} sx={{ maxWidth: 1040, mx: "auto" }}>
+      {breadcrumbs && (
+        <Breadcrumbs
+          separator="›"
+          sx={{ color: "text.secondary", fontSize: "0.875rem" }}
+        >
+          <Link component={RouterLink} to="/" color="inherit" underline="hover">
+            Dashboard
+          </Link>
+          <Typography variant="inherit" color="text.primary">
+            Draft review
+          </Typography>
+        </Breadcrumbs>
+      )}
+      <Typography variant="h4" component="h1">
+        Action Request
+      </Typography>
+      {children}
+    </Stack>
+  );
+}
 
 export function ActionRequestPage() {
   const { requestID = "" } = useParams();
@@ -190,29 +220,51 @@ export function ActionRequestPage() {
 
   if (!features.action_requests) {
     return (
-      <Alert severity="warning">
-        Asynchronous action requests are unavailable on this deployment.
-      </Alert>
+      <ActionRequestPageFrame>
+        <Alert severity="warning">
+          Asynchronous action requests are unavailable on this deployment.
+        </Alert>
+      </ActionRequestPageFrame>
     );
   }
-  if (status === "loading") return <CircularProgress size={24} />;
+  if (status === "loading") {
+    return (
+      <ActionRequestPageFrame>
+        <CircularProgress size={24} />
+      </ActionRequestPageFrame>
+    );
+  }
   if (status === "anonymous") {
     return (
-      <Panel sx={{ maxWidth: 560, mx: "auto", p: 3, textAlign: "center" }}>
-        <Typography variant="h5" sx={{ mb: 1 }}>
-          Sign in to review this draft
-        </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 2.5 }}>
-          Drafts are bound to the maintainer who requested them.
-        </Typography>
-        <Button variant="contained" startIcon={<GitHub />} onClick={signIn}>
-          Sign in with GitHub
-        </Button>
-      </Panel>
+      <ActionRequestPageFrame>
+        <Panel sx={{ maxWidth: 560, mx: "auto", p: 3, textAlign: "center" }}>
+          <Typography variant="h5" component="h2" sx={{ mb: 1 }}>
+            Sign in to review this draft
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2.5 }}>
+            Drafts are bound to the maintainer who requested them.
+          </Typography>
+          <Button variant="contained" startIcon={<GitHub />} onClick={signIn}>
+            Sign in with GitHub
+          </Button>
+        </Panel>
+      </ActionRequestPageFrame>
     );
   }
-  if (error && !request) return <Alert severity="error">{error}</Alert>;
-  if (!request) return <CircularProgress size={24} />;
+  if (error && !request) {
+    return (
+      <ActionRequestPageFrame>
+        <Alert severity="error">{error}</Alert>
+      </ActionRequestPageFrame>
+    );
+  }
+  if (!request) {
+    return (
+      <ActionRequestPageFrame>
+        <CircularProgress size={24} />
+      </ActionRequestPageFrame>
+    );
+  }
 
   const preview = request.preview;
   const isFix = request.kind === "propose-fix";
@@ -221,16 +273,7 @@ export function ActionRequestPage() {
   );
 
   return (
-    <Stack spacing={2.5} sx={{ maxWidth: 1040, mx: "auto" }}>
-      <Breadcrumbs separator="›" sx={{ color: "text.secondary", fontSize: "0.875rem" }}>
-        <Link component={RouterLink} to="/" color="inherit" underline="hover">
-          Dashboard
-        </Link>
-        <Typography variant="inherit" color="text.primary">
-          Draft review
-        </Typography>
-      </Breadcrumbs>
-
+    <ActionRequestPageFrame breadcrumbs>
       <Panel sx={{ borderRadius: "16px", overflow: "hidden" }}>
         <Box
           sx={{
@@ -260,7 +303,7 @@ export function ActionRequestPage() {
             {isFix ? <Build /> : <BugReport />}
           </Box>
           <Box sx={{ minWidth: 0, flex: 1 }}>
-            <Typography variant="h5">
+            <Typography variant="h5" component="h2">
               {isFix ? "Review draft fix PR" : "Review issue"}
             </Typography>
             <Typography variant="body2" color="text.secondary">
@@ -418,6 +461,6 @@ export function ActionRequestPage() {
           )}
         </Box>
       </Panel>
-    </Stack>
+    </ActionRequestPageFrame>
   );
 }
