@@ -408,6 +408,118 @@ func TestHandler_ReadOnlyRoutesPreserveHeadAndRange(t *testing.T) {
 	}
 }
 
+func TestHandler_StaticRoutesRejectUnsupportedMethods(t *testing.T) {
+	dataDir := t.TempDir()
+	staticDir := t.TempDir()
+	writeFile(t, staticDir, "index.html", "<!doctype html><title>app</title>")
+	writeFile(t, staticDir, "assets/index-wlRzmcMX.js", "console.log('asset')")
+
+	h, err := Handler(Options{DataDir: dataDir, StaticDir: staticDir, Capabilities: DefaultCapabilities()})
+	if err != nil {
+		t.Fatalf("Handler: %v", err)
+	}
+
+	for _, method := range []string{
+		http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete,
+		http.MethodConnect, http.MethodOptions, http.MethodTrace,
+	} {
+		for _, path := range []string{"/", "/flaky", "/job/example", "/assets/index-wlRzmcMX.js"} {
+			t.Run(method+" "+path, func(t *testing.T) {
+				recorder := httptest.NewRecorder()
+				h.ServeHTTP(recorder, httptest.NewRequest(method, path, nil))
+				if recorder.Code != http.StatusMethodNotAllowed {
+					t.Errorf("status = %d, want 405", recorder.Code)
+				}
+				if got := recorder.Header().Get("Allow"); got != "GET, HEAD" {
+					t.Errorf("Allow = %q, want GET, HEAD", got)
+				}
+			})
+		}
+	}
+}
+
+func TestHandler_StaticRoutesPreserveGetHeadAndRange(t *testing.T) {
+	dataDir := t.TempDir()
+	staticDir := t.TempDir()
+	indexBody := "<!doctype html><title>app</title>"
+	assetBody := "console.log('asset')"
+	writeFile(t, staticDir, "index.html", indexBody)
+	writeFile(t, staticDir, "assets/index-wlRzmcMX.js", assetBody)
+
+	h, err := Handler(Options{DataDir: dataDir, StaticDir: staticDir, Capabilities: DefaultCapabilities()})
+	if err != nil {
+		t.Fatalf("Handler: %v", err)
+	}
+
+	for _, testCase := range []struct {
+		path         string
+		body         string
+		cacheControl string
+	}{
+		{path: "/", body: indexBody, cacheControl: "no-cache"},
+		{path: "/flaky", body: indexBody, cacheControl: "no-cache"},
+		{path: "/job/example", body: indexBody, cacheControl: "no-cache"},
+		{path: "/not-found", body: indexBody, cacheControl: "no-cache"},
+		{path: "/assets/index-wlRzmcMX.js", body: assetBody, cacheControl: "public, max-age=31536000, immutable"},
+	} {
+		t.Run("GET "+testCase.path, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			h.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, testCase.path, nil))
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200", recorder.Code)
+			}
+			if got := recorder.Body.String(); got != testCase.body {
+				t.Errorf("body = %q, want %q", got, testCase.body)
+			}
+			if got := recorder.Header().Get("Cache-Control"); got != testCase.cacheControl {
+				t.Errorf("Cache-Control = %q, want %q", got, testCase.cacheControl)
+			}
+		})
+
+		t.Run("HEAD "+testCase.path, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			h.ServeHTTP(recorder, httptest.NewRequest(http.MethodHead, testCase.path, nil))
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200", recorder.Code)
+			}
+			if recorder.Body.Len() != 0 {
+				t.Errorf("body = %q, want empty", recorder.Body.String())
+			}
+			if got := recorder.Header().Get("Cache-Control"); got != testCase.cacheControl {
+				t.Errorf("Cache-Control = %q, want %q", got, testCase.cacheControl)
+			}
+		})
+	}
+
+	for _, testCase := range []struct {
+		path         string
+		body         string
+		cacheControl string
+	}{
+		{path: "/job/example", body: "<!do", cacheControl: "no-cache"},
+		{path: "/assets/index-wlRzmcMX.js", body: "cons", cacheControl: "public, max-age=31536000, immutable"},
+	} {
+		t.Run("range "+testCase.path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, testCase.path, nil)
+			req.Header.Set("Range", "bytes=0-3")
+			recorder := httptest.NewRecorder()
+			h.ServeHTTP(recorder, req)
+			if recorder.Code != http.StatusPartialContent {
+				t.Fatalf("status = %d, want 206", recorder.Code)
+			}
+			if got := recorder.Body.String(); got != testCase.body {
+				t.Errorf("body = %q, want %q", got, testCase.body)
+			}
+			if recorder.Header().Get("Content-Range") == "" {
+				t.Error("Content-Range is empty")
+			}
+			if got := recorder.Header().Get("Cache-Control"); got != testCase.cacheControl {
+				t.Errorf("Cache-Control = %q, want %q", got, testCase.cacheControl)
+			}
+		})
+	}
+}
+
 // TestHandler_SPAFallback verifies deep links fall back to index.html while
 // real asset files are served directly.
 func TestHandler_SPAFallback(t *testing.T) {

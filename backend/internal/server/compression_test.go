@@ -149,9 +149,10 @@ func TestHandlerCompressionPreservesRouteCaching(t *testing.T) {
 	dataDir := t.TempDir()
 	staticDir := t.TempDir()
 	dataBody := `{"entries":"` + strings.Repeat("data", 1000) + `"}`
+	indexBody := "<!doctype html>" + strings.Repeat("<main>dashboard</main>", 1000)
 	assetBody := strings.Repeat("console.log('asset');", 1000)
 	writeFile(t, dataDir, "search-index.json", dataBody)
-	writeFile(t, staticDir, "index.html", "<!doctype html>")
+	writeFile(t, staticDir, "index.html", indexBody)
 	writeFile(t, staticDir, "assets/app.js", assetBody)
 	handler, err := Handler(Options{DataDir: dataDir, StaticDir: staticDir, Capabilities: DefaultCapabilities()})
 	if err != nil {
@@ -169,6 +170,17 @@ func TestHandlerCompressionPreservesRouteCaching(t *testing.T) {
 		t.Fatalf("data body length = %d", len(got))
 	}
 
+	indexReq := httptest.NewRequest(http.MethodGet, "/flaky", nil)
+	indexReq.Header.Set("Accept-Encoding", "gzip")
+	indexRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(indexRecorder, indexReq)
+	if indexRecorder.Header().Get("Content-Encoding") != "gzip" || indexRecorder.Header().Get("Cache-Control") != "no-cache" {
+		t.Fatalf("index headers = %v", indexRecorder.Header())
+	}
+	if got := gunzipBody(t, indexRecorder.Body.Bytes()); got != indexBody {
+		t.Fatalf("index body length = %d", len(got))
+	}
+
 	assetReq := httptest.NewRequest(http.MethodGet, "/assets/app.js", nil)
 	assetReq.Header.Set("Accept-Encoding", "gzip")
 	assetRecorder := httptest.NewRecorder()
@@ -179,6 +191,19 @@ func TestHandlerCompressionPreservesRouteCaching(t *testing.T) {
 	}
 	if got := gunzipBody(t, assetRecorder.Body.Bytes()); got != assetBody {
 		t.Fatalf("asset body length = %d", len(got))
+	}
+
+	rangeReq := httptest.NewRequest(http.MethodGet, "/assets/app.js", nil)
+	rangeReq.Header.Set("Accept-Encoding", "gzip")
+	rangeReq.Header.Set("Range", "bytes=0-6")
+	rangeRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(rangeRecorder, rangeReq)
+	if rangeRecorder.Code != http.StatusPartialContent || rangeRecorder.Header().Get("Content-Encoding") != "" ||
+		rangeRecorder.Header().Get("Cache-Control") != "public, max-age=31536000, immutable" {
+		t.Fatalf("range headers = %v status = %d", rangeRecorder.Header(), rangeRecorder.Code)
+	}
+	if got := rangeRecorder.Body.String(); got != "console" {
+		t.Fatalf("range body = %q, want console", got)
 	}
 }
 
