@@ -113,9 +113,6 @@ func validateOptions(opts *Options) error {
 	if opts.GCSWebBase != "" && opts.Bucket == "" {
 		return fmt.Errorf("--gcsweb-base only applies with --bucket")
 	}
-	if opts.OpenPR && opts.GitHubToken == "" {
-		return fmt.Errorf("--open-pr needs a GitHub token with write access to the dashboard repo (set GITHUB_TOKEN)")
-	}
 	// AI drafting needs an explicit endpoint and model because the engine has no
 	// default provider. Without AI, the stub is written.
 	if opts.AIToken != "" && !opts.NoPrompt {

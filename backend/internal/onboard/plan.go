@@ -121,6 +121,9 @@ func Apply(ctx context.Context, plan *Plan, githubToken string) error {
 	}
 	dashboardOwner, dashboardName := splitRepo(plan.DashboardRepo)
 	if plan.OpenPR {
+		if githubToken == "" {
+			return fmt.Errorf("applying an open-PR onboarding plan needs a GitHub token with write access to the dashboard repo")
+		}
 		title := fmt.Sprintf("Add %s prow-ai-dashboard scaffold", plan.Project.Name)
 		httpClient := &http.Client{Timeout: 30 * time.Second}
 		fmt.Printf("⤴ opening a scaffold PR against %s…\n", plan.DashboardRepo)

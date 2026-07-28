@@ -80,3 +80,27 @@ func TestBuildPlan_DoesNotRetainCredentials(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildPlan_OpenPRDoesNotRequireWriteCredential(t *testing.T) {
+	opts := testOpts()
+	opts.OpenPR = true
+	opts.GitHubToken = ""
+
+	plan, err := buildPlan(context.Background(), opts, plannerDependencies{
+		discover: func(context.Context, *project.Config, bool) ([]models.ProwJob, error) {
+			return []models.ProwJob{{Name: "periodic-project", JobType: models.JobTypePeriodic}}, nil
+		},
+		prompt: func(context.Context, Options, scaffoldData) (string, error) {
+			return "# Prompt\n", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildPlan: %v", err)
+	}
+	if !plan.OpenPR {
+		t.Fatal("plan lost the explicit open-PR request")
+	}
+	if err := Apply(context.Background(), plan, ""); err == nil || !strings.Contains(err.Error(), "needs a GitHub token") {
+		t.Fatalf("Apply error = %v", err)
+	}
+}
