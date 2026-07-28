@@ -243,6 +243,9 @@ func downloadAndParseAll(ctx context.Context, client *http.Client, sha string, f
 	if firstErr != nil {
 		return nil, nil, firstErr
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 
 	var all []models.ProwJob
 	catalog := &Catalog{Revision: sha, Jobs: map[string]JobDefinition{}}

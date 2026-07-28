@@ -18,6 +18,7 @@ func TestNormalizeGitHubRepo(t *testing.T) {
 		wantErr string
 	}{
 		{name: "owner name", input: "kubernetes-sigs/cluster-api", want: "kubernetes-sigs/cluster-api"},
+		{name: "literal dot git name", input: "example/project.git", want: "example/project.git"},
 		{name: "https", input: "https://github.com/kubernetes-sigs/cluster-api.git", want: "kubernetes-sigs/cluster-api"},
 		{name: "ssh url", input: "ssh://git@github.com/kubernetes-sigs/cluster-api.git", want: "kubernetes-sigs/cluster-api"},
 		{name: "scp remote", input: "git@github.com:kubernetes-sigs/cluster-api.git", want: "kubernetes-sigs/cluster-api"},

@@ -3,6 +3,7 @@ package jobconfig
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -458,5 +459,14 @@ presubmits:
 func TestFetchCatalogForRepo_RequiresRepository(t *testing.T) {
 	if _, err := FetchCatalogForRepo(context.Background(), http.DefaultClient, ""); err == nil {
 		t.Fatal("expected an error for an empty repository")
+	}
+}
+
+func TestDownloadAndParseAll_PropagatesCancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _, err := downloadAndParseAll(ctx, http.DefaultClient, fakeSHA, nil, nil, "example/project")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
 	}
 }

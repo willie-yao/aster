@@ -30,7 +30,7 @@ func NormalizeGitHubRepo(input string) (Repo, error) {
 		return Repo{}, fmt.Errorf("repository is required")
 	}
 	if match := scpGitHubPattern.FindStringSubmatch(raw); match != nil {
-		return repoFromParts(match[1], match[2])
+		return repoFromRemoteParts(match[1], match[2])
 	}
 	if !strings.Contains(raw, "://") {
 		if strings.Count(raw, "/") != 1 {
@@ -54,12 +54,16 @@ func NormalizeGitHubRepo(input string) (Repo, error) {
 	if len(parts) != 2 {
 		return Repo{}, fmt.Errorf("GitHub repository must identify owner/name, got %q", raw)
 	}
-	return repoFromParts(parts[0], parts[1])
+	return repoFromRemoteParts(parts[0], parts[1])
+}
+
+func repoFromRemoteParts(owner, name string) (Repo, error) {
+	return repoFromParts(owner, strings.TrimSuffix(strings.TrimSpace(name), ".git"))
 }
 
 func repoFromParts(owner, name string) (Repo, error) {
 	owner = strings.TrimSpace(owner)
-	name = strings.TrimSuffix(strings.TrimSpace(name), ".git")
+	name = strings.TrimSpace(name)
 	if !repoOwnerPattern.MatchString(owner) || !repoNamePattern.MatchString(name) || len(name) > 100 || name == "." || name == ".." {
 		return Repo{}, fmt.Errorf("GitHub repository must be owner/name, got %q", strings.Trim(owner+"/"+name, "/"))
 	}
