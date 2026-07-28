@@ -647,3 +647,27 @@ func TestWizard_ExplicitTestGridPromptsForRequiredPresubmits(t *testing.T) {
 		t.Fatalf("presubmit-only dashboard was not enabled:\n%s", writer.files["project.yaml"])
 	}
 }
+
+func TestSetPlanCategoryTokens_RejectsCredentialBeforeMutation(t *testing.T) {
+	deps, _, _, _ := wizardDependencies("")
+	opts := Options{
+		TestGrid: "dashboard-a", DashboardRepo: "example/project-prow-ai-dashboard",
+		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out",
+		NoPrompt: true, AIToken: "fixture-ai-token",
+	}
+	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
+	if err != nil {
+		t.Fatalf("buildPlan: %v", err)
+	}
+	before := plan.Files["project.yaml"]
+	err = setPlanCategoryTokens(plan, opts, opts.AIToken)
+	if err == nil || !strings.Contains(err.Error(), "contained a credential") {
+		t.Fatalf("error = %v", err)
+	}
+	if strings.Contains(err.Error(), opts.AIToken) {
+		t.Fatalf("credential leaked into error: %v", err)
+	}
+	if plan.Files["project.yaml"] != before {
+		t.Fatal("plan mutated before the credential check")
+	}
+}

@@ -588,3 +588,17 @@ func TestChecklist_UsesSelectedAPIAndOmitsDisabledAI(t *testing.T) {
 		t.Fatalf("AI-disabled PR body requests AI setup:\n%s", body)
 	}
 }
+
+func TestValidateOptions_CredentialCheckPrecedesAPIValidation(t *testing.T) {
+	opts := testOpts()
+	opts.NoPrompt = true
+	opts.AIToken = "fixture-ai-token"
+	opts.AIAPI = opts.AIToken
+	err := validateOptions(&opts)
+	if err == nil || !strings.Contains(err.Error(), "credential was supplied") {
+		t.Fatalf("error = %v", err)
+	}
+	if strings.Contains(err.Error(), opts.AIToken) {
+		t.Fatalf("credential leaked into error: %v", err)
+	}
+}

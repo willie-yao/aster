@@ -331,6 +331,9 @@ func setPlanCategoryTokens(plan *Plan, opts Options, value string) error {
 	if err != nil {
 		return fmt.Errorf("edited project.yaml failed validation: %w", err)
 	}
+	if err := validateRenderedFilesNoCredentials(opts, map[string]string{"project.yaml": yamlText}); err != nil {
+		return err
+	}
 	plan.Project = *parsed
 	plan.Files["project.yaml"] = yamlText
 	return nil

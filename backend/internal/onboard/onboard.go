@@ -102,6 +102,9 @@ func buildSystemPrompt(ctx context.Context, opts Options, data scaffoldData, out
 const promptDraftTimeout = 3 * time.Minute
 
 func validateOptions(opts *Options) error {
+	if err := validateCredentialSeparation(*opts); err != nil {
+		return err
+	}
 	if err := project.ValidateAIAPI(opts.AIAPI); err != nil {
 		return err
 	}
@@ -113,9 +116,6 @@ func validateOptions(opts *Options) error {
 	}
 	if err := validateAIEndpoint(opts.DeploymentAIEndpoint); err != nil {
 		return fmt.Errorf("deployed %w", err)
-	}
-	if err := validateCredentialSeparation(*opts); err != nil {
-		return err
 	}
 	opts.AIAPI = strings.ToLower(strings.TrimSpace(opts.AIAPI))
 	if opts.AIAPI == "" {
