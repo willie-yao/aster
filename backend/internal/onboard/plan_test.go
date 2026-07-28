@@ -3,38 +3,24 @@ package onboard
 import (
 	"context"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 )
 
 func TestBuildPlan_RendersAndValidatesWithoutWriting(t *testing.T) {
-	outDir := filepath.Join(t.TempDir(), "scaffold")
-	opts := testOpts()
-	opts.OutDir = outDir
-
-	plan, err := buildPlan(context.Background(), opts, plannerDependencies{
-		discover: func(context.Context, *project.Config, bool) ([]models.ProwJob, error) {
-			return []models.ProwJob{
-				{Name: "periodic-project-aks-main", JobType: models.JobTypePeriodic},
-				{Name: "periodic-project-conformance-main", JobType: models.JobTypePeriodic},
-			}, nil
-		},
-		prompt: func(context.Context, Options, scaffoldData) (string, error) {
-			return "# Prompt\n\nReview me.\n", nil
-		},
-	})
+	deps, _, writer, _ := wizardDependencies("")
+	opts := Options{
+		TestGrid: "dashboard-a", DashboardRepo: "example/project-prow-ai-dashboard",
+		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out", NoPrompt: true,
+	}
+	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
 	if err != nil {
 		t.Fatalf("buildPlan: %v", err)
 	}
-	if _, err := os.Stat(outDir); !os.IsNotExist(err) {
-		t.Fatalf("planning created output path %s", outDir)
+	if writer.writes != 0 {
+		t.Fatalf("planning wrote %d time(s)", writer.writes)
 	}
-	if plan.Project.ID != "my-proj" {
+	if plan.Project.ID != "project" {
 		t.Fatalf("project id = %q", plan.Project.ID)
 	}
 	for _, path := range []string{"project.yaml", "prompts/system.md", ".github/workflows/deploy.yml", "CHECKLIST.md"} {
@@ -42,27 +28,16 @@ func TestBuildPlan_RendersAndValidatesWithoutWriting(t *testing.T) {
 			t.Errorf("planned file %q is empty", path)
 		}
 	}
-	if _, err := project.Parse([]byte(plan.Files["project.yaml"])); err != nil {
-		t.Fatalf("planned project.yaml: %v", err)
-	}
 }
 
 func TestBuildPlan_DoesNotRetainCredentials(t *testing.T) {
-	opts := testOpts()
-	opts.OutDir = "out"
-	opts.AIToken = "fixture-ai-token"
-	opts.AIEndpoint = "https://provider.example/v1/chat/completions"
-	opts.AIModel = "model"
-	opts.GitHubToken = "fixture-github-token"
-
-	plan, err := buildPlan(context.Background(), opts, plannerDependencies{
-		discover: func(context.Context, *project.Config, bool) ([]models.ProwJob, error) {
-			return []models.ProwJob{{Name: "periodic-project", JobType: models.JobTypePeriodic}}, nil
-		},
-		prompt: func(context.Context, Options, scaffoldData) (string, error) {
-			return "# Prompt\n", nil
-		},
-	})
+	deps, _, _, _ := wizardDependencies("")
+	opts := Options{
+		TestGrid: "dashboard-a", DashboardRepo: "example/project-prow-ai-dashboard",
+		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out", NoPrompt: true,
+		AIToken: "fixture-ai-token", GitHubToken: "fixture-github-token",
+	}
+	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
 	if err != nil {
 		t.Fatalf("buildPlan: %v", err)
 	}
@@ -82,73 +57,57 @@ func TestBuildPlan_DoesNotRetainCredentials(t *testing.T) {
 }
 
 func TestBuildPlan_OpenPRDoesNotRequireWriteCredential(t *testing.T) {
-	opts := testOpts()
-	opts.OpenPR = true
-	opts.GitHubToken = ""
-
-	plan, err := buildPlan(context.Background(), opts, plannerDependencies{
-		discover: func(context.Context, *project.Config, bool) ([]models.ProwJob, error) {
-			return []models.ProwJob{{Name: "periodic-project", JobType: models.JobTypePeriodic}}, nil
-		},
-		prompt: func(context.Context, Options, scaffoldData) (string, error) {
-			return "# Prompt\n", nil
-		},
-	})
+	deps, _, _, _ := wizardDependencies("")
+	opts := Options{
+		TestGrid: "dashboard-a", DashboardRepo: "example/project-prow-ai-dashboard",
+		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", NoPrompt: true, OpenPR: true,
+	}
+	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
 	if err != nil {
 		t.Fatalf("buildPlan: %v", err)
 	}
-	if !plan.OpenPR {
+	if !plan.Destination.OpenPR {
 		t.Fatal("plan lost the explicit open-PR request")
 	}
-	if err := Apply(context.Background(), plan, ""); err == nil || !strings.Contains(err.Error(), "needs a GitHub token") {
-		t.Fatalf("Apply error = %v", err)
+	if err := applyPlan(context.Background(), plan, "", deps); err == nil || !strings.Contains(err.Error(), "needs a GitHub token") {
+		t.Fatalf("applyPlan error = %v", err)
 	}
 }
 
 func TestApply_RejectsModifiedPlanBeforeWriting(t *testing.T) {
-	outDir := filepath.Join(t.TempDir(), "scaffold")
-	opts := testOpts()
-	opts.OutDir = outDir
-	plan, err := buildPlan(context.Background(), opts, plannerDependencies{
-		discover: func(context.Context, *project.Config, bool) ([]models.ProwJob, error) {
-			return []models.ProwJob{{Name: "periodic-project", JobType: models.JobTypePeriodic}}, nil
-		},
-		prompt: func(context.Context, Options, scaffoldData) (string, error) {
-			return "# Prompt\n", nil
-		},
-	})
+	deps, _, writer, _ := wizardDependencies("")
+	opts := Options{
+		TestGrid: "dashboard-a", DashboardRepo: "example/project-prow-ai-dashboard",
+		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out", NoPrompt: true,
+	}
+	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
 	if err != nil {
 		t.Fatalf("buildPlan: %v", err)
 	}
 	plan.Files["../outside"] = "unsafe"
-	if err := Apply(context.Background(), plan, ""); err == nil || !strings.Contains(err.Error(), "unexpected file") {
-		t.Fatalf("Apply error = %v", err)
+	if err := applyPlan(context.Background(), plan, "", deps); err == nil || !strings.Contains(err.Error(), "unexpected file") {
+		t.Fatalf("applyPlan error = %v", err)
 	}
-	if _, err := os.Stat(outDir); !os.IsNotExist(err) {
-		t.Fatalf("modified plan wrote output path %s", outDir)
+	if writer.writes != 0 {
+		t.Fatalf("modified plan wrote %d time(s)", writer.writes)
 	}
 }
 
 func TestApply_RejectsProjectMutationBeforeWriting(t *testing.T) {
-	outDir := filepath.Join(t.TempDir(), "scaffold")
-	opts := testOpts()
-	opts.OutDir = outDir
-	plan, err := buildPlan(context.Background(), opts, plannerDependencies{
-		discover: func(context.Context, *project.Config, bool) ([]models.ProwJob, error) {
-			return []models.ProwJob{{Name: "periodic-project", JobType: models.JobTypePeriodic}}, nil
-		},
-		prompt: func(context.Context, Options, scaffoldData) (string, error) {
-			return "# Prompt\n", nil
-		},
-	})
+	deps, _, writer, _ := wizardDependencies("")
+	opts := Options{
+		TestGrid: "dashboard-a", DashboardRepo: "example/project-prow-ai-dashboard",
+		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out", NoPrompt: true,
+	}
+	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
 	if err != nil {
 		t.Fatalf("buildPlan: %v", err)
 	}
 	plan.Files["project.yaml"] = "id: invalid\n"
-	if err := Apply(context.Background(), plan, ""); err == nil || !strings.Contains(err.Error(), "failed validation") {
-		t.Fatalf("Apply error = %v", err)
+	if err := applyPlan(context.Background(), plan, "", deps); err == nil || !strings.Contains(err.Error(), "failed validation") {
+		t.Fatalf("applyPlan error = %v", err)
 	}
-	if _, err := os.Stat(outDir); !os.IsNotExist(err) {
-		t.Fatalf("modified plan wrote output path %s", outDir)
+	if writer.writes != 0 {
+		t.Fatalf("modified plan wrote %d time(s)", writer.writes)
 	}
 }

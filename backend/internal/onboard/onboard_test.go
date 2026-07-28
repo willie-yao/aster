@@ -168,7 +168,7 @@ func TestRenderProjectYAML_ValidatesForTestGrid(t *testing.T) {
 			t.Errorf("project.yaml missing %q\n---\n%s", want, yamlText)
 		}
 	}
-	if !strings.Contains(yamlText, "id: my-proj") {
+	if !strings.Contains(yamlText, `id: "my-proj"`) {
 		t.Errorf("expected id my-proj derived from repo name\n%s", yamlText)
 	}
 }
@@ -231,6 +231,8 @@ func TestValidateOptions(t *testing.T) {
 		{"gcsweb without bucket", func(o *Options) { o.GCSWebBase = "https://x" }, "gcsweb-base"},
 		{"ai token without endpoint or model", func(o *Options) { o.AIToken = "t" }, "AI_ENDPOINT and AI_MODEL"},
 		{"ai token without model", func(o *Options) { o.AIToken = "t"; o.AIEndpoint = "https://x" }, "AI_ENDPOINT and AI_MODEL"},
+		{"endpoint userinfo", func(o *Options) { o.AIEndpoint = "https://user:fixture-secret@example.test/v1" }, "must not contain credentials"},
+		{"endpoint token query", func(o *Options) { o.AIEndpoint = "https://example.test/v1?api_key=fixture-secret" }, "must not contain credential query"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -324,7 +326,7 @@ func TestScaffold_PagesIncludesProviderSetup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render deploy workflow: %v", err)
 	}
-	for _, want := range []string{"vars.AI_ENDPOINT", "vars.AI_MODEL", "secrets.AI_TOKEN"} {
+	for _, want := range []string{"vars.AI_API", "vars.AI_ENDPOINT", "vars.AI_MODEL", "secrets.AI_TOKEN"} {
 		if !strings.Contains(deploy, want) {
 			t.Errorf("deploy workflow missing %q:\n%s", want, deploy)
 		}
@@ -344,7 +346,7 @@ func TestScaffold_PagesIncludesProviderSetup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render checklist: %v", err)
 	}
-	for _, want := range []string{"gh variable set AI_ENDPOINT", "gh variable set AI_MODEL", "gh secret set AI_TOKEN"} {
+	for _, want := range []string{"gh variable set AI_API", "gh variable set AI_ENDPOINT", "gh variable set AI_MODEL", "gh secret set AI_TOKEN"} {
 		if !strings.Contains(checklist, want) {
 			t.Errorf("checklist missing %q:\n%s", want, checklist)
 		}
@@ -507,5 +509,47 @@ func TestScaffold_K8sStaysFocused(t *testing.T) {
 		if strings.Contains(values+readme, unwanted) {
 			t.Errorf("Kubernetes scaffold includes optional feature %q:\n%s\n%s", unwanted, values, readme)
 		}
+	}
+}
+
+func TestScaffold_KubernetesDisabledAIOmitsTokenInstruction(t *testing.T) {
+	disabled := false
+	opts := testOpts()
+	opts.Mode = modeK8s
+	opts.AIEnabled = &disabled
+	data := buildScaffoldData(opts, nil)
+	values, err := render(k8sValuesTmpl, data)
+	if err != nil {
+		t.Fatalf("render values: %v", err)
+	}
+	if !strings.Contains(values, "enabled: false") {
+		t.Fatalf("values did not disable AI:\n%s", values)
+	}
+	readme, err := render(k8sDeployReadmeTmpl, data)
+	if err != nil {
+		t.Fatalf("render readme: %v", err)
+	}
+	if strings.Contains(readme, "--set ai.token=<token>") {
+		t.Fatalf("AI-disabled install still requires a token:\n%s", readme)
+	}
+}
+
+func TestRenderProjectYAML_QuotesUntrustedDiscoveryValues(t *testing.T) {
+	opts := testOpts()
+	opts.TestGrid = "dashboard\"\nai:\n  endpoint: injected"
+	data := buildScaffoldData(opts, nil)
+	yamlText, err := renderProjectYAML(data)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	cfg, err := project.Parse([]byte(yamlText))
+	if err != nil {
+		t.Fatalf("parse: %v\n%s", err, yamlText)
+	}
+	if cfg.TestGrid.Dashboard != opts.TestGrid {
+		t.Fatalf("dashboard = %q, want %q", cfg.TestGrid.Dashboard, opts.TestGrid)
+	}
+	if cfg.AI != nil {
+		t.Fatalf("untrusted dashboard injected AI config: %+v", cfg.AI)
 	}
 }
