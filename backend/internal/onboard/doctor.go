@@ -97,9 +97,14 @@ func runDoctor(ctx context.Context, opts DoctorOptions, deps doctorDependencies)
 
 	promptPath := filepath.Join(dir, "prompts", "system.md")
 	prompt, err := deps.files.ReadFile(promptPath)
-	if err != nil || strings.TrimSpace(string(prompt)) == "" {
-		add("prompts/system.md", DoctorFail, "the required project prompt is missing or empty", "Create a non-empty prompts/system.md and review its project-specific claims.")
-	} else {
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		add("prompts/system.md", DoctorFail, "the required project prompt is missing", "Create a non-empty prompts/system.md and review its project-specific claims.")
+	case err != nil:
+		add("prompts/system.md", DoctorFail, fmt.Sprintf("cannot read %s: %v", promptPath, err), "Fix prompt file permissions or the read error, then rerun doctor.")
+	case strings.TrimSpace(string(prompt)) == "":
+		add("prompts/system.md", DoctorFail, "the required project prompt is empty", "Add project-specific prompt content and rerun doctor.")
+	default:
 		add("prompts/system.md", DoctorPass, "required project prompt is present", "")
 	}
 
@@ -176,17 +181,17 @@ func checkPages(report *DoctorReport, workflowYAML []byte) {
 		return
 	}
 	requiredWith := map[string]string{
-		"ai-api":      "vars.AI_API",
-		"ai-endpoint": "vars.AI_ENDPOINT",
-		"ai-model":    "vars.AI_MODEL",
+		"ai-api":      "AI_API",
+		"ai-endpoint": "AI_ENDPOINT",
+		"ai-model":    "AI_MODEL",
 	}
 	var missing []string
 	for key, marker := range requiredWith {
-		if !strings.Contains(fmt.Sprint(deploy.With[key]), marker) {
+		if !githubExpression(deploy.With[key], "vars", marker) {
 			missing = append(missing, key)
 		}
 	}
-	if !strings.Contains(fmt.Sprint(deploy.Secrets["AI_TOKEN"]), "secrets.AI_TOKEN") {
+	if !githubExpression(deploy.Secrets["AI_TOKEN"], "secrets", "AI_TOKEN") {
 		missing = append(missing, "secrets.AI_TOKEN")
 	}
 	sort.Strings(missing)
@@ -198,8 +203,14 @@ func checkPages(report *DoctorReport, workflowYAML []byte) {
 	add("Pages AI values", DoctorWarn, "offline doctor cannot read GitHub repository variable or secret values", "Confirm AI_API, AI_ENDPOINT, AI_MODEL, and AI_TOKEN are set in the dashboard repository.")
 }
 
+func githubExpression(value any, scope, name string) bool {
+	normalized := strings.Join(strings.Fields(fmt.Sprint(value)), " ")
+	return normalized == fmt.Sprintf("${{ %s.%s }}", scope, name)
+}
+
 type doctorKubernetesValues struct {
 	Persistence struct {
+		Enabled       *bool  `yaml:"enabled"`
 		ExistingClaim string `yaml:"existingClaim"`
 		StorageClass  string `yaml:"storageClass"`
 		AccessMode    string `yaml:"accessMode"`
@@ -223,6 +234,8 @@ func checkKubernetes(report *DoctorReport, valuesYAML []byte) {
 	}
 	if !placeholder(values.Persistence.ExistingClaim) {
 		add("Kubernetes storage", DoctorPass, "persistence.existingClaim is configured", "")
+	} else if values.Persistence.Enabled != nil && !*values.Persistence.Enabled {
+		add("Kubernetes storage", DoctorFail, "persistence is disabled without an existing claim", "Set persistence.existingClaim or enable persistence with a ReadWriteMany storage strategy.")
 	} else if placeholder(values.Persistence.StorageClass) {
 		add("Kubernetes storage", DoctorFail, "neither persistence.existingClaim nor persistence.storageClass is configured", "Set an existing ReadWriteMany claim or a ReadWriteMany-capable storage class.")
 	} else if mode := strings.TrimSpace(values.Persistence.AccessMode); mode != "" && mode != "ReadWriteMany" {

@@ -242,6 +242,7 @@ func TestDoctor_KubernetesStorageStrategies(t *testing.T) {
 	}{
 		{name: "existing claim", values: "persistence:\n  existingClaim: shared-rwx\n", wantStatus: DoctorPass},
 		{name: "wrong access mode", values: "persistence:\n  storageClass: fast\n  accessMode: ReadWriteOnce\n", wantStatus: DoctorFail},
+		{name: "disabled without claim", values: "persistence:\n  enabled: false\n  storageClass: fast\n", wantStatus: DoctorFail},
 		{name: "chart defaults AI disabled", values: "persistence:\n  storageClass: fast\n", wantStatus: DoctorPass},
 	}
 	for _, test := range tests {
@@ -257,5 +258,55 @@ func TestDoctor_KubernetesStorageStrategies(t *testing.T) {
 				t.Fatalf("missing ai.enabled did not inherit false: %+v", report.Checks)
 			}
 		})
+	}
+}
+
+type doctorErrorFS struct {
+	doctorMapFS
+	path string
+	err  error
+}
+
+func (f doctorErrorFS) ReadFile(path string) ([]byte, error) {
+	if filepath.Clean(path) == filepath.Clean(f.path) {
+		return nil, f.err
+	}
+	return f.doctorMapFS.ReadFile(path)
+}
+
+func TestDoctor_PromptReadErrorIsDistinct(t *testing.T) {
+	base := doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": "    ai: false\n"})
+	report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
+		files:   doctorErrorFS{doctorMapFS: base, path: "/consumer/prompts/system.md", err: os.ErrPermission},
+		sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}},
+	})
+	for _, check := range report.Checks {
+		if check.Name == "prompts/system.md" {
+			if !strings.Contains(check.Detail, "permission") || !strings.Contains(check.Action, "permissions") {
+				t.Fatalf("check = %+v", check)
+			}
+			return
+		}
+	}
+	t.Fatal("missing prompt check")
+}
+
+func TestDoctor_PagesRequiresFullGitHubExpressions(t *testing.T) {
+	workflow := `jobs:
+  deploy:
+    uses: example/workflow@main
+    with:
+      ai-api: vars.AI_API
+      ai-endpoint: vars.AI_ENDPOINT
+      ai-model: vars.AI_MODEL
+    secrets:
+      AI_TOKEN: secrets.AI_TOKEN
+`
+	report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
+		files:   doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": workflow}),
+		sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}},
+	})
+	if !hasDoctorCheck(report, "Pages AI", DoctorFail) {
+		t.Fatalf("literal strings passed expression validation: %+v", report.Checks)
 	}
 }
