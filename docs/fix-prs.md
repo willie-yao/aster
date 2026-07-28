@@ -213,17 +213,24 @@ ServiceAccount token. File-backed credentials are read for every result request,
 so projected ServiceAccount token rotation does not require a server restart.
 Local kubeconfig testing can select a context through `ORKA_KUBE_CONTEXT`.
 
-OpenCode support requires an Orka build containing upstream PR #289. As of July
-24, 2026, Orka had not published a tagged release containing that change. Build
-and pin Orka from a verified source commit until a later release is confirmed.
-Orka currently labels the entire project experimental, so treat this
-integration accordingly.
+OpenCode support requires upstream PR #289. The generated chart, all 12 CRDs,
+complete AgentRuntime and SubstrateActorPool controller RBAC, and guarded CRD
+lifecycle are present at Orka merge commit
+`fde3b7925c367784570fcc36d7a5b3a51747bf10` from PR #295.
 
-The Orka Helm chart at merge commit `d03acb99` omits controller permissions for
-`agentruntimes` and `substrateactorpools` even though the generated controller
-RBAC includes them. Use source manifests or a later chart that fixes those
-permissions. Do not compensate by broadening the dashboard ServiceAccount,
-which must remain limited to Orka Tasks.
+As of July 28, 2026, Orka has no tag or GitHub release containing those changes.
+Do not install from older raw manifests and do not add a supplemental controller
+RBAC patch. Use a verified published chart containing `fde3b792` or later when
+one exists. Until then, source-commit packaging is maintainer-only and limited
+to local lint, render, and temporary kind validation because matching released
+runtime images do not exist. See
+[Install Orka as a separate release](kubernetes.md#install-orka-as-a-separate-release)
+and the
+[CAPZ Orka consumer reference](https://github.com/willie-yao/capz-prow-ai-dashboard-orka-demo/tree/main/deploy/orka).
+
+Orka labels the project experimental, so treat this integration accordingly.
+The dashboard ServiceAccount must remain limited to Orka Tasks; controller and
+worker RBAC stays with the separate Orka release.
 
 Fix generation remains independent from failure analysis. Failure analysis runs
 in-process by default; Helm deployments may separately select the experimental

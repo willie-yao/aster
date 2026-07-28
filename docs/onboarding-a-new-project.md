@@ -36,6 +36,8 @@ deploy/README.md
 
 Optional email, issue, fix-PR, action, and Orka configuration is not included in
 the first-run scaffold. Add those features after the first dashboard works.
+`fetcher onboard -mode k8s` does not install Orka or make an Orka runtime the
+default.
 
 ## Before you start
 
@@ -112,12 +114,18 @@ and pull-request write access to the dashboard repository.
 4. Follow `CHECKLIST.md` for Pages or `deploy/README.md` for Helm.
 
 Do not add AI tuning, notifications, write features, or Orka settings until the
-first fetch publishes the expected jobs.
+first fetch publishes the expected jobs. If a later requirement justifies Orka,
+install it as a separate cluster-level release before enabling any dashboard
+Orka setting. Multiple dashboards may share that release. Follow
+[Install Orka as a separate release](kubernetes.md#install-orka-as-a-separate-release)
+and the
+[CAPZ Orka consumer reference](https://github.com/willie-yao/capz-prow-ai-dashboard-orka-demo).
 
 ## Deploy
 
 - [GitHub Actions and Pages](github-pages.md)
 - [Kubernetes with Helm](kubernetes.md)
+- [Separate Orka Helm installation](kubernetes.md#install-orka-as-a-separate-release)
 - [Orka fix generation](fix-prs.md)
 
 The Pages workflow uses repository variables `AI_ENDPOINT` and `AI_MODEL` plus

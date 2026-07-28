@@ -132,6 +132,8 @@ The Kubernetes server serves the same `/data/*.json` contract as Pages and adds
 
 ### Orka runtimes
 
+- [Separate Orka Helm installation and CRD lifecycle](docs/kubernetes.md#install-orka-as-a-separate-release)
+- [CAPZ Orka consumer reference](https://github.com/willie-yao/capz-prow-ai-dashboard-orka-demo)
 - [Orka architecture and dashboard integration](docs/orka-architecture.md)
 - [Failure analysis runtime evaluation](docs/analysis-runtime-evaluation.md)
 - [Analysis runtime ownership decision](docs/architecture-decisions/0001-analysis-runtime-ownership.md)
