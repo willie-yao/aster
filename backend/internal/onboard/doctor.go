@@ -171,19 +171,22 @@ func findPagesWorkflow(files doctorFileSystem, projectDir string) (string, []byt
 	}
 }
 
-func yamlBool(value any, defaultValue bool) bool {
+func yamlBool(value any, defaultValue bool) (bool, bool) {
+	if value == nil {
+		return defaultValue, true
+	}
 	switch typed := value.(type) {
 	case bool:
-		return typed
+		return typed, true
 	case string:
 		if strings.EqualFold(strings.TrimSpace(typed), "true") {
-			return true
+			return true, true
 		}
 		if strings.EqualFold(strings.TrimSpace(typed), "false") {
-			return false
+			return false, true
 		}
 	}
-	return defaultValue
+	return false, false
 }
 
 func checkPages(report *DoctorReport, workflowPath, projectDir string, workflowYAML []byte, cfg *project.Config) (includePresubmits bool) {
@@ -214,8 +217,10 @@ func checkPages(report *DoctorReport, workflowPath, projectDir string, workflowY
 	if value, ok := deploy.With["include-presubmits"]; ok {
 		if dynamicExpression(value) {
 			add("Pages presubmits", DoctorWarn, "include-presubmits is dynamic and cannot be resolved offline", "Confirm the expression enables presubmits when the dashboard depends on them.")
+		} else if parsed, valid := yamlBool(value, false); valid {
+			includePresubmits = parsed
 		} else {
-			includePresubmits = yamlBool(value, false)
+			add("Pages presubmits", DoctorFail, "include-presubmits is not a boolean", "Set jobs.deploy.with.include-presubmits to true or false.")
 		}
 	}
 	workflowRoot := filepath.Dir(filepath.Dir(filepath.Dir(workflowPath)))
@@ -239,11 +244,20 @@ func checkPages(report *DoctorReport, workflowPath, projectDir string, workflowY
 		add("Pages AI", DoctorWarn, "skip-fetch or ai is dynamic and provider requirements cannot be resolved offline", "Confirm every runtime branch has the provider mappings it uses.")
 		return
 	}
-	if yamlBool(deploy.With["skip-fetch"], false) {
+	skipFetch, valid := yamlBool(deploy.With["skip-fetch"], false)
+	if !valid {
+		add("Pages AI", DoctorFail, "skip-fetch is not a boolean", "Set jobs.deploy.with.skip-fetch to true or false.")
+		return
+	}
+	if skipFetch {
 		add("Pages AI", DoctorPass, "skip-fetch is enabled, so provider settings are unused", "")
 		return
 	}
-	aiEnabled := yamlBool(deploy.With["ai"], true)
+	aiEnabled, valid := yamlBool(deploy.With["ai"], true)
+	if !valid {
+		add("Pages AI", DoctorFail, "ai is not a boolean", "Set jobs.deploy.with.ai to true or false.")
+		return
+	}
 	if !aiEnabled {
 		add("Pages AI", DoctorPass, "deployed AI analysis is disabled", "")
 		return
@@ -304,7 +318,6 @@ func githubExpression(value any, scope, name string) bool {
 		return false
 	}
 	body := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(raw, "${{"), "}}"))
-	body = strings.Join(strings.Fields(body), "")
 	return body == scope+"."+name
 }
 

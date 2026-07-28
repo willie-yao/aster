@@ -547,3 +547,28 @@ func TestDoctor_DeploymentPresubmitSettingsReachSweep(t *testing.T) {
 		}
 	})
 }
+
+func TestDoctor_PagesRejectsInvalidBooleanInputs(t *testing.T) {
+	for _, key := range []string{"ai", "skip-fetch", "include-presubmits"} {
+		t.Run(key, func(t *testing.T) {
+			workflow := strings.Replace(doctorPagesWorkflow, "with:\n", "with:\n      "+key+": enabled\n", 1)
+			report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
+				files:   doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": workflow}),
+				sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}},
+			})
+			checkName := "Pages AI"
+			if key == "include-presubmits" {
+				checkName = "Pages presubmits"
+			}
+			if !hasDoctorCheck(report, checkName, DoctorFail) {
+				t.Fatalf("checks = %+v", report.Checks)
+			}
+		})
+	}
+}
+
+func TestGitHubExpression_RejectsWhitespaceInsideIdentifier(t *testing.T) {
+	if githubExpression("${{ v a r s.AI_MODEL }}", "vars", "AI_MODEL") {
+		t.Fatal("invalid expression was accepted")
+	}
+}
