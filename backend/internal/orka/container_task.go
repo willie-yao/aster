@@ -50,6 +50,7 @@ type ContainerAnalysisTaskSpec struct {
 	Environment         map[string]string
 	SecretEnv           []SecretEnvVar
 	Labels              map[string]string
+	TaskLabels          map[string]string
 	NodeSelector        map[string]string
 	Tolerations         []map[string]any
 	Affinity            map[string]any
@@ -57,8 +58,9 @@ type ContainerAnalysisTaskSpec struct {
 
 // ContainerAnalysisResources are the immutable bundle and its Orka Task.
 type ContainerAnalysisResources struct {
-	BundleConfigMap map[string]any
-	Task            map[string]any
+	BundleConfigMap   map[string]any
+	Task              map[string]any
+	CacheSeedIncluded bool
 }
 
 // BuildContainerAnalysisResources builds one content-addressed bundle and Task.
@@ -111,6 +113,13 @@ func BuildContainerAnalysisResources(in ContainerAnalysisTaskSpec) (ContainerAna
 	if err != nil {
 		return ContainerAnalysisResources{}, err
 	}
+	var encodedBundle struct {
+		CacheSeed map[string]json.RawMessage `json:"cache_seed"`
+	}
+	if err := json.Unmarshal(bundleJSON, &encodedBundle); err != nil {
+		return ContainerAnalysisResources{}, fmt.Errorf("inspect container analysis cache seed: %w", err)
+	}
+	cacheSeedIncluded := len(encodedBundle.CacheSeed) > 0
 	secretEnv := append([]SecretEnvVar(nil), in.SecretEnv...)
 	sort.Slice(secretEnv, func(i, j int) bool {
 		if secretEnv[i].Name != secretEnv[j].Name {
@@ -203,6 +212,9 @@ func BuildContainerAnalysisResources(in ContainerAnalysisTaskSpec) (ContainerAna
 	bundleAnnotations := containerAnalysisAnnotations(ContainerAnalysisContractVersion, bundleDigest)
 	bundleAnnotations[containerAnalysisTaskNameAnnotation] = name
 	taskLabels := containerAnalysisLabels(in.Labels)
+	for key, value := range in.TaskLabels {
+		taskLabels[key] = value
+	}
 	execution := map[string]any{}
 	if len(in.NodeSelector) == 0 {
 		execution["nodeSelector"] = map[string]any{"agentpool": "nodepool1"}
@@ -256,6 +268,7 @@ func BuildContainerAnalysisResources(in ContainerAnalysisTaskSpec) (ContainerAna
 			},
 			"spec": containerSpec,
 		},
+		CacheSeedIncluded: cacheSeedIncluded,
 	}, nil
 }
 

@@ -62,7 +62,7 @@ remains identical.
 
 ## Capability seam
 
-The fetcher writes aggregate progress to `.fetch-status/status.json` on the shared data volume. The directory is mode `0700`, the file is mode `0600`, and updates use atomic rename. The `/data/*` file server rejects the hidden directory. Authenticated servers expose only the versioned aggregate schema through `/api/fetch-status`, with `Cache-Control: no-store`; raw errors, artifact identities, prompts, provider bodies, and filesystem paths are not included. The frontend polls this endpoint without overlapping requests, backs off after failures, and stops polling when the component unmounts.
+The fetcher writes aggregate progress to `.fetch-status/status.json` and the last 20 terminal pass summaries to `.fetch-status/history.json` on the shared data volume. The directory is mode `0700`, both files are mode `0600`, and updates use atomic rename. The `/data/*` file server rejects the hidden directory. Authenticated servers expose the versioned aggregate status and pass history through `/api/fetch-status`, with `Cache-Control: no-store`; raw errors, Task mappings, artifact identities, prompts, provider bodies, and filesystem paths are not included. The frontend polls this endpoint without overlapping requests, backs off after failures, and stops polling when the component unmounts.
 
 The frontend discovers its mode by probing `/api/capabilities`:
 

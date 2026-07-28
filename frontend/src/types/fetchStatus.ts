@@ -38,6 +38,9 @@ export interface FetchProgressStatus {
   builds: { cached: number; fetched: number };
   analyses: {
     logical_total: number;
+    accepted_cache_hits: number;
+    new_work: number;
+    stale_work: number;
     queued: number;
     running: number;
     completed: number;
@@ -45,10 +48,14 @@ export interface FetchProgressStatus {
     cancelled: number;
     task_attempts: number;
     retries: number;
+    existing_tasks_adopted: number;
+    results_retrieved: number;
+    result_retrieval_retries: number;
   };
   pattern_phase: string;
   publication_phase: string;
   side_effect_phase: string;
+  phase_durations_ms?: Record<string, number>;
   next_watch_at?: string;
   next_reconcile_at?: string;
 }

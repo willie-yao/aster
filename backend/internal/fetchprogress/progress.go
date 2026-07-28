@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,7 +21,7 @@ import (
 
 const (
 	// SchemaVersion is the current private fetch status schema.
-	SchemaVersion = 1
+	SchemaVersion = 2
 	// StatusDirectory is hidden from the public /data file server.
 	StatusDirectory = ".fetch-status"
 	// StatusFilename is the current fetch status snapshot.
@@ -115,14 +116,20 @@ type BuildProgress struct {
 
 // AnalysisProgress separates logical analyses from Task attempts.
 type AnalysisProgress struct {
-	LogicalTotal int `json:"logical_total"`
-	Queued       int `json:"queued"`
-	Running      int `json:"running"`
-	Completed    int `json:"completed"`
-	Failed       int `json:"failed"`
-	Cancelled    int `json:"cancelled"`
-	TaskAttempts int `json:"task_attempts"`
-	Retries      int `json:"retries"`
+	LogicalTotal           int `json:"logical_total"`
+	AcceptedCacheHits      int `json:"accepted_cache_hits"`
+	NewWork                int `json:"new_work"`
+	StaleWork              int `json:"stale_work"`
+	Queued                 int `json:"queued"`
+	Running                int `json:"running"`
+	Completed              int `json:"completed"`
+	Failed                 int `json:"failed"`
+	Cancelled              int `json:"cancelled"`
+	TaskAttempts           int `json:"task_attempts"`
+	Retries                int `json:"retries"`
+	ExistingTasksAdopted   int `json:"existing_tasks_adopted"`
+	ResultsRetrieved       int `json:"results_retrieved"`
+	ResultRetrievalRetries int `json:"result_retrieval_retries"`
 }
 
 // Status is the private, aggregate-only fetch progress snapshot.
@@ -145,9 +152,11 @@ type Status struct {
 	Outcome         Outcome         `json:"outcome"`
 	FailureCategory FailureCategory `json:"failure_category,omitempty"`
 
-	Jobs     JobProgress      `json:"jobs"`
-	Builds   BuildProgress    `json:"builds"`
-	Analyses AnalysisProgress `json:"analyses"`
+	Jobs             JobProgress      `json:"jobs"`
+	Builds           BuildProgress    `json:"builds"`
+	Analyses         AnalysisProgress `json:"analyses"`
+	PhaseDurationsMS map[string]int64 `json:"phase_durations_ms,omitempty"`
+	CurrentTasks     []TaskMapping    `json:"current_tasks,omitempty"`
 
 	PatternPhase     StageState `json:"pattern_phase"`
 	PublicationPhase StageState `json:"publication_phase"`
@@ -177,7 +186,7 @@ func Read(path string) (Status, error) {
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return Status{}, errors.New("fetch status has trailing data")
 	}
-	if status.SchemaVersion != SchemaVersion {
+	if status.SchemaVersion != 1 && status.SchemaVersion != SchemaVersion {
 		return Status{}, fmt.Errorf("unsupported fetch status schema %d", status.SchemaVersion)
 	}
 	if err := status.validate(); err != nil {
@@ -199,12 +208,27 @@ func (s Status) validate() error {
 		s.Builds.Cached < 0 || s.Builds.Fetched < 0 ||
 		s.Analyses.LogicalTotal < 0 || s.Analyses.Queued < 0 || s.Analyses.Running < 0 ||
 		s.Analyses.Completed < 0 || s.Analyses.Failed < 0 || s.Analyses.Cancelled < 0 ||
-		s.Analyses.TaskAttempts < 0 || s.Analyses.Retries < 0 {
+		s.Analyses.AcceptedCacheHits < 0 || s.Analyses.NewWork < 0 || s.Analyses.StaleWork < 0 ||
+		s.Analyses.TaskAttempts < 0 || s.Analyses.Retries < 0 || s.Analyses.ExistingTasksAdopted < 0 ||
+		s.Analyses.ResultsRetrieved < 0 || s.Analyses.ResultRetrievalRetries < 0 {
 		return errors.New("fetch status has invalid counters")
 	}
 	accounted := s.Analyses.Queued + s.Analyses.Running + s.Analyses.Completed + s.Analyses.Failed + s.Analyses.Cancelled
 	if accounted > s.Analyses.LogicalTotal || (s.Outcome != OutcomeRunning && accounted != s.Analyses.LogicalTotal) {
 		return errors.New("fetch status has inconsistent analysis counters")
+	}
+	if len(s.CurrentTasks) > currentTaskLimit {
+		return errors.New("fetch status has too many Task mappings")
+	}
+	for _, task := range s.CurrentTasks {
+		if task.WorkItem == "" || task.TaskName == "" || task.Attempts < 0 {
+			return errors.New("fetch status has invalid Task mapping")
+		}
+	}
+	for _, duration := range s.PhaseDurationsMS {
+		if duration < 0 {
+			return errors.New("fetch status has invalid phase duration")
+		}
 	}
 	return nil
 }
@@ -260,6 +284,10 @@ func validStage(value StageState) bool {
 
 // Write atomically writes a private status snapshot.
 func Write(path string, status Status) error {
+	return writePrivateJSON(path, status)
+}
+
+func writePrivateJSON(path string, value any) error {
 	parent := filepath.Dir(path)
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return err
@@ -267,7 +295,7 @@ func Write(path string, status Status) error {
 	if err := os.Chmod(parent, 0o700); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(status, "", "  ")
+	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -311,6 +339,7 @@ type trackerOptions struct {
 	now               func() time.Time
 	newID             func() string
 	write             func(string, Status) error
+	writeHistory      func(string, History) error
 	logf              func(string, ...any)
 	writeInterval     time.Duration
 	heartbeatInterval time.Duration
@@ -320,15 +349,24 @@ type trackerOptions struct {
 type Tracker struct {
 	mu sync.Mutex
 
-	path          string
-	engineVersion string
-	runID         string
-	runStartedAt  time.Time
-	status        Status
+	path              string
+	engineVersion     string
+	runID             string
+	runStartedAt      time.Time
+	status            Status
+	history           History
+	phaseCompleted    bool
+	publishedThisPass bool
+	plannedTasks      map[string]bool
+	taskAttempts      map[string]int
+	taskAdopted       map[string]bool
+	taskResults       map[string]bool
+	cacheDisposition  map[string]string
 
 	now               func() time.Time
 	newID             func() string
 	write             func(string, Status) error
+	writeHistory      func(string, History) error
 	logf              func(string, ...any)
 	writeInterval     time.Duration
 	heartbeatInterval time.Duration
@@ -352,6 +390,9 @@ func newTracker(dataDir, engineVersion string, opts trackerOptions) *Tracker {
 	if opts.write == nil {
 		opts.write = Write
 	}
+	if opts.writeHistory == nil {
+		opts.writeHistory = WriteHistory
+	}
 	if opts.logf == nil {
 		opts.logf = log.Printf
 	}
@@ -363,8 +404,12 @@ func newTracker(dataDir, engineVersion string, opts trackerOptions) *Tracker {
 	}
 	t := &Tracker{
 		path: Path(dataDir), engineVersion: engineVersion,
-		now: opts.now, newID: opts.newID, write: opts.write, logf: opts.logf,
+		now: opts.now, newID: opts.newID, write: opts.write, writeHistory: opts.writeHistory, logf: opts.logf,
 		writeInterval: opts.writeInterval, heartbeatInterval: opts.heartbeatInterval,
+		history: History{SchemaVersion: HistorySchemaVersion, Passes: []PassSummary{}},
+	}
+	if history, err := ReadHistory(HistoryPath(dataDir)); err == nil {
+		t.history = history
 	}
 	t.recoverInterrupted()
 	return t
@@ -377,9 +422,17 @@ func (t *Tracker) recoverInterrupted() {
 	}
 	t.status = previous
 	if previous.Outcome != OutcomeRunning {
+		t.phaseCompleted = true
+		t.appendHistoryLocked(previous.PhaseStartedAt)
 		return
 	}
 	now := t.now()
+	priorPhase := previous.Phase
+	previous.SchemaVersion = SchemaVersion
+	if previous.PhaseDurationsMS == nil {
+		previous.PhaseDurationsMS = map[string]int64{}
+	}
+	previous.PhaseDurationsMS[string(priorPhase)] += durationMilliseconds(now.Sub(previous.PhaseStartedAt))
 	previous.Phase = PhaseInterrupted
 	previous.Outcome = OutcomeInterrupted
 	previous.FailureCategory = FailureInterrupted
@@ -399,10 +452,12 @@ func (t *Tracker) recoverInterrupted() {
 	}
 	t.status = previous
 	if err := t.write(t.path, previous); err != nil {
-		t.logWriteFailure(err)
+		t.logPersistenceFailure("status", err)
 		return
 	}
 	t.lastWrite = now
+	t.phaseCompleted = true
+	t.appendHistoryLocked(now)
 	t.logf("fetch pass interrupted: pass=%s phase=%s", previous.PassType, previous.Phase)
 }
 
@@ -423,7 +478,15 @@ func (t *Tracker) StartPass(passType PassType) {
 		LastCheckedAt:               t.status.LastCheckedAt,
 		LastSuccessfulPublicationAt: t.status.LastSuccessfulPublicationAt,
 		PatternPhase:                StagePending, PublicationPhase: StagePending, SideEffectPhase: StagePending,
+		PhaseDurationsMS: map[string]int64{}, CurrentTasks: []TaskMapping{},
 	}
+	t.phaseCompleted = false
+	t.publishedThisPass = false
+	t.plannedTasks = map[string]bool{}
+	t.taskAttempts = map[string]int{}
+	t.taskAdopted = map[string]bool{}
+	t.taskResults = map[string]bool{}
+	t.cacheDisposition = map[string]string{}
 	t.lastHeartbeat = now
 	t.persistLocked(true)
 	t.logPhaseStartedLocked()
@@ -434,9 +497,11 @@ func (t *Tracker) StartPhase(phase Phase) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	now := t.now()
+	t.recordPhaseDurationLocked(now)
 	t.status.Phase = phase
 	t.status.PhaseStartedAt = now
 	t.status.LastProgressAt = now
+	t.phaseCompleted = false
 	switch phase {
 	case PhasePatterns:
 		t.status.PatternPhase = StageRunning
@@ -455,6 +520,7 @@ func (t *Tracker) CompletePhase() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	now := t.now()
+	t.recordPhaseDurationLocked(now)
 	t.status.LastProgressAt = now
 	switch t.status.Phase {
 	case PhasePatterns:
@@ -568,6 +634,7 @@ func (t *Tracker) MarkPublished() {
 		now := t.now()
 		status.LastSuccessfulPublicationAt = &now
 		status.PublicationPhase = StageCompleted
+		t.publishedThisPass = true
 	})
 }
 
@@ -586,6 +653,7 @@ func (t *Tracker) FinishSuccess(watch bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	now := t.now()
+	t.recordPhaseDurationLocked(now)
 	if watch {
 		t.status.Phase = PhaseIdle
 	} else {
@@ -596,6 +664,7 @@ func (t *Tracker) FinishSuccess(watch bool) {
 	t.status.Outcome = OutcomeSucceeded
 	t.status.FailureCategory = FailureNone
 	t.persistLocked(true)
+	t.appendHistoryLocked(now)
 	t.logf("fetch pass completed: pass=%s jobs=%d/%d analyses=%d/%d duration=%s",
 		t.status.PassType, t.status.Jobs.Completed, t.status.Jobs.Total,
 		t.status.Analyses.Completed+t.status.Analyses.Failed+t.status.Analyses.Cancelled,
@@ -626,6 +695,7 @@ func (t *Tracker) finishTerminal(phase Phase, outcome Outcome, category FailureC
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	now := t.now()
+	t.recordPhaseDurationLocked(now)
 	t.status.Phase = phase
 	t.status.PhaseStartedAt = now
 	t.status.LastProgressAt = now
@@ -644,6 +714,7 @@ func (t *Tracker) finishTerminal(phase Phase, outcome Outcome, category FailureC
 		t.status.SideEffectPhase = terminalStage(outcome)
 	}
 	t.persistLocked(true)
+	t.appendHistoryLocked(now)
 	t.logf("fetch pass ended: pass=%s outcome=%s category=%s duration=%s",
 		t.status.PassType, outcome, category, formatDuration(now.Sub(t.status.PassStartedAt)))
 }
@@ -701,7 +772,10 @@ func (t *Tracker) RunHeartbeats(ctx context.Context) {
 func (t *Tracker) Snapshot() Status {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.status
+	snapshot := t.status
+	snapshot.PhaseDurationsMS = maps.Clone(t.status.PhaseDurationsMS)
+	snapshot.CurrentTasks = append([]TaskMapping(nil), t.status.CurrentTasks...)
+	return snapshot
 }
 
 func (t *Tracker) update(force bool, mutate func(*Status)) {
@@ -719,13 +793,13 @@ func (t *Tracker) persistLocked(force bool) {
 	}
 	t.lastWriteAttempt = now
 	if err := t.write(t.path, t.status); err != nil {
-		t.logWriteFailure(err)
+		t.logPersistenceFailure("status", err)
 		return
 	}
 	t.lastWrite = now
 }
 
-func (t *Tracker) logWriteFailure(err error) {
+func (t *Tracker) logPersistenceFailure(kind string, err error) {
 	category := "storage error"
 	switch {
 	case errors.Is(err, os.ErrPermission):
@@ -733,7 +807,7 @@ func (t *Tracker) logWriteFailure(err error) {
 	case errors.Is(err, os.ErrNotExist):
 		category = "path unavailable"
 	}
-	t.logf("fetch progress status write failed: %s", category)
+	t.logf("fetch progress %s write failed: %s", kind, category)
 }
 
 func (t *Tracker) logPhaseStartedLocked() {
@@ -747,6 +821,24 @@ func (t *Tracker) logPhaseCompletedLocked(duration time.Duration) {
 		t.status.Phase, t.status.Jobs.Completed, t.status.Jobs.Total,
 		t.status.Builds.Cached, t.status.Builds.Fetched, done,
 		t.status.Analyses.LogicalTotal, formatDuration(duration))
+}
+
+func (t *Tracker) recordPhaseDurationLocked(now time.Time) {
+	if t.phaseCompleted || t.status.PhaseStartedAt.IsZero() || t.status.Outcome != OutcomeRunning {
+		return
+	}
+	if t.status.PhaseDurationsMS == nil {
+		t.status.PhaseDurationsMS = map[string]int64{}
+	}
+	t.status.PhaseDurationsMS[string(t.status.Phase)] += durationMilliseconds(now.Sub(t.status.PhaseStartedAt))
+	t.phaseCompleted = true
+}
+
+func durationMilliseconds(duration time.Duration) int64 {
+	if duration <= 0 {
+		return 0
+	}
+	return duration.Milliseconds()
 }
 
 func formatDuration(duration time.Duration) string {

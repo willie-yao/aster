@@ -250,7 +250,10 @@ func TestTrackerWriteFailureDoesNotAbortOrExposePath(t *testing.T) {
 		now:   func() time.Time { return time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC) },
 		newID: func() string { return "safe-id" },
 		write: func(path string, _ Status) error { return &os.PathError{Op: "open", Path: path, Err: os.ErrPermission} },
-		logf:  func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) },
+		writeHistory: func(path string, _ History) error {
+			return &os.PathError{Op: "open", Path: path, Err: os.ErrPermission}
+		},
+		logf: func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) },
 	})
 	tracker.StartPass(PassOneShot)
 	tracker.SetJobs(1)
@@ -306,5 +309,178 @@ func TestTrackerConcurrentUpdates(t *testing.T) {
 	}
 	if status.Analyses != (AnalysisProgress{LogicalTotal: 100, Completed: 100}) {
 		t.Fatalf("analysis counters = %+v", status.Analyses)
+	}
+}
+
+func TestWorkItemIDAndCorrelationAreLabelSafe(t *testing.T) {
+	first := WorkItemID("private/job/build/test/path")
+	second := WorkItemID("private/job/build/test/path")
+	if first != second || len(first) != 16 {
+		t.Fatalf("work item ids = %q %q", first, second)
+	}
+	for _, r := range first {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			t.Fatalf("work item id contains unsafe rune %q", r)
+		}
+	}
+	tracker := newTracker(t.TempDir(), "sha-test", trackerOptions{
+		now:   func() time.Time { return time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC) },
+		newID: func() string { return "0123456789abcdef01234567" },
+		logf:  func(string, ...any) {},
+	})
+	tracker.StartPass(PassLightweightWatch)
+	correlation, ok := tracker.Correlation()
+	if !ok || correlation.RunID != "0123456789abcdef01234567" || correlation.PassID != correlation.RunID || correlation.PassType != PassLightweightWatch {
+		t.Fatalf("correlation = %+v, ok=%t", correlation, ok)
+	}
+}
+
+func TestTrackerTaskAttemptRetryAndCacheAccounting(t *testing.T) {
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	tracker := newTracker(t.TempDir(), "sha-test", trackerOptions{
+		now:           func() time.Time { return now },
+		newID:         func() string { return "0123456789abcdef01234567" },
+		write:         func(string, Status) error { return nil },
+		writeHistory:  func(string, History) error { return nil },
+		logf:          func(string, ...any) {},
+		writeInterval: time.Hour,
+	})
+	tracker.StartPass(PassLightweightWatch)
+	tracker.PlanAnalyses(3)
+	tracker.RecordTaskPlanned("work-new", "task-new", false)
+	tracker.RecordTaskState("work-new", "Running", 1, false)
+	tracker.RecordTaskState("work-new", "Running", 2, false)
+	tracker.RecordTaskState("work-new", "Running", 2, false)
+	tracker.RecordResultAttempt("work-new", false, false)
+	tracker.RecordResultAttempt("work-new", true, false)
+	tracker.RecordResultAttempt("work-new", true, true)
+
+	tracker.RecordTaskPlanned("work-cached", "task-cached", true)
+	tracker.RecordTaskState("work-cached", "Succeeded", 1, true)
+	tracker.RecordCacheDisposition("work-cached", true)
+	tracker.RecordCacheDisposition("work-cached", true)
+	tracker.RecordTaskPlanned("work-stale", "task-stale", true)
+	tracker.RecordCacheDisposition("work-stale", false)
+
+	status := tracker.Snapshot()
+	if status.Analyses.TaskAttempts != 3 || status.Analyses.Retries != 1 {
+		t.Fatalf("attempt accounting = %+v", status.Analyses)
+	}
+	if status.Analyses.NewWork != 1 || status.Analyses.AcceptedCacheHits != 1 || status.Analyses.StaleWork != 1 {
+		t.Fatalf("work accounting = %+v", status.Analyses)
+	}
+	if status.Analyses.ExistingTasksAdopted != 1 || status.Analyses.ResultsRetrieved != 1 || status.Analyses.ResultRetrievalRetries != 2 {
+		t.Fatalf("adoption/result accounting = %+v", status.Analyses)
+	}
+	if len(status.CurrentTasks) != 3 || !status.CurrentTasks[1].Adopted || status.CurrentTasks[0].Attempts != 2 {
+		t.Fatalf("Task mappings = %+v", status.CurrentTasks)
+	}
+}
+
+func TestPassHistoryIsVersionedBoundedAndRecordsDurations(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	id := 0
+	tracker := newTracker(dir, "sha-test", trackerOptions{
+		now:   func() time.Time { return now },
+		newID: func() string { id++; return fmt.Sprintf("%024x", id) },
+		logf:  func(string, ...any) {},
+	})
+	for pass := 0; pass < HistoryLimit+5; pass++ {
+		tracker.StartPass(PassLightweightWatch)
+		now = now.Add(2 * time.Second)
+		tracker.CompletePhase()
+		tracker.PlanAnalyses(1)
+		tracker.RecordTaskPlanned(fmt.Sprintf("work-%d", pass), fmt.Sprintf("task-%d", pass), false)
+		tracker.RecordTaskState(fmt.Sprintf("work-%d", pass), "Succeeded", 2, false)
+		tracker.StartAnalysis()
+		tracker.FinishAnalysis(OutcomeSucceeded)
+		tracker.MarkPublished()
+		now = now.Add(time.Second)
+		tracker.FinishSuccess(true)
+		now = now.Add(time.Second)
+	}
+	historyPath := HistoryPath(dir)
+	history, err := ReadHistory(historyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(historyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("history mode = %o, want 600", info.Mode().Perm())
+	}
+	if history.SchemaVersion != HistorySchemaVersion || len(history.Passes) != HistoryLimit {
+		t.Fatalf("history = %+v", history)
+	}
+	first, last := history.Passes[0], history.Passes[len(history.Passes)-1]
+	if first.PassID == "000000000000000000000002" || last.TaskAttempts != 2 || last.Retries != 1 || !last.Published {
+		t.Fatalf("bounded summaries first=%+v last=%+v", first, last)
+	}
+	if last.PhaseDurationsMS[string(PhaseSetup)] != 2000 || last.Outcome != OutcomeSucceeded {
+		t.Fatalf("last summary = %+v", last)
+	}
+}
+
+func TestReadHistoryRejectsUnknownSchemaAndCorruption(t *testing.T) {
+	path := HistoryPath(t.TempDir())
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range []string{`{"schema_version":99,"passes":[]}`, `{"schema_version":1`} {
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ReadHistory(path); err == nil {
+			t.Fatalf("ReadHistory accepted %s", body)
+		}
+	}
+}
+
+func TestTrackerBackfillsTerminalStatusMissingFromHistory(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	tracker := newTracker(dir, "sha-test", trackerOptions{
+		now:          func() time.Time { return now },
+		newID:        func() string { return "0123456789abcdef01234567" },
+		writeHistory: func(string, History) error { return errors.New("crash before history") },
+		logf:         func(string, ...any) {},
+	})
+	tracker.StartPass(PassOneShot)
+	now = now.Add(3 * time.Second)
+	tracker.CompletePhase()
+	tracker.FinishSuccess(false)
+	if _, err := ReadHistory(HistoryPath(dir)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("history unexpectedly persisted: %v", err)
+	}
+
+	_ = newTracker(dir, "sha-test", trackerOptions{now: func() time.Time { return now.Add(time.Minute) }, logf: func(string, ...any) {}})
+	history, err := ReadHistory(HistoryPath(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history.Passes) != 1 || history.Passes[0].PassID != "0123456789abcdef01234567" || history.Passes[0].Outcome != OutcomeSucceeded {
+		t.Fatalf("backfilled history = %+v", history)
+	}
+}
+
+func TestSnapshotDeepCopiesMutableProgress(t *testing.T) {
+	tracker := newTracker(t.TempDir(), "sha-test", trackerOptions{
+		now:          func() time.Time { return time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC) },
+		newID:        func() string { return "0123456789abcdef01234567" },
+		write:        func(string, Status) error { return nil },
+		writeHistory: func(string, History) error { return nil },
+		logf:         func(string, ...any) {},
+	})
+	tracker.StartPass(PassLightweightWatch)
+	tracker.RecordTaskPlanned("work", "task", false)
+	snapshot := tracker.Snapshot()
+	snapshot.PhaseDurationsMS[string(PhaseSetup)] = 999
+	snapshot.CurrentTasks[0].Phase = "Failed"
+	current := tracker.Snapshot()
+	if current.PhaseDurationsMS[string(PhaseSetup)] == 999 || current.CurrentTasks[0].Phase == "Failed" {
+		t.Fatalf("Snapshot shared mutable storage: snapshot=%+v current=%+v", snapshot, current)
 	}
 }

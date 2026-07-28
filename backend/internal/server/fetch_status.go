@@ -13,10 +13,12 @@ import (
 const fetchStatusStaleAfter = 2 * time.Minute
 
 type fetchStatusResponse struct {
-	Available bool                  `json:"available"`
-	State     string                `json:"state"`
-	Stale     bool                  `json:"stale,omitempty"`
-	Status    *fetchprogress.Status `json:"status,omitempty"`
+	Available            bool                        `json:"available"`
+	State                string                      `json:"state"`
+	Stale                bool                        `json:"stale,omitempty"`
+	Status               *fetchprogress.Status       `json:"status,omitempty"`
+	HistorySchemaVersion int                         `json:"history_schema_version,omitempty"`
+	History              []fetchprogress.PassSummary `json:"history,omitempty"`
 }
 
 func fetchStatusHandler(dataDir string) http.Handler {
@@ -36,8 +38,14 @@ func fetchStatusHandlerWithClock(dataDir string, now func() time.Time, staleAfte
 			response.State = "unavailable"
 		default:
 			response.Available = true
-			response.Status = &status
+			publicStatus := status
+			publicStatus.CurrentTasks = nil
+			response.Status = &publicStatus
 			response.State, response.Stale = classifyFetchStatus(status, now().UTC(), staleAfter)
+			if history, historyErr := fetchprogress.ReadHistory(fetchprogress.HistoryPath(dataDir)); historyErr == nil {
+				response.HistorySchemaVersion = history.SchemaVersion
+				response.History = history.Passes
+			}
 		}
 		if r.Method == http.MethodHead {
 			w.WriteHeader(http.StatusOK)

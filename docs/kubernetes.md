@@ -299,6 +299,22 @@ kubectl -n dashboards get deploy,pod -l app.kubernetes.io/component=worker
 kubectl -n dashboards logs deploy/capz-prow-ai-dashboard-worker -f
 ```
 
+Authenticated `/api/fetch-status` responses include the current pass ID and a
+bounded history of the last 20 passes. Newly created analyzer Tasks carry safe
+run, pass, pass-type, and work-item digest labels. Use the pass ID from the
+status response without adding another CLI dependency:
+
+```bash
+kubectl -n <analysis-namespace> get tasks \
+  -l prow-ai-dashboard/pass-id=<pass-id> \
+  -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,ATTEMPTS:.status.attempts
+```
+
+A content-addressed Task adopted from an earlier pass keeps its original labels.
+The private `.fetch-status/status.json` mapping and aggregate
+`existing_tasks_adopted` count retain that current-pass correlation without
+changing the Task, its canonical request hash, or its name.
+
 To return to cron mode without starting a fetch, upgrade with the same chart
 and values while changing only the mode and suspension setting:
 
