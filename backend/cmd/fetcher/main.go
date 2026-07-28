@@ -54,31 +54,47 @@ func main() {
 	}
 }
 
-// runOnboard parses the onboard subcommand flags and scaffolds a new dashboard.
+// runOnboard parses the onboard command and its read-only discover mode.
 func runOnboard(args []string) {
 	if len(args) > 0 && args[0] == "discover" {
 		runOnboardDiscover(args[1:])
 		return
 	}
+
 	fs := flag.NewFlagSet("onboard", flag.ExitOnError)
 	var opts onboard.Options
+	var enableAI bool
+	var includePresubmits bool
 	fs.StringVar(&opts.TestGrid, "testgrid", "", "testgrid dashboard name to discover jobs from (kubernetes-ecosystem Prow)")
 	fs.StringVar(&opts.Bucket, "bucket", "", "artifact bucket name for bucket-based discovery (any Prow); alternative to -testgrid")
-	fs.StringVar(&opts.GCSWebBase, "gcsweb-base", "", "gcsweb gateway root for the bucket (e.g. https://gcsweb.istio.io/s3); selects the gcsweb provider")
-	fs.StringVar(&opts.DashboardRepo, "dashboard-repo", "", "owner/name of the repo that will publish the dashboard (required)")
-	fs.StringVar(&opts.SourceRepo, "source-repo", "", "source repo as owner/name or a GitHub URL")
-	fs.StringVar(&opts.Mode, "mode", "pages", "deploy target for the scaffold: \"pages\" (GitHub Actions + Pages) or \"k8s\" (Kubernetes-native Helm)")
-	fs.StringVar(&opts.ID, "id", "", "project id (default: derived from the dashboard repo name)")
-	fs.StringVar(&opts.Name, "name", "", "project display name (default: derived from the id)")
-	fs.BoolVar(&opts.IncludePresubmits, "include-presubmits", false, "include presubmit jobs in the sweep")
+	fs.StringVar(&opts.GCSWebBase, "gcsweb-base", "", "gcsweb gateway root for the bucket (for example, https://gcsweb.istio.io/s3); selects the gcsweb provider")
+	fs.StringVar(&opts.DashboardRepo, "dashboard-repo", "", "owner/name of the repo that will publish the dashboard")
+	fs.StringVar(&opts.SourceRepo, "source-repo", "", "source repo as owner/name or a GitHub URL; defaults to the current origin in the wizard")
+	fs.StringVar(&opts.Mode, "mode", "", "deploy target: pages (GitHub Actions + Pages) or k8s (Kubernetes-native Helm)")
+	fs.StringVar(&opts.ID, "id", "", "project id (default: derived from repository metadata)")
+	fs.StringVar(&opts.Name, "name", "", "project display name (default: derived from repository metadata)")
+	fs.StringVar(&opts.ShortName, "short-name", "", "short display name (optional)")
+	fs.BoolVar(&includePresubmits, "include-presubmits", false, "include presubmit jobs in the sweep")
 	fs.StringVar(&opts.EngineRef, "engine-ref", "main", "prow-ai-dashboard ref the generated workflows pin")
 	fs.StringVar(&opts.OutDir, "out", "", "output directory for the scaffold (default: the dashboard repo name)")
+	fs.BoolVar(&enableAI, "ai", true, "enable deployed AI failure analysis")
 	fs.BoolVar(&opts.NoPrompt, "no-prompt", false, "skip AI prompt drafting and always write the prompts/system.md stub")
-	fs.BoolVar(&opts.OpenPR, "open-pr", false, "open a PR against the dashboard repo with the scaffold instead of writing a local directory (needs GITHUB_TOKEN write access)")
+	fs.BoolVar(&opts.OpenPR, "open-pr", false, "open a PR against the dashboard repo instead of writing locally; needs GITHUB_TOKEN write access")
+	fs.BoolVar(&opts.DryRun, "dry-run", false, "discover, render, and validate without writing files or opening a pull request")
+	fs.BoolVar(&opts.NonInteractive, "non-interactive", false, "forbid prompts and require all necessary flags")
 	_ = fs.Parse(args)
 
-	// AI_TOKEN authenticates the chat-completions endpoint for prompt drafting.
-	// GITHUB_TOKEN reads the source repo's docs.
+	fs.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "include-presubmits":
+			opts.IncludePresubmits = &includePresubmits
+		case "ai":
+			opts.AIEnabled = &enableAI
+		}
+	})
+
+	// These variables configure prompt drafting and seed the deployed provider.
+	// Tokens remain environment-only and are never copied into the plan.
 	opts.AIToken = os.Getenv("AI_TOKEN")
 	opts.AIAPI = os.Getenv("AI_API")
 	opts.AIEndpoint = os.Getenv("AI_ENDPOINT")

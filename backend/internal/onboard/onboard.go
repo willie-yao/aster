@@ -3,7 +3,9 @@ package onboard
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,9 +37,12 @@ func scaffoldGuide(mode string) string {
 }
 
 // scaffoldPRBody is the PR description: a short summary plus the human steps.
-func scaffoldPRBody(name, mode string) string {
+func scaffoldPRBody(name, mode string, aiEnabled bool) string {
 	guide := "`" + scaffoldGuide(mode) + "`"
-	finalStep := "Complete the GitHub configuration in `CHECKLIST.md` (enable Pages, set the AI provider variables and token)."
+	finalStep := "Complete the GitHub configuration in `CHECKLIST.md` and enable Pages."
+	if aiEnabled {
+		finalStep = "Complete the GitHub configuration in `CHECKLIST.md` (enable Pages, set the AI provider variables and token)."
+	}
 	if mode == modeK8s {
 		finalStep = "Fill in `deploy/values.yaml`, then follow `deploy/README.md` to install the dashboard with Helm."
 	}
@@ -51,12 +56,13 @@ func scaffoldPRBody(name, mode string) string {
 
 // buildSystemPrompt drafts prompts/system.md from source docs when AI is
 // available. It falls back to the stub on disabled, missing, slow, or failed AI.
-func buildSystemPrompt(ctx context.Context, opts Options, data scaffoldData) (string, error) {
+func buildSystemPrompt(ctx context.Context, opts Options, data scaffoldData, out io.Writer) (string, bool, error) {
 	if opts.NoPrompt || opts.AIToken == "" {
 		if opts.AIToken == "" && !opts.NoPrompt {
-			fmt.Println("ⓘ no AI token (set AI_TOKEN); writing a prompts/system.md stub to fill in")
+			fmt.Fprintln(out, "[info] no AI token is set; writing a prompts/system.md stub")
 		}
-		return render(systemPromptTmpl, data)
+		prompt, err := render(systemPromptTmpl, data)
+		return prompt, false, err
 	}
 
 	// Bound the whole drafting phase so a hung endpoint degrades to the stub
@@ -67,12 +73,13 @@ func buildSystemPrompt(ctx context.Context, opts Options, data scaffoldData) (st
 	srcOwner, srcName := splitRepo(opts.SourceRepo)
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 
-	fmt.Printf("✦ drafting prompts/system.md from %s/%s docs…\n", srcOwner, srcName)
+	fmt.Fprintf(out, "Drafting prompts/system.md from %s/%s documentation...\n", srcOwner, srcName)
 	// Empty GitHub token means anonymous public reads.
 	docs, err := fetchSourceDocs(ctx, httpClient, srcOwner, srcName, opts.GitHubToken)
 	if err != nil {
-		fmt.Printf("  ⚠ could not read source-repo docs (%v); writing the stub instead\n", err)
-		return render(systemPromptTmpl, data)
+		fmt.Fprintln(out, "[warn] could not read source repository documentation; writing the stub instead")
+		prompt, renderErr := render(systemPromptTmpl, data)
+		return prompt, false, renderErr
 	}
 
 	client := ai.NewClientWithOptions(ai.Options{
@@ -83,24 +90,38 @@ func buildSystemPrompt(ctx context.Context, opts Options, data scaffoldData) (st
 	})
 	body, err := generatePromptBody(ctx, client, data.Name, docs)
 	if err != nil {
-		fmt.Printf("  ⚠ prompt generation failed (%v); writing the stub instead\n", err)
-		return render(systemPromptTmpl, data)
+		fmt.Fprintln(out, "[warn] prompt generation failed; writing the stub instead")
+		prompt, renderErr := render(systemPromptTmpl, data)
+		return prompt, false, renderErr
 	}
-	fmt.Printf("  ✓ drafted from %d doc(s)\n", len(docs))
-	return composeGeneratedPrompt(data.Name, body), nil
+	fmt.Fprintf(out, "Drafted prompts/system.md from %d document(s). Review it before deployment.\n", len(docs))
+	return composeGeneratedPrompt(data.Name, body), true, nil
 }
 
 // promptDraftTimeout bounds doc fetch and one generation call.
 const promptDraftTimeout = 3 * time.Minute
 
 func validateOptions(opts *Options) error {
+	if err := validateCredentialSeparation(*opts); err != nil {
+		return err
+	}
 	if err := project.ValidateAIAPI(opts.AIAPI); err != nil {
 		return err
+	}
+	if err := project.ValidateAIAPI(opts.DeploymentAIAPI); err != nil {
+		return fmt.Errorf("deployed %w", err)
+	}
+	if err := validateAIEndpoint(opts.AIEndpoint); err != nil {
+		return err
+	}
+	if err := validateAIEndpoint(opts.DeploymentAIEndpoint); err != nil {
+		return fmt.Errorf("deployed %w", err)
 	}
 	opts.AIAPI = strings.ToLower(strings.TrimSpace(opts.AIAPI))
 	if opts.AIAPI == "" {
 		opts.AIAPI = project.AIAPIChatCompletions
 	}
+	opts.DeploymentAIAPI = strings.ToLower(strings.TrimSpace(opts.DeploymentAIAPI))
 	if (opts.TestGrid == "") == (opts.Bucket == "") {
 		return fmt.Errorf("provide exactly one of --testgrid or --bucket")
 	}
@@ -137,6 +158,62 @@ func validateOptions(opts *Options) error {
 		opts.OutDir = name
 	}
 	return nil
+}
+
+func validateCredentialSeparation(opts Options) error {
+	values := []string{
+		opts.TestGrid, opts.Bucket, opts.GCSWebBase, opts.DashboardRepo, opts.SourceRepo,
+		opts.ID, opts.Name, opts.ShortName, opts.EngineRef, opts.OutDir,
+		opts.AIAPI, opts.AIEndpoint, opts.AIModel,
+		opts.DeploymentAIAPI, opts.DeploymentAIEndpoint, opts.DeploymentAIModel,
+	}
+	for _, credential := range []string{opts.AIToken, opts.GitHubToken} {
+		if credential == "" {
+			continue
+		}
+		for _, value := range values {
+			if strings.Contains(value, credential) {
+				return fmt.Errorf("a credential was supplied in a nonsecret onboarding field; keep tokens in environment variables only")
+			}
+		}
+	}
+	return nil
+}
+
+func validateAIEndpoint(endpoint string) error {
+	if strings.TrimSpace(endpoint) == "" {
+		return nil
+	}
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return fmt.Errorf("AI_ENDPOINT is not a valid URL")
+	}
+	if (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return fmt.Errorf("AI_ENDPOINT must be an absolute HTTP or HTTPS URL")
+	}
+	if parsed.User != nil {
+		return fmt.Errorf("AI_ENDPOINT must not contain credentials; use AI_TOKEN")
+	}
+	query, err := url.ParseQuery(parsed.RawQuery)
+	if err != nil {
+		return fmt.Errorf("AI_ENDPOINT contains an invalid query string")
+	}
+	for key := range query {
+		if credentialQueryKey(key) {
+			return fmt.Errorf("AI_ENDPOINT must not contain credential query parameters; use AI_TOKEN")
+		}
+	}
+	return nil
+}
+
+func credentialQueryKey(key string) bool {
+	lower := strings.ToLower(strings.TrimSpace(key))
+	for _, fragment := range []string{"token", "secret", "password", "credential", "api-key", "api_key", "apikey", "access-key", "access_key", "subscription-key", "subscription_key", "signature"} {
+		if strings.Contains(lower, fragment) {
+			return true
+		}
+	}
+	return lower == "key" || lower == "sig" || strings.HasSuffix(lower, "-key") || strings.HasSuffix(lower, "_key")
 }
 
 // sweepConfig builds the minimal in-memory config needed to run discovery.
@@ -180,6 +257,31 @@ func discover(ctx context.Context, cfg *project.Config, includePresubmits bool) 
 	return periodic, nil
 }
 
+func includePresubmits(opts Options) bool {
+	return opts.IncludePresubmits != nil && *opts.IncludePresubmits
+}
+
+func deploymentAIAPI(opts Options) string {
+	if value := strings.TrimSpace(opts.DeploymentAIAPI); value != "" {
+		return value
+	}
+	return strings.TrimSpace(opts.AIAPI)
+}
+
+func deploymentAIEndpoint(opts Options) string {
+	if value := strings.TrimSpace(opts.DeploymentAIEndpoint); value != "" {
+		return value
+	}
+	return strings.TrimSpace(opts.AIEndpoint)
+}
+
+func deploymentAIModel(opts Options) string {
+	if value := strings.TrimSpace(opts.DeploymentAIModel); value != "" {
+		return value
+	}
+	return strings.TrimSpace(opts.AIModel)
+}
+
 // buildScaffoldData assembles template input from options and categories.
 func buildScaffoldData(opts Options, cats []project.CategoryRule) scaffoldData {
 	owner, name := splitRepo(opts.DashboardRepo)
@@ -188,9 +290,26 @@ func buildScaffoldData(opts Options, cats []project.CategoryRule) scaffoldData {
 	if mode == "" {
 		mode = modePages
 	}
+	aiAPI := deploymentAIAPI(opts)
+	if aiAPI == "" {
+		aiAPI = project.AIAPIChatCompletions
+	}
+	aiEndpoint := deploymentAIEndpoint(opts)
+	if aiEndpoint == "" {
+		if aiAPI == project.AIAPIResponses {
+			aiEndpoint = "http://<your-model-svc>.<ns>.svc.cluster.local:8000/v1/responses"
+		} else {
+			aiEndpoint = "http://<your-model-svc>.<ns>.svc.cluster.local:8000/v1/chat/completions"
+		}
+	}
+	aiModel := deploymentAIModel(opts)
+	if aiModel == "" {
+		aiModel = "<your-model-id>"
+	}
 	d := scaffoldData{
 		ID:                derivedID(opts),
 		Name:              derivedName(opts),
+		ShortName:         opts.ShortName,
 		Provider:          provider(opts),
 		Bucket:            bucket(opts),
 		GCSWebBase:        opts.GCSWebBase,
@@ -200,12 +319,13 @@ func buildScaffoldData(opts Options, cats []project.CategoryRule) scaffoldData {
 		SourceOwner:       srcOwner,
 		SourceName:        srcName,
 		Categories:        cats,
-		IncludePresubmits: opts.IncludePresubmits,
+		IncludePresubmits: includePresubmits(opts),
 		EngineRef:         opts.EngineRef,
 		Mode:              mode,
-		AIAPI:             opts.AIAPI,
-		AIEndpoint:        opts.AIEndpoint,
-		AIModel:           opts.AIModel,
+		AIEnabled:         effectiveAIEnabled(opts),
+		AIAPI:             aiAPI,
+		AIEndpoint:        aiEndpoint,
+		AIModel:           aiModel,
 		Namespace:         k8sName(derivedID(opts)),
 		DashboardName:     name,
 	}
@@ -230,14 +350,8 @@ func validateGeneratedYAML(yamlText string) error {
 }
 
 func writeFiles(outDir string, files map[string]string) error {
-	// Never silently clobber an existing scaffold or repo.
-	for rel := range files {
-		full := filepath.Join(outDir, rel)
-		if _, err := os.Stat(full); err == nil {
-			return fmt.Errorf("refusing to overwrite existing %s; choose an empty --out directory", full)
-		} else if !os.IsNotExist(err) {
-			return fmt.Errorf("checking %s: %w", full, err)
-		}
+	if err := validateFileDestination(outDir, files); err != nil {
+		return err
 	}
 	for _, rel := range sortedFilePaths(files) {
 		full := filepath.Join(outDir, rel)
@@ -332,11 +446,4 @@ func render(t *template.Template, data any) (string, error) {
 		return "", err
 	}
 	return b.String(), nil
-}
-
-func plural(n int) string {
-	if n == 1 {
-		return "y"
-	}
-	return "ies"
 }
