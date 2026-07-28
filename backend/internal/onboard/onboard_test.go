@@ -229,8 +229,8 @@ func TestValidateOptions(t *testing.T) {
 		{"trailing slash repo", func(o *Options) { o.DashboardRepo = "owner/" }, "owner/name"},
 		{"three-part repo", func(o *Options) { o.SourceRepo = "a/b/c" }, "owner/name"},
 		{"gcsweb without bucket", func(o *Options) { o.GCSWebBase = "https://x" }, "gcsweb-base"},
-		{"ai token without endpoint or model", func(o *Options) { o.AIToken = "t" }, "AI_ENDPOINT and AI_MODEL"},
-		{"ai token without model", func(o *Options) { o.AIToken = "t"; o.AIEndpoint = "https://x" }, "AI_ENDPOINT and AI_MODEL"},
+		{"ai token without endpoint or model", func(o *Options) { o.AIToken = "fixture-token" }, "AI_ENDPOINT and AI_MODEL"},
+		{"ai token without model", func(o *Options) { o.AIToken = "fixture-token"; o.AIEndpoint = "https://x" }, "AI_ENDPOINT and AI_MODEL"},
 		{"endpoint userinfo", func(o *Options) { o.AIEndpoint = "https://user:fixture-secret@example.test/v1" }, "must not contain credentials"},
 		{"endpoint token query", func(o *Options) { o.AIEndpoint = "https://example.test/v1?api_key=fixture-secret" }, "must not contain credential query"},
 		{"relative endpoint", func(o *Options) { o.AIEndpoint = "not-a-url" }, "absolute HTTP or HTTPS"},
@@ -266,14 +266,14 @@ func TestValidateOptions_DefaultsOutDir(t *testing.T) {
 func TestValidateOptions_AIProviderExplicit(t *testing.T) {
 	t.Run("full provider ok", func(t *testing.T) {
 		opts := testOpts()
-		opts.AIToken, opts.AIEndpoint, opts.AIModel = "t", "https://x/chat/completions", "m"
+		opts.AIToken, opts.AIEndpoint, opts.AIModel = "secret-987654", "https://x/chat/completions", "m"
 		if err := validateOptions(&opts); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 	t.Run("no-prompt skips the requirement", func(t *testing.T) {
 		opts := testOpts()
-		opts.AIToken, opts.NoPrompt = "t", true
+		opts.AIToken, opts.NoPrompt = "secret-987654", true
 		if err := validateOptions(&opts); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -600,5 +600,17 @@ func TestValidateOptions_CredentialCheckPrecedesAPIValidation(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), opts.AIToken) {
 		t.Fatalf("credential leaked into error: %v", err)
+	}
+}
+
+func TestValidateAIEndpoint_RejectsCommonCredentialQueryKeys(t *testing.T) {
+	for _, endpoint := range []string{
+		"https://example.test/v1?x-api-key=secret",
+		"https://example.test/v1?subscription-key=secret",
+		"https://example.test/v1?X-Amz-Credential=secret",
+	} {
+		if err := validateAIEndpoint(endpoint); err == nil || !strings.Contains(err.Error(), "credential query") {
+			t.Errorf("validateAIEndpoint(%q) error = %v", endpoint, err)
+		}
 	}
 }

@@ -168,7 +168,7 @@ func validateCredentialSeparation(opts Options) error {
 		opts.DeploymentAIAPI, opts.DeploymentAIEndpoint, opts.DeploymentAIModel,
 	}
 	for _, credential := range []string{opts.AIToken, opts.GitHubToken} {
-		if len(credential) < 8 {
+		if credential == "" {
 			continue
 		}
 		for _, value := range values {
@@ -194,13 +194,26 @@ func validateAIEndpoint(endpoint string) error {
 	if parsed.User != nil {
 		return fmt.Errorf("AI_ENDPOINT must not contain credentials; use AI_TOKEN")
 	}
-	for key := range parsed.Query() {
-		switch strings.ToLower(key) {
-		case "token", "access_token", "api_key", "apikey", "key", "secret", "password", "signature", "sig":
+	query, err := url.ParseQuery(parsed.RawQuery)
+	if err != nil {
+		return fmt.Errorf("AI_ENDPOINT contains an invalid query string")
+	}
+	for key := range query {
+		if credentialQueryKey(key) {
 			return fmt.Errorf("AI_ENDPOINT must not contain credential query parameters; use AI_TOKEN")
 		}
 	}
 	return nil
+}
+
+func credentialQueryKey(key string) bool {
+	lower := strings.ToLower(strings.TrimSpace(key))
+	for _, fragment := range []string{"token", "secret", "password", "credential", "api-key", "api_key", "apikey", "access-key", "access_key", "subscription-key", "subscription_key", "signature"} {
+		if strings.Contains(lower, fragment) {
+			return true
+		}
+	}
+	return lower == "key" || lower == "sig" || strings.HasSuffix(lower, "-key") || strings.HasSuffix(lower, "_key")
 }
 
 // sweepConfig builds the minimal in-memory config needed to run discovery.

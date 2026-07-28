@@ -211,10 +211,11 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 		}
 	}
 	if opts.ShortName == "" {
-		opts.ShortName, err = prompt.line("Short name (optional)", report.Identity.ShortName.Value, false)
+		opts.ShortName, err = prompt.line("Short name (optional; type none to omit)", report.Identity.ShortName.Value, false)
 		if err != nil {
 			return nil, opts, err
 		}
+		opts.ShortName = clearableValue(opts.ShortName)
 	}
 
 	if opts.AIEnabled == nil {
@@ -293,7 +294,7 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 		for _, category := range plan.Project.Categories {
 			categoryTokens = append(categoryTokens, category.ID)
 		}
-		value, err := prompt.line("Category tokens, comma separated (empty for none)", strings.Join(categoryTokens, ","), false)
+		value, err := prompt.line("Category tokens, comma separated (type none to clear)", strings.Join(categoryTokens, ","), false)
 		if err != nil {
 			return nil, opts, err
 		}
@@ -318,7 +319,17 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 	return plan, opts, nil
 }
 
+func clearableValue(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "none", "-":
+		return ""
+	default:
+		return value
+	}
+}
+
 func setPlanCategoryTokens(plan *Plan, opts Options, value string) error {
+	value = clearableValue(value)
 	var categories []project.CategoryRule
 	seen := map[string]struct{}{}
 	for _, token := range strings.Split(value, ",") {

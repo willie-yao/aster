@@ -712,3 +712,43 @@ func TestWizard_APIModeValueIsExplicitWithoutBookkeeping(t *testing.T) {
 		t.Fatalf("API-supplied mode triggered a deployment prompt:\n%s", out.String())
 	}
 }
+
+func TestWizard_ClearSentinelsRemoveOptionalSuggestions(t *testing.T) {
+	input := strings.Join([]string{
+		"",     // strongest dashboard
+		"",     // deployment
+		"",     // dashboard repo
+		"",     // id
+		"",     // name
+		"none", // omit inferred short name
+		"n",    // AI
+		"",     // output
+		"none", // clear categories
+		"y",    // confirm
+	}, "\n") + "\n"
+	deps, out, writer, sweeper := wizardDependencies(input)
+	sweeper.jobs = []models.ProwJob{
+		{Name: "periodic-project-aks-one", JobType: models.JobTypePeriodic},
+		{Name: "periodic-project-aks-two", JobType: models.JobTypePeriodic},
+		{Name: "periodic-project-other-one", JobType: models.JobTypePeriodic},
+	}
+	opts := Options{SourceRepo: "example/my-project", EngineRef: "main", NoPrompt: true}
+	if err := run(context.Background(), opts, deps); err != nil {
+		t.Fatalf("run: %v\n%s", err, out.String())
+	}
+	projectYAML := writer.files["project.yaml"]
+	if strings.Contains(projectYAML, "short_name:") || strings.Contains(projectYAML, "categories:") {
+		t.Fatalf("clear sentinels were ignored:\n%s", projectYAML)
+	}
+}
+
+func TestCredentialSeparationCoversShortTokens(t *testing.T) {
+	opts := testOpts()
+	opts.NoPrompt = true
+	opts.AIToken = "short"
+	opts.Name = "short"
+	err := validateOptions(&opts)
+	if err == nil || !strings.Contains(err.Error(), "credential was supplied") {
+		t.Fatalf("error = %v", err)
+	}
+}
