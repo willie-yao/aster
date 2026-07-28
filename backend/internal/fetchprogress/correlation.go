@@ -170,6 +170,8 @@ func safeTaskPhase(phase string) string {
 		return "Pending"
 	case "running":
 		return "Running"
+	case "scheduled":
+		return "Scheduled"
 	case "succeeded":
 		return "Succeeded"
 	case "failed":
