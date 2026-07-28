@@ -2,8 +2,9 @@
 
 Orka is an optional execution and lifecycle layer for Kubernetes deployments of
 `prow-ai-dashboard`. It isolates long-running work, records Task state, and
-provides durable result retrieval. The dashboard continues to own analysis
-policy, evidence quality, result validation, and every GitHub write.
+provides result retrieval that survives controller restarts when the Orka store
+is persistent. The dashboard continues to own analysis policy, evidence
+quality, result validation, and every GitHub write.
 
 This guide explains how the components fit together. See
 [Kubernetes deployment](kubernetes.md) for Helm values and
@@ -60,7 +61,7 @@ flowchart LR
     API -->|Task result| Server
     Fetcher -->|validated state and output| Data
     Server --> Validator
-    Validator -->|after human confirmation| GitHub
+    Validator -->|confirmed action or enabled automation| GitHub
 ```
 
 Orka is installed as a separate cluster-level release. A cluster may serve
@@ -80,11 +81,11 @@ policy.
 | Model calls for failure analysis | Dashboard analyzer |
 | Task and worker lifecycle | Orka |
 | Task retry, timeout, and execution history | Orka |
-| Durable Task result retrieval | Orka |
+| Durable Task result retrieval | Orka with a persistent store |
 | Cache acceptance and private trace schema | Dashboard |
 | Fix diff and source citation validation | Dashboard |
 | Public dashboard output | Dashboard |
-| Final issue or pull request creation | Dashboard after confirmation |
+| Final issue or pull request creation | Dashboard, based on confirmation and `dry_run` settings |
 
 The removed patched Orka AI worker is not part of the supported design. New
 analysis policy belongs in the dashboard-owned `FailureAnalyzer`, regardless of
@@ -133,8 +134,9 @@ Agent may select `spec.runtime.type: opencode`.
    base mismatches, binary changes, deletions, and push instructions.
 7. The dashboard may reconstruct the change in a clean workspace and run build
    or vet commands.
-8. A maintainer reviews the preview. Only the dashboard uses its GitHub write
-   credential after explicit confirmation.
+8. For on-demand actions, a maintainer reviews the preview before the dashboard
+   uses its GitHub write credential. Scheduled reconciliation can open a draft
+   automatically when the consumer enables it with `dry_run: false`.
 
 The model's final text is a human-readable summary. It is not the authoritative
 structured result contract.
@@ -236,12 +238,14 @@ for a complete investigation.
 | --- | --- |
 | In-process failure analysis | Default and recommended production runtime |
 | Orka container analysis | Experimental Helm-only cron option |
-| Orka fix generation | Optional supported integration |
-| Orka source investigation | Optional supported integration |
+| Orka fix generation | Optional experimental upstream integration |
+| Orka source investigation | Optional experimental upstream integration |
 | Patched generic Orka AI worker | Removed |
 | Orka installed as a dashboard subchart | Not supported |
 
 Install Orka as a separate release and pin a verified chart and runtime images.
+Orka currently labels the project experimental, so verify the required Agent
+runtime against the pinned release or commit before enabling these paths.
 See [Kubernetes deployment](kubernetes.md) for namespace, Secret, RBAC, and
 placement requirements.
 
