@@ -439,3 +439,10 @@ ai:
 		t.Fatalf("checks = %+v", report.Checks)
 	}
 }
+
+func TestNormalizeDoctorProjectDir_IsAbsolute(t *testing.T) {
+	dir := normalizeDoctorProjectDir(".")
+	if !filepath.IsAbs(dir) {
+		t.Fatalf("normalized dir = %q, want absolute", dir)
+	}
+}

@@ -72,11 +72,19 @@ func Doctor(ctx context.Context, opts DoctorOptions) DoctorReport {
 	return runDoctor(ctx, opts, doctorDependencies{files: osDoctorFileSystem{}, sweeper: defaultSweeper{}})
 }
 
-func runDoctor(ctx context.Context, opts DoctorOptions, deps doctorDependencies) DoctorReport {
-	dir := strings.TrimSpace(opts.ProjectDir)
+func normalizeDoctorProjectDir(projectDir string) string {
+	dir := strings.TrimSpace(projectDir)
 	if dir == "" {
 		dir = "."
 	}
+	if absolute, err := filepath.Abs(dir); err == nil {
+		return filepath.Clean(absolute)
+	}
+	return filepath.Clean(dir)
+}
+
+func runDoctor(ctx context.Context, opts DoctorOptions, deps doctorDependencies) DoctorReport {
+	dir := normalizeDoctorProjectDir(opts.ProjectDir)
 	report := DoctorReport{ProjectDir: dir}
 	add := func(name string, status DoctorStatus, detail, action string) {
 		report.Checks = append(report.Checks, DoctorCheck{Name: name, Status: status, Detail: detail, Action: action})
