@@ -133,10 +133,12 @@ func runDoctor(ctx context.Context, opts DoctorOptions, deps doctorDependencies)
 		add("deployment", DoctorFail, "both Pages and Kubernetes deployment files are present", "Keep one first-run deployment profile and remove the unintended scaffold files.")
 	case pagesExists:
 		add("deployment", DoctorPass, "GitHub Pages profile detected", "")
-		includePresubmits = includePresubmits || checkPages(&report, pagesPath, dir, pages, cfg)
+		profilePresubmits := checkPages(&report, pagesPath, dir, pages, cfg)
+		includePresubmits = includePresubmits || profilePresubmits
 	case k8sExists:
 		add("deployment", DoctorPass, "Kubernetes with Helm profile detected", "")
-		includePresubmits = includePresubmits || checkKubernetes(&report, k8s, cfg)
+		profilePresubmits := checkKubernetes(&report, k8s, cfg)
+		includePresubmits = includePresubmits || profilePresubmits
 	default:
 		add("deployment", DoctorFail, "no supported deployment scaffold was found", "Restore .github/workflows/deploy.yml or deploy/values.yaml.")
 	}

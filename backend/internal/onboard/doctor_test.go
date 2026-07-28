@@ -572,3 +572,16 @@ func TestGitHubExpression_RejectsWhitespaceInsideIdentifier(t *testing.T) {
 		t.Fatal("invalid expression was accepted")
 	}
 }
+
+func TestDoctor_ProjectPresubmitsDoNotSkipDeploymentValidation(t *testing.T) {
+	projectYAML := doctorProjectYAML + "source:\n  include_presubmits: true\n"
+	files := doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": "jobs: {}\n"})
+	files["/consumer/project.yaml"] = projectYAML
+	report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
+		files:   files,
+		sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePresubmit}}},
+	})
+	if !hasDoctorCheck(report, "Pages workflow", DoctorFail) {
+		t.Fatalf("project presubmits skipped deployment validation: %+v", report.Checks)
+	}
+}
