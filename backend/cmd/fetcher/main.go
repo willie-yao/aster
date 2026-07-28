@@ -64,16 +64,17 @@ func runOnboard(args []string) {
 	fs := flag.NewFlagSet("onboard", flag.ExitOnError)
 	var opts onboard.Options
 	var enableAI bool
+	var includePresubmits bool
 	fs.StringVar(&opts.TestGrid, "testgrid", "", "testgrid dashboard name to discover jobs from (kubernetes-ecosystem Prow)")
 	fs.StringVar(&opts.Bucket, "bucket", "", "artifact bucket name for bucket-based discovery (any Prow); alternative to -testgrid")
 	fs.StringVar(&opts.GCSWebBase, "gcsweb-base", "", "gcsweb gateway root for the bucket (for example, https://gcsweb.istio.io/s3); selects the gcsweb provider")
 	fs.StringVar(&opts.DashboardRepo, "dashboard-repo", "", "owner/name of the repo that will publish the dashboard")
 	fs.StringVar(&opts.SourceRepo, "source-repo", "", "source repo as owner/name or a GitHub URL; defaults to the current origin in the wizard")
-	fs.StringVar(&opts.Mode, "mode", "pages", "deploy target: pages (GitHub Actions + Pages) or k8s (Kubernetes-native Helm)")
+	fs.StringVar(&opts.Mode, "mode", "", "deploy target: pages (GitHub Actions + Pages) or k8s (Kubernetes-native Helm)")
 	fs.StringVar(&opts.ID, "id", "", "project id (default: derived from repository metadata)")
 	fs.StringVar(&opts.Name, "name", "", "project display name (default: derived from repository metadata)")
 	fs.StringVar(&opts.ShortName, "short-name", "", "short display name (optional)")
-	fs.BoolVar(&opts.IncludePresubmits, "include-presubmits", false, "include presubmit jobs in the sweep")
+	fs.BoolVar(&includePresubmits, "include-presubmits", false, "include presubmit jobs in the sweep")
 	fs.StringVar(&opts.EngineRef, "engine-ref", "main", "prow-ai-dashboard ref the generated workflows pin")
 	fs.StringVar(&opts.OutDir, "out", "", "output directory for the scaffold (default: the dashboard repo name)")
 	fs.BoolVar(&enableAI, "ai", true, "enable deployed AI failure analysis")
@@ -85,10 +86,8 @@ func runOnboard(args []string) {
 
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
-		case "mode":
-			opts.ModeExplicit = true
 		case "include-presubmits":
-			opts.IncludePresubmitsExplicit = true
+			opts.IncludePresubmits = &includePresubmits
 		case "ai":
 			opts.AIEnabled = &enableAI
 		}

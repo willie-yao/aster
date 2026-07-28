@@ -23,17 +23,16 @@ type Options struct {
 	// "pages" (GitHub Actions + Pages, the default) or "k8s" (Kubernetes-native
 	// Helm). It changes which deploy files are emitted and the branding
 	// defaults; project.yaml and prompts/system.md are the same either way.
-	Mode         string
-	ModeExplicit bool
+	Mode string
 
 	// ID, Name, and ShortName override the derived project identity. Optional.
 	ID        string
 	Name      string
 	ShortName string
 
-	// IncludePresubmits widens the sweep to presubmit jobs.
-	IncludePresubmits         bool
-	IncludePresubmitsExplicit bool
+	// IncludePresubmits widens the sweep to presubmit jobs. Nil means the
+	// interactive wizard may ask; non-interactive planning treats nil as false.
+	IncludePresubmits *bool
 
 	// EngineRef is the prow-ai-dashboard ref the generated workflows pin.
 	EngineRef string

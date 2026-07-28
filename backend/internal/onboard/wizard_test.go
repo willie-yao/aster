@@ -671,3 +671,44 @@ func TestSetPlanCategoryTokens_RejectsCredentialBeforeMutation(t *testing.T) {
 		t.Fatal("plan mutated before the credential check")
 	}
 }
+
+func TestWizard_ValidatesSeedCredentialsBeforeOutput(t *testing.T) {
+	deps, out, writer, _ := wizardDependencies("")
+	opts := Options{
+		SourceRepo: "example/project", AIToken: "fixture-ai-token", AIModel: "fixture-ai-token",
+	}
+	err := run(context.Background(), opts, deps)
+	if err == nil || !strings.Contains(err.Error(), "credential was supplied") {
+		t.Fatalf("error = %v", err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("wizard emitted secret-bearing defaults before validation: %q", out.String())
+	}
+	if writer.writes != 0 {
+		t.Fatalf("writes = %d", writer.writes)
+	}
+}
+
+func TestWizard_APIModeValueIsExplicitWithoutBookkeeping(t *testing.T) {
+	input := strings.Join([]string{
+		"",  // strongest dashboard
+		"",  // dashboard repo
+		"",  // id
+		"",  // name
+		"",  // short name
+		"n", // AI
+		"",  // output
+		"y", // confirm
+	}, "\n") + "\n"
+	deps, out, writer, _ := wizardDependencies(input)
+	opts := Options{SourceRepo: "example/project", Mode: modeK8s, EngineRef: "main", NoPrompt: true}
+	if err := run(context.Background(), opts, deps); err != nil {
+		t.Fatalf("run: %v\n%s", err, out.String())
+	}
+	if _, ok := writer.files["deploy/values.yaml"]; !ok {
+		t.Fatalf("API-supplied mode was overwritten: %v", writer.files)
+	}
+	if strings.Contains(out.String(), "Deployment profile") {
+		t.Fatalf("API-supplied mode triggered a deployment prompt:\n%s", out.String())
+	}
+}

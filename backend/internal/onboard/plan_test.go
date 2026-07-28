@@ -130,3 +130,34 @@ func TestApply_RejectsMismatchedDashboardRepoFields(t *testing.T) {
 		t.Fatalf("mismatched plan wrote %d time(s)", writer.writes)
 	}
 }
+
+func TestApply_RejectsGitHubTokenInPlanFiles(t *testing.T) {
+	deps, _, writer, _ := wizardDependencies("")
+	opts := Options{
+		TestGrid: "dashboard-a", DashboardRepo: "example/project-prow-ai-dashboard",
+		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out", NoPrompt: true,
+	}
+	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
+	if err != nil {
+		t.Fatalf("buildPlan: %v", err)
+	}
+	token := "fixture-github-token"
+	plan.Files["prompts/system.md"] = token
+	if err := applyPlan(context.Background(), plan, token, deps); err == nil || !strings.Contains(err.Error(), "contain the supplied GitHub credential") {
+		t.Fatalf("applyPlan error = %v", err)
+	}
+	if writer.writes != 0 {
+		t.Fatalf("credential-bearing plan wrote %d time(s)", writer.writes)
+	}
+}
+
+func TestNormalizeRepositories_ChecksCredentialsBeforeParsing(t *testing.T) {
+	opts := Options{SourceRepo: "fixture-github-token", DashboardRepo: "example/dashboard", GitHubToken: "fixture-github-token"}
+	err := normalizeRepositories(&opts)
+	if err == nil || !strings.Contains(err.Error(), "credential was supplied") {
+		t.Fatalf("error = %v", err)
+	}
+	if strings.Contains(err.Error(), opts.GitHubToken) {
+		t.Fatalf("credential leaked into error: %v", err)
+	}
+}

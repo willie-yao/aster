@@ -114,6 +114,15 @@ func isCancel(value string) bool {
 }
 
 func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Options, error) {
+	if err := validateCredentialSeparation(opts); err != nil {
+		return nil, opts, err
+	}
+	if err := validateAIEndpoint(opts.AIEndpoint); err != nil {
+		return nil, opts, err
+	}
+	if err := validateAIEndpoint(opts.DeploymentAIEndpoint); err != nil {
+		return nil, opts, fmt.Errorf("deployed %w", err)
+	}
 	prompt := newPrompter(deps.terminal)
 	fmt.Fprintln(deps.terminal.Out, "Guided prow-ai-dashboard onboarding")
 	fmt.Fprintln(deps.terminal.Out, "Enter q at any prompt to cancel. No files are written before final confirmation.")
@@ -153,15 +162,16 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 	if err != nil {
 		return nil, opts, err
 	}
-	if selected != nil && !opts.IncludePresubmitsExplicit && selected.PresubmitJobs > 0 {
+	if selected != nil && opts.IncludePresubmits == nil && selected.PresubmitJobs > 0 {
 		defaultInclude := selected.PeriodicJobs == 0
-		opts.IncludePresubmits, err = prompt.confirm("Include presubmit jobs in the dashboard?", defaultInclude)
-		if err != nil {
-			return nil, opts, err
+		include, confirmErr := prompt.confirm("Include presubmit jobs in the dashboard?", defaultInclude)
+		if confirmErr != nil {
+			return nil, opts, confirmErr
 		}
+		opts.IncludePresubmits = &include
 	}
 
-	if !opts.ModeExplicit {
+	if opts.Mode == "" {
 		choice, err := prompt.selectOne("\nDeployment profile", []string{
 			"GitHub Pages, for public artifacts and a provider reachable from GitHub Actions",
 			"Kubernetes with Helm, for cluster-local providers, persistent state, or authenticated actions",

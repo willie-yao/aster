@@ -25,7 +25,7 @@ func buildPlan(ctx context.Context, opts Options, planning planningContext, deps
 	}
 
 	discoveryCtx, cancelDiscovery := context.WithTimeout(ctx, onboardingDiscoveryTimeout)
-	jobs, err := deps.sweeper.Discover(discoveryCtx, sweepConfig(opts), opts.IncludePresubmits)
+	jobs, err := deps.sweeper.Discover(discoveryCtx, sweepConfig(opts), includePresubmits(opts))
 	cancelDiscovery()
 	if err != nil {
 		return nil, fmt.Errorf("job sweep: %w", err)

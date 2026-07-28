@@ -244,6 +244,10 @@ func discover(ctx context.Context, cfg *project.Config, includePresubmits bool) 
 	return periodic, nil
 }
 
+func includePresubmits(opts Options) bool {
+	return opts.IncludePresubmits != nil && *opts.IncludePresubmits
+}
+
 func deploymentAIAPI(opts Options) string {
 	if value := strings.TrimSpace(opts.DeploymentAIAPI); value != "" {
 		return value
@@ -302,7 +306,7 @@ func buildScaffoldData(opts Options, cats []project.CategoryRule) scaffoldData {
 		SourceOwner:       srcOwner,
 		SourceName:        srcName,
 		Categories:        cats,
-		IncludePresubmits: opts.IncludePresubmits,
+		IncludePresubmits: includePresubmits(opts),
 		EngineRef:         opts.EngineRef,
 		Mode:              mode,
 		AIEnabled:         effectiveAIEnabled(opts),

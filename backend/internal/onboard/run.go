@@ -177,6 +177,9 @@ func missingInputs(opts Options) []string {
 }
 
 func normalizeRepositories(opts *Options) error {
+	if err := validateCredentialSeparation(*opts); err != nil {
+		return err
+	}
 	source, err := NormalizeGitHubRepo(opts.SourceRepo)
 	if err != nil {
 		return fmt.Errorf("--source-repo: %w", err)
@@ -203,6 +206,13 @@ func preflightPlan(plan *Plan, deps dependencies) error {
 func applyPlan(ctx context.Context, plan *Plan, githubToken string, deps dependencies) error {
 	if err := validatePlan(plan); err != nil {
 		return err
+	}
+	if githubToken != "" {
+		for _, content := range plan.Files {
+			if strings.Contains(content, githubToken) {
+				return fmt.Errorf("onboarding plan files contain the supplied GitHub credential; no output was applied")
+			}
+		}
 	}
 	if plan.Destination.OpenPR {
 		if githubToken == "" {
