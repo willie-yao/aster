@@ -38,6 +38,29 @@ func FetchJobConfigs(ctx context.Context, client *http.Client, cfg *project.Conf
 	return jobs, err
 }
 
+// FetchCatalogForRepo returns job definitions that test targetRepo from one
+// pinned kubernetes/test-infra snapshot. It does not require a TestGrid
+// dashboard and performs no artifact discovery.
+func FetchCatalogForRepo(ctx context.Context, client *http.Client, targetRepo string) (*Catalog, error) {
+	if strings.TrimSpace(targetRepo) == "" {
+		return nil, fmt.Errorf("target repository is required")
+	}
+	sha, err := resolveMasterSHA(ctx, client)
+	if err != nil {
+		return nil, fmt.Errorf("resolving kubernetes/test-infra master SHA: %w", err)
+	}
+	files, err := listConfigJobsYAMLs(ctx, client, sha)
+	if err != nil {
+		return nil, fmt.Errorf("listing config/jobs/ at %s: %w", sha[:7], err)
+	}
+	log.Printf("  discovered %d candidate YAMLs under %s at test-infra@%s", len(files), configJobsPrefix, sha[:7])
+	_, catalog, err := downloadAndParseAll(ctx, client, sha, files, nil, targetRepo)
+	if err != nil {
+		return nil, err
+	}
+	return catalog, nil
+}
+
 // FetchJobConfigsAndCatalog returns dashboard jobs plus definitions that test
 // targetRepo. Both results come from one pinned test-infra snapshot.
 func FetchJobConfigsAndCatalog(ctx context.Context, client *http.Client, cfg *project.Config, targetRepo string) ([]models.ProwJob, *Catalog, error) {
@@ -198,10 +221,13 @@ func downloadAndParseAll(ctx context.Context, client *http.Client, sha string, f
 				}
 				return
 			}
-			jobs, err := ParseJobConfig(body, f, cfg.TestGrid.Dashboard, cfg.EffectiveCategories())
-			if err != nil {
-				recordErr(fmt.Errorf("parsing %s: %w", f, err))
-				return
+			var jobs []models.ProwJob
+			if cfg != nil {
+				jobs, err = ParseJobConfig(body, f, cfg.TestGrid.Dashboard, cfg.EffectiveCategories())
+				if err != nil {
+					recordErr(fmt.Errorf("parsing %s: %w", f, err))
+					return
+				}
 			}
 			definitions, err := ParseCatalog(body, f)
 			if err != nil {
@@ -223,7 +249,7 @@ func downloadAndParseAll(ctx context.Context, client *http.Client, sha string, f
 	for i, jobs := range perFile {
 		all = append(all, jobs...)
 		for _, definition := range catalogPerFile[i] {
-			matchesDashboard := definitionMatchesDashboard(definition, cfg.TestGrid.Dashboard)
+			matchesDashboard := cfg != nil && definitionMatchesDashboard(definition, cfg.TestGrid.Dashboard)
 			matchesTarget := targetRepo != "" && definition.TestsRepo(targetRepo)
 			if !matchesDashboard && !matchesTarget {
 				continue

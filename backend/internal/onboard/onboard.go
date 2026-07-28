@@ -107,9 +107,11 @@ func validateOptions(opts *Options) error {
 	if _, _, err := parseRepo(opts.DashboardRepo); err != nil {
 		return fmt.Errorf("--dashboard-repo %w", err)
 	}
-	if _, _, err := parseRepo(opts.SourceRepo); err != nil {
+	sourceRepo, err := NormalizeGitHubRepo(opts.SourceRepo)
+	if err != nil {
 		return fmt.Errorf("--source-repo %w", err)
 	}
+	opts.SourceRepo = sourceRepo.FullName
 	if opts.GCSWebBase != "" && opts.Bucket == "" {
 		return fmt.Errorf("--gcsweb-base only applies with --bucket")
 	}

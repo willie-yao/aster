@@ -54,13 +54,17 @@ func main() {
 
 // runOnboard parses the onboard subcommand flags and scaffolds a new dashboard.
 func runOnboard(args []string) {
+	if len(args) > 0 && args[0] == "discover" {
+		runOnboardDiscover(args[1:])
+		return
+	}
 	fs := flag.NewFlagSet("onboard", flag.ExitOnError)
 	var opts onboard.Options
 	fs.StringVar(&opts.TestGrid, "testgrid", "", "testgrid dashboard name to discover jobs from (kubernetes-ecosystem Prow)")
 	fs.StringVar(&opts.Bucket, "bucket", "", "artifact bucket name for bucket-based discovery (any Prow); alternative to -testgrid")
 	fs.StringVar(&opts.GCSWebBase, "gcsweb-base", "", "gcsweb gateway root for the bucket (e.g. https://gcsweb.istio.io/s3); selects the gcsweb provider")
 	fs.StringVar(&opts.DashboardRepo, "dashboard-repo", "", "owner/name of the repo that will publish the dashboard (required)")
-	fs.StringVar(&opts.SourceRepo, "source-repo", "", "owner/name of the code repo under test (required)")
+	fs.StringVar(&opts.SourceRepo, "source-repo", "", "source repo as owner/name or a GitHub URL")
 	fs.StringVar(&opts.Mode, "mode", "pages", "deploy target for the scaffold: \"pages\" (GitHub Actions + Pages) or \"k8s\" (Kubernetes-native Helm)")
 	fs.StringVar(&opts.ID, "id", "", "project id (default: derived from the dashboard repo name)")
 	fs.StringVar(&opts.Name, "name", "", "project display name (default: derived from the id)")
@@ -80,6 +84,25 @@ func runOnboard(args []string) {
 	opts.GitHubToken = os.Getenv("GITHUB_TOKEN")
 
 	if err := onboard.Run(context.Background(), opts); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func runOnboardDiscover(args []string) {
+	fs := flag.NewFlagSet("onboard discover", flag.ExitOnError)
+	var sourceRepo string
+	var jsonOutput bool
+	fs.StringVar(&sourceRepo, "source-repo", "", "source repo as owner/name or a GitHub URL; defaults to the current origin")
+	fs.BoolVar(&jsonOutput, "json", false, "write the discovery report as JSON")
+	_ = fs.Parse(args)
+
+	report, err := onboard.Discover(context.Background(), sourceRepo, os.Getenv("GITHUB_TOKEN"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	if err := onboard.WriteDiscovery(os.Stdout, report, jsonOutput); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}

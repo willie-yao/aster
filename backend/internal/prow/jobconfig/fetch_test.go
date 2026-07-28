@@ -415,3 +415,48 @@ func TestFetchCatalogWithoutTargetKeepsOnlyDashboardJobs(t *testing.T) {
 		t.Fatalf("catalog = %+v", catalog.Jobs)
 	}
 }
+
+func TestFetchCatalogForRepo_DoesNotRequireDashboard(t *testing.T) {
+	tf := &fakeTestInfra{files: map[string]string{
+		"config/jobs/example/project/jobs.yaml": `periodics:
+- name: periodic-example
+  annotations:
+    testgrid-dashboards: dashboard-a, dashboard-b
+  extra_refs:
+  - org: example
+    repo: project
+    base_ref: main
+presubmits:
+  example/project:
+  - name: pull-example
+    annotations:
+      testgrid-dashboards: dashboard-a
+`,
+		"config/jobs/other/project/jobs.yaml": periodicJob("unrelated", "other-dashboard"),
+	}}
+	raw, api, stop := tf.start(t)
+	defer stop()
+	setURLs(t, raw, api)
+
+	catalog, err := FetchCatalogForRepo(context.Background(), http.DefaultClient, "example/project")
+	if err != nil {
+		t.Fatalf("FetchCatalogForRepo: %v", err)
+	}
+	if catalog.Revision != fakeSHA {
+		t.Fatalf("revision = %q, want %q", catalog.Revision, fakeSHA)
+	}
+	if len(catalog.Jobs) != 2 {
+		t.Fatalf("catalog jobs = %d, want 2: %+v", len(catalog.Jobs), catalog.Jobs)
+	}
+	for _, definition := range catalog.Jobs {
+		if !definition.TestsRepo("example/project") {
+			t.Fatalf("catalog included unrelated definition: %+v", definition)
+		}
+	}
+}
+
+func TestFetchCatalogForRepo_RequiresRepository(t *testing.T) {
+	if _, err := FetchCatalogForRepo(context.Background(), http.DefaultClient, ""); err == nil {
+		t.Fatal("expected an error for an empty repository")
+	}
+}
