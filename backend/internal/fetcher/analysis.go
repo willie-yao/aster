@@ -2,6 +2,7 @@ package fetcher
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisruntime"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fetchprogress"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
@@ -52,6 +54,10 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 			}
 		}
 	}
+	p.planProgressAnalyses(len(work))
+	p.completeProgressPhase()
+	p.startProgressPhase(fetchprogress.PhaseAnalysis)
+
 	var container containerFailureAnalyzer
 	var err error
 	if p.opts.AnalysisRuntime.Type == AnalysisRuntimeOrkaContainer {
@@ -70,6 +76,9 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 	}
 	if len(work) == 0 {
 		log.Println("🤖 No failures to analyze")
+		p.completeProgressPhase()
+		p.startProgressPhase(fetchprogress.PhasePatterns)
+		p.skipProgressPatterns()
 		return nil
 	}
 	log.Printf("🤖 Analyzing %d failures with %s...", len(work), p.opts.AnalysisRuntime.Type)
@@ -85,6 +94,10 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 		runtime, err = p.ensureAnalysisRuntime(ctx)
 		if err != nil {
 			log.Printf("⚠ AI runtime setup failed: %v", err)
+			p.skipProgressAnalysis()
+			p.completeProgressPhase()
+			p.startProgressPhase(fetchprogress.PhasePatterns)
+			p.skipProgressPatterns()
 			return nil
 		}
 		traceStore = ai.NewTraceStore()
@@ -96,6 +109,10 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 		})
 		if err != nil {
 			log.Printf("⚠ AI service setup failed: %v", err)
+			p.skipProgressAnalysis()
+			p.completeProgressPhase()
+			p.startProgressPhase(fetchprogress.PhasePatterns)
+			p.skipProgressPatterns()
 			return nil
 		}
 		runtime.LogConfiguration()
@@ -137,6 +154,7 @@ schedule:
 		go func(w aiWork) {
 			defer wg.Done()
 			defer func() { <-sem }()
+			p.startProgressAnalysis()
 			before := w.tc.AISummary
 			result, analyzeErr := analyzer.AnalyzeFailure(analysisCtx, p.client, ai.FailureAnalysisRequest{
 				JobID:               w.jobID,
@@ -146,6 +164,7 @@ schedule:
 				ConsecutiveFailures: consecutiveMap[w.jobID+"::"+w.tc.Name],
 			})
 			if analysisruntime.IsProjectBundleSourceError(analyzeErr) {
+				p.finishProgressAnalysis(fetchprogress.OutcomeFailed)
 				systemicOnce.Do(func() {
 					systemicErr = fmt.Errorf("systemic Orka project setup failure: %w", analyzeErr)
 					cancelAnalysis()
@@ -153,6 +172,7 @@ schedule:
 				return
 			}
 			if orka.IsResultAuthorizationError(analyzeErr) {
+				p.finishProgressAnalysis(fetchprogress.OutcomeFailed)
 				systemicOnce.Do(func() {
 					systemicErr = fmt.Errorf("systemic Orka result API authorization failure: %w", analyzeErr)
 					cancelAnalysis()
@@ -178,9 +198,19 @@ schedule:
 					judgeRevised.Add(1)
 				}
 			}
+			outcome := fetchprogress.OutcomeSucceeded
+			if analyzeErr != nil {
+				outcome = fetchprogress.OutcomeFailed
+				if errors.Is(analyzeErr, context.Canceled) || errors.Is(analyzeErr, context.DeadlineExceeded) {
+					outcome = fetchprogress.OutcomeCancelled
+				}
+			}
+			p.finishProgressAnalysis(outcome)
 		}(w)
 	}
 	wg.Wait()
+	p.cancelQueuedProgressAnalyses()
+	p.completeProgressPhase()
 	if systemicErr != nil {
 		return systemicErr
 	}
@@ -191,12 +221,14 @@ schedule:
 	if n := judgeRan.Load(); n > 0 {
 		log.Printf("⚖️ semantic judge: ran on %d, objected on %d, revised %d", n, judgeObjected.Load(), judgeRevised.Load())
 	}
+	p.startProgressPhase(fetchprogress.PhasePatterns)
 
 	if container != nil {
 		warnOnAnalysisPersistence("container analysis state", container.StateStore().Save)
 		runtime, err = p.ensureAnalysisRuntime(ctx)
 		if err != nil {
 			log.Printf("Warning: cross-build analysis runtime setup failed: %v", err)
+			p.skipProgressPatterns()
 			return nil
 		}
 		traceStore = container.StateStore().TraceStore()
@@ -208,6 +240,7 @@ schedule:
 		})
 		if err != nil {
 			log.Printf("Warning: cross-build analysis service setup failed: %v", err)
+			p.skipProgressPatterns()
 			return nil
 		}
 		runtime.LogConfiguration()

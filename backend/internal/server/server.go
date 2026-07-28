@@ -121,6 +121,8 @@ type Features struct {
 	ActionRequests bool `json:"action_requests,omitempty"`
 	// AnalysisTraces enables the private analysis-trace API and UI.
 	AnalysisTraces bool `json:"analysis_traces,omitempty"`
+	// FetchStatus enables the private aggregate fetch progress API and banner.
+	FetchStatus bool `json:"fetch_status,omitempty"`
 	// AnalysisChat enables authenticated conversations about one published analysis.
 	AnalysisChat        bool `json:"analysis_chat,omitempty"`
 	AnalysisCorrections bool `json:"analysis_corrections,omitempty"`
@@ -171,6 +173,7 @@ func Handler(opts Options) (http.Handler, error) {
 	if opts.Auth != nil {
 		caps.Auth = &AuthInfo{Mode: opts.AuthMode, LoginURL: opts.LoginURL}
 		caps.Features.AnalysisTraces = true
+		caps.Features.FetchStatus = true
 		if reg, ok := opts.Auth.(authRegistrar); ok {
 			reg.Register(mux)
 		}
@@ -178,6 +181,8 @@ func Handler(opts Options) (http.Handler, error) {
 			auth.Middleware(opts.Auth, analysisTracesHandler(opts.DataDir, false)))
 		mux.Handle("GET /api/analysis-traces/download",
 			auth.Middleware(opts.Auth, analysisTracesHandler(opts.DataDir, true)))
+		mux.Handle("/api/fetch-status",
+			readOnly(auth.Middleware(opts.Auth, fetchStatusHandler(opts.DataDir))))
 	}
 
 	if opts.Auth != nil && opts.AnalysisChat != nil {

@@ -13,6 +13,7 @@ import { useColorScheme } from "@mui/material/styles";
 import { Link as RouterLink, Outlet, useLocation } from "react-router-dom";
 import { SearchBar } from "./SearchBar";
 import { ProfileMenu } from "./ProfileMenu";
+import { FetchProgressBanner } from "./FetchProgressBanner";
 import { useManifest } from "../hooks/useManifest";
 import { useCapabilities } from "../hooks/useCapabilities";
 import { usePageDocumentTitle } from "../lib/pageMetadata";
@@ -240,6 +241,7 @@ export function Layout() {
         </Toolbar>
       </AppBar>
 
+      <FetchProgressBanner />
       <Container component="main" maxWidth="xl" sx={{ minWidth: 0, py: 3 }}>
         <Outlet />
       </Container>
