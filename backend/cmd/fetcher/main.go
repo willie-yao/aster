@@ -56,6 +56,10 @@ func main() {
 
 // runOnboard parses the onboard command and its read-only discover mode.
 func runOnboard(args []string) {
+	if len(args) > 0 && args[0] == "doctor" {
+		runOnboardDoctor(args[1:])
+		return
+	}
 	if len(args) > 0 && args[0] == "discover" {
 		runOnboardDiscover(args[1:])
 		return
@@ -127,6 +131,24 @@ func runOnboardDiscover(args []string) {
 	}
 	if err := onboard.WriteDiscovery(os.Stdout, report, jsonOutput); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func runOnboardDoctor(args []string) {
+	fs := flag.NewFlagSet("onboard doctor", flag.ExitOnError)
+	var projectDir string
+	fs.StringVar(&projectDir, "project-dir", ".", "directory containing project.yaml and prompts/system.md")
+	_ = fs.Parse(args)
+
+	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	report := onboard.Doctor(signalCtx, onboard.DoctorOptions{ProjectDir: projectDir})
+	if err := onboard.WriteDoctorReport(os.Stdout, report); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	if report.HasFailures() {
 		os.Exit(1)
 	}
 }
