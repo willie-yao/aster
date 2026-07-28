@@ -147,6 +147,13 @@ func TestValidateProjectBundleSource(t *testing.T) {
 			},
 		},
 		{
+			name: "reserved skill id",
+			want: "reserved engine. namespace",
+			edit: func(t *testing.T, dir string) {
+				writeBundleTestFile(t, filepath.Join(dir, "skills", "reserved.yaml"), "id: engine.consumer\ntriggers: ['failure']\n")
+			},
+		},
+		{
 			name: "oversized project file",
 			want: "exceeds",
 			edit: func(t *testing.T, dir string) {
@@ -200,6 +207,32 @@ func TestValidateProjectBundleSource(t *testing.T) {
 				t.Fatalf("error is not a project bundle source error: %v", err)
 			}
 		})
+	}
+}
+
+func TestProjectBundleOversizeAfterPreflightIsSystemic(t *testing.T) {
+	dir := writeBundleProject(t, "https://model.invalid/v1/chat/completions", "model")
+	promptPath := filepath.Join(dir, "prompts", "system.md")
+	low, high := 1, MaxProjectBundleBytes
+	for low < high {
+		mid := low + (high-low+1)/2
+		writeBundleTestFile(t, promptPath, strings.Repeat("p", mid))
+		if err := ValidateProjectBundleSource(dir); err == nil {
+			low = mid
+		} else {
+			high = mid - 1
+		}
+	}
+	writeBundleTestFile(t, promptPath, strings.Repeat("p", low))
+	if err := ValidateProjectBundleSource(dir); err != nil {
+		t.Fatalf("preflight at %d bytes: %v", low, err)
+	}
+	_, _, err := BuildProjectBundle(dir, ContainerAnalyzerContractVersion, testBundleRequest())
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("BuildProjectBundle error = %v", err)
+	}
+	if !IsProjectBundleSourceError(err) {
+		t.Fatalf("oversize error is not systemic: %v", err)
 	}
 }
 

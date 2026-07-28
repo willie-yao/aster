@@ -20,7 +20,7 @@ for how to pin a release.
 
 ## [Unreleased]
 
-## [1.0.0-beta.7] - 2026-07-27
+## [1.0.0-beta.7] - 2026-07-28
 
 ### Fixed
 

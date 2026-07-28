@@ -124,7 +124,7 @@ func BuildProjectBundleWithCache(projectDir, contractVersion string, request ai.
 		}
 	}
 	if len(data) > MaxProjectBundleBytes {
-		return nil, "", fmt.Errorf("project bundle is %d bytes, exceeds %d-byte ConfigMap environment limit", len(data), MaxProjectBundleBytes)
+		return nil, "", &projectBundleSourceError{err: fmt.Errorf("project bundle is %d bytes, exceeds %d-byte ConfigMap environment limit", len(data), MaxProjectBundleBytes)}
 	}
 	return data, digest, nil
 }
@@ -284,6 +284,9 @@ func loadBundleSkills(projectDir string) ([]ProjectBundleFile, error) {
 		skill, err := skills.ParseAndValidate(data)
 		if err != nil {
 			return nil, fmt.Errorf("validate project bundle skill %s: %w", entry.Name(), err)
+		}
+		if strings.HasPrefix(skill.ID, "engine.") {
+			return nil, fmt.Errorf("consumer skill id %q uses reserved engine. namespace", skill.ID)
 		}
 		if previous, ok := seenIDs[skill.ID]; ok {
 			return nil, fmt.Errorf("duplicate project bundle skill id %q in %s and %s", skill.ID, previous, entry.Name())
