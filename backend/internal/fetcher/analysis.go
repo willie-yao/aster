@@ -140,6 +140,13 @@ schedule:
 				TestCase:            *w.tc,
 				ConsecutiveFailures: consecutiveMap[w.jobID+"::"+w.tc.Name],
 			})
+			if analysisruntime.IsProjectBundleSourceError(analyzeErr) {
+				systemicOnce.Do(func() {
+					systemicErr = fmt.Errorf("systemic Orka project setup failure: %w", analyzeErr)
+					cancelAnalysis()
+				})
+				return
+			}
 			if orka.IsResultAuthorizationError(analyzeErr) {
 				systemicOnce.Do(func() {
 					systemicErr = fmt.Errorf("systemic Orka result API authorization failure: %w", analyzeErr)

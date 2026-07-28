@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/evidenceplan"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"gopkg.in/yaml.v3"
 )
@@ -51,6 +53,27 @@ type ProjectBundle struct {
 	Files           []ProjectBundleFile       `json:"files"`
 }
 
+type projectBundleSourceError struct {
+	err error
+}
+
+func (e *projectBundleSourceError) Error() string { return e.err.Error() }
+func (e *projectBundleSourceError) Unwrap() error { return e.err }
+
+// IsProjectBundleSourceError reports a deterministic project input failure.
+func IsProjectBundleSourceError(err error) bool {
+	var sourceErr *projectBundleSourceError
+	return errors.As(err, &sourceErr)
+}
+
+// ValidateProjectBundleSource validates the static files used by Orka analysis.
+func ValidateProjectBundleSource(projectDir string) error {
+	if _, err := loadProjectBundleSource(projectDir, ContainerAnalyzerContractVersion); err != nil {
+		return fmt.Errorf("validate project bundle source: %w", err)
+	}
+	return nil
+}
+
 // BuildProjectBundle loads and encodes a project bundle without a cache seed.
 func BuildProjectBundle(projectDir, contractVersion string, request ai.FailureAnalysisRequest) ([]byte, string, error) {
 	return BuildProjectBundleWithCache(projectDir, contractVersion, request, nil)
@@ -65,38 +88,10 @@ func BuildProjectBundleWithCache(projectDir, contractVersion string, request ai.
 	if err := validateRequest(request); err != nil {
 		return nil, "", err
 	}
-	cfg, err := project.Load(filepath.Join(projectDir, "project.yaml"))
-	if err != nil {
-		return nil, "", fmt.Errorf("load project bundle config: %w", err)
-	}
-	if cfg.AI != nil && len(cfg.AI.Headers) > 0 {
-		return nil, "", fmt.Errorf("project bundle does not support ai.headers; provider credentials must remain Secret-backed")
-	}
-	projectYAML, err := readBundleFile(filepath.Join(projectDir, "project.yaml"))
+	files, err := loadProjectBundleSource(projectDir, contractVersion)
 	if err != nil {
 		return nil, "", err
 	}
-	projectYAML, err = sanitizeProjectYAML(projectYAML)
-	if err != nil {
-		return nil, "", err
-	}
-	prompt, err := readBundleFile(filepath.Join(projectDir, "prompts", "system.md"))
-	if err != nil {
-		return nil, "", err
-	}
-	if strings.TrimSpace(string(prompt)) == "" {
-		return nil, "", fmt.Errorf("project bundle prompt is empty")
-	}
-	files := []ProjectBundleFile{
-		{Path: "project.yaml", Content: string(projectYAML)},
-		{Path: "prompts/system.md", Content: string(prompt)},
-	}
-	skillFiles, err := loadBundleSkills(projectDir)
-	if err != nil {
-		return nil, "", err
-	}
-	files = append(files, skillFiles...)
-	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	bundle := ProjectBundle{
 		SchemaVersion: ProjectBundleSchemaVersion, ContractVersion: contractVersion,
 		Request: request, CacheSeed: cloneCacheEntries(cacheSeed), Files: files,
@@ -132,6 +127,61 @@ func BuildProjectBundleWithCache(projectDir, contractVersion string, request ai.
 		return nil, "", fmt.Errorf("project bundle is %d bytes, exceeds %d-byte ConfigMap environment limit", len(data), MaxProjectBundleBytes)
 	}
 	return data, digest, nil
+}
+
+func loadProjectBundleSource(projectDir, contractVersion string) ([]ProjectBundleFile, error) {
+	files, err := loadProjectBundleFiles(projectDir)
+	if err != nil {
+		return nil, &projectBundleSourceError{err: err}
+	}
+	probe := ProjectBundle{
+		SchemaVersion: ProjectBundleSchemaVersion, ContractVersion: contractVersion, Files: files,
+	}
+	data, err := json.Marshal(probe)
+	if err != nil {
+		return nil, &projectBundleSourceError{err: fmt.Errorf("marshal project bundle source: %w", err)}
+	}
+	if len(data) > MaxProjectBundleBytes {
+		return nil, &projectBundleSourceError{err: fmt.Errorf("project bundle source is %d bytes, exceeds %d-byte ConfigMap environment limit", len(data), MaxProjectBundleBytes)}
+	}
+	return files, nil
+}
+
+func loadProjectBundleFiles(projectDir string) ([]ProjectBundleFile, error) {
+	projectPath := filepath.Join(projectDir, "project.yaml")
+	projectYAML, err := readBundleFile(projectPath)
+	if err != nil {
+		return nil, err
+	}
+	sanitizedProjectYAML, err := sanitizeProjectYAML(projectYAML)
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := project.Load(projectPath)
+	if err != nil {
+		return nil, fmt.Errorf("load project bundle config: %w", err)
+	}
+	if cfg.AI != nil && len(cfg.AI.Headers) > 0 {
+		return nil, fmt.Errorf("project bundle does not support ai.headers; provider credentials must remain Secret-backed")
+	}
+	prompt, err := readBundleFile(filepath.Join(projectDir, "prompts", "system.md"))
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(string(prompt)) == "" {
+		return nil, fmt.Errorf("project bundle prompt is empty")
+	}
+	files := []ProjectBundleFile{
+		{Path: "project.yaml", Content: string(sanitizedProjectYAML)},
+		{Path: "prompts/system.md", Content: string(prompt)},
+	}
+	skillFiles, err := loadBundleSkills(projectDir)
+	if err != nil {
+		return nil, err
+	}
+	files = append(files, skillFiles...)
+	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	return files, nil
 }
 
 // DecodeProjectBundle validates one strict content-addressed bundle.
@@ -221,6 +271,7 @@ func loadBundleSkills(projectDir string) ([]ProjectBundleFile, error) {
 		return nil, fmt.Errorf("read project bundle skills: %w", err)
 	}
 	files := make([]ProjectBundleFile, 0, len(entries))
+	seenIDs := make(map[string]string)
 	for _, entry := range entries {
 		ext := strings.ToLower(filepath.Ext(entry.Name()))
 		if ext != ".yaml" && ext != ".yml" {
@@ -230,6 +281,14 @@ func loadBundleSkills(projectDir string) ([]ProjectBundleFile, error) {
 		if err != nil {
 			return nil, err
 		}
+		skill, err := skills.ParseAndValidate(data)
+		if err != nil {
+			return nil, fmt.Errorf("validate project bundle skill %s: %w", entry.Name(), err)
+		}
+		if previous, ok := seenIDs[skill.ID]; ok {
+			return nil, fmt.Errorf("duplicate project bundle skill id %q in %s and %s", skill.ID, previous, entry.Name())
+		}
+		seenIDs[skill.ID] = entry.Name()
 		files = append(files, ProjectBundleFile{Path: "skills/" + entry.Name(), Content: string(data)})
 	}
 	return files, nil

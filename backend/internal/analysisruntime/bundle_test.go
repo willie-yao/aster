@@ -78,6 +78,147 @@ func writeBundleTestFile(t *testing.T, path, content string) {
 	}
 }
 
+func TestValidateProjectBundleSource(t *testing.T) {
+	t.Run("valid regular files with multiple skills", func(t *testing.T) {
+		dir := writeBundleProject(t, "https://model.invalid/v1/chat/completions", "model")
+		if err := ValidateProjectBundleSource(dir); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	tests := []struct {
+		name string
+		want string
+		edit func(*testing.T, string)
+	}{
+		{
+			name: "symlinked project",
+			want: "must be a regular file, not a symlink",
+			edit: func(t *testing.T, dir string) {
+				replaceBundleFileWithSymlink(t, filepath.Join(dir, "project.yaml"))
+			},
+		},
+		{
+			name: "symlinked prompt",
+			want: "must be a regular file, not a symlink",
+			edit: func(t *testing.T, dir string) {
+				replaceBundleFileWithSymlink(t, filepath.Join(dir, "prompts", "system.md"))
+			},
+		},
+		{
+			name: "empty prompt",
+			want: "project bundle prompt is empty",
+			edit: func(t *testing.T, dir string) {
+				writeBundleTestFile(t, filepath.Join(dir, "prompts", "system.md"), " \n")
+			},
+		},
+		{
+			name: "missing prompt",
+			want: "no such file",
+			edit: func(t *testing.T, dir string) {
+				if err := os.Remove(filepath.Join(dir, "prompts", "system.md")); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "invalid skills directory",
+			want: "skills path must be a directory",
+			edit: func(t *testing.T, dir string) {
+				skillsDir := filepath.Join(dir, "skills")
+				if err := os.Rename(skillsDir, filepath.Join(dir, "skills-original")); err != nil {
+					t.Fatal(err)
+				}
+				writeBundleTestFile(t, skillsDir, "not a directory\n")
+			},
+		},
+		{
+			name: "symlinked skill",
+			want: "must be a regular file, not a symlink",
+			edit: func(t *testing.T, dir string) {
+				replaceBundleFileWithSymlink(t, filepath.Join(dir, "skills", "z-last.yaml"))
+			},
+		},
+		{
+			name: "invalid skill",
+			want: "validate project bundle skill",
+			edit: func(t *testing.T, dir string) {
+				writeBundleTestFile(t, filepath.Join(dir, "skills", "invalid.yaml"), "id: invalid\ntriggers: ['[']\n")
+			},
+		},
+		{
+			name: "oversized project file",
+			want: "exceeds",
+			edit: func(t *testing.T, dir string) {
+				writeBundleTestFile(t, filepath.Join(dir, "project.yaml"), strings.Repeat("x", MaxProjectBundleBytes+1))
+			},
+		},
+		{
+			name: "invalid project yaml",
+			want: "parse project bundle config",
+			edit: func(t *testing.T, dir string) {
+				writeBundleTestFile(t, filepath.Join(dir, "project.yaml"), ": invalid\n")
+			},
+		},
+		{
+			name: "yaml merge key",
+			want: "merge keys",
+			edit: func(t *testing.T, dir string) {
+				path := filepath.Join(dir, "project.yaml")
+				data, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				data = bytes.Replace(data, []byte("ai:\n"), []byte("defaults: &defaults {tools: [filesystem]}\nai:\n  <<: *defaults\n"), 1)
+				writeBundleTestFile(t, path, string(data))
+			},
+		},
+		{
+			name: "yaml anchor",
+			want: "anchors or aliases",
+			edit: func(t *testing.T, dir string) {
+				path := filepath.Join(dir, "project.yaml")
+				data, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				data = bytes.Replace(data, []byte("name: Analyzer Test"), []byte("name: &project_name Analyzer Test"), 1)
+				writeBundleTestFile(t, path, string(data))
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dir := writeBundleProject(t, "https://model.invalid/v1/chat/completions", "model")
+			test.edit(t, dir)
+			err := ValidateProjectBundleSource(dir)
+			if err == nil || !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(test.want)) {
+				t.Fatalf("ValidateProjectBundleSource error = %v, want %q", err, test.want)
+			}
+			if !IsProjectBundleSourceError(err) {
+				t.Fatalf("error is not a project bundle source error: %v", err)
+			}
+		})
+	}
+}
+
+func replaceBundleFileWithSymlink(t *testing.T, path string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), filepath.Base(path))
+	writeBundleTestFile(t, target, string(data))
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestProjectBundleRoundTripAndMaterialize(t *testing.T) {
 	projectDir := writeBundleProject(t, "https://private-model.example/v1/responses?token=secret", "private-model")
 	request := testBundleRequest()

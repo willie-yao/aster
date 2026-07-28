@@ -20,8 +20,14 @@ for how to pin a release.
 
 ## [Unreleased]
 
+## [1.0.0-beta.7] - 2026-07-27
+
 ### Fixed
 
+- **Fail-fast Orka project setup.** Orka container analysis validates the
+  complete project bundle source before Prow discovery and treats later source
+  failures as systemic, preserving public output, traces, cache, chat, action,
+  notification, and remediation state instead of publishing a degraded pass.
 - **Orka project ConfigMap materialization.** The Helm CronJob now copies the
   allowlisted project configuration, prompt, and optional skill recipes from
   the ConfigMap volume into a read-only runtime mount before Orka container
