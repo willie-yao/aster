@@ -124,10 +124,10 @@ func runDoctor(ctx context.Context, opts DoctorOptions, deps doctorDependencies)
 		add("deployment", DoctorFail, "both Pages and Kubernetes deployment files are present", "Keep one first-run deployment profile and remove the unintended scaffold files.")
 	case pagesExists:
 		add("deployment", DoctorPass, "GitHub Pages profile detected", "")
-		checkPages(&report, pages, cfg)
+		checkPages(&report, pagesPath, dir, pages, cfg)
 	case k8sExists:
 		add("deployment", DoctorPass, "Kubernetes with Helm profile detected", "")
-		checkKubernetes(&report, k8s)
+		checkKubernetes(&report, k8s, cfg)
 	default:
 		add("deployment", DoctorFail, "no supported deployment scaffold was found", "Restore .github/workflows/deploy.yml or deploy/values.yaml.")
 	}
@@ -177,7 +177,7 @@ func yamlBool(value any, defaultValue bool) bool {
 	return defaultValue
 }
 
-func checkPages(report *DoctorReport, workflowYAML []byte, cfg *project.Config) {
+func checkPages(report *DoctorReport, workflowPath, projectDir string, workflowYAML []byte, cfg *project.Config) {
 	add := func(name string, status DoctorStatus, detail, action string) {
 		report.Checks = append(report.Checks, DoctorCheck{Name: name, Status: status, Detail: detail, Action: action})
 	}
@@ -196,6 +196,19 @@ func checkPages(report *DoctorReport, workflowYAML []byte, cfg *project.Config) 
 	if !ok {
 		add("Pages workflow", DoctorFail, "jobs.deploy is missing", "Restore the generated deploy job that calls the reusable dashboard workflow.")
 		return
+	}
+	workflowRoot := filepath.Dir(filepath.Dir(filepath.Dir(workflowPath)))
+	configuredProjectDir := "."
+	if value, ok := deploy.With["project_dir"]; ok {
+		configuredProjectDir = strings.TrimSpace(fmt.Sprint(value))
+	}
+	if strings.Contains(configuredProjectDir, "${{") {
+		add("Pages project_dir", DoctorWarn, "jobs.deploy.with.project_dir is dynamic and cannot be resolved offline", "Confirm the expression resolves to "+projectDir+".")
+	} else {
+		resolvedProjectDir := filepath.Clean(filepath.Join(workflowRoot, configuredProjectDir))
+		if resolvedProjectDir != filepath.Clean(projectDir) {
+			add("Pages project_dir", DoctorFail, "workflow resolves project_dir to "+resolvedProjectDir+", not "+filepath.Clean(projectDir), "Set jobs.deploy.with.project_dir to the consumer directory relative to the repository root.")
+		}
 	}
 	if yamlBool(deploy.With["skip-fetch"], false) {
 		add("Pages AI", DoctorPass, "skip-fetch is enabled, so provider settings are unused", "")
@@ -252,7 +265,7 @@ type doctorKubernetesValues struct {
 	} `yaml:"ai"`
 }
 
-func checkKubernetes(report *DoctorReport, valuesYAML []byte) {
+func checkKubernetes(report *DoctorReport, valuesYAML []byte, cfg *project.Config) {
 	add := func(name string, status DoctorStatus, detail, action string) {
 		report.Checks = append(report.Checks, DoctorCheck{Name: name, Status: status, Detail: detail, Action: action})
 	}
@@ -277,15 +290,29 @@ func checkKubernetes(report *DoctorReport, valuesYAML []byte) {
 		add("Kubernetes AI", DoctorPass, "deployed AI analysis is disabled", "")
 		return
 	}
-	if err := project.ValidateAIAPI(values.AI.API); err != nil {
-		add("Kubernetes AI", DoctorFail, err.Error(), "Set ai.api to chat_completions or responses.")
+	api := values.AI.API
+	endpoint := values.AI.Endpoint
+	model := values.AI.Model
+	if cfg.AI != nil {
+		if strings.TrimSpace(cfg.AI.API) != "" {
+			api = cfg.AI.API
+		}
+		if strings.TrimSpace(cfg.AI.Endpoint) != "" {
+			endpoint = cfg.AI.Endpoint
+		}
+		if strings.TrimSpace(cfg.AI.Model) != "" {
+			model = cfg.AI.Model
+		}
+	}
+	if err := project.ValidateAIAPI(api); err != nil {
+		add("Kubernetes AI", DoctorFail, err.Error(), "Set ai.api to chat_completions or responses in project.yaml or deploy/values.yaml.")
 		return
 	}
 	var missing []string
-	if placeholder(values.AI.Endpoint) {
+	if placeholder(endpoint) {
 		missing = append(missing, "ai.endpoint")
 	}
-	if placeholder(values.AI.Model) {
+	if placeholder(model) {
 		missing = append(missing, "ai.model")
 	}
 	if len(missing) > 0 {

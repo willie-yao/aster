@@ -315,7 +315,7 @@ func TestDoctor_PagesWorkflowCanLiveAboveProjectDir(t *testing.T) {
 	files := doctorMapFS{
 		"/repo/dashboard/project.yaml":       doctorProjectYAML,
 		"/repo/dashboard/prompts/system.md":  "# Prompt\n",
-		"/repo/.github/workflows/deploy.yml": doctorPagesWorkflow,
+		"/repo/.github/workflows/deploy.yml": strings.Replace(doctorPagesWorkflow, "with:\n", "with:\n      project_dir: dashboard\n", 1),
 	}
 	report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/repo/dashboard"}, doctorDependencies{
 		files:   files,
@@ -361,6 +361,44 @@ func TestDoctor_PagesSkipFetchDoesNotRequireProviderMappings(t *testing.T) {
 		sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}},
 	})
 	if !hasDoctorCheck(report, "Pages AI", DoctorPass) {
+		t.Fatalf("checks = %+v", report.Checks)
+	}
+}
+
+func TestDoctor_PagesProjectDirMismatchFails(t *testing.T) {
+	files := doctorMapFS{
+		"/repo/dashboard/project.yaml":       doctorProjectYAML,
+		"/repo/dashboard/prompts/system.md":  "# Prompt\n",
+		"/repo/.github/workflows/deploy.yml": doctorPagesWorkflow,
+	}
+	report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/repo/dashboard"}, doctorDependencies{
+		files:   files,
+		sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}},
+	})
+	if !hasDoctorCheck(report, "Pages project_dir", DoctorFail) {
+		t.Fatalf("checks = %+v", report.Checks)
+	}
+}
+
+func TestDoctor_KubernetesUsesProjectProviderCoordinates(t *testing.T) {
+	projectYAML := doctorProjectYAML + `ai:
+  api: responses
+  endpoint: https://provider.example/v1/responses
+  model: model-id
+`
+	values := `persistence:
+  storageClass: fast
+  accessMode: ReadWriteMany
+ai:
+  enabled: true
+`
+	files := doctorFiles(map[string]string{"/consumer/deploy/values.yaml": values})
+	files["/consumer/project.yaml"] = projectYAML
+	report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
+		files:   files,
+		sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}},
+	})
+	if !hasDoctorCheck(report, "Kubernetes AI", DoctorPass) {
 		t.Fatalf("checks = %+v", report.Checks)
 	}
 }
