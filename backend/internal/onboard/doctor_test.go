@@ -310,3 +310,57 @@ func TestDoctor_PagesRequiresFullGitHubExpressions(t *testing.T) {
 		t.Fatalf("literal strings passed expression validation: %+v", report.Checks)
 	}
 }
+
+func TestDoctor_PagesWorkflowCanLiveAboveProjectDir(t *testing.T) {
+	files := doctorMapFS{
+		"/repo/dashboard/project.yaml":       doctorProjectYAML,
+		"/repo/dashboard/prompts/system.md":  "# Prompt\n",
+		"/repo/.github/workflows/deploy.yml": doctorPagesWorkflow,
+	}
+	report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/repo/dashboard"}, doctorDependencies{
+		files:   files,
+		sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}},
+	})
+	if report.HasFailures() || !hasDoctorCheck(report, "deployment", DoctorPass) {
+		t.Fatalf("checks = %+v", report.Checks)
+	}
+}
+
+func TestDoctor_PagesAcceptsProviderCoordinatesInProjectConfig(t *testing.T) {
+	projectYAML := doctorProjectYAML + `ai:
+  api: responses
+  endpoint: https://provider.example/v1/responses
+  model: model-id
+`
+	workflow := `jobs:
+  deploy:
+    uses: example/workflow@main
+    secrets:
+      AI_TOKEN: ${{ secrets.AI_TOKEN }}
+`
+	files := doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": workflow})
+	files["/consumer/project.yaml"] = projectYAML
+	report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
+		files:   files,
+		sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}},
+	})
+	if !hasDoctorCheck(report, "Pages AI", DoctorPass) {
+		t.Fatalf("checks = %+v", report.Checks)
+	}
+}
+
+func TestDoctor_PagesSkipFetchDoesNotRequireProviderMappings(t *testing.T) {
+	workflow := `jobs:
+  deploy:
+    uses: example/workflow@main
+    with:
+      skip-fetch: true
+`
+	report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
+		files:   doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": workflow}),
+		sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}},
+	})
+	if !hasDoctorCheck(report, "Pages AI", DoctorPass) {
+		t.Fatalf("checks = %+v", report.Checks)
+	}
+}

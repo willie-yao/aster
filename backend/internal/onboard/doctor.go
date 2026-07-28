@@ -108,9 +108,8 @@ func runDoctor(ctx context.Context, opts DoctorOptions, deps doctorDependencies)
 		add("prompts/system.md", DoctorPass, "required project prompt is present", "")
 	}
 
-	pagesPath := filepath.Join(dir, ".github", "workflows", "deploy.yml")
+	pagesPath, pages, pagesErr := findPagesWorkflow(deps.files, dir)
 	k8sPath := filepath.Join(dir, "deploy", "values.yaml")
-	pages, pagesErr := deps.files.ReadFile(pagesPath)
 	k8s, k8sErr := deps.files.ReadFile(k8sPath)
 	pagesExists := pagesErr == nil
 	k8sExists := k8sErr == nil
@@ -125,7 +124,7 @@ func runDoctor(ctx context.Context, opts DoctorOptions, deps doctorDependencies)
 		add("deployment", DoctorFail, "both Pages and Kubernetes deployment files are present", "Keep one first-run deployment profile and remove the unintended scaffold files.")
 	case pagesExists:
 		add("deployment", DoctorPass, "GitHub Pages profile detected", "")
-		checkPages(&report, pages)
+		checkPages(&report, pages, cfg)
 	case k8sExists:
 		add("deployment", DoctorPass, "Kubernetes with Helm profile detected", "")
 		checkKubernetes(&report, k8s)
@@ -147,7 +146,38 @@ func runDoctor(ctx context.Context, opts DoctorOptions, deps doctorDependencies)
 	return report
 }
 
-func checkPages(report *DoctorReport, workflowYAML []byte) {
+func findPagesWorkflow(files doctorFileSystem, projectDir string) (string, []byte, error) {
+	current := filepath.Clean(projectDir)
+	for {
+		path := filepath.Join(current, ".github", "workflows", "deploy.yml")
+		data, err := files.ReadFile(path)
+		if err == nil || !errors.Is(err, os.ErrNotExist) {
+			return path, data, err
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return filepath.Join(projectDir, ".github", "workflows", "deploy.yml"), nil, os.ErrNotExist
+		}
+		current = parent
+	}
+}
+
+func yamlBool(value any, defaultValue bool) bool {
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		if strings.EqualFold(strings.TrimSpace(typed), "true") {
+			return true
+		}
+		if strings.EqualFold(strings.TrimSpace(typed), "false") {
+			return false
+		}
+	}
+	return defaultValue
+}
+
+func checkPages(report *DoctorReport, workflowYAML []byte, cfg *project.Config) {
 	add := func(name string, status DoctorStatus, detail, action string) {
 		report.Checks = append(report.Checks, DoctorCheck{Name: name, Status: status, Detail: detail, Action: action})
 	}
@@ -167,29 +197,28 @@ func checkPages(report *DoctorReport, workflowYAML []byte) {
 		add("Pages workflow", DoctorFail, "jobs.deploy is missing", "Restore the generated deploy job that calls the reusable dashboard workflow.")
 		return
 	}
-	aiEnabled := true
-	if value, ok := deploy.With["ai"]; ok {
-		switch typed := value.(type) {
-		case bool:
-			aiEnabled = typed
-		case string:
-			aiEnabled = !strings.EqualFold(strings.TrimSpace(typed), "false")
-		}
+	if yamlBool(deploy.With["skip-fetch"], false) {
+		add("Pages AI", DoctorPass, "skip-fetch is enabled, so provider settings are unused", "")
+		return
 	}
+	aiEnabled := yamlBool(deploy.With["ai"], true)
 	if !aiEnabled {
 		add("Pages AI", DoctorPass, "deployed AI analysis is disabled", "")
 		return
 	}
-	requiredWith := map[string]string{
-		"ai-api":      "AI_API",
-		"ai-endpoint": "AI_ENDPOINT",
-		"ai-model":    "AI_MODEL",
-	}
 	var missing []string
-	for key, marker := range requiredWith {
-		if !githubExpression(deploy.With[key], "vars", marker) {
-			missing = append(missing, key)
+	if cfg.AI == nil || strings.TrimSpace(cfg.AI.Endpoint) == "" {
+		if !githubExpression(deploy.With["ai-endpoint"], "vars", "AI_ENDPOINT") {
+			missing = append(missing, "ai-endpoint")
 		}
+	}
+	if cfg.AI == nil || strings.TrimSpace(cfg.AI.Model) == "" {
+		if !githubExpression(deploy.With["ai-model"], "vars", "AI_MODEL") {
+			missing = append(missing, "ai-model")
+		}
+	}
+	if value, ok := deploy.With["ai-api"]; ok && !githubExpression(value, "vars", "AI_API") {
+		missing = append(missing, "ai-api")
 	}
 	if !githubExpression(deploy.Secrets["AI_TOKEN"], "secrets", "AI_TOKEN") {
 		missing = append(missing, "secrets.AI_TOKEN")
