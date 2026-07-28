@@ -182,6 +182,7 @@ func checkPages(report *DoctorReport, workflowPath, projectDir string, workflowY
 		report.Checks = append(report.Checks, DoctorCheck{Name: name, Status: status, Detail: detail, Action: action})
 	}
 	type workflowJob struct {
+		Uses    string         `yaml:"uses"`
 		With    map[string]any `yaml:"with"`
 		Secrets map[string]any `yaml:"secrets"`
 	}
@@ -197,13 +198,21 @@ func checkPages(report *DoctorReport, workflowPath, projectDir string, workflowY
 		add("Pages workflow", DoctorFail, "jobs.deploy is missing", "Restore the generated deploy job that calls the reusable dashboard workflow.")
 		return
 	}
+	if !strings.Contains(deploy.Uses, "/.github/workflows/reusable-deploy.yml@") {
+		add("Pages workflow", DoctorFail, "jobs.deploy.uses does not target the dashboard reusable-deploy workflow", "Restore the generated uses target for prow-ai-dashboard/.github/workflows/reusable-deploy.yml.")
+		return
+	}
 	workflowRoot := filepath.Dir(filepath.Dir(filepath.Dir(workflowPath)))
 	configuredProjectDir := "."
 	if value, ok := deploy.With["project_dir"]; ok {
 		configuredProjectDir = strings.TrimSpace(fmt.Sprint(value))
 	}
 	if strings.Contains(configuredProjectDir, "${{") {
-		add("Pages project_dir", DoctorWarn, "jobs.deploy.with.project_dir is dynamic and cannot be resolved offline", "Confirm the expression resolves to "+projectDir+".")
+		expectedProjectDir, err := filepath.Rel(workflowRoot, filepath.Clean(projectDir))
+		if err != nil {
+			expectedProjectDir = "the selected consumer directory relative to the repository root"
+		}
+		add("Pages project_dir", DoctorWarn, "jobs.deploy.with.project_dir is dynamic and cannot be resolved offline", "Confirm the expression resolves to "+filepath.ToSlash(expectedProjectDir)+".")
 	} else {
 		resolvedProjectDir := filepath.Clean(filepath.Join(workflowRoot, configuredProjectDir))
 		if resolvedProjectDir != filepath.Clean(projectDir) {
@@ -220,18 +229,24 @@ func checkPages(report *DoctorReport, workflowPath, projectDir string, workflowY
 		return
 	}
 	var missing []string
+	externalValues := []string{"AI_TOKEN"}
 	if cfg.AI == nil || strings.TrimSpace(cfg.AI.Endpoint) == "" {
+		externalValues = append(externalValues, "AI_ENDPOINT")
 		if !githubExpression(deploy.With["ai-endpoint"], "vars", "AI_ENDPOINT") {
 			missing = append(missing, "ai-endpoint")
 		}
 	}
 	if cfg.AI == nil || strings.TrimSpace(cfg.AI.Model) == "" {
+		externalValues = append(externalValues, "AI_MODEL")
 		if !githubExpression(deploy.With["ai-model"], "vars", "AI_MODEL") {
 			missing = append(missing, "ai-model")
 		}
 	}
-	if value, ok := deploy.With["ai-api"]; ok && !githubExpression(value, "vars", "AI_API") {
-		missing = append(missing, "ai-api")
+	if value, ok := deploy.With["ai-api"]; ok {
+		externalValues = append(externalValues, "AI_API")
+		if !githubExpression(value, "vars", "AI_API") {
+			missing = append(missing, "ai-api")
+		}
 	}
 	if !githubExpression(deploy.Secrets["AI_TOKEN"], "secrets", "AI_TOKEN") {
 		missing = append(missing, "secrets.AI_TOKEN")
@@ -241,13 +256,19 @@ func checkPages(report *DoctorReport, workflowPath, projectDir string, workflowY
 		add("Pages AI", DoctorFail, "deploy job mappings are missing or incorrect: "+strings.Join(missing, ", "), "Regenerate the Pages workflow or repair jobs.deploy.with and jobs.deploy.secrets.")
 		return
 	}
-	add("Pages AI", DoctorPass, "deploy job maps API, endpoint, model, and token settings", "")
-	add("Pages AI values", DoctorWarn, "offline doctor cannot read GitHub repository variable or secret values", "Confirm AI_API, AI_ENDPOINT, AI_MODEL, and AI_TOKEN are set in the dashboard repository.")
+	add("Pages AI", DoctorPass, "deploy job resolves provider coordinates and token settings", "")
+	sort.Strings(externalValues)
+	add("Pages AI values", DoctorWarn, "offline doctor cannot read GitHub repository variable or secret values", "Confirm "+strings.Join(externalValues, ", ")+" are set in the dashboard repository.")
 }
 
 func githubExpression(value any, scope, name string) bool {
-	normalized := strings.Join(strings.Fields(fmt.Sprint(value)), " ")
-	return normalized == fmt.Sprintf("${{ %s.%s }}", scope, name)
+	raw := strings.TrimSpace(fmt.Sprint(value))
+	if !strings.HasPrefix(raw, "${{") || !strings.HasSuffix(raw, "}}") {
+		return false
+	}
+	body := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(raw, "${{"), "}}"))
+	body = strings.Join(strings.Fields(body), "")
+	return body == scope+"."+name
 }
 
 type doctorKubernetesValues struct {
@@ -258,10 +279,12 @@ type doctorKubernetesValues struct {
 		AccessMode    string `yaml:"accessMode"`
 	} `yaml:"persistence"`
 	AI struct {
-		Enabled  *bool  `yaml:"enabled"`
-		API      string `yaml:"api"`
-		Endpoint string `yaml:"endpoint"`
-		Model    string `yaml:"model"`
+		Enabled        *bool  `yaml:"enabled"`
+		API            string `yaml:"api"`
+		Endpoint       string `yaml:"endpoint"`
+		Model          string `yaml:"model"`
+		Token          string `yaml:"token"`
+		ExistingSecret string `yaml:"existingSecret"`
 	} `yaml:"ai"`
 }
 
@@ -319,6 +342,9 @@ func checkKubernetes(report *DoctorReport, valuesYAML []byte, cfg *project.Confi
 		add("Kubernetes AI", DoctorFail, "required settings are missing or placeholders: "+strings.Join(missing, ", "), "Set the model endpoint and model id before installing the chart.")
 	} else {
 		add("Kubernetes AI", DoctorPass, "API, endpoint, and model are configured", "")
+	}
+	if strings.TrimSpace(values.AI.Token) == "" && strings.TrimSpace(values.AI.ExistingSecret) == "" {
+		add("Kubernetes AI credential", DoctorWarn, "no token or existing Secret is declared in deploy/values.yaml", "Supply --set ai.token at install time or configure ai.existingSecret.")
 	}
 }
 

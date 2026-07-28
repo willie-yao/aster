@@ -51,7 +51,7 @@ branding:
 
 const doctorPagesWorkflow = `jobs:
   deploy:
-    uses: example/workflow@main
+    uses: example/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
     with:
       ai-api: ${{ vars.AI_API }}
       ai-endpoint: ${{ vars.AI_ENDPOINT }}
@@ -91,7 +91,7 @@ func TestDoctor_ValidPagesScaffold(t *testing.T) {
 func TestDoctor_PagesMissingProviderMappings(t *testing.T) {
 	sweeper := &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}}
 	report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
-		files:   doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": "jobs:\n  deploy:\n    uses: example/workflow@main\n"}),
+		files:   doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": "jobs:\n  deploy:\n    uses: example/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main\n"}),
 		sweeper: sweeper,
 	})
 	if !hasDoctorCheck(report, "Pages AI", DoctorFail) {
@@ -223,7 +223,7 @@ func TestDoctor_PagesParsingIsScopedToDeployJob(t *testing.T) {
     steps:
       - run: echo "vars.AI_API secrets.AI_TOKEN"
   deploy:
-    uses: example/workflow@main
+    uses: example/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
 `
 	report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
 		files:   doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": workflow}),
@@ -294,7 +294,7 @@ func TestDoctor_PromptReadErrorIsDistinct(t *testing.T) {
 func TestDoctor_PagesRequiresFullGitHubExpressions(t *testing.T) {
 	workflow := `jobs:
   deploy:
-    uses: example/workflow@main
+    uses: example/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
     with:
       ai-api: vars.AI_API
       ai-endpoint: vars.AI_ENDPOINT
@@ -334,7 +334,7 @@ func TestDoctor_PagesAcceptsProviderCoordinatesInProjectConfig(t *testing.T) {
 `
 	workflow := `jobs:
   deploy:
-    uses: example/workflow@main
+    uses: example/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
     secrets:
       AI_TOKEN: ${{ secrets.AI_TOKEN }}
 `
@@ -352,7 +352,7 @@ func TestDoctor_PagesAcceptsProviderCoordinatesInProjectConfig(t *testing.T) {
 func TestDoctor_PagesSkipFetchDoesNotRequireProviderMappings(t *testing.T) {
 	workflow := `jobs:
   deploy:
-    uses: example/workflow@main
+    uses: example/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
     with:
       skip-fetch: true
 `
@@ -399,6 +399,43 @@ ai:
 		sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}},
 	})
 	if !hasDoctorCheck(report, "Kubernetes AI", DoctorPass) {
+		t.Fatalf("checks = %+v", report.Checks)
+	}
+}
+
+func TestDoctor_PagesRequiresReusableDeployTarget(t *testing.T) {
+	workflow := strings.Replace(doctorPagesWorkflow, "example/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main", "example/other/.github/workflows/build.yml@main", 1)
+	report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
+		files:   doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": workflow}),
+		sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}},
+	})
+	if !hasDoctorCheck(report, "Pages workflow", DoctorFail) {
+		t.Fatalf("checks = %+v", report.Checks)
+	}
+}
+
+func TestGitHubExpression_AllowsOptionalWhitespace(t *testing.T) {
+	for _, value := range []string{"${{ vars.AI_MODEL }}", "${{vars.AI_MODEL}}", "${{  vars.AI_MODEL  }}"} {
+		if !githubExpression(value, "vars", "AI_MODEL") {
+			t.Errorf("expression %q rejected", value)
+		}
+	}
+}
+
+func TestDoctor_KubernetesMissingCredentialWarns(t *testing.T) {
+	values := `persistence:
+  storageClass: fast
+  accessMode: ReadWriteMany
+ai:
+  enabled: true
+  endpoint: https://provider.example/v1/chat/completions
+  model: model
+`
+	report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
+		files:   doctorFiles(map[string]string{"/consumer/deploy/values.yaml": values}),
+		sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}},
+	})
+	if !hasDoctorCheck(report, "Kubernetes AI credential", DoctorWarn) {
 		t.Fatalf("checks = %+v", report.Checks)
 	}
 }
