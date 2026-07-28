@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"path"
+	"reflect"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
@@ -116,8 +119,8 @@ func buildPlan(ctx context.Context, opts Options, deps plannerDependencies) (*Pl
 // Apply writes a fully validated plan locally or opens the explicitly requested
 // scaffold pull request.
 func Apply(ctx context.Context, plan *Plan, githubToken string) error {
-	if plan == nil {
-		return fmt.Errorf("onboarding plan is nil")
+	if err := validatePlan(plan); err != nil {
+		return err
 	}
 	dashboardOwner, dashboardName := splitRepo(plan.DashboardRepo)
 	if plan.OpenPR {
@@ -150,6 +153,55 @@ func Apply(ctx context.Context, plan *Plan, githubToken string) error {
 	fmt.Printf("  next: review prompts/system.md and project.yaml, then follow %s\n", scaffoldGuide(plan.Mode))
 	if len(plan.Categories) > 0 {
 		fmt.Printf("  inferred %d categor%s from job names (review/reorder them)\n", len(plan.Categories), plural(len(plan.Categories)))
+	}
+	return nil
+}
+
+func validatePlan(planValue *Plan) error {
+	if planValue == nil {
+		return fmt.Errorf("onboarding plan is nil")
+	}
+	if _, _, err := parseRepo(planValue.DashboardRepo); err != nil {
+		return fmt.Errorf("onboarding plan dashboard repo: %w", err)
+	}
+	if !planValue.OpenPR && strings.TrimSpace(planValue.OutDir) == "" {
+		return fmt.Errorf("onboarding plan output directory is required")
+	}
+
+	expected := map[string]struct{}{
+		"project.yaml":      {},
+		"prompts/system.md": {},
+	}
+	switch planValue.Mode {
+	case modePages:
+		expected[".github/workflows/deploy.yml"] = struct{}{}
+		expected["CHECKLIST.md"] = struct{}{}
+	case modeK8s:
+		expected["deploy/values.yaml"] = struct{}{}
+		expected["deploy/README.md"] = struct{}{}
+	default:
+		return fmt.Errorf("onboarding plan mode %q is invalid", planValue.Mode)
+	}
+	if len(planValue.Files) != len(expected) {
+		return fmt.Errorf("onboarding plan contains an unexpected file set")
+	}
+	for file := range planValue.Files {
+		if _, ok := expected[file]; !ok {
+			return fmt.Errorf("onboarding plan contains unexpected file %q", file)
+		}
+		if path.IsAbs(file) || path.Clean(file) != file || strings.Contains(file, "\\") {
+			return fmt.Errorf("onboarding plan file path %q is not a safe repo-relative path", file)
+		}
+	}
+	if strings.TrimSpace(planValue.Files["prompts/system.md"]) == "" {
+		return fmt.Errorf("onboarding plan prompt is empty")
+	}
+	parsed, err := project.Parse([]byte(planValue.Files["project.yaml"]))
+	if err != nil {
+		return fmt.Errorf("onboarding plan project.yaml failed validation: %w", err)
+	}
+	if !reflect.DeepEqual(*parsed, planValue.Project) {
+		return fmt.Errorf("onboarding plan project metadata does not match project.yaml")
 	}
 	return nil
 }

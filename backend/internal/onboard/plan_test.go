@@ -104,3 +104,51 @@ func TestBuildPlan_OpenPRDoesNotRequireWriteCredential(t *testing.T) {
 		t.Fatalf("Apply error = %v", err)
 	}
 }
+
+func TestApply_RejectsModifiedPlanBeforeWriting(t *testing.T) {
+	outDir := filepath.Join(t.TempDir(), "scaffold")
+	opts := testOpts()
+	opts.OutDir = outDir
+	plan, err := buildPlan(context.Background(), opts, plannerDependencies{
+		discover: func(context.Context, *project.Config, bool) ([]models.ProwJob, error) {
+			return []models.ProwJob{{Name: "periodic-project", JobType: models.JobTypePeriodic}}, nil
+		},
+		prompt: func(context.Context, Options, scaffoldData) (string, error) {
+			return "# Prompt\n", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildPlan: %v", err)
+	}
+	plan.Files["../outside"] = "unsafe"
+	if err := Apply(context.Background(), plan, ""); err == nil || !strings.Contains(err.Error(), "unexpected file") {
+		t.Fatalf("Apply error = %v", err)
+	}
+	if _, err := os.Stat(outDir); !os.IsNotExist(err) {
+		t.Fatalf("modified plan wrote output path %s", outDir)
+	}
+}
+
+func TestApply_RejectsProjectMutationBeforeWriting(t *testing.T) {
+	outDir := filepath.Join(t.TempDir(), "scaffold")
+	opts := testOpts()
+	opts.OutDir = outDir
+	plan, err := buildPlan(context.Background(), opts, plannerDependencies{
+		discover: func(context.Context, *project.Config, bool) ([]models.ProwJob, error) {
+			return []models.ProwJob{{Name: "periodic-project", JobType: models.JobTypePeriodic}}, nil
+		},
+		prompt: func(context.Context, Options, scaffoldData) (string, error) {
+			return "# Prompt\n", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildPlan: %v", err)
+	}
+	plan.Files["project.yaml"] = "id: invalid\n"
+	if err := Apply(context.Background(), plan, ""); err == nil || !strings.Contains(err.Error(), "failed validation") {
+		t.Fatalf("Apply error = %v", err)
+	}
+	if _, err := os.Stat(outDir); !os.IsNotExist(err) {
+		t.Fatalf("modified plan wrote output path %s", outDir)
+	}
+}
