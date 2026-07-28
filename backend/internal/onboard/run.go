@@ -2,6 +2,7 @@ package onboard
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -204,15 +205,11 @@ func preflightPlan(plan *Plan, deps dependencies) error {
 }
 
 func applyPlan(ctx context.Context, plan *Plan, githubToken string, deps dependencies) error {
+	if planContainsCredential(plan, githubToken) {
+		return fmt.Errorf("onboarding plan contains the supplied GitHub credential; no output was applied")
+	}
 	if err := validatePlan(plan); err != nil {
 		return err
-	}
-	if githubToken != "" {
-		for _, content := range plan.Files {
-			if strings.Contains(content, githubToken) {
-				return fmt.Errorf("onboarding plan files contain the supplied GitHub credential; no output was applied")
-			}
-		}
 	}
 	if plan.Destination.OpenPR {
 		if githubToken == "" {
@@ -233,6 +230,22 @@ func applyPlan(ctx context.Context, plan *Plan, githubToken string, deps depende
 	fmt.Fprintf(deps.terminal.Out, "Scaffold written to %s/\n", plan.Destination.OutDir)
 	fmt.Fprintf(deps.terminal.Out, "Next: review prompts/system.md and project.yaml, then follow %s.\n", scaffoldGuide(plan.Deployment.Mode))
 	return nil
+}
+
+func planContainsCredential(planValue *Plan, credential string) bool {
+	if planValue == nil || credential == "" {
+		return false
+	}
+	metadata, err := json.Marshal(planValue)
+	if err != nil || strings.Contains(string(metadata), credential) {
+		return true
+	}
+	for path, content := range planValue.Files {
+		if strings.Contains(path, credential) || strings.Contains(content, credential) {
+			return true
+		}
+	}
+	return false
 }
 
 func validatePlan(planValue *Plan) error {

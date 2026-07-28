@@ -143,7 +143,7 @@ func TestApply_RejectsGitHubTokenInPlanFiles(t *testing.T) {
 	}
 	token := "fixture-github-token"
 	plan.Files["prompts/system.md"] = token
-	if err := applyPlan(context.Background(), plan, token, deps); err == nil || !strings.Contains(err.Error(), "contain the supplied GitHub credential") {
+	if err := applyPlan(context.Background(), plan, token, deps); err == nil || !strings.Contains(err.Error(), "contains the supplied GitHub credential") {
 		t.Fatalf("applyPlan error = %v", err)
 	}
 	if writer.writes != 0 {
@@ -159,5 +159,30 @@ func TestNormalizeRepositories_ChecksCredentialsBeforeParsing(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), opts.GitHubToken) {
 		t.Fatalf("credential leaked into error: %v", err)
+	}
+}
+
+func TestApply_RejectsGitHubTokenInPlanMetadataBeforeValidation(t *testing.T) {
+	deps, _, writer, _ := wizardDependencies("")
+	opts := Options{
+		TestGrid: "dashboard-a", DashboardRepo: "example/project-prow-ai-dashboard",
+		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out", NoPrompt: true,
+	}
+	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
+	if err != nil {
+		t.Fatalf("buildPlan: %v", err)
+	}
+	token := "fixture-github-token"
+	plan.Destination.OutDir = token
+	plan.Deployment.Mode = token
+	err = applyPlan(context.Background(), plan, token, deps)
+	if err == nil || !strings.Contains(err.Error(), "contains the supplied GitHub credential") {
+		t.Fatalf("applyPlan error = %v", err)
+	}
+	if strings.Contains(err.Error(), token) {
+		t.Fatalf("credential leaked into error: %v", err)
+	}
+	if writer.writes != 0 {
+		t.Fatalf("credential-bearing plan wrote %d time(s)", writer.writes)
 	}
 }
