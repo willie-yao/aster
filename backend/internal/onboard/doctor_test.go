@@ -23,13 +23,15 @@ func (f doctorMapFS) ReadFile(path string) ([]byte, error) {
 }
 
 type doctorFakeSweeper struct {
-	jobs  []models.ProwJob
-	err   error
-	calls int
+	jobs    []models.ProwJob
+	err     error
+	calls   int
+	include bool
 }
 
-func (f *doctorFakeSweeper) Discover(context.Context, *project.Config, bool) ([]models.ProwJob, error) {
+func (f *doctorFakeSweeper) Discover(_ context.Context, _ *project.Config, include bool) ([]models.ProwJob, error) {
 	f.calls++
+	f.include = include
 	return append([]models.ProwJob(nil), f.jobs...), f.err
 }
 
@@ -51,7 +53,7 @@ branding:
 
 const doctorPagesWorkflow = `jobs:
   deploy:
-    uses: example/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
+    uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
     with:
       ai-api: ${{ vars.AI_API }}
       ai-endpoint: ${{ vars.AI_ENDPOINT }}
@@ -91,7 +93,7 @@ func TestDoctor_ValidPagesScaffold(t *testing.T) {
 func TestDoctor_PagesMissingProviderMappings(t *testing.T) {
 	sweeper := &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}}
 	report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
-		files:   doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": "jobs:\n  deploy:\n    uses: example/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main\n"}),
+		files:   doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": "jobs:\n  deploy:\n    uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main\n"}),
 		sweeper: sweeper,
 	})
 	if !hasDoctorCheck(report, "Pages AI", DoctorFail) {
@@ -223,7 +225,7 @@ func TestDoctor_PagesParsingIsScopedToDeployJob(t *testing.T) {
     steps:
       - run: echo "vars.AI_API secrets.AI_TOKEN"
   deploy:
-    uses: example/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
+    uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
 `
 	report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
 		files:   doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": workflow}),
@@ -294,7 +296,7 @@ func TestDoctor_PromptReadErrorIsDistinct(t *testing.T) {
 func TestDoctor_PagesRequiresFullGitHubExpressions(t *testing.T) {
 	workflow := `jobs:
   deploy:
-    uses: example/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
+    uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
     with:
       ai-api: vars.AI_API
       ai-endpoint: vars.AI_ENDPOINT
@@ -334,7 +336,7 @@ func TestDoctor_PagesAcceptsProviderCoordinatesInProjectConfig(t *testing.T) {
 `
 	workflow := `jobs:
   deploy:
-    uses: example/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
+    uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
     secrets:
       AI_TOKEN: ${{ secrets.AI_TOKEN }}
 `
@@ -352,7 +354,7 @@ func TestDoctor_PagesAcceptsProviderCoordinatesInProjectConfig(t *testing.T) {
 func TestDoctor_PagesSkipFetchDoesNotRequireProviderMappings(t *testing.T) {
 	workflow := `jobs:
   deploy:
-    uses: example/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
+    uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
     with:
       skip-fetch: true
 `
@@ -404,7 +406,7 @@ ai:
 }
 
 func TestDoctor_PagesRequiresReusableDeployTarget(t *testing.T) {
-	workflow := strings.Replace(doctorPagesWorkflow, "example/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main", "example/other/.github/workflows/build.yml@main", 1)
+	workflow := strings.Replace(doctorPagesWorkflow, "willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main", "example/other/.github/workflows/build.yml@main", 1)
 	report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
 		files:   doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": workflow}),
 		sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}},
@@ -448,13 +450,13 @@ func TestNormalizeDoctorProjectDir_IsAbsolute(t *testing.T) {
 }
 
 func TestReusableDeployReference_RequiresExactPathAndRef(t *testing.T) {
-	valid := "example/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main"
+	valid := "willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main"
 	if !reusableDeployReference(valid) {
 		t.Fatalf("valid reference rejected: %s", valid)
 	}
 	for _, invalid := range []string{
-		"example/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@",
-		"example/prow-ai-dashboard/.github/workflows/other.yml@main",
+		"willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@",
+		"willie-yao/prow-ai-dashboard/.github/workflows/other.yml@main",
 		"./.github/workflows/reusable-deploy.yml@main",
 	} {
 		if reusableDeployReference(invalid) {
@@ -480,4 +482,68 @@ ai:
 	if !hasDoctorCheck(report, "Kubernetes AI credential", DoctorWarn) {
 		t.Fatalf("checks = %+v", report.Checks)
 	}
+}
+
+func TestDoctor_PagesDynamicAIBranchWarns(t *testing.T) {
+	workflow := `jobs:
+  deploy:
+    uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
+    with:
+      ai: ${{ vars.ENABLE_AI }}
+`
+	report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
+		files:   doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": workflow}),
+		sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}},
+	})
+	if !hasDoctorCheck(report, "Pages AI", DoctorWarn) {
+		t.Fatalf("checks = %+v", report.Checks)
+	}
+}
+
+func TestDoctor_ProjectAPIOverridesStaleWorkflowFallback(t *testing.T) {
+	projectYAML := doctorProjectYAML + `ai:
+  api: responses
+  endpoint: https://provider.example/v1/responses
+  model: model-id
+`
+	workflow := `jobs:
+  deploy:
+    uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
+    with:
+      ai-api: stale-literal
+    secrets:
+      AI_TOKEN: ${{ secrets.AI_TOKEN }}
+`
+	files := doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": workflow})
+	files["/consumer/project.yaml"] = projectYAML
+	report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
+		files:   files,
+		sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}},
+	})
+	if !hasDoctorCheck(report, "Pages AI", DoctorPass) {
+		t.Fatalf("checks = %+v", report.Checks)
+	}
+}
+
+func TestDoctor_DeploymentPresubmitSettingsReachSweep(t *testing.T) {
+	t.Run("pages", func(t *testing.T) {
+		workflow := strings.Replace(doctorPagesWorkflow, "with:\n", "with:\n      include-presubmits: true\n", 1)
+		sweeper := &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "pull-job", JobType: models.JobTypePresubmit}}}
+		_ = runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
+			files: doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": workflow}), sweeper: sweeper,
+		})
+		if !sweeper.include {
+			t.Fatal("Pages include-presubmits did not reach discovery")
+		}
+	})
+	t.Run("kubernetes", func(t *testing.T) {
+		values := "persistence:\n  storageClass: fast\nfetcher:\n  includePresubmits: true\n"
+		sweeper := &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "pull-job", JobType: models.JobTypePresubmit}}}
+		_ = runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
+			files: doctorFiles(map[string]string{"/consumer/deploy/values.yaml": values}), sweeper: sweeper,
+		})
+		if !sweeper.include {
+			t.Fatal("Kubernetes includePresubmits did not reach discovery")
+		}
+	})
 }

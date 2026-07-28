@@ -105,6 +105,7 @@ func runDoctor(ctx context.Context, opts DoctorOptions, deps doctorDependencies)
 
 	promptPath := filepath.Join(dir, "prompts", "system.md")
 	prompt, err := deps.files.ReadFile(promptPath)
+	includePresubmits := cfg.Source.IncludePresubmits
 	switch {
 	case errors.Is(err, os.ErrNotExist):
 		add("prompts/system.md", DoctorFail, "the required project prompt is missing", "Create a non-empty prompts/system.md and review its project-specific claims.")
@@ -132,16 +133,16 @@ func runDoctor(ctx context.Context, opts DoctorOptions, deps doctorDependencies)
 		add("deployment", DoctorFail, "both Pages and Kubernetes deployment files are present", "Keep one first-run deployment profile and remove the unintended scaffold files.")
 	case pagesExists:
 		add("deployment", DoctorPass, "GitHub Pages profile detected", "")
-		checkPages(&report, pagesPath, dir, pages, cfg)
+		includePresubmits = includePresubmits || checkPages(&report, pagesPath, dir, pages, cfg)
 	case k8sExists:
 		add("deployment", DoctorPass, "Kubernetes with Helm profile detected", "")
-		checkKubernetes(&report, k8s, cfg)
+		includePresubmits = includePresubmits || checkKubernetes(&report, k8s, cfg)
 	default:
 		add("deployment", DoctorFail, "no supported deployment scaffold was found", "Restore .github/workflows/deploy.yml or deploy/values.yaml.")
 	}
 
 	discoveryCtx, cancel := context.WithTimeout(ctx, onboardingDiscoveryTimeout)
-	jobs, err := deps.sweeper.Discover(discoveryCtx, cfg, cfg.Source.IncludePresubmits)
+	jobs, err := deps.sweeper.Discover(discoveryCtx, cfg, includePresubmits)
 	cancel()
 	if err != nil {
 		action := "Verify the TestGrid dashboard or artifact bucket, GitHub access, and network connectivity, then rerun doctor."
@@ -185,7 +186,7 @@ func yamlBool(value any, defaultValue bool) bool {
 	return defaultValue
 }
 
-func checkPages(report *DoctorReport, workflowPath, projectDir string, workflowYAML []byte, cfg *project.Config) {
+func checkPages(report *DoctorReport, workflowPath, projectDir string, workflowYAML []byte, cfg *project.Config) (includePresubmits bool) {
 	add := func(name string, status DoctorStatus, detail, action string) {
 		report.Checks = append(report.Checks, DoctorCheck{Name: name, Status: status, Detail: detail, Action: action})
 	}
@@ -210,6 +211,13 @@ func checkPages(report *DoctorReport, workflowPath, projectDir string, workflowY
 		add("Pages workflow", DoctorFail, "jobs.deploy.uses does not target the dashboard reusable-deploy workflow", "Restore the generated uses target for prow-ai-dashboard/.github/workflows/reusable-deploy.yml.")
 		return
 	}
+	if value, ok := deploy.With["include-presubmits"]; ok {
+		if dynamicExpression(value) {
+			add("Pages presubmits", DoctorWarn, "include-presubmits is dynamic and cannot be resolved offline", "Confirm the expression enables presubmits when the dashboard depends on them.")
+		} else {
+			includePresubmits = yamlBool(value, false)
+		}
+	}
 	workflowRoot := filepath.Dir(filepath.Dir(filepath.Dir(workflowPath)))
 	configuredProjectDir := "."
 	if value, ok := deploy.With["project_dir"]; ok {
@@ -226,6 +234,10 @@ func checkPages(report *DoctorReport, workflowPath, projectDir string, workflowY
 		if resolvedProjectDir != filepath.Clean(projectDir) {
 			add("Pages project_dir", DoctorFail, "workflow resolves project_dir to "+resolvedProjectDir+", not "+filepath.Clean(projectDir), "Set jobs.deploy.with.project_dir to the consumer directory relative to the repository root.")
 		}
+	}
+	if dynamicExpression(deploy.With["skip-fetch"]) || dynamicExpression(deploy.With["ai"]) {
+		add("Pages AI", DoctorWarn, "skip-fetch or ai is dynamic and provider requirements cannot be resolved offline", "Confirm every runtime branch has the provider mappings it uses.")
+		return
 	}
 	if yamlBool(deploy.With["skip-fetch"], false) {
 		add("Pages AI", DoctorPass, "skip-fetch is enabled, so provider settings are unused", "")
@@ -250,10 +262,12 @@ func checkPages(report *DoctorReport, workflowPath, projectDir string, workflowY
 			missing = append(missing, "ai-model")
 		}
 	}
-	if value, ok := deploy.With["ai-api"]; ok {
-		externalValues = append(externalValues, "AI_API")
-		if !githubExpression(value, "vars", "AI_API") {
-			missing = append(missing, "ai-api")
+	if cfg.AI == nil || strings.TrimSpace(cfg.AI.API) == "" {
+		if value, ok := deploy.With["ai-api"]; ok {
+			externalValues = append(externalValues, "AI_API")
+			if !githubExpression(value, "vars", "AI_API") {
+				missing = append(missing, "ai-api")
+			}
 		}
 	}
 	if !githubExpression(deploy.Secrets["AI_TOKEN"], "secrets", "AI_TOKEN") {
@@ -267,6 +281,11 @@ func checkPages(report *DoctorReport, workflowPath, projectDir string, workflowY
 	add("Pages AI", DoctorPass, "deploy job resolves provider coordinates and token settings", "")
 	sort.Strings(externalValues)
 	add("Pages AI values", DoctorWarn, "offline doctor cannot read GitHub repository variable or secret values", "Confirm "+strings.Join(externalValues, ", ")+" are set in the dashboard repository.")
+	return includePresubmits
+}
+
+func dynamicExpression(value any) bool {
+	return strings.Contains(fmt.Sprint(value), "${{")
 }
 
 func reusableDeployReference(value string) bool {
@@ -275,7 +294,7 @@ func reusableDeployReference(value string) bool {
 		return false
 	}
 	parts := strings.Split(workflow, "/")
-	return len(parts) == 5 && parts[0] != "" && parts[1] != "" &&
+	return len(parts) == 5 && parts[0] == "willie-yao" && parts[1] == "prow-ai-dashboard" &&
 		parts[2] == ".github" && parts[3] == "workflows" && parts[4] == "reusable-deploy.yml"
 }
 
@@ -296,6 +315,9 @@ type doctorKubernetesValues struct {
 		StorageClass  string `yaml:"storageClass"`
 		AccessMode    string `yaml:"accessMode"`
 	} `yaml:"persistence"`
+	Fetcher struct {
+		IncludePresubmits bool `yaml:"includePresubmits"`
+	} `yaml:"fetcher"`
 	AI struct {
 		Enabled        *bool  `yaml:"enabled"`
 		API            string `yaml:"api"`
@@ -306,7 +328,7 @@ type doctorKubernetesValues struct {
 	} `yaml:"ai"`
 }
 
-func checkKubernetes(report *DoctorReport, valuesYAML []byte, cfg *project.Config) {
+func checkKubernetes(report *DoctorReport, valuesYAML []byte, cfg *project.Config) (includePresubmits bool) {
 	add := func(name string, status DoctorStatus, detail, action string) {
 		report.Checks = append(report.Checks, DoctorCheck{Name: name, Status: status, Detail: detail, Action: action})
 	}
@@ -315,6 +337,7 @@ func checkKubernetes(report *DoctorReport, valuesYAML []byte, cfg *project.Confi
 		add("Kubernetes values", DoctorFail, err.Error(), "Fix deploy/values.yaml so it is valid YAML.")
 		return
 	}
+	includePresubmits = values.Fetcher.IncludePresubmits
 	if !placeholder(values.Persistence.ExistingClaim) {
 		add("Kubernetes storage", DoctorPass, "persistence.existingClaim is configured", "")
 	} else if values.Persistence.Enabled != nil && !*values.Persistence.Enabled {
@@ -364,6 +387,7 @@ func checkKubernetes(report *DoctorReport, valuesYAML []byte, cfg *project.Confi
 	if placeholder(values.AI.Token) && placeholder(values.AI.ExistingSecret) {
 		add("Kubernetes AI credential", DoctorWarn, "no token or existing Secret is declared in deploy/values.yaml", "Supply --set ai.token at install time or configure ai.existingSecret.")
 	}
+	return includePresubmits
 }
 
 func placeholder(value string) bool {
