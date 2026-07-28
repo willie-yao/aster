@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -421,6 +422,8 @@ func (t *Tracker) recoverInterrupted() {
 	}
 	t.status = previous
 	if previous.Outcome != OutcomeRunning {
+		t.phaseCompleted = true
+		t.appendHistoryLocked(previous.PhaseStartedAt)
 		return
 	}
 	now := t.now()
@@ -769,7 +772,10 @@ func (t *Tracker) RunHeartbeats(ctx context.Context) {
 func (t *Tracker) Snapshot() Status {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.status
+	snapshot := t.status
+	snapshot.PhaseDurationsMS = maps.Clone(t.status.PhaseDurationsMS)
+	snapshot.CurrentTasks = append([]TaskMapping(nil), t.status.CurrentTasks...)
+	return snapshot
 }
 
 func (t *Tracker) update(force bool, mutate func(*Status)) {

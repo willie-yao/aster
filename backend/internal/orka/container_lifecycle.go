@@ -121,8 +121,12 @@ func ReconcileContainerAnalysisResourcesWithResult(ctx context.Context, client C
 		}
 		result.Adopted = false
 	}
-	if err := ApplyContainerAnalysisResources(ctx, client, resources); err != nil {
+	applyResult, err := ApplyContainerAnalysisResourcesWithResult(ctx, client, resources)
+	if err != nil {
 		return result, err
+	}
+	if applyResult.Adopted {
+		result.Adopted = true
 	}
 	return result, nil
 }
@@ -212,54 +216,68 @@ func MarkContainerAnalysisFailureConsumed(ctx context.Context, client ContainerA
 	return nil
 }
 
+// ContainerAnalysisApplyResult reports whether another claimant supplied the Task.
+type ContainerAnalysisApplyResult struct {
+	Adopted bool
+}
+
 // ApplyContainerAnalysisResources claims the bundle before applying its Task.
 func ApplyContainerAnalysisResources(ctx context.Context, client ContainerAnalysisResourceClient, resources ContainerAnalysisResources) error {
+	_, err := ApplyContainerAnalysisResourcesWithResult(ctx, client, resources)
+	return err
+}
+
+// ApplyContainerAnalysisResourcesWithResult also reports a lost-claim adoption.
+func ApplyContainerAnalysisResourcesWithResult(ctx context.Context, client ContainerAnalysisResourceClient, resources ContainerAnalysisResources) (ContainerAnalysisApplyResult, error) {
 	bundleNamespace, bundleName, err := containerResourceRef(resources.BundleConfigMap)
 	if err != nil {
-		return err
+		return ContainerAnalysisApplyResult{}, err
 	}
 	taskNamespace, taskName, err := containerResourceRef(resources.Task)
 	if err != nil {
-		return err
+		return ContainerAnalysisApplyResult{}, err
 	}
 	if taskNamespace != bundleNamespace {
-		return fmt.Errorf("container analysis Task and bundle namespaces differ")
+		return ContainerAnalysisApplyResult{}, fmt.Errorf("container analysis Task and bundle namespaces differ")
 	}
 	claim, err := newContainerAnalysisBundleClaim()
 	if err != nil {
-		return err
+		return ContainerAnalysisApplyResult{}, err
 	}
 	if _, err := client.CreateIfAbsent(ctx, configMapsGVR, bundleNamespace, resources.BundleConfigMap); err != nil {
-		return fmt.Errorf("create container analysis bundle %s: %w", bundleName, err)
+		return ContainerAnalysisApplyResult{}, fmt.Errorf("create container analysis bundle %s: %w", bundleName, err)
 	}
 	existing, err := client.Get(ctx, configMapsGVR, bundleNamespace, bundleName)
 	if err != nil {
-		return fmt.Errorf("read container analysis bundle %s: %w", bundleName, err)
+		return ContainerAnalysisApplyResult{}, fmt.Errorf("read container analysis bundle %s: %w", bundleName, err)
 	}
 	if err := validateExistingContainerAnalysisBundle(existing, resources.BundleConfigMap); err != nil {
-		return err
+		return ContainerAnalysisApplyResult{}, err
 	}
 	if _, err := client.PatchAnnotations(ctx, configMapsGVR, bundleNamespace, bundleName, map[string]string{
 		containerAnalysisClaimAnnotation:      claim,
 		containerAnalysisClaimTimeAnnotation:  time.Now().UTC().Format(time.RFC3339Nano),
 		containerAnalysisConsumedAtAnnotation: "",
 	}); err != nil {
-		return fmt.Errorf("claim container analysis bundle %s: %w", bundleName, err)
+		return ContainerAnalysisApplyResult{}, fmt.Errorf("claim container analysis bundle %s: %w", bundleName, err)
 	}
 	claimed, err := client.Get(ctx, configMapsGVR, bundleNamespace, bundleName)
 	if err != nil {
-		return fmt.Errorf("verify container analysis bundle claim %s: %w", bundleName, err)
+		return ContainerAnalysisApplyResult{}, fmt.Errorf("verify container analysis bundle claim %s: %w", bundleName, err)
 	}
 	if err := validateExistingContainerAnalysisBundle(claimed, resources.BundleConfigMap); err != nil {
-		return err
+		return ContainerAnalysisApplyResult{}, err
 	}
 	if claimed.GetAnnotations()[containerAnalysisClaimAnnotation] != claim {
-		return waitForClaimedContainerAnalysisTask(ctx, client, taskNamespace, taskName, resources.Task)
+		if err := waitForClaimedContainerAnalysisTask(ctx, client, taskNamespace, taskName, resources.Task); err != nil {
+			return ContainerAnalysisApplyResult{}, err
+		}
+		return ContainerAnalysisApplyResult{Adopted: true}, nil
 	}
 	if err := client.Apply(ctx, TasksGVR, taskNamespace, resources.Task); err != nil {
-		return fmt.Errorf("apply container analysis Task: %w", err)
+		return ContainerAnalysisApplyResult{}, fmt.Errorf("apply container analysis Task: %w", err)
 	}
-	return nil
+	return ContainerAnalysisApplyResult{}, nil
 }
 
 func waitForClaimedContainerAnalysisTask(ctx context.Context, client ContainerAnalysisResourceClient, namespace, taskName string, expected map[string]any) error {

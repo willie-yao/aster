@@ -254,11 +254,12 @@ func TestApplyContainerAnalysisResourcesObservesWinningClaim(t *testing.T) {
 			{Exists: true},
 		}},
 	}
-	if err := ApplyContainerAnalysisResources(context.Background(), client, lifecycleResources()); err != nil {
+	result, err := ApplyContainerAnalysisResourcesWithResult(context.Background(), client, lifecycleResources())
+	if err != nil {
 		t.Fatal(err)
 	}
-	if len(client.applied) != 0 || len(client.deletedVersion) != 0 {
-		t.Fatalf("superseded claimant changed resources: applied=%v deleted=%v", client.applied, client.deletedVersion)
+	if !result.Adopted || len(client.applied) != 0 || len(client.deletedVersion) != 0 {
+		t.Fatalf("superseded claimant result=%+v applied=%v deleted=%v", result, client.applied, client.deletedVersion)
 	}
 }
 

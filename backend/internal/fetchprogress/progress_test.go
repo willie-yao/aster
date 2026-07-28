@@ -438,3 +438,49 @@ func TestReadHistoryRejectsUnknownSchemaAndCorruption(t *testing.T) {
 		}
 	}
 }
+
+func TestTrackerBackfillsTerminalStatusMissingFromHistory(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	tracker := newTracker(dir, "sha-test", trackerOptions{
+		now:          func() time.Time { return now },
+		newID:        func() string { return "0123456789abcdef01234567" },
+		writeHistory: func(string, History) error { return errors.New("crash before history") },
+		logf:         func(string, ...any) {},
+	})
+	tracker.StartPass(PassOneShot)
+	now = now.Add(3 * time.Second)
+	tracker.CompletePhase()
+	tracker.FinishSuccess(false)
+	if _, err := ReadHistory(HistoryPath(dir)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("history unexpectedly persisted: %v", err)
+	}
+
+	_ = newTracker(dir, "sha-test", trackerOptions{now: func() time.Time { return now.Add(time.Minute) }, logf: func(string, ...any) {}})
+	history, err := ReadHistory(HistoryPath(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history.Passes) != 1 || history.Passes[0].PassID != "0123456789abcdef01234567" || history.Passes[0].Outcome != OutcomeSucceeded {
+		t.Fatalf("backfilled history = %+v", history)
+	}
+}
+
+func TestSnapshotDeepCopiesMutableProgress(t *testing.T) {
+	tracker := newTracker(t.TempDir(), "sha-test", trackerOptions{
+		now:          func() time.Time { return time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC) },
+		newID:        func() string { return "0123456789abcdef01234567" },
+		write:        func(string, Status) error { return nil },
+		writeHistory: func(string, History) error { return nil },
+		logf:         func(string, ...any) {},
+	})
+	tracker.StartPass(PassLightweightWatch)
+	tracker.RecordTaskPlanned("work", "task", false)
+	snapshot := tracker.Snapshot()
+	snapshot.PhaseDurationsMS[string(PhaseSetup)] = 999
+	snapshot.CurrentTasks[0].Phase = "Failed"
+	current := tracker.Snapshot()
+	if current.PhaseDurationsMS[string(PhaseSetup)] == 999 || current.CurrentTasks[0].Phase == "Failed" {
+		t.Fatalf("Snapshot shared mutable storage: snapshot=%+v current=%+v", snapshot, current)
+	}
+}
