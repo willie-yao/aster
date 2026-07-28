@@ -56,9 +56,9 @@ flowchart LR
     Agent --> Source
     Worker -->|Task result| Store
     API --> Store
-    Fetcher -->|validated result| API
-    Server -->|validated result| API
-    Fetcher --> Data
+    API -->|Task result| Fetcher
+    API -->|Task result| Server
+    Fetcher -->|validated state and output| Data
     Server --> Validator
     Validator -->|after human confirmation| GitHub
 ```
@@ -97,7 +97,8 @@ Helm deployments may select `analysisRuntime.type: orka-container` with
 
 1. The fetcher discovers a failed Prow test.
 2. The dashboard builds a sanitized project bundle containing the request,
-   prompt, skills, and a bounded encrypted cache seed.
+   prompt, skills, and a bounded cache seed. The bundle is stored in an
+   immutable ConfigMap; only state returned by the analyzer is encrypted.
 3. The dashboard creates a content-addressed Orka container Task in a dedicated
    analysis namespace.
 4. Orka creates the worker Job using the pinned analyzer image and CPU
@@ -108,8 +109,9 @@ Helm deployments may select `analysisRuntime.type: orka-container` with
    state.
 7. The fetcher reads the result through the Orka result API, validates it, and
    merges accepted private state.
-8. After all analysis and pattern validation succeeds, the fetcher atomically
-   publishes the new dashboard data.
+8. Fatal analysis or pattern errors stop publication and restore protected
+   private state. Otherwise, the fetcher publishes public JSON with per-file
+   atomic replacement. Individual unavailable analyses may remain nonfatal.
 
 Orka does not select evidence, define prompts, judge diagnoses, or decide which
 analysis is safe to cache. It supplies isolation and Task lifecycle around the
@@ -164,8 +166,10 @@ that permits workspace edits and returns a diff.
 | Read-only repository credential | Orka namespace | Source workspace initialization | GitHub write path |
 | OAuth or bot write token | Dashboard namespace | Confirmed issue or PR creation | Orka Task or Agent |
 
-The dashboard ServiceAccounts receive Task-only permissions for the namespaces
-they use. Broader Orka controller and worker RBAC remains operator-owned.
+The fix-generation and source-investigation ServiceAccounts receive Task-only
+permissions in the namespaces they use. Container analysis also receives
+narrow ConfigMap permissions for its immutable input bundles. Broader Orka
+controller and worker RBAC remains operator-owned.
 
 ## State and persistence
 
