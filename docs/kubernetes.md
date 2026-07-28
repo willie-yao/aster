@@ -62,6 +62,136 @@ the same `existingClaim`. A `Recreate` rollout keeps a single worker across
 updates, and Helm-managed config or secret changes trigger a rollout
 automatically.
 
+## Install Orka as a separate release
+
+The dashboard chart does not install Orka and does not list Orka as a chart
+dependency. Install Orka once as a separate cluster-level release before enabling
+Orka container analysis, fix generation, or source investigation. Multiple
+dashboard releases may share one compatible Orka installation.
+
+The maintained consumer example is
+[CAPZ Prow AI Dashboard Orka Demo](https://github.com/willie-yao/capz-prow-ai-dashboard-orka-demo/tree/main/deploy/orka).
+It provides an explicit installer, readiness validator, guarded CRD upgrade,
+uninstall guidance, OpenCode Agent setup, immutable version fields, and a
+fresh-install kind test.
+
+### Release selection
+
+Prefer a published Orka release that contains merge commit
+`fde3b7925c367784570fcc36d7a5b3a51747bf10` or later. Verify the tag contains
+that commit and publishes the controller, AI worker, general worker, agent
+harness-wrapper, and Helm chart. Pin the exact chart version, chart digest, and
+all four image digests in the consumer repository before installation. The
+reference installer renders every controller and worker image as
+`tag@sha256:digest`, and its release upgrade writes all four digest-pinned
+references into the target Helm revision.
+
+As of July 28, 2026, `orka-agents/orka` has no tag or GitHub release. The
+`0.1.1` version in the chart source is not evidence of a published release. Do
+not invent a chart repository URL, publish an unofficial release, or use mutable
+`main` or `latest` image tags. The source-commit path is maintainer-only and
+non-production: it can package the chart from the exact commit for lint, render,
+and temporary kind validation, but it does not provide matching released runtime
+images and must not be used for a cloud-cluster installation.
+
+When a verified release exists, prefer the consumer reference's
+`deploy/orka/install.sh`, which verifies the chart digest and supplies all four
+image digests. A direct Helm equivalent must include the same digest-pinned image
+references:
+
+```bash
+chart_dir=$(mktemp -d)
+helm pull <published-orka-chart> \
+  --version <exact-version> \
+  --destination "$chart_dir"
+chart_package="$chart_dir/orka-<exact-version>.tgz"
+actual_chart_digest=$(shasum -a 256 "$chart_package" | awk '{print $1}')
+test "$actual_chart_digest" = <verified-chart-sha256>
+
+helm upgrade --install orka "$chart_package" \
+  --namespace orka-system \
+  --create-namespace \
+  -f deploy/orka/values.yaml \
+  --set-string 'controller.image.tag=<exact-version>@sha256:<controller-digest>' \
+  --set-string 'workers.ai.image.tag=<exact-version>@sha256:<ai-worker-digest>' \
+  --set-string 'workers.general.image.tag=<exact-version>@sha256:<general-worker-digest>' \
+  --set-string 'workers.harnessWrapper.image.tag=<exact-version>@sha256:<harness-wrapper-digest>' \
+  --wait
+```
+
+Use the actual publication reference and verified digests from the release. The
+consumer installer supports both `sha256sum` and `shasum`; the example above uses
+`shasum` only to show the required comparison before Helm reads the local
+package. The dashboard Helm command remains separate and must never invoke this
+command implicitly.
+
+### Fresh install and readiness
+
+A fresh chart install creates all 12 cluster-scoped Orka CRDs from the chart's
+`crds/` directory before the templated release resources. It also manages the
+controller, controller Service and RBAC, worker ServiceAccounts and RBAC,
+harness-wrapper Deployment and Service, its release-local authentication Secret,
+and the persistent store.
+
+After installation, wait for every CRD to become `Established`, then validate the
+controller, harness wrapper, REST Service, store PVC, controller permissions for
+`agentruntimes` and `substrateactorpools`, worker identities, and pinned runtime
+images. Do not broaden a dashboard ServiceAccount to compensate for an Orka
+controller installation error.
+
+The chart does not create model credentials or an Agent definition. Create the
+Agent model Secret separately, apply a reviewed Agent with the endpoint-specific
+model ID, and wait for its `Ready` condition. An OpenCode Agent uses
+`spec.runtime.type: opencode`, `OPENAI_BASE_URL`, and `OPENAI_API_KEY` only when
+the endpoint requires it. Keep any private-repository clone credential separate
+and read-only. Never give the Agent a dashboard GitHub write token.
+
+### CRD-first upgrades
+
+Helm installs files from `crds/` on fresh install, but `helm upgrade` does not
+update them. Schedule a maintenance window, stop every client that can create
+Orka Tasks, and wait for active Tasks to finish before starting. This includes
+all dashboards and any other Orka client sharing the release. The reference
+upgrade script serializes CRD lifecycle writers, but it does not block clients
+from creating new Tasks, so the operator must keep every producer stopped until
+validation finishes.
+
+Upgrade CRDs from the exact target chart before upgrading the Orka controller:
+
+1. Download or locate the exact target chart package and run `helm show crds`.
+2. Apply those CRDs server-side with the dedicated `orka-crd-lifecycle` field
+   manager.
+3. For each CRD, read its current `resourceVersion` and use a JSON Patch that
+   tests that version before replacing the complete target `spec`. This removes
+   schema fields deleted by the target chart without deleting custom resources.
+4. Wait for all 12 CRDs to become `Established`.
+5. Only then run `helm upgrade`, wait for the controller and harness wrapper,
+   and run the full readiness validation.
+
+Serialize this cluster-wide operation. Do not run a competing CRD apply workflow
+and do not replace the guarded spec update with a plain `kubectl apply` that can
+retain fields removed from the target schema. The consumer reference implements
+this flow in `deploy/orka/upgrade.sh` and records a pre-upgrade resource
+inventory.
+
+### Uninstall and multi-release topology
+
+`helm uninstall` removes release-scoped Orka resources, including the
+chart-managed store PVC, but Helm retains CRDs installed from `crds/`. The Orka
+custom resources also remain in the Kubernetes API. Back up store data before
+uninstalling when Task results or sessions must survive.
+
+Deleting a CRD deletes every custom resource for that kind across the cluster.
+Treat CRD deletion as a separate destructive operation. Do not automate it as
+part of dashboard or Orka uninstall.
+
+One cluster-wide Orka release may serve multiple dashboards. If a cluster needs
+multiple Orka releases, every release needs a unique release name or
+`fullnameOverride`, an isolated controller namespace, and a distinct non-empty
+`controller.watchNamespace`. Do not combine a cluster-wide watcher with
+namespace-scoped releases because their admission and reconciliation scopes can
+overlap.
+
 ## Analysis runtimes and Orka fix generation
 
 See [Orka architecture in prow-ai-dashboard](orka-architecture.md) for the
@@ -239,15 +369,13 @@ repository may use `git_secret`, but that Secret must contain only a read-only
 clone credential. `FIX_TOKEN` remains in the dashboard workload and is never
 passed to the Orka Agent, Task, workspace, or model Secret.
 
-OpenCode requires an Orka build containing upstream PR #289. No tagged Orka
-release contained that change as of July 24, 2026, so verify and pin the Orka
-source and harness image before enabling it. Orka labels the entire project
+OpenCode requires upstream PR #289, and the complete chart and controller RBAC
+require PR #295 at `fde3b792` or later. As of July 28, 2026, Orka has no tagged
+release containing those changes. Follow
+[Install Orka as a separate release](#install-orka-as-a-separate-release); do not
+install older raw manifests or add a supplemental controller RBAC patch. The
+dashboard ServiceAccount needs Orka Task access only. Orka labels the project
 experimental.
-
-At Orka merge commit `d03acb99`, the Helm controller ClusterRole omits
-`agentruntimes` and `substrateactorpools`. Use source manifests or a later chart
-with the corrected Orka controller RBAC. Do not add those permissions to the
-dashboard ServiceAccount; it needs Orka Task access only.
 
 When the release namespace differs from `orka.namespace`, grant the dashboard
 ServiceAccount access to the Orka result API. Use a static `ORKA_API_TOKEN` only
