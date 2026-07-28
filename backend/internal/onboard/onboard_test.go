@@ -233,6 +233,8 @@ func TestValidateOptions(t *testing.T) {
 		{"ai token without model", func(o *Options) { o.AIToken = "t"; o.AIEndpoint = "https://x" }, "AI_ENDPOINT and AI_MODEL"},
 		{"endpoint userinfo", func(o *Options) { o.AIEndpoint = "https://user:fixture-secret@example.test/v1" }, "must not contain credentials"},
 		{"endpoint token query", func(o *Options) { o.AIEndpoint = "https://example.test/v1?api_key=fixture-secret" }, "must not contain credential query"},
+		{"relative endpoint", func(o *Options) { o.AIEndpoint = "not-a-url" }, "absolute HTTP or HTTPS"},
+		{"ftp endpoint", func(o *Options) { o.AIEndpoint = "ftp://example.test/model" }, "absolute HTTP or HTTPS"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -342,6 +344,8 @@ func TestScaffold_PagesIncludesProviderSetup(t *testing.T) {
 		DashboardOwner: "my-org",
 		DashboardName:  data.DashboardName,
 		EngineRef:      data.EngineRef,
+		AIEnabled:      true,
+		AIAPI:          project.AIAPIChatCompletions,
 	})
 	if err != nil {
 		t.Fatalf("render checklist: %v", err)
@@ -478,11 +482,11 @@ func TestScaffoldGuideUsesModeFile(t *testing.T) {
 }
 
 func TestScaffoldPRBodyUsesModeGuide(t *testing.T) {
-	pages := scaffoldPRBody("Project", modePages)
+	pages := scaffoldPRBody("Project", modePages, true)
 	if !strings.Contains(pages, "CHECKLIST.md") || strings.Contains(pages, "deploy/README.md") {
 		t.Fatalf("Pages PR body uses the wrong guide:\n%s", pages)
 	}
-	k8s := scaffoldPRBody("Project", modeK8s)
+	k8s := scaffoldPRBody("Project", modeK8s, true)
 	if !strings.Contains(k8s, "deploy/README.md") || strings.Contains(k8s, "CHECKLIST.md") {
 		t.Fatalf("Kubernetes PR body uses the wrong guide:\n%s", k8s)
 	}
@@ -551,5 +555,36 @@ func TestRenderProjectYAML_QuotesUntrustedDiscoveryValues(t *testing.T) {
 	}
 	if cfg.AI != nil {
 		t.Fatalf("untrusted dashboard injected AI config: %+v", cfg.AI)
+	}
+}
+
+func TestChecklist_UsesSelectedAPIAndOmitsDisabledAI(t *testing.T) {
+	responses, err := render(checklistTmpl, checklistData{
+		Name: "Project", DashboardOwner: "example", DashboardName: "dashboard",
+		EngineRef: "main", AIEnabled: true, AIAPI: project.AIAPIResponses,
+	})
+	if err != nil {
+		t.Fatalf("render responses checklist: %v", err)
+	}
+	if !strings.Contains(responses, "AI_API --body responses") {
+		t.Fatalf("responses checklist uses the wrong API:\n%s", responses)
+	}
+
+	disabled, err := render(checklistTmpl, checklistData{
+		Name: "Project", DashboardOwner: "example", DashboardName: "dashboard",
+		EngineRef: "main", AIEnabled: false, AIAPI: project.AIAPIChatCompletions,
+	})
+	if err != nil {
+		t.Fatalf("render disabled checklist: %v", err)
+	}
+	for _, unexpected := range []string{"gh variable set AI_API", "gh variable set AI_ENDPOINT", "gh variable set AI_MODEL", "gh secret set AI_TOKEN"} {
+		if strings.Contains(disabled, unexpected) {
+			t.Fatalf("AI-disabled checklist contains %q:\n%s", unexpected, disabled)
+		}
+	}
+
+	body := scaffoldPRBody("Project", modePages, false)
+	if strings.Contains(body, "AI provider variables") || strings.Contains(body, "token") {
+		t.Fatalf("AI-disabled PR body requests AI setup:\n%s", body)
 	}
 }

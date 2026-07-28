@@ -251,13 +251,13 @@ Existing repo: put them in a subdir and set ` + "`project_dir`" + ` in the workf
 # Enable Pages with the GitHub Actions build source:
 gh api -X POST repos/{{.DashboardOwner}}/{{.DashboardName}}/pages \
   -f build_type=workflow
-# When AI is enabled, set the deployed provider coordinates and token. The
-# onboarding drafting provider is separate and is not configured by these values.
-gh variable set AI_API --body chat_completions --repo {{.DashboardOwner}}/{{.DashboardName}}
+{{if .AIEnabled}}# Set the deployed provider coordinates and token. The onboarding drafting
+# provider is separate and is not configured by these values.
+gh variable set AI_API --body {{.AIAPI}} --repo {{.DashboardOwner}}/{{.DashboardName}}
 gh variable set AI_ENDPOINT --repo {{.DashboardOwner}}/{{.DashboardName}}
 gh variable set AI_MODEL --repo {{.DashboardOwner}}/{{.DashboardName}}
 gh secret set AI_TOKEN --repo {{.DashboardOwner}}/{{.DashboardName}}
-` + "```" + `
+{{end}}` + "```" + `
 
 ## 4. First deploy
 
@@ -274,6 +274,7 @@ type checklistData struct {
 	DashboardName  string
 	EngineRef      string
 	AIEnabled      bool
+	AIAPI          string
 }
 
 // renderProjectYAML renders and returns the project.yaml text, collapsing the

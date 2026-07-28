@@ -616,3 +616,34 @@ func TestBuildPlan_SeparatesDraftingAndDeploymentProviders(t *testing.T) {
 		t.Fatalf("deployment values mixed providers:\n%s", values)
 	}
 }
+
+func TestWizard_ExplicitTestGridPromptsForRequiredPresubmits(t *testing.T) {
+	input := strings.Join([]string{
+		"",  // include presubmits, default yes because the dashboard has no periodics
+		"",  // deployment
+		"",  // dashboard repo
+		"",  // id
+		"",  // name
+		"",  // short name
+		"n", // AI
+		"",  // output
+		"y", // confirm
+	}, "\n") + "\n"
+	deps, out, writer, _ := wizardDependencies(input)
+	catalog := deps.catalogs.(*wizardFakeCatalogClient).catalog
+	catalog.Jobs = map[string]jobconfig.JobDefinition{
+		"presubmit/example": {
+			Name: "pull-project", JobType: models.JobTypePresubmit, Repo: "example/project",
+			Annotations: map[string]string{"testgrid-dashboards": "dashboard-a"},
+		},
+	}
+	opts := Options{
+		SourceRepo: "example/project", TestGrid: "dashboard-a", EngineRef: "main", NoPrompt: true,
+	}
+	if err := run(context.Background(), opts, deps); err != nil {
+		t.Fatalf("run: %v\n%s", err, out.String())
+	}
+	if writer.writes != 1 || !strings.Contains(writer.files["project.yaml"], "include_presubmits: true") {
+		t.Fatalf("presubmit-only dashboard was not enabled:\n%s", writer.files["project.yaml"])
+	}
+}

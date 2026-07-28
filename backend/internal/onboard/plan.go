@@ -77,7 +77,7 @@ func buildPlan(ctx context.Context, opts Options, planning planningContext, deps
 		}
 		if files["CHECKLIST.md"], err = render(checklistTmpl, checklistData{
 			Name: data.Name, DashboardOwner: dashboardRepo.Owner, DashboardName: dashboardRepo.Name,
-			EngineRef: data.EngineRef, AIEnabled: data.AIEnabled,
+			EngineRef: data.EngineRef, AIEnabled: data.AIEnabled, AIAPI: data.AIAPI,
 		}); err != nil {
 			return nil, fmt.Errorf("rendering CHECKLIST.md: %w", err)
 		}

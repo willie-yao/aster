@@ -370,7 +370,16 @@ func wizardSourceRepo(ctx context.Context, prompt *prompter, opts Options, deps 
 }
 
 func wizardDiscovery(prompt *prompter, opts *Options, report DiscoveryReport) (*DashboardCandidate, error) {
-	if opts.TestGrid != "" || opts.Bucket != "" {
+	if opts.Bucket != "" {
+		return nil, nil
+	}
+	if opts.TestGrid != "" {
+		for _, candidate := range report.Candidates {
+			if candidate.Dashboard == opts.TestGrid {
+				selected := candidate
+				return &selected, nil
+			}
+		}
 		return nil, nil
 	}
 	fmt.Fprintln(prompt.out, "\nCandidate TestGrid dashboards")

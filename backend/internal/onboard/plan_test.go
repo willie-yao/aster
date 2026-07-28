@@ -111,3 +111,22 @@ func TestApply_RejectsProjectMutationBeforeWriting(t *testing.T) {
 		t.Fatalf("modified plan wrote %d time(s)", writer.writes)
 	}
 }
+
+func TestApply_RejectsMismatchedDashboardRepoFields(t *testing.T) {
+	deps, _, writer, _ := wizardDependencies("")
+	opts := Options{
+		TestGrid: "dashboard-a", DashboardRepo: "example/project-prow-ai-dashboard",
+		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out", NoPrompt: true,
+	}
+	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
+	if err != nil {
+		t.Fatalf("buildPlan: %v", err)
+	}
+	plan.DashboardRepo.Owner = "other"
+	if err := applyPlan(context.Background(), plan, "", deps); err == nil || !strings.Contains(err.Error(), "do not match full_name") {
+		t.Fatalf("applyPlan error = %v", err)
+	}
+	if writer.writes != 0 {
+		t.Fatalf("mismatched plan wrote %d time(s)", writer.writes)
+	}
+}

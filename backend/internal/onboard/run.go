@@ -210,7 +210,7 @@ func applyPlan(ctx context.Context, plan *Plan, githubToken string, deps depende
 		}
 		title := fmt.Sprintf("Add %s prow-ai-dashboard scaffold", plan.Project.Name)
 		fmt.Fprintf(deps.terminal.Out, "Opening a scaffold pull request against %s...\n", plan.DashboardRepo.FullName)
-		url, err := deps.pullRequests.Open(ctx, plan.DashboardRepo, plan.Files, "onboard/scaffold", title, scaffoldPRBody(plan.Project.Name, plan.Deployment.Mode), githubToken)
+		url, err := deps.pullRequests.Open(ctx, plan.DashboardRepo, plan.Files, "onboard/scaffold", title, scaffoldPRBody(plan.Project.Name, plan.Deployment.Mode, plan.Deployment.AIEnabled), githubToken)
 		if err != nil {
 			return fmt.Errorf("opening scaffold pull request: %w", err)
 		}
@@ -229,8 +229,12 @@ func validatePlan(planValue *Plan) error {
 	if planValue == nil {
 		return fmt.Errorf("onboarding plan is nil")
 	}
-	if _, err := NormalizeGitHubRepo(planValue.DashboardRepo.FullName); err != nil {
+	normalizedRepo, err := NormalizeGitHubRepo(planValue.DashboardRepo.FullName)
+	if err != nil {
 		return fmt.Errorf("onboarding plan dashboard repo: %w", err)
+	}
+	if normalizedRepo.Owner != planValue.DashboardRepo.Owner || normalizedRepo.Name != planValue.DashboardRepo.Name {
+		return fmt.Errorf("onboarding plan dashboard repo fields do not match full_name")
 	}
 	if !planValue.Destination.OpenPR && strings.TrimSpace(planValue.Destination.OutDir) == "" {
 		return fmt.Errorf("onboarding plan output directory is required")

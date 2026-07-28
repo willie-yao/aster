@@ -37,9 +37,12 @@ func scaffoldGuide(mode string) string {
 }
 
 // scaffoldPRBody is the PR description: a short summary plus the human steps.
-func scaffoldPRBody(name, mode string) string {
+func scaffoldPRBody(name, mode string, aiEnabled bool) string {
 	guide := "`" + scaffoldGuide(mode) + "`"
-	finalStep := "Complete the GitHub configuration in `CHECKLIST.md` (enable Pages, set the AI provider variables and token)."
+	finalStep := "Complete the GitHub configuration in `CHECKLIST.md` and enable Pages."
+	if aiEnabled {
+		finalStep = "Complete the GitHub configuration in `CHECKLIST.md` (enable Pages, set the AI provider variables and token)."
+	}
 	if mode == modeK8s {
 		finalStep = "Fill in `deploy/values.yaml`, then follow `deploy/README.md` to install the dashboard with Helm."
 	}
@@ -184,6 +187,9 @@ func validateAIEndpoint(endpoint string) error {
 	parsed, err := url.Parse(endpoint)
 	if err != nil {
 		return fmt.Errorf("AI_ENDPOINT is not a valid URL")
+	}
+	if (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return fmt.Errorf("AI_ENDPOINT must be an absolute HTTP or HTTPS URL")
 	}
 	if parsed.User != nil {
 		return fmt.Errorf("AI_ENDPOINT must not contain credentials; use AI_TOKEN")
