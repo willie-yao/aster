@@ -752,3 +752,36 @@ func TestCredentialSeparationCoversShortTokens(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestWizard_RejectsCredentialsEnteredAsRepositoriesWithoutLeaking(t *testing.T) {
+	t.Run("source", func(t *testing.T) {
+		deps, _, writer, _ := wizardDependencies("fixture-ai-token\n")
+		opts := Options{AIToken: "fixture-ai-token", EngineRef: "main", NoPrompt: true}
+		err := run(context.Background(), opts, deps)
+		if err == nil || !strings.Contains(err.Error(), "credential was supplied") {
+			t.Fatalf("error = %v", err)
+		}
+		if strings.Contains(err.Error(), opts.AIToken) {
+			t.Fatalf("credential leaked into error: %v", err)
+		}
+		if writer.writes != 0 {
+			t.Fatalf("writes = %d", writer.writes)
+		}
+	})
+
+	t.Run("dashboard", func(t *testing.T) {
+		input := strings.Join([]string{"", "", "fixture-ai-token"}, "\n") + "\n"
+		deps, _, writer, _ := wizardDependencies(input)
+		opts := Options{SourceRepo: "example/project", AIToken: "fixture-ai-token", EngineRef: "main", NoPrompt: true}
+		err := run(context.Background(), opts, deps)
+		if err == nil || !strings.Contains(err.Error(), "credential was supplied") {
+			t.Fatalf("error = %v", err)
+		}
+		if strings.Contains(err.Error(), opts.AIToken) {
+			t.Fatalf("credential leaked into error: %v", err)
+		}
+		if writer.writes != 0 {
+			t.Fatalf("writes = %d", writer.writes)
+		}
+	})
+}

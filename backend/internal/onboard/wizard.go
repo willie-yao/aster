@@ -192,6 +192,9 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 			return nil, opts, err
 		}
 	}
+	if err := validateCredentialSeparation(opts); err != nil {
+		return nil, opts, err
+	}
 	dashboardRepo, err := NormalizeGitHubRepo(opts.DashboardRepo)
 	if err != nil {
 		return nil, opts, fmt.Errorf("dashboard repository: %w", err)
@@ -384,6 +387,11 @@ func wizardSourceRepo(ctx context.Context, prompt *prompter, opts Options, deps 
 	}
 	value, err := prompt.line("Source GitHub repository (owner/name or URL)", "", true)
 	if err != nil {
+		return Repo{}, false, err
+	}
+	candidateOpts := opts
+	candidateOpts.SourceRepo = value
+	if err := validateCredentialSeparation(candidateOpts); err != nil {
 		return Repo{}, false, err
 	}
 	repo, err := NormalizeGitHubRepo(value)
