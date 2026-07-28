@@ -446,3 +446,38 @@ func TestNormalizeDoctorProjectDir_IsAbsolute(t *testing.T) {
 		t.Fatalf("normalized dir = %q, want absolute", dir)
 	}
 }
+
+func TestReusableDeployReference_RequiresExactPathAndRef(t *testing.T) {
+	valid := "example/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main"
+	if !reusableDeployReference(valid) {
+		t.Fatalf("valid reference rejected: %s", valid)
+	}
+	for _, invalid := range []string{
+		"example/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@",
+		"example/prow-ai-dashboard/.github/workflows/other.yml@main",
+		"./.github/workflows/reusable-deploy.yml@main",
+	} {
+		if reusableDeployReference(invalid) {
+			t.Errorf("invalid reference accepted: %s", invalid)
+		}
+	}
+}
+
+func TestDoctor_KubernetesPlaceholderCredentialWarns(t *testing.T) {
+	values := `persistence:
+  storageClass: fast
+  accessMode: ReadWriteMany
+ai:
+  enabled: true
+  endpoint: https://provider.example/v1/chat/completions
+  model: model
+  existingSecret: "<your-ai-secret>"
+`
+	report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
+		files:   doctorFiles(map[string]string{"/consumer/deploy/values.yaml": values}),
+		sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}},
+	})
+	if !hasDoctorCheck(report, "Kubernetes AI credential", DoctorWarn) {
+		t.Fatalf("checks = %+v", report.Checks)
+	}
+}

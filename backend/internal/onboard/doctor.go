@@ -206,7 +206,7 @@ func checkPages(report *DoctorReport, workflowPath, projectDir string, workflowY
 		add("Pages workflow", DoctorFail, "jobs.deploy is missing", "Restore the generated deploy job that calls the reusable dashboard workflow.")
 		return
 	}
-	if !strings.Contains(deploy.Uses, "/.github/workflows/reusable-deploy.yml@") {
+	if !reusableDeployReference(deploy.Uses) {
 		add("Pages workflow", DoctorFail, "jobs.deploy.uses does not target the dashboard reusable-deploy workflow", "Restore the generated uses target for prow-ai-dashboard/.github/workflows/reusable-deploy.yml.")
 		return
 	}
@@ -267,6 +267,16 @@ func checkPages(report *DoctorReport, workflowPath, projectDir string, workflowY
 	add("Pages AI", DoctorPass, "deploy job resolves provider coordinates and token settings", "")
 	sort.Strings(externalValues)
 	add("Pages AI values", DoctorWarn, "offline doctor cannot read GitHub repository variable or secret values", "Confirm "+strings.Join(externalValues, ", ")+" are set in the dashboard repository.")
+}
+
+func reusableDeployReference(value string) bool {
+	workflow, ref, ok := strings.Cut(strings.TrimSpace(value), "@")
+	if !ok || strings.TrimSpace(ref) == "" {
+		return false
+	}
+	parts := strings.Split(workflow, "/")
+	return len(parts) == 5 && parts[0] != "" && parts[1] != "" &&
+		parts[2] == ".github" && parts[3] == "workflows" && parts[4] == "reusable-deploy.yml"
 }
 
 func githubExpression(value any, scope, name string) bool {
@@ -351,7 +361,7 @@ func checkKubernetes(report *DoctorReport, valuesYAML []byte, cfg *project.Confi
 	} else {
 		add("Kubernetes AI", DoctorPass, "API, endpoint, and model are configured", "")
 	}
-	if strings.TrimSpace(values.AI.Token) == "" && strings.TrimSpace(values.AI.ExistingSecret) == "" {
+	if placeholder(values.AI.Token) && placeholder(values.AI.ExistingSecret) {
 		add("Kubernetes AI credential", DoctorWarn, "no token or existing Secret is declared in deploy/values.yaml", "Supply --set ai.token at install time or configure ai.existingSecret.")
 	}
 }
