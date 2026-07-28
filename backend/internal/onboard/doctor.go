@@ -120,7 +120,7 @@ func runDoctor(ctx context.Context, opts DoctorOptions, deps doctorDependencies)
 		add("deployment", DoctorFail, "both Pages and Kubernetes deployment files are present", "Keep one first-run deployment profile and remove the unintended scaffold files.")
 	case pagesExists:
 		add("deployment", DoctorPass, "GitHub Pages profile detected", "")
-		checkPages(&report, string(pages))
+		checkPages(&report, pages)
 	case k8sExists:
 		add("deployment", DoctorPass, "Kubernetes with Helm profile detected", "")
 		checkKubernetes(&report, k8s)
@@ -142,53 +142,67 @@ func runDoctor(ctx context.Context, opts DoctorOptions, deps doctorDependencies)
 	return report
 }
 
-func checkPages(report *DoctorReport, workflow string) {
+func checkPages(report *DoctorReport, workflowYAML []byte) {
 	add := func(name string, status DoctorStatus, detail, action string) {
 		report.Checks = append(report.Checks, DoctorCheck{Name: name, Status: status, Detail: detail, Action: action})
 	}
-	aiEnabled := !containsYAMLBool(workflow, "ai", false)
+	type workflowJob struct {
+		With    map[string]any `yaml:"with"`
+		Secrets map[string]any `yaml:"secrets"`
+	}
+	var workflow struct {
+		Jobs map[string]workflowJob `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(workflowYAML, &workflow); err != nil {
+		add("Pages workflow", DoctorFail, err.Error(), "Fix .github/workflows/deploy.yml so it is valid YAML.")
+		return
+	}
+	deploy, ok := workflow.Jobs["deploy"]
+	if !ok {
+		add("Pages workflow", DoctorFail, "jobs.deploy is missing", "Restore the generated deploy job that calls the reusable dashboard workflow.")
+		return
+	}
+	aiEnabled := true
+	if value, ok := deploy.With["ai"]; ok {
+		switch typed := value.(type) {
+		case bool:
+			aiEnabled = typed
+		case string:
+			aiEnabled = !strings.EqualFold(strings.TrimSpace(typed), "false")
+		}
+	}
 	if !aiEnabled {
 		add("Pages AI", DoctorPass, "deployed AI analysis is disabled", "")
 		return
 	}
-	required := map[string]string{
-		"AI_API":      "vars.AI_API",
-		"AI_ENDPOINT": "vars.AI_ENDPOINT",
-		"AI_MODEL":    "vars.AI_MODEL",
-		"AI_TOKEN":    "secrets.AI_TOKEN",
+	requiredWith := map[string]string{
+		"ai-api":      "vars.AI_API",
+		"ai-endpoint": "vars.AI_ENDPOINT",
+		"ai-model":    "vars.AI_MODEL",
 	}
 	var missing []string
-	for name, marker := range required {
-		if !strings.Contains(workflow, marker) {
-			missing = append(missing, name)
+	for key, marker := range requiredWith {
+		if !strings.Contains(fmt.Sprint(deploy.With[key]), marker) {
+			missing = append(missing, key)
 		}
+	}
+	if !strings.Contains(fmt.Sprint(deploy.Secrets["AI_TOKEN"]), "secrets.AI_TOKEN") {
+		missing = append(missing, "secrets.AI_TOKEN")
 	}
 	sort.Strings(missing)
 	if len(missing) > 0 {
-		add("Pages AI", DoctorFail, "workflow mappings are missing: "+strings.Join(missing, ", "), "Regenerate the Pages workflow or add the missing repository variable and secret mappings.")
+		add("Pages AI", DoctorFail, "deploy job mappings are missing or incorrect: "+strings.Join(missing, ", "), "Regenerate the Pages workflow or repair jobs.deploy.with and jobs.deploy.secrets.")
 		return
 	}
-	add("Pages AI", DoctorPass, "workflow maps API, endpoint, model, and token settings", "")
+	add("Pages AI", DoctorPass, "deploy job maps API, endpoint, model, and token settings", "")
 	add("Pages AI values", DoctorWarn, "offline doctor cannot read GitHub repository variable or secret values", "Confirm AI_API, AI_ENDPOINT, AI_MODEL, and AI_TOKEN are set in the dashboard repository.")
-}
-
-func containsYAMLBool(text, key string, value bool) bool {
-	want := "false"
-	if value {
-		want = "true"
-	}
-	for _, line := range strings.Split(text, "\n") {
-		fields := strings.Fields(strings.TrimSpace(line))
-		if len(fields) == 2 && fields[0] == key+":" && fields[1] == want {
-			return true
-		}
-	}
-	return false
 }
 
 type doctorKubernetesValues struct {
 	Persistence struct {
-		StorageClass string `yaml:"storageClass"`
+		ExistingClaim string `yaml:"existingClaim"`
+		StorageClass  string `yaml:"storageClass"`
+		AccessMode    string `yaml:"accessMode"`
 	} `yaml:"persistence"`
 	AI struct {
 		Enabled  *bool  `yaml:"enabled"`
@@ -207,12 +221,16 @@ func checkKubernetes(report *DoctorReport, valuesYAML []byte) {
 		add("Kubernetes values", DoctorFail, err.Error(), "Fix deploy/values.yaml so it is valid YAML.")
 		return
 	}
-	if placeholder(values.Persistence.StorageClass) {
-		add("Kubernetes storage", DoctorFail, "persistence.storageClass is missing or still a placeholder", "Set persistence.storageClass to a ReadWriteMany-capable storage class.")
+	if !placeholder(values.Persistence.ExistingClaim) {
+		add("Kubernetes storage", DoctorPass, "persistence.existingClaim is configured", "")
+	} else if placeholder(values.Persistence.StorageClass) {
+		add("Kubernetes storage", DoctorFail, "neither persistence.existingClaim nor persistence.storageClass is configured", "Set an existing ReadWriteMany claim or a ReadWriteMany-capable storage class.")
+	} else if mode := strings.TrimSpace(values.Persistence.AccessMode); mode != "" && mode != "ReadWriteMany" {
+		add("Kubernetes storage", DoctorFail, "persistence.accessMode is "+mode+", not ReadWriteMany", "Set persistence.accessMode to ReadWriteMany or use an existing ReadWriteMany claim.")
 	} else {
-		add("Kubernetes storage", DoctorPass, "persistence.storageClass is configured", "")
+		add("Kubernetes storage", DoctorPass, "dynamic ReadWriteMany storage is configured", "")
 	}
-	aiEnabled := values.AI.Enabled == nil || *values.AI.Enabled
+	aiEnabled := values.AI.Enabled != nil && *values.AI.Enabled
 	if !aiEnabled {
 		add("Kubernetes AI", DoctorPass, "deployed AI analysis is disabled", "")
 		return

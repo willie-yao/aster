@@ -91,7 +91,7 @@ func TestDoctor_ValidPagesScaffold(t *testing.T) {
 func TestDoctor_PagesMissingProviderMappings(t *testing.T) {
 	sweeper := &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}}
 	report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
-		files:   doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": "jobs: {}\n"}),
+		files:   doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": "jobs:\n  deploy:\n    uses: example/workflow@main\n"}),
 		sweeper: sweeper,
 	})
 	if !hasDoctorCheck(report, "Pages AI", DoctorFail) {
@@ -102,6 +102,7 @@ func TestDoctor_PagesMissingProviderMappings(t *testing.T) {
 func TestDoctor_KubernetesPlaceholdersAreActionable(t *testing.T) {
 	values := `persistence:
   storageClass: "<your-rwx-storage-class>"
+  accessMode: ReadWriteMany
 ai:
   enabled: true
   api: chat_completions
@@ -126,6 +127,7 @@ ai:
 func TestDoctor_KubernetesDisabledAI(t *testing.T) {
 	values := `persistence:
   storageClass: azurefile-csi
+  accessMode: ReadWriteMany
 ai:
   enabled: false
 `
@@ -205,10 +207,55 @@ func TestWriteDoctorReport_SanitizesTerminalControls(t *testing.T) {
 	if err := WriteDoctorReport(&out, report); err != nil {
 		t.Fatalf("WriteDoctorReport: %v", err)
 	}
-	if strings.ContainsAny(out.String(), "\n\r\x1b") && strings.Count(out.String(), "\n") != 2 {
+	if strings.Contains(out.String(), "\r") || strings.Contains(out.String(), "\x1b") || strings.Count(out.String(), "\n") != 2 {
 		t.Fatalf("terminal controls were not sanitized: %q", out.String())
 	}
 	if !strings.Contains(out.String(), "check?forged") || !strings.Contains(out.String(), "fix?now") {
 		t.Fatalf("sanitized fields missing: %q", out.String())
+	}
+}
+
+func TestDoctor_PagesParsingIsScopedToDeployJob(t *testing.T) {
+	workflow := `jobs:
+  unrelated:
+    with:
+      ai: false
+    steps:
+      - run: echo "vars.AI_API secrets.AI_TOKEN"
+  deploy:
+    uses: example/workflow@main
+`
+	report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
+		files:   doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": workflow}),
+		sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}},
+	})
+	if !hasDoctorCheck(report, "Pages AI", DoctorFail) {
+		t.Fatalf("unrelated workflow text satisfied deploy checks: %+v", report.Checks)
+	}
+}
+
+func TestDoctor_KubernetesStorageStrategies(t *testing.T) {
+	tests := []struct {
+		name       string
+		values     string
+		wantStatus DoctorStatus
+	}{
+		{name: "existing claim", values: "persistence:\n  existingClaim: shared-rwx\n", wantStatus: DoctorPass},
+		{name: "wrong access mode", values: "persistence:\n  storageClass: fast\n  accessMode: ReadWriteOnce\n", wantStatus: DoctorFail},
+		{name: "chart defaults AI disabled", values: "persistence:\n  storageClass: fast\n", wantStatus: DoctorPass},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
+				files:   doctorFiles(map[string]string{"/consumer/deploy/values.yaml": test.values}),
+				sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}},
+			})
+			if !hasDoctorCheck(report, "Kubernetes storage", test.wantStatus) {
+				t.Fatalf("checks = %+v", report.Checks)
+			}
+			if test.name == "chart defaults AI disabled" && !hasDoctorCheck(report, "Kubernetes AI", DoctorPass) {
+				t.Fatalf("missing ai.enabled did not inherit false: %+v", report.Checks)
+			}
+		})
 	}
 }
