@@ -32,6 +32,7 @@ remains identical.
 | `GET /data/*` | The fetcher output tree at read parity: `manifest.json`, `dashboard.json`, `jobs/*.json`, `flakiness.json`, `search-index.json`. |
 | `GET /api/capabilities` | Deploy descriptor, for example `{"mode":"server","features":{"actions":false}}`. |
 | `GET /api/analysis-traces` | Admin-gated private trace snapshot. Exact filters: `job_id`, `build_id`, `test_name`, `outcome`, and `response_id`. |
+| `GET /api/fetch-status` | Admin-gated aggregate fetch progress, freshness, and next scheduled pass. `HEAD` is also supported. |
 | `GET /api/analysis-traces/download` | Admin-gated attachment form of the same filtered trace snapshot. |
 | `POST /api/analysis-chat/sessions` | Start an owner-bound conversation for one published test analysis. |
 | `POST /api/analysis-chat/sessions/lookup` | Restore the latest non-expired conversation owned by the signed-in admin for an exact analysis reference. |
@@ -60,6 +61,8 @@ remains identical.
 | `POST /api/failures/{id}/unresolve` | Admin-gated: remove the resolved marker. |
 
 ## Capability seam
+
+The fetcher writes aggregate progress to `.fetch-status/status.json` on the shared data volume. The directory is mode `0700`, the file is mode `0600`, and updates use atomic rename. The `/data/*` file server rejects the hidden directory. Authenticated servers expose only the versioned aggregate schema through `/api/fetch-status`, with `Cache-Control: no-store`; raw errors, artifact identities, prompts, provider bodies, and filesystem paths are not included. The frontend polls this endpoint without overlapping requests, backs off after failures, and stops polling when the component unmounts.
 
 The frontend discovers its mode by probing `/api/capabilities`:
 

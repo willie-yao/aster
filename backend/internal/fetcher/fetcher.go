@@ -24,6 +24,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aggregator"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisruntime"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fetchprogress"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixruntime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
@@ -116,6 +117,7 @@ type pipeline struct {
 	jobCatalog        *jobconfig.Catalog
 	aiRuntime         *analysisruntime.Runtime
 	containerAnalyzer containerFailureAnalyzer
+	progress          *fetchprogress.Tracker
 }
 
 // refreshResult carries the outputs a pass needs for its side effects.
@@ -128,11 +130,19 @@ type refreshResult struct {
 // analyze, write output, and notify. Per-job fetch errors are logged but do not
 // abort.
 func Run(ctx context.Context, opts Options) error {
+	progress, stopProgress := startFetchProgress(ctx, opts, fetchprogress.PassOneShot)
+	defer stopProgress()
+
 	p, err := setupPipeline(opts)
 	if err != nil {
+		progress.FinishFailure(fetchprogress.FailureSetup)
 		return err
 	}
-	if _, err := p.fullPass(ctx); err != nil {
+	p.progress = progress
+	progress.CompletePhase()
+	_, err = p.fullPass(ctx)
+	finishProgressPass(progress, err, false)
+	if err != nil {
 		return err
 	}
 	log.Println("Done!")
@@ -244,20 +254,26 @@ func (p *pipeline) fullPass(ctx context.Context) ([]models.ProwJob, error) {
 	fetchCtx, cancel := context.WithTimeout(ctx, p.opts.Timeout)
 	defer cancel()
 
+	p.startProgressPhase(fetchprogress.PhaseDiscovery)
 	jobs, err := p.discover(fetchCtx)
 	if err != nil {
 		return nil, err
 	}
+	p.completeProgressPhase()
 	analysisCtx, sideEffectCtx := passExecutionContexts(ctx, fetchCtx, p.opts.AnalysisRuntime.Type)
 	res, err := p.refreshWithAnalysisContext(fetchCtx, analysisCtx, jobs)
 	if err != nil {
 		return nil, err
 	}
-	if !p.opts.SkipSideEffects {
-		if err := p.runSideEffects(sideEffectCtx, res); err != nil {
-			return nil, err
-		}
+	if p.opts.SkipSideEffects {
+		p.skipProgressSideEffects()
+		return jobs, nil
 	}
+	p.startProgressPhase(fetchprogress.PhaseSideEffects)
+	if err := p.runSideEffects(sideEffectCtx, res); err != nil {
+		return nil, err
+	}
+	p.completeProgressPhase()
 	return jobs, nil
 }
 
@@ -370,6 +386,8 @@ func (p *pipeline) discover(ctx context.Context) ([]models.ProwJob, error) {
 
 // refreshWithAnalysisContext fetches builds, runs analysis, and writes output.
 func (p *pipeline) refreshWithAnalysisContext(fetchCtx, analysisCtx context.Context, jobs []models.ProwJob) (*refreshResult, error) {
+	p.startProgressPhase(fetchprogress.PhaseArtifacts)
+	p.setProgressJobs(len(jobs))
 	var snapshot *aiRefreshStateSnapshot
 	var err error
 	if p.enableAI {
@@ -423,7 +441,8 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			runs, err := fetchJobRunsCached(fetchCtx, p.backend, cfg, &j, opts.BuildsPerJob, cachedJobs[j.JobID])
+			runs, stats, err := fetchJobRunsCachedWithStats(fetchCtx, p.backend, cfg, &j, opts.BuildsPerJob, cachedJobs[j.JobID])
+			defer p.finishProgressJob(stats.cached, stats.fetched)
 			if err != nil {
 				mu.Lock()
 				fetchErrors = append(fetchErrors, fmt.Errorf("job %s: %w", j.Name, err))
@@ -447,6 +466,9 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 	if len(fetchErrors) > 0 {
 		log.Printf("Warning: %d jobs had fetch errors", len(fetchErrors))
 	}
+	p.markProgressChecked()
+	p.completeProgressPhase()
+	p.startProgressPhase(fetchprogress.PhaseAggregation)
 
 	now := time.Now().UTC()
 	dashboard := models.Dashboard{GeneratedAt: now}
@@ -479,8 +501,10 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 
 	searchIndex := aggregator.BuildSearchIndex(jobResultMap, jobs, now)
 	log.Printf("Search index: %d entries", len(searchIndex.Entries))
+	p.completeProgressPhase()
 
 	if p.enableAI {
+		p.startProgressPhase(fetchprogress.PhaseAnalysisPlanning)
 		if err := p.analyzeFailuresWithAI(analysisCtx, details, flakinessReport); err != nil {
 			return nil, err
 		}
@@ -490,8 +514,12 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 		if n := len(flakinessReport.RecurringPatterns); n > 0 {
 			log.Printf("🔗 %d systemic recurring pattern(s) surfaced on the home page", n)
 		}
+		p.completeProgressPhase()
+	} else {
+		p.skipProgressPatterns()
 	}
 
+	p.startProgressPhase(fetchprogress.PhasePublication)
 	// Auto-reopen resolved patterns that have recurred past their watermark, so
 	// a fixed-then-flaked failure returns to the active view. The server may
 	// also write resolved.json on an admin action; both use atomic writes, and a
@@ -511,6 +539,8 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 	if err := output.WriteAll(opts.OutDir, cfg, dashboard, details, flakinessReport, searchIndex); err != nil {
 		return nil, fmt.Errorf("writing output: %w", err)
 	}
+	p.markProgressPublished()
+	p.completeProgressPhase()
 
 	return &refreshResult{details: details, flakiness: flakinessReport}, nil
 }
@@ -964,20 +994,24 @@ func loadCachedJobDetails(outDir string) map[string]map[string]models.BuildResul
 	return cached
 }
 
-// fetchJobRunsCached discovers recent builds and reuses cached data for
-// completed builds. Per-build fetch errors are logged but do not abort.
-func fetchJobRunsCached(ctx context.Context, backend storage.Backend, cfg *project.Config, job *models.ProwJob, count int, cachedBuilds map[string]models.BuildResult) ([]models.BuildResult, error) {
+type buildFetchStats struct {
+	cached  int
+	fetched int
+}
+
+// fetchJobRunsCachedWithStats discovers recent builds and reuses cached data.
+func fetchJobRunsCachedWithStats(ctx context.Context, backend storage.Backend, cfg *project.Config, job *models.ProwJob, count int, cachedBuilds map[string]models.BuildResult) ([]models.BuildResult, buildFetchStats, error) {
 	builds, err := prowbuild.ListRecentBuilds(ctx, backend, job, count)
 	if err != nil {
-		return nil, fmt.Errorf("listing builds: %w", err)
+		return nil, buildFetchStats{}, fmt.Errorf("listing builds: %w", err)
 	}
 
 	var runs []models.BuildResult
-	fetched, reused := 0, 0
+	stats := buildFetchStats{}
 	for _, b := range builds {
 		if cached, ok := cachedBuilds[b.ID]; ok {
 			runs = append(runs, cached)
-			reused++
+			stats.cached++
 			continue
 		}
 		result, err := fetchBuildResult(ctx, backend, job, b)
@@ -986,14 +1020,14 @@ func fetchJobRunsCached(ctx context.Context, backend storage.Backend, cfg *proje
 			continue
 		}
 		runs = append(runs, *result)
-		fetched++
+		stats.fetched++
 	}
 
-	if reused > 0 {
-		log.Printf("    💾 %s: %d cached, %d fetched", job.Name, reused, fetched)
+	if stats.cached > 0 {
+		log.Printf("    💾 %s: %d cached, %d fetched", job.Name, stats.cached, stats.fetched)
 	}
 
-	return runs, nil
+	return runs, stats, nil
 }
 
 // fetchBuildResult fetches metadata and JUnit XML for a single build.

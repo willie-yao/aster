@@ -13,7 +13,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const { features, auth } = useCapabilities();
   const authAvailable =
     Boolean(auth) &&
-    (features.actions || Boolean(features.analysis_traces) || Boolean(features.analysis_chat));
+    (features.actions ||
+      Boolean(features.analysis_traces) ||
+      Boolean(features.analysis_chat) ||
+      Boolean(features.fetch_status));
   const mode = auth?.mode ?? null;
   const loginUrl = auth?.login_url;
 

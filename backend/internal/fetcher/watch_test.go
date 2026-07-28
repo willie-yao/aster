@@ -9,21 +9,24 @@ import (
 	"testing"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fetchprogress"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
 )
 
 type fakeWatchPipeline struct {
-	mu          sync.Mutex
-	events      []string
-	fullCalls   int
-	watchCalls  int
-	active      int
-	maxActive   int
-	fullResults []error
-	watchErrors []error
-	advance     func(time.Duration)
-	passTime    time.Duration
+	mu             sync.Mutex
+	events         []string
+	fullCalls      int
+	watchCalls     int
+	active         int
+	maxActive      int
+	fullResults    []error
+	watchErrors    []error
+	advance        func(time.Duration)
+	passTime       time.Duration
+	progressEvents []string
+	schedules      [][2]time.Time
 }
 
 func (p *fakeWatchPipeline) fullPass(context.Context) ([]models.ProwJob, error) {
@@ -79,6 +82,28 @@ func (p *fakeWatchPipeline) end() {
 	p.active--
 }
 
+func (p *fakeWatchPipeline) beginWatchPass(passType fetchprogress.PassType) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.progressEvents = append(p.progressEvents, "begin:"+string(passType))
+}
+
+func (p *fakeWatchPipeline) finishWatchPass(err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	outcome := "success"
+	if err != nil {
+		outcome = "error"
+	}
+	p.progressEvents = append(p.progressEvents, "finish:"+outcome)
+}
+
+func (p *fakeWatchPipeline) setWatchSchedule(nextWatch, nextReconcile time.Time) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.schedules = append(p.schedules, [2]time.Time{nextWatch, nextReconcile})
+}
+
 type fakeWatchTime struct {
 	now       time.Time
 	waits     []time.Time
@@ -124,6 +149,18 @@ func TestRunWatchLoopRunsInitialWatchAndReconcilePassesSerially(t *testing.T) {
 	}
 	if pipeline.fullCalls != 2 || pipeline.watchCalls != 2 {
 		t.Fatalf("full=%d watch=%d", pipeline.fullCalls, pipeline.watchCalls)
+	}
+	wantProgress := []string{
+		"finish:success",
+		"begin:lightweight-watch", "finish:success",
+		"begin:lightweight-watch", "finish:success",
+		"begin:reconcile", "finish:success",
+	}
+	if fmt.Sprint(pipeline.progressEvents) != fmt.Sprint(wantProgress) {
+		t.Fatalf("progress events = %v, want %v", pipeline.progressEvents, wantProgress)
+	}
+	if len(pipeline.schedules) != 4 {
+		t.Fatalf("schedule updates = %d, want 4", len(pipeline.schedules))
 	}
 }
 

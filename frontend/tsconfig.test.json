@@ -21,6 +21,8 @@
     "tests/**/*.ts",
     "src/lib/analysisChat.ts",
     "src/lib/pageMetadata.ts",
-    "src/types/analysisChat.ts"
+    "src/lib/fetchStatus.ts",
+    "src/types/analysisChat.ts",
+    "src/types/fetchStatus.ts"
   ]
 }

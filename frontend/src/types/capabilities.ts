@@ -7,6 +7,7 @@ export interface CapabilityFeatures {
   actions: boolean;
   action_requests?: boolean;
   analysis_traces?: boolean;
+  fetch_status?: boolean;
   analysis_chat?: boolean;
   analysis_corrections?: boolean;
   source_investigation?: boolean;

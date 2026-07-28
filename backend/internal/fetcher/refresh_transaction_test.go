@@ -20,6 +20,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisruntime"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fetchprogress"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/notify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
@@ -656,6 +657,9 @@ func hashFileTree(t *testing.T, root string) map[string][32]byte {
 			return err
 		}
 		if entry.IsDir() {
+			if entry.Name() == fetchprogress.StatusDirectory {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		data, err := os.ReadFile(path)

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisruntime"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fetchprogress"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
 )
@@ -15,6 +16,12 @@ import (
 type watchPipeline interface {
 	fullPass(context.Context) ([]models.ProwJob, error)
 	watchPass(context.Context, []models.ProwJob) error
+}
+
+type watchProgressPipeline interface {
+	beginWatchPass(fetchprogress.PassType)
+	finishWatchPass(error)
+	setWatchSchedule(time.Time, time.Time)
 }
 
 type watchClock struct {
@@ -45,6 +52,9 @@ func (p *pipeline) watchPass(ctx context.Context, jobs []models.ProwJob) error {
 	defer cancel()
 	analysisCtx, _ := passExecutionContexts(ctx, fetchCtx, p.opts.AnalysisRuntime.Type)
 	_, err := p.refreshWithAnalysisContext(fetchCtx, analysisCtx, jobs)
+	if err == nil {
+		p.skipProgressSideEffects()
+	}
 	return err
 }
 
@@ -53,14 +63,26 @@ func RunWatch(ctx context.Context, opts Options, watchInterval, reconcileInterva
 	if watchInterval <= 0 || reconcileInterval <= 0 {
 		return fmt.Errorf("watch and reconcile intervals must be positive (got watch=%s reconcile=%s)", watchInterval, reconcileInterval)
 	}
+	progress, stopProgress := startFetchProgress(ctx, opts, fetchprogress.PassInitialWatch)
+	defer stopProgress()
 	p, err := setupPipeline(opts)
 	if err != nil {
+		progress.FinishFailure(fetchprogress.FailureSetup)
 		return haltSystemicWatchFailure(ctx, err)
 	}
+	p.progress = progress
+	progress.CompletePhase()
 	if err := ctx.Err(); err != nil {
+		progress.FinishCancelled()
 		return err
 	}
 	if err := runWatchLoop(ctx, p, watchInterval, reconcileInterval, realWatchClock); err != nil {
+		outcome := progress.Snapshot().Outcome
+		if errors.Is(err, context.Canceled) && (outcome == fetchprogress.OutcomeRunning || outcome == fetchprogress.OutcomeSucceeded) {
+			progress.FinishCancelled()
+		} else {
+			progress.CancelIfRunning()
+		}
 		return haltSystemicWatchFailure(ctx, err)
 	}
 	return nil
@@ -68,6 +90,7 @@ func RunWatch(ctx context.Context, opts Options, watchInterval, reconcileInterva
 
 func runWatchLoop(ctx context.Context, p watchPipeline, watchInterval, reconcileInterval time.Duration, clock watchClock) error {
 	jobs, err := p.fullPass(ctx)
+	finishWatchProgress(p, err)
 	if err != nil {
 		if isSystemicWatchFailure(err) {
 			return err
@@ -79,6 +102,7 @@ func runWatchLoop(ctx context.Context, p watchPipeline, watchInterval, reconcile
 	completed := clock.now()
 	nextWatch := completed.Add(watchInterval)
 	nextReconcile := completed.Add(reconcileInterval)
+	setWatchProgressSchedule(p, nextWatch, nextReconcile)
 	for {
 		next := nextWatch
 		if nextReconcile.Before(next) {
@@ -90,7 +114,9 @@ func runWatchLoop(ctx context.Context, p watchPipeline, watchInterval, reconcile
 
 		now := clock.now()
 		if !now.Before(nextReconcile) {
+			beginWatchProgress(p, fetchprogress.PassReconcile)
 			newJobs, err := p.fullPass(ctx)
+			finishWatchProgress(p, err)
 			if err != nil {
 				if isSystemicWatchFailure(err) {
 					return err
@@ -102,10 +128,13 @@ func runWatchLoop(ctx context.Context, p watchPipeline, watchInterval, reconcile
 			completed = clock.now()
 			nextReconcile = completed.Add(reconcileInterval)
 			nextWatch = completed.Add(watchInterval)
+			setWatchProgressSchedule(p, nextWatch, nextReconcile)
 			continue
 		}
 		if len(jobs) == 0 {
+			beginWatchProgress(p, fetchprogress.PassReconcile)
 			newJobs, err := p.fullPass(ctx)
+			finishWatchProgress(p, err)
 			if err != nil {
 				if isSystemicWatchFailure(err) {
 					return err
@@ -116,15 +145,38 @@ func runWatchLoop(ctx context.Context, p watchPipeline, watchInterval, reconcile
 				nextReconcile = clock.now().Add(reconcileInterval)
 			}
 			nextWatch = clock.now().Add(watchInterval)
+			setWatchProgressSchedule(p, nextWatch, nextReconcile)
 			continue
 		}
-		if err := p.watchPass(ctx, jobs); err != nil {
+		beginWatchProgress(p, fetchprogress.PassLightweightWatch)
+		err := p.watchPass(ctx, jobs)
+		finishWatchProgress(p, err)
+		if err != nil {
 			if isSystemicWatchFailure(err) {
 				return err
 			}
 			log.Printf("⚠ refresh failed: %v", err)
 		}
 		nextWatch = clock.now().Add(watchInterval)
+		setWatchProgressSchedule(p, nextWatch, nextReconcile)
+	}
+}
+
+func beginWatchProgress(p watchPipeline, passType fetchprogress.PassType) {
+	if progress, ok := p.(watchProgressPipeline); ok {
+		progress.beginWatchPass(passType)
+	}
+}
+
+func finishWatchProgress(p watchPipeline, err error) {
+	if progress, ok := p.(watchProgressPipeline); ok {
+		progress.finishWatchPass(err)
+	}
+}
+
+func setWatchProgressSchedule(p watchPipeline, nextWatch, nextReconcile time.Time) {
+	if progress, ok := p.(watchProgressPipeline); ok {
+		progress.setWatchSchedule(nextWatch, nextReconcile)
 	}
 }
 
