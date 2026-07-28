@@ -66,6 +66,11 @@ if grep -Fq 'name: prepare-project' "$tmp/cron.yaml" || grep -Fq 'name: project-
   exit 1
 fi
 grep -A3 -F 'name: project' "$tmp/cron.yaml" | grep -Fq 'mountPath: /config'
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" --set mode=cron > "$tmp/cron-all.yaml"
+if grep -Fq 'app.kubernetes.io/component: worker' "$tmp/cron-all.yaml"; then
+  echo 'cron mode rendered a worker Deployment' >&2
+  exit 1
+fi
 
 # The experimental selector is Helm-only and leaves existing consumers on the
 # in-process path until explicitly selected.
@@ -196,6 +201,107 @@ if [[ $(grep -Fc 'app.kubernetes.io/component: orka-container-analysis-state' "$
   exit 1
 fi
 
+container_watch_args=(
+  --set mode=watch
+  --set ai.enabled=true
+  --set ai.endpoint=http://model.orka-system.svc.cluster.local/v1/chat/completions
+  --set ai.model=script-model
+  --set ai.token=dashboard-token
+  --set analysisRuntime.type=orka-container
+  --set analysisRuntime.orkaContainer.image.tag=sha-deadbeef
+  --set analysisRuntime.orkaContainer.apiAuth.existingSecret=orka-api
+  --set analysisRuntime.orkaContainer.modelAuth.existingSecret=orka-model
+)
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  "${container_watch_args[@]}" > "$tmp/container-watch.yaml"
+grep -Fq 'kind: Deployment' "$tmp/container-watch.yaml"
+grep -Fq 'app.kubernetes.io/component: worker' "$tmp/container-watch.yaml"
+grep -Fq 'type: Recreate' "$tmp/container-watch.yaml"
+grep -Fq 'replicas: 1' "$tmp/container-watch.yaml"
+grep -Fq -- '- /usr/local/bin/worker' "$tmp/container-watch.yaml"
+grep -Fq -- '- -watch-interval=5m' "$tmp/container-watch.yaml"
+grep -Fq -- '- -reconcile-interval=1h' "$tmp/container-watch.yaml"
+for arg in \
+  '-analysis-runtime=orka-container' \
+  '-orka-analysis-namespace=test-prow-ai-dashboard-analysis-' \
+  '-orka-analysis-api=http://orka.orka-system.svc.cluster.local:8080' \
+  '-orka-analysis-image=ghcr.io/willie-yao/prow-ai-dashboard/analyzer:sha-deadbeef' \
+  '-orka-analysis-model-secret=orka-model' \
+  '-orka-analysis-model-token-key=token' \
+  '-orka-analysis-state-secret=test-prow-ai-dashboard-analysis-state-' \
+  '-orka-analysis-state-key=state-key' \
+  '-orka-analysis-max-concurrent-tasks=2' \
+  '-orka-analysis-poll-interval=2s' \
+  '-orka-analysis-task-timeout=20m' \
+  '-orka-analysis-retries=1' \
+  '-orka-analysis-node-selector-json=' \
+  '-orka-analysis-tolerations-json=' \
+  '-orka-analysis-affinity-json='; do
+  grep -Fq -- "$arg" "$tmp/container-watch.yaml"
+done
+grep -Fq 'name: prepare-project' "$tmp/container-watch.yaml"
+grep -Fq 'image: busybox:1.36.1' "$tmp/container-watch.yaml"
+grep -Fq 'cp -L /source/project.yaml /project/project.yaml' "$tmp/container-watch.yaml"
+grep -Fq 'cp -L /source/prompts/system.md /project/prompts/system.md' "$tmp/container-watch.yaml"
+grep -Fq 'for file in /source/skills/*; do' "$tmp/container-watch.yaml"
+grep -Fq 'name: project-runtime' "$tmp/container-watch.yaml"
+grep -Fq 'emptyDir: {}' "$tmp/container-watch.yaml"
+grep -Fq 'name: PROW_AI_STATE_KEY' "$tmp/container-watch.yaml"
+grep -Fq 'name: ORKA_API_TOKEN' "$tmp/container-watch.yaml"
+grep -Fq 'name: orka-api' "$tmp/container-watch.yaml"
+grep -Fq 'serviceAccountName: test-prow-ai-dashboard-orka' "$tmp/container-watch.yaml"
+grep -Fq 'automountServiceAccountToken: false' "$tmp/container-watch.yaml"
+grep -A18 -F 'name: orka-api-token' "$tmp/container-watch.yaml" | grep -Fq 'serviceAccountToken:'
+if grep -Fq 'kind: CronJob' "$tmp/container-watch.yaml" || grep -Fq 'name: ORKA_API_TOKEN_FILE' "$tmp/container-watch.yaml"; then
+  echo 'static-token Orka watch mode rendered a CronJob or result token file' >&2
+  exit 1
+fi
+
+container_watch_service_account_args=(
+  --set mode=watch
+  --set ai.enabled=true
+  --set ai.endpoint=http://model.orka-system.svc.cluster.local/v1/chat/completions
+  --set ai.model=script-model
+  --set ai.token=dashboard-token
+  --set analysisRuntime.type=orka-container
+  --set analysisRuntime.orkaContainer.image.tag=sha-deadbeef
+  --set analysisRuntime.orkaContainer.modelAuth.existingSecret=orka-model
+)
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  "${container_watch_service_account_args[@]}" --show-only templates/worker-deployment.yaml > "$tmp/container-watch-service-account.yaml"
+grep -Fq 'name: ORKA_API_TOKEN_FILE' "$tmp/container-watch-service-account.yaml"
+grep -Fq 'value: /var/run/secrets/kubernetes.io/serviceaccount/token' "$tmp/container-watch-service-account.yaml"
+if grep -Eq '^[[:space:]]*- name: ORKA_API_TOKEN$|^[[:space:]]*- name: ORKA_ANALYSIS_API_TOKEN$' "$tmp/container-watch-service-account.yaml"; then
+  echo 'ServiceAccount Orka watch mode rendered a static result token' >&2
+  exit 1
+fi
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set mode=watch \
+  --set orka.fixRuntime.enabled=true \
+  --set orka.fixRuntime.image.tag=sha-fixer \
+  --show-only templates/worker-deployment.yaml > "$tmp/watch-fix-only.yaml"
+grep -Fq 'image: ghcr.io/willie-yao/prow-ai-dashboard/fixer:sha-fixer' "$tmp/watch-fix-only.yaml"
+grep -Fq 'name: ORKA_API_TOKEN_FILE' "$tmp/watch-fix-only.yaml"
+grep -Fq 'serviceAccountName: test-prow-ai-dashboard-orka' "$tmp/watch-fix-only.yaml"
+if grep -Fq -- '-analysis-runtime=orka-container' "$tmp/watch-fix-only.yaml" || grep -Fq 'name: prepare-project' "$tmp/watch-fix-only.yaml"; then
+  echo 'fix-only watch mode rendered container analysis wiring' >&2
+  exit 1
+fi
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  "${container_watch_args[@]}" \
+  --set orka.fixRuntime.enabled=true \
+  --set orka.fixRuntime.image.tag=sha-fixer \
+  --show-only templates/worker-deployment.yaml > "$tmp/watch-analysis-and-fix.yaml"
+grep -Fq 'image: ghcr.io/willie-yao/prow-ai-dashboard/fixer:sha-fixer' "$tmp/watch-analysis-and-fix.yaml"
+grep -Fq 'name: ORKA_ANALYSIS_API_TOKEN' "$tmp/watch-analysis-and-fix.yaml"
+grep -Fq 'name: ORKA_API_TOKEN_FILE' "$tmp/watch-analysis-and-fix.yaml"
+if grep -Eq '^[[:space:]]*- name: ORKA_API_TOKEN$' "$tmp/watch-analysis-and-fix.yaml"; then
+  echo 'combined Orka watch mode shared the analysis token with fix generation' >&2
+  exit 1
+fi
+
 for namespace in dashboard-a dashboard-b; do
   helm template test "$chart" -n "$namespace" -f "$tmp/values.yaml" "${container_args[@]}" \
     --show-only templates/orka-analysis-state-secret.yaml > "$tmp/state-$namespace.yaml"
@@ -226,10 +332,9 @@ helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" "${container
   --set-string analysisRuntime.orkaContainer.taskTimeout=1h > "$tmp/container-microsecond-duration.yaml"
 grep -Fq -- '-orka-analysis-poll-interval=500us' "$tmp/container-microsecond-duration.yaml"
 
-for invalid in type watch endpoint model materializer-repository materializer-tag materializer-mutable materializer-policy custom-namespace shared-namespace release-namespace api api-token-key image mutable-image build-metadata model-secret token-key state-key concurrency poll slow-poll timeout retries cpu-selector gpu accelerator; do
+for invalid in type endpoint model materializer-repository materializer-tag materializer-mutable materializer-policy custom-namespace shared-namespace release-namespace api api-token-key image mutable-image build-metadata model-secret token-key state-key concurrency poll slow-poll timeout retries cpu-selector gpu accelerator; do
   case $invalid in
     type) invalid_args=(--set analysisRuntime.type=remote); want='analysisRuntime.type must be inprocess or orka-container' ;;
-    watch) invalid_args=("${container_args[@]}" --set mode=watch); want='analysisRuntime.type=orka-container requires mode=cron' ;;
     endpoint) invalid_args=("${container_args[@]}" --set-string ai.endpoint=); want='analysisRuntime.type=orka-container requires ai.endpoint' ;;
     model) invalid_args=("${container_args[@]}" --set-string ai.model=); want='analysisRuntime.type=orka-container requires ai.model' ;;
     materializer-repository) invalid_args=("${container_args[@]}" --set-string project.materializer.image.repository=); want='project.materializer.image.repository is required for Orka container analysis' ;;
@@ -262,6 +367,13 @@ for invalid in type watch endpoint model materializer-repository materializer-ta
   fi
   grep -Fq "$want" "$tmp/invalid-analysis-$invalid.yaml"
 done
+
+if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set mode=continuous > "$tmp/invalid-mode.yaml" 2>&1; then
+  echo 'chart accepted an unknown mode' >&2
+  exit 1
+fi
+grep -Fq 'mode must be "cron" or "watch"' "$tmp/invalid-mode.yaml"
 
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set mode=cron \
@@ -371,9 +483,10 @@ helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set orka.fixRuntime.image.tag=sha-test \
   --show-only templates/worker-deployment.yaml > "$tmp/fix-watch.yaml"
 grep -Fq 'serviceAccountName: test-prow-ai-dashboard-orka' "$tmp/fix-watch.yaml"
-grep -Fq 'automountServiceAccountToken: true' "$tmp/fix-watch.yaml"
+grep -Fq 'automountServiceAccountToken: false' "$tmp/fix-watch.yaml"
 grep -Fq 'name: ORKA_API_TOKEN_FILE' "$tmp/fix-watch.yaml"
 grep -Fq 'image: ghcr.io/willie-yao/prow-ai-dashboard/fixer:sha-test' "$tmp/fix-watch.yaml"
+grep -A3 -F 'name: orka-api-token' "$tmp/fix-watch.yaml" | grep -Fq 'mountPath: /var/run/secrets/kubernetes.io/serviceaccount'
 if [[ $(container_command worker "$tmp/fix-watch.yaml") != /usr/local/bin/worker ]]; then
   echo 'fix-enabled worker does not run the in-process analyzer' >&2
   exit 1

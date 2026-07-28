@@ -221,7 +221,6 @@ Validate AI provider configuration.
 {{- if eq $runtime "orka-container" -}}
   {{- $cfg := .Values.analysisRuntime.orkaContainer -}}
   {{- $materializer := .Values.project.materializer.image -}}
-  {{- if ne .Values.mode "cron" -}}{{- fail "analysisRuntime.type=orka-container requires mode=cron" -}}{{- end -}}
   {{- if not .Values.ai.enabled -}}{{- fail "analysisRuntime.type=orka-container requires ai.enabled=true" -}}{{- end -}}
   {{- if not .Values.ai.endpoint -}}{{- fail "analysisRuntime.type=orka-container requires ai.endpoint" -}}{{- end -}}
   {{- if not .Values.ai.model -}}{{- fail "analysisRuntime.type=orka-container requires ai.model" -}}{{- end -}}

@@ -1,5 +1,6 @@
 {{- include "prow-ai-dashboard.validateAnalysisRuntime" . -}}
 {{- if eq .Values.mode "watch" }}
+{{- $containerAnalysis := eq .Values.analysisRuntime.type "orka-container" }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -33,18 +34,47 @@ spec:
         {{- include "prow-ai-dashboard.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: worker
     spec:
-      {{- if .Values.orka.fixRuntime.enabled }}
+      {{- if or .Values.orka.fixRuntime.enabled $containerAnalysis }}
       serviceAccountName: {{ include "prow-ai-dashboard.orkaServiceAccountName" . }}
-      automountServiceAccountToken: true
-      {{- else }}
-      automountServiceAccountToken: false
       {{- end }}
+      automountServiceAccountToken: false
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- if $containerAnalysis }}
+      initContainers:
+        - name: prepare-project
+          image: {{ include "prow-ai-dashboard.projectMaterializerImage" . }}
+          imagePullPolicy: {{ .Values.project.materializer.image.pullPolicy }}
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              mkdir -p /project/prompts /project/skills
+              cp -L /source/project.yaml /project/project.yaml
+              cp -L /source/prompts/system.md /project/prompts/system.md
+              for file in /source/skills/*; do
+                if [ -f "$file" ]; then
+                  extension=${file##*.}
+                  extension=$(printf '%s' "$extension" | tr '[:upper:]' '[:lower:]')
+                  case "$extension" in
+                    yaml|yml) cp -L "$file" /project/skills/ ;;
+                  esac
+                fi
+              done
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: project
+              mountPath: /source
+              readOnly: true
+            - name: project-runtime
+              mountPath: /project
+      {{- end }}
       containers:
         - name: worker
           {{- if .Values.orka.fixRuntime.enabled }}
@@ -68,6 +98,23 @@ spec:
             {{- end }}
             {{- if .Values.ai.enabled }}
             - -ai
+            {{- end }}
+            {{- if $containerAnalysis }}
+            - -analysis-runtime=orka-container
+            - -orka-analysis-namespace={{ include "prow-ai-dashboard.orkaAnalysisNamespace" . }}
+            - -orka-analysis-api={{ .Values.analysisRuntime.orkaContainer.api }}
+            - -orka-analysis-image={{ include "prow-ai-dashboard.analyzerImage" . }}
+            - -orka-analysis-model-secret={{ .Values.analysisRuntime.orkaContainer.modelAuth.existingSecret }}
+            - -orka-analysis-model-token-key={{ .Values.analysisRuntime.orkaContainer.modelAuth.tokenKey }}
+            - -orka-analysis-state-secret={{ include "prow-ai-dashboard.orkaAnalysisStateSecret" . }}
+            - -orka-analysis-state-key={{ .Values.analysisRuntime.orkaContainer.state.key }}
+            - -orka-analysis-max-concurrent-tasks={{ .Values.analysisRuntime.orkaContainer.maxConcurrentTasks }}
+            - -orka-analysis-poll-interval={{ .Values.analysisRuntime.orkaContainer.pollInterval }}
+            - -orka-analysis-task-timeout={{ .Values.analysisRuntime.orkaContainer.taskTimeout }}
+            - -orka-analysis-retries={{ .Values.analysisRuntime.orkaContainer.retries }}
+            - {{ printf "-orka-analysis-node-selector-json=%s" (toJson .Values.analysisRuntime.orkaContainer.nodeSelector) | quote }}
+            - {{ printf "-orka-analysis-tolerations-json=%s" (toJson .Values.analysisRuntime.orkaContainer.tolerations) | quote }}
+            - {{ printf "-orka-analysis-affinity-json=%s" (toJson .Values.analysisRuntime.orkaContainer.affinity) | quote }}
             {{- end }}
           env:
             {{- if .Values.ai.enabled }}
@@ -99,7 +146,33 @@ spec:
                   optional: true
             {{- end }}
             {{- end }}
+            {{- if $containerAnalysis }}
+            - name: PROW_AI_STATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "prow-ai-dashboard.orkaAnalysisStateSecret" . }}
+                  key: {{ .Values.analysisRuntime.orkaContainer.state.key }}
+            {{- if .Values.analysisRuntime.orkaContainer.apiAuth.existingSecret }}
             {{- if .Values.orka.fixRuntime.enabled }}
+            - name: ORKA_ANALYSIS_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.analysisRuntime.orkaContainer.apiAuth.existingSecret }}
+                  key: {{ .Values.analysisRuntime.orkaContainer.apiAuth.tokenKey }}
+            - name: ORKA_API_TOKEN_FILE
+              value: /var/run/secrets/kubernetes.io/serviceaccount/token
+            {{- else }}
+            - name: ORKA_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.analysisRuntime.orkaContainer.apiAuth.existingSecret }}
+                  key: {{ .Values.analysisRuntime.orkaContainer.apiAuth.tokenKey }}
+            {{- end }}
+            {{- else }}
+            - name: ORKA_API_TOKEN_FILE
+              value: /var/run/secrets/kubernetes.io/serviceaccount/token
+            {{- end }}
+            {{- else if .Values.orka.fixRuntime.enabled }}
             - name: ORKA_API_TOKEN_FILE
               value: /var/run/secrets/kubernetes.io/serviceaccount/token
             {{- end }}
@@ -111,11 +184,22 @@ spec:
           volumeMounts:
             - name: data
               mountPath: {{ .Values.persistence.mountPath }}
+            {{- if $containerAnalysis }}
+            - name: project-runtime
+              mountPath: {{ .Values.project.mountPath }}
+              readOnly: true
+            {{- else }}
             - name: project
               mountPath: {{ .Values.project.mountPath }}
               readOnly: true
+            {{- end }}
             - name: tmp
               mountPath: /tmp
+            {{- if or .Values.orka.fixRuntime.enabled $containerAnalysis }}
+            - name: orka-api-token
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+            {{- end }}
           resources:
             {{- toYaml .Values.fetcher.resources | nindent 12 }}
       {{- with .Values.fetcher.nodeSelector }}
@@ -139,6 +223,29 @@ spec:
             name: {{ include "prow-ai-dashboard.projectConfigMap" . }}
             items:
               {{- include "prow-ai-dashboard.projectVolumeItems" . | nindent 14 }}
+        {{- if $containerAnalysis }}
+        - name: project-runtime
+          emptyDir: {}
+        {{- end }}
+        {{- if or .Values.orka.fixRuntime.enabled $containerAnalysis }}
+        - name: orka-api-token
+          projected:
+            defaultMode: 420
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+              - downwardAPI:
+                  items:
+                    - path: namespace
+                      fieldRef:
+                        fieldPath: metadata.namespace
+        {{- end }}
         - name: tmp
           emptyDir: {}
 {{- end }}

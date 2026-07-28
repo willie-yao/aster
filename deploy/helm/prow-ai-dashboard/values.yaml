@@ -25,8 +25,9 @@ fullnameOverride: ""
 mode: watch
 
 # Failure analysis runs in-process by default. The Orka container runtime is an
-# experimental Helm-only cron option. It is a lifecycle sidegrade, not the
-# recommended production mode, and has no backward compatibility guarantee.
+# experimental Helm-only option for cron or watch mode. It is a lifecycle
+# sidegrade, not the recommended production mode, and has no compatibility
+# guarantee.
 analysisRuntime:
   type: inprocess
   orkaContainer:
@@ -163,8 +164,8 @@ fetcher:
   schedule: "0 */6 * * *"
   # Forbid overlapping runs so a slow fetch never races itself.
   concurrencyPolicy: Forbid
-  # Suspend scheduled starts while retaining the CronJob for manual evaluation
-  # runs created with kubectl create job --from=cronjob/....
+  # Suspend cron-mode starts while retaining the CronJob for manual evaluation.
+  # Keep this true during watch mode for a safe rollback to suspended cron mode.
   suspend: false
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
@@ -182,7 +183,7 @@ fetcher:
   buildsPerJob: 10
   workers: 5
   # Bounds discovery and artifact fetching. Orka container analysis uses its
-  # per-Task timeout and the CronJob activeDeadlineSeconds across Task waves.
+  # per-Task timeout across Task waves; cron mode also has activeDeadlineSeconds.
   timeout: 30m
   includePresubmits: false
   # Extra environment variables (e.g. ISSUE_TOKEN, FIX_TOKEN,

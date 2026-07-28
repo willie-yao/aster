@@ -1,6 +1,6 @@
 apiVersion: v2
 name: prow-ai-dashboard
-description: Kubernetes-native deploy of the prow-ai-dashboard engine, running the fetcher as a CronJob and serving the dashboard from a shared volume.
+description: Kubernetes-native deploy of the prow-ai-dashboard engine, running a worker or CronJob and serving the dashboard from a shared volume.
 type: application
 version: 0.1.0
 # appVersion tracks the engine image tag the chart defaults to.

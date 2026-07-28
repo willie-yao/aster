@@ -324,6 +324,76 @@ func TestContainerAnalyzerMaintainPrunesWithoutAnalysisWork(t *testing.T) {
 	}
 }
 
+func TestContainerAnalyzerMaintainRetriesOnLaterPass(t *testing.T) {
+	key := bytes.Repeat([]byte{0x79}, 32)
+	store, err := analysisruntime.NewContainerStateStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources := &fakeContainerResourceClient{listErr: errors.New("temporary list failure")}
+	kube := &fakeContainerAnalyzerKube{fakeContainerResourceClient: resources, phase: "Succeeded"}
+	analyzer, err := newContainerAnalyzer(containerAnalyzerTestOptions(t, key), kube, &generatedContainerResult{}, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := analyzer.Maintain(t.Context()); err == nil || !strings.Contains(err.Error(), "temporary list failure") {
+		t.Fatalf("first maintenance error = %v", err)
+	}
+	resources.listErr = nil
+	if err := analyzer.Maintain(t.Context()); err != nil {
+		t.Fatalf("second maintenance error = %v", err)
+	}
+	if resources.listCalls != 3 {
+		t.Fatalf("maintenance list calls = %d, want 3", resources.listCalls)
+	}
+
+	request := containerTaskRequest()
+	cacheKey := analysisruntime.FailureCacheKey(request)
+	results := &generatedContainerResult{
+		request: request, key: key,
+		entry: map[string]ai.CacheEntry{cacheKey: {
+			Key: cacheKey, CreatedAt: time.Now().UTC(), Data: json.RawMessage(`{"summary":"ok"}`),
+		}},
+	}
+	analyzer.results = results
+	if _, err := analyzer.AnalyzeFailure(t.Context(), nil, request); err != nil {
+		t.Fatal(err)
+	}
+	if resources.listCalls != 3 {
+		t.Fatalf("analysis repeated pass maintenance: list calls = %d, want 3", resources.listCalls)
+	}
+}
+
+func TestContainerAnalyzerPreflightStopsBeforeTaskCreation(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusServiceUnavailable} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			key := bytes.Repeat([]byte{0x78}, 32)
+			store, err := analysisruntime.NewContainerStateStore(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			resources := &fakeContainerResourceClient{}
+			kube := &fakeContainerAnalyzerKube{fakeContainerResourceClient: resources, phase: "Succeeded"}
+			results := &generatedContainerResult{err: &ResultHTTPError{StatusCode: status}}
+			analyzer, err := newContainerAnalyzer(containerAnalyzerTestOptions(t, key), kube, results, store)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = analyzer.Preflight(t.Context())
+			if err == nil {
+				t.Fatal("preflight succeeded")
+			}
+			wantAuth := status == http.StatusUnauthorized || status == http.StatusForbidden
+			if IsResultAuthorizationError(err) != wantAuth {
+				t.Fatalf("authorization classification = %v, want %v: %v", IsResultAuthorizationError(err), wantAuth, err)
+			}
+			if len(resources.created) != 0 || len(resources.applied) != 0 {
+				t.Fatalf("preflight created resources: created=%v applied=%v", resources.created, resources.applied)
+			}
+		})
+	}
+}
+
 func TestContainerAnalyzerAllowsSchedulingAndFreshResultGrace(t *testing.T) {
 	request := containerTaskRequest()
 	key := bytes.Repeat([]byte{0x75}, 32)
@@ -392,5 +462,24 @@ func TestContainerTaskWaitTimeoutIncludesRetries(t *testing.T) {
 	}
 	if got := containerTaskWaitTimeout(time.Duration(1<<62), 99); got != time.Duration(1<<63-1) {
 		t.Fatalf("overflow wait timeout = %s", got)
+	}
+}
+
+func TestContainerAnalyzerUnknownTaskPhaseStopsAtContextDeadline(t *testing.T) {
+	key := bytes.Repeat([]byte{0x77}, 32)
+	store, err := analysisruntime.NewContainerStateStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources := &fakeContainerResourceClient{}
+	kube := &fakeContainerAnalyzerKube{fakeContainerResourceClient: resources, phase: "Unknown"}
+	analyzer, err := newContainerAnalyzer(containerAnalyzerTestOptions(t, key), kube, &generatedContainerResult{}, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := analyzer.waitTerminal(ctx, "unknown-task"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("waitTerminal error = %v", err)
 	}
 }
