@@ -75,3 +75,11 @@ func TestCatalogFromJobs(t *testing.T) {
 		t.Fatalf("catalog = %+v", catalog)
 	}
 }
+
+func TestJobDefinitionTestsRepo_IsCaseInsensitive(t *testing.T) {
+	presubmit := JobDefinition{JobType: models.JobTypePresubmit, Repo: "Example/Project"}
+	periodic := JobDefinition{JobType: models.JobTypePeriodic, Refs: []RepoRef{{Org: "Example", Repo: "Project"}}}
+	if !presubmit.TestsRepo("example/project") || !periodic.TestsRepo("example/project") {
+		t.Fatalf("case-insensitive matching failed: presubmit=%t periodic=%t", presubmit.TestsRepo("example/project"), periodic.TestsRepo("example/project"))
+	}
+}

@@ -14,7 +14,7 @@ type Options struct {
 
 	// DashboardRepo is the owner/name repo that will publish the dashboard.
 	DashboardRepo string
-	// SourceRepo is the owner/name repo for the code under test.
+	// SourceRepo accepts owner/name or a GitHub repository URL for the code under test.
 	SourceRepo string
 
 	// Mode selects the deploy target the scaffold is generated for:
