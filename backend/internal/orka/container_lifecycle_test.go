@@ -28,6 +28,7 @@ type fakeContainerResourceClient struct {
 	deleteVersionConflict     bool
 	deleteTaskConflict        bool
 	listErr                   error
+	listCalls                 int
 	taskErr                   error
 	applied                   []string
 	created                   []string
@@ -108,6 +109,7 @@ func (f *fakeContainerResourceClient) DeleteIfResourceVersion(_ context.Context,
 }
 
 func (f *fakeContainerResourceClient) ListByLabel(_ context.Context, gvr schema.GroupVersionResource, _ string, selector string) ([]unstructured.Unstructured, error) {
+	f.listCalls++
 	switch {
 	case gvr == configMapsGVR && selector == containerAnalysisBundleSelector:
 		return f.listed, f.listErr

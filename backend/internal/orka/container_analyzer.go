@@ -68,13 +68,12 @@ type containerAnalyzerResults interface {
 
 // ContainerAnalyzer runs the dashboard-owned FailureAnalyzer in Orka container Tasks.
 type ContainerAnalyzer struct {
-	opts      ContainerAnalyzerOptions
-	kube      containerAnalyzerKube
-	results   containerAnalyzerResults
-	state     *analysisruntime.ContainerStateStore
-	sem       chan struct{}
-	pruneOnce sync.Once
-	pruneErr  error
+	opts          ContainerAnalyzerOptions
+	kube          containerAnalyzerKube
+	results       containerAnalyzerResults
+	state         *analysisruntime.ContainerStateStore
+	sem           chan struct{}
+	maintenanceMu sync.Mutex
 }
 
 // NewContainerAnalyzer builds the Kubernetes, Orka API, and encrypted-state clients.
@@ -193,16 +192,14 @@ func (a *ContainerAnalyzer) Maintain(ctx context.Context) error {
 	if a == nil {
 		return fmt.Errorf("container analysis runtime is not configured")
 	}
-	a.pruneOnce.Do(func() {
-		now := time.Now().UTC()
-		if _, err := PruneContainerAnalysisBundles(ctx, a.kube, a.opts.Namespace, now); err != nil {
-			a.pruneErr = err
-			return
-		}
-		_, a.pruneErr = PruneContainerAnalysisTasks(ctx, a.kube, a.opts.Namespace, now)
-	})
-	if a.pruneErr != nil {
-		return fmt.Errorf("prune stale container analysis resources: %w", a.pruneErr)
+	a.maintenanceMu.Lock()
+	defer a.maintenanceMu.Unlock()
+	now := time.Now().UTC()
+	if _, err := PruneContainerAnalysisBundles(ctx, a.kube, a.opts.Namespace, now); err != nil {
+		return fmt.Errorf("prune stale container analysis resources: %w", err)
+	}
+	if _, err := PruneContainerAnalysisTasks(ctx, a.kube, a.opts.Namespace, now); err != nil {
+		return fmt.Errorf("prune stale container analysis resources: %w", err)
 	}
 	return nil
 }
@@ -233,9 +230,6 @@ func (a *ContainerAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, 
 		return ai.UnavailableFailureAnalysisResult(request.TestCase, ctx.Err()), ctx.Err()
 	}
 
-	if err := a.Maintain(ctx); err != nil {
-		return ai.UnavailableFailureAnalysisResult(request.TestCase, err), err
-	}
 	taskRequest := analysisruntime.CanonicalFailureAnalysisRequest(request)
 
 	resources, err := BuildContainerAnalysisResources(ContainerAnalysisTaskSpec{

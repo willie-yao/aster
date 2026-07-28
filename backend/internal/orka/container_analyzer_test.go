@@ -324,6 +324,46 @@ func TestContainerAnalyzerMaintainPrunesWithoutAnalysisWork(t *testing.T) {
 	}
 }
 
+func TestContainerAnalyzerMaintainRetriesOnLaterPass(t *testing.T) {
+	key := bytes.Repeat([]byte{0x79}, 32)
+	store, err := analysisruntime.NewContainerStateStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources := &fakeContainerResourceClient{listErr: errors.New("temporary list failure")}
+	kube := &fakeContainerAnalyzerKube{fakeContainerResourceClient: resources, phase: "Succeeded"}
+	analyzer, err := newContainerAnalyzer(containerAnalyzerTestOptions(t, key), kube, &generatedContainerResult{}, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := analyzer.Maintain(t.Context()); err == nil || !strings.Contains(err.Error(), "temporary list failure") {
+		t.Fatalf("first maintenance error = %v", err)
+	}
+	resources.listErr = nil
+	if err := analyzer.Maintain(t.Context()); err != nil {
+		t.Fatalf("second maintenance error = %v", err)
+	}
+	if resources.listCalls != 3 {
+		t.Fatalf("maintenance list calls = %d, want 3", resources.listCalls)
+	}
+
+	request := containerTaskRequest()
+	cacheKey := analysisruntime.FailureCacheKey(request)
+	results := &generatedContainerResult{
+		request: request, key: key,
+		entry: map[string]ai.CacheEntry{cacheKey: {
+			Key: cacheKey, CreatedAt: time.Now().UTC(), Data: json.RawMessage(`{"summary":"ok"}`),
+		}},
+	}
+	analyzer.results = results
+	if _, err := analyzer.AnalyzeFailure(t.Context(), nil, request); err != nil {
+		t.Fatal(err)
+	}
+	if resources.listCalls != 3 {
+		t.Fatalf("analysis repeated pass maintenance: list calls = %d, want 3", resources.listCalls)
+	}
+}
+
 func TestContainerAnalyzerPreflightStopsBeforeTaskCreation(t *testing.T) {
 	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusServiceUnavailable} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
