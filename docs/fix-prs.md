@@ -155,6 +155,10 @@ reconstructs diffs returned by an Orka Agent; it does not support the local
 
 #### `orka` (in-cluster)
 
+See [Orka architecture in prow-ai-dashboard](orka-architecture.md) for how the
+Agent Task, isolated workspace, structured result, and dashboard validation
+boundary fit with the other Orka integrations.
+
 The dashboard runtime type `orka` selects the execution backend. The referenced
 Orka `Agent` selects its coding CLI independently. For example,
 `spec.runtime.type: opencode` selects OpenCode without adding a dashboard runtime

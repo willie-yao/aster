@@ -230,6 +230,9 @@ context and persist a terminal cancelled outcome.
 
 ## Source investigation API
 
+See [Orka architecture in prow-ai-dashboard](orka-architecture.md) for how this
+read-only Agent path differs from container analysis and fix generation.
+
 Source investigation is an optional Kubernetes-native extension to analysis
 chat. Set `ANALYSIS_SOURCE_INVESTIGATION_ENABLED=1` and configure
 `ai.source_investigation` in `project.yaml`. The server then advertises

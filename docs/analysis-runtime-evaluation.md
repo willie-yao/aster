@@ -1,5 +1,9 @@
 # Failure analysis runtime evaluation
 
+For the current component and ownership model, see
+[Orka architecture in prow-ai-dashboard](orka-architecture.md). This document
+records the evaluation and tradeoffs that led to that design.
+
 Status: Current recommendation as of July 23, 2026.
 
 This document summarizes the evaluation of three ways to run failure analysis in

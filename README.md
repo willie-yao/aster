@@ -132,6 +132,7 @@ The Kubernetes server serves the same `/data/*.json` contract as Pages and adds
 
 ### Orka runtimes
 
+- [Orka architecture and dashboard integration](docs/orka-architecture.md)
 - [Failure analysis runtime evaluation](docs/analysis-runtime-evaluation.md)
 - [Analysis runtime ownership decision](docs/architecture-decisions/0001-analysis-runtime-ownership.md)
 - [Agent-proposed fix PRs](docs/fix-prs.md)
