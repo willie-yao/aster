@@ -23,6 +23,7 @@ const (
 	containerTaskExecutionGrace   = 2 * time.Minute
 	containerTaskRetryDelay       = 10 * time.Second
 	containerResultReadTimeout    = 30 * time.Second
+	containerResultPreflightTask  = "prow-ai-dashboard-result-access-preflight"
 )
 
 var immutableAnalyzerTagPattern = regexp.MustCompile(`^(sha-[0-9a-fA-F]{7,64}|v?[0-9]+[.][0-9]+[.][0-9]+(-[0-9A-Za-z.-]+)?)$`)
@@ -202,6 +203,19 @@ func (a *ContainerAnalyzer) Maintain(ctx context.Context) error {
 	})
 	if a.pruneErr != nil {
 		return fmt.Errorf("prune stale container analysis resources: %w", a.pruneErr)
+	}
+	return nil
+}
+
+// Preflight verifies result API access before creating analyzer Tasks.
+func (a *ContainerAnalyzer) Preflight(ctx context.Context) error {
+	if a == nil {
+		return fmt.Errorf("container analysis runtime is not configured")
+	}
+	preflightCtx, cancel := context.WithTimeout(ctx, containerResultReadTimeout)
+	defer cancel()
+	if _, _, err := a.results.Result(preflightCtx, a.opts.Namespace, containerResultPreflightTask); err != nil {
+		return fmt.Errorf("container analysis result API preflight: %w", err)
 	}
 	return nil
 }

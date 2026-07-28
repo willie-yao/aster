@@ -9,7 +9,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -38,26 +37,10 @@ func main() {
 	flag.BoolVar(&opts.IncludePresubmits, "include-presubmits", false, "include presubmit jobs in addition to periodics (ORed with project.yaml source.include_presubmits)")
 	flag.BoolVar(&opts.EnableAI, "ai", false, "enable AI-powered failure analysis")
 	flag.BoolVar(&opts.SkipSideEffects, "skip-side-effects", false, "write data without notifications, issues, or fix PRs")
-	flag.StringVar(&opts.AnalysisRuntime.Type, "analysis-runtime", fetcher.AnalysisRuntimeInProcess, "single-failure analysis runtime: inprocess or orka-container")
-	container := &opts.AnalysisRuntime.OrkaContainer
-	flag.StringVar(&container.Namespace, "orka-analysis-namespace", "", "Orka namespace for container analysis Tasks")
-	flag.StringVar(&container.ResultAPI, "orka-analysis-api", "", "Orka result API base URL")
-	flag.StringVar(&container.Image, "orka-analysis-image", "", "analyzer image for Orka container Tasks")
-	flag.StringVar(&container.ModelSecretName, "orka-analysis-model-secret", "", "model token Secret in the Orka namespace")
-	flag.StringVar(&container.ModelTokenKey, "orka-analysis-model-token-key", "token", "model token Secret key")
-	flag.StringVar(&container.StateSecretName, "orka-analysis-state-secret", "", "state key Secret name in the dashboard and Orka namespaces")
-	flag.StringVar(&container.StateSecretKey, "orka-analysis-state-key", "state-key", "state Secret key")
-	flag.IntVar(&container.MaxConcurrent, "orka-analysis-max-concurrent-tasks", 2, "maximum concurrent Orka analysis Tasks")
-	flag.DurationVar(&container.PollInterval, "orka-analysis-poll-interval", 2*time.Second, "Orka Task poll interval")
-	flag.DurationVar(&container.TaskTimeout, "orka-analysis-task-timeout", 20*time.Minute, "per-Task timeout")
-	flag.IntVar(&container.Retries, "orka-analysis-retries", 1, "Orka Task retries")
-	var nodeSelectorJSON, tolerationsJSON, affinityJSON string
-	flag.StringVar(&nodeSelectorJSON, "orka-analysis-node-selector-json", "", "JSON node selector for analyzer Tasks")
-	flag.StringVar(&tolerationsJSON, "orka-analysis-tolerations-json", "", "JSON tolerations for analyzer Tasks")
-	flag.StringVar(&affinityJSON, "orka-analysis-affinity-json", "", "JSON affinity for analyzer Tasks")
+	analysisFlags := fetcher.BindAnalysisRuntimeFlags(flag.CommandLine, &opts)
 	flag.Parse()
 
-	if err := decodeAnalysisPlacement(nodeSelectorJSON, tolerationsJSON, affinityJSON, container); err != nil {
+	if err := analysisFlags.DecodePlacement(&opts); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(2)
 	}
@@ -67,25 +50,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-}
-
-func decodeAnalysisPlacement(nodeSelectorJSON, tolerationsJSON, affinityJSON string, opts *fetcher.OrkaContainerAnalysisOptions) error {
-	if nodeSelectorJSON != "" {
-		if err := json.Unmarshal([]byte(nodeSelectorJSON), &opts.NodeSelector); err != nil {
-			return fmt.Errorf("parse Orka analysis node selector: %w", err)
-		}
-	}
-	if tolerationsJSON != "" {
-		if err := json.Unmarshal([]byte(tolerationsJSON), &opts.Tolerations); err != nil {
-			return fmt.Errorf("parse Orka analysis tolerations: %w", err)
-		}
-	}
-	if affinityJSON != "" {
-		if err := json.Unmarshal([]byte(affinityJSON), &opts.Affinity); err != nil {
-			return fmt.Errorf("parse Orka analysis affinity: %w", err)
-		}
-	}
-	return nil
 }
 
 // runOnboard parses the onboard subcommand flags and scaffolds a new dashboard.

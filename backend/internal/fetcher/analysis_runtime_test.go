@@ -10,12 +10,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisruntime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 )
 
 func validContainerAnalysisOptions() Options {
@@ -76,10 +78,47 @@ func TestValidateContainerAnalysisStateKey(t *testing.T) {
 	}
 }
 
-func TestRunWatchRejectsContainerAnalysis(t *testing.T) {
-	err := RunWatch(t.Context(), validContainerAnalysisOptions(), time.Second, time.Minute)
-	if err == nil || !strings.Contains(err.Error(), "does not support watch mode") {
-		t.Fatalf("RunWatch error = %v", err)
+func TestRunWatchAcceptsContainerAnalysis(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "prompts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	config := fmt.Sprintf(`id: test
+name: Test
+discovery:
+  source: bucket
+storage:
+  provider: local
+  base: %s
+branding:
+  title: Test
+  base_path: /
+  site_url: https://example.invalid
+ai:
+  timeout: 30s
+  tools: [filesystem]
+`, dir)
+	if err := os.WriteFile(filepath.Join(dir, "project.yaml"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "prompts", "system.md"), []byte("Investigate artifacts.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AI_TOKEN", "dashboard-token")
+	t.Setenv("AI_API", "chat_completions")
+	t.Setenv("AI_ENDPOINT", "https://helm.invalid/v1/chat/completions")
+	t.Setenv("AI_MODEL", "helm-model")
+	t.Setenv("PROW_AI_STATE_KEY", base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x22}, 32)))
+	opts := validContainerAnalysisOptions()
+	opts.ProjectDir = dir
+	opts.OutDir = t.TempDir()
+	opts.BuildsPerJob = 1
+	opts.Workers = 1
+	opts.Timeout = time.Minute
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := RunWatch(ctx, opts, time.Second, time.Minute); !errors.Is(err, context.Canceled) {
+		t.Fatalf("RunWatch error = %v, want cancellation after valid setup", err)
 	}
 }
 
@@ -182,6 +221,76 @@ func TestAnalyzeFailuresNoWorkStillRunsContainerMaintenance(t *testing.T) {
 	}
 	if !analyzer.called {
 		t.Fatal("container maintenance was skipped")
+	}
+}
+
+type blockingAnalysisAnalyzer struct {
+	mu        sync.Mutex
+	active    int
+	maxActive int
+	started   chan struct{}
+}
+
+func (a *blockingAnalysisAnalyzer) Maintain(context.Context) error { return nil }
+
+func (a *blockingAnalysisAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, request ai.FailureAnalysisRequest) (ai.FailureAnalysisResult, error) {
+	a.mu.Lock()
+	a.active++
+	if a.active > a.maxActive {
+		a.maxActive = a.active
+	}
+	if a.active == 2 {
+		select {
+		case a.started <- struct{}{}:
+		default:
+		}
+	}
+	a.mu.Unlock()
+	<-ctx.Done()
+	a.mu.Lock()
+	a.active--
+	a.mu.Unlock()
+	return ai.UnavailableFailureAnalysisResult(request.TestCase, ctx.Err()), ctx.Err()
+}
+
+func (a *blockingAnalysisAnalyzer) StateStore() *analysisruntime.ContainerStateStore { return nil }
+
+func TestAnalyzeFailuresContainerConcurrencyAndCancellation(t *testing.T) {
+	analyzer := &blockingAnalysisAnalyzer{started: make(chan struct{}, 1)}
+	p := &pipeline{
+		opts: Options{AnalysisRuntime: AnalysisRuntimeOptions{
+			Type: AnalysisRuntimeOrkaContainer, OrkaContainer: OrkaContainerAnalysisOptions{MaxConcurrent: 2},
+		}},
+		cfg:               &project.Config{AI: &project.AI{Concurrency: 5}},
+		client:            &http.Client{},
+		containerAnalyzer: analyzer,
+	}
+	details := []models.JobDetail{{
+		Name: "job", JobID: "job", JobType: models.JobTypePeriodic,
+		Runs: []models.BuildResult{{
+			BuildInfo: models.BuildInfo{BuildID: "1", Result: "FAILURE"},
+			TestCases: []models.TestCase{
+				{Name: "one", Status: "failed"}, {Name: "two", Status: "failed"}, {Name: "three", Status: "failed"},
+				{Name: "four", Status: "failed"}, {Name: "five", Status: "failed"},
+			},
+		}},
+	}}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- p.analyzeFailuresWithAI(ctx, details, models.FlakinessReport{}) }()
+	select {
+	case <-analyzer.started:
+	case <-time.After(time.Second):
+		t.Fatal("two analyses did not start")
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("analysis error = %v", err)
+	}
+	analyzer.mu.Lock()
+	defer analyzer.mu.Unlock()
+	if analyzer.maxActive != 2 || analyzer.active != 0 {
+		t.Fatalf("active=%d max=%d, want active=0 max=2", analyzer.active, analyzer.maxActive)
 	}
 }
 

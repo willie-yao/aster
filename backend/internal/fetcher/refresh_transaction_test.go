@@ -142,6 +142,54 @@ func TestOrkaAuthorizationFailurePreservesRefreshState(t *testing.T) {
 	}
 }
 
+func TestWatchPassAuthorizationFailurePreservesRefreshState(t *testing.T) {
+	dataDir, bucketDir := installRefreshLifecycleFixture(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer server.Close()
+	state, err := analysisruntime.NewContainerStateStore(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	analyzer := &resultLifecycleAnalyzer{
+		client: orka.NewResultClient(server.URL, "token"), state: state, dataDir: dataDir, mutate: true,
+	}
+	p := refreshLifecyclePipeline(t, dataDir, bucketDir, analyzer)
+	jobs, err := p.discover(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := hashFileTree(t, dataDir)
+	if err := p.watchPass(t.Context(), jobs); err == nil || !orka.IsResultAuthorizationError(err) {
+		t.Fatalf("watchPass error = %v", err)
+	}
+	if after := hashFileTree(t, dataDir); !reflect.DeepEqual(after, before) {
+		t.Fatalf("data directory changed after aborted watch pass\nbefore=%v\nafter=%v", before, after)
+	}
+}
+
+func TestWatchPassSkipsSideEffects(t *testing.T) {
+	dataDir, bucketDir := installRefreshLifecycleFixture(t)
+	sender := &countingNotifySender{}
+	oldEmailSender := newEmailSender
+	newEmailSender = func(notify.SMTPConfig) (notify.Sender, error) { return sender, nil }
+	t.Cleanup(func() { newEmailSender = oldEmailSender })
+	p := refreshLifecyclePipeline(t, dataDir, bucketDir, nil)
+	p.enableAI = false
+	p.opts.AnalysisRuntime.Type = AnalysisRuntimeInProcess
+	jobs, err := p.discover(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.watchPass(t.Context(), jobs); err != nil {
+		t.Fatal(err)
+	}
+	if sender.calls.Load() != 0 {
+		t.Fatalf("notification sends = %d, want 0", sender.calls.Load())
+	}
+}
+
 func TestOrkaProjectSetupFailurePreservesRefreshState(t *testing.T) {
 	dataDir, bucketDir := installRefreshLifecycleFixture(t)
 	before := hashFileTree(t, dataDir)

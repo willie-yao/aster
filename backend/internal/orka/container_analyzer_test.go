@@ -324,6 +324,36 @@ func TestContainerAnalyzerMaintainPrunesWithoutAnalysisWork(t *testing.T) {
 	}
 }
 
+func TestContainerAnalyzerPreflightStopsBeforeTaskCreation(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusServiceUnavailable} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			key := bytes.Repeat([]byte{0x78}, 32)
+			store, err := analysisruntime.NewContainerStateStore(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			resources := &fakeContainerResourceClient{}
+			kube := &fakeContainerAnalyzerKube{fakeContainerResourceClient: resources, phase: "Succeeded"}
+			results := &generatedContainerResult{err: &ResultHTTPError{StatusCode: status}}
+			analyzer, err := newContainerAnalyzer(containerAnalyzerTestOptions(t, key), kube, results, store)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = analyzer.Preflight(t.Context())
+			if err == nil {
+				t.Fatal("preflight succeeded")
+			}
+			wantAuth := status == http.StatusUnauthorized || status == http.StatusForbidden
+			if IsResultAuthorizationError(err) != wantAuth {
+				t.Fatalf("authorization classification = %v, want %v: %v", IsResultAuthorizationError(err), wantAuth, err)
+			}
+			if len(resources.created) != 0 || len(resources.applied) != 0 {
+				t.Fatalf("preflight created resources: created=%v applied=%v", resources.created, resources.applied)
+			}
+		})
+	}
+}
+
 func TestContainerAnalyzerAllowsSchedulingAndFreshResultGrace(t *testing.T) {
 	request := containerTaskRequest()
 	key := bytes.Repeat([]byte{0x75}, 32)
@@ -392,5 +422,24 @@ func TestContainerTaskWaitTimeoutIncludesRetries(t *testing.T) {
 	}
 	if got := containerTaskWaitTimeout(time.Duration(1<<62), 99); got != time.Duration(1<<63-1) {
 		t.Fatalf("overflow wait timeout = %s", got)
+	}
+}
+
+func TestContainerAnalyzerUnknownTaskPhaseStopsAtContextDeadline(t *testing.T) {
+	key := bytes.Repeat([]byte{0x77}, 32)
+	store, err := analysisruntime.NewContainerStateStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources := &fakeContainerResourceClient{}
+	kube := &fakeContainerAnalyzerKube{fakeContainerResourceClient: resources, phase: "Unknown"}
+	analyzer, err := newContainerAnalyzer(containerAnalyzerTestOptions(t, key), kube, &generatedContainerResult{}, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := analyzer.waitTerminal(ctx, "unknown-task"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("waitTerminal error = %v", err)
 	}
 }

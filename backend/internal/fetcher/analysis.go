@@ -62,6 +62,11 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 		if err := container.Maintain(ctx); err != nil {
 			return err
 		}
+		if preflight, ok := container.(interface{ Preflight(context.Context) error }); ok {
+			if err := preflight.Preflight(ctx); err != nil {
+				return err
+			}
+		}
 	}
 	if len(work) == 0 {
 		log.Println("🤖 No failures to analyze")

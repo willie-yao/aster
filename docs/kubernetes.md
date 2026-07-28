@@ -206,8 +206,9 @@ uses this runtime.
 
 ### Experimental Orka container analysis
 
-`analysisRuntime.type: orka-container` is an opt-in, Helm-only, cron-only
-sidegrade. It submits one content-addressed Orka `type: container` Task per
+`analysisRuntime.type: orka-container` is an opt-in Helm sidegrade for both
+`mode: cron` and `mode: watch`. It submits one content-addressed Orka
+`type: container` Task per
 failure. The analyzer image runs the current dashboard `FailureAnalyzer`, so
 prompts, Tool schemas, skills loaded through `LoadForTools`, ranked evidence
 planning, evidence coverage, critique, semantic review, cache acceptance, traces,
@@ -216,12 +217,17 @@ Provider resources, dynamic Tool resources, and analysis worker patches remain
 removed.
 
 Use this mode only for a concrete lifecycle requirement such as per-failure Task
-isolation or Task retry history. It has no Pages support, no watch-mode support,
-no backward compatibility guarantee, and is not recommended over in-process
-analysis.
+isolation or Task retry history. It has no Pages support or backward
+compatibility guarantee and is not recommended over in-process analysis.
 
 ```yaml
-mode: cron
+mode: watch
+
+fetcher:
+  watchInterval: 5m
+  reconcileInterval: 1h
+  suspend: true
+  schedule: "0 */6 * * *"
 
 ai:
   enabled: true
@@ -269,6 +275,36 @@ the model token stored in the analysis namespace.
 Task startup and encrypted result finalization. The fetcher rejects a shorter
 outer timeout at startup instead of allowing Orka to kill the analyzer before
 it can emit recoverable state.
+
+Watch mode runs one continuously active worker Deployment, not a CronJob.
+`watchInterval` checks the known job list for new builds. `reconcileInterval`
+rediscovers jobs and runs notifications, issue filing, and fix generation.
+Passes never overlap, so long Task waves delay the next refresh. Never create a
+manual fetch Job while the worker exists. `fetcher.suspend` and
+`fetcher.schedule` do not render a CronJob in watch mode. Keep them set for a
+safe rollback to suspended cron mode.
+
+Inspect the worker with:
+
+```bash
+kubectl -n dashboards get deploy,pod -l app.kubernetes.io/component=worker
+kubectl -n dashboards logs deploy/capz-prow-ai-dashboard-worker -f
+```
+
+To return to cron mode without starting a fetch, upgrade with the same chart
+and values while changing only the mode and suspension setting:
+
+```bash
+helm upgrade capz ./deploy/helm/prow-ai-dashboard -n dashboards \
+  --reuse-values \
+  --set mode=cron \
+  --set fetcher.suspend=true
+kubectl -n dashboards get deploy,cronjob \
+  -l app.kubernetes.io/instance=capz
+```
+
+Verify the worker is gone and the restored CronJob reports `SUSPEND=true`
+before considering any manual run.
 
 Because the pinned Orka controller uses `IfNotPresent`, the chart rejects mutable analyzer tags such as `main`, `latest`, `dev`, and moving major tags. Use a `sha-<hex>` tag or a full semantic version.
 
@@ -454,8 +490,8 @@ When the provider's total context window is independently known, add
 deployment, use `--set ai.contextWindowTokens=128000`. Leave it unset for a
 generic endpoint so provider metadata or the bounded fallback remains active.
 
-To populate data immediately rather than waiting for the schedule, run the
-fetcher once:
+In cron mode, populate data immediately rather than waiting for the schedule by
+running the fetcher once. Do not run this command while a watch worker exists:
 
 ```bash
 kubectl -n dashboards create job \
@@ -484,7 +520,7 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | --- | --- |
 | `image.repository`, `image.tag` | Engine image; tag defaults to the chart `appVersion`. |
 | `mode` | `watch` (continuous worker Deployment, default) or `cron` (scheduled CronJob). |
-| `analysisRuntime.type` | `inprocess` by default; `orka-container` is experimental and requires `mode: cron`. |
+| `analysisRuntime.type` | `inprocess` by default; `orka-container` is experimental and supports cron or watch mode. |
 | `analysisRuntime.orkaContainer.*` | Orka result API, analyzer image, namespace, bounded Task lifecycle, Secret references, encrypted state key, and CPU placement. |
 | `fetcher.restartPolicy`, `fetcher.backoffLimit`, `fetcher.activeDeadlineSeconds` | Bound CronJob container restarts, Job retries, and total wall time. Empty restart policy selects `OnFailure` for in-process and `Never` for Orka container analysis; the default deadline is 10 hours. |
 | `orka.fixRuntime.enabled` | Mount a ServiceAccount token and grant Orka Task RBAC for `agent_runtime.type: orka` fix generation. |
@@ -499,9 +535,9 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | `ai.contextWindowTokens` | Optional operator-provided total provider context window. Set only with endpoint evidence. Values must be at least `9217`; use `128000` for the current Copilot GPT-5 mini deployment. |
 | `ai.existingSecret`, `ai.tokenSecretKey` | Reuse a Secret holding the token. |
 | `fetcher.schedule` | Cron schedule (default every 6 hours). `mode: cron`. |
-| `fetcher.suspend` | Suspend scheduled CronJob starts while allowing manual Jobs. `mode: cron`. |
+| `fetcher.suspend` | Suspend scheduled CronJob starts while allowing manual Jobs. Retain `true` for rollback when watch mode is active. |
 | `fetcher.watchInterval`, `fetcher.reconcileInterval` | Refresh and full-pass cadence. `mode: watch`. |
-| `fetcher.buildsPerJob`, `fetcher.workers`, `fetcher.timeout` | Fetch depth and discovery/artifact budget. Orka Task waves use `taskTimeout` and the CronJob deadline. |
+| `fetcher.buildsPerJob`, `fetcher.workers`, `fetcher.timeout` | Fetch depth and discovery/artifact budget. Orka Task waves use `taskTimeout`; cron mode also uses the Job deadline. |
 | `fetcher.extraEnv` | Extra env such as `GITHUB_TOKEN`, `EMAIL_SMTP_PASSWORD`, or the `ISSUE_TOKEN` / `FIX_TOKEN` write tokens (see [Automatic issues and fix PRs](#automatic-issues-and-fix-prs)). |
 | `ingress.enabled`, `ingress.hosts`, `ingress.tls` | Public read path. |
 | `server.chat.enabled` | Enable authenticated analysis conversations. Requires `ai.enabled`. |

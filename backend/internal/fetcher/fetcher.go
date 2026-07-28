@@ -368,13 +368,7 @@ func (p *pipeline) discover(ctx context.Context) ([]models.ProwJob, error) {
 	return jobs, nil
 }
 
-// refresh fetches each job's builds, aggregates, runs AI analysis, and writes
-// the output JSON. Completed builds are reused from the on-disk cache, so
-// repeated passes only fetch new or still-running builds.
-func (p *pipeline) refresh(ctx context.Context, jobs []models.ProwJob) (*refreshResult, error) {
-	return p.refreshWithAnalysisContext(ctx, ctx, jobs)
-}
-
+// refreshWithAnalysisContext fetches builds, runs analysis, and writes output.
 func (p *pipeline) refreshWithAnalysisContext(fetchCtx, analysisCtx context.Context, jobs []models.ProwJob) (*refreshResult, error) {
 	var snapshot *aiRefreshStateSnapshot
 	var err error
@@ -735,74 +729,6 @@ func (p *pipeline) runSideEffects(ctx context.Context, res *refreshResult) error
 		sideEffectErrs = append(sideEffectErrs, err)
 	}
 	return errors.Join(sideEffectErrs...)
-}
-
-// RunWatch runs the pipeline continuously as a single writer: a lightweight
-// refresh every watchInterval that reuses a cached job list, and a full pass
-// (rediscovery plus side effects) every reconcileInterval. Cached completed
-// builds mean each refresh only fetches new or still-running builds. It returns
-// when ctx is cancelled.
-func RunWatch(ctx context.Context, opts Options, watchInterval, reconcileInterval time.Duration) error {
-	if watchInterval <= 0 || reconcileInterval <= 0 {
-		return fmt.Errorf("watch and reconcile intervals must be positive (got watch=%s reconcile=%s)", watchInterval, reconcileInterval)
-	}
-	if opts.AnalysisRuntime.Type == AnalysisRuntimeOrkaContainer {
-		return fmt.Errorf("orka-container analysis does not support watch mode")
-	}
-	p, err := setupPipeline(opts)
-	if err != nil {
-		return err
-	}
-
-	// Seed the output and the job list with an initial full pass.
-	jobs, err := p.fullPass(ctx)
-	if err != nil {
-		log.Printf("⚠ initial pass failed: %v", err)
-	}
-
-	log.Printf("👀 watching: refresh every %s, reconcile every %s", watchInterval, reconcileInterval)
-	nextWatch := time.Now().Add(watchInterval)
-	nextReconcile := time.Now().Add(reconcileInterval)
-	for {
-		next := nextWatch
-		if nextReconcile.Before(next) {
-			next = nextReconcile
-		}
-		timer := time.NewTimer(time.Until(next))
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C:
-		}
-
-		now := time.Now()
-		if !now.Before(nextReconcile) {
-			if newJobs, err := p.fullPass(ctx); err != nil {
-				log.Printf("⚠ reconcile failed: %v", err)
-			} else {
-				jobs = newJobs
-			}
-			nextReconcile = now.Add(reconcileInterval)
-			nextWatch = now.Add(watchInterval)
-			continue
-		}
-		if len(jobs) == 0 {
-			if newJobs, err := p.fullPass(ctx); err != nil {
-				log.Printf("⚠ discovery retry failed: %v", err)
-			} else {
-				jobs = newJobs
-			}
-			nextWatch = now.Add(watchInterval)
-			continue
-		}
-		passCtx, cancel := context.WithTimeout(ctx, opts.Timeout)
-		if _, err := p.refresh(passCtx, jobs); err != nil {
-			log.Printf("⚠ refresh failed: %v", err)
-		}
-		cancel()
-		nextWatch = now.Add(watchInterval)
-	}
 }
 
 // processIssues reconciles the project's highest-signal findings into GitHub
