@@ -6,13 +6,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"text/template"
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prow/jobconfig"
@@ -28,103 +26,6 @@ const (
 	modePages = "pages"
 	modeK8s   = "k8s"
 )
-
-// Run produces a scaffold for a new dashboard. It verifies discovery, infers
-// categories, renders files, validates project.yaml, and emits the scaffold.
-// It performs no secret writes.
-func Run(ctx context.Context, opts Options) error {
-	if err := validateOptions(&opts); err != nil {
-		return err
-	}
-
-	// Sweep with a minimal config to confirm discovery finds jobs.
-	sweepCfg := sweepConfig(opts)
-	jobs, err := discover(ctx, sweepCfg, opts.IncludePresubmits)
-	if err != nil {
-		return fmt.Errorf("job sweep: %w", err)
-	}
-	if len(jobs) == 0 {
-		return fmt.Errorf("discovery found 0 jobs for the given input; check the testgrid dashboard name or bucket before scaffolding")
-	}
-	jobNames := make([]string, 0, len(jobs))
-	for _, j := range jobs {
-		jobNames = append(jobNames, j.Name)
-	}
-	sort.Strings(jobNames)
-	fmt.Printf("✓ discovery found %d jobs\n", len(jobNames))
-
-	// Generate deterministic files from the discovered jobs.
-	cats := InferCategories(jobNames)
-	data := buildScaffoldData(opts, cats)
-
-	projectYAML, err := renderProjectYAML(data)
-	if err != nil {
-		return fmt.Errorf("rendering project.yaml: %w", err)
-	}
-
-	// Validate generated YAML through the real loader before writing it.
-	if err := validateGeneratedYAML(projectYAML); err != nil {
-		return fmt.Errorf("generated project.yaml failed validation: %w", err)
-	}
-
-	// Render the remaining scaffold files. The deploy files differ by mode; the
-	// prompt is the same either way.
-	files := map[string]string{"project.yaml": projectYAML}
-	dashOwner, dashName := splitRepo(opts.DashboardRepo)
-	switch opts.Mode {
-	case modeK8s:
-		if files["deploy/values.yaml"], err = render(k8sValuesTmpl, data); err != nil {
-			return err
-		}
-		if files["deploy/README.md"], err = render(k8sDeployReadmeTmpl, data); err != nil {
-			return err
-		}
-	default:
-		if files[".github/workflows/deploy.yml"], err = render(deployYAMLTmpl, data); err != nil {
-			return err
-		}
-		if files["CHECKLIST.md"], err = render(checklistTmpl, checklistData{
-			Name: data.Name, DashboardOwner: dashOwner, DashboardName: dashName, EngineRef: data.EngineRef,
-		}); err != nil {
-			return err
-		}
-	}
-	files["prompts/system.md"], err = buildSystemPrompt(ctx, opts, data)
-	if err != nil {
-		return err
-	}
-
-	// Open a PR against the dashboard repo, or write a local scaffold.
-	if opts.OpenPR {
-		title := fmt.Sprintf("Add %s prow-ai-dashboard scaffold", data.Name)
-		httpClient := &http.Client{Timeout: 30 * time.Second}
-		fmt.Printf("⤴ opening a scaffold PR against %s…\n", opts.DashboardRepo)
-		url, err := ghpr.NewClient(httpClient, opts.GitHubToken).OpenPR(ctx, ghpr.Request{
-			Owner:        dashOwner,
-			Repo:         dashName,
-			Files:        files,
-			BranchPrefix: "onboard/scaffold",
-			Title:        title,
-			Body:         scaffoldPRBody(data.Name, opts.Mode),
-		})
-		if err != nil {
-			return fmt.Errorf("opening scaffold PR: %w", err)
-		}
-		fmt.Printf("\n✓ opened scaffold PR: %s\n", url)
-		fmt.Printf("  review it (especially prompts/system.md), then follow %s\n", scaffoldGuide(opts.Mode))
-		return nil
-	}
-
-	if err := writeFiles(opts.OutDir, files); err != nil {
-		return err
-	}
-	fmt.Printf("\n✓ scaffold written to %s/\n", opts.OutDir)
-	fmt.Printf("  next: review prompts/system.md and project.yaml, then follow %s\n", scaffoldGuide(opts.Mode))
-	if len(cats) > 0 {
-		fmt.Printf("  inferred %d categor%s from job names (review/reorder them)\n", len(cats), plural(len(cats)))
-	}
-	return nil
-}
 
 func scaffoldGuide(mode string) string {
 	if mode == modeK8s {
@@ -325,16 +226,7 @@ func buildScaffoldData(opts Options, cats []project.CategoryRule) scaffoldData {
 }
 
 func validateGeneratedYAML(yamlText string) error {
-	dir, err := os.MkdirTemp("", "onboard-validate-")
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(dir)
-	path := filepath.Join(dir, "project.yaml")
-	if err := os.WriteFile(path, []byte(yamlText), 0o644); err != nil {
-		return err
-	}
-	_, err = project.Load(path)
+	_, err := project.Parse([]byte(yamlText))
 	return err
 }
 
@@ -348,12 +240,12 @@ func writeFiles(outDir string, files map[string]string) error {
 			return fmt.Errorf("checking %s: %w", full, err)
 		}
 	}
-	for rel, content := range files {
+	for _, rel := range sortedFilePaths(files) {
 		full := filepath.Join(outDir, rel)
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 			return err
 		}
-		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+		if err := os.WriteFile(full, []byte(files[rel]), 0o644); err != nil {
 			return fmt.Errorf("writing %s: %w", rel, err)
 		}
 	}

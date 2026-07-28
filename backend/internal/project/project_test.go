@@ -1052,3 +1052,31 @@ func TestValidateSourceInvestigation(t *testing.T) {
 		t.Fatalf("source config boundary rejected: %v", err)
 	}
 }
+
+func TestParseValidatesInMemory(t *testing.T) {
+	data := []byte(`id: test
+name: Test
+testgrid:
+  dashboard: dashboard
+storage:
+  provider: gcs
+  bucket: bucket
+branding:
+  title: Test
+  base_path: /
+  site_url: https://example.test
+  source_repo:
+    owner: example
+    name: test
+`)
+	cfg, err := Parse(data)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.ID != "test" {
+		t.Fatalf("id = %q", cfg.ID)
+	}
+	if _, err := Parse(append(data, []byte("unknown_field: true\n")...)); err == nil {
+		t.Fatal("expected strict parsing to reject an unknown field")
+	}
+}

@@ -766,17 +766,20 @@ func (a *AI) EffectiveAgentic() Agentic {
 
 // Load reads and validates a project.yaml file from disk.
 func Load(path string) (*Config, error) {
-	f, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("opening %s: %w", path, err)
 	}
-	defer f.Close()
-
-	cfg, err := parse(f)
+	cfg, err := Parse(data)
 	if err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", path, err)
 	}
 	return cfg, nil
+}
+
+// Parse decodes and validates project.yaml content in memory.
+func Parse(data []byte) (*Config, error) {
+	return parse(strings.NewReader(string(data)))
 }
 
 // LoadPrompt reads the required consumer AI prompt.
