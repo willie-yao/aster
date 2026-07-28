@@ -147,6 +147,11 @@ func setupPipeline(opts Options) (*pipeline, error) {
 	if err := validateAnalysisRuntimeOptions(opts); err != nil {
 		return nil, err
 	}
+	if opts.AnalysisRuntime.Type == AnalysisRuntimeOrkaContainer {
+		if err := analysisruntime.ValidateProjectBundleSource(opts.ProjectDir); err != nil {
+			return nil, fmt.Errorf("initialize Orka container analysis: %w", err)
+		}
+	}
 	cfg, err := project.Load(filepath.Join(opts.ProjectDir, "project.yaml"))
 	if err != nil {
 		return nil, fmt.Errorf("loading project config: %w", err)

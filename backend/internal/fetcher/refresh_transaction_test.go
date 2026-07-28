@@ -1,8 +1,10 @@
 package fetcher
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -30,6 +32,7 @@ type resultLifecycleAnalyzer struct {
 	state   *analysisruntime.ContainerStateStore
 	dataDir string
 	result  ai.FailureAnalysisResult
+	err     error
 	calls   atomic.Int64
 	mutate  bool
 	merge   bool
@@ -54,6 +57,9 @@ func (a *resultLifecycleAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Cl
 		if err := os.WriteFile(filepath.Join(a.dataDir, "ai_traces.json"), []byte(`{"version":1,"traces":null}`), 0o600); err != nil {
 			return ai.FailureAnalysisResult{}, err
 		}
+	}
+	if a.err != nil {
+		return ai.UnavailableFailureAnalysisResult(request.TestCase, a.err), a.err
 	}
 	_, ok, err := a.client.Result(ctx, "analysis", "succeeded-task")
 	if err != nil {
@@ -134,6 +140,146 @@ func TestOrkaAuthorizationFailurePreservesRefreshState(t *testing.T) {
 	if !reflect.DeepEqual(after, before) {
 		t.Fatalf("data directory changed after aborted refresh\nbefore=%v\nafter=%v", before, after)
 	}
+}
+
+func TestOrkaProjectSetupFailurePreservesRefreshState(t *testing.T) {
+	dataDir, bucketDir := installRefreshLifecycleFixture(t)
+	before := hashFileTree(t, dataDir)
+	projectDir := t.TempDir()
+	projectTarget := filepath.Join(t.TempDir(), "project.yaml")
+	writeFixtureFile(t, filepath.Dir(projectTarget), filepath.Base(projectTarget), fmt.Sprintf(`id: test
+name: Test
+discovery:
+  source: bucket
+storage:
+  provider: local
+  base: %s
+branding:
+  title: Test
+  base_path: /
+  site_url: https://dashboard.example.test
+ai:
+  timeout: 5m
+  tools: [filesystem]
+`, bucketDir))
+	if err := os.Symlink(projectTarget, filepath.Join(projectDir, "project.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	writeFixtureFile(t, projectDir, "prompts/system.md", "Investigate build artifacts.\n")
+
+	var patternCalls atomic.Int64
+	oldPatternAnalysis := analyzePatternsAcrossBuilds
+	analyzePatternsAcrossBuilds = func(context.Context, *ai.Service, []models.JobDetail) error {
+		patternCalls.Add(1)
+		return nil
+	}
+	sender := &countingNotifySender{}
+	oldEmailSender := newEmailSender
+	newEmailSender = func(notify.SMTPConfig) (notify.Sender, error) { return sender, nil }
+	t.Cleanup(func() {
+		analyzePatternsAcrossBuilds = oldPatternAnalysis
+		newEmailSender = oldEmailSender
+	})
+
+	t.Setenv("AI_TOKEN", "dashboard-token")
+	t.Setenv("AI_ENDPOINT", "https://model.invalid/v1/chat/completions")
+	t.Setenv("AI_MODEL", "test-model")
+	t.Setenv("AI_CONTEXT_WINDOW_TOKENS", "65536")
+	t.Setenv(analysisruntime.ContainerStateKeyEnv, base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x22}, 32)))
+	opts := validContainerAnalysisOptions()
+	opts.ProjectDir = projectDir
+	opts.OutDir = dataDir
+	opts.BuildsPerJob = 1
+	opts.Workers = 1
+	opts.Timeout = time.Minute
+
+	err := Run(t.Context(), opts)
+	if err == nil || !strings.Contains(err.Error(), "initialize Orka container analysis: validate project bundle source") {
+		t.Fatalf("Run error = %v", err)
+	}
+	if patternCalls.Load() != 0 {
+		t.Fatalf("pattern analysis calls = %d, want 0", patternCalls.Load())
+	}
+	if sender.calls.Load() != 0 {
+		t.Fatalf("notification sends = %d, want 0", sender.calls.Load())
+	}
+	after := hashFileTree(t, dataDir)
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("data directory changed after project setup failure\nbefore=%v\nafter=%v", before, after)
+	}
+}
+
+func TestOrkaProjectSetupFailureAfterSchedulingRollsBackRefresh(t *testing.T) {
+	dataDir, bucketDir := installRefreshLifecycleFixture(t)
+	writeFixtureFile(t, bucketDir, "logs/periodic-test/1/artifacts/junit.xml", `<testsuite name="suite"><testcase name="fails-one" classname="suite"><failure message="failed">failed</failure></testcase><testcase name="fails-two" classname="suite"><failure message="failed">failed</failure></testcase></testsuite>`)
+	before := hashFileTree(t, dataDir)
+	projectDir := writeSymlinkedFetcherProject(t)
+	setupErr := analysisruntime.ValidateProjectBundleSource(projectDir)
+	if setupErr == nil || !analysisruntime.IsProjectBundleSourceError(setupErr) {
+		t.Fatalf("setup error = %v", setupErr)
+	}
+	state, err := analysisruntime.NewContainerStateStore(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	analyzer := &resultLifecycleAnalyzer{state: state, dataDir: dataDir, mutate: true, err: setupErr}
+	p := refreshLifecyclePipeline(t, dataDir, bucketDir, analyzer)
+	sender := &countingNotifySender{}
+	oldEmailSender := newEmailSender
+	newEmailSender = func(notify.SMTPConfig) (notify.Sender, error) { return sender, nil }
+	var patternCalls atomic.Int64
+	oldPatternAnalysis := analyzePatternsAcrossBuilds
+	analyzePatternsAcrossBuilds = func(context.Context, *ai.Service, []models.JobDetail) error {
+		patternCalls.Add(1)
+		return nil
+	}
+	t.Cleanup(func() {
+		newEmailSender = oldEmailSender
+		analyzePatternsAcrossBuilds = oldPatternAnalysis
+	})
+
+	_, err = p.fullPass(t.Context())
+	if err == nil || !analysisruntime.IsProjectBundleSourceError(err) || !strings.Contains(err.Error(), "systemic Orka project setup failure") {
+		t.Fatalf("fullPass error = %v", err)
+	}
+	if analyzer.calls.Load() != 1 {
+		t.Fatalf("analyzer calls = %d, want 1", analyzer.calls.Load())
+	}
+	if patternCalls.Load() != 0 {
+		t.Fatalf("pattern analysis calls = %d, want 0", patternCalls.Load())
+	}
+	if sender.calls.Load() != 0 {
+		t.Fatalf("notification sends = %d, want 0", sender.calls.Load())
+	}
+	after := hashFileTree(t, dataDir)
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("data directory changed after scheduled setup failure\nbefore=%v\nafter=%v", before, after)
+	}
+}
+
+func writeSymlinkedFetcherProject(t *testing.T) string {
+	t.Helper()
+	projectDir := t.TempDir()
+	projectTarget := filepath.Join(t.TempDir(), "project.yaml")
+	writeFixtureFile(t, filepath.Dir(projectTarget), filepath.Base(projectTarget), `id: test
+name: Test
+testgrid:
+  dashboard: test
+storage:
+  provider: local
+  base: /fixtures
+branding:
+  title: Test
+  base_path: /
+  site_url: https://dashboard.example.test
+ai:
+  tools: [filesystem]
+`)
+	if err := os.Symlink(projectTarget, filepath.Join(projectDir, "project.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	writeFixtureFile(t, projectDir, "prompts/system.md", "Investigate build artifacts.\n")
+	return projectDir
 }
 
 func TestAIRefreshBackupsRemainPrivate(t *testing.T) {
@@ -425,16 +571,17 @@ func installRefreshLifecycleFixture(t *testing.T) (string, string) {
 	writeFixtureFile(t, bucketDir, "logs/periodic-test/1/artifacts/junit.xml", `<testsuite name="suite"><testcase name="fails" classname="suite"><failure message="failed">failed</failure></testcase></testsuite>`)
 
 	files := map[string]string{
-		"dashboard.json":                `{"sentinel":"dashboard"}`,
-		"flakiness.json":                `{"sentinel":"flakiness"}`,
-		"manifest.json":                 `{"sentinel":"manifest"}`,
-		"search-index.json":             `{"sentinel":"search"}`,
-		"jobs/old.json":                 `{"job_id":"old","runs":[]}`,
-		ai.CacheFilename:                `{}`,
-		"ai_traces.json":                `{"version":1,"traces":[]}`,
-		"notification_state.json":       `{"sentinel":"notification"}`,
-		"remediation_state.json":        `{"sentinel":"remediation"}`,
-		".analysis-chat/session-1.json": `{"sentinel":"chat"}`,
+		"dashboard.json":               `{"sentinel":"dashboard"}`,
+		"flakiness.json":               `{"sentinel":"flakiness"}`,
+		"manifest.json":                `{"sentinel":"manifest"}`,
+		"search-index.json":            `{"sentinel":"search"}`,
+		"jobs/old.json":                `{"job_id":"old","runs":[]}`,
+		ai.CacheFilename:               `{}`,
+		"ai_traces.json":               `{"version":1,"traces":[]}`,
+		"notification_state.json":      `{"sentinel":"notification"}`,
+		"remediation_state.json":       `{"sentinel":"remediation"}`,
+		"action_request_state.json":    `{"sentinel":"action"}`,
+		".analysis-chat/sessions.json": `{"sentinel":"chat"}`,
 	}
 	for path, body := range files {
 		writeFixtureFile(t, dataDir, path, body)

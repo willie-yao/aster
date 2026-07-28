@@ -184,6 +184,16 @@ func TestPatternCacheKey_TracksModelInput(t *testing.T) {
 	}
 }
 
+func TestPatternCacheKey_ChangesWhenAdditionalAnalysesBecomeAvailable(t *testing.T) {
+	degraded := patternFailures(2)
+	complete := patternFailures(3)
+	degradedKey := patternCacheKey("kubernetes", "job", "job", buildPatternUserPrompt("job", degraded), "toolfree", "model-fingerprint")
+	completeKey := patternCacheKey("kubernetes", "job", "job", buildPatternUserPrompt("job", complete), "toolfree", "model-fingerprint")
+	if degradedKey == completeKey {
+		t.Fatal("additional per-failure analysis did not change the pattern cache key")
+	}
+}
+
 func TestCollectRelevantFiles_LeadsWithLocation(t *testing.T) {
 	failures := []PatternFailure{
 		{LocationFile: "test/e2e/foo_test.go", RelevantFiles: []string{"config/a.yaml", "test/e2e/foo_test.go"}},
