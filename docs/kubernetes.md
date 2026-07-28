@@ -64,6 +64,10 @@ automatically.
 
 ## Analysis runtimes and Orka fix generation
 
+See [Orka architecture in prow-ai-dashboard](orka-architecture.md) for the
+component, credential, state, and ownership boundaries shared by the analysis,
+fix-generation, and source-investigation paths.
+
 ### In-process analysis
 
 `analysisRuntime.type: inprocess` is the default and the only recommended
