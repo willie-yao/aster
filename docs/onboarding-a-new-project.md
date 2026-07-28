@@ -1,22 +1,98 @@
 # Onboarding a project
 
-The `fetcher onboard` command verifies Prow job discovery and creates a small
-consumer scaffold. The command sets deployment-specific branding and files for Pages or
-Kubernetes.
+`fetcher onboard` creates a validated consumer scaffold for GitHub Pages or
+Kubernetes. It can guide an interactive first run from a GitHub source
+repository, or preserve the existing fully flagged automation flow.
 
-## Choose the environment
+The command reuses the same discovery, category inference, templates, prompt
+drafting, strict `project.yaml` loader, local writer, and pull request writer in
+both modes. It does not maintain a second scaffold generator.
 
-| Requirement | Deployment | Analysis |
-| --- | --- | --- |
-| Fastest evaluation or public read-only site | GitHub Actions and Pages | In-process |
-| Private in-cluster model endpoint | Kubernetes with Helm | In-process initially |
-| Authenticated server actions | Kubernetes with Helm | In-process |
+## What the wizard does
 
-Orka remains optional for fix generation.
+When required flags are missing and stdin is an interactive terminal, the
+wizard:
 
-## What the scaffold creates
+1. Detects the current Git `origin`, or accepts `owner/name` or a GitHub URL.
+2. Reads bounded GitHub repository metadata.
+3. Reads Prow job definitions from one pinned `kubernetes/test-infra` revision.
+4. Finds jobs whose presubmit repository or `extra_refs` test the source repo.
+5. Ranks candidate TestGrid dashboards and lets you edit the selection.
+6. Runs the real final job sweep and refuses a zero-job scaffold.
+7. Suggests editable identity, dashboard repository, deployment, and categories.
+8. Renders every file in memory and validates `project.yaml` with the real loader.
+9. Shows the complete plan and intended paths.
+10. Writes nothing until you answer yes to the final confirmation.
 
-### GitHub Actions and Pages
+Enter `q`, `quit`, or `cancel` at any prompt. Cancellation and EOF leave no
+scaffold. The final confirmation defaults to no.
+
+Repository metadata, Prow configuration, and source documentation are treated
+as untrusted data. Documentation is only passed as bounded input to the fixed
+prompt-drafting contract. It cannot alter the CLI flow or cause command
+execution.
+
+## Guided first run
+
+From the source repository checkout:
+
+```bash
+go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboard
+```
+
+The wizard normally detects `origin`. If `origin` is a GitHub fork, it also
+shows the canonical upstream repository and defaults Prow discovery to that
+upstream after confirmation. You can instead supply a repository name or URL:
+
+```bash
+go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboard \
+  -source-repo https://github.com/kubernetes-sigs/cluster-api-provider-azure
+```
+
+Accepted source forms include:
+
+```text
+owner/name
+https://github.com/owner/name.git
+ssh://git@github.com/owner/name.git
+git@github.com:owner/name.git
+```
+
+For a private repository, export `GITHUB_TOKEN` before running the wizard. The
+token is used for GitHub API access and is never printed, added to the plan, or
+written into generated files.
+
+## Read-only repository discovery
+
+Inspect automatic inference without rendering or writing a scaffold:
+
+```bash
+go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboard discover \
+  -source-repo owner/name
+```
+
+Add `-json` for machine-readable output. The report includes:
+
+- Normalized source repository and GitHub metadata source.
+- Default branch and visibility.
+- Matching Prow jobs.
+- Ranked TestGrid candidates.
+- Suggested project identity and dashboard repository.
+- Warnings and unresolved fields.
+- The pinned `kubernetes/test-infra` revision.
+
+Discovery is read-only. It does not render files, create repositories, write
+GitHub settings, or inspect a Kubernetes cluster.
+
+## Deployment profiles
+
+### GitHub Pages
+
+Choose Pages when artifacts are publicly readable, the model provider is
+reachable from GitHub Actions, and authenticated server actions are not
+required.
+
+The scaffold contains:
 
 ```text
 project.yaml
@@ -25,7 +101,25 @@ prompts/system.md
 CHECKLIST.md
 ```
 
+When AI is enabled, complete the generated checklist by setting:
+
+```text
+AI_API
+AI_ENDPOINT
+AI_MODEL
+AI_TOKEN
+```
+
+`AI_API`, `AI_ENDPOINT`, and `AI_MODEL` are repository variables. `AI_TOKEN` is
+a repository secret. The wizard does not write any of them to GitHub.
+
 ### Kubernetes with Helm
+
+Choose Kubernetes when the endpoint is cluster-local, persistent server state
+is needed, authenticated actions are required, or continuous watch mode is
+desired.
+
+The scaffold contains:
 
 ```text
 project.yaml
@@ -34,38 +128,79 @@ deploy/values.yaml
 deploy/README.md
 ```
 
-Optional email, issue, fix-PR, action, and Orka configuration is not included in
-the first-run scaffold. Add those features after the first dashboard works.
-`fetcher onboard -mode k8s` does not install Orka or make an Orka runtime the
-default.
+The wizard generates files only. It does not install Helm releases, write
+Kubernetes Secrets, configure ingress or DNS, or inspect a cluster.
 
-## Before you start
+Orka remains a separate advanced integration. The first-run scaffold does not
+install, upgrade, or silently enable Orka.
 
-Collect:
+## AI configuration and prompt drafting
 
-- The TestGrid dashboard name, or an artifact bucket for bucket discovery.
-- The dashboard repository as `owner/name`.
-- The source repository under test as `owner/name`.
-- An OpenAI-compatible endpoint, model id, and token when AI is enabled.
+The wizard separates two decisions:
 
-The model must support function calling.
+1. The provider used by the deployed dashboard.
+2. Whether to use a provider now to draft `prompts/system.md` from bounded
+   source-repository documentation.
 
-## Fast start: scaffold it with `onboard`
+The same endpoint and model may be used for both, but the wizard asks before
+sending documentation to the provider. Always review an AI-generated prompt
+before deployment.
 
-Pages is the default and needs no engine checkout:
+Supported environment variables remain:
+
+```text
+AI_API
+AI_ENDPOINT
+AI_MODEL
+AI_TOKEN
+GITHUB_TOKEN
+```
+
+Tokens remain environment-only. Do not put tokens in an endpoint URL. The
+onboarding plan and generated files contain no token, password, cookie,
+kubeconfig, or Kubernetes Secret value.
+
+Use `-no-prompt` to force the reviewable prompt stub. This flag only controls AI
+prompt drafting. It does not disable terminal interaction. Use `-ai=false` to
+disable deployed AI analysis.
+
+## Dry run
+
+`-dry-run` performs discovery, the real job sweep, planning, rendering, output
+path checks, and strict configuration validation. It writes no files and opens
+no pull request.
 
 ```bash
 go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboard \
+  -source-repo owner/source \
+  -dry-run
+```
+
+The interactive dry run stops after the review. A fully flagged dry run remains
+non-interactive.
+
+## Non-interactive automation
+
+When all required flags are supplied, `onboard` never prompts. Add
+`-non-interactive` when automation must fail rather than prompt if a required
+value is missing.
+
+Pages example:
+
+```bash
+go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboard \
+  -non-interactive \
   -testgrid "<testgrid-dashboard>" \
   -dashboard-repo "<owner>/<dashboard-repo>" \
   -source-repo "<owner>/<source-repo>" \
   -out ./my-dashboard
 ```
 
-For Kubernetes, add `-mode k8s`:
+Kubernetes example:
 
 ```bash
 go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboard \
+  -non-interactive \
   -testgrid "<testgrid-dashboard>" \
   -dashboard-repo "<owner>/<dashboard-repo>" \
   -source-repo "<owner>/<source-repo>" \
@@ -73,12 +208,8 @@ go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboar
   -out ./my-dashboard
 ```
 
-The command performs a real discovery sweep before it writes anything. A zero-job
-result is an error rather than a broken scaffold.
-
-### Other Prow installations
-
-Replace `-testgrid` with `-bucket` to discover jobs from the artifact store:
+For projects outside Kubernetes TestGrid, replace `-testgrid` with an artifact
+bucket:
 
 ```bash
 -bucket "<bucket>"
@@ -87,76 +218,96 @@ Replace `-testgrid` with `-bucket` to discover jobs from the artifact store:
 Add `-gcsweb-base "https://gcsweb.example.net/s3"` when the bucket is served
 through gcsweb.
 
-### Optional prompt drafting
+## Open a scaffold pull request
 
-Without an AI token, `onboard` writes a short prompt with TODOs. To draft it from
-the source repository documentation, set all three provider values before
-running the command:
+`-open-pr` is always explicit. It opens a pull request against an existing
+dashboard repository instead of writing a local directory.
 
 ```bash
-export AI_ENDPOINT="https://provider.example/v1/chat/completions"
-export AI_MODEL="model-id"
-export AI_TOKEN="token"
+export GITHUB_TOKEN="..."
+fetcher onboard \
+  -non-interactive \
+  -testgrid "<testgrid-dashboard>" \
+  -dashboard-repo "<owner>/<existing-dashboard-repo>" \
+  -source-repo "<owner>/<source-repo>" \
+  -open-pr
 ```
 
-Always review an AI-drafted prompt before deployment.
+The command does not create the repository. It does not enable Pages or write
+variables and Secrets. `-open-pr -dry-run` plans the pull request without
+opening it.
 
-### Open a scaffold pull request
+## Review the result
 
-Set `GITHUB_TOKEN` and use `-open-pr` instead of `-out`. The token needs contents
-and pull-request write access to the dashboard repository.
+Before deployment:
 
-## Review only four things
+1. Confirm discovery, storage, branding, and source repository in
+   `project.yaml`.
+2. Review, reorder, rename, or remove inferred categories.
+3. Review every claim in `prompts/system.md` and replace any TODOs.
+4. Follow `CHECKLIST.md` for Pages or `deploy/README.md` for Kubernetes.
 
-1. Confirm `project.yaml` discovery, storage, branding, and source repository.
-2. Review or remove the inferred categories.
-3. Replace the TODOs or verify the claims in `prompts/system.md`.
-4. Follow `CHECKLIST.md` for Pages or `deploy/README.md` for Helm.
+Do not add notifications, issue automation, fix-PR automation, source
+investigation, or Orka settings until the first fetch publishes the expected
+jobs.
 
-Do not add AI tuning, notifications, write features, or Orka settings until the
-first fetch publishes the expected jobs. If a later requirement justifies Orka,
-install it as a separate cluster-level release before enabling any dashboard
-Orka setting. Multiple dashboards may share that release. Follow
-[Install Orka as a separate release](kubernetes.md#install-orka-as-a-separate-release)
-and the
-[CAPZ Orka consumer reference](https://github.com/willie-yao/capz-prow-ai-dashboard-orka-demo).
+## Automatic inference limits
 
-## Deploy
+The wizard does not guess operational settings that GitHub and Prow metadata
+cannot establish safely. It does not infer:
+
+- AI provider reachability.
+- Kubernetes namespace or storage class.
+- Ingress, DNS, certificates, or OAuth.
+- Notification routing.
+- Secret names or values.
+- Orka installation or runtime configuration.
+
+If no Prow jobs or TestGrid annotations match the source repository, the wizard
+asks for a TestGrid dashboard or artifact bucket. It never invents one.
+
+## Validate an existing scaffold
+
+Run the read-only doctor after generation or when diagnosing an existing
+consumer:
+
+```bash
+go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboard doctor \
+  -project-dir ./my-dashboard
+```
+
+Doctor checks:
+
+- Strict `project.yaml` parsing.
+- Presence of a non-empty `prompts/system.md`.
+- The Pages reusable-workflow target, effective `project_dir`, AI inputs, and
+  token mapping.
+- Kubernetes persistence strategy, AI provider coordinates, and credential
+  source.
+- The real Prow discovery sweep and a nonzero job count.
+
+Failures include the next corrective action and return a nonzero exit status.
+Warnings identify settings that cannot be resolved offline, such as dynamic
+GitHub expressions, repository variable values, or a Helm token supplied only
+at install time. Doctor does not contact the model provider or inspect a
+Kubernetes cluster. Those checks remain deferred until they have separate,
+explicit opt-in contracts.
+
+## Command surface
+
+The MVP remains under `fetcher onboard`. A separate top-level
+`prow-ai-dashboard init` executable was evaluated but not added because it would
+duplicate command distribution, parsing, templates, and validation before the
+guided workflow is proven.
+
+## Deploy and validate
 
 - [GitHub Actions and Pages](github-pages.md)
 - [Kubernetes with Helm](kubernetes.md)
 - [Separate Orka Helm installation](kubernetes.md#install-orka-as-a-separate-release)
-- [Orka fix generation](fix-prs.md)
+- [Project configuration](project-configuration.md)
+- [Troubleshooting](troubleshooting.md)
 
-The Pages workflow uses repository variables `AI_ENDPOINT` and `AI_MODEL` plus
-the `AI_TOKEN` secret. The Kubernetes scaffold stores endpoint and model in
-`deploy/values.yaml` and accepts the token at install time.
-
-## Validate the first result
-
-A successful first deployment has:
-
-- The expected project branding in `data/manifest.json`.
-- At least one discovered job in `data/dashboard.json`.
-- Grounded analysis on a failing test when AI is enabled.
-- `/healthz` and `/api/capabilities` in Kubernetes mode.
-
-If the dashboard has no jobs, use the discovery check in
-[Troubleshooting](troubleshooting.md#no-jobs-were-published).
-
-## Versioning and pinning
-
-The workflow or image ref controls the engine version. Before the first stable
-release, use `main`, a commit SHA, or an exact published prerelease. The moving
-`v1` alias is created only after `v1.0.0` is published. See
-[Releasing](releasing.md).
-
-## Advanced options
-
-`onboard -help` lists identity overrides, presubmit discovery, engine pinning,
-bucket discovery, and pull-request creation. These are not required for a normal
-first run.
-
-The reusable Pages workflow also exposes build depth, worker count, runner,
-timeout, pre-fetched data, and presubmit overrides. Keep their defaults until a
-real deployment needs different operational behavior.
+A successful first deployment has the expected branding in
+`data/manifest.json`, at least one job in `data/dashboard.json`, grounded
+analysis when AI is enabled, and healthy server endpoints in Kubernetes mode.

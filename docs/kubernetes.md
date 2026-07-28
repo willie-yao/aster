@@ -9,9 +9,17 @@ the same `/data/*.json` contract as Pages. The server also exposes
 `/api/capabilities` for server-only features. See [Server mode](server.md) for
 the endpoint and authentication reference.
 
-Start with `fetcher onboard -mode k8s`. Its generated values contain only the
-storage class, model connection, and a safe fetch timeout. The rest of this guide
-is an operator reference for production settings and optional features.
+Start with the guided `fetcher onboard` flow and select **Kubernetes with Helm**,
+or use `fetcher onboard -mode k8s` with complete flags for automation. The
+command runs the real job sweep, renders and validates the scaffold in memory,
+and writes nothing before interactive confirmation. `-dry-run` performs the same
+checks without writing files.
+
+The generated values contain only the storage class, model connection, AI
+enablement, and a safe fetch timeout. The wizard does not install Helm releases,
+write Kubernetes Secrets, inspect a cluster, or configure ingress and DNS. The
+rest of this guide is an operator reference for production settings and optional
+features.
 
 ## Why run in-cluster
 
@@ -442,6 +450,16 @@ source lives at `deploy/helm/prow-ai-dashboard`. Supply your consumer-owned
 into the engine repo. The `onboard -mode k8s` subcommand scaffolds a project
 plus a `deploy/values.yaml` ready to pass here with `-f`; see
 [Onboarding a project](onboarding-a-new-project.md).
+
+Before installing, run:
+
+```bash
+fetcher onboard doctor -project-dir ./my-dashboard
+```
+
+Doctor validates the local persistence strategy, effective AI provider
+coordinates, credential source, prompt, and Prow job sweep. It is read-only and
+does not inspect cluster readiness.
 
 Install the released chart straight from GHCR (no repo checkout needed). The
 chart pins its image to the matching release, so `image.tag` is optional:

@@ -3,7 +3,12 @@
 Each consumer owns one strict `project.yaml`. Unknown fields are errors. Start
 with [`configs/example/project.yaml`](../configs/example/project.yaml) or let
 [`fetcher onboard`](onboarding-a-new-project.md) generate it. Add optional
-sections only when a working deployment needs them.
+sections only when a working deployment needs them. The guided onboarding
+wizard shows the source and confidence for inferred identity and TestGrid values,
+then lets you edit them before any file is written.
+
+Use `fetcher onboard doctor -project-dir <dir>` to run the same strict parser on
+an existing consumer before deployment.
 
 ## Configuration boundaries
 
@@ -54,7 +59,12 @@ branding:
 | `storage` | Artifact backend and bucket |
 | `branding` | Site identity, URL paths, and source repository |
 
-`short_name` is an optional compact display label. For Pages, set
+`short_name` is an optional compact display label. The wizard suggests one only
+when the repository name provides a reasonable abbreviation. Type `none` in the
+wizard to omit the suggestion. Inferred category tokens are also editable and
+can be cleared with the same sentinel.
+
+For Pages, set
 `branding.base_path` to `/<host-repo>` and `site_url` to the full Pages URL. For
 Kubernetes, use `/` and the ingress URL.
 

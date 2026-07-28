@@ -10,11 +10,17 @@ and you do not need interactive admin actions.
 
 - A host repository that does not already publish another Pages site.
 - `project.yaml` and `prompts/system.md` in the repository root or one subdirectory.
-- An OpenAI-compatible Chat Completions or Responses endpoint with function calling.
-- The API selector, endpoint URL, model id, and bearer token.
+- When AI is enabled, an OpenAI-compatible Chat Completions or Responses
+  endpoint with function calling.
+- When AI is enabled, the API selector, endpoint URL, model id, and bearer
+  token.
 
-Run [`fetcher onboard`](onboarding-a-new-project.md) to generate the files, or
-create the workflow below manually.
+Run the guided [`fetcher onboard`](onboarding-a-new-project.md) flow to generate
+and validate these files. The wizard does not enable Pages or write repository
+variables and Secrets. Use `-dry-run` to review the complete plan without
+writing files.
+
+You can also create the workflow below manually.
 
 ## Deploy workflow
 
@@ -72,7 +78,21 @@ gh variable set AI_MODEL --repo my-org/my-dashboard
 gh secret set AI_TOKEN --repo my-org/my-dashboard
 ```
 
-The variable commands read the value interactively. You may also pass `--body`.
+The variable and secret commands read values interactively. You may also pass
+`--body` for nonsecret variables. Keep the token in `AI_TOKEN`; never put it in
+`AI_ENDPOINT`, `project.yaml`, or the workflow.
+
+The provider used to draft `prompts/system.md` during onboarding is a separate
+choice. Using it does not configure the deployed Pages workflow.
+
+Validate the local scaffold and workflow structure with:
+
+```bash
+fetcher onboard doctor -project-dir ./my-dashboard
+```
+
+Doctor validates the workflow mappings but cannot read the values stored in
+GitHub repository variables or Secrets.
 
 ## Engine version
 
