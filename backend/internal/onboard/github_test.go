@@ -21,6 +21,7 @@ func TestNormalizeGitHubRepo(t *testing.T) {
 		{name: "https", input: "https://github.com/kubernetes-sigs/cluster-api.git", want: "kubernetes-sigs/cluster-api"},
 		{name: "ssh url", input: "ssh://git@github.com/kubernetes-sigs/cluster-api.git", want: "kubernetes-sigs/cluster-api"},
 		{name: "scp remote", input: "git@github.com:kubernetes-sigs/cluster-api.git", want: "kubernetes-sigs/cluster-api"},
+		{name: "scp mixed-case host", input: "git@GitHub.com:kubernetes-sigs/cluster-api.git", want: "kubernetes-sigs/cluster-api"},
 		{name: "non github", input: "https://gitlab.com/example/project", wantErr: "not github.com"},
 		{name: "invalid repo", input: "not-a-repository", wantErr: "owner/name"},
 		{name: "missing name", input: "https://github.com/example", wantErr: "owner/name"},

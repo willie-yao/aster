@@ -18,7 +18,7 @@ var githubAPIBaseURL = "https://api.github.com"
 var (
 	repoOwnerPattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$`)
 	repoNamePattern  = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
-	scpGitHubPattern = regexp.MustCompile(`^(?:[^@]+@)?github\.com:([^/]+)/(.+)$`)
+	scpGitHubPattern = regexp.MustCompile(`(?i)^(?:[^@]+@)?github\.com:([^/]+)/(.+)$`)
 )
 
 var errNoGitOrigin = errors.New("current checkout has no GitHub origin remote")
@@ -60,7 +60,7 @@ func NormalizeGitHubRepo(input string) (Repo, error) {
 func repoFromParts(owner, name string) (Repo, error) {
 	owner = strings.TrimSpace(owner)
 	name = strings.TrimSuffix(strings.TrimSpace(name), ".git")
-	if !repoOwnerPattern.MatchString(owner) || !repoNamePattern.MatchString(name) || name == "." || name == ".." {
+	if !repoOwnerPattern.MatchString(owner) || !repoNamePattern.MatchString(name) || len(name) > 100 || name == "." || name == ".." {
 		return Repo{}, fmt.Errorf("GitHub repository must be owner/name, got %q", strings.Trim(owner+"/"+name, "/"))
 	}
 	return Repo{Owner: owner, Name: name, FullName: owner + "/" + name}, nil

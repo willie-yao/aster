@@ -135,7 +135,8 @@ func discoverRepository(ctx context.Context, repo Repo, token string, repositori
 		categoryNames = append([]string(nil), candidates[0].JobNames...)
 	}
 
-	dashboardRepo := repo.Owner + "/" + repo.Name + "-prow-ai-dashboard"
+	dashboardName := suggestedDashboardName(repo.Name)
+	dashboardRepo := repo.Owner + "/" + dashboardName
 	shortName := suggestShortName(repo.Name)
 	shortConfidence := ConfidenceLow
 	shortSource := "repository name did not provide a safe abbreviation"
@@ -156,8 +157,8 @@ func discoverRepository(ctx context.Context, repo Repo, token string, repositori
 			ShortName: Inferred[string]{Value: shortName, Source: shortSource, Confidence: shortConfidence},
 		},
 		DashboardRepo: Inferred[string]{Value: dashboardRepo, Source: "source repository owner and name", Confidence: ConfidenceHigh},
-		BasePath:      Inferred[string]{Value: "/" + repo.Name + "-prow-ai-dashboard", Source: "suggested dashboard repository name", Confidence: ConfidenceHigh},
-		SiteURL:       Inferred[string]{Value: "https://" + repo.Owner + ".github.io/" + repo.Name + "-prow-ai-dashboard", Source: "GitHub Pages repository convention", Confidence: ConfidenceHigh},
+		BasePath:      Inferred[string]{Value: "/" + dashboardName, Source: "suggested dashboard repository name", Confidence: ConfidenceHigh},
+		SiteURL:       Inferred[string]{Value: "https://" + repo.Owner + ".github.io/" + dashboardName, Source: "GitHub Pages repository convention", Confidence: ConfidenceHigh},
 		Categories:    InferCategories(categoryNames),
 	}
 	if metadata.Upstream != nil && metadata.Upstream.FullName != repo.FullName {
@@ -270,6 +271,18 @@ func splitDashboards(value string) []string {
 	return out
 }
 
+func suggestedDashboardName(sourceName string) string {
+	const (
+		suffix        = "-prow-ai-dashboard"
+		maxRepository = 100
+	)
+	maxSource := maxRepository - len(suffix)
+	if len(sourceName) > maxSource {
+		sourceName = sourceName[:maxSource]
+	}
+	return sourceName + suffix
+}
+
 func suggestShortName(name string) string {
 	parts := strings.FieldsFunc(name, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
 	if len(parts) < 2 || len(parts) > 5 {
@@ -306,22 +319,63 @@ func WriteDiscovery(out io.Writer, report DiscoveryReport, asJSON bool) error {
 		enc.SetIndent("", "  ")
 		return enc.Encode(report)
 	}
-	fmt.Fprintf(out, "Source repository: %s\n", safeTerminal(report.SourceRepo.FullName))
-	fmt.Fprintf(out, "GitHub metadata: %s, default branch %s, visibility %s\n", safeTerminal(report.MetadataSource), safeTerminal(report.SourceRepo.Branch), safeTerminal(report.SourceRepo.Visibility))
-	fmt.Fprintf(out, "Pinned test-infra revision: %s\n", safeTerminal(report.CatalogRevision))
-	fmt.Fprintf(out, "Matching Prow jobs: %d\n", len(report.MatchingJobs))
-	fmt.Fprintln(out, "Candidate TestGrid dashboards:")
+	writer := discoveryTextWriter{out: out}
+	writer.printf("Source repository: %s\n", safeTerminal(report.SourceRepo.FullName))
+	writer.printf("GitHub metadata: %s, default branch %s, visibility %s\n", safeTerminal(report.MetadataSource), safeTerminal(report.SourceRepo.Branch), safeTerminal(report.SourceRepo.Visibility))
+	writer.printf("Pinned test-infra revision: %s\n", safeTerminal(report.CatalogRevision))
+	writer.printf("Matching Prow jobs: %d\n", len(report.MatchingJobs))
+	writer.println("Candidate TestGrid dashboards:")
 	if len(report.Candidates) == 0 {
-		fmt.Fprintln(out, "  none")
+		writer.println("  none")
 	}
 	for i, candidate := range report.Candidates {
-		fmt.Fprintf(out, "  %d. %s\n", i+1, safeTerminal(candidate.Dashboard))
-		fmt.Fprintf(out, "     %d periodic jobs, %d presubmit jobs, %d branch value(s)\n", candidate.PeriodicJobs, candidate.PresubmitJobs, candidate.BranchCoverage)
+		writer.printf("  %d. %s\n", i+1, safeTerminal(candidate.Dashboard))
+		writer.printf("     %d periodic jobs, %d presubmit jobs, %d branch value(s)\n", candidate.PeriodicJobs, candidate.PresubmitJobs, candidate.BranchCoverage)
 	}
-	fmt.Fprintf(out, "Suggested project id: %s (%s, %s confidence)\n", safeTerminal(report.Identity.ID.Value), safeTerminal(report.Identity.ID.Source), report.Identity.ID.Confidence)
-	fmt.Fprintf(out, "Suggested dashboard repository: %s\n", safeTerminal(report.DashboardRepo.Value))
+	writeInference(&writer, "Suggested project id", report.Identity.ID)
+	writeInference(&writer, "Suggested project name", report.Identity.Name)
+	writeInference(&writer, "Suggested short name", report.Identity.ShortName)
+	writeInference(&writer, "Suggested dashboard repository", report.DashboardRepo)
+	writeInference(&writer, "Suggested Pages base path", report.BasePath)
+	writeInference(&writer, "Suggested Pages site URL", report.SiteURL)
+	if len(report.Categories) == 0 {
+		writer.println("Suggested categories: none")
+	} else {
+		ids := make([]string, 0, len(report.Categories))
+		for _, category := range report.Categories {
+			ids = append(ids, safeTerminal(category.ID))
+		}
+		writer.printf("Suggested categories: %s\n", strings.Join(ids, ", "))
+	}
 	for _, warning := range report.Warnings {
-		fmt.Fprintf(out, "Warning: %s\n", safeTerminal(warning))
+		writer.printf("Warning: %s\n", safeTerminal(warning))
 	}
-	return nil
+	return writer.err
+}
+
+type discoveryTextWriter struct {
+	out io.Writer
+	err error
+}
+
+func (w *discoveryTextWriter) printf(format string, args ...any) {
+	if w.err != nil {
+		return
+	}
+	_, w.err = fmt.Fprintf(w.out, format, args...)
+}
+
+func (w *discoveryTextWriter) println(args ...any) {
+	if w.err != nil {
+		return
+	}
+	_, w.err = fmt.Fprintln(w.out, args...)
+}
+
+func writeInference(writer *discoveryTextWriter, label string, inferred Inferred[string]) {
+	value := safeTerminal(inferred.Value)
+	if value == "" {
+		value = "unresolved"
+	}
+	writer.printf("%s: %s (%s, %s confidence)\n", label, value, safeTerminal(inferred.Source), inferred.Confidence)
 }

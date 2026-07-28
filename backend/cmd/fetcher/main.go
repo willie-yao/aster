@@ -12,6 +12,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fetcher"
@@ -97,7 +99,12 @@ func runOnboardDiscover(args []string) {
 	fs.BoolVar(&jsonOutput, "json", false, "write the discovery report as JSON")
 	_ = fs.Parse(args)
 
-	report, err := onboard.Discover(context.Background(), sourceRepo, os.Getenv("GITHUB_TOKEN"))
+	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	ctx, cancel := context.WithTimeout(signalCtx, 5*time.Minute)
+	defer cancel()
+
+	report, err := onboard.Discover(ctx, sourceRepo, os.Getenv("GITHUB_TOKEN"))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)

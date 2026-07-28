@@ -77,11 +77,11 @@ func (j JobDefinition) TestsRepo(repo string) bool {
 	if repo == "" {
 		return false
 	}
-	if j.JobType == models.JobTypePresubmit && j.Repo == repo {
+	if j.JobType == models.JobTypePresubmit && strings.EqualFold(j.Repo, repo) {
 		return true
 	}
 	for _, ref := range j.Refs {
-		if ref.FullRepo() == repo {
+		if strings.EqualFold(ref.FullRepo(), repo) {
 			return true
 		}
 	}

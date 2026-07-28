@@ -2,11 +2,13 @@ package onboard
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prow/jobconfig"
 )
 
@@ -140,5 +142,50 @@ func TestWriteDiscovery_EscapesTerminalControlCharacters(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "dashboard?forged") {
 		t.Fatalf("sanitized dashboard missing: %q", out.String())
+	}
+}
+
+func TestSuggestedDashboardNameIsValidForLongSourceName(t *testing.T) {
+	source := strings.Repeat("a", 100)
+	name := suggestedDashboardName(source)
+	if len(name) != 100 || !strings.HasSuffix(name, "-prow-ai-dashboard") {
+		t.Fatalf("suggested name length=%d value=%q", len(name), name)
+	}
+}
+
+func TestWriteDiscovery_TextIncludesAllSuggestions(t *testing.T) {
+	var out strings.Builder
+	report := DiscoveryReport{
+		SourceRepo: Repo{FullName: "example/project", Branch: "main", Visibility: "public"},
+		Identity: IdentitySuggestions{
+			ID:        Inferred[string]{Value: "project", Source: "repo", Confidence: ConfidenceHigh},
+			Name:      Inferred[string]{Value: "Project", Source: "repo", Confidence: ConfidenceMedium},
+			ShortName: Inferred[string]{Value: "PRJ", Source: "initials", Confidence: ConfidenceMedium},
+		},
+		DashboardRepo: Inferred[string]{Value: "example/project-prow-ai-dashboard", Source: "repo", Confidence: ConfidenceHigh},
+		BasePath:      Inferred[string]{Value: "/project-prow-ai-dashboard", Source: "dashboard repo", Confidence: ConfidenceHigh},
+		SiteURL:       Inferred[string]{Value: "https://example.github.io/project-prow-ai-dashboard", Source: "Pages", Confidence: ConfidenceHigh},
+		Categories:    []project.CategoryRule{{ID: "e2e"}, {ID: "conformance"}},
+	}
+	if err := WriteDiscovery(&out, report, false); err != nil {
+		t.Fatalf("WriteDiscovery: %v", err)
+	}
+	for _, want := range []string{"Suggested project name", "Suggested short name", "Suggested Pages base path", "Suggested Pages site URL", "e2e, conformance", "high confidence"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) {
+	return 0, errors.New("write failed")
+}
+
+func TestWriteDiscovery_TextPropagatesWriteError(t *testing.T) {
+	err := WriteDiscovery(failingWriter{}, DiscoveryReport{}, false)
+	if err == nil || !strings.Contains(err.Error(), "write failed") {
+		t.Fatalf("error = %v", err)
 	}
 }
