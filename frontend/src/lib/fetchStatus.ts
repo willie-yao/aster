@@ -50,7 +50,8 @@ export function fetchStatusPresentation(response: FetchStatusResponse): FetchSta
     title = "Previous fetch interrupted";
     severity = "warning";
   } else if (state === "failed") {
-    title = `Fetch failed: ${phase}`;
+    const failedPhase = phaseLabels[status.failure_category ?? ""] ?? phase;
+    title = `Fetch failed: ${failedPhase}`;
     severity = "error";
   } else if (state === "cancelled") {
     title = "Fetch cancelled";

@@ -61,7 +61,12 @@ test("fetch status presentation covers active idle failed and stale states", () 
     next_reconcile_at: "2026-07-28T12:00:00Z",
   }).status!)?.includes("Next reconcile"));
 
-  const failed = fetchStatusPresentation(response("failed", { ...activeStatus, phase: "publication", outcome: "failed" }));
+  const failed = fetchStatusPresentation(response("failed", {
+    ...activeStatus,
+    phase: "failed",
+    outcome: "failed",
+    failure_category: "publication",
+  }));
   assert.equal(failed?.title, "Fetch failed: Publication");
   assert.equal(failed?.severity, "error");
 

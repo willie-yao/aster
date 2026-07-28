@@ -383,6 +383,7 @@ func (t *Tracker) recoverInterrupted() {
 	previous.Phase = PhaseInterrupted
 	previous.Outcome = OutcomeInterrupted
 	previous.FailureCategory = FailureInterrupted
+	previous.PhaseStartedAt = now
 	previous.LastProgressAt = now
 	previous.Analyses.Cancelled += previous.Analyses.Queued + previous.Analyses.Running
 	previous.Analyses.Queued = 0

@@ -129,7 +129,7 @@ func TestNewTrackerMarksRunningStatusInterrupted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Outcome != OutcomeInterrupted || got.Phase != PhaseInterrupted || got.FailureCategory != FailureInterrupted {
+	if got.Outcome != OutcomeInterrupted || got.Phase != PhaseInterrupted || got.FailureCategory != FailureInterrupted || got.PhaseStartedAt != now {
 		t.Fatalf("recovered status = %+v", got)
 	}
 	if tracker.Snapshot().Outcome != OutcomeInterrupted || len(logs) != 1 {
