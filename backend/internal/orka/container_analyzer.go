@@ -13,6 +13,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisruntime"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fetchprogress"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 )
 
@@ -52,6 +53,7 @@ type ContainerAnalyzerOptions struct {
 	Tolerations         []map[string]any
 	Affinity            map[string]any
 	Labels              map[string]string
+	Progress            *fetchprogress.Tracker
 	KubeContext         string
 	OrkaAPI             string
 	OrkaAPIToken        string
@@ -231,6 +233,8 @@ func (a *ContainerAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, 
 	}
 
 	taskRequest := analysisruntime.CanonicalFailureAnalysisRequest(request)
+	cacheSeed := a.state.CacheSeed(taskRequest)
+	workItem, correlationLabels := containerAnalysisCorrelation(a.opts.Progress, taskRequest)
 
 	resources, err := BuildContainerAnalysisResources(ContainerAnalysisTaskSpec{
 		Namespace:           a.opts.Namespace,
@@ -241,14 +245,14 @@ func (a *ContainerAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, 
 		MaxRetries:          a.opts.MaxRetries,
 		ProjectDir:          a.opts.ProjectDir,
 		Request:             taskRequest,
-		CacheSeed:           a.state.CacheSeed(taskRequest),
+		CacheSeed:           cacheSeed,
 		StateKeyFingerprint: containerStateKeyFingerprint(a.opts.StateKey),
 		Environment:         containerAnalyzerEnvironment(a.opts),
 		SecretEnv: []SecretEnvVar{
 			{Name: "AI_TOKEN", SecretName: a.opts.ModelSecretName, SecretKey: a.opts.ModelTokenKey},
 			{Name: analysisruntime.ContainerStateKeyEnv, SecretName: a.opts.StateSecretName, SecretKey: a.opts.StateSecretKey},
 		},
-		Labels: a.opts.Labels, NodeSelector: a.opts.NodeSelector,
+		Labels: a.opts.Labels, TaskLabels: correlationLabels, NodeSelector: a.opts.NodeSelector,
 		Tolerations: a.opts.Tolerations, Affinity: a.opts.Affinity,
 	})
 	if err != nil {
@@ -258,15 +262,25 @@ func (a *ContainerAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, 
 	if err != nil {
 		return ai.UnavailableFailureAnalysisResult(request.TestCase, err), err
 	}
-	if err := ReconcileContainerAnalysisResources(ctx, a.kube, resources); err != nil {
+	if a.opts.Progress != nil {
+		a.opts.Progress.RecordTaskPlanned(workItem, taskName, resources.CacheSeedIncluded)
+	}
+	reconcile, err := ReconcileContainerAnalysisResourcesWithResult(ctx, a.kube, resources)
+	if err != nil {
 		err = fmt.Errorf("reconcile container analysis Task %s: %w", taskName, err)
 		return ai.UnavailableFailureAnalysisResult(request.TestCase, err), err
+	}
+	if a.opts.Progress != nil {
+		a.opts.Progress.RecordTaskState(workItem, "Pending", 0, reconcile.Adopted)
 	}
 
 	taskCtx, cancel := context.WithTimeout(ctx, containerTaskWaitTimeout(a.opts.TaskTimeout, a.opts.MaxRetries))
 	defer cancel()
-	state, err := a.waitTerminal(taskCtx, taskName)
+	state, err := a.waitTerminal(taskCtx, taskName, workItem, reconcile.Adopted)
 	if err != nil {
+		if a.opts.Progress != nil {
+			a.opts.Progress.RecordTaskOutcome(workItem, terminalProgressPhase(err))
+		}
 		err = fmt.Errorf("wait for container analysis Task %s: %w", taskName, err)
 		return ai.UnavailableFailureAnalysisResult(request.TestCase, err), err
 	}
@@ -274,7 +288,7 @@ func (a *ContainerAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, 
 		taskErr := fmt.Errorf("container analysis Task %s ended %s", taskName, state.Phase)
 		stateCtx, stateCancel := context.WithTimeout(ctx, failedTaskStateTimeout)
 		defer stateCancel()
-		if raw, resultErr := a.waitResult(stateCtx, taskName); resultErr != nil {
+		if raw, resultErr := a.waitResult(stateCtx, taskName, workItem); resultErr != nil {
 			if IsResultAuthorizationError(resultErr) {
 				resultErr = fmt.Errorf("read failed container analysis Task %s result: %w", taskName, resultErr)
 				return ai.UnavailableFailureAnalysisResult(request.TestCase, resultErr), resultErr
@@ -284,10 +298,13 @@ func (a *ContainerAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, 
 			identity := analysisruntime.NewContainerStateIdentity(a.opts.Namespace, taskName, taskRequest)
 			if delta, stateErr := analysisruntime.ParseEncryptedContainerAnalysisState(raw, a.opts.StateKey, identity); stateErr != nil {
 				log.Printf("Warning: failed to parse private state from %s: %v", taskName, stateErr)
-			} else if stateErr := a.state.MergeTraces(delta); stateErr != nil {
-				log.Printf("Warning: failed to merge private traces from %s: %v", taskName, stateErr)
-			} else if markErr := MarkContainerAnalysisFailureConsumed(stateCtx, a.kube, resources, state.UID); markErr != nil {
-				log.Printf("Warning: failed to mark consumed failure %s: %v", taskName, markErr)
+			} else {
+				a.recordCacheDisposition(workItem, resources.CacheSeedIncluded, delta)
+				if stateErr := a.state.MergeTraces(delta); stateErr != nil {
+					log.Printf("Warning: failed to merge private traces from %s: %v", taskName, stateErr)
+				} else if markErr := MarkContainerAnalysisFailureConsumed(stateCtx, a.kube, resources, state.UID); markErr != nil {
+					log.Printf("Warning: failed to mark consumed failure %s: %v", taskName, markErr)
+				}
 			}
 		}
 		return ai.UnavailableFailureAnalysisResult(request.TestCase, taskErr), taskErr
@@ -295,7 +312,7 @@ func (a *ContainerAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, 
 
 	resultCtx, resultCancel := context.WithTimeout(ctx, containerResultReadTimeout)
 	defer resultCancel()
-	raw, err := a.waitResult(resultCtx, taskName)
+	raw, err := a.waitResult(resultCtx, taskName, workItem)
 	if err != nil {
 		err = fmt.Errorf("read container analysis Task %s result: %w", taskName, err)
 		return ai.UnavailableFailureAnalysisResult(request.TestCase, err), err
@@ -309,12 +326,20 @@ func (a *ContainerAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, 
 	if err != nil {
 		return ai.UnavailableFailureAnalysisResult(request.TestCase, err), err
 	}
+	a.recordCacheDisposition(workItem, resources.CacheSeedIncluded, delta)
 	if err := a.state.Merge(delta); err != nil {
 		log.Printf("Warning: failed to persist state from %s: %v", taskName, err)
 		return result, nil
 	}
 	a.cleanupConsumedBundle(resources, state)
 	return result, nil
+}
+
+func (a *ContainerAnalyzer) recordCacheDisposition(workItem string, cacheSeedIncluded bool, delta analysisruntime.ContainerAnalysisState) {
+	if a.opts.Progress == nil || !cacheSeedIncluded {
+		return
+	}
+	a.opts.Progress.RecordCacheDisposition(workItem, containerAnalysisCacheHit(delta.Traces))
 }
 
 func containerAnalyzerEnvironment(opts ContainerAnalyzerOptions) map[string]string {
@@ -341,13 +366,16 @@ func containerTaskWaitTimeout(taskTimeout time.Duration, retries int) time.Durat
 	return total + attempts*taskTimeout
 }
 
-func (a *ContainerAnalyzer) waitTerminal(ctx context.Context, taskName string) (TaskState, error) {
+func (a *ContainerAnalyzer) waitTerminal(ctx context.Context, taskName, workItem string, adopted bool) (TaskState, error) {
 	ticker := time.NewTicker(a.opts.PollInterval)
 	defer ticker.Stop()
 	for {
 		state, err := a.kube.TaskState(ctx, a.opts.Namespace, taskName)
 		if err != nil {
 			return TaskState{}, err
+		}
+		if a.opts.Progress != nil && state.Exists {
+			a.opts.Progress.RecordTaskState(workItem, state.Phase, state.Attempts, adopted)
 		}
 		if state.Exists && TerminalPhase(state.Phase) {
 			return state, nil
@@ -360,11 +388,16 @@ func (a *ContainerAnalyzer) waitTerminal(ctx context.Context, taskName string) (
 	}
 }
 
-func (a *ContainerAnalyzer) waitResult(ctx context.Context, taskName string) (string, error) {
+func (a *ContainerAnalyzer) waitResult(ctx context.Context, taskName, workItem string) (string, error) {
 	ticker := time.NewTicker(a.opts.PollInterval)
 	defer ticker.Stop()
+	calls := 0
 	for {
 		raw, ok, err := a.results.Result(ctx, a.opts.Namespace, taskName)
+		if a.opts.Progress != nil {
+			a.opts.Progress.RecordResultAttempt(workItem, calls > 0, ok && err == nil)
+		}
+		calls++
 		if err != nil {
 			return "", err
 		}

@@ -450,6 +450,9 @@ func TestEvidencePlanCoverageSurvivesContainerRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !resources.CacheSeedIncluded {
+		t.Fatal("bounded cache seed was not reported as included")
+	}
 	bundleJSON := resources.BundleConfigMap["data"].(map[string]any)[analysisruntime.ProjectBundleConfigMapKey].(string)
 	bundle, err := analysisruntime.DecodeProjectBundle([]byte(bundleJSON))
 	if err != nil {

@@ -20,11 +20,13 @@ import (
 
 type fakeContainerAnalyzerKube struct {
 	*fakeContainerResourceClient
-	mu            sync.Mutex
-	taskCalls     int
-	phase         string
-	terminalDelay time.Duration
-	deletedTask   []string
+	mu              sync.Mutex
+	taskCalls       int
+	phase           string
+	attempts        int
+	existsInitially bool
+	terminalDelay   time.Duration
+	deletedTask     []string
 }
 
 func (f *fakeContainerAnalyzerKube) TaskState(ctx context.Context, _ string, _ string) (TaskState, error) {
@@ -33,7 +35,7 @@ func (f *fakeContainerAnalyzerKube) TaskState(ctx context.Context, _ string, _ s
 	call := f.taskCalls
 	delay := f.terminalDelay
 	f.mu.Unlock()
-	if call == 1 {
+	if call == 1 && !f.existsInitially {
 		return TaskState{}, nil
 	}
 	if call == 2 && delay > 0 {
@@ -46,7 +48,7 @@ func (f *fakeContainerAnalyzerKube) TaskState(ctx context.Context, _ string, _ s
 		}
 	}
 	return TaskState{
-		Exists: true, Phase: f.phase, UID: "task-uid", ResourceVersion: "task-rv",
+		Exists: true, Phase: f.phase, UID: "task-uid", ResourceVersion: "task-rv", Attempts: f.attempts,
 	}, nil
 }
 
@@ -58,17 +60,22 @@ func (f *fakeContainerAnalyzerKube) DeleteTaskIfIdentity(_ context.Context, name
 }
 
 type generatedContainerResult struct {
-	request ai.FailureAnalysisRequest
-	key     []byte
-	entry   map[string]ai.CacheEntry
-	failed  bool
-	err     error
-	delay   time.Duration
-	calls   int
+	request      ai.FailureAnalysisRequest
+	key          []byte
+	entry        map[string]ai.CacheEntry
+	failed       bool
+	err          error
+	delay        time.Duration
+	notReady     int
+	traceOutcome string
+	calls        int
 }
 
 func (r *generatedContainerResult) Result(ctx context.Context, namespace, taskName string) (string, bool, error) {
 	r.calls++
+	if r.calls <= r.notReady {
+		return "", false, nil
+	}
 	if r.delay > 0 {
 		timer := time.NewTimer(r.delay)
 		defer timer.Stop()
@@ -82,13 +89,17 @@ func (r *generatedContainerResult) Result(ctx context.Context, namespace, taskNa
 		return "", false, r.err
 	}
 	identity := analysisruntime.NewContainerStateIdentity(namespace, taskName, r.request)
+	traceOutcome := r.traceOutcome
+	if traceOutcome == "" {
+		traceOutcome = "unavailable"
+	}
 	state := analysisruntime.ContainerAnalysisState{
 		Version: analysisruntime.ContainerStateVersion, TaskNamespace: namespace,
 		TaskName: taskName, CacheKey: identity.CacheKey, CacheEntries: r.entry,
 		Traces: []ai.AnalysisTrace{{
 			JobID: r.request.JobID, BuildID: r.request.Build.BuildID, TestName: r.request.TestCase.Name,
 			APIMode: "chat_completions", StartedAt: time.Now().UTC().Format(time.RFC3339Nano),
-			RecordedAt: time.Now().UTC().Format(time.RFC3339Nano), Outcome: "unavailable",
+			RecordedAt: time.Now().UTC().Format(time.RFC3339Nano), Outcome: traceOutcome,
 		}},
 	}
 	result := ai.FailureAnalysisResult{
@@ -479,7 +490,7 @@ func TestContainerAnalyzerUnknownTaskPhaseStopsAtContextDeadline(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
 	defer cancel()
-	if _, err := analyzer.waitTerminal(ctx, "unknown-task"); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := analyzer.waitTerminal(ctx, "unknown-task", "work-item", false); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("waitTerminal error = %v", err)
 	}
 }

@@ -125,6 +125,7 @@ type TaskState struct {
 	Execution       map[string]any
 	ResourceVersion string
 	UID             string
+	Attempts        int
 	Deleting        bool
 }
 
@@ -147,6 +148,10 @@ func (k *KubeClient) TaskState(ctx context.Context, ns, name string) (TaskState,
 
 func taskStateFromObject(u *unstructured.Unstructured) (TaskState, error) {
 	phase, _, _ := unstructured.NestedString(u.Object, "status", "phase")
+	attempts, foundAttempts, err := unstructured.NestedInt64(u.Object, "status", "attempts")
+	if err != nil || (foundAttempts && (attempts < 0 || attempts > 1<<31-1)) {
+		return TaskState{}, fmt.Errorf("invalid status.attempts")
+	}
 	execution, found, err := unstructured.NestedMap(u.Object, "spec", "execution")
 	if err != nil {
 		return TaskState{}, err
@@ -156,7 +161,7 @@ func taskStateFromObject(u *unstructured.Unstructured) (TaskState, error) {
 	}
 	return TaskState{
 		Exists: true, Phase: phase, Execution: execution,
-		ResourceVersion: u.GetResourceVersion(), UID: string(u.GetUID()),
+		ResourceVersion: u.GetResourceVersion(), UID: string(u.GetUID()), Attempts: int(attempts),
 		Deleting: u.GetDeletionTimestamp() != nil,
 	}, nil
 }

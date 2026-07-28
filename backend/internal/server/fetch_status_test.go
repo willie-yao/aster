@@ -34,7 +34,17 @@ func serverFetchStatus(now time.Time) fetchprogress.Status {
 func TestFetchStatusEndpointAuthenticationMethodsAndPrivacy(t *testing.T) {
 	dataDir := t.TempDir()
 	now := time.Now().UTC()
-	if err := fetchprogress.Write(fetchprogress.Path(dataDir), serverFetchStatus(now)); err != nil {
+	status := serverFetchStatus(now)
+	status.CurrentTasks = []fetchprogress.TaskMapping{{WorkItem: "safe-work", TaskName: "private-task-name", Phase: "Running"}}
+	if err := fetchprogress.Write(fetchprogress.Path(dataDir), status); err != nil {
+		t.Fatal(err)
+	}
+	history := fetchprogress.History{SchemaVersion: fetchprogress.HistorySchemaVersion, Passes: []fetchprogress.PassSummary{{
+		RunID: "safe-run", PassID: "previous-pass", PassType: fetchprogress.PassLightweightWatch,
+		StartedAt: now.Add(-2 * time.Minute), CompletedAt: now.Add(-time.Minute),
+		LogicalCount: 3, TaskAttempts: 4, Retries: 1, Outcome: fetchprogress.OutcomeSucceeded, Published: true,
+	}}}
+	if err := fetchprogress.WriteHistory(fetchprogress.HistoryPath(dataDir), history); err != nil {
 		t.Fatal(err)
 	}
 	h, err := Handler(Options{DataDir: dataDir, Capabilities: DefaultCapabilities(), Auth: fakeAuth{}, AuthMode: "dev"})
@@ -70,8 +80,11 @@ func TestFetchStatusEndpointAuthenticationMethodsAndPrivacy(t *testing.T) {
 	if !got.Available || got.State != "active" || got.Status == nil || got.Status.Analyses.Retries != 3 {
 		t.Fatalf("GET response = %+v", got)
 	}
+	if len(got.Status.CurrentTasks) != 0 || got.HistorySchemaVersion != fetchprogress.HistorySchemaVersion || len(got.History) != 1 || got.History[0].TaskAttempts != 4 {
+		t.Fatalf("safe status/history response = %+v", got)
+	}
 	body, _ := json.Marshal(got)
-	for _, sensitive := range []string{"/private/", "token-value", "provider-body", "test-name", "job-name", "build-id"} {
+	for _, sensitive := range []string{"/private/", "token-value", "provider-body", "test-name", "job-name", "build-id", "private-task-name"} {
 		if string(body) != "" && bytes.Contains(body, []byte(sensitive)) {
 			t.Fatalf("response exposed %q: %s", sensitive, body)
 		}
@@ -109,6 +122,14 @@ func TestFetchStatusEndpointAuthenticationMethodsAndPrivacy(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("private status file = %d, want 404", resp.StatusCode)
+	}
+	resp, err = http.Get(srv.URL + "/data/.fetch-status/history.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("private history file = %d, want 404", resp.StatusCode)
 	}
 
 	resp, err = http.Get(srv.URL + "/api/capabilities")

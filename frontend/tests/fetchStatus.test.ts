@@ -20,6 +20,9 @@ const activeStatus: FetchProgressStatus = {
   builds: { cached: 241, fetched: 29 },
   analyses: {
     logical_total: 61,
+    accepted_cache_hits: 0,
+    new_work: 0,
+    stale_work: 0,
     queued: 35,
     running: 2,
     completed: 23,
@@ -27,6 +30,9 @@ const activeStatus: FetchProgressStatus = {
     cancelled: 0,
     task_attempts: 0,
     retries: 3,
+    existing_tasks_adopted: 0,
+    results_retrieved: 0,
+    result_retrieval_retries: 0,
   },
   pattern_phase: "pending",
   publication_phase: "pending",
@@ -44,6 +50,11 @@ test("fetch status presentation covers active idle failed and stale states", () 
   assert.equal(active?.determinateTotal, 61);
   assert.equal(active?.determinateCompleted, 24);
   assert.ok(active?.ariaLabel.includes("Fetch in progress"));
+  const attempts = fetchStatusPresentation(response("active", {
+    ...activeStatus,
+    analyses: { ...activeStatus.analyses, task_attempts: 27 },
+  }));
+  assert.ok(attempts?.detail.includes("27 Task attempts"));
 
   const idle = fetchStatusPresentation(response("idle", {
     ...activeStatus,

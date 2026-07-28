@@ -309,6 +309,7 @@ func (p *pipeline) ensureContainerAnalyzer() (containerFailureAnalyzer, error) {
 		NodeSelector:        cfg.NodeSelector,
 		Tolerations:         cfg.Tolerations,
 		Affinity:            cfg.Affinity,
+		Progress:            p.progress,
 	})
 	if err != nil {
 		return nil, err

@@ -625,3 +625,26 @@ func TestPruneContainerAnalysisTasksExpiresStaleActiveTask(t *testing.T) {
 		t.Fatalf("deleted=%d calls=%v", deleted, client.deletedTasks)
 	}
 }
+
+func TestReconcileContainerAnalysisResourcesReportsAdoption(t *testing.T) {
+	resources := lifecycleResources()
+	client := &fakeContainerResourceClient{taskStates: map[string]TaskState{
+		"task": {Exists: true, Phase: "Succeeded", UID: "uid-task", Attempts: 1},
+	}}
+	result, err := ReconcileContainerAnalysisResourcesWithResult(context.Background(), client, resources)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Adopted || len(client.applied) != 0 {
+		t.Fatalf("adopted result=%+v applied=%v", result, client.applied)
+	}
+
+	client = &fakeContainerResourceClient{}
+	result, err = ReconcileContainerAnalysisResourcesWithResult(context.Background(), client, resources)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Adopted || !reflect.DeepEqual(client.applied, []string{"tasks/task"}) {
+		t.Fatalf("new result=%+v applied=%v", result, client.applied)
+	}
+}

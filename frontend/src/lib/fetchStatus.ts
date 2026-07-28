@@ -34,6 +34,7 @@ export function fetchStatusPresentation(response: FetchStatusResponse): FetchSta
   const logicalDetail = status.analyses.logical_total > 0
     ? `${analysesDone} of ${status.analyses.logical_total} analyses complete, ${status.analyses.running} running, ${status.analyses.queued} queued`
     : `${status.jobs.completed} of ${status.jobs.total} jobs checked`;
+  const attemptDetail = status.analyses.task_attempts > 0 ? `, ${status.analyses.task_attempts} Task attempts` : "";
   const retryDetail = status.analyses.retries > 0 ? `, ${status.analyses.retries} retries` : "";
   const state = response.state;
   let title = `Fetch in progress: ${phase}`;
@@ -57,7 +58,7 @@ export function fetchStatusPresentation(response: FetchStatusResponse): FetchSta
     title = "Fetch cancelled";
     severity = "warning";
   }
-  const detail = `${logicalDetail}${retryDetail}`;
+  const detail = `${logicalDetail}${attemptDetail}${retryDetail}`;
   const determinateTotal = status.analyses.logical_total > 0
     ? status.analyses.logical_total
     : status.jobs.total > 0 ? status.jobs.total : null;

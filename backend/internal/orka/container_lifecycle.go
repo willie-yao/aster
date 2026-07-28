@@ -56,61 +56,75 @@ type ContainerAnalysisMaintenanceClient interface {
 	DeleteTaskIfIdentity(context.Context, string, string, string, string) (bool, error)
 }
 
+// ContainerAnalysisReconcileResult reports whether an existing Task was adopted.
+type ContainerAnalysisReconcileResult struct {
+	Adopted bool
+}
+
 // ReconcileContainerAnalysisResources applies one bundle and Task without batch GC.
 func ReconcileContainerAnalysisResources(ctx context.Context, client ContainerAnalysisMaintenanceClient, resources ContainerAnalysisResources) error {
+	_, err := ReconcileContainerAnalysisResourcesWithResult(ctx, client, resources)
+	return err
+}
+
+// ReconcileContainerAnalysisResourcesWithResult also reports Task adoption.
+func ReconcileContainerAnalysisResourcesWithResult(ctx context.Context, client ContainerAnalysisMaintenanceClient, resources ContainerAnalysisResources) (ContainerAnalysisReconcileResult, error) {
 	namespace, _, err := containerResourceRef(resources.BundleConfigMap)
 	if err != nil {
-		return err
+		return ContainerAnalysisReconcileResult{}, err
 	}
 	taskNamespace, taskName, err := containerResourceRef(resources.Task)
 	if err != nil {
-		return err
+		return ContainerAnalysisReconcileResult{}, err
 	}
 	if taskNamespace != namespace {
-		return fmt.Errorf("container analysis Task and bundle namespaces differ")
+		return ContainerAnalysisReconcileResult{}, fmt.Errorf("container analysis Task and bundle namespaces differ")
 	}
 	state, err := client.TaskState(ctx, taskNamespace, taskName)
 	if err != nil {
-		return fmt.Errorf("read container analysis Task %s: %w", taskName, err)
+		return ContainerAnalysisReconcileResult{}, fmt.Errorf("read container analysis Task %s: %w", taskName, err)
 	}
+	result := ContainerAnalysisReconcileResult{Adopted: state.Exists}
 	if state.Exists && state.Deleting {
 		disappeared, err := waitForDeletingContainerAnalysisTask(ctx, client, taskNamespace, taskName, state.UID)
 		if err != nil {
-			return err
+			return result, err
 		}
 		if !disappeared {
-			return nil
+			return result, nil
 		}
+		result.Adopted = false
 	} else if state.Exists && TerminalPhase(state.Phase) {
 		if state.Phase == "Succeeded" {
-			return nil
+			return result, nil
 		}
 		replace, err := consumedFailureReadyForReplacement(ctx, client, resources, time.Now().UTC())
 		if err != nil {
-			return err
+			return result, err
 		}
 		if !replace {
-			return nil
+			return result, nil
 		}
 		removed, err := client.DeleteTaskIfIdentity(ctx, taskNamespace, taskName, state.UID, state.ResourceVersion)
 		if err != nil {
-			return fmt.Errorf("delete consumed container analysis Task %s: %w", taskName, err)
+			return result, fmt.Errorf("delete consumed container analysis Task %s: %w", taskName, err)
 		}
 		if !removed {
-			return nil
+			return result, nil
 		}
 		disappeared, err := waitForDeletingContainerAnalysisTask(ctx, client, taskNamespace, taskName, state.UID)
 		if err != nil {
-			return err
+			return result, err
 		}
 		if !disappeared {
-			return nil
+			return result, nil
 		}
+		result.Adopted = false
 	}
 	if err := ApplyContainerAnalysisResources(ctx, client, resources); err != nil {
-		return err
+		return result, err
 	}
-	return nil
+	return result, nil
 }
 
 func waitForDeletingContainerAnalysisTask(ctx context.Context, client ContainerAnalysisResourceClient, namespace, taskName, expectedUID string) (bool, error) {
