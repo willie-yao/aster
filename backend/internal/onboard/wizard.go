@@ -156,6 +156,7 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 	if err != nil {
 		return nil, opts, err
 	}
+	opts.SourceRepo = report.SourceRepo.FullName
 	fmt.Fprintf(deps.terminal.Out, "Found %d Prow job definition(s) that test this repository.\n", len(report.MatchingJobs))
 
 	selected, err := wizardDiscovery(prompt, &opts, report)

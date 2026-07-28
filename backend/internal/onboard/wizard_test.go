@@ -785,3 +785,27 @@ func TestWizard_RejectsCredentialsEnteredAsRepositoriesWithoutLeaking(t *testing
 		}
 	})
 }
+
+func TestWizard_UsesCanonicalRepositoryFromGitHub(t *testing.T) {
+	input := strings.Join([]string{"", "", "", "", "", "", "n", "", "y"}, "\n") + "\n"
+	deps, out, writer, _ := wizardDependencies(input)
+	deps.repositories = &wizardFakeRepositoryClient{metadata: RepositoryMetadata{Repo: Repo{
+		Owner: "canonical", Name: "project", FullName: "canonical/project", Branch: "main", Visibility: "public",
+	}}}
+	catalog := deps.catalogs.(*wizardFakeCatalogClient).catalog
+	for key, definition := range catalog.Jobs {
+		definition.Refs = []jobconfig.RepoRef{{Org: "canonical", Repo: "project", BaseRef: "main"}}
+		catalog.Jobs[key] = definition
+	}
+	opts := Options{SourceRepo: "old-owner/old-name", EngineRef: "main", NoPrompt: true}
+	if err := run(context.Background(), opts, deps); err != nil {
+		t.Fatalf("run: %v\n%s", err, out.String())
+	}
+	projectYAML := writer.files["project.yaml"]
+	if !strings.Contains(projectYAML, `owner: "canonical"`) || !strings.Contains(projectYAML, `name: "project"`) {
+		t.Fatalf("canonical source repo not rendered:\n%s", projectYAML)
+	}
+	if strings.Contains(projectYAML, "old-owner") || strings.Contains(projectYAML, "old-name") {
+		t.Fatalf("stale source repo retained:\n%s", projectYAML)
+	}
+}
