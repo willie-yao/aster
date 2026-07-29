@@ -24,6 +24,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixruntime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/issues"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/patternstate"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/repotemplate"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/resolve"
@@ -504,6 +505,16 @@ func (s *Service) reconcileEntry(ctx context.Context, entry *previewEntry, userT
 }
 
 func (s *Service) confirmEntry(ctx context.Context, entry *previewEntry, userToken string) (string, error) {
+	var result string
+	err := patternstate.WithLock(s.dataDir, func() error {
+		var err error
+		result, err = s.confirmEntryUnlocked(ctx, entry, userToken)
+		return err
+	})
+	return result, err
+}
+
+func (s *Service) confirmEntryUnlocked(ctx context.Context, entry *previewEntry, userToken string) (string, error) {
 	if entry != nil && entry.failureID != "" {
 		pattern, err := s.findPattern(entry.failureID)
 		if err != nil {
@@ -579,6 +590,10 @@ func fixTargetFingerprint(eff project.FixPRs) string {
 // view until a failing build newer than the current watermark recurs. note is
 // an optional maintainer comment (e.g. the fixing PR). login attributes it.
 func (s *Service) Resolve(failureID, login, note string) error {
+	return patternstate.WithLock(s.dataDir, func() error { return s.resolveUnlocked(failureID, login, note) })
+}
+
+func (s *Service) resolveUnlocked(failureID, login, note string) error {
 	pa, err := s.findPattern(failureID)
 	if err != nil {
 		return err
@@ -604,6 +619,10 @@ func (s *Service) Resolve(failureID, login, note string) error {
 
 // Unresolve clears a pattern's resolved mark so it returns to the active view.
 func (s *Service) Unresolve(failureID string) error {
+	return patternstate.WithLock(s.dataDir, func() error { return s.unresolveUnlocked(failureID) })
+}
+
+func (s *Service) unresolveUnlocked(failureID string) error {
 	if !resolve.Load(s.dataDir).IsResolved(failureID) {
 		return ErrNotFound
 	}

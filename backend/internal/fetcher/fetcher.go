@@ -35,6 +35,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/patterns"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/patternstate"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prow/jobconfig"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prowbuild"
@@ -563,15 +564,21 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 	}
 
 	log.Printf("Writing output to %s/ (%d jobs)", opts.OutDir, len(dashboard.Jobs))
-	if err := writeAllOutput(opts.OutDir, cfg, dashboard, details, flakinessReport, searchIndex); err != nil {
-		return nil, fmt.Errorf("writing output: %w", err)
-	}
-	if len(stagedReopened) > 0 {
-		if err := resolve.RemoveMatching(opts.OutDir, stagedReopened); err != nil {
-			log.Printf("Warning: failed to save resolved state after publication: %v", err)
-		} else {
-			log.Printf("↩ re-opened %d resolved pattern(s) after recurrence", len(stagedReopened))
+	err = patternstate.WithLock(opts.OutDir, func() error {
+		if err := writeAllOutput(opts.OutDir, cfg, dashboard, details, flakinessReport, searchIndex); err != nil {
+			return fmt.Errorf("writing output: %w", err)
 		}
+		if len(stagedReopened) > 0 {
+			if err := resolve.RemoveMatching(opts.OutDir, stagedReopened); err != nil {
+				log.Printf("Warning: failed to save resolved state after publication: %v", err)
+			} else {
+				log.Printf("↩ re-opened %d resolved pattern(s) after recurrence", len(stagedReopened))
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	p.markProgressPublished()
 	p.completeProgressPhase()

@@ -14,6 +14,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/issues"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/patternstate"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
 )
 
@@ -349,9 +350,14 @@ func (s *Service) notifyRequestReady(view ActionRequestView) {
 		if s.validatePatternSnapshot(view.FailureID, view.PatternHash) != nil {
 			return
 		}
-		notifyCtx, notifyCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		notifyErr = notifier(notifyCtx, view)
-		notifyCancel()
+		notifyErr = patternstate.WithLock(s.dataDir, func() error {
+			if err := s.validatePatternSnapshot(view.FailureID, view.PatternHash); err != nil {
+				return err
+			}
+			notifyCtx, notifyCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer notifyCancel()
+			return notifier(notifyCtx, view)
+		})
 		if notifyErr == nil {
 			break
 		}
