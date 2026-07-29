@@ -318,9 +318,9 @@ When admin authentication is configured, the server advertises
 `features.analysis_traces: true` and adds a **Traces** page. The page shows the
 bounded, content-free metadata from `ai_traces.json`, including response IDs,
 provider API mode, request duration and usage, tool names, compaction, critique,
-and finalization decisions. Pattern events expose only structural candidate
-counts, scan truncation, safe stages, safe failure categories, and repair
-outcomes. Each trace links back to the matching test and build.
+and finalization decisions. The trace API and download include content-free
+pattern candidate counts, scan truncation, safe stages, safe failure categories,
+and repair outcomes. Each trace links back to the matching test and build.
 
 The API decodes the known trace schema rather than serving the file directly.
 Requests are capped at 64 MiB, responses use `Cache-Control: no-store`, and both

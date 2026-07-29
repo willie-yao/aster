@@ -534,6 +534,33 @@ func TestParsePatternResponseRejectsTruncatedCandidateWindow(t *testing.T) {
 	}
 }
 
+func TestParsePatternOutputDoesNotRepairTruncatedCandidateWindow(t *testing.T) {
+	shrinkCallDelay(t)
+	first := `{"systemic":true,"confidence":"high","shared_root_cause":"first cause","shared_builds":["abuild","bbuild"],"suggested_fix":"fix first","summary":"first verdict"}`
+	second := `{"systemic":true,"confidence":"medium","shared_root_cause":"second cause","shared_builds":["abuild","bbuild"],"suggested_fix":"fix second","summary":"second verdict"}`
+	var raw strings.Builder
+	raw.WriteString(first)
+	for index := 0; index < analysisChatMaxCandidates; index++ {
+		fmt.Fprintf(&raw, `\n{"metadata":%d}`, index)
+	}
+	raw.WriteString("\n" + second)
+
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal(first))
+	s := newPatternTestService(t, srv.URL)
+	repairAttempted := false
+	_, err := s.parsePatternOutput(t.Context(), "grounded", raw.String(), patternBuildIDs(patternFailures(2)), PatternAnalyzeOptions{
+		AllowAmbiguityRepair: true,
+		OnRepair:             func(PatternRepairAttempt) { repairAttempted = true },
+	})
+	if got := patternValidationCategoryOf(err); got != patternValidationAmbiguous {
+		t.Fatalf("category = %q, error = %v", got, err)
+	}
+	if repairAttempted || atomic.LoadInt32(&srv.calls) != 0 {
+		t.Fatalf("truncated candidate window attempted repair: observed=%t calls=%d", repairAttempted, srv.calls)
+	}
+}
+
 func TestAnalyzePatternAcceptsKimiTrailingProse(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
