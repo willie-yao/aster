@@ -566,9 +566,10 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 	}
 	if stagedResolved != nil {
 		if err := stagedResolved.Save(opts.OutDir); err != nil {
-			return nil, fmt.Errorf("saving resolved state after publication: %w", err)
+			log.Printf("Warning: failed to save resolved state after publication: %v", err)
+		} else {
+			log.Printf("↩ re-opened %d resolved pattern(s) after recurrence", reopenedResolved)
 		}
-		log.Printf("↩ re-opened %d resolved pattern(s) after recurrence", reopenedResolved)
 	}
 	p.markProgressPublished()
 	p.completeProgressPhase()
