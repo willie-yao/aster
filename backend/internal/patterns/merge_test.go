@@ -59,3 +59,13 @@ func TestMergeLastGoodMarksMissingRetainedEvidence(t *testing.T) {
 		t.Fatalf("report=%+v status=%+v", report, details[0].PatternRefresh)
 	}
 }
+
+func TestMergeLastGoodRejectsCrossJobPriorPattern(t *testing.T) {
+	prior := models.PatternAnalysis{JobID: "other-job", Systemic: true, Summary: "old"}
+	models.AssignPatternIdentity(&prior)
+	details := []models.JobDetail{eligibleJob("job")}
+	result := AnalyzeResult{Outcomes: map[string]JobOutcome{"job": {JobID: "job", Attempts: 1}}}
+	if _, err := MergeLastGood(details, map[string]models.JobDetail{"job": {JobID: "job", PatternAnalyses: []models.PatternAnalysis{prior}}}, result); err == nil {
+		t.Fatal("cross-job prior pattern was accepted")
+	}
+}

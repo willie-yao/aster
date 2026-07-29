@@ -68,7 +68,7 @@ func retainPriorPattern(detail *models.JobDetail, previous models.JobDetail, sta
 		return nil
 	}
 	for _, pattern := range previous.PatternAnalyses {
-		if pattern.ID == "" || pattern.ContentHash == "" || pattern.ContentHash != models.PatternHash(pattern) {
+		if pattern.JobID != detail.JobID || pattern.ID == "" || pattern.ContentHash == "" || pattern.ContentHash != models.PatternHash(pattern) {
 			return fmt.Errorf("prior pattern identity is invalid for job %s", detail.JobID)
 		}
 	}
