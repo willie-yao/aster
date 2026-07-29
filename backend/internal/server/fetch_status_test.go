@@ -21,10 +21,14 @@ func serverFetchStatus(now time.Time) fetchprogress.Status {
 		EngineVersion: "sha-safe", Phase: fetchprogress.PhaseAnalysis,
 		RunStartedAt: now.Add(-time.Hour), PassStartedAt: now.Add(-time.Minute),
 		PhaseStartedAt: now.Add(-30 * time.Second), LastProgressAt: now,
-		Outcome:          fetchprogress.OutcomeRunning,
-		Jobs:             fetchprogress.JobProgress{Total: 28, Completed: 28},
-		Builds:           fetchprogress.BuildProgress{Cached: 241, Fetched: 29},
-		Analyses:         fetchprogress.AnalysisProgress{LogicalTotal: 61, Queued: 35, Running: 2, Completed: 24, Retries: 3},
+		Outcome:  fetchprogress.OutcomeRunning,
+		Jobs:     fetchprogress.JobProgress{Total: 28, Completed: 28},
+		Builds:   fetchprogress.BuildProgress{Cached: 241, Fetched: 29},
+		Analyses: fetchprogress.AnalysisProgress{LogicalTotal: 61, Queued: 35, Running: 2, Completed: 24, Retries: 3},
+		Patterns: fetchprogress.PatternProgress{
+			Eligible: 2, Completed: 1, Failed: 1, Attempts: 3, Retries: 1,
+			FailureCategory: fetchprogress.PatternFailureAmbiguous,
+		},
 		PatternPhase:     fetchprogress.StagePending,
 		PublicationPhase: fetchprogress.StagePending,
 		SideEffectPhase:  fetchprogress.StagePending,
@@ -77,7 +81,8 @@ func TestFetchStatusEndpointAuthenticationMethodsAndPrivacy(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = resp.Body.Close()
-	if !got.Available || got.State != "active" || got.Status == nil || got.Status.Analyses.Retries != 3 {
+	if !got.Available || got.State != "active" || got.Status == nil || got.Status.Analyses.Retries != 3 ||
+		got.Status.Patterns.Attempts != 3 || got.Status.Patterns.FailureCategory != fetchprogress.PatternFailureAmbiguous {
 		t.Fatalf("GET response = %+v", got)
 	}
 	if len(got.Status.CurrentTasks) != 0 || got.HistorySchemaVersion != fetchprogress.HistorySchemaVersion || len(got.History) != 1 || got.History[0].TaskAttempts != 4 {

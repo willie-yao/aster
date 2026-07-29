@@ -27,6 +27,9 @@ type ToolLoopOptions struct {
 	// ContextByteBudget, when > 0, compacts the message list to fit an
 	// approximate request size before each turn.
 	ContextByteBudget int
+	// PropagateFinalizeError returns a forced-finalization model error instead
+	// of preserving the generic tool loop's best-effort empty result.
+	PropagateFinalizeError bool
 }
 
 // toolLoopBudget is a large per-dispatch budget handed to tools that gate on
@@ -140,11 +143,37 @@ func (c *Client) ToolLoop(
 
 	// The model never returned a tools-free answer within the budget. Force one
 	// finalize round with tools omitted so the caller still gets a response.
-	final, _, safe := c.runFinalizeRound(ctx, messages, contextHeadroomFor(AgenticOptions{ContextByteBudget: opts.ContextByteBudget}))
+	headroom := contextHeadroomFor(AgenticOptions{ContextByteBudget: opts.ContextByteBudget})
+	if opts.PropagateFinalizeError {
+		return c.runToolLoopFinalizeRound(ctx, messages, headroom)
+	}
+	final, _, safe := c.runFinalizeRound(ctx, messages, headroom)
 	if !safe {
 		return "", ErrContextHeadroom
 	}
 	return final, nil
+}
+
+func (c *Client) runToolLoopFinalizeRound(ctx context.Context, messages []modelMessage, headroom contextHeadroom) (string, error) {
+	messages = append(messages, modelMessage{Role: "user", Content: strPtr(agForceFinalizePrompt)})
+	prepared, safe := prepareContextRequest(ctx, messages, 0, headroom, "finalize")
+	if !safe {
+		recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "headroom_denied", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
+		recordTrace(ctx, TraceEvent{Kind: "context_headroom", Outcome: "unavailable", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
+		return "", ErrContextHeadroom
+	}
+	recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "requested"})
+	resp, err := c.callModel(ctx, prepared, nil, nil)
+	if err != nil {
+		recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "error", ErrorCode: "model_request_error"})
+		return "", err
+	}
+	if !resp.HasMessage || resp.Message.Content == nil {
+		recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "empty"})
+		return "", nil
+	}
+	recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "success"})
+	return *resp.Message.Content, nil
 }
 
 // dispatchToolLoop routes one tool call through the registry and returns the

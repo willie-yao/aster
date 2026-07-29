@@ -24,6 +24,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/notify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/patterns"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
@@ -218,7 +219,7 @@ ai:
 
 	var patternCalls atomic.Int64
 	oldPatternAnalysis := analyzePatternsAcrossBuilds
-	analyzePatternsAcrossBuilds = func(context.Context, *ai.Service, []models.JobDetail) error {
+	analyzePatternsAcrossBuilds = func(context.Context, *ai.Service, []models.JobDetail, patterns.AnalyzeOptions) error {
 		patternCalls.Add(1)
 		return nil
 	}
@@ -278,7 +279,7 @@ func TestOrkaProjectSetupFailureAfterSchedulingRollsBackRefresh(t *testing.T) {
 	newEmailSender = func(notify.SMTPConfig) (notify.Sender, error) { return sender, nil }
 	var patternCalls atomic.Int64
 	oldPatternAnalysis := analyzePatternsAcrossBuilds
-	analyzePatternsAcrossBuilds = func(context.Context, *ai.Service, []models.JobDetail) error {
+	analyzePatternsAcrossBuilds = func(context.Context, *ai.Service, []models.JobDetail, patterns.AnalyzeOptions) error {
 		patternCalls.Add(1)
 		return nil
 	}
@@ -377,6 +378,16 @@ func TestSuccessfulOrkaResultPublishesRefresh(t *testing.T) {
 	p := refreshLifecyclePipeline(t, dataDir, bucketDir, analyzer)
 	p.opts.SkipSideEffects = true
 	configureRefreshLifecycleRuntime(t, p, dataDir)
+	p.progress = fetchprogress.New(dataDir, "sha-test")
+	p.progress.StartPass(fetchprogress.PassOneShot)
+	oldPatternAnalysis := analyzePatternsAcrossBuilds
+	analyzePatternsAcrossBuilds = func(_ context.Context, _ *ai.Service, _ []models.JobDetail, options patterns.AnalyzeOptions) error {
+		options.OnPlan(1)
+		options.OnAttempt(patterns.Attempt{Number: 1, FailureCategory: ai.PatternFailureAmbiguous})
+		options.OnAttempt(patterns.Attempt{Number: 2, Retry: true, Succeeded: true, Final: true})
+		return nil
+	}
+	t.Cleanup(func() { analyzePatternsAcrossBuilds = oldPatternAnalysis })
 
 	if _, err := p.fullPass(t.Context()); err != nil {
 		t.Fatal(err)
@@ -391,6 +402,10 @@ func TestSuccessfulOrkaResultPublishesRefresh(t *testing.T) {
 	}
 	if !strings.Contains(string(jobData), `"root_cause": "configuration drift"`) {
 		t.Fatalf("published job detail does not contain successful analysis: %s", jobData)
+	}
+	patternProgress := p.progress.Snapshot().Patterns
+	if patternProgress.Attempts != 2 || patternProgress.Retries != 1 || patternProgress.Completed != 1 || patternProgress.Failed != 0 {
+		t.Fatalf("pattern progress = %+v", patternProgress)
 	}
 }
 
@@ -417,12 +432,17 @@ func TestPatternFailurePreservesRefreshState(t *testing.T) {
 	}
 	p := refreshLifecyclePipeline(t, dataDir, bucketDir, analyzer)
 	configureRefreshLifecycleRuntime(t, p, dataDir)
+	p.progress = fetchprogress.New(dataDir, "sha-test")
+	p.progress.StartPass(fetchprogress.PassOneShot)
 	sender := &countingNotifySender{}
 	oldEmailSender := newEmailSender
 	newEmailSender = func(notify.SMTPConfig) (notify.Sender, error) { return sender, nil }
 	oldPatternAnalysis := analyzePatternsAcrossBuilds
-	analyzePatternsAcrossBuilds = func(context.Context, *ai.Service, []models.JobDetail) error {
-		return fmt.Errorf("pattern analysis: response validation failed (schema)")
+	analyzePatternsAcrossBuilds = func(_ context.Context, _ *ai.Service, _ []models.JobDetail, options patterns.AnalyzeOptions) error {
+		options.OnPlan(1)
+		options.OnAttempt(patterns.Attempt{Number: 1, FailureCategory: ai.PatternFailureRequestTimeout})
+		options.OnAttempt(patterns.Attempt{Number: 2, Retry: true, Final: true, FailureCategory: ai.PatternFailureProvider5xx})
+		return &ai.PatternProviderError{StatusCode: http.StatusServiceUnavailable}
 	}
 	t.Cleanup(func() {
 		newEmailSender = oldEmailSender
@@ -437,6 +457,11 @@ func TestPatternFailurePreservesRefreshState(t *testing.T) {
 	}
 	if p.aiRuntime != nil || p.containerAnalyzer != nil {
 		t.Fatal("failed pattern refresh retained in-memory AI state")
+	}
+	patternProgress := p.progress.Snapshot().Patterns
+	if patternProgress.Attempts != 2 || patternProgress.Retries != 1 || patternProgress.Completed != 0 || patternProgress.Failed != 1 ||
+		patternProgress.FailureCategory != fetchprogress.PatternFailureProvider5xx {
+		t.Fatalf("pattern progress = %+v", patternProgress)
 	}
 	if after := hashFileTree(t, dataDir); !reflect.DeepEqual(after, before) {
 		t.Fatalf("data directory changed after pattern failure\nbefore=%v\nafter=%v", before, after)

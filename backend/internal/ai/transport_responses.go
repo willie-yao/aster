@@ -104,7 +104,7 @@ func (t *responsesTransport) Complete(ctx context.Context, req modelRequest) (*m
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode}, fmt.Errorf("responses returned %d: %s", resp.StatusCode, textutil.Truncate(string(raw), 500))
+		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode}, &modelHTTPError{API: "responses", StatusCode: resp.StatusCode, Body: textutil.Truncate(string(raw), 500)}
 	}
 	var wire responsesResponse
 	if err := json.Unmarshal(raw, &wire); err != nil {

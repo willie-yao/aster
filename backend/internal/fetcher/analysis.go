@@ -246,7 +246,24 @@ schedule:
 		runtime.LogConfiguration()
 	}
 
-	if err := analyzePatternsAcrossBuilds(ctx, service, details); err != nil {
+	patternOptions := patterns.AnalyzeOptions{
+		OnPlan: func(total int) {
+			if p.progress != nil {
+				p.progress.PlanPatterns(total)
+			}
+		},
+		OnAttempt: func(attempt patterns.Attempt) {
+			if p.progress != nil {
+				p.progress.RecordPatternAttempt(
+					attempt.Retry,
+					attempt.Succeeded,
+					attempt.Final,
+					fetchprogress.PatternFailureCategory(attempt.FailureCategory),
+				)
+			}
+		},
+	}
+	if err := analyzePatternsAcrossBuilds(ctx, service, details, patternOptions); err != nil {
 		return fmt.Errorf("cross-build pattern analysis: %w", err)
 	}
 	warnOnAnalysisPersistence("AI cache", runtime.SaveCache)
@@ -318,8 +335,8 @@ func (p *pipeline) ensureContainerAnalyzer() (containerFailureAnalyzer, error) {
 	return p.containerAnalyzer, nil
 }
 
-var analyzePatternsAcrossBuilds = func(ctx context.Context, service *ai.Service, details []models.JobDetail) error {
-	_, err := patterns.Analyze(ctx, service, details)
+var analyzePatternsAcrossBuilds = func(ctx context.Context, service *ai.Service, details []models.JobDetail, options patterns.AnalyzeOptions) error {
+	_, err := patterns.AnalyzeWithOptions(ctx, service, details, options)
 	return err
 }
 

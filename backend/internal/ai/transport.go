@@ -24,6 +24,18 @@ type modelTransport interface {
 	Complete(context.Context, modelRequest) (*modelResponse, error)
 }
 
+// modelHTTPError preserves provider response details for existing transport
+// callers while allowing domain-specific callers to classify the status code.
+type modelHTTPError struct {
+	API        string
+	StatusCode int
+	Body       string
+}
+
+func (e *modelHTTPError) Error() string {
+	return fmt.Sprintf("%s returned %d: %s", e.API, e.StatusCode, e.Body)
+}
+
 func (c *Client) callModel(ctx context.Context, messages []modelMessage, toolDefs []tools.Schema, parallelToolCalls *bool) (*modelResponse, error) {
 	start := time.Now()
 	resp, err := c.transport.Complete(ctx, modelRequest{

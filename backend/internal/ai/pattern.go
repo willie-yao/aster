@@ -89,6 +89,35 @@ type patternValidationError struct {
 	category patternValidationCategory
 }
 
+// PatternFailureCategory is a privacy-safe pattern-attempt outcome.
+type PatternFailureCategory string
+
+const (
+	PatternFailureNone           PatternFailureCategory = ""
+	PatternFailureJSON           PatternFailureCategory = "json"
+	PatternFailureMissing        PatternFailureCategory = "missing"
+	PatternFailureSchema         PatternFailureCategory = "schema"
+	PatternFailureBuilds         PatternFailureCategory = "builds"
+	PatternFailureAmbiguous      PatternFailureCategory = "ambiguous"
+	PatternFailureRequestTimeout PatternFailureCategory = "request-timeout"
+	PatternFailureRateLimited    PatternFailureCategory = "rate-limited"
+	PatternFailureProvider5xx    PatternFailureCategory = "provider-5xx"
+	PatternFailureProvider       PatternFailureCategory = "provider"
+	PatternFailureCancelled      PatternFailureCategory = "cancelled"
+	PatternFailureDeadline       PatternFailureCategory = "deadline"
+	PatternFailureUnknown        PatternFailureCategory = "unknown"
+)
+
+// PatternProviderError reports only a provider status class. It never includes
+// the response body.
+type PatternProviderError struct {
+	StatusCode int
+}
+
+func (e *PatternProviderError) Error() string {
+	return fmt.Sprintf("pattern analysis: provider request failed (%s)", patternProviderFailureCategory(e.StatusCode))
+}
+
 func (e *patternValidationError) Error() string {
 	return fmt.Sprintf("pattern analysis: response validation failed (%s)", e.category)
 }
@@ -99,6 +128,71 @@ func patternValidationCategoryOf(err error) patternValidationCategory {
 		return validationErr.category
 	}
 	return ""
+}
+
+// PatternFailureCategoryOf classifies a pattern error without exposing model
+// output, provider bodies, prompts, or private paths.
+func PatternFailureCategoryOf(err error) PatternFailureCategory {
+	if err == nil {
+		return PatternFailureNone
+	}
+	if category := patternValidationCategoryOf(err); category != "" {
+		return PatternFailureCategory(category)
+	}
+	var providerErr *PatternProviderError
+	if errors.As(err, &providerErr) {
+		return patternProviderFailureCategory(providerErr.StatusCode)
+	}
+	switch {
+	case errors.Is(err, context.Canceled):
+		return PatternFailureCancelled
+	case errors.Is(err, context.DeadlineExceeded):
+		return PatternFailureDeadline
+	default:
+		return PatternFailureUnknown
+	}
+}
+
+// IsRetryablePatternError reports whether one fresh correlation attempt is
+// allowed after the first failed attempt.
+func IsRetryablePatternError(err error) bool {
+	switch PatternFailureCategoryOf(err) {
+	case PatternFailureAmbiguous, PatternFailureRequestTimeout, PatternFailureRateLimited, PatternFailureProvider5xx:
+		return true
+	default:
+		return false
+	}
+}
+
+func patternProviderFailureCategory(statusCode int) PatternFailureCategory {
+	switch {
+	case statusCode == http.StatusRequestTimeout:
+		return PatternFailureRequestTimeout
+	case statusCode == http.StatusTooManyRequests:
+		return PatternFailureRateLimited
+	case statusCode >= 500 && statusCode <= 599:
+		return PatternFailureProvider5xx
+	default:
+		return PatternFailureProvider
+	}
+}
+
+func safePatternProviderError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	var patternErr *PatternProviderError
+	if errors.As(err, &patternErr) {
+		return patternErr
+	}
+	var httpErr *modelHTTPError
+	if errors.As(err, &httpErr) {
+		return &PatternProviderError{StatusCode: httpErr.StatusCode}
+	}
+	return &PatternProviderError{}
 }
 
 // patternSystemPrompt instructs the model to correlate several per-build
@@ -231,10 +325,10 @@ func (s *Service) toolFreePatternVerdict(ctx context.Context, userPrompt string,
 	}
 	resp, err := s.client.callModel(ctx, messages, nil, nil)
 	if err != nil {
-		return patternResponse{}, fmt.Errorf("pattern analysis chat: %w", err)
+		return patternResponse{}, safePatternProviderError(err)
 	}
 	if !resp.HasMessage || resp.Message.Content == nil {
-		return patternResponse{}, fmt.Errorf("pattern analysis: empty response")
+		return patternResponse{}, &patternValidationError{category: patternValidationMissing}
 	}
 	return parsePatternResponse(*resp.Message.Content, buildIDs)
 }
@@ -252,14 +346,14 @@ func (s *Service) groundedPatternVerdict(ctx context.Context, userPrompt string,
 	}
 	env := &tools.Env{Repo: s.patternRepo, Cache: s.patternToolCache()}
 	out, err := s.client.ToolLoop(ctx, patternGroundedSystemPrompt, userPrompt, reg, enabled, env,
-		ToolLoopOptions{MaxIters: patternMaxIters, MinToolCalls: 1, SingleToolCall: true})
+		ToolLoopOptions{MaxIters: patternMaxIters, MinToolCalls: 1, SingleToolCall: true, PropagateFinalizeError: true})
 	if err != nil {
-		return patternResponse{}, fmt.Errorf("pattern analysis tool loop: %w", err)
+		return patternResponse{}, safePatternProviderError(err)
 	}
 	// A content-free loop carries no evidence to correlate; reject it rather
 	// than letting the recovery completion synthesize a verdict from nothing.
 	if strings.TrimSpace(out) == "" {
-		return patternResponse{}, fmt.Errorf("pattern analysis: empty tool-loop output")
+		return patternResponse{}, &patternValidationError{category: patternValidationMissing}
 	}
 	parsed, perr := parsePatternResponse(out, buildIDs)
 	if perr != nil {
@@ -271,7 +365,7 @@ func (s *Service) groundedPatternVerdict(ctx context.Context, userPrompt string,
 			"Reply with ONLY the JSON.\n\nInvestigation:\n" + out
 		out2, ferr := s.client.Complete(ctx, "You output only a JSON object.", extract)
 		if ferr != nil {
-			return patternResponse{}, perr
+			return patternResponse{}, safePatternProviderError(ferr)
 		}
 		parsed, perr = parsePatternResponse(out2, buildIDs)
 		if perr != nil {

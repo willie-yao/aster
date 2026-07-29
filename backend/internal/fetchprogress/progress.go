@@ -134,6 +134,36 @@ type AnalysisProgress struct {
 	ResultRetrievalRetries int `json:"result_retrieval_retries"`
 }
 
+// PatternFailureCategory is a privacy-safe final correlation failure class.
+type PatternFailureCategory string
+
+const (
+	PatternFailureNone           PatternFailureCategory = ""
+	PatternFailureJSON           PatternFailureCategory = "json"
+	PatternFailureMissing        PatternFailureCategory = "missing"
+	PatternFailureSchema         PatternFailureCategory = "schema"
+	PatternFailureBuilds         PatternFailureCategory = "builds"
+	PatternFailureAmbiguous      PatternFailureCategory = "ambiguous"
+	PatternFailureRequestTimeout PatternFailureCategory = "request-timeout"
+	PatternFailureRateLimited    PatternFailureCategory = "rate-limited"
+	PatternFailureProvider5xx    PatternFailureCategory = "provider-5xx"
+	PatternFailureProvider       PatternFailureCategory = "provider"
+	PatternFailureCancelled      PatternFailureCategory = "cancelled"
+	PatternFailureDeadline       PatternFailureCategory = "deadline"
+	PatternFailureUnknown        PatternFailureCategory = "unknown"
+	PatternFailureMultiple       PatternFailureCategory = "multiple"
+)
+
+// PatternProgress tracks bounded job-level correlation attempts.
+type PatternProgress struct {
+	Eligible        int                    `json:"eligible"`
+	Completed       int                    `json:"completed"`
+	Failed          int                    `json:"failed"`
+	Attempts        int                    `json:"attempts"`
+	Retries         int                    `json:"retries"`
+	FailureCategory PatternFailureCategory `json:"failure_category,omitempty"`
+}
+
 // Status is the private, aggregate-only fetch progress snapshot.
 type Status struct {
 	SchemaVersion int      `json:"schema_version"`
@@ -157,6 +187,7 @@ type Status struct {
 	Jobs             JobProgress      `json:"jobs"`
 	Builds           BuildProgress    `json:"builds"`
 	Analyses         AnalysisProgress `json:"analyses"`
+	Patterns         PatternProgress  `json:"patterns"`
 	PhaseDurationsMS map[string]int64 `json:"phase_durations_ms,omitempty"`
 	CurrentTasks     []TaskMapping    `json:"current_tasks,omitempty"`
 
@@ -212,7 +243,11 @@ func (s Status) validate() error {
 		s.Analyses.Completed < 0 || s.Analyses.Failed < 0 || s.Analyses.Cancelled < 0 ||
 		s.Analyses.AcceptedCacheHits < 0 || s.Analyses.NewWork < 0 || s.Analyses.StaleWork < 0 ||
 		s.Analyses.TaskAttempts < 0 || s.Analyses.Retries < 0 || s.Analyses.ExistingTasksAdopted < 0 ||
-		s.Analyses.ResultsRetrieved < 0 || s.Analyses.ResultRetrievalRetries < 0 {
+		s.Analyses.ResultsRetrieved < 0 || s.Analyses.ResultRetrievalRetries < 0 ||
+		s.Patterns.Eligible < 0 || s.Patterns.Completed < 0 || s.Patterns.Failed < 0 ||
+		s.Patterns.Attempts < 0 || s.Patterns.Retries < 0 ||
+		s.Patterns.Completed+s.Patterns.Failed > s.Patterns.Eligible || s.Patterns.Retries > s.Patterns.Attempts ||
+		!validPatternFailureCategory(s.Patterns.FailureCategory) {
 		return errors.New("fetch status has invalid counters")
 	}
 	accounted := s.Analyses.Queued + s.Analyses.Running + s.Analyses.Completed + s.Analyses.Failed + s.Analyses.Cancelled
@@ -233,6 +268,18 @@ func (s Status) validate() error {
 		}
 	}
 	return nil
+}
+
+func validPatternFailureCategory(value PatternFailureCategory) bool {
+	switch value {
+	case PatternFailureNone, PatternFailureJSON, PatternFailureMissing, PatternFailureSchema,
+		PatternFailureBuilds, PatternFailureAmbiguous, PatternFailureRequestTimeout,
+		PatternFailureRateLimited, PatternFailureProvider5xx, PatternFailureProvider,
+		PatternFailureCancelled, PatternFailureDeadline, PatternFailureUnknown, PatternFailureMultiple:
+		return true
+	default:
+		return false
+	}
 }
 
 func validPassType(value PassType) bool {
@@ -573,6 +620,40 @@ func (t *Tracker) SkipAnalysis() {
 		status.Analyses.Failed += status.Analyses.Queued
 		status.Analyses.Queued = 0
 		status.PatternPhase = StageSkipped
+	})
+}
+
+// PlanPatterns initializes the job-level correlation counters.
+func (t *Tracker) PlanPatterns(total int) {
+	t.update(true, func(status *Status) {
+		status.Patterns = PatternProgress{Eligible: total}
+	})
+}
+
+// RecordPatternAttempt records one bounded correlation attempt.
+func (t *Tracker) RecordPatternAttempt(retry, succeeded, final bool, category PatternFailureCategory) {
+	t.update(true, func(status *Status) {
+		status.Patterns.Attempts++
+		if retry {
+			status.Patterns.Retries++
+		}
+		if succeeded {
+			status.Patterns.Completed++
+			return
+		}
+		if !final {
+			return
+		}
+		status.Patterns.Failed++
+		if !validPatternFailureCategory(category) || category == PatternFailureNone {
+			category = PatternFailureUnknown
+		}
+		switch {
+		case status.Patterns.FailureCategory == PatternFailureNone:
+			status.Patterns.FailureCategory = category
+		case status.Patterns.FailureCategory != category:
+			status.Patterns.FailureCategory = PatternFailureMultiple
+		}
 	})
 }
 

@@ -52,6 +52,14 @@ export interface FetchProgressStatus {
     results_retrieved: number;
     result_retrieval_retries: number;
   };
+  patterns?: {
+    eligible: number;
+    completed: number;
+    failed: number;
+    attempts: number;
+    retries: number;
+    failure_category?: string;
+  };
   pattern_phase: string;
   publication_phase: string;
   side_effect_phase: string;

@@ -56,6 +56,15 @@ test("fetch status presentation covers active idle failed and stale states", () 
   }));
   assert.ok(attempts?.detail.includes("27 Task attempts"));
 
+  const patternRetry = fetchStatusPresentation(response("active", {
+    ...activeStatus,
+    phase: "patterns",
+    patterns: { eligible: 2, completed: 1, failed: 1, attempts: 3, retries: 1, failure_category: "ambiguous" },
+  }));
+  assert.ok(patternRetry?.detail.includes("3 pattern attempts"));
+  assert.ok(patternRetry?.detail.includes("1 pattern retry"));
+  assert.ok(patternRetry?.detail.includes("pattern failure: ambiguous response"));
+
   const idle = fetchStatusPresentation(response("idle", {
     ...activeStatus,
     phase: "idle",

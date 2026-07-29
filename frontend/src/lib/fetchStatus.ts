@@ -9,6 +9,22 @@ export interface FetchStatusPresentation {
   determinateCompleted: number;
 }
 
+const patternFailureLabels: Record<string, string> = {
+  ambiguous: "ambiguous response",
+  "request-timeout": "request timeout",
+  "rate-limited": "rate limited",
+  "provider-5xx": "provider failure",
+  provider: "provider error",
+  json: "invalid JSON",
+  missing: "missing response",
+  schema: "invalid schema",
+  builds: "invalid build references",
+  cancelled: "cancelled",
+  deadline: "deadline exceeded",
+  unknown: "unknown",
+  multiple: "multiple categories",
+};
+
 const phaseLabels: Record<string, string> = {
   setup: "Setup",
   discovery: "Discovery",
@@ -36,6 +52,13 @@ export function fetchStatusPresentation(response: FetchStatusResponse): FetchSta
     : `${status.jobs.completed} of ${status.jobs.total} jobs checked`;
   const attemptDetail = status.analyses.task_attempts > 0 ? `, ${status.analyses.task_attempts} Task attempts` : "";
   const retryDetail = status.analyses.retries > 0 ? `, ${status.analyses.retries} retries` : "";
+  const patternAttempts = status.patterns?.attempts ?? 0;
+  const patternRetries = status.patterns?.retries ?? 0;
+  const patternAttemptDetail = patternAttempts > 0 ? `, ${patternAttempts} pattern ${patternAttempts === 1 ? "attempt" : "attempts"}` : "";
+  const patternRetryDetail = patternRetries > 0 ? `, ${patternRetries} pattern ${patternRetries === 1 ? "retry" : "retries"}` : "";
+  const patternFailureDetail = status.patterns?.failure_category
+    ? `, pattern failure: ${patternFailureLabels[status.patterns.failure_category] ?? "unknown"}`
+    : "";
   const state = response.state;
   let title = `Fetch in progress: ${phase}`;
   let severity: FetchStatusPresentation["severity"] = "info";
@@ -58,7 +81,7 @@ export function fetchStatusPresentation(response: FetchStatusResponse): FetchSta
     title = "Fetch cancelled";
     severity = "warning";
   }
-  const detail = `${logicalDetail}${attemptDetail}${retryDetail}`;
+  const detail = `${logicalDetail}${attemptDetail}${retryDetail}${patternAttemptDetail}${patternRetryDetail}${patternFailureDetail}`;
   const determinateTotal = status.analyses.logical_total > 0
     ? status.analyses.logical_total
     : status.jobs.total > 0 ? status.jobs.total : null;

@@ -484,3 +484,31 @@ func TestSnapshotDeepCopiesMutableProgress(t *testing.T) {
 		t.Fatalf("Snapshot shared mutable storage: snapshot=%+v current=%+v", snapshot, current)
 	}
 }
+
+func TestTrackerPatternAttemptAccounting(t *testing.T) {
+	now := time.Date(2026, 7, 29, 1, 0, 0, 0, time.UTC)
+	tracker := newTracker(t.TempDir(), "sha-test", trackerOptions{
+		now:           func() time.Time { return now },
+		newID:         func() string { return "0123456789abcdef01234567" },
+		write:         func(string, Status) error { return nil },
+		writeHistory:  func(string, History) error { return nil },
+		logf:          func(string, ...any) {},
+		writeInterval: time.Hour,
+	})
+	tracker.StartPass(PassInitialWatch)
+	tracker.StartPhase(PhasePatterns)
+	tracker.PlanPatterns(3)
+	tracker.RecordPatternAttempt(false, false, false, PatternFailureAmbiguous)
+	tracker.RecordPatternAttempt(true, true, true, PatternFailureNone)
+	tracker.RecordPatternAttempt(false, false, true, PatternFailureSchema)
+	tracker.RecordPatternAttempt(false, false, true, PatternFailureBuilds)
+
+	got := tracker.Snapshot().Patterns
+	want := PatternProgress{
+		Eligible: 3, Completed: 1, Failed: 2, Attempts: 4, Retries: 1,
+		FailureCategory: PatternFailureMultiple,
+	}
+	if got != want {
+		t.Fatalf("pattern progress = %+v, want %+v", got, want)
+	}
+}

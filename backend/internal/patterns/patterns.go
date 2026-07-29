@@ -22,28 +22,62 @@ type Analyzer interface {
 	AnalyzePattern(ctx context.Context, jobID, subject string, failures []ai.PatternFailure) (*models.PatternAnalysis, error)
 }
 
+const maxPatternAttempts = 2
+
 // AnalyzeStats records eligible jobs and completed or failed correlations.
 type AnalyzeStats struct {
 	Eligible  int
 	Completed int
 	Failed    int
+	Attempts  int
+	Retries   int
+}
+
+// Attempt reports one privacy-safe correlation attempt.
+type Attempt struct {
+	Number          int
+	Retry           bool
+	Succeeded       bool
+	Final           bool
+	FailureCategory ai.PatternFailureCategory
+}
+
+// AnalyzeOptions reports pattern planning and attempt progress.
+type AnalyzeOptions struct {
+	OnPlan    func(int)
+	OnAttempt func(Attempt)
+}
+
+type analysisWork struct {
+	index    int
+	jobID    string
+	subject  string
+	failures []ai.PatternFailure
 }
 
 // Analyze correlates eligible jobs and stores each verdict on its JobDetail.
 func Analyze(ctx context.Context, analyzer Analyzer, details []models.JobDetail) (AnalyzeStats, error) {
-	var stats AnalyzeStats
+	return AnalyzeWithOptions(ctx, analyzer, details, AnalyzeOptions{})
+}
+
+// AnalyzeWithOptions correlates eligible jobs with bounded per-job retries and
+// reports aggregate attempt progress.
+func AnalyzeWithOptions(ctx context.Context, analyzer Analyzer, details []models.JobDetail, options AnalyzeOptions) (AnalyzeStats, error) {
+	work := eligibleWork(details)
+	stats := AnalyzeStats{Eligible: len(work)}
+	if options.OnPlan != nil {
+		options.OnPlan(stats.Eligible)
+	}
 	var errs []error
-	for i := range details {
-		d := &details[i]
-		failures := GatherFailures(d)
-		if CountFailedBuilds(d) < MinFailedBuilds || len(failures) < 2 {
-			continue
-		}
-		stats.Eligible++
-		pa, err := analyzer.AnalyzePattern(ctx, d.JobID, d.Name, failures)
+	for _, item := range work {
+		pa, attempts, retries, err := analyzeOne(ctx, analyzer, item, options.OnAttempt)
+		stats.Attempts += attempts
+		stats.Retries += retries
+		d := &details[item.index]
 		if err != nil {
 			stats.Failed++
-			log.Printf("  ⚠ pattern analysis failed for %s: %v", d.Name, err)
+			category := ai.PatternFailureCategoryOf(err)
+			log.Printf("  ⚠ pattern analysis failed for %s: category=%s", d.Name, category)
 			errs = append(errs, fmt.Errorf("%s: %w", d.Name, err))
 			continue
 		}
@@ -58,30 +92,29 @@ func Analyze(ctx context.Context, analyzer Analyzer, details []models.JobDetail)
 // results, so one slow job cannot consume the finalization budget for the rest.
 func AnalyzeConcurrent(ctx context.Context, analyzer Analyzer, details []models.JobDetail) AnalyzeStats {
 	type result struct {
-		index int
-		pa    *models.PatternAnalysis
-		err   error
+		index    int
+		pa       *models.PatternAnalysis
+		err      error
+		attempts int
+		retries  int
 	}
-	results := make(chan result, len(details))
-	var stats AnalyzeStats
-	for i := range details {
-		d := &details[i]
-		failures := GatherFailures(d)
-		if CountFailedBuilds(d) < MinFailedBuilds || len(failures) < 2 {
-			continue
-		}
-		stats.Eligible++
-		go func(index int, jobID, subject string, failures []ai.PatternFailure) {
-			pa, err := analyzer.AnalyzePattern(ctx, jobID, subject, failures)
-			results <- result{index: index, pa: pa, err: err}
-		}(i, d.JobID, d.Name, failures)
+	work := eligibleWork(details)
+	results := make(chan result, len(work))
+	stats := AnalyzeStats{Eligible: len(work)}
+	for _, item := range work {
+		go func(item analysisWork) {
+			pa, attempts, retries, err := analyzeOne(ctx, analyzer, item, nil)
+			results <- result{index: item.index, pa: pa, err: err, attempts: attempts, retries: retries}
+		}(item)
 	}
 	for range stats.Eligible {
 		result := <-results
+		stats.Attempts += result.attempts
+		stats.Retries += result.retries
 		d := &details[result.index]
 		if result.err != nil {
 			stats.Failed++
-			log.Printf("  ⚠ pattern analysis failed for %s: %v", d.Name, result.err)
+			log.Printf("  ⚠ pattern analysis failed for %s: category=%s", d.Name, ai.PatternFailureCategoryOf(result.err))
 			continue
 		}
 		if applyAnalysis(d, result.pa) {
@@ -89,6 +122,40 @@ func AnalyzeConcurrent(ctx context.Context, analyzer Analyzer, details []models.
 		}
 	}
 	return stats
+}
+
+func eligibleWork(details []models.JobDetail) []analysisWork {
+	work := make([]analysisWork, 0, len(details))
+	for i := range details {
+		d := &details[i]
+		failures := GatherFailures(d)
+		if CountFailedBuilds(d) < MinFailedBuilds || len(failures) < 2 {
+			continue
+		}
+		work = append(work, analysisWork{index: i, jobID: d.JobID, subject: d.Name, failures: failures})
+	}
+	return work
+}
+
+func analyzeOne(ctx context.Context, analyzer Analyzer, work analysisWork, observe func(Attempt)) (*models.PatternAnalysis, int, int, error) {
+	for attempt := 1; attempt <= maxPatternAttempts; attempt++ {
+		pa, err := analyzer.AnalyzePattern(ctx, work.jobID, work.subject, work.failures)
+		retry := err != nil && attempt < maxPatternAttempts && ai.IsRetryablePatternError(err)
+		if observe != nil {
+			observe(Attempt{
+				Number: attempt, Retry: attempt > 1, Succeeded: err == nil, Final: err == nil || !retry,
+				FailureCategory: ai.PatternFailureCategoryOf(err),
+			})
+		}
+		if err == nil {
+			return pa, attempt, attempt - 1, nil
+		}
+		if !retry {
+			return nil, attempt, attempt - 1, err
+		}
+		log.Printf("  ↻ retrying pattern analysis for %s: category=%s", work.subject, ai.PatternFailureCategoryOf(err))
+	}
+	panic("unreachable pattern retry state")
 }
 
 func applyAnalysis(detail *models.JobDetail, pa *models.PatternAnalysis) bool {

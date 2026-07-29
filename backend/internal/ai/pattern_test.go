@@ -414,3 +414,80 @@ func TestAnalyzePatternAcceptsKimiTrailingProse(t *testing.T) {
 		t.Fatalf("pattern = %+v", pa)
 	}
 }
+
+func TestAnalyzePatternProviderErrorsAreBodySafe(t *testing.T) {
+	shrinkCallDelay(t)
+	tests := []struct {
+		name         string
+		status       int
+		body         string
+		wantCategory PatternFailureCategory
+	}{
+		{name: "request timeout", status: 408, body: "private timeout response", wantCategory: PatternFailureRequestTimeout},
+		{name: "server failure", status: 503, body: "private server response", wantCategory: PatternFailureProvider5xx},
+		{name: "nonretryable failure", status: 400, body: "private request response", wantCategory: PatternFailureProvider},
+		{name: "malformed success", status: 200, body: "private malformed response", wantCategory: PatternFailureProvider},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			srv := newScriptedChatServer(t)
+			srv.push(testCase.status, testCase.body)
+			s := newPatternTestService(t, srv.URL)
+			_, err := s.AnalyzePattern(t.Context(), "job", "job", patternFailures(2))
+			if category := PatternFailureCategoryOf(err); category != testCase.wantCategory {
+				t.Fatalf("category = %q, want %q, error=%v", category, testCase.wantCategory, err)
+			}
+			if err == nil || strings.Contains(err.Error(), testCase.body) {
+				t.Fatalf("error exposed provider body: %v", err)
+			}
+		})
+	}
+}
+
+func TestPatternRetryClassification(t *testing.T) {
+	ambiguous := &patternValidationError{category: patternValidationAmbiguous}
+	for _, err := range []error{
+		ambiguous,
+		&PatternProviderError{StatusCode: 408},
+		&PatternProviderError{StatusCode: 429},
+		&PatternProviderError{StatusCode: 500},
+	} {
+		if !IsRetryablePatternError(err) {
+			t.Fatalf("error was not retryable: %v", err)
+		}
+	}
+	for _, err := range []error{
+		&patternValidationError{category: patternValidationSchema},
+		&patternValidationError{category: patternValidationBuilds},
+		&PatternProviderError{StatusCode: 400},
+		context.Canceled,
+	} {
+		if IsRetryablePatternError(err) {
+			t.Fatalf("error was retryable: %v", err)
+		}
+	}
+}
+
+func TestGroundedPatternVerdictPropagatesFinalizeHTTPError(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	for index := 0; index < patternMaxIters; index++ {
+		srv.push(200, chatRespToolCall(fmt.Sprintf("call_%d", index), "list_repo_tree", map[string]interface{}{"path": ""}))
+	}
+	srv.push(408, "private finalize response")
+	client := newAgenticTestClient(t, srv.URL)
+	s := NewService(client, &stubModule{name: "kubernetes"}, "sys", nil)
+	s.SetSourceRepo("example", "repo")
+	s.SetPatternRepoReader(&fakeRepoReader{files: map[string]string{"config/controller.yaml": "enabled: true"}})
+
+	_, err := s.AnalyzePattern(t.Context(), "job", "job", patternFailures(2))
+	if category := PatternFailureCategoryOf(err); category != PatternFailureRequestTimeout {
+		t.Fatalf("category = %q, error = %v", category, err)
+	}
+	if strings.Contains(err.Error(), "private finalize response") {
+		t.Fatalf("error exposed provider body: %v", err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != int32(patternMaxIters+1) {
+		t.Fatalf("model calls = %d, want %d", got, patternMaxIters+1)
+	}
+}
