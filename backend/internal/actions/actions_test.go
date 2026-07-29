@@ -757,3 +757,17 @@ func TestTargetDriftRetiresPreviewForReplacement(t *testing.T) {
 		t.Fatalf("replacement preview was blocked: %v", err)
 	}
 }
+
+func TestStalePatternIsNotActionable(t *testing.T) {
+	dataDir := t.TempDir()
+	pa := models.PatternAnalysis{JobID: "periodic-x", Systemic: true, SharedRootCause: "etcd timeout", SharedBuilds: []string{"100"}}
+	models.AssignPatternIdentity(&pa)
+	writeJobDetail(t, dataDir, "periodic-x.json", models.JobDetail{
+		JobID: "periodic-x", PatternAnalyses: []models.PatternAnalysis{pa},
+		PatternRefresh: &models.PatternRefreshStatus{State: models.PatternRefreshRetained, EvidenceAvailable: true},
+	})
+	s := NewService(&project.Config{}, dataDir, AIConfig{})
+	if err := s.Resolve(pa.ID, "alice", ""); err == nil || !strings.Contains(err.Error(), "stale pattern evidence") {
+		t.Fatalf("Resolve error = %v", err)
+	}
+}

@@ -6,7 +6,7 @@ import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
 import { Link as RouterLink } from "react-router-dom";
 import { Insights } from "@mui/icons-material";
-import type { BuildResult, PatternAnalysis, RemediationObservation } from "../types/dashboard";
+import type { BuildResult, PatternAnalysis, PatternRefreshStatus, RemediationObservation } from "../types/dashboard";
 import type { AnalysisChatReference } from "../types/analysisChat";
 import { confidenceColor, meetsConfidenceFloor, type FileToUrlContext } from "../lib/utils";
 import { RichText } from "./RichText";
@@ -39,10 +39,12 @@ export function PatternBanner({
   pattern,
   jobID,
   runs = [],
+  refreshStatus,
 }: {
   pattern: PatternAnalysis;
   jobID?: string;
   runs?: BuildResult[];
+  refreshStatus?: PatternRefreshStatus;
 }) {
   const color = pattern.systemic ? "warning" : "success";
   const confColor = confidenceColor(pattern.confidence, color);
@@ -62,7 +64,7 @@ export function PatternBanner({
     return observedAt > latestObservedAt ? observation : latest;
   }, undefined as RemediationObservation | undefined);
   const hasEvidenceBuild = Boolean(
-    pattern.shared_builds?.some((buildID) => runs.some((run) => run.build_id === buildID)),
+    pattern.shared_builds?.length && pattern.shared_builds.every((buildID) => runs.some((run) => run.build_id === buildID)),
   );
   const chatAvailability = patternChatAvailability(pattern, jobID, hasEvidenceBuild, Boolean(features.analysis_chat));
   const chatRef: AnalysisChatReference | null =
@@ -80,8 +82,9 @@ export function PatternBanner({
       { buildLogUrl: run.build_log_url, webUrl: run.web_url } satisfies FileToUrlContext,
     ]),
   );
+  const isCurrent = !refreshStatus || refreshStatus.state === "current";
   const fixPatterns =
-    pattern.id && pattern.content_hash && pattern.suggested_fix &&
+    isCurrent && pattern.id && pattern.content_hash && pattern.suggested_fix &&
     meetsConfidenceFloor(pattern.confidence, features.chat_fix_min_confidence ?? "high")
       ? [pattern]
       : [];
@@ -174,6 +177,12 @@ export function PatternBanner({
           </Stack>
         )}
 
+        {refreshStatus && refreshStatus.state !== "current" && (
+          <Alert severity="warning" variant="outlined">
+            Last known good pattern from {refreshStatus.last_successful_at ?? "an earlier refresh"}. Current refresh: {refreshStatus.failure_category ?? refreshStatus.state}.
+          </Alert>
+        )}
+
         <Typography variant="body2" sx={{ whiteSpace: "pre-line", lineHeight: 1.6 }}>
           <RichText text={pattern.summary} steps />
         </Typography>
@@ -239,7 +248,7 @@ export function PatternBanner({
           />
         )}
 
-        {pattern.systemic && pattern.id && <FailureActions failureID={pattern.id} />}
+        {isCurrent && pattern.systemic && pattern.id && <FailureActions failureID={pattern.id} />}
       </Stack>
     </Box>
   );

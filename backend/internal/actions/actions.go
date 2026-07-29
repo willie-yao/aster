@@ -96,6 +96,7 @@ type PreviewResult struct {
 // previewEntry is a cached draft awaiting confirmation. Exactly one of spec or
 // fix is set, per kind. owner binds the draft to the admin who generated it.
 type previewEntry struct {
+	failureID    string
 	kind         string
 	targetRepo   string
 	targetConfig string
@@ -190,6 +191,9 @@ func (s *Service) findPattern(id string) (*models.PatternAnalysis, error) {
 		}
 		for i := range detail.PatternAnalyses {
 			if detail.PatternAnalyses[i].ID != "" && detail.PatternAnalyses[i].ID == id {
+				if detail.PatternRefresh != nil && (detail.PatternRefresh.State != models.PatternRefreshCurrent || !detail.PatternRefresh.EvidenceAvailable) {
+					return nil, fmt.Errorf("failure %s is not actionable with stale pattern evidence", id)
+				}
 				return &detail.PatternAnalyses[i], nil
 			}
 		}
@@ -317,7 +321,7 @@ func (s *Service) generateIssuePreview(ctx context.Context, failureID, userToken
 		}
 	}
 	return PreviewResult{Kind: "issue", Title: final.Title, Body: final.Body},
-		&previewEntry{kind: "issue", targetRepo: targetRepo, spec: final}, nil
+		&previewEntry{failureID: failureID, kind: "issue", targetRepo: targetRepo, spec: final}, nil
 }
 
 // PreviewIssue renders the exact issue that would be filed for the failure,
@@ -365,7 +369,7 @@ func (s *Service) generateFixPreviewForPattern(
 			Kind: gfKind, Title: gf.Title, Body: gf.Description, Diff: gf.Preview.Diff,
 			VerifyStatus: string(gf.Preview.Verify.Status), VerifySummary: gf.Preview.Verify.Summary,
 			VerifyOutput: gf.Preview.Verify.Output,
-		}, &previewEntry{kind: gfKind, targetRepo: s.cfg.EffectiveFixPRs().Repo.Owner + "/" + s.cfg.EffectiveFixPRs().Repo.Name,
+		}, &previewEntry{failureID: pattern.ID, kind: gfKind, targetRepo: s.cfg.EffectiveFixPRs().Repo.Owner + "/" + s.cfg.EffectiveFixPRs().Repo.Name,
 			targetConfig: fixTargetFingerprint(s.cfg.EffectiveFixPRs()), fix: gf}, nil
 }
 
@@ -501,6 +505,11 @@ func (s *Service) reconcileEntry(ctx context.Context, entry *previewEntry, userT
 }
 
 func (s *Service) confirmEntry(ctx context.Context, entry *previewEntry, userToken string) (string, error) {
+	if entry != nil && entry.failureID != "" {
+		if _, err := s.findPattern(entry.failureID); err != nil {
+			return "", err
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

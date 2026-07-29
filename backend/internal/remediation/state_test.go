@@ -213,3 +213,11 @@ func TestPublicProjectionRedactsObservationEvidence(t *testing.T) {
 		t.Fatalf("public projection omitted safe reason text: %s", data)
 	}
 }
+
+func TestUntrackedPatternsSkipsRetainedPattern(t *testing.T) {
+	pattern := models.PatternAnalysis{ID: "pattern", JobID: "job", Systemic: true}
+	details := []models.JobDetail{{JobID: "job", PatternRefresh: &models.PatternRefreshStatus{State: models.PatternRefreshRetained}}}
+	if got := UntrackedPatterns(NewState(), []models.PatternAnalysis{pattern}, details); len(got) != 0 {
+		t.Fatalf("untracked = %+v", got)
+	}
+}

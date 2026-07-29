@@ -239,7 +239,39 @@ type JobDetail struct {
 	Runs    []BuildResult `json:"runs"`
 	// PatternAnalyses holds cross-build correlations for this job.
 	// Empty unless the job failed in enough builds for pattern analysis.
-	PatternAnalyses []PatternAnalysis `json:"pattern_analyses,omitempty"`
+	PatternAnalyses []PatternAnalysis     `json:"pattern_analyses,omitempty"`
+	PatternRefresh  *PatternRefreshStatus `json:"pattern_refresh,omitempty"`
+}
+
+// PatternRefreshState describes the current job-level correlation result.
+type PatternRefreshState string
+
+const (
+	PatternRefreshCurrent       PatternRefreshState = "current"
+	PatternRefreshRetained      PatternRefreshState = "retained"
+	PatternRefreshFailed        PatternRefreshState = "failed"
+	PatternRefreshNotApplicable PatternRefreshState = "not_applicable"
+	PatternRefreshUnavailable   PatternRefreshState = "unavailable"
+)
+
+// PatternRefreshStatus stores freshness outside PatternAnalysis identity.
+type PatternRefreshStatus struct {
+	State             PatternRefreshState `json:"state"`
+	LastSuccessfulAt  string              `json:"last_successful_at,omitempty"`
+	Attempts          int                 `json:"attempts,omitempty"`
+	Repairs           int                 `json:"repairs,omitempty"`
+	FailureCategory   string              `json:"failure_category,omitempty"`
+	EvidenceAvailable bool                `json:"evidence_available"`
+}
+
+// PatternRefreshReport aggregates job-level pattern freshness.
+type PatternRefreshReport struct {
+	Current       int                             `json:"current"`
+	Retained      int                             `json:"retained"`
+	Failed        int                             `json:"failed"`
+	Unavailable   int                             `json:"unavailable"`
+	NotApplicable int                             `json:"not_applicable"`
+	Jobs          map[string]PatternRefreshStatus `json:"jobs,omitempty"`
 }
 
 // PatternAnalysis is a job-level correlation across recent failed builds.
@@ -355,5 +387,6 @@ type FlakinessReport struct {
 	RecentlyBroken     []TestFlakiness `json:"recently_broken"`
 	// RecurringPatterns holds systemic job-level verdicts across all jobs.
 	// The home page uses these without loading every job file.
-	RecurringPatterns []PatternAnalysis `json:"recurring_patterns,omitempty"`
+	RecurringPatterns []PatternAnalysis    `json:"recurring_patterns,omitempty"`
+	PatternRefresh    PatternRefreshReport `json:"pattern_refresh,omitempty"`
 }

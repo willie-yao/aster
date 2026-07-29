@@ -170,6 +170,9 @@ type PatternProgress struct {
 	RepairFailed          int                    `json:"repair_failed,omitempty"`
 	RepairFailureCategory PatternFailureCategory `json:"repair_failure_category,omitempty"`
 	FailureCategory       PatternFailureCategory `json:"failure_category,omitempty"`
+	Current               int                    `json:"current,omitempty"`
+	Retained              int                    `json:"retained,omitempty"`
+	Unavailable           int                    `json:"unavailable,omitempty"`
 }
 
 // Status is the private, aggregate-only fetch progress snapshot.
@@ -255,6 +258,7 @@ func (s Status) validate() error {
 		s.Patterns.Eligible < 0 || s.Patterns.Completed < 0 || s.Patterns.Failed < 0 ||
 		s.Patterns.Attempts < 0 || s.Patterns.Retries < 0 || s.Patterns.CacheHits < 0 ||
 		s.Patterns.Repairs < 0 || s.Patterns.RepairSucceeded < 0 || s.Patterns.RepairFailed < 0 ||
+		s.Patterns.Current < 0 || s.Patterns.Retained < 0 || s.Patterns.Unavailable < 0 ||
 		s.Patterns.Completed+s.Patterns.Failed > s.Patterns.Eligible || s.Patterns.Retries > s.Patterns.Attempts ||
 		s.Patterns.CacheHits > s.Patterns.Completed || s.Patterns.RepairSucceeded+s.Patterns.RepairFailed != s.Patterns.Repairs ||
 		!validPatternFailureCategory(s.Patterns.FailureCategory) || !validPatternFailureCategory(s.Patterns.RepairFailureCategory) {
@@ -690,6 +694,15 @@ func (t *Tracker) RecordPatternAttempt(cacheHit, repair, retry, succeeded, final
 		case status.Patterns.FailureCategory != category:
 			status.Patterns.FailureCategory = PatternFailureMultiple
 		}
+	})
+}
+
+// SetPatternRefreshCounts records publishable per-job freshness outcomes.
+func (t *Tracker) SetPatternRefreshCounts(current, retained, unavailable int) {
+	t.update(true, func(status *Status) {
+		status.Patterns.Current = current
+		status.Patterns.Retained = retained
+		status.Patterns.Unavailable = unavailable
 	})
 }
 

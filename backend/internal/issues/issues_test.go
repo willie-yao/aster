@@ -601,3 +601,12 @@ func TestReconcile_TemplateFillerPreservesMarker(t *testing.T) {
 		t.Errorf("title not templated: %q", created.Title)
 	}
 }
+
+func TestBuildSpecsSkipsRetainedPattern(t *testing.T) {
+	pattern := models.PatternAnalysis{Subject: "job", JobID: "job", Systemic: true, Confidence: "high"}
+	details := []models.JobDetail{{JobID: "job", PatternRefresh: &models.PatternRefreshStatus{State: models.PatternRefreshRetained}}}
+	specs := BuildSpecs(BuildInput{Report: models.FlakinessReport{RecurringPatterns: []models.PatternAnalysis{pattern}}, JobDetails: details, Triggers: []string{project.IssueTriggerPatterns}})
+	if len(specs) != 0 {
+		t.Fatalf("specs = %+v", specs)
+	}
+}

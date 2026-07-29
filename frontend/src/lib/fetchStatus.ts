@@ -66,6 +66,8 @@ export function fetchStatusPresentation(response: FetchStatusResponse): FetchSta
   const patternRepairFailureDetail = status.patterns?.repair_failure_category
     ? `, repair failure: ${patternFailureLabels[status.patterns.repair_failure_category] ?? "unknown"}`
     : "";
+  const retainedPatterns = status.patterns?.retained ?? 0;
+  const retainedPatternDetail = retainedPatterns > 0 ? `, ${retainedPatterns} last-known-good ${retainedPatterns === 1 ? "pattern" : "patterns"}` : "";
   const patternFailureDetail = status.patterns?.failure_category
     ? `, pattern failure: ${patternFailureLabels[status.patterns.failure_category] ?? "unknown"}`
     : "";
@@ -91,7 +93,7 @@ export function fetchStatusPresentation(response: FetchStatusResponse): FetchSta
     title = "Fetch cancelled";
     severity = "warning";
   }
-  const detail = `${logicalDetail}${attemptDetail}${retryDetail}${checkpointDetail}${patternAttemptDetail}${patternRetryDetail}${patternCacheDetail}${patternRepairDetail}${patternRepairFailureDetail}${patternFailureDetail}`;
+  const detail = `${logicalDetail}${attemptDetail}${retryDetail}${checkpointDetail}${patternAttemptDetail}${patternRetryDetail}${patternCacheDetail}${patternRepairDetail}${patternRepairFailureDetail}${retainedPatternDetail}${patternFailureDetail}`;
   const determinateTotal = status.analyses.logical_total > 0
     ? status.analyses.logical_total
     : status.jobs.total > 0 ? status.jobs.total : null;

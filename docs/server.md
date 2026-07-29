@@ -530,3 +530,7 @@ When `notifications.email.action_links` is enabled and the server receives
 `EMAIL_SMTP_PASSWORD`, it emails the configured recipients after a draft becomes
 ready. The review link still requires the same authenticated login that created
 the request.
+
+## Pattern refresh freshness
+
+Each job detail includes additive `pattern_refresh` metadata with `current`, `retained`, `failed`, `not_applicable`, or `unavailable` state. `flakiness.json` carries aggregate counts and a job-status map. Freshness is outside `PatternAnalysis` and does not change pattern identity. Server write actions require `current` state and current evidence. Read-only pattern chat may use retained evidence only while every referenced build remains available.

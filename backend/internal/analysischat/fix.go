@@ -117,6 +117,9 @@ func (s *Service) FixCandidate(sessionID, owner, requestID, patternID, patternHa
 	if err != nil {
 		return FixCandidate{}, err
 	}
+	if candidate.Analysis.Scope == ScopePattern && !resolved.patternFresh {
+		return FixCandidate{}, ErrPatternChanged
+	}
 	analysis := resolved.testCase.AIAnalysis
 	if candidate.Analysis.Scope != ScopePattern && (analysis == nil || !sameAnalysisSnapshot(candidate.Original, analysisSnapshot(analysis))) {
 		return FixCandidate{}, ErrAnalysisChanged

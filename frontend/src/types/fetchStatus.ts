@@ -65,6 +65,9 @@ export interface FetchProgressStatus {
     repair_failed?: number;
     repair_failure_category?: string;
     failure_category?: string;
+    current?: number;
+    retained?: number;
+    unavailable?: number;
   };
   pattern_phase: string;
   publication_phase: string;

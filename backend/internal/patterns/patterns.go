@@ -39,6 +39,23 @@ type AnalyzeStats struct {
 	CacheHits int
 }
 
+// JobOutcome is one privacy-safe eligible-job correlation result.
+type JobOutcome struct {
+	JobID           string
+	Succeeded       bool
+	Systemic        bool
+	FailureCategory ai.PatternFailureCategory
+	Attempts        int
+	Repairs         int
+	CacheHits       int
+}
+
+// AnalyzeResult contains aggregate stats and deterministic job outcomes.
+type AnalyzeResult struct {
+	Stats    AnalyzeStats
+	Outcomes map[string]JobOutcome
+}
+
 // Attempt reports one privacy-safe correlation attempt.
 type Attempt struct {
 	Number          int
@@ -54,6 +71,7 @@ type Attempt struct {
 type AnalyzeOptions struct {
 	OnPlan    func(int)
 	OnAttempt func(Attempt)
+	OnOutcome func(JobOutcome)
 }
 
 type analysisWork struct {
@@ -71,31 +89,47 @@ func Analyze(ctx context.Context, analyzer Analyzer, details []models.JobDetail)
 // AnalyzeWithOptions correlates eligible jobs with bounded per-job retries and
 // reports aggregate attempt progress.
 func AnalyzeWithOptions(ctx context.Context, analyzer Analyzer, details []models.JobDetail, options AnalyzeOptions) (AnalyzeStats, error) {
+	result, err := AnalyzeDetailedWithOptions(ctx, analyzer, details, options)
+	return result.Stats, err
+}
+
+// AnalyzeDetailedWithOptions returns one outcome for every eligible job.
+func AnalyzeDetailedWithOptions(ctx context.Context, analyzer Analyzer, details []models.JobDetail, options AnalyzeOptions) (AnalyzeResult, error) {
 	work := eligibleWork(details)
-	stats := AnalyzeStats{Eligible: len(work)}
+	result := AnalyzeResult{Stats: AnalyzeStats{Eligible: len(work)}, Outcomes: map[string]JobOutcome{}}
 	if options.OnPlan != nil {
-		options.OnPlan(stats.Eligible)
+		options.OnPlan(result.Stats.Eligible)
 	}
 	var errs []error
 	for _, item := range work {
 		pa, attempts, retries, repairs, cacheHits, err := analyzeOne(ctx, analyzer, item, options.OnAttempt)
-		stats.Attempts += attempts
-		stats.Retries += retries
-		stats.Repairs += repairs
-		stats.CacheHits += cacheHits
+		result.Stats.Attempts += attempts
+		result.Stats.Retries += retries
+		result.Stats.Repairs += repairs
+		result.Stats.CacheHits += cacheHits
+		outcome := JobOutcome{JobID: item.jobID, Succeeded: err == nil, Attempts: attempts, Repairs: repairs, CacheHits: cacheHits}
+		if pa != nil {
+			outcome.Systemic = pa.Systemic
+		}
+		if err != nil {
+			outcome.FailureCategory = ai.PatternFailureCategoryOf(err)
+		}
+		result.Outcomes[item.jobID] = outcome
+		if options.OnOutcome != nil {
+			options.OnOutcome(outcome)
+		}
 		d := &details[item.index]
 		if err != nil {
-			stats.Failed++
-			category := ai.PatternFailureCategoryOf(err)
-			log.Printf("  ⚠ pattern analysis failed for %s: category=%s", d.Name, category)
+			result.Stats.Failed++
+			log.Printf("  ⚠ pattern analysis failed for %s: category=%s", d.Name, outcome.FailureCategory)
 			errs = append(errs, fmt.Errorf("%s: %w", d.Name, err))
 			continue
 		}
 		if applyAnalysis(d, pa) {
-			stats.Completed++
+			result.Stats.Completed++
 		}
 	}
-	return stats, errors.Join(errs...)
+	return result, errors.Join(errs...)
 }
 
 // AnalyzeConcurrent starts every eligible correlation before waiting for
@@ -138,12 +172,17 @@ func AnalyzeConcurrent(ctx context.Context, analyzer Analyzer, details []models.
 	return stats
 }
 
+// IsEligible reports whether a job qualifies for recurring-pattern correlation.
+func IsEligible(detail *models.JobDetail) bool {
+	return detail != nil && CountFailedBuilds(detail) >= MinFailedBuilds && len(GatherFailures(detail)) >= 2
+}
+
 func eligibleWork(details []models.JobDetail) []analysisWork {
 	work := make([]analysisWork, 0, len(details))
 	for i := range details {
 		d := &details[i]
 		failures := GatherFailures(d)
-		if CountFailedBuilds(d) < MinFailedBuilds || len(failures) < 2 {
+		if !IsEligible(d) {
 			continue
 		}
 		work = append(work, analysisWork{index: i, jobID: d.JobID, subject: d.Name, failures: failures})

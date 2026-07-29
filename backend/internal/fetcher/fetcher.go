@@ -119,9 +119,12 @@ type pipeline struct {
 	containerAnalyzer    containerFailureAnalyzer
 	progress             *fetchprogress.Tracker
 	aiRefreshTransaction *aiRefreshStateTransaction
+	lastPatternOutcomes  map[string]patterns.JobOutcome
 }
 
 // refreshResult carries the outputs a pass needs for its side effects.
+var writeAllOutput = output.WriteAll
+
 type refreshResult struct {
 	details   []models.JobDetail
 	flakiness models.FlakinessReport
@@ -433,7 +436,11 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 	}
 
 	// Fetch each job's builds. Cached completed builds are reused.
-	cachedJobs := loadCachedJobDetails(opts.OutDir)
+	priorDetails, err := loadPublishedJobDetails(opts.OutDir)
+	if err != nil {
+		return nil, fmt.Errorf("loading prior job details: %w", err)
+	}
+	cachedJobs := cachedBuildsFromDetails(priorDetails)
 
 	type jobResult struct {
 		job  models.ProwJob
@@ -520,15 +527,22 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 		if err := p.analyzeFailuresWithAI(analysisCtx, details, flakinessReport); err != nil {
 			return nil, err
 		}
-		patterns.AssignIDs(details)
-		// Fold systemic job-level verdicts into flakiness.json for the home page.
-		flakinessReport.RecurringPatterns = collectRecurringPatterns(details)
-		if n := len(flakinessReport.RecurringPatterns); n > 0 {
-			log.Printf("🔗 %d systemic recurring pattern(s) surfaced on the home page", n)
-		}
 		p.completeProgressPhase()
 	} else {
+		p.lastPatternOutcomes = map[string]patterns.JobOutcome{}
 		p.skipProgressPatterns()
+	}
+	refreshReport, err := patterns.MergeLastGood(details, priorDetails, patterns.AnalyzeResult{Outcomes: p.lastPatternOutcomes})
+	if err != nil {
+		return nil, fmt.Errorf("merging pattern refresh results: %w", err)
+	}
+	flakinessReport.PatternRefresh = refreshReport
+	if p.progress != nil {
+		p.progress.SetPatternRefreshCounts(refreshReport.Current, refreshReport.Retained, refreshReport.Unavailable)
+	}
+	flakinessReport.RecurringPatterns = collectRecurringPatterns(details)
+	if n := len(flakinessReport.RecurringPatterns); n > 0 {
+		log.Printf("🔗 %d systemic recurring pattern(s) surfaced on the home page", n)
 	}
 
 	p.startProgressPhase(fetchprogress.PhasePublication)
@@ -537,19 +551,24 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 	// also write resolved.json on an admin action; both use atomic writes, and a
 	// rare lost update self-heals on the next pass (same trade-off as the other
 	// *_state.json files).
+	var stagedResolved *resolve.State
+	reopenedResolved := 0
 	if rs := resolve.Load(opts.OutDir); len(rs.Resolved) > 0 {
-		if pruned, changed := rs.Prune(flakinessReport.RecurringPatterns); changed {
-			if err := pruned.Save(opts.OutDir); err != nil {
-				log.Printf("Warning: failed to save resolved state: %v", err)
-			} else {
-				log.Printf("↩ re-opened %d resolved pattern(s) after recurrence", len(rs.Resolved)-len(pruned.Resolved))
-			}
+		if pruned, changed := rs.Prune(patterns.CurrentRecurring(details)); changed {
+			stagedResolved = pruned
+			reopenedResolved = len(rs.Resolved) - len(pruned.Resolved)
 		}
 	}
 
 	log.Printf("Writing output to %s/ (%d jobs)", opts.OutDir, len(dashboard.Jobs))
-	if err := output.WriteAll(opts.OutDir, cfg, dashboard, details, flakinessReport, searchIndex); err != nil {
+	if err := writeAllOutput(opts.OutDir, cfg, dashboard, details, flakinessReport, searchIndex); err != nil {
 		return nil, fmt.Errorf("writing output: %w", err)
+	}
+	if stagedResolved != nil {
+		if err := stagedResolved.Save(opts.OutDir); err != nil {
+			return nil, fmt.Errorf("saving resolved state after publication: %w", err)
+		}
+		log.Printf("↩ re-opened %d resolved pattern(s) after recurrence", reopenedResolved)
 	}
 	p.markProgressPublished()
 	p.completeProgressPhase()
@@ -843,6 +862,19 @@ func processIssues(ctx context.Context, cfg *project.Config, report models.Flaki
 		return fmt.Errorf("load remediation state for issues: %w", err)
 	}
 	keepOpen, retire := remediationIssueLifecycleKeys(ledger, targetRepo)
+	if keepOpen == nil {
+		keepOpen = map[string]bool{}
+	}
+	for _, detail := range details {
+		if detail.PatternRefresh == nil || detail.PatternRefresh.State == models.PatternRefreshCurrent {
+			continue
+		}
+		for _, pattern := range detail.PatternAnalyses {
+			if pattern.Systemic {
+				keepOpen[issues.KeyPrefixPattern+pattern.JobID] = true
+			}
+		}
+	}
 	mgr := issues.NewManager(client, filepath.Join(outDir, "issue_state.json"), targetRepo, issues.Options{
 		CommentOnRecovery: eff.CommentOnRecovery == nil || *eff.CommentOnRecovery,
 		CloseOnRecovery:   eff.CloseOnRecovery,
@@ -996,38 +1028,62 @@ func wrapOptional(operation string, err error) error {
 
 // loadCachedJobDetails loads existing per-job JSON files from the output dir.
 // The returned map is JobID to build ID to cached BuildResult.
-func loadCachedJobDetails(outDir string) map[string]map[string]models.BuildResult {
-	cached := make(map[string]map[string]models.BuildResult)
+func loadPublishedJobDetails(outDir string) (map[string]models.JobDetail, error) {
+	details := map[string]models.JobDetail{}
 	jobsDir := filepath.Join(outDir, "jobs")
 	entries, err := os.ReadDir(jobsDir)
-	if err != nil {
-		return cached
+	if os.IsNotExist(err) {
+		return details, nil
 	}
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(jobsDir, e.Name()))
+		data, err := os.ReadFile(filepath.Join(jobsDir, entry.Name()))
 		if err != nil {
-			continue
+			return nil, err
 		}
 		var detail models.JobDetail
-		if json.Unmarshal(data, &detail) != nil || detail.JobID == "" {
-			continue
+		if err := json.Unmarshal(data, &detail); err != nil {
+			return nil, fmt.Errorf("parse %s: %w", entry.Name(), err)
 		}
+		if detail.JobID == "" {
+			return nil, fmt.Errorf("job detail %s is missing job_id", entry.Name())
+		}
+		if _, duplicate := details[detail.JobID]; duplicate {
+			return nil, fmt.Errorf("duplicate job detail for %s", detail.JobID)
+		}
+		details[detail.JobID] = detail
+	}
+	return details, nil
+}
+
+func cachedBuildsFromDetails(details map[string]models.JobDetail) map[string]map[string]models.BuildResult {
+	cached := make(map[string]map[string]models.BuildResult, len(details))
+	for jobID, detail := range details {
 		builds := make(map[string]models.BuildResult, len(detail.Runs))
-		for _, r := range detail.Runs {
-			// Truncated discovery is reusable only when it retained a JUnit path.
-			cacheableJUnit := r.JUnitComplete || (r.JUnitTruncated && len(r.JUnitURLs) > 0)
-			if r.Result != "PENDING" && r.Result != "" && cacheableJUnit {
-				builds[r.BuildID] = r
+		for _, run := range detail.Runs {
+			cacheableJUnit := run.JUnitComplete || (run.JUnitTruncated && len(run.JUnitURLs) > 0)
+			if run.Result != "PENDING" && run.Result != "" && cacheableJUnit {
+				builds[run.BuildID] = run
 			}
 		}
 		if len(builds) > 0 {
-			cached[detail.JobID] = builds
+			cached[jobID] = builds
 		}
 	}
 	return cached
+}
+
+func loadCachedJobDetails(outDir string) map[string]map[string]models.BuildResult {
+	details, err := loadPublishedJobDetails(outDir)
+	if err != nil {
+		return map[string]map[string]models.BuildResult{}
+	}
+	return cachedBuildsFromDetails(details)
 }
 
 type buildFetchStats struct {

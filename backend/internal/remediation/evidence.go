@@ -133,11 +133,15 @@ func runsForTestIdentity(runs []models.BuildResult, identity string) []models.Bu
 
 // UntrackedPatterns excludes findings already represented by a remediation attempt.
 func UntrackedPatterns(state *State, patterns []models.PatternAnalysis, details []models.JobDetail) []models.PatternAnalysis {
-	if state == nil || len(state.Remediations) == 0 {
-		return append([]models.PatternAnalysis(nil), patterns...)
-	}
 	out := make([]models.PatternAnalysis, 0, len(patterns))
 	for _, pattern := range patterns {
+		if len(details) > 0 && !models.PatternIsCurrent(details, pattern.JobID) {
+			continue
+		}
+		if state == nil || len(state.Remediations) == 0 {
+			out = append(out, pattern)
+			continue
+		}
 		id := pattern.ID
 		if id == "" {
 			id = models.PatternID(pattern)
