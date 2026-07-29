@@ -18,6 +18,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisruntime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
 
 func validContainerAnalysisOptions() Options {
@@ -300,5 +301,52 @@ func TestPassExecutionContextsDetachDurableContainerWork(t *testing.T) {
 	}
 	if _, ok := sideEffects.Deadline(); !ok {
 		t.Fatal("in-process side effects lost the pass deadline")
+	}
+}
+
+func TestAnalyzeFailuresInProcessCancellationDoesNotPersistCheckpoint(t *testing.T) {
+	t.Setenv("AI_CONTEXT_WINDOW_TOKENS", "65536")
+	dataDir := t.TempDir()
+	bucketDir := t.TempDir()
+	backend, err := storage.NewLocalBackend(bucketDir, "https://prow.example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &project.Config{
+		AI:      &project.AI{Agentic: project.Agentic{Tools: []string{"filesystem"}}},
+		Storage: project.Storage{Provider: string(storage.ProviderLocal), Base: bucketDir},
+	}
+	p := &pipeline{
+		opts: Options{OutDir: dataDir, AnalysisRuntime: AnalysisRuntimeOptions{Type: AnalysisRuntimeInProcess}},
+		cfg:  cfg, client: &http.Client{}, backend: backend,
+		aiProject: &analysisruntime.Project{
+			Config: cfg,
+			Provider: project.AIProvider{
+				API: project.AIAPIChatCompletions, Endpoint: "http://model.invalid/v1/chat/completions", Model: "test-model",
+			},
+			SystemPrompt: "test prompt",
+		},
+	}
+	details := []models.JobDetail{{
+		Name: "job", JobID: "job", JobType: models.JobTypePeriodic,
+		Runs: []models.BuildResult{{
+			BuildInfo: models.BuildInfo{BuildID: "1", Result: "FAILURE"},
+			TestCases: []models.TestCase{{Name: "test", Status: "failed", FailureMessage: "failed"}},
+		}},
+	}}
+	persistCalls := 0
+	oldSave := saveAnalysisRuntimeCache
+	saveAnalysisRuntimeCache = func(*analysisruntime.Runtime) error {
+		persistCalls++
+		return nil
+	}
+	t.Cleanup(func() { saveAnalysisRuntimeCache = oldSave })
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := p.analyzeFailuresWithAI(ctx, details, models.FlakinessReport{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("analysis error = %v", err)
+	}
+	if persistCalls != 0 {
+		t.Fatalf("checkpoint persistence calls = %d, want 0", persistCalls)
 	}
 }

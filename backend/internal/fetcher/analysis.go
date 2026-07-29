@@ -220,7 +220,7 @@ schedule:
 	if systemicErr != nil {
 		return systemicErr
 	}
-	if container != nil && ctx.Err() != nil {
+	if ctx.Err() != nil {
 		return ctx.Err()
 	}
 	log.Printf("🤖 AI analysis complete (%d transient skipped)", transientSkipped.Load())
