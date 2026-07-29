@@ -876,14 +876,11 @@ func processIssues(ctx context.Context, cfg *project.Config, report models.Flaki
 		keepOpen = map[string]bool{}
 	}
 	for _, detail := range details {
-		if detail.PatternRefresh == nil || detail.PatternRefresh.State == models.PatternRefreshCurrent {
+		if detail.PatternRefresh == nil || detail.PatternRefresh.State == models.PatternRefreshCurrent ||
+			detail.PatternRefresh.State == models.PatternRefreshNotApplicable {
 			continue
 		}
-		for _, pattern := range detail.PatternAnalyses {
-			if pattern.Systemic {
-				keepOpen[issues.KeyPrefixPattern+pattern.JobID] = true
-			}
-		}
+		keepOpen[issues.KeyPrefixPattern+detail.JobID] = true
 	}
 	mgr := issues.NewManager(client, filepath.Join(outDir, "issue_state.json"), targetRepo, issues.Options{
 		CommentOnRecovery: eff.CommentOnRecovery == nil || *eff.CommentOnRecovery,
