@@ -56,6 +56,11 @@ type presubmitsFile struct {
 	Presubmits map[string][]rawJob `yaml:"presubmits"`
 }
 
+// postsubmitsFile represents the top-level structure of a postsubmits YAML file.
+type postsubmitsFile struct {
+	Postsubmits map[string][]rawJob `yaml:"postsubmits"`
+}
+
 // ParseJobConfig parses Prow YAML and returns jobs whose testgrid-dashboards
 // annotation contains the given dashboard. filename is recorded in ConfigFile.
 // categories controls substring-to-category mapping; nil leaves jobs ungrouped.

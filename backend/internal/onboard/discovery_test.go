@@ -26,7 +26,7 @@ type fakeCatalogClient struct {
 	err     error
 }
 
-func (f fakeCatalogClient) ForRepo(context.Context, string) (*jobconfig.Catalog, error) {
+func (f fakeCatalogClient) Catalog(context.Context) (*jobconfig.Catalog, error) {
 	return f.catalog, f.err
 }
 
@@ -187,5 +187,54 @@ func TestWriteDiscovery_TextPropagatesWriteError(t *testing.T) {
 	err := WriteDiscovery(failingWriter{}, DiscoveryReport{}, false)
 	if err == nil || !strings.Contains(err.Error(), "write failed") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestPopulateDashboardTotals(t *testing.T) {
+	matching := []jobconfig.JobDefinition{{
+		Name: "source-periodic", JobType: models.JobTypePeriodic,
+		Annotations: map[string]string{"testgrid-dashboards": "shared-dashboard"},
+	}}
+	catalog := &jobconfig.Catalog{Jobs: map[string]jobconfig.JobDefinition{
+		"source":     matching[0],
+		"periodic-2": {Name: "other-periodic", JobType: models.JobTypePeriodic, Annotations: map[string]string{"testgrid-dashboards": "shared-dashboard"}},
+		"presubmit":  {Name: "other-presubmit", JobType: models.JobTypePresubmit, Repo: "example/other", Annotations: map[string]string{"testgrid-dashboards": "shared-dashboard"}},
+		"postsubmit": {Name: "source-postsubmit", JobType: jobconfig.JobTypePostsubmit, Repo: "example/source", Annotations: map[string]string{"testgrid-dashboards": "shared-dashboard"}},
+	}}
+	candidates := populateDashboardTotals(RankDashboardCandidates(matching), catalog)
+	if len(candidates) != 1 {
+		t.Fatalf("candidates = %+v", candidates)
+	}
+	candidate := candidates[0]
+	if candidate.PeriodicJobs != 1 || candidate.PresubmitJobs != 0 {
+		t.Fatalf("source-match counts = %+v", candidate)
+	}
+	if candidate.DashboardPeriodicJobs != 2 || candidate.DashboardPresubmitJobs != 1 || candidate.DashboardPostsubmitJobs != 1 {
+		t.Fatalf("dashboard totals = %+v", candidate)
+	}
+}
+
+func TestWriteDiscovery_LabelsMatchAndDashboardCounts(t *testing.T) {
+	var out strings.Builder
+	report := DiscoveryReport{
+		SourceRepo: Repo{FullName: "example/source"},
+		Candidates: []DashboardCandidate{{
+			Dashboard: "shared-dashboard", PeriodicJobs: 1,
+			DashboardPeriodicJobs: 45, DashboardPresubmitJobs: 6, DashboardPostsubmitJobs: 7,
+		}},
+		Identity:      IdentitySuggestions{ID: Inferred[string]{Value: "source"}},
+		DashboardRepo: Inferred[string]{Value: "example/source-dashboard"},
+	}
+	if err := WriteDiscovery(&out, report, false); err != nil {
+		t.Fatalf("WriteDiscovery: %v", err)
+	}
+	for _, want := range []string{
+		"source matches: 1 periodic, 0 presubmit",
+		"dashboard tabs: 45 periodic, 6 presubmit, 7 postsubmit",
+		"postsubmit tabs are not supported",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output missing %q:\n%s", want, out.String())
+		}
 	}
 }

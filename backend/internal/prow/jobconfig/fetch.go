@@ -38,6 +38,25 @@ func FetchJobConfigs(ctx context.Context, client *http.Client, cfg *project.Conf
 	return jobs, err
 }
 
+// FetchCatalog returns every Prow job definition from one pinned
+// kubernetes/test-infra snapshot. It performs no artifact discovery.
+func FetchCatalog(ctx context.Context, client *http.Client) (*Catalog, error) {
+	sha, err := resolveMasterSHA(ctx, client)
+	if err != nil {
+		return nil, fmt.Errorf("resolving kubernetes/test-infra master SHA: %w", err)
+	}
+	files, err := listConfigJobsYAMLs(ctx, client, sha)
+	if err != nil {
+		return nil, fmt.Errorf("listing config/jobs/ at %s: %w", sha[:7], err)
+	}
+	log.Printf("  discovered %d candidate YAMLs under %s at test-infra@%s", len(files), configJobsPrefix, sha[:7])
+	_, catalog, err := downloadAndParseAll(ctx, client, sha, files, nil, "", true)
+	if err != nil {
+		return nil, err
+	}
+	return catalog, nil
+}
+
 // FetchCatalogForRepo returns job definitions that test targetRepo from one
 // pinned kubernetes/test-infra snapshot. It does not require a TestGrid
 // dashboard and performs no artifact discovery.
@@ -54,7 +73,7 @@ func FetchCatalogForRepo(ctx context.Context, client *http.Client, targetRepo st
 		return nil, fmt.Errorf("listing config/jobs/ at %s: %w", sha[:7], err)
 	}
 	log.Printf("  discovered %d candidate YAMLs under %s at test-infra@%s", len(files), configJobsPrefix, sha[:7])
-	_, catalog, err := downloadAndParseAll(ctx, client, sha, files, nil, targetRepo)
+	_, catalog, err := downloadAndParseAll(ctx, client, sha, files, nil, targetRepo, false)
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +94,7 @@ func FetchJobConfigsAndCatalog(ctx context.Context, client *http.Client, cfg *pr
 	}
 	log.Printf("  discovered %d candidate YAMLs under %s at test-infra@%s", len(files), configJobsPrefix, sha[:7])
 
-	allJobs, catalog, err := downloadAndParseAll(ctx, client, sha, files, cfg, targetRepo)
+	allJobs, catalog, err := downloadAndParseAll(ctx, client, sha, files, cfg, targetRepo, false)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -183,7 +202,7 @@ func listConfigJobsYAMLs(ctx context.Context, client *http.Client, sha string) (
 // ParseJobConfig, which keeps only jobs whose testgrid-dashboards annotation
 // contains cfg.TestGrid.Dashboard. The first file-level error cancels every
 // in-flight goroutine and is returned to the caller.
-func downloadAndParseAll(ctx context.Context, client *http.Client, sha string, files []string, cfg *project.Config, targetRepo string) ([]models.ProwJob, *Catalog, error) {
+func downloadAndParseAll(ctx context.Context, client *http.Client, sha string, files []string, cfg *project.Config, targetRepo string, includeAllDefinitions bool) ([]models.ProwJob, *Catalog, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -254,7 +273,7 @@ func downloadAndParseAll(ctx context.Context, client *http.Client, sha string, f
 		for _, definition := range catalogPerFile[i] {
 			matchesDashboard := cfg != nil && definitionMatchesDashboard(definition, cfg.TestGrid.Dashboard)
 			matchesTarget := targetRepo != "" && definition.TestsRepo(targetRepo)
-			if !matchesDashboard && !matchesTarget {
+			if !includeAllDefinitions && !matchesDashboard && !matchesTarget {
 				continue
 			}
 			id := definition.ID()

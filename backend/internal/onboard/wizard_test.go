@@ -41,7 +41,7 @@ type wizardFakeCatalogClient struct {
 	calls   int
 }
 
-func (f *wizardFakeCatalogClient) ForRepo(_ context.Context, _ string) (*jobconfig.Catalog, error) {
+func (f *wizardFakeCatalogClient) Catalog(_ context.Context) (*jobconfig.Catalog, error) {
 	f.calls++
 	return f.catalog, f.err
 }
@@ -807,5 +807,42 @@ func TestWizard_UsesCanonicalRepositoryFromGitHub(t *testing.T) {
 	}
 	if strings.Contains(projectYAML, "old-owner") || strings.Contains(projectYAML, "old-name") {
 		t.Fatalf("stale source repo retained:\n%s", projectYAML)
+	}
+}
+
+func TestWizard_DashboardWidePresubmitsControlPrompt(t *testing.T) {
+	input := strings.Join([]string{
+		"y", // include dashboard presubmits even though none test the source repo
+		"",  // deployment
+		"",  // dashboard repo
+		"",  // id
+		"",  // name
+		"",  // short name
+		"n", // AI
+		"",  // output
+		"y", // confirm
+	}, "\n") + "\n"
+	deps, out, writer, _ := wizardDependencies(input)
+	catalog := deps.catalogs.(*wizardFakeCatalogClient).catalog
+	catalog.Jobs = map[string]jobconfig.JobDefinition{
+		"source-periodic": {
+			Name: "source-periodic", JobType: models.JobTypePeriodic,
+			Refs:        []jobconfig.RepoRef{{Org: "example", Repo: "project"}},
+			Annotations: map[string]string{"testgrid-dashboards": "dashboard-a"},
+		},
+		"other-presubmit": {
+			Name: "other-presubmit", JobType: models.JobTypePresubmit, Repo: "example/other",
+			Annotations: map[string]string{"testgrid-dashboards": "dashboard-a"},
+		},
+	}
+	opts := Options{SourceRepo: "example/project", TestGrid: "dashboard-a", EngineRef: "main", NoPrompt: true}
+	if err := run(context.Background(), opts, deps); err != nil {
+		t.Fatalf("run: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "Include presubmit jobs in the dashboard?") {
+		t.Fatalf("dashboard-wide presubmits did not trigger the prompt:\n%s", out.String())
+	}
+	if !strings.Contains(writer.files["project.yaml"], "include_presubmits: true") {
+		t.Fatalf("presubmit choice was not rendered:\n%s", writer.files["project.yaml"])
 	}
 }

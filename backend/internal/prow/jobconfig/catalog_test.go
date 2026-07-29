@@ -83,3 +83,22 @@ func TestJobDefinitionTestsRepo_IsCaseInsensitive(t *testing.T) {
 		t.Fatalf("case-insensitive matching failed: presubmit=%t periodic=%t", presubmit.TestsRepo("example/project"), periodic.TestsRepo("example/project"))
 	}
 }
+
+func TestParseCatalog_IncludesPostsubmits(t *testing.T) {
+	data := []byte(`postsubmits:
+  example/project:
+  - name: post-example
+    annotations:
+      testgrid-dashboards: example-dashboard
+`)
+	jobs, err := ParseCatalog(data, "postsubmits.yaml")
+	if err != nil {
+		t.Fatalf("ParseCatalog: %v", err)
+	}
+	if len(jobs) != 1 || jobs[0].JobType != JobTypePostsubmit || jobs[0].Repo != "example/project" {
+		t.Fatalf("jobs = %+v", jobs)
+	}
+	if !jobs[0].TestsRepo("EXAMPLE/PROJECT") {
+		t.Fatalf("postsubmit does not match its repository: %+v", jobs[0])
+	}
+}

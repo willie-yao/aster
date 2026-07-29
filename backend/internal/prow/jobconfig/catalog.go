@@ -9,6 +9,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// JobTypePostsubmit identifies postsubmit definitions used for discovery
+// reporting. The dashboard fetcher does not ingest postsubmit artifacts.
+const JobTypePostsubmit = "postsubmit"
+
 // Catalog is a snapshot of Prow job definitions from one source revision.
 type Catalog struct {
 	Revision string                   `json:"revision,omitempty"`
@@ -77,7 +81,7 @@ func (j JobDefinition) TestsRepo(repo string) bool {
 	if repo == "" {
 		return false
 	}
-	if j.JobType == models.JobTypePresubmit && strings.EqualFold(j.Repo, repo) {
+	if (j.JobType == models.JobTypePresubmit || j.JobType == JobTypePostsubmit) && strings.EqualFold(j.Repo, repo) {
 		return true
 	}
 	for _, ref := range j.Refs {
@@ -88,7 +92,7 @@ func (j JobDefinition) TestsRepo(repo string) bool {
 	return false
 }
 
-// ParseCatalog parses every periodic and presubmit in one Prow YAML file.
+// ParseCatalog parses every periodic, presubmit, and postsubmit in one Prow YAML file.
 func ParseCatalog(data []byte, filename string) ([]JobDefinition, error) {
 	var pf periodicsFile
 	if err := yaml.Unmarshal(data, &pf); err != nil {
@@ -96,6 +100,10 @@ func ParseCatalog(data []byte, filename string) ([]JobDefinition, error) {
 	}
 	var psf presubmitsFile
 	if err := yaml.Unmarshal(data, &psf); err != nil {
+		return nil, err
+	}
+	var pof postsubmitsFile
+	if err := yaml.Unmarshal(data, &pof); err != nil {
 		return nil, err
 	}
 
@@ -114,6 +122,19 @@ func ParseCatalog(data []byte, filename string) ([]JobDefinition, error) {
 		}
 		for _, job := range psf.Presubmits[repo] {
 			out = append(out, convertDefinition(job, filename, models.JobTypePresubmit, repo))
+		}
+	}
+	postRepos := make([]string, 0, len(pof.Postsubmits))
+	for repo := range pof.Postsubmits {
+		postRepos = append(postRepos, repo)
+	}
+	sort.Strings(postRepos)
+	for _, repo := range postRepos {
+		if !strings.Contains(repo, "/") {
+			return nil, fmt.Errorf("postsubmit repo key %q is not org/repo", repo)
+		}
+		for _, job := range pof.Postsubmits[repo] {
+			out = append(out, convertDefinition(job, filename, JobTypePostsubmit, repo))
 		}
 	}
 	return out, nil
