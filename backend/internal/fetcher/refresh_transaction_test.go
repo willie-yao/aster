@@ -448,6 +448,13 @@ func TestPatternFailurePreservesRefreshState(t *testing.T) {
 	}
 	p := refreshLifecyclePipeline(t, dataDir, bucketDir, analyzer)
 	configureRefreshLifecycleRuntime(t, p, dataDir)
+	staleRuntime := p.aiRuntime
+	var persistedPatternRuntime *analysisruntime.Runtime
+	oldSaveRuntime := saveAnalysisRuntimeCache
+	saveAnalysisRuntimeCache = func(runtime *analysisruntime.Runtime) error {
+		persistedPatternRuntime = runtime
+		return oldSaveRuntime(runtime)
+	}
 	p.progress = fetchprogress.New(dataDir, "sha-test")
 	p.progress.StartPass(fetchprogress.PassOneShot)
 	sender := &countingNotifySender{}
@@ -463,6 +470,7 @@ func TestPatternFailurePreservesRefreshState(t *testing.T) {
 	t.Cleanup(func() {
 		newEmailSender = oldEmailSender
 		analyzePatternsAcrossBuilds = oldPatternAnalysis
+		saveAnalysisRuntimeCache = oldSaveRuntime
 	})
 
 	if _, err := p.fullPass(t.Context()); err == nil || !strings.Contains(err.Error(), "cross-build pattern analysis") {
@@ -470,6 +478,9 @@ func TestPatternFailurePreservesRefreshState(t *testing.T) {
 	}
 	if sender.calls.Load() != 0 {
 		t.Fatalf("notification sends = %d, want 0", sender.calls.Load())
+	}
+	if persistedPatternRuntime == nil || persistedPatternRuntime == staleRuntime {
+		t.Fatal("pattern persistence reused the stale pre-checkpoint runtime")
 	}
 	if p.aiRuntime != nil || p.containerAnalyzer != nil {
 		t.Fatal("failed pattern refresh retained in-memory AI state")

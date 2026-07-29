@@ -237,6 +237,9 @@ schedule:
 	p.startProgressPhase(fetchprogress.PhasePatterns)
 
 	if container != nil {
+		// Container analysis wrote the checkpoint outside the retained runtime.
+		// Reload it before pattern cache writes so new individual entries survive.
+		p.aiRuntime = nil
 		runtime, err = p.ensureAnalysisRuntime(ctx)
 		if err != nil {
 			log.Printf("Warning: cross-build analysis runtime setup failed: %v", err)
