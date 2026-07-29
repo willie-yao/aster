@@ -659,8 +659,11 @@ judging, forced finalization, and completion.
 The trace intentionally excludes prompts, assistant text, reasoning items, tool
 arguments, tool output, and configured endpoint or model fields. Provider and
 harness failures are stored as fixed error codes, never free-form response
-bodies. Identifiers are URL- and credential-redacted and byte-capped. A trace
-keeps at most 128 events, and the private store keeps a rolling window of up to
+bodies. Pattern traces add only structural parse counts, scan truncation,
+request stage, duration, repair outcome, and safe failure categories. They never
+store candidate text, prompts, provider bodies, tool content, private paths, or
+Task identities. Identifiers are URL- and credential-redacted and byte-capped.
+A trace keeps at most 128 events, and the private store keeps a rolling window of up to
 500 completed failure traces. It admits only entries newer than the retained
 oldest trace and evicts oldest-first as needed to keep the saved file within the
 64 MiB loader limit. The persisted `retained_since` watermark prevents polling
@@ -716,19 +719,23 @@ For each job, the engine:
    not, with a confidence, the shared root cause, the cross-cutting fix, and the
    builds it judges to share the cause. The newest 10 representatives are sent.
    When a source repo is wired (see grounding below), this attempt is a repotree
-   tool loop; otherwise it is a single tool-free chat call. If the attempt ends
-   with an ambiguous response, HTTP 408, HTTP 429, or a provider 5xx response,
-   that job gets one fresh retry. Successful job correlations are not rerun, and
-   both attempts use the same strict response validation.
+   tool loop; otherwise it is a single tool-free chat call. Strictly valid
+   candidates are canonicalized by trimming field boundaries, lowercasing
+   confidence, and sorting and deduplicating `shared_builds`. Repeated candidates
+   are accepted only when their canonical JSON is identical. Distinct valid
+   candidates trigger one no-tools ambiguity-repair completion, whose result must
+   pass the same strict parser. HTTP 408, HTTP 429, and retryable provider 5xx
+   responses permit one fresh full attempt. Ambiguity alone never repeats the
+   grounded investigation.
 
-The retry is bounded at two job-level attempts. A tool-free correlation makes
-one logical model call per attempt. Since the transport permits up to two internal
-retries for HTTP 429, that path makes at most six HTTP requests across both
-attempts. A grounded attempt remains bounded at six tool-loop turns, one forced
-finalization, and one extraction call. Each logical call has the same three-request
-HTTP 429 cap, so grounded mode has a hard limit of 48 HTTP requests across both
-attempts. A final failure aborts transactional publication and retains the
-previously published generation.
+Each job is bounded at two full attempts and one ambiguity-repair completion.
+A tool-free correlation therefore makes at most three logical model calls. Since
+transport permits up to two internal retries for HTTP 429, that path makes at
+most nine HTTP requests. A grounded full attempt remains bounded at six tool-loop
+turns, one forced finalization, and one extraction call. Including the single
+repair completion, grounded mode has a hard limit of 51 HTTP requests across two
+full attempts. Successful correlations are not rerun. A final failure aborts
+transactional publication and retains the previously published generation.
 
 The verdict is cached under `pattern:<module>:<hash>`, where the hash covers the
 prompt version, the grounding mode (grounded vs tool-free), plus the exact

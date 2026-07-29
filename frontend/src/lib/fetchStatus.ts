@@ -15,6 +15,8 @@ const patternFailureLabels: Record<string, string> = {
   "rate-limited": "rate limited",
   "provider-5xx": "provider failure",
   provider: "provider error",
+  "context-headroom": "context headroom unavailable",
+  "tools-unsupported": "tools unsupported",
   json: "invalid JSON",
   missing: "missing response",
   schema: "invalid schema",
@@ -56,6 +58,11 @@ export function fetchStatusPresentation(response: FetchStatusResponse): FetchSta
   const patternRetries = status.patterns?.retries ?? 0;
   const patternAttemptDetail = patternAttempts > 0 ? `, ${patternAttempts} pattern ${patternAttempts === 1 ? "attempt" : "attempts"}` : "";
   const patternRetryDetail = patternRetries > 0 ? `, ${patternRetries} pattern ${patternRetries === 1 ? "retry" : "retries"}` : "";
+  const patternRepairs = status.patterns?.repairs ?? 0;
+  const patternRepairDetail = patternRepairs > 0 ? `, ${patternRepairs} ambiguity ${patternRepairs === 1 ? "repair" : "repairs"}` : "";
+  const patternRepairFailureDetail = status.patterns?.repair_failure_category
+    ? `, repair failure: ${patternFailureLabels[status.patterns.repair_failure_category] ?? "unknown"}`
+    : "";
   const patternFailureDetail = status.patterns?.failure_category
     ? `, pattern failure: ${patternFailureLabels[status.patterns.failure_category] ?? "unknown"}`
     : "";
@@ -81,7 +88,7 @@ export function fetchStatusPresentation(response: FetchStatusResponse): FetchSta
     title = "Fetch cancelled";
     severity = "warning";
   }
-  const detail = `${logicalDetail}${attemptDetail}${retryDetail}${patternAttemptDetail}${patternRetryDetail}${patternFailureDetail}`;
+  const detail = `${logicalDetail}${attemptDetail}${retryDetail}${patternAttemptDetail}${patternRetryDetail}${patternRepairDetail}${patternRepairFailureDetail}${patternFailureDetail}`;
   const determinateTotal = status.analyses.logical_total > 0
     ? status.analyses.logical_total
     : status.jobs.total > 0 ? status.jobs.total : null;

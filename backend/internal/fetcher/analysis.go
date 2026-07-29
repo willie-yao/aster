@@ -255,6 +255,7 @@ schedule:
 		OnAttempt: func(attempt patterns.Attempt) {
 			if p.progress != nil {
 				p.progress.RecordPatternAttempt(
+					attempt.Repair,
 					attempt.Retry,
 					attempt.Succeeded,
 					attempt.Final,

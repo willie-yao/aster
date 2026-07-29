@@ -385,6 +385,140 @@ func TestParsePatternResponseNormalizesBuildIDs(t *testing.T) {
 	}
 }
 
+func TestParsePatternResponseDeduplicatesEquivalentCandidates(t *testing.T) {
+	first := `{"systemic":true,"confidence":" HIGH ","shared_root_cause":" shared cause ","shared_builds":["bbuild","abuild","bbuild"],"suggested_fix":" fix it ","summary":" same summary "}`
+	second := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":["abuild","bbuild"],"suggested_fix":"fix it","summary":"same summary"}`
+	parsed, stats, err := parsePatternResponseWithStats(first+"\n"+second, patternBuildIDs(patternFailures(2)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.CandidateCount != 2 || stats.ValidCount != 2 || stats.UniqueValidCount != 1 {
+		t.Fatalf("stats = %+v", stats)
+	}
+	if parsed.Confidence != "high" || strings.Join(parsed.SharedBuilds, ",") != "abuild,bbuild" || parsed.SharedRootCause != "shared cause" {
+		t.Fatalf("parsed = %+v", parsed)
+	}
+}
+
+func TestParsePatternResponseRejectsInvalidContractBetweenEquivalentCandidates(t *testing.T) {
+	valid := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":["abuild","bbuild"],"suggested_fix":"fix it","summary":"same summary"}`
+	raw := valid + "\n" + `{"systemic":true}` + "\n" + valid
+	_, _, err := parsePatternResponseWithStats(raw, patternBuildIDs(patternFailures(2)))
+	if got := patternValidationCategoryOf(err); got != patternValidationSchema {
+		t.Fatalf("category = %q, error = %v", got, err)
+	}
+}
+
+func TestParsePatternResponseRejectsDistinctCanonicalCandidates(t *testing.T) {
+	first := `{"systemic":true,"confidence":"high","shared_root_cause":"first cause","shared_builds":["abuild","bbuild"],"suggested_fix":"fix it","summary":"same summary"}`
+	second := strings.Replace(first, "first cause", "second cause", 1)
+	_, stats, err := parsePatternResponseWithStats(first+"\n"+second, patternBuildIDs(patternFailures(2)))
+	if got := patternValidationCategoryOf(err); got != patternValidationAmbiguous {
+		t.Fatalf("category = %q, error = %v", got, err)
+	}
+	if stats.ValidCount != 2 || stats.UniqueValidCount != 2 {
+		t.Fatalf("stats = %+v", stats)
+	}
+}
+
+func TestAnalyzePatternRepairsAmbiguityOnce(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	valid := `{"systemic":true,"confidence":"high","shared_root_cause":"private-shared-cause","shared_builds":["abuild","bbuild"],"suggested_fix":"update config/controller.yaml","summary":"same summary"}`
+	ambiguous := valid + "\n" + strings.Replace(valid, "private-shared-cause", "private-other-cause", 1)
+	srv.push(200, chatRespFinal(ambiguous))
+	srv.push(200, chatRespFinal(valid))
+	s := newPatternTestService(t, srv.URL)
+	traceStore := NewTraceStore()
+	s.SetTraceStore(traceStore)
+	var repairs []PatternRepairAttempt
+	pa, err := s.AnalyzePatternWithOptions(t.Context(), "job", "job", patternFailures(2), PatternAnalyzeOptions{
+		AllowAmbiguityRepair: true,
+		OnRepair:             func(attempt PatternRepairAttempt) { repairs = append(repairs, attempt) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pa == nil || pa.SharedRootCause != "private-shared-cause" || len(repairs) != 1 || !repairs[0].Succeeded {
+		t.Fatalf("pattern=%+v repairs=%+v", pa, repairs)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 2 {
+		t.Fatalf("model calls = %d, want 2", got)
+	}
+	snapshot := traceStore.Snapshot()
+	rawTrace, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(rawTrace), "private-shared-cause") || strings.Contains(string(rawTrace), "private-other-cause") {
+		t.Fatalf("trace exposed candidate content: %s", rawTrace)
+	}
+	var sawAmbiguous, sawRepair bool
+	for _, trace := range snapshot.Traces {
+		for _, event := range trace.Events {
+			if event.Kind == "pattern_parse" && event.Status == "tool_free" && event.ValidCount == 2 && event.UniqueCandidateCount == 2 {
+				sawAmbiguous = true
+			}
+			if event.Kind == "pattern_repair" && event.Outcome == "success" {
+				sawRepair = true
+			}
+		}
+	}
+	if !sawAmbiguous || !sawRepair {
+		t.Fatalf("trace missing structural telemetry: %+v", snapshot)
+	}
+}
+
+func TestAnalyzePatternRepairRejectsAmbiguousAndTransportFailures(t *testing.T) {
+	shrinkCallDelay(t)
+	valid := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":["abuild","bbuild"],"suggested_fix":"update config/controller.yaml","summary":"same summary"}`
+	ambiguous := valid + "\n" + strings.Replace(valid, "shared cause", "other cause", 1)
+	tests := []struct {
+		name         string
+		repairStatus int
+		repairBody   string
+		want         PatternFailureCategory
+	}{
+		{name: "ambiguous repair", repairStatus: 200, repairBody: chatRespFinal(ambiguous), want: PatternFailureAmbiguous},
+		{name: "transport repair", repairStatus: 408, repairBody: "private repair timeout", want: PatternFailureRequestTimeout},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			srv := newScriptedChatServer(t)
+			srv.push(200, chatRespFinal(ambiguous))
+			srv.push(testCase.repairStatus, testCase.repairBody)
+			s := newPatternTestService(t, srv.URL)
+			_, err := s.AnalyzePattern(t.Context(), "job", "job", patternFailures(2))
+			if category := PatternFailureCategoryOf(err); category != testCase.want {
+				t.Fatalf("category=%q want=%q error=%v", category, testCase.want, err)
+			}
+			if err == nil || strings.Contains(err.Error(), "private repair timeout") {
+				t.Fatalf("unsafe error=%v", err)
+			}
+			if got := atomic.LoadInt32(&srv.calls); got != 2 {
+				t.Fatalf("model calls = %d, want 2", got)
+			}
+		})
+	}
+}
+
+func TestAnalyzePatternRepairFailureDoesNotStartAnotherRepair(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	valid := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":["abuild","bbuild"],"suggested_fix":"update config/controller.yaml","summary":"same summary"}`
+	ambiguous := valid + "\n" + strings.Replace(valid, "shared cause", "other cause", 1)
+	srv.push(200, chatRespFinal(ambiguous))
+	srv.push(200, chatRespFinal(`{"systemic":true}`))
+	s := newPatternTestService(t, srv.URL)
+	_, err := s.AnalyzePattern(t.Context(), "job", "job", patternFailures(2))
+	if category := PatternFailureCategoryOf(err); category != PatternFailureSchema {
+		t.Fatalf("category=%q error=%v", category, err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 2 {
+		t.Fatalf("model calls = %d, want 2", got)
+	}
+}
+
 func TestParsePatternResponseRejectsTruncatedCandidateWindow(t *testing.T) {
 	first := `{"systemic":true,"confidence":"high","shared_root_cause":"first cause","shared_builds":["abuild","bbuild"],"suggested_fix":"fix first","summary":"first verdict"}`
 	second := `{"systemic":true,"confidence":"medium","shared_root_cause":"second cause","shared_builds":["abuild","bbuild"],"suggested_fix":"fix second","summary":"second verdict"}`
@@ -445,9 +579,7 @@ func TestAnalyzePatternProviderErrorsAreBodySafe(t *testing.T) {
 }
 
 func TestPatternRetryClassification(t *testing.T) {
-	ambiguous := &patternValidationError{category: patternValidationAmbiguous}
 	for _, err := range []error{
-		ambiguous,
 		&PatternProviderError{StatusCode: 408},
 		&PatternProviderError{StatusCode: 429},
 		&PatternProviderError{StatusCode: 500},
@@ -457,6 +589,7 @@ func TestPatternRetryClassification(t *testing.T) {
 		}
 	}
 	for _, err := range []error{
+		&patternValidationError{category: patternValidationAmbiguous},
 		&patternValidationError{category: patternValidationSchema},
 		&patternValidationError{category: patternValidationBuilds},
 		&PatternProviderError{StatusCode: 400},
@@ -464,6 +597,20 @@ func TestPatternRetryClassification(t *testing.T) {
 	} {
 		if IsRetryablePatternError(err) {
 			t.Fatalf("error was retryable: %v", err)
+		}
+	}
+}
+
+func TestPatternLocalFailureClassification(t *testing.T) {
+	for err, want := range map[error]PatternFailureCategory{
+		ErrContextHeadroom:  PatternFailureContextHeadroom,
+		ErrToolsUnsupported: PatternFailureToolsUnsupported,
+	} {
+		if got := PatternFailureCategoryOf(safePatternProviderError(err)); got != want {
+			t.Fatalf("category=%q want=%q", got, want)
+		}
+		if IsRetryablePatternError(err) {
+			t.Fatalf("local error was retryable: %v", err)
 		}
 	}
 }

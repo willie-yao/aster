@@ -147,12 +147,8 @@ func TestAnalyzeRetriesOnlyEligiblePatternFailures(t *testing.T) {
 		wantCategory  ai.PatternFailureCategory
 	}{
 		{
-			name: "ambiguous then valid", results: []scriptedPatternResult{{raw: ambiguous}, {raw: valid}},
-			wantCalls: 2, wantCompleted: 1, wantRetries: 1,
-		},
-		{
-			name: "ambiguous twice", results: []scriptedPatternResult{{raw: ambiguous}, {raw: ambiguous}},
-			wantCalls: 2, wantFailed: 1, wantRetries: 1, wantCategory: ai.PatternFailureAmbiguous,
+			name: "ambiguous response", results: []scriptedPatternResult{{raw: ambiguous}, {raw: valid}},
+			wantCalls: 1, wantFailed: 1, wantCategory: ai.PatternFailureAmbiguous,
 		},
 		{
 			name: "request timeout then valid", results: []scriptedPatternResult{{err: &ai.PatternProviderError{StatusCode: 408}}, {raw: valid}},
@@ -236,10 +232,10 @@ func TestAnalyzeDoesNotRerunSuccessfulJobWhenAnotherFails(t *testing.T) {
 		"job-b": {{raw: ambiguous}, {raw: ambiguous}},
 	}}
 	stats, err := Analyze(t.Context(), analyzer, details)
-	if err == nil || stats.Completed != 1 || stats.Failed != 1 || stats.Attempts != 3 || stats.Retries != 1 {
+	if err == nil || stats.Completed != 1 || stats.Failed != 1 || stats.Attempts != 2 || stats.Retries != 0 {
 		t.Fatalf("stats=%+v error=%v", stats, err)
 	}
-	if analyzer.calls["job-a"] != 1 || analyzer.calls["job-b"] != 2 {
+	if analyzer.calls["job-a"] != 1 || analyzer.calls["job-b"] != 1 {
 		t.Fatalf("calls=%v", analyzer.calls)
 	}
 	if len(details[0].PatternAnalyses) != 1 || len(details[1].PatternAnalyses) != 0 {
@@ -258,4 +254,47 @@ func mustJSON(value any) string {
 		panic(err)
 	}
 	return string(data)
+}
+
+type repairTrackingAnalyzer struct {
+	calls        int
+	repairAllows []bool
+}
+
+func (a *repairTrackingAnalyzer) AnalyzePattern(context.Context, string, string, []ai.PatternFailure) (*models.PatternAnalysis, error) {
+	return nil, errors.New("AnalyzePattern should not be called")
+}
+
+func (a *repairTrackingAnalyzer) AnalyzePatternWithOptions(_ context.Context, _ string, subject string, failures []ai.PatternFailure, options ai.PatternAnalyzeOptions) (*models.PatternAnalysis, error) {
+	a.calls++
+	a.repairAllows = append(a.repairAllows, options.AllowAmbiguityRepair)
+	if a.calls == 1 {
+		if options.OnRepair != nil {
+			options.OnRepair(ai.PatternRepairAttempt{FailureCategory: ai.PatternFailureRequestTimeout})
+		}
+		return nil, &ai.PatternProviderError{StatusCode: 408}
+	}
+	return ai.ParsePatternResult(subject, failures,
+		validPatternResult("3", "2")+"\n"+strings.Replace(validPatternResult("3", "2"), "shared cause", "different cause", 1))
+}
+
+func TestAnalyzeBoundsRepairAcrossFullRetries(t *testing.T) {
+	analyzer := &repairTrackingAnalyzer{}
+	details := []models.JobDetail{eligibleJob("job-a")}
+	var attempts []Attempt
+	stats, err := AnalyzeWithOptions(t.Context(), analyzer, details, AnalyzeOptions{
+		OnAttempt: func(attempt Attempt) { attempts = append(attempts, attempt) },
+	})
+	if ai.PatternFailureCategoryOf(err) != ai.PatternFailureAmbiguous {
+		t.Fatalf("category=%q error=%v", ai.PatternFailureCategoryOf(err), err)
+	}
+	if stats.Attempts != 2 || stats.Retries != 1 || stats.Repairs != 1 || analyzer.calls != 2 {
+		t.Fatalf("stats=%+v calls=%d", stats, analyzer.calls)
+	}
+	if len(analyzer.repairAllows) != 2 || !analyzer.repairAllows[0] || analyzer.repairAllows[1] {
+		t.Fatalf("repair allowance=%v", analyzer.repairAllows)
+	}
+	if len(attempts) != 3 || !attempts[0].Repair || attempts[1].Repair || attempts[2].Repair {
+		t.Fatalf("attempts=%+v", attempts)
+	}
 }
