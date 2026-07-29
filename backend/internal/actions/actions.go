@@ -202,17 +202,7 @@ func (s *Service) findPattern(id string) (*models.PatternAnalysis, error) {
 	return nil, ErrNotFound
 }
 
-// buildIssueSpec resolves the failure to a single issue spec and the target
-// repo. It forces the patterns trigger: the admin explicitly asked to file
-// this, so the project's configured triggers do not gate the on-demand action.
-func (s *Service) buildIssueSpec(failureID string) (issues.IssueSpec, string, error) {
-	pattern, err := s.findPattern(failureID)
-	if err != nil {
-		return issues.IssueSpec{}, "", err
-	}
-	return s.buildIssueSpecForPattern(*pattern)
-}
-
+// buildIssueSpecForPattern renders one current pattern into an issue spec.
 func (s *Service) buildIssueSpecForPattern(pattern models.PatternAnalysis) (issues.IssueSpec, string, error) {
 	eff := s.cfg.EffectiveIssues()
 	if eff.Repo == nil || eff.Repo.Owner == "" || eff.Repo.Name == "" {
@@ -603,19 +593,13 @@ func (s *Service) Resolve(failureID, login, note string) error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	st := resolve.Load(s.dataDir)
-	st.Resolved[failureID] = resolve.Entry{
-		ResolvedAt: time.Now().UTC().Format(time.RFC3339),
-		ResolvedBy: login,
-		Note:       strings.TrimSpace(note),
-		Watermark:  watermark,
-		Subject:    pa.Subject,
-	}
-	if err := st.Save(s.dataDir); err != nil {
-		return fmt.Errorf("saving resolved state: %w", err)
-	}
-	return nil
+	return resolve.Update(s.dataDir, func(st *resolve.State) bool {
+		st.Resolved[failureID] = resolve.Entry{
+			ResolvedAt: time.Now().UTC().Format(time.RFC3339), ResolvedBy: login,
+			Note: strings.TrimSpace(note), Watermark: watermark, Subject: pa.Subject,
+		}
+		return true
+	})
 }
 
 // Unresolve clears a pattern's resolved mark so it returns to the active view.
@@ -628,16 +612,13 @@ func (s *Service) Unresolve(failureID string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	st := resolve.Load(s.dataDir)
-	if !st.IsResolved(failureID) {
-		return ErrNotFound
-	}
-	delete(st.Resolved, failureID)
-	if err := st.Save(s.dataDir); err != nil {
-		return fmt.Errorf("saving resolved state: %w", err)
-	}
-	return nil
+	return resolve.Update(s.dataDir, func(st *resolve.State) bool {
+		if !st.IsResolved(failureID) {
+			return false
+		}
+		delete(st.Resolved, failureID)
+		return true
+	})
 }
 
 // stash persists a draft under a fresh token bound to the admin identity.

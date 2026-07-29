@@ -69,3 +69,13 @@ func TestMergeLastGoodRejectsCrossJobPriorPattern(t *testing.T) {
 		t.Fatal("cross-job prior pattern was accepted")
 	}
 }
+
+func TestMergeLastGoodRejectsNonCanonicalPriorID(t *testing.T) {
+	prior := models.PatternAnalysis{ID: "arbitrary", JobID: "job", Systemic: true, Summary: "old"}
+	prior.ContentHash = models.PatternHash(prior)
+	details := []models.JobDetail{eligibleJob("job")}
+	result := AnalyzeResult{Outcomes: map[string]JobOutcome{"job": {JobID: "job", Attempts: 1}}}
+	if _, err := MergeLastGood(details, map[string]models.JobDetail{"job": {JobID: "job", PatternAnalyses: []models.PatternAnalysis{prior}}}, result); err == nil {
+		t.Fatal("non-canonical prior ID was accepted")
+	}
+}
