@@ -51,12 +51,15 @@ type RepositoryMetadata struct {
 
 // DashboardCandidate is a ranked TestGrid dashboard for a source repository.
 type DashboardCandidate struct {
-	Dashboard      string   `json:"dashboard"`
-	MatchingJobs   int      `json:"matching_jobs"`
-	PeriodicJobs   int      `json:"periodic_jobs"`
-	PresubmitJobs  int      `json:"presubmit_jobs"`
-	BranchCoverage int      `json:"branch_coverage"`
-	JobNames       []string `json:"job_names,omitempty"`
+	Dashboard               string   `json:"dashboard"`
+	MatchingJobs            int      `json:"matching_jobs"`
+	PeriodicJobs            int      `json:"periodic_jobs"`
+	PresubmitJobs           int      `json:"presubmit_jobs"`
+	DashboardPeriodicJobs   int      `json:"dashboard_periodic_jobs"`
+	DashboardPresubmitJobs  int      `json:"dashboard_presubmit_jobs"`
+	DashboardPostsubmitJobs int      `json:"dashboard_postsubmit_jobs"`
+	BranchCoverage          int      `json:"branch_coverage"`
+	JobNames                []string `json:"job_names,omitempty"`
 }
 
 // IdentitySuggestions contains editable project identity defaults.
@@ -87,15 +90,15 @@ type repositoryClient interface {
 }
 
 type catalogClient interface {
-	ForRepo(context.Context, string) (*jobconfig.Catalog, error)
+	Catalog(context.Context) (*jobconfig.Catalog, error)
 }
 
 type prowCatalogClient struct {
 	client *http.Client
 }
 
-func (c prowCatalogClient) ForRepo(ctx context.Context, repo string) (*jobconfig.Catalog, error) {
-	return jobconfig.FetchCatalogForRepo(ctx, c.client, repo)
+func (c prowCatalogClient) Catalog(ctx context.Context) (*jobconfig.Catalog, error) {
+	return jobconfig.FetchCatalog(ctx, c.client)
 }
 
 // Discover performs repository-first discovery without rendering or mutation.
@@ -121,12 +124,12 @@ func discoverRepository(ctx context.Context, repo Repo, token string, repositori
 		return DiscoveryReport{}, err
 	}
 	repo = metadata.Repo
-	catalog, err := catalogs.ForRepo(ctx, repo.FullName)
+	catalog, err := catalogs.Catalog(ctx)
 	if err != nil {
 		return DiscoveryReport{}, fmt.Errorf("discovering Prow jobs for %s: %w", repo.FullName, err)
 	}
 	matching := matchingDefinitions(catalog, repo.FullName)
-	candidates := RankDashboardCandidates(matching)
+	candidates := populateDashboardTotals(RankDashboardCandidates(matching), catalog)
 	categoryNames := make([]string, 0, len(matching))
 	for _, job := range matching {
 		categoryNames = append(categoryNames, job.Name)
@@ -178,6 +181,9 @@ func matchingDefinitions(catalog *jobconfig.Catalog, repo string) []jobconfig.Jo
 	}
 	out := make([]jobconfig.JobDefinition, 0, len(catalog.Jobs))
 	for _, definition := range catalog.Jobs {
+		if definition.JobType == jobconfig.JobTypePostsubmit {
+			continue
+		}
 		if definition.TestsRepo(repo) {
 			out = append(out, definition)
 		}
@@ -192,6 +198,33 @@ func matchingDefinitions(catalog *jobconfig.Catalog, repo string) []jobconfig.Jo
 		return out[i].ConfigFile < out[j].ConfigFile
 	})
 	return out
+}
+
+func populateDashboardTotals(candidates []DashboardCandidate, catalog *jobconfig.Catalog) []DashboardCandidate {
+	indices := make(map[string]int, len(candidates))
+	for i := range candidates {
+		indices[candidates[i].Dashboard] = i
+	}
+	if catalog == nil {
+		return candidates
+	}
+	for _, definition := range catalog.Jobs {
+		for _, dashboard := range splitDashboards(definition.Annotations["testgrid-dashboards"]) {
+			idx, ok := indices[dashboard]
+			if !ok {
+				continue
+			}
+			switch definition.JobType {
+			case models.JobTypePeriodic:
+				candidates[idx].DashboardPeriodicJobs++
+			case models.JobTypePresubmit:
+				candidates[idx].DashboardPresubmitJobs++
+			case jobconfig.JobTypePostsubmit:
+				candidates[idx].DashboardPostsubmitJobs++
+			}
+		}
+	}
+	return candidates
 }
 
 // RankDashboardCandidates groups TestGrid annotations and returns the strongest
@@ -330,7 +363,11 @@ func WriteDiscovery(out io.Writer, report DiscoveryReport, asJSON bool) error {
 	}
 	for i, candidate := range report.Candidates {
 		writer.printf("  %d. %s\n", i+1, safeTerminal(candidate.Dashboard))
-		writer.printf("     %d periodic jobs, %d presubmit jobs, %d branch value(s)\n", candidate.PeriodicJobs, candidate.PresubmitJobs, candidate.BranchCoverage)
+		writer.printf("     source matches: %d periodic, %d presubmit; dashboard tabs: %d periodic, %d presubmit, %d postsubmit\n",
+			candidate.PeriodicJobs, candidate.PresubmitJobs, candidate.DashboardPeriodicJobs, candidate.DashboardPresubmitJobs, candidate.DashboardPostsubmitJobs)
+		if candidate.DashboardPostsubmitJobs > 0 {
+			writer.println("     note: postsubmit tabs are not supported by the dashboard fetcher")
+		}
 	}
 	writeInference(&writer, "Suggested project id", report.Identity.ID)
 	writeInference(&writer, "Suggested project name", report.Identity.Name)

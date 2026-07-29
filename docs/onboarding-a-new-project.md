@@ -76,13 +76,20 @@ Add `-json` for machine-readable output. The report includes:
 - Normalized source repository and GitHub metadata source.
 - Default branch and visibility.
 - Matching Prow jobs.
-- Ranked TestGrid candidates.
+- Ranked TestGrid candidates. Each candidate separates jobs that directly test
+  the source repository from the dashboard's complete periodic, presubmit, and
+  postsubmit tab counts. Repository-match counts drive ranking; dashboard totals
+  describe what the selected TestGrid contains.
 - Suggested project identity and dashboard repository.
 - Warnings and unresolved fields.
 - The pinned `kubernetes/test-infra` revision.
 
 Discovery is read-only. It does not render files, create repositories, write
 GitHub settings, or inspect a Kubernetes cluster.
+
+The dashboard fetcher currently ingests periodic jobs and optional presubmits.
+Postsubmit tabs are reported during discovery so TestGrid totals are transparent,
+but postsubmit artifact ingestion is not supported.
 
 ## Deployment profiles
 

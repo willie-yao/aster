@@ -163,8 +163,8 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 	if err != nil {
 		return nil, opts, err
 	}
-	if selected != nil && opts.IncludePresubmits == nil && selected.PresubmitJobs > 0 {
-		defaultInclude := selected.PeriodicJobs == 0
+	if selected != nil && opts.IncludePresubmits == nil && selected.DashboardPresubmitJobs > 0 {
+		defaultInclude := selected.DashboardPeriodicJobs == 0
 		include, confirmErr := prompt.confirm("Include presubmit jobs in the dashboard?", defaultInclude)
 		if confirmErr != nil {
 			return nil, opts, confirmErr
@@ -418,7 +418,12 @@ func wizardDiscovery(prompt *prompter, opts *Options, report DiscoveryReport) (*
 	fmt.Fprintln(prompt.out, "\nCandidate TestGrid dashboards")
 	options := make([]string, 0, len(report.Candidates)+2)
 	for _, candidate := range report.Candidates {
-		options = append(options, fmt.Sprintf("%s (%d periodic, %d presubmit)", safeTerminal(candidate.Dashboard), candidate.PeriodicJobs, candidate.PresubmitJobs))
+		summary := fmt.Sprintf("%s (source matches: %d periodic, %d presubmit; dashboard: %d periodic, %d presubmit",
+			safeTerminal(candidate.Dashboard), candidate.PeriodicJobs, candidate.PresubmitJobs, candidate.DashboardPeriodicJobs, candidate.DashboardPresubmitJobs)
+		if candidate.DashboardPostsubmitJobs > 0 {
+			summary += fmt.Sprintf(", %d postsubmit unsupported", candidate.DashboardPostsubmitJobs)
+		}
+		options = append(options, summary+")")
 	}
 	options = append(options, "Enter a TestGrid dashboard manually", "Use an artifact bucket")
 	defaultIndex := 0

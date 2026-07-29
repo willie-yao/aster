@@ -465,8 +465,55 @@ func TestFetchCatalogForRepo_RequiresRepository(t *testing.T) {
 func TestDownloadAndParseAll_PropagatesCancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, _, err := downloadAndParseAll(ctx, http.DefaultClient, fakeSHA, nil, nil, "example/project")
+	_, _, err := downloadAndParseAll(ctx, http.DefaultClient, fakeSHA, nil, nil, "example/project", false)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+}
+
+func TestFetchCatalog_IncludesAllDashboardDefinitions(t *testing.T) {
+	tf := &fakeTestInfra{files: map[string]string{
+		"config/jobs/example/jobs.yaml": `periodics:
+- name: source-periodic
+  annotations:
+    testgrid-dashboards: shared-dashboard
+  extra_refs:
+  - org: example
+    repo: source
+- name: unrelated-periodic
+  annotations:
+    testgrid-dashboards: shared-dashboard
+  extra_refs:
+  - org: example
+    repo: unrelated
+presubmits:
+  example/other:
+  - name: unrelated-presubmit
+    annotations:
+      testgrid-dashboards: shared-dashboard
+postsubmits:
+  example/source:
+  - name: source-postsubmit
+    annotations:
+      testgrid-dashboards: shared-dashboard
+`,
+	}}
+	raw, api, stop := tf.start(t)
+	defer stop()
+	setURLs(t, raw, api)
+
+	catalog, err := FetchCatalog(context.Background(), http.DefaultClient)
+	if err != nil {
+		t.Fatalf("FetchCatalog: %v", err)
+	}
+	if len(catalog.Jobs) != 4 {
+		t.Fatalf("catalog jobs = %d, want 4: %+v", len(catalog.Jobs), catalog.Jobs)
+	}
+	counts := map[string]int{}
+	for _, job := range catalog.Jobs {
+		counts[job.JobType]++
+	}
+	if counts[models.JobTypePeriodic] != 2 || counts[models.JobTypePresubmit] != 1 || counts[JobTypePostsubmit] != 1 {
+		t.Fatalf("job type counts = %v", counts)
 	}
 }
