@@ -6,9 +6,12 @@ package statefile
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
+	"syscall"
 )
 
 // WriteJSON marshals v as indented JSON and writes it to path atomically: it
@@ -16,66 +19,138 @@ import (
 // concurrent reader (the server in Kubernetes-native mode) never observes a
 // half-written file. Parent directories are created as needed.
 func WriteJSON(path string, v any) error {
-	return writeJSON(path, v, 0o644, nil, nil)
+	return writeJSON(path, v, writeOptions{parentPerm: 0o755, filePerm: 0o644}, defaultWriteOps())
 }
 
 // WriteJSONDurable writes private JSON atomically and syncs the file and parent
 // directory before returning.
 func WriteJSONDurable(path string, v any) error {
-	sync := func(file *os.File) error { return file.Sync() }
-	return writeJSON(path, v, 0o600, sync, sync)
+	return writeJSON(path, v, writeOptions{parentPerm: 0o755, filePerm: 0o600, durable: true}, defaultWriteOps())
 }
 
-func writeJSON(
-	path string,
-	v any,
-	perm os.FileMode,
-	syncFile func(*os.File) error,
-	syncDir func(*os.File) error,
-) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+// WritePrivateJSONDurable writes private JSON with restrictive POSIX modes,
+// atomic replacement, and file and parent-directory syncs. Filesystems that
+// enforce permissions at mount level may reject only the mode changes.
+func WritePrivateJSONDurable(path string, v any) error {
+	return writeJSON(path, v, writeOptions{
+		parentPerm:        0o700,
+		filePerm:          0o600,
+		enforceParentMode: true,
+		enforceFinalMode:  true,
+		durable:           true,
+		trailingNewline:   true,
+	}, defaultWriteOps())
+}
+
+type writeOptions struct {
+	parentPerm        os.FileMode
+	filePerm          os.FileMode
+	enforceParentMode bool
+	enforceFinalMode  bool
+	durable           bool
+	trailingNewline   bool
+}
+
+type writeOps struct {
+	mkdirAll   func(string, os.FileMode) error
+	chmodPath  func(string, os.FileMode) error
+	createTemp func(string, string) (*os.File, error)
+	chmodFile  func(*os.File, os.FileMode) error
+	write      func(*os.File, []byte) (int, error)
+	sync       func(*os.File) error
+	close      func(*os.File) error
+	rename     func(string, string) error
+	open       func(string) (*os.File, error)
+	remove     func(string) error
+}
+
+func defaultWriteOps() writeOps {
+	return writeOps{
+		mkdirAll:   os.MkdirAll,
+		chmodPath:  os.Chmod,
+		createTemp: os.CreateTemp,
+		chmodFile:  func(file *os.File, mode os.FileMode) error { return file.Chmod(mode) },
+		write:      func(file *os.File, data []byte) (int, error) { return file.Write(data) },
+		sync:       func(file *os.File) error { return file.Sync() },
+		close:      func(file *os.File) error { return file.Close() },
+		rename:     os.Rename,
+		open:       os.Open,
+		remove:     os.Remove,
+	}
+}
+
+func writeJSON(path string, v any, options writeOptions, ops writeOps) error {
+	parent := filepath.Dir(path)
+	if err := ops.mkdirAll(parent, options.parentPerm); err != nil {
 		return err
+	}
+	if options.enforceParentMode {
+		if err := tolerateUnsupportedMode(ops.chmodPath(parent, options.parentPerm)); err != nil {
+			return err
+		}
 	}
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
+	if options.trailingNewline {
+		data = append(data, '\n')
+	}
+	tmp, err := ops.createTemp(parent, filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return err
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	// Some RWX filesystems use mount-level modes and reject chmod.
-	_ = tmp.Chmod(perm)
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+	defer func() { _ = ops.remove(tmpName) }()
+	if err := tolerateUnsupportedMode(ops.chmodFile(tmp, options.filePerm)); err != nil {
+		_ = ops.close(tmp)
 		return err
 	}
-	if syncFile != nil {
-		if err := syncFile(tmp); err != nil {
-			tmp.Close()
+	written, err := ops.write(tmp, data)
+	if err != nil {
+		_ = ops.close(tmp)
+		return err
+	}
+	if written != len(data) {
+		_ = ops.close(tmp)
+		return io.ErrShortWrite
+	}
+	if options.durable {
+		if err := ops.sync(tmp); err != nil {
+			_ = ops.close(tmp)
 			return err
 		}
 	}
-	if err := tmp.Close(); err != nil {
+	if err := ops.close(tmp); err != nil {
 		return err
 	}
-	if err := os.Rename(tmpName, path); err != nil {
+	if err := ops.rename(tmpName, path); err != nil {
 		return err
 	}
-	if syncDir == nil {
+	if options.enforceFinalMode {
+		if err := tolerateUnsupportedMode(ops.chmodPath(path, options.filePerm)); err != nil {
+			return err
+		}
+	}
+	if !options.durable {
 		return nil
 	}
-	dir, err := os.Open(filepath.Dir(path))
+	dir, err := ops.open(parent)
 	if err != nil {
 		return err
 	}
-	defer dir.Close()
-	if err := syncDir(dir); err != nil {
+	if err := ops.sync(dir); err != nil {
+		_ = ops.close(dir)
 		return err
 	}
-	return nil
+	return ops.close(dir)
+}
+
+func tolerateUnsupportedMode(err error) error {
+	if err == nil || errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.ENOTSUP) || errors.Is(err, syscall.ENOSYS) {
+		return nil
+	}
+	return err
 }
 
 // State is the on-disk tracking state for a repo-scoped manager: a set of
