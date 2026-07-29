@@ -417,7 +417,7 @@ func (s *Service) groundedPatternVerdict(ctx context.Context, userPrompt string,
 func (s *Service) parsePatternOutput(ctx context.Context, stage, output string, buildIDs map[string]struct{}, options PatternAnalyzeOptions) (patternResponse, error) {
 	parsed, stats, err := parsePatternResponseWithStats(output, buildIDs)
 	recordPatternParseTrace(ctx, stage, stats, err)
-	if err == nil || patternValidationCategoryOf(err) != patternValidationAmbiguous || !options.AllowAmbiguityRepair {
+	if err == nil || patternValidationCategoryOf(err) != patternValidationAmbiguous || stats.ScanTruncated || !options.AllowAmbiguityRepair {
 		return parsed, err
 	}
 	return s.repairPatternAmbiguity(ctx, output, buildIDs, options.OnRepair)
