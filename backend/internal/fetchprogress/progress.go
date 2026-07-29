@@ -138,30 +138,36 @@ type AnalysisProgress struct {
 type PatternFailureCategory string
 
 const (
-	PatternFailureNone           PatternFailureCategory = ""
-	PatternFailureJSON           PatternFailureCategory = "json"
-	PatternFailureMissing        PatternFailureCategory = "missing"
-	PatternFailureSchema         PatternFailureCategory = "schema"
-	PatternFailureBuilds         PatternFailureCategory = "builds"
-	PatternFailureAmbiguous      PatternFailureCategory = "ambiguous"
-	PatternFailureRequestTimeout PatternFailureCategory = "request-timeout"
-	PatternFailureRateLimited    PatternFailureCategory = "rate-limited"
-	PatternFailureProvider5xx    PatternFailureCategory = "provider-5xx"
-	PatternFailureProvider       PatternFailureCategory = "provider"
-	PatternFailureCancelled      PatternFailureCategory = "cancelled"
-	PatternFailureDeadline       PatternFailureCategory = "deadline"
-	PatternFailureUnknown        PatternFailureCategory = "unknown"
-	PatternFailureMultiple       PatternFailureCategory = "multiple"
+	PatternFailureNone             PatternFailureCategory = ""
+	PatternFailureJSON             PatternFailureCategory = "json"
+	PatternFailureMissing          PatternFailureCategory = "missing"
+	PatternFailureSchema           PatternFailureCategory = "schema"
+	PatternFailureBuilds           PatternFailureCategory = "builds"
+	PatternFailureAmbiguous        PatternFailureCategory = "ambiguous"
+	PatternFailureRequestTimeout   PatternFailureCategory = "request-timeout"
+	PatternFailureRateLimited      PatternFailureCategory = "rate-limited"
+	PatternFailureProvider5xx      PatternFailureCategory = "provider-5xx"
+	PatternFailureProvider         PatternFailureCategory = "provider"
+	PatternFailureContextHeadroom  PatternFailureCategory = "context-headroom"
+	PatternFailureToolsUnsupported PatternFailureCategory = "tools-unsupported"
+	PatternFailureCancelled        PatternFailureCategory = "cancelled"
+	PatternFailureDeadline         PatternFailureCategory = "deadline"
+	PatternFailureUnknown          PatternFailureCategory = "unknown"
+	PatternFailureMultiple         PatternFailureCategory = "multiple"
 )
 
 // PatternProgress tracks bounded job-level correlation attempts.
 type PatternProgress struct {
-	Eligible        int                    `json:"eligible"`
-	Completed       int                    `json:"completed"`
-	Failed          int                    `json:"failed"`
-	Attempts        int                    `json:"attempts"`
-	Retries         int                    `json:"retries"`
-	FailureCategory PatternFailureCategory `json:"failure_category,omitempty"`
+	Eligible              int                    `json:"eligible"`
+	Completed             int                    `json:"completed"`
+	Failed                int                    `json:"failed"`
+	Attempts              int                    `json:"attempts"`
+	Retries               int                    `json:"retries"`
+	Repairs               int                    `json:"repairs,omitempty"`
+	RepairSucceeded       int                    `json:"repair_succeeded,omitempty"`
+	RepairFailed          int                    `json:"repair_failed,omitempty"`
+	RepairFailureCategory PatternFailureCategory `json:"repair_failure_category,omitempty"`
+	FailureCategory       PatternFailureCategory `json:"failure_category,omitempty"`
 }
 
 // Status is the private, aggregate-only fetch progress snapshot.
@@ -275,7 +281,7 @@ func validPatternFailureCategory(value PatternFailureCategory) bool {
 	case PatternFailureNone, PatternFailureJSON, PatternFailureMissing, PatternFailureSchema,
 		PatternFailureBuilds, PatternFailureAmbiguous, PatternFailureRequestTimeout,
 		PatternFailureRateLimited, PatternFailureProvider5xx, PatternFailureProvider,
-		PatternFailureCancelled, PatternFailureDeadline, PatternFailureUnknown, PatternFailureMultiple:
+		PatternFailureContextHeadroom, PatternFailureToolsUnsupported, PatternFailureCancelled, PatternFailureDeadline, PatternFailureUnknown, PatternFailureMultiple:
 		return true
 	default:
 		return false
@@ -631,8 +637,26 @@ func (t *Tracker) PlanPatterns(total int) {
 }
 
 // RecordPatternAttempt records one bounded correlation attempt.
-func (t *Tracker) RecordPatternAttempt(retry, succeeded, final bool, category PatternFailureCategory) {
+func (t *Tracker) RecordPatternAttempt(repair, retry, succeeded, final bool, category PatternFailureCategory) {
 	t.update(true, func(status *Status) {
+		if repair {
+			status.Patterns.Repairs++
+			if succeeded {
+				status.Patterns.RepairSucceeded++
+			} else {
+				status.Patterns.RepairFailed++
+				if !validPatternFailureCategory(category) || category == PatternFailureNone {
+					category = PatternFailureUnknown
+				}
+				switch {
+				case status.Patterns.RepairFailureCategory == PatternFailureNone:
+					status.Patterns.RepairFailureCategory = category
+				case status.Patterns.RepairFailureCategory != category:
+					status.Patterns.RepairFailureCategory = PatternFailureMultiple
+				}
+			}
+			return
+		}
 		status.Patterns.Attempts++
 		if retry {
 			status.Patterns.Retries++

@@ -58,6 +58,10 @@ export interface FetchProgressStatus {
     failed: number;
     attempts: number;
     retries: number;
+    repairs?: number;
+    repair_succeeded?: number;
+    repair_failed?: number;
+    repair_failure_category?: string;
     failure_category?: string;
   };
   pattern_phase: string;

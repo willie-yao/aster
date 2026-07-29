@@ -22,6 +22,10 @@ type Analyzer interface {
 	AnalyzePattern(ctx context.Context, jobID, subject string, failures []ai.PatternFailure) (*models.PatternAnalysis, error)
 }
 
+type observedAnalyzer interface {
+	AnalyzePatternWithOptions(ctx context.Context, jobID, subject string, failures []ai.PatternFailure, options ai.PatternAnalyzeOptions) (*models.PatternAnalysis, error)
+}
+
 const maxPatternAttempts = 2
 
 // AnalyzeStats records eligible jobs and completed or failed correlations.
@@ -31,11 +35,13 @@ type AnalyzeStats struct {
 	Failed    int
 	Attempts  int
 	Retries   int
+	Repairs   int
 }
 
 // Attempt reports one privacy-safe correlation attempt.
 type Attempt struct {
 	Number          int
+	Repair          bool
 	Retry           bool
 	Succeeded       bool
 	Final           bool
@@ -70,9 +76,10 @@ func AnalyzeWithOptions(ctx context.Context, analyzer Analyzer, details []models
 	}
 	var errs []error
 	for _, item := range work {
-		pa, attempts, retries, err := analyzeOne(ctx, analyzer, item, options.OnAttempt)
+		pa, attempts, retries, repairs, err := analyzeOne(ctx, analyzer, item, options.OnAttempt)
 		stats.Attempts += attempts
 		stats.Retries += retries
+		stats.Repairs += repairs
 		d := &details[item.index]
 		if err != nil {
 			stats.Failed++
@@ -97,20 +104,22 @@ func AnalyzeConcurrent(ctx context.Context, analyzer Analyzer, details []models.
 		err      error
 		attempts int
 		retries  int
+		repairs  int
 	}
 	work := eligibleWork(details)
 	results := make(chan result, len(work))
 	stats := AnalyzeStats{Eligible: len(work)}
 	for _, item := range work {
 		go func(item analysisWork) {
-			pa, attempts, retries, err := analyzeOne(ctx, analyzer, item, nil)
-			results <- result{index: item.index, pa: pa, err: err, attempts: attempts, retries: retries}
+			pa, attempts, retries, repairs, err := analyzeOne(ctx, analyzer, item, nil)
+			results <- result{index: item.index, pa: pa, err: err, attempts: attempts, retries: retries, repairs: repairs}
 		}(item)
 	}
 	for range stats.Eligible {
 		result := <-results
 		stats.Attempts += result.attempts
 		stats.Retries += result.retries
+		stats.Repairs += result.repairs
 		d := &details[result.index]
 		if result.err != nil {
 			stats.Failed++
@@ -137,9 +146,29 @@ func eligibleWork(details []models.JobDetail) []analysisWork {
 	return work
 }
 
-func analyzeOne(ctx context.Context, analyzer Analyzer, work analysisWork, observe func(Attempt)) (*models.PatternAnalysis, int, int, error) {
+func analyzeOne(ctx context.Context, analyzer Analyzer, work analysisWork, observe func(Attempt)) (*models.PatternAnalysis, int, int, int, error) {
+	repairUsed := false
+	repairs := 0
 	for attempt := 1; attempt <= maxPatternAttempts; attempt++ {
-		pa, err := analyzer.AnalyzePattern(ctx, work.jobID, work.subject, work.failures)
+		var pa *models.PatternAnalysis
+		var err error
+		if observed, ok := analyzer.(observedAnalyzer); ok {
+			pa, err = observed.AnalyzePatternWithOptions(ctx, work.jobID, work.subject, work.failures, ai.PatternAnalyzeOptions{
+				AllowAmbiguityRepair: !repairUsed,
+				OnRepair: func(result ai.PatternRepairAttempt) {
+					repairUsed = true
+					repairs++
+					if observe != nil {
+						observe(Attempt{
+							Number: repairs, Repair: true, Succeeded: result.Succeeded, Final: true,
+							FailureCategory: result.FailureCategory,
+						})
+					}
+				},
+			})
+		} else {
+			pa, err = analyzer.AnalyzePattern(ctx, work.jobID, work.subject, work.failures)
+		}
 		retry := err != nil && attempt < maxPatternAttempts && ai.IsRetryablePatternError(err)
 		if observe != nil {
 			observe(Attempt{
@@ -148,10 +177,10 @@ func analyzeOne(ctx context.Context, analyzer Analyzer, work analysisWork, obser
 			})
 		}
 		if err == nil {
-			return pa, attempt, attempt - 1, nil
+			return pa, attempt, attempt - 1, repairs, nil
 		}
 		if !retry {
-			return nil, attempt, attempt - 1, err
+			return nil, attempt, attempt - 1, repairs, err
 		}
 		log.Printf("  ↻ retrying pattern analysis for %s: category=%s", work.subject, ai.PatternFailureCategoryOf(err))
 	}

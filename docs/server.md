@@ -62,7 +62,7 @@ remains identical.
 
 ## Capability seam
 
-The fetcher writes aggregate progress to `.fetch-status/status.json` and the last 20 terminal pass summaries to `.fetch-status/history.json` on the shared data volume. On POSIX filesystems the directory is mode `0700` and both files are mode `0600`. Some RWX filesystems enforce permissions at mount level, so an unsupported per-file `chmod` does not invalidate a successful atomic write. Private HTTP filtering remains mandatory, and the `/data/*` file server rejects the hidden directory. Authenticated servers expose the versioned aggregate status and pass history through `/api/fetch-status`, with `Cache-Control: no-store`. Pattern progress includes eligible jobs, bounded attempt and retry counts, and a safe final failure category. Raw errors, Task mappings, artifact identities, prompts, provider bodies, and filesystem paths are not included. The frontend polls this endpoint without overlapping requests, backs off after failures, and stops polling when the component unmounts.
+The fetcher writes aggregate progress to `.fetch-status/status.json` and the last 20 terminal pass summaries to `.fetch-status/history.json` on the shared data volume. On POSIX filesystems the directory is mode `0700` and both files are mode `0600`. Some RWX filesystems enforce permissions at mount level, so an unsupported per-file `chmod` does not invalidate a successful atomic write. Private HTTP filtering remains mandatory, and the `/data/*` file server rejects the hidden directory. Authenticated servers expose the versioned aggregate status and pass history through `/api/fetch-status`, with `Cache-Control: no-store`. Pattern progress includes eligible jobs, separate bounded full-attempt, retry, and ambiguity-repair counts, repair outcomes, and a safe final failure category. Raw errors, Task mappings, artifact identities, prompts, provider bodies, and filesystem paths are not included. The frontend polls this endpoint without overlapping requests, backs off after failures, and stops polling when the component unmounts.
 
 The frontend discovers its mode by probing `/api/capabilities`:
 
@@ -318,7 +318,9 @@ When admin authentication is configured, the server advertises
 `features.analysis_traces: true` and adds a **Traces** page. The page shows the
 bounded, content-free metadata from `ai_traces.json`, including response IDs,
 provider API mode, request duration and usage, tool names, compaction, critique,
-and finalization decisions. Each trace links back to the matching test and build.
+and finalization decisions. Pattern events expose only structural candidate
+counts, scan truncation, safe stages, safe failure categories, and repair
+outcomes. Each trace links back to the matching test and build.
 
 The API decodes the known trace schema rather than serving the file directly.
 Requests are capped at 64 MiB, responses use `Cache-Control: no-store`, and both

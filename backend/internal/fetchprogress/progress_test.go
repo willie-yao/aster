@@ -498,14 +498,16 @@ func TestTrackerPatternAttemptAccounting(t *testing.T) {
 	tracker.StartPass(PassInitialWatch)
 	tracker.StartPhase(PhasePatterns)
 	tracker.PlanPatterns(3)
-	tracker.RecordPatternAttempt(false, false, false, PatternFailureAmbiguous)
-	tracker.RecordPatternAttempt(true, true, true, PatternFailureNone)
-	tracker.RecordPatternAttempt(false, false, true, PatternFailureSchema)
-	tracker.RecordPatternAttempt(false, false, true, PatternFailureBuilds)
+	tracker.RecordPatternAttempt(false, false, false, false, PatternFailureAmbiguous)
+	tracker.RecordPatternAttempt(true, false, false, true, PatternFailureSchema)
+	tracker.RecordPatternAttempt(false, true, true, true, PatternFailureNone)
+	tracker.RecordPatternAttempt(false, false, false, true, PatternFailureSchema)
+	tracker.RecordPatternAttempt(false, false, false, true, PatternFailureBuilds)
 
 	got := tracker.Snapshot().Patterns
 	want := PatternProgress{
 		Eligible: 3, Completed: 1, Failed: 2, Attempts: 4, Retries: 1,
+		Repairs: 1, RepairFailed: 1, RepairFailureCategory: PatternFailureSchema,
 		FailureCategory: PatternFailureMultiple,
 	}
 	if got != want {
