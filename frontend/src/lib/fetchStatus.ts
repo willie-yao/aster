@@ -54,10 +54,13 @@ export function fetchStatusPresentation(response: FetchStatusResponse): FetchSta
     : `${status.jobs.completed} of ${status.jobs.total} jobs checked`;
   const attemptDetail = status.analyses.task_attempts > 0 ? `, ${status.analyses.task_attempts} Task attempts` : "";
   const retryDetail = status.analyses.retries > 0 ? `, ${status.analyses.retries} retries` : "";
+  const checkpointDetail = status.analyses.checkpoint_committed ? ", analysis checkpoint saved" : "";
   const patternAttempts = status.patterns?.attempts ?? 0;
   const patternRetries = status.patterns?.retries ?? 0;
+  const patternCacheHits = status.patterns?.cache_hits ?? 0;
   const patternAttemptDetail = patternAttempts > 0 ? `, ${patternAttempts} pattern ${patternAttempts === 1 ? "attempt" : "attempts"}` : "";
   const patternRetryDetail = patternRetries > 0 ? `, ${patternRetries} pattern ${patternRetries === 1 ? "retry" : "retries"}` : "";
+  const patternCacheDetail = patternCacheHits > 0 ? `, ${patternCacheHits} pattern cache ${patternCacheHits === 1 ? "hit" : "hits"}` : "";
   const patternRepairs = status.patterns?.repairs ?? 0;
   const patternRepairDetail = patternRepairs > 0 ? `, ${patternRepairs} ambiguity ${patternRepairs === 1 ? "repair" : "repairs"}` : "";
   const patternRepairFailureDetail = status.patterns?.repair_failure_category
@@ -88,7 +91,7 @@ export function fetchStatusPresentation(response: FetchStatusResponse): FetchSta
     title = "Fetch cancelled";
     severity = "warning";
   }
-  const detail = `${logicalDetail}${attemptDetail}${retryDetail}${patternAttemptDetail}${patternRetryDetail}${patternRepairDetail}${patternRepairFailureDetail}${patternFailureDetail}`;
+  const detail = `${logicalDetail}${attemptDetail}${retryDetail}${checkpointDetail}${patternAttemptDetail}${patternRetryDetail}${patternCacheDetail}${patternRepairDetail}${patternRepairFailureDetail}${patternFailureDetail}`;
   const determinateTotal = status.analyses.logical_total > 0
     ? status.analyses.logical_total
     : status.jobs.total > 0 ? status.jobs.total : null;

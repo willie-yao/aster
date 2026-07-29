@@ -106,18 +106,19 @@ type containerFailureAnalyzer interface {
 // AI settings. It is built once by setupPipeline and drives one
 // or many passes (one-shot Run, or repeated passes in RunWatch).
 type pipeline struct {
-	opts              Options
-	cfg               *project.Config
-	client            *http.Client
-	backend           storage.Backend
-	enableAI          bool
-	aiToken           string
-	aiProject         *analysisruntime.Project
-	includePresubmits bool
-	jobCatalog        *jobconfig.Catalog
-	aiRuntime         *analysisruntime.Runtime
-	containerAnalyzer containerFailureAnalyzer
-	progress          *fetchprogress.Tracker
+	opts                 Options
+	cfg                  *project.Config
+	client               *http.Client
+	backend              storage.Backend
+	enableAI             bool
+	aiToken              string
+	aiProject            *analysisruntime.Project
+	includePresubmits    bool
+	jobCatalog           *jobconfig.Catalog
+	aiRuntime            *analysisruntime.Runtime
+	containerAnalyzer    containerFailureAnalyzer
+	progress             *fetchprogress.Tracker
+	aiRefreshTransaction *aiRefreshStateTransaction
 }
 
 // refreshResult carries the outputs a pass needs for its side effects.
@@ -271,6 +272,7 @@ func (p *pipeline) fullPass(ctx context.Context) ([]models.ProwJob, error) {
 	}
 	p.startProgressPhase(fetchprogress.PhaseSideEffects)
 	if err := p.runSideEffects(sideEffectCtx, res); err != nil {
+		p.invalidateAnalysisRuntime()
 		return nil, err
 	}
 	p.completeProgressPhase()
@@ -388,30 +390,36 @@ func (p *pipeline) discover(ctx context.Context) ([]models.ProwJob, error) {
 func (p *pipeline) refreshWithAnalysisContext(fetchCtx, analysisCtx context.Context, jobs []models.ProwJob) (*refreshResult, error) {
 	p.startProgressPhase(fetchprogress.PhaseArtifacts)
 	p.setProgressJobs(len(jobs))
-	var snapshot *aiRefreshStateSnapshot
+	var transaction *aiRefreshStateTransaction
 	var err error
 	if p.enableAI {
-		snapshot, err = captureAIRefreshState(p.opts.OutDir)
+		transaction, err = captureAIRefreshState(p.opts.OutDir)
 		if err != nil {
 			return nil, fmt.Errorf("snapshotting AI refresh state: %w", err)
 		}
+		p.aiRefreshTransaction = transaction
+		defer func() { p.aiRefreshTransaction = nil }()
 	}
 	result, err := p.refreshDataWithAnalysisContext(fetchCtx, analysisCtx, jobs)
 	if err == nil {
-		if snapshot != nil {
-			snapshot.Discard()
+		if transaction != nil {
+			transaction.Discard()
 		}
+		return result, nil
+	}
+	if transaction == nil {
 		return result, err
 	}
-	if snapshot == nil {
-		return result, err
-	}
-	if restoreErr := snapshot.Restore(); restoreErr != nil {
+	if restoreErr := transaction.Restore(); restoreErr != nil {
 		return nil, errors.Join(err, fmt.Errorf("restoring AI refresh state: %w", restoreErr))
 	}
+	p.invalidateAnalysisRuntime()
+	return nil, err
+}
+
+func (p *pipeline) invalidateAnalysisRuntime() {
 	p.containerAnalyzer = nil
 	p.aiRuntime = nil
-	return nil, err
 }
 
 func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.Context, jobs []models.ProwJob) (*refreshResult, error) {
@@ -552,12 +560,14 @@ type aiRefreshFileSnapshot struct {
 	exists     bool
 }
 
-type aiRefreshStateSnapshot struct {
-	files []aiRefreshFileSnapshot
+type aiRefreshStateTransaction struct {
+	outDir              string
+	files               []aiRefreshFileSnapshot
+	checkpointCommitted bool
 }
 
-func captureAIRefreshState(outDir string) (*aiRefreshStateSnapshot, error) {
-	snapshot := &aiRefreshStateSnapshot{}
+func captureAIRefreshState(outDir string) (*aiRefreshStateTransaction, error) {
+	snapshot := &aiRefreshStateTransaction{outDir: outDir}
 	for _, name := range []string{ai.CacheFilename, output.AITraceFilename} {
 		path := filepath.Join(outDir, name)
 		info, err := os.Stat(path)
@@ -600,7 +610,22 @@ func captureAIRefreshState(outDir string) (*aiRefreshStateSnapshot, error) {
 	return snapshot, nil
 }
 
-func (s *aiRefreshStateSnapshot) Restore() error {
+// CommitAnalysisCheckpoint makes the current private generation the rollback baseline.
+func (s *aiRefreshStateTransaction) CommitAnalysisCheckpoint() error {
+	if s == nil {
+		return nil
+	}
+	next, err := captureAIRefreshState(s.outDir)
+	if err != nil {
+		return err
+	}
+	s.Discard()
+	s.files = next.files
+	s.checkpointCommitted = true
+	return nil
+}
+
+func (s *aiRefreshStateTransaction) Restore() error {
 	if s == nil {
 		return nil
 	}
@@ -649,7 +674,7 @@ func restoreAIRefreshFile(snapshot aiRefreshFileSnapshot) error {
 	return os.Remove(snapshot.backupPath)
 }
 
-func (s *aiRefreshStateSnapshot) Discard() {
+func (s *aiRefreshStateTransaction) Discard() {
 	if s == nil {
 		return
 	}
@@ -658,6 +683,13 @@ func (s *aiRefreshStateSnapshot) Discard() {
 			_ = os.Remove(file.backupPath)
 		}
 	}
+}
+
+func (p *pipeline) commitAnalysisCheckpoint() error {
+	if p == nil || p.aiRefreshTransaction == nil {
+		return nil
+	}
+	return p.aiRefreshTransaction.CommitAnalysisCheckpoint()
 }
 
 func clearAnalysisTrace(outDir string) error {

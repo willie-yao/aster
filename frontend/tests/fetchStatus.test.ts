@@ -4,7 +4,7 @@ import { fetchStatusPresentation, nextFetchStatusDelay, nextFetchTime, pollFetch
 import type { FetchProgressStatus, FetchStatusResponse } from "../src/types/fetchStatus.js";
 
 const activeStatus: FetchProgressStatus = {
-  schema_version: 1,
+  schema_version: 3,
   run_id: "safe-run",
   pass_id: "safe-pass",
   pass_type: "lightweight-watch",
@@ -52,20 +52,22 @@ test("fetch status presentation covers active idle failed and stale states", () 
   assert.ok(active?.ariaLabel.includes("Fetch in progress"));
   const attempts = fetchStatusPresentation(response("active", {
     ...activeStatus,
-    analyses: { ...activeStatus.analyses, task_attempts: 27 },
+    analyses: { ...activeStatus.analyses, task_attempts: 27, checkpoint_committed: true },
   }));
   assert.ok(attempts?.detail.includes("27 Task attempts"));
+  assert.ok(attempts?.detail.includes("analysis checkpoint saved"));
 
   const patternRetry = fetchStatusPresentation(response("active", {
     ...activeStatus,
     phase: "patterns",
     patterns: {
-      eligible: 2, completed: 1, failed: 1, attempts: 3, retries: 1,
+      eligible: 2, completed: 1, failed: 1, attempts: 3, retries: 1, cache_hits: 1,
       repairs: 1, repair_failed: 1, repair_failure_category: "schema", failure_category: "ambiguous",
     },
   }));
   assert.ok(patternRetry?.detail.includes("3 pattern attempts"));
   assert.ok(patternRetry?.detail.includes("1 pattern retry"));
+  assert.ok(patternRetry?.detail.includes("1 pattern cache hit"));
   assert.ok(patternRetry?.detail.includes("1 ambiguity repair"));
   assert.ok(patternRetry?.detail.includes("repair failure: invalid schema"));
   assert.ok(patternRetry?.detail.includes("pattern failure: ambiguous response"));

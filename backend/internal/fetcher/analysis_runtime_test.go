@@ -184,17 +184,6 @@ ai:
 	}
 }
 
-func TestWarnOnAnalysisPersistenceIsBestEffort(t *testing.T) {
-	called := 0
-	warnOnAnalysisPersistence("test state", func() error {
-		called++
-		return errors.New("disk full")
-	})
-	if called != 1 {
-		t.Fatalf("save calls = %d, want 1", called)
-	}
-}
-
 type maintenanceOnlyAnalyzer struct {
 	called bool
 }

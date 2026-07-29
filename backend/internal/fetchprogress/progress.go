@@ -23,7 +23,7 @@ import (
 
 const (
 	// SchemaVersion is the current private fetch status schema.
-	SchemaVersion = 2
+	SchemaVersion = 3
 	// StatusDirectory is hidden from the public /data file server.
 	StatusDirectory = ".fetch-status"
 	// StatusFilename is the current fetch status snapshot.
@@ -118,20 +118,21 @@ type BuildProgress struct {
 
 // AnalysisProgress separates logical analyses from Task attempts.
 type AnalysisProgress struct {
-	LogicalTotal           int `json:"logical_total"`
-	AcceptedCacheHits      int `json:"accepted_cache_hits"`
-	NewWork                int `json:"new_work"`
-	StaleWork              int `json:"stale_work"`
-	Queued                 int `json:"queued"`
-	Running                int `json:"running"`
-	Completed              int `json:"completed"`
-	Failed                 int `json:"failed"`
-	Cancelled              int `json:"cancelled"`
-	TaskAttempts           int `json:"task_attempts"`
-	Retries                int `json:"retries"`
-	ExistingTasksAdopted   int `json:"existing_tasks_adopted"`
-	ResultsRetrieved       int `json:"results_retrieved"`
-	ResultRetrievalRetries int `json:"result_retrieval_retries"`
+	LogicalTotal           int  `json:"logical_total"`
+	AcceptedCacheHits      int  `json:"accepted_cache_hits"`
+	NewWork                int  `json:"new_work"`
+	StaleWork              int  `json:"stale_work"`
+	Queued                 int  `json:"queued"`
+	Running                int  `json:"running"`
+	Completed              int  `json:"completed"`
+	Failed                 int  `json:"failed"`
+	Cancelled              int  `json:"cancelled"`
+	TaskAttempts           int  `json:"task_attempts"`
+	Retries                int  `json:"retries"`
+	ExistingTasksAdopted   int  `json:"existing_tasks_adopted"`
+	ResultsRetrieved       int  `json:"results_retrieved"`
+	ResultRetrievalRetries int  `json:"result_retrieval_retries"`
+	CheckpointCommitted    bool `json:"checkpoint_committed,omitempty"`
 }
 
 // PatternFailureCategory is a privacy-safe final correlation failure class.
@@ -163,6 +164,7 @@ type PatternProgress struct {
 	Failed                int                    `json:"failed"`
 	Attempts              int                    `json:"attempts"`
 	Retries               int                    `json:"retries"`
+	CacheHits             int                    `json:"cache_hits,omitempty"`
 	Repairs               int                    `json:"repairs,omitempty"`
 	RepairSucceeded       int                    `json:"repair_succeeded,omitempty"`
 	RepairFailed          int                    `json:"repair_failed,omitempty"`
@@ -225,7 +227,7 @@ func Read(path string) (Status, error) {
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return Status{}, errors.New("fetch status has trailing data")
 	}
-	if status.SchemaVersion != 1 && status.SchemaVersion != SchemaVersion {
+	if status.SchemaVersion != 1 && status.SchemaVersion != 2 && status.SchemaVersion != SchemaVersion {
 		return Status{}, fmt.Errorf("unsupported fetch status schema %d", status.SchemaVersion)
 	}
 	if err := status.validate(); err != nil {
@@ -251,9 +253,11 @@ func (s Status) validate() error {
 		s.Analyses.TaskAttempts < 0 || s.Analyses.Retries < 0 || s.Analyses.ExistingTasksAdopted < 0 ||
 		s.Analyses.ResultsRetrieved < 0 || s.Analyses.ResultRetrievalRetries < 0 ||
 		s.Patterns.Eligible < 0 || s.Patterns.Completed < 0 || s.Patterns.Failed < 0 ||
-		s.Patterns.Attempts < 0 || s.Patterns.Retries < 0 ||
+		s.Patterns.Attempts < 0 || s.Patterns.Retries < 0 || s.Patterns.CacheHits < 0 ||
+		s.Patterns.Repairs < 0 || s.Patterns.RepairSucceeded < 0 || s.Patterns.RepairFailed < 0 ||
 		s.Patterns.Completed+s.Patterns.Failed > s.Patterns.Eligible || s.Patterns.Retries > s.Patterns.Attempts ||
-		!validPatternFailureCategory(s.Patterns.FailureCategory) {
+		s.Patterns.CacheHits > s.Patterns.Completed || s.Patterns.RepairSucceeded+s.Patterns.RepairFailed != s.Patterns.Repairs ||
+		!validPatternFailureCategory(s.Patterns.FailureCategory) || !validPatternFailureCategory(s.Patterns.RepairFailureCategory) {
 		return errors.New("fetch status has invalid counters")
 	}
 	accounted := s.Analyses.Queued + s.Analyses.Running + s.Analyses.Completed + s.Analyses.Failed + s.Analyses.Cancelled
@@ -620,6 +624,11 @@ func (t *Tracker) CancelQueuedAnalyses() {
 	})
 }
 
+// MarkAnalysisCheckpoint records durable private analysis state.
+func (t *Tracker) MarkAnalysisCheckpoint() {
+	t.update(true, func(status *Status) { status.Analyses.CheckpointCommitted = true })
+}
+
 // SkipAnalysis marks all planned analyses unavailable without running them.
 func (t *Tracker) SkipAnalysis() {
 	t.update(true, func(status *Status) {
@@ -634,6 +643,11 @@ func (t *Tracker) PlanPatterns(total int) {
 	t.update(true, func(status *Status) {
 		status.Patterns = PatternProgress{Eligible: total}
 	})
+}
+
+// RecordPatternCacheHit records one accepted recurring-pattern cache entry.
+func (t *Tracker) RecordPatternCacheHit() {
+	t.update(true, func(status *Status) { status.Patterns.CacheHits++ })
 }
 
 // RecordPatternAttempt records one bounded correlation attempt.

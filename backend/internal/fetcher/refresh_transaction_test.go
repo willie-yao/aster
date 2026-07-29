@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -24,23 +25,25 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/notify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/patterns"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
 
 type resultLifecycleAnalyzer struct {
-	client  *orka.ResultClient
-	state   *analysisruntime.ContainerStateStore
-	dataDir string
-	result  ai.FailureAnalysisResult
-	err     error
-	calls   atomic.Int64
-	mutate  bool
-	merge   bool
-	merged  chan struct{}
-	once    sync.Once
-	seeds   atomic.Int64
+	client    *orka.ResultClient
+	state     *analysisruntime.ContainerStateStore
+	dataDir   string
+	result    ai.FailureAnalysisResult
+	err       error
+	calls     atomic.Int64
+	mutate    bool
+	merge     bool
+	merged    chan struct{}
+	once      sync.Once
+	seeds     atomic.Int64
+	reuseSeed bool
 }
 
 func (a *resultLifecycleAnalyzer) Maintain(context.Context) error { return nil }
@@ -49,8 +52,19 @@ func (a *resultLifecycleAnalyzer) StateStore() *analysisruntime.ContainerStateSt
 
 func (a *resultLifecycleAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, request ai.FailureAnalysisRequest) (ai.FailureAnalysisResult, error) {
 	a.calls.Add(1)
+	seedCount := 0
 	if a.state != nil {
-		a.seeds.Add(int64(len(a.state.CacheSeed(request))))
+		seedCount = len(a.state.CacheSeed(request))
+		a.seeds.Add(int64(seedCount))
+	}
+	if a.reuseSeed && seedCount > 0 {
+		result := a.result
+		if result.Analysis != nil {
+			analysis := *result.Analysis
+			analysis.CacheHit = true
+			result.Analysis = &analysis
+		}
+		return result, nil
 	}
 	if a.mutate {
 		if err := os.WriteFile(filepath.Join(a.dataDir, ai.CacheFilename), []byte(`{"changed":true}`), 0o600); err != nil {
@@ -412,7 +426,9 @@ func TestSuccessfulOrkaResultPublishesRefresh(t *testing.T) {
 func TestPatternFailurePreservesRefreshState(t *testing.T) {
 	dataDir, bucketDir := installRefreshLifecycleFixture(t)
 	before := hashFileTree(t, dataDir)
+	var resultCalls atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		resultCalls.Add(1)
 		_ = json.NewEncoder(w).Encode(map[string]string{"result": `{"version":1}`})
 	}))
 	defer server.Close()
@@ -421,7 +437,7 @@ func TestPatternFailurePreservesRefreshState(t *testing.T) {
 		t.Fatal(err)
 	}
 	analyzer := &resultLifecycleAnalyzer{
-		client: orka.NewResultClient(server.URL, "token"), state: state, dataDir: dataDir,
+		client: orka.NewResultClient(server.URL, "token"), state: state, dataDir: dataDir, merge: true,
 		result: ai.FailureAnalysisResult{
 			Summary: &models.AISummary{GeneratedAt: "2026-07-27T00:00:00Z", Summary: "analyzed"},
 			Analysis: &models.AIAnalysis{
@@ -463,8 +479,47 @@ func TestPatternFailurePreservesRefreshState(t *testing.T) {
 		patternProgress.FailureCategory != fetchprogress.PatternFailureProvider5xx {
 		t.Fatalf("pattern progress = %+v", patternProgress)
 	}
-	if after := hashFileTree(t, dataDir); !reflect.DeepEqual(after, before) {
-		t.Fatalf("data directory changed after pattern failure\nbefore=%v\nafter=%v", before, after)
+	after := hashFileTree(t, dataDir)
+	for path, beforeHash := range before {
+		if path == ai.CacheFilename || path == output.AITraceFilename {
+			continue
+		}
+		if after[path] != beforeHash {
+			t.Fatalf("non-checkpoint state changed after pattern failure: %s", path)
+		}
+	}
+	if after[ai.CacheFilename] == before[ai.CacheFilename] || after[output.AITraceFilename] == before[output.AITraceFilename] {
+		t.Fatalf("analysis checkpoint did not advance: before=%v after=%v", before, after)
+	}
+	if !p.progress.Snapshot().Analyses.CheckpointCommitted {
+		t.Fatal("analysis checkpoint was not reported")
+	}
+
+	nextState, err := analysisruntime.NewContainerStateStore(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := ai.FailureAnalysisRequest{
+		JobID: "periodic-test", Build: models.BuildInfo{BuildID: "1", Result: "FAILURE"},
+		TestCase: models.TestCase{Name: "fails", Status: "failed", FailureMessage: "failed"},
+	}
+	if seed := nextState.CacheSeed(request); len(seed) != 1 {
+		t.Fatalf("checkpoint cache seed entries = %d, want 1", len(seed))
+	}
+	nextAnalyzer := &resultLifecycleAnalyzer{
+		client: orka.NewResultClient(server.URL, "token"), state: nextState, dataDir: dataDir, reuseSeed: true,
+		result: analyzer.result,
+	}
+	p.containerAnalyzer = nextAnalyzer
+	p.opts.SkipSideEffects = true
+	p.progress.StartPass(fetchprogress.PassOneShot)
+	analyzePatternsAcrossBuilds = func(context.Context, *ai.Service, []models.JobDetail, patterns.AnalyzeOptions) error { return nil }
+	resultCallsBefore := resultCalls.Load()
+	if _, err := p.fullPass(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if nextAnalyzer.seeds.Load() != 1 || resultCalls.Load() != resultCallsBefore {
+		t.Fatalf("checkpoint reuse seeds=%d result calls=%d before=%d", nextAnalyzer.seeds.Load(), resultCalls.Load(), resultCallsBefore)
 	}
 }
 
@@ -702,4 +757,77 @@ func hashFileTree(t *testing.T, root string) map[string][32]byte {
 		t.Fatal(err)
 	}
 	return hashes
+}
+
+func TestAIRefreshTransactionCommitChangesRollbackBaseline(t *testing.T) {
+	dataDir := t.TempDir()
+	writeFixtureFile(t, dataDir, ai.CacheFilename, `{"generation":"original"}`)
+	writeFixtureFile(t, dataDir, output.AITraceFilename, `{"generation":"original"}`)
+
+	transaction, err := captureAIRefreshState(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer transaction.Discard()
+	writeFixtureFile(t, dataDir, ai.CacheFilename, `{"generation":"checkpoint"}`)
+	writeFixtureFile(t, dataDir, output.AITraceFilename, `{"generation":"checkpoint"}`)
+	if err := transaction.CommitAnalysisCheckpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if !transaction.checkpointCommitted {
+		t.Fatal("transaction did not record the checkpoint")
+	}
+
+	writeFixtureFile(t, dataDir, ai.CacheFilename, `{"generation":"later"}`)
+	writeFixtureFile(t, dataDir, output.AITraceFilename, `{"generation":"later"}`)
+	if err := transaction.Restore(); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{ai.CacheFilename, output.AITraceFilename} {
+		data, err := os.ReadFile(filepath.Join(dataDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(data), `"checkpoint"`) {
+			t.Fatalf("%s restored data = %s", name, data)
+		}
+	}
+}
+
+func TestAnalysisCheckpointPersistenceFailureRestoresRefreshState(t *testing.T) {
+	dataDir, bucketDir := installRefreshLifecycleFixture(t)
+	before := hashFileTree(t, dataDir)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"result": `{"version":1}`})
+	}))
+	defer server.Close()
+	state, err := analysisruntime.NewContainerStateStore(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	analyzer := &resultLifecycleAnalyzer{
+		client: orka.NewResultClient(server.URL, "token"), state: state, dataDir: dataDir, merge: true,
+		result: ai.FailureAnalysisResult{
+			Summary: &models.AISummary{GeneratedAt: "2026-07-29T00:00:00Z", Summary: "analyzed"},
+			Analysis: &models.AIAnalysis{
+				GeneratedAt: "2026-07-29T00:00:00Z", RootCause: "configuration drift", Severity: "High",
+				SuggestedFix: "update configuration", Mode: "agentic", EvidencePlanCovered: true,
+			},
+		},
+	}
+	p := refreshLifecyclePipeline(t, dataDir, bucketDir, analyzer)
+	want := errors.New("checkpoint disk full")
+	oldSave := saveContainerAnalysisState
+	saveContainerAnalysisState = func(*analysisruntime.ContainerStateStore) error { return want }
+	t.Cleanup(func() { saveContainerAnalysisState = oldSave })
+
+	if _, err := p.fullPass(t.Context()); !errors.Is(err, want) || !strings.Contains(err.Error(), "persisting completed container analysis") {
+		t.Fatalf("fullPass error = %v", err)
+	}
+	if p.aiRuntime != nil || p.containerAnalyzer != nil {
+		t.Fatal("checkpoint failure retained in-memory AI state")
+	}
+	if after := hashFileTree(t, dataDir); !reflect.DeepEqual(after, before) {
+		t.Fatalf("checkpoint failure changed refresh state\nbefore=%v\nafter=%v", before, after)
+	}
 }

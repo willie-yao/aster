@@ -298,3 +298,33 @@ func TestAnalyzeBoundsRepairAcrossFullRetries(t *testing.T) {
 		t.Fatalf("attempts=%+v", attempts)
 	}
 }
+
+type cacheHitPatternAnalyzer struct{}
+
+func (cacheHitPatternAnalyzer) AnalyzePattern(context.Context, string, string, []ai.PatternFailure) (*models.PatternAnalysis, error) {
+	return nil, errors.New("AnalyzePattern should not be called")
+}
+
+func (cacheHitPatternAnalyzer) AnalyzePatternWithOptions(_ context.Context, _ string, subject string, failures []ai.PatternFailure, options ai.PatternAnalyzeOptions) (*models.PatternAnalysis, error) {
+	if options.OnCacheHit != nil {
+		options.OnCacheHit()
+	}
+	return &models.PatternAnalysis{Subject: subject, BuildsAnalyzed: len(failures), Summary: "cached"}, nil
+}
+
+func TestAnalyzeReportsPatternCacheHits(t *testing.T) {
+	details := []models.JobDetail{eligibleJob("job-a")}
+	var attempts []Attempt
+	stats, err := AnalyzeWithOptions(t.Context(), cacheHitPatternAnalyzer{}, details, AnalyzeOptions{
+		OnAttempt: func(attempt Attempt) { attempts = append(attempts, attempt) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.CacheHits != 1 || stats.Attempts != 1 || stats.Completed != 1 {
+		t.Fatalf("stats = %+v", stats)
+	}
+	if len(attempts) != 1 || !attempts[0].CacheHit || !attempts[0].Succeeded {
+		t.Fatalf("attempts = %+v", attempts)
+	}
+}

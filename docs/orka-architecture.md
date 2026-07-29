@@ -110,9 +110,14 @@ Helm deployments may select `analysisRuntime.type: orka-container` with
    state.
 7. The fetcher reads the result through the Orka result API, validates it, and
    merges accepted private state.
-8. Fatal analysis or pattern errors stop publication and restore protected
-   private state. Otherwise, the fetcher publishes public JSON with per-file
-   atomic replacement. Individual unavailable analyses may remain nonfatal.
+8. After all individual analyses finish, the fetcher persists authenticated
+   cache and trace state and commits a private checkpoint before pattern work.
+9. A failure before that checkpoint restores the prior private generation. A
+   later pattern failure preserves the checkpoint and any successfully persisted
+   pattern cache entries, invalidates in-memory runtimes, and leaves public and
+   side-effect state unchanged. Otherwise, the fetcher publishes public JSON
+   with per-file atomic replacement. Individual unavailable analyses may remain
+   nonfatal.
 
 Orka does not select evidence, define prompts, judge diagnoses, or decide which
 analysis is safe to cache. It supplies isolation and Task lifecycle around the
@@ -180,6 +185,7 @@ controller and worker RBAC remains operator-owned.
 | Public dashboard JSON | Dashboard RWX volume | SPA data contract |
 | `ai_cache.json` | Dashboard RWX volume | Accepted analysis and pattern cache |
 | `ai_traces.json` | Dashboard RWX volume | Private content-free execution traces |
+| Analysis checkpoint | Dashboard RWX volume | Private cache and trace rollback baseline, distinct from public publication |
 | `.analysis-chat` | Dashboard RWX volume | Owner-bound chat and source requests |
 | Task resources | Kubernetes API | Lifecycle, phase, identity, and history |
 | Task results | Orka persistent store | Durable result retrieval |
