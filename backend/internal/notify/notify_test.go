@@ -737,3 +737,18 @@ func TestPatternStateWithEmptyJobIDSurvivesUnavailableAnalysis(t *testing.T) {
 		t.Fatalf("unavailable analysis cleared state with empty JobID: %+v", n.state.Patterns)
 	}
 }
+
+func TestRetainedPatternDoesNotSendNewNotification(t *testing.T) {
+	sender := &fakeSender{}
+	n := newTestNotifier(t, sender, filepath.Join(t.TempDir(), "state.json"))
+	pattern := systemicPattern("pattern-1", "job-id", "periodic-job")
+	report := models.FlakinessReport{RecurringPatterns: []models.PatternAnalysis{pattern}}
+	details := []models.JobDetail{{JobID: "job-id", PatternAnalyses: []models.PatternAnalysis{pattern}, PatternRefresh: &models.PatternRefreshStatus{State: models.PatternRefreshRetained}}}
+	stats, err := n.ProcessFailures(context.Background(), report, details)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.PatternAlerts != 0 || len(sender.messages) != 0 {
+		t.Fatalf("stats=%+v messages=%d", stats, len(sender.messages))
+	}
+}

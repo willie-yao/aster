@@ -263,3 +263,7 @@ placement requirements.
 - [Server and analysis chat](server.md)
 - [Failure analysis runtime evaluation](analysis-runtime-evaluation.md)
 - [ADR 0001: Dashboard ownership of analysis policy](architecture-decisions/0001-analysis-runtime-ownership.md)
+
+## Partial pattern refreshes
+
+A provider or validation failure for one eligible job no longer blocks current dashboard, JUnit, search, or individual-analysis publication. The fetcher merges pattern outcomes per job with the prior complete job details. Retained verdicts keep their exact identity and are excluded from new side effects. Context cancellation, checkpoint persistence failure, corrupt prior pattern identity, and output failure remain fatal.

@@ -206,3 +206,7 @@ currently persistent failure therefore receives one initial email.
 - `backend/internal/notify/remediation.go`: remediation transition rendering.
 - `backend/internal/notify/smtp.go`: SMTP, authentication, TLS, MIME delivery.
 - `backend/internal/fetcher/fetcher.go`: configuration and side-effect wiring.
+
+## Retained patterns
+
+A retained last-known-good pattern is display-only evidence. It does not send a new or changed-pattern notification. Existing notification state remains intact until a fresh correlation or authoritative job removal changes the finding.

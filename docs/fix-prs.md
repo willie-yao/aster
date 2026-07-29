@@ -382,3 +382,7 @@ This builds on the same pattern analysis that drives the home-page recurring
 patterns and the auto-filed issues ([github-issues.md](github-issues.md)).
 Issues act on **your** repos; fix PRs are the only feature that writes to the
 **source** repo, which is why the identity and CLA requirements are stricter.
+
+## Retained patterns
+
+Fix generation requires a fresh `current` pattern with current evidence. A retained last-known-good pattern remains visible with its existing remediation references, but it cannot start a new issue, fix preview, or remediation attempt.

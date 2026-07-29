@@ -28,6 +28,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/patterns"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/resolve"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
 
@@ -425,6 +426,14 @@ func TestSuccessfulOrkaResultPublishesRefresh(t *testing.T) {
 
 func TestPatternFailurePreservesRefreshState(t *testing.T) {
 	dataDir, bucketDir := installRefreshLifecycleFixture(t)
+	for _, buildID := range []string{"2", "3"} {
+		writeFixtureFile(t, bucketDir, "logs/periodic-test/"+buildID+"/started.json", `{"timestamp":1}`)
+		writeFixtureFile(t, bucketDir, "logs/periodic-test/"+buildID+"/finished.json", `{"timestamp":2,"passed":false,"result":"FAILURE"}`)
+		writeFixtureFile(t, bucketDir, "logs/periodic-test/"+buildID+"/artifacts/junit.xml", `<testsuite name="suite"><testcase name="fails" classname="suite"><failure message="failed">failed</failure></testcase></testsuite>`)
+	}
+	priorPattern := models.PatternAnalysis{Subject: "periodic-test", JobID: "periodic-test", GeneratedAt: "2026-07-28T00:00:00Z", BuildsAnalyzed: 3, Systemic: true, Confidence: "high", SharedRootCause: "last good cause", SharedBuilds: []string{"3", "2"}, SuggestedFix: "keep last good fix", Summary: "last good"}
+	models.AssignPatternIdentity(&priorPattern)
+	writeFixtureFile(t, dataDir, "jobs/"+models.JobDataFilename("periodic-test"), mustJSON(t, models.JobDetail{JobID: "periodic-test", Name: "periodic-test", JobType: models.JobTypePeriodic, PatternAnalyses: []models.PatternAnalysis{priorPattern}}))
 	before := hashFileTree(t, dataDir)
 	var resultCalls atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -447,6 +456,8 @@ func TestPatternFailurePreservesRefreshState(t *testing.T) {
 		},
 	}
 	p := refreshLifecyclePipeline(t, dataDir, bucketDir, analyzer)
+	p.opts.BuildsPerJob = 3
+	p.opts.SkipSideEffects = true
 	configureRefreshLifecycleRuntime(t, p, dataDir)
 	staleRuntime := p.aiRuntime
 	var persistedPatternRuntime *analysisruntime.Runtime
@@ -463,6 +474,7 @@ func TestPatternFailurePreservesRefreshState(t *testing.T) {
 	oldPatternAnalysis := analyzePatternsAcrossBuilds
 	analyzePatternsAcrossBuilds = func(_ context.Context, _ *ai.Service, _ []models.JobDetail, options patterns.AnalyzeOptions) error {
 		options.OnPlan(1)
+		options.OnOutcome(patterns.JobOutcome{JobID: "periodic-test", Attempts: 2, FailureCategory: ai.PatternFailureProvider5xx})
 		options.OnAttempt(patterns.Attempt{Number: 1, FailureCategory: ai.PatternFailureRequestTimeout})
 		options.OnAttempt(patterns.Attempt{Number: 2, Retry: true, Final: true, FailureCategory: ai.PatternFailureProvider5xx})
 		return &ai.PatternProviderError{StatusCode: http.StatusServiceUnavailable}
@@ -473,7 +485,7 @@ func TestPatternFailurePreservesRefreshState(t *testing.T) {
 		saveAnalysisRuntimeCache = oldSaveRuntime
 	})
 
-	if _, err := p.fullPass(t.Context()); err == nil || !strings.Contains(err.Error(), "cross-build pattern analysis") {
+	if _, err := p.fullPass(t.Context()); err != nil {
 		t.Fatalf("fullPass error = %v", err)
 	}
 	if sender.calls.Load() != 0 {
@@ -482,25 +494,31 @@ func TestPatternFailurePreservesRefreshState(t *testing.T) {
 	if persistedPatternRuntime == nil || persistedPatternRuntime == staleRuntime {
 		t.Fatal("pattern persistence reused the stale pre-checkpoint runtime")
 	}
-	if p.aiRuntime != nil || p.containerAnalyzer != nil {
-		t.Fatal("failed pattern refresh retained in-memory AI state")
-	}
 	patternProgress := p.progress.Snapshot().Patterns
 	if patternProgress.Attempts != 2 || patternProgress.Retries != 1 || patternProgress.Completed != 0 || patternProgress.Failed != 1 ||
 		patternProgress.FailureCategory != fetchprogress.PatternFailureProvider5xx {
 		t.Fatalf("pattern progress = %+v", patternProgress)
 	}
 	after := hashFileTree(t, dataDir)
-	for path, beforeHash := range before {
-		if path == ai.CacheFilename || path == output.AITraceFilename {
-			continue
-		}
-		if after[path] != beforeHash {
-			t.Fatalf("non-checkpoint state changed after pattern failure: %s", path)
-		}
+	if after["dashboard.json"] == before["dashboard.json"] || after[ai.CacheFilename] == before[ai.CacheFilename] || after[output.AITraceFilename] == before[output.AITraceFilename] {
+		t.Fatalf("core publication or checkpoint did not advance: before=%v after=%v", before, after)
 	}
-	if after[ai.CacheFilename] == before[ai.CacheFilename] || after[output.AITraceFilename] == before[output.AITraceFilename] {
-		t.Fatalf("analysis checkpoint did not advance: before=%v after=%v", before, after)
+	jobData, err := os.ReadFile(filepath.Join(dataDir, "jobs", models.JobDataFilename("periodic-test")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var published models.JobDetail
+	if err := json.Unmarshal(jobData, &published); err != nil {
+		t.Fatal(err)
+	}
+	if published.PatternRefresh == nil || published.PatternRefresh.State != models.PatternRefreshRetained ||
+		len(published.PatternAnalyses) != 1 || !reflect.DeepEqual(published.PatternAnalyses[0], priorPattern) {
+		t.Fatalf("published pattern refresh = %+v patterns=%+v", published.PatternRefresh, published.PatternAnalyses)
+	}
+	var flakiness models.FlakinessReport
+	flakinessData, err := os.ReadFile(filepath.Join(dataDir, "flakiness.json"))
+	if err != nil || json.Unmarshal(flakinessData, &flakiness) != nil || flakiness.PatternRefresh.Retained != 1 || len(flakiness.RecurringPatterns) != 1 {
+		t.Fatalf("flakiness refresh = %+v error=%v", flakiness, err)
 	}
 	if !p.progress.Snapshot().Analyses.CheckpointCommitted {
 		t.Fatal("analysis checkpoint was not reported")
@@ -529,7 +547,7 @@ func TestPatternFailurePreservesRefreshState(t *testing.T) {
 	if _, err := p.fullPass(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if nextAnalyzer.seeds.Load() != 1 || resultCalls.Load() != resultCallsBefore {
+	if nextAnalyzer.seeds.Load() != 3 || resultCalls.Load() != resultCallsBefore {
 		t.Fatalf("checkpoint reuse seeds=%d result calls=%d before=%d", nextAnalyzer.seeds.Load(), resultCalls.Load(), resultCallsBefore)
 	}
 }
@@ -859,4 +877,63 @@ func TestRollbackFailureInvalidatesInMemoryAnalysisState(t *testing.T) {
 	if p.aiRuntime != nil || p.containerAnalyzer != nil {
 		t.Fatal("rollback failure retained in-memory AI state")
 	}
+}
+
+func TestOutputFailureLeavesResolvedStateUnchanged(t *testing.T) {
+	dataDir, bucketDir := installRefreshLifecycleFixture(t)
+	for _, buildID := range []string{"2", "3"} {
+		writeFixtureFile(t, bucketDir, "logs/periodic-test/"+buildID+"/started.json", `{"timestamp":1}`)
+		writeFixtureFile(t, bucketDir, "logs/periodic-test/"+buildID+"/finished.json", `{"timestamp":2,"passed":false,"result":"FAILURE"}`)
+		writeFixtureFile(t, bucketDir, "logs/periodic-test/"+buildID+"/artifacts/junit.xml", `<testsuite name="suite"><testcase name="fails" classname="suite"><failure message="failed">failed</failure></testcase></testsuite>`)
+	}
+	prior := models.PatternAnalysis{Subject: "periodic-test", JobID: "periodic-test", GeneratedAt: "2026-07-28T00:00:00Z", BuildsAnalyzed: 3, Systemic: true, Confidence: "high", SharedRootCause: "cause", SharedBuilds: []string{"1"}, SuggestedFix: "fix", Summary: "old"}
+	models.AssignPatternIdentity(&prior)
+	writeFixtureFile(t, dataDir, "jobs/"+models.JobDataFilename("periodic-test"), mustJSON(t, models.JobDetail{JobID: "periodic-test", Name: "periodic-test", JobType: models.JobTypePeriodic, PatternAnalyses: []models.PatternAnalysis{prior}}))
+	resolved := &resolve.State{Resolved: map[string]resolve.Entry{prior.ID: {Watermark: "1"}}}
+	if err := resolved.Save(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(filepath.Join(dataDir, resolve.FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"result": `{"version":1}`})
+	}))
+	defer server.Close()
+	state, _ := analysisruntime.NewContainerStateStore(dataDir)
+	analyzer := &resultLifecycleAnalyzer{client: orka.NewResultClient(server.URL, "token"), state: state, dataDir: dataDir, result: ai.FailureAnalysisResult{Summary: &models.AISummary{Summary: "analyzed"}, Analysis: &models.AIAnalysis{RootCause: "cause", Severity: "High", SuggestedFix: "fix", Mode: "agentic", EvidencePlanCovered: true}}}
+	p := refreshLifecyclePipeline(t, dataDir, bucketDir, analyzer)
+	p.opts.BuildsPerJob = 3
+	p.opts.SkipSideEffects = true
+	configureRefreshLifecycleRuntime(t, p, dataDir)
+	oldPatterns, oldWrite := analyzePatternsAcrossBuilds, writeAllOutput
+	analyzePatternsAcrossBuilds = func(_ context.Context, _ *ai.Service, details []models.JobDetail, options patterns.AnalyzeOptions) error {
+		fresh := prior
+		fresh.GeneratedAt = "2026-07-29T00:00:00Z"
+		fresh.SharedBuilds = []string{"3", "2"}
+		details[0].PatternAnalyses = []models.PatternAnalysis{fresh}
+		options.OnOutcome(patterns.JobOutcome{JobID: "periodic-test", Succeeded: true, Systemic: true, Attempts: 1})
+		return nil
+	}
+	writeAllOutput = func(string, *project.Config, models.Dashboard, []models.JobDetail, models.FlakinessReport, models.SearchIndex) error {
+		return errors.New("output failed")
+	}
+	t.Cleanup(func() { analyzePatternsAcrossBuilds, writeAllOutput = oldPatterns, oldWrite })
+	if _, err := p.fullPass(t.Context()); err == nil || !strings.Contains(err.Error(), "output failed") {
+		t.Fatalf("fullPass error = %v", err)
+	}
+	after, _ := os.ReadFile(filepath.Join(dataDir, resolve.FileName))
+	if !bytes.Equal(before, after) {
+		t.Fatalf("resolved state changed on output failure\nbefore=%s\nafter=%s", before, after)
+	}
+}
+
+func mustJSON(t *testing.T, value any) string {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
 }

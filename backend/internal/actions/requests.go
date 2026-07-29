@@ -14,6 +14,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/issues"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/patternstate"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
 )
 
@@ -43,6 +44,7 @@ type RequestReadyNotifier func(context.Context, ActionRequestView) error
 type ActionRequestView struct {
 	ID           string         `json:"id"`
 	FailureID    string         `json:"failure_id"`
+	PatternHash  string         `json:"pattern_hash,omitempty"`
 	Kind         string         `json:"kind"`
 	Owner        string         `json:"owner"`
 	Status       string         `json:"status"`
@@ -76,13 +78,22 @@ func (s *Service) requestStatePath() string {
 }
 
 func (s *Service) loadActionRequests() {
-	state := &actionRequestState{Version: 1, Requests: map[string]*actionRequest{}}
+	state := &actionRequestState{Version: 2, Requests: map[string]*actionRequest{}}
 	data, err := os.ReadFile(s.requestStatePath())
 	if err == nil {
 		if err := json.Unmarshal(data, state); err != nil {
 			log.Printf("Warning: failed to parse action request state: %v", err)
-			state = &actionRequestState{Version: 1, Requests: map[string]*actionRequest{}}
+			state = &actionRequestState{Version: 2, Requests: map[string]*actionRequest{}}
 		}
+	}
+	if state.Version == 1 {
+		for _, request := range state.Requests {
+			if request != nil && request.Status == RequestReady && request.PatternHash == "" {
+				request.Status = RequestFailed
+				request.Error = "pattern changed before confirmation"
+			}
+		}
+		state.Version = 2
 	}
 	if state.Requests == nil {
 		state.Requests = map[string]*actionRequest{}
@@ -274,6 +285,9 @@ func (s *Service) generateRequestWith(id, userToken string, generate requestPrev
 	s.rmu.Unlock()
 
 	preview, entry, err := generate(ctx, failureID, kind, userToken, instruction)
+	if err == nil {
+		err = s.validatePatternSnapshot(failureID, entry.patternHash)
+	}
 
 	s.rmu.Lock()
 	request = s.requests.Requests[id]
@@ -290,6 +304,7 @@ func (s *Service) generateRequestWith(id, userToken string, generate requestPrev
 		request.Preview = &preview
 		request.TargetRepo = entry.targetRepo
 		request.TargetConfig = entry.targetConfig
+		request.PatternHash = entry.patternHash
 		if entry.kind == "issue" {
 			spec := entry.spec
 			request.Issue = &spec
@@ -327,14 +342,22 @@ func (s *Service) notifyRequestReady(view ActionRequestView) {
 	view = current.ActionRequestView
 	notifier := s.requestNotify
 	s.rmu.Unlock()
-	if notifier == nil {
+	if notifier == nil || s.validatePatternSnapshot(view.FailureID, view.PatternHash) != nil {
 		return
 	}
 	var notifyErr error
 	for attempt := 0; attempt < 3; attempt++ {
-		notifyCtx, notifyCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		notifyErr = notifier(notifyCtx, view)
-		notifyCancel()
+		if s.validatePatternSnapshot(view.FailureID, view.PatternHash) != nil {
+			return
+		}
+		notifyErr = patternstate.WithLock(s.dataDir, func() error {
+			if err := s.validatePatternSnapshot(view.FailureID, view.PatternHash); err != nil {
+				return err
+			}
+			notifyCtx, notifyCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer notifyCancel()
+			return notifier(notifyCtx, view)
+		})
 		if notifyErr == nil {
 			break
 		}
@@ -407,7 +430,7 @@ func (s *Service) ConfirmRequest(ctx context.Context, id, owner, userToken strin
 		s.rmu.Unlock()
 		return "", fmt.Errorf("action request has no persisted preview")
 	}
-	entry := &previewEntry{kind: request.Preview.Kind, targetRepo: request.TargetRepo, targetConfig: request.TargetConfig}
+	entry := &previewEntry{failureID: request.FailureID, patternHash: request.PatternHash, kind: request.Preview.Kind, targetRepo: request.TargetRepo, targetConfig: request.TargetConfig}
 	switch entry.kind {
 	case "issue":
 		if request.Issue == nil {
@@ -520,6 +543,17 @@ func (s *Service) expireRequestsLocked(now time.Time) bool {
 		changed = true
 	}
 	return changed
+}
+
+func (s *Service) validatePatternSnapshot(failureID, patternHash string) error {
+	pattern, err := s.findPattern(failureID)
+	if err != nil {
+		return err
+	}
+	if patternHash == "" || pattern.ContentHash != patternHash {
+		return ErrPreviewTargetChanged
+	}
+	return nil
 }
 
 func (s *Service) saveRequestsLocked() error {

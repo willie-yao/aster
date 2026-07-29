@@ -1796,3 +1796,20 @@ func TestVersionOneCreateIdempotencyMigratesOnRetry(t *testing.T) {
 		t.Fatalf("create migration = %+v", migrated)
 	}
 }
+
+func TestRetainedPatternChatRequiresCompleteEvidence(t *testing.T) {
+	dir := t.TempDir()
+	detail := patternDetail()
+	detail.PatternRefresh = &models.PatternRefreshStatus{State: models.PatternRefreshRetained, EvidenceAvailable: false}
+	detail.Runs = detail.Runs[:1]
+	writeJobDetail(t, dir, detail)
+	service, err := NewService(t.Context(), dir, &fakeRunner{}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pattern := recurringPattern()
+	_, err = service.Create(AnalysisRef{Scope: ScopePattern, JobID: "periodic-demo", PatternID: pattern.ID, PatternHash: pattern.ContentHash}, "Alice", testRequestID(t))
+	if !errors.Is(err, ErrAnalysisNotFound) {
+		t.Fatalf("Create error = %v", err)
+	}
+}

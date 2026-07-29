@@ -29,6 +29,7 @@ var (
 
 // analyzeFailuresWithAI runs the dashboard-owned analyzer on every failed test.
 func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.JobDetail, flakinessReport models.FlakinessReport) error {
+	p.lastPatternOutcomes = map[string]patterns.JobOutcome{}
 	consecutiveMap := make(map[string]int)
 	for _, tf := range flakinessReport.PersistentFailures {
 		consecutiveMap[tf.JobID+"::"+tf.TestName] = tf.ConsecutiveFailures
@@ -267,6 +268,9 @@ schedule:
 				p.progress.PlanPatterns(total)
 			}
 		},
+		OnOutcome: func(outcome patterns.JobOutcome) {
+			p.lastPatternOutcomes[outcome.JobID] = outcome
+		},
 		OnAttempt: func(attempt patterns.Attempt) {
 			if p.progress != nil {
 				p.progress.RecordPatternAttempt(
@@ -288,10 +292,16 @@ schedule:
 			persistErr = fmt.Errorf("committing completed pattern checkpoint: %w", persistErr)
 		}
 	}
-	if patternErr != nil {
-		patternErr = fmt.Errorf("cross-build pattern analysis: %w", patternErr)
+	if persistErr != nil {
+		return errors.Join(patternErr, persistErr)
 	}
-	return errors.Join(patternErr, persistErr)
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if patternErr != nil {
+		log.Printf("Warning: cross-build pattern analysis incomplete: %v", patternErr)
+	}
+	return nil
 }
 
 func (p *pipeline) persistIndividualAnalysisCheckpoint(container containerFailureAnalyzer, runtime *analysisruntime.Runtime, traces *ai.TraceStore) error {

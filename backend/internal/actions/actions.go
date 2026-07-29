@@ -24,6 +24,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixruntime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/issues"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/patternstate"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/repotemplate"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/resolve"
@@ -96,6 +97,8 @@ type PreviewResult struct {
 // previewEntry is a cached draft awaiting confirmation. Exactly one of spec or
 // fix is set, per kind. owner binds the draft to the admin who generated it.
 type previewEntry struct {
+	failureID    string
+	patternHash  string
 	kind         string
 	targetRepo   string
 	targetConfig string
@@ -190,6 +193,9 @@ func (s *Service) findPattern(id string) (*models.PatternAnalysis, error) {
 		}
 		for i := range detail.PatternAnalyses {
 			if detail.PatternAnalyses[i].ID != "" && detail.PatternAnalyses[i].ID == id {
+				if detail.PatternRefresh != nil && (detail.PatternRefresh.State != models.PatternRefreshCurrent || !detail.PatternRefresh.EvidenceAvailable) {
+					return nil, fmt.Errorf("failure %s is not actionable with stale pattern evidence", id)
+				}
 				return &detail.PatternAnalyses[i], nil
 			}
 		}
@@ -197,19 +203,13 @@ func (s *Service) findPattern(id string) (*models.PatternAnalysis, error) {
 	return nil, ErrNotFound
 }
 
-// buildIssueSpec resolves the failure to a single issue spec and the target
-// repo. It forces the patterns trigger: the admin explicitly asked to file
-// this, so the project's configured triggers do not gate the on-demand action.
-func (s *Service) buildIssueSpec(failureID string) (issues.IssueSpec, string, error) {
-	pa, err := s.findPattern(failureID)
-	if err != nil {
-		return issues.IssueSpec{}, "", err
-	}
+// buildIssueSpecForPattern renders one current pattern into an issue spec.
+func (s *Service) buildIssueSpecForPattern(pattern models.PatternAnalysis) (issues.IssueSpec, string, error) {
 	eff := s.cfg.EffectiveIssues()
 	if eff.Repo == nil || eff.Repo.Owner == "" || eff.Repo.Name == "" {
 		return issues.IssueSpec{}, "", fmt.Errorf("no target repo resolved (set issues.repo or branding.source_repo)")
 	}
-	report := models.FlakinessReport{RecurringPatterns: []models.PatternAnalysis{*pa}}
+	report := models.FlakinessReport{RecurringPatterns: []models.PatternAnalysis{pattern}}
 	specs := issues.BuildSpecs(issues.BuildInput{
 		Report:       report,
 		Triggers:     []string{project.IssueTriggerPatterns},
@@ -217,7 +217,7 @@ func (s *Service) buildIssueSpec(failureID string) (issues.IssueSpec, string, er
 		DashboardURL: s.cfg.Branding.SiteURL,
 	})
 	if len(specs) == 0 {
-		return issues.IssueSpec{}, "", fmt.Errorf("failure %s is not an actionable systemic pattern", failureID)
+		return issues.IssueSpec{}, "", fmt.Errorf("failure %s is not an actionable systemic pattern", pattern.ID)
 	}
 	return specs[0], eff.Repo.Owner + "/" + eff.Repo.Name, nil
 }
@@ -300,7 +300,11 @@ func (s *Service) buildFixManager(userToken string) (*fixpr.Manager, error) {
 
 // generateIssuePreview renders an issue draft without caching or posting it.
 func (s *Service) generateIssuePreview(ctx context.Context, failureID, userToken, instruction string) (PreviewResult, *previewEntry, error) {
-	spec, targetRepo, err := s.buildIssueSpec(failureID)
+	pattern, err := s.findPattern(failureID)
+	if err != nil {
+		return PreviewResult{}, nil, err
+	}
+	spec, targetRepo, err := s.buildIssueSpecForPattern(*pattern)
 	if err != nil {
 		return PreviewResult{}, nil, err
 	}
@@ -317,7 +321,7 @@ func (s *Service) generateIssuePreview(ctx context.Context, failureID, userToken
 		}
 	}
 	return PreviewResult{Kind: "issue", Title: final.Title, Body: final.Body},
-		&previewEntry{kind: "issue", targetRepo: targetRepo, spec: final}, nil
+		&previewEntry{failureID: failureID, patternHash: pattern.ContentHash, kind: "issue", targetRepo: targetRepo, spec: final}, nil
 }
 
 // PreviewIssue renders the exact issue that would be filed for the failure,
@@ -365,7 +369,7 @@ func (s *Service) generateFixPreviewForPattern(
 			Kind: gfKind, Title: gf.Title, Body: gf.Description, Diff: gf.Preview.Diff,
 			VerifyStatus: string(gf.Preview.Verify.Status), VerifySummary: gf.Preview.Verify.Summary,
 			VerifyOutput: gf.Preview.Verify.Output,
-		}, &previewEntry{kind: gfKind, targetRepo: s.cfg.EffectiveFixPRs().Repo.Owner + "/" + s.cfg.EffectiveFixPRs().Repo.Name,
+		}, &previewEntry{failureID: pattern.ID, patternHash: pattern.ContentHash, kind: gfKind, targetRepo: s.cfg.EffectiveFixPRs().Repo.Owner + "/" + s.cfg.EffectiveFixPRs().Repo.Name,
 			targetConfig: fixTargetFingerprint(s.cfg.EffectiveFixPRs()), fix: gf}, nil
 }
 
@@ -501,6 +505,25 @@ func (s *Service) reconcileEntry(ctx context.Context, entry *previewEntry, userT
 }
 
 func (s *Service) confirmEntry(ctx context.Context, entry *previewEntry, userToken string) (string, error) {
+	var result string
+	err := patternstate.WithLock(s.dataDir, func() error {
+		var err error
+		result, err = s.confirmEntryUnlocked(ctx, entry, userToken)
+		return err
+	})
+	return result, err
+}
+
+func (s *Service) confirmEntryUnlocked(ctx context.Context, entry *previewEntry, userToken string) (string, error) {
+	if entry != nil && entry.failureID != "" {
+		pattern, err := s.findPattern(entry.failureID)
+		if err != nil {
+			return "", err
+		}
+		if entry.patternHash == "" || pattern.ContentHash != entry.patternHash {
+			return "", ErrPreviewTargetChanged
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -567,6 +590,10 @@ func fixTargetFingerprint(eff project.FixPRs) string {
 // view until a failing build newer than the current watermark recurs. note is
 // an optional maintainer comment (e.g. the fixing PR). login attributes it.
 func (s *Service) Resolve(failureID, login, note string) error {
+	return patternstate.WithLock(s.dataDir, func() error { return s.resolveUnlocked(failureID, login, note) })
+}
+
+func (s *Service) resolveUnlocked(failureID, login, note string) error {
 	pa, err := s.findPattern(failureID)
 	if err != nil {
 		return err
@@ -581,35 +608,36 @@ func (s *Service) Resolve(failureID, login, note string) error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	st := resolve.Load(s.dataDir)
-	st.Resolved[failureID] = resolve.Entry{
-		ResolvedAt: time.Now().UTC().Format(time.RFC3339),
-		ResolvedBy: login,
-		Note:       strings.TrimSpace(note),
-		Watermark:  watermark,
-		Subject:    pa.Subject,
-	}
-	if err := st.Save(s.dataDir); err != nil {
-		return fmt.Errorf("saving resolved state: %w", err)
-	}
-	return nil
+	return resolve.Update(s.dataDir, func(st *resolve.State) bool {
+		st.Resolved[failureID] = resolve.Entry{
+			ResolvedAt: time.Now().UTC().Format(time.RFC3339), ResolvedBy: login,
+			Note: strings.TrimSpace(note), Watermark: watermark, Subject: pa.Subject,
+		}
+		return true
+	})
 }
 
 // Unresolve clears a pattern's resolved mark so it returns to the active view.
 func (s *Service) Unresolve(failureID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	return patternstate.WithLock(s.dataDir, func() error { return s.unresolveUnlocked(failureID) })
+}
 
-	st := resolve.Load(s.dataDir)
-	if !st.IsResolved(failureID) {
+func (s *Service) unresolveUnlocked(failureID string) error {
+	if !resolve.Load(s.dataDir).IsResolved(failureID) {
 		return ErrNotFound
 	}
-	delete(st.Resolved, failureID)
-	if err := st.Save(s.dataDir); err != nil {
-		return fmt.Errorf("saving resolved state: %w", err)
+	if _, err := s.findPattern(failureID); err != nil {
+		return err
 	}
-	return nil
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return resolve.Update(s.dataDir, func(st *resolve.State) bool {
+		if !st.IsResolved(failureID) {
+			return false
+		}
+		delete(st.Resolved, failureID)
+		return true
+	})
 }
 
 // stash persists a draft under a fresh token bound to the admin identity.

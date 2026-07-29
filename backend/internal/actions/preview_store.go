@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	previewStateVersion     = 1
+	previewStateVersion     = 2
 	maxPreviewStateBytes    = 64 << 20
 	maxPersistedPreviews    = 128
 	previewStatusReady      = "ready"
@@ -31,6 +31,8 @@ const (
 type persistedPreview struct {
 	Owner        string                      `json:"owner"`
 	Kind         string                      `json:"kind"`
+	FailureID    string                      `json:"failure_id,omitempty"`
+	PatternHash  string                      `json:"pattern_hash,omitempty"`
 	TargetRepo   string                      `json:"target_repo"`
 	TargetConfig string                      `json:"target_config,omitempty"`
 	CreatedAt    string                      `json:"created_at"`
@@ -268,8 +270,16 @@ func (s *previewStore) load() (*previewState, error) {
 	if err := json.Unmarshal(data, state); err != nil {
 		return nil, fmt.Errorf("decoding preview state: %w", err)
 	}
-	if state.Version != previewStateVersion || state.Previews == nil {
+	if state.Previews == nil || (state.Version != 1 && state.Version != previewStateVersion) {
 		return nil, fmt.Errorf("unsupported preview state version %d", state.Version)
+	}
+	if state.Version == 1 {
+		for key, record := range state.Previews {
+			if record != nil && (record.FailureID == "" || record.PatternHash == "") && (record.Status == previewStatusReady || record.Status == previewStatusRunning) {
+				delete(state.Previews, key)
+			}
+		}
+		state.Version = previewStateVersion
 	}
 	return state, nil
 }
@@ -283,7 +293,7 @@ func persistPreview(entry *previewEntry, owner string, now time.Time) (*persiste
 		return nil, ErrPreviewNotFound
 	}
 	record := &persistedPreview{
-		Owner: owner, Kind: entry.kind, TargetRepo: entry.targetRepo, TargetConfig: entry.targetConfig,
+		Owner: owner, Kind: entry.kind, FailureID: entry.failureID, PatternHash: entry.patternHash, TargetRepo: entry.targetRepo, TargetConfig: entry.targetConfig,
 		CreatedAt: now.Format(time.RFC3339Nano), Status: previewStatusReady,
 	}
 	switch entry.kind {
@@ -305,7 +315,7 @@ func restorePreview(record *persistedPreview) (*previewEntry, error) {
 	if record == nil {
 		return nil, ErrPreviewNotFound
 	}
-	entry := &previewEntry{kind: record.Kind, targetRepo: record.TargetRepo, targetConfig: record.TargetConfig}
+	entry := &previewEntry{failureID: record.FailureID, patternHash: record.PatternHash, kind: record.Kind, targetRepo: record.TargetRepo, targetConfig: record.TargetConfig}
 	switch record.Kind {
 	case "issue":
 		if record.Issue == nil {

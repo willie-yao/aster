@@ -317,6 +317,7 @@ export function TestDetailPage() {
   const fixPatterns: PatternAnalysis[] = selectedRun
     ? (data.pattern_analyses ?? []).filter(
         (pattern) =>
+          (!data.pattern_refresh || data.pattern_refresh.state === "current") &&
           pattern.systemic &&
           Boolean(pattern.id) &&
           Boolean(pattern.content_hash) &&

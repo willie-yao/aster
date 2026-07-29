@@ -18,6 +18,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/resolve"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
 )
 
 // writeJobDetail writes a jobs/<name>.json fixture under dataDir.
@@ -38,7 +39,7 @@ func writeJobDetail(t *testing.T, dataDir, name string, detail models.JobDetail)
 
 func systemicPattern() models.PatternAnalysis {
 	pa := models.PatternAnalysis{JobID: "periodic-x", Systemic: true, SharedRootCause: "etcd timeout"}
-	pa.ID = models.PatternID(pa)
+	models.AssignPatternIdentity(&pa)
 	return pa
 }
 
@@ -755,5 +756,44 @@ func TestTargetDriftRetiresPreviewForReplacement(t *testing.T) {
 	replacement := &previewEntry{kind: "issue", targetRepo: "new/issues", spec: issues.IssueSpec{Key: "same-action"}}
 	if _, err := service.stash("owner-token", replacement); err != nil {
 		t.Fatalf("replacement preview was blocked: %v", err)
+	}
+}
+
+func TestStalePatternIsNotActionable(t *testing.T) {
+	dataDir := t.TempDir()
+	pa := models.PatternAnalysis{JobID: "periodic-x", Systemic: true, SharedRootCause: "etcd timeout", SharedBuilds: []string{"100"}}
+	models.AssignPatternIdentity(&pa)
+	writeJobDetail(t, dataDir, "periodic-x.json", models.JobDetail{
+		JobID: "periodic-x", PatternAnalyses: []models.PatternAnalysis{pa},
+		PatternRefresh: &models.PatternRefreshStatus{State: models.PatternRefreshRetained, EvidenceAvailable: true},
+	})
+	if err := (&resolve.State{Resolved: map[string]resolve.Entry{pa.ID: {Watermark: "100"}}}).Save(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	s := NewService(&project.Config{}, dataDir, AIConfig{})
+	if err := s.Resolve(pa.ID, "alice", ""); err == nil || !strings.Contains(err.Error(), "stale pattern evidence") {
+		t.Fatalf("Resolve error = %v", err)
+	}
+	if err := s.Unresolve(pa.ID); err == nil || !strings.Contains(err.Error(), "stale pattern evidence") {
+		t.Fatalf("Unresolve error = %v", err)
+	}
+}
+
+func TestLegacyReadyPreviewWithoutFailureIDIsRejected(t *testing.T) {
+	dataDir := t.TempDir()
+	store := newPreviewStore(dataDir)
+	state := &previewState{Version: 1, Previews: map[string]*persistedPreview{
+		"legacy":  {Owner: tokenHash("owner"), Kind: "issue", TargetRepo: "owner/repo", Status: previewStatusReady, Issue: &issues.IssueSpec{Key: "pattern::job"}},
+		"unknown": {Owner: tokenHash("owner"), Kind: "issue", TargetRepo: "owner/repo", Status: previewStatusUnknown, Issue: &issues.IssueSpec{Key: "pattern::job"}},
+	}}
+	if err := statefile.WriteJSONDurable(store.path, state); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Version != previewStateVersion || loaded.Previews["legacy"] != nil || loaded.Previews["unknown"] == nil {
+		t.Fatalf("migrated state = %+v", loaded)
 	}
 }

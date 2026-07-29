@@ -815,3 +815,9 @@ path.
   module that builds the per-failure seed prompt.
 - `backend/internal/artifacts/` — the `Browser` interface and
   `GCSBrowser` implementation backing the filesystem tools.
+
+### Last-known-good pattern publication
+
+Recurring-pattern failures are isolated per job. A fresh systemic verdict replaces the prior pattern, a fresh non-systemic verdict removes it, and an eligible failed refresh retains the exact prior verdict when one exists. Jobs with no prior valid verdict publish no fabricated fallback. Jobs that are removed or no longer eligible do not retain stale patterns.
+
+Freshness lives in `pattern_refresh`, outside `PatternAnalysis`, so retained IDs, content hashes, timestamps, build lists, chats, resolved state, and remediation references remain unchanged. Retained patterns are labeled `Last known good`. They remain readable, and pattern chat remains available only when every referenced build is still in the current job window. Retained patterns cannot create notifications, issues, fixes, remediation attempts, or resolved-state pruning.

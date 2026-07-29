@@ -149,12 +149,33 @@ export interface TestFlakiness {
   }[];
 }
 
+export type PatternRefreshState = "current" | "retained" | "failed" | "not_applicable" | "unavailable";
+
+export interface PatternRefreshStatus {
+  state: PatternRefreshState;
+  last_successful_at?: string;
+  attempts?: number;
+  repairs?: number;
+  failure_category?: string;
+  evidence_available: boolean;
+}
+
+export interface PatternRefreshReport {
+  current: number;
+  retained: number;
+  failed: number;
+  unavailable: number;
+  not_applicable: number;
+  jobs?: Record<string, PatternRefreshStatus>;
+}
+
 export interface FlakinessReport {
   generated_at: string;
   most_flaky: TestFlakiness[];
   persistent_failures: TestFlakiness[];
   recently_broken: TestFlakiness[];
   recurring_patterns?: PatternAnalysis[];
+  pattern_refresh?: PatternRefreshReport;
 }
 
 export interface PatternAnalysis {
@@ -180,6 +201,7 @@ export interface JobDetail {
   repo: string;
   runs: BuildResult[];
   pattern_analyses?: PatternAnalysis[];
+  pattern_refresh?: PatternRefreshStatus;
 }
 
 export interface SearchEntry {

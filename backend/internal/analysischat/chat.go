@@ -305,6 +305,7 @@ type resolvedAnalysis struct {
 	testCase       models.TestCase
 	patterns       []models.PatternAnalysis
 	pattern        *models.PatternAnalysis
+	patternFresh   bool
 	evidenceBuilds []ArtifactBuild
 }
 
@@ -858,6 +859,9 @@ func resolvePatternAnalysis(ref AnalysisRef, detail models.JobDetail) (resolvedA
 		}
 		matchingRuns = append(matchingRuns, run)
 	}
+	if detail.PatternRefresh != nil && detail.PatternRefresh.State != models.PatternRefreshCurrent && len(matchingRuns) != len(shared) {
+		return resolvedAnalysis{}, ErrAnalysisNotFound
+	}
 	slices.SortStableFunc(matchingRuns, func(left, right models.BuildResult) int {
 		if !left.Started.Equal(right.Started) {
 			if left.Started.After(right.Started) {
@@ -911,6 +915,7 @@ func resolvePatternAnalysis(ref AnalysisRef, detail models.JobDetail) (resolvedA
 		ref: ref, jobID: ref.JobID, buildPrefix: builds[0].BuildPrefix,
 		build: cloneBuildInfo(builds[0].Build), testCase: testCase,
 		patterns: clonePatternAnalyses(detail.PatternAnalyses), pattern: &pattern,
+		patternFresh:   detail.PatternRefresh == nil || detail.PatternRefresh.State == models.PatternRefreshCurrent,
 		evidenceBuilds: cloneArtifactBuilds(builds),
 	}, nil
 }

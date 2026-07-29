@@ -172,6 +172,7 @@ export function NeedsAttention() {
 
               {recurring.map((pattern) => {
                 const confColor = confidenceColor(pattern.confidence);
+                const refreshStatus = data.pattern_refresh?.jobs?.[pattern.job_id ?? ""];
                 return (
                   <ListItemButton
                     key={pattern.job_id ?? pattern.subject}
@@ -221,6 +222,9 @@ export function NeedsAttention() {
                           display: { xs: "none", sm: "flex" },
                         }}
                       />
+                      {refreshStatus && refreshStatus.state !== "current" && (
+                        <Chip size="small" label="Last known good" color="warning" variant="outlined" />
+                      )}
                       <Chip
                         size="small"
                         label={pattern.confidence}
