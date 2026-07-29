@@ -695,6 +695,15 @@ Cached agentic entries are scoped to a specific build because answers cite
 build-specific paths and line numbers; the same test failing in two different
 builds gets two separate agentic analyses.
 
+After all individual analyses reach an accepted or unavailable terminal state,
+the fetcher persists `ai_cache.json` and `ai_traces.json` as a private analysis
+checkpoint before recurring-pattern correlation starts. This checkpoint is not
+public dashboard publication. If a later pattern or output stage fails, the next
+pass reloads the checkpoint from disk and applies the normal model, prompt,
+skill, critique, evidence-floor, build, and age gates. Successful pattern cache
+entries are also persisted before a joined pattern error returns, so only the
+missing or invalid correlations rerun.
+
 ### Pattern analysis
 
 The engine always runs one job-level correlation pass after every per-failure

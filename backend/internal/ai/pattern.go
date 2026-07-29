@@ -113,6 +113,7 @@ type PatternRepairAttempt struct {
 type PatternAnalyzeOptions struct {
 	AllowAmbiguityRepair bool
 	OnRepair             func(PatternRepairAttempt)
+	OnCacheHit           func()
 }
 
 // PatternFailureCategory is a privacy-safe pattern-attempt outcome.
@@ -306,6 +307,9 @@ func (s *Service) AnalyzePatternWithOptions(ctx context.Context, jobID, subject 
 	buildIDs := patternBuildIDs(failures)
 	if raw, ok := s.client.cache.Get(key); ok {
 		if cached, stats, err := parsePatternResponseWithStats(string(raw), buildIDs); err == nil {
+			if options.OnCacheHit != nil {
+				options.OnCacheHit()
+			}
 			recordPatternParseTrace(ctx, "cache", stats, nil)
 			return buildPatternAnalysis(subject, len(failures), cached, collectRelevantFiles(failures)), nil
 		}

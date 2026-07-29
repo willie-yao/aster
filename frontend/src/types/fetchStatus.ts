@@ -51,6 +51,7 @@ export interface FetchProgressStatus {
     existing_tasks_adopted: number;
     results_retrieved: number;
     result_retrieval_retries: number;
+    checkpoint_committed?: boolean;
   };
   patterns?: {
     eligible: number;
@@ -58,6 +59,7 @@ export interface FetchProgressStatus {
     failed: number;
     attempts: number;
     retries: number;
+    cache_hits?: number;
     repairs?: number;
     repair_succeeded?: number;
     repair_failed?: number;

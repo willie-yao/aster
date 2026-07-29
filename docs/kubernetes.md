@@ -228,6 +228,15 @@ Use this mode only for a concrete lifecycle requirement such as per-failure Task
 isolation or Task retry history. It has no Pages support or backward
 compatibility guarantee and is not recommended over in-process analysis.
 
+Both analysis runtimes commit private cache and trace checkpoints after the
+individual-analysis phase. The checkpoint uses the existing cache entry schema
+and acceptance gates. It does not publish dashboard JSON or side effects. A
+post-checkpoint failure reloads state from disk on the next pass, and successful
+pattern cache entries from a partially failed correlation pass remain reusable.
+Failures before the checkpoint, including project-bundle, state identity,
+decryption, cancellation, and systemic result authorization errors, restore the
+prior private generation.
+
 ```yaml
 mode: watch
 

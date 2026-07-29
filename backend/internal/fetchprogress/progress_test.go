@@ -1,6 +1,7 @@
 package fetchprogress
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -361,12 +362,13 @@ func TestTrackerTaskAttemptRetryAndCacheAccounting(t *testing.T) {
 	tracker.RecordCacheDisposition("work-cached", true)
 	tracker.RecordTaskPlanned("work-stale", "task-stale", true)
 	tracker.RecordCacheDisposition("work-stale", false)
+	tracker.MarkAnalysisCheckpoint()
 
 	status := tracker.Snapshot()
 	if status.Analyses.TaskAttempts != 3 || status.Analyses.Retries != 1 {
 		t.Fatalf("attempt accounting = %+v", status.Analyses)
 	}
-	if status.Analyses.NewWork != 1 || status.Analyses.AcceptedCacheHits != 1 || status.Analyses.StaleWork != 1 {
+	if status.Analyses.NewWork != 1 || status.Analyses.AcceptedCacheHits != 1 || status.Analyses.StaleWork != 1 || !status.Analyses.CheckpointCommitted {
 		t.Fatalf("work accounting = %+v", status.Analyses)
 	}
 	if status.Analyses.ExistingTasksAdopted != 1 || status.Analyses.ResultsRetrieved != 1 || status.Analyses.ResultRetrievalRetries != 2 {
@@ -395,6 +397,9 @@ func TestPassHistoryIsVersionedBoundedAndRecordsDurations(t *testing.T) {
 		tracker.RecordTaskState(fmt.Sprintf("work-%d", pass), "Succeeded", 2, false)
 		tracker.StartAnalysis()
 		tracker.FinishAnalysis(OutcomeSucceeded)
+		tracker.MarkAnalysisCheckpoint()
+		tracker.PlanPatterns(1)
+		tracker.RecordPatternAttempt(true, false, false, true, true, PatternFailureNone)
 		tracker.MarkPublished()
 		now = now.Add(time.Second)
 		tracker.FinishSuccess(true)
@@ -416,7 +421,8 @@ func TestPassHistoryIsVersionedBoundedAndRecordsDurations(t *testing.T) {
 		t.Fatalf("history = %+v", history)
 	}
 	first, last := history.Passes[0], history.Passes[len(history.Passes)-1]
-	if first.PassID == "000000000000000000000002" || last.TaskAttempts != 2 || last.Retries != 1 || !last.Published {
+	if first.PassID == "000000000000000000000002" || last.TaskAttempts != 2 || last.Retries != 1 || !last.Published ||
+		!last.CheckpointCommitted || last.PatternCacheHits != 1 {
 		t.Fatalf("bounded summaries first=%+v last=%+v", first, last)
 	}
 	if last.PhaseDurationsMS[string(PhaseSetup)] != 2000 || last.Outcome != OutcomeSucceeded {
@@ -498,11 +504,11 @@ func TestTrackerPatternAttemptAccounting(t *testing.T) {
 	tracker.StartPass(PassInitialWatch)
 	tracker.StartPhase(PhasePatterns)
 	tracker.PlanPatterns(3)
-	tracker.RecordPatternAttempt(false, false, false, false, PatternFailureAmbiguous)
-	tracker.RecordPatternAttempt(true, false, false, true, PatternFailureSchema)
-	tracker.RecordPatternAttempt(false, true, true, true, PatternFailureNone)
-	tracker.RecordPatternAttempt(false, false, false, true, PatternFailureSchema)
-	tracker.RecordPatternAttempt(false, false, false, true, PatternFailureBuilds)
+	tracker.RecordPatternAttempt(false, false, false, false, false, PatternFailureAmbiguous)
+	tracker.RecordPatternAttempt(false, true, false, false, true, PatternFailureSchema)
+	tracker.RecordPatternAttempt(false, false, true, true, true, PatternFailureNone)
+	tracker.RecordPatternAttempt(false, false, false, false, true, PatternFailureSchema)
+	tracker.RecordPatternAttempt(false, false, false, false, true, PatternFailureBuilds)
 
 	got := tracker.Snapshot().Patterns
 	want := PatternProgress{
@@ -512,5 +518,70 @@ func TestTrackerPatternAttemptAccounting(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("pattern progress = %+v, want %+v", got, want)
+	}
+}
+
+func TestReadAcceptsPreviousCheckpointFreeStatusSchema(t *testing.T) {
+	status := testStatus(time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC))
+	status.SchemaVersion = 2
+	status.Analyses.CheckpointCommitted = false
+	status.Patterns.CacheHits = 0
+	path := filepath.Join(t.TempDir(), "status.json")
+	data, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Read(path); err != nil {
+		t.Fatalf("reading previous status schema: %v", err)
+	}
+}
+
+func TestReadHistoryAcceptsPreviousCheckpointFreeSchema(t *testing.T) {
+	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+	history := History{SchemaVersion: 1, Passes: []PassSummary{{
+		RunID: "run", PassID: "pass", PassType: PassOneShot,
+		StartedAt: now, CompletedAt: now.Add(time.Second), Outcome: OutcomeSucceeded,
+	}}}
+	path := HistoryPath(t.TempDir())
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(history)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadHistory(path); err != nil {
+		t.Fatalf("reading previous history schema: %v", err)
+	}
+}
+
+func TestTrackerRecordsPatternCacheHitAtomically(t *testing.T) {
+	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+	invalidWrite := false
+	tracker := newTracker(t.TempDir(), "sha-test", trackerOptions{
+		now:   func() time.Time { return now },
+		newID: func() string { return "0123456789abcdef01234567" },
+		write: func(_ string, status Status) error {
+			if status.Patterns.CacheHits > status.Patterns.Completed {
+				invalidWrite = true
+			}
+			return nil
+		},
+		writeHistory: func(string, History) error { return nil },
+		logf:         func(string, ...any) {},
+	})
+	tracker.StartPass(PassInitialWatch)
+	tracker.StartPhase(PhasePatterns)
+	tracker.PlanPatterns(1)
+	tracker.RecordPatternAttempt(true, false, false, true, true, PatternFailureNone)
+	got := tracker.Snapshot().Patterns
+	if invalidWrite || got.CacheHits != 1 || got.Completed != 1 {
+		t.Fatalf("invalidWrite=%t pattern progress=%+v", invalidWrite, got)
 	}
 }

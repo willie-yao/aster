@@ -91,7 +91,11 @@ func TestAnalyzePattern_CacheHit_NoSecondCall(t *testing.T) {
 		t.Fatalf("first call: %v", err)
 	}
 	// Second call with the same failure set must be served from cache.
-	pa, err := s.AnalyzePattern(context.Background(), "job", "job", in)
+	cacheHits := 0
+	pa, err := s.AnalyzePatternWithOptions(context.Background(), "job", "job", in, PatternAnalyzeOptions{
+		AllowAmbiguityRepair: true,
+		OnCacheHit:           func() { cacheHits++ },
+	})
 	if err != nil {
 		t.Fatalf("second call: %v", err)
 	}
@@ -100,6 +104,9 @@ func TestAnalyzePattern_CacheHit_NoSecondCall(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&srv.calls); got != 1 {
 		t.Errorf("expected 1 model call (second cached), got %d", got)
+	}
+	if cacheHits != 1 {
+		t.Errorf("cache hits = %d, want 1", cacheHits)
 	}
 }
 

@@ -21,6 +21,12 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prowbuild"
 )
 
+var (
+	saveContainerAnalysisState = func(store *analysisruntime.ContainerStateStore) error { return store.Save() }
+	saveAnalysisRuntimeCache   = func(runtime *analysisruntime.Runtime) error { return runtime.SaveCache() }
+	saveAnalysisTraceStore     = func(store *ai.TraceStore, path string) error { return store.Save(path) }
+)
+
 // analyzeFailuresWithAI runs the dashboard-owned analyzer on every failed test.
 func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.JobDetail, flakinessReport models.FlakinessReport) error {
 	consecutiveMap := make(map[string]int)
@@ -214,17 +220,26 @@ schedule:
 	if systemicErr != nil {
 		return systemicErr
 	}
-	if container != nil && ctx.Err() != nil {
+	if ctx.Err() != nil {
 		return ctx.Err()
 	}
 	log.Printf("🤖 AI analysis complete (%d transient skipped)", transientSkipped.Load())
 	if n := judgeRan.Load(); n > 0 {
 		log.Printf("⚖️ semantic judge: ran on %d, objected on %d, revised %d", n, judgeObjected.Load(), judgeRevised.Load())
 	}
+	if err := p.persistIndividualAnalysisCheckpoint(container, runtime, traceStore); err != nil {
+		return err
+	}
+	if err := p.commitAnalysisCheckpoint(); err != nil {
+		return fmt.Errorf("committing completed analysis checkpoint: %w", err)
+	}
+	p.markProgressAnalysisCheckpoint()
 	p.startProgressPhase(fetchprogress.PhasePatterns)
 
 	if container != nil {
-		warnOnAnalysisPersistence("container analysis state", container.StateStore().Save)
+		// Container analysis wrote the checkpoint outside the retained runtime.
+		// Reload it before pattern cache writes so new individual entries survive.
+		p.aiRuntime = nil
 		runtime, err = p.ensureAnalysisRuntime(ctx)
 		if err != nil {
 			log.Printf("Warning: cross-build analysis runtime setup failed: %v", err)
@@ -255,6 +270,7 @@ schedule:
 		OnAttempt: func(attempt patterns.Attempt) {
 			if p.progress != nil {
 				p.progress.RecordPatternAttempt(
+					attempt.CacheHit,
 					attempt.Repair,
 					attempt.Retry,
 					attempt.Succeeded,
@@ -264,20 +280,41 @@ schedule:
 			}
 		},
 	}
-	if err := analyzePatternsAcrossBuilds(ctx, service, details, patternOptions); err != nil {
-		return fmt.Errorf("cross-build pattern analysis: %w", err)
+	patternErr := analyzePatternsAcrossBuilds(ctx, service, details, patternOptions)
+	persistErr := p.persistRuntimeAnalysisState(runtime, traceStore)
+	if persistErr == nil {
+		persistErr = p.commitAnalysisCheckpoint()
+		if persistErr != nil {
+			persistErr = fmt.Errorf("committing completed pattern checkpoint: %w", persistErr)
+		}
 	}
-	warnOnAnalysisPersistence("AI cache", runtime.SaveCache)
-	warnOnAnalysisPersistence("AI traces", func() error {
-		return traceStore.Save(filepath.Join(p.opts.OutDir, output.AITraceFilename))
-	})
-	return nil
+	if patternErr != nil {
+		patternErr = fmt.Errorf("cross-build pattern analysis: %w", patternErr)
+	}
+	return errors.Join(patternErr, persistErr)
 }
 
-func warnOnAnalysisPersistence(name string, save func() error) {
-	if err := save(); err != nil {
-		log.Printf("Warning: failed to save %s: %v", name, err)
+func (p *pipeline) persistIndividualAnalysisCheckpoint(container containerFailureAnalyzer, runtime *analysisruntime.Runtime, traces *ai.TraceStore) error {
+	if container != nil {
+		if err := saveContainerAnalysisState(container.StateStore()); err != nil {
+			return fmt.Errorf("persisting completed container analysis: %w", err)
+		}
+		return nil
 	}
+	return p.persistRuntimeAnalysisState(runtime, traces)
+}
+
+func (p *pipeline) persistRuntimeAnalysisState(runtime *analysisruntime.Runtime, traces *ai.TraceStore) error {
+	if err := saveAnalysisRuntimeCache(runtime); err != nil {
+		return fmt.Errorf("persisting AI cache: %w", err)
+	}
+	if traces == nil {
+		return fmt.Errorf("persisting AI traces: trace store is unavailable")
+	}
+	if err := saveAnalysisTraceStore(traces, filepath.Join(p.opts.OutDir, output.AITraceFilename)); err != nil {
+		return fmt.Errorf("persisting AI traces: %w", err)
+	}
+	return nil
 }
 
 func (p *pipeline) ensureAnalysisRuntime(ctx context.Context) (*analysisruntime.Runtime, error) {

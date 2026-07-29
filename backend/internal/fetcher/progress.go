@@ -142,6 +142,12 @@ func (p *pipeline) cancelQueuedProgressAnalyses() {
 	}
 }
 
+func (p *pipeline) markProgressAnalysisCheckpoint() {
+	if p.progress != nil {
+		p.progress.MarkAnalysisCheckpoint()
+	}
+}
+
 func (p *pipeline) skipProgressAnalysis() {
 	if p.progress != nil {
 		p.progress.SkipAnalysis()
