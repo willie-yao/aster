@@ -859,6 +859,9 @@ func resolvePatternAnalysis(ref AnalysisRef, detail models.JobDetail) (resolvedA
 		}
 		matchingRuns = append(matchingRuns, run)
 	}
+	if detail.PatternRefresh != nil && detail.PatternRefresh.State != models.PatternRefreshCurrent && len(matchingRuns) != len(shared) {
+		return resolvedAnalysis{}, ErrAnalysisNotFound
+	}
 	slices.SortStableFunc(matchingRuns, func(left, right models.BuildResult) int {
 		if !left.Started.Equal(right.Started) {
 			if left.Started.After(right.Started) {

@@ -18,6 +18,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/resolve"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
 )
 
 // writeJobDetail writes a jobs/<name>.json fixture under dataDir.
@@ -769,5 +770,24 @@ func TestStalePatternIsNotActionable(t *testing.T) {
 	s := NewService(&project.Config{}, dataDir, AIConfig{})
 	if err := s.Resolve(pa.ID, "alice", ""); err == nil || !strings.Contains(err.Error(), "stale pattern evidence") {
 		t.Fatalf("Resolve error = %v", err)
+	}
+}
+
+func TestLegacyReadyPreviewWithoutFailureIDIsRejected(t *testing.T) {
+	dataDir := t.TempDir()
+	store := newPreviewStore(dataDir)
+	state := &previewState{Version: 1, Previews: map[string]*persistedPreview{
+		"legacy":  {Owner: tokenHash("owner"), Kind: "issue", TargetRepo: "owner/repo", Status: previewStatusReady, Issue: &issues.IssueSpec{Key: "pattern::job"}},
+		"unknown": {Owner: tokenHash("owner"), Kind: "issue", TargetRepo: "owner/repo", Status: previewStatusUnknown, Issue: &issues.IssueSpec{Key: "pattern::job"}},
+	}}
+	if err := statefile.WriteJSONDurable(store.path, state); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Version != previewStateVersion || loaded.Previews["legacy"] != nil || loaded.Previews["unknown"] == nil {
+		t.Fatalf("migrated state = %+v", loaded)
 	}
 }
