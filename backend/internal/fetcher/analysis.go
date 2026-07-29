@@ -266,10 +266,8 @@ schedule:
 		},
 		OnAttempt: func(attempt patterns.Attempt) {
 			if p.progress != nil {
-				if attempt.CacheHit {
-					p.progress.RecordPatternCacheHit()
-				}
 				p.progress.RecordPatternAttempt(
+					attempt.CacheHit,
 					attempt.Repair,
 					attempt.Retry,
 					attempt.Succeeded,

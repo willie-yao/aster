@@ -645,13 +645,8 @@ func (t *Tracker) PlanPatterns(total int) {
 	})
 }
 
-// RecordPatternCacheHit records one accepted recurring-pattern cache entry.
-func (t *Tracker) RecordPatternCacheHit() {
-	t.update(true, func(status *Status) { status.Patterns.CacheHits++ })
-}
-
 // RecordPatternAttempt records one bounded correlation attempt.
-func (t *Tracker) RecordPatternAttempt(repair, retry, succeeded, final bool, category PatternFailureCategory) {
+func (t *Tracker) RecordPatternAttempt(cacheHit, repair, retry, succeeded, final bool, category PatternFailureCategory) {
 	t.update(true, func(status *Status) {
 		if repair {
 			status.Patterns.Repairs++
@@ -672,6 +667,9 @@ func (t *Tracker) RecordPatternAttempt(repair, retry, succeeded, final bool, cat
 			return
 		}
 		status.Patterns.Attempts++
+		if cacheHit {
+			status.Patterns.CacheHits++
+		}
 		if retry {
 			status.Patterns.Retries++
 		}
