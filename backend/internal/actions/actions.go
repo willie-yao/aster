@@ -206,15 +206,19 @@ func (s *Service) findPattern(id string) (*models.PatternAnalysis, error) {
 // repo. It forces the patterns trigger: the admin explicitly asked to file
 // this, so the project's configured triggers do not gate the on-demand action.
 func (s *Service) buildIssueSpec(failureID string) (issues.IssueSpec, string, error) {
-	pa, err := s.findPattern(failureID)
+	pattern, err := s.findPattern(failureID)
 	if err != nil {
 		return issues.IssueSpec{}, "", err
 	}
+	return s.buildIssueSpecForPattern(*pattern)
+}
+
+func (s *Service) buildIssueSpecForPattern(pattern models.PatternAnalysis) (issues.IssueSpec, string, error) {
 	eff := s.cfg.EffectiveIssues()
 	if eff.Repo == nil || eff.Repo.Owner == "" || eff.Repo.Name == "" {
 		return issues.IssueSpec{}, "", fmt.Errorf("no target repo resolved (set issues.repo or branding.source_repo)")
 	}
-	report := models.FlakinessReport{RecurringPatterns: []models.PatternAnalysis{*pa}}
+	report := models.FlakinessReport{RecurringPatterns: []models.PatternAnalysis{pattern}}
 	specs := issues.BuildSpecs(issues.BuildInput{
 		Report:       report,
 		Triggers:     []string{project.IssueTriggerPatterns},
@@ -222,7 +226,7 @@ func (s *Service) buildIssueSpec(failureID string) (issues.IssueSpec, string, er
 		DashboardURL: s.cfg.Branding.SiteURL,
 	})
 	if len(specs) == 0 {
-		return issues.IssueSpec{}, "", fmt.Errorf("failure %s is not an actionable systemic pattern", failureID)
+		return issues.IssueSpec{}, "", fmt.Errorf("failure %s is not an actionable systemic pattern", pattern.ID)
 	}
 	return specs[0], eff.Repo.Owner + "/" + eff.Repo.Name, nil
 }
@@ -305,7 +309,11 @@ func (s *Service) buildFixManager(userToken string) (*fixpr.Manager, error) {
 
 // generateIssuePreview renders an issue draft without caching or posting it.
 func (s *Service) generateIssuePreview(ctx context.Context, failureID, userToken, instruction string) (PreviewResult, *previewEntry, error) {
-	spec, targetRepo, err := s.buildIssueSpec(failureID)
+	pattern, err := s.findPattern(failureID)
+	if err != nil {
+		return PreviewResult{}, nil, err
+	}
+	spec, targetRepo, err := s.buildIssueSpecForPattern(*pattern)
 	if err != nil {
 		return PreviewResult{}, nil, err
 	}
@@ -320,10 +328,6 @@ func (s *Service) generateIssuePreview(ctx context.Context, failureID, userToken
 		if c := s.aiClient(); c != nil {
 			final = issues.ReviseBody(ctx, c, final, instruction)
 		}
-	}
-	pattern, err := s.findPattern(failureID)
-	if err != nil {
-		return PreviewResult{}, nil, err
 	}
 	return PreviewResult{Kind: "issue", Title: final.Title, Body: final.Body},
 		&previewEntry{failureID: failureID, patternHash: pattern.ContentHash, kind: "issue", targetRepo: targetRepo, spec: final}, nil
@@ -616,6 +620,12 @@ func (s *Service) Resolve(failureID, login, note string) error {
 
 // Unresolve clears a pattern's resolved mark so it returns to the active view.
 func (s *Service) Unresolve(failureID string) error {
+	if !resolve.Load(s.dataDir).IsResolved(failureID) {
+		return ErrNotFound
+	}
+	if _, err := s.findPattern(failureID); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

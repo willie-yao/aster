@@ -767,9 +767,15 @@ func TestStalePatternIsNotActionable(t *testing.T) {
 		JobID: "periodic-x", PatternAnalyses: []models.PatternAnalysis{pa},
 		PatternRefresh: &models.PatternRefreshStatus{State: models.PatternRefreshRetained, EvidenceAvailable: true},
 	})
+	if err := (&resolve.State{Resolved: map[string]resolve.Entry{pa.ID: {Watermark: "100"}}}).Save(dataDir); err != nil {
+		t.Fatal(err)
+	}
 	s := NewService(&project.Config{}, dataDir, AIConfig{})
 	if err := s.Resolve(pa.ID, "alice", ""); err == nil || !strings.Contains(err.Error(), "stale pattern evidence") {
 		t.Fatalf("Resolve error = %v", err)
+	}
+	if err := s.Unresolve(pa.ID); err == nil || !strings.Contains(err.Error(), "stale pattern evidence") {
+		t.Fatalf("Unresolve error = %v", err)
 	}
 }
 
