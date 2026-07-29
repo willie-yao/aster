@@ -410,11 +410,15 @@ func (p *pipeline) refreshWithAnalysisContext(fetchCtx, analysisCtx context.Cont
 	if transaction == nil {
 		return result, err
 	}
-	if restoreErr := transaction.Restore(); restoreErr != nil {
-		return nil, errors.Join(err, fmt.Errorf("restoring AI refresh state: %w", restoreErr))
-	}
+	return nil, p.rollbackAIRefresh(transaction, err)
+}
+
+func (p *pipeline) rollbackAIRefresh(transaction *aiRefreshStateTransaction, refreshErr error) error {
 	p.invalidateAnalysisRuntime()
-	return nil, err
+	if restoreErr := transaction.Restore(); restoreErr != nil {
+		return errors.Join(refreshErr, fmt.Errorf("restoring AI refresh state: %w", restoreErr))
+	}
+	return refreshErr
 }
 
 func (p *pipeline) invalidateAnalysisRuntime() {

@@ -842,3 +842,21 @@ func TestAnalysisCheckpointPersistenceFailureRestoresRefreshState(t *testing.T) 
 		t.Fatalf("checkpoint failure changed refresh state\nbefore=%v\nafter=%v", before, after)
 	}
 }
+
+func TestRollbackFailureInvalidatesInMemoryAnalysisState(t *testing.T) {
+	p := &pipeline{
+		aiRuntime:         &analysisruntime.Runtime{},
+		containerAnalyzer: &resultLifecycleAnalyzer{},
+	}
+	transaction := &aiRefreshStateTransaction{files: []aiRefreshFileSnapshot{{
+		path: filepath.Join(t.TempDir(), ai.CacheFilename), backupPath: filepath.Join(t.TempDir(), "missing-backup"), exists: true,
+	}}}
+	refreshErr := errors.New("refresh failed")
+	err := p.rollbackAIRefresh(transaction, refreshErr)
+	if !errors.Is(err, refreshErr) || !strings.Contains(err.Error(), "restoring AI refresh state") {
+		t.Fatalf("rollback error = %v", err)
+	}
+	if p.aiRuntime != nil || p.containerAnalyzer != nil {
+		t.Fatal("rollback failure retained in-memory AI state")
+	}
+}
