@@ -133,6 +133,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, patterns []models.PatternAna
 		if entry != nil {
 			syncLinkedIssue(entry, r.issues[pattern.JobID])
 		}
+		if len(details) > 0 && !models.PatternIsCurrent(details, pattern.JobID) {
+			continue
+		}
 		key := keyFor(pattern)
 		fix, ok := fixes[key]
 		if (!ok || strings.TrimSpace(fix.URL) == "") && r.search != nil && r.targetRepo != "" {

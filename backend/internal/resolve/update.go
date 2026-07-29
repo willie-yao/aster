@@ -31,12 +31,12 @@ func Update(dir string, mutate func(*State) bool) error {
 	return state.Save(dir)
 }
 
-// RemoveIDs removes selected resolutions from the latest locked state.
-func RemoveIDs(dir string, ids []string) error {
+// RemoveMatching removes only entries that still match the staged values.
+func RemoveMatching(dir string, expected map[string]Entry) error {
 	return Update(dir, func(state *State) bool {
 		changed := false
-		for _, id := range ids {
-			if _, ok := state.Resolved[id]; ok {
+		for id, want := range expected {
+			if current, ok := state.Resolved[id]; ok && current == want {
 				delete(state.Resolved, id)
 				changed = true
 			}

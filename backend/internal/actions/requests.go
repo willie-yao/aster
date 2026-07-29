@@ -284,6 +284,9 @@ func (s *Service) generateRequestWith(id, userToken string, generate requestPrev
 	s.rmu.Unlock()
 
 	preview, entry, err := generate(ctx, failureID, kind, userToken, instruction)
+	if err == nil {
+		err = s.validatePatternSnapshot(failureID, entry.patternHash)
+	}
 
 	s.rmu.Lock()
 	request = s.requests.Requests[id]
@@ -338,11 +341,14 @@ func (s *Service) notifyRequestReady(view ActionRequestView) {
 	view = current.ActionRequestView
 	notifier := s.requestNotify
 	s.rmu.Unlock()
-	if notifier == nil {
+	if notifier == nil || s.validatePatternSnapshot(view.FailureID, view.PatternHash) != nil {
 		return
 	}
 	var notifyErr error
 	for attempt := 0; attempt < 3; attempt++ {
+		if s.validatePatternSnapshot(view.FailureID, view.PatternHash) != nil {
+			return
+		}
 		notifyCtx, notifyCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		notifyErr = notifier(notifyCtx, view)
 		notifyCancel()
@@ -531,6 +537,17 @@ func (s *Service) expireRequestsLocked(now time.Time) bool {
 		changed = true
 	}
 	return changed
+}
+
+func (s *Service) validatePatternSnapshot(failureID, patternHash string) error {
+	pattern, err := s.findPattern(failureID)
+	if err != nil {
+		return err
+	}
+	if patternHash == "" || pattern.ContentHash != patternHash {
+		return ErrPreviewTargetChanged
+	}
+	return nil
 }
 
 func (s *Service) saveRequestsLocked() error {

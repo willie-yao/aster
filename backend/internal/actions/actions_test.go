@@ -39,7 +39,7 @@ func writeJobDetail(t *testing.T, dataDir, name string, detail models.JobDetail)
 
 func systemicPattern() models.PatternAnalysis {
 	pa := models.PatternAnalysis{JobID: "periodic-x", Systemic: true, SharedRootCause: "etcd timeout"}
-	pa.ID = models.PatternID(pa)
+	models.AssignPatternIdentity(&pa)
 	return pa
 }
 

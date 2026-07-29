@@ -274,11 +274,11 @@ func TestCancelReadyRequest(t *testing.T) {
 }
 
 func TestConfigureAsyncRequestsRetriesPersistedReadyEmail(t *testing.T) {
-	service, _ := requestTestService(t)
+	service, pattern := requestTestService(t)
 	now := time.Now().UTC()
 	state := actionRequestState{Version: 1, Requests: map[string]*actionRequest{
 		"request-ready": {ActionRequestView: ActionRequestView{
-			ID: "request-ready", FailureID: "pattern", PatternHash: "hash", Owner: "alice", Kind: "create-issue", Status: RequestReady,
+			ID: "request-ready", FailureID: pattern.ID, PatternHash: pattern.ContentHash, Owner: "alice", Kind: "create-issue", Status: RequestReady,
 			CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339),
 			ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
 			Preview:   &PreviewResult{Kind: "issue", Title: "Ready", Body: "Body"},

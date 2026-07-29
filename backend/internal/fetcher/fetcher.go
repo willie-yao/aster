@@ -551,12 +551,12 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 	// also write resolved.json on an admin action; both use atomic writes, and a
 	// rare lost update self-heals on the next pass (same trade-off as the other
 	// *_state.json files).
-	var stagedReopenedIDs []string
+	stagedReopened := map[string]resolve.Entry{}
 	if rs := resolve.Load(opts.OutDir); len(rs.Resolved) > 0 {
 		if pruned, changed := rs.Prune(patterns.CurrentRecurring(details)); changed {
 			for id := range rs.Resolved {
 				if _, kept := pruned.Resolved[id]; !kept {
-					stagedReopenedIDs = append(stagedReopenedIDs, id)
+					stagedReopened[id] = rs.Resolved[id]
 				}
 			}
 		}
@@ -566,11 +566,11 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 	if err := writeAllOutput(opts.OutDir, cfg, dashboard, details, flakinessReport, searchIndex); err != nil {
 		return nil, fmt.Errorf("writing output: %w", err)
 	}
-	if len(stagedReopenedIDs) > 0 {
-		if err := resolve.RemoveIDs(opts.OutDir, stagedReopenedIDs); err != nil {
+	if len(stagedReopened) > 0 {
+		if err := resolve.RemoveMatching(opts.OutDir, stagedReopened); err != nil {
 			log.Printf("Warning: failed to save resolved state after publication: %v", err)
 		} else {
-			log.Printf("↩ re-opened %d resolved pattern(s) after recurrence", len(stagedReopenedIDs))
+			log.Printf("↩ re-opened %d resolved pattern(s) after recurrence", len(stagedReopened))
 		}
 	}
 	p.markProgressPublished()
