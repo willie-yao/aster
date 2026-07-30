@@ -39,6 +39,7 @@ export interface FetchProgressStatus {
   analyses: {
     logical_total: number;
     accepted_cache_hits: number;
+    compatible_results_reused?: number;
     new_work: number;
     stale_work: number;
     cache_rejections?: {

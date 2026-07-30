@@ -32,6 +32,9 @@ const (
 	// ProjectBundleSchemaVersion identifies the JSON bundle schema.
 	ProjectBundleSchemaVersion = 1
 	// ContainerAnalyzerContractVersion is implemented by the analyzer binary.
+	// Bump it when transport, tool behavior, cache or result schemas, or analysis
+	// semantics change outside the prompt, model, skill, and critique hashes.
+	// Packaging, server, frontend, and unrelated image changes do not require a bump.
 	ContainerAnalyzerContractVersion = "dashboard-failure-analyzer-v5"
 	// MaxProjectBundleBytes stays below the Linux per-environment-value limit.
 	MaxProjectBundleBytes = 96 << 10

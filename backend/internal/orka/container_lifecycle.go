@@ -33,7 +33,7 @@ const (
 	containerStaleActiveTaskGrace = 10 * time.Minute
 	// ContainerAnalysisBundlePruneLimit bounds cleanup work per fetch run.
 	ContainerAnalysisBundlePruneLimit = 100
-	// ContainerAnalysisTaskRetention bounds terminal Task history.
+	// ContainerAnalysisTaskRetention bounds failed, cancelled, and non-reusable Task history.
 	ContainerAnalysisTaskRetention = 24 * time.Hour
 	// ContainerAnalysisTaskPruneLimit bounds terminal Task cleanup per fetch run.
 	ContainerAnalysisTaskPruneLimit = 100
@@ -472,6 +472,7 @@ func PruneContainerAnalysisTasks(ctx context.Context, client ContainerAnalysisMa
 		}
 		return left.Before(right)
 	})
+	retainedSucceeded := retainedSucceededContainerAnalysisTasks(items, now)
 	cutoff := now.Add(-ContainerAnalysisTaskRetention)
 	deleted := 0
 	deleteCandidates := 0
@@ -488,6 +489,10 @@ func PruneContainerAnalysisTasks(ctx context.Context, client ContainerAnalysisMa
 			continue
 		}
 		terminalExpired := TerminalPhase(state.Phase) && !created.Time.After(cutoff)
+		_, _, _, reusableMetadata := reusableContainerAnalysisTaskMetadata(&items[i])
+		if state.Phase == "Succeeded" && state.ResultAvailable && reusableMetadata && !state.CompletionTime.IsZero() && !state.CompletionTime.After(now.Add(containerResultClockSkew)) {
+			terminalExpired = now.Sub(state.CompletionTime) > ContainerAnalysisSucceededTaskRetention || !retainedSucceeded[items[i].GetName()]
+		}
 		activeExpired := !TerminalPhase(state.Phase) && staleActiveContainerAnalysisTask(&items[i], now)
 		if !terminalExpired && !activeExpired {
 			continue
@@ -505,6 +510,48 @@ func PruneContainerAnalysisTasks(ctx context.Context, client ContainerAnalysisMa
 		}
 	}
 	return deleted, nil
+}
+
+func retainedSucceededContainerAnalysisTasks(items []unstructured.Unstructured, now time.Time) map[string]bool {
+	type reusableTask struct {
+		name        string
+		workItem    string
+		completedAt time.Time
+		createdAt   time.Time
+	}
+	candidates := make([]reusableTask, 0, len(items))
+	for i := range items {
+		state, err := taskStateFromObject(&items[i])
+		workItem, _, _, validMetadata := reusableContainerAnalysisTaskMetadata(&items[i])
+		if err != nil || state.Deleting || state.Phase != "Succeeded" || !state.ResultAvailable || state.CompletionTime.IsZero() ||
+			!validMetadata || now.Sub(state.CompletionTime) > ContainerAnalysisSucceededTaskRetention || state.CompletionTime.After(now.Add(containerResultClockSkew)) {
+			continue
+		}
+		createdAt := items[i].GetCreationTimestamp().Time
+		if createdAt.IsZero() {
+			continue
+		}
+		candidates = append(candidates, reusableTask{items[i].GetName(), workItem, state.CompletionTime, createdAt})
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if !candidates[i].completedAt.Equal(candidates[j].completedAt) {
+			return candidates[i].completedAt.After(candidates[j].completedAt)
+		}
+		if !candidates[i].createdAt.Equal(candidates[j].createdAt) {
+			return candidates[i].createdAt.After(candidates[j].createdAt)
+		}
+		return candidates[i].name < candidates[j].name
+	})
+	retained := map[string]bool{}
+	counts := map[string]int{}
+	for _, candidate := range candidates {
+		if counts[candidate.workItem] >= containerCompatibleResultCandidateLimit {
+			continue
+		}
+		counts[candidate.workItem]++
+		retained[candidate.name] = true
+	}
+	return retained
 }
 
 func staleActiveContainerAnalysisTask(task *unstructured.Unstructured, now time.Time) bool {

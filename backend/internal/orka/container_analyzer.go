@@ -237,25 +237,7 @@ func (a *ContainerAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, 
 	cacheSeed := a.state.CacheSeed(taskRequest)
 	workItem, correlationLabels := containerAnalysisCorrelation(a.opts.Progress, taskRequest)
 
-	resources, err := BuildContainerAnalysisResources(ContainerAnalysisTaskSpec{
-		Namespace:           a.opts.Namespace,
-		NamePrefix:          "dashboard-analyzer",
-		Image:               a.opts.Image,
-		Args:                []string{"-data-dir=/tmp/prow-ai-analyzer"},
-		Timeout:             a.opts.TaskTimeout.String(),
-		MaxRetries:          a.opts.MaxRetries,
-		ProjectDir:          a.opts.ProjectDir,
-		Request:             taskRequest,
-		CacheSeed:           cacheSeed,
-		StateKeyFingerprint: containerStateKeyFingerprint(a.opts.StateKey),
-		Environment:         containerAnalyzerEnvironment(a.opts),
-		SecretEnv: []SecretEnvVar{
-			{Name: "AI_TOKEN", SecretName: a.opts.ModelSecretName, SecretKey: a.opts.ModelTokenKey},
-			{Name: analysisruntime.ContainerStateKeyEnv, SecretName: a.opts.StateSecretName, SecretKey: a.opts.StateSecretKey},
-		},
-		Labels: a.opts.Labels, TaskLabels: correlationLabels, NodeSelector: a.opts.NodeSelector,
-		Tolerations: a.opts.Tolerations, Affinity: a.opts.Affinity,
-	})
+	resources, err := BuildContainerAnalysisResources(a.taskSpec(taskRequest, cacheSeed, correlationLabels))
 	if err != nil {
 		return ai.UnavailableFailureAnalysisResult(request.TestCase, err), err
 	}
@@ -334,6 +316,28 @@ func (a *ContainerAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, 
 	}
 	a.cleanupConsumedBundle(resources, state)
 	return result, nil
+}
+
+func (a *ContainerAnalyzer) taskSpec(request ai.FailureAnalysisRequest, cacheSeed map[string]ai.CacheEntry, taskLabels map[string]string) ContainerAnalysisTaskSpec {
+	return ContainerAnalysisTaskSpec{
+		Namespace:           a.opts.Namespace,
+		NamePrefix:          "dashboard-analyzer",
+		Image:               a.opts.Image,
+		Args:                []string{"-data-dir=/tmp/prow-ai-analyzer"},
+		Timeout:             a.opts.TaskTimeout.String(),
+		MaxRetries:          a.opts.MaxRetries,
+		ProjectDir:          a.opts.ProjectDir,
+		Request:             request,
+		CacheSeed:           cacheSeed,
+		StateKeyFingerprint: containerStateKeyFingerprint(a.opts.StateKey),
+		Environment:         containerAnalyzerEnvironment(a.opts),
+		SecretEnv: []SecretEnvVar{
+			{Name: "AI_TOKEN", SecretName: a.opts.ModelSecretName, SecretKey: a.opts.ModelTokenKey},
+			{Name: analysisruntime.ContainerStateKeyEnv, SecretName: a.opts.StateSecretName, SecretKey: a.opts.StateSecretKey},
+		},
+		Labels: a.opts.Labels, TaskLabels: taskLabels, NodeSelector: a.opts.NodeSelector,
+		Tolerations: a.opts.Tolerations, Affinity: a.opts.Affinity,
+	}
 }
 
 func (a *ContainerAnalyzer) recordCacheDisposition(workItem string, cacheSeedIncluded bool, delta analysisruntime.ContainerAnalysisState) {

@@ -33,6 +33,10 @@ type analysisPlanner interface {
 	NeedsAnalysis(context.Context, *http.Client, *models.BuildResult, *models.TestCase, int) bool
 }
 
+type compatibleResultReuser interface {
+	ReuseCompatibleResult(context.Context, ai.FailureAnalysisRequest, ai.AgenticCachePolicy) (ai.FailureAnalysisResult, bool, error)
+}
+
 type aiWork struct {
 	jobID       string
 	buildPrefix string
@@ -142,6 +146,31 @@ func planContainerAnalysisWork(ctx context.Context, httpClient *http.Client, wor
 				plan.BuildSubjects.AcceptedCacheHits++
 			}
 			continue
+		}
+		if reason == ai.CacheRejectedMissing && planner != nil {
+			if reuser, ok := container.(compatibleResultReuser); ok {
+				request := item.request(consecutiveMap)
+				policy, err := analysisruntime.FailureCachePolicy(ctx, httpClient, request, planner)
+				if err != nil {
+					return nil, fetchprogress.AnalysisPlan{}, err
+				}
+				result, reused, err := reuser.ReuseCompatibleResult(ctx, request, policy)
+				if err != nil {
+					return nil, fetchprogress.AnalysisPlan{}, err
+				}
+				if reused {
+					item.tc.AISummary = result.Summary
+					item.tc.AIAnalysis = result.Analysis
+					if item.tc.AIAnalysis != nil {
+						item.tc.AIAnalysis.FileLinks = linkResolver.Resolve(ctx, httpClient, item.tc)
+					}
+					plan.CompatibleResultsReused++
+					if buildSubject {
+						plan.BuildSubjects.Completed++
+					}
+					continue
+				}
+			}
 		}
 		plan.CacheRejections.Add(string(reason))
 		if reason == ai.CacheRejectedMissing {

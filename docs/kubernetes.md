@@ -331,6 +331,15 @@ transient-persistence checks. `logical_total` still counts every subject, while
 An image-only analyzer update keeps the cache key stable but still changes the
 content-addressed Task identity when new execution is required.
 
+If private cache is missing, the worker checks up to five newest succeeded
+managed Tasks for the same work item in the release-scoped analysis namespace.
+It accepts only results with the current bundle digest, state-key fingerprint,
+analyzer contract, durable result reference, authenticated encrypted state, and
+current quality floors. Compatible result reuse increments
+`compatible_results_reused`; it does not increment `existing_tasks_adopted` or
+`task_attempts`. Succeeded Tasks are retained for seven days, with at most five
+newest reusable Tasks per work item.
+
 To return to cron mode without starting a fetch, upgrade with the same chart
 and values while changing only the mode and suspension setting:
 

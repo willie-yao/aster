@@ -697,6 +697,18 @@ the same age, investigation-floor, critique, skill, model, prompt, and transient
 persistence checks. Analyzer image changes do not change the cache key. Public
 `jobs/*.json` analysis remains presentation data and is never used as cache.
 
+After a private cache miss, the worker may reuse a retained succeeded analyzer
+Task result from another image. Reuse requires the current work item, bundle
+digest, state-key fingerprint, analyzer contract, authenticated result, encrypted
+state identity, and every current quality floor to match. A reused result is
+promoted into the private cache and persisted by the normal analysis checkpoint.
+It is reported separately from exact Task adoption.
+
+`ContainerAnalyzerContractVersion` is the cross-image execution boundary. Bump
+it when transport, tool behavior, cache or result schemas, or analysis semantics
+change in a way not already covered by prompt, model, skill, or critique hashes.
+Packaging, frontend, server, and unrelated image changes do not require a bump.
+
 Cached agentic entries are scoped to a specific build because answers cite
 build-specific paths and line numbers; the same test failing in two different
 builds gets two separate agentic analyses.

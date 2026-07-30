@@ -56,6 +56,28 @@ type ContainerStateIdentity struct {
 	CacheKey      string
 }
 
+type containerStateDecryptionError struct{ err error }
+
+func (e *containerStateDecryptionError) Error() string { return e.err.Error() }
+func (e *containerStateDecryptionError) Unwrap() error { return e.err }
+
+type containerStateIdentityError struct{ err error }
+
+func (e *containerStateIdentityError) Error() string { return e.err.Error() }
+func (e *containerStateIdentityError) Unwrap() error { return e.err }
+
+// IsContainerStateDecryptionError reports authenticated-state decryption failure.
+func IsContainerStateDecryptionError(err error) bool {
+	var target *containerStateDecryptionError
+	return errors.As(err, &target)
+}
+
+// IsContainerStateIdentityError reports a decrypted Task or cache-key mismatch.
+func IsContainerStateIdentityError(err error) bool {
+	var target *containerStateIdentityError
+	return errors.As(err, &target)
+}
+
 // NewContainerStateIdentity builds the expected encrypted-state identity.
 func NewContainerStateIdentity(namespace, taskName string, request ai.FailureAnalysisRequest) ContainerStateIdentity {
 	return ContainerStateIdentity{TaskNamespace: strings.TrimSpace(namespace), TaskName: strings.TrimSpace(taskName), CacheKey: FailureCacheKey(request)}
@@ -184,7 +206,7 @@ func DecryptContainerAnalysisState(encoded string, key []byte, identity Containe
 	}
 	plaintext, err := gcm.Open(nil, payload[:gcm.NonceSize()], payload[gcm.NonceSize():], containerStateAssociatedData(identity))
 	if err != nil {
-		return state, fmt.Errorf("decrypt container analysis state: %w", err)
+		return state, &containerStateDecryptionError{err: fmt.Errorf("decrypt container analysis state: %w", err)}
 	}
 	if len(plaintext) > maxContainerStateBytes {
 		return state, fmt.Errorf("container analysis state exceeds %d bytes", maxContainerStateBytes)
@@ -300,13 +322,45 @@ func (s *ContainerStateStore) AcceptCachedFailure(ctx context.Context, httpClien
 		return ai.FailureAnalysisResult{}, ai.CacheRejectedMissing, fmt.Errorf("analysis reuse planner is required")
 	}
 	request = CanonicalFailureAnalysisRequest(request)
-	run := models.BuildResult{BuildInfo: request.Build}
-	testCase := request.TestCase
-	policy := planner.FailureCachePolicy(ctx, httpClient, &run, &testCase, max(1, request.ConsecutiveFailures))
+	policy, err := FailureCachePolicy(ctx, httpClient, request, planner)
+	if err != nil {
+		return ai.FailureAnalysisResult{}, ai.CacheRejectedMissing, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	result, reason := ai.LookupAgenticCache(s.cache, FailureCacheKey(request), policy)
 	return result, reason, nil
+}
+
+// FailureCachePolicy returns the current policy for one canonical request.
+func FailureCachePolicy(ctx context.Context, httpClient *http.Client, request ai.FailureAnalysisRequest, planner *ai.Service) (ai.AgenticCachePolicy, error) {
+	if planner == nil {
+		return ai.AgenticCachePolicy{}, fmt.Errorf("analysis reuse planner is required")
+	}
+	request = CanonicalFailureAnalysisRequest(request)
+	run := models.BuildResult{BuildInfo: request.Build}
+	testCase := request.TestCase
+	return planner.FailureCachePolicy(ctx, httpClient, &run, &testCase, max(1, request.ConsecutiveFailures)), nil
+}
+
+// StageCacheEntry adds one validated entry for the next private checkpoint.
+func (s *ContainerStateStore) StageCacheEntry(entry ai.CacheEntry) error {
+	if s == nil || s.cache == nil {
+		return fmt.Errorf("container state store is required")
+	}
+	entries := map[string]ai.CacheEntry{entry.Key: entry}
+	if err := validateContainerCacheEntries(entry.Key, entries); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cache.Merge(entries) {
+		return nil
+	}
+	if _, ok := s.cache.Lookup(entry.Key); !ok {
+		return fmt.Errorf("container cache entry was not staged")
+	}
+	return nil
 }
 
 // TraceStore returns the shared private trace store.
@@ -397,7 +451,7 @@ func validateContainerStateIdentity(state ContainerAnalysisState, identity Conta
 		return fmt.Errorf("container state identity is incomplete")
 	}
 	if state.TaskNamespace != identity.TaskNamespace || state.TaskName != identity.TaskName || state.CacheKey != identity.CacheKey {
-		return fmt.Errorf("container analysis state identity mismatch")
+		return &containerStateIdentityError{err: fmt.Errorf("container analysis state identity mismatch")}
 	}
 	return nil
 }

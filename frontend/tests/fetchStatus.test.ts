@@ -15,7 +15,7 @@ import {
 import type { FetchProgressStatus, FetchStatusResponse } from "../src/types/fetchStatus.js";
 
 const activeStatus: FetchProgressStatus = {
-  schema_version: 5,
+  schema_version: 6,
   run_id: "safe-run",
   pass_id: "safe-pass",
   pass_type: "lightweight-watch",
@@ -32,6 +32,7 @@ const activeStatus: FetchProgressStatus = {
   analyses: {
     logical_total: 61,
     accepted_cache_hits: 0,
+    compatible_results_reused: 0,
     new_work: 0,
     stale_work: 0,
     cache_rejections: {
