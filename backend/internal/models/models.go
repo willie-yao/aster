@@ -151,18 +151,15 @@ type AIAnalysis struct {
 	// Cache gates require the current version.
 	CritiqueVersion int `json:"critique_version,omitempty"`
 
-	// SkillSetHash fingerprints the loaded recipe set for this analysis.
-	// Edits to triggers, required evidence, or procedure force re-analysis.
+	// SkillSetHash fingerprints the loaded recipe set that produced this analysis.
 	// Empty when no recipes are loaded.
 	SkillSetHash string `json:"skill_set_hash,omitempty"`
 
-	// ModelHash fingerprints the model + endpoint that produced this
-	// analysis. A provider or model swap changes it, forcing re-analysis so a
-	// new model does not serve the prior model's cached verdict.
+	// ModelHash fingerprints the model and endpoint that produced this analysis.
 	ModelHash string `json:"model_hash,omitempty"`
 
-	// PromptHash fingerprints the effective prompt contract for this analysis.
-	// Build subjects include their module prompt so causal-guidance edits refresh them.
+	// PromptHash fingerprints the effective prompt contract that produced this analysis.
+	// Build subjects include their module prompt.
 	PromptHash string `json:"prompt_hash,omitempty"`
 
 	// FileLinks maps cited source-file paths to verified GitHub URLs.

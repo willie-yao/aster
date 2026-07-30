@@ -14,8 +14,8 @@ cases below.
 | Dashboard assets return 404 | `branding.base_path` does not match the Pages repository. | Set it to `/<host-repo>` with no trailing slash. |
 | Pages site is not deployed | Pages is not configured to use GitHub Actions. | Enable Pages with `gh api .../pages -X POST -F build_type=workflow`. |
 | Private endpoint times out | The GitHub-hosted runner cannot reach the network. | Use Kubernetes-native mode, a self-hosted runner, or `skip-fetch` with committed data. |
-| Analysis is generic | The project prompt lacks architecture, artifact layout, or real failure signatures. | Expand `prompts/system.md` and let prompt fingerprinting refresh affected entries. |
-| Cached analysis came from the old provider | A replacement analysis has not completed yet. | Provider fingerprinting refreshes it automatically. Clear the cache only for an immediate full rebaseline. |
+| Analysis is generic | The project prompt lacks architecture, artifact layout, or real failure signatures. | Expand `prompts/system.md`. The update applies to new analyses; use an intentional cache rebaseline if existing entries must be replaced. |
+| Cached analysis came from the old provider | Existing reusable entries retain their provider provenance after a provider change. | Keep the retained analysis or run an intentional full cache rebaseline. |
 | `Propose fix` reports unavailable | The process cannot find `opencode` or git. | Use a runner or custom server image containing both tools. |
 
 ## Useful checks

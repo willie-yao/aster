@@ -395,40 +395,33 @@ func TestAgentic_CacheHit(t *testing.T) {
 	}
 }
 
-// TestAgentic_CacheMiss_StaleTransientOnPersistence verifies the on-disk agentic
-// cache invalidates a transient entry once the failure is persistent: a second
-// call with ConsecutiveFailures>=threshold re-analyzes instead of serving the
-// cached transient verdict.
-func TestAgentic_CacheMiss_StaleTransientOnPersistence(t *testing.T) {
+func TestAgentic_CacheHit_TransientVerdictAfterPersistence(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 	transient := `{"summary":"flaky","is_transient":true,"root_cause":"infra","severity":"Low","suggested_fix":"re-run","relevant_files":[]}`
-	real := `{"summary":"real","is_transient":false,"root_cause":"bug","severity":"High","suggested_fix":"fix it","relevant_files":[]}`
-	srv.push(200, chatRespFinal(transient)) // first call: caches transient
-	srv.push(200, chatRespFinal(real))      // re-analysis after invalidation
+	srv.push(200, chatRespFinal(transient))
 
 	client := newAgenticTestClient(t, srv.URL)
 	browser := &fakeBrowser{}
 	opts := AgenticOptions{MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}
 
-	// First call: not yet persistent, transient verdict is accepted and cached.
 	in1 := newTestAgenticInputs(t, browser, opts)
-	if _, _, err := client.doAnalyzeAgentic(context.Background(), in1, "agentic:test:staletransient", "sys", "user"); err != nil {
+	_, first, err := client.doAnalyzeAgentic(context.Background(), in1, "agentic:test:staletransient", "sys", "user")
+	if err != nil {
 		t.Fatalf("first call: %v", err)
 	}
 
-	// Second call: now persistent. The cached transient entry must be a miss.
 	in2 := newTestAgenticInputs(t, browser, opts)
 	in2.ConsecutiveFailures = transientPersistThreshold
-	_, a2, err := client.doAnalyzeAgentic(context.Background(), in2, "agentic:test:staletransient", "sys", "user")
+	summary, second, err := client.doAnalyzeAgentic(context.Background(), in2, "agentic:test:staletransient", "sys", "user")
 	if err != nil {
 		t.Fatalf("second call: %v", err)
 	}
-	if a2.CacheHit {
-		t.Error("expected a cache miss (re-analysis) for a persistent failure with a cached transient verdict")
+	if !second.CacheHit || !summary.IsTransient || second.RootCause != first.RootCause {
+		t.Fatalf("cached transient result = summary=%+v analysis=%+v", summary, second)
 	}
-	if got := atomic.LoadInt32(&srv.calls); got != 2 {
-		t.Errorf("expected 2 server calls (initial + re-analysis), got %d", got)
+	if got := atomic.LoadInt32(&srv.calls); got != 1 {
+		t.Fatalf("server calls = %d, want 1", got)
 	}
 }
 
@@ -2201,20 +2194,13 @@ func loadAgenticSkillsForTest(t *testing.T, recipes map[string]string) *skills.S
 	return set
 }
 
-// TestAgentic_CacheInvalidatedBySkillSetHashChange verifies recipe edits
-// invalidate entries stamped with a different SkillSetHash.
-func TestAgentic_CacheInvalidatedBySkillSetHashChange(t *testing.T) {
+func TestAgentic_CacheRetainedBySkillSetHashChange(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-
-	// Clean draft so critique passes and the entry gets cached. The
-	// recipe does not trigger on this draft, so no skill-evidence
-	// check fires; the entry caches with the current SkillSetHash.
 	cleanFinal := `{"summary":"deep","is_transient":false,"root_cause":"vnet peering misconfigured","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 42; reapply.","relevant_files":["kustomize/cluster-template.yaml"]}`
 	srv.push(200, chatRespFinal(cleanFinal))
 
 	client := newAgenticTestClient(t, srv.URL)
-
 	set := loadAgenticSkillsForTest(t, map[string]string{
 		"unrelated": `
 id: unrelated-recipe
@@ -2224,40 +2210,22 @@ required_evidence:
     any_of: ["x"]
 `,
 	})
-
 	opts := AgenticOptions{
-		MaxIters:           5,
-		ModelByteBudget:    100_000,
-		GCSByteBudget:      100_000,
-		Timeout:            30 * time.Second,
-		CritiqueMaxRetries: 2,
+		MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+		Timeout: 30 * time.Second, CritiqueMaxRetries: 2,
 	}
 	in := newTestAgenticInputs(t, &fakeBrowser{}, opts)
 	in.Skills = set
 
-	const key = "agentic:test:skillhash-invalidate"
+	const key = "agentic:test:skillhash-retained"
 	_, analysis, err := client.doAnalyzeAgentic(context.Background(), in, key, "sys", "user")
 	if err != nil {
 		t.Fatalf("first call: %v", err)
 	}
-	if !analysis.CritiquePassed {
-		t.Fatalf("first call: expected CritiquePassed=true, got %+v", analysis)
-	}
-	if analysis.SkillSetHash != set.Hash() {
-		t.Fatalf("first call: SkillSetHash = %q, want %q", analysis.SkillSetHash, set.Hash())
+	if !analysis.CritiquePassed || analysis.SkillSetHash != set.Hash() {
+		t.Fatalf("first analysis = %+v, skill hash = %q", analysis, set.Hash())
 	}
 
-	// A second call with the same set should serve from cache.
-	before := atomic.LoadInt32(&srv.calls)
-	_, _, err = client.doAnalyzeAgentic(context.Background(), in, key, "sys", "user")
-	if err != nil {
-		t.Fatalf("second call (same set): %v", err)
-	}
-	if atomic.LoadInt32(&srv.calls) != before {
-		t.Errorf("second call with same set hit model; expected cache hit")
-	}
-
-	// Simulate a consumer recipe edit by loading a set with a different hash.
 	edited := loadAgenticSkillsForTest(t, map[string]string{
 		"unrelated": `
 id: unrelated-recipe
@@ -2271,19 +2239,20 @@ required_evidence:
 		t.Fatal("test setup: edited skill set should have different hash")
 	}
 
-	srv.push(200, chatRespFinal(cleanFinal))
-	before2 := atomic.LoadInt32(&srv.calls)
 	in2 := newTestAgenticInputs(t, &fakeBrowser{}, opts)
 	in2.Skills = edited
 	_, analysis2, err := client.doAnalyzeAgentic(context.Background(), in2, key, "sys", "user")
 	if err != nil {
-		t.Fatalf("third call: %v", err)
+		t.Fatalf("second call: %v", err)
 	}
-	if atomic.LoadInt32(&srv.calls) == before2 {
-		t.Error("expected re-analysis after SkillSetHash change (server hit), got cache hit")
+	if !analysis2.CacheHit {
+		t.Fatal("skill-set change missed the cache")
 	}
-	if analysis2.SkillSetHash != edited.Hash() {
-		t.Errorf("third call: SkillSetHash = %q, want %q (post-edit)", analysis2.SkillSetHash, edited.Hash())
+	if analysis2.SkillSetHash != set.Hash() {
+		t.Fatalf("cached skill provenance = %q, want %q", analysis2.SkillSetHash, set.Hash())
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 1 {
+		t.Fatalf("server calls = %d, want 1", got)
 	}
 }
 

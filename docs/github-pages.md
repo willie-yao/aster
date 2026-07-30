@@ -151,11 +151,12 @@ is empty or analysis is unavailable.
 
 ## Manual full cache reset
 
-Provider, model, prompt, and skill changes invalidate affected analyses
-automatically. A clear-cache workflow is therefore not generated for new
-projects. If an operator needs an immediate full rebaseline, add a small workflow
+Provider, model, prompt, and skill changes affect new analyses but do not
+invalidate existing reusable entries. If an operator needs a full rebaseline
+before the follow-up cache generation control is available, add a small workflow
 that calls `.github/workflows/reusable-clear-cache.yml` with the same engine ref
-and `project_dir` as the deploy workflow.
+and `project_dir` as the deploy workflow. This reset is destructive and should
+remain an emergency or migration tool.
 
 ## Private AI endpoints
 

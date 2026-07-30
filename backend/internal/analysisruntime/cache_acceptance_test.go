@@ -44,6 +44,23 @@ func TestContainerStateStoreAcceptCachedFailure(t *testing.T) {
 		return raw
 	}
 	validData := cacheData(policyFor(request), 50)
+	stickyData := func() json.RawMessage {
+		var data map[string]any
+		if err := json.Unmarshal(validData, &data); err != nil {
+			t.Fatal(err)
+		}
+		data["skill_set_hash"] = "old-skills"
+		data["model_hash"] = "old-model"
+		data["prompt_hash"] = "old-prompt"
+		data["is_transient"] = true
+		raw, err := json.Marshal(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}()
+	stickyRequest := request
+	stickyRequest.ConsecutiveFailures = 3
 	buildRequest := request
 	buildRequest.TestCase.Source = models.TestCaseSourceBuild
 	cases := []struct {
@@ -53,7 +70,9 @@ func TestContainerStateStoreAcceptCachedFailure(t *testing.T) {
 		want    ai.CacheRejectionReason
 	}{
 		{name: "accepted", entry: ai.CacheEntry{Key: FailureCacheKey(request), CreatedAt: now, Data: validData}, request: request},
+		{name: "configuration and transient changes remain accepted", entry: ai.CacheEntry{Key: FailureCacheKey(stickyRequest), CreatedAt: now, Data: stickyData}, request: stickyRequest},
 		{name: "expired", entry: ai.CacheEntry{Key: FailureCacheKey(request), CreatedAt: now.Add(-31 * 24 * time.Hour), Data: validData}, request: request, want: ai.CacheRejectedExpired},
+		{name: "future timestamp", entry: ai.CacheEntry{Key: FailureCacheKey(request), CreatedAt: now.Add(6 * time.Minute), Data: validData}, request: request, want: ai.CacheRejectedExpired},
 		{name: "malformed", entry: ai.CacheEntry{Key: FailureCacheKey(request), CreatedAt: now, Data: json.RawMessage(`{}`)}, request: request, want: ai.CacheRejectedMalformed},
 		{name: "build failure ignores junit evidence floor", entry: ai.CacheEntry{
 			Key: FailureCacheKey(buildRequest), CreatedAt: now, Data: cacheData(policyFor(buildRequest), 0),

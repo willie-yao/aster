@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -184,20 +186,18 @@ func TestContainerAnalyzerCompatibleResultSafetyFailures(t *testing.T) {
 	request := containerTaskRequest()
 	key := bytes.Repeat([]byte{0x7b}, 32)
 	for _, tc := range []struct {
-		name        string
-		resultErr   error
-		wrongTask   bool
-		wrongCache  bool
-		wrongBundle bool
-		minTools    int
-		wantErr     bool
-		wantAuth    bool
+		name       string
+		resultErr  error
+		wrongTask  bool
+		wrongCache bool
+		minTools   int
+		wantErr    bool
+		wantAuth   bool
 	}{
 		{name: "authorization", resultErr: &ResultHTTPError{StatusCode: http.StatusUnauthorized}, wantErr: true, wantAuth: true},
 		{name: "candidate result unavailable", resultErr: &ResultHTTPError{StatusCode: http.StatusBadGateway}},
 		{name: "encrypted identity", wrongTask: true, wantErr: true},
 		{name: "cache identity", wrongCache: true, wantErr: true},
-		{name: "bundle identity", wrongBundle: true},
 		{name: "below floor", minTools: 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -229,9 +229,6 @@ func TestContainerAnalyzerCompatibleResultSafetyFailures(t *testing.T) {
 			workItem := fetchprogress.WorkItemID(analysisruntime.FailureCacheKey(request))
 			candidateName := "old-candidate"
 			candidateBundle := prepared.BundleDigest
-			if tc.wrongBundle {
-				candidateBundle = strings.Repeat("c", 64)
-			}
 			kube.listed = []unstructured.Unstructured{compatibleTaskObject(opts.Namespace, candidateName, workItem, candidateBundle, containerStateKeyFingerprint(key), "Succeeded", true, time.Now().UTC().Add(-time.Minute))}
 			identityName := candidateName
 			if tc.wrongTask {
@@ -320,10 +317,11 @@ func compatibleResultPolicy(opts ContainerAnalyzerOptions) ai.AgenticCachePolicy
 }
 
 func compatibleFailureResult(policy ai.AgenticCachePolicy) ai.FailureAnalysisResult {
+	generatedAt := time.Now().UTC().Format(time.RFC3339)
 	return ai.FailureAnalysisResult{
-		Summary: &models.AISummary{GeneratedAt: "2026-07-30T18:00:00Z", Summary: "summary"},
+		Summary: &models.AISummary{GeneratedAt: generatedAt, Summary: "summary"},
 		Analysis: &models.AIAnalysis{
-			GeneratedAt: "2026-07-30T18:00:00Z", Mode: ai.AgenticMode, Model: policy.Model,
+			GeneratedAt: generatedAt, Mode: ai.AgenticMode, Model: policy.Model,
 			RootCause: "root", Severity: "High", SuggestedFix: "fix", RelevantFiles: []string{"a.go"},
 			ToolCalls: 2, ContextBytes: 100, GCSBytes: 50, CritiquePassed: true, CritiqueVersion: 999,
 			ModelHash: policy.ModelHash, PromptHash: policy.PromptHash,
@@ -455,6 +453,158 @@ func TestContainerAnalyzerReusesAuthenticatedCacheEntry(t *testing.T) {
 	got := store.CacheSeed(request)[cacheKey]
 	if !got.CreatedAt.Equal(entry.CreatedAt) {
 		t.Fatalf("promoted cache time = %s, want %s", got.CreatedAt, entry.CreatedAt)
+	}
+}
+
+func TestContainerAnalyzerReusesAuthenticatedCacheAcrossPolicyChanges(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		mutate        func(*ai.FailureAnalysisResult, *ai.AgenticCachePolicy)
+		changeProject func(*testing.T, string)
+	}{
+		{name: "skill set", mutate: func(result *ai.FailureAnalysisResult, policy *ai.AgenticCachePolicy) {
+			result.Analysis.SkillSetHash = "old-skills"
+			policy.SkillSetHash = "current-skills"
+		}, changeProject: func(t *testing.T, projectDir string) {
+			if err := os.MkdirAll(filepath.Join(projectDir, "skills"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(projectDir, "skills", "current.yaml"), []byte("id: current\ntriggers: [current]\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "model and endpoint", mutate: func(result *ai.FailureAnalysisResult, policy *ai.AgenticCachePolicy) {
+			result.Analysis.ModelHash = ai.ModelFingerprint(ai.APIChatCompletions, "https://old-model.invalid/v1/chat/completions", "old-model")
+			policy.ModelHash = ai.ModelFingerprint(ai.APIChatCompletions, "https://current-model.invalid/v1/chat/completions", "current-model")
+		}},
+		{name: "prompt", mutate: func(result *ai.FailureAnalysisResult, policy *ai.AgenticCachePolicy) {
+			result.Analysis.PromptHash = "old-prompt"
+			policy.PromptHash = "current-prompt"
+		}, changeProject: func(t *testing.T, projectDir string) {
+			if err := os.WriteFile(filepath.Join(projectDir, "prompts", "system.md"), []byte("Changed prompt.\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "transient persistence", mutate: func(result *ai.FailureAnalysisResult, policy *ai.AgenticCachePolicy) {
+			result.Summary.IsTransient = true
+			policy.ConsecutiveFailures = 3
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			request := containerTaskRequest()
+			key := bytes.Repeat([]byte{0x70}, 32)
+			store, err := analysisruntime.NewContainerStateStore(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			opts := containerAnalyzerTestOptions(t, key)
+			kube := &compatibleResultKube{fakeContainerAnalyzerKube: &fakeContainerAnalyzerKube{fakeContainerResourceClient: &fakeContainerResourceClient{}}}
+			results := &compatibleResultAPI{values: map[string]struct {
+				raw string
+				ok  bool
+				err error
+			}{}}
+			analyzer, err := newContainerAnalyzer(opts, kube, results, store)
+			if err != nil {
+				t.Fatal(err)
+			}
+			policy := compatibleResultPolicy(opts)
+			result := compatibleFailureResult(policy)
+			tc.mutate(&result, &policy)
+			completedAt := time.Now().UTC().Add(-time.Minute)
+			cacheKey := analysisruntime.FailureCacheKey(request)
+			entry, err := ai.NewAgenticCacheEntry(cacheKey, result, completedAt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, bundleDigest, err := analysisruntime.BuildProjectBundleWithCache(opts.ProjectDir, ContainerAnalysisContractVersion, request, map[string]ai.CacheEntry{cacheKey: entry})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.changeProject != nil {
+				tc.changeProject(t, opts.ProjectDir)
+			}
+			candidateName := "old-policy"
+			workItem := fetchprogress.WorkItemID(cacheKey)
+			kube.listed = []unstructured.Unstructured{compatibleTaskObject(opts.Namespace, candidateName, workItem, bundleDigest, containerStateKeyFingerprint(key), "Succeeded", true, completedAt)}
+			results.values[candidateName] = struct {
+				raw string
+				ok  bool
+				err error
+			}{raw: compatibleRawResult(t, opts.Namespace, candidateName, request, key, result, map[string]ai.CacheEntry{cacheKey: entry}), ok: true}
+
+			got, reused, err := analyzer.ReuseCompatibleResult(t.Context(), request, policy)
+			if err != nil || !reused || !sameAgenticResult(got, result) {
+				t.Fatalf("reused=%t result=%+v error=%v", reused, got, err)
+			}
+			accepted, reason := ai.AcceptAgenticCacheEntry(store.CacheSeed(request)[cacheKey], cacheKey, policy)
+			if reason != ai.CacheAccepted || !sameAgenticResult(accepted, result) {
+				t.Fatalf("promoted cache reason=%q result=%+v", reason, accepted)
+			}
+		})
+	}
+}
+
+func TestContainerAnalyzerRejectsInconsistentAuthenticatedCacheResult(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*ai.FailureAnalysisResult)
+	}{
+		{name: "provenance", mutate: func(result *ai.FailureAnalysisResult) { result.Analysis.ModelHash = "different-model" }},
+		{name: "generation time", mutate: func(result *ai.FailureAnalysisResult) {
+			result.Summary.GeneratedAt = time.Now().UTC().Add(-time.Hour).Format(time.RFC3339)
+			result.Analysis.GeneratedAt = result.Summary.GeneratedAt
+		}},
+		{name: "analysis content", mutate: func(result *ai.FailureAnalysisResult) { result.Analysis.RootCause = "different root cause" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			request := containerTaskRequest()
+			key := bytes.Repeat([]byte{0x71}, 32)
+			store, err := analysisruntime.NewContainerStateStore(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			opts := containerAnalyzerTestOptions(t, key)
+			kube := &compatibleResultKube{fakeContainerAnalyzerKube: &fakeContainerAnalyzerKube{fakeContainerResourceClient: &fakeContainerResourceClient{}}}
+			results := &compatibleResultAPI{values: map[string]struct {
+				raw string
+				ok  bool
+				err error
+			}{}}
+			analyzer, err := newContainerAnalyzer(opts, kube, results, store)
+			if err != nil {
+				t.Fatal(err)
+			}
+			policy := compatibleResultPolicy(opts)
+			published := compatibleFailureResult(policy)
+			cached := compatibleFailureResult(policy)
+			tc.mutate(&cached)
+			completedAt := time.Now().UTC().Add(-time.Minute)
+			cacheKey := analysisruntime.FailureCacheKey(request)
+			entry, err := ai.NewAgenticCacheEntry(cacheKey, cached, completedAt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, bundleDigest, err := analysisruntime.BuildProjectBundleWithCache(opts.ProjectDir, ContainerAnalysisContractVersion, request, map[string]ai.CacheEntry{cacheKey: entry})
+			if err != nil {
+				t.Fatal(err)
+			}
+			candidateName := "old-inconsistent"
+			kube.listed = []unstructured.Unstructured{compatibleTaskObject(opts.Namespace, candidateName, fetchprogress.WorkItemID(cacheKey), bundleDigest, containerStateKeyFingerprint(key), "Succeeded", true, completedAt)}
+			results.values[candidateName] = struct {
+				raw string
+				ok  bool
+				err error
+			}{raw: compatibleRawResult(t, opts.Namespace, candidateName, request, key, published, map[string]ai.CacheEntry{cacheKey: entry}), ok: true}
+
+			_, reused, err := analyzer.ReuseCompatibleResult(t.Context(), request, policy)
+			if err != nil || reused {
+				t.Fatalf("reused=%t error=%v", reused, err)
+			}
+			if len(store.CacheSeed(request)) != 0 {
+				t.Fatal("inconsistent result was promoted")
+			}
+		})
 	}
 }
 

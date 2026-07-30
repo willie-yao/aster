@@ -88,19 +88,6 @@ func (a *ContainerAnalyzer) ReuseCompatibleResult(ctx context.Context, request a
 			}
 			continue
 		}
-		bundleMatches := candidate.BundleDigest == prepared.BundleDigest
-		if !bundleMatches && len(delta.CacheEntries) > 0 {
-			_, seededBundleDigest, bundleErr := analysisruntime.BuildProjectBundleWithCache(
-				a.opts.ProjectDir, ContainerAnalysisContractVersion, taskRequest, delta.CacheEntries,
-			)
-			if bundleErr != nil {
-				return ai.FailureAnalysisResult{}, false, bundleErr
-			}
-			bundleMatches = candidate.BundleDigest == seededBundleDigest
-		}
-		if !bundleMatches {
-			continue
-		}
 		entry, hasEntry := delta.CacheEntries[cacheKey]
 		if hasEntry {
 			cachedResult, reason := ai.AcceptAgenticCacheEntry(entry, cacheKey, policy)
@@ -213,8 +200,10 @@ func sameAgenticResult(left, right ai.FailureAnalysisResult) bool {
 	if left.Summary == nil || right.Summary == nil || left.Analysis == nil || right.Analysis == nil {
 		return false
 	}
-	return left.Summary.Summary == right.Summary.Summary &&
+	return left.Summary.GeneratedAt == right.Summary.GeneratedAt &&
+		left.Summary.Summary == right.Summary.Summary &&
 		left.Summary.IsTransient == right.Summary.IsTransient &&
+		left.Analysis.GeneratedAt == right.Analysis.GeneratedAt &&
 		left.Analysis.Mode == right.Analysis.Mode &&
 		left.Analysis.RootCause == right.Analysis.RootCause &&
 		left.Analysis.Severity == right.Analysis.Severity &&

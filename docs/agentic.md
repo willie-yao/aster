@@ -535,8 +535,9 @@ consumer recipes. Built-in IDs use the reserved `engine.` namespace, and any
 collision or malformed recipe is a startup error.
 
 Every cache entry carries the `skill_set_hash` fingerprint of the complete
-merged set. A selected engine-recipe edit, consumer-recipe edit, or profile
-selection change invalidates affected entries independently of the
+merged set. It records which recipes produced the analysis. Recipe edits and
+profile selection changes affect new analyses but do not invalidate reusable
+existing entries. Strengthening the enforced critique contract still requires a
 `critique_version` bump.
 
 **Inapplicable recipes do not block caching.** A recipe whose required
@@ -679,23 +680,27 @@ without exposing prompt or tool content.
 
 ### Cache semantics
 
-Agentic analyses are cached under `agentic:<module>:<job>:<build>:<hash>`. The
-engine records the analysis `mode` on each entry; an entry from a prior
-pipeline (or one below the current quality floors) is detected as stale on the
-next fetcher run and re-analyzed.
+Agentic analyses are cached under `agentic:<module>:<job>:<build>:<hash>`. A
+reusable entry must match that key, be no more than 30 days old, contain a valid
+agentic result, meet the current investigation floors, and have passed at least
+the current critique version.
 
 Entries also carry fingerprints for the composed prompt, model and endpoint,
-and loaded skill set, plus the factual `evidence_plan_covered` marker. Changing
-any fingerprint triggers incremental re-analysis on the next fetch. The marker
-only substitutes for the GCS-byte floor. The last usable result stays published
-until its replacement succeeds. A manual cache clear is only for an immediate
-full rebaseline.
+and loaded skill set, plus the factual `evidence_plan_covered` marker. These
+fingerprints are provenance only. Model, endpoint, prompt, skill, and
+transient-streak changes affect new analyses but do not invalidate an existing
+entry. The evidence marker can satisfy the GCS-byte floor. A manual cache clear
+remains available for an intentional full rebaseline until the follow-up cache
+generation control is available.
 
 In Kubernetes container mode, the worker applies valid private cache entries
-before it constructs analyzer ConfigMaps or Tasks. The worker and analyzer use
-the same age, investigation-floor, critique, skill, model, prompt, and transient
-persistence checks. Analyzer image changes do not change the cache key. Public
-`jobs/*.json` analysis remains presentation data and is never used as cache.
+before it constructs analyzer ConfigMaps or Tasks. The worker, analyzer, build
+reuse path, and compatible Task reuse path use the same key, age,
+investigation-floor, critique, and malformed-state checks. Analyzer image
+changes do not change the cache key. The in-process path can reuse analyses
+attached to prior `jobs/*.json` with cached completed builds. The container
+worker instead requires authenticated private-cache or compatible Task state and
+never promotes public JSON as a private cache entry or container cache seed.
 
 After a private cache miss, the worker may reuse a retained succeeded analyzer
 Task result from another image. Reuse requires the current work item, bundle
@@ -706,7 +711,8 @@ It is reported separately from exact Task adoption.
 
 `ContainerAnalyzerContractVersion` is the cross-image execution boundary. Bump
 it when transport, tool behavior, cache or result schemas, or analysis semantics
-change in a way not already covered by prompt, model, skill, or critique hashes.
+change in a way that makes retained Task results incompatible and is not already
+covered by cache identity, investigation floors, or the critique version.
 Packaging, frontend, server, and unrelated image changes do not require a bump.
 
 Cached agentic entries are scoped to a specific build because answers cite
@@ -717,8 +723,8 @@ After all individual analyses reach an accepted or unavailable terminal state,
 the fetcher persists `ai_cache.json` and `ai_traces.json` as a private analysis
 checkpoint before recurring-pattern correlation starts. This checkpoint is not
 public dashboard publication. If a later pattern or output stage fails, the next
-pass reloads the checkpoint from disk and applies the normal model, prompt,
-skill, critique, evidence-floor, build, and age gates. Successful pattern cache
+pass reloads the checkpoint from disk and applies the normal key, age,
+investigation-floor, critique, and malformed-state gates. Successful pattern cache
 entries are also persisted before a joined pattern error returns, so only the
 missing or invalid correlations rerun.
 

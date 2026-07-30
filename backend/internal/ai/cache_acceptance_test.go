@@ -16,11 +16,11 @@ func TestAgenticCacheAcceptanceReasons(t *testing.T) {
 			Summary: "summary", RootCause: "root cause", Severity: "High", SuggestedFix: "fix",
 		},
 		ToolCalls: 3, GCSBytes: 100, CritiquePassed: true, CritiqueVersion: currentCritiqueVersion,
-		SkillSetHash: "skills", ModelHash: "model", PromptHash: "prompt",
+		SkillSetHash: "cached-skills", Model: "cached-model-name", ModelHash: "cached-model", PromptHash: "cached-prompt",
 	}
 	policy := AgenticCachePolicy{
 		MinToolCalls: 2, MinGCSBytes: 50, ConsecutiveFailures: 1,
-		SkillSetHash: "skills", Model: "model-name", ModelHash: "model", PromptHash: "prompt", Now: now,
+		SkillSetHash: "cached-skills", Model: "current-model", ModelHash: "cached-model", PromptHash: "cached-prompt", Now: now,
 	}
 	entry := func(data agenticCacheData) CacheEntry {
 		raw, err := json.Marshal(data)
@@ -36,17 +36,28 @@ func TestAgenticCacheAcceptanceReasons(t *testing.T) {
 		want   CacheRejectionReason
 	}{
 		{name: "accepted", entry: entry(base), policy: policy},
+		{name: "skill provenance differs", entry: entry(base), policy: func() AgenticCachePolicy { p := policy; p.SkillSetHash = "current-skills"; return p }()},
+		{name: "model provenance differs", entry: entry(base), policy: func() AgenticCachePolicy { p := policy; p.ModelHash = "current-model"; return p }()},
+		{name: "endpoint fingerprint differs", entry: entry(base), policy: func() AgenticCachePolicy {
+			p := policy
+			p.ModelHash = ModelFingerprint(APIChatCompletions, "https://new-model.invalid/v1/chat/completions", "current-model")
+			return p
+		}()},
+		{name: "prompt provenance differs", entry: entry(base), policy: func() AgenticCachePolicy { p := policy; p.PromptHash = "current-prompt"; return p }()},
+		{name: "transient verdict became persistent", entry: func() CacheEntry { d := base; d.IsTransient = true; return entry(d) }(), policy: func() AgenticCachePolicy {
+			p := policy
+			p.ConsecutiveFailures = transientPersistThreshold
+			return p
+		}()},
 		{name: "expired", entry: func() CacheEntry { e := entry(base); e.CreatedAt = now.Add(-cacheMaxAge - time.Second); return e }(), policy: policy, want: CacheRejectedExpired},
+		{name: "future timestamp", entry: func() CacheEntry { e := entry(base); e.CreatedAt = now.Add(cacheMaxFutureSkew + time.Second); return e }(), policy: policy, want: CacheRejectedExpired},
 		{name: "tool floor", entry: func() CacheEntry { d := base; d.ToolCalls = 1; return entry(d) }(), policy: policy, want: CacheRejectedToolFloor},
 		{name: "evidence floor", entry: func() CacheEntry { d := base; d.GCSBytes = 1; return entry(d) }(), policy: policy, want: CacheRejectedEvidenceFloor},
 		{name: "critique pass", entry: func() CacheEntry { d := base; d.CritiquePassed = false; return entry(d) }(), policy: policy, want: CacheRejectedCritique},
 		{name: "critique version", entry: func() CacheEntry { d := base; d.CritiqueVersion--; return entry(d) }(), policy: policy, want: CacheRejectedCritique},
-		{name: "skill", entry: func() CacheEntry { d := base; d.SkillSetHash = "old"; return entry(d) }(), policy: policy, want: CacheRejectedSkill},
-		{name: "model", entry: func() CacheEntry { d := base; d.ModelHash = "old"; return entry(d) }(), policy: policy, want: CacheRejectedModel},
-		{name: "prompt", entry: func() CacheEntry { d := base; d.PromptHash = "old"; return entry(d) }(), policy: policy, want: CacheRejectedPrompt},
-		{name: "transient persistence", entry: func() CacheEntry { d := base; d.IsTransient = true; return entry(d) }(), policy: func() AgenticCachePolicy { p := policy; p.ConsecutiveFailures = transientPersistThreshold; return p }(), want: CacheRejectedTransientPersistence},
-		{name: "malformed key", entry: func() CacheEntry { e := entry(base); e.Key = "other"; return e }(), policy: policy, want: CacheRejectedMalformed},
-		{name: "malformed data", entry: CacheEntry{Key: key, CreatedAt: now, Data: json.RawMessage(`{"summary":`)}, policy: policy, want: CacheRejectedMalformed},
+		{name: "wrong cache key", entry: func() CacheEntry { e := entry(base); e.Key = "other"; return e }(), policy: policy, want: CacheRejectedMalformed},
+		{name: "malformed JSON", entry: CacheEntry{Key: key, CreatedAt: now, Data: json.RawMessage(`{"summary":`)}, policy: policy, want: CacheRejectedMalformed},
+		{name: "missing result fields", entry: CacheEntry{Key: key, CreatedAt: now, Data: json.RawMessage(`{}`)}, policy: policy, want: CacheRejectedMalformed},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -55,13 +66,50 @@ func TestAgenticCacheAcceptanceReasons(t *testing.T) {
 				t.Fatalf("reason = %q, want %q", got, tc.want)
 			}
 			if got == CacheAccepted {
-				if result.Summary == nil || result.Summary.Summary != "summary" || result.Analysis == nil || !result.Analysis.CacheHit || result.Analysis.Model != "model-name" {
+				if result.Summary == nil || result.Summary.Summary != "summary" || result.Analysis == nil || !result.Analysis.CacheHit || result.Analysis.Model != "cached-model-name" {
 					t.Fatalf("accepted result = %+v", result)
+				}
+				if result.Analysis.SkillSetHash != "cached-skills" || result.Analysis.ModelHash != "cached-model" || result.Analysis.PromptHash != "cached-prompt" {
+					t.Fatalf("cache hit rewrote provenance: %+v", result.Analysis)
+				}
+				if result.Analysis.GeneratedAt != tc.entry.CreatedAt.UTC().Format(time.RFC3339) || result.Summary.GeneratedAt != result.Analysis.GeneratedAt {
+					t.Fatalf("cache hit generation time = summary %q analysis %q, want %q", result.Summary.GeneratedAt, result.Analysis.GeneratedAt, tc.entry.CreatedAt.UTC().Format(time.RFC3339))
 				}
 			} else if result.Summary != nil || result.Analysis != nil {
 				t.Fatalf("rejected result = %+v", result)
 			}
 		})
+	}
+}
+
+func TestAgenticCacheAcceptancePreservesStoredGenerationTime(t *testing.T) {
+	now := time.Now().UTC()
+	generatedAt := now.Add(-2 * time.Hour).Truncate(time.Second)
+	const key = "agentic:universal:job:1:failure"
+	data := agenticCacheData{
+		analysisResponse: analysisResponse{Summary: "summary", RootCause: "root"},
+		GeneratedAt:      generatedAt.Format(time.RFC3339), CritiquePassed: true, CritiqueVersion: currentCritiqueVersion,
+	}
+	raw, err := json.Marshal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := CacheEntry{Key: key, CreatedAt: now.Add(-time.Hour), Data: raw}
+	result, reason := AcceptAgenticCacheEntry(entry, key, AgenticCachePolicy{Now: now})
+	if reason != CacheAccepted || result.Analysis.GeneratedAt != generatedAt.Format(time.RFC3339) || result.Summary.GeneratedAt != result.Analysis.GeneratedAt {
+		t.Fatalf("reason=%q result=%+v", reason, result)
+	}
+}
+
+func TestAgenticResultRejectionRejectsNonAgenticState(t *testing.T) {
+	policy := AgenticCachePolicy{}
+	for _, result := range []FailureAnalysisResult{
+		{},
+		{Analysis: &models.AIAnalysis{Mode: "legacy", CritiquePassed: true, CritiqueVersion: currentCritiqueVersion}},
+	} {
+		if got := AgenticResultRejection(result, policy); got != CacheRejectedMalformed {
+			t.Fatalf("reason = %q, want %q", got, CacheRejectedMalformed)
+		}
 	}
 }
 
@@ -71,17 +119,20 @@ func TestCachedAgenticAnalysisMatchesSharedAcceptance(t *testing.T) {
 	base := agenticCacheData{
 		analysisResponse: analysisResponse{Summary: "summary", RootCause: "root", SuggestedFix: "fix"},
 		ToolCalls:        2, CritiquePassed: true, CritiqueVersion: currentCritiqueVersion,
-		ModelHash:  ModelFingerprint(APIChatCompletions, "https://model.invalid/v1/chat/completions", "model"),
-		PromptHash: PromptFingerprint("sys"),
+		SkillSetHash: "cached-skills",
+		ModelHash:    ModelFingerprint(APIChatCompletions, "https://old-model.invalid/v1/chat/completions", "old-model"),
+		PromptHash:   PromptFingerprint("old-sys"),
 	}
 	for _, tc := range []struct {
 		name   string
 		mutate func(*agenticCacheData)
+		input  AgenticInputs
 		want   CacheRejectionReason
 	}{
 		{name: "accepted"},
 		{name: "tool floor", mutate: func(data *agenticCacheData) { data.ToolCalls = 1 }, want: CacheRejectedToolFloor},
-		{name: "prompt", mutate: func(data *agenticCacheData) { data.PromptHash = "old" }, want: CacheRejectedPrompt},
+		{name: "prompt mismatch remains accepted", input: AgenticInputs{PromptHash: PromptFingerprint("new-sys")}},
+		{name: "transient persistence remains accepted", mutate: func(data *agenticCacheData) { data.IsTransient = true }, input: AgenticInputs{ConsecutiveFailures: transientPersistThreshold}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			data := base
@@ -92,43 +143,31 @@ func TestCachedAgenticAnalysisMatchesSharedAcceptance(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			client := NewClientWithOptions(Options{API: APIChatCompletions, Endpoint: "https://model.invalid/v1/chat/completions", Model: "model"})
+			client := NewClientWithOptions(Options{API: APIChatCompletions, Endpoint: "https://new-model.invalid/v1/chat/completions", Model: "new-model"})
 			client.cache.entries[key] = CacheEntry{Key: key, CreatedAt: now, Data: raw}
-			in := AgenticInputs{Opts: AgenticOptions{MinToolCalls: 2}, Mode: AgenticMode}
-			policy := agenticCachePolicy(client, in.Opts, "", PromptFingerprint("sys"), 1)
+			in := tc.input
+			in.Opts = AgenticOptions{MinToolCalls: 2}
+			in.Mode = AgenticMode
+			policy := agenticCachePolicy(client, in.Opts, "current-skills", effectiveAgenticPromptHash(in, "sys"), in.ConsecutiveFailures)
 			_, reason := LookupAgenticCache(client.cache, key, policy)
-			_, _, accepted := client.cachedAgenticAnalysis(in, key, "sys", time.Now())
-			if reason != tc.want || accepted != (reason == CacheAccepted) {
-				t.Fatalf("shared reason=%q analyzer accepted=%t", reason, accepted)
+			_, _, ok := client.cachedAgenticAnalysis(in, key, "sys", now)
+			if reason != tc.want || ok != (tc.want == CacheAccepted) {
+				t.Fatalf("shared reason = %q, cachedAgenticAnalysis ok = %t", reason, ok)
 			}
 		})
 	}
 }
 
-func TestModelFingerprintNormalizesDefaultAPI(t *testing.T) {
-	implicit := ModelFingerprint("", "https://model.invalid/v1/chat/completions", "model")
-	explicit := ModelFingerprint(APIChatCompletions, "https://model.invalid/v1/chat/completions", "model")
-	if implicit != explicit {
-		t.Fatalf("default API changed fingerprint: implicit=%q explicit=%q", implicit, explicit)
-	}
-	if implicit == ModelFingerprint(APIResponses, "https://model.invalid/v1/chat/completions", "model") {
-		t.Fatal("responses API did not change fingerprint")
-	}
-}
-
 func TestNewAgenticCacheEntryRoundTripsAcceptedResult(t *testing.T) {
-	now := time.Date(2026, 7, 30, 19, 0, 0, 0, time.UTC)
+	now := time.Now().UTC()
 	const key = "agentic:universal:job:1:failure"
-	policy := AgenticCachePolicy{
-		MinToolCalls: 2, MinGCSBytes: 50, SkillSetHash: "skills",
-		Model: "model", ModelHash: "model-hash", PromptHash: "prompt-hash", Now: now,
-	}
+	policy := AgenticCachePolicy{MinToolCalls: 2, MinGCSBytes: 50, Model: "model", ModelHash: "model-hash", PromptHash: "prompt-hash", SkillSetHash: "skills", Now: now}
 	result := FailureAnalysisResult{
-		Summary: &models.AISummary{Summary: "summary", IsTransient: false},
+		Summary: &models.AISummary{Summary: "summary", IsTransient: true},
 		Analysis: &models.AIAnalysis{
-			Mode: AgenticMode, RootCause: "root", Severity: "High", SuggestedFix: "fix", RelevantFiles: []string{"a.go"},
-			ToolCalls: 2, ContextBytes: 100, GCSBytes: 50, CritiquePassed: true, CritiqueVersion: currentCritiqueVersion,
-			SkillSetHash: policy.SkillSetHash, ModelHash: policy.ModelHash, PromptHash: policy.PromptHash,
+			Mode: AgenticMode, Model: "model", RootCause: "root", Severity: "High", SuggestedFix: "fix", RelevantFiles: []string{"a.go"},
+			ToolCalls: 2, ContextBytes: 100, GCSBytes: 50, EvidencePlanCovered: true, BudgetExhausted: true,
+			CritiquePassed: true, CritiqueVersion: currentCritiqueVersion, SkillSetHash: "skills", ModelHash: "model-hash", PromptHash: "prompt-hash",
 		},
 	}
 	entry, err := NewAgenticCacheEntry(key, result, now.Add(-time.Minute))
@@ -136,7 +175,14 @@ func TestNewAgenticCacheEntryRoundTripsAcceptedResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, reason := AcceptAgenticCacheEntry(entry, key, policy)
-	if reason != CacheAccepted || got.Summary == nil || got.Analysis == nil || got.Summary.Summary != result.Summary.Summary || got.Analysis.RootCause != result.Analysis.RootCause || got.Analysis.ContextBytes != result.Analysis.ContextBytes {
-		t.Fatalf("round trip result=%+v reason=%q", got, reason)
+	if reason != CacheAccepted || got.Summary == nil || got.Analysis == nil {
+		t.Fatalf("round trip reason=%q result=%+v", reason, got)
+	}
+	if got.Summary.Summary != result.Summary.Summary || got.Summary.IsTransient != result.Summary.IsTransient ||
+		got.Summary.GeneratedAt != entry.CreatedAt.UTC().Format(time.RFC3339) || got.Analysis.GeneratedAt != got.Summary.GeneratedAt ||
+		got.Analysis.RootCause != result.Analysis.RootCause || got.Analysis.ToolCalls != result.Analysis.ToolCalls ||
+		got.Analysis.ContextBytes != result.Analysis.ContextBytes || got.Analysis.GCSBytes != result.Analysis.GCSBytes ||
+		!got.Analysis.EvidencePlanCovered || !got.Analysis.BudgetExhausted || got.Analysis.SkillSetHash != result.Analysis.SkillSetHash {
+		t.Fatalf("round trip result = %+v", got)
 	}
 }

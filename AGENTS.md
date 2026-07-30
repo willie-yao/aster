@@ -202,9 +202,8 @@ first. Quick map:
   tools → results appended → repeat until model returns a final
   `analysisResponse` JSON or budget exhausted.
 - **Quality floors:** `min_tool_calls`, `min_gcs_bytes`, model byte budget,
-  critique pass, skill-set hash - all enforced in
-  `belowCurrentAgenticFloor`. A cache hit that fails any current floor is
-  re-analyzed.
+  critique pass, and critique version are enforced by the centralized cache
+  policy. A cache hit that fails a current floor is re-analyzed.
 - **Critique gate** (`critique.go`): deterministic regex judge runs after
   every draft. Catches investigation-as-remediation, hallucinated artifact
   paths, fabricated import paths, etc. Re-prompts the model with feedback;
@@ -212,8 +211,8 @@ first. Quick map:
   extend this gate when present.
 - **Skills** (`skills/`): consumer-owned recipe registry. Each recipe pairs
   a failure signal with required evidence the model must read before
-  claiming that class of failure. Hash of loaded skills participates in
-  cache invalidation.
+  claiming that class of failure. The loaded skill hash is retained as
+  provenance and changes affect new analyses only.
 - **Tools** (`tools/`): `filesystem` (list/read/tail/grep over GCS) +
   `k8s` (discover_clusters, discover_controllers, ...). Read-only. No
   shell or write tools, ever. No browser tools. (See "What we explicitly

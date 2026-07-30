@@ -11,17 +11,13 @@ import (
 type CacheRejectionReason string
 
 const (
-	CacheAccepted                     CacheRejectionReason = ""
-	CacheRejectedMissing              CacheRejectionReason = "missing"
-	CacheRejectedExpired              CacheRejectionReason = "expired"
-	CacheRejectedToolFloor            CacheRejectionReason = "tool_floor"
-	CacheRejectedEvidenceFloor        CacheRejectionReason = "evidence_floor"
-	CacheRejectedCritique             CacheRejectionReason = "critique"
-	CacheRejectedSkill                CacheRejectionReason = "skill"
-	CacheRejectedModel                CacheRejectionReason = "model"
-	CacheRejectedPrompt               CacheRejectionReason = "prompt"
-	CacheRejectedTransientPersistence CacheRejectionReason = "transient_persistence"
-	CacheRejectedMalformed            CacheRejectionReason = "malformed"
+	CacheAccepted              CacheRejectionReason = ""
+	CacheRejectedMissing       CacheRejectionReason = "missing"
+	CacheRejectedExpired       CacheRejectionReason = "expired"
+	CacheRejectedToolFloor     CacheRejectionReason = "tool_floor"
+	CacheRejectedEvidenceFloor CacheRejectionReason = "evidence_floor"
+	CacheRejectedCritique      CacheRejectionReason = "critique"
+	CacheRejectedMalformed     CacheRejectionReason = "malformed"
 )
 
 // AgenticCachePolicy contains the current cache acceptance contract.
@@ -34,6 +30,7 @@ type AgenticCachePolicy struct {
 	ModelHash           string
 	PromptHash          string
 	Now                 time.Time
+	entryTimeValidated  bool
 }
 
 // LookupAgenticCache evaluates one private entry without mutating the cache.
@@ -65,7 +62,18 @@ func AcceptAgenticCacheEntry(entry CacheEntry, expectedKey string, policy Agenti
 	if err := json.Unmarshal(entry.Data, &cached); err != nil || (cached.RootCause == "" && cached.Summary == "") {
 		return FailureAnalysisResult{}, CacheRejectedMalformed
 	}
-	summary, analysis := buildOutputs(cached.analysisResponse, policy.Model, policy.ModelHash, now)
+	generatedAt := entry.CreatedAt
+	if cached.GeneratedAt != "" {
+		parsedGeneratedAt, err := time.Parse(time.RFC3339, cached.GeneratedAt)
+		if err != nil {
+			return FailureAnalysisResult{}, CacheRejectedMalformed
+		}
+		if !validCacheEntryTime(now, parsedGeneratedAt) {
+			return FailureAnalysisResult{}, CacheRejectedExpired
+		}
+		generatedAt = parsedGeneratedAt
+	}
+	summary, analysis := buildOutputs(cached.analysisResponse, cached.Model, cached.ModelHash, generatedAt)
 	analysis.Mode = AgenticMode
 	analysis.CacheHit = true
 	analysis.ToolCalls = cached.ToolCalls
@@ -79,18 +87,33 @@ func AcceptAgenticCacheEntry(entry CacheEntry, expectedKey string, policy Agenti
 	analysis.ModelHash = cached.ModelHash
 	analysis.PromptHash = cached.PromptHash
 	result := FailureAnalysisResult{Summary: summary, Analysis: analysis}
+	policy.Now = now
+	policy.entryTimeValidated = true
 	if reason := AgenticResultRejection(result, policy); reason != CacheAccepted {
 		return FailureAnalysisResult{}, reason
 	}
 	return result, CacheAccepted
 }
 
-// AgenticResultRejection evaluates current quality floors for an analysis.
+// AgenticResultRejection evaluates the reusable quality contract for an analysis.
 func AgenticResultRejection(result FailureAnalysisResult, policy AgenticCachePolicy) CacheRejectionReason {
-	if result.Analysis == nil || result.Analysis.Mode != AgenticMode {
+	if result.Summary == nil || result.Analysis == nil || result.Analysis.Mode != AgenticMode {
 		return CacheRejectedMalformed
 	}
 	analysis := result.Analysis
+	if strings.TrimSpace(result.Summary.Summary) == "" && strings.TrimSpace(analysis.RootCause) == "" {
+		return CacheRejectedMalformed
+	}
+	if !policy.entryTimeValidated {
+		now := policy.Now
+		if now.IsZero() {
+			now = time.Now()
+		}
+		generatedAt, err := time.Parse(time.RFC3339, analysis.GeneratedAt)
+		if err != nil || !validCacheEntryTime(now, generatedAt) {
+			return CacheRejectedExpired
+		}
+	}
 	if analysis.ToolCalls < policy.MinToolCalls {
 		return CacheRejectedToolFloor
 	}
@@ -99,18 +122,6 @@ func AgenticResultRejection(result FailureAnalysisResult, policy AgenticCachePol
 	}
 	if !analysis.CritiquePassed || analysis.CritiqueVersion < currentCritiqueVersion {
 		return CacheRejectedCritique
-	}
-	if analysis.SkillSetHash != policy.SkillSetHash {
-		return CacheRejectedSkill
-	}
-	if analysis.ModelHash != policy.ModelHash {
-		return CacheRejectedModel
-	}
-	if analysis.PromptHash != policy.PromptHash {
-		return CacheRejectedPrompt
-	}
-	if result.Summary != nil && result.Summary.IsTransient && policy.ConsecutiveFailures >= transientPersistThreshold {
-		return CacheRejectedTransientPersistence
 	}
 	return CacheAccepted
 }
@@ -126,6 +137,12 @@ func NewAgenticCacheEntry(key string, result FailureAnalysisResult, createdAt ti
 	if result.Summary == nil || strings.TrimSpace(result.Summary.Summary) == "" || result.Analysis == nil || result.Analysis.Mode != AgenticMode {
 		return CacheEntry{}, fmt.Errorf("agentic cache result is incomplete")
 	}
+	generatedAt := result.Analysis.GeneratedAt
+	if generatedAt == "" {
+		generatedAt = createdAt.UTC().Format(time.RFC3339)
+	} else if _, err := time.Parse(time.RFC3339, generatedAt); err != nil {
+		return CacheEntry{}, fmt.Errorf("agentic analysis generation time is invalid: %w", err)
+	}
 	data := agenticCacheData{
 		analysisResponse: analysisResponse{
 			Summary:       result.Summary.Summary,
@@ -135,6 +152,8 @@ func NewAgenticCacheEntry(key string, result FailureAnalysisResult, createdAt ti
 			SuggestedFix:  result.Analysis.SuggestedFix,
 			RelevantFiles: append([]string(nil), result.Analysis.RelevantFiles...),
 		},
+		GeneratedAt:         generatedAt,
+		Model:               result.Analysis.Model,
 		ToolCalls:           result.Analysis.ToolCalls,
 		ModelBytes:          result.Analysis.ContextBytes,
 		GCSBytes:            result.Analysis.GCSBytes,

@@ -1,6 +1,7 @@
 package fetchprogress
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -118,6 +119,9 @@ func TestNewTrackerMarksRunningStatusInterrupted(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	status := testStatus(now.Add(-time.Minute))
+	status.SchemaVersion = 6
+	status.Analyses.StaleWork = 4
+	status.Analyses.CacheRejections = CacheRejectionProgress{Skill: 1, Model: 1, Prompt: 1, TransientPersistence: 1}
 	if err := Write(Path(dir), status); err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +134,8 @@ func TestNewTrackerMarksRunningStatusInterrupted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Outcome != OutcomeInterrupted || got.Phase != PhaseInterrupted || got.FailureCategory != FailureInterrupted || got.PhaseStartedAt != now {
+	if got.Outcome != OutcomeInterrupted || got.Phase != PhaseInterrupted || got.FailureCategory != FailureInterrupted || got.PhaseStartedAt != now ||
+		got.Analyses.CacheRejections.Skill != 0 || got.Analyses.CacheRejections.Model != 0 || got.Analyses.CacheRejections.Prompt != 0 || got.Analyses.CacheRejections.TransientPersistence != 0 {
 		t.Fatalf("recovered status = %+v", got)
 	}
 	if tracker.Snapshot().Outcome != OutcomeInterrupted || len(logs) != 1 {
@@ -646,7 +651,7 @@ func TestTrackerFinalizesPostCacheAnalysisPlan(t *testing.T) {
 		logf:         func(string, ...any) {},
 	})
 	tracker.StartPass(PassInitialWatch)
-	rejections := CacheRejectionProgress{Missing: 1, Prompt: 1}
+	rejections := CacheRejectionProgress{Missing: 1, Critique: 1}
 	tracker.PlanAnalysisWork(AnalysisPlan{
 		LogicalTotal: 4, AcceptedCacheHits: 1, CompatibleResultsReused: 1, NewWork: 1, StaleWork: 1, Queued: 2,
 		CacheRejections: rejections,
@@ -670,6 +675,38 @@ func TestTrackerFinalizesPostCacheAnalysisPlan(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("analysis progress = %+v, want %+v", got, want)
+	}
+}
+
+func TestCurrentStatusOmitsObsoleteCacheRejectionCategories(t *testing.T) {
+	status := testStatus(time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC))
+	data, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, category := range []string{"skill", "model", "prompt", "transient_persistence"} {
+		if bytes.Contains(data, []byte(`"`+category+`"`)) {
+			t.Fatalf("current status emitted obsolete category %q: %s", category, data)
+		}
+	}
+}
+
+func TestReadAcceptsPreviousConfigurationRejectionStatusSchema(t *testing.T) {
+	status := testStatus(time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC))
+	status.SchemaVersion = 6
+	status.Analyses.NewWork = 0
+	status.Analyses.StaleWork = 4
+	status.Analyses.CacheRejections = CacheRejectionProgress{Skill: 1, Model: 1, Prompt: 1, TransientPersistence: 1}
+	path := filepath.Join(t.TempDir(), "status.json")
+	data, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Read(path); err != nil {
+		t.Fatalf("reading previous configuration-rejection schema: %v", err)
 	}
 }
 
