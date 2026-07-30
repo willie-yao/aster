@@ -39,7 +39,7 @@ type confirmPrompt struct {
 }
 
 func newWizardUI(terminal Terminal) wizardUI {
-	if os.Getenv("TERM") == "dumb" {
+	if os.Getenv("TERM") == "dumb" || os.Getenv("ACCESSIBLE") != "" {
 		return newAccessibleWizardUI(terminal)
 	}
 	return newHuhWizardUI(terminal)

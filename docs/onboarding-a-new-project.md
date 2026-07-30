@@ -28,7 +28,8 @@ The interactive wizard uses keyboard forms. Use the arrow keys to move through
 choices, Enter to accept a choice or prefilled input, and `Ctrl+C` to cancel.
 Inferred values appear directly in their input fields so they can be edited
 before continuing. When `TERM=dumb`, the wizard uses equivalent numbered and
-line-oriented prompts without terminal cursor control. Cancellation and EOF
+line-oriented prompts without terminal cursor control. Set `ACCESSIBLE=1` to
+select this screen-reader-friendly mode in any terminal. Cancellation and EOF
 leave no scaffold. The final confirmation defaults to no.
 
 Repository metadata, Prow configuration, and source documentation are treated

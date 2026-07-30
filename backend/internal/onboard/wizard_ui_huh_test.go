@@ -21,8 +21,16 @@ func TestNewWizardUI_SelectsTerminalImplementation(t *testing.T) {
 			t.Fatalf("TERM=dumb did not select accessible UI")
 		}
 	})
+	t.Run("accessible environment override", func(t *testing.T) {
+		t.Setenv("TERM", "xterm-256color")
+		t.Setenv("ACCESSIBLE", "1")
+		if _, ok := newWizardUI(terminal).(*accessibleWizardUI); !ok {
+			t.Fatalf("ACCESSIBLE did not select accessible UI")
+		}
+	})
 	t.Run("interactive", func(t *testing.T) {
 		t.Setenv("TERM", "xterm-256color")
+		t.Setenv("ACCESSIBLE", "")
 		if _, ok := newWizardUI(terminal).(*huhWizardUI); !ok {
 			t.Fatalf("interactive terminal did not select Huh UI")
 		}
