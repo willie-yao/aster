@@ -477,3 +477,30 @@ func TestService_ShouldReanalyze_PreRankedEvidencePlanContract(t *testing.T) {
 		t.Fatal("current ranked-plan analysis should be reusable")
 	}
 }
+
+func TestServiceBuildFailureUsesSourceSpecificGCSFloor(t *testing.T) {
+	client := newAgenticTestClient(t, "http://example.invalid")
+	s := &Service{
+		client: client, systemPrompt: "sys",
+		agenticOpts: AgenticOptions{MinToolCalls: 5, MinGCSBytes: 50_000},
+	}
+	buildFailure := &models.TestCase{Source: models.TestCaseSourceBuild}
+	if got := s.agenticOptionsFor(buildFailure); got.MinGCSBytes != 0 || got.MinToolCalls != 5 {
+		t.Fatalf("build failure options = %+v", got)
+	}
+	if got := s.agenticOptionsFor(&models.TestCase{}); got.MinGCSBytes != 50_000 {
+		t.Fatalf("JUnit options = %+v", got)
+	}
+	analysis := &models.AIAnalysis{
+		Mode: AgenticMode, ToolCalls: 5, GCSBytes: 1_000,
+		CritiquePassed: true, CritiqueVersion: currentCritiqueVersion,
+		ModelHash: client.modelFingerprint(), PromptHash: PromptFingerprint("sys"),
+	}
+	buildFailure.AIAnalysis = analysis
+	if s.shouldReanalyze(buildFailure) {
+		t.Fatal("build failure below the project GCS floor was not reusable")
+	}
+	if !s.shouldReanalyze(&models.TestCase{AIAnalysis: analysis}) {
+		t.Fatal("JUnit failure below the project GCS floor was reusable")
+	}
+}

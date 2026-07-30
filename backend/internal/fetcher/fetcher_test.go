@@ -260,3 +260,90 @@ func TestGatherPatternFailures_SeedsFailingTestLocation(t *testing.T) {
 		t.Errorf("RelevantFiles should stay the AI's list only, got %v", got[0].RelevantFiles)
 	}
 }
+
+func TestNormalizeBuildResultAddsBuildFailureCase(t *testing.T) {
+	result := models.BuildResult{
+		BuildInfo: models.BuildInfo{
+			BuildID: "1", Result: "FAILURE", DurationSeconds: 248,
+			JUnitComplete: true,
+		},
+	}
+
+	normalizeBuildResult(&result)
+	if len(result.TestCases) != 1 {
+		t.Fatalf("test cases = %+v, want one build failure", result.TestCases)
+	}
+	got := result.TestCases[0]
+	if got.Source != models.TestCaseSourceBuild || got.Status != "failed" || got.Name != "Prow job execution" {
+		t.Fatalf("build failure = %+v", got)
+	}
+	if got.DurationSeconds != 248 || result.TestsTotal != 1 || result.TestsFailed != 1 {
+		t.Fatalf("duration/counts = %v/%d/%d", got.DurationSeconds, result.TestsTotal, result.TestsFailed)
+	}
+
+	normalizeBuildResult(&result)
+	if len(result.TestCases) != 1 {
+		t.Fatalf("normalization duplicated build failure: %+v", result.TestCases)
+	}
+}
+
+func TestNormalizeBuildResultBuildFailureEligibility(t *testing.T) {
+	cases := []struct {
+		name   string
+		result models.BuildResult
+		want   bool
+	}{
+		{
+			name: "passed build",
+			result: models.BuildResult{BuildInfo: models.BuildInfo{
+				Passed: true, Result: "SUCCESS", JUnitComplete: true,
+			}},
+		},
+		{
+			name: "pending build",
+			result: models.BuildResult{BuildInfo: models.BuildInfo{
+				Result: "PENDING", JUnitComplete: true,
+			}},
+		},
+		{
+			name: "incomplete discovery",
+			result: models.BuildResult{BuildInfo: models.BuildInfo{
+				Result: "FAILURE", JUnitComplete: false,
+			}},
+		},
+		{
+			name: "truncated discovery",
+			result: models.BuildResult{BuildInfo: models.BuildInfo{
+				Result: "FAILURE", JUnitComplete: false, JUnitTruncated: true,
+			}},
+		},
+		{
+			name: "existing failed junit",
+			result: models.BuildResult{
+				BuildInfo: models.BuildInfo{Result: "FAILURE", JUnitComplete: true},
+				TestCases: []models.TestCase{{Name: "test", Status: "failed"}},
+			},
+		},
+		{
+			name: "failed build with passing junit only",
+			result: models.BuildResult{
+				BuildInfo: models.BuildInfo{Result: "FAILURE", JUnitComplete: true},
+				TestCases: []models.TestCase{{Name: "test", Status: "passed"}},
+			},
+			want: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			normalizeBuildResult(&tc.result)
+			got := false
+			for _, testCase := range tc.result.TestCases {
+				got = got || testCase.Source == models.TestCaseSourceBuild
+			}
+			if got != tc.want {
+				t.Fatalf("build failure present = %t, want %t: %+v", got, tc.want, tc.result.TestCases)
+			}
+		})
+	}
+}

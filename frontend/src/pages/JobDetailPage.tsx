@@ -6,7 +6,7 @@ import Chip from "@mui/material/Chip";
 import Collapse from "@mui/material/Collapse";
 import Link from "@mui/material/Link";
 import Typography from "@mui/material/Typography";
-import { ChevronRight, HourglassEmpty, OpenInNew } from "@mui/icons-material";
+import { ChevronRight, ErrorOutlined, HourglassEmpty, OpenInNew, WarningAmber } from "@mui/icons-material";
 import { Link as RouterLink, useParams, useSearchParams } from "react-router-dom";
 import { useJobDetail } from "../hooks/useData";
 import { formatDuration, formatPercent, timeAgo } from "../lib/utils";
@@ -21,6 +21,7 @@ import { Panel } from "../components/Panel";
 import { LoadingState } from "../components/LoadingState";
 import { ErrorState } from "../components/ErrorState";
 import { soft } from "../theme";
+import { emptyTestResultsPresentation } from "../lib/testResults";
 
 function passRateColor(rate: number): "success" | "warning" | "error" {
   if (rate >= 0.9) return "success";
@@ -190,6 +191,7 @@ export function JobDetailPage() {
   }, [runs, selectedBuildId]);
 
   const testCases: TestCase[] = selectedRun?.test_cases ?? [];
+  const emptyTestResults = selectedRun ? emptyTestResultsPresentation(selectedRun) : null;
 
   // Pass rate over the most recent 10 runs.
   const passRateRecent = useMemo(() => {
@@ -426,17 +428,39 @@ export function JobDetailPage() {
                 </Box>
               ) : (
                 <Panel component="section" sx={{ borderRadius: 3, p: 4, textAlign: "center" }}>
-                  {selectedRun.result === "PENDING" ? (
+                  {emptyTestResults?.kind === "pending" ? (
                     <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 1, color: "text.secondary" }}>
                       <HourglassEmpty sx={{ fontSize: 20 }} />
                       <Typography color="text.secondary">
-                        This build is still running — test results will appear when it completes.
+                        {emptyTestResults.detail}
                       </Typography>
                     </Box>
                   ) : (
-                    <Typography color="text.secondary">
-                      No test cases available for this run.
-                    </Typography>
+                    <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
+                      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                        {emptyTestResults?.severity === "error" ? (
+                          <ErrorOutlined color="error" sx={{ fontSize: 20 }} />
+                        ) : emptyTestResults?.severity === "warning" ? (
+                          <WarningAmber color="warning" sx={{ fontSize: 20 }} />
+                        ) : null}
+                        <Typography variant="headline" sx={{ fontSize: "1rem", color: "text.primary" }}>
+                          {emptyTestResults?.title ?? "No test cases available"}
+                        </Typography>
+                      </Box>
+                      <Typography color="text.secondary">
+                        {emptyTestResults?.detail ?? "No test cases are available for this run."}
+                      </Typography>
+                      {selectedRun.build_log_url && (
+                        <Link
+                          href={selectedRun.build_log_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, color: "primary.main" }}
+                        >
+                          Open build log <OpenInNew sx={{ fontSize: 16 }} />
+                        </Link>
+                      )}
+                    </Box>
                   )}
                 </Panel>
               )}

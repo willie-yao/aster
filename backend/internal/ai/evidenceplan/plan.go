@@ -39,7 +39,11 @@ func CanonicalTestCase(tc models.TestCase) models.TestCase {
 // FailureSignal renders only bounded test-failure evidence for recipe matching.
 func FailureSignal(tc models.TestCase) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Failed test: %s\n", tc.Name)
+	if tc.Source == models.TestCaseSourceBuild {
+		fmt.Fprintf(&b, "Failed Prow build: %s\n", tc.Name)
+	} else {
+		fmt.Fprintf(&b, "Failed test: %s\n", tc.Name)
+	}
 	if tc.FailureLocation != "" {
 		fmt.Fprintf(&b, "Failure location: %s\n", tc.FailureLocation)
 	}

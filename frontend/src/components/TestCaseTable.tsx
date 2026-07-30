@@ -214,6 +214,13 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                       <OpenInNew sx={{ fontSize: 14 }} />
                     </Link>
                   )}
+                  {tc.source === "build" && (
+                    <Chip
+                      size="small"
+                      label="Build failure"
+                      sx={{ ml: 1, height: 20, fontSize: "0.625rem", verticalAlign: "middle" }}
+                    />
+                  )}
                 </Box>
                 <Typography
                   variant="label"

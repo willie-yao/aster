@@ -40,6 +40,7 @@ export interface TestCase {
   name: string;
   suite_name?: string;
   class_name?: string;
+  source?: "build";
   status: "passed" | "failed" | "skipped";
   duration_seconds: number;
   failure_message?: string;
@@ -115,6 +116,7 @@ export interface BuildResult {
   build_log_url: string;
   junit_urls?: string[];
   junit_complete?: boolean;
+  junit_truncated?: boolean;
   test_cases: TestCase[];
   tests_total: number;
   tests_passed: number;

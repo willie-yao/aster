@@ -1109,6 +1109,7 @@ func fetchJobRunsCachedWithStats(ctx context.Context, backend storage.Backend, c
 	stats := buildFetchStats{}
 	for _, b := range builds {
 		if cached, ok := cachedBuilds[b.ID]; ok {
+			normalizeBuildResult(&cached)
 			runs = append(runs, cached)
 			stats.cached++
 			continue
@@ -1155,6 +1156,7 @@ func fetchBuildResult(ctx context.Context, backend storage.Backend, job *models.
 		return result, nil
 	}
 	if len(junitPaths) == 0 {
+		normalizeBuildResult(result)
 		return result, nil
 	}
 
@@ -1177,6 +1179,39 @@ func fetchBuildResult(ctx context.Context, backend storage.Backend, job *models.
 		result.TestCases = append(result.TestCases, testCases...)
 	}
 
+	normalizeBuildResult(result)
+	return result, nil
+}
+
+func normalizeBuildResult(result *models.BuildResult) {
+	if result == nil {
+		return
+	}
+	if !result.Passed && result.Result != "PENDING" && result.JUnitComplete && !result.JUnitTruncated {
+		hasFailedCase := false
+		for i := range result.TestCases {
+			if result.TestCases[i].Status == "failed" {
+				hasFailedCase = true
+				break
+			}
+		}
+		if !hasFailedCase {
+			result.TestCases = append(result.TestCases, models.TestCase{
+				Name:            "Prow job execution",
+				SuiteName:       "Prow",
+				ClassName:       "job",
+				Source:          models.TestCaseSourceBuild,
+				Status:          "failed",
+				DurationSeconds: result.DurationSeconds,
+				FailureMessage:  "The Prow job failed without reporting a failed JUnit test case. Investigate build-log.txt for the root cause.",
+			})
+		}
+	}
+
+	result.TestsTotal = 0
+	result.TestsPassed = 0
+	result.TestsFailed = 0
+	result.TestsSkipped = 0
 	for _, tc := range result.TestCases {
 		result.TestsTotal++
 		switch tc.Status {
@@ -1188,8 +1223,6 @@ func fetchBuildResult(ctx context.Context, backend storage.Backend, job *models.
 			result.TestsSkipped++
 		}
 	}
-
-	return result, nil
 }
 
 func configuredFixRepo(cfg *project.Config) string {

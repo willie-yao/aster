@@ -421,3 +421,16 @@ func TestComputeFlakinessReport_GeneratedAt(t *testing.T) {
 		t.Errorf("GeneratedAt = %q, want %q", report.GeneratedAt, expected)
 	}
 }
+
+func TestComputeFlakinessReportExcludesBuildFailures(t *testing.T) {
+	buildFailure := models.TestCase{
+		Name: "Prow job execution", Source: models.TestCaseSourceBuild,
+		Status: "failed", FailureMessage: "inspect build-log.txt",
+	}
+	report := ComputeFlakinessReport(map[string][]models.BuildResult{
+		"test-job": {makeFlakyBuild("1", flakyHoursAgo(1), false, []models.TestCase{buildFailure})},
+	}, []models.ProwJob{{Name: "test-job", JobID: "test-job"}}, flakyBaseTime)
+	if len(report.MostFlaky) != 0 || len(report.PersistentFailures) != 0 || len(report.RecentlyBroken) != 0 {
+		t.Fatalf("build failure entered test flakiness: %+v", report)
+	}
+}
