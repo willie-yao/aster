@@ -29,6 +29,9 @@ const keyPrefix = "fix-pr::"
 // search-based dedup can find it again when local state is lost.
 const markerPrefix = "prow-ai-dashboard-fix"
 
+// ErrWriteOutcomeUnknown means GitHub may have accepted the PR create request.
+var ErrWriteOutcomeUnknown = errors.New("fix PR write outcome unknown")
+
 // prClient is the subset of *ghpr.Client the manager needs.
 type prClient interface {
 	OpenPR(ctx context.Context, req ghpr.Request) (string, error)
@@ -562,6 +565,12 @@ func (m *Manager) OpenFromPreview(ctx context.Context, gf *GeneratedFix) (string
 	}
 	url, err := m.openPR(ctx, gf.Title, gf.Body, gf.Preview.Files, gf.base)
 	if url == "" {
+		if errors.Is(err, ghpr.ErrWriteOutcomeUnknown) {
+			return "", fmt.Errorf("%w: %v", ErrWriteOutcomeUnknown, err)
+		}
+		if err != nil {
+			return "", err
+		}
 		return "", fmt.Errorf("opening the pull request failed")
 	}
 	if err != nil {

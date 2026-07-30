@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,6 +23,19 @@ import (
 
 // apiBase is the GitHub REST API root, overridable per Client for tests.
 const apiBase = "https://api.github.com"
+
+// ErrWriteOutcomeUnknown means GitHub may have created a PR before the response was lost.
+var ErrWriteOutcomeUnknown = errors.New("pull request write outcome unknown")
+
+type transportError struct{ err error }
+
+func (e *transportError) Error() string { return e.err.Error() }
+func (e *transportError) Unwrap() error { return e.err }
+
+type decodeResponseError struct{ err error }
+
+func (e *decodeResponseError) Error() string { return e.err.Error() }
+func (e *decodeResponseError) Unwrap() error { return e.err }
 
 // Client opens PRs against a GitHub repo with a single token identity.
 type Client struct {
@@ -320,6 +334,11 @@ func (c *Client) createPR(ctx context.Context, owner, repo, title, body, head, b
 	err := c.post(ctx, c.url(owner, repo, "pulls"), map[string]any{
 		"title": title, "body": body, "head": head, "base": base, "draft": draft,
 	}, &out)
+	var transport *transportError
+	var decode *decodeResponseError
+	if errors.As(err, &transport) || errors.As(err, &decode) {
+		return 0, "", fmt.Errorf("%w: %v", ErrWriteOutcomeUnknown, err)
+	}
 	return out.Number, out.HTMLURL, err
 }
 
@@ -361,7 +380,7 @@ func (c *Client) do(ctx context.Context, method, url string, body, out any, okSt
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return err
+		return &transportError{err: err}
 	}
 	defer resp.Body.Close()
 	rb, _ := io.ReadAll(resp.Body)
@@ -376,7 +395,10 @@ func (c *Client) do(ctx context.Context, method, url string, body, out any, okSt
 		return fmt.Errorf("%s %s: %s: %s", method, url, resp.Status, textutil.Truncate(string(rb), 300))
 	}
 	if out != nil {
-		return json.Unmarshal(rb, out)
+		if err := json.Unmarshal(rb, out); err != nil {
+			return &decodeResponseError{err: err}
+		}
+		return nil
 	}
 	return nil
 }

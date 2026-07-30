@@ -1042,7 +1042,7 @@ func TestAsyncBuildIssueLostResponseReconcilesWithoutSecondWrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager := &fakeIssuePreviewManager{reconcileErr: errors.New("connection reset after create")}
+	manager := &fakeIssuePreviewManager{reconcileErr: fmt.Errorf("%w: connection reset after create", issues.ErrWriteOutcomeUnknown)}
 	service.issueManagerFactory = func(string, string, string) issuePreviewManager { return manager }
 	now := time.Now().UTC()
 	service.requests.Requests["request"] = &actionRequest{ActionRequestView: ActionRequestView{
@@ -1064,5 +1064,30 @@ func TestAsyncBuildIssueLostResponseReconcilesWithoutSecondWrite(t *testing.T) {
 	}
 	if len(manager.specs) != 1 || service.requests.Requests["request"].Status != RequestConfirmed {
 		t.Fatalf("retry wrote again: writes=%d status=%s", len(manager.specs), service.requests.Requests["request"].Status)
+	}
+}
+
+func TestAsyncBuildIssuePrewriteFailureRemainsRetryable(t *testing.T) {
+	dataDir := t.TempDir()
+	detail := analyzedBuildDetail(false)
+	writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
+	cfg := &project.Config{Issues: &project.Issues{Repo: &project.SourceRepo{Owner: "o", Name: "r"}}}
+	service := NewService(cfg, dataDir, AIConfig{})
+	id := BuildFailureID(detail.JobID, "123")
+	subject, _ := service.resolveSubject(id)
+	spec, targetRepo, _ := service.buildIssueSpecForBuild(subject.Build, id)
+	manager := &fakeIssuePreviewManager{reconcileErr: errors.New("search unavailable")}
+	service.issueManagerFactory = func(string, string, string) issuePreviewManager { return manager }
+	now := time.Now().UTC()
+	service.requests.Requests["request-prewrite"] = &actionRequest{ActionRequestView: ActionRequestView{
+		ID: "request-prewrite", FailureID: id, PatternHash: subject.ContentHash, Kind: "create-issue", Owner: "alice", Status: RequestReady,
+		CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
+		Preview: &PreviewResult{Kind: "issue", Title: spec.Title, Body: spec.Body},
+	}, Issue: &spec, TargetRepo: targetRepo}
+	if _, err := service.ConfirmRequest(t.Context(), "request-prewrite", "alice", "token"); err == nil || errors.Is(err, ErrPreviewOutcomeUnknown) {
+		t.Fatalf("prewrite error = %v", err)
+	}
+	if service.requests.Requests["request-prewrite"].Status != RequestReady {
+		t.Fatalf("prewrite status = %s", service.requests.Requests["request-prewrite"].Status)
 	}
 }

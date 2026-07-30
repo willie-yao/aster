@@ -43,7 +43,7 @@ function requestedAction(value: string | null): Action | null {
 }
 
 function requestIsActive(request: ActionRequest): boolean {
-  if (request.status !== "pending" && request.status !== "ready" && request.status !== "unknown") return false;
+  if (request.status !== "pending" && request.status !== "ready") return false;
   const expiresAt = Date.parse(request.expires_at);
   return Number.isFinite(expiresAt) && expiresAt > Date.now();
 }
@@ -53,7 +53,7 @@ function requestStateError(request: ActionRequest): string | null {
     return request.error || "Draft generation failed.";
   }
   if (request.status === "expired") return "This draft expired.";
-  if (request.status === "unknown") return "GitHub may have accepted this action. Check the result before retrying.";
+
   return null;
 }
 
@@ -740,11 +740,14 @@ export function FailureActions({ failureID, resolvable = true }: { failureID: st
           {request?.status === "cancelled" && (
             <Alert severity="info">This request was cancelled.</Alert>
           )}
+          {request?.status === "unknown" && (
+            <Alert severity="warning">GitHub may have accepted this action. Use Check GitHub result; do not regenerate or cancel it.</Alert>
+          )}
 
           {preview && (request?.status === "ready" || request?.status === "unknown") && (
             <Stack spacing={2.5}>
               <ActionDraftPreview preview={preview} />
-              <Box>
+              {request.status === "ready" && <Box>
                 <TextField
                   label="Refine this draft with a prompt (optional)"
                   placeholder={
@@ -784,7 +787,7 @@ export function FailureActions({ failureID, resolvable = true }: { failureID: st
                     ? "Regenerating…"
                     : "Regenerate with prompt"}
                 </Button>
-              </Box>
+              </Box>}
             </Stack>
           )}
         </DialogContent>

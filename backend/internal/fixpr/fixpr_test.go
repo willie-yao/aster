@@ -532,3 +532,18 @@ func TestBuildFixAdoptsMarkerFromClosedPR(t *testing.T) {
 		t.Fatalf("closed PR adoption url=%q any=%d opened=%d", url, pr.searchAnyCalls, len(pr.opened))
 	}
 }
+
+func TestBuildFixReportsAmbiguousPRCreate(t *testing.T) {
+	pr := &fakePR{openErr: ghpr.ErrWriteOutcomeUnknown}
+	manager := newManager(t, pr, goodAgent(), Options{})
+	generated, err := manager.GenerateBuildPreview(t.Context(), BuildFailure{
+		ID: "build-id", JobID: "job", JobName: "job", BuildID: "1", RootCause: "cause", SuggestedFix: "fix",
+		RelevantFiles: []string{"templates/cluster.yaml"}, SourceFiles: []string{"templates/cluster.yaml"},
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.OpenFromPreview(t.Context(), generated); !errors.Is(err, ErrWriteOutcomeUnknown) {
+		t.Fatalf("ambiguous PR error = %v", err)
+	}
+}
