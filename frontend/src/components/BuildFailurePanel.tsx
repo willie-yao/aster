@@ -8,8 +8,9 @@ import { ErrorOutlined, HourglassEmpty, OpenInNew, Troubleshoot } from "@mui/ico
 import { Link as RouterLink } from "react-router-dom";
 import type { BuildResult, TestCase } from "../types/dashboard";
 import type { FetchStatusResponse } from "../types/fetchStatus";
-import { buildAnalysisState, buildFailureActionID, type BuildAnalysisState } from "../lib/buildFailures";
+import { buildActionsReady, buildAnalysisState, buildFailureActionID, type BuildAnalysisState } from "../lib/buildFailures";
 import { FailureActions } from "./FailureActions";
+import { useCapabilities } from "../hooks/useCapabilities";
 import { AiAnalysisPanel } from "./AiAnalysisPanel";
 import { LabeledBlock } from "./LabeledBlock";
 import { Panel } from "./Panel";
@@ -36,6 +37,7 @@ export function BuildFailurePanel({
   showDetailLink?: boolean;
 }) {
   const state = buildAnalysisState(failure, fetchStatus);
+  const { features } = useCapabilities();
   const fileCtx = {
     buildLogUrl: run.build_log_url,
     webUrl: run.web_url,
@@ -51,13 +53,7 @@ export function BuildFailurePanel({
     analysis_generated_at: failure.ai_analysis.generated_at,
   } : undefined;
   const pendingState = state === "succeeded" ? "unavailable" : state;
-  const actionsReady = Boolean(
-    failure.ai_analysis?.mode === "agentic" &&
-    failure.ai_analysis.critique_passed &&
-    failure.ai_analysis.generated_at &&
-    failure.ai_analysis.root_cause.trim() &&
-    failure.ai_analysis.suggested_fix.trim(),
-  );
+  const actionsReady = buildActionsReady(failure.ai_analysis, features.analysis_critique_version);
   const telemetry = failure.ai_analysis ? [
     failure.ai_analysis.cache_hit ? "Cache hit" : null,
     failure.ai_analysis.tool_calls != null ? `${failure.ai_analysis.tool_calls} tool calls` : null,

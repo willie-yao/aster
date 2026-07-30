@@ -33,6 +33,7 @@ const markerPrefix = "prow-ai-dashboard-fix"
 type prClient interface {
 	OpenPR(ctx context.Context, req ghpr.Request) (string, error)
 	SearchOpenPR(ctx context.Context, owner, repo, queryToken, confirmMarker string) (int, string, bool, error)
+	SearchAnyPR(ctx context.Context, owner, repo, queryToken, confirmMarker string) (int, string, bool, error)
 	ResolveBase(ctx context.Context, owner, repo string) (ghpr.Base, error)
 }
 
@@ -549,7 +550,11 @@ func (m *Manager) OpenFromPreview(ctx context.Context, gf *GeneratedFix) (string
 	if t, tracked := m.state.Tracked[key]; tracked {
 		return t.URL, nil
 	}
-	if _, url, found, err := m.pr.SearchOpenPR(ctx, m.opts.SourceOwner, m.opts.SourceName, markerToken(key), markerFor(key)); err != nil {
+	search := m.pr.SearchOpenPR
+	if strings.HasPrefix(key, "fix-build::") {
+		search = m.pr.SearchAnyPR
+	}
+	if _, url, found, err := search(ctx, m.opts.SourceOwner, m.opts.SourceName, markerToken(key), markerFor(key)); err != nil {
 		return "", fmt.Errorf("fix-PR search failed: %w", err)
 	} else if found {
 		m.state.Tracked[key] = trackedGeneratedFix(url, gf)

@@ -821,6 +821,9 @@ func TestHandler_ActionsEnabled(t *testing.T) {
 	if !caps.Features.Actions {
 		t.Error("actions must be true when configured")
 	}
+	if caps.Features.AnalysisCritiqueVersion <= 0 {
+		t.Error("actions must advertise the current critique contract")
+	}
 
 	do := func(path, authz, body string) *http.Response {
 		var rdr io.Reader

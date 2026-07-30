@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildAnalysisState, buildFailure, buildFailureActionID, junitTestCases } from "../src/lib/buildFailures.js";
+import { buildActionsReady, buildAnalysisState, buildFailure, buildFailureActionID, junitTestCases } from "../src/lib/buildFailures.js";
 import type { FetchProgressStatus, FetchStatusResponse } from "../src/types/fetchStatus.js";
 import type { TestCase } from "../src/types/dashboard.js";
 
@@ -40,4 +40,12 @@ test("build subjects stay out of JUnit-only collections", () => {
 test("build action IDs are stable and source-scoped", () => {
   assert.equal(buildFailureActionID("periodic-aks", "123"), "build::cGVyaW9kaWMtYWtz::MTIz");
   assert.notEqual(buildFailureActionID("periodic-aks", "123"), buildFailureActionID("periodic-aks", "124"));
+});
+
+
+test("build actions require the server's current critique contract", () => {
+  const analysis = { generated_at: "now", model: "m", mode: "agentic", critique_passed: true, critique_version: 7, root_cause: "cause", severity: "High", suggested_fix: "fix" };
+  assert.equal(buildActionsReady(analysis, 7), true);
+  assert.equal(buildActionsReady(analysis, 8), false);
+  assert.equal(buildActionsReady(analysis, undefined), false);
 });

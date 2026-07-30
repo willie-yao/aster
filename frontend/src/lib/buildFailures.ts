@@ -1,4 +1,4 @@
-import type { TestCase } from "../types/dashboard";
+import type { AIAnalysis, TestCase } from "../types/dashboard";
 import type { FetchStatusResponse } from "../types/fetchStatus";
 
 export function isBuildFailure(testCase: TestCase): boolean {
@@ -34,4 +34,16 @@ export function buildFailureActionID(jobID: string, buildID: string): string {
     return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   };
   return `build::${encode(jobID)}::${encode(buildID)}`;
+}
+
+export function buildActionsReady(analysis: AIAnalysis | undefined, currentCritiqueVersion: number | undefined): boolean {
+  return Boolean(
+    analysis?.mode === "agentic" &&
+    analysis.critique_passed &&
+    currentCritiqueVersion != null &&
+    analysis.critique_version === currentCritiqueVersion &&
+    analysis.generated_at &&
+    analysis.root_cause.trim() &&
+    analysis.suggested_fix.trim(),
+  );
 }

@@ -24,6 +24,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actions"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/auth"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
 )
@@ -117,6 +118,8 @@ type AuthInfo struct {
 type Features struct {
 	// Actions enables on-page create-issue / propose-fix buttons.
 	Actions bool `json:"actions"`
+	// AnalysisCritiqueVersion lets action UIs apply the current critique gate.
+	AnalysisCritiqueVersion int `json:"analysis_critique_version,omitempty"`
 	// ActionRequests enables persisted asynchronous draft generation.
 	ActionRequests bool `json:"action_requests,omitempty"`
 	// AnalysisTraces enables the private analysis-trace API and UI.
@@ -255,6 +258,7 @@ func Handler(opts Options) (http.Handler, error) {
 	// Write actions require both auth and an action runner.
 	if opts.Auth != nil && opts.Actions != nil {
 		caps.Features.Actions = true
+		caps.Features.AnalysisCritiqueVersion = ai.CurrentCritiqueVersion()
 		timeout := opts.ActionTimeout
 		if timeout <= 0 {
 			timeout = defaultActionTimeout

@@ -36,11 +36,12 @@ func (f *fakeCompleter) Complete(_ context.Context, system, user string) (string
 
 // fakePR records OpenPR calls and serves a configurable SearchOpenPR result.
 type fakePR struct {
-	opened      []ghpr.Request
-	openErr     error
-	openURL     string
-	searchURL   string
-	searchFound bool
+	opened         []ghpr.Request
+	openErr        error
+	openURL        string
+	searchURL      string
+	searchFound    bool
+	searchAnyCalls int
 }
 
 func (f *fakePR) OpenPR(_ context.Context, req ghpr.Request) (string, error) {
@@ -56,6 +57,11 @@ func (f *fakePR) SearchOpenPR(_ context.Context, _, _, _, _ string) (int, string
 		return 5, f.searchURL, true, nil
 	}
 	return 0, "", false, nil
+}
+
+func (f *fakePR) SearchAnyPR(ctx context.Context, owner, repo, token, marker string) (int, string, bool, error) {
+	f.searchAnyCalls++
+	return f.SearchOpenPR(ctx, owner, repo, token, marker)
 }
 
 func (f *fakePR) ResolveBase(_ context.Context, _, _ string) (ghpr.Base, error) {
@@ -505,5 +511,24 @@ func TestGenerateBuildPreviewRejectsExternalOnlyRemediation(t *testing.T) {
 	}, "")
 	if err == nil || !strings.Contains(err.Error(), "verified local path") {
 		t.Fatalf("external-only error = %v", err)
+	}
+}
+
+func TestBuildFixAdoptsMarkerFromClosedPR(t *testing.T) {
+	pr := &fakePR{searchFound: true, searchURL: "https://github.com/up/stream/pull/closed"}
+	manager := newManager(t, pr, goodAgent(), Options{})
+	generated, err := manager.GenerateBuildPreview(t.Context(), BuildFailure{
+		ID: "build-id", JobID: "job", JobName: "job", BuildID: "1", RootCause: "cause", SuggestedFix: "fix",
+		RelevantFiles: []string{"templates/cluster.yaml"}, SourceFiles: []string{"templates/cluster.yaml"},
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	url, err := manager.OpenFromPreview(t.Context(), generated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if url != pr.searchURL || pr.searchAnyCalls != 1 || len(pr.opened) != 0 {
+		t.Fatalf("closed PR adoption url=%q any=%d opened=%d", url, pr.searchAnyCalls, len(pr.opened))
 	}
 }

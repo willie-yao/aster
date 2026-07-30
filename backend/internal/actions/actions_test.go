@@ -930,10 +930,11 @@ func TestBuildActionsRejectOldCritiqueContract(t *testing.T) {
 }
 
 type fakeIssuePreviewManager struct {
-	specs  []issues.IssueSpec
-	forgot []string
-	saved  bool
-	url    string
+	specs   []issues.IssueSpec
+	forgot  []string
+	saved   bool
+	url     string
+	findURL string
 }
 
 func (f *fakeIssuePreviewManager) Reconcile(_ context.Context, specs []issues.IssueSpec) (issues.Stats, error) {
@@ -941,8 +942,11 @@ func (f *fakeIssuePreviewManager) Reconcile(_ context.Context, specs []issues.Is
 	return issues.Stats{Created: 1}, nil
 }
 func (f *fakeIssuePreviewManager) TrackedURL(string) (string, bool) { return f.url, f.url != "" }
-func (f *fakeIssuePreviewManager) Forget(key string)                { f.forgot = append(f.forgot, key) }
-func (f *fakeIssuePreviewManager) SaveState() error                 { f.saved = true; return nil }
+func (f *fakeIssuePreviewManager) FindAny(context.Context, string) (string, bool, error) {
+	return f.findURL, f.findURL != "", nil
+}
+func (f *fakeIssuePreviewManager) Forget(key string) { f.forgot = append(f.forgot, key) }
+func (f *fakeIssuePreviewManager) SaveState() error  { f.saved = true; return nil }
 
 func TestBuildIssuePreviewToConfirmWritesReviewedDraft(t *testing.T) {
 	dataDir := t.TempDir()
@@ -966,5 +970,26 @@ func TestBuildIssuePreviewToConfirmWritesReviewedDraft(t *testing.T) {
 	}
 	if manager.specs[0].Body != preview.Body {
 		t.Fatal("confirmation did not use the reviewed issue body")
+	}
+}
+
+func TestBuildIssueConfirmationAdoptsClosedMarkerMatch(t *testing.T) {
+	dataDir := t.TempDir()
+	detail := analyzedBuildDetail(false)
+	writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
+	cfg := &project.Config{Issues: &project.Issues{Repo: &project.SourceRepo{Owner: "o", Name: "r"}}}
+	service := NewService(cfg, dataDir, AIConfig{})
+	manager := &fakeIssuePreviewManager{findURL: "https://github.com/o/r/issues/closed"}
+	service.issueManagerFactory = func(string, string, string) issuePreviewManager { return manager }
+	preview, err := service.PreviewIssue(t.Context(), BuildFailureID(detail.JobID, "123"), "owner-token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	url, err := service.Confirm(t.Context(), preview.Token, "owner-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if url != manager.findURL || len(manager.specs) != 0 {
+		t.Fatalf("closed issue adoption url=%q specs=%d", url, len(manager.specs))
 	}
 }

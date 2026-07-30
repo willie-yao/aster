@@ -143,6 +143,7 @@ func BuildFailureID(jobID, buildID string) string {
 type issuePreviewManager interface {
 	Reconcile(context.Context, []issues.IssueSpec) (issues.Stats, error)
 	TrackedURL(string) (string, bool)
+	FindAny(context.Context, string) (string, bool, error)
 	Forget(string)
 	SaveState() error
 }
@@ -729,6 +730,13 @@ func (s *Service) confirmEntryUnlocked(ctx context.Context, entry *previewEntry,
 			return "", ErrPreviewTargetChanged
 		}
 		mgr := s.issueManagerFactory(userToken, eff.Repo.Owner, eff.Repo.Name)
+		if strings.HasPrefix(entry.failureID, "build::") {
+			if url, found, err := mgr.FindAny(ctx, entry.spec.Key); err != nil {
+				return "", fmt.Errorf("searching build issue: %w", err)
+			} else if found {
+				return url, nil
+			}
+		}
 		if _, err := mgr.Reconcile(ctx, []issues.IssueSpec{entry.spec}); err != nil {
 			return "", fmt.Errorf("filing issue: %w", err)
 		}
