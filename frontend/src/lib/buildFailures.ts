@@ -13,7 +13,7 @@ export function buildFailure(testCases: TestCase[] = []): TestCase | undefined {
   return testCases.find(isBuildFailure);
 }
 
-export type BuildAnalysisState = "pending" | "queued" | "running" | "unavailable" | "stale" | "succeeded";
+export type BuildAnalysisState = "pending" | "unavailable" | "stale" | "succeeded";
 
 export function buildAnalysisState(failure: TestCase, response: FetchStatusResponse | null): BuildAnalysisState {
   if (failure.ai_analysis) return "succeeded";
@@ -21,10 +21,6 @@ export function buildAnalysisState(failure: TestCase, response: FetchStatusRespo
   const status = response?.status;
   if (response?.state === "active" && status) {
     const builds = status.analyses.build_subjects;
-    if ((builds?.logical_total ?? 0) === 1) {
-      if (status.phase === "analysis" && (builds?.running ?? 0) > 0) return "running";
-      if (["artifacts", "aggregation", "analysis-planning", "analysis"].includes(status.phase) && (builds?.queued ?? 0) > 0) return "queued";
-    }
     if (["artifacts", "aggregation", "analysis-planning", "analysis"].includes(status.phase) && ((builds?.queued ?? 0) > 0 || (builds?.running ?? 0) > 0)) return "pending";
   }
   return "unavailable";

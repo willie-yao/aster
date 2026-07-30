@@ -17,8 +17,6 @@ import { soft } from "../theme";
 
 const stateText: Record<Exclude<BuildAnalysisState, "succeeded">, { title: string; detail: string }> = {
   pending: { title: "Build analysis pending", detail: "Build analyses are active, but aggregate progress cannot identify this specific run." },
-  queued: { title: "Build analysis queued", detail: "Waiting for the bounded analysis worker." },
-  running: { title: "Build analysis running", detail: "The analyzer is inspecting the build log and supporting artifacts." },
   unavailable: { title: "Build analysis unavailable", detail: "No accepted build analysis is available for this run." },
   stale: { title: "Build analysis status stale", detail: "The latest analysis progress could not be confirmed." },
 };
