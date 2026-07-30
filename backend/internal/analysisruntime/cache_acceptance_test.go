@@ -1,0 +1,89 @@
+package analysisruntime
+
+import (
+	"encoding/json"
+	"net/http"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+)
+
+func TestContainerStateStoreAcceptCachedFailure(t *testing.T) {
+	now := time.Now().UTC()
+	request := ai.FailureAnalysisRequest{
+		JobID: "job", BuildPrefix: "logs/job/1", Build: models.BuildInfo{BuildID: "1"},
+		TestCase: models.TestCase{Name: "test", Status: "failed", FailureMessage: "failed"},
+	}
+	analysisProject := &Project{
+		Config:       &project.Config{AI: &project.AI{Agentic: project.Agentic{MinToolCalls: 2, MinGCSBytes: 50}}},
+		Provider:     project.AIProvider{API: project.AIAPIChatCompletions, Endpoint: "https://model.invalid/v1/chat/completions", Model: "model"},
+		SystemPrompt: "system prompt",
+	}
+	planner := NewReusePlanner(analysisProject)
+	policyFor := func(request ai.FailureAnalysisRequest) ai.AgenticCachePolicy {
+		run := models.BuildResult{BuildInfo: request.Build}
+		testCase := request.TestCase
+		return planner.FailureCachePolicy(t.Context(), &http.Client{}, &run, &testCase, max(1, request.ConsecutiveFailures))
+	}
+	cacheData := func(policy ai.AgenticCachePolicy, gcsBytes int) json.RawMessage {
+		data := map[string]any{
+			"summary": "summary", "is_transient": false, "root_cause": "root cause", "severity": "High", "suggested_fix": "fix", "relevant_files": []string{},
+			"tool_calls": 2, "gcs_bytes": gcsBytes, "critique_passed": true, "critique_version": 999,
+			"model_hash": policy.ModelHash, "prompt_hash": policy.PromptHash,
+		}
+		raw, err := json.Marshal(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	validData := cacheData(policyFor(request), 50)
+	buildRequest := request
+	buildRequest.TestCase.Source = models.TestCaseSourceBuild
+	cases := []struct {
+		name    string
+		entry   ai.CacheEntry
+		request ai.FailureAnalysisRequest
+		want    ai.CacheRejectionReason
+	}{
+		{name: "accepted", entry: ai.CacheEntry{Key: FailureCacheKey(request), CreatedAt: now, Data: validData}, request: request},
+		{name: "expired", entry: ai.CacheEntry{Key: FailureCacheKey(request), CreatedAt: now.Add(-31 * 24 * time.Hour), Data: validData}, request: request, want: ai.CacheRejectedExpired},
+		{name: "malformed", entry: ai.CacheEntry{Key: FailureCacheKey(request), CreatedAt: now, Data: json.RawMessage(`{}`)}, request: request, want: ai.CacheRejectedMalformed},
+		{name: "build failure ignores junit evidence floor", entry: ai.CacheEntry{
+			Key: FailureCacheKey(buildRequest), CreatedAt: now, Data: cacheData(policyFor(buildRequest), 0),
+		}, request: buildRequest},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			cacheKey := FailureCacheKey(tc.request)
+			entries := map[string]ai.CacheEntry{cacheKey: tc.entry}
+			data, err := json.Marshal(entries)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, ai.CacheFilename), data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			state, err := NewContainerStateStore(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, reason, err := state.AcceptCachedFailure(t.Context(), &http.Client{}, tc.request, planner)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reason != tc.want {
+				t.Fatalf("reason = %q, want %q", reason, tc.want)
+			}
+			if reason == ai.CacheAccepted && (result.Analysis == nil || !result.Analysis.CacheHit || result.Summary == nil) {
+				t.Fatalf("accepted result = %+v", result)
+			}
+		})
+	}
+}

@@ -317,6 +317,18 @@ func (s *Service) NeedsAnalysis(ctx context.Context, httpClient *http.Client, ru
 	return s.shouldReanalyzeWithPrompt(tc, userPrompt) || staleTransientVerdict(tc, consecutiveFailures)
 }
 
+// FailureCachePolicy returns the current private-cache contract for one failure.
+func (s *Service) FailureCachePolicy(ctx context.Context, httpClient *http.Client, run *models.BuildResult, tc *models.TestCase, consecutiveFailures int) AgenticCachePolicy {
+	if s == nil {
+		return AgenticCachePolicy{}
+	}
+	userPrompt := ""
+	if s.module != nil {
+		userPrompt = s.module.AnalysisPrompt(ctx, httpClient, run, tc, consecutiveFailures)
+	}
+	return s.agenticCachePolicyFor(tc, s.analysisPromptHash(tc, userPrompt), consecutiveFailures)
+}
+
 // shouldReanalyze returns true when a cached analysis must be discarded
 // because it predates the single agentic path or fails any current quality gate.
 func (s *Service) shouldReanalyze(tc *models.TestCase) bool {
@@ -341,41 +353,16 @@ func (s *Service) analysisPromptHash(tc *models.TestCase, userPrompt string) str
 // current quality gate: tool-call floor, GCS-byte floor without complete
 // evidence-plan coverage, critique failure or stale version, or hash mismatch.
 func (s *Service) belowCurrentAgenticFloor(tc *models.TestCase, expectedPromptHash string) bool {
-	opts := s.agenticOptionsFor(tc)
-	if tc.AIAnalysis.ToolCalls < opts.MinToolCalls {
-		return true
-	}
-	if gcsFloorUnmet(tc.AIAnalysis.GCSBytes, opts.MinGCSBytes, tc.AIAnalysis.EvidencePlanCovered) {
-		return true
-	}
-	if !tc.AIAnalysis.CritiquePassed {
-		return true
-	}
-	if tc.AIAnalysis.CritiqueVersion < currentCritiqueVersion {
-		return true
-	}
-	// Invalidate entries whose SkillSetHash doesn't match the loaded set so
-	// engine or consumer recipe edits trigger re-analysis. Skills feed the
-	// critique gate, so the hash is part of the contract. Empty wantHash matches an
-	// entry stamped with no recipes.
+	policy := s.agenticCachePolicyFor(tc, expectedPromptHash, 0)
+	return AgenticResultRejection(FailureAnalysisResult{Summary: tc.AISummary, Analysis: tc.AIAnalysis}, policy) != CacheAccepted
+}
+
+func (s *Service) agenticCachePolicyFor(tc *models.TestCase, expectedPromptHash string, consecutiveFailures int) AgenticCachePolicy {
 	wantHash := ""
 	if s.skillSet != nil {
 		wantHash = s.skillSet.Hash()
 	}
-	if tc.AIAnalysis.SkillSetHash != wantHash {
-		return true
-	}
-	// A model or endpoint swap invalidates the entry so a new model does not
-	// serve the prior model's cached verdict.
-	if s.client != nil && tc.AIAnalysis.ModelHash != s.client.modelFingerprint() {
-		return true
-	}
-	// The prompt is always sent to the model, so prompt edits invalidate the
-	// entry without a critique dependency.
-	if tc.AIAnalysis.PromptHash != expectedPromptHash {
-		return true
-	}
-	return false
+	return agenticCachePolicy(s.client, s.agenticOptionsFor(tc), wantHash, expectedPromptHash, consecutiveFailures)
 }
 
 // agenticCacheKey scopes agentic results by job+build because the model's

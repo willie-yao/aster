@@ -324,6 +324,13 @@ The private `.fetch-status/status.json` mapping and aggregate
 `existing_tasks_adopted` count retain that current-pass correlation without
 changing the Task, its canonical request hash, or its name.
 
+Before creating analyzer resources, the worker applies private cache entries
+that pass the current age, quality-floor, critique, skill, model, prompt, and
+transient-persistence checks. `logical_total` still counts every subject, while
+`queued`, `new_work`, and `stale_work` describe only the remaining Task workload.
+An image-only analyzer update keeps the cache key stable but still changes the
+content-addressed Task identity when new execution is required.
+
 To return to cron mode without starting a fetch, upgrade with the same chart
 and values while changing only the mode and suspension setting:
 

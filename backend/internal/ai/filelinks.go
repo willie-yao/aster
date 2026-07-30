@@ -53,6 +53,24 @@ var (
 	goGetScheme    = "https://"
 )
 
+// FileLinkResolver verifies source-file links without requiring model runtime setup.
+type FileLinkResolver struct {
+	service Service
+}
+
+// NewFileLinkResolver creates a reusable source-file verifier for one project.
+func NewFileLinkResolver(owner, repo string) *FileLinkResolver {
+	return &FileLinkResolver{service: Service{sourceRepoOwner: owner, sourceRepoName: repo}}
+}
+
+// Resolve returns the verified source-file links for one accepted analysis.
+func (r *FileLinkResolver) Resolve(ctx context.Context, client *http.Client, tc *models.TestCase) map[string]string {
+	if r == nil {
+		return map[string]string{}
+	}
+	return r.service.resolveFileLinks(ctx, client, tc)
+}
+
 // resolveFileLinks builds the verified GitHub link map for one analysis. It
 // gathers candidate source paths from relevant_files and the analysis prose,
 // resolves each to a verified GitHub blob URL, and returns only the paths that

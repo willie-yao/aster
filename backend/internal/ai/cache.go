@@ -47,13 +47,27 @@ func NewCache(dir string) *Cache {
 		var entries map[string]CacheEntry
 		if err := json.Unmarshal(data, &entries); err == nil {
 			c.entries = entries
-			c.dirty = c.pruneExpiredLocked(time.Now())
 		} else {
 			log.Printf("Warning: failed to parse AI cache: %v", err)
 			c.dirty = true
 		}
 	}
 	return c
+}
+
+// Lookup returns a copy of one entry without applying cache policy.
+func (c *Cache) Lookup(key string) (CacheEntry, bool) {
+	if c == nil {
+		return CacheEntry{}, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[key]
+	if !ok {
+		return CacheEntry{}, false
+	}
+	entry.Data = append(json.RawMessage(nil), entry.Data...)
+	return entry, true
 }
 
 // Get returns the cached data if the key exists and is not older than 30 days.

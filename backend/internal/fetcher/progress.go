@@ -124,6 +124,12 @@ func (p *pipeline) planProgressAnalyses(total, buildSubjects int) {
 	}
 }
 
+func (p *pipeline) planProgressAnalysisWork(plan fetchprogress.AnalysisPlan) {
+	if p.progress != nil {
+		p.progress.PlanAnalysisWork(plan)
+	}
+}
+
 func (p *pipeline) startProgressAnalysis(buildSubject bool) {
 	if p.progress != nil {
 		p.progress.StartAnalysis(buildSubject)

@@ -583,3 +583,28 @@ func TestContainerAnalysisIdentityIgnoresPriorPublishedAI(t *testing.T) {
 		t.Fatalf("prior AI output changed Task identity: %v != %v", changedName, baseName)
 	}
 }
+
+func TestAnalyzerImageChangesTaskIdentityWithoutChangingFailureCacheKey(t *testing.T) {
+	beforeSpec := containerTaskSpec(t)
+	afterSpec := beforeSpec
+	afterSpec.Image = "dashboard-analyzer:sha-feedface"
+
+	before, err := BuildContainerAnalysisResources(beforeSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := BuildContainerAnalysisResources(afterSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeName := before.Task["metadata"].(map[string]any)["name"]
+	afterName := after.Task["metadata"].(map[string]any)["name"]
+	if beforeName == afterName {
+		t.Fatalf("image-only change kept Task identity %q", beforeName)
+	}
+	beforeKey := analysisruntime.FailureCacheKey(beforeSpec.Request)
+	afterKey := analysisruntime.FailureCacheKey(afterSpec.Request)
+	if beforeKey != afterKey {
+		t.Fatalf("image-only change altered failure cache key: before=%q after=%q", beforeKey, afterKey)
+	}
+}

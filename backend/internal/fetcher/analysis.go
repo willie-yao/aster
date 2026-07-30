@@ -41,6 +41,16 @@ type aiWork struct {
 	priority    aiWorkPriority
 }
 
+func (w aiWork) request(consecutiveMap map[string]int) ai.FailureAnalysisRequest {
+	return ai.FailureAnalysisRequest{
+		JobID:               w.jobID,
+		BuildPrefix:         w.buildPrefix,
+		Build:               w.run.BuildInfo,
+		TestCase:            *w.tc,
+		ConsecutiveFailures: consecutiveMap[w.jobID+"::"+w.tc.Name],
+	}
+}
+
 type aiWorkPriority uint8
 
 const (
@@ -97,6 +107,57 @@ func analysisNeedsWork(tc *models.TestCase) bool {
 	return tc.AISummary == nil || tc.AIAnalysis == nil || tc.AIAnalysis.Mode != ai.AgenticMode || !tc.AIAnalysis.CritiquePassed
 }
 
+func planContainerAnalysisWork(ctx context.Context, httpClient *http.Client, work []aiWork, container containerFailureAnalyzer, planner *ai.Service, project *analysisruntime.Project, consecutiveMap map[string]int) ([]aiWork, fetchprogress.AnalysisPlan, error) {
+	plan := fetchprogress.AnalysisPlan{LogicalTotal: len(work)}
+	queued := make([]aiWork, 0, len(work))
+	state := container.StateStore()
+	var linkResolver *ai.FileLinkResolver
+	if project != nil && project.Config != nil {
+		source := project.Config.Branding.SourceRepo
+		linkResolver = ai.NewFileLinkResolver(source.Owner, source.Name)
+	}
+	for _, item := range work {
+		buildSubject := item.tc.Source == models.TestCaseSourceBuild
+		if buildSubject {
+			plan.BuildSubjects.LogicalTotal++
+		}
+		reason := ai.CacheRejectedMissing
+		var result ai.FailureAnalysisResult
+		if state != nil && planner != nil {
+			var err error
+			result, reason, err = state.AcceptCachedFailure(ctx, httpClient, item.request(consecutiveMap), planner)
+			if err != nil {
+				return nil, fetchprogress.AnalysisPlan{}, err
+			}
+		}
+		if reason == ai.CacheAccepted {
+			item.tc.AISummary = result.Summary
+			item.tc.AIAnalysis = result.Analysis
+			if item.tc.AIAnalysis != nil {
+				item.tc.AIAnalysis.FileLinks = linkResolver.Resolve(ctx, httpClient, item.tc)
+			}
+			plan.AcceptedCacheHits++
+			if buildSubject {
+				plan.BuildSubjects.Completed++
+				plan.BuildSubjects.AcceptedCacheHits++
+			}
+			continue
+		}
+		plan.CacheRejections.Add(string(reason))
+		if reason == ai.CacheRejectedMissing {
+			plan.NewWork++
+		} else {
+			plan.StaleWork++
+		}
+		if buildSubject {
+			plan.BuildSubjects.Queued++
+		}
+		queued = append(queued, item)
+	}
+	plan.Queued = len(queued)
+	return queued, plan, nil
+}
+
 // analyzeFailuresWithAI runs the dashboard-owned analyzer on every failed test.
 func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.JobDetail, flakinessReport models.FlakinessReport) error {
 	p.lastPatternOutcomes = map[string]patterns.JobOutcome{}
@@ -107,16 +168,7 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 
 	planner := analysisruntime.NewReusePlanner(p.aiProject)
 	work := collectAIWork(ctx, p.client, details, consecutiveMap, planner)
-	buildSubjects := 0
-	for i := range work {
-		if work[i].tc.Source == models.TestCaseSourceBuild {
-			buildSubjects++
-		}
-	}
-	p.planProgressAnalyses(len(work), buildSubjects)
-	p.completeProgressPhase()
-	p.startProgressPhase(fetchprogress.PhaseAnalysis)
-
+	logicalTotal := len(work)
 	var container containerFailureAnalyzer
 	var err error
 	if p.opts.AnalysisRuntime.Type == AnalysisRuntimeOrkaContainer {
@@ -127,20 +179,42 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 		if err := container.Maintain(ctx); err != nil {
 			return err
 		}
+		var plan fetchprogress.AnalysisPlan
+		work, plan, err = planContainerAnalysisWork(ctx, p.client, work, container, planner, p.aiProject, consecutiveMap)
+		if err != nil {
+			return fmt.Errorf("plan container analysis cache reuse: %w", err)
+		}
+		p.planProgressAnalysisWork(plan)
+	} else {
+		buildSubjects := 0
+		for i := range work {
+			if work[i].tc.Source == models.TestCaseSourceBuild {
+				buildSubjects++
+			}
+		}
+		p.planProgressAnalyses(len(work), buildSubjects)
+	}
+	p.completeProgressPhase()
+	p.startProgressPhase(fetchprogress.PhaseAnalysis)
+	if len(work) == 0 {
+		if logicalTotal == 0 {
+			log.Println("🤖 No failures to analyze")
+			p.completeProgressPhase()
+			p.startProgressPhase(fetchprogress.PhasePatterns)
+			p.skipProgressPatterns()
+			return nil
+		}
+		log.Println("🤖 All failure analyses reused from private cache")
+	} else if container != nil {
 		if preflight, ok := container.(interface{ Preflight(context.Context) error }); ok {
 			if err := preflight.Preflight(ctx); err != nil {
 				return err
 			}
 		}
 	}
-	if len(work) == 0 {
-		log.Println("🤖 No failures to analyze")
-		p.completeProgressPhase()
-		p.startProgressPhase(fetchprogress.PhasePatterns)
-		p.skipProgressPatterns()
-		return nil
+	if len(work) > 0 {
+		log.Printf("🤖 Analyzing %d failures with %s...", len(work), p.opts.AnalysisRuntime.Type)
 	}
-	log.Printf("🤖 Analyzing %d failures with %s...", len(work), p.opts.AnalysisRuntime.Type)
 
 	var analyzer ai.FailureAnalyzer
 	var runtime *analysisruntime.Runtime
@@ -216,13 +290,7 @@ schedule:
 			buildSubject := w.tc.Source == models.TestCaseSourceBuild
 			p.startProgressAnalysis(buildSubject)
 			before := w.tc.AISummary
-			result, analyzeErr := analyzer.AnalyzeFailure(analysisCtx, p.client, ai.FailureAnalysisRequest{
-				JobID:               w.jobID,
-				BuildPrefix:         w.buildPrefix,
-				Build:               w.run.BuildInfo,
-				TestCase:            *w.tc,
-				ConsecutiveFailures: consecutiveMap[w.jobID+"::"+w.tc.Name],
-			})
+			result, analyzeErr := analyzer.AnalyzeFailure(analysisCtx, p.client, w.request(consecutiveMap))
 			if analysisruntime.IsProjectBundleSourceError(analyzeErr) {
 				p.finishProgressAnalysis(buildSubject, fetchprogress.OutcomeFailed)
 				systemicOnce.Do(func() {
