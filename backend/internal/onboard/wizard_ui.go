@@ -1,6 +1,9 @@
 package onboard
 
-import "context"
+import (
+	"context"
+	"os"
+)
 
 type wizardUI interface {
 	Input(context.Context, inputPrompt) (string, error)
@@ -33,4 +36,11 @@ type confirmPrompt struct {
 	Title       string
 	Description string
 	Value       bool
+}
+
+func newWizardUI(terminal Terminal) wizardUI {
+	if os.Getenv("TERM") == "dumb" {
+		return newAccessibleWizardUI(terminal)
+	}
+	return newHuhWizardUI(terminal)
 }

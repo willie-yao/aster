@@ -4,16 +4,34 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"charm.land/huh/v2"
 )
 
-func TestHuhWizardUI_InputAcceptsEditableDefault(t *testing.T) {
-	t.Setenv("TERM", "dumb")
+func TestNewWizardUI_SelectsTerminalImplementation(t *testing.T) {
+	terminal := Terminal{In: strings.NewReader(""), Out: io.Discard, Err: io.Discard}
+	t.Run("accessible", func(t *testing.T) {
+		t.Setenv("TERM", "dumb")
+		if _, ok := newWizardUI(terminal).(*accessibleWizardUI); !ok {
+			t.Fatalf("TERM=dumb did not select accessible UI")
+		}
+	})
+	t.Run("interactive", func(t *testing.T) {
+		t.Setenv("TERM", "xterm-256color")
+		if _, ok := newWizardUI(terminal).(*huhWizardUI); !ok {
+			t.Fatalf("interactive terminal did not select Huh UI")
+		}
+	})
+}
+
+func TestAccessibleWizardUI_InputAcceptsEditableDefault(t *testing.T) {
 	out := &bytes.Buffer{}
-	ui := newHuhWizardUI(Terminal{In: strings.NewReader("\n"), Out: out, Err: out})
+	ui := newAccessibleWizardUI(Terminal{In: strings.NewReader("\n"), Out: out, Err: out})
 	value, err := ui.Input(context.Background(), inputPrompt{
 		Title: "Project ID", Value: "kind", Required: true,
 	})
@@ -23,15 +41,14 @@ func TestHuhWizardUI_InputAcceptsEditableDefault(t *testing.T) {
 	if value != "kind" {
 		t.Fatalf("value = %q", value)
 	}
-	if !strings.Contains(out.String(), "Project ID") {
-		t.Fatalf("output did not use injected writer: %q", out.String())
+	if !strings.Contains(out.String(), "Project ID [kind]") {
+		t.Fatalf("output did not expose default: %q", out.String())
 	}
 }
 
-func TestHuhWizardUI_InputCanReplaceDefault(t *testing.T) {
-	t.Setenv("TERM", "dumb")
+func TestAccessibleWizardUI_InputCanReplaceDefault(t *testing.T) {
 	out := &bytes.Buffer{}
-	ui := newHuhWizardUI(Terminal{In: strings.NewReader("custom\n"), Out: out, Err: out})
+	ui := newAccessibleWizardUI(Terminal{In: strings.NewReader("custom\n"), Out: out, Err: out})
 	value, err := ui.Input(context.Background(), inputPrompt{
 		Title: "Project ID", Value: "kind", Required: true,
 	})
@@ -43,10 +60,9 @@ func TestHuhWizardUI_InputCanReplaceDefault(t *testing.T) {
 	}
 }
 
-func TestHuhWizardUI_InputValidatesRequiredValue(t *testing.T) {
-	t.Setenv("TERM", "dumb")
+func TestAccessibleWizardUI_InputValidatesRequiredValue(t *testing.T) {
 	out := &bytes.Buffer{}
-	ui := newHuhWizardUI(Terminal{In: strings.NewReader("\naccepted\n"), Out: out, Err: out})
+	ui := newAccessibleWizardUI(Terminal{In: strings.NewReader("\naccepted\n"), Out: out, Err: out})
 	value, err := ui.Input(context.Background(), inputPrompt{
 		Title: "Required", Required: true,
 	})
@@ -61,10 +77,9 @@ func TestHuhWizardUI_InputValidatesRequiredValue(t *testing.T) {
 	}
 }
 
-func TestHuhWizardUI_SelectUsesStableValue(t *testing.T) {
-	t.Setenv("TERM", "dumb")
+func TestAccessibleWizardUI_SelectUsesStableValue(t *testing.T) {
 	out := &bytes.Buffer{}
-	ui := newHuhWizardUI(Terminal{In: strings.NewReader("\n"), Out: out, Err: out})
+	ui := newAccessibleWizardUI(Terminal{In: strings.NewReader("\n"), Out: out, Err: out})
 	value, err := ui.Select(context.Background(), selectPrompt{
 		Title: "Deployment",
 		Options: []selectOption{
@@ -81,10 +96,9 @@ func TestHuhWizardUI_SelectUsesStableValue(t *testing.T) {
 	}
 }
 
-func TestHuhWizardUI_ConfirmPreservesDefaultNo(t *testing.T) {
-	t.Setenv("TERM", "dumb")
+func TestAccessibleWizardUI_ConfirmPreservesDefaultNo(t *testing.T) {
 	out := &bytes.Buffer{}
-	ui := newHuhWizardUI(Terminal{In: strings.NewReader("\n"), Out: out, Err: out})
+	ui := newAccessibleWizardUI(Terminal{In: strings.NewReader("\n"), Out: out, Err: out})
 	value, err := ui.Confirm(context.Background(), confirmPrompt{
 		Title: "Create this scaffold?", Value: false,
 	})
@@ -93,6 +107,69 @@ func TestHuhWizardUI_ConfirmPreservesDefaultNo(t *testing.T) {
 	}
 	if value {
 		t.Fatal("default confirmation was true")
+	}
+}
+
+func TestAccessibleWizardUI_EOFCancelsInsteadOfAcceptingDefaults(t *testing.T) {
+	for name, run := range map[string]func(wizardUI) error{
+		"input": func(ui wizardUI) error {
+			_, err := ui.Input(context.Background(), inputPrompt{Title: "Input", Value: "default"})
+			return err
+		},
+		"select": func(ui wizardUI) error {
+			_, err := ui.Select(context.Background(), selectPrompt{
+				Title: "Select", Value: "a", Options: []selectOption{{Value: "a", Label: "A"}},
+			})
+			return err
+		},
+		"confirm": func(ui wizardUI) error {
+			_, err := ui.Confirm(context.Background(), confirmPrompt{Title: "Confirm", Value: true})
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ui := newAccessibleWizardUI(Terminal{In: strings.NewReader(""), Out: io.Discard, Err: io.Discard})
+			if err := run(ui); !errors.Is(err, ErrCancelled) {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
+
+type blockingReader struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (r *blockingReader) Read([]byte) (int, error) {
+	r.once.Do(func() { close(r.started) })
+	<-r.release
+	return 0, io.EOF
+}
+
+func TestAccessibleWizardUI_ContextCancellationUnblocksPrompt(t *testing.T) {
+	reader := &blockingReader{started: make(chan struct{}), release: make(chan struct{})}
+	ui := newAccessibleWizardUI(Terminal{In: reader, Out: io.Discard, Err: io.Discard}).(*accessibleWizardUI)
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := ui.Input(ctx, inputPrompt{Title: "Blocked", Value: "default"})
+		result <- err
+	}()
+	<-reader.started
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, ErrCancelled) {
+			t.Fatalf("error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("prompt did not return after context cancellation")
+	}
+	close(reader.release)
+	if err := ui.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
 	}
 }
 

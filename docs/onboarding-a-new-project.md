@@ -27,8 +27,9 @@ wizard:
 The interactive wizard uses keyboard forms. Use the arrow keys to move through
 choices, Enter to accept a choice or prefilled input, and `Ctrl+C` to cancel.
 Inferred values appear directly in their input fields so they can be edited
-before continuing. Cancellation and EOF leave no scaffold. The final
-confirmation defaults to no.
+before continuing. When `TERM=dumb`, the wizard uses equivalent numbered and
+line-oriented prompts without terminal cursor control. Cancellation and EOF
+leave no scaffold. The final confirmation defaults to no.
 
 Repository metadata, Prow configuration, and source documentation are treated
 as untrusted data. Documentation is only passed as bounded input to the fixed

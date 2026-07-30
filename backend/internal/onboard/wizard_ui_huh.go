@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 
 	"charm.land/huh/v2"
@@ -90,10 +89,8 @@ func (u *huhWizardUI) Confirm(ctx context.Context, prompt confirmPrompt) (bool, 
 func (u *huhWizardUI) run(ctx context.Context, title string, field huh.Field) error {
 	form := huh.NewForm(huh.NewGroup(field)).
 		WithInput(u.terminal.In).
-		WithOutput(u.terminal.Out)
-	if os.Getenv("TERM") == "dumb" {
-		form.WithAccessible(true)
-	}
+		WithOutput(u.terminal.Out).
+		WithAccessible(false)
 	if err := form.RunWithContext(ctx); err != nil {
 		return normalizeWizardUIError(title, err)
 	}

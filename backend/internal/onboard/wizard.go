@@ -3,6 +3,7 @@ package onboard
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
@@ -22,6 +23,9 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 		return nil, opts, fmt.Errorf("interactive onboarding UI is unavailable")
 	}
 	prompt := deps.wizard
+	if closer, ok := prompt.(io.Closer); ok {
+		defer func() { _ = closer.Close() }()
+	}
 	fmt.Fprintln(deps.terminal.Out, "Guided prow-ai-dashboard onboarding")
 	fmt.Fprintln(deps.terminal.Out, "Use Ctrl+C to cancel. No files are written before final confirmation.")
 	fmt.Fprintln(deps.terminal.Out)
