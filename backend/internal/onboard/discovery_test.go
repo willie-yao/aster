@@ -190,6 +190,22 @@ func TestWriteDiscovery_TextPropagatesWriteError(t *testing.T) {
 	}
 }
 
+func TestDirectSourceMatchSummary(t *testing.T) {
+	tests := []struct {
+		periodic  int
+		presubmit int
+		want      string
+	}{
+		{periodic: 1, want: "1 direct source match: 1 periodic, 0 presubmit"},
+		{periodic: 1, presubmit: 1, want: "2 direct source matches: 1 periodic, 1 presubmit"},
+	}
+	for _, test := range tests {
+		if got := directSourceMatchSummary(test.periodic, test.presubmit); got != test.want {
+			t.Errorf("directSourceMatchSummary(%d, %d) = %q, want %q", test.periodic, test.presubmit, got, test.want)
+		}
+	}
+}
+
 func TestPopulateDashboardTotals(t *testing.T) {
 	matching := []jobconfig.JobDefinition{{
 		Name: "source-periodic", JobType: models.JobTypePeriodic,
@@ -229,7 +245,7 @@ func TestWriteDiscovery_LabelsMatchAndDashboardCounts(t *testing.T) {
 		t.Fatalf("WriteDiscovery: %v", err)
 	}
 	for _, want := range []string{
-		"source matches: 1 periodic, 0 presubmit",
+		"1 direct source match: 1 periodic, 0 presubmit",
 		"dashboard tabs: 45 periodic, 6 presubmit, 7 postsubmit",
 		"postsubmit tabs are not supported",
 	} {
