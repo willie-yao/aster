@@ -63,6 +63,10 @@ type Options struct {
 	DeploymentAIAPI      string
 	DeploymentAIEndpoint string
 	DeploymentAIModel    string
+
+	// deferDeploymentAI marks the wizard's configure-later choice without
+	// changing flag-based AI-disabled provider seeding.
+	deferDeploymentAI bool
 	// GitHubToken authenticates metadata/doc reads and scaffold PR creation. It
 	// is never copied into a plan or generated file.
 	GitHubToken string

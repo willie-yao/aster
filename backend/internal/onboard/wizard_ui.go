@@ -24,6 +24,7 @@ type selectPrompt struct {
 	Description string
 	Options     []selectOption
 	Value       string
+	Validate    func(string) error
 }
 
 type selectOption struct {

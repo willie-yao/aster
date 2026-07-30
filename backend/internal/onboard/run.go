@@ -345,11 +345,14 @@ func printReview(out io.Writer, plan *Plan) {
 		fmt.Fprintf(out, "  Short name:           %s\n", safeTerminal(plan.Project.ShortName))
 	}
 	fmt.Fprintf(out, "  Categories:           %d rule(s)\n", len(plan.Project.Categories))
-	fmt.Fprintf(out, "  AI analysis:          %t\n", plan.Deployment.AIEnabled)
 	if plan.Deployment.AIEnabled {
+		fmt.Fprintln(out, "  AI analysis:          enabled")
+		fmt.Fprintf(out, "  AI provider:          %s\n", providerLabel(plan.Deployment.AIAPI, plan.Deployment.Endpoint))
 		fmt.Fprintf(out, "  AI API:               %s\n", safeTerminal(plan.Deployment.AIAPI))
 		fmt.Fprintf(out, "  AI endpoint:          %s\n", reviewValue(plan.Deployment.Endpoint))
 		fmt.Fprintf(out, "  AI model:             %s\n", reviewValue(plan.Deployment.Model))
+	} else {
+		fmt.Fprintln(out, "  AI analysis:          disabled in initial scaffold")
 	}
 	fmt.Fprintf(out, "  Prompt:               %s\n", safeTerminal(plan.Prompt.Source))
 	if plan.Prompt.Drafted {

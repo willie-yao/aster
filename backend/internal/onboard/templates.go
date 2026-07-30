@@ -161,6 +161,9 @@ current prerequisites are installed.
 2. Replace the TODOs in ` + "`prompts/system.md`" + `.
 3. Set ` + "`persistence.storageClass`" + ` in ` + "`deploy/values.yaml`" + `.
 {{if .AIEnabled}}4. Set ` + "`ai.endpoint`" + ` and ` + "`ai.model`" + ` in ` + "`deploy/values.yaml`" + `.
+{{else}}4. AI is disabled in the initial scaffold. To enable it later, set ` + "`ai.enabled=true`" + `,
+   configure ` + "`ai.api`" + `, ` + "`ai.endpoint`" + `, and ` + "`ai.model`" + `, then supply the token through
+   ` + "`ai.token`" + ` or ` + "`ai.existingSecret`" + `.
 {{end}}
 ## Install
 
@@ -254,6 +257,12 @@ gh api -X POST repos/{{.DashboardOwner}}/{{.DashboardName}}/pages \
 {{if .AIEnabled}}# Set the deployed provider coordinates and token. The onboarding drafting
 # provider is separate and is not configured by these values.
 gh variable set AI_API --body {{.AIAPI}} --repo {{.DashboardOwner}}/{{.DashboardName}}
+gh variable set AI_ENDPOINT --repo {{.DashboardOwner}}/{{.DashboardName}}
+gh variable set AI_MODEL --repo {{.DashboardOwner}}/{{.DashboardName}}
+gh secret set AI_TOKEN --repo {{.DashboardOwner}}/{{.DashboardName}}
+{{else}}# AI is disabled in the initial workflow. To enable it later, remove ` + "`ai: false`" + `
+# from .github/workflows/deploy.yml, then configure the provider coordinates and token.
+gh variable set AI_API --body chat_completions --repo {{.DashboardOwner}}/{{.DashboardName}}
 gh variable set AI_ENDPOINT --repo {{.DashboardOwner}}/{{.DashboardName}}
 gh variable set AI_MODEL --repo {{.DashboardOwner}}/{{.DashboardName}}
 gh secret set AI_TOKEN --repo {{.DashboardOwner}}/{{.DashboardName}}

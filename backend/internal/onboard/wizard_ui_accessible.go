@@ -80,14 +80,26 @@ func (u *accessibleWizardUI) Select(ctx context.Context, prompt selectPrompt) (s
 			return "", err
 		}
 		value = strings.TrimSpace(value)
+		selectedValue := ""
 		if value == "" {
-			return prompt.Options[defaultIndex].Value, nil
+			selectedValue = prompt.Options[defaultIndex].Value
+		} else {
+			selected, convErr := strconv.Atoi(value)
+			if convErr == nil && selected >= 1 && selected <= len(prompt.Options) {
+				selectedValue = prompt.Options[selected-1].Value
+			}
 		}
-		selected, err := strconv.Atoi(value)
-		if err == nil && selected >= 1 && selected <= len(prompt.Options) {
-			return prompt.Options[selected-1].Value, nil
+		if selectedValue == "" {
+			fmt.Fprintf(u.terminal.Out, "Enter a number from 1 to %d.\n", len(prompt.Options))
+			continue
 		}
-		fmt.Fprintf(u.terminal.Out, "Enter a number from 1 to %d.\n", len(prompt.Options))
+		if prompt.Validate != nil {
+			if err := prompt.Validate(selectedValue); err != nil {
+				fmt.Fprintln(u.terminal.Out, err)
+				continue
+			}
+		}
+		return selectedValue, nil
 	}
 }
 

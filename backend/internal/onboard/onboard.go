@@ -290,12 +290,13 @@ func buildScaffoldData(opts Options, cats []project.CategoryRule) scaffoldData {
 	if mode == "" {
 		mode = modePages
 	}
+	aiEnabled := effectiveAIEnabled(opts)
 	aiAPI := deploymentAIAPI(opts)
-	if aiAPI == "" {
+	if aiAPI == "" || opts.deferDeploymentAI {
 		aiAPI = project.AIAPIChatCompletions
 	}
 	aiEndpoint := deploymentAIEndpoint(opts)
-	if aiEndpoint == "" {
+	if aiEndpoint == "" || opts.deferDeploymentAI {
 		if aiAPI == project.AIAPIResponses {
 			aiEndpoint = "http://<your-model-svc>.<ns>.svc.cluster.local:8000/v1/responses"
 		} else {
@@ -303,7 +304,7 @@ func buildScaffoldData(opts Options, cats []project.CategoryRule) scaffoldData {
 		}
 	}
 	aiModel := deploymentAIModel(opts)
-	if aiModel == "" {
+	if aiModel == "" || opts.deferDeploymentAI {
 		aiModel = "<your-model-id>"
 	}
 	d := scaffoldData{
@@ -322,7 +323,7 @@ func buildScaffoldData(opts Options, cats []project.CategoryRule) scaffoldData {
 		IncludePresubmits: includePresubmits(opts),
 		EngineRef:         opts.EngineRef,
 		Mode:              mode,
-		AIEnabled:         effectiveAIEnabled(opts),
+		AIEnabled:         aiEnabled,
 		AIAPI:             aiAPI,
 		AIEndpoint:        aiEndpoint,
 		AIModel:           aiModel,

@@ -53,12 +53,20 @@ func (u *huhWizardUI) Select(ctx context.Context, prompt selectPrompt) (string, 
 		Options(options...).
 		Value(&value).
 		Validate(func(value string) error {
+			available := false
 			for _, option := range prompt.Options {
 				if option.Value == value {
-					return nil
+					available = true
+					break
 				}
 			}
-			return fmt.Errorf("select an available option")
+			if !available {
+				return fmt.Errorf("select an available option")
+			}
+			if prompt.Validate != nil {
+				return prompt.Validate(value)
+			}
+			return nil
 		})
 	field.DescriptionFunc(func() string {
 		for _, option := range prompt.Options {

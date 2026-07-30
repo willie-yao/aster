@@ -30,6 +30,79 @@ func TestBuildPlan_RendersAndValidatesWithoutWriting(t *testing.T) {
 	}
 }
 
+func TestBuildPlan_DeferredAIDropsProviderCoordinates(t *testing.T) {
+	deps, _, _, _ := wizardDependencies("")
+	disabled := false
+	opts := Options{
+		TestGrid: "dashboard-a", DashboardRepo: "example/project-prow-ai-dashboard",
+		SourceRepo: "example/project", Mode: modeK8s, EngineRef: "main", OutDir: "out", NoPrompt: true,
+		AIEnabled: &disabled, AIAPI: "responses", AIEndpoint: "https://private.example/v1/responses", AIModel: "private-model",
+		deferDeploymentAI: true,
+	}
+	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
+	if err != nil {
+		t.Fatalf("buildPlan: %v", err)
+	}
+	if plan.Deployment.AIEnabled || plan.Deployment.AIAPI != "" || plan.Deployment.Endpoint != "" || plan.Deployment.Model != "" {
+		t.Fatalf("disabled deployment retained provider coordinates: %+v", plan.Deployment)
+	}
+	all := plan.Files["deploy/values.yaml"] + plan.Files["deploy/README.md"]
+	for _, private := range []string{opts.AIEndpoint, opts.AIModel} {
+		if strings.Contains(all, private) {
+			t.Fatalf("disabled scaffold retained %q:\n%s", private, all)
+		}
+	}
+}
+
+func TestBuildPlan_FlagDisabledAIPreservesProviderSeed(t *testing.T) {
+	deps, _, _, _ := wizardDependencies("")
+	disabled := false
+	opts := Options{
+		TestGrid: "dashboard-a", DashboardRepo: "example/project-prow-ai-dashboard",
+		SourceRepo: "example/project", Mode: modeK8s, EngineRef: "main", OutDir: "out", NoPrompt: true,
+		AIEnabled: &disabled, AIAPI: "responses", AIEndpoint: "https://provider.example/v1/responses", AIModel: "seed-model",
+	}
+	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
+	if err != nil {
+		t.Fatalf("buildPlan: %v", err)
+	}
+	if plan.Deployment.AIEnabled || plan.Deployment.AIAPI != "responses" || plan.Deployment.Endpoint != opts.AIEndpoint || plan.Deployment.Model != opts.AIModel {
+		t.Fatalf("flag-disabled deployment lost provider seed: %+v", plan.Deployment)
+	}
+	values := plan.Files["deploy/values.yaml"]
+	for _, want := range []string{opts.AIEndpoint, opts.AIModel} {
+		if !strings.Contains(values, want) {
+			t.Fatalf("flag-disabled values missing %q:\n%s", want, values)
+		}
+	}
+}
+
+func TestBuildPlan_DeferredDeploymentKeepsSeparatePromptProvider(t *testing.T) {
+	deps, _, _, _ := wizardDependencies("")
+	deps.prompts = &fakePromptBuilder{drafted: true}
+	disabled := false
+	opts := Options{
+		TestGrid: "dashboard-a", DashboardRepo: "example/project-prow-ai-dashboard",
+		SourceRepo: "example/project", Mode: modeK8s, EngineRef: "main", OutDir: "out",
+		AIEnabled: &disabled, deferDeploymentAI: true,
+		AIToken: "fixture-ai-token", AIAPI: "responses",
+		AIEndpoint: "https://draft.example/v1/responses", AIModel: "draft-model",
+	}
+	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
+	if err != nil {
+		t.Fatalf("buildPlan: %v", err)
+	}
+	if plan.Deployment.AIEnabled || plan.Deployment.Endpoint != "" || plan.Deployment.Model != "" {
+		t.Fatalf("deferred deployment retained provider: %+v", plan.Deployment)
+	}
+	if plan.Prompt.Endpoint != opts.AIEndpoint || plan.Prompt.Model != opts.AIModel {
+		t.Fatalf("prompt provider = %+v", plan.Prompt)
+	}
+	if strings.Contains(plan.Files["deploy/values.yaml"], opts.AIEndpoint) {
+		t.Fatalf("draft provider leaked into deployment values:\n%s", plan.Files["deploy/values.yaml"])
+	}
+}
+
 func TestBuildPlan_DoesNotRetainCredentials(t *testing.T) {
 	deps, _, _, _ := wizardDependencies("")
 	opts := Options{

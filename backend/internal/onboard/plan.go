@@ -105,13 +105,16 @@ func buildPlan(ctx context.Context, opts Options, planning planningContext, deps
 		value := Inferred[string]{Value: planning.selected.Dashboard, Source: "ranked kubernetes/test-infra jobs for " + sourceRepo.FullName, Confidence: candidateConfidence(*planning.selected)}
 		testGridProvenance = &value
 	}
+	deployment := DeploymentPlan{Mode: opts.Mode, AIEnabled: effectiveAIEnabled(opts)}
+	if !opts.deferDeploymentAI {
+		deployment.AIAPI = deploymentAIAPI(opts)
+		deployment.Endpoint = deploymentAIEndpoint(opts)
+		deployment.Model = deploymentAIModel(opts)
+	}
 	plan := &Plan{
 		SourceRepo:    sourceRepo,
 		DashboardRepo: dashboardRepo,
-		Deployment: DeploymentPlan{
-			Mode: opts.Mode, AIEnabled: effectiveAIEnabled(opts), AIAPI: deploymentAIAPI(opts),
-			Endpoint: deploymentAIEndpoint(opts), Model: deploymentAIModel(opts),
-		},
+		Deployment:    deployment,
 		Discovery: DiscoveryPlan{
 			TestGrid: opts.TestGrid, Bucket: opts.Bucket, GCSWebBase: opts.GCSWebBase,
 			CatalogRevision: catalogRevision, Jobs: append([]models.ProwJob(nil), jobs...),
