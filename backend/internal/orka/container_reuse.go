@@ -16,6 +16,7 @@ import (
 
 const (
 	containerCompatibleResultCandidateLimit = 5
+	containerCompatibleResultLookupTimeout  = 5 * time.Second
 	// ContainerAnalysisSucceededTaskRetention bounds cross-image result reuse.
 	ContainerAnalysisSucceededTaskRetention = 7 * 24 * time.Hour
 	containerResultClockSkew                = 5 * time.Minute
@@ -56,16 +57,19 @@ func (a *ContainerAnalyzer) ReuseCompatibleResult(ctx context.Context, request a
 		return ai.FailureAnalysisResult{}, false, nil
 	}
 	cacheKey := analysisruntime.FailureCacheKey(taskRequest)
+	lookupCtx, cancelLookup := context.WithTimeout(ctx, containerCompatibleResultLookupTimeout)
+	defer cancelLookup()
 	for _, candidate := range candidates {
-		resultCtx, cancel := context.WithTimeout(ctx, containerResultReadTimeout)
-		raw, ok, resultErr := a.results.Result(resultCtx, candidate.Namespace, candidate.Name)
-		cancel()
+		raw, ok, resultErr := a.results.Result(lookupCtx, candidate.Namespace, candidate.Name)
 		if resultErr != nil {
 			if IsResultAuthorizationError(resultErr) {
 				return ai.FailureAnalysisResult{}, false, fmt.Errorf("read compatible container analysis result: %w", resultErr)
 			}
 			if ctx.Err() != nil {
 				return ai.FailureAnalysisResult{}, false, ctx.Err()
+			}
+			if lookupCtx.Err() != nil {
+				return ai.FailureAnalysisResult{}, false, nil
 			}
 			continue
 		}
@@ -84,13 +88,17 @@ func (a *ContainerAnalyzer) ReuseCompatibleResult(ctx context.Context, request a
 			}
 			continue
 		}
-		_, candidateBundleDigest, bundleErr := analysisruntime.BuildProjectBundleWithCache(
-			a.opts.ProjectDir, ContainerAnalysisContractVersion, taskRequest, delta.CacheEntries,
-		)
-		if bundleErr != nil {
-			return ai.FailureAnalysisResult{}, false, bundleErr
+		bundleMatches := candidate.BundleDigest == prepared.BundleDigest
+		if !bundleMatches && len(delta.CacheEntries) > 0 {
+			_, seededBundleDigest, bundleErr := analysisruntime.BuildProjectBundleWithCache(
+				a.opts.ProjectDir, ContainerAnalysisContractVersion, taskRequest, delta.CacheEntries,
+			)
+			if bundleErr != nil {
+				return ai.FailureAnalysisResult{}, false, bundleErr
+			}
+			bundleMatches = candidate.BundleDigest == seededBundleDigest
 		}
-		if candidateBundleDigest != candidate.BundleDigest {
+		if !bundleMatches {
 			continue
 		}
 		entry, hasEntry := delta.CacheEntries[cacheKey]

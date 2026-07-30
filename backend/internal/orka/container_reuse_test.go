@@ -365,6 +365,11 @@ func TestPruneContainerAnalysisTasksRetainsBoundedSucceededReuseWindow(t *testin
 		taskObject("old-failed", "Failed", now.Add(-2*ContainerAnalysisTaskRetention)),
 		taskObject("old-unlabeled", "Succeeded", now.Add(-2*ContainerAnalysisTaskRetention)),
 	)
+	previousContract := compatibleTaskObject(namespace, "recent-previous-contract", workItem, bundle, fingerprint, "Succeeded", true, now.Add(-time.Hour))
+	annotations := previousContract.GetAnnotations()
+	annotations["prow-ai-dashboard/contract-version"] = "previous-contract"
+	previousContract.SetAnnotations(annotations)
+	items = append(items, previousContract)
 	client := &fakeContainerResourceClient{listedTasks: items}
 	deleted, err := PruneContainerAnalysisTasks(t.Context(), client, namespace, now)
 	if err != nil {
@@ -386,6 +391,9 @@ func TestPruneContainerAnalysisTasksRetainsBoundedSucceededReuseWindow(t *testin
 		if deletedNames[name] {
 			t.Fatalf("retained candidate %s was deleted", name)
 		}
+	}
+	if deletedNames["recent-previous-contract"] {
+		t.Fatal("recent non-reusable Task bypassed normal retention")
 	}
 }
 
@@ -440,5 +448,94 @@ func TestContainerAnalyzerReusesAuthenticatedCacheEntry(t *testing.T) {
 	got := store.CacheSeed(request)[cacheKey]
 	if !got.CreatedAt.Equal(entry.CreatedAt) {
 		t.Fatalf("promoted cache time = %s, want %s", got.CreatedAt, entry.CreatedAt)
+	}
+}
+
+func TestContainerAnalyzerReusesGeneratedEntryFromUnseededTask(t *testing.T) {
+	request := containerTaskRequest()
+	key := bytes.Repeat([]byte{0x7e}, 32)
+	store, err := analysisruntime.NewContainerStateStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := containerAnalyzerTestOptions(t, key)
+	kube := &compatibleResultKube{fakeContainerAnalyzerKube: &fakeContainerAnalyzerKube{fakeContainerResourceClient: &fakeContainerResourceClient{}}}
+	results := &compatibleResultAPI{values: map[string]struct {
+		raw string
+		ok  bool
+		err error
+	}{}}
+	analyzer, err := newContainerAnalyzer(opts, kube, results, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := compatibleResultPolicy(opts)
+	result := compatibleFailureResult(policy)
+	prepared, err := prepareContainerAnalysisTask(analyzer.taskSpec(request, nil, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	completedAt := time.Now().UTC().Add(-time.Minute)
+	candidateName := "old-generated"
+	workItem := fetchprogress.WorkItemID(analysisruntime.FailureCacheKey(request))
+	kube.listed = []unstructured.Unstructured{compatibleTaskObject(opts.Namespace, candidateName, workItem, prepared.BundleDigest, containerStateKeyFingerprint(key), "Succeeded", true, completedAt)}
+	cacheKey := analysisruntime.FailureCacheKey(request)
+	entry, err := ai.NewAgenticCacheEntry(cacheKey, result, completedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results.values[candidateName] = struct {
+		raw string
+		ok  bool
+		err error
+	}{raw: compatibleRawResult(t, opts.Namespace, candidateName, request, key, result, map[string]ai.CacheEntry{cacheKey: entry}), ok: true}
+
+	_, reused, err := analyzer.ReuseCompatibleResult(t.Context(), request, policy)
+	if err != nil || !reused {
+		t.Fatalf("reused=%t error=%v", reused, err)
+	}
+}
+
+type deadlineCompatibleResultAPI struct {
+	deadlines []time.Time
+}
+
+func (a *deadlineCompatibleResultAPI) Result(ctx context.Context, _, _ string) (string, bool, error) {
+	deadline, _ := ctx.Deadline()
+	a.deadlines = append(a.deadlines, deadline)
+	return "", false, &ResultHTTPError{StatusCode: http.StatusBadGateway}
+}
+
+func TestContainerAnalyzerCompatibleCandidatesShareOneTimeoutBudget(t *testing.T) {
+	request := containerTaskRequest()
+	key := bytes.Repeat([]byte{0x7f}, 32)
+	store, err := analysisruntime.NewContainerStateStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := containerAnalyzerTestOptions(t, key)
+	results := &deadlineCompatibleResultAPI{}
+	kube := &compatibleResultKube{fakeContainerAnalyzerKube: &fakeContainerAnalyzerKube{fakeContainerResourceClient: &fakeContainerResourceClient{}}}
+	analyzer, err := newContainerAnalyzer(opts, kube, results, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := prepareContainerAnalysisTask(analyzer.taskSpec(request, nil, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workItem := fetchprogress.WorkItemID(analysisruntime.FailureCacheKey(request))
+	now := time.Now().UTC()
+	for i := 0; i < containerCompatibleResultCandidateLimit; i++ {
+		kube.listed = append(kube.listed, compatibleTaskObject(opts.Namespace, "old-budget-"+string(rune('a'+i)), workItem, prepared.BundleDigest, containerStateKeyFingerprint(key), "Succeeded", true, now.Add(-time.Duration(i+1)*time.Minute)))
+	}
+	_, reused, err := analyzer.ReuseCompatibleResult(t.Context(), request, compatibleResultPolicy(opts))
+	if err != nil || reused || len(results.deadlines) != containerCompatibleResultCandidateLimit {
+		t.Fatalf("reused=%t error=%v deadlines=%v", reused, err, results.deadlines)
+	}
+	for _, deadline := range results.deadlines[1:] {
+		if !deadline.Equal(results.deadlines[0]) {
+			t.Fatalf("candidate deadlines differ: %v", results.deadlines)
+		}
 	}
 }
