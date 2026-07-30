@@ -141,6 +141,12 @@ func (m *Manager) TrackedURL(key string) (string, bool) {
 	return t.URL, ok
 }
 
+// FindOpen returns an open issue with this marker.
+func (m *Manager) FindOpen(ctx context.Context, key string) (string, bool, error) {
+	_, url, found, err := m.client.SearchOpenIssue(ctx, markerToken(key), markerFor(key))
+	return url, found, err
+}
+
 // FindAny returns an issue with this marker in any state.
 func (m *Manager) FindAny(ctx context.Context, key string) (string, bool, error) {
 	_, url, found, err := m.client.SearchIssue(ctx, markerToken(key), markerFor(key))

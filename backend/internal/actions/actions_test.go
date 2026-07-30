@@ -959,6 +959,9 @@ func (f *fakeIssuePreviewManager) Reconcile(_ context.Context, specs []issues.Is
 	return issues.Stats{Created: 1}, f.reconcileErr
 }
 func (f *fakeIssuePreviewManager) TrackedURL(string) (string, bool) { return f.url, f.url != "" }
+func (f *fakeIssuePreviewManager) FindOpen(context.Context, string) (string, bool, error) {
+	return f.url, f.url != "", nil
+}
 func (f *fakeIssuePreviewManager) FindAny(context.Context, string) (string, bool, error) {
 	return f.findURL, f.findURL != "", nil
 }
@@ -1170,5 +1173,30 @@ func TestDirectUnknownPreviewReconcilesAfterSubjectLeavesWindow(t *testing.T) {
 	url, err := service.Confirm(t.Context(), preview.Token, "owner-token")
 	if err != nil || url != manager.findURL {
 		t.Fatalf("reconcile url=%q err=%v", url, err)
+	}
+}
+
+func TestPatternIssueAmbiguousWriteUsesOpenOnlyReconciliation(t *testing.T) {
+	service, pattern := requestTestService(t)
+	manager := &fakeIssuePreviewManager{reconcileErr: fmt.Errorf("%w: lost response", issues.ErrWriteOutcomeUnknown)}
+	service.issueManagerFactory = func(string, string, string) issuePreviewManager { return manager }
+	created, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := waitRequest(t, service, created.ID, "alice", RequestReady)
+	if _, err := service.ConfirmRequest(t.Context(), ready.ID, "alice", "token"); !errors.Is(err, ErrPreviewOutcomeUnknown) {
+		t.Fatalf("ambiguous error = %v", err)
+	}
+	manager.reconcileErr = nil
+	manager.findURL = "https://github.com/o/r/issues/closed"
+	manager.url = ""
+	if _, err := service.ConfirmRequest(t.Context(), ready.ID, "alice", "token"); !errors.Is(err, ErrPreviewOutcomeUnknown) {
+		t.Fatalf("closed issue was incorrectly adopted: %v", err)
+	}
+	manager.url = "https://github.com/o/r/issues/open"
+	url, err := service.ConfirmRequest(t.Context(), ready.ID, "alice", "token")
+	if err != nil || url != manager.url {
+		t.Fatalf("open reconciliation url=%q err=%v", url, err)
 	}
 }

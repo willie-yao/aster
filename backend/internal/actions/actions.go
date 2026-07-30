@@ -144,6 +144,7 @@ func BuildFailureID(jobID, buildID string) string {
 type issuePreviewManager interface {
 	Reconcile(context.Context, []issues.IssueSpec) (issues.Stats, error)
 	TrackedURL(string) (string, bool)
+	FindOpen(context.Context, string) (string, bool, error)
 	FindAny(context.Context, string) (string, bool, error)
 	Forget(string)
 	SaveState() error
@@ -693,7 +694,10 @@ func (s *Service) reconcileEntry(ctx context.Context, entry *previewEntry, userT
 			return "", false, ErrPreviewTargetChanged
 		}
 		mgr := s.issueManagerFactory(userToken, eff.Repo.Owner, eff.Repo.Name)
-		return mgr.FindAny(ctx, entry.spec.Key)
+		if strings.HasPrefix(entry.failureID, "build::") {
+			return mgr.FindAny(ctx, entry.spec.Key)
+		}
+		return mgr.FindOpen(ctx, entry.spec.Key)
 	case gfKind:
 		eff := s.cfg.EffectiveFixPRs()
 		if eff.Repo == nil || eff.Repo.Owner == "" || eff.Repo.Name == "" || entry.fix == nil {
@@ -706,7 +710,12 @@ func (s *Service) reconcileEntry(ctx context.Context, entry *previewEntry, userT
 			return "", false, ErrPreviewTargetChanged
 		}
 		key := entry.fix.Snapshot().Key
-		_, url, found, err := fixpr.NewClients(userToken).SearchAnyPR(ctx, eff.Repo.Owner, eff.Repo.Name, fixpr.MarkerToken(key), fixpr.MarkerFor(key))
+		client := fixpr.NewClients(userToken)
+		if strings.HasPrefix(entry.failureID, "build::") {
+			_, url, found, err := client.SearchAnyPR(ctx, eff.Repo.Owner, eff.Repo.Name, fixpr.MarkerToken(key), fixpr.MarkerFor(key))
+			return url, found, err
+		}
+		_, url, found, err := client.SearchOpenPR(ctx, eff.Repo.Owner, eff.Repo.Name, fixpr.MarkerToken(key), fixpr.MarkerFor(key))
 		return url, found, err
 	default:
 		return "", false, ErrPreviewNotFound
@@ -750,8 +759,8 @@ func (s *Service) confirmEntryUnlocked(ctx context.Context, entry *previewEntry,
 			}
 		}
 		if _, err := mgr.Reconcile(ctx, []issues.IssueSpec{entry.spec}); err != nil {
-			if strings.HasPrefix(entry.failureID, "build::") && errors.Is(err, issues.ErrWriteOutcomeUnknown) {
-				return "", fmt.Errorf("%w: filing build issue: %v", ErrPreviewOutcomeUnknown, err)
+			if errors.Is(err, issues.ErrWriteOutcomeUnknown) {
+				return "", fmt.Errorf("%w: filing issue: %v", ErrPreviewOutcomeUnknown, err)
 			}
 			return "", fmt.Errorf("filing issue: %w", err)
 		}
@@ -784,8 +793,8 @@ func (s *Service) confirmEntryUnlocked(ctx context.Context, entry *previewEntry,
 		}
 		url, err := mgr.OpenFromPreview(ctx, entry.fix)
 		if err != nil {
-			if strings.HasPrefix(entry.failureID, "build::") && errors.Is(err, fixpr.ErrWriteOutcomeUnknown) {
-				return "", fmt.Errorf("%w: opening build fix: %s", ErrPreviewOutcomeUnknown, safeReason(err.Error()))
+			if errors.Is(err, fixpr.ErrWriteOutcomeUnknown) {
+				return "", fmt.Errorf("%w: opening fix: %s", ErrPreviewOutcomeUnknown, safeReason(err.Error()))
 			}
 			return "", fmt.Errorf("%s", safeReason(err.Error()))
 		}
