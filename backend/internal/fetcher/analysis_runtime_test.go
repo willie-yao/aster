@@ -366,7 +366,7 @@ func TestCollectAIWorkPrioritizesMissingBuildAnalysis(t *testing.T) {
 		},
 	}}
 
-	work := collectAIWork(details)
+	work := collectAIWork(t.Context(), nil, details, nil, nil)
 	if len(work) != 4 {
 		t.Fatalf("work items = %d, want 4", len(work))
 	}
@@ -445,5 +445,30 @@ func TestAnalyzeFailuresSubmitsBuildWorkFirstWithoutExtraConcurrency(t *testing.
 	defer analyzer.mu.Unlock()
 	if analyzer.max != 1 || analyzer.active != 0 {
 		t.Fatalf("active=%d max=%d, want active=0 max=1", analyzer.active, analyzer.max)
+	}
+}
+
+type namedAnalysisPlanner map[string]bool
+
+func (p namedAnalysisPlanner) NeedsAnalysis(_ context.Context, _ *http.Client, _ *models.BuildResult, tc *models.TestCase, _ int) bool {
+	return p[tc.Name]
+}
+
+func TestCollectAIWorkUsesCurrentStalenessPlanner(t *testing.T) {
+	analysis := &models.AIAnalysis{Mode: ai.AgenticMode, CritiquePassed: true}
+	summary := &models.AISummary{Summary: "existing"}
+	details := []models.JobDetail{{
+		Name: "job", JobID: "job", JobType: models.JobTypePeriodic,
+		Runs: []models.BuildResult{{
+			BuildInfo: models.BuildInfo{BuildID: "1"},
+			TestCases: []models.TestCase{
+				{Name: "reusable", Status: "failed", AISummary: summary, AIAnalysis: analysis},
+				{Name: "stale", Status: "failed", AISummary: summary, AIAnalysis: analysis},
+			},
+		}},
+	}}
+	work := collectAIWork(t.Context(), nil, details, nil, namedAnalysisPlanner{"stale": true})
+	if len(work) != 2 || work[0].tc.Name != "stale" || work[1].tc.Name != "reusable" {
+		t.Fatalf("work order = %v, %v", work[0].tc.Name, work[1].tc.Name)
 	}
 }

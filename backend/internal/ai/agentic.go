@@ -534,6 +534,9 @@ type AgenticInputs struct {
 	Cache        *tools.Cache
 	WebURLBase   string
 	Mode         string
+	// PromptHash overrides the system-only fingerprint when the per-failure
+	// module prompt is part of the cache contract.
+	PromptHash string
 
 	// Skills is the merged diagnostic recipe set. nil disables skill
 	// matching entirely. Critique-disabled runs also skip recipes because recipes
@@ -714,6 +717,13 @@ func compactMessages(messages []modelMessage, schemaBytes, budgetBytes int) ([]m
 	return messages, elided
 }
 
+func effectiveAgenticPromptHash(in AgenticInputs, sysPrompt string) string {
+	if in.PromptHash != "" {
+		return in.PromptHash
+	}
+	return PromptFingerprint(sysPrompt)
+}
+
 func (c *Client) cachedAgenticAnalysis(in AgenticInputs, cacheKey, sysPrompt string, start time.Time) (*models.AISummary, *models.AIAnalysis, bool) {
 	raw, ok := c.cache.Get(cacheKey)
 	if !ok {
@@ -733,7 +743,7 @@ func (c *Client) cachedAgenticAnalysis(in AgenticInputs, cacheKey, sysPrompt str
 	if cached.IsTransient && in.ConsecutiveFailures >= transientPersistThreshold {
 		critiqueOK = false
 	}
-	if cached.ToolCalls < in.Opts.MinToolCalls || gcsFloorUnmet(cached.GCSBytes, in.Opts.MinGCSBytes, cached.EvidencePlanCovered) || !critiqueOK || cached.PromptHash != PromptFingerprint(sysPrompt) {
+	if cached.ToolCalls < in.Opts.MinToolCalls || gcsFloorUnmet(cached.GCSBytes, in.Opts.MinGCSBytes, cached.EvidencePlanCovered) || !critiqueOK || cached.PromptHash != effectiveAgenticPromptHash(in, sysPrompt) {
 		return nil, nil, false
 	}
 	summary, analysis := c.buildOutputs(cached.analysisResponse)
@@ -779,7 +789,7 @@ func (c *Client) doAnalyzeAgentic(
 		cache:             in.Cache,
 		webURLBase:        in.WebURLBase,
 		startTime:         time.Now(),
-		promptHash:        PromptFingerprint(sysPrompt),
+		promptHash:        effectiveAgenticPromptHash(in, sysPrompt),
 		draftObserver:     in.DraftObserver,
 		selectionObserver: in.DraftSelectionObserver,
 	}

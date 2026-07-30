@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -28,6 +29,10 @@ var (
 	saveAnalysisTraceStore     = func(store *ai.TraceStore, path string) error { return store.Save(path) }
 )
 
+type analysisPlanner interface {
+	NeedsAnalysis(context.Context, *http.Client, *models.BuildResult, *models.TestCase, int) bool
+}
+
 type aiWork struct {
 	jobID       string
 	buildPrefix string
@@ -44,7 +49,7 @@ const (
 	aiWorkReusable
 )
 
-func collectAIWork(details []models.JobDetail) []aiWork {
+func collectAIWork(ctx context.Context, httpClient *http.Client, details []models.JobDetail, consecutiveMap map[string]int, planner analysisPlanner) []aiWork {
 	var work []aiWork
 	for i := range details {
 		d := &details[i]
@@ -62,9 +67,10 @@ func collectAIWork(details []models.JobDetail) []aiWork {
 				if tc.Status != "failed" {
 					continue
 				}
+				consecutive := consecutiveMap[d.JobID+"::"+tc.Name]
 				work = append(work, aiWork{
 					jobID: d.JobID, buildPrefix: loc.BuildPath(), run: run, tc: tc,
-					priority: classifyAIWork(tc),
+					priority: classifyAIWork(ctx, httpClient, run, tc, consecutive, planner),
 				})
 			}
 		}
@@ -73,8 +79,12 @@ func collectAIWork(details []models.JobDetail) []aiWork {
 	return work
 }
 
-func classifyAIWork(tc *models.TestCase) aiWorkPriority {
-	if analysisNeedsWork(tc) {
+func classifyAIWork(ctx context.Context, httpClient *http.Client, run *models.BuildResult, tc *models.TestCase, consecutive int, planner analysisPlanner) aiWorkPriority {
+	needsWork := analysisNeedsWork(tc)
+	if planner != nil {
+		needsWork = planner.NeedsAnalysis(ctx, httpClient, run, tc, max(1, consecutive))
+	}
+	if needsWork {
 		if tc.Source == models.TestCaseSourceBuild {
 			return aiWorkBuildMissing
 		}
@@ -95,7 +105,8 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 		consecutiveMap[tf.JobID+"::"+tf.TestName] = tf.ConsecutiveFailures
 	}
 
-	work := collectAIWork(details)
+	planner := analysisruntime.NewReusePlanner(p.aiProject)
+	work := collectAIWork(ctx, p.client, details, consecutiveMap, planner)
 	buildSubjects := 0
 	for i := range work {
 		if work[i].tc.Source == models.TestCaseSourceBuild {
