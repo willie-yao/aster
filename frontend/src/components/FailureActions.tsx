@@ -43,7 +43,7 @@ function requestedAction(value: string | null): Action | null {
 }
 
 function requestIsActive(request: ActionRequest): boolean {
-  if (request.status !== "pending" && request.status !== "ready") return false;
+  if (request.status !== "pending" && request.status !== "ready" && request.status !== "unknown") return false;
   const expiresAt = Date.parse(request.expires_at);
   return Number.isFinite(expiresAt) && expiresAt > Date.now();
 }
@@ -53,6 +53,7 @@ function requestStateError(request: ActionRequest): string | null {
     return request.error || "Draft generation failed.";
   }
   if (request.status === "expired") return "This draft expired.";
+  if (request.status === "unknown") return "GitHub may have accepted this action. Check the result before retrying.";
   return null;
 }
 
@@ -740,7 +741,7 @@ export function FailureActions({ failureID, resolvable = true }: { failureID: st
             <Alert severity="info">This request was cancelled.</Alert>
           )}
 
-          {preview && request?.status === "ready" && (
+          {preview && (request?.status === "ready" || request?.status === "unknown") && (
             <Stack spacing={2.5}>
               <ActionDraftPreview preview={preview} />
               <Box>
@@ -808,10 +809,10 @@ export function FailureActions({ failureID, resolvable = true }: { failureID: st
                 <BugReport sx={{ fontSize: 18 }} />
               )
             }
-            disabled={busy !== null || !preview || request?.status !== "ready"}
+            disabled={busy !== null || !preview || (request?.status !== "ready" && request?.status !== "unknown")}
             onClick={confirm}
           >
-            {isFix ? "Open draft PR" : "File issue"}
+            {request?.status === "unknown" ? "Check GitHub result" : isFix ? "Open draft PR" : "File issue"}
           </Button>
         </DialogActions>
       </Dialog>

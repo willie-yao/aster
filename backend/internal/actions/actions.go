@@ -687,9 +687,8 @@ func (s *Service) reconcileEntry(ctx context.Context, entry *previewEntry, userT
 		if entry.targetRepo != eff.Repo.Owner+"/"+eff.Repo.Name {
 			return "", false, ErrPreviewTargetChanged
 		}
-		client := issues.NewClient(userToken, eff.Repo.Owner, eff.Repo.Name)
-		_, url, found, err := client.SearchIssue(ctx, issues.MarkerToken(entry.spec.Key), issues.MarkerFor(entry.spec.Key))
-		return url, found, err
+		mgr := s.issueManagerFactory(userToken, eff.Repo.Owner, eff.Repo.Name)
+		return mgr.FindAny(ctx, entry.spec.Key)
 	case gfKind:
 		eff := s.cfg.EffectiveFixPRs()
 		if eff.Repo == nil || eff.Repo.Owner == "" || eff.Repo.Name == "" || entry.fix == nil {
@@ -746,6 +745,9 @@ func (s *Service) confirmEntryUnlocked(ctx context.Context, entry *previewEntry,
 			}
 		}
 		if _, err := mgr.Reconcile(ctx, []issues.IssueSpec{entry.spec}); err != nil {
+			if strings.HasPrefix(entry.failureID, "build::") {
+				return "", fmt.Errorf("%w: filing build issue: %v", ErrPreviewOutcomeUnknown, err)
+			}
 			return "", fmt.Errorf("filing issue: %w", err)
 		}
 		url, ok := mgr.TrackedURL(entry.spec.Key)
@@ -777,6 +779,9 @@ func (s *Service) confirmEntryUnlocked(ctx context.Context, entry *previewEntry,
 		}
 		url, err := mgr.OpenFromPreview(ctx, entry.fix)
 		if err != nil {
+			if strings.HasPrefix(entry.failureID, "build::") {
+				return "", fmt.Errorf("%w: opening build fix: %s", ErrPreviewOutcomeUnknown, safeReason(err.Error()))
+			}
 			return "", fmt.Errorf("%s", safeReason(err.Error()))
 		}
 		if strings.HasPrefix(entry.failureID, "build::") {

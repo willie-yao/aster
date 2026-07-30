@@ -930,17 +930,18 @@ func TestBuildActionsRejectOldCritiqueContract(t *testing.T) {
 }
 
 type fakeIssuePreviewManager struct {
-	specs   []issues.IssueSpec
-	forgot  []string
-	saved   bool
-	url     string
-	findURL string
-	saveErr error
+	specs        []issues.IssueSpec
+	forgot       []string
+	saved        bool
+	url          string
+	findURL      string
+	saveErr      error
+	reconcileErr error
 }
 
 func (f *fakeIssuePreviewManager) Reconcile(_ context.Context, specs []issues.IssueSpec) (issues.Stats, error) {
 	f.specs = append(f.specs, specs...)
-	return issues.Stats{Created: 1}, nil
+	return issues.Stats{Created: 1}, f.reconcileErr
 }
 func (f *fakeIssuePreviewManager) TrackedURL(string) (string, bool) { return f.url, f.url != "" }
 func (f *fakeIssuePreviewManager) FindAny(context.Context, string) (string, bool, error) {
@@ -1023,5 +1024,45 @@ func TestBuildSourceFilesUseAllAuthoritativeLinks(t *testing.T) {
 	subject := &BuildActionSubject{JobID: detail.JobID, JobName: detail.Name, Build: detail.Runs[0].BuildInfo, Failure: failure}
 	if got := verifiedBuildSourceFiles(subject, "example", "repo"); len(got) != 1 || got[0] != "config/versions.yaml" {
 		t.Fatalf("authoritative source files = %v", got)
+	}
+}
+
+func TestAsyncBuildIssueLostResponseReconcilesWithoutSecondWrite(t *testing.T) {
+	dataDir := t.TempDir()
+	detail := analyzedBuildDetail(false)
+	writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
+	cfg := &project.Config{Issues: &project.Issues{Repo: &project.SourceRepo{Owner: "o", Name: "r"}}}
+	service := NewService(cfg, dataDir, AIConfig{})
+	id := BuildFailureID(detail.JobID, "123")
+	subject, err := service.resolveSubject(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, targetRepo, err := service.buildIssueSpecForBuild(subject.Build, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := &fakeIssuePreviewManager{reconcileErr: errors.New("connection reset after create")}
+	service.issueManagerFactory = func(string, string, string) issuePreviewManager { return manager }
+	now := time.Now().UTC()
+	service.requests.Requests["request"] = &actionRequest{ActionRequestView: ActionRequestView{
+		ID: "request", FailureID: id, PatternHash: subject.ContentHash, Kind: "create-issue", Owner: "alice", Status: RequestReady,
+		CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
+		Preview: &PreviewResult{Kind: "issue", Title: spec.Title, Body: spec.Body},
+	}, Issue: &spec, TargetRepo: targetRepo}
+	if _, err := service.ConfirmRequest(t.Context(), "request", "alice", "token"); !errors.Is(err, ErrPreviewOutcomeUnknown) {
+		t.Fatalf("first confirmation error = %v", err)
+	}
+	if service.requests.Requests["request"].Status != RequestUnknown || len(manager.specs) != 1 {
+		t.Fatalf("unknown request = %+v writes=%d", service.requests.Requests["request"].ActionRequestView, len(manager.specs))
+	}
+	manager.reconcileErr = nil
+	manager.findURL = "https://github.com/o/r/issues/9"
+	url, err := service.ConfirmRequest(t.Context(), "request", "alice", "token")
+	if err != nil || url != manager.findURL {
+		t.Fatalf("reconcile url=%q err=%v", url, err)
+	}
+	if len(manager.specs) != 1 || service.requests.Requests["request"].Status != RequestConfirmed {
+		t.Fatalf("retry wrote again: writes=%d status=%s", len(manager.specs), service.requests.Requests["request"].Status)
 	}
 }

@@ -29,6 +29,7 @@ const (
 const (
 	RequestPending   = "pending"
 	RequestReady     = "ready"
+	RequestUnknown   = "unknown"
 	RequestFailed    = "failed"
 	RequestConfirmed = "confirmed"
 	RequestCancelled = "cancelled"
@@ -204,7 +205,7 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 		if existing.Status == RequestPending && existing.Owner == owner {
 			pending++
 		}
-		if existing.Status == RequestPending || existing.Status == RequestReady {
+		if existing.Status == RequestPending || existing.Status == RequestReady || existing.Status == RequestUnknown {
 			active++
 		}
 	}
@@ -417,11 +418,12 @@ func (s *Service) ConfirmRequest(ctx context.Context, id, owner, userToken strin
 		s.rmu.Unlock()
 		return url, nil
 	}
-	if request.Status != RequestReady {
+	if request.Status != RequestReady && request.Status != RequestUnknown {
 		status := request.Status
 		s.rmu.Unlock()
 		return "", fmt.Errorf("action request is %s", status)
 	}
+	reconcileOnly := request.Status == RequestUnknown
 	if _, confirming := s.requestConfirms[id]; confirming {
 		s.rmu.Unlock()
 		return "", fmt.Errorf("action request is being confirmed")
@@ -456,9 +458,32 @@ func (s *Service) ConfirmRequest(ctx context.Context, id, owner, userToken strin
 		s.rmu.Unlock()
 	}()
 
-	url, err := s.confirmEntry(ctx, entry, userToken)
-	if err != nil {
-		return "", err
+	var url string
+	if reconcileOnly {
+		reconciledURL, found, err := s.reconcileEntry(ctx, entry, userToken)
+		if err != nil {
+			return "", err
+		}
+		if !found {
+			return "", ErrPreviewOutcomeUnknown
+		}
+		url = reconciledURL
+	} else {
+		confirmedURL, err := s.confirmEntry(ctx, entry, userToken)
+		if errors.Is(err, ErrPreviewOutcomeUnknown) {
+			s.rmu.Lock()
+			if current := s.requests.Requests[id]; current != nil {
+				current.Status = RequestUnknown
+				current.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+				_ = s.saveRequestsLocked()
+			}
+			s.rmu.Unlock()
+			return "", err
+		}
+		if err != nil {
+			return "", err
+		}
+		url = confirmedURL
 	}
 	s.rmu.Lock()
 	if current := s.requests.Requests[id]; current != nil {
