@@ -47,5 +47,6 @@ test("build actions require the server's current critique contract", () => {
   const analysis = { generated_at: "now", model: "m", mode: "agentic", critique_passed: true, critique_version: 7, root_cause: "cause", severity: "High", suggested_fix: "fix" };
   assert.equal(buildActionsReady(analysis, 7), true);
   assert.equal(buildActionsReady(analysis, 8), false);
+  assert.equal(buildActionsReady({ ...analysis, critique_version: 9 }, 8), true);
   assert.equal(buildActionsReady(analysis, undefined), false);
 });

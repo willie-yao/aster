@@ -41,7 +41,7 @@ export function buildActionsReady(analysis: AIAnalysis | undefined, currentCriti
     analysis?.mode === "agentic" &&
     analysis.critique_passed &&
     currentCritiqueVersion != null &&
-    analysis.critique_version === currentCritiqueVersion &&
+    (analysis.critique_version ?? 0) >= currentCritiqueVersion &&
     analysis.generated_at &&
     analysis.root_cause.trim() &&
     analysis.suggested_fix.trim(),
