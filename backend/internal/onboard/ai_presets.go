@@ -200,14 +200,18 @@ func pagesEndpointWarnings(endpoint string) []string {
 		warnings = append(warnings, "The endpoint uses HTTP, so a bearer token would be sent without TLS.")
 	}
 	host := strings.ToLower(strings.TrimSuffix(parsed.Hostname(), "."))
-	if host == "localhost" {
-		warnings = append(warnings, "GitHub-hosted Actions runners cannot reach localhost on your machine.")
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		warnings = append(warnings, "GitHub-hosted Actions runners cannot reach a localhost name on your machine.")
 		return warnings
 	}
 	if ip := net.ParseIP(host); ip != nil {
 		switch {
+		case ip.IsUnspecified():
+			warnings = append(warnings, "An unspecified IP address does not identify a reachable model service.")
 		case ip.IsLoopback():
 			warnings = append(warnings, "GitHub-hosted Actions runners cannot reach a loopback address.")
+		case ip.IsLinkLocalUnicast():
+			warnings = append(warnings, "GitHub-hosted Actions runners cannot reach your model through a link-local address.")
 		case ip.IsPrivate():
 			warnings = append(warnings, "GitHub-hosted Actions runners normally cannot reach a private IP address.")
 		}
