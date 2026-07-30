@@ -9,6 +9,20 @@ export interface FetchStatusPresentation {
   determinateCompleted: number;
 }
 
+export interface FetchStatusCompactPresentation {
+  label: string;
+  ariaLabel: string;
+  severity: FetchStatusPresentation["severity"];
+  quiet: boolean;
+}
+
+export interface FetchStatusPreferenceStorage {
+  getItem: (key: string) => string | null;
+  setItem: (key: string, value: string) => void;
+}
+
+export const FETCH_STATUS_IDLE_COMPACT_KEY = "prow-ai-dashboard.fetch-status.idle-compact";
+
 const patternFailureLabels: Record<string, string> = {
   ambiguous: "ambiguous response",
   "request-timeout": "request timeout",
@@ -53,7 +67,9 @@ export function fetchStatusPresentation(response: FetchStatusResponse): FetchSta
     ? `${analysesDone} of ${status.analyses.logical_total} analyses complete, ${status.analyses.running} running, ${status.analyses.queued} queued`
     : `${status.jobs.completed} of ${status.jobs.total} jobs checked`;
   const attemptDetail = status.analyses.task_attempts > 0 ? `, ${status.analyses.task_attempts} Task attempts` : "";
-  const retryDetail = status.analyses.retries > 0 ? `, ${status.analyses.retries} retries` : "";
+  const retryDetail = status.analyses.retries > 0
+    ? `, ${status.analyses.retries} ${status.analyses.retries === 1 ? "retry" : "retries"}`
+    : "";
   const checkpointDetail = status.analyses.checkpoint_committed ? ", analysis checkpoint saved" : "";
   const patternAttempts = status.patterns?.attempts ?? 0;
   const patternRetries = status.patterns?.retries ?? 0;
@@ -106,6 +122,79 @@ export function fetchStatusPresentation(response: FetchStatusResponse): FetchSta
     determinateTotal,
     determinateCompleted,
   };
+}
+
+export function fetchStatusCompactPresentation(response: FetchStatusResponse): FetchStatusCompactPresentation | null {
+  const presentation = fetchStatusPresentation(response);
+  const status = response.status;
+  if (!presentation || !status) return null;
+  const completed = status.analyses.completed + status.analyses.failed + status.analyses.cancelled;
+  const total = status.analyses.logical_total;
+  let label = "Fetch";
+  let quiet = false;
+  let severity = presentation.severity;
+  switch (response.state) {
+    case "active": {
+      const phase = phaseLabels[status.phase] ?? "Fetch";
+      label = total > 0 ? `${phase} ${completed}/${total}` : phase;
+      break;
+    }
+    case "idle":
+      label = "Idle";
+      quiet = true;
+      severity = "success";
+      break;
+    case "completed":
+      label = "Complete";
+      quiet = true;
+      severity = "success";
+      break;
+    case "failed":
+      label = "Fetch failed";
+      break;
+    case "stale":
+      label = "Status stale";
+      break;
+    case "interrupted":
+      label = "Interrupted";
+      break;
+    case "cancelled":
+      label = "Cancelled";
+      break;
+  }
+  return {
+    label,
+    ariaLabel: `${presentation.title}. Open fetch status details.`,
+    severity,
+    quiet,
+  };
+}
+
+export function patternFailureLabel(category?: string): string | null {
+  if (!category) return null;
+  return patternFailureLabels[category] ?? "unknown";
+}
+
+export function fetchStatusStripKey(response: FetchStatusResponse): string {
+  return `${response.status?.pass_id ?? "unknown"}:${response.state}`;
+}
+
+export function readFetchStatusIdleCompact(storage?: FetchStatusPreferenceStorage | null): boolean {
+  if (!storage) return false;
+  try {
+    return storage.getItem(FETCH_STATUS_IDLE_COMPACT_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export function writeFetchStatusIdleCompact(value: boolean, storage?: FetchStatusPreferenceStorage | null): void {
+  if (!storage) return;
+  try {
+    storage.setItem(FETCH_STATUS_IDLE_COMPACT_KEY, value ? "true" : "false");
+  } catch {
+    // The preference is optional when storage is unavailable.
+  }
 }
 
 export function nextFetchStatusDelay(state: FetchStatusState | undefined, failures: number, baseDelay = 15_000, maxDelay = 120_000): number {

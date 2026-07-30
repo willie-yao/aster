@@ -1,6 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fetchStatusPresentation, nextFetchStatusDelay, nextFetchTime, pollFetchStatus } from "../src/lib/fetchStatus.js";
+import {
+  FETCH_STATUS_IDLE_COMPACT_KEY,
+  fetchStatusCompactPresentation,
+  fetchStatusPresentation,
+  fetchStatusStripKey,
+  nextFetchStatusDelay,
+  nextFetchTime,
+  pollFetchStatus,
+  readFetchStatusIdleCompact,
+  writeFetchStatusIdleCompact,
+} from "../src/lib/fetchStatus.js";
 import type { FetchProgressStatus, FetchStatusResponse } from "../src/types/fetchStatus.js";
 
 const activeStatus: FetchProgressStatus = {
@@ -56,6 +66,12 @@ test("fetch status presentation covers active idle failed and stale states", () 
   }));
   assert.ok(attempts?.detail.includes("27 Task attempts"));
   assert.ok(attempts?.detail.includes("analysis checkpoint saved"));
+  const oneRetry = fetchStatusPresentation(response("active", {
+    ...activeStatus,
+    analyses: { ...activeStatus.analyses, retries: 1 },
+  }));
+  assert.ok(oneRetry?.detail.includes("1 retry"));
+  assert.ok(!oneRetry?.detail.includes("1 retries"));
 
   const patternRetry = fetchStatusPresentation(response("active", {
     ...activeStatus,
@@ -107,6 +123,55 @@ test("fetch status presentation covers active idle failed and stale states", () 
   assert.equal(interrupted?.severity, "warning");
 
   assert.equal(fetchStatusPresentation({ available: false, state: "missing" }), null);
+});
+
+test("compact fetch status distinguishes quiet and attention states", () => {
+  const active = fetchStatusCompactPresentation(response("active"));
+  assert.equal(active?.label, "Analysis 24/61");
+  assert.equal(active?.quiet, false);
+  assert.equal(active?.severity, "info");
+
+  const idle = fetchStatusCompactPresentation(response("idle", {
+    ...activeStatus,
+    phase: "idle",
+    outcome: "succeeded",
+  }));
+  assert.equal(idle?.label, "Idle");
+  assert.equal(idle?.quiet, true);
+  assert.equal(idle?.severity, "success");
+
+  const failed = fetchStatusCompactPresentation(response("failed", {
+    ...activeStatus,
+    phase: "failed",
+    outcome: "failed",
+    failure_category: "patterns",
+  }));
+  assert.equal(failed?.label, "Fetch failed");
+  assert.equal(failed?.quiet, false);
+  assert.equal(failed?.severity, "error");
+  assert.equal(fetchStatusStripKey(response("active")), "safe-pass:active");
+  assert.equal(fetchStatusStripKey(response("failed")), "safe-pass:failed");
+});
+
+test("idle compact preference is optional and persistent", () => {
+  const values = new Map<string, string>();
+  const storage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value); },
+  };
+  assert.equal(readFetchStatusIdleCompact(storage), false);
+  writeFetchStatusIdleCompact(true, storage);
+  assert.equal(values.get(FETCH_STATUS_IDLE_COMPACT_KEY), "true");
+  assert.equal(readFetchStatusIdleCompact(storage), true);
+  writeFetchStatusIdleCompact(false, storage);
+  assert.equal(readFetchStatusIdleCompact(storage), false);
+
+  const denied = {
+    getItem: () => { throw new Error("denied"); },
+    setItem: () => { throw new Error("denied"); },
+  };
+  assert.equal(readFetchStatusIdleCompact(denied), false);
+  assert.doesNotThrow(() => writeFetchStatusIdleCompact(true, denied));
 });
 
 test("polling is sequential and backs off after failures", async () => {

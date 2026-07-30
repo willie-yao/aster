@@ -10,13 +10,16 @@ import SvgIcon from "@mui/material/SvgIcon";
 import Toolbar from "@mui/material/Toolbar";
 import Typography from "@mui/material/Typography";
 import { useColorScheme } from "@mui/material/styles";
+import { useState } from "react";
 import { Link as RouterLink, Outlet, useLocation } from "react-router-dom";
 import { SearchBar } from "./SearchBar";
 import { ProfileMenu } from "./ProfileMenu";
-import { FetchProgressBanner } from "./FetchProgressBanner";
+import { FetchStatusControl, FetchStatusStrip } from "./FetchStatus";
 import { useManifest } from "../hooks/useManifest";
 import { useCapabilities } from "../hooks/useCapabilities";
+import { useFetchStatus } from "../hooks/useFetchStatus";
 import { usePageDocumentTitle } from "../lib/pageMetadata";
+import { readFetchStatusIdleCompact, writeFetchStatusIdleCompact } from "../lib/fetchStatus";
 import { soft } from "../theme";
 
 // Primary top-nav tab: pill highlight for the active section, with aria-current
@@ -68,6 +71,15 @@ export function Layout() {
   const location = useLocation();
   const { mode, setMode } = useColorScheme();
   const isDark = mode === "dark";
+  const fetchStatus = useFetchStatus();
+  const [idleStatusCompact, setIdleStatusCompact] = useState(() =>
+    readFetchStatusIdleCompact(typeof window === "undefined" ? null : window.localStorage)
+  );
+  const [dismissedFetchStrip, setDismissedFetchStrip] = useState<string | null>(null);
+  const updateIdleStatusCompact = (value: boolean) => {
+    setIdleStatusCompact(value);
+    writeFetchStatusIdleCompact(value, typeof window === "undefined" ? null : window.localStorage);
+  };
   usePageDocumentTitle(location.pathname, manifest.branding.title);
   const flakyActive = location.pathname === "/flaky" || location.pathname.startsWith("/flaky/");
   const tracesActive = location.pathname === "/analysis-traces";
@@ -226,6 +238,11 @@ export function Layout() {
             }}
           >
             <SearchBar />
+            <FetchStatusControl
+              response={fetchStatus}
+              idleCompact={idleStatusCompact}
+              onIdleCompactChange={updateIdleStatusCompact}
+            />
             {mode !== undefined && (
               <IconButton
                 aria-label={`Switch to ${isDark ? "light" : "dark"} mode`}
@@ -241,7 +258,11 @@ export function Layout() {
         </Toolbar>
       </AppBar>
 
-      <FetchProgressBanner />
+      <FetchStatusStrip
+        response={fetchStatus}
+        dismissedKey={dismissedFetchStrip}
+        onDismiss={setDismissedFetchStrip}
+      />
       <Container component="main" maxWidth="xl" sx={{ minWidth: 0, py: 3 }}>
         <Outlet />
       </Container>
