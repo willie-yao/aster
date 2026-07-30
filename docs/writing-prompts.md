@@ -133,19 +133,10 @@ Editing `prompts/system.md` changes the prompt used for new analyses. Existing
 reusable entries remain cached and keep their original `prompt_hash` provenance.
 This avoids an automatic dashboard-wide re-analysis after a prompt edit.
 
-Until the follow-up cache generation control is available, use the existing
-**Clear AI Cache** workflow only when an intentional full rebaseline is worth
-discarding all warm entries:
-
-```yaml
-# In your consumer repo, e.g. .github/workflows/clear-cache.yml
-on: { workflow_dispatch: {} }
-jobs:
-  clear:
-    uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-clear-cache.yml@main
-    with:
-      project_dir: .
-```
+Set `ai.cache_generation` or `AI_CACHE_GENERATION` to a new value when a prompt
+rewrite requires an intentional full rebaseline. Returning to a prior value
+reuses its unexpired entries. Use the **Clear AI Cache** workflow only for
+emergency destructive cleanup.
 
 ## What the engine does NOT add to your prompt
 

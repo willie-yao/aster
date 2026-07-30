@@ -162,6 +162,9 @@ type AIAnalysis struct {
 	// Build subjects include their module prompt.
 	PromptHash string `json:"prompt_hash,omitempty"`
 
+	// CacheGeneration is the safe generation fingerprint for this analysis.
+	CacheGeneration string `json:"cache_generation,omitempty"`
+
 	// FileLinks maps cited source-file paths to verified GitHub URLs.
 	// It is the UI allowlist for source links. A present-but-empty map means
 	// verification ran and found nothing linkable; an absent field means the

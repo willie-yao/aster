@@ -309,6 +309,7 @@ func enableAnalysisChat(ctx context.Context, opts *server.Options, cfg *project.
 	}
 	projectRuntime, err := analysisruntime.LoadProject(projectDir, cfg, analysisruntime.ProviderFallbacks{
 		API: os.Getenv("AI_API"), Endpoint: os.Getenv("AI_ENDPOINT"), Model: os.Getenv("AI_MODEL"),
+		CacheGeneration: os.Getenv(project.AICacheGenerationEnv),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("loading analysis chat project: %w", err)

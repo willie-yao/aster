@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"net/http"
 	"slices"
@@ -16,6 +17,7 @@ type FailureAnalysisRequest struct {
 	Build               models.BuildInfo `json:"build"`
 	TestCase            models.TestCase  `json:"test_case"`
 	ConsecutiveFailures int              `json:"consecutive_failures,omitempty"`
+	CacheGeneration     string           `json:"cache_generation,omitempty"`
 }
 
 // FailureAnalysisResult is the dashboard analysis output for one test failure.
@@ -32,6 +34,10 @@ type FailureAnalyzer interface {
 // AnalyzeFailure runs one analysis without mutating the request values. Errors
 // are also represented by the returned unavailable summary for existing callers.
 func (s *Service) AnalyzeFailure(ctx context.Context, httpClient *http.Client, request FailureAnalysisRequest) (FailureAnalysisResult, error) {
+	if request.CacheGeneration != s.cacheGeneration {
+		err := fmt.Errorf("analysis cache generation mismatch")
+		return UnavailableFailureAnalysisResult(request.TestCase, err), err
+	}
 	run := models.BuildResult{BuildInfo: cloneBuildInfo(request.Build)}
 	tc := cloneTestCase(request.TestCase)
 	consecutiveFailures := max(1, request.ConsecutiveFailures)

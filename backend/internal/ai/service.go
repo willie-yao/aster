@@ -25,10 +25,11 @@ import (
 // a snapshot of consecutive failure counts. Every failure is analyzed by the
 // agentic tool-calling loop; there is no other path.
 type Service struct {
-	client         *Client
-	module         Module
-	systemPrompt   string
-	consecutiveMap map[string]int
+	client          *Client
+	module          Module
+	systemPrompt    string
+	consecutiveMap  map[string]int
+	cacheGeneration string
 
 	// agenticOpts is the resolved agentic config.
 	agenticOpts AgenticOptions
@@ -102,6 +103,11 @@ func NewService(client *Client, module Module, systemPrompt string, consecutiveM
 	}
 }
 
+// SetCacheGeneration installs the safe generation fingerprint used in cache keys.
+func (s *Service) SetCacheGeneration(fingerprint string) {
+	s.cacheGeneration = fingerprint
+}
+
 // EnableAgentic installs the agentic loop's runtime dependencies: resolved
 // options, per-build browser factory, tool registry, and enabled tool set.
 // Must be called once at fetcher startup before Analyze.
@@ -160,6 +166,7 @@ func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, jobID, b
 		Build:               run.BuildInfo,
 		TestCase:            *tc,
 		ConsecutiveFailures: s.consecutiveMap[consecutiveKey(jobID, tc.Name)],
+		CacheGeneration:     s.cacheGeneration,
 	})
 	tc.AISummary = result.Summary
 	tc.AIAnalysis = result.Analysis
@@ -210,6 +217,7 @@ func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, b
 	tc.AISummary = summary
 	tc.AIAnalysis = analysis
 	if analysis != nil {
+		analysis.CacheGeneration = s.cacheGeneration
 		analysis.FileLinks = s.resolveFileLinks(ctx, httpClient, tc)
 	}
 	if analysis != nil && analysis.CacheHit {
@@ -352,19 +360,29 @@ func (s *Service) agenticCachePolicyFor(tc *models.TestCase, expectedPromptHash 
 	if s.skillSet != nil {
 		wantHash = s.skillSet.Hash()
 	}
-	return agenticCachePolicy(s.client, s.agenticOptionsFor(tc), wantHash, expectedPromptHash, consecutiveFailures)
+	policy := agenticCachePolicy(s.client, s.agenticOptionsFor(tc), wantHash, expectedPromptHash, consecutiveFailures)
+	policy.CacheGeneration = s.cacheGeneration
+	return policy
 }
 
 // agenticCacheKey scopes agentic results by job+build because the model's
 // answer cites build-specific artifact paths and line numbers.
 func (s *Service) agenticCacheKey(jobID, buildID, testName, failureMessage string) string {
-	return AgenticCacheKey(s.module.Name(), jobID, buildID, testName, failureMessage)
+	return AgenticCacheKeyForGeneration(s.module.Name(), s.cacheGeneration, jobID, buildID, testName, failureMessage)
 }
 
 // AgenticCacheKey returns the stable per-failure cache key.
 func AgenticCacheKey(moduleName, jobID, buildID, testName, failureMessage string) string {
+	return AgenticCacheKeyForGeneration(moduleName, "", jobID, buildID, testName, failureMessage)
+}
+
+// AgenticCacheKeyForGeneration returns the generation-scoped per-failure key.
+func AgenticCacheKeyForGeneration(moduleName, generation, jobID, buildID, testName, failureMessage string) string {
 	hash := failureHash(testName, failureMessage)
-	return fmt.Sprintf("agentic:%s:%s:%s:%x", moduleName, jobID, buildID, hash)
+	if generation == "" {
+		return fmt.Sprintf("agentic:%s:%s:%s:%x", moduleName, jobID, buildID, hash)
+	}
+	return fmt.Sprintf("agentic:%s:g:%s:%s:%s:%x", moduleName, generation, jobID, buildID, hash)
 }
 
 // consecutiveKey scopes consecutive-failure counts by JobID + test name so

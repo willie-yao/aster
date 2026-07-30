@@ -191,6 +191,7 @@ func setupPipeline(opts Options) (*pipeline, error) {
 	if enableAI {
 		fallbacks := analysisruntime.ProviderFallbacks{
 			API: os.Getenv("AI_API"), Endpoint: os.Getenv("AI_ENDPOINT"), Model: os.Getenv("AI_MODEL"),
+			CacheGeneration: os.Getenv(project.AICacheGenerationEnv),
 		}
 		aiProject, err = analysisruntime.LoadProject(opts.ProjectDir, cfg, fallbacks)
 		if err != nil {
@@ -220,7 +221,7 @@ func setupPipeline(opts Options) (*pipeline, error) {
 			container := opts.AnalysisRuntime.OrkaContainer
 			if err := orka.ValidateContainerAnalyzerOptions(orka.ContainerAnalyzerOptions{
 				Namespace: container.Namespace, OrkaAPI: container.ResultAPI, Image: container.Image, ProjectDir: opts.ProjectDir, DataDir: opts.OutDir,
-				API: aiProject.Provider.API, Endpoint: aiProject.Provider.Endpoint, Model: aiProject.Provider.Model,
+				API: aiProject.Provider.API, Endpoint: aiProject.Provider.Endpoint, Model: aiProject.Provider.Model, CacheGeneration: aiProject.CacheGeneration,
 				ModelSecretName: container.ModelSecretName, ModelTokenKey: container.ModelTokenKey,
 				StateSecretName: container.StateSecretName, StateSecretKey: container.StateSecretKey, StateKey: stateKey,
 				ContextWindowTokens: container.ContextWindowTokens,

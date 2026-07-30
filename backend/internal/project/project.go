@@ -336,6 +336,10 @@ type AI struct {
 	// from manifest.json.
 	Model string `yaml:"model,omitempty" json:"-"`
 
+	// CacheGeneration selects a reversible namespace for all AI cache keys.
+	// AI_CACHE_GENERATION overrides it when non-empty. Excluded from public JSON.
+	CacheGeneration string `yaml:"cache_generation,omitempty" json:"-"`
+
 	// Headers are extra HTTP headers merged into every AI request after
 	// the defaults. Use for provider-specific routing headers or to
 	// override the default Authorization scheme. Do not put secrets here;
@@ -878,6 +882,9 @@ func (c *Config) Validate() error {
 		api := strings.ToLower(strings.TrimSpace(c.AI.API))
 		if api != "" && api != AIAPIChatCompletions && api != AIAPIResponses {
 			return fmt.Errorf("ai.api %q is invalid (want %q or %q)", c.AI.API, AIAPIChatCompletions, AIAPIResponses)
+		}
+		if err := ValidateAICacheGeneration(c.AI.CacheGeneration); err != nil {
+			return fmt.Errorf("ai.cache_generation: %w", err)
 		}
 	}
 

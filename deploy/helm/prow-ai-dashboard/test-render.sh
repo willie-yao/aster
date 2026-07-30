@@ -192,6 +192,12 @@ helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" "${container
   --set ai.contextWindowTokens=128000 --show-only templates/orka-analysis-admission.yaml > "$tmp/container-context-window.yaml"
 grep -Fq "AI_CONTEXT_WINDOW_TOKENS" "$tmp/container-context-window.yaml"
 grep -Fq 'e.value == \"128000\"' "$tmp/container-context-window.yaml"
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" "${container_args[@]}" \
+  --set analysisCache.generation=0 --show-only templates/orka-analysis-admission.yaml > "$tmp/container-cache-generation.yaml"
+grep -Fq 'AI_CACHE_GENERATION' "$tmp/container-cache-generation.yaml"
+grep -Fq "size(object.spec.env) == 10 + (object.spec.env.exists(e, e.name == 'AI_CACHE_GENERATION') ? 1 : 0)" "$tmp/container-cache-generation.yaml"
+grep -Fq 'e.value == \"0\"' "$tmp/container-cache-generation.yaml"
+grep -Fq "e.value.matches('^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$')" "$tmp/container-analysis.yaml"
 if grep -Eq 'resources: \["(tools|providers|agents|agentruntimes)"\]|type: ai|orka-producer|orka-ingestor|orka-artifact-tool' "$tmp/container-analysis.yaml"; then
   echo 'container analysis render contains a forbidden patched-worker resource' >&2
   exit 1
@@ -848,5 +854,22 @@ if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   exit 1
 fi
 grep -Fq 'server.chat.enabled requires ai.enabled' "$tmp/chat-without-ai.yaml"
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set ai.enabled=true --set ai.token=test-token \
+  --set analysisCache.generation=2 \
+  --show-only templates/worker-deployment.yaml > "$tmp/cache-generation-worker.yaml"
+grep -A1 -F 'name: AI_CACHE_GENERATION' "$tmp/cache-generation-worker.yaml" | grep -Fq 'value: "2"'
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set mode=cron --set ai.enabled=true --set ai.token=test-token \
+  --set analysisCache.generation=2 \
+  --show-only templates/fetcher-cronjob.yaml > "$tmp/cache-generation-cron.yaml"
+grep -A1 -F 'name: AI_CACHE_GENERATION' "$tmp/cache-generation-cron.yaml" | grep -Fq 'value: "2"'
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set ai.enabled=true --set ai.token=test-token \
+  --set analysisCache.generation=0 \
+  --show-only templates/worker-deployment.yaml > "$tmp/cache-generation-zero.yaml"
+grep -A1 -F 'name: AI_CACHE_GENERATION' "$tmp/cache-generation-zero.yaml" | grep -Fq 'value: "0"'
 
 echo 'Helm render checks passed.'

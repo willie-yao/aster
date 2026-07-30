@@ -24,6 +24,11 @@ fullnameOverride: ""
 # release at the same existingClaim.
 mode: watch
 
+# AI cache generation selects a reversible namespace for all analysis and
+# recurring-pattern cache keys. Empty preserves the historical key shape.
+analysisCache:
+  generation: ""
+
 # Failure analysis runs in-process by default. The Orka container runtime is an
 # experimental Helm-only option for cron or watch mode. It is a lifecycle
 # sidegrade, not the recommended production mode, and has no compatibility

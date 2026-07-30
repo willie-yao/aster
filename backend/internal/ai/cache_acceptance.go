@@ -31,6 +31,7 @@ type AgenticCachePolicy struct {
 	Model               string
 	ModelHash           string
 	PromptHash          string
+	CacheGeneration     string
 	Now                 time.Time
 	entryTimeValidated  bool
 }
@@ -88,6 +89,7 @@ func AcceptAgenticCacheEntry(entry CacheEntry, expectedKey string, policy Agenti
 	analysis.SkillSetHash = cached.SkillSetHash
 	analysis.ModelHash = cached.ModelHash
 	analysis.PromptHash = cached.PromptHash
+	analysis.CacheGeneration = policy.CacheGeneration
 	result := FailureAnalysisResult{Summary: summary, Analysis: analysis}
 	policy.Now = now
 	policy.entryTimeValidated = true
@@ -124,6 +126,9 @@ func AgenticResultRejection(result FailureAnalysisResult, policy AgenticCachePol
 	}
 	if !analysis.CritiquePassed || analysis.CritiqueVersion < currentCritiqueVersion {
 		return CacheRejectedCritique
+	}
+	if analysis.CacheGeneration != policy.CacheGeneration {
+		return CacheRejectedMissing
 	}
 	return CacheAccepted
 }

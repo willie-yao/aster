@@ -221,6 +221,10 @@ spec:
                   key: {{ .Values.ai.tokenSecretKey }}
             - name: AI_API
               value: {{ .Values.ai.api | quote }}
+            {{- if ne (printf "%v" .Values.analysisCache.generation) "" }}
+            - name: AI_CACHE_GENERATION
+              value: {{ .Values.analysisCache.generation | quote }}
+            {{- end }}
             {{- if .Values.ai.endpoint }}
             - name: AI_ENDPOINT
               value: {{ .Values.ai.endpoint | quote }}

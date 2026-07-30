@@ -30,19 +30,22 @@ const (
 
 // ProviderFallbacks are used when project.yaml omits provider fields.
 type ProviderFallbacks struct {
-	API      string
-	Endpoint string
-	Model    string
+	API             string
+	Endpoint        string
+	Model           string
+	CacheGeneration string
 }
 
 // Project holds the AI configuration shared by every analysis in one project.
 type Project struct {
-	Config           *project.Config
-	Provider         project.AIProvider
-	SystemPrompt     string
-	ConsumerPrompt   string
-	SkillSet         *skills.Set
-	ProfileSelection skills.ProfileSelection
+	Config                     *project.Config
+	Provider                   project.AIProvider
+	SystemPrompt               string
+	ConsumerPrompt             string
+	SkillSet                   *skills.Set
+	ProfileSelection           skills.ProfileSelection
+	CacheGeneration            string
+	CacheGenerationFingerprint string
 }
 
 // LoadProject loads and validates the dashboard-owned AI configuration.
@@ -65,17 +68,27 @@ func LoadProject(projectDir string, cfg *project.Config, fallbacks ProviderFallb
 	if err != nil {
 		return nil, fmt.Errorf("loading AI prompt: %w", err)
 	}
+	configuredGeneration := ""
+	if cfg.AI != nil {
+		configuredGeneration = cfg.AI.CacheGeneration
+	}
+	cacheGeneration, err := project.ResolveAICacheGeneration(configuredGeneration, fallbacks.CacheGeneration)
+	if err != nil {
+		return nil, fmt.Errorf("resolving AI cache generation: %w", err)
+	}
 	set, selection, err := skills.LoadForTools(projectDir, cfg.AI.EffectiveAgentic().Tools)
 	if err != nil {
 		return nil, fmt.Errorf("loading AI skills: %w", err)
 	}
 	return &Project{
-		Config:           cfg,
-		Provider:         provider,
-		SystemPrompt:     ai.ComposeSystemPrompt(prompt),
-		ConsumerPrompt:   prompt,
-		SkillSet:         set,
-		ProfileSelection: selection,
+		Config:                     cfg,
+		Provider:                   provider,
+		SystemPrompt:               ai.ComposeSystemPrompt(prompt),
+		ConsumerPrompt:             prompt,
+		SkillSet:                   set,
+		ProfileSelection:           selection,
+		CacheGeneration:            cacheGeneration,
+		CacheGenerationFingerprint: project.AICacheGenerationFingerprint(cacheGeneration),
 	}, nil
 }
 
@@ -247,6 +260,7 @@ func (r *Runtime) NewService(opts ServiceOptions) (*ai.Service, error) {
 	}
 	cfg := r.Project.Config
 	service := ai.NewService(r.Client, universal.New(), r.Project.SystemPrompt, opts.ConsecutiveFailures)
+	service.SetCacheGeneration(r.Project.CacheGenerationFingerprint)
 	if opts.TraceStore != nil {
 		service.SetTraceStore(opts.TraceStore)
 	}
@@ -298,6 +312,9 @@ func (r *Runtime) LogConfiguration() {
 	}
 	log.Printf("🤖 Agentic AI enabled (%d iters, %dKB model, %dMB gcs, %s timeout, min_tools=%d, min_gcs_kb=%d, critique=on/%d, skills=%s, tools=%v)",
 		eff.MaxIters, r.ModelByteBudget/1024, gcsByteBudget/1024/1024, eff.Timeout, eff.MinToolCalls, eff.MinGCSBytes/1024, *eff.Critique.MaxRetries, skillsLog, r.EnabledTools)
+	if r.Project.CacheGenerationFingerprint != "" {
+		log.Printf("🗂 AI cache generation configured (fingerprint=%s)", r.Project.CacheGenerationFingerprint)
+	}
 	if os.Getenv("AI_LOG_ENDPOINT") == "1" {
 		log.Printf("Using AI endpoint: %s, model: %s", r.Client.Endpoint(), r.Client.ModelName())
 	} else {
@@ -322,6 +339,7 @@ func NewReusePlanner(project *Project) *ai.Service {
 		API: project.Provider.API, Endpoint: project.Provider.Endpoint, Model: project.Provider.Model,
 	})
 	service := ai.NewService(client, universal.New(), project.SystemPrompt, nil)
+	service.SetCacheGeneration(project.CacheGenerationFingerprint)
 	eff := project.Config.AI.EffectiveAgentic()
 	service.EnableAgentic(ai.AgenticOptions{
 		MinToolCalls: eff.MinToolCalls,

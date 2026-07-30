@@ -186,18 +186,20 @@ func TestContainerAnalyzerCompatibleResultSafetyFailures(t *testing.T) {
 	request := containerTaskRequest()
 	key := bytes.Repeat([]byte{0x7b}, 32)
 	for _, tc := range []struct {
-		name       string
-		resultErr  error
-		wrongTask  bool
-		wrongCache bool
-		minTools   int
-		wantErr    bool
-		wantAuth   bool
+		name            string
+		resultErr       error
+		wrongTask       bool
+		wrongCache      bool
+		wrongGeneration bool
+		minTools        int
+		wantErr         bool
+		wantAuth        bool
 	}{
 		{name: "authorization", resultErr: &ResultHTTPError{StatusCode: http.StatusUnauthorized}, wantErr: true, wantAuth: true},
 		{name: "candidate result unavailable", resultErr: &ResultHTTPError{StatusCode: http.StatusBadGateway}},
 		{name: "encrypted identity", wrongTask: true, wantErr: true},
 		{name: "cache identity", wrongCache: true, wantErr: true},
+		{name: "cache generation identity", wrongGeneration: true, wantErr: true},
 		{name: "below floor", minTools: 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -237,6 +239,9 @@ func TestContainerAnalyzerCompatibleResultSafetyFailures(t *testing.T) {
 			resultRequest := request
 			if tc.wrongCache {
 				resultRequest.TestCase.FailureMessage = "different failure"
+			}
+			if tc.wrongGeneration {
+				resultRequest.CacheGeneration = "0123456789abcdef"
 			}
 			results.values[candidateName] = struct {
 				raw string

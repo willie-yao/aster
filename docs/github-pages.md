@@ -149,14 +149,21 @@ After the run succeeds, check:
 See [Troubleshooting](troubleshooting.md) if the workflow succeeds but the site
 is empty or analysis is unavailable.
 
-## Manual full cache reset
+## Intentional AI cache rebaseline
 
 Provider, model, prompt, and skill changes affect new analyses but do not
-invalidate existing reusable entries. If an operator needs a full rebaseline
-before the follow-up cache generation control is available, add a small workflow
-that calls `.github/workflows/reusable-clear-cache.yml` with the same engine ref
-and `project_dir` as the deploy workflow. This reset is destructive and should
-remain an emergency or migration tool.
+invalidate existing reusable entries. Use the reusable workflow's
+`ai-cache-generation` input for a reversible full rebaseline:
+
+```yaml
+with:
+  ai-cache-generation: "2"
+```
+
+Generation `2` misses generation `1`; returning to `1` reuses its unexpired
+entries. Empty preserves all historical keys byte-for-byte. The value is not
+published in dashboard JSON. Keep `.github/workflows/reusable-clear-cache.yml`
+for emergency destructive cleanup only.
 
 ## Private AI endpoints
 

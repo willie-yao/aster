@@ -15,6 +15,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisruntime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -256,11 +257,13 @@ func TestValidateContainerAnalyzerOptionsRejectsSlowResultPolling(t *testing.T) 
 func TestContainerAnalyzerEnvironmentIncludesContextWindowOverride(t *testing.T) {
 	opts := containerAnalyzerTestOptions(t, bytes.Repeat([]byte{0x63}, 32))
 	opts.ContextWindowTokens = 128000
+	opts.CacheGeneration = "2"
 	environment := containerAnalyzerEnvironment(opts)
-	if environment["AI_CONTEXT_WINDOW_TOKENS"] != "128000" {
+	if environment["AI_CONTEXT_WINDOW_TOKENS"] != "128000" || environment[project.AICacheGenerationEnv] != "2" {
 		t.Fatalf("environment = %+v", environment)
 	}
 	opts.ContextWindowTokens = 0
+	opts.CacheGeneration = ""
 	if _, ok := containerAnalyzerEnvironment(opts)["AI_CONTEXT_WINDOW_TOKENS"]; ok {
 		t.Fatal("unset context window was transported")
 	}

@@ -215,9 +215,10 @@ Each cached analysis records a fingerprint of the model and endpoint that
 produced it. Changing either value affects new analyses only. Existing reusable
 entries remain cached with their original fingerprint.
 
-The engine always runs the agentic loop. Until cache generation is available,
-use `clear-cache.yml` only when an intentional full rebaseline is worth deleting
-all warm entries.
+The engine always runs the agentic loop. Use `ai.cache_generation`,
+`AI_CACHE_GENERATION`, the Pages `ai-cache-generation` input, or Helm
+`analysisCache.generation` for a reversible rebaseline. Use `clear-cache.yml`
+only for emergency destructive cleanup.
 
 ## Function-calling support (required)
 
