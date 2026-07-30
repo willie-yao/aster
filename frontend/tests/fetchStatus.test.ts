@@ -9,6 +9,7 @@ import {
   nextFetchTime,
   pollFetchStatus,
   readFetchStatusIdleCompact,
+  resolveFetchStatusPreferenceStorage,
   writeFetchStatusIdleCompact,
 } from "../src/lib/fetchStatus.js";
 import type { FetchProgressStatus, FetchStatusResponse } from "../src/types/fetchStatus.js";
@@ -172,6 +173,13 @@ test("idle compact preference is optional and persistent", () => {
   };
   assert.equal(readFetchStatusIdleCompact(denied), false);
   assert.doesNotThrow(() => writeFetchStatusIdleCompact(true, denied));
+
+  const blockedScope = {
+    get localStorage(): never { throw new Error("blocked"); },
+  };
+  assert.equal(resolveFetchStatusPreferenceStorage(blockedScope), null);
+  assert.equal(resolveFetchStatusPreferenceStorage(null), null);
+  assert.equal(resolveFetchStatusPreferenceStorage({ localStorage: storage }), storage);
 });
 
 test("polling is sequential and backs off after failures", async () => {

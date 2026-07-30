@@ -19,7 +19,11 @@ import { useManifest } from "../hooks/useManifest";
 import { useCapabilities } from "../hooks/useCapabilities";
 import { useFetchStatus } from "../hooks/useFetchStatus";
 import { usePageDocumentTitle } from "../lib/pageMetadata";
-import { readFetchStatusIdleCompact, writeFetchStatusIdleCompact } from "../lib/fetchStatus";
+import {
+  readFetchStatusIdleCompact,
+  resolveFetchStatusPreferenceStorage,
+  writeFetchStatusIdleCompact,
+} from "../lib/fetchStatus";
 import { soft } from "../theme";
 
 // Primary top-nav tab: pill highlight for the active section, with aria-current
@@ -73,12 +77,15 @@ export function Layout() {
   const isDark = mode === "dark";
   const fetchStatus = useFetchStatus();
   const [idleStatusCompact, setIdleStatusCompact] = useState(() =>
-    readFetchStatusIdleCompact(typeof window === "undefined" ? null : window.localStorage)
+    readFetchStatusIdleCompact(resolveFetchStatusPreferenceStorage(typeof window === "undefined" ? null : window))
   );
   const [dismissedFetchStrip, setDismissedFetchStrip] = useState<string | null>(null);
   const updateIdleStatusCompact = (value: boolean) => {
     setIdleStatusCompact(value);
-    writeFetchStatusIdleCompact(value, typeof window === "undefined" ? null : window.localStorage);
+    writeFetchStatusIdleCompact(
+      value,
+      resolveFetchStatusPreferenceStorage(typeof window === "undefined" ? null : window)
+    );
   };
   usePageDocumentTitle(location.pathname, manifest.branding.title);
   const flakyActive = location.pathname === "/flaky" || location.pathname.startsWith("/flaky/");

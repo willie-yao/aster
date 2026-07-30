@@ -21,6 +21,10 @@ export interface FetchStatusPreferenceStorage {
   setItem: (key: string, value: string) => void;
 }
 
+export interface FetchStatusPreferenceScope {
+  readonly localStorage: FetchStatusPreferenceStorage;
+}
+
 export const FETCH_STATUS_IDLE_COMPACT_KEY = "prow-ai-dashboard.fetch-status.idle-compact";
 
 const patternFailureLabels: Record<string, string> = {
@@ -177,6 +181,15 @@ export function patternFailureLabel(category?: string): string | null {
 
 export function fetchStatusStripKey(response: FetchStatusResponse): string {
   return `${response.status?.pass_id ?? "unknown"}:${response.state}`;
+}
+
+export function resolveFetchStatusPreferenceStorage(scope?: FetchStatusPreferenceScope | null): FetchStatusPreferenceStorage | null {
+  if (!scope) return null;
+  try {
+    return scope.localStorage;
+  } catch {
+    return null;
+  }
 }
 
 export function readFetchStatusIdleCompact(storage?: FetchStatusPreferenceStorage | null): boolean {
