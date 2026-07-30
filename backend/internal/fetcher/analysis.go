@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"sync/atomic"
 
@@ -27,20 +28,23 @@ var (
 	saveAnalysisTraceStore     = func(store *ai.TraceStore, path string) error { return store.Save(path) }
 )
 
-// analyzeFailuresWithAI runs the dashboard-owned analyzer on every failed test.
-func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.JobDetail, flakinessReport models.FlakinessReport) error {
-	p.lastPatternOutcomes = map[string]patterns.JobOutcome{}
-	consecutiveMap := make(map[string]int)
-	for _, tf := range flakinessReport.PersistentFailures {
-		consecutiveMap[tf.JobID+"::"+tf.TestName] = tf.ConsecutiveFailures
-	}
+type aiWork struct {
+	jobID       string
+	buildPrefix string
+	run         *models.BuildResult
+	tc          *models.TestCase
+	priority    aiWorkPriority
+}
 
-	type aiWork struct {
-		jobID       string
-		buildPrefix string
-		run         *models.BuildResult
-		tc          *models.TestCase
-	}
+type aiWorkPriority uint8
+
+const (
+	aiWorkBuildMissing aiWorkPriority = iota
+	aiWorkJUnitMissing
+	aiWorkReusable
+)
+
+func collectAIWork(details []models.JobDetail) []aiWork {
 	var work []aiWork
 	for i := range details {
 		d := &details[i]
@@ -55,13 +59,50 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 			}
 			for j := range run.TestCases {
 				tc := &run.TestCases[j]
-				if tc.Status == "failed" {
-					work = append(work, aiWork{jobID: d.JobID, buildPrefix: loc.BuildPath(), run: run, tc: tc})
+				if tc.Status != "failed" {
+					continue
 				}
+				work = append(work, aiWork{
+					jobID: d.JobID, buildPrefix: loc.BuildPath(), run: run, tc: tc,
+					priority: classifyAIWork(tc),
+				})
 			}
 		}
 	}
-	p.planProgressAnalyses(len(work))
+	sort.SliceStable(work, func(i, j int) bool { return work[i].priority < work[j].priority })
+	return work
+}
+
+func classifyAIWork(tc *models.TestCase) aiWorkPriority {
+	if analysisNeedsWork(tc) {
+		if tc.Source == models.TestCaseSourceBuild {
+			return aiWorkBuildMissing
+		}
+		return aiWorkJUnitMissing
+	}
+	return aiWorkReusable
+}
+
+func analysisNeedsWork(tc *models.TestCase) bool {
+	return tc.AISummary == nil || tc.AIAnalysis == nil || tc.AIAnalysis.Mode != ai.AgenticMode || !tc.AIAnalysis.CritiquePassed
+}
+
+// analyzeFailuresWithAI runs the dashboard-owned analyzer on every failed test.
+func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.JobDetail, flakinessReport models.FlakinessReport) error {
+	p.lastPatternOutcomes = map[string]patterns.JobOutcome{}
+	consecutiveMap := make(map[string]int)
+	for _, tf := range flakinessReport.PersistentFailures {
+		consecutiveMap[tf.JobID+"::"+tf.TestName] = tf.ConsecutiveFailures
+	}
+
+	work := collectAIWork(details)
+	buildSubjects := 0
+	for i := range work {
+		if work[i].tc.Source == models.TestCaseSourceBuild {
+			buildSubjects++
+		}
+	}
+	p.planProgressAnalyses(len(work), buildSubjects)
 	p.completeProgressPhase()
 	p.startProgressPhase(fetchprogress.PhaseAnalysis)
 
@@ -161,7 +202,8 @@ schedule:
 		go func(w aiWork) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			p.startProgressAnalysis()
+			buildSubject := w.tc.Source == models.TestCaseSourceBuild
+			p.startProgressAnalysis(buildSubject)
 			before := w.tc.AISummary
 			result, analyzeErr := analyzer.AnalyzeFailure(analysisCtx, p.client, ai.FailureAnalysisRequest{
 				JobID:               w.jobID,
@@ -171,7 +213,7 @@ schedule:
 				ConsecutiveFailures: consecutiveMap[w.jobID+"::"+w.tc.Name],
 			})
 			if analysisruntime.IsProjectBundleSourceError(analyzeErr) {
-				p.finishProgressAnalysis(fetchprogress.OutcomeFailed)
+				p.finishProgressAnalysis(buildSubject, fetchprogress.OutcomeFailed)
 				systemicOnce.Do(func() {
 					systemicErr = fmt.Errorf("systemic Orka project setup failure: %w", analyzeErr)
 					cancelAnalysis()
@@ -179,7 +221,7 @@ schedule:
 				return
 			}
 			if orka.IsResultAuthorizationError(analyzeErr) {
-				p.finishProgressAnalysis(fetchprogress.OutcomeFailed)
+				p.finishProgressAnalysis(buildSubject, fetchprogress.OutcomeFailed)
 				systemicOnce.Do(func() {
 					systemicErr = fmt.Errorf("systemic Orka result API authorization failure: %w", analyzeErr)
 					cancelAnalysis()
@@ -212,7 +254,7 @@ schedule:
 					outcome = fetchprogress.OutcomeCancelled
 				}
 			}
-			p.finishProgressAnalysis(outcome)
+			p.finishProgressAnalysis(buildSubject, outcome)
 		}(w)
 	}
 	wg.Wait()

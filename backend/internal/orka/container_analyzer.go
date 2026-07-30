@@ -14,6 +14,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisruntime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fetchprogress"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 )
 
@@ -263,7 +264,7 @@ func (a *ContainerAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, 
 		return ai.UnavailableFailureAnalysisResult(request.TestCase, err), err
 	}
 	if a.opts.Progress != nil {
-		a.opts.Progress.RecordTaskPlanned(workItem, taskName, resources.CacheSeedIncluded)
+		a.opts.Progress.RecordTaskPlanned(workItem, taskName, resources.CacheSeedIncluded, taskRequest.TestCase.Source == models.TestCaseSourceBuild)
 	}
 	reconcile, err := ReconcileContainerAnalysisResourcesWithResult(ctx, a.kube, resources)
 	if err != nil {

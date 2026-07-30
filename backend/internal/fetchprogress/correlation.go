@@ -46,7 +46,7 @@ func (t *Tracker) Correlation() (Correlation, bool) {
 }
 
 // RecordTaskPlanned adds a bounded current-pass mapping and classifies new work.
-func (t *Tracker) RecordTaskPlanned(workItem, taskName string, hasCacheSeed bool) {
+func (t *Tracker) RecordTaskPlanned(workItem, taskName string, hasCacheSeed, buildSubject bool) {
 	if t == nil || workItem == "" || taskName == "" {
 		return
 	}
@@ -58,6 +58,9 @@ func (t *Tracker) RecordTaskPlanned(workItem, taskName string, hasCacheSeed bool
 		}
 		if mapping != nil && mapping.TaskName == "" {
 			mapping.TaskName = taskName
+		}
+		if buildSubject {
+			t.taskBuildSubjects[workItem] = true
 		}
 		if !t.plannedTasks[workItem] {
 			t.plannedTasks[workItem] = true
@@ -81,6 +84,9 @@ func (t *Tracker) RecordTaskState(workItem, phase string, attempts int, adopted 
 		if adopted && !t.taskAdopted[workItem] {
 			t.taskAdopted[workItem] = true
 			status.Analyses.ExistingTasksAdopted++
+			if t.taskBuildSubjects[workItem] {
+				status.Analyses.BuildSubjects.ExistingTasksAdopted++
+			}
 		}
 		if mapping != nil {
 			mapping.Adopted = t.taskAdopted[workItem]
@@ -145,6 +151,9 @@ func (t *Tracker) RecordCacheDisposition(workItem string, accepted bool) {
 		if accepted {
 			t.cacheDisposition[workItem] = "accepted"
 			status.Analyses.AcceptedCacheHits++
+			if t.taskBuildSubjects[workItem] {
+				status.Analyses.BuildSubjects.AcceptedCacheHits++
+			}
 		} else {
 			t.cacheDisposition[workItem] = "stale"
 			status.Analyses.StaleWork++

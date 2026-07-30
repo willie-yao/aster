@@ -84,7 +84,7 @@ func TestAnalysisPromptBuildFailureUsesBuildLog(t *testing.T) {
 		FailureMessage: "No failed JUnit test case was reported.",
 	}
 	got := (&Module{}).AnalysisPrompt(context.Background(), nil, &models.BuildResult{BuildInfo: models.BuildInfo{BuildID: "1"}}, tc, 1)
-	for _, want := range []string{"Prow build failure to investigate", "build-log.txt as the primary failure evidence", "do not invent a test assertion", "Failure subject: Prow job execution"} {
+	for _, want := range []string{"Prow build failure to investigate", "build-log.txt as the primary failure evidence", "earliest causal error before later cleanup or teardown failures", "do not invent a test assertion", "Failure subject: Prow job execution"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("build failure prompt missing %q: %s", want, got)
 		}

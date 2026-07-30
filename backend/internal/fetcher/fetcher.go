@@ -1187,25 +1187,8 @@ func normalizeBuildResult(result *models.BuildResult) {
 	if result == nil {
 		return
 	}
-	if !result.Passed && result.Result != "PENDING" && result.JUnitComplete && !result.JUnitTruncated {
-		hasFailedCase := false
-		for i := range result.TestCases {
-			if result.TestCases[i].Status == "failed" {
-				hasFailedCase = true
-				break
-			}
-		}
-		if !hasFailedCase {
-			result.TestCases = append(result.TestCases, models.TestCase{
-				Name:            "Prow job execution",
-				SuiteName:       "Prow",
-				ClassName:       "job",
-				Source:          models.TestCaseSourceBuild,
-				Status:          "failed",
-				DurationSeconds: result.DurationSeconds,
-				FailureMessage:  "The Prow job failed without reporting a failed JUnit test case. Investigate build-log.txt for the root cause.",
-			})
-		}
+	if eligibleForBuildFailure(result) {
+		result.TestCases = append(result.TestCases, newBuildFailure(result))
 	}
 
 	result.TestsTotal = 0
@@ -1213,6 +1196,9 @@ func normalizeBuildResult(result *models.BuildResult) {
 	result.TestsFailed = 0
 	result.TestsSkipped = 0
 	for _, tc := range result.TestCases {
+		if tc.Source == models.TestCaseSourceBuild {
+			continue
+		}
 		result.TestsTotal++
 		switch tc.Status {
 		case "passed":
@@ -1222,6 +1208,30 @@ func normalizeBuildResult(result *models.BuildResult) {
 		case "skipped":
 			result.TestsSkipped++
 		}
+	}
+}
+
+func eligibleForBuildFailure(result *models.BuildResult) bool {
+	if result == nil || result.Passed || result.Result == "PENDING" || !result.JUnitComplete || result.JUnitTruncated {
+		return false
+	}
+	for i := range result.TestCases {
+		if result.TestCases[i].Status == "failed" {
+			return false
+		}
+	}
+	return true
+}
+
+func newBuildFailure(result *models.BuildResult) models.TestCase {
+	return models.TestCase{
+		Name:            "Prow job execution",
+		SuiteName:       "Prow",
+		ClassName:       "job",
+		Source:          models.TestCaseSourceBuild,
+		Status:          "failed",
+		DurationSeconds: result.DurationSeconds,
+		FailureMessage:  "The Prow job failed without reporting a failed JUnit test case. Investigate build-log.txt for the root cause.",
 	}
 }
 

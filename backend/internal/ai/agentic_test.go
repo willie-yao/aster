@@ -3141,3 +3141,49 @@ func TestDispatchAgenticToolRejectsRegisteredButDisabledTool(t *testing.T) {
 		t.Fatalf("disabled tool fetched %d bytes", state.gcsBytes)
 	}
 }
+
+func TestAgenticBuildLogSelectsAKSBootstrapCauseBeforeCleanup(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespToolCall("call_1", "grep_artifact", map[string]interface{}{
+		"path": "build-log.txt", "pattern": "K8sVersionNotSupported|ResourceGroupNotFound", "context_lines": 2,
+	}))
+	srv.push(200, chatRespToolCall("call_2", "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
+	srv.push(200, chatRespFinal(`{"summary":"AKS bootstrap-cluster creation failed before tests started.","is_transient":false,"root_cause":"build-log.txt shows K8sVersionNotSupported while creating the AKS bootstrap cluster because Kubernetes 1.33.2 requires Long-Term Support in AKS.","severity":"High","suggested_fix":"Update the repository configuration that selects Kubernetes 1.33.2 to use an AKS-supported version or enable the required Long-Term Support plan before creating the bootstrap cluster.","relevant_files":["build-log.txt"]}`))
+
+	logData := []byte(`2026-07-29T10:00:00Z creating AKS bootstrap cluster
+2026-07-29T10:01:00Z Code="K8sVersionNotSupported" Message="Kubernetes version 1.33.2 is not supported without Long-Term Support"
+2026-07-29T10:01:01Z failed to create AKS bootstrap cluster
+2026-07-29T10:10:00Z cleanup started
+2026-07-29T10:10:01Z Code="ResourceGroupNotFound" Message="resource group cleanup target was not found"
+`)
+	client := newAgenticTestClient(t, srv.URL)
+	inputs := newTestAgenticInputs(t, &fakeBrowser{files: map[string][]byte{"build-log.txt": logData}}, AgenticOptions{
+		MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second, MinToolCalls: 2,
+	})
+	inputs.FailureSignal = "Prow job execution failed before JUnit results"
+	_, analysis, err := client.doAnalyzeAgentic(t.Context(), inputs, "agentic:test:aks-build-log-cause", "sys", "Investigate the build failure and identify the earliest causal error before cleanup failures.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"K8sVersionNotSupported", "1.33.2", "Long-Term Support", "AKS bootstrap cluster"} {
+		if !strings.Contains(analysis.RootCause, want) {
+			t.Fatalf("root cause missing %q: %s", want, analysis.RootCause)
+		}
+	}
+	if strings.Contains(analysis.RootCause, "ResourceGroupNotFound") {
+		t.Fatalf("cleanup error was reported as the root cause: %s", analysis.RootCause)
+	}
+	if analysis.ToolCalls != 2 || analysis.GCSBytes == 0 {
+		t.Fatalf("analysis telemetry = calls:%d bytes:%d", analysis.ToolCalls, analysis.GCSBytes)
+	}
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	if len(srv.requests) != 3 {
+		t.Fatalf("model requests = %d, want 3", len(srv.requests))
+	}
+	history := string(srv.requests[2])
+	if !strings.Contains(history, "K8sVersionNotSupported") || !strings.Contains(history, "ResourceGroupNotFound") {
+		t.Fatalf("final request did not include both causal and cleanup evidence: %s", history)
+	}
+}

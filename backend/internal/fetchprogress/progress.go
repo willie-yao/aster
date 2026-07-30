@@ -23,7 +23,7 @@ import (
 
 const (
 	// SchemaVersion is the current private fetch status schema.
-	SchemaVersion = 3
+	SchemaVersion = 4
 	// StatusDirectory is hidden from the public /data file server.
 	StatusDirectory = ".fetch-status"
 	// StatusFilename is the current fetch status snapshot.
@@ -116,23 +116,36 @@ type BuildProgress struct {
 	Fetched int `json:"fetched"`
 }
 
+// BuildAnalysisProgress tracks build-level subjects without source identity.
+type BuildAnalysisProgress struct {
+	LogicalTotal         int `json:"logical_total"`
+	Queued               int `json:"queued"`
+	Running              int `json:"running"`
+	Completed            int `json:"completed"`
+	Failed               int `json:"failed"`
+	Cancelled            int `json:"cancelled"`
+	AcceptedCacheHits    int `json:"accepted_cache_hits"`
+	ExistingTasksAdopted int `json:"existing_tasks_adopted"`
+}
+
 // AnalysisProgress separates logical analyses from Task attempts.
 type AnalysisProgress struct {
-	LogicalTotal           int  `json:"logical_total"`
-	AcceptedCacheHits      int  `json:"accepted_cache_hits"`
-	NewWork                int  `json:"new_work"`
-	StaleWork              int  `json:"stale_work"`
-	Queued                 int  `json:"queued"`
-	Running                int  `json:"running"`
-	Completed              int  `json:"completed"`
-	Failed                 int  `json:"failed"`
-	Cancelled              int  `json:"cancelled"`
-	TaskAttempts           int  `json:"task_attempts"`
-	Retries                int  `json:"retries"`
-	ExistingTasksAdopted   int  `json:"existing_tasks_adopted"`
-	ResultsRetrieved       int  `json:"results_retrieved"`
-	ResultRetrievalRetries int  `json:"result_retrieval_retries"`
-	CheckpointCommitted    bool `json:"checkpoint_committed,omitempty"`
+	LogicalTotal           int                   `json:"logical_total"`
+	AcceptedCacheHits      int                   `json:"accepted_cache_hits"`
+	NewWork                int                   `json:"new_work"`
+	StaleWork              int                   `json:"stale_work"`
+	Queued                 int                   `json:"queued"`
+	Running                int                   `json:"running"`
+	Completed              int                   `json:"completed"`
+	Failed                 int                   `json:"failed"`
+	Cancelled              int                   `json:"cancelled"`
+	TaskAttempts           int                   `json:"task_attempts"`
+	Retries                int                   `json:"retries"`
+	ExistingTasksAdopted   int                   `json:"existing_tasks_adopted"`
+	ResultsRetrieved       int                   `json:"results_retrieved"`
+	ResultRetrievalRetries int                   `json:"result_retrieval_retries"`
+	CheckpointCommitted    bool                  `json:"checkpoint_committed,omitempty"`
+	BuildSubjects          BuildAnalysisProgress `json:"build_subjects"`
 }
 
 // PatternFailureCategory is a privacy-safe final correlation failure class.
@@ -230,7 +243,7 @@ func Read(path string) (Status, error) {
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return Status{}, errors.New("fetch status has trailing data")
 	}
-	if status.SchemaVersion != 1 && status.SchemaVersion != 2 && status.SchemaVersion != SchemaVersion {
+	if status.SchemaVersion != 1 && status.SchemaVersion != 2 && status.SchemaVersion != 3 && status.SchemaVersion != SchemaVersion {
 		return Status{}, fmt.Errorf("unsupported fetch status schema %d", status.SchemaVersion)
 	}
 	if err := status.validate(); err != nil {
@@ -255,6 +268,10 @@ func (s Status) validate() error {
 		s.Analyses.AcceptedCacheHits < 0 || s.Analyses.NewWork < 0 || s.Analyses.StaleWork < 0 ||
 		s.Analyses.TaskAttempts < 0 || s.Analyses.Retries < 0 || s.Analyses.ExistingTasksAdopted < 0 ||
 		s.Analyses.ResultsRetrieved < 0 || s.Analyses.ResultRetrievalRetries < 0 ||
+		s.Analyses.BuildSubjects.LogicalTotal < 0 || s.Analyses.BuildSubjects.Queued < 0 ||
+		s.Analyses.BuildSubjects.Running < 0 || s.Analyses.BuildSubjects.Completed < 0 ||
+		s.Analyses.BuildSubjects.Failed < 0 || s.Analyses.BuildSubjects.Cancelled < 0 ||
+		s.Analyses.BuildSubjects.AcceptedCacheHits < 0 || s.Analyses.BuildSubjects.ExistingTasksAdopted < 0 ||
 		s.Patterns.Eligible < 0 || s.Patterns.Completed < 0 || s.Patterns.Failed < 0 ||
 		s.Patterns.Attempts < 0 || s.Patterns.Retries < 0 || s.Patterns.CacheHits < 0 ||
 		s.Patterns.Repairs < 0 || s.Patterns.RepairSucceeded < 0 || s.Patterns.RepairFailed < 0 ||
@@ -267,6 +284,13 @@ func (s Status) validate() error {
 	accounted := s.Analyses.Queued + s.Analyses.Running + s.Analyses.Completed + s.Analyses.Failed + s.Analyses.Cancelled
 	if accounted > s.Analyses.LogicalTotal || (s.Outcome != OutcomeRunning && accounted != s.Analyses.LogicalTotal) {
 		return errors.New("fetch status has inconsistent analysis counters")
+	}
+	buildAccounted := s.Analyses.BuildSubjects.Queued + s.Analyses.BuildSubjects.Running + s.Analyses.BuildSubjects.Completed + s.Analyses.BuildSubjects.Failed + s.Analyses.BuildSubjects.Cancelled
+	if s.Analyses.BuildSubjects.LogicalTotal > s.Analyses.LogicalTotal || buildAccounted > s.Analyses.BuildSubjects.LogicalTotal ||
+		(s.Outcome != OutcomeRunning && buildAccounted != s.Analyses.BuildSubjects.LogicalTotal) ||
+		s.Analyses.BuildSubjects.AcceptedCacheHits > s.Analyses.AcceptedCacheHits ||
+		s.Analyses.BuildSubjects.ExistingTasksAdopted > s.Analyses.ExistingTasksAdopted {
+		return errors.New("fetch status has inconsistent build analysis counters")
 	}
 	if len(s.CurrentTasks) > currentTaskLimit {
 		return errors.New("fetch status has too many Task mappings")
@@ -377,6 +401,7 @@ type Tracker struct {
 	phaseCompleted    bool
 	publishedThisPass bool
 	plannedTasks      map[string]bool
+	taskBuildSubjects map[string]bool
 	taskAttempts      map[string]int
 	taskAdopted       map[string]bool
 	taskResults       map[string]bool
@@ -460,6 +485,9 @@ func (t *Tracker) recoverInterrupted() {
 	previous.Analyses.Cancelled += previous.Analyses.Queued + previous.Analyses.Running
 	previous.Analyses.Queued = 0
 	previous.Analyses.Running = 0
+	previous.Analyses.BuildSubjects.Cancelled += previous.Analyses.BuildSubjects.Queued + previous.Analyses.BuildSubjects.Running
+	previous.Analyses.BuildSubjects.Queued = 0
+	previous.Analyses.BuildSubjects.Running = 0
 	if previous.PatternPhase == StageRunning {
 		previous.PatternPhase = StageCancelled
 	}
@@ -502,6 +530,7 @@ func (t *Tracker) StartPass(passType PassType) {
 	t.phaseCompleted = false
 	t.publishedThisPass = false
 	t.plannedTasks = map[string]bool{}
+	t.taskBuildSubjects = map[string]bool{}
 	t.taskAttempts = map[string]int{}
 	t.taskAdopted = map[string]bool{}
 	t.taskResults = map[string]bool{}
@@ -587,35 +616,56 @@ func (t *Tracker) MarkChecked() {
 }
 
 // PlanAnalyses initializes logical analysis progress.
-func (t *Tracker) PlanAnalyses(total int) {
+func (t *Tracker) PlanAnalyses(total, buildSubjects int) {
 	t.update(true, func(status *Status) {
-		status.Analyses = AnalysisProgress{LogicalTotal: total, Queued: total}
+		status.Analyses = AnalysisProgress{
+			LogicalTotal: total, Queued: total,
+			BuildSubjects: BuildAnalysisProgress{LogicalTotal: buildSubjects, Queued: buildSubjects},
+		}
 	})
 }
 
 // StartAnalysis records one logical item moving from queued to running.
-func (t *Tracker) StartAnalysis() {
+func (t *Tracker) StartAnalysis(buildSubject bool) {
 	t.update(false, func(status *Status) {
 		if status.Analyses.Queued > 0 {
 			status.Analyses.Queued--
 		}
 		status.Analyses.Running++
+		if buildSubject {
+			if status.Analyses.BuildSubjects.Queued > 0 {
+				status.Analyses.BuildSubjects.Queued--
+			}
+			status.Analyses.BuildSubjects.Running++
+		}
 	})
 }
 
 // FinishAnalysis records one terminal logical result.
-func (t *Tracker) FinishAnalysis(outcome Outcome) {
+func (t *Tracker) FinishAnalysis(buildSubject bool, outcome Outcome) {
 	t.update(false, func(status *Status) {
 		if status.Analyses.Running > 0 {
 			status.Analyses.Running--
 		}
+		if buildSubject && status.Analyses.BuildSubjects.Running > 0 {
+			status.Analyses.BuildSubjects.Running--
+		}
 		switch outcome {
 		case OutcomeSucceeded:
 			status.Analyses.Completed++
+			if buildSubject {
+				status.Analyses.BuildSubjects.Completed++
+			}
 		case OutcomeCancelled, OutcomeInterrupted:
 			status.Analyses.Cancelled++
+			if buildSubject {
+				status.Analyses.BuildSubjects.Cancelled++
+			}
 		default:
 			status.Analyses.Failed++
+			if buildSubject {
+				status.Analyses.BuildSubjects.Failed++
+			}
 		}
 	})
 }
@@ -625,6 +675,8 @@ func (t *Tracker) CancelQueuedAnalyses() {
 	t.update(true, func(status *Status) {
 		status.Analyses.Cancelled += status.Analyses.Queued
 		status.Analyses.Queued = 0
+		status.Analyses.BuildSubjects.Cancelled += status.Analyses.BuildSubjects.Queued
+		status.Analyses.BuildSubjects.Queued = 0
 	})
 }
 
@@ -638,6 +690,8 @@ func (t *Tracker) SkipAnalysis() {
 	t.update(true, func(status *Status) {
 		status.Analyses.Failed += status.Analyses.Queued
 		status.Analyses.Queued = 0
+		status.Analyses.BuildSubjects.Failed += status.Analyses.BuildSubjects.Queued
+		status.Analyses.BuildSubjects.Queued = 0
 		status.PatternPhase = StageSkipped
 	})
 }

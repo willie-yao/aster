@@ -37,7 +37,7 @@ func (m *Module) AnalysisPrompt(_ context.Context, _ *http.Client, run *models.B
 
 	var sb strings.Builder
 	if tc.Source == models.TestCaseSourceBuild {
-		fmt.Fprintf(&sb, "Prow build failure to investigate. No failed JUnit test case was reported, so use build-log.txt as the primary failure evidence and do not invent a test assertion.\n\n")
+		fmt.Fprintf(&sb, "Prow build failure to investigate. No failed JUnit test case was reported, so use build-log.txt as the primary failure evidence, identify the earliest causal error before later cleanup or teardown failures, and do not invent a test assertion.\n\n")
 		fmt.Fprintf(&sb, "Failure subject: %s\n", tc.Name)
 	} else {
 		fmt.Fprintf(&sb, "Test failure to investigate.\n\n")
