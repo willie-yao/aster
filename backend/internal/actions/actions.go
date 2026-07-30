@@ -750,8 +750,8 @@ func (s *Service) confirmEntryUnlocked(ctx context.Context, entry *previewEntry,
 			}
 		}
 		if _, err := mgr.Reconcile(ctx, []issues.IssueSpec{entry.spec}); err != nil {
-			if errors.Is(err, issues.ErrWriteOutcomeUnknown) {
-				return "", fmt.Errorf("%w: filing issue: %v", ErrPreviewOutcomeUnknown, err)
+			if strings.HasPrefix(entry.failureID, "build::") && errors.Is(err, issues.ErrWriteOutcomeUnknown) {
+				return "", fmt.Errorf("%w: filing build issue: %v", ErrPreviewOutcomeUnknown, err)
 			}
 			return "", fmt.Errorf("filing issue: %w", err)
 		}
@@ -784,8 +784,8 @@ func (s *Service) confirmEntryUnlocked(ctx context.Context, entry *previewEntry,
 		}
 		url, err := mgr.OpenFromPreview(ctx, entry.fix)
 		if err != nil {
-			if errors.Is(err, fixpr.ErrWriteOutcomeUnknown) {
-				return "", fmt.Errorf("%w: opening fix: %s", ErrPreviewOutcomeUnknown, safeReason(err.Error()))
+			if strings.HasPrefix(entry.failureID, "build::") && errors.Is(err, fixpr.ErrWriteOutcomeUnknown) {
+				return "", fmt.Errorf("%w: opening build fix: %s", ErrPreviewOutcomeUnknown, safeReason(err.Error()))
 			}
 			return "", fmt.Errorf("%s", safeReason(err.Error()))
 		}

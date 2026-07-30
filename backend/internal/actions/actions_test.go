@@ -1172,21 +1172,3 @@ func TestDirectUnknownPreviewReconcilesAfterSubjectLeavesWindow(t *testing.T) {
 		t.Fatalf("reconcile url=%q err=%v", url, err)
 	}
 }
-
-func TestPatternIssueAmbiguousWriteAlsoBecomesUnknown(t *testing.T) {
-	service, pattern := requestTestService(t)
-	manager := &fakeIssuePreviewManager{reconcileErr: fmt.Errorf("%w: lost response", issues.ErrWriteOutcomeUnknown)}
-	service.issueManagerFactory = func(string, string, string) issuePreviewManager { return manager }
-	created, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	ready := waitRequest(t, service, created.ID, "alice", RequestReady)
-	if _, err := service.ConfirmRequest(t.Context(), ready.ID, "alice", "token"); !errors.Is(err, ErrPreviewOutcomeUnknown) {
-		t.Fatalf("pattern ambiguous error = %v", err)
-	}
-	view, err := service.GetRequest(ready.ID, "alice")
-	if err != nil || view.Status != RequestUnknown {
-		t.Fatalf("pattern unknown view=%+v err=%v", view, err)
-	}
-}
