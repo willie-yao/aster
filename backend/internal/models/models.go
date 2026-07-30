@@ -161,8 +161,8 @@ type AIAnalysis struct {
 	// new model does not serve the prior model's cached verdict.
 	ModelHash string `json:"model_hash,omitempty"`
 
-	// PromptHash fingerprints the composed system prompt for this analysis.
-	// Prompt edits refresh affected failures on the next run.
+	// PromptHash fingerprints the effective prompt contract for this analysis.
+	// Build subjects include their module prompt so causal-guidance edits refresh them.
 	PromptHash string `json:"prompt_hash,omitempty"`
 
 	// FileLinks maps cited source-file paths to verified GitHub URLs.

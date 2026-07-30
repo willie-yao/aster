@@ -173,7 +173,8 @@ func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, b
 		})
 		ctx = withAnalysisTrace(ctx, trace)
 	}
-	if tc.AISummary != nil && tc.AIAnalysis != nil && !s.shouldReanalyze(tc) && !staleTransientVerdict(tc, consecutiveFailures) {
+	userPrompt := s.module.AnalysisPrompt(ctx, httpClient, run, tc, consecutiveFailures)
+	if tc.AISummary != nil && tc.AIAnalysis != nil && !s.shouldReanalyzeWithPrompt(tc, userPrompt) && !staleTransientVerdict(tc, consecutiveFailures) {
 		recordTrace(ctx, TraceEvent{Kind: "cache", Outcome: "build_hit"})
 		trace.Finish("build_cache_hit", nil)
 		return nil
@@ -182,7 +183,6 @@ func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, b
 	log.Printf("  🔍 Analyzing: %s [%s]", tc.Name, AgenticMode)
 
 	failureSignal := evidenceplan.FailureSignal(*tc)
-	userPrompt := s.module.AnalysisPrompt(ctx, httpClient, run, tc, consecutiveFailures)
 
 	// Surface endpoints without function-calling as unavailable. There is no
 	// tools-free analysis path to degrade to.
@@ -247,6 +247,7 @@ func (s *Service) runAgentic(ctx context.Context, jobID, buildPrefix string, run
 		FailureSignal:          failureSignal,
 		DraftObserver:          s.draftObserver,
 		DraftSelectionObserver: s.draftSelectionObserver,
+		PromptHash:             s.analysisPromptHash(tc, userPrompt),
 	}
 	return s.client.doAnalyzeAgentic(ctx, in, cacheKey, s.systemPrompt, userPrompt)
 }
@@ -307,19 +308,39 @@ func staleTransientVerdict(tc *models.TestCase, consecutiveFailures int) bool {
 	return tc.AISummary != nil && tc.AISummary.IsTransient && consecutiveFailures >= transientPersistThreshold
 }
 
+// NeedsAnalysis reports whether the current analysis contract requires work.
+func (s *Service) NeedsAnalysis(ctx context.Context, httpClient *http.Client, run *models.BuildResult, tc *models.TestCase, consecutiveFailures int) bool {
+	if tc == nil || tc.AISummary == nil || tc.AIAnalysis == nil {
+		return true
+	}
+	userPrompt := s.module.AnalysisPrompt(ctx, httpClient, run, tc, consecutiveFailures)
+	return s.shouldReanalyzeWithPrompt(tc, userPrompt) || staleTransientVerdict(tc, consecutiveFailures)
+}
+
 // shouldReanalyze returns true when a cached analysis must be discarded
 // because it predates the single agentic path or fails any current quality gate.
 func (s *Service) shouldReanalyze(tc *models.TestCase) bool {
+	return s.shouldReanalyzeWithPrompt(tc, "")
+}
+
+func (s *Service) shouldReanalyzeWithPrompt(tc *models.TestCase, userPrompt string) bool {
 	if tc.AIAnalysis.Mode != AgenticMode {
 		return true
 	}
-	return s.belowCurrentAgenticFloor(tc)
+	return s.belowCurrentAgenticFloor(tc, s.analysisPromptHash(tc, userPrompt))
+}
+
+func (s *Service) analysisPromptHash(tc *models.TestCase, userPrompt string) string {
+	if tc != nil && tc.Source == models.TestCaseSourceBuild && userPrompt != "" {
+		return PromptFingerprint(s.systemPrompt + "\x00" + userPrompt)
+	}
+	return PromptFingerprint(s.systemPrompt)
 }
 
 // belowCurrentAgenticFloor returns true when the cached analysis fails any
 // current quality gate: tool-call floor, GCS-byte floor without complete
 // evidence-plan coverage, critique failure or stale version, or hash mismatch.
-func (s *Service) belowCurrentAgenticFloor(tc *models.TestCase) bool {
+func (s *Service) belowCurrentAgenticFloor(tc *models.TestCase, expectedPromptHash string) bool {
 	opts := s.agenticOptionsFor(tc)
 	if tc.AIAnalysis.ToolCalls < opts.MinToolCalls {
 		return true
@@ -351,7 +372,7 @@ func (s *Service) belowCurrentAgenticFloor(tc *models.TestCase) bool {
 	}
 	// The prompt is always sent to the model, so prompt edits invalidate the
 	// entry without a critique dependency.
-	if tc.AIAnalysis.PromptHash != PromptFingerprint(s.systemPrompt) {
+	if tc.AIAnalysis.PromptHash != expectedPromptHash {
 		return true
 	}
 	return false

@@ -312,3 +312,21 @@ func ShortHash(hash string) string {
 	}
 	return hash[:8]
 }
+
+// NewReusePlanner creates a lightweight service for analysis scheduling.
+func NewReusePlanner(project *Project) *ai.Service {
+	if project == nil || project.Config == nil || project.Config.AI == nil {
+		return nil
+	}
+	client := ai.NewClientWithOptions(ai.Options{
+		API: project.Provider.API, Endpoint: project.Provider.Endpoint, Model: project.Provider.Model,
+	})
+	service := ai.NewService(client, universal.New(), project.SystemPrompt, nil)
+	eff := project.Config.AI.EffectiveAgentic()
+	service.EnableAgentic(ai.AgenticOptions{
+		MinToolCalls: eff.MinToolCalls,
+		MinGCSBytes:  eff.MinGCSBytes,
+	}, nil, nil, nil)
+	service.SetSkills(project.SkillSet)
+	return service
+}

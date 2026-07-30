@@ -350,3 +350,125 @@ func TestAnalyzeFailuresInProcessCancellationDoesNotPersistCheckpoint(t *testing
 		t.Fatalf("checkpoint persistence calls = %d, want 0", persistCalls)
 	}
 }
+
+func TestCollectAIWorkPrioritizesMissingBuildAnalysis(t *testing.T) {
+	reusable := models.TestCase{
+		Name: "reusable", Status: "failed",
+		AISummary:  &models.AISummary{Summary: "cached"},
+		AIAnalysis: &models.AIAnalysis{Mode: ai.AgenticMode, CritiquePassed: true},
+	}
+	details := []models.JobDetail{{
+		Name: "job", JobID: "job", JobType: models.JobTypePeriodic,
+		Runs: []models.BuildResult{
+			{BuildInfo: models.BuildInfo{BuildID: "1"}, TestCases: []models.TestCase{reusable}},
+			{BuildInfo: models.BuildInfo{BuildID: "2"}, TestCases: []models.TestCase{{Name: "junit-one", Status: "failed"}, {Name: "junit-two", Status: "failed"}}},
+			{BuildInfo: models.BuildInfo{BuildID: "3"}, TestCases: []models.TestCase{{Name: "build", Source: models.TestCaseSourceBuild, Status: "failed"}}},
+		},
+	}}
+
+	work := collectAIWork(t.Context(), nil, details, nil, nil)
+	if len(work) != 4 {
+		t.Fatalf("work items = %d, want 4", len(work))
+	}
+	got := []string{work[0].tc.Name, work[1].tc.Name, work[2].tc.Name, work[3].tc.Name}
+	want := []string{"build", "junit-one", "junit-two", "reusable"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("work order = %v, want %v", got, want)
+	}
+}
+
+type priorityBlockingAnalyzer struct {
+	started chan ai.FailureAnalysisRequest
+	mu      sync.Mutex
+	active  int
+	max     int
+}
+
+func (a *priorityBlockingAnalyzer) Maintain(context.Context) error { return nil }
+
+func (a *priorityBlockingAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, request ai.FailureAnalysisRequest) (ai.FailureAnalysisResult, error) {
+	a.mu.Lock()
+	a.active++
+	if a.active > a.max {
+		a.max = a.active
+	}
+	a.mu.Unlock()
+	select {
+	case a.started <- request:
+	case <-ctx.Done():
+	}
+	<-ctx.Done()
+	a.mu.Lock()
+	a.active--
+	a.mu.Unlock()
+	return ai.UnavailableFailureAnalysisResult(request.TestCase, ctx.Err()), ctx.Err()
+}
+
+func (a *priorityBlockingAnalyzer) StateStore() *analysisruntime.ContainerStateStore { return nil }
+
+func TestAnalyzeFailuresSubmitsBuildWorkFirstWithoutExtraConcurrency(t *testing.T) {
+	analyzer := &priorityBlockingAnalyzer{started: make(chan ai.FailureAnalysisRequest, 1)}
+	p := &pipeline{
+		opts: Options{AnalysisRuntime: AnalysisRuntimeOptions{
+			Type: AnalysisRuntimeOrkaContainer, OrkaContainer: OrkaContainerAnalysisOptions{MaxConcurrent: 1},
+		}},
+		cfg:               &project.Config{AI: &project.AI{Concurrency: 5}},
+		client:            &http.Client{},
+		containerAnalyzer: analyzer,
+	}
+	details := []models.JobDetail{{
+		Name: "job", JobID: "job", JobType: models.JobTypePeriodic,
+		Runs: []models.BuildResult{{
+			BuildInfo: models.BuildInfo{BuildID: "1", Result: "FAILURE"},
+			TestCases: []models.TestCase{
+				{Name: "junit", Status: "failed"},
+				{Name: "build", Source: models.TestCaseSourceBuild, Status: "failed"},
+			},
+		}},
+	}}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- p.analyzeFailuresWithAI(ctx, details, models.FlakinessReport{}) }()
+	select {
+	case request := <-analyzer.started:
+		if request.TestCase.Source != models.TestCaseSourceBuild {
+			t.Fatalf("first submitted source = %q, want build", request.TestCase.Source)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no analysis started")
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("analysis error = %v", err)
+	}
+	analyzer.mu.Lock()
+	defer analyzer.mu.Unlock()
+	if analyzer.max != 1 || analyzer.active != 0 {
+		t.Fatalf("active=%d max=%d, want active=0 max=1", analyzer.active, analyzer.max)
+	}
+}
+
+type namedAnalysisPlanner map[string]bool
+
+func (p namedAnalysisPlanner) NeedsAnalysis(_ context.Context, _ *http.Client, _ *models.BuildResult, tc *models.TestCase, _ int) bool {
+	return p[tc.Name]
+}
+
+func TestCollectAIWorkUsesCurrentStalenessPlanner(t *testing.T) {
+	analysis := &models.AIAnalysis{Mode: ai.AgenticMode, CritiquePassed: true}
+	summary := &models.AISummary{Summary: "existing"}
+	details := []models.JobDetail{{
+		Name: "job", JobID: "job", JobType: models.JobTypePeriodic,
+		Runs: []models.BuildResult{{
+			BuildInfo: models.BuildInfo{BuildID: "1"},
+			TestCases: []models.TestCase{
+				{Name: "reusable", Status: "failed", AISummary: summary, AIAnalysis: analysis},
+				{Name: "stale", Status: "failed", AISummary: summary, AIAnalysis: analysis},
+			},
+		}},
+	}}
+	work := collectAIWork(t.Context(), nil, details, nil, namedAnalysisPlanner{"stale": true})
+	if len(work) != 2 || work[0].tc.Name != "stale" || work[1].tc.Name != "reusable" {
+		t.Fatalf("work order = %v, %v", work[0].tc.Name, work[1].tc.Name)
+	}
+}

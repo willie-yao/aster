@@ -88,7 +88,7 @@ func TestContainerAnalyzerAccountsAdoptionAttemptsRetriesAndCacheHit(t *testing.
 	}
 	progress := fetchprogress.New(dataDir, "sha-test")
 	progress.StartPass(fetchprogress.PassLightweightWatch)
-	progress.PlanAnalyses(1)
+	progress.PlanAnalyses(1, 0)
 	resources := &fakeContainerResourceClient{}
 	kube := &fakeContainerAnalyzerKube{
 		fakeContainerResourceClient: resources,
@@ -135,7 +135,7 @@ func TestContainerAnalyzerRecordsTaskTimeoutAndCancellation(t *testing.T) {
 			}
 			progress := fetchprogress.New(dataDir, "sha-test")
 			progress.StartPass(fetchprogress.PassLightweightWatch)
-			progress.PlanAnalyses(1)
+			progress.PlanAnalyses(1, 0)
 			resources := &fakeContainerResourceClient{}
 			kube := &fakeContainerAnalyzerKube{
 				fakeContainerResourceClient: resources,

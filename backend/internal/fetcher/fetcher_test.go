@@ -277,7 +277,7 @@ func TestNormalizeBuildResultAddsBuildFailureCase(t *testing.T) {
 	if got.Source != models.TestCaseSourceBuild || got.Status != "failed" || got.Name != "Prow job execution" {
 		t.Fatalf("build failure = %+v", got)
 	}
-	if got.DurationSeconds != 248 || result.TestsTotal != 1 || result.TestsFailed != 1 {
+	if got.DurationSeconds != 248 || result.TestsTotal != 0 || result.TestsFailed != 0 {
 		t.Fatalf("duration/counts = %v/%d/%d", got.DurationSeconds, result.TestsTotal, result.TestsFailed)
 	}
 
@@ -345,5 +345,23 @@ func TestNormalizeBuildResultBuildFailureEligibility(t *testing.T) {
 				t.Fatalf("build failure present = %t, want %t: %+v", got, tc.want, tc.result.TestCases)
 			}
 		})
+	}
+}
+
+func TestNormalizeBuildResultExcludesBuildSubjectFromJUnitCounts(t *testing.T) {
+	result := models.BuildResult{
+		BuildInfo: models.BuildInfo{Result: "FAILURE", JUnitComplete: true},
+		TestCases: []models.TestCase{
+			{Name: "passed", Status: "passed"},
+			{Name: "skipped", Status: "skipped"},
+		},
+	}
+
+	normalizeBuildResult(&result)
+	if len(result.TestCases) != 3 || result.TestCases[2].Source != models.TestCaseSourceBuild {
+		t.Fatalf("test cases = %+v", result.TestCases)
+	}
+	if result.TestsTotal != 2 || result.TestsPassed != 1 || result.TestsFailed != 0 || result.TestsSkipped != 1 {
+		t.Fatalf("JUnit counts = total:%d passed:%d failed:%d skipped:%d", result.TestsTotal, result.TestsPassed, result.TestsFailed, result.TestsSkipped)
 	}
 }

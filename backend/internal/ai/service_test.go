@@ -504,3 +504,36 @@ func TestServiceBuildFailureUsesSourceSpecificGCSFloor(t *testing.T) {
 		t.Fatal("JUnit failure below the project GCS floor was reusable")
 	}
 }
+
+func TestServiceBuildPromptChangeInvalidatesPublishedAndAgenticCaches(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal(`{"summary":"old","is_transient":false,"root_cause":"old cleanup explanation","severity":"High","suggested_fix":"Correct the build configuration.","relevant_files":[]}`))
+	srv.push(200, chatRespFinal(`{"summary":"new","is_transient":false,"root_cause":"new earliest causal explanation","severity":"High","suggested_fix":"Correct the initiating build configuration.","relevant_files":[]}`))
+
+	module := &stubModule{name: "universal", prompt: "use the build log"}
+	client := newAgenticTestClient(t, srv.URL)
+	registry, enabled := newServiceTestRegistry(t)
+	service := NewService(client, module, "sys", nil)
+	service.EnableAgentic(AgenticOptions{
+		MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
+	}, &fakeFactory{}, registry, enabled)
+	run := newRun("job", "1")
+	tc := newFailedTC("Prow job execution", "build failed")
+	tc.Source = models.TestCaseSourceBuild
+
+	service.Analyze(t.Context(), &http.Client{}, "job", "logs/job/1/", run, tc)
+	oldHash := tc.AIAnalysis.PromptHash
+	module.prompt = "use the build log and select the earliest causal error before cleanup"
+	service.Analyze(t.Context(), &http.Client{}, "job", "logs/job/1/", run, tc)
+
+	if tc.AIAnalysis.RootCause != "new earliest causal explanation" {
+		t.Fatalf("root cause = %q", tc.AIAnalysis.RootCause)
+	}
+	if tc.AIAnalysis.PromptHash == oldHash {
+		t.Fatal("build prompt change did not change the cache contract")
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 2 {
+		t.Fatalf("model calls = %d, want 2", got)
+	}
+}

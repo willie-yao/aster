@@ -156,13 +156,13 @@ func TestTrackerPhaseCountersAndTerminalOutcomes(t *testing.T) {
 	tracker.MarkChecked()
 	tracker.CompletePhase()
 	tracker.StartPhase(PhaseAnalysisPlanning)
-	tracker.PlanAnalyses(3)
+	tracker.PlanAnalyses(3, 0)
 	tracker.CompletePhase()
 	tracker.StartPhase(PhaseAnalysis)
-	tracker.StartAnalysis()
-	tracker.FinishAnalysis(OutcomeSucceeded)
-	tracker.StartAnalysis()
-	tracker.FinishAnalysis(OutcomeFailed)
+	tracker.StartAnalysis(false)
+	tracker.FinishAnalysis(false, OutcomeSucceeded)
+	tracker.StartAnalysis(false)
+	tracker.FinishAnalysis(false, OutcomeFailed)
 	tracker.CancelQueuedAnalyses()
 	tracker.CompletePhase()
 	tracker.StartPhase(PhasePatterns)
@@ -215,10 +215,10 @@ func TestTrackerBoundsWritesAndEmitsSafeHeartbeat(t *testing.T) {
 	})
 	tracker.StartPass(PassLightweightWatch)
 	tracker.StartPhase(PhaseAnalysis)
-	tracker.PlanAnalyses(2)
+	tracker.PlanAnalyses(2, 0)
 	initialWrites := writes
-	tracker.StartAnalysis()
-	tracker.FinishAnalysis(OutcomeSucceeded)
+	tracker.StartAnalysis(false)
+	tracker.FinishAnalysis(false, OutcomeSucceeded)
 	if writes != initialWrites {
 		t.Fatalf("progress writes = %d, want bounded at %d", writes, initialWrites)
 	}
@@ -290,7 +290,7 @@ func TestTrackerConcurrentUpdates(t *testing.T) {
 	})
 	tracker.StartPass(PassLightweightWatch)
 	tracker.SetJobs(100)
-	tracker.PlanAnalyses(100)
+	tracker.PlanAnalyses(100, 0)
 	tracker.StartPhase(PhaseAnalysis)
 	var wg sync.WaitGroup
 	for range 100 {
@@ -298,8 +298,8 @@ func TestTrackerConcurrentUpdates(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			tracker.FinishJob(1, 2)
-			tracker.StartAnalysis()
-			tracker.FinishAnalysis(OutcomeSucceeded)
+			tracker.StartAnalysis(false)
+			tracker.FinishAnalysis(false, OutcomeSucceeded)
 		}()
 	}
 	wg.Wait()
@@ -347,8 +347,8 @@ func TestTrackerTaskAttemptRetryAndCacheAccounting(t *testing.T) {
 		writeInterval: time.Hour,
 	})
 	tracker.StartPass(PassLightweightWatch)
-	tracker.PlanAnalyses(3)
-	tracker.RecordTaskPlanned("work-new", "task-new", false)
+	tracker.PlanAnalyses(3, 0)
+	tracker.RecordTaskPlanned("work-new", "task-new", false, false)
 	tracker.RecordTaskState("work-new", "Running", 1, false)
 	tracker.RecordTaskState("work-new", "Running", 2, false)
 	tracker.RecordTaskState("work-new", "Running", 2, false)
@@ -356,11 +356,11 @@ func TestTrackerTaskAttemptRetryAndCacheAccounting(t *testing.T) {
 	tracker.RecordResultAttempt("work-new", true, false)
 	tracker.RecordResultAttempt("work-new", true, true)
 
-	tracker.RecordTaskPlanned("work-cached", "task-cached", true)
+	tracker.RecordTaskPlanned("work-cached", "task-cached", true, false)
 	tracker.RecordTaskState("work-cached", "Succeeded", 1, true)
 	tracker.RecordCacheDisposition("work-cached", true)
 	tracker.RecordCacheDisposition("work-cached", true)
-	tracker.RecordTaskPlanned("work-stale", "task-stale", true)
+	tracker.RecordTaskPlanned("work-stale", "task-stale", true, false)
 	tracker.RecordCacheDisposition("work-stale", false)
 	tracker.MarkAnalysisCheckpoint()
 
@@ -392,11 +392,11 @@ func TestPassHistoryIsVersionedBoundedAndRecordsDurations(t *testing.T) {
 		tracker.StartPass(PassLightweightWatch)
 		now = now.Add(2 * time.Second)
 		tracker.CompletePhase()
-		tracker.PlanAnalyses(1)
-		tracker.RecordTaskPlanned(fmt.Sprintf("work-%d", pass), fmt.Sprintf("task-%d", pass), false)
+		tracker.PlanAnalyses(1, 0)
+		tracker.RecordTaskPlanned(fmt.Sprintf("work-%d", pass), fmt.Sprintf("task-%d", pass), false, false)
 		tracker.RecordTaskState(fmt.Sprintf("work-%d", pass), "Succeeded", 2, false)
-		tracker.StartAnalysis()
-		tracker.FinishAnalysis(OutcomeSucceeded)
+		tracker.StartAnalysis(false)
+		tracker.FinishAnalysis(false, OutcomeSucceeded)
 		tracker.MarkAnalysisCheckpoint()
 		tracker.PlanPatterns(1)
 		tracker.RecordPatternAttempt(true, false, false, true, true, PatternFailureNone)
@@ -481,7 +481,7 @@ func TestSnapshotDeepCopiesMutableProgress(t *testing.T) {
 		logf:         func(string, ...any) {},
 	})
 	tracker.StartPass(PassLightweightWatch)
-	tracker.RecordTaskPlanned("work", "task", false)
+	tracker.RecordTaskPlanned("work", "task", false, false)
 	snapshot := tracker.Snapshot()
 	snapshot.PhaseDurationsMS[string(PhaseSetup)] = 999
 	snapshot.CurrentTasks[0].Phase = "Failed"
@@ -583,5 +583,56 @@ func TestTrackerRecordsPatternCacheHitAtomically(t *testing.T) {
 	got := tracker.Snapshot().Patterns
 	if invalidWrite || got.CacheHits != 1 || got.Completed != 1 {
 		t.Fatalf("invalidWrite=%t pattern progress=%+v", invalidWrite, got)
+	}
+}
+
+func TestTrackerBuildAnalysisCountersRemainAggregateOnly(t *testing.T) {
+	now := time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
+	tracker := newTracker(t.TempDir(), "sha-test", trackerOptions{
+		now:           func() time.Time { return now },
+		newID:         func() string { return "0123456789abcdef01234567" },
+		write:         func(string, Status) error { return nil },
+		writeHistory:  func(string, History) error { return nil },
+		logf:          func(string, ...any) {},
+		writeInterval: time.Hour,
+	})
+	tracker.StartPass(PassInitialWatch)
+	tracker.PlanAnalyses(2, 1)
+	tracker.StartAnalysis(true)
+	tracker.RecordTaskPlanned("work-build", "task-build", true, true)
+	tracker.RecordTaskState("work-build", "Running", 1, true)
+	tracker.RecordCacheDisposition("work-build", true)
+	tracker.FinishAnalysis(true, OutcomeSucceeded)
+	tracker.CancelQueuedAnalyses()
+
+	status := tracker.Snapshot()
+	want := BuildAnalysisProgress{
+		LogicalTotal: 1, Completed: 1, AcceptedCacheHits: 1, ExistingTasksAdopted: 1,
+	}
+	if status.Analyses.BuildSubjects != want {
+		t.Fatalf("build analysis counters = %+v, want %+v", status.Analyses.BuildSubjects, want)
+	}
+	if status.Analyses.LogicalTotal != 2 || status.Analyses.Completed != 1 || status.Analyses.Cancelled != 1 {
+		t.Fatalf("overall analysis counters = %+v", status.Analyses)
+	}
+}
+
+func TestTrackerTerminalFailureCancelsBuildAnalysisCounters(t *testing.T) {
+	tracker := newTracker(t.TempDir(), "sha-test", trackerOptions{
+		write:        func(string, Status) error { return nil },
+		writeHistory: func(string, History) error { return nil },
+		logf:         func(string, ...any) {},
+	})
+	tracker.StartPass(PassInitialWatch)
+	tracker.PlanAnalyses(2, 1)
+	tracker.StartAnalysis(true)
+	tracker.FinishFailure(FailureAnalysis)
+
+	status := tracker.Snapshot()
+	if status.Analyses.BuildSubjects != (BuildAnalysisProgress{LogicalTotal: 1, Cancelled: 1}) {
+		t.Fatalf("build analysis counters = %+v", status.Analyses.BuildSubjects)
+	}
+	if status.Analyses.Queued != 0 || status.Analyses.Running != 0 || status.Analyses.Cancelled != 2 {
+		t.Fatalf("overall analysis counters = %+v", status.Analyses)
 	}
 }

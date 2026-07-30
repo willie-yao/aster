@@ -118,21 +118,21 @@ func (p *pipeline) setWatchSchedule(nextWatch, nextReconcile time.Time) {
 	}
 }
 
-func (p *pipeline) planProgressAnalyses(total int) {
+func (p *pipeline) planProgressAnalyses(total, buildSubjects int) {
 	if p.progress != nil {
-		p.progress.PlanAnalyses(total)
+		p.progress.PlanAnalyses(total, buildSubjects)
 	}
 }
 
-func (p *pipeline) startProgressAnalysis() {
+func (p *pipeline) startProgressAnalysis(buildSubject bool) {
 	if p.progress != nil {
-		p.progress.StartAnalysis()
+		p.progress.StartAnalysis(buildSubject)
 	}
 }
 
-func (p *pipeline) finishProgressAnalysis(outcome fetchprogress.Outcome) {
+func (p *pipeline) finishProgressAnalysis(buildSubject bool, outcome fetchprogress.Outcome) {
 	if p.progress != nil {
-		p.progress.FinishAnalysis(outcome)
+		p.progress.FinishAnalysis(buildSubject, outcome)
 	}
 }
 
