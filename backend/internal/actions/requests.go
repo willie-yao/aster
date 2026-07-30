@@ -450,6 +450,19 @@ func (s *Service) ConfirmRequest(ctx context.Context, id, owner, userToken strin
 		s.rmu.Unlock()
 		return "", fmt.Errorf("action request has invalid preview kind %q", entry.kind)
 	}
+	if !reconcileOnly && entry.failureID != "" {
+		if err := s.validateSubjectSnapshot(entry.failureID, entry.patternHash, entry.kind); err != nil {
+			s.rmu.Unlock()
+			return "", err
+		}
+		request.Status = RequestUnknown
+		request.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		if err := s.saveRequestsLocked(); err != nil {
+			request.Status = RequestReady
+			s.rmu.Unlock()
+			return "", err
+		}
+	}
 	s.requestConfirms[id] = struct{}{}
 	s.rmu.Unlock()
 	defer func() {
@@ -471,16 +484,16 @@ func (s *Service) ConfirmRequest(ctx context.Context, id, owner, userToken strin
 	} else {
 		confirmedURL, err := s.confirmEntry(ctx, entry, userToken)
 		if errors.Is(err, ErrPreviewOutcomeUnknown) {
+			return "", err
+		}
+		if err != nil {
 			s.rmu.Lock()
 			if current := s.requests.Requests[id]; current != nil {
-				current.Status = RequestUnknown
+				current.Status = RequestReady
 				current.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 				_ = s.saveRequestsLocked()
 			}
 			s.rmu.Unlock()
-			return "", err
-		}
-		if err != nil {
 			return "", err
 		}
 		url = confirmedURL

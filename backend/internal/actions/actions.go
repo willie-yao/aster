@@ -309,10 +309,15 @@ func (s *Service) resolveSubject(id string) (*ActionSubject, error) {
 
 func buildSubjectHash(subject *BuildActionSubject) string {
 	analysis := subject.Failure.AIAnalysis
+	fileLinks := make([]string, 0, len(analysis.FileLinks))
+	for file, link := range analysis.FileLinks {
+		fileLinks = append(fileLinks, file+"\x00"+link)
+	}
+	slices.Sort(fileLinks)
 	payload, _ := json.Marshal(struct {
 		JobID, BuildID, Source, Suite, Class, Name, GeneratedAt, RootCause, SuggestedFix string
-		RelevantFiles                                                                    []string
-	}{subject.JobID, subject.Build.BuildID, subject.Failure.Source, subject.Failure.SuiteName, subject.Failure.ClassName, subject.Failure.Name, analysis.GeneratedAt, analysis.RootCause, analysis.SuggestedFix, subject.RelevantFiles})
+		RelevantFiles, FileLinks                                                         []string
+	}{subject.JobID, subject.Build.BuildID, subject.Failure.Source, subject.Failure.SuiteName, subject.Failure.ClassName, subject.Failure.Name, analysis.GeneratedAt, analysis.RootCause, analysis.SuggestedFix, subject.RelevantFiles, fileLinks})
 	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])
 }
@@ -622,7 +627,7 @@ func (s *Service) Confirm(ctx context.Context, token, userToken string) (string,
 	if err != nil || resultURL != "" {
 		return resultURL, err
 	}
-	if entry.failureID != "" || entry.patternHash != "" {
+	if !reconcile && (entry.failureID != "" || entry.patternHash != "") {
 		if err := s.validateSubjectSnapshot(entry.failureID, entry.patternHash, entry.kind); err != nil {
 			_ = s.previewStore.discard(userToken, token, attemptID)
 			return "", err
