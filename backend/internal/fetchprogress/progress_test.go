@@ -648,7 +648,7 @@ func TestTrackerFinalizesPostCacheAnalysisPlan(t *testing.T) {
 	tracker.StartPass(PassInitialWatch)
 	rejections := CacheRejectionProgress{Missing: 1, Prompt: 1}
 	tracker.PlanAnalysisWork(AnalysisPlan{
-		LogicalTotal: 3, AcceptedCacheHits: 1, NewWork: 1, StaleWork: 1, Queued: 2,
+		LogicalTotal: 4, AcceptedCacheHits: 1, CompatibleResultsReused: 1, NewWork: 1, StaleWork: 1, Queued: 2,
 		CacheRejections: rejections,
 		BuildSubjects: BuildAnalysisProgress{
 			LogicalTotal: 1, Completed: 1, AcceptedCacheHits: 1,
@@ -664,12 +664,28 @@ func TestTrackerFinalizesPostCacheAnalysisPlan(t *testing.T) {
 
 	got := tracker.Snapshot().Analyses
 	want := AnalysisProgress{
-		LogicalTotal: 3, AcceptedCacheHits: 1, NewWork: 1, StaleWork: 1, CacheRejections: rejections,
-		Queued: 1, Completed: 2, TaskAttempts: 1,
+		LogicalTotal: 4, AcceptedCacheHits: 1, CompatibleResultsReused: 1, NewWork: 1, StaleWork: 1, CacheRejections: rejections,
+		Queued: 1, Completed: 3, TaskAttempts: 1,
 		BuildSubjects: BuildAnalysisProgress{LogicalTotal: 1, Completed: 1, AcceptedCacheHits: 1},
 	}
 	if got != want {
 		t.Fatalf("analysis progress = %+v, want %+v", got, want)
+	}
+}
+
+func TestReadAcceptsPreviousCompatibleReuseFreeStatusSchema(t *testing.T) {
+	status := testStatus(time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC))
+	status.SchemaVersion = 5
+	path := filepath.Join(t.TempDir(), "status.json")
+	data, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Read(path); err != nil {
+		t.Fatalf("reading previous status schema: %v", err)
 	}
 }
 
@@ -686,5 +702,19 @@ func TestReadAcceptsPreviousBuildSubjectStatusSchema(t *testing.T) {
 	}
 	if _, err := Read(path); err != nil {
 		t.Fatalf("reading previous status schema: %v", err)
+	}
+}
+
+func TestTrackerCompatibleReuseDoesNotCountTaskActivity(t *testing.T) {
+	tracker := newTracker(t.TempDir(), "sha-test", trackerOptions{
+		write:        func(string, Status) error { return nil },
+		writeHistory: func(string, History) error { return nil },
+		logf:         func(string, ...any) {},
+	})
+	tracker.StartPass(PassInitialWatch)
+	tracker.PlanAnalysisWork(AnalysisPlan{LogicalTotal: 1, CompatibleResultsReused: 1})
+	got := tracker.Snapshot().Analyses
+	if got.LogicalTotal != 1 || got.Completed != 1 || got.CompatibleResultsReused != 1 || got.Queued != 0 || got.TaskAttempts != 0 || got.ExistingTasksAdopted != 0 || got.ResultsRetrieved != 0 {
+		t.Fatalf("compatible reuse progress = %+v", got)
 	}
 }

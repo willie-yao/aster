@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
 func TestAgenticCacheAcceptanceReasons(t *testing.T) {
@@ -111,5 +113,30 @@ func TestModelFingerprintNormalizesDefaultAPI(t *testing.T) {
 	}
 	if implicit == ModelFingerprint(APIResponses, "https://model.invalid/v1/chat/completions", "model") {
 		t.Fatal("responses API did not change fingerprint")
+	}
+}
+
+func TestNewAgenticCacheEntryRoundTripsAcceptedResult(t *testing.T) {
+	now := time.Date(2026, 7, 30, 19, 0, 0, 0, time.UTC)
+	const key = "agentic:universal:job:1:failure"
+	policy := AgenticCachePolicy{
+		MinToolCalls: 2, MinGCSBytes: 50, SkillSetHash: "skills",
+		Model: "model", ModelHash: "model-hash", PromptHash: "prompt-hash", Now: now,
+	}
+	result := FailureAnalysisResult{
+		Summary: &models.AISummary{Summary: "summary", IsTransient: false},
+		Analysis: &models.AIAnalysis{
+			Mode: AgenticMode, RootCause: "root", Severity: "High", SuggestedFix: "fix", RelevantFiles: []string{"a.go"},
+			ToolCalls: 2, ContextBytes: 100, GCSBytes: 50, CritiquePassed: true, CritiqueVersion: currentCritiqueVersion,
+			SkillSetHash: policy.SkillSetHash, ModelHash: policy.ModelHash, PromptHash: policy.PromptHash,
+		},
+	}
+	entry, err := NewAgenticCacheEntry(key, result, now.Add(-time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, reason := AcceptAgenticCacheEntry(entry, key, policy)
+	if reason != CacheAccepted || got.Summary == nil || got.Analysis == nil || got.Summary.Summary != result.Summary.Summary || got.Analysis.RootCause != result.Analysis.RootCause || got.Analysis.ContextBytes != result.Analysis.ContextBytes {
+		t.Fatalf("round trip result=%+v reason=%q", got, reason)
 	}
 }

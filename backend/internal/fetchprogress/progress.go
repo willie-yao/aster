@@ -23,7 +23,7 @@ import (
 
 const (
 	// SchemaVersion is the current private fetch status schema.
-	SchemaVersion = 5
+	SchemaVersion = 6
 	// StatusDirectory is hidden from the public /data file server.
 	StatusDirectory = ".fetch-status"
 	// StatusFilename is the current fetch status snapshot.
@@ -181,34 +181,36 @@ func (p CacheRejectionProgress) valid() bool {
 
 // AnalysisPlan is the finalized pre-execution logical workload.
 type AnalysisPlan struct {
-	LogicalTotal      int
-	AcceptedCacheHits int
-	NewWork           int
-	StaleWork         int
-	Queued            int
-	CacheRejections   CacheRejectionProgress
-	BuildSubjects     BuildAnalysisProgress
+	LogicalTotal            int
+	AcceptedCacheHits       int
+	CompatibleResultsReused int
+	NewWork                 int
+	StaleWork               int
+	Queued                  int
+	CacheRejections         CacheRejectionProgress
+	BuildSubjects           BuildAnalysisProgress
 }
 
 // AnalysisProgress separates logical analyses from Task attempts.
 type AnalysisProgress struct {
-	LogicalTotal           int                    `json:"logical_total"`
-	AcceptedCacheHits      int                    `json:"accepted_cache_hits"`
-	NewWork                int                    `json:"new_work"`
-	StaleWork              int                    `json:"stale_work"`
-	CacheRejections        CacheRejectionProgress `json:"cache_rejections"`
-	Queued                 int                    `json:"queued"`
-	Running                int                    `json:"running"`
-	Completed              int                    `json:"completed"`
-	Failed                 int                    `json:"failed"`
-	Cancelled              int                    `json:"cancelled"`
-	TaskAttempts           int                    `json:"task_attempts"`
-	Retries                int                    `json:"retries"`
-	ExistingTasksAdopted   int                    `json:"existing_tasks_adopted"`
-	ResultsRetrieved       int                    `json:"results_retrieved"`
-	ResultRetrievalRetries int                    `json:"result_retrieval_retries"`
-	CheckpointCommitted    bool                   `json:"checkpoint_committed,omitempty"`
-	BuildSubjects          BuildAnalysisProgress  `json:"build_subjects"`
+	LogicalTotal            int                    `json:"logical_total"`
+	AcceptedCacheHits       int                    `json:"accepted_cache_hits"`
+	CompatibleResultsReused int                    `json:"compatible_results_reused"`
+	NewWork                 int                    `json:"new_work"`
+	StaleWork               int                    `json:"stale_work"`
+	CacheRejections         CacheRejectionProgress `json:"cache_rejections"`
+	Queued                  int                    `json:"queued"`
+	Running                 int                    `json:"running"`
+	Completed               int                    `json:"completed"`
+	Failed                  int                    `json:"failed"`
+	Cancelled               int                    `json:"cancelled"`
+	TaskAttempts            int                    `json:"task_attempts"`
+	Retries                 int                    `json:"retries"`
+	ExistingTasksAdopted    int                    `json:"existing_tasks_adopted"`
+	ResultsRetrieved        int                    `json:"results_retrieved"`
+	ResultRetrievalRetries  int                    `json:"result_retrieval_retries"`
+	CheckpointCommitted     bool                   `json:"checkpoint_committed,omitempty"`
+	BuildSubjects           BuildAnalysisProgress  `json:"build_subjects"`
 }
 
 // PatternFailureCategory is a privacy-safe final correlation failure class.
@@ -306,7 +308,7 @@ func Read(path string) (Status, error) {
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return Status{}, errors.New("fetch status has trailing data")
 	}
-	if status.SchemaVersion != 1 && status.SchemaVersion != 2 && status.SchemaVersion != 3 && status.SchemaVersion != 4 && status.SchemaVersion != SchemaVersion {
+	if status.SchemaVersion != 1 && status.SchemaVersion != 2 && status.SchemaVersion != 3 && status.SchemaVersion != 4 && status.SchemaVersion != 5 && status.SchemaVersion != SchemaVersion {
 		return Status{}, fmt.Errorf("unsupported fetch status schema %d", status.SchemaVersion)
 	}
 	if err := status.validate(); err != nil {
@@ -328,7 +330,7 @@ func (s Status) validate() error {
 		s.Builds.Cached < 0 || s.Builds.Fetched < 0 ||
 		s.Analyses.LogicalTotal < 0 || s.Analyses.Queued < 0 || s.Analyses.Running < 0 ||
 		s.Analyses.Completed < 0 || s.Analyses.Failed < 0 || s.Analyses.Cancelled < 0 ||
-		s.Analyses.AcceptedCacheHits < 0 || s.Analyses.NewWork < 0 || s.Analyses.StaleWork < 0 ||
+		s.Analyses.AcceptedCacheHits < 0 || s.Analyses.CompatibleResultsReused < 0 || s.Analyses.NewWork < 0 || s.Analyses.StaleWork < 0 ||
 		!s.Analyses.CacheRejections.valid() ||
 		s.Analyses.TaskAttempts < 0 || s.Analyses.Retries < 0 || s.Analyses.ExistingTasksAdopted < 0 ||
 		s.Analyses.ResultsRetrieved < 0 || s.Analyses.ResultRetrievalRetries < 0 ||
@@ -351,6 +353,9 @@ func (s Status) validate() error {
 	}
 	if s.Analyses.CacheRejections.total() > s.Analyses.NewWork+s.Analyses.StaleWork {
 		return errors.New("fetch status has inconsistent cache counters")
+	}
+	if s.Analyses.AcceptedCacheHits+s.Analyses.CompatibleResultsReused > s.Analyses.Completed {
+		return errors.New("fetch status has inconsistent analysis reuse counters")
 	}
 	buildAccounted := s.Analyses.BuildSubjects.Queued + s.Analyses.BuildSubjects.Running + s.Analyses.BuildSubjects.Completed + s.Analyses.BuildSubjects.Failed + s.Analyses.BuildSubjects.Cancelled
 	if s.Analyses.BuildSubjects.LogicalTotal > s.Analyses.LogicalTotal || buildAccounted > s.Analyses.BuildSubjects.LogicalTotal ||
@@ -700,14 +705,15 @@ func (t *Tracker) PlanAnalysisWork(plan AnalysisPlan) {
 	t.update(true, func(status *Status) {
 		t.analysisPlanFinalized = true
 		status.Analyses = AnalysisProgress{
-			LogicalTotal:      plan.LogicalTotal,
-			AcceptedCacheHits: plan.AcceptedCacheHits,
-			NewWork:           plan.NewWork,
-			StaleWork:         plan.StaleWork,
-			CacheRejections:   plan.CacheRejections,
-			Queued:            plan.Queued,
-			Completed:         plan.AcceptedCacheHits,
-			BuildSubjects:     plan.BuildSubjects,
+			LogicalTotal:            plan.LogicalTotal,
+			AcceptedCacheHits:       plan.AcceptedCacheHits,
+			CompatibleResultsReused: plan.CompatibleResultsReused,
+			NewWork:                 plan.NewWork,
+			StaleWork:               plan.StaleWork,
+			CacheRejections:         plan.CacheRejections,
+			Queued:                  plan.Queued,
+			Completed:               plan.AcceptedCacheHits + plan.CompatibleResultsReused,
+			BuildSubjects:           plan.BuildSubjects,
 		}
 	})
 }

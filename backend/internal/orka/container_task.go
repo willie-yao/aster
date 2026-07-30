@@ -63,47 +63,54 @@ type ContainerAnalysisResources struct {
 	CacheSeedIncluded bool
 }
 
-// BuildContainerAnalysisResources builds one content-addressed bundle and Task.
-func BuildContainerAnalysisResources(in ContainerAnalysisTaskSpec) (ContainerAnalysisResources, error) {
+type preparedContainerAnalysisTask struct {
+	Spec              ContainerAnalysisTaskSpec
+	BundleJSON        []byte
+	BundleDigest      string
+	CacheSeedIncluded bool
+	Name              string
+}
+
+func prepareContainerAnalysisTask(in ContainerAnalysisTaskSpec) (preparedContainerAnalysisTask, error) {
 	if strings.TrimSpace(in.Namespace) == "" {
-		return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task namespace is required")
+		return preparedContainerAnalysisTask{}, fmt.Errorf("container analysis Task namespace is required")
 	}
 	if strings.TrimSpace(in.Image) == "" {
-		return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task image is required")
+		return preparedContainerAnalysisTask{}, fmt.Errorf("container analysis Task image is required")
 	}
 	if strings.TrimSpace(in.Timeout) == "" {
-		return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task timeout is required")
+		return preparedContainerAnalysisTask{}, fmt.Errorf("container analysis Task timeout is required")
 	}
 	if in.MaxRetries < 0 {
-		return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task retries must not be negative")
+		return preparedContainerAnalysisTask{}, fmt.Errorf("container analysis Task retries must not be negative")
 	}
 	if strings.TrimSpace(in.ProjectDir) == "" {
-		return ContainerAnalysisResources{}, fmt.Errorf("container analysis project directory is required")
+		return preparedContainerAnalysisTask{}, fmt.Errorf("container analysis project directory is required")
 	}
 	if !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(in.StateKeyFingerprint) {
-		return ContainerAnalysisResources{}, fmt.Errorf("container analysis state key fingerprint must be a lowercase SHA-256")
+		return preparedContainerAnalysisTask{}, fmt.Errorf("container analysis state key fingerprint must be a lowercase SHA-256")
 	}
 	if len(in.NodeSelector) == 0 {
 		in.NodeSelector = map[string]string{"agentpool": "nodepool1"}
 	}
 	if err := validateContainerAnalysisPlacement(in.NodeSelector, in.Tolerations, in.Affinity); err != nil {
-		return ContainerAnalysisResources{}, err
+		return preparedContainerAnalysisTask{}, err
 	}
 	environment := maps.Clone(in.Environment)
 	api := strings.ToLower(strings.TrimSpace(environment["AI_API"]))
 	if api == "" {
-		return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task environment requires AI_API")
+		return preparedContainerAnalysisTask{}, fmt.Errorf("container analysis Task environment requires AI_API")
 	}
 	if err := project.ValidateAIAPI(api); err != nil {
-		return ContainerAnalysisResources{}, err
+		return preparedContainerAnalysisTask{}, err
 	}
 	endpoint, err := validateContainerAnalysisEndpoint(environment["AI_ENDPOINT"])
 	if err != nil {
-		return ContainerAnalysisResources{}, err
+		return preparedContainerAnalysisTask{}, err
 	}
 	model := strings.TrimSpace(environment["AI_MODEL"])
 	if model == "" {
-		return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task environment requires AI_MODEL")
+		return preparedContainerAnalysisTask{}, fmt.Errorf("container analysis Task environment requires AI_MODEL")
 	}
 	environment["AI_API"] = api
 	environment["AI_ENDPOINT"] = endpoint
@@ -111,15 +118,14 @@ func BuildContainerAnalysisResources(in ContainerAnalysisTaskSpec) (ContainerAna
 	in.Environment = environment
 	bundleJSON, bundleDigest, err := analysisruntime.BuildProjectBundleWithCache(in.ProjectDir, ContainerAnalysisContractVersion, in.Request, in.CacheSeed)
 	if err != nil {
-		return ContainerAnalysisResources{}, err
+		return preparedContainerAnalysisTask{}, err
 	}
 	var encodedBundle struct {
 		CacheSeed map[string]json.RawMessage `json:"cache_seed"`
 	}
 	if err := json.Unmarshal(bundleJSON, &encodedBundle); err != nil {
-		return ContainerAnalysisResources{}, fmt.Errorf("inspect container analysis cache seed: %w", err)
+		return preparedContainerAnalysisTask{}, fmt.Errorf("inspect container analysis cache seed: %w", err)
 	}
-	cacheSeedIncluded := len(encodedBundle.CacheSeed) > 0
 	secretEnv := append([]SecretEnvVar(nil), in.SecretEnv...)
 	sort.Slice(secretEnv, func(i, j int) bool {
 		if secretEnv[i].Name != secretEnv[j].Name {
@@ -139,13 +145,13 @@ func BuildContainerAnalysisResources(in ContainerAnalysisTaskSpec) (ContainerAna
 	}
 	for name := range in.Environment {
 		if strings.TrimSpace(name) == "" {
-			return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task environment name is required")
+			return preparedContainerAnalysisTask{}, fmt.Errorf("container analysis Task environment name is required")
 		}
 		if !safeInlineEnvironmentName(name) {
-			return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task environment %s must use a Secret reference", name)
+			return preparedContainerAnalysisTask{}, fmt.Errorf("container analysis Task environment %s must use a Secret reference", name)
 		}
 		if seenEnv[name] {
-			return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task environment must not override %s", name)
+			return preparedContainerAnalysisTask{}, fmt.Errorf("container analysis Task environment must not override %s", name)
 		}
 		seenEnv[name] = true
 	}
@@ -153,10 +159,10 @@ func BuildContainerAnalysisResources(in ContainerAnalysisTaskSpec) (ContainerAna
 	stateSecretFound := false
 	for _, secret := range secretEnv {
 		if strings.TrimSpace(secret.Name) == "" || strings.TrimSpace(secret.SecretName) == "" || strings.TrimSpace(secret.SecretKey) == "" {
-			return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task secret environment references require name, Secret name, and key")
+			return preparedContainerAnalysisTask{}, fmt.Errorf("container analysis Task secret environment references require name, Secret name, and key")
 		}
 		if seenEnv[secret.Name] {
-			return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task environment contains duplicate %s", secret.Name)
+			return preparedContainerAnalysisTask{}, fmt.Errorf("container analysis Task environment contains duplicate %s", secret.Name)
 		}
 		seenEnv[secret.Name] = true
 		if secret.Name == "AI_TOKEN" {
@@ -167,17 +173,34 @@ func BuildContainerAnalysisResources(in ContainerAnalysisTaskSpec) (ContainerAna
 		}
 	}
 	if !tokenSecretFound {
-		return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task requires an AI_TOKEN Secret reference")
+		return preparedContainerAnalysisTask{}, fmt.Errorf("container analysis Task requires an AI_TOKEN Secret reference")
 	}
 	if !stateSecretFound {
-		return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task requires a %s Secret reference", analysisruntime.ContainerStateKeyEnv)
+		return preparedContainerAnalysisTask{}, fmt.Errorf("container analysis Task requires a %s Secret reference", analysisruntime.ContainerStateKeyEnv)
 	}
 	in.SecretEnv = secretEnv
-
 	name, err := containerAnalysisTaskName(in, bundleDigest)
+	if err != nil {
+		return preparedContainerAnalysisTask{}, err
+	}
+	return preparedContainerAnalysisTask{
+		Spec: in, BundleJSON: bundleJSON, BundleDigest: bundleDigest,
+		CacheSeedIncluded: len(encodedBundle.CacheSeed) > 0, Name: name,
+	}, nil
+}
+
+// BuildContainerAnalysisResources builds one content-addressed bundle and Task.
+func BuildContainerAnalysisResources(in ContainerAnalysisTaskSpec) (ContainerAnalysisResources, error) {
+	prepared, err := prepareContainerAnalysisTask(in)
 	if err != nil {
 		return ContainerAnalysisResources{}, err
 	}
+	in = prepared.Spec
+	bundleJSON := prepared.BundleJSON
+	bundleDigest := prepared.BundleDigest
+	cacheSeedIncluded := prepared.CacheSeedIncluded
+	secretEnv := in.SecretEnv
+	name := prepared.Name
 	bundleName := containerAnalysisBundleName(name)
 	env := []any{
 		map[string]any{

@@ -2,6 +2,8 @@ package ai
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 )
 
@@ -111,6 +113,44 @@ func AgenticResultRejection(result FailureAnalysisResult, policy AgenticCachePol
 		return CacheRejectedTransientPersistence
 	}
 	return CacheAccepted
+}
+
+// NewAgenticCacheEntry reconstructs the existing private cache shape from a validated result.
+func NewAgenticCacheEntry(key string, result FailureAnalysisResult, createdAt time.Time) (CacheEntry, error) {
+	if strings.TrimSpace(key) == "" {
+		return CacheEntry{}, fmt.Errorf("agentic cache key is required")
+	}
+	if createdAt.IsZero() {
+		return CacheEntry{}, fmt.Errorf("agentic cache creation time is required")
+	}
+	if result.Summary == nil || strings.TrimSpace(result.Summary.Summary) == "" || result.Analysis == nil || result.Analysis.Mode != AgenticMode {
+		return CacheEntry{}, fmt.Errorf("agentic cache result is incomplete")
+	}
+	data := agenticCacheData{
+		analysisResponse: analysisResponse{
+			Summary:       result.Summary.Summary,
+			IsTransient:   result.Summary.IsTransient,
+			RootCause:     result.Analysis.RootCause,
+			Severity:      result.Analysis.Severity,
+			SuggestedFix:  result.Analysis.SuggestedFix,
+			RelevantFiles: append([]string(nil), result.Analysis.RelevantFiles...),
+		},
+		ToolCalls:           result.Analysis.ToolCalls,
+		ModelBytes:          result.Analysis.ContextBytes,
+		GCSBytes:            result.Analysis.GCSBytes,
+		EvidencePlanCovered: result.Analysis.EvidencePlanCovered,
+		BudgetExhausted:     result.Analysis.BudgetExhausted,
+		CritiquePassed:      result.Analysis.CritiquePassed,
+		CritiqueVersion:     result.Analysis.CritiqueVersion,
+		SkillSetHash:        result.Analysis.SkillSetHash,
+		ModelHash:           result.Analysis.ModelHash,
+		PromptHash:          result.Analysis.PromptHash,
+	}
+	raw, err := json.Marshal(data)
+	if err != nil {
+		return CacheEntry{}, fmt.Errorf("encode agentic cache entry: %w", err)
+	}
+	return CacheEntry{Key: key, CreatedAt: createdAt, Data: raw}, nil
 }
 
 func agenticCachePolicy(client *Client, opts AgenticOptions, skillSetHash, promptHash string, consecutiveFailures int) AgenticCachePolicy {

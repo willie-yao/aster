@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -85,5 +86,40 @@ func TestContainerStateStoreAcceptCachedFailure(t *testing.T) {
 				t.Fatalf("accepted result = %+v", result)
 			}
 		})
+	}
+}
+
+func TestContainerStateStoreStagesPromotedCacheForCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	state, err := NewContainerStateStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := ai.FailureAnalysisRequest{
+		JobID: "job", BuildPrefix: "logs/job/1", Build: models.BuildInfo{BuildID: "1"},
+		TestCase: models.TestCase{Name: "test", Status: "failed", FailureMessage: "failed"},
+	}
+	key := FailureCacheKey(request)
+	entry := ai.CacheEntry{Key: key, CreatedAt: time.Now().UTC(), Data: json.RawMessage(`{"summary":"summary"}`)}
+	if err := state.StageCacheEntry(entry); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Save(); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := NewContainerStateStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := reloaded.CacheSeed(request)[key]
+	var gotData, wantData map[string]any
+	if err := json.Unmarshal(got.Data, &gotData); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(entry.Data, &wantData); err != nil {
+		t.Fatal(err)
+	}
+	if got.Key != key || !reflect.DeepEqual(gotData, wantData) {
+		t.Fatalf("reloaded promoted cache = %+v", got)
 	}
 }

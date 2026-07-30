@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -127,6 +129,8 @@ type TaskState struct {
 	UID             string
 	Attempts        int
 	Deleting        bool
+	ResultAvailable bool
+	CompletionTime  time.Time
 }
 
 // TaskState returns a Task's phase and execution placement. A missing Task has
@@ -159,10 +163,28 @@ func taskStateFromObject(u *unstructured.Unstructured) (TaskState, error) {
 	if !found {
 		execution = nil
 	}
+	resultAvailable, foundResult, err := unstructured.NestedBool(u.Object, "status", "resultRef", "available")
+	if err != nil {
+		return TaskState{}, fmt.Errorf("invalid status.resultRef.available")
+	}
+	if !foundResult {
+		resultAvailable = false
+	}
+	var completionTime time.Time
+	completionText, foundCompletion, err := unstructured.NestedString(u.Object, "status", "completionTime")
+	if err != nil {
+		return TaskState{}, fmt.Errorf("invalid status.completionTime")
+	}
+	if foundCompletion && strings.TrimSpace(completionText) != "" {
+		completionTime, err = time.Parse(time.RFC3339Nano, completionText)
+		if err != nil {
+			return TaskState{}, fmt.Errorf("invalid status.completionTime")
+		}
+	}
 	return TaskState{
 		Exists: true, Phase: phase, Execution: execution,
 		ResourceVersion: u.GetResourceVersion(), UID: string(u.GetUID()), Attempts: int(attempts),
-		Deleting: u.GetDeletionTimestamp() != nil,
+		Deleting: u.GetDeletionTimestamp() != nil, ResultAvailable: resultAvailable, CompletionTime: completionTime,
 	}, nil
 }
 

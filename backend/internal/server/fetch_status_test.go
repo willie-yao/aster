@@ -25,7 +25,7 @@ func serverFetchStatus(now time.Time) fetchprogress.Status {
 		Jobs:    fetchprogress.JobProgress{Total: 28, Completed: 28},
 		Builds:  fetchprogress.BuildProgress{Cached: 241, Fetched: 29},
 		Analyses: fetchprogress.AnalysisProgress{
-			LogicalTotal: 61, NewWork: 20, StaleWork: 3, Queued: 35, Running: 2, Completed: 24, Retries: 3,
+			LogicalTotal: 61, CompatibleResultsReused: 4, NewWork: 20, StaleWork: 3, Queued: 35, Running: 2, Completed: 24, Retries: 3,
 			CacheRejections: fetchprogress.CacheRejectionProgress{Missing: 20, Prompt: 3},
 		},
 		Patterns: fetchprogress.PatternProgress{
@@ -84,7 +84,7 @@ func TestFetchStatusEndpointAuthenticationMethodsAndPrivacy(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = resp.Body.Close()
-	if !got.Available || got.State != "active" || got.Status == nil || got.Status.Analyses.Retries != 3 || got.Status.Analyses.CacheRejections.Missing != 20 ||
+	if !got.Available || got.State != "active" || got.Status == nil || got.Status.Analyses.Retries != 3 || got.Status.Analyses.CompatibleResultsReused != 4 || got.Status.Analyses.CacheRejections.Missing != 20 ||
 		got.Status.Patterns.Attempts != 3 || got.Status.Patterns.FailureCategory != fetchprogress.PatternFailureAmbiguous {
 		t.Fatalf("GET response = %+v", got)
 	}

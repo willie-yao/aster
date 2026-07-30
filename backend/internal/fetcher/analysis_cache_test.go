@@ -229,3 +229,42 @@ func TestPlanContainerAnalysisWorkAcceptsBuildCache(t *testing.T) {
 		t.Fatalf("build cache result was not applied: %+v", run.TestCases[0])
 	}
 }
+
+type compatiblePlanningAnalyzer struct {
+	*cachePlanningAnalyzer
+	result ai.FailureAnalysisResult
+	calls  atomic.Int64
+}
+
+func (a *compatiblePlanningAnalyzer) ReuseCompatibleResult(context.Context, ai.FailureAnalysisRequest, ai.AgenticCachePolicy) (ai.FailureAnalysisResult, bool, error) {
+	a.calls.Add(1)
+	return a.result, true, nil
+}
+
+func TestPlanContainerAnalysisWorkCountsCompatibleResultReuse(t *testing.T) {
+	projectConfig := &project.Config{AI: &project.AI{Agentic: project.Agentic{MinToolCalls: 2}}}
+	analysisProject := testCacheAnalysisProject(projectConfig)
+	state, err := analysisruntime.NewContainerStateStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := testCacheRequest()
+	run := models.BuildResult{BuildInfo: request.Build, TestCases: []models.TestCase{request.TestCase}}
+	result := ai.FailureAnalysisResult{
+		Summary:  &models.AISummary{Summary: "compatible"},
+		Analysis: &models.AIAnalysis{Mode: ai.AgenticMode, RootCause: "root"},
+	}
+	analyzer := &compatiblePlanningAnalyzer{cachePlanningAnalyzer: &cachePlanningAnalyzer{state: state}, result: result}
+	planner := analysisruntime.NewReusePlanner(analysisProject)
+	work := []aiWork{{jobID: request.JobID, buildPrefix: request.BuildPrefix, run: &run, tc: &run.TestCases[0]}}
+	queued, plan, err := planContainerAnalysisWork(t.Context(), &http.Client{}, work, analyzer, planner, analysisProject, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(queued) != 0 || plan.LogicalTotal != 1 || plan.CompatibleResultsReused != 1 || plan.AcceptedCacheHits != 0 || plan.NewWork != 0 || plan.Queued != 0 || plan.CacheRejections.Missing != 0 || analyzer.calls.Load() != 1 {
+		t.Fatalf("plan=%+v calls=%d", plan, analyzer.calls.Load())
+	}
+	if run.TestCases[0].AISummary == nil || run.TestCases[0].AISummary.Summary != "compatible" {
+		t.Fatalf("compatible result was not applied: %+v", run.TestCases[0])
+	}
+}
