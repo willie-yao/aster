@@ -488,13 +488,13 @@ func TestGenerateBuildPreviewUsesRepositoryEvidenceWithoutPatternSemantics(t *te
 	if _, err := manager.OpenFromPreview(t.Context(), generated); err != nil {
 		t.Fatal(err)
 	}
+	manager.Forget(generated.key)
 	if err := manager.SaveState(); err != nil {
 		t.Fatal(err)
 	}
 	reloaded := NewManager(&fakePR{}, manager.stateFile, manager.opts)
-	tracked := reloaded.state.Tracked[generated.key]
-	if tracked.SubjectID != "build-id" || tracked.HasPatternSnapshot() {
-		t.Fatalf("tracked build fix = %+v", tracked)
+	if _, found := reloaded.state.Tracked[generated.key]; found {
+		t.Fatal("build fix leaked into persistent pattern state")
 	}
 }
 

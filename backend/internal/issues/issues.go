@@ -140,6 +140,11 @@ func (m *Manager) TrackedURL(key string) (string, bool) {
 	return t.URL, ok
 }
 
+// Forget removes one transient tracked issue before state persistence.
+func (m *Manager) Forget(key string) {
+	delete(m.state.Tracked, key)
+}
+
 // NewManager builds a Manager and loads prior state from stateFile if present.
 // targetRepo scopes state by owner/name so issue numbers are never mixed
 // across repos.

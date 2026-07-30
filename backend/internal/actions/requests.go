@@ -554,8 +554,11 @@ func (s *Service) validateSubjectSnapshot(failureID, patternHash string, kind ..
 		return ErrPreviewTargetChanged
 	}
 	fix := len(kind) > 0 && (kind[0] == gfKind || kind[0] == "propose-fix")
-	if fix && subject.Kind == actionSubjectBuild && len(verifiedBuildSourceFiles(subject.Build)) == 0 {
-		return ErrPreviewTargetChanged
+	if fix && subject.Kind == actionSubjectBuild {
+		eff := s.cfg.EffectiveFixPRs()
+		if eff.Repo == nil || len(verifiedBuildSourceFiles(subject.Build, eff.Repo.Owner, eff.Repo.Name)) == 0 {
+			return ErrPreviewTargetChanged
+		}
 	}
 	return nil
 }

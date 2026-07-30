@@ -801,7 +801,7 @@ func TestLegacyReadyPreviewWithoutFailureIDIsRejected(t *testing.T) {
 
 func analyzedBuildDetail(withSource bool) models.JobDetail {
 	analysis := &models.AIAnalysis{
-		GeneratedAt: "2026-07-30T12:00:00Z", Mode: ai.AgenticMode, CritiquePassed: true,
+		GeneratedAt: "2026-07-30T12:00:00Z", Mode: ai.AgenticMode, CritiquePassed: true, CritiqueVersion: ai.CurrentCritiqueVersion(),
 		RootCause: "K8sVersionNotSupported rejected Kubernetes 1.33.2 because AKS requires Long-Term Support.",
 		Severity:  "High", SuggestedFix: "Update the repository version selection or enable AKS LTS.",
 		RelevantFiles: []string{"templates/aks.yaml"}, FileLinks: map[string]string{},
@@ -887,5 +887,84 @@ func TestBuildFixSnapshotRejectsRemovedSourceEvidenceButIssueRemainsValid(t *tes
 	}
 	if err := service.validateSubjectSnapshot(id, subject.ContentHash, "create-issue"); err != nil {
 		t.Fatalf("issue snapshot validation = %v", err)
+	}
+}
+
+func TestBuildPreviewConfirmUsesTypedSubjectGuard(t *testing.T) {
+	dataDir := t.TempDir()
+	detail := analyzedBuildDetail(false)
+	writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
+	cfg := &project.Config{Issues: &project.Issues{Repo: &project.SourceRepo{Owner: "old", Name: "issues"}}}
+	service := NewService(cfg, dataDir, AIConfig{})
+	preview, err := service.PreviewIssue(t.Context(), BuildFailureID(detail.JobID, "123"), "owner-token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Issues.Repo = &project.SourceRepo{Owner: "new", Name: "issues"}
+	if _, err := service.Confirm(t.Context(), preview.Token, "owner-token"); !errors.Is(err, ErrPreviewTargetChanged) {
+		t.Fatalf("build confirmation error = %v", err)
+	}
+}
+
+func TestBuildSourceFilesMustMatchFixRepository(t *testing.T) {
+	detail := analyzedBuildDetail(true)
+	failure := detail.Runs[0].TestCases[0]
+	subject := &BuildActionSubject{JobID: detail.JobID, JobName: detail.Name, Build: detail.Runs[0].BuildInfo, Failure: failure, RelevantFiles: failure.AIAnalysis.RelevantFiles}
+	if got := verifiedBuildSourceFiles(subject, "example", "repo"); len(got) != 1 || got[0] != "templates/aks.yaml" {
+		t.Fatalf("matching source files = %v", got)
+	}
+	if got := verifiedBuildSourceFiles(subject, "other", "repo"); len(got) != 0 {
+		t.Fatalf("cross-repository source files = %v", got)
+	}
+}
+
+func TestBuildActionsRejectOldCritiqueContract(t *testing.T) {
+	dataDir := t.TempDir()
+	detail := analyzedBuildDetail(true)
+	detail.Runs[0].TestCases[0].AIAnalysis.CritiqueVersion--
+	writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
+	service := NewService(&project.Config{}, dataDir, AIConfig{})
+	if _, err := service.resolveSubject(BuildFailureID(detail.JobID, "123")); err == nil || !strings.Contains(err.Error(), "quality gates") {
+		t.Fatalf("old critique analysis error = %v", err)
+	}
+}
+
+type fakeIssuePreviewManager struct {
+	specs  []issues.IssueSpec
+	forgot []string
+	saved  bool
+	url    string
+}
+
+func (f *fakeIssuePreviewManager) Reconcile(_ context.Context, specs []issues.IssueSpec) (issues.Stats, error) {
+	f.specs = append(f.specs, specs...)
+	return issues.Stats{Created: 1}, nil
+}
+func (f *fakeIssuePreviewManager) TrackedURL(string) (string, bool) { return f.url, f.url != "" }
+func (f *fakeIssuePreviewManager) Forget(key string)                { f.forgot = append(f.forgot, key) }
+func (f *fakeIssuePreviewManager) SaveState() error                 { f.saved = true; return nil }
+
+func TestBuildIssuePreviewToConfirmWritesReviewedDraft(t *testing.T) {
+	dataDir := t.TempDir()
+	detail := analyzedBuildDetail(false)
+	writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
+	cfg := &project.Config{Issues: &project.Issues{Repo: &project.SourceRepo{Owner: "o", Name: "r"}}}
+	service := NewService(cfg, dataDir, AIConfig{})
+	manager := &fakeIssuePreviewManager{url: "https://github.com/o/r/issues/7"}
+	service.issueManagerFactory = func(string, string, string) issuePreviewManager { return manager }
+
+	preview, err := service.PreviewIssue(t.Context(), BuildFailureID(detail.JobID, "123"), "owner-token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	url, err := service.Confirm(t.Context(), preview.Token, "owner-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if url != manager.url || len(manager.specs) != 1 || !manager.saved || len(manager.forgot) != 1 {
+		t.Fatalf("confirmation url=%q specs=%d saved=%t forgot=%v", url, len(manager.specs), manager.saved, manager.forgot)
+	}
+	if manager.specs[0].Body != preview.Body {
+		t.Fatal("confirmation did not use the reviewed issue body")
 	}
 }

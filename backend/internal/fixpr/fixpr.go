@@ -160,10 +160,9 @@ type State = statefile.State[TrackedFix]
 
 // TrackedFix records the fix PR opened for a pattern key.
 type TrackedFix struct {
-	URL       string                 `json:"url"`
-	OpenedAt  string                 `json:"opened_at"`
-	Pattern   models.PatternAnalysis `json:"pattern"`
-	SubjectID string                 `json:"subject_id,omitempty"`
+	URL      string                 `json:"url"`
+	OpenedAt string                 `json:"opened_at"`
+	Pattern  models.PatternAnalysis `json:"pattern"`
 }
 
 // HasPatternSnapshot reports whether the fix can be reconciled.
@@ -176,7 +175,7 @@ func trackedFix(url string, pattern models.PatternAnalysis) TrackedFix {
 }
 
 func trackedGeneratedFix(url string, fix *GeneratedFix) TrackedFix {
-	return TrackedFix{URL: url, OpenedAt: now(), Pattern: fix.pattern, SubjectID: fix.subjectID}
+	return TrackedFix{URL: url, OpenedAt: now(), Pattern: fix.pattern}
 }
 
 // Preview is a dry-run proposed fix (no PR opened).
@@ -214,12 +213,17 @@ func NewManager(pr prClient, stateFile string, opts Options) *Manager {
 	repo := opts.SourceOwner + "/" + opts.SourceName
 	state := statefile.Load[TrackedFix](stateFile, repo, "fix PRs")
 	for key, tracked := range state.Tracked {
-		if !tracked.HasPatternSnapshot() && tracked.SubjectID == "" {
+		if !tracked.HasPatternSnapshot() {
 			delete(state.Tracked, key)
-			log.Printf("Fix PRs: discarded unsupported state entry %s without a subject snapshot", key)
+			log.Printf("Fix PRs: discarded unsupported state entry %s without a pattern snapshot", key)
 		}
 	}
 	return &Manager{pr: pr, stateFile: stateFile, opts: opts, state: state}
+}
+
+// Forget removes one transient tracking entry before state persistence.
+func (m *Manager) Forget(key string) {
+	delete(m.state.Tracked, key)
 }
 
 // SaveState writes the tracking state to disk.
@@ -433,10 +437,9 @@ type GeneratedFix struct {
 	Description string  // PR description (after any repo-template reformat)
 	Body        string  // full PR body that embeds Description + diff + marker
 
-	pattern   models.PatternAnalysis
-	subjectID string
-	key       string
-	base      ghpr.Base
+	pattern models.PatternAnalysis
+	key     string
+	base    ghpr.Base
 }
 
 // GeneratedFixSnapshot is the serializable form of a generated fix. It keeps
@@ -451,7 +454,6 @@ type GeneratedFixSnapshot struct {
 	Description string                 `json:"description"`
 	Body        string                 `json:"body"`
 	Pattern     models.PatternAnalysis `json:"pattern"`
-	SubjectID   string                 `json:"subject_id,omitempty"`
 	Key         string                 `json:"key"`
 	Base        ghpr.Base              `json:"base"`
 }
@@ -469,7 +471,7 @@ func (gf *GeneratedFix) Snapshot() *GeneratedFixSnapshot {
 		Subject: gf.Preview.Subject, Rationale: gf.Preview.Rationale,
 		Diff: gf.Preview.Diff, Files: files, Verify: gf.Preview.Verify,
 		Title: gf.Title, Description: gf.Description, Body: gf.Body,
-		Pattern: gf.pattern, SubjectID: gf.subjectID, Key: gf.key, Base: gf.base,
+		Pattern: gf.pattern, Key: gf.key, Base: gf.base,
 	}
 }
 
@@ -486,7 +488,7 @@ func RestoreGeneratedFix(snapshot *GeneratedFixSnapshot) *GeneratedFix {
 		Preview: Preview{Subject: snapshot.Subject, Rationale: snapshot.Rationale,
 			Diff: snapshot.Diff, Files: files, Verify: snapshot.Verify},
 		Title: snapshot.Title, Description: snapshot.Description, Body: snapshot.Body,
-		pattern: snapshot.Pattern, subjectID: snapshot.SubjectID, key: snapshot.Key, base: snapshot.Base,
+		pattern: snapshot.Pattern, key: snapshot.Key, base: snapshot.Base,
 	}
 }
 

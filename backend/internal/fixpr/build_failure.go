@@ -52,7 +52,7 @@ func (m *Manager) GenerateBuildPreview(ctx context.Context, failure BuildFailure
 	return &GeneratedFix{
 		Preview: Preview{Subject: failure.JobName, Rationale: fix.rationale, Diff: fix.diff, Files: fix.files, Verify: verified},
 		Title:   "fix: address build failure in " + oneLine(failure.JobName), Description: description, Body: body,
-		subjectID: failure.ID, key: key, base: base,
+		key: key, base: base,
 	}, nil
 }
 

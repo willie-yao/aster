@@ -13,7 +13,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -138,6 +140,15 @@ func BuildFailureID(jobID, buildID string) string {
 	return "build::" + encode(jobID) + "::" + encode(buildID)
 }
 
+type issuePreviewManager interface {
+	Reconcile(context.Context, []issues.IssueSpec) (issues.Stats, error)
+	TrackedURL(string) (string, bool)
+	Forget(string)
+	SaveState() error
+}
+
+type issueManagerFactory func(userToken, owner, repo string) issuePreviewManager
+
 // Service runs on-demand actions against the data written to DataDir. It reads
 // jobs/*.json to resolve a failure id and reuses the issue and fix-PR state
 // files alongside them. A mutex serializes state read-modify-write so
@@ -150,7 +161,8 @@ type Service struct {
 	ai      AIConfig
 	mu      sync.Mutex
 
-	previewStore *previewStore
+	previewStore        *previewStore
+	issueManagerFactory issueManagerFactory
 
 	rmu             sync.Mutex
 	requests        *actionRequestState
@@ -165,7 +177,10 @@ type Service struct {
 func NewService(cfg *project.Config, dataDir string, ai AIConfig) *Service {
 	s := &Service{
 		cfg: cfg, dataDir: dataDir, ai: ai,
-		previewStore:   newPreviewStore(dataDir),
+		previewStore: newPreviewStore(dataDir),
+		issueManagerFactory: func(token, owner, repo string) issuePreviewManager {
+			return issues.NewManager(issues.NewClient(token, owner, repo), filepath.Join(dataDir, "issue_state.json"), owner+"/"+repo, issues.Options{MaxNewPerRun: 1})
+		},
 		requestCancels: map[string]context.CancelFunc{}, requestConfirms: map[string]struct{}{},
 		requestTimeout: defaultRequestTimeout,
 	}
@@ -276,7 +291,7 @@ func (s *Service) resolveSubject(id string) (*ActionSubject, error) {
 				continue
 			}
 			analysis := testCase.AIAnalysis
-			if analysis.Mode != ai.AgenticMode || !analysis.CritiquePassed || strings.TrimSpace(analysis.GeneratedAt) == "" || strings.TrimSpace(analysis.RootCause) == "" || strings.TrimSpace(analysis.SuggestedFix) == "" {
+			if !ai.MeetsCurrentCritiqueContract(analysis) || strings.TrimSpace(analysis.GeneratedAt) == "" || strings.TrimSpace(analysis.RootCause) == "" || strings.TrimSpace(analysis.SuggestedFix) == "" {
 				return nil, fmt.Errorf("build analysis does not pass current action quality gates")
 			}
 			relevant := slices.Clone(analysis.RelevantFiles)
@@ -298,18 +313,34 @@ func buildSubjectHash(subject *BuildActionSubject) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func verifiedBuildSourceFiles(subject *BuildActionSubject) []string {
+func verifiedBuildSourceFiles(subject *BuildActionSubject, owner, repo string) []string {
 	analysis := subject.Failure.AIAnalysis
 	if analysis == nil || len(analysis.FileLinks) == 0 {
 		return nil
 	}
 	var files []string
-	for _, file := range subject.RelevantFiles {
-		if strings.TrimSpace(analysis.FileLinks[file]) != "" {
-			files = append(files, file)
+	for _, cited := range subject.RelevantFiles {
+		raw := strings.TrimSpace(analysis.FileLinks[cited])
+		parsed, err := url.Parse(raw)
+		if err != nil || !strings.EqualFold(parsed.Hostname(), "github.com") {
+			continue
 		}
+		parts := strings.Split(strings.Trim(parsed.EscapedPath(), "/"), "/")
+		if len(parts) < 5 || !strings.EqualFold(parts[0], owner) || !strings.EqualFold(parts[1], repo) || parts[2] != "blob" {
+			continue
+		}
+		decoded, err := url.PathUnescape(strings.Join(parts[4:], "/"))
+		if err != nil {
+			continue
+		}
+		clean := path.Clean(decoded)
+		if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "/") || strings.Contains(clean, "\\") {
+			continue
+		}
+		files = append(files, clean)
 	}
-	return files
+	slices.Sort(files)
+	return slices.Compact(files)
 }
 
 // buildIssueSpecForPattern renders one current pattern into an issue spec.
@@ -482,7 +513,11 @@ func (s *Service) generateFixPreview(ctx context.Context, failureID, userToken, 
 	if subject.Kind == actionSubjectPattern {
 		return s.generateFixPreviewForPattern(ctx, *subject.Pattern, userToken, instruction, nil)
 	}
-	sourceFiles := verifiedBuildSourceFiles(subject.Build)
+	eff := s.cfg.EffectiveFixPRs()
+	if eff.Repo == nil {
+		return PreviewResult{}, nil, fmt.Errorf("no source repo resolved (set ai.fix_prs.repo or branding.source_repo)")
+	}
+	sourceFiles := verifiedBuildSourceFiles(subject.Build, eff.Repo.Owner, eff.Repo.Name)
 	if len(sourceFiles) == 0 {
 		return PreviewResult{}, nil, fmt.Errorf("%w: repository source investigation did not identify a verified local path; create an issue or investigate source before proposing a fix", ErrPreviewRejected)
 	}
@@ -498,7 +533,6 @@ func (s *Service) generateFixPreview(ctx context.Context, failureID, userToken, 
 	if err != nil {
 		return PreviewResult{}, nil, safeFixPreviewError(err)
 	}
-	eff := s.cfg.EffectiveFixPRs()
 	return PreviewResult{Kind: gfKind, Title: gf.Title, Body: gf.Description, Diff: gf.Preview.Diff,
 			VerifyStatus: string(gf.Preview.Verify.Status), VerifySummary: gf.Preview.Verify.Summary, VerifyOutput: gf.Preview.Verify.Output},
 		&previewEntry{failureID: subject.ID, patternHash: subject.ContentHash, kind: gfKind, targetRepo: eff.Repo.Owner + "/" + eff.Repo.Name, targetConfig: fixTargetFingerprint(eff), fix: gf}, nil
@@ -678,12 +712,8 @@ func (s *Service) confirmEntry(ctx context.Context, entry *previewEntry, userTok
 
 func (s *Service) confirmEntryUnlocked(ctx context.Context, entry *previewEntry, userToken string) (string, error) {
 	if entry != nil && entry.failureID != "" {
-		pattern, err := s.findPattern(entry.failureID)
-		if err != nil {
+		if err := s.validateSubjectSnapshot(entry.failureID, entry.patternHash, entry.kind); err != nil {
 			return "", err
-		}
-		if entry.patternHash == "" || pattern.ContentHash != entry.patternHash {
-			return "", ErrPreviewTargetChanged
 		}
 	}
 	s.mu.Lock()
@@ -698,15 +728,16 @@ func (s *Service) confirmEntryUnlocked(ctx context.Context, entry *previewEntry,
 		if entry.targetRepo != eff.Repo.Owner+"/"+eff.Repo.Name {
 			return "", ErrPreviewTargetChanged
 		}
-		client := issues.NewClient(userToken, eff.Repo.Owner, eff.Repo.Name)
-		targetRepo := eff.Repo.Owner + "/" + eff.Repo.Name
-		mgr := issues.NewManager(client, filepath.Join(s.dataDir, "issue_state.json"), targetRepo, issues.Options{MaxNewPerRun: 1})
+		mgr := s.issueManagerFactory(userToken, eff.Repo.Owner, eff.Repo.Name)
 		if _, err := mgr.Reconcile(ctx, []issues.IssueSpec{entry.spec}); err != nil {
 			return "", fmt.Errorf("filing issue: %w", err)
 		}
 		url, ok := mgr.TrackedURL(entry.spec.Key)
 		if !ok {
 			return "", fmt.Errorf("issue was not filed")
+		}
+		if strings.HasPrefix(entry.failureID, "build::") {
+			mgr.Forget(entry.spec.Key)
 		}
 		if err := mgr.SaveState(); err != nil {
 			return url, fmt.Errorf("saving issue state: %w", err)
@@ -727,6 +758,9 @@ func (s *Service) confirmEntryUnlocked(ctx context.Context, entry *previewEntry,
 		url, err := mgr.OpenFromPreview(ctx, entry.fix)
 		if err != nil {
 			return "", fmt.Errorf("%s", safeReason(err.Error()))
+		}
+		if strings.HasPrefix(entry.failureID, "build::") {
+			mgr.Forget(entry.fix.Snapshot().Key)
 		}
 		if err := mgr.SaveState(); err != nil {
 			return url, fmt.Errorf("saving fix-PR state: %w", err)

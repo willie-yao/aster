@@ -186,3 +186,14 @@ func TestNewAgenticCacheEntryRoundTripsAcceptedResult(t *testing.T) {
 		t.Fatalf("round trip result = %+v", got)
 	}
 }
+
+func TestMeetsCurrentCritiqueContract(t *testing.T) {
+	analysis := &models.AIAnalysis{Mode: AgenticMode, CritiquePassed: true, CritiqueVersion: CurrentCritiqueVersion()}
+	if !MeetsCurrentCritiqueContract(analysis) {
+		t.Fatal("current critique contract was rejected")
+	}
+	analysis.CritiqueVersion--
+	if MeetsCurrentCritiqueContract(analysis) {
+		t.Fatal("old critique contract was accepted")
+	}
+}

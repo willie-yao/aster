@@ -610,3 +610,18 @@ func TestBuildSpecsSkipsRetainedPattern(t *testing.T) {
 		t.Fatalf("specs = %+v", specs)
 	}
 }
+
+func TestManagerForgetDropsTransientBuildIssueState(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "issue-state.json")
+	fake := newFakeGitHub(t)
+	manager := NewManager(newTestClient(fake), stateFile, "o/r", Options{})
+	manager.state.Tracked["build::one"] = TrackedIssue{Number: 1, URL: "https://example/1"}
+	manager.Forget("build::one")
+	if err := manager.SaveState(); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := NewManager(newTestClient(fake), stateFile, "o/r", Options{})
+	if _, found := reloaded.state.Tracked["build::one"]; found {
+		t.Fatal("transient build issue remained in persistent state")
+	}
+}
