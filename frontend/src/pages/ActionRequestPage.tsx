@@ -268,7 +268,7 @@ export function ActionRequestPage() {
 
   const preview = request.preview;
   const isFix = request.kind === "propose-fix";
-  const terminal = ["failed", "confirmed", "cancelled", "expired"].includes(
+  const terminal = ["failed", "confirmed", "cancelled", "expired", "unknown"].includes(
     request.status,
   );
 
@@ -314,7 +314,7 @@ export function ActionRequestPage() {
             size="small"
             label={request.status}
             color={
-              request.status === "ready"
+              request.status === "ready" || request.status === "unknown"
                 ? "warning"
                 : request.status === "confirmed"
                   ? "success"
@@ -362,6 +362,9 @@ export function ActionRequestPage() {
           {request.status === "cancelled" && (
             <Alert severity="info">This request was cancelled.</Alert>
           )}
+          {request.status === "unknown" && (
+            <Alert severity="warning">GitHub may have accepted this action. Check the GitHub result before doing anything else.</Alert>
+          )}
           {request.status === "expired" && (
             <Alert severity={request.result_url ? "info" : "warning"}>
               {request.result_url ? (
@@ -385,10 +388,10 @@ export function ActionRequestPage() {
             </Alert>
           )}
 
-          {preview && request.status === "ready" && (
+          {preview && (request.status === "ready" || request.status === "unknown") && (
             <Stack spacing={2.5}>
               <ActionDraftPreview preview={preview} />
-              <Box>
+              {request.status === "ready" && <Box>
                 <TextField
                   label="Refine this draft with a prompt (optional)"
                   fullWidth
@@ -416,7 +419,7 @@ export function ActionRequestPage() {
                 >
                   {refining ? "Regenerating…" : "Regenerate with prompt"}
                 </Button>
-              </Box>
+              </Box>}
             </Stack>
           )}
         </Box>
@@ -442,7 +445,7 @@ export function ActionRequestPage() {
               {cancelling ? "Cancelling…" : "Cancel request"}
             </Button>
           )}
-          {request.status === "ready" && (
+          {(request.status === "ready" || request.status === "unknown") && (
             <Button
               color="warning"
               variant="contained"
@@ -454,7 +457,9 @@ export function ActionRequestPage() {
             >
               {confirming
                 ? "Confirming…"
-                : isFix
+                : request.status === "unknown"
+                  ? "Check GitHub result"
+                  : isFix
                   ? "Open draft PR"
                   : "File issue"}
             </Button>

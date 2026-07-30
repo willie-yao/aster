@@ -418,3 +418,19 @@ func TestConfirmedRequestExpiresAndClearsDraft(t *testing.T) {
 	}
 	reloaded.rmu.Unlock()
 }
+
+func TestCreateRequestReusesOwnerUnknownAndRejectsOtherOwner(t *testing.T) {
+	service, pattern := requestTestService(t)
+	now := time.Now().UTC()
+	service.requests.Requests["unknown"] = &actionRequest{ActionRequestView: ActionRequestView{
+		ID: "unknown", FailureID: pattern.ID, PatternHash: pattern.ContentHash, Kind: "create-issue", Owner: "alice", Status: RequestUnknown,
+		CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
+	}}
+	view, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", "")
+	if err != nil || view.ID != "unknown" {
+		t.Fatalf("owner reuse view=%+v err=%v", view, err)
+	}
+	if _, err := service.CreateRequest(pattern.ID, "create-issue", "bob", "token", "", ""); err == nil || !strings.Contains(err.Error(), "unknown GitHub outcome") {
+		t.Fatalf("other owner error = %v", err)
+	}
+}

@@ -3,6 +3,7 @@ package issues
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -608,5 +609,35 @@ func TestBuildSpecsSkipsRetainedPattern(t *testing.T) {
 	specs := BuildSpecs(BuildInput{Report: models.FlakinessReport{RecurringPatterns: []models.PatternAnalysis{pattern}}, JobDetails: details, Triggers: []string{project.IssueTriggerPatterns}})
 	if len(specs) != 0 {
 		t.Fatalf("specs = %+v", specs)
+	}
+}
+
+func TestManagerForgetDropsTransientBuildIssueState(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "issue-state.json")
+	fake := newFakeGitHub(t)
+	manager := NewManager(newTestClient(fake), stateFile, "o/r", Options{})
+	manager.state.Tracked["build::one"] = TrackedIssue{Number: 1, URL: "https://example/1"}
+	manager.Forget("build::one")
+	if err := manager.SaveState(); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := NewManager(newTestClient(fake), stateFile, "o/r", Options{})
+	if _, found := reloaded.state.Tracked["build::one"]; found {
+		t.Fatal("transient build issue remained in persistent state")
+	}
+}
+
+func TestCreateIssueMissingIdentityIsOutcomeUnknown(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	client := NewClient("token", "o", "r")
+	client.apiBase = srv.URL
+	client.httpClient = srv.Client()
+	if _, _, err := client.CreateIssue(t.Context(), "title", "body", nil); !errors.Is(err, ErrWriteOutcomeUnknown) {
+		t.Fatalf("missing identity error = %v", err)
 	}
 }

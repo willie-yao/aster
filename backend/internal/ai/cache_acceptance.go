@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
 // CacheRejectionReason is a privacy-safe cache acceptance outcome.
@@ -186,3 +188,11 @@ func agenticCachePolicy(client *Client, opts AgenticOptions, skillSetHash, promp
 	}
 	return policy
 }
+
+// MeetsCurrentCritiqueContract reports whether an analysis passed the current deterministic critique contract.
+func MeetsCurrentCritiqueContract(analysis *models.AIAnalysis) bool {
+	return analysis != nil && analysis.Mode == AgenticMode && analysis.CritiquePassed && analysis.CritiqueVersion >= currentCritiqueVersion
+}
+
+// CurrentCritiqueVersion returns the active deterministic critique contract version.
+func CurrentCritiqueVersion() int { return currentCritiqueVersion }

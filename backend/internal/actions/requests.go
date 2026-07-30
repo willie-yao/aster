@@ -29,6 +29,7 @@ const (
 const (
 	RequestPending   = "pending"
 	RequestReady     = "ready"
+	RequestUnknown   = "unknown"
 	RequestFailed    = "failed"
 	RequestConfirmed = "confirmed"
 	RequestCancelled = "cancelled"
@@ -154,7 +155,7 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 	if kind != "create-issue" && kind != "propose-fix" {
 		return ActionRequestView{}, fmt.Errorf("unsupported action %q", kind)
 	}
-	if _, err := s.findPattern(failureID); err != nil {
+	if _, err := s.resolveSubject(failureID); err != nil {
 		return ActionRequestView{}, err
 	}
 
@@ -195,6 +196,18 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 			return ActionRequestView{}, fmt.Errorf("action request is %s", status)
 		}
 	}
+	for existingID, existing := range s.requests.Requests {
+		if existingID == supersedesID || existing.Status != RequestUnknown || existing.FailureID != failureID || existing.Kind != kind {
+			continue
+		}
+		if existing.Owner == owner {
+			view := existing.ActionRequestView
+			s.rmu.Unlock()
+			return view, nil
+		}
+		s.rmu.Unlock()
+		return ActionRequestView{}, fmt.Errorf("an existing action for this failure has an unknown GitHub outcome")
+	}
 	pending := 0
 	active := 0
 	for existingID, existing := range s.requests.Requests {
@@ -204,7 +217,7 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 		if existing.Status == RequestPending && existing.Owner == owner {
 			pending++
 		}
-		if existing.Status == RequestPending || existing.Status == RequestReady {
+		if existing.Status == RequestPending || existing.Status == RequestReady || existing.Status == RequestUnknown {
 			active++
 		}
 	}
@@ -286,7 +299,7 @@ func (s *Service) generateRequestWith(id, userToken string, generate requestPrev
 
 	preview, entry, err := generate(ctx, failureID, kind, userToken, instruction)
 	if err == nil {
-		err = s.validatePatternSnapshot(failureID, entry.patternHash)
+		err = s.validateSubjectSnapshot(failureID, entry.patternHash, entry.kind)
 	}
 
 	s.rmu.Lock()
@@ -342,16 +355,16 @@ func (s *Service) notifyRequestReady(view ActionRequestView) {
 	view = current.ActionRequestView
 	notifier := s.requestNotify
 	s.rmu.Unlock()
-	if notifier == nil || s.validatePatternSnapshot(view.FailureID, view.PatternHash) != nil {
+	if notifier == nil || s.validateSubjectSnapshot(view.FailureID, view.PatternHash, view.Kind) != nil {
 		return
 	}
 	var notifyErr error
 	for attempt := 0; attempt < 3; attempt++ {
-		if s.validatePatternSnapshot(view.FailureID, view.PatternHash) != nil {
+		if s.validateSubjectSnapshot(view.FailureID, view.PatternHash, view.Kind) != nil {
 			return
 		}
 		notifyErr = patternstate.WithLock(s.dataDir, func() error {
-			if err := s.validatePatternSnapshot(view.FailureID, view.PatternHash); err != nil {
+			if err := s.validateSubjectSnapshot(view.FailureID, view.PatternHash, view.Kind); err != nil {
 				return err
 			}
 			notifyCtx, notifyCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -417,11 +430,12 @@ func (s *Service) ConfirmRequest(ctx context.Context, id, owner, userToken strin
 		s.rmu.Unlock()
 		return url, nil
 	}
-	if request.Status != RequestReady {
+	if request.Status != RequestReady && request.Status != RequestUnknown {
 		status := request.Status
 		s.rmu.Unlock()
 		return "", fmt.Errorf("action request is %s", status)
 	}
+	reconcileOnly := request.Status == RequestUnknown
 	if _, confirming := s.requestConfirms[id]; confirming {
 		s.rmu.Unlock()
 		return "", fmt.Errorf("action request is being confirmed")
@@ -448,6 +462,19 @@ func (s *Service) ConfirmRequest(ctx context.Context, id, owner, userToken strin
 		s.rmu.Unlock()
 		return "", fmt.Errorf("action request has invalid preview kind %q", entry.kind)
 	}
+	if !reconcileOnly && entry.failureID != "" {
+		if err := s.validateSubjectSnapshot(entry.failureID, entry.patternHash, entry.kind); err != nil {
+			s.rmu.Unlock()
+			return "", err
+		}
+		request.Status = RequestUnknown
+		request.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		if err := s.saveRequestsLocked(); err != nil {
+			request.Status = RequestReady
+			s.rmu.Unlock()
+			return "", err
+		}
+	}
 	s.requestConfirms[id] = struct{}{}
 	s.rmu.Unlock()
 	defer func() {
@@ -456,9 +483,32 @@ func (s *Service) ConfirmRequest(ctx context.Context, id, owner, userToken strin
 		s.rmu.Unlock()
 	}()
 
-	url, err := s.confirmEntry(ctx, entry, userToken)
-	if err != nil {
-		return "", err
+	var url string
+	if reconcileOnly {
+		reconciledURL, found, err := s.reconcileEntry(ctx, entry, userToken)
+		if err != nil {
+			return "", err
+		}
+		if !found {
+			return "", ErrPreviewOutcomeUnknown
+		}
+		url = reconciledURL
+	} else {
+		confirmedURL, err := s.confirmEntry(ctx, entry, userToken)
+		if errors.Is(err, ErrPreviewOutcomeUnknown) {
+			return "", err
+		}
+		if err != nil {
+			s.rmu.Lock()
+			if current := s.requests.Requests[id]; current != nil {
+				current.Status = RequestReady
+				current.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+				_ = s.saveRequestsLocked()
+			}
+			s.rmu.Unlock()
+			return "", err
+		}
+		url = confirmedURL
 	}
 	s.rmu.Lock()
 	if current := s.requests.Requests[id]; current != nil {
@@ -545,13 +595,20 @@ func (s *Service) expireRequestsLocked(now time.Time) bool {
 	return changed
 }
 
-func (s *Service) validatePatternSnapshot(failureID, patternHash string) error {
-	pattern, err := s.findPattern(failureID)
+func (s *Service) validateSubjectSnapshot(failureID, patternHash string, kind ...string) error {
+	subject, err := s.resolveSubject(failureID)
 	if err != nil {
 		return err
 	}
-	if patternHash == "" || pattern.ContentHash != patternHash {
+	if patternHash == "" || subject.ContentHash != patternHash {
 		return ErrPreviewTargetChanged
+	}
+	fix := len(kind) > 0 && (kind[0] == gfKind || kind[0] == "propose-fix")
+	if fix && subject.Kind == actionSubjectBuild {
+		eff := s.cfg.EffectiveFixPRs()
+		if eff.Repo == nil || len(verifiedBuildSourceFiles(subject.Build, eff.Repo.Owner, eff.Repo.Name)) == 0 {
+			return ErrPreviewTargetChanged
+		}
 	}
 	return nil
 }

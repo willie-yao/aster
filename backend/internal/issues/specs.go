@@ -174,3 +174,54 @@ func buildAILookup(jobDetails []models.JobDetail) map[string]aiEntry {
 	}
 	return lookup
 }
+
+// BuildFailureInput describes one analyzed failed run without a failed JUnit case.
+type BuildFailureInput struct {
+	ID            string
+	JobID         string
+	JobName       string
+	BuildID       string
+	BuildURL      string
+	BuildLogURL   string
+	Summary       string
+	RootCause     string
+	SuggestedFix  string
+	RelevantFiles []string
+	DashboardURL  string
+	Labels        []string
+}
+
+// BuildFailureSpec renders a single-run issue without recurring-pattern claims.
+func BuildFailureSpec(in BuildFailureInput) IssueSpec {
+	key := "build::" + in.ID
+	jobName := strings.TrimSpace(in.JobName)
+	if jobName == "" {
+		jobName = in.JobID
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Prow job `%s` failed in build `%s` before reporting a failed JUnit test case.\n\n", jobName, in.BuildID)
+	if in.BuildURL != "" {
+		fmt.Fprintf(&b, "- Build: %s\n", in.BuildURL)
+	}
+	if in.BuildLogURL != "" {
+		fmt.Fprintf(&b, "- Build log: %s\n", in.BuildLogURL)
+	}
+	if in.DashboardURL != "" {
+		fmt.Fprintf(&b, "- Dashboard: %s/job/%s/build/%s/failure\n", strings.TrimRight(in.DashboardURL, "/"), url.PathEscape(in.JobID), url.PathEscape(in.BuildID))
+	}
+	b.WriteString("\n")
+	if strings.TrimSpace(in.Summary) != "" {
+		fmt.Fprintf(&b, "### Summary\n\n%s\n\n", in.Summary)
+	}
+	fmt.Fprintf(&b, "### Root cause\n\n%s\n\n", in.RootCause)
+	fmt.Fprintf(&b, "### Suggested remediation\n\n%s\n\n", in.SuggestedFix)
+	if len(in.RelevantFiles) > 0 {
+		b.WriteString("### Relevant files and artifacts\n\n")
+		for _, file := range in.RelevantFiles {
+			fmt.Fprintf(&b, "- `%s`\n", file)
+		}
+		b.WriteString("\n")
+	}
+	fmt.Fprintf(&b, "---\n_Filed after explicit review of one analyzed build failure._\n\n%s\n", markerFor(key))
+	return IssueSpec{Key: key, Title: clampTitle(fmt.Sprintf("[%s] Build failure %s", jobName, in.BuildID)), Body: b.String(), Labels: in.Labels}
+}

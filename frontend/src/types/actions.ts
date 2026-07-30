@@ -3,6 +3,7 @@ export type Action = "create-issue" | "propose-fix";
 export type RequestStatus =
   | "pending"
   | "ready"
+  | "unknown"
   | "failed"
   | "confirmed"
   | "cancelled"

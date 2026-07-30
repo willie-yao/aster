@@ -94,6 +94,10 @@ func (c *emailLoopFixPRClient) SearchOpenPR(context.Context, string, string, str
 	return 0, "", false, nil
 }
 
+func (c *emailLoopFixPRClient) SearchAnyPR(ctx context.Context, owner, repo, token, marker string) (int, string, bool, error) {
+	return c.SearchOpenPR(ctx, owner, repo, token, marker)
+}
+
 func (*emailLoopFixPRClient) ResolveBase(context.Context, string, string) (ghpr.Base, error) {
 	return ghpr.Base{Branch: "main", HeadSHA: "base-sha", TreeSHA: "base-tree"}, nil
 }

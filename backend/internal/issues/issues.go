@@ -84,6 +84,7 @@ type TrackedIssue struct {
 // gh is the subset of the GitHub client the manager needs.
 type gh interface {
 	SearchOpenIssue(ctx context.Context, queryToken, confirmMarker string) (int, string, bool, error)
+	SearchIssue(ctx context.Context, queryToken, confirmMarker string) (int, string, bool, error)
 	CreateIssue(ctx context.Context, title, body string, labels []string) (int, string, error)
 	CommentIssue(ctx context.Context, number int, body string) error
 	CloseIssue(ctx context.Context, number int) error
@@ -138,6 +139,23 @@ type Stats struct {
 func (m *Manager) TrackedURL(key string) (string, bool) {
 	t, ok := m.state.Tracked[key]
 	return t.URL, ok
+}
+
+// FindOpen returns an open issue with this marker.
+func (m *Manager) FindOpen(ctx context.Context, key string) (string, bool, error) {
+	_, url, found, err := m.client.SearchOpenIssue(ctx, markerToken(key), markerFor(key))
+	return url, found, err
+}
+
+// FindAny returns an issue with this marker in any state.
+func (m *Manager) FindAny(ctx context.Context, key string) (string, bool, error) {
+	_, url, found, err := m.client.SearchIssue(ctx, markerToken(key), markerFor(key))
+	return url, found, err
+}
+
+// Forget removes one transient tracked issue before state persistence.
+func (m *Manager) Forget(key string) {
+	delete(m.state.Tracked, key)
 }
 
 // NewManager builds a Manager and loads prior state from stateFile if present.

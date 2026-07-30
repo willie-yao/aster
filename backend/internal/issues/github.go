@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +18,9 @@ import (
 // defaultAPIBase is the GitHub REST API root. Overridable per-client so tests
 // can point at an httptest server.
 const defaultAPIBase = "https://api.github.com"
+
+// ErrWriteOutcomeUnknown means GitHub may have accepted a create request before the response was lost.
+var ErrWriteOutcomeUnknown = errors.New("issue write outcome unknown")
 
 // Client is a minimal GitHub REST client scoped to one target repo, with just
 // the issue operations this package needs.
@@ -121,7 +125,7 @@ func (c *Client) CreateIssue(ctx context.Context, title, body string, labels []s
 	}
 	resp, rb, err := c.do(ctx, http.MethodPost, fmt.Sprintf("/repos/%s/%s/issues", c.owner, c.repo), payload)
 	if err != nil {
-		return 0, "", err
+		return 0, "", fmt.Errorf("%w: %v", ErrWriteOutcomeUnknown, err)
 	}
 	if resp.StatusCode != http.StatusCreated {
 		return 0, "", fmt.Errorf("create issue: %s: %s", resp.Status, textutil.Truncate(string(rb), 300))
@@ -131,7 +135,10 @@ func (c *Client) CreateIssue(ctx context.Context, title, body string, labels []s
 		HTMLURL string `json:"html_url"`
 	}
 	if err := json.Unmarshal(rb, &out); err != nil {
-		return 0, "", fmt.Errorf("decode create response: %w", err)
+		return 0, "", fmt.Errorf("%w: decode create response: %v", ErrWriteOutcomeUnknown, err)
+	}
+	if out.Number <= 0 || strings.TrimSpace(out.HTMLURL) == "" {
+		return 0, "", fmt.Errorf("%w: create response omitted issue identity", ErrWriteOutcomeUnknown)
 	}
 	return out.Number, out.HTMLURL, nil
 }

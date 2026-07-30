@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/issues"
@@ -795,5 +796,407 @@ func TestLegacyReadyPreviewWithoutFailureIDIsRejected(t *testing.T) {
 	}
 	if loaded.Version != previewStateVersion || loaded.Previews["legacy"] != nil || loaded.Previews["unknown"] == nil {
 		t.Fatalf("migrated state = %+v", loaded)
+	}
+}
+
+func analyzedBuildDetail(withSource bool) models.JobDetail {
+	analysis := &models.AIAnalysis{
+		GeneratedAt: "2026-07-30T12:00:00Z", Mode: ai.AgenticMode, CritiquePassed: true, CritiqueVersion: ai.CurrentCritiqueVersion(),
+		RootCause: "K8sVersionNotSupported rejected Kubernetes 1.33.2 because AKS requires Long-Term Support.",
+		Severity:  "High", SuggestedFix: "Update the repository version selection or enable AKS LTS.",
+		RelevantFiles: []string{"templates/aks.yaml"}, FileLinks: map[string]string{},
+	}
+	if withSource {
+		analysis.FileLinks["templates/aks.yaml"] = "https://github.com/example/repo/blob/sha/templates/aks.yaml"
+	}
+	return models.JobDetail{Name: "periodic-aks", JobID: "periodic-aks", JobType: models.JobTypePeriodic, Runs: []models.BuildResult{{
+		BuildInfo: models.BuildInfo{BuildID: "123", JobName: "periodic-aks", ProwURL: "https://prow.example/123", BuildLogURL: "https://gcs.example/123/build-log.txt"},
+		TestCases: []models.TestCase{{Name: "Prow job execution", SuiteName: "Prow", ClassName: "job", Source: models.TestCaseSourceBuild, Status: "failed", AISummary: &models.AISummary{Summary: "AKS bootstrap creation failed."}, AIAnalysis: analysis}},
+	}}}
+}
+
+func TestBuildIssuePreviewUsesSingleRunLanguage(t *testing.T) {
+	dataDir := t.TempDir()
+	detail := analyzedBuildDetail(false)
+	writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
+	cfg := &project.Config{Issues: &project.Issues{Repo: &project.SourceRepo{Owner: "o", Name: "r"}}, Branding: project.Branding{SiteURL: "https://dashboard.example"}}
+	service := NewService(cfg, dataDir, AIConfig{})
+	id := BuildFailureID(detail.JobID, "123")
+	preview, err := service.PreviewIssue(t.Context(), id, "token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"K8sVersionNotSupported", "1.33.2", "Long-Term Support", "build-log.txt", "one analyzed build failure"} {
+		if !strings.Contains(preview.Body, want) {
+			t.Fatalf("issue body missing %q: %s", want, preview.Body)
+		}
+	}
+	if strings.Contains(strings.ToLower(preview.Body), "recurring pattern") || strings.Contains(strings.ToLower(preview.Body), "systemic") {
+		t.Fatalf("issue body claimed recurrence: %s", preview.Body)
+	}
+}
+
+func TestBuildFixPreviewRejectsMissingRepositoryEvidence(t *testing.T) {
+	dataDir := t.TempDir()
+	detail := analyzedBuildDetail(false)
+	writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
+	cfg := &project.Config{AI: &project.AI{FixPRs: &project.FixPRs{Repo: &project.SourceRepo{Owner: "o", Name: "r"}}}}
+	service := NewService(cfg, dataDir, AIConfig{})
+	_, err := service.PreviewFix(t.Context(), BuildFailureID(detail.JobID, "123"), "token", "")
+	if !errors.Is(err, ErrPreviewRejected) || !strings.Contains(err.Error(), "verified local path") {
+		t.Fatalf("fix preview error = %v", err)
+	}
+	if _, err := service.PreviewIssue(t.Context(), BuildFailureID(detail.JobID, "123"), "token", ""); err == nil {
+		// No issue repo is configured. This verifies the fix refusal did not mutate the subject.
+		t.Fatal("issue preview unexpectedly succeeded without a target repo")
+	}
+}
+
+func TestBuildSubjectHashChangesWithPublishedAnalysis(t *testing.T) {
+	dataDir := t.TempDir()
+	detail := analyzedBuildDetail(true)
+	writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
+	service := NewService(&project.Config{}, dataDir, AIConfig{})
+	id := BuildFailureID(detail.JobID, "123")
+	subject, err := service.resolveSubject(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldHash := subject.ContentHash
+	detail.Runs[0].TestCases[0].AIAnalysis.SuggestedFix = "Choose a supported version."
+	writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
+	if err := service.validateSubjectSnapshot(id, oldHash); !errors.Is(err, ErrPreviewTargetChanged) {
+		t.Fatalf("changed analysis validation = %v", err)
+	}
+}
+
+func TestBuildFixSnapshotRejectsRemovedSourceEvidenceButIssueRemainsValid(t *testing.T) {
+	dataDir := t.TempDir()
+	detail := analyzedBuildDetail(true)
+	writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
+	service := NewService(&project.Config{}, dataDir, AIConfig{})
+	id := BuildFailureID(detail.JobID, "123")
+	subject, err := service.resolveSubject(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail.Runs[0].TestCases[0].AIAnalysis.FileLinks = nil
+	writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
+	if err := service.validateSubjectSnapshot(id, subject.ContentHash, gfKind); !errors.Is(err, ErrPreviewTargetChanged) {
+		t.Fatalf("old fix snapshot validation = %v", err)
+	}
+	current, err := service.resolveSubject(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.validateSubjectSnapshot(id, current.ContentHash, gfKind); !errors.Is(err, ErrPreviewTargetChanged) {
+		t.Fatalf("current fix snapshot validation = %v", err)
+	}
+	if err := service.validateSubjectSnapshot(id, current.ContentHash, "create-issue"); err != nil {
+		t.Fatalf("current issue snapshot validation = %v", err)
+	}
+}
+
+func TestBuildPreviewConfirmUsesTypedSubjectGuard(t *testing.T) {
+	dataDir := t.TempDir()
+	detail := analyzedBuildDetail(false)
+	writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
+	cfg := &project.Config{Issues: &project.Issues{Repo: &project.SourceRepo{Owner: "old", Name: "issues"}}}
+	service := NewService(cfg, dataDir, AIConfig{})
+	preview, err := service.PreviewIssue(t.Context(), BuildFailureID(detail.JobID, "123"), "owner-token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Issues.Repo = &project.SourceRepo{Owner: "new", Name: "issues"}
+	if _, err := service.Confirm(t.Context(), preview.Token, "owner-token"); !errors.Is(err, ErrPreviewTargetChanged) {
+		t.Fatalf("build confirmation error = %v", err)
+	}
+}
+
+func TestBuildSourceFilesMustMatchFixRepository(t *testing.T) {
+	detail := analyzedBuildDetail(true)
+	failure := detail.Runs[0].TestCases[0]
+	subject := &BuildActionSubject{JobID: detail.JobID, JobName: detail.Name, Build: detail.Runs[0].BuildInfo, Failure: failure, RelevantFiles: failure.AIAnalysis.RelevantFiles}
+	if got := verifiedBuildSourceFiles(subject, "example", "repo"); len(got) != 1 || got[0] != "templates/aks.yaml" {
+		t.Fatalf("matching source files = %v", got)
+	}
+	if got := verifiedBuildSourceFiles(subject, "other", "repo"); len(got) != 0 {
+		t.Fatalf("cross-repository source files = %v", got)
+	}
+}
+
+func TestBuildActionsRejectOldCritiqueContract(t *testing.T) {
+	dataDir := t.TempDir()
+	detail := analyzedBuildDetail(true)
+	detail.Runs[0].TestCases[0].AIAnalysis.CritiqueVersion--
+	writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
+	service := NewService(&project.Config{}, dataDir, AIConfig{})
+	if _, err := service.resolveSubject(BuildFailureID(detail.JobID, "123")); err == nil || !strings.Contains(err.Error(), "quality gates") {
+		t.Fatalf("old critique analysis error = %v", err)
+	}
+}
+
+type fakeIssuePreviewManager struct {
+	specs        []issues.IssueSpec
+	forgot       []string
+	saved        bool
+	url          string
+	findURL      string
+	saveErr      error
+	reconcileErr error
+	started      chan struct{}
+	release      chan struct{}
+}
+
+func (f *fakeIssuePreviewManager) Reconcile(_ context.Context, specs []issues.IssueSpec) (issues.Stats, error) {
+	f.specs = append(f.specs, specs...)
+	if f.started != nil {
+		close(f.started)
+	}
+	if f.release != nil {
+		<-f.release
+	}
+	return issues.Stats{Created: 1}, f.reconcileErr
+}
+func (f *fakeIssuePreviewManager) TrackedURL(string) (string, bool) { return f.url, f.url != "" }
+func (f *fakeIssuePreviewManager) FindOpen(context.Context, string) (string, bool, error) {
+	return f.url, f.url != "", nil
+}
+func (f *fakeIssuePreviewManager) FindAny(context.Context, string) (string, bool, error) {
+	return f.findURL, f.findURL != "", nil
+}
+func (f *fakeIssuePreviewManager) Forget(key string) { f.forgot = append(f.forgot, key) }
+func (f *fakeIssuePreviewManager) SaveState() error  { f.saved = true; return f.saveErr }
+
+func TestBuildIssuePreviewToConfirmWritesReviewedDraft(t *testing.T) {
+	dataDir := t.TempDir()
+	detail := analyzedBuildDetail(false)
+	writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
+	cfg := &project.Config{Issues: &project.Issues{Repo: &project.SourceRepo{Owner: "o", Name: "r"}}}
+	service := NewService(cfg, dataDir, AIConfig{})
+	manager := &fakeIssuePreviewManager{url: "https://github.com/o/r/issues/7"}
+	service.issueManagerFactory = func(string, string, string) issuePreviewManager { return manager }
+
+	preview, err := service.PreviewIssue(t.Context(), BuildFailureID(detail.JobID, "123"), "owner-token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	url, err := service.Confirm(t.Context(), preview.Token, "owner-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if url != manager.url || len(manager.specs) != 1 || !manager.saved || len(manager.forgot) != 1 {
+		t.Fatalf("confirmation url=%q specs=%d saved=%t forgot=%v", url, len(manager.specs), manager.saved, manager.forgot)
+	}
+	if manager.specs[0].Body != preview.Body {
+		t.Fatal("confirmation did not use the reviewed issue body")
+	}
+}
+
+func TestBuildIssueConfirmationAdoptsClosedMarkerMatch(t *testing.T) {
+	dataDir := t.TempDir()
+	detail := analyzedBuildDetail(false)
+	writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
+	cfg := &project.Config{Issues: &project.Issues{Repo: &project.SourceRepo{Owner: "o", Name: "r"}}}
+	service := NewService(cfg, dataDir, AIConfig{})
+	manager := &fakeIssuePreviewManager{findURL: "https://github.com/o/r/issues/closed"}
+	service.issueManagerFactory = func(string, string, string) issuePreviewManager { return manager }
+	preview, err := service.PreviewIssue(t.Context(), BuildFailureID(detail.JobID, "123"), "owner-token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	url, err := service.Confirm(t.Context(), preview.Token, "owner-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if url != manager.findURL || len(manager.specs) != 0 {
+		t.Fatalf("closed issue adoption url=%q specs=%d", url, len(manager.specs))
+	}
+}
+
+func TestBuildIssueCleanupFailureStillCommitsConfirmation(t *testing.T) {
+	dataDir := t.TempDir()
+	detail := analyzedBuildDetail(false)
+	writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
+	cfg := &project.Config{Issues: &project.Issues{Repo: &project.SourceRepo{Owner: "o", Name: "r"}}}
+	service := NewService(cfg, dataDir, AIConfig{})
+	manager := &fakeIssuePreviewManager{url: "https://github.com/o/r/issues/8", saveErr: errors.New("cleanup failed")}
+	service.issueManagerFactory = func(string, string, string) issuePreviewManager { return manager }
+	preview, err := service.PreviewIssue(t.Context(), BuildFailureID(detail.JobID, "123"), "owner-token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	url, err := service.Confirm(t.Context(), preview.Token, "owner-token")
+	if err != nil || url != manager.url {
+		t.Fatalf("confirmation url=%q err=%v", url, err)
+	}
+}
+
+func TestBuildSourceFilesUseAllAuthoritativeLinks(t *testing.T) {
+	detail := analyzedBuildDetail(false)
+	failure := detail.Runs[0].TestCases[0]
+	failure.AIAnalysis.RelevantFiles = nil
+	failure.AIAnalysis.FileLinks = map[string]string{
+		"config/versions.yaml": "https://github.com/example/repo/blob/sha/config/versions.yaml",
+	}
+	subject := &BuildActionSubject{JobID: detail.JobID, JobName: detail.Name, Build: detail.Runs[0].BuildInfo, Failure: failure}
+	if got := verifiedBuildSourceFiles(subject, "example", "repo"); len(got) != 1 || got[0] != "config/versions.yaml" {
+		t.Fatalf("authoritative source files = %v", got)
+	}
+}
+
+func TestAsyncBuildIssueLostResponseReconcilesWithoutSecondWrite(t *testing.T) {
+	dataDir := t.TempDir()
+	detail := analyzedBuildDetail(false)
+	writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
+	cfg := &project.Config{Issues: &project.Issues{Repo: &project.SourceRepo{Owner: "o", Name: "r"}}}
+	service := NewService(cfg, dataDir, AIConfig{})
+	id := BuildFailureID(detail.JobID, "123")
+	subject, err := service.resolveSubject(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, targetRepo, err := service.buildIssueSpecForBuild(subject.Build, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := &fakeIssuePreviewManager{reconcileErr: fmt.Errorf("%w: connection reset after create", issues.ErrWriteOutcomeUnknown)}
+	service.issueManagerFactory = func(string, string, string) issuePreviewManager { return manager }
+	now := time.Now().UTC()
+	service.requests.Requests["request"] = &actionRequest{ActionRequestView: ActionRequestView{
+		ID: "request", FailureID: id, PatternHash: subject.ContentHash, Kind: "create-issue", Owner: "alice", Status: RequestReady,
+		CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
+		Preview: &PreviewResult{Kind: "issue", Title: spec.Title, Body: spec.Body},
+	}, Issue: &spec, TargetRepo: targetRepo}
+	if _, err := service.ConfirmRequest(t.Context(), "request", "alice", "token"); !errors.Is(err, ErrPreviewOutcomeUnknown) {
+		t.Fatalf("first confirmation error = %v", err)
+	}
+	if service.requests.Requests["request"].Status != RequestUnknown || len(manager.specs) != 1 {
+		t.Fatalf("unknown request = %+v writes=%d", service.requests.Requests["request"].ActionRequestView, len(manager.specs))
+	}
+	manager.reconcileErr = nil
+	manager.findURL = "https://github.com/o/r/issues/9"
+	url, err := service.ConfirmRequest(t.Context(), "request", "alice", "token")
+	if err != nil || url != manager.findURL {
+		t.Fatalf("reconcile url=%q err=%v", url, err)
+	}
+	if len(manager.specs) != 1 || service.requests.Requests["request"].Status != RequestConfirmed {
+		t.Fatalf("retry wrote again: writes=%d status=%s", len(manager.specs), service.requests.Requests["request"].Status)
+	}
+}
+
+func TestAsyncBuildIssuePrewriteFailureRemainsRetryable(t *testing.T) {
+	dataDir := t.TempDir()
+	detail := analyzedBuildDetail(false)
+	writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
+	cfg := &project.Config{Issues: &project.Issues{Repo: &project.SourceRepo{Owner: "o", Name: "r"}}}
+	service := NewService(cfg, dataDir, AIConfig{})
+	id := BuildFailureID(detail.JobID, "123")
+	subject, _ := service.resolveSubject(id)
+	spec, targetRepo, _ := service.buildIssueSpecForBuild(subject.Build, id)
+	manager := &fakeIssuePreviewManager{reconcileErr: errors.New("search unavailable")}
+	service.issueManagerFactory = func(string, string, string) issuePreviewManager { return manager }
+	now := time.Now().UTC()
+	service.requests.Requests["request-prewrite"] = &actionRequest{ActionRequestView: ActionRequestView{
+		ID: "request-prewrite", FailureID: id, PatternHash: subject.ContentHash, Kind: "create-issue", Owner: "alice", Status: RequestReady,
+		CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
+		Preview: &PreviewResult{Kind: "issue", Title: spec.Title, Body: spec.Body},
+	}, Issue: &spec, TargetRepo: targetRepo}
+	if _, err := service.ConfirmRequest(t.Context(), "request-prewrite", "alice", "token"); err == nil || errors.Is(err, ErrPreviewOutcomeUnknown) {
+		t.Fatalf("prewrite error = %v", err)
+	}
+	if service.requests.Requests["request-prewrite"].Status != RequestReady {
+		t.Fatalf("prewrite status = %s", service.requests.Requests["request-prewrite"].Status)
+	}
+}
+
+func TestAsyncConfirmationPersistsUnknownBeforeExternalWrite(t *testing.T) {
+	dataDir := t.TempDir()
+	detail := analyzedBuildDetail(false)
+	writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
+	cfg := &project.Config{Issues: &project.Issues{Repo: &project.SourceRepo{Owner: "o", Name: "r"}}}
+	service := NewService(cfg, dataDir, AIConfig{})
+	id := BuildFailureID(detail.JobID, "123")
+	subject, _ := service.resolveSubject(id)
+	spec, targetRepo, _ := service.buildIssueSpecForBuild(subject.Build, id)
+	manager := &fakeIssuePreviewManager{started: make(chan struct{}), release: make(chan struct{}), reconcileErr: errors.New("search unavailable")}
+	service.issueManagerFactory = func(string, string, string) issuePreviewManager { return manager }
+	now := time.Now().UTC()
+	service.requests.Requests["request-crash"] = &actionRequest{ActionRequestView: ActionRequestView{
+		ID: "request-crash", FailureID: id, PatternHash: subject.ContentHash, Kind: "create-issue", Owner: "alice", Status: RequestReady,
+		CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339), Preview: &PreviewResult{Kind: "issue", Title: spec.Title, Body: spec.Body},
+	}, Issue: &spec, TargetRepo: targetRepo}
+	done := make(chan error, 1)
+	go func() {
+		_, err := service.ConfirmRequest(context.Background(), "request-crash", "alice", "token")
+		done <- err
+	}()
+	<-manager.started
+	service.rmu.Lock()
+	status := service.requests.Requests["request-crash"].Status
+	service.rmu.Unlock()
+	if status != RequestUnknown {
+		t.Fatalf("in-flight status = %s", status)
+	}
+	close(manager.release)
+	if err := <-done; err == nil {
+		t.Fatal("confirmation unexpectedly succeeded")
+	}
+	if service.requests.Requests["request-crash"].Status != RequestReady {
+		t.Fatalf("definite failure status = %s", service.requests.Requests["request-crash"].Status)
+	}
+}
+
+func TestDirectUnknownPreviewReconcilesAfterSubjectLeavesWindow(t *testing.T) {
+	dataDir := t.TempDir()
+	detail := analyzedBuildDetail(false)
+	jobPath := filepath.Join(dataDir, "jobs", models.JobDataFilename(detail.JobID))
+	writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
+	cfg := &project.Config{Issues: &project.Issues{Repo: &project.SourceRepo{Owner: "o", Name: "r"}}}
+	service := NewService(cfg, dataDir, AIConfig{})
+	manager := &fakeIssuePreviewManager{findURL: "https://github.com/o/r/issues/10"}
+	service.issueManagerFactory = func(string, string, string) issuePreviewManager { return manager }
+	preview, err := service.PreviewIssue(t.Context(), BuildFailureID(detail.JobID, "123"), "owner-token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.previewStore.update(func(state *previewState, _ time.Time) (bool, error) {
+		record := state.Previews[tokenHash(preview.Token)]
+		record.Status = previewStatusUnknown
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(jobPath); err != nil {
+		t.Fatal(err)
+	}
+	url, err := service.Confirm(t.Context(), preview.Token, "owner-token")
+	if err != nil || url != manager.findURL {
+		t.Fatalf("reconcile url=%q err=%v", url, err)
+	}
+}
+
+func TestPatternIssueAmbiguousWriteUsesOpenOnlyReconciliation(t *testing.T) {
+	service, pattern := requestTestService(t)
+	manager := &fakeIssuePreviewManager{reconcileErr: fmt.Errorf("%w: lost response", issues.ErrWriteOutcomeUnknown)}
+	service.issueManagerFactory = func(string, string, string) issuePreviewManager { return manager }
+	created, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := waitRequest(t, service, created.ID, "alice", RequestReady)
+	if _, err := service.ConfirmRequest(t.Context(), ready.ID, "alice", "token"); !errors.Is(err, ErrPreviewOutcomeUnknown) {
+		t.Fatalf("ambiguous error = %v", err)
+	}
+	manager.reconcileErr = nil
+	manager.findURL = "https://github.com/o/r/issues/closed"
+	manager.url = ""
+	if _, err := service.ConfirmRequest(t.Context(), ready.ID, "alice", "token"); !errors.Is(err, ErrPreviewOutcomeUnknown) {
+		t.Fatalf("closed issue was incorrectly adopted: %v", err)
+	}
+	manager.url = "https://github.com/o/r/issues/open"
+	url, err := service.ConfirmRequest(t.Context(), ready.ID, "alice", "token")
+	if err != nil || url != manager.url {
+		t.Fatalf("open reconciliation url=%q err=%v", url, err)
 	}
 }

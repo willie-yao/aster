@@ -36,11 +36,12 @@ func (f *fakeCompleter) Complete(_ context.Context, system, user string) (string
 
 // fakePR records OpenPR calls and serves a configurable SearchOpenPR result.
 type fakePR struct {
-	opened      []ghpr.Request
-	openErr     error
-	openURL     string
-	searchURL   string
-	searchFound bool
+	opened         []ghpr.Request
+	openErr        error
+	openURL        string
+	searchURL      string
+	searchFound    bool
+	searchAnyCalls int
 }
 
 func (f *fakePR) OpenPR(_ context.Context, req ghpr.Request) (string, error) {
@@ -56,6 +57,11 @@ func (f *fakePR) SearchOpenPR(_ context.Context, _, _, _, _ string) (int, string
 		return 5, f.searchURL, true, nil
 	}
 	return 0, "", false, nil
+}
+
+func (f *fakePR) SearchAnyPR(ctx context.Context, owner, repo, token, marker string) (int, string, bool, error) {
+	f.searchAnyCalls++
+	return f.SearchOpenPR(ctx, owner, repo, token, marker)
 }
 
 func (f *fakePR) ResolveBase(_ context.Context, _, _ string) (ghpr.Base, error) {
@@ -461,5 +467,83 @@ func TestReviewJSONCandidatesCapsVerboseBraceOutput(t *testing.T) {
 	issues, err := parseReviewIssues(raw)
 	if err != nil || len(issues) != 0 {
 		t.Fatalf("issues=%v err=%v", issues, err)
+	}
+}
+
+func TestGenerateBuildPreviewUsesRepositoryEvidenceWithoutPatternSemantics(t *testing.T) {
+	agent := goodAgent()
+	manager := newManager(t, &fakePR{}, agent, Options{})
+	generated, err := manager.GenerateBuildPreview(t.Context(), BuildFailure{
+		ID: "build-id", JobID: "periodic-aks", JobName: "periodic-aks", BuildID: "123",
+		RootCause:     "K8sVersionNotSupported rejected Kubernetes 1.33.2.",
+		SuggestedFix:  "Update the AKS version selection.",
+		RelevantFiles: []string{"templates/aks.yaml"}, SourceFiles: []string{"templates/aks.yaml"},
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if generated.pattern.ID != "" || generated.pattern.Systemic {
+		t.Fatalf("build fix manufactured a pattern: %+v", generated.pattern)
+	}
+	if !strings.Contains(agent.spec.Instruction, "single CI build") || !strings.Contains(agent.spec.Instruction, "templates/aks.yaml") {
+		t.Fatalf("build instruction = %s", agent.spec.Instruction)
+	}
+	if strings.Contains(strings.ToLower(generated.Body), "recurring failure") {
+		t.Fatalf("build PR body claimed recurrence: %s", generated.Body)
+	}
+	if _, err := manager.OpenFromPreview(t.Context(), generated); err != nil {
+		t.Fatal(err)
+	}
+	manager.Forget(generated.key)
+	if err := manager.SaveState(); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := NewManager(&fakePR{}, manager.stateFile, manager.opts)
+	if _, found := reloaded.state.Tracked[generated.key]; found {
+		t.Fatal("build fix leaked into persistent pattern state")
+	}
+}
+
+func TestGenerateBuildPreviewRejectsExternalOnlyRemediation(t *testing.T) {
+	manager := newManager(t, &fakePR{}, goodAgent(), Options{})
+	_, err := manager.GenerateBuildPreview(t.Context(), BuildFailure{
+		ID: "build-id", JobID: "job", JobName: "job", BuildID: "1", RootCause: "external outage", SuggestedFix: "wait for provider",
+	}, "")
+	if err == nil || !strings.Contains(err.Error(), "verified local path") {
+		t.Fatalf("external-only error = %v", err)
+	}
+}
+
+func TestBuildFixAdoptsMarkerFromClosedPR(t *testing.T) {
+	pr := &fakePR{searchFound: true, searchURL: "https://github.com/up/stream/pull/closed"}
+	manager := newManager(t, pr, goodAgent(), Options{})
+	generated, err := manager.GenerateBuildPreview(t.Context(), BuildFailure{
+		ID: "build-id", JobID: "job", JobName: "job", BuildID: "1", RootCause: "cause", SuggestedFix: "fix",
+		RelevantFiles: []string{"templates/cluster.yaml"}, SourceFiles: []string{"templates/cluster.yaml"},
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	url, err := manager.OpenFromPreview(t.Context(), generated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if url != pr.searchURL || pr.searchAnyCalls != 1 || len(pr.opened) != 0 {
+		t.Fatalf("closed PR adoption url=%q any=%d opened=%d", url, pr.searchAnyCalls, len(pr.opened))
+	}
+}
+
+func TestBuildFixReportsAmbiguousPRCreate(t *testing.T) {
+	pr := &fakePR{openErr: ghpr.ErrWriteOutcomeUnknown}
+	manager := newManager(t, pr, goodAgent(), Options{})
+	generated, err := manager.GenerateBuildPreview(t.Context(), BuildFailure{
+		ID: "build-id", JobID: "job", JobName: "job", BuildID: "1", RootCause: "cause", SuggestedFix: "fix",
+		RelevantFiles: []string{"templates/cluster.yaml"}, SourceFiles: []string{"templates/cluster.yaml"},
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.OpenFromPreview(t.Context(), generated); !errors.Is(err, ErrWriteOutcomeUnknown) {
+		t.Fatalf("ambiguous PR error = %v", err)
 	}
 }

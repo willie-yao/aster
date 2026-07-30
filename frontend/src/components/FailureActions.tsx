@@ -53,6 +53,7 @@ function requestStateError(request: ActionRequest): string | null {
     return request.error || "Draft generation failed.";
   }
   if (request.status === "expired") return "This draft expired.";
+
   return null;
 }
 
@@ -119,7 +120,7 @@ function DialogHeader({
   );
 }
 
-export function FailureActions({ failureID }: { failureID: string }) {
+export function FailureActions({ failureID, resolvable = true }: { failureID: string; resolvable?: boolean }) {
   const { features } = useCapabilities();
   const { status, signIn } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -262,7 +263,7 @@ export function FailureActions({ failureID }: { failureID: string }) {
           ? `Sign in to review ${linkedAction === "propose-fix" ? "a fix proposal" : "an issue draft"}`
           : features.action_requests
             ? "Sign in to file issues or fixes"
-            : "Sign in to manage this pattern"}
+            : "Sign in to manage this failure"}
       </Button>
     );
   }
@@ -523,7 +524,7 @@ export function FailureActions({ failureID }: { failureID: string }) {
             </Button>
           </>
         )}
-        {isResolved ? (
+        {resolvable && (isResolved ? (
           <Button
             size="small"
             variant="outlined"
@@ -548,10 +549,10 @@ export function FailureActions({ failureID }: { failureID: string }) {
           >
             Mark resolved
           </Button>
-        )}
+        ))}
       </Stack>
 
-      {resolveError && (
+      {resolvable && resolveError && (
         <Alert severity="error" sx={{ mt: 1 }}>
           <Typography variant="body2">{resolveError}</Typography>
         </Alert>
@@ -611,7 +612,7 @@ export function FailureActions({ failureID }: { failureID: string }) {
       </Dialog>
 
       <Dialog
-        open={resolveOpen}
+        open={resolvable && resolveOpen}
         onClose={resolveBusy ? undefined : () => setResolveOpen(false)}
         maxWidth="sm"
         fullWidth
@@ -739,11 +740,14 @@ export function FailureActions({ failureID }: { failureID: string }) {
           {request?.status === "cancelled" && (
             <Alert severity="info">This request was cancelled.</Alert>
           )}
+          {request?.status === "unknown" && (
+            <Alert severity="warning">GitHub may have accepted this action. Use Check GitHub result; do not regenerate or cancel it.</Alert>
+          )}
 
-          {preview && request?.status === "ready" && (
+          {preview && (request?.status === "ready" || request?.status === "unknown") && (
             <Stack spacing={2.5}>
               <ActionDraftPreview preview={preview} />
-              <Box>
+              {request.status === "ready" && <Box>
                 <TextField
                   label="Refine this draft with a prompt (optional)"
                   placeholder={
@@ -783,7 +787,7 @@ export function FailureActions({ failureID }: { failureID: string }) {
                     ? "Regenerating…"
                     : "Regenerate with prompt"}
                 </Button>
-              </Box>
+              </Box>}
             </Stack>
           )}
         </DialogContent>
@@ -808,10 +812,10 @@ export function FailureActions({ failureID }: { failureID: string }) {
                 <BugReport sx={{ fontSize: 18 }} />
               )
             }
-            disabled={busy !== null || !preview || request?.status !== "ready"}
+            disabled={busy !== null || !preview || (request?.status !== "ready" && request?.status !== "unknown")}
             onClick={confirm}
           >
-            {isFix ? "Open draft PR" : "File issue"}
+            {request?.status === "unknown" ? "Check GitHub result" : isFix ? "Open draft PR" : "File issue"}
           </Button>
         </DialogActions>
       </Dialog>

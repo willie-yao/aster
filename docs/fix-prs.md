@@ -386,3 +386,14 @@ Issues act on **your** repos; fix PRs are the only feature that writes to the
 ## Retained patterns
 
 Fix generation requires a fresh `current` pattern with current evidence. A retained last-known-good pattern remains visible with its existing remediation references, but it cannot start a new issue, fix preview, or remediation attempt.
+
+## Individual build failures
+
+A completed failed run that has an accepted `source: "build"` analysis can use the same authenticated preview and confirmation flow without being converted into a recurring pattern.
+
+- **File issue** renders single-run language with the Prow build, build log, published root cause, and suggested remediation.
+- **Propose fix** requires at least one repository path that the analysis linked to the configured source repository. The coding agent inspects the pinned repository and must produce a repository change. If the evidence supports only an external platform or operator action, or the agent produces no code change, the preview is rejected while issue preview remains available.
+- Build previews use a content hash over the job, build, typed subject identity, analysis generation, root cause, suggested fix, and relevant files. Confirmation fails closed when any of that published analysis changes or leaves the current window.
+- Build issues and fixes use GitHub markers for deduplication and are removed from the recurring-pattern tracking files after confirmation. They do not create a one-build pattern or participate in recurring-pattern remediation state.
+
+The server advertises its current analysis critique version with the action capability. The frontend hides build action controls when the published analysis predates that contract, while analyses produced by a newer compatible engine remain visible during a rollback or rolling upgrade.

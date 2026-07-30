@@ -81,6 +81,10 @@ func (finalizedFakePR) OpenPR(context.Context, ghpr.Request) (string, error) {
 func (finalizedFakePR) SearchOpenPR(context.Context, string, string, string, string) (int, string, bool, error) {
 	return 0, "", false, nil
 }
+func (f finalizedFakePR) SearchAnyPR(ctx context.Context, owner, repo, token, marker string) (int, string, bool, error) {
+	return f.SearchOpenPR(ctx, owner, repo, token, marker)
+}
+
 func (finalizedFakePR) ResolveBase(context.Context, string, string) (ghpr.Base, error) {
 	return ghpr.Base{Branch: "main", HeadSHA: "base-sha", TreeSHA: "tree-sha"}, nil
 }

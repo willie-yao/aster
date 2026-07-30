@@ -29,10 +29,14 @@ const keyPrefix = "fix-pr::"
 // search-based dedup can find it again when local state is lost.
 const markerPrefix = "prow-ai-dashboard-fix"
 
+// ErrWriteOutcomeUnknown means GitHub may have accepted the PR create request.
+var ErrWriteOutcomeUnknown = errors.New("fix PR write outcome unknown")
+
 // prClient is the subset of *ghpr.Client the manager needs.
 type prClient interface {
 	OpenPR(ctx context.Context, req ghpr.Request) (string, error)
 	SearchOpenPR(ctx context.Context, owner, repo, queryToken, confirmMarker string) (int, string, bool, error)
+	SearchAnyPR(ctx context.Context, owner, repo, queryToken, confirmMarker string) (int, string, bool, error)
 	ResolveBase(ctx context.Context, owner, repo string) (ghpr.Base, error)
 }
 
@@ -174,6 +178,10 @@ func trackedFix(url string, pattern models.PatternAnalysis) TrackedFix {
 	return TrackedFix{URL: url, OpenedAt: now(), Pattern: pattern}
 }
 
+func trackedGeneratedFix(url string, fix *GeneratedFix) TrackedFix {
+	return TrackedFix{URL: url, OpenedAt: now(), Pattern: fix.pattern}
+}
+
 // Preview is a dry-run proposed fix (no PR opened).
 type Preview struct {
 	Subject   string            `json:"subject"`
@@ -215,6 +223,11 @@ func NewManager(pr prClient, stateFile string, opts Options) *Manager {
 		}
 	}
 	return &Manager{pr: pr, stateFile: stateFile, opts: opts, state: state}
+}
+
+// Forget removes one transient tracking entry before state persistence.
+func (m *Manager) Forget(key string) {
+	delete(m.state.Tracked, key)
 }
 
 // SaveState writes the tracking state to disk.
@@ -529,7 +542,7 @@ func (m *Manager) generatePreview(ctx context.Context, p models.PatternAnalysis,
 }
 
 // OpenFromPreview opens the draft PR for a previously generated fix, applying
-// the same dedup guard as Reconcile: skip if the pattern is already tracked or
+// the same dedup guard as Reconcile: skip if the subject is already tracked or
 // an open fix PR already exists. It returns the PR URL and records tracking
 // state; the caller saves state.
 func (m *Manager) OpenFromPreview(ctx context.Context, gf *GeneratedFix) (string, error) {
@@ -540,21 +553,31 @@ func (m *Manager) OpenFromPreview(ctx context.Context, gf *GeneratedFix) (string
 	if t, tracked := m.state.Tracked[key]; tracked {
 		return t.URL, nil
 	}
-	if _, url, found, err := m.pr.SearchOpenPR(ctx, m.opts.SourceOwner, m.opts.SourceName, markerToken(key), markerFor(key)); err != nil {
+	search := m.pr.SearchOpenPR
+	if strings.HasPrefix(key, "fix-build::") {
+		search = m.pr.SearchAnyPR
+	}
+	if _, url, found, err := search(ctx, m.opts.SourceOwner, m.opts.SourceName, markerToken(key), markerFor(key)); err != nil {
 		return "", fmt.Errorf("fix-PR search failed: %w", err)
 	} else if found {
-		m.state.Tracked[key] = trackedFix(url, gf.pattern)
+		m.state.Tracked[key] = trackedGeneratedFix(url, gf)
 		return url, nil
 	}
 	url, err := m.openPR(ctx, gf.Title, gf.Body, gf.Preview.Files, gf.base)
 	if url == "" {
+		if errors.Is(err, ghpr.ErrWriteOutcomeUnknown) {
+			return "", fmt.Errorf("%w: %v", ErrWriteOutcomeUnknown, err)
+		}
+		if err != nil {
+			return "", err
+		}
 		return "", fmt.Errorf("opening the pull request failed")
 	}
 	if err != nil {
 		// PR opened but a follow-up (e.g. labeling) failed; still track it.
-		log.Printf("  ⚠ fix PR opened with a warning for %q: %v", gf.pattern.Subject, err)
+		log.Printf("  ⚠ fix PR opened with a warning for %q: %v", gf.Preview.Subject, err)
 	}
-	m.state.Tracked[key] = trackedFix(url, gf.pattern)
+	m.state.Tracked[key] = trackedGeneratedFix(url, gf)
 	return url, nil
 }
 
