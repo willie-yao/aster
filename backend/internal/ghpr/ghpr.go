@@ -339,6 +339,9 @@ func (c *Client) createPR(ctx context.Context, owner, repo, title, body, head, b
 	if errors.As(err, &transport) || errors.As(err, &decode) {
 		return 0, "", fmt.Errorf("%w: %v", ErrWriteOutcomeUnknown, err)
 	}
+	if err == nil && (out.Number <= 0 || strings.TrimSpace(out.HTMLURL) == "") {
+		return 0, "", fmt.Errorf("%w: create response omitted pull request identity", ErrWriteOutcomeUnknown)
+	}
 	return out.Number, out.HTMLURL, err
 }
 

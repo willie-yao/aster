@@ -196,6 +196,18 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 			return ActionRequestView{}, fmt.Errorf("action request is %s", status)
 		}
 	}
+	for existingID, existing := range s.requests.Requests {
+		if existingID == supersedesID || existing.Status != RequestUnknown || existing.FailureID != failureID || existing.Kind != kind {
+			continue
+		}
+		if existing.Owner == owner {
+			view := existing.ActionRequestView
+			s.rmu.Unlock()
+			return view, nil
+		}
+		s.rmu.Unlock()
+		return ActionRequestView{}, fmt.Errorf("an existing action for this failure has an unknown GitHub outcome")
+	}
 	pending := 0
 	active := 0
 	for existingID, existing := range s.requests.Requests {

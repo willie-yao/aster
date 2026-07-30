@@ -3,6 +3,7 @@ package issues
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -623,5 +624,20 @@ func TestManagerForgetDropsTransientBuildIssueState(t *testing.T) {
 	reloaded := NewManager(newTestClient(fake), stateFile, "o/r", Options{})
 	if _, found := reloaded.state.Tracked["build::one"]; found {
 		t.Fatal("transient build issue remained in persistent state")
+	}
+}
+
+func TestCreateIssueMissingIdentityIsOutcomeUnknown(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	client := NewClient("token", "o", "r")
+	client.apiBase = srv.URL
+	client.httpClient = srv.Client()
+	if _, _, err := client.CreateIssue(t.Context(), "title", "body", nil); !errors.Is(err, ErrWriteOutcomeUnknown) {
+		t.Fatalf("missing identity error = %v", err)
 	}
 }

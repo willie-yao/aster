@@ -3,6 +3,7 @@ package ghpr
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -98,7 +99,7 @@ func (f *fakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = json.Unmarshal(body, &in)
 		f.prHead, f.prBase, f.prTitle, f.prDraft = in.Head, in.Base, in.Title, in.Draft
-		writeJSON(w, 201, map[string]any{"html_url": "https://github.com/o/r/pull/7"})
+		writeJSON(w, 201, map[string]any{"number": 7, "html_url": "https://github.com/o/r/pull/7"})
 	default:
 		http.Error(w, "unexpected "+r.Method+" "+p, 500)
 	}
@@ -245,5 +246,19 @@ func TestOpenPR_ForkFlow(t *testing.T) {
 	}
 	if !strings.Contains(f.commitMessage, "Signed-off-by: Jane Maintainer <jane@example.com>") {
 		t.Errorf("commit message missing sign-off: %q", f.commitMessage)
+	}
+}
+
+func TestCreatePRMissingIdentityIsOutcomeUnknown(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	client := NewClient(srv.Client(), "token")
+	client.base = srv.URL
+	if _, _, err := client.createPR(t.Context(), "o", "r", "title", "body", "head", "main", true); !errors.Is(err, ErrWriteOutcomeUnknown) {
+		t.Fatalf("missing identity error = %v", err)
 	}
 }

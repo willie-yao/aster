@@ -137,6 +137,9 @@ func (c *Client) CreateIssue(ctx context.Context, title, body string, labels []s
 	if err := json.Unmarshal(rb, &out); err != nil {
 		return 0, "", fmt.Errorf("%w: decode create response: %v", ErrWriteOutcomeUnknown, err)
 	}
+	if out.Number <= 0 || strings.TrimSpace(out.HTMLURL) == "" {
+		return 0, "", fmt.Errorf("%w: create response omitted issue identity", ErrWriteOutcomeUnknown)
+	}
 	return out.Number, out.HTMLURL, nil
 }
 
