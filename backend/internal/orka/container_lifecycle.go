@@ -490,8 +490,8 @@ func PruneContainerAnalysisTasks(ctx context.Context, client ContainerAnalysisMa
 		}
 		terminalExpired := TerminalPhase(state.Phase) && !created.Time.After(cutoff)
 		_, _, _, reusableMetadata := reusableContainerAnalysisTaskMetadata(&items[i])
-		if state.Phase == "Succeeded" && state.ResultAvailable && reusableMetadata {
-			terminalExpired = !retainedSucceeded[items[i].GetName()]
+		if state.Phase == "Succeeded" && state.ResultAvailable && reusableMetadata && !state.CompletionTime.IsZero() && !state.CompletionTime.After(now.Add(containerResultClockSkew)) {
+			terminalExpired = now.Sub(state.CompletionTime) > ContainerAnalysisSucceededTaskRetention || !retainedSucceeded[items[i].GetName()]
 		}
 		activeExpired := !TerminalPhase(state.Phase) && staleActiveContainerAnalysisTask(&items[i], now)
 		if !terminalExpired && !activeExpired {

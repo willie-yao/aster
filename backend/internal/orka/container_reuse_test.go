@@ -370,6 +370,10 @@ func TestPruneContainerAnalysisTasksRetainsBoundedSucceededReuseWindow(t *testin
 	annotations["prow-ai-dashboard/contract-version"] = "previous-contract"
 	previousContract.SetAnnotations(annotations)
 	items = append(items, previousContract)
+	missingCompletion := compatibleTaskObject(namespace, "recent-missing-completion", workItem, bundle, fingerprint, "Succeeded", true, now.Add(-time.Hour))
+	delete(missingCompletion.Object["status"].(map[string]any), "completionTime")
+	futureCompletion := compatibleTaskObject(namespace, "recent-future-completion", workItem, bundle, fingerprint, "Succeeded", true, now.Add(containerResultClockSkew+time.Minute))
+	items = append(items, missingCompletion, futureCompletion)
 	client := &fakeContainerResourceClient{listedTasks: items}
 	deleted, err := PruneContainerAnalysisTasks(t.Context(), client, namespace, now)
 	if err != nil {
@@ -394,6 +398,9 @@ func TestPruneContainerAnalysisTasksRetainsBoundedSucceededReuseWindow(t *testin
 	}
 	if deletedNames["recent-previous-contract"] {
 		t.Fatal("recent non-reusable Task bypassed normal retention")
+	}
+	if deletedNames["recent-missing-completion"] || deletedNames["recent-future-completion"] {
+		t.Fatal("Task with incomplete timing status bypassed normal retention")
 	}
 }
 
