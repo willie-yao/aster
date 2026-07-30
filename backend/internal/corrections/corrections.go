@@ -464,9 +464,14 @@ func previewView(preview *proposal) Preview {
 }
 
 func analysisKey(ref analysischat.AnalysisRef) string {
-	value := struct {
+	var value any = struct {
 		JobID, BuildID, TestName, SuiteName, ClassName, JUnitFile string
 	}{ref.JobID, ref.BuildID, ref.TestName, ref.SuiteName, ref.ClassName, ref.JUnitFile}
+	if ref.Source != "" {
+		value = struct {
+			JobID, BuildID, TestName, Source, SuiteName, ClassName, JUnitFile string
+		}{ref.JobID, ref.BuildID, ref.TestName, ref.Source, ref.SuiteName, ref.ClassName, ref.JUnitFile}
+	}
 	data, _ := json.Marshal(value)
 	digest := sha256.Sum256(data)
 	return hex.EncodeToString(digest[:])

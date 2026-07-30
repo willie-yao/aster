@@ -26,6 +26,7 @@ import { formatDuration, fileToUrl, fileSortKey, highlightStackTrace } from "../
 import { RichText } from "./RichText";
 import { soft } from "../theme";
 import { Panel } from "./Panel";
+import { junitTestCases } from "../lib/buildFailures";
 
 interface TestCaseTableProps {
   testCases: TestCase[];
@@ -75,7 +76,7 @@ const externalLinkSx = {
 export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }: TestCaseTableProps) {
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
 
-  const filtered = testCases.filter(
+  const filtered = junitTestCases(testCases).filter(
     (tc) => tc.status !== "skipped" && (tc.status === "failed" || !setupPatterns.test(tc.name)),
   );
 

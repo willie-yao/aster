@@ -521,6 +521,10 @@ func sameResolvedContext(left, right resolvedAnalysis) bool {
 	if left.ref.Scope == ScopePattern || right.ref.Scope == ScopePattern {
 		return left.pattern != nil && right.pattern != nil && models.PatternHash(*left.pattern) == models.PatternHash(*right.pattern)
 	}
+	if left.ref.JobID != right.ref.JobID || left.ref.BuildID != right.ref.BuildID || left.ref.TestName != right.ref.TestName ||
+		left.ref.Source != right.ref.Source || left.ref.SuiteName != right.ref.SuiteName || left.ref.ClassName != right.ref.ClassName || left.ref.JUnitFile != right.ref.JUnitFile {
+		return false
+	}
 	return sameAnalysisSnapshot(analysisSnapshot(left.testCase.AIAnalysis), analysisSnapshot(right.testCase.AIAnalysis))
 }
 

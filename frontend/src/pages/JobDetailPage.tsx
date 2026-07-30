@@ -22,6 +22,9 @@ import { LoadingState } from "../components/LoadingState";
 import { ErrorState } from "../components/ErrorState";
 import { soft } from "../theme";
 import { emptyTestResultsPresentation } from "../lib/testResults";
+import { BuildFailurePanel } from "../components/BuildFailurePanel";
+import { buildFailure as findBuildFailure, junitTestCases as onlyJUnitTestCases } from "../lib/buildFailures";
+import { useSharedFetchStatus } from "../hooks/useSharedFetchStatus";
 
 function passRateColor(rate: number): "success" | "warning" | "error" {
   if (rate >= 0.9) return "success";
@@ -178,6 +181,7 @@ export function JobDetailPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [gridOpen, setGridOpen] = useState(false);
   const { data, loading, error } = useJobDetail(jobID);
+  const fetchStatus = useSharedFetchStatus();
 
   const runs = useMemo(() => data?.runs ?? [], [data]);
   const displayName = data?.name ?? jobID ?? "";
@@ -191,6 +195,9 @@ export function JobDetailPage() {
   }, [runs, selectedBuildId]);
 
   const testCases: TestCase[] = selectedRun?.test_cases ?? [];
+  const buildFailure = findBuildFailure(testCases);
+  const junitTestCases = onlyJUnitTestCases(testCases);
+  const hasJUnitCases = runs.some((run) => onlyJUnitTestCases(run.test_cases).length > 0);
   const emptyTestResults = selectedRun ? emptyTestResultsPresentation(selectedRun) : null;
 
   // Pass rate over the most recent 10 runs.
@@ -410,23 +417,31 @@ export function JobDetailPage() {
             </>
           )}
 
-          {gridSection}
+          {hasJUnitCases && gridSection}
 
           {selectedRun && (
             <>
               {!pattern && <RunDetailsPanel run={selectedRun} orientation="row" />}
-              {testCases.length > 0 ? (
+              {buildFailure && (
+                <BuildFailurePanel
+                  jobID={jobID ?? ""}
+                  run={selectedRun}
+                  failure={buildFailure}
+                  fetchStatus={fetchStatus}
+                />
+              )}
+              {junitTestCases.length > 0 ? (
                 <Box component="section">
                   <SectionHeading title="Test Cases" />
                   <TestCaseTable
-                    testCases={testCases}
+                    testCases={junitTestCases}
                     jobID={jobID}
                     buildId={selectedRun.build_id}
                     buildLogUrl={selectedRun.build_log_url}
                     webUrl={selectedRun.web_url}
                   />
                 </Box>
-              ) : (
+              ) : !buildFailure ? (
                 <Panel component="section" sx={{ borderRadius: 3, p: 4, textAlign: "center" }}>
                   {emptyTestResults?.kind === "pending" ? (
                     <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 1, color: "text.secondary" }}>
@@ -463,7 +478,7 @@ export function JobDetailPage() {
                     </Box>
                   )}
                 </Panel>
-              )}
+              ) : null}
             </>
           )}
         </>

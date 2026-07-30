@@ -109,6 +109,25 @@ The lookup endpoint accepts the same reference and returns `204 No Content`
 when that admin has no live matching session. The dashboard uses it on mount so
 reloads and navigation restore the transcript from shared server storage.
 
+For an analyzed build failure that has no failed JUnit case, include the typed
+source and omit `junit_file`:
+
+```json
+{
+  "job_id": "periodic-demo",
+  "build_id": "123",
+  "test_name": "Prow job execution",
+  "source": "build",
+  "suite_name": "Prow",
+  "class_name": "job",
+  "analysis_generated_at": "2026-07-30T12:00:00Z"
+}
+```
+
+Build references require `source: "build"` and reject `junit_file`. Omitting
+`source` retains the legacy JUnit-reference contract and cannot resolve a build
+subject.
+
 For a recurring pattern, post its stable ID and complete content hash instead:
 
 ```json

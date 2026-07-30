@@ -342,3 +342,16 @@ func TestGitHubSourceReaderPinsPathAndStripsCrossHostAuthorization(t *testing.T)
 		t.Fatal("ReadFile accepted the repository parent path")
 	}
 }
+
+func TestBuildSourcePromptUsesTypedFailureSubject(t *testing.T) {
+	request := sourceRequest()
+	request.Subject.TestCase.Source = models.TestCaseSourceBuild
+	request.Subject.TestCase.Name = "Prow job execution"
+	prompt := buildSourcePrompt(request.Subject)
+	if !strings.Contains(prompt, `"failure_subject":"Prow job execution"`) || !strings.Contains(prompt, `"source":"build"`) {
+		t.Fatalf("build source prompt lacks typed subject: %s", prompt)
+	}
+	if strings.Contains(prompt, `"test_name"`) {
+		t.Fatalf("build source prompt used test-only label: %s", prompt)
+	}
+}

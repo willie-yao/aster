@@ -7,6 +7,7 @@ const pageRoutes = [
   { path: "/analysis-traces", title: "Analysis Traces" },
   { path: "/job/:jobName", title: "Job Details" },
   { path: "/job/:jobName/test/:testName", title: "Test Details" },
+  { path: "/job/:jobName/build/:buildId/failure", title: "Build Failure" },
   { path: "/action-request/:requestID", title: "Action Request" },
 ] as const;
 

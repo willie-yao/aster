@@ -516,6 +516,7 @@ export function AnalysisChat({
         analysisRef.scope,
         analysisRef.build_id,
         analysisRef.test_name,
+        analysisRef.source,
         analysisRef.suite_name,
         analysisRef.class_name,
         analysisRef.junit_file,

@@ -95,6 +95,7 @@ type AnalysisRef struct {
 	JobID               string `json:"job_id"`
 	BuildID             string `json:"build_id"`
 	TestName            string `json:"test_name"`
+	Source              string `json:"source,omitempty"`
 	SuiteName           string `json:"suite_name,omitempty"`
 	ClassName           string `json:"class_name,omitempty"`
 	JUnitFile           string `json:"junit_file,omitempty"`
@@ -791,9 +792,12 @@ func (s *Service) resolve(ref AnalysisRef) (resolvedAnalysis, error) {
 	var matches []models.TestCase
 	for _, testCase := range run.TestCases {
 		testName := strings.TrimSpace(testCase.Name)
+		source := strings.TrimSpace(testCase.Source)
 		suiteName := strings.TrimSpace(testCase.SuiteName)
 		className := strings.TrimSpace(testCase.ClassName)
 		if testName != ref.TestName ||
+			ref.Source == models.TestCaseSourceBuild && source != models.TestCaseSourceBuild ||
+			ref.Source == "" && source == models.TestCaseSourceBuild ||
 			ref.SuiteName != "" && suiteName != ref.SuiteName ||
 			ref.ClassName != "" && className != ref.ClassName ||
 			ref.JUnitFile != "" && testCase.JUnitFile != ref.JUnitFile {
@@ -814,6 +818,7 @@ func (s *Service) resolve(ref AnalysisRef) (resolvedAnalysis, error) {
 		return resolvedAnalysis{}, ErrAnalysisChanged
 	}
 	ref.TestName = strings.TrimSpace(testCase.Name)
+	ref.Source = strings.TrimSpace(testCase.Source)
 	ref.SuiteName = strings.TrimSpace(testCase.SuiteName)
 	ref.ClassName = strings.TrimSpace(testCase.ClassName)
 	ref.JUnitFile = testCase.JUnitFile
@@ -998,6 +1003,7 @@ func normalizeAnalysisRef(ref AnalysisRef) (AnalysisRef, error) {
 	ref.JobID = strings.TrimSpace(ref.JobID)
 	ref.BuildID = strings.TrimSpace(ref.BuildID)
 	ref.TestName = strings.TrimSpace(ref.TestName)
+	ref.Source = strings.TrimSpace(ref.Source)
 	ref.SuiteName = strings.TrimSpace(ref.SuiteName)
 	ref.ClassName = strings.TrimSpace(ref.ClassName)
 	ref.JUnitFile = strings.TrimSpace(ref.JUnitFile)
@@ -1019,8 +1025,14 @@ func normalizeAnalysisRef(ref AnalysisRef) (AnalysisRef, error) {
 		if ref.BuildID == "" || ref.TestName == "" || ref.PatternID != "" || ref.PatternHash != "" {
 			return AnalysisRef{}, fmt.Errorf("%w: test scope requires build_id and test_name only", ErrInvalidRequest)
 		}
+		if ref.Source != "" && ref.Source != models.TestCaseSourceBuild {
+			return AnalysisRef{}, fmt.Errorf("%w: unsupported failure source %q", ErrInvalidRequest, ref.Source)
+		}
+		if ref.Source == models.TestCaseSourceBuild && ref.JUnitFile != "" {
+			return AnalysisRef{}, fmt.Errorf("%w: build source must not include junit_file", ErrInvalidRequest)
+		}
 	case ScopePattern:
-		if ref.PatternID == "" || ref.PatternHash == "" || ref.BuildID != "" || ref.TestName != "" || ref.SuiteName != "" || ref.ClassName != "" || ref.JUnitFile != "" || ref.AnalysisGeneratedAt != "" {
+		if ref.PatternID == "" || ref.PatternHash == "" || ref.BuildID != "" || ref.TestName != "" || ref.Source != "" || ref.SuiteName != "" || ref.ClassName != "" || ref.JUnitFile != "" || ref.AnalysisGeneratedAt != "" {
 			return AnalysisRef{}, fmt.Errorf("%w: pattern scope requires pattern_id and pattern_hash only", ErrInvalidRequest)
 		}
 	default:

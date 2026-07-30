@@ -408,6 +408,7 @@ func persistResolved(resolved resolvedAnalysis, requiredRepo string) persistedRe
 	}
 	testCase := models.TestCase{
 		Name:           resolved.testCase.Name,
+		Source:         resolved.testCase.Source,
 		SuiteName:      resolved.testCase.SuiteName,
 		ClassName:      resolved.testCase.ClassName,
 		JUnitFile:      resolved.testCase.JUnitFile,

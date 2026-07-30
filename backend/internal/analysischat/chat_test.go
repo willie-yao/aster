@@ -1813,3 +1813,35 @@ func TestRetainedPatternChatRequiresCompleteEvidence(t *testing.T) {
 		t.Fatalf("Create error = %v", err)
 	}
 }
+
+func TestServiceCreateBuildAnalysisWithoutJUnitFile(t *testing.T) {
+	dir := t.TempDir()
+	build := analyzedTest("Prow job execution", "", "2026-07-30T12:00:00Z")
+	build.Source = models.TestCaseSourceBuild
+	writeJobDetail(t, dir, testDetail(build))
+	service, err := NewService(t.Context(), dir, &fakeRunner{}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	created, err := service.Create(AnalysisRef{
+		JobID: "periodic-demo", BuildID: "123", TestName: build.Name,
+		Source: models.TestCaseSourceBuild, SuiteName: build.SuiteName, ClassName: build.ClassName,
+		AnalysisGeneratedAt: build.AIAnalysis.GeneratedAt,
+	}, "alice", testRequestID(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Analysis.Source != models.TestCaseSourceBuild || created.Analysis.JUnitFile != "" {
+		t.Fatalf("build analysis reference = %+v", created.Analysis)
+	}
+	if _, err := service.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: build.Name}, "alice", testRequestID(t)); !errors.Is(err, ErrAnalysisNotFound) {
+		t.Fatalf("legacy test reference resolved build subject: %v", err)
+	}
+	if _, err := service.Create(AnalysisRef{
+		JobID: "periodic-demo", BuildID: "123", TestName: build.Name, Source: models.TestCaseSourceBuild,
+		AnalysisGeneratedAt: "2026-07-30T13:00:00Z",
+	}, "alice", testRequestID(t)); !errors.Is(err, ErrAnalysisChanged) {
+		t.Fatalf("changed build analysis error = %v", err)
+	}
+}

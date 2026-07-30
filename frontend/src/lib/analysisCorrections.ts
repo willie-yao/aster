@@ -46,7 +46,7 @@ export function findAnalysisCorrection(state: AnalysisCorrectionState, ref: Anal
   return Object.values(state.corrections).find((correction) => {
     const candidate = correction.analysis;
     return candidate.job_id === ref.job_id && candidate.build_id === ref.build_id &&
-      candidate.test_name === ref.test_name && (candidate.suite_name ?? "") === (ref.suite_name ?? "") &&
+      candidate.test_name === ref.test_name && (candidate.source ?? "") === (ref.source ?? "") && (candidate.suite_name ?? "") === (ref.suite_name ?? "") &&
       (candidate.class_name ?? "") === (ref.class_name ?? "") && (candidate.junit_file ?? "") === (ref.junit_file ?? "");
   });
 }

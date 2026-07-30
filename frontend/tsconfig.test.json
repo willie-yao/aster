@@ -23,6 +23,7 @@
     "src/lib/pageMetadata.ts",
     "src/lib/fetchStatus.ts",
     "src/lib/testResults.ts",
+    "src/lib/buildFailures.ts",
     "src/types/dashboard.ts",
     "src/types/analysisChat.ts",
     "src/types/fetchStatus.ts"
