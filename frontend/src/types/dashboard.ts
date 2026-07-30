@@ -115,6 +115,7 @@ export interface BuildResult {
   build_log_url: string;
   junit_urls?: string[];
   junit_complete?: boolean;
+  junit_truncated?: boolean;
   test_cases: TestCase[];
   tests_total: number;
   tests_passed: number;
