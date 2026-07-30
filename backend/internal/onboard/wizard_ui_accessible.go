@@ -23,6 +23,9 @@ func newAccessibleWizardUI(terminal Terminal) wizardUI {
 }
 
 func (u *accessibleWizardUI) Input(ctx context.Context, prompt inputPrompt) (string, error) {
+	if prompt.Description != "" {
+		fmt.Fprintln(u.terminal.Out, prompt.Description)
+	}
 	for {
 		fmt.Fprint(u.terminal.Out, prompt.Title)
 		if prompt.Value != "" {
@@ -57,6 +60,9 @@ func (u *accessibleWizardUI) Select(ctx context.Context, prompt selectPrompt) (s
 	}
 	defaultIndex := 0
 	fmt.Fprintln(u.terminal.Out, prompt.Title)
+	if prompt.Description != "" {
+		fmt.Fprintln(u.terminal.Out, prompt.Description)
+	}
 	for index, option := range prompt.Options {
 		if option.Value == prompt.Value {
 			defaultIndex = index
@@ -86,6 +92,9 @@ func (u *accessibleWizardUI) Select(ctx context.Context, prompt selectPrompt) (s
 }
 
 func (u *accessibleWizardUI) Confirm(ctx context.Context, prompt confirmPrompt) (bool, error) {
+	if prompt.Description != "" {
+		fmt.Fprintln(u.terminal.Out, prompt.Description)
+	}
 	suffix := " [y/N]: "
 	if prompt.Value {
 		suffix = " [Y/n]: "

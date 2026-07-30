@@ -33,7 +33,7 @@ func TestAccessibleWizardUI_InputAcceptsEditableDefault(t *testing.T) {
 	out := &bytes.Buffer{}
 	ui := newAccessibleWizardUI(Terminal{In: strings.NewReader("\n"), Out: out, Err: out})
 	value, err := ui.Input(context.Background(), inputPrompt{
-		Title: "Project ID", Value: "kind", Required: true,
+		Title: "Project ID", Description: "Editable inferred value.", Value: "kind", Required: true,
 	})
 	if err != nil {
 		t.Fatalf("Input: %v", err)
@@ -41,8 +41,10 @@ func TestAccessibleWizardUI_InputAcceptsEditableDefault(t *testing.T) {
 	if value != "kind" {
 		t.Fatalf("value = %q", value)
 	}
-	if !strings.Contains(out.String(), "Project ID [kind]") {
-		t.Fatalf("output did not expose default: %q", out.String())
+	for _, want := range []string{"Editable inferred value.", "Project ID [kind]"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output missing %q: %q", want, out.String())
+		}
 	}
 }
 
@@ -100,13 +102,16 @@ func TestAccessibleWizardUI_ConfirmPreservesDefaultNo(t *testing.T) {
 	out := &bytes.Buffer{}
 	ui := newAccessibleWizardUI(Terminal{In: strings.NewReader("\n"), Out: out, Err: out})
 	value, err := ui.Confirm(context.Background(), confirmPrompt{
-		Title: "Create this scaffold?", Value: false,
+		Title: "Create this scaffold?", Description: "This permits a write.", Value: false,
 	})
 	if err != nil {
 		t.Fatalf("Confirm: %v", err)
 	}
 	if value {
 		t.Fatal("default confirmation was true")
+	}
+	if !strings.Contains(out.String(), "This permits a write.") {
+		t.Fatalf("confirmation description missing: %q", out.String())
 	}
 }
 
