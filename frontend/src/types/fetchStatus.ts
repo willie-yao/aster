@@ -52,6 +52,16 @@ export interface FetchProgressStatus {
     results_retrieved: number;
     result_retrieval_retries: number;
     checkpoint_committed?: boolean;
+    build_subjects?: {
+      logical_total: number;
+      queued: number;
+      running: number;
+      completed: number;
+      failed: number;
+      cancelled: number;
+      accepted_cache_hits: number;
+      existing_tasks_adopted: number;
+    };
   };
   patterns?: {
     eligible: number;

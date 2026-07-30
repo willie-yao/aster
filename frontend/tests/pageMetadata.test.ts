@@ -18,6 +18,7 @@ test("known routes receive route-specific page titles", () => {
     ["/JOB/periodic-capz", "Job Details"],
     ["/job/periodic-capz/test/TestCluster", "Test Details"],
     ["/JOB/periodic-capz/TEST/TestCluster", "Test Details"],
+    ["/job/periodic-capz/build/123/failure", "Build Failure"],
     ["/action-request/request-1", "Action Request"],
     ["/ACTION-REQUEST/request-1", "Action Request"],
   ] as const;

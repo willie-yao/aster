@@ -361,7 +361,8 @@ func buildSourcePrompt(subject sourceinvestigation.Subject) string {
 		Repository          sourceinvestigation.Repository `json:"repository"`
 		JobID               string                         `json:"job_id"`
 		BuildID             string                         `json:"build_id"`
-		TestName            string                         `json:"test_name"`
+		FailureSubject      string                         `json:"failure_subject"`
+		Source              string                         `json:"source,omitempty"`
 		FailureMessage      string                         `json:"failure_message"`
 		FailureBody         string                         `json:"failure_body"`
 		PublishedRootCause  string                         `json:"published_root_cause"`
@@ -371,7 +372,8 @@ func buildSourcePrompt(subject sourceinvestigation.Subject) string {
 		Answer              string                         `json:"chat_answer"`
 	}{
 		Repository: subject.Repository, JobID: subject.JobID, BuildID: subject.Build.BuildID,
-		TestName:           subject.TestCase.Name,
+		FailureSubject:     subject.TestCase.Name,
+		Source:             subject.TestCase.Source,
 		FailureMessage:     clampSourcePrompt(subject.TestCase.FailureMessage, 12<<10),
 		FailureBody:        clampSourcePrompt(subject.TestCase.FailureBody, 8<<10),
 		PublishedRootCause: clampSourcePrompt(rootCause, 16<<10), PublishedFix: clampSourcePrompt(suggestedFix, 8<<10),

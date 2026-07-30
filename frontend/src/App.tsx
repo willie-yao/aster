@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { DashboardPage } from "./pages/DashboardPage";
 import { JobDetailPage } from "./pages/JobDetailPage";
 import { TestDetailPage } from "./pages/TestDetailPage";
+import { BuildFailurePage } from "./pages/BuildFailurePage";
 import { FlakinessPage } from "./pages/FlakinessPage";
 import { ActionRequestPage } from "./pages/ActionRequestPage";
 import { AnalysisTracesPage } from "./pages/AnalysisTracesPage";
@@ -29,6 +30,10 @@ export default function App() {
                 <Route
                   path="job/:jobName/test/:testName"
                   element={<TestDetailPage />}
+                />
+                <Route
+                  path="job/:jobName/build/:buildId/failure"
+                  element={<BuildFailurePage />}
                 />
                 <Route
                   path="action-request/:requestID"

@@ -6,6 +6,7 @@ import { Link as RouterLink } from "react-router-dom";
 import type { BuildResult } from "../types/dashboard";
 import { shortDate, shortTestName } from "../lib/utils";
 import { Panel } from "./Panel";
+import { junitTestCases } from "../lib/buildFailures";
 
 interface TestResultsGridProps {
   runs: BuildResult[];
@@ -40,7 +41,7 @@ export function TestResultsGrid({ runs, jobID }: TestResultsGridProps) {
 
     for (let col = 0; col < sortedRuns.length; col++) {
       const run = sortedRuns[col];
-      for (const tc of run.test_cases ?? []) {
+      for (const tc of junitTestCases(run.test_cases)) {
         if (!testMap.has(tc.name)) {
           testMap.set(tc.name, new Array(sortedRuns.length).fill("skipped"));
         }

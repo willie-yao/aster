@@ -275,3 +275,17 @@ test("version two active sessions poll without a recoverable question", async ()
   assert.equal(restored.id, session.id);
   assert.equal(restored.active, undefined);
 });
+
+test("build analysis lookup keeps the source discriminator and omits JUnit identity", async () => {
+  const buildAnalysis: AnalysisChatReference = {
+    scope: "test", job_id: "periodic-demo", build_id: "123", test_name: "Prow job execution",
+    source: "build", suite_name: "Prow", class_name: "job", analysis_generated_at: "2026-07-30T12:00:00Z",
+  };
+  globalThis.fetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body));
+    assert.equal(body.source, "build");
+    assert.equal("junit_file" in body, false);
+    return new Response(null, { status: 204 });
+  };
+  assert.equal(await findAnalysisChatSession(buildAnalysis), null);
+});

@@ -1,6 +1,8 @@
 package corrections
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -10,6 +12,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysischat"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
 type fakeSource struct {
@@ -201,4 +204,20 @@ func readPrivateState(t *testing.T, dir string) state {
 		t.Fatal(err)
 	}
 	return state
+}
+
+func TestAnalysisKeyPreservesLegacyJUnitIdentity(t *testing.T) {
+	ref := analysischat.AnalysisRef{JobID: "job", BuildID: "1", TestName: "test", SuiteName: "suite", ClassName: "class", JUnitFile: "junit.xml"}
+	legacy := struct {
+		JobID, BuildID, TestName, SuiteName, ClassName, JUnitFile string
+	}{ref.JobID, ref.BuildID, ref.TestName, ref.SuiteName, ref.ClassName, ref.JUnitFile}
+	data, _ := json.Marshal(legacy)
+	digest := sha256.Sum256(data)
+	if got, want := analysisKey(ref), hex.EncodeToString(digest[:]); got != want {
+		t.Fatalf("legacy analysis key = %q, want %q", got, want)
+	}
+	ref.Source = models.TestCaseSourceBuild
+	if analysisKey(ref) == analysisKey(analysischat.AnalysisRef{JobID: ref.JobID, BuildID: ref.BuildID, TestName: ref.TestName, SuiteName: ref.SuiteName, ClassName: ref.ClassName, JUnitFile: ref.JUnitFile}) {
+		t.Fatal("build analysis key collided with legacy JUnit identity")
+	}
 }

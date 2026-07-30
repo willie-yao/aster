@@ -51,7 +51,7 @@ export function AiAnalysisPanel({
   const [revokeBusy, setRevokeBusy] = useState(false);
   const [correctionError, setCorrectionError] = useState<string | null>(null);
   const revokeControllerRef = useRef<AbortController | null>(null);
-  const analysisIdentity = [chatRef?.job_id, chatRef?.build_id, chatRef?.test_name, chatRef?.suite_name, chatRef?.class_name, chatRef?.junit_file, chatRef?.analysis_generated_at].join("\u0000");
+  const analysisIdentity = [chatRef?.job_id, chatRef?.build_id, chatRef?.test_name, chatRef?.source, chatRef?.suite_name, chatRef?.class_name, chatRef?.junit_file, chatRef?.analysis_generated_at].join("\u0000");
   const identityRef = useRef(analysisIdentity);
   identityRef.current = analysisIdentity;
   useEffect(() => {
@@ -220,6 +220,7 @@ export function AiAnalysisPanel({
               chatRef.job_id,
               chatRef.build_id,
               chatRef.test_name,
+              chatRef.source,
               chatRef.suite_name,
               chatRef.class_name,
               chatRef.junit_file,

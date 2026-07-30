@@ -12,6 +12,7 @@ export interface TestAnalysisChatReference extends AnalysisChatReferenceBase {
   scope?: "test";
   build_id: string;
   test_name: string;
+  source?: "build";
   suite_name?: string;
   class_name?: string;
   junit_file?: string;
@@ -26,6 +27,7 @@ export interface PatternAnalysisChatReference extends AnalysisChatReferenceBase 
   pattern_hash: string;
   build_id?: never;
   test_name?: never;
+  source?: never;
   suite_name?: never;
   class_name?: never;
   junit_file?: never;

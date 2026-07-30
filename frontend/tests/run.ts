@@ -5,3 +5,4 @@ import "./pageMetadata.test.js";
 import "./search.test.js";
 import "./fetchStatus.test.js";
 import "./testResults.test.js";
+import "./buildFailures.test.js";
