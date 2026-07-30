@@ -8,13 +8,13 @@ import { ErrorState } from "../components/ErrorState";
 import { LoadingState } from "../components/LoadingState";
 import { Panel } from "../components/Panel";
 import { useJobDetail } from "../hooks/useData";
-import { useFetchStatus } from "../hooks/useFetchStatus";
+import { useSharedFetchStatus } from "../hooks/useSharedFetchStatus";
 import { buildFailure as findBuildFailure } from "../lib/buildFailures";
 
 export function BuildFailurePage() {
   const { jobName: jobID, buildId } = useParams<{ jobName: string; buildId: string }>();
   const { data, loading, error } = useJobDetail(jobID);
-  const fetchStatus = useFetchStatus();
+  const fetchStatus = useSharedFetchStatus();
   if (loading) return <LoadingState />;
   if (error) return <ErrorState title="Failed to load build failure" message={error} onRetry={() => window.location.reload()} />;
   if (!data) return null;

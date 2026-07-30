@@ -20,8 +20,9 @@ const status: FetchProgressStatus = {
 };
 const response = (state: FetchStatusResponse["state"], value = status): FetchStatusResponse => ({ available: true, state, status: value });
 
-test("build analysis state covers queued running success unavailable and stale", () => {
+test("build analysis state covers pending queued running success unavailable and stale", () => {
   assert.equal(buildAnalysisState(failure, response("active")), "queued");
+  assert.equal(buildAnalysisState(failure, response("active", { ...status, analyses: { ...status.analyses, logical_total: 2, queued: 1, running: 1, build_subjects: { ...status.analyses.build_subjects!, logical_total: 2, queued: 1, running: 1 } } })), "pending");
   assert.equal(buildAnalysisState(failure, response("active", { ...status, analyses: { ...status.analyses, queued: 0, running: 1, build_subjects: { ...status.analyses.build_subjects!, queued: 0, running: 1 } } })), "running");
   assert.equal(buildAnalysisState({ ...failure, ai_analysis: { generated_at: "now", model: "m", root_cause: "cause", severity: "High", suggested_fix: "fix" } }, null), "succeeded");
   assert.equal(buildAnalysisState(failure, null), "unavailable");

@@ -8,11 +8,11 @@ interface AnalysisChatReferenceBase {
   job_id: string;
 }
 
-export interface TestAnalysisChatReference extends AnalysisChatReferenceBase {
+export interface JUnitAnalysisChatReference extends AnalysisChatReferenceBase {
   scope?: "test";
   build_id: string;
   test_name: string;
-  source?: "build";
+  source?: never;
   suite_name?: string;
   class_name?: string;
   junit_file?: string;
@@ -20,6 +20,21 @@ export interface TestAnalysisChatReference extends AnalysisChatReferenceBase {
   pattern_id?: never;
   pattern_hash?: never;
 }
+
+export interface BuildAnalysisChatReference extends AnalysisChatReferenceBase {
+  scope?: "test";
+  build_id: string;
+  test_name: string;
+  source: "build";
+  suite_name?: string;
+  class_name?: string;
+  junit_file?: never;
+  analysis_generated_at?: string;
+  pattern_id?: never;
+  pattern_hash?: never;
+}
+
+export type TestAnalysisChatReference = JUnitAnalysisChatReference | BuildAnalysisChatReference;
 
 export interface PatternAnalysisChatReference extends AnalysisChatReferenceBase {
   scope: "pattern";

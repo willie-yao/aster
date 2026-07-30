@@ -18,6 +18,7 @@ import { FetchStatusControl, FetchStatusStrip } from "./FetchStatus";
 import { useManifest } from "../hooks/useManifest";
 import { useCapabilities } from "../hooks/useCapabilities";
 import { useFetchStatus } from "../hooks/useFetchStatus";
+import { FetchStatusContext } from "../hooks/useSharedFetchStatus";
 import { usePageDocumentTitle } from "../lib/pageMetadata";
 import {
   readFetchStatusIdleCompact,
@@ -93,6 +94,7 @@ export function Layout() {
   const overviewActive = !flakyActive && !tracesActive;
 
   return (
+    <FetchStatusContext.Provider value={fetchStatus}>
     <Box sx={{ minHeight: "100vh", bgcolor: "background.default", color: "text.primary" }}>
       <AppBar
         position="sticky"
@@ -274,5 +276,6 @@ export function Layout() {
         <Outlet />
       </Container>
     </Box>
+    </FetchStatusContext.Provider>
   );
 }

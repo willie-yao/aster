@@ -24,7 +24,7 @@ import { soft } from "../theme";
 import { emptyTestResultsPresentation } from "../lib/testResults";
 import { BuildFailurePanel } from "../components/BuildFailurePanel";
 import { buildFailure as findBuildFailure, junitTestCases as onlyJUnitTestCases } from "../lib/buildFailures";
-import { useFetchStatus } from "../hooks/useFetchStatus";
+import { useSharedFetchStatus } from "../hooks/useSharedFetchStatus";
 
 function passRateColor(rate: number): "success" | "warning" | "error" {
   if (rate >= 0.9) return "success";
@@ -181,7 +181,7 @@ export function JobDetailPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [gridOpen, setGridOpen] = useState(false);
   const { data, loading, error } = useJobDetail(jobID);
-  const fetchStatus = useFetchStatus();
+  const fetchStatus = useSharedFetchStatus();
 
   const runs = useMemo(() => data?.runs ?? [], [data]);
   const displayName = data?.name ?? jobID ?? "";

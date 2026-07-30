@@ -16,6 +16,7 @@ import { RichText } from "./RichText";
 import { soft } from "../theme";
 
 const stateText: Record<Exclude<BuildAnalysisState, "succeeded">, { title: string; detail: string }> = {
+  pending: { title: "Build analysis pending", detail: "Build analyses are active, but aggregate progress cannot identify this specific run." },
   queued: { title: "Build analysis queued", detail: "Waiting for the bounded analysis worker." },
   running: { title: "Build analysis running", detail: "The analyzer is inspecting the build log and supporting artifacts." },
   unavailable: { title: "Build analysis unavailable", detail: "No accepted build analysis is available for this run." },
@@ -93,7 +94,6 @@ export function BuildFailurePanel({
             <AiAnalysisPanel
               analysis={failure.ai_analysis}
               fileCtx={fileCtx}
-              traceHref={`/analysis-traces?job_id=${encodeURIComponent(jobID)}&build_id=${encodeURIComponent(run.build_id)}&test_name=${encodeURIComponent(failure.name)}`}
               chatRef={chatRef}
             />
           </>
