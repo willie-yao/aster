@@ -286,6 +286,15 @@ func RankDashboardCandidates(jobs []jobconfig.JobDefinition) []DashboardCandidat
 	return out
 }
 
+func directSourceMatchSummary(periodic, presubmit int) string {
+	total := periodic + presubmit
+	label := "matches"
+	if total == 1 {
+		label = "match"
+	}
+	return fmt.Sprintf("%d direct source %s: %d periodic, %d presubmit", total, label, periodic, presubmit)
+}
+
 func splitDashboards(value string) []string {
 	seen := map[string]struct{}{}
 	var out []string
@@ -363,8 +372,8 @@ func WriteDiscovery(out io.Writer, report DiscoveryReport, asJSON bool) error {
 	}
 	for i, candidate := range report.Candidates {
 		writer.printf("  %d. %s\n", i+1, safeTerminal(candidate.Dashboard))
-		writer.printf("     source matches: %d periodic, %d presubmit; dashboard tabs: %d periodic, %d presubmit, %d postsubmit\n",
-			candidate.PeriodicJobs, candidate.PresubmitJobs, candidate.DashboardPeriodicJobs, candidate.DashboardPresubmitJobs, candidate.DashboardPostsubmitJobs)
+		writer.printf("     %s; dashboard tabs: %d periodic, %d presubmit, %d postsubmit\n",
+			directSourceMatchSummary(candidate.PeriodicJobs, candidate.PresubmitJobs), candidate.DashboardPeriodicJobs, candidate.DashboardPresubmitJobs, candidate.DashboardPostsubmitJobs)
 		if candidate.DashboardPostsubmitJobs > 0 {
 			writer.println("     note: postsubmit tabs are not supported by the dashboard fetcher")
 		}

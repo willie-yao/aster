@@ -370,8 +370,8 @@ func wizardDiscovery(ctx context.Context, prompt wizardUI, opts *Options, report
 	}
 	options := make([]selectOption, 0, len(report.Candidates)+2)
 	for _, candidate := range report.Candidates {
-		summary := fmt.Sprintf("%s (%d periodic, %d presubmit source matches)",
-			safeTerminal(candidate.Dashboard), candidate.PeriodicJobs, candidate.PresubmitJobs)
+		summary := fmt.Sprintf("%s (%s)", safeTerminal(candidate.Dashboard),
+			directSourceMatchSummary(candidate.PeriodicJobs, candidate.PresubmitJobs))
 		description := fmt.Sprintf("Dashboard contains %d periodic and %d presubmit jobs", candidate.DashboardPeriodicJobs, candidate.DashboardPresubmitJobs)
 		if candidate.DashboardPostsubmitJobs > 0 {
 			description += fmt.Sprintf("; %d postsubmit jobs are unsupported", candidate.DashboardPostsubmitJobs)
