@@ -95,10 +95,14 @@ func wizardDeploymentAI(ctx context.Context, prompt wizardUI, opts *Options, out
 		if err != nil {
 			return err
 		}
+		modelValue := ""
+		if existingSelection {
+			modelValue = modelDefault
+		}
 		model, err := prompt.Input(ctx, inputPrompt{
 			Title:       "Deployed AI model",
 			Description: "Exact model identifier available to your account or deployment.",
-			Value:       modelDefault,
+			Value:       modelValue,
 			Required:    true,
 		})
 		if err != nil {

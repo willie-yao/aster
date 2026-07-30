@@ -577,7 +577,7 @@ func TestChecklist_UsesSelectedAPIAndExplainsDeferredAI(t *testing.T) {
 
 	disabled, err := render(checklistTmpl, checklistData{
 		Name: "Project", DashboardOwner: "example", DashboardName: "dashboard",
-		EngineRef: "main", AIEnabled: false, AIAPI: project.AIAPIChatCompletions,
+		EngineRef: "main", AIEnabled: false, AIAPI: project.AIAPIResponses,
 	})
 	if err != nil {
 		t.Fatalf("render disabled checklist: %v", err)
@@ -585,7 +585,7 @@ func TestChecklist_UsesSelectedAPIAndExplainsDeferredAI(t *testing.T) {
 	for _, want := range []string{
 		"AI is disabled in the initial workflow",
 		"remove `ai: false`",
-		"gh variable set AI_API",
+		"gh variable set AI_API --body responses",
 		"gh variable set AI_ENDPOINT",
 		"gh variable set AI_MODEL",
 		"gh secret set AI_TOKEN",

@@ -184,6 +184,37 @@ func TestWizardDeploymentAI_PagesWarningRejectionReturnsToProviderSelection(t *t
 	}
 }
 
+func TestWizardDeploymentAI_ProviderSwitchClearsRejectedModelDefault(t *testing.T) {
+	enabled := true
+	opts := Options{Mode: modePages, AIEnabled: &enabled}
+	ui := &queuedWizardUI{
+		selects: []string{
+			string(aiProviderCustom), project.AIAPIChatCompletions,
+			string(aiProviderOpenAIResponse),
+		},
+		inputs: []string{
+			"http://localhost:8000/v1/chat/completions", "local-model",
+			usePromptDefault, "openai-model",
+		},
+		confirms: []bool{false},
+	}
+	if err := wizardDeploymentAI(context.Background(), ui, &opts, &bytes.Buffer{}); err != nil {
+		t.Fatalf("wizardDeploymentAI: %v", err)
+	}
+	var modelPrompts []inputPrompt
+	for _, prompt := range ui.inputPrompts {
+		if prompt.Title == "Deployed AI model" {
+			modelPrompts = append(modelPrompts, prompt)
+		}
+	}
+	if len(modelPrompts) != 2 || modelPrompts[0].Value != "" || modelPrompts[1].Value != "" {
+		t.Fatalf("model defaults = %+v", modelPrompts)
+	}
+	if opts.DeploymentAIEndpoint != "https://api.openai.com/v1/responses" || opts.DeploymentAIModel != "openai-model" {
+		t.Fatalf("final coordinates = %+v", opts)
+	}
+}
+
 func TestWizardDeploymentAI_PagesWarningCanBeAcceptedExplicitly(t *testing.T) {
 	enabled := true
 	opts := Options{Mode: modePages, AIEnabled: &enabled}

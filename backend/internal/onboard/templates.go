@@ -262,7 +262,7 @@ gh variable set AI_MODEL --repo {{.DashboardOwner}}/{{.DashboardName}}
 gh secret set AI_TOKEN --repo {{.DashboardOwner}}/{{.DashboardName}}
 {{else}}# AI is disabled in the initial workflow. To enable it later, remove ` + "`ai: false`" + `
 # from .github/workflows/deploy.yml, then configure the provider coordinates and token.
-gh variable set AI_API --body chat_completions --repo {{.DashboardOwner}}/{{.DashboardName}}
+gh variable set AI_API --body {{.AIAPI}} --repo {{.DashboardOwner}}/{{.DashboardName}}
 gh variable set AI_ENDPOINT --repo {{.DashboardOwner}}/{{.DashboardName}}
 gh variable set AI_MODEL --repo {{.DashboardOwner}}/{{.DashboardName}}
 gh secret set AI_TOKEN --repo {{.DashboardOwner}}/{{.DashboardName}}
