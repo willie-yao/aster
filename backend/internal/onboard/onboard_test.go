@@ -536,6 +536,11 @@ func TestScaffold_KubernetesDisabledAIOmitsTokenInstruction(t *testing.T) {
 	if strings.Contains(readme, "--set ai.token=<token>") {
 		t.Fatalf("AI-disabled install still requires a token:\n%s", readme)
 	}
+	for _, want := range []string{"AI is disabled in the initial scaffold", "ai.enabled=true", "ai.existingSecret"} {
+		if !strings.Contains(readme, want) {
+			t.Fatalf("AI-disabled guidance missing %q:\n%s", want, readme)
+		}
+	}
 }
 
 func TestRenderProjectYAML_QuotesUntrustedDiscoveryValues(t *testing.T) {
@@ -558,7 +563,7 @@ func TestRenderProjectYAML_QuotesUntrustedDiscoveryValues(t *testing.T) {
 	}
 }
 
-func TestChecklist_UsesSelectedAPIAndOmitsDisabledAI(t *testing.T) {
+func TestChecklist_UsesSelectedAPIAndExplainsDeferredAI(t *testing.T) {
 	responses, err := render(checklistTmpl, checklistData{
 		Name: "Project", DashboardOwner: "example", DashboardName: "dashboard",
 		EngineRef: "main", AIEnabled: true, AIAPI: project.AIAPIResponses,
@@ -572,14 +577,21 @@ func TestChecklist_UsesSelectedAPIAndOmitsDisabledAI(t *testing.T) {
 
 	disabled, err := render(checklistTmpl, checklistData{
 		Name: "Project", DashboardOwner: "example", DashboardName: "dashboard",
-		EngineRef: "main", AIEnabled: false, AIAPI: project.AIAPIChatCompletions,
+		EngineRef: "main", AIEnabled: false, AIAPI: project.AIAPIResponses,
 	})
 	if err != nil {
 		t.Fatalf("render disabled checklist: %v", err)
 	}
-	for _, unexpected := range []string{"gh variable set AI_API", "gh variable set AI_ENDPOINT", "gh variable set AI_MODEL", "gh secret set AI_TOKEN"} {
-		if strings.Contains(disabled, unexpected) {
-			t.Fatalf("AI-disabled checklist contains %q:\n%s", unexpected, disabled)
+	for _, want := range []string{
+		"AI is disabled in the initial workflow",
+		"remove `ai: false`",
+		"gh variable set AI_API --body responses",
+		"gh variable set AI_ENDPOINT",
+		"gh variable set AI_MODEL",
+		"gh secret set AI_TOKEN",
+	} {
+		if !strings.Contains(disabled, want) {
+			t.Fatalf("AI-disabled checklist missing %q:\n%s", want, disabled)
 		}
 	}
 

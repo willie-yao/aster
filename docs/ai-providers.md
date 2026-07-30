@@ -24,6 +24,13 @@ Both `endpoint` and `model` are required when AI is enabled; provide them here
 or via the `AI_ENDPOINT` / `AI_MODEL` env vars (see below). For GitHub Copilot,
 the endpoint is `https://api.githubcopilot.com/chat/completions`.
 
+The guided `fetcher onboard` wizard includes coordinate presets for GitHub
+Copilot, OpenAI Responses, OpenAI Chat Completions, and the public NVIDIA API.
+It also provides guided self-hosted, Azure, custom, and configure-later paths.
+Preset endpoints remain editable. Models are never preset because availability
+varies by account and deployment. Selecting a preset does not test credentials,
+subscription access, network reachability, or function-calling support.
+
 Set the bearer token via the `AI_TOKEN` secret in the GitHub Actions workflow
 (see the [reusable workflow README](../README.md)). The token is sent as
 `Authorization: Bearer <AI_TOKEN>` unless an entry in `headers:` overrides it.

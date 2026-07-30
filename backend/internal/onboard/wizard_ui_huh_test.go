@@ -106,6 +106,34 @@ func TestAccessibleWizardUI_SelectUsesStableValue(t *testing.T) {
 	}
 }
 
+func TestAccessibleWizardUI_SelectValidationRejectsSentinel(t *testing.T) {
+	out := &bytes.Buffer{}
+	ui := newAccessibleWizardUI(Terminal{In: strings.NewReader("\n2\n"), Out: out, Err: out})
+	value, err := ui.Select(context.Background(), selectPrompt{
+		Title: "Provider",
+		Options: []selectOption{
+			{Value: "choose", Label: "Choose a provider"},
+			{Value: "provider", Label: "Provider"},
+		},
+		Value: "choose",
+		Validate: func(value string) error {
+			if value == "choose" {
+				return errors.New("choose a provider")
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if value != "provider" {
+		t.Fatalf("value = %q", value)
+	}
+	if !strings.Contains(out.String(), "choose a provider") {
+		t.Fatalf("validation output missing: %q", out.String())
+	}
+}
+
 func TestAccessibleWizardUI_ConfirmPreservesDefaultNo(t *testing.T) {
 	out := &bytes.Buffer{}
 	ui := newAccessibleWizardUI(Terminal{In: strings.NewReader("\n"), Out: out, Err: out})

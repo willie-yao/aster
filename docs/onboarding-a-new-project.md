@@ -157,9 +157,39 @@ The wizard separates two decisions:
 2. Whether to use a provider now to draft `prompts/system.md` from bounded
    source-repository documentation.
 
-The same endpoint and model may be used for both, but the wizard asks before
-sending documentation to the provider. Always review an AI-generated prompt
-before deployment.
+For the deployed dashboard, choose one of these paths:
+
+- GitHub Copilot.
+- OpenAI Responses.
+- OpenAI Chat Completions.
+- NVIDIA API.
+- A self-hosted OpenAI-compatible endpoint such as Ollama, vLLM, NIM, or Ray Serve.
+- Azure OpenAI or an Azure gateway.
+- Another custom Chat Completions or Responses endpoint.
+- Configure later.
+
+Public-provider presets fill the API mode and endpoint as editable values. The
+wizard always requires you to enter a model that your account or deployment
+actually exposes. It never guesses a model or requests a token.
+
+`Configure later` produces a valid initial scaffold with AI disabled. The
+generated `CHECKLIST.md` or `deploy/README.md` explains how to enable it later.
+It does not leave an enabled deployment with missing provider coordinates.
+
+In Pages mode, obvious HTTP, localhost, loopback, private-IP, and cluster-local
+endpoints produce a warning that defaults to no. Rejecting the warning returns
+to provider selection. This check does not make a network request and cannot
+prove that other endpoints are reachable. Kubernetes mode accepts cluster-local
+HTTP endpoints without that Pages warning.
+
+Azure deployments commonly require an `api-key` header. The stock Pages
+workflow sends `AI_TOKEN` as a bearer token, so use a trusted gateway or
+separately managed private configuration when direct Azure authentication needs
+that header.
+
+The same endpoint and model may be used for both deployed analysis and prompt
+drafting, but the wizard asks before sending documentation to the provider.
+Always review an AI-generated prompt before deployment.
 
 Supported environment variables remain:
 

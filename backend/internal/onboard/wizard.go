@@ -169,53 +169,8 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 		opts.ShortName = clearableValue(opts.ShortName)
 	}
 
-	if opts.AIEnabled == nil {
-		enabled, confirmErr := prompt.Confirm(ctx, confirmPrompt{
-			Title:       "Enable AI failure analysis in the deployed dashboard?",
-			Description: "Provider coordinates and a model are required when enabled.",
-			Value:       true,
-		})
-		if confirmErr != nil {
-			return nil, opts, confirmErr
-		}
-		opts.AIEnabled = &enabled
-	}
-	if effectiveAIEnabled(opts) {
-		apiDefault := deploymentAIAPI(opts)
-		if apiDefault != project.AIAPIResponses {
-			apiDefault = project.AIAPIChatCompletions
-		}
-		opts.DeploymentAIAPI, err = prompt.Select(ctx, selectPrompt{
-			Title:       "Deployed AI API",
-			Description: "Choose the request contract supported by the deployed provider.",
-			Options: []selectOption{
-				{Value: project.AIAPIChatCompletions, Label: "Chat Completions"},
-				{Value: project.AIAPIResponses, Label: "Responses"},
-			},
-			Value: apiDefault,
-		})
-		if err != nil {
-			return nil, opts, err
-		}
-		opts.DeploymentAIEndpoint, err = prompt.Input(ctx, inputPrompt{
-			Title:       "Deployed AI endpoint",
-			Description: "Absolute HTTP or HTTPS endpoint reachable from the deployment.",
-			Value:       deploymentAIEndpoint(opts),
-			Required:    true,
-			Validate:    validateAIEndpoint,
-		})
-		if err != nil {
-			return nil, opts, err
-		}
-		opts.DeploymentAIModel, err = prompt.Input(ctx, inputPrompt{
-			Title:       "Deployed AI model",
-			Description: "Exact model identifier accepted by the endpoint.",
-			Value:       deploymentAIModel(opts),
-			Required:    true,
-		})
-		if err != nil {
-			return nil, opts, err
-		}
+	if err := wizardDeploymentAI(ctx, prompt, &opts, deps.terminal.Out); err != nil {
+		return nil, opts, err
 	}
 
 	if opts.NoPrompt || opts.AIToken == "" {

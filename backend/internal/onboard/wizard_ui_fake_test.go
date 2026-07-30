@@ -72,14 +72,26 @@ func (u *lineWizardUI) Select(_ context.Context, prompt selectPrompt) (string, e
 		if isLineCancel(line) || errors.Is(readErr, io.EOF) && line == "" {
 			return "", ErrCancelled
 		}
+		selectedValue := ""
 		if line == "" {
-			return prompt.Options[defaultIndex].Value, nil
+			selectedValue = prompt.Options[defaultIndex].Value
+		} else {
+			selected, convErr := strconv.Atoi(line)
+			if convErr == nil && selected >= 1 && selected <= len(prompt.Options) {
+				selectedValue = prompt.Options[selected-1].Value
+			}
 		}
-		selected, convErr := strconv.Atoi(line)
-		if convErr == nil && selected >= 1 && selected <= len(prompt.Options) {
-			return prompt.Options[selected-1].Value, nil
+		if selectedValue == "" {
+			fmt.Fprintf(u.out, "Enter a number from 1 to %d, or q to cancel.\n", len(prompt.Options))
+			continue
 		}
-		fmt.Fprintf(u.out, "Enter a number from 1 to %d, or q to cancel.\n", len(prompt.Options))
+		if prompt.Validate != nil {
+			if err := prompt.Validate(selectedValue); err != nil {
+				fmt.Fprintln(u.out, err)
+				continue
+			}
+		}
+		return selectedValue, nil
 	}
 }
 

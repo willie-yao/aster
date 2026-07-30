@@ -184,6 +184,42 @@ func TestWizard_DefaultsAccepted(t *testing.T) {
 	}
 }
 
+func TestWizard_ConfigureLaterProducesDisabledScaffold(t *testing.T) {
+	input := strings.Join([]string{
+		"",  // strongest dashboard
+		"",  // deployment
+		"",  // dashboard repo
+		"",  // id
+		"",  // name
+		"",  // short name
+		"",  // enable AI
+		"9", // configure later
+		"",  // output
+		"y", // confirm
+	}, "\n") + "\n"
+	deps, out, writer, _ := wizardDependencies(input)
+	opts := Options{SourceRepo: "example/project", EngineRef: "main", NoPrompt: true}
+	if err := run(context.Background(), opts, deps); err != nil {
+		t.Fatalf("run: %v\n%s", err, out.String())
+	}
+	if writer.writes != 1 {
+		t.Fatalf("writes = %d", writer.writes)
+	}
+	workflow := writer.files[".github/workflows/deploy.yml"]
+	if !strings.Contains(workflow, "ai: false") {
+		t.Fatalf("configure later did not disable AI:\n%s", workflow)
+	}
+	if !strings.Contains(writer.files["CHECKLIST.md"], "AI is disabled in the initial workflow") {
+		t.Fatalf("configure-later checklist guidance missing:\n%s", writer.files["CHECKLIST.md"])
+	}
+	if !strings.Contains(out.String(), "AI analysis:          disabled in initial scaffold") {
+		t.Fatalf("review did not show initial AI state:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "Deployed AI endpoint") || strings.Contains(out.String(), "Deployed AI model") {
+		t.Fatalf("configure later requested provider coordinates:\n%s", out.String())
+	}
+}
+
 func TestWizard_InferredValuesCanBeChanged(t *testing.T) {
 	input := strings.Join([]string{
 		"",                    // strongest dashboard
@@ -446,8 +482,9 @@ func TestWizard_AdditionalCancellationStages(t *testing.T) {
 	})
 
 	stages := map[string][]string{
-		"AI API":      {"", "", "", "", "", "", "", "q"},
-		"AI endpoint": {"", "", "", "", "", "", "", "", "q"},
+		"AI provider":   {"", "", "", "", "", "", "", "q"},
+		"AI custom API": {"", "", "", "", "", "", "", "8", "q"},
+		"AI endpoint":   {"", "", "", "", "", "", "", "8", "", "q"},
 	}
 	for name, answers := range stages {
 		t.Run(name, func(t *testing.T) {
@@ -463,7 +500,18 @@ func TestWizard_AdditionalCancellationStages(t *testing.T) {
 	}
 
 	t.Run("AI model", func(t *testing.T) {
-		answers := []string{"", "", "", "", "", "", "", "", "https://provider.example/v1/chat/completions", "q"}
+		answers := []string{"", "", "", "", "", "", "", "8", "", "https://provider.example/v1/chat/completions", "q"}
+		deps, _, writer, _ := wizardDependencies(strings.Join(answers, "\n") + "\n")
+		if err := run(context.Background(), Options{SourceRepo: "example/project", EngineRef: "main", NoPrompt: true}, deps); err != nil {
+			t.Fatalf("run: %v", err)
+		}
+		if writer.writes != 0 {
+			t.Fatalf("writes=%d", writer.writes)
+		}
+	})
+
+	t.Run("Pages endpoint warning", func(t *testing.T) {
+		answers := []string{"", "", "", "", "", "", "", "8", "", "http://localhost:8000/v1/chat/completions", "model", "q"}
 		deps, _, writer, _ := wizardDependencies(strings.Join(answers, "\n") + "\n")
 		if err := run(context.Background(), Options{SourceRepo: "example/project", EngineRef: "main", NoPrompt: true}, deps); err != nil {
 			t.Fatalf("run: %v", err)
