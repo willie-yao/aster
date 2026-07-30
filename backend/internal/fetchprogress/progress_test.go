@@ -616,3 +616,23 @@ func TestTrackerBuildAnalysisCountersRemainAggregateOnly(t *testing.T) {
 		t.Fatalf("overall analysis counters = %+v", status.Analyses)
 	}
 }
+
+func TestTrackerTerminalFailureCancelsBuildAnalysisCounters(t *testing.T) {
+	tracker := newTracker(t.TempDir(), "sha-test", trackerOptions{
+		write:        func(string, Status) error { return nil },
+		writeHistory: func(string, History) error { return nil },
+		logf:         func(string, ...any) {},
+	})
+	tracker.StartPass(PassInitialWatch)
+	tracker.PlanAnalyses(2, 1)
+	tracker.StartAnalysis(true)
+	tracker.FinishFailure(FailureAnalysis)
+
+	status := tracker.Snapshot()
+	if status.Analyses.BuildSubjects != (BuildAnalysisProgress{LogicalTotal: 1, Cancelled: 1}) {
+		t.Fatalf("build analysis counters = %+v", status.Analyses.BuildSubjects)
+	}
+	if status.Analyses.Queued != 0 || status.Analyses.Running != 0 || status.Analyses.Cancelled != 2 {
+		t.Fatalf("overall analysis counters = %+v", status.Analyses)
+	}
+}

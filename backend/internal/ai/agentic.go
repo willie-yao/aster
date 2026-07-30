@@ -319,9 +319,9 @@ type agenticCacheData struct {
 	// of serving the prior model's verdict.
 	ModelHash string `json:"model_hash,omitempty"`
 
-	// PromptHash is the fingerprint of the composed system prompt under
+	// PromptHash is the fingerprint of the effective prompt contract under
 	// which this entry was produced. The cache-read gate invalidates the
-	// entry when it differs from the current prompt.
+	// entry when it differs from the current contract.
 	PromptHash string `json:"prompt_hash,omitempty"`
 }
 

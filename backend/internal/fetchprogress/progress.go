@@ -846,6 +846,9 @@ func (t *Tracker) finishTerminal(phase Phase, outcome Outcome, category FailureC
 	t.status.Analyses.Cancelled += t.status.Analyses.Queued + t.status.Analyses.Running
 	t.status.Analyses.Queued = 0
 	t.status.Analyses.Running = 0
+	t.status.Analyses.BuildSubjects.Cancelled += t.status.Analyses.BuildSubjects.Queued + t.status.Analyses.BuildSubjects.Running
+	t.status.Analyses.BuildSubjects.Queued = 0
+	t.status.Analyses.BuildSubjects.Running = 0
 	if t.status.PatternPhase == StageRunning {
 		t.status.PatternPhase = terminalStage(outcome)
 	}
