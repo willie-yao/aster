@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"path"
@@ -748,6 +749,10 @@ func (s *Service) confirmEntryUnlocked(ctx context.Context, entry *previewEntry,
 			mgr.Forget(entry.spec.Key)
 		}
 		if err := mgr.SaveState(); err != nil {
+			if strings.HasPrefix(entry.failureID, "build::") {
+				log.Printf("Warning: build issue state cleanup failed after creating %s: %v", url, err)
+				return url, nil
+			}
 			return url, fmt.Errorf("saving issue state: %w", err)
 		}
 		return url, nil
@@ -771,6 +776,10 @@ func (s *Service) confirmEntryUnlocked(ctx context.Context, entry *previewEntry,
 			mgr.Forget(entry.fix.Snapshot().Key)
 		}
 		if err := mgr.SaveState(); err != nil {
+			if strings.HasPrefix(entry.failureID, "build::") {
+				log.Printf("Warning: build fix state cleanup failed after opening %s: %v", url, err)
+				return url, nil
+			}
 			return url, fmt.Errorf("saving fix-PR state: %w", err)
 		}
 		return url, nil

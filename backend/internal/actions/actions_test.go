@@ -935,6 +935,7 @@ type fakeIssuePreviewManager struct {
 	saved   bool
 	url     string
 	findURL string
+	saveErr error
 }
 
 func (f *fakeIssuePreviewManager) Reconcile(_ context.Context, specs []issues.IssueSpec) (issues.Stats, error) {
@@ -946,7 +947,7 @@ func (f *fakeIssuePreviewManager) FindAny(context.Context, string) (string, bool
 	return f.findURL, f.findURL != "", nil
 }
 func (f *fakeIssuePreviewManager) Forget(key string) { f.forgot = append(f.forgot, key) }
-func (f *fakeIssuePreviewManager) SaveState() error  { f.saved = true; return nil }
+func (f *fakeIssuePreviewManager) SaveState() error  { f.saved = true; return f.saveErr }
 
 func TestBuildIssuePreviewToConfirmWritesReviewedDraft(t *testing.T) {
 	dataDir := t.TempDir()
@@ -991,5 +992,23 @@ func TestBuildIssueConfirmationAdoptsClosedMarkerMatch(t *testing.T) {
 	}
 	if url != manager.findURL || len(manager.specs) != 0 {
 		t.Fatalf("closed issue adoption url=%q specs=%d", url, len(manager.specs))
+	}
+}
+
+func TestBuildIssueCleanupFailureStillCommitsConfirmation(t *testing.T) {
+	dataDir := t.TempDir()
+	detail := analyzedBuildDetail(false)
+	writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
+	cfg := &project.Config{Issues: &project.Issues{Repo: &project.SourceRepo{Owner: "o", Name: "r"}}}
+	service := NewService(cfg, dataDir, AIConfig{})
+	manager := &fakeIssuePreviewManager{url: "https://github.com/o/r/issues/8", saveErr: errors.New("cleanup failed")}
+	service.issueManagerFactory = func(string, string, string) issuePreviewManager { return manager }
+	preview, err := service.PreviewIssue(t.Context(), BuildFailureID(detail.JobID, "123"), "owner-token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	url, err := service.Confirm(t.Context(), preview.Token, "owner-token")
+	if err != nil || url != manager.url {
+		t.Fatalf("confirmation url=%q err=%v", url, err)
 	}
 }
