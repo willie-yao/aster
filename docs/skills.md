@@ -63,8 +63,8 @@ A skill is the right tool when **all** of the following are true:
   short of that procedure even with the engine's prompt-side rules.
 
 If the model already does the right thing on this failure pattern,
-do not author a skill: extra triggers just inflate the recipe set
-hash and invalidate cache for no benefit.
+do not author a skill: extra triggers add maintenance cost and change the
+provenance hash for no benefit.
 
 ## Schema
 
@@ -172,20 +172,16 @@ No separate profile field is needed. This keeps the diagnostic contract aligned
 with the tools the model can actually call. Consumer recipes still load in both
 cases.
 
-## Cache invalidation
+## Cache provenance
 
 Each cache entry is stamped with the SHA-256 fingerprint of the complete merged
 set in `skill_set_hash`.
 
 The hash changes when any selected built-in or consumer recipe changes, or when
-the selected profile set changes. The result is:
-
-- Existing entries with the prior hash are re-analyzed.
-- Consumer-only whitespace and YAML comment changes do not change the hash.
-
-Changing an engine recipe therefore invalidates consumers that select that
-profile. Switching from `[filesystem]` to `[filesystem, k8s]` also invalidates
-prior results because the model-visible evidence contract changed.
+the selected profile set changes. It records which recipe contract produced an
+analysis. Existing reusable entries keep their original hash and remain cached.
+New analyses use the updated hash. Consumer-only whitespace and YAML comment
+changes do not change the hash.
 
 ## Writing good triggers
 
@@ -241,12 +237,11 @@ repair. Any positive value makes the bounded repair eligible, subject to context
 
 ## Schema versioning
 
-Skills don't have their own schema version. Changes to a recipe
-change the SkillSetHash, which invalidates affected cache entries.
-Engine-side contract changes (e.g. adding a new check inside the critique gate,
-or changing deterministic evidence repair) bump `currentCritiqueVersion`
-instead, which also invalidates all entries on the next run without changing the
-cache-key shape.
+Skills don't have their own schema version. Changes to a recipe change
+`skill_set_hash` provenance for new analyses without invalidating existing
+entries. Engine-side contract changes that make older results unacceptable, such
+as a stronger deterministic critique check, bump `currentCritiqueVersion`.
+Entries below that version are rejected without changing the cache-key shape.
 
 ## Authoring checklist
 

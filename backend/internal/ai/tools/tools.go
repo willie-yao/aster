@@ -183,7 +183,7 @@ func (r *Registry) Enable(entries []string) ([]string, error) {
 
 // Schemas returns the OpenAI tool definitions for the given enabled names,
 // sorted by name for determinism so equivalent configs produce equivalent
-// system prompts and cache keys.
+// system prompts and prompt fingerprints.
 func (r *Registry) Schemas(enabled []string) []Schema {
 	out := make([]Schema, 0, len(enabled))
 	for _, n := range enabled {

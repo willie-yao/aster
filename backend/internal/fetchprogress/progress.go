@@ -23,7 +23,7 @@ import (
 
 const (
 	// SchemaVersion is the current private fetch status schema.
-	SchemaVersion = 6
+	SchemaVersion = 7
 	// StatusDirectory is hidden from the public /data file server.
 	StatusDirectory = ".fetch-status"
 	// StatusFilename is the current fetch status snapshot.
@@ -130,15 +130,16 @@ type BuildAnalysisProgress struct {
 
 // CacheRejectionProgress reports aggregate private-cache rejection reasons.
 type CacheRejectionProgress struct {
-	Missing              int `json:"missing"`
-	Expired              int `json:"expired"`
-	ToolFloor            int `json:"tool_floor"`
-	EvidenceFloor        int `json:"evidence_floor"`
-	Critique             int `json:"critique"`
-	Skill                int `json:"skill"`
-	Model                int `json:"model"`
-	Prompt               int `json:"prompt"`
-	TransientPersistence int `json:"transient_persistence"`
+	Missing       int `json:"missing"`
+	Expired       int `json:"expired"`
+	ToolFloor     int `json:"tool_floor"`
+	EvidenceFloor int `json:"evidence_floor"`
+	Critique      int `json:"critique"`
+	// Deprecated fields remain decodable for status schemas through version 6.
+	Skill                int `json:"skill,omitempty"`
+	Model                int `json:"model,omitempty"`
+	Prompt               int `json:"prompt,omitempty"`
+	TransientPersistence int `json:"transient_persistence,omitempty"`
 	Malformed            int `json:"malformed"`
 }
 
@@ -158,14 +159,6 @@ func (p *CacheRejectionProgress) Add(reason string) {
 		p.EvidenceFloor++
 	case "critique":
 		p.Critique++
-	case "skill":
-		p.Skill++
-	case "model":
-		p.Model++
-	case "prompt":
-		p.Prompt++
-	case "transient_persistence":
-		p.TransientPersistence++
 	case "malformed":
 		p.Malformed++
 	}
@@ -308,7 +301,7 @@ func Read(path string) (Status, error) {
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return Status{}, errors.New("fetch status has trailing data")
 	}
-	if status.SchemaVersion != 1 && status.SchemaVersion != 2 && status.SchemaVersion != 3 && status.SchemaVersion != 4 && status.SchemaVersion != 5 && status.SchemaVersion != SchemaVersion {
+	if status.SchemaVersion != 1 && status.SchemaVersion != 2 && status.SchemaVersion != 3 && status.SchemaVersion != 4 && status.SchemaVersion != 5 && status.SchemaVersion != 6 && status.SchemaVersion != SchemaVersion {
 		return Status{}, fmt.Errorf("unsupported fetch status schema %d", status.SchemaVersion)
 	}
 	if err := status.validate(); err != nil {
@@ -546,6 +539,10 @@ func (t *Tracker) recoverInterrupted() {
 	now := t.now()
 	priorPhase := previous.Phase
 	previous.SchemaVersion = SchemaVersion
+	previous.Analyses.CacheRejections.Skill = 0
+	previous.Analyses.CacheRejections.Model = 0
+	previous.Analyses.CacheRejections.Prompt = 0
+	previous.Analyses.CacheRejections.TransientPersistence = 0
 	if previous.PhaseDurationsMS == nil {
 		previous.PhaseDurationsMS = map[string]int64{}
 	}

@@ -77,6 +77,7 @@ func TestServiceAnalyzeFailureClonesCachedResult(t *testing.T) {
 		MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
 	}, &fakeFactory{}, registry, enabled)
 
+	generatedAt := time.Now().UTC().Format(time.RFC3339)
 	request := FailureAnalysisRequest{
 		JobID:       "job",
 		BuildPrefix: "logs/job/1/",
@@ -85,9 +86,9 @@ func TestServiceAnalyzeFailureClonesCachedResult(t *testing.T) {
 		},
 		TestCase: models.TestCase{
 			Name: "Test A", Status: "failed", FailureMessage: "failure",
-			AISummary: &models.AISummary{Summary: "cached"},
+			AISummary: &models.AISummary{GeneratedAt: generatedAt, Summary: "cached"},
 			AIAnalysis: &models.AIAnalysis{
-				RootCause: "cached", Mode: AgenticMode,
+				GeneratedAt: generatedAt, RootCause: "cached", Mode: AgenticMode,
 				PromptHash: PromptFingerprint("sys"), ModelHash: client.modelFingerprint(),
 				CritiquePassed: true, CritiqueVersion: currentCritiqueVersion,
 				RelevantFiles: []string{"a.go"}, FileLinks: map[string]string{"a.go": "https://example.invalid/a.go"},

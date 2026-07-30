@@ -174,7 +174,7 @@ func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, b
 		ctx = withAnalysisTrace(ctx, trace)
 	}
 	userPrompt := s.module.AnalysisPrompt(ctx, httpClient, run, tc, consecutiveFailures)
-	if tc.AISummary != nil && tc.AIAnalysis != nil && !s.shouldReanalyzeWithPrompt(tc, userPrompt) && !staleTransientVerdict(tc, consecutiveFailures) {
+	if tc.AISummary != nil && tc.AIAnalysis != nil && !s.shouldReanalyzeWithPrompt(tc, userPrompt) {
 		recordTrace(ctx, TraceEvent{Kind: "cache", Outcome: "build_hit"})
 		trace.Finish("build_cache_hit", nil)
 		return nil
@@ -299,22 +299,13 @@ func isUnavailableSummary(s *models.AISummary) bool {
 	return s != nil && !s.IsTransient && strings.HasPrefix(s.Summary, unavailablePrefix)
 }
 
-// staleTransientVerdict reports whether a cached transient verdict must be
-// re-analyzed because the failure has since become persistent. A transient
-// flake that recurs across transientPersistThreshold consecutive builds is
-// contradicted by the critique gate, so a cached transient answer produced when
-// the failure was not yet persistent must not keep being served.
-func staleTransientVerdict(tc *models.TestCase, consecutiveFailures int) bool {
-	return tc.AISummary != nil && tc.AISummary.IsTransient && consecutiveFailures >= transientPersistThreshold
-}
-
 // NeedsAnalysis reports whether the current analysis contract requires work.
 func (s *Service) NeedsAnalysis(ctx context.Context, httpClient *http.Client, run *models.BuildResult, tc *models.TestCase, consecutiveFailures int) bool {
 	if tc == nil || tc.AISummary == nil || tc.AIAnalysis == nil {
 		return true
 	}
 	userPrompt := s.module.AnalysisPrompt(ctx, httpClient, run, tc, consecutiveFailures)
-	return s.shouldReanalyzeWithPrompt(tc, userPrompt) || staleTransientVerdict(tc, consecutiveFailures)
+	return s.shouldReanalyzeWithPrompt(tc, userPrompt)
 }
 
 // FailureCachePolicy returns the current private-cache contract for one failure.
@@ -349,9 +340,8 @@ func (s *Service) analysisPromptHash(tc *models.TestCase, userPrompt string) str
 	return PromptFingerprint(s.systemPrompt)
 }
 
-// belowCurrentAgenticFloor returns true when the cached analysis fails any
-// current quality gate: tool-call floor, GCS-byte floor without complete
-// evidence-plan coverage, critique failure or stale version, or hash mismatch.
+// belowCurrentAgenticFloor returns true when the cached analysis fails a
+// current investigation floor or critique gate.
 func (s *Service) belowCurrentAgenticFloor(tc *models.TestCase, expectedPromptHash string) bool {
 	policy := s.agenticCachePolicyFor(tc, expectedPromptHash, 0)
 	return AgenticResultRejection(FailureAnalysisResult{Summary: tc.AISummary, Analysis: tc.AIAnalysis}, policy) != CacheAccepted

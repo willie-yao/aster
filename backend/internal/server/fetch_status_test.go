@@ -26,7 +26,7 @@ func serverFetchStatus(now time.Time) fetchprogress.Status {
 		Builds:  fetchprogress.BuildProgress{Cached: 241, Fetched: 29},
 		Analyses: fetchprogress.AnalysisProgress{
 			LogicalTotal: 61, CompatibleResultsReused: 4, NewWork: 20, StaleWork: 3, Queued: 35, Running: 2, Completed: 24, Retries: 3,
-			CacheRejections: fetchprogress.CacheRejectionProgress{Missing: 20, Prompt: 3},
+			CacheRejections: fetchprogress.CacheRejectionProgress{Missing: 20, Critique: 3},
 		},
 		Patterns: fetchprogress.PatternProgress{
 			Eligible: 2, Completed: 1, Failed: 1, Attempts: 3, Retries: 1,

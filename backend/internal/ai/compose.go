@@ -7,10 +7,8 @@ import (
 )
 
 // PromptFingerprint returns a stable short hex fingerprint of the composed
-// system prompt. It is stamped onto every analysis so cache reads can reject
-// entries produced by a different prompt. The fingerprint covers the engine
-// base, consumer addendum, and response-format footer, so prompt edits
-// re-analyze affected failures without a manual cache clear.
+// system prompt. It records the engine base, consumer addendum, and
+// response-format footer that produced an analysis.
 func PromptFingerprint(composedPrompt string) string {
 	sum := sha256.Sum256([]byte(composedPrompt))
 	return hex.EncodeToString(sum[:8])

@@ -124,23 +124,18 @@ this engine repo.
   if you see the model ignoring the user message.
 - **Iterate against real failures.** Trigger an AI analysis on a known
   failure, read the summary, and refine the prompt where the model got it
-  wrong. Prompt fingerprinting refreshes affected analyses on the next run.
-  Clear the cache only when you want an immediate full rebaseline.
+  wrong. The updated prompt applies to new analyses. Existing reusable entries
+  keep the prompt fingerprint that produced them.
 
 ## Iterating on the prompt
 
-Editing `prompts/system.md` takes effect automatically: each analysis records a
-fingerprint of the prompt it was produced under, and on the next run any failure
-whose prompt no longer matches is re-analyzed. You do **not** need to clear the
-cache, and you do not lose existing analyses while re-analysis catches up: an
-old analysis stays published until its replacement succeeds (if a re-analysis
-errors or times out, the prior result is kept).
+Editing `prompts/system.md` changes the prompt used for new analyses. Existing
+reusable entries remain cached and keep their original `prompt_hash` provenance.
+This avoids an automatic dashboard-wide re-analysis after a prompt edit.
 
-Re-analysis is incremental, so a large dashboard refreshes over one or more
-deploys rather than all at once. To force every analysis to refresh immediately
-(e.g. to re-baseline after a big prompt rewrite), run the **Clear AI Cache**
-workflow from the Actions tab; that wipes the cache so the next deploy
-re-analyzes everything from scratch.
+Until the follow-up cache generation control is available, use the existing
+**Clear AI Cache** workflow only when an intentional full rebaseline is worth
+discarding all warm entries:
 
 ```yaml
 # In your consumer repo, e.g. .github/workflows/clear-cache.yml

@@ -286,11 +286,13 @@ If after this investigation the evidence is genuinely inconclusive, say so expli
 // project's current floors.
 type agenticCacheData struct {
 	analysisResponse
-	ToolCalls           int  `json:"tool_calls,omitempty"`
-	ModelBytes          int  `json:"model_bytes,omitempty"`
-	GCSBytes            int  `json:"gcs_bytes,omitempty"`
-	EvidencePlanCovered bool `json:"evidence_plan_covered,omitempty"`
-	BudgetExhausted     bool `json:"budget_exhausted,omitempty"`
+	GeneratedAt         string `json:"generated_at,omitempty"`
+	Model               string `json:"model,omitempty"`
+	ToolCalls           int    `json:"tool_calls,omitempty"`
+	ModelBytes          int    `json:"model_bytes,omitempty"`
+	GCSBytes            int    `json:"gcs_bytes,omitempty"`
+	EvidencePlanCovered bool   `json:"evidence_plan_covered,omitempty"`
+	BudgetExhausted     bool   `json:"budget_exhausted,omitempty"`
 
 	// CritiquePassed marks entries that cleared the critique gate.
 	// Defaults to false on pre-critique entries and on entries written
@@ -308,20 +310,15 @@ type agenticCacheData struct {
 
 	// SkillSetHash is the fingerprint of the merged diagnostic skill
 	// set at the time this draft was accepted. Empty when skills were
-	// disabled or no recipes were loaded. Used independently of
-	// CritiqueVersion to invalidate cached entries when a selected engine
-	// profile or consumer recipe changes.
+	// disabled or no recipes were loaded.
 	SkillSetHash string `json:"skill_set_hash,omitempty"`
 
-	// ModelHash is the fingerprint of the model + endpoint that produced
-	// this draft. The cache-read gate invalidates the entry when it differs
-	// from the current model, so a provider or model swap re-analyzes instead
-	// of serving the prior model's verdict.
+	// ModelHash is the fingerprint of the model and endpoint that produced
+	// this draft.
 	ModelHash string `json:"model_hash,omitempty"`
 
 	// PromptHash is the fingerprint of the effective prompt contract under
-	// which this entry was produced. The cache-read gate invalidates the
-	// entry when it differs from the current contract.
+	// which this entry was produced.
 	PromptHash string `json:"prompt_hash,omitempty"`
 }
 
@@ -535,13 +532,13 @@ type AgenticInputs struct {
 	WebURLBase   string
 	Mode         string
 	// PromptHash overrides the system-only fingerprint when the per-failure
-	// module prompt is part of the cache contract.
+	// module prompt is part of the recorded provenance.
 	PromptHash string
 
 	// Skills is the merged diagnostic recipe set. nil disables skill
 	// matching entirely. Critique-disabled runs also skip recipes because recipes
-	// are consulted only inside the critique gate. Skills.Hash is stamped onto
-	// cached entries so profile and consumer-recipe changes invalidate cache.
+	// are consulted only inside the critique gate. Skills.Hash records the
+	// profile and consumer recipes that produced the analysis.
 	Skills *skills.Set
 
 	// ConsecutiveFailures is how many consecutive builds this test has failed,
@@ -1107,8 +1104,8 @@ agentLoop:
 	parsed = c.applyPostLoopCritique(loopCtx, state, messages, finalContent, finalProviderItems, parsed, in.Opts, critiqueRetries, finalDraftObserved, draftPhase)
 
 	state.notifyDraftSelection()
-	c.cacheAcceptedAnalysis(cacheKey, parsed, state, in.Opts, state.critiquePassed)
 	summary, analysis := c.buildOutputs(parsed)
+	c.cacheAcceptedAnalysis(cacheKey, parsed, analysis.GeneratedAt, state, in.Opts, state.critiquePassed)
 	stampAgenticTelemetry(analysis, state, in.Mode, false, start)
 	return summary, analysis, nil
 }
@@ -1740,7 +1737,7 @@ func matchSkillsForDraft(state *agentState, parsed analysisResponse) []skills.Sk
 // the agent met every per-project quality gate: floors and the always-on
 // critique. Below-floor or critique-failing finals are still published for this
 // run but are not cached, so the next run re-attempts them.
-func (c *Client) cacheAcceptedAnalysis(cacheKey string, parsed analysisResponse, state *agentState, opts AgenticOptions, critiquePassed bool) {
+func (c *Client) cacheAcceptedAnalysis(cacheKey string, parsed analysisResponse, generatedAt string, state *agentState, opts AgenticOptions, critiquePassed bool) {
 	if evalFloors(state, opts).anyUnmet() {
 		return
 	}
@@ -1757,6 +1754,8 @@ func (c *Client) cacheAcceptedAnalysis(cacheKey string, parsed analysisResponse,
 	}
 	_ = c.cache.Set(cacheKey, agenticCacheData{
 		analysisResponse:    parsed,
+		GeneratedAt:         generatedAt,
+		Model:               c.model,
 		ToolCalls:           state.calls,
 		ModelBytes:          state.modelBytes,
 		GCSBytes:            state.gcsBytes,

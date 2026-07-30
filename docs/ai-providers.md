@@ -209,16 +209,15 @@ Notes:
   `metadata.max_request_context_length` in `/v1/models`, which the fetcher
   reads (alongside top-level `context_window` / `max_model_len`).
 
-## Cache invalidation when switching providers
+## Cache provenance when switching providers
 
 Each cached analysis records a fingerprint of the model and endpoint that
-produced it. Changing either value automatically marks the entry stale and
-reanalyzes it on the next fetch. The prior result stays published until a
-replacement succeeds, so a slow or failing provider swap does not erase the
-last usable analysis.
+produced it. Changing either value affects new analyses only. Existing reusable
+entries remain cached with their original fingerprint.
 
-The engine always runs the agentic loop. Use `clear-cache.yml` only when you
-want an immediate full rebaseline rather than incremental refresh.
+The engine always runs the agentic loop. Until cache generation is available,
+use `clear-cache.yml` only when an intentional full rebaseline is worth deleting
+all warm entries.
 
 ## Function-calling support (required)
 

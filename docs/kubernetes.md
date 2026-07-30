@@ -325,17 +325,20 @@ The private `.fetch-status/status.json` mapping and aggregate
 changing the Task, its canonical request hash, or its name.
 
 Before creating analyzer resources, the worker applies private cache entries
-that pass the current age, quality-floor, critique, skill, model, prompt, and
-transient-persistence checks. `logical_total` still counts every subject, while
-`queued`, `new_work`, and `stale_work` describe only the remaining Task workload.
+that pass the current key, age, investigation-floor, critique, and
+malformed-state checks. Model, endpoint, prompt, skill, and transient-streak
+changes do not make an otherwise reusable entry stale. `logical_total` still
+counts every subject, while `queued`, `new_work`, and `stale_work` describe only
+the remaining Task workload.
 An image-only analyzer update keeps the cache key stable but still changes the
 content-addressed Task identity when new execution is required.
 
 If private cache is missing, the worker checks up to five newest succeeded
 managed Tasks for the same work item in the release-scoped analysis namespace.
 It accepts only results with the current bundle digest, state-key fingerprint,
-analyzer contract, durable result reference, authenticated encrypted state, and
-current quality floors. Compatible result reuse increments
+analyzer contract, durable result reference, authenticated encrypted state,
+exact agreement between the encrypted cache entry and published result, and the
+current investigation and critique gates. Compatible result reuse increments
 `compatible_results_reused`; it does not increment `existing_tasks_adopted` or
 `task_attempts`. Succeeded Tasks are retained for seven days, with at most five
 newest reusable Tasks per work item.

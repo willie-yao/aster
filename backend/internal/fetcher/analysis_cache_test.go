@@ -93,21 +93,26 @@ func TestAnalyzeFailuresContainerPrivateCacheHitSkipsTask(t *testing.T) {
 	}
 }
 
-func TestPlanContainerAnalysisWorkClassifiesRejections(t *testing.T) {
+func TestPlanContainerAnalysisWorkUsesStickyCachePolicy(t *testing.T) {
 	projectConfig := &project.Config{AI: &project.AI{Agentic: project.Agentic{MinToolCalls: 2}}}
 	analysisProject := testCacheAnalysisProject(projectConfig)
 	request := testCacheRequest()
+	baseData := privateCacheData(t, analysisProject, request, false, "")
 	cases := []struct {
-		name        string
-		data        json.RawMessage
-		consecutive int
-		wantNew     int
-		wantStale   int
-		wantReason  func(fetchprogress.CacheRejectionProgress) int
+		name         string
+		data         json.RawMessage
+		consecutive  int
+		wantQueued   int
+		wantNew      int
+		wantAccepted int
+		wantMissing  int
 	}{
-		{name: "missing", wantNew: 1, wantReason: func(r fetchprogress.CacheRejectionProgress) int { return r.Missing }},
-		{name: "prompt", data: privateCacheData(t, analysisProject, request, false, "old-prompt"), wantStale: 1, wantReason: func(r fetchprogress.CacheRejectionProgress) int { return r.Prompt }},
-		{name: "transient persistence", data: privateCacheData(t, analysisProject, request, true, ""), consecutive: 3, wantStale: 1, wantReason: func(r fetchprogress.CacheRejectionProgress) int { return r.TransientPersistence }},
+		{name: "missing", wantQueued: 1, wantNew: 1, wantMissing: 1},
+		{name: "prompt changed", data: privateCacheData(t, analysisProject, request, false, "old-prompt"), wantAccepted: 1},
+		{name: "model endpoint and skill changed", data: mutatePrivateCacheData(t, baseData, map[string]any{
+			"skill_set_hash": "old-skills", "model_hash": "old-model",
+		}), wantAccepted: 1},
+		{name: "transient verdict became persistent", data: privateCacheData(t, analysisProject, request, true, ""), consecutive: 3, wantAccepted: 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -133,10 +138,16 @@ func TestPlanContainerAnalysisWorkClassifiesRejections(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(queued) != 1 || plan.LogicalTotal != 1 || plan.Queued != 1 || plan.NewWork != tc.wantNew || plan.StaleWork != tc.wantStale || tc.wantReason(plan.CacheRejections) != 1 {
+			if len(queued) != tc.wantQueued || plan.LogicalTotal != 1 || plan.Queued != tc.wantQueued || plan.NewWork != tc.wantNew ||
+				plan.AcceptedCacheHits != tc.wantAccepted || plan.CacheRejections.Missing != tc.wantMissing {
 				t.Fatalf("plan = %+v", plan)
 			}
-			if details[0].Runs[0].TestCases[0].AIAnalysis != nil {
+			got := details[0].Runs[0].TestCases[0]
+			if tc.wantAccepted == 1 {
+				if got.AIAnalysis == nil || !got.AIAnalysis.CacheHit || got.AISummary == nil {
+					t.Fatalf("accepted cache result was not applied: %+v", got)
+				}
+			} else if got.AIAnalysis != nil {
 				t.Fatal("rejected cache result was applied")
 			}
 		})
@@ -187,6 +198,22 @@ func privateCacheData(t *testing.T, analysisProject *analysisruntime.Project, re
 		t.Fatal(err)
 	}
 	return raw
+}
+
+func mutatePrivateCacheData(t *testing.T, raw json.RawMessage, values map[string]any) json.RawMessage {
+	t.Helper()
+	var data map[string]any
+	if err := json.Unmarshal(raw, &data); err != nil {
+		t.Fatal(err)
+	}
+	for key, value := range values {
+		data[key] = value
+	}
+	updated, err := json.Marshal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return updated
 }
 
 func writePrivateAnalysisCache(t *testing.T, dir string, request ai.FailureAnalysisRequest, data json.RawMessage, createdAt time.Time) {

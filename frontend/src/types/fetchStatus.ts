@@ -48,10 +48,6 @@ export interface FetchProgressStatus {
       tool_floor: number;
       evidence_floor: number;
       critique: number;
-      skill: number;
-      model: number;
-      prompt: number;
-      transient_persistence: number;
       malformed: number;
     };
     queued: number;

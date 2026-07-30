@@ -36,6 +36,18 @@ func newFailedTC(name, msg string) *models.TestCase {
 	return &models.TestCase{Name: name, FailureMessage: msg, Status: "failed"}
 }
 
+func reusablePublishedTestCase(analysis *models.AIAnalysis) *models.TestCase {
+	generatedAt := analysis.GeneratedAt
+	if generatedAt == "" {
+		generatedAt = time.Now().UTC().Format(time.RFC3339)
+		analysis.GeneratedAt = generatedAt
+	}
+	return &models.TestCase{
+		AISummary:  &models.AISummary{GeneratedAt: generatedAt, Summary: "cached summary"},
+		AIAnalysis: analysis,
+	}
+}
+
 func TestService_Agentic_TagsModeAgentic(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
@@ -96,8 +108,8 @@ func TestService_SkipWhenAlreadyAnalyzedSameMode(t *testing.T) {
 	s.SetTraceStore(traces)
 
 	tc := newFailedTC("Test A", "msg")
-	tc.AISummary = &models.AISummary{Summary: "cached"}
-	tc.AIAnalysis = &models.AIAnalysis{RootCause: "cached", Mode: AgenticMode, PromptHash: PromptFingerprint("sys"), ModelHash: client.modelFingerprint(), CritiquePassed: true, CritiqueVersion: currentCritiqueVersion}
+	tc.AISummary = &models.AISummary{GeneratedAt: time.Now().UTC().Format(time.RFC3339), Summary: "cached"}
+	tc.AIAnalysis = &models.AIAnalysis{GeneratedAt: tc.AISummary.GeneratedAt, RootCause: "cached", Mode: AgenticMode, PromptHash: PromptFingerprint("sys"), ModelHash: client.modelFingerprint(), CritiquePassed: true, CritiqueVersion: currentCritiqueVersion}
 
 	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
 
@@ -113,35 +125,9 @@ func TestService_SkipWhenAlreadyAnalyzedSameMode(t *testing.T) {
 	}
 }
 
-// TestStaleTransientVerdict verifies the predicate guarding a cached transient
-// verdict: it is stale only once the failure recurs at or above the threshold.
-func TestStaleTransientVerdict(t *testing.T) {
-	transient := &models.TestCase{AISummary: &models.AISummary{IsTransient: true}}
-	real := &models.TestCase{AISummary: &models.AISummary{IsTransient: false}}
-
-	if staleTransientVerdict(transient, transientPersistThreshold-1) {
-		t.Error("transient below threshold should not be stale")
-	}
-	if !staleTransientVerdict(transient, transientPersistThreshold) {
-		t.Error("transient at threshold should be stale")
-	}
-	if staleTransientVerdict(real, transientPersistThreshold+5) {
-		t.Error("non-transient verdict is never stale by this rule")
-	}
-	if staleTransientVerdict(&models.TestCase{}, transientPersistThreshold) {
-		t.Error("nil summary should not be stale")
-	}
-}
-
-// TestService_ReanalyzesStaleTransientOnPersistence verifies a cached transient
-// verdict is re-analyzed once the same test becomes persistent, closing the gap
-// where a transient answer from consec=1 would otherwise serve forever.
-func TestService_ReanalyzesStaleTransientOnPersistence(t *testing.T) {
+func TestService_ReusesTransientVerdictAfterPersistence(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	final := `{"summary":"real bug","is_transient":false,"root_cause":"r","severity":"High","suggested_fix":"f","relevant_files":[]}`
-	srv.push(200, chatRespFinal(final))
-
 	client := newAgenticTestClient(t, srv.URL)
 	registry, enabled := newServiceTestRegistry(t)
 	consec := map[string]int{"j::Test A": transientPersistThreshold}
@@ -149,16 +135,25 @@ func TestService_ReanalyzesStaleTransientOnPersistence(t *testing.T) {
 	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}, &fakeFactory{}, registry, enabled)
 
 	tc := newFailedTC("Test A", "msg")
-	tc.AISummary = &models.AISummary{Summary: "flaky", IsTransient: true}
-	tc.AIAnalysis = &models.AIAnalysis{RootCause: "flake", Mode: AgenticMode, PromptHash: PromptFingerprint("sys"), CritiquePassed: true, CritiqueVersion: currentCritiqueVersion}
+	tc.AISummary = &models.AISummary{GeneratedAt: time.Now().UTC().Format(time.RFC3339), Summary: "flaky", IsTransient: true}
+	tc.AIAnalysis = &models.AIAnalysis{
+		GeneratedAt: tc.AISummary.GeneratedAt, RootCause: "flake", Mode: AgenticMode, SkillSetHash: "old-skills", ModelHash: "old-model",
+		PromptHash: "old-prompt", CritiquePassed: true, CritiqueVersion: currentCritiqueVersion,
+	}
 
+	if s.NeedsAnalysis(t.Context(), &http.Client{}, newRun("j", "1"), tc, transientPersistThreshold) {
+		t.Fatal("persistent streak made the cached transient verdict stale")
+	}
 	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
 
-	if got := atomic.LoadInt32(&srv.calls); got == 0 {
-		t.Error("expected re-analysis (server call) for a persistent failure with a cached transient verdict")
+	if got := atomic.LoadInt32(&srv.calls); got != 0 {
+		t.Fatalf("server calls = %d, want 0", got)
 	}
-	if tc.AISummary.IsTransient {
-		t.Errorf("expected the transient verdict to be replaced, got IsTransient=true (summary %q)", tc.AISummary.Summary)
+	if !tc.AISummary.IsTransient || tc.AISummary.Summary != "flaky" || tc.AIAnalysis.RootCause != "flake" {
+		t.Fatalf("cached transient result changed: summary=%+v analysis=%+v", tc.AISummary, tc.AIAnalysis)
+	}
+	if tc.AIAnalysis.SkillSetHash != "old-skills" || tc.AIAnalysis.ModelHash != "old-model" || tc.AIAnalysis.PromptHash != "old-prompt" {
+		t.Fatalf("cached provenance changed: %+v", tc.AIAnalysis)
 	}
 }
 
@@ -179,54 +174,84 @@ func TestService_CacheKeyShape(t *testing.T) {
 	}
 }
 
-// TestService_ShouldReanalyze_PromptHash verifies prompt changes invalidate
-// cached analysis while matching prompts are reused.
-func TestService_ShouldReanalyze_PromptHash(t *testing.T) {
-	s := &Service{systemPrompt: "engine base + my prompt"}
-	// Meets the (zero) floors and is agentic mode, so only the prompt gate
-	// can force re-analysis here.
-	mk := func(promptHash string) *models.TestCase {
-		return &models.TestCase{AIAnalysis: &models.AIAnalysis{Mode: AgenticMode, PromptHash: promptHash, CritiquePassed: true, CritiqueVersion: currentCritiqueVersion}}
-	}
-
-	if s.shouldReanalyze(mk(PromptFingerprint("engine base + my prompt"))) {
-		t.Error("matching prompt hash should be reused, got re-analyze")
-	}
-	if !s.shouldReanalyze(mk(PromptFingerprint("engine base + an OLD prompt"))) {
-		t.Error("changed prompt hash should force re-analysis")
-	}
-	// Unstamped entries re-analyze once.
-	if !s.shouldReanalyze(mk("")) {
-		t.Error("unstamped (pre-feature) entry should re-analyze once")
-	}
-}
-
-// TestService_ShouldReanalyze_ModelHash verifies a model or endpoint swap
-// invalidates a cached analysis while a matching model is reused.
-func TestService_ShouldReanalyze_ModelHash(t *testing.T) {
+func TestService_ShouldReanalyze_IgnoresProvenanceChanges(t *testing.T) {
 	srv := newScriptedChatServer(t)
 	client := newAgenticTestClient(t, srv.URL)
-	s := NewService(client, &stubModule{name: "kubernetes"}, "sys", nil)
-
-	mk := func(modelHash string) *models.TestCase {
-		return &models.TestCase{AIAnalysis: &models.AIAnalysis{Mode: AgenticMode, PromptHash: PromptFingerprint("sys"), ModelHash: modelHash, CritiquePassed: true, CritiqueVersion: currentCritiqueVersion}}
+	s := NewService(client, &stubModule{name: "kubernetes"}, "engine base + my prompt", nil)
+	base := models.AIAnalysis{
+		Mode: AgenticMode, SkillSetHash: "old-skills", ModelHash: "old-model", PromptHash: "old-prompt",
+		CritiquePassed: true, CritiqueVersion: currentCritiqueVersion,
 	}
-
-	if s.shouldReanalyze(mk(client.modelFingerprint())) {
-		t.Error("matching model hash should be reused, got re-analyze")
-	}
-	if !s.shouldReanalyze(mk("some-other-model")) {
-		t.Error("changed model hash should force re-analysis")
-	}
-	// Unstamped (pre-feature) entries re-analyze once so a stale verdict from an
-	// unknown model does not persist.
-	if !s.shouldReanalyze(mk("")) {
-		t.Error("unstamped entry should re-analyze once")
+	for _, tc := range []struct {
+		name   string
+		mutate func(*models.AIAnalysis)
+	}{
+		{name: "matching current provenance", mutate: func(analysis *models.AIAnalysis) {
+			analysis.ModelHash = client.modelFingerprint()
+			analysis.PromptHash = PromptFingerprint("engine base + my prompt")
+		}},
+		{name: "model changed"},
+		{name: "endpoint changed", mutate: func(analysis *models.AIAnalysis) {
+			analysis.ModelHash = ModelFingerprint(APIChatCompletions, "https://old-endpoint.invalid/v1/chat/completions", "old-model")
+		}},
+		{name: "prompt changed", mutate: func(analysis *models.AIAnalysis) { analysis.PromptHash = PromptFingerprint("old prompt") }},
+		{name: "skill set changed", mutate: func(analysis *models.AIAnalysis) { analysis.SkillSetHash = "different-skills" }},
+		{name: "missing provenance", mutate: func(analysis *models.AIAnalysis) {
+			analysis.SkillSetHash = ""
+			analysis.ModelHash = ""
+			analysis.PromptHash = ""
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			analysis := base
+			if tc.mutate != nil {
+				tc.mutate(&analysis)
+			}
+			if s.shouldReanalyze(reusablePublishedTestCase(&analysis)) {
+				t.Fatalf("provenance change forced re-analysis: %+v", analysis)
+			}
+		})
 	}
 }
 
-// TestService_ToolsUnsupported_SetsUnavailable verifies tools-unsupported
-// endpoints mark failures unavailable and short-circuit subsequent failures.
+func TestService_ShouldReanalyze_AgeAndMalformedState(t *testing.T) {
+	s := &Service{systemPrompt: "sys"}
+	now := time.Now().UTC()
+	base := models.AIAnalysis{
+		GeneratedAt: now.Format(time.RFC3339), Mode: AgenticMode, RootCause: "root cause",
+		CritiquePassed: true, CritiqueVersion: currentCritiqueVersion,
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func(*models.TestCase)
+		want   bool
+	}{
+		{name: "current"},
+		{name: "expired", mutate: func(tc *models.TestCase) {
+			tc.AIAnalysis.GeneratedAt = now.Add(-cacheMaxAge - time.Second).Format(time.RFC3339)
+		}, want: true},
+		{name: "future", mutate: func(tc *models.TestCase) {
+			tc.AIAnalysis.GeneratedAt = now.Add(cacheMaxFutureSkew + time.Second).Format(time.RFC3339)
+		}, want: true},
+		{name: "invalid timestamp", mutate: func(tc *models.TestCase) { tc.AIAnalysis.GeneratedAt = "not-a-time" }, want: true},
+		{name: "missing result fields", mutate: func(tc *models.TestCase) {
+			tc.AISummary.Summary = ""
+			tc.AIAnalysis.RootCause = ""
+		}, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			analysis := base
+			testCase := reusablePublishedTestCase(&analysis)
+			if tc.mutate != nil {
+				tc.mutate(testCase)
+			}
+			if got := s.shouldReanalyze(testCase); got != tc.want {
+				t.Fatalf("shouldReanalyze = %t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestService_ToolsUnsupported_SetsUnavailable(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
@@ -287,11 +312,12 @@ func TestService_ShouldReanalyze_FloorTable(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s := &Service{systemPrompt: "sys", agenticOpts: AgenticOptions{MinToolCalls: tc.minToolCalls, MinGCSBytes: tc.minGCSBytes}}
-			testCase := &models.TestCase{
-				// Critique is always on, so a reusable entry must be
-				// critique-passing; this table isolates the floor behavior.
-				AIAnalysis: &models.AIAnalysis{Mode: tc.cachedMode, ToolCalls: tc.cachedCalls, GCSBytes: tc.cachedGCS, EvidencePlanCovered: tc.covered, PromptHash: PromptFingerprint("sys"), CritiquePassed: true, CritiqueVersion: currentCritiqueVersion},
-			}
+			// Critique is always on, so a reusable entry must be
+			// critique-passing; this table isolates the floor behavior.
+			testCase := reusablePublishedTestCase(&models.AIAnalysis{
+				Mode: tc.cachedMode, ToolCalls: tc.cachedCalls, GCSBytes: tc.cachedGCS, EvidencePlanCovered: tc.covered,
+				PromptHash: PromptFingerprint("sys"), CritiquePassed: true, CritiqueVersion: currentCritiqueVersion,
+			})
 			if got := s.shouldReanalyze(testCase); got != tc.want {
 				t.Errorf("shouldReanalyze cached(mode=%q, calls=%d, gcs=%d) floors(calls=%d, gcs=%d) = %v, want %v",
 					tc.cachedMode, tc.cachedCalls, tc.cachedGCS, tc.minToolCalls, tc.minGCSBytes, got, tc.want)
@@ -323,9 +349,9 @@ func TestService_EvidencePlanCoverageOnlyBypassesGCSFloor(t *testing.T) {
 		{name: "tool floor", mutate: func(analysis *models.AIAnalysis) { analysis.ToolCalls = 1 }, want: true},
 		{name: "critique pass", mutate: func(analysis *models.AIAnalysis) { analysis.CritiquePassed = false }, want: true},
 		{name: "critique version", mutate: func(analysis *models.AIAnalysis) { analysis.CritiqueVersion-- }, want: true},
-		{name: "skill hash", mutate: func(analysis *models.AIAnalysis) { analysis.SkillSetHash = "stale" }, want: true},
-		{name: "model hash", mutate: func(analysis *models.AIAnalysis) { analysis.ModelHash = "stale" }, want: true},
-		{name: "prompt hash", mutate: func(analysis *models.AIAnalysis) { analysis.PromptHash = "stale" }, want: true},
+		{name: "skill hash", mutate: func(analysis *models.AIAnalysis) { analysis.SkillSetHash = "stale" }},
+		{name: "model hash", mutate: func(analysis *models.AIAnalysis) { analysis.ModelHash = "stale" }},
+		{name: "prompt hash", mutate: func(analysis *models.AIAnalysis) { analysis.PromptHash = "stale" }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -333,7 +359,7 @@ func TestService_EvidencePlanCoverageOnlyBypassesGCSFloor(t *testing.T) {
 			if tc.mutate != nil {
 				tc.mutate(&analysis)
 			}
-			if got := s.shouldReanalyze(&models.TestCase{AIAnalysis: &analysis}); got != tc.want {
+			if got := s.shouldReanalyze(reusablePublishedTestCase(&analysis)); got != tc.want {
 				t.Fatalf("shouldReanalyze = %t, want %t", got, tc.want)
 			}
 		})
@@ -358,8 +384,8 @@ func TestService_BelowFloor_ReanalyzesBuildCacheEntry(t *testing.T) {
 	)
 
 	tc := newFailedTC("Test A", "msg")
-	tc.AISummary = &models.AISummary{Summary: "stale zero-tool"}
-	tc.AIAnalysis = &models.AIAnalysis{RootCause: "stale", Mode: AgenticMode, ToolCalls: 0}
+	tc.AISummary = &models.AISummary{GeneratedAt: time.Now().UTC().Format(time.RFC3339), Summary: "stale zero-tool"}
+	tc.AIAnalysis = &models.AIAnalysis{GeneratedAt: tc.AISummary.GeneratedAt, RootCause: "stale", Mode: AgenticMode, ToolCalls: 0}
 
 	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
 
@@ -469,11 +495,11 @@ func TestService_ShouldReanalyze_PreRankedEvidencePlanContract(t *testing.T) {
 		Mode: AgenticMode, PromptHash: PromptFingerprint("sys"),
 		CritiquePassed: true, CritiqueVersion: currentCritiqueVersion - 1,
 	}
-	if !s.shouldReanalyze(&models.TestCase{AIAnalysis: analysis}) {
+	if !s.shouldReanalyze(reusablePublishedTestCase(analysis)) {
 		t.Fatal("pre-ranked-plan analysis should be re-analyzed")
 	}
 	analysis.CritiqueVersion = currentCritiqueVersion
-	if s.shouldReanalyze(&models.TestCase{AIAnalysis: analysis}) {
+	if s.shouldReanalyze(reusablePublishedTestCase(analysis)) {
 		t.Fatal("current ranked-plan analysis should be reusable")
 	}
 }
@@ -496,20 +522,20 @@ func TestServiceBuildFailureUsesSourceSpecificGCSFloor(t *testing.T) {
 		CritiquePassed: true, CritiqueVersion: currentCritiqueVersion,
 		ModelHash: client.modelFingerprint(), PromptHash: PromptFingerprint("sys"),
 	}
-	buildFailure.AIAnalysis = analysis
+	buildFailure = reusablePublishedTestCase(analysis)
+	buildFailure.Source = models.TestCaseSourceBuild
 	if s.shouldReanalyze(buildFailure) {
 		t.Fatal("build failure below the project GCS floor was not reusable")
 	}
-	if !s.shouldReanalyze(&models.TestCase{AIAnalysis: analysis}) {
+	if !s.shouldReanalyze(reusablePublishedTestCase(analysis)) {
 		t.Fatal("JUnit failure below the project GCS floor was reusable")
 	}
 }
 
-func TestServiceBuildPromptChangeInvalidatesPublishedAndAgenticCaches(t *testing.T) {
+func TestServiceBuildPromptChangeReusesPublishedAndAgenticCaches(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 	srv.push(200, chatRespFinal(`{"summary":"old","is_transient":false,"root_cause":"old cleanup explanation","severity":"High","suggested_fix":"Correct the build configuration.","relevant_files":[]}`))
-	srv.push(200, chatRespFinal(`{"summary":"new","is_transient":false,"root_cause":"new earliest causal explanation","severity":"High","suggested_fix":"Correct the initiating build configuration.","relevant_files":[]}`))
 
 	module := &stubModule{name: "universal", prompt: "use the build log"}
 	client := newAgenticTestClient(t, srv.URL)
@@ -527,13 +553,13 @@ func TestServiceBuildPromptChangeInvalidatesPublishedAndAgenticCaches(t *testing
 	module.prompt = "use the build log and select the earliest causal error before cleanup"
 	service.Analyze(t.Context(), &http.Client{}, "job", "logs/job/1/", run, tc)
 
-	if tc.AIAnalysis.RootCause != "new earliest causal explanation" {
+	if tc.AIAnalysis.RootCause != "old cleanup explanation" {
 		t.Fatalf("root cause = %q", tc.AIAnalysis.RootCause)
 	}
-	if tc.AIAnalysis.PromptHash == oldHash {
-		t.Fatal("build prompt change did not change the cache contract")
+	if tc.AIAnalysis.PromptHash != oldHash {
+		t.Fatal("build prompt change rewrote cached provenance")
 	}
-	if got := atomic.LoadInt32(&srv.calls); got != 2 {
-		t.Fatalf("model calls = %d, want 2", got)
+	if got := atomic.LoadInt32(&srv.calls); got != 1 {
+		t.Fatalf("model calls = %d, want 1", got)
 	}
 }
