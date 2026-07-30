@@ -1012,3 +1012,16 @@ func TestBuildIssueCleanupFailureStillCommitsConfirmation(t *testing.T) {
 		t.Fatalf("confirmation url=%q err=%v", url, err)
 	}
 }
+
+func TestBuildSourceFilesUseAllAuthoritativeLinks(t *testing.T) {
+	detail := analyzedBuildDetail(false)
+	failure := detail.Runs[0].TestCases[0]
+	failure.AIAnalysis.RelevantFiles = nil
+	failure.AIAnalysis.FileLinks = map[string]string{
+		"config/versions.yaml": "https://github.com/example/repo/blob/sha/config/versions.yaml",
+	}
+	subject := &BuildActionSubject{JobID: detail.JobID, JobName: detail.Name, Build: detail.Runs[0].BuildInfo, Failure: failure}
+	if got := verifiedBuildSourceFiles(subject, "example", "repo"); len(got) != 1 || got[0] != "config/versions.yaml" {
+		t.Fatalf("authoritative source files = %v", got)
+	}
+}

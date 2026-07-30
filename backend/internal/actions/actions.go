@@ -253,10 +253,12 @@ func (s *Service) findPattern(id string) (*models.PatternAnalysis, error) {
 }
 
 func (s *Service) resolveSubject(id string) (*ActionSubject, error) {
-	if pattern, err := s.findPattern(id); err == nil {
+	if !strings.HasPrefix(id, "build::") {
+		pattern, err := s.findPattern(id)
+		if err != nil {
+			return nil, err
+		}
 		return &ActionSubject{Kind: actionSubjectPattern, ID: pattern.ID, ContentHash: pattern.ContentHash, Pattern: pattern}, nil
-	} else if !errors.Is(err, ErrNotFound) {
-		return nil, err
 	}
 	parts := strings.Split(id, "::")
 	if len(parts) != 3 || parts[0] != "build" {
@@ -321,8 +323,13 @@ func verifiedBuildSourceFiles(subject *BuildActionSubject, owner, repo string) [
 		return nil
 	}
 	var files []string
-	for _, cited := range subject.RelevantFiles {
-		raw := strings.TrimSpace(analysis.FileLinks[cited])
+	links := make([]string, 0, len(analysis.FileLinks))
+	for _, raw := range analysis.FileLinks {
+		links = append(links, raw)
+	}
+	slices.Sort(links)
+	for _, link := range links {
+		raw := strings.TrimSpace(link)
 		parsed, err := url.Parse(raw)
 		if err != nil || !strings.EqualFold(parsed.Hostname(), "github.com") {
 			continue
