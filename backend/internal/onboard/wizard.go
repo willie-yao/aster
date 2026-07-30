@@ -1,117 +1,12 @@
 package onboard
 
 import (
-	"bufio"
 	"context"
-	"errors"
 	"fmt"
-	"io"
-	"strconv"
 	"strings"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 )
-
-type prompter struct {
-	reader *bufio.Reader
-	out    io.Writer
-}
-
-func newPrompter(terminal Terminal) *prompter {
-	return &prompter{reader: bufio.NewReader(terminal.In), out: terminal.Out}
-}
-
-func (p *prompter) line(label, defaultValue string, required bool) (string, error) {
-	for {
-		fmt.Fprint(p.out, label)
-		if defaultValue != "" {
-			fmt.Fprintf(p.out, " [%s]", defaultValue)
-		}
-		fmt.Fprint(p.out, ": ")
-		line, err := p.reader.ReadString('\n')
-		if err != nil && !errors.Is(err, io.EOF) {
-			return "", err
-		}
-		line = strings.TrimSpace(line)
-		if isCancel(line) || (errors.Is(err, io.EOF) && line == "") {
-			return "", ErrCancelled
-		}
-		if line == "" {
-			line = defaultValue
-		}
-		if line == "" && required {
-			fmt.Fprintln(p.out, "A value is required. Enter q to cancel.")
-			if errors.Is(err, io.EOF) {
-				return "", ErrCancelled
-			}
-			continue
-		}
-		return line, nil
-	}
-}
-
-func (p *prompter) confirm(label string, defaultYes bool) (bool, error) {
-	suffix := " [y/N]: "
-	if defaultYes {
-		suffix = " [Y/n]: "
-	}
-	for {
-		fmt.Fprint(p.out, label+suffix)
-		line, err := p.reader.ReadString('\n')
-		if err != nil && !errors.Is(err, io.EOF) {
-			return false, err
-		}
-		line = strings.ToLower(strings.TrimSpace(line))
-		if isCancel(line) || (errors.Is(err, io.EOF) && line == "") {
-			return false, ErrCancelled
-		}
-		switch line {
-		case "":
-			return defaultYes, nil
-		case "y", "yes":
-			return true, nil
-		case "n", "no":
-			return false, nil
-		default:
-			fmt.Fprintln(p.out, "Enter y, n, or q to cancel.")
-		}
-	}
-}
-
-func (p *prompter) selectOne(label string, options []string, defaultIndex int) (int, error) {
-	fmt.Fprintln(p.out, label)
-	for i, option := range options {
-		fmt.Fprintf(p.out, "  %d. %s\n", i+1, option)
-	}
-	for {
-		fmt.Fprintf(p.out, "Select [%d]: ", defaultIndex+1)
-		line, err := p.reader.ReadString('\n')
-		if err != nil && !errors.Is(err, io.EOF) {
-			return 0, err
-		}
-		line = strings.TrimSpace(line)
-		if isCancel(line) || (errors.Is(err, io.EOF) && line == "") {
-			return 0, ErrCancelled
-		}
-		if line == "" {
-			return defaultIndex, nil
-		}
-		selected, convErr := strconv.Atoi(line)
-		if convErr == nil && selected >= 1 && selected <= len(options) {
-			return selected - 1, nil
-		}
-		fmt.Fprintf(p.out, "Enter a number from 1 to %d, or q to cancel.\n", len(options))
-	}
-}
-
-func isCancel(value string) bool {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "q", "quit", "cancel":
-		return true
-	default:
-		return false
-	}
-}
 
 func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Options, error) {
 	if err := validateCredentialSeparation(opts); err != nil {
@@ -123,9 +18,12 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 	if err := validateAIEndpoint(opts.DeploymentAIEndpoint); err != nil {
 		return nil, opts, fmt.Errorf("deployed %w", err)
 	}
-	prompt := newPrompter(deps.terminal)
+	if deps.wizard == nil {
+		return nil, opts, fmt.Errorf("interactive onboarding UI is unavailable")
+	}
+	prompt := deps.wizard
 	fmt.Fprintln(deps.terminal.Out, "Guided prow-ai-dashboard onboarding")
-	fmt.Fprintln(deps.terminal.Out, "Enter q at any prompt to cancel. No files are written before final confirmation.")
+	fmt.Fprintln(deps.terminal.Out, "Use Ctrl+C to cancel. No files are written before final confirmation.")
 	fmt.Fprintln(deps.terminal.Out)
 
 	repo, detectedFromGit, err := wizardSourceRepo(ctx, prompt, opts, deps)
@@ -139,7 +37,10 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 		}
 		if metadata.Upstream != nil && metadata.Upstream.FullName != repo.FullName {
 			fmt.Fprintf(deps.terminal.Out, "Detected GitHub fork upstream: %s\n", metadata.Upstream.FullName)
-			useUpstream, confirmErr := prompt.confirm("Use the upstream repository for Prow discovery?", true)
+			useUpstream, confirmErr := prompt.Confirm(ctx, confirmPrompt{
+				Title: "Use the upstream repository for Prow discovery?",
+				Value: true,
+			})
 			if confirmErr != nil {
 				return nil, opts, confirmErr
 			}
@@ -159,13 +60,17 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 	opts.SourceRepo = report.SourceRepo.FullName
 	fmt.Fprintf(deps.terminal.Out, "Found %d Prow job definition(s) that test this repository.\n", len(report.MatchingJobs))
 
-	selected, err := wizardDiscovery(prompt, &opts, report)
+	selected, err := wizardDiscovery(ctx, prompt, &opts, report)
 	if err != nil {
 		return nil, opts, err
 	}
 	if selected != nil && opts.IncludePresubmits == nil && selected.DashboardPresubmitJobs > 0 {
 		defaultInclude := selected.DashboardPeriodicJobs == 0
-		include, confirmErr := prompt.confirm("Include presubmit jobs in the dashboard?", defaultInclude)
+		include, confirmErr := prompt.Confirm(ctx, confirmPrompt{
+			Title:       "Include presubmit jobs in the dashboard?",
+			Description: "Presubmit history increases coverage and fetch time.",
+			Value:       defaultInclude,
+		})
 		if confirmErr != nil {
 			return nil, opts, confirmErr
 		}
@@ -173,22 +78,46 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 	}
 
 	if opts.Mode == "" {
-		choice, err := prompt.selectOne("\nDeployment profile", []string{
-			"GitHub Pages, for public artifacts and a provider reachable from GitHub Actions",
-			"Kubernetes with Helm, for cluster-local providers, persistent state, or authenticated actions",
-		}, 0)
-		if err != nil {
-			return nil, opts, err
+		choice, selectErr := prompt.Select(ctx, selectPrompt{
+			Title: "Deployment profile",
+			Options: []selectOption{
+				{
+					Value:       modePages,
+					Label:       "GitHub Pages",
+					Description: "Public artifacts with an AI provider reachable from GitHub Actions.",
+				},
+				{
+					Value:       modeK8s,
+					Label:       "Kubernetes with Helm",
+					Description: "Cluster-local providers, persistent state, or authenticated actions.",
+				},
+			},
+			Value: modePages,
+		})
+		if selectErr != nil {
+			return nil, opts, selectErr
 		}
-		if choice == 1 {
-			opts.Mode = modeK8s
-		} else {
-			opts.Mode = modePages
-		}
+		opts.Mode = choice
 	}
 
 	if opts.DashboardRepo == "" {
-		opts.DashboardRepo, err = prompt.line("Dashboard repository", report.DashboardRepo.Value, true)
+		opts.DashboardRepo, err = prompt.Input(ctx, inputPrompt{
+			Title:       "Dashboard repository",
+			Description: "Existing owner/name repository that will publish the dashboard.",
+			Value:       report.DashboardRepo.Value,
+			Required:    true,
+			Validate: func(value string) error {
+				candidateOpts := opts
+				candidateOpts.DashboardRepo = value
+				if err := validateCredentialSeparation(candidateOpts); err != nil {
+					return err
+				}
+				if _, err := NormalizeGitHubRepo(value); err != nil {
+					return err
+				}
+				return nil
+			},
+		})
 		if err != nil {
 			return nil, opts, err
 		}
@@ -203,19 +132,33 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 	opts.DashboardRepo = dashboardRepo.FullName
 
 	if opts.ID == "" {
-		opts.ID, err = prompt.line("Project id", report.Identity.ID.Value, true)
+		opts.ID, err = prompt.Input(ctx, inputPrompt{
+			Title:       "Project ID",
+			Description: "Stable lowercase identifier inferred from repository metadata.",
+			Value:       report.Identity.ID.Value,
+			Required:    true,
+		})
 		if err != nil {
 			return nil, opts, err
 		}
 	}
 	if opts.Name == "" {
-		opts.Name, err = prompt.line("Project display name", report.Identity.Name.Value, true)
+		opts.Name, err = prompt.Input(ctx, inputPrompt{
+			Title:       "Project display name",
+			Description: "Human-readable name shown throughout the dashboard.",
+			Value:       report.Identity.Name.Value,
+			Required:    true,
+		})
 		if err != nil {
 			return nil, opts, err
 		}
 	}
 	if opts.ShortName == "" {
-		opts.ShortName, err = prompt.line("Short name (optional; type none to omit)", report.Identity.ShortName.Value, false)
+		opts.ShortName, err = prompt.Input(ctx, inputPrompt{
+			Title:       "Short name",
+			Description: "Optional compact label. Enter none or - to omit it.",
+			Value:       report.Identity.ShortName.Value,
+		})
 		if err != nil {
 			return nil, opts, err
 		}
@@ -223,35 +166,49 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 	}
 
 	if opts.AIEnabled == nil {
-		enabled, err := prompt.confirm("\nEnable AI failure analysis in the deployed dashboard?", true)
-		if err != nil {
-			return nil, opts, err
+		enabled, confirmErr := prompt.Confirm(ctx, confirmPrompt{
+			Title:       "Enable AI failure analysis in the deployed dashboard?",
+			Description: "Provider coordinates and a model are required when enabled.",
+			Value:       true,
+		})
+		if confirmErr != nil {
+			return nil, opts, confirmErr
 		}
 		opts.AIEnabled = &enabled
 	}
 	if effectiveAIEnabled(opts) {
 		apiDefault := deploymentAIAPI(opts)
-		if apiDefault == "" {
+		if apiDefault != project.AIAPIResponses {
 			apiDefault = project.AIAPIChatCompletions
 		}
-		apiChoice := 0
-		if apiDefault == project.AIAPIResponses {
-			apiChoice = 1
-		}
-		choice, err := prompt.selectOne("Deployed AI API", []string{"chat_completions", "responses"}, apiChoice)
+		opts.DeploymentAIAPI, err = prompt.Select(ctx, selectPrompt{
+			Title:       "Deployed AI API",
+			Description: "Choose the request contract supported by the deployed provider.",
+			Options: []selectOption{
+				{Value: project.AIAPIChatCompletions, Label: "Chat Completions"},
+				{Value: project.AIAPIResponses, Label: "Responses"},
+			},
+			Value: apiDefault,
+		})
 		if err != nil {
 			return nil, opts, err
 		}
-		if choice == 1 {
-			opts.DeploymentAIAPI = project.AIAPIResponses
-		} else {
-			opts.DeploymentAIAPI = project.AIAPIChatCompletions
-		}
-		opts.DeploymentAIEndpoint, err = prompt.line("Deployed AI endpoint", deploymentAIEndpoint(opts), true)
+		opts.DeploymentAIEndpoint, err = prompt.Input(ctx, inputPrompt{
+			Title:       "Deployed AI endpoint",
+			Description: "Absolute HTTP or HTTPS endpoint reachable from the deployment.",
+			Value:       deploymentAIEndpoint(opts),
+			Required:    true,
+			Validate:    validateAIEndpoint,
+		})
 		if err != nil {
 			return nil, opts, err
 		}
-		opts.DeploymentAIModel, err = prompt.line("Deployed AI model", deploymentAIModel(opts), true)
+		opts.DeploymentAIModel, err = prompt.Input(ctx, inputPrompt{
+			Title:       "Deployed AI model",
+			Description: "Exact model identifier accepted by the endpoint.",
+			Value:       deploymentAIModel(opts),
+			Required:    true,
+		})
 		if err != nil {
 			return nil, opts, err
 		}
@@ -260,15 +217,23 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 	if opts.NoPrompt || opts.AIToken == "" {
 		opts.NoPrompt = true
 	} else if opts.AIEndpoint != "" && opts.AIModel != "" {
-		draft, err := prompt.confirm("Use the AI_ENDPOINT and AI_MODEL provider now to draft prompts/system.md from bounded repository documentation?", false)
-		if err != nil {
-			return nil, opts, err
+		draft, confirmErr := prompt.Confirm(ctx, confirmPrompt{
+			Title:       "Use AI_ENDPOINT and AI_MODEL now to draft prompts/system.md?",
+			Description: "Bounded repository documentation will be sent to that provider.",
+			Value:       false,
+		})
+		if confirmErr != nil {
+			return nil, opts, confirmErr
 		}
 		opts.NoPrompt = !draft
 	} else if effectiveAIEnabled(opts) {
-		draft, err := prompt.confirm("Also use the deployed provider to draft prompts/system.md from bounded repository documentation?", false)
-		if err != nil {
-			return nil, opts, err
+		draft, confirmErr := prompt.Confirm(ctx, confirmPrompt{
+			Title:       "Also use the deployed provider to draft prompts/system.md?",
+			Description: "Bounded repository documentation will be sent to that provider.",
+			Value:       false,
+		})
+		if confirmErr != nil {
+			return nil, opts, confirmErr
 		}
 		opts.NoPrompt = !draft
 		if draft {
@@ -281,7 +246,12 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 	}
 
 	if !opts.OpenPR && opts.OutDir == "" {
-		opts.OutDir, err = prompt.line("Output directory", dashboardRepo.Name, true)
+		opts.OutDir, err = prompt.Input(ctx, inputPrompt{
+			Title:       "Output directory",
+			Description: "New directory where the validated scaffold will be written.",
+			Value:       dashboardRepo.Name,
+			Required:    true,
+		})
 		if err != nil {
 			return nil, opts, err
 		}
@@ -298,9 +268,13 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 		for _, category := range plan.Project.Categories {
 			categoryTokens = append(categoryTokens, category.ID)
 		}
-		value, err := prompt.line("Category tokens, comma separated (type none to clear)", strings.Join(categoryTokens, ","), false)
-		if err != nil {
-			return nil, opts, err
+		value, inputErr := prompt.Input(ctx, inputPrompt{
+			Title:       "Category tokens",
+			Description: "Comma-separated job-name tokens. Enter none or - to clear them.",
+			Value:       strings.Join(categoryTokens, ","),
+		})
+		if inputErr != nil {
+			return nil, opts, inputErr
 		}
 		if err := setPlanCategoryTokens(plan, opts, value); err != nil {
 			return nil, opts, err
@@ -313,7 +287,11 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 	if opts.DryRun {
 		return plan, opts, nil
 	}
-	confirmed, err := prompt.confirm("Create this scaffold?", false)
+	confirmed, err := prompt.Confirm(ctx, confirmPrompt{
+		Title:       "Create this scaffold?",
+		Description: "This is the first prompt that permits a filesystem or GitHub write.",
+		Value:       false,
+	})
 	if err != nil {
 		return nil, opts, err
 	}
@@ -364,7 +342,7 @@ func setPlanCategoryTokens(plan *Plan, opts Options, value string) error {
 	return nil
 }
 
-func wizardSourceRepo(ctx context.Context, prompt *prompter, opts Options, deps dependencies) (Repo, bool, error) {
+func wizardSourceRepo(ctx context.Context, prompt wizardUI, opts Options, deps dependencies) (Repo, bool, error) {
 	if opts.SourceRepo != "" {
 		repo, err := NormalizeGitHubRepo(opts.SourceRepo)
 		if err != nil {
@@ -377,7 +355,10 @@ func wizardSourceRepo(ctx context.Context, prompt *prompter, opts Options, deps 
 		repo, normalizeErr := NormalizeGitHubRepo(remote)
 		if normalizeErr == nil {
 			fmt.Fprintf(deps.terminal.Out, "Source repository detected from git remote origin: %s\n", repo.FullName)
-			use, confirmErr := prompt.confirm("Use this repository?", true)
+			use, confirmErr := prompt.Confirm(ctx, confirmPrompt{
+				Title: "Use this repository?",
+				Value: true,
+			})
 			if confirmErr != nil {
 				return Repo{}, false, confirmErr
 			}
@@ -386,7 +367,20 @@ func wizardSourceRepo(ctx context.Context, prompt *prompter, opts Options, deps 
 			}
 		}
 	}
-	value, err := prompt.line("Source GitHub repository (owner/name or URL)", "", true)
+	value, err := prompt.Input(ctx, inputPrompt{
+		Title:       "Source GitHub repository",
+		Description: "Repository tested by Prow, as owner/name or a GitHub URL.",
+		Required:    true,
+		Validate: func(value string) error {
+			candidateOpts := opts
+			candidateOpts.SourceRepo = value
+			if err := validateCredentialSeparation(candidateOpts); err != nil {
+				return err
+			}
+			_, err := NormalizeGitHubRepo(value)
+			return err
+		},
+	})
 	if err != nil {
 		return Repo{}, false, err
 	}
@@ -402,7 +396,7 @@ func wizardSourceRepo(ctx context.Context, prompt *prompter, opts Options, deps 
 	return repo, false, nil
 }
 
-func wizardDiscovery(prompt *prompter, opts *Options, report DiscoveryReport) (*DashboardCandidate, error) {
+func wizardDiscovery(ctx context.Context, prompt wizardUI, opts *Options, report DiscoveryReport) (*DashboardCandidate, error) {
 	if opts.Bucket != "" {
 		return nil, nil
 	}
@@ -415,38 +409,71 @@ func wizardDiscovery(prompt *prompter, opts *Options, report DiscoveryReport) (*
 		}
 		return nil, nil
 	}
-	fmt.Fprintln(prompt.out, "\nCandidate TestGrid dashboards")
-	options := make([]string, 0, len(report.Candidates)+2)
+	options := make([]selectOption, 0, len(report.Candidates)+2)
 	for _, candidate := range report.Candidates {
-		summary := fmt.Sprintf("%s (source matches: %d periodic, %d presubmit; dashboard: %d periodic, %d presubmit",
-			safeTerminal(candidate.Dashboard), candidate.PeriodicJobs, candidate.PresubmitJobs, candidate.DashboardPeriodicJobs, candidate.DashboardPresubmitJobs)
+		summary := fmt.Sprintf("%s (%d periodic, %d presubmit source matches)",
+			safeTerminal(candidate.Dashboard), candidate.PeriodicJobs, candidate.PresubmitJobs)
+		description := fmt.Sprintf("Dashboard contains %d periodic and %d presubmit jobs", candidate.DashboardPeriodicJobs, candidate.DashboardPresubmitJobs)
 		if candidate.DashboardPostsubmitJobs > 0 {
-			summary += fmt.Sprintf(", %d postsubmit unsupported", candidate.DashboardPostsubmitJobs)
+			description += fmt.Sprintf("; %d postsubmit jobs are unsupported", candidate.DashboardPostsubmitJobs)
 		}
-		options = append(options, summary+")")
+		options = append(options, selectOption{
+			Value:       "candidate:" + candidate.Dashboard,
+			Label:       summary,
+			Description: description + ".",
+		})
 	}
-	options = append(options, "Enter a TestGrid dashboard manually", "Use an artifact bucket")
-	defaultIndex := 0
-	if len(report.Candidates) == 0 {
-		defaultIndex = len(options) - 2
+	options = append(options,
+		selectOption{
+			Value:       "manual_testgrid",
+			Label:       "Enter a TestGrid dashboard manually",
+			Description: "Use a dashboard name not inferred from repository metadata.",
+		},
+		selectOption{
+			Value:       "artifact_bucket",
+			Label:       "Use an artifact bucket",
+			Description: "Discover jobs directly from a Prow artifact bucket.",
+		},
+	)
+	defaultValue := "manual_testgrid"
+	if len(report.Candidates) > 0 {
+		defaultValue = "candidate:" + report.Candidates[0].Dashboard
 	}
-	choice, err := prompt.selectOne("Choose the discovery source", options, defaultIndex)
+	choice, err := prompt.Select(ctx, selectPrompt{
+		Title:       "Choose the discovery source",
+		Description: "Select the TestGrid dashboard or artifact source for this project.",
+		Options:     options,
+		Value:       defaultValue,
+	})
 	if err != nil {
 		return nil, err
 	}
-	if choice < len(report.Candidates) {
-		selected := report.Candidates[choice]
-		opts.TestGrid = selected.Dashboard
-		return &selected, nil
+	for _, candidate := range report.Candidates {
+		if choice == "candidate:"+candidate.Dashboard {
+			selected := candidate
+			opts.TestGrid = selected.Dashboard
+			return &selected, nil
+		}
 	}
-	if choice == len(report.Candidates) {
-		opts.TestGrid, err = prompt.line("TestGrid dashboard", "", true)
+	if choice == "manual_testgrid" {
+		opts.TestGrid, err = prompt.Input(ctx, inputPrompt{
+			Title:    "TestGrid dashboard",
+			Required: true,
+		})
 		return nil, err
 	}
-	opts.Bucket, err = prompt.line("Artifact bucket", "", true)
+	opts.Bucket, err = prompt.Input(ctx, inputPrompt{
+		Title:       "Artifact bucket",
+		Description: "Bucket containing Prow logs or pr-logs indexes.",
+		Required:    true,
+	})
 	if err != nil {
 		return nil, err
 	}
-	opts.GCSWebBase, err = prompt.line("gcsweb base URL (optional)", opts.GCSWebBase, false)
+	opts.GCSWebBase, err = prompt.Input(ctx, inputPrompt{
+		Title:       "gcsweb base URL",
+		Description: "Optional gateway root for non-GCS object storage.",
+		Value:       opts.GCSWebBase,
+	})
 	return nil, err
 }

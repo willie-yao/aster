@@ -32,6 +32,7 @@ type dependencies struct {
 	files        scaffoldWriter
 	pullRequests pullRequestWriter
 	terminal     Terminal
+	wizard       wizardUI
 }
 
 type defaultSweeper struct{}
@@ -76,6 +77,7 @@ func defaultDependencies(opts Options, terminal Terminal) dependencies {
 		files:        localScaffoldWriter{},
 		pullRequests: githubPullRequestWriter{client: &http.Client{Timeout: 30 * time.Second}, token: opts.GitHubToken},
 		terminal:     terminal,
+		wizard:       newHuhWizardUI(terminal),
 	}
 }
 

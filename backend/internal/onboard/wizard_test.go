@@ -156,6 +156,7 @@ func wizardDependencies(input string) (dependencies, *bytes.Buffer, *fakeScaffol
 			In: strings.NewReader(input), Out: out, Err: out, Interactive: true,
 		},
 	}
+	deps.wizard = newLineWizardUI(deps.terminal)
 	return deps, out, writer, sweeper
 }
 
@@ -322,6 +323,7 @@ func TestRun_CompleteFlagsRemainNonInteractive(t *testing.T) {
 	deps, _, writer, sweeper := wizardDependencies("")
 	deps.terminal.In = panicReader{}
 	deps.terminal.Interactive = false
+	deps.wizard = panicWizardUI{}
 	disabled := false
 	opts := Options{
 		TestGrid: "dashboard-a", DashboardRepo: "example/project-prow-ai-dashboard",
