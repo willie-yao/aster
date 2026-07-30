@@ -288,3 +288,32 @@ func TestContainerStateStoreConcurrentMergesRetainDistinctIdentities(t *testing.
 		t.Fatalf("traces = %+v", traces)
 	}
 }
+
+func TestFailureCacheKeyGeneration(t *testing.T) {
+	request := stateTestRequest()
+	base := FailureCacheKey(request)
+	request.CacheGeneration = "0123456789abcdef"
+	generated := FailureCacheKey(request)
+	if generated == base || !strings.Contains(generated, ":g:0123456789abcdef:") {
+		t.Fatalf("generated key = %q, base = %q", generated, base)
+	}
+	request.CacheGeneration = ""
+	if got := FailureCacheKey(request); got != base {
+		t.Fatalf("empty generation changed key: %q vs %q", got, base)
+	}
+}
+
+func TestContainerStateRejectsCrossGenerationIdentity(t *testing.T) {
+	request := stateTestRequest()
+	request.CacheGeneration = "0123456789abcdef"
+	identity := NewContainerStateIdentity("ns", "task", request)
+	state := ContainerAnalysisState{
+		Version: ContainerStateVersion, TaskNamespace: "ns", TaskName: "task",
+		CacheKey: identity.CacheKey, CacheEntries: map[string]ai.CacheEntry{},
+	}
+	other := request
+	other.CacheGeneration = "fedcba9876543210"
+	if err := validateContainerStateIdentity(state, NewContainerStateIdentity("ns", "task", other)); err == nil {
+		t.Fatal("cross-generation state identity was accepted")
+	}
+}

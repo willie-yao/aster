@@ -218,5 +218,6 @@ func sameAgenticResult(left, right ai.FailureAnalysisResult) bool {
 		left.Analysis.CritiqueVersion == right.Analysis.CritiqueVersion &&
 		left.Analysis.SkillSetHash == right.Analysis.SkillSetHash &&
 		left.Analysis.ModelHash == right.Analysis.ModelHash &&
-		left.Analysis.PromptHash == right.Analysis.PromptHash
+		left.Analysis.PromptHash == right.Analysis.PromptHash &&
+		left.Analysis.CacheGeneration == right.Analysis.CacheGeneration
 }

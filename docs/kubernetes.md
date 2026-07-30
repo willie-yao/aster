@@ -228,6 +228,18 @@ Use this mode only for a concrete lifecycle requirement such as per-failure Task
 isolation or Task retry history. It has no Pages support or backward
 compatibility guarantee and is not recommended over in-process analysis.
 
+Set `analysisCache.generation` to request a non-destructive full AI rebaseline.
+The chart passes it to the worker or CronJob and to analyzer Tasks. Empty keeps
+existing keys unchanged; returning to an older value reuses its unexpired cache.
+
+```bash
+helm upgrade capz deploy/helm/prow-ai-dashboard \
+  --kube-context h100 \
+  --namespace capz-dynamo \
+  --reuse-values \
+  --set analysisCache.generation=2
+```
+
 Both analysis runtimes commit private cache and trace checkpoints after the
 individual-analysis phase. The checkpoint uses the existing cache entry schema
 and acceptance gates. It does not publish dashboard JSON or side effects. A

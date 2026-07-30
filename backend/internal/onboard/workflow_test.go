@@ -22,6 +22,8 @@ func TestReusableDeploySerializesProjectRuns(t *testing.T) {
 	for _, want := range []string{
 		"group: prow-ai-dashboard-${{ github.repository }}-${{ inputs.project_dir }}",
 		"cancel-in-progress: false",
+		"ai-cache-generation:",
+		"AI_CACHE_GENERATION: ${{ inputs.ai-cache-generation }}",
 	} {
 		if !strings.Contains(workflow, want) {
 			t.Errorf("reusable deploy workflow missing %q", want)

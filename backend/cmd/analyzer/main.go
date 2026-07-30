@@ -148,6 +148,7 @@ func loadRuntime(ctx context.Context, opts commandOptions, getenv envGetter) (*a
 	}
 	analysisProject, err := analysisruntime.LoadProject(opts.projectDir, cfg, analysisruntime.ProviderFallbacks{
 		API: getenv("AI_API"), Endpoint: getenv("AI_ENDPOINT"), Model: getenv("AI_MODEL"),
+		CacheGeneration: getenv(project.AICacheGenerationEnv),
 	})
 	if err != nil {
 		return nil, err

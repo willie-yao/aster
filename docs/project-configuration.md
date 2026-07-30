@@ -145,10 +145,14 @@ Provider coordinates can come from YAML:
 ai:
   endpoint: "https://api.example.net/v1/chat/completions"
   model: "model-id"
+  cache_generation: ""
 ```
 
-Public consumers normally omit those values and use `AI_ENDPOINT`, `AI_MODEL`,
-and `AI_TOKEN` from the deployment. YAML wins when both are set.
+Public consumers normally omit provider values and use `AI_ENDPOINT`, `AI_MODEL`,
+and `AI_TOKEN` from the deployment. For cache generation, a non-empty
+`AI_CACHE_GENERATION` overrides `ai.cache_generation`; empty preserves the
+historical cache-key shape. Generation values are limited to 64 characters and
+may contain alphanumerics, dot, underscore, and hyphen.
 The experimental Helm `orka-container` runtime is the exception: its API mode,
 endpoint, and model come from Helm `ai.api`, `ai.endpoint`, and `ai.model` so the
 fetcher pattern pass and analyzer Tasks use the same deployment coordinates.

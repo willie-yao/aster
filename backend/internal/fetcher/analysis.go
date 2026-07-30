@@ -45,13 +45,14 @@ type aiWork struct {
 	priority    aiWorkPriority
 }
 
-func (w aiWork) request(consecutiveMap map[string]int) ai.FailureAnalysisRequest {
+func (w aiWork) request(consecutiveMap map[string]int, cacheGeneration string) ai.FailureAnalysisRequest {
 	return ai.FailureAnalysisRequest{
 		JobID:               w.jobID,
 		BuildPrefix:         w.buildPrefix,
 		Build:               w.run.BuildInfo,
 		TestCase:            *w.tc,
 		ConsecutiveFailures: consecutiveMap[w.jobID+"::"+w.tc.Name],
+		CacheGeneration:     cacheGeneration,
 	}
 }
 
@@ -113,6 +114,10 @@ func analysisNeedsWork(tc *models.TestCase) bool {
 
 func planContainerAnalysisWork(ctx context.Context, httpClient *http.Client, work []aiWork, container containerFailureAnalyzer, planner *ai.Service, project *analysisruntime.Project, consecutiveMap map[string]int) ([]aiWork, fetchprogress.AnalysisPlan, error) {
 	plan := fetchprogress.AnalysisPlan{LogicalTotal: len(work)}
+	cacheGeneration := ""
+	if project != nil {
+		cacheGeneration = project.CacheGenerationFingerprint
+	}
 	queued := make([]aiWork, 0, len(work))
 	state := container.StateStore()
 	var linkResolver *ai.FileLinkResolver
@@ -129,7 +134,7 @@ func planContainerAnalysisWork(ctx context.Context, httpClient *http.Client, wor
 		var result ai.FailureAnalysisResult
 		if state != nil && planner != nil {
 			var err error
-			result, reason, err = state.AcceptCachedFailure(ctx, httpClient, item.request(consecutiveMap), planner)
+			result, reason, err = state.AcceptCachedFailure(ctx, httpClient, item.request(consecutiveMap, cacheGeneration), planner)
 			if err != nil {
 				return nil, fetchprogress.AnalysisPlan{}, err
 			}
@@ -149,7 +154,7 @@ func planContainerAnalysisWork(ctx context.Context, httpClient *http.Client, wor
 		}
 		if reason == ai.CacheRejectedMissing && planner != nil {
 			if reuser, ok := container.(compatibleResultReuser); ok {
-				request := item.request(consecutiveMap)
+				request := item.request(consecutiveMap, cacheGeneration)
 				policy, err := analysisruntime.FailureCachePolicy(ctx, httpClient, request, planner)
 				if err != nil {
 					return nil, fetchprogress.AnalysisPlan{}, err
@@ -185,6 +190,13 @@ func planContainerAnalysisWork(ctx context.Context, httpClient *http.Client, wor
 	}
 	plan.Queued = len(queued)
 	return queued, plan, nil
+}
+
+func (p *pipeline) cacheGenerationFingerprint() string {
+	if p == nil || p.aiProject == nil {
+		return ""
+	}
+	return p.aiProject.CacheGenerationFingerprint
 }
 
 // analyzeFailuresWithAI runs the dashboard-owned analyzer on every failed test.
@@ -319,7 +331,7 @@ schedule:
 			buildSubject := w.tc.Source == models.TestCaseSourceBuild
 			p.startProgressAnalysis(buildSubject)
 			before := w.tc.AISummary
-			result, analyzeErr := analyzer.AnalyzeFailure(analysisCtx, p.client, w.request(consecutiveMap))
+			result, analyzeErr := analyzer.AnalyzeFailure(analysisCtx, p.client, w.request(consecutiveMap, p.cacheGenerationFingerprint()))
 			if analysisruntime.IsProjectBundleSourceError(analyzeErr) {
 				p.finishProgressAnalysis(buildSubject, fetchprogress.OutcomeFailed)
 				systemicOnce.Do(func() {
@@ -510,6 +522,7 @@ func (p *pipeline) ensureContainerAnalyzer() (containerFailureAnalyzer, error) {
 		API:                 p.aiProject.Provider.API,
 		Endpoint:            p.aiProject.Provider.Endpoint,
 		Model:               p.aiProject.Provider.Model,
+		CacheGeneration:     p.aiProject.CacheGeneration,
 		ModelSecretName:     cfg.ModelSecretName,
 		ModelTokenKey:       cfg.ModelTokenKey,
 		StateSecretName:     cfg.StateSecretName,

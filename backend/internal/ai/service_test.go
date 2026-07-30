@@ -172,6 +172,15 @@ func TestService_CacheKeyShape(t *testing.T) {
 	if got := s.agenticCacheKey("job1", "build1", "Test A", "boom"); got != a1 {
 		t.Errorf("critique retry budget changed cache key: %q vs %q", a1, got)
 	}
+	s.SetCacheGeneration("0123456789abcdef")
+	generated := s.agenticCacheKey("job1", "build1", "Test A", "boom")
+	if generated == a1 || !strings.HasPrefix(generated, "agentic:kubernetes:g:0123456789abcdef:job1:build1:") {
+		t.Fatalf("generated cache key = %q", generated)
+	}
+	s.SetCacheGeneration("")
+	if got := s.agenticCacheKey("job1", "build1", "Test A", "boom"); got != a1 {
+		t.Fatalf("returning to empty generation changed key: %q vs %q", got, a1)
+	}
 }
 
 func TestService_ShouldReanalyze_IgnoresProvenanceChanges(t *testing.T) {
@@ -561,5 +570,21 @@ func TestServiceBuildPromptChangeReusesPublishedAndAgenticCaches(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&srv.calls); got != 1 {
 		t.Fatalf("model calls = %d, want 1", got)
+	}
+}
+
+func TestService_ShouldReanalyze_CacheGeneration(t *testing.T) {
+	s := &Service{systemPrompt: "sys"}
+	s.SetCacheGeneration("0123456789abcdef")
+	analysis := &models.AIAnalysis{
+		Mode: AgenticMode, RootCause: "root", CritiquePassed: true,
+		CritiqueVersion: currentCritiqueVersion, CacheGeneration: "fedcba9876543210",
+	}
+	if !s.shouldReanalyze(reusablePublishedTestCase(analysis)) {
+		t.Fatal("cross-generation published analysis was reused")
+	}
+	analysis.CacheGeneration = "0123456789abcdef"
+	if s.shouldReanalyze(reusablePublishedTestCase(analysis)) {
+		t.Fatal("matching generation was not reusable")
 	}
 }

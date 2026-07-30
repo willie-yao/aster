@@ -58,9 +58,9 @@ spec:
     - expression: "!has(object.spec.execution.affinity) || object.spec.execution.affinity == {}"
       message: "analysis Tasks must not add affinity"
     {{- end }}
-    - expression: {{ printf "size(object.spec.env) == %d" (ternary 11 10 (gt (int .Values.ai.contextWindowTokens) 0)) | quote }}
+    - expression: {{ printf "size(object.spec.env) == %d + (object.spec.env.exists(e, e.name == 'AI_CACHE_GENERATION') ? 1 : 0)" (add 10 (ternary 1 0 (gt (int .Values.ai.contextWindowTokens) 0))) | quote }}
       message: "analysis Tasks must use the exact analyzer environment"
-    - expression: "object.spec.env.all(e, e.name in ['PROW_AI_ANALYSIS_BUNDLE', 'PROW_AI_ANALYSIS_BUNDLE_SHA256', 'PROW_AI_TASK_NAMESPACE', 'PROW_AI_TASK_NAME', 'PROW_AI_CONTRACT_VERSION', 'AI_API', 'AI_ENDPOINT', 'AI_MODEL', 'AI_CONTEXT_WINDOW_TOKENS', 'AI_TOKEN', 'PROW_AI_STATE_KEY'])"
+    - expression: "object.spec.env.all(e, e.name in ['PROW_AI_ANALYSIS_BUNDLE', 'PROW_AI_ANALYSIS_BUNDLE_SHA256', 'PROW_AI_TASK_NAMESPACE', 'PROW_AI_TASK_NAME', 'PROW_AI_CONTRACT_VERSION', 'AI_API', 'AI_ENDPOINT', 'AI_MODEL', 'AI_CACHE_GENERATION', 'AI_CONTEXT_WINDOW_TOKENS', 'AI_TOKEN', 'PROW_AI_STATE_KEY'])"
       message: "analysis Tasks contain an unauthorized environment variable"
     - expression: "object.spec.env.exists(e, e.name == 'PROW_AI_ANALYSIS_BUNDLE' && has(e.valueFrom) && has(e.valueFrom.configMapKeyRef) && e.valueFrom.configMapKeyRef.name == object.metadata.name + '-input' && e.valueFrom.configMapKeyRef.key == 'bundle.json')"
       message: "analysis Tasks must use their content-addressed bundle"
@@ -78,6 +78,13 @@ spec:
       message: "analysis Tasks must use the configured model endpoint"
     - expression: {{ printf "object.spec.env.exists(e, e.name == 'AI_MODEL' && has(e.value) && e.value == %s)" (toJson .Values.ai.model) | quote }}
       message: "analysis Tasks must use the configured model"
+    {{- if ne (printf "%v" .Values.analysisCache.generation) "" }}
+    - expression: {{ printf "object.spec.env.exists(e, e.name == 'AI_CACHE_GENERATION' && has(e.value) && e.value == %s)" (toJson (printf "%v" .Values.analysisCache.generation)) | quote }}
+      message: "analysis Tasks must use the configured cache generation"
+    {{- else }}
+    - expression: "!object.spec.env.exists(e, e.name == 'AI_CACHE_GENERATION') || object.spec.env.exists(e, e.name == 'AI_CACHE_GENERATION' && has(e.value) && e.value.matches('^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'))"
+      message: "analysis Tasks must use a valid project cache generation"
+    {{- end }}
     {{- if gt (int .Values.ai.contextWindowTokens) 0 }}
     - expression: {{ printf "object.spec.env.exists(e, e.name == 'AI_CONTEXT_WINDOW_TOKENS' && has(e.value) && e.value == %s)" (toJson (printf "%v" .Values.ai.contextWindowTokens)) | quote }}
       message: "analysis Tasks must use the configured context window"

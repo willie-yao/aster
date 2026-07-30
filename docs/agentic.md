@@ -47,6 +47,7 @@ every other field is optional and runs with engine defaults when unset:
 ai:
   endpoint: ...                 # required when AI is enabled; or env AI_ENDPOINT
   model: ...                    # required when AI is enabled; or env AI_MODEL
+  cache_generation: ""          # optional reversible full-reanalysis namespace
   concurrency: 1                # parallel analyses (raise for endpoints you control)
   max_iters: 15                 # tool-call rounds per failure
   timeout: 5m                   # per-failure agentic wall-clock timeout
@@ -689,9 +690,10 @@ Entries also carry fingerprints for the composed prompt, model and endpoint,
 and loaded skill set, plus the factual `evidence_plan_covered` marker. These
 fingerprints are provenance only. Model, endpoint, prompt, skill, and
 transient-streak changes affect new analyses but do not invalidate an existing
-entry. The evidence marker can satisfy the GCS-byte floor. A manual cache clear
-remains available for an intentional full rebaseline until the follow-up cache
-generation control is available.
+entry. The evidence marker can satisfy the GCS-byte floor. Set `ai.cache_generation` or `AI_CACHE_GENERATION` to a new non-empty value for
+an intentional full rebaseline. The value is hashed before it enters cache keys.
+Returning to a prior value reuses its unexpired entries. A manual cache clear
+remains available for emergency destructive cleanup.
 
 In Kubernetes container mode, the worker applies valid private cache entries
 before it constructs analyzer ConfigMaps or Tasks. The worker, analyzer, build

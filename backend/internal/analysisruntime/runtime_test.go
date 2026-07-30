@@ -90,6 +90,7 @@ branding:
     owner: example
     name: project
 ai:
+  cache_generation: "1"
   tools: [filesystem]
 `)
 	write(filepath.Join(dir, "prompts", "system.md"), "Investigate artifacts.\n")
@@ -101,10 +102,13 @@ triggers: ["boom"]
 		t.Fatal(err)
 	}
 	loaded, err := LoadProject(dir, cfg, ProviderFallbacks{
-		API: "chat_completions", Endpoint: "https://model.invalid/v1/chat/completions", Model: "model",
+		API: "chat_completions", Endpoint: "https://model.invalid/v1/chat/completions", Model: "model", CacheGeneration: "2",
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if loaded.CacheGeneration != "2" || loaded.CacheGenerationFingerprint != project.AICacheGenerationFingerprint("2") {
+		t.Fatalf("cache generation = %q fingerprint=%q", loaded.CacheGeneration, loaded.CacheGenerationFingerprint)
 	}
 	if loaded.ProfileSelection.Kubernetes {
 		t.Fatal("filesystem-only project selected Kubernetes skills")

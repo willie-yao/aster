@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -521,6 +522,8 @@ func projectBundleDigest(bundle ProjectBundle) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
+var cacheGenerationFingerprintPattern = regexp.MustCompile(`^[0-9a-f]{16}$`)
+
 // CanonicalFailureAnalysisRequest applies the current prompt bounds and removes published AI output from Task identity.
 func CanonicalFailureAnalysisRequest(request ai.FailureAnalysisRequest) ai.FailureAnalysisRequest {
 	request.Build.JUnitURLs = nil
@@ -554,6 +557,8 @@ func validateRequest(request ai.FailureAnalysisRequest) error {
 		return fmt.Errorf("failure analysis request test_case.status must be failed")
 	case request.ConsecutiveFailures < 0:
 		return fmt.Errorf("failure analysis request consecutive_failures must not be negative")
+	case request.CacheGeneration != "" && !cacheGenerationFingerprintPattern.MatchString(request.CacheGeneration):
+		return fmt.Errorf("failure analysis request cache_generation is invalid")
 	default:
 		return nil
 	}

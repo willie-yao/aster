@@ -303,7 +303,7 @@ func (s *Service) AnalyzePatternWithOptions(ctx context.Context, jobID, subject 
 		groundKey = "grounded:" + s.sourceRepoOwner + "/" + s.sourceRepoName
 	}
 
-	key := patternCacheKey(s.module.Name(), jobID, subject, userPrompt, groundKey, s.client.modelFingerprint())
+	key := patternCacheKey(s.module.Name(), s.cacheGeneration, jobID, subject, userPrompt, groundKey, s.client.modelFingerprint())
 	buildIDs := patternBuildIDs(failures)
 	if raw, ok := s.client.cache.Get(key); ok {
 		if cached, stats, err := parsePatternResponseWithStats(string(raw), buildIDs); err == nil {
@@ -807,10 +807,14 @@ func buildPatternUserPrompt(subject string, failures []PatternFailure) string {
 // the grounding namespace (mode plus, when grounded, the source repo), and the
 // rendered model input, so the verdict is reused only while the exact evidence
 // the model saw is unchanged.
-func patternCacheKey(module, jobID, subject, userPrompt, groundKey, modelFingerprint string) string {
+func patternCacheKey(module, generation, jobID, subject, userPrompt, groundKey, modelFingerprint string) string {
 	h := sha256.New()
 	fmt.Fprintf(h, "v%d:r%d\x00%s\x00%s\x00%s\x00%s\x00%s", patternPromptVersion, patternAmbiguityRepairVersion, groundKey, modelFingerprint, jobID, subject, userPrompt)
-	return fmt.Sprintf("pattern:%s:%s", module, hex.EncodeToString(h.Sum(nil)[:12]))
+	digest := hex.EncodeToString(h.Sum(nil)[:12])
+	if generation == "" {
+		return fmt.Sprintf("pattern:%s:%s", module, digest)
+	}
+	return fmt.Sprintf("pattern:%s:g:%s:%s", module, generation, digest)
 }
 
 // clampPattern trims a field to max bytes so one verbose analysis can't blow

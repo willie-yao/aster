@@ -39,6 +39,7 @@ type ContainerAnalyzerOptions struct {
 	API                 string
 	Endpoint            string
 	Model               string
+	CacheGeneration     string
 	ModelSecretName     string
 	ModelTokenKey       string
 	StateSecretName     string
@@ -135,6 +136,9 @@ func immutableContainerAnalyzerImage(image string) bool {
 }
 
 func validateContainerAnalyzerOptions(opts ContainerAnalyzerOptions) error {
+	if err := project.ValidateAICacheGeneration(opts.CacheGeneration); err != nil {
+		return fmt.Errorf("container analysis cache generation: %w", err)
+	}
 	if err := validateOrkaResultAPI(opts.OrkaAPI); err != nil {
 		return err
 	}
@@ -349,6 +353,9 @@ func (a *ContainerAnalyzer) recordCacheDisposition(workItem string, cacheSeedInc
 
 func containerAnalyzerEnvironment(opts ContainerAnalyzerOptions) map[string]string {
 	environment := map[string]string{"AI_API": opts.API, "AI_ENDPOINT": opts.Endpoint, "AI_MODEL": opts.Model}
+	if opts.CacheGeneration != "" {
+		environment[project.AICacheGenerationEnv] = opts.CacheGeneration
+	}
 	if opts.ContextWindowTokens > 0 {
 		environment["AI_CONTEXT_WINDOW_TOKENS"] = fmt.Sprintf("%d", opts.ContextWindowTokens)
 	}

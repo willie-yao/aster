@@ -93,9 +93,13 @@ func TestCacheSaveAndReload(t *testing.T) {
 
 func TestCachePrunesExpiredEntriesOnLoad(t *testing.T) {
 	dir := t.TempDir()
+	oldKey := AgenticCacheKeyForGeneration("universal", "1111111111111111", "job", "1", "test", "failed")
+	newKey1 := AgenticCacheKeyForGeneration("universal", "1111111111111111", "job", "2", "test", "failed")
+	newKey2 := AgenticCacheKeyForGeneration("universal", "2222222222222222", "job", "2", "test", "failed")
 	entries := map[string]CacheEntry{
-		"old": {Key: "old", CreatedAt: time.Now().Add(-31 * 24 * time.Hour), Data: json.RawMessage(`"old"`)},
-		"new": {Key: "new", CreatedAt: time.Now(), Data: json.RawMessage(`"new"`)},
+		oldKey:  {Key: oldKey, CreatedAt: time.Now().Add(-31 * 24 * time.Hour), Data: json.RawMessage(`"old"`)},
+		newKey1: {Key: newKey1, CreatedAt: time.Now(), Data: json.RawMessage(`"new-1"`)},
+		newKey2: {Key: newKey2, CreatedAt: time.Now(), Data: json.RawMessage(`"new-2"`)},
 	}
 	data, err := json.Marshal(entries)
 	if err != nil {
@@ -106,18 +110,18 @@ func TestCachePrunesExpiredEntriesOnLoad(t *testing.T) {
 	}
 
 	c := NewCache(dir)
-	if _, ok := c.Get("old"); ok {
+	if _, ok := c.Get(oldKey); ok {
 		t.Fatal("expired entry survived load")
 	}
-	if _, ok := c.Get("new"); !ok {
+	if _, ok := c.Get(newKey1); !ok {
 		t.Fatal("fresh entry was pruned")
 	}
 	if err := c.Save(); err != nil {
 		t.Fatal(err)
 	}
 	reloaded := NewCache(dir)
-	if len(reloaded.entries) != 1 {
-		t.Fatalf("reloaded entries = %d, want 1", len(reloaded.entries))
+	if len(reloaded.entries) != 2 {
+		t.Fatalf("reloaded entries = %d, want 2", len(reloaded.entries))
 	}
 }
 

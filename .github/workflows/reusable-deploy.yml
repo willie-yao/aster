@@ -70,6 +70,11 @@ on:
         required: false
         type: string
         default: ""
+      ai-cache-generation:
+        description: "Optional. Reversible AI cache namespace passed as AI_CACHE_GENERATION. Empty preserves existing cache keys."
+        required: false
+        type: string
+        default: ""
       include-presubmits:
         description: "Include presubmit jobs in addition to periodics. ORed with project.yaml source.include_presubmits — setting either to true enables presubmits."
         required: false
@@ -205,6 +210,7 @@ jobs:
           AI_MODEL: ${{ inputs.ai-model }}
           AI_ENDPOINT: ${{ inputs.ai-endpoint }}
           AI_CONTEXT_WINDOW_TOKENS: ${{ inputs.ai-context-window-tokens }}
+          AI_CACHE_GENERATION: ${{ inputs.ai-cache-generation }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EMAIL_SMTP_PASSWORD: ${{ secrets.EMAIL_SMTP_PASSWORD }}
           ISSUE_TOKEN: ${{ secrets.ISSUE_TOKEN }}

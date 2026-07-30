@@ -3156,3 +3156,31 @@ func TestAgenticBuildLogSelectsAKSBootstrapCauseBeforeCleanup(t *testing.T) {
 		t.Fatalf("final request did not include both causal and cleanup evidence: %s", history)
 	}
 }
+
+func TestAgentic_CacheGenerationSwitchIsReversible(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	final := `{"summary":"cached","is_transient":false,"root_cause":"root","severity":"Low","suggested_fix":"fix","relevant_files":[]}`
+	srv.push(200, chatRespFinal(final))
+	srv.push(200, chatRespFinal(final))
+	client := newAgenticTestClient(t, srv.URL)
+	in := newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second})
+	key1 := AgenticCacheKeyForGeneration("universal", "1111111111111111", "job", "1", "test", "failed")
+	key2 := AgenticCacheKeyForGeneration("universal", "2222222222222222", "job", "1", "test", "failed")
+	if _, _, err := client.doAnalyzeAgentic(t.Context(), in, key1, "sys", "user"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := client.doAnalyzeAgentic(t.Context(), in, key2, "sys", "user"); err != nil {
+		t.Fatal(err)
+	}
+	_, analysis, err := client.doAnalyzeAgentic(t.Context(), in, key1, "sys", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !analysis.CacheHit || atomic.LoadInt32(&srv.calls) != 2 {
+		t.Fatalf("cache hit=%t server calls=%d", analysis.CacheHit, atomic.LoadInt32(&srv.calls))
+	}
+	if _, ok := client.Cache().Get(key2); !ok {
+		t.Fatal("switching generations deleted the other entry")
+	}
+}

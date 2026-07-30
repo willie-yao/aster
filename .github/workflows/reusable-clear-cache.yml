@@ -1,8 +1,8 @@
 name: Reusable Clear Cache
 
-# Reusable workflow that clears the data-cache entries for a given project.
-# Consumer repos call this on demand to force the next deploy to re-fetch all
-# builds and re-run AI analysis.
+# Emergency workflow that destructively clears data-cache entries for a project.
+# Prefer ai-cache-generation for reversible AI rebaselines that retain old cache
+# entries and fetched build data.
 #
 # Example consumer workflow:
 #   jobs:
