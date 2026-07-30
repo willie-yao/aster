@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildAnalysisState, buildFailure, junitTestCases } from "../src/lib/buildFailures.js";
+import { buildAnalysisState, buildFailure, buildFailureActionID, junitTestCases } from "../src/lib/buildFailures.js";
 import type { FetchProgressStatus, FetchStatusResponse } from "../src/types/fetchStatus.js";
 import type { TestCase } from "../src/types/dashboard.js";
 
@@ -34,4 +34,10 @@ test("build subjects stay out of JUnit-only collections", () => {
   const junit: TestCase = { name: "real test", status: "failed", duration_seconds: 1 };
   assert.deepEqual(junitTestCases([failure, junit]), [junit]);
   assert.equal(buildFailure([junit, failure]), failure);
+});
+
+
+test("build action IDs are stable and source-scoped", () => {
+  assert.equal(buildFailureActionID("periodic-aks", "123"), "build::cGVyaW9kaWMtYWtz::MTIz");
+  assert.notEqual(buildFailureActionID("periodic-aks", "123"), buildFailureActionID("periodic-aks", "124"));
 });

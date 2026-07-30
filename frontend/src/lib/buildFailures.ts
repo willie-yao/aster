@@ -25,3 +25,13 @@ export function buildAnalysisState(failure: TestCase, response: FetchStatusRespo
   }
   return "unavailable";
 }
+
+export function buildFailureActionID(jobID: string, buildID: string): string {
+  const encode = (value: string) => {
+    const bytes = new TextEncoder().encode(value);
+    let binary = "";
+    for (const byte of bytes) binary += String.fromCharCode(byte);
+    return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  };
+  return `build::${encode(jobID)}::${encode(buildID)}`;
+}

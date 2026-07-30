@@ -154,7 +154,7 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 	if kind != "create-issue" && kind != "propose-fix" {
 		return ActionRequestView{}, fmt.Errorf("unsupported action %q", kind)
 	}
-	if _, err := s.findPattern(failureID); err != nil {
+	if _, err := s.resolveSubject(failureID); err != nil {
 		return ActionRequestView{}, err
 	}
 
@@ -286,7 +286,7 @@ func (s *Service) generateRequestWith(id, userToken string, generate requestPrev
 
 	preview, entry, err := generate(ctx, failureID, kind, userToken, instruction)
 	if err == nil {
-		err = s.validatePatternSnapshot(failureID, entry.patternHash)
+		err = s.validateSubjectSnapshot(failureID, entry.patternHash, entry.kind)
 	}
 
 	s.rmu.Lock()
@@ -342,16 +342,16 @@ func (s *Service) notifyRequestReady(view ActionRequestView) {
 	view = current.ActionRequestView
 	notifier := s.requestNotify
 	s.rmu.Unlock()
-	if notifier == nil || s.validatePatternSnapshot(view.FailureID, view.PatternHash) != nil {
+	if notifier == nil || s.validateSubjectSnapshot(view.FailureID, view.PatternHash, view.Kind) != nil {
 		return
 	}
 	var notifyErr error
 	for attempt := 0; attempt < 3; attempt++ {
-		if s.validatePatternSnapshot(view.FailureID, view.PatternHash) != nil {
+		if s.validateSubjectSnapshot(view.FailureID, view.PatternHash, view.Kind) != nil {
 			return
 		}
 		notifyErr = patternstate.WithLock(s.dataDir, func() error {
-			if err := s.validatePatternSnapshot(view.FailureID, view.PatternHash); err != nil {
+			if err := s.validateSubjectSnapshot(view.FailureID, view.PatternHash, view.Kind); err != nil {
 				return err
 			}
 			notifyCtx, notifyCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -545,12 +545,16 @@ func (s *Service) expireRequestsLocked(now time.Time) bool {
 	return changed
 }
 
-func (s *Service) validatePatternSnapshot(failureID, patternHash string) error {
-	pattern, err := s.findPattern(failureID)
+func (s *Service) validateSubjectSnapshot(failureID, patternHash string, kind ...string) error {
+	subject, err := s.resolveSubject(failureID)
 	if err != nil {
 		return err
 	}
-	if patternHash == "" || pattern.ContentHash != patternHash {
+	if patternHash == "" || subject.ContentHash != patternHash {
+		return ErrPreviewTargetChanged
+	}
+	fix := len(kind) > 0 && (kind[0] == gfKind || kind[0] == "propose-fix")
+	if fix && subject.Kind == actionSubjectBuild && len(verifiedBuildSourceFiles(subject.Build)) == 0 {
 		return ErrPreviewTargetChanged
 	}
 	return nil

@@ -160,9 +160,10 @@ type State = statefile.State[TrackedFix]
 
 // TrackedFix records the fix PR opened for a pattern key.
 type TrackedFix struct {
-	URL      string                 `json:"url"`
-	OpenedAt string                 `json:"opened_at"`
-	Pattern  models.PatternAnalysis `json:"pattern"`
+	URL       string                 `json:"url"`
+	OpenedAt  string                 `json:"opened_at"`
+	Pattern   models.PatternAnalysis `json:"pattern"`
+	SubjectID string                 `json:"subject_id,omitempty"`
 }
 
 // HasPatternSnapshot reports whether the fix can be reconciled.
@@ -172,6 +173,10 @@ func (f TrackedFix) HasPatternSnapshot() bool {
 
 func trackedFix(url string, pattern models.PatternAnalysis) TrackedFix {
 	return TrackedFix{URL: url, OpenedAt: now(), Pattern: pattern}
+}
+
+func trackedGeneratedFix(url string, fix *GeneratedFix) TrackedFix {
+	return TrackedFix{URL: url, OpenedAt: now(), Pattern: fix.pattern, SubjectID: fix.subjectID}
 }
 
 // Preview is a dry-run proposed fix (no PR opened).
@@ -209,9 +214,9 @@ func NewManager(pr prClient, stateFile string, opts Options) *Manager {
 	repo := opts.SourceOwner + "/" + opts.SourceName
 	state := statefile.Load[TrackedFix](stateFile, repo, "fix PRs")
 	for key, tracked := range state.Tracked {
-		if !tracked.HasPatternSnapshot() {
+		if !tracked.HasPatternSnapshot() && tracked.SubjectID == "" {
 			delete(state.Tracked, key)
-			log.Printf("Fix PRs: discarded unsupported state entry %s without a pattern snapshot", key)
+			log.Printf("Fix PRs: discarded unsupported state entry %s without a subject snapshot", key)
 		}
 	}
 	return &Manager{pr: pr, stateFile: stateFile, opts: opts, state: state}
@@ -428,9 +433,10 @@ type GeneratedFix struct {
 	Description string  // PR description (after any repo-template reformat)
 	Body        string  // full PR body that embeds Description + diff + marker
 
-	pattern models.PatternAnalysis
-	key     string
-	base    ghpr.Base
+	pattern   models.PatternAnalysis
+	subjectID string
+	key       string
+	base      ghpr.Base
 }
 
 // GeneratedFixSnapshot is the serializable form of a generated fix. It keeps
@@ -445,6 +451,7 @@ type GeneratedFixSnapshot struct {
 	Description string                 `json:"description"`
 	Body        string                 `json:"body"`
 	Pattern     models.PatternAnalysis `json:"pattern"`
+	SubjectID   string                 `json:"subject_id,omitempty"`
 	Key         string                 `json:"key"`
 	Base        ghpr.Base              `json:"base"`
 }
@@ -462,7 +469,7 @@ func (gf *GeneratedFix) Snapshot() *GeneratedFixSnapshot {
 		Subject: gf.Preview.Subject, Rationale: gf.Preview.Rationale,
 		Diff: gf.Preview.Diff, Files: files, Verify: gf.Preview.Verify,
 		Title: gf.Title, Description: gf.Description, Body: gf.Body,
-		Pattern: gf.pattern, Key: gf.key, Base: gf.base,
+		Pattern: gf.pattern, SubjectID: gf.subjectID, Key: gf.key, Base: gf.base,
 	}
 }
 
@@ -479,7 +486,7 @@ func RestoreGeneratedFix(snapshot *GeneratedFixSnapshot) *GeneratedFix {
 		Preview: Preview{Subject: snapshot.Subject, Rationale: snapshot.Rationale,
 			Diff: snapshot.Diff, Files: files, Verify: snapshot.Verify},
 		Title: snapshot.Title, Description: snapshot.Description, Body: snapshot.Body,
-		pattern: snapshot.Pattern, key: snapshot.Key, base: snapshot.Base,
+		pattern: snapshot.Pattern, subjectID: snapshot.SubjectID, key: snapshot.Key, base: snapshot.Base,
 	}
 }
 
@@ -529,7 +536,7 @@ func (m *Manager) generatePreview(ctx context.Context, p models.PatternAnalysis,
 }
 
 // OpenFromPreview opens the draft PR for a previously generated fix, applying
-// the same dedup guard as Reconcile: skip if the pattern is already tracked or
+// the same dedup guard as Reconcile: skip if the subject is already tracked or
 // an open fix PR already exists. It returns the PR URL and records tracking
 // state; the caller saves state.
 func (m *Manager) OpenFromPreview(ctx context.Context, gf *GeneratedFix) (string, error) {
@@ -543,7 +550,7 @@ func (m *Manager) OpenFromPreview(ctx context.Context, gf *GeneratedFix) (string
 	if _, url, found, err := m.pr.SearchOpenPR(ctx, m.opts.SourceOwner, m.opts.SourceName, markerToken(key), markerFor(key)); err != nil {
 		return "", fmt.Errorf("fix-PR search failed: %w", err)
 	} else if found {
-		m.state.Tracked[key] = trackedFix(url, gf.pattern)
+		m.state.Tracked[key] = trackedGeneratedFix(url, gf)
 		return url, nil
 	}
 	url, err := m.openPR(ctx, gf.Title, gf.Body, gf.Preview.Files, gf.base)
@@ -552,9 +559,9 @@ func (m *Manager) OpenFromPreview(ctx context.Context, gf *GeneratedFix) (string
 	}
 	if err != nil {
 		// PR opened but a follow-up (e.g. labeling) failed; still track it.
-		log.Printf("  ⚠ fix PR opened with a warning for %q: %v", gf.pattern.Subject, err)
+		log.Printf("  ⚠ fix PR opened with a warning for %q: %v", gf.Preview.Subject, err)
 	}
-	m.state.Tracked[key] = trackedFix(url, gf.pattern)
+	m.state.Tracked[key] = trackedGeneratedFix(url, gf)
 	return url, nil
 }
 

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/issues"
@@ -795,5 +796,96 @@ func TestLegacyReadyPreviewWithoutFailureIDIsRejected(t *testing.T) {
 	}
 	if loaded.Version != previewStateVersion || loaded.Previews["legacy"] != nil || loaded.Previews["unknown"] == nil {
 		t.Fatalf("migrated state = %+v", loaded)
+	}
+}
+
+func analyzedBuildDetail(withSource bool) models.JobDetail {
+	analysis := &models.AIAnalysis{
+		GeneratedAt: "2026-07-30T12:00:00Z", Mode: ai.AgenticMode, CritiquePassed: true,
+		RootCause: "K8sVersionNotSupported rejected Kubernetes 1.33.2 because AKS requires Long-Term Support.",
+		Severity:  "High", SuggestedFix: "Update the repository version selection or enable AKS LTS.",
+		RelevantFiles: []string{"templates/aks.yaml"}, FileLinks: map[string]string{},
+	}
+	if withSource {
+		analysis.FileLinks["templates/aks.yaml"] = "https://github.com/example/repo/blob/sha/templates/aks.yaml"
+	}
+	return models.JobDetail{Name: "periodic-aks", JobID: "periodic-aks", JobType: models.JobTypePeriodic, Runs: []models.BuildResult{{
+		BuildInfo: models.BuildInfo{BuildID: "123", JobName: "periodic-aks", ProwURL: "https://prow.example/123", BuildLogURL: "https://gcs.example/123/build-log.txt"},
+		TestCases: []models.TestCase{{Name: "Prow job execution", SuiteName: "Prow", ClassName: "job", Source: models.TestCaseSourceBuild, Status: "failed", AISummary: &models.AISummary{Summary: "AKS bootstrap creation failed."}, AIAnalysis: analysis}},
+	}}}
+}
+
+func TestBuildIssuePreviewUsesSingleRunLanguage(t *testing.T) {
+	dataDir := t.TempDir()
+	detail := analyzedBuildDetail(false)
+	writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
+	cfg := &project.Config{Issues: &project.Issues{Repo: &project.SourceRepo{Owner: "o", Name: "r"}}, Branding: project.Branding{SiteURL: "https://dashboard.example"}}
+	service := NewService(cfg, dataDir, AIConfig{})
+	id := BuildFailureID(detail.JobID, "123")
+	preview, err := service.PreviewIssue(t.Context(), id, "token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"K8sVersionNotSupported", "1.33.2", "Long-Term Support", "build-log.txt", "one analyzed build failure"} {
+		if !strings.Contains(preview.Body, want) {
+			t.Fatalf("issue body missing %q: %s", want, preview.Body)
+		}
+	}
+	if strings.Contains(strings.ToLower(preview.Body), "recurring pattern") || strings.Contains(strings.ToLower(preview.Body), "systemic") {
+		t.Fatalf("issue body claimed recurrence: %s", preview.Body)
+	}
+}
+
+func TestBuildFixPreviewRejectsMissingRepositoryEvidence(t *testing.T) {
+	dataDir := t.TempDir()
+	detail := analyzedBuildDetail(false)
+	writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
+	cfg := &project.Config{AI: &project.AI{FixPRs: &project.FixPRs{Repo: &project.SourceRepo{Owner: "o", Name: "r"}}}}
+	service := NewService(cfg, dataDir, AIConfig{})
+	_, err := service.PreviewFix(t.Context(), BuildFailureID(detail.JobID, "123"), "token", "")
+	if !errors.Is(err, ErrPreviewRejected) || !strings.Contains(err.Error(), "verified local path") {
+		t.Fatalf("fix preview error = %v", err)
+	}
+	if _, err := service.PreviewIssue(t.Context(), BuildFailureID(detail.JobID, "123"), "token", ""); err == nil {
+		// No issue repo is configured. This verifies the fix refusal did not mutate the subject.
+		t.Fatal("issue preview unexpectedly succeeded without a target repo")
+	}
+}
+
+func TestBuildSubjectHashChangesWithPublishedAnalysis(t *testing.T) {
+	dataDir := t.TempDir()
+	detail := analyzedBuildDetail(true)
+	writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
+	service := NewService(&project.Config{}, dataDir, AIConfig{})
+	id := BuildFailureID(detail.JobID, "123")
+	subject, err := service.resolveSubject(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldHash := subject.ContentHash
+	detail.Runs[0].TestCases[0].AIAnalysis.SuggestedFix = "Choose a supported version."
+	writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
+	if err := service.validateSubjectSnapshot(id, oldHash); !errors.Is(err, ErrPreviewTargetChanged) {
+		t.Fatalf("changed analysis validation = %v", err)
+	}
+}
+
+func TestBuildFixSnapshotRejectsRemovedSourceEvidenceButIssueRemainsValid(t *testing.T) {
+	dataDir := t.TempDir()
+	detail := analyzedBuildDetail(true)
+	writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
+	service := NewService(&project.Config{}, dataDir, AIConfig{})
+	id := BuildFailureID(detail.JobID, "123")
+	subject, err := service.resolveSubject(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail.Runs[0].TestCases[0].AIAnalysis.FileLinks = nil
+	writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
+	if err := service.validateSubjectSnapshot(id, subject.ContentHash, gfKind); !errors.Is(err, ErrPreviewTargetChanged) {
+		t.Fatalf("fix snapshot validation = %v", err)
+	}
+	if err := service.validateSubjectSnapshot(id, subject.ContentHash, "create-issue"); err != nil {
+		t.Fatalf("issue snapshot validation = %v", err)
 	}
 }

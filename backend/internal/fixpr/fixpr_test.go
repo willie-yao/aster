@@ -463,3 +463,47 @@ func TestReviewJSONCandidatesCapsVerboseBraceOutput(t *testing.T) {
 		t.Fatalf("issues=%v err=%v", issues, err)
 	}
 }
+
+func TestGenerateBuildPreviewUsesRepositoryEvidenceWithoutPatternSemantics(t *testing.T) {
+	agent := goodAgent()
+	manager := newManager(t, &fakePR{}, agent, Options{})
+	generated, err := manager.GenerateBuildPreview(t.Context(), BuildFailure{
+		ID: "build-id", JobID: "periodic-aks", JobName: "periodic-aks", BuildID: "123",
+		RootCause:     "K8sVersionNotSupported rejected Kubernetes 1.33.2.",
+		SuggestedFix:  "Update the AKS version selection.",
+		RelevantFiles: []string{"templates/aks.yaml"}, SourceFiles: []string{"templates/aks.yaml"},
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if generated.pattern.ID != "" || generated.pattern.Systemic {
+		t.Fatalf("build fix manufactured a pattern: %+v", generated.pattern)
+	}
+	if !strings.Contains(agent.spec.Instruction, "single CI build") || !strings.Contains(agent.spec.Instruction, "templates/aks.yaml") {
+		t.Fatalf("build instruction = %s", agent.spec.Instruction)
+	}
+	if strings.Contains(strings.ToLower(generated.Body), "recurring failure") {
+		t.Fatalf("build PR body claimed recurrence: %s", generated.Body)
+	}
+	if _, err := manager.OpenFromPreview(t.Context(), generated); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.SaveState(); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := NewManager(&fakePR{}, manager.stateFile, manager.opts)
+	tracked := reloaded.state.Tracked[generated.key]
+	if tracked.SubjectID != "build-id" || tracked.HasPatternSnapshot() {
+		t.Fatalf("tracked build fix = %+v", tracked)
+	}
+}
+
+func TestGenerateBuildPreviewRejectsExternalOnlyRemediation(t *testing.T) {
+	manager := newManager(t, &fakePR{}, goodAgent(), Options{})
+	_, err := manager.GenerateBuildPreview(t.Context(), BuildFailure{
+		ID: "build-id", JobID: "job", JobName: "job", BuildID: "1", RootCause: "external outage", SuggestedFix: "wait for provider",
+	}, "")
+	if err == nil || !strings.Contains(err.Error(), "verified local path") {
+		t.Fatalf("external-only error = %v", err)
+	}
+}
