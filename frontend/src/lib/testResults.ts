@@ -20,6 +20,15 @@ export function emptyTestResultsPresentation(run: BuildResult): EmptyTestResults
   }
 
   const hasJUnit = (run.junit_urls?.length ?? 0) > 0;
+  if (run.junit_truncated) {
+    return {
+      kind: "unavailable",
+      title: "Test results incomplete",
+      detail: "JUnit discovery reached the artifact limit, so some test cases may be missing. Review the build artifacts and build log for the complete result.",
+      severity: "warning",
+    };
+  }
+
   if (!hasJUnit && run.junit_complete === false) {
     return {
       kind: "unavailable",

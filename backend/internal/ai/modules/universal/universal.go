@@ -36,8 +36,13 @@ func (m *Module) AnalysisPrompt(_ context.Context, _ *http.Client, run *models.B
 	const failureMessageCap = 16 * 1024
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "Test failure to investigate.\n\n")
-	fmt.Fprintf(&sb, "Test name: %s\n", tc.Name)
+	if tc.Source == models.TestCaseSourceBuild {
+		fmt.Fprintf(&sb, "Prow build failure to investigate. No failed JUnit test case was reported, so use build-log.txt as the primary failure evidence and do not invent a test assertion.\n\n")
+		fmt.Fprintf(&sb, "Failure subject: %s\n", tc.Name)
+	} else {
+		fmt.Fprintf(&sb, "Test failure to investigate.\n\n")
+		fmt.Fprintf(&sb, "Test name: %s\n", tc.Name)
+	}
 	if tc.JUnitFile != "" {
 		fmt.Fprintf(&sb, "JUnit file: %s\n", tc.JUnitFile)
 	}

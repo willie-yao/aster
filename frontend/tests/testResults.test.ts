@@ -43,6 +43,22 @@ test("incomplete discovery does not claim that tests never started", () => {
   );
 });
 
+test("truncated discovery remains incomplete when some JUnit URLs were found", () => {
+  assert.deepEqual(
+    emptyTestResultsPresentation(run({
+      junit_complete: false,
+      junit_truncated: true,
+      junit_urls: ["https://artifacts.example/run/junit.xml"],
+    })),
+    {
+      kind: "unavailable",
+      title: "Test results incomplete",
+      detail: "JUnit discovery reached the artifact limit, so some test cases may be missing. Review the build artifacts and build log for the complete result.",
+      severity: "warning",
+    },
+  );
+});
+
 test("uploaded JUnit without parsed cases reports unreadable results", () => {
   assert.equal(
     emptyTestResultsPresentation(run({ junit_urls: ["https://artifacts.example/run/junit.xml"] }))?.title,

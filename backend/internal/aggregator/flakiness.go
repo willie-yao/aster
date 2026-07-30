@@ -27,6 +27,9 @@ func outcomesForTest(testName string, runs []models.BuildResult) []testOutcome {
 	var outcomes []testOutcome
 	for _, run := range runs {
 		for _, tc := range run.TestCases {
+			if tc.Source == models.TestCaseSourceBuild {
+				continue
+			}
 			if tc.Name != testName {
 				continue
 			}
@@ -50,6 +53,9 @@ func collectTestOutcomes(runs []models.BuildResult) map[string][]testOutcome {
 	for _, run := range runs {
 		seen := make(map[string]bool, len(run.TestCases))
 		for _, tc := range run.TestCases {
+			if tc.Source == models.TestCaseSourceBuild {
+				continue
+			}
 			if seen[tc.Name] {
 				continue
 			}

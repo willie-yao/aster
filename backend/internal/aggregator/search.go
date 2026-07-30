@@ -51,6 +51,9 @@ func BuildSearchIndex(jobResults map[string][]models.BuildResult, jobs []models.
 		// Process runs newest-first: the first occurrence sets the latest status.
 		for _, run := range runs {
 			for _, tc := range run.TestCases {
+				if tc.Source == models.TestCaseSourceBuild {
+					continue
+				}
 				key := testKey{testName: tc.Name, jobID: jobID}
 				info, ok := seen[key]
 				if !ok {

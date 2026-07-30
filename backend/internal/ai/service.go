@@ -233,9 +233,10 @@ func (s *Service) runAgentic(ctx context.Context, jobID, buildPrefix string, run
 	browser := s.browserFactory.ForBuild(buildPrefix, run.JobName+"/"+run.BuildID)
 	cache := s.toolCacheFor(buildPrefix)
 	cacheKey := s.agenticCacheKey(jobID, run.BuildID, tc.Name, tc.FailureMessage)
+	opts := s.agenticOptionsFor(tc)
 	in := AgenticInputs{
 		Browser:                browser,
-		Opts:                   s.agenticOpts,
+		Opts:                   opts,
 		Registry:               s.registry,
 		EnabledTools:           s.enabledTools,
 		Cache:                  cache,
@@ -248,6 +249,14 @@ func (s *Service) runAgentic(ctx context.Context, jobID, buildPrefix string, run
 		DraftSelectionObserver: s.draftSelectionObserver,
 	}
 	return s.client.doAnalyzeAgentic(ctx, in, cacheKey, s.systemPrompt, userPrompt)
+}
+
+func (s *Service) agenticOptionsFor(tc *models.TestCase) AgenticOptions {
+	opts := s.agenticOpts
+	if tc != nil && tc.Source == models.TestCaseSourceBuild {
+		opts.MinGCSBytes = 0
+	}
+	return opts
 }
 
 // toolCacheFor returns the *tools.Cache scoped to one build, creating it
@@ -311,10 +320,11 @@ func (s *Service) shouldReanalyze(tc *models.TestCase) bool {
 // current quality gate: tool-call floor, GCS-byte floor without complete
 // evidence-plan coverage, critique failure or stale version, or hash mismatch.
 func (s *Service) belowCurrentAgenticFloor(tc *models.TestCase) bool {
-	if tc.AIAnalysis.ToolCalls < s.agenticOpts.MinToolCalls {
+	opts := s.agenticOptionsFor(tc)
+	if tc.AIAnalysis.ToolCalls < opts.MinToolCalls {
 		return true
 	}
-	if gcsFloorUnmet(tc.AIAnalysis.GCSBytes, s.agenticOpts.MinGCSBytes, tc.AIAnalysis.EvidencePlanCovered) {
+	if gcsFloorUnmet(tc.AIAnalysis.GCSBytes, opts.MinGCSBytes, tc.AIAnalysis.EvidencePlanCovered) {
 		return true
 	}
 	if !tc.AIAnalysis.CritiquePassed {

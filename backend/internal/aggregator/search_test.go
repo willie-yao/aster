@@ -278,3 +278,20 @@ func TestBuildSearchIndex_GeneratedAt(t *testing.T) {
 		t.Errorf("GeneratedAt = %q, want %q", idx.GeneratedAt, expected)
 	}
 }
+
+func TestBuildSearchIndexExcludesBuildFailures(t *testing.T) {
+	jobs := searchJobs()[:1]
+	jobResults := map[string][]models.BuildResult{
+		"job-alpha": {
+			makeSearchBuild("1", "job-alpha", searchHoursAgo(1), false, []models.TestCase{{
+				Name: "Prow job execution", Source: models.TestCaseSourceBuild, Status: "failed",
+			}}),
+		},
+	}
+	idx := BuildSearchIndex(jobResults, jobs, searchBaseTime)
+	for _, entry := range idx.Entries {
+		if entry.TestName == "Prow job execution" {
+			t.Fatalf("build failure entered the test search index: %+v", entry)
+		}
+	}
+}

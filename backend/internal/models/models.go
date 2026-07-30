@@ -173,11 +173,17 @@ type AIAnalysis struct {
 	FileLinks map[string]string `json:"file_links"`
 }
 
-// TestCase represents a single test case from JUnit XML.
+const (
+	// TestCaseSourceBuild identifies a build-level failure not represented by JUnit.
+	TestCaseSourceBuild = "build"
+)
+
+// TestCase represents one test or build-level failure.
 type TestCase struct {
 	Name            string  `json:"name"`
 	SuiteName       string  `json:"suite_name,omitempty"`
 	ClassName       string  `json:"class_name,omitempty"`
+	Source          string  `json:"source,omitempty"`
 	Status          string  `json:"status"` // "passed", "failed", "skipped"
 	DurationSeconds float64 `json:"duration_seconds"`
 	FailureMessage  string  `json:"failure_message,omitempty"`

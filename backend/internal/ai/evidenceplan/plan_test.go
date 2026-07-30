@@ -82,3 +82,16 @@ func TestCanonicalTestCaseBoundsFailureAndDropsPriorAI(t *testing.T) {
 		t.Fatalf("canonicalization is not idempotent: first=%+v second=%+v", got, twice)
 	}
 }
+
+func TestFailureSignalIdentifiesBuildFailure(t *testing.T) {
+	signal := FailureSignal(models.TestCase{
+		Name: "Prow job execution", Source: models.TestCaseSourceBuild,
+		FailureMessage: "Inspect build-log.txt.",
+	})
+	if !strings.Contains(signal, "Failed Prow build: Prow job execution") {
+		t.Fatalf("build failure signal = %q", signal)
+	}
+	if strings.Contains(signal, "Failed test:") {
+		t.Fatalf("build failure signal presented a synthetic test: %q", signal)
+	}
+}
