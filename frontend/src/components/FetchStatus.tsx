@@ -18,7 +18,7 @@ import Stack from "@mui/material/Stack";
 import Switch from "@mui/material/Switch";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
-import { useState, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import {
   fetchStatusCompactPresentation,
   fetchStatusPresentation,
@@ -41,10 +41,73 @@ interface FetchStatusStripProps {
   onDismiss: (key: string) => void;
 }
 
+const activeSpinnerDuration = 1400;
+
+function ActiveStateIcon({ size }: { size: number }) {
+  const spinnerRef = useRef<HTMLSpanElement>(null);
+
+  useLayoutEffect(() => {
+    const spinner = spinnerRef.current;
+    if (!spinner) return;
+
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+    let animation: Animation | null = null;
+    const updateAnimation = () => {
+      animation?.cancel();
+      animation = null;
+      spinner.style.transform = "rotate(0deg)";
+      if (reducedMotion.matches) return;
+
+      animation = spinner.animate(
+        [{ transform: "rotate(0deg)" }, { transform: "rotate(360deg)" }],
+        { duration: activeSpinnerDuration, iterations: Infinity, easing: "linear" }
+      );
+      animation.startTime = 0;
+    };
+
+    updateAnimation();
+    reducedMotion.addEventListener("change", updateAnimation);
+    return () => {
+      reducedMotion.removeEventListener("change", updateAnimation);
+      animation?.cancel();
+    };
+  }, []);
+
+  return (
+    <Box
+      ref={spinnerRef}
+      component="span"
+      aria-hidden="true"
+      sx={{
+        display: "inline-flex",
+        width: size,
+        height: size,
+        flex: "0 0 auto",
+        transform: "rotate(0deg)",
+      }}
+    >
+      <CircularProgress
+        variant="determinate"
+        value={30}
+        size={size}
+        thickness={5}
+        color="inherit"
+        sx={{
+          display: "block",
+          "& .MuiCircularProgress-circle": {
+            strokeLinecap: "round",
+            transition: "none",
+          },
+        }}
+      />
+    </Box>
+  );
+}
+
 function stateIcon(response: FetchStatusResponse, size = 18): ReactNode {
   switch (response.state) {
     case "active":
-      return <CircularProgress size={size} thickness={5} color="inherit" aria-hidden="true" />;
+      return <ActiveStateIcon size={size} />;
     case "failed":
       return <ErrorOutlineOutlined sx={{ fontSize: size }} />;
     case "stale":
@@ -98,7 +161,6 @@ export function FetchStatusControl({ response, idleCompact, onIdleCompactChange 
       aria-controls={popoverID}
       aria-expanded={Boolean(anchor)}
       onClick={(event) => setAnchor(event.currentTarget)}
-      startIcon={stateIcon(response)}
       endIcon={iconOnly ? undefined : <ExpandMore sx={{ fontSize: 16 }} />}
       sx={{
         minWidth: { xs: 34, md: iconOnly ? 34 : "auto" },
@@ -113,9 +175,6 @@ export function FetchStatusControl({ response, idleCompact, onIdleCompactChange 
         textTransform: "none",
         whiteSpace: "nowrap",
         boxShadow: "none",
-        "& .MuiButton-startIcon": {
-          m: { xs: 0, md: iconOnly ? 0 : undefined },
-        },
         "& .MuiButton-endIcon": {
           display: { xs: "none", md: "inherit" },
         },
@@ -128,13 +187,23 @@ export function FetchStatusControl({ response, idleCompact, onIdleCompactChange 
       <Box
         component="span"
         sx={{
-          display: { xs: "none", md: iconOnly ? "none" : "inline" },
-          color: "text.primary",
-          fontSize: "0.75rem",
-          fontWeight: 700,
+          display: "inline-flex",
+          alignItems: "center",
+          gap: { xs: 0, md: iconOnly ? 0 : 1 },
         }}
       >
-        {compact.label}
+        {stateIcon(response)}
+        <Box
+          component="span"
+          sx={{
+            display: { xs: "none", md: iconOnly ? "none" : "inline" },
+            color: "text.primary",
+            fontSize: "0.75rem",
+            fontWeight: 700,
+          }}
+        >
+          {compact.label}
+        </Box>
       </Box>
     </Button>
   );
@@ -167,7 +236,7 @@ export function FetchStatusControl({ response, idleCompact, onIdleCompactChange 
         }}
       >
         <Box role="dialog" aria-label="Fetch status details" sx={{ p: 2 }}>
-          <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+          <Stack direction="row" spacing={1.25} sx={{ alignItems: "center" }}>
             <Box sx={{ color: `${compact.severity}.main`, display: "flex" }}>{stateIcon(response, 20)}</Box>
             <Box sx={{ minWidth: 0, flex: 1 }}>
               <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
@@ -292,7 +361,7 @@ export function FetchStatusStrip({ response, dismissedKey, onDismiss }: FetchSta
           py: 0.75,
           display: "grid",
           gridTemplateColumns: "auto minmax(0, 1fr) auto",
-          gap: 1,
+          columnGap: 1.25,
           alignItems: "center",
         }}
       >
