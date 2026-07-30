@@ -24,8 +24,13 @@ wizard:
 9. Shows the complete plan and intended paths.
 10. Writes nothing until you answer yes to the final confirmation.
 
-Enter `q`, `quit`, or `cancel` at any prompt. Cancellation and EOF leave no
-scaffold. The final confirmation defaults to no.
+The interactive wizard uses keyboard forms. Use the arrow keys to move through
+choices, Enter to accept a choice or prefilled input, and `Ctrl+C` to cancel.
+Inferred values appear directly in their input fields so they can be edited
+before continuing. When `TERM=dumb`, the wizard uses equivalent numbered and
+line-oriented prompts without terminal cursor control. Set `ACCESSIBLE=1` to
+select this screen-reader-friendly mode in any terminal. Cancellation and EOF
+leave no scaffold. The final confirmation defaults to no.
 
 Repository metadata, Prow configuration, and source documentation are treated
 as untrusted data. Documentation is only passed as bounded input to the fixed
@@ -42,7 +47,10 @@ go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboar
 
 The wizard normally detects `origin`. If `origin` is a GitHub fork, it also
 shows the canonical upstream repository and defaults Prow discovery to that
-upstream after confirmation. You can instead supply a repository name or URL:
+upstream after confirmation. Selection fields include a short description of
+the highlighted choice. Text fields show inferred defaults as editable values,
+not as hidden fallback behavior. You can instead supply a repository name or
+URL:
 
 ```bash
 go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboard \
