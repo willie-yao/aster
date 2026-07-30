@@ -41,6 +41,18 @@ export interface FetchProgressStatus {
     accepted_cache_hits: number;
     new_work: number;
     stale_work: number;
+    cache_rejections?: {
+      missing: number;
+      expired: number;
+      tool_floor: number;
+      evidence_floor: number;
+      critique: number;
+      skill: number;
+      model: number;
+      prompt: number;
+      transient_persistence: number;
+      malformed: number;
+    };
     queued: number;
     running: number;
     completed: number;

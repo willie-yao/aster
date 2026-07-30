@@ -691,6 +691,12 @@ only substitutes for the GCS-byte floor. The last usable result stays published
 until its replacement succeeds. A manual cache clear is only for an immediate
 full rebaseline.
 
+In Kubernetes container mode, the worker applies valid private cache entries
+before it constructs analyzer ConfigMaps or Tasks. The worker and analyzer use
+the same age, investigation-floor, critique, skill, model, prompt, and transient
+persistence checks. Analyzer image changes do not change the cache key. Public
+`jobs/*.json` analysis remains presentation data and is never used as cache.
+
 Cached agentic entries are scoped to a specific build because answers cite
 build-specific paths and line numbers; the same test failing in two different
 builds gets two separate agentic analyses.

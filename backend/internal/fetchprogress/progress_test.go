@@ -636,3 +636,55 @@ func TestTrackerTerminalFailureCancelsBuildAnalysisCounters(t *testing.T) {
 		t.Fatalf("overall analysis counters = %+v", status.Analyses)
 	}
 }
+
+func TestTrackerFinalizesPostCacheAnalysisPlan(t *testing.T) {
+	tracker := newTracker(t.TempDir(), "sha-test", trackerOptions{
+		now:          func() time.Time { return time.Date(2026, 7, 30, 18, 0, 0, 0, time.UTC) },
+		newID:        func() string { return "0123456789abcdef01234567" },
+		write:        func(string, Status) error { return nil },
+		writeHistory: func(string, History) error { return nil },
+		logf:         func(string, ...any) {},
+	})
+	tracker.StartPass(PassInitialWatch)
+	rejections := CacheRejectionProgress{Missing: 1, Prompt: 1}
+	tracker.PlanAnalysisWork(AnalysisPlan{
+		LogicalTotal: 3, AcceptedCacheHits: 1, NewWork: 1, StaleWork: 1, Queued: 2,
+		CacheRejections: rejections,
+		BuildSubjects: BuildAnalysisProgress{
+			LogicalTotal: 1, Completed: 1, AcceptedCacheHits: 1,
+		},
+	})
+
+	tracker.RecordTaskPlanned("new", "task-new", false, false)
+	tracker.RecordTaskPlanned("stale", "task-stale", true, false)
+	tracker.RecordCacheDisposition("stale", false)
+	tracker.StartAnalysis(false)
+	tracker.RecordTaskState("new", "Running", 1, false)
+	tracker.FinishAnalysis(false, OutcomeSucceeded)
+
+	got := tracker.Snapshot().Analyses
+	want := AnalysisProgress{
+		LogicalTotal: 3, AcceptedCacheHits: 1, NewWork: 1, StaleWork: 1, CacheRejections: rejections,
+		Queued: 1, Completed: 2, TaskAttempts: 1,
+		BuildSubjects: BuildAnalysisProgress{LogicalTotal: 1, Completed: 1, AcceptedCacheHits: 1},
+	}
+	if got != want {
+		t.Fatalf("analysis progress = %+v, want %+v", got, want)
+	}
+}
+
+func TestReadAcceptsPreviousBuildSubjectStatusSchema(t *testing.T) {
+	status := testStatus(time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC))
+	status.SchemaVersion = 4
+	path := filepath.Join(t.TempDir(), "status.json")
+	data, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Read(path); err != nil {
+		t.Fatalf("reading previous status schema: %v", err)
+	}
+}

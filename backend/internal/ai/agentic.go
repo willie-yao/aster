@@ -725,40 +725,18 @@ func effectiveAgenticPromptHash(in AgenticInputs, sysPrompt string) string {
 }
 
 func (c *Client) cachedAgenticAnalysis(in AgenticInputs, cacheKey, sysPrompt string, start time.Time) (*models.AISummary, *models.AIAnalysis, bool) {
-	raw, ok := c.cache.Get(cacheKey)
-	if !ok {
-		return nil, nil, false
-	}
-	var cached agenticCacheData
-	if json.Unmarshal(raw, &cached) != nil {
-		return nil, nil, false
-	}
-	critiqueOK := cached.CritiquePassed && cached.CritiqueVersion >= currentCritiqueVersion
-	wantSkillHash := ""
+	skillSetHash := ""
 	if in.Skills != nil {
-		wantSkillHash = in.Skills.Hash()
+		skillSetHash = in.Skills.Hash()
 	}
-	critiqueOK = critiqueOK && cached.SkillSetHash == wantSkillHash
-	critiqueOK = critiqueOK && cached.ModelHash == c.modelFingerprint()
-	if cached.IsTransient && in.ConsecutiveFailures >= transientPersistThreshold {
-		critiqueOK = false
-	}
-	if cached.ToolCalls < in.Opts.MinToolCalls || gcsFloorUnmet(cached.GCSBytes, in.Opts.MinGCSBytes, cached.EvidencePlanCovered) || !critiqueOK || cached.PromptHash != effectiveAgenticPromptHash(in, sysPrompt) {
+	result, reason := LookupAgenticCache(c.cache, cacheKey, agenticCachePolicy(
+		c, in.Opts, skillSetHash, effectiveAgenticPromptHash(in, sysPrompt), in.ConsecutiveFailures,
+	))
+	if reason != CacheAccepted {
 		return nil, nil, false
 	}
-	summary, analysis := c.buildOutputs(cached.analysisResponse)
-	stampAgenticTelemetry(analysis, nil, in.Mode, true, start)
-	analysis.ToolCalls = cached.ToolCalls
-	analysis.ContextBytes = cached.ModelBytes
-	analysis.GCSBytes = cached.GCSBytes
-	analysis.EvidencePlanCovered = cached.EvidencePlanCovered
-	analysis.BudgetExhausted = cached.BudgetExhausted
-	analysis.CritiquePassed = cached.CritiquePassed
-	analysis.CritiqueVersion = cached.CritiqueVersion
-	analysis.SkillSetHash = cached.SkillSetHash
-	analysis.ModelHash = cached.ModelHash
-	analysis.PromptHash = cached.PromptHash
-	return summary, analysis, true
+	stampAgenticTelemetry(result.Analysis, nil, in.Mode, true, start)
+	return result.Summary, result.Analysis, true
 }
 
 // doAnalyzeAgentic runs the tool-calling AI loop for one failure. Returns the

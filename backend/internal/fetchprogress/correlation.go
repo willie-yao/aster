@@ -64,7 +64,7 @@ func (t *Tracker) RecordTaskPlanned(workItem, taskName string, hasCacheSeed, bui
 		}
 		if !t.plannedTasks[workItem] {
 			t.plannedTasks[workItem] = true
-			if !hasCacheSeed {
+			if !t.analysisPlanFinalized && !hasCacheSeed {
 				status.Analyses.NewWork++
 			}
 		}
@@ -150,13 +150,17 @@ func (t *Tracker) RecordCacheDisposition(workItem string, accepted bool) {
 		}
 		if accepted {
 			t.cacheDisposition[workItem] = "accepted"
-			status.Analyses.AcceptedCacheHits++
-			if t.taskBuildSubjects[workItem] {
-				status.Analyses.BuildSubjects.AcceptedCacheHits++
+			if !t.analysisPlanFinalized {
+				status.Analyses.AcceptedCacheHits++
+				if t.taskBuildSubjects[workItem] {
+					status.Analyses.BuildSubjects.AcceptedCacheHits++
+				}
 			}
 		} else {
 			t.cacheDisposition[workItem] = "stale"
-			status.Analyses.StaleWork++
+			if !t.analysisPlanFinalized {
+				status.Analyses.StaleWork++
+			}
 		}
 		if mapping != nil {
 			mapping.CacheDisposition = t.cacheDisposition[workItem]

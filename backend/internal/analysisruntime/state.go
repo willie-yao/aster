@@ -2,6 +2,7 @@ package analysisruntime
 
 import (
 	"bytes"
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -10,12 +11,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
 )
 
@@ -286,6 +289,24 @@ func (s *ContainerStateStore) CacheSeed(request ai.FailureAnalysisRequest) map[s
 		return nil
 	}
 	return entries
+}
+
+// AcceptCachedFailure evaluates one private cache entry under the current runtime contract.
+func (s *ContainerStateStore) AcceptCachedFailure(ctx context.Context, httpClient *http.Client, request ai.FailureAnalysisRequest, planner *ai.Service) (ai.FailureAnalysisResult, ai.CacheRejectionReason, error) {
+	if s == nil || s.cache == nil {
+		return ai.FailureAnalysisResult{}, ai.CacheRejectedMissing, fmt.Errorf("container state store is required")
+	}
+	if planner == nil {
+		return ai.FailureAnalysisResult{}, ai.CacheRejectedMissing, fmt.Errorf("analysis reuse planner is required")
+	}
+	request = CanonicalFailureAnalysisRequest(request)
+	run := models.BuildResult{BuildInfo: request.Build}
+	testCase := request.TestCase
+	policy := planner.FailureCachePolicy(ctx, httpClient, &run, &testCase, max(1, request.ConsecutiveFailures))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result, reason := ai.LookupAgenticCache(s.cache, FailureCacheKey(request), policy)
+	return result, reason, nil
 }
 
 // TraceStore returns the shared private trace store.

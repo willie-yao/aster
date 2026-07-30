@@ -80,15 +80,23 @@ func (c *Client) ModelName() string { return c.model }
 // APIMode returns the selected provider API contract.
 func (c *Client) APIMode() string { return c.apiMode }
 
-// modelFingerprint hashes the model + endpoint so a provider or model swap
-// invalidates cached analyses produced by the prior model.
-func (c *Client) modelFingerprint() string {
-	fingerprint := c.model + "\x00" + c.apiURL
-	if c.apiMode != "" && c.apiMode != APIChatCompletions {
-		fingerprint += "\x00" + c.apiMode
+// ModelFingerprint hashes the model, endpoint, and non-default API contract.
+func ModelFingerprint(apiMode, endpoint, model string) string {
+	apiMode = strings.ToLower(strings.TrimSpace(apiMode))
+	if apiMode == "" {
+		apiMode = APIChatCompletions
+	}
+	fingerprint := model + "\x00" + endpoint
+	if apiMode != APIChatCompletions {
+		fingerprint += "\x00" + apiMode
 	}
 	sum := sha256.Sum256([]byte(fingerprint))
 	return hex.EncodeToString(sum[:8])
+}
+
+// modelFingerprint returns the current client's cache fingerprint.
+func (c *Client) modelFingerprint() string {
+	return ModelFingerprint(c.apiMode, c.apiURL, c.model)
 }
 
 // Cache returns the underlying cache so callers can persist it.
@@ -231,10 +239,9 @@ func (r analysisResponse) proseFields() []string {
 	return out
 }
 
-// buildOutputs splits an analysisResponse into the AISummary + AIAnalysis
-// pair the pipeline consumes, both stamped with the same generated_at.
-func (c *Client) buildOutputs(parsed analysisResponse) (*models.AISummary, *models.AIAnalysis) {
-	now := time.Now().UTC().Format(time.RFC3339)
+// buildOutputs splits an analysisResponse into the AISummary + AIAnalysis pair.
+func buildOutputs(parsed analysisResponse, model, modelHash string, now time.Time) (*models.AISummary, *models.AIAnalysis) {
+	generatedAt := now.UTC().Format(time.RFC3339)
 
 	summaryText := parsed.Summary
 	if summaryText == "" {
@@ -242,20 +249,25 @@ func (c *Client) buildOutputs(parsed analysisResponse) (*models.AISummary, *mode
 	}
 
 	summary := &models.AISummary{
-		GeneratedAt: now,
+		GeneratedAt: generatedAt,
 		Summary:     summaryText,
 		IsTransient: parsed.IsTransient,
 	}
 	analysis := &models.AIAnalysis{
-		GeneratedAt:   now,
-		Model:         c.model,
-		ModelHash:     c.modelFingerprint(),
+		GeneratedAt:   generatedAt,
+		Model:         model,
+		ModelHash:     modelHash,
 		RootCause:     parsed.RootCause,
 		Severity:      parsed.Severity,
 		SuggestedFix:  parsed.SuggestedFix,
 		RelevantFiles: parsed.RelevantFiles,
 	}
 	return summary, analysis
+}
+
+// buildOutputs uses the current client identity for a fresh model response.
+func (c *Client) buildOutputs(parsed analysisResponse) (*models.AISummary, *models.AIAnalysis) {
+	return buildOutputs(parsed, c.model, c.modelFingerprint(), time.Now())
 }
 
 // firstSentence returns the first sentence of s, capped at 200 chars. It derives
