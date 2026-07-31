@@ -12,6 +12,9 @@ import (
 	"strings"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/filesystem"
+	k8stools "github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/k8s"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	k8svalidation "k8s.io/apimachinery/pkg/util/validation"
 )
@@ -112,7 +115,11 @@ func validateBundle(opts Options) (Options, []string, error) {
 	if err != nil {
 		return Options{}, nil, fmt.Errorf("validate project bundle: %w", err)
 	}
-	set, _, err := skills.LoadForTools(opts.ProjectDir, cfg.AI.EffectiveAgentic().Tools)
+	toolSelection := cfg.AI.EffectiveAgentic().Tools
+	if err := validateToolSelection(toolSelection); err != nil {
+		return Options{}, nil, fmt.Errorf("validate project tools: %w", err)
+	}
+	set, _, err := skills.LoadForTools(opts.ProjectDir, toolSelection)
 	if err != nil {
 		return Options{}, nil, fmt.Errorf("validate project skills: %w", err)
 	}
@@ -129,6 +136,17 @@ func validateBundle(opts Options) (Options, []string, error) {
 		return Options{}, nil, err
 	}
 	return opts, skillPaths, nil
+}
+
+func validateToolSelection(selection []string) error {
+	if len(selection) == 0 {
+		return nil
+	}
+	registry := tools.NewRegistry()
+	filesystem.Register(registry)
+	k8stools.Register(registry)
+	_, err := registry.Enable(selection)
+	return err
 }
 
 func requireRegularFile(path, label string) error {

@@ -106,6 +106,20 @@ func TestRunRejectsMissingAndMalformedBundleFiles(t *testing.T) {
 	}
 }
 
+func TestRunRejectsUnknownToolBeforeHelm(t *testing.T) {
+	projectYAML := minimalProject + "ai:\n  tools: [typo]\n"
+	dir := writeBundle(t, projectYAML, "prompt")
+	runner := &recordingRunner{}
+
+	err := run(context.Background(), baseOptions(dir), runner, io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), `validate project tools: unknown tool or group: "typo"`) {
+		t.Fatalf("error = %v, want unknown tool failure", err)
+	}
+	if len(runner.commands) != 0 {
+		t.Fatalf("invalid tool selection reached Helm: %q", runner.commands)
+	}
+}
+
 func TestRunBuildsUpgradeInstallArguments(t *testing.T) {
 	dir := writeBundle(t, minimalProject, "prompt")
 	runner := &recordingRunner{}
