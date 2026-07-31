@@ -41,6 +41,10 @@ VALUES
 
 helm lint "$chart" -f "$tmp/values.yaml"
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" > "$tmp/default.yaml"
+if grep -Eq '^kind: (CronJob|Job)$' "$tmp/default.yaml"; then
+  echo 'watch mode rendered a CronJob or manual Job' >&2
+  exit 1
+fi
 for removed in orka-producer orka-ingestor orka-artifact-tool submit-analysis 'type: ai' 'kind: RoleBinding' 'kind: ValidatingAdmissionPolicy'; do
   if grep -Fq "$removed" "$tmp/default.yaml"; then
     echo "default render contains removed Orka analysis resource: $removed" >&2
@@ -90,6 +94,66 @@ container_args=(
   --set analysisRuntime.orkaContainer.apiAuth.existingSecret=orka-api
   --set analysisRuntime.orkaContainer.modelAuth.existingSecret=orka-model
 )
+
+# Image-specific tags override the shared snapshot tag. Empty image-specific
+# tags resolve through global.imageTag, then Chart.appVersion.
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set-string image.tag= \
+  --set-string global.imageTag=sha-abcdef0 > "$tmp/global-engine.yaml"
+grep -Fq 'image: ghcr.io/willie-yao/prow-ai-dashboard:sha-abcdef0' "$tmp/global-engine.yaml"
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  "${container_args[@]}" \
+  --set-string analysisRuntime.orkaContainer.image.tag= \
+  --set-string global.imageTag=sha-abcdef0 > "$tmp/global-analyzer.yaml"
+grep -Fq -- '-orka-analysis-image=ghcr.io/willie-yao/prow-ai-dashboard/analyzer:sha-abcdef0' "$tmp/global-analyzer.yaml"
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set-string global.imageTag=sha-abcdef0 \
+  --set orka.fixRuntime.enabled=true \
+  --set server.actions.enabled=true \
+  --set server.actions.mode=proxy \
+  --set 'server.actions.admins[0]=alice' \
+  --set server.actions.proxy.botToken=test-token > "$tmp/global-fixer.yaml"
+grep -Fq 'image: ghcr.io/willie-yao/prow-ai-dashboard/fixer:sha-abcdef0' "$tmp/global-fixer.yaml"
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set-string global.imageTag=sha-abcdef0 > "$tmp/specific-engine.yaml"
+grep -Fq 'image: ghcr.io/willie-yao/prow-ai-dashboard:sha-test' "$tmp/specific-engine.yaml"
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  "${container_args[@]}" \
+  --set-string global.imageTag=sha-abcdef0 > "$tmp/specific-analyzer.yaml"
+grep -Fq -- '-orka-analysis-image=ghcr.io/willie-yao/prow-ai-dashboard/analyzer:sha-deadbeef' "$tmp/specific-analyzer.yaml"
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set-string global.imageTag=sha-abcdef0 \
+  --set-string orka.fixRuntime.image.tag=sha-cafebabe \
+  --set orka.fixRuntime.enabled=true \
+  --set server.actions.enabled=true \
+  --set server.actions.mode=proxy \
+  --set 'server.actions.admins[0]=alice' \
+  --set server.actions.proxy.botToken=test-token > "$tmp/specific-fixer.yaml"
+grep -Fq 'image: ghcr.io/willie-yao/prow-ai-dashboard/fixer:sha-cafebabe' "$tmp/specific-fixer.yaml"
+
+helm package "$chart" --destination "$tmp" --version 9.8.7 --app-version v9.8.7 >/dev/null
+fallback_chart="$tmp/prow-ai-dashboard-9.8.7.tgz"
+helm template test "$fallback_chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set-string image.tag= \
+  --set-string global.imageTag= > "$tmp/app-version-engine.yaml"
+grep -Fq 'image: ghcr.io/willie-yao/prow-ai-dashboard:v9.8.7' "$tmp/app-version-engine.yaml"
+helm template test "$fallback_chart" -n dashboard-test -f "$tmp/values.yaml" \
+  "${container_args[@]}" \
+  --set-string analysisRuntime.orkaContainer.image.tag= \
+  --set-string global.imageTag= > "$tmp/app-version-analyzer.yaml"
+grep -Fq -- '-orka-analysis-image=ghcr.io/willie-yao/prow-ai-dashboard/analyzer:v9.8.7' "$tmp/app-version-analyzer.yaml"
+helm template test "$fallback_chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set-string global.imageTag= \
+  --set orka.fixRuntime.enabled=true \
+  --set server.actions.enabled=true \
+  --set server.actions.mode=proxy \
+  --set 'server.actions.admins[0]=alice' \
+  --set server.actions.proxy.botToken=test-token > "$tmp/app-version-fixer.yaml"
+grep -Fq 'image: ghcr.io/willie-yao/prow-ai-dashboard/fixer:v9.8.7' "$tmp/app-version-fixer.yaml"
+
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" "${container_args[@]}" > "$tmp/container-analysis.yaml"
 awk '/^          initContainers:/{copy=1} /^          containers:/{copy=0} copy' \
   "$tmp/container-analysis.yaml" > "$tmp/prepare-project.yaml"
@@ -338,7 +402,7 @@ helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" "${container
   --set-string analysisRuntime.orkaContainer.taskTimeout=1h > "$tmp/container-microsecond-duration.yaml"
 grep -Fq -- '-orka-analysis-poll-interval=500us' "$tmp/container-microsecond-duration.yaml"
 
-for invalid in type endpoint model materializer-repository materializer-tag materializer-mutable materializer-policy custom-namespace shared-namespace release-namespace api api-token-key image mutable-image build-metadata model-secret token-key state-key concurrency poll slow-poll timeout retries cpu-selector gpu accelerator; do
+for invalid in type endpoint model materializer-repository materializer-tag materializer-mutable materializer-policy custom-namespace shared-namespace release-namespace api api-token-key image mutable-image mutable-global build-metadata model-secret token-key state-key concurrency poll slow-poll timeout retries cpu-selector gpu accelerator; do
   case $invalid in
     type) invalid_args=(--set analysisRuntime.type=remote); want='analysisRuntime.type must be inprocess or orka-container' ;;
     endpoint) invalid_args=("${container_args[@]}" --set-string ai.endpoint=); want='analysisRuntime.type=orka-container requires ai.endpoint' ;;
@@ -354,6 +418,7 @@ for invalid in type endpoint model materializer-repository materializer-tag mate
     api-token-key) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.apiAuth.tokenKey=); want='analysisRuntime.orkaContainer.apiAuth.tokenKey is required when apiAuth.existingSecret is set' ;;
     image) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.image.repository=); want='analysisRuntime.orkaContainer.image.repository is required' ;;
     mutable-image) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.image.tag=main); want='analysisRuntime.orkaContainer.image tag must be an immutable sha-<hex> or full semantic version' ;;
+    mutable-global) invalid_args=(--set-string global.imageTag=latest); want='global.imageTag must be an immutable sha-<hex> or full semantic version' ;;
     build-metadata) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.image.tag=v1.2.3+build.4); want='analysisRuntime.orkaContainer.image tag must be an immutable sha-<hex> or full semantic version' ;;
     model-secret) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.modelAuth.existingSecret=); want='analysisRuntime.orkaContainer.modelAuth.existingSecret is required' ;;
     token-key) invalid_args=("${container_args[@]}" --set-string analysisRuntime.orkaContainer.modelAuth.tokenKey=); want='analysisRuntime.orkaContainer.modelAuth.tokenKey is required' ;;

@@ -528,7 +528,8 @@ coordinates, credential source, prompt, and Prow job sweep. It is read-only and
 does not inspect cluster readiness.
 
 Install the released chart straight from GHCR (no repo checkout needed). The
-chart pins its image to the matching release, so `image.tag` is optional:
+chart `appVersion` pins all dashboard images to the matching release, so the
+image-specific tags and `global.imageTag` are optional:
 
 ```bash
 helm install capz oci://ghcr.io/willie-yao/charts/prow-ai-dashboard \
@@ -549,13 +550,13 @@ helm install capz oci://ghcr.io/willie-yao/charts/prow-ai-dashboard \
 > every release also attaches the packaged chart `.tgz`: download it from the
 > release page and `helm install capz ./prow-ai-dashboard-<version>.tgz ...`.
 
-To install from a local checkout instead (e.g. an unreleased change), point Helm
-at the chart directory and set `image.tag` to a published image tag:
+To install from a local checkout instead, point Helm at the chart directory and
+set `global.imageTag` to a published immutable snapshot tag:
 
 ```bash
 helm install capz deploy/helm/prow-ai-dashboard \
   --namespace dashboards --create-namespace \
-  --set image.tag=v1.0.0-beta.5 \
+  --set global.imageTag=v1.0.0-beta.5 \
   --set persistence.storageClass=<your-rwx-class> \
   --set-file project.config=../capz-prow-ai-dashboard/project.yaml \
   --set-file project.systemPrompt=../capz-prow-ai-dashboard/prompts/system.md \
@@ -563,6 +564,79 @@ helm install capz deploy/helm/prow-ai-dashboard \
   --set ai.endpoint=http://vllm.inference.svc.cluster.local/v1/chat/completions \
   --set ai.model=<model-id> \
   --set ai.token=<token>
+```
+
+## Upgrade with Helm
+
+Image tags resolve in this order for the engine, analyzer, and fixer images:
+
+1. The image-specific tag
+2. `global.imageTag`
+3. The chart `appVersion`
+
+Keep image-specific tags empty unless one image intentionally needs a different
+version. The two supported upgrade paths use the remaining levels. These commands
+require Helm 4, which renamed `--atomic` to `--rollback-on-failure`.
+
+### Stable OCI release
+
+Upgrade to a published chart version from GHCR. The packaged chart sets its
+`appVersion` to the matching released image tag, so no image tag override is
+needed:
+
+```bash
+helm upgrade capz oci://ghcr.io/willie-yao/charts/prow-ai-dashboard \
+  --kube-context h100 \
+  --namespace capz-dynamo \
+  --version <chart-version> \
+  --reuse-values \
+  --values deploy/values.yaml \
+  --wait \
+  --rollback-on-failure
+```
+
+### Unreleased snapshot
+
+From an engine checkout, use the guarded helper with a published `sha-<commit>`
+or full semantic-version tag:
+
+```bash
+./deploy/helm/upgrade.sh \
+  --context h100 \
+  --namespace capz-dynamo \
+  --release capz \
+  --version sha-<commit> \
+  --values deploy/values.yaml
+```
+
+The helper requires an existing release. It reuses its values, preserves
+`analysisCache.generation`, applies the requested tag through
+`global.imageTag`, runs Helm lint and template validation, and shows the image
+changes before the upgrade. When `crane`, `docker`, or `skopeo` is available, it
+also verifies the rendered image manifests. It then runs Helm with `--wait` and
+`--rollback-on-failure` and reports the resulting revision and image references.
+It does not clear the cache or create a fetch Job.
+
+`--reuse-values` also preserves explicit old `image.tag`,
+`analysisRuntime.orkaContainer.image.tag`, and `orka.fixRuntime.image.tag`
+values. Those values take precedence over both `global.imageTag` and the chart
+`appVersion`, so they can prevent an intended snapshot upgrade. Keep the
+consumer-owned values file explicit and empty at those paths, then pass it on
+every upgrade:
+
+```yaml
+global:
+  imageTag: ""
+image:
+  tag: ""
+analysisRuntime:
+  orkaContainer:
+    image:
+      tag: ""
+orka:
+  fixRuntime:
+    image:
+      tag: ""
 ```
 
 For production, provide the token via `ai.existingSecret` (see [Reusing
@@ -617,7 +691,8 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 
 | Value | Purpose |
 | --- | --- |
-| `image.repository`, `image.tag` | Engine image; tag defaults to the chart `appVersion`. |
+| `global.imageTag` | Shared engine, analyzer, and fixer snapshot tag. Each image-specific tag overrides it; empty falls back to the chart `appVersion`. |
+| `image.repository`, `image.tag` | Engine image and optional image-specific tag. |
 | `mode` | `watch` (continuous worker Deployment, default) or `cron` (scheduled CronJob). |
 | `analysisRuntime.type` | `inprocess` by default; `orka-container` is experimental and supports cron or watch mode. |
 | `analysisRuntime.orkaContainer.*` | Orka result API, analyzer image, namespace, bounded Task lifecycle, Secret references, encrypted state key, and CPU placement. |

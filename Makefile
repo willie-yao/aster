@@ -90,6 +90,7 @@ tidy:
 helm-check:
 	bash deploy/helm/prow-ai-dashboard/test-render.sh
 	bash deploy/helm/prow-ai-dashboard/test-operations.sh
+	bash deploy/helm/test-upgrade.sh
 
 ## ─── Data Fetching ────────────────────────────────────────────
 

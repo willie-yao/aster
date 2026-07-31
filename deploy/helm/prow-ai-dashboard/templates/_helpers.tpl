@@ -41,27 +41,33 @@ app.kubernetes.io/name: {{ include "prow-ai-dashboard.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
-{{/*
-Image reference, defaulting the tag to the chart appVersion.
-*/}}
+{{/* Resolve an image-specific tag, then the shared tag, then appVersion. */}}
+{{- define "prow-ai-dashboard.resolvedImageTag" -}}
+{{- $root := index . 0 -}}
+{{- $specificTag := index . 1 -}}
+{{- $global := $root.Values.global | default dict -}}
+{{- $globalTag := $global.imageTag | default "" -}}
+{{- if and $globalTag (not (regexMatch "^(sha-[0-9a-fA-F]{7,64}|v?[0-9]+[.][0-9]+[.][0-9]+(-[0-9A-Za-z.-]+)?)$" $globalTag)) -}}
+{{- fail "global.imageTag must be an immutable sha-<hex> or full semantic version" -}}
+{{- end -}}
+{{- $specificTag | default $globalTag | default $root.Chart.AppVersion -}}
+{{- end -}}
+
+{{/* Engine image reference. */}}
 {{- define "prow-ai-dashboard.image" -}}
-{{- $tag := .Values.image.tag | default .Chart.AppVersion -}}
+{{- $tag := include "prow-ai-dashboard.resolvedImageTag" (list . .Values.image.tag) -}}
 {{- printf "%s:%s" .Values.image.repository $tag -}}
 {{- end -}}
 
-{{/*
-Analyzer image used only by the experimental Orka container runtime.
-*/}}
+{{/* Analyzer image used only by the experimental Orka container runtime. */}}
 {{- define "prow-ai-dashboard.analyzerImage" -}}
-{{- $tag := .Values.analysisRuntime.orkaContainer.image.tag | default .Chart.AppVersion -}}
+{{- $tag := include "prow-ai-dashboard.resolvedImageTag" (list . .Values.analysisRuntime.orkaContainer.image.tag) -}}
 {{- printf "%s:%s" .Values.analysisRuntime.orkaContainer.image.repository $tag -}}
 {{- end -}}
 
-{{/*
-Git-capable engine image used by the opt-in fix runtime.
-*/}}
+{{/* Git-capable engine image used by the opt-in fix runtime. */}}
 {{- define "prow-ai-dashboard.fixerImage" -}}
-{{- $tag := .Values.orka.fixRuntime.image.tag | default .Chart.AppVersion -}}
+{{- $tag := include "prow-ai-dashboard.resolvedImageTag" (list . .Values.orka.fixRuntime.image.tag) -}}
 {{- printf "%s:%s" .Values.orka.fixRuntime.image.repository $tag -}}
 {{- end -}}
 
@@ -252,8 +258,8 @@ Validate AI provider configuration.
   {{- if not (regexMatch "^https?://[^/@?#]+(/[^?#]*)?$" $cfg.api) -}}{{- fail "analysisRuntime.orkaContainer.api must be an absolute http or https URL without credentials" -}}{{- end -}}
   {{- if and $cfg.apiAuth.existingSecret (not $cfg.apiAuth.tokenKey) -}}{{- fail "analysisRuntime.orkaContainer.apiAuth.tokenKey is required when apiAuth.existingSecret is set" -}}{{- end -}}
   {{- if not $cfg.image.repository -}}{{- fail "analysisRuntime.orkaContainer.image.repository is required" -}}{{- end -}}
-  {{- $imageTag := $cfg.image.tag | default .Chart.AppVersion -}}
-  {{- if not $imageTag -}}{{- fail "analysisRuntime.orkaContainer.image.tag or Chart.appVersion is required" -}}{{- end -}}
+  {{- $imageTag := include "prow-ai-dashboard.resolvedImageTag" (list . $cfg.image.tag) -}}
+  {{- if not $imageTag -}}{{- fail "analysisRuntime.orkaContainer.image.tag, global.imageTag, or Chart.appVersion is required" -}}{{- end -}}
   {{- if not (regexMatch "^(sha-[0-9a-fA-F]{7,64}|v?[0-9]+[.][0-9]+[.][0-9]+(-[0-9A-Za-z.-]+)?)$" $imageTag) -}}{{- fail "analysisRuntime.orkaContainer.image tag must be an immutable sha-<hex> or full semantic version" -}}{{- end -}}
   {{- if ne $cfg.image.pullPolicy "IfNotPresent" -}}{{- fail "analysisRuntime.orkaContainer.image.pullPolicy must be IfNotPresent for the pinned Orka controller" -}}{{- end -}}
   {{- if not $cfg.modelAuth.existingSecret -}}{{- fail "analysisRuntime.orkaContainer.modelAuth.existingSecret is required" -}}{{- end -}}
