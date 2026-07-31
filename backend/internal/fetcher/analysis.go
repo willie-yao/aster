@@ -125,12 +125,23 @@ func planContainerAnalysisWork(ctx context.Context, httpClient *http.Client, wor
 	queued := make([]aiWork, 0, len(work))
 	state := container.StateStore()
 	var linkResolver *ai.FileLinkResolver
+	var sourceOwner, sourceName string
 	if project != nil && project.Config != nil {
-		source := project.AnalysisSource
-		if source.Owner == "" || source.Name == "" {
-			source = project.Config.EffectiveAnalysisSourceRepo()
+		sourceRepo := project.AnalysisSource
+		if sourceRepo.Owner == "" || sourceRepo.Name == "" {
+			sourceRepo = project.Config.EffectiveAnalysisSourceRepo()
 		}
-		linkResolver = ai.NewFileLinkResolver(source.Owner, source.Name)
+		sourceOwner, sourceName = sourceRepo.Owner, sourceRepo.Name
+		linkResolver = ai.NewFileLinkResolver(sourceRepo.Owner, sourceRepo.Name, githubReadToken())
+	}
+	resolveLinks := func(item aiWork) map[string]string {
+		if linkResolver == nil || project == nil {
+			return map[string]string{}
+		}
+		if source, ok := ai.ResolveBuildSource(item.run.BuildInfo, sourceOwner, sourceName); ok {
+			return linkResolver.ResolveAtRef(ctx, httpClient, item.tc, source.Revision)
+		}
+		return map[string]string{}
 	}
 	for _, item := range work {
 		buildSubject := item.tc.Source == models.TestCaseSourceBuild
@@ -150,7 +161,7 @@ func planContainerAnalysisWork(ctx context.Context, httpClient *http.Client, wor
 			item.tc.AISummary = result.Summary
 			item.tc.AIAnalysis = result.Analysis
 			if item.tc.AIAnalysis != nil {
-				item.tc.AIAnalysis.FileLinks = linkResolver.Resolve(ctx, httpClient, item.tc)
+				item.tc.AIAnalysis.FileLinks = resolveLinks(item)
 			}
 			plan.AcceptedCacheHits++
 			if buildSubject {
@@ -174,7 +185,7 @@ func planContainerAnalysisWork(ctx context.Context, httpClient *http.Client, wor
 					item.tc.AISummary = result.Summary
 					item.tc.AIAnalysis = result.Analysis
 					if item.tc.AIAnalysis != nil {
-						item.tc.AIAnalysis.FileLinks = linkResolver.Resolve(ctx, httpClient, item.tc)
+						item.tc.AIAnalysis.FileLinks = resolveLinks(item)
 					}
 					plan.ExactResultsReused++
 					if buildSubject {
@@ -193,7 +204,7 @@ func planContainerAnalysisWork(ctx context.Context, httpClient *http.Client, wor
 					item.tc.AISummary = result.Summary
 					item.tc.AIAnalysis = result.Analysis
 					if item.tc.AIAnalysis != nil {
-						item.tc.AIAnalysis.FileLinks = linkResolver.Resolve(ctx, httpClient, item.tc)
+						item.tc.AIAnalysis.FileLinks = resolveLinks(item)
 					}
 					plan.CompatibleResultsReused++
 					if buildSubject {

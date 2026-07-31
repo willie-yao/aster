@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 )
 
 // githubRepoReader is a bound tools.RepoReader over one GitHub repo at a ref.
@@ -94,6 +95,14 @@ func (r *githubRepoReader) ListTree(ctx context.Context) ([]string, error) {
 // the GitHub contents API so private repositories work. Anonymous readers use
 // the public raw CDN. found is false when the file does not exist.
 func (r *githubRepoReader) ReadFile(ctx context.Context, path string) (string, bool, error) {
+	var err error
+	path, err = artifacts.SafePath(strings.TrimSpace(path))
+	if err != nil {
+		return "", false, fmt.Errorf("invalid repository path: %w", err)
+	}
+	if path == "" {
+		return "", false, fmt.Errorf("invalid repository path: path is empty")
+	}
 	escaped := strings.Join(mapSegments(strings.Split(path, "/"), url.PathEscape), "/")
 	u := fmt.Sprintf("%s/%s/%s/%s/%s", rawContentBase, r.owner, r.repo, url.PathEscape(r.ref), escaped)
 	if r.token != "" {

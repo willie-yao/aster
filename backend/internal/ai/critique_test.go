@@ -784,7 +784,7 @@ required_evidence:
 	artifactPath := "artifacts/clusters/parallel/clusterctl-upgrade.log"
 	reads := map[string]bool{artifactPath: true}
 	wrongContent := map[string][]string{artifactPath: {"PRIVATE RAW CONTENT: upgrade completed successfully"}}
-	out := critiqueDraftWithContent(parsed, reads, map[string]bool{"clusterctl-upgrade.log": true}, wrongContent, set.Match("conversion webhook"), 0)
+	out := critiqueDraftWithContent(parsed, reads, map[string]bool{"clusterctl-upgrade.log": true}, wrongContent, nil, set.Match("conversion webhook"), 0)
 	if out.Passed || len(out.MissingSkillEvidence) != 1 {
 		t.Fatalf("wrong parallel log critique = %+v", out)
 	}
@@ -796,7 +796,7 @@ required_evidence:
 	}
 
 	correctContent := map[string][]string{artifactPath: {"ManagedClustersAgentPool conversion webhook connection refused"}}
-	out = critiqueDraftWithContent(parsed, reads, map[string]bool{"clusterctl-upgrade.log": true}, correctContent, set.Match("conversion webhook"), 0)
+	out = critiqueDraftWithContent(parsed, reads, map[string]bool{"clusterctl-upgrade.log": true}, correctContent, nil, set.Match("conversion webhook"), 0)
 	if !out.Passed {
 		t.Fatalf("matching content did not pass critique: %+v", out)
 	}

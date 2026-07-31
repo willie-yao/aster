@@ -15,6 +15,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/filesystem"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/k8s"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/repotree"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysischat"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
@@ -164,6 +165,7 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 	registry := tools.NewRegistry()
 	filesystem.Register(registry)
 	k8s.Register(registry)
+	repotree.Register(registry)
 	toolNames := opts.Project.Config.AI.EffectiveAgentic().Tools
 	if len(toolNames) == 0 {
 		toolNames = []string{"filesystem", "k8s"}
@@ -291,6 +293,7 @@ func (r *Runtime) NewService(opts ServiceOptions) (*ai.Service, error) {
 		sourceRepo = cfg.EffectiveAnalysisSourceRepo()
 	}
 	service.SetSourceRepo(sourceRepo.Owner, sourceRepo.Name)
+	service.SetGitHubReadToken(opts.GitHubReadToken)
 	if sourceRepo.Owner != "" && sourceRepo.Name != "" {
 		service.SetPatternRepoReader(ai.NewGitHubRepoReader(
 			sourceRepo.Owner, sourceRepo.Name, "", opts.GitHubReadToken))

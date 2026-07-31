@@ -139,6 +139,14 @@ var artifactCitationRE = regexp.MustCompile(
 // appends to artifact citations, such as "build-log.txt:1720" or
 // "manager.log#L42-L50", so the basename matches the tool arg form.
 var citationStripRE = regexp.MustCompile(`(?::\d+(?:-\d+)?|#L\d+(?:-L?\d+)?)\b`)
+var sourceCitationRE = regexp.MustCompile(`(?:[\w.@-]+/)*[\w.-]+\.(?:go|ya?ml|json|sh|tpl|md|py|js|jsx|ts|tsx|java|rs|c|cc|cpp|h|hpp|proto|sql|toml)\b|(?:[\w.-]+/)*(?:go\.mod|go\.sum|Dockerfile|Makefile)\b`)
+
+func isSourceCitation(path string) bool {
+	if strings.HasPrefix(path, "artifacts/") || strings.HasPrefix(path, "clusters/") {
+		return false
+	}
+	return sourceCitationRE.MatchString(path)
+}
 
 // NormalizeArtifactCitation cleans up a path-shaped match for comparison
 // against the reads set: slash semantics, lowercase, trim wrapping
@@ -326,10 +334,10 @@ func (o critiqueOutcome) MissingEvidenceCount() int {
 // consecutiveFailures is how many consecutive builds this test has failed; it
 // contradicts an is_transient=true verdict at or above transientPersistThreshold.
 func critiqueDraft(parsed analysisResponse, readsFull, readsBase map[string]bool, matchedSkills []skills.Skill, consecutiveFailures int) critiqueOutcome {
-	return critiqueDraftWithContent(parsed, readsFull, readsBase, nil, matchedSkills, consecutiveFailures)
+	return critiqueDraftWithContent(parsed, readsFull, readsBase, nil, nil, matchedSkills, consecutiveFailures)
 }
 
-func critiqueDraftWithContent(parsed analysisResponse, readsFull, readsBase map[string]bool, contentByPath map[string][]string, matchedSkills []skills.Skill, consecutiveFailures int) critiqueOutcome {
+func critiqueDraftWithContent(parsed analysisResponse, readsFull, readsBase map[string]bool, contentByPath map[string][]string, sourceReads map[string]bool, matchedSkills []skills.Skill, consecutiveFailures int) critiqueOutcome {
 	puntMatches := findPunts(parsed.SuggestedFix)
 
 	// Scan every prose field plus each relevant_files entry: the model
@@ -340,11 +348,34 @@ func critiqueDraftWithContent(parsed analysisResponse, readsFull, readsBase map[
 	scanned := map[string]bool{}
 	for _, s := range fields {
 		for _, u := range findUnreadArtifactCitations(s, readsFull, readsBase) {
+			if sourceReads != nil && isSourceCitation(u) && sourceReadMatches(u, sourceReads) {
+				continue
+			}
 			if scanned[u] {
 				continue
 			}
 			scanned[u] = true
 			unread = append(unread, u)
+		}
+	}
+	if sourceReads != nil {
+		for _, candidate := range parsed.RelevantFiles {
+			clean := strings.ToLower(strings.TrimPrefix(citationStripRE.ReplaceAllString(trailingParenRe.ReplaceAllString(candidate, ""), ""), "./"))
+			if isSourceCitation(clean) && !readsFull[clean] && !sourceReadMatches(clean, sourceReads) && !scanned[clean] {
+				scanned[clean] = true
+				unread = append(unread, clean)
+			}
+		}
+		var sourceCandidates []string
+		for _, s := range fields {
+			sourceCandidates = append(sourceCandidates, sourceCitationRE.FindAllString(s, -1)...)
+		}
+		for _, candidate := range sourceCandidates {
+			clean := strings.ToLower(strings.TrimPrefix(candidate, "./"))
+			if isSourceCitation(clean) && !readsFull[clean] && !sourceReadMatches(clean, sourceReads) && !scanned[clean] {
+				scanned[clean] = true
+				unread = append(unread, clean)
+			}
 		}
 	}
 
@@ -390,6 +421,30 @@ func critiqueDraftWithContent(parsed analysisResponse, readsFull, readsBase map[
 	}
 	out.Feedback = formatCritiqueFeedback(parsed, out)
 	return out
+}
+
+func sourceReadMatches(candidate string, reads map[string]bool) bool {
+	candidate = strings.TrimPrefix(candidate, "https://")
+	if at := strings.Index(candidate, "@"); at >= 0 {
+		if slash := strings.Index(candidate[at:], "/"); slash >= 0 {
+			suffix := candidate[at+slash+1:]
+			moduleRoot := candidate[:at]
+			moduleName := path.Base(moduleRoot)
+			if reads[moduleName+"/"+suffix] && reads[suffix] {
+				return true
+			}
+			candidate = candidate[:at] + candidate[at+slash:]
+		}
+	}
+	if reads[candidate] {
+		return true
+	}
+	if before, after, ok := strings.Cut(candidate, "/blob/"); ok {
+		if slash := strings.Index(after, "/"); slash >= 0 && reads[before+"/"+after[slash+1:]] {
+			return true
+		}
+	}
+	return false
 }
 
 // pruneAbsentSkillEvidence drops matched-recipe evidence groups whose required
@@ -523,7 +578,7 @@ func formatUnreadSection(unread []string) string {
 
 Either you fabricated these citations or you inferred from a directory listing; both are unacceptable. Do NOT infer file contents from filenames or list output. Before re-emitting:
 
-1. In ONE assistant turn, batch read_artifact / tail_artifact / grep_artifact calls for every cited artifact you have not yet fetched. If a file is large, prefer tail_artifact or grep_artifact with wide context over read_artifact.
+1. In ONE assistant turn, batch the appropriate read_artifact / tail_artifact / grep_artifact / read_repo_file calls for every cited artifact you have not yet fetched. If a file is large, prefer tail_artifact or grep_artifact with wide context over read_artifact.
 2. If a file does not exist, the tool will return an error; in that case remove the citation from your draft and re-emit using only evidence the tools actually returned.
 3. Claim only facts supported by the bytes the tool actually returned. Do not paraphrase a grep_artifact match into a claim about the rest of the file you did not see.`,
 		strings.Join(quoted, "\n"))
