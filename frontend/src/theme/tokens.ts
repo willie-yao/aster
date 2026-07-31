@@ -101,50 +101,50 @@ export const darkTokens: ColorTokens = {
   glass: "rgba(18, 24, 38, 0.72)",
 };
 
-// Light palette: slate-tinted neutrals sharing the dark scheme's hue family,
-// with status colors darkened for AA contrast on light surfaces.
+// Light palette: warm ivory foundations with muted lavender surface layers.
+// Status colors stay dark enough for AA contrast across the softer surfaces.
 export const lightTokens: ColorTokens = {
-  background: "#f7f9fc",
-  surface: "#f7f9fc",
-  surfaceDim: "#dde3ec",
-  surfaceBright: "#ffffff",
-  surfaceContainer: "#eef1f7",
-  surfaceContainerLow: "#f2f5fa",
-  surfaceContainerHigh: "#e7ebf3",
-  surfaceContainerHighest: "#e1e6ef",
-  surfaceVariant: "#e1e6ef",
+  background: "#f2efe8",
+  surface: "#f2efe8",
+  surfaceDim: "#d8d6df",
+  surfaceBright: "#faf7f1",
+  surfaceContainer: "#ebe9f0",
+  surfaceContainerLow: "#efecf0",
+  surfaceContainerHigh: "#e1e1eb",
+  surfaceContainerHighest: "#d8d8e4",
+  surfaceVariant: "#dcdbe7",
 
-  onSurface: "#0f172a",
-  onSurfaceVariant: "#475569",
+  onSurface: "#242333",
+  onSurfaceVariant: "#59576a",
 
-  primary: "#2f6bff",
-  primaryDim: "#1e50d8",
-  primaryContainer: "#d9e4ff",
+  primary: "#5d63b3",
+  primaryDim: "#464b91",
+  primaryContainer: "#d8dcf4",
   onPrimary: "#ffffff",
 
-  secondary: "#047857",
-  secondaryDim: "#036045",
-  secondaryContainer: "#a7f3d0",
+  secondary: "#0b7355",
+  secondaryDim: "#075b44",
+  secondaryContainer: "#bee3d2",
   onSecondary: "#ffffff",
 
-  tertiary: "#b45309",
-  tertiaryContainer: "#fde3b3",
+  tertiary: "#9d4f0c",
+  tertiaryContainer: "#f0d7b3",
   onTertiary: "#ffffff",
 
-  error: "#dc2626",
-  errorDim: "#b01818",
-  errorContainer: "#ffdad6",
+  error: "#c73535",
+  errorDim: "#a52222",
+  errorContainer: "#efc7c8",
   onError: "#ffffff",
 
   // Light scheme renders dark dots on a light surface, so no bloom mismatch;
   // keep the semantic pass/fail hues.
-  dotPass: "#047857",
-  dotFail: "#dc2626",
+  dotPass: "#0b7355",
+  dotFail: "#c73535",
 
-  outline: "#64748b",
-  outlineVariant: "#cbd3e0",
+  outline: "#757285",
+  outlineVariant: "#c8c4d0",
 
-  surfaceTint: "#2f6bff",
+  surfaceTint: "#5d63b3",
 
-  glass: "rgba(238, 241, 247, 0.8)",
+  glass: "rgba(235, 233, 240, 0.88)",
 };
