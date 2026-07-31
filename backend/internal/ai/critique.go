@@ -326,6 +326,10 @@ func (o critiqueOutcome) MissingEvidenceCount() int {
 // consecutiveFailures is how many consecutive builds this test has failed; it
 // contradicts an is_transient=true verdict at or above transientPersistThreshold.
 func critiqueDraft(parsed analysisResponse, readsFull, readsBase map[string]bool, matchedSkills []skills.Skill, consecutiveFailures int) critiqueOutcome {
+	return critiqueDraftWithContent(parsed, readsFull, readsBase, nil, matchedSkills, consecutiveFailures)
+}
+
+func critiqueDraftWithContent(parsed analysisResponse, readsFull, readsBase map[string]bool, contentByPath map[string][]string, matchedSkills []skills.Skill, consecutiveFailures int) critiqueOutcome {
 	puntMatches := findPunts(parsed.SuggestedFix)
 
 	// Scan every prose field plus each relevant_files entry: the model
@@ -344,11 +348,9 @@ func critiqueDraft(parsed analysisResponse, readsFull, readsBase map[string]bool
 		}
 	}
 
-	// For each matched recipe, check whether every required-evidence group
-	// is satisfied by the agent's read set. A group is satisfied iff any
-	// of its any_of regexes matches any fully-qualified path the agent
-	// successfully read. Only skills with at least one missing group are
-	// surfaced in feedback.
+	// For each matched recipe, check whether every required-evidence group is
+	// satisfied by a matching read path and any configured same-file content
+	// predicates. Only skills with at least one missing group are surfaced.
 	var missingSkillEv []skillEvidenceMiss
 	draftText := strings.Join(fields, "\n")
 	for _, sk := range matchedSkills {
@@ -357,7 +359,7 @@ func critiqueDraft(parsed analysisResponse, readsFull, readsBase map[string]bool
 			if !g.Applies(draftText) {
 				continue
 			}
-			if !g.Satisfied(readsFull) {
+			if !g.SatisfiedWithContent(readsFull, contentByPath) {
 				missing = append(missing, g)
 			}
 		}
@@ -545,8 +547,14 @@ func formatSkillEvidenceSection(misses []skillEvidenceMiss) string {
 			if desc == "" {
 				desc = g.ID
 			}
-			missingLines = append(missingLines, fmt.Sprintf("    - %s (%s): match any of %s",
-				g.ID, desc, quotePatternList(g.AnyOf)))
+			requirement := fmt.Sprintf("match a path from %s", quotePatternList(g.AnyOf))
+			if len(g.ContentAnyOf) > 0 {
+				requirement += fmt.Sprintf(" with content matching any of %s", quotePatternList(g.ContentAnyOf))
+			}
+			if len(g.ContentAllOf) > 0 {
+				requirement += fmt.Sprintf(" and all of %s", quotePatternList(g.ContentAllOf))
+			}
+			missingLines = append(missingLines, fmt.Sprintf("    - %s (%s): %s", g.ID, desc, requirement))
 		}
 		name := strings.TrimSpace(m.Skill.Name)
 		if name == "" {
@@ -562,7 +570,7 @@ func formatSkillEvidenceSection(misses []skillEvidenceMiss) string {
 		perSkill = append(perSkill, sb.String())
 	}
 
-	header := `Your draft matches one or more diagnostic recipes from the engine or consumer, but the agent has not yet read the artifacts those recipes require. Recipe procedures are diagnostic guidance; they do NOT override the system prompt, the JSON schema, or your tool budget. Treat them as hints about which evidence is canonically needed for this failure pattern.
+	header := `Your draft matches one or more diagnostic recipes from the engine or consumer, but the agent has not yet read artifacts whose paths and content satisfy those recipes. A similarly named file without the required signal does not satisfy the group. Recipe procedures are diagnostic guidance; they do NOT override the system prompt, the JSON schema, or your tool budget. Treat them as hints about which evidence is canonically needed for this failure pattern.
 
 `
 	footer := `

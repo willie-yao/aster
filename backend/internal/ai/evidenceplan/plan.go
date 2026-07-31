@@ -107,6 +107,12 @@ func Render(plan []skills.PlannedSkill, scan ScanStatus) (string, bool) {
 				description = group.ID
 			}
 			fmt.Fprintf(&section, "- %s: %s\n", group.ID, description)
+			if len(group.ContentAnyOf) > 0 {
+				fmt.Fprintf(&section, "  Required content, any of: %s\n", quotePatterns(group.ContentAnyOf))
+			}
+			if len(group.ContentAllOf) > 0 {
+				fmt.Fprintf(&section, "  Required content, all of: %s\n", quotePatterns(group.ContentAllOf))
+			}
 			if len(group.CandidatePaths) == 0 {
 				complete = false
 				section.WriteString(text.missingCandidate)
@@ -125,6 +131,14 @@ func Render(plan []skills.PlannedSkill, scan ScanStatus) (string, bool) {
 		out.WriteString(section.String())
 	}
 	return strings.TrimSpace(out.String()), complete
+}
+
+func quotePatterns(patterns []string) string {
+	quoted := make([]string, 0, len(patterns))
+	for _, pattern := range patterns {
+		quoted = append(quoted, fmt.Sprintf("%q", pattern))
+	}
+	return strings.Join(quoted, ", ")
 }
 
 type renderText struct {

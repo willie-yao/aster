@@ -376,10 +376,13 @@ volume. The engine records `evidence_plan_covered` only when the initial tree
 scan succeeded without truncation, at least one recipe matched the bounded
 failure signal, every applicable group had a ranked candidate, and every group
 was satisfied by a successful non-empty `read_artifact`, `tail_artifact`, or
-`grep_artifact` result whose path matches that group's evidence regex. A path
-may satisfy multiple groups only when it matches each group. Listing calls,
-failed reads, empty reads, unmatched failures, and unavailable skills never set
-the marker.
+`grep_artifact` result whose path matches that group's evidence regex. When a
+group declares `content_any_of` or `content_all_of`, the same artifact must also
+provide positive content proof. Signals from different parallel files are never
+combined. A partial read can prove a positive match but cannot prove absence.
+A path may satisfy multiple groups only when it satisfies each complete group.
+Listing calls, failed reads, empty reads, unmatched failures, and unavailable
+skills never set the marker.
 
 The per-failure task prompt is bounded for the same reason: the failing test's
 junit **failure message** is clamped (head + tail, ~16 KB) before it is

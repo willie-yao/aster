@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -172,7 +173,31 @@ triggers: ["foo"]
 required_evidence:
   - id: g1
     any_of: ["[unclosed"]
+			`,
+		},
+		{
+			name: "bad evidence content any regex",
+			body: `
+id: bad-content-any
+triggers: ["foo"]
+required_evidence:
+  - id: g1
+    any_of: ["path"]
+    content_any_of: ["[unclosed"]
 `,
+			wantSubstr: "content_any_of",
+		},
+		{
+			name: "bad evidence content all regex",
+			body: `
+id: bad-content-all
+triggers: ["foo"]
+required_evidence:
+  - id: g1
+    any_of: ["path"]
+    content_all_of: ["[unclosed"]
+`,
+			wantSubstr: "content_all_of",
 		},
 		{
 			name: "empty evidence any_of",
@@ -614,5 +639,196 @@ func TestCoversPlanRequiresCompleteMatchingContentReads(t *testing.T) {
 				t.Fatalf("CoversPlan = %t, want %t", got, tc.covered)
 			}
 		})
+	}
+}
+
+func TestEvidenceGroupContentPredicatesRequireSameArtifact(t *testing.T) {
+	set := mustSkillSetJSON(t, `{
+		"skills":[{
+			"id":"aso-conversion",
+			"triggers":["conversion webhook"],
+			"required_evidence":[{
+				"id":"failed-upgrade-log",
+				"any_of":["artifacts/clusters/.*/clusterctl-upgrade\\.log"],
+				"content_any_of":["(?i)ManagedClustersAgentPool","(?i)VirtualNetworks?Subnet"],
+				"content_all_of":["(?i)conversion webhook","(?i)connect: connection refused"]
+			}]
+		}]
+	}`)
+	group := set.Skills()[0].RequiredEvidence[0]
+	if !group.HasContentPredicates() || len(group.contentAnyREs) != 2 || len(group.contentAllREs) != 2 {
+		t.Fatalf("compiled content predicates = any:%d all:%d", len(group.contentAnyREs), len(group.contentAllREs))
+	}
+	paths := []string{
+		"artifacts/clusters/clusterctl-upgrade-management-g9706x/clusterctl-upgrade.log",
+		"artifacts/clusters/clusterctl-upgrade-management-p9uqx9/clusterctl-upgrade.log",
+		"artifacts/clusters/clusterctl-upgrade-management-s4c1ag/clusterctl-upgrade.log",
+		"artifacts/clusters/clusterctl-upgrade-management-ttjjmj/clusterctl-upgrade.log",
+	}
+	failing := "conversion webhook for containerservice.azure.com/v1api20250801storage, Kind=ManagedClustersAgentPool failed: connect: connection refused"
+	content := map[string][]string{
+		paths[0]: {failing},
+		paths[1]: {"upgrade completed successfully"},
+		paths[2]: {"conversion webhook health check succeeded"},
+		paths[3]: {"ManagedClustersAgentPool reconciliation completed"},
+	}
+	for i, artifactPath := range paths {
+		got := group.SatisfiedWithContent(map[string]bool{artifactPath: true}, content)
+		if got != (i == 0) {
+			t.Fatalf("path %s satisfied=%t, want %t", artifactPath, got, i == 0)
+		}
+	}
+
+	split := map[string][]string{
+		paths[1]: {"conversion webhook ManagedClustersAgentPool"},
+		paths[2]: {"connect: connection refused"},
+	}
+	if group.SatisfiedWithContent(map[string]bool{paths[1]: true, paths[2]: true}, split) {
+		t.Fatal("content split across parallel artifacts satisfied one evidence group")
+	}
+}
+
+func TestEvidenceGroupContentProofAccumulatesPositivePartialReads(t *testing.T) {
+	set := mustSkillSetJSON(t, `{
+		"skills":[{
+			"id":"content","triggers":["failure"],
+			"required_evidence":[{
+				"id":"log","any_of":["failure\\.log$"],
+				"content_any_of":["ManagedClustersAgentPool"],
+				"content_all_of":["conversion webhook","connection refused"]
+			}]
+		}]
+	}`)
+	group := set.Skills()[0].RequiredEvidence[0]
+	artifactPath := "logs/failure.log"
+	reads := map[string]bool{artifactPath: true}
+	content := map[string][]string{artifactPath: {"conversion webhook"}}
+	if group.SatisfiedWithContent(reads, content) {
+		t.Fatal("partial content incorrectly proved absent predicates")
+	}
+	content[artifactPath] = append(content[artifactPath], "ManagedClustersAgentPool connection refused")
+	if !group.SatisfiedWithContent(reads, content) {
+		t.Fatal("positive predicates across bounded reads did not satisfy the same artifact")
+	}
+}
+
+func TestPlanAndHashIncludeContentPredicates(t *testing.T) {
+	base := `id: content
+triggers: ["failure"]
+required_evidence:
+  - id: log
+    any_of: ["failure\\.log$"]
+    content_any_of: ["first"]
+    content_all_of: ["second"]
+`
+	dir := t.TempDir()
+	writeSkill(t, dir, "content", base)
+	set, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := set.Plan("failure", []string{"logs/failure.log"}, 4)
+	if len(plan) != 1 || len(plan[0].RequiredEvidence) != 1 {
+		t.Fatalf("plan = %+v", plan)
+	}
+	group := plan[0].RequiredEvidence[0]
+	if !reflect.DeepEqual(group.ContentAnyOf, []string{"first"}) || !reflect.DeepEqual(group.ContentAllOf, []string{"second"}) {
+		t.Fatalf("planned content predicates = %+v", group)
+	}
+	firstHash := set.Hash()
+	writeSkill(t, dir, "content", strings.Replace(base, "second", "changed", 1))
+	changed, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed.Hash() == firstHash {
+		t.Fatal("content predicate change did not change the skill hash")
+	}
+}
+
+func TestCoversPlanRequiresContentProof(t *testing.T) {
+	set := mustSkillSetJSON(t, `{
+		"skills":[{
+			"id":"content","triggers":["failure"],
+			"required_evidence":[{
+				"id":"log","any_of":["failure\\.log$"],
+				"content_all_of":["initiating error","connection refused"]
+			}]
+		}]
+	}`)
+	plan := set.Plan("failure", []string{"logs/failure.log"}, 4)
+	reads := map[string]bool{"logs/failure.log": true}
+	if set.CoversPlanWithContent("failure", plan, reads, map[string][]string{"logs/failure.log": {"unrelated retry"}}) {
+		t.Fatal("path-only read covered a content-aware plan")
+	}
+	if !set.CoversPlanWithContent("failure", plan, reads, map[string][]string{"logs/failure.log": {"initiating error", "connection refused"}}) {
+		t.Fatal("positive same-file content proof did not cover the plan")
+	}
+}
+
+func TestEvidenceContentDoesNotFabricateAdjacencyAcrossSnippets(t *testing.T) {
+	set := mustSkillSetJSON(t, `{
+		"skills":[{
+			"id":"adjacency","triggers":["failure"],
+			"required_evidence":[{
+				"id":"log","any_of":["failure\\.log$"],
+				"content_all_of":["foo\\s+bar"]
+			}]
+		}]
+	}`)
+	group := set.Skills()[0].RequiredEvidence[0]
+	path := "logs/failure.log"
+	reads := map[string]bool{path: true}
+	if group.SatisfiedWithContent(reads, map[string][]string{path: {"foo", "bar"}}) {
+		t.Fatal("separate snippets fabricated regex adjacency")
+	}
+	if !group.SatisfiedWithContent(reads, map[string][]string{path: {"foo bar"}}) {
+		t.Fatal("one snippet with real adjacency did not satisfy the regex")
+	}
+}
+
+func TestEvidenceContentKeepsCaseSensitiveArtifactIdentity(t *testing.T) {
+	set := mustSkillSetJSON(t, `{
+		"skills":[{
+			"id":"case","triggers":["failure"],
+			"required_evidence":[{
+				"id":"log","any_of":["logs/foo\\.log$"],
+				"content_all_of":["first signal","second signal"]
+			}]
+		}]
+	}`)
+	group := set.Skills()[0].RequiredEvidence[0]
+	reads := map[string]bool{"logs/foo.log": true}
+	split := map[string][]string{
+		"logs/Foo.log": {"first signal"},
+		"logs/foo.log": {"second signal"},
+	}
+	if group.SatisfiedWithContent(reads, split) {
+		t.Fatal("signals from case-distinct artifacts satisfied one group")
+	}
+	if !group.SatisfiedWithContent(reads, map[string][]string{"logs/Foo.log": {"first signal", "second signal"}}) {
+		t.Fatal("same case-preserved artifact did not accumulate all predicates")
+	}
+}
+
+func TestEvidenceContentPreservesRegexWhitespaceSemantics(t *testing.T) {
+	anchored := mustSkillSetJSON(t, `{
+		"skills":[{"id":"anchored","triggers":["failure"],"required_evidence":[{
+			"id":"log","any_of":["failure\\.log$"],"content_all_of":["^ERROR"]
+		}]}]
+	}`).Skills()[0].RequiredEvidence[0]
+	path := "logs/failure.log"
+	reads := map[string]bool{path: true}
+	content := map[string][]string{path: {"  ERROR\n"}}
+	if anchored.SatisfiedWithContent(reads, content) {
+		t.Fatal("trimming changed ^ERROR semantics")
+	}
+	indented := mustSkillSetJSON(t, `{
+		"skills":[{"id":"indented","triggers":["failure"],"required_evidence":[{
+			"id":"log","any_of":["failure\\.log$"],"content_all_of":["^\\s+ERROR"]
+		}]}]
+	}`).Skills()[0].RequiredEvidence[0]
+	if !indented.SatisfiedWithContent(reads, content) {
+		t.Fatal("indentation-aware predicate did not match returned content")
 	}
 }

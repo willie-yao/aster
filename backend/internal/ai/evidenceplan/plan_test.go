@@ -45,6 +45,29 @@ func TestRenderCompleteness(t *testing.T) {
 	}
 }
 
+func TestRenderIncludesContentPredicatesWithoutArtifactContent(t *testing.T) {
+	plan := []skills.PlannedSkill{{
+		ID: "content-aware",
+		RequiredEvidence: []skills.PlannedEvidenceGroup{{
+			ID: "failed-log", CandidatePaths: []string{"logs/failure.log"},
+			ContentAnyOf: []string{"ManagedClustersAgentPool"},
+			ContentAllOf: []string{"conversion webhook", "connection refused"},
+		}},
+	}}
+	prompt, complete := Render(plan, ScanStatus{})
+	if !complete {
+		t.Fatalf("content-aware plan was incomplete: %s", prompt)
+	}
+	for _, want := range []string{"Required content, any of", "ManagedClustersAgentPool", "Required content, all of", "connection refused"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q: %s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, "PRIVATE ARTIFACT CONTENT") {
+		t.Fatalf("prompt embedded artifact content: %s", prompt)
+	}
+}
+
 func TestFailureSignalIsBoundedAndInstructionFree(t *testing.T) {
 	body := strings.Repeat("b", FailureBodyBytes+100) + "body-tail"
 	signal := FailureSignal(models.TestCase{

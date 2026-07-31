@@ -766,3 +766,38 @@ required_evidence:
 		t.Errorf("regenerated feedback should NOT mention the dropped skill")
 	}
 }
+
+func TestCritiqueContentAwareEvidenceRequiresSignalInSameArtifact(t *testing.T) {
+	set := loadSkillsForTest(t, map[string]string{"aso-conversion": `
+id: aso-conversion
+triggers: ["conversion webhook"]
+required_evidence:
+  - id: failed-log
+    any_of: ["clusterctl-upgrade\\.log$"]
+    content_any_of: ["ManagedClustersAgentPool"]
+    content_all_of: ["conversion webhook", "connection refused"]
+`})
+	parsed := analysisResponse{
+		RootCause:    "The conversion webhook failed.",
+		SuggestedFix: "Restart the webhook deployment.",
+	}
+	artifactPath := "artifacts/clusters/parallel/clusterctl-upgrade.log"
+	reads := map[string]bool{artifactPath: true}
+	wrongContent := map[string][]string{artifactPath: {"PRIVATE RAW CONTENT: upgrade completed successfully"}}
+	out := critiqueDraftWithContent(parsed, reads, map[string]bool{"clusterctl-upgrade.log": true}, wrongContent, set.Match("conversion webhook"), 0)
+	if out.Passed || len(out.MissingSkillEvidence) != 1 {
+		t.Fatalf("wrong parallel log critique = %+v", out)
+	}
+	if !strings.Contains(out.Feedback, "similarly named file") || !strings.Contains(out.Feedback, "ManagedClustersAgentPool") {
+		t.Fatalf("content-aware feedback = %s", out.Feedback)
+	}
+	if strings.Contains(out.Feedback, "PRIVATE RAW CONTENT") {
+		t.Fatalf("feedback exposed raw evidence content: %s", out.Feedback)
+	}
+
+	correctContent := map[string][]string{artifactPath: {"ManagedClustersAgentPool conversion webhook connection refused"}}
+	out = critiqueDraftWithContent(parsed, reads, map[string]bool{"clusterctl-upgrade.log": true}, correctContent, set.Match("conversion webhook"), 0)
+	if !out.Passed {
+		t.Fatalf("matching content did not pass critique: %+v", out)
+	}
+}
