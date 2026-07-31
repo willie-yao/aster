@@ -4,7 +4,8 @@
 // Orchestration lives in internal/fetcher; this file handles flags.
 //
 // The onboard subcommand scaffolds a new dashboard config from a TestGrid
-// dashboard name or storage bucket.
+// dashboard name or storage bucket. The kubernetes subcommand validates and
+// installs a consumer bundle with Helm.
 package main
 
 import (
@@ -13,10 +14,13 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fetcher"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/kubernetesdeploy"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/onboard"
 )
 
@@ -25,6 +29,10 @@ import (
 var version = "dev"
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "kubernetes" {
+		runKubernetes(os.Args[2:])
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "onboard" {
 		runOnboard(os.Args[2:])
 		return
@@ -49,6 +57,39 @@ func main() {
 	opts.Version = version
 
 	if err := fetcher.Run(context.Background(), opts); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func runKubernetes(args []string) {
+	if len(args) == 0 || (args[0] != "install" && args[0] != "upgrade") {
+		fmt.Fprintln(os.Stderr, "error: usage: fetcher kubernetes <install|upgrade> [flags]")
+		os.Exit(2)
+	}
+
+	opts := kubernetesdeploy.Options{Action: args[0]}
+	fs := flag.NewFlagSet("kubernetes "+args[0], flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	fs.StringVar(&opts.ProjectDir, "project-dir", ".", "consumer directory containing project.yaml, prompts/system.md, and optional skills")
+	fs.StringVar(&opts.ValuesFile, "values", filepath.Join("deploy", "values.yaml"), "Helm values file relative to project-dir unless absolute")
+	fs.StringVar(&opts.Release, "release", "", "Helm release name (required)")
+	fs.StringVar(&opts.Namespace, "namespace", "", "Kubernetes namespace (required)")
+	fs.StringVar(&opts.KubeContext, "kube-context", "", "explicit Kubernetes context (required)")
+	fs.StringVar(&opts.Chart, "chart", kubernetesdeploy.DefaultChart, "Helm chart path or OCI reference")
+	fs.StringVar(&opts.ChartVersion, "chart-version", "", "optional OCI chart version")
+	fs.BoolVar(&opts.DryRun, "dry-run", false, "validate the bundle and render locally without cluster writes")
+	if err := fs.Parse(args[1:]); err != nil {
+		os.Exit(2)
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintf(os.Stderr, "error: unexpected arguments: %s\n", strings.Join(fs.Args(), " "))
+		os.Exit(2)
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := kubernetesdeploy.Run(ctx, opts, os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}

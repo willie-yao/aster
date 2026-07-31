@@ -436,7 +436,7 @@ func TestScaffold_K8sMode(t *testing.T) {
 	// The install commands must reference the scaffold directory (the dashboard
 	// repo name), not the human display name, and the namespace/release must be
 	// a DNS-1123-safe name.
-	if !strings.Contains(readme, "../"+data.DashboardName+"/deploy/values.yaml") {
+	if !strings.Contains(readme, "--project-dir ../"+data.DashboardName) || !strings.Contains(readme, "--values deploy/values.yaml") {
 		t.Errorf("README does not reference the scaffold dir %q:\n%s", data.DashboardName, readme)
 	}
 	if strings.Contains(readme, "../"+data.Name+"/") {
@@ -504,12 +504,12 @@ func TestScaffold_K8sStaysFocused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"mode: watch", "dashboard-owned analyzer"} {
+	for _, want := range []string{"mode: watch", "dashboard-owned analyzer", "existingSecret: \"my-proj-ai\"", "Kubernetes Secret"} {
 		if !strings.Contains(values+readme, want) {
 			t.Errorf("Kubernetes scaffold missing %q:\n%s\n%s", want, values, readme)
 		}
 	}
-	for _, unwanted := range []string{"EMAIL_SMTP_PASSWORD", "server.actions", "existingSecret", "ISSUE_TOKEN", "FIX_TOKEN"} {
+	for _, unwanted := range []string{"EMAIL_SMTP_PASSWORD", "server.actions", "--set ai.token", "ISSUE_TOKEN", "FIX_TOKEN"} {
 		if strings.Contains(values+readme, unwanted) {
 			t.Errorf("Kubernetes scaffold includes optional feature %q:\n%s\n%s", unwanted, values, readme)
 		}

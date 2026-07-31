@@ -101,6 +101,9 @@ but postsubmit artifact ingestion is not supported.
 
 ## Deployment profiles
 
+`project.yaml` owns portable project behavior and analysis policy. Workflow
+inputs and Helm values own infrastructure, credentials, and execution tuning.
+
 ### GitHub Pages
 
 Choose Pages when artifacts are publicly readable, the model provider is
@@ -139,12 +142,40 @@ The scaffold contains:
 ```text
 project.yaml
 prompts/system.md
+skills/*.yaml
 deploy/values.yaml
 deploy/README.md
 ```
 
+The `skills/` directory is optional unless `project.yaml` requires consumer
+recipes. When AI is enabled, generated values reference the predictable
+`<release>-ai` Kubernetes Secret and key `AI_TOKEN`. Create that Secret with
+your normal secret manager before installation. The wizard never writes its
+value.
+
 The wizard generates files only. It does not install Helm releases, write
-Kubernetes Secrets, configure ingress or DNS, or inspect a cluster.
+Kubernetes Secrets, configure ingress or DNS, or inspect a cluster. From an
+engine checkout, build the helper with `make build`, then validate the bundle
+without cluster writes:
+
+```bash
+./bin/fetcher kubernetes install \
+  --project-dir ../my-dashboard \
+  --values deploy/values.yaml \
+  --release my-dashboard \
+  --namespace dashboards \
+  --kube-context my-cluster \
+  --chart deploy/helm/prow-ai-dashboard \
+  --dry-run
+```
+
+Remove `--dry-run` for the fresh install. Later image, values, project, prompt,
+or skill changes use the same flags with `kubernetes upgrade`. Both commands
+run `helm upgrade --install`, and image-only upgrades do not require editing
+`project.yaml`. The wrapper validates the current bundle and passes its files to
+the chart-managed ConfigMap on every run. See
+[Kubernetes with Helm](kubernetes.md#install-and-upgrade-a-consumer-bundle) for
+the published OCI chart and manual Helm equivalent.
 
 Orka remains a separate advanced integration. The first-run scaffold does not
 install, upgrade, or silently enable Orka.
@@ -305,7 +336,7 @@ cannot establish safely. It does not infer:
 - Kubernetes namespace or storage class.
 - Ingress, DNS, certificates, or OAuth.
 - Notification routing.
-- Secret names or values.
+- Secret values.
 - Orka installation or runtime configuration.
 
 If no Prow jobs or TestGrid annotations match the source repository, the wizard
@@ -340,10 +371,10 @@ explicit opt-in contracts.
 
 ## Command surface
 
-The MVP remains under `fetcher onboard`. A separate top-level
-`prow-ai-dashboard init` executable was evaluated but not added because it would
-duplicate command distribution, parsing, templates, and validation before the
-guided workflow is proven.
+Scaffolding remains under `fetcher onboard`. Kubernetes bundle installation and
+upgrades use `fetcher kubernetes install|upgrade`, which reuses the same binary
+and project loaders. A separate top-level `prow-ai-dashboard` executable was
+not added because it would duplicate command distribution and validation.
 
 ## Deploy and validate
 
