@@ -221,7 +221,7 @@ export function Layout() {
             />
             <NavTab
               to="/flaky"
-              label="Test Analysis"
+              label="Failure Analysis"
               active={flakyActive}
               current={location.pathname === "/flaky"}
             />

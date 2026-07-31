@@ -3,7 +3,7 @@ import { matchPath } from "react-router-dom";
 
 const pageRoutes = [
   { path: "/", title: "Overview" },
-  { path: "/flaky", title: "Test Analysis" },
+  { path: "/flaky", title: "Failure Analysis" },
   { path: "/analysis-traces", title: "Analysis Traces" },
   { path: "/job/:jobName", title: "Job Details" },
   { path: "/job/:jobName/test/:testName", title: "Test Details" },

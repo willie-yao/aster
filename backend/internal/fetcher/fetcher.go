@@ -550,6 +550,7 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 		p.progress.SetPatternRefreshCounts(refreshReport.Current, refreshReport.Retained, refreshReport.Unavailable)
 	}
 	flakinessReport.RecurringPatterns = collectRecurringPatterns(details)
+	flakinessReport.BuildFailures = aggregator.CollectBuildFailures(details)
 	if n := len(flakinessReport.RecurringPatterns); n > 0 {
 		log.Printf("🔗 %d systemic recurring pattern(s) surfaced on the home page", n)
 	}

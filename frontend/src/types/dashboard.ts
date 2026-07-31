@@ -173,11 +173,27 @@ export interface PatternRefreshReport {
   jobs?: Record<string, PatternRefreshStatus>;
 }
 
+export interface BuildFailureSummary {
+  job_id: string;
+  job_name: string;
+  build_id: string;
+  started_at: string;
+  result: string;
+  analysis_state: "succeeded" | "unavailable";
+  summary?: string;
+  severity?: string;
+  is_transient: boolean;
+  provenance?: "cache";
+  build_log_url?: string;
+  job_detail_url: string;
+}
+
 export interface FlakinessReport {
   generated_at: string;
   most_flaky: TestFlakiness[];
   persistent_failures: TestFlakiness[];
   recently_broken: TestFlakiness[];
+  build_failures: BuildFailureSummary[];
   recurring_patterns?: PatternAnalysis[];
   pattern_refresh?: PatternRefreshReport;
 }
