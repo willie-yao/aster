@@ -28,7 +28,7 @@ import {
   formatFetchTimestamp,
   patternFailureLabel,
 } from "../lib/fetchStatus";
-import type { FetchProgressStatus, FetchStatusResponse } from "../types/fetchStatus";
+import type { FetchPassSummary, FetchProgressStatus, FetchStatusResponse } from "../types/fetchStatus";
 import { soft } from "../theme";
 
 interface FetchStatusControlProps {
@@ -136,6 +136,32 @@ function DetailRow({ label, value }: { label: string; value: ReactNode }) {
       </Typography>
     </Box>
   );
+}
+
+function formatPassDuration(durationMS: number): string {
+  const seconds = Math.max(0, Math.round(durationMS / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return remainder > 0 ? `${minutes}m ${remainder}s` : `${minutes}m`;
+}
+
+function passTypeLabel(passType: FetchPassSummary["pass_type"]): string {
+  switch (passType) {
+    case "one-shot":
+      return "One-shot";
+    case "initial-watch":
+      return "Initial watch";
+    case "lightweight-watch":
+      return "Watch";
+    case "reconcile":
+      return "Reconcile";
+  }
+}
+
+function recentPassDetail(pass: FetchPassSummary): string {
+  const published = pass.published ? "published" : "not published";
+  return `${pass.outcome} · ${formatPassDuration(pass.duration_ms)} · ${pass.cache_hits} cache · ${pass.compatible_results_reused} compatible · ${pass.exact_results_reused} exact · ${pass.new_tasks_created} new Tasks · ${published}`;
 }
 
 function cacheRejectionDetail(status: FetchProgressStatus): string {
@@ -303,8 +329,10 @@ export function FetchStatusControl({ response, idleCompact, onIdleCompactChange 
             />
             <DetailRow label="Reused from cache" value={analysis.reusedFromCache} />
             <DetailRow label="Compatible results" value={analysis.compatibleResults} />
-            <DetailRow label="Existing results adopted" value={analysis.adopted} />
-            <DetailRow label="New analyzer Tasks" value={`At least ${analysis.newAnalyzerTasksLowerBound}`} />
+            <DetailRow label="Exact results reused" value={analysis.exactResultsReused} />
+            <DetailRow label="Existing Tasks adopted" value={analysis.lateTasksAdopted} />
+            <DetailRow label="New analyzer Tasks" value={analysis.newTasksCreated} />
+            <DetailRow label="Fresh analyses completed" value={analysis.freshAnalysesCompleted} />
             <DetailRow label="Currently analyzing" value={analysis.analyzing} />
             <DetailRow label="Waiting to check" value={analysis.waiting} />
             <DetailRow
@@ -333,10 +361,7 @@ export function FetchStatusControl({ response, idleCompact, onIdleCompactChange 
           </Button>
           <Collapse in={technicalOpen} timeout="auto">
             <Stack id={technicalID} spacing={0.75} sx={{ mt: 0.75 }}>
-              <DetailRow
-                label="Task attempts"
-                value={`${status.analyses.task_attempts} total, including adopted existing Tasks`}
-              />
+              <DetailRow label="Task attempts" value={status.analyses.task_attempts} />
               <DetailRow
                 label="Results retrieved"
                 value={`${status.analyses.results_retrieved} total, including adopted existing Tasks`}
@@ -344,10 +369,6 @@ export function FetchStatusControl({ response, idleCompact, onIdleCompactChange 
               <DetailRow
                 label="Retries"
                 value={`${status.analyses.retries} Task · ${status.analyses.result_retrieval_retries} result retrieval`}
-              />
-              <DetailRow
-                label="Lower-bound counts"
-                value="New Task counts subtract all adopted Tasks, including adoption still awaiting attempts or results"
               />
               <DetailRow
                 label="Planned Task work"
@@ -372,6 +393,21 @@ export function FetchStatusControl({ response, idleCompact, onIdleCompactChange 
               )}
               {patterns?.failure_category && (
                 <DetailRow label="Pattern failure" value={patternFailureLabel(patterns.failure_category)} />
+              )}
+              {response.history && response.history.length > 0 && (
+                <>
+                  <Divider sx={{ my: 0.5 }} />
+                  <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>
+                    Recent passes
+                  </Typography>
+                  {response.history.slice(-5).reverse().map((pass) => (
+                    <DetailRow
+                      key={`${pass.started_at}/${pass.pass_type}`}
+                      label={passTypeLabel(pass.pass_type)}
+                      value={recentPassDetail(pass)}
+                    />
+                  ))}
+                </>
               )}
             </Stack>
           </Collapse>

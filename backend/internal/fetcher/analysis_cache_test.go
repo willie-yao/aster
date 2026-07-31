@@ -257,6 +257,18 @@ func TestPlanContainerAnalysisWorkAcceptsBuildCache(t *testing.T) {
 	}
 }
 
+type exactPlanningAnalyzer struct {
+	*compatiblePlanningAnalyzer
+	exactResult ai.FailureAnalysisResult
+	exactReused bool
+	exactCalls  atomic.Int64
+}
+
+func (a *exactPlanningAnalyzer) ReuseExactResult(context.Context, ai.FailureAnalysisRequest, ai.AgenticCachePolicy) (ai.FailureAnalysisResult, bool, error) {
+	a.exactCalls.Add(1)
+	return a.exactResult, a.exactReused, nil
+}
+
 type compatiblePlanningAnalyzer struct {
 	*cachePlanningAnalyzer
 	result ai.FailureAnalysisResult
@@ -266,6 +278,66 @@ type compatiblePlanningAnalyzer struct {
 func (a *compatiblePlanningAnalyzer) ReuseCompatibleResult(context.Context, ai.FailureAnalysisRequest, ai.AgenticCachePolicy) (ai.FailureAnalysisResult, bool, error) {
 	a.calls.Add(1)
 	return a.result, true, nil
+}
+
+func TestPlanContainerAnalysisWorkReusesExactResultBeforeCompatibleFallback(t *testing.T) {
+	projectConfig := &project.Config{AI: &project.AI{Agentic: project.Agentic{MinToolCalls: 2}}}
+	analysisProject := testCacheAnalysisProject(projectConfig)
+	state, err := analysisruntime.NewContainerStateStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := testCacheRequest()
+	request.TestCase.Source = models.TestCaseSourceBuild
+	run := models.BuildResult{BuildInfo: request.Build, TestCases: []models.TestCase{request.TestCase}}
+	exactResult := ai.FailureAnalysisResult{
+		Summary:  &models.AISummary{Summary: "exact"},
+		Analysis: &models.AIAnalysis{Mode: ai.AgenticMode, RootCause: "exact root"},
+	}
+	compatible := &compatiblePlanningAnalyzer{
+		cachePlanningAnalyzer: &cachePlanningAnalyzer{state: state},
+		result:                ai.FailureAnalysisResult{Summary: &models.AISummary{Summary: "compatible"}},
+	}
+	analyzer := &exactPlanningAnalyzer{compatiblePlanningAnalyzer: compatible, exactResult: exactResult, exactReused: true}
+	planner := analysisruntime.NewReusePlanner(analysisProject)
+	work := []aiWork{{jobID: request.JobID, buildPrefix: request.BuildPrefix, run: &run, tc: &run.TestCases[0]}}
+	queued, plan, err := planContainerAnalysisWork(t.Context(), &http.Client{}, work, analyzer, planner, analysisProject, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(queued) != 0 || plan.LogicalTotal != 1 || plan.ExactResultsReused != 1 || plan.CompatibleResultsReused != 0 || plan.NewWork != 0 || plan.Queued != 0 || plan.CacheRejections.Missing != 0 ||
+		plan.BuildSubjects != (fetchprogress.BuildAnalysisProgress{LogicalTotal: 1, Completed: 1, ExactResultsReused: 1}) || analyzer.exactCalls.Load() != 1 || compatible.calls.Load() != 0 {
+		t.Fatalf("plan=%+v exact calls=%d compatible calls=%d", plan, analyzer.exactCalls.Load(), compatible.calls.Load())
+	}
+	if run.TestCases[0].AISummary == nil || run.TestCases[0].AISummary.Summary != "exact" {
+		t.Fatalf("exact result was not applied: %+v", run.TestCases[0])
+	}
+}
+
+func TestPlanContainerAnalysisWorkFallsBackFromExactToCompatibleResult(t *testing.T) {
+	projectConfig := &project.Config{AI: &project.AI{Agentic: project.Agentic{MinToolCalls: 2}}}
+	analysisProject := testCacheAnalysisProject(projectConfig)
+	state, err := analysisruntime.NewContainerStateStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := testCacheRequest()
+	run := models.BuildResult{BuildInfo: request.Build, TestCases: []models.TestCase{request.TestCase}}
+	compatibleResult := ai.FailureAnalysisResult{
+		Summary:  &models.AISummary{Summary: "compatible"},
+		Analysis: &models.AIAnalysis{Mode: ai.AgenticMode, RootCause: "compatible root"},
+	}
+	compatible := &compatiblePlanningAnalyzer{cachePlanningAnalyzer: &cachePlanningAnalyzer{state: state}, result: compatibleResult}
+	analyzer := &exactPlanningAnalyzer{compatiblePlanningAnalyzer: compatible}
+	planner := analysisruntime.NewReusePlanner(analysisProject)
+	work := []aiWork{{jobID: request.JobID, buildPrefix: request.BuildPrefix, run: &run, tc: &run.TestCases[0]}}
+	queued, plan, err := planContainerAnalysisWork(t.Context(), &http.Client{}, work, analyzer, planner, analysisProject, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(queued) != 0 || plan.ExactResultsReused != 0 || plan.CompatibleResultsReused != 1 || analyzer.exactCalls.Load() != 1 || compatible.calls.Load() != 1 {
+		t.Fatalf("plan=%+v exact calls=%d compatible calls=%d", plan, analyzer.exactCalls.Load(), compatible.calls.Load())
+	}
 }
 
 func TestPlanContainerAnalysisWorkCountsCompatibleResultReuse(t *testing.T) {

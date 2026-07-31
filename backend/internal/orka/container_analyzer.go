@@ -317,6 +317,9 @@ func (a *ContainerAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, 
 	if err != nil {
 		return ai.UnavailableFailureAnalysisResult(request.TestCase, err), err
 	}
+	if a.opts.Progress != nil && !containerAnalysisCacheHit(delta.Traces) {
+		a.opts.Progress.RecordFreshAnalysisCompleted(workItem)
+	}
 	a.recordCacheDisposition(workItem, resources.CacheSeedIncluded, delta)
 	if err := a.state.Merge(delta); err != nil {
 		log.Printf("Warning: failed to persist state from %s: %v", taskName, err)

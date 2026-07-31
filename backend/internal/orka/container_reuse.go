@@ -35,6 +35,35 @@ type compatibleContainerResultCandidate struct {
 	CompletedAt  time.Time
 }
 
+// ReuseExactResult returns a validated result for the current Task identity without creating resources.
+func (a *ContainerAnalyzer) ReuseExactResult(ctx context.Context, request ai.FailureAnalysisRequest, policy ai.AgenticCachePolicy) (ai.FailureAnalysisResult, bool, error) {
+	if a == nil || a.kube == nil || a.results == nil || a.state == nil {
+		return ai.FailureAnalysisResult{}, false, fmt.Errorf("container analysis runtime is not configured")
+	}
+	taskRequest := analysisruntime.CanonicalFailureAnalysisRequest(request)
+	prepared, err := prepareContainerAnalysisTask(a.taskSpec(taskRequest, a.state.CacheSeed(taskRequest), nil))
+	if err != nil {
+		return ai.FailureAnalysisResult{}, false, err
+	}
+	workItem, _ := containerAnalysisCorrelation(nil, taskRequest)
+	task, err := a.kube.Get(ctx, TasksGVR, a.opts.Namespace, prepared.Name)
+	if IsNotFound(err) {
+		return ai.FailureAnalysisResult{}, false, nil
+	}
+	if err != nil {
+		return ai.FailureAnalysisResult{}, false, fmt.Errorf("read exact container analysis Task: %w", err)
+	}
+	candidate, ok := compatibleContainerResultCandidateFromObject(
+		task, a.opts.Namespace, workItem, containerStateKeyFingerprint(a.opts.StateKey), "", time.Now().UTC(),
+	)
+	if !ok || candidate.Name != prepared.Name || candidate.BundleDigest != prepared.BundleDigest {
+		return ai.FailureAnalysisResult{}, false, nil
+	}
+	lookupCtx, cancelLookup := context.WithTimeout(ctx, containerCompatibleResultLookupTimeout)
+	defer cancelLookup()
+	return a.reuseContainerResultCandidate(ctx, lookupCtx, taskRequest, policy, candidate)
+}
+
 // ReuseCompatibleResult returns a validated succeeded result without creating a Task.
 func (a *ContainerAnalyzer) ReuseCompatibleResult(ctx context.Context, request ai.FailureAnalysisRequest, policy ai.AgenticCachePolicy) (ai.FailureAnalysisResult, bool, error) {
 	if a == nil || a.kube == nil || a.results == nil || a.state == nil {
@@ -56,56 +85,69 @@ func (a *ContainerAnalyzer) ReuseCompatibleResult(ctx context.Context, request a
 		}
 		return ai.FailureAnalysisResult{}, false, nil
 	}
-	cacheKey := analysisruntime.FailureCacheKey(taskRequest)
 	lookupCtx, cancelLookup := context.WithTimeout(ctx, containerCompatibleResultLookupTimeout)
 	defer cancelLookup()
 	for _, candidate := range candidates {
-		raw, ok, resultErr := a.results.Result(lookupCtx, candidate.Namespace, candidate.Name)
-		if resultErr != nil {
-			if IsResultAuthorizationError(resultErr) {
-				return ai.FailureAnalysisResult{}, false, fmt.Errorf("read compatible container analysis result: %w", resultErr)
-			}
-			if ctx.Err() != nil {
-				return ai.FailureAnalysisResult{}, false, ctx.Err()
-			}
-			if lookupCtx.Err() != nil {
-				return ai.FailureAnalysisResult{}, false, nil
-			}
-			continue
+		result, reused, reuseErr := a.reuseContainerResultCandidate(ctx, lookupCtx, taskRequest, policy, candidate)
+		if reuseErr != nil {
+			return ai.FailureAnalysisResult{}, false, reuseErr
 		}
-		if !ok {
-			continue
+		if reused {
+			return result, true, nil
 		}
-		result, parseErr := ParseContainerAnalysisResult(raw)
-		if parseErr != nil || ai.AgenticResultRejection(result, policy) != ai.CacheAccepted {
-			continue
-		}
-		identity := analysisruntime.NewContainerStateIdentity(candidate.Namespace, candidate.Name, taskRequest)
-		delta, stateErr := analysisruntime.ParseEncryptedContainerAnalysisState(raw, a.opts.StateKey, identity)
-		if stateErr != nil {
-			if analysisruntime.IsContainerStateDecryptionError(stateErr) || analysisruntime.IsContainerStateIdentityError(stateErr) {
-				return ai.FailureAnalysisResult{}, false, fmt.Errorf("validate compatible container analysis state: %w", stateErr)
-			}
-			continue
-		}
-		entry, hasEntry := delta.CacheEntries[cacheKey]
-		if hasEntry {
-			cachedResult, reason := ai.AcceptAgenticCacheEntry(entry, cacheKey, policy)
-			if reason != ai.CacheAccepted || !sameAgenticResult(cachedResult, result) {
-				continue
-			}
-		} else {
-			entry, err = ai.NewAgenticCacheEntry(cacheKey, result, candidate.CompletedAt)
-			if err != nil {
-				continue
-			}
-		}
-		if err := a.state.StageCacheEntry(entry); err != nil {
-			return ai.FailureAnalysisResult{}, false, fmt.Errorf("stage compatible container analysis cache: %w", err)
-		}
-		return result, true, nil
 	}
 	return ai.FailureAnalysisResult{}, false, nil
+}
+
+func (a *ContainerAnalyzer) reuseContainerResultCandidate(
+	ctx, lookupCtx context.Context,
+	taskRequest ai.FailureAnalysisRequest,
+	policy ai.AgenticCachePolicy,
+	candidate compatibleContainerResultCandidate,
+) (ai.FailureAnalysisResult, bool, error) {
+	raw, ok, resultErr := a.results.Result(lookupCtx, candidate.Namespace, candidate.Name)
+	if resultErr != nil {
+		if IsResultAuthorizationError(resultErr) {
+			return ai.FailureAnalysisResult{}, false, fmt.Errorf("read reusable container analysis result: %w", resultErr)
+		}
+		if ctx.Err() != nil {
+			return ai.FailureAnalysisResult{}, false, ctx.Err()
+		}
+		return ai.FailureAnalysisResult{}, false, nil
+	}
+	if !ok {
+		return ai.FailureAnalysisResult{}, false, nil
+	}
+	result, parseErr := ParseContainerAnalysisResult(raw)
+	if parseErr != nil || ai.AgenticResultRejection(result, policy) != ai.CacheAccepted {
+		return ai.FailureAnalysisResult{}, false, nil
+	}
+	identity := analysisruntime.NewContainerStateIdentity(candidate.Namespace, candidate.Name, taskRequest)
+	delta, stateErr := analysisruntime.ParseEncryptedContainerAnalysisState(raw, a.opts.StateKey, identity)
+	if stateErr != nil {
+		if analysisruntime.IsContainerStateDecryptionError(stateErr) || analysisruntime.IsContainerStateIdentityError(stateErr) {
+			return ai.FailureAnalysisResult{}, false, fmt.Errorf("validate reusable container analysis state: %w", stateErr)
+		}
+		return ai.FailureAnalysisResult{}, false, nil
+	}
+	cacheKey := analysisruntime.FailureCacheKey(taskRequest)
+	entry, hasEntry := delta.CacheEntries[cacheKey]
+	if hasEntry {
+		cachedResult, reason := ai.AcceptAgenticCacheEntry(entry, cacheKey, policy)
+		if reason != ai.CacheAccepted || !sameAgenticResult(cachedResult, result) {
+			return ai.FailureAnalysisResult{}, false, nil
+		}
+	} else {
+		var entryErr error
+		entry, entryErr = ai.NewAgenticCacheEntry(cacheKey, result, candidate.CompletedAt)
+		if entryErr != nil {
+			return ai.FailureAnalysisResult{}, false, nil
+		}
+	}
+	if err := a.state.StageCacheEntry(entry); err != nil {
+		return ai.FailureAnalysisResult{}, false, fmt.Errorf("stage reusable container analysis cache: %w", err)
+	}
+	return result, true, nil
 }
 
 func compatibleContainerResultCandidates(

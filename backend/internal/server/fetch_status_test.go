@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -25,7 +26,8 @@ func serverFetchStatus(now time.Time) fetchprogress.Status {
 		Jobs:    fetchprogress.JobProgress{Total: 28, Completed: 28},
 		Builds:  fetchprogress.BuildProgress{Cached: 241, Fetched: 29},
 		Analyses: fetchprogress.AnalysisProgress{
-			LogicalTotal: 61, CompatibleResultsReused: 4, NewWork: 20, StaleWork: 3, Queued: 35, Running: 2, Completed: 24, Retries: 3,
+			LogicalTotal: 61, CompatibleResultsReused: 4, ExactResultsReused: 2, NewWork: 20, StaleWork: 3, Queued: 35, Running: 2, Completed: 24, Retries: 3,
+			NewTasksCreated: 4, FreshAnalysesCompleted: 2,
 			CacheRejections: fetchprogress.CacheRejectionProgress{Missing: 20, Critique: 3},
 		},
 		Patterns: fetchprogress.PatternProgress{
@@ -49,7 +51,8 @@ func TestFetchStatusEndpointAuthenticationMethodsAndPrivacy(t *testing.T) {
 	history := fetchprogress.History{SchemaVersion: fetchprogress.HistorySchemaVersion, Passes: []fetchprogress.PassSummary{{
 		RunID: "safe-run", PassID: "previous-pass", PassType: fetchprogress.PassLightweightWatch,
 		StartedAt: now.Add(-2 * time.Minute), CompletedAt: now.Add(-time.Minute),
-		LogicalCount: 3, TaskAttempts: 4, Retries: 1, Outcome: fetchprogress.OutcomeSucceeded, Published: true,
+		LogicalCount: 3, CompatibleResultsReused: 1, ExactResultsReused: 1, NewTasksCreated: 1, FreshAnalysesCompleted: 1,
+		TaskAttempts: 4, Retries: 1, Outcome: fetchprogress.OutcomeSucceeded, Published: true,
 	}}}
 	if err := fetchprogress.WriteHistory(fetchprogress.HistoryPath(dataDir), history); err != nil {
 		t.Fatal(err)
@@ -84,15 +87,15 @@ func TestFetchStatusEndpointAuthenticationMethodsAndPrivacy(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = resp.Body.Close()
-	if !got.Available || got.State != "active" || got.Status == nil || got.Status.Analyses.Retries != 3 || got.Status.Analyses.CompatibleResultsReused != 4 || got.Status.Analyses.CacheRejections.Missing != 20 ||
+	if !got.Available || got.State != "active" || got.Status == nil || got.Status.Analyses.Retries != 3 || got.Status.Analyses.CompatibleResultsReused != 4 || got.Status.Analyses.ExactResultsReused != 2 || got.Status.Analyses.NewTasksCreated != 4 || got.Status.Analyses.FreshAnalysesCompleted != 2 || got.Status.Analyses.CacheRejections.Missing != 20 ||
 		got.Status.Patterns.Attempts != 3 || got.Status.Patterns.FailureCategory != fetchprogress.PatternFailureAmbiguous {
 		t.Fatalf("GET response = %+v", got)
 	}
-	if len(got.Status.CurrentTasks) != 0 || got.HistorySchemaVersion != fetchprogress.HistorySchemaVersion || len(got.History) != 1 || got.History[0].TaskAttempts != 4 {
+	if len(got.Status.CurrentTasks) != 0 || got.HistorySchemaVersion != fetchprogress.HistorySchemaVersion || len(got.History) != 1 || got.History[0].DurationMS != int64(time.Minute/time.Millisecond) || got.History[0].ExactResultsReused != 1 || got.History[0].NewTasksCreated != 1 || got.History[0].FreshAnalysesCompleted != 1 {
 		t.Fatalf("safe status/history response = %+v", got)
 	}
 	body, _ := json.Marshal(got)
-	for _, sensitive := range []string{"/private/", "token-value", "provider-body", "test-name", "job-name", "build-id", "private-task-name"} {
+	for _, sensitive := range []string{"/private/", "token-value", "provider-body", "test-name", "job-name", "build-id", "private-task-name", "previous-pass"} {
 		if string(body) != "" && bytes.Contains(body, []byte(sensitive)) {
 			t.Fatalf("response exposed %q: %s", sensitive, body)
 		}
@@ -151,6 +154,34 @@ func TestFetchStatusEndpointAuthenticationMethodsAndPrivacy(t *testing.T) {
 	_ = resp.Body.Close()
 	if !caps.Features.FetchStatus {
 		t.Fatalf("capabilities = %+v", caps)
+	}
+}
+
+func TestFetchStatusEndpointReturnsOnlyRecentPasses(t *testing.T) {
+	dataDir := t.TempDir()
+	now := time.Date(2026, 7, 31, 18, 0, 0, 0, time.UTC)
+	if err := fetchprogress.Write(fetchprogress.Path(dataDir), serverFetchStatus(now)); err != nil {
+		t.Fatal(err)
+	}
+	history := fetchprogress.History{SchemaVersion: fetchprogress.HistorySchemaVersion}
+	for i := 0; i < fetchStatusRecentPassLimit+2; i++ {
+		history.Passes = append(history.Passes, fetchprogress.PassSummary{
+			RunID: "safe-run", PassID: fmt.Sprintf("pass-%02d", i), PassType: fetchprogress.PassLightweightWatch,
+			StartedAt: now.Add(time.Duration(i) * time.Minute), CompletedAt: now.Add(time.Duration(i)*time.Minute + time.Second),
+			Outcome: fetchprogress.OutcomeSucceeded,
+		})
+	}
+	if err := fetchprogress.WriteHistory(fetchprogress.HistoryPath(dataDir), history); err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	fetchStatusHandlerWithClock(dataDir, func() time.Time { return now }, time.Minute).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/fetch-status", nil))
+	var got fetchStatusResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.History) != fetchStatusRecentPassLimit || !got.History[0].StartedAt.Equal(now.Add(2*time.Minute)) || !got.History[len(got.History)-1].StartedAt.Equal(now.Add(11*time.Minute)) {
+		t.Fatalf("recent history = %+v", got.History)
 	}
 }
 

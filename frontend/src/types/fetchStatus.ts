@@ -40,6 +40,7 @@ export interface FetchProgressStatus {
     logical_total: number;
     accepted_cache_hits: number;
     compatible_results_reused?: number;
+    exact_results_reused?: number;
     new_work: number;
     stale_work: number;
     cache_rejections?: {
@@ -58,7 +59,9 @@ export interface FetchProgressStatus {
     task_attempts: number;
     retries: number;
     existing_tasks_adopted: number;
+    new_tasks_created?: number;
     results_retrieved: number;
+    fresh_analyses_completed?: number;
     result_retrieval_retries: number;
     checkpoint_committed?: boolean;
     build_subjects?: {
@@ -69,7 +72,10 @@ export interface FetchProgressStatus {
       failed: number;
       cancelled: number;
       accepted_cache_hits: number;
+      exact_results_reused?: number;
       existing_tasks_adopted: number;
+      new_tasks_created?: number;
+      fresh_analyses_completed?: number;
     };
   };
   patterns?: {
@@ -111,9 +117,27 @@ export interface FetchProgressStatus {
   next_reconcile_at?: string;
 }
 
+export interface FetchPassSummary {
+  pass_type: FetchPassType;
+  started_at: string;
+  completed_at: string;
+  duration_ms: number;
+  logical_count: number;
+  cache_hits: number;
+  compatible_results_reused: number;
+  exact_results_reused: number;
+  new_tasks_created: number;
+  fresh_analyses_completed: number;
+  retries: number;
+  outcome: FetchOutcome;
+  published: boolean;
+}
+
 export interface FetchStatusResponse {
   available: boolean;
   state: FetchStatusState;
   stale?: boolean;
   status?: FetchProgressStatus;
+  history_schema_version?: number;
+  history?: FetchPassSummary[];
 }
