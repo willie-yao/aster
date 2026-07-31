@@ -3,6 +3,7 @@ package kubernetesdeploy
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -19,12 +20,26 @@ type recordedCommand struct {
 
 type recordingRunner struct {
 	commands []recordedCommand
+	releases []string
+	listErr  error
 	err      error
 	output   string
 }
 
 func (r *recordingRunner) Run(_ context.Context, name string, args []string, stdout, _ io.Writer) error {
 	r.commands = append(r.commands, recordedCommand{name: name, args: append([]string(nil), args...)})
+	if len(args) > 0 && args[0] == "list" {
+		if r.listErr != nil {
+			return r.listErr
+		}
+		releases := make([]releaseSummary, 0, len(r.releases))
+		for _, release := range r.releases {
+			releases = append(releases, releaseSummary{Name: release})
+		}
+		data, _ := json.Marshal(releases)
+		_, _ = stdout.Write(data)
+		return nil
+	}
 	if r.output != "" {
 		_, _ = io.WriteString(stdout, r.output)
 	}
@@ -122,7 +137,7 @@ func TestRunRejectsUnknownToolBeforeHelm(t *testing.T) {
 
 func TestRunBuildsUpgradeInstallArguments(t *testing.T) {
 	dir := writeBundle(t, minimalProject, "prompt")
-	runner := &recordingRunner{}
+	runner := &recordingRunner{releases: []string{"capz"}}
 	opts := baseOptions(dir)
 	opts.Action = "upgrade"
 	opts.Chart = "./chart"
@@ -131,10 +146,13 @@ func TestRunBuildsUpgradeInstallArguments(t *testing.T) {
 	if err := run(context.Background(), opts, runner, io.Discard, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	if len(runner.commands) != 1 {
-		t.Fatalf("commands = %d, want 1", len(runner.commands))
+	if len(runner.commands) != 2 {
+		t.Fatalf("commands = %d, want 2", len(runner.commands))
 	}
-	got := runner.commands[0]
+	if got := runner.commands[0].args; len(got) == 0 || got[0] != "list" {
+		t.Fatalf("first command = %q, want helm list", got)
+	}
+	got := runner.commands[1]
 	want := []string{
 		"upgrade", "--install", "capz", "./chart",
 		"--namespace", "capz-dynamo", "--create-namespace", "--kube-context", "h100", "--reuse-values",
@@ -158,12 +176,39 @@ func TestRunInstallDoesNotReuseMissingReleaseValues(t *testing.T) {
 	if err := run(context.Background(), baseOptions(dir), runner, io.Discard, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	args := runner.commands[0].args
+	args := runner.commands[1].args
 	if slicesContain(args, "--reuse-values") {
 		t.Fatalf("fresh install unexpectedly reuses release values: %q", args)
 	}
 	if !containsPair(args, "--wait", "--rollback-on-failure") {
 		t.Fatalf("fresh install is not rollback guarded: %q", args)
+	}
+}
+
+func TestRunEnforcesRequestedReleaseState(t *testing.T) {
+	tests := []struct {
+		name     string
+		action   string
+		releases []string
+		want     string
+	}{
+		{name: "install existing", action: "install", releases: []string{"capz"}, want: "already exists"},
+		{name: "upgrade missing", action: "upgrade", want: "does not exist"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := writeBundle(t, minimalProject, "prompt")
+			opts := baseOptions(dir)
+			opts.Action = tt.action
+			runner := &recordingRunner{releases: tt.releases}
+			err := run(context.Background(), opts, runner, io.Discard, io.Discard)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want %q", err, tt.want)
+			}
+			if len(runner.commands) != 1 || runner.commands[0].args[0] != "list" {
+				t.Fatalf("release-state failure reached Helm write: %q", runner.commands)
+			}
+		})
 	}
 }
 
@@ -204,7 +249,7 @@ func TestRunIncludesValidatedConsumerSkillsAndClearsStaleValues(t *testing.T) {
 	if err := run(context.Background(), baseOptions(dir), runner, io.Discard, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	args := runner.commands[0].args
+	args := runner.commands[1].args
 	want := []string{
 		"project.skills.alpha\\.recipe\\.yaml=" + filepath.Join(dir, "skills", "alpha.recipe.yaml"),
 		"project.skills.zeta\\.yml=" + filepath.Join(dir, "skills", "zeta.yml"),

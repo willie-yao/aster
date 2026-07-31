@@ -586,10 +586,11 @@ that context.
   --chart-version 1.0.0-beta.5
 ```
 
-The command uses `helm upgrade --install --wait --rollback-on-failure`.
-Release, namespace, and context are required. The current kubectl or Helm
-context is never selected implicitly. Relative `--values` paths are resolved
-from `--project-dir`.
+The command uses `helm upgrade --install --wait --rollback-on-failure` after a
+read-only release-state check. `install` refuses an existing release, while
+`upgrade` requires one. Release, namespace, and context are required. The
+current kubectl or Helm context is never selected implicitly. Relative
+`--values` paths are resolved from `--project-dir`.
 
 ### Bundle-aware upgrade
 

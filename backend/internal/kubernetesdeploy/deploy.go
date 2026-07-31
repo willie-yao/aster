@@ -2,12 +2,15 @@
 package kubernetesdeploy
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -58,6 +61,19 @@ func run(ctx context.Context, opts Options, runner commandRunner, stdout, stderr
 		return err
 	}
 
+	if !resolved.DryRun {
+		exists, err := releaseExists(ctx, resolved, runner)
+		if err != nil {
+			return err
+		}
+		switch {
+		case resolved.Action == "install" && exists:
+			return fmt.Errorf("release %q already exists in namespace %q; use kubernetes upgrade", resolved.Release, resolved.Namespace)
+		case resolved.Action == "upgrade" && !exists:
+			return fmt.Errorf("release %q does not exist in namespace %q; use kubernetes install", resolved.Release, resolved.Namespace)
+		}
+	}
+
 	args := helmArgs(resolved, skillPaths)
 	helmStdout := stdout
 	if resolved.DryRun {
@@ -70,6 +86,31 @@ func run(ctx context.Context, opts Options, runner commandRunner, stdout, stderr
 		fmt.Fprintf(stdout, "Validated and rendered release %q from %s with %d consumer skill files.\n", resolved.Release, resolved.ProjectDir, len(skillPaths))
 	}
 	return nil
+}
+
+type releaseSummary struct {
+	Name string `json:"name"`
+}
+
+func releaseExists(ctx context.Context, opts Options, runner commandRunner) (bool, error) {
+	args := []string{
+		"list", "--all", "--filter", "^" + regexp.QuoteMeta(opts.Release) + "$",
+		"--kube-context", opts.KubeContext, "--namespace", opts.Namespace, "--output", "json",
+	}
+	var stdout, stderr bytes.Buffer
+	if err := runner.Run(ctx, "helm", args, &stdout, &stderr); err != nil {
+		return false, fmt.Errorf("inspect Helm releases: %w", err)
+	}
+	var releases []releaseSummary
+	if err := json.Unmarshal(stdout.Bytes(), &releases); err != nil {
+		return false, fmt.Errorf("parse Helm release list: %w", err)
+	}
+	for _, release := range releases {
+		if release.Name == opts.Release {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func validateBundle(opts Options) (Options, []string, error) {
