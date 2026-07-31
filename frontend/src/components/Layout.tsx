@@ -20,11 +20,6 @@ import { useCapabilities } from "../hooks/useCapabilities";
 import { useFetchStatus } from "../hooks/useFetchStatus";
 import { FetchStatusContext } from "../hooks/useSharedFetchStatus";
 import { usePageDocumentTitle } from "../lib/pageMetadata";
-import {
-  readFetchStatusIdleCompact,
-  resolveFetchStatusPreferenceStorage,
-  writeFetchStatusIdleCompact,
-} from "../lib/fetchStatus";
 import { soft } from "../theme";
 
 // Primary top-nav tab: pill highlight for the active section, with aria-current
@@ -77,17 +72,7 @@ export function Layout() {
   const { mode, setMode } = useColorScheme();
   const isDark = mode === "dark";
   const fetchStatus = useFetchStatus();
-  const [idleStatusCompact, setIdleStatusCompact] = useState(() =>
-    readFetchStatusIdleCompact(resolveFetchStatusPreferenceStorage(typeof window === "undefined" ? null : window))
-  );
   const [dismissedFetchStrip, setDismissedFetchStrip] = useState<string | null>(null);
-  const updateIdleStatusCompact = (value: boolean) => {
-    setIdleStatusCompact(value);
-    writeFetchStatusIdleCompact(
-      value,
-      resolveFetchStatusPreferenceStorage(typeof window === "undefined" ? null : window)
-    );
-  };
   usePageDocumentTitle(location.pathname, manifest.branding.title);
   const flakyActive = location.pathname === "/flaky" || location.pathname.startsWith("/flaky/");
   const tracesActive = location.pathname === "/analysis-traces";
@@ -247,11 +232,7 @@ export function Layout() {
             }}
           >
             <SearchBar />
-            <FetchStatusControl
-              response={fetchStatus}
-              idleCompact={idleStatusCompact}
-              onIdleCompactChange={updateIdleStatusCompact}
-            />
+            <FetchStatusControl response={fetchStatus} />
             {mode !== undefined && (
               <IconButton
                 aria-label={`Switch to ${isDark ? "light" : "dark"} mode`}

@@ -3,7 +3,6 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import test from "node:test";
 import {
-  FETCH_STATUS_IDLE_COMPACT_KEY,
   analysisProgressAccessibleDetail,
   analysisProgressBreakdown,
   fetchStatusCompactPresentation,
@@ -12,9 +11,6 @@ import {
   nextFetchStatusDelay,
   nextFetchTime,
   pollFetchStatus,
-  readFetchStatusIdleCompact,
-  resolveFetchStatusPreferenceStorage,
-  writeFetchStatusIdleCompact,
 } from "../src/lib/fetchStatus.js";
 import type { FetchProgressStatus, FetchStatusResponse } from "../src/types/fetchStatus.js";
 
@@ -203,11 +199,10 @@ test("fetch status presentation covers active idle failed and stale states", () 
   assert.equal(fetchStatusPresentation({ available: false, state: "missing" }), null);
 });
 
-test("compact fetch status distinguishes quiet and attention states", () => {
+test("compact fetch status distinguishes fetch states", () => {
   const active = fetchStatusCompactPresentation(response("active"));
   assert.equal(active?.label, "84/126 ready");
   assert.match(active?.ariaLabel ?? "", /2 newly analyzed/);
-  assert.equal(active?.quiet, false);
   assert.equal(active?.severity, "info");
 
   const idle = fetchStatusCompactPresentation(response("idle", {
@@ -216,7 +211,6 @@ test("compact fetch status distinguishes quiet and attention states", () => {
     outcome: "succeeded",
   }));
   assert.equal(idle?.label, "Idle");
-  assert.equal(idle?.quiet, true);
   assert.equal(idle?.severity, "success");
 
   const failed = fetchStatusCompactPresentation(response("failed", {
@@ -226,7 +220,6 @@ test("compact fetch status distinguishes quiet and attention states", () => {
     failure_category: "patterns",
   }));
   assert.equal(failed?.label, "Fetch failed");
-  assert.equal(failed?.quiet, false);
   assert.equal(failed?.severity, "error");
   assert.equal(fetchStatusStripKey(response("active")), "safe-pass:active");
   assert.equal(fetchStatusStripKey(response("failed")), "safe-pass:failed");
@@ -252,40 +245,13 @@ test("fetch status popover presents the user-facing breakdown before technical c
   assert.match(fetchStatusSource, /Recent passes/);
   assert.match(fetchStatusSource, /<Collapse in=\{technicalOpen\}/);
   assert.match(fetchStatusSource, /<CircularProgress\s+aria-hidden="true"\s+role="presentation"/);
+  assert.doesNotMatch(fetchStatusSource, /Hide idle status label/);
 });
 
 test("polling counters are not inside the live status announcement", () => {
   assert.match(fetchStatusSource, /role="region"[\s\S]*aria-label=\{presentation\.ariaLabel\}/);
   assert.match(fetchStatusSource, /role="status"[\s\S]*aria-live="polite"[\s\S]*\{presentation\.announcement\}/);
   assert.doesNotMatch(fetchStatusSource, /role="status"\s+aria-live="polite"\s+aria-label=\{presentation\.ariaLabel\}/);
-});
-
-test("idle compact preference is optional and persistent", () => {
-  const values = new Map<string, string>();
-  const storage = {
-    getItem: (key: string) => values.get(key) ?? null,
-    setItem: (key: string, value: string) => { values.set(key, value); },
-  };
-  assert.equal(readFetchStatusIdleCompact(storage), false);
-  writeFetchStatusIdleCompact(true, storage);
-  assert.equal(values.get(FETCH_STATUS_IDLE_COMPACT_KEY), "true");
-  assert.equal(readFetchStatusIdleCompact(storage), true);
-  writeFetchStatusIdleCompact(false, storage);
-  assert.equal(readFetchStatusIdleCompact(storage), false);
-
-  const denied = {
-    getItem: () => { throw new Error("denied"); },
-    setItem: () => { throw new Error("denied"); },
-  };
-  assert.equal(readFetchStatusIdleCompact(denied), false);
-  assert.doesNotThrow(() => writeFetchStatusIdleCompact(true, denied));
-
-  const blockedScope = {
-    get localStorage(): never { throw new Error("blocked"); },
-  };
-  assert.equal(resolveFetchStatusPreferenceStorage(blockedScope), null);
-  assert.equal(resolveFetchStatusPreferenceStorage(null), null);
-  assert.equal(resolveFetchStatusPreferenceStorage({ localStorage: storage }), storage);
 });
 
 test("polling is sequential and backs off after failures", async () => {
