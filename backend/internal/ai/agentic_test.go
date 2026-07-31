@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
@@ -3182,5 +3183,238 @@ func TestAgentic_CacheGenerationSwitchIsReversible(t *testing.T) {
 	}
 	if _, ok := client.Cache().Get(key2); !ok {
 		t.Fatal("switching generations deleted the other entry")
+	}
+}
+
+func TestToolResultSnippetsCaptureReadTailAndSeparateGrepMatches(t *testing.T) {
+	cases := []struct {
+		name    string
+		tool    string
+		payload map[string]interface{}
+		want    [][]string
+	}{
+		{name: "read", tool: "read_artifact", payload: map[string]interface{}{"content": "conversion webhook"}, want: [][]string{{"conversion webhook"}}},
+		{name: "tail", tool: "tail_artifact", payload: map[string]interface{}{"content": "connection refused"}, want: [][]string{{"connection refused"}}},
+		{name: "grep", tool: "grep_artifact", payload: map[string]interface{}{"matches": []map[string]interface{}{
+			{"context": []string{"> 12: ManagedClustersAgentPool", "  13: conversion webhook"}},
+			{"context": []string{"> 90: connection refused"}},
+		}}, want: [][]string{{"ManagedClustersAgentPool", "conversion webhook"}, {"connection refused"}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := toolResultSnippets(tc.tool, tc.payload)
+			if len(got) != len(tc.want) {
+				t.Fatalf("toolResultSnippets = %q, want %d snippets", got, len(tc.want))
+			}
+			for i, wants := range tc.want {
+				for _, want := range wants {
+					if !strings.Contains(got[i], want) {
+						t.Fatalf("snippet[%d] = %q, want %q", i, got[i], want)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestEvidenceInjectionTriesParallelCandidatesUntilContentMatches(t *testing.T) {
+	set := loadAgenticSkillsForTest(t, map[string]string{
+		"conversion": `
+id: aso-conversion
+triggers: ["conversion webhook"]
+required_evidence:
+  - id: failed-upgrade-log
+    any_of: ["artifacts/clusters/.*/clusterctl-upgrade\\.log"]
+    content_any_of: ["(?i)ManagedClustersAgentPool", "(?i)VirtualNetworks?Subnet"]
+    content_all_of: ["(?i)conversion webhook", "(?i)connect: connection refused"]
+`,
+	})
+	skill := set.Skills()[0]
+	group := skill.RequiredEvidence[0]
+	paths := []string{
+		"artifacts/clusters/parallel-p9uqx9/clusterctl-upgrade.log",
+		"artifacts/clusters/parallel-s4c1ag/clusterctl-upgrade.log",
+		"artifacts/clusters/parallel-ttjjmj/clusterctl-upgrade.log",
+		"artifacts/clusters/parallel-g9706x/clusterctl-upgrade.log",
+	}
+	browser := &trackingBrowser{fakeBrowser: &fakeBrowser{files: map[string][]byte{
+		paths[0]: []byte("upgrade completed successfully\n"),
+		paths[1]: []byte("conversion webhook health check succeeded\n"),
+		paths[2]: []byte("ManagedClustersAgentPool reconciliation completed\n"),
+		paths[3]: []byte("ManagedClustersAgentPool conversion webhook failed: connect: connection refused\n"),
+	}}}
+	state := &agentState{
+		browser:           browser,
+		readArtifactsFull: map[string]bool{}, readArtifactsBase: map[string]bool{},
+		initialEvidencePlan: []skills.PlannedSkill{{
+			ID:               skill.ID,
+			RequiredEvidence: []skills.PlannedEvidenceGroup{{ID: group.ID, CandidatePaths: paths}},
+		}},
+	}
+	out := critiqueOutcome{MissingSkillEvidence: []skillEvidenceMiss{{Skill: skill, Missing: []skills.EvidenceGroup{group}}}}
+	injection := (&Client{}).buildEvidenceInjection(context.Background(), state, out)
+	if !reflect.DeepEqual(browser.tailCalls, paths) {
+		t.Fatalf("tail candidate order = %v, want %v", browser.tailCalls, paths)
+	}
+	if !group.SatisfiedWithContent(state.readArtifactsFull, state.evidenceContentByPath) {
+		t.Fatalf("content-aware group remained unsatisfied: reads=%v content=%v", state.readArtifactsFull, state.evidenceContentByPath)
+	}
+	if !strings.Contains(injection, "parallel-g9706x") || state.gcsBytes == 0 {
+		t.Fatalf("injection did not include the satisfying candidate: %s", injection)
+	}
+}
+
+func TestResolveEvidenceCandidatesByWalkDeterministicAndBounded(t *testing.T) {
+	browser := &fakeBrowser{files: map[string][]byte{
+		"logs/c.log": []byte("c"),
+		"logs/a.log": []byte("a"),
+		"logs/b.log": []byte("b"),
+	}}
+	got := resolveEvidenceCandidatesByWalk(context.Background(), browser, []func(string) bool{
+		func(p string) bool { return strings.HasSuffix(p, ".log") },
+	}, 2)
+	want := [][]string{{"logs/a.log", "logs/b.log"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("candidates = %v, want %v", got, want)
+	}
+}
+
+func TestRecordEvidenceContentPreservesArtifactPathCase(t *testing.T) {
+	state := &agentState{}
+	state.recordEvidenceContent("logs/Foo.log", "first")
+	state.recordEvidenceContent("logs/foo.log", "second")
+	if len(state.evidenceContentByPath) != 2 || state.evidenceContentByPath["logs/Foo.log"][0] != "first" || state.evidenceContentByPath["logs/foo.log"][0] != "second" {
+		t.Fatalf("content proof identities = %+v", state.evidenceContentByPath)
+	}
+}
+
+func TestEvidenceTrackingCanonicalizesSafeToolPath(t *testing.T) {
+	state := &agentState{readArtifactsFull: map[string]bool{}, readArtifactsBase: map[string]bool{}}
+	state.recordSuccessfulRead("logs/./failure.log")
+	state.recordEvidenceSnippets("logs/./failure.log", []string{"signal"})
+	if !state.readArtifactsFull["logs/failure.log"] || !state.evidenceArtifactsFull["logs/failure.log"] {
+		t.Fatalf("canonical read paths = read:%v evidence:%v", state.readArtifactsFull, state.evidenceArtifactsFull)
+	}
+	if !reflect.DeepEqual(state.evidenceContentByPath, map[string][]string{"logs/failure.log": {"signal"}}) {
+		t.Fatalf("canonical content paths = %+v", state.evidenceContentByPath)
+	}
+}
+
+func TestTruncatedToolEnvelopeDoesNotCreateInvisibleContentProof(t *testing.T) {
+	registry, enabled := newTestRegistry(t)
+	line := "MATCH " + strings.Repeat("x", 900) + "\n"
+	browser := &fakeBrowser{files: map[string][]byte{"logs/large.log": []byte(strings.Repeat(line, 100))}}
+	state := &agentState{
+		browser: browser, registry: registry, enabledTools: enabled,
+		opts:      AgenticOptions{ModelByteBudget: 200_000, GCSByteBudget: 200_000},
+		startTime: time.Now(),
+	}
+	arguments, err := json.Marshal(map[string]interface{}{
+		"path": "logs/large.log", "pattern": "MATCH", "context_lines": 0, "max_matches": 100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope := dispatchAgenticTool(context.Background(), state, modelToolCall{
+		ID: "call", Type: "function", Function: modelFunction{Name: "grep_artifact", Arguments: string(arguments)},
+	})
+	if len(envelope) <= agenticToolBudget || modelVisibleToolPayload(envelope) != nil {
+		t.Fatalf("expected a truncated non-decodable envelope, length=%d", len(envelope))
+	}
+	if !state.evidenceArtifactsFull["logs/large.log"] || len(state.evidenceContentByPath) != 0 {
+		t.Fatalf("capped evidence tracking = paths:%v content:%v", state.evidenceArtifactsFull, state.evidenceContentByPath)
+	}
+}
+
+func TestAdditionalUniqueContentAdvancesEvidenceRevision(t *testing.T) {
+	state := &agentState{}
+	state.recordEvidenceSnippets("logs/failure.log", []string{"first signal"})
+	if state.evidenceRevision != 1 {
+		t.Fatalf("first evidence revision = %d, want 1", state.evidenceRevision)
+	}
+	state.recordEvidenceSnippets("logs/failure.log", []string{"first signal"})
+	if state.evidenceRevision != 1 {
+		t.Fatalf("duplicate content advanced revision to %d", state.evidenceRevision)
+	}
+	state.recordEvidenceSnippets("logs/failure.log", []string{"second signal"})
+	if state.evidenceRevision != 2 {
+		t.Fatalf("additional same-path content revision = %d, want 2", state.evidenceRevision)
+	}
+}
+
+func TestEvidenceInjectionKeepsCaseDistinctCandidates(t *testing.T) {
+	set := loadAgenticSkillsForTest(t, map[string]string{"case": `
+id: case-sensitive
+triggers: ["failure"]
+required_evidence:
+  - id: log
+    any_of: ["logs/foo\\.log$"]
+    content_all_of: ["required signal"]
+`})
+	skill := set.Skills()[0]
+	group := skill.RequiredEvidence[0]
+	paths := []string{"logs/Foo.log", "logs/foo.log"}
+	plan := set.Plan("failure", paths, evidenceplan.CandidatePathLimit)
+	if len(plan) != 1 || len(plan[0].RequiredEvidence) != 1 || !reflect.DeepEqual(plan[0].RequiredEvidence[0].CandidatePaths, paths) {
+		t.Fatalf("case-distinct planned candidates = %+v", plan)
+	}
+	browser := &trackingBrowser{fakeBrowser: &fakeBrowser{files: map[string][]byte{
+		paths[0]: []byte("unrelated\n"),
+		paths[1]: []byte("required signal\n"),
+	}}}
+	state := &agentState{
+		browser:           browser,
+		readArtifactsFull: map[string]bool{}, readArtifactsBase: map[string]bool{},
+		initialEvidencePlan: plan,
+	}
+	out := critiqueOutcome{MissingSkillEvidence: []skillEvidenceMiss{{Skill: skill, Missing: []skills.EvidenceGroup{group}}}}
+	(&Client{}).buildEvidenceInjection(context.Background(), state, out)
+	if !reflect.DeepEqual(browser.tailCalls, paths) {
+		t.Fatalf("case-distinct candidate reads = %v, want %v", browser.tailCalls, paths)
+	}
+	if !group.SatisfiedWithContent(state.readArtifactsFull, state.evidenceContentByPath) {
+		t.Fatalf("satisfying case-distinct candidate was skipped: %+v", state.evidenceContentByPath)
+	}
+}
+
+func TestEvidenceInjectionDoesNotTreatPartialReadAsNegativeProof(t *testing.T) {
+	set := loadAgenticSkillsForTest(t, map[string]string{"partial": `
+id: partial
+triggers: ["failure"]
+required_evidence:
+  - id: log
+    any_of: ["logs/failure\\.log$"]
+    content_all_of: ["required tail signal"]
+`})
+	skill := set.Skills()[0]
+	group := skill.RequiredEvidence[0]
+	artifactPath := "logs/failure.log"
+	browser := &trackingBrowser{fakeBrowser: &fakeBrowser{files: map[string][]byte{artifactPath: []byte("required tail signal\n")}}}
+	state := &agentState{
+		browser:               browser,
+		readArtifactsFull:     map[string]bool{artifactPath: true},
+		readArtifactsBase:     map[string]bool{"failure.log": true},
+		evidenceArtifactsFull: map[string]bool{artifactPath: true},
+		evidenceContentByPath: map[string][]string{artifactPath: {"unrelated head content"}},
+		initialEvidencePlan:   set.Plan("failure", []string{artifactPath}, evidenceplan.CandidatePathLimit),
+	}
+	out := critiqueOutcome{MissingSkillEvidence: []skillEvidenceMiss{{Skill: skill, Missing: []skills.EvidenceGroup{group}}}}
+	(&Client{}).buildEvidenceInjection(context.Background(), state, out)
+	if !reflect.DeepEqual(browser.tailCalls, []string{artifactPath}) {
+		t.Fatalf("partial prior read suppressed tail repair: %v", browser.tailCalls)
+	}
+	if !group.SatisfiedWithContent(state.readArtifactsFull, state.evidenceContentByPath) {
+		t.Fatalf("tail repair did not add positive proof: %+v", state.evidenceContentByPath)
+	}
+}
+
+func TestToolResultSnippetsPreserveReturnedWhitespace(t *testing.T) {
+	snippets := toolResultSnippets("read_artifact", map[string]interface{}{"content": "  ERROR\n"})
+	if len(snippets) != 1 || snippets[0] != "  ERROR\n" {
+		t.Fatalf("read snippet = %q", snippets)
+	}
+	grep := toolResultSnippets("grep_artifact", map[string]interface{}{"matches": []map[string]interface{}{{"context": []string{"> 4:   ERROR"}}}})
+	if len(grep) != 1 || grep[0] != "  ERROR" {
+		t.Fatalf("grep snippet = %q", grep)
 	}
 }

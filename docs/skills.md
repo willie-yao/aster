@@ -108,6 +108,12 @@ required_evidence:
     any_of:
       - "config/certmanager/.*\\.ya?ml"
       - ".*certificate\\.ya?ml"
+    # Optional positive content proof. Path and content predicates must match
+    # the same artifact. Use (?i) for case-insensitive matching.
+    content_any_of:
+      - "(?i)kind:\\s*(Certificate|Issuer)"
+    content_all_of:
+      - "(?i)dnsNames"
   - id: webhook-secret
     description: webhook server cert secret contents
     any_of:
@@ -218,6 +224,16 @@ within a recipe:
   (e.g. `clusters/.*/machines/`).
 - Use `any_of` to handle natural variation: different namespaces,
   different generated filenames, different controller pod names.
+- Use `content_any_of` when at least one signal must appear in the selected
+  artifact. Use `content_all_of` when every listed signal must appear.
+- Path and content predicates are evaluated against the same artifact. Signals
+  split across parallel logs do not satisfy one evidence group.
+- Each regex must match one returned snippet. Snippets are never concatenated
+  before matching, although different `content_all_of` predicates may match
+  different snippets from the same case-sensitive artifact path.
+- A bounded read, tail, or grep can prove a positive content match. A partial
+  read that does not match never proves the signal is absent. The bounded repair
+  tries the next ranked candidate instead.
 - Use `when` only when one recipe spans distinct failure classes. Its regexes
   match the same draft text as skill triggers and keep unrelated groups out of
   critique and final validation.
@@ -229,9 +245,11 @@ within a recipe:
 ## Bounded critique repair
 
 When a recipe matches and evidence is missing, the critique gate performs at
-most one bounded repair operation. It injects ranked evidence first. If evidence
-is still unresolved, the model gets at most one batched Tool turn, followed by
-one forced finalization. The general agent loop is not reopened.
+most one bounded repair operation. It injects ranked evidence first. For a
+content-aware group, it tries candidates in deterministic order until one
+provides positive proof or the existing artifact cap is reached. If evidence is
+still unresolved, the model gets at most one batched Tool turn, followed by one
+forced finalization. The general agent loop is not reopened.
 
 `ai.critique.max_retries: 0` still evaluates recipe evidence but performs no
 repair. Any positive value makes the bounded repair eligible, subject to context and time-headroom guards.

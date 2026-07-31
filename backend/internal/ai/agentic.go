@@ -399,6 +399,11 @@ type agentState struct {
 	// failed reads, and empty reads do not enter this set.
 	evidenceArtifactsFull map[string]bool
 
+	// evidenceContentByPath retains bounded tool-result content in memory so
+	// content-aware evidence groups can prove positive matches in the same file.
+	// It is never copied into caches, traces, manifests, or progress state.
+	evidenceContentByPath map[string][]string
+
 	// skillSet is the merged diagnostic recipe set. nil disables recipes
 	// or no recipes are configured. Held on state
 	// so in-loop and post-loop critique paths both consult the same
@@ -476,7 +481,7 @@ func (s *agentState) evidencePlanCovered() bool {
 	if s == nil || s.skillSet == nil || s.initialArtifactTree.failed || s.initialArtifactTree.truncated {
 		return false
 	}
-	return s.skillSet.CoversPlan(s.initialFailureSignal, s.initialEvidencePlan, s.evidenceArtifactsFull)
+	return s.skillSet.CoversPlanWithContent(s.initialFailureSignal, s.initialEvidencePlan, s.evidenceArtifactsFull, s.evidenceContentByPath)
 }
 
 func (s *agentState) modelRemaining() int { return s.opts.ModelByteBudget - s.modelBytes }
@@ -895,7 +900,7 @@ agentLoop:
 			var candidateCritique critiqueOutcome
 			var candidateDraft *critiqueDraftCandidate
 			if parsedOK {
-				candidateCritique = critiqueDraft(parsedCandidate, state.readArtifactsFull, state.readArtifactsBase, matchSkillsForDraft(state, parsedCandidate), state.consecutiveFailures)
+				candidateCritique = critiqueDraftWithContent(parsedCandidate, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, matchSkillsForDraft(state, parsedCandidate), state.consecutiveFailures)
 				if len(candidateCritique.MissingSkillEvidence) > 0 {
 					if treeSet := state.artifactTreeSet(); treeSet != nil {
 						if n := pruneAbsentSkillEvidence(parsedCandidate, &candidateCritique, treeSet); n > 0 {
@@ -993,7 +998,7 @@ agentLoop:
 							revised, revisedItems, safe := c.runFinalizeRoundTracked(loopCtx, state, repairMessages, headroom)
 							if safe {
 								if rp, ok := tryParseAnalysis(revised); ok {
-									revisedCritique := critiqueDraft(rp, state.readArtifactsFull, state.readArtifactsBase, matchSkillsForDraft(state, rp), state.consecutiveFailures)
+									revisedCritique := critiqueDraftWithContent(rp, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, matchSkillsForDraft(state, rp), state.consecutiveFailures)
 									if len(revisedCritique.MissingSkillEvidence) > 0 {
 										if treeSet := state.artifactTreeSet(); treeSet != nil {
 											pruneAbsentSkillEvidence(rp, &revisedCritique, treeSet)
@@ -1114,7 +1119,7 @@ func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, m
 	if state.critiquePassed {
 		return state.bestDraft.parsed
 	}
-	out := critiqueDraft(parsed, state.readArtifactsFull, state.readArtifactsBase, matchSkillsForDraft(state, parsed), state.consecutiveFailures)
+	out := critiqueDraftWithContent(parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, matchSkillsForDraft(state, parsed), state.consecutiveFailures)
 	if len(out.MissingSkillEvidence) > 0 {
 		if treeSet := state.artifactTreeSet(); treeSet != nil {
 			pruneAbsentSkillEvidence(parsed, &out, treeSet)
@@ -1198,7 +1203,7 @@ func (c *Client) runBoundedCritiqueRepair(ctx context.Context, state *agentState
 		modelMessage{Role: "user", Content: strPtr(feedback)})
 	retry, _ := retries.admit()
 
-	updated := critiqueDraft(parsed, state.readArtifactsFull, state.readArtifactsBase, matchSkillsForDraft(state, parsed), state.consecutiveFailures)
+	updated := critiqueDraftWithContent(parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, matchSkillsForDraft(state, parsed), state.consecutiveFailures)
 	if len(updated.MissingSkillEvidence) > 0 {
 		if treeSet := state.artifactTreeSet(); treeSet != nil {
 			pruneAbsentSkillEvidence(parsed, &updated, treeSet)
@@ -1261,7 +1266,7 @@ func (c *Client) runBoundedCritiqueRepair(ctx context.Context, state *agentState
 		recordTrace(ctx, TraceEvent{Kind: "critique_retry", Outcome: "unparseable", Retry: retry, RetryAdmitted: true, InitialIssueCount: len(initial.Matches()), NewEvidenceReads: state.evidenceRevision - initialEvidenceRevision, RetryDurationMs: int(time.Since(started) / time.Millisecond), RemainingTimeMs: int(time.Until(state.deadline) / time.Millisecond), SelectedAttempt: state.bestDraft.attempt})
 		return state.bestDraft.parsed
 	}
-	out := critiqueDraft(next, state.readArtifactsFull, state.readArtifactsBase, matchSkillsForDraft(state, next), state.consecutiveFailures)
+	out := critiqueDraftWithContent(next, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, matchSkillsForDraft(state, next), state.consecutiveFailures)
 	if len(out.MissingSkillEvidence) > 0 {
 		if treeSet := state.artifactTreeSet(); treeSet != nil {
 			pruneAbsentSkillEvidence(next, &out, treeSet)
@@ -1277,7 +1282,7 @@ func (c *Client) runBoundedCritiqueRepair(ctx context.Context, state *agentState
 		state.critiquePassed = state.bestDraft.quality.Passed
 	}
 	selected := state.bestDraft
-	selectedOut := critiqueDraft(selected.parsed, state.readArtifactsFull, state.readArtifactsBase, matchSkillsForDraft(state, selected.parsed), state.consecutiveFailures)
+	selectedOut := critiqueDraftWithContent(selected.parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, matchSkillsForDraft(state, selected.parsed), state.consecutiveFailures)
 	if len(selectedOut.MissingSkillEvidence) > 0 {
 		if treeSet := state.artifactTreeSet(); treeSet != nil {
 			pruneAbsentSkillEvidence(selected.parsed, &selectedOut, treeSet)
@@ -1521,8 +1526,8 @@ func prependPrompt(prompt, section string) string {
 // buildEvidenceInjection fetches evidence a critique-failing draft needed but
 // did not read, and returns a feedback addendum embedding it. Ranked initial
 // candidates direct skill repair; unresolved groups and unread basenames share
-// one bounded fallback tree walk. At most one artifact is read for each missing
-// group, and duplicate paths are fetched once.
+// one bounded fallback tree walk. Content-aware groups try ranked candidates in
+// order until one artifact provides positive proof or the shared cap is reached.
 func (c *Client) buildEvidenceInjection(ctx context.Context, state *agentState, out critiqueOutcome) string {
 	if state == nil || state.browser == nil {
 		return ""
@@ -1538,11 +1543,10 @@ func (c *Client) buildEvidenceInjection(ctx context.Context, state *agentState, 
 		if err != nil || realPath == "" {
 			return "", false
 		}
-		norm := NormalizeArtifactCitation(realPath)
-		if norm == "" || attempted[norm] {
+		if attempted[realPath] {
 			return "", false
 		}
-		attempted[norm] = true
+		attempted[realPath] = true
 		res, err := state.browser.Tail(ctx, realPath, 200, evidenceInjectionPerArtifactBytes)
 		if err != nil || res == nil || len(bytes.TrimSpace(res.Content)) == 0 {
 			return "", false
@@ -1557,7 +1561,7 @@ func (c *Client) buildEvidenceInjection(ctx context.Context, state *agentState, 
 		state.gcsBytes += len(content)
 		state.modelBytes += len(content)
 		state.recordSuccessfulRead(realPath)
-		state.recordEvidenceRead(realPath)
+		state.recordEvidenceSnippets(realPath, []string{content})
 		sections = append(sections, fmt.Sprintf("### %s\n%s", label, content))
 		fetched++
 	}
@@ -1593,15 +1597,15 @@ func (c *Client) buildEvidenceInjection(ctx context.Context, state *agentState, 
 	}
 
 	type groupTarget struct {
-		skillID   string
-		group     skills.EvidenceGroup
-		path      string
-		walkIndex int
+		skillID    string
+		group      skills.EvidenceGroup
+		candidates []string
+		walkIndex  int
 	}
 	var groups []groupTarget
 	for _, miss := range out.MissingSkillEvidence {
 		for _, group := range miss.Missing {
-			if group.Satisfied(state.readArtifactsFull) {
+			if group.SatisfiedWithContent(state.readArtifactsFull, state.evidenceContentByPath) {
 				continue
 			}
 			target := groupTarget{skillID: miss.Skill.ID, group: group, walkIndex: -1}
@@ -1610,13 +1614,12 @@ func (c *Client) buildEvidenceInjection(ctx context.Context, state *agentState, 
 				for _, candidate := range candidates {
 					realPath, err := artifacts.SafePath(strings.TrimSpace(candidate))
 					norm := NormalizeArtifactCitation(realPath)
-					if err == nil && realPath != "" && norm != "" && !attempted[norm] && group.Satisfied(map[string]bool{norm: true}) {
-						target.path = realPath
-						break
+					if err == nil && realPath != "" && norm != "" && group.Satisfied(map[string]bool{norm: true}) {
+						target.candidates = append(target.candidates, realPath)
 					}
 				}
 			}
-			if target.path == "" {
+			if len(target.candidates) == 0 {
 				groupCopy := group
 				target.walkIndex = len(walkTargets)
 				walkTargets = append(walkTargets, walkTarget{
@@ -1630,19 +1633,19 @@ func (c *Client) buildEvidenceInjection(ctx context.Context, state *agentState, 
 		}
 	}
 
-	var walked []string
+	var walked [][]string
 	if len(walkTargets) > 0 && fetched < evidenceInjectionMaxArtifacts {
 		preds := make([]func(string) bool, len(walkTargets))
 		for i := range walkTargets {
 			preds[i] = walkTargets[i].match
 		}
-		walked = resolveEvidenceByWalk(ctx, state.browser, preds)
+		walked = resolveEvidenceCandidatesByWalk(ctx, state.browser, preds, evidenceplan.CandidatePathLimit)
 	}
 	for _, target := range unreadWalks {
-		if target.target >= len(walked) || walked[target.target] == "" || fetched >= evidenceInjectionMaxArtifacts {
+		if target.target >= len(walked) || len(walked[target.target]) == 0 || fetched >= evidenceInjectionMaxArtifacts {
 			continue
 		}
-		realPath := walked[target.target]
+		realPath := walked[target.target][0]
 		if content, ok := fetchTail(realPath); ok {
 			add(realPath, walkTargets[target.target].label(realPath), content)
 		}
@@ -1652,24 +1655,30 @@ func (c *Client) buildEvidenceInjection(ctx context.Context, state *agentState, 
 			break
 		}
 		target := &groups[i]
-		if target.group.Satisfied(state.readArtifactsFull) {
+		if target.group.SatisfiedWithContent(state.readArtifactsFull, state.evidenceContentByPath) {
 			continue
 		}
-		if target.path == "" && target.walkIndex >= 0 && target.walkIndex < len(walked) {
-			target.path = walked[target.walkIndex]
+		if len(target.candidates) == 0 && target.walkIndex >= 0 && target.walkIndex < len(walked) {
+			target.candidates = append(target.candidates, walked[target.walkIndex]...)
 		}
-		if target.path == "" {
-			continue
+		for _, candidate := range target.candidates {
+			if fetched >= evidenceInjectionMaxArtifacts {
+				break
+			}
+			realPath, err := artifacts.SafePath(strings.TrimSpace(candidate))
+			norm := NormalizeArtifactCitation(realPath)
+			if err != nil || realPath == "" || norm == "" || attempted[realPath] || !target.group.Satisfied(map[string]bool{norm: true}) {
+				continue
+			}
+			content, ok := fetchTail(realPath)
+			if !ok {
+				continue
+			}
+			add(realPath, fmt.Sprintf("%s (tail; required evidence %q for skill %q)", realPath, target.group.ID, target.skillID), content)
+			if target.group.SatisfiedWithContent(state.readArtifactsFull, state.evidenceContentByPath) {
+				break
+			}
 		}
-		norm := NormalizeArtifactCitation(target.path)
-		if norm == "" || !target.group.Satisfied(map[string]bool{norm: true}) {
-			continue
-		}
-		content, ok := fetchTail(target.path)
-		if !ok {
-			continue
-		}
-		add(target.path, fmt.Sprintf("%s (tail; required evidence %q for skill %q)", target.path, target.group.ID, target.skillID), content)
 	}
 
 	if fetched == 0 {
@@ -1699,23 +1708,30 @@ func initialPlanCandidates(plan []skills.PlannedSkill, skillID, groupID string) 
 // evidenceTreeMaxPaths to cap GCS list cost. Stops early once every predicate
 // has a match.
 func resolveEvidenceByWalk(ctx context.Context, browser artifacts.Browser, preds []func(string) bool) []string {
-	found := make([]string, len(preds))
-	if browser == nil || len(preds) == 0 {
+	candidates := resolveEvidenceCandidatesByWalk(ctx, browser, preds, 1)
+	found := make([]string, len(candidates))
+	for i := range candidates {
+		if len(candidates[i]) > 0 {
+			found[i] = candidates[i][0]
+		}
+	}
+	return found
+}
+
+func resolveEvidenceCandidatesByWalk(ctx context.Context, browser artifacts.Browser, preds []func(string) bool, limit int) [][]string {
+	found := make([][]string, len(preds))
+	if browser == nil || len(preds) == 0 || limit <= 0 {
 		return found
 	}
-	remaining := len(preds)
 	paths, _, err := browser.ListTree(ctx, evidenceTreeMaxPaths)
 	if err != nil {
 		return found
 	}
+	sort.Strings(paths)
 	for _, p := range paths {
-		if remaining == 0 {
-			break
-		}
 		for i, pred := range preds {
-			if found[i] == "" && pred(p) {
-				found[i] = p
-				remaining--
+			if len(found[i]) < limit && pred(p) {
+				found[i] = append(found[i], p)
 			}
 		}
 	}
@@ -1881,6 +1897,8 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc model
 		toolOutcome = "error"
 	}
 	recordTrace(ctx, TraceEvent{Kind: "tool_call", Tool: tc.Function.Name, Outcome: toolOutcome, Bytes: result.BytesFetched})
+	envelope := toolEnvelopeJSON(s, result.Payload)
+	visiblePayload := modelVisibleToolPayload(envelope)
 
 	// Record successful artifact reads so critiqueDraft can flag prose
 	// citations of files the agent never opened. Only content-fetching
@@ -1891,8 +1909,18 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc model
 		if !toolFailed {
 			if p := extractToolPathArg(tc.Function.Arguments); p != "" {
 				s.recordSuccessfulRead(p)
-				if toolResultHasContent(tc.Function.Name, result.Payload) {
-					s.recordEvidenceRead(p)
+				originalSnippets := toolResultSnippets(tc.Function.Name, result.Payload)
+				newPath := false
+				if len(originalSnippets) > 0 {
+					newPath = s.recordEvidenceRead(p)
+				}
+				visibleSnippets := toolResultSnippets(tc.Function.Name, visiblePayload)
+				contentAdded := false
+				for _, snippet := range visibleSnippets {
+					contentAdded = s.recordEvidenceContent(p, snippet) || contentAdded
+				}
+				if contentAdded && !newPath {
+					s.evidenceRevision++
 				}
 			}
 		}
@@ -1908,7 +1936,15 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc model
 		log.Printf("    🔧 %s(%s) -> %d gcs bytes [%s]", tc.Function.Name, textutil.Truncate(tc.Function.Arguments, 140), result.BytesFetched, flag)
 	}
 
-	return toolEnvelopeJSON(s, result.Payload), result.Payload
+	return envelope, result.Payload
+}
+
+func modelVisibleToolPayload(envelope string) map[string]interface{} {
+	var payload map[string]interface{}
+	if json.Unmarshal([]byte(envelope), &payload) != nil {
+		return nil
+	}
+	return payload
 }
 
 func agenticToolEnabled(enabledTools []string, name string) bool {
@@ -1947,76 +1983,97 @@ func extractToolPathArg(raw string) string {
 	return strings.TrimSpace(args.Path)
 }
 
-// toolResultHasContent reports whether a successful filesystem read returned
-// non-empty content. grep_artifact counts only when at least one non-empty
-// match context was returned, not merely when it scanned bytes.
-func toolResultHasContent(name string, payload map[string]interface{}) bool {
+// toolResultSnippets extracts bounded positive evidence from filesystem reads.
+// Each grep match remains a separate snippet so distant hits cannot fabricate
+// regex adjacency.
+func toolResultSnippets(name string, payload map[string]interface{}) []string {
 	switch name {
 	case "read_artifact", "tail_artifact":
-		return nonEmptyContent(payload["content"])
+		if content := flattenToolContent(payload["content"]); content != "" {
+			return []string{content}
+		}
 	case "grep_artifact":
+		var sections []string
 		switch matches := payload["matches"].(type) {
 		case []map[string]interface{}:
 			for _, match := range matches {
-				if nonEmptyGrepContext(match["context"]) {
-					return true
+				if content := flattenGrepContext(match["context"]); content != "" {
+					sections = append(sections, content)
 				}
 			}
 		case []interface{}:
 			for _, raw := range matches {
 				match, _ := raw.(map[string]interface{})
-				if nonEmptyGrepContext(match["context"]) {
-					return true
+				if content := flattenGrepContext(match["context"]); content != "" {
+					sections = append(sections, content)
 				}
 			}
 		}
+		return sections
 	}
-	return false
+	return nil
 }
 
 var grepContextLineRE = regexp.MustCompile(`^[> ]\s*\d+:\s?(.*)$`)
 
-func nonEmptyGrepContext(value interface{}) bool {
+func flattenGrepContext(value interface{}) string {
 	switch context := value.(type) {
 	case string:
 		if match := grepContextLineRE.FindStringSubmatch(context); len(match) == 2 {
-			return strings.TrimSpace(match[1]) != ""
+			if strings.TrimSpace(match[1]) == "" {
+				return ""
+			}
+			return match[1]
 		}
-		return strings.TrimSpace(context) != ""
+		if strings.TrimSpace(context) == "" {
+			return ""
+		}
+		return context
 	case []string:
+		var sections []string
 		for _, line := range context {
-			if nonEmptyGrepContext(line) {
-				return true
+			if content := flattenGrepContext(line); content != "" {
+				sections = append(sections, content)
 			}
 		}
+		return strings.Join(sections, "\n")
 	case []interface{}:
+		var sections []string
 		for _, item := range context {
-			if nonEmptyGrepContext(item) {
-				return true
+			if content := flattenGrepContext(item); content != "" {
+				sections = append(sections, content)
 			}
 		}
+		return strings.Join(sections, "\n")
 	}
-	return false
+	return ""
 }
 
-func nonEmptyContent(value interface{}) bool {
+func flattenToolContent(value interface{}) string {
 	switch content := value.(type) {
 	case string:
-		return strings.TrimSpace(content) != ""
+		if strings.TrimSpace(content) == "" {
+			return ""
+		}
+		return content
 	case []string:
+		var sections []string
 		for _, line := range content {
 			if strings.TrimSpace(line) != "" {
-				return true
+				sections = append(sections, line)
 			}
 		}
+		return strings.Join(sections, "\n")
 	case []interface{}:
+		var sections []string
 		for _, item := range content {
-			if nonEmptyContent(item) {
-				return true
+			if section := flattenToolContent(item); section != "" {
+				sections = append(sections, section)
 			}
 		}
+		return strings.Join(sections, "\n")
 	}
-	return false
+	return ""
 }
 
 // recordSuccessfulRead normalizes a successfully-read path and adds it to
@@ -2027,7 +2084,7 @@ func (s *agentState) recordSuccessfulRead(rawPath string) {
 	if s.readArtifactsFull == nil && s.readArtifactsBase == nil {
 		return
 	}
-	norm := NormalizeArtifactCitation(rawPath)
+	_, norm := canonicalTrackedArtifactPath(rawPath)
 	if norm == "" {
 		return
 	}
@@ -2037,16 +2094,57 @@ func (s *agentState) recordSuccessfulRead(rawPath string) {
 
 // recordEvidenceRead adds a successful non-empty content read to the set used
 // for initial evidence-plan coverage.
-func (s *agentState) recordEvidenceRead(rawPath string) {
-	if norm := NormalizeArtifactCitation(rawPath); norm != "" {
+func (s *agentState) recordEvidenceRead(rawPath string) bool {
+	if _, norm := canonicalTrackedArtifactPath(rawPath); norm != "" {
 		if s.evidenceArtifactsFull == nil {
 			s.evidenceArtifactsFull = map[string]bool{}
 		}
 		if !s.evidenceArtifactsFull[norm] {
 			s.evidenceArtifactsFull[norm] = true
 			s.evidenceRevision++
+			return true
 		}
 	}
+	return false
+}
+
+func (s *agentState) recordEvidenceSnippets(rawPath string, snippets []string) {
+	if len(snippets) == 0 {
+		return
+	}
+	newPath := s.recordEvidenceRead(rawPath)
+	contentAdded := false
+	for _, snippet := range snippets {
+		contentAdded = s.recordEvidenceContent(rawPath, snippet) || contentAdded
+	}
+	if contentAdded && !newPath {
+		s.evidenceRevision++
+	}
+}
+
+func (s *agentState) recordEvidenceContent(rawPath, content string) bool {
+	norm, _ := canonicalTrackedArtifactPath(rawPath)
+	if norm == "" || strings.TrimSpace(content) == "" {
+		return false
+	}
+	if s.evidenceContentByPath == nil {
+		s.evidenceContentByPath = map[string][]string{}
+	}
+	for _, existing := range s.evidenceContentByPath[norm] {
+		if existing == content {
+			return false
+		}
+	}
+	s.evidenceContentByPath[norm] = append(s.evidenceContentByPath[norm], content)
+	return true
+}
+
+func canonicalTrackedArtifactPath(rawPath string) (string, string) {
+	casePath, err := artifacts.SafePath(strings.TrimSpace(rawPath))
+	if err != nil || casePath == "" {
+		return "", ""
+	}
+	return casePath, NormalizeArtifactCitation(casePath)
 }
 
 func toolEnvelopeJSON(s *agentState, payload map[string]interface{}) string {

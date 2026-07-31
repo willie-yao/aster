@@ -114,8 +114,8 @@ type Skill struct {
 	Triggers []string `yaml:"triggers" json:"triggers"`
 
 	// RequiredEvidence is the list of evidence groups the critique gate
-	// checks once the recipe matches. Each group is satisfied if any of
-	// its any_of regexes matches any path the agent successfully read.
+	// checks once the recipe matches. Each group requires a matching read path
+	// and, when configured, positive content proof from that same artifact.
 	RequiredEvidence []EvidenceGroup `yaml:"required_evidence,omitempty" json:"required_evidence,omitempty"`
 
 	// Procedure is markdown guidance quoted back to the model when the
@@ -141,12 +141,12 @@ type PlannedEvidenceGroup struct {
 	ID             string   `json:"id"`
 	Description    string   `json:"description,omitempty"`
 	AnyOf          []string `json:"any_of"`
+	ContentAnyOf   []string `json:"content_any_of,omitempty"`
+	ContentAllOf   []string `json:"content_all_of,omitempty"`
 	CandidatePaths []string `json:"candidate_paths,omitempty"`
 }
 
-// EvidenceGroup is one OR'd cluster of artifact-path regex patterns. A
-// draft satisfies the group iff at least one regex matches at least one
-// artifact path the agent successfully read.
+// EvidenceGroup is one cluster of path and optional content predicates.
 type EvidenceGroup struct {
 	// ID identifies the group within the recipe. Surfaced in feedback;
 	// recommended kebab-case, such as cert-manager-config.
@@ -164,9 +164,19 @@ type EvidenceGroup struct {
 	// the group.
 	AnyOf []string `yaml:"any_of" json:"any_of"`
 
+	// ContentAnyOf optionally requires at least one regex to match content read
+	// from the same artifact whose path satisfies AnyOf.
+	ContentAnyOf []string `yaml:"content_any_of,omitempty" json:"content_any_of,omitempty"`
+
+	// ContentAllOf optionally requires every regex to match content read from the
+	// same artifact whose path satisfies AnyOf.
+	ContentAllOf []string `yaml:"content_all_of,omitempty" json:"content_all_of,omitempty"`
+
 	// compiled patterns. Not serialized.
-	whenREs  []*regexp.Regexp
-	anyOfREs []*regexp.Regexp
+	whenREs       []*regexp.Regexp
+	anyOfREs      []*regexp.Regexp
+	contentAnyREs []*regexp.Regexp
+	contentAllREs []*regexp.Regexp
 }
 
 // Set is a loaded, validated, and ordered collection of recipes.
@@ -275,6 +285,8 @@ func (s *Set) Plan(text string, artifactPaths []string, maxCandidates int) []Pla
 				ID:             group.ID,
 				Description:    group.Description,
 				AnyOf:          append([]string(nil), group.AnyOf...),
+				ContentAnyOf:   append([]string(nil), group.ContentAnyOf...),
+				ContentAllOf:   append([]string(nil), group.ContentAllOf...),
 				CandidatePaths: group.CandidatePaths(text, artifactPaths, maxCandidates),
 			})
 		}
@@ -289,6 +301,12 @@ func (s *Set) Plan(text string, artifactPaths []string, maxCandidates int) []Pla
 // plan had a valid candidate and was satisfied by a matching content read.
 // At least one applicable evidence group is required.
 func (s *Set) CoversPlan(text string, plan []PlannedSkill, reads map[string]bool) bool {
+	return s.CoversPlanWithContent(text, plan, reads, nil)
+}
+
+// CoversPlanWithContent reports initial-plan coverage using positive content
+// proof captured from bounded reads. Raw content remains in-memory only.
+func (s *Set) CoversPlanWithContent(text string, plan []PlannedSkill, reads map[string]bool, contentByPath map[string][]string) bool {
 	if s == nil || strings.TrimSpace(text) == "" || len(plan) == 0 || len(reads) == 0 {
 		return false
 	}
@@ -325,7 +343,7 @@ func (s *Set) CoversPlan(text string, plan []PlannedSkill, reads map[string]bool
 					candidates[normalized] = true
 				}
 			}
-			if !group.Satisfied(candidates) || !group.Satisfied(reads) {
+			if !group.Satisfied(candidates) || !group.SatisfiedWithContent(reads, contentByPath) {
 				return false
 			}
 		}
@@ -346,8 +364,9 @@ func (g EvidenceGroup) CandidatePaths(signal string, artifactPaths []string, lim
 	seen := map[string]bool{}
 	candidates := make([]candidate, 0)
 	for _, artifactPath := range artifactPaths {
+		candidatePath := strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(artifactPath), "./"), "/")
 		normalized := normalizeEvidencePath(artifactPath)
-		if normalized == "" || seen[normalized] {
+		if normalized == "" || candidatePath == "" || seen[candidatePath] {
 			continue
 		}
 		matched := false
@@ -360,14 +379,14 @@ func (g EvidenceGroup) CandidatePaths(signal string, artifactPaths []string, lim
 		if !matched {
 			continue
 		}
-		seen[normalized] = true
+		seen[candidatePath] = true
 		score := 0
 		for _, token := range tokens {
 			if strings.Contains(normalized, token) {
 				score += len(token)
 			}
 		}
-		candidates = append(candidates, candidate{path: strings.TrimPrefix(strings.TrimPrefix(artifactPath, "./"), "/"), score: score})
+		candidates = append(candidates, candidate{path: candidatePath, score: score})
 	}
 	sort.Slice(candidates, func(i, j int) bool {
 		if candidates[i].score != candidates[j].score {
@@ -439,6 +458,74 @@ func (g EvidenceGroup) Satisfied(reads map[string]bool) bool {
 			if re.MatchString(path) {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// HasContentPredicates reports whether path evidence also needs content proof.
+func (g EvidenceGroup) HasContentPredicates() bool {
+	return len(g.contentAnyREs) > 0 || len(g.contentAllREs) > 0
+}
+
+// SatisfiedWithContent requires path and content predicates to match the same
+// artifact. Content proof is positive-only: missing or partial content never
+// proves that a pattern is absent.
+func (g EvidenceGroup) SatisfiedWithContent(reads map[string]bool, contentByPath map[string][]string) bool {
+	if len(g.anyOfREs) == 0 || len(reads) == 0 {
+		return false
+	}
+	if !g.HasContentPredicates() {
+		return g.Satisfied(reads)
+	}
+	for contentPath, snippets := range contentByPath {
+		artifactPath := normalizeEvidencePath(contentPath)
+		if artifactPath == "" || !reads[artifactPath] {
+			continue
+		}
+		pathMatched := false
+		for _, re := range g.anyOfREs {
+			if re.MatchString(artifactPath) {
+				pathMatched = true
+				break
+			}
+		}
+		if !pathMatched {
+			continue
+		}
+		if len(snippets) == 0 {
+			continue
+		}
+		if len(g.contentAnyREs) > 0 {
+			matched := false
+			for _, re := range g.contentAnyREs {
+				if regexMatchesAnySnippet(re, snippets) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+		}
+		allMatched := true
+		for _, re := range g.contentAllREs {
+			if !regexMatchesAnySnippet(re, snippets) {
+				allMatched = false
+				break
+			}
+		}
+		if allMatched {
+			return true
+		}
+	}
+	return false
+}
+
+func regexMatchesAnySnippet(re *regexp.Regexp, snippets []string) bool {
+	for _, snippet := range snippets {
+		if re.MatchString(snippet) {
+			return true
 		}
 	}
 	return false
@@ -683,6 +770,24 @@ func validateAndCompile(sk *Skill) error {
 			}
 			g.anyOfREs = append(g.anyOfREs, re)
 		}
+		g.contentAnyREs = make([]*regexp.Regexp, 0, len(g.ContentAnyOf))
+		for i, pat := range g.ContentAnyOf {
+			re, err := regexp.Compile(pat)
+			if err != nil {
+				return fmt.Errorf("skill %q evidence %q content_any_of[%d] %q: %w",
+					sk.ID, g.ID, i, pat, err)
+			}
+			g.contentAnyREs = append(g.contentAnyREs, re)
+		}
+		g.contentAllREs = make([]*regexp.Regexp, 0, len(g.ContentAllOf))
+		for i, pat := range g.ContentAllOf {
+			re, err := regexp.Compile(pat)
+			if err != nil {
+				return fmt.Errorf("skill %q evidence %q content_all_of[%d] %q: %w",
+					sk.ID, g.ID, i, pat, err)
+			}
+			g.contentAllREs = append(g.contentAllREs, re)
+		}
 	}
 	return nil
 }
@@ -717,6 +822,12 @@ func computeHash(loaded []Skill) string {
 			}
 			for _, p := range g.AnyOf {
 				fmt.Fprintf(h, "evidence-anyof:%s\n", p)
+			}
+			for _, p := range g.ContentAnyOf {
+				fmt.Fprintf(h, "evidence-content-anyof:%s\n", p)
+			}
+			for _, p := range g.ContentAllOf {
+				fmt.Fprintf(h, "evidence-content-allof:%s\n", p)
 			}
 		}
 		fmt.Fprintf(h, "procedure:%s\n", sk.Procedure)
