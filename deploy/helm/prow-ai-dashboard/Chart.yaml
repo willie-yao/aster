@@ -3,7 +3,7 @@ name: prow-ai-dashboard
 description: Kubernetes-native deploy of the prow-ai-dashboard engine, running a worker or CronJob and serving the dashboard from a shared volume.
 type: application
 version: 0.1.0
-# appVersion tracks the engine image tag the chart defaults to.
+# appVersion is the default tag for the engine, analyzer, and fixer images.
 appVersion: "dev"
 home: https://github.com/willie-yao/prow-ai-dashboard
 sources:
