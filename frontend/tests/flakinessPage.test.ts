@@ -83,8 +83,9 @@ test("focusable tabs own their visible names and descriptions", () => {
   assert.match(source, /label: "Most Flaky"/);
   assert.match(source, /label: "Persistent Failures"/);
   assert.match(source, /label: "Recently Broken"/);
-  assert.match(source, /aria-describedby={`test-analysis-\$\{t\.value\}-description`}/);
-  assert.match(source, /label={`\$\{t\.label\} \$\{listMap\[t\.value\]\.length\}`}/);
+  assert.match(source, /label: "Build Failures"/);
+  assert.match(source, /aria-describedby={`failure-analysis-\$\{t\.value\}-description`}/);
+  assert.match(source, /label={`\$\{t\.label\} \$\{tabCounts\[t\.value\]}`}/);
   assert.match(source, /title=\{t\.tooltip\}/);
   assert.match(source, /height: "1px"[\s\S]*width: "1px"/);
   assert.doesNotMatch(source, /<Tooltip/);
@@ -96,7 +97,20 @@ test("published freshness stays separate from background refresh progress", () =
   assert.match(source, />\s*Published results\s*</);
   assert.match(source, />\s*Refresh in progress\s*</);
   assert.match(source, /Published results remain available until the refresh completes\./);
+  assert.match(source, /Showing the last published build failures\. A new snapshot is currently being prepared\./);
   assert.match(source, /fetchStatus\?\.state === "active"/);
   assert.match(source, /refreshProgress\.ready} of \$\{refreshProgress\.total} results ready/);
   assert.doesNotMatch(source, /aria-live=/);
+});
+
+
+test("build failures use a bounded summary surface and canonical links", () => {
+  assert.match(source, />\s*Failure Analysis\s*</);
+  assert.match(source, /function BuildFailureRow/);
+  assert.match(source, /to={item\.job_detail_url}/);
+  assert.match(source, /item\.build_log_url/);
+  assert.match(source, /item\.summary \|\| "No accepted build analysis is available for this run\."/);
+  assert.match(source, /item\.provenance === "cache"/);
+  assert.doesNotMatch(source, /item\.root_cause/);
+  assert.doesNotMatch(source, /item\.suggested_fix/);
 });

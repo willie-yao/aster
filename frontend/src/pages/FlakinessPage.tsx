@@ -11,6 +11,7 @@ import Tabs from "@mui/material/Tabs";
 import Typography from "@mui/material/Typography";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import SentimentSatisfiedAltIcon from "@mui/icons-material/SentimentSatisfiedAlt";
+import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import { Link as RouterLink } from "react-router-dom";
 import { ErrorState } from "../components/ErrorState";
 import { FetchActivityIcon } from "../components/FetchStatus";
@@ -22,15 +23,17 @@ import { useSharedFetchStatus } from "../hooks/useSharedFetchStatus";
 import { analysisProgressBreakdown } from "../lib/fetchStatus";
 import { formatPercent, shortJobName, shortTestName, timeAgo } from "../lib/utils";
 import { soft } from "../theme";
-import type { TestFlakiness } from "../types/dashboard";
+import type { BuildFailureSummary, TestFlakiness } from "../types/dashboard";
 
-type Tab = "most_flaky" | "persistent" | "recently_broken";
+type Tab = "most_flaky" | "persistent" | "recently_broken" | "build_failures";
+type TestTab = Exclude<Tab, "build_failures">;
 type ClassificationColor = "error" | "warning" | "default";
 
 const tabs: { label: string; value: Tab; tooltip: string }[] = [
   { label: "Most Flaky", value: "most_flaky", tooltip: "Tests that alternate between passing and failing. Sorted by flip rate, the percentage of runs where the result changed from the previous run." },
   { label: "Persistent Failures", value: "persistent", tooltip: "Tests that have failed 3 or more times in a row with the same error. These are consistently broken, not flaky." },
   { label: "Recently Broken", value: "recently_broken", tooltip: "Tests that started a new failure streak within the last 48 hours. These are likely new regressions." },
+  { label: "Build Failures", value: "build_failures", tooltip: "Build-level failures that were not reported as JUnit test cases. These remain separate from test flakiness and pass-rate calculations." },
 ];
 
 function classificationStyle(c: TestFlakiness["classification"]): ClassificationColor {
@@ -48,7 +51,7 @@ function classificationLabel(c: TestFlakiness["classification"]): string {
   return c.charAt(0).toUpperCase() + c.slice(1);
 }
 
-function metricValue(tab: Tab, item: TestFlakiness): string {
+function metricValue(tab: TestTab, item: TestFlakiness): string {
   switch (tab) {
     case "most_flaky":
       return formatPercent(item.flip_rate);
@@ -59,7 +62,7 @@ function metricValue(tab: Tab, item: TestFlakiness): string {
   }
 }
 
-function metricLabel(tab: Tab): string {
+function metricLabel(tab: TestTab): string {
   switch (tab) {
     case "most_flaky":
       return "Flip Rate";
@@ -70,7 +73,7 @@ function metricLabel(tab: Tab): string {
   }
 }
 
-function TestRow({ item, tab }: { item: TestFlakiness; tab: Tab }) {
+function TestRow({ item, tab }: { item: TestFlakiness; tab: TestTab }) {
   const manifest = useManifest();
   const filePrefix = manifest.short_name_prefix ?? "";
   const [expanded, setExpanded] = useState(false);
@@ -367,6 +370,85 @@ function TestRow({ item, tab }: { item: TestFlakiness; tab: Tab }) {
   );
 }
 
+function buildSeverityColor(severity?: string): "error" | "warning" | "info" | "default" {
+  switch (severity?.toLowerCase()) {
+    case "critical":
+    case "high":
+      return "error";
+    case "medium":
+      return "warning";
+    case "low":
+      return "info";
+    default:
+      return "default";
+  }
+}
+
+function BuildFailureRow({ item }: { item: BuildFailureSummary }) {
+  const manifest = useManifest();
+  const filePrefix = manifest.short_name_prefix ?? "";
+  const severity = item.severity || (item.is_transient ? "Transient" : "Unavailable");
+  const summary = item.summary || "No accepted build analysis is available for this run.";
+
+  return (
+    <Panel
+      component="article"
+      sx={{
+        borderRadius: "12px",
+        overflow: "hidden",
+        position: "relative",
+        "&::before": {
+          content: '""',
+          position: "absolute",
+          insetBlock: 0,
+          insetInlineStart: 0,
+          width: 3,
+          bgcolor: (theme) => soft(theme, item.analysis_state === "succeeded" ? "error" : "warning", 0.9),
+        },
+      }}
+    >
+      <Stack spacing={1.25} sx={{ px: { xs: 1.5, sm: 2 }, py: 1.5 }}>
+        <Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ alignItems: { sm: "center" }, minWidth: 0 }}>
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Link
+              component={RouterLink}
+              to={item.job_detail_url}
+              underline="none"
+              sx={{ color: "text.primary", display: "block", fontSize: "0.875rem", fontWeight: 700 }}
+            >
+              {shortJobName(item.job_name, filePrefix)}
+            </Link>
+            <Typography variant="caption" color="text.secondary">
+              Build {item.build_id}{item.started_at ? ` · ${timeAgo(item.started_at)}` : ""}
+            </Typography>
+          </Box>
+          <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", flexWrap: "wrap" }}>
+            {item.result && <Chip size="small" variant="outlined" label={item.result} />}
+            <Chip size="small" color={buildSeverityColor(item.severity)} variant="outlined" label={severity} />
+            {item.provenance === "cache" && <Chip size="small" label="Cached" />}
+            {item.is_transient && severity.toLowerCase() !== "transient" && <Chip size="small" color="info" variant="outlined" label="Transient" />}
+          </Stack>
+        </Stack>
+
+        <Typography variant="body2" color="text.secondary" sx={{ overflowWrap: "anywhere" }}>
+          {summary}
+        </Typography>
+
+        <Stack direction="row" spacing={1.5} sx={{ alignItems: "center", flexWrap: "wrap" }}>
+          <Link component={RouterLink} to={item.job_detail_url} underline="hover" sx={{ fontSize: "0.8125rem", fontWeight: 600 }}>
+            Open details
+          </Link>
+          {item.build_log_url && (
+            <Link href={item.build_log_url} target="_blank" rel="noopener noreferrer" sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, fontSize: "0.8125rem" }}>
+              Build log <OpenInNewIcon sx={{ fontSize: 15 }} />
+            </Link>
+          )}
+        </Stack>
+      </Stack>
+    </Panel>
+  );
+}
+
 export function FlakinessPage() {
   const { data, loading, error } = useFlakinessReport();
   const fetchStatus = useSharedFetchStatus();
@@ -382,13 +464,19 @@ export function FlakinessPage() {
 
   if (!data) return null;
 
-  const listMap: Record<Tab, TestFlakiness[]> = {
+  const testListMap: Record<TestTab, TestFlakiness[]> = {
     most_flaky: data.most_flaky,
     persistent: data.persistent_failures,
     recently_broken: data.recently_broken,
   };
-
-  const items = listMap[activeTab] ?? [];
+  const buildFailures = data.build_failures ?? [];
+  const tabCounts: Record<Tab, number> = {
+    most_flaky: data.most_flaky.length,
+    persistent: data.persistent_failures.length,
+    recently_broken: data.recently_broken.length,
+    build_failures: buildFailures.length,
+  };
+  const testItems = activeTab === "build_failures" ? [] : testListMap[activeTab];
   const activeDescription = tabs.find((t) => t.value === activeTab)?.tooltip;
   const refreshStatus = fetchStatus?.state === "active" ? fetchStatus.status : undefined;
   const refreshProgress = refreshStatus ? analysisProgressBreakdown(refreshStatus) : null;
@@ -397,7 +485,7 @@ export function FlakinessPage() {
     <Stack spacing={4}>
       <Stack spacing={1.25}>
         <Typography variant="h4" component="h1">
-          Test Analysis
+          Failure Analysis
         </Typography>
         <Stack
           direction={{ xs: "column", sm: "row" }}
@@ -451,7 +539,9 @@ export function FlakinessPage() {
                     : "Preparing the next published snapshot"}
                 </Typography>
                 <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
-                  Published results remain available until the refresh completes.
+                  {activeTab === "build_failures"
+                    ? "Showing the last published build failures. A new snapshot is currently being prepared."
+                    : "Published results remain available until the refresh completes."}
                 </Typography>
               </Box>
             </Stack>
@@ -465,7 +555,7 @@ export function FlakinessPage() {
           onChange={(_, value: Tab) => setActiveTab(value)}
           variant="scrollable"
           scrollButtons="auto"
-          aria-label="Test analysis categories"
+          aria-label="Failure analysis categories"
           sx={{
             minHeight: 34,
             "& .MuiTabs-flexContainer": { gap: 0.5 },
@@ -496,8 +586,8 @@ export function FlakinessPage() {
             <Tab
               key={t.value}
               value={t.value}
-              aria-describedby={`test-analysis-${t.value}-description`}
-              label={`${t.label} ${listMap[t.value].length}`}
+              aria-describedby={`failure-analysis-${t.value}-description`}
+              label={`${t.label} ${tabCounts[t.value]}`}
               title={t.tooltip}
             />
           ))}
@@ -506,7 +596,7 @@ export function FlakinessPage() {
         {tabs.map((t) => (
           <Box
             component="span"
-            id={`test-analysis-${t.value}-description`}
+            id={`failure-analysis-${t.value}-description`}
             key={`${t.value}-description`}
             sx={{
               border: 0,
@@ -529,7 +619,17 @@ export function FlakinessPage() {
         </Typography>
       </Stack>
 
-      {items.length === 0 ? (
+      {activeTab === "build_failures" ? (
+        buildFailures.length === 0 ? (
+          <Panel sx={{ borderRadius: "12px", px: 2, py: 8, textAlign: "center" }}>
+            <Typography variant="h6" color="text.secondary">No build failures in this snapshot</Typography>
+          </Panel>
+        ) : (
+          <Stack spacing={1.5}>
+            {buildFailures.map((item) => <BuildFailureRow key={`${item.job_id}/${item.build_id}`} item={item} />)}
+          </Stack>
+        )
+      ) : testItems.length === 0 ? (
         <Panel sx={{ borderRadius: "12px", px: 2, py: 8, textAlign: "center" }}>
           <Stack
             direction="row"
@@ -544,7 +644,7 @@ export function FlakinessPage() {
         </Panel>
       ) : (
         <Stack spacing={1.5}>
-          {items.map((item) => (
+          {testItems.map((item) => (
             <TestRow
               key={`${item.job_id}/${item.test_name}`}
               item={item}

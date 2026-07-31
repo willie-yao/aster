@@ -58,6 +58,9 @@ func WriteJobDetail(dir string, detail models.JobDetail) error {
 
 // WriteFlakinessReport writes flakiness.json to dir.
 func WriteFlakinessReport(dir string, report models.FlakinessReport) error {
+	if report.BuildFailures == nil {
+		report.BuildFailures = []models.BuildFailureSummary{}
+	}
 	report.RecurringPatterns, _ = models.BackfillPatternIdentities(report.RecurringPatterns)
 	return writeJSON(filepath.Join(dir, "flakiness.json"), report)
 }

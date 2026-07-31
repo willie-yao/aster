@@ -29,7 +29,7 @@ remains identical.
 
 | Path | Purpose |
 | --- | --- |
-| `GET /data/*` | The fetcher output tree at read parity: `manifest.json`, `dashboard.json`, `jobs/*.json`, `flakiness.json`, `search-index.json`. |
+| `GET /data/*` | The fetcher output tree at read parity: `manifest.json`, `dashboard.json`, `jobs/*.json`, `flakiness.json` with its bounded build-failure index, `search-index.json`. |
 | `GET /api/capabilities` | Deploy descriptor, for example `{"mode":"server","features":{"actions":false}}`. |
 | `GET /api/analysis-traces` | Admin-gated private trace snapshot. Exact filters: `job_id`, `build_id`, `test_name`, `outcome`, and `response_id`. |
 | `GET /api/fetch-status` | Admin-gated aggregate fetch progress, freshness, and next scheduled pass. `HEAD` is also supported. |

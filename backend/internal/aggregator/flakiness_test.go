@@ -1,6 +1,9 @@
 package aggregator
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
 	"math"
 	"testing"
 	"time"
@@ -432,5 +435,48 @@ func TestComputeFlakinessReportExcludesBuildFailures(t *testing.T) {
 	}, []models.ProwJob{{Name: "test-job", JobID: "test-job"}}, flakyBaseTime)
 	if len(report.MostFlaky) != 0 || len(report.PersistentFailures) != 0 || len(report.RecentlyBroken) != 0 {
 		t.Fatalf("build failure entered test flakiness: %+v", report)
+	}
+}
+
+func TestCollectBuildFailuresBuildsBoundedSafeIndex(t *testing.T) {
+	details := []models.JobDetail{{
+		Name: "periodic-capz-e2e", JobID: "org/repo/periodic-capz-e2e",
+	}}
+	for i := 0; i < maxBuildFailureResults+5; i++ {
+		started := flakyBaseTime.Add(-time.Duration(i) * time.Minute)
+		details[0].Runs = append(details[0].Runs, models.BuildResult{
+			BuildInfo: models.BuildInfo{
+				BuildID: fmt.Sprintf("%03d", i), Started: started, Result: "FAILURE",
+				BuildLogURL: "https://logs.example/build-log.txt",
+			},
+			TestCases: []models.TestCase{
+				{
+					Name: "Prow job execution", Source: models.TestCaseSourceBuild, Status: "failed",
+					FailureMessage: "private failure text",
+					AISummary:      &models.AISummary{Summary: "Control plane provisioning timed out."},
+					AIAnalysis:     &models.AIAnalysis{Severity: "High", RootCause: "private root cause", CacheHit: i == 0},
+				},
+				{Name: "JUnit test", Status: "failed", FailureMessage: "JUnit failure"},
+			},
+		})
+	}
+
+	got := CollectBuildFailures(details)
+	if len(got) != maxBuildFailureResults {
+		t.Fatalf("build failures = %d, want %d", len(got), maxBuildFailureResults)
+	}
+	first := got[0]
+	if first.BuildID != "000" || first.JobName != "periodic-capz-e2e" || first.AnalysisState != "succeeded" || first.Severity != "High" || first.Provenance != "cache" ||
+		first.JobDetailURL != "/job/org%2Frepo%2Fperiodic-capz-e2e/build/000/failure" {
+		t.Fatalf("first build failure = %+v", first)
+	}
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, private := range []string{"private failure text", "private root cause", "JUnit failure"} {
+		if bytes.Contains(raw, []byte(private)) {
+			t.Fatalf("build failure index exposed %q: %s", private, raw)
+		}
 	}
 }

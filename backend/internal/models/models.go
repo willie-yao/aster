@@ -385,12 +385,29 @@ type SearchIndex struct {
 	Entries     []SearchEntry `json:"entries"`
 }
 
+// BuildFailureSummary is a bounded public index entry for one build-level failure.
+type BuildFailureSummary struct {
+	JobID         string `json:"job_id"`
+	JobName       string `json:"job_name"`
+	BuildID       string `json:"build_id"`
+	StartedAt     string `json:"started_at"`
+	Result        string `json:"result"`
+	AnalysisState string `json:"analysis_state"`
+	Summary       string `json:"summary,omitempty"`
+	Severity      string `json:"severity,omitempty"`
+	IsTransient   bool   `json:"is_transient"`
+	Provenance    string `json:"provenance,omitempty"`
+	BuildLogURL   string `json:"build_log_url,omitempty"`
+	JobDetailURL  string `json:"job_detail_url"`
+}
+
 // FlakinessReport is the top-level structure for flakiness.json.
 type FlakinessReport struct {
-	GeneratedAt        string          `json:"generated_at"`
-	MostFlaky          []TestFlakiness `json:"most_flaky"`
-	PersistentFailures []TestFlakiness `json:"persistent_failures"`
-	RecentlyBroken     []TestFlakiness `json:"recently_broken"`
+	GeneratedAt        string                `json:"generated_at"`
+	MostFlaky          []TestFlakiness       `json:"most_flaky"`
+	PersistentFailures []TestFlakiness       `json:"persistent_failures"`
+	RecentlyBroken     []TestFlakiness       `json:"recently_broken"`
+	BuildFailures      []BuildFailureSummary `json:"build_failures"`
 	// RecurringPatterns holds systemic job-level verdicts across all jobs.
 	// The home page uses these without loading every job file.
 	RecurringPatterns []PatternAnalysis    `json:"recurring_patterns,omitempty"`

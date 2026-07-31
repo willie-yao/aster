@@ -1,13 +1,17 @@
 package aggregator
 
 import (
+	"net/url"
 	"sort"
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
-const maxFlakyResults = 50
+const (
+	maxFlakyResults        = 50
+	maxBuildFailureResults = 50
+)
 
 // ComputeTestFlakiness computes flakiness stats for one test across a job's runs.
 // Runs are expected newest-first.
@@ -200,6 +204,7 @@ func ComputeFlakinessReport(jobResults map[string][]models.BuildResult, jobs []m
 		MostFlaky:          []models.TestFlakiness{},
 		PersistentFailures: []models.TestFlakiness{},
 		RecentlyBroken:     []models.TestFlakiness{},
+		BuildFailures:      []models.BuildFailureSummary{},
 	}
 
 	// MostFlaky includes flaky tests sorted by flip rate.
@@ -263,6 +268,57 @@ func ComputeFlakinessReport(jobResults map[string][]models.BuildResult, jobs []m
 	report.RecentlyBroken = recentlyBroken
 
 	return report
+}
+
+// CollectBuildFailures builds a bounded public index without changing test flakiness calculations.
+func CollectBuildFailures(details []models.JobDetail) []models.BuildFailureSummary {
+	failures := make([]models.BuildFailureSummary, 0)
+	for _, detail := range details {
+		for _, run := range detail.Runs {
+			for _, testCase := range run.TestCases {
+				if testCase.Source != models.TestCaseSourceBuild || testCase.Status != "failed" {
+					continue
+				}
+				entry := models.BuildFailureSummary{
+					JobID: detail.JobID, JobName: detail.Name, BuildID: run.BuildID, Result: run.Result,
+					AnalysisState: "unavailable", IsTransient: testCase.AISummary != nil && testCase.AISummary.IsTransient,
+					BuildLogURL:  run.BuildLogURL,
+					JobDetailURL: "/job/" + url.PathEscape(detail.JobID) + "/build/" + url.PathEscape(run.BuildID) + "/failure",
+				}
+				if !run.Started.IsZero() {
+					entry.StartedAt = run.Started.UTC().Format(time.RFC3339)
+				}
+				if testCase.AISummary != nil {
+					entry.AnalysisState = "succeeded"
+					entry.Summary = testCase.AISummary.Summary
+				}
+				if testCase.AIAnalysis != nil {
+					entry.AnalysisState = "succeeded"
+					entry.Severity = testCase.AIAnalysis.Severity
+					if testCase.AIAnalysis.CacheHit {
+						entry.Provenance = "cache"
+					}
+				} else if entry.IsTransient {
+					entry.Severity = "Transient-Ignore"
+				}
+				failures = append(failures, entry)
+				break
+			}
+		}
+	}
+	sort.Slice(failures, func(i, j int) bool {
+		if failures[i].StartedAt != failures[j].StartedAt {
+			return failures[i].StartedAt > failures[j].StartedAt
+		}
+		if failures[i].JobID != failures[j].JobID {
+			return failures[i].JobID < failures[j].JobID
+		}
+		return failures[i].BuildID > failures[j].BuildID
+	})
+	if len(failures) > maxBuildFailureResults {
+		failures = failures[:maxBuildFailureResults]
+	}
+	return failures
 }
 
 func testFlakinessLess(a, b models.TestFlakiness) bool {
