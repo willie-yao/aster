@@ -78,8 +78,8 @@ test("analysis progress distinguishes reuse, adoption, and new Tasks", () => {
     compatibleResults: 2,
     reused: 70,
     adopted: 12,
-    newAnalyzerTasks: 4,
-    newlyAnalyzed: 2,
+    newAnalyzerTasksLowerBound: 4,
+    newlyAnalyzedLowerBound: 2,
     analyzing: 2,
     waiting: 40,
     failed: 0,
@@ -88,8 +88,24 @@ test("analysis progress distinguishes reuse, adoption, and new Tasks", () => {
   });
   assert.equal(
     analysisProgressAccessibleDetail(progress),
-    "84 of 126 results ready: 70 reused, 12 existing results adopted, 2 newly analyzed, 2 running, 40 waiting",
+    "84 of 126 results ready: 70 reused, 12 existing results adopted, at least 2 newly analyzed, 2 running, 40 waiting",
   );
+});
+
+test("pending adopted Tasks keep new-work derivations as lower bounds", () => {
+  const progress = analysisProgressBreakdown({
+    ...activeStatus,
+    analyses: {
+      ...activeStatus.analyses,
+      task_attempts: 1,
+      retries: 0,
+      existing_tasks_adopted: 1,
+      results_retrieved: 1,
+    },
+  });
+  assert.equal(progress.newAnalyzerTasksLowerBound, 0);
+  assert.equal(progress.newlyAnalyzedLowerBound, 0);
+  assert.match(analysisProgressAccessibleDetail(progress), /at least 0 newly analyzed/);
 });
 
 test("analysis progress stays non-negative and removes retries from the new Task count", () => {
@@ -113,8 +129,8 @@ test("analysis progress stays non-negative and removes retries from the new Task
   });
   assert.equal(progress.total, 0);
   assert.equal(progress.reused, 0);
-  assert.equal(progress.newAnalyzerTasks, 3);
-  assert.equal(progress.newlyAnalyzed, 0);
+  assert.equal(progress.newAnalyzerTasksLowerBound, 3);
+  assert.equal(progress.newlyAnalyzedLowerBound, 0);
   assert.equal(progress.ready, 0);
   assert.equal(progress.analyzing, 0);
   assert.equal(progress.waiting, 0);
@@ -124,13 +140,13 @@ test("analysis progress stays non-negative and removes retries from the new Task
 test("fetch status presentation covers active idle failed and stale states", () => {
   const active = fetchStatusPresentation(response("active"));
   assert.equal(active?.title, "84 of 126 results ready");
-  assert.equal(active?.detail, "70 reused · 12 adopted · 2 new · 2 analyzing · 40 waiting");
+  assert.equal(active?.detail, "70 reused · 12 adopted · ≥2 new · 2 analyzing · 40 waiting");
   assert.equal(active?.announcement, "Fetch in progress: Analysis");
   assert.equal(active?.determinateTotal, 126);
   assert.equal(active?.determinateCompleted, 84);
   assert.equal(
     active?.ariaLabel,
-    "Fetch in progress: Analysis. 84 of 126 results ready: 70 reused, 12 existing results adopted, 2 newly analyzed, 2 running, 40 waiting.",
+    "Fetch in progress: Analysis. 84 of 126 results ready: 70 reused, 12 existing results adopted, at least 2 newly analyzed, 2 running, 40 waiting.",
   );
 
   const terminalFailures = fetchStatusPresentation(response("active", {
@@ -180,7 +196,7 @@ test("fetch status presentation covers active idle failed and stale states", () 
 test("compact fetch status distinguishes quiet and attention states", () => {
   const active = fetchStatusCompactPresentation(response("active"));
   assert.equal(active?.label, "84/126 ready");
-  assert.match(active?.ariaLabel ?? "", /70 reused/);
+  assert.match(active?.ariaLabel ?? "", /at least 2 newly analyzed/);
   assert.equal(active?.quiet, false);
   assert.equal(active?.severity, "info");
 
@@ -222,6 +238,7 @@ test("fetch status popover presents the user-facing breakdown before technical c
     assert.match(fetchStatusSource, new RegExp(label));
   }
   assert.match(fetchStatusSource, /including adopted existing Tasks/);
+  assert.match(fetchStatusSource, /Lower-bound counts/);
   assert.match(fetchStatusSource, /<Collapse in=\{technicalOpen\}/);
   assert.match(fetchStatusSource, /<CircularProgress\s+aria-hidden="true"\s+role="presentation"/);
 });

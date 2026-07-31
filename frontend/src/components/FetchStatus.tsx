@@ -304,7 +304,7 @@ export function FetchStatusControl({ response, idleCompact, onIdleCompactChange 
             <DetailRow label="Reused from cache" value={analysis.reusedFromCache} />
             <DetailRow label="Compatible results" value={analysis.compatibleResults} />
             <DetailRow label="Existing results adopted" value={analysis.adopted} />
-            <DetailRow label="New analyzer Tasks" value={analysis.newAnalyzerTasks} />
+            <DetailRow label="New analyzer Tasks" value={`At least ${analysis.newAnalyzerTasksLowerBound}`} />
             <DetailRow label="Currently analyzing" value={analysis.analyzing} />
             <DetailRow label="Waiting to check" value={analysis.waiting} />
             <DetailRow
@@ -339,11 +339,15 @@ export function FetchStatusControl({ response, idleCompact, onIdleCompactChange 
               />
               <DetailRow
                 label="Results retrieved"
-                value={`${status.analyses.results_retrieved} total · ${analysis.newlyAnalyzed} from new Tasks`}
+                value={`${status.analyses.results_retrieved} total, including adopted existing Tasks`}
               />
               <DetailRow
                 label="Retries"
                 value={`${status.analyses.retries} Task · ${status.analyses.result_retrieval_retries} result retrieval`}
+              />
+              <DetailRow
+                label="Lower-bound counts"
+                value="New Task counts subtract all adopted Tasks, including adoption still awaiting attempts or results"
               />
               <DetailRow
                 label="Planned Task work"
