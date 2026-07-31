@@ -798,6 +798,13 @@ verdicts are not aggregated there.
 
 #### Grounding the correlation on the source tree
 
+Individual failure analysis receives repository tools when build metadata
+identifies the configured `ai.source_repo` at one immutable commit. Source tools
+are bound server-side to that repository and commit. Missing, mutable, composite,
+or mismatched revisions keep the analysis artifact-only. Repository bytes do not
+count toward GCS evidence floors. Verified individual source links use the same
+commit rather than the repository default branch.
+
 The per-build analyses fed into this pass are already grounded (each cites real
 artifact files and line numbers from its own agentic loop), but the correlation
 step names the source **file or config to change** in `suggested_fix`. To keep

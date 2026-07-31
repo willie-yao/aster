@@ -234,6 +234,7 @@ tools field of this request for names, descriptions, and parameters).
 5. Investigation is YOUR job, not the user's. suggested_fix must be a concrete remediation action (a code change, config edit, command to run, retry, redeploy, rollback, operational fix). It must NOT be a diagnostic or information-gathering task. If the sentence's primary purpose is to learn more (check, verify, investigate, ensure, inspect, examine, confirm, audit, review, look into, determine), it belongs in your tool work BEFORE finalizing, not in suggested_fix. A "then validate by ..." clause is fine, but only after a concrete remediation. If after following the directly relevant artifact leads you still cannot identify a concrete remediation, say so explicitly in suggested_fix and include all three of: (a) the strongest fact you established, (b) the specific artifacts/logs you consulted, (c) the exact missing evidence that prevents a remediation. Do not invoke this escape hatch if any standard remediation or best-evidence operational action is supported by the artifacts you read.
 6. Cite actual paths and quoted log lines in your final answer. Do not speculate; if evidence is incomplete, state what is known and what remains unclear.
 7. Watch the remaining_model_bytes and remaining_gcs_bytes returned with each tool result; stop browsing and produce the final JSON answer before they hit zero.
+8. When repository tools are available, establish the runtime cause from build artifacts first. Then use read_repo_file or grep_repo at the tested commit to trace the project caller or verify a source file before naming it.
 
 Before finalizing, self-check:
 - Before drilling, did I rule out a known-transient class named in the project knowledge?
@@ -360,6 +361,7 @@ func evalFloors(state *agentState, opts AgenticOptions) floorStatus {
 
 type agentState struct {
 	browser            artifacts.Browser
+	repo               tools.RepoReader
 	opts               AgenticOptions
 	registry           *tools.Registry
 	enabledTools       []string
@@ -393,6 +395,9 @@ type agentState struct {
 	// a successful tool dispatch. Both maps stay nil when critique is disabled.
 	readArtifactsFull map[string]bool
 	readArtifactsBase map[string]bool
+	readSourceFull    map[string]bool
+	sourceOwner       string
+	sourceName        string
 
 	// evidenceArtifactsFull tracks successful non-empty content reads for
 	// evaluating coverage of the initial ranked evidence plan. Listing calls,
@@ -530,6 +535,9 @@ func stampAgenticTelemetry(analysis *models.AIAnalysis, state *agentState, mode 
 //   - Mode is stamped on the returned AIAnalysis and defaults to AgenticMode.
 type AgenticInputs struct {
 	Browser      artifacts.Browser
+	Repo         tools.RepoReader
+	SourceOwner  string
+	SourceName   string
 	Opts         AgenticOptions
 	Registry     *tools.Registry
 	EnabledTools []string
@@ -763,6 +771,9 @@ func (c *Client) doAnalyzeAgentic(
 
 	state := &agentState{
 		browser:           in.Browser,
+		repo:              in.Repo,
+		sourceOwner:       in.SourceOwner,
+		sourceName:        in.SourceName,
 		opts:              in.Opts,
 		registry:          in.Registry,
 		enabledTools:      in.EnabledTools,
@@ -783,6 +794,9 @@ func (c *Client) doAnalyzeAgentic(
 	// nil-disables contract would skip the worst-case hallucination scenario.
 	state.readArtifactsFull = map[string]bool{}
 	state.readArtifactsBase = map[string]bool{}
+	if in.Repo != nil {
+		state.readSourceFull = map[string]bool{}
+	}
 	state.evidenceArtifactsFull = map[string]bool{}
 
 	fullSysPrompt := sysPrompt + agToolDocs
@@ -900,7 +914,7 @@ agentLoop:
 			var candidateCritique critiqueOutcome
 			var candidateDraft *critiqueDraftCandidate
 			if parsedOK {
-				candidateCritique = critiqueDraftWithContent(parsedCandidate, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, matchSkillsForDraft(state, parsedCandidate), state.consecutiveFailures)
+				candidateCritique = critiqueDraftWithContent(parsedCandidate, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, parsedCandidate), state.consecutiveFailures)
 				if len(candidateCritique.MissingSkillEvidence) > 0 {
 					if treeSet := state.artifactTreeSet(); treeSet != nil {
 						if n := pruneAbsentSkillEvidence(parsedCandidate, &candidateCritique, treeSet); n > 0 {
@@ -998,7 +1012,7 @@ agentLoop:
 							revised, revisedItems, safe := c.runFinalizeRoundTracked(loopCtx, state, repairMessages, headroom)
 							if safe {
 								if rp, ok := tryParseAnalysis(revised); ok {
-									revisedCritique := critiqueDraftWithContent(rp, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, matchSkillsForDraft(state, rp), state.consecutiveFailures)
+									revisedCritique := critiqueDraftWithContent(rp, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, rp), state.consecutiveFailures)
 									if len(revisedCritique.MissingSkillEvidence) > 0 {
 										if treeSet := state.artifactTreeSet(); treeSet != nil {
 											pruneAbsentSkillEvidence(rp, &revisedCritique, treeSet)
@@ -1119,7 +1133,7 @@ func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, m
 	if state.critiquePassed {
 		return state.bestDraft.parsed
 	}
-	out := critiqueDraftWithContent(parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, matchSkillsForDraft(state, parsed), state.consecutiveFailures)
+	out := critiqueDraftWithContent(parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, parsed), state.consecutiveFailures)
 	if len(out.MissingSkillEvidence) > 0 {
 		if treeSet := state.artifactTreeSet(); treeSet != nil {
 			pruneAbsentSkillEvidence(parsed, &out, treeSet)
@@ -1203,7 +1217,7 @@ func (c *Client) runBoundedCritiqueRepair(ctx context.Context, state *agentState
 		modelMessage{Role: "user", Content: strPtr(feedback)})
 	retry, _ := retries.admit()
 
-	updated := critiqueDraftWithContent(parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, matchSkillsForDraft(state, parsed), state.consecutiveFailures)
+	updated := critiqueDraftWithContent(parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, parsed), state.consecutiveFailures)
 	if len(updated.MissingSkillEvidence) > 0 {
 		if treeSet := state.artifactTreeSet(); treeSet != nil {
 			pruneAbsentSkillEvidence(parsed, &updated, treeSet)
@@ -1266,7 +1280,7 @@ func (c *Client) runBoundedCritiqueRepair(ctx context.Context, state *agentState
 		recordTrace(ctx, TraceEvent{Kind: "critique_retry", Outcome: "unparseable", Retry: retry, RetryAdmitted: true, InitialIssueCount: len(initial.Matches()), NewEvidenceReads: state.evidenceRevision - initialEvidenceRevision, RetryDurationMs: int(time.Since(started) / time.Millisecond), RemainingTimeMs: int(time.Until(state.deadline) / time.Millisecond), SelectedAttempt: state.bestDraft.attempt})
 		return state.bestDraft.parsed
 	}
-	out := critiqueDraftWithContent(next, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, matchSkillsForDraft(state, next), state.consecutiveFailures)
+	out := critiqueDraftWithContent(next, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, next), state.consecutiveFailures)
 	if len(out.MissingSkillEvidence) > 0 {
 		if treeSet := state.artifactTreeSet(); treeSet != nil {
 			pruneAbsentSkillEvidence(next, &out, treeSet)
@@ -1282,7 +1296,7 @@ func (c *Client) runBoundedCritiqueRepair(ctx context.Context, state *agentState
 		state.critiquePassed = state.bestDraft.quality.Passed
 	}
 	selected := state.bestDraft
-	selectedOut := critiqueDraftWithContent(selected.parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, matchSkillsForDraft(state, selected.parsed), state.consecutiveFailures)
+	selectedOut := critiqueDraftWithContent(selected.parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, selected.parsed), state.consecutiveFailures)
 	if len(selectedOut.MissingSkillEvidence) > 0 {
 		if treeSet := state.artifactTreeSet(); treeSet != nil {
 			pruneAbsentSkillEvidence(selected.parsed, &selectedOut, treeSet)
@@ -1866,7 +1880,7 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc model
 		payload := map[string]interface{}{"error": message}
 		return toolErrJSON(message), payload
 	}
-	if s.gcsRemaining() <= 0 {
+	if !isRepoTool(tc.Function.Name) && s.gcsRemaining() <= 0 {
 		s.budgetExhausted = true
 		recordTrace(ctx, TraceEvent{Kind: "tool_call", Tool: tc.Function.Name, Outcome: "gcs_budget_exhausted"})
 		message := "GCS byte budget exhausted; produce final JSON now"
@@ -1876,13 +1890,16 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc model
 
 	env := &tools.Env{
 		Browser:             s.browser,
+		Repo:                s.repo,
 		Cache:               s.cache,
 		WebURLBase:          s.webURLBase,
 		RemainingModelBytes: s.modelRemaining(),
 		RemainingGCSBytes:   s.gcsRemaining(),
 	}
 	result := s.registry.Dispatch(ctx, env, tc.Function.Name, json.RawMessage(tc.Function.Arguments))
-	s.gcsBytes += result.BytesFetched
+	if !isRepoTool(tc.Function.Name) {
+		s.gcsBytes += result.BytesFetched
+	}
 	if result.BudgetExhausted {
 		s.budgetExhausted = true
 	}
@@ -1925,6 +1942,11 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc model
 			}
 		}
 	}
+	if !toolFailed && s.repo != nil {
+		for _, repoPath := range visibleRepoReadPaths(tc, visiblePayload) {
+			s.recordSourceRead(repoPath)
+		}
+	}
 
 	// Optional per-tool-call trace for diagnosing investigation behavior.
 	// Off unless AGENTIC_TRACE_TOOLS is set, so production logs stay clean.
@@ -1965,6 +1987,39 @@ func isContentFetchingTool(name string) bool {
 		return true
 	}
 	return false
+}
+
+func isRepoTool(name string) bool {
+	return name == "list_repo_tree" || name == "read_repo_file" || name == "grep_repo"
+}
+
+func visibleRepoReadPaths(tc modelToolCall, payload map[string]interface{}) []string {
+	if payload == nil {
+		return nil
+	}
+	switch tc.Function.Name {
+	case "read_repo_file":
+		if _, visible := payload["content"]; visible {
+			if p := extractToolPathArg(tc.Function.Arguments); p != "" {
+				return []string{p}
+			}
+		}
+	case "grep_repo":
+		seen := map[string]bool{}
+		var out []string
+		if matches, ok := payload["matches"].([]interface{}); ok {
+			for _, raw := range matches {
+				match, _ := raw.(map[string]interface{})
+				p, _ := match["path"].(string)
+				if p != "" && !seen[p] {
+					seen[p] = true
+					out = append(out, p)
+				}
+			}
+		}
+		return out
+	}
+	return nil
 }
 
 // extractToolPathArg pulls the "path" field out of a content-fetching tool's
@@ -2090,6 +2145,21 @@ func (s *agentState) recordSuccessfulRead(rawPath string) {
 	}
 	s.readArtifactsFull[norm] = true
 	s.readArtifactsBase[path.Base(norm)] = true
+}
+
+func (s *agentState) recordSourceRead(rawPath string) {
+	_, norm := canonicalTrackedArtifactPath(rawPath)
+	if norm != "" {
+		if s.readSourceFull == nil {
+			s.readSourceFull = map[string]bool{}
+		}
+		s.readSourceFull[norm] = true
+		if s.sourceOwner != "" && s.sourceName != "" {
+			s.readSourceFull[strings.ToLower(s.sourceOwner+"/"+s.sourceName+"/"+norm)] = true
+			s.readSourceFull[strings.ToLower("github.com/"+s.sourceOwner+"/"+s.sourceName+"/"+norm)] = true
+			s.readSourceFull[strings.ToLower(s.sourceName+"/"+norm)] = true
+		}
+	}
 }
 
 // recordEvidenceRead adds a successful non-empty content read to the set used

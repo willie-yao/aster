@@ -22,6 +22,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/filesystem"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/repotree"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 )
 
@@ -36,6 +37,21 @@ func newTestRegistry(t *testing.T) (*tools.Registry, []string) {
 		t.Fatalf("registry.Enable: %v", err)
 	}
 	return r, enabled
+}
+
+type fakeSourceRepo struct{ files map[string]string }
+
+func (r *fakeSourceRepo) ListTree(context.Context) ([]string, error) {
+	var paths []string
+	for path := range r.files {
+		paths = append(paths, path)
+	}
+	return paths, nil
+}
+
+func (r *fakeSourceRepo) ReadFile(_ context.Context, path string) (string, bool, error) {
+	content, ok := r.files[path]
+	return content, ok, nil
 }
 
 // newTestAgenticInputs builds per-call agentic inputs for tests.
@@ -3416,5 +3432,31 @@ func TestToolResultSnippetsPreserveReturnedWhitespace(t *testing.T) {
 	grep := toolResultSnippets("grep_artifact", map[string]interface{}{"matches": []map[string]interface{}{{"context": []string{"> 4:   ERROR"}}}})
 	if len(grep) != 1 || grep[0] != "  ERROR" {
 		t.Fatalf("grep snippet = %q", grep)
+	}
+}
+
+func TestRepoToolReadDoesNotCountAsGCSEvidence(t *testing.T) {
+	registry := tools.NewRegistry()
+	repotree.Register(registry)
+	enabled, err := registry.Enable([]string{"repotree"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := &agentState{
+		repo:     &fakeSourceRepo{files: map[string]string{"test/e2e/capi_test.go": "package e2e\n"}},
+		registry: registry, enabledTools: enabled, cache: tools.NewCache(),
+		opts: AgenticOptions{ModelByteBudget: 100_000, GCSByteBudget: 100_000}, startTime: time.Now(),
+		readArtifactsFull: map[string]bool{}, readArtifactsBase: map[string]bool{},
+	}
+	arguments, _ := json.Marshal(map[string]interface{}{"path": "test/e2e/capi_test.go"})
+	dispatchAgenticTool(context.Background(), state, modelToolCall{ID: "repo", Type: "function", Function: modelFunction{Name: "read_repo_file", Arguments: string(arguments)}})
+	if state.gcsBytes != 0 {
+		t.Fatalf("repo bytes counted as GCS: %d", state.gcsBytes)
+	}
+	if !state.readSourceFull["test/e2e/capi_test.go"] {
+		t.Fatalf("repo read path not recorded: %v", state.readSourceFull)
+	}
+	if len(state.evidenceArtifactsFull) != 0 {
+		t.Fatalf("repo read satisfied artifact evidence: %v", state.evidenceArtifactsFull)
 	}
 }

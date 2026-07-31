@@ -58,6 +58,7 @@ type Service struct {
 	// repo-relative file citations. Empty until SetSourceRepo.
 	sourceRepoOwner string
 	sourceRepoName  string
+	githubReadToken string
 
 	// patternRepo is the source-tree reader that grounds the recurring-pattern
 	// agent's repotree tools. nil disables tool grounding, leaving the tool-free
@@ -134,6 +135,9 @@ func (s *Service) SetSourceRepo(owner, name string) {
 	s.sourceRepoName = name
 }
 
+// SetGitHubReadToken installs the optional read-only source credential.
+func (s *Service) SetGitHubReadToken(token string) { s.githubReadToken = token }
+
 // SetPatternRepoReader installs the source-tree reader that grounds the
 // recurring-pattern agent. When set, AnalyzePattern runs a repotree tool loop
 // so the model verifies file and config paths against the real repo before
@@ -182,6 +186,7 @@ func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, b
 	}
 	userPrompt := s.module.AnalysisPrompt(ctx, httpClient, run, tc, consecutiveFailures)
 	if tc.AISummary != nil && tc.AIAnalysis != nil && !s.shouldReanalyzeWithPrompt(tc, userPrompt) {
+		s.refreshBuildFileLinks(ctx, httpClient, run, tc)
 		recordTrace(ctx, TraceEvent{Kind: "cache", Outcome: "build_hit"})
 		trace.Finish("build_cache_hit", nil)
 		return nil
@@ -218,7 +223,7 @@ func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, b
 	tc.AIAnalysis = analysis
 	if analysis != nil {
 		analysis.CacheGeneration = s.cacheGeneration
-		analysis.FileLinks = s.resolveFileLinks(ctx, httpClient, tc)
+		s.refreshBuildFileLinks(ctx, httpClient, run, tc)
 	}
 	if analysis != nil && analysis.CacheHit {
 		recordTrace(ctx, TraceEvent{Kind: "cache", Outcome: "ai_hit"})
@@ -227,6 +232,17 @@ func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, b
 		trace.Finish("success", nil)
 	}
 	return nil
+}
+
+func (s *Service) refreshBuildFileLinks(ctx context.Context, client *http.Client, run *models.BuildResult, tc *models.TestCase) {
+	if tc == nil || tc.AIAnalysis == nil || run == nil {
+		return
+	}
+	if source, ok := ResolveBuildSource(run.BuildInfo, s.sourceRepoOwner, s.sourceRepoName); ok {
+		tc.AIAnalysis.FileLinks = s.resolveFileLinksAtRef(ctx, client, tc, source.Revision)
+	} else {
+		tc.AIAnalysis.FileLinks = map[string]string{}
+	}
 }
 
 // runAgentic does the per-failure agentic call setup. Kept separate so
@@ -242,11 +258,25 @@ func (s *Service) runAgentic(ctx context.Context, jobID, buildPrefix string, run
 	cache := s.toolCacheFor(buildPrefix)
 	cacheKey := s.agenticCacheKey(jobID, run.BuildID, tc.Name, tc.FailureMessage)
 	opts := s.agenticOptionsFor(tc)
+	var enabledTools []string
+	for _, name := range s.enabledTools {
+		if !isRepoTool(name) {
+			enabledTools = append(enabledTools, name)
+		}
+	}
+	var repo tools.RepoReader
+	if source, ok := ResolveBuildSource(run.BuildInfo, s.sourceRepoOwner, s.sourceRepoName); ok {
+		repo = NewGitHubRepoReader(source.Owner, source.Name, source.Revision, s.githubReadToken)
+		enabledTools = append(enabledTools, "grep_repo", "list_repo_tree", "read_repo_file")
+	}
 	in := AgenticInputs{
 		Browser:                browser,
 		Opts:                   opts,
 		Registry:               s.registry,
-		EnabledTools:           s.enabledTools,
+		EnabledTools:           enabledTools,
+		Repo:                   repo,
+		SourceOwner:            s.sourceRepoOwner,
+		SourceName:             s.sourceRepoName,
 		Cache:                  cache,
 		WebURLBase:             run.WebURL,
 		Mode:                   AgenticMode,
@@ -274,7 +304,7 @@ func (s *Service) toolCacheFor(buildPrefix string) *tools.Cache {
 	if existing, ok := s.toolCaches.Load(buildPrefix); ok {
 		return existing.(*tools.Cache)
 	}
-	fresh := tools.NewCache()
+	fresh := tools.NewBoundedCache(512, 64<<20)
 	actual, _ := s.toolCaches.LoadOrStore(buildPrefix, fresh)
 	return actual.(*tools.Cache)
 }

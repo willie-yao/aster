@@ -4,10 +4,12 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
@@ -32,11 +34,11 @@ var trailingParenRe = regexp.MustCompile(`\s*\(.*\)$`)
 // "/"-separated segments ending in a known extension. Mirrors the frontend
 // PATH_RE so the keys it produces match the tokens the UI looks up. Only
 // source-file extensions are verified as GitHub links.
-var pathTokenRe = regexp.MustCompile(`(?:[\w.-]+/)+[\w.-]+\.(?:go|ya?ml|sh|json|tpl|md|log|txt|xml|out|conf)\b`)
+var pathTokenRe = regexp.MustCompile(`(?:[\w.@-]+/)+[\w.-]+\.(?:go|ya?ml|sh|json|tpl|md|log|txt|xml|out|conf|py|js|jsx|ts|tsx|java|rs|c|cc|cpp|h|hpp|proto|sql|toml|mod|sum)\b`)
 
 // sourceExtRe matches source-file extensions. Run artifacts are linked against
 // the build's GCS tree.
-var sourceExtRe = regexp.MustCompile(`\.(?:go|yaml|yml|sh|json|tpl|md)$`)
+var sourceExtRe = regexp.MustCompile(`\.(?:go|yaml|yml|sh|json|tpl|md|py|js|jsx|ts|tsx|java|rs|c|cc|cpp|h|hpp|proto|sql|toml|mod|sum)$`)
 
 // goImportMetaRe extracts the go-import meta tag's content. It may span
 // multiple lines and has shape "<import-prefix> <vcs> <repo-url>".
@@ -59,8 +61,14 @@ type FileLinkResolver struct {
 }
 
 // NewFileLinkResolver creates a reusable source-file verifier for one project.
-func NewFileLinkResolver(owner, repo string) *FileLinkResolver {
-	return &FileLinkResolver{service: Service{sourceRepoOwner: owner, sourceRepoName: repo}}
+func NewFileLinkResolver(owner, repo string, token ...string) *FileLinkResolver {
+	r := &FileLinkResolver{}
+	r.service.sourceRepoOwner = owner
+	r.service.sourceRepoName = repo
+	if len(token) > 0 {
+		r.service.githubReadToken = token[0]
+	}
+	return r
 }
 
 // Resolve returns the verified source-file links for one accepted analysis.
@@ -71,6 +79,14 @@ func (r *FileLinkResolver) Resolve(ctx context.Context, client *http.Client, tc 
 	return r.service.resolveFileLinks(ctx, client, tc)
 }
 
+// ResolveAtRef verifies source links at one immutable build commit.
+func (r *FileLinkResolver) ResolveAtRef(ctx context.Context, client *http.Client, tc *models.TestCase, ref string) map[string]string {
+	if r == nil {
+		return map[string]string{}
+	}
+	return r.service.resolveFileLinksAtRef(ctx, client, tc, ref)
+}
+
 // resolveFileLinks builds the verified GitHub link map for one analysis. It
 // gathers candidate source paths from relevant_files and the analysis prose,
 // resolves each to a verified GitHub blob URL, and returns only the paths that
@@ -78,6 +94,10 @@ func (r *FileLinkResolver) Resolve(ctx context.Context, client *http.Client, tc 
 // "file_links": {...}. An empty map means "verified, nothing to link" and is
 // distinct from absent on older data.
 func (s *Service) resolveFileLinks(ctx context.Context, client *http.Client, tc *models.TestCase) map[string]string {
+	return s.resolveFileLinksAtRef(ctx, client, tc, "HEAD")
+}
+
+func (s *Service) resolveFileLinksAtRef(ctx context.Context, client *http.Client, tc *models.TestCase, ref string) map[string]string {
 	links := map[string]string{}
 	if tc.AIAnalysis == nil {
 		return links
@@ -113,11 +133,61 @@ func (s *Service) resolveFileLinks(ctx context.Context, client *http.Client, tc 
 			break
 		}
 		n++
-		if url, ok := s.resolveSourceLink(ctx, client, clean); ok {
+		var url string
+		var ok bool
+		if ref != "" && ref != "HEAD" {
+			url, ok = s.resolveConfiguredSourceLinkAtRef(ctx, client, clean, ref)
+		} else {
+			url, ok = s.resolveSourceLink(ctx, client, clean)
+		}
+		if ok {
 			links[clean] = url
 		}
 	}
 	return links
+}
+
+func (s *Service) resolveConfiguredSourceLinkAtRef(ctx context.Context, client *http.Client, clean, ref string) (string, bool) {
+	path := normalizeConfiguredSourcePath(clean, s.sourceRepoOwner, s.sourceRepoName)
+	path, err := artifacts.SafePath(path)
+	if err != nil || path == "" || !s.verifyGitHubFileAtRef(ctx, client, s.sourceRepoOwner, s.sourceRepoName, ref, path) {
+		return "", false
+	}
+	return blobURLAtRef(s.sourceRepoOwner, s.sourceRepoName, ref, path), true
+}
+
+func normalizeConfiguredSourcePath(clean, owner, repo string) string {
+	clean = strings.TrimSpace(clean)
+	blobPrefix := "https://github.com/" + owner + "/" + repo + "/blob/"
+	schemeLessBlobPrefix := strings.TrimPrefix(blobPrefix, "https://")
+	if strings.HasPrefix(strings.ToLower(clean), strings.ToLower(blobPrefix)) || strings.HasPrefix(strings.ToLower(clean), strings.ToLower(schemeLessBlobPrefix)) {
+		if strings.HasPrefix(strings.ToLower(clean), strings.ToLower(schemeLessBlobPrefix)) {
+			blobPrefix = schemeLessBlobPrefix
+		}
+		rest := clean[len(blobPrefix):]
+		if slash := strings.Index(rest, "/"); slash >= 0 {
+			return rest[slash+1:]
+		}
+		return ""
+	}
+	prefixes := []string{"github.com/" + owner + "/" + repo + "/", owner + "/" + repo + "/", repo + "/"}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(strings.ToLower(clean), strings.ToLower(prefix)) {
+			return clean[len(prefix):]
+		}
+	}
+	if i := strings.Index(clean, "@v"); i > 0 {
+		if slash := strings.Index(clean[i:], "/"); slash >= 0 {
+			root := clean[:i]
+			rootLower := strings.ToLower(root)
+			if rootLower == strings.ToLower(repo) || rootLower == strings.ToLower(owner+"/"+repo) || rootLower == strings.ToLower("github.com/"+owner+"/"+repo) || rootLower == strings.ToLower("sigs.k8s.io/"+repo) {
+				clean = clean[i+slash+1:]
+			} else {
+				return ""
+			}
+		}
+	}
+	return strings.TrimPrefix(clean, "./")
 }
 
 // resolveSourceLink resolves a cleaned source path to a verified GitHub blob
@@ -244,7 +314,36 @@ func ownerRepoFromGitHubURL(url string) (owner, repo string, ok bool) {
 // verifyGitHubFile reports whether a file exists in a repo's default branch,
 // memoized per run by the raw URL.
 func (s *Service) verifyGitHubFile(ctx context.Context, client *http.Client, owner, repo, inRepoPath string) bool {
-	rawURL := rawContentBase + "/" + owner + "/" + repo + "/HEAD/" + inRepoPath
+	return s.verifyGitHubFileAtRef(ctx, client, owner, repo, "HEAD", inRepoPath)
+}
+
+func (s *Service) verifyGitHubFileAtRef(ctx context.Context, client *http.Client, owner, repo, ref, inRepoPath string) bool {
+	inRepoPath = citationStripRE.ReplaceAllString(strings.TrimSpace(inRepoPath), "")
+	if s.githubReadToken != "" {
+		segments := strings.Split(inRepoPath, "/")
+		for i := range segments {
+			segments[i] = url.PathEscape(segments[i])
+		}
+		u := githubAPIBase + "/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo) + "/contents/" + strings.Join(segments, "/") + "?ref=" + url.QueryEscape(ref)
+		if v, ok := s.linkVerifyCache.Load(u); ok {
+			return v.(bool)
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			return false
+		}
+		req.Header.Set("Authorization", "Bearer "+s.githubReadToken)
+		req.Header.Set("Accept", "application/vnd.github.raw+json")
+		resp, err := client.Do(req)
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		exists := resp.StatusCode >= 200 && resp.StatusCode < 300
+		s.linkVerifyCache.Store(u, exists)
+		return exists
+	}
+	rawURL := rawContentBase + "/" + owner + "/" + repo + "/" + ref + "/" + inRepoPath
 	if v, ok := s.linkVerifyCache.Load(rawURL); ok {
 		return v.(bool)
 	}
@@ -254,7 +353,11 @@ func (s *Service) verifyGitHubFile(ctx context.Context, client *http.Client, own
 }
 
 func blobURL(owner, repo, inRepoPath string) string {
-	return "https://github.com/" + owner + "/" + repo + "/blob/HEAD/" + inRepoPath
+	return blobURLAtRef(owner, repo, "HEAD", inRepoPath)
+}
+
+func blobURLAtRef(owner, repo, ref, inRepoPath string) string {
+	return "https://github.com/" + owner + "/" + repo + "/blob/" + ref + "/" + inRepoPath
 }
 
 // headOK issues a bounded HEAD request and reports a 2xx response.

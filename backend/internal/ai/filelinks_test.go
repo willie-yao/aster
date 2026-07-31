@@ -154,3 +154,25 @@ func (s *Service) cachedCount() int {
 	s.linkVerifyCache.Range(func(_, _ any) bool { n++; return true })
 	return n
 }
+
+func TestResolveFileLinksAtExactBuildCommit(t *testing.T) {
+	sha := strings.Repeat("a", 40)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/kubernetes-sigs/cluster-api-provider-azure/"+sha+"/test/e2e/capi_test.go" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	old := rawContentBase
+	rawContentBase = srv.URL
+	t.Cleanup(func() { rawContentBase = old })
+
+	r := NewFileLinkResolver("kubernetes-sigs", "cluster-api-provider-azure")
+	tc := &models.TestCase{AIAnalysis: &models.AIAnalysis{RelevantFiles: []string{"test/e2e/capi_test.go"}}}
+	links := r.ResolveAtRef(context.Background(), srv.Client(), tc, sha)
+	want := "https://github.com/kubernetes-sigs/cluster-api-provider-azure/blob/" + sha + "/test/e2e/capi_test.go"
+	if links["test/e2e/capi_test.go"] != want {
+		t.Fatalf("links = %v, want %s", links, want)
+	}
+}
