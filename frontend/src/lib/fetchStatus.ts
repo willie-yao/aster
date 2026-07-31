@@ -14,19 +14,7 @@ export interface FetchStatusCompactPresentation {
   label: string;
   ariaLabel: string;
   severity: FetchStatusPresentation["severity"];
-  quiet: boolean;
 }
-
-export interface FetchStatusPreferenceStorage {
-  getItem: (key: string) => string | null;
-  setItem: (key: string, value: string) => void;
-}
-
-export interface FetchStatusPreferenceScope {
-  readonly localStorage: FetchStatusPreferenceStorage;
-}
-
-export const FETCH_STATUS_IDLE_COMPACT_KEY = "prow-ai-dashboard.fetch-status.idle-compact";
 
 const patternFailureLabels: Record<string, string> = {
   ambiguous: "ambiguous response",
@@ -181,7 +169,6 @@ export function fetchStatusCompactPresentation(response: FetchStatusResponse): F
   if (!presentation || !status) return null;
   const analysis = analysisProgressBreakdown(status);
   let label = "Fetch";
-  let quiet = false;
   let severity = presentation.severity;
   switch (response.state) {
     case "active": {
@@ -191,12 +178,10 @@ export function fetchStatusCompactPresentation(response: FetchStatusResponse): F
     }
     case "idle":
       label = "Idle";
-      quiet = true;
       severity = "success";
       break;
     case "completed":
       label = "Complete";
-      quiet = true;
       severity = "success";
       break;
     case "failed":
@@ -216,7 +201,6 @@ export function fetchStatusCompactPresentation(response: FetchStatusResponse): F
     label,
     ariaLabel: `${presentation.ariaLabel} Open fetch status details.`,
     severity,
-    quiet,
   };
 }
 
@@ -227,33 +211,6 @@ export function patternFailureLabel(category?: string): string | null {
 
 export function fetchStatusStripKey(response: FetchStatusResponse): string {
   return `${response.status?.pass_id ?? "unknown"}:${response.state}`;
-}
-
-export function resolveFetchStatusPreferenceStorage(scope?: FetchStatusPreferenceScope | null): FetchStatusPreferenceStorage | null {
-  if (!scope) return null;
-  try {
-    return scope.localStorage;
-  } catch {
-    return null;
-  }
-}
-
-export function readFetchStatusIdleCompact(storage?: FetchStatusPreferenceStorage | null): boolean {
-  if (!storage) return false;
-  try {
-    return storage.getItem(FETCH_STATUS_IDLE_COMPACT_KEY) === "true";
-  } catch {
-    return false;
-  }
-}
-
-export function writeFetchStatusIdleCompact(value: boolean, storage?: FetchStatusPreferenceStorage | null): void {
-  if (!storage) return;
-  try {
-    storage.setItem(FETCH_STATUS_IDLE_COMPACT_KEY, value ? "true" : "false");
-  } catch {
-    // The preference is optional when storage is unavailable.
-  }
 }
 
 export function nextFetchStatusDelay(state: FetchStatusState | undefined, failures: number, baseDelay = 15_000, maxDelay = 120_000): number {

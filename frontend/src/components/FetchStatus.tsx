@@ -11,12 +11,10 @@ import CircularProgress from "@mui/material/CircularProgress";
 import Collapse from "@mui/material/Collapse";
 import Container from "@mui/material/Container";
 import Divider from "@mui/material/Divider";
-import FormControlLabel from "@mui/material/FormControlLabel";
 import IconButton from "@mui/material/IconButton";
 import LinearProgress from "@mui/material/LinearProgress";
 import Popover from "@mui/material/Popover";
 import Stack from "@mui/material/Stack";
-import Switch from "@mui/material/Switch";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
@@ -33,8 +31,6 @@ import { soft } from "../theme";
 
 interface FetchStatusControlProps {
   response: FetchStatusResponse | null;
-  idleCompact: boolean;
-  onIdleCompactChange: (value: boolean) => void;
 }
 
 interface FetchStatusStripProps {
@@ -181,7 +177,7 @@ function cacheRejectionDetail(status: FetchProgressStatus): string {
   return details.length > 0 ? details.join(" · ") : "0";
 }
 
-export function FetchStatusControl({ response, idleCompact, onIdleCompactChange }: FetchStatusControlProps) {
+export function FetchStatusControl({ response }: FetchStatusControlProps) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const [technicalOpen, setTechnicalOpen] = useState(false);
   const technicalID = useId();
@@ -190,7 +186,6 @@ export function FetchStatusControl({ response, idleCompact, onIdleCompactChange 
   const status = response?.status;
   if (!response || !compact || !presentation || !status) return null;
 
-  const iconOnly = compact.quiet && idleCompact;
   const popoverID = anchor ? "fetch-status-details" : undefined;
   const analysis = analysisProgressBreakdown(status);
   const patterns = status.patterns;
@@ -206,12 +201,12 @@ export function FetchStatusControl({ response, idleCompact, onIdleCompactChange 
       aria-controls={popoverID}
       aria-expanded={Boolean(anchor)}
       onClick={(event) => setAnchor(event.currentTarget)}
-      endIcon={iconOnly ? undefined : <ExpandMore sx={{ fontSize: 16 }} />}
+      endIcon={<ExpandMore sx={{ fontSize: 16 }} />}
       sx={{
-        minWidth: { xs: 34, md: iconOnly ? 34 : "auto" },
+        minWidth: { xs: 34, md: "auto" },
         width: { xs: 34, md: "auto" },
         height: 34,
-        px: { xs: 0, md: iconOnly ? 0 : 1.1 },
+        px: { xs: 0, md: 1.1 },
         border: "1px solid",
         borderColor: "divider",
         borderRadius: 999,
@@ -234,14 +229,14 @@ export function FetchStatusControl({ response, idleCompact, onIdleCompactChange 
         sx={{
           display: "inline-flex",
           alignItems: "center",
-          gap: { xs: 0, md: iconOnly ? 0 : 1 },
+          gap: { xs: 0, md: 1 },
         }}
       >
         {stateIcon(response)}
         <Box
           component="span"
           sx={{
-            display: { xs: "none", md: iconOnly ? "none" : "inline" },
+            display: { xs: "none", md: "inline" },
             color: "text.primary",
             fontSize: "0.75rem",
             fontWeight: 700,
@@ -255,7 +250,7 @@ export function FetchStatusControl({ response, idleCompact, onIdleCompactChange 
 
   return (
     <>
-      {iconOnly ? <Tooltip title={compact.label}>{control}</Tooltip> : control}
+      {control}
       <Popover
         id={popoverID}
         open={Boolean(anchor)}
@@ -411,23 +406,6 @@ export function FetchStatusControl({ response, idleCompact, onIdleCompactChange 
               )}
             </Stack>
           </Collapse>
-
-          <Divider sx={{ my: 1.5 }} />
-
-          <FormControlLabel
-            control={(
-              <Switch
-                size="small"
-                checked={idleCompact}
-                onChange={(event) => onIdleCompactChange(event.target.checked)}
-              />
-            )}
-            label="Hide idle status label"
-            sx={{ m: 0, "& .MuiFormControlLabel-label": { fontSize: "0.8125rem" } }}
-          />
-          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.25 }}>
-            The status icon remains available in the header.
-          </Typography>
         </Box>
       </Popover>
     </>
