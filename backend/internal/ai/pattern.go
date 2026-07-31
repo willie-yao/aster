@@ -79,6 +79,15 @@ type patternResponse struct {
 	Summary         string   `json:"summary"`
 }
 
+type patternCacheData struct {
+	Version   int               `json:"version"`
+	Response  patternResponse   `json:"response"`
+	FileLinks map[string]string `json:"file_links,omitempty"`
+	SourceRef string            `json:"source_ref,omitempty"`
+}
+
+func mustJSON(v any) []byte { b, _ := json.Marshal(v); return b }
+
 type patternValidationCategory string
 
 const (
@@ -300,25 +309,46 @@ func (s *Service) AnalyzePatternWithOptions(ctx context.Context, jobID, subject 
 	grounded := s.patternRepo != nil
 	groundKey := "toolfree"
 	if grounded {
+		if resolver, ok := s.patternRepo.(interface{ ResolveRef(context.Context) error }); ok {
+			if err := resolver.ResolveRef(ctx); err != nil {
+				return nil, err
+			}
+		}
 		groundKey = "grounded:" + s.sourceRepoOwner + "/" + s.sourceRepoName
+		if identity, ok := s.patternRepo.(interface {
+			SourceIdentity() (string, string, string)
+		}); ok {
+			_, _, ref := identity.SourceIdentity()
+			groundKey += "@" + ref
+		}
 	}
 
 	key := patternCacheKey(s.module.Name(), s.cacheGeneration, jobID, subject, userPrompt, groundKey, s.client.modelFingerprint())
 	buildIDs := patternBuildIDs(failures)
 	if raw, ok := s.client.cache.Get(key); ok {
+		var cachedData patternCacheData
+		if json.Unmarshal(raw, &cachedData) == nil && cachedData.Version == 1 {
+			if _, _, err := parsePatternResponseWithStats(string(mustJSON(cachedData.Response)), buildIDs); err == nil {
+				if options.OnCacheHit != nil {
+					options.OnCacheHit()
+				}
+				return buildPatternAnalysis(subject, len(failures), cachedData.Response, collectRelevantFiles(failures), cachedData.FileLinks, cachedData.SourceRef), nil
+			}
+		}
 		if cached, stats, err := parsePatternResponseWithStats(string(raw), buildIDs); err == nil {
 			if options.OnCacheHit != nil {
 				options.OnCacheHit()
 			}
 			recordPatternParseTrace(ctx, "cache", stats, nil)
-			return buildPatternAnalysis(subject, len(failures), cached, collectRelevantFiles(failures)), nil
+			return buildPatternAnalysis(subject, len(failures), cached, collectRelevantFiles(failures), nil, ""), nil
 		}
 	}
 
 	var parsed patternResponse
+	var sourceReads []string
 	var err error
 	if grounded {
-		parsed, err = s.groundedPatternVerdict(ctx, userPrompt, buildIDs, options)
+		parsed, sourceReads, err = s.groundedPatternVerdict(ctx, userPrompt, buildIDs, options)
 	} else {
 		parsed, err = s.toolFreePatternVerdict(ctx, userPrompt, buildIDs, options)
 	}
@@ -326,9 +356,16 @@ func (s *Service) AnalyzePatternWithOptions(ctx context.Context, jobID, subject 
 		return nil, err
 	}
 
-	s.guardPatternPaths(ctx, &parsed)
-	_ = s.client.cache.Set(key, parsed)
-	return buildPatternAnalysis(subject, len(failures), parsed, collectRelevantFiles(failures)), nil
+	var fileLinks map[string]string
+	var sourceRef string
+	if grounded {
+		parsed.SuggestedFix = removeUnreadPatternPaths(parsed.SuggestedFix, sourceReads)
+		fileLinks, sourceRef = s.patternFileLinks(parsed, sourceReads)
+	} else {
+		s.guardPatternPaths(ctx, &parsed)
+	}
+	_ = s.client.cache.Set(key, patternCacheData{Version: 1, Response: parsed, FileLinks: fileLinks, SourceRef: sourceRef})
+	return buildPatternAnalysis(subject, len(failures), parsed, collectRelevantFiles(failures), fileLinks, sourceRef), nil
 }
 
 // BuildPatternInput renders the pattern-analysis contract.
@@ -355,7 +392,73 @@ func ParsePatternResult(subject string, failures []PatternFailure, result string
 	// The Orka correlation task has no source-repository tools. Mark every path
 	// it introduces as unverified rather than presenting a guessed target as fact.
 	parsed.SuggestedFix = annotateUnverifiedPaths(parsed.SuggestedFix, func(string) bool { return false })
-	return buildPatternAnalysis(subject, len(failures), parsed, collectRelevantFiles(failures)), nil
+	return buildPatternAnalysis(subject, len(failures), parsed, collectRelevantFiles(failures), nil, ""), nil
+}
+
+type trackingPatternRepo struct {
+	inner    tools.RepoReader
+	reads    map[string]bool
+	listTree func(context.Context) ([]string, error)
+}
+
+func (r *trackingPatternRepo) ListTree(ctx context.Context) ([]string, error) {
+	if r.listTree != nil {
+		return r.listTree(ctx)
+	}
+	return r.inner.ListTree(ctx)
+}
+func (r *trackingPatternRepo) ReadFile(ctx context.Context, path string) (string, bool, error) {
+	content, found, err := r.inner.ReadFile(ctx, path)
+	if err == nil && found {
+		r.reads[path] = true
+	}
+	return content, found, err
+}
+func (r *trackingPatternRepo) Paths() []string {
+	paths := make([]string, 0, len(r.reads))
+	for p := range r.reads {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+func removeUnreadPatternPaths(text string, reads []string) string {
+	read := map[string]bool{}
+	for _, p := range reads {
+		read[p] = true
+	}
+	return patternPathRe.ReplaceAllStringFunc(text, func(match string) string {
+		if read[strings.TrimPrefix(match, "./")] {
+			return match
+		}
+		return "the verified source location"
+	})
+}
+
+func (s *Service) patternFileLinks(p patternResponse, reads []string) (map[string]string, string) {
+	links := map[string]string{}
+	owner, repo, ref := s.sourceRepoOwner, s.sourceRepoName, "HEAD"
+	if identity, ok := s.patternRepo.(interface {
+		SourceIdentity() (string, string, string)
+	}); ok {
+		owner, repo, ref = identity.SourceIdentity()
+	}
+	read := map[string]bool{}
+	for _, path := range reads {
+		read[path] = true
+	}
+	text := p.SharedRootCause + "\n" + p.SuggestedFix + "\n" + p.Summary
+	for _, match := range patternPathRe.FindAllString(text, -1) {
+		clean := strings.TrimPrefix(match, "./")
+		if read[clean] {
+			links[clean] = blobURLAtRef(owner, repo, ref, clean)
+		}
+	}
+	if len(links) == 0 {
+		return nil, owner + "/" + repo + "@" + ref
+	}
+	return links, owner + "/" + repo + "@" + ref
 }
 
 // toolFreePatternVerdict makes one correlation call without tools.
@@ -379,29 +482,30 @@ func (s *Service) toolFreePatternVerdict(ctx context.Context, userPrompt string,
 }
 
 // groundedPatternVerdict runs one correlation as a repotree tool loop.
-func (s *Service) groundedPatternVerdict(ctx context.Context, userPrompt string, buildIDs map[string]struct{}, options PatternAnalyzeOptions) (patternResponse, error) {
+func (s *Service) groundedPatternVerdict(ctx context.Context, userPrompt string, buildIDs map[string]struct{}, options PatternAnalyzeOptions) (patternResponse, []string, error) {
 	reg := tools.NewRegistry()
 	repotree.Register(reg)
 	enabled, err := reg.Enable([]string{repotree.Group})
 	if err != nil {
-		return patternResponse{}, fmt.Errorf("enabling repo tools: %w", err)
+		return patternResponse{}, nil, fmt.Errorf("enabling repo tools: %w", err)
 	}
-	env := &tools.Env{Repo: s.patternRepo, Cache: s.patternToolCache()}
+	tracker := &trackingPatternRepo{inner: s.patternRepo, reads: map[string]bool{}, listTree: s.patternRepoTree}
+	env := &tools.Env{Repo: tracker, Cache: tools.NewBoundedCache(128, 16<<20)}
 	started := time.Now()
 	out, err := s.client.ToolLoop(ctx, patternGroundedSystemPrompt, userPrompt, reg, enabled, env,
 		ToolLoopOptions{MaxIters: patternMaxIters, MinToolCalls: 1, SingleToolCall: true, PropagateFinalizeError: true})
 	if err != nil {
 		err = safePatternProviderError(err)
 		recordTrace(ctx, TraceEvent{Kind: "pattern_request", Status: "grounded", Outcome: "error", DurationMs: int(time.Since(started) / time.Millisecond), ErrorCode: patternTraceErrorCode(err)})
-		return patternResponse{}, err
+		return patternResponse{}, nil, err
 	}
 	recordTrace(ctx, TraceEvent{Kind: "pattern_request", Status: "grounded", Outcome: "success", DurationMs: int(time.Since(started) / time.Millisecond)})
 	if strings.TrimSpace(out) == "" {
-		return patternResponse{}, &patternValidationError{category: patternValidationMissing}
+		return patternResponse{}, nil, &patternValidationError{category: patternValidationMissing}
 	}
 	parsed, perr := s.parsePatternOutput(ctx, "grounded", out, buildIDs, options)
 	if perr == nil || patternValidationCategoryOf(perr) != patternValidationMissing {
-		return parsed, perr
+		return parsed, tracker.Paths(), perr
 	}
 
 	extract := "Extract the correlation verdict this investigation reached as JSON with exactly these keys: " +
@@ -412,10 +516,11 @@ func (s *Service) groundedPatternVerdict(ctx context.Context, userPrompt string,
 	if err != nil {
 		err = safePatternProviderError(err)
 		recordTrace(ctx, TraceEvent{Kind: "pattern_request", Status: "extraction", Outcome: "error", DurationMs: int(time.Since(started) / time.Millisecond), ErrorCode: patternTraceErrorCode(err)})
-		return patternResponse{}, err
+		return patternResponse{}, nil, err
 	}
 	recordTrace(ctx, TraceEvent{Kind: "pattern_request", Status: "extraction", Outcome: "success", DurationMs: int(time.Since(started) / time.Millisecond)})
-	return s.parsePatternOutput(ctx, "extraction", out2, buildIDs, options)
+	parsed, err = s.parsePatternOutput(ctx, "extraction", out2, buildIDs, options)
+	return parsed, tracker.Paths(), err
 }
 
 func (s *Service) parsePatternOutput(ctx context.Context, stage, output string, buildIDs map[string]struct{}, options PatternAnalyzeOptions) (patternResponse, error) {
@@ -749,7 +854,7 @@ func collectRelevantFiles(failures []PatternFailure) []string {
 }
 
 // buildPatternAnalysis converts a parsed verdict into the published model.
-func buildPatternAnalysis(subject string, builds int, p patternResponse, relevantFiles []string) *models.PatternAnalysis {
+func buildPatternAnalysis(subject string, builds int, p patternResponse, relevantFiles []string, fileLinks map[string]string, sourceRef string) *models.PatternAnalysis {
 	conf := strings.ToLower(strings.TrimSpace(p.Confidence))
 	switch conf {
 	case "high", "medium", "low":
@@ -767,6 +872,8 @@ func buildPatternAnalysis(subject string, builds int, p patternResponse, relevan
 		SuggestedFix:    strings.TrimSpace(p.SuggestedFix),
 		Summary:         strings.TrimSpace(p.Summary),
 		RelevantFiles:   relevantFiles,
+		FileLinks:       fileLinks,
+		SourceRef:       sourceRef,
 	}
 }
 
@@ -825,10 +932,9 @@ func clampPattern(s string, max int) string {
 
 // patternPathRe matches repo-relative-looking file paths embedded in prose,
 // with or without a directory prefix, ending in a source or config extension.
-// Bounded to real file references so it does not flag incidental words. Log and
-// prose extensions (.log/.txt/.md) are excluded because suggested_fix names
-// files to change, not evidence artifacts.
-var patternPathRe = regexp.MustCompile(`(?:[A-Za-z0-9_.\-]+/)*[A-Za-z0-9_.\-]+\.(?:go|ya?ml|sh|json|tpl|star|bzl|toml|cfg|conf|mod)`)
+// Bounded to real file references so it does not flag incidental words. Runtime
+// artifact extensions are excluded because suggested_fix names files to change.
+var patternPathRe = regexp.MustCompile(`(?:[A-Za-z0-9_.\-]+/)*[A-Za-z0-9_.\-]+\.(?:go|ya?ml|sh|json|tpl|star|bzl|toml|cfg|conf|mod|sum|md|py|js|jsx|ts|tsx|java|rs|c|cc|cpp|h|hpp|proto|sql)\b`)
 
 // guardPatternPaths annotates any file path in the verdict's suggested fix that
 // does not exist in the source repo, so a fabricated citation is marked
@@ -909,15 +1015,4 @@ func (s *Service) patternRepoTree(ctx context.Context) ([]string, error) {
 	s.patternTree, s.patternTreeErr = s.patternRepo.ListTree(ctx)
 	s.patternTreeDone = true
 	return s.patternTree, s.patternTreeErr
-}
-
-// patternToolCache returns the tools.Cache shared across all pattern tool loops
-// in a run, so repotree memoizes the tree and file reads once across jobs.
-func (s *Service) patternToolCache() *tools.Cache {
-	s.patternTreeMu.Lock()
-	defer s.patternTreeMu.Unlock()
-	if s.patternCache == nil {
-		s.patternCache = tools.NewCache()
-	}
-	return s.patternCache
 }

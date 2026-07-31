@@ -151,10 +151,34 @@ func TestAnalyzePattern_GroundedToolLoop(t *testing.T) {
 	if pa == nil || !pa.Systemic {
 		t.Fatalf("expected systemic verdict, got %+v", pa)
 	}
-	if !strings.Contains(pa.SuggestedFix, "cluster-template-azure-linux.yaml (unverified path)") {
-		t.Errorf("fabricated path should be annotated, got: %q", pa.SuggestedFix)
+	if strings.Contains(pa.SuggestedFix, "cluster-template-azure-linux.yaml") || strings.Contains(pa.SuggestedFix, "unverified path") {
+		t.Errorf("unread grounded path should be removed, got: %q", pa.SuggestedFix)
 	}
 	if strings.Contains(pa.SuggestedFix, "azure_test.go (unverified path)") {
 		t.Errorf("real path must not be annotated, got: %q", pa.SuggestedFix)
+	}
+	if len(pa.FileLinks) != 0 || pa.SourceRef != "willie-yao/cluster-api-provider-azure@HEAD" {
+		t.Fatalf("grounded provenance = links:%v ref:%q", pa.FileLinks, pa.SourceRef)
+	}
+}
+
+func TestPatternFileLinksIncludeOnlyReadCitations(t *testing.T) {
+	s := &Service{sourceRepoOwner: "o", sourceRepoName: "r", patternRepo: &fakeRepoReader{files: map[string]string{"config/controller.yaml": "enabled"}}}
+	links, ref := s.patternFileLinks(patternResponse{SuggestedFix: "Update config/controller.yaml and config/guessed.yaml."}, []string{"config/controller.yaml"})
+	if links["config/controller.yaml"] != "https://github.com/o/r/blob/HEAD/config/controller.yaml" || links["config/guessed.yaml"] != "" || ref != "o/r@HEAD" {
+		t.Fatalf("links=%v ref=%q", links, ref)
+	}
+}
+
+func TestGroundedPatternPathsCoverSupportedSourceExtensions(t *testing.T) {
+	fix := removeUnreadPatternPaths("Update src/controller.ts and src/guessed.py.", []string{"src/controller.ts"})
+	if fix != "Update src/controller.ts and the verified source location." {
+		t.Fatalf("suggested fix = %q", fix)
+	}
+
+	s := &Service{sourceRepoOwner: "o", sourceRepoName: "r", patternRepo: &fakeRepoReader{}}
+	links, _ := s.patternFileLinks(patternResponse{SuggestedFix: fix}, []string{"src/controller.ts"})
+	if links["src/controller.ts"] != "https://github.com/o/r/blob/HEAD/src/controller.ts" {
+		t.Fatalf("links = %v", links)
 	}
 }

@@ -308,7 +308,9 @@ type PatternAnalysis struct {
 	SuggestedFix string `json:"suggested_fix,omitempty"`
 	// RelevantFiles are the source files the per-build analyses implicated,
 	// unioned across builds. They ground the fix harness's target selection.
-	RelevantFiles []string `json:"relevant_files,omitempty"`
+	RelevantFiles []string          `json:"relevant_files,omitempty"`
+	FileLinks     map[string]string `json:"file_links,omitempty"`
+	SourceRef     string            `json:"source_ref,omitempty"`
 	// Summary is a one-paragraph human-readable verdict.
 	Summary string `json:"summary"`
 }

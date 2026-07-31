@@ -82,6 +82,7 @@ export function PatternBanner({
       { buildLogUrl: run.build_log_url, webUrl: run.web_url } satisfies FileToUrlContext,
     ]),
   );
+  const patternFileCtx = { builds: buildContexts, fileLinks: pattern.file_links } satisfies FileToUrlContext;
   const isCurrent = !refreshStatus || refreshStatus.state === "current";
   const fixPatterns =
     isCurrent && pattern.id && pattern.content_hash && pattern.suggested_fix &&
@@ -184,13 +185,13 @@ export function PatternBanner({
         )}
 
         <Typography variant="body2" sx={{ whiteSpace: "pre-line", lineHeight: 1.6 }}>
-          <RichText text={pattern.summary} steps />
+          <RichText text={pattern.summary} steps fileCtx={patternFileCtx} />
         </Typography>
 
         {pattern.systemic && pattern.shared_root_cause && (
           <LabeledBlock label="Shared Root Cause" accent={color}>
             <Typography variant="body2" sx={{ whiteSpace: "pre-line", lineHeight: 1.6 }}>
-              <RichText text={pattern.shared_root_cause} steps />
+              <RichText text={pattern.shared_root_cause} steps fileCtx={patternFileCtx} />
             </Typography>
           </LabeledBlock>
         )}
@@ -198,9 +199,15 @@ export function PatternBanner({
         {pattern.systemic && pattern.suggested_fix && (
           <LabeledBlock label="Suggested Fix" accent="primary">
             <Typography variant="body2" sx={{ whiteSpace: "pre-line", lineHeight: 1.6 }}>
-              <RichText text={pattern.suggested_fix} steps />
+              <RichText text={pattern.suggested_fix} steps fileCtx={patternFileCtx} />
             </Typography>
           </LabeledBlock>
+        )}
+
+        {pattern.source_ref && (
+          <Typography variant="caption" color="text.secondary">
+            Source grounding: {pattern.source_ref}
+          </Typography>
         )}
 
         {pattern.systemic && pattern.shared_builds && pattern.shared_builds.length > 0 && (

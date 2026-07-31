@@ -65,15 +65,11 @@ type Service struct {
 	// correlation call plus the path-verification guard.
 	patternRepo tools.RepoReader
 
-	// patternTreeMu guards the per-run pattern memos below. patternTree caches
-	// the source repo's blob paths (one recursive listing per run) for the path
-	// guard; patternCache is the tools.Cache shared across pattern tool loops so
-	// repotree fetches the tree and files once across jobs.
+	// patternTreeMu guards the per-run source-tree memo used by pattern loops and path verification.
 	patternTreeMu   sync.Mutex
 	patternTree     []string
 	patternTreeErr  error
 	patternTreeDone bool
-	patternCache    *tools.Cache
 
 	// linkVerifyCache memoizes GitHub file-existence checks across all
 	// analyses in a run, keyed by "owner/repo/path" to existence.
