@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
@@ -29,7 +30,51 @@ type githubRepoReader struct {
 	ref    string
 	token  string
 	client *http.Client
+	mu     sync.Mutex
 }
+
+func (r *githubRepoReader) SourceIdentity() (string, string, string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.owner, r.repo, r.ref
+}
+func (r *githubRepoReader) ResolveRef(ctx context.Context) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.ref != "HEAD" {
+		return nil
+	}
+	u := fmt.Sprintf("%s/repos/%s/%s/commits/HEAD", githubAPIBase, r.owner, r.repo)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return err
+	}
+	if r.token != "" {
+		req.Header.Set("Authorization", "Bearer "+r.token)
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := r.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("resolving %s/%s HEAD: %s", r.owner, r.repo, resp.Status)
+	}
+	var out struct {
+		SHA string `json:"sha"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {
+		return err
+	}
+	if !fullSourceCommitRE.MatchString(out.SHA) {
+		return fmt.Errorf("resolving %s/%s HEAD returned invalid commit", r.owner, r.repo)
+	}
+	r.ref = strings.ToLower(out.SHA)
+	return nil
+}
+
+func (r *githubRepoReader) resolvedRef() string { r.mu.Lock(); defer r.mu.Unlock(); return r.ref }
 
 var githubAPIBase = "https://api.github.com"
 
@@ -52,8 +97,9 @@ func NewGitHubRepoReader(owner, repo, ref, token string) tools.RepoReader {
 // ListTree returns the repo's blob paths at the bound ref via the recursive
 // git-trees API.
 func (r *githubRepoReader) ListTree(ctx context.Context) ([]string, error) {
+	ref := r.resolvedRef()
 	u := fmt.Sprintf("%s/repos/%s/%s/git/trees/%s?recursive=1", githubAPIBase,
-		r.owner, r.repo, url.PathEscape(r.ref))
+		r.owner, r.repo, url.PathEscape(ref))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
@@ -104,9 +150,9 @@ func (r *githubRepoReader) ReadFile(ctx context.Context, path string) (string, b
 		return "", false, fmt.Errorf("invalid repository path: path is empty")
 	}
 	escaped := strings.Join(mapSegments(strings.Split(path, "/"), url.PathEscape), "/")
-	u := fmt.Sprintf("%s/%s/%s/%s/%s", rawContentBase, r.owner, r.repo, url.PathEscape(r.ref), escaped)
+	u := fmt.Sprintf("%s/%s/%s/%s/%s", rawContentBase, r.owner, r.repo, url.PathEscape(r.resolvedRef()), escaped)
 	if r.token != "" {
-		u = fmt.Sprintf("%s/repos/%s/%s/contents/%s?ref=%s", githubAPIBase, r.owner, r.repo, escaped, url.QueryEscape(r.ref))
+		u = fmt.Sprintf("%s/repos/%s/%s/contents/%s?ref=%s", githubAPIBase, r.owner, r.repo, escaped, url.QueryEscape(r.resolvedRef()))
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {

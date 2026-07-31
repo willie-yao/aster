@@ -211,6 +211,8 @@ export interface PatternAnalysis {
   shared_builds?: string[];
   suggested_fix?: string;
   relevant_files?: string[];
+  file_links?: Record<string, string>;
+  source_ref?: string;
   summary: string;
 }
 

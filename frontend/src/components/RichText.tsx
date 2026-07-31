@@ -56,7 +56,7 @@ function basename(path: string): string {
 // source or artifact extension. Trailing line refs such as :120 or :120-130 are
 // excluded so the path still resolves.
 const PATH_RE =
-  /(?:[\w.-]+\/)+[\w.-]+\.(?:go|ya?ml|sh|json|tpl|md|log|txt|xml|out|conf)\b/g;
+  /(?:[\w.-]+\/)+[\w.-]+\.(?:go|ya?ml|sh|json|tpl|md|log|txt|xml|out|conf|star|bzl|toml|cfg|mod|sum|py|js|jsx|ts|tsx|java|rs|c|cc|cpp|h|hpp|proto|sql)\b/g;
 
 // Linkify resolvable bare file paths in prose. Return the raw string when
 // nothing resolves so the parent's pre-line whitespace handling stays intact.
