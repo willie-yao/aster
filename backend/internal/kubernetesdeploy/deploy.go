@@ -185,6 +185,9 @@ func helmArgs(opts Options, skillPaths []string) []string {
 		args = []string{"template", opts.Release, opts.Chart, "--namespace", opts.Namespace}
 	} else {
 		args = []string{"upgrade", "--install", opts.Release, opts.Chart, "--namespace", opts.Namespace, "--create-namespace", "--kube-context", opts.KubeContext}
+		if opts.Action == "upgrade" {
+			args = append(args, "--reuse-values")
+		}
 	}
 	if opts.ChartVersion != "" {
 		args = append(args, "--version", opts.ChartVersion)
@@ -199,6 +202,9 @@ func helmArgs(opts Options, skillPaths []string) []string {
 	for _, path := range skillPaths {
 		key := strings.ReplaceAll(filepath.Base(path), ".", `\.`)
 		args = append(args, "--set-file", "project.skills."+key+"="+path)
+	}
+	if !opts.DryRun {
+		args = append(args, "--wait", "--rollback-on-failure")
 	}
 	return args
 }

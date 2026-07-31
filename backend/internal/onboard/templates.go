@@ -124,8 +124,20 @@ var k8sValuesTmpl = template.Must(template.New("values.yaml").Funcs(yamlTemplate
 # The Kubernetes deploy wrapper passes project.yaml, prompts/system.md, and
 # skills/* separately with --set-file.
 
+# Empty tag overrides let stable chart upgrades follow the chart appVersion
+# instead of retaining an older snapshot through --reuse-values.
+global:
+  imageTag: ""
 image:
-  tag: main
+  tag: ""
+analysisRuntime:
+  orkaContainer:
+    image:
+      tag: ""
+orka:
+  fixRuntime:
+    image:
+      tag: ""
 
 # The dashboard-owned analyzer runs inside the worker.
 mode: watch
@@ -189,8 +201,9 @@ skill bundle.
 ## Validate without cluster writes
 
 From a checkout of ` + "`willie-yao/prow-ai-dashboard`" + `, build the helper and
-render the release locally. The context is required for the later write but is
-not contacted by ` + "`--dry-run`" + `.
+render the release locally. Replace the chart-version placeholder with a
+published release. Live installs and upgrades require Helm 4. The context is
+required for the later write but is not contacted by ` + "`--dry-run`" + `.
 
 ` + "```bash" + `
 make build
@@ -200,7 +213,7 @@ make build
   --release {{.Namespace}} \
   --namespace {{.Namespace}} \
   --kube-context <context> \
-  --chart deploy/helm/prow-ai-dashboard \
+  --chart-version <chart-version> \
   --dry-run
 ` + "```" + `
 
@@ -213,13 +226,13 @@ make build
   --release {{.Namespace}} \
   --namespace {{.Namespace}} \
   --kube-context <context> \
-  --chart deploy/helm/prow-ai-dashboard
+  --chart-version <chart-version>
 ` + "```" + `
 
 ## Upgrade
 
-Edit image settings or other infrastructure values in ` + "`deploy/values.yaml`" + `,
-then run:
+Change ` + "`--chart-version`" + ` for a stable image-only upgrade, or edit other
+infrastructure values in ` + "`deploy/values.yaml`" + `, then run:
 
 ` + "```bash" + `
 ./bin/fetcher kubernetes upgrade \
@@ -228,11 +241,13 @@ then run:
   --release {{.Namespace}} \
   --namespace {{.Namespace}} \
   --kube-context <context> \
-  --chart deploy/helm/prow-ai-dashboard
+  --chart-version <chart-version>
 ` + "```" + `
 
-Image-only upgrades do not require editing ` + "`project.yaml`" + `. Every install or
-upgrade validates the project and prompt, validates consumer skills, and includes
+Image-only upgrades do not require editing ` + "`project.yaml`" + `. Upgrades reuse
+deployed values, apply the consumer values and current bundle, wait for
+readiness, and roll back on failure. Every install or upgrade validates the
+project and prompt, validates consumer skills, and includes
 the current bundle in the chart-managed ConfigMap. The ConfigMap mounts
 ` + "`project.yaml`" + `, ` + "`prompts/system.md`" + `, and each skill under ` + "`skills/`" + ` into
 the worker, fetcher, and interactive server pods that need them.

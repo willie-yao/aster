@@ -67,8 +67,6 @@ if grep -Fq 'stale.yaml:' "$tmp/bundle-skills.yaml"; then
   echo 'bundle skill override retained a stale values entry' >&2
   exit 1
 fi
-  exit 1
-fi
 for removed in orka-producer orka-ingestor orka-artifact-tool submit-analysis 'type: ai' 'kind: RoleBinding' 'kind: ValidatingAdmissionPolicy'; do
   if grep -Fq "$removed" "$tmp/default.yaml"; then
     echo "default render contains removed Orka analysis resource: $removed" >&2

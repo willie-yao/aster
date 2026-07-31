@@ -156,7 +156,8 @@ value.
 The wizard generates files only. It does not install Helm releases, write
 Kubernetes Secrets, configure ingress or DNS, or inspect a cluster. From an
 engine checkout, build the helper with `make build`, then validate the bundle
-without cluster writes:
+without cluster writes. Replace the chart-version placeholder with a published
+release. Live installs and upgrades require Helm 4.
 
 ```bash
 ./bin/fetcher kubernetes install \
@@ -165,13 +166,14 @@ without cluster writes:
   --release my-dashboard \
   --namespace dashboards \
   --kube-context my-cluster \
-  --chart deploy/helm/prow-ai-dashboard \
+  --chart-version <chart-version> \
   --dry-run
 ```
 
 Remove `--dry-run` for the fresh install. Later image, values, project, prompt,
-or skill changes use the same flags with `kubernetes upgrade`. Both commands
-run `helm upgrade --install`, and image-only upgrades do not require editing
+or skill changes use the same flags with `kubernetes upgrade`. Live commands
+wait and roll back on failure; upgrades also reuse deployed values. Image-only
+upgrades do not require editing
 `project.yaml`. The wrapper validates the current bundle and passes its files to
 the chart-managed ConfigMap on every run. See
 [Kubernetes with Helm](kubernetes.md#install-and-upgrade-a-consumer-bundle) for

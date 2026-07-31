@@ -123,16 +123,33 @@ func TestRunBuildsUpgradeInstallArguments(t *testing.T) {
 	got := runner.commands[0]
 	want := []string{
 		"upgrade", "--install", "capz", "./chart",
-		"--namespace", "capz-dynamo", "--create-namespace", "--kube-context", "h100",
+		"--namespace", "capz-dynamo", "--create-namespace", "--kube-context", "h100", "--reuse-values",
 		"--version", "1.2.3",
 		"--values", filepath.Join(dir, "deploy", "values.yaml"),
 		"--set-string", "project.existingConfigMap=",
 		"--set-json", "project.skills={}",
 		"--set-file", "project.config=" + filepath.Join(dir, "project.yaml"),
 		"--set-file", "project.systemPrompt=" + filepath.Join(dir, "prompts", "system.md"),
+		"--wait", "--rollback-on-failure",
 	}
 	if got.name != "helm" || !reflect.DeepEqual(got.args, want) {
 		t.Fatalf("command = %s %q\nwant helm %q", got.name, got.args, want)
+	}
+}
+
+func TestRunInstallDoesNotReuseMissingReleaseValues(t *testing.T) {
+	dir := writeBundle(t, minimalProject, "prompt")
+	runner := &recordingRunner{}
+
+	if err := run(context.Background(), baseOptions(dir), runner, io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	args := runner.commands[0].args
+	if slicesContain(args, "--reuse-values") {
+		t.Fatalf("fresh install unexpectedly reuses release values: %q", args)
+	}
+	if !containsPair(args, "--wait", "--rollback-on-failure") {
+		t.Fatalf("fresh install is not rollback guarded: %q", args)
 	}
 }
 
