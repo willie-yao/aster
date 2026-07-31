@@ -149,7 +149,7 @@ done
 [[ -n $version ]] || fail "--version is required"
 valid_version "$version" || fail "--version must be an immutable sha-<hex> or full semantic-version tag"
 
-for values_file in "${values_files[@]}"; do
+for values_file in ${values_files[@]+"${values_files[@]}"}; do
   [[ -f $values_file ]] || fail "values file not found: $values_file"
 done
 
@@ -157,6 +157,10 @@ helm_bin=${HELM:-helm}
 python_bin=${PYTHON:-python3}
 command -v "$helm_bin" >/dev/null 2>&1 || fail "Helm is required"
 command -v "$python_bin" >/dev/null 2>&1 || fail "Python 3 is required"
+helm_upgrade_help=$("$helm_bin" upgrade --help 2>/dev/null) || fail "could not read Helm upgrade help"
+if ! grep -Fq -- '--rollback-on-failure' <<< "$helm_upgrade_help"; then
+  fail "Helm 4 with --rollback-on-failure support is required"
+fi
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 chart=$script_dir/prow-ai-dashboard
@@ -209,10 +213,15 @@ fi
   --namespace "$namespace" > "$current_manifest"
 
 value_args=(-f "$current_values")
-upgrade_value_args=()
-for values_file in "${values_files[@]}"; do
+upgrade_args=(
+  upgrade "$release" "$chart"
+  --kube-context "$context"
+  --namespace "$namespace"
+  --reuse-values
+)
+for values_file in ${values_files[@]+"${values_files[@]}"}; do
   value_args+=(-f "$values_file")
-  upgrade_value_args+=(--values "$values_file")
+  upgrade_args+=(--values "$values_file")
 done
 set_args=(
   --set-string "global.imageTag=$version"
@@ -275,14 +284,8 @@ else
 fi
 
 echo "Upgrading $namespace/$release on context $context..."
-"$helm_bin" upgrade "$release" "$chart" \
-  --kube-context "$context" \
-  --namespace "$namespace" \
-  --reuse-values \
-  "${upgrade_value_args[@]}" \
-  "${set_args[@]}" \
-  --wait \
-  --rollback-on-failure
+upgrade_args+=("${set_args[@]}" --wait --rollback-on-failure)
+"$helm_bin" "${upgrade_args[@]}"
 
 status_json=$tmp/status.json
 "$helm_bin" status "$release" \

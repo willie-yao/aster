@@ -89,6 +89,14 @@ spec:
 MANIFEST
     ;;
   upgrade)
+    if [[ \${1:-} == --help ]]; then
+      if [[ \${FAKE_UNSUPPORTED_HELM:-false} == true ]]; then
+        printf '%s\n' 'Usage: helm upgrade'
+      else
+        printf '%s\n' '      --rollback-on-failure'
+      fi
+      exit 0
+    fi
     tag=missing
     for arg in "\$@"; do
       case \$arg in
@@ -187,7 +195,20 @@ if "$upgrade" --context h100 --namespace capz-dynamo --release capz \
 fi
 grep -Fq -- '--version is required' "$tmp/missing-version"
 
-upgrades_before=$(grep -c '^upgrade ' "$calls")
+helm_calls_before=$(wc -l < "$calls")
+if FAKE_UNSUPPORTED_HELM=true "$upgrade" \
+  --context h100 --namespace capz-dynamo --release capz \
+  --version sha-cafebabe > "$tmp/unsupported-helm" 2>&1; then
+  echo 'upgrade helper accepted Helm without rollback-on-failure support' >&2
+  exit 1
+fi
+grep -Fq 'Helm 4 with --rollback-on-failure support is required' "$tmp/unsupported-helm"
+if [[ $(wc -l < "$calls") -ne $((helm_calls_before + 1)) ]]; then
+  echo 'unsupported Helm reached release inspection' >&2
+  exit 1
+fi
+
+upgrades_before=$(grep -c '^upgrade <capz>' "$calls")
 if FAKE_MUTABLE_IMAGE=true "$upgrade" \
   --context h100 --namespace capz-dynamo --release capz \
   --version sha-cafebabe --values "$tmp/consumer-values.yaml" \
@@ -196,7 +217,7 @@ if FAKE_MUTABLE_IMAGE=true "$upgrade" \
   exit 1
 fi
 grep -Fq 'candidate image must use an immutable' "$tmp/mutable-candidate"
-if [[ $(grep -c '^upgrade ' "$calls") -ne $upgrades_before ]]; then
+if [[ $(grep -c '^upgrade <capz>' "$calls") -ne $upgrades_before ]]; then
   echo 'mutable candidate reached Helm upgrade' >&2
   exit 1
 fi
@@ -209,7 +230,7 @@ if FAKE_IMAGE_FAILURE=true "$upgrade" \
   exit 1
 fi
 grep -Fq 'image manifest is unavailable' "$tmp/missing-image"
-if [[ $(grep -c '^upgrade ' "$calls") -ne $upgrades_before ]]; then
+if [[ $(grep -c '^upgrade <capz>' "$calls") -ne $upgrades_before ]]; then
   echo 'missing image reached Helm upgrade' >&2
   exit 1
 fi

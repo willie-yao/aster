@@ -575,7 +575,8 @@ Image tags resolve in this order for the engine, analyzer, and fixer images:
 3. The chart `appVersion`
 
 Keep image-specific tags empty unless one image intentionally needs a different
-version. The two supported upgrade paths use the remaining levels.
+version. The two supported upgrade paths use the remaining levels. These commands
+require Helm 4, which renamed `--atomic` to `--rollback-on-failure`.
 
 ### Stable OCI release
 
