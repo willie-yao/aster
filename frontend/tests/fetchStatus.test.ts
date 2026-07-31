@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import test from "node:test";
 import {
   FETCH_STATUS_IDLE_COMPACT_KEY,
+  analysisProgressAccessibleDetail,
+  analysisProgressBreakdown,
   fetchStatusCompactPresentation,
   fetchStatusPresentation,
   fetchStatusStripKey,
@@ -13,6 +17,8 @@ import {
   writeFetchStatusIdleCompact,
 } from "../src/lib/fetchStatus.js";
 import type { FetchProgressStatus, FetchStatusResponse } from "../src/types/fetchStatus.js";
+
+const fetchStatusSource = readFileSync(resolve(process.cwd(), "src/components/FetchStatus.tsx"), "utf8");
 
 const activeStatus: FetchProgressStatus = {
   schema_version: 6,
@@ -30,28 +36,28 @@ const activeStatus: FetchProgressStatus = {
   jobs: { total: 28, completed: 28 },
   builds: { cached: 241, fetched: 29 },
   analyses: {
-    logical_total: 61,
-    accepted_cache_hits: 0,
-    compatible_results_reused: 0,
-    new_work: 0,
+    logical_total: 126,
+    accepted_cache_hits: 68,
+    compatible_results_reused: 2,
+    new_work: 44,
     stale_work: 0,
     cache_rejections: {
-      missing: 0,
+      missing: 44,
       expired: 0,
       tool_floor: 0,
       evidence_floor: 0,
       critique: 0,
       malformed: 0,
     },
-    queued: 35,
+    queued: 40,
     running: 2,
-    completed: 23,
-    failed: 1,
+    completed: 84,
+    failed: 0,
     cancelled: 0,
-    task_attempts: 0,
-    retries: 3,
-    existing_tasks_adopted: 0,
-    results_retrieved: 0,
+    task_attempts: 16,
+    retries: 0,
+    existing_tasks_adopted: 12,
+    results_retrieved: 14,
     result_retrieval_retries: 0,
   },
   pattern_phase: "pending",
@@ -63,41 +69,93 @@ function response(state: FetchStatusResponse["state"], status: FetchProgressStat
   return { available: true, state, stale: state === "stale", status };
 }
 
+test("analysis progress distinguishes reuse, adoption, and new Tasks", () => {
+  const progress = analysisProgressBreakdown(activeStatus);
+  assert.deepEqual(progress, {
+    total: 126,
+    ready: 84,
+    reusedFromCache: 68,
+    compatibleResults: 2,
+    reused: 70,
+    adopted: 12,
+    newAnalyzerTasksLowerBound: 4,
+    newlyAnalyzedLowerBound: 2,
+    analyzing: 2,
+    waiting: 40,
+    failed: 0,
+    cancelled: 0,
+    terminal: 84,
+  });
+  assert.equal(
+    analysisProgressAccessibleDetail(progress),
+    "84 of 126 results ready: 70 reused, 12 existing results adopted, at least 2 newly analyzed, 2 running, 40 waiting",
+  );
+});
+
+test("pending adopted Tasks keep new-work derivations as lower bounds", () => {
+  const progress = analysisProgressBreakdown({
+    ...activeStatus,
+    analyses: {
+      ...activeStatus.analyses,
+      task_attempts: 1,
+      retries: 0,
+      existing_tasks_adopted: 1,
+      results_retrieved: 1,
+    },
+  });
+  assert.equal(progress.newAnalyzerTasksLowerBound, 0);
+  assert.equal(progress.newlyAnalyzedLowerBound, 0);
+  assert.match(analysisProgressAccessibleDetail(progress), /at least 0 newly analyzed/);
+});
+
+test("analysis progress stays non-negative and removes retries from the new Task count", () => {
+  const progress = analysisProgressBreakdown({
+    ...activeStatus,
+    analyses: {
+      ...activeStatus.analyses,
+      logical_total: -1,
+      accepted_cache_hits: -2,
+      compatible_results_reused: -3,
+      task_attempts: 8,
+      retries: 2,
+      existing_tasks_adopted: 3,
+      results_retrieved: 1,
+      completed: -4,
+      running: -5,
+      queued: -6,
+      failed: 1,
+      cancelled: 1,
+    },
+  });
+  assert.equal(progress.total, 0);
+  assert.equal(progress.reused, 0);
+  assert.equal(progress.newAnalyzerTasksLowerBound, 3);
+  assert.equal(progress.newlyAnalyzedLowerBound, 0);
+  assert.equal(progress.ready, 0);
+  assert.equal(progress.analyzing, 0);
+  assert.equal(progress.waiting, 0);
+  assert.equal(progress.terminal, 2);
+});
+
 test("fetch status presentation covers active idle failed and stale states", () => {
   const active = fetchStatusPresentation(response("active"));
-  assert.equal(active?.title, "Fetch in progress: Analysis");
-  assert.equal(active?.detail, "24 of 61 analyses complete, 2 running, 35 queued, 3 retries");
-  assert.equal(active?.determinateTotal, 61);
-  assert.equal(active?.determinateCompleted, 24);
-  assert.ok(active?.ariaLabel.includes("Fetch in progress"));
-  const attempts = fetchStatusPresentation(response("active", {
-    ...activeStatus,
-    analyses: { ...activeStatus.analyses, task_attempts: 27, checkpoint_committed: true },
-  }));
-  assert.ok(attempts?.detail.includes("27 Task attempts"));
-  assert.ok(attempts?.detail.includes("analysis checkpoint saved"));
-  const oneRetry = fetchStatusPresentation(response("active", {
-    ...activeStatus,
-    analyses: { ...activeStatus.analyses, retries: 1 },
-  }));
-  assert.ok(oneRetry?.detail.includes("1 retry"));
-  assert.ok(!oneRetry?.detail.includes("1 retries"));
+  assert.equal(active?.title, "84 of 126 results ready");
+  assert.equal(active?.detail, "70 reused · 12 adopted · ≥2 new · 2 analyzing · 40 waiting");
+  assert.equal(active?.announcement, "Fetch in progress: Analysis");
+  assert.equal(active?.determinateTotal, 126);
+  assert.equal(active?.determinateCompleted, 84);
+  assert.equal(
+    active?.ariaLabel,
+    "Fetch in progress: Analysis. 84 of 126 results ready: 70 reused, 12 existing results adopted, at least 2 newly analyzed, 2 running, 40 waiting.",
+  );
 
-  const patternRetry = fetchStatusPresentation(response("active", {
+  const terminalFailures = fetchStatusPresentation(response("active", {
     ...activeStatus,
-    phase: "patterns",
-    patterns: {
-      eligible: 2, completed: 1, failed: 1, attempts: 3, retries: 1, cache_hits: 1,
-      repairs: 1, repair_failed: 1, repair_failure_category: "schema", failure_category: "ambiguous", retained: 1,
-    },
+    analyses: { ...activeStatus.analyses, completed: 82, failed: 1, cancelled: 1 },
   }));
-  assert.ok(patternRetry?.detail.includes("3 pattern attempts"));
-  assert.ok(patternRetry?.detail.includes("1 pattern retry"));
-  assert.ok(patternRetry?.detail.includes("1 pattern cache hit"));
-  assert.ok(patternRetry?.detail.includes("1 ambiguity repair"));
-  assert.ok(patternRetry?.detail.includes("repair failure: invalid schema"));
-  assert.ok(patternRetry?.detail.includes("1 last-known-good pattern"));
-  assert.ok(patternRetry?.detail.includes("pattern failure: ambiguous response"));
+  assert.equal(terminalFailures?.title, "82 of 126 results ready");
+  assert.equal(terminalFailures?.determinateCompleted, 84);
+  assert.match(terminalFailures?.detail ?? "", /1 failed · 1 cancelled/);
 
   const idle = fetchStatusPresentation(response("idle", {
     ...activeStatus,
@@ -137,7 +195,8 @@ test("fetch status presentation covers active idle failed and stale states", () 
 
 test("compact fetch status distinguishes quiet and attention states", () => {
   const active = fetchStatusCompactPresentation(response("active"));
-  assert.equal(active?.label, "Analysis 24/61");
+  assert.equal(active?.label, "84/126 ready");
+  assert.match(active?.ariaLabel ?? "", /at least 2 newly analyzed/);
   assert.equal(active?.quiet, false);
   assert.equal(active?.severity, "info");
 
@@ -161,6 +220,33 @@ test("compact fetch status distinguishes quiet and attention states", () => {
   assert.equal(failed?.severity, "error");
   assert.equal(fetchStatusStripKey(response("active")), "safe-pass:active");
   assert.equal(fetchStatusStripKey(response("failed")), "safe-pass:failed");
+});
+
+
+test("fetch status popover presents the user-facing breakdown before technical counters", () => {
+  for (const label of [
+    "Results ready",
+    "Reused from cache",
+    "Compatible results",
+    "Existing results adopted",
+    "New analyzer Tasks",
+    "Currently analyzing",
+    "Waiting to check",
+    "Failures",
+    "Technical details",
+  ]) {
+    assert.match(fetchStatusSource, new RegExp(label));
+  }
+  assert.match(fetchStatusSource, /including adopted existing Tasks/);
+  assert.match(fetchStatusSource, /Lower-bound counts/);
+  assert.match(fetchStatusSource, /<Collapse in=\{technicalOpen\}/);
+  assert.match(fetchStatusSource, /<CircularProgress\s+aria-hidden="true"\s+role="presentation"/);
+});
+
+test("polling counters are not inside the live status announcement", () => {
+  assert.match(fetchStatusSource, /role="region"[\s\S]*aria-label=\{presentation\.ariaLabel\}/);
+  assert.match(fetchStatusSource, /role="status"[\s\S]*aria-live="polite"[\s\S]*\{presentation\.announcement\}/);
+  assert.doesNotMatch(fetchStatusSource, /role="status"\s+aria-live="polite"\s+aria-label=\{presentation\.ariaLabel\}/);
 });
 
 test("idle compact preference is optional and persistent", () => {

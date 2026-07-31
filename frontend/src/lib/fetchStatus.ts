@@ -4,6 +4,7 @@ export interface FetchStatusPresentation {
   title: string;
   detail: string;
   ariaLabel: string;
+  announcement: string;
   severity: "info" | "warning" | "error" | "success";
   determinateTotal: number | null;
   determinateCompleted: number;
@@ -62,37 +63,79 @@ const phaseLabels: Record<string, string> = {
   interrupted: "Interrupted",
 };
 
+export interface AnalysisProgressBreakdown {
+  total: number;
+  ready: number;
+  reusedFromCache: number;
+  compatibleResults: number;
+  reused: number;
+  adopted: number;
+  newAnalyzerTasksLowerBound: number;
+  newlyAnalyzedLowerBound: number;
+  analyzing: number;
+  waiting: number;
+  failed: number;
+  cancelled: number;
+  terminal: number;
+}
+
+function nonNegative(value: number | undefined): number {
+  return Math.max(0, value ?? 0);
+}
+
+export function analysisProgressBreakdown(status: FetchProgressStatus): AnalysisProgressBreakdown {
+  const analyses = status.analyses;
+  const reusedFromCache = nonNegative(analyses.accepted_cache_hits);
+  const compatibleResults = nonNegative(analyses.compatible_results_reused);
+  const adopted = nonNegative(analyses.existing_tasks_adopted);
+  const retries = nonNegative(analyses.retries);
+  const ready = nonNegative(analyses.completed);
+  const failed = nonNegative(analyses.failed);
+  const cancelled = nonNegative(analyses.cancelled);
+  return {
+    total: nonNegative(analyses.logical_total),
+    ready,
+    reusedFromCache,
+    compatibleResults,
+    reused: reusedFromCache + compatibleResults,
+    adopted,
+    newAnalyzerTasksLowerBound: Math.max(0, nonNegative(analyses.task_attempts) - retries - adopted),
+    newlyAnalyzedLowerBound: Math.max(0, nonNegative(analyses.results_retrieved) - adopted),
+    analyzing: nonNegative(analyses.running),
+    waiting: nonNegative(analyses.queued),
+    failed,
+    cancelled,
+    terminal: ready + failed + cancelled,
+  };
+}
+
+export function analysisProgressAccessibleDetail(progress: AnalysisProgressBreakdown): string {
+  const failureDetail = progress.failed > 0 || progress.cancelled > 0
+    ? `, ${progress.failed} failed, ${progress.cancelled} cancelled`
+    : "";
+  return `${progress.ready} of ${progress.total} results ready: ${progress.reused} reused, ${progress.adopted} existing results adopted, at least ${progress.newlyAnalyzedLowerBound} newly analyzed, ${progress.analyzing} running, ${progress.waiting} waiting${failureDetail}`;
+}
+
+export function analysisProgressStripDetail(progress: AnalysisProgressBreakdown): string {
+  const failureDetail = progress.failed > 0 || progress.cancelled > 0
+    ? ` · ${progress.failed} failed · ${progress.cancelled} cancelled`
+    : "";
+  return `${progress.reused} reused · ${progress.adopted} adopted · ≥${progress.newlyAnalyzedLowerBound} new · ${progress.analyzing} analyzing · ${progress.waiting} waiting${failureDetail}`;
+}
+
 export function fetchStatusPresentation(response: FetchStatusResponse): FetchStatusPresentation | null {
   const status = response.status;
   if (!response.available || !status) return null;
   const phase = phaseLabels[status.phase] ?? "Fetch";
-  const analysesDone = status.analyses.completed + status.analyses.failed + status.analyses.cancelled;
-  const logicalDetail = status.analyses.logical_total > 0
-    ? `${analysesDone} of ${status.analyses.logical_total} analyses complete, ${status.analyses.running} running, ${status.analyses.queued} queued`
-    : `${status.jobs.completed} of ${status.jobs.total} jobs checked`;
-  const attemptDetail = status.analyses.task_attempts > 0 ? `, ${status.analyses.task_attempts} Task attempts` : "";
-  const retryDetail = status.analyses.retries > 0
-    ? `, ${status.analyses.retries} ${status.analyses.retries === 1 ? "retry" : "retries"}`
-    : "";
-  const checkpointDetail = status.analyses.checkpoint_committed ? ", analysis checkpoint saved" : "";
-  const patternAttempts = status.patterns?.attempts ?? 0;
-  const patternRetries = status.patterns?.retries ?? 0;
-  const patternCacheHits = status.patterns?.cache_hits ?? 0;
-  const patternAttemptDetail = patternAttempts > 0 ? `, ${patternAttempts} pattern ${patternAttempts === 1 ? "attempt" : "attempts"}` : "";
-  const patternRetryDetail = patternRetries > 0 ? `, ${patternRetries} pattern ${patternRetries === 1 ? "retry" : "retries"}` : "";
-  const patternCacheDetail = patternCacheHits > 0 ? `, ${patternCacheHits} pattern cache ${patternCacheHits === 1 ? "hit" : "hits"}` : "";
-  const patternRepairs = status.patterns?.repairs ?? 0;
-  const patternRepairDetail = patternRepairs > 0 ? `, ${patternRepairs} ambiguity ${patternRepairs === 1 ? "repair" : "repairs"}` : "";
-  const patternRepairFailureDetail = status.patterns?.repair_failure_category
-    ? `, repair failure: ${patternFailureLabels[status.patterns.repair_failure_category] ?? "unknown"}`
-    : "";
-  const retainedPatterns = status.patterns?.retained ?? 0;
-  const retainedPatternDetail = retainedPatterns > 0 ? `, ${retainedPatterns} last-known-good ${retainedPatterns === 1 ? "pattern" : "patterns"}` : "";
-  const patternFailureDetail = status.patterns?.failure_category
-    ? `, pattern failure: ${patternFailureLabels[status.patterns.failure_category] ?? "unknown"}`
-    : "";
+  const analysis = analysisProgressBreakdown(status);
+  const hasAnalysis = analysis.total > 0;
+  const logicalDetail = hasAnalysis
+    ? analysisProgressStripDetail(analysis)
+    : `${nonNegative(status.jobs.completed)} of ${nonNegative(status.jobs.total)} jobs checked`;
   const state = response.state;
-  let title = `Fetch in progress: ${phase}`;
+  let title = state === "active" && hasAnalysis
+    ? `${analysis.ready} of ${analysis.total} results ready`
+    : `Fetch in progress: ${phase}`;
   let severity: FetchStatusPresentation["severity"] = "info";
   if (state === "idle") {
     title = "Fetch idle";
@@ -113,15 +156,19 @@ export function fetchStatusPresentation(response: FetchStatusResponse): FetchSta
     title = "Fetch cancelled";
     severity = "warning";
   }
-  const detail = `${logicalDetail}${attemptDetail}${retryDetail}${checkpointDetail}${patternAttemptDetail}${patternRetryDetail}${patternCacheDetail}${patternRepairDetail}${patternRepairFailureDetail}${retainedPatternDetail}${patternFailureDetail}`;
-  const determinateTotal = status.analyses.logical_total > 0
-    ? status.analyses.logical_total
-    : status.jobs.total > 0 ? status.jobs.total : null;
-  const determinateCompleted = status.analyses.logical_total > 0 ? analysesDone : status.jobs.completed;
+  const ariaProgress = hasAnalysis
+    ? analysisProgressAccessibleDetail(analysis)
+    : logicalDetail;
+  const ariaState = state === "active" ? `Fetch in progress: ${phase}` : title;
+  const determinateTotal = hasAnalysis
+    ? analysis.total
+    : status.jobs.total > 0 ? nonNegative(status.jobs.total) : null;
+  const determinateCompleted = hasAnalysis ? analysis.terminal : nonNegative(status.jobs.completed);
   return {
     title,
-    detail,
-    ariaLabel: `${title}. ${detail}.`,
+    detail: logicalDetail,
+    ariaLabel: `${ariaState}. ${ariaProgress}.`,
+    announcement: ariaState,
     severity,
     determinateTotal,
     determinateCompleted,
@@ -132,15 +179,14 @@ export function fetchStatusCompactPresentation(response: FetchStatusResponse): F
   const presentation = fetchStatusPresentation(response);
   const status = response.status;
   if (!presentation || !status) return null;
-  const completed = status.analyses.completed + status.analyses.failed + status.analyses.cancelled;
-  const total = status.analyses.logical_total;
+  const analysis = analysisProgressBreakdown(status);
   let label = "Fetch";
   let quiet = false;
   let severity = presentation.severity;
   switch (response.state) {
     case "active": {
       const phase = phaseLabels[status.phase] ?? "Fetch";
-      label = total > 0 ? `${phase} ${completed}/${total}` : phase;
+      label = analysis.total > 0 ? `${analysis.ready}/${analysis.total} ready` : phase;
       break;
     }
     case "idle":
@@ -168,7 +214,7 @@ export function fetchStatusCompactPresentation(response: FetchStatusResponse): F
   }
   return {
     label,
-    ariaLabel: `${presentation.title}. Open fetch status details.`,
+    ariaLabel: `${presentation.ariaLabel} Open fetch status details.`,
     severity,
     quiet,
   };
