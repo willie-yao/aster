@@ -121,10 +121,23 @@ jobs:
 
 var k8sValuesTmpl = template.Must(template.New("values.yaml").Funcs(yamlTemplateFuncs).Parse(
 	`# Minimal values for the Kubernetes-native dashboard.
-# project.yaml and prompts/system.md are passed separately with --set-file.
+# The Kubernetes deploy wrapper passes project.yaml, prompts/system.md, and
+# skills/* separately with --set-file.
 
+# Empty tag overrides let stable chart upgrades follow the chart appVersion
+# instead of retaining an older snapshot through --reuse-values.
+global:
+  imageTag: ""
 image:
-  tag: main
+  tag: ""
+analysisRuntime:
+  orkaContainer:
+    image:
+      tag: ""
+orka:
+  fixRuntime:
+    image:
+      tag: ""
 
 # The dashboard-owned analyzer runs inside the worker.
 mode: watch
@@ -140,7 +153,9 @@ ai:
   api: {{quote .AIAPI}}
   endpoint: {{quote .AIEndpoint}}
   model: {{quote .AIModel}}
-
+{{if .AIEnabled}}  existingSecret: {{quote (printf "%s-ai" .Namespace)}}
+  tokenSecretKey: AI_TOKEN
+{{end}}
 # Give a cold analysis pass room to finish on a self-hosted model.
 fetcher:
   timeout: 120m
@@ -150,10 +165,26 @@ var k8sDeployReadmeTmpl = template.Must(template.New("README.md").Parse(
 	`# Deploying with Helm
 
 This is the Kubernetes-native path. Use it when the model endpoint is private to
-the cluster or the dashboard needs authenticated server actions. The generated
-values use the self-contained in-process backend for the first install. Orka is
-the strategic orchestration backend and is available as a preview once its
-current prerequisites are installed.
+the cluster or the dashboard needs authenticated server actions.
+
+` + "`project.yaml`" + ` owns portable project behavior and analysis policy.
+Workflow inputs and Helm values own infrastructure, credentials, and execution tuning.
+
+## Consumer bundle
+
+Keep these files together in the consumer repository:
+
+` + "```text" + `
+project.yaml
+prompts/system.md
+skills/*.yaml
+skills/*.yml
+deploy/values.yaml
+deploy/README.md
+` + "```" + `
+
+The ` + "`skills/`" + ` directory is optional unless ` + "`project.yaml`" + ` requires a consumer
+skill bundle.
 
 ## Before installing
 
@@ -161,42 +192,83 @@ current prerequisites are installed.
 2. Replace the TODOs in ` + "`prompts/system.md`" + `.
 3. Set ` + "`persistence.storageClass`" + ` in ` + "`deploy/values.yaml`" + `.
 {{if .AIEnabled}}4. Set ` + "`ai.endpoint`" + ` and ` + "`ai.model`" + ` in ` + "`deploy/values.yaml`" + `.
+5. Create a Kubernetes Secret named ` + "`{{.Namespace}}-ai`" + ` with key ` + "`AI_TOKEN`" + `.
+   Use your normal secret manager or a local token file. Never commit the value.
 {{else}}4. AI is disabled in the initial scaffold. To enable it later, set ` + "`ai.enabled=true`" + `,
-   configure ` + "`ai.api`" + `, ` + "`ai.endpoint`" + `, and ` + "`ai.model`" + `, then supply the token through
-   ` + "`ai.token`" + ` or ` + "`ai.existingSecret`" + `.
+   configure ` + "`ai.api`" + `, ` + "`ai.endpoint`" + `, and ` + "`ai.model`" + `, then reference a
+   Kubernetes Secret with ` + "`ai.existingSecret`" + `.
 {{end}}
-## Install
+## Validate without cluster writes
 
-Run from a checkout of ` + "`willie-yao/prow-ai-dashboard`" + `:
+From a checkout of ` + "`willie-yao/prow-ai-dashboard`" + `, build the helper and
+render the release locally. Replace the chart-version placeholder with a
+published release. Live installs and upgrades require Helm 4. The context is
+required for the later write but is not contacted by ` + "`--dry-run`" + `.
 
 ` + "```bash" + `
-helm upgrade --install {{.Namespace}} deploy/helm/prow-ai-dashboard \
-  --namespace {{.Namespace}} --create-namespace \
-  -f ../{{.DashboardName}}/deploy/values.yaml \
-  --set-file project.config=../{{.DashboardName}}/project.yaml \
-  --set-file project.systemPrompt=../{{.DashboardName}}/prompts/system.md{{if .AIEnabled}} \
-  --set ai.token=<token>{{end}}
+make build
+./bin/fetcher kubernetes install \
+  --project-dir ../{{.DashboardName}} \
+  --values deploy/values.yaml \
+  --release {{.Namespace}} \
+  --namespace {{.Namespace}} \
+  --kube-context <context> \
+  --chart-version <chart-version> \
+  --dry-run
 ` + "```" + `
-{{if .AIEnabled}}
-Use any non-empty token when the endpoint does not require authentication.
-{{else}}
-AI is disabled in the generated values. Enable it later only after endpoint, model, and token configuration are ready.
-{{end}}
+
+## Install
+
+` + "```bash" + `
+./bin/fetcher kubernetes install \
+  --project-dir ../{{.DashboardName}} \
+  --values deploy/values.yaml \
+  --release {{.Namespace}} \
+  --namespace {{.Namespace}} \
+  --kube-context <context> \
+  --chart-version <chart-version>
+` + "```" + `
+
+## Upgrade
+
+Change ` + "`--chart-version`" + ` for a stable image-only upgrade, or edit other
+infrastructure values in ` + "`deploy/values.yaml`" + `, then run:
+
+` + "```bash" + `
+./bin/fetcher kubernetes upgrade \
+  --project-dir ../{{.DashboardName}} \
+  --values deploy/values.yaml \
+  --release {{.Namespace}} \
+  --namespace {{.Namespace}} \
+  --kube-context <context> \
+  --chart-version <chart-version>
+` + "```" + `
+
+Image-only upgrades do not require editing ` + "`project.yaml`" + `. Live commands
+check that install targets a new release and upgrade targets an existing one.
+Upgrades reuse deployed values, apply the consumer values and current bundle,
+wait for readiness, and roll back on failure. Every install or upgrade validates the
+project and prompt, validates consumer skills, and includes
+the current bundle in the chart-managed ConfigMap. The ConfigMap mounts
+` + "`project.yaml`" + `, ` + "`prompts/system.md`" + `, and each skill under ` + "`skills/`" + ` into
+the worker, fetcher, and interactive server pods that need them.
+
 ## Open the dashboard
 
 ` + "```bash" + `
-kubectl -n {{.Namespace}} port-forward svc/{{.Namespace}}-prow-ai-dashboard-server 8080:80
+kubectl --context <context> -n {{.Namespace}} port-forward svc/{{.Namespace}}-prow-ai-dashboard-server 8080:80
 open http://localhost:8080
 ` + "```" + `
 
 Follow the first fetch with:
 
 ` + "```bash" + `
-kubectl -n {{.Namespace}} logs -f deploy/{{.Namespace}}-prow-ai-dashboard-worker
+kubectl --context <context> -n {{.Namespace}} logs -f deploy/{{.Namespace}}-prow-ai-dashboard-worker
 ` + "```" + `
 
-For Orka, authenticated actions, ingress, existing Secrets, and production
-storage settings, continue with the engine's Kubernetes guide:
+For the published OCI chart, manual Helm equivalent, existing ConfigMaps, Orka,
+authenticated actions, ingress, and production storage settings, continue with
+the engine's Kubernetes guide:
 https://github.com/willie-yao/prow-ai-dashboard/blob/{{.EngineRef}}/docs/kubernetes.md
 `))
 

@@ -508,65 +508,123 @@ tag additionally publishes the Helm chart to
 `oci://ghcr.io/<owner>/charts/prow-ai-dashboard` and attaches the packaged
 `.tgz` to the GitHub release (see `.github/workflows/release.yml`).
 
-## Install with Helm
+## Install and upgrade a consumer bundle
 
-The chart is published to GHCR as an OCI artifact on each release, and its
-source lives at `deploy/helm/prow-ai-dashboard`. Supply your consumer-owned
-`project.yaml` and `prompts/system.md` at install time; they are never checked
-into the engine repo. The `onboard -mode k8s` subcommand scaffolds a project
-plus a `deploy/values.yaml` ready to pass here with `-f`; see
-[Onboarding a project](onboarding-a-new-project.md).
+`project.yaml` owns portable project behavior and analysis policy. Workflow
+inputs and Helm values own infrastructure, credentials, and execution tuning.
+The same project bundle works with Pages, local development, and Kubernetes.
+Do not reproduce the `project.yaml` schema in `deploy/values.yaml`.
 
-Before installing, run:
+A Kubernetes consumer repository has this layout:
 
-```bash
-fetcher onboard doctor -project-dir ./my-dashboard
+```text
+project.yaml
+prompts/system.md
+skills/*.yaml
+deploy/values.yaml
 ```
 
-Doctor validates the local persistence strategy, effective AI provider
-coordinates, credential source, prompt, and Prow job sweep. It is read-only and
-does not inspect cluster readiness.
+The `skills/` directory is optional unless `ai.consumer_skills` requires it.
+The `onboard -mode k8s` subcommand scaffolds this layout and a focused deployment
+guide. See [Onboarding a project](onboarding-a-new-project.md).
 
-Install the released chart straight from GHCR (no repo checkout needed). The
-chart `appVersion` pins all dashboard images to the matching release, so the
-image-specific tags and `global.imageTag` are optional:
+The supported wrapper is part of the `fetcher` binary. From an engine checkout,
+run `make build` to create `bin/fetcher`. The wrapper defaults to the published
+OCI chart. Use `--chart deploy/helm/prow-ai-dashboard` when testing a local chart
+change. Live installs and upgrades require Helm 4 so failed changes can use
+`--rollback-on-failure`.
 
-```bash
-helm install capz oci://ghcr.io/willie-yao/charts/prow-ai-dashboard \
-  --version 1.0.0-beta.5 \
-  --namespace dashboards --create-namespace \
-  --set persistence.storageClass=<your-rwx-class> \
-  --set-file project.config=../capz-prow-ai-dashboard/project.yaml \
-  --set-file project.systemPrompt=../capz-prow-ai-dashboard/prompts/system.md \
-  --set ai.enabled=true \
-  --set ai.endpoint=http://vllm.inference.svc.cluster.local/v1/chat/completions \
-  --set ai.model=<model-id> \
-  --set ai.token=<token>
+Before deploying, run `fetcher onboard doctor -project-dir <dir>` when you also
+want the persistence, provider, credential-source, and Prow discovery checks.
+The bundle wrapper independently runs strict project, prompt, and skill
+validation on every install and upgrade.
+
+Keep provider tokens and other credentials in Kubernetes Secrets. Reference
+them from `deploy/values.yaml`, for example:
+
+```yaml
+ai:
+  enabled: true
+  endpoint: http://vllm.inference.svc.cluster.local/v1/chat/completions
+  model: <model-id>
+  existingSecret: capz-dashboard-ai
+  tokenSecretKey: AI_TOKEN
 ```
 
-> GHCR packages are private by default. If the pull fails with an auth error,
-> make the `charts/prow-ai-dashboard` package public once in the repo's package
-> settings, or `helm registry login ghcr.io` first. As a no-auth alternative,
-> every release also attaches the packaged chart `.tgz`: download it from the
-> release page and `helm install capz ./prow-ai-dashboard-<version>.tgz ...`.
+Do not put Secret values in `project.yaml`, `deploy/values.yaml`, command-line
+`--set` arguments, or committed documentation.
 
-To install from a local checkout instead, point Helm at the chart directory and
-set `global.imageTag` to a published immutable snapshot tag:
+### Validate and render without cluster writes
+
+`--dry-run` validates `project.yaml`, the required prompt, selected engine
+profiles, consumer skill recipes, and required skill counts. It then runs
+`helm template` locally. Rendered manifests are not printed, which avoids
+exposing inline values. The command still requires an explicit context so the
+same invocation can be used for the later write, but dry-run does not contact
+that context.
 
 ```bash
-helm install capz deploy/helm/prow-ai-dashboard \
-  --namespace dashboards --create-namespace \
-  --set global.imageTag=v1.0.0-beta.5 \
-  --set persistence.storageClass=<your-rwx-class> \
-  --set-file project.config=../capz-prow-ai-dashboard/project.yaml \
-  --set-file project.systemPrompt=../capz-prow-ai-dashboard/prompts/system.md \
-  --set ai.enabled=true \
-  --set ai.endpoint=http://vllm.inference.svc.cluster.local/v1/chat/completions \
-  --set ai.model=<model-id> \
-  --set ai.token=<token>
+./bin/fetcher kubernetes install \
+  --project-dir ../capz-prow-ai-dashboard \
+  --values deploy/values.yaml \
+  --release capz \
+  --namespace capz-dynamo \
+  --kube-context h100 \
+  --chart-version 1.0.0-beta.5 \
+  --dry-run
 ```
 
-## Upgrade with Helm
+### Fresh install
+
+```bash
+./bin/fetcher kubernetes install \
+  --project-dir ../capz-prow-ai-dashboard \
+  --values deploy/values.yaml \
+  --release capz \
+  --namespace capz-dynamo \
+  --kube-context h100 \
+  --chart-version 1.0.0-beta.5
+```
+
+The command uses `helm upgrade --install --wait --rollback-on-failure` after a
+read-only release-state check. `install` refuses an existing release, while
+`upgrade` requires one. Release, namespace, and context are required. The
+current kubectl or Helm context is never selected implicitly. Relative
+`--values` paths are resolved from `--project-dir`.
+
+### Bundle-aware upgrade
+
+Every upgrade includes the current `project.yaml`, `prompts/system.md`, and
+`skills/*` automatically. The upgrade reuses deployed values before applying
+the consumer values and current bundle:
+
+```bash
+./bin/fetcher kubernetes upgrade \
+  --project-dir ../capz-prow-ai-dashboard \
+  --values deploy/values.yaml \
+  --release capz \
+  --namespace capz-dynamo \
+  --kube-context h100 \
+  --chart-version 1.0.0-beta.6
+```
+
+For a stable image-only upgrade, change only `--chart-version` to the new
+release. The packaged chart sets `appVersion` to the matching image tag, so
+`project.yaml` does not need an image-only edit.
+
+The wrapper makes the local bundle authoritative for chart-managed project
+configuration. It clears `project.existingConfigMap`, clears any stale
+`project.skills` map from values, and passes the current files with `--set-file`.
+The chart creates one release-managed ConfigMap with keys `project.yaml`,
+`system.md`, and one key per consumer skill. Workload volumes map those keys to
+`<project.mountPath>/project.yaml`, `prompts/system.md`, and `skills/<name>` in
+the worker, CronJob, and interactive server pods that need the project bundle.
+A managed ConfigMap checksum rolls the watch worker and any interactive server
+so they load the new bundle. Because the ConfigMap is part of the Helm release,
+a separate ConfigMap update
+cannot get ahead of a failed Helm operation.
+
+### Guarded unreleased image upgrade
 
 Image tags resolve in this order for the engine, analyzer, and fixer images:
 
@@ -575,30 +633,8 @@ Image tags resolve in this order for the engine, analyzer, and fixer images:
 3. The chart `appVersion`
 
 Keep image-specific tags empty unless one image intentionally needs a different
-version. The two supported upgrade paths use the remaining levels. These commands
-require Helm 4, which renamed `--atomic` to `--rollback-on-failure`.
-
-### Stable OCI release
-
-Upgrade to a published chart version from GHCR. The packaged chart sets its
-`appVersion` to the matching released image tag, so no image tag override is
-needed:
-
-```bash
-helm upgrade capz oci://ghcr.io/willie-yao/charts/prow-ai-dashboard \
-  --kube-context h100 \
-  --namespace capz-dynamo \
-  --version <chart-version> \
-  --reuse-values \
-  --values deploy/values.yaml \
-  --wait \
-  --rollback-on-failure
-```
-
-### Unreleased snapshot
-
-From an engine checkout, use the guarded helper with a published `sha-<commit>`
-or full semantic-version tag:
+version. For an image-only upgrade to a published `sha-<commit>` snapshot, use
+the guarded helper:
 
 ```bash
 ./deploy/helm/upgrade.sh \
@@ -606,7 +642,7 @@ or full semantic-version tag:
   --namespace capz-dynamo \
   --release capz \
   --version sha-<commit> \
-  --values deploy/values.yaml
+  --values ../capz-prow-ai-dashboard/deploy/values.yaml
 ```
 
 The helper requires an existing release. It reuses its values, preserves
@@ -615,7 +651,8 @@ The helper requires an existing release. It reuses its values, preserves
 changes before the upgrade. When `crane`, `docker`, or `skopeo` is available, it
 also verifies the rendered image manifests. It then runs Helm with `--wait` and
 `--rollback-on-failure` and reports the resulting revision and image references.
-It does not clear the cache or create a fetch Job.
+It does not clear the cache, update the project bundle, or create a fetch Job.
+Use the bundle-aware wrapper when project files change in the same release.
 
 `--reuse-values` also preserves explicit old `image.tag`,
 `analysisRuntime.orkaContainer.image.tag`, and `orka.fixRuntime.image.tag`
@@ -639,9 +676,36 @@ orka:
       tag: ""
 ```
 
-For production, provide the token via `ai.existingSecret` (see [Reusing
-existing config](#reusing-existing-config)) rather than `--set ai.token`, which
-lands in shell history and Helm release metadata.
+### Manual Helm equivalent
+
+Manual Helm usage remains supported. Repeat the final `--set-file` argument for
+each skill. `--set-json 'project.skills={}'` makes deletion of a local skill
+remove a stale map entry from a values file.
+
+```bash
+helm upgrade --install capz \
+  oci://ghcr.io/willie-yao/charts/prow-ai-dashboard \
+  --version 1.0.0-beta.5 \
+  --namespace capz-dynamo \
+  --create-namespace \
+  --kube-context h100 \
+  --values ../capz-prow-ai-dashboard/deploy/values.yaml \
+  --set-string project.existingConfigMap= \
+  --set-json 'project.skills={}' \
+  --set-file project.config=../capz-prow-ai-dashboard/project.yaml \
+  --set-file project.systemPrompt=../capz-prow-ai-dashboard/prompts/system.md \
+  --set-file 'project.skills.cluster\.yaml=../capz-prow-ai-dashboard/skills/cluster.yaml' \
+  --wait \
+  --rollback-on-failure
+```
+
+If you intentionally manage the project ConfigMap outside Helm, continue using
+`project.existingConfigMap` and manual Helm. The external ConfigMap must contain
+`project.yaml`, `system.md`, and skill keys that match the chart volume items.
+The bundle wrapper intentionally selects chart-managed configuration instead.
+
+GHCR packages may require `helm registry login ghcr.io`. Every release also
+attaches the packaged chart `.tgz`, which can be supplied with `--chart`.
 
 Source grounding uses a separate optional Secret. Public repositories work
 anonymously. For reliable rate limits or private repositories, create a
@@ -654,20 +718,34 @@ ai:
 ```
 
 In `orka-container` mode, create the same Secret name and key in the dedicated
-analysis namespace. The chart copies an inline `ai.githubReadToken` to both
-namespaces for development, but inline values are stored in Helm release
-metadata and should not be used in production.
+analysis namespace. Do not use inline token values in production because Helm
+stores them in release metadata.
 
-When the provider's total context window is independently known, add
-`--set ai.contextWindowTokens=<tokens>` with at least `9217` tokens. For the current Copilot GPT-5 mini
-deployment, use `--set ai.contextWindowTokens=128000`. Leave it unset for a
+When the provider's total context window is independently known, set
+`ai.contextWindowTokens` in `deploy/values.yaml` to at least `9217`. Use
+`128000` for the current Copilot GPT-5 mini deployment. Leave it unset for a
 generic endpoint so provider metadata or the bounded fallback remains active.
+
+### Equivalent Pages and Helm controls
+
+Pages workflow inputs and Helm values configure separate deployment paths. They
+do not override each other. The equivalent controls and runtime precedence are:
+
+| Concern | Pages workflow | Helm values | Precedence |
+| --- | --- | --- | --- |
+| Recent builds | `builds` | `fetcher.buildsPerJob` | Selected deployment path only. |
+| Fetch concurrency | `workers` | `fetcher.workers` | Selected deployment path only. |
+| Whole-fetch timeout | `fetch-timeout` | `fetcher.timeout` | Selected deployment path only. This is distinct from project `ai.timeout`. |
+| Provider API, endpoint, model | `ai-api`, `ai-endpoint`, `ai-model` | `ai.api`, `ai.endpoint`, `ai.model` | Non-empty `project.yaml` provider fields win; deployment values are fallbacks. |
+| Context window | `ai-context-window-tokens` | `ai.contextWindowTokens` | Deployment value overrides provider metadata. It has no `project.yaml` field. |
+| Cache generation | `ai-cache-generation` | `analysisCache.generation` | Non-empty deployment value overrides `project.yaml` `ai.cache_generation`. |
+| Presubmits | `include-presubmits` | `fetcher.includePresubmits` | ORed with `project.yaml` `source.include_presubmits`. |
 
 In cron mode, populate data immediately rather than waiting for the schedule by
 running the fetcher once. Do not run this command while a watch worker exists:
 
 ```bash
-kubectl -n dashboards create job \
+kubectl --context h100 -n capz-dynamo create job \
   --from=cronjob/capz-prow-ai-dashboard-fetcher \
   fetch-now-$(date -u +%Y%m%d%H%M%S)
 ```
@@ -681,7 +759,7 @@ distributed lock, so do not invoke the helper concurrently.
 Then reach the server:
 
 ```bash
-kubectl -n dashboards port-forward svc/capz-prow-ai-dashboard-server 8080:80
+kubectl --context h100 -n capz-dynamo port-forward svc/capz-prow-ai-dashboard-server 8080:80
 open http://localhost:8080
 ```
 
@@ -702,10 +780,10 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | `persistence.storageClass`, `persistence.size` | The shared volume's class and size. |
 | `persistence.existingClaim` | Reuse a pre-provisioned PVC instead of creating one. |
 | `persistence.retain` | Preserve a chart-managed PVC when it leaves the release. Defaults to `true`. |
-| `project.config`, `project.systemPrompt` | Consumer config, via `--set-file`. |
-| `project.existingConfigMap` | Reuse a ConfigMap with keys `project.yaml` and `system.md`. |
+| `project.config`, `project.systemPrompt`, `project.skills` | Chart-managed consumer bundle, normally supplied by the wrapper with `--set-file`. |
+| `project.existingConfigMap` | Manual path for an external ConfigMap with `project.yaml`, `system.md`, and configured skill keys. |
 | `project.materializer.image.*` | Small pinned image used by Orka container analysis to copy ConfigMap-backed project files into a regular-file runtime directory. |
-| `ai.enabled`, `ai.endpoint`, `ai.model`, `ai.token` | AI analysis and its OpenAI-compatible endpoint. |
+| `ai.enabled`, `ai.endpoint`, `ai.model` | AI analysis and its OpenAI-compatible endpoint. Use `ai.existingSecret` for credentials. |
 | `ai.contextWindowTokens` | Optional operator-provided total provider context window. Set only with endpoint evidence. Values must be at least `9217`; use `128000` for the current Copilot GPT-5 mini deployment. |
 | `ai.existingSecret`, `ai.tokenSecretKey` | Reuse a Secret holding the token. |
 | `ai.githubReadTokenSecretName`, `ai.githubReadTokenSecretKey` | Reuse a separate read-only GitHub token Secret. Omit it for anonymous public-repository grounding. |

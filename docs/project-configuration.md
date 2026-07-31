@@ -12,12 +12,16 @@ an existing consumer before deployment.
 
 ## Configuration boundaries
 
-Three files have different owners:
+`project.yaml` owns portable project behavior and analysis policy. Workflow
+inputs and Helm values own infrastructure, credentials, and execution tuning.
+
+The consumer files have different owners:
 
 | File | Owns |
 | --- | --- |
 | `project.yaml` | Portable project identity, discovery, storage, branding, analysis policy, and optional features |
 | `prompts/system.md` | Project-specific architecture and failure knowledge |
+| `skills/*.yaml` | Optional portable diagnostic recipes and evidence requirements |
 | Pages workflow or Helm values | Infrastructure, credentials, runner or cluster settings, and Orka execution settings |
 
 Do not copy Helm or workflow tuning into `project.yaml`. Do not put project
@@ -196,9 +200,11 @@ a secret in another header.
 
 ## Custom skills
 
-Diagnostic recipes live under `skills/*.yaml`. Their presence is the opt-in.
-The analyzer loads these recipes, enforces their required evidence, and includes
-the skill-set hash in cache acceptance. See
+Diagnostic recipes live under `skills/*.yaml` or `skills/*.yml`. Their presence
+is the opt-in. Pages, local development, and the Kubernetes bundle wrapper load
+the same directory. Filenames must be valid ConfigMap keys and cannot be
+`project.yaml`. The analyzer loads these recipes, enforces their
+required evidence, and includes the skill-set hash in cache acceptance. See
 [Custom diagnostic skills](skills.md).
 
 Deployments that require a consumer bundle can fail startup when it is absent
