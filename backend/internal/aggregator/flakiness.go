@@ -289,7 +289,6 @@ func CollectBuildFailures(details []models.JobDetail) []models.BuildFailureSumma
 					entry.StartedAt = run.Started.UTC().Format(time.RFC3339)
 				}
 				if testCase.AISummary != nil {
-					entry.AnalysisState = "succeeded"
 					entry.Summary = testCase.AISummary.Summary
 				}
 				if testCase.AIAnalysis != nil {

@@ -435,7 +435,13 @@ function BuildFailureRow({ item }: { item: BuildFailureSummary }) {
         </Typography>
 
         <Stack direction="row" spacing={1.5} sx={{ alignItems: "center", flexWrap: "wrap" }}>
-          <Link component={RouterLink} to={item.job_detail_url} underline="hover" sx={{ fontSize: "0.8125rem", fontWeight: 600 }}>
+          <Link
+            component={RouterLink}
+            to={item.job_detail_url}
+            aria-label={`Open details for ${item.job_name} build ${item.build_id}`}
+            underline="hover"
+            sx={{ fontSize: "0.8125rem", fontWeight: 600 }}
+          >
             Open details
           </Link>
           {item.build_log_url && (

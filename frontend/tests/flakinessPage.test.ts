@@ -108,6 +108,7 @@ test("build failures use a bounded summary surface and canonical links", () => {
   assert.match(source, />\s*Failure Analysis\s*</);
   assert.match(source, /function BuildFailureRow/);
   assert.match(source, /to={item\.job_detail_url}/);
+  assert.match(source, /aria-label={`Open details for \$\{item\.job_name\} build \$\{item\.build_id\}`}/);
   assert.match(source, /item\.build_log_url/);
   assert.match(source, /item\.summary \|\| "No accepted build analysis is available for this run\."/);
   assert.match(source, /item\.provenance === "cache"/);

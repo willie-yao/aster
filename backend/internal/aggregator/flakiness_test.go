@@ -480,3 +480,20 @@ func TestCollectBuildFailuresBuildsBoundedSafeIndex(t *testing.T) {
 		}
 	}
 }
+
+func TestCollectBuildFailuresDoesNotTreatFallbackSummaryAsSuccess(t *testing.T) {
+	details := []models.JobDetail{{
+		Name: "periodic-capz-e2e", JobID: "periodic-capz-e2e",
+		Runs: []models.BuildResult{{
+			BuildInfo: models.BuildInfo{BuildID: "123", Started: flakyBaseTime, Result: "FAILURE"},
+			TestCases: []models.TestCase{{
+				Name: "Prow job execution", Source: models.TestCaseSourceBuild, Status: "failed",
+				AISummary: &models.AISummary{Summary: "AI analysis unavailable"},
+			}},
+		}},
+	}}
+	got := CollectBuildFailures(details)
+	if len(got) != 1 || got[0].AnalysisState != "unavailable" || got[0].Summary != "AI analysis unavailable" {
+		t.Fatalf("build failure = %+v", got)
+	}
+}
