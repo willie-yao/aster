@@ -84,9 +84,19 @@ test("focusable tabs own their visible names and descriptions", () => {
   assert.match(source, /label: "Persistent Failures"/);
   assert.match(source, /label: "Recently Broken"/);
   assert.match(source, /aria-describedby={`test-analysis-\$\{t\.value\}-description`}/);
-  assert.match(source, /label=\{t\.label\}/);
+  assert.match(source, /label={`\$\{t\.label\} \$\{listMap\[t\.value\]\.length\}`}/);
   assert.match(source, /title=\{t\.tooltip\}/);
   assert.match(source, /height: "1px"[\s\S]*width: "1px"/);
   assert.doesNotMatch(source, /<Tooltip/);
   assert.doesNotMatch(source, /<Tab(?=[\s>])[^>]*aria-label=/);
+});
+
+
+test("published freshness stays separate from background refresh progress", () => {
+  assert.match(source, />\s*Published results\s*</);
+  assert.match(source, />\s*Refresh in progress\s*</);
+  assert.match(source, /Published results remain available until the refresh completes\./);
+  assert.match(source, /fetchStatus\?\.state === "active"/);
+  assert.match(source, /refreshProgress\.ready} of \$\{refreshProgress\.total} results ready/);
+  assert.doesNotMatch(source, /aria-live=/);
 });

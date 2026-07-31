@@ -8,6 +8,7 @@ import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Chip from "@mui/material/Chip";
 import CircularProgress from "@mui/material/CircularProgress";
+import Collapse from "@mui/material/Collapse";
 import Container from "@mui/material/Container";
 import Divider from "@mui/material/Divider";
 import FormControlLabel from "@mui/material/FormControlLabel";
@@ -18,8 +19,9 @@ import Stack from "@mui/material/Stack";
 import Switch from "@mui/material/Switch";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import {
+  analysisProgressBreakdown,
   fetchStatusCompactPresentation,
   fetchStatusPresentation,
   fetchStatusStripKey,
@@ -43,7 +45,7 @@ interface FetchStatusStripProps {
 
 const activeSpinnerDuration = 1400;
 
-function ActiveStateIcon({ size }: { size: number }) {
+export function FetchActivityIcon({ size }: { size: number }) {
   const spinnerRef = useRef<HTMLSpanElement>(null);
 
   useLayoutEffect(() => {
@@ -87,6 +89,8 @@ function ActiveStateIcon({ size }: { size: number }) {
       }}
     >
       <CircularProgress
+        aria-hidden="true"
+        role="presentation"
         variant="determinate"
         value={30}
         size={size}
@@ -107,7 +111,7 @@ function ActiveStateIcon({ size }: { size: number }) {
 function stateIcon(response: FetchStatusResponse, size = 18): ReactNode {
   switch (response.state) {
     case "active":
-      return <ActiveStateIcon size={size} />;
+      return <FetchActivityIcon size={size} />;
     case "failed":
       return <ErrorOutlineOutlined sx={{ fontSize: size }} />;
     case "stale":
@@ -134,12 +138,27 @@ function DetailRow({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 
-function analysisDone(status: FetchProgressStatus): number {
-  return status.analyses.completed + status.analyses.failed + status.analyses.cancelled;
+function cacheRejectionDetail(status: FetchProgressStatus): string {
+  const rejections = status.analyses.cache_rejections;
+  if (!rejections) return "0";
+  const entries: Array<[string, number]> = [
+    ["missing", rejections.missing],
+    ["expired", rejections.expired],
+    ["tool floor", rejections.tool_floor],
+    ["evidence floor", rejections.evidence_floor],
+    ["critique", rejections.critique],
+    ["malformed", rejections.malformed],
+  ];
+  const details = entries
+    .filter(([, count]) => count > 0)
+    .map(([label, count]) => `${count} ${label}`);
+  return details.length > 0 ? details.join(" · ") : "0";
 }
 
 export function FetchStatusControl({ response, idleCompact, onIdleCompactChange }: FetchStatusControlProps) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const [technicalOpen, setTechnicalOpen] = useState(false);
+  const technicalID = useId();
   const compact = response ? fetchStatusCompactPresentation(response) : null;
   const presentation = response ? fetchStatusPresentation(response) : null;
   const status = response?.status;
@@ -147,7 +166,7 @@ export function FetchStatusControl({ response, idleCompact, onIdleCompactChange 
 
   const iconOnly = compact.quiet && idleCompact;
   const popoverID = anchor ? "fetch-status-details" : undefined;
-  const done = analysisDone(status);
+  const analysis = analysisProgressBreakdown(status);
   const patterns = status.patterns;
   const progress = presentation.determinateTotal && presentation.determinateTotal > 0
     ? Math.min(100, (presentation.determinateCompleted / presentation.determinateTotal) * 100)
@@ -279,34 +298,79 @@ export function FetchStatusControl({ response, idleCompact, onIdleCompactChange 
 
           <Stack spacing={0.75}>
             <DetailRow
-              label="Analysis"
-              value={status.analyses.logical_total > 0 ? `${done} / ${status.analyses.logical_total}` : "Not planned"}
+              label="Results ready"
+              value={analysis.total > 0 ? `${analysis.ready} / ${analysis.total}` : "Not planned"}
             />
-            <DetailRow label="Running / queued" value={`${status.analyses.running} / ${status.analyses.queued}`} />
+            <DetailRow label="Reused from cache" value={analysis.reusedFromCache} />
+            <DetailRow label="Compatible results" value={analysis.compatibleResults} />
+            <DetailRow label="Existing results adopted" value={analysis.adopted} />
+            <DetailRow label="New analyzer Tasks" value={analysis.newAnalyzerTasks} />
+            <DetailRow label="Currently analyzing" value={analysis.analyzing} />
+            <DetailRow label="Waiting to check" value={analysis.waiting} />
             <DetailRow
-              label="Task attempts"
-              value={`${status.analyses.task_attempts}${status.analyses.retries ? ` · ${status.analyses.retries} ${status.analyses.retries === 1 ? "retry" : "retries"}` : ""}`}
+              label="Failures"
+              value={analysis.cancelled > 0 ? `${analysis.failed} · ${analysis.cancelled} cancelled` : analysis.failed}
             />
-            {status.analyses.checkpoint_committed && <DetailRow label="Checkpoint" value="Saved" />}
-            {patterns && (patterns.eligible > 0 || patterns.attempts > 0 || (patterns.cache_hits ?? 0) > 0) && (
-              <DetailRow
-                label="Patterns"
-                value={`${patterns.current ?? patterns.completed} current · ${patterns.retained ?? 0} retained · ${patterns.cache_hits ?? 0} cached`}
-              />
-            )}
-            {patterns && (patterns.repairs ?? 0) > 0 && (
-              <DetailRow
-                label="Repairs"
-                value={`${patterns.repair_succeeded ?? 0} succeeded · ${patterns.repair_failed ?? 0} failed`}
-              />
-            )}
-            {patterns?.repair_failure_category && (
-              <DetailRow label="Repair failure" value={patternFailureLabel(patterns.repair_failure_category)} />
-            )}
-            {patterns?.failure_category && (
-              <DetailRow label="Pattern failure" value={patternFailureLabel(patterns.failure_category)} />
-            )}
           </Stack>
+
+          <Button
+            size="small"
+            aria-expanded={technicalOpen}
+            aria-controls={technicalID}
+            onClick={() => setTechnicalOpen((open) => !open)}
+            endIcon={(
+              <ExpandMore
+                sx={{
+                  fontSize: 16,
+                  transform: technicalOpen ? "rotate(180deg)" : "rotate(0deg)",
+                  transition: "transform 150ms ease",
+                }}
+              />
+            )}
+            sx={{ mt: 1.25, px: 0.5, textTransform: "none" }}
+          >
+            Technical details
+          </Button>
+          <Collapse in={technicalOpen} timeout="auto">
+            <Stack id={technicalID} spacing={0.75} sx={{ mt: 0.75 }}>
+              <DetailRow
+                label="Task attempts"
+                value={`${status.analyses.task_attempts} total, including adopted existing Tasks`}
+              />
+              <DetailRow
+                label="Results retrieved"
+                value={`${status.analyses.results_retrieved} total · ${analysis.newlyAnalyzed} from new Tasks`}
+              />
+              <DetailRow
+                label="Retries"
+                value={`${status.analyses.retries} Task · ${status.analyses.result_retrieval_retries} result retrieval`}
+              />
+              <DetailRow
+                label="Planned Task work"
+                value={`${status.analyses.new_work} without cache · ${status.analyses.stale_work} stale`}
+              />
+              <DetailRow label="Cache rejections" value={cacheRejectionDetail(status)} />
+              {status.analyses.checkpoint_committed && <DetailRow label="Checkpoint" value="Saved" />}
+              {patterns && (patterns.eligible > 0 || patterns.attempts > 0 || (patterns.cache_hits ?? 0) > 0) && (
+                <DetailRow
+                  label="Patterns"
+                  value={`${patterns.current ?? patterns.completed} current · ${patterns.retained ?? 0} retained · ${patterns.cache_hits ?? 0} cached`}
+                />
+              )}
+              {patterns && (patterns.repairs ?? 0) > 0 && (
+                <DetailRow
+                  label="Repairs"
+                  value={`${patterns.repair_succeeded ?? 0} succeeded · ${patterns.repair_failed ?? 0} failed`}
+                />
+              )}
+              {patterns?.repair_failure_category && (
+                <DetailRow label="Repair failure" value={patternFailureLabel(patterns.repair_failure_category)} />
+              )}
+              {patterns?.failure_category && (
+                <DetailRow label="Pattern failure" value={patternFailureLabel(patterns.failure_category)} />
+              )}
+            </Stack>
+          </Collapse>
 
           <Divider sx={{ my: 1.5 }} />
 
@@ -345,8 +409,7 @@ export function FetchStatusStrip({ response, dismissedKey, onDismiss }: FetchSta
 
   return (
     <Box
-      role="status"
-      aria-live="polite"
+      role="region"
       aria-label={presentation.ariaLabel}
       sx={{
         borderBottom: "1px solid",
@@ -354,6 +417,25 @@ export function FetchStatusStrip({ response, dismissedKey, onDismiss }: FetchSta
         bgcolor: (theme) => soft(theme, presentation.severity, response.state === "active" ? 0.04 : 0.08),
       }}
     >
+      <Box
+        component="span"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        sx={{
+          border: 0,
+          clip: "rect(0 0 0 0)",
+          height: "1px",
+          m: "-1px",
+          overflow: "hidden",
+          p: 0,
+          position: "absolute",
+          whiteSpace: "nowrap",
+          width: "1px",
+        }}
+      >
+        {presentation.announcement}
+      </Box>
       <Container
         maxWidth="xl"
         sx={{

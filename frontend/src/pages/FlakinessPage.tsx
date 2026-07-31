@@ -13,10 +13,13 @@ import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import SentimentSatisfiedAltIcon from "@mui/icons-material/SentimentSatisfiedAlt";
 import { Link as RouterLink } from "react-router-dom";
 import { ErrorState } from "../components/ErrorState";
+import { FetchActivityIcon } from "../components/FetchStatus";
 import { LoadingState } from "../components/LoadingState";
 import { Panel } from "../components/Panel";
 import { useFlakinessReport } from "../hooks/useData";
 import { useManifest } from "../hooks/useManifest";
+import { useSharedFetchStatus } from "../hooks/useSharedFetchStatus";
+import { analysisProgressBreakdown } from "../lib/fetchStatus";
 import { formatPercent, shortJobName, shortTestName, timeAgo } from "../lib/utils";
 import { soft } from "../theme";
 import type { TestFlakiness } from "../types/dashboard";
@@ -366,6 +369,7 @@ function TestRow({ item, tab }: { item: TestFlakiness; tab: Tab }) {
 
 export function FlakinessPage() {
   const { data, loading, error } = useFlakinessReport();
+  const fetchStatus = useSharedFetchStatus();
   const [activeTab, setActiveTab] = useState<Tab>("most_flaky");
 
   if (loading) {
@@ -386,27 +390,73 @@ export function FlakinessPage() {
 
   const items = listMap[activeTab] ?? [];
   const activeDescription = tabs.find((t) => t.value === activeTab)?.tooltip;
+  const refreshStatus = fetchStatus?.state === "active" ? fetchStatus.status : undefined;
+  const refreshProgress = refreshStatus ? analysisProgressBreakdown(refreshStatus) : null;
 
   return (
     <Stack spacing={4}>
-      <Stack spacing={0.75}>
+      <Stack spacing={1.25}>
         <Typography variant="h4" component="h1">
           Test Analysis
         </Typography>
-        <Box sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
-          <Box
-            sx={{
-              width: 7,
-              height: 7,
-              borderRadius: "50%",
-              bgcolor: "success.main",
-              boxShadow: (theme) => `0 0 8px ${(theme.vars ?? theme).palette.success.main}`,
-            }}
-          />
-          <Typography variant="data" color="text.secondary" sx={{ fontSize: "0.75rem" }}>
-            Updated {timeAgo(data.generated_at)}
-          </Typography>
-        </Box>
+        <Stack
+          direction={{ xs: "column", sm: "row" }}
+          spacing={{ xs: 1.25, sm: 2.5 }}
+          sx={{ alignItems: { xs: "flex-start", sm: "stretch" } }}
+        >
+          <Stack direction="row" spacing={1} sx={{ alignItems: "flex-start" }}>
+            <Box
+              aria-hidden="true"
+              sx={{
+                width: 8,
+                height: 8,
+                mt: 0.5,
+                borderRadius: "50%",
+                bgcolor: "success.main",
+                boxShadow: (theme) => `0 0 8px ${(theme.vars ?? theme).palette.success.main}`,
+                flex: "0 0 auto",
+              }}
+            />
+            <Box>
+              <Typography variant="data" sx={{ display: "block", color: "text.primary", fontSize: "0.75rem" }}>
+                Published results
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                Updated {timeAgo(data.generated_at)}
+              </Typography>
+            </Box>
+          </Stack>
+
+          {refreshStatus && (
+            <Stack
+              direction="row"
+              spacing={1}
+              sx={{
+                alignItems: "flex-start",
+                borderLeft: { xs: 0, sm: "1px solid" },
+                borderColor: { sm: "divider" },
+                pl: { xs: 0, sm: 2.5 },
+              }}
+            >
+              <Box aria-hidden="true" sx={{ color: "info.main", display: "flex", mt: 0.25 }}>
+                <FetchActivityIcon size={16} />
+              </Box>
+              <Box>
+                <Typography variant="data" sx={{ display: "block", color: "info.main", fontSize: "0.75rem" }}>
+                  Refresh in progress
+                </Typography>
+                <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+                  {refreshProgress && refreshProgress.total > 0
+                    ? `${refreshProgress.ready} of ${refreshProgress.total} results ready`
+                    : "Preparing the next published snapshot"}
+                </Typography>
+                <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+                  Published results remain available until the refresh completes.
+                </Typography>
+              </Box>
+            </Stack>
+          )}
+        </Stack>
       </Stack>
 
       <Stack spacing={1.5}>
@@ -447,7 +497,7 @@ export function FlakinessPage() {
               key={t.value}
               value={t.value}
               aria-describedby={`test-analysis-${t.value}-description`}
-              label={t.label}
+              label={`${t.label} ${listMap[t.value].length}`}
               title={t.tooltip}
             />
           ))}
