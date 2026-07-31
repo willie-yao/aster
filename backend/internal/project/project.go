@@ -354,6 +354,18 @@ type AI struct {
 	// shared providers can 429 under parallelism. Excluded from manifest.json.
 	Concurrency int `yaml:"concurrency,omitempty" json:"-"`
 
+	// SourceRepo is the repository analysis reads for source grounding. It
+	// defaults to branding.source_repo and does not affect issue or fix targets.
+	SourceRepo *SourceRepo `yaml:"source_repo,omitempty" json:"source_repo,omitempty"`
+
+	// ConsumerSkills can require a mounted consumer recipe bundle and minimum
+	// recipe count. It is operator policy and is excluded from public JSON.
+	ConsumerSkills ConsumerSkills `yaml:"consumer_skills,omitempty" json:"-"`
+
+	// SkillBundle is populated at runtime with public aggregate metadata. Recipe
+	// IDs and contents remain private.
+	SkillBundle *SkillBundleManifest `yaml:"-" json:"skill_bundle,omitempty"`
+
 	// Agentic holds tool-calling loop tuning inlined under `ai:` in YAML.
 	// Unset fields fall back to DefaultAgentic.
 	// The agentic loop is the only analysis path, and a function-calling
@@ -368,6 +380,52 @@ type AI struct {
 	// SourceInvestigation configures optional read-only source inspection for
 	// authenticated analysis chat requests.
 	SourceInvestigation *AnalysisSourceInvestigation `yaml:"source_investigation,omitempty" json:"-"`
+}
+
+// ConsumerSkills configures startup requirements for consumer recipes.
+type ConsumerSkills struct {
+	Required     bool `yaml:"required,omitempty" json:"-"`
+	MinimumCount int  `yaml:"minimum_count,omitempty" json:"-"`
+}
+
+// SkillBundleManifest is the privacy-safe public recipe summary.
+type SkillBundleManifest struct {
+	Profiles              []string `json:"profiles"`
+	EngineCount           int      `json:"engine_count"`
+	ConsumerCount         int      `json:"consumer_count"`
+	ConsumerBundlePresent bool     `json:"consumer_bundle_present"`
+	Hash                  string   `json:"hash,omitempty"`
+}
+
+// EffectiveAnalysisSourceRepo resolves the read-only analysis source without
+// changing the independently configured issue and fix targets.
+func (c *Config) EffectiveAnalysisSourceRepo() SourceRepo {
+	if c != nil && c.AI != nil && c.AI.SourceRepo != nil {
+		return SourceRepo{
+			Owner: strings.TrimSpace(c.AI.SourceRepo.Owner),
+			Name:  strings.TrimSpace(c.AI.SourceRepo.Name),
+		}
+	}
+	if c == nil {
+		return SourceRepo{}
+	}
+	return SourceRepo{
+		Owner: strings.TrimSpace(c.Branding.SourceRepo.Owner),
+		Name:  strings.TrimSpace(c.Branding.SourceRepo.Name),
+	}
+}
+
+// EffectiveConsumerSkills returns the configured consumer recipe requirement.
+// required without an explicit minimum means at least one recipe.
+func (c *Config) EffectiveConsumerSkills() ConsumerSkills {
+	if c == nil || c.AI == nil {
+		return ConsumerSkills{}
+	}
+	out := c.AI.ConsumerSkills
+	if out.Required && out.MinimumCount == 0 {
+		out.MinimumCount = 1
+	}
+	return out
 }
 
 // AIProvider is the resolved provider configuration used to construct clients.
@@ -971,6 +1029,15 @@ func (c *Config) Validate() error {
 		// branding.source_repo, risking issues on the wrong repo.
 		if r := c.Issues.Repo; r != nil && (r.Owner == "" || r.Name == "") {
 			return fmt.Errorf("issues.repo requires both owner and name (omit issues.repo entirely to default to branding.source_repo)")
+		}
+	}
+
+	if c.AI != nil {
+		if r := c.AI.SourceRepo; r != nil && (strings.TrimSpace(r.Owner) == "" || strings.TrimSpace(r.Name) == "") {
+			return fmt.Errorf("ai.source_repo requires both owner and name (omit it to default to branding.source_repo)")
+		}
+		if c.AI.ConsumerSkills.MinimumCount < 0 {
+			return fmt.Errorf("ai.consumer_skills.minimum_count must be >= 0")
 		}
 	}
 

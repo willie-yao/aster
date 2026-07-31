@@ -106,6 +106,10 @@ spec:
             - -orka-analysis-image={{ include "prow-ai-dashboard.analyzerImage" . }}
             - -orka-analysis-model-secret={{ .Values.analysisRuntime.orkaContainer.modelAuth.existingSecret }}
             - -orka-analysis-model-token-key={{ .Values.analysisRuntime.orkaContainer.modelAuth.tokenKey }}
+            {{- if or .Values.ai.githubReadToken .Values.ai.githubReadTokenSecretName }}
+            - -orka-analysis-github-secret={{ include "prow-ai-dashboard.githubReadSecret" . }}
+            - -orka-analysis-github-token-key={{ .Values.ai.githubReadTokenSecretKey }}
+            {{- end }}
             - -orka-analysis-state-secret={{ include "prow-ai-dashboard.orkaAnalysisStateSecret" . }}
             - -orka-analysis-state-key={{ .Values.analysisRuntime.orkaContainer.state.key }}
             - -orka-analysis-max-concurrent-tasks={{ .Values.analysisRuntime.orkaContainer.maxConcurrentTasks }}
@@ -141,13 +145,15 @@ spec:
             - name: AI_CONTEXT_WINDOW_TOKENS
               value: {{ .Values.ai.contextWindowTokens | quote }}
             {{- end }}
-            {{- if or .Values.ai.githubReadToken .Values.ai.existingSecret }}
+            {{- if or .Values.ai.githubReadToken .Values.ai.githubReadTokenSecretName .Values.ai.existingSecret }}
             - name: GITHUB_READ_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "prow-ai-dashboard.aiSecret" . }}
+                  name: {{ include "prow-ai-dashboard.githubReadSecret" . }}
                   key: {{ .Values.ai.githubReadTokenSecretKey }}
+                  {{- if and (not .Values.ai.githubReadToken) (not .Values.ai.githubReadTokenSecretName) }}
                   optional: true
+                  {{- end }}
             {{- end }}
             {{- end }}
             {{- if $containerAnalysis }}

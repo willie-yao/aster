@@ -170,8 +170,9 @@ func loadRuntime(ctx context.Context, opts commandOptions, getenv envGetter) (*a
 	}
 	traceStore := ai.NewTraceStore()
 	service, err := runtime.NewService(analysisruntime.ServiceOptions{
-		Backend:    backend,
-		TraceStore: traceStore,
+		Backend:         backend,
+		TraceStore:      traceStore,
+		GitHubReadToken: getenv("GITHUB_READ_TOKEN"),
 	})
 	if err != nil {
 		return nil, err

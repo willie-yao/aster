@@ -497,3 +497,29 @@ func TestContainerAnalyzerUnknownTaskPhaseStopsAtContextDeadline(t *testing.T) {
 		t.Fatalf("waitTerminal error = %v", err)
 	}
 }
+
+func TestContainerAnalyzerGitHubReadSecretPair(t *testing.T) {
+	opts := containerAnalyzerTestOptions(t, bytes.Repeat([]byte{0x65}, 32))
+	opts.GitHubSecretName = "github-read"
+	if err := ValidateContainerAnalyzerOptions(opts); err == nil || !strings.Contains(err.Error(), "configured together") {
+		t.Fatalf("partial GitHub Secret error = %v", err)
+	}
+	opts.GitHubTokenKey = "token"
+	if err := ValidateContainerAnalyzerOptions(opts); err != nil {
+		t.Fatal(err)
+	}
+	analyzer, err := newContainerAnalyzer(opts, &fakeContainerAnalyzerKube{fakeContainerResourceClient: &fakeContainerResourceClient{}}, &generatedContainerResult{}, &analysisruntime.ContainerStateStore{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := analyzer.taskSpec(containerTaskRequest(), nil, nil)
+	found := false
+	for _, env := range spec.SecretEnv {
+		if env.Name == "GITHUB_READ_TOKEN" && env.SecretName == "github-read" && env.SecretKey == "token" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("SecretEnv = %+v", spec.SecretEnv)
+	}
+}

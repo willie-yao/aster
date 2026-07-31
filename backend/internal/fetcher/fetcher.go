@@ -61,6 +61,8 @@ type OrkaContainerAnalysisOptions struct {
 	Image               string
 	ModelSecretName     string
 	ModelTokenKey       string
+	GitHubSecretName    string
+	GitHubTokenKey      string
 	StateSecretName     string
 	StateSecretKey      string
 	MaxConcurrent       int
@@ -144,6 +146,7 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	}
 	p.progress = progress
+	p.configureProgressAnalysisMetadata()
 	progress.CompletePhase()
 	_, err = p.fullPass(ctx)
 	finishProgressPass(progress, err, false)
@@ -223,6 +226,7 @@ func setupPipeline(opts Options) (*pipeline, error) {
 				Namespace: container.Namespace, OrkaAPI: container.ResultAPI, Image: container.Image, ProjectDir: opts.ProjectDir, DataDir: opts.OutDir,
 				API: aiProject.Provider.API, Endpoint: aiProject.Provider.Endpoint, Model: aiProject.Provider.Model, CacheGeneration: aiProject.CacheGeneration,
 				ModelSecretName: container.ModelSecretName, ModelTokenKey: container.ModelTokenKey,
+				GitHubSecretName: container.GitHubSecretName, GitHubTokenKey: container.GitHubTokenKey,
 				StateSecretName: container.StateSecretName, StateSecretKey: container.StateSecretKey, StateKey: stateKey,
 				ContextWindowTokens: container.ContextWindowTokens,
 				AnalysisTimeout:     cfg.AI.EffectiveAgentic().Timeout,
@@ -232,8 +236,9 @@ func setupPipeline(opts Options) (*pipeline, error) {
 				return nil, fmt.Errorf("orka-container analysis: %w", err)
 			}
 		}
-		log.Printf("Loaded %d AI skill recipe(s) (profiles=%s, hash=%s)",
-			len(aiProject.SkillSet.Skills()), aiProject.ProfileSelection.String(), analysisruntime.ShortHash(aiProject.SkillSet.Hash()))
+		log.Printf("Loaded AI skills (profiles=%s engine=%d consumer=%d consumer_bundle=%t hash=%s)",
+			aiProject.ProfileSelection.String(), aiProject.SkillSet.EngineCount(), aiProject.SkillSet.ConsumerCount(),
+			aiProject.SkillSet.ConsumerBundlePresent(), analysisruntime.ShortHash(aiProject.SkillSet.Hash()))
 	}
 
 	client := &http.Client{Timeout: 30 * time.Second}
@@ -311,6 +316,8 @@ func validateAnalysisRuntimeOptions(opts Options) error {
 			return fmt.Errorf("orka-container model Secret is required")
 		case strings.TrimSpace(cfg.ModelTokenKey) == "":
 			return fmt.Errorf("orka-container model token key is required")
+		case (strings.TrimSpace(cfg.GitHubSecretName) == "") != (strings.TrimSpace(cfg.GitHubTokenKey) == ""):
+			return fmt.Errorf("orka-container GitHub Secret name and token key must be configured together")
 		case strings.TrimSpace(cfg.StateSecretName) == "":
 			return fmt.Errorf("orka-container state Secret is required")
 		case strings.TrimSpace(cfg.StateSecretKey) == "":

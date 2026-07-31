@@ -57,7 +57,7 @@ branding:
 | `name` | Human-readable project name |
 | `testgrid.dashboard` | TestGrid annotation used by the default discovery source |
 | `storage` | Artifact backend and bucket |
-| `branding` | Site identity, URL paths, and source repository |
+| `branding` | Site identity, URL paths, and default repository |
 
 `short_name` is an optional compact display label. The wizard suggests one only
 when the repository name provides a reasonable abbreviation. Type `none` in the
@@ -67,6 +67,22 @@ can be cleared with the same sentinel.
 For Pages, set
 `branding.base_path` to `/<host-repo>` and `site_url` to the full Pages URL. For
 Kubernetes, use `/` and the ingress URL.
+
+## Analysis source repository
+
+Analysis can read a repository that differs from branding and write targets:
+
+```yaml
+ai:
+  source_repo:
+    owner: kubernetes-sigs
+    name: cluster-api-provider-azure
+```
+
+Omit `ai.source_repo` to use `branding.source_repo`. This setting controls
+read-only analysis grounding only. `issues.repo` and `ai.fix_prs.repo` remain
+independent write targets and continue to default to `branding.source_repo`.
+Both `owner` and `name` are required when `ai.source_repo` is present.
 
 ## Storage
 
@@ -185,6 +201,19 @@ The analyzer loads these recipes, enforces their required evidence, and includes
 the skill-set hash in cache acceptance. See
 [Custom diagnostic skills](skills.md).
 
+Deployments that require a consumer bundle can fail startup when it is absent
+or too small:
+
+```yaml
+ai:
+  consumer_skills:
+    required: true
+    minimum_count: 11
+```
+
+`required: true` without `minimum_count` requires at least one consumer recipe.
+Errors report counts only and do not expose recipe contents.
+
 ## Optional features
 
 Keep these sections out of the first-run config. Add them after the dashboard
@@ -226,7 +255,7 @@ belongs to Orka and must provide read-only clone credentials. Provider and model
 credentials remain owned by the Agent. The Agent runtime must support Orka's
 enforced `orka.ai/agent-read-only`
 contract; an Orka release that rejects guarded OpenCode cannot use OpenCode here.
-The dashboard uses `branding.source_repo` and the selected build's exact
+The dashboard uses the effective `ai.source_repo` and the selected build's exact
 `repo_refs` commit, so there is no repository override or branch fallback. Bare
 full SHAs and unambiguous `ref:fullSHA` values are supported. Composite
 presubmit refs are rejected rather than guessing which commit was tested.

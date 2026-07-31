@@ -165,11 +165,14 @@ func prepareContainerAnalysisTask(in ContainerAnalysisTaskSpec) (preparedContain
 			return preparedContainerAnalysisTask{}, fmt.Errorf("container analysis Task environment contains duplicate %s", secret.Name)
 		}
 		seenEnv[secret.Name] = true
-		if secret.Name == "AI_TOKEN" {
+		switch secret.Name {
+		case "AI_TOKEN":
 			tokenSecretFound = true
-		}
-		if secret.Name == analysisruntime.ContainerStateKeyEnv {
+		case analysisruntime.ContainerStateKeyEnv:
 			stateSecretFound = true
+		case "GITHUB_READ_TOKEN":
+		default:
+			return preparedContainerAnalysisTask{}, fmt.Errorf("container analysis Task secret environment %s is not allowed", secret.Name)
 		}
 	}
 	if !tokenSecretFound {

@@ -1080,3 +1080,62 @@ branding:
 		t.Fatal("expected strict parsing to reject an unknown field")
 	}
 }
+
+func TestEffectiveAnalysisSourceRepo(t *testing.T) {
+	c := validConfig()
+	got := c.EffectiveAnalysisSourceRepo()
+	if got != c.Branding.SourceRepo {
+		t.Fatalf("fallback source repo = %+v, want %+v", got, c.Branding.SourceRepo)
+	}
+	c.AI = &AI{SourceRepo: &SourceRepo{Owner: " upstream ", Name: " source "}}
+	got = c.EffectiveAnalysisSourceRepo()
+	if got.Owner != "upstream" || got.Name != "source" {
+		t.Fatalf("explicit source repo = %+v", got)
+	}
+}
+
+func TestAnalysisSourceRepoDoesNotRedirectWriteTargets(t *testing.T) {
+	c := validConfig()
+	c.AI = &AI{
+		SourceRepo: &SourceRepo{Owner: "upstream", Name: "source"},
+		FixPRs: &FixPRs{
+			Enabled: true, Repo: &SourceRepo{Owner: "write", Name: "fixes"},
+			AuthorName: "Jane", AuthorEmail: "jane@example.com",
+		},
+	}
+	c.Issues = &Issues{Enabled: true, Repo: &SourceRepo{Owner: "write", Name: "issues"}}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.EffectiveIssues().Repo; got.Owner != "write" || got.Name != "issues" {
+		t.Fatalf("issue target = %+v", got)
+	}
+	if got := c.EffectiveFixPRs().Repo; got.Owner != "write" || got.Name != "fixes" {
+		t.Fatalf("fix target = %+v", got)
+	}
+
+	c.Issues.Repo = nil
+	c.AI.FixPRs.Repo = nil
+	if got := c.EffectiveIssues().Repo; *got != c.Branding.SourceRepo {
+		t.Fatalf("default issue target = %+v, want branding repo", got)
+	}
+	if got := c.EffectiveFixPRs().Repo; *got != c.Branding.SourceRepo {
+		t.Fatalf("default fix target = %+v, want branding repo", got)
+	}
+}
+
+func TestValidateAnalysisSourceAndConsumerSkills(t *testing.T) {
+	c := validConfig()
+	c.AI = &AI{SourceRepo: &SourceRepo{Owner: "only-owner"}}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "ai.source_repo") {
+		t.Fatalf("partial source repo error = %v", err)
+	}
+	c.AI = &AI{ConsumerSkills: ConsumerSkills{MinimumCount: -1}}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "minimum_count") {
+		t.Fatalf("negative minimum error = %v", err)
+	}
+	c.AI = &AI{ConsumerSkills: ConsumerSkills{Required: true}}
+	if got := c.EffectiveConsumerSkills(); got.MinimumCount != 1 {
+		t.Fatalf("required default = %+v", got)
+	}
+}

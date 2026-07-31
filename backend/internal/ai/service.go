@@ -54,7 +54,7 @@ type Service struct {
 	// function-calling.
 	toolsUnsupported atomic.Bool
 
-	// sourceRepoOwner/Name identify the project's own GitHub repo for resolving
+	// sourceRepoOwner/Name identify the configured analysis GitHub repo for resolving
 	// repo-relative file citations. Empty until SetSourceRepo.
 	sourceRepoOwner string
 	sourceRepoName  string
@@ -127,7 +127,7 @@ func (s *Service) SetSkills(set *skills.Set) {
 	s.skillSet = set
 }
 
-// SetSourceRepo records branding.source_repo for resolving repo-relative file
+// SetSourceRepo records the analysis source repo for resolving repo-relative file
 // citations. Safe to call once at fetcher startup.
 func (s *Service) SetSourceRepo(owner, name string) {
 	s.sourceRepoOwner = owner

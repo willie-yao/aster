@@ -118,6 +118,38 @@ func (p *pipeline) setWatchSchedule(nextWatch, nextReconcile time.Time) {
 	}
 }
 
+func (p *pipeline) configureProgressAnalysisMetadata() {
+	if p == nil || p.progress == nil || p.aiProject == nil || p.aiProject.SkillSet == nil {
+		return
+	}
+	profiles := make([]string, 0, len(p.aiProject.ProfileSelection.Profiles()))
+	for _, profile := range p.aiProject.ProfileSelection.Profiles() {
+		profiles = append(profiles, string(profile))
+	}
+	source := p.aiProject.AnalysisSource
+	mode := "anonymous"
+	if githubReadToken() != "" {
+		mode = "authenticated"
+	}
+	configured := source.Owner != "" && source.Name != ""
+	if !configured {
+		mode = ""
+	}
+	refStrategy := ""
+	if configured {
+		refStrategy = "default-branch"
+	}
+	p.progress.SetAnalysisMetadata(fetchprogress.SourceGrounding{
+		Configured: configured, Mode: mode, Owner: source.Owner, Repository: source.Name,
+		RefStrategy: refStrategy,
+	}, fetchprogress.SkillBundle{
+		Profiles: profiles, EngineCount: p.aiProject.SkillSet.EngineCount(),
+		ConsumerCount:         p.aiProject.SkillSet.ConsumerCount(),
+		ConsumerBundlePresent: p.aiProject.SkillSet.ConsumerBundlePresent(),
+		IDs:                   p.aiProject.SkillSet.IDs(), Hash: p.aiProject.SkillSet.Hash(),
+	})
+}
+
 func (p *pipeline) planProgressAnalyses(total, buildSubjects int) {
 	if p.progress != nil {
 		p.progress.PlanAnalyses(total, buildSubjects)

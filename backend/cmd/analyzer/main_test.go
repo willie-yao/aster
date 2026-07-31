@@ -253,6 +253,7 @@ func TestRunWithScriptedModelEndpoint(t *testing.T) {
 	values["AI_API"] = "chat_completions"
 	values["AI_ENDPOINT"] = script.URL
 	values["AI_MODEL"] = "script-model"
+	values["GITHUB_READ_TOKEN"] = "github-read-secret"
 	var stdout, stderr bytes.Buffer
 	err := run(context.Background(), []string{"-data-dir", t.TempDir()}, func(name string) string { return values[name] }, &stdout, &stderr, loadRuntime)
 	if err != nil {
@@ -274,6 +275,9 @@ func TestRunWithScriptedModelEndpoint(t *testing.T) {
 	}
 	if strings.Contains(stdout.String(), "script-token") || strings.Contains(stderr.String(), "script-token") {
 		t.Fatal("AI token leaked to output")
+	}
+	if strings.Contains(stdout.String(), "github-read-secret") || strings.Contains(stderr.String(), "github-read-secret") {
+		t.Fatal("GitHub read token leaked to output")
 	}
 }
 

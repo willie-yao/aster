@@ -23,7 +23,7 @@ import (
 
 const (
 	// SchemaVersion is the current private fetch status schema.
-	SchemaVersion = 7
+	SchemaVersion = 8
 	// StatusDirectory is hidden from the public /data file server.
 	StatusDirectory = ".fetch-status"
 	// StatusFilename is the current fetch status snapshot.
@@ -246,6 +246,25 @@ type PatternProgress struct {
 	Unavailable           int                    `json:"unavailable,omitempty"`
 }
 
+// SourceGrounding reports aggregate read-only source configuration.
+type SourceGrounding struct {
+	Configured  bool   `json:"configured"`
+	Mode        string `json:"mode,omitempty"`
+	Owner       string `json:"owner,omitempty"`
+	Repository  string `json:"repository,omitempty"`
+	RefStrategy string `json:"ref_strategy,omitempty"`
+}
+
+// SkillBundle reports private recipe identity without recipe contents.
+type SkillBundle struct {
+	Profiles              []string `json:"profiles,omitempty"`
+	EngineCount           int      `json:"engine_count"`
+	ConsumerCount         int      `json:"consumer_count"`
+	ConsumerBundlePresent bool     `json:"consumer_bundle_present"`
+	IDs                   []string `json:"ids,omitempty"`
+	Hash                  string   `json:"hash,omitempty"`
+}
+
 // Status is the private, aggregate-only fetch progress snapshot.
 type Status struct {
 	SchemaVersion int      `json:"schema_version"`
@@ -272,6 +291,8 @@ type Status struct {
 	Patterns         PatternProgress  `json:"patterns"`
 	PhaseDurationsMS map[string]int64 `json:"phase_durations_ms,omitempty"`
 	CurrentTasks     []TaskMapping    `json:"current_tasks,omitempty"`
+	SourceGrounding  SourceGrounding  `json:"source_grounding,omitempty"`
+	SkillBundle      SkillBundle      `json:"skill_bundle,omitempty"`
 
 	PatternPhase     StageState `json:"pattern_phase"`
 	PublicationPhase StageState `json:"publication_phase"`
@@ -301,7 +322,7 @@ func Read(path string) (Status, error) {
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return Status{}, errors.New("fetch status has trailing data")
 	}
-	if status.SchemaVersion != 1 && status.SchemaVersion != 2 && status.SchemaVersion != 3 && status.SchemaVersion != 4 && status.SchemaVersion != 5 && status.SchemaVersion != 6 && status.SchemaVersion != SchemaVersion {
+	if status.SchemaVersion != 1 && status.SchemaVersion != 2 && status.SchemaVersion != 3 && status.SchemaVersion != 4 && status.SchemaVersion != 5 && status.SchemaVersion != 6 && status.SchemaVersion != 7 && status.SchemaVersion != SchemaVersion {
 		return Status{}, fmt.Errorf("unsupported fetch status schema %d", status.SchemaVersion)
 	}
 	if err := status.validate(); err != nil {
@@ -359,6 +380,9 @@ func (s Status) validate() error {
 	}
 	if len(s.CurrentTasks) > currentTaskLimit {
 		return errors.New("fetch status has too many Task mappings")
+	}
+	if s.SkillBundle.EngineCount < 0 || s.SkillBundle.ConsumerCount < 0 {
+		return errors.New("fetch status has invalid skill counts")
 	}
 	for _, task := range s.CurrentTasks {
 		if task.WorkItem == "" || task.TaskName == "" || task.Attempts < 0 {
@@ -472,6 +496,8 @@ type Tracker struct {
 	taskResults           map[string]bool
 	cacheDisposition      map[string]string
 	analysisPlanFinalized bool
+	sourceGrounding       SourceGrounding
+	skillBundle           SkillBundle
 
 	now               func() time.Time
 	newID             func() string
@@ -596,6 +622,7 @@ func (t *Tracker) StartPass(passType PassType) {
 		LastSuccessfulPublicationAt: t.status.LastSuccessfulPublicationAt,
 		PatternPhase:                StagePending, PublicationPhase: StagePending, SideEffectPhase: StagePending,
 		PhaseDurationsMS: map[string]int64{}, CurrentTasks: []TaskMapping{},
+		SourceGrounding: t.sourceGrounding, SkillBundle: cloneSkillBundle(t.skillBundle),
 	}
 	t.phaseCompleted = false
 	t.publishedThisPass = false
@@ -609,6 +636,21 @@ func (t *Tracker) StartPass(passType PassType) {
 	t.lastHeartbeat = now
 	t.persistLocked(true)
 	t.logPhaseStartedLocked()
+}
+
+// SetAnalysisMetadata stores source and skill metadata across watch passes.
+func (t *Tracker) SetAnalysisMetadata(source SourceGrounding, bundle SkillBundle) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.sourceGrounding = source
+	t.skillBundle = cloneSkillBundle(bundle)
+	t.status.SourceGrounding = source
+	t.status.SkillBundle = cloneSkillBundle(bundle)
+	t.status.LastProgressAt = t.now()
+	t.persistLocked(true)
 }
 
 // StartPhase begins a new phase and forces a status write.
@@ -1010,7 +1052,14 @@ func (t *Tracker) Snapshot() Status {
 	snapshot := t.status
 	snapshot.PhaseDurationsMS = maps.Clone(t.status.PhaseDurationsMS)
 	snapshot.CurrentTasks = append([]TaskMapping(nil), t.status.CurrentTasks...)
+	snapshot.SkillBundle = cloneSkillBundle(t.status.SkillBundle)
 	return snapshot
+}
+
+func cloneSkillBundle(bundle SkillBundle) SkillBundle {
+	bundle.Profiles = append([]string(nil), bundle.Profiles...)
+	bundle.IDs = append([]string(nil), bundle.IDs...)
+	return bundle
 }
 
 func (t *Tracker) update(force bool, mutate func(*Status)) {

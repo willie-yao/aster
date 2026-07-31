@@ -691,3 +691,28 @@ triggers: ["filesystem"]
 		}
 	}
 }
+
+func TestLoadMergedReportsBundleMetadata(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "skills"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "skills", "consumer.yaml"), []byte("id: consumer.recipe\ntriggers: [boom]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	set, selection, err := LoadForTools(dir, []string{"filesystem"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selection.Kubernetes || set.EngineCount() != 2 || set.ConsumerCount() != 1 || !set.ConsumerBundlePresent() {
+		t.Fatalf("metadata: selection=%+v engine=%d consumer=%d present=%t", selection, set.EngineCount(), set.ConsumerCount(), set.ConsumerBundlePresent())
+	}
+	ids := set.IDs()
+	if len(ids) != 3 || ids[0] == "" || ids[1] == "" || ids[2] == "" {
+		t.Fatalf("ids = %v", ids)
+	}
+	ids[0] = "mutated"
+	if set.IDs()[0] == "mutated" {
+		t.Fatal("IDs returned an aliased slice")
+	}
+}

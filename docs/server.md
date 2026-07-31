@@ -273,7 +273,7 @@ Post the chat request ID with a new `Idempotency-Key`:
 
 The server binds the request to the authenticated session owner and snapshots the
 selected build, published analysis generation timestamp, chat question, and chat
-answer. It resolves `branding.source_repo` only from that build's exact
+answer. It resolves the effective `ai.source_repo` only from that build's exact
 `repo_refs` entry. The revision must be a full commit SHA. The server never falls
 back to the decorated build commit, a branch name, or current `main`. It accepts a
 bare full SHA or Prow's unambiguous `ref:fullSHA` form. Composite presubmit refs
@@ -295,8 +295,8 @@ analysis, investigation direction, and source citations. Every citation path and
 line range is validated and its quote is checked against the same pinned GitHub
 revision before `verified: true` is persisted. Public repositories need no extra
 credential. Private repositories require a read-only token in
-`SOURCE_INVESTIGATION_GITHUB_TOKEN`; the Helm chart can reuse the AI Secret's
-`GITHUB_READ_TOKEN` key. A missing file, changed quote, unsafe path, mutable
+`SOURCE_INVESTIGATION_GITHUB_TOKEN`; the Helm chart wires the configured
+GitHub read-token Secret. A missing file, changed quote, unsafe path, mutable
 revision, or unavailable verification source fails the request instead of
 presenting an unverified citation.
 

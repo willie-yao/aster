@@ -30,6 +30,8 @@ type githubRepoReader struct {
 	client *http.Client
 }
 
+var githubAPIBase = "https://api.github.com"
+
 // NewGitHubRepoReader binds a reader to owner/repo at ref. Empty ref means the
 // default branch (HEAD). Empty token falls back to anonymous access. The
 // returned reader grounds the pattern agent's repotree tools.
@@ -49,7 +51,7 @@ func NewGitHubRepoReader(owner, repo, ref, token string) tools.RepoReader {
 // ListTree returns the repo's blob paths at the bound ref via the recursive
 // git-trees API.
 func (r *githubRepoReader) ListTree(ctx context.Context) ([]string, error) {
-	u := fmt.Sprintf("https://api.github.com/repos/%s/%s/git/trees/%s?recursive=1",
+	u := fmt.Sprintf("%s/repos/%s/%s/git/trees/%s?recursive=1", githubAPIBase,
 		r.owner, r.repo, url.PathEscape(r.ref))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
@@ -88,16 +90,23 @@ func (r *githubRepoReader) ListTree(ctx context.Context) ([]string, error) {
 	return paths, nil
 }
 
-// ReadFile returns a file's content at the bound ref via the raw CDN. found is
-// false (no error) when the file does not exist. The CDN serves public repos
-// only; on a private source repo reads 404 (the tree listing still works with a
-// token), so grounding assumes a public repository.
+// ReadFile returns a file's content at the bound ref. Authenticated readers use
+// the GitHub contents API so private repositories work. Anonymous readers use
+// the public raw CDN. found is false when the file does not exist.
 func (r *githubRepoReader) ReadFile(ctx context.Context, path string) (string, bool, error) {
 	escaped := strings.Join(mapSegments(strings.Split(path, "/"), url.PathEscape), "/")
 	u := fmt.Sprintf("%s/%s/%s/%s/%s", rawContentBase, r.owner, r.repo, url.PathEscape(r.ref), escaped)
+	if r.token != "" {
+		u = fmt.Sprintf("%s/repos/%s/%s/contents/%s?ref=%s", githubAPIBase, r.owner, r.repo, escaped, url.QueryEscape(r.ref))
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return "", false, err
+	}
+	if r.token != "" {
+		req.Header.Set("Authorization", "Bearer "+r.token)
+		req.Header.Set("Accept", "application/vnd.github.raw+json")
+		req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	}
 	req.Header.Set("User-Agent", "prow-ai-dashboard")
 	resp, err := r.client.Do(req)

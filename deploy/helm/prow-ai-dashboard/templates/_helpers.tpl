@@ -138,6 +138,17 @@ Name of the Secret holding the AI token.
 {{- end -}}
 {{- end -}}
 
+{{/* Name of the Secret holding the read-only GitHub source token. */}}
+{{- define "prow-ai-dashboard.githubReadSecret" -}}
+{{- if .Values.ai.githubReadTokenSecretName -}}
+{{- .Values.ai.githubReadTokenSecretName -}}
+{{- else if and (not .Values.ai.githubReadToken) .Values.ai.existingSecret -}}
+{{- .Values.ai.existingSecret -}}
+{{- else -}}
+{{- printf "%s-github-read" (include "prow-ai-dashboard.fullname" .) -}}
+{{- end -}}
+{{- end -}}
+
 {{/*
 Name of the ServiceAccount used by Orka fix generation.
 */}}
@@ -201,6 +212,12 @@ Validate AI provider configuration.
 {{- define "prow-ai-dashboard.validateAI" -}}
 {{- if not (has .Values.ai.api (list "chat_completions" "responses")) -}}
 {{- fail "ai.api must be chat_completions or responses" -}}
+{{- end -}}
+{{- if and .Values.ai.githubReadToken .Values.ai.githubReadTokenSecretName -}}
+{{- fail "ai.githubReadToken and ai.githubReadTokenSecretName are mutually exclusive" -}}
+{{- end -}}
+{{- if and (or .Values.ai.githubReadToken .Values.ai.githubReadTokenSecretName .Values.ai.existingSecret) (not .Values.ai.githubReadTokenSecretKey) -}}
+{{- fail "ai.githubReadTokenSecretKey is required when a GitHub read-token Secret is configured" -}}
 {{- end -}}
 {{- $contextWindow := printf "%v" .Values.ai.contextWindowTokens -}}
 {{- if not (regexMatch "^(0|[1-9][0-9]{0,9})$" $contextWindow) -}}

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -134,5 +135,96 @@ func TestAnalysisChatAgentTimeout(t *testing.T) {
 	}
 	if got := analysisChatAgentTimeout(45*time.Minute, 0); got != analysisChatDefaultTimeout {
 		t.Fatalf("legacy default timeout = %v", got)
+	}
+}
+
+func TestLoadProjectRequiresConsumerSkillCount(t *testing.T) {
+	dir := t.TempDir()
+	write := func(path, content string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(dir, "project.yaml"), `id: test
+name: Test
+testgrid:
+  dashboard: test
+storage:
+  provider: local
+  base: /fixtures
+branding:
+  title: Test
+  base_path: /
+  site_url: https://example.invalid
+  source_repo: {owner: branding, name: repo}
+ai:
+  source_repo: {owner: analysis, name: source}
+  consumer_skills:
+    required: true
+    minimum_count: 2
+  tools: [filesystem]
+`)
+	write(filepath.Join(dir, "prompts", "system.md"), "Investigate artifacts.\n")
+	write(filepath.Join(dir, "skills", "one.yaml"), "id: consumer.one\ntriggers: [boom]\n")
+	cfg, err := project.Load(filepath.Join(dir, "project.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = LoadProject(dir, cfg, ProviderFallbacks{Endpoint: "https://model.invalid/v1/chat/completions", Model: "model"})
+	if err == nil || !strings.Contains(err.Error(), "count 1") || !strings.Contains(err.Error(), "minimum 2") {
+		t.Fatalf("consumer skill requirement error = %v", err)
+	}
+	write(filepath.Join(dir, "skills", "two.yaml"), "id: consumer.two\ntriggers: [bang]\n")
+	loaded, err := LoadProject(dir, cfg, ProviderFallbacks{Endpoint: "https://model.invalid/v1/chat/completions", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.AnalysisSource.Owner != "analysis" || loaded.AnalysisSource.Name != "source" {
+		t.Fatalf("analysis source = %+v", loaded.AnalysisSource)
+	}
+	manifest := loaded.Config.AI.SkillBundle
+	if manifest == nil || manifest.EngineCount != 2 || manifest.ConsumerCount != 2 || !manifest.ConsumerBundlePresent || manifest.Hash == "" {
+		t.Fatalf("public skill metadata = %+v", manifest)
+	}
+	if len(manifest.Profiles) != 1 || manifest.Profiles[0] != "prow" {
+		t.Fatalf("profiles = %v", manifest.Profiles)
+	}
+}
+
+func TestLoadProjectRequiredConsumerBundleMissing(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "prompts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	config := `id: test
+name: Test
+testgrid: {dashboard: test}
+storage: {provider: local, base: /fixtures}
+branding:
+  title: Test
+  base_path: /
+  site_url: https://example.invalid
+  source_repo: {owner: branding, name: repo}
+ai:
+  consumer_skills: {required: true}
+  tools: [filesystem]
+`
+	if err := os.WriteFile(filepath.Join(dir, "project.yaml"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "prompts", "system.md"), []byte("Investigate artifacts.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := project.Load(filepath.Join(dir, "project.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = LoadProject(dir, cfg, ProviderFallbacks{Endpoint: "https://model.invalid/v1/chat/completions", Model: "model"})
+	if err == nil || !strings.Contains(err.Error(), "bundle is required") {
+		t.Fatalf("missing bundle error = %v", err)
 	}
 }

@@ -604,7 +604,7 @@ grep -A1 -Fq 'name: ANALYSIS_SOURCE_INVESTIGATION_ENABLED' "$tmp/source-investig
 grep -Fq 'name: ANALYSIS_SOURCE_INVESTIGATION_MAX_PER_SESSION' "$tmp/source-investigation.yaml"
 grep -Fq 'name: ANALYSIS_SOURCE_INVESTIGATION_MAX_ACTIVE_PER_OWNER' "$tmp/source-investigation.yaml"
 grep -A6 -Fq 'name: SOURCE_INVESTIGATION_GITHUB_TOKEN' "$tmp/source-investigation.yaml"
-grep -Fq 'optional: true' "$tmp/source-investigation.yaml"
+grep -Fq 'name: test-prow-ai-dashboard-github-read' "$tmp/source-investigation.yaml"
 grep -Fq 'automountServiceAccountToken: true' "$tmp/source-investigation.yaml"
 grep -Fq 'name: ORKA_API_TOKEN_FILE' "$tmp/source-investigation.yaml"
 grep -Fq 'value: /var/run/secrets/kubernetes.io/serviceaccount/token' "$tmp/source-investigation.yaml"
@@ -871,5 +871,67 @@ helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set analysisCache.generation=0 \
   --show-only templates/worker-deployment.yaml > "$tmp/cache-generation-zero.yaml"
 grep -A1 -F 'name: AI_CACHE_GENERATION' "$tmp/cache-generation-zero.yaml" | grep -Fq 'value: "0"'
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set ai.enabled=true --set ai.token=test-token \
+  --set ai.githubReadToken=read-token \
+  --show-only templates/secret-github-read.yaml > "$tmp/github-read-inline-secret.yaml"
+grep -Fq 'name: test-prow-ai-dashboard-github-read' "$tmp/github-read-inline-secret.yaml"
+grep -Fq 'GITHUB_READ_TOKEN: "read-token"' "$tmp/github-read-inline-secret.yaml"
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set ai.enabled=true --set ai.token=test-token \
+  --set ai.githubReadToken=read-token \
+  --show-only templates/secret-ai.yaml > "$tmp/github-read-ai-secret.yaml"
+if grep -Fq 'GITHUB_READ_TOKEN' "$tmp/github-read-ai-secret.yaml"; then
+  echo 'GitHub read token was stored in the model Secret' >&2
+  exit 1
+fi
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set ai.enabled=true --set ai.token=test-token \
+  --set ai.githubReadTokenSecretName=github-read \
+  --show-only templates/worker-deployment.yaml > "$tmp/github-read-worker.yaml"
+grep -A5 -Fq 'name: GITHUB_READ_TOKEN' "$tmp/github-read-worker.yaml"
+grep -Fq 'name: github-read' "$tmp/github-read-worker.yaml"
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set mode=cron --set ai.enabled=true --set ai.token=test-token \
+  --set ai.githubReadTokenSecretName=github-read \
+  --show-only templates/fetcher-cronjob.yaml > "$tmp/github-read-cron.yaml"
+grep -A5 -Fq 'name: GITHUB_READ_TOKEN' "$tmp/github-read-cron.yaml"
+grep -Fq 'name: github-read' "$tmp/github-read-cron.yaml"
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" "${container_args[@]}" \
+  --set ai.githubReadTokenSecretName=github-read > "$tmp/github-read-container.yaml"
+grep -Fq -- '-orka-analysis-github-secret=github-read' "$tmp/github-read-container.yaml"
+grep -Fq -- '-orka-analysis-github-token-key=GITHUB_READ_TOKEN' "$tmp/github-read-container.yaml"
+grep -Fq "e.name == 'GITHUB_READ_TOKEN'" "$tmp/github-read-container.yaml"
+grep -Fq 'GitHub read Secret' "$tmp/github-read-container.yaml"
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" "${container_watch_args[@]}" \
+  --set ai.githubReadTokenSecretName=github-read \
+  --show-only templates/worker-deployment.yaml > "$tmp/github-read-container-watch.yaml"
+grep -Fq -- '-orka-analysis-github-secret=github-read' "$tmp/github-read-container-watch.yaml"
+grep -Fq -- '-orka-analysis-github-token-key=GITHUB_READ_TOKEN' "$tmp/github-read-container-watch.yaml"
+grep -A5 -Fq 'name: GITHUB_READ_TOKEN' "$tmp/github-read-container-watch.yaml"
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set ai.enabled=true --set ai.token=test-token \
+  --set ai.githubReadToken=read-token \
+  --show-only templates/configmap-project.yaml > "$tmp/github-read-configmap.yaml"
+if grep -Fq 'read-token' "$tmp/github-read-configmap.yaml"; then
+  echo 'GitHub read token leaked into project ConfigMap' >&2
+  exit 1
+fi
+
+if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set ai.enabled=true --set ai.token=test-token \
+  --set ai.githubReadToken=read-token \
+  --set ai.githubReadTokenSecretName=github-read > "$tmp/github-read-conflict.yaml" 2>&1; then
+  echo 'GitHub read token accepted inline and Secret name together' >&2
+  exit 1
+fi
+grep -Fq 'ai.githubReadToken and ai.githubReadTokenSecretName are mutually exclusive' "$tmp/github-read-conflict.yaml"
 
 echo 'Helm render checks passed.'

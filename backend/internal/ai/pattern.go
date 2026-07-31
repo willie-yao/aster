@@ -847,7 +847,7 @@ func (s *Service) guardPatternPaths(ctx context.Context, p *patternResponse) {
 // patternPathVerifier returns a func reporting whether a cited path exists, or
 // nil when nothing can verify. The memoized repo tree verifies both full paths
 // and bare basenames; if the tree is unavailable it falls back to a raw-CDN
-// existence check against branding.source_repo so the guard stays active rather
+// existence check against the configured analysis source so the guard stays active rather
 // than silently disabling. The CDN fallback verifies only explicit repo-relative
 // paths, leaving bare names unflagged since it cannot locate them to a subdir.
 func (s *Service) patternPathVerifier(ctx context.Context) func(string) bool {

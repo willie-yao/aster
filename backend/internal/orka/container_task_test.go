@@ -608,3 +608,34 @@ func TestAnalyzerImageChangesTaskIdentityWithoutChangingFailureCacheKey(t *testi
 		t.Fatalf("image-only change altered failure cache key: before=%q after=%q", beforeKey, afterKey)
 	}
 }
+
+func TestBuildContainerAnalysisResourcesAllowsGitHubReadSecret(t *testing.T) {
+	spec := containerTaskSpec(t)
+	spec.SecretEnv = append(spec.SecretEnv, SecretEnvVar{
+		Name: "GITHUB_READ_TOKEN", SecretName: "github-read", SecretKey: "token",
+	})
+	resources, err := BuildContainerAnalysisResources(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, raw := range resources.Task["spec"].(map[string]any)["env"].([]any) {
+		entry := raw.(map[string]any)
+		if entry["name"] != "GITHUB_READ_TOKEN" {
+			continue
+		}
+		secret := entry["valueFrom"].(map[string]any)["secretKeyRef"].(map[string]any)
+		found = secret["name"] == "github-read" && secret["key"] == "token"
+	}
+	if !found {
+		t.Fatalf("GitHub read Secret not rendered: %+v", resources.Task)
+	}
+}
+
+func TestBuildContainerAnalysisResourcesRejectsUnknownSecretEnvironment(t *testing.T) {
+	spec := containerTaskSpec(t)
+	spec.SecretEnv = append(spec.SecretEnv, SecretEnvVar{Name: "UNRELATED_TOKEN", SecretName: "secret", SecretKey: "token"})
+	if _, err := BuildContainerAnalysisResources(spec); err == nil || !strings.Contains(err.Error(), "not allowed") {
+		t.Fatalf("unknown Secret environment error = %v", err)
+	}
+}

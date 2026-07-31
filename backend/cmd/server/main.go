@@ -383,14 +383,15 @@ func enableSourceInvestigation(
 	if err != nil {
 		return err
 	}
+	sourceRepo := cfg.EffectiveAnalysisSourceRepo()
 	if err := chatService.ConfigureSourceInvestigation(runner, sourceinvestigation.Repository{
-		Owner: cfg.Branding.SourceRepo.Owner, Name: cfg.Branding.SourceRepo.Name,
+		Owner: sourceRepo.Owner, Name: sourceRepo.Name,
 	}, serviceOpts); err != nil {
 		return fmt.Errorf("configuring source investigation service: %w", err)
 	}
 	opts.SourceInvestigation = chatService
 	opts.SourceInvestigationTimeout = timeout
-	log.Printf("🔎 source investigation enabled (repo=%s/%s timeout=%s)", cfg.Branding.SourceRepo.Owner, cfg.Branding.SourceRepo.Name, timeout)
+	log.Printf("🔎 source investigation enabled (repo=%s/%s timeout=%s)", sourceRepo.Owner, sourceRepo.Name, timeout)
 	return nil
 }
 

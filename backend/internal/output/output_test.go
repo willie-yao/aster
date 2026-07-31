@@ -398,3 +398,37 @@ func TestWriteManifest(t *testing.T) {
 		t.Errorf("manifest mismatch: got %+v want %+v", got, cfg)
 	}
 }
+
+func TestWriteManifestPublishesOnlyAggregateSkillMetadata(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &project.Config{
+		ID: "test", Name: "Test", Source: project.Source{}, TestGrid: project.TestGrid{Dashboard: "test"},
+		Storage:  project.Storage{Provider: "gcs", Bucket: "bucket"},
+		Branding: project.Branding{Title: "Test", BasePath: "/", SiteURL: "https://example.invalid", SourceRepo: project.SourceRepo{Owner: "branding", Name: "repo"}},
+		AI: &project.AI{
+			SourceRepo: &project.SourceRepo{Owner: "analysis", Name: "source"},
+			SkillBundle: &project.SkillBundleManifest{
+				Profiles: []string{"prow", "kubernetes"}, EngineCount: 6, ConsumerCount: 11,
+				ConsumerBundlePresent: true, Hash: "1234abcd",
+			},
+		},
+	}
+	if err := WriteManifest(dir, cfg); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, want := range []string{`"source_repo"`, `"owner": "analysis"`, `"engine_count": 6`, `"consumer_count": 11`, `"hash": "1234abcd"`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("manifest missing %s: %s", want, text)
+		}
+	}
+	for _, forbidden := range []string{"consumer.recipe", "procedure", "triggers", "required_evidence", strings.Repeat("a", 64)} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("manifest contains private skill metadata %q: %s", forbidden, text)
+		}
+	}
+}

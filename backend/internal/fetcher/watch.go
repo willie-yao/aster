@@ -71,6 +71,7 @@ func RunWatch(ctx context.Context, opts Options, watchInterval, reconcileInterva
 		return haltSystemicWatchFailure(ctx, err)
 	}
 	p.progress = progress
+	p.configureProgressAnalysisMetadata()
 	progress.CompletePhase()
 	if err := ctx.Err(); err != nil {
 		progress.FinishCancelled()

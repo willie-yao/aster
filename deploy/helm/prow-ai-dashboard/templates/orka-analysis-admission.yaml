@@ -4,6 +4,7 @@
 {{- $analysisNamespace := include "prow-ai-dashboard.orkaAnalysisNamespace" . -}}
 {{- $image := include "prow-ai-dashboard.analyzerImage" . -}}
 {{- $stateSecret := include "prow-ai-dashboard.orkaAnalysisStateSecret" . -}}
+{{- $githubReadSecret := or (ne .Values.ai.githubReadToken "") (ne .Values.ai.githubReadTokenSecretName "") -}}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -58,9 +59,9 @@ spec:
     - expression: "!has(object.spec.execution.affinity) || object.spec.execution.affinity == {}"
       message: "analysis Tasks must not add affinity"
     {{- end }}
-    - expression: {{ printf "size(object.spec.env) == %d + (object.spec.env.exists(e, e.name == 'AI_CACHE_GENERATION') ? 1 : 0)" (add 10 (ternary 1 0 (gt (int .Values.ai.contextWindowTokens) 0))) | quote }}
+    - expression: {{ printf "size(object.spec.env) == %d + (object.spec.env.exists(e, e.name == 'AI_CACHE_GENERATION') ? 1 : 0)" (add (add 10 (ternary 1 0 (gt (int .Values.ai.contextWindowTokens) 0))) (ternary 1 0 $githubReadSecret)) | quote }}
       message: "analysis Tasks must use the exact analyzer environment"
-    - expression: "object.spec.env.all(e, e.name in ['PROW_AI_ANALYSIS_BUNDLE', 'PROW_AI_ANALYSIS_BUNDLE_SHA256', 'PROW_AI_TASK_NAMESPACE', 'PROW_AI_TASK_NAME', 'PROW_AI_CONTRACT_VERSION', 'AI_API', 'AI_ENDPOINT', 'AI_MODEL', 'AI_CACHE_GENERATION', 'AI_CONTEXT_WINDOW_TOKENS', 'AI_TOKEN', 'PROW_AI_STATE_KEY'])"
+    - expression: "object.spec.env.all(e, e.name in ['PROW_AI_ANALYSIS_BUNDLE', 'PROW_AI_ANALYSIS_BUNDLE_SHA256', 'PROW_AI_TASK_NAMESPACE', 'PROW_AI_TASK_NAME', 'PROW_AI_CONTRACT_VERSION', 'AI_API', 'AI_ENDPOINT', 'AI_MODEL', 'AI_CACHE_GENERATION', 'AI_CONTEXT_WINDOW_TOKENS', 'AI_TOKEN', 'GITHUB_READ_TOKEN', 'PROW_AI_STATE_KEY'])"
       message: "analysis Tasks contain an unauthorized environment variable"
     - expression: "object.spec.env.exists(e, e.name == 'PROW_AI_ANALYSIS_BUNDLE' && has(e.valueFrom) && has(e.valueFrom.configMapKeyRef) && e.valueFrom.configMapKeyRef.name == object.metadata.name + '-input' && e.valueFrom.configMapKeyRef.key == 'bundle.json')"
       message: "analysis Tasks must use their content-addressed bundle"
@@ -94,6 +95,13 @@ spec:
     {{- end }}
     - expression: {{ printf "object.spec.env.exists(e, e.name == 'AI_TOKEN' && has(e.valueFrom) && has(e.valueFrom.secretKeyRef) && e.valueFrom.secretKeyRef.name == %s && e.valueFrom.secretKeyRef.key == %s)" (toJson $cfg.modelAuth.existingSecret) (toJson $cfg.modelAuth.tokenKey) | quote }}
       message: "analysis Tasks must use only the configured model Secret"
+    {{- if $githubReadSecret }}
+    - expression: {{ printf "object.spec.env.exists(e, e.name == 'GITHUB_READ_TOKEN' && has(e.valueFrom) && has(e.valueFrom.secretKeyRef) && e.valueFrom.secretKeyRef.name == %s && e.valueFrom.secretKeyRef.key == %s)" (toJson (include "prow-ai-dashboard.githubReadSecret" .)) (toJson .Values.ai.githubReadTokenSecretKey) | quote }}
+      message: "analysis Tasks must use only the configured GitHub read Secret"
+    {{- else }}
+    - expression: "!object.spec.env.exists(e, e.name == 'GITHUB_READ_TOKEN')"
+      message: "analysis Tasks must not use a GitHub read Secret when source credentials are not configured"
+    {{- end }}
     - expression: {{ printf "object.spec.env.exists(e, e.name == 'PROW_AI_STATE_KEY' && has(e.valueFrom) && has(e.valueFrom.secretKeyRef) && e.valueFrom.secretKeyRef.name == %s && e.valueFrom.secretKeyRef.key == %s)" (toJson $stateSecret) (toJson $cfg.state.key) | quote }}
       message: "analysis Tasks must use only the configured state Secret"
     - expression: "(!has(object.spec.priority) || object.spec.priority == 500) && (!has(object.spec.webhookURL) || object.spec.webhookURL == '') && !has(object.spec.secretRef) && !has(object.spec.sessionRef)"

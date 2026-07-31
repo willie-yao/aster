@@ -559,6 +559,21 @@ For production, provide the token via `ai.existingSecret` (see [Reusing
 existing config](#reusing-existing-config)) rather than `--set ai.token`, which
 lands in shell history and Helm release metadata.
 
+Source grounding uses a separate optional Secret. Public repositories work
+anonymously. For reliable rate limits or private repositories, create a
+read-only token Secret and reference it independently from the model Secret:
+
+```yaml
+ai:
+  githubReadTokenSecretName: dashboard-github-read
+  githubReadTokenSecretKey: GITHUB_READ_TOKEN
+```
+
+In `orka-container` mode, create the same Secret name and key in the dedicated
+analysis namespace. The chart copies an inline `ai.githubReadToken` to both
+namespaces for development, but inline values are stored in Helm release
+metadata and should not be used in production.
+
 When the provider's total context window is independently known, add
 `--set ai.contextWindowTokens=<tokens>` with at least `9217` tokens. For the current Copilot GPT-5 mini
 deployment, use `--set ai.contextWindowTokens=128000`. Leave it unset for a
@@ -608,6 +623,7 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | `ai.enabled`, `ai.endpoint`, `ai.model`, `ai.token` | AI analysis and its OpenAI-compatible endpoint. |
 | `ai.contextWindowTokens` | Optional operator-provided total provider context window. Set only with endpoint evidence. Values must be at least `9217`; use `128000` for the current Copilot GPT-5 mini deployment. |
 | `ai.existingSecret`, `ai.tokenSecretKey` | Reuse a Secret holding the token. |
+| `ai.githubReadTokenSecretName`, `ai.githubReadTokenSecretKey` | Reuse a separate read-only GitHub token Secret. Omit it for anonymous public-repository grounding. |
 | `fetcher.schedule` | Cron schedule (default every 6 hours). `mode: cron`. |
 | `fetcher.suspend` | Suspend scheduled CronJob starts while allowing manual Jobs. Retain `true` for rollback when watch mode is active. |
 | `fetcher.watchInterval`, `fetcher.reconcileInterval` | Refresh and full-pass cadence. `mode: watch`. |
@@ -716,8 +732,8 @@ dedicated ServiceAccount with only Task create, get, patch, and delete
 permissions. Source investigation alone does not require the git-capable fixer
 image. When write actions and `orka.fixRuntime.enabled=true` are also enabled,
 the existing fixer image selection still applies. If the source repository is
-private, put a read-only GitHub token in the AI Secret under `GITHUB_READ_TOKEN`
-so the server can verify returned quotes against the pinned commit.
+private, configure `ai.githubReadTokenSecretName` so the server can verify
+returned quotes against the pinned commit.
 
 `retries` must be between `0` and `2`. A nonzero `max_turns` must be between `1`
 and `1000`, matching the Orka Task CRD.
