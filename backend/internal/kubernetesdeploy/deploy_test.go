@@ -192,6 +192,15 @@ func TestRunIncludesValidatedConsumerSkillsAndClearsStaleValues(t *testing.T) {
 	}
 }
 
+func TestRunRejectsReservedSkillFilename(t *testing.T) {
+	dir := writeBundle(t, minimalProject, "prompt")
+	writeFile(t, filepath.Join(dir, "skills", "project.yaml"), "id: reserved-project\ntriggers: [failure]\n")
+	err := run(context.Background(), baseOptions(dir), &recordingRunner{}, io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "is reserved by the project ConfigMap") {
+		t.Fatalf("error = %v, want reserved filename failure", err)
+	}
+}
+
 func TestRunRejectsSkillFilenameThatCannotBeMounted(t *testing.T) {
 	dir := writeBundle(t, minimalProject, "prompt")
 	writeFile(t, filepath.Join(dir, "skills", "bad name.yaml"), "id: bad-name\ntriggers: [failure]\n")

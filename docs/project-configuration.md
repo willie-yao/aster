@@ -202,8 +202,9 @@ a secret in another header.
 
 Diagnostic recipes live under `skills/*.yaml` or `skills/*.yml`. Their presence
 is the opt-in. Pages, local development, and the Kubernetes bundle wrapper load
-the same directory. The analyzer loads these recipes, enforces their required
-evidence, and includes the skill-set hash in cache acceptance. See
+the same directory. Filenames must be valid ConfigMap keys and cannot be
+`project.yaml`. The analyzer loads these recipes, enforces their
+required evidence, and includes the skill-set hash in cache acceptance. See
 [Custom diagnostic skills](skills.md).
 
 Deployments that require a consumer bundle can fail startup when it is absent

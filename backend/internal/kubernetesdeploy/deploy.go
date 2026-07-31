@@ -166,6 +166,9 @@ func consumerSkillPaths(projectDir string) ([]string, error) {
 	sort.Strings(paths)
 	for _, path := range paths {
 		name := filepath.Base(path)
+		if name == "project.yaml" {
+			return nil, fmt.Errorf("consumer skill filename %q is reserved by the project ConfigMap", name)
+		}
 		if problems := k8svalidation.IsConfigMapKey(name); len(problems) > 0 {
 			return nil, fmt.Errorf("consumer skill filename %q is not a valid ConfigMap key: %s", name, strings.Join(problems, ", "))
 		}

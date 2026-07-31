@@ -45,6 +45,30 @@ if grep -Eq '^kind: (CronJob|Job)$' "$tmp/default.yaml"; then
   echo 'watch mode rendered a CronJob or manual Job' >&2
   exit 1
 fi
+
+# The bundle wrapper clears skill entries inherited from values, then adds the
+# current files. Helm applies --set-json before --set-file.
+cat > "$tmp/stale-skills.yaml" <<'VALUES'
+project:
+  skills:
+    stale.yaml: stale
+VALUES
+cat > "$tmp/current-skill.yaml" <<'SKILL'
+id: current
+triggers: [failure]
+SKILL
+helm template test "$chart" -n dashboard-test \
+  -f "$tmp/values.yaml" -f "$tmp/stale-skills.yaml" \
+  --set-json 'project.skills={}' \
+  --set-file "project.skills.current\.yaml=$tmp/current-skill.yaml" \
+  --show-only templates/configmap-project.yaml > "$tmp/bundle-skills.yaml"
+grep -Fq 'current.yaml: |' "$tmp/bundle-skills.yaml"
+if grep -Fq 'stale.yaml:' "$tmp/bundle-skills.yaml"; then
+  echo 'bundle skill override retained a stale values entry' >&2
+  exit 1
+fi
+  exit 1
+fi
 for removed in orka-producer orka-ingestor orka-artifact-tool submit-analysis 'type: ai' 'kind: RoleBinding' 'kind: ValidatingAdmissionPolicy'; do
   if grep -Fq "$removed" "$tmp/default.yaml"; then
     echo "default render contains removed Orka analysis resource: $removed" >&2
