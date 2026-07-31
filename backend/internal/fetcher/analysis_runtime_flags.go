@@ -24,6 +24,8 @@ func BindAnalysisRuntimeFlags(fs *flag.FlagSet, opts *Options) *AnalysisRuntimeF
 	fs.StringVar(&container.Image, "orka-analysis-image", "", "analyzer image for Orka container Tasks")
 	fs.StringVar(&container.ModelSecretName, "orka-analysis-model-secret", "", "model token Secret in the Orka namespace")
 	fs.StringVar(&container.ModelTokenKey, "orka-analysis-model-token-key", "token", "model token Secret key")
+	fs.StringVar(&container.GitHubSecretName, "orka-analysis-github-secret", "", "read-only GitHub token Secret in the Orka namespace")
+	fs.StringVar(&container.GitHubTokenKey, "orka-analysis-github-token-key", "", "read-only GitHub token Secret key")
 	fs.StringVar(&container.StateSecretName, "orka-analysis-state-secret", "", "state key Secret name in the dashboard and Orka namespaces")
 	fs.StringVar(&container.StateSecretKey, "orka-analysis-state-key", "state-key", "state Secret key")
 	fs.IntVar(&container.MaxConcurrent, "orka-analysis-max-concurrent-tasks", 2, "maximum concurrent Orka analysis Tasks")

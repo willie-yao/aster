@@ -88,6 +88,21 @@ export interface FetchProgressStatus {
     retained?: number;
     unavailable?: number;
   };
+  source_grounding?: {
+    configured: boolean;
+    mode?: "anonymous" | "authenticated";
+    owner?: string;
+    repository?: string;
+    ref_strategy?: string;
+  };
+  skill_bundle?: {
+    profiles?: string[];
+    engine_count: number;
+    consumer_count: number;
+    consumer_bundle_present: boolean;
+    ids?: string[];
+    hash?: string;
+  };
   pattern_phase: string;
   publication_phase: string;
   side_effect_phase: string;

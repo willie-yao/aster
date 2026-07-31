@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -753,5 +754,29 @@ func TestTrackerCompatibleReuseDoesNotCountTaskActivity(t *testing.T) {
 	got := tracker.Snapshot().Analyses
 	if got.LogicalTotal != 1 || got.Completed != 1 || got.CompatibleResultsReused != 1 || got.Queued != 0 || got.TaskAttempts != 0 || got.ExistingTasksAdopted != 0 || got.ResultsRetrieved != 0 {
 		t.Fatalf("compatible reuse progress = %+v", got)
+	}
+}
+
+func TestTrackerPersistsAnalysisMetadataAcrossPasses(t *testing.T) {
+	tracker := newTracker(t.TempDir(), "sha-test", trackerOptions{
+		now:          func() time.Time { return time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC) },
+		newID:        func() string { return "0123456789abcdef01234567" },
+		write:        func(string, Status) error { return nil },
+		writeHistory: func(string, History) error { return nil },
+		logf:         func(string, ...any) {},
+	})
+	tracker.StartPass(PassInitialWatch)
+	source := SourceGrounding{Configured: true, Mode: "authenticated", Owner: "kubernetes-sigs", Repository: "cluster-api-provider-azure", RefStrategy: "default-branch"}
+	bundle := SkillBundle{Profiles: []string{"prow", "kubernetes"}, EngineCount: 6, ConsumerCount: 11, ConsumerBundlePresent: true, IDs: []string{"engine.prow.one", "consumer.one"}, Hash: strings.Repeat("a", 64)}
+	tracker.SetAnalysisMetadata(source, bundle)
+	first := tracker.Snapshot()
+	if first.SourceGrounding != source || !reflect.DeepEqual(first.SkillBundle, bundle) {
+		t.Fatalf("metadata = source=%+v skills=%+v", first.SourceGrounding, first.SkillBundle)
+	}
+	first.SkillBundle.IDs[0] = "mutated"
+	tracker.StartPass(PassLightweightWatch)
+	second := tracker.Snapshot()
+	if second.SkillBundle.IDs[0] != "engine.prow.one" || second.SkillBundle.Hash != bundle.Hash {
+		t.Fatalf("metadata did not survive pass reset: %+v", second.SkillBundle)
 	}
 }

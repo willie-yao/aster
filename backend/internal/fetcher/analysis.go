@@ -122,7 +122,10 @@ func planContainerAnalysisWork(ctx context.Context, httpClient *http.Client, wor
 	state := container.StateStore()
 	var linkResolver *ai.FileLinkResolver
 	if project != nil && project.Config != nil {
-		source := project.Config.Branding.SourceRepo
+		source := project.AnalysisSource
+		if source.Owner == "" || source.Name == "" {
+			source = project.Config.EffectiveAnalysisSourceRepo()
+		}
 		linkResolver = ai.NewFileLinkResolver(source.Owner, source.Name)
 	}
 	for _, item := range work {
@@ -525,6 +528,8 @@ func (p *pipeline) ensureContainerAnalyzer() (containerFailureAnalyzer, error) {
 		CacheGeneration:     p.aiProject.CacheGeneration,
 		ModelSecretName:     cfg.ModelSecretName,
 		ModelTokenKey:       cfg.ModelTokenKey,
+		GitHubSecretName:    cfg.GitHubSecretName,
+		GitHubTokenKey:      cfg.GitHubTokenKey,
 		StateSecretName:     cfg.StateSecretName,
 		StateSecretKey:      cfg.StateSecretKey,
 		StateKey:            stateKey,
@@ -574,10 +579,10 @@ func aiEndpoint(cfg *project.Config) string {
 	return cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL")).Endpoint
 }
 
-// githubReadToken returns the token for read-only GitHub API access (the
-// pattern agent's recursive repo-tree listing). GITHUB_READ_TOKEN is preferred;
+// githubReadToken returns the token for read-only GitHub source access.
+// GITHUB_READ_TOKEN is preferred;
 // FIX_TOKEN then GITHUB_TOKEN are reused as fallbacks so a deploy that already
-// has a fix-PR token or the Actions-provided token grounds the pattern agent
+// has a fix-PR token or the Actions-provided token enables authenticated reads
 // without extra configuration.
 func githubReadToken() string {
 	for _, name := range []string{"GITHUB_READ_TOKEN", "FIX_TOKEN", "GITHUB_TOKEN"} {

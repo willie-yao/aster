@@ -47,6 +47,12 @@ every other field is optional and runs with engine defaults when unset:
 ai:
   endpoint: ...                 # required when AI is enabled; or env AI_ENDPOINT
   model: ...                    # required when AI is enabled; or env AI_MODEL
+  source_repo:                  # optional read-only source, defaults to branding.source_repo
+    owner: my-org
+    name: my-project
+  consumer_skills:              # optional mounted-bundle requirement
+    required: false
+    minimum_count: 0
   cache_generation: ""          # optional reversible full-reanalysis namespace
   concurrency: 1                # parallel analyses (raise for endpoints you control)
   max_iters: 15                 # tool-call rounds per failure
@@ -793,16 +799,17 @@ The per-build analyses fed into this pass are already grounded (each cites real
 artifact files and line numbers from its own agentic loop), but the correlation
 step names the source **file or config to change** in `suggested_fix`. To keep
 that from being a plausible-sounding guess, the pass grounds itself on the real
-repository when `branding.source_repo` is set and a read token is available:
+repository when the effective `ai.source_repo` is set. A token is optional for
+public repositories:
 
 - **Repo tool loop.** With a reader wired, the correlation runs as a repotree
   loop (`list_repo_tree` / `read_repo_file` / `grep_repo` over the source repo
   at `HEAD`), so the model verifies a path exists before naming it. The
   recursive tree listing and file reads are memoized once per run across every
-  job. Set the token via `GITHUB_READ_TOKEN` (falling back to `FIX_TOKEN`, then
-  the Actions-provided `GITHUB_TOKEN`); it clears GitHub's anonymous trees-API
-  rate limit. File reads use the `raw.githubusercontent.com` CDN and need no
-  token, so grounding assumes a public source repo.
+  job. Without a token, public repositories use anonymous tree and raw-file
+  reads. Set `GITHUB_READ_TOKEN` for sustained use or private repositories.
+  `FIX_TOKEN` and the Actions-provided `GITHUB_TOKEN` remain compatibility
+  fallbacks outside Helm. Authenticated file reads use the GitHub contents API.
 - **Path guard (always on).** Independent of the tool loop, any path named in
   `suggested_fix` that does not exist in the source repo is annotated
   `(unverified path)` rather than asserted as fact. When no reader is wired the
@@ -810,9 +817,9 @@ repository when `branding.source_repo` is set and a read token is available:
   guarded, because `shared_root_cause` and `summary` legitimately cite GCS
   artifact paths that are not in the source tree.
 
-Without a source repo or token, the pass falls back to the single tool-free
-completion plus the CDN-backed guard, so it still never asserts a fabricated
-path.
+Without a source repo, the pass falls back to the single tool-free completion
+plus the path guard. A configured public repository remains grounded even when
+no token exists.
 
 ## Troubleshooting
 

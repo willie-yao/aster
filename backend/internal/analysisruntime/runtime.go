@@ -40,6 +40,7 @@ type ProviderFallbacks struct {
 type Project struct {
 	Config                     *project.Config
 	Provider                   project.AIProvider
+	AnalysisSource             project.SourceRepo
 	SystemPrompt               string
 	ConsumerPrompt             string
 	SkillSet                   *skills.Set
@@ -80,9 +81,30 @@ func LoadProject(projectDir string, cfg *project.Config, fallbacks ProviderFallb
 	if err != nil {
 		return nil, fmt.Errorf("loading AI skills: %w", err)
 	}
+	requirement := cfg.EffectiveConsumerSkills()
+	if requirement.Required && !set.ConsumerBundlePresent() {
+		return nil, fmt.Errorf("loading AI skills: consumer skill bundle is required but not present")
+	}
+	if requirement.MinimumCount > 0 && set.ConsumerCount() < requirement.MinimumCount {
+		return nil, fmt.Errorf("loading AI skills: consumer skill count %d is below required minimum %d", set.ConsumerCount(), requirement.MinimumCount)
+	}
+	sourceRepo := cfg.EffectiveAnalysisSourceRepo()
+	profiles := make([]string, 0, len(selection.Profiles()))
+	for _, profile := range selection.Profiles() {
+		profiles = append(profiles, string(profile))
+	}
+	if cfg.AI == nil {
+		cfg.AI = &project.AI{}
+	}
+	cfg.AI.SourceRepo = &project.SourceRepo{Owner: sourceRepo.Owner, Name: sourceRepo.Name}
+	cfg.AI.SkillBundle = &project.SkillBundleManifest{
+		Profiles: profiles, EngineCount: set.EngineCount(), ConsumerCount: set.ConsumerCount(),
+		ConsumerBundlePresent: set.ConsumerBundlePresent(), Hash: ShortHash(set.Hash()),
+	}
 	return &Project{
 		Config:                     cfg,
 		Provider:                   provider,
+		AnalysisSource:             sourceRepo,
 		SystemPrompt:               ai.ComposeSystemPrompt(prompt),
 		ConsumerPrompt:             prompt,
 		SkillSet:                   set,
@@ -264,12 +286,20 @@ func (r *Runtime) NewService(opts ServiceOptions) (*ai.Service, error) {
 	if opts.TraceStore != nil {
 		service.SetTraceStore(opts.TraceStore)
 	}
-	service.SetSourceRepo(cfg.Branding.SourceRepo.Owner, cfg.Branding.SourceRepo.Name)
-	if cfg.Branding.SourceRepo.Owner != "" && cfg.Branding.SourceRepo.Name != "" && opts.GitHubReadToken != "" {
+	sourceRepo := r.Project.AnalysisSource
+	if sourceRepo.Owner == "" || sourceRepo.Name == "" {
+		sourceRepo = cfg.EffectiveAnalysisSourceRepo()
+	}
+	service.SetSourceRepo(sourceRepo.Owner, sourceRepo.Name)
+	if sourceRepo.Owner != "" && sourceRepo.Name != "" {
 		service.SetPatternRepoReader(ai.NewGitHubRepoReader(
-			cfg.Branding.SourceRepo.Owner, cfg.Branding.SourceRepo.Name, "", opts.GitHubReadToken))
-		log.Printf("🔎 Pattern agent grounded on %s/%s source tree",
-			cfg.Branding.SourceRepo.Owner, cfg.Branding.SourceRepo.Name)
+			sourceRepo.Owner, sourceRepo.Name, "", opts.GitHubReadToken))
+		mode := "anonymous"
+		if opts.GitHubReadToken != "" {
+			mode = "authenticated"
+		}
+		log.Printf("🔎 Pattern source grounding configured (repo=%s/%s mode=%s ref=default-branch)",
+			sourceRepo.Owner, sourceRepo.Name, mode)
 	}
 
 	eff := cfg.AI.EffectiveAgentic()
@@ -306,12 +336,12 @@ func (r *Runtime) LogConfiguration() {
 		return
 	}
 	eff := r.Project.Config.AI.EffectiveAgentic()
-	skillsLog := "off"
-	if r.Project.SkillSet != nil && len(r.Project.SkillSet.Skills()) > 0 {
-		skillsLog = fmt.Sprintf("on/%d", len(r.Project.SkillSet.Skills()))
+	log.Printf("🤖 Agentic AI enabled (%d iters, %dKB model, %dMB gcs, %s timeout, min_tools=%d, min_gcs_kb=%d, critique=on/%d, tools=%v)",
+		eff.MaxIters, r.ModelByteBudget/1024, gcsByteBudget/1024/1024, eff.Timeout, eff.MinToolCalls, eff.MinGCSBytes/1024, *eff.Critique.MaxRetries, r.EnabledTools)
+	if set := r.Project.SkillSet; set != nil {
+		log.Printf("🧰 AI skills loaded (profiles=%s engine=%d consumer=%d consumer_bundle=%t hash=%s)",
+			r.Project.ProfileSelection.String(), set.EngineCount(), set.ConsumerCount(), set.ConsumerBundlePresent(), ShortHash(set.Hash()))
 	}
-	log.Printf("🤖 Agentic AI enabled (%d iters, %dKB model, %dMB gcs, %s timeout, min_tools=%d, min_gcs_kb=%d, critique=on/%d, skills=%s, tools=%v)",
-		eff.MaxIters, r.ModelByteBudget/1024, gcsByteBudget/1024/1024, eff.Timeout, eff.MinToolCalls, eff.MinGCSBytes/1024, *eff.Critique.MaxRetries, skillsLog, r.EnabledTools)
 	if r.Project.CacheGenerationFingerprint != "" {
 		log.Printf("🗂 AI cache generation configured (fingerprint=%s)", r.Project.CacheGenerationFingerprint)
 	}

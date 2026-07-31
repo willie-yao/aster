@@ -22,7 +22,7 @@ storage:
   provider: gcs
   bucket: "kubernetes-ci-logs"
 
-# Site identity and the source repo issues/fix PRs target.
+# Site identity and the default repo for analysis and write targets.
 branding:
   title: "Your Project Prow Dashboard"
   base_path: "/your-consumer-repo"
@@ -30,3 +30,10 @@ branding:
   source_repo:
     owner: "kubernetes-sigs"
     name: "your-project"
+
+# Optional: read source from a repository that differs from branding and write
+# targets. Public repositories work without a token.
+# ai:
+#   source_repo:
+#     owner: "kubernetes-sigs"
+#     name: "your-project"

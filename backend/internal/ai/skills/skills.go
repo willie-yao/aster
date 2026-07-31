@@ -171,8 +171,12 @@ type EvidenceGroup struct {
 
 // Set is a loaded, validated, and ordered collection of recipes.
 type Set struct {
-	skills []Skill
-	hash   string
+	skills                []Skill
+	hash                  string
+	profiles              []Profile
+	engineCount           int
+	consumerCount         int
+	consumerBundlePresent bool
 }
 
 // Skills returns recipes in load order, priority desc then ID asc. Callers may
@@ -191,6 +195,47 @@ func (s *Set) Hash() string {
 		return ""
 	}
 	return s.hash
+}
+
+// Profiles returns the selected engine profiles in composition order.
+func (s *Set) Profiles() []Profile {
+	if s == nil {
+		return nil
+	}
+	return append([]Profile(nil), s.profiles...)
+}
+
+// EngineCount returns the number of selected engine recipes.
+func (s *Set) EngineCount() int {
+	if s == nil {
+		return 0
+	}
+	return s.engineCount
+}
+
+// ConsumerCount returns the number of loaded consumer recipes.
+func (s *Set) ConsumerCount() int {
+	if s == nil {
+		return 0
+	}
+	return s.consumerCount
+}
+
+// ConsumerBundlePresent reports whether the consumer skills directory exists.
+func (s *Set) ConsumerBundlePresent() bool {
+	return s != nil && s.consumerBundlePresent
+}
+
+// IDs returns recipe IDs in deterministic execution order.
+func (s *Set) IDs() []string {
+	if s == nil {
+		return nil
+	}
+	ids := make([]string, 0, len(s.skills))
+	for _, skill := range s.skills {
+		ids = append(ids, skill.ID)
+	}
+	return ids
 }
 
 // Match returns the recipes whose triggers fire on the given text,
@@ -431,7 +476,15 @@ func LoadMerged(dir string, selection ProfileSelection) (*Set, error) {
 		}
 		entries = append(entries, sourcedSkill{skill: skill, source: "consumer skills"})
 	}
-	return setFromSources(entries)
+	set, err := setFromSources(entries)
+	if err != nil {
+		return nil, err
+	}
+	set.profiles = selection.Profiles()
+	set.engineCount = len(set.skills) - consumer.ConsumerCount()
+	set.consumerCount = consumer.ConsumerCount()
+	set.consumerBundlePresent = consumer.ConsumerBundlePresent()
+	return set, nil
 }
 
 type sourcedSkill struct {
@@ -515,7 +568,7 @@ func Load(dir string) (*Set, error) {
 	paths := append(yamlPaths, ymlPaths...)
 	sort.Strings(paths)
 	if len(paths) == 0 {
-		return &Set{}, nil
+		return &Set{consumerBundlePresent: true}, nil
 	}
 
 	seen := map[string]string{}
@@ -539,7 +592,10 @@ func Load(dir string) (*Set, error) {
 		return loaded[i].ID < loaded[j].ID
 	})
 
-	return &Set{skills: loaded, hash: computeHash(loaded)}, nil
+	return &Set{
+		skills: loaded, hash: computeHash(loaded),
+		consumerCount: len(loaded), consumerBundlePresent: true,
+	}, nil
 }
 
 // loadOne reads a single recipe file, parses, validates, and compiles

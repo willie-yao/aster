@@ -42,6 +42,8 @@ type ContainerAnalyzerOptions struct {
 	CacheGeneration     string
 	ModelSecretName     string
 	ModelTokenKey       string
+	GitHubSecretName    string
+	GitHubTokenKey      string
 	StateSecretName     string
 	StateSecretKey      string
 	StateKey            []byte
@@ -169,6 +171,8 @@ func validateContainerAnalyzerOptions(opts ContainerAnalyzerOptions) error {
 		return fmt.Errorf("container analysis model Secret is required")
 	case strings.TrimSpace(opts.ModelTokenKey) == "":
 		return fmt.Errorf("container analysis model token key is required")
+	case (strings.TrimSpace(opts.GitHubSecretName) == "") != (strings.TrimSpace(opts.GitHubTokenKey) == ""):
+		return fmt.Errorf("container analysis GitHub Secret name and token key must be configured together")
 	case strings.TrimSpace(opts.StateSecretName) == "":
 		return fmt.Errorf("container analysis state Secret is required")
 	case strings.TrimSpace(opts.StateSecretKey) == "":
@@ -323,6 +327,15 @@ func (a *ContainerAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, 
 }
 
 func (a *ContainerAnalyzer) taskSpec(request ai.FailureAnalysisRequest, cacheSeed map[string]ai.CacheEntry, taskLabels map[string]string) ContainerAnalysisTaskSpec {
+	secretEnv := []SecretEnvVar{
+		{Name: "AI_TOKEN", SecretName: a.opts.ModelSecretName, SecretKey: a.opts.ModelTokenKey},
+		{Name: analysisruntime.ContainerStateKeyEnv, SecretName: a.opts.StateSecretName, SecretKey: a.opts.StateSecretKey},
+	}
+	if a.opts.GitHubSecretName != "" && a.opts.GitHubTokenKey != "" {
+		secretEnv = append(secretEnv, SecretEnvVar{
+			Name: "GITHUB_READ_TOKEN", SecretName: a.opts.GitHubSecretName, SecretKey: a.opts.GitHubTokenKey,
+		})
+	}
 	return ContainerAnalysisTaskSpec{
 		Namespace:           a.opts.Namespace,
 		NamePrefix:          "dashboard-analyzer",
@@ -335,11 +348,8 @@ func (a *ContainerAnalyzer) taskSpec(request ai.FailureAnalysisRequest, cacheSee
 		CacheSeed:           cacheSeed,
 		StateKeyFingerprint: containerStateKeyFingerprint(a.opts.StateKey),
 		Environment:         containerAnalyzerEnvironment(a.opts),
-		SecretEnv: []SecretEnvVar{
-			{Name: "AI_TOKEN", SecretName: a.opts.ModelSecretName, SecretKey: a.opts.ModelTokenKey},
-			{Name: analysisruntime.ContainerStateKeyEnv, SecretName: a.opts.StateSecretName, SecretKey: a.opts.StateSecretKey},
-		},
-		Labels: a.opts.Labels, TaskLabels: taskLabels, NodeSelector: a.opts.NodeSelector,
+		SecretEnv:           secretEnv,
+		Labels:              a.opts.Labels, TaskLabels: taskLabels, NodeSelector: a.opts.NodeSelector,
 		Tolerations: a.opts.Tolerations, Affinity: a.opts.Affinity,
 	}
 }

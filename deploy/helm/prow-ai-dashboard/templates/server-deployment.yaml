@@ -135,12 +135,16 @@ spec:
               value: {{ .Values.server.chat.sourceInvestigation.maxPerSession | quote }}
             - name: ANALYSIS_SOURCE_INVESTIGATION_MAX_ACTIVE_PER_OWNER
               value: {{ .Values.server.chat.sourceInvestigation.maxActivePerOwner | quote }}
+            {{- if or .Values.ai.githubReadToken .Values.ai.githubReadTokenSecretName .Values.ai.existingSecret }}
             - name: SOURCE_INVESTIGATION_GITHUB_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "prow-ai-dashboard.aiSecret" . }}
+                  name: {{ include "prow-ai-dashboard.githubReadSecret" . }}
                   key: {{ .Values.ai.githubReadTokenSecretKey }}
+                  {{- if and (not .Values.ai.githubReadToken) (not .Values.ai.githubReadTokenSecretName) }}
                   optional: true
+                  {{- end }}
+            {{- end }}
             {{- end }}
             - name: ANALYSIS_CHAT_STATE_DIR
               value: {{ printf "%s/.analysis-chat" .Values.persistence.mountPath | quote }}

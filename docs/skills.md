@@ -137,7 +137,8 @@ Loading is strict:
 
 - Every selected engine recipe is embedded in the binary and parsed with the
   same schema as consumer recipes. A malformed built-in is a startup error.
-- A missing or empty consumer `skills/` directory is allowed.
+- A missing or empty consumer `skills/` directory is allowed unless
+  `ai.consumer_skills` requires the bundle or a minimum recipe count.
 - Every present `.yaml` or `.yml` file must parse with strict YAML. Unknown
   fields, invalid regexes, and read errors abort startup.
 - IDs must be unique across the complete merged set. The `engine.` prefix is
@@ -148,7 +149,7 @@ Loading is strict:
 The engine logs the selected profiles and merged hash:
 
 ```text
-Loaded 6 AI skill recipe(s) (profiles=prow,kubernetes, hash=a1b2c3d4)
+Loaded AI skills (profiles=prow,kubernetes engine=6 consumer=11 consumer_bundle=true hash=a1b2c3d4)
 ```
 
 ## Profile selection and Kubernetes opt-out
@@ -277,6 +278,11 @@ After the run, every `AIAnalysis` in `data/jobs/*.json` carries:
 
 Grouping analyses by `skill_set_hash` lets you compare runs before and after
 a recipe or profile change.
+
+The public manifest reports selected profiles, engine and consumer counts,
+consumer bundle presence, and a short hash. Private fetch status also reports
+recipe IDs and the full hash. Neither output includes procedures, trigger
+patterns, evidence patterns, or recipe source text.
 
 ## Auto-suggesting recipes
 
