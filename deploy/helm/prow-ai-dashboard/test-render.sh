@@ -649,6 +649,7 @@ helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
 grep -A1 -Fq 'name: ANALYSIS_CHAT_ENABLED' "$tmp/chat-server.yaml"
 grep -Fq 'value: "true"' "$tmp/chat-server.yaml"
 grep -Fq 'name: ANALYSIS_CHAT_STATE_DIR' "$tmp/chat-server.yaml"
+grep -Fq 'checksum/project-config:' "$tmp/chat-server.yaml"
 grep -Fq 'value: "/data/.analysis-chat"' "$tmp/chat-server.yaml"
 grep -A1 -Fq 'name: ANALYSIS_CHAT_TIMEOUT' "$tmp/chat-server.yaml"
 grep -Fq 'value: "2m"' "$tmp/chat-server.yaml"

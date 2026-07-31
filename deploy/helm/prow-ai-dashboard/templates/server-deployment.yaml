@@ -70,6 +70,10 @@ spec:
       app.kubernetes.io/component: server
   template:
     metadata:
+      {{- if and $interactive (not .Values.project.existingConfigMap) }}
+      annotations:
+        checksum/project-config: {{ include (print $.Template.BasePath "/configmap-project.yaml") . | sha256sum }}
+      {{- end }}
       labels:
         {{- include "prow-ai-dashboard.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: server

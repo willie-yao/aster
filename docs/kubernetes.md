@@ -619,7 +619,9 @@ The chart creates one release-managed ConfigMap with keys `project.yaml`,
 `system.md`, and one key per consumer skill. Workload volumes map those keys to
 `<project.mountPath>/project.yaml`, `prompts/system.md`, and `skills/<name>` in
 the worker, CronJob, and interactive server pods that need the project bundle.
-Because the ConfigMap is part of the Helm release, a separate ConfigMap update
+A managed ConfigMap checksum rolls the watch worker and any interactive server
+so they load the new bundle. Because the ConfigMap is part of the Helm release,
+a separate ConfigMap update
 cannot get ahead of a failed Helm operation.
 
 ### Guarded unreleased image upgrade
