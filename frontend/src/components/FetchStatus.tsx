@@ -329,7 +329,8 @@ export function FetchStatusControl({ response, idleCompact, onIdleCompactChange 
             />
             <DetailRow label="Reused from cache" value={analysis.reusedFromCache} />
             <DetailRow label="Compatible results" value={analysis.compatibleResults} />
-            <DetailRow label="Existing results adopted" value={analysis.exactResultsReused} />
+            <DetailRow label="Exact results reused" value={analysis.exactResultsReused} />
+            <DetailRow label="Existing Tasks adopted" value={analysis.lateTasksAdopted} />
             <DetailRow label="New analyzer Tasks" value={analysis.newTasksCreated} />
             <DetailRow label="Fresh analyses completed" value={analysis.freshAnalysesCompleted} />
             <DetailRow label="Currently analyzing" value={analysis.analyzing} />
@@ -360,7 +361,6 @@ export function FetchStatusControl({ response, idleCompact, onIdleCompactChange 
           </Button>
           <Collapse in={technicalOpen} timeout="auto">
             <Stack id={technicalID} spacing={0.75} sx={{ mt: 0.75 }}>
-              <DetailRow label="Late Task adoptions" value={analysis.lateTasksAdopted} />
               <DetailRow label="Task attempts" value={status.analyses.task_attempts} />
               <DetailRow
                 label="Results retrieved"

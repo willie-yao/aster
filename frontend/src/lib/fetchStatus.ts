@@ -113,14 +113,14 @@ export function analysisProgressAccessibleDetail(progress: AnalysisProgressBreak
   const failureDetail = progress.failed > 0 || progress.cancelled > 0
     ? `, ${progress.failed} failed, ${progress.cancelled} cancelled`
     : "";
-  return `${progress.ready} of ${progress.total} results ready: ${progress.reused} reused, ${progress.exactResultsReused} existing results adopted, ${progress.freshAnalysesCompleted} newly analyzed, ${progress.analyzing} running, ${progress.waiting} waiting${failureDetail}`;
+  return `${progress.ready} of ${progress.total} results ready: ${progress.reused} reused, ${progress.exactResultsReused} exact results reused, ${progress.lateTasksAdopted} existing Tasks adopted, ${progress.freshAnalysesCompleted} newly analyzed, ${progress.analyzing} running, ${progress.waiting} waiting${failureDetail}`;
 }
 
 export function analysisProgressStripDetail(progress: AnalysisProgressBreakdown): string {
   const failureDetail = progress.failed > 0 || progress.cancelled > 0
     ? ` · ${progress.failed} failed · ${progress.cancelled} cancelled`
     : "";
-  return `${progress.reused} reused · ${progress.exactResultsReused} adopted · ${progress.freshAnalysesCompleted} new · ${progress.analyzing} analyzing · ${progress.waiting} waiting${failureDetail}`;
+  return `${progress.reused} reused · ${progress.exactResultsReused} exact · ${progress.lateTasksAdopted} adopted · ${progress.freshAnalysesCompleted} new · ${progress.analyzing} analyzing · ${progress.waiting} waiting${failureDetail}`;
 }
 
 export function fetchStatusPresentation(response: FetchStatusResponse): FetchStatusPresentation | null {

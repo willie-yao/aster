@@ -92,7 +92,7 @@ test("analysis progress distinguishes reuse, adoption, and new Tasks", () => {
   });
   assert.equal(
     analysisProgressAccessibleDetail(progress),
-    "84 of 126 results ready: 70 reused, 12 existing results adopted, 2 newly analyzed, 2 running, 40 waiting",
+    "84 of 126 results ready: 70 reused, 12 exact results reused, 0 existing Tasks adopted, 2 newly analyzed, 2 running, 40 waiting",
   );
 });
 
@@ -150,13 +150,13 @@ test("analysis progress keeps exact counters non-negative", () => {
 test("fetch status presentation covers active idle failed and stale states", () => {
   const active = fetchStatusPresentation(response("active"));
   assert.equal(active?.title, "84 of 126 results ready");
-  assert.equal(active?.detail, "70 reused · 12 adopted · 2 new · 2 analyzing · 40 waiting");
+  assert.equal(active?.detail, "70 reused · 12 exact · 0 adopted · 2 new · 2 analyzing · 40 waiting");
   assert.equal(active?.announcement, "Fetch in progress: Analysis");
   assert.equal(active?.determinateTotal, 126);
   assert.equal(active?.determinateCompleted, 84);
   assert.equal(
     active?.ariaLabel,
-    "Fetch in progress: Analysis. 84 of 126 results ready: 70 reused, 12 existing results adopted, 2 newly analyzed, 2 running, 40 waiting.",
+    "Fetch in progress: Analysis. 84 of 126 results ready: 70 reused, 12 exact results reused, 0 existing Tasks adopted, 2 newly analyzed, 2 running, 40 waiting.",
   );
 
   const terminalFailures = fetchStatusPresentation(response("active", {
@@ -238,7 +238,8 @@ test("fetch status popover presents the user-facing breakdown before technical c
     "Results ready",
     "Reused from cache",
     "Compatible results",
-    "Existing results adopted",
+    "Exact results reused",
+    "Existing Tasks adopted",
     "New analyzer Tasks",
     "Fresh analyses completed",
     "Currently analyzing",
@@ -248,7 +249,6 @@ test("fetch status popover presents the user-facing breakdown before technical c
   ]) {
     assert.match(fetchStatusSource, new RegExp(label));
   }
-  assert.match(fetchStatusSource, /Late Task adoptions/);
   assert.match(fetchStatusSource, /Recent passes/);
   assert.match(fetchStatusSource, /<Collapse in=\{technicalOpen\}/);
   assert.match(fetchStatusSource, /<CircularProgress\s+aria-hidden="true"\s+role="presentation"/);
