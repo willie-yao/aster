@@ -107,7 +107,7 @@ func TestContainerAnalyzerAccountsAdoptionAttemptsRetriesAndCacheHit(t *testing.
 		t.Fatal(err)
 	}
 	status := progress.Snapshot()
-	if status.Analyses.TaskAttempts != 2 || status.Analyses.Retries != 1 || status.Analyses.ExistingTasksAdopted != 1 {
+	if status.Analyses.TaskAttempts != 2 || status.Analyses.Retries != 1 || status.Analyses.ExistingTasksAdopted != 1 || status.Analyses.NewTasksCreated != 0 || status.Analyses.FreshAnalysesCompleted != 0 {
 		t.Fatalf("Task accounting = %+v", status.Analyses)
 	}
 	if status.Analyses.ResultsRetrieved != 1 || status.Analyses.ResultRetrievalRetries != 1 {
@@ -118,6 +118,75 @@ func TestContainerAnalyzerAccountsAdoptionAttemptsRetriesAndCacheHit(t *testing.
 	}
 	if len(status.CurrentTasks) != 1 || !status.CurrentTasks[0].Adopted || status.CurrentTasks[0].Attempts != 2 || status.CurrentTasks[0].Phase != "Succeeded" {
 		t.Fatalf("current Task mapping = %+v", status.CurrentTasks)
+	}
+}
+
+func TestContainerAnalyzerCountsNewTaskAndFreshAnalysis(t *testing.T) {
+	request := containerTaskRequest()
+	key := bytes.Repeat([]byte{0x83}, 32)
+	dataDir := t.TempDir()
+	store, err := analysisruntime.NewContainerStateStore(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	progress := fetchprogress.New(dataDir, "sha-test")
+	progress.StartPass(fetchprogress.PassLightweightWatch)
+	progress.PlanAnalyses(1, 0)
+	resources := &fakeContainerResourceClient{}
+	kube := &fakeContainerAnalyzerKube{fakeContainerResourceClient: resources, phase: "Succeeded", attempts: 1}
+	results := &generatedContainerResult{request: request, key: key}
+	opts := containerAnalyzerTestOptions(t, key)
+	opts.Progress = progress
+	analyzer, err := newContainerAnalyzer(opts, kube, results, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := analyzer.AnalyzeFailure(t.Context(), nil, request); err != nil {
+		t.Fatal(err)
+	}
+	status := progress.Snapshot()
+	if status.Analyses.NewTasksCreated != 1 || status.Analyses.FreshAnalysesCompleted != 1 || status.Analyses.ExistingTasksAdopted != 0 || status.Analyses.ResultsRetrieved != 1 {
+		t.Fatalf("new Task accounting = %+v", status.Analyses)
+	}
+}
+
+func TestContainerAnalyzerDoesNotCountTaskCacheHitAsFreshAnalysis(t *testing.T) {
+	request := containerTaskRequest()
+	key := bytes.Repeat([]byte{0x84}, 32)
+	cacheKey := analysisruntime.FailureCacheKey(request)
+	entry := map[string]ai.CacheEntry{cacheKey: {
+		Key: cacheKey, CreatedAt: time.Now().UTC(), Data: json.RawMessage(`{"summary":"cached"}`),
+	}}
+	dataDir := t.TempDir()
+	store, err := analysisruntime.NewContainerStateStore(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedIdentity := analysisruntime.NewContainerStateIdentity("orka-system", "seed-task", request)
+	if err := store.Merge(analysisruntime.ContainerAnalysisState{
+		Version: analysisruntime.ContainerStateVersion, TaskNamespace: seedIdentity.TaskNamespace,
+		TaskName: seedIdentity.TaskName, CacheKey: cacheKey, CacheEntries: entry,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	progress := fetchprogress.New(dataDir, "sha-test")
+	progress.StartPass(fetchprogress.PassLightweightWatch)
+	progress.PlanAnalyses(1, 0)
+	resources := &fakeContainerResourceClient{}
+	kube := &fakeContainerAnalyzerKube{fakeContainerResourceClient: resources, phase: "Succeeded", attempts: 1}
+	results := &generatedContainerResult{request: request, key: key, entry: entry, traceOutcome: "ai_cache_hit"}
+	opts := containerAnalyzerTestOptions(t, key)
+	opts.Progress = progress
+	analyzer, err := newContainerAnalyzer(opts, kube, results, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := analyzer.AnalyzeFailure(t.Context(), nil, request); err != nil {
+		t.Fatal(err)
+	}
+	status := progress.Snapshot()
+	if status.Analyses.NewTasksCreated != 1 || status.Analyses.FreshAnalysesCompleted != 0 || status.Analyses.AcceptedCacheHits != 1 {
+		t.Fatalf("Task cache-hit accounting = %+v", status.Analyses)
 	}
 }
 

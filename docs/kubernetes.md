@@ -320,10 +320,11 @@ kubectl -n dashboards get deploy,pod -l app.kubernetes.io/component=worker
 kubectl -n dashboards logs deploy/capz-prow-ai-dashboard-worker -f
 ```
 
-Authenticated `/api/fetch-status` responses include the current pass ID and a
-bounded history of the last 20 passes. Newly created analyzer Tasks carry safe
-run, pass, pass-type, and work-item digest labels. Use the pass ID from the
-status response without adding another CLI dependency:
+Authenticated `/api/fetch-status` responses include the current pass ID and an
+identity-free summary of the latest 10 passes. The private history file retains
+20 terminal passes. Newly created analyzer Tasks carry safe run, pass,
+pass-type, and work-item digest labels. Use the current pass ID from the status
+response without adding another CLI dependency:
 
 ```bash
 kubectl -n <analysis-namespace> get tasks \
@@ -342,18 +343,27 @@ malformed-state checks. Model, endpoint, prompt, skill, and transient-streak
 changes do not make an otherwise reusable entry stale. `logical_total` still
 counts every subject, while `queued`, `new_work`, and `stale_work` describe only
 the remaining Task workload.
-An image-only analyzer update keeps the cache key stable but still changes the
-content-addressed Task identity when new execution is required.
 
-If private cache is missing, the worker checks up to five newest succeeded
-managed Tasks for the same work item in the release-scoped analysis namespace.
-It accepts only results with the current bundle digest, state-key fingerprint,
-analyzer contract, durable result reference, authenticated encrypted state,
+If private cache is missing, planning first computes the canonical
+content-addressed Task identity and checks that exact managed Task in the
+release-scoped analysis namespace. Reuse requires a non-deleting succeeded Task,
+a durable result reference, the exact current bundle digest and state-key
+fingerprint, the current analyzer contract, authenticated encrypted state,
 exact agreement between the encrypted cache entry and published result, and the
-current investigation and critique gates. Compatible result reuse increments
-`compatible_results_reused`; it does not increment `existing_tasks_adopted` or
-`task_attempts`. Succeeded Tasks are retained for seven days, with at most five
-newest reusable Tasks per work item.
+current investigation and critique gates. Exact planning reuse increments
+`exact_results_reused` and creates no Task.
+
+If exact reuse misses, the worker checks up to five newest succeeded managed
+Tasks for the same work item. Compatible reuse preserves the same result,
+authentication, state, and quality gates while allowing a prior Task identity.
+It increments `compatible_results_reused`. Only work that misses every reuse
+path is queued. `new_tasks_created` counts Tasks actually created after
+planning, `fresh_analyses_completed` counts their accepted results, and
+`existing_tasks_adopted` remains the late-adoption fallback for a Task that
+appears after planning. An image-only analyzer update keeps the cache key stable
+but changes the exact content-addressed Task identity when new execution is
+required. Succeeded Tasks are retained for seven days, with at most five newest
+compatible candidates per work item.
 
 To return to cron mode without starting a fetch, upgrade with the same chart
 and values while changing only the mode and suspension setting:

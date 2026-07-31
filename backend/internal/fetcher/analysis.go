@@ -33,6 +33,10 @@ type analysisPlanner interface {
 	NeedsAnalysis(context.Context, *http.Client, *models.BuildResult, *models.TestCase, int) bool
 }
 
+type exactResultReuser interface {
+	ReuseExactResult(context.Context, ai.FailureAnalysisRequest, ai.AgenticCachePolicy) (ai.FailureAnalysisResult, bool, error)
+}
+
 type compatibleResultReuser interface {
 	ReuseCompatibleResult(context.Context, ai.FailureAnalysisRequest, ai.AgenticCachePolicy) (ai.FailureAnalysisResult, bool, error)
 }
@@ -156,12 +160,31 @@ func planContainerAnalysisWork(ctx context.Context, httpClient *http.Client, wor
 			continue
 		}
 		if reason == ai.CacheRejectedMissing && planner != nil {
-			if reuser, ok := container.(compatibleResultReuser); ok {
-				request := item.request(consecutiveMap, cacheGeneration)
-				policy, err := analysisruntime.FailureCachePolicy(ctx, httpClient, request, planner)
+			request := item.request(consecutiveMap, cacheGeneration)
+			policy, err := analysisruntime.FailureCachePolicy(ctx, httpClient, request, planner)
+			if err != nil {
+				return nil, fetchprogress.AnalysisPlan{}, err
+			}
+			if reuser, ok := container.(exactResultReuser); ok {
+				result, reused, err := reuser.ReuseExactResult(ctx, request, policy)
 				if err != nil {
 					return nil, fetchprogress.AnalysisPlan{}, err
 				}
+				if reused {
+					item.tc.AISummary = result.Summary
+					item.tc.AIAnalysis = result.Analysis
+					if item.tc.AIAnalysis != nil {
+						item.tc.AIAnalysis.FileLinks = linkResolver.Resolve(ctx, httpClient, item.tc)
+					}
+					plan.ExactResultsReused++
+					if buildSubject {
+						plan.BuildSubjects.Completed++
+						plan.BuildSubjects.ExactResultsReused++
+					}
+					continue
+				}
+			}
+			if reuser, ok := container.(compatibleResultReuser); ok {
 				result, reused, err := reuser.ReuseCompatibleResult(ctx, request, policy)
 				if err != nil {
 					return nil, fetchprogress.AnalysisPlan{}, err
@@ -226,7 +249,7 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 		var plan fetchprogress.AnalysisPlan
 		work, plan, err = planContainerAnalysisWork(ctx, p.client, work, container, planner, p.aiProject, consecutiveMap)
 		if err != nil {
-			return fmt.Errorf("plan container analysis cache reuse: %w", err)
+			return fmt.Errorf("plan container analysis reuse: %w", err)
 		}
 		p.planProgressAnalysisWork(plan)
 	} else {
@@ -248,7 +271,7 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 			p.skipProgressPatterns()
 			return nil
 		}
-		log.Println("🤖 All failure analyses reused from private cache")
+		log.Println("🤖 All failure analysis results are ready from reuse")
 	} else if container != nil {
 		if preflight, ok := container.(interface{ Preflight(context.Context) error }); ok {
 			if err := preflight.Preflight(ctx); err != nil {

@@ -23,7 +23,7 @@ import (
 
 const (
 	// SchemaVersion is the current private fetch status schema.
-	SchemaVersion = 8
+	SchemaVersion = 9
 	// StatusDirectory is hidden from the public /data file server.
 	StatusDirectory = ".fetch-status"
 	// StatusFilename is the current fetch status snapshot.
@@ -118,14 +118,17 @@ type BuildProgress struct {
 
 // BuildAnalysisProgress tracks build-level subjects without source identity.
 type BuildAnalysisProgress struct {
-	LogicalTotal         int `json:"logical_total"`
-	Queued               int `json:"queued"`
-	Running              int `json:"running"`
-	Completed            int `json:"completed"`
-	Failed               int `json:"failed"`
-	Cancelled            int `json:"cancelled"`
-	AcceptedCacheHits    int `json:"accepted_cache_hits"`
-	ExistingTasksAdopted int `json:"existing_tasks_adopted"`
+	LogicalTotal           int `json:"logical_total"`
+	Queued                 int `json:"queued"`
+	Running                int `json:"running"`
+	Completed              int `json:"completed"`
+	Failed                 int `json:"failed"`
+	Cancelled              int `json:"cancelled"`
+	AcceptedCacheHits      int `json:"accepted_cache_hits"`
+	ExactResultsReused     int `json:"exact_results_reused"`
+	ExistingTasksAdopted   int `json:"existing_tasks_adopted"`
+	NewTasksCreated        int `json:"new_tasks_created"`
+	FreshAnalysesCompleted int `json:"fresh_analyses_completed"`
 }
 
 // CacheRejectionProgress reports aggregate private-cache rejection reasons.
@@ -177,6 +180,7 @@ type AnalysisPlan struct {
 	LogicalTotal            int
 	AcceptedCacheHits       int
 	CompatibleResultsReused int
+	ExactResultsReused      int
 	NewWork                 int
 	StaleWork               int
 	Queued                  int
@@ -189,6 +193,7 @@ type AnalysisProgress struct {
 	LogicalTotal            int                    `json:"logical_total"`
 	AcceptedCacheHits       int                    `json:"accepted_cache_hits"`
 	CompatibleResultsReused int                    `json:"compatible_results_reused"`
+	ExactResultsReused      int                    `json:"exact_results_reused"`
 	NewWork                 int                    `json:"new_work"`
 	StaleWork               int                    `json:"stale_work"`
 	CacheRejections         CacheRejectionProgress `json:"cache_rejections"`
@@ -200,7 +205,9 @@ type AnalysisProgress struct {
 	TaskAttempts            int                    `json:"task_attempts"`
 	Retries                 int                    `json:"retries"`
 	ExistingTasksAdopted    int                    `json:"existing_tasks_adopted"`
+	NewTasksCreated         int                    `json:"new_tasks_created"`
 	ResultsRetrieved        int                    `json:"results_retrieved"`
+	FreshAnalysesCompleted  int                    `json:"fresh_analyses_completed"`
 	ResultRetrievalRetries  int                    `json:"result_retrieval_retries"`
 	CheckpointCommitted     bool                   `json:"checkpoint_committed,omitempty"`
 	BuildSubjects           BuildAnalysisProgress  `json:"build_subjects"`
@@ -322,7 +329,7 @@ func Read(path string) (Status, error) {
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return Status{}, errors.New("fetch status has trailing data")
 	}
-	if status.SchemaVersion != 1 && status.SchemaVersion != 2 && status.SchemaVersion != 3 && status.SchemaVersion != 4 && status.SchemaVersion != 5 && status.SchemaVersion != 6 && status.SchemaVersion != 7 && status.SchemaVersion != SchemaVersion {
+	if status.SchemaVersion != 1 && status.SchemaVersion != 2 && status.SchemaVersion != 3 && status.SchemaVersion != 4 && status.SchemaVersion != 5 && status.SchemaVersion != 6 && status.SchemaVersion != 7 && status.SchemaVersion != 8 && status.SchemaVersion != SchemaVersion {
 		return Status{}, fmt.Errorf("unsupported fetch status schema %d", status.SchemaVersion)
 	}
 	if err := status.validate(); err != nil {
@@ -344,14 +351,15 @@ func (s Status) validate() error {
 		s.Builds.Cached < 0 || s.Builds.Fetched < 0 ||
 		s.Analyses.LogicalTotal < 0 || s.Analyses.Queued < 0 || s.Analyses.Running < 0 ||
 		s.Analyses.Completed < 0 || s.Analyses.Failed < 0 || s.Analyses.Cancelled < 0 ||
-		s.Analyses.AcceptedCacheHits < 0 || s.Analyses.CompatibleResultsReused < 0 || s.Analyses.NewWork < 0 || s.Analyses.StaleWork < 0 ||
+		s.Analyses.AcceptedCacheHits < 0 || s.Analyses.CompatibleResultsReused < 0 || s.Analyses.ExactResultsReused < 0 || s.Analyses.NewWork < 0 || s.Analyses.StaleWork < 0 ||
 		!s.Analyses.CacheRejections.valid() ||
-		s.Analyses.TaskAttempts < 0 || s.Analyses.Retries < 0 || s.Analyses.ExistingTasksAdopted < 0 ||
-		s.Analyses.ResultsRetrieved < 0 || s.Analyses.ResultRetrievalRetries < 0 ||
+		s.Analyses.TaskAttempts < 0 || s.Analyses.Retries < 0 || s.Analyses.ExistingTasksAdopted < 0 || s.Analyses.NewTasksCreated < 0 ||
+		s.Analyses.ResultsRetrieved < 0 || s.Analyses.FreshAnalysesCompleted < 0 || s.Analyses.ResultRetrievalRetries < 0 ||
 		s.Analyses.BuildSubjects.LogicalTotal < 0 || s.Analyses.BuildSubjects.Queued < 0 ||
 		s.Analyses.BuildSubjects.Running < 0 || s.Analyses.BuildSubjects.Completed < 0 ||
 		s.Analyses.BuildSubjects.Failed < 0 || s.Analyses.BuildSubjects.Cancelled < 0 ||
-		s.Analyses.BuildSubjects.AcceptedCacheHits < 0 || s.Analyses.BuildSubjects.ExistingTasksAdopted < 0 ||
+		s.Analyses.BuildSubjects.AcceptedCacheHits < 0 || s.Analyses.BuildSubjects.ExactResultsReused < 0 || s.Analyses.BuildSubjects.ExistingTasksAdopted < 0 ||
+		s.Analyses.BuildSubjects.NewTasksCreated < 0 || s.Analyses.BuildSubjects.FreshAnalysesCompleted < 0 ||
 		s.Patterns.Eligible < 0 || s.Patterns.Completed < 0 || s.Patterns.Failed < 0 ||
 		s.Patterns.Attempts < 0 || s.Patterns.Retries < 0 || s.Patterns.CacheHits < 0 ||
 		s.Patterns.Repairs < 0 || s.Patterns.RepairSucceeded < 0 || s.Patterns.RepairFailed < 0 ||
@@ -368,14 +376,17 @@ func (s Status) validate() error {
 	if s.Analyses.CacheRejections.total() > s.Analyses.NewWork+s.Analyses.StaleWork {
 		return errors.New("fetch status has inconsistent cache counters")
 	}
-	if s.Analyses.AcceptedCacheHits+s.Analyses.CompatibleResultsReused > s.Analyses.Completed {
+	if s.Analyses.AcceptedCacheHits+s.Analyses.CompatibleResultsReused+s.Analyses.ExactResultsReused > s.Analyses.Completed {
 		return errors.New("fetch status has inconsistent analysis reuse counters")
 	}
 	buildAccounted := s.Analyses.BuildSubjects.Queued + s.Analyses.BuildSubjects.Running + s.Analyses.BuildSubjects.Completed + s.Analyses.BuildSubjects.Failed + s.Analyses.BuildSubjects.Cancelled
 	if s.Analyses.BuildSubjects.LogicalTotal > s.Analyses.LogicalTotal || buildAccounted > s.Analyses.BuildSubjects.LogicalTotal ||
 		(s.Outcome != OutcomeRunning && buildAccounted != s.Analyses.BuildSubjects.LogicalTotal) ||
 		s.Analyses.BuildSubjects.AcceptedCacheHits > s.Analyses.AcceptedCacheHits ||
-		s.Analyses.BuildSubjects.ExistingTasksAdopted > s.Analyses.ExistingTasksAdopted {
+		s.Analyses.BuildSubjects.ExactResultsReused > s.Analyses.ExactResultsReused ||
+		s.Analyses.BuildSubjects.ExistingTasksAdopted > s.Analyses.ExistingTasksAdopted ||
+		s.Analyses.BuildSubjects.NewTasksCreated > s.Analyses.NewTasksCreated ||
+		s.Analyses.BuildSubjects.FreshAnalysesCompleted > s.Analyses.FreshAnalysesCompleted {
 		return errors.New("fetch status has inconsistent build analysis counters")
 	}
 	if len(s.CurrentTasks) > currentTaskLimit {
@@ -493,7 +504,9 @@ type Tracker struct {
 	taskBuildSubjects     map[string]bool
 	taskAttempts          map[string]int
 	taskAdopted           map[string]bool
+	taskCreated           map[string]bool
 	taskResults           map[string]bool
+	freshResults          map[string]bool
 	cacheDisposition      map[string]string
 	analysisPlanFinalized bool
 	sourceGrounding       SourceGrounding
@@ -630,7 +643,9 @@ func (t *Tracker) StartPass(passType PassType) {
 	t.taskBuildSubjects = map[string]bool{}
 	t.taskAttempts = map[string]int{}
 	t.taskAdopted = map[string]bool{}
+	t.taskCreated = map[string]bool{}
 	t.taskResults = map[string]bool{}
+	t.freshResults = map[string]bool{}
 	t.cacheDisposition = map[string]string{}
 	t.analysisPlanFinalized = false
 	t.lastHeartbeat = now
@@ -747,11 +762,12 @@ func (t *Tracker) PlanAnalysisWork(plan AnalysisPlan) {
 			LogicalTotal:            plan.LogicalTotal,
 			AcceptedCacheHits:       plan.AcceptedCacheHits,
 			CompatibleResultsReused: plan.CompatibleResultsReused,
+			ExactResultsReused:      plan.ExactResultsReused,
 			NewWork:                 plan.NewWork,
 			StaleWork:               plan.StaleWork,
 			CacheRejections:         plan.CacheRejections,
 			Queued:                  plan.Queued,
-			Completed:               plan.AcceptedCacheHits + plan.CompatibleResultsReused,
+			Completed:               plan.AcceptedCacheHits + plan.CompatibleResultsReused + plan.ExactResultsReused,
 			BuildSubjects:           plan.BuildSubjects,
 		}
 	})

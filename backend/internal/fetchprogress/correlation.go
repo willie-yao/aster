@@ -88,6 +88,13 @@ func (t *Tracker) RecordTaskState(workItem, phase string, attempts int, adopted 
 				status.Analyses.BuildSubjects.ExistingTasksAdopted++
 			}
 		}
+		if !adopted && !t.taskCreated[workItem] {
+			t.taskCreated[workItem] = true
+			status.Analyses.NewTasksCreated++
+			if t.taskBuildSubjects[workItem] {
+				status.Analyses.BuildSubjects.NewTasksCreated++
+			}
+		}
 		if mapping != nil {
 			mapping.Adopted = t.taskAdopted[workItem]
 		}
@@ -134,6 +141,23 @@ func (t *Tracker) RecordResultAttempt(workItem string, retry, retrieved bool) {
 		}
 		if mapping != nil {
 			mapping.ResultRetrieved = t.taskResults[workItem]
+		}
+	})
+}
+
+// RecordFreshAnalysisCompleted records one accepted result from a newly created Task.
+func (t *Tracker) RecordFreshAnalysisCompleted(workItem string) {
+	if t == nil || workItem == "" {
+		return
+	}
+	t.update(false, func(status *Status) {
+		if !t.taskCreated[workItem] || t.freshResults[workItem] {
+			return
+		}
+		t.freshResults[workItem] = true
+		status.Analyses.FreshAnalysesCompleted++
+		if t.taskBuildSubjects[workItem] {
+			status.Analyses.BuildSubjects.FreshAnalysesCompleted++
 		}
 	})
 }

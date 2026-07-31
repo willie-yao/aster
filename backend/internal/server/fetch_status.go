@@ -10,15 +10,34 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fetchprogress"
 )
 
-const fetchStatusStaleAfter = 2 * time.Minute
+const (
+	fetchStatusStaleAfter      = 2 * time.Minute
+	fetchStatusRecentPassLimit = 10
+)
 
 type fetchStatusResponse struct {
-	Available            bool                        `json:"available"`
-	State                string                      `json:"state"`
-	Stale                bool                        `json:"stale,omitempty"`
-	Status               *fetchprogress.Status       `json:"status,omitempty"`
-	HistorySchemaVersion int                         `json:"history_schema_version,omitempty"`
-	History              []fetchprogress.PassSummary `json:"history,omitempty"`
+	Available            bool                     `json:"available"`
+	State                string                   `json:"state"`
+	Stale                bool                     `json:"stale,omitempty"`
+	Status               *fetchprogress.Status    `json:"status,omitempty"`
+	HistorySchemaVersion int                      `json:"history_schema_version,omitempty"`
+	History              []fetchStatusPassSummary `json:"history,omitempty"`
+}
+
+type fetchStatusPassSummary struct {
+	PassType                fetchprogress.PassType `json:"pass_type"`
+	StartedAt               time.Time              `json:"started_at"`
+	CompletedAt             time.Time              `json:"completed_at"`
+	DurationMS              int64                  `json:"duration_ms"`
+	LogicalCount            int                    `json:"logical_count"`
+	CacheHits               int                    `json:"cache_hits"`
+	CompatibleResultsReused int                    `json:"compatible_results_reused"`
+	ExactResultsReused      int                    `json:"exact_results_reused"`
+	NewTasksCreated         int                    `json:"new_tasks_created"`
+	FreshAnalysesCompleted  int                    `json:"fresh_analyses_completed"`
+	Retries                 int                    `json:"retries"`
+	Outcome                 fetchprogress.Outcome  `json:"outcome"`
+	Published               bool                   `json:"published"`
 }
 
 func fetchStatusHandler(dataDir string) http.Handler {
@@ -44,7 +63,21 @@ func fetchStatusHandlerWithClock(dataDir string, now func() time.Time, staleAfte
 			response.State, response.Stale = classifyFetchStatus(status, now().UTC(), staleAfter)
 			if history, historyErr := fetchprogress.ReadHistory(fetchprogress.HistoryPath(dataDir)); historyErr == nil {
 				response.HistorySchemaVersion = history.SchemaVersion
-				response.History = history.Passes
+				passes := history.Passes
+				if len(passes) > fetchStatusRecentPassLimit {
+					passes = passes[len(passes)-fetchStatusRecentPassLimit:]
+				}
+				response.History = make([]fetchStatusPassSummary, 0, len(passes))
+				for _, pass := range passes {
+					response.History = append(response.History, fetchStatusPassSummary{
+						PassType: pass.PassType, StartedAt: pass.StartedAt, CompletedAt: pass.CompletedAt,
+						DurationMS: pass.CompletedAt.Sub(pass.StartedAt).Milliseconds(), LogicalCount: pass.LogicalCount,
+						CacheHits: pass.CacheHits, CompatibleResultsReused: pass.CompatibleResultsReused,
+						ExactResultsReused: pass.ExactResultsReused, NewTasksCreated: pass.NewTasksCreated,
+						FreshAnalysesCompleted: pass.FreshAnalysesCompleted, Retries: pass.Retries,
+						Outcome: pass.Outcome, Published: pass.Published,
+					})
+				}
 			}
 		}
 		if r.Method == http.MethodHead {

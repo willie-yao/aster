@@ -24,10 +24,22 @@ import (
 
 type compatibleResultKube struct {
 	*fakeContainerAnalyzerKube
-	listed    []unstructured.Unstructured
-	namespace string
-	selector  string
-	listErr   error
+	listed      []unstructured.Unstructured
+	exact       *unstructured.Unstructured
+	namespace   string
+	name        string
+	selector    string
+	listErr     error
+	exactGetErr error
+}
+
+func (k *compatibleResultKube) Get(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string) (*unstructured.Unstructured, error) {
+	if gvr == TasksGVR {
+		k.namespace = namespace
+		k.name = name
+		return k.exact, k.exactGetErr
+	}
+	return k.fakeContainerAnalyzerKube.Get(ctx, gvr, namespace, name)
 }
 
 func (k *compatibleResultKube) ListByLabel(_ context.Context, gvr schema.GroupVersionResource, namespace, selector string) ([]unstructured.Unstructured, error) {
@@ -107,6 +119,122 @@ func TestCompatibleContainerResultCandidatesAreBoundedAndStrict(t *testing.T) {
 	}
 	if kube.namespace != namespace || !strings.Contains(kube.selector, containerWorkItemLabel+"="+workItem) || !strings.Contains(kube.selector, "app.kubernetes.io/managed-by=prow-ai-dashboard") {
 		t.Fatalf("lookup namespace=%q selector=%q", kube.namespace, kube.selector)
+	}
+}
+
+func TestContainerAnalyzerReusesExactResultWithoutCreatingTask(t *testing.T) {
+	request := containerTaskRequest()
+	key := bytes.Repeat([]byte{0x79}, 32)
+	store, err := analysisruntime.NewContainerStateStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := containerAnalyzerTestOptions(t, key)
+	resources := &fakeContainerResourceClient{}
+	kube := &compatibleResultKube{fakeContainerAnalyzerKube: &fakeContainerAnalyzerKube{fakeContainerResourceClient: resources}}
+	results := &compatibleResultAPI{values: map[string]struct {
+		raw string
+		ok  bool
+		err error
+	}{}}
+	analyzer, err := newContainerAnalyzer(opts, kube, results, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := compatibleResultPolicy(opts)
+	result := compatibleFailureResult(policy)
+	prepared, err := prepareContainerAnalysisTask(analyzer.taskSpec(request, store.CacheSeed(request), nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workItem := fetchprogress.WorkItemID(analysisruntime.FailureCacheKey(request))
+	exact := compatibleTaskObject(opts.Namespace, prepared.Name, workItem, prepared.BundleDigest, containerStateKeyFingerprint(key), "Succeeded", true, time.Now().UTC().Add(-time.Minute))
+	kube.exact = &exact
+	results.values[prepared.Name] = struct {
+		raw string
+		ok  bool
+		err error
+	}{raw: compatibleRawResult(t, opts.Namespace, prepared.Name, request, key, result, nil), ok: true}
+
+	got, reused, err := analyzer.ReuseExactResult(t.Context(), request, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reused || !sameAgenticResult(got, result) {
+		t.Fatalf("reused=%t result=%+v", reused, got)
+	}
+	if kube.namespace != opts.Namespace || kube.name != prepared.Name || !reflect.DeepEqual(results.calls, []string{opts.Namespace + "/" + prepared.Name}) {
+		t.Fatalf("lookup namespace=%q name=%q result calls=%v", kube.namespace, kube.name, results.calls)
+	}
+	if len(resources.created) != 0 || len(resources.applied) != 0 || kube.selector != "" {
+		t.Fatalf("exact reuse mutated resources: created=%v applied=%v selector=%q", resources.created, resources.applied, kube.selector)
+	}
+	cacheKey := analysisruntime.FailureCacheKey(request)
+	accepted, reason := ai.AcceptAgenticCacheEntry(store.CacheSeed(request)[cacheKey], cacheKey, policy)
+	if reason != ai.CacheAccepted || !sameAgenticResult(accepted, result) {
+		t.Fatalf("promoted cache reason=%q result=%+v", reason, accepted)
+	}
+}
+
+func TestContainerAnalyzerExactReuseRejectsIneligibleTasks(t *testing.T) {
+	request := containerTaskRequest()
+	key := bytes.Repeat([]byte{0x78}, 32)
+	opts := containerAnalyzerTestOptions(t, key)
+	policy := compatibleResultPolicy(opts)
+	for _, tc := range []struct {
+		name   string
+		phase  string
+		result bool
+		mutate func(*unstructured.Unstructured)
+	}{
+		{name: "missing", phase: ""},
+		{name: "running", phase: "Running"},
+		{name: "failed", phase: "Failed", result: true},
+		{name: "cancelled", phase: "Cancelled", result: true},
+		{name: "resultless", phase: "Succeeded"},
+		{name: "unmanaged", phase: "Succeeded", result: true, mutate: func(task *unstructured.Unstructured) {
+			labels := task.GetLabels()
+			labels["app.kubernetes.io/managed-by"] = "other"
+			task.SetLabels(labels)
+		}},
+		{name: "wrong-bundle", phase: "Succeeded", result: true, mutate: func(task *unstructured.Unstructured) {
+			annotations := task.GetAnnotations()
+			annotations["prow-ai-dashboard/bundle-digest"] = strings.Repeat("f", 64)
+			task.SetAnnotations(annotations)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, err := analysisruntime.NewContainerStateStore(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			kube := &compatibleResultKube{fakeContainerAnalyzerKube: &fakeContainerAnalyzerKube{fakeContainerResourceClient: &fakeContainerResourceClient{}}}
+			results := &compatibleResultAPI{values: map[string]struct {
+				raw string
+				ok  bool
+				err error
+			}{}}
+			analyzer, err := newContainerAnalyzer(opts, kube, results, store)
+			if err != nil {
+				t.Fatal(err)
+			}
+			prepared, err := prepareContainerAnalysisTask(analyzer.taskSpec(request, store.CacheSeed(request), nil))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.phase != "" {
+				workItem := fetchprogress.WorkItemID(analysisruntime.FailureCacheKey(request))
+				task := compatibleTaskObject(opts.Namespace, prepared.Name, workItem, prepared.BundleDigest, containerStateKeyFingerprint(key), tc.phase, tc.result, time.Now().UTC().Add(-time.Minute))
+				if tc.mutate != nil {
+					tc.mutate(&task)
+				}
+				kube.exact = &task
+			}
+			_, reused, err := analyzer.ReuseExactResult(t.Context(), request, policy)
+			if err != nil || reused || len(results.calls) != 0 {
+				t.Fatalf("reused=%t error=%v calls=%v", reused, err, results.calls)
+			}
+		})
 	}
 }
 

@@ -361,6 +361,8 @@ func TestTrackerTaskAttemptRetryAndCacheAccounting(t *testing.T) {
 	tracker.RecordResultAttempt("work-new", false, false)
 	tracker.RecordResultAttempt("work-new", true, false)
 	tracker.RecordResultAttempt("work-new", true, true)
+	tracker.RecordFreshAnalysisCompleted("work-new")
+	tracker.RecordFreshAnalysisCompleted("work-new")
 
 	tracker.RecordTaskPlanned("work-cached", "task-cached", true, false)
 	tracker.RecordTaskState("work-cached", "Succeeded", 1, true)
@@ -377,7 +379,7 @@ func TestTrackerTaskAttemptRetryAndCacheAccounting(t *testing.T) {
 	if status.Analyses.NewWork != 1 || status.Analyses.AcceptedCacheHits != 1 || status.Analyses.StaleWork != 1 || !status.Analyses.CheckpointCommitted {
 		t.Fatalf("work accounting = %+v", status.Analyses)
 	}
-	if status.Analyses.ExistingTasksAdopted != 1 || status.Analyses.ResultsRetrieved != 1 || status.Analyses.ResultRetrievalRetries != 2 {
+	if status.Analyses.ExistingTasksAdopted != 1 || status.Analyses.NewTasksCreated != 1 || status.Analyses.ResultsRetrieved != 1 || status.Analyses.FreshAnalysesCompleted != 1 || status.Analyses.ResultRetrievalRetries != 2 {
 		t.Fatalf("adoption/result accounting = %+v", status.Analyses)
 	}
 	if len(status.CurrentTasks) != 3 || !status.CurrentTasks[1].Adopted || status.CurrentTasks[0].Attempts != 2 {
@@ -401,6 +403,7 @@ func TestPassHistoryIsVersionedBoundedAndRecordsDurations(t *testing.T) {
 		tracker.PlanAnalyses(1, 0)
 		tracker.RecordTaskPlanned(fmt.Sprintf("work-%d", pass), fmt.Sprintf("task-%d", pass), false, false)
 		tracker.RecordTaskState(fmt.Sprintf("work-%d", pass), "Succeeded", 2, false)
+		tracker.RecordFreshAnalysisCompleted(fmt.Sprintf("work-%d", pass))
 		tracker.StartAnalysis(false)
 		tracker.FinishAnalysis(false, OutcomeSucceeded)
 		tracker.MarkAnalysisCheckpoint()
@@ -427,7 +430,7 @@ func TestPassHistoryIsVersionedBoundedAndRecordsDurations(t *testing.T) {
 		t.Fatalf("history = %+v", history)
 	}
 	first, last := history.Passes[0], history.Passes[len(history.Passes)-1]
-	if first.PassID == "000000000000000000000002" || last.TaskAttempts != 2 || last.Retries != 1 || !last.Published ||
+	if first.PassID == "000000000000000000000002" || last.TaskAttempts != 2 || last.Retries != 1 || last.NewTasksCreated != 1 || last.FreshAnalysesCompleted != 1 || !last.Published ||
 		!last.CheckpointCommitted || last.PatternCacheHits != 1 {
 		t.Fatalf("bounded summaries first=%+v last=%+v", first, last)
 	}
@@ -542,6 +545,28 @@ func TestReadAcceptsPreviousCheckpointFreeStatusSchema(t *testing.T) {
 	}
 	if _, err := Read(path); err != nil {
 		t.Fatalf("reading previous status schema: %v", err)
+	}
+}
+
+func TestReadHistoryAcceptsPreviousExactCounterFreeSchema(t *testing.T) {
+	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+	history := History{SchemaVersion: 2, Passes: []PassSummary{{
+		RunID: "run", PassID: "pass", PassType: PassOneShot,
+		StartedAt: now, CompletedAt: now.Add(time.Second), Outcome: OutcomeSucceeded,
+	}}}
+	path := HistoryPath(t.TempDir())
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(history)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadHistory(path); err != nil {
+		t.Fatalf("reading previous exact-counter-free history: %v", err)
 	}
 }
 
@@ -671,7 +696,7 @@ func TestTrackerFinalizesPostCacheAnalysisPlan(t *testing.T) {
 	got := tracker.Snapshot().Analyses
 	want := AnalysisProgress{
 		LogicalTotal: 4, AcceptedCacheHits: 1, CompatibleResultsReused: 1, NewWork: 1, StaleWork: 1, CacheRejections: rejections,
-		Queued: 1, Completed: 3, TaskAttempts: 1,
+		Queued: 1, Completed: 3, TaskAttempts: 1, NewTasksCreated: 1,
 		BuildSubjects: BuildAnalysisProgress{LogicalTotal: 1, Completed: 1, AcceptedCacheHits: 1},
 	}
 	if got != want {
@@ -689,6 +714,22 @@ func TestCurrentStatusOmitsObsoleteCacheRejectionCategories(t *testing.T) {
 		if bytes.Contains(data, []byte(`"`+category+`"`)) {
 			t.Fatalf("current status emitted obsolete category %q: %s", category, data)
 		}
+	}
+}
+
+func TestReadAcceptsPreviousExactCounterFreeStatusSchema(t *testing.T) {
+	status := testStatus(time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC))
+	status.SchemaVersion = 8
+	path := filepath.Join(t.TempDir(), "status.json")
+	data, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Read(path); err != nil {
+		t.Fatalf("reading previous exact-counter-free schema: %v", err)
 	}
 }
 
@@ -740,6 +781,20 @@ func TestReadAcceptsPreviousBuildSubjectStatusSchema(t *testing.T) {
 	}
 	if _, err := Read(path); err != nil {
 		t.Fatalf("reading previous status schema: %v", err)
+	}
+}
+
+func TestTrackerExactReuseCompletesWithoutTaskActivity(t *testing.T) {
+	tracker := newTracker(t.TempDir(), "sha-test", trackerOptions{
+		write:        func(string, Status) error { return nil },
+		writeHistory: func(string, History) error { return nil },
+		logf:         func(string, ...any) {},
+	})
+	tracker.StartPass(PassInitialWatch)
+	tracker.PlanAnalysisWork(AnalysisPlan{LogicalTotal: 1, ExactResultsReused: 1})
+	got := tracker.Snapshot().Analyses
+	if got.LogicalTotal != 1 || got.Completed != 1 || got.ExactResultsReused != 1 || got.Queued != 0 || got.TaskAttempts != 0 || got.NewTasksCreated != 0 || got.ExistingTasksAdopted != 0 || got.ResultsRetrieved != 0 || got.FreshAnalysesCompleted != 0 {
+		t.Fatalf("exact reuse progress = %+v", got)
 	}
 }
 
