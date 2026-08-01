@@ -106,6 +106,10 @@ func TestServiceAnalyzeFailureClonesCachedResult(t *testing.T) {
 				RelevantFiles: []string{"a.go"}, FileLinks: map[string]string{"a.go": "https://example.invalid/a.go"},
 			},
 		},
+		ProwJob: &ProwJobContext{
+			Name: "job", JobType: models.JobTypePeriodic,
+			ConfigFile: "config/jobs/example/periodics.yaml", ConfigRevision: strings.Repeat("a", 40),
+		},
 	}
 
 	result, err := service.AnalyzeFailure(context.Background(), &http.Client{}, request)
@@ -114,6 +118,15 @@ func TestServiceAnalyzeFailureClonesCachedResult(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&srv.calls); got != 0 {
 		t.Fatalf("server calls = %d, want 0", got)
+	}
+	request.ProwJob.ConfigFile = "config/jobs/example/renamed-periodics.yaml"
+	request.ProwJob.ConfigRevision = strings.Repeat("b", 40)
+	reused, err := service.AnalyzeFailure(context.Background(), &http.Client{}, request)
+	if err != nil {
+		t.Fatalf("AnalyzeFailure() after source change error = %v", err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 0 || reused.Analysis == nil || reused.Analysis.RootCause != "cached" {
+		t.Fatalf("source metadata invalidated accepted result: calls=%d result=%+v", got, reused.Analysis)
 	}
 	result.Summary.Summary = "changed"
 	result.Analysis.RootCause = "changed"

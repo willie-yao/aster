@@ -349,6 +349,9 @@ func TestProjectBundleIdentityChangesWithInputs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if changedProwJob == changedPrompt {
+		t.Fatalf("Prow job context change kept bundle digest %s", changedProwJob)
+	}
 	writeBundleTestFile(t, filepath.Join(projectDir, "skills", "a-first.yml"), `id: a-first
 triggers: ["changed"]
 `)
