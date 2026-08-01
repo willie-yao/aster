@@ -391,6 +391,22 @@ to multi-MB ginkgo messages that would otherwise overflow the window on
 iteration 1 and fail the analysis with a 400. The agent can still read the full
 junit / build-log via its tools.
 
+### Prow job source context
+
+Each failure request carries compact Prow job metadata when it is available:
+the job name and type, the current `kubernetes/test-infra` configuration file,
+and the pinned test-infra revision used by dashboard discovery. The analyzer
+labels these values as untrusted metadata and quotes them before adding them to
+the task prompt. The same request is serialized into Orka analyzer bundles.
+
+The source file and revision describe the current discovery snapshot, not
+necessarily the historical source revision that created an older failed run.
+`prowjob.json` remains authoritative for the effective pod spec, environment,
+arguments, refs, and test selection that actually executed. Current source
+metadata helps identify the likely edit location without replacing runtime
+evidence. Changes to the current discovery revision do not invalidate accepted
+analysis cache entries for the same build.
+
 ### Investigation floors
 
 `min_tool_calls` and `min_gcs_bytes` are minimum-investigation floors. When

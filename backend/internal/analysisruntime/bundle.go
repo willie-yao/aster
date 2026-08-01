@@ -19,6 +19,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/evidenceplan"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"gopkg.in/yaml.v3"
 )
@@ -36,7 +37,7 @@ const (
 	// Bump it when transport, tool behavior, cache or result schemas, or analysis
 	// semantics change outside the prompt, model, skill, and critique hashes.
 	// Packaging, server, frontend, and unrelated image changes do not require a bump.
-	ContainerAnalyzerContractVersion = "dashboard-failure-analyzer-v5"
+	ContainerAnalyzerContractVersion = "dashboard-failure-analyzer-v6"
 	// MaxProjectBundleBytes stays below the Linux per-environment-value limit.
 	MaxProjectBundleBytes = 96 << 10
 )
@@ -528,6 +529,7 @@ var cacheGenerationFingerprintPattern = regexp.MustCompile(`^[0-9a-f]{16}$`)
 func CanonicalFailureAnalysisRequest(request ai.FailureAnalysisRequest) ai.FailureAnalysisRequest {
 	request.Build.JUnitURLs = nil
 	request.TestCase = evidenceplan.CanonicalTestCase(request.TestCase)
+	request.ProwJob = ai.CanonicalProwJobContext(request.ProwJob)
 	return request
 }
 
@@ -555,6 +557,8 @@ func validateRequest(request ai.FailureAnalysisRequest) error {
 		return fmt.Errorf("failure analysis request test_case.name is required")
 	case request.TestCase.Status != "failed":
 		return fmt.Errorf("failure analysis request test_case.status must be failed")
+	case request.ProwJob != nil && request.ProwJob.JobType != "" && request.ProwJob.JobType != models.JobTypePeriodic && request.ProwJob.JobType != models.JobTypePresubmit:
+		return fmt.Errorf("failure analysis request prow_job.job_type is invalid")
 	case request.ConsecutiveFailures < 0:
 		return fmt.Errorf("failure analysis request consecutive_failures must not be negative")
 	case request.CacheGeneration != "" && !cacheGenerationFingerprintPattern.MatchString(request.CacheGeneration):

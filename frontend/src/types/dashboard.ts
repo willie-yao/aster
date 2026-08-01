@@ -221,6 +221,8 @@ export interface JobDetail {
   job_id: string;
   job_type: "periodic" | "presubmit";
   repo: string;
+  config_file?: string;
+  config_revision?: string;
   runs: BuildResult[];
   pattern_analyses?: PatternAnalysis[];
   pattern_refresh?: PatternRefreshStatus;

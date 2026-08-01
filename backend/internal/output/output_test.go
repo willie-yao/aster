@@ -34,9 +34,11 @@ func sampleDashboard() models.Dashboard {
 
 func sampleJobDetail(name string) models.JobDetail {
 	return models.JobDetail{
-		Name:    name,
-		JobID:   name,
-		JobType: models.JobTypePeriodic,
+		Name:           name,
+		JobID:          name,
+		JobType:        models.JobTypePeriodic,
+		ConfigFile:     "config/jobs/example/periodics.yaml",
+		ConfigRevision: strings.Repeat("a", 40),
 		Runs: []models.BuildResult{
 			{
 				BuildInfo: models.BuildInfo{
@@ -230,6 +232,9 @@ func TestWriteAllKeepsPatternIdentityConsistent(t *testing.T) {
 	}
 	if err := json.Unmarshal(flakinessData, &writtenReport); err != nil {
 		t.Fatal(err)
+	}
+	if writtenDetail.ConfigFile != detail.ConfigFile || writtenDetail.ConfigRevision != detail.ConfigRevision {
+		t.Fatalf("written Prow config source = %q@%q", writtenDetail.ConfigFile, writtenDetail.ConfigRevision)
 	}
 	jobPattern := writtenDetail.PatternAnalyses[0]
 	reportPattern := writtenReport.RecurringPatterns[0]

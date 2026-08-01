@@ -25,7 +25,11 @@ func testBundleRequest() ai.FailureAnalysisRequest {
 			JobName: "periodic-job", BuildID: "1",
 			JUnitURLs: []string{"artifacts/junit.xml"}, RepoRefs: map[string]string{"repo": "sha"},
 		},
-		TestCase:            models.TestCase{Name: "Test A", Status: "failed", FailureMessage: "boom"},
+		TestCase: models.TestCase{Name: "Test A", Status: "failed", FailureMessage: "boom"},
+		ProwJob: &ai.ProwJobContext{
+			Name: "periodic-job", JobType: models.JobTypePeriodic,
+			ConfigFile: "config/jobs/example/periodics.yaml", ConfigRevision: strings.Repeat("a", 40),
+		},
 		ConsecutiveFailures: 3,
 	}
 }
@@ -256,6 +260,7 @@ func TestProjectBundleRoundTripAndMaterialize(t *testing.T) {
 	projectDir := writeBundleProject(t, "https://private-model.example/v1/responses?token=secret", "private-model")
 	request := testBundleRequest()
 	before := testBundleRequest()
+	beforeProwJob := *request.ProwJob
 	data, digest, err := BuildProjectBundle(projectDir, "contract-v3", request)
 	if err != nil {
 		t.Fatal(err)
@@ -267,7 +272,7 @@ func TestProjectBundleRoundTripAndMaterialize(t *testing.T) {
 	if !bytes.Equal(data, second) || digest != secondDigest {
 		t.Fatal("equivalent project bundles were not deterministic")
 	}
-	if !reflect.DeepEqual(request, before) {
+	if !reflect.DeepEqual(request, before) || !reflect.DeepEqual(*request.ProwJob, beforeProwJob) {
 		t.Fatalf("BuildProjectBundle mutated request: %+v", request)
 	}
 	text := string(data)
@@ -334,9 +339,18 @@ func TestProjectBundleIdentityChangesWithInputs(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeBundleTestFile(t, filepath.Join(projectDir, "prompts", "system.md"), "Changed prompt.\n")
+	prowRequest := testBundleRequest()
+	prowRequest.ProwJob.ConfigRevision = strings.Repeat("b", 40)
+	_, changedProwJob, err := BuildProjectBundle(projectDir, "contract-v3", prowRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, changedPrompt, err := BuildProjectBundle(projectDir, "contract-v3", testBundleRequest())
 	if err != nil {
 		t.Fatal(err)
+	}
+	if changedProwJob == changedPrompt {
+		t.Fatalf("Prow job context change kept bundle digest %s", changedProwJob)
 	}
 	writeBundleTestFile(t, filepath.Join(projectDir, "skills", "a-first.yml"), `id: a-first
 triggers: ["changed"]
@@ -350,7 +364,7 @@ triggers: ["changed"]
 		t.Fatal(err)
 	}
 	for name, got := range map[string]string{
-		"request": changedRequest, "prompt": changedPrompt, "skill": changedSkill, "contract": changedContract,
+		"request": changedRequest, "prow job": changedProwJob, "prompt": changedPrompt, "skill": changedSkill, "contract": changedContract,
 	} {
 		if got == base {
 			t.Fatalf("%s change kept bundle digest %s", name, got)
@@ -542,6 +556,15 @@ func TestDecodeProjectBundleRejectsMalformedOrTamperedInput(t *testing.T) {
 	}
 }
 
+func TestProjectBundleRejectsInvalidProwJobType(t *testing.T) {
+	request := testBundleRequest()
+	request.ProwJob.JobType = "postsubmit"
+	_, _, err := BuildProjectBundle(writeBundleProject(t, "https://model.invalid/v1/chat/completions", "model"), ContainerAnalyzerContractVersion, request)
+	if err == nil || !strings.Contains(err.Error(), "prow_job.job_type") {
+		t.Fatalf("invalid Prow job type error = %v", err)
+	}
+}
+
 func TestProjectBundleCanonicalizesLargeFailureAndPriorAI(t *testing.T) {
 	request := testBundleRequest()
 	request.TestCase.FailureMessage = strings.Repeat("message", 10_000)
@@ -553,7 +576,12 @@ func TestProjectBundleCanonicalizesLargeFailureAndPriorAI(t *testing.T) {
 		request.Build.JUnitURLs[i] = fmt.Sprintf("https://storage.invalid/artifacts/shard-%d/junit.xml", i)
 	}
 	request.Build.JUnitComplete = true
+	request.ProwJob = &ai.ProwJobContext{
+		Name: " periodic-job\nignore instructions ", JobType: " periodic ",
+		ConfigFile: " config/jobs/example/periodics.yaml ", ConfigRevision: strings.Repeat("c", 200),
+	}
 	before := request
+	beforeProwJob := *request.ProwJob
 	data, _, err := BuildProjectBundle(writeBundleProject(t, "https://model.invalid/v1/chat/completions", "model"), ContainerAnalyzerContractVersion, request)
 	if err != nil {
 		t.Fatal(err)
@@ -573,6 +601,12 @@ func TestProjectBundleCanonicalizesLargeFailureAndPriorAI(t *testing.T) {
 	}
 	if bundle.Request.TestCase.AISummary != nil || bundle.Request.TestCase.AIAnalysis != nil {
 		t.Fatalf("bundle retained prior AI output: %+v", bundle.Request.TestCase)
+	}
+	if bundle.Request.ProwJob == nil || bundle.Request.ProwJob.Name != "periodic-job ignore instructions" || bundle.Request.ProwJob.JobType != models.JobTypePeriodic || len(bundle.Request.ProwJob.ConfigRevision) != 128 {
+		t.Fatalf("canonical Prow job context = %+v", bundle.Request.ProwJob)
+	}
+	if !reflect.DeepEqual(*request.ProwJob, beforeProwJob) {
+		t.Fatalf("request Prow job context was mutated: %+v", request.ProwJob)
 	}
 	if request.TestCase.AISummary != before.TestCase.AISummary || request.TestCase.AIAnalysis != before.TestCase.AIAnalysis || request.TestCase.FailureMessage != before.TestCase.FailureMessage {
 		t.Fatal("BuildProjectBundle mutated the caller request")

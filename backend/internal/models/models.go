@@ -238,11 +238,13 @@ type Dashboard struct {
 
 // JobDetail is the per-job detail structure for jobs/{job-id}.json.
 type JobDetail struct {
-	Name    string        `json:"name"`
-	JobID   string        `json:"job_id"`
-	JobType string        `json:"job_type"`
-	Repo    string        `json:"repo"`
-	Runs    []BuildResult `json:"runs"`
+	Name           string        `json:"name"`
+	JobID          string        `json:"job_id"`
+	JobType        string        `json:"job_type"`
+	Repo           string        `json:"repo"`
+	ConfigFile     string        `json:"config_file,omitempty"`
+	ConfigRevision string        `json:"config_revision,omitempty"`
+	Runs           []BuildResult `json:"runs"`
 	// PatternAnalyses holds cross-build correlations for this job.
 	// Empty unless the job failed in enough builds for pattern analysis.
 	PatternAnalyses []PatternAnalysis     `json:"pattern_analyses,omitempty"`

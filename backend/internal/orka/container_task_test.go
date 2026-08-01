@@ -22,6 +22,10 @@ func containerTaskRequest() ai.FailureAnalysisRequest {
 		BuildPrefix: "logs/periodic-job/1/",
 		Build:       models.BuildInfo{JobName: "periodic-job", BuildID: "1"},
 		TestCase:    models.TestCase{Name: "Test A", Status: "failed", FailureMessage: "boom"},
+		ProwJob: &ai.ProwJobContext{
+			Name: "periodic-job", JobType: models.JobTypePeriodic,
+			ConfigFile: "config/jobs/example/periodics.yaml", ConfigRevision: strings.Repeat("a", 40),
+		},
 	}
 }
 

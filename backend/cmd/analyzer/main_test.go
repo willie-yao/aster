@@ -38,6 +38,10 @@ func analyzerTestRequest() ai.FailureAnalysisRequest {
 		BuildPrefix: "logs/job/1/",
 		Build:       models.BuildInfo{JobName: "job", BuildID: "1"},
 		TestCase:    models.TestCase{Name: "Test A", Status: "failed", FailureMessage: "private failure"},
+		ProwJob: &ai.ProwJobContext{
+			Name: "job", JobType: models.JobTypePeriodic,
+			ConfigFile: "config/jobs/example/periodics.yaml", ConfigRevision: strings.Repeat("a", 40),
+		},
 	}
 }
 
@@ -209,7 +213,7 @@ func TestRunRejectsMalformedOrMismatchedBundle(t *testing.T) {
 		return nil, nil
 	}
 	valid := bundleValues(t, analyzerTestRequest(), "")
-	future := bundleValuesForContract(t, analyzerTestRequest(), "", "dashboard-failure-analyzer-v6")
+	future := bundleValuesForContract(t, analyzerTestRequest(), "", "dashboard-failure-analyzer-v7")
 	for _, values := range []map[string]string{
 		{analysisruntime.ProjectBundleEnv: "not json", analysisruntime.ProjectBundleDigestEnv: strings.Repeat("0", 64)},
 		{analysisruntime.ProjectBundleEnv: valid[analysisruntime.ProjectBundleEnv]},
