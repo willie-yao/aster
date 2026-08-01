@@ -30,7 +30,10 @@ The universal system prompt stays small. The Prow profile is engine-owned
 because Prow artifacts are part of the product contract. Kubernetes knowledge
 is conditional because some Prow consumers do not produce Kubernetes cluster
 dumps or use the cluster-navigation tools. Provider details such as CAPZ,
-Azure resources, ASO, and project flavor behavior remain consumer-owned.
+Azure resources, ASO, and project flavor behavior remain consumer-owned. The
+failure prompt may name the current test-infra config file and discovery
+revision, while `prowjob.json` remains the evidence for what the failed run
+actually executed.
 
 ## What a skill is
 

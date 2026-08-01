@@ -46,16 +46,18 @@ type aiWork struct {
 	buildPrefix string
 	run         *models.BuildResult
 	tc          *models.TestCase
+	prowJob     ai.ProwJobContext
 	priority    aiWorkPriority
 }
 
-func (w aiWork) request(consecutiveMap map[string]int, cacheGeneration string) ai.FailureAnalysisRequest {
+func (w aiWork) request(consecutiveFailures int, cacheGeneration string) ai.FailureAnalysisRequest {
 	return ai.FailureAnalysisRequest{
 		JobID:               w.jobID,
 		BuildPrefix:         w.buildPrefix,
 		Build:               w.run.BuildInfo,
 		TestCase:            *w.tc,
-		ConsecutiveFailures: consecutiveMap[w.jobID+"::"+w.tc.Name],
+		ProwJob:             ai.CanonicalProwJobContext(&w.prowJob),
+		ConsecutiveFailures: consecutiveFailures,
 		CacheGeneration:     cacheGeneration,
 	}
 }
@@ -87,10 +89,14 @@ func collectAIWork(ctx context.Context, httpClient *http.Client, details []model
 					continue
 				}
 				consecutive := consecutiveMap[d.JobID+"::"+tc.Name]
-				work = append(work, aiWork{
+				item := aiWork{
 					jobID: d.JobID, buildPrefix: loc.BuildPath(), run: run, tc: tc,
-					priority: classifyAIWork(ctx, httpClient, run, tc, consecutive, planner),
-				})
+					prowJob: ai.ProwJobContext{
+						Name: d.Name, JobType: d.JobType, ConfigFile: d.ConfigFile, ConfigRevision: d.ConfigRevision,
+					},
+				}
+				item.priority = classifyAIWork(ctx, httpClient, item, consecutive, planner)
+				work = append(work, item)
 			}
 		}
 	}
@@ -98,13 +104,13 @@ func collectAIWork(ctx context.Context, httpClient *http.Client, details []model
 	return work
 }
 
-func classifyAIWork(ctx context.Context, httpClient *http.Client, run *models.BuildResult, tc *models.TestCase, consecutive int, planner analysisPlanner) aiWorkPriority {
-	needsWork := analysisNeedsWork(tc)
+func classifyAIWork(ctx context.Context, httpClient *http.Client, item aiWork, consecutive int, planner analysisPlanner) aiWorkPriority {
+	needsWork := analysisNeedsWork(item.tc)
 	if planner != nil {
-		needsWork = planner.NeedsAnalysis(ctx, httpClient, run, tc, max(1, consecutive))
+		needsWork = planner.NeedsAnalysis(ctx, httpClient, item.run, item.tc, max(1, consecutive))
 	}
 	if needsWork {
-		if tc.Source == models.TestCaseSourceBuild {
+		if item.tc.Source == models.TestCaseSourceBuild {
 			return aiWorkBuildMissing
 		}
 		return aiWorkJUnitMissing
@@ -152,7 +158,7 @@ func planContainerAnalysisWork(ctx context.Context, httpClient *http.Client, wor
 		var result ai.FailureAnalysisResult
 		if state != nil && planner != nil {
 			var err error
-			result, reason, err = state.AcceptCachedFailure(ctx, httpClient, item.request(consecutiveMap, cacheGeneration), planner)
+			result, reason, err = state.AcceptCachedFailure(ctx, httpClient, item.request(consecutiveMap[item.jobID+"::"+item.tc.Name], cacheGeneration), planner)
 			if err != nil {
 				return nil, fetchprogress.AnalysisPlan{}, err
 			}
@@ -171,7 +177,7 @@ func planContainerAnalysisWork(ctx context.Context, httpClient *http.Client, wor
 			continue
 		}
 		if reason == ai.CacheRejectedMissing && planner != nil {
-			request := item.request(consecutiveMap, cacheGeneration)
+			request := item.request(consecutiveMap[item.jobID+"::"+item.tc.Name], cacheGeneration)
 			policy, err := analysisruntime.FailureCachePolicy(ctx, httpClient, request, planner)
 			if err != nil {
 				return nil, fetchprogress.AnalysisPlan{}, err
@@ -368,7 +374,7 @@ schedule:
 			buildSubject := w.tc.Source == models.TestCaseSourceBuild
 			p.startProgressAnalysis(buildSubject)
 			before := w.tc.AISummary
-			result, analyzeErr := analyzer.AnalyzeFailure(analysisCtx, p.client, w.request(consecutiveMap, p.cacheGenerationFingerprint()))
+			result, analyzeErr := analyzer.AnalyzeFailure(analysisCtx, p.client, w.request(consecutiveMap[w.jobID+"::"+w.tc.Name], p.cacheGenerationFingerprint()))
 			if analysisruntime.IsProjectBundleSourceError(analyzeErr) {
 				p.finishProgressAnalysis(buildSubject, fetchprogress.OutcomeFailed)
 				systemicOnce.Do(func() {

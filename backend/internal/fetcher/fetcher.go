@@ -502,17 +502,23 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 	dashboard := models.Dashboard{GeneratedAt: now}
 	var details []models.JobDetail
 
+	configRevision := ""
+	if p.jobCatalog != nil {
+		configRevision = p.jobCatalog.Revision
+	}
 	for _, r := range results {
 		if r.job.Name == "" {
 			continue // skipped due to fetch error
 		}
 		dashboard.Jobs = append(dashboard.Jobs, aggregator.ComputeJobSummary(r.job, r.runs))
 		details = append(details, models.JobDetail{
-			Name:    r.job.Name,
-			JobID:   r.job.JobID,
-			JobType: r.job.JobType,
-			Repo:    r.job.Repo,
-			Runs:    r.runs,
+			Name:           r.job.Name,
+			JobID:          r.job.JobID,
+			JobType:        r.job.JobType,
+			Repo:           r.job.Repo,
+			ConfigFile:     r.job.ConfigFile,
+			ConfigRevision: configRevision,
+			Runs:           r.runs,
 		})
 	}
 

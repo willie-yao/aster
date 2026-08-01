@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -168,6 +169,9 @@ func testCacheRequest() ai.FailureAnalysisRequest {
 	return ai.FailureAnalysisRequest{
 		JobID: "job", BuildPrefix: "logs/job/1", Build: models.BuildInfo{BuildID: "1", JobName: "job"},
 		TestCase: models.TestCase{Name: "test", Status: "failed", FailureMessage: "failed"},
+		ProwJob: &ai.ProwJobContext{
+			Name: "job", JobType: models.JobTypePeriodic, ConfigFile: "config/jobs/example/periodics.yaml", ConfigRevision: strings.Repeat("a", 40),
+		},
 	}
 }
 
@@ -175,6 +179,7 @@ func testCacheDetails() []models.JobDetail {
 	request := testCacheRequest()
 	return []models.JobDetail{{
 		Name: "job", JobID: request.JobID, JobType: models.JobTypePeriodic,
+		ConfigFile: request.ProwJob.ConfigFile, ConfigRevision: request.ProwJob.ConfigRevision,
 		Runs: []models.BuildResult{{BuildInfo: request.Build, TestCases: []models.TestCase{request.TestCase}}},
 	}}
 }

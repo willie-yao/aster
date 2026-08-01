@@ -257,6 +257,7 @@ func TestAnalyzeFailuresContainerConcurrencyAndCancellation(t *testing.T) {
 	}
 	details := []models.JobDetail{{
 		Name: "job", JobID: "job", JobType: models.JobTypePeriodic,
+		ConfigFile: "config/jobs/example/periodics.yaml", ConfigRevision: strings.Repeat("a", 40),
 		Runs: []models.BuildResult{{
 			BuildInfo: models.BuildInfo{BuildID: "1", Result: "FAILURE"},
 			TestCases: []models.TestCase{
@@ -418,6 +419,7 @@ func TestAnalyzeFailuresSubmitsBuildWorkFirstWithoutExtraConcurrency(t *testing.
 	}
 	details := []models.JobDetail{{
 		Name: "job", JobID: "job", JobType: models.JobTypePeriodic,
+		ConfigFile: "config/jobs/example/periodics.yaml", ConfigRevision: strings.Repeat("a", 40),
 		Runs: []models.BuildResult{{
 			BuildInfo: models.BuildInfo{BuildID: "1", Result: "FAILURE"},
 			TestCases: []models.TestCase{
@@ -433,6 +435,9 @@ func TestAnalyzeFailuresSubmitsBuildWorkFirstWithoutExtraConcurrency(t *testing.
 	case request := <-analyzer.started:
 		if request.TestCase.Source != models.TestCaseSourceBuild {
 			t.Fatalf("first submitted source = %q, want build", request.TestCase.Source)
+		}
+		if request.ProwJob == nil || request.ProwJob.Name != "job" || request.ProwJob.JobType != models.JobTypePeriodic || request.ProwJob.ConfigFile != "config/jobs/example/periodics.yaml" || request.ProwJob.ConfigRevision != strings.Repeat("a", 40) {
+			t.Fatalf("Prow job context = %+v", request.ProwJob)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("no analysis started")
@@ -459,6 +464,7 @@ func TestCollectAIWorkUsesCurrentStalenessPlanner(t *testing.T) {
 	summary := &models.AISummary{Summary: "existing"}
 	details := []models.JobDetail{{
 		Name: "job", JobID: "job", JobType: models.JobTypePeriodic,
+		ConfigFile: "config/jobs/example/periodics.yaml", ConfigRevision: strings.Repeat("b", 40),
 		Runs: []models.BuildResult{{
 			BuildInfo: models.BuildInfo{BuildID: "1"},
 			TestCases: []models.TestCase{
@@ -470,5 +476,12 @@ func TestCollectAIWorkUsesCurrentStalenessPlanner(t *testing.T) {
 	work := collectAIWork(t.Context(), nil, details, nil, namedAnalysisPlanner{"stale": true})
 	if len(work) != 2 || work[0].tc.Name != "stale" || work[1].tc.Name != "reusable" {
 		t.Fatalf("work order = %v, %v", work[0].tc.Name, work[1].tc.Name)
+	}
+	request := work[0].request(2, "")
+	if request.ProwJob == nil || request.ProwJob.Name != "job" || request.ProwJob.JobType != models.JobTypePeriodic || request.ProwJob.ConfigFile != "config/jobs/example/periodics.yaml" || request.ProwJob.ConfigRevision != strings.Repeat("b", 40) {
+		t.Fatalf("Prow job context = %+v", request.ProwJob)
+	}
+	if request.ConsecutiveFailures != 2 {
+		t.Fatalf("consecutive failures = %d, want 2", request.ConsecutiveFailures)
 	}
 }
