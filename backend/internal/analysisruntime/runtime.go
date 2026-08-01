@@ -375,8 +375,9 @@ func NewReusePlanner(project *Project) *ai.Service {
 	service.SetCacheGeneration(project.CacheGenerationFingerprint)
 	eff := project.Config.AI.EffectiveAgentic()
 	service.EnableAgentic(ai.AgenticOptions{
-		MinToolCalls: eff.MinToolCalls,
-		MinGCSBytes:  eff.MinGCSBytes,
+		MinToolCalls:       eff.MinToolCalls,
+		MinGCSBytes:        eff.MinGCSBytes,
+		CritiqueMaxRetries: *eff.Critique.MaxRetries,
 	}, nil, nil, nil)
 	service.SetSkills(project.SkillSet)
 	return service

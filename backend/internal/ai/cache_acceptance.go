@@ -32,8 +32,10 @@ type AgenticCachePolicy struct {
 	ModelHash           string
 	PromptHash          string
 	CacheGeneration     string
-	Now                 time.Time
-	entryTimeValidated  bool
+	// CritiqueRequired makes critique success and version part of acceptance.
+	CritiqueRequired   bool
+	Now                time.Time
+	entryTimeValidated bool
 }
 
 // LookupAgenticCache evaluates one private entry without mutating the cache.
@@ -124,7 +126,7 @@ func AgenticResultRejection(result FailureAnalysisResult, policy AgenticCachePol
 	if gcsFloorUnmet(analysis.GCSBytes, policy.MinGCSBytes, analysis.EvidencePlanCovered) {
 		return CacheRejectedEvidenceFloor
 	}
-	if !analysis.CritiquePassed || analysis.CritiqueVersion < currentCritiqueVersion {
+	if policy.CritiqueRequired && (!analysis.CritiquePassed || analysis.CritiqueVersion < currentCritiqueVersion) {
 		return CacheRejectedCritique
 	}
 	if analysis.CacheGeneration != policy.CacheGeneration {
@@ -184,6 +186,7 @@ func agenticCachePolicy(client *Client, opts AgenticOptions, skillSetHash, promp
 		MinToolCalls:        opts.MinToolCalls,
 		MinGCSBytes:         opts.MinGCSBytes,
 		ConsecutiveFailures: consecutiveFailures,
+		CritiqueRequired:    opts.CritiqueMaxRetries > 0,
 		SkillSetHash:        skillSetHash,
 		PromptHash:          promptHash,
 	}

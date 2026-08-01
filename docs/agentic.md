@@ -468,22 +468,24 @@ offending suggested_fix back to the model, lists the exact phrases that
 tripped the gate, and re-states the two allowed shapes (concrete remediation
 OR the strict no-remediation escape hatch). It performs the bounded repair when `max_retries` is positive and the
 headroom guards admit it. Repair is bounded to evidence injection, at most one
-Tool-enabled turn when evidence is unresolved, and one forced finalization. Drafts that still fail after the
-bounded operation are published but NOT cached, so the next fetcher
-run retries with a fresh attempt.
+Tool-enabled turn when evidence is unresolved, and one forced finalization. With
+`max_retries: 0`, critique remains visible telemetry but does not gate caching.
+With a positive retry budget, drafts that still fail after the bounded operation
+are published but not cached, so the next fetcher run retries them.
 
 **Coverage.** Critique evaluates parseable drafts in-loop, but deterministic
 repair runs once after draft selection. It injects evidence, optionally allows
 one Tool-enabled turn when evidence remains unresolved, then forces one final
 JSON response. It never reopens the general investigation loop.
 
-**Cache invalidation.** Only critique-passing analyses are cached; a draft that
-still fails after `max_retries` publishes but is not cached, so the next
-fetcher run retries it (same two-layer behavior as the floors). A
-`critique_version` int is stamped onto every critique-passing analysis; the
-invalidation gates reject entries whose version is below the current engine's,
-so strengthening the gate automatically invalidates entries that passed under
-the older, weaker contract without per-consumer cache clears.
+**Cache invalidation.** With `max_retries: 0`, critique is advisory and
+analyses that meet the investigation floors remain cacheable even when critique
+objects. A positive retry budget requires critique success before cache write or
+reuse; a draft that still fails publishes but is not cached. A
+`critique_version` int is stamped onto analyses, and positive-retry policies
+reject entries below the current engine version. Switching from zero to a
+positive retry count therefore re-enables the current critique gate without a
+cache clear.
 
 **Best-draft selection.** A repair never replaces an earlier draft merely
 because it arrived later. The engine compares parseable attempts in this order:

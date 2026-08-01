@@ -1657,8 +1657,23 @@ func TestAgentic_CritiqueZeroRetriesMakesNoRepairRequest(t *testing.T) {
 			if analysis.CritiquePassed {
 				t.Fatal("critique-failing result unexpectedly passed")
 			}
-			if _, ok := client.Cache().Get(key); ok {
-				t.Fatal("critique-failing result was cached")
+			if _, ok := client.Cache().Get(key); !ok {
+				t.Fatal("zero-retry critique result was not cached")
+			}
+			before := atomic.LoadInt32(&srv.calls)
+			_, cached, err := client.doAnalyzeAgentic(context.Background(),
+				newTestAgenticInputs(t, tc.browser, AgenticOptions{
+					MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+					Timeout: 30 * time.Second, CritiqueMaxRetries: 0,
+				}), key, "sys", "user")
+			if err != nil {
+				t.Fatalf("cached doAnalyzeAgentic: %v", err)
+			}
+			if got := atomic.LoadInt32(&srv.calls); got != before {
+				t.Fatalf("cached call count = %d, want %d", got, before)
+			}
+			if !cached.CacheHit || cached.CritiquePassed {
+				t.Fatalf("cached analysis = %+v", cached)
 			}
 		})
 	}
