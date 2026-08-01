@@ -13,6 +13,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisruntime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 )
 
 func containerTaskRequest() ai.FailureAnalysisRequest {
@@ -403,9 +404,26 @@ func TestBuildContainerAnalysisResourcesAllowsOnlyKnownSafeInlineEnvironment(t *
 	spec := containerTaskSpec(t)
 	spec.Environment = map[string]string{
 		"AI_API": "chat_completions", "AI_ENDPOINT": "http://model.invalid/v1/chat/completions", "AI_MODEL": "model",
+		project.AICacheGenerationEnv: "h100-grounded-v1",
 	}
-	if _, err := BuildContainerAnalysisResources(spec); err != nil {
+	resources, err := BuildContainerAnalysisResources(spec)
+	if err != nil {
 		t.Fatalf("safe inline environment rejected: %v", err)
+	}
+	taskSpec := resources.Task["spec"].(map[string]any)
+	generationFound := false
+	for _, raw := range taskSpec["env"].([]any) {
+		entry := raw.(map[string]any)
+		if entry["name"] != project.AICacheGenerationEnv {
+			continue
+		}
+		generationFound = entry["value"] == "h100-grounded-v1"
+		if _, ok := entry["valueFrom"]; ok {
+			t.Fatal("AI_CACHE_GENERATION used a Secret reference")
+		}
+	}
+	if !generationFound {
+		t.Fatalf("Task environment = %+v", taskSpec["env"])
 	}
 	for _, name := range []string{"AI_TOKEN", "GITHUB_PAT", "PRIVATE_KEY", "OPENAI_APIKEY"} {
 		spec := containerTaskSpec(t)

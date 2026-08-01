@@ -269,6 +269,24 @@ func TestContainerAnalyzerEnvironmentIncludesContextWindowOverride(t *testing.T)
 	}
 }
 
+func TestContainerAnalyzerTaskSpecBuildsWithCacheGeneration(t *testing.T) {
+	opts := containerAnalyzerTestOptions(t, bytes.Repeat([]byte{0x65}, 32))
+	opts.CacheGeneration = "h100-grounded-v1"
+	analyzer := &ContainerAnalyzer{opts: opts}
+	resources, err := BuildContainerAnalysisResources(analyzer.taskSpec(containerTaskRequest(), nil, nil))
+	if err != nil {
+		t.Fatalf("build generated Task: %v", err)
+	}
+	taskSpec := resources.Task["spec"].(map[string]any)
+	for _, raw := range taskSpec["env"].([]any) {
+		entry := raw.(map[string]any)
+		if entry["name"] == project.AICacheGenerationEnv && entry["value"] == "h100-grounded-v1" {
+			return
+		}
+	}
+	t.Fatalf("Task environment = %+v", taskSpec["env"])
+}
+
 func TestContainerAnalyzerRetainsResourcesUntilResultIsConsumed(t *testing.T) {
 	request := containerTaskRequest()
 	key := bytes.Repeat([]byte{0x73}, 32)
