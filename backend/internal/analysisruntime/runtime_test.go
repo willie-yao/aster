@@ -187,7 +187,7 @@ ai:
 		t.Fatalf("analysis source = %+v", loaded.AnalysisSource)
 	}
 	manifest := loaded.Config.AI.SkillBundle
-	if manifest == nil || manifest.EngineCount != 2 || manifest.ConsumerCount != 2 || !manifest.ConsumerBundlePresent || manifest.Hash == "" {
+	if manifest == nil || manifest.EngineCount != 3 || manifest.ConsumerCount != 2 || !manifest.ConsumerBundlePresent || manifest.Hash == "" {
 		t.Fatalf("public skill metadata = %+v", manifest)
 	}
 	if len(manifest.Profiles) != 1 || manifest.Profiles[0] != "prow" {
