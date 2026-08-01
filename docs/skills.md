@@ -11,8 +11,9 @@ The engine composes one merged set for the dashboard-owned analyzer:
 
 1. **Engine Prow profile.** Always enabled because the product analyzes Prow
    runs. It teaches the distinction between `build-log.txt` and JUnit details,
-   the roles of Prow metadata files, artifact-tree navigation, timeline
-   ordering, cleanup noise, and last-passing comparisons.
+   the roles of Prow metadata files, effective job configuration and test
+   selection, artifact-tree navigation, timeline ordering, cleanup noise, and
+   last-passing comparisons.
 2. **Engine Kubernetes profile.** Enabled when the effective `ai.tools`
    selection includes `k8s` or an individual `k8s.*` tool. It contains
    provider-neutral procedures for Machine and Node initialization, Pod

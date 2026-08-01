@@ -164,6 +164,11 @@ func TestBuiltinTriggersMatchProceduralSignals(t *testing.T) {
 			notMatch: "The webhook certificate is invalid.",
 		},
 		{
+			id:       "engine.prow.job-config",
+			matching: "The value for configuration variables IMAGE_TAG and ARTIFACT_BUCKET is not set.",
+			notMatch: "The application failed because a ConfigMap data key was missing.",
+		},
+		{
 			id:       "engine.kubernetes.machine-node-providerid",
 			matching: "The MachineDeployment timed out while the worker Node lacked providerID.",
 			notMatch: "A webhook rejected an invalid certificate.",
@@ -210,6 +215,9 @@ func TestBuiltinEvidencePaths(t *testing.T) {
 			"run-start":    "started.json",
 			"run-finish":   "finished.json",
 			"prow-context": "prowjob.json",
+		},
+		"engine.prow.job-config": {
+			"effective-job-config": "prowjob.json",
 		},
 		"engine.kubernetes.machine-node-providerid": {
 			"machine-state":             "artifacts/clusters/bootstrap/resources/ns/Machine/machine.yaml",
@@ -582,6 +590,59 @@ func TestProwRunContextEvidenceAppliesByClaim(t *testing.T) {
 	}
 }
 
+func TestProwJobConfigPlansHistoricalSelectionFailure(t *testing.T) {
+	set, err := LoadMerged(t.TempDir(), ProfileSelection{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	signal := `Failed test: [It] Workload cluster creation Creating a self-managed cluster and deploying an optional addon [Addon] Creates a workload
+Failure message:
+Failed to run cluster configuration
+Unexpected error: value for variables [ARTIFACT_BUCKET, IMAGE_TAG] is not set. Please set the value using environment variables or the config file`
+	if !matchContains(set, signal, "engine.prow.job-config") {
+		t.Fatalf("historical selection failure did not match job config recipe: %v", skillIDs(set.Match(signal)))
+	}
+
+	planned := set.Plan(signal, []string{
+		"build-log.txt",
+		"prowjob.json",
+		"artifacts/junit.e2e_suite.1.xml",
+	}, 4)
+	for _, skill := range planned {
+		if skill.ID != "engine.prow.job-config" {
+			continue
+		}
+		if len(skill.RequiredEvidence) != 1 {
+			t.Fatalf("required evidence = %+v", skill.RequiredEvidence)
+		}
+		group := skill.RequiredEvidence[0]
+		if group.ID != "effective-job-config" || !reflect.DeepEqual(group.CandidatePaths, []string{"prowjob.json"}) {
+			t.Fatalf("job config plan = %+v", group)
+		}
+		if !strings.Contains(skill.Procedure, "Suggest skipping a test only") || !strings.Contains(skill.Procedure, "authoritative configuration that executed") {
+			t.Fatalf("job config procedure lacks ownership or skip guard: %q", skill.Procedure)
+		}
+		return
+	}
+	t.Fatalf("job config recipe missing from plan: %+v", planned)
+}
+
+func TestProwJobConfigMatchesVersionSelectionFailures(t *testing.T) {
+	set, err := LoadMerged(t.TempDir(), ProfileSelection{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, failure := range []string{
+		"The API Version Upgrade used a Kubernetes release that is no longer available.",
+		"The stale node image version was not found during the upgrade.",
+		"GINKGO_SKIP selected the wrong test suite and the test failed.",
+	} {
+		if !matchContains(set, failure, "engine.prow.job-config") {
+			t.Errorf("job config recipe did not match %q", failure)
+		}
+	}
+}
+
 func TestBuiltinRecipesRemainProviderAndVersionNeutral(t *testing.T) {
 	set, err := LoadMerged(t.TempDir(), ProfileSelection{Kubernetes: true})
 	if err != nil {
@@ -704,11 +765,11 @@ func TestLoadMergedReportsBundleMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if selection.Kubernetes || set.EngineCount() != 2 || set.ConsumerCount() != 1 || !set.ConsumerBundlePresent() {
+	if selection.Kubernetes || set.EngineCount() != 3 || set.ConsumerCount() != 1 || !set.ConsumerBundlePresent() {
 		t.Fatalf("metadata: selection=%+v engine=%d consumer=%d present=%t", selection, set.EngineCount(), set.ConsumerCount(), set.ConsumerBundlePresent())
 	}
 	ids := set.IDs()
-	if len(ids) != 3 || ids[0] == "" || ids[1] == "" || ids[2] == "" {
+	if len(ids) != 4 || ids[0] == "" || ids[1] == "" || ids[2] == "" || ids[3] == "" {
 		t.Fatalf("ids = %v", ids)
 	}
 	ids[0] = "mutated"

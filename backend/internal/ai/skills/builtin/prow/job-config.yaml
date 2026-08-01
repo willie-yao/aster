@@ -1,0 +1,21 @@
+id: engine.prow.job-config
+name: Prow job configuration and test selection
+priority: 115
+triggers:
+  - '(?i)\bvalue for variables?\b.{0,160}\b(?:is|are)\s+not set\b'
+  - '(?i)\b(?:environment|configuration) variables?\b.{0,120}\b(?:missing|not set|unset|required)\b'
+  - '(?i)\b(?:missing|unset|required)\b.{0,120}\b(?:environment|configuration) variables?\b'
+  - '(?i)\b(?:api[ -]?version|kubernetes|k8s|cluster|node|image|artifact)\b.{0,120}\b(?:upgrade|version|release)\b.{0,120}\b(?:unsupported|unavailable|not available|no longer available|unknown|obsolete|deprecated|stale|too old|not found|missing)\b'
+  - '(?i)\b(?:unsupported|unavailable|not available|no longer available|unknown|obsolete|deprecated|stale|too old|not found|missing)\b.{0,120}\b(?:api[ -]?version|kubernetes|k8s|cluster|node|image|artifact)\b.{0,120}\b(?:upgrade|version|release)\b'
+  - '(?i)\b(?:ginkgo[ _-]?(?:focus|skip)|test (?:focus|selection|filter)|selected tests?)\b.{0,120}\b(?:wrong|unexpected|unintended|excluded|included|missing|failed|failure|error)\b'
+  - '(?i)\b(?:wrong|unexpected|unintended)\b.{0,120}\b(?:test|suite)\b.{0,80}\b(?:run|selected|included|excluded)\b'
+required_evidence:
+  - id: effective-job-config
+    description: effective Prow pod spec, refs, and test selection
+    any_of:
+      - '(?i)(^|/)prowjob\.json$'
+procedure: |
+  1. Read prowjob.json and inspect spec.pod_spec container commands, arguments, environment variables, refs, and extra_refs. This is the authoritative configuration that executed.
+  2. Compare the failing test name, tags, and prerequisites with configured focus, skip, version, image, and environment overrides. Determine whether the job selected the wrong test or supplied a stale or missing override.
+  3. Distinguish a tested-repository defect from a Prow job configuration mismatch. When job configuration is responsible, cite the exact field and value. Do not invent a source file path that is not present in the evidence.
+  4. Suggest skipping a test only when evidence shows it is outside the intended job scope or requires an unsupported prerequisite. Otherwise fix the underlying cause. Label a non-scope skip as a temporary CI unblock.
