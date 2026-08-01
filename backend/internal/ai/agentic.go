@@ -1776,7 +1776,10 @@ func (c *Client) cacheAcceptedAnalysis(cacheKey string, parsed analysisResponse,
 	if state.judgeObjected && !state.judgeRevised {
 		return
 	}
-	version := currentCritiqueVersion
+	version := 0
+	if critiquePassed {
+		version = currentCritiqueVersion
+	}
 	skillHash := ""
 	if state.skillSet != nil {
 		skillHash = state.skillSet.Hash()

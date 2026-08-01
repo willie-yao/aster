@@ -1672,7 +1672,7 @@ func TestAgentic_CritiqueZeroRetriesMakesNoRepairRequest(t *testing.T) {
 			if got := atomic.LoadInt32(&srv.calls); got != before {
 				t.Fatalf("cached call count = %d, want %d", got, before)
 			}
-			if !cached.CacheHit || cached.CritiquePassed {
+			if !cached.CacheHit || cached.CritiquePassed || cached.CritiqueVersion != 0 {
 				t.Fatalf("cached analysis = %+v", cached)
 			}
 		})
