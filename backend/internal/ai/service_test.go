@@ -321,8 +321,7 @@ func TestService_ShouldReanalyze_FloorTable(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s := &Service{systemPrompt: "sys", agenticOpts: AgenticOptions{MinToolCalls: tc.minToolCalls, MinGCSBytes: tc.minGCSBytes}}
-			// Critique is always on, so a reusable entry must be
-			// critique-passing; this table isolates the floor behavior.
+			// Use a critique-passing entry so this table isolates floor behavior.
 			testCase := reusablePublishedTestCase(&models.AIAnalysis{
 				Mode: tc.cachedMode, ToolCalls: tc.cachedCalls, GCSBytes: tc.cachedGCS, EvidencePlanCovered: tc.covered,
 				PromptHash: PromptFingerprint("sys"), CritiquePassed: true, CritiqueVersion: currentCritiqueVersion,
@@ -342,7 +341,7 @@ func TestService_EvidencePlanCoverageOnlyBypassesGCSFloor(t *testing.T) {
 	})
 	s := &Service{
 		client: client, systemPrompt: "sys", skillSet: set,
-		agenticOpts: AgenticOptions{MinToolCalls: 2, MinGCSBytes: 50_000},
+		agenticOpts: AgenticOptions{MinToolCalls: 2, MinGCSBytes: 50_000, CritiqueMaxRetries: 1},
 	}
 	base := models.AIAnalysis{
 		Mode: AgenticMode, ToolCalls: 2, GCSBytes: 1_000, EvidencePlanCovered: true,
@@ -371,6 +370,43 @@ func TestService_EvidencePlanCoverageOnlyBypassesGCSFloor(t *testing.T) {
 			if got := s.shouldReanalyze(reusablePublishedTestCase(&analysis)); got != tc.want {
 				t.Fatalf("shouldReanalyze = %t, want %t", got, tc.want)
 			}
+		})
+	}
+}
+
+func TestService_ZeroCritiqueRetriesMakesCritiqueAdvisory(t *testing.T) {
+	client := newAgenticTestClient(t, "http://example.invalid")
+	s := &Service{
+		client: client, systemPrompt: "sys",
+		agenticOpts: AgenticOptions{MinToolCalls: 2, MinGCSBytes: 50_000, CritiqueMaxRetries: 0},
+	}
+	base := models.AIAnalysis{
+		Mode: AgenticMode, ToolCalls: 2, GCSBytes: 50_000,
+		PromptHash: PromptFingerprint("sys"), ModelHash: client.modelFingerprint(),
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func(*models.AIAnalysis)
+	}{
+		{name: "critique objection"},
+		{name: "old critique version", mutate: func(analysis *models.AIAnalysis) {
+			analysis.CritiquePassed = true
+			analysis.CritiqueVersion = currentCritiqueVersion - 1
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			analysis := base
+			if tc.mutate != nil {
+				tc.mutate(&analysis)
+			}
+			if s.shouldReanalyze(reusablePublishedTestCase(&analysis)) {
+				t.Fatal("zero-retry critique telemetry triggered reanalysis")
+			}
+			s.agenticOpts.CritiqueMaxRetries = 1
+			if !s.shouldReanalyze(reusablePublishedTestCase(&analysis)) {
+				t.Fatal("enforced critique accepted advisory analysis")
+			}
+			s.agenticOpts.CritiqueMaxRetries = 0
 		})
 	}
 }
@@ -499,7 +535,7 @@ type simpleErr struct{ s string }
 func (e *simpleErr) Error() string { return e.s }
 
 func TestService_ShouldReanalyze_PreRankedEvidencePlanContract(t *testing.T) {
-	s := &Service{systemPrompt: "sys"}
+	s := &Service{systemPrompt: "sys", agenticOpts: AgenticOptions{CritiqueMaxRetries: 1}}
 	analysis := &models.AIAnalysis{
 		Mode: AgenticMode, PromptHash: PromptFingerprint("sys"),
 		CritiquePassed: true, CritiqueVersion: currentCritiqueVersion - 1,

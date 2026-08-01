@@ -256,7 +256,9 @@ still unresolved, the model gets at most one batched Tool turn, followed by one
 forced finalization. The general agent loop is not reopened.
 
 `ai.critique.max_retries: 0` still evaluates recipe evidence but performs no
-repair. Any positive value makes the bounded repair eligible, subject to context and time-headroom guards.
+repair and treats critique as advisory for cache reuse. Any positive value makes
+the bounded repair eligible and requires critique success, subject to context
+and time-headroom guards.
 
 ## Schema versioning
 

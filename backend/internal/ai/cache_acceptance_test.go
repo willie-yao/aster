@@ -19,7 +19,7 @@ func TestAgenticCacheAcceptanceReasons(t *testing.T) {
 		SkillSetHash: "cached-skills", Model: "cached-model-name", ModelHash: "cached-model", PromptHash: "cached-prompt",
 	}
 	policy := AgenticCachePolicy{
-		MinToolCalls: 2, MinGCSBytes: 50, ConsecutiveFailures: 1,
+		MinToolCalls: 2, MinGCSBytes: 50, ConsecutiveFailures: 1, CritiqueRequired: true,
 		SkillSetHash: "cached-skills", Model: "current-model", ModelHash: "cached-model", PromptHash: "cached-prompt", Now: now,
 	}
 	entry := func(data agenticCacheData) CacheEntry {
@@ -55,6 +55,8 @@ func TestAgenticCacheAcceptanceReasons(t *testing.T) {
 		{name: "evidence floor", entry: func() CacheEntry { d := base; d.GCSBytes = 1; return entry(d) }(), policy: policy, want: CacheRejectedEvidenceFloor},
 		{name: "critique pass", entry: func() CacheEntry { d := base; d.CritiquePassed = false; return entry(d) }(), policy: policy, want: CacheRejectedCritique},
 		{name: "critique version", entry: func() CacheEntry { d := base; d.CritiqueVersion--; return entry(d) }(), policy: policy, want: CacheRejectedCritique},
+		{name: "critique advisory accepts objection", entry: func() CacheEntry { d := base; d.CritiquePassed = false; return entry(d) }(), policy: func() AgenticCachePolicy { p := policy; p.CritiqueRequired = false; return p }()},
+		{name: "critique advisory accepts old version", entry: func() CacheEntry { d := base; d.CritiqueVersion--; return entry(d) }(), policy: func() AgenticCachePolicy { p := policy; p.CritiqueRequired = false; return p }()},
 		{name: "wrong cache key", entry: func() CacheEntry { e := entry(base); e.Key = "other"; return e }(), policy: policy, want: CacheRejectedMalformed},
 		{name: "malformed JSON", entry: CacheEntry{Key: key, CreatedAt: now, Data: json.RawMessage(`{"summary":`)}, policy: policy, want: CacheRejectedMalformed},
 		{name: "missing result fields", entry: CacheEntry{Key: key, CreatedAt: now, Data: json.RawMessage(`{}`)}, policy: policy, want: CacheRejectedMalformed},

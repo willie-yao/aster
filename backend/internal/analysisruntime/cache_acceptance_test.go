@@ -108,6 +108,69 @@ func TestContainerStateStoreAcceptCachedFailure(t *testing.T) {
 	}
 }
 
+func TestContainerStateStoreCritiqueRequirementFollowsRetryBudget(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	request := ai.FailureAnalysisRequest{
+		JobID: "job", BuildPrefix: "logs/job/1", Build: models.BuildInfo{BuildID: "1"},
+		TestCase: models.TestCase{Name: "test", Status: "failed", FailureMessage: "failed"},
+	}
+	for _, tc := range []struct {
+		name    string
+		retries int
+		want    ai.CacheRejectionReason
+	}{
+		{name: "zero retries is advisory"},
+		{name: "positive retries requires critique", retries: 1, want: ai.CacheRejectedCritique},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			analysisProject := &Project{
+				Config: &project.Config{AI: &project.AI{Agentic: project.Agentic{
+					MinToolCalls: 2, MinGCSBytes: 50, Critique: project.AgenticCritique{MaxRetries: &tc.retries},
+				}}},
+				Provider:     project.AIProvider{API: project.AIAPIChatCompletions, Endpoint: "https://model.invalid/v1/chat/completions", Model: "model"},
+				SystemPrompt: "system prompt",
+			}
+			planner := NewReusePlanner(analysisProject)
+			policy, err := FailureCachePolicy(t.Context(), &http.Client{}, request, planner)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := ai.FailureAnalysisResult{
+				Summary: &models.AISummary{GeneratedAt: now.Format(time.RFC3339), Summary: "summary"},
+				Analysis: &models.AIAnalysis{
+					GeneratedAt: now.Format(time.RFC3339), Mode: ai.AgenticMode, RootCause: "root cause",
+					ToolCalls: 2, GCSBytes: 50, CritiqueVersion: ai.CurrentCritiqueVersion(),
+					ModelHash: policy.ModelHash, PromptHash: policy.PromptHash,
+				},
+			}
+			key := FailureCacheKey(request)
+			entry, err := ai.NewAgenticCacheEntry(key, result, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			dir := t.TempDir()
+			data, err := json.Marshal(map[string]ai.CacheEntry{key: entry})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, ai.CacheFilename), data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			state, err := NewContainerStateStore(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, reason, err := state.AcceptCachedFailure(t.Context(), &http.Client{}, request, planner)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reason != tc.want {
+				t.Fatalf("reason = %q, want %q", reason, tc.want)
+			}
+		})
+	}
+}
+
 func TestContainerStateStoreStagesPromotedCacheForCheckpoint(t *testing.T) {
 	dir := t.TempDir()
 	state, err := NewContainerStateStore(dir)

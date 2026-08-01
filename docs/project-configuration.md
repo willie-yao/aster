@@ -194,6 +194,10 @@ ai:
     max_retries: 0
 ```
 
+`critique.max_retries: 0` publishes and caches the model's original answer when
+the investigation floors pass, while retaining critique telemetry. Positive
+values enable bounded repair and require critique success for cache reuse.
+
 Do not commit credentials under `ai.headers`. `AI_TOKEN` is the supported bearer
 token channel. Use a trusted proxy or custom deployment for providers that need
 a secret in another header.

@@ -767,7 +767,8 @@ type Agentic struct {
 // the operational semantics.
 type AgenticCritique struct {
 	// MaxRetries controls eligibility for one bounded deterministic repair.
-	// 0 evaluates without repair; positive values remain subject to headroom.
+	// 0 evaluates without repair and treats critique as advisory for caching.
+	// Positive values require critique success and remain subject to headroom.
 	// Defaults to 0.
 	MaxRetries *int `yaml:"max_retries,omitempty" json:"max_retries,omitempty"`
 }

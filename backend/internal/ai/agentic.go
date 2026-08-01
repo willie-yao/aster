@@ -66,8 +66,8 @@ type AgenticOptions struct {
 	MinGCSBytes int
 
 	// CritiqueMaxRetries controls eligibility for one bounded deterministic repair.
-	// 0 evaluates once without repair; positive values remain subject to context
-	// and time-headroom guards.
+	// 0 evaluates once without repair and treats critique as advisory for caching;
+	// positive values require critique success and remain subject to headroom guards.
 	CritiqueMaxRetries int
 
 	// SingleToolCall caps the loop to one tool call per assistant turn. Extra
@@ -1763,21 +1763,23 @@ func matchSkillsForDraft(state *agentState, parsed analysisResponse) []skills.Sk
 	return state.skillSet.Match(strings.Join(parsed.proseFields(), "\n"))
 }
 
-// cacheAcceptedAnalysis writes a parsed analysis to the cache, but only if
-// the agent met every per-project quality gate: floors and the always-on
-// critique. Below-floor or critique-failing finals are still published for this
-// run but are not cached, so the next run re-attempts them.
+// cacheAcceptedAnalysis writes a parsed analysis after the agent meets the
+// investigation floors. Critique is advisory when no repair retries are
+// configured and required when the project enables a positive retry budget.
 func (c *Client) cacheAcceptedAnalysis(cacheKey string, parsed analysisResponse, generatedAt string, state *agentState, opts AgenticOptions, critiquePassed bool) {
 	if evalFloors(state, opts).anyUnmet() {
 		return
 	}
-	if !critiquePassed {
+	if opts.CritiqueMaxRetries > 0 && !critiquePassed {
 		return
 	}
 	if state.judgeObjected && !state.judgeRevised {
 		return
 	}
-	version := currentCritiqueVersion
+	version := 0
+	if critiquePassed {
+		version = currentCritiqueVersion
+	}
 	skillHash := ""
 	if state.skillSet != nil {
 		skillHash = state.skillSet.Hash()
