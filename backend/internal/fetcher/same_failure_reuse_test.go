@@ -212,3 +212,111 @@ func TestAnalyzeFailuresReusesSameFailureRepresentativeAndFallsBack(t *testing.T
 		})
 	}
 }
+
+type fallbackConcurrencyAnalyzer struct {
+	state   *analysisruntime.ContainerStateStore
+	project *analysisruntime.Project
+	started chan struct{}
+	release chan struct{}
+	mu      sync.Mutex
+	calls   int
+	active  int
+	max     int
+}
+
+func (a *fallbackConcurrencyAnalyzer) Maintain(context.Context) error  { return nil }
+func (a *fallbackConcurrencyAnalyzer) Preflight(context.Context) error { return nil }
+func (a *fallbackConcurrencyAnalyzer) StateStore() *analysisruntime.ContainerStateStore {
+	return a.state
+}
+
+func (a *fallbackConcurrencyAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, request ai.FailureAnalysisRequest) (ai.FailureAnalysisResult, error) {
+	a.mu.Lock()
+	a.calls++
+	if request.FailureCohort != nil {
+		a.mu.Unlock()
+		err := errors.New("cohort unavailable")
+		return ai.UnavailableFailureAnalysisResult(request.TestCase, err), err
+	}
+	a.active++
+	if a.active > a.max {
+		a.max = a.active
+	}
+	if a.active == 2 {
+		select {
+		case a.started <- struct{}{}:
+		default:
+		}
+	}
+	a.mu.Unlock()
+	select {
+	case <-a.release:
+	case <-ctx.Done():
+	}
+	a.mu.Lock()
+	a.active--
+	a.mu.Unlock()
+	return testSameFailureResult(a.project, request.CacheGeneration, 2), nil
+}
+
+func TestSameFailureFallbackUsesBoundedConcurrency(t *testing.T) {
+	t.Setenv("AI_CONTEXT_WINDOW_TOKENS", "65536")
+	dataDir := t.TempDir()
+	retries := 0
+	config := &project.Config{
+		AI:      &project.AI{Concurrency: 5, Agentic: project.Agentic{MinToolCalls: 2, Tools: []string{"filesystem"}, Critique: project.AgenticCritique{MaxRetries: &retries}}},
+		Storage: project.Storage{Provider: string(storage.ProviderLocal), Base: t.TempDir()},
+	}
+	analysisProject := testCacheAnalysisProject(config)
+	state, err := analysisruntime.NewContainerStateStore(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend, err := storage.NewLocalBackend(config.Storage.Base, "https://prow.example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	analyzer := &fallbackConcurrencyAnalyzer{
+		state: state, project: analysisProject, started: make(chan struct{}, 1), release: make(chan struct{}),
+	}
+	p := &pipeline{
+		opts: Options{OutDir: dataDir, AnalysisRuntime: AnalysisRuntimeOptions{Type: AnalysisRuntimeOrkaContainer, OrkaContainer: OrkaContainerAnalysisOptions{MaxConcurrent: 2}}},
+		cfg:  config, client: &http.Client{}, backend: backend, aiProject: analysisProject, aiToken: "token", containerAnalyzer: analyzer,
+	}
+	details := []models.JobDetail{{
+		Name: "job", JobID: "job", JobType: models.JobTypePeriodic,
+		Runs: []models.BuildResult{{
+			BuildInfo: models.BuildInfo{BuildID: "1", Result: "FAILURE"},
+			TestCases: []models.TestCase{
+				*cohortTestWork("job", "1", "DRA test alpha", "same DRA test alpha failure", "same body").tc,
+				*cohortTestWork("job", "1", "DRA test beta", "same DRA test beta failure", "same body").tc,
+				*cohortTestWork("job", "1", "DRA test gamma", "same DRA test gamma failure", "same body").tc,
+			},
+		}},
+	}}
+	oldPatterns := analyzePatternsAcrossBuilds
+	analyzePatternsAcrossBuilds = func(context.Context, *ai.Service, []models.JobDetail, patterns.AnalyzeOptions) error { return nil }
+	t.Cleanup(func() { analyzePatternsAcrossBuilds = oldPatterns })
+	done := make(chan error, 1)
+	go func() { done <- p.analyzeFailuresWithAI(t.Context(), details, models.FlakinessReport{}) }()
+	select {
+	case <-analyzer.started:
+	case <-time.After(3 * time.Second):
+		analyzer.mu.Lock()
+		t.Fatalf("individual fallbacks did not use both concurrency slots: calls=%d active=%d max=%d", analyzer.calls, analyzer.active, analyzer.max)
+	}
+	analyzer.mu.Lock()
+	if analyzer.max != 2 {
+		t.Fatalf("max active = %d, want 2", analyzer.max)
+	}
+	analyzer.mu.Unlock()
+	close(analyzer.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	analyzer.mu.Lock()
+	defer analyzer.mu.Unlock()
+	if analyzer.calls != 4 || analyzer.active != 0 {
+		t.Fatalf("calls=%d active=%d", analyzer.calls, analyzer.active)
+	}
+}

@@ -284,6 +284,7 @@ type ContainerStateStore struct {
 	dataDir string
 	cache   *ai.Cache
 	traces  *ai.TraceStore
+	staged  map[string]ai.CacheEntry
 }
 
 // NewContainerStateStore loads shared cache and trace state.
@@ -295,7 +296,7 @@ func NewContainerStateStore(dataDir string) (*ContainerStateStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &ContainerStateStore{dataDir: dataDir, cache: ai.NewCache(dataDir), traces: traces}, nil
+	return &ContainerStateStore{dataDir: dataDir, cache: ai.NewCache(dataDir), traces: traces, staged: map[string]ai.CacheEntry{}}, nil
 }
 
 // CacheSeed returns the one cache entry relevant to a request.
@@ -361,6 +362,8 @@ func (s *ContainerStateStore) StageCacheEntry(entry ai.CacheEntry) error {
 	if !ok || !staged.CreatedAt.Equal(entry.CreatedAt) || !bytes.Equal(staged.Data, entry.Data) {
 		return fmt.Errorf("container cache entry was not staged exactly")
 	}
+	entry.Data = append(json.RawMessage(nil), entry.Data...)
+	s.staged[entry.Key] = entry
 	return nil
 }
 
@@ -382,7 +385,11 @@ func (s *ContainerStateStore) Save() error {
 	if err := s.traces.Save(filepath.Join(s.dataDir, output.AITraceFilename)); err != nil {
 		return err
 	}
-	return s.cache.Save()
+	if err := s.cache.Save(); err != nil {
+		return err
+	}
+	clear(s.staged)
+	return nil
 }
 
 // MergeTraces persists authenticated traces without accepting cache entries.
@@ -427,6 +434,11 @@ func (s *ContainerStateStore) Merge(state ContainerAnalysisState) error {
 	}
 	cache := ai.NewCache(s.dataDir)
 	cache.Merge(state.CacheEntries)
+	for _, entry := range s.staged {
+		if err := cache.StoreEntry(entry); err != nil {
+			return fmt.Errorf("preserve staged container cache entry: %w", err)
+		}
+	}
 	for _, trace := range state.Traces {
 		traces.Upsert(trace)
 	}
@@ -437,6 +449,7 @@ func (s *ContainerStateStore) Merge(state ContainerAnalysisState) error {
 		return err
 	}
 	s.cache = cache
+	clear(s.staged)
 	for _, trace := range state.Traces {
 		s.traces.Upsert(trace)
 	}
