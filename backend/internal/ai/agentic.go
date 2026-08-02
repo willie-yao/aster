@@ -294,6 +294,7 @@ type agenticCacheData struct {
 	GCSBytes            int    `json:"gcs_bytes,omitempty"`
 	EvidencePlanCovered bool   `json:"evidence_plan_covered,omitempty"`
 	BudgetExhausted     bool   `json:"budget_exhausted,omitempty"`
+	SameFailureReuse    bool   `json:"same_failure_reuse,omitempty"`
 
 	// CritiquePassed marks entries that cleared the critique gate.
 	// Defaults to false on pre-critique entries and on entries written

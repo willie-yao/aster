@@ -35,6 +35,23 @@ func TestCacheEntriesCopiesAndMergeUsesNewest(t *testing.T) {
 	}
 }
 
+func TestCacheStoreEntryReplacesNewerValueExactly(t *testing.T) {
+	cache := NewCache("")
+	now := time.Now().UTC()
+	newer := CacheEntry{Key: "key", CreatedAt: now, Data: json.RawMessage(`{"value":"new"}`)}
+	older := CacheEntry{Key: "key", CreatedAt: now.Add(-time.Minute), Data: json.RawMessage(`{"value":"old"}`)}
+	if err := cache.StoreEntry(newer); err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.StoreEntry(older); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := cache.Lookup("key")
+	if !ok || !got.CreatedAt.Equal(older.CreatedAt) || string(got.Data) != string(older.Data) {
+		t.Fatalf("stored entry = %+v", got)
+	}
+}
+
 func TestCachePrunesFarFutureEntries(t *testing.T) {
 	dir := t.TempDir()
 	entries := map[string]CacheEntry{

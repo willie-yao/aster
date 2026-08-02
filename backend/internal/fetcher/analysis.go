@@ -345,6 +345,14 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 		analyzer = service
 	}
 
+	executions := make([]analysisExecution, 0, len(work))
+	if container != nil {
+		executions = planAnalysisExecutions(work)
+	} else {
+		for _, item := range work {
+			executions = append(executions, analysisExecution{Work: []aiWork{item}})
+		}
+	}
 	concurrency := p.cfg.AnalysisConcurrency()
 	if container != nil {
 		concurrency = p.opts.AnalysisRuntime.OrkaContainer.MaxConcurrent
@@ -365,70 +373,134 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
 
-schedule:
-	for _, w := range work {
-		select {
-		case sem <- struct{}{}:
-		case <-analysisCtx.Done():
-			break schedule
+	finish := func(item aiWork, before *models.AISummary, result ai.FailureAnalysisResult, analyzeErr error, recordJudge bool) {
+		item.tc.AISummary = result.Summary
+		item.tc.AIAnalysis = result.Analysis
+		if analyzeErr != nil {
+			log.Printf("  ⚠ analysis unavailable for %s/%s: %v", item.jobID, item.tc.Name, analyzeErr)
 		}
-		if analysisCtx.Err() != nil {
-			<-sem
-			break
+		if before == nil && item.tc.AISummary != nil && item.tc.AISummary.IsTransient && item.tc.AIAnalysis == nil {
+			transientSkipped.Add(1)
 		}
-		wg.Add(1)
-		go func(w aiWork) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			buildSubject := w.tc.Source == models.TestCaseSourceBuild
-			p.startProgressAnalysis(buildSubject)
-			before := w.tc.AISummary
-			result, analyzeErr := analyzer.AnalyzeFailure(analysisCtx, p.client, w.request(consecutiveMap[w.jobID+"::"+w.tc.Name], p.cacheGenerationFingerprint()))
-			if analysisruntime.IsProjectBundleSourceError(analyzeErr) {
-				p.finishProgressAnalysis(buildSubject, fetchprogress.OutcomeFailed)
-				systemicOnce.Do(func() {
-					systemicErr = fmt.Errorf("systemic Orka project setup failure: %w", analyzeErr)
-					cancelAnalysis()
-				})
-				return
-			}
-			if orka.IsResultAuthorizationError(analyzeErr) {
-				p.finishProgressAnalysis(buildSubject, fetchprogress.OutcomeFailed)
-				systemicOnce.Do(func() {
-					systemicErr = fmt.Errorf("systemic Orka result API authorization failure: %w", analyzeErr)
-					cancelAnalysis()
-				})
-				return
-			}
-			w.tc.AISummary = result.Summary
-			w.tc.AIAnalysis = result.Analysis
-			if analyzeErr != nil {
-				log.Printf("  ⚠ analysis unavailable for %s/%s: %v", w.jobID, w.tc.Name, analyzeErr)
-			}
-			if before == nil && w.tc.AISummary != nil && w.tc.AISummary.IsTransient && w.tc.AIAnalysis == nil {
-				transientSkipped.Add(1)
-			}
-			if a := w.tc.AIAnalysis; a != nil {
-				if a.JudgeRan {
+		if recordJudge {
+			if analysis := item.tc.AIAnalysis; analysis != nil {
+				if analysis.JudgeRan {
 					judgeRan.Add(1)
 				}
-				if a.JudgeObjected {
+				if analysis.JudgeObjected {
 					judgeObjected.Add(1)
 				}
-				if a.JudgeRevised {
+				if analysis.JudgeRevised {
 					judgeRevised.Add(1)
 				}
 			}
-			outcome := fetchprogress.OutcomeSucceeded
-			if analyzeErr != nil {
-				outcome = fetchprogress.OutcomeFailed
-				if errors.Is(analyzeErr, context.Canceled) || errors.Is(analyzeErr, context.DeadlineExceeded) {
-					outcome = fetchprogress.OutcomeCancelled
+		}
+		outcome := fetchprogress.OutcomeSucceeded
+		if analyzeErr != nil {
+			outcome = fetchprogress.OutcomeFailed
+			if errors.Is(analyzeErr, context.Canceled) || errors.Is(analyzeErr, context.DeadlineExceeded) {
+				outcome = fetchprogress.OutcomeCancelled
+			}
+		}
+		p.finishProgressAnalysis(item.tc.Source == models.TestCaseSourceBuild, outcome)
+	}
+	cancelStarted := func(execution analysisExecution) {
+		for _, item := range execution.Work {
+			p.finishProgressAnalysis(item.tc.Source == models.TestCaseSourceBuild, fetchprogress.OutcomeCancelled)
+		}
+	}
+
+	var scheduleExecution func(analysisExecution, bool)
+	scheduleExecution = func(execution analysisExecution, progressStarted bool) {
+		tokenHeld := false
+		if !progressStarted {
+			select {
+			case sem <- struct{}{}:
+				tokenHeld = true
+			case <-analysisCtx.Done():
+				return
+			}
+			if analysisCtx.Err() != nil {
+				<-sem
+				return
+			}
+		}
+		wg.Add(1)
+		go func(tokenHeld bool) {
+			defer wg.Done()
+			if !tokenHeld {
+				select {
+				case sem <- struct{}{}:
+					tokenHeld = true
+				case <-analysisCtx.Done():
+					if progressStarted {
+						cancelStarted(execution)
+					}
+					return
 				}
 			}
-			p.finishProgressAnalysis(buildSubject, outcome)
-		}(w)
+			defer func() { <-sem }()
+			if analysisCtx.Err() != nil {
+				if progressStarted {
+					cancelStarted(execution)
+				}
+				return
+			}
+			if !progressStarted {
+				for _, item := range execution.Work {
+					p.startProgressAnalysis(item.tc.Source == models.TestCaseSourceBuild)
+				}
+			}
+
+			representative := execution.Work[0]
+			before := representative.tc.AISummary
+			request := analysisExecutionRequest(execution, consecutiveMap[representative.jobID+"::"+representative.tc.Name], p.cacheGenerationFingerprint())
+			result, analyzeErr := analyzer.AnalyzeFailure(analysisCtx, p.client, request)
+			if systemic := systemicContainerAnalysisError(analyzeErr); systemic != nil {
+				finish(representative, before, result, analyzeErr, true)
+				for _, follower := range execution.Work[1:] {
+					p.finishProgressAnalysis(follower.tc.Source == models.TestCaseSourceBuild, fetchprogress.OutcomeCancelled)
+				}
+				systemicOnce.Do(func() {
+					systemicErr = systemic
+					cancelAnalysis()
+				})
+				return
+			}
+			if len(execution.Work) == 1 {
+				finish(representative, before, result, analyzeErr, true)
+				return
+			}
+			if errors.Is(analyzeErr, context.Canceled) || errors.Is(analyzeErr, context.DeadlineExceeded) {
+				finish(representative, before, result, analyzeErr, true)
+				for _, follower := range execution.Work[1:] {
+					p.finishProgressAnalysis(follower.tc.Source == models.TestCaseSourceBuild, fetchprogress.OutcomeCancelled)
+				}
+				return
+			}
+			if analyzeErr != nil {
+				for _, item := range execution.Work {
+					scheduleExecution(analysisExecution{Work: []aiWork{item}}, true)
+				}
+				return
+			}
+
+			finish(representative, before, result, nil, true)
+			for _, follower := range execution.Work[1:] {
+				shared, ok := prepareSameFailureReuse(analysisCtx, p.client, follower, result, container.StateStore(), planner, consecutiveMap[follower.jobID+"::"+follower.tc.Name], p.cacheGenerationFingerprint())
+				if ok {
+					finish(follower, follower.tc.AISummary, shared, nil, false)
+					p.recordProgressSameFailureReuse(1)
+					continue
+				}
+				scheduleExecution(analysisExecution{Work: []aiWork{follower}}, true)
+			}
+		}(tokenHeld)
 	}
+	for _, execution := range executions {
+		scheduleExecution(execution, false)
+	}
+
 	wg.Wait()
 	p.cancelQueuedProgressAnalyses()
 	p.completeProgressPhase()

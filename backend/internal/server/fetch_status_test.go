@@ -27,7 +27,7 @@ func serverFetchStatus(now time.Time) fetchprogress.Status {
 		Builds:  fetchprogress.BuildProgress{Cached: 241, Fetched: 29},
 		Analyses: fetchprogress.AnalysisProgress{
 			LogicalTotal: 61, CompatibleResultsReused: 4, ExactResultsReused: 2,
-			SameFailureGroups: 3, SameFailureCandidates: 9, PotentialTasksSaved: 6, LargestSameFailureGroup: 4,
+			SameFailureGroups: 3, SameFailureCandidates: 9, PotentialTasksSaved: 6, LargestSameFailureGroup: 4, SameFailureReused: 5,
 			NewWork: 20, StaleWork: 3, Queued: 35, Running: 2, Completed: 24, Retries: 3,
 			NewTasksCreated: 4, FreshAnalysesCompleted: 2,
 			CacheRejections: fetchprogress.CacheRejectionProgress{Missing: 20, Critique: 3},
@@ -54,7 +54,7 @@ func TestFetchStatusEndpointAuthenticationMethodsAndPrivacy(t *testing.T) {
 		RunID: "safe-run", PassID: "previous-pass", PassType: fetchprogress.PassLightweightWatch,
 		StartedAt: now.Add(-2 * time.Minute), CompletedAt: now.Add(-time.Minute),
 		LogicalCount: 3, CompatibleResultsReused: 1, ExactResultsReused: 1,
-		SameFailureGroups: 1, SameFailureCandidates: 2, PotentialTasksSaved: 1, LargestSameFailureGroup: 2,
+		SameFailureGroups: 1, SameFailureCandidates: 2, PotentialTasksSaved: 1, LargestSameFailureGroup: 2, SameFailureReused: 1,
 		NewTasksCreated: 1, FreshAnalysesCompleted: 1,
 		TaskAttempts: 4, Retries: 1, Outcome: fetchprogress.OutcomeSucceeded, Published: true,
 	}}}
@@ -91,11 +91,11 @@ func TestFetchStatusEndpointAuthenticationMethodsAndPrivacy(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = resp.Body.Close()
-	if !got.Available || got.State != "active" || got.Status == nil || got.Status.Analyses.Retries != 3 || got.Status.Analyses.CompatibleResultsReused != 4 || got.Status.Analyses.ExactResultsReused != 2 || got.Status.Analyses.PotentialTasksSaved != 6 || got.Status.Analyses.LargestSameFailureGroup != 4 || got.Status.Analyses.NewTasksCreated != 4 || got.Status.Analyses.FreshAnalysesCompleted != 2 || got.Status.Analyses.CacheRejections.Missing != 20 ||
+	if !got.Available || got.State != "active" || got.Status == nil || got.Status.Analyses.Retries != 3 || got.Status.Analyses.CompatibleResultsReused != 4 || got.Status.Analyses.ExactResultsReused != 2 || got.Status.Analyses.PotentialTasksSaved != 6 || got.Status.Analyses.LargestSameFailureGroup != 4 || got.Status.Analyses.SameFailureReused != 5 || got.Status.Analyses.NewTasksCreated != 4 || got.Status.Analyses.FreshAnalysesCompleted != 2 || got.Status.Analyses.CacheRejections.Missing != 20 ||
 		got.Status.Patterns.Attempts != 3 || got.Status.Patterns.FailureCategory != fetchprogress.PatternFailureAmbiguous {
 		t.Fatalf("GET response = %+v", got)
 	}
-	if len(got.Status.CurrentTasks) != 0 || got.HistorySchemaVersion != fetchprogress.HistorySchemaVersion || len(got.History) != 1 || got.History[0].DurationMS != int64(time.Minute/time.Millisecond) || got.History[0].ExactResultsReused != 1 || got.History[0].PotentialTasksSaved != 1 || got.History[0].LargestSameFailureGroup != 2 || got.History[0].NewTasksCreated != 1 || got.History[0].FreshAnalysesCompleted != 1 {
+	if len(got.Status.CurrentTasks) != 0 || got.HistorySchemaVersion != fetchprogress.HistorySchemaVersion || len(got.History) != 1 || got.History[0].DurationMS != int64(time.Minute/time.Millisecond) || got.History[0].ExactResultsReused != 1 || got.History[0].PotentialTasksSaved != 1 || got.History[0].LargestSameFailureGroup != 2 || got.History[0].SameFailureReused != 1 || got.History[0].NewTasksCreated != 1 || got.History[0].FreshAnalysesCompleted != 1 {
 		t.Fatalf("safe status/history response = %+v", got)
 	}
 	body, _ := json.Marshal(got)

@@ -36,6 +36,7 @@ const activeStatus: FetchProgressStatus = {
     accepted_cache_hits: 68,
     compatible_results_reused: 2,
     exact_results_reused: 12,
+    same_failure_results_reused: 5,
     same_failure_groups: 3,
     same_failure_candidates: 9,
     potential_tasks_saved: 6,
@@ -81,6 +82,7 @@ test("analysis progress distinguishes reuse, adoption, and new Tasks", () => {
     compatibleResults: 2,
     reused: 70,
     exactResultsReused: 12,
+    sameFailureResultsReused: 5,
     sameFailureGroups: 3,
     sameFailureCandidates: 9,
     potentialTasksSaved: 6,
@@ -96,7 +98,7 @@ test("analysis progress distinguishes reuse, adoption, and new Tasks", () => {
   });
   assert.equal(
     analysisProgressAccessibleDetail(progress),
-    "84 of 126 results ready: 70 reused, 12 exact results reused, 0 existing Tasks adopted, 2 newly analyzed, 2 running, 40 waiting, 6 potential same-failure Task savings",
+    "84 of 126 results ready: 70 reused, 12 exact results reused, 5 same-failure results reused, 0 existing Tasks adopted, 2 newly analyzed, 2 running, 40 waiting, 6 potential same-failure Task savings",
   );
 });
 
@@ -154,13 +156,13 @@ test("analysis progress keeps exact counters non-negative", () => {
 test("fetch status presentation covers active idle failed and stale states", () => {
   const active = fetchStatusPresentation(response("active"));
   assert.equal(active?.title, "84 of 126 results ready");
-  assert.equal(active?.detail, "70 reused · 12 exact · 0 adopted · 2 new · 2 analyzing · 40 waiting · 6 potential dedupe");
+  assert.equal(active?.detail, "70 reused · 12 exact · 5 same failure · 0 adopted · 2 new · 2 analyzing · 40 waiting · 6 potential dedupe");
   assert.equal(active?.announcement, "Fetch in progress: Analysis");
   assert.equal(active?.determinateTotal, 126);
   assert.equal(active?.determinateCompleted, 84);
   assert.equal(
     active?.ariaLabel,
-    "Fetch in progress: Analysis. 84 of 126 results ready: 70 reused, 12 exact results reused, 0 existing Tasks adopted, 2 newly analyzed, 2 running, 40 waiting, 6 potential same-failure Task savings.",
+    "Fetch in progress: Analysis. 84 of 126 results ready: 70 reused, 12 exact results reused, 5 same-failure results reused, 0 existing Tasks adopted, 2 newly analyzed, 2 running, 40 waiting, 6 potential same-failure Task savings.",
   );
 
   const terminalFailures = fetchStatusPresentation(response("active", {
@@ -240,6 +242,7 @@ test("fetch status popover presents the user-facing breakdown before technical c
     "Reused from cache",
     "Compatible results",
     "Exact results reused",
+    "Same-failure results reused",
     "Existing Tasks adopted",
     "New analyzer Tasks",
     "Fresh analyses completed",

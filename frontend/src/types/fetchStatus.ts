@@ -41,6 +41,7 @@ export interface FetchProgressStatus {
     accepted_cache_hits: number;
     compatible_results_reused?: number;
     exact_results_reused?: number;
+    same_failure_results_reused?: number;
     same_failure_groups?: number;
     same_failure_candidates?: number;
     potential_tasks_saved?: number;
@@ -130,6 +131,7 @@ export interface FetchPassSummary {
   cache_hits: number;
   compatible_results_reused: number;
   exact_results_reused: number;
+  same_failure_results_reused?: number;
   same_failure_groups?: number;
   same_failure_candidates?: number;
   potential_tasks_saved?: number;

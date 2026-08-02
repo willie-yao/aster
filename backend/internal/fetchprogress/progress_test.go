@@ -548,6 +548,25 @@ func TestReadAcceptsPreviousCheckpointFreeStatusSchema(t *testing.T) {
 	}
 }
 
+func TestReadHistoryAcceptsPreviousSameFailureReuseFreeSchema(t *testing.T) {
+	now := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
+	history := History{SchemaVersion: 4, Passes: []PassSummary{{RunID: "run", PassID: "pass", PassType: PassOneShot, StartedAt: now, CompletedAt: now.Add(time.Second), Outcome: OutcomeSucceeded}}}
+	path := HistoryPath(t.TempDir())
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(history)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadHistory(path); err != nil {
+		t.Fatalf("reading previous same-failure-reuse-free history: %v", err)
+	}
+}
+
 func TestReadHistoryAcceptsPreviousCohortFreeSchema(t *testing.T) {
 	now := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
 	history := History{SchemaVersion: 3, Passes: []PassSummary{{
@@ -716,11 +735,12 @@ func TestTrackerFinalizesPostCacheAnalysisPlan(t *testing.T) {
 	tracker.StartAnalysis(false)
 	tracker.RecordTaskState("new", "Running", 1, false)
 	tracker.FinishAnalysis(false, OutcomeSucceeded)
+	tracker.RecordSameFailureReused(1)
 
 	got := tracker.Snapshot().Analyses
 	want := AnalysisProgress{
 		LogicalTotal: 4, AcceptedCacheHits: 1, CompatibleResultsReused: 1,
-		SameFailureGroups: 1, SameFailureCandidates: 2, PotentialTasksSaved: 1, LargestSameFailureGroup: 2,
+		SameFailureGroups: 1, SameFailureCandidates: 2, PotentialTasksSaved: 1, LargestSameFailureGroup: 2, SameFailureReused: 1,
 		NewWork: 1, StaleWork: 1, CacheRejections: rejections,
 		Queued: 1, Completed: 3, TaskAttempts: 1, NewTasksCreated: 1,
 		BuildSubjects: BuildAnalysisProgress{LogicalTotal: 1, Completed: 1, AcceptedCacheHits: 1},
@@ -751,6 +771,22 @@ func TestCurrentStatusOmitsObsoleteCacheRejectionCategories(t *testing.T) {
 		if bytes.Contains(data, []byte(`"`+category+`"`)) {
 			t.Fatalf("current status emitted obsolete category %q: %s", category, data)
 		}
+	}
+}
+
+func TestReadAcceptsPreviousSameFailureReuseFreeStatusSchema(t *testing.T) {
+	status := testStatus(time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC))
+	status.SchemaVersion = 10
+	path := filepath.Join(t.TempDir(), "status.json")
+	data, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Read(path); err != nil {
+		t.Fatalf("reading previous same-failure-reuse-free schema: %v", err)
 	}
 }
 

@@ -689,6 +689,9 @@ func TestContainerAnalyzerRejectsInconsistentAuthenticatedCacheResult(t *testing
 			result.Analysis.GeneratedAt = result.Summary.GeneratedAt
 		}},
 		{name: "analysis content", mutate: func(result *ai.FailureAnalysisResult) { result.Analysis.RootCause = "different root cause" }},
+		{name: "same-failure provenance", mutate: func(result *ai.FailureAnalysisResult) {
+			result.Analysis.SameFailureReuse = !result.Analysis.SameFailureReuse
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			request := containerTaskRequest()

@@ -86,6 +86,7 @@ export interface AIAnalysis {
   input_tokens?: number;
   output_tokens?: number;
   cache_hit?: boolean;
+  same_failure_reuse?: boolean;
   budget_exhausted?: boolean;
 }
 

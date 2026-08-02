@@ -71,7 +71,7 @@ spec:
       message: "analysis Tasks must use the configured namespace identity"
     - expression: "object.spec.env.exists(e, e.name == 'PROW_AI_TASK_NAME' && has(e.value) && e.value == object.metadata.name)"
       message: "analysis Tasks must bind their Task identity"
-    - expression: "object.spec.env.exists(e, e.name == 'PROW_AI_CONTRACT_VERSION' && has(e.value) && e.value == 'dashboard-failure-analyzer-v6')"
+    - expression: "object.spec.env.exists(e, e.name == 'PROW_AI_CONTRACT_VERSION' && has(e.value) && e.value == 'dashboard-failure-analyzer-v7')"
       message: "analysis Tasks must use the current analyzer contract"
     - expression: {{ printf "object.spec.env.exists(e, e.name == 'AI_API' && has(e.value) && e.value == %s)" (toJson .Values.ai.api) | quote }}
       message: "analysis Tasks must use the configured model API"
@@ -112,7 +112,7 @@ spec:
       message: "analysis Tasks must not add AI, agent, workspace, or transaction fields"
     - expression: "has(object.metadata.labels) && object.metadata.labels['app.kubernetes.io/managed-by'] == 'prow-ai-dashboard' && object.metadata.labels['prow-ai-dashboard/adapter'] == 'container-analyzer'"
       message: "analysis Tasks must carry the dashboard lifecycle labels"
-    - expression: "has(object.metadata.annotations) && object.metadata.annotations['prow-ai-dashboard/contract-version'] == 'dashboard-failure-analyzer-v6' && object.metadata.annotations['prow-ai-dashboard/bundle-digest'].matches('^[0-9a-f]{64}$') && object.metadata.annotations['prow-ai-dashboard/state-key-fingerprint'].matches('^[0-9a-f]{64}$') && object.spec.env.exists(e, e.name == 'PROW_AI_ANALYSIS_BUNDLE_SHA256' && e.value == object.metadata.annotations['prow-ai-dashboard/bundle-digest'])"
+    - expression: "has(object.metadata.annotations) && object.metadata.annotations['prow-ai-dashboard/contract-version'] == 'dashboard-failure-analyzer-v7' && object.metadata.annotations['prow-ai-dashboard/bundle-digest'].matches('^[0-9a-f]{64}$') && object.metadata.annotations['prow-ai-dashboard/state-key-fingerprint'].matches('^[0-9a-f]{64}$') && object.spec.env.exists(e, e.name == 'PROW_AI_ANALYSIS_BUNDLE_SHA256' && e.value == object.metadata.annotations['prow-ai-dashboard/bundle-digest'])"
       message: "analysis Tasks must carry the authenticated dashboard identity"
 ---
 apiVersion: admissionregistration.k8s.io/v1

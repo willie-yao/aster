@@ -182,7 +182,12 @@ func TestContainerStateStoreStagesPromotedCacheForCheckpoint(t *testing.T) {
 		TestCase: models.TestCase{Name: "test", Status: "failed", FailureMessage: "failed"},
 	}
 	key := FailureCacheKey(request)
-	entry := ai.CacheEntry{Key: key, CreatedAt: time.Now().UTC(), Data: json.RawMessage(`{"summary":"summary"}`)}
+	now := time.Now().UTC()
+	newer := ai.CacheEntry{Key: key, CreatedAt: now, Data: json.RawMessage(`{"summary":"newer"}`)}
+	entry := ai.CacheEntry{Key: key, CreatedAt: now.Add(-time.Minute), Data: json.RawMessage(`{"summary":"summary"}`)}
+	if err := state.StageCacheEntry(newer); err != nil {
+		t.Fatal(err)
+	}
 	if err := state.StageCacheEntry(entry); err != nil {
 		t.Fatal(err)
 	}

@@ -317,3 +317,42 @@ func TestContainerStateRejectsCrossGenerationIdentity(t *testing.T) {
 		t.Fatal("cross-generation state identity was accepted")
 	}
 }
+
+func TestContainerStateStoreMergePreservesStagedFanoutEntries(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewContainerStateStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fanoutRequest := stateTestRequest()
+	fanoutRequest.TestCase.Name = "fanout"
+	fanoutRequest.TestCase.FailureMessage = "shared"
+	fanoutKey := FailureCacheKey(fanoutRequest)
+	fanoutEntry := ai.CacheEntry{Key: fanoutKey, CreatedAt: time.Now().UTC(), Data: json.RawMessage(`{"summary":"fanout"}`)}
+	if err := store.StageCacheEntry(fanoutEntry); err != nil {
+		t.Fatal(err)
+	}
+
+	mergedRequest := stateTestRequest()
+	mergedRequest.TestCase.Name = "task"
+	mergedRequest.TestCase.FailureMessage = "other"
+	identity := NewContainerStateIdentity("orka-system", "task", mergedRequest)
+	mergedEntries := stateTestEntry(mergedRequest, time.Now().UTC().Add(time.Second), `{"summary":"task"}`)
+	if err := store.Merge(ContainerAnalysisState{
+		Version: ContainerStateVersion, TaskNamespace: identity.TaskNamespace, TaskName: identity.TaskName,
+		CacheKey: identity.CacheKey, CacheEntries: mergedEntries,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded, err := NewContainerStateStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(reloaded.CacheSeed(fanoutRequest)); got != 1 {
+		t.Fatalf("fanout cache entries = %d, want 1", got)
+	}
+	if got := len(reloaded.CacheSeed(mergedRequest)); got != 1 {
+		t.Fatalf("merged cache entries = %d, want 1", got)
+	}
+}
