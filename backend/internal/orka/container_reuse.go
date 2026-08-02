@@ -256,6 +256,7 @@ func sameAgenticResult(left, right ai.FailureAnalysisResult) bool {
 		left.Analysis.GCSBytes == right.Analysis.GCSBytes &&
 		left.Analysis.EvidencePlanCovered == right.Analysis.EvidencePlanCovered &&
 		left.Analysis.BudgetExhausted == right.Analysis.BudgetExhausted &&
+		left.Analysis.SameFailureReuse == right.Analysis.SameFailureReuse &&
 		left.Analysis.CritiquePassed == right.Analysis.CritiquePassed &&
 		left.Analysis.CritiqueVersion == right.Analysis.CritiqueVersion &&
 		left.Analysis.SkillSetHash == right.Analysis.SkillSetHash &&
