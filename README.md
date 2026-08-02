@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/prow-ai-dashboard-mark.svg" alt="Prow AI Dashboard logo" width="80" height="80">
+</p>
+
 # prow-ai-dashboard
 
 Reusable engine for AI-powered Prow and TestGrid dashboards. It discovers Prow
