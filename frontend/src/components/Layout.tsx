@@ -150,15 +150,18 @@ export function Layout() {
               <SvgIcon
                 viewBox="0 0 24 24"
                 fill="none"
-                stroke="currentColor"
-                strokeWidth={2}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                sx={{ fontSize: 18, color: "primary.main", fill: "none" }}
+                sx={{ fontSize: 20, color: "primary.main", fill: "none" }}
               >
-                <path d="M21 12V7H5a2 2 0 0 1 0-4h14v4" />
-                <path d="M3 5v14a2 2 0 0 0 2 2h16v-5" />
-                <path d="M18 12a2 2 0 0 0 0 4h4v-4Z" />
+                <path
+                  d="M12 3.7 19.65 18.4 12 15.7l-7.65 2.7L12 3.7Z"
+                  stroke="currentColor"
+                  strokeWidth={1.85}
+                  strokeLinejoin="round"
+                />
+                <path
+                  d="M12 6.7c.35 2.13 1.45 3.25 3.55 3.6-2.1.35-3.2 1.47-3.55 3.6-.35-2.13-1.45-3.25-3.55-3.6 2.1-.35 3.2-1.47 3.55-3.6Z"
+                  fill="currentColor"
+                />
               </SvgIcon>
             </Box>
             <Typography
