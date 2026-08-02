@@ -213,7 +213,7 @@ func TestRunRejectsMalformedOrMismatchedBundle(t *testing.T) {
 		return nil, nil
 	}
 	valid := bundleValues(t, analyzerTestRequest(), "")
-	future := bundleValuesForContract(t, analyzerTestRequest(), "", "dashboard-failure-analyzer-v7")
+	future := bundleValuesForContract(t, analyzerTestRequest(), "", "dashboard-failure-analyzer-v8")
 	for _, values := range []map[string]string{
 		{analysisruntime.ProjectBundleEnv: "not json", analysisruntime.ProjectBundleDigestEnv: strings.Repeat("0", 64)},
 		{analysisruntime.ProjectBundleEnv: valid[analysisruntime.ProjectBundleEnv]},

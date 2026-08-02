@@ -354,11 +354,12 @@ func (s *ContainerStateStore) StageCacheEntry(entry ai.CacheEntry) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.cache.Merge(entries) {
-		return nil
+	if err := s.cache.StoreEntry(entry); err != nil {
+		return fmt.Errorf("stage container cache entry: %w", err)
 	}
-	if _, ok := s.cache.Lookup(entry.Key); !ok {
-		return fmt.Errorf("container cache entry was not staged")
+	staged, ok := s.cache.Lookup(entry.Key)
+	if !ok || !staged.CreatedAt.Equal(entry.CreatedAt) || !bytes.Equal(staged.Data, entry.Data) {
+		return fmt.Errorf("container cache entry was not staged exactly")
 	}
 	return nil
 }

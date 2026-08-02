@@ -2,6 +2,7 @@ package ai
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -149,6 +150,19 @@ func (c *Cache) Merge(entries map[string]CacheEntry) bool {
 		c.dirty = true
 	}
 	return changed
+}
+
+// StoreEntry replaces one validated cache entry exactly.
+func (c *Cache) StoreEntry(entry CacheEntry) error {
+	if c == nil || entry.Key == "" || !validCacheEntryTime(time.Now(), entry.CreatedAt) || !json.Valid(entry.Data) {
+		return fmt.Errorf("invalid cache entry")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry.Data = append(json.RawMessage(nil), entry.Data...)
+	c.entries[entry.Key] = entry
+	c.dirty = true
+	return nil
 }
 
 // Save writes the cache to dir/ai_cache.json.

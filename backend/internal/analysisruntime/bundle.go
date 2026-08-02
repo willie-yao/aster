@@ -37,7 +37,7 @@ const (
 	// Bump it when transport, tool behavior, cache or result schemas, or analysis
 	// semantics change outside the prompt, model, skill, and critique hashes.
 	// Packaging, server, frontend, and unrelated image changes do not require a bump.
-	ContainerAnalyzerContractVersion = "dashboard-failure-analyzer-v6"
+	ContainerAnalyzerContractVersion = "dashboard-failure-analyzer-v7"
 	// MaxProjectBundleBytes stays below the Linux per-environment-value limit.
 	MaxProjectBundleBytes = 96 << 10
 )
