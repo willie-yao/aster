@@ -548,6 +548,28 @@ func TestReadAcceptsPreviousCheckpointFreeStatusSchema(t *testing.T) {
 	}
 }
 
+func TestReadHistoryAcceptsPreviousCohortFreeSchema(t *testing.T) {
+	now := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
+	history := History{SchemaVersion: 3, Passes: []PassSummary{{
+		RunID: "run", PassID: "pass", PassType: PassOneShot,
+		StartedAt: now, CompletedAt: now.Add(time.Second), Outcome: OutcomeSucceeded,
+	}}}
+	path := HistoryPath(t.TempDir())
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(history)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadHistory(path); err != nil {
+		t.Fatalf("reading previous cohort-free history: %v", err)
+	}
+}
+
 func TestReadHistoryAcceptsPreviousExactCounterFreeSchema(t *testing.T) {
 	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
 	history := History{SchemaVersion: 2, Passes: []PassSummary{{
@@ -679,7 +701,9 @@ func TestTrackerFinalizesPostCacheAnalysisPlan(t *testing.T) {
 	tracker.StartPass(PassInitialWatch)
 	rejections := CacheRejectionProgress{Missing: 1, Critique: 1}
 	tracker.PlanAnalysisWork(AnalysisPlan{
-		LogicalTotal: 4, AcceptedCacheHits: 1, CompatibleResultsReused: 1, NewWork: 1, StaleWork: 1, Queued: 2,
+		LogicalTotal: 4, AcceptedCacheHits: 1, CompatibleResultsReused: 1,
+		SameFailureGroups: 1, SameFailureCandidates: 2, PotentialTasksSaved: 1, LargestSameFailureGroup: 2,
+		NewWork: 1, StaleWork: 1, Queued: 2,
 		CacheRejections: rejections,
 		BuildSubjects: BuildAnalysisProgress{
 			LogicalTotal: 1, Completed: 1, AcceptedCacheHits: 1,
@@ -695,12 +719,25 @@ func TestTrackerFinalizesPostCacheAnalysisPlan(t *testing.T) {
 
 	got := tracker.Snapshot().Analyses
 	want := AnalysisProgress{
-		LogicalTotal: 4, AcceptedCacheHits: 1, CompatibleResultsReused: 1, NewWork: 1, StaleWork: 1, CacheRejections: rejections,
+		LogicalTotal: 4, AcceptedCacheHits: 1, CompatibleResultsReused: 1,
+		SameFailureGroups: 1, SameFailureCandidates: 2, PotentialTasksSaved: 1, LargestSameFailureGroup: 2,
+		NewWork: 1, StaleWork: 1, CacheRejections: rejections,
 		Queued: 1, Completed: 3, TaskAttempts: 1, NewTasksCreated: 1,
 		BuildSubjects: BuildAnalysisProgress{LogicalTotal: 1, Completed: 1, AcceptedCacheHits: 1},
 	}
 	if got != want {
 		t.Fatalf("analysis progress = %+v, want %+v", got, want)
+	}
+}
+
+func TestStatusRejectsInconsistentSameFailureCohorts(t *testing.T) {
+	status := testStatus(time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC))
+	status.Analyses.SameFailureGroups = 1
+	status.Analyses.SameFailureCandidates = 3
+	status.Analyses.PotentialTasksSaved = 1
+	status.Analyses.LargestSameFailureGroup = 3
+	if err := status.validate(); err == nil || !strings.Contains(err.Error(), "same-failure") {
+		t.Fatalf("validate error = %v", err)
 	}
 }
 
@@ -714,6 +751,22 @@ func TestCurrentStatusOmitsObsoleteCacheRejectionCategories(t *testing.T) {
 		if bytes.Contains(data, []byte(`"`+category+`"`)) {
 			t.Fatalf("current status emitted obsolete category %q: %s", category, data)
 		}
+	}
+}
+
+func TestReadAcceptsPreviousCohortFreeStatusSchema(t *testing.T) {
+	status := testStatus(time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC))
+	status.SchemaVersion = 9
+	path := filepath.Join(t.TempDir(), "status.json")
+	data, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Read(path); err != nil {
+		t.Fatalf("reading previous cohort-free schema: %v", err)
 	}
 }
 

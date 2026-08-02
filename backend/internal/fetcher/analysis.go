@@ -268,6 +268,15 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 		if err != nil {
 			return fmt.Errorf("plan container analysis reuse: %w", err)
 		}
+		cohorts := analysisFailureCohortStats(work)
+		plan.SameFailureGroups = cohorts.Groups
+		plan.SameFailureCandidates = cohorts.Candidates
+		plan.PotentialTasksSaved = cohorts.PotentialTasksSaved
+		plan.LargestSameFailureGroup = cohorts.LargestGroup
+		if cohorts.Groups > 0 {
+			log.Printf("🧩 same-failure candidates: groups=%d subjects=%d potential_task_savings=%d largest_group=%d",
+				cohorts.Groups, cohorts.Candidates, cohorts.PotentialTasksSaved, cohorts.LargestGroup)
+		}
 		p.planProgressAnalysisWork(plan)
 	} else {
 		buildSubjects := 0

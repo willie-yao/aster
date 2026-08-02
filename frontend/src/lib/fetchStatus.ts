@@ -58,6 +58,10 @@ export interface AnalysisProgressBreakdown {
   compatibleResults: number;
   reused: number;
   exactResultsReused: number;
+  sameFailureGroups: number;
+  sameFailureCandidates: number;
+  potentialTasksSaved: number;
+  largestSameFailureGroup: number;
   lateTasksAdopted: number;
   newTasksCreated: number;
   freshAnalysesCompleted: number;
@@ -86,6 +90,10 @@ export function analysisProgressBreakdown(status: FetchProgressStatus): Analysis
     compatibleResults,
     reused: reusedFromCache + compatibleResults,
     exactResultsReused: nonNegative(analyses.exact_results_reused),
+    sameFailureGroups: nonNegative(analyses.same_failure_groups),
+    sameFailureCandidates: nonNegative(analyses.same_failure_candidates),
+    potentialTasksSaved: nonNegative(analyses.potential_tasks_saved),
+    largestSameFailureGroup: nonNegative(analyses.largest_same_failure_group),
     lateTasksAdopted: nonNegative(analyses.existing_tasks_adopted),
     newTasksCreated: nonNegative(analyses.new_tasks_created),
     freshAnalysesCompleted: nonNegative(analyses.fresh_analyses_completed),
@@ -101,14 +109,20 @@ export function analysisProgressAccessibleDetail(progress: AnalysisProgressBreak
   const failureDetail = progress.failed > 0 || progress.cancelled > 0
     ? `, ${progress.failed} failed, ${progress.cancelled} cancelled`
     : "";
-  return `${progress.ready} of ${progress.total} results ready: ${progress.reused} reused, ${progress.exactResultsReused} exact results reused, ${progress.lateTasksAdopted} existing Tasks adopted, ${progress.freshAnalysesCompleted} newly analyzed, ${progress.analyzing} running, ${progress.waiting} waiting${failureDetail}`;
+  const cohortDetail = progress.potentialTasksSaved > 0
+    ? `, ${progress.potentialTasksSaved} potential same-failure Task savings`
+    : "";
+  return `${progress.ready} of ${progress.total} results ready: ${progress.reused} reused, ${progress.exactResultsReused} exact results reused, ${progress.lateTasksAdopted} existing Tasks adopted, ${progress.freshAnalysesCompleted} newly analyzed, ${progress.analyzing} running, ${progress.waiting} waiting${cohortDetail}${failureDetail}`;
 }
 
 export function analysisProgressStripDetail(progress: AnalysisProgressBreakdown): string {
   const failureDetail = progress.failed > 0 || progress.cancelled > 0
     ? ` · ${progress.failed} failed · ${progress.cancelled} cancelled`
     : "";
-  return `${progress.reused} reused · ${progress.exactResultsReused} exact · ${progress.lateTasksAdopted} adopted · ${progress.freshAnalysesCompleted} new · ${progress.analyzing} analyzing · ${progress.waiting} waiting${failureDetail}`;
+  const cohortDetail = progress.potentialTasksSaved > 0
+    ? ` · ${progress.potentialTasksSaved} potential dedupe`
+    : "";
+  return `${progress.reused} reused · ${progress.exactResultsReused} exact · ${progress.lateTasksAdopted} adopted · ${progress.freshAnalysesCompleted} new · ${progress.analyzing} analyzing · ${progress.waiting} waiting${cohortDetail}${failureDetail}`;
 }
 
 export function fetchStatusPresentation(response: FetchStatusResponse): FetchStatusPresentation | null {
