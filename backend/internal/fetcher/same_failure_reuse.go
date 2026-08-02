@@ -2,6 +2,7 @@ package fetcher
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"net/http"
 	"slices"
@@ -9,7 +10,21 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisruntime"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
 )
+
+func systemicContainerAnalysisError(err error) error {
+	switch {
+	case analysisruntime.IsProjectBundleSourceError(err):
+		return fmt.Errorf("systemic Orka project setup failure: %w", err)
+	case orka.IsResultAuthorizationError(err):
+		return fmt.Errorf("systemic Orka result API authorization failure: %w", err)
+	case analysisruntime.IsContainerStateDecryptionError(err), analysisruntime.IsContainerStateIdentityError(err):
+		return fmt.Errorf("systemic Orka result state integrity failure: %w", err)
+	default:
+		return nil
+	}
+}
 
 func analysisExecutionRequest(execution analysisExecution, consecutiveFailures int, cacheGeneration string) ai.FailureAnalysisRequest {
 	request := execution.Work[0].request(consecutiveFailures, cacheGeneration)

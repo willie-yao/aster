@@ -373,17 +373,6 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
 
-	systemicError := func(err error) error {
-		switch {
-		case analysisruntime.IsProjectBundleSourceError(err):
-			return fmt.Errorf("systemic Orka project setup failure: %w", err)
-		case orka.IsResultAuthorizationError(err):
-			return fmt.Errorf("systemic Orka result API authorization failure: %w", err)
-		default:
-			return nil
-		}
-	}
-
 	finish := func(item aiWork, before *models.AISummary, result ai.FailureAnalysisResult, analyzeErr error, recordJudge bool) {
 		item.tc.AISummary = result.Summary
 		item.tc.AIAnalysis = result.Analysis
@@ -436,7 +425,8 @@ schedule:
 			before := representative.tc.AISummary
 			request := analysisExecutionRequest(execution, consecutiveMap[representative.jobID+"::"+representative.tc.Name], p.cacheGenerationFingerprint())
 			result, analyzeErr := analyzer.AnalyzeFailure(analysisCtx, p.client, request)
-			systemic := systemicError(analyzeErr)
+			cohortSucceeded := analyzeErr == nil
+			systemic := systemicContainerAnalysisError(analyzeErr)
 			if systemic != nil {
 				finish(representative, before, result, analyzeErr, true)
 				systemicOnce.Do(func() {
@@ -447,7 +437,7 @@ schedule:
 			}
 			if analyzeErr != nil && len(execution.Work) > 1 {
 				result, analyzeErr = analyzer.AnalyzeFailure(analysisCtx, p.client, representative.request(consecutiveMap[representative.jobID+"::"+representative.tc.Name], p.cacheGenerationFingerprint()))
-				if systemic = systemicError(analyzeErr); systemic != nil {
+				if systemic = systemicContainerAnalysisError(analyzeErr); systemic != nil {
 					finish(representative, before, result, analyzeErr, true)
 					systemicOnce.Do(func() {
 						systemicErr = systemic
@@ -458,19 +448,18 @@ schedule:
 			}
 			finish(representative, before, result, analyzeErr, true)
 
-			reused := 0
 			for _, follower := range execution.Work[1:] {
 				p.startProgressAnalysis(follower.tc.Source == models.TestCaseSourceBuild)
-				if analyzeErr == nil {
+				if cohortSucceeded {
 					shared, ok := prepareSameFailureReuse(analysisCtx, p.client, follower, result, container.StateStore(), planner, consecutiveMap[follower.jobID+"::"+follower.tc.Name], p.cacheGenerationFingerprint())
 					if ok {
 						finish(follower, follower.tc.AISummary, shared, nil, false)
-						reused++
+						p.recordProgressSameFailureReuse(1)
 						continue
 					}
 				}
 				fallback, fallbackErr := analyzer.AnalyzeFailure(analysisCtx, p.client, follower.request(consecutiveMap[follower.jobID+"::"+follower.tc.Name], p.cacheGenerationFingerprint()))
-				if fallbackSystemic := systemicError(fallbackErr); fallbackSystemic != nil {
+				if fallbackSystemic := systemicContainerAnalysisError(fallbackErr); fallbackSystemic != nil {
 					finish(follower, follower.tc.AISummary, fallback, fallbackErr, true)
 					systemicOnce.Do(func() {
 						systemicErr = fallbackSystemic
@@ -479,9 +468,6 @@ schedule:
 					return
 				}
 				finish(follower, follower.tc.AISummary, fallback, fallbackErr, true)
-			}
-			if reused > 0 {
-				p.recordProgressSameFailureReuse(reused)
 			}
 		}(execution)
 	}

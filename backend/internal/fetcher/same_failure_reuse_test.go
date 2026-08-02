@@ -2,8 +2,10 @@ package fetcher
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -27,6 +29,32 @@ func testSameFailureResult(analysisProject *analysisruntime.Project, generation 
 			ModelHash:       ai.ModelFingerprint(analysisProject.Provider.API, analysisProject.Provider.Endpoint, analysisProject.Provider.Model),
 			CacheGeneration: generation,
 		},
+	}
+}
+
+func TestSystemicContainerAnalysisErrorIncludesStateIntegrityFailures(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	identity := analysisruntime.ContainerStateIdentity{TaskNamespace: "ns", TaskName: "task", CacheKey: "cache"}
+	state := analysisruntime.ContainerAnalysisState{
+		Version: analysisruntime.ContainerStateVersion, TaskNamespace: identity.TaskNamespace,
+		TaskName: identity.TaskName, CacheKey: identity.CacheKey,
+	}
+	encoded, err := analysisruntime.EncryptContainerAnalysisState(state, key, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload[len(payload)-1] ^= 0xff
+	_, decryptErr := analysisruntime.DecryptContainerAnalysisState(base64.StdEncoding.EncodeToString(payload), key, identity)
+	if !analysisruntime.IsContainerStateDecryptionError(decryptErr) {
+		t.Fatalf("decryption error = %v", decryptErr)
+	}
+	classified := systemicContainerAnalysisError(decryptErr)
+	if classified == nil || !strings.Contains(classified.Error(), "state integrity") {
+		t.Fatalf("classified error = %v", classified)
 	}
 }
 
@@ -115,7 +143,7 @@ func TestAnalyzeFailuresReusesSameFailureRepresentativeAndFallsBack(t *testing.T
 	}{
 		{name: "representative fanout", toolCalls: 2, wantCalls: 1, wantReused: 1},
 		{name: "below-floor fallback", toolCalls: 1, wantCalls: 2},
-		{name: "representative error fallback", toolCalls: 2, firstErr: errors.New("representative unavailable"), wantCalls: 2, wantReused: 1},
+		{name: "representative error fallback", toolCalls: 2, firstErr: errors.New("representative unavailable"), wantCalls: 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("AI_CONTEXT_WINDOW_TOKENS", "65536")
