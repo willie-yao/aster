@@ -157,7 +157,8 @@ function passTypeLabel(passType: FetchPassSummary["pass_type"]): string {
 
 function recentPassDetail(pass: FetchPassSummary): string {
   const published = pass.published ? "published" : "not published";
-  return `${pass.outcome} · ${formatPassDuration(pass.duration_ms)} · ${pass.cache_hits} cache · ${pass.compatible_results_reused} compatible · ${pass.exact_results_reused} exact · ${pass.new_tasks_created} new Tasks · ${published}`;
+  const cohort = (pass.potential_tasks_saved ?? 0) > 0 ? ` · ${pass.potential_tasks_saved} potential dedupe` : "";
+  return `${pass.outcome} · ${formatPassDuration(pass.duration_ms)} · ${pass.cache_hits} cache · ${pass.compatible_results_reused} compatible · ${pass.exact_results_reused} exact · ${pass.new_tasks_created} new Tasks${cohort} · ${published}`;
 }
 
 function cacheRejectionDetail(status: FetchProgressStatus): string {
@@ -369,6 +370,12 @@ export function FetchStatusControl({ response }: FetchStatusControlProps) {
                 label="Planned Task work"
                 value={`${status.analyses.new_work} without cache · ${status.analyses.stale_work} stale`}
               />
+              {(status.analyses.potential_tasks_saved ?? 0) > 0 && (
+                <DetailRow
+                  label="Same-failure candidates"
+                  value={`${status.analyses.same_failure_candidates ?? 0} subjects · ${status.analyses.same_failure_groups ?? 0} groups · up to ${status.analyses.potential_tasks_saved ?? 0} fewer Tasks · largest ${status.analyses.largest_same_failure_group ?? 0}`}
+                />
+              )}
               <DetailRow label="Cache rejections" value={cacheRejectionDetail(status)} />
               {status.analyses.checkpoint_committed && <DetailRow label="Checkpoint" value="Saved" />}
               {patterns && (patterns.eligible > 0 || patterns.attempts > 0 || (patterns.cache_hits ?? 0) > 0) && (
