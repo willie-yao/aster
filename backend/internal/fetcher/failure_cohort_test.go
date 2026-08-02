@@ -16,8 +16,8 @@ func cohortTestWork(jobID, buildID, testName, message, body string) aiWork {
 }
 
 func TestGroupAnalysisFailureCohorts(t *testing.T) {
-	first := cohortTestWork("job", "1", "test A", "device claim failed for test A at 0x1234", "request 123e4567-e89b-12d3-a456-426614174000 failed")
-	second := cohortTestWork("job", "1", "test B", "device claim failed for test B at 0xabcd", "request 9f8e7d6c-5b4a-3210-9999-123456789abc failed")
+	first := cohortTestWork("job", "1", "DRA test alpha", "device claim failed for DRA test alpha at 0x1234", "request 123e4567-e89b-12d3-a456-426614174000 failed")
+	second := cohortTestWork("job", "1", "DRA test beta", "device claim failed for DRA test beta at 0xabcd", "request 9f8e7d6c-5b4a-3210-9999-123456789abc failed")
 	differentBuild := cohortTestWork("job", "2", "test C", second.tc.FailureMessage, second.tc.FailureBody)
 	differentMessage := cohortTestWork("job", "1", "test D", "different failure", second.tc.FailureBody)
 	empty := cohortTestWork("job", "1", "test E", "", "")
@@ -26,12 +26,22 @@ func TestGroupAnalysisFailureCohorts(t *testing.T) {
 
 	work := []aiWork{first, differentBuild, second, differentMessage, empty, buildSubject}
 	groups := groupAnalysisFailureCohorts(work)
-	if len(groups) != 1 || len(groups[0].Work) != 2 || groups[0].Work[0].tc.Name != "test A" || groups[0].Work[1].tc.Name != "test B" {
+	if len(groups) != 1 || len(groups[0].Work) != 2 || groups[0].Work[0].tc.Name != "DRA test alpha" || groups[0].Work[1].tc.Name != "DRA test beta" {
 		t.Fatalf("groups = %+v", groups)
 	}
 	telemetry := analysisFailureCohortStats(work)
 	if telemetry != (analysisFailureCohortTelemetry{Groups: 1, Candidates: 2, PotentialTasksSaved: 1, LargestGroup: 2}) {
 		t.Fatalf("telemetry = %+v", telemetry)
+	}
+}
+
+func TestAnalysisFailureCohortSignatureDoesNotReplaceShortTestNames(t *testing.T) {
+	first := cohortTestWork("job", "1", "a", "fatal", "same body")
+	second := cohortTestWork("job", "1", "i", "fitil", "same body")
+	left, leftOK := analysisFailureCohortSignature(first)
+	right, rightOK := analysisFailureCohortSignature(second)
+	if !leftOK || !rightOK || left == right {
+		t.Fatalf("signatures = %q and %q", left, right)
 	}
 }
 

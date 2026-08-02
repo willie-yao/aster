@@ -97,7 +97,7 @@ func normalizeFailureCohortText(value, testName string) string {
 	if value == "" {
 		return ""
 	}
-	if testName = strings.TrimSpace(testName); testName != "" {
+	if testName = strings.TrimSpace(testName); len(testName) >= 8 {
 		value = strings.ReplaceAll(value, testName, "<test>")
 	}
 	value = failureCohortUUID.ReplaceAllString(value, "<uuid>")
