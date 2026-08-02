@@ -23,7 +23,7 @@ import (
 
 const (
 	// SchemaVersion is the current private fetch status schema.
-	SchemaVersion = 10
+	SchemaVersion = 11
 	// StatusDirectory is hidden from the public /data file server.
 	StatusDirectory = ".fetch-status"
 	// StatusFilename is the current fetch status snapshot.
@@ -198,6 +198,7 @@ type AnalysisProgress struct {
 	AcceptedCacheHits       int                    `json:"accepted_cache_hits"`
 	CompatibleResultsReused int                    `json:"compatible_results_reused"`
 	ExactResultsReused      int                    `json:"exact_results_reused"`
+	SameFailureReused       int                    `json:"same_failure_results_reused"`
 	SameFailureGroups       int                    `json:"same_failure_groups"`
 	SameFailureCandidates   int                    `json:"same_failure_candidates"`
 	PotentialTasksSaved     int                    `json:"potential_tasks_saved"`
@@ -337,7 +338,7 @@ func Read(path string) (Status, error) {
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return Status{}, errors.New("fetch status has trailing data")
 	}
-	if status.SchemaVersion != 1 && status.SchemaVersion != 2 && status.SchemaVersion != 3 && status.SchemaVersion != 4 && status.SchemaVersion != 5 && status.SchemaVersion != 6 && status.SchemaVersion != 7 && status.SchemaVersion != 8 && status.SchemaVersion != 9 && status.SchemaVersion != SchemaVersion {
+	if status.SchemaVersion != 1 && status.SchemaVersion != 2 && status.SchemaVersion != 3 && status.SchemaVersion != 4 && status.SchemaVersion != 5 && status.SchemaVersion != 6 && status.SchemaVersion != 7 && status.SchemaVersion != 8 && status.SchemaVersion != 9 && status.SchemaVersion != 10 && status.SchemaVersion != SchemaVersion {
 		return Status{}, fmt.Errorf("unsupported fetch status schema %d", status.SchemaVersion)
 	}
 	if err := status.validate(); err != nil {
@@ -359,7 +360,7 @@ func (s Status) validate() error {
 		s.Builds.Cached < 0 || s.Builds.Fetched < 0 ||
 		s.Analyses.LogicalTotal < 0 || s.Analyses.Queued < 0 || s.Analyses.Running < 0 ||
 		s.Analyses.Completed < 0 || s.Analyses.Failed < 0 || s.Analyses.Cancelled < 0 ||
-		s.Analyses.AcceptedCacheHits < 0 || s.Analyses.CompatibleResultsReused < 0 || s.Analyses.ExactResultsReused < 0 ||
+		s.Analyses.AcceptedCacheHits < 0 || s.Analyses.CompatibleResultsReused < 0 || s.Analyses.ExactResultsReused < 0 || s.Analyses.SameFailureReused < 0 ||
 		s.Analyses.SameFailureGroups < 0 || s.Analyses.SameFailureCandidates < 0 || s.Analyses.PotentialTasksSaved < 0 || s.Analyses.LargestSameFailureGroup < 0 ||
 		s.Analyses.NewWork < 0 || s.Analyses.StaleWork < 0 ||
 		!s.Analyses.CacheRejections.valid() ||
@@ -386,7 +387,8 @@ func (s Status) validate() error {
 	if s.Analyses.CacheRejections.total() > s.Analyses.NewWork+s.Analyses.StaleWork {
 		return errors.New("fetch status has inconsistent cache counters")
 	}
-	if s.Analyses.AcceptedCacheHits+s.Analyses.CompatibleResultsReused+s.Analyses.ExactResultsReused > s.Analyses.Completed {
+	if s.Analyses.AcceptedCacheHits+s.Analyses.CompatibleResultsReused+s.Analyses.ExactResultsReused+s.Analyses.SameFailureReused > s.Analyses.Completed ||
+		s.Analyses.SameFailureReused > s.Analyses.PotentialTasksSaved {
 		return errors.New("fetch status has inconsistent analysis reuse counters")
 	}
 	if (s.Analyses.SameFailureGroups == 0) != (s.Analyses.SameFailureCandidates == 0) ||

@@ -33,6 +33,7 @@ type fetchStatusPassSummary struct {
 	CacheHits               int                    `json:"cache_hits"`
 	CompatibleResultsReused int                    `json:"compatible_results_reused"`
 	ExactResultsReused      int                    `json:"exact_results_reused"`
+	SameFailureReused       int                    `json:"same_failure_results_reused"`
 	SameFailureGroups       int                    `json:"same_failure_groups"`
 	SameFailureCandidates   int                    `json:"same_failure_candidates"`
 	PotentialTasksSaved     int                    `json:"potential_tasks_saved"`
@@ -77,7 +78,8 @@ func fetchStatusHandlerWithClock(dataDir string, now func() time.Time, staleAfte
 						PassType: pass.PassType, StartedAt: pass.StartedAt, CompletedAt: pass.CompletedAt,
 						DurationMS: pass.CompletedAt.Sub(pass.StartedAt).Milliseconds(), LogicalCount: pass.LogicalCount,
 						CacheHits: pass.CacheHits, CompatibleResultsReused: pass.CompatibleResultsReused,
-						ExactResultsReused: pass.ExactResultsReused, SameFailureGroups: pass.SameFailureGroups,
+						ExactResultsReused: pass.ExactResultsReused, SameFailureReused: pass.SameFailureReused,
+						SameFailureGroups:     pass.SameFailureGroups,
 						SameFailureCandidates: pass.SameFailureCandidates, PotentialTasksSaved: pass.PotentialTasksSaved,
 						LargestSameFailureGroup: pass.LargestSameFailureGroup, NewTasksCreated: pass.NewTasksCreated,
 						FreshAnalysesCompleted: pass.FreshAnalysesCompleted, Retries: pass.Retries,

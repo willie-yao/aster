@@ -530,6 +530,7 @@ func CanonicalFailureAnalysisRequest(request ai.FailureAnalysisRequest) ai.Failu
 	request.Build.JUnitURLs = nil
 	request.TestCase = evidenceplan.CanonicalTestCase(request.TestCase)
 	request.ProwJob = ai.CanonicalProwJobContext(request.ProwJob)
+	request.FailureCohort = ai.CanonicalFailureCohortContext(request.FailureCohort)
 	return request
 }
 

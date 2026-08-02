@@ -53,15 +53,41 @@ func canonicalProwJobField(value string, maxBytes int) string {
 	return value
 }
 
+// FailureCohortContext describes equivalent failures sharing one representative analysis.
+type FailureCohortContext struct {
+	Count     int      `json:"count"`
+	TestNames []string `json:"test_names,omitempty"`
+}
+
+const maxFailureCohortNames = 8
+
+// CanonicalFailureCohortContext returns bounded metadata without mutating input.
+func CanonicalFailureCohortContext(context *FailureCohortContext) *FailureCohortContext {
+	if context == nil || context.Count < 2 {
+		return nil
+	}
+	out := FailureCohortContext{Count: context.Count}
+	for _, name := range context.TestNames {
+		if len(out.TestNames) >= maxFailureCohortNames {
+			break
+		}
+		if name = canonicalProwJobField(name, maxProwJobNameBytes); name != "" {
+			out.TestNames = append(out.TestNames, name)
+		}
+	}
+	return &out
+}
+
 // FailureAnalysisRequest is the complete input for one test-failure analysis.
 type FailureAnalysisRequest struct {
-	JobID               string           `json:"job_id"`
-	BuildPrefix         string           `json:"build_prefix"`
-	Build               models.BuildInfo `json:"build"`
-	TestCase            models.TestCase  `json:"test_case"`
-	ProwJob             *ProwJobContext  `json:"prow_job,omitempty"`
-	ConsecutiveFailures int              `json:"consecutive_failures,omitempty"`
-	CacheGeneration     string           `json:"cache_generation,omitempty"`
+	JobID               string                `json:"job_id"`
+	BuildPrefix         string                `json:"build_prefix"`
+	Build               models.BuildInfo      `json:"build"`
+	TestCase            models.TestCase       `json:"test_case"`
+	ProwJob             *ProwJobContext       `json:"prow_job,omitempty"`
+	FailureCohort       *FailureCohortContext `json:"failure_cohort,omitempty"`
+	ConsecutiveFailures int                   `json:"consecutive_failures,omitempty"`
+	CacheGeneration     string                `json:"cache_generation,omitempty"`
 }
 
 // FailureAnalysisResult is the dashboard analysis output for one test failure.
@@ -85,7 +111,7 @@ func (s *Service) AnalyzeFailure(ctx context.Context, httpClient *http.Client, r
 	run := models.BuildResult{BuildInfo: cloneBuildInfo(request.Build)}
 	tc := cloneTestCase(request.TestCase)
 	consecutiveFailures := max(1, request.ConsecutiveFailures)
-	err := s.analyze(ctx, httpClient, request.JobID, request.BuildPrefix, &run, &tc, consecutiveFailures, request.ProwJob)
+	err := s.analyze(ctx, httpClient, request.JobID, request.BuildPrefix, &run, &tc, consecutiveFailures, request.ProwJob, request.FailureCohort)
 	return FailureAnalysisResult{Summary: tc.AISummary, Analysis: tc.AIAnalysis}, err
 }
 

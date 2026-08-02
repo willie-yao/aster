@@ -104,3 +104,29 @@ func normalizeFailureCohortText(value, testName string) string {
 	value = failureCohortAddress.ReplaceAllString(value, "<addr>")
 	return strings.TrimSpace(failureCohortWhitespace.ReplaceAllString(value, " "))
 }
+
+type analysisExecution struct {
+	Work []aiWork
+}
+
+func planAnalysisExecutions(work []aiWork) []analysisExecution {
+	cohorts := groupAnalysisFailureCohorts(work)
+	bySignature := make(map[string][]aiWork, len(cohorts))
+	for _, cohort := range cohorts {
+		bySignature[cohort.Signature] = cohort.Work
+	}
+	emitted := make(map[string]bool, len(cohorts))
+	executions := make([]analysisExecution, 0, len(work))
+	for _, item := range work {
+		signature, ok := analysisFailureCohortSignature(item)
+		if ok && len(bySignature[signature]) > 1 {
+			if !emitted[signature] {
+				executions = append(executions, analysisExecution{Work: bySignature[signature]})
+				emitted[signature] = true
+			}
+			continue
+		}
+		executions = append(executions, analysisExecution{Work: []aiWork{item}})
+	}
+	return executions
+}

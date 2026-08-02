@@ -86,6 +86,7 @@ func AcceptAgenticCacheEntry(entry CacheEntry, expectedKey string, policy Agenti
 	analysis.GCSBytes = cached.GCSBytes
 	analysis.EvidencePlanCovered = cached.EvidencePlanCovered
 	analysis.BudgetExhausted = cached.BudgetExhausted
+	analysis.SameFailureReuse = cached.SameFailureReuse
 	analysis.CritiquePassed = cached.CritiquePassed
 	analysis.CritiqueVersion = cached.CritiqueVersion
 	analysis.SkillSetHash = cached.SkillSetHash
@@ -168,6 +169,7 @@ func NewAgenticCacheEntry(key string, result FailureAnalysisResult, createdAt ti
 		GCSBytes:            result.Analysis.GCSBytes,
 		EvidencePlanCovered: result.Analysis.EvidencePlanCovered,
 		BudgetExhausted:     result.Analysis.BudgetExhausted,
+		SameFailureReuse:    result.Analysis.SameFailureReuse,
 		CritiquePassed:      result.Analysis.CritiquePassed,
 		CritiqueVersion:     result.Analysis.CritiqueVersion,
 		SkillSetHash:        result.Analysis.SkillSetHash,

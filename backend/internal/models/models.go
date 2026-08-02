@@ -132,6 +132,8 @@ type AIAnalysis struct {
 	OutputTokens int `json:"output_tokens,omitempty"`
 	// CacheHit reports whether the analysis was served from the AI cache.
 	CacheHit bool `json:"cache_hit,omitempty"`
+	// SameFailureReuse reports reuse from an equivalent failure in the same build.
+	SameFailureReuse bool `json:"same_failure_reuse,omitempty"`
 	// BudgetExhausted reports whether the agentic loop hit one of its
 	// budget caps and was forced to finalize on best-effort evidence.
 	BudgetExhausted bool `json:"budget_exhausted,omitempty"`

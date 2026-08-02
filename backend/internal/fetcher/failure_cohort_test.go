@@ -73,3 +73,13 @@ func TestAnalysisFailureCohortSignaturePreservesEvidenceBoundaries(t *testing.T)
 		})
 	}
 }
+
+func TestPlanAnalysisExecutionsUsesOneRepresentativePerCohort(t *testing.T) {
+	first := cohortTestWork("job", "1", "DRA test alpha", "same DRA test alpha failure", "same body")
+	second := cohortTestWork("job", "1", "DRA test beta", "same DRA test beta failure", "same body")
+	single := cohortTestWork("job", "1", "single test", "different", "different")
+	executions := planAnalysisExecutions([]aiWork{first, single, second})
+	if len(executions) != 2 || len(executions[0].Work) != 2 || len(executions[1].Work) != 1 {
+		t.Fatalf("executions = %+v", executions)
+	}
+}

@@ -168,7 +168,7 @@ func TestNewAgenticCacheEntryRoundTripsAcceptedResult(t *testing.T) {
 		Summary: &models.AISummary{Summary: "summary", IsTransient: true},
 		Analysis: &models.AIAnalysis{
 			Mode: AgenticMode, Model: "model", RootCause: "root", Severity: "High", SuggestedFix: "fix", RelevantFiles: []string{"a.go"},
-			ToolCalls: 2, ContextBytes: 100, GCSBytes: 50, EvidencePlanCovered: true, BudgetExhausted: true,
+			ToolCalls: 2, ContextBytes: 100, GCSBytes: 50, EvidencePlanCovered: true, BudgetExhausted: true, SameFailureReuse: true,
 			CritiquePassed: true, CritiqueVersion: currentCritiqueVersion, SkillSetHash: "skills", ModelHash: "model-hash", PromptHash: "prompt-hash",
 		},
 	}
@@ -184,7 +184,7 @@ func TestNewAgenticCacheEntryRoundTripsAcceptedResult(t *testing.T) {
 		got.Summary.GeneratedAt != entry.CreatedAt.UTC().Format(time.RFC3339) || got.Analysis.GeneratedAt != got.Summary.GeneratedAt ||
 		got.Analysis.RootCause != result.Analysis.RootCause || got.Analysis.ToolCalls != result.Analysis.ToolCalls ||
 		got.Analysis.ContextBytes != result.Analysis.ContextBytes || got.Analysis.GCSBytes != result.Analysis.GCSBytes ||
-		!got.Analysis.EvidencePlanCovered || !got.Analysis.BudgetExhausted || got.Analysis.SkillSetHash != result.Analysis.SkillSetHash {
+		!got.Analysis.EvidencePlanCovered || !got.Analysis.BudgetExhausted || !got.Analysis.SameFailureReuse || got.Analysis.SkillSetHash != result.Analysis.SkillSetHash {
 		t.Fatalf("round trip result = %+v", got)
 	}
 }

@@ -168,6 +168,12 @@ func (p *pipeline) startProgressAnalysis(buildSubject bool) {
 	}
 }
 
+func (p *pipeline) recordProgressSameFailureReuse(count int) {
+	if p.progress != nil {
+		p.progress.RecordSameFailureReused(count)
+	}
+}
+
 func (p *pipeline) finishProgressAnalysis(buildSubject bool, outcome fetchprogress.Outcome) {
 	if p.progress != nil {
 		p.progress.FinishAnalysis(buildSubject, outcome)

@@ -13,7 +13,7 @@ import (
 
 const (
 	// HistorySchemaVersion is the current private pass history schema.
-	HistorySchemaVersion = 4
+	HistorySchemaVersion = 5
 	// HistoryFilename stores bounded terminal pass summaries.
 	HistoryFilename = "history.json"
 	// HistoryLimit bounds retained pass summaries.
@@ -32,6 +32,7 @@ type PassSummary struct {
 	CacheHits               int              `json:"cache_hits"`
 	CompatibleResultsReused int              `json:"compatible_results_reused,omitempty"`
 	ExactResultsReused      int              `json:"exact_results_reused,omitempty"`
+	SameFailureReused       int              `json:"same_failure_results_reused,omitempty"`
 	SameFailureGroups       int              `json:"same_failure_groups,omitempty"`
 	SameFailureCandidates   int              `json:"same_failure_candidates,omitempty"`
 	PotentialTasksSaved     int              `json:"potential_tasks_saved,omitempty"`
@@ -73,7 +74,7 @@ func ReadHistory(path string) (History, error) {
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return History{}, errors.New("fetch history has trailing data")
 	}
-	if history.SchemaVersion != 1 && history.SchemaVersion != 2 && history.SchemaVersion != 3 && history.SchemaVersion != HistorySchemaVersion {
+	if history.SchemaVersion != 1 && history.SchemaVersion != 2 && history.SchemaVersion != 3 && history.SchemaVersion != 4 && history.SchemaVersion != HistorySchemaVersion {
 		return History{}, fmt.Errorf("unsupported fetch history schema %d", history.SchemaVersion)
 	}
 	if len(history.Passes) > HistoryLimit {
@@ -84,8 +85,9 @@ func ReadHistory(path string) (History, error) {
 			!validOutcome(summary.Outcome) || summary.Outcome == OutcomeRunning || !validFailureCategory(summary.FailureCategory) ||
 			summary.StartedAt.IsZero() || summary.CompletedAt.IsZero() || summary.CompletedAt.Before(summary.StartedAt) ||
 			summary.LogicalCount < 0 || summary.CacheHits < 0 || summary.CompatibleResultsReused < 0 || summary.ExactResultsReused < 0 ||
-			summary.SameFailureGroups < 0 || summary.SameFailureCandidates < 0 || summary.PotentialTasksSaved < 0 || summary.LargestSameFailureGroup < 0 ||
-			summary.NewTasksCreated < 0 || summary.FreshAnalysesCompleted < 0 || summary.TaskAttempts < 0 || summary.Retries < 0 || summary.PatternCacheHits < 0 {
+			summary.SameFailureReused < 0 || summary.SameFailureGroups < 0 || summary.SameFailureCandidates < 0 || summary.PotentialTasksSaved < 0 || summary.LargestSameFailureGroup < 0 ||
+			summary.NewTasksCreated < 0 || summary.FreshAnalysesCompleted < 0 || summary.TaskAttempts < 0 || summary.Retries < 0 || summary.PatternCacheHits < 0 ||
+			summary.SameFailureReused > summary.PotentialTasksSaved {
 			return History{}, errors.New("fetch history has invalid pass summary")
 		}
 		for phase, duration := range summary.PhaseDurationsMS {
@@ -125,6 +127,7 @@ func (t *Tracker) appendHistoryLocked(now time.Time) {
 		CacheHits:               t.status.Analyses.AcceptedCacheHits,
 		CompatibleResultsReused: t.status.Analyses.CompatibleResultsReused,
 		ExactResultsReused:      t.status.Analyses.ExactResultsReused,
+		SameFailureReused:       t.status.Analyses.SameFailureReused,
 		SameFailureGroups:       t.status.Analyses.SameFailureGroups,
 		SameFailureCandidates:   t.status.Analyses.SameFailureCandidates,
 		PotentialTasksSaved:     t.status.Analyses.PotentialTasksSaved,

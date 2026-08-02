@@ -145,6 +145,14 @@ func (t *Tracker) RecordResultAttempt(workItem string, retry, retrieved bool) {
 	})
 }
 
+// RecordSameFailureReused records logical results shared from one representative Task.
+func (t *Tracker) RecordSameFailureReused(count int) {
+	if t == nil || count <= 0 {
+		return
+	}
+	t.update(false, func(status *Status) { status.Analyses.SameFailureReused += count })
+}
+
 // RecordFreshAnalysisCompleted records one accepted result from a newly created Task.
 func (t *Tracker) RecordFreshAnalysisCompleted(workItem string) {
 	if t == nil || workItem == "" {

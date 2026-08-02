@@ -407,7 +407,22 @@ metadata helps identify the likely edit location without replacing runtime
 evidence. Changes to the current discovery revision do not invalidate accepted
 analysis cache entries for the same build.
 
-### Investigation floors
+### Same-build failure cohorts
+
+After normal private-cache and retained-Task reuse, the Orka container runtime
+can group equivalent failed tests from the same job, build, JUnit file, and test
+class when their bounded failure messages and bodies match after conservative
+normalization. One representative Task investigates the shared signal. A
+validated result is written under each member's existing per-test cache key and
+applied to the other tests with `same_failure_reuse` provenance.
+
+Cohorts never cross builds, never include build-level subjects or empty failure
+signals, and do not replace per-test chat, correction, or action identity. If the
+representative fails or its result does not satisfy a member's current policy,
+that member falls back to an individual analyzer Task. Systemic project,
+authorization, or state-integrity failures remain fatal.
+
+## Investigation floors
 
 `min_tool_calls` and `min_gcs_bytes` are minimum-investigation floors. When
 the model returns a final answer below a floor, the loop appends a nudge

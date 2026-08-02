@@ -158,7 +158,8 @@ function passTypeLabel(passType: FetchPassSummary["pass_type"]): string {
 function recentPassDetail(pass: FetchPassSummary): string {
   const published = pass.published ? "published" : "not published";
   const cohort = (pass.potential_tasks_saved ?? 0) > 0 ? ` · ${pass.potential_tasks_saved} potential dedupe` : "";
-  return `${pass.outcome} · ${formatPassDuration(pass.duration_ms)} · ${pass.cache_hits} cache · ${pass.compatible_results_reused} compatible · ${pass.exact_results_reused} exact · ${pass.new_tasks_created} new Tasks${cohort} · ${published}`;
+  const shared = (pass.same_failure_results_reused ?? 0) > 0 ? ` · ${pass.same_failure_results_reused} same failure` : "";
+  return `${pass.outcome} · ${formatPassDuration(pass.duration_ms)} · ${pass.cache_hits} cache · ${pass.compatible_results_reused} compatible · ${pass.exact_results_reused} exact${shared} · ${pass.new_tasks_created} new Tasks${cohort} · ${published}`;
 }
 
 function cacheRejectionDetail(status: FetchProgressStatus): string {
@@ -326,6 +327,7 @@ export function FetchStatusControl({ response }: FetchStatusControlProps) {
             <DetailRow label="Reused from cache" value={analysis.reusedFromCache} />
             <DetailRow label="Compatible results" value={analysis.compatibleResults} />
             <DetailRow label="Exact results reused" value={analysis.exactResultsReused} />
+            <DetailRow label="Same-failure results reused" value={analysis.sameFailureResultsReused} />
             <DetailRow label="Existing Tasks adopted" value={analysis.lateTasksAdopted} />
             <DetailRow label="New analyzer Tasks" value={analysis.newTasksCreated} />
             <DetailRow label="Fresh analyses completed" value={analysis.freshAnalysesCompleted} />
