@@ -245,7 +245,7 @@ func helmArgs(opts Options, skillPaths []string) []string {
 	} else {
 		args = []string{"upgrade", "--install", opts.Release, opts.Chart, "--namespace", opts.Namespace, "--create-namespace", "--kube-context", opts.KubeContext}
 		if opts.Action == "upgrade" {
-			args = append(args, "--reuse-values")
+			args = append(args, "--reset-then-reuse-values")
 		}
 	}
 	if opts.ChartVersion != "" {

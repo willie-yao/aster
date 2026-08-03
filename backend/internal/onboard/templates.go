@@ -456,8 +456,9 @@ infrastructure values in ` + "`deploy/values.yaml`" + `, then run:
 
 Image-only upgrades do not require editing ` + "`project.yaml`" + `. Live commands
 check that install targets a new release and upgrade targets an existing one.
-Upgrades reuse deployed values, apply the consumer values and current bundle,
-wait for readiness, and roll back on failure.
+Upgrades start from the new chart defaults, reapply the last user-supplied
+values, then apply the current consumer values and bundle. They wait for
+readiness and roll back on failure.
 
 ## Open the dashboard
 

@@ -179,9 +179,10 @@ release. Live installs and upgrades require Helm 4.
 Remove `--dry-run` for the fresh install. Later image, values, project, prompt,
 or skill changes use the same flags with `kubernetes upgrade`. Live commands
 verify the requested install or upgrade state, wait, and roll back on failure;
-upgrades also reuse deployed values. Image-only upgrades do not require editing
-`project.yaml`. The wrapper validates the current bundle and passes its files to
-the chart-managed ConfigMap on every run. See
+upgrades start from the new chart defaults, reapply the last user-supplied
+values, and then apply the current consumer values. Image-only upgrades do not
+require editing `project.yaml`. The wrapper validates the current bundle and
+passes its files to the chart-managed ConfigMap on every run. See
 [Kubernetes with Helm](kubernetes.md#install-and-upgrade-a-consumer-bundle) for
 the published OCI chart and manual Helm equivalent.
 

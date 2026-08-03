@@ -537,7 +537,9 @@ The supported wrapper is part of the `fetcher` binary. From an engine checkout,
 run `make build` to create `bin/fetcher`. The wrapper defaults to the published
 OCI chart. Use `--chart deploy/helm/prow-ai-dashboard` when testing a local chart
 change. Live installs and upgrades require Helm 4 so failed changes can use
-`--rollback-on-failure`.
+`--rollback-on-failure`. Upgrades use `--reset-then-reuse-values`: the new chart
+defaults apply first, then the last user-supplied values and current consumer
+values are layered on top.
 
 Before deploying, run `fetcher onboard doctor -project-dir <dir>` when you also
 want the persistence, provider, credential-source, and Prow discovery checks.
