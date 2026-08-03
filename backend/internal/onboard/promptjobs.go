@@ -40,9 +40,6 @@ func buildPromptJobSummaries(jobs []models.ProwJob, definitions []jobconfig.JobD
 			}
 			summary.Dashboards = append(summary.Dashboards, splitDashboards(definition.Annotations["testgrid-dashboards"])...)
 		}
-		if summary.Repo == "" {
-			summary.Repo = sourceRepo.FullName
-		}
 		if len(summary.Dashboards) == 0 && selectedDashboard != "" {
 			summary.Dashboards = append(summary.Dashboards, selectedDashboard)
 		}

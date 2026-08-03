@@ -17,6 +17,9 @@ func TestBuildSystemPromptUsesEvidenceWithoutLeakingTokens(t *testing.T) {
 	const githubToken = "fixture-github-secret"
 	var modelRequest string
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if servePromptSourceRevision(w, r) {
+			return
+		}
 		if got := r.Header.Get("Authorization"); got != "Bearer "+aiToken {
 			t.Fatalf("model authorization = %q", got)
 		}
@@ -27,15 +30,18 @@ func TestBuildSystemPromptUsesEvidenceWithoutLeakingTokens(t *testing.T) {
 	defer model.Close()
 
 	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if servePromptSourceRevision(w, r) {
+			return
+		}
 		if got := r.Header.Get("Authorization"); got != "Bearer "+githubToken {
 			t.Fatalf("source authorization = %q", got)
 		}
 		switch r.URL.Path {
 		case "/repos/example/project":
 			_, _ = w.Write([]byte(`{"default_branch":"main"}`))
-		case "/repos/example/project/git/trees/main":
+		case "/repos/example/project/git/trees/" + promptSourceTestSHA:
 			_ = json.NewEncoder(w).Encode(map[string]any{"tree": []map[string]any{{"path": "README.md", "type": "blob", "size": 100}}})
-		case "/example/project/main/README.md":
+		case "/example/project/" + promptSourceTestSHA + "/README.md":
 			fmt.Fprintf(w, "artifact documentation %s %s", aiToken, githubToken)
 		default:
 			http.NotFound(w, r)
@@ -82,15 +88,21 @@ func TestBuildSystemPromptUsesEvidenceWithoutLeakingTokens(t *testing.T) {
 func TestBuildSystemPromptEmptyCorpusSkipsModel(t *testing.T) {
 	modelCalls := 0
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if servePromptSourceRevision(w, r) {
+			return
+		}
 		modelCalls++
 		http.Error(w, "unexpected", http.StatusInternalServerError)
 	}))
 	defer model.Close()
 	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if servePromptSourceRevision(w, r) {
+			return
+		}
 		switch r.URL.Path {
 		case "/repos/example/project":
 			_, _ = w.Write([]byte(`{"default_branch":"main"}`))
-		case "/repos/example/project/git/trees/main":
+		case "/repos/example/project/git/trees/" + promptSourceTestSHA:
 			_, _ = w.Write([]byte(`{"tree":[]}`))
 		default:
 			http.NotFound(w, r)
@@ -125,6 +137,9 @@ func TestBuildSystemPromptSourceFailureFallsBackSafely(t *testing.T) {
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { modelCalls++ }))
 	defer model.Close()
 	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if servePromptSourceRevision(w, r) {
+			return
+		}
 		http.Error(w, "private-source-content", http.StatusInternalServerError)
 	}))
 	defer source.Close()
@@ -153,16 +168,22 @@ func TestBuildSystemPromptSourceFailureFallsBackSafely(t *testing.T) {
 
 func TestBuildSystemPromptModelFailureFallsBack(t *testing.T) {
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if servePromptSourceRevision(w, r) {
+			return
+		}
 		http.Error(w, "provider detail", http.StatusInternalServerError)
 	}))
 	defer model.Close()
 	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if servePromptSourceRevision(w, r) {
+			return
+		}
 		switch r.URL.Path {
 		case "/repos/example/project":
 			_, _ = w.Write([]byte(`{"default_branch":"main"}`))
-		case "/repos/example/project/git/trees/main":
+		case "/repos/example/project/git/trees/" + promptSourceTestSHA:
 			_, _ = w.Write([]byte(`{"tree":[{"path":"README.md","type":"blob","size":20}]}`))
-		case "/example/project/main/README.md":
+		case "/example/project/" + promptSourceTestSHA + "/README.md":
 			_, _ = w.Write([]byte("artifact docs"))
 		default:
 			http.NotFound(w, r)

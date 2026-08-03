@@ -56,7 +56,8 @@ confirm that repository content may be sent to the selected provider. The input
 combines:
 
 - Markdown documentation.
-- Relevant Go, YAML, and shell excerpts from the default branch.
+- Relevant Go, YAML, and shell excerpts from one commit resolved from the
+  default branch.
 - Matched Prow job names, types, configuration files, repositories, branches or
   refs, and TestGrid annotations already found during planning.
 

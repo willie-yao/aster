@@ -54,7 +54,7 @@ func TestBuildPromptJobSummariesFallsBackToFinalSweepMetadata(t *testing.T) {
 		Name: "periodic", JobType: models.JobTypePeriodic, ConfigFile: "periodics.yaml", Branch: "main",
 	}}, nil, Repo{FullName: "example/project"}, "dashboard-a")
 	want := []promptJobSummary{{
-		Name: "periodic", Type: models.JobTypePeriodic, ConfigFile: "periodics.yaml", Repo: "example/project",
+		Name: "periodic", Type: models.JobTypePeriodic, ConfigFile: "periodics.yaml", Repo: "",
 		Branches: []string{"main"}, Dashboards: []string{"dashboard-a"},
 	}}
 	if !reflect.DeepEqual(got, want) {

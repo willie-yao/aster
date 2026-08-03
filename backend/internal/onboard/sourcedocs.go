@@ -66,7 +66,11 @@ func fetchPromptSources(ctx context.Context, client *http.Client, repo Repo, job
 	if err != nil {
 		return nil, err
 	}
-	candidates, err := listPromptSourceCandidates(ctx, client, repo.Owner, repo.Name, branch, token)
+	revision, err := resolvePromptSourceRevision(ctx, client, repo.Owner, repo.Name, branch, token)
+	if err != nil {
+		return nil, err
+	}
+	candidates, err := listPromptSourceCandidates(ctx, client, repo.Owner, repo.Name, revision, token)
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +103,7 @@ func fetchPromptSources(ctx context.Context, client *http.Client, repo Repo, job
 			break
 		}
 		attempted[candidate.Path] = true
-		text, err := fetchRawSource(ctx, client, repo.Owner, repo.Name, branch, candidate.Path, token)
+		text, err := fetchRawSource(ctx, client, repo.Owner, repo.Name, revision, candidate.Path, token)
 		if err != nil || strings.TrimSpace(text) == "" {
 			continue
 		}
@@ -350,6 +354,38 @@ func defaultBranch(ctx context.Context, client *http.Client, owner, repo, token 
 		return "main", nil
 	}
 	return out.DefaultBranch, nil
+}
+
+func resolvePromptSourceRevision(ctx context.Context, client *http.Client, owner, repo, branch, token string) (string, error) {
+	endpoint := fmt.Sprintf("%s/repos/%s/%s/commits/%s", githubAPIBaseURL, owner, repo, url.PathEscape(branch))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/vnd.github.sha")
+	req.Header.Set("User-Agent", "prow-ai-dashboard")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 256))
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("resolving source revision: %s", resp.Status)
+	}
+	revision := strings.TrimSpace(string(body))
+	if len(revision) < 7 || strings.IndexFunc(revision, func(r rune) bool {
+		return !strings.ContainsRune("0123456789abcdefABCDEF", r)
+	}) >= 0 {
+		return "", fmt.Errorf("source revision response was invalid")
+	}
+	return revision, nil
 }
 
 func fetchRawSource(ctx context.Context, client *http.Client, owner, repo, branch, filename, token string) (string, error) {
