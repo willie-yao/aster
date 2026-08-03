@@ -76,7 +76,7 @@ type remoteDetector interface {
 
 // promptBuilder renders or drafts prompts/system.md.
 type promptBuilder interface {
-	Build(context.Context, Options, scaffoldData) (string, bool, error)
+	Build(context.Context, Options, scaffoldData, promptDraftInput) (string, bool, error)
 }
 
 // scaffoldWriter applies rendered files locally.

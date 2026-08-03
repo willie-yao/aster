@@ -10,6 +10,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prow/jobconfig"
 )
 
 const onboardingDiscoveryTimeout = 5 * time.Minute
@@ -59,6 +60,13 @@ func buildPlan(ctx context.Context, opts Options, planning planningContext, deps
 	}
 
 	files := map[string]string{"project.yaml": projectYAML}
+	sourceRepo, err := NormalizeGitHubRepo(opts.SourceRepo)
+	if err != nil {
+		return nil, fmt.Errorf("--source-repo: %w", err)
+	}
+	if planning.discovery != nil {
+		sourceRepo = planning.discovery.SourceRepo
+	}
 	dashboardRepo, err := NormalizeGitHubRepo(opts.DashboardRepo)
 	if err != nil {
 		return nil, fmt.Errorf("--dashboard-repo: %w", err)
@@ -82,7 +90,16 @@ func buildPlan(ctx context.Context, opts Options, planning planningContext, deps
 			return nil, fmt.Errorf("rendering CHECKLIST.md: %w", err)
 		}
 	}
-	prompt, drafted, err := deps.prompts.Build(ctx, opts, data)
+	var definitions []jobconfig.JobDefinition
+	if planning.discovery != nil {
+		definitions = planning.discovery.MatchingJobs
+	}
+	promptInput := promptDraftInput{
+		ProjectName: data.Name,
+		SourceRepo:  sourceRepo,
+		Jobs:        buildPromptJobSummaries(jobs, definitions, sourceRepo, opts.TestGrid),
+	}
+	prompt, drafted, err := deps.prompts.Build(ctx, opts, data, promptInput)
 	if err != nil {
 		return nil, fmt.Errorf("rendering prompts/system.md: %w", err)
 	}
@@ -91,14 +108,9 @@ func buildPlan(ctx context.Context, opts Options, planning planningContext, deps
 		return nil, err
 	}
 
-	sourceRepo, err := NormalizeGitHubRepo(opts.SourceRepo)
-	if err != nil {
-		return nil, fmt.Errorf("--source-repo: %w", err)
-	}
 	catalogRevision := ""
 	var testGridProvenance *Inferred[string]
 	if planning.discovery != nil {
-		sourceRepo = planning.discovery.SourceRepo
 		catalogRevision = planning.discovery.CatalogRevision
 	}
 	if planning.selected != nil {
@@ -122,7 +134,7 @@ func buildPlan(ctx context.Context, opts Options, planning planningContext, deps
 		},
 		Project: *parsed,
 		Prompt: PromptPlan{
-			Drafted: drafted, Source: promptSource(drafted),
+			Drafted: drafted, Source: promptSourceDescription(drafted),
 			API: promptCoordinate(drafted, opts.AIAPI), Endpoint: promptCoordinate(drafted, opts.AIEndpoint),
 			Model: promptCoordinate(drafted, opts.AIModel),
 		},
@@ -189,9 +201,9 @@ func promptCoordinate(drafted bool, value string) string {
 	return value
 }
 
-func promptSource(drafted bool) string {
+func promptSourceDescription(drafted bool) string {
 	if drafted {
-		return "AI draft from bounded repository documentation"
+		return "AI draft from bounded repository evidence and Prow job metadata"
 	}
 	return "reviewable stub"
 }
@@ -204,6 +216,6 @@ type defaultPromptBuilder struct {
 	out io.Writer
 }
 
-func (b defaultPromptBuilder) Build(ctx context.Context, opts Options, data scaffoldData) (string, bool, error) {
-	return buildSystemPrompt(ctx, opts, data, b.out)
+func (b defaultPromptBuilder) Build(ctx context.Context, opts Options, data scaffoldData, input promptDraftInput) (string, bool, error) {
+	return buildSystemPrompt(ctx, opts, data, input, b.out)
 }

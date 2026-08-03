@@ -49,6 +49,29 @@ chat completions API as:
 [baseprompt]: ../backend/internal/ai/baseprompt.go
 [footer]: ../backend/internal/ai/responseformat.go
 
+## How onboarding drafts the prompt
+
+Guided onboarding can draft this file from a bounded evidence corpus after you
+confirm that repository content may be sent to the selected provider. The input
+combines:
+
+- Markdown documentation.
+- Relevant Go, YAML, and shell excerpts from the default branch.
+- Matched Prow job names, types, configuration files, repositories, branches or
+  refs, and TestGrid annotations already found during planning.
+
+Selection is deterministic. It uses at most 10 source files or excerpts, at most
+20,000 bytes from one source, and at most 80,000 source bytes total. Large files
+are excerpted around diagnostic terms and retain line ranges. Vendored,
+generated, unsupported binary, `node_modules`, and `.github` paths are excluded.
+Documentation references and Prow configuration paths can raise an exact source
+path's rank.
+
+Onboarding does not clone the repository, execute repository code, use GitHub
+code search, or send the whole repository. Repository text and job metadata are
+untrusted evidence and cannot request more files, URLs, commands, or secrets.
+The draft remains a starting point that requires human review.
+
 ## Required runbook sections
 
 The onboarding generator requires these sections in this order. Keeping the

@@ -56,7 +56,7 @@ func scaffoldPRBody(name, mode string, aiEnabled bool) string {
 
 // buildSystemPrompt drafts prompts/system.md from source docs when AI is
 // available. It falls back to the stub on disabled, missing, slow, or failed AI.
-func buildSystemPrompt(ctx context.Context, opts Options, data scaffoldData, out io.Writer) (string, bool, error) {
+func buildSystemPrompt(ctx context.Context, opts Options, data scaffoldData, input promptDraftInput, out io.Writer) (string, bool, error) {
 	if opts.NoPrompt || opts.AIToken == "" {
 		if opts.AIToken == "" && !opts.NoPrompt {
 			fmt.Fprintln(out, "[info] no AI token is set; writing a prompts/system.md stub")
@@ -70,19 +70,20 @@ func buildSystemPrompt(ctx context.Context, opts Options, data scaffoldData, out
 	ctx, cancel := context.WithTimeout(ctx, promptDraftTimeout)
 	defer cancel()
 
-	srcOwner, srcName := splitRepo(opts.SourceRepo)
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 
-	fmt.Fprintf(out, "Drafting prompts/system.md from %s/%s documentation...\n", srcOwner, srcName)
+	fmt.Fprintf(out, "Drafting prompts/system.md from %s source evidence...\n", input.SourceRepo.FullName)
 	// Empty GitHub token means anonymous public reads.
-	docs, err := fetchSourceDocs(ctx, httpClient, srcOwner, srcName, opts.GitHubToken)
+	sources, err := fetchPromptSources(ctx, httpClient, input.SourceRepo, input.Jobs, opts.GitHubToken)
 	if err != nil {
-		fmt.Fprintln(out, "[warn] could not read source repository documentation; writing the stub instead")
+		fmt.Fprintln(out, "[warn] could not read source repository evidence; writing the stub instead")
 		prompt, renderErr := render(systemPromptTmpl, data)
 		return prompt, false, renderErr
 	}
-	if !hasMeaningfulSourceDocs(docs) {
-		fmt.Fprintln(out, "[info] no meaningful source documentation was found; writing the stub instead")
+	redactPromptCredentials(sources, opts.AIToken, opts.GitHubToken)
+	input.Sources = sources
+	if !hasMeaningfulPromptSources(input.Sources) {
+		fmt.Fprintln(out, "[info] no meaningful source evidence was found; writing the stub instead")
 		prompt, renderErr := render(systemPromptTmpl, data)
 		return prompt, false, renderErr
 	}
@@ -93,17 +94,17 @@ func buildSystemPrompt(ctx context.Context, opts Options, data scaffoldData, out
 		Endpoint: opts.AIEndpoint,
 		Model:    opts.AIModel,
 	})
-	body, err := generatePromptBody(ctx, client, data.Name, docs)
+	body, err := generatePromptBody(ctx, client, input)
 	if err != nil {
 		fmt.Fprintln(out, "[warn] prompt generation failed; writing the stub instead")
 		prompt, renderErr := render(systemPromptTmpl, data)
 		return prompt, false, renderErr
 	}
-	fmt.Fprintf(out, "Drafted prompts/system.md from %d document(s). Review it before deployment.\n", len(docs))
+	fmt.Fprintf(out, "Drafted prompts/system.md from %d source(s) and %d Prow job(s). Review it before deployment.\n", len(input.Sources), len(input.Jobs))
 	return composeGeneratedPrompt(data.Name, body), true, nil
 }
 
-// promptDraftTimeout bounds doc fetch and one generation call.
+// promptDraftTimeout bounds source retrieval and one generation call.
 const promptDraftTimeout = 3 * time.Minute
 
 func validateOptions(opts *Options) error {

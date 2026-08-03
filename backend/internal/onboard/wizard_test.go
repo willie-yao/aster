@@ -67,16 +67,18 @@ func (f fakeRemoteDetector) Origin(context.Context) (string, error) {
 }
 
 type fakePromptBuilder struct {
-	content string
-	drafted bool
-	err     error
-	calls   int
-	gotOpts Options
+	content  string
+	drafted  bool
+	err      error
+	calls    int
+	gotOpts  Options
+	gotInput promptDraftInput
 }
 
-func (f *fakePromptBuilder) Build(_ context.Context, opts Options, _ scaffoldData) (string, bool, error) {
+func (f *fakePromptBuilder) Build(_ context.Context, opts Options, _ scaffoldData, input promptDraftInput) (string, bool, error) {
 	f.calls++
 	f.gotOpts = opts
+	f.gotInput = input
 	if f.content == "" {
 		f.content = "# Prompt\n\nReview this prompt.\n"
 	}

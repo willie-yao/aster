@@ -6,75 +6,332 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"path"
 	"sort"
 	"strings"
-
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/textutil"
+	"unicode"
+	"unicode/utf8"
 )
 
-// Doc bounds for grounding generation: keep the prompt budget sane while still
-// giving the model real project context.
 const (
-	maxDocFiles     = 6
-	maxDocFileBytes = 20_000
-	maxDocTotal     = 80_000
-	// maxDocAttempts caps ranked candidates so large repos do not cause long fetch
-	// sequences.
-	maxDocAttempts = 18
+	maxPromptSources          = 10
+	maxPromptSourceBytes      = 20_000
+	maxPromptSourceTotalBytes = 80_000
+	maxPromptSourceFetchBytes = 256_000
+	maxPromptSourceAttempts   = 30
 )
 
-// sourceDoc is one fetched markdown doc from the source repo.
-type sourceDoc struct {
-	Path string
-	Text string
+var githubRawBaseURL = "https://raw.githubusercontent.com"
+
+type promptSource struct {
+	Path      string
+	Kind      string
+	StartLine int
+	EndLine   int
+	Text      string
 }
 
-// fetchSourceDocs pulls bounded markdown docs from the source repo to ground
-// prompt generation. An empty result is not an error.
-func fetchSourceDocs(ctx context.Context, client *http.Client, owner, repo, token string) ([]sourceDoc, error) {
-	branch, err := defaultBranch(ctx, client, owner, repo, token)
-	if err != nil {
-		return nil, err
-	}
-	paths, err := listMarkdownPaths(ctx, client, owner, repo, branch, token)
-	if err != nil {
-		return nil, err
-	}
-	ranked := rankDocPaths(paths)
+type promptJobSummary struct {
+	Name       string
+	Type       string
+	ConfigFile string
+	Repo       string
+	Branches   []string
+	Dashboards []string
+}
 
-	var docs []sourceDoc
+type promptDraftInput struct {
+	ProjectName string
+	SourceRepo  Repo
+	Jobs        []promptJobSummary
+	Sources     []promptSource
+}
+
+type promptSourceCandidate struct {
+	Path string
+	Kind string
+	Size int
+}
+
+var promptSourceKeywords = map[string]int{
+	"artifact": 70, "collect": 60, "logger": 55, "debug": 55,
+	"troubleshoot": 65, "e2e": 55, "test": 35, "template": 45,
+	"flavor": 50, "bootstrap": 55, "cloud-init": 60, "controller": 40,
+	"machine": 40, "cluster": 35, "prow": 50,
+}
+
+func fetchPromptSources(ctx context.Context, client *http.Client, repo Repo, jobs []promptJobSummary, token string) ([]promptSource, error) {
+	branch, err := defaultBranch(ctx, client, repo.Owner, repo.Name, token)
+	if err != nil {
+		return nil, err
+	}
+	candidates, err := listPromptSourceCandidates(ctx, client, repo.Owner, repo.Name, branch, token)
+	if err != nil {
+		return nil, err
+	}
+	candidatePaths := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		candidatePaths[candidate.Path] = struct{}{}
+	}
+	references := make(map[string]struct{})
+	for _, job := range jobs {
+		if _, ok := candidatePaths[job.ConfigFile]; ok {
+			references[job.ConfigFile] = struct{}{}
+		}
+	}
+
+	selectedKinds := make(map[string]int)
+	attempted := make(map[string]bool)
+	sources := make([]promptSource, 0, maxPromptSources)
 	total := 0
-	attempts := 0
-	for _, p := range ranked {
-		if len(docs) >= maxDocFiles || total >= maxDocTotal || attempts >= maxDocAttempts {
+	for attempts := 0; attempts < maxPromptSourceAttempts && len(sources) < maxPromptSources && total < maxPromptSourceTotalBytes; attempts++ {
+		sortPromptSourceCandidates(candidates, references, selectedKinds, len(sources))
+		var candidate promptSourceCandidate
+		found := false
+		for _, item := range candidates {
+			if !attempted[item.Path] {
+				candidate, found = item, true
+				break
+			}
+		}
+		if !found {
 			break
 		}
-		attempts++
-		text, err := fetchRaw(ctx, client, owner, repo, branch, p, token)
+		attempted[candidate.Path] = true
+		text, err := fetchRawSource(ctx, client, repo.Owner, repo.Name, branch, candidate.Path, token)
 		if err != nil || strings.TrimSpace(text) == "" {
 			continue
 		}
-		// Trim the last file to stay within the total budget.
-		remaining := maxDocTotal - total
-		if len(text) > remaining {
-			text = text[:remaining] + "\n…(truncated)"
+		remaining := maxPromptSourceTotalBytes - total
+		limit := maxPromptSourceBytes
+		if remaining < limit {
+			limit = remaining
 		}
-		if len(text) > maxDocFileBytes {
-			text = text[:maxDocFileBytes] + "\n…(truncated)"
+		source := selectPromptSourceExcerpt(candidate, text, limit)
+		if strings.TrimSpace(source.Text) == "" {
+			continue
 		}
-		docs = append(docs, sourceDoc{Path: p, Text: text})
-		total += len(text)
+		sources = append(sources, source)
+		selectedKinds[candidate.Kind]++
+		total += len(source.Text)
+		if candidate.Kind == "markdown" {
+			for _, referenced := range referencedPromptPaths(source.Text, candidatePaths) {
+				references[referenced] = struct{}{}
+			}
+		}
 	}
-	return docs, nil
+	sort.Slice(sources, func(i, j int) bool { return sources[i].Path < sources[j].Path })
+	return sources, nil
 }
 
-// defaultBranch resolves the repo's default branch via the GitHub API.
+func listPromptSourceCandidates(ctx context.Context, client *http.Client, owner, repo, branch, token string) ([]promptSourceCandidate, error) {
+	var out struct {
+		Tree []struct {
+			Path string `json:"path"`
+			Type string `json:"type"`
+			Size int    `json:"size"`
+		} `json:"tree"`
+	}
+	endpoint := fmt.Sprintf("%s/repos/%s/%s/git/trees/%s?recursive=1", githubAPIBaseURL, owner, repo, branch)
+	if err := ghJSON(ctx, client, endpoint, token, &out); err != nil {
+		return nil, err
+	}
+	candidates := make([]promptSourceCandidate, 0, len(out.Tree))
+	for _, entry := range out.Tree {
+		kind, ok := promptSourceKind(entry.Path)
+		if entry.Type != "blob" || !ok || excludedPromptSourcePath(entry.Path) || entry.Size > 1<<20 {
+			continue
+		}
+		candidates = append(candidates, promptSourceCandidate{Path: entry.Path, Kind: kind, Size: entry.Size})
+	}
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].Path < candidates[j].Path })
+	return candidates, nil
+}
+
+func promptSourceKind(filename string) (string, bool) {
+	switch strings.ToLower(path.Ext(filename)) {
+	case ".md":
+		return "markdown", true
+	case ".go":
+		return "go", true
+	case ".yaml", ".yml":
+		return "yaml", true
+	case ".sh":
+		return "shell", true
+	default:
+		return "", false
+	}
+}
+
+func excludedPromptSourcePath(filename string) bool {
+	if filename == "" || strings.HasPrefix(filename, "/") || containsControl(filename) {
+		return true
+	}
+	lower := strings.ToLower(filename)
+	for _, component := range strings.Split(lower, "/") {
+		switch component {
+		case "vendor", "third_party", "thirdparty", ".github", "node_modules", "dist", "build", "_output", "generated":
+			return true
+		}
+	}
+	base := path.Base(lower)
+	return strings.HasPrefix(base, "zz_generated.") || strings.HasSuffix(base, ".pb.go") || strings.HasSuffix(base, "_generated.go")
+}
+
+func sortPromptSourceCandidates(candidates []promptSourceCandidate, references map[string]struct{}, selectedKinds map[string]int, selected int) {
+	sort.SliceStable(candidates, func(i, j int) bool {
+		si := promptSourceScore(candidates[i], references, selectedKinds, selected)
+		sj := promptSourceScore(candidates[j], references, selectedKinds, selected)
+		if si != sj {
+			return si > sj
+		}
+		return candidates[i].Path < candidates[j].Path
+	})
+}
+
+func promptSourceScore(candidate promptSourceCandidate, references map[string]struct{}, selectedKinds map[string]int, selected int) int {
+	lower := strings.ToLower(candidate.Path)
+	base := strings.ToLower(path.Base(candidate.Path))
+	score := 0
+	if _, ok := references[candidate.Path]; ok {
+		score += 1000
+	}
+	switch {
+	case lower == "readme.md":
+		score += 140
+	case base == "readme.md":
+		score += 45
+	case strings.HasPrefix(lower, "docs/"):
+		score += 70
+	}
+	for keyword, weight := range promptSourceKeywords {
+		if strings.Contains(lower, keyword) {
+			score += weight
+		}
+	}
+	switch candidate.Kind {
+	case "yaml":
+		score += 30
+	case "go", "shell":
+		score += 25
+	case "markdown":
+		score += 20
+	}
+	if selectedKinds[candidate.Kind] == 0 {
+		score += 35
+	}
+	if selected >= 2 && selectedKinds["go"]+selectedKinds["yaml"]+selectedKinds["shell"] == 0 && candidate.Kind != "markdown" {
+		score += 100
+	}
+	score -= strings.Count(candidate.Path, "/") * 3
+	return score
+}
+
+func selectPromptSourceExcerpt(candidate promptSourceCandidate, text string, limit int) promptSource {
+	text = sanitizePromptSourceText(text)
+	lines := strings.Split(text, "\n")
+	if len(text) <= limit {
+		return promptSource{Path: candidate.Path, Kind: candidate.Kind, StartLine: 1, EndLine: len(lines), Text: text}
+	}
+	anchor, best := 0, 0
+	for i, line := range lines {
+		score := 0
+		lower := strings.ToLower(line)
+		for keyword, weight := range promptSourceKeywords {
+			if strings.Contains(lower, keyword) {
+				score += weight
+			}
+		}
+		if score > best {
+			anchor, best = i, score
+		}
+	}
+	start := 0
+	if best > 0 && anchor > 40 {
+		start = anchor - 40
+	}
+	var b strings.Builder
+	end := start
+	for i := start; i < len(lines); i++ {
+		piece := lines[i]
+		if i > start {
+			piece = "\n" + piece
+		}
+		if b.Len()+len(piece) > limit {
+			if b.Len() == 0 {
+				b.WriteString(truncateUTF8Bytes(piece, limit))
+				end = i
+			}
+			break
+		}
+		b.WriteString(piece)
+		end = i
+	}
+	return promptSource{Path: candidate.Path, Kind: candidate.Kind, StartLine: start + 1, EndLine: end + 1, Text: b.String()}
+}
+
+func referencedPromptPaths(text string, candidates map[string]struct{}) []string {
+	found := make(map[string]struct{})
+	fields := strings.FieldsFunc(text, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && !strings.ContainsRune("._/-", r)
+	})
+	for _, field := range fields {
+		field = strings.Trim(field, "/")
+		if _, ok := candidates[field]; ok {
+			found[field] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(found))
+	for item := range found {
+		out = append(out, item)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func sanitizePromptSourceText(text string) string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	text = strings.ToValidUTF8(text, "�")
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' || !unicode.IsControl(r) {
+			return r
+		}
+		return -1
+	}, text)
+}
+
+func truncateUTF8Bytes(text string, limit int) string {
+	if len(text) <= limit {
+		return text
+	}
+	text = text[:limit]
+	for !utf8.ValidString(text) {
+		text = text[:len(text)-1]
+	}
+	return text
+}
+
+func containsControl(text string) bool {
+	return strings.IndexFunc(text, unicode.IsControl) >= 0
+}
+
+func redactPromptCredentials(sources []promptSource, credentials ...string) {
+	for i := range sources {
+		for _, credential := range credentials {
+			if credential != "" {
+				sources[i].Text = strings.ReplaceAll(sources[i].Text, credential, strings.Repeat("*", len(credential)))
+			}
+		}
+	}
+}
+
 func defaultBranch(ctx context.Context, client *http.Client, owner, repo, token string) (string, error) {
 	var out struct {
 		DefaultBranch string `json:"default_branch"`
 	}
-	if err := ghJSON(ctx, client, fmt.Sprintf("https://api.github.com/repos/%s/%s", owner, repo), token, &out); err != nil {
+	if err := ghJSON(ctx, client, fmt.Sprintf("%s/repos/%s/%s", githubAPIBaseURL, owner, repo), token, &out); err != nil {
 		return "", err
 	}
 	if out.DefaultBranch == "" {
@@ -83,80 +340,13 @@ func defaultBranch(ctx context.Context, client *http.Client, owner, repo, token 
 	return out.DefaultBranch, nil
 }
 
-// listMarkdownPaths returns markdown file paths from one recursive git tree.
-func listMarkdownPaths(ctx context.Context, client *http.Client, owner, repo, branch, token string) ([]string, error) {
-	var out struct {
-		Tree []struct {
-			Path string `json:"path"`
-			Type string `json:"type"`
-		} `json:"tree"`
+func fetchRawSource(ctx context.Context, client *http.Client, owner, repo, branch, filename, token string) (string, error) {
+	parts := strings.Split(filename, "/")
+	for i := range parts {
+		parts[i] = url.PathEscape(parts[i])
 	}
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/git/trees/%s?recursive=1", owner, repo, branch)
-	if err := ghJSON(ctx, client, url, token, &out); err != nil {
-		return nil, err
-	}
-	var paths []string
-	for _, e := range out.Tree {
-		if e.Type == "blob" && strings.EqualFold(path.Ext(e.Path), ".md") && !excludedDocDir(e.Path) {
-			paths = append(paths, e.Path)
-		}
-	}
-	return paths, nil
-}
-
-// excludedDocDir filters out vendored, generated, and meta markdown.
-func excludedDocDir(p string) bool {
-	lp := strings.ToLower(p)
-	for _, prefix := range []string{"vendor/", "third_party/", "thirdparty/", ".github/", "node_modules/"} {
-		if strings.HasPrefix(lp, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-// rankDocPaths orders markdown paths by likely usefulness for a CI-failure
-// prompt: README first, then top-level docs, preferring architecture/design/
-// testing/contributing material, and shallower paths over deep ones.
-func rankDocPaths(paths []string) []string {
-	score := func(p string) int {
-		lp := strings.ToLower(p)
-		base := strings.ToLower(path.Base(p))
-		s := 0
-		switch {
-		case lp == "readme.md": // root README only
-			s += 100
-		case base == "readme.md": // a nested README is still useful, just less
-			s += 15
-		case strings.HasPrefix(lp, "docs/"):
-			s += 50
-		}
-		for kw, w := range map[string]int{
-			"architect": 40, "design": 30, "test": 25, "e2e": 25,
-			"contribut": 20, "troubleshoot": 30, "debug": 25, "flake": 35,
-		} {
-			if strings.Contains(lp, kw) {
-				s += w
-			}
-		}
-		// Prefer shallower files.
-		s -= strings.Count(p, "/") * 5
-		return s
-	}
-	sort.SliceStable(paths, func(i, j int) bool {
-		si, sj := score(paths[i]), score(paths[j])
-		if si != sj {
-			return si > sj
-		}
-		return paths[i] < paths[j]
-	})
-	return paths
-}
-
-// fetchRaw fetches a file's raw content from raw.githubusercontent.com.
-func fetchRaw(ctx context.Context, client *http.Client, owner, repo, branch, p, token string) (string, error) {
-	url := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s/%s", owner, repo, branch, p)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	endpoint := fmt.Sprintf("%s/%s/%s/%s/%s", githubRawBaseURL, owner, repo, branch, strings.Join(parts, "/"))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return "", err
 	}
@@ -169,18 +359,17 @@ func fetchRaw(ctx context.Context, client *http.Client, owner, repo, branch, p, 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("raw %s: %s", p, resp.Status)
+		return "", fmt.Errorf("raw source %s: %s", filename, resp.Status)
 	}
-	b, err := io.ReadAll(io.LimitReader(resp.Body, maxDocFileBytes+1))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxPromptSourceFetchBytes+1))
 	if err != nil {
 		return "", err
 	}
-	return string(b), nil
+	return string(body), nil
 }
 
-// ghJSON does a GET against the GitHub API and decodes the JSON body.
-func ghJSON(ctx context.Context, client *http.Client, url, token string, out any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+func ghJSON(ctx context.Context, client *http.Client, endpoint, token string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return err
 	}
@@ -197,7 +386,7 @@ func ghJSON(ctx context.Context, client *http.Client, url, token string, out any
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("GET %s: %s: %s", url, resp.Status, textutil.Truncate(string(body), 200))
+		return fmt.Errorf("GET %s: %s", endpoint, resp.Status)
 	}
 	return json.Unmarshal(body, out)
 }
