@@ -930,6 +930,14 @@
                 "existingSecret": {
                   "type": "string",
                   "description": "Existing Secret containing OAuth credentials."
+                },
+                "scope": {
+                  "type": "string",
+                  "description": "Deprecated OAuth scope override. Remove this field and use privateRepositories."
+                },
+                "chatScope": {
+                  "type": "string",
+                  "description": "Deprecated chat OAuth scope override. Remove this field and use privateRepositories."
                 }
               },
               "additionalProperties": false,

@@ -241,6 +241,14 @@ server:
 VALUES
 expect_fail invalid-fixed-key "$tmp/invalid-fixed-key.yaml" /server/service
 
+cat > "$tmp/invalid-oauth-key.yaml" <<'VALUES'
+server:
+  actions:
+    oauth:
+      audience: fixture
+VALUES
+expect_fail invalid-oauth-key "$tmp/invalid-oauth-key.yaml" /server/actions/oauth
+
 cat > "$tmp/invalid-service.yaml" <<'VALUES'
 server:
   service:
