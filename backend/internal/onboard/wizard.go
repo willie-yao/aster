@@ -9,6 +9,8 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 )
 
+const promptDraftDisclosure = "Bounded repository documentation, source excerpts, and matched Prow job metadata will be sent to that provider."
+
 func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Options, error) {
 	if err := validateCredentialSeparation(opts); err != nil {
 		return nil, opts, err
@@ -178,7 +180,7 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 	} else if opts.AIEndpoint != "" && opts.AIModel != "" {
 		draft, confirmErr := prompt.Confirm(ctx, confirmPrompt{
 			Title:       "Use AI_ENDPOINT and AI_MODEL now to draft prompts/system.md?",
-			Description: "Bounded repository documentation will be sent to that provider.",
+			Description: promptDraftDisclosure,
 			Value:       false,
 		})
 		if confirmErr != nil {
@@ -188,7 +190,7 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 	} else if effectiveAIEnabled(opts) {
 		draft, confirmErr := prompt.Confirm(ctx, confirmPrompt{
 			Title:       "Also use the deployed provider to draft prompts/system.md?",
-			Description: "Bounded repository documentation will be sent to that provider.",
+			Description: promptDraftDisclosure,
 			Value:       false,
 		})
 		if confirmErr != nil {

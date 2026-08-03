@@ -3,6 +3,7 @@ package onboard
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -92,6 +93,26 @@ func TestGeneratePromptBody_IncludesSortedProwJobsAndSourceRanges(t *testing.T) 
 	}
 	if strings.Index(c.gotUser, "Name: a-presubmit forged") > strings.Index(c.gotUser, "Name: z-periodic") {
 		t.Fatal("jobs were not sorted deterministically")
+	}
+}
+
+func TestGeneratePromptBodyBoundsProwJobs(t *testing.T) {
+	c := &stubCompleter{out: validPromptBody()}
+	input := promptTestInput("Project", []promptSource{{Path: "README.md", Kind: "markdown", StartLine: 1, EndLine: 1, Text: "docs"}})
+	for i := 0; i < 150; i++ {
+		input.Jobs = append(input.Jobs, promptJobSummary{
+			Name: fmt.Sprintf("job-%03d-%s", i, strings.Repeat("x", 500)), Type: "periodic",
+			ConfigFile: "config/jobs.yaml", Repo: "example/project", Dashboards: []string{"dashboard"},
+		})
+	}
+	if _, err := generatePromptBody(context.Background(), c, input); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(c.gotUser, "additional Prow job(s)") {
+		t.Fatalf("bounded request did not report omitted jobs: %s", c.gotUser)
+	}
+	if count := strings.Count(c.gotUser, "===== JOB "); count > maxPromptJobs {
+		t.Fatalf("serialized %d jobs, limit %d", count, maxPromptJobs)
 	}
 }
 

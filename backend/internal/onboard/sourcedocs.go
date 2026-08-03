@@ -18,7 +18,7 @@ const (
 	maxPromptSources          = 10
 	maxPromptSourceBytes      = 20_000
 	maxPromptSourceTotalBytes = 80_000
-	maxPromptSourceFetchBytes = 256_000
+	maxPromptSourceFetchBytes = 1 << 20
 	maxPromptSourceAttempts   = 30
 )
 
@@ -127,7 +127,8 @@ func fetchPromptSources(ctx context.Context, client *http.Client, repo Repo, job
 
 func listPromptSourceCandidates(ctx context.Context, client *http.Client, owner, repo, branch, token string) ([]promptSourceCandidate, error) {
 	var out struct {
-		Tree []struct {
+		Truncated bool `json:"truncated"`
+		Tree      []struct {
 			Path string `json:"path"`
 			Type string `json:"type"`
 			Size int    `json:"size"`
@@ -136,6 +137,9 @@ func listPromptSourceCandidates(ctx context.Context, client *http.Client, owner,
 	endpoint := fmt.Sprintf("%s/repos/%s/%s/git/trees/%s?recursive=1", githubAPIBaseURL, owner, repo, branch)
 	if err := ghJSON(ctx, client, endpoint, token, &out); err != nil {
 		return nil, err
+	}
+	if out.Truncated {
+		return nil, fmt.Errorf("source repository tree response is truncated")
 	}
 	candidates := make([]promptSourceCandidate, 0, len(out.Tree))
 	for _, entry := range out.Tree {
@@ -247,28 +251,36 @@ func selectPromptSourceExcerpt(candidate promptSourceCandidate, text string, lim
 			anchor, best = i, score
 		}
 	}
-	start := 0
-	if best > 0 && anchor > 40 {
-		start = anchor - 40
+	start, end, excerpt := promptExcerptWindow(lines, anchor, best > 0, limit)
+	return promptSource{Path: candidate.Path, Kind: candidate.Kind, StartLine: start + 1, EndLine: end + 1, Text: excerpt}
+}
+
+func promptExcerptWindow(lines []string, anchor int, useAnchor bool, limit int) (int, int, string) {
+	if !useAnchor {
+		anchor = 0
 	}
-	var b strings.Builder
-	end := start
-	for i := start; i < len(lines); i++ {
-		piece := lines[i]
-		if i > start {
-			piece = "\n" + piece
+	if len(lines[anchor]) >= limit {
+		return anchor, anchor, truncateUTF8Bytes(lines[anchor], limit)
+	}
+	start, end := anchor, anchor
+	total := len(lines[anchor])
+	for {
+		expanded := false
+		if start > 0 && total+1+len(lines[start-1]) <= limit {
+			start--
+			total += 1 + len(lines[start])
+			expanded = true
 		}
-		if b.Len()+len(piece) > limit {
-			if b.Len() == 0 {
-				b.WriteString(truncateUTF8Bytes(piece, limit))
-				end = i
-			}
+		if end+1 < len(lines) && total+1+len(lines[end+1]) <= limit {
+			end++
+			total += 1 + len(lines[end])
+			expanded = true
+		}
+		if !expanded {
 			break
 		}
-		b.WriteString(piece)
-		end = i
 	}
-	return promptSource{Path: candidate.Path, Kind: candidate.Kind, StartLine: start + 1, EndLine: end + 1, Text: b.String()}
+	return start, end, strings.Join(lines[start:end+1], "\n")
 }
 
 func referencedPromptPaths(text string, candidates map[string]struct{}) []string {

@@ -14,6 +14,11 @@ type completer interface {
 	Complete(ctx context.Context, system, user string) (string, error)
 }
 
+const (
+	maxPromptJobs     = 100
+	maxPromptJobBytes = 40_000
+)
+
 var requiredPromptHeadings = []string{
 	"## Architecture",
 	"## Diagnostic lifecycle",
@@ -95,16 +100,22 @@ func generatePromptBody(ctx context.Context, c completer, input promptDraftInput
 	if len(jobs) == 0 {
 		b.WriteString("No matching Prow job metadata was available.\n\n")
 	} else {
-		for i, job := range jobs {
-			fmt.Fprintf(&b, "\n===== JOB %d =====\n", i+1)
-			fmt.Fprintf(&b, "Name: %s\n", sanitizePromptInline(job.Name))
-			fmt.Fprintf(&b, "Type: %s\n", sanitizePromptInline(job.Type))
-			fmt.Fprintf(&b, "Config file: %s\n", sanitizePromptInline(job.ConfigFile))
-			fmt.Fprintf(&b, "Repository under test: %s\n", sanitizePromptInline(job.Repo))
-			branches := sortedUniqueStrings(job.Branches)
-			dashboards := sortedUniqueStrings(job.Dashboards)
-			fmt.Fprintf(&b, "Branches or refs: %s\n", sanitizePromptInline(strings.Join(branches, ", ")))
-			fmt.Fprintf(&b, "TestGrid dashboards: %s\n", sanitizePromptInline(strings.Join(dashboards, ", ")))
+		var jobText strings.Builder
+		included := 0
+		for _, job := range jobs {
+			if included >= maxPromptJobs {
+				break
+			}
+			block := renderPromptJob(included+1, job)
+			if jobText.Len()+len(block) > maxPromptJobBytes {
+				break
+			}
+			jobText.WriteString(block)
+			included++
+		}
+		b.WriteString(jobText.String())
+		if omitted := len(jobs) - included; omitted > 0 {
+			fmt.Fprintf(&b, "\nOmitted %d additional Prow job(s) to keep the request bounded.\n", omitted)
 		}
 		b.WriteString("\n")
 	}
@@ -125,6 +136,20 @@ func generatePromptBody(ctx context.Context, c completer, input promptDraftInput
 		return "", err
 	}
 	return body, nil
+}
+
+func renderPromptJob(index int, job promptJobSummary) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "\n===== JOB %d =====\n", index)
+	fmt.Fprintf(&b, "Name: %s\n", sanitizePromptInline(job.Name))
+	fmt.Fprintf(&b, "Type: %s\n", sanitizePromptInline(job.Type))
+	fmt.Fprintf(&b, "Config file: %s\n", sanitizePromptInline(job.ConfigFile))
+	fmt.Fprintf(&b, "Repository under test: %s\n", sanitizePromptInline(job.Repo))
+	branches := sortedUniqueStrings(job.Branches)
+	dashboards := sortedUniqueStrings(job.Dashboards)
+	fmt.Fprintf(&b, "Branches or refs: %s\n", sanitizePromptInline(strings.Join(branches, ", ")))
+	fmt.Fprintf(&b, "TestGrid dashboards: %s\n", sanitizePromptInline(strings.Join(dashboards, ", ")))
+	return b.String()
 }
 
 func hasMeaningfulPromptSources(sources []promptSource) bool {

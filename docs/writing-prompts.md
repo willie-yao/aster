@@ -65,7 +65,12 @@ Selection is deterministic. It uses at most 10 source files or excerpts, at most
 are excerpted around diagnostic terms and retain line ranges. Vendored,
 generated, unsupported binary, `node_modules`, and `.github` paths are excluded.
 Documentation references and Prow configuration paths can raise an exact source
-path's rank.
+path's rank. The job section is separately limited to 100 jobs and 40,000
+bytes, with an omitted-count summary when more jobs match.
+
+Eligible source files up to 1 MiB are scanned before the line-ranged excerpt is
+selected. A truncated recursive Git tree is rejected rather than presented as a
+complete deterministic corpus.
 
 Onboarding does not clone the repository, execute repository code, use GitHub
 code search, or send the whole repository. Repository text and job metadata are

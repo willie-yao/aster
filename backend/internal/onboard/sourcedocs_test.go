@@ -186,3 +186,62 @@ func TestPromptSourceReferenceBoostPrefersExactPath(t *testing.T) {
 		t.Fatalf("exact referenced path did not rank first: %+v", candidates)
 	}
 }
+
+func TestPromptExcerptWindowAlwaysIncludesAnchor(t *testing.T) {
+	lines := make([]string, 90)
+	for i := range lines {
+		lines[i] = strings.Repeat("x", 120)
+	}
+	lines[60] = "collect diagnostic artifact anchor"
+	source := selectPromptSourceExcerpt(promptSourceCandidate{Path: "debug.go", Kind: "go"}, strings.Join(lines, "\n"), 1_000)
+	if !strings.Contains(source.Text, "diagnostic artifact anchor") || source.StartLine > 61 || source.EndLine < 61 {
+		t.Fatalf("anchor omitted from lines %d-%d:\n%s", source.StartLine, source.EndLine, source.Text)
+	}
+}
+
+func TestFetchPromptSourcesScansFullEligibleFile(t *testing.T) {
+	content := strings.Repeat("ordinary source line\n", 16_000) + "collect diagnostic artifact near end\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/example/project":
+			_, _ = w.Write([]byte(`{"default_branch":"main"}`))
+		case "/repos/example/project/git/trees/main":
+			fmt.Fprintf(w, `{"tree":[{"path":"test/e2e/large.go","type":"blob","size":%d}]}`, len(content))
+		case "/example/project/main/test/e2e/large.go":
+			_, _ = w.Write([]byte(content))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	oldAPI, oldRaw := githubAPIBaseURL, githubRawBaseURL
+	githubAPIBaseURL, githubRawBaseURL = srv.URL, srv.URL
+	t.Cleanup(func() { githubAPIBaseURL, githubRawBaseURL = oldAPI, oldRaw })
+
+	sources, err := fetchPromptSources(context.Background(), srv.Client(), Repo{Owner: "example", Name: "project"}, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources) != 1 || !strings.Contains(sources[0].Text, "diagnostic artifact near end") {
+		t.Fatalf("late diagnostic evidence was not selected: %+v", sources)
+	}
+}
+
+func TestFetchPromptSourcesRejectsTruncatedTree(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/repos/example/project" {
+			_, _ = w.Write([]byte(`{"default_branch":"main"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"truncated":true,"tree":[]}`))
+	}))
+	defer srv.Close()
+	oldAPI := githubAPIBaseURL
+	githubAPIBaseURL = srv.URL
+	t.Cleanup(func() { githubAPIBaseURL = oldAPI })
+
+	_, err := fetchPromptSources(context.Background(), srv.Client(), Repo{Owner: "example", Name: "project"}, nil, "")
+	if err == nil || !strings.Contains(err.Error(), "truncated") {
+		t.Fatalf("error = %v", err)
+	}
+}
