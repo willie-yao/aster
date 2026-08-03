@@ -68,7 +68,7 @@ jobs:
       ISSUE_TOKEN: ${{ secrets.ISSUE_TOKEN }}
 ```
 
-On the [Kubernetes-native](kubernetes.md) path, set `ISSUE_TOKEN` on the worker
+On the [Kubernetes-native](kubernetes-reference.md) path, set `ISSUE_TOKEN` on the worker
 instead, via `fetcher.extraEnv` in the Helm values (sourced from a Secret). The
 same scheduled auto-filing runs there; and an admin can additionally file a
 single issue on demand from the UI (see [server.md](server.md#admin-gated-actions)).
@@ -123,7 +123,7 @@ flag to set.
 
 ## Implementation reference
 
-- `backend/internal/issues/` — the GitHub client, the reconciler (state +
+- `backend/internal/issues/`: the GitHub client, the reconciler (state +
   repo-side dedup), and the spec builder that turns findings into issues.
 - Wired in `backend/internal/fetcher/fetcher.go` (Step 7), gated on
   `issues.enabled` + `ISSUE_TOKEN`.

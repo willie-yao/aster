@@ -218,14 +218,11 @@ complete AgentRuntime and SubstrateActorPool controller RBAC, and guarded CRD
 lifecycle are present at Orka merge commit
 `fde3b7925c367784570fcc36d7a5b3a51747bf10` from PR #295.
 
-As of July 28, 2026, Orka has no tag or GitHub release containing those changes.
-Do not install from older raw manifests and do not add a supplemental controller
-RBAC patch. Use a verified published chart containing `fde3b792` or later when
-one exists. Until then, source-commit packaging is maintainer-only and limited
-to local lint, render, and temporary kind validation because matching released
-runtime images do not exist. See
-[Install Orka as a separate release](kubernetes.md#install-orka-as-a-separate-release)
-and the
+This repository does not configure a verified published Orka release containing
+those changes. Do not install older raw manifests or add a supplemental
+controller RBAC patch. Source-commit packaging is maintainer-only and limited to
+local lint, render, and temporary kind validation until matching immutable
+runtime artifacts are available. See [Orka integration](orka.md) and the
 [CAPZ Orka consumer reference](https://github.com/willie-yao/capz-prow-ai-dashboard-orka-demo/tree/main/deploy/orka).
 
 Orka labels the project experimental, so treat this integration accordingly.
@@ -318,7 +315,7 @@ jobs:
       FIX_TOKEN: ${{ secrets.FIX_TOKEN }}
 ```
 
-On the [Kubernetes-native](kubernetes.md) path, set `FIX_TOKEN` on the worker via
+On the [Kubernetes-native](kubernetes-reference.md) path, set `FIX_TOKEN` on the worker via
 `fetcher.extraEnv` in the Helm values instead. The writer still needs a custom
 runtime image as described above. An admin can draft a single fix PR on demand
 only when the server image also contains `opencode` and git (see

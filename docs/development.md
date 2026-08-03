@@ -89,4 +89,4 @@ helm lint deploy/helm/prow-ai-dashboard \
 make helm-check
 ```
 
-Use [Kubernetes-native deployment](kubernetes.md) for runtime configuration.
+Use [Kubernetes operator reference](kubernetes-reference.md) for runtime configuration.

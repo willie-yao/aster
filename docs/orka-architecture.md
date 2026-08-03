@@ -7,14 +7,14 @@ is persistent. The dashboard continues to own analysis policy, evidence
 quality, result validation, and every GitHub write.
 
 This guide explains how the components fit together. See
-[Kubernetes deployment](kubernetes.md) for Helm values and
+[Orka integration](orka.md) for installation and Helm values. See
 [Agent-proposed fix PRs](fix-prs.md) for feature configuration.
 
 ## Where Orka is used
 
 | Integration | Orka execution | Status | Main benefit |
 | --- | --- | --- | --- |
-| Failure analysis | One `type: container` Task per failure | Experimental Helm cron option | Isolation and per-failure Task history |
+| Failure analysis | One `type: container` Task per failure | Experimental Helm watch or cron option | Isolation and per-failure Task history |
 | Fix generation | `type: agent` Task using an AgentRuntime such as OpenCode | Optional | Isolated source workspace and structured diff result |
 | Source investigation | Read-only `type: agent` Task at a pinned source revision | Optional | Deeper source inspection with verified citations |
 
@@ -252,12 +252,13 @@ for a complete investigation.
 Install Orka as a separate release and pin a verified chart and runtime images.
 Orka currently labels the project experimental, so verify the required Agent
 runtime against the pinned release or commit before enabling these paths.
-See [Kubernetes deployment](kubernetes.md) for namespace, Secret, RBAC, and
+See [Orka integration](orka.md) for installation, namespace, Secret, RBAC, and
 placement requirements.
 
 ## Further reading
 
-- [Kubernetes deployment](kubernetes.md)
+- [Orka integration](orka.md)
+- [Kubernetes operator reference](kubernetes-reference.md)
 - [Agentic analysis](agentic.md)
 - [Agent-proposed fix PRs](fix-prs.md)
 - [Server and analysis chat](server.md)

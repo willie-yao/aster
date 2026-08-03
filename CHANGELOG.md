@@ -14,9 +14,8 @@ What bumps what:
   minor.
 - **PATCH**: bug fixes, prompt tweaks, performance.
 
-See [docs/releasing.md](docs/releasing.md) for the release process and
-[docs/onboarding-a-new-project.md](docs/onboarding-a-new-project.md#versioning-and-pinning)
-for how to pin a release.
+See [the release guide](docs/releasing.md#versioning) for the release process and
+how to pin a consumer to a reviewed version.
 
 ## [Unreleased]
 
@@ -185,7 +184,7 @@ for how to pin a release.
   When AI creds are set it drafts `prompts/system.md` from the source repo's own
   docs; otherwise it writes a stub. Pass `-open-pr` to open a scaffold PR instead
   of writing locally, and `-mode k8s` to also scaffold a `deploy/` folder. See
-  [docs/onboarding-a-new-project.md](docs/onboarding-a-new-project.md#fast-start-scaffold-it-with-onboard).
+  [docs/onboarding-a-new-project.md](docs/onboarding-a-new-project.md#run-the-wizard).
 - Optional **auto-filing of GitHub issues** for the dashboard's highest-signal
   findings: systemic recurring patterns and persistent failures (>=3 consecutive
   runs). Off by default; enable with an `issues:` block plus an `ISSUE_TOKEN`

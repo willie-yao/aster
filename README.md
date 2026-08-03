@@ -54,18 +54,12 @@ recommended production mode on Pages and Kubernetes. It keeps prompts, Tools,
 evidence policy, critique, cache acceptance, traces, and result schemas in one
 implementation.
 
-Helm deployments can opt into `analysisRuntime.type: orka-container` in
-`mode: cron`. This experimental sidegrade runs the same dashboard
-`FailureAnalyzer` in one Orka `type: container` Task per failure. It has no Pages
-or watch-mode support and no backward compatibility guarantee. Use it only when
-a concrete Task lifecycle or per-failure isolation requirement justifies the
-extra control plane.
-
-The patched Orka AI worker remains removed. Orka fix generation is independent
-through `ai.fix_prs.agent_runtime.type: orka`. See the
-[analysis runtime evaluation](docs/analysis-runtime-evaluation.md),
-[ownership decision](docs/architecture-decisions/0001-analysis-runtime-ownership.md),
-and [fix PR documentation](docs/fix-prs.md).
+Kubernetes deployments can opt into the experimental Orka container runtime
+when a concrete Task lifecycle or per-failure isolation requirement justifies a
+separate control plane. Orka is not required for the default deployment and is
+installed as a separate release. See [Orka integration](docs/orka.md), the
+[analysis runtime evaluation](docs/analysis-runtime-evaluation.md), and the
+[ownership decision](docs/architecture-decisions/0001-analysis-runtime-ownership.md).
 
 ## What a project owns
 
@@ -115,8 +109,10 @@ The Kubernetes server serves the same `/data/*.json` contract as Pages and adds
 ### Get started
 
 - [Onboarding a project](docs/onboarding-a-new-project.md)
+- [Onboarding reference](docs/onboarding-reference.md)
 - [GitHub Actions and Pages](docs/github-pages.md)
 - [Kubernetes deployment](docs/kubernetes.md)
+- [Kubernetes operator reference](docs/kubernetes-reference.md)
 - [Project configuration](docs/project-configuration.md)
 - [Troubleshooting](docs/troubleshooting.md)
 
@@ -136,7 +132,7 @@ The Kubernetes server serves the same `/data/*.json` contract as Pages and adds
 
 ### Orka runtimes
 
-- [Separate Orka Helm installation and CRD lifecycle](docs/kubernetes.md#install-orka-as-a-separate-release)
+- [Orka installation and runtime integration](docs/orka.md)
 - [CAPZ Orka consumer reference](https://github.com/willie-yao/capz-prow-ai-dashboard-orka-demo)
 - [Orka architecture and dashboard integration](docs/orka-architecture.md)
 - [Failure analysis runtime evaluation](docs/analysis-runtime-evaluation.md)
