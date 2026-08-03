@@ -111,20 +111,20 @@ func validatePromptBody(body string) error {
 	}
 
 	var headings []string
-	fence := ""
-	for _, line := range strings.Split(body, "\n") {
-		line = strings.TrimSpace(line)
-		if marker := markdownFenceMarker(line); marker != "" {
-			if fence == "" {
-				fence = marker
-			} else if marker == fence {
-				fence = ""
+	var fence markdownFence
+	for _, rawLine := range strings.Split(body, "\n") {
+		if fence.length != 0 {
+			if closesMarkdownFence(rawLine, fence) {
+				fence = markdownFence{}
 			}
 			continue
 		}
-		if fence != "" {
+		if opened, ok := opensMarkdownFence(rawLine); ok {
+			fence = opened
 			continue
 		}
+
+		line := strings.TrimSpace(rawLine)
 		if strings.HasPrefix(line, "# ") {
 			return fmt.Errorf("generated prompt contains a top-level title")
 		}
@@ -132,7 +132,7 @@ func validatePromptBody(body string) error {
 			headings = append(headings, line)
 		}
 	}
-	if fence != "" {
+	if fence.length != 0 {
 		return fmt.Errorf("generated prompt contains an unclosed code fence")
 	}
 	if len(headings) != len(requiredPromptHeadings) {
@@ -149,26 +149,56 @@ func validatePromptBody(body string) error {
 	return nil
 }
 
-func markdownFenceMarker(line string) string {
-	for _, marker := range []string{"```", "~~~"} {
-		if strings.HasPrefix(line, marker) {
-			return marker
-		}
+type markdownFence struct {
+	character byte
+	length    int
+}
+
+func opensMarkdownFence(line string) (markdownFence, bool) {
+	character, length, rest, ok := markdownFenceRun(line)
+	if !ok || (character == '`' && strings.ContainsRune(rest, '`')) {
+		return markdownFence{}, false
 	}
-	return ""
+	return markdownFence{character: character, length: length}, true
+}
+
+func closesMarkdownFence(line string, fence markdownFence) bool {
+	character, length, rest, ok := markdownFenceRun(line)
+	return ok && character == fence.character && length >= fence.length && strings.Trim(rest, " \t") == ""
+}
+
+func markdownFenceRun(line string) (byte, int, string, bool) {
+	leading := 0
+	for leading < len(line) && line[leading] == ' ' {
+		leading++
+	}
+	if leading > 3 || leading == len(line) {
+		return 0, 0, "", false
+	}
+	character := line[leading]
+	if character != '`' && character != '~' {
+		return 0, 0, "", false
+	}
+	end := leading
+	for end < len(line) && line[end] == character {
+		end++
+	}
+	if end-leading < 3 {
+		return 0, 0, "", false
+	}
+	return character, end - leading, line[end:], true
 }
 
 // sanitizePromptBody trims a wrapping code fence and plain leading prose.
 func sanitizePromptBody(s string) string {
 	s = strings.TrimSpace(s)
-	if strings.HasPrefix(s, "```") && strings.HasSuffix(s, "```") {
-		if i := strings.Index(s, "\n"); i >= 0 {
-			s = s[i+1:]
-		}
-		s = strings.TrimSuffix(strings.TrimRight(s, "\n"), "```")
-		s = strings.TrimSpace(s)
-	}
 	lines := strings.Split(s, "\n")
+	if len(lines) >= 2 {
+		if fence, ok := opensMarkdownFence(lines[0]); ok && closesMarkdownFence(lines[len(lines)-1], fence) {
+			s = strings.TrimSpace(strings.Join(lines[1:len(lines)-1], "\n"))
+			lines = strings.Split(s, "\n")
+		}
+	}
 	for i, line := range lines {
 		if strings.TrimSpace(line) != requiredPromptHeadings[0] {
 			continue

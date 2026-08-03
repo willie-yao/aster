@@ -93,6 +93,7 @@ func TestSanitizePromptBody(t *testing.T) {
 	body := validPromptBody()
 	cases := map[string]string{
 		"```markdown\n" + body + "\n```":          body,
+		"~~~markdown\n" + body + "\n~~~":          body,
 		"Here is the requested draft:\n\n" + body: body,
 		body: body,
 	}
@@ -106,15 +107,27 @@ func TestSanitizePromptBody(t *testing.T) {
 	if got := sanitizePromptBody(withTitle); got != withTitle {
 		t.Fatalf("sanitize removed a top-level title that validation must reject: %q", got)
 	}
+	invalidWrapper := "```markdown\n" + body + "\n    ```"
+	if got := sanitizePromptBody(invalidWrapper); got == body {
+		t.Fatal("sanitize accepted a fence closer indented by four spaces")
+	}
 }
 
 func TestValidatePromptBody(t *testing.T) {
 	if err := validatePromptBody(validPromptBody()); err != nil {
 		t.Fatalf("valid body rejected: %v", err)
 	}
-	withFencedHeadings := strings.Replace(validPromptBody(), "## Common failure patterns\nGrounded guidance.", "## Common failure patterns\n\n```sh\n# shell comment\n## not a section\n```", 1)
-	if err := validatePromptBody(withFencedHeadings); err != nil {
-		t.Fatalf("headings inside a code fence affected validation: %v", err)
+	for name, fenced := range map[string]string{
+		"backtick":    "```sh\n# shell comment\n## not a section\n```",
+		"long closer": "````text\n## not a section\n`````",
+		"tilde":       "~~~text\n## not a section\n~~~",
+	} {
+		t.Run("valid fence "+name, func(t *testing.T) {
+			withFencedHeadings := strings.Replace(validPromptBody(), "## Common failure patterns\nGrounded guidance.", "## Common failure patterns\n\n"+fenced, 1)
+			if err := validatePromptBody(withFencedHeadings); err != nil {
+				t.Fatalf("headings inside a code fence affected validation: %v", err)
+			}
+		})
 	}
 
 	tests := map[string]string{
@@ -123,10 +136,13 @@ func TestValidatePromptBody(t *testing.T) {
 		"out of order": strings.Replace(validPromptBody(),
 			"## Architecture\nGrounded guidance.\n\n## Diagnostic lifecycle\nGrounded guidance.",
 			"## Diagnostic lifecycle\nGrounded guidance.\n\n## Architecture\nGrounded guidance.", 1),
-		"unexpected section": strings.Replace(validPromptBody(), "## Diagnostic lifecycle", "## Overview\nExtra.\n\n## Diagnostic lifecycle", 1),
-		"top-level title":    "# Project AI prompt addendum\n\n" + validPromptBody(),
-		"second wrapper":     validPromptBody() + "\n\n# Other project AI prompt addendum\nWrapped again.",
-		"unclosed fence":     validPromptBody() + "\n\n```text\nunterminated",
+		"unexpected section":       strings.Replace(validPromptBody(), "## Diagnostic lifecycle", "## Overview\nExtra.\n\n## Diagnostic lifecycle", 1),
+		"top-level title":          "# Project AI prompt addendum\n\n" + validPromptBody(),
+		"second wrapper":           validPromptBody() + "\n\n# Other project AI prompt addendum\nWrapped again.",
+		"unclosed fence":           validPromptBody() + "\n\n```text\nunterminated",
+		"closer with info":         validPromptBody() + "\n\n```text\ncontent\n```oops",
+		"closer indented four":     validPromptBody() + "\n\n```text\ncontent\n    ```",
+		"closer shorter than open": validPromptBody() + "\n\n````text\ncontent\n```",
 	}
 	for name, body := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -134,6 +150,13 @@ func TestValidatePromptBody(t *testing.T) {
 				t.Fatal("expected validation error")
 			}
 		})
+	}
+}
+
+func TestGeneratePromptBody_RejectsInvalidWrappingFence(t *testing.T) {
+	c := &stubCompleter{out: "```markdown\n" + validPromptBody() + "\n```oops"}
+	if _, err := generatePromptBody(context.Background(), c, "P", []sourceDoc{{Path: "README.md", Text: "project docs"}}); err == nil {
+		t.Fatal("expected invalid wrapping fence to be rejected")
 	}
 }
 
