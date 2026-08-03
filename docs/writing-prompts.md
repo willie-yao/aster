@@ -2,8 +2,9 @@
 
 Every consumer of [prow-ai-dashboard][engine] must ship a `prompts/system.md`
 alongside its `project.yaml`. This file is what makes the AI summaries useful
-for your project: it tells the model how your components fit together, what
-common failures look like, and which signals to skip as known flakes.
+for your project. It should be an artifact-backed diagnostic runbook that tells
+the model how to localize a failure, which evidence proves each conclusion, and
+which details remain unknown.
 
 The engine hard-errors at startup if `prompts/system.md` is missing or
 whitespace-only when `-ai` is enabled. There is no "default project prompt";
@@ -32,7 +33,7 @@ chat completions API as:
   `junit_*.xml` entry points, and a generic triage order. It is the same for
   every consumer.
 - **Your `prompts/system.md`** is the variable part. It is appended verbatim
-  with no editorial filtering — what you write is what the model sees.
+  with no editorial filtering. What you write is what the model sees.
 - **`ResponseFormatFooter`** ([responseformat.go][footer]) pins the JSON
   schema the Go code unmarshals (`summary`, `is_transient`, `root_cause`,
   `severity`, `suggested_fix`, `relevant_files`). Do NOT redeclare it in your
@@ -48,49 +49,108 @@ chat completions API as:
 [baseprompt]: ../backend/internal/ai/baseprompt.go
 [footer]: ../backend/internal/ai/responseformat.go
 
-## Recommended sections
+## Required runbook sections
 
-The sections below are what consistently lift summary quality. Pick the ones
-that apply; you do not have to use all of them.
+The onboarding generator requires these sections in this order. Keeping the
+same structure in hand-written prompts makes review and iteration easier.
+
+```markdown
+## Architecture
+## Diagnostic lifecycle
+## Test and job flavors
+## Artifact layout
+## Common failure patterns
+## Transient classification
+## Triage order
+## Relevant source repositories
+## Unresolved details
+```
 
 ### Architecture
-5-15 bullets describing how the system under test fits together: top-level
-controllers, the resource hierarchy, addons, and the canonical request flow on
-a successful run. The model uses this to interpret stack traces and resource
-YAMLs.
 
-### Project-specific artifact layout
-If your project drops debug data under `artifacts/` in a project-specific
-shape (e.g. `artifacts/clusters/{cluster}/machines/{vm}/kubelet.log`), list
-the paths the model should consult. The base prompt already covers the
-universal Prow files; do not repeat them.
+Describe only component, resource, and repository relationships that help
+localize a failure. Avoid marketing language and exhaustive API inventories.
+
+### Diagnostic lifecycle
+
+Describe the relevant provisioning, initialization, reconciliation, test, and
+cleanup sequence. Treat it as a diagnostic sequence, not a guaranteed order.
+Require resource conditions and timestamped logs to prove where progress
+stopped. When a dependency chain matters, state that a downstream symptom does
+not establish the upstream cause.
+
+### Test and job flavors
+
+Document meaningful test families and environment flavors. Require the analyzer
+to identify the actual flavor from the job and artifacts before applying
+flavor-specific guidance. Put unknown flavors under `Unresolved details`.
+
+### Artifact layout
+
+List exact project-specific paths or path patterns only when project evidence
+supports them. State what each artifact can prove. The base prompt already
+covers universal Prow files such as `build-log.txt`; label them as engine-owned
+defaults when they appear here. Require the analyzer to list the available
+artifact tree before declaring that an expected file is absent.
 
 ### Common failure patterns
-5-15 failure modes the model is likely to encounter, grouped by component.
-For each, name the signal that distinguishes it. Concrete log-line excerpts
-are more useful than abstract descriptions.
 
-### Transient errors
-A bullet list of patterns that should set `is_transient=true` rather than
-being flagged as bugs (API throttling, quota exhaustion, image-pull backoff,
-DNS flakes, etc.). The engine's regex-based `IsKnownTransient` covers the
-most universal cases; add anything your project sees often.
+Write operational rules rather than a catalog of possible failures. Each rule
+should identify:
+
+1. The symptom or signal.
+2. The evidence that must be read.
+3. The incorrect causal conclusion to avoid.
+4. The remediation boundary supported by that evidence.
+
+A useful form is: "If X appears, read Y and Z before concluding A. Do not infer
+A from X alone."
+
+### Transient classification
+
+Add a transient rule only when project evidence supports it. Every rule must
+state both the positive run evidence that permits `is_transient=true` and the
+evidence or persistence that makes the failure non-transient. A failure is not
+transient merely because a retry might recover.
+
+Do not broadly classify invalid credentials, persistent quota exhaustion,
+unavailable SKUs, deterministic bootstrap failures, repeated missing images,
+lasting webhook TLS failures, or service startup failures that never recover
+during the run as transient.
 
 ### Triage order
-If the universal triage order in the base prompt isn't enough (e.g. for a
-provider where a specific log file usually has the answer), spell out the
-order. Example: "1. build-log.txt → 2. kubelet.log → 3. cloud-init-output.log
-→ 4. <provider> activity log → 5. Machine resource YAML."
 
-### Repos to reference in `relevant_files`
-The engine's response schema asks the model for a list of file paths to
-investigate. Tell it which GitHub repos are in scope so the paths it returns
-are actionable links rather than guesses.
+Provide an ordered, artifact-first procedure. Start with the failing JUnit
+detail and `build-log.txt`, narrow to resource conditions and relevant component
+logs, then compare with a passing resource or build when possible.
+
+### Relevant source repositories
+
+List only repositories established by project evidence that can produce
+actionable `relevant_files` paths. Prefer GitHub `owner/name` form and do not
+invent repository names.
+
+### Unresolved details
+
+List important artifact paths, flavors, dependency chains, failure boundaries,
+or repositories that the available sources do not establish. Use factual
+maintainer TODOs instead of filling gaps with generic assumptions.
+
+## Analyzer capability boundary
+
+The analyzer can read supplied Prow artifacts through engine tools. Optional
+Kubernetes tools navigate Kubernetes-shaped logs and resource dumps already
+captured in the artifact tree. They do not connect to a live Kubernetes API.
+The analyzer also does not have portal, SSH, arbitrary shell, browser, or local
+CLI access. Do not present an unavailable investigation as evidence already
+collected, and do not substitute retries or manual portal checks for an
+artifact-backed remediation.
 
 ## Worked examples
 
-Two production consumer prompts are available as reference templates.
-Both are around 100-150 lines and follow the section structure above.
+Two production consumer prompts are available as content references. Use them
+to judge diagnostic depth, then map grounded facts into the required section
+structure above.
 
 - **Provider-agnostic example (CAPD, Docker):**
   [CAPI core `prompts/system.md`][capi-prompt] is ~150 lines covering

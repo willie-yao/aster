@@ -284,11 +284,14 @@ var systemPromptTmpl = template.Must(template.New("system.md").Parse(
 	`# {{.Name}} AI prompt addendum
 
 This file is concatenated between the engine's universal Prow base prompt and
-its JSON response schema. Replace the placeholder below with project-specific
-knowledge: the architecture under test, the failure surface, where evidence
-lives in the artifacts, and the known transient/flake classes. The richer this
-is, the deeper the analysis. See an example at
-https://github.com/willie-yao/capz-prow-ai-dashboard/blob/main/prompts/system.md
+its JSON response schema. Replace the TODOs with a grounded diagnostic runbook.
+Use only project documentation, job configuration, source, and observed CI
+artifacts. Leave an item unresolved instead of adding plausible guidance.
+
+The analyzer can read supplied Prow artifacts. If Kubernetes artifact tools are
+enabled, they navigate Kubernetes-shaped logs and resource dumps already in the
+artifact tree. The analyzer does not connect to a live Kubernetes API and does
+not have portal, SSH, arbitrary shell, browser, or local CLI access.
 
 ---
 
@@ -296,18 +299,51 @@ You are debugging {{.Name}} CI test failures.
 
 ## Architecture
 
-<!-- TODO: describe the system under test and how its components relate. -->
+<!-- TODO: describe only component and resource relationships that help localize
+failures. -->
 
-## Where the evidence lives
+## Diagnostic lifecycle
 
-<!-- TODO: name the key artifacts (build-log.txt, per-component logs, resource
-dumps) and what each is good for. -->
+<!-- TODO: describe the relevant provisioning, initialization, reconciliation,
+test, and cleanup sequence. Require conditions and timestamped logs to prove the
+stalled phase. -->
 
-## Known transient / flake classes
+## Test and job flavors
 
-<!-- TODO: list infrastructure flakes that should be classified transient (and
-NOT turned into a "real bug" verdict), e.g. registry pull timeouts, quota
-exhaustion, API server still starting. -->
+<!-- TODO: describe test families and environment flavors established by project
+documentation or job configuration. Require the analyzer to identify the actual
+flavor before applying flavor-specific guidance. -->
+
+## Artifact layout
+
+<!-- TODO: list exact project-specific artifact paths only when documented, and
+state what each artifact proves. Label universal Prow files as defaults. -->
+
+## Common failure patterns
+
+<!-- TODO: for each supported pattern, name the signal, required evidence, causal
+conclusion to avoid, and remediation boundary. -->
+
+## Transient classification
+
+<!-- TODO: add only project-supported transient rules. Each rule must state the
+positive run evidence that permits the classification and the evidence or
+persistence that makes the failure non-transient. Do not add generic classes. -->
+
+## Triage order
+
+<!-- TODO: provide an artifact-first sequence from failing JUnit detail and
+build-log.txt to resource conditions, component logs, and a passing comparison. -->
+
+## Relevant source repositories
+
+<!-- TODO: list only grounded GitHub owner/name repositories that can produce
+actionable relevant_files paths. -->
+
+## Unresolved details
+
+<!-- TODO: list important artifact paths, flavors, dependency chains, failure
+boundaries, or repositories that the available sources do not establish. -->
 `))
 
 var checklistTmpl = template.Must(template.New("CHECKLIST.md").Parse(

@@ -81,6 +81,11 @@ func buildSystemPrompt(ctx context.Context, opts Options, data scaffoldData, out
 		prompt, renderErr := render(systemPromptTmpl, data)
 		return prompt, false, renderErr
 	}
+	if !hasMeaningfulSourceDocs(docs) {
+		fmt.Fprintln(out, "[info] no meaningful source documentation was found; writing the stub instead")
+		prompt, renderErr := render(systemPromptTmpl, data)
+		return prompt, false, renderErr
+	}
 
 	client := ai.NewClientWithOptions(ai.Options{
 		Token:    opts.AIToken,

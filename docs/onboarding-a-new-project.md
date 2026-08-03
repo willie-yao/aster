@@ -224,6 +224,25 @@ The same endpoint and model may be used for both deployed analysis and prompt
 drafting, but the wizard asks before sending documentation to the provider.
 Always review an AI-generated prompt before deployment.
 
+The generated draft is an operational diagnostic runbook, not a repository
+summary. It uses a fixed section order covering architecture, lifecycle, job
+flavors, artifact layout, failure patterns, transient boundaries, triage,
+source repositories, and unresolved details. Project-specific claims and exact
+artifact paths must come from the bounded documentation supplied to the model.
+If the documentation does not establish an important detail, the draft records
+it as unresolved instead of inventing generic guidance.
+
+Transient rules require both positive evidence that permits the classification
+and a boundary that makes the failure non-transient. The generator does not add
+common transient classes when the documentation is silent. It also tells the
+model that the analyzer has Prow artifact tools. Optional Kubernetes tools
+navigate Kubernetes-shaped logs and resource dumps already captured in the
+artifact tree. They do not connect to a live Kubernetes API. The analyzer also
+does not have portal, SSH, arbitrary shell, browser, or local CLI access.
+
+When the source repository yields no meaningful documentation, onboarding skips
+the model request and writes the same reviewable stub used by `-no-prompt`.
+
 Supported environment variables remain:
 
 ```text
