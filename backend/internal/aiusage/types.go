@@ -162,3 +162,9 @@ func validOutcome(value Outcome) bool {
 		return false
 	}
 }
+
+// ParseFeature validates one API feature filter.
+func ParseFeature(value string) (Feature, bool) {
+	feature := Feature(value)
+	return feature, validFeature(feature) && feature != FeatureUnknown
+}

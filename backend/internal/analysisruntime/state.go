@@ -18,6 +18,7 @@ import (
 	"sync"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
 )
@@ -284,11 +285,12 @@ type ContainerStateStore struct {
 	dataDir string
 	cache   *ai.Cache
 	traces  *ai.TraceStore
+	usage   *aiusage.Recorder
 	staged  map[string]ai.CacheEntry
 }
 
 // NewContainerStateStore loads shared cache and trace state.
-func NewContainerStateStore(dataDir string) (*ContainerStateStore, error) {
+func NewContainerStateStore(dataDir string, usage ...*aiusage.Recorder) (*ContainerStateStore, error) {
 	if strings.TrimSpace(dataDir) == "" {
 		return nil, fmt.Errorf("container state data directory is required")
 	}
@@ -296,7 +298,11 @@ func NewContainerStateStore(dataDir string) (*ContainerStateStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &ContainerStateStore{dataDir: dataDir, cache: ai.NewCache(dataDir), traces: traces, staged: map[string]ai.CacheEntry{}}, nil
+	store := &ContainerStateStore{dataDir: dataDir, cache: ai.NewCache(dataDir), traces: traces, staged: map[string]ai.CacheEntry{}}
+	if len(usage) > 0 {
+		store.usage = usage[0]
+	}
+	return store, nil
 }
 
 // CacheSeed returns the one cache entry relevant to a request.
@@ -415,6 +421,7 @@ func (s *ContainerStateStore) MergeTraces(state ContainerAnalysisState) error {
 	for _, trace := range state.Traces {
 		s.traces.Upsert(trace)
 	}
+	s.recordUsageLocked(state)
 	return nil
 }
 
@@ -453,7 +460,53 @@ func (s *ContainerStateStore) Merge(state ContainerAnalysisState) error {
 	for _, trace := range state.Traces {
 		s.traces.Upsert(trace)
 	}
+	s.recordUsageLocked(state)
 	return nil
+}
+
+func (s *ContainerStateStore) recordUsageLocked(state ContainerAnalysisState) {
+	if s.usage == nil {
+		return
+	}
+	for _, trace := range state.Traces {
+		completedAt := trace.RecordedAt
+		if completedAt == "" {
+			completedAt = trace.StartedAt
+		}
+		operation := aiusage.OperationUsage{
+			ID:        state.TaskNamespace + "\x00" + state.TaskName + "\x00" + trace.StartedAt,
+			LogicalID: state.CacheKey, Origin: aiusage.OriginAnalyzer, Feature: aiusage.FeatureFailureAnalysis,
+			StartedAt: trace.StartedAt, CompletedAt: completedAt,
+			Outcome:     aiusage.OutcomeSuccess,
+			Correlation: aiusage.Correlation{JobID: trace.JobID, BuildID: trace.BuildID, TestName: trace.TestName},
+		}
+		switch trace.Outcome {
+		case "ai_cache_hit", "build_cache_hit":
+			operation.Outcome = aiusage.OutcomeCacheHit
+		case "unavailable":
+			operation.Outcome = aiusage.OutcomeUnavailable
+		case "cancelled":
+			operation.Outcome = aiusage.OutcomeCancelled
+		case "error", "failed", "rejected":
+			operation.Outcome = aiusage.OutcomeError
+		}
+		for _, event := range trace.Events {
+			if event.Kind != "model_request" {
+				continue
+			}
+			operation.ModelRequests++
+			if event.UsageReported {
+				operation.ReportedRequests++
+				operation.InputTokens += int64(max(event.InputTokens, 0))
+				operation.CachedInputTokens += int64(max(event.CachedInputTokens, 0))
+				operation.OutputTokens += int64(max(event.OutputTokens, 0))
+				operation.ReasoningTokens += int64(max(event.ReasoningTokens, 0))
+			} else {
+				operation.UnreportedRequests++
+			}
+		}
+		s.usage.Record(operation)
+	}
 }
 
 func containerStateAssociatedData(identity ContainerStateIdentity) []byte {

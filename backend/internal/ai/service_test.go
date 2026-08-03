@@ -10,6 +10,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/filesystem"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
@@ -106,6 +107,11 @@ func TestService_SkipWhenAlreadyAnalyzedSameMode(t *testing.T) {
 	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}, &fakeFactory{}, registry, enabled)
 	traces := NewTraceStore()
 	s.SetTraceStore(traces)
+	usage, err := aiusage.NewRecorder("", aiusage.RecorderOptions{RetentionDays: 30, RecentOperations: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetUsageRecorder(usage, aiusage.OriginFetcher)
 
 	tc := newFailedTC("Test A", "msg")
 	tc.AISummary = &models.AISummary{GeneratedAt: time.Now().UTC().Format(time.RFC3339), Summary: "cached"}
@@ -122,6 +128,10 @@ func TestService_SkipWhenAlreadyAnalyzedSameMode(t *testing.T) {
 	got := traces.Snapshot()
 	if len(got.Traces) != 1 || got.Traces[0].Outcome != "build_cache_hit" || len(got.Traces[0].Events) != 1 || got.Traces[0].Events[0].Outcome != "build_hit" {
 		t.Fatalf("trace = %+v", got)
+	}
+	usageSnapshot := usage.Snapshot()
+	if len(usageSnapshot.Days) != 1 || usageSnapshot.Days[0].Totals.CacheHits != 1 || usageSnapshot.RecentOperations[0].Feature != aiusage.FeatureFailureAnalysis {
+		t.Fatalf("usage = %+v", usageSnapshot)
 	}
 }
 

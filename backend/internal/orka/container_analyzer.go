@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisruntime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fetchprogress"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
@@ -58,6 +59,7 @@ type ContainerAnalyzerOptions struct {
 	Affinity            map[string]any
 	Labels              map[string]string
 	Progress            *fetchprogress.Tracker
+	UsageRecorder       *aiusage.Recorder
 	KubeContext         string
 	OrkaAPI             string
 	OrkaAPIToken        string
@@ -96,7 +98,7 @@ func NewContainerAnalyzer(opts ContainerAnalyzerOptions) (*ContainerAnalyzer, er
 		return nil, fmt.Errorf("container analysis kube client: %w", err)
 	}
 	kube.Manager = containerAnalyzerFieldManager
-	state, err := analysisruntime.NewContainerStateStore(opts.DataDir)
+	state, err := analysisruntime.NewContainerStateStore(opts.DataDir, opts.UsageRecorder)
 	if err != nil {
 		return nil, fmt.Errorf("container analysis state: %w", err)
 	}

@@ -92,6 +92,8 @@ type Options struct {
 	// HSTSEnabled adds a one-year Strict-Transport-Security policy. Local HTTP
 	// development leaves it disabled.
 	HSTSEnabled bool
+	// AIUsageEnabled exposes private usage data when authentication is configured.
+	AIUsageEnabled bool
 }
 
 // Capabilities tells the frontend which deploy mode it is talking to and which
@@ -127,6 +129,8 @@ type Features struct {
 	AnalysisTraces bool `json:"analysis_traces,omitempty"`
 	// FetchStatus enables the private aggregate fetch progress API and banner.
 	FetchStatus bool `json:"fetch_status,omitempty"`
+	// AIUsage enables the private token and cost API.
+	AIUsage bool `json:"ai_usage,omitempty"`
 	// AnalysisChat enables authenticated conversations about one published analysis.
 	AnalysisChat        bool `json:"analysis_chat,omitempty"`
 	AnalysisCorrections bool `json:"analysis_corrections,omitempty"`
@@ -185,6 +189,11 @@ func Handler(opts Options) (http.Handler, error) {
 			auth.Middleware(opts.Auth, analysisTracesHandler(opts.DataDir, false)))
 		mux.Handle("GET /api/analysis-traces/download",
 			auth.Middleware(opts.Auth, analysisTracesHandler(opts.DataDir, true)))
+		if opts.AIUsageEnabled {
+			caps.Features.AIUsage = true
+			mux.Handle("GET /api/ai-usage", auth.Middleware(opts.Auth, aiUsageHandler(opts.DataDir, false, time.Now)))
+			mux.Handle("GET /api/ai-usage/download", auth.Middleware(opts.Auth, aiUsageHandler(opts.DataDir, true, time.Now)))
+		}
 		mux.Handle("/api/fetch-status",
 			readOnly(auth.Middleware(opts.Auth, fetchStatusHandler(opts.DataDir))))
 	}

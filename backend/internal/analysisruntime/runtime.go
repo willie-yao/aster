@@ -16,6 +16,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/filesystem"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/k8s"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/repotree"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysischat"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
@@ -117,9 +118,11 @@ func LoadProject(projectDir string, cfg *project.Config, fallbacks ProviderFallb
 
 // Options configure reusable model and Tool runtime state.
 type Options struct {
-	Token   string
-	DataDir string
-	Project *Project
+	Token         string
+	DataDir       string
+	Project       *Project
+	UsageRecorder *aiusage.Recorder
+	UsageOrigin   aiusage.Origin
 }
 
 // Runtime holds reusable model, cache, budget, and Tool registry state.
@@ -132,6 +135,8 @@ type Runtime struct {
 	ContextWindowTokens int
 	RequestTokenBudget  int
 	Project             *Project
+	UsageRecorder       *aiusage.Recorder
+	UsageOrigin         aiusage.Origin
 }
 
 // New creates the reusable dashboard analysis runtime.
@@ -183,6 +188,8 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 		ContextWindowTokens: budgets.ContextWindowTokens,
 		RequestTokenBudget:  budgets.RequestTokenBudget,
 		Project:             opts.Project,
+		UsageRecorder:       opts.UsageRecorder,
+		UsageOrigin:         opts.UsageOrigin,
 	}, nil
 }
 
@@ -287,6 +294,9 @@ func (r *Runtime) NewService(opts ServiceOptions) (*ai.Service, error) {
 	service.SetCacheGeneration(r.Project.CacheGenerationFingerprint)
 	if opts.TraceStore != nil {
 		service.SetTraceStore(opts.TraceStore)
+	}
+	if r.UsageRecorder != nil {
+		service.SetUsageRecorder(r.UsageRecorder, r.UsageOrigin)
 	}
 	sourceRepo := r.Project.AnalysisSource
 	if sourceRepo.Owner == "" || sourceRepo.Name == "" {

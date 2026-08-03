@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prowbuild"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
@@ -243,6 +244,7 @@ type Options struct {
 	PollInterval                 time.Duration
 	MaxActiveTurnsPerOwner       int
 	MaxRequestsPerOwnerPerMinute int
+	UsageRecorder                *aiusage.Recorder
 	Now                          func() time.Time
 }
 

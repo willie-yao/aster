@@ -192,7 +192,7 @@ func TestProcessFixPRsReportsPersistedReference(t *testing.T) {
 		ID: "pattern", JobID: "job", Subject: "job", Systemic: true, Confidence: "high",
 		SharedRootCause: "configuration is stale", SuggestedFix: "update config/fix.yaml", Summary: "recurring",
 	}
-	changed, err := processFixPRs(context.Background(), cfg, []models.PatternAnalysis{pattern}, "", dataDir)
+	changed, err := processFixPRs(context.Background(), cfg, []models.PatternAnalysis{pattern}, "", dataDir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +213,7 @@ func TestProcessFixPRsRejectsInvalidAIAPI(t *testing.T) {
 	t.Setenv("FIX_TOKEN", "test-token")
 	t.Setenv("AI_API", "invalid")
 	pattern := models.PatternAnalysis{ID: "pattern", Systemic: true, Confidence: "high"}
-	changed, err := processFixPRs(context.Background(), cfg, []models.PatternAnalysis{pattern}, "", t.TempDir())
+	changed, err := processFixPRs(context.Background(), cfg, []models.PatternAnalysis{pattern}, "", t.TempDir(), nil)
 	if err == nil || !strings.Contains(err.Error(), `AI API "invalid" is invalid`) {
 		t.Fatalf("err = %v, want invalid AI API error", err)
 	}

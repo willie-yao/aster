@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
 )
 
 func newPatternTestService(t *testing.T, serverURL string) *Service {
@@ -85,6 +87,11 @@ func TestAnalyzePattern_CacheHit_NoSecondCall(t *testing.T) {
 	srv := newScriptedChatServer(t)
 	srv.push(200, chatRespFinal(`{"systemic":false,"confidence":"low","shared_root_cause":"","shared_builds":[],"suggested_fix":"","summary":"independent flakes"}`))
 	s := newPatternTestService(t, srv.URL)
+	usage, err := aiusage.NewRecorder("", aiusage.RecorderOptions{RetentionDays: 30, RecentOperations: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetUsageRecorder(usage, aiusage.OriginFetcher)
 
 	in := patternFailures(3)
 	if _, err := s.AnalyzePattern(context.Background(), "job", "job", in); err != nil {
@@ -107,6 +114,10 @@ func TestAnalyzePattern_CacheHit_NoSecondCall(t *testing.T) {
 	}
 	if cacheHits != 1 {
 		t.Errorf("cache hits = %d, want 1", cacheHits)
+	}
+	snapshot := usage.Snapshot()
+	if len(snapshot.RecentOperations) != 2 || snapshot.Days[0].Totals.CacheHits != 1 {
+		t.Fatalf("usage = %+v", snapshot)
 	}
 }
 

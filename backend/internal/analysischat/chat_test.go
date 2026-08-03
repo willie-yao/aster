@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
 )
@@ -1843,5 +1844,36 @@ func TestServiceCreateBuildAnalysisWithoutJUnitFile(t *testing.T) {
 		AnalysisGeneratedAt: "2026-07-30T13:00:00Z",
 	}, "alice", testRequestID(t)); !errors.Is(err, ErrAnalysisChanged) {
 		t.Fatalf("changed build analysis error = %v", err)
+	}
+}
+
+type usageTestRunner struct{}
+
+func (usageTestRunner) Reply(ctx context.Context, _ Turn) (Reply, error) {
+	aiusage.ObserveModelRequest(ctx, aiusage.TokenUsage{Reported: true, InputTokens: 8, OutputTokens: 2})
+	return Reply{Answer: "answer", Assessment: "explains"}, nil
+}
+
+func TestServiceRecordsTurnUsage(t *testing.T) {
+	dir := t.TempDir()
+	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
+	usage, err := aiusage.NewRecorder("", aiusage.RecorderOptions{RetentionDays: 30, RecentOperations: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewService(t.Context(), dir, usageTestRunner{}, Options{UsageRecorder: usage, PollInterval: 5 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := service.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", "create-usage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Send(t.Context(), created.ID, "alice", "turn-usage", "question"); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := usage.Snapshot()
+	if len(snapshot.Days) != 1 || snapshot.Days[0].Totals.InputTokens != 8 || snapshot.RecentOperations[0].Feature != aiusage.FeatureAnalysisChat {
+		t.Fatalf("usage = %+v", snapshot)
 	}
 }

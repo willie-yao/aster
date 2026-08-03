@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
 )
 
 const (
@@ -230,8 +232,19 @@ func (s *Service) runTurn(id, owner, requestID, leaseID string, turn Turn) {
 
 	turn.Progress = func(phase string) { _ = s.updateProgress(id, owner, requestID, leaseID, phase) }
 	turn.ReportProgress(PhaseInvestigating)
+	runCtx, usageOperation := aiusage.Begin(runCtx, s.opts.UsageRecorder, aiusage.Metadata{
+		LogicalID: requestID, Origin: aiusage.OriginServer, Feature: aiusage.FeatureAnalysisChat,
+		Correlation: aiusage.Correlation{JobID: turn.JobID, BuildID: turn.Build.BuildID, TestName: turn.TestCase.Name},
+	})
 	go s.watchCancellation(runCtx, id, owner, requestID, leaseID, cancel)
 	reply, runErr := s.runner.Reply(runCtx, turn)
+	usageOutcome := aiusage.OutcomeSuccess
+	if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) {
+		usageOutcome = aiusage.OutcomeCancelled
+	} else if runErr != nil {
+		usageOutcome = aiusage.OutcomeError
+	}
+	usageOperation.Finish(usageOutcome)
 	if err := s.finishTurn(id, owner, requestID, leaseID, turn.Question, reply, runErr); err != nil &&
 		!errors.Is(err, ErrRequestOutcomeUnknown) && !errors.Is(err, ErrSessionNotFound) {
 		log.Printf("analysis chat turn %s finalize: %v", requestID, err)

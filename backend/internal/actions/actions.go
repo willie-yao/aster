@@ -26,6 +26,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actionverify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixruntime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/issues"
@@ -77,12 +78,13 @@ const sourceVerificationVersion = 1
 
 // AIConfig is the resolved chat-completions configuration used to draft fixes.
 type AIConfig struct {
-	Token       string
-	API         string
-	Endpoint    string
-	Model       string
-	Headers     map[string]string
-	SourceToken string
+	Token         string
+	API           string
+	Endpoint      string
+	Model         string
+	Headers       map[string]string
+	SourceToken   string
+	UsageRecorder *aiusage.Recorder
 }
 
 // FixTarget identifies the published build selected by analysis chat.
@@ -598,8 +600,26 @@ func (s *Service) buildFixManager(ctx context.Context, userToken string) (*fixpr
 	return mgr, nil
 }
 
+func actionUsageOutcome(err error) aiusage.Outcome {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return aiusage.OutcomeCancelled
+	}
+	if err != nil {
+		return aiusage.OutcomeError
+	}
+	return aiusage.OutcomeSuccess
+}
+
 // generateIssuePreview renders an issue draft without caching or posting it.
-func (s *Service) generateIssuePreview(ctx context.Context, failureID, userToken, instruction string, baseIssue *issues.IssueSpec, baseTargetRepo, basePatternHash string) (PreviewResult, *previewEntry, error) {
+func (s *Service) generateIssuePreview(ctx context.Context, failureID, userToken, instruction string, baseIssue *issues.IssueSpec, baseTargetRepo, basePatternHash string) (_ PreviewResult, _ *previewEntry, resultErr error) {
+	logicalID := actionRequestID(ctx)
+	if logicalID == "" {
+		logicalID = failureID
+	}
+	ctx, usageOperation := aiusage.Begin(ctx, s.ai.UsageRecorder, aiusage.Metadata{
+		LogicalID: logicalID, Origin: aiusage.OriginServer, Feature: aiusage.FeatureIssueDraft,
+	})
+	defer func() { usageOperation.Finish(actionUsageOutcome(resultErr)) }()
 	subject, err := s.resolveSubject(failureID)
 	if err != nil {
 		return PreviewResult{}, nil, err
@@ -677,7 +697,15 @@ func (s *Service) PreviewIssue(ctx context.Context, failureID, userToken, instru
 }
 
 // generateFixPreview creates a fix draft without caching or opening it.
-func (s *Service) generateFixPreview(ctx context.Context, failureID, userToken, instruction string) (PreviewResult, *previewEntry, error) {
+func (s *Service) generateFixPreview(ctx context.Context, failureID, userToken, instruction string) (_ PreviewResult, _ *previewEntry, resultErr error) {
+	logicalID := actionRequestID(ctx)
+	if logicalID == "" {
+		logicalID = failureID
+	}
+	ctx, usageOperation := aiusage.Begin(ctx, s.ai.UsageRecorder, aiusage.Metadata{
+		LogicalID: logicalID, Origin: aiusage.OriginServer, Feature: aiusage.FeatureFixPreview,
+	})
+	defer func() { usageOperation.Finish(actionUsageOutcome(resultErr)) }()
 	subject, err := s.resolveSubject(failureID)
 	if err != nil {
 		return PreviewResult{}, nil, err
@@ -800,7 +828,15 @@ func (s *Service) PreviewFix(ctx context.Context, failureID, userToken, instruct
 // PreviewFixWithContext generates a fix from one validated selected chat response.
 func (s *Service) PreviewFixWithContext(
 	ctx context.Context, pattern models.PatternAnalysis, userToken, instruction string, target FixTarget, generationContext fixpr.GenerationContext,
-) (PreviewResult, error) {
+) (_ PreviewResult, resultErr error) {
+	logicalID := actionRequestID(ctx)
+	if logicalID == "" {
+		logicalID = pattern.ID
+	}
+	ctx, usageOperation := aiusage.Begin(ctx, s.ai.UsageRecorder, aiusage.Metadata{
+		LogicalID: logicalID, Origin: aiusage.OriginServer, Feature: aiusage.FeatureFixPreview,
+	})
+	defer func() { usageOperation.Finish(actionUsageOutcome(resultErr)) }()
 	if strings.TrimSpace(target.JobID) == "" || strings.TrimSpace(target.BuildID) == "" ||
 		pattern.JobID != target.JobID || !slices.Contains(pattern.SharedBuilds, target.BuildID) {
 		return PreviewResult{}, ErrPatternMismatch

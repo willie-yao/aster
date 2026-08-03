@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
@@ -347,6 +348,7 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 // an optional maintainer directive that steers the edit; empty for the batch
 // path.
 func (m *Manager) generate(ctx context.Context, p models.PatternAnalysis, ref, instruction string, generationContext *GenerationContext) (*proposedFix, error) {
+	aiusage.MarkExternalUnmetered(ctx)
 	return generateWithAgent(ctx, genParams{
 		critique:        m.opts.Critique,
 		owner:           m.opts.SourceOwner,

@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisruntime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fetchprogress"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
@@ -619,6 +620,7 @@ func (p *pipeline) ensureAnalysisRuntime(ctx context.Context) (*analysisruntime.
 	}
 	runtime, err := analysisruntime.New(ctx, analysisruntime.Options{
 		Token: p.aiToken, DataDir: p.opts.OutDir, Project: p.aiProject,
+		UsageRecorder: p.usageRecorder, UsageOrigin: aiusage.OriginFetcher,
 	})
 	if err != nil {
 		return nil, err
@@ -664,6 +666,7 @@ func (p *pipeline) ensureContainerAnalyzer() (containerFailureAnalyzer, error) {
 		Tolerations:         cfg.Tolerations,
 		Affinity:            cfg.Affinity,
 		Progress:            p.progress,
+		UsageRecorder:       p.usageRecorder,
 	})
 	if err != nil {
 		return nil, err

@@ -17,6 +17,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/repotree"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/textutil"
 )
@@ -305,6 +306,20 @@ func (s *Service) AnalyzePatternWithOptions(ctx context.Context, jobID, subject 
 		return nil, nil
 	}
 	failures = input.Failures
+	usageOutcome := aiusage.OutcomeSuccess
+	ctx, usageOperation := aiusage.Begin(ctx, s.usageRecorder, aiusage.Metadata{
+		LogicalID: jobID + "\x00" + subject, Origin: s.usageOrigin,
+		Feature: aiusage.FeaturePatternAnalysis, ModelFingerprint: s.client.modelFingerprint(),
+		Correlation: aiusage.Correlation{JobID: jobID, TestName: subject},
+	})
+	defer func() {
+		if errors.Is(resultErr, context.Canceled) || errors.Is(resultErr, context.DeadlineExceeded) {
+			usageOutcome = aiusage.OutcomeCancelled
+		} else if resultErr != nil {
+			usageOutcome = aiusage.OutcomeError
+		}
+		usageOperation.Finish(usageOutcome)
+	}()
 	userPrompt := input.UserPrompt
 	grounded := s.patternRepo != nil
 	groundKey := "toolfree"
@@ -332,6 +347,7 @@ func (s *Service) AnalyzePatternWithOptions(ctx context.Context, jobID, subject 
 				if options.OnCacheHit != nil {
 					options.OnCacheHit()
 				}
+				usageOutcome = aiusage.OutcomeCacheHit
 				return buildPatternAnalysis(subject, len(failures), cachedData.Response, collectRelevantFiles(failures), cachedData.FileLinks, cachedData.SourceRef), nil
 			}
 		}
@@ -339,6 +355,7 @@ func (s *Service) AnalyzePatternWithOptions(ctx context.Context, jobID, subject 
 			if options.OnCacheHit != nil {
 				options.OnCacheHit()
 			}
+			usageOutcome = aiusage.OutcomeCacheHit
 			recordPatternParseTrace(ctx, "cache", stats, nil)
 			return buildPatternAnalysis(subject, len(failures), cached, collectRelevantFiles(failures), nil, ""), nil
 		}

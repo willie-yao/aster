@@ -23,6 +23,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aggregator"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisruntime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fetchprogress"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
@@ -119,6 +120,7 @@ type pipeline struct {
 	includePresubmits    bool
 	jobCatalog           *jobconfig.Catalog
 	aiRuntime            *analysisruntime.Runtime
+	usageRecorder        *aiusage.Recorder
 	containerAnalyzer    containerFailureAnalyzer
 	progress             *fetchprogress.Tracker
 	aiRefreshTransaction *aiRefreshStateTransaction
@@ -246,6 +248,10 @@ func setupPipeline(opts Options) (*pipeline, error) {
 	if err != nil {
 		return nil, fmt.Errorf("configuring storage: %w", err)
 	}
+	usageRecorder, err := analysisruntime.NewUsageRecorder(opts.OutDir, output.AIUsageFetcherFilename, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("configuring AI usage accounting: %w", err)
+	}
 
 	return &pipeline{
 		opts:              opts,
@@ -255,6 +261,7 @@ func setupPipeline(opts Options) (*pipeline, error) {
 		enableAI:          enableAI,
 		aiToken:           aiToken,
 		aiProject:         aiProject,
+		usageRecorder:     usageRecorder,
 		includePresubmits: opts.IncludePresubmits || cfg.Source.IncludePresubmits,
 	}, nil
 }
@@ -823,7 +830,7 @@ func (p *pipeline) runSideEffects(ctx context.Context, res *refreshResult) error
 				log.Printf("Fix PRs: %d pattern(s) already have remediation history; skipping duplicate proposals", skipped)
 			}
 			var fixErr error
-			fixStateChanged, fixErr = processFixPRs(ctx, cfg, fixPatterns, p.aiToken, opts.OutDir)
+			fixStateChanged, fixErr = processFixPRs(ctx, cfg, fixPatterns, p.aiToken, opts.OutDir, p.usageRecorder)
 			if fixErr != nil {
 				sideEffectErrs = append(sideEffectErrs, fixErr)
 			}
@@ -835,15 +842,25 @@ func (p *pipeline) runSideEffects(ctx context.Context, res *refreshResult) error
 			sideEffectErrs = append(sideEffectErrs, err)
 		}
 	}
-	if err := processIssues(ctx, cfg, flakinessReport, details, p.aiToken, p.enableAI, opts.OutDir); err != nil {
+	if err := processIssues(ctx, cfg, flakinessReport, details, p.aiToken, p.enableAI, opts.OutDir, p.usageRecorder); err != nil {
 		sideEffectErrs = append(sideEffectErrs, err)
 	}
 	return errors.Join(sideEffectErrs...)
 }
 
+func fetcherUsageOutcome(err error) aiusage.Outcome {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return aiusage.OutcomeCancelled
+	}
+	if err != nil {
+		return aiusage.OutcomeError
+	}
+	return aiusage.OutcomeSuccess
+}
+
 // processIssues reconciles the project's highest-signal findings into GitHub
 // issues on the configured target repo. Gated on issues.enabled and ISSUE_TOKEN.
-func processIssues(ctx context.Context, cfg *project.Config, report models.FlakinessReport, details []models.JobDetail, aiToken string, enableAI bool, outDir string) error {
+func processIssues(ctx context.Context, cfg *project.Config, report models.FlakinessReport, details []models.JobDetail, aiToken string, enableAI bool, outDir string, usageRecorder *aiusage.Recorder) error {
 	if cfg.Issues == nil || !cfg.Issues.Enabled {
 		return nil
 	}
@@ -906,7 +923,11 @@ func processIssues(ctx context.Context, cfg *project.Config, report models.Flaki
 		RetireKeys:        retire,
 		TemplateFiller:    filler,
 	})
+	ctx, usageOperation := aiusage.Begin(ctx, usageRecorder, aiusage.Metadata{
+		LogicalID: "scheduled-issues", Origin: aiusage.OriginFetcher, Feature: aiusage.FeatureIssueDraft,
+	})
 	stats, err := mgr.Reconcile(ctx, specs)
+	usageOperation.Finish(fetcherUsageOutcome(err))
 	if err != nil {
 		log.Printf("Warning: issue processing failed: %v", err)
 	} else {
@@ -929,7 +950,7 @@ var newBatchFixManager = func(token, stateFile string, opts fixpr.Options) *fixp
 // recurring patterns. Gated on ai.fix_prs.enabled and FIX_TOKEN (a CLA-signed
 // operator PAT). In dry-run it writes previews instead of opening PRs. Any
 // missing piece is a no-op.
-func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.PatternAnalysis, aiToken, outDir string) (bool, error) {
+func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.PatternAnalysis, aiToken, outDir string, usageRecorder *aiusage.Recorder) (bool, error) {
 	if cfg.AI == nil || cfg.AI.FixPRs == nil || !cfg.AI.FixPRs.Enabled {
 		return false, nil
 	}
@@ -1022,7 +1043,11 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 		GitToken:            fixToken,
 	}
 	mgr := newBatchFixManager(fixToken, filepath.Join(outDir, "fix_pr_state.json"), fixOpts)
+	ctx, usageOperation := aiusage.Begin(ctx, usageRecorder, aiusage.Metadata{
+		LogicalID: "scheduled-fix-prs", Origin: aiusage.OriginFetcher, Feature: aiusage.FeatureFixPreview,
+	})
 	stats, err := mgr.Reconcile(ctx, patterns)
+	usageOperation.Finish(fetcherUsageOutcome(err))
 	if err != nil {
 		log.Printf("Warning: fix-PR processing failed: %v", err)
 	} else if stats.Proposed+stats.Adopted+stats.Previewed > 0 {

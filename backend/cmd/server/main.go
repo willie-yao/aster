@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actions"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysischat"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisruntime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/auth"
@@ -34,6 +35,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/corrections"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/notify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/server"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
@@ -137,17 +139,22 @@ func enableInteractiveFeatures(ctx context.Context, opts *server.Options, projec
 	if err := configureAuthenticator(opts, features.Actions); err != nil {
 		return err
 	}
+	usageRecorder, err := analysisruntime.NewUsageRecorder(dataDir, output.AIUsageServerFilename, cfg)
+	if err != nil {
+		return fmt.Errorf("configuring AI usage accounting: %w", err)
+	}
+	opts.AIUsageEnabled = usageRecorder != nil
 	opts.TrustedOrigins = trustedOrigins(os.Getenv("OAUTH_REDIRECT_URL"), os.Getenv("TRUSTED_ORIGINS"))
 	var actionService *actions.Service
 	if features.Actions {
-		actionService, err = enableActions(ctx, opts, cfg, dataDir)
+		actionService, err = enableActions(ctx, opts, cfg, dataDir, usageRecorder)
 		if err != nil {
 			return err
 		}
 	}
 	var chatService *analysischat.Service
 	if features.AnalysisChat {
-		chatService, err = enableAnalysisChat(ctx, opts, cfg, projectDir, dataDir)
+		chatService, err = enableAnalysisChat(ctx, opts, cfg, projectDir, dataDir, usageRecorder)
 		if err != nil {
 			return err
 		}
@@ -290,7 +297,7 @@ func configureAuthenticator(opts *server.Options, actionsEnabled bool) error {
 	return nil
 }
 
-func enableActions(ctx context.Context, opts *server.Options, cfg *project.Config, dataDir string) (*actions.Service, error) {
+func enableActions(ctx context.Context, opts *server.Options, cfg *project.Config, dataDir string, usageRecorder *aiusage.Recorder) (*actions.Service, error) {
 	provider := cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"))
 	if err := project.ValidateAIAPI(provider.API); err != nil {
 		return nil, err
@@ -298,6 +305,7 @@ func enableActions(ctx context.Context, opts *server.Options, cfg *project.Confi
 	actionService := actions.NewService(cfg, dataDir, actions.AIConfig{
 		Token: os.Getenv("AI_TOKEN"), API: provider.API, Endpoint: provider.Endpoint,
 		Model: provider.Model, Headers: provider.Headers, SourceToken: os.Getenv("SOURCE_INVESTIGATION_GITHUB_TOKEN"),
+		UsageRecorder: usageRecorder,
 	})
 	opts.Actions = actionService
 	if value := os.Getenv("ACTION_TIMEOUT"); value != "" {
@@ -315,7 +323,7 @@ func enableActions(ctx context.Context, opts *server.Options, cfg *project.Confi
 	return actionService, nil
 }
 
-func enableAnalysisChat(ctx context.Context, opts *server.Options, cfg *project.Config, projectDir, dataDir string) (*analysischat.Service, error) {
+func enableAnalysisChat(ctx context.Context, opts *server.Options, cfg *project.Config, projectDir, dataDir string, usageRecorder *aiusage.Recorder) (*analysischat.Service, error) {
 	timeout, err := analysisChatTimeoutFromEnv()
 	if err != nil {
 		return nil, err
@@ -324,6 +332,7 @@ func enableAnalysisChat(ctx context.Context, opts *server.Options, cfg *project.
 	if err != nil {
 		return nil, err
 	}
+	serviceOpts.UsageRecorder = usageRecorder
 	token := os.Getenv("AI_TOKEN")
 	if token == "" {
 		return nil, fmt.Errorf("analysis chat requires AI_TOKEN")

@@ -147,6 +147,9 @@ func (a *ContainerAnalyzer) reuseContainerResultCandidate(
 	if err := a.state.StageCacheEntry(entry); err != nil {
 		return ai.FailureAnalysisResult{}, false, fmt.Errorf("stage reusable container analysis cache: %w", err)
 	}
+	if err := a.state.MergeTraces(delta); err != nil {
+		return ai.FailureAnalysisResult{}, false, fmt.Errorf("merge reusable container analysis traces: %w", err)
+	}
 	return result, true, nil
 }
 

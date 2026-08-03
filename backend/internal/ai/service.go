@@ -16,6 +16,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/evidenceplan"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/redact"
@@ -78,6 +79,9 @@ type Service struct {
 
 	// traceStore collects private, sanitized per-analysis control flow.
 	traceStore *TraceStore
+
+	usageRecorder *aiusage.Recorder
+	usageOrigin   aiusage.Origin
 
 	// draftObserver is an optional in-memory hook used only by the quality
 	// benchmark to compare parseable drafts from the same investigation.
@@ -148,6 +152,12 @@ func (s *Service) SetTraceStore(store *TraceStore) {
 	s.traceStore = store
 }
 
+// SetUsageRecorder enables private usage accounting for this service.
+func (s *Service) SetUsageRecorder(recorder *aiusage.Recorder, origin aiusage.Origin) {
+	s.usageRecorder = recorder
+	s.usageOrigin = origin
+}
+
 // SetDraftObserver installs the optional in-memory quality benchmark hook.
 func (s *Service) SetDraftObserver(observer DraftObserver) {
 	s.draftObserver = observer
@@ -173,7 +183,15 @@ func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, jobID, b
 	tc.AIAnalysis = result.Analysis
 }
 
-func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, buildPrefix string, run *models.BuildResult, tc *models.TestCase, consecutiveFailures int, prowJob *ProwJobContext, failureCohort *FailureCohortContext) error {
+func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, buildPrefix string, run *models.BuildResult, tc *models.TestCase, consecutiveFailures int, prowJob *ProwJobContext, failureCohort *FailureCohortContext) (resultErr error) {
+	usageOutcome := aiusage.OutcomeSuccess
+	ctx, usageOperation := aiusage.Begin(ctx, s.usageRecorder, aiusage.Metadata{
+		LogicalID: jobID + "\x00" + run.BuildID + "\x00" + tc.Name,
+		Origin:    s.usageOrigin, Feature: aiusage.FeatureFailureAnalysis,
+		ModelFingerprint: s.client.modelFingerprint(),
+		Correlation:      aiusage.Correlation{JobID: jobID, BuildID: run.BuildID, TestName: tc.Name},
+	})
+	defer func() { usageOperation.Finish(usageOutcome) }()
 	var trace *TraceSession
 	if s.traceStore != nil {
 		trace = s.traceStore.Start(TraceMetadata{
@@ -189,6 +207,7 @@ func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, b
 		s.refreshBuildFileLinks(ctx, httpClient, run, tc)
 		recordTrace(ctx, TraceEvent{Kind: "cache", Outcome: "build_hit"})
 		trace.Finish("build_cache_hit", nil)
+		usageOutcome = aiusage.OutcomeCacheHit
 		return nil
 	}
 
@@ -202,6 +221,7 @@ func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, b
 		err := fmt.Errorf("AI endpoint requires function-calling support")
 		s.setUnavailable(tc, err)
 		trace.Finish("unavailable", err)
+		usageOutcome = aiusage.OutcomeUnavailable
 		return err
 	}
 	summary, analysis, err := s.runAgentic(ctx, jobID, buildPrefix, run, tc, userPrompt, failureSignal, consecutiveFailures, promptHash)
@@ -212,11 +232,17 @@ func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, b
 			unavailableErr := fmt.Errorf("AI endpoint requires function-calling support: %w", err)
 			s.setUnavailable(tc, unavailableErr)
 			trace.Finish("unavailable", err)
+			usageOutcome = aiusage.OutcomeUnavailable
 			return unavailableErr
 		}
 		log.Printf("  ⚠ Agentic AI analysis failed for %s: %v", tc.Name, err)
 		s.setUnavailable(tc, err)
 		trace.Finish("error", err)
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			usageOutcome = aiusage.OutcomeCancelled
+		} else {
+			usageOutcome = aiusage.OutcomeError
+		}
 		return err
 	}
 	tc.AISummary = summary
@@ -228,6 +254,7 @@ func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, b
 	if analysis != nil && analysis.CacheHit {
 		recordTrace(ctx, TraceEvent{Kind: "cache", Outcome: "ai_hit"})
 		trace.Finish("ai_cache_hit", nil)
+		usageOutcome = aiusage.OutcomeCacheHit
 	} else {
 		trace.Finish("success", nil)
 	}

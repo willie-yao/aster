@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
 )
@@ -354,5 +355,31 @@ func TestContainerStateStoreMergePreservesStagedFanoutEntries(t *testing.T) {
 	}
 	if got := len(reloaded.CacheSeed(mergedRequest)); got != 1 {
 		t.Fatalf("merged cache entries = %d, want 1", got)
+	}
+}
+
+func TestContainerStateStoreRecordsUsageFromTrace(t *testing.T) {
+	dir := t.TempDir()
+	usage, err := aiusage.NewRecorder("", aiusage.RecorderOptions{RetentionDays: 30, RecentOperations: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewContainerStateStore(dir, usage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := stateTestRequest()
+	identity := NewContainerStateIdentity("orka-system", "task-usage", request)
+	trace := ai.AnalysisTrace{JobID: "job", BuildID: "1", TestName: "Test A", StartedAt: "2026-08-03T12:00:00Z", RecordedAt: "2026-08-03T12:00:01Z", Outcome: "success", Events: []ai.TraceEvent{{Kind: "model_request", UsageReported: true, InputTokens: 12, OutputTokens: 4}}}
+	state := ContainerAnalysisState{Version: ContainerStateVersion, TaskNamespace: identity.TaskNamespace, TaskName: identity.TaskName, CacheKey: identity.CacheKey, Traces: []ai.AnalysisTrace{trace}}
+	if err := store.MergeTraces(state); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MergeTraces(state); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := usage.Snapshot()
+	if len(snapshot.Days) != 1 || snapshot.Days[0].Totals.Operations != 1 || snapshot.Days[0].Totals.InputTokens != 12 || snapshot.RecentOperations[0].Origin != aiusage.OriginAnalyzer {
+		t.Fatalf("usage = %+v", snapshot)
 	}
 }
