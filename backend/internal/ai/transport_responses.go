@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/textutil"
 )
 
@@ -60,12 +61,22 @@ type responsesResponse struct {
 	ID     string            `json:"id"`
 	Status string            `json:"status"`
 	Output []json.RawMessage `json:"output"`
-	Usage  responsesUsage    `json:"usage"`
+	Usage  *responsesUsage   `json:"usage"`
 }
 
 type responsesUsage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+	InputTokens         int                         `json:"input_tokens"`
+	OutputTokens        int                         `json:"output_tokens"`
+	InputTokensDetails  responsesInputTokenDetails  `json:"input_tokens_details"`
+	OutputTokensDetails responsesOutputTokenDetails `json:"output_tokens_details"`
+}
+
+type responsesInputTokenDetails struct {
+	CachedTokens int `json:"cached_tokens"`
+}
+
+type responsesOutputTokenDetails struct {
+	ReasoningTokens int `json:"reasoning_tokens"`
 }
 
 type responsesOutputItem struct {
@@ -137,7 +148,7 @@ func (t *responsesTransport) Complete(ctx context.Context, req modelRequest) (*m
 		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode}, fmt.Errorf("decode response: %w; body=%s", err, textutil.Truncate(string(raw), 500))
 	}
 	if wire.Status != "completed" {
-		return &modelResponse{ResponseID: wire.ID, Status: wire.Status, Attempts: attempts, HTTPStatus: resp.StatusCode, InputTokens: wire.Usage.InputTokens, OutputTokens: wire.Usage.OutputTokens}, fmt.Errorf("responses status %q: %s", wire.Status, textutil.Truncate(string(raw), 500))
+		return &modelResponse{ResponseID: wire.ID, Status: wire.Status, Attempts: attempts, HTTPStatus: resp.StatusCode, Usage: responsesTokenUsage(wire.Usage)}, fmt.Errorf("responses status %q: %s", wire.Status, textutil.Truncate(string(raw), 500))
 	}
 	out := decodeResponsesResponse(wire)
 	out.Attempts = attempts
@@ -200,6 +211,16 @@ func encodeResponsesTools(schemas []tools.Schema) []responsesTool {
 	return out
 }
 
+func responsesTokenUsage(usage *responsesUsage) aiusage.TokenUsage {
+	if usage == nil {
+		return aiusage.TokenUsage{}
+	}
+	return aiusage.TokenUsage{
+		Reported: true, InputTokens: usage.InputTokens, CachedInputTokens: usage.InputTokensDetails.CachedTokens,
+		OutputTokens: usage.OutputTokens, ReasoningTokens: usage.OutputTokensDetails.ReasoningTokens,
+	}
+}
+
 func decodeResponsesResponse(resp responsesResponse) *modelResponse {
 	message := modelMessage{Role: "assistant"}
 	var text string
@@ -237,7 +258,7 @@ func decodeResponsesResponse(resp responsesResponse) *modelResponse {
 	}
 	return &modelResponse{
 		Message: message, FinishReason: finish, ResponseID: resp.ID, Status: resp.Status,
-		InputTokens: resp.Usage.InputTokens, OutputTokens: resp.Usage.OutputTokens,
+		Usage:      responsesTokenUsage(resp.Usage),
 		HasMessage: len(resp.Output) > 0,
 	}
 }

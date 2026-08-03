@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
 	"net/mail"
 	"os"
 	"path/filepath"
@@ -362,6 +363,10 @@ type AI struct {
 	// recipe count. It is operator policy and is excluded from public JSON.
 	ConsumerSkills ConsumerSkills `yaml:"consumer_skills,omitempty" json:"-"`
 
+	// Usage configures private token accounting and optional cost estimates.
+	// It is excluded from public JSON.
+	Usage *AIUsage `yaml:"usage,omitempty" json:"-"`
+
 	// SkillBundle is populated at runtime with public aggregate metadata. Recipe
 	// IDs and contents remain private.
 	SkillBundle *SkillBundleManifest `yaml:"-" json:"skill_bundle,omitempty"`
@@ -380,6 +385,71 @@ type AI struct {
 	// SourceInvestigation configures optional read-only source inspection for
 	// authenticated analysis chat requests.
 	SourceInvestigation *AnalysisSourceInvestigation `yaml:"source_investigation,omitempty" json:"-"`
+}
+
+const (
+	defaultAIUsageRetentionDays    = 90
+	defaultAIUsageRecentOperations = 250
+	maxAIUsageRetentionDays        = 3650
+	maxAIUsageRecentOperations     = 5000
+	maxAIUsageRatePerMillion       = "1000000"
+)
+
+// AIUsage configures private token accounting and cost estimates.
+type AIUsage struct {
+	Enabled          *bool           `yaml:"enabled,omitempty" json:"-"`
+	RetentionDays    int             `yaml:"retention_days,omitempty" json:"-"`
+	RecentOperations *int            `yaml:"recent_operations,omitempty" json:"-"`
+	Pricing          *AIUsagePricing `yaml:"pricing,omitempty" json:"-"`
+}
+
+// AIUsagePricing is one operator-supplied price table per million tokens.
+type AIUsagePricing struct {
+	Currency              string `yaml:"currency,omitempty" json:"-"`
+	InputPerMillion       string `yaml:"input_per_million,omitempty" json:"-"`
+	CachedInputPerMillion string `yaml:"cached_input_per_million,omitempty" json:"-"`
+	OutputPerMillion      string `yaml:"output_per_million,omitempty" json:"-"`
+}
+
+// ResolvedAIUsage contains usage defaults ready for runtime wiring.
+type ResolvedAIUsage struct {
+	Enabled          bool
+	RetentionDays    int
+	RecentOperations int
+	Pricing          AIUsagePricing
+}
+
+// EffectiveUsage applies private usage-accounting defaults. AI-disabled
+// projects do not create usage ledgers.
+func (a *AI) EffectiveUsage() ResolvedAIUsage {
+	if a == nil {
+		return ResolvedAIUsage{}
+	}
+	out := ResolvedAIUsage{Enabled: true, RetentionDays: defaultAIUsageRetentionDays, RecentOperations: defaultAIUsageRecentOperations}
+	if a.Usage == nil {
+		return out
+	}
+	if a.Usage.Enabled != nil {
+		out.Enabled = *a.Usage.Enabled
+	}
+	if a.Usage.RetentionDays > 0 {
+		out.RetentionDays = a.Usage.RetentionDays
+	}
+	if a.Usage.RecentOperations != nil {
+		out.RecentOperations = *a.Usage.RecentOperations
+	}
+	if a.Usage.Pricing != nil {
+		out.Pricing = AIUsagePricing{
+			Currency:              strings.TrimSpace(a.Usage.Pricing.Currency),
+			InputPerMillion:       strings.TrimSpace(a.Usage.Pricing.InputPerMillion),
+			CachedInputPerMillion: strings.TrimSpace(a.Usage.Pricing.CachedInputPerMillion),
+			OutputPerMillion:      strings.TrimSpace(a.Usage.Pricing.OutputPerMillion),
+		}
+		if out.Pricing.CachedInputPerMillion == "" {
+			out.Pricing.CachedInputPerMillion = out.Pricing.InputPerMillion
+		}
+	}
+	return out
 }
 
 // ConsumerSkills configures startup requirements for consumer recipes.
@@ -827,6 +897,79 @@ func (a *AI) EffectiveAgentic() Agentic {
 	return out
 }
 
+func validateAIUsagePricing(pricing *AIUsagePricing) error {
+	if pricing == nil {
+		return nil
+	}
+	currency := strings.TrimSpace(pricing.Currency)
+	input := strings.TrimSpace(pricing.InputPerMillion)
+	cached := strings.TrimSpace(pricing.CachedInputPerMillion)
+	output := strings.TrimSpace(pricing.OutputPerMillion)
+	if currency == "" && input == "" && cached == "" && output == "" {
+		return nil
+	}
+	if !validAIUsageCurrency(currency) {
+		return fmt.Errorf("ai.usage.pricing.currency must be three ASCII uppercase letters")
+	}
+	if input == "" || output == "" {
+		return fmt.Errorf("ai.usage.pricing requires input_per_million and output_per_million")
+	}
+	fields := []struct {
+		name  string
+		value string
+	}{
+		{name: "input_per_million", value: input},
+		{name: "cached_input_per_million", value: cached},
+		{name: "output_per_million", value: output},
+	}
+	for _, field := range fields {
+		if field.value == "" && field.name == "cached_input_per_million" {
+			continue
+		}
+		if err := validateAIUsageRate(field.value); err != nil {
+			return fmt.Errorf("ai.usage.pricing.%s %w", field.name, err)
+		}
+	}
+	return nil
+}
+
+func validAIUsageCurrency(value string) bool {
+	if len(value) != 3 {
+		return false
+	}
+	for _, r := range value {
+		if r < 'A' || r > 'Z' {
+			return false
+		}
+	}
+	return true
+}
+
+func validateAIUsageRate(value string) error {
+	if strings.HasPrefix(value, "+") || strings.HasPrefix(value, "-") || strings.ContainsAny(value, "eE/") {
+		return fmt.Errorf("must be a non-negative decimal")
+	}
+	seenDot := false
+	for i, r := range value {
+		switch {
+		case r >= '0' && r <= '9':
+		case r == '.' && !seenDot && i > 0 && i < len(value)-1:
+			seenDot = true
+		default:
+			return fmt.Errorf("must be a non-negative decimal")
+		}
+	}
+	rate, ok := new(big.Rat).SetString(value)
+	if !ok || rate.Sign() < 0 {
+		return fmt.Errorf("must be a non-negative decimal")
+	}
+	max, _ := new(big.Rat).SetString(maxAIUsageRatePerMillion)
+	if rate.Cmp(max) > 0 {
+		return fmt.Errorf("must be at most %s", maxAIUsageRatePerMillion)
+	}
+	return nil
+}
+
 // Load reads and validates a project.yaml file from disk.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
@@ -1039,6 +1182,18 @@ func (c *Config) Validate() error {
 		}
 		if c.AI.ConsumerSkills.MinimumCount < 0 {
 			return fmt.Errorf("ai.consumer_skills.minimum_count must be >= 0")
+		}
+
+		if usage := c.AI.Usage; usage != nil {
+			if usage.RetentionDays < 0 || usage.RetentionDays > maxAIUsageRetentionDays {
+				return fmt.Errorf("ai.usage.retention_days must be 0 or between 1 and %d", maxAIUsageRetentionDays)
+			}
+			if usage.RecentOperations != nil && (*usage.RecentOperations < 0 || *usage.RecentOperations > maxAIUsageRecentOperations) {
+				return fmt.Errorf("ai.usage.recent_operations must be between 0 and %d", maxAIUsageRecentOperations)
+			}
+			if err := validateAIUsagePricing(usage.Pricing); err != nil {
+				return err
+			}
 		}
 	}
 

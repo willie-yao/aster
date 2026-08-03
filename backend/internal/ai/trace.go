@@ -59,8 +59,11 @@ type TraceEvent struct {
 	DurationMs                int    `json:"duration_ms,omitempty"`
 	Attempts                  int    `json:"attempts,omitempty"`
 	HTTPStatus                int    `json:"http_status,omitempty"`
+	UsageReported             bool   `json:"usage_reported,omitempty"`
 	InputTokens               int    `json:"input_tokens,omitempty"`
+	CachedInputTokens         int    `json:"cached_input_tokens,omitempty"`
 	OutputTokens              int    `json:"output_tokens,omitempty"`
+	ReasoningTokens           int    `json:"reasoning_tokens,omitempty"`
 	EstimatedPromptTokens     int    `json:"estimated_prompt_tokens,omitempty"`
 	ContextLimitTokens        int    `json:"context_limit_tokens,omitempty"`
 	ReservedTokens            int    `json:"reserved_tokens,omitempty"`

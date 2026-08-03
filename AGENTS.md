@@ -70,6 +70,7 @@ backend/                         Go 1.25
       tools/{filesystem,k8s,repotree}/  Function-calling tools exposed to the model
       skills/                    Diagnostic recipe registry (+ builtin/{prow,kubernetes})
       modules/universal/         Builds the per-failure seed prompt
+    aiusage/                     Private token usage and cost accounting
     analysisruntime/             Selects the failure-analysis runtime (in-process default)
     analysischat/                Bounded conversations about a published analysis
     corrections/                 Promotes reviewed chat revisions without mutating output

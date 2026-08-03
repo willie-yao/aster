@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/textutil"
 )
 
@@ -73,14 +74,24 @@ type chatToolChoice struct {
 type chatCompletionsResponse struct {
 	ID      string                  `json:"id"`
 	Choices []chatCompletionsChoice `json:"choices"`
-	Usage   chatCompletionsUsage    `json:"usage"`
+	Usage   *chatCompletionsUsage   `json:"usage"`
 }
 
 type chatCompletionsUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	InputTokens      int `json:"input_tokens"`
-	OutputTokens     int `json:"output_tokens"`
+	PromptTokens            int                    `json:"prompt_tokens"`
+	CompletionTokens        int                    `json:"completion_tokens"`
+	InputTokens             int                    `json:"input_tokens"`
+	OutputTokens            int                    `json:"output_tokens"`
+	PromptTokensDetails     chatPromptTokenDetails `json:"prompt_tokens_details"`
+	CompletionTokensDetails chatOutputTokenDetails `json:"completion_tokens_details"`
+}
+
+type chatPromptTokenDetails struct {
+	CachedTokens int `json:"cached_tokens"`
+}
+
+type chatOutputTokenDetails struct {
+	ReasoningTokens int `json:"reasoning_tokens"`
 }
 
 type chatCompletionsChoice struct {
@@ -186,15 +197,14 @@ func encodeChatToolCalls(calls []modelToolCall) []chatCompletionsToolCall {
 
 func decodeChatResponse(resp chatCompletionsResponse) *modelResponse {
 	if len(resp.Choices) == 0 {
-		return &modelResponse{ResponseID: resp.ID, InputTokens: chatInputTokens(resp.Usage), OutputTokens: chatOutputTokens(resp.Usage)}
+		return &modelResponse{ResponseID: resp.ID, Usage: chatTokenUsage(resp.Usage)}
 	}
 	choice := resp.Choices[0]
 	return &modelResponse{
 		HasMessage:   true,
 		FinishReason: choice.FinishReason,
 		ResponseID:   resp.ID,
-		InputTokens:  chatInputTokens(resp.Usage),
-		OutputTokens: chatOutputTokens(resp.Usage),
+		Usage:        chatTokenUsage(resp.Usage),
 		Message: modelMessage{
 			Role:       choice.Message.Role,
 			Content:    choice.Message.Content,
@@ -205,18 +215,22 @@ func decodeChatResponse(resp chatCompletionsResponse) *modelResponse {
 	}
 }
 
-func chatInputTokens(usage chatCompletionsUsage) int {
-	if usage.InputTokens > 0 {
-		return usage.InputTokens
+func chatTokenUsage(usage *chatCompletionsUsage) aiusage.TokenUsage {
+	if usage == nil {
+		return aiusage.TokenUsage{}
 	}
-	return usage.PromptTokens
-}
-
-func chatOutputTokens(usage chatCompletionsUsage) int {
-	if usage.OutputTokens > 0 {
-		return usage.OutputTokens
+	input := usage.InputTokens
+	if input == 0 {
+		input = usage.PromptTokens
 	}
-	return usage.CompletionTokens
+	output := usage.OutputTokens
+	if output == 0 {
+		output = usage.CompletionTokens
+	}
+	return aiusage.TokenUsage{
+		Reported: true, InputTokens: input, CachedInputTokens: usage.PromptTokensDetails.CachedTokens,
+		OutputTokens: output, ReasoningTokens: usage.CompletionTokensDetails.ReasoningTokens,
+	}
 }
 
 func decodeChatToolCalls(calls []chatCompletionsToolCall) []modelToolCall {

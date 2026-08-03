@@ -202,6 +202,42 @@ Do not commit credentials under `ai.headers`. `AI_TOKEN` is the supported bearer
 token channel. Use a trusted proxy or custom deployment for providers that need
 a secret in another header.
 
+### AI usage accounting
+
+Private token accounting is enabled by default when the `ai:` block is present.
+Configure retention and optional cost estimates under `ai.usage`:
+
+```yaml
+ai:
+  usage:
+    enabled: true
+    retention_days: 90
+    recent_operations: 250
+    pricing:
+      currency: USD
+      input_per_million: "1.25"
+      cached_input_per_million: "0.125"
+      output_per_million: "10"
+```
+
+`retention_days` defaults to `90` and accepts `1` through `3650` when set.
+`recent_operations` defaults to `250`, accepts `0` through `5000`, and controls
+the detailed private drill-down list. Set it to `0` to retain daily aggregates
+without recent operation records. Set `enabled: false` to disable both token and
+cost accounting.
+
+Pricing is optional. Without it, the dashboard records provider-reported tokens
+but does not assign a cost. `currency` must contain exactly three ASCII uppercase
+letters. Rates are decimal currency units per one million tokens. Omit
+`cached_input_per_million` to price cached input at the regular input rate. Rates
+must be non-negative decimal strings no greater than `1000000`.
+
+Cost values are estimates, not provider invoices. Providers may omit usage or
+apply discounts, retries, minimum charges, or non-token fees that are not present
+in the model response. Usage files are private operational state and are removed
+from Pages artifacts. A currency change is rejected while retained nonzero cost
+estimates still use the previous currency.
+
 ## Custom skills
 
 Diagnostic recipes live under `skills/*.yaml` or `skills/*.yml`. Their presence

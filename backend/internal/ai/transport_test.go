@@ -2,8 +2,12 @@ package ai
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
+	"time"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
 )
 
 type recordingTransport struct {
@@ -43,7 +47,7 @@ func TestClientCallModelRecordsTrace(t *testing.T) {
 	transport := &recordingTransport{result: &modelResponse{
 		HasMessage: true, Message: modelMessage{Role: "assistant", ToolCalls: []modelToolCall{{ID: "call"}}},
 		ResponseID: "resp-1", Status: "completed", FinishReason: "tool_calls",
-		Attempts: 2, HTTPStatus: 200, InputTokens: 11, OutputTokens: 7,
+		Attempts: 2, HTTPStatus: 200, Usage: aiusage.TokenUsage{Reported: true, InputTokens: 11, CachedInputTokens: 3, OutputTokens: 7, ReasoningTokens: 2},
 	}}
 	client := &Client{model: "model-a", transport: transport}
 	store := NewTraceStore()
@@ -54,8 +58,55 @@ func TestClientCallModelRecordsTrace(t *testing.T) {
 	}
 	trace.Finish("success", nil)
 	event := store.Snapshot().Traces[0].Events[0]
-	if event.Kind != "model_request" || event.ResponseID != "resp-1" || event.Attempts != 2 || event.InputTokens != 11 || event.OutputTokens != 7 || event.ToolCallCount != 1 {
+	if event.Kind != "model_request" || event.ResponseID != "resp-1" || event.Attempts != 2 || !event.UsageReported || event.InputTokens != 11 || event.CachedInputTokens != 3 || event.OutputTokens != 7 || event.ReasoningTokens != 2 || event.ToolCallCount != 1 {
 		t.Fatalf("event = %+v", event)
+	}
+}
+
+func TestClientCallModelRecordsUsageOperation(t *testing.T) {
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	recorder, err := aiusage.NewRecorder("", aiusage.RecorderOptions{RetentionDays: 30, RecentOperations: 10, Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := &recordingTransport{result: &modelResponse{Usage: aiusage.TokenUsage{Reported: true, InputTokens: 9, OutputTokens: 4}}}
+	client := &Client{model: "model-a", transport: transport}
+	ctx, operation := aiusage.Begin(t.Context(), recorder, aiusage.Metadata{LogicalID: "request", Origin: aiusage.OriginFetcher, Feature: aiusage.FeatureFailureAnalysis, StartedAt: now})
+	if _, err := client.callModel(ctx, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	operation.Finish(aiusage.OutcomeSuccess)
+	got := recorder.Snapshot().Days[0].Totals
+	if got.ModelRequests != 1 || got.ReportedRequests != 1 || got.InputTokens != 9 || got.OutputTokens != 4 {
+		t.Fatalf("usage totals = %+v", got)
+	}
+}
+
+func TestClientCallModelRecordsUnreportedUsage(t *testing.T) {
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	recorder, err := aiusage.NewRecorder("", aiusage.RecorderOptions{RetentionDays: 30, RecentOperations: 10, Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := &recordingTransport{err: errors.New("provider failed")}
+	client := &Client{model: "model-a", transport: transport}
+	ctx, operation := aiusage.Begin(t.Context(), recorder, aiusage.Metadata{LogicalID: "request", Origin: aiusage.OriginFetcher, Feature: aiusage.FeatureFailureAnalysis, StartedAt: now})
+	if _, err := client.callModel(ctx, nil, nil, nil); err == nil {
+		t.Fatal("expected provider error")
+	}
+	operation.Finish(aiusage.OutcomeError)
+	got := recorder.Snapshot().Days[0].Totals
+	if got.ModelRequests != 1 || got.ReportedRequests != 0 || got.UnreportedRequests != 1 || got.Failures != 1 {
+		t.Fatalf("usage totals = %+v", got)
+	}
+}
+
+func TestChatTokenUsageDistinguishesAbsentAndZero(t *testing.T) {
+	if got := chatTokenUsage(nil); got.Reported {
+		t.Fatalf("absent usage = %+v", got)
+	}
+	if got := chatTokenUsage(&chatCompletionsUsage{}); !got.Reported || got.InputTokens != 0 || got.OutputTokens != 0 {
+		t.Fatalf("present zero usage = %+v", got)
 	}
 }
 
@@ -72,7 +123,7 @@ func TestChatCompletionsMessageRoundTrip(t *testing.T) {
 		{Role: "tool", ToolCallID: "call-1", Name: "read_artifact", Content: strPtr(`{"ok":true}`)},
 	}
 
-	wire := chatCompletionsResponse{ID: "chat-1", Usage: chatCompletionsUsage{PromptTokens: 12, CompletionTokens: 4}}
+	wire := chatCompletionsResponse{ID: "chat-1", Usage: &chatCompletionsUsage{PromptTokens: 12, CompletionTokens: 4, PromptTokensDetails: chatPromptTokenDetails{CachedTokens: 5}, CompletionTokensDetails: chatOutputTokenDetails{ReasoningTokens: 2}}}
 	wire.Choices = append(wire.Choices, chatCompletionsChoice{
 		FinishReason: "tool_calls", Message: encodeChatMessages(messages)[0],
 	})
@@ -80,7 +131,7 @@ func TestChatCompletionsMessageRoundTrip(t *testing.T) {
 	if !decoded.HasMessage || decoded.FinishReason != "tool_calls" || !reflect.DeepEqual(decoded.Message, messages[0]) {
 		t.Fatalf("decoded response = %+v", decoded)
 	}
-	if decoded.ResponseID != "chat-1" || decoded.InputTokens != 12 || decoded.OutputTokens != 4 {
+	if decoded.ResponseID != "chat-1" || !decoded.Usage.Reported || decoded.Usage.InputTokens != 12 || decoded.Usage.CachedInputTokens != 5 || decoded.Usage.OutputTokens != 4 || decoded.Usage.ReasoningTokens != 2 {
 		t.Fatalf("decoded metadata = %+v", decoded)
 	}
 	if got := encodeChatMessages(messages); len(got) != 2 || got[1].ToolCallID != "call-1" || got[1].Name != "read_artifact" {

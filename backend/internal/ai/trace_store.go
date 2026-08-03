@@ -213,7 +213,7 @@ func traceInformation(trace AnalysisTrace) int {
 		if event.ErrorCode != "" {
 			score += 2
 		}
-		if event.InputTokens > 0 || event.OutputTokens > 0 || event.Bytes > 0 || event.FinishReason != "" {
+		if event.UsageReported || event.InputTokens > 0 || event.CachedInputTokens > 0 || event.OutputTokens > 0 || event.ReasoningTokens > 0 || event.Bytes > 0 || event.FinishReason != "" {
 			score++
 		}
 	}

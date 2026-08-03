@@ -1139,3 +1139,70 @@ func TestValidateAnalysisSourceAndConsumerSkills(t *testing.T) {
 		t.Fatalf("required default = %+v", got)
 	}
 }
+
+func TestEffectiveAIUsage(t *testing.T) {
+	if got := (*AI)(nil).EffectiveUsage(); got.Enabled || got.RetentionDays != 0 || got.RecentOperations != 0 {
+		t.Fatalf("nil AI usage = %+v", got)
+	}
+	defaults := (&AI{}).EffectiveUsage()
+	if !defaults.Enabled || defaults.RetentionDays != 90 || defaults.RecentOperations != 250 {
+		t.Fatalf("defaults = %+v", defaults)
+	}
+	falseValue := false
+	zero := 0
+	configured := (&AI{Usage: &AIUsage{
+		Enabled: &falseValue, RetentionDays: 30, RecentOperations: &zero,
+		Pricing: &AIUsagePricing{Currency: " USD ", InputPerMillion: " 1.25 ", OutputPerMillion: " 10 "},
+	}}).EffectiveUsage()
+	if configured.Enabled || configured.RetentionDays != 30 || configured.RecentOperations != 0 {
+		t.Fatalf("configured = %+v", configured)
+	}
+	if configured.Pricing.Currency != "USD" || configured.Pricing.CachedInputPerMillion != "1.25" {
+		t.Fatalf("pricing = %+v", configured.Pricing)
+	}
+}
+
+func TestValidateAIUsage(t *testing.T) {
+	base := func() *Config {
+		cfg, err := parse(strings.NewReader(validYAML))
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg.AI = &AI{}
+		return cfg
+	}
+	tests := []struct {
+		name    string
+		usage   *AIUsage
+		wantErr string
+	}{
+		{name: "defaults"},
+		{name: "valid", usage: &AIUsage{RetentionDays: 30, RecentOperations: intPtr(0), Pricing: &AIUsagePricing{Currency: "USD", InputPerMillion: "1.25", CachedInputPerMillion: "0.125", OutputPerMillion: "10"}}},
+		{name: "retention", usage: &AIUsage{RetentionDays: 3651}, wantErr: "retention_days"},
+		{name: "recent negative", usage: &AIUsage{RecentOperations: intPtr(-1)}, wantErr: "recent_operations"},
+		{name: "recent large", usage: &AIUsage{RecentOperations: intPtr(5001)}, wantErr: "recent_operations"},
+		{name: "currency", usage: &AIUsage{Pricing: &AIUsagePricing{Currency: "usd", InputPerMillion: "1", OutputPerMillion: "2"}}, wantErr: "currency"},
+		{name: "numeric currency", usage: &AIUsage{Pricing: &AIUsagePricing{Currency: "123", InputPerMillion: "1", OutputPerMillion: "2"}}, wantErr: "currency"},
+		{name: "symbol currency", usage: &AIUsage{Pricing: &AIUsagePricing{Currency: "$$$", InputPerMillion: "1", OutputPerMillion: "2"}}, wantErr: "currency"},
+		{name: "partial", usage: &AIUsage{Pricing: &AIUsagePricing{Currency: "USD", InputPerMillion: "1"}}, wantErr: "requires input_per_million and output_per_million"},
+		{name: "negative", usage: &AIUsage{Pricing: &AIUsagePricing{Currency: "USD", InputPerMillion: "-1", OutputPerMillion: "2"}}, wantErr: "non-negative decimal"},
+		{name: "exponent", usage: &AIUsage{Pricing: &AIUsagePricing{Currency: "USD", InputPerMillion: "1e2", OutputPerMillion: "2"}}, wantErr: "non-negative decimal"},
+		{name: "too large", usage: &AIUsage{Pricing: &AIUsagePricing{Currency: "USD", InputPerMillion: "1000000.1", OutputPerMillion: "2"}}, wantErr: "at most"},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			cfg := base()
+			cfg.AI.Usage = testCase.usage
+			err := cfg.Validate()
+			if testCase.wantErr == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), testCase.wantErr) {
+				t.Fatalf("error = %v, want substring %q", err, testCase.wantErr)
+			}
+		})
+	}
+}

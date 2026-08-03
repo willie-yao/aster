@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
 )
 
 // modelTransport executes one model turn. The analysis loops operate only on
@@ -50,16 +51,22 @@ func (c *Client) callModelRequest(ctx context.Context, request modelRequest) (*m
 	start := time.Now()
 	resp, err := c.transport.Complete(ctx, request)
 	event := TraceEvent{Kind: "model_request", DurationMs: int(time.Since(start) / time.Millisecond), MessageCount: len(request.Messages)}
+	usage := aiusage.TokenUsage{}
 	if resp != nil {
+		usage = resp.Usage
 		event.ResponseID = resp.ResponseID
 		event.Status = resp.Status
 		event.FinishReason = resp.FinishReason
 		event.Attempts = resp.Attempts
 		event.HTTPStatus = resp.HTTPStatus
-		event.InputTokens = resp.InputTokens
-		event.OutputTokens = resp.OutputTokens
+		event.UsageReported = resp.Usage.Reported
+		event.InputTokens = resp.Usage.InputTokens
+		event.CachedInputTokens = resp.Usage.CachedInputTokens
+		event.OutputTokens = resp.Usage.OutputTokens
+		event.ReasoningTokens = resp.Usage.ReasoningTokens
 		event.ToolCallCount = len(resp.Message.ToolCalls)
 	}
+	aiusage.ObserveModelRequest(ctx, usage)
 	if err != nil {
 		event.Outcome = "error"
 		event.ErrorCode = traceErrorCode(err)
@@ -113,8 +120,7 @@ type modelResponse struct {
 	Status       string
 	Attempts     int
 	HTTPStatus   int
-	InputTokens  int
-	OutputTokens int
+	Usage        aiusage.TokenUsage
 }
 
 // The JSON tags preserve the existing compaction size estimate. API adapters

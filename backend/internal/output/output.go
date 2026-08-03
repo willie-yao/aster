@@ -14,6 +14,13 @@ import (
 // AITraceFilename is the private per-analysis trace snapshot.
 const AITraceFilename = "ai_traces.json"
 
+const (
+	// AIUsageFetcherFilename is the fetcher-owned private usage ledger.
+	AIUsageFetcherFilename = "ai_usage_fetcher.json"
+	// AIUsageServerFilename is the server-owned private usage ledger.
+	AIUsageServerFilename = "ai_usage_server.json"
+)
+
 // NonPublishedFiles are operational files written into the output directory that
 // must not be served by the API server or deployed to the public Pages site:
 // the AI cache, Orka identity manifest, and operational side-effect state. The
@@ -23,6 +30,8 @@ const AITraceFilename = "ai_traces.json"
 var NonPublishedFiles = []string{
 	"ai_cache.json",
 	AITraceFilename,
+	AIUsageFetcherFilename,
+	AIUsageServerFilename,
 	"issue_state.json",
 	"fix_pr_state.json",
 	"fix_previews.json",
