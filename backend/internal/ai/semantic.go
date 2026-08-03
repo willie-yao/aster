@@ -133,7 +133,7 @@ func (s *agentState) readPathList() []string {
 // gate it already passed. Returns the draft to publish.
 func (c *Client) applySemanticJudgePostLoop(ctx context.Context, state *agentState, messages []modelMessage, finalContent string, finalProviderItems []json.RawMessage, parsed analysisResponse, headroom contextHeadroom) analysisResponse {
 	if state.bestDraft == nil {
-		out := critiqueDraftWithContent(parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, parsed), state.consecutiveFailures)
+		out := critiqueDraftWithContent(parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, parsed), state.consecutiveFailures, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
 		candidate := state.newDraftCandidate("finalize", finalContent, finalProviderItems, parsed, out)
 		state.considerFallbackDraft(candidate, false)
 		state.considerDraft(candidate, false)
@@ -165,7 +165,7 @@ func (c *Client) applySemanticJudgePostLoop(ctx context.Context, state *agentSta
 		log.Printf("  ✗ semantic judge (post-loop): %d objection(s); refinalize did not parse, keeping draft", len(objs))
 		return state.bestDraft.parsed
 	}
-	out := critiqueDraftWithContent(rp, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, rp), state.consecutiveFailures)
+	out := critiqueDraftWithContent(rp, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, rp), state.consecutiveFailures, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
 	if len(out.MissingSkillEvidence) > 0 {
 		if treeSet := state.artifactTreeSet(); treeSet != nil {
 			pruneAbsentSkillEvidence(rp, &out, treeSet)

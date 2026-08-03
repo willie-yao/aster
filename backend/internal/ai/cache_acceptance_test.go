@@ -2,6 +2,7 @@ package ai
 
 import (
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
@@ -56,7 +57,7 @@ func TestAgenticCacheAcceptanceReasons(t *testing.T) {
 		{name: "critique pass", entry: func() CacheEntry { d := base; d.CritiquePassed = false; return entry(d) }(), policy: policy, want: CacheRejectedCritique},
 		{name: "critique version", entry: func() CacheEntry { d := base; d.CritiqueVersion--; return entry(d) }(), policy: policy, want: CacheRejectedCritique},
 		{name: "critique advisory accepts objection", entry: func() CacheEntry { d := base; d.CritiquePassed = false; return entry(d) }(), policy: func() AgenticCachePolicy { p := policy; p.CritiqueRequired = false; return p }()},
-		{name: "critique advisory accepts old version", entry: func() CacheEntry { d := base; d.CritiqueVersion--; return entry(d) }(), policy: func() AgenticCachePolicy { p := policy; p.CritiqueRequired = false; return p }()},
+		{name: "publication contract rejects old version in advisory mode", entry: func() CacheEntry { d := base; d.CritiqueVersion--; return entry(d) }(), policy: func() AgenticCachePolicy { p := policy; p.CritiqueRequired = false; return p }(), want: CacheRejectedCritique},
 		{name: "wrong cache key", entry: func() CacheEntry { e := entry(base); e.Key = "other"; return e }(), policy: policy, want: CacheRejectedMalformed},
 		{name: "malformed JSON", entry: CacheEntry{Key: key, CreatedAt: now, Data: json.RawMessage(`{"summary":`)}, policy: policy, want: CacheRejectedMalformed},
 		{name: "missing result fields", entry: CacheEntry{Key: key, CreatedAt: now, Data: json.RawMessage(`{}`)}, policy: policy, want: CacheRejectedMalformed},
@@ -168,6 +169,7 @@ func TestNewAgenticCacheEntryRoundTripsAcceptedResult(t *testing.T) {
 		Summary: &models.AISummary{Summary: "summary", IsTransient: true},
 		Analysis: &models.AIAnalysis{
 			Mode: AgenticMode, Model: "model", RootCause: "root", Severity: "High", SuggestedFix: "fix", RelevantFiles: []string{"a.go"},
+			SearchSuggestions: []string{"search/a.go"}, EvidenceCitations: []models.EvidenceCitation{{Path: "build-log.txt", LineStart: 7, LineEnd: 7, Quote: "failure"}},
 			ToolCalls: 2, ContextBytes: 100, GCSBytes: 50, EvidencePlanCovered: true, BudgetExhausted: true, SameFailureReuse: true,
 			CritiquePassed: true, CritiqueVersion: currentCritiqueVersion, SkillSetHash: "skills", ModelHash: "model-hash", PromptHash: "prompt-hash",
 		},
@@ -184,6 +186,7 @@ func TestNewAgenticCacheEntryRoundTripsAcceptedResult(t *testing.T) {
 		got.Summary.GeneratedAt != entry.CreatedAt.UTC().Format(time.RFC3339) || got.Analysis.GeneratedAt != got.Summary.GeneratedAt ||
 		got.Analysis.RootCause != result.Analysis.RootCause || got.Analysis.ToolCalls != result.Analysis.ToolCalls ||
 		got.Analysis.ContextBytes != result.Analysis.ContextBytes || got.Analysis.GCSBytes != result.Analysis.GCSBytes ||
+		!slices.Equal(got.Analysis.SearchSuggestions, result.Analysis.SearchSuggestions) || !slices.Equal(got.Analysis.EvidenceCitations, result.Analysis.EvidenceCitations) ||
 		!got.Analysis.EvidencePlanCovered || !got.Analysis.BudgetExhausted || !got.Analysis.SameFailureReuse || got.Analysis.SkillSetHash != result.Analysis.SkillSetHash {
 		t.Fatalf("round trip result = %+v", got)
 	}

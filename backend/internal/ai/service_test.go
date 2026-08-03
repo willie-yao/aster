@@ -383,24 +383,26 @@ func TestService_ZeroCritiqueRetriesMakesCritiqueAdvisory(t *testing.T) {
 	base := models.AIAnalysis{
 		Mode: AgenticMode, ToolCalls: 2, GCSBytes: 50_000,
 		PromptHash: PromptFingerprint("sys"), ModelHash: client.modelFingerprint(),
+		CritiqueVersion: currentCritiqueVersion,
 	}
 	for _, tc := range []struct {
-		name   string
-		mutate func(*models.AIAnalysis)
+		name           string
+		mutate         func(*models.AIAnalysis)
+		wantReanalysis bool
 	}{
 		{name: "critique objection"},
 		{name: "old critique version", mutate: func(analysis *models.AIAnalysis) {
 			analysis.CritiquePassed = true
 			analysis.CritiqueVersion = currentCritiqueVersion - 1
-		}},
+		}, wantReanalysis: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			analysis := base
 			if tc.mutate != nil {
 				tc.mutate(&analysis)
 			}
-			if s.shouldReanalyze(reusablePublishedTestCase(&analysis)) {
-				t.Fatal("zero-retry critique telemetry triggered reanalysis")
+			if got := s.shouldReanalyze(reusablePublishedTestCase(&analysis)); got != tc.wantReanalysis {
+				t.Fatalf("shouldReanalyze = %t, want %t", got, tc.wantReanalysis)
 			}
 			s.agenticOpts.CritiqueMaxRetries = 1
 			if !s.shouldReanalyze(reusablePublishedTestCase(&analysis)) {

@@ -99,6 +99,7 @@ type DraftObservation struct {
 	RelevantFiles       []string
 	PuntCount           int
 	UnreadCitationCount int
+	CitationIssueCount  int
 	MissingGroupCount   int
 	TransientConflict   bool
 	ToolCalls           int
@@ -122,6 +123,7 @@ type critiqueQuality struct {
 	Passed               bool
 	TransientConflict    bool
 	UnreadCitationCount  int
+	CitationIssueCount   int
 	MissingEvidenceCount int
 	PuntCount            int
 }
@@ -303,11 +305,9 @@ type agenticCacheData struct {
 	// critique.
 	CritiquePassed bool `json:"critique_passed,omitempty"`
 
-	// CritiqueVersion records which contract version the draft passed
-	// critique under. The cache-read gate requires the cached version
-	// to be at least currentCritiqueVersion when critique is enabled,
-	// so strengthening the gate invalidates entries that passed under
-	// the weaker contract.
+	// CritiqueVersion records which deterministic critique and publication
+	// contract processed the draft. CritiquePassed records whether it passed.
+	// The cache-read gate always requires the current version.
 	CritiqueVersion int `json:"critique_version,omitempty"`
 
 	// SkillSetHash is the fingerprint of the merged diagnostic skill
@@ -409,6 +409,12 @@ type agentState struct {
 	// content-aware evidence groups can prove positive matches in the same file.
 	// It is never copied into caches, traces, manifests, or progress state.
 	evidenceContentByPath map[string][]string
+	// analysisEvidence retains bounded artifact lines for citation validation.
+	analysisEvidence     map[string]*analysisChatEvidence
+	analysisEvidenceFull bool
+	// sourceContentByPath retains bounded repo-tool snippets for CLI grounding.
+	// Neither map is copied into caches, traces, or public output.
+	sourceContentByPath map[string][]string
 
 	// skillSet is the merged diagnostic recipe set. nil disables recipes
 	// or no recipes are configured. Held on state
@@ -514,9 +520,7 @@ func stampAgenticTelemetry(analysis *models.AIAnalysis, state *agentState, mode 
 		analysis.EvidencePlanCovered = state.evidencePlanCovered()
 		analysis.BudgetExhausted = state.budgetExhausted
 		analysis.CritiquePassed = state.critiquePassed
-		if state.critiquePassed {
-			analysis.CritiqueVersion = currentCritiqueVersion
-		}
+		analysis.CritiqueVersion = currentCritiqueVersion
 		if state.skillSet != nil {
 			analysis.SkillSetHash = state.skillSet.Hash()
 		}
@@ -799,6 +803,7 @@ func (c *Client) doAnalyzeAgentic(
 		state.readSourceFull = map[string]bool{}
 	}
 	state.evidenceArtifactsFull = map[string]bool{}
+	state.analysisEvidence = map[string]*analysisChatEvidence{}
 
 	fullSysPrompt := sysPrompt + agToolDocs
 	state.initialArtifactTree = listInitialArtifactTree(ctx, in.Browser)
@@ -915,7 +920,7 @@ agentLoop:
 			var candidateCritique critiqueOutcome
 			var candidateDraft *critiqueDraftCandidate
 			if parsedOK {
-				candidateCritique = critiqueDraftWithContent(parsedCandidate, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, parsedCandidate), state.consecutiveFailures)
+				candidateCritique = critiqueDraftWithContent(parsedCandidate, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, parsedCandidate), state.consecutiveFailures, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
 				if len(candidateCritique.MissingSkillEvidence) > 0 {
 					if treeSet := state.artifactTreeSet(); treeSet != nil {
 						if n := pruneAbsentSkillEvidence(parsedCandidate, &candidateCritique, treeSet); n > 0 {
@@ -1013,7 +1018,7 @@ agentLoop:
 							revised, revisedItems, safe := c.runFinalizeRoundTracked(loopCtx, state, repairMessages, headroom)
 							if safe {
 								if rp, ok := tryParseAnalysis(revised); ok {
-									revisedCritique := critiqueDraftWithContent(rp, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, rp), state.consecutiveFailures)
+									revisedCritique := critiqueDraftWithContent(rp, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, rp), state.consecutiveFailures, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
 									if len(revisedCritique.MissingSkillEvidence) > 0 {
 										if treeSet := state.artifactTreeSet(); treeSet != nil {
 											pruneAbsentSkillEvidence(rp, &revisedCritique, treeSet)
@@ -1116,12 +1121,16 @@ agentLoop:
 			Severity:     "Medium",
 			SuggestedFix: "Unable to parse structured response",
 		}
+		parsed = sanitizePublishedCitations(parsed, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
+		parsed = state.preparePublishedAnalysis(parsed)
 		summary, analysis := c.buildOutputs(parsed)
 		stampAgenticTelemetry(analysis, state, in.Mode, false, start)
 		return summary, analysis, nil
 	}
 
 	parsed = c.applyPostLoopCritique(loopCtx, state, messages, finalContent, finalProviderItems, parsed, in.Opts, critiqueRetries, finalDraftObserved, draftPhase)
+	parsed = sanitizePublishedCitations(parsed, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
+	parsed = state.preparePublishedAnalysis(parsed)
 
 	state.notifyDraftSelection()
 	summary, analysis := c.buildOutputs(parsed)
@@ -1130,11 +1139,205 @@ agentLoop:
 	return summary, analysis, nil
 }
 
+func sanitizePublishedCitations(parsed analysisResponse, context analysisCitationContext) analysisResponse {
+	const maxPublishedCitations = 20
+	valid := make([]models.EvidenceCitation, 0, min(len(parsed.EvidenceCitations), maxPublishedCitations))
+	if !context.Full {
+		for _, citation := range parsed.EvidenceCitations {
+			if evidenceCitationIssue(citation, context.Evidence) == "" {
+				valid = append(valid, citation)
+				if len(valid) == maxPublishedCitations {
+					break
+				}
+			}
+		}
+	}
+	parsed.EvidenceCitations = valid
+	parsed.RootCause = removeUncitedLineClaims(parsed.RootCause, valid)
+	parsed.Summary = removeUncitedLineClaims(parsed.Summary, valid)
+	parsed.SuggestedFix = removeUncitedLineClaims(parsed.SuggestedFix, valid)
+	return parsed
+}
+
+func removeUncitedLineClaims(text string, citations []models.EvidenceCitation) string {
+	claims := proseLineClaims(text)
+	if len(claims) == 0 {
+		return text
+	}
+	var out strings.Builder
+	last := 0
+	for _, claim := range claims {
+		out.WriteString(text[last:claim.MatchStart])
+		supported := false
+		for _, citation := range citations {
+			if citationSupportsLineClaim(citation, claim) {
+				supported = true
+				break
+			}
+		}
+		if supported {
+			out.WriteString(text[claim.MatchStart:claim.MatchEnd])
+		} else if text[claim.MatchStart] == ':' || text[claim.MatchStart] == '#' {
+			// Keep the artifact path while dropping an unsupported attached suffix.
+		} else {
+			out.WriteString("the cited artifact evidence")
+		}
+		last = claim.MatchEnd
+	}
+	out.WriteString(text[last:])
+	return out.String()
+}
+
+var longCLIFlagRE = regexp.MustCompile(`--[A-Za-z][A-Za-z0-9-]*`)
+var shortCLIFlagRE = regexp.MustCompile(`(^|[[:space:]])(-[A-Za-z][A-Za-z0-9]*)`)
+
+const ungroundedRemediationFallback = "Apply the required remediation outcome using verified project automation, then rerun the failing job."
+
+type cliFlagMatch struct {
+	Value string
+	Start int
+	End   int
+}
+
+func cliFlagMatches(text string) []cliFlagMatch {
+	matches := make([]cliFlagMatch, 0)
+	for _, indexes := range longCLIFlagRE.FindAllStringIndex(text, -1) {
+		matches = append(matches, cliFlagMatch{Value: text[indexes[0]:indexes[1]], Start: indexes[0], End: indexes[1]})
+	}
+	for _, indexes := range shortCLIFlagRE.FindAllStringSubmatchIndex(text, -1) {
+		matches = append(matches, cliFlagMatch{Value: text[indexes[4]:indexes[5]], Start: indexes[4], End: indexes[5]})
+	}
+	sort.Slice(matches, func(i, j int) bool { return matches[i].Start < matches[j].Start })
+	return matches
+}
+
+func (s *agentState) preparePublishedAnalysis(parsed analysisResponse) analysisResponse {
+	matchedSkills := matchSkillsForDraft(s, parsed)
+	verified := make([]string, 0, len(parsed.RelevantFiles))
+	suggestions := append([]string(nil), parsed.SearchSuggestions...)
+	for _, candidate := range parsed.RelevantFiles {
+		candidate = strings.TrimSpace(candidate)
+		clean, err := artifacts.SafePath(candidate)
+		if err != nil || clean == "" || !isSourceCitation(clean) {
+			continue
+		}
+		if sourceReadMatches(strings.ToLower(clean), s.readSourceFull) {
+			verified = append(verified, clean)
+		} else {
+			suggestions = append(suggestions, candidate)
+		}
+	}
+	parsed.RelevantFiles = compactPublishedStrings(verified, 50)
+	parsed.SearchSuggestions = compactPublishedStrings(suggestions, 50)
+	parsed.RootCause = s.removeUngroundedSourcePaths(parsed.RootCause, "", true)
+	parsed.Summary = s.removeUngroundedSourcePaths(parsed.Summary, "", true)
+	if s.hasUngroundedSourcePath(parsed.SuggestedFix, false) {
+		parsed.SuggestedFix = ungroundedRemediationFallback
+	}
+	parsed.RootCause = s.removeUngroundedCLIFlags(parsed.RootCause, matchedSkills, "")
+	parsed.Summary = s.removeUngroundedCLIFlags(parsed.Summary, matchedSkills, "")
+	parsed.SuggestedFix = s.removeUngroundedCLIFlags(parsed.SuggestedFix, matchedSkills, ungroundedRemediationFallback)
+	return parsed
+}
+
+func (s *agentState) sourcePathGrounded(candidate string, allowArtifact bool) bool {
+	clean := strings.ToLower(strings.TrimPrefix(candidate, "./"))
+	return sourceReadMatches(clean, s.readSourceFull) || allowArtifact && readsArtifact(clean, s.readArtifactsFull, s.readArtifactsBase)
+}
+
+func (s *agentState) hasUngroundedSourcePath(text string, allowArtifact bool) bool {
+	for _, candidate := range sourceCitationRE.FindAllString(text, -1) {
+		if !s.sourcePathGrounded(candidate, allowArtifact) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *agentState) removeUngroundedSourcePaths(text, replacement string, allowArtifact bool) string {
+	return sourceCitationRE.ReplaceAllStringFunc(text, func(candidate string) string {
+		if s.sourcePathGrounded(candidate, allowArtifact) {
+			return candidate
+		}
+		return replacement
+	})
+}
+
+func readsArtifact(candidate string, full, base map[string]bool) bool {
+	normalized := NormalizeArtifactCitation(candidate)
+	if strings.Contains(normalized, "/") {
+		return full[normalized]
+	}
+	return full[normalized] || base[path.Base(normalized)]
+}
+
+func (s *agentState) removeUngroundedCLIFlags(text string, matchedSkills []skills.Skill, remediationFallback string) string {
+	flags := cliFlagMatches(text)
+	if len(flags) == 0 {
+		return text
+	}
+	var grounding []string
+	for _, snippets := range s.evidenceContentByPath {
+		grounding = append(grounding, snippets...)
+	}
+	for _, snippets := range s.sourceContentByPath {
+		grounding = append(grounding, snippets...)
+	}
+	for _, skill := range matchedSkills {
+		grounding = append(grounding, skill.Procedure)
+	}
+	joined := strings.Join(grounding, "\n")
+	groundedFlags := map[string]bool{}
+	for _, flag := range cliFlagMatches(joined) {
+		groundedFlags[flag.Value] = true
+	}
+	unsupported := map[string]bool{}
+	for _, flag := range flags {
+		if !groundedFlags[flag.Value] {
+			unsupported[flag.Value] = true
+		}
+	}
+	if len(unsupported) == 0 {
+		return text
+	}
+	if remediationFallback != "" {
+		return remediationFallback
+	}
+	var cleaned strings.Builder
+	last := 0
+	for _, flag := range flags {
+		cleaned.WriteString(text[last:flag.Start])
+		if !unsupported[flag.Value] {
+			cleaned.WriteString(flag.Value)
+		}
+		last = flag.End
+	}
+	cleaned.WriteString(text[last:])
+	return strings.Join(strings.Fields(cleaned.String()), " ")
+}
+
+func compactPublishedStrings(values []string, limit int) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.Join(strings.Fields(value), " ")
+		if value == "" || len(value) > 1024 || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+		if len(out) == limit {
+			break
+		}
+	}
+	return out
+}
+
 func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, messages []modelMessage, finalContent string, finalProviderItems []json.RawMessage, parsed analysisResponse, opts AgenticOptions, retries *critiqueRetryBudget, draftObserved bool, draftPhase string) analysisResponse {
 	if state.critiquePassed {
 		return state.bestDraft.parsed
 	}
-	out := critiqueDraftWithContent(parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, parsed), state.consecutiveFailures)
+	out := critiqueDraftWithContent(parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, parsed), state.consecutiveFailures, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
 	if len(out.MissingSkillEvidence) > 0 {
 		if treeSet := state.artifactTreeSet(); treeSet != nil {
 			pruneAbsentSkillEvidence(parsed, &out, treeSet)
@@ -1218,7 +1421,7 @@ func (c *Client) runBoundedCritiqueRepair(ctx context.Context, state *agentState
 		modelMessage{Role: "user", Content: strPtr(feedback)})
 	retry, _ := retries.admit()
 
-	updated := critiqueDraftWithContent(parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, parsed), state.consecutiveFailures)
+	updated := critiqueDraftWithContent(parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, parsed), state.consecutiveFailures, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
 	if len(updated.MissingSkillEvidence) > 0 {
 		if treeSet := state.artifactTreeSet(); treeSet != nil {
 			pruneAbsentSkillEvidence(parsed, &updated, treeSet)
@@ -1281,7 +1484,7 @@ func (c *Client) runBoundedCritiqueRepair(ctx context.Context, state *agentState
 		recordTrace(ctx, TraceEvent{Kind: "critique_retry", Outcome: "unparseable", Retry: retry, RetryAdmitted: true, InitialIssueCount: len(initial.Matches()), NewEvidenceReads: state.evidenceRevision - initialEvidenceRevision, RetryDurationMs: int(time.Since(started) / time.Millisecond), RemainingTimeMs: int(time.Until(state.deadline) / time.Millisecond), SelectedAttempt: state.bestDraft.attempt})
 		return state.bestDraft.parsed
 	}
-	out := critiqueDraftWithContent(next, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, next), state.consecutiveFailures)
+	out := critiqueDraftWithContent(next, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, next), state.consecutiveFailures, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
 	if len(out.MissingSkillEvidence) > 0 {
 		if treeSet := state.artifactTreeSet(); treeSet != nil {
 			pruneAbsentSkillEvidence(next, &out, treeSet)
@@ -1297,7 +1500,7 @@ func (c *Client) runBoundedCritiqueRepair(ctx context.Context, state *agentState
 		state.critiquePassed = state.bestDraft.quality.Passed
 	}
 	selected := state.bestDraft
-	selectedOut := critiqueDraftWithContent(selected.parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, selected.parsed), state.consecutiveFailures)
+	selectedOut := critiqueDraftWithContent(selected.parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, selected.parsed), state.consecutiveFailures, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
 	if len(selectedOut.MissingSkillEvidence) > 0 {
 		if treeSet := state.artifactTreeSet(); treeSet != nil {
 			pruneAbsentSkillEvidence(selected.parsed, &selectedOut, treeSet)
@@ -1315,7 +1518,7 @@ func (c *Client) runBoundedCritiqueRepair(ctx context.Context, state *agentState
 }
 
 func critiqueRepairNeedsTools(out critiqueOutcome) bool {
-	return len(out.UnreadCitations) > 0 || len(out.MissingSkillEvidence) > 0
+	return len(out.UnreadCitations) > 0 || len(out.CitationIssues) > 0 || len(out.MissingSkillEvidence) > 0
 }
 
 func (s *agentState) observeDraft(phase string, parsed analysisResponse, out critiqueOutcome) int {
@@ -1339,6 +1542,7 @@ func (s *agentState) observeDraft(phase string, parsed analysisResponse, out cri
 		RelevantFiles:       append([]string(nil), parsed.RelevantFiles...),
 		PuntCount:           len(out.PuntMatches),
 		UnreadCitationCount: len(out.UnreadCitations),
+		CitationIssueCount:  len(out.CitationIssues),
 		MissingGroupCount:   out.MissingEvidenceCount(),
 		TransientConflict:   out.TransientPersistCount > 0,
 		ToolCalls:           s.calls,
@@ -1352,6 +1556,7 @@ func critiqueQualityFor(out critiqueOutcome) critiqueQuality {
 		Passed:               out.Passed,
 		TransientConflict:    out.TransientPersistCount > 0,
 		UnreadCitationCount:  len(out.UnreadCitations),
+		CitationIssueCount:   len(out.CitationIssues),
 		MissingEvidenceCount: out.MissingEvidenceCount(),
 		PuntCount:            len(out.PuntMatches),
 	}
@@ -1372,6 +1577,7 @@ func compareCritiqueQuality(a, b critiqueQuality) int {
 		return -1
 	}
 	for _, counts := range [][2]int{
+		{a.CitationIssueCount, b.CitationIssueCount},
 		{a.UnreadCitationCount, b.UnreadCitationCount},
 		{a.MissingEvidenceCount, b.MissingEvidenceCount},
 		{a.PuntCount, b.PuntCount},
@@ -1777,10 +1983,6 @@ func (c *Client) cacheAcceptedAnalysis(cacheKey string, parsed analysisResponse,
 	if state.judgeObjected && !state.judgeRevised {
 		return
 	}
-	version := 0
-	if critiquePassed {
-		version = currentCritiqueVersion
-	}
 	skillHash := ""
 	if state.skillSet != nil {
 		skillHash = state.skillSet.Hash()
@@ -1795,7 +1997,7 @@ func (c *Client) cacheAcceptedAnalysis(cacheKey string, parsed analysisResponse,
 		EvidencePlanCovered: state.evidencePlanCovered(),
 		BudgetExhausted:     state.budgetExhausted,
 		CritiquePassed:      critiquePassed,
-		CritiqueVersion:     version,
+		CritiqueVersion:     currentCritiqueVersion,
 		SkillSetHash:        skillHash,
 		ModelHash:           c.modelFingerprint(),
 		PromptHash:          state.promptHash,
@@ -1927,14 +2129,16 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc model
 	// the hallucination gate.
 	if isContentFetchingTool(tc.Function.Name) {
 		if !toolFailed {
-			if p := extractToolPathArg(tc.Function.Arguments); p != "" {
+			if p := extractToolPathArg(tc.Function.Arguments); p != "" && visiblePayload != nil {
 				s.recordSuccessfulRead(p)
-				originalSnippets := toolResultSnippets(tc.Function.Name, result.Payload)
-				newPath := false
-				if len(originalSnippets) > 0 {
-					newPath = s.recordEvidenceRead(p)
+				if !recordAnalysisChatEvidence(s.analysisEvidence, tc, visiblePayload) {
+					s.analysisEvidenceFull = true
 				}
 				visibleSnippets := toolResultSnippets(tc.Function.Name, visiblePayload)
+				newPath := false
+				if len(visibleSnippets) > 0 {
+					newPath = s.recordEvidenceRead(p)
+				}
 				contentAdded := false
 				for _, snippet := range visibleSnippets {
 					contentAdded = s.recordEvidenceContent(p, snippet) || contentAdded
@@ -1949,6 +2153,7 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc model
 		for _, repoPath := range visibleRepoReadPaths(tc, visiblePayload) {
 			s.recordSourceRead(repoPath)
 		}
+		s.recordSourceContent(tc, visiblePayload)
 	}
 
 	// Optional per-tool-call trace for diagnosing investigation behavior.
@@ -2218,6 +2423,34 @@ func canonicalTrackedArtifactPath(rawPath string) (string, string) {
 		return "", ""
 	}
 	return casePath, NormalizeArtifactCitation(casePath)
+}
+
+func (s *agentState) recordSourceContent(tc modelToolCall, payload map[string]interface{}) {
+	if payload == nil {
+		return
+	}
+	if s.sourceContentByPath == nil {
+		s.sourceContentByPath = map[string][]string{}
+	}
+	add := func(rawPath, content string) {
+		_, norm := canonicalTrackedArtifactPath(rawPath)
+		if norm == "" || strings.TrimSpace(content) == "" {
+			return
+		}
+		s.sourceContentByPath[norm] = append(s.sourceContentByPath[norm], content)
+	}
+	switch tc.Function.Name {
+	case "read_repo_file":
+		path := extractToolPathArg(tc.Function.Arguments)
+		if content, _ := payload["content"].(string); content != "" {
+			add(path, content)
+		}
+	case "grep_repo":
+		for _, match := range analysisChatEvidenceMatches(payload["matches"]) {
+			path, _ := match["path"].(string)
+			add(path, flattenGrepContext(match["context"]))
+		}
+	}
 }
 
 func toolEnvelopeJSON(s *agentState, payload map[string]interface{}) string {

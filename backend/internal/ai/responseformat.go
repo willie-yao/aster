@@ -17,8 +17,12 @@ Always respond with a single JSON object matching this schema:
   "is_transient":   true | false,
   "root_cause":     "Full causal chain from observed symptom back to the underlying cause as far as the available evidence allows. At least 3-5 sentences. Quote the exact log line(s) that prove each link in the chain and cite the artifact path each quote came from. Do NOT stop at the first error message you see; trace the chain back to the underlying cause through every layer the evidence supports. If two distinct artifacts independently support the same conclusion, cite both.",
   "severity":       "Critical" | "High" | "Medium" | "Low",
-  "suggested_fix":  "Provide a concrete remediation. Name the specific file (with line number where applicable), the exact edit or command, and one verification step the operator can run to confirm the fix worked. Do not list diagnostic or information-gathering tasks as the fix; those belong in your analysis, not handed back to the user. If the available evidence is insufficient to determine a remediation, say so explicitly here, starting with the exact phrase 'No remediation possible from available evidence:' followed by which evidence is missing in your own words, rather than disguising the gap as a TODO list.",
-  "relevant_files": ["file1.go", "file2.yaml"]
+  "suggested_fix":      "Provide a concrete remediation. Name only verified source files. Do not list diagnostic or information-gathering tasks as the fix. Include exact CLI flags only when they appear in evidence you read or in an applicable project recipe. Otherwise describe the required outcome without inventing command syntax. Include one verification step. If the available evidence is insufficient, start with 'No remediation possible from available evidence:' and name the missing evidence.",
+  "relevant_files":     ["source/path/read_at_the_pinned_revision.go"],
+  "search_suggestions": ["unverified/path-or-name-hint"],
+  "evidence_citations": [
+    {"path":"artifact/path.log","line_start":2494,"line_end":2494,"quote":"exact text returned for that line"}
+  ]
 }
 
 Set is_transient=true when the root cause is a transient infrastructure

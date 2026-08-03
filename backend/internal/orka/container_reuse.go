@@ -251,6 +251,8 @@ func sameAgenticResult(left, right ai.FailureAnalysisResult) bool {
 		left.Analysis.Severity == right.Analysis.Severity &&
 		left.Analysis.SuggestedFix == right.Analysis.SuggestedFix &&
 		slices.Equal(left.Analysis.RelevantFiles, right.Analysis.RelevantFiles) &&
+		slices.Equal(left.Analysis.SearchSuggestions, right.Analysis.SearchSuggestions) &&
+		slices.Equal(left.Analysis.EvidenceCitations, right.Analysis.EvidenceCitations) &&
 		left.Analysis.ToolCalls == right.Analysis.ToolCalls &&
 		left.Analysis.ContextBytes == right.Analysis.ContextBytes &&
 		left.Analysis.GCSBytes == right.Analysis.GCSBytes &&

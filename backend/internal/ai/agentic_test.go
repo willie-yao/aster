@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -591,8 +592,8 @@ func TestAgentic_MinToolCalls_NudgeForcesInvestigation(t *testing.T) {
 	if summary.Summary != "real cause" {
 		t.Errorf("expected post-nudge final, got summary=%q", summary.Summary)
 	}
-	if analysis.RootCause != "found in build-log.txt line 42" {
-		t.Errorf("expected post-nudge root cause, got %q", analysis.RootCause)
+	if analysis.RootCause != "found in build-log.txt the cited artifact evidence" {
+		t.Errorf("expected unsupported line claim to be removed, got %q", analysis.RootCause)
 	}
 	if analysis.ToolCalls != 1 {
 		t.Errorf("tool_calls = %d, want 1", analysis.ToolCalls)
@@ -1204,8 +1205,8 @@ func TestAgentic_Critique_FailRetryPass(t *testing.T) {
 	if summary.Summary != "deep" {
 		t.Errorf("expected clean final, got summary=%q", summary.Summary)
 	}
-	if !strings.Contains(analysis.SuggestedFix, "kustomize/cluster-template.yaml") {
-		t.Errorf("expected concrete fix, got %q", analysis.SuggestedFix)
+	if !strings.Contains(analysis.SuggestedFix, "verified project automation") || len(analysis.RelevantFiles) != 0 || !slices.Contains(analysis.SearchSuggestions, "kustomize/cluster-template.yaml") {
+		t.Errorf("expected filtered remediation, got fix=%q relevant=%v suggestions=%v", analysis.SuggestedFix, analysis.RelevantFiles, analysis.SearchSuggestions)
 	}
 
 	// Critique-passing answer must be cached: second call hits cache, no
@@ -1526,11 +1527,11 @@ func TestAgentic_DraftObserverReceivesCopiesInOrder(t *testing.T) {
 	if observations[1].Attempt != 2 || observations[1].Phase != "critique_retry" || observations[1].PuntCount != 0 {
 		t.Fatalf("revised observation = %+v", observations[1])
 	}
-	if analysis.RootCause != observations[1].RootCause || analysis.SuggestedFix != observations[1].SuggestedFix {
+	if analysis.RootCause != observations[1].RootCause || strings.Contains(analysis.SuggestedFix, "observer mutation") {
 		t.Fatalf("observer mutation affected runtime: analysis=%+v observation=%+v", analysis, observations[1])
 	}
-	if len(analysis.RelevantFiles) != 1 || analysis.RelevantFiles[0] != "kustomize/cluster-template.yaml" {
-		t.Fatalf("observer mutated relevant files: %v", analysis.RelevantFiles)
+	if len(analysis.RelevantFiles) != 0 || !slices.Contains(analysis.SearchSuggestions, "kustomize/cluster-template.yaml") {
+		t.Fatalf("published file classification: relevant=%v suggestions=%v", analysis.RelevantFiles, analysis.SearchSuggestions)
 	}
 
 	_, hit, err := client.doAnalyzeAgentic(context.Background(), in,
@@ -1672,7 +1673,7 @@ func TestAgentic_CritiqueZeroRetriesMakesNoRepairRequest(t *testing.T) {
 			if got := atomic.LoadInt32(&srv.calls); got != before {
 				t.Fatalf("cached call count = %d, want %d", got, before)
 			}
-			if !cached.CacheHit || cached.CritiquePassed || cached.CritiqueVersion != 0 {
+			if !cached.CacheHit || cached.CritiquePassed || cached.CritiqueVersion != currentCritiqueVersion {
 				t.Fatalf("cached analysis = %+v", cached)
 			}
 		})
@@ -2091,8 +2092,8 @@ func TestCritiqueDraft_FeedbackTruncatesLongFix(t *testing.T) {
 // hallucinatedFinalJSON has a clean suggested_fix but cites unread manager.log.
 const hallucinatedFinalJSON = `{"summary":"deep","is_transient":false,"root_cause":"manager.log shows the controller failed to reconcile the AzureMachine","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 142 to match the staging vnet peering name; reapply.","relevant_files":[]}`
 
-// readThenCleanFinalJSON cites build-log.txt, which the model has read.
-const readThenCleanFinalJSON = `{"summary":"deep","is_transient":false,"root_cause":"build-log.txt:42 shows the vnet peering name mismatch","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 142 to match the staging vnet peering name; reapply.","relevant_files":["build-log.txt"]}`
+// readThenCleanFinalJSON cites build-log.txt at the exact line returned by grep.
+const readThenCleanFinalJSON = `{"summary":"deep","is_transient":false,"root_cause":"build-log.txt:42 shows the vnet peering name mismatch","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 142 to match the staging vnet peering name; reapply.","relevant_files":["build-log.txt"],"evidence_citations":[{"path":"build-log.txt","line_start":42,"line_end":42,"quote":"vnet peering mismatch"}]}`
 
 // TestAgentic_HallucinationRetry verifies an unread-citation critique can
 // recover after the model reads and cites a matching artifact.
@@ -2102,16 +2103,16 @@ func TestAgentic_HallucinationRetry(t *testing.T) {
 
 	// Round 1: model emits final citing manager.log (never read).
 	srv.push(200, chatRespFinal(hallucinatedFinalJSON))
-	// Round 2: after critique feedback, model reads build-log.txt.
-	srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]interface{}{
-		"path": "build-log.txt", "offset": 0, "length": 256,
+	// Round 2: after critique feedback, model greps the exact build-log line.
+	srv.push(200, chatRespToolCall("c1", "grep_artifact", map[string]interface{}{
+		"path": "build-log.txt", "pattern": "vnet peering mismatch", "context_lines": 0,
 	}))
 	// Round 3: re-emit citing build-log.txt, which passes.
 	srv.push(200, chatRespFinal(readThenCleanFinalJSON))
 
 	client := newAgenticTestClient(t, srv.URL)
 	browser := &fakeBrowser{
-		files: map[string][]byte{"build-log.txt": []byte("vnet peering mismatch on line 42\n")},
+		files: map[string][]byte{"build-log.txt": []byte(strings.Repeat("\n", 41) + "vnet peering mismatch on line 42\n")},
 		dirs:  map[string][]string{"": {"artifacts"}},
 	}
 	opts := AgenticOptions{
@@ -3331,7 +3332,7 @@ func TestEvidenceTrackingCanonicalizesSafeToolPath(t *testing.T) {
 	}
 }
 
-func TestTruncatedToolEnvelopeDoesNotCreateInvisibleContentProof(t *testing.T) {
+func TestTruncatedToolEnvelopeCreatesNoInvisibleEvidence(t *testing.T) {
 	registry, enabled := newTestRegistry(t)
 	line := "MATCH " + strings.Repeat("x", 900) + "\n"
 	browser := &fakeBrowser{files: map[string][]byte{"logs/large.log": []byte(strings.Repeat(line, 100))}}
@@ -3352,7 +3353,7 @@ func TestTruncatedToolEnvelopeDoesNotCreateInvisibleContentProof(t *testing.T) {
 	if len(envelope) <= agenticToolBudget || modelVisibleToolPayload(envelope) != nil {
 		t.Fatalf("expected a truncated non-decodable envelope, length=%d", len(envelope))
 	}
-	if !state.evidenceArtifactsFull["logs/large.log"] || len(state.evidenceContentByPath) != 0 {
+	if len(state.evidenceArtifactsFull) != 0 || len(state.evidenceContentByPath) != 0 || len(state.analysisEvidence) != 0 {
 		t.Fatalf("capped evidence tracking = paths:%v content:%v", state.evidenceArtifactsFull, state.evidenceContentByPath)
 	}
 }

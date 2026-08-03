@@ -32,7 +32,8 @@ type AgenticCachePolicy struct {
 	ModelHash           string
 	PromptHash          string
 	CacheGeneration     string
-	// CritiqueRequired makes critique success and version part of acceptance.
+	// CritiqueRequired makes critique success part of acceptance. The version is
+	// always required so cached output satisfies the current publication contract.
 	CritiqueRequired   bool
 	Now                time.Time
 	entryTimeValidated bool
@@ -127,7 +128,7 @@ func AgenticResultRejection(result FailureAnalysisResult, policy AgenticCachePol
 	if gcsFloorUnmet(analysis.GCSBytes, policy.MinGCSBytes, analysis.EvidencePlanCovered) {
 		return CacheRejectedEvidenceFloor
 	}
-	if policy.CritiqueRequired && (!analysis.CritiquePassed || analysis.CritiqueVersion < currentCritiqueVersion) {
+	if analysis.CritiqueVersion < currentCritiqueVersion || policy.CritiqueRequired && !analysis.CritiquePassed {
 		return CacheRejectedCritique
 	}
 	if analysis.CacheGeneration != policy.CacheGeneration {
@@ -155,12 +156,14 @@ func NewAgenticCacheEntry(key string, result FailureAnalysisResult, createdAt ti
 	}
 	data := agenticCacheData{
 		analysisResponse: analysisResponse{
-			Summary:       result.Summary.Summary,
-			IsTransient:   result.Summary.IsTransient,
-			RootCause:     result.Analysis.RootCause,
-			Severity:      result.Analysis.Severity,
-			SuggestedFix:  result.Analysis.SuggestedFix,
-			RelevantFiles: append([]string(nil), result.Analysis.RelevantFiles...),
+			Summary:           result.Summary.Summary,
+			IsTransient:       result.Summary.IsTransient,
+			RootCause:         result.Analysis.RootCause,
+			Severity:          result.Analysis.Severity,
+			SuggestedFix:      result.Analysis.SuggestedFix,
+			RelevantFiles:     append([]string(nil), result.Analysis.RelevantFiles...),
+			SearchSuggestions: append([]string(nil), result.Analysis.SearchSuggestions...),
+			EvidenceCitations: append([]models.EvidenceCitation(nil), result.Analysis.EvidenceCitations...),
 		},
 		GeneratedAt:         generatedAt,
 		Model:               result.Analysis.Model,

@@ -456,9 +456,28 @@ func compatibleFailureResult(policy ai.AgenticCachePolicy) ai.FailureAnalysisRes
 		Analysis: &models.AIAnalysis{
 			GeneratedAt: generatedAt, Mode: ai.AgenticMode, Model: policy.Model,
 			RootCause: "root", Severity: "High", SuggestedFix: "fix", RelevantFiles: []string{"a.go"},
+			SearchSuggestions: []string{"search/a.go"}, EvidenceCitations: []models.EvidenceCitation{{Path: "build-log.txt", LineStart: 7, LineEnd: 7, Quote: "failure"}},
 			ToolCalls: 2, ContextBytes: 100, GCSBytes: 50, CritiquePassed: true, CritiqueVersion: 999,
 			ModelHash: policy.ModelHash, PromptHash: policy.PromptHash,
 		},
+	}
+}
+
+func TestSameAgenticResultIncludesPublicationEvidence(t *testing.T) {
+	policy := compatibleResultPolicy(ContainerAnalyzerOptions{API: ai.APIChatCompletions, Endpoint: "https://model.invalid/v1/chat/completions", Model: "model"})
+	left := compatibleFailureResult(policy)
+	right := compatibleFailureResult(policy)
+	if !sameAgenticResult(left, right) {
+		t.Fatal("matching results were not equal")
+	}
+	right.Analysis.SearchSuggestions = []string{"different.go"}
+	if sameAgenticResult(left, right) {
+		t.Fatal("different search suggestions were treated as equal")
+	}
+	right = compatibleFailureResult(policy)
+	right.Analysis.EvidenceCitations[0].LineStart = 8
+	if sameAgenticResult(left, right) {
+		t.Fatal("different evidence citations were treated as equal")
 	}
 }
 

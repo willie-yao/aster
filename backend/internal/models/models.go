@@ -91,6 +91,14 @@ type AISummary struct {
 	IsTransient bool   `json:"is_transient"`
 }
 
+// EvidenceCitation identifies an exact artifact range supporting an analysis claim.
+type EvidenceCitation struct {
+	Path      string `json:"path"`
+	LineStart int    `json:"line_start"`
+	LineEnd   int    `json:"line_end"`
+	Quote     string `json:"quote"`
+}
+
 // AIAnalysis is a deep AI-generated root cause analysis.
 type AIAnalysis struct {
 	GeneratedAt string `json:"generated_at"`
@@ -98,11 +106,13 @@ type AIAnalysis struct {
 	// in-memory for cache validation and debug logging, but never serialized
 	// to public JSON so internal-only model labels do not leak via the
 	// deployed GitHub Pages data files.
-	Model         string   `json:"-"`
-	RootCause     string   `json:"root_cause"`
-	Severity      string   `json:"severity"` // Critical, High, Medium, Low, Transient-Ignore
-	SuggestedFix  string   `json:"suggested_fix"`
-	RelevantFiles []string `json:"relevant_files,omitempty"`
+	Model             string             `json:"-"`
+	RootCause         string             `json:"root_cause"`
+	Severity          string             `json:"severity"` // Critical, High, Medium, Low, Transient-Ignore
+	SuggestedFix      string             `json:"suggested_fix"`
+	RelevantFiles     []string           `json:"relevant_files,omitempty"`
+	SearchSuggestions []string           `json:"search_suggestions,omitempty"`
+	EvidenceCitations []EvidenceCitation `json:"evidence_citations,omitempty"`
 	// Mode records the analysis pipeline. Cache gates reject non-agentic entries.
 	Mode string `json:"mode,omitempty"`
 	// ToolCalls is the number of agent tool invocations made during this

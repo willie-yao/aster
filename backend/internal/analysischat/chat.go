@@ -1172,6 +1172,8 @@ func cloneTestCase(testCase models.TestCase) models.TestCase {
 	if testCase.AIAnalysis != nil {
 		analysis := *testCase.AIAnalysis
 		analysis.RelevantFiles = slices.Clone(analysis.RelevantFiles)
+		analysis.SearchSuggestions = slices.Clone(analysis.SearchSuggestions)
+		analysis.EvidenceCitations = slices.Clone(analysis.EvidenceCitations)
 		analysis.FileLinks = maps.Clone(analysis.FileLinks)
 		testCase.AIAnalysis = &analysis
 	}

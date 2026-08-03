@@ -185,6 +185,25 @@ func TestApplySemanticJudgePostLoop_RefinalizesOnObjection(t *testing.T) {
 	}
 }
 
+func TestApplySemanticJudgePostLoopRejectsInvalidCitationRevision(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal(`{"objections":["verify the exact failure location"]}`))
+	srv.push(200, chatRespFinal(`{"summary":"revised","is_transient":false,"root_cause":"failure at line 999","severity":"High","suggested_fix":"Set the route table.","relevant_files":[]}`))
+	client := newAgenticTestClient(t, srv.URL)
+
+	state := &agentState{
+		readArtifactsFull: map[string]bool{}, readArtifactsBase: map[string]bool{},
+		analysisEvidence: map[string]*analysisChatEvidence{},
+	}
+	orig := analysisResponse{Summary: "sound", RootCause: "verified root cause", SuggestedFix: "Set the route table."}
+	got := client.applySemanticJudgePostLoop(context.Background(), state, []modelMessage{{Role: "user", Content: strPtr("u")}}, "sound-final", nil, orig, contextHeadroomFor(AgenticOptions{ContextByteBudget: 100_000}))
+
+	if got.RootCause != orig.RootCause || state.judgeRevised {
+		t.Fatalf("invalid semantic revision replaced the valid draft: got=%+v state=%+v", got, state)
+	}
+}
+
 // TestApplySemanticJudgePostLoop_NoObjectionsKeepsDraft verifies a sound draft
 // is returned unchanged and no refinalize round is spent.
 func TestApplySemanticJudgePostLoop_NoObjectionsKeepsDraft(t *testing.T) {

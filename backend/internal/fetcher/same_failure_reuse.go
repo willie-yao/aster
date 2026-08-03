@@ -47,6 +47,8 @@ func cloneFailureAnalysisResult(result ai.FailureAnalysisResult) ai.FailureAnaly
 	if result.Analysis != nil {
 		analysis := *result.Analysis
 		analysis.RelevantFiles = slices.Clone(result.Analysis.RelevantFiles)
+		analysis.SearchSuggestions = slices.Clone(result.Analysis.SearchSuggestions)
+		analysis.EvidenceCitations = slices.Clone(result.Analysis.EvidenceCitations)
 		analysis.FileLinks = maps.Clone(result.Analysis.FileLinks)
 		out.Analysis = &analysis
 	}
