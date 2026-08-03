@@ -1098,4 +1098,251 @@ if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
 fi
 grep -Fq 'ai.githubReadToken and ai.githubReadTokenSecretName are mutually exclusive' "$tmp/github-read-conflict.yaml"
 
+# Service origin and NetworkPolicy guardrails.
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --show-only templates/server-service.yaml > "$tmp/service-default.yaml"
+grep -Fq 'type: ClusterIP' "$tmp/service-default.yaml"
+if grep -Eq 'loadBalancerSourceRanges:|externalTrafficPolicy:' "$tmp/service-default.yaml"; then
+  echo 'default ClusterIP rendered LoadBalancer fields' >&2
+  exit 1
+fi
+
+cat > "$tmp/origin-source-ranges.yaml" <<'VALUES'
+server:
+  actions:
+    enabled: true
+    mode: oauth
+    admins: [alice]
+    oauth:
+      clientId: client
+      clientSecret: secret
+      sessionKey: session-key
+      redirectUrl: https://dashboard.test/api/auth/callback
+  service:
+    type: LoadBalancer
+    loadBalancerSourceRanges: [10.0.0.0/8]
+    externalTrafficPolicy: Local
+networkPolicy:
+  enabled: true
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-system
+      ports:
+        - protocol: TCP
+          port: 8080
+VALUES
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/origin-source-ranges.yaml" \
+  --show-only templates/server-service.yaml > "$tmp/service-source-ranges.yaml"
+grep -Fq 'type: LoadBalancer' "$tmp/service-source-ranges.yaml"
+grep -A1 -F 'loadBalancerSourceRanges:' "$tmp/service-source-ranges.yaml" | grep -Fq '10.0.0.0/8'
+grep -Fq 'externalTrafficPolicy: Local' "$tmp/service-source-ranges.yaml"
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/origin-source-ranges.yaml" \
+  --show-only templates/networkpolicy.yaml > "$tmp/networkpolicy-ingress.yaml"
+grep -Fq 'kind: NetworkPolicy' "$tmp/networkpolicy-ingress.yaml"
+grep -Fq 'kubernetes.io/metadata.name: ingress-system' "$tmp/networkpolicy-ingress.yaml"
+grep -Fq 'port: 8080' "$tmp/networkpolicy-ingress.yaml"
+
+for family in ipv4 ipv6; do
+  if [[ $family == ipv4 ]]; then
+    first_range=0.0.0.0/1
+    second_range=128.0.0.0/1
+  else
+    first_range=::/1
+    second_range=8000::/1
+  fi
+  if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/origin-source-ranges.yaml" \
+    --set-string "server.service.loadBalancerSourceRanges[0]=$first_range" \
+    --set-string "server.service.loadBalancerSourceRanges[1]=$second_range" > "$tmp/service-complementary-${family}.yaml" 2>&1; then
+    echo "complementary $family ranges were accepted without public acknowledgement" >&2
+    exit 1
+  fi
+  grep -Fq 'authenticated actions or chat with multiple loadBalancerSourceRanges require publicOriginAcknowledged=true' "$tmp/service-complementary-${family}.yaml"
+done
+
+helm install complementary-notes "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/origin-source-ranges.yaml" \
+  --set-string 'server.service.loadBalancerSourceRanges[0]=0.0.0.0/1' \
+  --set-string 'server.service.loadBalancerSourceRanges[1]=128.0.0.0/1' \
+  --set server.service.publicOriginAcknowledged=true \
+  --dry-run=client --debug > "$tmp/service-complementary-notes.yaml" 2>&1
+grep -Fq 'multiple LoadBalancer source ranges explicitly acknowledged' "$tmp/service-complementary-notes.yaml"
+
+cat > "$tmp/origin-internal.yaml" <<'VALUES'
+server:
+  actions:
+    enabled: true
+    mode: proxy
+    admins: [alice]
+    proxy:
+      botToken: test-token
+  service:
+    type: LoadBalancer
+    internal:
+      enabled: true
+      annotations:
+        service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+VALUES
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/origin-internal.yaml" \
+  --show-only templates/server-service.yaml > "$tmp/service-internal.yaml"
+grep -Fq 'service.beta.kubernetes.io/azure-load-balancer-internal: "true"' "$tmp/service-internal.yaml"
+
+cat > "$tmp/origin-unrestricted.yaml" <<'VALUES'
+server:
+  actions:
+    enabled: true
+    mode: proxy
+    admins: [alice]
+    proxy:
+      botToken: test-token
+  service:
+    type: LoadBalancer
+    annotations:
+      service.beta.kubernetes.io/azure-allowed-service-tags: AzureFrontDoor.Backend
+VALUES
+if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/origin-unrestricted.yaml" > "$tmp/service-unrestricted.yaml" 2>&1; then
+  echo 'authenticated actions accepted an unrestricted public LoadBalancer' >&2
+  exit 1
+fi
+grep -Fq 'authenticated actions or chat with a LoadBalancer require loadBalancerSourceRanges, internal.enabled, or publicOriginAcknowledged=true' "$tmp/service-unrestricted.yaml"
+
+cat > "$tmp/origin-chat-unrestricted.yaml" <<'VALUES'
+ai:
+  enabled: true
+  endpoint: http://model.test/v1/chat/completions
+  model: test-model
+  token: test-token
+server:
+  chat:
+    enabled: true
+  actions:
+    mode: proxy
+    admins: [alice]
+  service:
+    type: LoadBalancer
+VALUES
+if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/origin-chat-unrestricted.yaml" > "$tmp/service-chat-unrestricted.yaml" 2>&1; then
+  echo 'authenticated chat accepted an unrestricted public LoadBalancer' >&2
+  exit 1
+fi
+grep -Fq 'authenticated actions or chat with a LoadBalancer require loadBalancerSourceRanges, internal.enabled, or publicOriginAcknowledged=true' "$tmp/service-chat-unrestricted.yaml"
+
+cat > "$tmp/origin-acknowledged.yaml" <<'VALUES'
+server:
+  actions:
+    enabled: true
+    mode: proxy
+    admins: [alice]
+    proxy:
+      botToken: test-token
+  service:
+    type: LoadBalancer
+    publicOriginAcknowledged: true
+VALUES
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/origin-acknowledged.yaml" \
+  --show-only templates/server-service.yaml > "$tmp/service-acknowledged.yaml"
+grep -Fq 'type: LoadBalancer' "$tmp/service-acknowledged.yaml"
+helm install notes-test "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/origin-acknowledged.yaml" \
+  --dry-run=client --debug > "$tmp/service-acknowledged-notes.yaml" 2>&1
+grep -Fq 'WARNING: public LoadBalancer origin explicitly acknowledged' "$tmp/service-acknowledged-notes.yaml"
+grep -Fq 'Service annotations are pass-through configuration, not proof' "$tmp/service-acknowledged-notes.yaml"
+
+if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set networkPolicy.ingress[0].ports[0].port=8080 > "$tmp/networkpolicy-disabled-ingress.yaml" 2>&1; then
+  echo 'networkPolicy ingress was accepted while disabled' >&2
+  exit 1
+fi
+grep -Fq 'networkPolicy.ingress requires networkPolicy.enabled=true' "$tmp/networkpolicy-disabled-ingress.yaml"
+
+cat > "$tmp/old-reuse-values.yaml" <<'VALUES'
+server:
+  service:
+    type: ClusterIP
+    port: 80
+    annotations: {}
+    internal: null
+    loadBalancerSourceRanges: null
+    externalTrafficPolicy: null
+    publicOriginAcknowledged: null
+networkPolicy:
+  enabled: true
+  ingress: null
+  from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: legacy-ingress
+VALUES
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/old-reuse-values.yaml" > "$tmp/old-reuse-render.yaml"
+grep -Fq 'type: ClusterIP' "$tmp/old-reuse-render.yaml"
+grep -Fq 'kubernetes.io/metadata.name: legacy-ingress' "$tmp/old-reuse-render.yaml"
+grep -Fq 'port: 8080' "$tmp/old-reuse-render.yaml"
+helm install old-reuse-notes "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/old-reuse-values.yaml" \
+  --dry-run=client --debug > "$tmp/old-reuse-notes.yaml" 2>&1
+grep -Fq 'ClusterIP only' "$tmp/old-reuse-notes.yaml"
+
+cat > "$tmp/explicit-empty-ingress.yaml" <<'VALUES'
+networkPolicy:
+  enabled: true
+  ingress: []
+  from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: stale-ingress
+VALUES
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/explicit-empty-ingress.yaml" \
+  --show-only templates/networkpolicy.yaml > "$tmp/explicit-empty-ingress-render.yaml"
+grep -A1 -F 'ingress:' "$tmp/explicit-empty-ingress-render.yaml" | grep -Fq '[]'
+if grep -Fq 'stale-ingress' "$tmp/explicit-empty-ingress-render.yaml"; then
+  echo 'explicit empty ingress retained a legacy peer' >&2
+  exit 1
+fi
+
+for invalid_origin in ranges-on-clusterip universal-ipv4-range zero-padded-universal-range universal-ipv6-range alternate-universal-ipv6-range empty-range internal-without-annotations acknowledgement-on-clusterip invalid-external-policy; do
+  invalid_args=()
+  want=
+  case "$invalid_origin" in
+    ranges-on-clusterip)
+      invalid_args=(--set server.service.loadBalancerSourceRanges[0]=10.0.0.0/8)
+      want='server.service.loadBalancerSourceRanges requires server.service.type=LoadBalancer'
+      ;;
+    universal-ipv4-range)
+      invalid_args=(--set server.service.type=LoadBalancer --set server.service.loadBalancerSourceRanges[0]=0.0.0.0/0)
+      want='server.service.loadBalancerSourceRanges must not contain universal CIDRs'
+      ;;
+    zero-padded-universal-range)
+      invalid_args=(--set server.service.type=LoadBalancer --set server.service.loadBalancerSourceRanges[0]=0.0.0.0/00)
+      want='server.service.loadBalancerSourceRanges must not contain universal CIDRs'
+      ;;
+    universal-ipv6-range)
+      invalid_args=(--set server.service.type=LoadBalancer --set server.service.loadBalancerSourceRanges[0]=::/0)
+      want='server.service.loadBalancerSourceRanges must not contain universal CIDRs'
+      ;;
+    alternate-universal-ipv6-range)
+      invalid_args=(--set server.service.type=LoadBalancer --set server.service.loadBalancerSourceRanges[0]=0:0:0:0:0:0:0:0/0)
+      want='server.service.loadBalancerSourceRanges must not contain universal CIDRs'
+      ;;
+    empty-range)
+      invalid_args=(--set server.service.type=LoadBalancer --set-string server.service.loadBalancerSourceRanges[0]=)
+      want='server.service.loadBalancerSourceRanges must not contain empty entries'
+      ;;
+    internal-without-annotations)
+      invalid_args=(--set server.service.type=LoadBalancer --set server.service.internal.enabled=true)
+      want='server.service.internal.annotations is required when internal.enabled=true'
+      ;;
+    acknowledgement-on-clusterip)
+      invalid_args=(--set server.service.publicOriginAcknowledged=true)
+      want='server.service.publicOriginAcknowledged applies only to LoadBalancer Services'
+      ;;
+    invalid-external-policy)
+      invalid_args=(--set server.service.type=LoadBalancer --set server.service.externalTrafficPolicy=External)
+      want='server.service.externalTrafficPolicy must be empty, Cluster, or Local'
+      ;;
+  esac
+  if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" "${invalid_args[@]}" > "$tmp/origin-${invalid_origin}.yaml" 2>&1; then
+    echo "invalid origin configuration was accepted: $invalid_origin" >&2
+    exit 1
+  fi
+  grep -Fq "$want" "$tmp/origin-${invalid_origin}.yaml"
+done
+
 echo 'Helm render checks passed.'

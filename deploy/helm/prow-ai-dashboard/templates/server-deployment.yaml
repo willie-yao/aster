@@ -1,3 +1,4 @@
+{{- include "prow-ai-dashboard.validateNetworkSecurity" . -}}
 {{- $actions := .Values.server.actions.enabled -}}
 {{- $chat := .Values.server.chat.enabled -}}
 {{- $corrections := .Values.server.chat.correctionsEnabled -}}

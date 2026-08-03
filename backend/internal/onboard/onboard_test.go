@@ -429,6 +429,9 @@ func TestScaffold_K8sMode(t *testing.T) {
 	if !strings.Contains(values, opts.AIEndpoint) || !strings.Contains(values, opts.AIModel) {
 		t.Errorf("values.yaml did not seed AI endpoint/model from env:\n%s", values)
 	}
+	if !strings.Contains(values, "type: ClusterIP") || !strings.Contains(values, "networkPolicy:\n  enabled: false") {
+		t.Errorf("values.yaml did not preserve safe network defaults:\n%s", values)
+	}
 	readme, err := render(k8sDeployReadmeTmpl, data)
 	if err != nil {
 		t.Fatalf("render deploy README: %v", err)

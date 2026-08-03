@@ -1,3 +1,10 @@
+{{- include "prow-ai-dashboard.validateNetworkSecurity" . -}}
+{{- $service := .Values.server.service -}}
+{{- $internal := $service.internal | default dict -}}
+{{- $annotations := deepCopy ($service.annotations | default dict) -}}
+{{- if ($internal.enabled | default false) -}}
+{{- $annotations = mergeOverwrite $annotations ($internal.annotations | default dict) -}}
+{{- end -}}
 apiVersion: v1
 kind: Service
 metadata:
@@ -5,16 +12,23 @@ metadata:
   labels:
     {{- include "prow-ai-dashboard.labels" . | nindent 4 }}
     app.kubernetes.io/component: server
-  {{- with .Values.server.service.annotations }}
+  {{- with $annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 spec:
-  type: {{ .Values.server.service.type }}
+  type: {{ $service.type }}
+  {{- with $service.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with $service.externalTrafficPolicy }}
+  externalTrafficPolicy: {{ . }}
+  {{- end }}
   selector:
     {{- include "prow-ai-dashboard.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: server
   ports:
     - name: http
-      port: {{ .Values.server.service.port }}
+      port: {{ $service.port }}
       targetPort: http

@@ -133,6 +133,56 @@ call site.
 {{- end }}
 {{- end -}}
 
+{{/* Validate Service origin and NetworkPolicy configuration. */}}
+{{- define "prow-ai-dashboard.validateNetworkSecurity" -}}
+{{- $service := .Values.server.service -}}
+{{- $serviceType := default "ClusterIP" $service.type -}}
+{{- if not (has $serviceType (list "ClusterIP" "LoadBalancer" "NodePort")) -}}
+{{- fail "server.service.type must be ClusterIP, LoadBalancer, or NodePort" -}}
+{{- end -}}
+{{- $ranges := $service.loadBalancerSourceRanges | default list -}}
+{{- range $range := $ranges -}}
+{{- $range = trim $range -}}
+{{- if not $range -}}{{- fail "server.service.loadBalancerSourceRanges must not contain empty entries" -}}{{- end -}}
+{{- if regexMatch "/0+$" $range -}}
+{{- fail "server.service.loadBalancerSourceRanges must not contain universal CIDRs; remove them and set publicOriginAcknowledged=true for an intentional public origin" -}}
+{{- end -}}
+{{- end -}}
+{{- $externalTrafficPolicy := default "" $service.externalTrafficPolicy -}}
+{{- $internal := $service.internal | default dict -}}
+{{- $internalEnabled := $internal.enabled | default false -}}
+{{- $internalAnnotations := $internal.annotations | default dict -}}
+{{- $publicAcknowledged := $service.publicOriginAcknowledged | default false -}}
+{{- $interactive := or .Values.server.actions.enabled .Values.server.chat.enabled -}}
+{{- if and (gt (len $ranges) 0) (ne $serviceType "LoadBalancer") -}}
+{{- fail "server.service.loadBalancerSourceRanges requires server.service.type=LoadBalancer" -}}
+{{- end -}}
+{{- if not (has $externalTrafficPolicy (list "" "Cluster" "Local")) -}}
+{{- fail "server.service.externalTrafficPolicy must be empty, Cluster, or Local" -}}
+{{- end -}}
+{{- if and $externalTrafficPolicy (eq $serviceType "ClusterIP") -}}
+{{- fail "server.service.externalTrafficPolicy requires LoadBalancer or NodePort" -}}
+{{- end -}}
+{{- if and $internalEnabled (ne $serviceType "LoadBalancer") -}}
+{{- fail "server.service.internal.enabled requires server.service.type=LoadBalancer" -}}
+{{- end -}}
+{{- if and $internalEnabled (eq (len $internalAnnotations) 0) -}}
+{{- fail "server.service.internal.annotations is required when internal.enabled=true" -}}
+{{- end -}}
+{{- if and $publicAcknowledged (ne $serviceType "LoadBalancer") -}}
+{{- fail "server.service.publicOriginAcknowledged applies only to LoadBalancer Services" -}}
+{{- end -}}
+{{- if and (not .Values.networkPolicy.enabled) (gt (len (.Values.networkPolicy.ingress | default list)) 0) -}}
+{{- fail "networkPolicy.ingress requires networkPolicy.enabled=true" -}}
+{{- end -}}
+{{- if and $interactive (eq $serviceType "LoadBalancer") (not $internalEnabled) (gt (len $ranges) 1) (not $publicAcknowledged) -}}
+{{- fail "authenticated actions or chat with multiple loadBalancerSourceRanges require publicOriginAcknowledged=true because the chart cannot prove their union is restricted" -}}
+{{- end -}}
+{{- if and $interactive (eq $serviceType "LoadBalancer") (not $internalEnabled) (eq (len $ranges) 0) (not $publicAcknowledged) -}}
+{{- fail "authenticated actions or chat with a LoadBalancer require loadBalancerSourceRanges, internal.enabled, or publicOriginAcknowledged=true" -}}
+{{- end -}}
+{{- end -}}
+
 {{/*
 Name of the Secret holding the AI token.
 */}}

@@ -302,9 +302,24 @@ server:
   service:
     type: ClusterIP
     port: 80
-    # Annotations for the server Service. Use these to configure a cloud
-    # LoadBalancer, e.g. restrict a public LB to Azure Front Door only:
-    #   service.beta.kubernetes.io/azure-allowed-service-tags: AzureFrontDoor.Backend
+    # Optional client source ranges for a LoadBalancer Service. These are
+    # rendered as spec.loadBalancerSourceRanges.
+    loadBalancerSourceRanges: []
+    # Optional for LoadBalancer or NodePort. Kubernetes accepts Cluster or Local.
+    externalTrafficPolicy: ""
+    # Explicit private LoadBalancer configuration. Provider-specific annotations
+    # are merged into annotations only when enabled. Example for Azure:
+    #   annotations:
+    #     service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+    internal:
+      enabled: false
+      annotations: {}
+    # A public LoadBalancer with authenticated actions or chat must either set
+    # source ranges, use internal.enabled, or explicitly acknowledge the risk.
+    # Acknowledgement does not prove that the origin is unreachable directly.
+    publicOriginAcknowledged: false
+    # General Service annotations. They are passed through but are not treated
+    # as verified origin restrictions by chart validation.
     annotations: {}
 
 ingress:
@@ -319,18 +334,19 @@ ingress:
   tls: []
 
 # NetworkPolicy restricting ingress to the server pod. Strongly recommended with
-# proxy actions mode, where the server trusts an SSO-proxy identity header: it
-# keeps the server reachable only from the proxy, so a client cannot reach the
-# server directly and spoof the header. When enabled with no `from` rules, all
-# ingress is denied except the healthz port from within the namespace.
+# authenticated actions. Ingress contains complete networking.k8s.io/v1
+# NetworkPolicy ingress rules; an empty list denies all ingress.
 networkPolicy:
   enabled: false
-  # from is a list of NetworkPolicyPeer entries allowed to reach the server
-  # (e.g. the SSO proxy). Example:
-  #   - namespaceSelector:
-  #       matchLabels:
-  #         kubernetes.io/metadata.name: ingress-nginx
-  from: []
+  # Example allowing an ingress controller to the server container port:
+  #   - from:
+  #       - namespaceSelector:
+  #           matchLabels:
+  #             kubernetes.io/metadata.name: ingress-nginx
+  #     ports:
+  #       - protocol: TCP
+  #         port: 8080
+  ingress: []
 
 # Applied to both the fetcher and server pods. The numeric UID/GID match the
 # distroless nonroot user; fsGroup makes the shared volume group-writable so the

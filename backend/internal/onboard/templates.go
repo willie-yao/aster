@@ -159,6 +159,14 @@ ai:
 # Give a cold analysis pass room to finish on a self-hosted model.
 fetcher:
   timeout: 120m
+
+server:
+  service:
+    type: ClusterIP
+
+networkPolicy:
+  enabled: false
+  ingress: []
 `))
 
 var k8sDeployReadmeTmpl = template.Must(template.New("README.md").Parse(

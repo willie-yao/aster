@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
@@ -323,6 +324,33 @@ func githubExpression(value any, scope, name string) bool {
 	return body == scope+"."+name
 }
 
+type doctorLabelSelector struct {
+	MatchLabels      map[string]string `yaml:"matchLabels"`
+	MatchExpressions []struct {
+		Key      string   `yaml:"key"`
+		Operator string   `yaml:"operator"`
+		Values   []string `yaml:"values"`
+	} `yaml:"matchExpressions"`
+}
+
+type doctorNetworkPolicyPeer struct {
+	PodSelector       *doctorLabelSelector `yaml:"podSelector"`
+	NamespaceSelector *doctorLabelSelector `yaml:"namespaceSelector"`
+	IPBlock           *struct {
+		CIDR string `yaml:"cidr"`
+	} `yaml:"ipBlock"`
+}
+
+type doctorNetworkPolicyIngressRule struct {
+	From []doctorNetworkPolicyPeer `yaml:"from"`
+}
+
+type doctorNetworkPolicyValues struct {
+	Enabled bool                             `yaml:"enabled"`
+	Ingress []doctorNetworkPolicyIngressRule `yaml:"ingress"`
+	From    []doctorNetworkPolicyPeer        `yaml:"from"`
+}
+
 type doctorKubernetesValues struct {
 	Persistence struct {
 		Enabled       *bool  `yaml:"enabled"`
@@ -341,6 +369,24 @@ type doctorKubernetesValues struct {
 		Token          string `yaml:"token"`
 		ExistingSecret string `yaml:"existingSecret"`
 	} `yaml:"ai"`
+	Server struct {
+		Actions struct {
+			Enabled bool `yaml:"enabled"`
+		} `yaml:"actions"`
+		Chat struct {
+			Enabled bool `yaml:"enabled"`
+		} `yaml:"chat"`
+		Service struct {
+			Type                     string   `yaml:"type"`
+			LoadBalancerSourceRanges []string `yaml:"loadBalancerSourceRanges"`
+			PublicOriginAcknowledged bool     `yaml:"publicOriginAcknowledged"`
+			Internal                 struct {
+				Enabled     bool           `yaml:"enabled"`
+				Annotations map[string]any `yaml:"annotations"`
+			} `yaml:"internal"`
+		} `yaml:"service"`
+	} `yaml:"server"`
+	NetworkPolicy doctorNetworkPolicyValues `yaml:"networkPolicy"`
 }
 
 func checkKubernetes(report *DoctorReport, valuesYAML []byte, cfg *project.Config) (includePresubmits bool) {
@@ -364,6 +410,7 @@ func checkKubernetes(report *DoctorReport, valuesYAML []byte, cfg *project.Confi
 	} else {
 		add("Kubernetes storage", DoctorPass, "dynamic ReadWriteMany storage is configured", "")
 	}
+	checkKubernetesOrigin(add, values)
 	aiEnabled := values.AI.Enabled != nil && *values.AI.Enabled
 	if !aiEnabled {
 		add("Kubernetes AI", DoctorPass, "deployed AI analysis is disabled", "")
@@ -403,6 +450,133 @@ func checkKubernetes(report *DoctorReport, valuesYAML []byte, cfg *project.Confi
 		add("Kubernetes AI credential", DoctorWarn, "no token or existing Secret is declared in deploy/values.yaml", "Supply --set ai.token at install time or configure ai.existingSecret.")
 	}
 	return includePresubmits
+}
+
+func checkKubernetesOrigin(add func(string, DoctorStatus, string, string), values doctorKubernetesValues) {
+	if !values.Server.Actions.Enabled && !values.Server.Chat.Enabled {
+		add("Kubernetes origin security", DoctorPass, "authenticated actions and chat are disabled", "")
+		return
+	}
+	serviceType := strings.TrimSpace(values.Server.Service.Type)
+	if serviceType == "" {
+		serviceType = "ClusterIP"
+	}
+	switch serviceType {
+	case "ClusterIP":
+		if doctorNetworkPolicyRestricted(values.NetworkPolicy) {
+			add("Kubernetes origin security", DoctorPass, "authenticated server features use a ClusterIP Service with NetworkPolicy", "")
+		} else {
+			add("Kubernetes origin security", DoctorWarn, "authenticated server features use a ClusterIP Service without a restrictive NetworkPolicy", "Enable NetworkPolicy and allow only the expected ingress controller or authentication proxy path.")
+		}
+	case "LoadBalancer":
+		if values.Server.Service.Internal.Enabled && len(values.Server.Service.Internal.Annotations) == 0 {
+			add("Kubernetes origin security", DoctorWarn, "internal LoadBalancer is enabled without provider annotations", "Set server.service.internal.annotations for the cloud provider and verify that the resulting address is private.")
+			return
+		}
+		restricted := values.Server.Service.Internal.Enabled || doctorRestrictedSourceRanges(values.Server.Service.LoadBalancerSourceRanges)
+		if !restricted {
+			if values.Server.Service.PublicOriginAcknowledged {
+				add("Kubernetes origin security", DoctorWarn, "authenticated server features use an acknowledged public LoadBalancer", "Verify direct origin reachability at runtime and restrict it with source ranges, a private origin, and NetworkPolicy where possible.")
+			} else {
+				add("Kubernetes origin security", DoctorWarn, "authenticated server features use a public LoadBalancer without source ranges, an explicit internal origin, or acknowledgement", "Prefer ClusterIP, configure an internal LoadBalancer or loadBalancerSourceRanges, and enable NetworkPolicy. Use publicOriginAcknowledged only for an intentional last-resort public origin.")
+			}
+			return
+		}
+		if !doctorNetworkPolicyRestricted(values.NetworkPolicy) {
+			add("Kubernetes origin security", DoctorWarn, "the LoadBalancer origin is restricted but NetworkPolicy does not restrict ingress", "Enable NetworkPolicy with ingress rules for the expected ingress or proxy path.")
+			return
+		}
+		add("Kubernetes origin security", DoctorPass, "authenticated server features use an origin-restricted LoadBalancer with NetworkPolicy", "")
+	default:
+		add("Kubernetes origin security", DoctorWarn, "authenticated server features use Service type "+serviceType, "Prefer ClusterIP behind an ingress or an explicitly restricted LoadBalancer, then verify runtime reachability.")
+	}
+}
+
+func doctorRestrictedSourceRanges(ranges []string) bool {
+	if len(ranges) != 1 {
+		return false
+	}
+	for _, cidr := range ranges {
+		cidr = strings.TrimSpace(cidr)
+		prefix, err := netip.ParsePrefix(cidr)
+		if err != nil || prefix.Bits() == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func doctorNetworkPolicyRestricted(policy doctorNetworkPolicyValues) bool {
+	if !policy.Enabled {
+		return false
+	}
+	if policy.Ingress != nil {
+		if len(policy.Ingress) == 0 {
+			return true
+		}
+		ipBlocks := 0
+		for _, rule := range policy.Ingress {
+			if len(rule.From) == 0 {
+				return false
+			}
+			for _, peer := range rule.From {
+				if peer.IPBlock != nil {
+					ipBlocks++
+				}
+				if !doctorNetworkPolicyPeerRestricted(peer) {
+					return false
+				}
+			}
+		}
+		return ipBlocks <= 1
+	}
+	if len(policy.From) == 0 {
+		return false
+	}
+	ipBlocks := 0
+	for _, peer := range policy.From {
+		if peer.IPBlock != nil {
+			ipBlocks++
+		}
+		if !doctorNetworkPolicyPeerRestricted(peer) {
+			return false
+		}
+	}
+	return ipBlocks <= 1
+}
+
+func doctorNetworkPolicyPeerRestricted(peer doctorNetworkPolicyPeer) bool {
+	if peer.IPBlock != nil {
+		prefix, err := netip.ParsePrefix(strings.TrimSpace(peer.IPBlock.CIDR))
+		return err == nil && prefix.Bits() > 0
+	}
+	if peer.NamespaceSelector != nil {
+		return doctorLabelSelectorRestricted(peer.NamespaceSelector) || doctorLabelSelectorRestricted(peer.PodSelector)
+	}
+	return doctorLabelSelectorRestricted(peer.PodSelector)
+}
+
+func doctorLabelSelectorRestricted(selector *doctorLabelSelector) bool {
+	if selector == nil {
+		return false
+	}
+	for key := range selector.MatchLabels {
+		if strings.TrimSpace(key) != "" {
+			return true
+		}
+	}
+	for _, expression := range selector.MatchExpressions {
+		if strings.TrimSpace(expression.Key) == "" {
+			continue
+		}
+		switch expression.Operator {
+		case "In":
+			if len(expression.Values) > 0 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func placeholder(value string) bool {

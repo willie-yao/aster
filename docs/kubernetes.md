@@ -810,6 +810,65 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | `server.actions.enabled`, `server.actions.mode` | Turn on admin authentication, write actions, and private trace access; `oauth` (GitHub sign-in) or `proxy` (SSO proxy + bot token). |
 | `server.actions.admins` | Required allowlist for admin actions, chat, and trace access. An empty list fails closed. |
 | `server.actions.oauth.privateRepositories` | Request the broad GitHub `repo` scope for private action targets. Defaults to `false`, which uses `public_repo` for actions. Chat-only OAuth always uses `read:user`. |
+| `server.service.type`, `server.service.port` | Server Service type and port. `ClusterIP` is the default and preferred origin. |
+| `server.service.loadBalancerSourceRanges` | CIDR ranges rendered to `spec.loadBalancerSourceRanges` for a restricted public LoadBalancer. |
+| `server.service.externalTrafficPolicy` | Optional `Cluster` or `Local` policy for LoadBalancer or NodePort Services. |
+| `server.service.internal.enabled`, `server.service.internal.annotations` | Explicit provider-neutral internal LoadBalancer signal plus the provider annotations that implement it. |
+| `server.service.publicOriginAcknowledged` | Explicit last-resort acknowledgement for an authenticated public LoadBalancer without chart-recognized origin restrictions. It does not prove runtime isolation. |
+| `networkPolicy.enabled`, `networkPolicy.ingress` | Render complete server-pod ingress rules. An enabled policy with an empty ingress list denies all ingress. |
+
+### Secure server origin topologies
+
+Authenticated actions and chat should not be exposed through an unrestricted origin.
+Use one of these topologies, in preference order:
+
+1. **ClusterIP behind an in-cluster ingress.** Keep the default Service type,
+   enable NetworkPolicy, and allow only the ingress controller or SSO proxy.
+2. **Internal LoadBalancer.** Set `server.service.type=LoadBalancer`, enable
+   `server.service.internal`, and provide the cloud provider's internal-LB
+   annotations. Verify that the resulting address is private.
+3. **Front Door Private Link origin.** Keep the origin private and configure
+   Front Door's Private Link path outside this chart. Verify that the Service
+   cannot be reached directly before enabling actions.
+4. **Restricted public LoadBalancer.** Use
+   `server.service.loadBalancerSourceRanges` and NetworkPolicy as a last resort.
+   If neither source ranges nor an explicit internal origin is configured, the
+   chart rejects authenticated actions or chat unless
+   `server.service.publicOriginAcknowledged=true`.
+
+The chart treats one non-universal source range as an explicit restriction. If
+multiple ranges are configured, set `publicOriginAcknowledged=true`; Helm
+cannot prove that their combined coverage does not span an entire address
+family. Verify the effective source-range behavior at runtime.
+
+Example restricted public origin:
+
+```yaml
+server:
+  actions:
+    enabled: true
+  service:
+    type: LoadBalancer
+    loadBalancerSourceRanges:
+      - 10.0.0.0/8
+    externalTrafficPolicy: Local
+
+networkPolicy:
+  enabled: true
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-system
+      ports:
+        - protocol: TCP
+          port: 8080
+```
+
+Service annotations are passed through but are not accepted as proof of origin
+restriction. In particular, do not assume that a cloud service-tag annotation
+works solely because it appears in the rendered Service. Confirm runtime
+reachability from the expected proxy and from a path that should be denied.
 
 The public read endpoints (`/data/*`, `/api/capabilities`, `/healthz`) are
 unauthenticated. Admin features are opt-in. Set `server.chat.enabled` for
