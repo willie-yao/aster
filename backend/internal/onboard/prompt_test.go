@@ -117,6 +117,9 @@ func TestValidatePromptBody(t *testing.T) {
 	if err := validatePromptBody(validPromptBody()); err != nil {
 		t.Fatalf("valid body rejected: %v", err)
 	}
+	if err := validatePromptBody(indentPromptHeadings(validPromptBody(), "   ")); err != nil {
+		t.Fatalf("headings indented by three spaces rejected: %v", err)
+	}
 	for name, fenced := range map[string]string{
 		"backtick":    "```sh\n# shell comment\n## not a section\n```",
 		"long closer": "````text\n## not a section\n`````",
@@ -143,6 +146,9 @@ func TestValidatePromptBody(t *testing.T) {
 		"closer with info":         validPromptBody() + "\n\n```text\ncontent\n```oops",
 		"closer indented four":     validPromptBody() + "\n\n```text\ncontent\n    ```",
 		"closer shorter than open": validPromptBody() + "\n\n````text\ncontent\n```",
+		"headings indented four":   indentPromptHeadings(validPromptBody(), "    "),
+		"headings tab indented":    indentPromptHeadings(validPromptBody(), "\t"),
+		"indented top-level title": "   # Project AI prompt addendum\n\n" + validPromptBody(),
 	}
 	for name, body := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -151,6 +157,16 @@ func TestValidatePromptBody(t *testing.T) {
 			}
 		})
 	}
+}
+
+func indentPromptHeadings(body, indent string) string {
+	lines := strings.Split(body, "\n")
+	for i, line := range lines {
+		if strings.HasPrefix(line, "## ") {
+			lines[i] = indent + line
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func TestGeneratePromptBody_RejectsInvalidWrappingFence(t *testing.T) {

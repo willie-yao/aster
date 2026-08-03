@@ -124,13 +124,14 @@ func validatePromptBody(body string) error {
 			continue
 		}
 
-		line := strings.TrimSpace(rawLine)
-		if strings.HasPrefix(line, "# ") {
+		heading, ok := markdownATXHeading(rawLine)
+		if !ok {
+			continue
+		}
+		if strings.HasPrefix(heading, "# ") {
 			return fmt.Errorf("generated prompt contains a top-level title")
 		}
-		if strings.HasPrefix(line, "## ") {
-			headings = append(headings, line)
-		}
+		headings = append(headings, heading)
 	}
 	if fence.length != 0 {
 		return fmt.Errorf("generated prompt contains an unclosed code fence")
@@ -143,10 +144,26 @@ func validatePromptBody(body string) error {
 			return fmt.Errorf("generated prompt section %d is %q, want %q", i+1, headings[i], want)
 		}
 	}
-	if !strings.HasPrefix(body, requiredPromptHeadings[0]) {
+	firstLine := strings.SplitN(body, "\n", 2)[0]
+	if heading, ok := markdownATXHeading(firstLine); !ok || heading != requiredPromptHeadings[0] {
 		return fmt.Errorf("generated prompt must start at %q", requiredPromptHeadings[0])
 	}
 	return nil
+}
+
+func markdownATXHeading(line string) (string, bool) {
+	leading := 0
+	for leading < len(line) && line[leading] == ' ' {
+		leading++
+	}
+	if leading > 3 || leading == len(line) || line[leading] == '\t' {
+		return "", false
+	}
+	heading := strings.TrimRight(line[leading:], " \t")
+	if strings.HasPrefix(heading, "# ") || strings.HasPrefix(heading, "## ") {
+		return heading, true
+	}
+	return "", false
 }
 
 type markdownFence struct {
