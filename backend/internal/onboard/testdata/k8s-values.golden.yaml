@@ -96,43 +96,38 @@ analysisRuntime:
   # orka-container is an experimental opt-in lifecycle sidegrade.
   type: inprocess
 
-  orkaContainer:
-    # Empty clears an older image-specific tag during upgrades.
-    image:
-      tag: ""
-
-  # Enabling this example does not install Orka. Install and operate a separate
+  # Enabling these fields does not install Orka. Install and operate a separate
   # Orka release first. The model Secret must exist in the analysis namespace,
   # taskTimeout must exceed the project AI timeout plus startup and result
   # finalization time, and analyzer Tasks must use CPU placement.
   #
   # To use the experimental Orka container runtime, set type to orka-container
-  # and configure:
-  #
-  # orkaContainer:
-  #   namespace: ""
-  #   api: http://orka.orka-system.svc.cluster.local:8080
-  #   apiAuth:
-  #     existingSecret: ""
-  #     tokenKey: token
-  #   maxConcurrentTasks: 2
-  #   pollInterval: 2s
-  #   taskTimeout: 20m
-  #   retries: 1
-  #   image:
-  #     repository: ghcr.io/willie-yao/prow-ai-dashboard/analyzer
-  #     tag: ""
-  #     pullPolicy: IfNotPresent
-  #   modelAuth:
-  #     existingSecret: "<model-secret-in-analysis-namespace>"
-  #     tokenKey: token
-  #   state:
-  #     existingSecret: ""
-  #     key: state-key
-  #   nodeSelector:
-  #     agentpool: "<cpu-agentpool>"
-  #   tolerations: []
-  #   affinity: {}
+  # and uncomment the needed fields inside this existing mapping.
+  orkaContainer:
+    # namespace: ""
+    # api: http://orka.orka-system.svc.cluster.local:8080
+    # apiAuth:
+    #   existingSecret: ""
+    #   tokenKey: token
+    # maxConcurrentTasks: 2
+    # pollInterval: 2s
+    # taskTimeout: 20m
+    # retries: 1
+    # Empty clears an older image-specific tag during upgrades.
+    image:
+      # repository: ghcr.io/willie-yao/prow-ai-dashboard/analyzer
+      tag: ""
+      # pullPolicy: IfNotPresent
+    # modelAuth:
+    #   existingSecret: "<model-secret-in-analysis-namespace>"
+    #   tokenKey: token
+    # state:
+    #   existingSecret: ""
+    #   key: state-key
+    # nodeSelector:
+    #   agentpool: "<cpu-agentpool>"
+    # tolerations: []
+    # affinity: {}
 
 # Fix generation is independent of analysisRuntime.type and must also be
 # configured in project.yaml. It remains disabled in the generated scaffold.
@@ -209,8 +204,8 @@ ingress:
 networkPolicy:
   enabled: false
   ingress: []
-  # Example allowing an ingress controller to the server container port:
-  # ingress:
+  # To allow an ingress controller to the server container port, change the
+  # ingress value above from [] to a list and add:
   #   - from:
   #       - namespaceSelector:
   #           matchLabels:

@@ -509,7 +509,7 @@ func TestScaffold_K8sStaysFocused(t *testing.T) {
 	}
 	for _, want := range []string{
 		"mode: watch", "type: inprocess", "imageTag: \"\"", "existingSecret: \"my-proj-ai\"",
-		"# schedule:", "# orkaContainer:", "chat:\n    enabled: false", "actions:\n    enabled: false",
+		"# schedule:", "# namespace:", "chat:\n    enabled: false", "actions:\n    enabled: false",
 		"Active values are common settings", "`mode: cron`", "separately installed", "authentication and secure origin",
 		"helm show values", "blob/main/deploy/helm/prow-ai-dashboard/values.yaml", "Kubernetes Secret", "--chart-version <chart-version>",
 	} {

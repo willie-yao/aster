@@ -92,13 +92,13 @@ func TestK8sValuesDocumentsOptionalConfiguration(t *testing.T) {
 	values := renderK8sValuesForTest(t, k8sValuesFixtureData(true))
 	for _, want := range []string{
 		`# schedule: "0 */6 * * *"`,
-		"# orkaContainer:",
-		`#     existingSecret: "<model-secret-in-analysis-namespace>"`,
+		`# namespace: ""`,
+		`#   existingSecret: "<model-secret-in-analysis-namespace>"`,
 		"# oauth:",
 		`#   existingSecret: "<oauth-secret>"`,
 		"# proxy:",
 		"# hosts:",
-		"# Example allowing an ingress controller",
+		"# ingress value above from [] to a list",
 		"# resources: {}",
 		"# nodeSelector: {}",
 		"# tolerations: []",
@@ -108,6 +108,11 @@ func TestK8sValuesDocumentsOptionalConfiguration(t *testing.T) {
 	} {
 		if !strings.Contains(values, want) {
 			t.Errorf("generated values missing %q\n---\n%s", want, values)
+		}
+	}
+	for _, duplicateExample := range []string{"# orkaContainer:", "# ingress:"} {
+		if strings.Contains(values, duplicateExample) {
+			t.Errorf("optional example repeats active key %q\n---\n%s", duplicateExample, values)
 		}
 	}
 }
