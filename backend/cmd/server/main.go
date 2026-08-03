@@ -115,6 +115,13 @@ func main() {
 			log.Printf("server: waiting for analysis chat turns: %v", err)
 		}
 	}
+	if waiter, ok := opts.Actions.(interface{ Wait(context.Context) error }); ok {
+		waitCtx, waitCancel := context.WithTimeout(context.Background(), 35*time.Second)
+		defer waitCancel()
+		if err := waiter.Wait(waitCtx); err != nil {
+			log.Printf("server: waiting for action requests: %v", err)
+		}
+	}
 }
 
 // enableInteractiveFeatures loads the project config and authenticated services.
@@ -133,7 +140,7 @@ func enableInteractiveFeatures(ctx context.Context, opts *server.Options, projec
 	opts.TrustedOrigins = trustedOrigins(os.Getenv("OAUTH_REDIRECT_URL"), os.Getenv("TRUSTED_ORIGINS"))
 	var actionService *actions.Service
 	if features.Actions {
-		actionService, err = enableActions(opts, cfg, dataDir)
+		actionService, err = enableActions(ctx, opts, cfg, dataDir)
 		if err != nil {
 			return err
 		}
@@ -269,7 +276,7 @@ func configureAuthenticator(opts *server.Options, actionsEnabled bool) error {
 	return nil
 }
 
-func enableActions(opts *server.Options, cfg *project.Config, dataDir string) (*actions.Service, error) {
+func enableActions(ctx context.Context, opts *server.Options, cfg *project.Config, dataDir string) (*actions.Service, error) {
 	provider := cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"))
 	if err := project.ValidateAIAPI(provider.API); err != nil {
 		return nil, err
@@ -290,7 +297,7 @@ func enableActions(opts *server.Options, cfg *project.Config, dataDir string) (*
 	if requestTimeout <= 0 {
 		requestTimeout = 10 * time.Minute
 	}
-	actionService.ConfigureAsyncRequests(requestTimeout, actionRequestNotifier(cfg))
+	actionService.ConfigureAsyncRequestsWithContext(ctx, requestTimeout, actionRequestNotifier(cfg))
 	return actionService, nil
 }
 

@@ -22,11 +22,13 @@ import (
 )
 
 const (
-	FixerManagedByValue = "orka-fixer"
-	defaultFixNamespace = "orka-system"
-	defaultFixVersion   = "v1"
-	serviceAccountToken = "/var/run/secrets/kubernetes.io/serviceaccount/token"
-	maxFixResultBytes   = 4 << 20
+	FixerManagedByValue      = "orka-fixer"
+	defaultFixNamespace      = "orka-system"
+	defaultFixVersion        = "v1"
+	serviceAccountToken      = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+	maxFixResultBytes        = 4 << 20
+	actionRequestAnnotation  = "prow-ai-dashboard/action-request"
+	defaultFixCleanupTimeout = 30 * time.Second
 )
 
 // StructuredResult is the generation result returned by an Orka agent Task.
@@ -42,6 +44,8 @@ type StructuredResult struct {
 type taskAPI interface {
 	Apply(context.Context, schema.GroupVersionResource, string, map[string]any) error
 	TaskPhase(context.Context, string, string) (string, error)
+	TaskState(context.Context, string, string) (TaskState, error)
+	DeleteTaskIfIdentity(context.Context, string, string, string, string) (bool, error)
 	Delete(context.Context, schema.GroupVersionResource, string, string) error
 }
 
@@ -140,14 +144,15 @@ func normalizeAgentOptions(opts AgentOptions) AgentOptions {
 }
 
 var (
-	_ runtime.AgentRuntime = (*AgentRuntime)(nil)
-	_ taskAPI              = (*KubeClient)(nil)
-	_ resultAPI            = (*ResultClient)(nil)
+	_ runtime.AgentRuntime        = (*AgentRuntime)(nil)
+	_ runtime.ManagedAgentRuntime = (*AgentRuntime)(nil)
+	_ taskAPI                     = (*KubeClient)(nil)
+	_ resultAPI                   = (*ResultClient)(nil)
 )
 
 // Generate runs the fix agent, validates its structured result, and reapplies
 // the captured diff to the pinned base before returning changed files.
-func (r *AgentRuntime) Generate(ctx context.Context, spec runtime.GenerateSpec) (runtime.GenerateResult, error) {
+func (r *AgentRuntime) Generate(ctx context.Context, spec runtime.GenerateSpec) (result runtime.GenerateResult, retErr error) {
 	if r == nil || r.kube == nil || r.results == nil {
 		return runtime.GenerateResult{}, fmt.Errorf("%w: Orka runtime is not configured", runtime.ErrUnavailable)
 	}
@@ -164,16 +169,65 @@ func (r *AgentRuntime) Generate(ctx context.Context, spec runtime.GenerateSpec) 
 	}
 
 	name := FixTaskName(spec, r.opts)
-	if phase, err := r.kube.TaskPhase(ctx, r.opts.Namespace, name); err == nil && (phase == "Failed" || phase == "Cancelled") {
-		if err := r.deleteFailedTask(ctx, name); err != nil {
-			return runtime.GenerateResult{}, err
+	work := runtime.WorkRef{Backend: "orka", Namespace: r.opts.Namespace, Name: name, ExecutionID: strings.TrimSpace(spec.ExecutionID)}
+	if spec.WorkObserver != nil {
+		if err := spec.WorkObserver(ctx, work); err != nil {
+			return runtime.GenerateResult{}, fmt.Errorf("recording planned fix Task: %w", err)
 		}
-	} else if err != nil && !IsNotFound(err) {
+	}
+
+	state, err := r.kube.TaskState(ctx, r.opts.Namespace, name)
+	if err != nil {
 		return runtime.GenerateResult{}, fmt.Errorf("%w: reading prior fix Task: %v", runtime.ErrUnavailable, err)
 	}
-	if err := r.kube.Apply(ctx, TasksGVR, r.opts.Namespace, r.buildTask(name, spec)); err != nil {
-		return runtime.GenerateResult{}, fmt.Errorf("%w: applying fix Task: %v", runtime.ErrUnavailable, err)
+	if state.Exists && work.ExecutionID != "" && state.Annotations[actionRequestAnnotation] != work.ExecutionID {
+		return runtime.GenerateResult{}, fmt.Errorf("%w: existing fix Task belongs to another request", runtime.ErrWorkIdentityChanged)
 	}
+	if state.Exists && (state.Phase == "Failed" || state.Phase == "Cancelled") {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), defaultFixCleanupTimeout)
+		err := r.Cleanup(cleanupCtx, runtime.WorkRef{Backend: "orka", Namespace: r.opts.Namespace, Name: name, UID: state.UID, ExecutionID: work.ExecutionID})
+		cancel()
+		if err != nil {
+			return runtime.GenerateResult{}, fmt.Errorf("%w: deleting prior fix Task: %v", runtime.ErrUnavailable, err)
+		}
+	}
+	if err := r.kube.Apply(ctx, TasksGVR, r.opts.Namespace, r.buildTask(name, spec)); err != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), defaultFixCleanupTimeout)
+		cleanupErr := r.Cleanup(cleanupCtx, work)
+		cancel()
+		return runtime.GenerateResult{}, errors.Join(fmt.Errorf("%w: applying fix Task: %v", runtime.ErrUnavailable, err), cleanupErr)
+	}
+	state, err = r.kube.TaskState(ctx, r.opts.Namespace, name)
+	if err != nil || !state.Exists || strings.TrimSpace(state.UID) == "" {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), defaultFixCleanupTimeout)
+		cleanupErr := r.Cleanup(cleanupCtx, work)
+		cancel()
+		if err == nil {
+			err = fmt.Errorf("applied Task identity is unavailable")
+		}
+		return runtime.GenerateResult{}, errors.Join(fmt.Errorf("%w: reading applied fix Task: %v", runtime.ErrUnavailable, err), cleanupErr)
+	}
+	if work.ExecutionID != "" && state.Annotations[actionRequestAnnotation] != work.ExecutionID {
+		return runtime.GenerateResult{}, fmt.Errorf("%w: applied fix Task belongs to another request", runtime.ErrWorkIdentityChanged)
+	}
+	work.UID = state.UID
+	if spec.WorkObserver != nil {
+		if err := spec.WorkObserver(ctx, work); err != nil {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), defaultFixCleanupTimeout)
+			cleanupErr := r.Cleanup(cleanupCtx, work)
+			cancel()
+			return runtime.GenerateResult{}, errors.Join(fmt.Errorf("recording observed fix Task: %w", err), cleanupErr)
+		}
+	}
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), defaultFixCleanupTimeout)
+		cleanupErr := r.Cleanup(cleanupCtx, work)
+		cancel()
+		if cleanupErr != nil {
+			retErr = errors.Join(retErr, cleanupErr)
+		}
+	}()
+
 	phase, err := r.waitTerminal(ctx, name)
 	if err != nil {
 		return runtime.GenerateResult{}, err
@@ -186,29 +240,79 @@ func (r *AgentRuntime) Generate(ctx context.Context, spec runtime.GenerateSpec) 
 	if err != nil {
 		return runtime.GenerateResult{}, err
 	}
-	var result StructuredResult
-	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+	var parsed StructuredResult
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
 		return runtime.GenerateResult{}, fmt.Errorf("orka fix Task %s: parsing result: %w", name, err)
 	}
-	if err := validateStructuredResult(result, spec.Repo.Ref); err != nil {
-		return runtime.GenerateResult{Output: result.Summary}, fmt.Errorf("orka fix Task %s: %w", name, err)
+	if err := validateStructuredResult(parsed, spec.Repo.Ref); err != nil {
+		return runtime.GenerateResult{Output: parsed.Summary}, fmt.Errorf("orka fix Task %s: %w", name, err)
 	}
-	if strings.TrimSpace(result.Diff) == "" {
-		return runtime.GenerateResult{Output: result.Summary}, nil
+	if strings.TrimSpace(parsed.Diff) == "" {
+		return runtime.GenerateResult{Output: parsed.Summary}, nil
 	}
 
 	apply := r.applyDiff
 	if apply == nil {
 		apply = runtime.ApplyDiff
 	}
-	files, diff, err := apply(ctx, spec.Repo, result.Diff)
+	files, diff, err := apply(ctx, spec.Repo, parsed.Diff)
 	if err != nil {
-		return runtime.GenerateResult{Output: result.Summary}, fmt.Errorf("reconstructing fix files: %w", err)
+		return runtime.GenerateResult{Output: parsed.Summary}, fmt.Errorf("reconstructing fix files: %w", err)
 	}
-	if err := validateResultFiles(result.Files, files); err != nil {
-		return runtime.GenerateResult{Output: result.Summary}, fmt.Errorf("orka fix Task %s: %w", name, err)
+	if err := validateResultFiles(parsed.Files, files); err != nil {
+		return runtime.GenerateResult{Output: parsed.Summary}, fmt.Errorf("orka fix Task %s: %w", name, err)
 	}
-	return runtime.GenerateResult{Files: files, Diff: diff, Output: result.Summary}, nil
+	return runtime.GenerateResult{Files: files, Diff: diff, Output: parsed.Summary}, nil
+}
+
+// Cleanup deletes only the exact observed Orka Task and waits for completion.
+func (r *AgentRuntime) Cleanup(ctx context.Context, work runtime.WorkRef) error {
+	if r == nil || r.kube == nil {
+		return fmt.Errorf("%w: Orka runtime is not configured", runtime.ErrUnavailable)
+	}
+	if work.Backend != "" && work.Backend != "orka" {
+		return fmt.Errorf("%w: backend %q", runtime.ErrWorkIdentityChanged, work.Backend)
+	}
+	namespace := strings.TrimSpace(work.Namespace)
+	if namespace == "" {
+		namespace = r.opts.Namespace
+	}
+	if strings.TrimSpace(work.Name) == "" {
+		return fmt.Errorf("%w: runtime work name is empty", runtime.ErrWorkIdentityChanged)
+	}
+	every := r.opts.PollEvery
+	if every <= 0 {
+		every = time.Second
+	}
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+	uid := strings.TrimSpace(work.UID)
+	for {
+		state, err := r.kube.TaskState(ctx, namespace, work.Name)
+		if err != nil {
+			return fmt.Errorf("%w: reading fix Task cleanup state: %v", runtime.ErrCleanupPending, err)
+		}
+		if !state.Exists {
+			return nil
+		}
+		if uid == "" {
+			if strings.TrimSpace(work.ExecutionID) == "" || state.Annotations[actionRequestAnnotation] != work.ExecutionID || strings.TrimSpace(state.UID) == "" {
+				return fmt.Errorf("%w: Task %s cannot be adopted safely", runtime.ErrWorkIdentityChanged, work.Name)
+			}
+			uid = state.UID
+		} else if state.UID != uid {
+			return fmt.Errorf("%w: Task %s UID changed", runtime.ErrWorkIdentityChanged, work.Name)
+		}
+		_, err = r.kube.DeleteTaskIfIdentity(ctx, namespace, work.Name, uid, state.ResourceVersion)
+		if err != nil {
+			return fmt.Errorf("%w: deleting fix Task: %v", runtime.ErrCleanupPending, err)
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("%w: %v", runtime.ErrCleanupPending, ctx.Err())
+		case <-ticker.C:
+		}
+	}
 }
 
 func validateStructuredResult(result StructuredResult, expectedBase string) error {
@@ -245,32 +349,6 @@ func validateResultFiles(expected []string, actual map[string]string) error {
 		return fmt.Errorf("reported files %v do not match reconstructed files %v", want, got)
 	}
 	return nil
-}
-
-func (r *AgentRuntime) deleteFailedTask(ctx context.Context, name string) error {
-	if err := r.kube.Delete(ctx, TasksGVR, r.opts.Namespace, name); err != nil && !IsNotFound(err) {
-		return fmt.Errorf("%w: deleting prior fix Task: %v", runtime.ErrUnavailable, err)
-	}
-	every := r.opts.PollEvery
-	if every <= 0 {
-		every = time.Second
-	}
-	ticker := time.NewTicker(every)
-	defer ticker.Stop()
-	for {
-		_, err := r.kube.TaskPhase(ctx, r.opts.Namespace, name)
-		if IsNotFound(err) {
-			return nil
-		}
-		if err != nil {
-			return fmt.Errorf("%w: waiting for prior fix Task deletion: %v", runtime.ErrUnavailable, err)
-		}
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("deleting prior fix Task %s: %w", name, ctx.Err())
-		case <-ticker.C:
-		}
-	}
 }
 
 func (r *AgentRuntime) waitResult(ctx context.Context, name string) (string, error) {
@@ -344,25 +422,33 @@ func (r *AgentRuntime) buildTask(name string, spec runtime.GenerateSpec) map[str
 	if r.opts.MaxRetries > 0 {
 		taskSpec["retryPolicy"] = map[string]any{"maxRetries": int64(r.opts.MaxRetries)}
 	}
+	metadata := map[string]any{
+		"name": name, "namespace": r.opts.Namespace,
+		"labels": map[string]any{ManagedByLabel: FixerManagedByValue},
+	}
+	if executionID := strings.TrimSpace(spec.ExecutionID); executionID != "" {
+		metadata["annotations"] = map[string]any{actionRequestAnnotation: executionID}
+	}
 	return map[string]any{
 		"apiVersion": "core.orka.ai/v1alpha1",
 		"kind":       "Task",
-		"metadata": map[string]any{
-			"name": name, "namespace": r.opts.Namespace,
-			"labels": map[string]any{ManagedByLabel: FixerManagedByValue},
-		},
-		"spec": taskSpec,
+		"metadata":   metadata,
+		"spec":       taskSpec,
 	}
 }
 
 // FixTaskName fingerprints the pinned repository and complete execution contract.
 func FixTaskName(spec runtime.GenerateSpec, opts AgentOptions) string {
 	opts = normalizeAgentOptions(opts)
-	data := strings.Join([]string{
+	parts := []string{
 		spec.Repo.Owner, spec.Repo.Name, spec.Repo.Ref, spec.Instruction,
 		opts.AgentRef, opts.GitSecret, opts.Version, fmt.Sprintf("%d", opts.MaxRetries),
 		fmt.Sprintf("%t", spec.AllowBash), fmt.Sprintf("%d", spec.MaxTurns), spec.Timeout.String(),
-	}, "\x00")
+	}
+	if executionID := strings.TrimSpace(spec.ExecutionID); executionID != "" {
+		parts = append(parts, executionID)
+	}
+	data := strings.Join(parts, "\x00")
 	sum := sha256.Sum256([]byte(data))
 	return Sanitize("fix-" + hex.EncodeToString(sum[:8]) + "-" + opts.Version)
 }

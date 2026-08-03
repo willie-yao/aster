@@ -33,6 +33,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/repotemplate"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/resolve"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
 )
 
 // ErrNotFound means no pattern in the published data matched the given id.
@@ -170,12 +171,20 @@ type Service struct {
 	previewStore        *previewStore
 	issueManagerFactory issueManagerFactory
 
-	rmu             sync.Mutex
-	requests        *actionRequestState
-	requestTimeout  time.Duration
-	requestNotify   RequestReadyNotifier
-	requestCancels  map[string]context.CancelFunc
-	requestConfirms map[string]struct{}
+	rmu                  sync.Mutex
+	requests             *actionRequestState
+	requestTimeout       time.Duration
+	requestNotify        RequestReadyNotifier
+	requestNotifyCancels map[string]context.CancelFunc
+	requestCancels       map[string]context.CancelFunc
+	requestConfirms      map[string]struct{}
+	requestDone          map[string]chan struct{}
+	requestCleanups      map[string]struct{}
+	requestsConfigured   bool
+	stopping             bool
+	requestWG            sync.WaitGroup
+	managedRuntime       func() (runtime.ManagedAgentRuntime, error)
+	requestStateWriter   func(string, any) error
 }
 
 // NewService builds a Service. dataDir is the fetcher output directory holding
@@ -187,8 +196,20 @@ func NewService(cfg *project.Config, dataDir string, ai AIConfig) *Service {
 		issueManagerFactory: func(token, owner, repo string) issuePreviewManager {
 			return issues.NewManager(issues.NewClient(token, owner, repo), filepath.Join(dataDir, "issue_state.json"), owner+"/"+repo, issues.Options{MaxNewPerRun: 1})
 		},
-		requestCancels: map[string]context.CancelFunc{}, requestConfirms: map[string]struct{}{},
-		requestTimeout: defaultRequestTimeout,
+		requestCancels: map[string]context.CancelFunc{}, requestConfirms: map[string]struct{}{}, requestDone: map[string]chan struct{}{}, requestCleanups: map[string]struct{}{}, requestNotifyCancels: map[string]context.CancelFunc{},
+		requestTimeout: defaultRequestTimeout, requestStateWriter: statefile.WritePrivateJSONDurable,
+	}
+	s.managedRuntime = func() (runtime.ManagedAgentRuntime, error) {
+		eff := s.cfg.EffectiveFixPRs()
+		rt, err := fixruntime.New(eff.AgentRuntime)
+		if err != nil {
+			return nil, err
+		}
+		managed, ok := rt.(runtime.ManagedAgentRuntime)
+		if !ok {
+			return nil, nil
+		}
+		return managed, nil
 	}
 	s.loadActionRequests()
 	return s
@@ -402,7 +423,7 @@ func (s *Service) buildIssueSpecForBuild(subject *BuildActionSubject, id string)
 // buildFixManager builds the fix-PR manager for the source repo using
 // userToken. It does not resolve a failure; callers that need the pattern look
 // it up separately.
-func (s *Service) buildFixManager(userToken string) (*fixpr.Manager, error) {
+func (s *Service) buildFixManager(ctx context.Context, userToken string) (*fixpr.Manager, error) {
 	eff := s.cfg.EffectiveFixPRs()
 	if eff.Repo == nil || eff.Repo.Owner == "" || eff.Repo.Name == "" {
 		return nil, fmt.Errorf("no source repo resolved (set ai.fix_prs.repo or branding.source_repo)")
@@ -469,6 +490,10 @@ func (s *Service) buildFixManager(userToken string) (*fixpr.Manager, error) {
 		AllowBash:           allowBash,
 		Timeout:             ar.ParsedTimeout(),
 		GitToken:            userToken,
+		ExecutionID:         actionRequestID(ctx),
+	}
+	if opts.Agent.ExecutionID != "" {
+		opts.Agent.WorkObserver = s.observeRuntimeWork(opts.Agent.ExecutionID)
 	}
 	mgr := fixpr.NewManager(prClient,
 		filepath.Join(s.dataDir, "fix_pr_state.json"), opts)
@@ -561,7 +586,7 @@ func (s *Service) generateFixPreview(ctx context.Context, failureID, userToken, 
 	if len(sourceFiles) == 0 {
 		return PreviewResult{}, nil, fmt.Errorf("%w: repository source investigation did not identify a verified local path; create an issue or investigate source before proposing a fix", ErrPreviewRejected)
 	}
-	mgr, err := s.buildFixManager(userToken)
+	mgr, err := s.buildFixManager(ctx, userToken)
 	if err != nil {
 		return PreviewResult{}, nil, err
 	}
@@ -582,7 +607,7 @@ func (s *Service) generateFixPreviewForPattern(
 	ctx context.Context, pattern models.PatternAnalysis, userToken, instruction string,
 	generationContext *fixpr.GenerationContext,
 ) (PreviewResult, *previewEntry, error) {
-	mgr, err := s.buildFixManager(userToken)
+	mgr, err := s.buildFixManager(ctx, userToken)
 	if err != nil {
 		return PreviewResult{}, nil, err
 	}
@@ -826,7 +851,7 @@ func (s *Service) confirmEntryUnlocked(ctx context.Context, entry *previewEntry,
 		if entry.targetConfig != fixTargetFingerprint(eff) {
 			return "", ErrPreviewTargetChanged
 		}
-		mgr, err := s.buildFixManager(userToken)
+		mgr, err := s.buildFixManager(ctx, userToken)
 		if err != nil {
 			return "", err
 		}

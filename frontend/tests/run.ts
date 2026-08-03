@@ -6,3 +6,4 @@ import "./search.test.js";
 import "./fetchStatus.test.js";
 import "./testResults.test.js";
 import "./buildFailures.test.js";
+import "./actionRequests.test.js";

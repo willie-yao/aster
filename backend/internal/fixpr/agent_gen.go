@@ -35,6 +35,7 @@ func generateWithAgent(ctx context.Context, gp genParams, p models.PatternAnalys
 			MaxTurns:    a.MaxTurns,
 			AllowBash:   a.AllowBash,
 			Timeout:     a.Timeout,
+			ExecutionID: a.ExecutionID, WorkObserver: a.WorkObserver,
 		})
 		if err != nil {
 			if errors.Is(err, runtime.ErrUnavailable) {

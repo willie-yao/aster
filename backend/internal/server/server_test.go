@@ -981,6 +981,7 @@ type fakeAsyncRunner struct {
 	fakeRunner
 	request      actions.ActionRequestView
 	supersedesID string
+	cancelStatus string
 }
 
 func (f *fakeAsyncRunner) CreateRequest(failureID, kind, login, userToken, instruction, supersedesID string) (actions.ActionRequestView, error) {
@@ -1005,12 +1006,15 @@ func (f *fakeAsyncRunner) ConfirmRequest(_ context.Context, id, login, token str
 	f.gotConfirmToken, f.gotToken = id, token
 	return "https://github.com/o/r/issues/1", nil
 }
-func (f *fakeAsyncRunner) CancelRequest(id, login string) error {
+func (f *fakeAsyncRunner) CancelRequest(_ context.Context, id, login string) (actions.ActionRequestView, error) {
 	if id != f.request.ID || login != f.request.Owner {
-		return actions.ErrRequestNotFound
+		return actions.ActionRequestView{}, actions.ErrRequestNotFound
 	}
-	f.request.Status = actions.RequestCancelled
-	return nil
+	f.request.Status = f.cancelStatus
+	if f.request.Status == "" {
+		f.request.Status = actions.RequestCancelled
+	}
+	return f.request, nil
 }
 
 func TestHandler_AsyncActionRequestFlow(t *testing.T) {
@@ -1077,11 +1081,19 @@ func TestHandler_AsyncActionRequestFlow(t *testing.T) {
 	}
 	_ = confirmed.Body.Close()
 
+	runner.cancelStatus = actions.RequestCancelling
 	cancelled := request(http.MethodPost, "/api/action-requests/request-1/cancel", "")
-	if cancelled.StatusCode != http.StatusNoContent {
+	if cancelled.StatusCode != http.StatusAccepted {
 		t.Fatalf("cancel status=%d body=%s", cancelled.StatusCode, readBody(t, cancelled))
 	}
+	var cancellingView actions.ActionRequestView
+	if err := json.NewDecoder(cancelled.Body).Decode(&cancellingView); err != nil {
+		t.Fatal(err)
+	}
 	_ = cancelled.Body.Close()
+	if cancellingView.Status != actions.RequestCancelling {
+		t.Fatalf("cancel view = %+v", cancellingView)
+	}
 
 	capsResp, _ := http.Get(srv.URL + "/api/capabilities")
 	var caps Capabilities

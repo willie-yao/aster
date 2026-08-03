@@ -46,7 +46,7 @@ type ActionRequestRunner interface {
 	CreateRequest(failureID, kind, login, userToken, instruction, supersedesID string) (actions.ActionRequestView, error)
 	GetRequest(id, login string) (actions.ActionRequestView, error)
 	ConfirmRequest(ctx context.Context, id, login, userToken string) (string, error)
-	CancelRequest(id, login string) error
+	CancelRequest(ctx context.Context, id, login string) (actions.ActionRequestView, error)
 }
 
 // defaultActionTimeout bounds a single on-demand action. Fix-PR drafting calls
@@ -284,7 +284,7 @@ func Handler(opts Options) (http.Handler, error) {
 			mux.Handle("POST /api/action-requests/{id}/confirm",
 				auth.Middleware(opts.Auth, guard(confirmActionRequestHandler(timeout, requests.ConfirmRequest))))
 			mux.Handle("POST /api/action-requests/{id}/cancel",
-				auth.Middleware(opts.Auth, guard(cancelActionRequestHandler(requests.CancelRequest))))
+				auth.Middleware(opts.Auth, guard(cancelActionRequestHandler(timeout, requests.CancelRequest))))
 		}
 	}
 	mux.Handle("/api/capabilities", readOnly(capabilitiesHandler(caps)))
@@ -565,20 +565,27 @@ func confirmActionRequestHandler(timeout time.Duration, run confirmActionRequest
 	})
 }
 
-type cancelActionRequestFunc func(id, login string) error
+type cancelActionRequestFunc func(context.Context, string, string) (actions.ActionRequestView, error)
 
-func cancelActionRequestHandler(run cancelActionRequestFunc) http.Handler {
+func cancelActionRequestHandler(timeout time.Duration, run cancelActionRequestFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		identity, ok := auth.IdentityFrom(r.Context())
 		if !ok {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		if err := run(r.PathValue("id"), identity.Login); err != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
+		defer cancel()
+		view, err := run(ctx, r.PathValue("id"), identity.Login)
+		if err != nil {
 			writeActionError(w, r.PathValue("id"), identity.Login, err)
 			return
 		}
-		w.WriteHeader(http.StatusNoContent)
+		w.Header().Set("Content-Type", "application/json")
+		if view.Status == actions.RequestCancelling {
+			w.WriteHeader(http.StatusAccepted)
+		}
+		_ = json.NewEncoder(w).Encode(view)
 	})
 }
 

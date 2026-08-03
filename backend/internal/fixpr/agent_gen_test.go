@@ -40,7 +40,8 @@ func TestGenerateWithAgent_HappyPath(t *testing.T) {
 		Files: map[string]string{"templates/cluster.yaml": "diskType: Premium_LRS\n"},
 		Diff:  "--- a/templates/cluster.yaml\n+++ b/templates/cluster.yaml\n",
 	}}
-	gp := agentGenParams(&AgentConfig{Runtime: fa, Model: "m", Endpoint: "e", ModelToken: "t", AllowBash: true})
+	observer := func(context.Context, runtime.WorkRef) error { return nil }
+	gp := agentGenParams(&AgentConfig{Runtime: fa, Model: "m", Endpoint: "e", ModelToken: "t", AllowBash: true, ExecutionID: "request-1", WorkObserver: observer})
 
 	fix, err := generateWithAgent(context.Background(), gp, systemicPattern("etcd"))
 	if err != nil {
@@ -61,6 +62,9 @@ func TestGenerateWithAgent_HappyPath(t *testing.T) {
 	}
 	if fa.spec.Model != "m" || fa.spec.Endpoint != "e" || fa.spec.Token != "t" {
 		t.Errorf("model config not passed: %+v", fa.spec)
+	}
+	if fa.spec.ExecutionID != "request-1" || fa.spec.WorkObserver == nil {
+		t.Errorf("runtime work identity not passed: %+v", fa.spec)
 	}
 }
 
@@ -145,5 +149,18 @@ func TestGenerateWithAgent_CritiqueErrorFailsClosed(t *testing.T) {
 
 	if _, err := generateWithAgent(context.Background(), gp, systemicPattern("etcd")); err == nil || !strings.Contains(err.Error(), "review failed") {
 		t.Errorf("a review error should drop the fix (fail closed), got %v", err)
+	}
+}
+
+func TestGenerateBuildWithAgentPassesRuntimeIdentity(t *testing.T) {
+	fa := &fakeAgentRuntime{res: runtime.GenerateResult{Files: map[string]string{"a": "b"}, Diff: "diff"}}
+	observer := func(context.Context, runtime.WorkRef) error { return nil }
+	gp := agentGenParams(&AgentConfig{Runtime: fa, ExecutionID: "build-request", WorkObserver: observer})
+	_, err := generateBuildWithAgent(context.Background(), gp, BuildFailure{RootCause: "failed", SuggestedFix: "fix it", SourceFiles: []string{"a"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fa.spec.ExecutionID != "build-request" || fa.spec.WorkObserver == nil {
+		t.Fatalf("runtime work identity not passed: %+v", fa.spec)
 	}
 }

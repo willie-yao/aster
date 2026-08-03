@@ -131,6 +131,7 @@ type TaskState struct {
 	Deleting        bool
 	ResultAvailable bool
 	CompletionTime  time.Time
+	Annotations     map[string]string
 }
 
 // TaskState returns a Task's phase and execution placement. A missing Task has
@@ -185,6 +186,7 @@ func taskStateFromObject(u *unstructured.Unstructured) (TaskState, error) {
 		Exists: true, Phase: phase, Execution: execution,
 		ResourceVersion: u.GetResourceVersion(), UID: string(u.GetUID()), Attempts: int(attempts),
 		Deleting: u.GetDeletionTimestamp() != nil, ResultAvailable: resultAvailable, CompletionTime: completionTime,
+		Annotations: u.GetAnnotations(),
 	}, nil
 }
 

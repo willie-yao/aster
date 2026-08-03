@@ -44,7 +44,23 @@ type GenerateSpec struct {
 	AllowBash bool
 	// Timeout bounds the whole run (clone plus agent). Zero uses defaultTimeout.
 	Timeout time.Duration
+	// ExecutionID scopes externally managed work to one action request.
+	ExecutionID string
+	// WorkObserver records planned and observed external runtime identities.
+	WorkObserver WorkObserver
 }
+
+// WorkRef identifies one externally managed runtime execution.
+type WorkRef struct {
+	Backend     string `json:"backend"`
+	Namespace   string `json:"namespace,omitempty"`
+	Name        string `json:"name"`
+	UID         string `json:"uid,omitempty"`
+	ExecutionID string `json:"execution_id,omitempty"`
+}
+
+// WorkObserver persists external runtime identity as it becomes available.
+type WorkObserver func(context.Context, WorkRef) error
 
 // GenerateResult is the outcome of a generative run.
 type GenerateResult struct {
@@ -64,6 +80,12 @@ type GenerateResult struct {
 // ships first; a pod-backed impl can be added later behind this interface.
 type AgentRuntime interface {
 	Generate(ctx context.Context, spec GenerateSpec) (GenerateResult, error)
+}
+
+// ManagedAgentRuntime can stop one exact external execution identity.
+type ManagedAgentRuntime interface {
+	AgentRuntime
+	Cleanup(context.Context, WorkRef) error
 }
 
 // LocalAgentRuntime runs a coding-agent CLI on the local host: it shallow-clones

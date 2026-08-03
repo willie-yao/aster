@@ -30,9 +30,15 @@ type fakeTaskAPI struct {
 	deleted     bool
 	deleteCalls int
 	deleteErrs  []error
+	uid         string
+	annotations map[string]string
+	preexisting bool
 }
 
 func (f *fakeTaskAPI) Apply(_ context.Context, _ schema.GroupVersionResource, _ string, obj map[string]any) error {
+	if f.deleted && len(f.phases) > 1 {
+		f.calls++
+	}
 	f.applied = obj
 	f.deleted = false
 	return f.applyErr
@@ -67,6 +73,53 @@ func (f *fakeTaskAPI) TaskPhase(_ context.Context, _, name string) (string, erro
 		return "Succeeded", nil
 	}
 	return f.phases[i], nil
+}
+
+func (f *fakeTaskAPI) TaskState(_ context.Context, _, _ string) (TaskState, error) {
+	if f.deleted {
+		return TaskState{}, nil
+	}
+	exists := f.applied != nil || f.preexisting
+	if !exists {
+		return TaskState{}, nil
+	}
+	phase := "Running"
+	if len(f.phases) > 0 {
+		i := f.calls
+		if i >= len(f.phases) {
+			i = len(f.phases) - 1
+		}
+		phase = f.phases[i]
+	}
+	annotations := map[string]string{}
+	for key, value := range f.annotations {
+		annotations[key] = value
+	}
+	if metadata, _ := f.applied["metadata"].(map[string]any); metadata != nil {
+		if values, _ := metadata["annotations"].(map[string]any); values != nil {
+			for key, value := range values {
+				annotations[key], _ = value.(string)
+			}
+		}
+	}
+	uid := f.uid
+	if uid == "" {
+		uid = "uid-1"
+	}
+	return TaskState{Exists: true, Phase: phase, UID: uid, ResourceVersion: "1", Annotations: annotations}, nil
+}
+
+func (f *fakeTaskAPI) DeleteTaskIfIdentity(_ context.Context, _, _ string, uid, _ string) (bool, error) {
+	wantUID := f.uid
+	if wantUID == "" {
+		wantUID = "uid-1"
+	}
+	if uid != wantUID {
+		return false, nil
+	}
+	f.deleteCalls++
+	f.deleted = true
+	return true, nil
 }
 
 // resultServer returns an httptest server that serves a StructuredResult (as the
@@ -231,9 +284,14 @@ func TestAgentRuntime_ApplyUnavailable(t *testing.T) {
 	r := &AgentRuntime{kube: kube, results: results, opts: AgentOptions{AgentRef: "codex-fixer", PollEvery: time.Millisecond},
 		applyDiff: stubApply(nil, nil)}
 
-	_, err := r.Generate(context.Background(), spec())
+	s := spec()
+	s.ExecutionID = "request-apply-unknown"
+	_, err := r.Generate(context.Background(), s)
 	if err == nil || !isUnavailable(err) {
 		t.Errorf("apply failure should surface ErrUnavailable, got %v", err)
+	}
+	if !kube.deleted {
+		t.Fatal("accepted Task with a lost apply response was not cleaned")
 	}
 }
 
@@ -577,19 +635,124 @@ func TestAgentRuntimeHonorsSpecTimeout(t *testing.T) {
 }
 
 func TestAgentRuntimeRecreatesFailedTask(t *testing.T) {
-	kube := &fakeTaskAPI{phases: []string{"Failed", "Succeeded"}}
+	kube := &fakeTaskAPI{phases: []string{"Failed", "Succeeded"}, preexisting: true}
 	results, done := resultServer(t, StructuredResult{BaseSHA: "pinned-sha", Diff: "", Files: nil})
 	defer done()
 	r := &AgentRuntime{kube: kube, results: results, opts: AgentOptions{AgentRef: "codex-fixer", MaxRetries: 1, PollEvery: time.Millisecond}}
 	if _, err := r.Generate(context.Background(), spec()); err != nil {
 		t.Fatal(err)
 	}
-	if kube.deleteCalls != 1 {
-		t.Fatalf("delete calls = %d, want 1", kube.deleteCalls)
+	if kube.deleteCalls != 2 {
+		t.Fatalf("delete calls = %d, want 2", kube.deleteCalls)
 	}
 	taskSpec := kube.applied["spec"].(map[string]any)
 	retry := taskSpec["retryPolicy"].(map[string]any)
 	if retry["maxRetries"] != int64(1) {
 		t.Fatalf("retryPolicy = %+v", retry)
+	}
+}
+
+func TestFixTaskNameSeparatesActionRequestExecutions(t *testing.T) {
+	first := spec()
+	first.ExecutionID = "request-one"
+	second := first
+	second.ExecutionID = "request-two"
+	if FixTaskName(first, AgentOptions{AgentRef: "agent"}) == FixTaskName(second, AgentOptions{AgentRef: "agent"}) {
+		t.Fatal("request-scoped executions shared a Task name")
+	}
+	legacy := spec()
+	legacyAgain := spec()
+	if FixTaskName(legacy, AgentOptions{AgentRef: "agent"}) != FixTaskName(legacyAgain, AgentOptions{AgentRef: "agent"}) {
+		t.Fatal("legacy content-addressed name is unstable")
+	}
+}
+
+func TestAgentRuntimeReportsTaskIdentity(t *testing.T) {
+	kube := &fakeTaskAPI{phases: []string{"Succeeded"}}
+	results, done := resultServer(t, StructuredResult{BaseSHA: "pinned-sha"})
+	defer done()
+	var observed []runtime.WorkRef
+	s := spec()
+	s.ExecutionID = "request-one"
+	s.WorkObserver = func(_ context.Context, work runtime.WorkRef) error {
+		observed = append(observed, work)
+		return nil
+	}
+	r := &AgentRuntime{kube: kube, results: results, opts: AgentOptions{AgentRef: "agent", PollEvery: time.Millisecond}}
+	if _, err := r.Generate(context.Background(), s); err != nil {
+		t.Fatal(err)
+	}
+	if len(observed) != 2 || observed[0].UID != "" || observed[1].UID != "uid-1" {
+		t.Fatalf("observed work = %+v", observed)
+	}
+	if !kube.deleted {
+		t.Fatal("successful request-scoped Task was not removed")
+	}
+	metadata := kube.applied["metadata"].(map[string]any)
+	annotations := metadata["annotations"].(map[string]any)
+	if annotations[actionRequestAnnotation] != "request-one" {
+		t.Fatalf("annotations = %+v", annotations)
+	}
+}
+
+func TestAgentRuntimeCleanupDeletesExactTask(t *testing.T) {
+	kube := &fakeTaskAPI{phases: []string{"Running"}, uid: "uid-one", preexisting: true}
+	r := &AgentRuntime{kube: kube, opts: AgentOptions{AgentRef: "agent", PollEvery: time.Millisecond}}
+	if err := r.Cleanup(context.Background(), runtime.WorkRef{Backend: "orka", Namespace: "orka-system", Name: "fix-task", UID: "uid-one"}); err != nil {
+		t.Fatal(err)
+	}
+	if !kube.deleted || kube.deleteCalls != 1 {
+		t.Fatalf("cleanup deleted=%t calls=%d", kube.deleted, kube.deleteCalls)
+	}
+}
+
+func TestAgentRuntimeCleanupRejectsReplacementUID(t *testing.T) {
+	kube := &fakeTaskAPI{phases: []string{"Running"}, uid: "replacement", preexisting: true}
+	r := &AgentRuntime{kube: kube, opts: AgentOptions{AgentRef: "agent", PollEvery: time.Millisecond}}
+	err := r.Cleanup(context.Background(), runtime.WorkRef{Backend: "orka", Namespace: "orka-system", Name: "fix-task", UID: "original"})
+	if !errors.Is(err, runtime.ErrWorkIdentityChanged) {
+		t.Fatalf("cleanup error = %v", err)
+	}
+	if kube.deleteCalls != 0 {
+		t.Fatalf("replacement Task was deleted: %d", kube.deleteCalls)
+	}
+}
+
+func TestAgentRuntimeTimeoutCleansObservedTask(t *testing.T) {
+	kube := &fakeTaskAPI{phases: []string{"Running"}}
+	r := &AgentRuntime{kube: kube, results: &delayedResultAPI{}, opts: AgentOptions{AgentRef: "agent", PollEvery: time.Millisecond}}
+	s := spec()
+	s.Timeout = 5 * time.Millisecond
+	s.ExecutionID = "request-timeout"
+	if _, err := r.Generate(context.Background(), s); err == nil {
+		t.Fatal("timed out generation succeeded")
+	}
+	if !kube.deleted {
+		t.Fatal("timed out generation left the Task running")
+	}
+}
+
+func TestAgentRuntimeRejectsTaskOwnedByAnotherRequest(t *testing.T) {
+	kube := &fakeTaskAPI{phases: []string{"Running"}, preexisting: true, annotations: map[string]string{actionRequestAnnotation: "other-request"}}
+	r := &AgentRuntime{kube: kube, results: &delayedResultAPI{}, opts: AgentOptions{AgentRef: "agent", PollEvery: time.Millisecond}}
+	s := spec()
+	s.ExecutionID = "this-request"
+	_, err := r.Generate(context.Background(), s)
+	if !errors.Is(err, runtime.ErrWorkIdentityChanged) {
+		t.Fatalf("generation error = %v", err)
+	}
+	if kube.deleteCalls != 0 {
+		t.Fatalf("another request's Task was deleted: %d", kube.deleteCalls)
+	}
+}
+
+func TestAgentRuntimeCleanupAdoptsPlannedOwnedTask(t *testing.T) {
+	kube := &fakeTaskAPI{phases: []string{"Running"}, preexisting: true, uid: "uid-one", annotations: map[string]string{actionRequestAnnotation: "request-one"}}
+	r := &AgentRuntime{kube: kube, opts: AgentOptions{AgentRef: "agent", PollEvery: time.Millisecond}}
+	if err := r.Cleanup(context.Background(), runtime.WorkRef{Backend: "orka", Name: "fix-task", ExecutionID: "request-one"}); err != nil {
+		t.Fatal(err)
+	}
+	if !kube.deleted {
+		t.Fatal("owned planned Task was not cleaned")
 	}
 }

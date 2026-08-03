@@ -22,6 +22,12 @@ import (
 // distroless deployment without a toolchain degrades gracefully.
 var ErrUnavailable = errors.New("runtime unavailable")
 
+// ErrWorkIdentityChanged means a named external execution now has another UID.
+var ErrWorkIdentityChanged = errors.New("runtime work identity changed")
+
+// ErrCleanupPending means external runtime cleanup could not be confirmed yet.
+var ErrCleanupPending = errors.New("runtime cleanup is still pending")
+
 // RepoRef identifies a Git repository and the ref to materialize.
 type RepoRef struct {
 	Owner string

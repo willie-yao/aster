@@ -26,6 +26,8 @@
     "src/lib/buildFailures.ts",
     "src/types/dashboard.ts",
     "src/types/analysisChat.ts",
-    "src/types/fetchStatus.ts"
+    "src/types/fetchStatus.ts",
+    "src/lib/actionRequests.ts",
+    "src/types/actions.ts"
   ]
 }

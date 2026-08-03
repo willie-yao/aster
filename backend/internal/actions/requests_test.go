@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,6 +16,8 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/issues"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
 )
 
 func requestTestService(t *testing.T) (*Service, models.PatternAnalysis) {
@@ -76,7 +80,11 @@ func TestAsyncIssueRequestPersistsAndNotifies(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("draft-ready notifier was not called")
 	}
-	ready = waitRequest(t, service, created.ID, "alice", RequestReady)
+	deadline := time.Now().Add(time.Second)
+	for !ready.EmailSent && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+		ready = waitRequest(t, service, created.ID, "alice", RequestReady)
+	}
 	if !ready.EmailSent {
 		t.Fatalf("email status not persisted: %+v", ready)
 	}
@@ -241,9 +249,9 @@ func TestCreateRequestSupersedesReadyRequest(t *testing.T) {
 	if replacement.ID == created.ID || replacement.Status != RequestPending {
 		t.Fatalf("replacement = %+v", replacement)
 	}
-	old, err := service.GetRequest(created.ID, "alice")
-	if err != nil || old.Status != RequestCancelled || old.SupersededBy != replacement.ID {
-		t.Fatalf("superseded=%+v err=%v", old, err)
+	old := waitRequest(t, service, created.ID, "alice", RequestCancelled)
+	if old.SupersededBy != replacement.ID {
+		t.Fatalf("superseded=%+v", old)
 	}
 	waitRequest(t, service, replacement.ID, "alice", RequestReady)
 
@@ -298,9 +306,9 @@ func TestCreateRequestSupersedesPendingRequest(t *testing.T) {
 	if ready.Preview == nil {
 		t.Fatalf("replacement=%+v", ready)
 	}
-	old, err := service.GetRequest(blockedID, "alice")
-	if err != nil || old.Status != RequestCancelled || old.Preview != nil || old.SupersededBy != replacement.ID {
-		t.Fatalf("superseded=%+v err=%v", old, err)
+	old := waitRequest(t, service, blockedID, "alice", RequestCancelled)
+	if old.Preview != nil || old.SupersededBy != replacement.ID {
+		t.Fatalf("superseded=%+v", old)
 	}
 	select {
 	case id := <-notified:
@@ -341,9 +349,9 @@ func TestCreateRequestSupersedesDifferentAction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	old, err := service.GetRequest(created.ID, "alice")
-	if err != nil || old.Status != RequestCancelled || old.SupersededBy != replacement.ID {
-		t.Fatalf("superseded=%+v err=%v", old, err)
+	old := waitRequest(t, service, created.ID, "alice", RequestCancelled)
+	if old.SupersededBy != replacement.ID {
+		t.Fatalf("superseded=%+v", old)
 	}
 	if replacement.Kind != "propose-fix" || replacement.Status != RequestPending {
 		t.Fatalf("replacement=%+v", replacement)
@@ -552,7 +560,7 @@ func TestCancelReadyRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitRequest(t, service, created.ID, "alice", RequestReady)
-	if err := service.CancelRequest(created.ID, "alice"); err != nil {
+	if _, err := service.CancelRequest(context.Background(), created.ID, "alice"); err != nil {
 		t.Fatal(err)
 	}
 	view, err := service.GetRequest(created.ID, "alice")
@@ -648,8 +656,13 @@ func TestCancelRequestPreservesTerminalStatus(t *testing.T) {
 				ID: status, Owner: "alice", Status: status,
 				CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
 			}}
-			if err := service.CancelRequest(status, "alice"); err == nil || !strings.Contains(err.Error(), status) {
-				t.Fatalf("CancelRequest() err=%v, want status %q", err, status)
+			view, cancelErr := service.CancelRequest(context.Background(), status, "alice")
+			if status == RequestCancelled {
+				if cancelErr != nil || view.Status != RequestCancelled {
+					t.Fatalf("idempotent cancellation view=%+v err=%v", view, cancelErr)
+				}
+			} else if cancelErr == nil || !strings.Contains(cancelErr.Error(), status) {
+				t.Fatalf("CancelRequest() err=%v, want status %q", cancelErr, status)
 			}
 			view, err := service.GetRequest(status, "alice")
 			if err != nil || view.Status != status {
@@ -668,7 +681,7 @@ func TestCancelRequestRejectsConfirmationInProgress(t *testing.T) {
 	}}
 	service.requestConfirms["request-ready"] = struct{}{}
 
-	if err := service.CancelRequest("request-ready", "alice"); err == nil || !strings.Contains(err.Error(), "being confirmed") {
+	if _, err := service.CancelRequest(context.Background(), "request-ready", "alice"); err == nil || !strings.Contains(err.Error(), "being confirmed") {
 		t.Fatalf("CancelRequest() err=%v", err)
 	}
 	view, err := service.GetRequest("request-ready", "alice")
@@ -724,5 +737,520 @@ func TestCreateRequestReusesOwnerUnknownAndRejectsOtherOwner(t *testing.T) {
 	}
 	if _, err := service.CreateRequest(pattern.ID, "create-issue", "bob", "token", "", ""); err == nil || !strings.Contains(err.Error(), "unknown GitHub outcome") {
 		t.Fatalf("other owner error = %v", err)
+	}
+}
+
+type fakeManagedAgentRuntime struct {
+	mu      sync.Mutex
+	refs    []runtime.WorkRef
+	started chan struct{}
+	release chan struct{}
+	err     error
+	errs    []error
+	once    sync.Once
+}
+
+func (f *fakeManagedAgentRuntime) Generate(context.Context, runtime.GenerateSpec) (runtime.GenerateResult, error) {
+	return runtime.GenerateResult{}, nil
+}
+
+func (f *fakeManagedAgentRuntime) Cleanup(ctx context.Context, ref runtime.WorkRef) error {
+	f.mu.Lock()
+	f.refs = append(f.refs, ref)
+	f.mu.Unlock()
+	if f.started != nil {
+		f.once.Do(func() { close(f.started) })
+	}
+	if f.release != nil {
+		select {
+		case <-f.release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.errs) > 0 {
+		err := f.errs[0]
+		f.errs = f.errs[1:]
+		return err
+	}
+	return f.err
+}
+
+func TestCancelRequestWaitsForRuntimeCleanup(t *testing.T) {
+	service, pattern := requestTestService(t)
+	fake := &fakeManagedAgentRuntime{started: make(chan struct{}), release: make(chan struct{})}
+	service.managedRuntime = func() (runtime.ManagedAgentRuntime, error) { return fake, nil }
+	now := time.Now().UTC()
+	const id = "runtime-request"
+	service.requests.Requests[id] = &actionRequest{
+		ActionRequestView: ActionRequestView{ID: id, FailureID: pattern.ID, Kind: "propose-fix", Owner: "alice", Status: RequestReady,
+			CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339)},
+		Runtime: &runtime.WorkRef{Backend: "orka", Namespace: "orka-system", Name: "fix-task", UID: "uid-one", ExecutionID: id},
+	}
+
+	type result struct {
+		view ActionRequestView
+		err  error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		view, err := service.CancelRequest(context.Background(), id, "alice")
+		resultCh <- result{view: view, err: err}
+	}()
+	<-fake.started
+	view, err := service.GetRequest(id, "alice")
+	if err != nil || view.Status != RequestCancelling {
+		t.Fatalf("during cleanup view=%+v err=%v", view, err)
+	}
+	close(fake.release)
+	got := <-resultCh
+	if got.err != nil || got.view.Status != RequestCancelled {
+		t.Fatalf("cancellation result=%+v err=%v", got.view, got.err)
+	}
+	fake.mu.Lock()
+	refs := append([]runtime.WorkRef(nil), fake.refs...)
+	fake.mu.Unlock()
+	if len(refs) != 1 || refs[0].UID != "uid-one" || refs[0].Name != "fix-task" {
+		t.Fatalf("cleanup refs = %+v", refs)
+	}
+}
+
+func TestCancelRequestFailsWhenIdentityChanges(t *testing.T) {
+	service, pattern := requestTestService(t)
+	fake := &fakeManagedAgentRuntime{err: runtime.ErrWorkIdentityChanged}
+	service.managedRuntime = func() (runtime.ManagedAgentRuntime, error) { return fake, nil }
+	now := time.Now().UTC()
+	const id = "identity-changed"
+	service.requests.Requests[id] = &actionRequest{
+		ActionRequestView: ActionRequestView{ID: id, FailureID: pattern.ID, Kind: "propose-fix", Owner: "alice", Status: RequestReady,
+			CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339)},
+		Runtime: &runtime.WorkRef{Backend: "orka", Name: "fix-task", UID: "old-uid", ExecutionID: id},
+	}
+	view, err := service.CancelRequest(context.Background(), id, "alice")
+	if err != nil || view.Status != RequestFailed || view.Error == "" {
+		t.Fatalf("view=%+v err=%v", view, err)
+	}
+	if _, err = service.CancelRequest(context.Background(), id, "alice"); err == nil {
+		t.Fatal("failed identity-change cleanup was reported as cancelled")
+	}
+}
+
+func TestRestartResumesRuntimeCleanup(t *testing.T) {
+	service, pattern := requestTestService(t)
+	now := time.Now().UTC()
+	state := actionRequestState{Version: 3, Requests: map[string]*actionRequest{
+		"restart-runtime": {
+			ActionRequestView: ActionRequestView{ID: "restart-runtime", FailureID: pattern.ID, Kind: "propose-fix", Owner: "alice", Status: RequestPending,
+				CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339)},
+			Runtime: &runtime.WorkRef{Backend: "orka", Name: "fix-task", UID: "uid-one", ExecutionID: "restart-runtime"},
+		},
+	}}
+	data, _ := json.Marshal(state)
+	if err := os.WriteFile(filepath.Join(service.dataDir, "action_request_state.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
+	fake := &fakeManagedAgentRuntime{}
+	reloaded.managedRuntime = func() (runtime.ManagedAgentRuntime, error) { return fake, nil }
+	reloaded.ConfigureAsyncRequests(time.Minute, nil)
+	view := waitRequest(t, reloaded, "restart-runtime", "alice", RequestFailed)
+	if view.Error == "" {
+		t.Fatalf("restart cleanup result = %+v", view)
+	}
+}
+
+func TestCreateRequestDeduplicatesEquivalentActiveRequest(t *testing.T) {
+	service, pattern := requestTestService(t)
+	first, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ID != first.ID {
+		t.Fatalf("duplicate request IDs: first=%s second=%s", first.ID, second.ID)
+	}
+	waitRequest(t, service, first.ID, "alice", RequestReady)
+	third, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", "")
+	if err != nil || third.ID != first.ID {
+		t.Fatalf("ready request was not deduplicated: view=%+v err=%v", third, err)
+	}
+}
+
+func TestRequestTimeoutUsesRuntimeCleanup(t *testing.T) {
+	service, pattern := requestTestService(t)
+	service.requestTimeout = 5 * time.Millisecond
+	fake := &fakeManagedAgentRuntime{}
+	service.managedRuntime = func() (runtime.ManagedAgentRuntime, error) { return fake, nil }
+	now := time.Now().UTC()
+	const id = "timeout-runtime"
+	service.requests.Requests[id] = &actionRequest{ActionRequestView: ActionRequestView{
+		ID: id, FailureID: pattern.ID, Kind: "propose-fix", Owner: "alice", Status: RequestPending,
+		CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
+	}}
+	service.requestDone[id] = make(chan struct{})
+	service.requestWG.Add(1)
+	go func() {
+		defer service.requestWG.Done()
+		service.generateRequestWith(id, "token", func(ctx context.Context, _, _, _, _ string, _ *issues.IssueSpec, _, _ string) (PreviewResult, *previewEntry, error) {
+			if err := service.observeRuntimeWork(id)(ctx, runtime.WorkRef{Backend: "orka", Name: "fix-task", UID: "uid-one", ExecutionID: id}); err != nil {
+				return PreviewResult{}, nil, err
+			}
+			<-ctx.Done()
+			return PreviewResult{}, nil, ctx.Err()
+		})
+	}()
+	view := waitRequest(t, service, id, "alice", RequestFailed)
+	if view.Error == "" {
+		t.Fatalf("timeout view = %+v", view)
+	}
+	fake.mu.Lock()
+	calls := len(fake.refs)
+	fake.mu.Unlock()
+	if calls == 0 {
+		t.Fatal("timeout did not clean runtime work")
+	}
+}
+
+func TestCancelPendingRequestWaitsForGenerator(t *testing.T) {
+	service, pattern := requestTestService(t)
+	now := time.Now().UTC()
+	const id = "pending-cancel"
+	service.requests.Requests[id] = &actionRequest{ActionRequestView: ActionRequestView{
+		ID: id, FailureID: pattern.ID, Kind: "create-issue", Owner: "alice", Status: RequestPending,
+		CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
+	}}
+	service.requestDone[id] = make(chan struct{})
+	started := make(chan struct{})
+	service.requestWG.Add(1)
+	go func() {
+		defer service.requestWG.Done()
+		service.generateRequestWith(id, "token", func(ctx context.Context, _, _, _, _ string, _ *issues.IssueSpec, _, _ string) (PreviewResult, *previewEntry, error) {
+			close(started)
+			<-ctx.Done()
+			return PreviewResult{}, nil, ctx.Err()
+		})
+	}()
+	<-started
+	view, err := service.CancelRequest(context.Background(), id, "alice")
+	if err != nil || view.Status != RequestCancelled {
+		t.Fatalf("pending cancellation view=%+v err=%v", view, err)
+	}
+}
+
+func TestCreateRequestAllowsDifferentOwner(t *testing.T) {
+	service, pattern := requestTestService(t)
+	first, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token-a", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.CreateRequest(pattern.ID, "create-issue", "bob", "token-b", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID == second.ID {
+		t.Fatalf("different owners shared request %q", first.ID)
+	}
+	waitRequest(t, service, first.ID, "alice", RequestReady)
+	waitRequest(t, service, second.ID, "bob", RequestReady)
+	if err := service.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCleanupRetriesTransientFailure(t *testing.T) {
+	service, pattern := requestTestService(t)
+	fake := &fakeManagedAgentRuntime{errs: []error{runtime.ErrCleanupPending, nil}}
+	service.managedRuntime = func() (runtime.ManagedAgentRuntime, error) { return fake, nil }
+	now := time.Now().UTC()
+	const id = "retry-cleanup"
+	service.requests.Requests[id] = &actionRequest{
+		ActionRequestView: ActionRequestView{ID: id, FailureID: pattern.ID, Kind: "propose-fix", Owner: "alice", Status: RequestReady,
+			CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339)},
+		Runtime: &runtime.WorkRef{Backend: "orka", Name: "fix-task", UID: "uid-one", ExecutionID: id},
+	}
+	view, err := service.CancelRequest(context.Background(), id, "alice")
+	if err != nil || view.Status != RequestCancelling {
+		t.Fatalf("initial cancellation view=%+v err=%v", view, err)
+	}
+	waitRequest(t, service, id, "alice", RequestCancelled)
+	fake.mu.Lock()
+	calls := len(fake.refs)
+	fake.mu.Unlock()
+	if calls < 2 {
+		t.Fatalf("cleanup calls = %d, want retry", calls)
+	}
+}
+
+func TestCleanupPendingGenerationTransitionsThroughCleanup(t *testing.T) {
+	service, pattern := requestTestService(t)
+	fake := &fakeManagedAgentRuntime{}
+	service.managedRuntime = func() (runtime.ManagedAgentRuntime, error) { return fake, nil }
+	now := time.Now().UTC()
+	const id = "cleanup-pending-generation"
+	service.requests.Requests[id] = &actionRequest{ActionRequestView: ActionRequestView{
+		ID: id, FailureID: pattern.ID, Kind: "propose-fix", Owner: "alice", Status: RequestPending,
+		CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
+	}}
+	service.requestDone[id] = make(chan struct{})
+	service.requestWG.Add(1)
+	go func() {
+		defer service.requestWG.Done()
+		service.generateRequestWith(id, "token", func(ctx context.Context, _, _, _, _ string, _ *issues.IssueSpec, _, _ string) (PreviewResult, *previewEntry, error) {
+			if err := service.observeRuntimeWork(id)(ctx, runtime.WorkRef{Backend: "orka", Name: "fix-task", UID: "uid-one", ExecutionID: id}); err != nil {
+				return PreviewResult{}, nil, err
+			}
+			return PreviewResult{}, nil, runtime.ErrCleanupPending
+		})
+	}()
+	view := waitRequest(t, service, id, "alice", RequestFailed)
+	if view.Error == "" {
+		t.Fatalf("cleanup-pending result = %+v", view)
+	}
+	fake.mu.Lock()
+	calls := len(fake.refs)
+	fake.mu.Unlock()
+	if calls == 0 {
+		t.Fatal("cleanup-pending generation was not reconciled")
+	}
+}
+
+func TestExpiredPendingRequestCleansBeforeExpiring(t *testing.T) {
+	service, pattern := requestTestService(t)
+	now := time.Now().UTC()
+	const id = "expired-pending"
+	service.requests.Requests[id] = &actionRequest{ActionRequestView: ActionRequestView{
+		ID: id, FailureID: pattern.ID, Kind: "create-issue", Owner: "alice", Status: RequestPending,
+		CreatedAt: now.Add(-2 * time.Hour).Format(time.RFC3339), UpdatedAt: now.Add(-2 * time.Hour).Format(time.RFC3339), ExpiresAt: now.Add(-time.Hour).Format(time.RFC3339),
+	}}
+	service.requestDone[id] = make(chan struct{})
+	started := make(chan struct{})
+	service.requestWG.Add(1)
+	go func() {
+		defer service.requestWG.Done()
+		service.generateRequestWith(id, "token", func(ctx context.Context, _, _, _, _ string, _ *issues.IssueSpec, _, _ string) (PreviewResult, *previewEntry, error) {
+			close(started)
+			<-ctx.Done()
+			return PreviewResult{}, nil, ctx.Err()
+		})
+	}()
+	<-started
+	view, err := service.GetRequest(id, "alice")
+	if err != nil || view.Status != RequestCancelling {
+		t.Fatalf("expired active request view=%+v err=%v", view, err)
+	}
+	waitRequest(t, service, id, "alice", RequestExpired)
+}
+
+func TestCreateRequestDoesNotDeduplicateDifferentInstruction(t *testing.T) {
+	service, pattern := requestTestService(t)
+	first, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "mention IPv6", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ID == first.ID {
+		t.Fatalf("different instructions shared request %q", first.ID)
+	}
+	waitRequest(t, service, first.ID, "alice", RequestReady)
+	waitRequest(t, service, second.ID, "alice", RequestFailed)
+}
+
+func TestCleanupRetriesAfterRuntimeBecomesAvailable(t *testing.T) {
+	service, pattern := requestTestService(t)
+	fake := &fakeManagedAgentRuntime{}
+	var available atomic.Bool
+	service.managedRuntime = func() (runtime.ManagedAgentRuntime, error) {
+		if !available.Load() {
+			return nil, nil
+		}
+		return fake, nil
+	}
+	now := time.Now().UTC()
+	const id = "runtime-unavailable"
+	service.requests.Requests[id] = &actionRequest{
+		ActionRequestView: ActionRequestView{ID: id, FailureID: pattern.ID, Kind: "propose-fix", Owner: "alice", Status: RequestReady,
+			CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339)},
+		Runtime: &runtime.WorkRef{Backend: "orka", Name: "fix-task", UID: "uid-one", ExecutionID: id},
+	}
+	view, err := service.CancelRequest(context.Background(), id, "alice")
+	if err != nil || view.Status != RequestCancelling {
+		t.Fatalf("initial cancellation view=%+v err=%v", view, err)
+	}
+	available.Store(true)
+	waitRequest(t, service, id, "alice", RequestCancelled)
+}
+
+func TestOverlappingCleanupWaitsForGenerationExit(t *testing.T) {
+	service, pattern := requestTestService(t)
+	fake := &fakeManagedAgentRuntime{}
+	service.managedRuntime = func() (runtime.ManagedAgentRuntime, error) { return fake, nil }
+	now := time.Now().UTC()
+	const id = "overlapping-cleanup"
+	service.requests.Requests[id] = &actionRequest{
+		ActionRequestView: ActionRequestView{ID: id, FailureID: pattern.ID, Kind: "propose-fix", Owner: "alice", Status: RequestCancelling,
+			CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339)},
+		Cleanup: &actionCleanupState{FinalStatus: RequestCancelled, RequestedAt: now.Format(time.RFC3339)},
+	}
+	service.requestDone[id] = make(chan struct{})
+	firstDone := make(chan ActionRequestView, 1)
+	go func() {
+		view, _ := service.cleanupRequest(context.Background(), id)
+		firstDone <- view
+	}()
+	time.Sleep(20 * time.Millisecond)
+	service.rmu.Lock()
+	service.requests.Requests[id].Runtime = &runtime.WorkRef{Backend: "orka", Name: "fix-task", UID: "uid-one", ExecutionID: id}
+	service.rmu.Unlock()
+	second, err := service.cleanupRequest(context.Background(), id)
+	if err != nil || second.Status != RequestCancelled {
+		t.Fatalf("second cleanup view=%+v err=%v", second, err)
+	}
+	select {
+	case <-firstDone:
+		t.Fatal("first cleanup returned before generation exited")
+	case <-time.After(20 * time.Millisecond):
+	}
+	service.finishGeneration(id)
+	select {
+	case first := <-firstDone:
+		if first.Status != RequestCancelled {
+			t.Fatalf("first cleanup view=%+v", first)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first cleanup did not finish after generation exit")
+	}
+}
+
+func TestWaitTracksShutdownWatcher(t *testing.T) {
+	service, _ := requestTestService(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	service.ConfigureAsyncRequestsWithContext(ctx, time.Minute, nil)
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- service.Wait(context.Background()) }()
+	select {
+	case err := <-waitDone:
+		t.Fatalf("Wait returned before shutdown: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	cancel()
+	select {
+	case err := <-waitDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Wait did not observe shutdown watcher completion")
+	}
+}
+
+func TestCleanupRetriesFinalStateWriteFailure(t *testing.T) {
+	service, pattern := requestTestService(t)
+	var writes atomic.Int32
+	service.requestStateWriter = func(path string, value any) error {
+		if writes.Add(1) == 2 {
+			return errors.New("transient state write failure")
+		}
+		return statefile.WritePrivateJSONDurable(path, value)
+	}
+	now := time.Now().UTC()
+	const id = "final-write-retry"
+	service.requests.Requests[id] = &actionRequest{ActionRequestView: ActionRequestView{
+		ID: id, FailureID: pattern.ID, Kind: "create-issue", Owner: "alice", Status: RequestReady,
+		CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
+	}}
+	view, err := service.CancelRequest(context.Background(), id, "alice")
+	if err != nil || view.Status != RequestCancelling {
+		t.Fatalf("initial cancellation view=%+v err=%v", view, err)
+	}
+	waitRequest(t, service, id, "alice", RequestCancelled)
+	if writes.Load() < 3 {
+		t.Fatalf("state writes = %d, want retry", writes.Load())
+	}
+}
+
+func TestSupersedingRequestCancelsReadyNotification(t *testing.T) {
+	service, pattern := requestTestService(t)
+	started := make(chan struct{})
+	cancelled := make(chan struct{})
+	var calls atomic.Int32
+	service.ConfigureAsyncRequests(time.Minute, func(ctx context.Context, _ ActionRequestView) error {
+		if calls.Add(1) != 1 {
+			return nil
+		}
+		close(started)
+		<-ctx.Done()
+		close(cancelled)
+		return ctx.Err()
+	})
+	created, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitRequest(t, service, created.ID, "alice", RequestReady)
+	<-started
+	replacement, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("superseded ready notification was not cancelled")
+	}
+	waitRequest(t, service, replacement.ID, "alice", RequestReady)
+	if err := service.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCreateRequestDoesNotReuseStaleReadyRequest(t *testing.T) {
+	service, pattern := requestTestService(t)
+	first, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitRequest(t, service, first.ID, "alice", RequestReady)
+	service.rmu.Lock()
+	service.requests.Requests[first.ID].PatternHash = "stale"
+	service.rmu.Unlock()
+	second, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ID == first.ID {
+		t.Fatalf("stale ready request %q was reused", first.ID)
+	}
+	waitRequest(t, service, second.ID, "alice", RequestReady)
+}
+
+func TestShutdownRejectsNewRequests(t *testing.T) {
+	service, pattern := requestTestService(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	service.ConfigureAsyncRequestsWithContext(ctx, time.Minute, nil)
+	cancel()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		service.rmu.Lock()
+		stopping := service.stopping
+		service.rmu.Unlock()
+		if stopping {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", ""); err == nil || !strings.Contains(err.Error(), "stopping") {
+		t.Fatalf("CreateRequest() error = %v", err)
+	}
+	if err := service.Wait(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }

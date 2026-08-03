@@ -1,4 +1,5 @@
-import { actionErrorMessage, type ActionPreview } from "../types/actions";
+import type { ActionPreview } from "../types/actions";
+import { actionErrorMessage } from "./actionRequests";
 
 const API_BASE = import.meta.env.BASE_URL;
 const maxInstructionBytes = 4096;

@@ -18,25 +18,28 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/issues"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/patternstate"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
 )
 
 const (
-	defaultRequestTimeout = 10 * time.Minute
-	actionRequestTTL      = 24 * time.Hour
-	maxActiveRequests     = 50
-	maxPendingPerOwner    = 3
+	defaultRequestTimeout        = 10 * time.Minute
+	actionRequestTTL             = 24 * time.Hour
+	maxActiveRequests            = 50
+	maxPendingPerOwner           = 3
+	defaultRuntimeCleanupTimeout = 30 * time.Second
 )
 
 // Action request states.
 const (
-	RequestPending   = "pending"
-	RequestReady     = "ready"
-	RequestUnknown   = "unknown"
-	RequestFailed    = "failed"
-	RequestConfirmed = "confirmed"
-	RequestCancelled = "cancelled"
-	RequestExpired   = "expired"
+	RequestPending    = "pending"
+	RequestCancelling = "cancelling"
+	RequestReady      = "ready"
+	RequestUnknown    = "unknown"
+	RequestFailed     = "failed"
+	RequestConfirmed  = "confirmed"
+	RequestCancelled  = "cancelled"
+	RequestExpired    = "expired"
 )
 
 const draftRefinementWarning = "The revised draft could not be generated or did not pass safety validation. The safe fallback draft is shown below, but this replacement request cannot be confirmed."
@@ -66,6 +69,12 @@ type ActionRequestView struct {
 	EmailError   string         `json:"email_error,omitempty"`
 }
 
+type actionCleanupState struct {
+	FinalStatus string `json:"final_status"`
+	Reason      string `json:"reason,omitempty"`
+	RequestedAt string `json:"requested_at"`
+}
+
 type actionRequest struct {
 	ActionRequestView
 	Instruction     string                      `json:"instruction,omitempty"`
@@ -76,6 +85,8 @@ type actionRequest struct {
 	BaseIssue       *issues.IssueSpec           `json:"base_issue,omitempty"`
 	BaseTargetRepo  string                      `json:"base_target_repo,omitempty"`
 	BasePatternHash string                      `json:"base_pattern_hash,omitempty"`
+	Runtime         *runtime.WorkRef            `json:"runtime,omitempty"`
+	Cleanup         *actionCleanupState         `json:"cleanup,omitempty"`
 }
 
 type actionRequestState struct {
@@ -87,13 +98,44 @@ func (s *Service) requestStatePath() string {
 	return filepath.Join(s.dataDir, "action_request_state.json")
 }
 
+type actionRequestContextKey struct{}
+
+func withActionRequestID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, actionRequestContextKey{}, id)
+}
+
+func actionRequestID(ctx context.Context) string {
+	id, _ := ctx.Value(actionRequestContextKey{}).(string)
+	return id
+}
+
+func (s *Service) observeRuntimeWork(id string) runtime.WorkObserver {
+	return func(_ context.Context, work runtime.WorkRef) error {
+		s.rmu.Lock()
+		defer s.rmu.Unlock()
+		request := s.requests.Requests[id]
+		if request == nil || (request.Status != RequestPending && request.Status != RequestCancelling) {
+			return context.Canceled
+		}
+		copy := work
+		previousRuntime, previousUpdatedAt := request.Runtime, request.UpdatedAt
+		request.Runtime = &copy
+		request.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		if err := s.saveRequestsLocked(); err != nil {
+			request.Runtime, request.UpdatedAt = previousRuntime, previousUpdatedAt
+			return err
+		}
+		return nil
+	}
+}
+
 func (s *Service) loadActionRequests() {
-	state := &actionRequestState{Version: 2, Requests: map[string]*actionRequest{}}
+	state := &actionRequestState{Version: 3, Requests: map[string]*actionRequest{}}
 	data, err := os.ReadFile(s.requestStatePath())
 	if err == nil {
 		if err := json.Unmarshal(data, state); err != nil {
 			log.Printf("Warning: failed to parse action request state: %v", err)
-			state = &actionRequestState{Version: 2, Requests: map[string]*actionRequest{}}
+			state = &actionRequestState{Version: 3, Requests: map[string]*actionRequest{}}
 		}
 	}
 	if state.Version == 1 {
@@ -104,6 +146,9 @@ func (s *Service) loadActionRequests() {
 			}
 		}
 		state.Version = 2
+	}
+	if state.Version == 2 {
+		state.Version = 3
 	}
 	if state.Requests == nil {
 		state.Requests = map[string]*actionRequest{}
@@ -142,29 +187,40 @@ func (s *Service) loadActionRequests() {
 		}
 	}
 	for _, request := range state.Requests {
-		if request.Status != RequestPending {
-			continue
-		}
-		request.Status = RequestFailed
-		if request.BaseIssue != nil {
-			entry := &previewEntry{kind: "issue", spec: *request.BaseIssue}
-			if preview, err := validatedPreviewEntry(entry); err == nil {
-				request.Warning = draftRefinementWarning
-				request.Preview = &preview
+		switch request.Status {
+		case RequestPending:
+			if request.Runtime != nil {
+				request.Status = RequestCancelling
+				request.Cleanup = &actionCleanupState{FinalStatus: RequestFailed, Reason: "server restarted before draft generation completed", RequestedAt: nowText}
 			} else {
-				request.Error = "saved fallback draft did not pass current safety validation"
+				request.Status = RequestFailed
+				if request.BaseIssue != nil {
+					entry := &previewEntry{kind: "issue", spec: *request.BaseIssue}
+					if preview, err := validatedPreviewEntry(entry); err == nil {
+						request.Warning = draftRefinementWarning
+						request.Preview = &preview
+					} else {
+						request.Error = "saved fallback draft did not pass current safety validation"
+					}
+				} else {
+					request.Error = "server restarted before draft generation completed"
+				}
 			}
-		} else {
-			request.Error = "server restarted before draft generation completed"
+			request.BaseIssue = nil
+			request.BaseTargetRepo = ""
+			request.BasePatternHash = ""
+			request.UpdatedAt = nowText
+			changed = true
+		case RequestCancelling:
+			if request.Cleanup == nil {
+				request.Cleanup = &actionCleanupState{FinalStatus: RequestFailed, Reason: "server restarted during runtime cleanup", RequestedAt: nowText}
+				request.UpdatedAt = nowText
+				changed = true
+			}
 		}
-		request.BaseIssue = nil
-		request.BaseTargetRepo = ""
-		request.BasePatternHash = ""
-		request.UpdatedAt = nowText
-		changed = true
 	}
 	if changed {
-		if err := statefile.WriteJSON(s.requestStatePath(), state); err != nil {
+		if err := statefile.WritePrivateJSONDurable(s.requestStatePath(), state); err != nil {
 			log.Printf("Warning: failed to save recovered action request state: %v", err)
 		}
 	}
@@ -225,21 +281,298 @@ func validatedPreviewEntry(entry *previewEntry) (PreviewResult, error) {
 	}
 }
 
+func (s *Service) startGeneration(id, userToken string) {
+	s.rmu.Lock()
+	if s.requestDone == nil {
+		s.requestDone = map[string]chan struct{}{}
+	}
+	if s.requestDone[id] == nil {
+		s.requestDone[id] = make(chan struct{})
+	}
+	s.rmu.Unlock()
+	s.requestWG.Add(1)
+	go func() {
+		defer s.requestWG.Done()
+		s.generateRequest(id, userToken)
+	}()
+}
+
+func (s *Service) finishGeneration(id string) {
+	s.rmu.Lock()
+	defer s.rmu.Unlock()
+	if done := s.requestDone[id]; done != nil {
+		select {
+		case <-done:
+		default:
+			close(done)
+		}
+		delete(s.requestDone, id)
+	}
+}
+
+func (s *Service) registerCleanupLocked(id string) bool {
+	if s.requestCleanups == nil {
+		s.requestCleanups = map[string]struct{}{}
+	}
+	if _, running := s.requestCleanups[id]; running {
+		return false
+	}
+	s.requestCleanups[id] = struct{}{}
+	s.requestWG.Add(1)
+	return true
+}
+
+func (s *Service) startCleanup(id string) {
+	s.rmu.Lock()
+	registered := s.registerCleanupLocked(id)
+	s.rmu.Unlock()
+	if registered {
+		s.launchCleanup(id)
+	}
+}
+
+func (s *Service) launchCleanup(id string) {
+	go func() {
+		defer s.requestWG.Done()
+		defer func() {
+			s.rmu.Lock()
+			delete(s.requestCleanups, id)
+			s.rmu.Unlock()
+		}()
+		backoff := 250 * time.Millisecond
+		for {
+			ctx, cancel := context.WithTimeout(context.Background(), defaultRuntimeCleanupTimeout)
+			view, err := s.cleanupRequest(ctx, id)
+			cancel()
+			current := s.currentRequestView(id)
+			if current.Status != RequestCancelling && view.Status != RequestCancelling {
+				return
+			}
+			if errors.Is(err, runtime.ErrWorkIdentityChanged) {
+				if s.markCleanupBlocked(id) {
+					return
+				}
+				err = runtime.ErrCleanupPending
+			}
+			if err != nil {
+				log.Printf("action request %s: runtime cleanup retry: %v", id, err)
+			}
+			time.Sleep(backoff)
+			if backoff < 5*time.Second {
+				backoff *= 2
+				if backoff > 5*time.Second {
+					backoff = 5 * time.Second
+				}
+			}
+		}
+	}()
+}
+
+func (s *Service) markCleanupBlocked(id string) bool {
+	s.rmu.Lock()
+	request := s.requests.Requests[id]
+	if request == nil || request.Status != RequestCancelling {
+		s.rmu.Unlock()
+		return true
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	previous := *request
+	request.Cleanup = &actionCleanupState{FinalStatus: RequestFailed, Reason: "runtime work identity changed during cleanup", RequestedAt: now}
+	request.UpdatedAt = now
+	if err := s.saveRequestsLocked(); err != nil {
+		*request = previous
+		log.Printf("action request %s: persist identity-change cleanup: %v", id, err)
+		s.rmu.Unlock()
+		return false
+	}
+	s.rmu.Unlock()
+	if _, err := s.finalizeCleanup(id); err != nil {
+		log.Printf("action request %s: finalize identity-change cleanup: %v", id, err)
+		return false
+	}
+	return true
+}
+
+func (s *Service) cleanupRequest(ctx context.Context, id string) (ActionRequestView, error) {
+	generationDone := false
+	var cancel context.CancelFunc
+	ctx, cancel = context.WithTimeout(ctx, defaultRuntimeCleanupTimeout)
+	defer cancel()
+	for {
+		s.rmu.Lock()
+		request := s.requests.Requests[id]
+		if request == nil {
+			s.rmu.Unlock()
+			return ActionRequestView{}, ErrRequestNotFound
+		}
+		if request.Status != RequestCancelling {
+			view := request.ActionRequestView
+			s.rmu.Unlock()
+			return view, nil
+		}
+		var work *runtime.WorkRef
+		if request.Runtime != nil {
+			copy := *request.Runtime
+			work = &copy
+		}
+		done := s.requestDone[id]
+		s.rmu.Unlock()
+
+		if work != nil {
+			if s.managedRuntime == nil {
+				return s.currentRequestView(id), runtime.ErrUnavailable
+			}
+			cleaner, err := s.managedRuntime()
+			if err != nil {
+				return s.currentRequestView(id), err
+			}
+			if cleaner == nil {
+				return s.currentRequestView(id), runtime.ErrUnavailable
+			}
+			if err := cleaner.Cleanup(ctx, *work); err != nil {
+				return s.currentRequestView(id), err
+			}
+			if work.UID == "" && done != nil && !generationDone {
+				select {
+				case <-done:
+					generationDone = true
+					continue
+				case <-ctx.Done():
+					return s.currentRequestView(id), ctx.Err()
+				}
+			}
+			return s.finalizeCleanup(id)
+		}
+		if done == nil || generationDone {
+			return s.finalizeCleanup(id)
+		}
+		select {
+		case <-done:
+			// The observer may have persisted runtime identity before generation exited.
+			generationDone = true
+			continue
+		case <-ctx.Done():
+			return s.currentRequestView(id), ctx.Err()
+		}
+	}
+}
+
+func (s *Service) currentRequestView(id string) ActionRequestView {
+	s.rmu.Lock()
+	defer s.rmu.Unlock()
+	if request := s.requests.Requests[id]; request != nil {
+		return request.ActionRequestView
+	}
+	return ActionRequestView{}
+}
+
+func (s *Service) finalizeCleanup(id string) (ActionRequestView, error) {
+	s.rmu.Lock()
+	defer s.rmu.Unlock()
+	request := s.requests.Requests[id]
+	if request == nil {
+		return ActionRequestView{}, ErrRequestNotFound
+	}
+	if request.Status != RequestCancelling {
+		return request.ActionRequestView, nil
+	}
+	finalStatus := RequestCancelled
+	reason := ""
+	if request.Cleanup != nil {
+		if request.Cleanup.FinalStatus != "" {
+			finalStatus = request.Cleanup.FinalStatus
+		}
+		reason = request.Cleanup.Reason
+	}
+	previous := *request
+	request.Status = finalStatus
+	request.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	request.Warning = ""
+	request.Preview = nil
+	request.Instruction = ""
+	request.Issue = nil
+	request.Fix = nil
+	request.BaseIssue = nil
+	request.BaseTargetRepo = ""
+	request.BasePatternHash = ""
+	request.Runtime = nil
+	request.Cleanup = nil
+	request.EmailError = ""
+	if finalStatus == RequestFailed {
+		request.Error = reason
+	} else {
+		request.Error = ""
+	}
+	if err := s.saveRequestsLocked(); err != nil {
+		*request = previous
+		return ActionRequestView{}, err
+	}
+	return request.ActionRequestView, nil
+}
+
+func (s *Service) transitionToCleanup(id, finalStatus, reason string) (context.CancelFunc, error) {
+	s.rmu.Lock()
+	defer s.rmu.Unlock()
+	request := s.requests.Requests[id]
+	if request == nil {
+		return nil, ErrRequestNotFound
+	}
+	if request.Status == RequestCancelling || request.Status == RequestCancelled {
+		return s.requestCancels[id], nil
+	}
+	if request.Status != RequestPending && request.Status != RequestReady {
+		return nil, fmt.Errorf("action request is %s", request.Status)
+	}
+	previous := *request
+	now := time.Now().UTC().Format(time.RFC3339)
+	request.Status = RequestCancelling
+	request.Cleanup = &actionCleanupState{FinalStatus: finalStatus, Reason: reason, RequestedAt: now}
+	request.UpdatedAt = now
+	if err := s.saveRequestsLocked(); err != nil {
+		*request = previous
+		return nil, err
+	}
+	s.cancelRequestNotificationLocked(id)
+	return s.requestCancels[id], nil
+}
+
+// Wait waits for active generation and cleanup goroutines.
+func (s *Service) Wait(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		s.requestWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // ConfigureAsyncRequests sets the generation timeout and draft-ready notifier.
 func (s *Service) ConfigureAsyncRequests(timeout time.Duration, notifier RequestReadyNotifier) {
+	s.ConfigureAsyncRequestsWithContext(context.Background(), timeout, notifier)
+}
+
+// ConfigureAsyncRequestsWithContext also stops active requests during shutdown.
+func (s *Service) ConfigureAsyncRequestsWithContext(ctx context.Context, timeout time.Duration, notifier RequestReadyNotifier) {
 	if timeout > 0 {
 		s.requestTimeout = timeout
 	}
 	s.requestNotify = notifier
-	if notifier == nil {
-		return
-	}
 	s.rmu.Lock()
+	s.requestsConfigured = true
 	changed := s.expireRequestsLocked(time.Now().UTC())
 	var pending []ActionRequestView
-	for _, request := range s.requests.Requests {
-		if request.Status == RequestReady && !request.EmailSent {
+	var cleanupIDs []string
+	for id, request := range s.requests.Requests {
+		if request.Status == RequestReady && !request.EmailSent && notifier != nil {
 			pending = append(pending, request.ActionRequestView)
+		}
+		if request.Status == RequestCancelling {
+			cleanupIDs = append(cleanupIDs, id)
 		}
 	}
 	if changed {
@@ -250,6 +583,65 @@ func (s *Service) ConfigureAsyncRequests(timeout time.Duration, notifier Request
 	s.rmu.Unlock()
 	for _, request := range pending {
 		go s.notifyRequestReady(request)
+	}
+	for _, id := range cleanupIDs {
+		s.startCleanup(id)
+	}
+	if ctx != nil && ctx.Done() != nil {
+		s.requestWG.Add(1)
+		go func() {
+			defer s.requestWG.Done()
+			<-ctx.Done()
+			s.stopActiveRequests()
+		}()
+	}
+}
+
+func (s *Service) stopActiveRequests() {
+	s.rmu.Lock()
+	s.stopping = true
+	var ids []string
+	var cancels []context.CancelFunc
+	now := time.Now().UTC().Format(time.RFC3339)
+	for id, request := range s.requests.Requests {
+		if request.Status != RequestPending {
+			continue
+		}
+		request.Status = RequestCancelling
+		request.Cleanup = &actionCleanupState{FinalStatus: RequestFailed, Reason: "server stopped before draft generation completed", RequestedAt: now}
+		request.UpdatedAt = now
+		ids = append(ids, id)
+		if cancel := s.requestCancels[id]; cancel != nil {
+			cancels = append(cancels, cancel)
+		}
+	}
+	if len(ids) > 0 {
+		if err := s.saveRequestsLocked(); err != nil {
+			log.Printf("action requests: persist shutdown cleanup: %v", err)
+		}
+	}
+	s.rmu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
+	for _, id := range ids {
+		s.startCleanup(id)
+	}
+}
+
+func (s *Service) readyRequestMatchesCurrent(request *actionRequest, subject *ActionSubject) bool {
+	if request == nil || subject == nil || request.PatternHash == "" || request.PatternHash != subject.ContentHash {
+		return false
+	}
+	switch request.Kind {
+	case "create-issue":
+		eff := s.cfg.EffectiveIssues()
+		return eff.Repo != nil && request.TargetRepo == eff.Repo.Owner+"/"+eff.Repo.Name
+	case "propose-fix":
+		eff := s.cfg.EffectiveFixPRs()
+		return eff.Repo != nil && request.TargetRepo == eff.Repo.Owner+"/"+eff.Repo.Name && request.TargetConfig == fixTargetFingerprint(eff)
+	default:
+		return false
 	}
 }
 
@@ -280,10 +672,16 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 	supersedesID = strings.TrimSpace(supersedesID)
 
 	s.rmu.Lock()
+	if s.stopping {
+		s.rmu.Unlock()
+		return ActionRequestView{}, fmt.Errorf("action service is stopping")
+	}
 	s.expireRequestsLocked(now)
 	var superseded *actionRequest
 	var supersededStatus, supersededUpdatedAt, supersededBy string
+	var supersededCleanup *actionCleanupState
 	var supersededCancel context.CancelFunc
+	var supersededNotifyCancel context.CancelFunc
 	if supersedesID != "" {
 		superseded = s.requests.Requests[supersedesID]
 		if superseded == nil || superseded.Owner != owner {
@@ -304,6 +702,21 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 			return ActionRequestView{}, fmt.Errorf("action request is %s", status)
 		}
 	}
+	if supersedesID == "" {
+		for _, existing := range s.requests.Requests {
+			if existing.Owner != owner || existing.FailureID != failureID || existing.Kind != kind || existing.Instruction != request.Instruction {
+				continue
+			}
+			if existing.Status == RequestReady && !s.readyRequestMatchesCurrent(existing, subject) {
+				continue
+			}
+			if existing.Status == RequestPending || existing.Status == RequestReady || existing.Status == RequestCancelling || existing.Status == RequestUnknown {
+				view := existing.ActionRequestView
+				s.rmu.Unlock()
+				return view, nil
+			}
+		}
+	}
 	for existingID, existing := range s.requests.Requests {
 		if existingID == supersedesID || existing.Status != RequestUnknown || existing.FailureID != failureID || existing.Kind != kind {
 			continue
@@ -322,10 +735,10 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 		if existingID == supersedesID {
 			continue
 		}
-		if existing.Status == RequestPending && existing.Owner == owner {
+		if (existing.Status == RequestPending || existing.Status == RequestCancelling) && existing.Owner == owner {
 			pending++
 		}
-		if existing.Status == RequestPending || existing.Status == RequestReady || existing.Status == RequestUnknown {
+		if existing.Status == RequestPending || existing.Status == RequestCancelling || existing.Status == RequestReady || existing.Status == RequestUnknown {
 			active++
 		}
 	}
@@ -352,10 +765,13 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 		supersededStatus = superseded.Status
 		supersededUpdatedAt = superseded.UpdatedAt
 		supersededBy = superseded.SupersededBy
-		superseded.Status = RequestCancelled
+		supersededCleanup = superseded.Cleanup
+		superseded.Status = RequestCancelling
+		superseded.Cleanup = &actionCleanupState{FinalStatus: RequestCancelled, Reason: "superseded by a replacement request", RequestedAt: now.Format(time.RFC3339)}
 		superseded.UpdatedAt = now.Format(time.RFC3339)
 		superseded.SupersededBy = request.ID
 		supersededCancel = s.requestCancels[supersedesID]
+		supersededNotifyCancel = s.requestNotifyCancels[supersedesID]
 	}
 	s.requests.Requests[request.ID] = request
 	if err := s.saveRequestsLocked(); err != nil {
@@ -364,6 +780,7 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 			superseded.Status = supersededStatus
 			superseded.UpdatedAt = supersededUpdatedAt
 			superseded.SupersededBy = supersededBy
+			superseded.Cleanup = supersededCleanup
 		}
 		s.rmu.Unlock()
 		return ActionRequestView{}, err
@@ -374,7 +791,13 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 	if supersededCancel != nil {
 		supersededCancel()
 	}
-	go s.generateRequest(request.ID, userToken)
+	if supersededNotifyCancel != nil {
+		supersededNotifyCancel()
+	}
+	if superseded != nil {
+		s.startCleanup(supersedesID)
+	}
+	s.startGeneration(request.ID, userToken)
 	return view, nil
 }
 
@@ -396,7 +819,8 @@ func (s *Service) generateRequestPreview(ctx context.Context, failureID, kind, u
 }
 
 func (s *Service) generateRequestWith(id, userToken string, generate requestPreviewGenerator) {
-	ctx, cancel := context.WithTimeout(context.Background(), s.requestTimeout)
+	ctx, cancel := context.WithTimeout(withActionRequestID(context.Background(), id), s.requestTimeout)
+	needsCleanup := false
 	s.rmu.Lock()
 	s.requestCancels[id] = cancel
 	s.rmu.Unlock()
@@ -405,6 +829,10 @@ func (s *Service) generateRequestWith(id, userToken string, generate requestPrev
 		s.rmu.Lock()
 		delete(s.requestCancels, id)
 		s.rmu.Unlock()
+		s.finishGeneration(id)
+		if needsCleanup {
+			s.startCleanup(id)
+		}
 	}()
 
 	s.rmu.Lock()
@@ -438,9 +866,24 @@ func (s *Service) generateRequestWith(id, userToken string, generate requestPrev
 		}
 	}
 
+	if ctx.Err() != nil || errors.Is(err, runtime.ErrCleanupPending) {
+		reason := "draft runtime cleanup did not complete"
+		if ctx.Err() != nil {
+			reason = "draft generation timed out"
+		}
+		_, transitionErr := s.transitionToCleanup(id, RequestFailed, reason)
+		if transitionErr == nil {
+			needsCleanup = true
+		} else {
+			log.Printf("action request %s: persist timeout cleanup: %v", id, transitionErr)
+		}
+		return
+	}
+
 	s.rmu.Lock()
 	request = s.requests.Requests[id]
 	if request == nil || request.Status != RequestPending {
+		needsCleanup = request != nil && request.Status == RequestCancelling
 		s.rmu.Unlock()
 		return
 	}
@@ -483,6 +926,13 @@ func (s *Service) generateRequestWith(id, userToken string, generate requestPrev
 	s.notifyRequestReady(view)
 }
 
+func (s *Service) cancelRequestNotificationLocked(id string) {
+	if cancel := s.requestNotifyCancels[id]; cancel != nil {
+		cancel()
+		delete(s.requestNotifyCancels, id)
+	}
+}
+
 func (s *Service) notifyRequestReady(view ActionRequestView) {
 	s.rmu.Lock()
 	changed := s.expireRequestsLocked(time.Now().UTC())
@@ -498,7 +948,19 @@ func (s *Service) notifyRequestReady(view ActionRequestView) {
 	}
 	view = current.ActionRequestView
 	notifier := s.requestNotify
+	notifyCtx, notifyCancel := context.WithCancel(context.Background())
+	if s.requestNotifyCancels == nil {
+		s.requestNotifyCancels = map[string]context.CancelFunc{}
+	}
+	s.cancelRequestNotificationLocked(view.ID)
+	s.requestNotifyCancels[view.ID] = notifyCancel
 	s.rmu.Unlock()
+	defer func() {
+		notifyCancel()
+		s.rmu.Lock()
+		delete(s.requestNotifyCancels, view.ID)
+		s.rmu.Unlock()
+	}()
 	if notifier == nil || s.validateSubjectSnapshot(view.FailureID, view.PatternHash, view.Kind) != nil {
 		return
 	}
@@ -511,7 +973,7 @@ func (s *Service) notifyRequestReady(view ActionRequestView) {
 			if err := s.validateSubjectSnapshot(view.FailureID, view.PatternHash, view.Kind); err != nil {
 				return err
 			}
-			notifyCtx, notifyCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			notifyCtx, notifyCancel := context.WithTimeout(notifyCtx, 30*time.Second)
 			defer notifyCancel()
 			return notifier(notifyCtx, view)
 		})
@@ -519,7 +981,11 @@ func (s *Service) notifyRequestReady(view ActionRequestView) {
 			break
 		}
 		if attempt < 2 {
-			time.Sleep(time.Duration(1+attempt*2) * time.Second)
+			select {
+			case <-notifyCtx.Done():
+				return
+			case <-time.After(time.Duration(1+attempt*2) * time.Second):
+			}
 		}
 	}
 	s.rmu.Lock()
@@ -629,6 +1095,7 @@ func (s *Service) ConfirmRequest(ctx context.Context, id, owner, userToken strin
 			s.rmu.Unlock()
 			return "", err
 		}
+		s.cancelRequestNotificationLocked(id)
 	}
 	s.requestConfirms[id] = struct{}{}
 	s.rmu.Unlock()
@@ -679,32 +1146,71 @@ func (s *Service) ConfirmRequest(ctx context.Context, id, owner, userToken strin
 	return url, nil
 }
 
-// CancelRequest cancels a pending request or expires a ready draft.
-func (s *Service) CancelRequest(id, owner string) error {
+// CancelRequest stops generation and confirms external runtime cleanup.
+func (s *Service) CancelRequest(ctx context.Context, id, owner string) (ActionRequestView, error) {
 	owner = strings.ToLower(strings.TrimSpace(owner))
 	s.rmu.Lock()
-	defer s.rmu.Unlock()
 	if s.expireRequestsLocked(time.Now().UTC()) {
 		if err := s.saveRequestsLocked(); err != nil {
-			return err
+			s.rmu.Unlock()
+			return ActionRequestView{}, err
 		}
 	}
 	request := s.requests.Requests[id]
 	if request == nil || request.Owner != owner {
-		return ErrRequestNotFound
+		s.rmu.Unlock()
+		return ActionRequestView{}, ErrRequestNotFound
 	}
 	if _, confirming := s.requestConfirms[id]; confirming {
-		return fmt.Errorf("action request is being confirmed")
+		s.rmu.Unlock()
+		return ActionRequestView{}, fmt.Errorf("action request is being confirmed")
+	}
+	if request.Status == RequestCancelled || request.Status == RequestCancelling {
+		view := request.ActionRequestView
+		s.rmu.Unlock()
+		if view.Status != RequestCancelling {
+			return view, nil
+		}
+		view, cleanupErr := s.cleanupRequest(ctx, id)
+		current := s.currentRequestView(id)
+		if cleanupErr != nil && current.Status == RequestCancelling {
+			if errors.Is(cleanupErr, runtime.ErrWorkIdentityChanged) {
+				if !s.markCleanupBlocked(id) {
+					s.startCleanup(id)
+				}
+			} else {
+				s.startCleanup(id)
+			}
+			return s.currentRequestView(id), nil
+		}
+		return view, cleanupErr
 	}
 	if request.Status != RequestPending && request.Status != RequestReady {
-		return fmt.Errorf("action request is %s", request.Status)
+		status := request.Status
+		s.rmu.Unlock()
+		return ActionRequestView{}, fmt.Errorf("action request is %s", status)
 	}
-	if cancel := s.requestCancels[id]; cancel != nil {
+	s.rmu.Unlock()
+	cancel, err := s.transitionToCleanup(id, RequestCancelled, "")
+	if err != nil {
+		return ActionRequestView{}, err
+	}
+	if cancel != nil {
 		cancel()
 	}
-	request.Status = RequestCancelled
-	request.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	return s.saveRequestsLocked()
+	view, cleanupErr := s.cleanupRequest(ctx, id)
+	current := s.currentRequestView(id)
+	if cleanupErr != nil && current.Status == RequestCancelling {
+		if errors.Is(cleanupErr, runtime.ErrWorkIdentityChanged) {
+			if !s.markCleanupBlocked(id) {
+				s.startCleanup(id)
+			}
+		} else {
+			s.startCleanup(id)
+		}
+		return s.currentRequestView(id), nil
+	}
+	return view, cleanupErr
 }
 
 func (s *Service) expireRequestsLocked(now time.Time) bool {
@@ -714,25 +1220,44 @@ func (s *Service) expireRequestsLocked(now time.Time) bool {
 			continue
 		}
 		expires, err := time.Parse(time.RFC3339, request.ExpiresAt)
-		if err == nil && now.After(expires) {
-			if request.Status != RequestExpired {
-				request.Status = RequestExpired
-				request.UpdatedAt = now.Format(time.RFC3339)
-				changed = true
+		if err != nil || !now.After(expires) {
+			continue
+		}
+		if request.Status == RequestPending || request.Status == RequestCancelling {
+			if request.Status == RequestPending {
+				request.Status = RequestCancelling
+				if cancel := s.requestCancels[id]; cancel != nil {
+					cancel()
+				}
 			}
-			if request.Error != "" || request.Warning != "" || request.Preview != nil || request.Instruction != "" || request.Issue != nil || request.BaseIssue != nil || request.BaseTargetRepo != "" || request.BasePatternHash != "" || request.Fix != nil || request.EmailError != "" {
-				request.Error = ""
-				request.Warning = ""
-				request.Preview = nil
-				request.Instruction = ""
-				request.Issue = nil
-				request.BaseIssue = nil
-				request.BaseTargetRepo = ""
-				request.BasePatternHash = ""
-				request.Fix = nil
-				request.EmailError = ""
-				changed = true
+			request.Cleanup = &actionCleanupState{FinalStatus: RequestExpired, Reason: "action request expired during runtime cleanup", RequestedAt: now.Format(time.RFC3339)}
+			request.UpdatedAt = now.Format(time.RFC3339)
+			changed = true
+			if s.requestsConfigured && s.registerCleanupLocked(id) {
+				s.launchCleanup(id)
 			}
+			continue
+		}
+		if request.Status != RequestExpired {
+			s.cancelRequestNotificationLocked(id)
+			request.Status = RequestExpired
+			request.UpdatedAt = now.Format(time.RFC3339)
+			changed = true
+		}
+		if request.Error != "" || request.Warning != "" || request.Preview != nil || request.Instruction != "" || request.Issue != nil || request.BaseIssue != nil || request.BaseTargetRepo != "" || request.BasePatternHash != "" || request.Runtime != nil || request.Cleanup != nil || request.Fix != nil || request.EmailError != "" {
+			request.Error = ""
+			request.Warning = ""
+			request.Preview = nil
+			request.Instruction = ""
+			request.Issue = nil
+			request.BaseIssue = nil
+			request.BaseTargetRepo = ""
+			request.BasePatternHash = ""
+			request.Runtime = nil
+			request.Cleanup = nil
+			request.Fix = nil
+			request.EmailError = ""
+			changed = true
 		}
 	}
 	if len(s.requests.Requests) <= 200 {
@@ -741,7 +1266,7 @@ func (s *Service) expireRequestsLocked(now time.Time) bool {
 	type item struct{ id, updated string }
 	var completed []item
 	for id, request := range s.requests.Requests {
-		if request.Status != RequestPending && request.Status != RequestReady {
+		if request.Status != RequestPending && request.Status != RequestReady && request.Status != RequestCancelling {
 			completed = append(completed, item{id, request.UpdatedAt})
 		}
 	}
@@ -773,7 +1298,11 @@ func (s *Service) validateSubjectSnapshot(failureID, patternHash string, kind ..
 }
 
 func (s *Service) saveRequestsLocked() error {
-	if err := statefile.WriteJSON(s.requestStatePath(), s.requests); err != nil {
+	write := s.requestStateWriter
+	if write == nil {
+		write = statefile.WritePrivateJSONDurable
+	}
+	if err := write(s.requestStatePath(), s.requests); err != nil {
 		return fmt.Errorf("saving action request state: %w", err)
 	}
 	return nil

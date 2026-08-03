@@ -30,22 +30,26 @@ import { useResolved } from "../hooks/useData";
 import { soft } from "../theme";
 import { useSearchParams } from "react-router-dom";
 import { ActionDraftPreview } from "./ActionDraftPreview";
+import type {
+  Action,
+  ActionRequest,
+  ActionPreview,
+} from "../types/actions";
 import {
   actionErrorMessage,
+  actionRequestCanConfirm,
+  actionRequestIsActive,
+  actionRequestIsPollable,
+  actionRequestIsRecoverable,
+  actionRequestStorageOwner,
+  cancelActionRequest,
   loadLatestActionRequest,
-  type Action,
-  type ActionRequest,
-  type ActionPreview,
-} from "../types/actions";
+  readStoredActionRequestID,
+  syncStoredActionRequest,
+} from "../lib/actionRequests";
 
 function requestedAction(value: string | null): Action | null {
   return value === "create-issue" || value === "propose-fix" ? value : null;
-}
-
-function requestIsActive(request: ActionRequest): boolean {
-  if (request.status !== "pending" && request.status !== "ready") return false;
-  const expiresAt = Date.parse(request.expires_at);
-  return Number.isFinite(expiresAt) && expiresAt > Date.now();
 }
 
 function requestStateError(request: ActionRequest): string | null {
@@ -122,7 +126,7 @@ function DialogHeader({
 
 export function FailureActions({ failureID, resolvable = true }: { failureID: string; resolvable?: boolean }) {
   const { features } = useCapabilities();
-  const { status, signIn } = useAuth();
+  const { status, signIn, login, mode } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const linkedFailure = searchParams.get("failure");
   const linkedAction = requestedAction(searchParams.get("action"));
@@ -136,9 +140,12 @@ export function FailureActions({ failureID, resolvable = true }: { failureID: st
   const [instruction, setInstruction] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [url, setUrl] = useState<string | null>(null);
-  const activeFailureID = useRef(failureID);
   const requestID = request?.id;
   const requestStatus = request?.status;
+  const activeFailureID = useRef(failureID);
+  const activeRequestID = useRef<string | undefined>(requestID);
+  const activeAction = useRef<Action | null>(null);
+  const storageOwner = actionRequestStorageOwner(login, mode);
 
   const { data: resolved, refetch: refetchResolved } = useResolved();
   const [resolveOpen, setResolveOpen] = useState(false);
@@ -147,8 +154,11 @@ export function FailureActions({ failureID, resolvable = true }: { failureID: st
   const [resolveError, setResolveError] = useState<string | null>(null);
 
   useLayoutEffect(() => {
+    const failureChanged = activeFailureID.current !== failureID;
     activeFailureID.current = failureID;
-  }, [failureID]);
+    activeRequestID.current = requestID;
+    activeAction.current = failureChanged ? null : action;
+  }, [action, failureID, requestID]);
 
   // Reset action state if this component is reused for a different failure.
   useEffect(() => {
@@ -192,8 +202,89 @@ export function FailureActions({ failureID, resolvable = true }: { failureID: st
     if (
       !features.action_requests ||
       status !== "authenticated" ||
+      !storageOwner
+    ) {
+      return;
+    }
+    const owner = storageOwner;
+    const expectedOwner = login?.trim().toLowerCase();
+    const stored = (["create-issue", "propose-fix"] as const)
+      .map((kind) => ({
+        kind,
+        id: readStoredActionRequestID(
+          window.sessionStorage,
+          owner,
+          failureID,
+          kind,
+        ),
+      }))
+      .filter((candidate): candidate is { kind: Action; id: string } =>
+        Boolean(candidate.id),
+      );
+    if (stored.length === 0) return;
+
+    let cancelled = false;
+    async function recover() {
+      const recovered = await Promise.all(
+        stored.map(async ({ kind, id }) => {
+          try {
+            const value = await loadLatestActionRequest(API_BASE, id);
+            if (
+              value.failure_id !== failureID ||
+              value.kind !== kind ||
+              (expectedOwner &&
+                value.owner.trim().toLowerCase() !== expectedOwner)
+            ) {
+              return null;
+            }
+            syncStoredActionRequest(
+              window.sessionStorage,
+              owner,
+              value,
+            );
+            return actionRequestIsRecoverable(value.status) ? value : null;
+          } catch {
+            return null;
+          }
+        }),
+      );
+      if (cancelled || activeAction.current !== null) return;
+      const latest = recovered
+        .filter((value): value is ActionRequest => value !== null)
+        .sort((left, right) => right.updated_at.localeCompare(left.updated_at))[0];
+      if (!latest) return;
+      activeAction.current = latest.kind;
+      setAction(latest.kind);
+      setRequest(latest);
+      setPreview(latest.preview ?? null);
+      setError(requestStateError(latest));
+    }
+    void recover();
+    return () => {
+      cancelled = true;
+    };
+  }, [failureID, features.action_requests, login, status, storageOwner]);
+
+  useEffect(() => {
+    if (
+      !features.action_requests ||
+      status !== "authenticated" ||
+      !storageOwner ||
+      !request ||
+      request.failure_id !== failureID
+    ) {
+      return;
+    }
+    syncStoredActionRequest(window.sessionStorage, storageOwner, request);
+  }, [failureID, features.action_requests, request, status, storageOwner]);
+
+  useEffect(() => {
+    if (
+      !features.action_requests ||
+      status !== "authenticated" ||
       !requestID ||
-      requestStatus !== "pending"
+      !requestStatus ||
+      !actionRequestIsPollable(requestStatus)
     ) {
       return;
     }
@@ -227,7 +318,9 @@ export function FailureActions({ failureID, resolvable = true }: { failureID: st
         setRequest(latest);
         setPreview(latest.preview ?? null);
         setError(requestStateError(latest));
-        if (latest.status === "pending") timer = window.setTimeout(load, 2000);
+        if (actionRequestIsPollable(latest.status)) {
+          timer = window.setTimeout(load, 2000);
+        }
       } catch (e) {
         if (cancelled) return;
         setError(e instanceof Error ? e.message : String(e));
@@ -278,7 +371,11 @@ export function FailureActions({ failureID, resolvable = true }: { failureID: st
   ): Promise<ActionRequest | null> {
     try {
       const value = await loadLatestActionRequest(API_BASE, id);
-      if (activeFailureID.current !== startedFailureID) return null;
+      if (
+        activeFailureID.current !== startedFailureID ||
+        (activeRequestID.current !== undefined && activeRequestID.current !== id)
+      ) return null;
+      activeAction.current = value.kind;
       setAction(value.kind);
       setRequest(value);
       setPreview(value.preview ?? null);
@@ -308,11 +405,13 @@ export function FailureActions({ failureID, resolvable = true }: { failureID: st
     previousRequestID?: string,
   ) {
     if (!features.action_requests) {
+      activeAction.current = requested;
       setAction(requested);
       setError("Background draft generation is unavailable on this deployment.");
       return;
     }
     const startedFailureID = failureID;
+    activeAction.current = requested;
     setAction(requested);
     setBusy(prompt ? "refine" : "preview");
     setError(null);
@@ -366,8 +465,15 @@ export function FailureActions({ failureID, resolvable = true }: { failureID: st
   function open(requested: Action) {
     setInstruction("");
     setError(null);
-    const activeRequest = request && requestIsActive(request) ? request : null;
+    const activeRequest = request && actionRequestIsActive(request) ? request : null;
+    if (activeRequest?.status === "unknown") {
+      activeAction.current = activeRequest.kind;
+      setAction(activeRequest.kind);
+      setPreview(activeRequest.preview ?? null);
+      return;
+    }
     if (activeRequest?.kind === requested) {
+      activeAction.current = requested;
       setAction(requested);
       setPreview(activeRequest.preview ?? null);
       return;
@@ -378,7 +484,13 @@ export function FailureActions({ failureID, resolvable = true }: { failureID: st
   }
 
   async function confirm() {
-    if (!preview || !action || !request) return;
+    if (
+      !action ||
+      !request ||
+      !actionRequestCanConfirm(request.status, Boolean(preview))
+    ) {
+      return;
+    }
     const startedFailureID = failureID;
     setBusy("confirm");
     setError(null);
@@ -410,36 +522,40 @@ export function FailureActions({ failureID, resolvable = true }: { failureID: st
   }
 
   async function cancelRequest() {
-    if (!request) return;
+    if (!request || request.status === "cancelling") return;
     const startedFailureID = failureID;
+    const startedRequestID = request.id;
     setBusy("cancel");
     setError(null);
     try {
-      const res = await fetch(
-        `${API_BASE}api/action-requests/${encodeURIComponent(request.id)}/cancel`,
-        { method: "POST", credentials: "same-origin" },
-      );
-      if (!res.ok) throw new Error(await actionErrorMessage(res));
-      if (activeFailureID.current !== startedFailureID) return;
-      setRequest({ ...request, status: "cancelled" });
-      setPreview(null);
-      close();
+      const value = await cancelActionRequest(API_BASE, request.id);
+      const latest = value.superseded_by
+        ? await loadLatestActionRequest(API_BASE, value.id)
+        : value;
+      if (activeFailureID.current !== startedFailureID || activeRequestID.current !== startedRequestID) return;
+      activeAction.current = latest.kind;
+      setAction(latest.kind);
+      setRequest(latest);
+      setPreview(latest.preview ?? null);
+      setError(requestStateError(latest));
     } catch (e) {
+      if (activeRequestID.current !== startedRequestID) return;
       const message = e instanceof Error ? e.message : String(e);
       const refreshed = await refreshRequestState(request.id, startedFailureID);
       if (activeFailureID.current !== startedFailureID) return;
       if (handleRecoveredReplacement(refreshed, request.id)) return;
-      if (refreshed?.status === "cancelled") {
-        close();
-        return;
-      }
-      setError(message);
+      setError(
+        refreshed?.status === "cancelled" || refreshed?.status === "cancelling"
+          ? null
+          : message,
+      );
     } finally {
       if (activeFailureID.current === startedFailureID) setBusy(null);
     }
   }
 
   function close() {
+    activeAction.current = null;
     setAction(null);
     setInstruction("");
     setError(null);
@@ -727,6 +843,33 @@ export function FailureActions({ failureID, resolvable = true }: { failureID: st
             </Box>
           )}
 
+          {request?.status === "cancelling" && (
+            <Box
+              role="status"
+              sx={{
+                borderRadius: "12px",
+                bgcolor: (theme) =>
+                  (theme.vars ?? theme).palette.surface.containerLow,
+                border: "1px solid",
+                borderColor: "divider",
+                p: 2,
+              }}
+            >
+              <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }}>
+                <CircularProgress size={20} />
+                <Box>
+                  <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                    Stopping runtime work
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    This request remains active until the server confirms that
+                    its runtime work has stopped.
+                  </Typography>
+                </Box>
+              </Stack>
+            </Box>
+          )}
+
           {error && (
             <Alert
               severity="error"
@@ -824,7 +967,11 @@ export function FailureActions({ failureID, resolvable = true }: { failureID: st
                 <BugReport sx={{ fontSize: 18 }} />
               )
             }
-            disabled={busy !== null || !preview || (request?.status !== "ready" && request?.status !== "unknown")}
+            disabled={
+              busy !== null ||
+              !request ||
+              !actionRequestCanConfirm(request.status, Boolean(preview))
+            }
             onClick={confirm}
           >
             {request?.status === "unknown" ? "Check GitHub result" : isFix ? "Open draft PR" : "File issue"}

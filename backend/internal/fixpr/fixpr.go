@@ -105,6 +105,9 @@ type AgentConfig struct {
 	// GitToken authenticates the source clone. Empty clones anonymously, which
 	// is enough for a public repo.
 	GitToken string
+	// ExecutionID and WorkObserver bind external runtime work to one request.
+	ExecutionID  string
+	WorkObserver runtime.WorkObserver
 }
 
 // VerifyConfig configures pre-PR verification of a proposed fix.
