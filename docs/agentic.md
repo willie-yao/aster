@@ -854,6 +854,15 @@ that from being a plausible-sounding guess, the pass grounds itself on the real
 repository when the effective `ai.source_repo` is set. A token is optional for
 public repositories:
 
+Systemic verdicts also include `remediation_targets`, a strict structured list
+used by the actions preflight. Each target declares an intent (`add_symbol` for
+package-level Go symbols,
+`modify_symbol`, `set_configuration`, `remove_configuration`, or `investigate`)
+plus the applicable verified path and symbol or configuration value. The model
+does not decide whether a remediation is present. File issue and Propose fix
+independently verify the metadata against the exact pinned source revision and
+remain fail-closed when the target is missing or inconclusive.
+
 - **Repo tool loop.** With a reader wired, the correlation runs as a repotree
   loop (`list_repo_tree` / `read_repo_file` / `grep_repo` over the source repo
   at `HEAD`), so the model verifies a path exists before naming it. The

@@ -3,12 +3,17 @@ import { afterEach, test } from "node:test";
 
 import {
   actionRequestCanConfirm,
+  actionRequestHasBlockingVerification,
   actionRequestIsActive,
   actionRequestIsPollable,
   actionRequestIsRecoverable,
   actionRequestIsTerminal,
+  actionRequestProgressDetail,
+  actionRequestProgressTitle,
   actionRequestStorageKey,
   actionRequestStorageOwner,
+  actionRequestVerificationDetail,
+  actionRequestVerificationTitle,
   cancelActionRequest,
   loadLatestActionRequest,
   readStoredActionRequestID,
@@ -87,6 +92,68 @@ test("unknown outcomes remain confirmable without a visible preview", () => {
   assert.equal(actionRequestCanConfirm("ready", false), false);
   assert.equal(actionRequestCanConfirm("ready", true), true);
   assert.equal(actionRequestCanConfirm("cancelling", true), false);
+});
+
+test("source verification progress is distinct from draft generation", () => {
+  const verifying = request("verifying", "pending", {
+    stage: "verifying_remediation",
+  });
+  assert.equal(
+    actionRequestProgressTitle(verifying, false),
+    "Verifying the proposed remediation against pinned source",
+  );
+  assert.match(actionRequestProgressDetail(verifying), /before starting any model/);
+
+  const drafting = request("drafting", "pending", {
+    stage: "drafting",
+    verification: {
+      state: "unresolved",
+      reason: "verified target remains unresolved",
+    },
+  });
+  assert.equal(actionRequestProgressTitle(drafting, true), "Generating the fix proposal");
+  assert.match(actionRequestProgressDetail(drafting), /verified as unresolved/);
+});
+
+test("source verification outcomes have specific labels", () => {
+  const existing = request("existing", "failed", {
+    verification: {
+      state: "already_present",
+      reason: "LabelCRDsForClusterctlUpgrade is already defined and used",
+    },
+  });
+  assert.equal(actionRequestVerificationTitle(existing), "Existing remediation detected");
+  assert.match(actionRequestVerificationDetail(existing) ?? "", /stale, regressed, or misclassified/);
+  assert.equal(actionRequestHasBlockingVerification(existing), true);
+
+  const configuration = request("configuration", "failed", {
+    verification: {
+      state: "already_present",
+      reason: "configuration GenericWorkload=true is already applied",
+    },
+  });
+  assert.equal(actionRequestVerificationTitle(configuration), "Configuration already applied");
+
+  const removedConfiguration = request("removed-configuration", "failed", {
+    verification: {
+      state: "already_present",
+      reason: "configuration LegacyGate=true is already absent from templates/dra.yaml",
+    },
+  });
+  assert.equal(
+    actionRequestVerificationTitle(removedConfiguration),
+    "Configuration already absent",
+  );
+
+  const inconclusive = request("inconclusive", "failed", {
+    verification: {
+      state: "inconclusive",
+      reason: "proposal has no implementation-ready source target",
+    },
+  });
+  assert.equal(actionRequestVerificationTitle(inconclusive), "Source verification inconclusive");
+  assert.match(actionRequestVerificationDetail(inconclusive) ?? "", /Investigate the pinned source/);
+  assert.equal(actionRequestHasBlockingVerification(inconclusive), true);
 });
 
 test("active request storage is isolated by owner failure and action", () => {

@@ -84,6 +84,21 @@ func TestGitHubRepoReaderAuthenticatedPrivateAccess(t *testing.T) {
 	}
 }
 
+func TestGitHubRepoReaderRejectsOversizedFile(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(strings.Repeat("x", maxSourceFileBytes+1)))
+	}))
+	defer srv.Close()
+	oldRaw := rawContentBase
+	rawContentBase = srv.URL
+	t.Cleanup(func() { rawContentBase = oldRaw })
+
+	reader := NewGitHubRepoReader("owner", "repo", "commit-sha", "")
+	if _, _, err := reader.ReadFile(context.Background(), "config/source.yaml"); err == nil || !strings.Contains(err.Error(), "exceeds verification limit") {
+		t.Fatalf("ReadFile error = %v", err)
+	}
+}
+
 func TestGitHubRepoReaderReadsBoundedSourceArchive(t *testing.T) {
 	const token = "read-token-value"
 	body := sourceArchive(t, map[string]string{

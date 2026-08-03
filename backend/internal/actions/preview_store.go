@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	previewStateVersion     = 3
+	previewStateVersion     = 4
 	maxPreviewStateBytes    = 64 << 20
 	maxPersistedPreviews    = 128
 	previewStatusReady      = "ready"
@@ -271,7 +271,7 @@ func (s *previewStore) load() (*previewState, error) {
 	if err := json.Unmarshal(data, state); err != nil {
 		return nil, fmt.Errorf("decoding preview state: %w", err)
 	}
-	if state.Previews == nil || (state.Version != 1 && state.Version != 2 && state.Version != previewStateVersion) {
+	if state.Previews == nil || (state.Version != 1 && state.Version != 2 && state.Version != 3 && state.Version != previewStateVersion) {
 		return nil, fmt.Errorf("unsupported preview state version %d", state.Version)
 	}
 	if state.Version == 1 {
@@ -282,7 +282,7 @@ func (s *previewStore) load() (*previewState, error) {
 		}
 		state.Version = 2
 	}
-	if state.Version == 2 {
+	if state.Version == 2 || state.Version == 3 {
 		for key, record := range state.Previews {
 			if record != nil && record.VerificationVersion != sourceVerificationVersion &&
 				(record.Status == previewStatusReady || record.Status == previewStatusRunning) {

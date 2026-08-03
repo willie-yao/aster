@@ -51,7 +51,7 @@ func TestAnalyzePattern_TooFewBuilds_NoCall(t *testing.T) {
 func TestAnalyzePattern_SystemicVerdict(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	verdict := `{"systemic":true,"confidence":"high","shared_root_cause":"undersized burstable control-plane VM starves etcd","shared_builds":["abuild","bbuild","cbuild"],"suggested_fix":"use a non-burstable VM size","summary":"8/10 builds share an etcd-join deadlock"}`
+	verdict := `{"systemic":true,"confidence":"high","shared_root_cause":"undersized burstable control-plane VM starves etcd","shared_builds":["abuild","bbuild","cbuild"],"suggested_fix":"use a non-burstable VM size","remediation_targets":[{"intent":"investigate"}],"summary":"8/10 builds share an etcd-join deadlock"}`
 	srv.push(200, chatRespFinal(verdict))
 	s := newPatternTestService(t, srv.URL)
 
@@ -85,7 +85,7 @@ func TestAnalyzePattern_SystemicVerdict(t *testing.T) {
 func TestAnalyzePattern_CacheHit_NoSecondCall(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	srv.push(200, chatRespFinal(`{"systemic":false,"confidence":"low","shared_root_cause":"","shared_builds":[],"suggested_fix":"","summary":"independent flakes"}`))
+	srv.push(200, chatRespFinal(`{"systemic":false,"confidence":"low","shared_root_cause":"","shared_builds":[],"suggested_fix":"","remediation_targets":[],"summary":"independent flakes"}`))
 	s := newPatternTestService(t, srv.URL)
 	usage, err := aiusage.NewRecorder("", aiusage.RecorderOptions{RetentionDays: 30, RecentOperations: 10})
 	if err != nil {
@@ -124,7 +124,7 @@ func TestAnalyzePattern_CacheHit_NoSecondCall(t *testing.T) {
 func TestAnalyzePatternRejectsPartialCacheEntry(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	srv.push(200, chatRespFinal(`{"systemic":false,"confidence":"low","shared_root_cause":"","shared_builds":[],"suggested_fix":"","summary":"fresh complete verdict"}`))
+	srv.push(200, chatRespFinal(`{"systemic":false,"confidence":"low","shared_root_cause":"","shared_builds":[],"suggested_fix":"","remediation_targets":[],"summary":"fresh complete verdict"}`))
 	s := newPatternTestService(t, srv.URL)
 	failures := patternFailures(3)
 	input := BuildPatternInput("job", failures)
@@ -150,7 +150,7 @@ func TestAnalyzePatternRejectsPartialCacheEntry(t *testing.T) {
 func TestAnalyzePattern_InvalidConfidenceRejected(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	srv.push(200, chatRespFinal(`{"systemic":false,"confidence":"VERY-SURE","shared_root_cause":"","shared_builds":[],"suggested_fix":"","summary":"independent flakes"}`))
+	srv.push(200, chatRespFinal(`{"systemic":false,"confidence":"VERY-SURE","shared_root_cause":"","shared_builds":[],"suggested_fix":"","remediation_targets":[],"summary":"independent flakes"}`))
 	s := newPatternTestService(t, srv.URL)
 
 	if _, err := s.AnalyzePattern(context.Background(), "job", "job", patternFailures(2)); patternValidationCategoryOf(err) != patternValidationSchema {
@@ -274,7 +274,7 @@ func TestBuildPatternUserPrompt_RendersFixAndFiles(t *testing.T) {
 func TestAnalyzePattern_CapsBuilds(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	srv.push(200, chatRespFinal(`{"systemic":true,"confidence":"high","shared_root_cause":"x","shared_builds":["obuild","nbuild"],"suggested_fix":"fix x","summary":"x"}`))
+	srv.push(200, chatRespFinal(`{"systemic":true,"confidence":"high","shared_root_cause":"x","shared_builds":["obuild","nbuild"],"suggested_fix":"fix x","remediation_targets":[{"intent":"investigate"}],"summary":"x"}`))
 	s := newPatternTestService(t, srv.URL)
 
 	pa, err := s.AnalyzePattern(context.Background(), "job", "job", patternFailures(maxPatternBuilds+5))
@@ -309,6 +309,7 @@ func TestParsePatternResultMarksPathsUnverified(t *testing.T) {
 		"shared_root_cause": "the controller writes stale state",
 		"shared_builds": ["abuild", "bbuild"],
 		"suggested_fix": "serialize updates in config/controller.yaml",
+		"remediation_targets": [{"intent":"investigate"}],
 		"summary": "the same controller path failed twice"
 	}`
 	pa, err := ParsePatternResult("job", patternFailures(2), result)
@@ -321,14 +322,14 @@ func TestParsePatternResultMarksPathsUnverified(t *testing.T) {
 }
 
 func TestParsePatternResponseCandidates(t *testing.T) {
-	valid := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":["abuild","bbuild"],"suggested_fix":"update config/controller.yaml","summary":"the builds share one cause"}`
-	valid2 := `{"systemic":true,"confidence":"medium","shared_root_cause":"second cause","shared_builds":["abuild","bbuild"],"suggested_fix":"update config/second.yaml","summary":"a different valid verdict"}`
+	valid := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":["abuild","bbuild"],"suggested_fix":"update config/controller.yaml","remediation_targets":[{"intent":"investigate"}],"summary":"the builds share one cause"}`
+	valid2 := `{"systemic":true,"confidence":"medium","shared_root_cause":"second cause","shared_builds":["abuild","bbuild"],"suggested_fix":"update config/second.yaml","remediation_targets":[{"intent":"investigate"}],"summary":"a different valid verdict"}`
 	missing := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":["abuild","bbuild"],"summary":"missing suggested fix"}`
-	invalidBuild := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":["abuild","unknown-build"],"suggested_fix":"update config/controller.yaml","summary":"bad build reference"}`
+	invalidBuild := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":["abuild","unknown-build"],"suggested_fix":"update config/controller.yaml","remediation_targets":[{"intent":"investigate"}],"summary":"bad build reference"}`
 	nullFields := `{"systemic":null,"confidence":"low","shared_root_cause":null,"shared_builds":[],"suggested_fix":null,"summary":"null fields"}`
 	partialFinal := `{"systemic":false,"confidence":"low"}`
 	contractWrapper := `{"systemic":` + valid + `,"confidence":"low","shared_root_cause":"","shared_builds":[],"suggested_fix":"","summary":"outer partial verdict"}`
-	duplicateField := `{"systemic":true,"systemic":false,"confidence":"low","shared_root_cause":"","shared_builds":[],"suggested_fix":"","summary":"duplicate verdict"}`
+	duplicateField := `{"systemic":true,"systemic":false,"confidence":"low","shared_root_cause":"","shared_builds":[],"suggested_fix":"","remediation_targets":[{"intent":"investigate"}],"summary":"duplicate verdict"}`
 	cases := []struct {
 		name         string
 		raw          string
@@ -374,11 +375,36 @@ func TestParsePatternResponseCandidates(t *testing.T) {
 	}
 }
 
+func TestParsePatternResponseValidatesRemediationTargets(t *testing.T) {
+	base := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":["abuild","bbuild"],"suggested_fix":"fix the target","remediation_targets":TARGETS,"summary":"shared failure"}`
+	tests := []struct {
+		name    string
+		targets string
+		wantErr bool
+	}{
+		{name: "modify symbol", targets: `[{"intent":"modify_symbol","symbol":"MachinePoolModelHasChanged","path":"controllers/helpers.go"}]`},
+		{name: "configuration", targets: `[{"intent":"set_configuration","path":"templates/dra.yaml","value":"GenericWorkload=true"}]`},
+		{name: "unknown field", targets: `[{"intent":"investigate","verified":true}]`, wantErr: true},
+		{name: "duplicate field", targets: `[{"intent":"investigate","intent":"add_symbol"}]`, wantErr: true},
+		{name: "unsafe path", targets: `[{"intent":"modify_symbol","symbol":"Fix","path":"../helpers.go"}]`, wantErr: true},
+		{name: "invalid configuration value", targets: `[{"intent":"set_configuration","path":"templates/dra.yaml","value":"GenericWorkload=true\nOther=true"}]`, wantErr: true},
+		{name: "configuration missing assignment", targets: `[{"intent":"set_configuration","path":"templates/dra.yaml","value":"GenericWorkload"}]`, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := parsePatternResponse(strings.Replace(base, "TARGETS", test.targets, 1), patternBuildIDs(patternFailures(2)))
+			if (err != nil) != test.wantErr {
+				t.Fatalf("error = %v, wantErr = %t", err, test.wantErr)
+			}
+		})
+	}
+}
+
 func TestGroundedPatternVerdictDoesNotRecoverRejectedJSON(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 	srv.push(200, chatRespToolCall("call_1", "list_repo_tree", map[string]interface{}{"path": ""}))
-	valid := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":["abuild","bbuild"],"suggested_fix":"update config/controller.yaml","summary":"the builds share one cause"}`
+	valid := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":["abuild","bbuild"],"suggested_fix":"update config/controller.yaml","remediation_targets":[{"intent":"investigate"}],"summary":"the builds share one cause"}`
 	srv.push(200, chatRespFinal(valid+`\n{"systemic":`))
 	client := newAgenticTestClient(t, srv.URL)
 	s := NewService(client, &stubModule{name: "kubernetes"}, "sys", nil)
@@ -393,7 +419,7 @@ func TestGroundedPatternVerdictDoesNotRecoverRejectedJSON(t *testing.T) {
 }
 
 func TestParsePatternResponseNormalizesBuildIDs(t *testing.T) {
-	raw := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":[" abuild ","bbuild"],"suggested_fix":"update config/controller.yaml","summary":"the builds share one cause"}`
+	raw := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":[" abuild ","bbuild"],"suggested_fix":"update config/controller.yaml","remediation_targets":[{"intent":"investigate"}],"summary":"the builds share one cause"}`
 	parsed, err := parsePatternResponse(raw, patternBuildIDs(patternFailures(2)))
 	if err != nil {
 		t.Fatal(err)
@@ -404,13 +430,13 @@ func TestParsePatternResponseNormalizesBuildIDs(t *testing.T) {
 }
 
 func TestParsePatternResponseDeduplicatesEquivalentCandidates(t *testing.T) {
-	first := `{"systemic":true,"confidence":" HIGH ","shared_root_cause":" shared cause ","shared_builds":["bbuild","abuild","bbuild"],"suggested_fix":" fix it ","summary":" same summary "}`
-	second := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":["abuild","bbuild"],"suggested_fix":"fix it","summary":"same summary"}`
+	first := `{"systemic":true,"confidence":" HIGH ","shared_root_cause":" shared cause ","shared_builds":["bbuild","abuild","bbuild"],"suggested_fix":" fix it ","remediation_targets":[{"intent":"investigate"}],"summary":" same summary "}`
+	second := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":["abuild","bbuild"],"suggested_fix":"fix it","remediation_targets":[{"intent":"investigate"}],"summary":"same summary"}`
 	parsed, stats, err := parsePatternResponseWithStats(first+"\n"+second, patternBuildIDs(patternFailures(2)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats.CandidateCount != 2 || stats.ValidCount != 2 || stats.UniqueValidCount != 1 {
+	if stats.CandidateCount != 4 || stats.ValidCount != 2 || stats.UniqueValidCount != 1 {
 		t.Fatalf("stats = %+v", stats)
 	}
 	if parsed.Confidence != "high" || strings.Join(parsed.SharedBuilds, ",") != "abuild,bbuild" || parsed.SharedRootCause != "shared cause" {
@@ -419,7 +445,7 @@ func TestParsePatternResponseDeduplicatesEquivalentCandidates(t *testing.T) {
 }
 
 func TestParsePatternResponseRejectsInvalidContractBetweenEquivalentCandidates(t *testing.T) {
-	valid := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":["abuild","bbuild"],"suggested_fix":"fix it","summary":"same summary"}`
+	valid := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":["abuild","bbuild"],"suggested_fix":"fix it","remediation_targets":[{"intent":"investigate"}],"summary":"same summary"}`
 	raw := valid + "\n" + `{"systemic":true}` + "\n" + valid
 	_, _, err := parsePatternResponseWithStats(raw, patternBuildIDs(patternFailures(2)))
 	if got := patternValidationCategoryOf(err); got != patternValidationSchema {
@@ -428,7 +454,7 @@ func TestParsePatternResponseRejectsInvalidContractBetweenEquivalentCandidates(t
 }
 
 func TestParsePatternResponseRejectsDistinctCanonicalCandidates(t *testing.T) {
-	first := `{"systemic":true,"confidence":"high","shared_root_cause":"first cause","shared_builds":["abuild","bbuild"],"suggested_fix":"fix it","summary":"same summary"}`
+	first := `{"systemic":true,"confidence":"high","shared_root_cause":"first cause","shared_builds":["abuild","bbuild"],"suggested_fix":"fix it","remediation_targets":[{"intent":"investigate"}],"summary":"same summary"}`
 	second := strings.Replace(first, "first cause", "second cause", 1)
 	_, stats, err := parsePatternResponseWithStats(first+"\n"+second, patternBuildIDs(patternFailures(2)))
 	if got := patternValidationCategoryOf(err); got != patternValidationAmbiguous {
@@ -442,7 +468,7 @@ func TestParsePatternResponseRejectsDistinctCanonicalCandidates(t *testing.T) {
 func TestAnalyzePatternRepairsAmbiguityOnce(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	valid := `{"systemic":true,"confidence":"high","shared_root_cause":"private-shared-cause","shared_builds":["abuild","bbuild"],"suggested_fix":"update config/controller.yaml","summary":"same summary"}`
+	valid := `{"systemic":true,"confidence":"high","shared_root_cause":"private-shared-cause","shared_builds":["abuild","bbuild"],"suggested_fix":"update config/controller.yaml","remediation_targets":[{"intent":"investigate"}],"summary":"same summary"}`
 	ambiguous := valid + "\n" + strings.Replace(valid, "private-shared-cause", "private-other-cause", 1)
 	srv.push(200, chatRespFinal(ambiguous))
 	srv.push(200, chatRespFinal(valid))
@@ -489,7 +515,7 @@ func TestAnalyzePatternRepairsAmbiguityOnce(t *testing.T) {
 
 func TestAnalyzePatternRepairRejectsAmbiguousAndTransportFailures(t *testing.T) {
 	shrinkCallDelay(t)
-	valid := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":["abuild","bbuild"],"suggested_fix":"update config/controller.yaml","summary":"same summary"}`
+	valid := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":["abuild","bbuild"],"suggested_fix":"update config/controller.yaml","remediation_targets":[{"intent":"investigate"}],"summary":"same summary"}`
 	ambiguous := valid + "\n" + strings.Replace(valid, "shared cause", "other cause", 1)
 	tests := []struct {
 		name         string
@@ -523,7 +549,7 @@ func TestAnalyzePatternRepairRejectsAmbiguousAndTransportFailures(t *testing.T) 
 func TestAnalyzePatternRepairFailureDoesNotStartAnotherRepair(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	valid := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":["abuild","bbuild"],"suggested_fix":"update config/controller.yaml","summary":"same summary"}`
+	valid := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":["abuild","bbuild"],"suggested_fix":"update config/controller.yaml","remediation_targets":[{"intent":"investigate"}],"summary":"same summary"}`
 	ambiguous := valid + "\n" + strings.Replace(valid, "shared cause", "other cause", 1)
 	srv.push(200, chatRespFinal(ambiguous))
 	srv.push(200, chatRespFinal(`{"systemic":true}`))
@@ -538,8 +564,8 @@ func TestAnalyzePatternRepairFailureDoesNotStartAnotherRepair(t *testing.T) {
 }
 
 func TestParsePatternResponseRejectsTruncatedCandidateWindow(t *testing.T) {
-	first := `{"systemic":true,"confidence":"high","shared_root_cause":"first cause","shared_builds":["abuild","bbuild"],"suggested_fix":"fix first","summary":"first verdict"}`
-	second := `{"systemic":true,"confidence":"medium","shared_root_cause":"second cause","shared_builds":["abuild","bbuild"],"suggested_fix":"fix second","summary":"second verdict"}`
+	first := `{"systemic":true,"confidence":"high","shared_root_cause":"first cause","shared_builds":["abuild","bbuild"],"suggested_fix":"fix first","remediation_targets":[{"intent":"investigate"}],"summary":"first verdict"}`
+	second := `{"systemic":true,"confidence":"medium","shared_root_cause":"second cause","shared_builds":["abuild","bbuild"],"suggested_fix":"fix second","remediation_targets":[{"intent":"investigate"}],"summary":"second verdict"}`
 	var raw strings.Builder
 	raw.WriteString(first)
 	for index := 0; index < analysisChatMaxCandidates; index++ {
@@ -554,8 +580,8 @@ func TestParsePatternResponseRejectsTruncatedCandidateWindow(t *testing.T) {
 
 func TestParsePatternOutputDoesNotRepairTruncatedCandidateWindow(t *testing.T) {
 	shrinkCallDelay(t)
-	first := `{"systemic":true,"confidence":"high","shared_root_cause":"first cause","shared_builds":["abuild","bbuild"],"suggested_fix":"fix first","summary":"first verdict"}`
-	second := `{"systemic":true,"confidence":"medium","shared_root_cause":"second cause","shared_builds":["abuild","bbuild"],"suggested_fix":"fix second","summary":"second verdict"}`
+	first := `{"systemic":true,"confidence":"high","shared_root_cause":"first cause","shared_builds":["abuild","bbuild"],"suggested_fix":"fix first","remediation_targets":[{"intent":"investigate"}],"summary":"first verdict"}`
+	second := `{"systemic":true,"confidence":"medium","shared_root_cause":"second cause","shared_builds":["abuild","bbuild"],"suggested_fix":"fix second","remediation_targets":[{"intent":"investigate"}],"summary":"second verdict"}`
 	var raw strings.Builder
 	raw.WriteString(first)
 	for index := 0; index < analysisChatMaxCandidates; index++ {
@@ -582,7 +608,7 @@ func TestParsePatternOutputDoesNotRepairTruncatedCandidateWindow(t *testing.T) {
 func TestAnalyzePatternAcceptsKimiTrailingProse(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	verdict := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":["abuild","bbuild"],"suggested_fix":"update config/controller.yaml","summary":"the builds share one cause"}`
+	verdict := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":["abuild","bbuild"],"suggested_fix":"update config/controller.yaml","remediation_targets":[{"intent":"investigate"}],"summary":"the builds share one cause"}`
 	srv.push(200, chatRespFinal(verdict+"\nWhat this means is recurring configuration drift."))
 	s := newPatternTestService(t, srv.URL)
 	pa, err := s.AnalyzePattern(t.Context(), "job", "job", patternFailures(2))

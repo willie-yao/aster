@@ -842,7 +842,7 @@ func TestCancelRequestFailsWhenIdentityChanges(t *testing.T) {
 func TestRestartResumesRuntimeCleanup(t *testing.T) {
 	service, pattern := requestTestService(t)
 	now := time.Now().UTC()
-	state := actionRequestState{Version: 3, Requests: map[string]*actionRequest{
+	state := actionRequestState{Version: 4, Requests: map[string]*actionRequest{
 		"restart-runtime": {
 			ActionRequestView: ActionRequestView{ID: "restart-runtime", FailureID: pattern.ID, Kind: "propose-fix", Owner: "alice", Status: RequestPending,
 				CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339)},
@@ -1269,7 +1269,7 @@ func TestLoadActionRequestsInvalidatesLegacyVerifiedPreview(t *testing.T) {
 				CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
 				Preview: &PreviewResult{Kind: "issue", Title: spec.Title, Body: spec.Body},
 			},
-			Issue: spec,
+			Issue: spec, VerificationVersion: sourceVerificationVersion - 1,
 		},
 	}}
 	data, _ := json.Marshal(state)

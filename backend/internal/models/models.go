@@ -294,6 +294,22 @@ type PatternRefreshReport struct {
 	Jobs          map[string]PatternRefreshStatus `json:"jobs,omitempty"`
 }
 
+const (
+	RemediationIntentAddSymbol           = "add_symbol"
+	RemediationIntentModifySymbol        = "modify_symbol"
+	RemediationIntentSetConfiguration    = "set_configuration"
+	RemediationIntentRemoveConfiguration = "remove_configuration"
+	RemediationIntentInvestigate         = "investigate"
+)
+
+// RemediationTarget identifies one source change proposed by a recurring pattern.
+type RemediationTarget struct {
+	Intent string `json:"intent"`
+	Symbol string `json:"symbol,omitempty"`
+	Path   string `json:"path,omitempty"`
+	Value  string `json:"value,omitempty"`
+}
+
 // PatternAnalysis is a job-level correlation across recent failed builds.
 // It captures whether varied-looking failures share one recurring, fixable
 // cause. The specific failing test may differ between builds.
@@ -320,6 +336,8 @@ type PatternAnalysis struct {
 	SharedBuilds []string `json:"shared_builds,omitempty"`
 	// SuggestedFix is the cross-cutting fix for the shared cause.
 	SuggestedFix string `json:"suggested_fix,omitempty"`
+	// RemediationTargets carry the machine-verifiable source changes behind the fix.
+	RemediationTargets []RemediationTarget `json:"remediation_targets,omitempty"`
 	// RelevantFiles are the source files the per-build analyses implicated,
 	// unioned across builds. They ground the fix harness's target selection.
 	RelevantFiles []string          `json:"relevant_files,omitempty"`

@@ -24,8 +24,13 @@ import type { ActionRequest } from "../types/actions";
 import {
   actionErrorMessage,
   actionRequestCanConfirm,
+  actionRequestHasBlockingVerification,
   actionRequestIsPollable,
+  actionRequestProgressDetail,
+  actionRequestProgressTitle,
   actionRequestStorageOwner,
+  actionRequestVerificationDetail,
+  actionRequestVerificationTitle,
   cancelActionRequest,
   loadLatestActionRequest,
   syncStoredActionRequest,
@@ -119,7 +124,9 @@ export function ActionRequestPage() {
         retryCount = 0;
         setRequest(latest);
         setError(
-          latest.status === "failed" && !latest.warning
+          latest.status === "failed" &&
+            !latest.warning &&
+            !actionRequestHasBlockingVerification(latest)
             ? latest.error || "Draft generation failed."
             : null,
         );
@@ -321,6 +328,8 @@ export function ActionRequestPage() {
   const isFix = request.kind === "propose-fix";
   const canCancel = request.status === "pending" || request.status === "ready";
   const canConfirm = actionRequestCanConfirm(request.status, Boolean(preview));
+  const verificationTitle = actionRequestVerificationTitle(request);
+  const verificationDetail = actionRequestVerificationDetail(request);
 
   return (
     <ActionRequestPageFrame breadcrumbs>
@@ -382,6 +391,26 @@ export function ActionRequestPage() {
               {error}
             </Alert>
           )}
+          {verificationTitle && request.status !== "pending" && (
+            <Alert
+              severity={
+                request.verification?.state === "unresolved"
+                  ? "success"
+                  : request.verification?.state === "already_present"
+                    ? "info"
+                    : "warning"
+              }
+              variant="outlined"
+              sx={{ mb: 2 }}
+            >
+              <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                {verificationTitle}
+              </Typography>
+              <Typography variant="body2">
+                {verificationDetail}
+              </Typography>
+            </Alert>
+          )}
           {request.warning && (
             <Alert severity="warning" variant="outlined" sx={{ mb: 2 }}>
               {request.warning}
@@ -403,11 +432,10 @@ export function ActionRequestPage() {
                 <CircularProgress size={20} />
                 <Box>
                   <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                    Generating the draft
+                    {actionRequestProgressTitle(request, isFix)}
                   </Typography>
                   <Typography variant="body2" color="text.secondary">
-                    You can leave this page. If draft-ready email is configured,
-                    the dashboard emails you when generation completes.
+                    {actionRequestProgressDetail(request)}
                   </Typography>
                 </Box>
               </Stack>

@@ -18,7 +18,7 @@ import (
 
 func TestSuccessfulPatternCacheSurvivesAnotherJobFailure(t *testing.T) {
 	t.Setenv("AI_CONTEXT_WINDOW_TOKENS", "65536")
-	valid := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":["3","2"],"suggested_fix":"update configuration","summary":"shared failure"}`
+	valid := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":["3","2"],"suggested_fix":"update configuration","remediation_targets":[{"intent":"investigate"}],"summary":"shared failure"}`
 	var calls atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if calls.Add(1) == 1 {

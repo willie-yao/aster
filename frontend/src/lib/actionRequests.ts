@@ -1,8 +1,4 @@
-import type {
-  Action,
-  ActionRequest,
-  RequestStatus,
-} from "../types/actions";
+import type { Action, ActionRequest, RequestStatus } from "../types/actions";
 
 export type ActionRequestStorage = Pick<
   Storage,
@@ -40,9 +36,10 @@ export function readStoredActionRequestID(
   action: Action,
 ): string | null {
   try {
-    const value = storage
-      .getItem(actionRequestStorageKey(owner, failureID, action))
-      ?.trim() ?? "";
+    const value =
+      storage
+        .getItem(actionRequestStorageKey(owner, failureID, action))
+        ?.trim() ?? "";
     return storedRequestIDPattern.test(value) ? value : null;
   } catch {
     return null;
@@ -114,6 +111,73 @@ export function actionRequestIsTerminal(status: RequestStatus): boolean {
 
 export function actionRequestIsRecoverable(status: RequestStatus): boolean {
   return !actionRequestIsTerminal(status);
+}
+
+export function actionRequestProgressTitle(
+  request: ActionRequest | null,
+  isFix: boolean,
+): string {
+  if (!request || request.stage !== "drafting") {
+    return "Verifying the proposed remediation against pinned source";
+  }
+  return isFix ? "Generating the fix proposal" : "Preparing the issue draft";
+}
+
+export function actionRequestProgressDetail(
+  request: ActionRequest | null,
+): string {
+  if (
+    request?.stage === "drafting" &&
+    request.verification?.state === "unresolved"
+  ) {
+    return "The source target is verified as unresolved. Draft generation has started.";
+  }
+  if (!request || request.stage !== "drafting") {
+    return "The dashboard checks the structured target before starting any model or runtime work.";
+  }
+  return "Generation continues in the background. You can leave this page and return later.";
+}
+
+export function actionRequestVerificationTitle(
+  request: ActionRequest,
+): string | null {
+  const verification = request.verification;
+  if (!verification) return null;
+  if (verification.state === "already_present") {
+    const reason = verification.reason.toLowerCase();
+    if (reason.startsWith("configuration ")) {
+      const absent = reason.includes("already absent");
+      return absent ? "Configuration already absent" : "Configuration already applied";
+    }
+    return "Existing remediation detected";
+  }
+  if (verification.state === "unresolved")
+    return "Verified target is unresolved";
+  return "Source verification inconclusive";
+}
+
+export function actionRequestVerificationDetail(
+  request: ActionRequest,
+): string | null {
+  const verification = request.verification;
+  if (!verification) return null;
+  if (verification.state === "already_present") {
+    return `${verification.reason}. Check whether the pattern is stale, regressed, or misclassified.`;
+  }
+  if (verification.state === "inconclusive") {
+    return `${verification.reason}. Investigate the pinned source before starting an action.`;
+  }
+  return verification.reason;
+}
+
+export function actionRequestHasBlockingVerification(
+  request: ActionRequest,
+): boolean {
+  return (
+    request.status === "failed" &&
+    (request.verification?.state === "already_present" ||
+      request.verification?.state === "inconclusive")
+  );
 }
 
 export function syncStoredActionRequest(

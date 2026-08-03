@@ -179,9 +179,12 @@ func (r *githubRepoReader) ReadFile(ctx context.Context, path string) (string, b
 	if resp.StatusCode != http.StatusOK {
 		return "", false, fmt.Errorf("reading %s: %s", path, resp.Status)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxSourceFileBytes+1))
 	if err != nil {
 		return "", false, fmt.Errorf("reading %s: %w", path, err)
+	}
+	if len(body) > maxSourceFileBytes {
+		return "", false, fmt.Errorf("reading %s: source file exceeds verification limit", path)
 	}
 	return string(body), true, nil
 }

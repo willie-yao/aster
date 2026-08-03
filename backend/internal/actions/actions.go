@@ -74,7 +74,7 @@ var ErrPreviewNotFound = errors.New("preview not found or expired")
 
 // previewTTL bounds how long a generated draft is held for confirmation.
 const previewTTL = 15 * time.Minute
-const sourceVerificationVersion = 1
+const sourceVerificationVersion = 2
 
 // AIConfig is the resolved chat-completions configuration used to draft fixes.
 type AIConfig struct {
@@ -453,6 +453,26 @@ func (s *Service) verifyOptionalRemediation(ctx context.Context, subject *Action
 	if proposal == "" || !actionverify.HasImplementationSymbols(proposal) {
 		return nil
 	}
+	if subject != nil && subject.Kind == actionSubjectPattern && subject.Pattern != nil && len(subject.Pattern.RemediationTargets) > 0 {
+		allowed := make([]string, 0, len(subject.Pattern.RemediationTargets))
+		for _, target := range subject.Pattern.RemediationTargets {
+			if target.Symbol != "" {
+				allowed = append(allowed, target.Symbol)
+			}
+			if key, _, ok := strings.Cut(target.Value, "="); ok && regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`).MatchString(strings.TrimSpace(key)) {
+				allowed = append(allowed, strings.TrimSpace(key))
+			}
+		}
+		unexpected := actionverify.UnexpectedImplementationSymbols(proposal, allowed)
+		if len(unexpected) == 0 {
+			return nil
+		}
+		quoted := make([]string, 0, len(unexpected))
+		for _, symbol := range unexpected {
+			quoted = append(quoted, "`"+symbol+"`")
+		}
+		proposal = strings.Join(quoted, " ")
+	}
 	return s.verifyRemediationProposal(ctx, subject, proposal)
 }
 
@@ -463,20 +483,39 @@ func (s *Service) verifyRemediationProposal(ctx context.Context, subject *Action
 	if s.cfg == nil {
 		return nil
 	}
+	inconclusive := func(reason string, cause error) error {
+		if err := s.setRequestVerification(ctx, actionverify.StateInconclusive, reason); err != nil {
+			return fmt.Errorf("%w: source verification result could not be persisted: %v", ErrRemediationInconclusive, err)
+		}
+		if cause != nil {
+			return fmt.Errorf("%w: %s: %w", ErrRemediationInconclusive, reason, cause)
+		}
+		return fmt.Errorf("%w: %s", ErrRemediationInconclusive, reason)
+	}
 	repo := s.cfg.EffectiveAnalysisSourceRepo()
+	patternSubject := subject != nil && subject.Kind == actionSubjectPattern && subject.Pattern != nil
+	if patternSubject && len(subject.Pattern.RemediationTargets) == 0 {
+		return inconclusive("recurring pattern does not include structured remediation targets", nil)
+	}
+	structured := patternSubject
 	if repo.Owner == "" && repo.Name == "" {
+		if structured {
+			return inconclusive("configured source repository is unavailable for structured remediation verification", nil)
+		}
 		return nil
 	}
 	if repo.Owner == "" || repo.Name == "" {
-		return fmt.Errorf("%w: configured source repository is incomplete", ErrRemediationInconclusive)
+		return inconclusive("configured source repository is incomplete", nil)
 	}
 	var revision, proposal string
 	var files []string
+	var targets []models.RemediationTarget
 	if subject.Kind == actionSubjectPattern && subject.Pattern != nil {
 		revision, proposal = subject.Pattern.SourceRef, subject.Pattern.SuggestedFix
+		targets = append([]models.RemediationTarget(nil), subject.Pattern.RemediationTargets...)
 		if sourceRepo, sourceRevision, ok := strings.Cut(revision, "@"); ok {
 			if !strings.EqualFold(sourceRepo, repo.Owner+"/"+repo.Name) {
-				return fmt.Errorf("%w: grounded repository does not match configured source", ErrRemediationInconclusive)
+				return inconclusive("grounded repository does not match configured source", nil)
 			}
 			revision = sourceRevision
 		}
@@ -487,16 +526,17 @@ func (s *Service) verifyRemediationProposal(ctx context.Context, subject *Action
 	} else if subject.Build != nil && subject.Build.Failure.AIAnalysis != nil {
 		source, ok := ai.ResolveBuildSource(subject.Build.Build, repo.Owner, repo.Name)
 		if !ok {
-			return fmt.Errorf("%w: build source repository revision could not be resolved", ErrRemediationInconclusive)
+			return inconclusive("build source repository revision could not be resolved", nil)
 		}
 		revision, proposal = source.Revision, subject.Build.Failure.AIAnalysis.SuggestedFix
 		files = verifiedSourceFiles(subject.Build.Failure.AIAnalysis.FileLinks, repo.Owner, repo.Name, revision)
 	}
 	if strings.TrimSpace(override) != "" {
 		proposal = override
+		targets = nil
 	}
 	if !regexp.MustCompile(`^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$`).MatchString(strings.TrimSpace(revision)) {
-		return fmt.Errorf("%w: source revision is not an immutable full commit", ErrRemediationInconclusive)
+		return inconclusive("source revision is not an immutable full commit", nil)
 	}
 	revision = strings.ToLower(revision)
 	slices.Sort(files)
@@ -504,11 +544,14 @@ func (s *Service) verifyRemediationProposal(ctx context.Context, subject *Action
 	rawReader := ai.NewGitHubRepoReader(repo.Owner, repo.Name, revision, s.ai.SourceToken)
 	reader, ok := rawReader.(actionverify.Reader)
 	if !ok {
-		return fmt.Errorf("%w: pinned source archive reader is unavailable", ErrRemediationInconclusive)
+		return inconclusive("pinned source archive reader is unavailable", nil)
 	}
-	result, err := s.sourceVerifier(ctx, reader, actionverify.Input{Proposal: proposal, RelevantFiles: files})
+	result, err := s.sourceVerifier(ctx, reader, actionverify.Input{Proposal: proposal, RelevantFiles: files, Targets: targets})
 	if err != nil {
-		return fmt.Errorf("%w: pinned source could not be checked: %w", ErrRemediationInconclusive, err)
+		return inconclusive("pinned source could not be checked", err)
+	}
+	if err := s.setRequestVerification(ctx, result.State, result.Reason); err != nil {
+		return fmt.Errorf("%w: source verification result could not be persisted: %v", ErrRemediationInconclusive, err)
 	}
 	switch result.State {
 	case actionverify.StateUnresolved:
@@ -630,6 +673,9 @@ func (s *Service) generateIssuePreview(ctx context.Context, failureID, userToken
 	if err := s.verifyOptionalRemediation(ctx, subject, instruction); err != nil {
 		return PreviewResult{}, nil, err
 	}
+	if err := s.setRequestStage(ctx, RequestStageDrafting); err != nil {
+		return PreviewResult{}, nil, err
+	}
 	var spec issues.IssueSpec
 	var targetRepo string
 	if subject.Kind == actionSubjectPattern {
@@ -719,6 +765,9 @@ func (s *Service) generateFixPreview(ctx context.Context, failureID, userToken, 
 	if subject.Kind == actionSubjectPattern {
 		return s.generateFixPreviewForPattern(ctx, *subject.Pattern, userToken, instruction, nil)
 	}
+	if err := s.setRequestStage(ctx, RequestStageDrafting); err != nil {
+		return PreviewResult{}, nil, err
+	}
 	eff := s.cfg.EffectiveFixPRs()
 	if eff.Repo == nil {
 		return PreviewResult{}, nil, fmt.Errorf("no source repo resolved (set ai.fix_prs.repo or branding.source_repo)")
@@ -756,6 +805,9 @@ func (s *Service) generateFixPreviewForPattern(
 	if generationContext != nil {
 		if generationContext.ProposedRevision != nil {
 			verificationPattern.SuggestedFix = generationContext.ProposedRevision.SuggestedFix
+			if strings.TrimSpace(verificationPattern.SuggestedFix) != strings.TrimSpace(pattern.SuggestedFix) {
+				verificationPattern.RemediationTargets = []models.RemediationTarget{{Intent: models.RemediationIntentInvestigate}}
+			}
 		}
 		if generationContext.Source != nil {
 			repo := s.cfg.EffectiveAnalysisSourceRepo()
@@ -772,6 +824,9 @@ func (s *Service) generateFixPreviewForPattern(
 		return PreviewResult{}, nil, err
 	}
 	if err := s.verifyOptionalRemediation(ctx, subject, instruction); err != nil {
+		return PreviewResult{}, nil, err
+	}
+	if err := s.setRequestStage(ctx, RequestStageDrafting); err != nil {
 		return PreviewResult{}, nil, err
 	}
 	mgr, err := s.buildFixManager(ctx, userToken)
@@ -791,11 +846,19 @@ func (s *Service) generateFixPreviewForPattern(
 		return PreviewResult{}, nil, err
 	}
 	return PreviewResult{
-			Kind: gfKind, Title: gf.Title, Body: gf.Description, Diff: gf.Preview.Diff,
-			VerifyStatus: string(gf.Preview.Verify.Status), VerifySummary: gf.Preview.Verify.Summary,
-			VerifyOutput: gf.Preview.Verify.Output,
-		}, &previewEntry{failureID: pattern.ID, patternHash: pattern.ContentHash, kind: gfKind, targetRepo: s.cfg.EffectiveFixPRs().Repo.Owner + "/" + s.cfg.EffectiveFixPRs().Repo.Name,
-			targetConfig: fixTargetFingerprint(s.cfg.EffectiveFixPRs()), fix: gf}, nil
+		Kind: gfKind, Title: gf.Title, Body: gf.Description, Diff: gf.Preview.Diff,
+		VerifyStatus: string(gf.Preview.Verify.Status), VerifySummary: gf.Preview.Verify.Summary,
+		VerifyOutput: gf.Preview.Verify.Output,
+	}, s.patternFixPreviewEntry(pattern, gf), nil
+}
+
+func (s *Service) patternFixPreviewEntry(pattern models.PatternAnalysis, fix *fixpr.GeneratedFix) *previewEntry {
+	eff := s.cfg.EffectiveFixPRs()
+	return &previewEntry{
+		failureID: pattern.ID, patternHash: pattern.ContentHash, kind: gfKind,
+		targetRepo: eff.Repo.Owner + "/" + eff.Repo.Name, targetConfig: fixTargetFingerprint(eff),
+		verificationVersion: sourceVerificationVersion, fix: fix,
+	}
 }
 
 func safeFixPreviewError(err error) error {

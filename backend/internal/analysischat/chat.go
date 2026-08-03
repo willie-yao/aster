@@ -953,6 +953,7 @@ func clonePatternAnalyses(patterns []models.PatternAnalysis) []models.PatternAna
 	out := slices.Clone(patterns)
 	for i := range out {
 		out[i].SharedBuilds = slices.Clone(out[i].SharedBuilds)
+		out[i].RemediationTargets = slices.Clone(out[i].RemediationTargets)
 		out[i].RelevantFiles = slices.Clone(out[i].RelevantFiles)
 	}
 	return out

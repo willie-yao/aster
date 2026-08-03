@@ -37,11 +37,16 @@ import type {
 } from "../types/actions";
 import {
   actionErrorMessage,
+  actionRequestHasBlockingVerification,
   actionRequestCanConfirm,
   actionRequestIsActive,
   actionRequestIsPollable,
   actionRequestIsRecoverable,
   actionRequestStorageOwner,
+  actionRequestProgressDetail,
+  actionRequestProgressTitle,
+  actionRequestVerificationDetail,
+  actionRequestVerificationTitle,
   cancelActionRequest,
   loadLatestActionRequest,
   readStoredActionRequestID,
@@ -53,6 +58,7 @@ function requestedAction(value: string | null): Action | null {
 }
 
 function requestStateError(request: ActionRequest): string | null {
+  if (actionRequestHasBlockingVerification(request)) return null;
   if (request.status === "failed" && !request.warning) {
     return request.error || "Draft generation failed.";
   }
@@ -608,6 +614,12 @@ export function FailureActions({ failureID, resolvable = true }: { failureID: st
 
   const isFix = action === "propose-fix";
   const isResolved = !!resolved.resolved[failureID];
+  const verificationTitle = request
+    ? actionRequestVerificationTitle(request)
+    : null;
+  const verificationDetail = request
+    ? actionRequestVerificationDetail(request)
+    : null;
 
   return (
     <Box>
@@ -820,12 +832,10 @@ export function FailureActions({ failureID, resolvable = true }: { failureID: st
                 <CircularProgress size={20} />
                 <Box>
                   <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                    {isFix ? "Generating the fix proposal" : "Preparing the issue draft"}
+                    {actionRequestProgressTitle(request, isFix)}
                   </Typography>
                   <Typography variant="body2" color="text.secondary">
-                    Generation continues in the background. You can close this
-                    dialog. If draft-ready email is configured, you can also
-                    return from the email.
+                    {actionRequestProgressDetail(request)}
                   </Typography>
                 </Box>
               </Stack>
@@ -877,6 +887,26 @@ export function FailureActions({ failureID, resolvable = true }: { failureID: st
               sx={{ mb: 2, borderRadius: "10px" }}
             >
               <Typography variant="body2">{error}</Typography>
+            </Alert>
+          )}
+          {request && verificationTitle && request.status !== "pending" && (
+            <Alert
+              severity={
+                request.verification?.state === "unresolved"
+                  ? "success"
+                  : request.verification?.state === "already_present"
+                    ? "info"
+                    : "warning"
+              }
+              variant="outlined"
+              sx={{ mb: 2, borderRadius: "10px" }}
+            >
+              <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                {verificationTitle}
+              </Typography>
+              <Typography variant="body2">
+                {verificationDetail}
+              </Typography>
             </Alert>
           )}
           {request?.warning && (

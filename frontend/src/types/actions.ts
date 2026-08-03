@@ -10,6 +10,13 @@ export type RequestStatus =
   | "cancelled"
   | "expired";
 
+export type RequestStage = "verifying_remediation" | "drafting";
+
+export interface ActionVerification {
+  state: "unresolved" | "already_present" | "inconclusive";
+  reason: string;
+}
+
 export interface ActionPreview {
   kind: "issue" | "fix";
   title: string;
@@ -26,6 +33,8 @@ export interface ActionRequest {
   kind: Action;
   owner: string;
   status: RequestStatus;
+  stage?: RequestStage;
+  verification?: ActionVerification;
   created_at: string;
   updated_at: string;
   expires_at: string;

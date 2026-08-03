@@ -134,6 +134,7 @@ func TestAnalyzePattern_GroundedToolLoop(t *testing.T) {
 	verdict := `{"systemic":true,"confidence":"high","shared_root_cause":"azl3 etcd-join deadlock",` +
 		`"shared_builds":["abuild","bbuild"],` +
 		`"suggested_fix":"Raise the timeout in templates/cluster-template-azure-linux.yaml or test/e2e/azure_test.go.",` +
+		`"remediation_targets":[{"intent":"investigate"}],` +
 		`"summary":"most builds share the cause"}`
 	srv.push(200, chatRespFinal(verdict))
 

@@ -42,6 +42,12 @@ const (
 	RequestExpired    = "expired"
 )
 
+const (
+	RequestStageVerifying     = "verifying_remediation"
+	RequestStageDrafting      = "drafting"
+	actionRequestStateVersion = 5
+)
+
 const draftRefinementWarning = "The revised draft could not be generated or did not pass safety validation. The safe fallback draft is shown below, but this replacement request cannot be confirmed."
 
 var ErrRequestNotFound = errors.New("action request not found")
@@ -49,23 +55,31 @@ var ErrRequestNotFound = errors.New("action request not found")
 // RequestReadyNotifier sends a draft-ready notification after async generation.
 type RequestReadyNotifier func(context.Context, ActionRequestView) error
 
+// ActionVerificationView reports the deterministic pinned-source preflight.
+type ActionVerificationView struct {
+	State  string `json:"state"`
+	Reason string `json:"reason"`
+}
+
 // ActionRequestView is the API-safe representation of a persisted request.
 type ActionRequestView struct {
-	ID           string         `json:"id"`
-	FailureID    string         `json:"failure_id"`
-	PatternHash  string         `json:"pattern_hash,omitempty"`
-	Kind         string         `json:"kind"`
-	Owner        string         `json:"owner"`
-	Status       string         `json:"status"`
-	CreatedAt    string         `json:"created_at"`
-	UpdatedAt    string         `json:"updated_at"`
-	ExpiresAt    string         `json:"expires_at"`
-	Error        string         `json:"error,omitempty"`
-	Warning      string         `json:"warning,omitempty"`
-	ResultURL    string         `json:"result_url,omitempty"`
-	SupersededBy string         `json:"superseded_by,omitempty"`
-	Preview      *PreviewResult `json:"preview,omitempty"`
-	EmailSent    bool           `json:"email_sent,omitempty"`
+	ID           string                  `json:"id"`
+	FailureID    string                  `json:"failure_id"`
+	PatternHash  string                  `json:"pattern_hash,omitempty"`
+	Kind         string                  `json:"kind"`
+	Owner        string                  `json:"owner"`
+	Status       string                  `json:"status"`
+	Stage        string                  `json:"stage,omitempty"`
+	Verification *ActionVerificationView `json:"verification,omitempty"`
+	CreatedAt    string                  `json:"created_at"`
+	UpdatedAt    string                  `json:"updated_at"`
+	ExpiresAt    string                  `json:"expires_at"`
+	Error        string                  `json:"error,omitempty"`
+	Warning      string                  `json:"warning,omitempty"`
+	ResultURL    string                  `json:"result_url,omitempty"`
+	SupersededBy string                  `json:"superseded_by,omitempty"`
+	Preview      *PreviewResult          `json:"preview,omitempty"`
+	EmailSent    bool                    `json:"email_sent,omitempty"`
 }
 
 type actionCleanupState struct {
@@ -110,6 +124,48 @@ func actionRequestID(ctx context.Context) string {
 	return id
 }
 
+func (s *Service) setRequestVerification(ctx context.Context, state, reason string) error {
+	id := actionRequestID(ctx)
+	if id == "" {
+		return nil
+	}
+	s.rmu.Lock()
+	defer s.rmu.Unlock()
+	request := s.requests.Requests[id]
+	if request == nil || request.Status != RequestPending {
+		return nil
+	}
+	previous, previousUpdatedAt := request.Verification, request.UpdatedAt
+	request.Verification = &ActionVerificationView{State: state, Reason: reason}
+	request.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	if err := s.saveRequestsLocked(); err != nil {
+		request.Verification, request.UpdatedAt = previous, previousUpdatedAt
+		return err
+	}
+	return nil
+}
+
+func (s *Service) setRequestStage(ctx context.Context, stage string) error {
+	id := actionRequestID(ctx)
+	if id == "" {
+		return nil
+	}
+	s.rmu.Lock()
+	defer s.rmu.Unlock()
+	request := s.requests.Requests[id]
+	if request == nil || request.Status != RequestPending || request.Stage == stage {
+		return nil
+	}
+	previous, previousUpdatedAt := request.Stage, request.UpdatedAt
+	request.Stage = stage
+	request.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	if err := s.saveRequestsLocked(); err != nil {
+		request.Stage, request.UpdatedAt = previous, previousUpdatedAt
+		return err
+	}
+	return nil
+}
+
 func (s *Service) observeRuntimeWork(id string) runtime.WorkObserver {
 	return func(_ context.Context, work runtime.WorkRef) error {
 		s.rmu.Lock()
@@ -131,15 +187,15 @@ func (s *Service) observeRuntimeWork(id string) runtime.WorkObserver {
 }
 
 func (s *Service) loadActionRequests() {
-	state := &actionRequestState{Version: 4, Requests: map[string]*actionRequest{}}
+	state := &actionRequestState{Version: actionRequestStateVersion, Requests: map[string]*actionRequest{}}
 	data, err := os.ReadFile(s.requestStatePath())
 	if err == nil {
 		if err := json.Unmarshal(data, state); err != nil {
 			log.Printf("Warning: failed to parse action request state: %v", err)
-			state = &actionRequestState{Version: 4, Requests: map[string]*actionRequest{}}
+			state = &actionRequestState{Version: actionRequestStateVersion, Requests: map[string]*actionRequest{}}
 		}
 	}
-	migrated := state.Version != 4
+	migrated := state.Version != actionRequestStateVersion
 	if state.Version == 1 {
 		for _, request := range state.Requests {
 			if request != nil && request.Status == RequestReady && request.PatternHash == "" {
@@ -163,6 +219,18 @@ func (s *Service) loadActionRequests() {
 			}
 		}
 		state.Version = 4
+	}
+	if state.Version == 4 {
+		for _, request := range state.Requests {
+			if request != nil && request.Status == RequestReady && request.VerificationVersion != sourceVerificationVersion {
+				request.Status = RequestFailed
+				request.Error = "saved preview requires regeneration after source verification upgrade"
+				request.Preview = nil
+				request.Issue = nil
+				request.Fix = nil
+			}
+		}
+		state.Version = actionRequestStateVersion
 	}
 	if state.Requests == nil {
 		state.Requests = map[string]*actionRequest{}
@@ -680,7 +748,7 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 	now := time.Now().UTC()
 	request := &actionRequest{ActionRequestView: ActionRequestView{
 		ID: id, FailureID: failureID, Kind: kind, Owner: owner,
-		Status: RequestPending, CreatedAt: now.Format(time.RFC3339),
+		Status: RequestPending, Stage: RequestStageVerifying, CreatedAt: now.Format(time.RFC3339),
 		UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(actionRequestTTL).Format(time.RFC3339),
 	}, Instruction: strings.TrimSpace(instruction)}
 	supersedesID = strings.TrimSpace(supersedesID)

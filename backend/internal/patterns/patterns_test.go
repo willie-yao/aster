@@ -244,7 +244,7 @@ func TestAnalyzeDoesNotRerunSuccessfulJobWhenAnotherFails(t *testing.T) {
 }
 
 func validPatternResult(builds ...string) string {
-	return fmt.Sprintf(`{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":%s,"suggested_fix":"update configuration","summary":"shared failure"}`,
+	return fmt.Sprintf(`{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":%s,"suggested_fix":"update configuration","remediation_targets":[{"intent":"investigate"}],"summary":"shared failure"}`,
 		mustJSON(builds))
 }
 

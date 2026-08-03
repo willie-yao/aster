@@ -211,10 +211,23 @@ export interface PatternAnalysis {
   shared_root_cause?: string;
   shared_builds?: string[];
   suggested_fix?: string;
+  remediation_targets?: RemediationTarget[];
   relevant_files?: string[];
   file_links?: Record<string, string>;
   source_ref?: string;
   summary: string;
+}
+
+export interface RemediationTarget {
+  intent:
+    | "add_symbol"
+    | "modify_symbol"
+    | "set_configuration"
+    | "remove_configuration"
+    | "investigate";
+  symbol?: string;
+  path?: string;
+  value?: string;
 }
 
 export interface JobDetail {
