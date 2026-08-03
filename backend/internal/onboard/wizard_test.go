@@ -397,6 +397,29 @@ func TestRun_InteractiveAndFlaggedInputsGenerateSameFiles(t *testing.T) {
 	}
 }
 
+func TestRun_K8sInteractiveAndFlaggedInputsGenerateSameFiles(t *testing.T) {
+	wizardInput := strings.Join([]string{"", "2", "", "", "", "", "n", "", "y"}, "\n") + "\n"
+	wizardDeps, _, wizardWriter, _ := wizardDependencies(wizardInput)
+	if err := run(context.Background(), Options{SourceRepo: "example/project", EngineRef: "main", NoPrompt: true}, wizardDeps); err != nil {
+		t.Fatalf("wizard run: %v", err)
+	}
+
+	flaggedDeps, _, flaggedWriter, _ := wizardDependencies("")
+	flaggedDeps.terminal.Interactive = false
+	disabled := false
+	flagged := Options{
+		TestGrid: "dashboard-a", DashboardRepo: "example/project-prow-ai-dashboard",
+		SourceRepo: "example/project", Mode: modeK8s, ID: "project", Name: "Project",
+		EngineRef: "main", OutDir: "project-prow-ai-dashboard", NoPrompt: true, AIEnabled: &disabled,
+	}
+	if err := run(context.Background(), flagged, flaggedDeps); err != nil {
+		t.Fatalf("flagged run: %v", err)
+	}
+	if !reflect.DeepEqual(wizardWriter.files, flaggedWriter.files) {
+		t.Fatalf("wizard and flagged Kubernetes files differ\nwizard=%v\nflagged=%v", wizardWriter.files, flaggedWriter.files)
+	}
+}
+
 func TestBuildPlan_DoesNotContainTokens(t *testing.T) {
 	deps, _, _, _ := wizardDependencies("")
 	opts := Options{

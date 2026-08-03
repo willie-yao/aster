@@ -148,10 +148,16 @@ deploy/README.md
 ```
 
 The `skills/` directory is optional unless `project.yaml` requires consumer
-recipes. When AI is enabled, generated values reference the predictable
-`<release>-ai` Kubernetes Secret and key `AI_TOKEN`. Create that Secret with
-your normal secret manager before installation. The wizard never writes its
-value.
+recipes. The generated values keep common watch-mode, persistence, provider,
+fetch, runtime, and service settings active. Optional cron, Orka, authentication,
+ingress, NetworkPolicy, resource, and scheduling settings remain commented so
+they are discoverable without pinning chart defaults. The generated header links
+to the complete values for the selected engine reference and includes a
+`helm show values` command for published charts.
+
+When AI is enabled, generated values reference the predictable `<release>-ai`
+Kubernetes Secret and key `AI_TOKEN`. Create that Secret with your normal secret
+manager before installation. The wizard never writes its value.
 
 The wizard generates files only. It does not install Helm releases, write
 Kubernetes Secrets, configure ingress or DNS, or inspect a cluster. From an

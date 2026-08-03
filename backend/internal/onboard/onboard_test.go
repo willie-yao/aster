@@ -507,12 +507,17 @@ func TestScaffold_K8sStaysFocused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"mode: watch", "dashboard-owned analyzer", "global:\n  imageTag: \"\"", "existingSecret: \"my-proj-ai\"", "Kubernetes Secret", "--chart-version <chart-version>"} {
+	for _, want := range []string{
+		"mode: watch", "type: inprocess", "imageTag: \"\"", "existingSecret: \"my-proj-ai\"",
+		"# schedule:", "# orkaContainer:", "chat:\n    enabled: false", "actions:\n    enabled: false",
+		"Active values are common settings", "`mode: cron`", "separately installed", "authentication and secure origin",
+		"helm show values", "blob/main/deploy/helm/prow-ai-dashboard/values.yaml", "Kubernetes Secret", "--chart-version <chart-version>",
+	} {
 		if !strings.Contains(values+readme, want) {
 			t.Errorf("Kubernetes scaffold missing %q:\n%s\n%s", want, values, readme)
 		}
 	}
-	for _, unwanted := range []string{"EMAIL_SMTP_PASSWORD", "server.actions", "--set ai.token", "ISSUE_TOKEN", "FIX_TOKEN"} {
+	for _, unwanted := range []string{"EMAIL_SMTP_PASSWORD", "--set ai.token", "ISSUE_TOKEN", "FIX_TOKEN", "clientSecret:", "sessionKey:", "botToken:"} {
 		if strings.Contains(values+readme, unwanted) {
 			t.Errorf("Kubernetes scaffold includes optional feature %q:\n%s\n%s", unwanted, values, readme)
 		}
