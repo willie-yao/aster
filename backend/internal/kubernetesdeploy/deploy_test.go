@@ -155,7 +155,7 @@ func TestRunBuildsUpgradeInstallArguments(t *testing.T) {
 	got := runner.commands[1]
 	want := []string{
 		"upgrade", "--install", "capz", "./chart",
-		"--namespace", "capz-dynamo", "--create-namespace", "--kube-context", "h100", "--reuse-values",
+		"--namespace", "capz-dynamo", "--create-namespace", "--kube-context", "h100", "--reset-then-reuse-values",
 		"--version", "1.2.3",
 		"--values", filepath.Join(dir, "deploy", "values.yaml"),
 		"--set-string", "project.existingConfigMap=",
@@ -177,8 +177,10 @@ func TestRunInstallDoesNotReuseMissingReleaseValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	args := runner.commands[1].args
-	if slicesContain(args, "--reuse-values") {
-		t.Fatalf("fresh install unexpectedly reuses release values: %q", args)
+	for _, mergeFlag := range []string{"--reuse-values", "--reset-then-reuse-values"} {
+		if slicesContain(args, mergeFlag) {
+			t.Fatalf("fresh install unexpectedly uses %s: %q", mergeFlag, args)
+		}
 	}
 	if !containsPair(args, "--wait", "--rollback-on-failure") {
 		t.Fatalf("fresh install is not rollback guarded: %q", args)

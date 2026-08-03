@@ -15,11 +15,12 @@ command runs the real job sweep, renders and validates the scaffold in memory,
 and writes nothing before interactive confirmation. `-dry-run` performs the same
 checks without writing files.
 
-The generated values contain only the storage class, model connection, AI
-enablement, and a safe fetch timeout. The wizard does not install Helm releases,
-write Kubernetes Secrets, inspect a cluster, or configure ingress and DNS. The
-rest of this guide is an operator reference for production settings and optional
-features.
+The generated values are a curated starting configuration. Common consumer-owned
+settings are active, while cron scheduling, Orka, authenticated features,
+ingress, NetworkPolicy, and pod placement are documented as commented examples.
+Comments do not pin the chart defaults. The wizard does not install Helm
+releases, write Kubernetes Secrets, inspect a cluster, or configure ingress and
+DNS. The rest of this guide is the complete operator reference.
 
 ## Why run in-cluster
 
@@ -526,13 +527,19 @@ deploy/values.yaml
 
 The `skills/` directory is optional unless `ai.consumer_skills` requires it.
 The `onboard -mode k8s` subcommand scaffolds this layout and a focused deployment
-guide. See [Onboarding a project](onboarding-a-new-project.md).
+guide. Its `deploy/values.yaml` keeps common, safe settings active and leaves
+optional or advanced settings commented so chart-default improvements still
+apply. The generated header links to the complete values at the selected engine
+reference and shows how to run `helm show values` for a published chart. See
+[Onboarding a project](onboarding-a-new-project.md).
 
 The supported wrapper is part of the `fetcher` binary. From an engine checkout,
 run `make build` to create `bin/fetcher`. The wrapper defaults to the published
 OCI chart. Use `--chart deploy/helm/prow-ai-dashboard` when testing a local chart
 change. Live installs and upgrades require Helm 4 so failed changes can use
-`--rollback-on-failure`.
+`--rollback-on-failure`. Upgrades use `--reset-then-reuse-values`: the new chart
+defaults apply first, then the last user-supplied values and current consumer
+values are layered on top.
 
 Before deploying, run `fetcher onboard doctor -project-dir <dir>` when you also
 want the persistence, provider, credential-source, and Prow discovery checks.
