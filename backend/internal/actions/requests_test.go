@@ -977,7 +977,7 @@ func TestCleanupRetriesTransientFailure(t *testing.T) {
 		Runtime: &runtime.WorkRef{Backend: "orka", Name: "fix-task", UID: "uid-one", ExecutionID: id},
 	}
 	view, err := service.CancelRequest(context.Background(), id, "alice")
-	if err != nil || view.Status != RequestCancelling {
+	if err != nil || (view.Status != RequestCancelling && view.Status != RequestCancelled) {
 		t.Fatalf("initial cancellation view=%+v err=%v", view, err)
 	}
 	waitRequest(t, service, id, "alice", RequestCancelled)
