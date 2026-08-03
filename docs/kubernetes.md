@@ -18,9 +18,12 @@ checks without writing files.
 The generated values are a curated starting configuration. Common consumer-owned
 settings are active, while cron scheduling, Orka, authenticated features,
 ingress, NetworkPolicy, and pod placement are documented as commented examples.
-Comments do not pin the chart defaults. The wizard does not install Helm
-releases, write Kubernetes Secrets, inspect a cluster, or configure ingress and
-DNS. The rest of this guide is the complete operator reference.
+Comments do not pin the chart defaults. The generated header also points YAML
+editors at the schema from the selected engine reference. If the installed chart
+version differs, use the schema that ships with that chart version. The wizard
+does not install Helm releases, write Kubernetes Secrets, inspect a cluster, or
+configure ingress and DNS. The rest of this guide is the complete operator
+reference.
 
 ## Why run in-cluster
 
@@ -530,8 +533,12 @@ The `onboard -mode k8s` subcommand scaffolds this layout and a focused deploymen
 guide. Its `deploy/values.yaml` keeps common, safe settings active and leaves
 optional or advanced settings commented so chart-default improvements still
 apply. The generated header links to the complete values at the selected engine
-reference and shows how to run `helm show values` for a published chart. See
-[Onboarding a project](onboarding-a-new-project.md).
+reference, links compatible YAML editors to `values.schema.json`, and shows how
+to run `helm show values` for a published chart. Helm validates supplied values
+against the chart schema before rendering. The full commented `values.yaml`
+remains the human-readable reference. Check unknown or advanced fields against
+the schema and values from the chart version being installed. See [Onboarding a
+project](onboarding-a-new-project.md).
 
 The supported wrapper is part of the `fetcher` binary. From an engine checkout,
 run `make build` to create `bin/fetcher`. The wrapper defaults to the published

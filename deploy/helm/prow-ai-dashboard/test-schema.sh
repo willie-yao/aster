@@ -1,0 +1,265 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
+chart="$root/deploy/helm/prow-ai-dashboard"
+generated="$root/backend/internal/onboard/testdata/k8s-values.golden.yaml"
+tmp="${TMPDIR:-/tmp}/prow-ai-dashboard-schema-$$"
+mkdir -p "$tmp"
+trap 'rm -rf "$tmp"' EXIT
+
+cat > "$tmp/base.yaml" <<'VALUES'
+project:
+  config: |
+    id: schema-test
+    name: Schema Test
+    testgrid:
+      dashboard: schema-test
+    storage:
+      provider: local
+      base: /tmp
+    branding:
+      title: Schema Test
+      base_path: /
+      site_url: https://schema.example.test
+      source_repo:
+        owner: example
+        name: project
+  systemPrompt: schema test prompt
+VALUES
+
+expect_pass() {
+  local name=$1 values=$2
+  if ! helm lint "$chart" -f "$tmp/base.yaml" -f "$values" > "$tmp/$name.out" 2>&1; then
+    cat "$tmp/$name.out" >&2
+    echo "schema rejected valid values: $name" >&2
+    exit 1
+  fi
+}
+
+expect_fail() {
+  local name=$1 values=$2 path=$3
+  if helm lint "$chart" -f "$tmp/base.yaml" -f "$values" > "$tmp/$name.out" 2>&1; then
+    echo "schema accepted invalid values: $name" >&2
+    exit 1
+  fi
+  grep -Fq "values don't meet the specifications of the schema" "$tmp/$name.out"
+  grep -Fq "$path" "$tmp/$name.out"
+}
+
+# The complete chart defaults must satisfy the schema before template validation.
+helm lint "$chart" > "$tmp/default.out" 2>&1
+
+# The onboarding scaffold is a supported chart values subset.
+expect_pass generated "$generated"
+
+cat > "$tmp/watch.yaml" <<'VALUES'
+mode: watch
+fetcher:
+  watchInterval: 2m
+  reconcileInterval: 30m
+  suspend: true
+VALUES
+expect_pass watch "$tmp/watch.yaml"
+
+cat > "$tmp/cron.yaml" <<'VALUES'
+mode: cron
+fetcher:
+  schedule: "15 */4 * * *"
+  concurrencyPolicy: Forbid
+  suspend: false
+  activeDeadlineSeconds: 7200
+  backoffLimit: 0
+  restartPolicy: Never
+VALUES
+expect_pass cron "$tmp/cron.yaml"
+
+cat > "$tmp/orka.yaml" <<'VALUES'
+mode: cron
+ai:
+  enabled: true
+  endpoint: https://model.example.test/v1/chat/completions
+  model: fixture-model
+  existingSecret: fixture-model-auth
+analysisRuntime:
+  type: orka-container
+  orkaContainer:
+    apiAuth:
+      existingSecret: fixture-orka-api
+    image:
+      tag: sha-deadbeef
+    modelAuth:
+      existingSecret: fixture-model-auth
+    nodeSelector:
+      agentpool: cpu-pool
+VALUES
+expect_pass orka "$tmp/orka.yaml"
+
+cat > "$tmp/oauth.yaml" <<'VALUES'
+ai:
+  enabled: true
+  endpoint: https://model.example.test/v1/chat/completions
+  model: fixture-model
+  existingSecret: fixture-model-auth
+server:
+  chat:
+    enabled: true
+  actions:
+    enabled: true
+    mode: oauth
+    admins:
+      - fixture-admin
+    oauth:
+      clientId: fixture-client-id
+      redirectUrl: https://dashboard.example.test/api/auth/callback
+      existingSecret: fixture-oauth-auth
+  service:
+    type: ClusterIP
+networkPolicy:
+  enabled: true
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-system
+      ports:
+        - protocol: TCP
+          port: 8080
+VALUES
+expect_pass oauth "$tmp/oauth.yaml"
+
+cat > "$tmp/flexible.yaml" <<'VALUES'
+imagePullSecrets:
+  - name: fixture-pull
+project:
+  skills:
+    fixture.yaml: |
+      id: fixture
+      triggers: [failure]
+fetcher:
+  extraEnv:
+    - name: FIXTURE_ENV
+      valueFrom:
+        secretKeyRef:
+          name: fixture-env
+          key: value
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+  nodeSelector:
+    example.com/pool: cpu
+  tolerations:
+    - key: dedicated
+      operator: Equal
+      value: dashboard
+      effect: NoSchedule
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution: []
+server:
+  resources:
+    limits:
+      cpu: "1"
+  nodeSelector:
+    example.com/pool: web
+  tolerations:
+    - operator: Exists
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution: []
+  service:
+    annotations:
+      example.com/exposure: internal
+    internal:
+      annotations:
+        example.com/load-balancer: private
+ingress:
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: 4m
+networkPolicy:
+  enabled: true
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchExpressions:
+              - key: kubernetes.io/metadata.name
+                operator: In
+                values: [ingress-system]
+      ports:
+        - protocol: TCP
+          port: 8080
+podSecurityContext:
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  seccompProfile:
+    type: RuntimeDefault
+VALUES
+expect_pass flexible "$tmp/flexible.yaml"
+
+cat > "$tmp/invalid-mode.yaml" <<'VALUES'
+mode: continuous
+VALUES
+expect_fail invalid-mode "$tmp/invalid-mode.yaml" /mode
+
+cat > "$tmp/invalid-runtime.yaml" <<'VALUES'
+analysisRuntime:
+  type: remote
+VALUES
+expect_fail invalid-runtime "$tmp/invalid-runtime.yaml" /analysisRuntime/type
+
+cat > "$tmp/invalid-api.yaml" <<'VALUES'
+ai:
+  api: completions
+VALUES
+expect_fail invalid-api "$tmp/invalid-api.yaml" /ai/api
+
+cat > "$tmp/invalid-actions.yaml" <<'VALUES'
+server:
+  actions:
+    mode: basic
+VALUES
+expect_fail invalid-actions "$tmp/invalid-actions.yaml" /server/actions/mode
+
+cat > "$tmp/invalid-type.yaml" <<'VALUES'
+fetcher:
+  workers: "five"
+VALUES
+expect_fail invalid-type "$tmp/invalid-type.yaml" /fetcher/workers
+
+cat > "$tmp/invalid-top-level.yaml" <<'VALUES'
+fetching:
+  workers: 5
+VALUES
+expect_fail invalid-top-level "$tmp/invalid-top-level.yaml" fetching
+
+cat > "$tmp/invalid-fixed-key.yaml" <<'VALUES'
+server:
+  service:
+    exposure: private
+VALUES
+expect_fail invalid-fixed-key "$tmp/invalid-fixed-key.yaml" /server/service
+
+cat > "$tmp/invalid-oauth-key.yaml" <<'VALUES'
+server:
+  actions:
+    oauth:
+      audience: fixture
+VALUES
+expect_fail invalid-oauth-key "$tmp/invalid-oauth-key.yaml" /server/actions/oauth
+
+cat > "$tmp/invalid-service.yaml" <<'VALUES'
+server:
+  service:
+    type: ExternalName
+VALUES
+expect_fail invalid-service "$tmp/invalid-service.yaml" /server/service/type
+
+cat > "$tmp/invalid-access-mode.yaml" <<'VALUES'
+persistence:
+  accessMode: ReadWriteOnce
+VALUES
+expect_fail invalid-access-mode "$tmp/invalid-access-mode.yaml" /persistence/accessMode
+
+echo 'Helm values schema checks passed.'
