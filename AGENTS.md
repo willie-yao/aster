@@ -356,8 +356,10 @@ live deploy.
   completions + function calling) and per-provider notes
   (Copilot, OpenAI, Nvidia Dynamo/NIM, vLLM, Ollama, ...).
 - `docs/server.md` - server mode endpoints and the capability seam.
-- `docs/kubernetes.md` - Kubernetes-native deploy: fetcher CronJob + server
-  from a shared volume, via the Helm chart in `deploy/helm`.
+- `docs/kubernetes.md` - first-run Kubernetes deployment quickstart.
+- `docs/kubernetes-reference.md` - architecture, modes, chart values, upgrades,
+  and advanced Kubernetes operations.
+- `docs/orka.md` - optional separate Orka installation and runtime integration.
 
 ## When in doubt
 
