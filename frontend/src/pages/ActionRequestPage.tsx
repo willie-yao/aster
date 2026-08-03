@@ -103,7 +103,11 @@ export function ActionRequestPage() {
         }
         retryCount = 0;
         setRequest(value);
-        setError(value.status === "failed" ? value.error || "Draft generation failed." : null);
+        setError(
+          value.status === "failed" && !value.warning
+            ? value.error || "Draft generation failed."
+            : null,
+        );
         if (value.status === "pending") timer = window.setTimeout(load, 2000);
       } catch (e) {
         if (cancelled) return;
@@ -332,6 +336,11 @@ export function ActionRequestPage() {
               {error}
             </Alert>
           )}
+          {request.warning && (
+            <Alert severity="warning" variant="outlined" sx={{ mb: 2 }}>
+              {request.warning}
+            </Alert>
+          )}
 
           {request.status === "pending" && (
             <Box
@@ -388,7 +397,10 @@ export function ActionRequestPage() {
             </Alert>
           )}
 
-          {preview && (request.status === "ready" || request.status === "unknown") && (
+          {preview &&
+            (request.status === "ready" ||
+              request.status === "unknown" ||
+              (request.status === "failed" && Boolean(request.warning))) && (
             <Stack spacing={2.5}>
               <ActionDraftPreview preview={preview} />
               {request.status === "ready" && <Box>

@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 )
 
 // contentsServer serves the GitHub contents API for a fixed file/dir set.
@@ -118,8 +120,11 @@ type fakeCompleter struct {
 	err  error
 }
 
-func (f fakeCompleter) Complete(context.Context, string, string) (string, error) {
-	return f.resp, f.err
+func (f fakeCompleter) CompleteStructured(_ context.Context, _, _ string, _ ai.ResponseFormat, validate ai.StructuredValidator) error {
+	if f.err != nil {
+		return f.err
+	}
+	return validate(json.RawMessage(f.resp))
 }
 
 func TestFillPR_Fallbacks(t *testing.T) {
@@ -129,11 +134,12 @@ func TestFillPR_Fallbacks(t *testing.T) {
 	if got := FillPR(context.Background(), fakeCompleter{err: context.DeadlineExceeded}, "tmpl", "desc"); got != "desc" {
 		t.Errorf("error did not fall back: %q", got)
 	}
-	if got := FillPR(context.Background(), fakeCompleter{resp: "**What this PR does**: fixes it"}, "tmpl", "desc"); !strings.Contains(got, "fixes it") {
+	if got := FillPR(context.Background(), fakeCompleter{resp: `{"body":"**What this PR does**: fixes it"}`}, "tmpl", "desc"); !strings.Contains(got, "fixes it") {
 		t.Errorf("fill not applied: %q", got)
 	}
-	if got := FillPR(context.Background(), fakeCompleter{resp: "```md\nfilled\n```"}, "tmpl", "desc"); strings.Contains(got, "```") {
-		t.Errorf("code fence not stripped: %q", got)
+	unsafe := `{"body":"The user wants me to revise this.\nLet me draft it.\n\n## Result\nfilled"}`
+	if got := FillPR(context.Background(), fakeCompleter{resp: unsafe}, "tmpl", "desc"); got != "desc" {
+		t.Errorf("unsafe fill did not fall back: %q", got)
 	}
 }
 
@@ -152,6 +158,15 @@ func TestFillIssue_PicksAndFills(t *testing.T) {
 	}
 	if tt, bb := FillIssue(context.Background(), fakeCompleter{resp: "not json"}, tmpls, "t", "b"); tt != "t" || bb != "b" {
 		t.Errorf("bad JSON did not fall back: %q %q", tt, bb)
+	}
+}
+
+func TestFillIssueRejectsObservedKimiReasoning(t *testing.T) {
+	tmpls := []Template{{Name: "Bug", Body: "## What happened"}}
+	raw := `{"title":"etcd join times out","body":"The user wants me to revise this issue.\nSo I need to keep the sections.\nLet me draft it.\nThis looks good.\n\n## What happened\netcd learner promotion timed out"}`
+	title, body := FillIssue(context.Background(), fakeCompleter{resp: raw}, tmpls, "safe title", "safe body")
+	if title != "safe title" || body != "safe body" {
+		t.Fatalf("unsafe output reached draft: %q / %q", title, body)
 	}
 }
 

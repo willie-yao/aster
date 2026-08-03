@@ -36,6 +36,7 @@ type FunctionDecl struct {
 	Name        string                 `json:"name"`
 	Description string                 `json:"description"`
 	Parameters  map[string]interface{} `json:"parameters"`
+	Strict      bool                   `json:"strict,omitempty"`
 }
 
 // Result is what a Tool returns from Dispatch. Payload is the inner JSON

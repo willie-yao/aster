@@ -8,10 +8,13 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actiondraft"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/issues"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/patternstate"
@@ -36,6 +39,8 @@ const (
 	RequestExpired   = "expired"
 )
 
+const draftRefinementWarning = "The revised draft could not be generated or did not pass safety validation. The safe fallback draft is shown below, but this replacement request cannot be confirmed."
+
 var ErrRequestNotFound = errors.New("action request not found")
 
 // RequestReadyNotifier sends a draft-ready notification after async generation.
@@ -53,6 +58,7 @@ type ActionRequestView struct {
 	UpdatedAt    string         `json:"updated_at"`
 	ExpiresAt    string         `json:"expires_at"`
 	Error        string         `json:"error,omitempty"`
+	Warning      string         `json:"warning,omitempty"`
 	ResultURL    string         `json:"result_url,omitempty"`
 	SupersededBy string         `json:"superseded_by,omitempty"`
 	Preview      *PreviewResult `json:"preview,omitempty"`
@@ -62,11 +68,14 @@ type ActionRequestView struct {
 
 type actionRequest struct {
 	ActionRequestView
-	Instruction  string                      `json:"instruction,omitempty"`
-	Issue        *issues.IssueSpec           `json:"issue,omitempty"`
-	Fix          *fixpr.GeneratedFixSnapshot `json:"fix,omitempty"`
-	TargetRepo   string                      `json:"target_repo,omitempty"`
-	TargetConfig string                      `json:"target_config,omitempty"`
+	Instruction     string                      `json:"instruction,omitempty"`
+	Issue           *issues.IssueSpec           `json:"issue,omitempty"`
+	Fix             *fixpr.GeneratedFixSnapshot `json:"fix,omitempty"`
+	TargetRepo      string                      `json:"target_repo,omitempty"`
+	TargetConfig    string                      `json:"target_config,omitempty"`
+	BaseIssue       *issues.IssueSpec           `json:"base_issue,omitempty"`
+	BaseTargetRepo  string                      `json:"base_target_repo,omitempty"`
+	BasePatternHash string                      `json:"base_pattern_hash,omitempty"`
 }
 
 type actionRequestState struct {
@@ -104,17 +113,115 @@ func (s *Service) loadActionRequests() {
 	changed := s.expireRequestsLocked(now)
 	nowText := now.Format(time.RFC3339)
 	for _, request := range state.Requests {
-		if request.Status == RequestPending {
+		if request.Status != RequestReady && request.Status != RequestUnknown {
+			continue
+		}
+		preview, err := validatedReadyPreview(request)
+		if err != nil {
+			if request.Status == RequestUnknown {
+				if request.Preview != nil {
+					request.Preview = nil
+					changed = true
+				}
+				continue
+			}
 			request.Status = RequestFailed
-			request.Error = "server restarted before draft generation completed"
+			request.Error = "saved draft did not pass current safety validation"
+			request.Warning = ""
+			request.Preview = nil
+			request.Issue = nil
+			request.Fix = nil
+			request.Instruction = ""
 			request.UpdatedAt = nowText
 			changed = true
+			continue
 		}
+		if !reflect.DeepEqual(request.Preview, preview) {
+			request.Preview = preview
+			changed = true
+		}
+	}
+	for _, request := range state.Requests {
+		if request.Status != RequestPending {
+			continue
+		}
+		request.Status = RequestFailed
+		if request.BaseIssue != nil {
+			entry := &previewEntry{kind: "issue", spec: *request.BaseIssue}
+			if preview, err := validatedPreviewEntry(entry); err == nil {
+				request.Warning = draftRefinementWarning
+				request.Preview = &preview
+			} else {
+				request.Error = "saved fallback draft did not pass current safety validation"
+			}
+		} else {
+			request.Error = "server restarted before draft generation completed"
+		}
+		request.BaseIssue = nil
+		request.BaseTargetRepo = ""
+		request.BasePatternHash = ""
+		request.UpdatedAt = nowText
+		changed = true
 	}
 	if changed {
 		if err := statefile.WriteJSON(s.requestStatePath(), state); err != nil {
 			log.Printf("Warning: failed to save recovered action request state: %v", err)
 		}
+	}
+}
+
+func validatedReadyPreview(request *actionRequest) (*PreviewResult, error) {
+	entry := &previewEntry{kind: request.Kind}
+	switch request.Kind {
+	case "create-issue":
+		if request.Issue == nil {
+			return nil, fmt.Errorf("ready issue request has no issue draft")
+		}
+		entry.kind = "issue"
+		entry.spec = *request.Issue
+	case "propose-fix":
+		if request.Fix == nil {
+			return nil, fmt.Errorf("ready fix request has no fix draft")
+		}
+		entry.kind = gfKind
+		entry.fix = fixpr.RestoreGeneratedFix(request.Fix)
+	default:
+		return nil, fmt.Errorf("ready request has unsupported action %q", request.Kind)
+	}
+	preview, err := validatedPreviewEntry(entry)
+	if err != nil {
+		return nil, err
+	}
+	return &preview, nil
+}
+
+func validatedPreviewEntry(entry *previewEntry) (PreviewResult, error) {
+	if entry == nil {
+		return PreviewResult{}, fmt.Errorf("preview entry is missing")
+	}
+	switch entry.kind {
+	case "issue":
+		if strings.TrimSpace(entry.spec.Key) == "" {
+			return PreviewResult{}, fmt.Errorf("issue preview key is missing")
+		}
+		body := strings.ReplaceAll(entry.spec.Body, issues.MarkerFor(entry.spec.Key), "")
+		if err := actiondraft.ValidateTitleBody(entry.spec.Title, body); err != nil {
+			return PreviewResult{}, err
+		}
+		return PreviewResult{Kind: "issue", Title: entry.spec.Title, Body: entry.spec.Body}, nil
+	case gfKind:
+		if entry.fix == nil {
+			return PreviewResult{}, fmt.Errorf("fix preview is missing")
+		}
+		if err := actiondraft.ValidateTitleBody(entry.fix.Title, entry.fix.Description); err != nil {
+			return PreviewResult{}, err
+		}
+		return PreviewResult{
+			Kind: gfKind, Title: entry.fix.Title, Body: entry.fix.Description, Diff: entry.fix.Preview.Diff,
+			VerifyStatus: string(entry.fix.Preview.Verify.Status), VerifySummary: entry.fix.Preview.Verify.Summary, VerifyOutput: entry.fix.Preview.Verify.Output,
+		}, nil
+	default:
+		return PreviewResult{}, fmt.Errorf("preview kind %q is unsupported", entry.kind)
 	}
 }
 
@@ -155,7 +262,8 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 	if kind != "create-issue" && kind != "propose-fix" {
 		return ActionRequestView{}, fmt.Errorf("unsupported action %q", kind)
 	}
-	if _, err := s.resolveSubject(failureID); err != nil {
+	subject, err := s.resolveSubject(failureID)
+	if err != nil {
 		return ActionRequestView{}, err
 	}
 
@@ -230,6 +338,17 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 		return ActionRequestView{}, fmt.Errorf("too many active action requests")
 	}
 	if superseded != nil {
+		if request.Instruction != "" && kind == "create-issue" && superseded.Kind == kind && superseded.Status == RequestReady && superseded.Issue != nil {
+			if superseded.PatternHash == "" || superseded.PatternHash != subject.ContentHash {
+				s.rmu.Unlock()
+				return ActionRequestView{}, ErrPreviewTargetChanged
+			}
+			base := *superseded.Issue
+			base.Labels = slices.Clone(base.Labels)
+			request.BaseIssue = &base
+			request.BaseTargetRepo = superseded.TargetRepo
+			request.BasePatternHash = superseded.PatternHash
+		}
 		supersededStatus = superseded.Status
 		supersededUpdatedAt = superseded.UpdatedAt
 		supersededBy = superseded.SupersededBy
@@ -259,16 +378,16 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 	return view, nil
 }
 
-type requestPreviewGenerator func(context.Context, string, string, string, string) (PreviewResult, *previewEntry, error)
+type requestPreviewGenerator func(context.Context, string, string, string, string, *issues.IssueSpec, string, string) (PreviewResult, *previewEntry, error)
 
 func (s *Service) generateRequest(id, userToken string) {
 	s.generateRequestWith(id, userToken, s.generateRequestPreview)
 }
 
-func (s *Service) generateRequestPreview(ctx context.Context, failureID, kind, userToken, instruction string) (PreviewResult, *previewEntry, error) {
+func (s *Service) generateRequestPreview(ctx context.Context, failureID, kind, userToken, instruction string, baseIssue *issues.IssueSpec, baseTargetRepo, basePatternHash string) (PreviewResult, *previewEntry, error) {
 	switch kind {
 	case "create-issue":
-		return s.generateIssuePreview(ctx, failureID, userToken, instruction)
+		return s.generateIssuePreview(ctx, failureID, userToken, instruction, baseIssue, baseTargetRepo, basePatternHash)
 	case "propose-fix":
 		return s.generateFixPreview(ctx, failureID, userToken, instruction)
 	default:
@@ -295,11 +414,28 @@ func (s *Service) generateRequestWith(id, userToken string, generate requestPrev
 		return
 	}
 	failureID, kind, instruction := request.FailureID, request.Kind, request.Instruction
+	baseTargetRepo := request.BaseTargetRepo
+	basePatternHash := request.BasePatternHash
+	var baseIssue *issues.IssueSpec
+	if request.BaseIssue != nil {
+		base := *request.BaseIssue
+		base.Labels = slices.Clone(base.Labels)
+		baseIssue = &base
+	}
 	s.rmu.Unlock()
 
-	preview, entry, err := generate(ctx, failureID, kind, userToken, instruction)
-	if err == nil {
-		err = s.validateSubjectSnapshot(failureID, entry.patternHash, entry.kind)
+	preview, entry, err := generate(ctx, failureID, kind, userToken, instruction, baseIssue, baseTargetRepo, basePatternHash)
+	fallbackPreview := errors.Is(err, ErrDraftRefinementRejected) && entry != nil
+	if err == nil || fallbackPreview {
+		if validateErr := s.validateSubjectSnapshot(failureID, entry.patternHash, entry.kind); validateErr != nil {
+			err = validateErr
+			fallbackPreview = false
+		} else if validated, validateErr := validatedPreviewEntry(entry); validateErr != nil {
+			err = fmt.Errorf("%w: generated draft did not pass safety validation", ErrPreviewRejected)
+			fallbackPreview = false
+		} else {
+			preview = validated
+		}
 	}
 
 	s.rmu.Lock()
@@ -309,9 +445,17 @@ func (s *Service) generateRequestWith(id, userToken string, generate requestPrev
 		return
 	}
 	request.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	request.BaseIssue = nil
+	request.BaseTargetRepo = ""
+	request.BasePatternHash = ""
 	if err != nil {
 		request.Status = RequestFailed
-		request.Error = safeReason(err.Error())
+		if fallbackPreview {
+			request.Warning = draftRefinementWarning
+			request.Preview = &preview
+		} else {
+			request.Error = safeReason(err.Error())
+		}
 	} else {
 		request.Status = RequestReady
 		request.Preview = &preview
@@ -440,11 +584,22 @@ func (s *Service) ConfirmRequest(ctx context.Context, id, owner, userToken strin
 		s.rmu.Unlock()
 		return "", fmt.Errorf("action request is being confirmed")
 	}
-	if request.Preview == nil {
+	entryKind := ""
+	if request.Preview != nil {
+		entryKind = request.Preview.Kind
+	} else if reconcileOnly {
+		switch request.Kind {
+		case "create-issue":
+			entryKind = "issue"
+		case "propose-fix":
+			entryKind = gfKind
+		}
+	}
+	if entryKind == "" {
 		s.rmu.Unlock()
 		return "", fmt.Errorf("action request has no persisted preview")
 	}
-	entry := &previewEntry{failureID: request.FailureID, patternHash: request.PatternHash, kind: request.Preview.Kind, targetRepo: request.TargetRepo, targetConfig: request.TargetConfig}
+	entry := &previewEntry{failureID: request.FailureID, patternHash: request.PatternHash, kind: entryKind, targetRepo: request.TargetRepo, targetConfig: request.TargetConfig}
 	switch entry.kind {
 	case "issue":
 		if request.Issue == nil {
@@ -565,11 +720,15 @@ func (s *Service) expireRequestsLocked(now time.Time) bool {
 				request.UpdatedAt = now.Format(time.RFC3339)
 				changed = true
 			}
-			if request.Error != "" || request.Preview != nil || request.Instruction != "" || request.Issue != nil || request.Fix != nil || request.EmailError != "" {
+			if request.Error != "" || request.Warning != "" || request.Preview != nil || request.Instruction != "" || request.Issue != nil || request.BaseIssue != nil || request.BaseTargetRepo != "" || request.BasePatternHash != "" || request.Fix != nil || request.EmailError != "" {
 				request.Error = ""
+				request.Warning = ""
 				request.Preview = nil
 				request.Instruction = ""
 				request.Issue = nil
+				request.BaseIssue = nil
+				request.BaseTargetRepo = ""
+				request.BasePatternHash = ""
 				request.Fix = nil
 				request.EmailError = ""
 				changed = true

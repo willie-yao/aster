@@ -49,7 +49,7 @@ function requestIsActive(request: ActionRequest): boolean {
 }
 
 function requestStateError(request: ActionRequest): string | null {
-  if (request.status === "failed") {
+  if (request.status === "failed" && !request.warning) {
     return request.error || "Draft generation failed.";
   }
   if (request.status === "expired") return "This draft expired.";
@@ -736,6 +736,15 @@ export function FailureActions({ failureID, resolvable = true }: { failureID: st
               <Typography variant="body2">{error}</Typography>
             </Alert>
           )}
+          {request?.warning && (
+            <Alert
+              severity="warning"
+              variant="outlined"
+              sx={{ mb: 2, borderRadius: "10px" }}
+            >
+              <Typography variant="body2">{request.warning}</Typography>
+            </Alert>
+          )}
 
           {request?.status === "cancelled" && (
             <Alert severity="info">This request was cancelled.</Alert>
@@ -744,7 +753,10 @@ export function FailureActions({ failureID, resolvable = true }: { failureID: st
             <Alert severity="warning">GitHub may have accepted this action. Use Check GitHub result; do not regenerate or cancel it.</Alert>
           )}
 
-          {preview && (request?.status === "ready" || request?.status === "unknown") && (
+          {preview &&
+            (request?.status === "ready" ||
+              request?.status === "unknown" ||
+              (request?.status === "failed" && Boolean(request.warning))) && (
             <Stack spacing={2.5}>
               <ActionDraftPreview preview={preview} />
               {request.status === "ready" && <Box>

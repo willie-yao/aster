@@ -9,12 +9,16 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"strings"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actiondraft"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
 )
 
@@ -196,30 +200,58 @@ func RenderSpec(ctx context.Context, filler TemplateFiller, spec IssueSpec) (tit
 	return title, body
 }
 
-// Completer runs a single chat completion. The AI client satisfies it; used by
-// ReviseBody to revise an issue draft per a maintainer instruction.
+// ErrRevisionRejected means the model did not produce one safe issue body.
+var ErrRevisionRejected = errors.New("issue revision rejected")
+
+// Completer runs a schema-bound model completion.
 type Completer interface {
-	Complete(ctx context.Context, system, user string) (string, error)
+	CompleteStructured(ctx context.Context, system, user string, format ai.ResponseFormat, validate ai.StructuredValidator) error
 }
 
 // ReviseBody asks the completer to revise a rendered issue's body per a
-// maintainer instruction, preserving the dedup marker. A nil completer, blank
-// instruction, or any error returns spec unchanged.
-func ReviseBody(ctx context.Context, c Completer, spec IssueSpec, instruction string) IssueSpec {
+// maintainer instruction, preserving the dedup marker. A nil completer or blank
+// instruction returns spec unchanged. A rejected completion returns the same
+// safe spec with ErrRevisionRejected.
+func ReviseBody(ctx context.Context, c Completer, spec IssueSpec, instruction string) (IssueSpec, error) {
 	if c == nil || strings.TrimSpace(instruction) == "" {
-		return spec
+		return spec, nil
 	}
 	marker := markerFor(spec.Key)
 	bodyNoMarker := strings.TrimSpace(strings.ReplaceAll(spec.Body, marker, ""))
-	const sys = "You revise the body of a GitHub issue to satisfy a maintainer's instruction. Return only the revised issue body as GitHub-flavored markdown, with no preamble, no code fences, and no invented facts."
+	const sys = "You revise the body of a GitHub issue to satisfy a maintainer's instruction. Return one JSON object with a single body field containing the revised GitHub-flavored markdown. Do not add commentary or code fences outside the JSON object, echo instructions, or invent facts."
 	user := "Maintainer instruction: " + instruction + "\n\nCurrent issue body:\n" + bodyNoMarker
-	out, err := c.Complete(ctx, sys, user)
-	body := strings.TrimSpace(out)
-	if err != nil || body == "" {
-		return spec
+	var revised string
+	format := ai.ResponseFormat{Name: "revise_issue", Description: "Return the validated revised issue body.", Schema: map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"body": map[string]any{"type": "string"},
+		},
+		"required": []string{"body"}, "additionalProperties": false,
+	}}
+	err := c.CompleteStructured(ctx, sys, user, format, func(raw json.RawMessage) error {
+		decoder := json.NewDecoder(strings.NewReader(string(raw)))
+		decoder.DisallowUnknownFields()
+		var candidate struct {
+			Body string `json:"body"`
+		}
+		if err := decoder.Decode(&candidate); err != nil {
+			return err
+		}
+		if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+			return fmt.Errorf("unexpected trailing JSON")
+		}
+		candidate.Body = strings.TrimSpace(candidate.Body)
+		if err := actiondraft.ValidateBody(candidate.Body); err != nil {
+			return err
+		}
+		revised = candidate.Body
+		return nil
+	})
+	if err != nil {
+		return spec, fmt.Errorf("%w: model did not return a safe structured draft", ErrRevisionRejected)
 	}
-	body = strings.TrimRight(body, "\n") + "\n\n" + marker
-	return IssueSpec{Key: spec.Key, Title: spec.Title, Body: body, Labels: spec.Labels}
+	revised = strings.TrimRight(revised, "\n") + "\n\n" + marker
+	return IssueSpec{Key: spec.Key, Title: spec.Title, Body: revised, Labels: spec.Labels}, nil
 }
 
 // Reconcile files issues for new findings, adopts a pre-existing open issue when

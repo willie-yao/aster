@@ -3,15 +3,21 @@ package repotemplate
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"log"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actiondraft"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 )
 
 // Completer is the subset of the AI client this package needs.
 type Completer interface {
-	Complete(ctx context.Context, system, user string) (string, error)
+	CompleteStructured(ctx context.Context, system, user string, format ai.ResponseFormat, validate ai.StructuredValidator) error
 }
 
 // fillTimeout bounds the optional reformat call so a slow or hung template fill
@@ -19,7 +25,7 @@ type Completer interface {
 // create/open request.
 const fillTimeout = 60 * time.Second
 
-const prFillSystem = `You reformat a proposed pull-request description to follow a repository's PULL REQUEST template. Rules: keep all factual content from the description; fill the template's sections using that content; for sections you have no information for, leave the template's placeholder text, HTML comments, and checklists intact; for Prow-style "/kind" lines choose the single most fitting kind; do not invent issue numbers or facts. Output only the filled markdown, with no code fences and no commentary.`
+const prFillSystem = `You reformat a proposed pull-request description to follow a repository's PULL REQUEST template. Rules: keep all factual content from the description; fill the template's sections using that content; for sections you have no information for, leave the template's placeholder text, HTML comments, and checklists intact; for Prow-style "/kind" lines choose the single most fitting kind; do not invent issue numbers or facts. Return one JSON object with a single "body" field containing the filled markdown. Do not add commentary or code fences outside the JSON object.`
 
 const issueFillSystem = `You reformat a bug/failure report to follow a repository's ISSUE template. You are given one or more candidate templates and the report content. Choose the single most appropriate template, then fill its sections using the report; leave placeholder text, HTML comments, and checklists intact where you lack information; choose the single most fitting "/kind" line if present; do not invent facts. Answer with one JSON object only: {"title": "<concise issue title>", "body": "<filled markdown>"}.`
 
@@ -33,16 +39,28 @@ func FillPR(ctx context.Context, c Completer, template, description string) stri
 	user := "PULL REQUEST TEMPLATE:\n" + template + "\n\nDESCRIPTION TO FIT INTO THE TEMPLATE:\n" + description
 	ctx, cancel := context.WithTimeout(ctx, fillTimeout)
 	defer cancel()
-	out, err := c.Complete(ctx, prFillSystem, user)
+	var result struct {
+		Body string `json:"body"`
+	}
+	err := c.CompleteStructured(ctx, prFillSystem, user, bodyResponseFormat("format_pull_request"), func(raw json.RawMessage) error {
+		var candidate struct {
+			Body string `json:"body"`
+		}
+		if err := decodeStructuredObject(raw, &candidate); err != nil {
+			return err
+		}
+		candidate.Body = strings.TrimSpace(candidate.Body)
+		if err := actiondraft.ValidateBody(candidate.Body); err != nil {
+			return err
+		}
+		result = candidate
+		return nil
+	})
 	if err != nil {
-		log.Printf("repotemplate: PR fill failed, using default body: %v", err)
+		log.Printf("repotemplate: PR fill rejected, using default body")
 		return description
 	}
-	out = stripCodeFence(strings.TrimSpace(out))
-	if out == "" {
-		return description
-	}
-	return out
+	return result.Body
 }
 
 // FillIssue picks the best-fit template and reformats the report to follow it.
@@ -66,24 +84,64 @@ func FillIssue(ctx context.Context, c Completer, templates []Template, title, bo
 	user := "CANDIDATE TEMPLATES:\n" + sb.String() + "\nREPORT TITLE: " + title + "\nREPORT CONTENT:\n" + body
 	ctx, cancel := context.WithTimeout(ctx, fillTimeout)
 	defer cancel()
-	out, err := c.Complete(ctx, issueFillSystem, user)
-	if err != nil {
-		log.Printf("repotemplate: issue fill failed, using default body: %v", err)
-		return title, body
-	}
-	var v struct {
+	var result struct {
 		Title string `json:"title"`
 		Body  string `json:"body"`
 	}
-	if err := parseJSONObject(out, &v); err != nil || strings.TrimSpace(v.Body) == "" {
-		log.Printf("repotemplate: issue fill returned no usable body, using default")
+	err := c.CompleteStructured(ctx, issueFillSystem, user, issueResponseFormat(), func(raw json.RawMessage) error {
+		var candidate struct {
+			Title string `json:"title"`
+			Body  string `json:"body"`
+		}
+		if err := decodeStructuredObject(raw, &candidate); err != nil {
+			return err
+		}
+		candidate.Title = strings.TrimSpace(candidate.Title)
+		candidate.Body = strings.TrimSpace(candidate.Body)
+		if err := actiondraft.ValidateTitleBody(candidate.Title, candidate.Body); err != nil {
+			return err
+		}
+		result = candidate
+		return nil
+	})
+	if err != nil {
+		log.Printf("repotemplate: issue fill rejected, using default body")
 		return title, body
 	}
-	newTitle := title
-	if strings.TrimSpace(v.Title) != "" {
-		newTitle = strings.TrimSpace(v.Title)
+	return result.Title, result.Body
+}
+
+func bodyResponseFormat(name string) ai.ResponseFormat {
+	return ai.ResponseFormat{Name: name, Description: "Return the validated GitHub markdown body.", Schema: map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"body": map[string]any{"type": "string"},
+		},
+		"required": []string{"body"}, "additionalProperties": false,
+	}}
+}
+
+func issueResponseFormat() ai.ResponseFormat {
+	return ai.ResponseFormat{Name: "format_issue", Description: "Return the validated issue title and GitHub markdown body.", Schema: map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"title": map[string]any{"type": "string"},
+			"body":  map[string]any{"type": "string"},
+		},
+		"required": []string{"title", "body"}, "additionalProperties": false,
+	}}
+}
+
+func decodeStructuredObject(raw json.RawMessage, dst any) error {
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(dst); err != nil {
+		return err
 	}
-	return newTitle, v.Body
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return fmt.Errorf("unexpected trailing JSON")
+	}
+	return nil
 }
 
 // PRFiller binds a fetcher and completer to one repo for PR-body templating. It
@@ -167,30 +225,3 @@ func (i *IssueFiller) FillIssue(ctx context.Context, title, body string) (string
 	}
 	return FillIssue(ctx, i.c, i.templates, title, body)
 }
-
-// stripCodeFence removes a wrapping ```...``` fence if the model added one.
-func stripCodeFence(s string) string {
-	if !strings.HasPrefix(s, "```") {
-		return s
-	}
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		s = s[i+1:]
-	}
-	return strings.TrimSuffix(strings.TrimRight(s, "\n"), "```")
-}
-
-// parseJSONObject extracts and decodes the first JSON object in s.
-func parseJSONObject(s string, v any) error {
-	start := strings.Index(s, "{")
-	end := strings.LastIndex(s, "}")
-	if start < 0 || end < start {
-		return errNoJSON
-	}
-	return json.Unmarshal([]byte(s[start:end+1]), v)
-}
-
-var errNoJSON = jsonErr("no JSON object in response")
-
-type jsonErr string
-
-func (e jsonErr) Error() string { return string(e) }

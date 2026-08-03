@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -37,14 +38,18 @@ func (e *modelHTTPError) Error() string {
 }
 
 func (c *Client) callModel(ctx context.Context, messages []modelMessage, toolDefs []tools.Schema, parallelToolCalls *bool) (*modelResponse, error) {
-	start := time.Now()
-	resp, err := c.transport.Complete(ctx, modelRequest{
+	return c.callModelRequest(ctx, modelRequest{
 		Model:             c.model,
 		Messages:          messages,
 		Tools:             toolDefs,
 		ParallelToolCalls: parallelToolCalls,
 	})
-	event := TraceEvent{Kind: "model_request", DurationMs: int(time.Since(start) / time.Millisecond), MessageCount: len(messages)}
+}
+
+func (c *Client) callModelRequest(ctx context.Context, request modelRequest) (*modelResponse, error) {
+	start := time.Now()
+	resp, err := c.transport.Complete(ctx, request)
+	event := TraceEvent{Kind: "model_request", DurationMs: int(time.Since(start) / time.Millisecond), MessageCount: len(request.Messages)}
 	if resp != nil {
 		event.ResponseID = resp.ResponseID
 		event.Status = resp.Status
@@ -78,6 +83,26 @@ type modelRequest struct {
 	Messages          []modelMessage
 	Tools             []tools.Schema
 	ParallelToolCalls *bool
+	ResponseFormat    *ResponseFormat
+	ToolChoice        *ToolChoice
+	MaxResponseBytes  int64
+	OmitReasoning     bool
+}
+
+const defaultModelHTTPResponseBytes int64 = 8 << 20
+
+func readModelResponseBody(body io.Reader, limit int64) ([]byte, error) {
+	if limit <= 0 {
+		limit = defaultModelHTTPResponseBytes
+	}
+	raw, err := io.ReadAll(io.LimitReader(body, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(raw)) > limit {
+		return nil, fmt.Errorf("model response exceeds %d bytes", limit)
+	}
+	return raw, nil
 }
 
 type modelResponse struct {

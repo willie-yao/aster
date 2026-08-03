@@ -9,12 +9,14 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 )
@@ -514,6 +516,42 @@ func TestBuildSpecs_PatternsAndPersistent(t *testing.T) {
 	}
 	if !strings.Contains(per.Body, markerFor(per.Key)) {
 		t.Error("persistent body must embed its marker")
+	}
+}
+
+type structuredCompleter struct {
+	raw string
+	err error
+}
+
+func (c structuredCompleter) CompleteStructured(_ context.Context, _, _ string, _ ai.ResponseFormat, validate ai.StructuredValidator) error {
+	if c.err != nil {
+		return c.err
+	}
+	return validate(json.RawMessage(c.raw))
+}
+
+func TestReviseBodyRejectsObservedKimiReasoning(t *testing.T) {
+	spec := IssueSpec{Key: "pattern::job-a", Title: "safe title", Body: "## What happened\nsafe body\n\n" + markerFor("pattern::job-a"), Labels: []string{"kind/bug"}}
+	raw := `{"body":"The user wants me to revise this.\nSo I need to keep the current structure.\nLet me draft it.\nThis looks good.\n\n## What happened\nunsafe replacement"}`
+	got, err := ReviseBody(context.Background(), structuredCompleter{raw: raw}, spec, "tighten it")
+	if !errors.Is(err, ErrRevisionRejected) {
+		t.Fatalf("error = %v", err)
+	}
+	if !reflect.DeepEqual(got, spec) {
+		t.Fatalf("unsafe revision changed draft: %+v", got)
+	}
+}
+
+func TestReviseBodyAddsMarkerAfterValidation(t *testing.T) {
+	key := "pattern::job-a"
+	spec := IssueSpec{Key: key, Title: "title", Body: "old\n\n" + markerFor(key)}
+	got, err := ReviseBody(context.Background(), structuredCompleter{raw: `{"body":"## What happened\nrevised safely"}`}, spec, "tighten it")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got.Body, "revised safely") || strings.Count(got.Body, markerFor(key)) != 1 {
+		t.Fatalf("revised body = %q", got.Body)
 	}
 }
 

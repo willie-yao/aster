@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"time"
 
@@ -22,12 +21,31 @@ func newResponsesTransport(api *httpAPIClient) *responsesTransport {
 }
 
 type responsesRequest struct {
-	Model             string          `json:"model"`
-	Input             []any           `json:"input"`
-	Tools             []responsesTool `json:"tools,omitempty"`
-	ParallelToolCalls *bool           `json:"parallel_tool_calls,omitempty"`
-	Store             bool            `json:"store"`
-	Include           []string        `json:"include,omitempty"`
+	Model             string               `json:"model"`
+	Input             []any                `json:"input"`
+	Tools             []responsesTool      `json:"tools,omitempty"`
+	Text              *responsesTextConfig `json:"text,omitempty"`
+	ToolChoice        *responsesToolChoice `json:"tool_choice,omitempty"`
+	ParallelToolCalls *bool                `json:"parallel_tool_calls,omitempty"`
+	Store             bool                 `json:"store"`
+	Include           []string             `json:"include,omitempty"`
+}
+
+type responsesTextConfig struct {
+	Format responsesTextFormat `json:"format"`
+}
+
+type responsesTextFormat struct {
+	Type        string         `json:"type"`
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	Strict      bool           `json:"strict"`
+	Schema      map[string]any `json:"schema"`
+}
+
+type responsesToolChoice struct {
+	Type string `json:"type"`
+	Name string `json:"name"`
 }
 
 type responsesTool struct {
@@ -64,10 +82,15 @@ type responsesOutputItem struct {
 
 func (t *responsesTransport) Complete(ctx context.Context, req modelRequest) (*modelResponse, error) {
 	time.Sleep(callDelay)
+	include := []string{"reasoning.encrypted_content"}
+	if req.OmitReasoning {
+		include = nil
+	}
 	body, err := json.Marshal(responsesRequest{
 		Model: req.Model, Input: encodeResponsesInput(req.Messages),
-		Tools: encodeResponsesTools(req.Tools), ParallelToolCalls: req.ParallelToolCalls,
-		Store: false, Include: []string{"reasoning.encrypted_content"},
+		Tools: encodeResponsesTools(req.Tools), Text: encodeResponsesText(req.ResponseFormat),
+		ToolChoice: encodeResponsesToolChoice(req.ToolChoice), ParallelToolCalls: req.ParallelToolCalls,
+		Store: false, Include: include,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
@@ -102,7 +125,10 @@ func (t *responsesTransport) Complete(ctx context.Context, req modelRequest) (*m
 		break
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
+	raw, err := readModelResponseBody(resp.Body, req.MaxResponseBytes)
+	if err != nil {
+		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode}, fmt.Errorf("read response: %w", err)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode}, &modelHTTPError{API: "responses", StatusCode: resp.StatusCode, Body: textutil.Truncate(string(raw), 500)}
 	}
@@ -168,7 +194,7 @@ func encodeResponsesTools(schemas []tools.Schema) []responsesTool {
 		out[i] = responsesTool{
 			Type: "function", Name: schema.Function.Name,
 			Description: schema.Function.Description, Parameters: schema.Function.Parameters,
-			Strict: false,
+			Strict: schema.Function.Strict,
 		}
 	}
 	return out
@@ -214,4 +240,21 @@ func decodeResponsesResponse(resp responsesResponse) *modelResponse {
 		InputTokens: resp.Usage.InputTokens, OutputTokens: resp.Usage.OutputTokens,
 		HasMessage: len(resp.Output) > 0,
 	}
+}
+
+func encodeResponsesText(format *ResponseFormat) *responsesTextConfig {
+	if format == nil {
+		return nil
+	}
+	return &responsesTextConfig{Format: responsesTextFormat{
+		Type: "json_schema", Name: format.Name, Description: format.Description,
+		Strict: true, Schema: format.Schema,
+	}}
+}
+
+func encodeResponsesToolChoice(choice *ToolChoice) *responsesToolChoice {
+	if choice == nil {
+		return nil
+	}
+	return &responsesToolChoice{Type: "function", Name: choice.Name}
 }

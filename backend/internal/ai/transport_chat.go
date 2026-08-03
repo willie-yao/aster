@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -43,11 +42,32 @@ type chatCompletionsFunction struct {
 }
 
 type chatCompletionsRequest struct {
-	Model    string                   `json:"model"`
-	Messages []chatCompletionsMessage `json:"messages"`
-	Tools    []tools.Schema           `json:"tools,omitempty"`
+	Model          string                   `json:"model"`
+	Messages       []chatCompletionsMessage `json:"messages"`
+	Tools          []tools.Schema           `json:"tools,omitempty"`
+	ResponseFormat *chatResponseFormat      `json:"response_format,omitempty"`
+	ToolChoice     *chatToolChoice          `json:"tool_choice,omitempty"`
 
 	ParallelToolCalls *bool `json:"parallel_tool_calls,omitempty"`
+}
+
+type chatResponseFormat struct {
+	Type       string                 `json:"type"`
+	JSONSchema chatResponseJSONSchema `json:"json_schema"`
+}
+
+type chatResponseJSONSchema struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	Strict      bool           `json:"strict"`
+	Schema      map[string]any `json:"schema"`
+}
+
+type chatToolChoice struct {
+	Type     string `json:"type"`
+	Function struct {
+		Name string `json:"name"`
+	} `json:"function"`
 }
 
 type chatCompletionsResponse struct {
@@ -75,6 +95,8 @@ func (t *chatCompletionsTransport) Complete(ctx context.Context, req modelReques
 		Model:             req.Model,
 		Messages:          encodeChatMessages(req.Messages),
 		Tools:             req.Tools,
+		ResponseFormat:    encodeChatResponseFormat(req.ResponseFormat),
+		ToolChoice:        encodeChatToolChoice(req.ToolChoice),
 		ParallelToolCalls: req.ParallelToolCalls,
 	})
 	if err != nil {
@@ -110,7 +132,10 @@ func (t *chatCompletionsTransport) Complete(ctx context.Context, req modelReques
 		break
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
+	raw, err := readModelResponseBody(resp.Body, req.MaxResponseBytes)
+	if err != nil {
+		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode}, fmt.Errorf("read response: %w", err)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode}, &modelHTTPError{API: "chat", StatusCode: resp.StatusCode, Body: textutil.Truncate(string(raw), 500)}
 	}
@@ -222,4 +247,25 @@ func retryAfter(value string, fallback time.Duration) time.Duration {
 		}
 	}
 	return fallback
+}
+
+func encodeChatResponseFormat(format *ResponseFormat) *chatResponseFormat {
+	if format == nil {
+		return nil
+	}
+	return &chatResponseFormat{
+		Type: "json_schema",
+		JSONSchema: chatResponseJSONSchema{
+			Name: format.Name, Description: format.Description, Strict: true, Schema: format.Schema,
+		},
+	}
+}
+
+func encodeChatToolChoice(choice *ToolChoice) *chatToolChoice {
+	if choice == nil {
+		return nil
+	}
+	out := &chatToolChoice{Type: "function"}
+	out.Function.Name = choice.Name
+	return out
 }

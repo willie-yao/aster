@@ -41,6 +41,9 @@ var ErrNotFound = errors.New("failure not found")
 // ErrPreviewRejected means generation safely declined an actionable fix preview.
 var ErrPreviewRejected = errors.New("fix preview rejected")
 
+// ErrDraftRefinementRejected means a replacement issue draft failed validation.
+var ErrDraftRefinementRejected = errors.New("draft refinement rejected")
+
 // ErrPatternMismatch means the selected recurring pattern does not include the chat analysis.
 var ErrPatternMismatch = errors.New("pattern does not include selected analysis")
 
@@ -473,7 +476,7 @@ func (s *Service) buildFixManager(userToken string) (*fixpr.Manager, error) {
 }
 
 // generateIssuePreview renders an issue draft without caching or posting it.
-func (s *Service) generateIssuePreview(ctx context.Context, failureID, userToken, instruction string) (PreviewResult, *previewEntry, error) {
+func (s *Service) generateIssuePreview(ctx context.Context, failureID, userToken, instruction string, baseIssue *issues.IssueSpec, baseTargetRepo, basePatternHash string) (PreviewResult, *previewEntry, error) {
 	subject, err := s.resolveSubject(failureID)
 	if err != nil {
 		return PreviewResult{}, nil, err
@@ -488,28 +491,50 @@ func (s *Service) generateIssuePreview(ctx context.Context, failureID, userToken
 	if err != nil {
 		return PreviewResult{}, nil, err
 	}
-	var filler issues.TemplateFiller
-	if c := s.aiCompleter(); c != nil {
-		eff := s.cfg.EffectiveIssues()
-		filler = repotemplate.NewIssueFiller(userToken, c, eff.Repo.Owner, eff.Repo.Name)
-	}
-	title, body := issues.RenderSpec(ctx, filler, spec)
-	final := issues.IssueSpec{Key: spec.Key, Title: title, Body: body, Labels: spec.Labels}
-	if strings.TrimSpace(instruction) != "" {
-		if c := s.aiClient(); c != nil {
-			final = issues.ReviseBody(ctx, c, final, instruction)
+	var final issues.IssueSpec
+	if baseIssue != nil {
+		if basePatternHash == "" || basePatternHash != subject.ContentHash || baseIssue.Key != spec.Key || (baseTargetRepo != "" && baseTargetRepo != targetRepo) {
+			return PreviewResult{}, nil, ErrPreviewTargetChanged
 		}
+		final = *baseIssue
+		final.Labels = slices.Clone(baseIssue.Labels)
+	} else {
+		var filler issues.TemplateFiller
+		if c := s.aiCompleter(); c != nil {
+			eff := s.cfg.EffectiveIssues()
+			filler = repotemplate.NewIssueFiller(userToken, c, eff.Repo.Owner, eff.Repo.Name)
+		}
+		title, body := issues.RenderSpec(ctx, filler, spec)
+		final = issues.IssueSpec{Key: spec.Key, Title: title, Body: body, Labels: spec.Labels}
 	}
-	return PreviewResult{Kind: "issue", Title: final.Title, Body: final.Body},
-		&previewEntry{failureID: subject.ID, patternHash: subject.ContentHash, kind: "issue", targetRepo: targetRepo, spec: final}, nil
+	preview := PreviewResult{Kind: "issue", Title: final.Title, Body: final.Body}
+	entry := &previewEntry{failureID: subject.ID, patternHash: subject.ContentHash, kind: "issue", targetRepo: targetRepo, spec: final}
+	if strings.TrimSpace(instruction) != "" {
+		c := s.aiClient()
+		if c == nil {
+			return preview, entry, fmt.Errorf("%w: AI is unavailable", ErrDraftRefinementRejected)
+		}
+		revised, reviseErr := issues.ReviseBody(ctx, c, final, instruction)
+		if reviseErr != nil {
+			return preview, entry, fmt.Errorf("%w: safe structured revision was not produced", ErrDraftRefinementRejected)
+		}
+		final = revised
+		preview = PreviewResult{Kind: "issue", Title: final.Title, Body: final.Body}
+		entry.spec = final
+	}
+	return preview, entry, nil
 }
 
 // PreviewIssue renders the exact issue that would be filed for the failure,
 // without filing it, and caches it for confirmation.
 func (s *Service) PreviewIssue(ctx context.Context, failureID, userToken, instruction string) (PreviewResult, error) {
-	preview, entry, err := s.generateIssuePreview(ctx, failureID, userToken, instruction)
+	preview, entry, err := s.generateIssuePreview(ctx, failureID, userToken, instruction, nil, "", "")
 	if err != nil {
 		return PreviewResult{}, err
+	}
+	preview, err = validatedPreviewEntry(entry)
+	if err != nil {
+		return PreviewResult{}, fmt.Errorf("%w: generated draft did not pass safety validation", ErrPreviewRejected)
 	}
 	token, err := s.stash(userToken, entry)
 	if err != nil {
@@ -593,6 +618,10 @@ func (s *Service) PreviewFix(ctx context.Context, failureID, userToken, instruct
 	if err != nil {
 		return PreviewResult{}, err
 	}
+	preview, err = validatedPreviewEntry(entry)
+	if err != nil {
+		return PreviewResult{}, fmt.Errorf("%w: generated draft did not pass safety validation", ErrPreviewRejected)
+	}
 	token, err := s.stash(userToken, entry)
 	if err != nil {
 		return PreviewResult{}, err
@@ -613,6 +642,10 @@ func (s *Service) PreviewFixWithContext(
 	if err != nil {
 		return PreviewResult{}, err
 	}
+	preview, err = validatedPreviewEntry(entry)
+	if err != nil {
+		return PreviewResult{}, fmt.Errorf("%w: generated draft did not pass safety validation", ErrPreviewRejected)
+	}
 	token, err := s.stash(userToken, entry)
 	if err != nil {
 		return PreviewResult{}, err
@@ -627,6 +660,12 @@ func (s *Service) Confirm(ctx context.Context, token, userToken string) (string,
 	entry, resultURL, attemptID, reconcile, err := s.beginConfirm(userToken, token, lease)
 	if err != nil || resultURL != "" {
 		return resultURL, err
+	}
+	if !reconcile {
+		if _, validateErr := validatedPreviewEntry(entry); validateErr != nil {
+			_ = s.previewStore.discard(userToken, token, attemptID)
+			return "", fmt.Errorf("%w: saved draft did not pass safety validation", ErrPreviewRejected)
+		}
 	}
 	if !reconcile && (entry.failureID != "" || entry.patternHash != "") {
 		if err := s.validateSubjectSnapshot(entry.failureID, entry.patternHash, entry.kind); err != nil {

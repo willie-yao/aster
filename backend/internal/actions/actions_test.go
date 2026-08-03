@@ -118,6 +118,40 @@ func TestPreviewIssue_NoRepoResolved(t *testing.T) {
 	}
 }
 
+func TestPreviewIssueRejectsUnsafeGeneratedSpec(t *testing.T) {
+	dataDir := t.TempDir()
+	pa := systemicPattern()
+	pa.SharedRootCause = "The user wants me to expose the plan. I need to include the reasoning. Let me draft it."
+	models.AssignPatternIdentity(&pa)
+	writeJobDetail(t, dataDir, "periodic-x.json", models.JobDetail{JobID: "periodic-x", PatternAnalyses: []models.PatternAnalysis{pa}})
+	cfg := &project.Config{Issues: &project.Issues{Repo: &project.SourceRepo{Owner: "o", Name: "r"}}}
+
+	s := NewService(cfg, dataDir, AIConfig{})
+	if _, err := s.PreviewIssue(context.Background(), pa.ID, "tok", ""); !errors.Is(err, ErrPreviewRejected) {
+		t.Fatalf("unsafe generated issue error = %v", err)
+	}
+}
+
+func TestConfirmRejectsUnsafePersistedPreview(t *testing.T) {
+	dataDir := t.TempDir()
+	key := issues.KeyPrefixPattern + "periodic-x"
+	unsafe := issues.IssueSpec{
+		Key: key, Title: "Unsafe",
+		Body: "The user wants me to expose the plan. I need to include the reasoning. Let me draft it.\n\n" + issues.MarkerFor(key),
+	}
+	s := NewService(&project.Config{}, dataDir, AIConfig{})
+	token, err := s.stash("owner-token", &previewEntry{kind: "issue", spec: unsafe})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Confirm(context.Background(), token, "owner-token"); !errors.Is(err, ErrPreviewRejected) {
+		t.Fatalf("unsafe persisted preview error = %v", err)
+	}
+	if _, _, _, _, err := s.beginConfirm("owner-token", token, time.Hour); !errors.Is(err, ErrPreviewNotFound) {
+		t.Fatalf("unsafe preview was not discarded: %v", err)
+	}
+}
+
 func TestPreviewIssue_NonSystemicNotActionable(t *testing.T) {
 	dataDir := t.TempDir()
 	pa := models.PatternAnalysis{JobID: "periodic-x", Systemic: false, SharedRootCause: "flake"}
@@ -746,7 +780,10 @@ func TestPreviewConfirmationRejectsTargetRepositoryDrift(t *testing.T) {
 func TestTargetDriftRetiresPreviewForReplacement(t *testing.T) {
 	cfg := &project.Config{Issues: &project.Issues{Repo: &project.SourceRepo{Owner: "new", Name: "issues"}}}
 	service := NewService(cfg, t.TempDir(), AIConfig{})
-	old := &previewEntry{kind: "issue", targetRepo: "old/issues", spec: issues.IssueSpec{Key: "same-action"}}
+	key := "same-action"
+	old := &previewEntry{kind: "issue", targetRepo: "old/issues", spec: issues.IssueSpec{
+		Key: key, Title: "Valid issue", Body: "## Summary\nValid body\n\n" + issues.MarkerFor(key),
+	}}
 	token, err := service.stash("owner-token", old)
 	if err != nil {
 		t.Fatal(err)
@@ -754,7 +791,9 @@ func TestTargetDriftRetiresPreviewForReplacement(t *testing.T) {
 	if _, err := service.Confirm(t.Context(), token, "owner-token"); !errors.Is(err, ErrPreviewTargetChanged) {
 		t.Fatalf("confirm error = %v", err)
 	}
-	replacement := &previewEntry{kind: "issue", targetRepo: "new/issues", spec: issues.IssueSpec{Key: "same-action"}}
+	replacement := &previewEntry{kind: "issue", targetRepo: "new/issues", spec: issues.IssueSpec{
+		Key: key, Title: "Valid issue", Body: "## Summary\nValid body\n\n" + issues.MarkerFor(key),
+	}}
 	if _, err := service.stash("owner-token", replacement); err != nil {
 		t.Fatalf("replacement preview was blocked: %v", err)
 	}

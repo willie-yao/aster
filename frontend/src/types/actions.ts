@@ -29,6 +29,7 @@ export interface ActionRequest {
   updated_at: string;
   expires_at: string;
   error?: string;
+  warning?: string;
   result_url?: string;
   superseded_by?: string;
   preview?: ActionPreview;
