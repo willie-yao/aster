@@ -73,7 +73,7 @@ Rules: output only the Markdown body starting at "## Architecture". Do not add a
 
 // generatePromptBody asks the model to draft the system.md body from bounded
 // source evidence and discovered Prow jobs.
-func generatePromptBody(ctx context.Context, c completer, input promptDraftInput) (string, error) {
+func generatePromptBody(ctx context.Context, c completer, input promptDraftInput, credentials ...string) (string, error) {
 	if !hasMeaningfulPromptSources(input.Sources) {
 		return "", fmt.Errorf("no meaningful source material")
 	}
@@ -127,7 +127,8 @@ func generatePromptBody(ctx context.Context, c completer, input promptDraftInput
 		b.WriteString("\n")
 	}
 
-	out, err := c.Complete(ctx, promptSystemInstruction, b.String())
+	userPrompt := redactPromptText(b.String(), credentials...)
+	out, err := c.Complete(ctx, promptSystemInstruction, userPrompt)
 	if err != nil {
 		return "", err
 	}

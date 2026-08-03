@@ -75,8 +75,10 @@ complete deterministic corpus.
 
 Onboarding does not clone the repository, execute repository code, use GitHub
 code search, or send the whole repository. Repository text and job metadata are
-untrusted evidence and cannot request more files, URLs, commands, or secrets.
-The draft remains a starting point that requires human review.
+untrusted evidence. Documentation references may influence deterministic ranking
+of eligible files in the pinned snapshot, but cannot trigger arbitrary URLs,
+commands, provider-time retrieval, or secret access. The draft remains a
+starting point that requires human review.
 
 ## Required runbook sections
 

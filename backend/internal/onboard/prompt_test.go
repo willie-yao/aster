@@ -116,6 +116,19 @@ func TestGeneratePromptBodyBoundsProwJobs(t *testing.T) {
 	}
 }
 
+func TestGeneratePromptBodyRedactsCredentialsFromMetadata(t *testing.T) {
+	const token = "fixture-secret"
+	c := &stubCompleter{out: validPromptBody()}
+	input := promptTestInput("Project", []promptSource{{Path: "docs/" + token + ".md", Kind: "markdown", StartLine: 1, EndLine: 1, Text: "docs"}})
+	input.Jobs = []promptJobSummary{{Name: "job-" + token, Type: "periodic", ConfigFile: token}}
+	if _, err := generatePromptBody(context.Background(), c, input, token); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(c.gotUser, token) {
+		t.Fatalf("credential entered serialized model input: %s", c.gotUser)
+	}
+}
+
 func TestRedactPromptCredentialsRemovesTokensFromModelInput(t *testing.T) {
 	sources := []promptSource{{Path: "README.md", Kind: "markdown", StartLine: 1, EndLine: 1, Text: "ai-secret github-secret"}}
 	redactPromptCredentials(sources, "ai-secret", "github-secret")

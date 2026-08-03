@@ -40,9 +40,10 @@ func TestBuildSystemPromptUsesEvidenceWithoutLeakingTokens(t *testing.T) {
 		case "/repos/example/project":
 			_, _ = w.Write([]byte(`{"default_branch":"main"}`))
 		case "/repos/example/project/git/trees/" + promptSourceTestSHA:
-			_ = json.NewEncoder(w).Encode(map[string]any{"tree": []map[string]any{{"path": "README.md", "type": "blob", "size": 100}}})
-		case "/example/project/" + promptSourceTestSHA + "/README.md":
-			fmt.Fprintf(w, "artifact documentation %s %s", aiToken, githubToken)
+			_ = json.NewEncoder(w).Encode(map[string]any{"tree": []map[string]any{{"path": "docs/" + aiToken + ".md", "type": "blob", "size": maxPromptSourceBytes + 100}}})
+		case "/example/project/" + promptSourceTestSHA + "/docs/" + aiToken + ".md":
+			prefix := strings.Repeat("x", maxPromptSourceBytes-len(aiToken)/2)
+			fmt.Fprintf(w, "%s%s %s", prefix, aiToken, githubToken)
 		default:
 			http.NotFound(w, r)
 		}
@@ -60,7 +61,7 @@ func TestBuildSystemPromptUsesEvidenceWithoutLeakingTokens(t *testing.T) {
 		ProjectName: data.Name,
 		SourceRepo:  Repo{Owner: "example", Name: "project", FullName: "example/project"},
 		Jobs: []promptJobSummary{{
-			Name: "periodic-e2e", Type: "periodic", ConfigFile: "config/jobs.yaml",
+			Name: "periodic-" + githubToken, Type: "periodic", ConfigFile: "config/jobs.yaml",
 			Repo: "example/project", Branches: []string{"main"}, Dashboards: []string{"dashboard-a"},
 		}},
 	}
@@ -72,7 +73,7 @@ func TestBuildSystemPromptUsesEvidenceWithoutLeakingTokens(t *testing.T) {
 	if !drafted || !strings.Contains(prompt, validPromptBody()) {
 		t.Fatalf("prompt was not drafted:\n%s", prompt)
 	}
-	for _, want := range []string{"DISCOVERED PROW JOBS", "periodic-e2e", "SOURCE 1: README.md, lines 1-1, kind markdown"} {
+	for _, want := range []string{"DISCOVERED PROW JOBS", "SOURCE 1: docs/", "kind markdown"} {
 		if !strings.Contains(modelRequest, want) {
 			t.Errorf("model request missing %q: %s", want, modelRequest)
 		}

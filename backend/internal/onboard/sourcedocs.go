@@ -61,7 +61,7 @@ var promptSourceKeywords = map[string]int{
 	"machine": 40, "cluster": 35, "prow": 50,
 }
 
-func fetchPromptSources(ctx context.Context, client *http.Client, repo Repo, jobs []promptJobSummary, token string) ([]promptSource, error) {
+func fetchPromptSources(ctx context.Context, client *http.Client, repo Repo, jobs []promptJobSummary, token string, credentials ...string) ([]promptSource, error) {
 	branch, err := defaultBranch(ctx, client, repo.Owner, repo.Name, token)
 	if err != nil {
 		return nil, err
@@ -107,6 +107,7 @@ func fetchPromptSources(ctx context.Context, client *http.Client, repo Repo, job
 		if err != nil || strings.TrimSpace(text) == "" {
 			continue
 		}
+		text = redactPromptText(text, credentials...)
 		remaining := maxPromptSourceTotalBytes - total
 		limit := maxPromptSourceBytes
 		if remaining < limit {
@@ -335,12 +336,17 @@ func containsControl(text string) bool {
 
 func redactPromptCredentials(sources []promptSource, credentials ...string) {
 	for i := range sources {
-		for _, credential := range credentials {
-			if credential != "" {
-				sources[i].Text = strings.ReplaceAll(sources[i].Text, credential, strings.Repeat("*", len(credential)))
-			}
+		sources[i].Text = redactPromptText(sources[i].Text, credentials...)
+	}
+}
+
+func redactPromptText(text string, credentials ...string) string {
+	for _, credential := range credentials {
+		if credential != "" {
+			text = strings.ReplaceAll(text, credential, strings.Repeat("*", len(credential)))
 		}
 	}
+	return text
 }
 
 func defaultBranch(ctx context.Context, client *http.Client, owner, repo, token string) (string, error) {

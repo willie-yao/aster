@@ -74,7 +74,7 @@ func buildSystemPrompt(ctx context.Context, opts Options, data scaffoldData, inp
 
 	fmt.Fprintf(out, "Drafting prompts/system.md from %s source evidence...\n", input.SourceRepo.FullName)
 	// Empty GitHub token means anonymous public reads.
-	sources, err := fetchPromptSources(ctx, httpClient, input.SourceRepo, input.Jobs, opts.GitHubToken)
+	sources, err := fetchPromptSources(ctx, httpClient, input.SourceRepo, input.Jobs, opts.GitHubToken, opts.AIToken, opts.GitHubToken)
 	if err != nil {
 		fmt.Fprintln(out, "[warn] could not read source repository evidence; writing the stub instead")
 		prompt, renderErr := render(systemPromptTmpl, data)
@@ -94,7 +94,7 @@ func buildSystemPrompt(ctx context.Context, opts Options, data scaffoldData, inp
 		Endpoint: opts.AIEndpoint,
 		Model:    opts.AIModel,
 	})
-	body, err := generatePromptBody(ctx, client, input)
+	body, err := generatePromptBody(ctx, client, input, opts.AIToken, opts.GitHubToken)
 	if err != nil {
 		fmt.Fprintln(out, "[warn] prompt generation failed; writing the stub instead")
 		prompt, renderErr := render(systemPromptTmpl, data)
