@@ -41,7 +41,7 @@ func findAnalysisChatSessionHandler(run AnalysisChatRunner) http.Handler {
 		}
 		session, err := run.Find(ref, identity.Login)
 		if errors.Is(err, analysischat.ErrSessionNotFound) {
-			w.Header().Set("Cache-Control", "no-store")
+			auth.SetPrivateResponseHeaders(w.Header())
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
@@ -157,7 +157,7 @@ func streamAnalysisChatMessageHandler(timeout time.Duration, run AnalysisChatRun
 			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 			return
 		}
-		w.Header().Set("Cache-Control", "no-store")
+		auth.SetPrivateResponseHeaders(w.Header())
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("X-Accel-Buffering", "no")
 		w.WriteHeader(http.StatusOK)
@@ -196,7 +196,7 @@ func cancelAnalysisChatMessageHandler(run AnalysisChatRunner) http.Handler {
 			writeAnalysisChatError(w, r.PathValue("id"), identity.Login, err)
 			return
 		}
-		w.Header().Set("Cache-Control", "no-store")
+		auth.SetPrivateResponseHeaders(w.Header())
 		w.WriteHeader(http.StatusNoContent)
 	})
 }
@@ -227,7 +227,7 @@ func decodeAnalysisChatBody(w http.ResponseWriter, r *http.Request, target any, 
 }
 
 func writeAnalysisChatJSON(w http.ResponseWriter, status int, value any) {
-	w.Header().Set("Cache-Control", "no-store")
+	auth.SetPrivateResponseHeaders(w.Header())
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
@@ -256,21 +256,21 @@ func analysisChatErrorDetails(err error) (int, string, string) {
 	case errors.Is(err, analysischat.ErrRequestNotFound):
 		status, message, outcome = http.StatusNotFound, "analysis chat request not found", "rejected"
 	case errors.Is(err, analysischat.ErrAnalysisChanged), errors.Is(err, analysischat.ErrPatternChanged):
-		status, message, outcome = http.StatusConflict, err.Error(), "rejected"
+		status, message, outcome = http.StatusConflict, "analysis changed; start a new chat", "rejected"
 	case errors.Is(err, analysischat.ErrSessionBusy):
 		status, message, outcome = http.StatusConflict, analysischat.ErrSessionBusy.Error(), "pending"
 	case errors.Is(err, analysischat.ErrRequestPending):
 		status, message, outcome = http.StatusConflict, analysischat.ErrRequestPending.Error(), "pending"
 	case errors.Is(err, analysischat.ErrIdempotencyConflict):
-		status, message, outcome = http.StatusConflict, err.Error(), "rejected"
+		status, message, outcome = http.StatusConflict, "analysis chat request conflicts with existing input", "rejected"
 	case errors.Is(err, analysischat.ErrRequestOutcomeUnknown):
-		status, message, outcome = http.StatusConflict, err.Error(), "unknown"
+		status, message, outcome = http.StatusConflict, "analysis chat outcome is unknown", "unknown"
 	case errors.Is(err, analysischat.ErrInvalidRequest):
-		status, message, outcome = http.StatusBadRequest, err.Error(), "rejected"
+		status, message, outcome = http.StatusBadRequest, "invalid analysis chat request", "rejected"
 	case errors.Is(err, analysischat.ErrSessionLimit), errors.Is(err, analysischat.ErrTurnLimit),
 		errors.Is(err, analysischat.ErrActiveTurnLimit), errors.Is(err, analysischat.ErrRateLimit),
 		errors.Is(err, analysischat.ErrSourceInvestigationLimit), errors.Is(err, analysischat.ErrSourceInvestigationActiveLimit):
-		status, message, outcome = http.StatusTooManyRequests, err.Error(), "rejected"
+		status, message, outcome = http.StatusTooManyRequests, "analysis chat limit reached", "rejected"
 	case errors.Is(err, sourceinvestigation.ErrInvalidResult), errors.Is(err, sourceinvestigation.ErrUnavailable):
 		status, message, outcome = http.StatusBadGateway, "source investigation could not complete the request", "failed"
 	case errors.Is(err, analysischat.ErrRequestFailed):

@@ -5,13 +5,33 @@
 {{- $interactive := or $actions $chat -}}
 {{- $a := .Values.server.actions -}}
 {{- $extraInsecureCookies := false -}}
+{{- $extraOAuthScope := false -}}
+{{- $extraOAuthPrivateRepositories := false -}}
 {{- range .Values.server.extraEnv -}}
 {{- if eq (default "" .name) "COOKIE_INSECURE" -}}
 {{- $extraInsecureCookies = true -}}
 {{- end -}}
+{{- if eq (default "" .name) "OAUTH_SCOPE" -}}
+{{- $extraOAuthScope = true -}}
+{{- end -}}
+{{- if eq (default "" .name) "OAUTH_PRIVATE_REPOSITORIES" -}}
+{{- $extraOAuthPrivateRepositories = true -}}
+{{- end -}}
 {{- end -}}
 {{- if $extraInsecureCookies -}}
 {{- fail "server.extraEnv must not set COOKIE_INSECURE; use server.development.allowInsecureCookies for local OAuth testing" -}}
+{{- end -}}
+{{- if or (hasKey $a.oauth "scope") (hasKey $a.oauth "chatScope") -}}
+{{- fail "server.actions.oauth.scope and server.actions.oauth.chatScope are no longer supported; remove them and set server.actions.oauth.privateRepositories=true only when OAuth actions must access private repositories" -}}
+{{- end -}}
+{{- if $extraOAuthScope -}}
+{{- fail "server.extraEnv must not set OAUTH_SCOPE; remove it and use server.actions.oauth.privateRepositories" -}}
+{{- end -}}
+{{- if $extraOAuthPrivateRepositories -}}
+{{- fail "server.extraEnv must not set OAUTH_PRIVATE_REPOSITORIES; use server.actions.oauth.privateRepositories" -}}
+{{- end -}}
+{{- if and $a.oauth.privateRepositories (not $actions) -}}
+{{- fail "server.actions.oauth.privateRepositories=true requires server.actions.enabled=true; chat-only OAuth uses read:user" -}}
 {{- end -}}
 {{- if and .Values.server.development.allowInsecureCookies (not (and $interactive (eq $a.mode "oauth"))) -}}
 {{- fail "server.development.allowInsecureCookies requires interactive OAuth mode" -}}
@@ -180,12 +200,8 @@ spec:
               value: {{ $a.oauth.clientId | quote }}
             - name: OAUTH_REDIRECT_URL
               value: {{ $a.oauth.redirectUrl | quote }}
-            - name: OAUTH_SCOPE
-              {{- if $actions }}
-              value: {{ $a.oauth.scope | quote }}
-              {{- else }}
-              value: {{ $a.oauth.chatScope | quote }}
-              {{- end }}
+            - name: OAUTH_PRIVATE_REPOSITORIES
+              value: {{ $a.oauth.privateRepositories | quote }}
             - name: OAUTH_CLIENT_SECRET
               valueFrom:
                 secretKeyRef:

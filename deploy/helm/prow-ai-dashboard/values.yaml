@@ -278,10 +278,9 @@ server:
       redirectUrl: ""
       # sessionKey seeds the session-cookie encryption; use a long random value.
       sessionKey: ""
-      # Scope for write-action deployments.
-      scope: repo
-      # Minimal identity scope for chat-only deployments.
-      chatScope: read:user
+      # Request GitHub private-repository access for write actions. Keep false
+      # for public targets. Chat-only OAuth always uses read:user.
+      privateRepositories: false
       existingSecret: ""
     # proxy mode settings.
     proxy:

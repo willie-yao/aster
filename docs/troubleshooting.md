@@ -17,6 +17,8 @@ cases below.
 | Analysis is generic | The project prompt lacks architecture, artifact layout, or real failure signatures. | Expand `prompts/system.md`. The update applies to new analyses; use an intentional cache rebaseline if existing entries must be replaced. |
 | Cached analysis came from the old provider | Existing reusable entries retain their provider provenance after a provider change. | Set a new cache generation for a reversible full rebaseline. |
 | `Propose fix` reports unavailable | The process cannot find `opencode` or git. | Use a runner or custom server image containing both tools. |
+| Helm rejects `server.actions.oauth.scope` or `chatScope` | The chart now derives a least-privilege OAuth scope. | Remove both legacy keys. Keep `server.actions.oauth.privateRepositories=false` for public targets or set it to `true` only for private action targets. |
+| OAuth actions cannot access a private repository | The public-only default requested `public_repo`. | Set `server.actions.oauth.privateRepositories=true`, upgrade, then sign out and authorize the OAuth App again. |
 
 ## Useful checks
 
@@ -38,6 +40,19 @@ curl -fsS http://localhost:8080/api/capabilities
 
 For deeper AI-loop behavior, see the troubleshooting section in
 [Agentic analysis](agentic.md#troubleshooting).
+
+## OAuth access after a scope change
+
+Chat-only OAuth always requests `read:user`. OAuth actions request
+`public_repo` by default and request `repo` only when
+`server.actions.oauth.privateRepositories=true`.
+
+After changing private-repository access in either direction, sign out of the
+dashboard and sign in again so the session matches the configured policy. When
+reducing from `repo` to `public_repo`, revoke the OAuth App in GitHub before
+reauthorizing if GitHub retains the previous broad grant. The chart rejects
+legacy `scope`, `chatScope`, and `OAUTH_SCOPE` overrides instead of silently
+continuing with broader access.
 
 ## No jobs were published
 

@@ -20,9 +20,10 @@ const sessionCookieName = "pad_session"
 // session is the authenticated state sealed into the cookie. Token is the
 // admin's OAuth token, used to perform GitHub writes as them.
 type session struct {
-	Login string `json:"login"`
-	Token string `json:"token"`
-	Exp   int64  `json:"exp"`
+	Login  string `json:"login"`
+	Token  string `json:"token"`
+	Policy string `json:"policy,omitempty"`
+	Exp    int64  `json:"exp"`
 }
 
 // sessionCodec seals and opens sessions with authenticated encryption so the
@@ -31,6 +32,7 @@ type sessionCodec struct {
 	aead   cipher.AEAD
 	secure bool
 	ttl    time.Duration
+	policy string
 }
 
 // deriveKey turns any secret string into a 32-byte AES key, so operators can
@@ -42,7 +44,7 @@ func deriveKey(secret string) []byte {
 
 // newSessionCodec builds a codec. secure sets the cookie Secure flag (disable
 // only for local http testing). ttl is the session lifetime.
-func newSessionCodec(secret string, secure bool, ttl time.Duration) (*sessionCodec, error) {
+func newSessionCodec(secret string, secure bool, ttl time.Duration, policies ...string) (*sessionCodec, error) {
 	if secret == "" {
 		return nil, errors.New("auth: session key is required")
 	}
@@ -54,7 +56,11 @@ func newSessionCodec(secret string, secure bool, ttl time.Duration) (*sessionCod
 	if err != nil {
 		return nil, fmt.Errorf("auth: session aead: %w", err)
 	}
-	return &sessionCodec{aead: aead, secure: secure, ttl: ttl}, nil
+	policy := ""
+	if len(policies) > 0 {
+		policy = policies[0]
+	}
+	return &sessionCodec{aead: aead, secure: secure, ttl: ttl, policy: policy}, nil
 }
 
 // seal encrypts a session into a URL-safe cookie value.
@@ -94,13 +100,16 @@ func (c *sessionCodec) open(v string) (*session, error) {
 	if time.Now().Unix() > s.Exp {
 		return nil, errors.New("auth: session expired")
 	}
+	if c.policy != "" && s.Policy != c.policy {
+		return nil, errors.New("auth: session policy changed")
+	}
 	return &s, nil
 }
 
 // write sets the session cookie with the sealed value.
 func (c *sessionCodec) write(w http.ResponseWriter, login, token string) error {
 	exp := time.Now().Add(c.ttl)
-	value, err := c.seal(session{Login: login, Token: token, Exp: exp.Unix()})
+	value, err := c.seal(session{Login: login, Token: token, Policy: c.policy, Exp: exp.Unix()})
 	if err != nil {
 		return err
 	}

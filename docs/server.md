@@ -435,7 +435,9 @@ Two auth modes, both keeping the admin allowlist (`ADMIN_LOGINS`):
   an encrypted, httpOnly session cookie and performs the write as them, so the
   issue or PR is attributed to the real user. No token is ever entered in the
   browser. Needs `OAUTH_CLIENT_ID`, `OAUTH_CLIENT_SECRET`, `OAUTH_REDIRECT_URL`
-  (the App's callback), and `SESSION_KEY`.
+  (the App's callback), and `SESSION_KEY`. Public issue and fix targets use the
+  least-privilege `public_repo` scope by default. Set
+  `OAUTH_PRIVATE_REPOSITORIES=true` only when an action target is private.
 - **`proxy`** (bot attribution): an upstream SSO proxy (oauth2-proxy, IAP, ...)
   authenticates the user and passes their identity in a trusted header
   (`AUTH_PROXY_HEADER`, e.g. `X-Auth-Request-Email`); a single `BOT_TOKEN`
@@ -475,7 +477,20 @@ oauth mode the `OAUTH_REDIRECT_URL` host is trusted automatically, and
    the client ID and secret.
 3. Generate a session key (any long random string), e.g.
    `openssl rand -base64 32`.
-4. Run the server with these env vars:
+4. Choose repository access. The server derives the GitHub scope instead of
+   accepting an arbitrary scope:
+
+   | Features | `OAUTH_PRIVATE_REPOSITORIES` | GitHub scope |
+   | --- | --- | --- |
+   | Chat only | `false` | `read:user` |
+   | Actions against public repositories | `false` | `public_repo` |
+   | Actions against private repositories | `true` | `repo` |
+
+   Keep the default `false` for public targets. The `repo` scope grants broad
+   access to both public and private repositories available to the signed-in
+   admin. Chat-only OAuth always uses `read:user` and rejects private-repository
+   access.
+5. Run the server with these env vars:
 
    | Variable | Purpose |
    | --- | --- |
@@ -485,7 +500,7 @@ oauth mode the `OAUTH_REDIRECT_URL` host is trusted automatically, and
    | `OAUTH_REDIRECT_URL` | The callback URL registered above. |
    | `SESSION_KEY` | Random secret seeding the session-cookie encryption. |
    | `ADMIN_LOGINS` | Comma-separated GitHub logins allowed to act. |
-   | `OAUTH_SCOPE` | Optional; defaults to `repo` with actions and `read:user` for chat-only. |
+   | `OAUTH_PRIVATE_REPOSITORIES` | Optional boolean. Defaults to `false`; set `true` only for actions against private repositories. |
    | `HSTS_ENABLED=1` | Optional; send `Strict-Transport-Security: max-age=31536000` when HTTPS is deployed. |
    | `COOKIE_INSECURE=1` | Optional; allow the cookie over plain http for local testing only. |
    | `TRUSTED_ORIGINS` | Optional; extra public origins the CSRF guard accepts (comma-separated) when behind a proxy. The `OAUTH_REDIRECT_URL` host is trusted automatically. |
@@ -496,6 +511,7 @@ oauth mode the `OAUTH_REDIRECT_URL` host is trusted automatically, and
    OAUTH_CLIENT_ID=<client-id> OAUTH_CLIENT_SECRET=<client-secret> \
    OAUTH_REDIRECT_URL=http://localhost:8080/api/auth/callback \
    SESSION_KEY="$(openssl rand -base64 32)" ADMIN_LOGINS=your-login \
+   OAUTH_PRIVATE_REPOSITORIES=false \
    ./bin/server -data-dir=frontend/public/data -static-dir=frontend/dist \
      -project-dir=../myproject-dashboard
    ```
@@ -505,6 +521,14 @@ oauth mode the `OAUTH_REDIRECT_URL` host is trusted automatically, and
 
    Helm deployments enable HSTS and secure OAuth cookies by default. The chart
    accepts insecure cookies only through its explicit local-development value.
+
+`OAUTH_SCOPE` is no longer supported. Remove it and choose repository access
+with `OAUTH_PRIVATE_REPOSITORIES`. After reducing access from `repo` to
+`public_repo`, every admin must sign out of the dashboard and sign in again.
+For certainty that GitHub does not reuse the previous broad authorization,
+revoke the OAuth App under the admin's GitHub application settings before
+signing in again. The OAuth client ID, secret, callback URL, and admin allowlist
+do not otherwise change.
 
 ### Setting up proxy mode
 

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strings"
 )
 
 // Identity is an authenticated admin. Token is the GitHub token used to perform
@@ -33,6 +34,24 @@ type Authenticator interface {
 	Authenticate(ctx context.Context, r *http.Request) (*Identity, error)
 }
 
+// SetPrivateResponseHeaders prevents authenticated responses from being cached.
+func SetPrivateResponseHeaders(header http.Header) {
+	header.Set("Cache-Control", "private, no-store")
+	appendVary(header, "Cookie")
+	appendVary(header, "Authorization")
+}
+
+func appendVary(header http.Header, value string) {
+	for _, current := range header.Values("Vary") {
+		for _, item := range strings.Split(current, ",") {
+			if strings.EqualFold(strings.TrimSpace(item), value) {
+				return
+			}
+		}
+	}
+	header.Add("Vary", value)
+}
+
 type ctxKey struct{}
 
 // withIdentity returns a context carrying the authenticated identity.
@@ -52,6 +71,7 @@ func IdentityFrom(ctx context.Context) (*Identity, bool) {
 // leaking the token.
 func Middleware(a Authenticator, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		SetPrivateResponseHeaders(w.Header())
 		id, err := a.Authenticate(r.Context(), r)
 		if err != nil {
 			switch {
@@ -60,7 +80,7 @@ func Middleware(a Authenticator, next http.Handler) http.Handler {
 			case errors.Is(err, ErrNoToken), errors.Is(err, ErrInvalidToken):
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 			default:
-				log.Printf("auth: unexpected error: %v", err)
+				log.Printf("auth: unexpected authentication failure")
 				http.Error(w, "internal error", http.StatusInternalServerError)
 			}
 			return

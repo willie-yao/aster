@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -160,7 +161,8 @@ func TestConfigureAuthenticatorOAuthScopeByFeature(t *testing.T) {
 		wantScope      string
 	}{
 		{name: "chat only", wantScope: "read:user"},
-		{name: "actions", actionsEnabled: true, wantScope: "repo"},
+		{name: "public actions", actionsEnabled: true, wantScope: "public_repo"},
+		{name: "private actions", actionsEnabled: true, wantScope: "repo"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Setenv("AUTH_MODE", "oauth")
@@ -168,6 +170,7 @@ func TestConfigureAuthenticatorOAuthScopeByFeature(t *testing.T) {
 			t.Setenv("OAUTH_CLIENT_SECRET", "secret")
 			t.Setenv("OAUTH_REDIRECT_URL", "https://dashboard.test/api/auth/callback")
 			t.Setenv("OAUTH_SCOPE", "")
+			t.Setenv("OAUTH_PRIVATE_REPOSITORIES", strconv.FormatBool(testCase.name == "private actions"))
 			t.Setenv("SESSION_KEY", strings.Repeat("k", 32))
 			t.Setenv("ADMIN_LOGINS", "alice")
 			var opts server.Options
@@ -300,5 +303,13 @@ func TestAnalysisChatTimeoutFromEnv(t *testing.T) {
 				t.Fatalf("invalid timeout %q was accepted", value)
 			}
 		})
+	}
+}
+
+func TestConfigureAuthenticatorRejectsLegacyOAuthScope(t *testing.T) {
+	t.Setenv("AUTH_MODE", "oauth")
+	t.Setenv("OAUTH_SCOPE", "repo")
+	if err := configureAuthenticator(&server.Options{}, true); err == nil || !strings.Contains(err.Error(), "OAUTH_SCOPE") {
+		t.Fatalf("legacy scope error = %v", err)
 	}
 }

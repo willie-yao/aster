@@ -11,6 +11,23 @@ Shared volume:    {{ include "prow-ai-dashboard.pvcName" . }} ({{ .Values.persis
 The server serves the SPA at / and the JSON contract at /data/*, with a
 capability descriptor at /api/capabilities.
 
+{{- if and (or .Values.server.actions.enabled .Values.server.chat.enabled) (eq .Values.server.actions.mode "oauth") }}
+OAuth access:
+{{- if .Values.server.actions.enabled }}
+{{- if .Values.server.actions.oauth.privateRepositories }}
+  Private-repository access is enabled. GitHub OAuth requests the broad repo
+  scope. Use this only when an issue or fix target is private.
+{{- else }}
+  Actions use the public_repo scope. Set
+  server.actions.oauth.privateRepositories=true only for private targets.
+{{- end }}
+{{- else }}
+  Chat-only OAuth uses the read:user scope.
+{{- end }}
+  If this release previously requested repo and now uses public-only access,
+  every admin must sign out and authorize the OAuth App again.
+{{- end }}
+
 {{- if .Values.ingress.enabled }}
 Reach it at:
 {{- range .Values.ingress.hosts }}

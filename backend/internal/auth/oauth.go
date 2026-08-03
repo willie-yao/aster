@@ -44,7 +44,7 @@ type OAuthConfig struct {
 	// RedirectURL is the callback registered on the OAuth App, e.g.
 	// https://dashboard.example.com/api/auth/callback.
 	RedirectURL string
-	// Scope granted at login; "repo" allows issue/PR writes on private repos.
+	// Scope granted at login. Callers derive it from the repository access policy.
 	Scope string
 	// Admins is the allowlist of GitHub logins (case-insensitive).
 	Admins []string
@@ -80,12 +80,13 @@ func NewOAuth(cfg OAuthConfig) (*OAuth, error) {
 	if ttl <= 0 {
 		ttl = 12 * time.Hour
 	}
-	codec, err := newSessionCodec(cfg.SessionKey, cfg.SecureCookies, ttl)
+	if strings.TrimSpace(cfg.Scope) == "" {
+		return nil, fmt.Errorf("auth: OAuth scope is required")
+	}
+	cfg.Scope = strings.TrimSpace(cfg.Scope)
+	codec, err := newSessionCodec(cfg.SessionKey, cfg.SecureCookies, ttl, "oauth:"+cfg.Scope)
 	if err != nil {
 		return nil, err
-	}
-	if cfg.Scope == "" {
-		cfg.Scope = "repo"
 	}
 	client := cfg.HTTPClient
 	if client == nil {
@@ -119,6 +120,7 @@ func (o *OAuth) Register(mux *http.ServeMux) {
 // same-origin return path so the callback can send the admin back to the page
 // they started from.
 func (o *OAuth) handleLogin(w http.ResponseWriter, r *http.Request) {
+	SetPrivateResponseHeaders(w.Header())
 	state, err := randomState()
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -139,6 +141,7 @@ func (o *OAuth) handleLogin(w http.ResponseWriter, r *http.Request) {
 // handleCallback verifies state, exchanges the code, checks the allowlist, and
 // establishes the session.
 func (o *OAuth) handleCallback(w http.ResponseWriter, r *http.Request) {
+	SetPrivateResponseHeaders(w.Header())
 	stateCookie, err := r.Cookie(stateCookieName)
 	if err != nil || stateCookie.Value == "" || stateCookie.Value != r.URL.Query().Get("state") {
 		http.Error(w, "invalid oauth state", http.StatusBadRequest)
@@ -152,10 +155,15 @@ func (o *OAuth) handleCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing code", http.StatusBadRequest)
 		return
 	}
-	token, err := o.exchange(r.Context(), code)
+	token, grantedScope, err := o.exchange(r.Context(), code)
 	if err != nil {
-		log.Printf("auth: token exchange failed: %v", err)
-		http.Error(w, "oauth exchange failed", http.StatusBadGateway)
+		log.Printf("auth: token exchange failed")
+		http.Error(w, "oauth authorization did not grant the configured access", http.StatusBadGateway)
+		return
+	}
+	if err := validateGrantedScope(o.cfg.Scope, grantedScope); err != nil {
+		log.Printf("auth: OAuth scope validation failed: %v", err)
+		http.Error(w, "oauth authorization did not grant the configured access", http.StatusForbidden)
 		return
 	}
 	login, err := ghpr.NewClient(nil, token).AuthedLogin(r.Context())
@@ -183,12 +191,14 @@ func (o *OAuth) handleCallback(w http.ResponseWriter, r *http.Request) {
 
 // handleLogout clears the session.
 func (o *OAuth) handleLogout(w http.ResponseWriter, r *http.Request) {
+	SetPrivateResponseHeaders(w.Header())
 	o.codec.clear(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleUser reports the signed-in admin, for the frontend to gate its UI.
 func (o *OAuth) handleUser(w http.ResponseWriter, r *http.Request) {
+	SetPrivateResponseHeaders(w.Header())
 	id, err := o.Authenticate(r.Context(), r)
 	if err != nil {
 		http.Error(w, "unauthenticated", http.StatusUnauthorized)
@@ -199,7 +209,7 @@ func (o *OAuth) handleUser(w http.ResponseWriter, r *http.Request) {
 }
 
 // exchange trades an authorization code for a user access token.
-func (o *OAuth) exchange(ctx context.Context, code string) (string, error) {
+func (o *OAuth) exchange(ctx context.Context, code string) (string, string, error) {
 	form := url.Values{
 		"client_id":     {o.cfg.ClientID},
 		"client_secret": {o.cfg.ClientSecret},
@@ -208,33 +218,45 @@ func (o *OAuth) exchange(ctx context.Context, code string) (string, error) {
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, githubTokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 	resp, err := o.client.Do(req)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("token endpoint status %d", resp.StatusCode)
+		return "", "", fmt.Errorf("token endpoint status %d", resp.StatusCode)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	var out struct {
 		AccessToken string `json:"access_token"`
+		Scope       string `json:"scope"`
 		Error       string `json:"error"`
 	}
 	if err := json.Unmarshal(body, &out); err != nil {
-		return "", err
+		return "", "", err
 	}
 	if out.AccessToken == "" {
-		return "", fmt.Errorf("no access token (%s)", out.Error)
+		return "", "", fmt.Errorf("no access token (%s)", out.Error)
 	}
-	return out.AccessToken, nil
+	return out.AccessToken, out.Scope, nil
+}
+
+func validateGrantedScope(expected, granted string) error {
+	grants := map[string]bool{}
+	for _, value := range strings.FieldsFunc(granted, func(r rune) bool { return r == ',' || r == ' ' }) {
+		grants[strings.TrimSpace(value)] = true
+	}
+	if len(grants) != 1 || !grants[expected] {
+		return fmt.Errorf("granted scopes do not exactly match %q", expected)
+	}
+	return nil
 }
 
 // randomState returns a URL-safe random string for CSRF protection.

@@ -225,9 +225,23 @@ func configureAuthenticator(opts *server.Options, actionsEnabled bool) error {
 	admins := splitList(os.Getenv("ADMIN_LOGINS"))
 	switch mode := os.Getenv("AUTH_MODE"); mode {
 	case "oauth":
-		scope := strings.TrimSpace(os.Getenv("OAUTH_SCOPE"))
-		if scope == "" && !actionsEnabled {
-			scope = "read:user"
+		if strings.TrimSpace(os.Getenv("OAUTH_SCOPE")) != "" {
+			return fmt.Errorf("OAUTH_SCOPE is no longer supported; use OAUTH_PRIVATE_REPOSITORIES=true for private action targets")
+		}
+		privateRepositories, err := optionalBoolEnv("OAUTH_PRIVATE_REPOSITORIES", false)
+		if err != nil {
+			return err
+		}
+		if privateRepositories && !actionsEnabled {
+			return fmt.Errorf("OAUTH_PRIVATE_REPOSITORIES requires actions to be enabled")
+		}
+		scope := "read:user"
+		if actionsEnabled {
+			scope = "public_repo"
+			if privateRepositories {
+				scope = "repo"
+				log.Printf("⚠️ OAuth private-repository access enabled; requesting the broad GitHub repo scope")
+			}
 		}
 		o, err := auth.NewOAuth(auth.OAuthConfig{
 			ClientID:      os.Getenv("OAUTH_CLIENT_ID"),

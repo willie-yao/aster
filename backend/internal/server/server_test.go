@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -242,7 +243,7 @@ func TestHandler_AnalysisTracesAuthenticatedAndFiltered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.StatusCode != http.StatusOK || resp.Header.Get("Cache-Control") != "no-store" {
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Cache-Control") != "private, no-store" {
 		t.Fatalf("filtered status=%d cache=%q", resp.StatusCode, resp.Header.Get("Cache-Control"))
 	}
 	var got ai.AnalysisTraceFile
@@ -296,7 +297,7 @@ func TestHandler_AnalysisTracesMissing(t *testing.T) {
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
-	if got := resp.Header.Get("Cache-Control"); got != "no-store" {
+	if got := resp.Header.Get("Cache-Control"); got != "private, no-store" {
 		t.Fatalf("Cache-Control = %q", got)
 	}
 	_ = resp.Body.Close()
@@ -1107,17 +1108,41 @@ func TestHandler_AsyncActionRequestFlow(t *testing.T) {
 func TestWriteActionErrorMapsPendingConfirmation(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	writeActionError(recorder, "confirm", "alice", actions.ErrPreviewPending)
-	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), actions.ErrPreviewPending.Error()) {
+	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), "already being processed") {
 		t.Fatalf("status=%d body=%q", recorder.Code, recorder.Body.String())
 	}
 	recorder = httptest.NewRecorder()
+	writeActionError(recorder, "confirm", "alice", actions.ErrPreviewSuperseded)
+	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), "replaced") {
+		t.Fatalf("superseded response = %d %q", recorder.Code, recorder.Body.String())
+	}
+	recorder = httptest.NewRecorder()
 	writeActionError(recorder, "confirm", "alice", actions.ErrPreviewOutcomeUnknown)
-	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), actions.ErrPreviewOutcomeUnknown.Error()) {
+	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), "outcome is unknown") {
 		t.Fatalf("unknown outcome response = %d %q", recorder.Code, recorder.Body.String())
 	}
 	recorder = httptest.NewRecorder()
 	writeActionError(recorder, "confirm", "alice", actions.ErrPreviewTargetChanged)
 	if recorder.Code != http.StatusConflict {
 		t.Fatalf("target drift response = %d %q", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestWriteActionErrorHidesInternalDetails(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	writeActionError(recorder, "request", "alice", errors.New("provider secret https://private.example/v1\nsecond line"))
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d", recorder.Code)
+	}
+	body := recorder.Body.String()
+	if strings.Contains(body, "private.example") || strings.Contains(body, "provider secret") {
+		t.Fatalf("internal error leaked: %q", body)
+	}
+}
+
+func TestSafeOperatorErrorRedactsURLsAndNewlines(t *testing.T) {
+	got := safeOperatorError(errors.New("failed https://private.example/token\nnext"))
+	if strings.Contains(got, "private.example") || strings.Contains(got, "\n") {
+		t.Fatalf("safe error = %q", got)
 	}
 }

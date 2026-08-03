@@ -832,14 +832,77 @@ helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set ai.endpoint=http://model.test/v1/chat/completions \
   --set ai.model=test-model \
   --show-only templates/server-deployment.yaml > "$tmp/chat-oauth.yaml"
-grep -A1 -Fq 'name: OAUTH_SCOPE' "$tmp/chat-oauth.yaml"
-grep -Fq 'value: "read:user"' "$tmp/chat-oauth.yaml"
+grep -A1 -F 'name: OAUTH_PRIVATE_REPOSITORIES' "$tmp/chat-oauth.yaml" | grep -Fq 'value: "false"'
+if grep -Fq 'name: OAUTH_SCOPE' "$tmp/chat-oauth.yaml"; then
+  echo 'chat-only OAuth rendered the removed OAUTH_SCOPE variable' >&2
+  exit 1
+fi
 grep -A1 -Fq 'name: HSTS_ENABLED' "$tmp/chat-oauth.yaml"
 grep -Fq 'value: "true"' "$tmp/chat-oauth.yaml"
 if grep -Fq 'name: COOKIE_INSECURE' "$tmp/chat-oauth.yaml"; then
   echo 'OAuth deployment rendered insecure cookies by default' >&2
   exit 1
 fi
+
+oauth_action_args=(
+  --set server.actions.enabled=true
+  --set server.actions.mode=oauth
+  --set server.actions.admins[0]=alice
+  --set server.actions.oauth.clientId=client
+  --set server.actions.oauth.clientSecret=secret
+  --set server.actions.oauth.sessionKey=session-key
+  --set server.actions.oauth.redirectUrl=https://dashboard.test/api/auth/callback
+)
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  "${oauth_action_args[@]}" \
+  --show-only templates/server-deployment.yaml > "$tmp/actions-oauth-public.yaml"
+grep -A1 -F 'name: OAUTH_PRIVATE_REPOSITORIES' "$tmp/actions-oauth-public.yaml" | grep -Fq 'value: "false"'
+if grep -Fq 'name: OAUTH_SCOPE' "$tmp/actions-oauth-public.yaml"; then
+  echo 'public OAuth actions rendered the removed OAUTH_SCOPE variable' >&2
+  exit 1
+fi
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  "${oauth_action_args[@]}" \
+  --set server.actions.oauth.privateRepositories=true \
+  --show-only templates/server-deployment.yaml > "$tmp/actions-oauth-private.yaml"
+grep -A1 -F 'name: OAUTH_PRIVATE_REPOSITORIES' "$tmp/actions-oauth-private.yaml" | grep -Fq 'value: "true"'
+
+for legacy_scope_key in scope chatScope; do
+  if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+    "${oauth_action_args[@]}" \
+    --set-string "server.actions.oauth.${legacy_scope_key}=repo" > "$tmp/oauth-legacy-${legacy_scope_key}.yaml" 2>&1; then
+    echo "legacy OAuth ${legacy_scope_key} value was accepted" >&2
+    exit 1
+  fi
+  grep -Fq 'server.actions.oauth.scope and server.actions.oauth.chatScope are no longer supported' "$tmp/oauth-legacy-${legacy_scope_key}.yaml"
+  grep -Fq 'server.actions.oauth.privateRepositories=true' "$tmp/oauth-legacy-${legacy_scope_key}.yaml"
+done
+
+if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  "${oauth_action_args[@]}" \
+  --set 'server.extraEnv[0].name=OAUTH_SCOPE' \
+  --set 'server.extraEnv[0].value=repo' > "$tmp/oauth-extra-env-scope.yaml" 2>&1; then
+  echo 'legacy OAUTH_SCOPE extra environment variable was accepted' >&2
+  exit 1
+fi
+grep -Fq 'server.extraEnv must not set OAUTH_SCOPE' "$tmp/oauth-extra-env-scope.yaml"
+
+if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.chat.enabled=true \
+  --set server.actions.mode=oauth \
+  --set server.actions.admins[0]=alice \
+  --set server.actions.oauth.clientId=client \
+  --set server.actions.oauth.clientSecret=secret \
+  --set server.actions.oauth.sessionKey=session-key \
+  --set server.actions.oauth.redirectUrl=https://dashboard.test/api/auth/callback \
+  --set server.actions.oauth.privateRepositories=true \
+  --set ai.enabled=true \
+  --set ai.token=test-token > "$tmp/chat-oauth-private.yaml" 2>&1; then
+  echo 'chat-only OAuth accepted private-repository access' >&2
+  exit 1
+fi
+grep -Fq 'server.actions.oauth.privateRepositories=true requires server.actions.enabled=true; chat-only OAuth uses read:user' "$tmp/chat-oauth-private.yaml"
 
 if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set server.chat.enabled=true \

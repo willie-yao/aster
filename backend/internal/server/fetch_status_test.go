@@ -83,7 +83,7 @@ func TestFetchStatusEndpointAuthenticationMethodsAndPrivacy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.StatusCode != http.StatusOK || resp.Header.Get("Cache-Control") != "no-store" {
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Cache-Control") != "private, no-store" {
 		t.Fatalf("GET status=%d cache=%q", resp.StatusCode, resp.Header.Get("Cache-Control"))
 	}
 	var got fetchStatusResponse

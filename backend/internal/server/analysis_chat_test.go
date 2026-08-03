@@ -223,8 +223,8 @@ func TestHandlerAnalysisChatLookupMissingSession(t *testing.T) {
 	if recorder.Code != http.StatusNoContent {
 		t.Fatalf("lookup status=%d body=%q", recorder.Code, recorder.Body.String())
 	}
-	if got := recorder.Header().Get("Cache-Control"); got != "no-store" {
-		t.Fatalf("Cache-Control = %q, want no-store", got)
+	if got := recorder.Header().Get("Cache-Control"); got != "private, no-store" {
+		t.Fatalf("Cache-Control = %q, want private, no-store", got)
 	}
 }
 
@@ -422,14 +422,14 @@ func TestWriteAnalysisChatErrorMapping(t *testing.T) {
 		{analysischat.ErrAnalysisChanged, http.StatusConflict, "analysis changed", "rejected"},
 		{analysischat.ErrSessionBusy, http.StatusConflict, "analysis chat session is busy", "pending"},
 		{analysischat.ErrRequestPending, http.StatusConflict, "analysis chat request is pending", "pending"},
-		{analysischat.ErrIdempotencyConflict, http.StatusConflict, "analysis chat idempotency key conflict", "rejected"},
-		{analysischat.ErrRequestOutcomeUnknown, http.StatusConflict, "analysis chat request outcome unknown", "unknown"},
+		{analysischat.ErrIdempotencyConflict, http.StatusConflict, "analysis chat request conflicts with existing input", "rejected"},
+		{analysischat.ErrRequestOutcomeUnknown, http.StatusConflict, "analysis chat outcome is unknown", "unknown"},
 		{analysischat.ErrInvalidRequest, http.StatusBadRequest, "invalid analysis chat request", "rejected"},
-		{analysischat.ErrSessionLimit, http.StatusTooManyRequests, "analysis chat session limit reached", "rejected"},
-		{analysischat.ErrActiveTurnLimit, http.StatusTooManyRequests, "analysis chat active turn limit reached", "rejected"},
-		{analysischat.ErrRateLimit, http.StatusTooManyRequests, "analysis chat rate limit reached", "rejected"},
-		{analysischat.ErrSourceInvestigationLimit, http.StatusTooManyRequests, "source investigation session limit reached", "rejected"},
-		{analysischat.ErrSourceInvestigationActiveLimit, http.StatusTooManyRequests, "source investigation active limit reached", "rejected"},
+		{analysischat.ErrSessionLimit, http.StatusTooManyRequests, "analysis chat limit reached", "rejected"},
+		{analysischat.ErrActiveTurnLimit, http.StatusTooManyRequests, "analysis chat limit reached", "rejected"},
+		{analysischat.ErrRateLimit, http.StatusTooManyRequests, "analysis chat limit reached", "rejected"},
+		{analysischat.ErrSourceInvestigationLimit, http.StatusTooManyRequests, "analysis chat limit reached", "rejected"},
+		{analysischat.ErrSourceInvestigationActiveLimit, http.StatusTooManyRequests, "analysis chat limit reached", "rejected"},
 		{sourceinvestigation.ErrInvalidResult, http.StatusBadGateway, "source investigation could not complete the request", "failed"},
 		{analysischat.ErrRequestFailed, http.StatusBadGateway, "analysis chat could not complete the request", "failed"},
 		{analysischat.ErrProviderRequestFailed, http.StatusBadGateway, analysischat.ErrProviderRequestFailed.Error(), "failed"},

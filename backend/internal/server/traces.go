@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/auth"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
 )
 
@@ -17,7 +18,7 @@ const maxAnalysisTraceFileBytes = 64 << 20
 
 func analysisTracesHandler(dataDir string, attachment bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
+		auth.SetPrivateResponseHeaders(w.Header())
 		traces, err := readAnalysisTraces(filepath.Join(dataDir, output.AITraceFilename))
 		if err != nil {
 			if os.IsNotExist(err) {

@@ -61,7 +61,7 @@ func streamSourceInvestigationHandler(timeout time.Duration, run SourceInvestiga
 			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 			return
 		}
-		w.Header().Set("Cache-Control", "no-store")
+		auth.SetPrivateResponseHeaders(w.Header())
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("X-Accel-Buffering", "no")
 		w.WriteHeader(http.StatusOK)
@@ -116,7 +116,7 @@ func cancelSourceInvestigationHandler(run SourceInvestigationRunner) http.Handle
 			writeSourceInvestigationError(w, r.PathValue("id"), identity.Login, err)
 			return
 		}
-		w.Header().Set("Cache-Control", "no-store")
+		auth.SetPrivateResponseHeaders(w.Header())
 		w.WriteHeader(http.StatusNoContent)
 	})
 }

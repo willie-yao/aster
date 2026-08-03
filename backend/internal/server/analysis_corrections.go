@@ -83,14 +83,14 @@ func writeAnalysisCorrectionError(w http.ResponseWriter, id, login string, err e
 		status, message = http.StatusNotFound, "analysis correction not found"
 	case errors.Is(err, corrections.ErrPreviewExpired), errors.Is(err, corrections.ErrCorrectionState),
 		errors.Is(err, analysischat.ErrAnalysisChanged):
-		status, message = http.StatusConflict, err.Error()
+		status, message = http.StatusConflict, "analysis correction state changed"
 	case errors.Is(err, analysischat.ErrInvalidRequest):
-		status, message = http.StatusBadRequest, err.Error()
+		status, message = http.StatusBadRequest, "invalid analysis correction request"
 	case errors.Is(err, corrections.ErrCorrectionLimit):
-		status, message = http.StatusTooManyRequests, err.Error()
+		status, message = http.StatusTooManyRequests, "analysis correction limit reached"
 	}
 	if status >= 500 {
-		log.Printf("analysis correction %s for %s: %v", id, login, err)
+		log.Printf("analysis correction %s for %s: %s", id, login, safeOperatorError(err))
 	}
 	http.Error(w, message, status)
 }

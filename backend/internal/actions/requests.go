@@ -66,7 +66,6 @@ type ActionRequestView struct {
 	SupersededBy string         `json:"superseded_by,omitempty"`
 	Preview      *PreviewResult `json:"preview,omitempty"`
 	EmailSent    bool           `json:"email_sent,omitempty"`
-	EmailError   string         `json:"email_error,omitempty"`
 }
 
 type actionCleanupState struct {
@@ -87,6 +86,7 @@ type actionRequest struct {
 	BasePatternHash string                      `json:"base_pattern_hash,omitempty"`
 	Runtime         *runtime.WorkRef            `json:"runtime,omitempty"`
 	Cleanup         *actionCleanupState         `json:"cleanup,omitempty"`
+	EmailError      string                      `json:"email_error,omitempty"`
 }
 
 type actionRequestState struct {

@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/auth"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fetchprogress"
 )
 
@@ -51,7 +52,7 @@ func fetchStatusHandler(dataDir string) http.Handler {
 
 func fetchStatusHandlerWithClock(dataDir string, now func() time.Time, staleAfter time.Duration) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
+		auth.SetPrivateResponseHeaders(w.Header())
 		w.Header().Set("Content-Type", "application/json")
 		response := fetchStatusResponse{State: "unavailable"}
 		status, err := fetchprogress.Read(fetchprogress.Path(dataDir))

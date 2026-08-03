@@ -809,6 +809,7 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | `server.development.allowInsecureCookies` | Allow OAuth cookies over local HTTP. Requires HSTS to be disabled and must not be used for a deployed dashboard. |
 | `server.actions.enabled`, `server.actions.mode` | Turn on admin authentication, write actions, and private trace access; `oauth` (GitHub sign-in) or `proxy` (SSO proxy + bot token). |
 | `server.actions.admins` | Required allowlist for admin actions, chat, and trace access. An empty list fails closed. |
+| `server.actions.oauth.privateRepositories` | Request the broad GitHub `repo` scope for private action targets. Defaults to `false`, which uses `public_repo` for actions. Chat-only OAuth always uses `read:user`. |
 
 The public read endpoints (`/data/*`, `/api/capabilities`, `/healthz`) are
 unauthenticated. Admin features are opt-in. Set `server.chat.enabled` for
@@ -832,8 +833,9 @@ owner-bound session state. Multiple server replicas can serve the same session.
 The storage class must support advisory file locking, atomic rename, and file and directory synchronization. The
 volume contains private transcripts and selected failure context, so restrict
 PVC access and backups to dashboard operators. Authentication reuses
-`server.actions` settings, but chat alone does not enable
-GitHub writes or require `BOT_TOKEN`.
+`server.actions` settings, but chat alone does not enable GitHub writes or
+require `BOT_TOKEN`. Chat-only OAuth uses only `read:user`; setting
+`server.actions.oauth.privateRepositories=true` requires actions to be enabled.
 
 ```bash
 helm upgrade --install capz deploy/helm/prow-ai-dashboard \
@@ -849,7 +851,8 @@ helm upgrade --install capz deploy/helm/prow-ai-dashboard \
   --set server.actions.oauth.clientId=<client-id> \
   --set server.actions.oauth.clientSecret=<client-secret> \
   --set server.actions.oauth.redirectUrl=https://dashboard.example.com/api/auth/callback \
-  --set server.actions.oauth.sessionKey="$(openssl rand -base64 32)"
+  --set server.actions.oauth.sessionKey="$(openssl rand -base64 32)" \
+  --set server.actions.oauth.privateRepositories=false
 ```
 
 The chart stores chat state at `<persistence.mountPath>/.analysis-chat`, mounts
@@ -929,8 +932,23 @@ helm upgrade --install capz deploy/helm/prow-ai-dashboard \
   --set server.actions.oauth.clientId=<client-id> \
   --set server.actions.oauth.clientSecret=<client-secret> \
   --set server.actions.oauth.redirectUrl=https://dashboard.example.com/api/auth/callback \
-  --set server.actions.oauth.sessionKey="$(openssl rand -base64 32)"
+  --set server.actions.oauth.sessionKey="$(openssl rand -base64 32)" \
+  --set server.actions.oauth.privateRepositories=false
 ```
+
+The public-only default requests `public_repo`, which is sufficient to file
+issues and create fix branches or pull requests in public repositories. Set
+`server.actions.oauth.privateRepositories=true` only when an issue or fix target
+is private. That choice requests GitHub's broad `repo` scope for every signed-in
+admin.
+
+The old `server.actions.oauth.scope` and
+`server.actions.oauth.chatScope` values are rejected. Remove both keys during
+upgrade. If the deployment previously requested `repo` and now uses the
+public-only default, every admin must sign out and authorize the OAuth App
+again. For certainty that GitHub discards the earlier broad grant, revoke the
+old OAuth authorization before signing in again. Existing OAuth client, secret,
+callback, and allowlist settings stay the same. Proxy mode is unaffected.
 
 Proxy mode (an SSO proxy fronts the server; a bot token writes):
 

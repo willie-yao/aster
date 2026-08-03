@@ -35,5 +35,4 @@ export interface ActionRequest {
   superseded_by?: string;
   preview?: ActionPreview;
   email_sent?: boolean;
-  email_error?: string;
 }

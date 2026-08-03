@@ -27,6 +27,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/auth"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/redact"
 )
 
 // ActionRunner performs on-demand actions for a failure id using the admin's
@@ -472,16 +473,42 @@ func writeActionError(w http.ResponseWriter, id, login string, err error) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	if errors.Is(err, actions.ErrPreviewPending) || errors.Is(err, actions.ErrPreviewSuperseded) || errors.Is(err, actions.ErrPreviewOutcomeUnknown) {
-		http.Error(w, err.Error(), http.StatusConflict)
+	if errors.Is(err, actions.ErrPreviewPending) {
+		http.Error(w, "action request is already being processed", http.StatusConflict)
+		return
+	}
+	if errors.Is(err, actions.ErrPreviewSuperseded) {
+		http.Error(w, "action request was replaced by a newer attempt", http.StatusConflict)
+		return
+	}
+	if errors.Is(err, actions.ErrPreviewOutcomeUnknown) {
+		http.Error(w, "GitHub action outcome is unknown", http.StatusConflict)
 		return
 	}
 	if errors.Is(err, actions.ErrPreviewTargetChanged) {
-		http.Error(w, err.Error(), http.StatusConflict)
+		http.Error(w, "action target changed; generate a new preview", http.StatusConflict)
 		return
 	}
-	log.Printf("action failed for %s (by %s): %v", id, login, err)
-	http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+	log.Printf("action failed for %s (by %s): %s", id, login, safeOperatorError(err))
+	http.Error(w, "action request could not be completed", http.StatusUnprocessableEntity)
+}
+
+func safeOperatorError(err error) string {
+	if err == nil {
+		return "unknown error"
+	}
+	value := redact.Credentials(redact.URLs(strings.TrimSpace(err.Error())))
+	value = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, value)
+	value = strings.Join(strings.Fields(value), " ")
+	if len(value) > 500 {
+		value = value[:500] + "..."
+	}
+	return value
 }
 
 type createActionRequestFunc func(failureID, kind, login, userToken, instruction, supersedesID string) (actions.ActionRequestView, error)
