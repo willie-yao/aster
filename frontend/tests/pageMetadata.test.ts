@@ -14,6 +14,8 @@ test("known routes receive route-specific page titles", () => {
     ["/FLAKY", "Failure Analysis"],
     ["/analysis-traces", "Analysis Traces"],
     ["/ANALYSIS-TRACES", "Analysis Traces"],
+    ["/ai-usage", "AI Usage"],
+    ["/AI-USAGE", "AI Usage"],
     ["/job/periodic-capz", "Job Details"],
     ["/JOB/periodic-capz", "Job Details"],
     ["/job/periodic-capz/test/TestCluster", "Test Details"],

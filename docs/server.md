@@ -587,3 +587,12 @@ the request.
 ## Pattern refresh freshness
 
 Each job detail includes additive `pattern_refresh` metadata with `current`, `retained`, `failed`, `not_applicable`, or `unavailable` state. `flakiness.json` carries aggregate counts and a job-status map. Freshness is outside `PatternAnalysis` and does not change pattern identity. Server write actions require `current` state and current evidence. Read-only pattern chat may use retained evidence only while every referenced build remains available.
+
+## AI usage reporting
+
+When `ai.usage.enabled` and authentication are configured, `GET /api/ai-usage`
+merges the private fetcher and server ledgers. The default range is the latest
+30 UTC days. `start` and `end` use `YYYY-MM-DD`, and repeated `feature`
+parameters filter AI features. `GET /api/ai-usage/download` downloads the same
+filtered report. Cost nanounits are serialized as strings. Coverage is
+`complete`, `partial`, or `unavailable`.

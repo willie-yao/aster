@@ -1078,3 +1078,12 @@ helm install capz deploy/helm/prow-ai-dashboard \
   --set ai.enabled=true --set ai.existingSecret=capz-ai \
   --set ai.endpoint=... --set ai.model=...
 ```
+
+## Private AI usage files
+
+When AI usage accounting is enabled, the fetcher writes
+`ai_usage_fetcher.json` and the authenticated server writes
+`ai_usage_server.json` on the shared data volume. Both files are blocked under
+`/data` and removed from Pages artifacts. The first release assumes one server
+replica owns the server ledger. Use an external store before scaling the server
+horizontally.

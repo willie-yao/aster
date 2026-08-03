@@ -6,6 +6,7 @@ import { BuildFailurePage } from "./pages/BuildFailurePage";
 import { FlakinessPage } from "./pages/FlakinessPage";
 import { ActionRequestPage } from "./pages/ActionRequestPage";
 import { AnalysisTracesPage } from "./pages/AnalysisTracesPage";
+import { AIUsagePage } from "./pages/AIUsagePage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { Layout } from "./components/Layout";
 import { ManifestProvider } from "./components/ManifestProvider";
@@ -26,6 +27,7 @@ export default function App() {
                 <Route index element={<DashboardPage />} />
                 <Route path="flaky" element={<FlakinessPage />} />
                 <Route path="analysis-traces" element={<AnalysisTracesPage />} />
+                <Route path="ai-usage" element={<AIUsagePage />} />
                 <Route path="job/:jobName" element={<JobDetailPage />} />
                 <Route
                   path="job/:jobName/test/:testName"

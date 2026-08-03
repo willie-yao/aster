@@ -238,3 +238,11 @@ chat-completion calls). Roughly 50-150k input tokens and 30-90 seconds of
 wall clock per failure, depending on artifact size and how deep the model
 digs. Most providers price the input dominant. See
 [agentic.md](agentic.md) for cost-control knobs (`max_iters`, `concurrency`).
+
+## Usage metadata
+
+The Chat Completions adapter reads prompt/input and completion/output token
+fields plus cached-input and reasoning detail fields when present. The
+Responses adapter reads input, output, cached-input, and reasoning token fields.
+Providers may omit usage. The dashboard does not substitute a tokenizer
+estimate and does not ship vendor price tables.

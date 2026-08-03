@@ -20,6 +20,7 @@
   "include": [
     "tests/**/*.ts",
     "src/lib/analysisChat.ts",
+    "src/lib/aiUsage.ts",
     "src/lib/pageMetadata.ts",
     "src/lib/routes.ts",
     "src/lib/fetchStatus.ts",
@@ -27,6 +28,7 @@
     "src/lib/buildFailures.ts",
     "src/types/dashboard.ts",
     "src/types/analysisChat.ts",
+    "src/types/usage.ts",
     "src/types/fetchStatus.ts",
     "src/lib/actionRequests.ts",
     "src/types/actions.ts"

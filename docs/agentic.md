@@ -721,6 +721,15 @@ decoded snapshot through `GET /api/analysis-traces` and the private **Traces**
 page. Exact query filters can correlate a response ID or a job/build/test tuple
 without exposing prompt or tool content.
 
+### Private token and cost accounting
+
+The shared model transport records provider-reported input, cached-input,
+output, and reasoning token metadata. Separate private ledgers cover scheduled
+analysis and authenticated server features. Cache hits record zero new token
+usage. Missing provider metadata remains unreported, and coding-agent work is
+marked external and unmetered rather than estimated from bytes or elapsed time.
+Cost estimates use only operator-configured rates and are not provider invoices.
+
 ### Cache semantics
 
 Agentic analyses are cached under `agentic:<module>:<job>:<build>:<hash>`. A

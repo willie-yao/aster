@@ -5,6 +5,7 @@ const pageRoutes = [
   { path: "/", title: "Overview" },
   { path: "/flaky", title: "Failure Analysis" },
   { path: "/analysis-traces", title: "Analysis Traces" },
+  { path: "/ai-usage", title: "AI Usage" },
   { path: "/job/:jobName", title: "Job Details" },
   { path: "/job/:jobName/test/:testName", title: "Test Details" },
   { path: "/job/:jobName/build/:buildId/failure", title: "Build Failure" },

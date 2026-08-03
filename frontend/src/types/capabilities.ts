@@ -8,6 +8,7 @@ export interface CapabilityFeatures {
   analysis_critique_version?: number;
   action_requests?: boolean;
   analysis_traces?: boolean;
+  ai_usage?: boolean;
   fetch_status?: boolean;
   analysis_chat?: boolean;
   analysis_corrections?: boolean;

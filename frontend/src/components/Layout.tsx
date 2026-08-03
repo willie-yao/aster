@@ -76,7 +76,8 @@ export function Layout() {
   usePageDocumentTitle(location.pathname, manifest.branding.title);
   const flakyActive = location.pathname === "/flaky" || location.pathname.startsWith("/flaky/");
   const tracesActive = location.pathname === "/analysis-traces";
-  const overviewActive = !flakyActive && !tracesActive;
+  const usageActive = location.pathname === "/ai-usage";
+  const overviewActive = !flakyActive && !tracesActive && !usageActive;
 
   return (
     <FetchStatusContext.Provider value={fetchStatus}>
@@ -214,12 +215,10 @@ export function Layout() {
               current={location.pathname === "/flaky"}
             />
             {features.analysis_traces && (
-              <NavTab
-                to="/analysis-traces"
-                label="Traces"
-                active={tracesActive}
-                current={tracesActive}
-              />
+              <NavTab to="/analysis-traces" label="Traces" active={tracesActive} current={tracesActive} />
+            )}
+            {features.ai_usage && (
+              <NavTab to="/ai-usage" label="Usage" active={usageActive} current={usageActive} />
             )}
           </Box>
 
