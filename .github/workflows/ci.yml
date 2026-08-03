@@ -18,6 +18,8 @@ jobs:
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
+      - name: Check repo map
+        run: make check-repo-map
       - name: Build
         working-directory: backend
         run: go build ./...

@@ -32,57 +32,123 @@ Consumer workflow (cron)
 
 ## Repo layout
 
-```
-backend/                       Go 1.25
-  cmd/
-    fetcher/                   Main entrypoint; one binary per deploy
-    server/                    Kubernetes-native API server (read parity + capabilities)
-    worker/                    Continuous watch worker (in-cluster incremental fetch)
-  internal/
-    ai/                        AI orchestration (most active area)
-      ai.go                    Chat client, JSON parsing, header handling
-      agentic.go               Agentic loop + cache shape + floor gates
-      service.go               Cache-key, staleness, shouldReanalyze
-      critique.go              Deterministic regex judge that gates drafts
-      skills/                  Consumer-owned recipe registry
-      tools/                   Function-calling tools (filesystem, k8s)
-      modules/
-        universal/             Universal agentic module (builds the seed prompt)
-      baseprompt.go            BasePrompt (engine-owned)
-      responseformat.go        ResponseFormatFooter (engine-owned)
-      compose.go               Composes: BasePrompt + consumer system.md + footer
-      cache.go                 On-disk cache (JSON, keyed by mode+hash)
-    aggregator/                Roll-ups across builds
-    artifacts/                 Build-log + artifact parsing
-    collectors/                Built-in generic collector
-    fetcher/                   AIModuleRegistry, CollectorRegistry wiring
-    storage/                  Pluggable artifact store (gcs / gcsweb / local backends)
-    prowbuild/                Prow path layout, build info, JUnit + job discovery
-    junit/                     JUnit XML parser
-    models/                    Wire-format types (BuildResult, AIAnalysis, ...)
-    notify/                    SMTP email notifications
-    output/                    JSON writers (dashboard.json, jobs/, ...)
-    project/                   project.yaml load + validate
-    prow/jobconfig/            kubernetes/test-infra job parsing
-    server/                    HTTP handler: /data/* read parity + /api/capabilities + actions
-    auth/                      Admin auth seam (PAT allowlist; OAuth-swappable)
-    actions/                   On-demand single-failure issue / fix-PR service
-    fixruntime/                Selects local OpenCode or generation-only Orka fixes
-    orka/                      Orka fix runtime helpers
+Grouped by role rather than alphabetically. Every `backend/cmd` and
+`backend/internal` package appears here; `make check-repo-map` fails if this
+list and the tree diverge.
 
-frontend/                      React 19 + Vite 8 + MUI 9
-  public/data/                 Fetcher writes JSON here; Vite serves it
-  src/
-    hooks/useData.ts           Loads dashboard.json, flakiness.json, jobs/*
-    components/ManifestProvider.tsx   Loads manifest.json
-configs/example/               Docs-only minimal project.yaml + prompts/
-deploy/helm/                   Helm chart for the Kubernetes-native mode
-Dockerfile                     Multi-stage image: fetcher + server + SPA
-docs/                          onboarding, deployment, configuration, AI,
-                               feature, troubleshooting, and contributor guides
-.github/workflows/             ci.yml + reusable-deploy.yml + reusable-clear-cache.yml + image.yml
-Makefile                       Local-dev entry points (PROJECT_DIR override)
 ```
+backend/                         Go 1.25
+  cmd/
+    fetcher/                     One-shot pipeline; the Pages path and the k8s CronJob
+    worker/                      Continuous in-cluster watch loop (k8s mode: watch)
+    server/                      API server: /data/* read parity, capabilities, actions
+    analyzer/                    Runs one failure analysis request (Orka container runtime)
+  internal/
+    -- core pipeline (discover -> analyze -> write) --
+    fetcher/                     Orchestration invoked by cmd/fetcher and cmd/worker
+    prow/jobconfig/              kubernetes/test-infra job discovery + parsing
+    prowbuild/                   Addresses Prow build artifacts over a storage.Backend
+    storage/                     Pluggable artifact store (gcs / gcsweb / local)
+    artifacts/                   Read-only Browser over one build's artifact tree
+    junit/                       JUnit XML -> structured test cases
+    aggregator/                  Per-job and per-test aggregate statistics
+    patterns/                    Correlates analyzed failures across builds
+    output/                      Writes the JSON contract the frontend reads
+    models/                      Shared wire-format types
+    fetchprogress/               Persists safe aggregate fetch progress for operators
+
+    -- analysis (the most active area) --
+    ai/                          Model transports + the agentic tool-calling loop
+      agentic.go                 The loop, finalize branch, floor gates
+      toolloop.go                Tool dispatch and transcript management
+      service.go                 Cache key, staleness, shouldReanalyze
+      critique.go                Deterministic judge that gates drafts
+      semantic.go                Semantic judge pass
+      compose.go                 BasePrompt + consumer system.md + ResponseFormatFooter
+      cache.go / cache_acceptance.go  On-disk cache and its acceptance floors
+      evidenceplan/              Ranked evidence planning + deterministic repair
+      tools/{filesystem,k8s,repotree}/  Function-calling tools exposed to the model
+      skills/                    Diagnostic recipe registry (+ builtin/{prow,kubernetes})
+      modules/universal/         Builds the per-failure seed prompt
+    analysisruntime/             Selects the failure-analysis runtime (in-process default)
+    analysischat/                Bounded conversations about a published analysis
+    corrections/                 Promotes reviewed chat revisions without mutating output
+    sourceinvestigation/         Read-only source investigation contracts
+    aitest/                      Record/replay chat-completions server for tests
+
+    -- write actions (issues, fix PRs, resolution) --
+    actions/                     On-demand single-failure actions behind admin auth
+    actiondraft/                 Validates model-generated issue and PR text
+    actionverify/                Checks remediation symbols against pinned source
+    issues/                      Opens and maintains GitHub issues
+    fixpr/                       Drafts minimal code fixes for recurring patterns
+    fixruntime/                  Selects the coding-agent runtime for fix PRs
+    chatfix/                     Bridges one chat response into fix generation
+    remediation/                 Lifecycle of dashboard-created fixes
+    resolve/                     Admin-marked "resolved" recurring patterns
+    patternstate/                Pattern publication + write-side validation
+    ghpr/                        Opens PRs that add/update files in one commit
+    repotemplate/                Fetches a repo's issue/PR markdown templates
+    notify/                      SMTP email notifications
+
+    -- serving and deployment --
+    server/                      HTTP handler for the Kubernetes-native mode
+    auth/                        Admin auth seam (dev / proxy / oauth)
+    runtime/                     Swappable agent-execution abstraction
+    orka/                        Adapters for Orka lifecycle execution
+    kubernetesdeploy/            Installs a validated consumer bundle with Helm
+    onboard/                     `fetcher onboard`: discovery, presets, doctor, scaffold
+    project/                     project.yaml load + validate
+
+    -- support --
+    statefile/                   Atomic JSON writes + repo-scoped tracking state
+    redact/                      Scrubs sensitive values before logging
+    textutil/                    Small shared string helpers
+    e2e/                         End-to-end pipeline, benchmark, and quality suites
+
+frontend/                        React 19 + Vite 8 + MUI 9
+  public/data/                   Fetcher writes JSON here; Vite serves it
+  src/
+    hooks/useData.ts             Loads dashboard.json, flakiness.json, jobs/*
+    components/ManifestProvider.tsx   Loads manifest.json
+configs/example/                 Docs-only minimal project.yaml + full reference
+deploy/helm/                     Helm chart for the Kubernetes-native mode
+docs/architecture-decisions/     ADRs; 0001 records analysis-runtime ownership
+Dockerfile                       Multi-stage image: fetcher + server + SPA
+docs/                            onboarding, deployment, configuration, AI,
+                                 feature, troubleshooting, and contributor guides
+.github/workflows/               ci.yml + reusable-deploy.yml + reusable-clear-cache.yml + image.yml
+Makefile                         Local-dev entry points (PROJECT_DIR override)
+```
+
+## How the pieces fit
+
+Most changes touch one of five packages. Read this before hunting through the
+list above.
+
+```
+Prow/TestGrid -> fetcher -> ai -> output -> server -> frontend
+                    |        |                 |
+                 patterns  skills+tools     actions (admin writes)
+```
+
+1. **`fetcher`** discovers jobs and builds, pulls JUnit + artifacts through
+   `storage`, and decides what needs analyzing. Start here for anything about
+   what data lands in the dashboard.
+2. **`ai`** analyzes one failure with the agentic loop: the model calls tools to
+   browse artifacts, and floors, critique, and the semantic judge gate the answer
+   before it is cached. Start here for analysis quality.
+3. **`output`** writes `dashboard.json`, `jobs/*.json`, and the rest of the JSON
+   contract. Both deploy paths read the identical contract.
+4. **`server`** serves that contract in Kubernetes mode and adds a capability
+   descriptor plus admin-gated writes. The Pages path serves the same files
+   statically with no server.
+5. **`actions`** performs on-demand admin writes (file issue, propose fix, mark
+   resolved), reusing the same `issues` and `fixpr` code the scheduled pass uses.
+
+The many small packages are deliberate: several exist to break shared
+dependencies between `fetcher`, `actions`, and `server` (for example `resolve`,
+`patternstate`, `actiondraft`), which would otherwise import-cycle.
 
 ## Setup commands
 
@@ -91,6 +157,7 @@ Makefile                       Local-dev entry points (PROJECT_DIR override)
 make build           # cd backend && go build -o ../bin/fetcher ./cmd/fetcher/
 make test            # cd backend && go test ./... -count=1
 make tidy            # go mod tidy
+make check-repo-map  # AGENTS.md repo layout matches backend/cmd + backend/internal
 
 # Frontend (Node 20+, npm)
 make fe-install      # npm ci in frontend/

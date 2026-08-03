@@ -1,4 +1,4 @@
-.PHONY: all build build-server build-worker serve dev-actions image analyzer-image fixer-image test test-v e2e lint fmt tidy helm-check \
+.PHONY: all build build-server build-worker serve dev-actions image analyzer-image fixer-image test test-v e2e lint fmt tidy helm-check check-repo-map \
        fetch-data fetch-data-quick fetch-data-ai fetch-data-ai-quick \
        fe-install dev fe-build fe-check fe-test fe-lint \
        dist dist-ai clean clean-cache clean-all help
@@ -91,6 +91,10 @@ helm-check:
 	bash deploy/helm/prow-ai-dashboard/test-render.sh
 	bash deploy/helm/prow-ai-dashboard/test-operations.sh
 	bash deploy/helm/test-upgrade.sh
+
+# Check the AGENTS.md repo map against the backend tree.
+check-repo-map:
+	bash hack/check-repo-map.sh
 
 ## ─── Data Fetching ────────────────────────────────────────────
 
