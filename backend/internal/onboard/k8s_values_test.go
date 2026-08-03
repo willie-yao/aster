@@ -104,6 +104,7 @@ func TestK8sValuesDocumentsOptionalConfiguration(t *testing.T) {
 		"# tolerations: []",
 		"# affinity: {}",
 		"helm show values oci://ghcr.io/willie-yao/charts/prow-ai-dashboard",
+		"raw.githubusercontent.com/willie-yao/prow-ai-dashboard/fixture-engine-ref/deploy/helm/prow-ai-dashboard/values.schema.json",
 		"blob/fixture-engine-ref/deploy/helm/prow-ai-dashboard/values.yaml",
 	} {
 		if !strings.Contains(values, want) {
@@ -150,6 +151,9 @@ func TestK8sValuesEscapesEngineRefInSourceURL(t *testing.T) {
 	values := renderK8sValuesForTest(t, data)
 	if !strings.Contains(values, "blob/feature%2Fscaffold%20values/deploy/helm/prow-ai-dashboard/values.yaml") {
 		t.Fatalf("engine ref was not escaped in source URL\n---\n%s", values)
+	}
+	if !strings.Contains(values, "feature%2Fscaffold%20values/deploy/helm/prow-ai-dashboard/values.schema.json") {
+		t.Fatalf("engine ref was not escaped in schema URL\n---\n%s", values)
 	}
 	parseYAMLMap(t, values)
 }

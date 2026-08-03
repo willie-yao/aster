@@ -88,6 +88,7 @@ tidy:
 
 # Lint and render the Helm chart.
 helm-check:
+	bash deploy/helm/prow-ai-dashboard/test-schema.sh
 	bash deploy/helm/prow-ai-dashboard/test-render.sh
 	bash deploy/helm/prow-ai-dashboard/test-operations.sh
 	bash deploy/helm/test-upgrade.sh

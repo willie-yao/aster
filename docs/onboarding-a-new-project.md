@@ -153,7 +153,11 @@ fetch, runtime, and service settings active. Optional cron, Orka, authentication
 ingress, NetworkPolicy, resource, and scheduling settings remain commented so
 they are discoverable without pinning chart defaults. The generated header links
 to the complete values for the selected engine reference and includes a
-`helm show values` command for published charts.
+`helm show values` command for published charts. It also links compatible YAML
+editors to the chart's `values.schema.json`. Helm validates supplied values
+against that schema before rendering. If the installed chart version differs
+from the engine reference, use the schema and full commented values that ship
+with the installed chart version.
 
 When AI is enabled, generated values reference the predictable `<release>-ai`
 Kubernetes Secret and key `AI_TOKEN`. Create that Secret with your normal secret

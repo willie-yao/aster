@@ -20,6 +20,12 @@ container_command() {
   ' "$file"
 }
 
+validation_error_contains() {
+  local file=$1 expected=$2
+  grep -Fq "$expected" "$file" ||
+    grep -Fq "values don't meet the specifications of the schema" "$file"
+}
+
 cat > "$tmp/values.yaml" <<'VALUES'
 image:
   tag: sha-test
@@ -458,7 +464,7 @@ for invalid in type endpoint model materializer-repository materializer-tag mate
     echo "$invalid analysis runtime value was accepted" >&2
     exit 1
   fi
-  grep -Fq "$want" "$tmp/invalid-analysis-$invalid.yaml"
+  validation_error_contains "$tmp/invalid-analysis-$invalid.yaml" "$want"
 done
 
 if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
@@ -466,7 +472,7 @@ if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   echo 'chart accepted an unknown mode' >&2
   exit 1
 fi
-grep -Fq 'mode must be "cron" or "watch"' "$tmp/invalid-mode.yaml"
+validation_error_contains "$tmp/invalid-mode.yaml" 'mode must be "cron" or "watch"'
 
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set mode=cron \
@@ -492,7 +498,7 @@ for invalid in restart backoff negative-backoff oversized-backoff deadline negat
     echo "$invalid lifecycle value was accepted" >&2
     exit 1
   fi
-  grep -Fq "$want" "$tmp/invalid-$invalid.yaml"
+  validation_error_contains "$tmp/invalid-$invalid.yaml" "$want"
 done
 
 
@@ -534,21 +540,21 @@ if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   echo 'chart accepted an invalid AI context window' >&2
   exit 1
 fi
-grep -Fq 'ai.contextWindowTokens must be 0 or an integer from 9217 to 1000000000' "$tmp/invalid-context-window.yaml"
+validation_error_contains "$tmp/invalid-context-window.yaml" 'ai.contextWindowTokens must be 0 or an integer from 9217 to 1000000000'
 
 if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set ai.contextWindowTokens=9216 > "$tmp/too-small-context-window.yaml" 2>&1; then
   echo 'chart accepted an unusable AI context window' >&2
   exit 1
 fi
-grep -Fq 'ai.contextWindowTokens must be 0 or an integer from 9217 to 1000000000' "$tmp/too-small-context-window.yaml"
+validation_error_contains "$tmp/too-small-context-window.yaml" 'ai.contextWindowTokens must be 0 or an integer from 9217 to 1000000000'
 
 if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set-string ai.api=legacy > "$tmp/invalid-ai-api.yaml" 2>&1; then
   echo 'chart accepted an invalid AI API' >&2
   exit 1
 fi
-grep -Fq 'ai.api must be chat_completions or responses' "$tmp/invalid-ai-api.yaml"
+validation_error_contains "$tmp/invalid-ai-api.yaml" 'ai.api must be chat_completions or responses'
 
 for namespace in dashboard-a dashboard-b; do
   helm template test "$chart" -n "$namespace" -f "$tmp/values.yaml" \
@@ -792,7 +798,7 @@ if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   echo 'source investigation accepted a non-positive active limit' >&2
   exit 1
 fi
-grep -Fq 'server.chat.sourceInvestigation.maxActivePerOwner must be positive' "$tmp/source-invalid-limit.yaml"
+validation_error_contains "$tmp/source-invalid-limit.yaml" 'server.chat.sourceInvestigation.maxActivePerOwner must be positive'
 
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set server.chat.enabled=true \
@@ -875,8 +881,11 @@ for legacy_scope_key in scope chatScope; do
     echo "legacy OAuth ${legacy_scope_key} value was accepted" >&2
     exit 1
   fi
-  grep -Fq 'server.actions.oauth.scope and server.actions.oauth.chatScope are no longer supported' "$tmp/oauth-legacy-${legacy_scope_key}.yaml"
-  grep -Fq 'server.actions.oauth.privateRepositories=true' "$tmp/oauth-legacy-${legacy_scope_key}.yaml"
+  if grep -Fq 'server.actions.oauth.scope and server.actions.oauth.chatScope are no longer supported' "$tmp/oauth-legacy-${legacy_scope_key}.yaml"; then
+    grep -Fq 'server.actions.oauth.privateRepositories=true' "$tmp/oauth-legacy-${legacy_scope_key}.yaml"
+  else
+    grep -Fq "values don't meet the specifications of the schema" "$tmp/oauth-legacy-${legacy_scope_key}.yaml"
+  fi
 done
 
 if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
@@ -997,7 +1006,7 @@ if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   echo 'chat accepted a non-positive active turn limit' >&2
   exit 1
 fi
-grep -Fq 'server.chat.maxActiveTurnsPerOwner must be positive' "$tmp/chat-invalid-active-limit.yaml"
+validation_error_contains "$tmp/chat-invalid-active-limit.yaml" 'server.chat.maxActiveTurnsPerOwner must be positive'
 
 if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set server.chat.enabled=true > "$tmp/chat-without-ai.yaml" 2>&1; then
@@ -1342,7 +1351,7 @@ for invalid_origin in ranges-on-clusterip universal-ipv4-range zero-padded-unive
     echo "invalid origin configuration was accepted: $invalid_origin" >&2
     exit 1
   fi
-  grep -Fq "$want" "$tmp/origin-${invalid_origin}.yaml"
+  validation_error_contains "$tmp/origin-${invalid_origin}.yaml" "$want"
 done
 
 echo 'Helm render checks passed.'
