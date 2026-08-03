@@ -288,9 +288,10 @@ its JSON response schema. Replace the TODOs with a grounded diagnostic runbook.
 Use only project documentation, job configuration, source, and observed CI
 artifacts. Leave an item unresolved instead of adding plausible guidance.
 
-The analyzer can read supplied Prow artifacts and may have read-only Kubernetes
-tools, depending on the deployment. It does not have portal, SSH, arbitrary
-shell, browser, or local CLI access.
+The analyzer can read supplied Prow artifacts. If Kubernetes artifact tools are
+enabled, they navigate Kubernetes-shaped logs and resource dumps already in the
+artifact tree. The analyzer does not connect to a live Kubernetes API and does
+not have portal, SSH, arbitrary shell, browser, or local CLI access.
 
 ---
 

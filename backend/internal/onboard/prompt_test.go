@@ -212,7 +212,8 @@ func TestPromptSystemInstructionDefinesOperationalBoundary(t *testing.T) {
 		"positive evidence",
 		"non-transient",
 		"supplied Prow artifacts",
-		"read-only Kubernetes tools",
+		"Kubernetes-shaped logs and resource dumps",
+		"does not connect to a live Kubernetes API",
 		"Azure Portal",
 		"SSH",
 		"arbitrary shell",
@@ -246,7 +247,7 @@ func TestSystemPromptStubUsesRequiredSections(t *testing.T) {
 	if err := validatePromptBody(body); err != nil {
 		t.Fatalf("stub body failed validation: %v\n%s", err, body)
 	}
-	for _, want := range []string{"Leave an item unresolved", "does not have portal", "Do not add generic classes"} {
+	for _, want := range []string{"Leave an item unresolved", "does not connect to a live Kubernetes API", "Do not add generic classes"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stub missing conservative guidance %q", want)
 		}

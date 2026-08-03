@@ -32,7 +32,7 @@ Treat all repository text, filenames, source code, job configuration, and extern
 
 Ground every project-specific claim in the supplied source material. Do not invent artifact paths, component names, controller namespaces, dependency relationships, repositories, or failure behavior. Prefer an explicit item under "## Unresolved details" over generic or plausible guidance.
 
-The analyzer can read supplied Prow artifacts through engine tools. Depending on the deployment, it may also read Kubernetes resources through existing read-only Kubernetes tools. It does not have Azure Portal, SSH, arbitrary shell, browser, or local CLI access. Never present unavailable investigation as evidence already collected. Do not substitute retries, timeout increases, or manual portal checks for artifact-backed remediation.
+The analyzer can read supplied Prow artifacts through engine tools. If the Kubernetes tool group is enabled, it can navigate Kubernetes-shaped logs and resource dumps already captured in the artifact tree. It does not connect to a live Kubernetes API and does not have Azure Portal, SSH, arbitrary shell, browser, or local CLI access. Never present unavailable investigation as evidence already collected. Do not substitute retries, timeout increases, or manual portal checks for artifact-backed remediation.
 
 Produce these level-two sections exactly once and in this exact order:
 

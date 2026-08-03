@@ -138,12 +138,13 @@ maintainer TODOs instead of filling gaps with generic assumptions.
 
 ## Analyzer capability boundary
 
-The analyzer can read supplied Prow artifacts through engine tools. Depending
-on the deployment, it may also read Kubernetes resources through existing
-read-only Kubernetes tools. It does not have portal, SSH, arbitrary shell,
-browser, or local CLI access. Do not present an unavailable investigation as
-evidence already collected, and do not substitute retries or manual portal
-checks for an artifact-backed remediation.
+The analyzer can read supplied Prow artifacts through engine tools. Optional
+Kubernetes tools navigate Kubernetes-shaped logs and resource dumps already
+captured in the artifact tree. They do not connect to a live Kubernetes API.
+The analyzer also does not have portal, SSH, arbitrary shell, browser, or local
+CLI access. Do not present an unavailable investigation as evidence already
+collected, and do not substitute retries or manual portal checks for an
+artifact-backed remediation.
 
 ## Worked examples
 

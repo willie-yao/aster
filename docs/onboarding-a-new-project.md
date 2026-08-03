@@ -235,9 +235,10 @@ it as unresolved instead of inventing generic guidance.
 Transient rules require both positive evidence that permits the classification
 and a boundary that makes the failure non-transient. The generator does not add
 common transient classes when the documentation is silent. It also tells the
-model that the analyzer has Prow artifact tools, may have read-only Kubernetes
-tools, and does not have portal, SSH, arbitrary shell, browser, or local CLI
-access.
+model that the analyzer has Prow artifact tools. Optional Kubernetes tools
+navigate Kubernetes-shaped logs and resource dumps already captured in the
+artifact tree. They do not connect to a live Kubernetes API. The analyzer also
+does not have portal, SSH, arbitrary shell, browser, or local CLI access.
 
 When the source repository yields no meaningful documentation, onboarding skips
 the model request and writes the same reviewable stub used by `-no-prompt`.
