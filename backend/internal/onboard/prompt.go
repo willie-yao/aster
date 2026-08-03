@@ -132,6 +132,9 @@ func validatePromptBody(body string) error {
 			headings = append(headings, line)
 		}
 	}
+	if fence != "" {
+		return fmt.Errorf("generated prompt contains an unclosed code fence")
+	}
 	if len(headings) != len(requiredPromptHeadings) {
 		return fmt.Errorf("generated prompt has %d level-two sections, want %d", len(headings), len(requiredPromptHeadings))
 	}

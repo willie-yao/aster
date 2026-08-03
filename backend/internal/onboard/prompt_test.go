@@ -126,6 +126,7 @@ func TestValidatePromptBody(t *testing.T) {
 		"unexpected section": strings.Replace(validPromptBody(), "## Diagnostic lifecycle", "## Overview\nExtra.\n\n## Diagnostic lifecycle", 1),
 		"top-level title":    "# Project AI prompt addendum\n\n" + validPromptBody(),
 		"second wrapper":     validPromptBody() + "\n\n# Other project AI prompt addendum\nWrapped again.",
+		"unclosed fence":     validPromptBody() + "\n\n```text\nunterminated",
 	}
 	for name, body := range tests {
 		t.Run(name, func(t *testing.T) {
