@@ -311,13 +311,17 @@ func Handler(opts Options) (http.Handler, error) {
 	return compressResponses(securityHeaders(opts.HSTSEnabled, mux)), nil
 }
 
-// securityHeaders wraps the handler with conservative response headers. It denies
-// framing (clickjacking of the admin action flow), disables MIME sniffing, and
-// limits referrer leakage. No Content-Security-Policy is set here because the SPA
-// relies on inline styles; a nonce-based CSP is a separate frontend change.
+const contentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'"
+
+const permissionsPolicy = "accelerometer=(), autoplay=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+
+// securityHeaders wraps the handler with conservative response headers. Scripts
+// stay same-origin only. MUI runtime styles require style-src 'unsafe-inline'.
 func securityHeaders(hsts bool, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
+		h.Set("Content-Security-Policy", contentSecurityPolicy)
+		h.Set("Permissions-Policy", permissionsPolicy)
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
@@ -686,9 +690,12 @@ func spaHandler(dir string) http.HandlerFunc {
 		}
 		if info, err := os.Stat(filepath.Join(dir, clean)); err == nil && !info.IsDir() {
 			// Vite emits content-hashed filenames under assets/, so they can be
-			// cached forever; a content change yields a new name.
+			// cached forever; a content change yields a new name. Root assets keep
+			// stable names and must revalidate on deploy.
 			if strings.HasPrefix(clean, "assets/") {
 				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			} else {
+				w.Header().Set("Cache-Control", "no-cache")
 			}
 			fileServer.ServeHTTP(w, r)
 			return

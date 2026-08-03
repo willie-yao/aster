@@ -2,6 +2,7 @@ import Box from "@mui/material/Box";
 import Tooltip from "@mui/material/Tooltip";
 import { Link as RouterLink } from "react-router-dom";
 import type { RunSummary } from "../types/dashboard";
+import { jobRunPath } from "../lib/routes";
 import { dotColorFor } from "../theme";
 
 interface SparklineProps {
@@ -22,7 +23,7 @@ export function Sparkline({ runs, jobID }: SparklineProps) {
           <Tooltip key={run.build_id} title={`#${run.build_id} — ${label}`}>
             <Box
               component={RouterLink}
-              to={`/job/${encodeURIComponent(jobID)}?run=${run.build_id}`}
+              to={jobRunPath(jobID, run.build_id)}
               aria-label={`Run ${run.build_id} ${label.toLowerCase()}`}
               onClick={(event) => event.stopPropagation()}
               sx={{

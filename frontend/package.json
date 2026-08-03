@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && node scripts/verify-build.mjs",
     "test": "tsc -p tsconfig.test.json && node node_modules/.tmp/test-dist/tests/run.js",
     "lint": "eslint .",
     "preview": "vite preview"
@@ -18,7 +18,8 @@
     "fuse.js": "^7.1.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
-    "react-router-dom": "^7.13.1"
+    "react-router": "7.18.1",
+    "react-router-dom": "7.18.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",

@@ -30,6 +30,7 @@ import {
   loadLatestActionRequest,
   syncStoredActionRequest,
 } from "../lib/actionRequests";
+import { actionRequestPath } from "../lib/routes";
 import { soft } from "../theme";
 
 const API_BASE = import.meta.env.BASE_URL;
@@ -111,7 +112,7 @@ export function ActionRequestPage() {
           : value;
         if (cancelled) return;
         if (latest.id !== requestID) {
-          navigate(`/action-request/${encodeURIComponent(latest.id)}`, {
+          navigate(actionRequestPath(latest.id), {
             replace: true,
           });
         }
@@ -156,7 +157,7 @@ export function ActionRequestPage() {
       if (activeRequestID.current !== id) return null;
       setRequest(value);
       if (value.id !== requestID) {
-        navigate(`/action-request/${encodeURIComponent(value.id)}`, {
+        navigate(actionRequestPath(value.id), {
           replace: true,
         });
       }
@@ -210,7 +211,7 @@ export function ActionRequestPage() {
       if (activeRequestID.current !== startedRequestID) return;
       setRequest(latest);
       if (latest.id !== requestID) {
-        navigate(`/action-request/${encodeURIComponent(latest.id)}`, {
+        navigate(actionRequestPath(latest.id), {
           replace: true,
         });
       }
@@ -255,7 +256,7 @@ export function ActionRequestPage() {
       if (activeRequestID.current !== startedRequestID) return;
       setInstruction("");
       setRequest(next);
-      navigate(`/action-request/${encodeURIComponent(next.id)}`, { replace: true });
+      navigate(actionRequestPath(next.id), { replace: true });
     } catch (e) {
       if (activeRequestID.current !== startedRequestID) return;
       const message = e instanceof Error ? e.message : String(e);

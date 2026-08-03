@@ -6,6 +6,7 @@ import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import { Link as RouterLink } from "react-router-dom";
 import type { JobSummary } from "../types/dashboard";
+import { jobPath } from "../lib/routes";
 import { formatPercent, timeAgo, formatDuration } from "../lib/utils";
 import { statusAccent } from "../theme";
 import { StatusChip } from "./StatusChip";
@@ -67,7 +68,7 @@ export function JobCard({ job }: JobCardProps) {
     >
       <CardActionArea
         component={RouterLink}
-        to={`/job/${encodeURIComponent(job.job_id)}`}
+        to={jobPath(job.job_id)}
         sx={{ height: "100%", display: "flex", alignItems: "stretch" }}
       >
         <CardContent

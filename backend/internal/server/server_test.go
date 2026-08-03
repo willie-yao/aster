@@ -448,6 +448,7 @@ func TestHandler_StaticRoutesPreserveGetHeadAndRange(t *testing.T) {
 	assetBody := "console.log('asset')"
 	writeFile(t, staticDir, "index.html", indexBody)
 	writeFile(t, staticDir, "assets/index-wlRzmcMX.js", assetBody)
+	writeFile(t, staticDir, "spa-index-redirect.js", "redirect()")
 
 	h, err := Handler(Options{DataDir: dataDir, StaticDir: staticDir, Capabilities: DefaultCapabilities()})
 	if err != nil {
@@ -463,6 +464,7 @@ func TestHandler_StaticRoutesPreserveGetHeadAndRange(t *testing.T) {
 		{path: "/flaky", body: indexBody, cacheControl: "no-cache"},
 		{path: "/job/example", body: indexBody, cacheControl: "no-cache"},
 		{path: "/not-found", body: indexBody, cacheControl: "no-cache"},
+		{path: "/spa-index-redirect.js", body: "redirect()", cacheControl: "no-cache"},
 		{path: "/assets/index-wlRzmcMX.js", body: assetBody, cacheControl: "public, max-age=31536000, immutable"},
 	} {
 		t.Run("GET "+testCase.path, func(t *testing.T) {
@@ -591,27 +593,41 @@ func TestHandler_DataNoCache(t *testing.T) {
 // every route.
 func TestHandler_SecurityHeaders(t *testing.T) {
 	dataDir := t.TempDir()
-	h, err := Handler(Options{DataDir: dataDir, Capabilities: DefaultCapabilities(), HSTSEnabled: true})
+	writeFile(t, dataDir, "dashboard.json", `{}`)
+	staticDir := t.TempDir()
+	writeFile(t, staticDir, "index.html", "<!doctype html><title>app</title>")
+	writeFile(t, staticDir, "assets/app.js", "console.log(1)")
+	h, err := Handler(Options{DataDir: dataDir, StaticDir: staticDir, Capabilities: DefaultCapabilities(), HSTSEnabled: true})
 	if err != nil {
 		t.Fatalf("Handler: %v", err)
 	}
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/healthz")
-	if err != nil {
-		t.Fatalf("GET healthz: %v", err)
-	}
-	resp.Body.Close()
 	want := map[string]string{
+		"Content-Security-Policy":   contentSecurityPolicy,
+		"Permissions-Policy":        permissionsPolicy,
 		"X-Frame-Options":           "DENY",
 		"X-Content-Type-Options":    "nosniff",
 		"Referrer-Policy":           "strict-origin-when-cross-origin",
 		"Strict-Transport-Security": "max-age=31536000",
 	}
-	for k, v := range want {
-		if got := resp.Header.Get(k); got != v {
-			t.Errorf("%s = %q, want %q", k, got, v)
+	for _, path := range []string{
+		"/healthz",
+		"/api/capabilities",
+		"/data/dashboard.json",
+		"/job/example",
+		"/assets/app.js",
+	} {
+		resp, err := http.Get(srv.URL + path)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		resp.Body.Close()
+		for k, v := range want {
+			if got := resp.Header.Get(k); got != v {
+				t.Errorf("GET %s: %s = %q, want %q", path, k, got, v)
+			}
 		}
 	}
 }

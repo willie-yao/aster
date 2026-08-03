@@ -14,6 +14,7 @@ import { useNavigate } from "react-router-dom";
 import Fuse from "fuse.js";
 import { useSearchIndex } from "../hooks/useData";
 import { useManifest } from "../hooks/useManifest";
+import { jobPath, testPath } from "../lib/routes";
 import { shortJobName, shortTestName } from "../lib/utils";
 import { soft } from "../theme";
 import { Panel } from "./Panel";
@@ -44,8 +45,9 @@ function searchResultAccessibleName(entry: SearchEntry, filePrefix: string): str
 }
 
 function searchResultPath(entry: SearchEntry): string {
-  const jobPath = `/job/${encodeURIComponent(entry.job_id)}`;
-  return entry.kind === "job" ? jobPath : `${jobPath}/test/${encodeURIComponent(entry.test_name)}`;
+  return entry.kind === "job"
+    ? jobPath(entry.job_id)
+    : testPath(entry.job_id, entry.test_name);
 }
 
 interface SearchResultButtonProps {

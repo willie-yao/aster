@@ -9,6 +9,7 @@ import { Link as RouterLink } from "react-router-dom";
 import type { BuildResult, TestCase } from "../types/dashboard";
 import type { FetchStatusResponse } from "../types/fetchStatus";
 import { buildActionsReady, buildAnalysisState, buildFailureActionID, type BuildAnalysisState } from "../lib/buildFailures";
+import { buildFailurePath } from "../lib/routes";
 import { FailureActions } from "./FailureActions";
 import { useCapabilities } from "../hooks/useCapabilities";
 import { AiAnalysisPanel } from "./AiAnalysisPanel";
@@ -72,7 +73,7 @@ export function BuildFailurePanel({
           <Chip size="small" color="error" variant="outlined" label={`Build ${run.build_id}`} />
           <Stack direction="row" spacing={1} sx={{ ml: { sm: "auto" }, flexWrap: "wrap" }}>
             {showDetailLink && (
-              <Button component={RouterLink} to={`/job/${encodeURIComponent(jobID)}/build/${encodeURIComponent(run.build_id)}/failure`} size="small">
+              <Button component={RouterLink} to={buildFailurePath(jobID, run.build_id)} size="small">
                 Open details
               </Button>
             )}

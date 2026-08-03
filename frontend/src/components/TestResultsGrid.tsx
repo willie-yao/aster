@@ -4,6 +4,7 @@ import Link from "@mui/material/Link";
 import Typography from "@mui/material/Typography";
 import { Link as RouterLink } from "react-router-dom";
 import type { BuildResult } from "../types/dashboard";
+import { jobRunPath, testPath } from "../lib/routes";
 import { shortDate, shortTestName } from "../lib/utils";
 import { Panel } from "./Panel";
 import { junitTestCases } from "../lib/buildFailures";
@@ -152,7 +153,7 @@ export function TestResultsGrid({ runs, jobID }: TestResultsGridProps) {
                     <Box component="td" sx={{ bgcolor: (t) => (t.vars ?? t).palette.surface.main, p: 0 }}>
                       <Link
                         component={RouterLink}
-                        to={`/job/${encodeURIComponent(jobID)}/test/${encodeURIComponent(row.testName)}`}
+                        to={testPath(jobID, row.testName)}
                         underline="none"
                         title={row.testName}
                         sx={{
@@ -236,7 +237,7 @@ export function TestResultsGrid({ runs, jobID }: TestResultsGridProps) {
                           {status !== "absent" ? (
                             <Link
                               component={RouterLink}
-                              to={`/job/${encodeURIComponent(jobID)}?run=${run.build_id}`}
+                              to={jobRunPath(jobID, run.build_id)}
                               underline="none"
                               sx={{ display: "block" }}
                             >

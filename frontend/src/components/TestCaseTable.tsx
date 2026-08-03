@@ -22,6 +22,7 @@ import {
 } from "@mui/icons-material";
 import { Link as RouterLink } from "react-router-dom";
 import type { TestCase } from "../types/dashboard";
+import { testPath, testRunPath } from "../lib/routes";
 import { formatDuration, fileToUrl, fileSortKey, highlightStackTrace } from "../lib/utils";
 import { RichText } from "./RichText";
 import { soft } from "../theme";
@@ -192,7 +193,9 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                   {jobID && tc.status === "failed" ? (
                     <Link
                       component={RouterLink}
-                      to={`/job/${encodeURIComponent(jobID)}/test/${encodeURIComponent(tc.name)}${buildId ? `?run=${buildId}` : ""}`}
+                      to={buildId
+                        ? testRunPath(jobID, tc.name, buildId)
+                        : testPath(jobID, tc.name)}
                       underline="none"
                       onClick={(e) => e.stopPropagation()}
                       sx={{ color: "inherit", "&:hover": { color: "primary.main" } }}

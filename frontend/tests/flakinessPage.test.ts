@@ -66,8 +66,9 @@ function collectInteractiveNesting(): string[] {
 test("test and job links stay separate from the disclosure button", () => {
   assert.deepEqual(collectInteractiveNesting(), []);
   assert.doesNotMatch(source, /AccordionSummary/);
-  assert.match(source, /to={`\/job\/\$\{encodeURIComponent\(item\.job_id\)\}\/test\//);
-  assert.match(source, /to={`\/job\/\$\{encodeURIComponent\(item\.job_id\)\}`}/);
+  assert.match(source, /testRunPath\(item\.job_id, item\.test_name, item\.last_failure\.build_id\)/);
+  assert.match(source, /testPath\(item\.job_id, item\.test_name\)/);
+  assert.match(source, /jobPath\(item\.job_id\)/);
   assert.match(source, /<IconButton[\s\S]*aria-controls=\{detailsId\}[\s\S]*aria-expanded=\{expanded\}/);
   assert.match(source, /<Collapse in=\{expanded\} timeout="auto">/);
   assert.doesNotMatch(source, /unmountOnExit/);

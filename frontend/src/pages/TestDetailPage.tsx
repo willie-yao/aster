@@ -24,6 +24,7 @@ import {
 } from "@mui/icons-material";
 import { useJobDetail } from "../hooks/useData";
 import { useCapabilities } from "../hooks/useCapabilities";
+import { jobPath, jobRunPath } from "../lib/routes";
 import {
   formatDuration,
   highlightStackTrace,
@@ -283,7 +284,7 @@ export function TestDetailPage() {
           </Link>
           <Link
             component={RouterLink}
-            to={`/job/${encodeURIComponent(jobID ?? "")}`}
+            to={jobPath(jobID ?? "")}
             underline="hover"
             color="text.secondary"
           >
@@ -352,7 +353,9 @@ export function TestDetailPage() {
         </Link>
         <Link
           component={RouterLink}
-          to={`/job/${encodeURIComponent(jobID ?? "")}${effectiveSelectedId ? `?run=${effectiveSelectedId}` : ""}`}
+          to={effectiveSelectedId
+            ? jobRunPath(jobID ?? "", effectiveSelectedId)
+            : jobPath(jobID ?? "")}
           underline="hover"
           color="text.secondary"
         >

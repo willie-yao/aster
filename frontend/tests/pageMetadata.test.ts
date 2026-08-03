@@ -17,9 +17,11 @@ test("known routes receive route-specific page titles", () => {
     ["/job/periodic-capz", "Job Details"],
     ["/JOB/periodic-capz", "Job Details"],
     ["/job/periodic-capz/test/TestCluster", "Test Details"],
+    ["/job/periodic%2Fcapz/test/Test%20Cluster", "Test Details"],
     ["/JOB/periodic-capz/TEST/TestCluster", "Test Details"],
     ["/job/periodic-capz/build/123/failure", "Build Failure"],
     ["/action-request/request-1", "Action Request"],
+    ["/action-request/request%2Fwith%20spaces", "Action Request"],
     ["/ACTION-REQUEST/request-1", "Action Request"],
   ] as const;
 
@@ -38,6 +40,8 @@ test("unknown and malformed routes receive the Not Found title", () => {
     "/job/periodic-capz//test/TestCluster",
     "/action-request",
     "/action-request//request-1",
+    "//evil.example/path",
+    "/\\evil.example/path",
   ]) {
     assert.equal(pageTitleForPath(pathname), "Page Not Found", pathname);
   }

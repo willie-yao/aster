@@ -10,6 +10,7 @@ import { Panel } from "../components/Panel";
 import { useJobDetail } from "../hooks/useData";
 import { useSharedFetchStatus } from "../hooks/useSharedFetchStatus";
 import { buildFailure as findBuildFailure } from "../lib/buildFailures";
+import { jobRunPath } from "../lib/routes";
 
 export function BuildFailurePage() {
   const { jobName: jobID, buildId } = useParams<{ jobName: string; buildId: string }>();
@@ -29,7 +30,7 @@ export function BuildFailurePage() {
     <Stack spacing={{ xs: 3, sm: 4 }}>
       <Breadcrumbs separator="›" sx={{ fontSize: "0.875rem" }}>
         <Link component={RouterLink} to="/" color="text.secondary" underline="hover">Dashboard</Link>
-        <Link component={RouterLink} to={`/job/${encodeURIComponent(jobID ?? "")}?run=${encodeURIComponent(run.build_id)}`} color="text.secondary" underline="hover">{data.name}</Link>
+        <Link component={RouterLink} to={jobRunPath(jobID ?? "", run.build_id)} color="text.secondary" underline="hover">{data.name}</Link>
         <Typography color="text.primary">Build {run.build_id}</Typography>
       </Breadcrumbs>
       <Stack spacing={0.75}>

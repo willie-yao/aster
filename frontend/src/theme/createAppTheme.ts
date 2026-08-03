@@ -67,10 +67,10 @@ function paletteFromTokens(t: ColorTokens): PaletteOptions {
 }
 
 const monoFontFamily =
-  '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+  'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace';
 
 const typography = {
-  fontFamily: '"Inter", system-ui, -apple-system, "Segoe UI", sans-serif',
+  fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
   // The root html font-size is 17px in index.css. Keeping MUI's htmlFontSize at
   // 16 preserves the dashboard's rem scale.
   htmlFontSize: 16,
@@ -86,13 +86,13 @@ const typography = {
   // Custom variants for reusable section titles and compact labels. Call sites
   // override fontSize via `sx` for larger titles or smaller card titles.
   headline: {
-    fontFamily: '"Inter", sans-serif',
+    fontFamily: "inherit",
     fontWeight: 700,
     fontSize: "1.125rem",
     letterSpacing: "-0.01em",
   },
   label: {
-    fontFamily: '"Inter", sans-serif',
+    fontFamily: "inherit",
     fontWeight: 600,
     fontSize: "0.6875rem",
     letterSpacing: "0.05em",

@@ -21,6 +21,14 @@ range responses, no-body statuses, `no-transform` responses, and content that
 already has a `Content-Encoding` remain uncompressed. Existing cache headers
 and private-file filtering are preserved.
 
+Server responses also set a same-origin Content Security Policy, deny framing,
+disable MIME sniffing, limit referrer data, and disable unused browser device
+features with `Permissions-Policy`. Scripts, connections, images, and fonts are
+restricted to the dashboard origin, with `data:` allowed only for images. MUI
+and Emotion inject runtime style elements, so `style-src` currently includes
+`'unsafe-inline'`; `script-src` remains strict and the SPA contains no inline
+startup script.
+
 The server is independent of where the in-process analyzer ran. Pages and
 Kubernetes deployments produce the same `jobs/*.json`, so the server contract
 remains identical.

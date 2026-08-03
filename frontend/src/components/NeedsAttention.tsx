@@ -13,6 +13,7 @@ import { useMemo, useState } from "react";
 import { Link as RouterLink } from "react-router-dom";
 import { useFlakinessReport, useResolved } from "../hooks/useData";
 import { useManifest } from "../hooks/useManifest";
+import { jobPath, testPath, testRunPath } from "../lib/routes";
 import { confidenceColor, shortJobName, shortTestName } from "../lib/utils";
 import { soft } from "../theme";
 import { Panel } from "./Panel";
@@ -177,7 +178,7 @@ export function NeedsAttention() {
                   <ListItemButton
                     key={pattern.job_id ?? pattern.subject}
                     component={RouterLink}
-                    to={`/job/${encodeURIComponent(pattern.job_id ?? "")}`}
+                    to={jobPath(pattern.job_id ?? "")}
                     sx={{
                       gap: 1.5,
                       px: 1,
@@ -259,7 +260,9 @@ export function NeedsAttention() {
                 <ListItemButton
                   key={`${item.job_id}/${item.test_name}`}
                   component={RouterLink}
-                  to={`/job/${encodeURIComponent(item.job_id)}/test/${encodeURIComponent(item.test_name)}${item.last_failure?.build_id ? `?run=${item.last_failure.build_id}` : ""}`}
+                  to={item.last_failure?.build_id
+                    ? testRunPath(item.job_id, item.test_name, item.last_failure.build_id)
+                    : testPath(item.job_id, item.test_name)}
                   sx={{
                     gap: 1.5,
                     px: 1,
@@ -380,7 +383,7 @@ export function NeedsAttention() {
                     <ListItemButton
                       key={pattern.id ?? pattern.job_id ?? pattern.subject}
                       component={RouterLink}
-                      to={`/job/${encodeURIComponent(pattern.job_id ?? "")}`}
+                      to={jobPath(pattern.job_id ?? "")}
                       sx={{
                         gap: 1.5,
                         px: 1,

@@ -21,6 +21,7 @@
     "tests/**/*.ts",
     "src/lib/analysisChat.ts",
     "src/lib/pageMetadata.ts",
+    "src/lib/routes.ts",
     "src/lib/fetchStatus.ts",
     "src/lib/testResults.ts",
     "src/lib/buildFailures.ts",

@@ -31,6 +31,7 @@ import type {
   AnalysisTraceEvent,
   AnalysisTraceFile,
 } from "../types/traces";
+import { testRunPath } from "../lib/routes";
 import { soft } from "../theme";
 
 const API_BASE = import.meta.env.BASE_URL;
@@ -180,7 +181,7 @@ function TraceEventRow({ event }: { event: AnalysisTraceEvent }) {
 }
 
 function TraceCard({ trace }: { trace: AnalysisTrace }) {
-  const testHref = `/job/${encodeURIComponent(trace.job_id)}/test/${encodeURIComponent(trace.test_name)}?run=${encodeURIComponent(trace.build_id)}`;
+  const testHref = testRunPath(trace.job_id, trace.test_name, trace.build_id);
   return (
     <Accordion
       disableGutters

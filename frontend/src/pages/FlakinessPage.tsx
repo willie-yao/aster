@@ -21,6 +21,7 @@ import { useFlakinessReport } from "../hooks/useData";
 import { useManifest } from "../hooks/useManifest";
 import { useSharedFetchStatus } from "../hooks/useSharedFetchStatus";
 import { analysisProgressBreakdown } from "../lib/fetchStatus";
+import { jobPath, testPath, testRunPath } from "../lib/routes";
 import { formatPercent, shortJobName, shortTestName, timeAgo } from "../lib/utils";
 import { soft } from "../theme";
 import type { BuildFailureSummary, TestFlakiness } from "../types/dashboard";
@@ -122,7 +123,9 @@ function TestRow({ item, tab }: { item: TestFlakiness; tab: TestTab }) {
           >
             <Link
               component={RouterLink}
-              to={`/job/${encodeURIComponent(item.job_id)}/test/${encodeURIComponent(item.test_name)}${item.last_failure?.build_id ? `?run=${item.last_failure.build_id}` : ""}`}
+              to={item.last_failure?.build_id
+                ? testRunPath(item.job_id, item.test_name, item.last_failure.build_id)
+                : testPath(item.job_id, item.test_name)}
               underline="none"
               title={item.test_name}
               sx={{
@@ -141,7 +144,7 @@ function TestRow({ item, tab }: { item: TestFlakiness; tab: TestTab }) {
             </Link>
             <Link
               component={RouterLink}
-              to={`/job/${encodeURIComponent(item.job_id)}`}
+              to={jobPath(item.job_id)}
               underline="none"
               title={item.job_name}
               variant="label"

@@ -17,6 +17,7 @@ import { soft } from "../theme";
 import { AnalysisChat } from "./AnalysisChat";
 import { useCapabilities } from "../hooks/useCapabilities";
 import { patternChatAvailability } from "../lib/patternChat";
+import { jobRunPath } from "../lib/routes";
 
 function remediationStatusLabel(status: string): string {
   return status.replaceAll("_", " ");
@@ -220,7 +221,7 @@ export function PatternBanner({
                 <Link
                   key={b}
                   component={RouterLink}
-                  to={jobID ? `/job/${encodeURIComponent(jobID)}?run=${b}` : "#"}
+                  to={jobID ? jobRunPath(jobID, b) : "#"}
                   underline="none"
                   sx={{
                     fontFamily: "monospace",
