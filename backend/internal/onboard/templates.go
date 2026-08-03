@@ -409,12 +409,16 @@ if [ ! -d "$ENGINE_DIR/.git" ]; then
   git clone https://github.com/willie-yao/prow-ai-dashboard.git "$ENGINE_DIR"
 fi
 
-test -z "$(git -C "$ENGINE_DIR" status --porcelain)"
-git -C "$ENGINE_DIR" fetch --tags origin "$ENGINE_REF"
-git -C "$ENGINE_DIR" checkout --detach FETCH_HEAD
-make -C "$ENGINE_DIR" build
-
-export FETCHER="$ENGINE_DIR/bin/fetcher"
+if [ -n "$(git -C "$ENGINE_DIR" status --porcelain)" ]; then
+  printf 'Engine checkout has local changes: %s\n' "$ENGINE_DIR" >&2
+else
+  if git -C "$ENGINE_DIR" fetch --tags origin "$ENGINE_REF" &&
+    git -C "$ENGINE_DIR" checkout --detach FETCH_HEAD &&
+    make -C "$ENGINE_DIR" build; then
+    export FETCHER="$ENGINE_DIR/bin/fetcher"
+    printf 'Fetcher ready: %s\n' "$FETCHER"
+  fi
+fi
 ` + "```" + `
 
 ## Understand deploy/values.yaml
@@ -533,22 +537,26 @@ if [ ! -s "$AI_TOKEN_FILE" ]; then
   printf 'AI token: '
   IFS= read -r -s AI_TOKEN
   printf '\n'
-  printf '%s' "$AI_TOKEN" >"$AI_TOKEN_FILE"
+  if [ -n "${AI_TOKEN:-}" ]; then
+    printf '%s' "$AI_TOKEN" >"$AI_TOKEN_FILE"
+    chmod 600 "$AI_TOKEN_FILE"
+  fi
   unset AI_TOKEN
-  chmod 600 "$AI_TOKEN_FILE"
 fi
 
-test -s "$AI_TOKEN_FILE"
-
-kubectl --context "$CONTEXT" \
-  --namespace "$NAMESPACE" \
-  create secret generic {{shellquote (printf "%s-ai" .Namespace)}} \
-  --from-file=AI_TOKEN="$AI_TOKEN_FILE" \
-  --dry-run=client \
-  -o yaml |
-kubectl --context "$CONTEXT" \
-  --namespace "$NAMESPACE" \
-  apply -f -
+if [ -s "$AI_TOKEN_FILE" ]; then
+  kubectl --context "$CONTEXT" \
+    --namespace "$NAMESPACE" \
+    create secret generic {{shellquote (printf "%s-ai" .Namespace)}} \
+    --from-file=AI_TOKEN="$AI_TOKEN_FILE" \
+    --dry-run=client \
+    -o yaml |
+  kubectl --context "$CONTEXT" \
+    --namespace "$NAMESPACE" \
+    apply -f -
+else
+  printf 'AI Secret was not created because the token file is empty.\n' >&2
+fi
 ` + "```" + `
 
 The token value is read from the file. It is not printed or placed in the

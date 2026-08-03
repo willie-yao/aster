@@ -343,6 +343,31 @@ uses an Orka Agent Task to inspect source for an authenticated chat session.
 Enable it only after the Orka release, Agent, read-only repository credential,
 and Task-only RBAC are ready.
 
+Source investigation requires authenticated analysis chat and the Helm-side
+source-investigation controller:
+
+```yaml
+server:
+  chat:
+    enabled: true
+    sourceInvestigation:
+      enabled: true
+      serviceAccountName: ""
+  actions:
+    enabled: false
+    mode: oauth
+    admins:
+      - "<github-login>"
+    oauth:
+      clientId: "<oauth-client-id>"
+      redirectUrl: "https://dashboard.example.com/api/auth/callback"
+      existingSecret: "<oauth-secret>"
+```
+
+Configure a secure origin before enabling authenticated chat. See
+[Server mode](server.md) for OAuth, proxy authentication, admin allowlists,
+NetworkPolicy, and origin requirements.
+
 Project configuration shape:
 
 ```yaml
@@ -379,13 +404,24 @@ orka:
     enabled: true
 ```
 
-Then configure the consumer project with:
+Then configure the consumer project with the required Agent and result API
+coordinates:
 
 ```yaml
 ai:
   fix_prs:
+    enabled: true
     agent_runtime:
       type: orka
+      agent_ref: "<orka-agent-name>"
+      api: http://orka.orka-system.svc.cluster.local:8080
+      namespace: orka-system
+      git_secret: "<read-only-clone-secret>" # optional for public repos
+      version: v1
+      retries: 1
+      max_turns: 30
+      allow_bash: true
+      timeout: 15m
 ```
 
 This selects the git-capable fixer image and a separate Task-only Role. Enabling

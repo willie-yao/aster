@@ -59,12 +59,16 @@ if [ ! -d "$ENGINE_DIR/.git" ]; then
   git clone https://github.com/willie-yao/prow-ai-dashboard.git "$ENGINE_DIR"
 fi
 
-test -z "$(git -C "$ENGINE_DIR" status --porcelain)"
-git -C "$ENGINE_DIR" fetch --tags origin "$ENGINE_REF"
-git -C "$ENGINE_DIR" checkout --detach FETCH_HEAD
-make -C "$ENGINE_DIR" build
-
-export FETCHER="$ENGINE_DIR/bin/fetcher"
+if [ -n "$(git -C "$ENGINE_DIR" status --porcelain)" ]; then
+  printf 'Engine checkout has local changes: %s\n' "$ENGINE_DIR" >&2
+else
+  if git -C "$ENGINE_DIR" fetch --tags origin "$ENGINE_REF" &&
+    git -C "$ENGINE_DIR" checkout --detach FETCH_HEAD &&
+    make -C "$ENGINE_DIR" build; then
+    export FETCHER="$ENGINE_DIR/bin/fetcher"
+    printf 'Fetcher ready: %s\n' "$FETCHER"
+  fi
+fi
 ```
 
 ## 1. Inspect and edit `deploy/values.yaml`
@@ -200,17 +204,31 @@ in `ai.existingSecret` and point to a token file outside the repository:
 export AI_SECRET="<ai.existingSecret>"
 export AI_TOKEN_FILE="$HOME/.config/prow-ai-dashboard/ai-token"
 
-test -s "$AI_TOKEN_FILE"
+install -d -m 700 "$(dirname "$AI_TOKEN_FILE")"
+if [ ! -s "$AI_TOKEN_FILE" ]; then
+  printf 'AI token: '
+  IFS= read -r -s AI_TOKEN
+  printf '\n'
+  if [ -n "${AI_TOKEN:-}" ]; then
+    printf '%s' "$AI_TOKEN" >"$AI_TOKEN_FILE"
+    chmod 600 "$AI_TOKEN_FILE"
+  fi
+  unset AI_TOKEN
+fi
 
-kubectl --context "$CONTEXT" \
-  --namespace "$NAMESPACE" \
-  create secret generic "$AI_SECRET" \
-  --from-file=AI_TOKEN="$AI_TOKEN_FILE" \
-  --dry-run=client \
-  -o yaml |
-kubectl --context "$CONTEXT" \
-  --namespace "$NAMESPACE" \
-  apply -f -
+if [ -s "$AI_TOKEN_FILE" ]; then
+  kubectl --context "$CONTEXT" \
+    --namespace "$NAMESPACE" \
+    create secret generic "$AI_SECRET" \
+    --from-file=AI_TOKEN="$AI_TOKEN_FILE" \
+    --dry-run=client \
+    -o yaml |
+  kubectl --context "$CONTEXT" \
+    --namespace "$NAMESPACE" \
+    apply -f -
+else
+  printf 'AI Secret was not created because the token file is empty.\n' >&2
+fi
 ```
 
 The token value is read from the file and is not placed in the command line.
