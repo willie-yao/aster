@@ -62,6 +62,7 @@ func (s *Service) PreviewChatFix(
 	if candidate.SourceResult != nil {
 		generationContext.Source = &fixpr.SourceContext{
 			Finding:   candidate.SourceResult.Finding,
+			Revision:  candidate.SourceRevision,
 			Citations: sourceEvidence(candidate.SourceResult.Citations),
 		}
 	}

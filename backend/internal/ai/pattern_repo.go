@@ -1,6 +1,8 @@
 package ai
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actionverify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 )
@@ -77,6 +80,7 @@ func (r *githubRepoReader) ResolveRef(ctx context.Context) error {
 func (r *githubRepoReader) resolvedRef() string { r.mu.Lock(); defer r.mu.Unlock(); return r.ref }
 
 var githubAPIBase = "https://api.github.com"
+var githubArchiveHost = "codeload.github.com"
 
 // NewGitHubRepoReader binds a reader to owner/repo at ref. Empty ref means the
 // default branch (HEAD). Empty token falls back to anonymous access. The
@@ -180,6 +184,107 @@ func (r *githubRepoReader) ReadFile(ctx context.Context, path string) (string, b
 		return "", false, fmt.Errorf("reading %s: %w", path, err)
 	}
 	return string(body), true, nil
+}
+
+const (
+	maxSourceArchiveCompressedBytes = 64 << 20
+	maxSourceArchiveExpandedBytes   = 256 << 20
+	maxSourceGoBytes                = 32 << 20
+	maxSourceFileBytes              = 8 << 20
+)
+
+// ReadSourceArchive fetches bounded Go source and the complete regular-file path set.
+func (r *githubRepoReader) ReadSourceArchive(ctx context.Context) (actionverify.Archive, error) {
+	ref := r.resolvedRef()
+	u := fmt.Sprintf("%s/repos/%s/%s/tarball/%s", githubAPIBase, r.owner, r.repo, url.PathEscape(ref))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return actionverify.Archive{}, err
+	}
+	if r.token != "" {
+		req.Header.Set("Authorization", "Bearer "+r.token)
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	req.Header.Set("User-Agent", "prow-ai-dashboard")
+	client := *r.client
+	previousRedirect := client.CheckRedirect
+	client.CheckRedirect = func(redirect *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return fmt.Errorf("stopped after 10 source archive redirects")
+		}
+		if previousRedirect != nil {
+			if err := previousRedirect(redirect, via); err != nil {
+				return err
+			}
+		}
+		if r.token == "" || len(via) == 0 {
+			return nil
+		}
+		targetHost := redirect.URL.Hostname()
+		sameOrigin := strings.EqualFold(redirect.URL.Scheme, via[0].URL.Scheme) && strings.EqualFold(redirect.URL.Host, via[0].URL.Host)
+		if !sameOrigin && (redirect.URL.Scheme != "https" || !strings.EqualFold(targetHost, githubArchiveHost)) {
+			return fmt.Errorf("refusing authenticated source archive redirect to %s", redirect.URL.Host)
+		}
+		redirect.Header.Set("Authorization", "Bearer "+r.token)
+		return nil
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return actionverify.Archive{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return actionverify.Archive{}, fmt.Errorf("reading %s/%s source archive: %s", r.owner, r.repo, resp.Status)
+	}
+	gzipReader, err := gzip.NewReader(io.LimitReader(resp.Body, maxSourceArchiveCompressedBytes+1))
+	if err != nil {
+		return actionverify.Archive{}, fmt.Errorf("opening %s/%s source archive: %w", r.owner, r.repo, err)
+	}
+	defer gzipReader.Close()
+
+	archive := actionverify.Archive{Paths: map[string]bool{}, GoFiles: map[string]string{}}
+	expandedBytes := int64(0)
+	goBytes := int64(0)
+	tarReader := tar.NewReader(gzipReader)
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return actionverify.Archive{}, fmt.Errorf("reading %s/%s source archive: %w", r.owner, r.repo, err)
+		}
+		if header.Typeflag != tar.TypeReg {
+			continue
+		}
+		if header.Size < 0 || expandedBytes+header.Size > maxSourceArchiveExpandedBytes {
+			return actionverify.Archive{}, fmt.Errorf("source archive exceeds expanded-byte limit")
+		}
+		expandedBytes += header.Size
+		_, filePath, ok := strings.Cut(strings.TrimPrefix(header.Name, "./"), "/")
+		if !ok || filePath == "" {
+			continue
+		}
+		clean, err := artifacts.SafePath(filePath)
+		if err != nil || clean == "" {
+			return actionverify.Archive{}, fmt.Errorf("source archive contains unsafe path %q", filePath)
+		}
+		archive.Paths[clean] = true
+		if !strings.HasSuffix(clean, ".go") {
+			continue
+		}
+		if header.Size > maxSourceFileBytes || goBytes+header.Size > maxSourceGoBytes {
+			return actionverify.Archive{}, fmt.Errorf("source archive Go files exceed verification limits")
+		}
+		body, err := io.ReadAll(io.LimitReader(tarReader, maxSourceFileBytes+1))
+		if err != nil || int64(len(body)) != header.Size {
+			return actionverify.Archive{}, fmt.Errorf("reading source archive file %s: incomplete content", clean)
+		}
+		goBytes += int64(len(body))
+		archive.GoFiles[clean] = string(body)
+	}
+	return archive, nil
 }
 
 // mapSegments applies f to each element, used to escape path segments while

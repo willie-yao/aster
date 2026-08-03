@@ -99,6 +99,38 @@ func TestServiceFixCandidateSelectsBoundedAnswerAndSource(t *testing.T) {
 	}
 }
 
+func TestServiceFixCandidateRetainsInvestigatedRevisionAcrossRestart(t *testing.T) {
+	service, session, chatRequestID, sourceRequestID := fixCandidateReadyService(t)
+	const refreshedRevision = "fedcba9876543210fedcba9876543210fedcba98"
+	detail := testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-24T12:00:00Z"))
+	detail.Runs[0].RepoRefs = map[string]string{"example/repo": "main:" + refreshedRevision}
+	detail.PatternAnalyses = []models.PatternAnalysis{fixCandidatePattern()}
+	writeJobDetail(t, service.dataDir, detail)
+
+	restarted, err := NewService(t.Context(), service.dataDir, &fakeRunner{}, Options{
+		StateDir: service.opts.StateDir, PollInterval: time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.ConfigureSourceInvestigation(
+		&fakeSourceInvestigator{result: sourceResult()},
+		sourceinvestigation.Repository{Owner: "example", Name: "repo"},
+		SourceInvestigationOptions{Timeout: time.Second, LeaseTTL: 2 * time.Second},
+	); err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := restarted.FixCandidate(
+		session.ID, "Alice", chatRequestID, fixCandidatePattern().ID, fixCandidatePattern().ContentHash, sourceRequestID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidate.SourceRevision != "0123456789abcdef0123456789abcdef01234567" {
+		t.Fatalf("source revision = %q, refreshed build revision = %q", candidate.SourceRevision, refreshedRevision)
+	}
+}
+
 func TestServiceFixCandidateValidatesSourceStateAndAttachment(t *testing.T) {
 	service, session, chatRequestID, sourceRequestID := fixCandidateReadyService(t)
 	secondRequestID := testRequestID(t)
@@ -168,6 +200,9 @@ func TestServiceFixCandidateRejectsTerminalSourceFailures(t *testing.T) {
 		{name: "unverified", status: sourceinvestigation.StatusSucceeded, mutate: func(record *persistedInvestigation) {
 			record.View.Result.Citations[0].Verified = false
 		}, want: sourceinvestigation.ErrInvalidResult},
+		{name: "invalid revision", status: sourceinvestigation.StatusSucceeded, mutate: func(record *persistedInvestigation) {
+			record.Revision = "main"
+		}, want: sourceinvestigation.ErrUnavailable},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			service, session, chatRequestID, sourceRequestID := fixCandidateReadyService(t)

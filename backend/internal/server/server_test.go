@@ -1,11 +1,13 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1144,5 +1146,22 @@ func TestSafeOperatorErrorRedactsURLsAndNewlines(t *testing.T) {
 	got := safeOperatorError(errors.New("failed https://private.example/token\nnext"))
 	if strings.Contains(got, "private.example") || strings.Contains(got, "\n") {
 		t.Fatalf("safe error = %q", got)
+	}
+}
+
+func TestWriteActionErrorLogsSanitizedInconclusiveCause(t *testing.T) {
+	var logs bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&logs)
+	defer log.SetOutput(previous)
+
+	recorder := httptest.NewRecorder()
+	err := fmt.Errorf("%w: archive request failed at https://private.example/token", actions.ErrRemediationInconclusive)
+	writeActionError(recorder, "request", "alice", err)
+	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), "source verification was inconclusive") {
+		t.Fatalf("response = %d %q", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(logs.String(), "source verification inconclusive") || strings.Contains(logs.String(), "private.example") {
+		t.Fatalf("operator log = %q", logs.String())
 	}
 }

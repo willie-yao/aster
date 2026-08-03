@@ -1024,6 +1024,19 @@ helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
 grep -A1 -F 'name: AI_CACHE_GENERATION' "$tmp/cache-generation-zero.yaml" | grep -Fq 'value: "0"'
 
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.actions.enabled=true \
+  --set server.actions.mode=proxy \
+  --set server.actions.admins[0]=alice \
+  --set server.actions.proxy.botToken=test-token \
+  --set ai.enabled=false \
+  --set ai.githubReadToken=read-token > "$tmp/github-read-actions-only.yaml"
+grep -Fq 'kind: Secret' "$tmp/github-read-actions-only.yaml"
+grep -Fq 'name: test-prow-ai-dashboard-github-read' "$tmp/github-read-actions-only.yaml"
+grep -Fq 'GITHUB_READ_TOKEN: "read-token"' "$tmp/github-read-actions-only.yaml"
+grep -Fq 'name: SOURCE_INVESTIGATION_GITHUB_TOKEN' "$tmp/github-read-actions-only.yaml"
+grep -A5 -F 'name: SOURCE_INVESTIGATION_GITHUB_TOKEN' "$tmp/github-read-actions-only.yaml" | grep -Fq 'name: test-prow-ai-dashboard-github-read'
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set ai.enabled=true --set ai.token=test-token \
   --set ai.githubReadToken=read-token \
   --show-only templates/secret-github-read.yaml > "$tmp/github-read-inline-secret.yaml"

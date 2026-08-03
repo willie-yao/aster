@@ -77,6 +77,7 @@ type persistedInvestigation struct {
 	View          sourceinvestigation.View    `json:"view"`
 	InputHash     string                      `json:"input_hash"`
 	Subject       sourceinvestigation.Subject `json:"subject"`
+	Revision      string                      `json:"revision,omitempty"`
 	FailureKind   string                      `json:"failure_kind,omitempty"`
 	LeaseID       string                      `json:"lease_id,omitempty"`
 	LeaseExpires  time.Time                   `json:"lease_expires,omitempty"`

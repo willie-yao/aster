@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	previewStateVersion     = 2
+	previewStateVersion     = 3
 	maxPreviewStateBytes    = 64 << 20
 	maxPersistedPreviews    = 128
 	previewStatusReady      = "ready"
@@ -29,20 +29,21 @@ const (
 )
 
 type persistedPreview struct {
-	Owner        string                      `json:"owner"`
-	Kind         string                      `json:"kind"`
-	FailureID    string                      `json:"failure_id,omitempty"`
-	PatternHash  string                      `json:"pattern_hash,omitempty"`
-	TargetRepo   string                      `json:"target_repo"`
-	TargetConfig string                      `json:"target_config,omitempty"`
-	CreatedAt    string                      `json:"created_at"`
-	Status       string                      `json:"status"`
-	ResultURL    string                      `json:"result_url,omitempty"`
-	LeaseExpires string                      `json:"lease_expires,omitempty"`
-	AttemptID    string                      `json:"attempt_id,omitempty"`
-	AttemptMode  string                      `json:"attempt_mode,omitempty"`
-	Issue        *issues.IssueSpec           `json:"issue,omitempty"`
-	Fix          *fixpr.GeneratedFixSnapshot `json:"fix,omitempty"`
+	Owner               string                      `json:"owner"`
+	Kind                string                      `json:"kind"`
+	FailureID           string                      `json:"failure_id,omitempty"`
+	PatternHash         string                      `json:"pattern_hash,omitempty"`
+	TargetRepo          string                      `json:"target_repo"`
+	TargetConfig        string                      `json:"target_config,omitempty"`
+	VerificationVersion int                         `json:"verification_version,omitempty"`
+	CreatedAt           string                      `json:"created_at"`
+	Status              string                      `json:"status"`
+	ResultURL           string                      `json:"result_url,omitempty"`
+	LeaseExpires        string                      `json:"lease_expires,omitempty"`
+	AttemptID           string                      `json:"attempt_id,omitempty"`
+	AttemptMode         string                      `json:"attempt_mode,omitempty"`
+	Issue               *issues.IssueSpec           `json:"issue,omitempty"`
+	Fix                 *fixpr.GeneratedFixSnapshot `json:"fix,omitempty"`
 }
 
 type previewState struct {
@@ -270,12 +271,21 @@ func (s *previewStore) load() (*previewState, error) {
 	if err := json.Unmarshal(data, state); err != nil {
 		return nil, fmt.Errorf("decoding preview state: %w", err)
 	}
-	if state.Previews == nil || (state.Version != 1 && state.Version != previewStateVersion) {
+	if state.Previews == nil || (state.Version != 1 && state.Version != 2 && state.Version != previewStateVersion) {
 		return nil, fmt.Errorf("unsupported preview state version %d", state.Version)
 	}
 	if state.Version == 1 {
 		for key, record := range state.Previews {
 			if record != nil && (record.FailureID == "" || record.PatternHash == "") && (record.Status == previewStatusReady || record.Status == previewStatusRunning) {
+				delete(state.Previews, key)
+			}
+		}
+		state.Version = 2
+	}
+	if state.Version == 2 {
+		for key, record := range state.Previews {
+			if record != nil && record.VerificationVersion != sourceVerificationVersion &&
+				(record.Status == previewStatusReady || record.Status == previewStatusRunning) {
 				delete(state.Previews, key)
 			}
 		}
@@ -293,7 +303,7 @@ func persistPreview(entry *previewEntry, owner string, now time.Time) (*persiste
 		return nil, ErrPreviewNotFound
 	}
 	record := &persistedPreview{
-		Owner: owner, Kind: entry.kind, FailureID: entry.failureID, PatternHash: entry.patternHash, TargetRepo: entry.targetRepo, TargetConfig: entry.targetConfig,
+		Owner: owner, Kind: entry.kind, FailureID: entry.failureID, PatternHash: entry.patternHash, TargetRepo: entry.targetRepo, TargetConfig: entry.targetConfig, VerificationVersion: entry.verificationVersion,
 		CreatedAt: now.Format(time.RFC3339Nano), Status: previewStatusReady,
 	}
 	switch entry.kind {
@@ -315,7 +325,7 @@ func restorePreview(record *persistedPreview) (*previewEntry, error) {
 	if record == nil {
 		return nil, ErrPreviewNotFound
 	}
-	entry := &previewEntry{failureID: record.FailureID, patternHash: record.PatternHash, kind: record.Kind, targetRepo: record.TargetRepo, targetConfig: record.TargetConfig}
+	entry := &previewEntry{failureID: record.FailureID, patternHash: record.PatternHash, kind: record.Kind, targetRepo: record.TargetRepo, targetConfig: record.TargetConfig, verificationVersion: record.VerificationVersion}
 	switch record.Kind {
 	case "issue":
 		if record.Issue == nil {

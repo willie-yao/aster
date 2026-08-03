@@ -31,7 +31,9 @@ func requestTestService(t *testing.T) (*Service, models.PatternAnalysis) {
 		Branding: project.Branding{SiteURL: "https://dash.example.com", SourceRepo: project.SourceRepo{Owner: "o", Name: "r"}},
 		Issues:   &project.Issues{Repo: &project.SourceRepo{Owner: "o", Name: "r"}},
 	}
-	return NewService(cfg, dataDir, AIConfig{}), pattern
+	service := NewService(cfg, dataDir, AIConfig{})
+	service.sourceVerifier = nil
+	return service, pattern
 }
 
 func waitRequest(t *testing.T, service *Service, id, owner string, want ...string) ActionRequestView {
@@ -574,14 +576,14 @@ func TestConfigureAsyncRequestsRetriesPersistedReadyEmail(t *testing.T) {
 	now := time.Now().UTC()
 	key := issues.KeyPrefixPattern + pattern.JobID
 	spec := &issues.IssueSpec{Key: key, Title: "Ready", Body: "## Summary\nBody\n\n" + issues.MarkerFor(key)}
-	state := actionRequestState{Version: 1, Requests: map[string]*actionRequest{
+	state := actionRequestState{Version: 4, Requests: map[string]*actionRequest{
 		"request-ready": {
 			ActionRequestView: ActionRequestView{
 				ID: "request-ready", FailureID: pattern.ID, PatternHash: pattern.ContentHash, Owner: "alice", Kind: "create-issue", Status: RequestReady,
 				CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339),
 				ExpiresAt: now.Add(time.Hour).Format(time.RFC3339), Preview: &PreviewResult{Kind: "issue", Title: spec.Title, Body: spec.Body},
 			},
-			Issue: spec,
+			Issue: spec, VerificationVersion: sourceVerificationVersion,
 		},
 	}}
 	data, _ := json.Marshal(state)
@@ -1252,5 +1254,31 @@ func TestShutdownRejectsNewRequests(t *testing.T) {
 	}
 	if err := service.Wait(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestLoadActionRequestsInvalidatesLegacyVerifiedPreview(t *testing.T) {
+	service, pattern := requestTestService(t)
+	now := time.Now().UTC()
+	key := issues.KeyPrefixPattern + pattern.JobID
+	spec := &issues.IssueSpec{Key: key, Title: "Ready", Body: "## Summary\nBody\n\n" + issues.MarkerFor(key)}
+	state := actionRequestState{Version: 3, Requests: map[string]*actionRequest{
+		"legacy": {
+			ActionRequestView: ActionRequestView{
+				ID: "legacy", FailureID: pattern.ID, PatternHash: pattern.ContentHash, Owner: "alice", Kind: "create-issue", Status: RequestReady,
+				CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
+				Preview: &PreviewResult{Kind: "issue", Title: spec.Title, Body: spec.Body},
+			},
+			Issue: spec,
+		},
+	}}
+	data, _ := json.Marshal(state)
+	if err := os.WriteFile(filepath.Join(service.dataDir, "action_request_state.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
+	view, err := reloaded.GetRequest("legacy", "alice")
+	if err != nil || view.Status != RequestFailed || view.Preview != nil {
+		t.Fatalf("legacy view = %+v, %v", view, err)
 	}
 }

@@ -489,6 +489,15 @@ func writeActionError(w http.ResponseWriter, id, login string, err error) {
 		http.Error(w, "action target changed; generate a new preview", http.StatusConflict)
 		return
 	}
+	if errors.Is(err, actions.ErrRemediationAlreadyPresent) {
+		http.Error(w, "the proposed remediation already exists at the grounded commit; check whether the finding is stale, regressed, or misclassified", http.StatusConflict)
+		return
+	}
+	if errors.Is(err, actions.ErrRemediationInconclusive) {
+		log.Printf("action source verification inconclusive for %s (by %s): %s", id, login, safeOperatorError(err))
+		http.Error(w, "source verification was inconclusive; investigate the grounded source before filing", http.StatusConflict)
+		return
+	}
 	log.Printf("action failed for %s (by %s): %s", id, login, safeOperatorError(err))
 	http.Error(w, "action request could not be completed", http.StatusUnprocessableEntity)
 }

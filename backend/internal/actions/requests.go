@@ -76,17 +76,18 @@ type actionCleanupState struct {
 
 type actionRequest struct {
 	ActionRequestView
-	Instruction     string                      `json:"instruction,omitempty"`
-	Issue           *issues.IssueSpec           `json:"issue,omitempty"`
-	Fix             *fixpr.GeneratedFixSnapshot `json:"fix,omitempty"`
-	TargetRepo      string                      `json:"target_repo,omitempty"`
-	TargetConfig    string                      `json:"target_config,omitempty"`
-	BaseIssue       *issues.IssueSpec           `json:"base_issue,omitempty"`
-	BaseTargetRepo  string                      `json:"base_target_repo,omitempty"`
-	BasePatternHash string                      `json:"base_pattern_hash,omitempty"`
-	Runtime         *runtime.WorkRef            `json:"runtime,omitempty"`
-	Cleanup         *actionCleanupState         `json:"cleanup,omitempty"`
-	EmailError      string                      `json:"email_error,omitempty"`
+	Instruction         string                      `json:"instruction,omitempty"`
+	Issue               *issues.IssueSpec           `json:"issue,omitempty"`
+	Fix                 *fixpr.GeneratedFixSnapshot `json:"fix,omitempty"`
+	TargetRepo          string                      `json:"target_repo,omitempty"`
+	TargetConfig        string                      `json:"target_config,omitempty"`
+	VerificationVersion int                         `json:"verification_version,omitempty"`
+	BaseIssue           *issues.IssueSpec           `json:"base_issue,omitempty"`
+	BaseTargetRepo      string                      `json:"base_target_repo,omitempty"`
+	BasePatternHash     string                      `json:"base_pattern_hash,omitempty"`
+	Runtime             *runtime.WorkRef            `json:"runtime,omitempty"`
+	Cleanup             *actionCleanupState         `json:"cleanup,omitempty"`
+	EmailError          string                      `json:"email_error,omitempty"`
 }
 
 type actionRequestState struct {
@@ -130,14 +131,15 @@ func (s *Service) observeRuntimeWork(id string) runtime.WorkObserver {
 }
 
 func (s *Service) loadActionRequests() {
-	state := &actionRequestState{Version: 3, Requests: map[string]*actionRequest{}}
+	state := &actionRequestState{Version: 4, Requests: map[string]*actionRequest{}}
 	data, err := os.ReadFile(s.requestStatePath())
 	if err == nil {
 		if err := json.Unmarshal(data, state); err != nil {
 			log.Printf("Warning: failed to parse action request state: %v", err)
-			state = &actionRequestState{Version: 3, Requests: map[string]*actionRequest{}}
+			state = &actionRequestState{Version: 4, Requests: map[string]*actionRequest{}}
 		}
 	}
+	migrated := state.Version != 4
 	if state.Version == 1 {
 		for _, request := range state.Requests {
 			if request != nil && request.Status == RequestReady && request.PatternHash == "" {
@@ -150,12 +152,24 @@ func (s *Service) loadActionRequests() {
 	if state.Version == 2 {
 		state.Version = 3
 	}
+	if state.Version == 3 {
+		for _, request := range state.Requests {
+			if request != nil && request.Status == RequestReady && request.VerificationVersion != sourceVerificationVersion {
+				request.Status = RequestFailed
+				request.Error = "saved preview requires regeneration after source verification upgrade"
+				request.Preview = nil
+				request.Issue = nil
+				request.Fix = nil
+			}
+		}
+		state.Version = 4
+	}
 	if state.Requests == nil {
 		state.Requests = map[string]*actionRequest{}
 	}
 	now := time.Now().UTC()
 	s.requests = state
-	changed := s.expireRequestsLocked(now)
+	changed := migrated || s.expireRequestsLocked(now)
 	nowText := now.Format(time.RFC3339)
 	for _, request := range state.Requests {
 		if request.Status != RequestReady && request.Status != RequestUnknown {
@@ -904,6 +918,7 @@ func (s *Service) generateRequestWith(id, userToken string, generate requestPrev
 		request.Preview = &preview
 		request.TargetRepo = entry.targetRepo
 		request.TargetConfig = entry.targetConfig
+		request.VerificationVersion = entry.verificationVersion
 		request.PatternHash = entry.patternHash
 		if entry.kind == "issue" {
 			spec := entry.spec
@@ -1065,7 +1080,7 @@ func (s *Service) ConfirmRequest(ctx context.Context, id, owner, userToken strin
 		s.rmu.Unlock()
 		return "", fmt.Errorf("action request has no persisted preview")
 	}
-	entry := &previewEntry{failureID: request.FailureID, patternHash: request.PatternHash, kind: entryKind, targetRepo: request.TargetRepo, targetConfig: request.TargetConfig}
+	entry := &previewEntry{failureID: request.FailureID, patternHash: request.PatternHash, kind: entryKind, targetRepo: request.TargetRepo, targetConfig: request.TargetConfig, verificationVersion: request.VerificationVersion}
 	switch entry.kind {
 	case "issue":
 		if request.Issue == nil {
@@ -1082,6 +1097,10 @@ func (s *Service) ConfirmRequest(ctx context.Context, id, owner, userToken strin
 	default:
 		s.rmu.Unlock()
 		return "", fmt.Errorf("action request has invalid preview kind %q", entry.kind)
+	}
+	if !reconcileOnly && entry.failureID != "" && entry.verificationVersion != sourceVerificationVersion {
+		s.rmu.Unlock()
+		return "", ErrPreviewTargetChanged
 	}
 	if !reconcileOnly && entry.failureID != "" {
 		if err := s.validateSubjectSnapshot(entry.failureID, entry.patternHash, entry.kind); err != nil {

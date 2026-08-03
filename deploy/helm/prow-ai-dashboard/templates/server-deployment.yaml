@@ -145,6 +145,16 @@ spec:
             - name: ORKA_API_TOKEN_FILE
               value: /var/run/secrets/kubernetes.io/serviceaccount/token
             {{- end }}
+            {{- if and $actions (not $source) (or .Values.ai.githubReadToken .Values.ai.githubReadTokenSecretName .Values.ai.existingSecret) }}
+            - name: SOURCE_INVESTIGATION_GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "prow-ai-dashboard.githubReadSecret" . }}
+                  key: {{ .Values.ai.githubReadTokenSecretKey }}
+                  {{- if and (not .Values.ai.githubReadToken) (not .Values.ai.githubReadTokenSecretName) }}
+                  optional: true
+                  {{- end }}
+            {{- end }}
             {{- if $chat }}
             - name: ANALYSIS_CHAT_ENABLED
               value: "true"

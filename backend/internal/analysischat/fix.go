@@ -28,6 +28,7 @@ type FixCandidate struct {
 	ProposedRevision  *Revision
 	ArtifactCitations []Citation
 	SourceRequestID   string
+	SourceRevision    string
 	SourceResult      *sourceinvestigation.Result
 	Pattern           models.PatternAnalysis
 }
@@ -103,7 +104,12 @@ func (s *Service) FixCandidate(sessionID, owner, requestID, patternID, patternHa
 			if record.View.Result == nil || sourceinvestigation.ValidateVerifiedResult(*record.View.Result) != nil {
 				return changed, sourceinvestigation.ErrInvalidResult
 			}
+			revision, ok := exactRepoRevision(record.Revision)
+			if !ok {
+				return changed, sourceinvestigation.ErrUnavailable
+			}
 			candidate.SourceRequestID = sourceRequestID
+			candidate.SourceRevision = revision
 			candidate.SourceResult = sourceinvestigation.CloneResult(record.View.Result)
 			return changed, nil
 		default:

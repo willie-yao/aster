@@ -118,6 +118,9 @@ func TestServiceSourceInvestigationPersistsPinnedSubjectAndResult(t *testing.T) 
 		if record.Subject.SessionID != "" || record.LeaseID != "" || !record.LeaseExpires.IsZero() {
 			t.Fatalf("terminal record retained private execution state: %+v", record)
 		}
+		if record.Revision != "0123456789abcdef0123456789abcdef01234567" {
+			t.Fatalf("persisted revision = %q", record.Revision)
+		}
 		return false, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -147,6 +150,16 @@ func TestServiceSourceInvestigationPersistsPinnedSubjectAndResult(t *testing.T) 
 	persisted, err := restarted.GetSourceInvestigation(session.ID, "Alice", requestID)
 	if err != nil || persisted.Status != sourceinvestigation.StatusSucceeded || persisted.Result == nil {
 		t.Fatalf("persisted view = %+v, %v", persisted, err)
+	}
+	restartCtx, restartCancel := restarted.store.context()
+	defer restartCancel()
+	if err := restarted.store.update(restartCtx, func(state *persistedState) (bool, error) {
+		if revision := state.Sessions[session.ID].Investigations[requestID].Revision; revision != "0123456789abcdef0123456789abcdef01234567" {
+			t.Fatalf("restarted revision = %q", revision)
+		}
+		return false, nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 

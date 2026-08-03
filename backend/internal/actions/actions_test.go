@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actionverify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
@@ -1106,7 +1107,7 @@ func TestAsyncBuildIssueLostResponseReconcilesWithoutSecondWrite(t *testing.T) {
 		ID: "request", FailureID: id, PatternHash: subject.ContentHash, Kind: "create-issue", Owner: "alice", Status: RequestReady,
 		CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
 		Preview: &PreviewResult{Kind: "issue", Title: spec.Title, Body: spec.Body},
-	}, Issue: &spec, TargetRepo: targetRepo}
+	}, Issue: &spec, TargetRepo: targetRepo, VerificationVersion: sourceVerificationVersion}
 	if _, err := service.ConfirmRequest(t.Context(), "request", "alice", "token"); !errors.Is(err, ErrPreviewOutcomeUnknown) {
 		t.Fatalf("first confirmation error = %v", err)
 	}
@@ -1140,7 +1141,7 @@ func TestAsyncBuildIssuePrewriteFailureRemainsRetryable(t *testing.T) {
 		ID: "request-prewrite", FailureID: id, PatternHash: subject.ContentHash, Kind: "create-issue", Owner: "alice", Status: RequestReady,
 		CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
 		Preview: &PreviewResult{Kind: "issue", Title: spec.Title, Body: spec.Body},
-	}, Issue: &spec, TargetRepo: targetRepo}
+	}, Issue: &spec, TargetRepo: targetRepo, VerificationVersion: sourceVerificationVersion}
 	if _, err := service.ConfirmRequest(t.Context(), "request-prewrite", "alice", "token"); err == nil || errors.Is(err, ErrPreviewOutcomeUnknown) {
 		t.Fatalf("prewrite error = %v", err)
 	}
@@ -1164,7 +1165,7 @@ func TestAsyncConfirmationPersistsUnknownBeforeExternalWrite(t *testing.T) {
 	service.requests.Requests["request-crash"] = &actionRequest{ActionRequestView: ActionRequestView{
 		ID: "request-crash", FailureID: id, PatternHash: subject.ContentHash, Kind: "create-issue", Owner: "alice", Status: RequestReady,
 		CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339), Preview: &PreviewResult{Kind: "issue", Title: spec.Title, Body: spec.Body},
-	}, Issue: &spec, TargetRepo: targetRepo}
+	}, Issue: &spec, TargetRepo: targetRepo, VerificationVersion: sourceVerificationVersion}
 	done := make(chan error, 1)
 	go func() {
 		_, err := service.ConfirmRequest(context.Background(), "request-crash", "alice", "token")
@@ -1237,5 +1238,248 @@ func TestPatternIssueAmbiguousWriteUsesOpenOnlyReconciliation(t *testing.T) {
 	url, err := service.ConfirmRequest(t.Context(), ready.ID, "alice", "token")
 	if err != nil || url != manager.url {
 		t.Fatalf("open reconciliation url=%q err=%v", url, err)
+	}
+}
+
+type fakeActionSourceReader map[string]string
+
+func (f fakeActionSourceReader) ReadSourceArchive(context.Context) (actionverify.Archive, error) {
+	archive := actionverify.Archive{Paths: map[string]bool{}, GoFiles: map[string]string{}}
+	for path, content := range f {
+		archive.Paths[path] = true
+		if strings.HasSuffix(path, ".go") {
+			archive.GoFiles[path] = content
+		}
+	}
+	return archive, nil
+}
+
+func TestSourcePreflightBlocksAlreadyPresentRemediation(t *testing.T) {
+	dataDir := t.TempDir()
+	const revision = "0123456789abcdef0123456789abcdef01234567"
+	pattern := models.PatternAnalysis{
+		JobID: "periodic-capz", Systemic: true,
+		SuggestedFix:  "Implement `LabelCRDsForClusterctlUpgrade`.",
+		RelevantFiles: []string{"sigs.k8s.io/cluster-api/test@v1.13.3/framework/x.go"},
+		FileLinks: map[string]string{
+			"internal/asomigration/labels.go": "https://github.com/kubernetes-sigs/cluster-api-provider-azure/blob/" + revision + "/internal/asomigration/labels.go",
+			"test/e2e/capi_test.go":           "https://github.com/kubernetes-sigs/cluster-api-provider-azure/blob/" + revision + "/test/e2e/capi_test.go",
+		},
+		SourceRef: revision,
+	}
+	models.AssignPatternIdentity(&pattern)
+	writeJobDetail(t, dataDir, "periodic-capz.json", models.JobDetail{JobID: pattern.JobID, PatternAnalyses: []models.PatternAnalysis{pattern}})
+	cfg := &project.Config{
+		Branding: project.Branding{SourceRepo: project.SourceRepo{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure"}},
+		Issues:   &project.Issues{Repo: &project.SourceRepo{Owner: "o", Name: "r"}},
+		AI:       &project.AI{SourceRepo: &project.SourceRepo{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure"}, FixPRs: &project.FixPRs{Enabled: true, Repo: &project.SourceRepo{Owner: "o", Name: "r"}}},
+	}
+	service := NewService(cfg, dataDir, AIConfig{})
+	reader := fakeActionSourceReader{
+		"go.mod":                          "module example\n",
+		"internal/asomigration/labels.go": "package asomigration\nfunc LabelCRDsForClusterctlUpgrade() error { return nil }\n",
+		"test/e2e/capi_test.go":           "package e2e\nimport \"example/internal/asomigration\"\nfunc test() { _ = asomigration.LabelCRDsForClusterctlUpgrade() }\n",
+	}
+	service.sourceVerifier = func(ctx context.Context, _ actionverify.Reader, input actionverify.Input) (actionverify.Result, error) {
+		return actionverify.Verify(ctx, reader, input)
+	}
+	if _, err := service.PreviewIssue(context.Background(), pattern.ID, "token", ""); !errors.Is(err, ErrRemediationAlreadyPresent) {
+		t.Fatalf("issue preview error = %v", err)
+	}
+	if _, err := service.PreviewFix(context.Background(), pattern.ID, "token", ""); !errors.Is(err, ErrRemediationAlreadyPresent) {
+		t.Fatalf("fix preview error = %v", err)
+	}
+	request, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := waitRequest(t, service, request.ID, "alice", RequestFailed)
+	if view.Preview != nil || !strings.Contains(view.Error, "already") {
+		t.Fatalf("request remained actionable: %+v", view)
+	}
+}
+
+func TestVerifiedSourceFilesRequirePinnedRevision(t *testing.T) {
+	const revision = "0123456789abcdef0123456789abcdef01234567"
+	links := map[string]string{
+		"current": "https://github.com/example/repo/blob/" + revision + "/current.go",
+		"stale":   "https://github.com/example/repo/blob/fedcba9876543210fedcba9876543210fedcba98/stale.go",
+	}
+	files := verifiedSourceFiles(links, "example", "repo", revision)
+	if len(files) != 1 || files[0] != "current.go" {
+		t.Fatalf("verified files = %v", files)
+	}
+}
+
+func TestContextSourceVerificationDropsPatternPathsFromAnotherRevision(t *testing.T) {
+	const oldRevision = "0123456789abcdef0123456789abcdef01234567"
+	const newRevision = "fedcba9876543210fedcba9876543210fedcba98"
+	pattern := systemicPattern()
+	pattern.SuggestedFix = "Implement ExistingFix."
+	pattern.SourceRef = "example/repo@" + oldRevision
+	pattern.RelevantFiles = []string{"old.go"}
+	pattern.FileLinks = map[string]string{
+		"old.go": "https://github.com/example/repo/blob/" + oldRevision + "/old.go",
+	}
+	cfg := &project.Config{AI: &project.AI{
+		SourceRepo: &project.SourceRepo{Owner: "example", Name: "repo"},
+		FixPRs:     &project.FixPRs{Enabled: true, Repo: &project.SourceRepo{Owner: "example", Name: "repo"}},
+	}}
+	service := NewService(cfg, t.TempDir(), AIConfig{})
+	var got actionverify.Input
+	service.sourceVerifier = func(_ context.Context, _ actionverify.Reader, input actionverify.Input) (actionverify.Result, error) {
+		got = input
+		return actionverify.Result{State: actionverify.StateUnresolved}, nil
+	}
+	_, _, _ = service.generateFixPreviewForPattern(t.Context(), pattern, "token", "", &fixpr.GenerationContext{
+		AssistantAnswer:   "selected answer",
+		ArtifactCitations: []fixpr.Evidence{{Path: "build-log.txt", Quote: "failure"}},
+		Source: &fixpr.SourceContext{
+			Revision:  newRevision,
+			Citations: []fixpr.Evidence{{Path: "new.go", LineStart: 1, LineEnd: 1, Quote: "package source"}},
+		},
+	})
+	if len(got.RelevantFiles) != 1 || got.RelevantFiles[0] != "new.go" {
+		t.Fatalf("verification files = %v", got.RelevantFiles)
+	}
+}
+
+func TestBuildSourceVerificationUsesOnlyPinnedLinks(t *testing.T) {
+	const revision = "0123456789abcdef0123456789abcdef01234567"
+	detail := analyzedBuildDetail(false)
+	detail.Runs[0].RepoRefs = map[string]string{"example/repo": "main:" + revision}
+	failure := detail.Runs[0].TestCases[0]
+	failure.AIAnalysis.RelevantFiles = []string{"sigs.k8s.io/cluster-api/test@v1.13.3/framework/x.go"}
+	failure.AIAnalysis.FileLinks = map[string]string{
+		"templates/aks.yaml": "https://github.com/example/repo/blob/" + revision + "/templates/aks.yaml",
+	}
+	subject := &ActionSubject{Kind: actionSubjectBuild, Build: &BuildActionSubject{
+		JobID: detail.JobID, JobName: detail.Name, Build: detail.Runs[0].BuildInfo,
+		Failure: failure, RelevantFiles: failure.AIAnalysis.RelevantFiles,
+	}}
+	service := NewService(&project.Config{AI: &project.AI{
+		SourceRepo: &project.SourceRepo{Owner: "example", Name: "repo"},
+	}}, t.TempDir(), AIConfig{})
+	var got actionverify.Input
+	service.sourceVerifier = func(_ context.Context, _ actionverify.Reader, input actionverify.Input) (actionverify.Result, error) {
+		got = input
+		return actionverify.Result{State: actionverify.StateUnresolved}, nil
+	}
+	if err := service.verifyRemediation(t.Context(), subject); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.RelevantFiles) != 1 || got.RelevantFiles[0] != "templates/aks.yaml" {
+		t.Fatalf("verification files = %v", got.RelevantFiles)
+	}
+}
+
+func TestSourcePreflightChecksInstruction(t *testing.T) {
+	const revision = "0123456789abcdef0123456789abcdef01234567"
+	pattern := models.PatternAnalysis{
+		SuggestedFix: "Implement MissingHelper.", SourceRef: revision,
+		FileLinks: map[string]string{"main.go": "https://github.com/example/repo/blob/" + revision + "/main.go"},
+	}
+	subject := &ActionSubject{Kind: actionSubjectPattern, Pattern: &pattern}
+	service := NewService(&project.Config{AI: &project.AI{
+		SourceRepo: &project.SourceRepo{Owner: "example", Name: "repo"},
+	}}, t.TempDir(), AIConfig{})
+	reader := fakeActionSourceReader{
+		"go.mod":  "module example\n",
+		"main.go": "package main\nfunc ExistingFix(){}\nfunc use(){ ExistingFix() }\n",
+	}
+	calls := 0
+	service.sourceVerifier = func(ctx context.Context, _ actionverify.Reader, input actionverify.Input) (actionverify.Result, error) {
+		calls++
+		return actionverify.Verify(ctx, reader, input)
+	}
+	if err := service.verifyOptionalRemediation(t.Context(), subject, "instead call `ExistingFix`"); !errors.Is(err, ErrRemediationAlreadyPresent) {
+		t.Fatalf("instruction preflight error = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("verification calls = %d, want 1", calls)
+	}
+	if err := service.verifyOptionalRemediation(t.Context(), subject, "make the title concise"); err != nil || calls != 1 {
+		t.Fatalf("non-remediation instruction error = %v calls = %d", err, calls)
+	}
+}
+
+func TestIssuePreflightChecksFinalDraft(t *testing.T) {
+	const revision = "0123456789abcdef0123456789abcdef01234567"
+	dataDir := t.TempDir()
+	pattern := models.PatternAnalysis{
+		JobID: "periodic-x", Systemic: true, SuggestedFix: "Implement MissingHelper.", SourceRef: revision,
+		FileLinks: map[string]string{"main.go": "https://github.com/example/repo/blob/" + revision + "/main.go"},
+	}
+	models.AssignPatternIdentity(&pattern)
+	writeJobDetail(t, dataDir, "periodic-x.json", models.JobDetail{JobID: pattern.JobID, PatternAnalyses: []models.PatternAnalysis{pattern}})
+	service := NewService(&project.Config{
+		Issues: &project.Issues{Repo: &project.SourceRepo{Owner: "example", Name: "issues"}},
+		AI:     &project.AI{SourceRepo: &project.SourceRepo{Owner: "example", Name: "repo"}},
+	}, dataDir, AIConfig{})
+	base, targetRepo, err := service.buildIssueSpecForPattern(pattern)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base.Body = "Instead call `ExistingFix`."
+	var proposals []string
+	service.sourceVerifier = func(_ context.Context, _ actionverify.Reader, input actionverify.Input) (actionverify.Result, error) {
+		proposals = append(proposals, input.Proposal)
+		return actionverify.Result{State: actionverify.StateUnresolved}, nil
+	}
+	if _, _, err := service.generateIssuePreview(
+		t.Context(), pattern.ID, "token", "", &base, targetRepo, pattern.ContentHash,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(proposals) != 2 || proposals[0] != pattern.SuggestedFix || !strings.Contains(proposals[1], "ExistingFix") {
+		t.Fatalf("verified proposals = %v", proposals)
+	}
+}
+
+func TestSourcePreflightUsesBrandingRepositoryFallback(t *testing.T) {
+	const revision = "0123456789abcdef0123456789abcdef01234567"
+	pattern := models.PatternAnalysis{
+		SuggestedFix: "Implement MissingHelper.", SourceRef: revision,
+		FileLinks: map[string]string{"main.go": "https://github.com/example/repo/blob/" + revision + "/main.go"},
+	}
+	subject := &ActionSubject{Kind: actionSubjectPattern, Pattern: &pattern}
+	service := NewService(&project.Config{Branding: project.Branding{
+		SourceRepo: project.SourceRepo{Owner: "example", Name: "repo"},
+	}}, t.TempDir(), AIConfig{})
+	called := false
+	service.sourceVerifier = func(_ context.Context, _ actionverify.Reader, input actionverify.Input) (actionverify.Result, error) {
+		called = true
+		if len(input.RelevantFiles) != 1 || input.RelevantFiles[0] != "main.go" {
+			t.Fatalf("verification files = %v", input.RelevantFiles)
+		}
+		return actionverify.Result{State: actionverify.StateUnresolved}, nil
+	}
+	if err := service.verifyRemediation(t.Context(), subject); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("branding source repository did not enable preflight")
+	}
+}
+
+func TestPreviewStoreInvalidatesLegacyVerificationVersion(t *testing.T) {
+	store := newPreviewStore(t.TempDir())
+	state := previewState{Version: 2, Previews: map[string]*persistedPreview{
+		"legacy": {
+			Owner: "owner", Kind: "issue", FailureID: "failure", PatternHash: "hash",
+			TargetRepo: "example/issues", CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), Status: previewStatusReady,
+			Issue: &issues.IssueSpec{Key: "pattern::legacy", Title: "Legacy", Body: "## Summary\nBody\n\n" + issues.MarkerFor("pattern::legacy")},
+		},
+	}}
+	data, _ := json.Marshal(state)
+	if err := os.WriteFile(store.path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Version != previewStateVersion || len(loaded.Previews) != 0 {
+		t.Fatalf("loaded legacy previews = %+v", loaded)
 	}
 }

@@ -297,7 +297,7 @@ func enableActions(ctx context.Context, opts *server.Options, cfg *project.Confi
 	}
 	actionService := actions.NewService(cfg, dataDir, actions.AIConfig{
 		Token: os.Getenv("AI_TOKEN"), API: provider.API, Endpoint: provider.Endpoint,
-		Model: provider.Model, Headers: provider.Headers,
+		Model: provider.Model, Headers: provider.Headers, SourceToken: os.Getenv("SOURCE_INVESTIGATION_GITHUB_TOKEN"),
 	})
 	opts.Actions = actionService
 	if value := os.Getenv("ACTION_TIMEOUT"); value != "" {
