@@ -31,6 +31,7 @@
     "src/types/usage.ts",
     "src/types/fetchStatus.ts",
     "src/lib/actionRequests.ts",
+    "src/lib/actionEligibility.ts",
     "src/types/actions.ts"
   ]
 }

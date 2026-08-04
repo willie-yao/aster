@@ -50,6 +50,11 @@ type ActionRequestRunner interface {
 	CancelRequest(ctx context.Context, id, login string) (actions.ActionRequestView, error)
 }
 
+// ActionEligibilityRunner performs deterministic source preflight without drafting.
+type ActionEligibilityRunner interface {
+	ActionEligibility(context.Context, string) (actions.Eligibility, error)
+}
+
 // defaultActionTimeout bounds a single on-demand action. Fix-PR drafting calls
 // the model and opens a PR, so it can run for a while.
 const defaultActionTimeout = 5 * time.Minute
@@ -125,6 +130,8 @@ type Features struct {
 	AnalysisCritiqueVersion int `json:"analysis_critique_version,omitempty"`
 	// ActionRequests enables persisted asynchronous draft generation.
 	ActionRequests bool `json:"action_requests,omitempty"`
+	// ActionEligibility enables deterministic preflight before draft generation.
+	ActionEligibility bool `json:"action_eligibility,omitempty"`
 	// AnalysisTraces enables the private analysis-trace API and UI.
 	AnalysisTraces bool `json:"analysis_traces,omitempty"`
 	// FetchStatus enables the private aggregate fetch progress API and banner.
@@ -285,6 +292,11 @@ func Handler(opts Options) (http.Handler, error) {
 			auth.Middleware(opts.Auth, guard(resolveHandler(opts.Actions.Resolve))))
 		mux.Handle("POST /api/failures/{id}/unresolve",
 			auth.Middleware(opts.Auth, guard(unresolveHandler(opts.Actions.Unresolve))))
+		if eligibility, ok := opts.Actions.(ActionEligibilityRunner); ok {
+			caps.Features.ActionEligibility = true
+			mux.Handle("GET /api/failures/{id}/eligibility",
+				auth.Middleware(opts.Auth, actionEligibilityHandler(timeout, eligibility.ActionEligibility)))
+		}
 		if requests, ok := opts.Actions.(ActionRequestRunner); ok {
 			caps.Features.ActionRequests = true
 			mux.Handle("POST /api/failures/{id}/{action}/requests",
@@ -531,6 +543,28 @@ func safeOperatorError(err error) string {
 		value = value[:500] + "..."
 	}
 	return value
+}
+
+type actionEligibilityFunc func(context.Context, string) (actions.Eligibility, error)
+
+func actionEligibilityHandler(timeout time.Duration, run actionEligibilityFunc) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
+		defer cancel()
+		eligibility, err := run(ctx, r.PathValue("id"))
+		if err != nil {
+			if errors.Is(err, actions.ErrNotFound) {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			log.Printf("action eligibility failed for %s: %s", r.PathValue("id"), safeOperatorError(err))
+			http.Error(w, "action eligibility could not be determined", http.StatusUnprocessableEntity)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(eligibility)
+	})
 }
 
 type createActionRequestFunc func(failureID, kind, login, userToken, instruction, supersedesID string) (actions.ActionRequestView, error)

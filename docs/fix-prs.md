@@ -35,6 +35,14 @@ A fix that can't be produced (the agent makes no change, touches more than
 `max_files`, or the reviewer keeps rejecting it) is dropped and logged. No
 partial or speculative changes are ever pushed.
 
+The authenticated action controls run a deterministic eligibility check before
+draft generation. Investigation-only targets direct the maintainer to source
+investigation, missing or malformed targets show that more evidence is required,
+and pinned-source verification reports when the remediation already exists. A
+blocked state does not create an action request, call a model, start an Orka
+Task, or send a draft-ready notification. Draft generation repeats verification
+and remains authoritative.
+
 > **Note on correctness.** The engine bounds the change (minimal scope, at most
 > `max_files`), runs an LLM review, and optionally builds it, but it does not
 > guarantee the change fixes the failure. A fix PR is a reviewed **draft starting

@@ -1,5 +1,14 @@
 export type Action = "create-issue" | "propose-fix";
 
+export interface ActionEligibility {
+  state:
+    | "actionable"
+    | "investigation_required"
+    | "already_present"
+    | "more_evidence_required";
+  reason: string;
+}
+
 export type RequestStatus =
   | "pending"
   | "cancelling"

@@ -739,6 +739,13 @@ func (f *fakeRunner) Unresolve(id string) error {
 	f.gotUnresolveID = id
 	return nil
 }
+func (f *fakeRunner) ActionEligibility(_ context.Context, id string) (actions.Eligibility, error) {
+	if id == "missing" {
+		return actions.Eligibility{}, actions.ErrNotFound
+	}
+	f.gotID = id
+	return actions.Eligibility{State: actions.EligibilityActionable, Reason: "verified"}, nil
+}
 
 func TestHandler_ActionsDisabledByDefault(t *testing.T) {
 	dataDir := t.TempDir()
@@ -843,6 +850,9 @@ func TestHandler_ActionsEnabled(t *testing.T) {
 	if caps.Features.AnalysisCritiqueVersion != ai.CurrentCritiqueVersion() {
 		t.Fatalf("critique version = %d, want %d", caps.Features.AnalysisCritiqueVersion, ai.CurrentCritiqueVersion())
 	}
+	if !caps.Features.ActionEligibility {
+		t.Fatal("action eligibility must be advertised when configured")
+	}
 
 	do := func(path, authz, body string) *http.Response {
 		var rdr io.Reader
@@ -858,6 +868,41 @@ func TestHandler_ActionsEnabled(t *testing.T) {
 			t.Fatal(err)
 		}
 		return resp
+	}
+
+	unauthEligibility, _ := http.Get(srv.URL + "/api/failures/abc/eligibility")
+	if unauthEligibility.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated eligibility = %d, want 401", unauthEligibility.StatusCode)
+	}
+	if !strings.Contains(unauthEligibility.Header.Get("Cache-Control"), "no-store") {
+		t.Fatalf("unauthenticated eligibility cache=%q", unauthEligibility.Header.Get("Cache-Control"))
+	}
+	_ = unauthEligibility.Body.Close()
+
+	missingEligibilityReq, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/failures/missing/eligibility", nil)
+	missingEligibilityReq.Header.Set("Authorization", "ok")
+	missingEligibility, err := http.DefaultClient.Do(missingEligibilityReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if missingEligibility.StatusCode != http.StatusNotFound || !strings.Contains(missingEligibility.Header.Get("Cache-Control"), "no-store") {
+		t.Fatalf("missing eligibility = %d cache=%q", missingEligibility.StatusCode, missingEligibility.Header.Get("Cache-Control"))
+	}
+	_ = missingEligibility.Body.Close()
+
+	eligibilityReq, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/failures/abc/eligibility", nil)
+	eligibilityReq.Header.Set("Authorization", "ok")
+	eligibilityResp, err := http.DefaultClient.Do(eligibilityReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var eligibility actions.Eligibility
+	if err := json.NewDecoder(eligibilityResp.Body).Decode(&eligibility); err != nil {
+		t.Fatal(err)
+	}
+	_ = eligibilityResp.Body.Close()
+	if eligibilityResp.StatusCode != http.StatusOK || eligibility.State != actions.EligibilityActionable || !strings.Contains(eligibilityResp.Header.Get("Cache-Control"), "no-store") {
+		t.Fatalf("eligibility response = %d %+v cache=%q", eligibilityResp.StatusCode, eligibility, eligibilityResp.Header.Get("Cache-Control"))
 	}
 
 	if r := do("/api/failures/abc/create-issue/preview", "", ""); r.StatusCode != http.StatusUnauthorized {

@@ -8,7 +8,8 @@ import { ErrorOutlined, HourglassEmpty, OpenInNew, Troubleshoot } from "@mui/ico
 import { Link as RouterLink } from "react-router-dom";
 import type { BuildResult, TestCase } from "../types/dashboard";
 import type { FetchStatusResponse } from "../types/fetchStatus";
-import { buildActionsReady, buildAnalysisState, buildFailureActionID, type BuildAnalysisState } from "../lib/buildFailures";
+import { buildAnalysisState, buildFailureActionID, type BuildAnalysisState } from "../lib/buildFailures";
+import { buildActionEligibilityHint } from "../lib/actionEligibility";
 import { buildFailurePath } from "../lib/routes";
 import { FailureActions } from "./FailureActions";
 import { useCapabilities } from "../hooks/useCapabilities";
@@ -54,7 +55,7 @@ export function BuildFailurePanel({
     analysis_generated_at: failure.ai_analysis.generated_at,
   } : undefined;
   const pendingState = state === "succeeded" ? "unavailable" : state;
-  const actionsReady = buildActionsReady(failure.ai_analysis, features.analysis_critique_version);
+  const actionEligibility = buildActionEligibilityHint(failure.ai_analysis, features.analysis_critique_version);
   const telemetry = failure.ai_analysis ? [
     failure.ai_analysis.cache_hit ? "Cache hit" : null,
     failure.ai_analysis.tool_calls != null ? `${failure.ai_analysis.tool_calls} tool calls` : null,
@@ -99,7 +100,6 @@ export function BuildFailurePanel({
               fileCtx={fileCtx}
               chatRef={chatRef}
             />
-            {actionsReady && <FailureActions failureID={buildFailureActionID(jobID, run.build_id)} resolvable={false} />}
           </>
         ) : (
           <Box role="status" sx={{ borderRadius: 2, p: 2, bgcolor: (theme) => soft(theme, pendingState === "unavailable" ? "warning" : "primary", 0.08) }}>
@@ -112,6 +112,11 @@ export function BuildFailurePanel({
             </Stack>
           </Box>
         )}
+        <FailureActions
+          failureID={buildFailureActionID(jobID, run.build_id)}
+          resolvable={false}
+          eligibilityHint={actionEligibility}
+        />
       </Stack>
     </Panel>
   );

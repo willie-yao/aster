@@ -58,6 +58,7 @@ remains identical.
 | `POST /api/analysis-corrections/{id}/revoke` | Revoke a correction and restore the original analysis. |
 | `GET /healthz` | Liveness and readiness probe. |
 | `GET /` | The built SPA, when `-static-dir` is set, with deep-link fallback to `index.html`. |
+| `GET /api/failures/{id}/eligibility` | Admin-gated deterministic source preflight without draft generation. |
 | `POST /api/failures/{id}/create-issue/preview` | Admin-gated: render the exact GitHub issue for one failure without filing it. Enabled only when actions are configured. |
 | `POST /api/failures/{id}/propose-fix/preview` | Admin-gated: generate and render the exact draft fix PR for one failure without opening it. |
 | `POST /api/actions/confirm` | Admin-gated: file the issue or open the PR previewed under the posted `{"token":...}`. |
@@ -412,6 +413,14 @@ off unless the server is started with `-project-dir` and `AUTH_MODE` selects an
 auth mechanism. When enabled, the server sets `features.actions: true` for
 resolve controls. It also sets `features.action_requests: true` when the action
 runner supports persistent drafts, which enables the issue and fix controls.
+
+Before rendering File issue or Propose fix, the frontend calls the authenticated
+eligibility endpoint. The server resolves the current published subject and runs
+the same deterministic pinned-source verification used by draft generation. The
+endpoint returns `actionable`, `investigation_required`, `already_present`, or
+`more_evidence_required`. It does not call a model, create an Orka Task, persist
+an action request, or send draft-ready email. Draft endpoints repeat verification
+and remain authoritative.
 
 File issue and Mark resolved work in the standard server image. Propose fix
 starts the local `opencode` runtime and also needs git. The standard distroless

@@ -17,6 +17,7 @@ import { soft } from "../theme";
 import { AnalysisChat } from "./AnalysisChat";
 import { useCapabilities } from "../hooks/useCapabilities";
 import { patternChatAvailability } from "../lib/patternChat";
+import { patternActionEligibilityHint } from "../lib/actionEligibility";
 import { jobRunPath } from "../lib/routes";
 
 function remediationStatusLabel(status: string): string {
@@ -85,6 +86,7 @@ export function PatternBanner({
   );
   const patternFileCtx = { builds: buildContexts, fileLinks: pattern.file_links } satisfies FileToUrlContext;
   const isCurrent = !refreshStatus || refreshStatus.state === "current";
+  const actionEligibility = patternActionEligibilityHint(pattern.remediation_targets, attempt?.status);
   const fixPatterns =
     isCurrent && pattern.id && pattern.content_hash && pattern.suggested_fix &&
     meetsConfidenceFloor(pattern.confidence, features.chat_fix_min_confidence ?? "high")
@@ -256,7 +258,9 @@ export function PatternBanner({
           />
         )}
 
-        {isCurrent && pattern.systemic && pattern.id && <FailureActions failureID={pattern.id} />}
+        {isCurrent && pattern.systemic && pattern.id && (
+          <FailureActions failureID={pattern.id} eligibilityHint={actionEligibility} />
+        )}
       </Stack>
     </Box>
   );

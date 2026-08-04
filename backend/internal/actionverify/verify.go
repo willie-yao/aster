@@ -135,7 +135,7 @@ func verifyTargets(ctx context.Context, reader Reader, input Input) (Result, err
 	}
 	results := make([]Result, 0, len(input.Targets))
 	for _, target := range input.Targets {
-		if reason := invalidTargetReason(target); reason != "" {
+		if reason := InvalidTargetReason(target); reason != "" {
 			return inconclusive(reason), nil
 		}
 		result, err := verifyTarget(ctx, reader, archive, target)
@@ -456,7 +456,8 @@ func verifyConfiguration(ctx context.Context, reader Reader, archive Archive, ta
 	}
 }
 
-func invalidTargetReason(target models.RemediationTarget) string {
+// InvalidTargetReason returns why a structured remediation target is unusable.
+func InvalidTargetReason(target models.RemediationTarget) string {
 	validPath := func(value string) bool {
 		return value != "" && len(value) <= 512 && !strings.HasPrefix(value, "/") && !strings.Contains(value, "\\") &&
 			path.Clean(value) == value && value != "." && value != ".." && !strings.HasPrefix(value, "../")
