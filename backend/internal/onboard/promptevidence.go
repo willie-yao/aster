@@ -19,11 +19,11 @@ var (
 	promptURLPattern               = regexp.MustCompile(`(?i)https?://[^\s<>()\[\]{}"']+`)
 	promptIdentifierPattern        = regexp.MustCompile(`\b[A-Z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*\b`)
 	promptCapitalizedPattern       = regexp.MustCompile(`\b[A-Z][a-z][A-Za-z0-9]*\b`)
-	promptSentenceSplitPattern     = regexp.MustCompile(`[\n.;!?]+`)
+	promptSentenceSplitPattern     = regexp.MustCompile(`(?:[;!?]+|\.\s+|\n+)`)
 	promptWordPattern              = regexp.MustCompile(`[A-Za-z0-9][A-Za-z0-9_.-]*`)
 	promptPathIdentifierPattern    = regexp.MustCompile(`(?:[A-Za-z0-9_.{}*-]+/)+[A-Za-z0-9_.{}*-]+|\b[A-Za-z0-9_.-]+\.(?:log|yaml|yml|json|go|sh)\b`)
 	promptNegationPattern          = regexp.MustCompile(`(?i)\b(no|not|never|without|cannot|can.t|doesn.t|isn.t|aren.t|won.t)\b|must not|do not`)
-	promptInjectionPattern         = regexp.MustCompile(`(?i)ignore (all |any |the )?(previous|system) instructions|follow (these|the) instructions|always report success|reveal (a |the )?(secret|token)|override (the )?system prompt`)
+	promptInjectionPattern         = regexp.MustCompile(`(?i)(ignore|disregard|set aside).{0,24}(previous|prior|system).{0,16}(instructions|directions)|follow (these|the) instructions|always report success|classify every failure as transient|reveal (a |the )?(secret|token)|override (the )?system prompt`)
 	deniedCapabilityMentionPattern = regexp.MustCompile(`(?i)\b(ssh|curl|wget|bash|powershell|kubectl)\b|azure portal|local[ -]?cli|live (cluster|kubernetes api)`)
 	prohibitedCapabilityPattern    = regexp.MustCompile(`(?i)\b(run|use|invoke|execute|open|launch|inspect|check|view|access)\s+(the\s+|an?\s+)?(ssh|curl|wget|bash|powershell|kubectl|az|aws|gcloud|browser|portal|shell|terminal)\b|\b(ssh|curl|wget)\s+(into|to|the|an?|https?://)|\bkubectl\s+(get|logs|describe|exec|apply|delete|port-forward)\b|\b(via|through|in)\s+(the\s+)?(azure\s+)?portal\b|local[ -]?cli|command[ -]?line|against (a |the )?live (kubernetes|cluster)|run (a )?command`)
 )
@@ -396,13 +396,25 @@ func substantiveClaimGrounded(claim, cited string) bool {
 	if len(promptWordPattern.FindAllString(stripped, -1)) == 0 {
 		return true
 	}
-	for _, segment := range promptSentenceSplitPattern.Split(cited, -1) {
-		segment = strings.TrimSpace(segment)
-		if segment != "" && substantiveClaimGroundedInSegment(stripped, segment) {
-			return true
+	citedSegments := promptSentenceSplitPattern.Split(cited, -1)
+	for _, claimSegment := range promptSentenceSplitPattern.Split(stripped, -1) {
+		claimSegment = strings.TrimSpace(claimSegment)
+		if claimSegment == "" {
+			continue
+		}
+		matched := false
+		for _, citedSegment := range citedSegments {
+			citedSegment = strings.TrimSpace(citedSegment)
+			if citedSegment != "" && substantiveClaimGroundedInSegment(claimSegment, citedSegment) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
 		}
 	}
-	return false
+	return true
 }
 
 func substantiveClaimGroundedInSegment(claim, cited string) bool {
@@ -414,8 +426,12 @@ func substantiveClaimGroundedInSegment(claim, cited string) bool {
 	}
 	stop := map[string]struct{}{"a": {}, "an": {}, "and": {}, "are": {}, "as": {}, "at": {}, "be": {}, "before": {}, "by": {}, "do": {}, "does": {}, "for": {}, "from": {}, "if": {}, "in": {}, "is": {}, "it": {}, "not": {}, "of": {}, "on": {}, "only": {}, "or": {}, "the": {}, "then": {}, "to": {}, "when": {}, "with": {}}
 	citedWords := promptWordPattern.FindAllString(strings.ToLower(cited), -1)
+	for i := range citedWords {
+		citedWords[i] = strings.Trim(citedWords[i], ".,;:")
+	}
 	var claimWords []string
 	for _, word := range promptWordPattern.FindAllString(strings.ToLower(claim), -1) {
+		word = strings.Trim(word, ".,;:")
 		if len(word) < 3 {
 			continue
 		}
@@ -437,7 +453,7 @@ func substantiveClaimGroundedInSegment(claim, cited string) bool {
 			cursor++
 		}
 	}
-	return matched*2 >= len(claimWords)
+	return matched == len(claimWords)
 }
 
 func validatePromptEvidence(e promptEvidence, input promptDraftInput, credentials []string) error {

@@ -151,6 +151,12 @@ func TestSubstantiveGroundingPreservesPolarity(t *testing.T) {
 	}
 }
 
+func TestSubstantiveGroundingRejectsUnsupportedSuffix(t *testing.T) {
+	if substantiveClaimGrounded("Controller reconciles Project resources and deletes them.", "Controller reconciles Project resources.") {
+		t.Fatal("unsupported claim suffix was accepted")
+	}
+}
+
 func TestSubstantiveGroundingPreservesRelationshipOrder(t *testing.T) {
 	if substantiveClaimGrounded("Controller readiness precedes initialization checks.", "Initialization precedes controller readiness checks.") {
 		t.Fatal("inverted relationship was accepted")
