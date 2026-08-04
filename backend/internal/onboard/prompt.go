@@ -2,6 +2,8 @@ package onboard
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -9,9 +11,9 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 )
 
-// completer is the subset of *ai.Client the generator needs.
-type completer interface {
-	Complete(ctx context.Context, system, user string) (string, error)
+// structuredCompleter is the subset of *ai.Client the generator needs.
+type structuredCompleter interface {
+	CompleteStructured(context.Context, string, string, ai.ResponseFormat, ai.StructuredValidator) error
 }
 
 const (
@@ -40,7 +42,7 @@ Ground every project-specific claim in the supplied source material. Do not inve
 
 The analyzer can read supplied Prow artifacts through engine tools. If the Kubernetes tool group is enabled, it can navigate Kubernetes-shaped logs and resource dumps already captured in the artifact tree. It does not connect to a live Kubernetes API and does not have Azure Portal, SSH, arbitrary shell, browser, or local CLI access. Never present unavailable investigation as evidence already collected. Do not substitute retries, timeout increases, or manual portal checks for artifact-backed remediation.
 
-Produce these level-two sections exactly once and in this exact order:
+The deterministic renderer will produce these level-two sections exactly once and in this exact order:
 
 ## Architecture
 Describe only relationships that help localize failures. Avoid marketing descriptions and exhaustive API inventories.
@@ -69,13 +71,13 @@ List only repositories established by supplied evidence that can produce actiona
 ## Unresolved details
 List important information not established by supplied sources. Keep it factual and use maintainer TODOs where useful. Do not fill gaps with generic assumptions.
 
-Rules: output only the Markdown body starting at "## Architecture". Do not add a top-level title, a second project-prompt wrapper, a preamble, a wrapping code fence, or closing remarks.`
+The structured extraction must return evidence for this contract rather than Markdown. The deterministic renderer owns headings, ordering, engine defaults, and final formatting.`
 
 // generatePromptBody asks the model to draft the system.md body from bounded
 // source evidence and discovered Prow jobs.
-func generatePromptBody(ctx context.Context, c completer, input promptDraftInput, credentials ...string) (string, error) {
+func generatePromptBody(ctx context.Context, c structuredCompleter, input promptDraftInput, credentials ...string) (string, bool, error) {
 	if !hasMeaningfulPromptSources(input.Sources) {
-		return "", fmt.Errorf("no meaningful source material")
+		return "", false, fmt.Errorf("no meaningful source material")
 	}
 
 	jobs := append([]promptJobSummary(nil), input.Jobs...)
@@ -128,15 +130,37 @@ func generatePromptBody(ctx context.Context, c completer, input promptDraftInput
 	}
 
 	userPrompt := redactPromptText(b.String(), credentials...)
-	out, err := c.Complete(ctx, promptSystemInstruction, userPrompt)
-	if err != nil {
-		return "", err
+	format := promptEvidenceResponseFormat()
+	var initial promptEvidence
+	if err := c.CompleteStructured(ctx, promptSystemInstruction+"\n\n"+promptEvidenceExtractionInstruction, userPrompt, format, func(raw json.RawMessage) error {
+		return decodeAndValidatePromptEvidence(raw, input, credentials, &initial)
+	}); err != nil {
+		return "", false, err
 	}
-	body := sanitizePromptBody(out)
+
+	revisionUser := promptEvidenceRevisionUser(initial) + "\n\nORIGINAL BOUNDED INPUT\n" + userPrompt
+	if gaps := promptEvidenceUnresolvedGaps(initial); len(gaps) > 0 {
+		revisionUser += "\n\nUNRESOLVED GAPS\n- " + strings.Join(gaps, "\n- ")
+	}
+	revisionUser = redactPromptText(revisionUser, credentials...)
+	selected := initial
+	revisionFallback := false
+	var revised promptEvidence
+	if err := c.CompleteStructured(ctx, promptEvidenceRevisionInstruction, revisionUser, format, func(raw json.RawMessage) error {
+		return decodeAndValidatePromptEvidence(raw, input, credentials, &revised)
+	}); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return "", false, err
+		}
+		revisionFallback = true
+	} else {
+		selected = revised
+	}
+	body := renderPromptEvidence(selected)
 	if err := validatePromptBody(body); err != nil {
-		return "", err
+		return "", revisionFallback, err
 	}
-	return body, nil
+	return body, revisionFallback, nil
 }
 
 func renderPromptJob(index int, job promptJobSummary) string {
@@ -308,7 +332,7 @@ func composeGeneratedPrompt(projectName, body string) string {
 	return fmt.Sprintf(`# %s AI prompt addendum
 
 This file is concatenated between the engine's universal Prow base prompt and
-its JSON response schema. It was drafted automatically from the project's docs
+its JSON response schema. It was drafted automatically from bounded project evidence
 by `+"`prow-ai-dashboard onboard`"+`; review and refine it, since prompt quality is
 the biggest lever on analysis depth.
 
@@ -318,5 +342,5 @@ the biggest lever on analysis depth.
 `, projectName, body)
 }
 
-// Ensure *ai.Client satisfies completer at compile time.
-var _ completer = (*ai.Client)(nil)
+// Ensure *ai.Client satisfies structuredCompleter at compile time.
+var _ structuredCompleter = (*ai.Client)(nil)

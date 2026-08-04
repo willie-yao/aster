@@ -152,9 +152,12 @@ When prompt drafting is selected, the wizard:
 2. Requires explicit confirmation.
 3. Resolves the default branch to one commit and reads a bounded source corpus.
 4. Reuses matched discovery and final-sweep jobs without another Prow discovery.
-5. Applies the fixed prompt-generation contract.
-6. Validates the result.
-7. Falls back to a reviewable stub when retrieval or generation fails.
+5. Makes one schema-bound evidence extraction call.
+6. Validates the evidence, makes one schema-bound revision call, and validates
+   the complete revision with the same rules.
+7. Renders Markdown deterministically and validates the final section contract.
+8. Falls back to a reviewable stub when extraction fails. If only revision
+   fails, it renders the first validated evidence object.
 
 The source corpus contains at most 10 Markdown, Go, YAML, or shell files or
 line-ranged excerpts. One source contributes at most 20,000 bytes and all source
@@ -166,7 +169,9 @@ Prow metadata includes job name, periodic or presubmit type, configuration file,
 repository when established, branches or refs, and TestGrid annotations. It is
 limited to 100 jobs and 40,000 bytes, with an omitted-count summary. Runtime
 credentials are redacted from full source text before excerpting and from the
-complete serialized provider input.
+complete serialized provider input. The two model calls and source retrieval
+share a five-minute timeout. Cancellation stops retrieval and provider calls.
+No third free-form formatting call is made.
 
 Generated prompts are drafts. Review every architecture, artifact, failure, and
 transient-classification claim before deployment.
@@ -187,7 +192,10 @@ connect to a live Kubernetes API. The analyzer also does not have portal, SSH,
 arbitrary shell, browser, or local CLI access.
 
 When the source repository yields no meaningful source evidence, onboarding
-skips the model request and writes the reviewable stub.
+skips the model request and writes the reviewable stub. Improve repository
+artifact documentation or job metadata and rerun onboarding when the generated
+`Unresolved details` section identifies important gaps. Choosing a more capable
+model does not substitute for missing source evidence.
 
 Use `-no-prompt` to force the stub. Use `-ai=false` to disable deployed AI
 analysis. These flags control different features.

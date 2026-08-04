@@ -94,18 +94,21 @@ func buildSystemPrompt(ctx context.Context, opts Options, data scaffoldData, inp
 		Endpoint: opts.AIEndpoint,
 		Model:    opts.AIModel,
 	})
-	body, err := generatePromptBody(ctx, client, input, opts.AIToken, opts.GitHubToken)
+	body, revisionFallback, err := generatePromptBody(ctx, client, input, opts.AIToken, opts.GitHubToken)
 	if err != nil {
 		fmt.Fprintln(out, "[warn] prompt generation failed; writing the stub instead")
 		prompt, renderErr := render(systemPromptTmpl, data)
 		return prompt, false, renderErr
 	}
+	if revisionFallback {
+		fmt.Fprintln(out, "[warn] prompt revision failed; using the first validated evidence extraction")
+	}
 	fmt.Fprintf(out, "Drafted prompts/system.md from %d source(s) and %d Prow job(s). Review it before deployment.\n", len(input.Sources), len(input.Jobs))
 	return composeGeneratedPrompt(data.Name, body), true, nil
 }
 
-// promptDraftTimeout bounds source retrieval and one generation call.
-const promptDraftTimeout = 3 * time.Minute
+// promptDraftTimeout bounds source retrieval and two structured model calls.
+const promptDraftTimeout = 5 * time.Minute
 
 func validateOptions(opts *Options) error {
 	if err := validateCredentialSeparation(*opts); err != nil {

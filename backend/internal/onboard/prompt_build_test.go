@@ -15,7 +15,7 @@ import (
 func TestBuildSystemPromptUsesEvidenceWithoutLeakingTokens(t *testing.T) {
 	const aiToken = "fixture-ai-secret"
 	const githubToken = "fixture-github-secret"
-	var modelRequest string
+	var modelRequests []string
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if servePromptSourceRevision(w, r) {
 			return
@@ -24,8 +24,8 @@ func TestBuildSystemPromptUsesEvidenceWithoutLeakingTokens(t *testing.T) {
 			t.Fatalf("model authorization = %q", got)
 		}
 		body, _ := io.ReadAll(r.Body)
-		modelRequest = string(body)
-		fmt.Fprintf(w, `{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":%q}}]}`, validPromptBody())
+		modelRequests = append(modelRequests, string(body))
+		fmt.Fprintf(w, `{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":%q}}]}`, validPromptEvidenceJSON())
 	}))
 	defer model.Close()
 
@@ -70,15 +70,18 @@ func TestBuildSystemPromptUsesEvidenceWithoutLeakingTokens(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildSystemPrompt: %v", err)
 	}
-	if !drafted || !strings.Contains(prompt, validPromptBody()) {
+	if !drafted || !strings.Contains(prompt, "## Architecture") || !strings.Contains(prompt, "## Unresolved details") {
 		t.Fatalf("prompt was not drafted:\n%s", prompt)
 	}
+	if len(modelRequests) != 2 {
+		t.Fatalf("model requests = %d, want extraction and revision", len(modelRequests))
+	}
 	for _, want := range []string{"DISCOVERED PROW JOBS", "SOURCE 1: docs/", "kind markdown"} {
-		if !strings.Contains(modelRequest, want) {
-			t.Errorf("model request missing %q: %s", want, modelRequest)
+		if !strings.Contains(modelRequests[0], want) {
+			t.Errorf("extraction request missing %q: %s", want, modelRequests[0])
 		}
 	}
-	all := modelRequest + prompt + logs.String()
+	all := strings.Join(modelRequests, "") + prompt + logs.String()
 	for _, token := range []string{aiToken, githubToken} {
 		if strings.Contains(all, token) {
 			t.Fatalf("credential %q leaked into prompt path", token)

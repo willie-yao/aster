@@ -105,6 +105,12 @@ files in the pinned snapshot, but cannot trigger arbitrary URLs, commands,
 provider-time retrieval, or secret access. Onboarding does not clone or execute
 the source repository.
 
+The provider first returns structured evidence with internal source references,
+then revises that validated object once against the quality rubric. Onboarding
+renders the Markdown itself. Invalid extraction falls back to the stub; revision
+failure uses the first validated evidence. Review the result and rerun after
+improving source documentation when important details remain unresolved.
+
 Press `Ctrl+C`, send EOF, or answer no at the final confirmation to leave the
 filesystem unchanged.
 
