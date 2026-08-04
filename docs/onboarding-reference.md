@@ -30,9 +30,11 @@ the wizard uses equivalent numbered and line-oriented prompts. Set
 `ACCESSIBLE=1` to select this mode in any terminal. Cancellation and EOF leave
 no scaffold. The final confirmation defaults to no.
 
-Repository metadata, Prow configuration, source documents, and model output are
-untrusted data. They cannot authorize commands, alter fixed instructions, or
-request credentials.
+Repository metadata, Prow configuration, source excerpts, job metadata, and
+model output are untrusted data. They cannot authorize commands, alter fixed
+instructions, or request credentials. Documentation references may influence
+deterministic ranking of eligible files in a pinned source snapshot, but cannot
+trigger arbitrary URLs, commands, provider-time retrieval, or secret access.
 
 ## Accepted repository forms
 
@@ -145,12 +147,26 @@ the documented environment variable, GitHub Secret, or Kubernetes Secret path.
 
 When prompt drafting is selected, the wizard:
 
-1. Explains what bounded repository content may be sent.
+1. Explains that documentation, source excerpts, and matched Prow job metadata
+   may be sent.
 2. Requires explicit confirmation.
-3. Reads a bounded source corpus.
-4. Applies the fixed prompt-generation contract.
-5. Validates the result.
-6. Falls back to a reviewable stub when generation fails.
+3. Resolves the default branch to one commit and reads a bounded source corpus.
+4. Reuses matched discovery and final-sweep jobs without another Prow discovery.
+5. Applies the fixed prompt-generation contract.
+6. Validates the result.
+7. Falls back to a reviewable stub when retrieval or generation fails.
+
+The source corpus contains at most 10 Markdown, Go, YAML, or shell files or
+line-ranged excerpts. One source contributes at most 20,000 bytes and all source
+text contributes at most 80,000 bytes. Eligible files up to 1 MiB are scanned
+before excerpt selection. Vendored, generated, binary, `node_modules`, and
+`.github` paths are excluded. A truncated recursive Git tree is rejected.
+
+Prow metadata includes job name, periodic or presubmit type, configuration file,
+repository when established, branches or refs, and TestGrid annotations. It is
+limited to 100 jobs and 40,000 bytes, with an omitted-count summary. Runtime
+credentials are redacted from full source text before excerpting and from the
+complete serialized provider input.
 
 Generated prompts are drafts. Review every architecture, artifact, failure, and
 transient-classification claim before deployment.
@@ -165,11 +181,13 @@ explicitly unresolved instead of being replaced with generic guidance.
 Transient rules require positive evidence that permits the classification and a
 boundary that makes the failure non-transient. The generator does not add common
 transient classes when the source material is silent. The analyzer can inspect
-supplied Prow artifacts, but it does not have portal, SSH, arbitrary shell,
-browser, or local CLI access.
+supplied Prow artifacts. Optional Kubernetes tools navigate Kubernetes-shaped
+logs and resource dumps already captured in the artifact tree. They do not
+connect to a live Kubernetes API. The analyzer also does not have portal, SSH,
+arbitrary shell, browser, or local CLI access.
 
-When the source repository yields no meaningful documentation, onboarding skips
-the model request and writes the reviewable stub.
+When the source repository yields no meaningful source evidence, onboarding
+skips the model request and writes the reviewable stub.
 
 Use `-no-prompt` to force the stub. Use `-ai=false` to disable deployed AI
 analysis. These flags control different features.

@@ -3,8 +3,12 @@ package onboard
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prow/jobconfig"
 )
 
 func TestBuildPlan_RendersAndValidatesWithoutWriting(t *testing.T) {
@@ -257,5 +261,42 @@ func TestApply_RejectsGitHubTokenInPlanMetadataBeforeValidation(t *testing.T) {
 	}
 	if writer.writes != 0 {
 		t.Fatalf("credential-bearing plan wrote %d time(s)", writer.writes)
+	}
+}
+
+func TestBuildPlanPassesExistingJobEvidenceToPromptBuilder(t *testing.T) {
+	for name, planning := range map[string]planningContext{
+		"flagged": {},
+		"interactive": {discovery: &DiscoveryReport{SourceRepo: Repo{Owner: "example", Name: "project", FullName: "example/project"}, MatchingJobs: []jobconfig.JobDefinition{{
+			Name: "periodic-project-main", JobType: models.JobTypePeriodic, ConfigFile: "config/jobs.yaml",
+			Refs:        []jobconfig.RepoRef{{Org: "example", Repo: "project", BaseRef: "main"}},
+			Annotations: map[string]string{"testgrid-dashboards": "dashboard-b, dashboard-a"},
+		}}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			deps, _, _, sweeper := wizardDependencies("")
+			sweeper.jobs = []models.ProwJob{{
+				Name: "periodic-project-main", JobType: models.JobTypePeriodic,
+				ConfigFile: "config/jobs.yaml", Branch: "main",
+			}}
+			prompts := &fakePromptBuilder{}
+			deps.prompts = prompts
+			opts := Options{
+				TestGrid: "dashboard-a", DashboardRepo: "example/project-prow-ai-dashboard",
+				SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out", NoPrompt: true,
+			}
+			if _, err := buildPlan(context.Background(), opts, planning, deps); err != nil {
+				t.Fatalf("buildPlan: %v", err)
+			}
+			if prompts.calls != 1 || prompts.gotInput.ProjectName != "Project" || prompts.gotInput.SourceRepo.FullName != "example/project" {
+				t.Fatalf("prompt input = %+v, calls=%d", prompts.gotInput, prompts.calls)
+			}
+			if len(prompts.gotInput.Jobs) != 1 || prompts.gotInput.Jobs[0].Name != "periodic-project-main" {
+				t.Fatalf("prompt jobs = %+v", prompts.gotInput.Jobs)
+			}
+			if name == "interactive" && !reflect.DeepEqual(prompts.gotInput.Jobs[0].Dashboards, []string{"dashboard-a", "dashboard-b"}) {
+				t.Fatalf("interactive dashboards = %v", prompts.gotInput.Jobs[0].Dashboards)
+			}
+		})
 	}
 }

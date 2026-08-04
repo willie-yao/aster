@@ -31,7 +31,7 @@ The wizard asks you to choose or confirm:
 4. Project and dashboard names.
 5. Whether to include presubmit jobs.
 6. Whether to enable AI analysis and which provider to use.
-7. Whether to draft `prompts/system.md` from bounded repository documentation.
+7. Whether to draft `prompts/system.md` from bounded source evidence and matched Prow job metadata.
 8. The output directory or pull request destination.
 
 In the interactive form, use the arrow keys to move, Enter to select, and
@@ -92,9 +92,18 @@ anything. Review:
 - Every project-specific claim in `prompts/system.md`.
 - The deployment files and their destination paths.
 
-Repository metadata, Prow configuration, and source documentation are untrusted
-input. They cannot alter the wizard flow or cause command execution. Repository
-content is sent to a prompt-drafting provider only after explicit confirmation.
+Repository metadata, Prow configuration, source excerpts, and job metadata are
+untrusted input. They cannot alter the wizard flow or cause command execution.
+Repository content is sent to a prompt-drafting provider only after explicit
+confirmation.
+
+Prompt drafting pins the source repository to one commit and sends at most 10
+line-ranged Markdown, Go, YAML, or shell excerpts, with a 20,000-byte per-source
+limit and an 80,000-byte total. Prow metadata is separately limited to 100 jobs
+and 40,000 bytes. Documentation references may raise the rank of exact eligible
+files in the pinned snapshot, but cannot trigger arbitrary URLs, commands,
+provider-time retrieval, or secret access. Onboarding does not clone or execute
+the source repository.
 
 Press `Ctrl+C`, send EOF, or answer no at the final confirmation to leave the
 filesystem unchanged.
@@ -112,7 +121,8 @@ go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboar
 ```
 
 Use `-no-prompt` when you want the reviewable prompt stub instead of sending
-repository documentation to an AI provider. This flag controls prompt drafting.
+source evidence and matched Prow metadata to an AI provider. This flag controls
+prompt drafting.
 It does not disable the interactive wizard.
 
 ## Next steps
