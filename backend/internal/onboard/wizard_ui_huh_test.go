@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
 )
 
@@ -224,5 +225,97 @@ func TestNormalizeWizardUIError(t *testing.T) {
 	got := normalizeWizardUIError("Prompt", sentinel)
 	if !errors.Is(got, sentinel) || !strings.Contains(got.Error(), "Prompt") {
 		t.Fatalf("normalize(sentinel) = %v", got)
+	}
+}
+
+func TestClearableHuhInput_EscapeClearsWithoutSubmitting(t *testing.T) {
+	value := "prefilled"
+	validationCalls := 0
+	field := newClearableHuhInput(huh.NewInput().
+		Value(&value).
+		Validate(func(string) error {
+			validationCalls++
+			return nil
+		}), &value)
+	form := huh.NewForm(huh.NewGroup(field))
+	field.Focus()
+
+	model, _ := form.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	form = model.(*huh.Form)
+
+	if value != "" {
+		t.Fatalf("value = %q", value)
+	}
+	if form.State != huh.StateNormal {
+		t.Fatalf("state = %v", form.State)
+	}
+	if validationCalls != 0 {
+		t.Fatalf("validation calls = %d", validationCalls)
+	}
+}
+
+func TestClearableHuhInput_EscapeUsesNormalValidation(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		required bool
+		wantErr  bool
+	}{
+		{name: "required", required: true, wantErr: true},
+		{name: "optional", required: false, wantErr: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			value := "prefilled"
+			field := newClearableHuhInput(huh.NewInput().
+				Value(&value).
+				Validate(func(value string) error {
+					if test.required && strings.TrimSpace(value) == "" {
+						return errors.New("a value is required")
+					}
+					return nil
+				}), &value)
+			form := huh.NewForm(huh.NewGroup(field))
+			field.Focus()
+
+			model, _ := form.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+			form = model.(*huh.Form)
+			model, _ = form.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			form = model.(*huh.Form)
+
+			if value != "" {
+				t.Fatalf("value = %q", value)
+			}
+			if got := form.GetFocusedField().Error() != nil; got != test.wantErr {
+				t.Fatalf("validation error = %v, want error %t", form.GetFocusedField().Error(), test.wantErr)
+			}
+		})
+	}
+}
+
+func TestClearableHuhInput_CtrlCCancels(t *testing.T) {
+	value := "prefilled"
+	field := newClearableHuhInput(huh.NewInput().Value(&value), &value)
+	form := huh.NewForm(huh.NewGroup(field))
+
+	model, _ := form.Update(tea.KeyPressMsg(tea.Key{Mod: tea.ModCtrl, Code: 'c'}))
+	form = model.(*huh.Form)
+
+	if form.State != huh.StateAborted {
+		t.Fatalf("state = %v", form.State)
+	}
+	if value != "prefilled" {
+		t.Fatalf("value = %q", value)
+	}
+}
+
+func TestClearableHuhInput_ShowsClearHint(t *testing.T) {
+	value := "prefilled"
+	field := newClearableHuhInput(huh.NewInput().Value(&value), &value)
+	bindings := field.KeyBinds()
+	if len(bindings) == 0 {
+		t.Fatal("no key bindings")
+	}
+	help := bindings[0].Help()
+	if help.Key != "esc" || help.Desc != "clear" {
+		t.Fatalf("clear help = %q %q", help.Key, help.Desc)
 	}
 }

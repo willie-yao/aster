@@ -35,8 +35,9 @@ The wizard asks you to choose or confirm:
 8. The output directory or pull request destination.
 
 In the interactive form, use the arrow keys to move, Enter to select, and
-`Ctrl+C` to cancel. Inferred text values are prefilled and editable. The final
-confirmation defaults to no.
+`Ctrl+C` to cancel. Press Esc to clear the current prefilled text input without
+submitting it. Inferred text values remain editable. The final confirmation
+defaults to no.
 
 The dashboard repository must be a consumer repository you control. The wizard
 prefers the authenticated GitHub login, then the owner of an automatically

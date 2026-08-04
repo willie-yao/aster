@@ -19,7 +19,7 @@ func newHuhWizardUI(terminal Terminal) wizardUI {
 
 func (u *huhWizardUI) Input(ctx context.Context, prompt inputPrompt) (string, error) {
 	value := prompt.Value
-	field := huh.NewInput().
+	field := newClearableHuhInput(huh.NewInput().
 		Title(prompt.Title).
 		Description(prompt.Description).
 		Value(&value).
@@ -32,7 +32,7 @@ func (u *huhWizardUI) Input(ctx context.Context, prompt inputPrompt) (string, er
 				return prompt.Validate(value)
 			}
 			return nil
-		})
+		}), &value)
 	if err := u.run(ctx, prompt.Title, field); err != nil {
 		return "", err
 	}
