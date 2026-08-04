@@ -22,7 +22,7 @@ var (
 	promptWordPattern           = regexp.MustCompile(`[A-Za-z0-9][A-Za-z0-9_.-]*`)
 	promptPathIdentifierPattern = regexp.MustCompile(`(?:[A-Za-z0-9_.{}*-]+/)+[A-Za-z0-9_.{}*-]+|\b[A-Za-z0-9_.-]+\.(?:log|yaml|yml|json|go|sh)\b`)
 	promptInjectionPattern      = regexp.MustCompile(`(?i)ignore (all |any |the )?(previous|system) instructions|follow (these|the) instructions|always report success|reveal (a |the )?(secret|token)|override (the )?system prompt`)
-	prohibitedCapabilityPattern = regexp.MustCompile(`(?i)\b(run|use|invoke|execute|open|launch|inspect|check|view|access)\s+(the\s+|an?\s+)?(ssh|curl|wget|bash|powershell|kubectl|az|aws|gcloud|browser|portal|shell|terminal)\b|\b(via|through|in)\s+(the\s+)?(azure\s+)?portal\b|local[ -]?cli|command[ -]?line|against (a |the )?live (kubernetes|cluster)|run (a )?command`)
+	prohibitedCapabilityPattern = regexp.MustCompile(`(?i)\b(run|use|invoke|execute|open|launch|inspect|check|view|access)\s+(the\s+|an?\s+)?(ssh|curl|wget|bash|powershell|kubectl|az|aws|gcloud|browser|portal|shell|terminal)\b|\b(ssh|curl|wget)\s+(into|to|the|an?|https?://)|\bkubectl\s+(get|logs|describe|exec|apply|delete|port-forward)\b|\b(via|through|in)\s+(the\s+)?(azure\s+)?portal\b|local[ -]?cli|command[ -]?line|against (a |the )?live (kubernetes|cluster)|run (a )?command`)
 )
 
 type evidenceRef struct {
@@ -287,8 +287,9 @@ func groundPromptEvidence(e *promptEvidence, sources []promptSource) {
 
 	rules := e.TransientRules[:0]
 	for _, item := range e.TransientRules {
-		text := strings.Join([]string{item.Class, item.OnlyIf, item.NotTransientIf}, " ")
-		if substantiveClaimGrounded(text, referencedEvidenceText(item.Sources, sources)) {
+		cited := referencedEvidenceText(item.Sources, sources)
+		boundariesDiffer := !strings.EqualFold(strings.TrimSpace(item.OnlyIf), strings.TrimSpace(item.NotTransientIf))
+		if boundariesDiffer && substantiveClaimGrounded(item.Class+" "+item.OnlyIf, cited) && substantiveClaimGrounded(item.Class+" "+item.NotTransientIf, cited) {
 			rules = append(rules, item)
 		} else {
 			unresolved = append(unresolved, "Verify unsupported transient rule: "+item.Class)
@@ -439,6 +440,9 @@ func validatePromptEvidence(e promptEvidence, input promptDraftInput, credential
 	for _, rule := range e.TransientRules {
 		if rule.Class == "" || rule.OnlyIf == "" || rule.NotTransientIf == "" || len(rule.Sources) == 0 {
 			return fmt.Errorf("transient rule requires positive and negative boundaries plus sources")
+		}
+		if strings.EqualFold(strings.TrimSpace(rule.OnlyIf), strings.TrimSpace(rule.NotTransientIf)) {
+			return fmt.Errorf("transient rule %q has identical positive and negative boundaries", rule.Class)
 		}
 		if err := validateEvidenceRefs(rule.Sources, input.Sources); err != nil {
 			return fmt.Errorf("transient rule %q: %w", rule.Class, err)
@@ -632,8 +636,11 @@ func containsCredentialBearingURL(values []string) bool {
 			if hasSensitiveURLKeys(u.Query()) {
 				return true
 			}
-			if fragment, err := url.ParseQuery(u.Fragment); err == nil && hasSensitiveURLKeys(fragment) {
-				return true
+			if u.Fragment != "" {
+				fragment, err := url.ParseQuery(u.Fragment)
+				if err != nil || hasSensitiveURLKeys(fragment) {
+					return true
+				}
 			}
 		}
 	}
@@ -762,26 +769,33 @@ func promptEvidenceUnresolvedGaps(e promptEvidence) []string {
 
 func promptQualityIssues(e promptEvidence, body string) []string {
 	var issues []string
-	if len(e.Architecture) == 0 {
-		issues = append(issues, "missing architecture")
+	checks := []struct {
+		name  string
+		count int
+	}{
+		{"architecture", len(e.Architecture)}, {"diagnostic lifecycle", len(e.DiagnosticLifecycle)},
+		{"test flavors", len(e.TestFlavors)}, {"grounded artifacts", len(e.Artifacts)},
+		{"failure patterns", len(e.FailurePatterns)}, {"transient boundaries", len(e.TransientRules)},
+		{"project triage", len(e.TriageOrder)}, {"repositories", len(e.Repositories)},
 	}
-	if len(e.DiagnosticLifecycle) == 0 {
-		issues = append(issues, "missing diagnostic lifecycle")
-	}
-	if len(e.Artifacts) == 0 {
-		issues = append(issues, "missing grounded artifacts")
-	}
-	if len(e.FailurePatterns) == 0 {
-		issues = append(issues, "missing failure patterns")
-	}
-	if len(e.TriageOrder) == 0 {
-		issues = append(issues, "missing project triage")
-	}
-	lower := strings.ToLower(body)
-	for _, unavailable := range []string{"azure portal", " ssh ", "run az ", "kubectl against the live", "open a browser"} {
-		if strings.Contains(" "+lower+" ", unavailable) {
-			issues = append(issues, "contains unavailable investigation: "+strings.TrimSpace(unavailable))
+	for _, check := range checks {
+		if check.count == 0 {
+			issues = append(issues, "missing "+check.name)
 		}
 	}
+	if containsUnavailableInvestigation([]string{body}) {
+		issues = append(issues, "contains unavailable investigation")
+	}
 	return issues
+}
+
+func promptEvidenceContentCount(e promptEvidence) int {
+	return len(e.Architecture) + len(e.DiagnosticLifecycle) + len(e.TestFlavors) + len(e.Artifacts) + len(e.FailurePatterns) + len(e.TransientRules) + len(e.TriageOrder) + len(e.Repositories)
+}
+
+func promptEvidenceRevisionRegresses(initial, revised promptEvidence) bool {
+	if promptEvidenceContentCount(initial) > 0 && promptEvidenceContentCount(revised) == 0 {
+		return true
+	}
+	return len(promptQualityIssues(revised, renderPromptEvidence(revised))) > len(promptQualityIssues(initial, renderPromptEvidence(initial)))
 }

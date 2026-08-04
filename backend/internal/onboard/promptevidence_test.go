@@ -179,6 +179,21 @@ func TestGeneratePromptBodyUsesValidatedRevision(t *testing.T) {
 	}
 }
 
+func TestGeneratePromptBodyRejectsRegressiveEmptyRevision(t *testing.T) {
+	input := groundedPromptInput()
+	initial := validGroundedPromptEvidence()
+	empty := promptEvidence{
+		Architecture: []evidenceClaim{}, DiagnosticLifecycle: []evidenceClaim{}, TestFlavors: []evidenceClaim{},
+		Artifacts: []artifactEvidence{}, FailurePatterns: []failurePatternEvidence{}, TransientRules: []transientEvidence{},
+		TriageOrder: []evidenceClaim{}, Repositories: []evidenceClaim{}, Unresolved: []string{"Everything unresolved."},
+	}
+	c := &stubCompleter{outputs: []string{evidenceJSON(initial), evidenceJSON(empty)}}
+	body, fallback, err := generatePromptBody(context.Background(), c, input)
+	if err != nil || !fallback || !strings.Contains(body, initial.Architecture[0].Text) {
+		t.Fatalf("fallback=%v err=%v body=%s", fallback, err, body)
+	}
+}
+
 func TestGeneratePromptBodyRevisionDeadlineUsesInitialEvidence(t *testing.T) {
 	input := groundedPromptInput()
 	initial := validGroundedPromptEvidence()

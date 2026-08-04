@@ -146,6 +146,8 @@ func generatePromptBody(ctx context.Context, c structuredCompleter, input prompt
 			return "", false, err
 		}
 		revisionFallback = true
+	} else if promptEvidenceRevisionRegresses(initial, revised) {
+		revisionFallback = true
 	} else {
 		selected = revised
 	}
