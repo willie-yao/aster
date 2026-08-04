@@ -103,9 +103,10 @@ func (s *Service) resolveFileLinksAtRef(ctx context.Context, client *http.Client
 		return links
 	}
 
-	// Collect distinct candidate source paths: explicit relevant_files plus
-	// paths cited in the prose.
+	// Collect distinct candidate source paths from relevant files, source-search
+	// suggestions, and paths cited in the prose.
 	seen := map[string]struct{}{}
+	candidates := make([]string, 0, maxLinkCandidates)
 	add := func(p string) {
 		clean := strings.TrimSpace(trailingParenRe.ReplaceAllString(p, ""))
 		// Artifact-tree paths are linked client-side against the build's GCS
@@ -114,9 +115,16 @@ func (s *Service) resolveFileLinksAtRef(ctx context.Context, client *http.Client
 			strings.HasPrefix(clean, "artifacts/") || strings.HasPrefix(clean, "clusters/") {
 			return
 		}
+		if _, ok := seen[clean]; ok {
+			return
+		}
 		seen[clean] = struct{}{}
+		candidates = append(candidates, clean)
 	}
 	for _, f := range tc.AIAnalysis.RelevantFiles {
+		add(f)
+	}
+	for _, f := range tc.AIAnalysis.SearchSuggestions {
 		add(f)
 	}
 	prose := tc.AIAnalysis.RootCause + "\n" + tc.AIAnalysis.SuggestedFix
@@ -127,12 +135,10 @@ func (s *Service) resolveFileLinksAtRef(ctx context.Context, client *http.Client
 		add(m)
 	}
 
-	n := 0
-	for clean := range seen {
-		if n >= maxLinkCandidates {
+	for index, clean := range candidates {
+		if index >= maxLinkCandidates {
 			break
 		}
-		n++
 		var url string
 		var ok bool
 		if ref != "" && ref != "HEAD" {

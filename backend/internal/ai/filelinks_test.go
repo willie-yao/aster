@@ -176,3 +176,39 @@ func TestResolveFileLinksAtExactBuildCommit(t *testing.T) {
 		t.Fatalf("links = %v, want %s", links, want)
 	}
 }
+
+func TestResolveFileLinksAtExactBuildCommitVerifiesSearchSuggestions(t *testing.T) {
+	sha := strings.Repeat("b", 40)
+	var requested []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = append(requested, r.URL.Path)
+		switch r.URL.Path {
+		case "/kubernetes-sigs/cluster-api-provider-azure/" + sha + "/internal/asomigration/labels.go":
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	old := rawContentBase
+	rawContentBase = srv.URL
+	t.Cleanup(func() { rawContentBase = old })
+
+	r := NewFileLinkResolver("kubernetes-sigs", "cluster-api-provider-azure")
+	tc := &models.TestCase{AIAnalysis: &models.AIAnalysis{SearchSuggestions: []string{
+		"internal/asomigration/labels.go", "../unsafe.go", "missing/file.go", "internal/asomigration/labels.go",
+	}}}
+	links := r.ResolveAtRef(context.Background(), srv.Client(), tc, sha)
+	want := "https://github.com/kubernetes-sigs/cluster-api-provider-azure/blob/" + sha + "/internal/asomigration/labels.go"
+	if links["internal/asomigration/labels.go"] != want || len(links) != 1 {
+		t.Fatalf("links=%v want=%s", links, want)
+	}
+	for _, path := range requested {
+		if strings.Contains(path, "unsafe") {
+			t.Fatalf("unsafe path was requested: %v", requested)
+		}
+	}
+	if len(requested) != 2 || !strings.HasSuffix(requested[0], "/internal/asomigration/labels.go") || !strings.HasSuffix(requested[1], "/missing/file.go") {
+		t.Fatalf("request order=%v", requested)
+	}
+}
