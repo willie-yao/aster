@@ -31,7 +31,7 @@ The wizard asks you to choose or confirm:
 4. Project and dashboard names.
 5. Whether to include presubmit jobs.
 6. Whether to enable AI analysis and which provider to use.
-7. Whether to draft `prompts/system.md` from bounded source evidence and matched Prow job metadata.
+7. Whether to use the experimental API path to draft `prompts/system.md` from bounded source evidence and matched Prow job metadata.
 8. The output directory or pull request destination.
 
 In the interactive form, use the arrow keys to move, Enter to select, and
@@ -95,7 +95,9 @@ anything. Review:
 Repository metadata, Prow configuration, source excerpts, and job metadata are
 untrusted input. They cannot alter the wizard flow or cause command execution.
 Repository content is sent to a prompt-drafting provider only after explicit
-confirmation.
+confirmation. `AI_TOKEN` authenticates that one-time draft and remains an
+environment-only value. It is never displayed, inspected, fingerprinted, or
+written into the plan or scaffold.
 
 Prompt drafting pins the source repository to one commit and sends at most 10
 line-ranged Markdown, Go, YAML, or shell excerpts, with a 20,000-byte per-source
@@ -107,9 +109,16 @@ the source repository.
 
 The provider first returns structured evidence with internal source references,
 then revises that validated object once against the quality rubric. Onboarding
-renders the Markdown itself. Invalid extraction falls back to the stub; revision
-failure uses the first validated evidence. Review the result and rerun after
-improving source documentation when important details remain unresolved.
+renders the Markdown itself. Invalid extraction falls back to the TODO template. Revision failure uses the
+first validated evidence. Safe warnings identify the failed stage, failure
+category, fallback, and operator action without printing the wrapped provider
+error. After an interactive API failure, choose whether to retry the same
+reviewed provider, continue with the TODO template, or cancel. The safe default
+is to continue with the template.
+
+The final review labels the prompt as `TODO template`, `Experimental API draft`,
+or `TODO template after experimental API failure`. The final write confirmation
+defaults to no.
 
 Press `Ctrl+C`, send EOF, or answer no at the final confirmation to leave the
 filesystem unchanged.
@@ -126,10 +135,20 @@ go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboar
   -dry-run
 ```
 
-Use `-no-prompt` when you want the reviewable prompt stub instead of sending
-source evidence and matched Prow metadata to an AI provider. This flag controls
-prompt drafting.
-It does not disable the interactive wizard.
+Use `--no-prompt` when you want the reviewable TODO template instead of
+sending source evidence and matched Prow metadata to an AI provider. This flag
+controls prompt drafting. It does not disable the interactive wizard.
+
+Use `--prompt-debug` for sanitized diagnostics on stderr. Debug output contains
+stage timing, bounded source paths and line ranges, counts, provider hostname,
+model fingerprint, safe HTTP metadata, and validation codes. It never creates a
+report file and excludes tokens, source contents, prompts, model responses,
+provider bodies, endpoint paths or query strings, and full model identifiers.
+
+Automation can add `--require-prompt-draft` to fail before local writes or pull
+request creation unless the experimental API draft succeeds. The flag is valid
+only for experimental API drafting and requires `AI_TOKEN`, `AI_ENDPOINT`, and
+`AI_MODEL`.
 
 ## Next steps
 

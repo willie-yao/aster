@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 )
@@ -76,8 +77,24 @@ The structured extraction must return evidence for this contract rather than Mar
 // generatePromptBody asks the model to draft the system.md body from bounded
 // source evidence and discovered Prow jobs.
 func generatePromptBody(ctx context.Context, c structuredCompleter, input promptDraftInput, credentials ...string) (string, bool, error) {
+	result, err := generatePromptBodyDetailed(ctx, c, input, credentials...)
+	return result.Body, result.RevisionFallback, err
+}
+
+type promptGenerationResult struct {
+	Body               string
+	RevisionFallback   bool
+	RevisionFailure    *promptPreparationFailure
+	ExtractionDuration time.Duration
+	RevisionDuration   time.Duration
+	RenderDuration     time.Duration
+}
+
+func generatePromptBodyDetailed(ctx context.Context, c structuredCompleter, input promptDraftInput, credentials ...string) (promptGenerationResult, error) {
+	var result promptGenerationResult
 	if !hasMeaningfulPromptSources(input.Sources) {
-		return "", false, fmt.Errorf("no meaningful source material")
+		failure := &promptPreparationFailure{Stage: promptStageSourceExcerpt, Category: promptFailureNoSourceEvidence}
+		return result, failure
 	}
 
 	jobs := append([]promptJobSummary(nil), input.Jobs...)
@@ -121,14 +138,27 @@ func generatePromptBody(ctx context.Context, c structuredCompleter, input prompt
 		b.WriteString(source.Text)
 		b.WriteString("\n")
 	}
-
 	userPrompt := redactPromptText(b.String(), credentials...)
 	format := promptEvidenceResponseFormat()
 	var initial promptEvidence
-	if err := c.CompleteStructured(ctx, promptSystemInstruction+"\n\n"+promptEvidenceExtractionInstruction, userPrompt, format, func(raw json.RawMessage) error {
-		return decodeAndValidatePromptEvidence(raw, validationInput, credentials, &initial)
-	}); err != nil {
-		return "", false, err
+	var initialValidation *promptEvidenceValidationError
+	extractionStart := time.Now()
+	err := c.CompleteStructured(ctx, promptSystemInstruction+"\n\n"+promptEvidenceExtractionInstruction, userPrompt, format, func(raw json.RawMessage) error {
+		err := decodeAndValidatePromptEvidence(raw, validationInput, credentials, &initial)
+		if typed, ok := err.(*promptEvidenceValidationError); ok {
+			initialValidation = typed
+		}
+		return err
+	})
+	result.ExtractionDuration = time.Since(extractionStart)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return result, err
+		}
+		failure := classifyPromptFailure(promptStageEvidenceExtraction, err)
+		applyPromptValidationFailure(failure, initialValidation)
+		failure.Debug.Phase = "initial-extraction"
+		return result, failure
 	}
 
 	revisionUser := promptEvidenceRevisionUser(initial) + "\n\nORIGINAL BOUNDED INPUT\n" + userPrompt
@@ -136,26 +166,60 @@ func generatePromptBody(ctx context.Context, c structuredCompleter, input prompt
 		revisionUser += "\n\nUNRESOLVED GAPS\n- " + strings.Join(gaps, "\n- ")
 	}
 	revisionUser = redactPromptText(revisionUser, credentials...)
-	selected := initial
-	revisionFallback := false
 	var revised promptEvidence
-	if err := c.CompleteStructured(ctx, promptSystemInstruction+"\n\n"+promptEvidenceRevisionInstruction, revisionUser, format, func(raw json.RawMessage) error {
-		return decodeAndValidatePromptEvidence(raw, validationInput, credentials, &revised)
-	}); err != nil {
-		if errors.Is(err, context.Canceled) {
-			return "", false, err
+	var revisionValidation *promptEvidenceValidationError
+	revisionStart := time.Now()
+	revisionErr := c.CompleteStructured(ctx, promptSystemInstruction+"\n\n"+promptEvidenceRevisionInstruction, revisionUser, format, func(raw json.RawMessage) error {
+		err := decodeAndValidatePromptEvidence(raw, validationInput, credentials, &revised)
+		if typed, ok := err.(*promptEvidenceValidationError); ok {
+			revisionValidation = typed
 		}
-		revisionFallback = true
-	} else if promptEvidenceRevisionRegresses(initial, revised) {
-		revisionFallback = true
-	} else {
-		selected = revised
+		return err
+	})
+	result.RevisionDuration = time.Since(revisionStart)
+	if errors.Is(revisionErr, context.Canceled) {
+		return result, revisionErr
 	}
+	selected := initial
+	if revisionErr == nil && !promptEvidenceRevisionRegresses(initial, revised) {
+		selected = revised
+	} else {
+		result.RevisionFallback = true
+		if revisionErr != nil {
+			result.RevisionFailure = classifyPromptFailure(promptStageStructuredRevision, revisionErr)
+			applyPromptValidationFailure(result.RevisionFailure, revisionValidation)
+			result.RevisionFailure.Stage = promptStageStructuredRevision
+		} else {
+			result.RevisionFailure = &promptPreparationFailure{Stage: promptStageStructuredRevision, Category: promptFailureRevisionRegressed}
+		}
+		result.RevisionFailure.Debug.Phase = "revision"
+		result.RevisionFailure.Debug.RetainedInitial = true
+	}
+
+	renderStart := time.Now()
 	body := renderPromptEvidence(selected)
 	if err := validatePromptBody(body); err != nil {
-		return "", revisionFallback, err
+		result.RenderDuration = time.Since(renderStart)
+		failure := &promptPreparationFailure{Stage: promptStageFinalPromptValidation, Category: promptFailurePromptValidation, cause: err}
+		failure.Debug.ValidationCode = "prompt-body"
+		failure.Debug.ValidationField = "headings"
+		return result, failure
 	}
-	return body, revisionFallback, nil
+	result.RenderDuration = time.Since(renderStart)
+	result.Body = body
+	return result, nil
+}
+
+func applyPromptValidationFailure(failure *promptPreparationFailure, validation *promptEvidenceValidationError) {
+	if failure == nil || validation == nil {
+		return
+	}
+	failure.Debug.ValidationCode = validation.code
+	failure.Debug.ValidationField = validation.field
+	if validation.stage == promptStageEvidenceGrounding {
+		failure.Stage = promptStageEvidenceGrounding
+		failure.Category = promptFailureUngroundedEvidence
+	}
 }
 
 func boundedPromptJobs(jobs []promptJobSummary) ([]promptJobSummary, int) {

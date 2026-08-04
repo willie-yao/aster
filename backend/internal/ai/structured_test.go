@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -133,5 +136,87 @@ func TestStructuredWireMappings(t *testing.T) {
 	responsesChoice := encodeResponsesToolChoice(&ToolChoice{Name: format.Name})
 	if responsesChoice == nil || responsesChoice.Type != "function" || responsesChoice.Name != format.Name {
 		t.Fatalf("responses tool choice = %+v", responsesChoice)
+	}
+}
+
+func TestSafeProviderErrorMetadataExcludesProviderBody(t *testing.T) {
+	headers := http.Header{}
+	headers.Set("Retry-After", "12")
+	headers.Set("X-GitHub-Request-Id", "request-123")
+	cause := newModelHTTPError("responses", 429, "private provider body with model output", headers)
+	err := structuredFailureAt("provider request failed", "forced-function", cause)
+	metadata, ok := SafeProviderErrorMetadata(err)
+	if !ok {
+		t.Fatal("provider metadata was not available")
+	}
+	if metadata.API != "responses" || metadata.StatusCode != 429 || metadata.RetryAfter != "12" || metadata.RequestID != "request-123" || metadata.StructuredAttempt != "forced-function" {
+		t.Fatalf("metadata = %+v", metadata)
+	}
+	for _, text := range []string{err.Error(), fmt.Sprintf("%+v", metadata)} {
+		if strings.Contains(text, cause.Body) || strings.Contains(text, "model output") {
+			t.Fatalf("safe metadata exposed provider body: %s", text)
+		}
+	}
+}
+
+func TestSafeProviderErrorMetadataRejectsUnsafeHeaders(t *testing.T) {
+	headers := http.Header{}
+	headers.Set("Retry-After", "private response text")
+	headers.Set("X-Request-Id", "request with spaces and source text")
+	err := structuredFailureAt("provider request failed", "json-schema", newModelHTTPError("chat", 500, "body", headers))
+	metadata, ok := SafeProviderErrorMetadata(err)
+	if !ok {
+		t.Fatal("structured attempt metadata was not available")
+	}
+	if metadata.RetryAfter != "" || metadata.RequestID != "" {
+		t.Fatalf("unsafe headers were retained: %+v", metadata)
+	}
+}
+
+func TestCompleteStructuredDoesNotSendTokenAcrossRedirect(t *testing.T) {
+	const token = "fixture-ai-secret"
+	received := 0
+	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		received++
+		if auth := r.Header.Get("Authorization"); auth != "" {
+			t.Fatalf("redirect destination received authorization: %q", auth)
+		}
+		http.Error(w, "unexpected", http.StatusInternalServerError)
+	}))
+	defer destination.Close()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, destination.URL+"/v1/responses", http.StatusTemporaryRedirect)
+	}))
+	defer origin.Close()
+
+	client := NewClientWithOptions(Options{Token: token, API: APIResponses, Endpoint: origin.URL + "/v1/responses", Model: "model"})
+	err := client.CompleteStructured(context.Background(), "system", "user", structuredBodyFormat(), bodyValidator("safe"))
+	if err == nil {
+		t.Fatal("cross-origin redirect was accepted")
+	}
+	if received != 0 {
+		t.Fatalf("redirect destination requests = %d", received)
+	}
+	if strings.Contains(err.Error(), token) || strings.Contains(err.Error(), destination.URL) {
+		t.Fatalf("redirect error exposed sensitive details: %v", err)
+	}
+}
+
+func TestCompleteStructuredStopsSameOriginRedirectLoop(t *testing.T) {
+	requests := 0
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		http.Redirect(w, r, server.URL+"/v1/responses", http.StatusTemporaryRedirect)
+	}))
+	defer server.Close()
+
+	client := NewClientWithOptions(Options{Token: "fixture-token", API: APIResponses, Endpoint: server.URL + "/v1/responses", Model: "model"})
+	err := client.CompleteStructured(context.Background(), "system", "user", structuredBodyFormat(), bodyValidator("safe"))
+	if err == nil {
+		t.Fatal("same-origin redirect loop was accepted")
+	}
+	if requests != 10 {
+		t.Fatalf("redirect requests = %d, want 10", requests)
 	}
 }

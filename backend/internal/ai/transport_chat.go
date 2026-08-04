@@ -148,7 +148,7 @@ func (t *chatCompletionsTransport) Complete(ctx context.Context, req modelReques
 		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode}, fmt.Errorf("read response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode}, &modelHTTPError{API: "chat", StatusCode: resp.StatusCode, Body: textutil.Truncate(string(raw), 500)}
+		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode}, newModelHTTPError("chat", resp.StatusCode, textutil.Truncate(string(raw), 500), resp.Header)
 	}
 	var wire chatCompletionsResponse
 	if err := json.Unmarshal(raw, &wire); err != nil {

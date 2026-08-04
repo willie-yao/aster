@@ -99,9 +99,16 @@ func buildPlan(ctx context.Context, opts Options, planning planningContext, deps
 		SourceRepo:  sourceRepo,
 		Jobs:        buildPromptJobSummaries(jobs, definitions, sourceRepo, opts.TestGrid),
 	}
-	prompt, drafted, err := deps.prompts.Build(ctx, opts, data, promptInput)
+	prompt, promptResult, err := deps.prompts.Build(ctx, opts, data, promptInput)
 	if err != nil {
 		return nil, fmt.Errorf("rendering prompts/system.md: %w", err)
+	}
+	if opts.RequirePromptDraft && promptResult.Status != promptStatusAPIDraft {
+		failure := promptResult.Failure
+		if failure == nil {
+			failure = &promptPreparationFailure{Stage: promptStageFinalPromptValidation, Category: promptFailurePromptValidation}
+		}
+		return nil, &requiredPromptDraftError{failure: failure}
 	}
 	files["prompts/system.md"] = prompt
 	if err := validateRenderedFilesNoCredentials(opts, files); err != nil {
@@ -132,12 +139,8 @@ func buildPlan(ctx context.Context, opts Options, planning planningContext, deps
 			CatalogRevision: catalogRevision, Jobs: append([]models.ProwJob(nil), jobs...),
 			SelectedCandidate: copyCandidate(planning.selected), TestGridProvenance: testGridProvenance,
 		},
-		Project: *parsed,
-		Prompt: PromptPlan{
-			Drafted: drafted, Source: promptSourceDescription(drafted),
-			API: promptCoordinate(drafted, opts.AIAPI), Endpoint: promptCoordinate(drafted, opts.AIEndpoint),
-			Model: promptCoordinate(drafted, opts.AIModel),
-		},
+		Project:     *parsed,
+		Prompt:      promptResult.promptPlan(opts),
 		Destination: DestinationPlan{OutDir: opts.OutDir, OpenPR: opts.OpenPR},
 		Files:       files,
 		Provenance: map[string]Inferred[string]{
@@ -194,28 +197,15 @@ func copyCandidate(candidate *DashboardCandidate) *DashboardCandidate {
 	return &copy
 }
 
-func promptCoordinate(drafted bool, value string) string {
-	if !drafted {
-		return ""
-	}
-	return value
-}
-
-func promptSourceDescription(drafted bool) string {
-	if drafted {
-		return "AI draft from bounded repository evidence and Prow job metadata"
-	}
-	return "reviewable stub"
-}
-
 func effectiveAIEnabled(opts Options) bool {
 	return opts.AIEnabled == nil || *opts.AIEnabled
 }
 
 type defaultPromptBuilder struct {
 	out io.Writer
+	err io.Writer
 }
 
-func (b defaultPromptBuilder) Build(ctx context.Context, opts Options, data scaffoldData, input promptDraftInput) (string, bool, error) {
-	return buildSystemPrompt(ctx, opts, data, input, b.out)
+func (b defaultPromptBuilder) Build(ctx context.Context, opts Options, data scaffoldData, input promptDraftInput) (string, promptPreparationResult, error) {
+	return buildSystemPrompt(ctx, opts, data, input, b.out, b.err)
 }

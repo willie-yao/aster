@@ -35,6 +35,12 @@ Set the bearer token via the `AI_TOKEN` secret in the GitHub Actions workflow
 (see the [reusable workflow README](../README.md)). The token is sent as
 `Authorization: Bearer <AI_TOKEN>` unless an entry in `headers:` overrides it.
 
+For one-time onboarding prompt drafting, `AI_TOKEN` is sent only to the
+configured `AI_ENDPOINT`. GitHub repository reads use `GITHUB_TOKEN` or
+anonymous access instead. `--prompt-debug` reports only the endpoint hostname
+and a model fingerprint, never the token, full endpoint, full model identifier,
+request body, or provider response body.
+
 ### Hiding the model identifier and endpoint URL from the public repo
 
 `project.yaml` is committed to a public repo, so any value you put in

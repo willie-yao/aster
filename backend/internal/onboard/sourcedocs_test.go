@@ -3,6 +3,7 @@ package onboard
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -308,7 +309,103 @@ func TestFetchPromptSourcesRejectsTruncatedTree(t *testing.T) {
 	t.Cleanup(func() { githubAPIBaseURL = oldAPI })
 
 	_, err := fetchPromptSources(context.Background(), srv.Client(), Repo{Owner: "example", Name: "project"}, nil, "")
-	if err == nil || !strings.Contains(err.Error(), "truncated") {
+	var failure *promptPreparationFailure
+	if !errors.As(err, &failure) || failure.Stage != promptStageSourceTree || failure.Category != promptFailureSourceUnavailable {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestFetchPromptSourcesReportsAllRawFetchFailures(t *testing.T) {
+	rawCalls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if servePromptSourceRevision(w, r) {
+			return
+		}
+		switch r.URL.Path {
+		case "/repos/example/project":
+			_, _ = w.Write([]byte(`{"default_branch":"main"}`))
+		case "/repos/example/project/git/trees/" + promptSourceTestSHA:
+			_, _ = w.Write([]byte(`{"tree":[{"path":"README.md","type":"blob","size":20},{"path":"test/e2e/debug.go","type":"blob","size":20}]}`))
+		case "/example/project/" + promptSourceTestSHA + "/README.md", "/example/project/" + promptSourceTestSHA + "/test/e2e/debug.go":
+			rawCalls++
+			http.Error(w, "private source response", http.StatusForbidden)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	oldAPI, oldRaw := githubAPIBaseURL, githubRawBaseURL
+	githubAPIBaseURL, githubRawBaseURL = srv.URL, srv.URL
+	t.Cleanup(func() { githubAPIBaseURL, githubRawBaseURL = oldAPI, oldRaw })
+
+	sources, err := fetchPromptSources(context.Background(), srv.Client(), Repo{Owner: "example", Name: "project"}, nil, "")
+	var failure *promptPreparationFailure
+	if !errors.As(err, &failure) || failure.Stage != promptStageSourceExcerpt || failure.Category != promptFailureSourceUnavailable {
+		t.Fatalf("sources=%v error=%v", sources, err)
+	}
+	if rawCalls != 2 || len(sources) != 0 || strings.Contains(err.Error(), "private source response") {
+		t.Fatalf("rawCalls=%d sources=%v error=%v", rawCalls, sources, err)
+	}
+}
+
+func TestFetchPromptSourcesAllowsPartialRawFetchSuccess(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if servePromptSourceRevision(w, r) {
+			return
+		}
+		switch r.URL.Path {
+		case "/repos/example/project":
+			_, _ = w.Write([]byte(`{"default_branch":"main"}`))
+		case "/repos/example/project/git/trees/" + promptSourceTestSHA:
+			_, _ = w.Write([]byte(`{"tree":[{"path":"README.md","type":"blob","size":20},{"path":"test/e2e/debug.go","type":"blob","size":20}]}`))
+		case "/example/project/" + promptSourceTestSHA + "/README.md":
+			http.Error(w, "unavailable", http.StatusInternalServerError)
+		case "/example/project/" + promptSourceTestSHA + "/test/e2e/debug.go":
+			_, _ = w.Write([]byte("package e2e\n// collect diagnostic artifacts\n"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	oldAPI, oldRaw := githubAPIBaseURL, githubRawBaseURL
+	githubAPIBaseURL, githubRawBaseURL = srv.URL, srv.URL
+	t.Cleanup(func() { githubAPIBaseURL, githubRawBaseURL = oldAPI, oldRaw })
+
+	sources, err := fetchPromptSources(context.Background(), srv.Client(), Repo{Owner: "example", Name: "project"}, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources) != 1 || sources[0].Path != "test/e2e/debug.go" {
+		t.Fatalf("sources = %+v", sources)
+	}
+}
+
+func TestFetchPromptSourcesPropagatesRawFetchCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if servePromptSourceRevision(w, r) {
+			return
+		}
+		switch r.URL.Path {
+		case "/repos/example/project":
+			_, _ = w.Write([]byte(`{"default_branch":"main"}`))
+		case "/repos/example/project/git/trees/" + promptSourceTestSHA:
+			_, _ = w.Write([]byte(`{"tree":[{"path":"README.md","type":"blob","size":20}]}`))
+		case "/example/project/" + promptSourceTestSHA + "/README.md":
+			cancel()
+			<-r.Context().Done()
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	oldAPI, oldRaw := githubAPIBaseURL, githubRawBaseURL
+	githubAPIBaseURL, githubRawBaseURL = srv.URL, srv.URL
+	t.Cleanup(func() { githubAPIBaseURL, githubRawBaseURL = oldAPI, oldRaw })
+
+	_, err := fetchPromptSources(ctx, srv.Client(), Repo{Owner: "example", Name: "project"}, nil, "")
+	var failure *promptPreparationFailure
+	if !errors.Is(err, context.Canceled) || !errors.As(err, &failure) || failure.Stage != promptStageSourceExcerpt {
 		t.Fatalf("error = %v", err)
 	}
 }

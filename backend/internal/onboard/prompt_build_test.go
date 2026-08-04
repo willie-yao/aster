@@ -67,11 +67,11 @@ func TestBuildSystemPromptUsesEvidenceWithoutLeakingTokens(t *testing.T) {
 		}},
 	}
 	var logs bytes.Buffer
-	prompt, drafted, err := buildSystemPrompt(context.Background(), opts, data, input, &logs)
+	prompt, result, err := buildSystemPrompt(context.Background(), opts, data, input, &logs, &logs)
 	if err != nil {
 		t.Fatalf("buildSystemPrompt: %v", err)
 	}
-	if !drafted || !strings.Contains(prompt, "## Architecture") || !strings.Contains(prompt, "## Unresolved details") {
+	if result.Status != promptStatusAPIDraft || !strings.Contains(prompt, "## Architecture") || !strings.Contains(prompt, "## Unresolved details") {
 		t.Fatalf("prompt was not drafted:\n%s", prompt)
 	}
 	if len(modelRequests) != 2 {
@@ -122,17 +122,17 @@ func TestBuildSystemPromptEmptyCorpusSkipsModel(t *testing.T) {
 	opts.AIToken, opts.AIEndpoint, opts.AIModel = "fixture-token", model.URL, "fixture-model"
 	data := buildScaffoldData(opts, nil)
 	var logs bytes.Buffer
-	prompt, drafted, err := buildSystemPrompt(context.Background(), opts, data, promptDraftInput{
+	prompt, result, err := buildSystemPrompt(context.Background(), opts, data, promptDraftInput{
 		ProjectName: data.Name,
 		SourceRepo:  Repo{Owner: "example", Name: "project", FullName: "example/project"},
-	}, &logs)
+	}, &logs, &logs)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if drafted || modelCalls != 0 || !strings.Contains(prompt, "## Unresolved details") {
-		t.Fatalf("drafted=%v modelCalls=%d prompt=%s", drafted, modelCalls, prompt)
+	if result.Status != promptStatusFallback || modelCalls != 0 || !strings.Contains(prompt, "## Unresolved details") {
+		t.Fatalf("result=%+v modelCalls=%d prompt=%s", result, modelCalls, prompt)
 	}
-	if !strings.Contains(logs.String(), "no meaningful source evidence") {
+	if !strings.Contains(logs.String(), "no usable bounded source excerpts were found") {
 		t.Fatalf("missing fallback log: %s", logs.String())
 	}
 }
@@ -156,15 +156,15 @@ func TestBuildSystemPromptSourceFailureFallsBackSafely(t *testing.T) {
 	opts.AIToken, opts.AIEndpoint, opts.AIModel = "fixture-token", model.URL, "fixture-model"
 	data := buildScaffoldData(opts, nil)
 	var logs bytes.Buffer
-	prompt, drafted, err := buildSystemPrompt(context.Background(), opts, data, promptDraftInput{
+	prompt, result, err := buildSystemPrompt(context.Background(), opts, data, promptDraftInput{
 		ProjectName: data.Name,
 		SourceRepo:  Repo{Owner: "example", Name: "project", FullName: "example/project"},
-	}, &logs)
+	}, &logs, &logs)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if drafted || modelCalls != 0 || !strings.Contains(prompt, "## Unresolved details") {
-		t.Fatalf("drafted=%v modelCalls=%d", drafted, modelCalls)
+	if result.Status != promptStatusFallback || modelCalls != 0 || !strings.Contains(prompt, "## Unresolved details") {
+		t.Fatalf("result=%+v modelCalls=%d", result, modelCalls)
 	}
 	if strings.Contains(logs.String(), "private-source-content") {
 		t.Fatalf("private content leaked into logs: %s", logs.String())
@@ -172,11 +172,14 @@ func TestBuildSystemPromptSourceFailureFallsBackSafely(t *testing.T) {
 }
 
 func TestBuildSystemPromptModelFailureFallsBack(t *testing.T) {
+	const aiToken = "fixture-ai-secret"
+	const sourceContents = "artifact docs with private source detail"
+	const providerBody = "private provider detail with raw model output"
+	const privateModel = "private-model-name"
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if servePromptSourceRevision(w, r) {
-			return
-		}
-		http.Error(w, "provider detail", http.StatusInternalServerError)
+		w.Header().Set("Retry-After", "12")
+		w.Header().Set("X-Request-Id", "request-"+aiToken)
+		http.Error(w, providerBody, http.StatusServiceUnavailable)
 	}))
 	defer model.Close()
 	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -187,9 +190,9 @@ func TestBuildSystemPromptModelFailureFallsBack(t *testing.T) {
 		case "/repos/example/project":
 			_, _ = w.Write([]byte(`{"default_branch":"main"}`))
 		case "/repos/example/project/git/trees/" + promptSourceTestSHA:
-			_, _ = w.Write([]byte(`{"tree":[{"path":"README.md","type":"blob","size":20}]}`))
+			_, _ = w.Write([]byte(`{"tree":[{"path":"README.md","type":"blob","size":60}]}`))
 		case "/example/project/" + promptSourceTestSHA + "/README.md":
-			_, _ = w.Write([]byte("artifact docs"))
+			_, _ = w.Write([]byte(sourceContents))
 		default:
 			http.NotFound(w, r)
 		}
@@ -200,18 +203,35 @@ func TestBuildSystemPromptModelFailureFallsBack(t *testing.T) {
 	t.Cleanup(func() { githubAPIBaseURL, githubRawBaseURL = oldAPI, oldRaw })
 
 	opts := testOpts()
-	opts.AIToken, opts.AIEndpoint, opts.AIModel = "fixture-token", model.URL, "fixture-model"
+	opts.AIToken = aiToken
+	opts.AIEndpoint = model.URL + "/private/tenant/chat/completions?api-version=secret#fragment"
+	opts.AIModel = privateModel
+	opts.PromptDebug = true
 	data := buildScaffoldData(opts, nil)
-	var logs bytes.Buffer
-	prompt, drafted, err := buildSystemPrompt(context.Background(), opts, data, promptDraftInput{
+	var out, errOut bytes.Buffer
+	prompt, result, err := buildSystemPrompt(context.Background(), opts, data, promptDraftInput{
 		ProjectName: data.Name,
 		SourceRepo:  Repo{Owner: "example", Name: "project", FullName: "example/project"},
-	}, &logs)
+	}, &out, &errOut)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if drafted || !strings.Contains(prompt, "## Unresolved details") || !strings.Contains(logs.String(), "prompt generation failed") {
-		t.Fatalf("drafted=%v logs=%s", drafted, logs.String())
+	if result.Status != promptStatusFallback || !strings.Contains(prompt, "## Unresolved details") {
+		t.Fatalf("result=%+v out=%s err=%s", result, out.String(), errOut.String())
+	}
+	if strings.Contains(out.String(), "[warn]") || !strings.Contains(errOut.String(), "prompts/system.md generation failed") {
+		t.Fatalf("warnings were not isolated to Terminal.Err: out=%s err=%s", out.String(), errOut.String())
+	}
+	for _, want := range []string{"endpoint_host=127.0.0.1", "model_fingerprint=sha256:", "structured_transport_attempt=json-schema", "http_status=503", "retry_after=12"} {
+		if !strings.Contains(errOut.String(), want) {
+			t.Errorf("debug output missing %q: %s", want, errOut.String())
+		}
+	}
+	all := out.String() + errOut.String()
+	for _, prohibited := range []string{aiToken, sourceContents, providerBody, "raw model output", privateModel, "/private/tenant", "api-version=secret", "fragment"} {
+		if strings.Contains(all, prohibited) {
+			t.Fatalf("diagnostics exposed %q: %s", prohibited, all)
+		}
 	}
 }
 
@@ -232,7 +252,7 @@ func TestBuildSystemPromptCancellationPropagates(t *testing.T) {
 	_, _, err := buildSystemPrompt(ctx, opts, data, promptDraftInput{
 		ProjectName: data.Name,
 		SourceRepo:  Repo{Owner: "example", Name: "project", FullName: "example/project"},
-	}, io.Discard)
+	}, io.Discard, io.Discard)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v", err)
 	}

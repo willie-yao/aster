@@ -141,7 +141,7 @@ func (t *responsesTransport) Complete(ctx context.Context, req modelRequest) (*m
 		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode}, fmt.Errorf("read response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode}, &modelHTTPError{API: "responses", StatusCode: resp.StatusCode, Body: textutil.Truncate(string(raw), 500)}
+		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode}, newModelHTTPError("responses", resp.StatusCode, textutil.Truncate(string(raw), 500), resp.Header)
 	}
 	var wire responsesResponse
 	if err := json.Unmarshal(raw, &wire); err != nil {

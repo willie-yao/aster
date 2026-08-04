@@ -72,6 +72,7 @@ func (c *Client) CompleteStructured(ctx context.Context, system, user string, fo
 	}
 
 	for index, request := range attempts {
+		attempt := structuredAttemptName(index)
 		resp, err := c.callModelRequest(ctx, request)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -80,7 +81,7 @@ func (c *Client) CompleteStructured(ctx context.Context, system, user string, fo
 			if index < len(attempts)-1 && structuredFallbackAllowed(err) {
 				continue
 			}
-			return structuredFailure("provider request failed")
+			return structuredFailureAt("provider request failed", attempt, err)
 		}
 		var raw string
 		if request.ToolChoice != nil {
@@ -98,7 +99,7 @@ func (c *Client) CompleteStructured(ctx context.Context, system, user string, fo
 		}
 		return nil
 	}
-	return structuredFailure("no valid structured response")
+	return structuredFailureAt("no valid structured response", structuredAttemptName(len(attempts)-1), nil)
 }
 
 func structuredFallbackAllowed(err error) bool {
@@ -114,8 +115,31 @@ func structuredFallbackAllowed(err error) bool {
 	}
 }
 
-func structuredFailure(reason string) error {
-	return fmt.Errorf("structured completion rejected: %s", reason)
+type structuredCompletionError struct {
+	reason  string
+	attempt string
+	cause   error
+}
+
+func (e *structuredCompletionError) Error() string {
+	return fmt.Sprintf("structured completion rejected: %s", e.reason)
+}
+
+func (e *structuredCompletionError) Unwrap() error { return e.cause }
+
+func structuredFailureAt(reason, attempt string, cause error) error {
+	return &structuredCompletionError{reason: reason, attempt: attempt, cause: cause}
+}
+
+func structuredAttemptName(index int) string {
+	switch index {
+	case 0:
+		return "json-schema"
+	case 1:
+		return "forced-function"
+	default:
+		return "plain-json"
+	}
 }
 
 func validateStructuredCandidates(raw string, validate StructuredValidator) error {

@@ -9,7 +9,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 )
 
-const promptDraftDisclosure = "Bounded repository documentation, source excerpts, and matched Prow job metadata will be sent to that provider."
+const promptDraftDisclosure = "AI_TOKEN authenticates prompt drafting. Bounded repository documentation, source excerpts, and matched Prow job metadata will be sent only to that reviewed provider."
 
 func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Options, error) {
 	if err := validateCredentialSeparation(opts); err != nil {
@@ -220,7 +220,7 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 
 	planning := planningContext{discovery: &report, selected: selected}
 	fmt.Fprintln(deps.terminal.Out, "\nRunning the real job sweep and validating the scaffold...")
-	plan, err := buildPlan(ctx, opts, planning, deps)
+	plan, err := buildPlanWithPromptRecovery(ctx, opts, planning, deps, prompt)
 	if err != nil {
 		return nil, opts, err
 	}
@@ -260,6 +260,39 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 		return nil, opts, ErrCancelled
 	}
 	return plan, opts, nil
+}
+
+func buildPlanWithPromptRecovery(ctx context.Context, opts Options, planning planningContext, deps dependencies, prompt wizardUI) (*Plan, error) {
+	for {
+		plan, err := buildPlan(ctx, opts, planning, deps)
+		if err != nil {
+			return nil, err
+		}
+		if plan.Prompt.RequestedMode != string(promptRequestAPIExperimental) || plan.Prompt.FinalStatus != string(promptStatusFallback) {
+			return plan, nil
+		}
+		choice, err := prompt.Select(ctx, selectPrompt{
+			Title:       "Experimental API prompt drafting failed",
+			Description: "Retry the same reviewed provider, continue safely, or cancel onboarding.",
+			Options: []selectOption{
+				{Value: "retry", Label: "Retry bounded draft", Description: "Use the same reviewed API, endpoint, and model."},
+				{Value: "template", Label: "Continue with TODO template", Description: "Keep the reviewable template and proceed."},
+				{Value: "cancel", Label: "Cancel onboarding", Description: "Stop without writing files or opening a pull request."},
+			},
+			Value: "template",
+		})
+		if err != nil {
+			return nil, err
+		}
+		switch choice {
+		case "retry":
+			continue
+		case "template":
+			return plan, nil
+		default:
+			return nil, ErrCancelled
+		}
+	}
 }
 
 func clearableValue(value string) string {

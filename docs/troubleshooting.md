@@ -8,6 +8,9 @@ cases below.
 | `AI is enabled but no provider is configured` | `AI_ENDPOINT` or `AI_MODEL` is missing. | Set both repository variables, commit `ai.endpoint` and `ai.model`, or disable AI. |
 | `AI_TOKEN is not set, disabling AI analysis` | No bearer token was supplied. | Set `AI_TOKEN`. Use any non-empty placeholder for an unauthenticated endpoint. |
 | Missing or empty `prompts/system.md` | AI was enabled without a project prompt. | Add a non-empty prompt under `<project_dir>/prompts/system.md`. |
+| `required experimental API prompt draft was not produced` | `--require-prompt-draft` was set and prompt preparation safely fell back. | Read the safe stage and category, fix the reviewed provider or source access, then retry. |
+| `AI_TOKEN is required because it authenticates experimental API prompt drafting` | Strict prompt drafting was selected without an environment token. | Export `AI_TOKEN`; do not pass it as a flag or endpoint query parameter. |
+| Prompt drafting falls back with a safe warning | Source retrieval, structured extraction, grounding, revision, or final validation failed. | Use the reported stage and action. Add `--prompt-debug` for sanitized stderr metadata without source or provider bodies. |
 | `AI endpoint rejected tools` | The endpoint or model does not support OpenAI-style function calling. | Enable the provider's tool-call parser or choose a tool-capable model. |
 | Zero jobs in `dashboard.json` | Discovery found no matches, or every discovered job failed while loading build data. | Check fetcher storage and artifact errors first, then validate the discovery selector. |
 | Pages workflow cannot find `project.yaml` | `project_dir` does not match the consumer layout. | Use `.` for the repository root or the exact subdirectory in the deploy workflow. |

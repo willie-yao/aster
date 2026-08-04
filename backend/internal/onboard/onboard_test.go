@@ -231,6 +231,8 @@ func TestValidateOptions(t *testing.T) {
 		{"gcsweb without bucket", func(o *Options) { o.GCSWebBase = "https://x" }, "gcsweb-base"},
 		{"ai token without endpoint or model", func(o *Options) { o.AIToken = "fixture-token" }, "AI_ENDPOINT and AI_MODEL"},
 		{"ai token without model", func(o *Options) { o.AIToken = "fixture-token"; o.AIEndpoint = "https://x" }, "AI_ENDPOINT and AI_MODEL"},
+		{"required draft with no-prompt", func(o *Options) { o.NoPrompt = true; o.RequirePromptDraft = true }, "valid only"},
+		{"required draft without token", func(o *Options) { o.RequirePromptDraft = true }, "AI_TOKEN is required"},
 		{"endpoint userinfo", func(o *Options) { o.AIEndpoint = "https://user:fixture-secret@example.test/v1" }, "must not contain credentials"},
 		{"endpoint token query", func(o *Options) { o.AIEndpoint = "https://example.test/v1?api_key=fixture-secret" }, "must not contain credential query"},
 		{"relative endpoint", func(o *Options) { o.AIEndpoint = "not-a-url" }, "absolute HTTP or HTTPS"},

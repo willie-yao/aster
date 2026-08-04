@@ -30,11 +30,17 @@ type DiscoveryPlan struct {
 
 // PromptPlan describes the generated prompt without carrying provider secrets.
 type PromptPlan struct {
-	Drafted  bool   `json:"drafted"`
-	Source   string `json:"source"`
-	API      string `json:"api,omitempty"`
-	Endpoint string `json:"endpoint,omitempty"`
-	Model    string `json:"model,omitempty"`
+	RequestedMode    string `json:"requested_mode"`
+	FinalStatus      string `json:"final_status"`
+	Output           string `json:"output"`
+	Source           string `json:"source"`
+	FailureStage     string `json:"failure_stage,omitempty"`
+	FailureCategory  string `json:"failure_category,omitempty"`
+	FailureAction    string `json:"failure_action,omitempty"`
+	RevisionFallback bool   `json:"revision_fallback,omitempty"`
+	API              string `json:"api,omitempty"`
+	Endpoint         string `json:"endpoint,omitempty"`
+	Model            string `json:"model,omitempty"`
 }
 
 // DestinationPlan describes the only mutation the apply phase may perform.
@@ -76,7 +82,7 @@ type remoteDetector interface {
 
 // promptBuilder renders or drafts prompts/system.md.
 type promptBuilder interface {
-	Build(context.Context, Options, scaffoldData, promptDraftInput) (string, bool, error)
+	Build(context.Context, Options, scaffoldData, promptDraftInput) (string, promptPreparationResult, error)
 }
 
 // scaffoldWriter applies rendered files locally.

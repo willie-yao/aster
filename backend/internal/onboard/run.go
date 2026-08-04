@@ -73,7 +73,7 @@ func defaultDependencies(opts Options, terminal Terminal) dependencies {
 		catalogs:     prowCatalogClient{client: client},
 		sweeper:      defaultSweeper{},
 		remotes:      gitRemoteDetector{},
-		prompts:      defaultPromptBuilder{out: terminal.Out},
+		prompts:      defaultPromptBuilder{out: terminal.Out, err: terminal.Err},
 		files:        localScaffoldWriter{},
 		pullRequests: githubPullRequestWriter{client: &http.Client{Timeout: 30 * time.Second}, token: opts.GitHubToken},
 		terminal:     terminal,
@@ -264,6 +264,9 @@ func validatePlan(planValue *Plan) error {
 	if !planValue.Destination.OpenPR && strings.TrimSpace(planValue.Destination.OutDir) == "" {
 		return fmt.Errorf("onboarding plan output directory is required")
 	}
+	if err := validatePromptPlan(planValue.Prompt); err != nil {
+		return err
+	}
 	expected := map[string]struct{}{
 		"project.yaml": {}, "prompts/system.md": {},
 	}
@@ -355,8 +358,18 @@ func printReview(out io.Writer, plan *Plan) {
 		fmt.Fprintln(out, "  AI analysis:          disabled in initial scaffold")
 	}
 	fmt.Fprintf(out, "  Prompt:               %s\n", safeTerminal(plan.Prompt.Source))
-	if plan.Prompt.Drafted {
+	fmt.Fprintf(out, "  Prompt requested:     %s\n", safeTerminal(plan.Prompt.RequestedMode))
+	if plan.Prompt.Output == string(promptOutputAPIDraft) {
 		fmt.Fprintf(out, "  Prompt provider:      %s, %s, %s\n", safeTerminal(plan.Prompt.API), reviewValue(plan.Prompt.Endpoint), safeTerminal(plan.Prompt.Model))
+	}
+	if plan.Prompt.FailureStage != "" {
+		fmt.Fprintf(out, "  Prompt failure:       %s (%s)\n", safeTerminal(promptPreparationStage(plan.Prompt.FailureStage).label()), safeTerminal(plan.Prompt.FailureCategory))
+		if plan.Prompt.FailureAction != "" {
+			fmt.Fprintf(out, "  Prompt action:        %s\n", safeTerminal(plan.Prompt.FailureAction))
+		}
+	}
+	if plan.Prompt.RevisionFallback {
+		fmt.Fprintln(out, "  Prompt revision:      first validated extraction retained")
 	}
 	if plan.Destination.OpenPR {
 		fmt.Fprintln(out, "  Destination:          scaffold pull request")

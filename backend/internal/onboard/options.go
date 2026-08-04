@@ -72,6 +72,10 @@ type Options struct {
 	GitHubToken string
 	// NoPrompt forces the stub even when an AI token is available.
 	NoPrompt bool
+	// PromptDebug writes sanitized prompt-preparation diagnostics to stderr.
+	PromptDebug bool
+	// RequirePromptDraft fails before writes unless experimental API drafting succeeds.
+	RequirePromptDraft bool
 
 	// OpenPR opens a pull request against the dashboard repo with the scaffold
 	// instead of writing a local directory. Requires a GitHub token with write

@@ -132,20 +132,33 @@ func integerSchema(minimum int) map[string]any {
 	return map[string]any{"type": "integer", "minimum": minimum}
 }
 
+type promptEvidenceValidationError struct {
+	stage promptPreparationStage
+	code  string
+	field string
+	cause error
+}
+
+func (e *promptEvidenceValidationError) Error() string {
+	return "prompt evidence validation failed"
+}
+
+func (e *promptEvidenceValidationError) Unwrap() error { return e.cause }
+
 func decodeAndValidatePromptEvidence(raw json.RawMessage, input promptDraftInput, credentials []string, target *promptEvidence) error {
 	var evidence promptEvidence
 	decoder := json.NewDecoder(strings.NewReader(string(raw)))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&evidence); err != nil {
-		return fmt.Errorf("decode prompt evidence: %w", err)
+		return &promptEvidenceValidationError{stage: promptStageEvidenceExtraction, code: "decode", field: "root", cause: err}
 	}
 	normalizePromptEvidence(&evidence)
 	if err := validatePromptEvidenceReferences(evidence, input.Sources); err != nil {
-		return err
+		return &promptEvidenceValidationError{stage: promptStageEvidenceGrounding, code: "source-reference", field: "sources", cause: err}
 	}
 	groundPromptEvidence(&evidence, input.Sources)
 	if err := validatePromptEvidence(evidence, input, credentials); err != nil {
-		return err
+		return &promptEvidenceValidationError{stage: promptStageEvidenceGrounding, code: "content-grounding", field: "evidence", cause: err}
 	}
 	*target = evidence
 	return nil

@@ -142,8 +142,11 @@ Provider presets can seed the API mode and endpoint for GitHub Copilot, OpenAI,
 NVIDIA, or a custom OpenAI-compatible provider. The model remains explicit
 because model availability depends on the account and endpoint.
 
-The wizard never asks for or stores a token. Supply provider credentials through
-the documented environment variable, GitHub Secret, or Kubernetes Secret path.
+The wizard never asks for or stores a token. `AI_TOKEN` authenticates one-time
+prompt drafting and is read only from the environment. It is never printed,
+inspected, fingerprinted, or placed in the plan or generated files. Supply
+deployment credentials through the documented GitHub Secret or Kubernetes
+Secret path.
 
 When prompt drafting is selected, the wizard:
 
@@ -156,8 +159,8 @@ When prompt drafting is selected, the wizard:
 6. Validates the evidence, makes one schema-bound revision call, and validates
    the complete revision with the same rules.
 7. Renders Markdown deterministically and validates the final section contract.
-8. Falls back to a reviewable stub when extraction fails. If only revision
-   fails, it renders the first validated evidence object.
+8. Falls back to a reviewable TODO template when extraction fails. If only
+   revision fails, it renders the first validated evidence object.
 
 The source corpus contains at most 10 Markdown, Go, YAML, or shell files or
 line-ranged excerpts. One source contributes at most 20,000 bytes and all source
@@ -194,13 +197,38 @@ connect to a live Kubernetes API. The analyzer also does not have portal, SSH,
 arbitrary shell, browser, or local CLI access.
 
 When the source repository yields no meaningful source evidence, onboarding
-skips the model request and writes the reviewable stub. Improve repository
-artifact documentation or job metadata and rerun onboarding when the generated
-`Unresolved details` section identifies important gaps. Choosing a more capable
-model does not substitute for missing source evidence.
+skips the model request and writes the reviewable TODO template. Improve
+repository artifact documentation or job metadata and rerun onboarding when the
+generated `Unresolved details` section identifies important gaps. Choosing a
+more capable model does not substitute for missing source evidence.
 
-Use `-no-prompt` to force the stub. Use `-ai=false` to disable deployed AI
-analysis. These flags control different features.
+Prompt preparation records a credential-free result in the plan: requested mode,
+final status, output type, safe failure stage and category, revision fallback,
+and provider coordinates only for a successful API draft. The final review
+shows `TODO template`, `Experimental API draft`, or `TODO template after
+experimental API failure`.
+
+Normal failures write a safe warning to stderr with the stage, category,
+fallback, and a short action. They do not print the wrapped source or provider
+error. Interactive API failures offer retry with the same reviewed coordinates,
+continue with the TODO template, or cancel. Continue is the default.
+
+Use `--no-prompt` to force the TODO template. Use `--ai=false` to disable
+deployed AI analysis. These flags control different features.
+
+`--prompt-debug` writes sanitized diagnostics to stderr only. It may include
+stage timing, selected source paths and line ranges, source and job counts, API,
+endpoint hostname, model fingerprint, structured transport attempt, HTTP status,
+safe `Retry-After`, provider request ID, validation code and field, revision
+fallback, and total elapsed time. It excludes credentials, source-line contents,
+raw prompts, model responses, evidence text, provider bodies, endpoint query or
+fragment details, credential-bearing URLs, and full private model identifiers.
+No debug report file is created.
+
+`--require-prompt-draft` is for strict automation. It is valid only for the
+experimental API path, requires `AI_TOKEN`, `AI_ENDPOINT`, and `AI_MODEL`, and
+returns a nonzero error before any local write or pull request when the final
+result is not an API draft.
 
 See [AI providers](ai-providers.md) and
 [Writing the project prompt](writing-prompts.md).
@@ -257,6 +285,22 @@ For a project outside Kubernetes TestGrid, replace `-testgrid` with:
 
 Add `-gcsweb-base "https://gcsweb.example.net/s3"` when the bucket is served
 through gcsweb.
+
+For automation that must receive an API-authored prompt rather than a safe
+fallback, export the reviewed provider coordinates and add the strict flag:
+
+```bash
+export AI_TOKEN="..."
+export AI_API="responses"
+export AI_ENDPOINT="https://provider.example/v1/responses"
+export AI_MODEL="reviewed-model"
+fetcher onboard \
+  -non-interactive \
+  -testgrid "<testgrid-dashboard>" \
+  -dashboard-repo "<owner>/<dashboard-repo>" \
+  -source-repo "<owner>/<source-repo>" \
+  --require-prompt-draft
+```
 
 ## Open a scaffold pull request
 

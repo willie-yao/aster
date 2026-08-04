@@ -3,10 +3,12 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,10 +34,86 @@ type modelHTTPError struct {
 	API        string
 	StatusCode int
 	Body       string
+	RetryAfter string
+	RequestID  string
 }
 
 func (e *modelHTTPError) Error() string {
 	return fmt.Sprintf("%s returned %d: %s", e.API, e.StatusCode, e.Body)
+}
+
+// ProviderErrorMetadata contains only provider fields safe for diagnostic logs.
+type ProviderErrorMetadata struct {
+	API               string
+	StatusCode        int
+	RetryAfter        string
+	RequestID         string
+	StructuredAttempt string
+}
+
+// SafeProviderErrorMetadata extracts provider metadata without exposing the
+// response body, request payload, endpoint, model, or credentials.
+func SafeProviderErrorMetadata(err error) (ProviderErrorMetadata, bool) {
+	if err == nil {
+		return ProviderErrorMetadata{}, false
+	}
+	metadata := ProviderErrorMetadata{}
+	var structured *structuredCompletionError
+	if errors.As(err, &structured) {
+		metadata.StructuredAttempt = structured.attempt
+	}
+	var httpErr *modelHTTPError
+	if errors.As(err, &httpErr) {
+		metadata.API = httpErr.API
+		metadata.StatusCode = httpErr.StatusCode
+		metadata.RetryAfter = safeProviderRetryAfter(httpErr.RetryAfter)
+		metadata.RequestID = safeProviderRequestID(httpErr.RequestID)
+	}
+	if metadata.StructuredAttempt == "" && metadata.StatusCode == 0 {
+		return ProviderErrorMetadata{}, false
+	}
+	return metadata, true
+}
+
+func newModelHTTPError(api string, statusCode int, body string, header http.Header) *modelHTTPError {
+	return &modelHTTPError{
+		API: api, StatusCode: statusCode, Body: body,
+		RetryAfter: header.Get("Retry-After"), RequestID: providerRequestID(header),
+	}
+}
+
+func providerRequestID(header http.Header) string {
+	for _, name := range []string{"X-GitHub-Request-Id", "OpenAI-Request-Id", "X-Request-Id", "Request-Id"} {
+		if value := header.Get(name); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func safeProviderRetryAfter(value string) string {
+	value = strings.TrimSpace(value)
+	if seconds, err := strconv.Atoi(value); err == nil && seconds >= 0 && seconds <= 86_400 {
+		return strconv.Itoa(seconds)
+	}
+	if at, err := http.ParseTime(value); err == nil {
+		return at.UTC().Format(http.TimeFormat)
+	}
+	return ""
+}
+
+func safeProviderRequestID(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > 128 {
+		return ""
+	}
+	for _, r := range value {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("-_.:/", r) {
+			continue
+		}
+		return ""
+	}
+	return value
 }
 
 func (c *Client) callModel(ctx context.Context, messages []modelMessage, toolDefs []tools.Schema, parallelToolCalls *bool) (*modelResponse, error) {
@@ -161,10 +239,26 @@ func newHTTPAPIClient(endpoint, token string, extraHeaders map[string]string) *h
 	return &httpAPIClient{
 		// Request deadlines come from the caller's context. A fixed client timeout
 		// would override per-failure budgets for slow reasoning endpoints.
-		httpClient:   &http.Client{Transport: transport},
+		httpClient: &http.Client{
+			Transport:     transport,
+			CheckRedirect: modelRedirectPolicy(endpoint),
+		},
 		endpoint:     endpoint,
 		token:        token,
 		extraHeaders: extraHeaders,
+	}
+}
+
+func modelRedirectPolicy(endpoint string) func(*http.Request, []*http.Request) error {
+	configured, err := url.Parse(endpoint)
+	return func(next *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return fmt.Errorf("model endpoint stopped after 10 redirects")
+		}
+		if err != nil || !strings.EqualFold(next.URL.Scheme, configured.Scheme) || !strings.EqualFold(next.URL.Host, configured.Host) {
+			return fmt.Errorf("model endpoint redirected to a different origin")
+		}
+		return nil
 	}
 }
 

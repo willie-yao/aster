@@ -348,3 +348,23 @@ func TestPromptGenerationEvaluationFixtures(t *testing.T) {
 		})
 	}
 }
+
+func TestGeneratePromptBodyRevisionFailureHasSafeDiagnostics(t *testing.T) {
+	input := groundedPromptInput()
+	initial := validGroundedPromptEvidence()
+	rawFailure := errors.New("private revision response body")
+	c := &stubCompleter{outputs: []string{evidenceJSON(initial)}, errs: []error{nil, rawFailure}}
+	result, err := generatePromptBodyDetailed(context.Background(), c, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.RevisionFallback || result.RevisionFailure == nil {
+		t.Fatalf("result = %+v", result)
+	}
+	if result.RevisionFailure.Stage != promptStageStructuredRevision || result.RevisionFailure.Debug.Phase != "revision" || !result.RevisionFailure.Debug.RetainedInitial {
+		t.Fatalf("revision diagnostics = %+v", result.RevisionFailure)
+	}
+	if strings.Contains(result.RevisionFailure.Error(), rawFailure.Error()) {
+		t.Fatalf("safe failure exposed raw revision error: %v", result.RevisionFailure)
+	}
+}
