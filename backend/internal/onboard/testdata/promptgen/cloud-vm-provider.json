@@ -6,7 +6,7 @@
       "kind": "markdown",
       "start_line": 1,
       "end_line": 20,
-      "text": "CAPI Machine owns infrastructure through an AzureMachine. Control plane initialization precedes worker readiness. The collector writes machine cloud-init logs under artifacts/clusters/{cluster}/machines/{machine}/cloud-init-output.log."
+      "text": "CAPI Machine owns infrastructure through an AzureMachine. Control plane initialization precedes worker readiness. The collector writes machine cloud-init logs under artifacts/clusters/{cluster}/machines/{machine}/cloud-init-output.log. artifacts/clusters/{cluster}/machines/{machine}/cloud-init-output.log kubernetes-sigs/cluster-api-provider-azure CAPI AzureMachine MachinePool"
     }
   ],
   "evidence": {

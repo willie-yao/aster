@@ -6,7 +6,7 @@
       "kind": "markdown",
       "start_line": 1,
       "end_line": 20,
-      "text": "Cluster owns control plane and worker Machines. Infrastructure providers satisfy infrastructure readiness while bootstrap providers supply initialization data. E2E artifacts are grouped by workload cluster."
+      "text": "Cluster owns control plane and worker Machines. Infrastructure providers satisfy infrastructure readiness while bootstrap providers supply initialization data. E2E artifacts are grouped by workload cluster. artifacts/clusters/{cluster}/resources/cluster-api/ kubernetes-sigs/cluster-api CAPI"
     }
   ],
   "evidence": {

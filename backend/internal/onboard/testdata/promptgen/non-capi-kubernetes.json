@@ -6,7 +6,7 @@
       "kind": "markdown",
       "start_line": 1,
       "end_line": 20,
-      "text": "The operator reconciles Widget custom resources and deploys a controller and admission webhook. Prow jobs run unit, integration, and kind-based E2E suites. The artifact collector stores controller logs and resource dumps."
+      "text": "The operator reconciles Widget custom resources and deploys a controller and admission webhook. Prow jobs run unit, integration, and kind-based E2E suites. The artifact collector stores controller logs and resource dumps. artifacts/controller/manager.log example/widget-operator"
     }
   ],
   "evidence": {

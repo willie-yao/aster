@@ -15,7 +15,7 @@ func groundedPromptInput() promptDraftInput {
 	return promptDraftInput{
 		ProjectName: "Project",
 		SourceRepo:  Repo{Owner: "example", Name: "project", FullName: "example/project"},
-		Sources:     []promptSource{{Path: "docs/runbook.md", Kind: "markdown", StartLine: 1, EndLine: 100, Text: "grounded diagnostic evidence"}},
+		Sources:     []promptSource{{Path: "docs/runbook.md", Kind: "markdown", StartLine: 1, EndLine: 100, Text: "Controller Project Initialization Linux Windows Readiness manager.log artifacts/controller/manager.log example/project resource conditions"}},
 	}
 }
 
@@ -84,6 +84,21 @@ func TestPromptEvidenceValidation(t *testing.T) {
 	}
 }
 
+func TestGroundPromptEvidenceMovesUnsupportedClaimsToUnresolved(t *testing.T) {
+	input := groundedPromptInput()
+	evidence := validGroundedPromptEvidence()
+	evidence.Artifacts[0].PathPattern = "artifacts/invented/path.log"
+	evidence.Repositories[0].Text = "example/invented"
+	groundPromptEvidence(&evidence, input.Sources)
+	if len(evidence.Artifacts) != 0 || len(evidence.Repositories) != 0 {
+		t.Fatalf("unsupported claims were retained: %+v", evidence)
+	}
+	joined := strings.Join(evidence.Unresolved, " ")
+	if !strings.Contains(joined, "artifact") || !strings.Contains(joined, "repository") {
+		t.Fatalf("unsupported claims were not moved to unresolved: %v", evidence.Unresolved)
+	}
+}
+
 func TestDecodePromptEvidenceRejectsUnknownFields(t *testing.T) {
 	input := groundedPromptInput()
 	raw := strings.TrimSuffix(evidenceJSON(validGroundedPromptEvidence()), "}") + `,"unexpected":true}`
@@ -127,11 +142,21 @@ func TestGeneratePromptBodyUsesValidatedRevision(t *testing.T) {
 	}
 }
 
-func TestGeneratePromptBodyRevisionCancellationPropagates(t *testing.T) {
+func TestGeneratePromptBodyRevisionDeadlineUsesInitialEvidence(t *testing.T) {
 	input := groundedPromptInput()
 	initial := validGroundedPromptEvidence()
 	c := &stubCompleter{outputs: []string{evidenceJSON(initial)}, errs: []error{nil, context.DeadlineExceeded}}
-	if _, _, err := generatePromptBody(context.Background(), c, input); !errors.Is(err, context.DeadlineExceeded) {
+	body, fallback, err := generatePromptBody(context.Background(), c, input)
+	if err != nil || !fallback || !strings.Contains(body, initial.Architecture[0].Text) {
+		t.Fatalf("fallback=%v err=%v body=%s", fallback, err, body)
+	}
+}
+
+func TestGeneratePromptBodyRevisionCancellationPropagates(t *testing.T) {
+	input := groundedPromptInput()
+	initial := validGroundedPromptEvidence()
+	c := &stubCompleter{outputs: []string{evidenceJSON(initial)}, errs: []error{nil, context.Canceled}}
+	if _, _, err := generatePromptBody(context.Background(), c, input); !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -179,6 +204,10 @@ func TestPromptGenerationEvaluationFixtures(t *testing.T) {
 			}
 			input := promptDraftInput{ProjectName: fixture.Name, SourceRepo: Repo{FullName: "example/project"}, Sources: fixture.Sources}
 			normalizePromptEvidence(&fixture.Evidence)
+			if err := validatePromptEvidenceReferences(fixture.Evidence, input.Sources); err != nil {
+				t.Fatalf("fixture references invalid: %v", err)
+			}
+			groundPromptEvidence(&fixture.Evidence, input.Sources)
 			if err := validatePromptEvidence(fixture.Evidence, input, nil); err != nil {
 				t.Fatalf("fixture evidence invalid: %v", err)
 			}
