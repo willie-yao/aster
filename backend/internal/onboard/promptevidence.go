@@ -18,9 +18,11 @@ const (
 var (
 	promptURLPattern            = regexp.MustCompile(`(?i)https?://[^\s<>()\[\]{}"']+`)
 	promptIdentifierPattern     = regexp.MustCompile(`\b[A-Z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*\b`)
+	promptCapitalizedPattern    = regexp.MustCompile(`\b[A-Z][a-z][A-Za-z0-9]*\b`)
 	promptWordPattern           = regexp.MustCompile(`[A-Za-z0-9][A-Za-z0-9_.-]*`)
 	promptPathIdentifierPattern = regexp.MustCompile(`(?:[A-Za-z0-9_.{}*-]+/)+[A-Za-z0-9_.{}*-]+|\b[A-Za-z0-9_.-]+\.(?:log|yaml|yml|json|go|sh)\b`)
-	prohibitedCapabilityPattern = regexp.MustCompile(`(?i)\b(ssh|curl|wget|bash|powershell|kubectl|browser|portal|shell|terminal)\b|\b(run|use|invoke|execute)\s+(the\s+)?(az|aws|gcloud)\b|local[ -]?cli|command[ -]?line|live (kubernetes|cluster)|run (a )?command`)
+	promptInjectionPattern      = regexp.MustCompile(`(?i)ignore (all |any |the )?(previous|system) instructions|follow (these|the) instructions|always report success|reveal (a |the )?(secret|token)|override (the )?system prompt`)
+	prohibitedCapabilityPattern = regexp.MustCompile(`(?i)\b(run|use|invoke|execute|open|launch|inspect|check|view|access)\s+(the\s+|an?\s+)?(ssh|curl|wget|bash|powershell|kubectl|az|aws|gcloud|browser|portal|shell|terminal)\b|\b(via|through|in)\s+(the\s+)?(azure\s+)?portal\b|local[ -]?cli|command[ -]?line|against (a |the )?live (kubernetes|cluster)|run (a )?command`)
 )
 
 type evidenceRef struct {
@@ -332,6 +334,15 @@ func identifiersGrounded(claim, cited string) bool {
 			return false
 		}
 	}
+	genericCapitalized := map[string]struct{}{"A": {}, "After": {}, "An": {}, "Before": {}, "Change": {}, "Check": {}, "Do": {}, "Engine": {}, "If": {}, "No": {}, "Not": {}, "Read": {}, "Recommend": {}, "The": {}, "This": {}, "Transient": {}, "Use": {}, "When": {}}
+	for _, identifier := range promptCapitalizedPattern.FindAllString(claim, -1) {
+		if _, ok := genericCapitalized[identifier]; ok {
+			continue
+		}
+		if !strings.Contains(citedLower, strings.ToLower(identifier)) {
+			return false
+		}
+	}
 	for _, identifier := range promptPathIdentifierPattern.FindAllString(claim, -1) {
 		if !strings.Contains(citedLower, strings.ToLower(identifier)) {
 			return false
@@ -440,7 +451,6 @@ func validatePromptEvidence(e promptEvidence, input promptDraftInput, credential
 	if len(encoded) > maxPromptEvidenceText {
 		return fmt.Errorf("prompt evidence exceeds %d bytes", maxPromptEvidenceText)
 	}
-	text := string(encoded)
 	for _, value := range promptEvidenceStrings(e) {
 		if containsControl(value) {
 			return fmt.Errorf("prompt evidence contains control characters")
@@ -452,8 +462,13 @@ func validatePromptEvidence(e promptEvidence, input promptDraftInput, credential
 		}
 	}
 	for _, credential := range credentials {
-		if credential != "" && strings.Contains(text, credential) {
-			return fmt.Errorf("prompt evidence contains a credential")
+		if credential == "" {
+			continue
+		}
+		for _, value := range promptEvidenceCredentialStrings(e) {
+			if strings.Contains(value, credential) {
+				return fmt.Errorf("prompt evidence contains a credential")
+			}
 		}
 	}
 	values := promptEvidenceStrings(e)
@@ -462,6 +477,11 @@ func validatePromptEvidence(e promptEvidence, input promptDraftInput, credential
 	}
 	if containsUnavailableInvestigation(values) {
 		return fmt.Errorf("prompt evidence contains unavailable investigation")
+	}
+	for _, value := range values {
+		if promptInjectionPattern.MatchString(value) {
+			return fmt.Errorf("prompt evidence contains source instructions")
+		}
 	}
 	if err := validateUniqueEvidenceNames(e); err != nil {
 		return err
@@ -570,6 +590,35 @@ func promptEvidenceStrings(e promptEvidence) []string {
 	return append(out, e.Unresolved...)
 }
 
+func promptEvidenceCredentialStrings(e promptEvidence) []string {
+	out := promptEvidenceStrings(e)
+	appendRefs := func(refs []evidenceRef) {
+		for _, ref := range refs {
+			out = append(out, ref.Path)
+		}
+	}
+	appendClaims := func(claims []evidenceClaim) {
+		for _, claim := range claims {
+			appendRefs(claim.Sources)
+		}
+	}
+	appendClaims(e.Architecture)
+	appendClaims(e.DiagnosticLifecycle)
+	appendClaims(e.TestFlavors)
+	appendClaims(e.TriageOrder)
+	appendClaims(e.Repositories)
+	for _, item := range e.Artifacts {
+		appendRefs(item.Sources)
+	}
+	for _, item := range e.FailurePatterns {
+		appendRefs(item.Sources)
+	}
+	for _, item := range e.TransientRules {
+		appendRefs(item.Sources)
+	}
+	return out
+}
+
 func containsCredentialBearingURL(values []string) bool {
 	for _, value := range values {
 		for _, candidate := range promptURLPattern.FindAllString(value, -1) {
@@ -603,7 +652,16 @@ func hasSensitiveURLKeys(values url.Values) bool {
 
 func containsUnavailableInvestigation(values []string) bool {
 	for _, value := range values {
-		if prohibitedCapabilityPattern.MatchString(value) {
+		lower := strings.ToLower(value)
+		for _, loc := range prohibitedCapabilityPattern.FindAllStringIndex(value, -1) {
+			start := loc[0] - 24
+			if start < 0 {
+				start = 0
+			}
+			prefix := lower[start:loc[0]]
+			if strings.Contains(prefix, "do not ") || strings.Contains(prefix, "don't ") || strings.Contains(prefix, "cannot ") || strings.Contains(prefix, "without ") {
+				continue
+			}
 			return true
 		}
 	}

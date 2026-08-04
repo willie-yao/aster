@@ -139,7 +139,7 @@ func generatePromptBody(ctx context.Context, c structuredCompleter, input prompt
 	selected := initial
 	revisionFallback := false
 	var revised promptEvidence
-	if err := c.CompleteStructured(ctx, promptEvidenceRevisionInstruction, revisionUser, format, func(raw json.RawMessage) error {
+	if err := c.CompleteStructured(ctx, promptSystemInstruction+"\n\n"+promptEvidenceRevisionInstruction, revisionUser, format, func(raw json.RawMessage) error {
 		return decodeAndValidatePromptEvidence(raw, validationInput, credentials, &revised)
 	}); err != nil {
 		if errors.Is(err, context.Canceled) {
