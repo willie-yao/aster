@@ -80,6 +80,30 @@ of eligible files in the pinned snapshot, but cannot trigger arbitrary URLs,
 commands, provider-time retrieval, or secret access. The draft remains a
 starting point that requires human review.
 
+Generation uses two structured completion stages within a five-minute total timeout:
+
+1. Extract an evidence object whose claims retain supplied source paths and line
+   ranges.
+2. Validate it deterministically, then ask for one complete structured revision
+   against the quality rubric.
+3. Validate the revision with the same rules and render Markdown deterministically.
+
+Each stage uses the engine's existing structured transport: native JSON schema,
+then a forced function call, then bounded plain-JSON extraction when the provider
+rejects the earlier protocol. This is at most three transport attempts per stage
+and six total; validation failure never triggers an unbounded retry loop.
+
+If the first extraction is invalid, onboarding writes the reviewable stub. If
+the revision fails, onboarding renders the first validated evidence object. It
+never publishes an unvalidated object or asks a third free-form call to format
+Markdown. Source references remain internal to generation unless their content
+is useful in the runbook.
+
+A capable model does not replace source quality. Improve repository diagnostics,
+artifact documentation, or job metadata, then rerun onboarding when important
+details remain unresolved. The generated file is always a draft requiring human
+review.
+
 ## Required runbook sections
 
 The onboarding generator requires these sections in this order. Keeping the

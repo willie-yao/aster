@@ -25,11 +25,11 @@ const (
 var githubRawBaseURL = "https://raw.githubusercontent.com"
 
 type promptSource struct {
-	Path      string
-	Kind      string
-	StartLine int
-	EndLine   int
-	Text      string
+	Path      string `json:"path"`
+	Kind      string `json:"kind"`
+	StartLine int    `json:"start_line"`
+	EndLine   int    `json:"end_line"`
+	Text      string `json:"text"`
 }
 
 type promptJobSummary struct {

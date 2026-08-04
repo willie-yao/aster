@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,7 +16,7 @@ import (
 func TestBuildSystemPromptUsesEvidenceWithoutLeakingTokens(t *testing.T) {
 	const aiToken = "fixture-ai-secret"
 	const githubToken = "fixture-github-secret"
-	var modelRequest string
+	var modelRequests []string
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if servePromptSourceRevision(w, r) {
 			return
@@ -24,8 +25,8 @@ func TestBuildSystemPromptUsesEvidenceWithoutLeakingTokens(t *testing.T) {
 			t.Fatalf("model authorization = %q", got)
 		}
 		body, _ := io.ReadAll(r.Body)
-		modelRequest = string(body)
-		fmt.Fprintf(w, `{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":%q}}]}`, validPromptBody())
+		modelRequests = append(modelRequests, string(body))
+		fmt.Fprintf(w, `{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":%q}}]}`, validPromptEvidenceJSON())
 	}))
 	defer model.Close()
 
@@ -70,15 +71,18 @@ func TestBuildSystemPromptUsesEvidenceWithoutLeakingTokens(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildSystemPrompt: %v", err)
 	}
-	if !drafted || !strings.Contains(prompt, validPromptBody()) {
+	if !drafted || !strings.Contains(prompt, "## Architecture") || !strings.Contains(prompt, "## Unresolved details") {
 		t.Fatalf("prompt was not drafted:\n%s", prompt)
 	}
+	if len(modelRequests) != 2 {
+		t.Fatalf("model requests = %d, want extraction and revision", len(modelRequests))
+	}
 	for _, want := range []string{"DISCOVERED PROW JOBS", "SOURCE 1: docs/", "kind markdown"} {
-		if !strings.Contains(modelRequest, want) {
-			t.Errorf("model request missing %q: %s", want, modelRequest)
+		if !strings.Contains(modelRequests[0], want) {
+			t.Errorf("extraction request missing %q: %s", want, modelRequests[0])
 		}
 	}
-	all := modelRequest + prompt + logs.String()
+	all := strings.Join(modelRequests, "") + prompt + logs.String()
 	for _, token := range []string{aiToken, githubToken} {
 		if strings.Contains(all, token) {
 			t.Fatalf("credential %q leaked into prompt path", token)
@@ -208,5 +212,28 @@ func TestBuildSystemPromptModelFailureFallsBack(t *testing.T) {
 	}
 	if drafted || !strings.Contains(prompt, "## Unresolved details") || !strings.Contains(logs.String(), "prompt generation failed") {
 		t.Fatalf("drafted=%v logs=%s", drafted, logs.String())
+	}
+}
+
+func TestBuildSystemPromptCancellationPropagates(t *testing.T) {
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"default_branch":"main"}`))
+	}))
+	defer source.Close()
+	oldAPI := githubAPIBaseURL
+	githubAPIBaseURL = source.URL
+	t.Cleanup(func() { githubAPIBaseURL = oldAPI })
+
+	opts := testOpts()
+	opts.AIToken, opts.AIEndpoint, opts.AIModel = "fixture-token", "https://provider.example/chat/completions", "fixture-model"
+	data := buildScaffoldData(opts, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _, err := buildSystemPrompt(ctx, opts, data, promptDraftInput{
+		ProjectName: data.Name,
+		SourceRepo:  Repo{Owner: "example", Name: "project", FullName: "example/project"},
+	}, io.Discard)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v", err)
 	}
 }
