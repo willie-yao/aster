@@ -205,6 +205,38 @@ func TestPromptSourceErrorsDoNotEchoPrivateContent(t *testing.T) {
 	}
 }
 
+func TestFetchPromptSourcesSkipsBinaryContent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if servePromptSourceRevision(w, r) {
+			return
+		}
+		switch r.URL.Path {
+		case "/repos/example/project":
+			_, _ = w.Write([]byte(`{"default_branch":"main"}`))
+		case "/repos/example/project/git/trees/" + promptSourceTestSHA:
+			_, _ = w.Write([]byte(`{"tree":[{"path":"README.md","type":"blob","size":20},{"path":"config.yaml","type":"blob","size":20}]}`))
+		case "/example/project/" + promptSourceTestSHA + "/README.md":
+			_, _ = w.Write([]byte("artifact documentation"))
+		case "/example/project/" + promptSourceTestSHA + "/config.yaml":
+			_, _ = w.Write([]byte{'k', 'i', 'n', 'd', ':', 0, 0xff})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	oldAPI, oldRaw := githubAPIBaseURL, githubRawBaseURL
+	githubAPIBaseURL, githubRawBaseURL = srv.URL, srv.URL
+	t.Cleanup(func() { githubAPIBaseURL, githubRawBaseURL = oldAPI, oldRaw })
+
+	sources, err := fetchPromptSources(context.Background(), srv.Client(), Repo{Owner: "example", Name: "project"}, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources) != 1 || sources[0].Path != "README.md" {
+		t.Fatalf("binary source was not excluded: %+v", sources)
+	}
+}
+
 func TestPromptSourceReferenceBoostPrefersExactPath(t *testing.T) {
 	candidates := []promptSourceCandidate{
 		{Path: "README.md", Kind: "markdown"},

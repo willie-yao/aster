@@ -104,7 +104,7 @@ func fetchPromptSources(ctx context.Context, client *http.Client, repo Repo, job
 		}
 		attempted[candidate.Path] = true
 		text, err := fetchRawSource(ctx, client, repo.Owner, repo.Name, revision, candidate.Path, token)
-		if err != nil || strings.TrimSpace(text) == "" {
+		if err != nil || strings.TrimSpace(text) == "" || !isPromptSourceText(text) {
 			continue
 		}
 		text = redactPromptText(text, credentials...)
@@ -305,6 +305,10 @@ func referencedPromptPaths(text string, candidates map[string]struct{}) []string
 	}
 	sort.Strings(out)
 	return out
+}
+
+func isPromptSourceText(text string) bool {
+	return utf8.ValidString(text) && !strings.ContainsRune(text, '\x00')
 }
 
 func sanitizePromptSourceText(text string) string {
