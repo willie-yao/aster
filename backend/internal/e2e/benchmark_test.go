@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -83,6 +84,9 @@ type benchCase struct {
 	buildID       string
 	pullNumber    string
 	webURL        string
+	commit        string
+	repoVersion   string
+	repoRefs      map[string]string
 	sourceRepo    [2]string // owner, name for repo-relative file-link resolution
 	testName      string
 	junitFile     string
@@ -509,10 +513,8 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, endpo
 		PullNumber:  bc.pullNumber,
 	}
 	run := &models.BuildResult{BuildInfo: models.BuildInfo{
-		BuildID:    bc.buildID,
-		JobName:    bc.jobName,
-		PullNumber: bc.pullNumber,
-		WebURL:     bc.webURL,
+		BuildID: bc.buildID, JobName: bc.jobName, PullNumber: bc.pullNumber, WebURL: bc.webURL,
+		Commit: bc.commit, RepoVersion: bc.repoVersion, RepoRefs: maps.Clone(bc.repoRefs),
 	}}
 	tc := benchTestCase(bc)
 
