@@ -387,7 +387,7 @@ function isAnalysisChatProgress(value: unknown): value is AnalysisChatProgress {
   const candidate = value as Partial<AnalysisChatProgress>;
   return typeof candidate.request_id === "string" &&
     typeof candidate.updated_at === "string" &&
-    ["queued", "investigating", "reading_evidence", "evaluating", "finalizing", "cancelling"].includes(
+    ["queued", "investigating", "reading_evidence", "evaluating", "finalizing", "validation_retrying", "cancelling"].includes(
       candidate.phase ?? "",
     );
 }

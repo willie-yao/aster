@@ -180,16 +180,23 @@ func decodeAnalysisChatReplyCandidate(candidate string, evidence map[string]*ana
 	if err != nil {
 		return analysischat.Reply{}, err
 	}
-	required := []string{"answer", "assessment", "citations", "proposed_revision"}
-	if len(fields) != len(required) {
+	allowed := map[string]bool{"answer": true, "citations": true, "assessment": true, "proposed_revision": true}
+	if len(fields) < 2 || len(fields) > len(allowed) {
 		return analysischat.Reply{}, newAnalysisChatValidationError(
-			analysisChatValidationContract, errors.New("response must contain exactly the required fields"),
+			analysisChatValidationContract, errors.New("response must contain answer and citations plus only supported optional fields"),
 		)
 	}
-	for _, field := range required {
+	for field := range fields {
+		if !allowed[field] {
+			return analysischat.Reply{}, newAnalysisChatValidationError(
+				analysisChatValidationContract, errors.New("response contains an unsupported field"),
+			)
+		}
+	}
+	for _, field := range []string{"answer", "citations"} {
 		if _, ok := fields[field]; !ok {
 			return analysischat.Reply{}, newAnalysisChatValidationError(
-				analysisChatValidationContract, errors.New("response must contain exactly the required fields"),
+				analysisChatValidationContract, errors.New("response requires answer and citations"),
 			)
 		}
 	}
@@ -224,10 +231,12 @@ func decodeAnalysisChatReplyCandidate(candidate string, evidence map[string]*ana
 		)
 	}
 	switch reply.Assessment {
-	case "explains", "supports", "challenges", "inconclusive":
+	case "explains":
+		reply.Assessment = ""
+	case "", "supports", "challenges", "inconclusive":
 	default:
 		return analysischat.Reply{}, newAnalysisChatValidationError(
-			analysisChatValidationContract, errors.New("assessment must be explains, supports, challenges, or inconclusive"),
+			analysisChatValidationContract, errors.New("assessment must be supports, challenges, inconclusive, or omitted"),
 		)
 	}
 	if reply.Citations == nil {
@@ -294,10 +303,10 @@ func decodeAnalysisChatReplyCandidate(candidate string, evidence map[string]*ana
 			analysisChatValidationCitation, fmt.Errorf("a %s response requires artifact citations", reply.Assessment),
 		)
 	}
-	if reply.Assessment == "challenges" {
-		if reply.ProposedRevision == nil {
+	if reply.ProposedRevision != nil {
+		if reply.Assessment != "challenges" {
 			return analysischat.Reply{}, newAnalysisChatValidationError(
-				analysisChatValidationContract, errors.New("a challenges response requires a complete proposed_revision"),
+				analysisChatValidationContract, errors.New("proposed_revision is allowed only for a challenges response"),
 			)
 		}
 		reply.ProposedRevision.RootCause = strings.TrimSpace(reply.ProposedRevision.RootCause)
@@ -312,10 +321,6 @@ func decodeAnalysisChatReplyCandidate(candidate string, evidence map[string]*ana
 				analysisChatValidationContract, errors.New("proposed_revision exceeds its size limit"),
 			)
 		}
-	} else if reply.ProposedRevision != nil {
-		return analysischat.Reply{}, newAnalysisChatValidationError(
-			analysisChatValidationContract, errors.New("proposed_revision is allowed only for a challenges response"),
-		)
 	}
 	return reply, nil
 }

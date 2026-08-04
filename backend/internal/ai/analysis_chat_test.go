@@ -140,7 +140,7 @@ func TestAnalysisChatAgentAllowsExplanationWithoutTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reply.Assessment != "explains" || reply.ToolCalls != 0 {
+	if reply.Assessment != "" || reply.ToolCalls != 0 {
 		t.Fatalf("reply = %+v", reply)
 	}
 }
@@ -153,11 +153,9 @@ func TestAnalysisChatAgentRepairsUnreadCitation(t *testing.T) {
 		"citations":[{"path":"build-log.txt","line_start":1,"line_end":1,"quote":"controller stopped"}],
 		"proposed_revision":null
 	}`))
-	server.push(200, chatRespToolCall("call-1", "tail_artifact", map[string]interface{}{"path": "build-log.txt", "lines": 20}))
 	server.push(200, chatRespFinal(`{
-		"answer":"After reading the log, the controller exit supports the analysis.","assessment":"supports",
-		"citations":[{"path":"build-log.txt","line_start":1,"line_end":1,"quote":"controller stopped"}],
-		"proposed_revision":null
+		"answer":"I cannot support that claim without reading the artifact.","assessment":"inconclusive",
+		"citations":[],"proposed_revision":null
 	}`))
 	browser := &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("controller stopped\n")}}
 	agent := newAnalysisChatAgentForTest(t, server.URL, browser, AnalysisChatOptions{MaxIters: 4, Timeout: time.Second})
@@ -166,13 +164,14 @@ func TestAnalysisChatAgentRepairsUnreadCitation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reply.ToolCalls != 1 || reply.Assessment != "supports" {
+	if reply.ToolCalls != 0 || reply.Assessment != "inconclusive" {
 		t.Fatalf("reply = %+v", reply)
 	}
 	server.mu.Lock()
 	requests := append([][]byte(nil), server.requests...)
 	server.mu.Unlock()
-	if len(requests) < 2 || !strings.Contains(string(requests[1]), "artifact not read during this turn") {
+	if len(requests) < 2 || !strings.Contains(string(requests[1]), "artifact not read during this turn") ||
+		!strings.Contains(string(requests[1]), `"response_format"`) {
 		t.Fatalf("repair prompt missing from second request: %s", requests[1])
 	}
 }
@@ -514,6 +513,18 @@ func TestParseAnalysisChatReplyValidatesCrossBuildReferences(t *testing.T) {
 	}
 }
 
+func TestParseAnalysisChatReplyAllowsMinimalAndOptionalContract(t *testing.T) {
+	evidence := map[string]*analysisChatEvidence{}
+	minimal, err := parseAnalysisChatReply(`{"answer":"Direct answer.","citations":[]}`, evidence)
+	if err != nil || minimal.Answer != "Direct answer." || minimal.Assessment != "" || minimal.ProposedRevision != nil {
+		t.Fatalf("minimal reply = %+v, err=%v", minimal, err)
+	}
+	assessment, err := parseAnalysisChatReply(`{"answer":"The evidence remains incomplete.","citations":[],"assessment":"inconclusive"}`, evidence)
+	if err != nil || assessment.Assessment != "inconclusive" || assessment.ProposedRevision != nil {
+		t.Fatalf("optional assessment reply = %+v, err=%v", assessment, err)
+	}
+}
+
 func TestParseAnalysisChatReplyRejectsDuplicateFields(t *testing.T) {
 	cases := []string{
 		`{"answer":"first","answer":"second","assessment":"explains","citations":[],"proposed_revision":null}`,
@@ -531,7 +542,7 @@ func TestParseAnalysisChatReplyRejectsDuplicateFields(t *testing.T) {
 
 func TestComposeAnalysisChatSystemPromptKeepsSeparateSchema(t *testing.T) {
 	prompt := ComposeAnalysisChatSystemPrompt("Consumer fact.")
-	for _, want := range []string{"Consumer fact.", "published AI analysis is a hypothesis", `"assessment": "explains"`, "preserve the full builds/<build-id>/"} {
+	for _, want := range []string{"Consumer fact.", "published AI analysis is a hypothesis", `"citations": []`, "preserve the full builds/<build-id>/"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("prompt missing %q", want)
 		}

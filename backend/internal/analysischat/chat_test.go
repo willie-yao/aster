@@ -1183,7 +1183,7 @@ func TestServiceStreamReconnectsToPendingTurn(t *testing.T) {
 	runner := &fakeRunner{
 		reply:   Reply{Answer: "answer", Assessment: "supports"},
 		started: make(chan struct{}, 1), release: make(chan struct{}),
-		phases: []string{PhaseReadingEvidence, PhaseEvaluating},
+		phases: []string{PhaseReadingEvidence, PhaseValidationRetrying, PhaseEvaluating},
 	}
 	service, err := NewService(t.Context(), dir, runner, Options{PollInterval: 10 * time.Millisecond})
 	if err != nil {
@@ -1243,6 +1243,9 @@ func TestServiceStreamReconnectsToPendingTurn(t *testing.T) {
 	}
 	if latestProgress.TurnsUsed != 1 || latestProgress.MaxTurns != 10 {
 		t.Fatalf("progress usage = %d/%d", latestProgress.TurnsUsed, latestProgress.MaxTurns)
+	}
+	if latestProgress.StartedAt == "" || latestProgress.ValidationRetries != 1 || latestProgress.MaxValidationRetries != 1 {
+		t.Fatalf("progress retry metadata = %+v", latestProgress)
 	}
 	runner.mu.Lock()
 	calls := len(runner.turns)

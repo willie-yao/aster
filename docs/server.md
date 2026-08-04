@@ -176,19 +176,20 @@ creating another session or model turn. Reusing a key for different input
 returns `409 Conflict`.
 
 The JSON endpoint waits for the final transcript. The streaming endpoint emits
-`progress` events with `queued`, `investigating`, `reading_evidence`,
-`evaluating`, `finalizing`, or `cancelling`, followed by a `session` event. It
-streams validated phases rather than unreviewed model tokens. Progress events
-also carry the authoritative `turns_used` and `max_turns` values immediately
-after admission. Reconnecting with the same idempotency key follows the
-already-running turn on any replica.
+validated internal progress followed by a `session` event. The frontend groups
+those phases into Investigating, Validating evidence, and Finalizing, with a
+separate cancelling state. Progress includes the turn start time, elapsed-time
+anchor, bounded validation retry count, and authoritative `turns_used` and
+`max_turns`. Reconnecting with the same idempotency key follows the already-running
+turn on any replica.
 
 The response contains the full transcript. User messages include the accepted
 request ID so the frontend can reconcile a response lost after the server
-committed it. Assistant messages include
-an `assessment` of `explains`, `supports`, `challenges`, or `inconclusive`, plus
-verified artifact paths and an optional proposed revision. A proposed revision
-does not alter `jobs/*.json` or the published analysis.
+committed it. Every assistant response requires `answer` and `citations`. An
+`assessment` of `supports`, `challenges`, or `inconclusive` is optional, as is a
+complete proposed revision for a challenges response. Normal follow-up answers
+do not need either optional field. A proposed revision does not alter
+`jobs/*.json` or the published analysis.
 While a turn is running, the owner-safe response also includes its request ID,
 question, phase, and update time. A reloaded client reconnects with the same
 request ID, and can still cancel it from another server replica.
@@ -221,10 +222,13 @@ the authoritative session before allowing an explicit retry. Startup cleanup,
 a lifecycle-bound periodic cleanup loop, and request-time cleanup remove
 expired sessions from the persisted file and release global and per-owner
 capacity.
-Model response parsing scans a bounded set of complete JSON objects, including
-fenced output and provider metadata wrappers, and validates each candidate
-against the strict response and evidence contracts. A previously validated
-draft may be retained when a later finalization response is unusable. Citation
+Finalization prefers a strict JSON Schema response and falls back to bounded
+plain-JSON extraction for compatible providers. At most one response-contract
+retry is admitted, and the retry receives only safe validation feedback. Model
+response parsing scans a bounded set of complete JSON objects, including fenced
+output and provider metadata wrappers, and validates each candidate against the
+strict response and evidence contracts. A previously validated draft may be
+retained when a later finalization response is unusable. Citation
 paths, quotes, and line ranges still require evidence read during that turn.
 
 Terminal failures use safe categories: provider request failed, model response

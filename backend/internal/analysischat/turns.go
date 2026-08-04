@@ -187,7 +187,7 @@ func (s *Service) startTurn(ctx context.Context, id, owner, requestID, question 
 		}
 		current.Active = &persistedActiveTurn{
 			RequestID: requestID, Question: question, LeaseID: leaseID,
-			ExpiresAt: now.Add(s.opts.TurnLeaseTTL), Phase: PhaseQueued, UpdatedAt: now,
+			ExpiresAt: now.Add(s.opts.TurnLeaseTTL), Phase: PhaseQueued, StartedAt: now, UpdatedAt: now,
 		}
 		current.View.UpdatedAt = stamp
 		resolved := restoreResolved(current.Resolved)
@@ -379,8 +379,9 @@ func (s *Service) requestSnapshot(id, owner, requestID string) (requestSnapshot,
 		if current.Active != nil && current.Active.RequestID == requestID {
 			snapshot.Progress = Progress{
 				RequestID: requestID, Phase: current.Active.Phase,
-				UpdatedAt: current.Active.UpdatedAt.Format(time.RFC3339),
+				StartedAt: optionalTimestamp(current.Active.StartedAt), UpdatedAt: current.Active.UpdatedAt.Format(time.RFC3339),
 				TurnsUsed: current.Turns, MaxTurns: s.opts.MaxTurns,
+				ValidationRetries: current.Active.ValidationRetries, MaxValidationRetries: 1,
 			}
 		}
 		return changed, nil
@@ -407,6 +408,9 @@ func (s *Service) updateProgress(id, owner, requestID, leaseID, phase string) er
 		}
 		if current.Active.Phase == phase {
 			return false, nil
+		}
+		if phase == PhaseValidationRetrying {
+			current.Active.ValidationRetries++
 		}
 		current.Active.Phase = phase
 		current.Active.UpdatedAt = now
@@ -513,7 +517,7 @@ func activeTurnKey(id, requestID string) string {
 
 func validProgressPhase(phase string) bool {
 	switch phase {
-	case PhaseQueued, PhaseInvestigating, PhaseReadingEvidence, PhaseEvaluating, PhaseFinalizing, PhaseCancelling:
+	case PhaseQueued, PhaseInvestigating, PhaseReadingEvidence, PhaseEvaluating, PhaseFinalizing, PhaseValidationRetrying, PhaseCancelling:
 		return true
 	default:
 		return false

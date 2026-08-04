@@ -85,13 +85,15 @@ type persistedInvestigation struct {
 }
 
 type persistedActiveTurn struct {
-	RequestID       string    `json:"request_id"`
-	Question        string    `json:"question,omitempty"`
-	LeaseID         string    `json:"lease_id"`
-	ExpiresAt       time.Time `json:"expires_at"`
-	Phase           string    `json:"phase"`
-	UpdatedAt       time.Time `json:"updated_at"`
-	CancelRequested bool      `json:"cancel_requested,omitempty"`
+	RequestID         string    `json:"request_id"`
+	Question          string    `json:"question,omitempty"`
+	LeaseID           string    `json:"lease_id"`
+	ExpiresAt         time.Time `json:"expires_at"`
+	Phase             string    `json:"phase"`
+	StartedAt         time.Time `json:"started_at,omitempty"`
+	UpdatedAt         time.Time `json:"updated_at"`
+	ValidationRetries int       `json:"validation_retries,omitempty"`
+	CancelRequested   bool      `json:"cancel_requested,omitempty"`
 }
 
 const (

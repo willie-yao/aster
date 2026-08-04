@@ -120,14 +120,18 @@ export type AnalysisChatProgressPhase =
   | "reading_evidence"
   | "evaluating"
   | "finalizing"
+  | "validation_retrying"
   | "cancelling";
 
 export interface AnalysisChatProgress {
   request_id: string;
   phase: AnalysisChatProgressPhase;
+  started_at?: string;
   updated_at: string;
   turns_used?: number;
   max_turns?: number;
+  validation_retries?: number;
+  max_validation_retries?: number;
 }
 
 export interface AnalysisChatActiveTurn extends AnalysisChatProgress {

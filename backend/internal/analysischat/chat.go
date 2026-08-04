@@ -171,28 +171,35 @@ type SessionView struct {
 
 // ActiveTurn is the owner-safe state needed to resume an in-flight request.
 type ActiveTurn struct {
-	RequestID string `json:"request_id"`
-	Question  string `json:"question,omitempty"`
-	Phase     string `json:"phase"`
-	UpdatedAt string `json:"updated_at"`
+	RequestID            string `json:"request_id"`
+	Question             string `json:"question,omitempty"`
+	Phase                string `json:"phase"`
+	StartedAt            string `json:"started_at,omitempty"`
+	UpdatedAt            string `json:"updated_at"`
+	ValidationRetries    int    `json:"validation_retries,omitempty"`
+	MaxValidationRetries int    `json:"max_validation_retries,omitempty"`
 }
 
 // Progress is a persisted, owner-safe turn phase.
 type Progress struct {
-	RequestID string `json:"request_id"`
-	Phase     string `json:"phase"`
-	UpdatedAt string `json:"updated_at"`
-	TurnsUsed int    `json:"turns_used"`
-	MaxTurns  int    `json:"max_turns"`
+	RequestID            string `json:"request_id"`
+	Phase                string `json:"phase"`
+	StartedAt            string `json:"started_at,omitempty"`
+	UpdatedAt            string `json:"updated_at"`
+	TurnsUsed            int    `json:"turns_used"`
+	MaxTurns             int    `json:"max_turns"`
+	ValidationRetries    int    `json:"validation_retries,omitempty"`
+	MaxValidationRetries int    `json:"max_validation_retries,omitempty"`
 }
 
 const (
-	PhaseQueued          = "queued"
-	PhaseInvestigating   = "investigating"
-	PhaseReadingEvidence = "reading_evidence"
-	PhaseEvaluating      = "evaluating"
-	PhaseFinalizing      = "finalizing"
-	PhaseCancelling      = "cancelling"
+	PhaseQueued             = "queued"
+	PhaseInvestigating      = "investigating"
+	PhaseReadingEvidence    = "reading_evidence"
+	PhaseEvaluating         = "evaluating"
+	PhaseFinalizing         = "finalizing"
+	PhaseValidationRetrying = "validation_retrying"
+	PhaseCancelling         = "cancelling"
 )
 
 // Turn is the immutable analysis snapshot and transcript for one model call.
@@ -1083,13 +1090,19 @@ func (s *Service) sessionView(current *persistedSession) SessionView {
 	view.MaxTurns = s.opts.MaxTurns
 	if current.Active != nil {
 		view.Active = &ActiveTurn{
-			RequestID: current.Active.RequestID,
-			Question:  current.Active.Question,
-			Phase:     current.Active.Phase,
-			UpdatedAt: current.Active.UpdatedAt.Format(time.RFC3339),
+			RequestID: current.Active.RequestID, Question: current.Active.Question, Phase: current.Active.Phase,
+			StartedAt: optionalTimestamp(current.Active.StartedAt), UpdatedAt: current.Active.UpdatedAt.Format(time.RFC3339),
+			ValidationRetries: current.Active.ValidationRetries, MaxValidationRetries: 1,
 		}
 	}
 	return view
+}
+
+func optionalTimestamp(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339)
 }
 
 func attemptViews(requests map[string]persistedRequest) []Attempt {

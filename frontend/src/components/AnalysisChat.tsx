@@ -113,10 +113,10 @@ function readableError(error: unknown): string {
         return "This analysis or conversation is no longer available. Refresh the page to load the latest data.";
       case 409:
         if (error.message === analysisChatSessionBusyMessage || error.message === analysisChatRequestPendingMessage) {
-          return "Another answer is still running for this conversation. Retry shortly to reconnect.";
+          return "Another answer is still running for this conversation. Select Continue to reconnect.";
         }
         if (error.message === analysisChatRequestOutcomeUnknownMessage) {
-          return "The previous answer could not be confirmed after a server interruption. Submit again to retry.";
+          return "The previous answer could not be confirmed after a server interruption. Select Continue to try again.";
         }
         if (error.message === analysisChatIdempotencyConflictMessage) {
           return "This request changed while it was being retried. Refresh the page before continuing.";
@@ -387,74 +387,61 @@ function AssistantMessage({
 }
 
 const progressLabels: Record<AnalysisChatProgressPhase, { title: string; detail: string }> = {
-  queued: { title: "Queued", detail: "Waiting for an analysis turn to start." },
-  investigating: { title: "Investigating the analysis", detail: "Reviewing the published conclusion and failure context." },
-  reading_evidence: { title: "Reading build evidence", detail: "Reopening relevant artifacts before answering." },
-  evaluating: { title: "Evaluating the evidence", detail: "Comparing the artifacts with the published conclusion." },
-  finalizing: { title: "Finalizing the answer", detail: "Validating the response and its citations." },
-  cancelling: { title: "Cancelling the request", detail: "Stopping the active analysis turn." },
+  queued: { title: "Investigating", detail: "Waiting for the analysis turn to start." },
+  investigating: { title: "Investigating", detail: "Reviewing the published conclusion and failure context." },
+  reading_evidence: { title: "Validating evidence", detail: "Reading the artifacts needed for this answer." },
+  evaluating: { title: "Investigating", detail: "Comparing the evidence with the published conclusion." },
+  finalizing: { title: "Finalizing", detail: "Checking the response and its citations." },
+  validation_retrying: { title: "Validating evidence", detail: "The response contract was rejected and is being retried." },
+  cancelling: { title: "Cancelling", detail: "Stopping the active analysis turn." },
 };
 
 function ThinkingState({
-  phase,
-  cancelling,
-  onCancel,
+  phase, cancelling, startedAt, validationRetries, maxValidationRetries, onCancel,
 }: {
   phase: AnalysisChatProgressPhase;
   cancelling: boolean;
+  startedAt?: string;
+  validationRetries: number;
+  maxValidationRetries: number;
   onCancel: () => void;
 }) {
   const copy = progressLabels[phase];
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const started = startedAt ? Date.parse(startedAt) : Number.NaN;
+  const elapsed = Number.isFinite(started) ? Math.max(0, Math.floor((now - started) / 1000)) : null;
   return (
-    <Stack
-      role="status"
-      aria-live="polite"
-      direction="row"
-      spacing={1.25}
-      sx={{
-        alignItems: "center",
-        borderRadius: "10px",
-        px: 1.5,
-        py: 1.25,
-        bgcolor: (theme) => soft(theme, "primary", 0.055),
-      }}
-    >
+    <Stack role="status" aria-live="polite" direction="row" spacing={1.25} sx={{
+      alignItems: "center", borderRadius: "10px", px: 1.5, py: 1.25,
+      bgcolor: (theme) => soft(theme, "primary", 0.055),
+    }}>
       <Stack direction="row" spacing={0.4} aria-hidden="true">
         {[0, 1, 2].map((i) => (
-          <Box
-            key={i}
-            sx={{
-              width: 5,
-              height: 5,
-              borderRadius: "50%",
-              bgcolor: "primary.main",
-              animation: "analysisChatPulse 1.2s ease-in-out infinite",
-              animationDelay: `${i * 150}ms`,
-              "@keyframes analysisChatPulse": {
-                "0%, 70%, 100%": { opacity: 0.25, transform: "translateY(0)" },
-                "35%": { opacity: 1, transform: "translateY(-3px)" },
-              },
-            }}
-          />
+          <Box key={i} sx={{
+            width: 5, height: 5, borderRadius: "50%", bgcolor: "primary.main",
+            animation: "analysisChatPulse 1.2s ease-in-out infinite", animationDelay: `${i * 150}ms`,
+            "@keyframes analysisChatPulse": {
+              "0%, 70%, 100%": { opacity: 0.25, transform: "translateY(0)" },
+              "35%": { opacity: 1, transform: "translateY(-3px)" },
+            },
+          }} />
         ))}
       </Stack>
       <Box sx={{ minWidth: 0, flex: 1 }}>
-        <Typography variant="body2" sx={{ fontWeight: 650 }}>
-          {copy.title}
-        </Typography>
+        <Typography variant="body2" sx={{ fontWeight: 650 }}>{copy.title}</Typography>
+        <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>{copy.detail}</Typography>
         <Typography variant="caption" color="text.secondary">
-          {copy.detail}
+          {elapsed !== null ? `${elapsed}s elapsed` : "Elapsed time unavailable"}
+          {phase === "validation_retrying" && maxValidationRetries > 0
+            ? ` · Validation retry ${validationRetries} of ${maxValidationRetries}` : ""}
         </Typography>
       </Box>
-      <Button
-        size="small"
-        variant="outlined"
-        color="inherit"
-        startIcon={<StopCircleOutlined />}
-        onClick={onCancel}
-        disabled={cancelling}
-        sx={{ flexShrink: 0 }}
-      >
+      <Button size="small" variant="outlined" color="inherit" startIcon={<StopCircleOutlined />}
+        onClick={onCancel} disabled={cancelling} sx={{ flexShrink: 0 }}>
         {cancelling ? "Cancelling" : "Cancel"}
       </Button>
     </Stack>
@@ -482,7 +469,11 @@ export function AnalysisChat({
   const [error, setError] = useState<string | null>(null);
   const [turnLimitRejected, setTurnLimitRejected] = useState(false);
   const [pendingTurn, setPendingTurn] = useState<PendingTurn | null>(null);
+  const [continueMode, setContinueMode] = useState(false);
   const [progressPhase, setProgressPhase] = useState<AnalysisChatProgressPhase>("queued");
+  const [progressStartedAt, setProgressStartedAt] = useState<string | undefined>();
+  const [validationRetries, setValidationRetries] = useState(0);
+  const [maxValidationRetries, setMaxValidationRetries] = useState(0);
   const [cancelling, setCancelling] = useState(false);
   const [correctionPreview, setCorrectionPreview] = useState<AnalysisCorrectionPreview | null>(null);
   const [correctionOpen, setCorrectionOpen] = useState(false);
@@ -503,6 +494,9 @@ export function AnalysisChat({
   const history = useMemo(() => session ? analysisChatHistory(session) : [], [session]);
   const recordProgress = useCallback((progress: AnalysisChatProgress) => {
     setProgressPhase(progress.phase);
+    if (progress.started_at) setProgressStartedAt(progress.started_at);
+    setValidationRetries(progress.validation_retries ?? 0);
+    setMaxValidationRetries(progress.max_validation_retries ?? 0);
     const usage = analysisChatProgressTurnUsage(progress);
     if (!usage) return;
     setTurnLimitRejected(usage.used >= usage.max);
@@ -542,7 +536,11 @@ export function AnalysisChat({
     setError(null);
     setTurnLimitRejected(false);
     setPendingTurn(null);
+    setContinueMode(false);
     setProgressPhase("queued");
+    setProgressStartedAt(undefined);
+    setValidationRetries(0);
+    setMaxValidationRetries(0);
     setCancelling(false);
     setCorrectionPreview(null);
     setCorrectionOpen(false);
@@ -598,13 +596,16 @@ export function AnalysisChat({
         if (restoredState === "answered" || restoredState === "succeeded") {
           setQuestion("");
           setPendingTurn(null);
+          setContinueMode(false);
           setError(null);
         } else if (restoredState === "terminal") {
           setPendingTurn(null);
           setError(null);
         } else {
           setPendingTurn(null);
-          setError("The restored question ended without an answer. Submit it again to retry.");
+          setQuestion(restoredTurn?.question ?? "");
+          setContinueMode(true);
+          setError("The restored question ended without an answer. Select Continue to try again.");
         }
       } catch (restoreError) {
         if (restoreError instanceof Error && restoreError.name === "AbortError") return;
@@ -636,7 +637,8 @@ export function AnalysisChat({
         }
         if (restoredTurn && isAmbiguousAnalysisChatFailure(restoreError)) {
           setPendingTurn(restoredTurn);
-          setError("The restored question may still be running. Retry shortly to reconnect.");
+          setContinueMode(true);
+          setError("The restored question may still be running. Select Continue to reconnect.");
         } else {
           setPendingTurn(null);
           setError(readableError(restoreError));
@@ -678,7 +680,7 @@ export function AnalysisChat({
     const value = (nextQuestion ?? pendingTurn?.question ?? question).trim();
     if (!value || busy || restoring || turnLimitReached) return;
     if (pendingTurn && pendingTurn.question !== value) {
-      setError("The previous question may still be running. Retry it before asking another question.");
+      setError("The previous question may still be running. Select Continue before asking another question.");
       return;
     }
     if (auth.status === "anonymous") {
@@ -687,11 +689,16 @@ export function AnalysisChat({
     }
     if (auth.status !== "authenticated") return;
 
+    setContinueMode(false);
     controllerRef.current?.abort();
     const controller = new AbortController();
     controllerRef.current = controller;
     setBusy(true);
     setError(null);
+    setProgressPhase("queued");
+    setProgressStartedAt(undefined);
+    setValidationRetries(0);
+    setMaxValidationRetries(0);
     let activeSession = session;
     let activeTurn = pendingTurn;
     try {
@@ -712,7 +719,6 @@ export function AnalysisChat({
         setPendingTurn(activeTurn);
         setQuestion(value);
       }
-      setProgressPhase("queued");
       const updated = await streamAnalysisChatMessage(
         activeTurn.sessionID,
         activeTurn.question,
@@ -769,11 +775,13 @@ export function AnalysisChat({
       const ambiguousFailure = isAmbiguousAnalysisChatFailure(requestError);
       if (activeSession && activeTurn && ambiguousFailure) {
         setPendingTurn(activeTurn);
-        setError("The question may still be running. Retry shortly to reconnect to the same request.");
+        setContinueMode(true);
+        setError("The question may still be running. Select Continue to reconnect to the same request.");
         return;
       }
       if (!activeSession && ambiguousFailure) {
-        setError("The conversation may have been created. Retry to reconnect to the same session.");
+        setContinueMode(true);
+        setError("The conversation may have been created. Select Continue to reconnect to the same session.");
         return;
       }
 
@@ -1100,6 +1108,9 @@ export function AnalysisChat({
                 <ThinkingState
                   phase={progressPhase}
                   cancelling={cancelling}
+                  startedAt={progressStartedAt}
+                  validationRetries={validationRetries}
+                  maxValidationRetries={maxValidationRetries}
                   onCancel={() => void cancelTurn()}
                 />
               )}
@@ -1119,7 +1130,10 @@ export function AnalysisChat({
                     minRows={1}
                     maxRows={5}
                     value={question}
-                    onChange={(event) => setQuestion(limitAnalysisChatQuestion(event.target.value))}
+                    onChange={(event) => {
+                      setContinueMode(false);
+                      setQuestion(limitAnalysisChatQuestion(event.target.value));
+                    }}
                     onKeyDown={(event) => {
                       if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                         event.preventDefault();
@@ -1139,11 +1153,11 @@ export function AnalysisChat({
                       htmlInput: { "aria-label": "Ask about this analysis" },
                     }}
                   />
-                  <Tooltip title={pendingTurn ? "Retry question" : "Send question"}>
+                  <Tooltip title={pendingTurn || continueMode ? "Continue" : "Send question"}>
                     <span>
                       <IconButton
                         color="primary"
-                        aria-label={pendingTurn ? "Retry question" : "Send question"}
+                        aria-label={pendingTurn || continueMode ? "Continue" : "Send question"}
                         onClick={() => void submit()}
                         disabled={restoring || busy || (pendingTurn?.question ?? question).trim() === ""}
                         sx={{
