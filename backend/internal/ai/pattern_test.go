@@ -153,7 +153,7 @@ func TestAnalyzePattern_InvalidConfidenceRejected(t *testing.T) {
 	srv.push(200, chatRespFinal(`{"systemic":false,"confidence":"VERY-SURE","shared_root_cause":"","shared_builds":[],"suggested_fix":"","remediation_targets":[],"summary":"independent flakes"}`))
 	s := newPatternTestService(t, srv.URL)
 
-	if _, err := s.AnalyzePattern(context.Background(), "job", "job", patternFailures(2)); patternValidationCategoryOf(err) != patternValidationSchema {
+	if _, err := s.AnalyzePatternWithOptions(context.Background(), "job", "job", patternFailures(2), PatternAnalyzeOptions{}); patternValidationCategoryOf(err) != patternValidationSchema {
 		t.Fatalf("AnalyzePattern error = %v", err)
 	}
 }
@@ -167,10 +167,10 @@ func TestAnalyzePattern_IncompleteVerdictRejected(t *testing.T) {
 	srv.push(200, chatRespFinal(`{"systemic":true,"confidence":"high","summary":"x"}`))
 	s := newPatternTestService(t, srv.URL)
 
-	if _, err := s.AnalyzePattern(context.Background(), "job", "job", patternFailures(2)); err == nil {
+	if _, err := s.AnalyzePatternWithOptions(context.Background(), "job", "job", patternFailures(2), PatternAnalyzeOptions{}); err == nil {
 		t.Error("expected error for empty verdict")
 	}
-	if _, err := s.AnalyzePattern(context.Background(), "job", "job2", patternFailures(2)); err == nil {
+	if _, err := s.AnalyzePatternWithOptions(context.Background(), "job", "job2", patternFailures(2), PatternAnalyzeOptions{}); err == nil {
 		t.Error("expected error for systemic verdict without a root cause")
 	}
 }
@@ -471,7 +471,7 @@ func TestAnalyzePatternRepairsAmbiguityOnce(t *testing.T) {
 	valid := `{"systemic":true,"confidence":"high","shared_root_cause":"private-shared-cause","shared_builds":["abuild","bbuild"],"suggested_fix":"update config/controller.yaml","remediation_targets":[{"intent":"investigate"}],"summary":"same summary"}`
 	ambiguous := valid + "\n" + strings.Replace(valid, "private-shared-cause", "private-other-cause", 1)
 	srv.push(200, chatRespFinal(ambiguous))
-	srv.push(200, chatRespFinal(valid))
+	srv.push(200, chatRespFinal("```json\n"+valid+"\n```"))
 	s := newPatternTestService(t, srv.URL)
 	traceStore := NewTraceStore()
 	s.SetTraceStore(traceStore)
@@ -718,5 +718,107 @@ func TestPatternCacheKeyGeneration(t *testing.T) {
 	}
 	if got := patternCacheKey("universal", "", "job", "subject", "prompt", "toolfree", "model"); got != base {
 		t.Fatalf("empty generation changed pattern key: %q vs %q", got, base)
+	}
+}
+
+func TestAnalyzePatternRepairsSchemaValidationOnce(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	const privateSentinel = "PRIVATE_PATTERN_SENTINEL"
+	invalid := `{"systemic":true,"summary":"` + privateSentinel + `"}`
+	valid := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":["abuild","bbuild"],"suggested_fix":"update config/controller.yaml","remediation_targets":[{"intent":"investigate"}],"summary":"fixed contract"}`
+	srv.push(200, chatRespFinal(invalid))
+	srv.push(200, chatRespFinal(valid))
+	s := newPatternTestService(t, srv.URL)
+	store := NewTraceStore()
+	s.SetTraceStore(store)
+	var repairs []PatternRepairAttempt
+	pa, err := s.AnalyzePatternWithOptions(t.Context(), "job", "job", patternFailures(2), PatternAnalyzeOptions{
+		AllowValidationRepair: true,
+		OnRepair:              func(attempt PatternRepairAttempt) { repairs = append(repairs, attempt) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pa == nil || pa.Summary != "fixed contract" || len(repairs) != 1 || !repairs[0].Succeeded {
+		t.Fatalf("pattern=%+v repairs=%+v", pa, repairs)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 2 {
+		t.Fatalf("model calls = %d, want 2", got)
+	}
+	rawTrace, err := json.Marshal(store.Snapshot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(rawTrace), privateSentinel) {
+		t.Fatalf("trace exposed candidate content: %s", rawTrace)
+	}
+	var sawValidation, sawRepair bool
+	for _, trace := range store.Snapshot().Traces {
+		for _, event := range trace.Events {
+			if event.Kind == "pattern_parse" && event.Outcome == "rejected" && event.ErrorCode == "schema" && event.ValidationCode == "required_fields" {
+				sawValidation = true
+			}
+			if event.Kind == "pattern_repair" && event.Status == "validation" && event.Outcome == "success" {
+				sawRepair = true
+			}
+		}
+	}
+	if !sawValidation || !sawRepair {
+		t.Fatalf("trace missing validation repair telemetry: %+v", store.Snapshot())
+	}
+}
+
+func TestAnalyzePatternValidationRepairFailureStops(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal(`{"systemic":true}`))
+	invalid := chatRespFinal(`{"systemic":true,"confidence":"invalid"}`)
+	srv.push(200, invalid)
+	srv.push(200, invalid)
+	srv.push(200, invalid)
+	s := newPatternTestService(t, srv.URL)
+	var repairs []PatternRepairAttempt
+	_, err := s.AnalyzePatternWithOptions(t.Context(), "job", "job", patternFailures(2), PatternAnalyzeOptions{
+		AllowValidationRepair: true,
+		OnRepair:              func(attempt PatternRepairAttempt) { repairs = append(repairs, attempt) },
+	})
+	if category := PatternFailureCategoryOf(err); category != PatternFailureSchema {
+		t.Fatalf("category=%q error=%v", category, err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 4 {
+		t.Fatalf("model calls = %d, want 4 (initial plus three structured repair transports)", got)
+	}
+	if len(repairs) != 1 || repairs[0].Succeeded || repairs[0].FailureCategory != PatternFailureSchema {
+		t.Fatalf("repairs=%+v", repairs)
+	}
+}
+
+func TestAnalyzePatternValidationRepairPreservesProviderFailure(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal(`{"systemic":true}`))
+	srv.push(503, "PRIVATE_PROVIDER_BODY")
+	s := newPatternTestService(t, srv.URL)
+	_, err := s.AnalyzePatternWithOptions(t.Context(), "job", "job", patternFailures(2), PatternAnalyzeOptions{AllowValidationRepair: true})
+	if category := PatternFailureCategoryOf(err); category != PatternFailureProvider5xx {
+		t.Fatalf("category=%q error=%v", category, err)
+	}
+	if strings.Contains(err.Error(), "PRIVATE_PROVIDER_BODY") {
+		t.Fatalf("provider body leaked: %v", err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 2 {
+		t.Fatalf("model calls = %d, want 2", got)
+	}
+}
+
+func TestPatternResponseFormatRequiresAllStrictTargetFields(t *testing.T) {
+	format := patternResponseFormat()
+	properties := format.Schema["properties"].(map[string]any)
+	targets := properties["remediation_targets"].(map[string]any)
+	item := targets["items"].(map[string]any)
+	required := item["required"].([]string)
+	if strings.Join(required, ",") != "intent,symbol,path,value" {
+		t.Fatalf("target required fields = %v", required)
 	}
 }

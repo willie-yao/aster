@@ -29,9 +29,9 @@ const patternPromptVersion = 4
 
 const patternCacheVersion = 2
 
-// patternAmbiguityRepairVersion is included in pattern cache keys so repair
-// contract changes invalidate verdicts produced by an older repair prompt.
-const patternAmbiguityRepairVersion = 1
+// patternRepairVersion is included in pattern cache keys so repair contract
+// changes invalidate verdicts produced by an older repair prompt.
+const patternRepairVersion = 1
 
 // maxPatternBuilds caps how many per-build analyses are fed into one pattern
 // call, keeping the prompt bounded for a test that failed in many builds.
@@ -114,10 +114,11 @@ type patternParseStats struct {
 
 type patternValidationError struct {
 	category patternValidationCategory
+	issue    string
 	stats    patternParseStats
 }
 
-// PatternRepairAttempt reports one bounded ambiguity-repair completion.
+// PatternRepairAttempt reports one bounded validation-repair completion.
 type PatternRepairAttempt struct {
 	Succeeded       bool
 	FailureCategory PatternFailureCategory
@@ -125,9 +126,10 @@ type PatternRepairAttempt struct {
 
 // PatternAnalyzeOptions configure one full correlation attempt.
 type PatternAnalyzeOptions struct {
-	AllowAmbiguityRepair bool
-	OnRepair             func(PatternRepairAttempt)
-	OnCacheHit           func()
+	AllowAmbiguityRepair  bool
+	AllowValidationRepair bool
+	OnRepair              func(PatternRepairAttempt)
+	OnCacheHit            func()
 }
 
 // PatternFailureCategory is a privacy-safe pattern-attempt outcome.
@@ -169,6 +171,14 @@ func patternValidationCategoryOf(err error) patternValidationCategory {
 	var validationErr *patternValidationError
 	if errors.As(err, &validationErr) {
 		return validationErr.category
+	}
+	return ""
+}
+
+func patternValidationIssueOf(err error) string {
+	var validationErr *patternValidationError
+	if errors.As(err, &validationErr) {
+		return validationErr.issue
 	}
 	return ""
 }
@@ -293,10 +303,46 @@ You also have read-only tools over the source repository:
 
 Ground every path you cite. BEFORE naming any file, template, manifest, or config in shared_root_cause, suggested_fix, or remediation_targets, confirm it exists by grepping for its name or the symbols/keys involved, listing the directory, and reading the file. NEVER invent or guess a path: an unread path is a hallucination. If you cannot find a real file that fits, use the investigate intent and lower confidence accordingly. When you are done investigating, respond with ONLY the JSON object described above and nothing else.`
 
+func patternResponseFormat() ResponseFormat {
+	stringProperty := func() map[string]any { return map[string]any{"type": "string"} }
+	return ResponseFormat{
+		Name:        "return_pattern",
+		Description: "Return one validated recurring-pattern verdict.",
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"systemic":          map[string]any{"type": "boolean"},
+				"confidence":        map[string]any{"type": "string", "enum": []string{"high", "medium", "low"}},
+				"shared_root_cause": stringProperty(),
+				"shared_builds":     map[string]any{"type": "array", "items": stringProperty()},
+				"suggested_fix":     stringProperty(),
+				"remediation_targets": map[string]any{
+					"type": "array", "maxItems": 8,
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"intent": map[string]any{"type": "string", "enum": []string{
+								models.RemediationIntentAddSymbol, models.RemediationIntentModifySymbol,
+								models.RemediationIntentSetConfiguration, models.RemediationIntentRemoveConfiguration,
+								models.RemediationIntentInvestigate,
+							}},
+							"symbol": stringProperty(), "path": stringProperty(), "value": stringProperty(),
+						},
+						"required": []string{"intent", "symbol", "path", "value"}, "additionalProperties": false,
+					},
+				},
+				"summary": stringProperty(),
+			},
+			"required":             []string{"systemic", "confidence", "shared_root_cause", "shared_builds", "suggested_fix", "remediation_targets", "summary"},
+			"additionalProperties": false,
+		},
+	}
+}
+
 // AnalyzePattern correlates the per-build analyses of one repeatedly-failing
-// job into a single PatternAnalysis. It permits one bounded ambiguity repair.
+// job into a single PatternAnalysis. It permits one bounded contract repair.
 func (s *Service) AnalyzePattern(ctx context.Context, jobID, subject string, failures []PatternFailure) (*models.PatternAnalysis, error) {
-	return s.AnalyzePatternWithOptions(ctx, jobID, subject, failures, PatternAnalyzeOptions{AllowAmbiguityRepair: true})
+	return s.AnalyzePatternWithOptions(ctx, jobID, subject, failures, PatternAnalyzeOptions{AllowAmbiguityRepair: true, AllowValidationRepair: true})
 }
 
 // AnalyzePatternWithOptions runs one full correlation attempt.
@@ -598,15 +644,70 @@ func (s *Service) groundedPatternVerdict(ctx context.Context, userPrompt string,
 func (s *Service) parsePatternOutput(ctx context.Context, stage, output string, buildIDs map[string]struct{}, options PatternAnalyzeOptions) (patternResponse, error) {
 	parsed, stats, err := parsePatternResponseWithStats(output, buildIDs)
 	recordPatternParseTrace(ctx, stage, stats, err)
-	if err == nil || patternValidationCategoryOf(err) != patternValidationAmbiguous || stats.ScanTruncated || !options.AllowAmbiguityRepair {
+	if err == nil || stats.ScanTruncated {
 		return parsed, err
 	}
-	return s.repairPatternAmbiguity(ctx, output, buildIDs, options.OnRepair)
+	switch patternValidationCategoryOf(err) {
+	case patternValidationAmbiguous:
+		if options.AllowAmbiguityRepair {
+			return s.repairPatternAmbiguity(ctx, output, buildIDs, options.OnRepair)
+		}
+	case patternValidationSchema, patternValidationBuilds:
+		if options.AllowValidationRepair && len(output) <= int(defaultStructuredResponseBytes) {
+			return s.repairPatternValidation(ctx, output, buildIDs, err, options.OnRepair)
+		}
+	}
+	return parsed, err
+}
+
+func (s *Service) repairPatternValidation(ctx context.Context, output string, buildIDs map[string]struct{}, validationErr error, observe func(PatternRepairAttempt)) (patternResponse, error) {
+	category := patternValidationCategoryOf(validationErr)
+	issue := patternValidationIssueOf(validationErr)
+	if issue == "" {
+		issue = "contract_validation"
+	}
+	prompt := fmt.Sprintf("Repair contract version %d. The prior bounded investigation produced a recurring-pattern contract that failed deterministic validation. Validation category: %s. Validation issue: %s. Correct the contract without weakening or omitting any required field. Do not add an explanation or code fence. Return the corrected contract.\n\nPrior output:\n%s", patternRepairVersion, category, issue, output)
+	started := time.Now()
+	var parsed patternResponse
+	var acceptedStats patternParseStats
+	var parseStats patternParseStats
+	var parseErr error
+	validate := func(raw json.RawMessage) error {
+		candidate, stats, err := parsePatternResponseWithStats(string(raw), buildIDs)
+		if err != nil {
+			parseStats, parseErr = stats, err
+			return err
+		}
+		parsed, acceptedStats = candidate, stats
+		return nil
+	}
+	err := s.client.CompleteStructured(ctx, "Return exactly one valid recurring-pattern contract.", prompt, patternResponseFormat(), validate)
+	if err != nil {
+		var structuredErr *structuredCompletionError
+		validationOnly := errors.As(err, &structuredErr) && structuredErr.cause == nil
+		if parseErr != nil && validationOnly {
+			err = parseErr
+			recordPatternParseTrace(ctx, "repair", parseStats, err)
+		} else {
+			err = safePatternProviderError(err)
+		}
+		recordTrace(ctx, TraceEvent{Kind: "pattern_repair", Status: "validation", Outcome: "rejected", DurationMs: int(time.Since(started) / time.Millisecond), ErrorCode: patternTraceErrorCode(err), ValidationCode: patternValidationIssueOf(err)})
+		if observe != nil {
+			observe(PatternRepairAttempt{Succeeded: false, FailureCategory: PatternFailureCategoryOf(err)})
+		}
+		return patternResponse{}, err
+	}
+	recordPatternParseTrace(ctx, "repair", acceptedStats, nil)
+	recordTrace(ctx, TraceEvent{Kind: "pattern_repair", Status: "validation", Outcome: "success", DurationMs: int(time.Since(started) / time.Millisecond)})
+	if observe != nil {
+		observe(PatternRepairAttempt{Succeeded: true})
+	}
+	return parsed, nil
 }
 
 func (s *Service) repairPatternAmbiguity(ctx context.Context, output string, buildIDs map[string]struct{}, observe func(PatternRepairAttempt)) (patternResponse, error) {
 	prompt := fmt.Sprintf("Repair contract version %d. The prior bounded investigation produced multiple distinct candidate contracts. Resolve them into exactly one verdict supported by that investigation. Do not add a draft, alternative, explanation, or code fence. Reply with only one JSON object using exactly these keys: "+
-		`{"systemic": true|false, "confidence": "high"|"medium"|"low", "shared_root_cause": "...", "shared_builds": ["..."], "suggested_fix": "...", "remediation_targets": [{"intent":"...","symbol":"...","path":"...","value":"..."}], "summary": "..."}.`+"\n\nInvestigation output:\n%s", patternAmbiguityRepairVersion, output)
+		`{"systemic": true|false, "confidence": "high"|"medium"|"low", "shared_root_cause": "...", "shared_builds": ["..."], "suggested_fix": "...", "remediation_targets": [{"intent":"...","symbol":"...","path":"...","value":"..."}], "summary": "..."}.`+"\n\nInvestigation output:\n%s", patternRepairVersion, output)
 	started := time.Now()
 	repaired, err := s.client.Complete(ctx, "Return exactly one final recurring-pattern JSON contract and no other content.", prompt)
 	if err != nil {
@@ -648,7 +749,7 @@ func recordPatternParseTrace(ctx context.Context, stage string, stats patternPar
 		CandidateCount: stats.CandidateCount, ValidCount: stats.ValidCount,
 		UniqueCandidateCount: stats.UniqueValidCount, IncompleteCount: stats.IncompleteCount,
 		ContractLikeRejectedCount: stats.ContractLikeRejectedCount, ScanTruncated: stats.ScanTruncated,
-		ErrorCode: patternTraceErrorCode(err),
+		ErrorCode: patternTraceErrorCode(err), ValidationCode: patternValidationIssueOf(err),
 	})
 }
 
@@ -659,18 +760,18 @@ func parsePatternResponse(raw string, buildIDs map[string]struct{}) (patternResp
 
 func parsePatternResponseWithStats(raw string, buildIDs map[string]struct{}) (patternResponse, patternParseStats, error) {
 	stats := patternParseStats{}
-	validationError := func(category patternValidationCategory) (patternResponse, patternParseStats, error) {
-		return patternResponse{}, stats, &patternValidationError{category: category, stats: stats}
+	validationError := func(category patternValidationCategory, issue string) (patternResponse, patternParseStats, error) {
+		return patternResponse{}, stats, &patternValidationError{category: category, issue: issue, stats: stats}
 	}
 	if len(raw) > maxPatternResponseBytes {
-		return validationError(patternValidationJSON)
+		return validationError(patternValidationJSON, "response_too_large")
 	}
 	scan := scanAnalysisChatJSONCandidates(raw)
 	stats.CandidateCount = len(scan.candidates)
 	stats.IncompleteCount = len(scan.incomplete)
 	stats.ScanTruncated = scan.truncated
 	if scan.truncated {
-		return validationError(patternValidationAmbiguous)
+		return validationError(patternValidationAmbiguous, "candidate_scan_truncated")
 	}
 	type validCandidate struct {
 		response patternResponse
@@ -681,20 +782,22 @@ func parsePatternResponseWithStats(raw string, buildIDs map[string]struct{}) (pa
 		start        int
 		end          int
 		category     patternValidationCategory
+		issue        string
 		contractLike bool
 	}
 	valid := make([]validCandidate, 0, 1)
 	rejected := make([]rejectedCandidate, 0, len(scan.candidates))
 	contractLikeSeen := false
 	bestCategory := patternValidationJSON
+	bestIssue := "invalid_json"
 	unique := map[string]patternResponse{}
 	for _, candidate := range scan.candidates {
-		parsed, category := decodePatternCandidate(candidate.value, buildIDs)
+		parsed, category, issue := decodePatternCandidate(candidate.value, buildIDs)
 		if category == "" {
 			parsed = canonicalizePatternResponse(parsed)
 			canonical, err := json.Marshal(parsed)
 			if err != nil {
-				return validationError(patternValidationJSON)
+				return validationError(patternValidationJSON, "canonical_json")
 			}
 			key := string(canonical)
 			valid = append(valid, validCandidate{response: parsed, start: candidate.start, end: candidate.end})
@@ -703,7 +806,7 @@ func parsePatternResponseWithStats(raw string, buildIDs map[string]struct{}) (pa
 		}
 		contractLike := patternCandidateIsContractLike(candidate.value)
 		rejected = append(rejected, rejectedCandidate{
-			start: candidate.start, end: candidate.end, category: category, contractLike: contractLike,
+			start: candidate.start, end: candidate.end, category: category, issue: issue, contractLike: contractLike,
 		})
 		if contractLike {
 			stats.ContractLikeRejectedCount++
@@ -711,15 +814,16 @@ func parsePatternResponseWithStats(raw string, buildIDs map[string]struct{}) (pa
 		contractLikeSeen = contractLikeSeen || contractLike
 		if patternValidationRank(category) > patternValidationRank(bestCategory) {
 			bestCategory = category
+			bestIssue = issue
 		}
 	}
 	stats.ValidCount = len(valid)
 	stats.UniqueValidCount = len(unique)
 	if len(valid) == 0 {
 		if !contractLikeSeen && len(scan.incomplete) == 0 {
-			return validationError(patternValidationMissing)
+			return validationError(patternValidationMissing, "no_contract")
 		}
-		return validationError(bestCategory)
+		return validationError(bestCategory, bestIssue)
 	}
 
 	firstStart, firstEnd, lastEnd := valid[0].start, valid[0].end, valid[0].end
@@ -733,17 +837,17 @@ func parsePatternResponseWithStats(raw string, buildIDs map[string]struct{}) (pa
 	}
 	for _, incomplete := range scan.incomplete {
 		if incomplete.start > firstEnd {
-			return validationError(patternValidationJSON)
+			return validationError(patternValidationJSON, "trailing_incomplete_json")
 		}
 	}
 	for _, candidate := range rejected {
 		if candidate.contractLike && (candidate.start > firstEnd ||
 			(candidate.start < firstStart && candidate.end > lastEnd)) {
-			return validationError(candidate.category)
+			return validationError(candidate.category, candidate.issue)
 		}
 	}
 	if len(unique) != 1 {
-		return validationError(patternValidationAmbiguous)
+		return validationError(patternValidationAmbiguous, "conflicting_valid_contracts")
 	}
 	for _, parsed := range unique {
 		return parsed, stats, nil
@@ -777,67 +881,67 @@ func canonicalizePatternResponse(parsed patternResponse) patternResponse {
 	return parsed
 }
 
-func decodePatternCandidate(raw string, buildIDs map[string]struct{}) (patternResponse, patternValidationCategory) {
-	fields, category := decodePatternObject(raw)
+func decodePatternCandidate(raw string, buildIDs map[string]struct{}) (patternResponse, patternValidationCategory, string) {
+	fields, category, issue := decodePatternObject(raw)
 	if category != "" {
-		return patternResponse{}, category
+		return patternResponse{}, category, issue
 	}
 	required := []string{"systemic", "confidence", "shared_root_cause", "shared_builds", "suggested_fix", "remediation_targets", "summary"}
 	if len(fields) != len(required) {
-		return patternResponse{}, patternValidationSchema
+		return patternResponse{}, patternValidationSchema, "required_fields"
 	}
 	for _, field := range required {
 		value, ok := fields[field]
 		if !ok || strings.TrimSpace(string(value)) == "null" {
-			return patternResponse{}, patternValidationSchema
+			return patternResponse{}, patternValidationSchema, "required_fields"
 		}
 	}
 	var parsed patternResponse
 	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
-		return patternResponse{}, patternValidationSchema
+		return patternResponse{}, patternValidationSchema, "field_types"
 	}
 	if !decodeRemediationTargets(fields["remediation_targets"], &parsed.RemediationTargets) {
-		return patternResponse{}, patternValidationSchema
+		return patternResponse{}, patternValidationSchema, "remediation_targets"
 	}
 	parsed = canonicalizePatternResponse(parsed)
-	if category := patternResponseValidationCategory(parsed, buildIDs); category != "" {
-		return patternResponse{}, category
+	if category, issue := patternResponseValidation(parsed, buildIDs); category != "" {
+		return patternResponse{}, category, issue
 	}
-	return parsed, ""
+	return parsed, "", ""
 }
 
-func decodePatternObject(raw string) (map[string]json.RawMessage, patternValidationCategory) {
+func decodePatternObject(raw string) (map[string]json.RawMessage, patternValidationCategory, string) {
 	decoder := json.NewDecoder(strings.NewReader(raw))
 	token, err := decoder.Token()
 	if err != nil || token != json.Delim('{') {
-		return nil, patternValidationJSON
+		return nil, patternValidationJSON, "invalid_json"
 	}
 	fields := make(map[string]json.RawMessage, 7)
 	for decoder.More() {
 		token, err := decoder.Token()
 		if err != nil {
-			return nil, patternValidationJSON
+			return nil, patternValidationJSON, "invalid_json"
 		}
 		name, ok := token.(string)
 		if !ok {
-			return nil, patternValidationJSON
+			return nil, patternValidationJSON, "invalid_json"
 		}
 		if _, duplicate := fields[name]; duplicate {
-			return nil, patternValidationSchema
+			return nil, patternValidationSchema, "duplicate_field"
 		}
 		var value json.RawMessage
 		if err := decoder.Decode(&value); err != nil {
-			return nil, patternValidationJSON
+			return nil, patternValidationJSON, "invalid_json"
 		}
 		fields[name] = value
 	}
 	if token, err := decoder.Token(); err != nil || token != json.Delim('}') {
-		return nil, patternValidationJSON
+		return nil, patternValidationJSON, "invalid_json"
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return nil, patternValidationJSON
+		return nil, patternValidationJSON, "trailing_json"
 	}
-	return fields, ""
+	return fields, "", ""
 }
 
 func patternCandidateIsContractLike(raw string) bool {
@@ -858,41 +962,41 @@ func patternCandidateIsContractLike(raw string) bool {
 	return false
 }
 
-func patternResponseValidationCategory(p patternResponse, buildIDs map[string]struct{}) patternValidationCategory {
+func patternResponseValidation(p patternResponse, buildIDs map[string]struct{}) (patternValidationCategory, string) {
 	confidence := strings.ToLower(strings.TrimSpace(p.Confidence))
 	if confidence != "high" && confidence != "medium" && confidence != "low" {
-		return patternValidationSchema
+		return patternValidationSchema, "confidence"
 	}
 	if strings.TrimSpace(p.Summary) == "" {
-		return patternValidationSchema
+		return patternValidationSchema, "summary"
 	}
 	if p.Systemic {
 		if strings.TrimSpace(p.SharedRootCause) == "" || strings.TrimSpace(p.SuggestedFix) == "" || len(p.SharedBuilds) < 2 || len(p.RemediationTargets) == 0 {
-			return patternValidationSchema
+			return patternValidationSchema, "systemic_contract"
 		}
 	} else if strings.TrimSpace(p.SharedRootCause) != "" || strings.TrimSpace(p.SuggestedFix) != "" || len(p.RemediationTargets) != 0 {
-		return patternValidationSchema
+		return patternValidationSchema, "non_systemic_contract"
 	}
 	if len(p.RemediationTargets) > 8 {
-		return patternValidationSchema
+		return patternValidationSchema, "remediation_target_limit"
 	}
 	for _, target := range p.RemediationTargets {
 		if !validRemediationTarget(target) {
-			return patternValidationSchema
+			return patternValidationSchema, "remediation_target"
 		}
 	}
 	for _, buildID := range p.SharedBuilds {
 		buildID = strings.TrimSpace(buildID)
 		if buildID == "" {
-			return patternValidationBuilds
+			return patternValidationBuilds, "shared_builds"
 		}
 		if buildIDs != nil {
 			if _, ok := buildIDs[buildID]; !ok {
-				return patternValidationBuilds
+				return patternValidationBuilds, "shared_builds"
 			}
 		}
 	}
-	return ""
+	return "", ""
 }
 
 func decodeRemediationTargets(raw json.RawMessage, targets *[]models.RemediationTarget) bool {
@@ -907,7 +1011,7 @@ func decodeRemediationTargets(raw json.RawMessage, targets *[]models.Remediation
 		if err := decoder.Decode(&item); err != nil {
 			return false
 		}
-		fields, category := decodePatternObject(string(item))
+		fields, category, _ := decodePatternObject(string(item))
 		if category != "" || len(fields) == 0 || len(fields) > 4 {
 			return false
 		}
@@ -1074,7 +1178,7 @@ func buildPatternUserPrompt(subject string, failures []PatternFailure) string {
 // the model saw is unchanged.
 func patternCacheKey(module, generation, jobID, subject, userPrompt, groundKey, modelFingerprint string) string {
 	h := sha256.New()
-	fmt.Fprintf(h, "v%d:r%d\x00%s\x00%s\x00%s\x00%s\x00%s", patternPromptVersion, patternAmbiguityRepairVersion, groundKey, modelFingerprint, jobID, subject, userPrompt)
+	fmt.Fprintf(h, "v%d:r%d\x00%s\x00%s\x00%s\x00%s\x00%s", patternPromptVersion, patternRepairVersion, groundKey, modelFingerprint, jobID, subject, userPrompt)
 	digest := hex.EncodeToString(h.Sum(nil)[:12])
 	if generation == "" {
 		return fmt.Sprintf("pattern:%s:%s", module, digest)

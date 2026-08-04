@@ -1102,6 +1102,15 @@ agentLoop:
 			return nil, nil, ErrContextHeadroom
 		}
 		parsed, ok = tryParseAnalysis(finalContent)
+		if ok {
+			recordTrace(loopCtx, TraceEvent{Kind: "finalize_parse", Outcome: "accepted"})
+		} else {
+			code := "invalid_structured_response"
+			if strings.TrimSpace(finalContent) == "" {
+				code = "empty_content"
+			}
+			recordTrace(loopCtx, TraceEvent{Kind: "finalize_parse", Outcome: "rejected", ErrorCode: code})
+		}
 	}
 	if !ok && state.fallbackDraft != nil {
 		fallback := state.promoteFallbackDraft()
@@ -1109,9 +1118,11 @@ agentLoop:
 		finalProviderItems = fallback.providerItems
 		finalDraftObserved = true
 		parsed, ok = tryParseAnalysis(finalContent)
+		recordTrace(loopCtx, TraceEvent{Kind: "finalize_recovery", Outcome: "retained_draft", SelectedAttempt: fallback.attempt})
 		log.Printf("  ⚠ agentic repair: finalize did not parse; keeping selected draft")
 	}
 	if !ok {
+		recordTrace(loopCtx, TraceEvent{Kind: "finalize_recovery", Outcome: "synthesized"})
 		// Last resort: synthesize an analysisResponse from the raw text so the
 		// UI still has something to render. Do not cache this because a transient
 		// model glitch should not permanently poison the cache.
@@ -2025,8 +2036,16 @@ func (c *Client) runFinalizeRound(ctx context.Context, messages []modelMessage, 
 		log.Printf("  ⚠ agentic finalize round failed: %v", err)
 		return "", nil, true
 	}
-	if !resp.HasMessage || resp.Message.Content == nil {
-		recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "empty"})
+	if !resp.HasMessage {
+		recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "empty", ErrorCode: "missing_message"})
+		return "", resp.Message.ProviderItems, true
+	}
+	if resp.Message.Content == nil {
+		code := "nil_content"
+		if len(resp.Message.ToolCalls) > 0 {
+			code = "unexpected_tool_call"
+		}
+		recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "empty", ErrorCode: code})
 		return "", resp.Message.ProviderItems, true
 	}
 	recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "success"})

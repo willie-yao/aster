@@ -199,8 +199,9 @@ func analyzeOne(ctx context.Context, analyzer Analyzer, work analysisWork, obser
 		var err error
 		if observed, ok := analyzer.(observedAnalyzer); ok {
 			pa, err = observed.AnalyzePatternWithOptions(ctx, work.jobID, work.subject, work.failures, ai.PatternAnalyzeOptions{
-				AllowAmbiguityRepair: !repairUsed,
-				OnCacheHit:           func() { cacheHits++ },
+				AllowAmbiguityRepair:  !repairUsed,
+				AllowValidationRepair: !repairUsed,
+				OnCacheHit:            func() { cacheHits++ },
 				OnRepair: func(result ai.PatternRepairAttempt) {
 					repairUsed = true
 					repairs++

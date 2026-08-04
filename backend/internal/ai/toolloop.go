@@ -168,8 +168,16 @@ func (c *Client) runToolLoopFinalizeRound(ctx context.Context, messages []modelM
 		recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "error", ErrorCode: "model_request_error"})
 		return "", err
 	}
-	if !resp.HasMessage || resp.Message.Content == nil {
-		recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "empty"})
+	if !resp.HasMessage {
+		recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "empty", ErrorCode: "missing_message"})
+		return "", nil
+	}
+	if resp.Message.Content == nil {
+		code := "nil_content"
+		if len(resp.Message.ToolCalls) > 0 {
+			code = "unexpected_tool_call"
+		}
+		recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "empty", ErrorCode: code})
 		return "", nil
 	}
 	recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "success"})

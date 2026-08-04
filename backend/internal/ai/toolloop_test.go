@@ -150,3 +150,36 @@ func TestToolLoop_MinToolCallsNudgesOnce(t *testing.T) {
 		t.Errorf("chat calls = %d, want 2 (premature answer + nudge retry)", script.ChatCalls())
 	}
 }
+
+func TestToolLoopFinalizeUnexpectedToolCallIsCategorized(t *testing.T) {
+	script := aitest.NewScriptServer(t)
+	script.PushToolCall("c1", "echo", map[string]any{"msg": "again"})
+	script.PushToolCall("unexpected", "echo", map[string]any{"msg": "still calling"})
+
+	stub := &stubTool{}
+	reg := tools.NewRegistry()
+	reg.Register(stub)
+	store := NewTraceStore()
+	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIChatCompletions})
+	ctx := withAnalysisTrace(context.Background(), trace)
+	out, err := newLoopClient(script.URL).ToolLoop(
+		ctx, "sys", "user", reg, []string{"echo"}, &tools.Env{},
+		ToolLoopOptions{MaxIters: 1, PropagateFinalizeError: true},
+	)
+	trace.Finish("success", err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "" {
+		t.Fatalf("finalize output = %q, want empty", out)
+	}
+	found := false
+	for _, event := range store.Snapshot().Traces[0].Events {
+		if event.Kind == "finalize" && event.Outcome == "empty" && event.ErrorCode == "unexpected_tool_call" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("missing finalize category: %+v", store.Snapshot())
+	}
+}

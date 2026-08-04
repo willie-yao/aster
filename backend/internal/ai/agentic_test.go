@@ -3476,3 +3476,70 @@ func TestRepoToolReadDoesNotCountAsGCSEvidence(t *testing.T) {
 		t.Fatalf("repo read satisfied artifact evidence: %v", state.evidenceArtifactsFull)
 	}
 }
+
+func TestAgenticFinalizeUnexpectedToolCallRetainsDraft(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	fallback := `{"summary":"fallback","is_transient":false,"root_cause":"controller configuration mismatch","severity":"High","suggested_fix":"Update the controller configuration.","relevant_files":[]}`
+	srv.push(200, chatRespFinal(fallback))
+	srv.push(200, chatRespToolCall("unexpected", "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
+
+	store := NewTraceStore()
+	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIChatCompletions})
+	ctx := withAnalysisTrace(context.Background(), trace)
+	in := newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
+		MaxIters: 1, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+		Timeout: 30 * time.Second, MinToolCalls: 2,
+	})
+	_, analysis, err := newAgenticTestClient(t, srv.URL).doAnalyzeAgentic(ctx, in, "agentic:test:finalize-tool-retain", "sys", "user")
+	trace.Finish("success", err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if analysis.RootCause != "controller configuration mismatch" {
+		t.Fatalf("fallback draft not retained: %+v", analysis)
+	}
+	var sawEmpty, sawRejected, sawRetained bool
+	for _, event := range store.Snapshot().Traces[0].Events {
+		switch {
+		case event.Kind == "finalize" && event.Outcome == "empty" && event.ErrorCode == "unexpected_tool_call":
+			sawEmpty = true
+		case event.Kind == "finalize_parse" && event.Outcome == "rejected" && event.ErrorCode == "empty_content":
+			sawRejected = true
+		case event.Kind == "finalize_recovery" && event.Outcome == "retained_draft" && event.SelectedAttempt == 1:
+			sawRetained = true
+		}
+	}
+	if !sawEmpty || !sawRejected || !sawRetained {
+		t.Fatalf("finalize telemetry missing: %+v", store.Snapshot())
+	}
+}
+
+func TestAgenticFinalizeUnexpectedToolCallSynthesizesWithoutDraft(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal("not json"))
+	srv.push(200, chatRespToolCall("unexpected", "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
+
+	store := NewTraceStore()
+	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIChatCompletions})
+	ctx := withAnalysisTrace(context.Background(), trace)
+	in := newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{MaxIters: 1, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second})
+	_, analysis, err := newAgenticTestClient(t, srv.URL).doAnalyzeAgentic(ctx, in, "agentic:test:finalize-tool-synthesize", "sys", "user")
+	trace.Finish("success", err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if analysis.SuggestedFix != "Unable to parse structured response" {
+		t.Fatalf("expected synthesized fallback: %+v", analysis)
+	}
+	var sawSynthesized bool
+	for _, event := range store.Snapshot().Traces[0].Events {
+		if event.Kind == "finalize_recovery" && event.Outcome == "synthesized" {
+			sawSynthesized = true
+		}
+	}
+	if !sawSynthesized {
+		t.Fatalf("missing synthesized recovery telemetry: %+v", store.Snapshot())
+	}
+}

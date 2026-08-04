@@ -90,6 +90,7 @@ type TraceEvent struct {
 	RetryDurationMs           int    `json:"retry_duration_ms,omitempty"`
 	RemainingTimeMs           int    `json:"remaining_time_ms,omitempty"`
 	ErrorCode                 string `json:"error_code,omitempty"`
+	ValidationCode            string `json:"validation_code,omitempty"`
 }
 
 // TraceMetadata identifies one analysis without model or endpoint details.
@@ -189,6 +190,9 @@ func (s *TraceSession) Record(event TraceEvent) {
 	event.Tool = traceText(event.Tool)
 	if event.ErrorCode != "" {
 		event.ErrorCode = traceCode(event.ErrorCode)
+	}
+	if event.ValidationCode != "" {
+		event.ValidationCode = traceCode(event.ValidationCode)
 	}
 	s.trace.Events = append(s.trace.Events, event)
 }

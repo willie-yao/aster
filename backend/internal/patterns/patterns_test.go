@@ -257,8 +257,9 @@ func mustJSON(value any) string {
 }
 
 type repairTrackingAnalyzer struct {
-	calls        int
-	repairAllows []bool
+	calls                  int
+	ambiguityRepairAllows  []bool
+	validationRepairAllows []bool
 }
 
 func (a *repairTrackingAnalyzer) AnalyzePattern(context.Context, string, string, []ai.PatternFailure) (*models.PatternAnalysis, error) {
@@ -267,7 +268,8 @@ func (a *repairTrackingAnalyzer) AnalyzePattern(context.Context, string, string,
 
 func (a *repairTrackingAnalyzer) AnalyzePatternWithOptions(_ context.Context, _ string, subject string, failures []ai.PatternFailure, options ai.PatternAnalyzeOptions) (*models.PatternAnalysis, error) {
 	a.calls++
-	a.repairAllows = append(a.repairAllows, options.AllowAmbiguityRepair)
+	a.ambiguityRepairAllows = append(a.ambiguityRepairAllows, options.AllowAmbiguityRepair)
+	a.validationRepairAllows = append(a.validationRepairAllows, options.AllowValidationRepair)
 	if a.calls == 1 {
 		if options.OnRepair != nil {
 			options.OnRepair(ai.PatternRepairAttempt{FailureCategory: ai.PatternFailureRequestTimeout})
@@ -291,8 +293,11 @@ func TestAnalyzeBoundsRepairAcrossFullRetries(t *testing.T) {
 	if stats.Attempts != 2 || stats.Retries != 1 || stats.Repairs != 1 || analyzer.calls != 2 {
 		t.Fatalf("stats=%+v calls=%d", stats, analyzer.calls)
 	}
-	if len(analyzer.repairAllows) != 2 || !analyzer.repairAllows[0] || analyzer.repairAllows[1] {
-		t.Fatalf("repair allowance=%v", analyzer.repairAllows)
+	if len(analyzer.ambiguityRepairAllows) != 2 || !analyzer.ambiguityRepairAllows[0] || analyzer.ambiguityRepairAllows[1] {
+		t.Fatalf("ambiguity repair allowance=%v", analyzer.ambiguityRepairAllows)
+	}
+	if len(analyzer.validationRepairAllows) != 2 || !analyzer.validationRepairAllows[0] || analyzer.validationRepairAllows[1] {
+		t.Fatalf("validation repair allowance=%v", analyzer.validationRepairAllows)
 	}
 	if len(attempts) != 3 || !attempts[0].Repair || attempts[1].Repair || attempts[2].Repair {
 		t.Fatalf("attempts=%+v", attempts)
