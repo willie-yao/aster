@@ -49,6 +49,20 @@ func TestBuildPromptJobSummariesUsesSweepAndDiscoveryMetadata(t *testing.T) {
 	}
 }
 
+func TestBuildPromptJobSummariesMatchesPresubmitRepository(t *testing.T) {
+	jobs := []models.ProwJob{{
+		Name: "pull-e2e", JobType: models.JobTypePresubmit, Repo: "example/project", ConfigFile: "presubmits.yaml",
+	}}
+	definitions := []jobconfig.JobDefinition{
+		{Name: "pull-e2e", JobType: models.JobTypePresubmit, Repo: "example/other", ConfigFile: "presubmits.yaml", Branches: []string{"wrong"}},
+		{Name: "pull-e2e", JobType: models.JobTypePresubmit, Repo: "example/project", ConfigFile: "presubmits.yaml", Branches: []string{"main"}},
+	}
+	got := buildPromptJobSummaries(jobs, definitions, Repo{FullName: "example/project"}, "dashboard")
+	if len(got) != 1 || !reflect.DeepEqual(got[0].Branches, []string{"main"}) {
+		t.Fatalf("summary matched the wrong repository: %+v", got)
+	}
+}
+
 func TestBuildPromptJobSummariesFallsBackToFinalSweepMetadata(t *testing.T) {
 	got := buildPromptJobSummaries([]models.ProwJob{{
 		Name: "periodic", JobType: models.JobTypePeriodic, ConfigFile: "periodics.yaml", Branch: "main",

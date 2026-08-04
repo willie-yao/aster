@@ -129,6 +129,13 @@ func TestGeneratePromptBodyRedactsCredentialsFromMetadata(t *testing.T) {
 	}
 }
 
+func TestRedactPromptTextHandlesOverlappingCredentials(t *testing.T) {
+	got := redactPromptText("abcdef abc", "abc", "abcdef")
+	if strings.Contains(got, "abc") || strings.Contains(got, "def") {
+		t.Fatalf("overlapping credential leaked: %q", got)
+	}
+}
+
 func TestRedactPromptCredentialsRemovesTokensFromModelInput(t *testing.T) {
 	sources := []promptSource{{Path: "README.md", Kind: "markdown", StartLine: 1, EndLine: 1, Text: "ai-secret github-secret"}}
 	redactPromptCredentials(sources, "ai-secret", "github-secret")

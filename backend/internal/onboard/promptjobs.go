@@ -62,9 +62,13 @@ func buildPromptJobSummaries(jobs []models.ProwJob, definitions []jobconfig.JobD
 func matchingPromptJobDefinition(job models.ProwJob, definitions []jobconfig.JobDefinition) *jobconfig.JobDefinition {
 	for i := range definitions {
 		definition := &definitions[i]
-		if definition.Name == job.Name && definition.JobType == job.JobType && (job.ConfigFile == "" || definition.ConfigFile == job.ConfigFile) {
-			return definition
+		if definition.Name != job.Name || definition.JobType != job.JobType || job.ConfigFile != "" && definition.ConfigFile != job.ConfigFile {
+			continue
 		}
+		if job.Repo != "" && !strings.EqualFold(definition.Repo, job.Repo) {
+			continue
+		}
+		return definition
 	}
 	return nil
 }

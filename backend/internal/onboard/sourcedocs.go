@@ -341,10 +341,15 @@ func redactPromptCredentials(sources []promptSource, credentials ...string) {
 }
 
 func redactPromptText(text string, credentials ...string) string {
-	for _, credential := range credentials {
-		if credential != "" {
-			text = strings.ReplaceAll(text, credential, strings.Repeat("*", len(credential)))
+	credentials = sortedUniqueStrings(credentials)
+	sort.Slice(credentials, func(i, j int) bool {
+		if len(credentials[i]) != len(credentials[j]) {
+			return len(credentials[i]) > len(credentials[j])
 		}
+		return credentials[i] < credentials[j]
+	})
+	for _, credential := range credentials {
+		text = strings.ReplaceAll(text, credential, strings.Repeat("*", len(credential)))
 	}
 	return text
 }
