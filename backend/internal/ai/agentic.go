@@ -986,7 +986,7 @@ agentLoop:
 				semanticAccepted := draftPhase == "semantic_retry" && state.judgeObjected
 				state.considerDraft(candidateDraft, semanticAccepted)
 				if out.Passed {
-					recordTrace(loopCtx, TraceEvent{Kind: "critique", Outcome: "passed"})
+					recordTrace(loopCtx, critiqueTraceEvent("passed", out))
 					// Second-line semantic judge: a focused LLM review that
 					// catches a fluent-but-wrong root cause the deterministic
 					// gate accepts. Runs at most once per analysis (its own
@@ -1375,13 +1375,14 @@ func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, m
 		}
 	}
 	if out.Passed {
-		recordTrace(ctx, TraceEvent{Kind: "critique", Outcome: "passed"})
+		recordTrace(ctx, critiqueTraceEvent("passed", out))
 		if opts.SemanticJudge && !state.judgeRan {
 			c.applySemanticJudgePostLoop(ctx, state, messages, finalContent, finalProviderItems, parsed, contextHeadroomFor(opts))
 		}
 		state.critiquePassed = state.bestDraft != nil && state.bestDraft.quality.Passed
 		return state.bestDraft.parsed
 	}
+	recordTrace(ctx, critiqueTraceEvent("objected", out))
 	return c.runBoundedCritiqueRepair(ctx, state, messages, finalContent, finalProviderItems, parsed, out, opts, retries)
 }
 
@@ -1399,6 +1400,15 @@ func (c *Client) semanticCritiqueTracked(ctx context.Context, state *agentState,
 	objections, err := c.semanticCritique(ctx, parsed, paths, headroom)
 	state.recentModelRequest = time.Since(started)
 	return objections, err
+}
+
+func critiqueTraceEvent(outcome string, out critiqueOutcome) TraceEvent {
+	return TraceEvent{
+		Kind: "critique", Outcome: outcome, IssueCount: len(out.Matches()),
+		CritiquePunts: len(out.PuntMatches), CritiqueUnread: len(out.UnreadCitations),
+		CritiqueCitations: len(out.CitationIssues), CritiqueSkills: len(out.MissingSkillEvidence),
+		CritiqueGroups: out.MissingEvidenceCount(), CritiqueTransient: out.TransientPersistCount,
+	}
 }
 
 func selectedDraftAttempt(state *agentState) int {
@@ -1517,6 +1527,7 @@ func (c *Client) runBoundedCritiqueRepair(ctx context.Context, state *agentState
 			pruneAbsentSkillEvidence(selected.parsed, &selectedOut, treeSet)
 		}
 	}
+	recordTrace(ctx, critiqueTraceEvent("revised", selectedOut))
 	recordTrace(ctx, TraceEvent{
 		Kind: "critique_retry", Outcome: "completed", Retry: retry, RetryAdmitted: true,
 		InitialIssueCount: len(initial.Matches()), RevisedIssueCount: len(selectedOut.Matches()),

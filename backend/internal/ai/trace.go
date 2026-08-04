@@ -80,6 +80,12 @@ type TraceEvent struct {
 	Elided                    int    `json:"elided,omitempty"`
 	Retry                     int    `json:"retry,omitempty"`
 	IssueCount                int    `json:"issue_count,omitempty"`
+	CritiquePunts             int    `json:"critique_punts,omitempty"`
+	CritiqueUnread            int    `json:"critique_unread,omitempty"`
+	CritiqueCitations         int    `json:"critique_citations,omitempty"`
+	CritiqueSkills            int    `json:"critique_skills,omitempty"`
+	CritiqueGroups            int    `json:"critique_groups,omitempty"`
+	CritiqueTransient         int    `json:"critique_transient,omitempty"`
 	RetryAdmitted             bool   `json:"retry_admitted,omitempty"`
 	RetryDeniedReason         string `json:"retry_denied_reason,omitempty"`
 	InitialIssueCount         int    `json:"initial_issue_count,omitempty"`

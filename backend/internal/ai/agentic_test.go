@@ -3543,3 +3543,62 @@ func TestAgenticFinalizeUnexpectedToolCallSynthesizesWithoutDraft(t *testing.T) 
 		t.Fatalf("missing synthesized recovery telemetry: %+v", store.Snapshot())
 	}
 }
+
+func TestCritiqueTraceEventCountsDoNotPersistContent(t *testing.T) {
+	const private = "PRIVATE_CRITIQUE_SENTINEL"
+	out := critiqueOutcome{
+		PuntMatches:     []string{private, private + "-2"},
+		UnreadCitations: []string{private + "/unread.log"},
+		CitationIssues:  []string{private + " citation", private + " line"},
+		MissingSkillEvidence: []skillEvidenceMiss{{
+			Skill:   skills.Skill{ID: private + "-skill"},
+			Missing: []skills.EvidenceGroup{{ID: private + "-one"}, {ID: private + "-two"}},
+		}},
+		TransientPersistCount: 4,
+	}
+	event := critiqueTraceEvent("objected", out)
+	if event.IssueCount != 7 || event.CritiquePunts != 2 || event.CritiqueUnread != 1 ||
+		event.CritiqueCitations != 2 || event.CritiqueSkills != 1 ||
+		event.CritiqueGroups != 2 || event.CritiqueTransient != 4 {
+		t.Fatalf("critique trace counts = %+v", event)
+	}
+	encoded, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), private) {
+		t.Fatalf("critique trace leaked private content: %s", encoded)
+	}
+}
+
+func TestAgenticCritiqueObjectedTraceCarriesCategoryCounts(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	final := `{"summary":"failure","is_transient":false,"root_cause":"controller failed","severity":"High","suggested_fix":"Investigate the logs and determine the root cause.","relevant_files":[]}`
+	srv.push(200, chatRespFinal(final))
+
+	store := NewTraceStore()
+	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIChatCompletions})
+	ctx := withAnalysisTrace(context.Background(), trace)
+	in := newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
+		MaxIters: 1, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+		Timeout: 30 * time.Second, CritiqueMaxRetries: 0,
+	})
+	_, _, err := newAgenticTestClient(t, srv.URL).doAnalyzeAgentic(ctx, in, "agentic:test:critique-category-trace", "sys", "user")
+	trace.Finish("success", err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var objected, denied bool
+	for _, event := range store.Snapshot().Traces[0].Events {
+		if event.Kind == "critique" && event.Outcome == "objected" && event.IssueCount == 1 && event.CritiquePunts == 1 {
+			objected = true
+		}
+		if event.Kind == "critique_retry_denied" && event.Outcome == "retry_budget" {
+			denied = true
+		}
+	}
+	if !objected || !denied {
+		t.Fatalf("critique trace missing categories or denial: %+v", store.Snapshot())
+	}
+}
