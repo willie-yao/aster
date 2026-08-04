@@ -49,6 +49,10 @@ import (
 // Point BENCH_PROJECT_DIR at a consumer repo to load its real project.yaml AI
 // tuning and prompts/system.md so the run matches that live deploy exactly;
 // otherwise a compact built-in prompt and the live CAPZ-Dynamo tuning are used.
+// BENCH_MANIFEST selects a strict external case manifest. BENCH_REPETITIONS
+// repeats every selected case with a fresh cache. BENCH_CACHE_MODE accepts only
+// "cold". BENCH_RESULTS_JSONL writes private scoring inputs and requires a
+// stable anonymous BENCH_MODEL_LABEL.
 
 // benchSignal is one scored expectation against the model's root cause text.
 type benchSignal struct {
@@ -63,8 +67,9 @@ type benchSignal struct {
 // benchCase pins one historical failure and the signals a correct root cause
 // should contain.
 type benchCase struct {
-	name   string
-	bucket string
+	name     string
+	stableID string
+	bucket   string
 	// fixtureAsset is the .tar.gz on the benchmark-fixtures release holding a
 	// full snapshot of this build's bucket-relative artifact tree. The default
 	// run extracts it and reads through the local storage provider, so the
@@ -402,14 +407,38 @@ func TestAIBenchmark(t *testing.T) {
 		t.Fatalf("load benchmark skills: %v", err)
 	}
 
-	for _, bc := range benchCases {
-		t.Run(bc.name, func(t *testing.T) {
-			runBenchCase(t, bc, endpoint, model, token, systemPrompt, agentic, projectSkills)
-		})
+	cases := benchCases
+	if path := strings.TrimSpace(os.Getenv("BENCH_MANIFEST")); path != "" {
+		cases, err = loadBenchmarkManifest(path)
+		if err != nil {
+			t.Fatalf("BENCH_MANIFEST=%s: %v", path, err)
+		}
+	}
+	repetitions := 1
+	if raw := strings.TrimSpace(os.Getenv("BENCH_REPETITIONS")); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 1 || value > 10 {
+			t.Fatalf("BENCH_REPETITIONS must be 1..10")
+		}
+		repetitions = value
+	}
+	cacheMode := strings.TrimSpace(os.Getenv("BENCH_CACHE_MODE"))
+	if cacheMode != "" && cacheMode != "cold" {
+		t.Fatalf("BENCH_CACHE_MODE only supports cold")
+	}
+	resultsPath := strings.TrimSpace(os.Getenv("BENCH_RESULTS_JSONL"))
+	for _, bc := range cases {
+		bc := bc
+		for repetition := 1; repetition <= repetitions; repetition++ {
+			repetition := repetition
+			t.Run(fmt.Sprintf("%s/rep-%02d", bc.name, repetition), func(t *testing.T) {
+				runBenchCase(t, bc, repetition, resultsPath, endpoint, model, token, systemPrompt, agentic, projectSkills)
+			})
+		}
 	}
 }
 
-func runBenchCase(t *testing.T, bc benchCase, endpoint, model, token, systemPrompt string, agentic project.Agentic, projectSkills *skills.Set) {
+func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, endpoint, model, token, systemPrompt string, agentic project.Agentic, projectSkills *skills.Set) {
 	client := ai.NewClientWithOptions(ai.Options{
 		Token:    token,
 		Endpoint: endpoint,
@@ -494,6 +523,7 @@ func runBenchCase(t *testing.T, bc benchCase, endpoint, model, token, systemProm
 	snapshot := traceStore.Snapshot()
 	toolUsage := successfulBenchmarkToolUsage(snapshot)
 	traceSummary := summarizeBenchmarkTrace(snapshot)
+	writeBenchmarkJSONL(t, resultsPath, bc, repetition, tc, elapsed, snapshot, selectedAttempt)
 	scoreBenchCase(t, bc, tc, elapsed, "in-process", agentic.MinGCSBytes, toolUsage, traceSummary, draftObservations, selectedAttempt)
 }
 
