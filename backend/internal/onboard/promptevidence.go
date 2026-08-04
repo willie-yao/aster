@@ -16,15 +16,16 @@ const (
 )
 
 var (
-	promptURLPattern            = regexp.MustCompile(`(?i)https?://[^\s<>()\[\]{}"']+`)
-	promptIdentifierPattern     = regexp.MustCompile(`\b[A-Z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*\b`)
-	promptCapitalizedPattern    = regexp.MustCompile(`\b[A-Z][a-z][A-Za-z0-9]*\b`)
-	promptSentenceSplitPattern  = regexp.MustCompile(`[\n.;!?]+`)
-	promptWordPattern           = regexp.MustCompile(`[A-Za-z0-9][A-Za-z0-9_.-]*`)
-	promptPathIdentifierPattern = regexp.MustCompile(`(?:[A-Za-z0-9_.{}*-]+/)+[A-Za-z0-9_.{}*-]+|\b[A-Za-z0-9_.-]+\.(?:log|yaml|yml|json|go|sh)\b`)
-	promptNegationPattern       = regexp.MustCompile(`(?i)\b(no|not|never|without|cannot|can.t|doesn.t|isn.t|aren.t|won.t)\b|must not|do not`)
-	promptInjectionPattern      = regexp.MustCompile(`(?i)ignore (all |any |the )?(previous|system) instructions|follow (these|the) instructions|always report success|reveal (a |the )?(secret|token)|override (the )?system prompt`)
-	prohibitedCapabilityPattern = regexp.MustCompile(`(?i)\b(run|use|invoke|execute|open|launch|inspect|check|view|access)\s+(the\s+|an?\s+)?(ssh|curl|wget|bash|powershell|kubectl|az|aws|gcloud|browser|portal|shell|terminal)\b|\b(ssh|curl|wget)\s+(into|to|the|an?|https?://)|\bkubectl\s+(get|logs|describe|exec|apply|delete|port-forward)\b|\b(via|through|in)\s+(the\s+)?(azure\s+)?portal\b|local[ -]?cli|command[ -]?line|against (a |the )?live (kubernetes|cluster)|run (a )?command`)
+	promptURLPattern               = regexp.MustCompile(`(?i)https?://[^\s<>()\[\]{}"']+`)
+	promptIdentifierPattern        = regexp.MustCompile(`\b[A-Z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*\b`)
+	promptCapitalizedPattern       = regexp.MustCompile(`\b[A-Z][a-z][A-Za-z0-9]*\b`)
+	promptSentenceSplitPattern     = regexp.MustCompile(`[\n.;!?]+`)
+	promptWordPattern              = regexp.MustCompile(`[A-Za-z0-9][A-Za-z0-9_.-]*`)
+	promptPathIdentifierPattern    = regexp.MustCompile(`(?:[A-Za-z0-9_.{}*-]+/)+[A-Za-z0-9_.{}*-]+|\b[A-Za-z0-9_.-]+\.(?:log|yaml|yml|json|go|sh)\b`)
+	promptNegationPattern          = regexp.MustCompile(`(?i)\b(no|not|never|without|cannot|can.t|doesn.t|isn.t|aren.t|won.t)\b|must not|do not`)
+	promptInjectionPattern         = regexp.MustCompile(`(?i)ignore (all |any |the )?(previous|system) instructions|follow (these|the) instructions|always report success|reveal (a |the )?(secret|token)|override (the )?system prompt`)
+	deniedCapabilityMentionPattern = regexp.MustCompile(`(?i)\b(ssh|curl|wget|bash|powershell|kubectl)\b|azure portal|local[ -]?cli|live (cluster|kubernetes api)`)
+	prohibitedCapabilityPattern    = regexp.MustCompile(`(?i)\b(run|use|invoke|execute|open|launch|inspect|check|view|access)\s+(the\s+|an?\s+)?(ssh|curl|wget|bash|powershell|kubectl|az|aws|gcloud|browser|portal|shell|terminal)\b|\b(ssh|curl|wget)\s+(into|to|the|an?|https?://)|\bkubectl\s+(get|logs|describe|exec|apply|delete|port-forward)\b|\b(via|through|in)\s+(the\s+)?(azure\s+)?portal\b|local[ -]?cli|command[ -]?line|against (a |the )?live (kubernetes|cluster)|run (a )?command`)
 )
 
 type evidenceRef struct {
@@ -279,7 +280,7 @@ func groundPromptEvidence(e *promptEvidence, sources []promptSource) {
 	patterns := e.FailurePatterns[:0]
 	for _, item := range e.FailurePatterns {
 		cited := referencedEvidenceText(item.Sources, sources)
-		grounded := substantiveClaimGrounded(item.Name+" "+item.Signal, cited) && substantiveClaimGrounded(item.DoNotConclude, cited) && substantiveClaimGrounded(item.RemediationLimit, cited)
+		grounded := substantiveClaimGrounded(item.Name, cited) && substantiveClaimGrounded(item.Signal, cited) && substantiveClaimGrounded(item.DoNotConclude, cited) && substantiveClaimGrounded(item.RemediationLimit, cited)
 		for _, required := range item.RequiredEvidence {
 			grounded = grounded && substantiveClaimGrounded(required, cited)
 		}
@@ -377,7 +378,7 @@ func exactPathGrounded(path, cited string) bool {
 	wanted := strings.TrimSuffix(path, "/")
 	for _, candidate := range promptPathIdentifierPattern.FindAllString(cited, -1) {
 		candidate = trimEvidenceToken(candidate)
-		if strings.EqualFold(strings.TrimSuffix(candidate, "/"), wanted) {
+		if strings.TrimSuffix(candidate, "/") == wanted {
 			return true
 		}
 	}
@@ -412,12 +413,8 @@ func substantiveClaimGroundedInSegment(claim, cited string) bool {
 		return false
 	}
 	stop := map[string]struct{}{"a": {}, "an": {}, "and": {}, "are": {}, "as": {}, "at": {}, "be": {}, "before": {}, "by": {}, "do": {}, "does": {}, "for": {}, "from": {}, "if": {}, "in": {}, "is": {}, "it": {}, "not": {}, "of": {}, "on": {}, "only": {}, "or": {}, "the": {}, "then": {}, "to": {}, "when": {}, "with": {}}
-	citedWords := map[string]struct{}{}
-	for _, word := range promptWordPattern.FindAllString(strings.ToLower(cited), -1) {
-		citedWords[word] = struct{}{}
-	}
-	matched, total := 0, 0
-	seen := map[string]struct{}{}
+	citedWords := promptWordPattern.FindAllString(strings.ToLower(cited), -1)
+	var claimWords []string
 	for _, word := range promptWordPattern.FindAllString(strings.ToLower(claim), -1) {
 		if len(word) < 3 {
 			continue
@@ -425,19 +422,22 @@ func substantiveClaimGroundedInSegment(claim, cited string) bool {
 		if _, ok := stop[word]; ok {
 			continue
 		}
-		if _, ok := seen[word]; ok {
-			continue
-		}
-		seen[word] = struct{}{}
-		total++
-		if _, ok := citedWords[word]; ok {
-			matched++
-		}
+		claimWords = append(claimWords, word)
 	}
-	if total == 0 {
+	if len(claimWords) == 0 {
 		return true
 	}
-	return matched*2 >= total
+	matched, cursor := 0, 0
+	for _, word := range claimWords {
+		for cursor < len(citedWords) && citedWords[cursor] != word {
+			cursor++
+		}
+		if cursor < len(citedWords) {
+			matched++
+			cursor++
+		}
+	}
+	return matched*2 >= len(claimWords)
 }
 
 func validatePromptEvidence(e promptEvidence, input promptDraftInput, credentials []string) error {
@@ -736,19 +736,38 @@ func containsUnavailableInvestigation(values []string) bool {
 	for _, value := range values {
 		normalized := normalizeSecurityText(value)
 		lower := strings.ToLower(normalized)
-		for _, loc := range prohibitedCapabilityPattern.FindAllStringIndex(normalized, -1) {
-			start := loc[0] - 24
-			if start < 0 {
-				start = 0
+		for _, loc := range deniedCapabilityMentionPattern.FindAllStringIndex(lower, -1) {
+			if !capabilityMentionNegated(lower, loc) {
+				return true
 			}
-			prefix := strings.TrimSpace(lower[start:loc[0]])
-			negated := false
-			for _, phrase := range []string{"do not", "don't", "cannot", "must not", "never"} {
-				negated = negated || strings.HasSuffix(prefix, phrase)
+		}
+		for _, loc := range prohibitedCapabilityPattern.FindAllStringIndex(lower, -1) {
+			if !capabilityMentionNegated(lower, loc) {
+				return true
 			}
-			if negated {
-				continue
-			}
+		}
+	}
+	return false
+}
+
+func capabilityMentionNegated(text string, loc []int) bool {
+	start := loc[0] - 32
+	if start < 0 {
+		start = 0
+	}
+	end := loc[1] + 32
+	if end > len(text) {
+		end = len(text)
+	}
+	prefix := strings.TrimSpace(text[start:loc[0]])
+	suffix := strings.TrimSpace(text[loc[1]:end])
+	for _, phrase := range []string{"do not", "do not use", "don't", "don't use", "cannot", "cannot use", "must not", "must not use", "never", "never use", "without"} {
+		if strings.HasSuffix(prefix, phrase) {
+			return true
+		}
+	}
+	for _, phrase := range []string{"is unavailable", "not available", "is not available", "cannot be used", "is disabled"} {
+		if strings.HasPrefix(suffix, phrase) {
 			return true
 		}
 	}

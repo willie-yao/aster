@@ -131,6 +131,12 @@ func TestGroundPromptEvidenceChecksFailureFieldsIndependently(t *testing.T) {
 	if len(evidence.FailurePatterns) != 0 || !strings.Contains(strings.Join(evidence.Unresolved, " "), "failure pattern") {
 		t.Fatalf("unsupported remediation was masked by grounded fields: %+v", evidence)
 	}
+	evidence = validGroundedPromptEvidence()
+	evidence.FailurePatterns[0].Signal = "retries exhaust"
+	groundPromptEvidence(&evidence, input.Sources)
+	if len(evidence.FailurePatterns) != 0 {
+		t.Fatalf("grounded name masked unsupported signal: %+v", evidence)
+	}
 }
 
 func TestSubstantiveGroundingPreservesPolarity(t *testing.T) {
@@ -142,6 +148,24 @@ func TestSubstantiveGroundingPreservesPolarity(t *testing.T) {
 	}
 	if !substantiveClaimGrounded("Controller does not reconcile Project resources.", "Controller does not reconcile Project resources.") {
 		t.Fatal("matching negative claim was rejected")
+	}
+}
+
+func TestSubstantiveGroundingPreservesRelationshipOrder(t *testing.T) {
+	if substantiveClaimGrounded("Controller readiness precedes initialization checks.", "Initialization precedes controller readiness checks.") {
+		t.Fatal("inverted relationship was accepted")
+	}
+}
+
+func TestCapabilityValidationHandlesDirectAndNegativeMentions(t *testing.T) {
+	if !containsUnavailableInvestigation([]string{"Investigate the node over SSH"}) || !containsUnavailableInvestigation([]string{"SSH access is available"}) {
+		t.Fatal("positive SSH capability was accepted")
+	}
+	if containsUnavailableInvestigation([]string{"SSH is unavailable"}) || containsUnavailableInvestigation([]string{"do not use SSH"}) || containsUnavailableInvestigation([]string{"the Pod entered a terminal failure state"}) {
+		t.Fatal("negative or unrelated capability text was rejected")
+	}
+	if !containsUnavailableInvestigation([]string{strings.Repeat("K", 40) + " use SSH"}) {
+		t.Fatal("unicode prefix bypassed capability detection")
 	}
 }
 
