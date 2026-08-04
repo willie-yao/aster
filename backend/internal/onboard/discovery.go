@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 	"unicode"
-	"unicode/utf8"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
@@ -87,6 +86,7 @@ type DiscoveryReport struct {
 
 type repositoryClient interface {
 	Repository(context.Context, Repo, string) (RepositoryMetadata, error)
+	AuthenticatedLogin(context.Context, string) (string, error)
 }
 
 type catalogClient interface {
@@ -103,7 +103,9 @@ func (c prowCatalogClient) Catalog(ctx context.Context) (*jobconfig.Catalog, err
 
 // Discover performs repository-first discovery without rendering or mutation.
 func Discover(ctx context.Context, source, token string) (DiscoveryReport, error) {
-	if strings.TrimSpace(source) == "" {
+	sourceDetected := strings.TrimSpace(source) == ""
+	var detectedRepo *Repo
+	if sourceDetected {
 		remote, err := (gitRemoteDetector{}).Origin(ctx)
 		if err != nil {
 			return DiscoveryReport{}, fmt.Errorf("source repository is required and no GitHub origin remote was detected")
@@ -114,11 +116,24 @@ func Discover(ctx context.Context, source, token string) (DiscoveryReport, error
 	if err != nil {
 		return DiscoveryReport{}, err
 	}
+	if sourceDetected {
+		detected := repo
+		detectedRepo = &detected
+	}
 	client := defaultDiscoveryHTTPClient()
-	return discoverRepository(ctx, repo, token, githubRepositoryClient{client: client}, prowCatalogClient{client: client})
+	repositories := githubRepositoryClient{client: client}
+	owner, warning := inferDashboardOwner(ctx, token, detectedRepo, repositories)
+	report, err := discoverRepository(ctx, repo, token, owner, repositories, prowCatalogClient{client: client})
+	if err != nil {
+		return DiscoveryReport{}, err
+	}
+	if warning != "" {
+		report.Warnings = append(report.Warnings, warning)
+	}
+	return report, nil
 }
 
-func discoverRepository(ctx context.Context, repo Repo, token string, repositories repositoryClient, catalogs catalogClient) (DiscoveryReport, error) {
+func discoverRepository(ctx context.Context, repo Repo, token string, dashboardOwner Inferred[string], repositories repositoryClient, catalogs catalogClient) (DiscoveryReport, error) {
 	metadata, err := repositories.Repository(ctx, repo, token)
 	if err != nil {
 		return DiscoveryReport{}, err
@@ -139,14 +154,7 @@ func discoverRepository(ctx context.Context, repo Repo, token string, repositori
 	}
 
 	dashboardName := suggestedDashboardName(repo.Name)
-	dashboardRepo := repo.Owner + "/" + dashboardName
-	shortName := suggestShortName(repo.Name)
-	shortConfidence := ConfidenceLow
-	shortSource := "repository name did not provide a safe abbreviation"
-	if shortName != "" {
-		shortConfidence = ConfidenceMedium
-		shortSource = "initials from the GitHub repository name"
-	}
+	dashboardRepo, siteURL := inferredDashboardDestination(dashboardOwner, dashboardName)
 	report := DiscoveryReport{
 		SourceRepo:      repo,
 		MetadataSource:  "GitHub repository API",
@@ -157,11 +165,11 @@ func discoverRepository(ctx context.Context, repo Repo, token string, repositori
 		Identity: IdentitySuggestions{
 			ID:        Inferred[string]{Value: repo.Name, Source: "GitHub repository name", Confidence: ConfidenceHigh},
 			Name:      Inferred[string]{Value: labelFor(repo.Name), Source: "GitHub repository name", Confidence: ConfidenceMedium},
-			ShortName: Inferred[string]{Value: shortName, Source: shortSource, Confidence: shortConfidence},
+			ShortName: Inferred[string]{Source: "no reliable project abbreviation inferred", Confidence: ConfidenceLow},
 		},
-		DashboardRepo: Inferred[string]{Value: dashboardRepo, Source: "source repository owner and name", Confidence: ConfidenceHigh},
+		DashboardRepo: dashboardRepo,
 		BasePath:      Inferred[string]{Value: "/" + dashboardName, Source: "suggested dashboard repository name", Confidence: ConfidenceHigh},
-		SiteURL:       Inferred[string]{Value: "https://" + repo.Owner + ".github.io/" + dashboardName, Source: "GitHub Pages repository convention", Confidence: ConfidenceHigh},
+		SiteURL:       siteURL,
 		Categories:    InferCategories(categoryNames),
 	}
 	if metadata.Upstream != nil && metadata.Upstream.FullName != repo.FullName {
@@ -173,6 +181,39 @@ func discoverRepository(ctx context.Context, repo Repo, token string, repositori
 		report.Warnings = append(report.Warnings, "Matching Prow jobs do not advertise a TestGrid dashboard. Provide a TestGrid dashboard or artifact bucket explicitly.")
 	}
 	return report, nil
+}
+
+func inferDashboardOwner(ctx context.Context, token string, detectedRepo *Repo, repositories repositoryClient) (Inferred[string], string) {
+	if token != "" {
+		login, err := repositories.AuthenticatedLogin(ctx, token)
+		if err == nil && login != "" && !strings.Contains(login, token) {
+			return Inferred[string]{Value: login, Source: "authenticated GitHub login", Confidence: ConfidenceHigh}, ""
+		}
+		warning := "The authenticated GitHub login could not be used for the dashboard repository suggestion."
+		if detectedRepo != nil && detectedRepo.Owner != "" {
+			return Inferred[string]{Value: detectedRepo.Owner, Source: "original Git remote owner", Confidence: ConfidenceHigh}, warning
+		}
+		return Inferred[string]{Source: "no authenticated GitHub login or detected Git remote owner", Confidence: ConfidenceLow}, warning
+	}
+	if detectedRepo != nil && detectedRepo.Owner != "" {
+		return Inferred[string]{Value: detectedRepo.Owner, Source: "original Git remote owner", Confidence: ConfidenceHigh}, ""
+	}
+	return Inferred[string]{Source: "no authenticated GitHub login or detected Git remote owner", Confidence: ConfidenceLow}, ""
+}
+
+func inferredDashboardDestination(owner Inferred[string], dashboardName string) (Inferred[string], Inferred[string]) {
+	if owner.Value == "" {
+		source := owner.Source
+		if source == "" {
+			source = "no authenticated GitHub login or detected Git remote owner"
+		}
+		return Inferred[string]{Source: source, Confidence: ConfidenceLow}, Inferred[string]{Source: source, Confidence: ConfidenceLow}
+	}
+	return Inferred[string]{
+			Value: owner.Value + "/" + dashboardName, Source: owner.Source + " and source repository name", Confidence: owner.Confidence,
+		}, Inferred[string]{
+			Value: "https://" + owner.Value + ".github.io/" + dashboardName, Source: owner.Source + " and GitHub Pages repository convention", Confidence: owner.Confidence,
+		}
 }
 
 func matchingDefinitions(catalog *jobconfig.Catalog, repo string) []jobconfig.JobDefinition {
@@ -323,22 +364,6 @@ func suggestedDashboardName(sourceName string) string {
 		sourceName = sourceName[:maxSource]
 	}
 	return sourceName + suffix
-}
-
-func suggestShortName(name string) string {
-	parts := strings.FieldsFunc(name, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
-	if len(parts) < 2 || len(parts) > 5 {
-		return ""
-	}
-	var b strings.Builder
-	for _, part := range parts {
-		r, _ := utf8.DecodeRuneInString(part)
-		b.WriteRune(unicode.ToUpper(r))
-	}
-	if b.Len() < 2 {
-		return ""
-	}
-	return b.String()
 }
 
 func defaultDiscoveryHTTPClient() *http.Client {

@@ -36,7 +36,10 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 	if err != nil {
 		return nil, opts, err
 	}
+	var detectedRepo *Repo
 	if detectedFromGit {
+		original := repo
+		detectedRepo = &original
 		metadata, metadataErr := deps.repositories.Repository(ctx, repo, opts.GitHubToken)
 		if metadataErr != nil {
 			return nil, opts, metadataErr
@@ -56,12 +59,20 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 		}
 	}
 	opts.SourceRepo = repo.FullName
+	dashboardOwner := Inferred[string]{Source: "no authenticated GitHub login or detected Git remote owner", Confidence: ConfidenceLow}
+	ownerWarning := ""
+	if opts.DashboardRepo == "" {
+		dashboardOwner, ownerWarning = inferDashboardOwner(ctx, opts.GitHubToken, detectedRepo, deps.repositories)
+	}
 	fmt.Fprintf(deps.terminal.Out, "\nInspecting GitHub metadata and kubernetes/test-infra for %s...\n", repo.FullName)
 	discoveryCtx, cancelDiscovery := context.WithTimeout(ctx, onboardingDiscoveryTimeout)
-	report, err := discoverRepository(discoveryCtx, repo, opts.GitHubToken, deps.repositories, deps.catalogs)
+	report, err := discoverRepository(discoveryCtx, repo, opts.GitHubToken, dashboardOwner, deps.repositories, deps.catalogs)
 	cancelDiscovery()
 	if err != nil {
 		return nil, opts, err
+	}
+	if ownerWarning != "" {
+		report.Warnings = append(report.Warnings, ownerWarning)
 	}
 	opts.SourceRepo = report.SourceRepo.FullName
 	fmt.Fprintf(deps.terminal.Out, "Found %d Prow job definition(s) that test this repository.\n", len(report.MatchingJobs))
@@ -109,7 +120,7 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 	if opts.DashboardRepo == "" {
 		opts.DashboardRepo, err = prompt.Input(ctx, inputPrompt{
 			Title:       "Dashboard repository",
-			Description: "Existing owner/name repository that will publish the dashboard.",
+			Description: "Existing owner/name consumer repository you control that will publish the dashboard.",
 			Value:       report.DashboardRepo.Value,
 			Required:    true,
 			Validate: func(value string) error {
@@ -162,7 +173,7 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 	if opts.ShortName == "" {
 		opts.ShortName, err = prompt.Input(ctx, inputPrompt{
 			Title:       "Short name",
-			Description: "Optional compact label. Enter none or - to omit it.",
+			Description: "Optional established project abbreviation. Enter none or - to omit it.",
 			Value:       report.Identity.ShortName.Value,
 		})
 		if err != nil {

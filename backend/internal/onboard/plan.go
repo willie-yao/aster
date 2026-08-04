@@ -152,7 +152,7 @@ func buildPlan(ctx context.Context, opts Options, planning planningContext, deps
 		plan.Provenance["source_repo"] = Inferred[string]{Value: sourceRepo.FullName, Source: planning.discovery.MetadataSource, Confidence: ConfidenceHigh}
 		plan.Provenance["project_id"] = confirmedInference(opts.ID, planning.discovery.Identity.ID, "interactive input")
 		plan.Provenance["project_name"] = confirmedInference(opts.Name, planning.discovery.Identity.Name, "interactive input")
-		plan.Provenance["dashboard_repo"] = confirmedInference(dashboardRepo.FullName, planning.discovery.DashboardRepo, "interactive input")
+		plan.Provenance["dashboard_repo"] = confirmedInference(dashboardRepo.FullName, planning.discovery.DashboardRepo, "confirmed dashboard repository input")
 	}
 	return plan, nil
 }

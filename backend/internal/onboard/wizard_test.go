@@ -15,10 +15,16 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prow/jobconfig"
 )
 
+const defaultTestDashboardRepo = "example/project-prow-ai-dashboard"
+
 type wizardFakeRepositoryClient struct {
-	metadata RepositoryMetadata
-	err      error
-	calls    int
+	metadata      RepositoryMetadata
+	err           error
+	calls         int
+	authLogin     string
+	authErr       error
+	authCalls     int
+	authTokenSeen string
 }
 
 func (f *wizardFakeRepositoryClient) Repository(_ context.Context, repo Repo, _ string) (RepositoryMetadata, error) {
@@ -33,6 +39,12 @@ func (f *wizardFakeRepositoryClient) Repository(_ context.Context, repo Repo, _ 
 		out.Repo.Visibility = "public"
 	}
 	return out, nil
+}
+
+func (f *wizardFakeRepositoryClient) AuthenticatedLogin(_ context.Context, token string) (string, error) {
+	f.authCalls++
+	f.authTokenSeen = token
+	return f.authLogin, f.authErr
 }
 
 type wizardFakeCatalogClient struct {
@@ -176,7 +188,7 @@ func wizardDependencies(input string) (dependencies, *bytes.Buffer, *fakeScaffol
 }
 
 func TestWizard_DefaultsAccepted(t *testing.T) {
-	input := "\n\n\n\n\n\nn\n\ny\n"
+	input := strings.Join([]string{"", "", defaultTestDashboardRepo, "", "", "", "n", "", "y"}, "\n") + "\n"
 	deps, out, writer, _ := wizardDependencies(input)
 	opts := Options{SourceRepo: "example/project", EngineRef: "main", NoPrompt: true}
 	if err := run(context.Background(), opts, deps); err != nil {
@@ -201,16 +213,16 @@ func TestWizard_DefaultsAccepted(t *testing.T) {
 
 func TestWizard_ConfigureLaterProducesDisabledScaffold(t *testing.T) {
 	input := strings.Join([]string{
-		"",  // strongest dashboard
-		"",  // deployment
-		"",  // dashboard repo
-		"",  // id
-		"",  // name
-		"",  // short name
-		"",  // enable AI
-		"9", // configure later
-		"",  // output
-		"y", // confirm
+		"",                       // strongest dashboard
+		"",                       // deployment
+		defaultTestDashboardRepo, // dashboard repo
+		"",                       // id
+		"",                       // name
+		"",                       // short name
+		"",                       // enable AI
+		"9",                      // configure later
+		"",                       // output
+		"y",                      // confirm
 	}, "\n") + "\n"
 	deps, out, writer, _ := wizardDependencies(input)
 	opts := Options{SourceRepo: "example/project", EngineRef: "main", NoPrompt: true}
@@ -271,12 +283,12 @@ func TestWizard_CancellationAtEachPromptLeavesNoFiles(t *testing.T) {
 		"dashboard candidate": {"q"},
 		"deployment":          {"", "q"},
 		"dashboard repo":      {"", "", "q"},
-		"project id":          {"", "", "", "q"},
-		"project name":        {"", "", "", "", "q"},
-		"short name":          {"", "", "", "", "", "q"},
-		"AI enabled":          {"", "", "", "", "", "", "q"},
-		"output":              {"", "", "", "", "", "", "n", "q"},
-		"final confirmation":  {"", "", "", "", "", "", "n", "", "q"},
+		"project id":          {"", "", defaultTestDashboardRepo, "q"},
+		"project name":        {"", "", defaultTestDashboardRepo, "", "q"},
+		"short name":          {"", "", defaultTestDashboardRepo, "", "", "q"},
+		"AI enabled":          {"", "", defaultTestDashboardRepo, "", "", "", "q"},
+		"output":              {"", "", defaultTestDashboardRepo, "", "", "", "n", "q"},
+		"final confirmation":  {"", "", defaultTestDashboardRepo, "", "", "", "n", "", "q"},
 	}
 	for name, answers := range stages {
 		t.Run(name, func(t *testing.T) {
@@ -307,7 +319,7 @@ func TestWizard_EOFCancelsCleanly(t *testing.T) {
 }
 
 func TestWizard_FinalConfirmationDefaultsToNo(t *testing.T) {
-	input := "\n\n\n\n\n\nn\n\n\n"
+	input := strings.Join([]string{"", "", defaultTestDashboardRepo, "", "", "", "n", "", ""}, "\n") + "\n"
 	deps, _, writer, _ := wizardDependencies(input)
 	opts := Options{SourceRepo: "example/project", EngineRef: "main", NoPrompt: true}
 	if err := run(context.Background(), opts, deps); err != nil {
@@ -319,7 +331,7 @@ func TestWizard_FinalConfirmationDefaultsToNo(t *testing.T) {
 }
 
 func TestWizard_DryRunPerformsNoWrites(t *testing.T) {
-	input := "\n\n\n\n\n\nn\n\n"
+	input := strings.Join([]string{"", "", defaultTestDashboardRepo, "", "", "", "n", ""}, "\n") + "\n"
 	deps, out, writer, _ := wizardDependencies(input)
 	opts := Options{SourceRepo: "example/project", EngineRef: "main", NoPrompt: true, DryRun: true}
 	if err := run(context.Background(), opts, deps); err != nil {
@@ -334,7 +346,7 @@ func TestWizard_DryRunPerformsNoWrites(t *testing.T) {
 }
 
 func TestWizard_ExistingOutputIsPreserved(t *testing.T) {
-	input := "\n\n\n\n\n\nn\n\n"
+	input := strings.Join([]string{"", "", defaultTestDashboardRepo, "", "", "", "n", ""}, "\n") + "\n"
 	deps, _, writer, _ := wizardDependencies(input)
 	writer.validateErr = errors.New("refusing to overwrite existing project.yaml")
 	opts := Options{SourceRepo: "example/project", EngineRef: "main", NoPrompt: true}
@@ -390,7 +402,7 @@ func TestRun_CompleteFlagsRemainNonInteractive(t *testing.T) {
 }
 
 func TestRun_InteractiveAndFlaggedInputsGenerateSameFiles(t *testing.T) {
-	wizardInput := "\n\n\n\n\n\nn\n\ny\n"
+	wizardInput := strings.Join([]string{"", "", defaultTestDashboardRepo, "", "", "", "n", "", "y"}, "\n") + "\n"
 	wizardDeps, _, wizardWriter, _ := wizardDependencies(wizardInput)
 	if err := run(context.Background(), Options{SourceRepo: "example/project", EngineRef: "main", NoPrompt: true}, wizardDeps); err != nil {
 		t.Fatalf("wizard run: %v", err)
@@ -413,7 +425,7 @@ func TestRun_InteractiveAndFlaggedInputsGenerateSameFiles(t *testing.T) {
 }
 
 func TestRun_K8sInteractiveAndFlaggedInputsGenerateSameFiles(t *testing.T) {
-	wizardInput := strings.Join([]string{"", "2", "", "", "", "", "n", "", "y"}, "\n") + "\n"
+	wizardInput := strings.Join([]string{"", "2", defaultTestDashboardRepo, "", "", "", "n", "", "y"}, "\n") + "\n"
 	wizardDeps, _, wizardWriter, _ := wizardDependencies(wizardInput)
 	if err := run(context.Background(), Options{SourceRepo: "example/project", EngineRef: "main", NoPrompt: true}, wizardDeps); err != nil {
 		t.Fatalf("wizard run: %v", err)
@@ -464,7 +476,7 @@ func TestBuildPlan_DoesNotContainTokens(t *testing.T) {
 var _ io.Reader = panicReader{}
 
 func TestWizard_CategoryTokensCanBeEdited(t *testing.T) {
-	input := strings.Join([]string{"", "", "", "", "", "", "n", "", "custom", "y"}, "\n") + "\n"
+	input := strings.Join([]string{"", "", defaultTestDashboardRepo, "", "", "", "n", "", "custom", "y"}, "\n") + "\n"
 	deps, out, writer, sweeper := wizardDependencies(input)
 	sweeper.jobs = []models.ProwJob{
 		{Name: "periodic-project-aks-one", JobType: models.JobTypePeriodic},
@@ -528,9 +540,9 @@ func TestWizard_AdditionalCancellationStages(t *testing.T) {
 	})
 
 	stages := map[string][]string{
-		"AI provider":   {"", "", "", "", "", "", "", "q"},
-		"AI custom API": {"", "", "", "", "", "", "", "8", "q"},
-		"AI endpoint":   {"", "", "", "", "", "", "", "8", "", "q"},
+		"AI provider":   {"", "", defaultTestDashboardRepo, "", "", "", "", "q"},
+		"AI custom API": {"", "", defaultTestDashboardRepo, "", "", "", "", "8", "q"},
+		"AI endpoint":   {"", "", defaultTestDashboardRepo, "", "", "", "", "8", "", "q"},
 	}
 	for name, answers := range stages {
 		t.Run(name, func(t *testing.T) {
@@ -546,7 +558,7 @@ func TestWizard_AdditionalCancellationStages(t *testing.T) {
 	}
 
 	t.Run("AI model", func(t *testing.T) {
-		answers := []string{"", "", "", "", "", "", "", "8", "", "https://provider.example/v1/chat/completions", "q"}
+		answers := []string{"", "", defaultTestDashboardRepo, "", "", "", "", "8", "", "https://provider.example/v1/chat/completions", "q"}
 		deps, _, writer, _ := wizardDependencies(strings.Join(answers, "\n") + "\n")
 		if err := run(context.Background(), Options{SourceRepo: "example/project", EngineRef: "main", NoPrompt: true}, deps); err != nil {
 			t.Fatalf("run: %v", err)
@@ -557,7 +569,7 @@ func TestWizard_AdditionalCancellationStages(t *testing.T) {
 	})
 
 	t.Run("Pages endpoint warning", func(t *testing.T) {
-		answers := []string{"", "", "", "", "", "", "", "8", "", "http://localhost:8000/v1/chat/completions", "model", "q"}
+		answers := []string{"", "", defaultTestDashboardRepo, "", "", "", "", "8", "", "http://localhost:8000/v1/chat/completions", "model", "q"}
 		deps, _, writer, _ := wizardDependencies(strings.Join(answers, "\n") + "\n")
 		if err := run(context.Background(), Options{SourceRepo: "example/project", EngineRef: "main", NoPrompt: true}, deps); err != nil {
 			t.Fatalf("run: %v", err)
@@ -568,7 +580,7 @@ func TestWizard_AdditionalCancellationStages(t *testing.T) {
 	})
 
 	t.Run("prompt drafting", func(t *testing.T) {
-		answers := []string{"", "", "", "", "", "", "", "", "", "q"}
+		answers := []string{"", "", defaultTestDashboardRepo, "", "", "", "", "", "", "q"}
 		deps, _, writer, _ := wizardDependencies(strings.Join(answers, "\n") + "\n")
 		opts := Options{
 			SourceRepo: "example/project", EngineRef: "main", AIToken: "fixture-token",
@@ -583,7 +595,7 @@ func TestWizard_AdditionalCancellationStages(t *testing.T) {
 	})
 
 	t.Run("category editing", func(t *testing.T) {
-		answers := []string{"", "", "", "", "", "", "n", "", "q"}
+		answers := []string{"", "", defaultTestDashboardRepo, "", "", "", "n", "", "q"}
 		deps, _, writer, sweeper := wizardDependencies(strings.Join(answers, "\n") + "\n")
 		sweeper.jobs = []models.ProwJob{
 			{Name: "periodic-project-aks-one", JobType: models.JobTypePeriodic},
@@ -601,6 +613,10 @@ func TestWizard_AdditionalCancellationStages(t *testing.T) {
 
 type forkRepositoryClient struct{}
 
+func (forkRepositoryClient) AuthenticatedLogin(context.Context, string) (string, error) {
+	return "", nil
+}
+
 func (forkRepositoryClient) Repository(_ context.Context, repo Repo, _ string) (RepositoryMetadata, error) {
 	if repo.FullName == "fork-owner/project" {
 		upstream := Repo{Owner: "upstream-owner", Name: "project", FullName: "upstream-owner/project"}
@@ -613,7 +629,7 @@ func (forkRepositoryClient) Repository(_ context.Context, repo Repo, _ string) (
 	return RepositoryMetadata{Repo: repo}, nil
 }
 
-func TestWizard_DetectedForkDefaultsToUpstream(t *testing.T) {
+func TestWizard_DetectedForkUsesUpstreamSourceAndForkDashboardOwner(t *testing.T) {
 	input := strings.Join([]string{"", "", "", "", "", "", "", "", "n", "", "y"}, "\n") + "\n"
 	deps, out, writer, _ := wizardDependencies(input)
 	deps.repositories = forkRepositoryClient{}
@@ -629,8 +645,15 @@ func TestWizard_DetectedForkDefaultsToUpstream(t *testing.T) {
 	if !strings.Contains(out.String(), "Detected GitHub fork upstream: upstream-owner/project") {
 		t.Fatalf("upstream prompt missing:\n%s", out.String())
 	}
-	if !strings.Contains(writer.files["project.yaml"], `owner: "upstream-owner"`) {
-		t.Fatalf("upstream source repo not used:\n%s", writer.files["project.yaml"])
+	projectYAML := writer.files["project.yaml"]
+	if !strings.Contains(projectYAML, `owner: "upstream-owner"`) {
+		t.Fatalf("upstream source repo not used:\n%s", projectYAML)
+	}
+	if !strings.Contains(projectYAML, `site_url: "https://fork-owner.github.io/project-prow-ai-dashboard"`) {
+		t.Fatalf("detected fork owner was not preserved for the dashboard destination:\n%s", projectYAML)
+	}
+	if !strings.Contains(out.String(), "original Git remote owner and source repository name (high confidence)") {
+		t.Fatalf("dashboard inference source missing:\n%s", out.String())
 	}
 }
 
@@ -715,15 +738,15 @@ func TestBuildPlan_SeparatesDraftingAndDeploymentProviders(t *testing.T) {
 
 func TestWizard_ExplicitTestGridPromptsForRequiredPresubmits(t *testing.T) {
 	input := strings.Join([]string{
-		"",  // include presubmits, default yes because the dashboard has no periodics
-		"",  // deployment
-		"",  // dashboard repo
-		"",  // id
-		"",  // name
-		"",  // short name
-		"n", // AI
-		"",  // output
-		"y", // confirm
+		"",                       // include presubmits, default yes because the dashboard has no periodics
+		"",                       // deployment
+		defaultTestDashboardRepo, // dashboard repo
+		"",                       // id
+		"",                       // name
+		"",                       // short name
+		"n",                      // AI
+		"",                       // output
+		"y",                      // confirm
 	}, "\n") + "\n"
 	deps, out, writer, _ := wizardDependencies(input)
 	catalog := deps.catalogs.(*wizardFakeCatalogClient).catalog
@@ -787,14 +810,14 @@ func TestWizard_ValidatesSeedCredentialsBeforeOutput(t *testing.T) {
 
 func TestWizard_APIModeValueIsExplicitWithoutBookkeeping(t *testing.T) {
 	input := strings.Join([]string{
-		"",  // strongest dashboard
-		"",  // dashboard repo
-		"",  // id
-		"",  // name
-		"",  // short name
-		"n", // AI
-		"",  // output
-		"y", // confirm
+		"",                       // strongest dashboard
+		defaultTestDashboardRepo, // dashboard repo
+		"",                       // id
+		"",                       // name
+		"",                       // short name
+		"n",                      // AI
+		"",                       // output
+		"y",                      // confirm
 	}, "\n") + "\n"
 	deps, out, writer, _ := wizardDependencies(input)
 	opts := Options{SourceRepo: "example/project", Mode: modeK8s, EngineRef: "main", NoPrompt: true}
@@ -811,16 +834,16 @@ func TestWizard_APIModeValueIsExplicitWithoutBookkeeping(t *testing.T) {
 
 func TestWizard_ClearSentinelsRemoveOptionalSuggestions(t *testing.T) {
 	input := strings.Join([]string{
-		"",     // strongest dashboard
-		"",     // deployment
-		"",     // dashboard repo
-		"",     // id
-		"",     // name
-		"none", // omit inferred short name
-		"n",    // AI
-		"",     // output
-		"none", // clear categories
-		"y",    // confirm
+		"",                       // strongest dashboard
+		"",                       // deployment
+		defaultTestDashboardRepo, // dashboard repo
+		"",                       // id
+		"",                       // name
+		"none",                   // omit inferred short name
+		"n",                      // AI
+		"",                       // output
+		"none",                   // clear categories
+		"y",                      // confirm
 	}, "\n") + "\n"
 	deps, out, writer, sweeper := wizardDependencies(input)
 	sweeper.jobs = []models.ProwJob{
@@ -883,7 +906,7 @@ func TestWizard_RejectsCredentialsEnteredAsRepositoriesWithoutLeaking(t *testing
 }
 
 func TestWizard_UsesCanonicalRepositoryFromGitHub(t *testing.T) {
-	input := strings.Join([]string{"", "", "", "", "", "", "n", "", "y"}, "\n") + "\n"
+	input := strings.Join([]string{"", "", defaultTestDashboardRepo, "", "", "", "n", "", "y"}, "\n") + "\n"
 	deps, out, writer, _ := wizardDependencies(input)
 	deps.repositories = &wizardFakeRepositoryClient{metadata: RepositoryMetadata{Repo: Repo{
 		Owner: "canonical", Name: "project", FullName: "canonical/project", Branch: "main", Visibility: "public",
@@ -908,15 +931,15 @@ func TestWizard_UsesCanonicalRepositoryFromGitHub(t *testing.T) {
 
 func TestWizard_DashboardWidePresubmitsControlPrompt(t *testing.T) {
 	input := strings.Join([]string{
-		"y", // include dashboard presubmits even though none test the source repo
-		"",  // deployment
-		"",  // dashboard repo
-		"",  // id
-		"",  // name
-		"",  // short name
-		"n", // AI
-		"",  // output
-		"y", // confirm
+		"y",                      // include dashboard presubmits even though none test the source repo
+		"",                       // deployment
+		defaultTestDashboardRepo, // dashboard repo
+		"",                       // id
+		"",                       // name
+		"",                       // short name
+		"n",                      // AI
+		"",                       // output
+		"y",                      // confirm
 	}, "\n") + "\n"
 	deps, out, writer, _ := wizardDependencies(input)
 	catalog := deps.catalogs.(*wizardFakeCatalogClient).catalog
@@ -940,5 +963,122 @@ func TestWizard_DashboardWidePresubmitsControlPrompt(t *testing.T) {
 	}
 	if !strings.Contains(writer.files["project.yaml"], "include_presubmits: true") {
 		t.Fatalf("presubmit choice was not rendered:\n%s", writer.files["project.yaml"])
+	}
+}
+
+func TestWizard_AuthenticatedUserOwnsUpstreamDashboardSuggestion(t *testing.T) {
+	deps, out, _, _ := wizardDependencies("")
+	repositories := deps.repositories.(*wizardFakeRepositoryClient)
+	repositories.metadata.Repo = Repo{Owner: "upstream-org", Name: "project", FullName: "upstream-org/project", Branch: "main", Visibility: "public"}
+	repositories.authLogin = "authenticated-owner"
+	for key, definition := range deps.catalogs.(*wizardFakeCatalogClient).catalog.Jobs {
+		definition.Refs = []jobconfig.RepoRef{{Org: "upstream-org", Repo: "project", BaseRef: "main"}}
+		deps.catalogs.(*wizardFakeCatalogClient).catalog.Jobs[key] = definition
+	}
+	ui := &queuedWizardUI{inputs: []string{usePromptDefault}}
+	deps.wizard = ui
+	disabled := false
+	plan, _, err := runWizard(context.Background(), Options{
+		SourceRepo: "upstream-org/project", TestGrid: "dashboard-a", Mode: modePages,
+		ID: "project", Name: "Project", ShortName: "P", OutDir: "out", EngineRef: "main",
+		AIEnabled: &disabled, NoPrompt: true, DryRun: true, GitHubToken: "fixture-token",
+	}, deps)
+	if err != nil {
+		t.Fatalf("runWizard: %v\n%s", err, out.String())
+	}
+	if plan.DashboardRepo.FullName != "authenticated-owner/project-prow-ai-dashboard" {
+		t.Fatalf("dashboard repo = %+v", plan.DashboardRepo)
+	}
+	if repositories.authCalls != 1 || repositories.authTokenSeen != "fixture-token" {
+		t.Fatalf("auth calls=%d token=%q", repositories.authCalls, repositories.authTokenSeen)
+	}
+	if len(ui.inputPrompts) != 1 || ui.inputPrompts[0].Title != "Dashboard repository" || ui.inputPrompts[0].Value != plan.DashboardRepo.FullName {
+		t.Fatalf("dashboard prompt = %+v", ui.inputPrompts)
+	}
+	if inferred := plan.Provenance["dashboard_repo"]; inferred.Source != "authenticated GitHub login and source repository name" || inferred.Confidence != ConfidenceHigh {
+		t.Fatalf("dashboard provenance = %+v", inferred)
+	}
+}
+
+func TestWizard_NoSafeDashboardOwnerRequiresInput(t *testing.T) {
+	deps, out, _, _ := wizardDependencies("")
+	ui := &queuedWizardUI{inputs: []string{"chosen-owner/project-prow-ai-dashboard"}}
+	deps.wizard = ui
+	disabled := false
+	plan, _, err := runWizard(context.Background(), Options{
+		SourceRepo: "example/project", TestGrid: "dashboard-a", Mode: modePages,
+		ID: "project", Name: "Project", ShortName: "P", OutDir: "out", EngineRef: "main",
+		AIEnabled: &disabled, NoPrompt: true, DryRun: true,
+	}, deps)
+	if err != nil {
+		t.Fatalf("runWizard: %v\n%s", err, out.String())
+	}
+	if len(ui.inputPrompts) != 1 || ui.inputPrompts[0].Title != "Dashboard repository" || ui.inputPrompts[0].Value != "" || !ui.inputPrompts[0].Required {
+		t.Fatalf("dashboard prompt = %+v", ui.inputPrompts)
+	}
+	if plan.DashboardRepo.FullName != "chosen-owner/project-prow-ai-dashboard" {
+		t.Fatalf("dashboard repo = %+v", plan.DashboardRepo)
+	}
+	if inferred := plan.Provenance["dashboard_repo"]; inferred.Source != "confirmed dashboard repository input" || inferred.Confidence != ConfidenceHigh {
+		t.Fatalf("dashboard provenance = %+v", inferred)
+	}
+}
+
+func TestWizard_ExplicitDashboardRepositorySkipsOwnerLookup(t *testing.T) {
+	deps, out, _, _ := wizardDependencies("")
+	repositories := deps.repositories.(*wizardFakeRepositoryClient)
+	repositories.authLogin = "authenticated-owner"
+	ui := &queuedWizardUI{}
+	deps.wizard = ui
+	disabled := false
+	plan, _, err := runWizard(context.Background(), Options{
+		SourceRepo: "example/project", DashboardRepo: "explicit-owner/dashboard", TestGrid: "dashboard-a", Mode: modePages,
+		ID: "project", Name: "Project", ShortName: "P", OutDir: "out", EngineRef: "main",
+		AIEnabled: &disabled, NoPrompt: true, DryRun: true, GitHubToken: "fixture-token",
+	}, deps)
+	if err != nil {
+		t.Fatalf("runWizard: %v\n%s", err, out.String())
+	}
+	if plan.DashboardRepo.FullName != "explicit-owner/dashboard" || repositories.authCalls != 0 || len(ui.inputPrompts) != 0 {
+		t.Fatalf("plan=%+v authCalls=%d prompts=%+v", plan.DashboardRepo, repositories.authCalls, ui.inputPrompts)
+	}
+}
+
+func TestWizard_ShortNameDefaultsEmpty(t *testing.T) {
+	deps, out, _, _ := wizardDependencies("")
+	ui := &queuedWizardUI{inputs: []string{usePromptDefault}}
+	deps.wizard = ui
+	disabled := false
+	plan, _, err := runWizard(context.Background(), Options{
+		SourceRepo: "example/project", DashboardRepo: defaultTestDashboardRepo, TestGrid: "dashboard-a", Mode: modePages,
+		ID: "project", Name: "Project", OutDir: "out", EngineRef: "main",
+		AIEnabled: &disabled, NoPrompt: true, DryRun: true,
+	}, deps)
+	if err != nil {
+		t.Fatalf("runWizard: %v\n%s", err, out.String())
+	}
+	if len(ui.inputPrompts) != 1 || ui.inputPrompts[0].Title != "Short name" || ui.inputPrompts[0].Value != "" {
+		t.Fatalf("short-name prompt = %+v", ui.inputPrompts)
+	}
+	if plan.Project.ShortName != "" || strings.Contains(plan.Files["project.yaml"], "short_name:") {
+		t.Fatalf("project short name = %q\n%s", plan.Project.ShortName, plan.Files["project.yaml"])
+	}
+}
+
+func TestWizard_ExplicitShortNameIsPreserved(t *testing.T) {
+	deps, out, _, _ := wizardDependencies("")
+	ui := &queuedWizardUI{}
+	deps.wizard = ui
+	disabled := false
+	plan, _, err := runWizard(context.Background(), Options{
+		SourceRepo: "example/project", DashboardRepo: defaultTestDashboardRepo, TestGrid: "dashboard-a", Mode: modePages,
+		ID: "project", Name: "Project", ShortName: "CAPZ", OutDir: "out", EngineRef: "main",
+		AIEnabled: &disabled, NoPrompt: true, DryRun: true,
+	}, deps)
+	if err != nil {
+		t.Fatalf("runWizard: %v\n%s", err, out.String())
+	}
+	if plan.Project.ShortName != "CAPZ" || !strings.Contains(plan.Files["project.yaml"], `short_name: "CAPZ"`) || len(ui.inputPrompts) != 0 {
+		t.Fatalf("short name=%q prompts=%+v\n%s", plan.Project.ShortName, ui.inputPrompts, plan.Files["project.yaml"])
 	}
 }

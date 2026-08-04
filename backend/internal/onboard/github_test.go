@@ -159,3 +159,60 @@ func TestGitRemoteDetector(t *testing.T) {
 		})
 	}
 }
+
+func TestGitHubRepositoryClientAuthenticatedLogin(t *testing.T) {
+	const token = "fixture-token"
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.URL.Path != "/user" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer "+token {
+			t.Fatalf("authorization = %q", got)
+		}
+		_, _ = w.Write([]byte(`{"login":"dashboard-owner"}`))
+	}))
+	defer srv.Close()
+	old := githubAPIBaseURL
+	githubAPIBaseURL = srv.URL
+	t.Cleanup(func() { githubAPIBaseURL = old })
+
+	login, err := (githubRepositoryClient{client: srv.Client()}).AuthenticatedLogin(context.Background(), token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if login != "dashboard-owner" || requests != 1 {
+		t.Fatalf("login=%q requests=%d", login, requests)
+	}
+}
+
+func TestGitHubRepositoryClientAuthenticatedLoginWithoutTokenDoesNotRequest(t *testing.T) {
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests++ }))
+	defer srv.Close()
+	old := githubAPIBaseURL
+	githubAPIBaseURL = srv.URL
+	t.Cleanup(func() { githubAPIBaseURL = old })
+
+	login, err := (githubRepositoryClient{client: srv.Client()}).AuthenticatedLogin(context.Background(), "")
+	if err != nil || login != "" || requests != 0 {
+		t.Fatalf("login=%q requests=%d error=%v", login, requests, err)
+	}
+}
+
+func TestGitHubRepositoryClientAuthenticatedLoginErrorDoesNotLeakToken(t *testing.T) {
+	const token = "fixture-token"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, token+" private response", http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+	old := githubAPIBaseURL
+	githubAPIBaseURL = srv.URL
+	t.Cleanup(func() { githubAPIBaseURL = old })
+
+	_, err := (githubRepositoryClient{client: srv.Client()}).AuthenticatedLogin(context.Background(), token)
+	if err == nil || strings.Contains(err.Error(), token) || !strings.Contains(err.Error(), "HTTP 401") {
+		t.Fatalf("error = %v", err)
+	}
+}

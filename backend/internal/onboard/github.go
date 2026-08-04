@@ -92,17 +92,54 @@ type githubRepositoryClient struct {
 	client *http.Client
 }
 
-func (c githubRepositoryClient) Repository(ctx context.Context, repo Repo, token string) (RepositoryMetadata, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, githubAPIBaseURL+"/repos/"+repo.FullName, nil)
-	if err != nil {
-		return RepositoryMetadata{}, err
+func (c githubRepositoryClient) AuthenticatedLogin(ctx context.Context, token string) (string, error) {
+	if token == "" {
+		return "", nil
 	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, githubAPIBaseURL+"/user", nil)
+	if err != nil {
+		return "", err
+	}
+	setGitHubRequestHeaders(req, token)
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("reading authenticated GitHub login: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if err != nil {
+		return "", fmt.Errorf("reading authenticated GitHub login: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("authenticated GitHub user request returned HTTP %d", resp.StatusCode)
+	}
+	var response struct {
+		Login string `json:"login"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return "", fmt.Errorf("decoding authenticated GitHub login: %w", err)
+	}
+	if !repoOwnerPattern.MatchString(response.Login) {
+		return "", fmt.Errorf("authenticated GitHub user response omitted a valid login")
+	}
+	return response.Login, nil
+}
+
+func setGitHubRequestHeaders(req *http.Request, token string) {
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	req.Header.Set("User-Agent", "prow-ai-dashboard")
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
+}
+
+func (c githubRepositoryClient) Repository(ctx context.Context, repo Repo, token string) (RepositoryMetadata, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, githubAPIBaseURL+"/repos/"+repo.FullName, nil)
+	if err != nil {
+		return RepositoryMetadata{}, err
+	}
+	setGitHubRequestHeaders(req, token)
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return RepositoryMetadata{}, fmt.Errorf("reading GitHub metadata for %s: %w", repo.FullName, err)

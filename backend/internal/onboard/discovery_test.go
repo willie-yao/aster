@@ -13,12 +13,22 @@ import (
 )
 
 type fakeRepositoryClient struct {
-	metadata RepositoryMetadata
-	err      error
+	metadata      RepositoryMetadata
+	err           error
+	authLogin     string
+	authErr       error
+	authCalls     int
+	authTokenSeen string
 }
 
 func (f fakeRepositoryClient) Repository(context.Context, Repo, string) (RepositoryMetadata, error) {
 	return f.metadata, f.err
+}
+
+func (f *fakeRepositoryClient) AuthenticatedLogin(_ context.Context, token string) (string, error) {
+	f.authCalls++
+	f.authTokenSeen = token
+	return f.authLogin, f.authErr
 }
 
 type fakeCatalogClient struct {
@@ -100,24 +110,24 @@ func TestDiscoverRepository_SuggestionsAndPinnedRevision(t *testing.T) {
 			Annotations: map[string]string{"testgrid-dashboards": "capz-dashboard"},
 		},
 	}}}
-	report, err := discoverRepository(context.Background(), repositories.metadata.Repo, "", repositories, catalogs)
+	report, err := discoverRepository(context.Background(), repositories.metadata.Repo, "", Inferred[string]{Value: "kubernetes-sigs", Source: "authenticated GitHub login", Confidence: ConfidenceHigh}, &repositories, catalogs)
 	if err != nil {
 		t.Fatalf("discoverRepository: %v", err)
 	}
 	if report.CatalogRevision != "abcdef123456" || len(report.Candidates) != 1 || report.Candidates[0].Dashboard != "capz-dashboard" {
 		t.Fatalf("report = %+v", report)
 	}
-	if report.DashboardRepo.Value != "kubernetes-sigs/cluster-api-provider-azure-prow-ai-dashboard" {
-		t.Fatalf("dashboard repo = %q", report.DashboardRepo.Value)
+	if report.DashboardRepo.Value != "kubernetes-sigs/cluster-api-provider-azure-prow-ai-dashboard" || report.DashboardRepo.Source != "authenticated GitHub login and source repository name" {
+		t.Fatalf("dashboard repo = %+v", report.DashboardRepo)
 	}
-	if report.Identity.ID.Confidence != ConfidenceHigh || report.Identity.Name.Value != "Cluster API Provider Azure" {
+	if report.Identity.ID.Confidence != ConfidenceHigh || report.Identity.Name.Value != "Cluster API Provider Azure" || report.Identity.ShortName.Value != "" || report.Identity.ShortName.Confidence != ConfidenceLow {
 		t.Fatalf("identity = %+v", report.Identity)
 	}
 }
 
 func TestDiscoverRepository_NoMatchingJobsWarns(t *testing.T) {
 	repo := Repo{Owner: "example", Name: "project", FullName: "example/project"}
-	report, err := discoverRepository(context.Background(), repo, "", fakeRepositoryClient{metadata: RepositoryMetadata{Repo: repo}}, fakeCatalogClient{catalog: &jobconfig.Catalog{Revision: "abc", Jobs: map[string]jobconfig.JobDefinition{}}})
+	report, err := discoverRepository(context.Background(), repo, "", Inferred[string]{}, &fakeRepositoryClient{metadata: RepositoryMetadata{Repo: repo}}, fakeCatalogClient{catalog: &jobconfig.Catalog{Revision: "abc", Jobs: map[string]jobconfig.JobDefinition{}}})
 	if err != nil {
 		t.Fatalf("discoverRepository: %v", err)
 	}
@@ -252,5 +262,57 @@ func TestWriteDiscovery_LabelsMatchAndDashboardCounts(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("output missing %q:\n%s", want, out.String())
 		}
+	}
+}
+
+func TestInferDashboardOwnerPreference(t *testing.T) {
+	detected := Repo{Owner: "fork-owner", Name: "project", FullName: "fork-owner/project"}
+
+	t.Run("authenticated login", func(t *testing.T) {
+		repositories := &fakeRepositoryClient{authLogin: "authenticated-owner"}
+		owner, warning := inferDashboardOwner(context.Background(), "fixture-token", &detected, repositories)
+		if owner.Value != "authenticated-owner" || owner.Source != "authenticated GitHub login" || owner.Confidence != ConfidenceHigh || warning != "" {
+			t.Fatalf("owner=%+v warning=%q", owner, warning)
+		}
+		if repositories.authCalls != 1 || repositories.authTokenSeen != "fixture-token" {
+			t.Fatalf("auth calls=%d token=%q", repositories.authCalls, repositories.authTokenSeen)
+		}
+	})
+
+	t.Run("detected remote owner", func(t *testing.T) {
+		repositories := &fakeRepositoryClient{}
+		owner, warning := inferDashboardOwner(context.Background(), "", &detected, repositories)
+		if owner.Value != "fork-owner" || owner.Source != "original Git remote owner" || owner.Confidence != ConfidenceHigh || warning != "" {
+			t.Fatalf("owner=%+v warning=%q", owner, warning)
+		}
+		if repositories.authCalls != 0 {
+			t.Fatalf("auth calls = %d", repositories.authCalls)
+		}
+	})
+
+	t.Run("no safe owner", func(t *testing.T) {
+		repositories := &fakeRepositoryClient{}
+		owner, warning := inferDashboardOwner(context.Background(), "", nil, repositories)
+		if owner.Value != "" || owner.Confidence != ConfidenceLow || warning != "" {
+			t.Fatalf("owner=%+v warning=%q", owner, warning)
+		}
+	})
+
+	t.Run("credential isolation", func(t *testing.T) {
+		repositories := &fakeRepositoryClient{authLogin: "fixture-token"}
+		owner, warning := inferDashboardOwner(context.Background(), "fixture-token", nil, repositories)
+		if owner.Value != "" || warning == "" {
+			t.Fatalf("owner=%+v warning=%q", owner, warning)
+		}
+		if strings.Contains(owner.Source+warning, "fixture-token") {
+			t.Fatalf("credential leaked: owner=%+v warning=%q", owner, warning)
+		}
+	})
+}
+
+func TestInferredDashboardDestinationWithoutOwner(t *testing.T) {
+	repo, site := inferredDashboardDestination(Inferred[string]{Source: "owner unresolved", Confidence: ConfidenceLow}, "project-prow-ai-dashboard")
+	if repo.Value != "" || site.Value != "" || repo.Confidence != ConfidenceLow || site.Confidence != ConfidenceLow {
+		t.Fatalf("repo=%+v site=%+v", repo, site)
 	}
 }

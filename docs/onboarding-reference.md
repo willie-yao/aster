@@ -48,7 +48,19 @@ git@github.com:owner/name.git
 ```
 
 If the current `origin` is a GitHub fork, the wizard can show the canonical
-upstream and use it for Prow discovery after confirmation.
+upstream and use it for Prow discovery after confirmation. The source repository
+and dashboard destination remain separate: selecting the upstream for Prow
+discovery does not suggest creating the dashboard under the upstream owner.
+
+The dashboard repository suggestion prefers the authenticated GitHub login when
+`GITHUB_TOKEN` can safely identify it. Otherwise it uses the owner of the Git
+remote that onboarding detected. If neither is available, the wizard leaves the
+owner empty and requires an explicit `owner/name`. An explicitly supplied
+`--dashboard-repo` is always preserved.
+
+The optional short name starts empty. Repository initials are not reliable
+project abbreviations, so enter an established abbreviation explicitly when the
+project has one.
 
 For private repositories, export `GITHUB_TOKEN`. The token is used only for
 GitHub API access. It is not printed, retained in the plan, or written to the

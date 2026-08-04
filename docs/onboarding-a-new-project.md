@@ -38,6 +38,13 @@ In the interactive form, use the arrow keys to move, Enter to select, and
 `Ctrl+C` to cancel. Inferred text values are prefilled and editable. The final
 confirmation defaults to no.
 
+The dashboard repository must be a consumer repository you control. The wizard
+prefers the authenticated GitHub login, then the owner of an automatically
+detected Git remote. Selecting an upstream fork source for Prow discovery does
+not change that destination owner. If no safe owner is known, enter `owner/name`
+explicitly. The optional short name starts empty because repository initials do
+not reliably identify established project abbreviations.
+
 ## Choose a deployment
 
 ### GitHub Pages
