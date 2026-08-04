@@ -99,6 +99,18 @@ orka:
       # Defaults to global.imageTag, then .Chart.AppVersion, when empty.
       tag: ""
       pullPolicy: IfNotPresent
+    # Required when enabled. These values duplicate the security-sensitive
+    # project.yaml settings so Kubernetes admission can fail closed before an
+    # Orka controller observes the Task.
+    admission:
+      agentRef: ""
+      repository:
+        owner: ""
+        name: ""
+      maxTurns: 30
+      allowBash: true
+      timeout: 10m
+      retries: 1
   # Disable this when an operator provides the ServiceAccount and Orka Roles.
   rbac:
     create: true

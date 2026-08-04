@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -25,11 +26,18 @@ const (
 	FixerManagedByValue      = "orka-fixer"
 	defaultFixNamespace      = "orka-system"
 	defaultFixVersion        = "v1"
+	defaultFixPriority       = int64(500)
+	fixContractLabel         = "prow-ai-dashboard/runtime"
+	fixContractLabelValue    = "fix-generation"
+	fixContractAnnotation    = "prow-ai-dashboard/fix-contract"
+	fixContractVersion       = "v1"
 	serviceAccountToken      = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 	maxFixResultBytes        = 4 << 20
 	actionRequestAnnotation  = "prow-ai-dashboard/action-request"
 	defaultFixCleanupTimeout = 30 * time.Second
 )
+
+var immutableGitRevision = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 // StructuredResult is the generation result returned by an Orka agent Task.
 type StructuredResult struct {
@@ -57,7 +65,6 @@ type resultAPI interface {
 type AgentOptions struct {
 	Namespace  string
 	AgentRef   string
-	GitSecret  string
 	Version    string
 	MaxRetries int
 	PollEvery  time.Duration
@@ -82,7 +89,6 @@ type FromEnvConfig struct {
 	AgentRef    string
 	API         string
 	APIToken    string
-	GitSecret   string
 	Version     string
 	MaxRetries  int
 	KubeContext string
@@ -111,7 +117,6 @@ func NewAgentRuntimeFromEnv(cfg FromEnvConfig) (*AgentRuntime, error) {
 	return NewAgentRuntime(kube, newResultClientFromEnv(cfg.API, cfg.APIToken), AgentOptions{
 		Namespace:  cfg.Namespace,
 		AgentRef:   cfg.AgentRef,
-		GitSecret:  strings.TrimSpace(cfg.GitSecret),
 		Version:    strings.TrimSpace(cfg.Version),
 		MaxRetries: cfg.MaxRetries,
 	}), nil
@@ -161,6 +166,18 @@ func (r *AgentRuntime) Generate(ctx context.Context, spec runtime.GenerateSpec) 
 	}
 	if spec.Repo.Owner == "" || spec.Repo.Name == "" || spec.Repo.Ref == "" || r.opts.AgentRef == "" {
 		return runtime.GenerateResult{}, fmt.Errorf("orka: repo owner, name, ref, and agent_ref are required")
+	}
+	if !immutableGitRevision.MatchString(spec.Repo.Ref) {
+		return runtime.GenerateResult{}, fmt.Errorf("orka: repo ref must be a lowercase 40-character commit SHA")
+	}
+	if spec.MaxTurns < 1 || spec.MaxTurns > 1000 {
+		return runtime.GenerateResult{}, fmt.Errorf("orka: max turns must be between 1 and 1000")
+	}
+	if spec.Timeout <= 0 || spec.Timeout > 30*time.Minute {
+		return runtime.GenerateResult{}, fmt.Errorf("orka: timeout must be greater than zero and at most 30m")
+	}
+	if r.opts.MaxRetries < 0 || r.opts.MaxRetries > 2 {
+		return runtime.GenerateResult{}, fmt.Errorf("orka: retries must be between 0 and 2")
 	}
 	if spec.Timeout > 0 {
 		var cancel context.CancelFunc
@@ -398,36 +415,34 @@ func (r *AgentRuntime) waitTerminal(ctx context.Context, name string) (string, e
 }
 
 func (r *AgentRuntime) buildTask(name string, spec runtime.GenerateSpec) map[string]any {
-	gitRepo := fmt.Sprintf("https://github.com/%s/%s.git", spec.Repo.Owner, spec.Repo.Name)
-	if strings.HasPrefix(spec.Repo.CloneURL, "https://") || strings.HasPrefix(spec.Repo.CloneURL, "http://") {
-		gitRepo = spec.Repo.CloneURL
+	workspace := map[string]any{
+		"gitRepo": fmt.Sprintf("https://github.com/%s/%s.git", spec.Repo.Owner, spec.Repo.Name),
+		"ref":     spec.Repo.Ref,
 	}
-	workspace := map[string]any{"gitRepo": gitRepo, "ref": spec.Repo.Ref}
-	if r.opts.GitSecret != "" {
-		workspace["gitSecretRef"] = map[string]any{"name": r.opts.GitSecret}
-	}
-	agentRuntime := map[string]any{"workspace": workspace, "allowBash": spec.AllowBash}
-	if spec.MaxTurns > 0 {
-		agentRuntime["maxTurns"] = int64(spec.MaxTurns)
+	agentRuntime := map[string]any{
+		"workspace": workspace,
+		"maxTurns":  int64(spec.MaxTurns),
+		"allowBash": spec.AllowBash,
 	}
 	taskSpec := map[string]any{
 		"type":         "agent",
-		"agentRef":     map[string]any{"name": r.opts.AgentRef},
+		"agentRef":     map[string]any{"name": r.opts.AgentRef, "namespace": r.opts.Namespace},
 		"prompt":       spec.Instruction,
 		"agentRuntime": agentRuntime,
-	}
-	if spec.Timeout > 0 {
-		taskSpec["timeout"] = spec.Timeout.String()
-	}
-	if r.opts.MaxRetries > 0 {
-		taskSpec["retryPolicy"] = map[string]any{"maxRetries": int64(r.opts.MaxRetries)}
+		"timeout":      spec.Timeout.String(),
+		"priority":     defaultFixPriority,
+		"retryPolicy":  map[string]any{"maxRetries": int64(r.opts.MaxRetries)},
 	}
 	metadata := map[string]any{
 		"name": name, "namespace": r.opts.Namespace,
-		"labels": map[string]any{ManagedByLabel: FixerManagedByValue},
+		"labels": map[string]any{
+			ManagedByLabel:   FixerManagedByValue,
+			fixContractLabel: fixContractLabelValue,
+		},
+		"annotations": map[string]any{fixContractAnnotation: fixContractVersion},
 	}
 	if executionID := strings.TrimSpace(spec.ExecutionID); executionID != "" {
-		metadata["annotations"] = map[string]any{actionRequestAnnotation: executionID}
+		metadata["annotations"].(map[string]any)[actionRequestAnnotation] = executionID
 	}
 	return map[string]any{
 		"apiVersion": "core.orka.ai/v1alpha1",
@@ -442,7 +457,7 @@ func FixTaskName(spec runtime.GenerateSpec, opts AgentOptions) string {
 	opts = normalizeAgentOptions(opts)
 	parts := []string{
 		spec.Repo.Owner, spec.Repo.Name, spec.Repo.Ref, spec.Instruction,
-		opts.AgentRef, opts.GitSecret, opts.Version, fmt.Sprintf("%d", opts.MaxRetries),
+		opts.AgentRef, opts.Namespace, opts.Version, fmt.Sprintf("%d", opts.MaxRetries),
 		fmt.Sprintf("%t", spec.AllowBash), fmt.Sprintf("%d", spec.MaxTurns), spec.Timeout.String(),
 	}
 	if executionID := strings.TrimSpace(spec.ExecutionID); executionID != "" {

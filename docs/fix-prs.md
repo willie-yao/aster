@@ -185,7 +185,6 @@ ai:
       agent_ref: opencode-fixer
       api: http://orka.orka-system.svc:8080
       namespace: orka-system
-      git_secret: source-repo-readonly   # optional for private repos
       version: v1
       retries: 1  # default; set 0 to disable Orka Task retries
       max_turns: 30
@@ -200,18 +199,58 @@ endpoint requires authentication. Set `spec.model.name` to the endpoint-specific
 model ID and `spec.runtime.type` to `opencode`. Do not copy the endpoint, model,
 or model credential into `project.yaml`.
 
-For a private source repository, `git_secret` must be a separate read-only clone
-credential. It is mounted only into the Orka workspace. Keep the write-capable
+Guarded fix Tasks do not accept `git_secret` or any other Task-level credential
+reference. The source repository must currently be publicly cloneable. Private
+repository support requires an upstream Orka credential binding that admission
+can pin without allowing an arbitrary Secret name. Keep the write-capable
 contributor token in `FIX_TOKEN`; it remains inside the dashboard and is used
 only by the engine-owned PR-opening path.
 
-For Helm deployments, set `orka.fixRuntime.enabled=true`. The chart then uses the
-published git-capable fixer image, mounts a ServiceAccount token only into the
-workloads that generate fixes, and grants a separate Task-only fix Role. REST
+For Helm deployments, set `orka.fixRuntime.enabled=true` and repeat the exact
+Agent, repository, turn, Bash, timeout, and retry settings in the admission
+contract:
+
+```yaml
+orka:
+  namespace: orka-system
+  fixRuntime:
+    enabled: true
+    admission:
+      agentRef: opencode-fixer
+      repository:
+        owner: example
+        name: repo
+      maxTurns: 30
+      allowBash: true
+      timeout: 15m
+      retries: 1
+```
+
+The chart uses the published git-capable fixer image, mounts a ServiceAccount
+token only into the workloads that generate fixes, and grants a separate
+Task-only fix Role. It also installs a fail-closed requester-scoped admission
+policy. A mismatch between `project.yaml` and Helm values denies the Task. REST
 authentication uses `ORKA_API_TOKEN`, `ORKA_API_TOKEN_FILE`, or the pod
 ServiceAccount token. File-backed credentials are read for every result request,
 so projected ServiceAccount token rotation does not require a server restart.
 Local kubeconfig testing can select a context through `ORKA_KUBE_CONTEXT`.
+
+The policy matches the authenticated dashboard ServiceAccount in
+`orka.namespace`; labels alone cannot opt a request out. It pins the Agent and
+namespace, public GitHub repository, immutable 40-character commit, workspace
+shape, turns, Bash setting, timeout, retries, priority, Agent-owned resource
+bounds, and dashboard identity metadata. It rejects custom images, commands,
+arguments, environment variables, Secret references, mutable refs, workspace
+push settings, scheduling, sessions, webhooks, prior Tasks, tool overrides, and
+placement overrides. The referenced Agent is operator-owned, so protect changes
+to its runtime, Secret, tools, and resource settings separately.
+
+Source investigation and fix actions cannot currently share one server pod. A
+single pod has one Kubernetes requester identity, so admission cannot distinguish
+the two Task contracts without trusting caller-controlled labels. Deploy them
+separately until the runtimes have distinct requesters. Container analysis is
+unaffected because it uses a dedicated Task namespace and keeps its existing
+admission policy.
 
 OpenCode support requires upstream PR #289. The generated chart, all 12 CRDs,
 complete AgentRuntime and SubstrateActorPool controller RBAC, and guarded CRD

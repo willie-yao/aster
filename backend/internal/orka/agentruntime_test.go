@@ -150,7 +150,7 @@ func rawResultServer(t *testing.T, raw string) (*ResultClient, func()) {
 
 func spec() runtime.GenerateSpec {
 	return runtime.GenerateSpec{
-		Repo:        runtime.RepoRef{Owner: "o", Name: "n", Ref: "pinned-sha"},
+		Repo:        runtime.RepoRef{Owner: "o", Name: "n", Ref: "0123456789abcdef0123456789abcdef01234567"},
 		Instruction: "fix the etcd disk type",
 		MaxTurns:    30,
 		AllowBash:   true,
@@ -173,7 +173,7 @@ func TestAgentRuntime_HappyPath(t *testing.T) {
 	kube := &fakeTaskAPI{phases: []string{"Running", "Succeeded"}}
 	results, done := resultServer(t, StructuredResult{
 		Summary: "pin etcd disk to Premium_LRS",
-		BaseSHA: "pinned-sha",
+		BaseSHA: "0123456789abcdef0123456789abcdef01234567",
 		Diff:    "diff --git a/x b/x\n+Premium_LRS\n",
 		Files:   []string{"x"},
 	})
@@ -208,10 +208,14 @@ func TestAgentRuntime_HappyPath(t *testing.T) {
 	if taskSpec["prompt"] != "fix the etcd disk type" {
 		t.Errorf("original instruction not preserved: %q", taskSpec["prompt"])
 	}
+	agentRef, _ := taskSpec["agentRef"].(map[string]any)
+	if agentRef["name"] != "codex-fixer" || agentRef["namespace"] != "orka-system" {
+		t.Errorf("agentRef is not pinned: %v", agentRef)
+	}
 	ar, _ := taskSpec["agentRuntime"].(map[string]any)
 	ws, _ := ar["workspace"].(map[string]any)
-	if ws["ref"] != "pinned-sha" {
-		t.Errorf("workspace ref = %v, want pinned-sha", ws["ref"])
+	if ws["gitRepo"] != "https://github.com/o/n.git" || ws["ref"] != "0123456789abcdef0123456789abcdef01234567" {
+		t.Errorf("workspace is not pinned: %v", ws)
 	}
 	if _, hasPush := ws["pushBranch"]; hasPush {
 		t.Errorf("generation-only Task must not set pushBranch: %v", ws)
@@ -219,11 +223,24 @@ func TestAgentRuntime_HappyPath(t *testing.T) {
 	if ar["allowBash"] != true || ar["maxTurns"] != int64(30) {
 		t.Errorf("agentRuntime overrides not set: %v", ar)
 	}
+	if taskSpec["timeout"] != "15m0s" || taskSpec["priority"] != int64(500) {
+		t.Errorf("Task execution bounds not pinned: %v", taskSpec)
+	}
+	retry, _ := taskSpec["retryPolicy"].(map[string]any)
+	if retry["maxRetries"] != int64(0) {
+		t.Errorf("retry policy not pinned: %v", retry)
+	}
+	metadata := kube.applied["metadata"].(map[string]any)
+	labels := metadata["labels"].(map[string]any)
+	annotations := metadata["annotations"].(map[string]any)
+	if labels[ManagedByLabel] != FixerManagedByValue || labels[fixContractLabel] != fixContractLabelValue || annotations[fixContractAnnotation] != fixContractVersion {
+		t.Errorf("Task identity metadata not pinned: labels=%v annotations=%v", labels, annotations)
+	}
 }
 
 func TestAgentRuntime_NoDiffIsNotFixable(t *testing.T) {
 	kube := &fakeTaskAPI{phases: []string{"Succeeded"}}
-	results, done := resultServer(t, StructuredResult{Summary: "no code change needed", BaseSHA: "pinned-sha", Diff: "", Files: []string{}})
+	results, done := resultServer(t, StructuredResult{Summary: "no code change needed", BaseSHA: "0123456789abcdef0123456789abcdef01234567", Diff: "", Files: []string{}})
 	defer done()
 	r := &AgentRuntime{kube: kube, results: results, opts: AgentOptions{AgentRef: "codex-fixer", PollEvery: time.Millisecond},
 		applyDiff: stubApply(nil, nil)}
@@ -241,7 +258,7 @@ func TestAgentRuntime_NoDiffIsNotFixable(t *testing.T) {
 }
 
 func TestAgentRuntimeRejectsNonJSONResult(t *testing.T) {
-	valid := `{"version":1,"summary":"fix","baseSHA":"pinned-sha","diff":"","files":[]}`
+	valid := `{"version":1,"summary":"fix","baseSHA":"0123456789abcdef0123456789abcdef01234567","diff":"","files":[]}`
 	for _, tc := range []struct {
 		name string
 		raw  string
@@ -319,6 +336,37 @@ func TestAgentRuntime_ValidatesInput(t *testing.T) {
 	}
 }
 
+func TestAgentRuntimeRejectsMutableRevision(t *testing.T) {
+	r := &AgentRuntime{kube: &fakeTaskAPI{}, results: &delayedResultAPI{}, opts: AgentOptions{AgentRef: "agent"}}
+	s := spec()
+	s.Repo.Ref = "main"
+	if _, err := r.Generate(context.Background(), s); err == nil || !strings.Contains(err.Error(), "commit SHA") {
+		t.Fatalf("mutable revision error = %v", err)
+	}
+}
+
+func TestAgentRuntimeRejectsUnsafeBounds(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		edit func(*runtime.GenerateSpec, *AgentOptions)
+		want string
+	}{
+		{name: "turns", edit: func(s *runtime.GenerateSpec, _ *AgentOptions) { s.MaxTurns = 1001 }, want: "max turns"},
+		{name: "timeout", edit: func(s *runtime.GenerateSpec, _ *AgentOptions) { s.Timeout = 31 * time.Minute }, want: "timeout"},
+		{name: "retries", edit: func(_ *runtime.GenerateSpec, o *AgentOptions) { o.MaxRetries = 3 }, want: "retries"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := spec()
+			opts := AgentOptions{AgentRef: "agent"}
+			tc.edit(&s, &opts)
+			r := &AgentRuntime{kube: &fakeTaskAPI{}, results: &delayedResultAPI{}, opts: opts}
+			if _, err := r.Generate(context.Background(), s); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("unsafe bounds error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestFixTaskName_ContentAddressedAndStable(t *testing.T) {
 	baseSpec := spec()
 	opts := AgentOptions{AgentRef: "codex-fixer", Version: "v1"}
@@ -347,11 +395,11 @@ func TestAgentRuntimeRejectsMismatchedResultIdentity(t *testing.T) {
 		result StructuredResult
 		want   string
 	}{
-		{name: "version", result: StructuredResult{Version: 2, BaseSHA: "pinned-sha", Diff: "x", Files: []string{"x"}}, want: "version"},
+		{name: "version", result: StructuredResult{Version: 2, BaseSHA: "0123456789abcdef0123456789abcdef01234567", Diff: "x", Files: []string{"x"}}, want: "version"},
 		{name: "base", result: StructuredResult{BaseSHA: "other", Diff: "x", Files: []string{"x"}}, want: "baseSHA"},
-		{name: "push", result: StructuredResult{BaseSHA: "pinned-sha", Diff: "x", Files: []string{"x"}, PushBranch: "automation/fix"}, want: "pushed branch"},
-		{name: "files", result: StructuredResult{BaseSHA: "pinned-sha", Diff: "x", Files: []string{"other"}}, want: "reported files"},
-		{name: "unsafe", result: StructuredResult{BaseSHA: "pinned-sha", Diff: "x", Files: []string{"../x"}}, want: "unsafe"},
+		{name: "push", result: StructuredResult{BaseSHA: "0123456789abcdef0123456789abcdef01234567", Diff: "x", Files: []string{"x"}, PushBranch: "automation/fix"}, want: "pushed branch"},
+		{name: "files", result: StructuredResult{BaseSHA: "0123456789abcdef0123456789abcdef01234567", Diff: "x", Files: []string{"other"}}, want: "reported files"},
+		{name: "unsafe", result: StructuredResult{BaseSHA: "0123456789abcdef0123456789abcdef01234567", Diff: "x", Files: []string{"../x"}}, want: "unsafe"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			kube := &fakeTaskAPI{phases: []string{"Succeeded"}}
@@ -602,7 +650,7 @@ func (d *delayedResultAPI) Result(context.Context, string, string) (string, bool
 
 func TestAgentRuntimeWaitsForDurableResult(t *testing.T) {
 	result, err := json.Marshal(StructuredResult{
-		Version: 1, BaseSHA: "pinned-sha", Diff: "diff", Files: []string{"x"},
+		Version: 1, BaseSHA: "0123456789abcdef0123456789abcdef01234567", Diff: "diff", Files: []string{"x"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -636,7 +684,7 @@ func TestAgentRuntimeHonorsSpecTimeout(t *testing.T) {
 
 func TestAgentRuntimeRecreatesFailedTask(t *testing.T) {
 	kube := &fakeTaskAPI{phases: []string{"Failed", "Succeeded"}, preexisting: true}
-	results, done := resultServer(t, StructuredResult{BaseSHA: "pinned-sha", Diff: "", Files: nil})
+	results, done := resultServer(t, StructuredResult{BaseSHA: "0123456789abcdef0123456789abcdef01234567", Diff: "", Files: nil})
 	defer done()
 	r := &AgentRuntime{kube: kube, results: results, opts: AgentOptions{AgentRef: "codex-fixer", MaxRetries: 1, PollEvery: time.Millisecond}}
 	if _, err := r.Generate(context.Background(), spec()); err != nil {
@@ -669,7 +717,7 @@ func TestFixTaskNameSeparatesActionRequestExecutions(t *testing.T) {
 
 func TestAgentRuntimeReportsTaskIdentity(t *testing.T) {
 	kube := &fakeTaskAPI{phases: []string{"Succeeded"}}
-	results, done := resultServer(t, StructuredResult{BaseSHA: "pinned-sha"})
+	results, done := resultServer(t, StructuredResult{BaseSHA: "0123456789abcdef0123456789abcdef01234567"})
 	defer done()
 	var observed []runtime.WorkRef
 	s := spec()

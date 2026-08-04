@@ -402,6 +402,15 @@ Orka fix generation is independent from container analysis. Set:
 orka:
   fixRuntime:
     enabled: true
+    admission:
+      agentRef: "<orka-agent-name>"
+      repository:
+        owner: "<github-owner>"
+        name: "<github-repository>"
+      maxTurns: 30
+      allowBash: true
+      timeout: 15m
+      retries: 1
 ```
 
 Then configure the consumer project with the required Agent and result API
@@ -416,7 +425,6 @@ ai:
       agent_ref: "<orka-agent-name>"
       api: http://orka.orka-system.svc.cluster.local:8080
       namespace: orka-system
-      git_secret: "<read-only-clone-secret>" # optional for public repos
       version: v1
       retries: 1
       max_turns: 30
@@ -424,7 +432,9 @@ ai:
       timeout: 15m
 ```
 
-This selects the git-capable fixer image and a separate Task-only Role. Enabling
+This selects the git-capable fixer image, a separate Task-only Role, and a
+fail-closed `ValidatingAdmissionPolicy`. The Helm admission values must match the
+effective `project.yaml` values. A mismatch denies Task creation. Enabling
 container analysis does not enable or configure fix generation.
 
 The dashboard and Agent runtime settings are separate:
@@ -433,12 +443,34 @@ The dashboard and Agent runtime settings are separate:
 - `Agent.spec.runtime.type: opencode` selects OpenCode inside Orka.
 
 The operator owns the Agent and model Secret. Put endpoint and model credentials
-in the Agent Secret, not `project.yaml`. A private repository clone Secret must
-be read-only. `FIX_TOKEN` stays in the dashboard workload and is never passed to
-the Agent, Task, workspace, or model Secret.
+in the Agent Secret, not `project.yaml`. Guarded fix Tasks reject workspace Git
+Secrets, so the repository must currently be publicly cloneable. `FIX_TOKEN`
+stays in the dashboard workload and is never passed to the Agent, Task,
+workspace, or model Secret.
 
 See [Agent-proposed fix PRs](fix-prs.md#orka-in-cluster) for project settings and
 identity boundaries.
+
+The policy is scoped by the authenticated dashboard ServiceAccount and the Orka
+namespace. It pins the exact Agent namespace, repository, immutable commit
+shape, generation-only workspace, turn and Bash limits, timeout, retry policy,
+priority, Agent-owned resources, and dashboard metadata. It rejects container
+fields, Task and workspace Secret references, custom environment variables,
+scheduling, sessions, webhooks, prior Tasks, mutable Git refs, tool overrides,
+and placement overrides. Unrelated Orka requesters are not matched. Container
+analyzer Tasks remain governed by the existing analyzer policy in their
+dedicated namespace.
+
+A dedicated fix Task namespace is not safe with the current Orka contract. Orka
+can enforce same-namespace Agent references, and the Agent's namespaced Secret
+cannot be mounted into a worker Job in another namespace without copying the
+credential. Keep fix Tasks with the approved Agent in `orka.namespace` until
+Orka provides a brokered credential and cross-namespace Agent contract.
+
+Source investigation and fix actions also cannot share one server pod today.
+They would use one Kubernetes requester for two different Task shapes, which
+would either deny source Tasks or leave fix Tasks outside the strict policy. The
+chart rejects that combined mode until the requesters are separated.
 
 When the dashboard namespace differs from `orka.namespace`, grant the dashboard
 ServiceAccount access to the Orka result API. Prefer projected ServiceAccount

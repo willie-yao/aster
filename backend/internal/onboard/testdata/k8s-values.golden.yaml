@@ -142,6 +142,16 @@ orka:
     # Empty clears an older image-specific tag during upgrades.
     image:
       tag: ""
+    # Required before enabling. Match the effective project.yaml fix runtime.
+    # admission:
+    #   agentRef: "<orka-agent-name>"
+    #   repository:
+    #     owner: "<github-owner>"
+    #     name: "<github-repository>"
+    #   maxTurns: 30
+    #   allowBash: true
+    #   timeout: 10m
+    #   retries: 1
 
   # rbac:
   #   create: true

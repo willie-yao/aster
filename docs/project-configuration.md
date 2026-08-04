@@ -277,6 +277,12 @@ For Orka fix generation, `agent_runtime.type: orka` selects the dashboard
 backend. The operator-managed Orka Agent selects its CLI with
 `spec.runtime.type: opencode` and owns the model endpoint, model ID, and model
 Secret. Keep those settings out of `project.yaml`.
+Helm deployments must also configure the matching
+`orka.fixRuntime.admission` contract. The duplicate values are intentional: the
+Kubernetes API must know the exact Agent, public repository, turns, Bash policy,
+timeout, and retries before it admits a Task. Guarded fix Tasks do not accept
+`git_secret`; private repository generation is unavailable until Orka exposes a
+pinnable credential binding.
 
 Source investigation is a separate read-only contract and does not inherit
 `ai.fix_prs`. Configure it only for Kubernetes-native analysis chat:

@@ -646,7 +646,6 @@ type FixAgentRuntime struct {
 	OrkaAgentRef  string `yaml:"agent_ref,omitempty" json:"-"`
 	OrkaAPI       string `yaml:"api,omitempty" json:"-"`
 	OrkaNamespace string `yaml:"namespace,omitempty" json:"-"`
-	OrkaGitSecret string `yaml:"git_secret,omitempty" json:"-"`
 	OrkaVersion   string `yaml:"version,omitempty" json:"-"`
 	OrkaRetries   *int   `yaml:"retries,omitempty" json:"-"`
 }
@@ -755,13 +754,15 @@ func (c *Config) EffectiveFixPRs() FixPRs {
 		out.AgentRuntime.OrkaAgentRef = strings.TrimSpace(out.AgentRuntime.OrkaAgentRef)
 		out.AgentRuntime.OrkaAPI = strings.TrimSpace(out.AgentRuntime.OrkaAPI)
 		out.AgentRuntime.OrkaNamespace = strings.TrimSpace(out.AgentRuntime.OrkaNamespace)
-		out.AgentRuntime.OrkaGitSecret = strings.TrimSpace(out.AgentRuntime.OrkaGitSecret)
 		out.AgentRuntime.OrkaVersion = strings.TrimSpace(out.AgentRuntime.OrkaVersion)
 		if out.AgentRuntime.OrkaNamespace == "" {
 			out.AgentRuntime.OrkaNamespace = "orka-system"
 		}
 		if out.AgentRuntime.OrkaVersion == "" {
 			out.AgentRuntime.OrkaVersion = "v1"
+		}
+		if strings.TrimSpace(out.AgentRuntime.Timeout) == "" {
+			out.AgentRuntime.Timeout = "10m"
 		}
 		if out.AgentRuntime.OrkaRetries == nil {
 			out.AgentRuntime.OrkaRetries = intPtr(1)
@@ -1248,25 +1249,39 @@ func (c *Config) Validate() error {
 			}
 		}
 		if ar := f.AgentRuntime; ar != nil {
-			switch strings.TrimSpace(ar.Type) {
-			case "", "opencode":
-			case "orka":
-				if strings.TrimSpace(ar.OrkaAgentRef) == "" || strings.TrimSpace(ar.OrkaAPI) == "" {
-					return fmt.Errorf("ai.fix_prs.agent_runtime type %q requires agent_ref and api", "orka")
-				}
-			default:
-				return fmt.Errorf("ai.fix_prs.agent_runtime.type %q is not supported (only %q or %q)", ar.Type, "opencode", "orka")
-			}
+			runtimeType := strings.TrimSpace(ar.Type)
 			if ar.OrkaRetries != nil && *ar.OrkaRetries < 0 {
 				return fmt.Errorf("ai.fix_prs.agent_runtime.retries must be >= 0")
 			}
 			if ar.MaxTurns < 0 {
 				return fmt.Errorf("ai.fix_prs.agent_runtime.max_turns must be >= 0")
 			}
-			if s := strings.TrimSpace(ar.Timeout); s != "" {
-				if _, err := time.ParseDuration(s); err != nil {
+			var timeout time.Duration
+			hasTimeout := strings.TrimSpace(ar.Timeout) != ""
+			if value := strings.TrimSpace(ar.Timeout); value != "" {
+				var err error
+				timeout, err = time.ParseDuration(value)
+				if err != nil {
 					return fmt.Errorf("ai.fix_prs.agent_runtime.timeout %q is not a valid duration", ar.Timeout)
 				}
+			}
+			switch runtimeType {
+			case "", "opencode":
+			case "orka":
+				if strings.TrimSpace(ar.OrkaAgentRef) == "" || strings.TrimSpace(ar.OrkaAPI) == "" {
+					return fmt.Errorf("ai.fix_prs.agent_runtime type %q requires agent_ref and api", "orka")
+				}
+				if ar.OrkaRetries != nil && *ar.OrkaRetries > 2 {
+					return fmt.Errorf("ai.fix_prs.agent_runtime.retries must be between 0 and 2")
+				}
+				if ar.MaxTurns > 1000 {
+					return fmt.Errorf("ai.fix_prs.agent_runtime.max_turns must be 0 or between 1 and 1000")
+				}
+				if hasTimeout && (timeout < time.Minute || timeout > 30*time.Minute || timeout%time.Minute != 0) {
+					return fmt.Errorf("ai.fix_prs.agent_runtime.timeout must use whole minutes from 1m through 30m")
+				}
+			default:
+				return fmt.Errorf("ai.fix_prs.agent_runtime.type %q is not supported (only %q or %q)", ar.Type, "opencode", "orka")
 			}
 		}
 	}

@@ -24,6 +24,13 @@ spec:
     inline: "Follow the Task prompt and make only the requested code change."
   secretRef:
     name: opencode-credentials
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 4Gi
   runtime:
     type: opencode
     defaultMaxTurns: 30

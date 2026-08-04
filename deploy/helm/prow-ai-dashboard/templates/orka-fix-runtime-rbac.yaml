@@ -1,3 +1,4 @@
+{{- include "prow-ai-dashboard.validateFixRuntime" . -}}
 {{- include "prow-ai-dashboard.validateAnalysisRuntime" . -}}
 {{- include "prow-ai-dashboard.validateAI" . -}}
 {{- $fixServiceAccount := include "prow-ai-dashboard.orkaServiceAccountName" . -}}

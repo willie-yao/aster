@@ -978,6 +978,51 @@ func TestValidateFixPRsOrkaRuntime(t *testing.T) {
 	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "retries") {
 		t.Fatalf("negative Orka retries error = %v", err)
 	}
+	tooManyRetries := 3
+	c.AI.FixPRs.AgentRuntime.OrkaRetries = &tooManyRetries
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "between 0 and 2") {
+		t.Fatalf("oversized Orka retries error = %v", err)
+	}
+	validRetries := 2
+	c.AI.FixPRs.AgentRuntime.OrkaRetries = &validRetries
+	c.AI.FixPRs.AgentRuntime.MaxTurns = 1001
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "between 1 and 1000") {
+		t.Fatalf("oversized Orka max turns error = %v", err)
+	}
+	c.AI.FixPRs.AgentRuntime.MaxTurns = 1000
+	c.AI.FixPRs.AgentRuntime.Timeout = "31m"
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "whole minutes") {
+		t.Fatalf("oversized Orka timeout error = %v", err)
+	}
+	c.AI.FixPRs.AgentRuntime.Timeout = "90s"
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "whole minutes") {
+		t.Fatalf("fractional-minute Orka timeout error = %v", err)
+	}
+	c.AI.FixPRs.AgentRuntime.Timeout = "0s"
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "whole minutes") {
+		t.Fatalf("zero Orka timeout error = %v", err)
+	}
+	c.AI.FixPRs.AgentRuntime.Timeout = "30m"
+	if err := c.Validate(); err != nil {
+		t.Fatalf("Orka runtime boundary rejected: %v", err)
+	}
+}
+
+func TestValidateLocalFixRuntimeKeepsExistingBounds(t *testing.T) {
+	c := validConfig()
+	c.AI = &AI{FixPRs: &FixPRs{Enabled: true, AuthorName: "Jane", AuthorEmail: "jane@example.com", AgentRuntime: &FixAgentRuntime{
+		Type: "opencode", MaxTurns: 1001, Timeout: "90s",
+	}}}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("local runtime bounds changed: %v", err)
+	}
+}
+
+func TestEffectiveFixPRsOrkaTimeoutDefault(t *testing.T) {
+	c := &Config{AI: &AI{FixPRs: &FixPRs{AgentRuntime: &FixAgentRuntime{Type: "orka"}}}}
+	if got := c.EffectiveFixPRs().AgentRuntime.Timeout; got != "10m" {
+		t.Fatalf("Orka timeout default = %q, want 10m", got)
+	}
 }
 
 func TestEffectiveFixPRsPreservesZeroOrkaRetries(t *testing.T) {

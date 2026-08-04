@@ -225,6 +225,12 @@ because Helm release names are unique only within their own namespace.
 {{- printf "%s-orka-%s" $base (include "prow-ai-dashboard.orkaReleaseScope" .) -}}
 {{- end -}}
 
+{{/* Fix Task admission policy name. */}}
+{{- define "prow-ai-dashboard.orkaFixAdmissionName" -}}
+{{- $base := include "prow-ai-dashboard.fullname" . | trunc 39 | trimSuffix "-" -}}
+{{- printf "%s-fix-guard-%s" $base (include "prow-ai-dashboard.orkaReleaseScope" .) -}}
+{{- end -}}
+
 {{/* Source investigation RBAC stays separate from fix-generation RBAC. */}}
 {{- define "prow-ai-dashboard.orkaSourceRBACName" -}}
 {{- $base := include "prow-ai-dashboard.fullname" . | trunc 39 | trimSuffix "-" -}}
@@ -282,6 +288,28 @@ Validate AI provider configuration.
 {{- $contextWindowInt := int64 $contextWindow -}}
 {{- if or (gt $contextWindowInt 1000000000) (and (gt $contextWindowInt 0) (lt $contextWindowInt 9217)) -}}
 {{- fail "ai.contextWindowTokens must be 0 or an integer from 9217 to 1000000000" -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Validate the fail-closed Orka fix Task contract. */}}
+{{- define "prow-ai-dashboard.validateFixRuntime" -}}
+{{- if .Values.orka.fixRuntime.enabled -}}
+  {{- $cfg := .Values.orka.fixRuntime.admission -}}
+  {{- if not .Values.orka.namespace -}}{{- fail "orka.namespace is required when orka.fixRuntime.enabled=true" -}}{{- end -}}
+  {{- if not $cfg.agentRef -}}{{- fail "orka.fixRuntime.admission.agentRef is required when fixRuntime is enabled" -}}{{- end -}}
+  {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $cfg.agentRef) -}}{{- fail "orka.fixRuntime.admission.agentRef must be a lowercase DNS name" -}}{{- end -}}
+  {{- if not $cfg.repository.owner -}}{{- fail "orka.fixRuntime.admission.repository.owner is required when fixRuntime is enabled" -}}{{- end -}}
+  {{- if not $cfg.repository.name -}}{{- fail "orka.fixRuntime.admission.repository.name is required when fixRuntime is enabled" -}}{{- end -}}
+  {{- if not (regexMatch "^[A-Za-z0-9][A-Za-z0-9-]{0,38}$" $cfg.repository.owner) -}}{{- fail "orka.fixRuntime.admission.repository.owner must be a GitHub owner name" -}}{{- end -}}
+  {{- if not (regexMatch "^[A-Za-z0-9_.-]+$" $cfg.repository.name) -}}{{- fail "orka.fixRuntime.admission.repository.name must be a GitHub repository name" -}}{{- end -}}
+  {{- if hasSuffix ".git" $cfg.repository.name -}}{{- fail "orka.fixRuntime.admission.repository.name must not include .git" -}}{{- end -}}
+  {{- $maxTurns := printf "%v" $cfg.maxTurns -}}
+  {{- if not (regexMatch "^([1-9][0-9]{0,2}|1000)$" $maxTurns) -}}{{- fail "orka.fixRuntime.admission.maxTurns must be an integer from 1 to 1000" -}}{{- end -}}
+  {{- $retries := printf "%v" $cfg.retries -}}
+  {{- if not (regexMatch "^[0-2]$" $retries) -}}{{- fail "orka.fixRuntime.admission.retries must be an integer from 0 to 2" -}}{{- end -}}
+  {{- if not (regexMatch "^([1-9]|[12][0-9]|30)m$" (printf "%v" $cfg.timeout)) -}}{{- fail "orka.fixRuntime.admission.timeout must be whole minutes from 1m through 30m" -}}{{- end -}}
+  {{- if and .Values.server.actions.enabled .Values.server.chat.sourceInvestigation.enabled -}}{{- fail "Orka fix generation and source investigation cannot share one server ServiceAccount safely; deploy them separately" -}}{{- end -}}
+  {{- if and (not .Values.orka.rbac.create) (not .Values.orka.rbac.serviceAccountName) -}}{{- fail "orka.rbac.serviceAccountName is required when chart-managed Orka RBAC is disabled" -}}{{- end -}}
 {{- end -}}
 {{- end -}}
 

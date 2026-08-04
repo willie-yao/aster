@@ -375,12 +375,72 @@
                 "tag",
                 "pullPolicy"
               ]
+            },
+            "admission": {
+              "type": "object",
+              "description": "Fail-closed admission contract for dashboard-created Orka fix Tasks.",
+              "properties": {
+                "agentRef": {
+                  "type": "string",
+                  "description": "Exact Orka Agent name allowed for fix generation."
+                },
+                "repository": {
+                  "type": "object",
+                  "description": "Exact GitHub repository allowed in fix Task workspaces.",
+                  "properties": {
+                    "owner": {
+                      "type": "string",
+                      "description": "Approved GitHub repository owner."
+                    },
+                    "name": {
+                      "type": "string",
+                      "description": "Approved GitHub repository name."
+                    }
+                  },
+                  "additionalProperties": false,
+                  "required": [
+                    "owner",
+                    "name"
+                  ]
+                },
+                "maxTurns": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000,
+                  "description": "Exact maximum agent turns allowed by admission."
+                },
+                "allowBash": {
+                  "type": "boolean",
+                  "description": "Exact Bash policy allowed by admission."
+                },
+                "timeout": {
+                  "type": "string",
+                  "pattern": "^([1-9]|[12][0-9]|30)m$",
+                  "description": "Exact Task timeout, from 1m through 30m."
+                },
+                "retries": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 2,
+                  "description": "Exact Orka Task retry count allowed by admission."
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "agentRef",
+                "repository",
+                "maxTurns",
+                "allowBash",
+                "timeout",
+                "retries"
+              ]
             }
           },
           "additionalProperties": false,
           "required": [
             "enabled",
-            "image"
+            "image",
+            "admission"
           ]
         },
         "rbac": {

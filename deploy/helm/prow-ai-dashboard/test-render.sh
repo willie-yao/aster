@@ -123,6 +123,16 @@ container_args=(
   --set analysisRuntime.orkaContainer.modelAuth.existingSecret=orka-model
 )
 
+fix_admission_args=(
+  --set orka.fixRuntime.admission.agentRef=codex-fixer
+  --set orka.fixRuntime.admission.repository.owner=example
+  --set orka.fixRuntime.admission.repository.name=repo
+  --set orka.fixRuntime.admission.maxTurns=30
+  --set orka.fixRuntime.admission.allowBash=true
+  --set orka.fixRuntime.admission.timeout=15m
+  --set orka.fixRuntime.admission.retries=1
+)
+
 # Image-specific tags override the shared snapshot tag. Empty image-specific
 # tags resolve through global.imageTag, then Chart.appVersion.
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
@@ -139,6 +149,7 @@ grep -Fq -- '-orka-analysis-image=ghcr.io/willie-yao/prow-ai-dashboard/analyzer:
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set-string global.imageTag=sha-abcdef0 \
   --set orka.fixRuntime.enabled=true \
+  "${fix_admission_args[@]}" \
   --set server.actions.enabled=true \
   --set server.actions.mode=proxy \
   --set 'server.actions.admins[0]=alice' \
@@ -156,6 +167,7 @@ helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set-string global.imageTag=sha-abcdef0 \
   --set-string orka.fixRuntime.image.tag=sha-cafebabe \
   --set orka.fixRuntime.enabled=true \
+  "${fix_admission_args[@]}" \
   --set server.actions.enabled=true \
   --set server.actions.mode=proxy \
   --set 'server.actions.admins[0]=alice' \
@@ -176,6 +188,7 @@ grep -Fq -- '-orka-analysis-image=ghcr.io/willie-yao/prow-ai-dashboard/analyzer:
 helm template test "$fallback_chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set-string global.imageTag= \
   --set orka.fixRuntime.enabled=true \
+  "${fix_admission_args[@]}" \
   --set server.actions.enabled=true \
   --set server.actions.mode=proxy \
   --set 'server.actions.admins[0]=alice' \
@@ -377,6 +390,7 @@ fi
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set mode=watch \
   --set orka.fixRuntime.enabled=true \
+  "${fix_admission_args[@]}" \
   --set orka.fixRuntime.image.tag=sha-fixer \
   --show-only templates/worker-deployment.yaml > "$tmp/watch-fix-only.yaml"
 grep -Fq 'image: ghcr.io/willie-yao/prow-ai-dashboard/fixer:sha-fixer' "$tmp/watch-fix-only.yaml"
@@ -390,6 +404,7 @@ fi
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   "${container_watch_args[@]}" \
   --set orka.fixRuntime.enabled=true \
+  "${fix_admission_args[@]}" \
   --set orka.fixRuntime.image.tag=sha-fixer \
   --show-only templates/worker-deployment.yaml > "$tmp/watch-analysis-and-fix.yaml"
 grep -Fq 'image: ghcr.io/willie-yao/prow-ai-dashboard/fixer:sha-fixer' "$tmp/watch-analysis-and-fix.yaml"
@@ -399,6 +414,75 @@ if grep -Eq '^[[:space:]]*- name: ORKA_API_TOKEN$' "$tmp/watch-analysis-and-fix.
   echo 'combined Orka watch mode shared the analysis token with fix generation' >&2
   exit 1
 fi
+
+if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set orka.fixRuntime.enabled=true \
+  --show-only templates/orka-fix-runtime-admission.yaml > "$tmp/fix-admission-missing.yaml" 2>&1; then
+  echo 'fix runtime rendered without an admission contract' >&2
+  exit 1
+fi
+validation_error_contains "$tmp/fix-admission-missing.yaml" 'orka.fixRuntime.admission.agentRef is required'
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set orka.fixRuntime.enabled=true \
+  "${fix_admission_args[@]}" \
+  --show-only templates/orka-fix-runtime-admission.yaml > "$tmp/fix-admission.yaml"
+grep -Fq 'request.userInfo.username == \"system:serviceaccount:dashboard-test:test-prow-ai-dashboard-orka\"' "$tmp/fix-admission.yaml"
+grep -Fq "request.operation == 'CREATE'" "$tmp/fix-admission.yaml"
+grep -Fq "oldObject.metadata.annotations['prow-ai-dashboard/fix-contract'] == 'v1'" "$tmp/fix-admission.yaml"
+grep -Fq 'object.spec == oldObject.spec' "$tmp/fix-admission.yaml"
+grep -Fq 'object.metadata.labels == oldObject.metadata.labels' "$tmp/fix-admission.yaml"
+grep -Fq 'object.metadata.annotations == oldObject.metadata.annotations' "$tmp/fix-admission.yaml"
+grep -Fq 'dashboard fix Task contracts are immutable after creation' "$tmp/fix-admission.yaml"
+grep -Fq 'size(object.metadata.labels) == 2' "$tmp/fix-admission.yaml"
+grep -Fq "size(object.metadata.annotations) == (('prow-ai-dashboard/action-request' in object.metadata.annotations) ? 2 : 1)" "$tmp/fix-admission.yaml"
+grep -Fq 'object.metadata.namespace == \"orka-system\"' "$tmp/fix-admission.yaml"
+grep -Fq 'object.spec.agentRef.name == \"codex-fixer\"' "$tmp/fix-admission.yaml"
+grep -Fq 'object.spec.agentRef.namespace == \"orka-system\"' "$tmp/fix-admission.yaml"
+grep -Fq 'object.spec.agentRuntime.workspace.gitRepo == \"https://github.com/example/repo.git\"' "$tmp/fix-admission.yaml"
+grep -Fq "object.spec.agentRuntime.workspace.ref.matches('^[0-9a-f]{40}$')" "$tmp/fix-admission.yaml"
+grep -Fq 'object.spec.agentRuntime.maxTurns == 30' "$tmp/fix-admission.yaml"
+grep -Fq 'object.spec.agentRuntime.allowBash == true' "$tmp/fix-admission.yaml"
+grep -Fq 'duration(object.spec.timeout) == duration(\"15m\")' "$tmp/fix-admission.yaml"
+grep -Fq 'object.spec.retryPolicy.maxRetries == 1' "$tmp/fix-admission.yaml"
+grep -Fq 'object.spec.priority == 500' "$tmp/fix-admission.yaml"
+for guard in \
+  'must not set an image, command, or arguments' \
+  'must not set environment variables or Task-level Secrets' \
+  'must use the configured Agent in the Orka namespace' \
+  'must use the approved repository at an immutable commit' \
+  'must use the fixed generation-only workspace shape' \
+  'must use the configured turn and Bash limits' \
+  'must not override the approved Agent tool policy' \
+  'must use the configured timeout' \
+  'must use priority 500' \
+  'must use the configured retry policy' \
+  'must inherit resource bounds from the approved Agent' \
+  'must not override scheduling or execution workspaces' \
+  'must not use webhooks, sessions, or prior Tasks' \
+  'must not schedule recurring executions' \
+  'must not add alternate AI, workspace, or transaction fields' \
+  'must carry the fix lifecycle labels' \
+  'must carry the fix contract annotation'; do
+  grep -Fq "$guard" "$tmp/fix-admission.yaml"
+done
+
+for invalid in \
+  'orka.fixRuntime.admission.agentRef=Not_DNS' \
+  'orka.fixRuntime.admission.repository.owner=bad/owner' \
+  'orka.fixRuntime.admission.repository.name=repo.git' \
+  'orka.fixRuntime.admission.maxTurns=1001' \
+  'orka.fixRuntime.admission.timeout=31m' \
+  'orka.fixRuntime.admission.retries=3'; do
+  if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+    --set orka.fixRuntime.enabled=true \
+    "${fix_admission_args[@]}" \
+    --set-string "$invalid" \
+    --show-only templates/orka-fix-runtime-admission.yaml > "$tmp/fix-admission-invalid.yaml" 2>&1; then
+    echo "fix admission accepted invalid value: $invalid" >&2
+    exit 1
+  fi
+done
 
 for namespace in dashboard-a dashboard-b; do
   helm template test "$chart" -n "$namespace" -f "$tmp/values.yaml" "${container_args[@]}" \
@@ -559,6 +643,7 @@ validation_error_contains "$tmp/invalid-ai-api.yaml" 'ai.api must be chat_comple
 for namespace in dashboard-a dashboard-b; do
   helm template test "$chart" -n "$namespace" -f "$tmp/values.yaml" \
     --set orka.fixRuntime.enabled=true \
+    "${fix_admission_args[@]}" \
     --set orka.namespace=orka-test \
     --show-only templates/orka-fix-runtime-rbac.yaml > "$tmp/rbac-$namespace.yaml"
   grep -Fq 'namespace: orka-test' "$tmp/rbac-$namespace.yaml"
@@ -579,6 +664,7 @@ fi
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set mode=watch \
   --set orka.fixRuntime.enabled=true \
+  "${fix_admission_args[@]}" \
   --set orka.fixRuntime.image.tag=sha-test \
   --show-only templates/worker-deployment.yaml > "$tmp/fix-watch.yaml"
 grep -Fq 'serviceAccountName: test-prow-ai-dashboard-orka' "$tmp/fix-watch.yaml"
@@ -594,6 +680,7 @@ fi
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set mode=cron \
   --set orka.fixRuntime.enabled=true \
+  "${fix_admission_args[@]}" \
   --set orka.fixRuntime.image.tag=sha-test \
   --show-only templates/fetcher-cronjob.yaml > "$tmp/fix-cron.yaml"
 grep -Fq 'serviceAccountName: test-prow-ai-dashboard-orka' "$tmp/fix-cron.yaml"
@@ -611,6 +698,7 @@ fi
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   "${container_args[@]}" \
   --set orka.fixRuntime.enabled=true \
+  "${fix_admission_args[@]}" \
   --set orka.fixRuntime.image.tag=sha-test > "$tmp/combined-orka-runtimes.yaml"
 grep -Fq 'app.kubernetes.io/component: orka-container-analysis' "$tmp/combined-orka-runtimes.yaml"
 grep -Fq 'app.kubernetes.io/component: orka-fix-runtime' "$tmp/combined-orka-runtimes.yaml"
@@ -737,7 +825,7 @@ if grep -Fq 'serviceAccountName: test-prow-ai-dashboard-orka' "$tmp/source-with-
   exit 1
 fi
 
-helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set server.chat.enabled=true \
   --set server.chat.sourceInvestigation.enabled=true \
   --set server.actions.enabled=true \
@@ -745,25 +833,13 @@ helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set server.actions.admins[0]=alice \
   --set server.actions.proxy.botToken=test-token \
   --set orka.fixRuntime.enabled=true \
-  --set orka.fixRuntime.image.tag=sha-test \
+  "${fix_admission_args[@]}" \
   --set ai.enabled=true \
-  --set ai.token=test-token > "$tmp/source-with-fix-actions.yaml"
-grep -Fq 'serviceAccountName: test-prow-ai-dashboard-source' "$tmp/source-with-fix-actions.yaml"
-grep -Fq 'name: ORKA_API_TOKEN_FILE' "$tmp/source-with-fix-actions.yaml"
-grep -Fq 'image: ghcr.io/willie-yao/prow-ai-dashboard/fixer:sha-test' "$tmp/source-with-fix-actions.yaml"
-helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
-  --set server.chat.enabled=true \
-  --set server.chat.sourceInvestigation.enabled=true \
-  --set server.actions.enabled=true \
-  --set server.actions.mode=proxy \
-  --set server.actions.admins[0]=alice \
-  --set server.actions.proxy.botToken=test-token \
-  --set orka.fixRuntime.enabled=true \
-  --set ai.enabled=true \
-  --set ai.token=test-token \
-  --show-only templates/orka-fix-runtime-rbac.yaml > "$tmp/source-with-fix-rbac.yaml"
-grep -Fq 'name: test-prow-ai-dashboard-orka' "$tmp/source-with-fix-rbac.yaml"
-grep -Fq 'name: test-prow-ai-dashboard-source' "$tmp/source-with-fix-rbac.yaml"
+  --set ai.token=test-token > "$tmp/source-with-fix-actions.yaml" 2>&1; then
+  echo 'source investigation and fix generation shared one server ServiceAccount' >&2
+  exit 1
+fi
+validation_error_contains "$tmp/source-with-fix-actions.yaml" 'cannot share one server ServiceAccount safely'
 
 long_fullname=$(printf 'a%.0s' {1..63})
 long_source_name="${long_fullname:0:56}-source"
