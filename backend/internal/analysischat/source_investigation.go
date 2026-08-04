@@ -218,7 +218,7 @@ func (s *Service) startSourceInvestigation(
 			CreatedAt: stamp, UpdatedAt: stamp, ExpiresAt: current.View.ExpiresAt,
 		}
 		current.Investigations[requestID] = persistedInvestigation{
-			View: view, InputHash: inputHash, Subject: subject, Revision: strings.ToLower(subject.Repository.Revision),
+			View: view, InputHash: inputHash, Subject: subject, Repository: subject.Repository, Revision: strings.ToLower(subject.Repository.Revision),
 			LeaseID: leaseID, LeaseExpires: now.Add(s.sourceOpts.LeaseTTL),
 		}
 		state.OwnerRequests[owner] = append(state.OwnerRequests[owner], now)

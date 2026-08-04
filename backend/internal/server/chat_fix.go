@@ -54,7 +54,7 @@ func previewChatFixHandler(timeout time.Duration, run ChatFixRunner) http.Handle
 		body.Instruction = strings.TrimSpace(body.Instruction)
 		if body.PatternID == "" || len(body.PatternID) > maxChatFixPatternBytes ||
 			body.PatternHash == "" || len(body.PatternHash) > maxChatFixPatternHash ||
-			len(body.SourceRequestID) > maxChatFixRequestIDBytes || len(body.Instruction) > maxChatFixInputBytes {
+			body.SourceRequestID == "" || len(body.SourceRequestID) > maxChatFixRequestIDBytes || len(body.Instruction) > maxChatFixInputBytes {
 			http.Error(w, "invalid chat fix request", http.StatusBadRequest)
 			return
 		}

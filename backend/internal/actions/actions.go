@@ -810,8 +810,12 @@ func (s *Service) generateFixPreviewForPattern(
 			}
 		}
 		if generationContext.Source != nil {
-			repo := s.cfg.EffectiveAnalysisSourceRepo()
-			verificationPattern.SourceRef = repo.Owner + "/" + repo.Name + "@" + generationContext.Source.Revision
+			eff := s.cfg.EffectiveFixPRs()
+			if eff.Repo == nil || !strings.EqualFold(generationContext.Source.Repository, eff.Repo.Owner+"/"+eff.Repo.Name) {
+				return PreviewResult{}, nil, fmt.Errorf("%w: investigated repository does not match the configured fix target", ErrPreviewRejected)
+			}
+			verificationPattern.RemediationTargets = []models.RemediationTarget{generationContext.Source.Target}
+			verificationPattern.SourceRef = generationContext.Source.Repository + "@" + generationContext.Source.Revision
 			verificationPattern.RelevantFiles = nil
 			verificationPattern.FileLinks = nil
 			for _, citation := range generationContext.Source.Citations {

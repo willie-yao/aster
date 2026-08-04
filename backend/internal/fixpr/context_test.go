@@ -3,6 +3,8 @@ package fixpr
 import (
 	"strings"
 	"testing"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
 func validGenerationContext() GenerationContext {
@@ -14,6 +16,8 @@ func validGenerationContext() GenerationContext {
 		},
 		ArtifactCitations: []Evidence{{Path: "build-log.txt", LineStart: 10, LineEnd: 12, Quote: "bootstrap failed"}},
 		Source: &SourceContext{
+			Repository: "example/repo", State: "actionable_code_change",
+			Target:    models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Path: "controllers/machine.go", Symbol: "reconcile"},
 			Revision:  "0123456789abcdef0123456789abcdef01234567",
 			Finding:   "The reconciliation branch returns a requeue while NodeRef is nil.",
 			Citations: []Evidence{{Path: "controllers/machine.go", LineStart: 40, LineEnd: 44, Quote: "return requeue"}},

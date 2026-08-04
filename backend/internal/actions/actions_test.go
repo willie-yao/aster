@@ -21,6 +21,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/resolve"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
 )
 
@@ -1425,12 +1426,30 @@ func TestContextSourceVerificationDropsPatternPathsFromAnotherRevision(t *testin
 		AssistantAnswer:   "selected answer",
 		ArtifactCitations: []fixpr.Evidence{{Path: "build-log.txt", Quote: "failure"}},
 		Source: &fixpr.SourceContext{
+			Repository: "example/repo", State: sourceinvestigation.StateActionableCodeChange,
+			Target:    models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Path: "new.go", Symbol: "ExistingFix"},
 			Revision:  newRevision,
 			Citations: []fixpr.Evidence{{Path: "new.go", LineStart: 1, LineEnd: 1, Quote: "package source"}},
 		},
 	})
 	if len(got.RelevantFiles) != 1 || got.RelevantFiles[0] != "new.go" {
 		t.Fatalf("verification files = %v", got.RelevantFiles)
+	}
+}
+
+func TestContextSourceRepositoryMustMatchFixTarget(t *testing.T) {
+	pattern := systemicPattern()
+	cfg := &project.Config{AI: &project.AI{
+		SourceRepo: &project.SourceRepo{Owner: "source", Name: "repo"},
+		FixPRs:     &project.FixPRs{Enabled: true, Repo: &project.SourceRepo{Owner: "fix", Name: "repo"}},
+	}}
+	service := NewService(cfg, t.TempDir(), AIConfig{})
+	_, _, err := service.generateFixPreviewForPattern(t.Context(), pattern, "token", "", &fixpr.GenerationContext{
+		AssistantAnswer: "answer", ArtifactCitations: []fixpr.Evidence{{Path: "build-log.txt", Quote: "failure"}},
+		Source: &fixpr.SourceContext{Repository: "source/repo", State: sourceinvestigation.StateActionableCodeChange, Target: models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Path: "main.go", Symbol: "Fix"}, Revision: "0123456789abcdef0123456789abcdef01234567", Finding: "finding", Citations: []fixpr.Evidence{{Path: "main.go", Quote: "Fix"}}},
+	})
+	if !errors.Is(err, ErrPreviewRejected) {
+		t.Fatalf("repository mismatch error = %v", err)
 	}
 }
 

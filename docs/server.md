@@ -379,7 +379,7 @@ Content-Type: application/json
 
 {
   "pattern_id": "<recurring-pattern-id>",
-  "source_request_id": "<optional-successful-source-request-id>",
+  "source_request_id": "<required-successful-actionable-source-request-id>",
   "instruction": "<optional-maintainer-direction>"
 }
 ```
@@ -392,12 +392,12 @@ reconstructs those fields from the owner-bound private chat state and requires:
 - the original published analysis generation and content to remain current,
 - analysis freshness and the recurring pattern to come from one job-detail snapshot,
 - the recurring pattern to belong to the same job and include the selected build,
-- an optional source request to belong to that response and have a successful,
-  independently verified result.
+- a source request to belong to that response and have a successful, independently
+  verified actionable code or configuration result with a validated remediation target.
 
 Generation receives the selected assistant answer, optional evidence-backed
-revision, verified artifact citations, optional verified source finding and
-citations, the existing `PatternAnalysis`, and the bounded maintainer
+revision, verified artifact citations, the required verified source finding,
+repository, immutable revision, remediation target, and citations, the existing `PatternAnalysis`, and the bounded maintainer
 instruction. It never receives the complete transcript. The response is the
 normal fix `PreviewResult`; post its token to `/api/actions/confirm` to open the
 exact reviewed draft through the existing confirmation workflow. Confirmation state is stored in the shared private volume and remains idempotent
@@ -410,7 +410,7 @@ completion cannot overwrite a newer retry.
 The dashboard exposes **Use this finding in a fix proposal** only for completed
 evidence-backed responses whose selected build belongs to an actionable recurring
 pattern. Before generation, the user reviews the selected pattern, assistant
-answer, proposed revision, artifact citations, optional successful source result,
+answer, proposed revision, artifact citations, required actionable source result,
 and maintainer instruction. The generated draft then uses the existing preview and
 confirmation UI.
 

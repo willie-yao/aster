@@ -74,14 +74,15 @@ type persistedRequest struct {
 }
 
 type persistedInvestigation struct {
-	View          sourceinvestigation.View    `json:"view"`
-	InputHash     string                      `json:"input_hash"`
-	Subject       sourceinvestigation.Subject `json:"subject"`
-	Revision      string                      `json:"revision,omitempty"`
-	FailureKind   string                      `json:"failure_kind,omitempty"`
-	LeaseID       string                      `json:"lease_id,omitempty"`
-	LeaseExpires  time.Time                   `json:"lease_expires,omitempty"`
-	CancelRequest bool                        `json:"cancel_requested,omitempty"`
+	View          sourceinvestigation.View       `json:"view"`
+	InputHash     string                         `json:"input_hash"`
+	Subject       sourceinvestigation.Subject    `json:"subject"`
+	Repository    sourceinvestigation.Repository `json:"repository,omitempty"`
+	Revision      string                         `json:"revision,omitempty"`
+	FailureKind   string                         `json:"failure_kind,omitempty"`
+	LeaseID       string                         `json:"lease_id,omitempty"`
+	LeaseExpires  time.Time                      `json:"lease_expires,omitempty"`
+	CancelRequest bool                           `json:"cancel_requested,omitempty"`
 }
 
 type persistedActiveTurn struct {

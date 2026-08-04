@@ -8,13 +8,11 @@ import DialogActions from "@mui/material/DialogActions";
 import DialogContent from "@mui/material/DialogContent";
 import DialogTitle from "@mui/material/DialogTitle";
 import FormControl from "@mui/material/FormControl";
-import FormControlLabel from "@mui/material/FormControlLabel";
 import InputLabel from "@mui/material/InputLabel";
 import Link from "@mui/material/Link";
 import MenuItem from "@mui/material/MenuItem";
 import Select from "@mui/material/Select";
 import Stack from "@mui/material/Stack";
-import Switch from "@mui/material/Switch";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import {
@@ -122,7 +120,6 @@ export function ChatFixDialog({
   onClose: () => void;
 }) {
   const [patternID, setPatternID] = useState("");
-  const [includeSource, setIncludeSource] = useState(false);
   const [instruction, setInstruction] = useState("");
   const [preview, setPreview] = useState<ChatFixPreview | null>(null);
   const [busy, setBusy] = useState<"preview" | "confirm" | null>(null);
@@ -149,17 +146,12 @@ export function ChatFixDialog({
     if (!open) return;
     controllerRef.current?.abort();
     setPatternID(firstPatternID);
-    setIncludeSource(false);
     setInstruction("");
     setPreview(null);
     setBusy(null);
     setError(null);
     setURL(null);
   }, [identity, firstPatternID, open]);
-
-  useEffect(() => {
-    if (open && sourceResult) setIncludeSource(true);
-  }, [open, sourceResult]);
 
   useEffect(() => () => controllerRef.current?.abort(), []);
 
@@ -177,7 +169,7 @@ export function ChatFixDialog({
         message.request_id,
         patternID,
         selectedPattern.content_hash,
-        includeSource && sourceResult ? source?.requestID ?? null : null,
+        sourceResult && source ? source.requestID : null,
         instruction,
         controller.signal,
       );
@@ -369,22 +361,20 @@ export function ChatFixDialog({
               )}
             </ContextSection>
 
-            {sourceResult && source && (
-              <ContextSection title="Verified source investigation" icon={<SourceOutlined sx={{ fontSize: 17, color: "info.main" }} />}>
-                <FormControlLabel
-                  control={<Switch checked={includeSource} onChange={(event) => setIncludeSource(event.target.checked)} />}
-                  label="Include this source finding"
-                  sx={{ mb: includeSource ? 0.8 : 0 }}
-                />
-                {includeSource && (
-                  <Box sx={{ borderRadius: "10px", bgcolor: (theme) => soft(theme, "info", 0.06), p: 1.25 }}>
-                    <Typography variant="body2" sx={{ lineHeight: 1.6 }}>{sourceResult.finding}</Typography>
-                    {sourceResult.citations && sourceResult.citations.length > 0 && (
-                      <Box sx={{ mt: 1 }}><EvidenceList citations={sourceResult.citations} /></Box>
-                    )}
-                  </Box>
-                )}
+            {sourceResult && source ? (
+              <ContextSection title="Required verified source investigation" icon={<SourceOutlined sx={{ fontSize: 17, color: "info.main" }} />}>
+                <Box sx={{ borderRadius: "10px", bgcolor: (theme) => soft(theme, "info", 0.06), p: 1.25 }}>
+                  <Typography variant="body2" sx={{ lineHeight: 1.6 }}>{sourceResult.finding}</Typography>
+                  {sourceResult.target?.path && (
+                    <Typography variant="caption" color="text.secondary">Target: {sourceResult.target.path}</Typography>
+                  )}
+                  {sourceResult.citations && sourceResult.citations.length > 0 && (
+                    <Box sx={{ mt: 1 }}><EvidenceList citations={sourceResult.citations} /></Box>
+                  )}
+                </Box>
               </ContextSection>
+            ) : (
+              <Alert severity="warning">A completed actionable source investigation is required before fix generation.</Alert>
             )}
 
             <TextField
@@ -436,7 +426,7 @@ export function ChatFixDialog({
             color="warning"
             startIcon={busy === "preview" ? <CircularProgress size={16} color="inherit" /> : <BuildOutlined />}
             onClick={() => void generatePreview()}
-            disabled={busy !== null || !patternID}
+            disabled={busy !== null || !patternID || !sourceResult || !source}
           >
             {busy === "preview" ? "Generating" : "Generate fix preview"}
           </Button>

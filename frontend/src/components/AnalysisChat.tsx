@@ -1088,6 +1088,11 @@ export function AnalysisChat({
                 if (message.role === "user") {
                   return <UserMessage key={entry.key} content={message.content} />;
                 }
+                const sourceSelection = message.request_id ? sourceSelections[message.request_id] : undefined;
+                const actionableSource = sourceSelection?.view.status === "succeeded" &&
+                  (sourceSelection.view.result?.state === "actionable_code_change" ||
+                    sourceSelection.view.result?.state === "actionable_configuration_change") &&
+                  Boolean(sourceSelection.view.result?.target);
                 return (
                   <AssistantMessage
                     key={entry.key}
@@ -1096,7 +1101,7 @@ export function AnalysisChat({
                     correctionEnabled={!patternScope && Boolean(features.analysis_corrections)}
                     sourceInvestigationEnabled={!patternScope && Boolean(features.source_investigation)}
                     chatFixEnabled={Boolean(features.chat_fix)}
-                    fixEligible={Boolean(message.request_id && message.citations?.length && fixPatterns.length)}
+                    fixEligible={Boolean(message.request_id && message.citations?.length && fixPatterns.length && actionableSource)}
                     sessionID={session?.id ?? ""}
                     sourceRepository={session?.source_repository}
                     onReviewCorrection={(requestID) => void reviewCorrection(requestID)}

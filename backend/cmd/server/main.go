@@ -164,10 +164,16 @@ func enableInteractiveFeatures(ctx context.Context, opts *server.Options, projec
 			return err
 		}
 	}
-	if actionService != nil && chatService != nil {
-		opts.ChatFix = chatfix.NewService(chatService, actionService)
-		opts.Capabilities.Features.ChatFixMinConfidence = cfg.EffectiveFixPRs().MinConfidence
-		log.Printf("🛠️ analysis chat fix previews enabled")
+	if actionService != nil && chatService != nil && features.SourceInvestigation {
+		analysisRepo := cfg.EffectiveAnalysisSourceRepo()
+		fixConfig := cfg.EffectiveFixPRs()
+		if fixConfig.Repo != nil && strings.EqualFold(analysisRepo.Owner, fixConfig.Repo.Owner) && strings.EqualFold(analysisRepo.Name, fixConfig.Repo.Name) {
+			opts.ChatFix = chatfix.NewService(chatService, actionService)
+			opts.Capabilities.Features.ChatFixMinConfidence = fixConfig.MinConfidence
+			log.Printf("🛠️ analysis chat fix previews enabled")
+		} else {
+			log.Printf("🛠️ analysis chat fix previews disabled: source and fix repositories differ")
+		}
 	}
 	if features.AnalysisCorrections {
 		correctionService, err := corrections.NewService(dataDir, chatService, corrections.Options{})

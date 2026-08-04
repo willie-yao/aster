@@ -43,12 +43,18 @@ func (s *Service) PreviewChatFix(
 	patternHash = strings.TrimSpace(patternHash)
 	sourceRequestID = strings.TrimSpace(sourceRequestID)
 	instruction = strings.TrimSpace(instruction)
-	if patternID == "" || patternHash == "" || len(instruction) > 4096 {
-		return actions.PreviewResult{}, fmt.Errorf("%w: pattern_id and pattern_hash are required and instruction must not exceed 4096 bytes", analysischat.ErrInvalidRequest)
+	if patternID == "" || patternHash == "" || sourceRequestID == "" || len(instruction) > 4096 {
+		return actions.PreviewResult{}, fmt.Errorf("%w: pattern_id, pattern_hash, and source_request_id are required and instruction must not exceed 4096 bytes", analysischat.ErrInvalidRequest)
 	}
 	candidate, err := s.chat.FixCandidate(sessionID, owner, requestID, patternID, patternHash, sourceRequestID)
 	if err != nil {
 		return actions.PreviewResult{}, err
+	}
+	if candidate.SourceRequestID != sourceRequestID || candidate.SourceResult == nil || candidate.SourceResult.Target == nil ||
+		sourceinvestigation.ValidateVerifiedResult(*candidate.SourceResult) != nil ||
+		(candidate.SourceResult.State != sourceinvestigation.StateActionableCodeChange && candidate.SourceResult.State != sourceinvestigation.StateActionableConfigurationChange) ||
+		sourceinvestigation.ValidateRepository(candidate.SourceRepository) != nil || !strings.EqualFold(candidate.SourceRepository.Revision, candidate.SourceRevision) {
+		return actions.PreviewResult{}, fmt.Errorf("%w: completed actionable source investigation is required", sourceinvestigation.ErrInvalidResult)
 	}
 	generationContext := fixpr.GenerationContext{
 		AssistantAnswer:   candidate.AssistantAnswer,
@@ -59,12 +65,11 @@ func (s *Service) PreviewChatFix(
 			RootCause: candidate.ProposedRevision.RootCause, SuggestedFix: candidate.ProposedRevision.SuggestedFix,
 		}
 	}
-	if candidate.SourceResult != nil {
-		generationContext.Source = &fixpr.SourceContext{
-			Finding:   candidate.SourceResult.Finding,
-			Revision:  candidate.SourceRevision,
-			Citations: sourceEvidence(candidate.SourceResult.Citations),
-		}
+	generationContext.Source = &fixpr.SourceContext{
+		Repository: candidate.SourceRepository.Owner + "/" + candidate.SourceRepository.Name,
+		State:      candidate.SourceResult.State, Target: *candidate.SourceResult.Target,
+		Finding: candidate.SourceResult.Finding, Revision: candidate.SourceRevision,
+		Citations: sourceEvidence(candidate.SourceResult.Citations),
 	}
 	return s.fixes.PreviewFixWithContext(
 		ctx,

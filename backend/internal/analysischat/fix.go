@@ -28,6 +28,7 @@ type FixCandidate struct {
 	ProposedRevision  *Revision
 	ArtifactCitations []Citation
 	SourceRequestID   string
+	SourceRepository  sourceinvestigation.Repository
 	SourceRevision    string
 	SourceResult      *sourceinvestigation.Result
 	Pattern           models.PatternAnalysis
@@ -104,11 +105,25 @@ func (s *Service) FixCandidate(sessionID, owner, requestID, patternID, patternHa
 			if record.View.Result == nil || sourceinvestigation.ValidateVerifiedResult(*record.View.Result) != nil {
 				return changed, sourceinvestigation.ErrInvalidResult
 			}
+			if record.View.Result.State != sourceinvestigation.StateActionableCodeChange &&
+				record.View.Result.State != sourceinvestigation.StateActionableConfigurationChange {
+				return changed, fmt.Errorf("%w: source investigation is not actionable", sourceinvestigation.ErrInvalidResult)
+			}
+			if record.View.Result.Target == nil {
+				return changed, fmt.Errorf("%w: actionable source result has no target", sourceinvestigation.ErrInvalidResult)
+			}
+			if err := sourceinvestigation.ValidateRepository(record.Repository); err != nil {
+				return changed, fmt.Errorf("%w: source repository identity is invalid: %v", sourceinvestigation.ErrInvalidResult, err)
+			}
 			revision, ok := exactRepoRevision(record.Revision)
 			if !ok {
 				return changed, sourceinvestigation.ErrUnavailable
 			}
+			if !strings.EqualFold(revision, record.Repository.Revision) {
+				return changed, fmt.Errorf("%w: source revision does not match the bound repository", sourceinvestigation.ErrInvalidResult)
+			}
 			candidate.SourceRequestID = sourceRequestID
+			candidate.SourceRepository = record.Repository
 			candidate.SourceRevision = revision
 			candidate.SourceResult = sourceinvestigation.CloneResult(record.View.Result)
 			return changed, nil

@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actionverify"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
 const (
@@ -31,9 +34,12 @@ type RevisionContext struct {
 
 // SourceContext is one independently verified source investigation result.
 type SourceContext struct {
-	Finding   string     `json:"finding"`
-	Revision  string     `json:"revision"`
-	Citations []Evidence `json:"citations"`
+	Repository string                   `json:"repository"`
+	State      string                   `json:"state"`
+	Target     models.RemediationTarget `json:"target"`
+	Finding    string                   `json:"finding"`
+	Revision   string                   `json:"revision"`
+	Citations  []Evidence               `json:"citations"`
 }
 
 // GenerationContext is the selected bounded context added to one fix request.
@@ -62,6 +68,9 @@ func (c GenerationContext) Validate() error {
 		}
 	}
 	if c.Source != nil {
+		if strings.TrimSpace(c.Source.Repository) == "" || (c.Source.State != "actionable_code_change" && c.Source.State != "actionable_configuration_change") || actionverify.InvalidTargetReason(c.Source.Target) != "" {
+			return fmt.Errorf("source investigation identity and actionable target are required")
+		}
 		if !regexp.MustCompile(`^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$`).MatchString(strings.TrimSpace(c.Source.Revision)) {
 			return fmt.Errorf("source revision must be a full commit SHA")
 		}
