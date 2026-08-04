@@ -43,6 +43,7 @@ import (
 // Run it with, e.g.:
 //
 //	RUN_AI_BENCHMARK=1 \
+//	AI_API=chat_completions \
 //	AI_ENDPOINT=http://127.0.0.1:8000/v1/chat/completions \
 //	AI_MODEL=moonshotai/Kimi-K2.7-Code AI_TOKEN=x \
 //	go test ./internal/e2e -run TestAIBenchmark -v -timeout 60m
@@ -387,6 +388,10 @@ func TestAIBenchmark(t *testing.T) {
 	if endpoint == "" || model == "" {
 		t.Fatal("RUN_AI_BENCHMARK set but AI_ENDPOINT/AI_MODEL are not")
 	}
+	apiMode, err := benchmarkAPIMode()
+	if err != nil {
+		t.Fatal(err)
+	}
 	token := os.Getenv("AI_TOKEN")
 	if token == "" {
 		token = "benchmark" // Dynamo needs no key; keep the client happy.
@@ -436,15 +441,54 @@ func TestAIBenchmark(t *testing.T) {
 		for repetition := 1; repetition <= repetitions; repetition++ {
 			repetition := repetition
 			t.Run(fmt.Sprintf("%s/rep-%02d", bc.name, repetition), func(t *testing.T) {
-				runBenchCase(t, bc, repetition, resultsPath, endpoint, model, token, systemPrompt, agentic, projectSkills)
+				runBenchCase(t, bc, repetition, resultsPath, apiMode, endpoint, model, token, systemPrompt, agentic, projectSkills)
 			})
 		}
 	}
 }
 
-func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, endpoint, model, token, systemPrompt string, agentic project.Agentic, projectSkills *skills.Set) {
+func benchmarkAPIMode() (string, error) {
+	apiMode := strings.ToLower(strings.TrimSpace(os.Getenv("AI_API")))
+	if apiMode == "" {
+		return ai.APIChatCompletions, nil
+	}
+	switch apiMode {
+	case ai.APIChatCompletions, ai.APIResponses:
+		return apiMode, nil
+	default:
+		return "", fmt.Errorf("AI_API must be %q or %q", ai.APIChatCompletions, ai.APIResponses)
+	}
+}
+
+func TestBenchmarkAPIMode(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value string
+		want  string
+		ok    bool
+	}{
+		{name: "default", want: ai.APIChatCompletions, ok: true},
+		{name: "chat", value: " Chat_Completions ", want: ai.APIChatCompletions, ok: true},
+		{name: "responses", value: " Responses ", want: ai.APIResponses, ok: true},
+		{name: "invalid", value: "completions"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AI_API", tc.value)
+			got, err := benchmarkAPIMode()
+			if (err == nil) != tc.ok {
+				t.Fatalf("benchmarkAPIMode error = %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("benchmarkAPIMode = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMode, endpoint, model, token, systemPrompt string, agentic project.Agentic, projectSkills *skills.Set) {
 	client := ai.NewClientWithOptions(ai.Options{
 		Token:    token,
+		API:      apiMode,
 		Endpoint: endpoint,
 		Model:    model,
 		CacheDir: t.TempDir(), // isolated cache: always a cold analysis.
