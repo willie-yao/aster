@@ -295,6 +295,7 @@ func (s *Service) finishTurn(id, owner, requestID, leaseID, question string, rep
 				Role: "assistant", RequestID: requestID, Content: reply.Answer, Assessment: reply.Assessment,
 				Citations: slices.Clone(reply.Citations), ProposedRevision: cloneRevision(reply.ProposedRevision),
 				ToolCalls: reply.ToolCalls, GCSBytes: reply.GCSBytes, ElapsedMs: reply.ElapsedMs,
+				ProviderMs: reply.ProviderMs, ValidationRetries: reply.ValidationRetries,
 				CreatedAt: stamp,
 			},
 		)

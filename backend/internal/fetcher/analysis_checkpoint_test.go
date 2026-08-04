@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisruntime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/patterns"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
@@ -62,8 +64,16 @@ func TestSuccessfulPatternCacheSurvivesAnotherJobFailure(t *testing.T) {
 	if patternErr == nil || stats.Completed != 1 || stats.Failed != 1 {
 		t.Fatalf("stats=%+v error=%v", stats, patternErr)
 	}
-	if err := (&pipeline{opts: Options{OutDir: dataDir}}).persistRuntimeAnalysisState(runtime, traces); err != nil {
+	producer := ai.TraceEngine{Version: "v1.2.3", Commit: "0123456789abcdef", ImageTag: "sha-0123456"}
+	if err := (&pipeline{opts: Options{OutDir: dataDir, TraceEngine: producer}}).persistRuntimeAnalysisState(runtime, traces); err != nil {
 		t.Fatal(err)
+	}
+	persistedTraces, err := ai.LoadTraceStore(filepath.Join(dataDir, output.AITraceFilename))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if engine := persistedTraces.Snapshot().Engine; engine == nil || *engine != producer {
+		t.Fatalf("trace engine = %+v", engine)
 	}
 
 	callsBeforeReload := calls.Load()

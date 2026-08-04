@@ -121,27 +121,31 @@ type Revision struct {
 
 // Reply is the structured answer returned by a conversation runner.
 type Reply struct {
-	Answer           string     `json:"answer"`
-	Assessment       string     `json:"assessment"`
-	Citations        []Citation `json:"citations,omitempty"`
-	ProposedRevision *Revision  `json:"proposed_revision,omitempty"`
-	ToolCalls        int        `json:"tool_calls,omitempty"`
-	GCSBytes         int        `json:"gcs_bytes,omitempty"`
-	ElapsedMs        int        `json:"elapsed_ms,omitempty"`
+	Answer            string     `json:"answer"`
+	Assessment        string     `json:"assessment"`
+	Citations         []Citation `json:"citations,omitempty"`
+	ProposedRevision  *Revision  `json:"proposed_revision,omitempty"`
+	ToolCalls         int        `json:"tool_calls,omitempty"`
+	GCSBytes          int        `json:"gcs_bytes,omitempty"`
+	ElapsedMs         int        `json:"elapsed_ms,omitempty"`
+	ProviderMs        int        `json:"provider_ms,omitempty"`
+	ValidationRetries int        `json:"validation_retries,omitempty"`
 }
 
 // Message is one user or assistant entry in a session transcript.
 type Message struct {
-	Role             string     `json:"role"`
-	RequestID        string     `json:"request_id,omitempty"`
-	Content          string     `json:"content"`
-	Assessment       string     `json:"assessment,omitempty"`
-	Citations        []Citation `json:"citations,omitempty"`
-	ProposedRevision *Revision  `json:"proposed_revision,omitempty"`
-	ToolCalls        int        `json:"tool_calls,omitempty"`
-	GCSBytes         int        `json:"gcs_bytes,omitempty"`
-	ElapsedMs        int        `json:"elapsed_ms,omitempty"`
-	CreatedAt        string     `json:"created_at"`
+	Role              string     `json:"role"`
+	RequestID         string     `json:"request_id,omitempty"`
+	Content           string     `json:"content"`
+	Assessment        string     `json:"assessment,omitempty"`
+	Citations         []Citation `json:"citations,omitempty"`
+	ProposedRevision  *Revision  `json:"proposed_revision,omitempty"`
+	ToolCalls         int        `json:"tool_calls,omitempty"`
+	GCSBytes          int        `json:"gcs_bytes,omitempty"`
+	ElapsedMs         int        `json:"elapsed_ms,omitempty"`
+	ProviderMs        int        `json:"provider_ms,omitempty"`
+	ValidationRetries int        `json:"validation_retries,omitempty"`
+	CreatedAt         string     `json:"created_at"`
 }
 
 // Attempt is one owner-safe admitted model request.

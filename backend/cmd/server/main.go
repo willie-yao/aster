@@ -42,6 +42,12 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
 
+var (
+	version  = "dev"
+	commit   = "dev"
+	imageTag = "dev"
+)
+
 func main() {
 	var (
 		addr       string
@@ -68,6 +74,7 @@ func main() {
 		Capabilities: server.DefaultCapabilities(),
 		HSTSEnabled:  hstsEnabled,
 	}
+	opts.Capabilities.Engine = server.EngineInfo{Version: version, Commit: commit, ImageTag: imageTag}
 
 	// Enable admin-gated features only when a project config and an auth mode are
 	// both provided. Otherwise the server stays read-only.
@@ -144,6 +151,13 @@ func enableInteractiveFeatures(ctx context.Context, opts *server.Options, projec
 		return fmt.Errorf("configuring AI usage accounting: %w", err)
 	}
 	opts.AIUsageEnabled = usageRecorder != nil
+	if cfg.AI != nil {
+		opts.AIUsageModel = cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL")).Model
+		pricing := cfg.AI.EffectiveUsage().Pricing
+		if pricing.Currency != "" {
+			opts.AIUsagePricingRule = fmt.Sprintf("%s input=%s cached_input=%s output=%s per million tokens", pricing.Currency, pricing.InputPerMillion, pricing.CachedInputPerMillion, pricing.OutputPerMillion)
+		}
+	}
 	opts.TrustedOrigins = trustedOrigins(os.Getenv("OAUTH_REDIRECT_URL"), os.Getenv("TRUSTED_ORIGINS"))
 	var actionService *actions.Service
 	if features.Actions {

@@ -214,9 +214,18 @@ func TestHandler_HidesOperationalFiles(t *testing.T) {
 	}
 }
 
+func TestEnsureAnalysisTraceEngineUsesLegacyFallback(t *testing.T) {
+	traces := ai.AnalysisTraceFile{}
+	ensureAnalysisTraceEngine(&traces)
+	if traces.Engine == nil || traces.Engine.Version != "legacy" || traces.Engine.Commit != "unknown" || traces.Engine.ImageTag != "unknown" {
+		t.Fatalf("legacy trace engine = %+v", traces.Engine)
+	}
+}
+
 func TestHandler_AnalysisTracesAuthenticatedAndFiltered(t *testing.T) {
 	dataDir := t.TempDir()
-	traces := ai.AnalysisTraceFile{Version: 1, GeneratedAt: "2026-07-22T00:00:00Z", Traces: []ai.AnalysisTrace{
+	producer := ai.TraceEngine{Version: "v1.2.3", Commit: "0123456789abcdef", ImageTag: "sha-0123456"}
+	traces := ai.AnalysisTraceFile{Version: 1, GeneratedAt: "2026-07-22T00:00:00Z", Engine: &producer, Traces: []ai.AnalysisTrace{
 		{JobID: "job-a", BuildID: "1", TestName: "Test A", Outcome: "success", Events: []ai.TraceEvent{{Sequence: 1, Kind: "model_request", ResponseID: "resp-a"}}},
 		{JobID: "job-b", BuildID: "2", TestName: "Test B", Outcome: "error", Events: []ai.TraceEvent{{Sequence: 1, Kind: "model_request", ResponseID: "resp-b"}}},
 	}}
@@ -255,6 +264,9 @@ func TestHandler_AnalysisTracesAuthenticatedAndFiltered(t *testing.T) {
 	_ = resp.Body.Close()
 	if len(got.Traces) != 1 || got.Traces[0].JobID != "job-b" {
 		t.Fatalf("filtered traces = %+v", got.Traces)
+	}
+	if got.Engine == nil || *got.Engine != producer {
+		t.Fatalf("trace producer = %+v", got.Engine)
 	}
 
 	req, _ = http.NewRequest(http.MethodGet, srv.URL+"/api/analysis-traces/download", nil)
@@ -331,6 +343,9 @@ func TestHandler_Capabilities(t *testing.T) {
 	_ = resp.Body.Close()
 	if got.Mode != "server" {
 		t.Errorf("Mode = %q, want server", got.Mode)
+	}
+	if got.Engine.Version != "dev" || got.Engine.Commit != "dev" || got.Engine.ImageTag != "dev" {
+		t.Fatalf("Engine = %+v, want dev fallback", got.Engine)
 	}
 	if got.Features.Actions || got.Features.AnalysisTraces {
 		t.Errorf("Features = %+v, want all false at read parity", got.Features)

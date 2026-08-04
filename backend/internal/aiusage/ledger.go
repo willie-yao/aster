@@ -160,6 +160,7 @@ func (r *Recorder) Record(operation OperationUsage) OperationUsage {
 		})
 		if err != nil {
 			r.logf("⚠ AI usage cost estimate failed: %v", err)
+			operation.PricingHash = ""
 		} else {
 			operation.Currency = r.pricing.Currency()
 			operation.EstimatedCostNanos = cost
@@ -246,7 +247,7 @@ func (r *Recorder) applyLocked(operation OperationUsage, direction int64) {
 		}
 		r.ledger.Days = append(r.ledger.Days, DailyUsage{})
 		copy(r.ledger.Days[index+1:], r.ledger.Days[index:])
-		r.ledger.Days[index] = DailyUsage{Date: date, Features: map[Feature]UsageTotals{}}
+		r.ledger.Days[index] = DailyUsage{Date: date, Features: map[Feature]UsageTotals{}, PricingCountsKnown: true}
 	}
 	day := &r.ledger.Days[index]
 	if day.Features == nil {
@@ -376,6 +377,9 @@ func operationTotals(operation OperationUsage) UsageTotals {
 		OutputTokens: operation.OutputTokens, ReasoningTokens: operation.ReasoningTokens,
 		EstimatedCostNanos: operation.EstimatedCostNanos,
 	}
+	if operation.PricingHash != "" && operation.Currency != "" {
+		totals.PricedReportedRequests = operation.ReportedRequests
+	}
 	if operation.Outcome == OutcomeCacheHit {
 		totals.CacheHits = 1
 	}
@@ -395,6 +399,7 @@ func applyTotals(target *UsageTotals, value UsageTotals, direction int64) {
 	target.ExternalUnmeteredOperations += int(int64(value.ExternalUnmeteredOperations) * direction)
 	target.ModelRequests += int(int64(value.ModelRequests) * direction)
 	target.ReportedRequests += int(int64(value.ReportedRequests) * direction)
+	target.PricedReportedRequests += int(int64(value.PricedReportedRequests) * direction)
 	target.UnreportedRequests += int(int64(value.UnreportedRequests) * direction)
 	target.InputTokens += value.InputTokens * direction
 	target.CachedInputTokens += value.CachedInputTokens * direction

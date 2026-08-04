@@ -281,12 +281,13 @@ func ParseEncryptedContainerAnalysisState(raw string, key []byte, identity Conta
 
 // ContainerStateStore merges Task deltas into shared cache and trace files.
 type ContainerStateStore struct {
-	mu      sync.Mutex
-	dataDir string
-	cache   *ai.Cache
-	traces  *ai.TraceStore
-	usage   *aiusage.Recorder
-	staged  map[string]ai.CacheEntry
+	mu          sync.Mutex
+	dataDir     string
+	cache       *ai.Cache
+	traces      *ai.TraceStore
+	traceEngine ai.TraceEngine
+	usage       *aiusage.Recorder
+	staged      map[string]ai.CacheEntry
 }
 
 // NewContainerStateStore loads shared cache and trace state.
@@ -303,6 +304,17 @@ func NewContainerStateStore(dataDir string, usage ...*aiusage.Recorder) (*Contai
 		store.usage = usage[0]
 	}
 	return store, nil
+}
+
+// SetTraceEngine records the producer identity used for trace snapshots.
+func (s *ContainerStateStore) SetTraceEngine(engine ai.TraceEngine) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.traceEngine = engine
+	s.traces.SetEngine(engine)
+	s.mu.Unlock()
 }
 
 // CacheSeed returns the one cache entry relevant to a request.
@@ -412,6 +424,7 @@ func (s *ContainerStateStore) MergeTraces(state ContainerAnalysisState) error {
 	if err != nil {
 		return err
 	}
+	traces.SetEngine(s.traceEngine)
 	for _, trace := range state.Traces {
 		traces.Upsert(trace)
 	}
@@ -439,6 +452,7 @@ func (s *ContainerStateStore) Merge(state ContainerAnalysisState) error {
 	if err != nil {
 		return err
 	}
+	traces.SetEngine(s.traceEngine)
 	cache := ai.NewCache(s.dataDir)
 	cache.Merge(state.CacheEntries)
 	for _, entry := range s.staged {

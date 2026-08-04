@@ -593,6 +593,7 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 
 func (p *pipeline) persistIndividualAnalysisCheckpoint(container containerFailureAnalyzer, runtime *analysisruntime.Runtime, traces *ai.TraceStore) error {
 	if container != nil {
+		container.StateStore().SetTraceEngine(p.opts.TraceEngine)
 		if err := saveContainerAnalysisState(container.StateStore()); err != nil {
 			return fmt.Errorf("persisting completed container analysis: %w", err)
 		}
@@ -608,6 +609,7 @@ func (p *pipeline) persistRuntimeAnalysisState(runtime *analysisruntime.Runtime,
 	if traces == nil {
 		return fmt.Errorf("persisting AI traces: trace store is unavailable")
 	}
+	traces.SetEngine(p.opts.TraceEngine)
 	if err := saveAnalysisTraceStore(traces, filepath.Join(p.opts.OutDir, output.AITraceFilename)); err != nil {
 		return fmt.Errorf("persisting AI traces: %w", err)
 	}
@@ -671,6 +673,7 @@ func (p *pipeline) ensureContainerAnalyzer() (containerFailureAnalyzer, error) {
 	if err != nil {
 		return nil, err
 	}
+	container.StateStore().SetTraceEngine(p.opts.TraceEngine)
 	p.containerAnalyzer = container
 	return p.containerAnalyzer, nil
 }

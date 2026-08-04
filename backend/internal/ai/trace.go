@@ -22,12 +22,20 @@ const (
 	analysisTraceMaxResponseID = 2048
 )
 
+// TraceEngine identifies the engine that produced a trace snapshot.
+type TraceEngine struct {
+	Version  string `json:"version"`
+	Commit   string `json:"commit"`
+	ImageTag string `json:"image_tag"`
+}
+
 // AnalysisTraceFile is the private, bounded trace snapshot for one fetch run.
 type AnalysisTraceFile struct {
 	Version       int             `json:"version"`
 	GeneratedAt   string          `json:"generated_at"`
 	RetainedSince string          `json:"retained_since,omitempty"`
 	DroppedTraces int             `json:"dropped_traces,omitempty"`
+	Engine        *TraceEngine    `json:"engine,omitempty"`
 	Traces        []AnalysisTrace `json:"traces"`
 }
 
@@ -110,12 +118,38 @@ type TraceMetadata struct {
 // TraceStore collects completed traces for one fetch run.
 type TraceStore struct {
 	mu      sync.Mutex
+	engine  *TraceEngine
 	traces  []AnalysisTrace
 	dropped int
 }
 
 // NewTraceStore creates an empty trace store.
 func NewTraceStore() *TraceStore { return &TraceStore{} }
+
+// SetEngine records the producer identity for future snapshots.
+func (s *TraceStore) SetEngine(engine TraceEngine) {
+	if s == nil {
+		return
+	}
+	engine.Version = strings.TrimSpace(engine.Version)
+	engine.Commit = strings.TrimSpace(engine.Commit)
+	engine.ImageTag = strings.TrimSpace(engine.ImageTag)
+	if engine.Version == "" && engine.Commit == "" && engine.ImageTag == "" {
+		return
+	}
+	if engine.Version == "" {
+		engine.Version = "unknown"
+	}
+	if engine.Commit == "" {
+		engine.Commit = "unknown"
+	}
+	if engine.ImageTag == "" {
+		engine.ImageTag = "unknown"
+	}
+	s.mu.Lock()
+	s.engine = &engine
+	s.mu.Unlock()
+}
 
 // Start begins a trace session for one failure.
 func (s *TraceStore) Start(meta TraceMetadata) *TraceSession {
@@ -145,6 +179,10 @@ func (s *TraceStore) Snapshot() AnalysisTraceFile {
 	}
 	s.mu.Lock()
 	out.DroppedTraces = s.dropped
+	if s.engine != nil {
+		engine := *s.engine
+		out.Engine = &engine
+	}
 	out.Traces = append(out.Traces, s.traces...)
 	s.mu.Unlock()
 	if out.DroppedTraces > 0 && len(out.Traces) > 0 {

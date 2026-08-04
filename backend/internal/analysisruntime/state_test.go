@@ -131,6 +131,8 @@ func TestContainerStateStorePersistsCacheAndPrivateTrace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	producer := ai.TraceEngine{Version: "v1.2.3", Commit: "0123456789abcdef", ImageTag: "sha-0123456"}
+	store.SetTraceEngine(producer)
 	if err := store.Merge(state); err != nil {
 		t.Fatal(err)
 	}
@@ -146,8 +148,12 @@ func TestContainerStateStorePersistsCacheAndPrivateTrace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := traces.Snapshot().Traces; len(got) != 1 || got[0].Events[0].ResponseID != "resp-old" {
-		t.Fatalf("traces = %+v", got)
+	snapshot := traces.Snapshot()
+	if len(snapshot.Traces) != 1 || snapshot.Traces[0].Events[0].ResponseID != "resp-old" {
+		t.Fatalf("traces = %+v", snapshot.Traces)
+	}
+	if snapshot.Engine == nil || *snapshot.Engine != producer {
+		t.Fatalf("trace producer = %+v", snapshot.Engine)
 	}
 	state.CacheEntries = stateTestEntry(request, created.Add(-time.Minute), `{"summary":"stale"}`)
 	if err := reloaded.Merge(state); err != nil {

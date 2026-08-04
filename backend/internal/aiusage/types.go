@@ -75,6 +75,7 @@ type UsageTotals struct {
 	ExternalUnmeteredOperations int   `json:"external_unmetered_operations,omitempty"`
 	ModelRequests               int   `json:"model_requests,omitempty"`
 	ReportedRequests            int   `json:"reported_requests,omitempty"`
+	PricedReportedRequests      int   `json:"priced_reported_requests,omitempty"`
 	UnreportedRequests          int   `json:"unreported_requests,omitempty"`
 	InputTokens                 int64 `json:"input_tokens,omitempty"`
 	CachedInputTokens           int64 `json:"cached_input_tokens,omitempty"`
@@ -110,10 +111,11 @@ type OperationUsage struct {
 
 // DailyUsage is one UTC day of totals and feature breakdowns.
 type DailyUsage struct {
-	Date          string                  `json:"date"`
-	Totals        UsageTotals             `json:"totals"`
-	Features      map[Feature]UsageTotals `json:"features"`
-	PricingHashes []string                `json:"pricing_hashes,omitempty"`
+	Date               string                  `json:"date"`
+	Totals             UsageTotals             `json:"totals"`
+	Features           map[Feature]UsageTotals `json:"features"`
+	PricingHashes      []string                `json:"pricing_hashes,omitempty"`
+	PricingCountsKnown bool                    `json:"pricing_counts_known,omitempty"`
 }
 
 // DedupeEntry is the minimal state needed to ignore exact persistence replays.

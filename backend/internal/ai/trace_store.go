@@ -38,6 +38,9 @@ func LoadTraceStore(path string) (*TraceStore, error) {
 		return nil, fmt.Errorf("trace version %d is newer than supported version %d", snapshot.Version, analysisTraceVersion)
 	}
 	store := NewTraceStore()
+	if snapshot.Engine != nil {
+		store.SetEngine(*snapshot.Engine)
+	}
 	store.dropped = snapshot.DroppedTraces
 	for _, trace := range snapshot.Traces {
 		store.Upsert(trace)
@@ -108,10 +111,15 @@ func (s *TraceStore) snapshotWithinLimit(limit int) (AnalysisTraceFile, error) {
 	ordered := append([]AnalysisTrace(nil), s.traces...)
 	sort.Slice(ordered, func(i, j int) bool { return traceBefore(ordered[i], ordered[j]) })
 	generatedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	var engine *TraceEngine
+	if s.engine != nil {
+		value := *s.engine
+		engine = &value
+	}
 	candidate := func(drop int) (AnalysisTraceFile, []byte, error) {
 		traces := append([]AnalysisTrace(nil), ordered[drop:]...)
 		snapshot := AnalysisTraceFile{
-			Version: analysisTraceVersion, GeneratedAt: generatedAt,
+			Version: analysisTraceVersion, GeneratedAt: generatedAt, Engine: engine,
 			DroppedTraces: s.dropped + drop, Traces: traces,
 		}
 		if snapshot.DroppedTraces > 0 && len(traces) > 0 {

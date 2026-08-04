@@ -98,7 +98,18 @@ type Options struct {
 	// development leaves it disabled.
 	HSTSEnabled bool
 	// AIUsageEnabled exposes private usage data when authentication is configured.
-	AIUsageEnabled bool
+	AIUsageEnabled     bool
+	AIUsageModel       string
+	AIUsagePricingRule string
+}
+
+// Capabilities tells the frontend which deploy mode it is talking to and which
+// server-only features are available. Its absence (static Pages mode) means
+// read-only.
+type EngineInfo struct {
+	Version  string `json:"version"`
+	Commit   string `json:"commit"`
+	ImageTag string `json:"image_tag"`
 }
 
 // Capabilities tells the frontend which deploy mode it is talking to and which
@@ -111,7 +122,8 @@ type Capabilities struct {
 	Features Features `json:"features"`
 	// Auth describes how the frontend should authenticate for operator features.
 	// Nil when no authenticated feature is available.
-	Auth *AuthInfo `json:"auth,omitempty"`
+	Auth   *AuthInfo  `json:"auth,omitempty"`
+	Engine EngineInfo `json:"engine"`
 }
 
 // AuthInfo tells the frontend how admins sign in for operator features.
@@ -156,7 +168,7 @@ type authRegistrar interface {
 // DefaultCapabilities is the read-parity descriptor: server mode, no
 // interactive features yet.
 func DefaultCapabilities() Capabilities {
-	return Capabilities{Mode: "server"}
+	return Capabilities{Mode: "server", Engine: EngineInfo{Version: "dev", Commit: "dev", ImageTag: "dev"}}
 }
 
 // Handler builds the HTTP handler for the dashboard server. DataDir must exist.
@@ -198,8 +210,8 @@ func Handler(opts Options) (http.Handler, error) {
 			auth.Middleware(opts.Auth, analysisTracesHandler(opts.DataDir, true)))
 		if opts.AIUsageEnabled {
 			caps.Features.AIUsage = true
-			mux.Handle("GET /api/ai-usage", auth.Middleware(opts.Auth, aiUsageHandler(opts.DataDir, false, time.Now)))
-			mux.Handle("GET /api/ai-usage/download", auth.Middleware(opts.Auth, aiUsageHandler(opts.DataDir, true, time.Now)))
+			mux.Handle("GET /api/ai-usage", auth.Middleware(opts.Auth, aiUsageHandler(opts.DataDir, false, time.Now, opts.AIUsageModel, opts.AIUsagePricingRule)))
+			mux.Handle("GET /api/ai-usage/download", auth.Middleware(opts.Auth, aiUsageHandler(opts.DataDir, true, time.Now, opts.AIUsageModel, opts.AIUsagePricingRule)))
 		}
 		mux.Handle("/api/fetch-status",
 			readOnly(auth.Middleware(opts.Auth, fetchStatusHandler(opts.DataDir))))

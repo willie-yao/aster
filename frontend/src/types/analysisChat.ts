@@ -73,6 +73,8 @@ export interface AnalysisChatMessage {
   tool_calls?: number;
   gcs_bytes?: number;
   elapsed_ms?: number;
+  provider_ms?: number;
+  validation_retries?: number;
   created_at: string;
 }
 

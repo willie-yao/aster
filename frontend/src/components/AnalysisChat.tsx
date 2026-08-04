@@ -258,6 +258,13 @@ function AssistantMessage({
         <Typography variant="body2" sx={{ whiteSpace: "pre-line", lineHeight: 1.65 }}>
           <RichText text={message.content} steps fileCtx={fileCtx} />
         </Typography>
+        {(message.elapsed_ms || message.provider_ms || message.validation_retries) && (
+          <Stack direction="row" spacing={0.75} useFlexGap sx={{ flexWrap: "wrap" }}>
+            {message.elapsed_ms ? <Chip size="small" variant="outlined" label={`${(message.elapsed_ms / 1000).toFixed(1)}s total`} /> : null}
+            {message.provider_ms ? <Chip size="small" variant="outlined" label={`${(message.provider_ms / 1000).toFixed(1)}s provider`} /> : null}
+            {message.validation_retries ? <Chip size="small" color="warning" variant="outlined" label={`${message.validation_retries} response-contract repair`} /> : null}
+          </Stack>
+        )}
 
         {message.citations && message.citations.length > 0 && (
           <Box>

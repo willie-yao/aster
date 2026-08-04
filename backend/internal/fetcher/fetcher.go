@@ -98,6 +98,8 @@ type Options struct {
 	SkipSideEffects bool
 	// Version is the engine version embedded at build time, logged at startup.
 	Version string
+	// TraceEngine is the build identity persisted with private analysis traces.
+	TraceEngine ai.TraceEngine
 }
 
 type containerFailureAnalyzer interface {

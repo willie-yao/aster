@@ -59,7 +59,7 @@ func TestOperationRecordsProviderUsage(t *testing.T) {
 		t.Fatalf("pricing = %+v", got)
 	}
 	snapshot := recorder.Snapshot()
-	if len(snapshot.Days) != 1 || snapshot.Days[0].Totals.ModelRequests != 2 || len(snapshot.RecentOperations) != 1 {
+	if len(snapshot.Days) != 1 || snapshot.Days[0].Totals.ModelRequests != 2 || !snapshot.Days[0].PricingCountsKnown || len(snapshot.RecentOperations) != 1 {
 		t.Fatalf("snapshot = %+v", snapshot)
 	}
 	dedupe := snapshot.DedupeOperations[got.ID]
@@ -330,6 +330,13 @@ func TestOperationMarksOverflowUnreported(t *testing.T) {
 	got := operation.Finish(OutcomeSuccess)
 	if got.ModelRequests != 2 || got.ReportedRequests != 1 || got.UnreportedRequests != 1 || got.InputTokens != int64(math.MaxInt) || !got.UsageInvalid {
 		t.Fatalf("operation = %+v", got)
+	}
+	if got.EstimatedCostNanos != 0 || got.PricingHash != "" {
+		t.Fatalf("failed pricing provenance = %+v", got)
+	}
+	snapshot := recorder.Snapshot()
+	if snapshot.Days[0].Totals.PricedReportedRequests != 0 || len(snapshot.Days[0].PricingHashes) != 0 {
+		t.Fatalf("snapshot = %+v", snapshot)
 	}
 }
 

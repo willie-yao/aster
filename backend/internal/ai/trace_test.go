@@ -56,6 +56,7 @@ func TestTraceErrorCodeDoesNotPersistProviderBody(t *testing.T) {
 
 func TestTraceStoreSaveUsesPrivateSchema(t *testing.T) {
 	store := NewTraceStore()
+	store.SetEngine(TraceEngine{Version: "v1.2.3", Commit: "0123456789abcdef", ImageTag: "sha-0123456"})
 	second := store.Start(TraceMetadata{JobID: "job-b", BuildID: "2", TestName: "test-b", APIMode: APIChatCompletions})
 	second.Record(TraceEvent{Kind: "tool_call", Tool: "read_artifact", Bytes: 42})
 	second.Finish("success", nil)
@@ -80,8 +81,15 @@ func TestTraceStoreSaveUsesPrivateSchema(t *testing.T) {
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Version != analysisTraceVersion || len(got.Traces) != 2 {
+	if got.Version != analysisTraceVersion || got.Engine == nil || got.Engine.Commit != "0123456789abcdef" || len(got.Traces) != 2 {
 		t.Fatalf("snapshot = %+v", got)
+	}
+	reloaded, err := LoadTraceStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if engine := reloaded.Snapshot().Engine; engine == nil || engine.Version != "v1.2.3" || engine.ImageTag != "sha-0123456" {
+		t.Fatalf("reloaded engine = %+v", engine)
 	}
 	if got.Traces[0].JobID != "job-a" || got.Traces[1].JobID != "job-b" {
 		t.Fatalf("trace order = %+v", got.Traces)

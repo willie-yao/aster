@@ -21,17 +21,22 @@ import (
 const maxAIUsageFileBytes = 64 << 20
 
 type usageReport struct {
-	Version          int                      `json:"version"`
-	GeneratedAt      string                   `json:"generated_at"`
-	Range            usageReportRange         `json:"range"`
-	Currency         string                   `json:"currency,omitempty"`
-	MixedCurrency    bool                     `json:"mixed_currency,omitempty"`
-	MixedPricing     bool                     `json:"mixed_pricing,omitempty"`
-	Coverage         usageReportCoverage      `json:"coverage"`
-	Totals           usageReportTotals        `json:"totals"`
-	Daily            []usageReportDay         `json:"daily"`
-	Features         []usageReportFeature     `json:"features"`
-	RecentOperations []aiusage.OperationUsage `json:"recent_operations"`
+	Version           int                      `json:"version"`
+	GeneratedAt       string                   `json:"generated_at"`
+	Range             usageReportRange         `json:"range"`
+	Currency          string                   `json:"currency,omitempty"`
+	MixedCurrency     bool                     `json:"mixed_currency,omitempty"`
+	MixedPricing      bool                     `json:"mixed_pricing,omitempty"`
+	Coverage          usageReportCoverage      `json:"coverage"`
+	Totals            usageReportTotals        `json:"totals"`
+	Daily             []usageReportDay         `json:"daily"`
+	Features          []usageReportFeature     `json:"features"`
+	RecentOperations  []aiusage.OperationUsage `json:"recent_operations"`
+	SelectedModel     string                   `json:"selected_model,omitempty"`
+	PricingRule       string                   `json:"pricing_rule,omitempty"`
+	PricingConfigured bool                     `json:"pricing_configured"`
+	RangePriced       bool                     `json:"range_priced"`
+	PricingCoverage   string                   `json:"pricing_coverage"`
 }
 
 type usageReportRange struct {
@@ -43,6 +48,7 @@ type usageReportCoverage struct {
 	Status                      string `json:"status"`
 	ModelRequests               int    `json:"model_requests"`
 	ReportedRequests            int    `json:"reported_requests"`
+	PricedReportedRequests      int    `json:"priced_reported_requests"`
 	UnreportedRequests          int    `json:"unreported_requests"`
 	ExternalUnmeteredOperations int    `json:"external_unmetered_operations"`
 }
@@ -54,6 +60,7 @@ type usageReportTotals struct {
 	ExternalUnmeteredOperations int    `json:"external_unmetered_operations"`
 	ModelRequests               int    `json:"model_requests"`
 	ReportedRequests            int    `json:"reported_requests"`
+	PricedReportedRequests      int    `json:"priced_reported_requests"`
 	UnreportedRequests          int    `json:"unreported_requests"`
 	InputTokens                 int64  `json:"input_tokens"`
 	CachedInputTokens           int64  `json:"cached_input_tokens"`
@@ -72,7 +79,7 @@ type usageReportFeature struct {
 	Totals  usageReportTotals `json:"totals"`
 }
 
-func aiUsageHandler(dataDir string, attachment bool, now func() time.Time) http.Handler {
+func aiUsageHandler(dataDir string, attachment bool, now func() time.Time, model, pricingRule string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth.SetPrivateResponseHeaders(w.Header())
 		start, end, features, err := parseUsageQuery(r, now().UTC())
@@ -91,6 +98,9 @@ func aiUsageHandler(dataDir string, attachment bool, now func() time.Time) http.
 			return
 		}
 		report := buildUsageReport(ledgers, start, end, features, now().UTC())
+		report.SelectedModel = strings.TrimSpace(model)
+		report.PricingRule = strings.TrimSpace(pricingRule)
+		report.PricingConfigured = report.PricingRule != ""
 		w.Header().Set("Content-Type", "application/json")
 		if attachment {
 			w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="ai-usage-%s-to-%s.json"`, report.Range.Start, report.Range.End))
@@ -180,6 +190,7 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 	featureTotals := map[aiusage.Feature]aiusage.UsageTotals{}
 	currencies := map[string]bool{}
 	pricingHashes := map[string]bool{}
+	pricingCountsUnknown := false
 	var recent []aiusage.OperationUsage
 	for _, ledger := range ledgers {
 		for _, day := range ledger.Days {
@@ -188,6 +199,9 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 				continue
 			}
 			if len(featureFilter) == 0 {
+				if !day.PricingCountsKnown && day.Totals.ReportedRequests > 0 && (day.Totals.EstimatedCostNanos > 0 || len(day.PricingHashes) > 0) {
+					pricingCountsUnknown = true
+				}
 				if day.Totals.Operations > 0 && ledger.Currency != "" {
 					currencies[ledger.Currency] = true
 				}
@@ -208,6 +222,9 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 				addUsageTotals(&featureTotal, values)
 				featureTotals[feature] = featureTotal
 				if len(featureFilter) > 0 {
+					if !day.PricingCountsKnown && values.ReportedRequests > 0 && (values.EstimatedCostNanos > 0 || len(day.PricingHashes) > 0) {
+						pricingCountsUnknown = true
+					}
 					if values.Operations > 0 && ledger.Currency != "" {
 						currencies[ledger.Currency] = true
 					}
@@ -264,17 +281,29 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 		currency = value
 		break
 	}
+	pricingCoverage := "unavailable"
+	if totals.ReportedRequests > 0 {
+		switch {
+		case pricingCountsUnknown:
+			pricingCoverage = "unknown"
+		case totals.PricedReportedRequests == totals.ReportedRequests:
+			pricingCoverage = "complete"
+		case totals.PricedReportedRequests > 0:
+			pricingCoverage = "partial"
+		}
+	}
 	status := "complete"
-	if totals.ModelRequests == 0 || currency == "" || len(pricingHashes) == 0 {
+	if totals.ModelRequests == 0 || totals.ReportedRequests == 0 {
 		status = "unavailable"
-	} else if totals.UnreportedRequests > 0 || totals.ExternalUnmeteredOperations > 0 || len(currencies) > 1 {
+	} else if totals.UnreportedRequests > 0 || totals.ExternalUnmeteredOperations > 0 {
 		status = "partial"
 	}
 	return usageReport{
 		Version: aiusage.LedgerVersion, GeneratedAt: generatedAt.Format(time.RFC3339Nano),
 		Range:    usageReportRange{Start: start.Format(time.DateOnly), End: end.Format(time.DateOnly)},
 		Currency: currency, MixedCurrency: len(currencies) > 1, MixedPricing: len(pricingHashes) > 1,
-		Coverage: usageReportCoverage{Status: status, ModelRequests: totals.ModelRequests, ReportedRequests: totals.ReportedRequests, UnreportedRequests: totals.UnreportedRequests, ExternalUnmeteredOperations: totals.ExternalUnmeteredOperations},
+		RangePriced: pricingCoverage == "complete", PricingCoverage: pricingCoverage,
+		Coverage: usageReportCoverage{Status: status, ModelRequests: totals.ModelRequests, ReportedRequests: totals.ReportedRequests, PricedReportedRequests: totals.PricedReportedRequests, UnreportedRequests: totals.UnreportedRequests, ExternalUnmeteredOperations: totals.ExternalUnmeteredOperations},
 		Totals:   reportTotals(totals), Daily: days, Features: features, RecentOperations: recent,
 	}
 }
@@ -286,6 +315,7 @@ func addUsageTotals(target *aiusage.UsageTotals, value aiusage.UsageTotals) {
 	target.ExternalUnmeteredOperations += value.ExternalUnmeteredOperations
 	target.ModelRequests += value.ModelRequests
 	target.ReportedRequests += value.ReportedRequests
+	target.PricedReportedRequests += value.PricedReportedRequests
 	target.UnreportedRequests += value.UnreportedRequests
 	target.InputTokens += value.InputTokens
 	target.CachedInputTokens += value.CachedInputTokens
@@ -298,7 +328,7 @@ func reportTotals(value aiusage.UsageTotals) usageReportTotals {
 	return usageReportTotals{
 		Operations: value.Operations, CacheHits: value.CacheHits, Failures: value.Failures,
 		ExternalUnmeteredOperations: value.ExternalUnmeteredOperations,
-		ModelRequests:               value.ModelRequests, ReportedRequests: value.ReportedRequests, UnreportedRequests: value.UnreportedRequests,
+		ModelRequests:               value.ModelRequests, ReportedRequests: value.ReportedRequests, PricedReportedRequests: value.PricedReportedRequests, UnreportedRequests: value.UnreportedRequests,
 		InputTokens: value.InputTokens, CachedInputTokens: value.CachedInputTokens,
 		OutputTokens: value.OutputTokens, ReasoningTokens: value.ReasoningTokens,
 		EstimatedCostNanos: strconv.FormatInt(value.EstimatedCostNanos, 10),

@@ -24,10 +24,13 @@ export interface AuthInfo {
   login_url?: string;
 }
 
+export interface EngineInfo { version: string; commit: string; image_tag: string }
+
 export interface Capabilities {
   mode: "static" | "server";
   features: CapabilityFeatures;
   auth?: AuthInfo;
+  engine?: EngineInfo;
 }
 
 // STATIC_CAPABILITIES is the read-only default used whenever no server

@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fetcher"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/kubernetesdeploy"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/onboard"
@@ -26,7 +27,11 @@ import (
 
 // version is the engine version. Builds can override it with
 // -ldflags "-X main.version=<tag>"; local builds use "dev".
-var version = "dev"
+var (
+	version  = "dev"
+	commit   = "dev"
+	imageTag = "dev"
+)
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "kubernetes" {
@@ -55,6 +60,7 @@ func main() {
 		os.Exit(2)
 	}
 	opts.Version = version
+	opts.TraceEngine = ai.TraceEngine{Version: version, Commit: commit, ImageTag: imageTag}
 
 	if err := fetcher.Run(context.Background(), opts); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

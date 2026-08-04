@@ -16,10 +16,15 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fetcher"
 )
 
-var version = "dev"
+var (
+	version  = "dev"
+	commit   = "dev"
+	imageTag = "dev"
+)
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -37,6 +42,7 @@ func run(ctx context.Context, args []string) error {
 		return err
 	}
 	opts.Version = version
+	opts.TraceEngine = ai.TraceEngine{Version: version, Commit: commit, ImageTag: imageTag}
 
 	log.Printf("🌀 worker starting: out=%s watch=%s reconcile=%s", opts.OutDir, watchInterval, reconcileInterval)
 	return fetcher.RunWatch(ctx, opts, watchInterval, reconcileInterval)

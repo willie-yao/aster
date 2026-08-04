@@ -255,6 +255,7 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 	evidenceRevision := 0
 	modelCalls := 0
 	providerAttempts := 0
+	providerElapsedMs := 0
 	validationRetries := 0
 	maxLoopIters := a.opts.MaxIters
 	for iter := 0; iter < maxLoopIters; iter++ {
@@ -268,11 +269,15 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 		var response *modelResponse
 		if validationRetries > 0 {
 			var calls, attempts int
+			providerStart := time.Now()
 			response, calls, attempts, err = a.callAnalysisChatFinal(loopCtx, messages)
+			providerElapsedMs += int(time.Since(providerStart) / time.Millisecond)
 			modelCalls += calls
 			providerAttempts += attempts
 		} else {
+			providerStart := time.Now()
 			response, err = a.client.callModel(loopCtx, messages, schemas, parallelToolCalls)
+			providerElapsedMs += int(time.Since(providerStart) / time.Millisecond)
 			modelCalls++
 			providerAttempts += analysisChatResponseAttempts(response)
 		}
@@ -295,7 +300,7 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 		if validationRetries > 0 && len(message.ToolCalls) > 0 {
 			if fallback.usable(evidenceRevision) {
 				recordAnalysisChatResponseFallback(loopCtx, "validation_retry_tools", modelCalls, providerAttempts, response, analysisChatParseStats{}, "response_contract")
-				return completeAnalysisChatReply(fallback.reply, state, start), nil
+				return completeAnalysisChatReply(fallback.reply, state, start, providerElapsedMs, validationRetries), nil
 			}
 			recordAnalysisChatResponseFailure(loopCtx, "validation_retry_tools", modelCalls, providerAttempts, response, analysisChatParseStats{}, "response_contract")
 			return analysischat.Reply{}, analysischat.ErrResponseValidationFailed
@@ -315,7 +320,7 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 			lastContent = messageContent
 			reply, stats, validationErr := parseAnalysisChatReplyCandidates(lastContent, evidence)
 			if validationErr == nil {
-				return completeAnalysisChatReply(reply, state, start), nil
+				return completeAnalysisChatReply(reply, state, start, providerElapsedMs, validationRetries), nil
 			}
 			recordAnalysisChatResponseFailure(loopCtx, "tool_loop_validation", modelCalls, providerAttempts, response, stats, analysisChatValidationCategory(validationErr))
 			if validationRetries < analysisChatMaxValidationRetries {
@@ -330,7 +335,7 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 			}
 			if fallback.usable(evidenceRevision) {
 				recordAnalysisChatResponseFallback(loopCtx, "validation_retry", modelCalls, providerAttempts, response, stats, analysisChatValidationCategory(validationErr))
-				return completeAnalysisChatReply(fallback.reply, state, start), nil
+				return completeAnalysisChatReply(fallback.reply, state, start, providerElapsedMs, validationRetries), nil
 			}
 			return analysischat.Reply{}, analysisChatSafeValidationError(validationErr)
 		}
@@ -373,11 +378,13 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 	if err != nil {
 		if fallback.usable(evidenceRevision) {
 			recordAnalysisChatResponseFallback(loopCtx, "finalize_context", modelCalls, providerAttempts, nil, analysisChatParseStats{}, "context_budget")
-			return completeAnalysisChatReply(fallback.reply, state, start), nil
+			return completeAnalysisChatReply(fallback.reply, state, start, providerElapsedMs, validationRetries), nil
 		}
 		return analysischat.Reply{}, err
 	}
+	providerStart := time.Now()
 	response, calls, attempts, err := a.callAnalysisChatFinal(loopCtx, messages)
+	providerElapsedMs += int(time.Since(providerStart) / time.Millisecond)
 	modelCalls += calls
 	providerAttempts += attempts
 	if err != nil {
@@ -388,7 +395,7 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 		}
 		if fallback.usable(evidenceRevision) {
 			recordAnalysisChatResponseFallback(loopCtx, "finalize_request", modelCalls, providerAttempts, response, analysisChatParseStats{}, "provider_request")
-			return completeAnalysisChatReply(fallback.reply, state, start), nil
+			return completeAnalysisChatReply(fallback.reply, state, start, providerElapsedMs, validationRetries), nil
 		}
 		recordAnalysisChatResponseFailure(loopCtx, "finalize_request", modelCalls, providerAttempts, response, analysisChatParseStats{}, category)
 		return analysischat.Reply{}, analysischat.ErrProviderRequestFailed
@@ -396,7 +403,7 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 	if response == nil || !response.HasMessage || response.Message.Content == nil {
 		if fallback.usable(evidenceRevision) {
 			recordAnalysisChatResponseFallback(loopCtx, "finalize_response", modelCalls, providerAttempts, response, analysisChatParseStats{}, "empty_response")
-			return completeAnalysisChatReply(fallback.reply, state, start), nil
+			return completeAnalysisChatReply(fallback.reply, state, start, providerElapsedMs, validationRetries), nil
 		}
 		recordAnalysisChatResponseFailure(loopCtx, "finalize_response", modelCalls, providerAttempts, response, analysisChatParseStats{}, "empty_response")
 		return analysischat.Reply{}, analysischat.ErrResponseValidationFailed
@@ -407,12 +414,12 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 		category := analysisChatValidationCategory(err)
 		if fallback.usable(evidenceRevision) {
 			recordAnalysisChatResponseFallback(loopCtx, "finalize_validation", modelCalls, providerAttempts, response, stats, category)
-			return completeAnalysisChatReply(fallback.reply, state, start), nil
+			return completeAnalysisChatReply(fallback.reply, state, start, providerElapsedMs, validationRetries), nil
 		}
 		recordAnalysisChatResponseFailure(loopCtx, "finalize_validation", modelCalls, providerAttempts, response, stats, category)
 		return analysischat.Reply{}, analysisChatSafeValidationError(err)
 	}
-	return completeAnalysisChatReply(reply, state, start), nil
+	return completeAnalysisChatReply(reply, state, start, providerElapsedMs, validationRetries), nil
 }
 
 func (a *AnalysisChatAgent) callAnalysisChatFinal(ctx context.Context, messages []modelMessage) (*modelResponse, int, int, error) {
@@ -441,10 +448,12 @@ func (fallback *analysisChatFallback) usable(evidenceRevision int) bool {
 	return fallback != nil && fallback.evidenceRevision == evidenceRevision
 }
 
-func completeAnalysisChatReply(reply analysischat.Reply, state *agentState, start time.Time) analysischat.Reply {
+func completeAnalysisChatReply(reply analysischat.Reply, state *agentState, start time.Time, providerMs, validationRetries int) analysischat.Reply {
 	reply.ToolCalls = state.calls
 	reply.GCSBytes = state.gcsBytes
 	reply.ElapsedMs = int(time.Since(start) / time.Millisecond)
+	reply.ProviderMs = providerMs
+	reply.ValidationRetries = validationRetries
 	return reply
 }
 

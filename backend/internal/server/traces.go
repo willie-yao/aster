@@ -30,12 +30,19 @@ func analysisTracesHandler(dataDir string, attachment bool) http.Handler {
 			return
 		}
 		traces.Traces = filterAnalysisTraces(traces.Traces, r)
+		ensureAnalysisTraceEngine(&traces)
 		w.Header().Set("Content-Type", "application/json")
 		if attachment {
 			w.Header().Set("Content-Disposition", `attachment; filename="analysis-traces.json"`)
 		}
 		_ = json.NewEncoder(w).Encode(traces)
 	})
+}
+
+func ensureAnalysisTraceEngine(traces *ai.AnalysisTraceFile) {
+	if traces != nil && traces.Engine == nil {
+		traces.Engine = &ai.TraceEngine{Version: "legacy", Commit: "unknown", ImageTag: "unknown"}
+	}
 }
 
 func readAnalysisTraces(path string) (ai.AnalysisTraceFile, error) {

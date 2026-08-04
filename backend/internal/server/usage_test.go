@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,7 +31,7 @@ func TestAIUsageHandlerAuthenticatedMergedAndFiltered(t *testing.T) {
 	if err := statefile.WritePrivateJSONDurable(filepath.Join(dataDir, output.AIUsageServerFilename), serverLedger); err != nil {
 		t.Fatal(err)
 	}
-	h, err := Handler(Options{DataDir: dataDir, Capabilities: DefaultCapabilities(), Auth: fakeAuth{}, AuthMode: "dev", AIUsageEnabled: true})
+	h, err := Handler(Options{DataDir: dataDir, Capabilities: DefaultCapabilities(), Auth: fakeAuth{}, AuthMode: "dev", AIUsageEnabled: true, AIUsageModel: "provider/model", AIUsagePricingRule: "USD input=1 output=2 per million tokens"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,6 +52,9 @@ func TestAIUsageHandlerAuthenticatedMergedAndFiltered(t *testing.T) {
 	var got usageReport
 	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
 		t.Fatal(err)
+	}
+	if got.SelectedModel != "provider/model" || !got.PricingConfigured || !strings.Contains(got.PricingRule, "USD") {
+		t.Fatalf("usage metadata = %+v", got)
 	}
 	if got.Currency != "USD" || got.Coverage.Status != "partial" || got.Totals.Operations != 2 || got.Totals.InputTokens != 100 || got.Totals.EstimatedCostNanos != "1200" || len(got.Daily) != 2 || len(got.RecentOperations) != 2 {
 		t.Fatalf("report = %+v", got)
@@ -127,6 +131,88 @@ func TestBuildUsageReportScopesProvenanceToFilters(t *testing.T) {
 	}
 	report := buildUsageReport(ledgers, start, end, map[aiusage.Feature]bool{aiusage.FeatureAnalysisChat: true}, end)
 	if report.Currency != "USD" || report.MixedCurrency || report.MixedPricing || report.Coverage.Status != "complete" {
+		t.Fatalf("report = %+v", report)
+	}
+}
+
+func TestBuildUsageReportMarksFilteredLegacyPricingUnknown(t *testing.T) {
+	start, _ := time.Parse(time.DateOnly, "2026-08-01")
+	end, _ := time.Parse(time.DateOnly, "2026-08-03")
+	report := buildUsageReport([]aiusage.UsageLedger{{Version: 1, Currency: "USD", Days: []aiusage.DailyUsage{{
+		Date:   "2026-08-02",
+		Totals: aiusage.UsageTotals{Operations: 2, ModelRequests: 2, ReportedRequests: 2},
+		Features: map[aiusage.Feature]aiusage.UsageTotals{
+			aiusage.FeatureFailureAnalysis: {Operations: 1, ModelRequests: 1, ReportedRequests: 1},
+			aiusage.FeatureAnalysisChat:    {Operations: 1, ModelRequests: 1, ReportedRequests: 1},
+		},
+		PricingHashes: []string{"zero-price"},
+	}}}}, start, end, map[aiusage.Feature]bool{aiusage.FeatureAnalysisChat: true}, end)
+	if report.PricingCoverage != "unknown" || report.RangePriced {
+		t.Fatalf("report = %+v", report)
+	}
+}
+
+func TestBuildUsageReportSeparatesCoverageFromPricing(t *testing.T) {
+	start, _ := time.Parse(time.DateOnly, "2026-08-01")
+	end, _ := time.Parse(time.DateOnly, "2026-08-03")
+	report := buildUsageReport([]aiusage.UsageLedger{{Version: 1, Days: []aiusage.DailyUsage{{
+		Date: "2026-08-02", Totals: aiusage.UsageTotals{Operations: 1, ModelRequests: 1, ReportedRequests: 1, InputTokens: 10},
+	}}}}, start, end, nil, end)
+	if report.Coverage.Status != "complete" || report.RangePriced || report.PricingCoverage != "unavailable" {
+		t.Fatalf("report = %+v", report)
+	}
+}
+
+func TestBuildUsageReportIgnoresUnappliedPricingHash(t *testing.T) {
+	start, _ := time.Parse(time.DateOnly, "2026-08-01")
+	end, _ := time.Parse(time.DateOnly, "2026-08-03")
+	report := buildUsageReport([]aiusage.UsageLedger{{Version: 1, Currency: "USD", Days: []aiusage.DailyUsage{{
+		Date:               "2026-08-02",
+		PricingCountsKnown: true,
+		Totals:             aiusage.UsageTotals{Operations: 2, ModelRequests: 1, ReportedRequests: 1},
+		PricingHashes:      []string{"unused-price"},
+	}}}}, start, end, nil, end)
+	if report.PricingCoverage != "unavailable" || report.RangePriced {
+		t.Fatalf("report = %+v", report)
+	}
+}
+
+func TestBuildUsageReportRetainsPricingCoverageCounts(t *testing.T) {
+	start, _ := time.Parse(time.DateOnly, "2026-08-01")
+	end, _ := time.Parse(time.DateOnly, "2026-08-03")
+	report := buildUsageReport([]aiusage.UsageLedger{{Version: 1, Currency: "USD", Days: []aiusage.DailyUsage{{
+		Date:               "2026-08-02",
+		PricingCountsKnown: true,
+		Totals:             aiusage.UsageTotals{Operations: 2, ModelRequests: 2, ReportedRequests: 2, PricedReportedRequests: 1, EstimatedCostNanos: 100},
+		Features: map[aiusage.Feature]aiusage.UsageTotals{
+			aiusage.FeatureFailureAnalysis: {Operations: 1, ModelRequests: 1, ReportedRequests: 1, PricedReportedRequests: 1, EstimatedCostNanos: 100},
+			aiusage.FeatureAnalysisChat:    {Operations: 1, ModelRequests: 1, ReportedRequests: 1},
+		},
+		PricingHashes: []string{"price"},
+	}}}}, start, end, nil, end)
+	if report.PricingCoverage != "partial" || report.RangePriced || report.Totals.PricedReportedRequests != 1 || report.Coverage.PricedReportedRequests != 1 {
+		t.Fatalf("report = %+v", report)
+	}
+	if len(report.Daily) != 1 || report.Daily[0].Totals.PricedReportedRequests != 1 {
+		t.Fatalf("daily = %+v", report.Daily)
+	}
+	pricedByFeature := map[aiusage.Feature]int{}
+	for _, feature := range report.Features {
+		pricedByFeature[feature.Feature] = feature.Totals.PricedReportedRequests
+	}
+	if len(report.Features) != 2 || pricedByFeature[aiusage.FeatureFailureAnalysis] != 1 || pricedByFeature[aiusage.FeatureAnalysisChat] != 0 {
+		t.Fatalf("features = %+v", report.Features)
+	}
+}
+
+func TestBuildUsageReportMarksMixedLegacyPricingUnknown(t *testing.T) {
+	start, _ := time.Parse(time.DateOnly, "2026-08-01")
+	end, _ := time.Parse(time.DateOnly, "2026-08-03")
+	report := buildUsageReport([]aiusage.UsageLedger{{Version: 1, Currency: "USD", Days: []aiusage.DailyUsage{
+		{Date: "2026-08-01", Totals: aiusage.UsageTotals{Operations: 1, ModelRequests: 1, ReportedRequests: 1, EstimatedCostNanos: 100}, PricingHashes: []string{"legacy-price"}},
+		{Date: "2026-08-02", PricingCountsKnown: true, Totals: aiusage.UsageTotals{Operations: 1, ModelRequests: 1, ReportedRequests: 1, PricedReportedRequests: 1, EstimatedCostNanos: 100}, PricingHashes: []string{"current-price"}},
+	}}}, start, end, nil, end)
+	if report.PricingCoverage != "unknown" || report.RangePriced {
 		t.Fatalf("report = %+v", report)
 	}
 }
