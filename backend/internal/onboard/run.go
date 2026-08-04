@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -43,12 +42,12 @@ func (defaultSweeper) Discover(ctx context.Context, cfg *project.Config, include
 
 type localScaffoldWriter struct{}
 
-func (localScaffoldWriter) Validate(outDir string, files map[string]string) error {
-	return validateFileDestination(outDir, files)
+func (localScaffoldWriter) Inspect(outDir string, files map[string]string) ([]DestinationFilePlan, []string, error) {
+	return inspectFileDestination(outDir, files)
 }
 
-func (localScaffoldWriter) Write(outDir string, files map[string]string) error {
-	return writeFiles(outDir, files)
+func (localScaffoldWriter) Write(outDir string, files map[string]string, updateExisting bool, expected []DestinationFilePlan) error {
+	return writeFiles(outDir, files, updateExisting, expected)
 }
 
 type githubPullRequestWriter struct {
@@ -108,7 +107,15 @@ func BuildPlan(ctx context.Context, opts Options) (*Plan, error) {
 		return nil, err
 	}
 	terminal := Terminal{In: strings.NewReader(""), Out: io.Discard, Err: io.Discard}
-	return buildPlan(ctx, opts, planningContext{}, defaultDependencies(opts, terminal))
+	deps := defaultDependencies(opts, terminal)
+	plan, err := buildPlan(ctx, opts, planningContext{}, deps)
+	if err != nil {
+		return nil, err
+	}
+	if err := preflightPlan(plan, deps); err != nil {
+		return nil, err
+	}
+	return plan, nil
 }
 
 // Apply revalidates and applies a plan using the provided GitHub write token.
@@ -197,13 +204,34 @@ func normalizeRepositories(opts *Options) error {
 }
 
 func preflightPlan(plan *Plan, deps dependencies) error {
-	if plan == nil {
-		return fmt.Errorf("onboarding plan is empty")
+	if err := inspectPlanDestination(plan, deps); err != nil {
+		return err
 	}
 	if plan.Destination.OpenPR {
 		return nil
 	}
-	return deps.files.Validate(plan.Destination.OutDir, plan.Files)
+	if replacements := destinationReplacementPaths(plan.Destination.Files); len(replacements) > 0 && !plan.Destination.UpdateExisting {
+		return &destinationConflictError{paths: replacements}
+	}
+	return nil
+}
+
+func inspectPlanDestination(plan *Plan, deps dependencies) error {
+	if plan == nil {
+		return fmt.Errorf("onboarding plan is empty")
+	}
+	if plan.Destination.OpenPR {
+		plan.Destination.Files = nil
+		plan.Destination.StaleFiles = nil
+		return nil
+	}
+	files, stale, err := deps.files.Inspect(plan.Destination.OutDir, plan.Files)
+	if err != nil {
+		return err
+	}
+	plan.Destination.Files = files
+	plan.Destination.StaleFiles = stale
+	return nil
 }
 
 func applyPlan(ctx context.Context, plan *Plan, githubToken string, deps dependencies) error {
@@ -226,7 +254,17 @@ func applyPlan(ctx context.Context, plan *Plan, githubToken string, deps depende
 		fmt.Fprintf(deps.terminal.Out, "Scaffold pull request opened: %s\n", url)
 		return nil
 	}
-	if err := deps.files.Write(plan.Destination.OutDir, plan.Files); err != nil {
+	files, _, err := deps.files.Inspect(plan.Destination.OutDir, plan.Files)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(files, plan.Destination.Files) {
+		return fmt.Errorf("dashboard consumer directory changed after review; rerun onboarding before writing")
+	}
+	if replacements := destinationReplacementPaths(files); len(replacements) > 0 && !plan.Destination.UpdateExisting {
+		return &destinationConflictError{paths: replacements}
+	}
+	if err := deps.files.Write(plan.Destination.OutDir, plan.Files, plan.Destination.UpdateExisting, plan.Destination.Files); err != nil {
 		return err
 	}
 	fmt.Fprintf(deps.terminal.Out, "Scaffold written to %s/\n", plan.Destination.OutDir)
@@ -261,8 +299,20 @@ func validatePlan(planValue *Plan) error {
 	if normalizedRepo.Owner != planValue.DashboardRepo.Owner || normalizedRepo.Name != planValue.DashboardRepo.Name {
 		return fmt.Errorf("onboarding plan dashboard repo fields do not match full_name")
 	}
-	if !planValue.Destination.OpenPR && strings.TrimSpace(planValue.Destination.OutDir) == "" {
-		return fmt.Errorf("onboarding plan output directory is required")
+	if !planValue.Destination.OpenPR {
+		normalizedOutDir, err := normalizeDashboardConsumerDir(planValue.Destination.OutDir)
+		if err != nil {
+			return err
+		}
+		if normalizedOutDir != planValue.Destination.OutDir {
+			return fmt.Errorf("onboarding plan dashboard consumer directory is not normalized")
+		}
+	}
+	if planValue.Destination.OpenPR && planValue.Destination.UpdateExisting {
+		return fmt.Errorf("onboarding plan cannot combine open-PR and local update modes")
+	}
+	if planValue.Destination.OpenPR && (len(planValue.Destination.Files) > 0 || len(planValue.Destination.StaleFiles) > 0) {
+		return fmt.Errorf("onboarding plan open-PR destination contains local filesystem state")
 	}
 	if err := validatePromptPlan(planValue.Prompt); err != nil {
 		return err
@@ -287,8 +337,44 @@ func validatePlan(planValue *Plan) error {
 		if _, ok := expected[file]; !ok {
 			return fmt.Errorf("onboarding plan contains unexpected file %q", file)
 		}
-		if path.IsAbs(file) || path.Clean(file) != file || strings.Contains(file, "\\") {
-			return fmt.Errorf("onboarding plan file path %q is not a safe repo-relative path", file)
+		if err := validateDestinationFilePath(file); err != nil {
+			return err
+		}
+	}
+	if !planValue.Destination.OpenPR {
+		if len(planValue.Destination.Files) != len(expected) {
+			return fmt.Errorf("onboarding plan destination file set is incomplete")
+		}
+		seen := make(map[string]struct{}, len(planValue.Destination.Files))
+		for _, file := range planValue.Destination.Files {
+			if _, ok := expected[file.Path]; !ok {
+				return fmt.Errorf("onboarding plan destination contains unexpected file %q", file.Path)
+			}
+			if _, duplicate := seen[file.Path]; duplicate {
+				return fmt.Errorf("onboarding plan destination duplicates file %q", file.Path)
+			}
+			seen[file.Path] = struct{}{}
+			if file.Action != destinationActionCreate && file.Action != destinationActionReplace {
+				return fmt.Errorf("onboarding plan destination action %q is invalid", file.Action)
+			}
+			if file.Action == destinationActionReplace && !planValue.Destination.UpdateExisting {
+				return fmt.Errorf("onboarding plan replacement requires update-existing mode")
+			}
+		}
+	}
+	for _, stale := range planValue.Destination.StaleFiles {
+		if err := validateDestinationFilePath(stale); err != nil {
+			return err
+		}
+		known := false
+		for _, candidate := range knownDeploymentFiles {
+			if stale == candidate {
+				known = true
+				break
+			}
+		}
+		if !known {
+			return fmt.Errorf("onboarding plan stale file %q is not a known deployment file", stale)
 		}
 	}
 	if strings.TrimSpace(planValue.Files["prompts/system.md"]) == "" {
@@ -300,18 +386,6 @@ func validatePlan(planValue *Plan) error {
 	}
 	if !reflect.DeepEqual(*parsed, planValue.Project) {
 		return fmt.Errorf("onboarding plan project metadata does not match project.yaml")
-	}
-	return nil
-}
-
-func validateFileDestination(outDir string, files map[string]string) error {
-	for _, rel := range sortedFilePaths(files) {
-		full := filepath.Join(outDir, rel)
-		if _, err := os.Stat(full); err == nil {
-			return fmt.Errorf("refusing to overwrite existing %s; choose an empty --out directory", full)
-		} else if !os.IsNotExist(err) {
-			return fmt.Errorf("checking %s: %w", full, err)
-		}
 	}
 	return nil
 }
@@ -374,12 +448,23 @@ func printReview(out io.Writer, plan *Plan) {
 	if plan.Destination.OpenPR {
 		fmt.Fprintln(out, "  Destination:          scaffold pull request")
 	} else {
-		fmt.Fprintf(out, "  Output:               %s\n", safeTerminal(plan.Destination.OutDir))
+		fmt.Fprintf(out, "  Dashboard consumer directory: %s\n", safeTerminal(filepath.Clean(plan.Destination.OutDir)))
+		if plan.Destination.UpdateExisting {
+			fmt.Fprintln(out, "  Existing scaffold:    update known generated files")
+		}
 	}
-	paths := sortedFilePaths(plan.Files)
 	fmt.Fprintln(out, "  Files:")
-	for _, path := range paths {
-		fmt.Fprintf(out, "    - %s\n", path)
+	if len(plan.Destination.Files) > 0 {
+		for _, file := range plan.Destination.Files {
+			fmt.Fprintf(out, "    - %s %s\n", file.Action, file.Path)
+		}
+	} else {
+		for _, path := range sortedFilePaths(plan.Files) {
+			fmt.Fprintf(out, "    - %s\n", path)
+		}
+	}
+	for _, stale := range plan.Destination.StaleFiles {
+		fmt.Fprintf(out, "  Warning: existing deployment file %s is stale for the selected mode and will be left untouched.\n", stale)
 	}
 	fmt.Fprintln(out, "\nNo files or external resources have been changed.")
 }
@@ -401,7 +486,7 @@ func reviewValue(value string) string {
 }
 
 func printDryRun(out io.Writer, plan *Plan) {
-	fmt.Fprintln(out, "\nDry run complete. The scaffold rendered and project.yaml passed strict validation.")
+	fmt.Fprintln(out, "\nDry run complete. The scaffold rendered, project.yaml passed strict validation, and the create/replace plan was reviewed.")
 	fmt.Fprintln(out, "No files were written and no pull request was opened.")
 }
 

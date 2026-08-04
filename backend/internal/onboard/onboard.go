@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"path/filepath"
 	"strings"
 	"text/template"
@@ -200,6 +199,9 @@ func validateOptions(opts *Options) error {
 	if opts.GCSWebBase != "" && opts.Bucket == "" {
 		return fmt.Errorf("--gcsweb-base only applies with --bucket")
 	}
+	if opts.OpenPR && opts.UpdateExisting {
+		return fmt.Errorf("--update-existing applies only to local output and cannot be combined with --open-pr")
+	}
 	if opts.RequirePromptDraft && opts.NoPrompt {
 		return fmt.Errorf("--require-prompt-draft is valid only when experimental API prompt drafting is selected")
 	}
@@ -227,6 +229,7 @@ func validateOptions(opts *Options) error {
 		_, name, _ := parseRepo(opts.DashboardRepo)
 		opts.OutDir = name
 	}
+	opts.OutDir = filepath.Clean(opts.OutDir)
 	return nil
 }
 
@@ -418,22 +421,6 @@ func buildScaffoldData(opts Options, cats []project.CategoryRule) scaffoldData {
 func validateGeneratedYAML(yamlText string) error {
 	_, err := project.Parse([]byte(yamlText))
 	return err
-}
-
-func writeFiles(outDir string, files map[string]string) error {
-	if err := validateFileDestination(outDir, files); err != nil {
-		return err
-	}
-	for _, rel := range sortedFilePaths(files) {
-		full := filepath.Join(outDir, rel)
-		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-			return err
-		}
-		if err := os.WriteFile(full, []byte(files[rel]), 0o644); err != nil {
-			return fmt.Errorf("writing %s: %w", rel, err)
-		}
-	}
-	return nil
 }
 
 func provider(opts Options) string {

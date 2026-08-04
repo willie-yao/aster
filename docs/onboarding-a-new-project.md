@@ -45,6 +45,12 @@ not change that destination owner. If no safe owner is known, enter `owner/name`
 explicitly. The optional short name starts empty because repository initials do
 not reliably identify established project abbreviations.
 
+When the source comes from the current Git checkout, the local destination
+defaults to a sibling such as `../<dashboard-repository-name>`. This keeps the
+source and dashboard consumer repositories separate. When the source was
+provided explicitly, the default is a relative directory under the current
+working directory. `--out` always overrides the default.
+
 ## Choose a deployment
 
 ### GitHub Pages
@@ -145,6 +151,13 @@ go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboar
 Use `--no-prompt` when you want the reviewable TODO template instead of
 sending source evidence and matched Prow metadata to an AI provider. This flag
 controls prompt drafting. It does not disable the interactive wizard.
+
+Local onboarding refuses to replace generated files unless `--update-existing`
+is explicit. Interactive onboarding instead offers another directory, updating
+only the listed scaffold files, or cancellation. The safe default is another
+directory. Before confirmation, review every file marked `create` or `replace`.
+Unrelated files and stale files from another deployment mode are left untouched.
+Open-PR mode continues to use a GitHub diff and does not use local update mode.
 
 Use `--prompt-debug` for sanitized diagnostics on stderr. Debug output contains
 stage timing, bounded source paths and line ranges, counts, provider hostname,

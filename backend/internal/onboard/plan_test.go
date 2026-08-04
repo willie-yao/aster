@@ -3,6 +3,8 @@ package onboard
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -30,6 +32,14 @@ func TestBuildPlan_RendersAndValidatesWithoutWriting(t *testing.T) {
 	for _, path := range []string{"project.yaml", "prompts/system.md", ".github/workflows/deploy.yml", "CHECKLIST.md"} {
 		if plan.Files[path] == "" {
 			t.Errorf("planned file %q is empty", path)
+		}
+	}
+	if len(plan.Destination.Files) != len(plan.Files) {
+		t.Fatalf("destination files = %+v", plan.Destination.Files)
+	}
+	for _, file := range plan.Destination.Files {
+		if file.Action != destinationActionCreate {
+			t.Fatalf("destination file = %+v", file)
 		}
 	}
 }
@@ -298,5 +308,66 @@ func TestBuildPlanPassesExistingJobEvidenceToPromptBuilder(t *testing.T) {
 				t.Fatalf("interactive dashboards = %v", prompts.gotInput.Jobs[0].Dashboards)
 			}
 		})
+	}
+}
+
+func TestApply_RejectsDestinationChangesAfterReview(t *testing.T) {
+	deps, _, writer, _ := wizardDependencies("")
+	dir := t.TempDir()
+	deps.files = localScaffoldWriter{}
+	opts := Options{
+		TestGrid: "dashboard-a", DashboardRepo: "example/project-prow-ai-dashboard",
+		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: dir, NoPrompt: true,
+	}
+	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
+	if err != nil {
+		t.Fatalf("buildPlan: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "project.yaml"), []byte("unexpected"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyPlan(context.Background(), plan, "", deps); err == nil || !strings.Contains(err.Error(), "changed after review") {
+		t.Fatalf("applyPlan error = %v", err)
+	}
+	if writer.writes != 0 {
+		t.Fatalf("fake writer writes = %d", writer.writes)
+	}
+	content, err := os.ReadFile(filepath.Join(dir, "project.yaml"))
+	if err != nil || string(content) != "unexpected" {
+		t.Fatalf("destination changed: %q %v", content, err)
+	}
+}
+
+func TestBuildPlanDoesNotRenderMachineSpecificOutputPath(t *testing.T) {
+	deps, _, _, _ := wizardDependencies("")
+	opts := Options{
+		TestGrid: "dashboard-a", DashboardRepo: "example/project-prow-ai-dashboard",
+		SourceRepo: "example/project", Mode: modePages, EngineRef: "main",
+		OutDir: "/private/machine-specific/dashboard", NoPrompt: true,
+	}
+	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
+	if err != nil {
+		t.Fatalf("buildPlan: %v", err)
+	}
+	for path, content := range plan.Files {
+		if strings.Contains(content, opts.OutDir) {
+			t.Fatalf("generated file %s contains output path %q", path, opts.OutDir)
+		}
+	}
+}
+
+func TestValidatePlanRejectsUnnormalizedDestination(t *testing.T) {
+	deps, _, _, _ := wizardDependencies("")
+	opts := Options{
+		TestGrid: "dashboard-a", DashboardRepo: "example/project-prow-ai-dashboard",
+		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out", NoPrompt: true,
+	}
+	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
+	if err != nil {
+		t.Fatalf("buildPlan: %v", err)
+	}
+	plan.Destination.OutDir = " out "
+	if err := validatePlan(plan); err == nil || !strings.Contains(err.Error(), "not normalized") {
+		t.Fatalf("validatePlan error = %v", err)
 	}
 }

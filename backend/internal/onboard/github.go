@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -71,6 +72,19 @@ func repoFromParts(owner, name string) (Repo, error) {
 }
 
 type gitRemoteDetector struct{}
+
+func (gitRemoteDetector) Root(ctx context.Context) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("detecting Git checkout root: %w", err)
+	}
+	root := strings.TrimSpace(string(out))
+	if root == "" {
+		return "", fmt.Errorf("git checkout root is empty")
+	}
+	return filepath.Clean(root), nil
+}
 
 func (gitRemoteDetector) Origin(ctx context.Context) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", "config", "--get", "remote.origin.url")

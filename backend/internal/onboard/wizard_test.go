@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -70,12 +72,24 @@ func (f *fakeSweeper) Discover(_ context.Context, _ *project.Config, _ bool) ([]
 }
 
 type fakeRemoteDetector struct {
-	remote string
-	err    error
+	remote  string
+	err     error
+	root    string
+	rootErr error
 }
 
 func (f fakeRemoteDetector) Origin(context.Context) (string, error) {
 	return f.remote, f.err
+}
+
+func (f fakeRemoteDetector) Root(context.Context) (string, error) {
+	if f.rootErr != nil {
+		return "", f.rootErr
+	}
+	if f.root != "" {
+		return f.root, nil
+	}
+	return os.Getwd()
 }
 
 type fakePromptBuilder struct {
@@ -111,23 +125,43 @@ func (f *fakePromptBuilder) Build(_ context.Context, opts Options, _ scaffoldDat
 }
 
 type fakeScaffoldWriter struct {
-	validateErr error
-	writeErr    error
-	validates   int
-	writes      int
-	outDir      string
-	files       map[string]string
+	validateErr    error
+	writeErr       error
+	validates      int
+	writes         int
+	outDir         string
+	files          map[string]string
+	inspection     []DestinationFilePlan
+	inspections    map[string][]DestinationFilePlan
+	staleFiles     []string
+	inspectOutDirs []string
+	updateExisting bool
 }
 
-func (f *fakeScaffoldWriter) Validate(_ string, _ map[string]string) error {
+func (f *fakeScaffoldWriter) Inspect(outDir string, files map[string]string) ([]DestinationFilePlan, []string, error) {
 	f.validates++
-	return f.validateErr
+	f.inspectOutDirs = append(f.inspectOutDirs, outDir)
+	if f.validateErr != nil {
+		return nil, nil, f.validateErr
+	}
+	if inspection, ok := f.inspections[outDir]; ok {
+		return append([]DestinationFilePlan(nil), inspection...), append([]string(nil), f.staleFiles...), nil
+	}
+	if f.inspection != nil {
+		return append([]DestinationFilePlan(nil), f.inspection...), append([]string(nil), f.staleFiles...), nil
+	}
+	actions := make([]DestinationFilePlan, 0, len(files))
+	for _, path := range sortedFilePaths(files) {
+		actions = append(actions, DestinationFilePlan{Path: path, Action: destinationActionCreate})
+	}
+	return actions, append([]string(nil), f.staleFiles...), nil
 }
 
-func (f *fakeScaffoldWriter) Write(outDir string, files map[string]string) error {
+func (f *fakeScaffoldWriter) Write(outDir string, files map[string]string, updateExisting bool, _ []DestinationFilePlan) error {
 	f.writes++
 	f.outDir = outDir
 	f.files = cloneFiles(files)
+	f.updateExisting = updateExisting
 	return f.writeErr
 }
 
@@ -337,7 +371,7 @@ func TestWizard_DryRunPerformsNoWrites(t *testing.T) {
 	if err := run(context.Background(), opts, deps); err != nil {
 		t.Fatalf("run: %v\n%s", err, out.String())
 	}
-	if writer.writes != 0 || writer.validates != 1 {
+	if writer.writes != 0 || writer.validates != 2 {
 		t.Fatalf("dry run writes=%d validates=%d", writer.writes, writer.validates)
 	}
 	if !strings.Contains(out.String(), "Dry run complete") {
@@ -655,6 +689,9 @@ func TestWizard_DetectedForkUsesUpstreamSourceAndForkDashboardOwner(t *testing.T
 	if !strings.Contains(out.String(), "original Git remote owner and source repository name (high confidence)") {
 		t.Fatalf("dashboard inference source missing:\n%s", out.String())
 	}
+	if writer.outDir != filepath.Join("..", "project-prow-ai-dashboard") {
+		t.Fatalf("dashboard consumer directory = %q", writer.outDir)
+	}
 }
 
 func TestRun_OpenPRDryRunDoesNotCallGitHub(t *testing.T) {
@@ -669,8 +706,8 @@ func TestRun_OpenPRDryRunDoesNotCallGitHub(t *testing.T) {
 	if err := run(context.Background(), opts, deps); err != nil {
 		t.Fatalf("run: %v\n%s", err, out.String())
 	}
-	if pullRequests.calls != 0 || writer.writes != 0 {
-		t.Fatalf("pull requests=%d writes=%d", pullRequests.calls, writer.writes)
+	if pullRequests.calls != 0 || writer.writes != 0 || writer.validates != 0 {
+		t.Fatalf("pull requests=%d writes=%d local inspections=%d", pullRequests.calls, writer.writes, writer.validates)
 	}
 }
 
@@ -1080,5 +1117,145 @@ func TestWizard_ExplicitShortNameIsPreserved(t *testing.T) {
 	}
 	if plan.Project.ShortName != "CAPZ" || !strings.Contains(plan.Files["project.yaml"], `short_name: "CAPZ"`) || len(ui.inputPrompts) != 0 {
 		t.Fatalf("short name=%q prompts=%+v\n%s", plan.Project.ShortName, ui.inputPrompts, plan.Files["project.yaml"])
+	}
+}
+
+func testPagesDestinationActions(replace ...string) []DestinationFilePlan {
+	replacements := map[string]struct{}{}
+	for _, path := range replace {
+		replacements[path] = struct{}{}
+	}
+	paths := []string{".github/workflows/deploy.yml", "CHECKLIST.md", "project.yaml", "prompts/system.md"}
+	actions := make([]DestinationFilePlan, 0, len(paths))
+	for _, path := range paths {
+		action := destinationActionCreate
+		if _, ok := replacements[path]; ok {
+			action = destinationActionReplace
+		}
+		actions = append(actions, DestinationFilePlan{Path: path, Action: action})
+	}
+	return actions
+}
+
+func TestRun_NonInteractiveConflictsRequireUpdateExisting(t *testing.T) {
+	deps, _, writer, _ := wizardDependencies("")
+	writer.inspection = testPagesDestinationActions("project.yaml")
+	disabled := false
+	opts := Options{
+		TestGrid: "dashboard-a", DashboardRepo: defaultTestDashboardRepo, SourceRepo: "example/project",
+		Mode: modePages, EngineRef: "main", OutDir: "out", NoPrompt: true, AIEnabled: &disabled,
+	}
+	err := run(context.Background(), opts, deps)
+	var conflict *destinationConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("error = %v", err)
+	}
+	if writer.writes != 0 {
+		t.Fatalf("writes = %d", writer.writes)
+	}
+}
+
+func TestRun_UpdateExistingWritesOnlyReviewedFiles(t *testing.T) {
+	deps, out, writer, _ := wizardDependencies("")
+	writer.inspection = testPagesDestinationActions("project.yaml")
+	disabled := false
+	opts := Options{
+		TestGrid: "dashboard-a", DashboardRepo: defaultTestDashboardRepo, SourceRepo: "example/project",
+		Mode: modePages, EngineRef: "main", OutDir: "out", NoPrompt: true, AIEnabled: &disabled,
+		UpdateExisting: true,
+	}
+	if err := run(context.Background(), opts, deps); err != nil {
+		t.Fatalf("run: %v\n%s", err, out.String())
+	}
+	if writer.writes != 1 || !writer.updateExisting {
+		t.Fatalf("writes=%d update=%t", writer.writes, writer.updateExisting)
+	}
+	if !strings.Contains(out.String(), "replace project.yaml") || !strings.Contains(out.String(), "create prompts/system.md") {
+		t.Fatalf("review omitted create/replace plan:\n%s", out.String())
+	}
+}
+
+func TestPrepareInteractiveDestinationChooseAnotherDirectory(t *testing.T) {
+	writer := &fakeScaffoldWriter{inspections: map[string][]DestinationFilePlan{
+		"old": {{Path: "project.yaml", Action: destinationActionReplace}},
+		"new": {{Path: "project.yaml", Action: destinationActionCreate}},
+	}}
+	deps := dependencies{files: writer}
+	ui := &queuedWizardUI{selects: []string{"another"}, inputs: []string{"new"}}
+	opts := Options{OutDir: "old"}
+	plan := &Plan{Destination: DestinationPlan{OutDir: "old"}, Files: map[string]string{"project.yaml": "content"}}
+	if err := prepareInteractiveDestination(context.Background(), ui, &opts, plan, deps); err != nil {
+		t.Fatal(err)
+	}
+	if opts.OutDir != "new" || plan.Destination.OutDir != "new" || plan.Destination.Files[0].Action != destinationActionCreate {
+		t.Fatalf("opts=%+v destination=%+v", opts, plan.Destination)
+	}
+	if len(ui.selectPrompts) != 1 || ui.selectPrompts[0].Value != "another" || len(ui.inputPrompts) != 1 || ui.inputPrompts[0].Title != "Dashboard consumer directory" {
+		t.Fatalf("selects=%+v inputs=%+v", ui.selectPrompts, ui.inputPrompts)
+	}
+}
+
+func TestPrepareInteractiveDestinationCancellation(t *testing.T) {
+	writer := &fakeScaffoldWriter{inspection: []DestinationFilePlan{{Path: "project.yaml", Action: destinationActionReplace}}}
+	deps := dependencies{files: writer}
+	ui := &queuedWizardUI{selects: []string{"cancel"}}
+	opts := Options{OutDir: "old"}
+	plan := &Plan{Destination: DestinationPlan{OutDir: "old"}, Files: map[string]string{"project.yaml": "content"}}
+	if err := prepareInteractiveDestination(context.Background(), ui, &opts, plan, deps); !errors.Is(err, ErrCancelled) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestWizard_InteractiveUpdateRequiresFinalConfirmation(t *testing.T) {
+	deps, out, _, _ := wizardDependencies("")
+	writer := deps.files.(*fakeScaffoldWriter)
+	writer.inspection = testPagesDestinationActions("project.yaml")
+	ui := &queuedWizardUI{selects: []string{"update"}, confirms: []bool{true}}
+	deps.wizard = ui
+	disabled := false
+	plan, opts, err := runWizard(context.Background(), Options{
+		SourceRepo: "example/project", DashboardRepo: defaultTestDashboardRepo, TestGrid: "dashboard-a", Mode: modePages,
+		ID: "project", Name: "Project", ShortName: "P", OutDir: "out", EngineRef: "main",
+		AIEnabled: &disabled, NoPrompt: true,
+	}, deps)
+	if err != nil {
+		t.Fatalf("runWizard: %v\n%s", err, out.String())
+	}
+	if !opts.UpdateExisting || !plan.Destination.UpdateExisting {
+		t.Fatalf("opts=%+v destination=%+v", opts, plan.Destination)
+	}
+	if len(ui.confirmPrompts) != 1 || ui.confirmPrompts[0].Title != "Create and update these scaffold files?" || ui.confirmPrompts[0].Value {
+		t.Fatalf("confirmation = %+v", ui.confirmPrompts)
+	}
+}
+
+func TestRun_DryRunShowsCreateReplaceAndStaleFiles(t *testing.T) {
+	deps, out, writer, _ := wizardDependencies("")
+	writer.inspection = testPagesDestinationActions("project.yaml")
+	writer.staleFiles = []string{"deploy/values.yaml"}
+	disabled := false
+	opts := Options{
+		TestGrid: "dashboard-a", DashboardRepo: defaultTestDashboardRepo, SourceRepo: "example/project",
+		Mode: modePages, EngineRef: "main", OutDir: "out", NoPrompt: true, AIEnabled: &disabled,
+		UpdateExisting: true, DryRun: true,
+	}
+	if err := run(context.Background(), opts, deps); err != nil {
+		t.Fatalf("run: %v\n%s", err, out.String())
+	}
+	for _, want := range []string{"Dashboard consumer directory: out", "replace project.yaml", "create prompts/system.md", "deploy/values.yaml", "left untouched", "create/replace plan was reviewed"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("dry-run output missing %q:\n%s", want, out.String())
+		}
+	}
+	if writer.writes != 0 {
+		t.Fatalf("writes = %d", writer.writes)
+	}
+}
+
+func TestSiblingDashboardConsumerDirUsesCheckoutRoot(t *testing.T) {
+	got := siblingDashboardConsumerDir("/workspace/source", "/workspace/source/backend", "project-prow-ai-dashboard")
+	want := filepath.Join("..", "..", "project-prow-ai-dashboard")
+	if got != want {
+		t.Fatalf("sibling directory = %q, want %q", got, want)
 	}
 }

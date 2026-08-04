@@ -233,6 +233,7 @@ func TestValidateOptions(t *testing.T) {
 		{"ai token without model", func(o *Options) { o.AIToken = "fixture-token"; o.AIEndpoint = "https://x" }, "AI_ENDPOINT and AI_MODEL"},
 		{"required draft with no-prompt", func(o *Options) { o.NoPrompt = true; o.RequirePromptDraft = true }, "valid only"},
 		{"required draft without token", func(o *Options) { o.RequirePromptDraft = true }, "AI_TOKEN is required"},
+		{"update existing with open PR", func(o *Options) { o.UpdateExisting = true; o.OpenPR = true }, "cannot be combined"},
 		{"endpoint userinfo", func(o *Options) { o.AIEndpoint = "https://user:fixture-secret@example.test/v1" }, "must not contain credentials"},
 		{"endpoint token query", func(o *Options) { o.AIEndpoint = "https://example.test/v1?api_key=fixture-secret" }, "must not contain credential query"},
 		{"relative endpoint", func(o *Options) { o.AIEndpoint = "not-a-url" }, "absolute HTTP or HTTPS"},
@@ -303,7 +304,7 @@ func TestScaffold_LoadsViaLoadDir(t *testing.T) {
 		"project.yaml":      projectYAML,
 		"prompts/system.md": prompt,
 	}
-	if err := writeFiles(dir, files); err != nil {
+	if err := writeFiles(dir, files, false, nil); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
@@ -318,7 +319,7 @@ func TestScaffold_LoadsViaLoadDir(t *testing.T) {
 		t.Error("prompt draft must be non-empty (LoadDir requires it)")
 	}
 
-	if err := writeFiles(dir, files); err == nil {
+	if err := writeFiles(dir, files, false, nil); err == nil {
 		t.Error("expected writeFiles to refuse overwriting existing files")
 	}
 }
@@ -460,7 +461,7 @@ func TestScaffold_K8sMode(t *testing.T) {
 		"prompts/system.md":  prompt,
 		"deploy/values.yaml": values,
 		"deploy/README.md":   readme,
-	}); err != nil {
+	}, false, nil); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 

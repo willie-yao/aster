@@ -245,11 +245,39 @@ result is not an API draft.
 See [AI providers](ai-providers.md) and
 [Writing the project prompt](writing-prompts.md).
 
+## Scaffold destination and local updates
+
+The scaffold belongs in the dashboard consumer repository, not inside the
+source repository. When onboarding detects the source from the current Git
+checkout, the interactive default is the sibling
+`../<dashboard-repository-name>`. For an explicitly supplied source without a
+detected checkout, the default remains a safe relative directory in the current
+working directory. `--out` always wins and may point to an existing checkout.
+
+Every local plan classifies its generated files as `create` or `replace` before
+the final confirmation. Without `--update-existing`, non-interactive onboarding
+refuses any replacement. Interactive onboarding offers:
+
+1. Choose another directory.
+2. Update known scaffold files.
+3. Cancel.
+
+Choosing another directory is the default. Update mode replaces only files in
+the validated plan. It preserves unrelated files, never deletes the destination,
+and never removes stale files from the other deployment mode. Existing stale
+Pages or Kubernetes deployment files are reported and left untouched. Partial
+path conflicts, symbolic links in generated paths, and unsafe plan paths are
+rejected.
+
+`--update-existing` is local-only and cannot be combined with `--open-pr`.
+Open-PR mode continues to submit the generated file map as a GitHub diff.
+
 ## Dry-run behavior
 
 `-dry-run` performs discovery, the real job sweep, planning, rendering,
-destination checks, and strict configuration validation. It writes no files and
-opens no pull request.
+destination checks, and strict configuration validation. It prints the same
+create/replace plan and stale-file warnings without writing files or opening a
+pull request.
 
 ```bash
 go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboard \

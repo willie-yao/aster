@@ -81,6 +81,8 @@ type Options struct {
 	// instead of writing a local directory. Requires a GitHub token with write
 	// access to the dashboard repo.
 	OpenPR bool
+	// UpdateExisting permits replacement of known local scaffold files only.
+	UpdateExisting bool
 
 	// DryRun performs discovery, planning, rendering, and validation without
 	// writing files or opening a pull request.

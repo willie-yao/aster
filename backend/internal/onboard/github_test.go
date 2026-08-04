@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -214,5 +215,41 @@ func TestGitHubRepositoryClientAuthenticatedLoginErrorDoesNotLeakToken(t *testin
 	_, err := (githubRepositoryClient{client: srv.Client()}).AuthenticatedLogin(context.Background(), token)
 	if err == nil || strings.Contains(err.Error(), token) || !strings.Contains(err.Error(), "HTTP 401") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestGitRemoteDetectorRootFromNestedDirectory(t *testing.T) {
+	originalDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(originalDir) })
+
+	dir := t.TempDir()
+	cmd := exec.Command("git", "init", "-q", dir)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, output)
+	}
+	nested := filepath.Join(dir, "backend", "internal")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(nested); err != nil {
+		t.Fatal(err)
+	}
+	root, err := (gitRemoteDetector{}).Root(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootInfo, err := os.Stat(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dirInfo, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(rootInfo, dirInfo) {
+		t.Fatalf("root = %q, want checkout %q", root, dir)
 	}
 }

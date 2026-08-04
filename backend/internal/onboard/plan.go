@@ -141,7 +141,7 @@ func buildPlan(ctx context.Context, opts Options, planning planningContext, deps
 		},
 		Project:     *parsed,
 		Prompt:      promptResult.promptPlan(opts),
-		Destination: DestinationPlan{OutDir: opts.OutDir, OpenPR: opts.OpenPR},
+		Destination: DestinationPlan{OutDir: opts.OutDir, OpenPR: opts.OpenPR, UpdateExisting: opts.UpdateExisting},
 		Files:       files,
 		Provenance: map[string]Inferred[string]{
 			"source_repo":    {Value: sourceRepo.FullName, Source: "explicit input", Confidence: ConfidenceHigh},
@@ -153,6 +153,9 @@ func buildPlan(ctx context.Context, opts Options, planning planningContext, deps
 		plan.Provenance["project_id"] = confirmedInference(opts.ID, planning.discovery.Identity.ID, "interactive input")
 		plan.Provenance["project_name"] = confirmedInference(opts.Name, planning.discovery.Identity.Name, "interactive input")
 		plan.Provenance["dashboard_repo"] = confirmedInference(dashboardRepo.FullName, planning.discovery.DashboardRepo, "confirmed dashboard repository input")
+	}
+	if err := inspectPlanDestination(plan, deps); err != nil {
+		return nil, fmt.Errorf("planning dashboard consumer directory: %w", err)
 	}
 	return plan, nil
 }

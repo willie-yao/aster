@@ -43,10 +43,24 @@ type PromptPlan struct {
 	Model            string `json:"model,omitempty"`
 }
 
+const (
+	destinationActionCreate  = "create"
+	destinationActionReplace = "replace"
+)
+
+// DestinationFilePlan describes one reviewed local scaffold mutation.
+type DestinationFilePlan struct {
+	Path   string `json:"path"`
+	Action string `json:"action"`
+}
+
 // DestinationPlan describes the only mutation the apply phase may perform.
 type DestinationPlan struct {
-	OutDir string `json:"out_dir,omitempty"`
-	OpenPR bool   `json:"open_pr"`
+	OutDir         string                `json:"out_dir,omitempty"`
+	OpenPR         bool                  `json:"open_pr"`
+	UpdateExisting bool                  `json:"update_existing,omitempty"`
+	Files          []DestinationFilePlan `json:"files,omitempty"`
+	StaleFiles     []string              `json:"stale_files,omitempty"`
 }
 
 // Plan is a complete credential-free onboarding plan.
@@ -78,6 +92,7 @@ type jobSweeper interface {
 // remoteDetector reads the current checkout's GitHub origin, when present.
 type remoteDetector interface {
 	Origin(context.Context) (string, error)
+	Root(context.Context) (string, error)
 }
 
 // promptBuilder renders or drafts prompts/system.md.
@@ -87,8 +102,8 @@ type promptBuilder interface {
 
 // scaffoldWriter applies rendered files locally.
 type scaffoldWriter interface {
-	Validate(string, map[string]string) error
-	Write(string, map[string]string) error
+	Inspect(string, map[string]string) ([]DestinationFilePlan, []string, error)
+	Write(string, map[string]string, bool, []DestinationFilePlan) error
 }
 
 // pullRequestWriter applies rendered files through GitHub.
