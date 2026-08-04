@@ -19,8 +19,10 @@ var (
 	promptURLPattern            = regexp.MustCompile(`(?i)https?://[^\s<>()\[\]{}"']+`)
 	promptIdentifierPattern     = regexp.MustCompile(`\b[A-Z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*\b`)
 	promptCapitalizedPattern    = regexp.MustCompile(`\b[A-Z][a-z][A-Za-z0-9]*\b`)
+	promptSentenceSplitPattern  = regexp.MustCompile(`[\n.;!?]+`)
 	promptWordPattern           = regexp.MustCompile(`[A-Za-z0-9][A-Za-z0-9_.-]*`)
 	promptPathIdentifierPattern = regexp.MustCompile(`(?:[A-Za-z0-9_.{}*-]+/)+[A-Za-z0-9_.{}*-]+|\b[A-Za-z0-9_.-]+\.(?:log|yaml|yml|json|go|sh)\b`)
+	promptNegationPattern       = regexp.MustCompile(`(?i)\b(no|not|never|without|cannot|can.t|doesn.t|isn.t|aren.t|won.t)\b|must not|do not`)
 	promptInjectionPattern      = regexp.MustCompile(`(?i)ignore (all |any |the )?(previous|system) instructions|follow (these|the) instructions|always report success|reveal (a |the )?(secret|token)|override (the )?system prompt`)
 	prohibitedCapabilityPattern = regexp.MustCompile(`(?i)\b(run|use|invoke|execute|open|launch|inspect|check|view|access)\s+(the\s+|an?\s+)?(ssh|curl|wget|bash|powershell|kubectl|az|aws|gcloud|browser|portal|shell|terminal)\b|\b(ssh|curl|wget)\s+(into|to|the|an?|https?://)|\bkubectl\s+(get|logs|describe|exec|apply|delete|port-forward)\b|\b(via|through|in)\s+(the\s+)?(azure\s+)?portal\b|local[ -]?cli|command[ -]?line|against (a |the )?live (kubernetes|cluster)|run (a )?command`)
 )
@@ -293,7 +295,7 @@ func groundPromptEvidence(e *promptEvidence, sources []promptSource) {
 	for _, item := range e.TransientRules {
 		cited := referencedEvidenceText(item.Sources, sources)
 		boundariesDiffer := !strings.EqualFold(strings.TrimSpace(item.OnlyIf), strings.TrimSpace(item.NotTransientIf))
-		if boundariesDiffer && substantiveClaimGrounded(item.Class+" "+item.OnlyIf, cited) && substantiveClaimGrounded(item.Class+" "+item.NotTransientIf, cited) {
+		if boundariesDiffer && substantiveClaimGrounded(item.Class, cited) && substantiveClaimGrounded(item.OnlyIf, cited) && substantiveClaimGrounded(item.NotTransientIf, cited) {
 			rules = append(rules, item)
 		} else {
 			unresolved = append(unresolved, "Verify unsupported transient rule: "+item.Class)
@@ -348,11 +350,6 @@ func identifiersGrounded(claim, cited string) bool {
 			return false
 		}
 	}
-	for _, identifier := range promptPathIdentifierPattern.FindAllString(claim, -1) {
-		if !strings.Contains(citedLower, strings.ToLower(identifier)) {
-			return false
-		}
-	}
 	return true
 }
 
@@ -362,6 +359,7 @@ func exactRepositoryGrounded(repository, cited string) bool {
 		return false
 	}
 	for _, candidate := range promptPathIdentifierPattern.FindAllString(cited, -1) {
+		candidate = trimEvidenceToken(candidate)
 		got, err := NormalizeGitHubRepo(candidate)
 		if err == nil && strings.EqualFold(got.FullName, wanted.FullName) {
 			return true
@@ -370,9 +368,15 @@ func exactRepositoryGrounded(repository, cited string) bool {
 	return false
 }
 
+func trimEvidenceToken(token string) string {
+	token = strings.TrimRight(token, ",;:")
+	return strings.TrimSuffix(token, ".")
+}
+
 func exactPathGrounded(path, cited string) bool {
 	wanted := strings.TrimSuffix(path, "/")
 	for _, candidate := range promptPathIdentifierPattern.FindAllString(cited, -1) {
+		candidate = trimEvidenceToken(candidate)
 		if strings.EqualFold(strings.TrimSuffix(candidate, "/"), wanted) {
 			return true
 		}
@@ -381,6 +385,29 @@ func exactPathGrounded(path, cited string) bool {
 }
 
 func substantiveClaimGrounded(claim, cited string) bool {
+	stripped := claim
+	for _, path := range promptPathIdentifierPattern.FindAllString(claim, -1) {
+		if !exactPathGrounded(path, cited) {
+			return false
+		}
+		stripped = strings.ReplaceAll(stripped, path, " ")
+	}
+	if len(promptWordPattern.FindAllString(stripped, -1)) == 0 {
+		return true
+	}
+	for _, segment := range promptSentenceSplitPattern.Split(cited, -1) {
+		segment = strings.TrimSpace(segment)
+		if segment != "" && substantiveClaimGroundedInSegment(stripped, segment) {
+			return true
+		}
+	}
+	return false
+}
+
+func substantiveClaimGroundedInSegment(claim, cited string) bool {
+	if promptNegationPattern.MatchString(claim) != promptNegationPattern.MatchString(cited) {
+		return false
+	}
 	if !identifiersGrounded(claim, cited) {
 		return false
 	}
@@ -523,7 +550,7 @@ func validatePromptEvidence(e promptEvidence, input promptDraftInput, credential
 		return fmt.Errorf("prompt evidence contains unavailable investigation")
 	}
 	for _, value := range values {
-		if promptInjectionPattern.MatchString(value) {
+		if promptInjectionPattern.MatchString(normalizeSecurityText(value)) {
 			return fmt.Errorf("prompt evidence contains source instructions")
 		}
 	}
@@ -700,10 +727,16 @@ func hasSensitiveURLKeys(values url.Values) bool {
 	return false
 }
 
+func normalizeSecurityText(text string) string {
+	replacer := strings.NewReplacer("`", "", "*", "", "_", "", "~", "")
+	return strings.Join(strings.Fields(replacer.Replace(text)), " ")
+}
+
 func containsUnavailableInvestigation(values []string) bool {
 	for _, value := range values {
-		lower := strings.ToLower(value)
-		for _, loc := range prohibitedCapabilityPattern.FindAllStringIndex(value, -1) {
+		normalized := normalizeSecurityText(value)
+		lower := strings.ToLower(normalized)
+		for _, loc := range prohibitedCapabilityPattern.FindAllStringIndex(normalized, -1) {
 			start := loc[0] - 24
 			if start < 0 {
 				start = 0

@@ -15,7 +15,10 @@ func groundedPromptInput() promptDraftInput {
 	return promptDraftInput{
 		ProjectName: "Project",
 		SourceRepo:  Repo{Owner: "example", Name: "project", FullName: "example/project"},
-		Sources:     []promptSource{{Path: "docs/runbook.md", Kind: "markdown", StartLine: 1, EndLine: 100, Text: "Controller reconciles Project resources. Initialization precedes readiness checks. Jobs include Linux and Windows E2E flavors. artifacts/controller/manager.log Shows reconciliation failures. Readiness stall Readiness remains false manager.log resource conditions Do not infer a test bug from the timeout alone. Change the controller only when its log proves the fault. Recovered timeout A later retry succeeds during the run. The condition never recovers. Read manager.log after confirming resource conditions. example/project Revised controller relationship."}},
+		Sources: []promptSource{{
+			Path: "docs/runbook.md", Kind: "markdown", StartLine: 1, EndLine: 100,
+			Text: "Controller reconciles Project resources. Initialization precedes readiness checks. Jobs include Linux and Windows E2E flavors. artifacts/controller/manager.log. Shows reconciliation failures. Readiness stall. Readiness remains false. manager.log. resource conditions. Do not infer a test bug from the timeout alone. Change the controller only when its log proves the fault. Recovered timeout. A later retry succeeds during the run. The condition never recovers. Read manager.log after confirming resource conditions. example/project. Revised controller relationship.",
+		}},
 	}
 }
 
@@ -127,6 +130,18 @@ func TestGroundPromptEvidenceChecksFailureFieldsIndependently(t *testing.T) {
 	groundPromptEvidence(&evidence, input.Sources)
 	if len(evidence.FailurePatterns) != 0 || !strings.Contains(strings.Join(evidence.Unresolved, " "), "failure pattern") {
 		t.Fatalf("unsupported remediation was masked by grounded fields: %+v", evidence)
+	}
+}
+
+func TestSubstantiveGroundingPreservesPolarity(t *testing.T) {
+	if substantiveClaimGrounded("Controller does not reconcile Project resources.", "Controller reconciles Project resources.") {
+		t.Fatal("negative claim grounded against positive source")
+	}
+	if substantiveClaimGrounded("Controller reconciles Project resources.", "Controller does not reconcile Project resources.") {
+		t.Fatal("positive claim grounded against negative source")
+	}
+	if !substantiveClaimGrounded("Controller does not reconcile Project resources.", "Controller does not reconcile Project resources.") {
+		t.Fatal("matching negative claim was rejected")
 	}
 }
 
