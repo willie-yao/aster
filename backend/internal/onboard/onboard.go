@@ -2,6 +2,7 @@ package onboard
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -76,6 +77,9 @@ func buildSystemPrompt(ctx context.Context, opts Options, data scaffoldData, inp
 	// Empty GitHub token means anonymous public reads.
 	sources, err := fetchPromptSources(ctx, httpClient, input.SourceRepo, input.Jobs, opts.GitHubToken, opts.AIToken, opts.GitHubToken)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return "", false, err
+		}
 		fmt.Fprintln(out, "[warn] could not read source repository evidence; writing the stub instead")
 		prompt, renderErr := render(systemPromptTmpl, data)
 		return prompt, false, renderErr
@@ -96,6 +100,9 @@ func buildSystemPrompt(ctx context.Context, opts Options, data scaffoldData, inp
 	})
 	body, revisionFallback, err := generatePromptBody(ctx, client, input, opts.AIToken, opts.GitHubToken)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return "", false, err
+		}
 		fmt.Fprintln(out, "[warn] prompt generation failed; writing the stub instead")
 		prompt, renderErr := render(systemPromptTmpl, data)
 		return prompt, false, renderErr
@@ -107,7 +114,7 @@ func buildSystemPrompt(ctx context.Context, opts Options, data scaffoldData, inp
 	return composeGeneratedPrompt(data.Name, body), true, nil
 }
 
-// promptDraftTimeout bounds source retrieval and two structured model calls.
+// promptDraftTimeout bounds source retrieval and two structured completion stages.
 const promptDraftTimeout = 5 * time.Minute
 
 func validateOptions(opts *Options) error {

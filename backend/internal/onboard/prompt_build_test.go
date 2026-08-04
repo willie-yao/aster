@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -211,5 +212,28 @@ func TestBuildSystemPromptModelFailureFallsBack(t *testing.T) {
 	}
 	if drafted || !strings.Contains(prompt, "## Unresolved details") || !strings.Contains(logs.String(), "prompt generation failed") {
 		t.Fatalf("drafted=%v logs=%s", drafted, logs.String())
+	}
+}
+
+func TestBuildSystemPromptCancellationPropagates(t *testing.T) {
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"default_branch":"main"}`))
+	}))
+	defer source.Close()
+	oldAPI := githubAPIBaseURL
+	githubAPIBaseURL = source.URL
+	t.Cleanup(func() { githubAPIBaseURL = oldAPI })
+
+	opts := testOpts()
+	opts.AIToken, opts.AIEndpoint, opts.AIModel = "fixture-token", "https://provider.example/chat/completions", "fixture-model"
+	data := buildScaffoldData(opts, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _, err := buildSystemPrompt(ctx, opts, data, promptDraftInput{
+		ProjectName: data.Name,
+		SourceRepo:  Repo{Owner: "example", Name: "project", FullName: "example/project"},
+	}, io.Discard)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v", err)
 	}
 }

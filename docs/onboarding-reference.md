@@ -169,9 +169,11 @@ Prow metadata includes job name, periodic or presubmit type, configuration file,
 repository when established, branches or refs, and TestGrid annotations. It is
 limited to 100 jobs and 40,000 bytes, with an omitted-count summary. Runtime
 credentials are redacted from full source text before excerpting and from the
-complete serialized provider input. The two model calls and source retrieval
-share a five-minute timeout. Cancellation stops retrieval and provider calls.
-No third free-form formatting call is made.
+complete serialized provider input. The two structured completion stages and source retrieval
+share a five-minute timeout. Each stage can use at most the existing schema,
+forced-function, and bounded plain-JSON transport attempts, for six provider
+requests total. Cancellation stops retrieval and provider calls. No third
+free-form formatting stage is made.
 
 Generated prompts are drafts. Review every architecture, artifact, failure, and
 transient-classification claim before deployment.

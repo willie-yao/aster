@@ -18,8 +18,9 @@ const (
 var (
 	promptURLPattern            = regexp.MustCompile(`(?i)https?://[^\s<>()\[\]{}"']+`)
 	promptIdentifierPattern     = regexp.MustCompile(`\b[A-Z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*\b`)
+	promptWordPattern           = regexp.MustCompile(`[A-Za-z0-9][A-Za-z0-9_.-]*`)
 	promptPathIdentifierPattern = regexp.MustCompile(`(?:[A-Za-z0-9_.{}*-]+/)+[A-Za-z0-9_.{}*-]+|\b[A-Za-z0-9_.-]+\.(?:log|yaml|yml|json|go|sh)\b`)
-	prohibitedCapabilityPattern = regexp.MustCompile(`(?i)\b(ssh|curl|wget|bash|powershell|kubectl|az|aws|gcloud|browser|portal|shell|terminal)\b|local[ -]?cli|command[ -]?line|live (kubernetes|cluster)|run (a )?command`)
+	prohibitedCapabilityPattern = regexp.MustCompile(`(?i)\b(ssh|curl|wget|bash|powershell|kubectl|browser|portal|shell|terminal)\b|\b(run|use|invoke|execute)\s+(the\s+)?(az|aws|gcloud)\b|local[ -]?cli|command[ -]?line|live (kubernetes|cluster)|run (a )?command`)
 )
 
 type evidenceRef struct {
@@ -237,7 +238,7 @@ func groundPromptEvidence(e *promptEvidence, sources []promptSource) {
 	filterClaims := func(section string, claims []evidenceClaim) []evidenceClaim {
 		out := claims[:0]
 		for _, claim := range claims {
-			if identifiersGrounded(claim.Text, referencedEvidenceText(claim.Sources, sources)) {
+			if substantiveClaimGrounded(claim.Text, referencedEvidenceText(claim.Sources, sources)) {
 				out = append(out, claim)
 			} else {
 				unresolved = append(unresolved, "Verify unsupported "+section+" claim: "+claim.Text)
@@ -263,7 +264,7 @@ func groundPromptEvidence(e *promptEvidence, sources []promptSource) {
 	artifacts := e.Artifacts[:0]
 	for _, item := range e.Artifacts {
 		cited := referencedEvidenceText(item.Sources, sources)
-		if strings.Contains(strings.ToLower(cited), strings.ToLower(item.PathPattern)) && identifiersGrounded(item.Purpose, cited) {
+		if strings.Contains(strings.ToLower(cited), strings.ToLower(item.PathPattern)) && substantiveClaimGrounded(item.Purpose, cited) {
 			artifacts = append(artifacts, item)
 		} else {
 			unresolved = append(unresolved, "Verify unsupported artifact path: "+item.PathPattern)
@@ -274,7 +275,7 @@ func groundPromptEvidence(e *promptEvidence, sources []promptSource) {
 	patterns := e.FailurePatterns[:0]
 	for _, item := range e.FailurePatterns {
 		text := strings.Join(append([]string{item.Name, item.Signal, item.DoNotConclude, item.RemediationLimit}, item.RequiredEvidence...), " ")
-		if identifiersGrounded(text, referencedEvidenceText(item.Sources, sources)) {
+		if substantiveClaimGrounded(text, referencedEvidenceText(item.Sources, sources)) {
 			patterns = append(patterns, item)
 		} else {
 			unresolved = append(unresolved, "Verify unsupported failure pattern: "+item.Name)
@@ -285,7 +286,7 @@ func groundPromptEvidence(e *promptEvidence, sources []promptSource) {
 	rules := e.TransientRules[:0]
 	for _, item := range e.TransientRules {
 		text := strings.Join([]string{item.Class, item.OnlyIf, item.NotTransientIf}, " ")
-		if identifiersGrounded(text, referencedEvidenceText(item.Sources, sources)) {
+		if substantiveClaimGrounded(text, referencedEvidenceText(item.Sources, sources)) {
 			rules = append(rules, item)
 		} else {
 			unresolved = append(unresolved, "Verify unsupported transient rule: "+item.Class)
@@ -337,6 +338,39 @@ func identifiersGrounded(claim, cited string) bool {
 		}
 	}
 	return true
+}
+
+func substantiveClaimGrounded(claim, cited string) bool {
+	if !identifiersGrounded(claim, cited) {
+		return false
+	}
+	stop := map[string]struct{}{"a": {}, "an": {}, "and": {}, "are": {}, "as": {}, "at": {}, "be": {}, "before": {}, "by": {}, "do": {}, "does": {}, "for": {}, "from": {}, "if": {}, "in": {}, "is": {}, "it": {}, "not": {}, "of": {}, "on": {}, "only": {}, "or": {}, "the": {}, "then": {}, "to": {}, "when": {}, "with": {}}
+	citedWords := map[string]struct{}{}
+	for _, word := range promptWordPattern.FindAllString(strings.ToLower(cited), -1) {
+		citedWords[word] = struct{}{}
+	}
+	matched, total := 0, 0
+	seen := map[string]struct{}{}
+	for _, word := range promptWordPattern.FindAllString(strings.ToLower(claim), -1) {
+		if len(word) < 3 {
+			continue
+		}
+		if _, ok := stop[word]; ok {
+			continue
+		}
+		if _, ok := seen[word]; ok {
+			continue
+		}
+		seen[word] = struct{}{}
+		total++
+		if _, ok := citedWords[word]; ok {
+			matched++
+		}
+	}
+	if total == 0 {
+		return true
+	}
+	return matched*2 >= total
 }
 
 func validatePromptEvidence(e promptEvidence, input promptDraftInput, credentials []string) error {
@@ -546,12 +580,22 @@ func containsCredentialBearingURL(values []string) bool {
 			if u.User != nil {
 				return true
 			}
-			for key := range u.Query() {
-				lower := strings.ToLower(key)
-				if strings.Contains(lower, "token") || strings.Contains(lower, "secret") || strings.Contains(lower, "password") || strings.Contains(lower, "credential") || strings.Contains(lower, "key") || strings.HasSuffix(lower, "sig") {
-					return true
-				}
+			if hasSensitiveURLKeys(u.Query()) {
+				return true
 			}
+			if fragment, err := url.ParseQuery(u.Fragment); err == nil && hasSensitiveURLKeys(fragment) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasSensitiveURLKeys(values url.Values) bool {
+	for key := range values {
+		lower := strings.ToLower(key)
+		if strings.Contains(lower, "token") || strings.Contains(lower, "secret") || strings.Contains(lower, "password") || strings.Contains(lower, "credential") || strings.Contains(lower, "key") || strings.HasSuffix(lower, "sig") {
+			return true
 		}
 	}
 	return false

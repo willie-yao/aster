@@ -15,7 +15,7 @@ func groundedPromptInput() promptDraftInput {
 	return promptDraftInput{
 		ProjectName: "Project",
 		SourceRepo:  Repo{Owner: "example", Name: "project", FullName: "example/project"},
-		Sources:     []promptSource{{Path: "docs/runbook.md", Kind: "markdown", StartLine: 1, EndLine: 100, Text: "Controller Project Initialization Linux Windows Readiness manager.log artifacts/controller/manager.log example/project resource conditions"}},
+		Sources:     []promptSource{{Path: "docs/runbook.md", Kind: "markdown", StartLine: 1, EndLine: 100, Text: "Controller reconciles Project resources. Initialization precedes readiness checks. Jobs include Linux and Windows E2E flavors. artifacts/controller/manager.log Shows reconciliation failures. Readiness stall Readiness remains false manager.log resource conditions Do not infer a test bug from the timeout alone. Change the controller only when its log proves the fault. Recovered timeout A later retry succeeds during the run. The condition never recovers. Read manager.log after confirming resource conditions. example/project Revised controller relationship."}},
 	}
 }
 
@@ -87,14 +87,15 @@ func TestPromptEvidenceValidation(t *testing.T) {
 func TestGroundPromptEvidenceMovesUnsupportedClaimsToUnresolved(t *testing.T) {
 	input := groundedPromptInput()
 	evidence := validGroundedPromptEvidence()
+	evidence.Architecture[0].Text = "Invented scheduler behavior without evidence."
 	evidence.Artifacts[0].PathPattern = "artifacts/invented/path.log"
 	evidence.Repositories[0].Text = "example/invented"
 	groundPromptEvidence(&evidence, input.Sources)
-	if len(evidence.Artifacts) != 0 || len(evidence.Repositories) != 0 {
+	if len(evidence.Architecture) != 0 || len(evidence.Artifacts) != 0 || len(evidence.Repositories) != 0 {
 		t.Fatalf("unsupported claims were retained: %+v", evidence)
 	}
 	joined := strings.Join(evidence.Unresolved, " ")
-	if !strings.Contains(joined, "artifact") || !strings.Contains(joined, "repository") {
+	if !strings.Contains(joined, "architecture") || !strings.Contains(joined, "artifact") || !strings.Contains(joined, "repository") {
 		t.Fatalf("unsupported claims were not moved to unresolved: %v", evidence.Unresolved)
 	}
 }
@@ -124,6 +125,29 @@ func TestRenderPromptEvidenceIsDeterministicAndCitationFree(t *testing.T) {
 	}
 	if body != renderPromptEvidence(evidence) {
 		t.Fatal("renderer is not deterministic")
+	}
+}
+
+func TestGeneratePromptBodyGroundsEngineMetadata(t *testing.T) {
+	input := groundedPromptInput()
+	input.SourceRepo = Repo{Owner: "kubernetes-sigs", Name: "cluster-api-provider-aws", FullName: "kubernetes-sigs/cluster-api-provider-aws"}
+	input.Jobs = []promptJobSummary{{Name: "periodic-aws-e2e", Type: "periodic", Repo: "kubernetes-sigs/cluster-api-provider-aws", Branches: []string{"main"}, Dashboards: []string{"aws-dashboard"}}}
+	evidence := promptEvidence{
+		Architecture: []evidenceClaim{}, DiagnosticLifecycle: []evidenceClaim{},
+		TestFlavors: []evidenceClaim{{Text: "periodic-aws-e2e is a periodic E2E flavor.", Sources: []evidenceRef{{Path: "engine://prow-jobs", StartLine: 1, EndLine: 1}}}},
+		Artifacts:   []artifactEvidence{}, FailurePatterns: []failurePatternEvidence{}, TransientRules: []transientEvidence{}, TriageOrder: []evidenceClaim{},
+		Repositories: []evidenceClaim{{Text: "kubernetes-sigs/cluster-api-provider-aws", Sources: []evidenceRef{{Path: "engine://source-repository", StartLine: 1, EndLine: 1}}}},
+		Unresolved:   []string{},
+	}
+	c := &stubCompleter{out: evidenceJSON(evidence)}
+	body, _, err := generatePromptBody(context.Background(), c, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"periodic-aws-e2e", "kubernetes-sigs/cluster-api-provider-aws"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing metadata-grounded %q: %s", want, body)
+		}
 	}
 }
 
