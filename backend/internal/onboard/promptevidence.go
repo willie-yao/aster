@@ -255,7 +255,7 @@ func groundPromptEvidence(e *promptEvidence, sources []promptSource) {
 
 	repositories := e.Repositories[:0]
 	for _, claim := range e.Repositories {
-		if strings.Contains(strings.ToLower(referencedEvidenceText(claim.Sources, sources)), strings.ToLower(claim.Text)) {
+		if exactRepositoryGrounded(claim.Text, referencedEvidenceText(claim.Sources, sources)) {
 			repositories = append(repositories, claim)
 		} else {
 			unresolved = append(unresolved, "Verify unsupported source repository: "+claim.Text)
@@ -266,7 +266,7 @@ func groundPromptEvidence(e *promptEvidence, sources []promptSource) {
 	artifacts := e.Artifacts[:0]
 	for _, item := range e.Artifacts {
 		cited := referencedEvidenceText(item.Sources, sources)
-		if strings.Contains(strings.ToLower(cited), strings.ToLower(item.PathPattern)) && substantiveClaimGrounded(item.Purpose, cited) {
+		if exactPathGrounded(item.PathPattern, cited) && substantiveClaimGrounded(item.Purpose, cited) {
 			artifacts = append(artifacts, item)
 		} else {
 			unresolved = append(unresolved, "Verify unsupported artifact path: "+item.PathPattern)
@@ -276,8 +276,12 @@ func groundPromptEvidence(e *promptEvidence, sources []promptSource) {
 
 	patterns := e.FailurePatterns[:0]
 	for _, item := range e.FailurePatterns {
-		text := strings.Join(append([]string{item.Name, item.Signal, item.DoNotConclude, item.RemediationLimit}, item.RequiredEvidence...), " ")
-		if substantiveClaimGrounded(text, referencedEvidenceText(item.Sources, sources)) {
+		cited := referencedEvidenceText(item.Sources, sources)
+		grounded := substantiveClaimGrounded(item.Name+" "+item.Signal, cited) && substantiveClaimGrounded(item.DoNotConclude, cited) && substantiveClaimGrounded(item.RemediationLimit, cited)
+		for _, required := range item.RequiredEvidence {
+			grounded = grounded && substantiveClaimGrounded(required, cited)
+		}
+		if grounded {
 			patterns = append(patterns, item)
 		} else {
 			unresolved = append(unresolved, "Verify unsupported failure pattern: "+item.Name)
@@ -352,6 +356,30 @@ func identifiersGrounded(claim, cited string) bool {
 	return true
 }
 
+func exactRepositoryGrounded(repository, cited string) bool {
+	wanted, err := NormalizeGitHubRepo(repository)
+	if err != nil {
+		return false
+	}
+	for _, candidate := range promptPathIdentifierPattern.FindAllString(cited, -1) {
+		got, err := NormalizeGitHubRepo(candidate)
+		if err == nil && strings.EqualFold(got.FullName, wanted.FullName) {
+			return true
+		}
+	}
+	return false
+}
+
+func exactPathGrounded(path, cited string) bool {
+	wanted := strings.TrimSuffix(path, "/")
+	for _, candidate := range promptPathIdentifierPattern.FindAllString(cited, -1) {
+		if strings.EqualFold(strings.TrimSuffix(candidate, "/"), wanted) {
+			return true
+		}
+	}
+	return false
+}
+
 func substantiveClaimGrounded(claim, cited string) bool {
 	if !identifiersGrounded(claim, cited) {
 		return false
@@ -404,6 +432,9 @@ func validatePromptEvidence(e promptEvidence, input promptDraftInput, credential
 			return err
 		}
 		for _, claim := range section.claims {
+			if len(claim.Sources) > maxPromptEvidenceItems {
+				return fmt.Errorf("%s claim has too many source references", section.name)
+			}
 			if claim.Text == "" || len(claim.Sources) == 0 {
 				return fmt.Errorf("%s claim requires text and sources", section.name)
 			}
@@ -422,6 +453,9 @@ func validatePromptEvidence(e promptEvidence, input promptDraftInput, credential
 		return fmt.Errorf("prompt evidence has too many items")
 	}
 	for _, artifact := range e.Artifacts {
+		if len(artifact.Sources) > maxPromptEvidenceItems {
+			return fmt.Errorf("artifact has too many source references")
+		}
 		if artifact.PathPattern == "" || artifact.Purpose == "" || len(artifact.Sources) == 0 {
 			return fmt.Errorf("artifact evidence requires path, purpose, and sources")
 		}
@@ -430,6 +464,9 @@ func validatePromptEvidence(e promptEvidence, input promptDraftInput, credential
 		}
 	}
 	for _, pattern := range e.FailurePatterns {
+		if len(pattern.Sources) > maxPromptEvidenceItems || len(pattern.RequiredEvidence) > maxPromptEvidenceItems {
+			return fmt.Errorf("failure pattern has too many nested items")
+		}
 		if pattern.Name == "" || pattern.Signal == "" || len(pattern.RequiredEvidence) == 0 || pattern.DoNotConclude == "" || pattern.RemediationLimit == "" || len(pattern.Sources) == 0 {
 			return fmt.Errorf("failure pattern requires signal, evidence, causal guard, remediation limit, and sources")
 		}
@@ -438,6 +475,9 @@ func validatePromptEvidence(e promptEvidence, input promptDraftInput, credential
 		}
 	}
 	for _, rule := range e.TransientRules {
+		if len(rule.Sources) > maxPromptEvidenceItems {
+			return fmt.Errorf("transient rule has too many source references")
+		}
 		if rule.Class == "" || rule.OnlyIf == "" || rule.NotTransientIf == "" || len(rule.Sources) == 0 {
 			return fmt.Errorf("transient rule requires positive and negative boundaries plus sources")
 		}
@@ -633,8 +673,11 @@ func containsCredentialBearingURL(values []string) bool {
 			if u.User != nil {
 				return true
 			}
-			if hasSensitiveURLKeys(u.Query()) {
-				return true
+			if u.RawQuery != "" {
+				query, err := url.ParseQuery(u.RawQuery)
+				if err != nil || hasSensitiveURLKeys(query) {
+					return true
+				}
 			}
 			if u.Fragment != "" {
 				fragment, err := url.ParseQuery(u.Fragment)
@@ -665,8 +708,12 @@ func containsUnavailableInvestigation(values []string) bool {
 			if start < 0 {
 				start = 0
 			}
-			prefix := lower[start:loc[0]]
-			if strings.Contains(prefix, "do not ") || strings.Contains(prefix, "don't ") || strings.Contains(prefix, "cannot ") || strings.Contains(prefix, "without ") {
+			prefix := strings.TrimSpace(lower[start:loc[0]])
+			negated := false
+			for _, phrase := range []string{"do not", "don't", "cannot", "must not", "never"} {
+				negated = negated || strings.HasSuffix(prefix, phrase)
+			}
+			if negated {
 				continue
 			}
 			return true

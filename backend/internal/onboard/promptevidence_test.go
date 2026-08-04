@@ -110,6 +110,26 @@ func TestGroundPromptEvidenceMovesUnsupportedClaimsToUnresolved(t *testing.T) {
 	}
 }
 
+func TestGroundPromptEvidenceUsesExactRepositoryAndPathTokens(t *testing.T) {
+	input := groundedPromptInput()
+	input.Sources[0].Text = "example/project-old old-artifacts/controller/manager.log.bak"
+	evidence := validGroundedPromptEvidence()
+	groundPromptEvidence(&evidence, input.Sources)
+	if len(evidence.Repositories) != 0 || len(evidence.Artifacts) != 0 {
+		t.Fatalf("substring grounding accepted exact identifiers: %+v", evidence)
+	}
+}
+
+func TestGroundPromptEvidenceChecksFailureFieldsIndependently(t *testing.T) {
+	input := groundedPromptInput()
+	evidence := validGroundedPromptEvidence()
+	evidence.FailurePatterns[0].RemediationLimit = "Increase retries and timeouts whenever tests fail."
+	groundPromptEvidence(&evidence, input.Sources)
+	if len(evidence.FailurePatterns) != 0 || !strings.Contains(strings.Join(evidence.Unresolved, " "), "failure pattern") {
+		t.Fatalf("unsupported remediation was masked by grounded fields: %+v", evidence)
+	}
+}
+
 func TestDecodePromptEvidenceRejectsUnknownFields(t *testing.T) {
 	input := groundedPromptInput()
 	raw := strings.TrimSuffix(evidenceJSON(validGroundedPromptEvidence()), "}") + `,"unexpected":true}`
