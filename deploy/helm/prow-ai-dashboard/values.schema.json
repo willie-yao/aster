@@ -885,6 +885,58 @@
                   "type": "integer",
                   "description": "Maximum active source investigations per owner.",
                   "minimum": 1
+                },
+                "admission": {
+                  "type": "object",
+                  "description": "Fail-closed admission contract for source investigation Tasks.",
+                  "properties": {
+                    "agentRef": {
+                      "type": "string"
+                    },
+                    "repository": {
+                      "type": "object",
+                      "properties": {
+                        "owner": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        }
+                      },
+                      "additionalProperties": false,
+                      "required": [
+                        "owner",
+                        "name"
+                      ]
+                    },
+                    "gitSecret": {
+                      "type": "string",
+                      "description": "Exact read-only workspace Git Secret."
+                    },
+                    "maxTurns": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 1000
+                    },
+                    "timeout": {
+                      "type": "string",
+                      "pattern": "^(([0-9]+([.][0-9]+)?)|([.][0-9]+))(ns|us|\u00b5s|\u03bcs|ms|s|m|h)((([0-9]+([.][0-9]+)?)|([.][0-9]+))(ns|us|\u00b5s|\u03bcs|ms|s|m|h))*$"
+                    },
+                    "retries": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 2
+                    }
+                  },
+                  "additionalProperties": false,
+                  "required": [
+                    "agentRef",
+                    "repository",
+                    "gitSecret",
+                    "maxTurns",
+                    "timeout",
+                    "retries"
+                  ]
                 }
               },
               "additionalProperties": false,
@@ -892,7 +944,8 @@
                 "enabled",
                 "serviceAccountName",
                 "maxPerSession",
-                "maxActivePerOwner"
+                "maxActivePerOwner",
+                "admission"
               ]
             },
             "sessionTTL": {

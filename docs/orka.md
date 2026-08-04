@@ -353,6 +353,15 @@ server:
     sourceInvestigation:
       enabled: true
       serviceAccountName: ""
+      admission:
+        agentRef: "<guarded-read-only-agent>"
+        repository:
+          owner: "<github-owner>"
+          name: "<github-repository>"
+        gitSecret: "<read-only-clone-secret>"
+        maxTurns: 30
+        timeout: 10m
+        retries: 1
   actions:
     enabled: false
     mode: oauth
@@ -387,9 +396,19 @@ the guard to make an unsupported runtime start. The clone Secret must contain
 only read-only repository credentials.
 
 The dashboard server uses a dedicated ServiceAccount with Task create, get,
-patch, and delete permissions. It independently verifies returned source quotes
-against the pinned commit. Private source repositories also require a separate
-read-only GitHub token Secret for that verification.
+patch, and delete permissions. A requester-scoped `ValidatingAdmissionPolicy`
+pins the Agent, repository, immutable revision shape, exact read-only Git Secret,
+read-only tool list, timeout, retries, and Task metadata. It rejects images,
+commands, environment variables, alternate Secrets, Bash, write or network
+tools, scheduling, webhooks, sessions, and placement overrides. The projected
+ServiceAccount token is mounted only because the server must create and cancel
+Tasks and read the authenticated Orka result API.
+
+The server independently verifies returned source quotes against the pinned
+commit. Private source repositories also require a separate read-only GitHub
+token Secret for that verification. The Helm admission values intentionally
+duplicate the security-sensitive `project.yaml` settings; a mismatch denies the
+Task.
 
 Source investigation does not require the git-capable fixer image and does not
 enable write actions.

@@ -133,6 +133,16 @@ fix_admission_args=(
   --set orka.fixRuntime.admission.retries=1
 )
 
+source_admission_args=(
+  --set server.chat.sourceInvestigation.admission.agentRef=source-reader
+  --set server.chat.sourceInvestigation.admission.repository.owner=example
+  --set server.chat.sourceInvestigation.admission.repository.name=repo
+  --set server.chat.sourceInvestigation.admission.gitSecret=source-readonly
+  --set server.chat.sourceInvestigation.admission.maxTurns=30
+  --set server.chat.sourceInvestigation.admission.timeout=10m
+  --set server.chat.sourceInvestigation.admission.retries=1
+)
+
 # Image-specific tags override the shared snapshot tag. Empty image-specific
 # tags resolve through global.imageTag, then Chart.appVersion.
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
@@ -772,9 +782,35 @@ if grep -Fq 'name: ANALYSIS_SOURCE_INVESTIGATION_ENABLED' "$tmp/chat-server.yaml
   exit 1
 fi
 
+if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.chat.enabled=true \
+  --set server.chat.sourceInvestigation.enabled=true \
+  --set ai.enabled=true --set ai.token=test-token \
+  --set server.actions.mode=proxy --set 'server.actions.admins[0]=alice' \
+  --show-only templates/orka-source-investigation-admission.yaml > "$tmp/source-admission-missing.yaml" 2>&1; then
+  echo 'source investigation rendered without an admission contract' >&2
+  exit 1
+fi
+validation_error_contains "$tmp/source-admission-missing.yaml" 'sourceInvestigation.admission.agentRef is required'
+
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set server.chat.enabled=true \
   --set server.chat.sourceInvestigation.enabled=true \
+  "${source_admission_args[@]}" \
+  --set ai.enabled=true --set ai.token=test-token \
+  --set server.actions.mode=proxy --set 'server.actions.admins[0]=alice' \
+  --show-only templates/orka-source-investigation-admission.yaml > "$tmp/source-admission.yaml"
+grep -Fq 'request.userInfo.username == \"system:serviceaccount:dashboard-test:test-prow-ai-dashboard-source\"' "$tmp/source-admission.yaml"
+grep -Fq 'source investigation Task contracts are immutable' "$tmp/source-admission.yaml"
+grep -Fq 'source-readonly' "$tmp/source-admission.yaml"
+grep -Fq "allowedTools == ['Read', 'Glob', 'Grep']" "$tmp/source-admission.yaml"
+grep -Fq 'object.spec.agentRuntime.allowBash == false' "$tmp/source-admission.yaml"
+grep -Fq "object.spec.agentRuntime.workspace.ref.matches('^[0-9a-f]{40}([0-9a-f]{24})?$')" "$tmp/source-admission.yaml"
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.chat.enabled=true \
+  --set server.chat.sourceInvestigation.enabled=true \
+  "${source_admission_args[@]}" \
   --set server.actions.mode=proxy \
   --set server.actions.admins[0]=alice \
   --set ai.enabled=true \
@@ -802,6 +838,7 @@ fi
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set server.chat.enabled=true \
   --set server.chat.sourceInvestigation.enabled=true \
+  "${source_admission_args[@]}" \
   --set server.actions.mode=proxy \
   --set server.actions.admins[0]=alice \
   --set ai.enabled=true \
@@ -816,6 +853,7 @@ fi
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" "${container_args[@]}" \
   --set server.chat.enabled=true \
   --set server.chat.sourceInvestigation.enabled=true \
+  "${source_admission_args[@]}" \
   --set server.actions.mode=proxy \
   --set server.actions.admins[0]=alice \
   --show-only templates/server-deployment.yaml > "$tmp/source-with-container-analysis-server.yaml"
@@ -828,6 +866,7 @@ fi
 if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set server.chat.enabled=true \
   --set server.chat.sourceInvestigation.enabled=true \
+  "${source_admission_args[@]}" \
   --set server.actions.enabled=true \
   --set server.actions.mode=proxy \
   --set server.actions.admins[0]=alice \
@@ -847,6 +886,7 @@ helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set fullnameOverride="$long_fullname" \
   --set server.chat.enabled=true \
   --set server.chat.sourceInvestigation.enabled=true \
+  "${source_admission_args[@]}" \
   --set server.actions.mode=proxy \
   --set server.actions.admins[0]=alice \
   --set ai.enabled=true \
@@ -859,7 +899,8 @@ if [[ ${#long_source_name} -ne 63 ]]; then
 fi
 
 if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
-  --set server.chat.sourceInvestigation.enabled=true > "$tmp/source-without-chat.yaml" 2>&1; then
+  --set server.chat.sourceInvestigation.enabled=true \
+  "${source_admission_args[@]}" > "$tmp/source-without-chat.yaml" 2>&1; then
   echo 'source investigation accepted without analysis chat' >&2
   exit 1
 fi
@@ -868,6 +909,7 @@ grep -Fq 'server.chat.sourceInvestigation.enabled requires server.chat.enabled' 
 if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set server.chat.enabled=true \
   --set server.chat.sourceInvestigation.enabled=true \
+  "${source_admission_args[@]}" \
   --set server.chat.sourceInvestigation.maxActivePerOwner=0 \
   --set ai.enabled=true \
   --set ai.token=test-token > "$tmp/source-invalid-limit.yaml" 2>&1; then

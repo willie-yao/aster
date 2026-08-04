@@ -1,3 +1,4 @@
+{{- include "prow-ai-dashboard.validateSourceInvestigation" . -}}
 {{- include "prow-ai-dashboard.validateFixRuntime" . -}}
 {{- include "prow-ai-dashboard.validateNetworkSecurity" . -}}
 {{- $actions := .Values.server.actions.enabled -}}
@@ -167,6 +168,8 @@ spec:
             {{- if $source }}
             - name: ANALYSIS_SOURCE_INVESTIGATION_ENABLED
               value: "true"
+            - name: SOURCE_INVESTIGATION_ADMISSION_IDENTITY
+              value: {{ include "prow-ai-dashboard.orkaReleaseScope" . | quote }}
             - name: ANALYSIS_SOURCE_INVESTIGATION_MAX_PER_SESSION
               value: {{ .Values.server.chat.sourceInvestigation.maxPerSession | quote }}
             - name: ANALYSIS_SOURCE_INVESTIGATION_MAX_ACTIVE_PER_OWNER

@@ -305,8 +305,11 @@ create, get, patch, and delete permissions. The runtime rejects any result that
 contains a workspace diff or push branch. It never receives `BOT_TOKEN` or
 `FIX_TOKEN`.
 
-The agent returns a bounded finding, confidence, relationship to the published
-analysis, investigation direction, and source citations. Every citation path and
+The agent returns a bounded deterministic state (`already_present`,
+`actionable_code_change`, `actionable_configuration_change`, or `inconclusive`),
+validated remediation metadata when actionable, a finding, confidence,
+relationship to the published analysis, investigation direction, and source
+citations. Every citation path and
 line range is validated and its quote is checked against the same pinned GitHub
 revision before `verified: true` is persisted. Public repositories need no extra
 credential. Private repositories require a read-only token in
@@ -320,7 +323,9 @@ limit, advisory lock, expiry, and replica-safe lease behavior. They continue
 after an SSE disconnect and expose only `queued`, `cloning_source`,
 `investigating_source`, `verifying_citations`, `finalizing`, or `cancelling`
 progress. Cancellation is idempotent and deletes the active Task on timeout or
-client cancellation.
+client cancellation. Before starting, the UI identifies the exact repository and
+commit when available and explains that source investigation starts a separate
+read-only coding-agent Task with a larger cost and security boundary.
 
 Additional settings:
 

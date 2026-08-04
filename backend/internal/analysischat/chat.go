@@ -157,16 +157,17 @@ type Attempt struct {
 
 // SessionView is the owner-safe session representation returned by the API.
 type SessionView struct {
-	ID        string      `json:"id"`
-	Analysis  AnalysisRef `json:"analysis"`
-	CreatedAt string      `json:"created_at"`
-	UpdatedAt string      `json:"updated_at"`
-	ExpiresAt string      `json:"expires_at"`
-	Messages  []Message   `json:"messages"`
-	Attempts  []Attempt   `json:"attempts"`
-	Active    *ActiveTurn `json:"active,omitempty"`
-	TurnsUsed int         `json:"turns_used"`
-	MaxTurns  int         `json:"max_turns"`
+	ID               string                          `json:"id"`
+	Analysis         AnalysisRef                     `json:"analysis"`
+	CreatedAt        string                          `json:"created_at"`
+	UpdatedAt        string                          `json:"updated_at"`
+	ExpiresAt        string                          `json:"expires_at"`
+	Messages         []Message                       `json:"messages"`
+	Attempts         []Attempt                       `json:"attempts"`
+	Active           *ActiveTurn                     `json:"active,omitempty"`
+	TurnsUsed        int                             `json:"turns_used"`
+	MaxTurns         int                             `json:"max_turns"`
+	SourceRepository *sourceinvestigation.Repository `json:"source_repository,omitempty"`
 }
 
 // ActiveTurn is the owner-safe state needed to resume an in-flight request.
@@ -1088,6 +1089,13 @@ func (s *Service) sessionView(current *persistedSession) SessionView {
 	view.Attempts = attemptViews(current.Requests)
 	view.TurnsUsed = current.Turns
 	view.MaxTurns = s.opts.MaxTurns
+	if view.Analysis.Scope != ScopePattern && s.sourceRepo.Owner != "" && s.sourceRepo.Name != "" {
+		resolved := restoreResolved(current.Resolved)
+		if revision, ok := repoRevision(resolved.build.RepoRefs, s.sourceRepo.Owner, s.sourceRepo.Name); ok {
+			repo := sourceinvestigation.Repository{Owner: s.sourceRepo.Owner, Name: s.sourceRepo.Name, Revision: revision}
+			view.SourceRepository = &repo
+		}
+	}
 	if current.Active != nil {
 		view.Active = &ActiveTurn{
 			RequestID: current.Active.RequestID, Question: current.Active.Question, Phase: current.Active.Phase,

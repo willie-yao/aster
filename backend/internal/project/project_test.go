@@ -1056,7 +1056,7 @@ func TestValidateRejectsUnknownAIAPI(t *testing.T) {
 
 func TestEffectiveSourceInvestigationDefaults(t *testing.T) {
 	cfg := &Config{AI: &AI{SourceInvestigation: &AnalysisSourceInvestigation{
-		AgentRef: " source-reader ", API: " http://orka:8080 ",
+		AgentRef: " source-reader ", API: " http://orka:8080 ", GitSecret: " source-readonly ",
 	}}}
 	got := cfg.EffectiveSourceInvestigation()
 	if got.AgentRef != "source-reader" || got.API != "http://orka:8080" || got.Namespace != "orka-system" ||
@@ -1073,6 +1073,7 @@ func TestValidateSourceInvestigation(t *testing.T) {
 	}
 	cfg.AI.SourceInvestigation.AgentRef = "reader"
 	cfg.AI.SourceInvestigation.API = "http://orka:8080"
+	cfg.AI.SourceInvestigation.GitSecret = "source-readonly"
 	cfg.AI.SourceInvestigation.Timeout = "15m"
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("valid source config rejected: %v", err)

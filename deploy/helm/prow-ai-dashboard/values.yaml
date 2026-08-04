@@ -256,6 +256,16 @@ server:
       serviceAccountName: ""
       maxPerSession: 8
       maxActivePerOwner: 1
+      # Required when enabled. Match ai.source_investigation in project.yaml.
+      admission:
+        agentRef: ""
+        repository:
+          owner: ""
+          name: ""
+        gitSecret: ""
+        maxTurns: 30
+        timeout: 10m
+        retries: 1
     sessionTTL: 2h
     maxSessions: 128
     maxSessionsPerOwner: 8

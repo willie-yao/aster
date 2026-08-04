@@ -135,7 +135,9 @@ func TestSourceInvestigatorPreservesPollingContextErrors(t *testing.T) {
 
 func TestSourceInvestigatorHappyPath(t *testing.T) {
 	inner, err := json.Marshal(map[string]any{
-		"version": 1, "finding": "The loop retries the same terminal error.",
+		"version": 1, "state": "actionable_code_change",
+		"target":     map[string]any{"intent": "modify_symbol", "path": "pkg/retry.go", "symbol": "retry"},
+		"finding":    "The loop retries the same terminal error.",
 		"confidence": "high", "relationship": "supports",
 		"direction": "Stop retrying after the terminal error.",
 		"citations": []map[string]any{{
@@ -188,7 +190,7 @@ func TestSourceInvestigatorHappyPath(t *testing.T) {
 }
 
 func TestSourceInvestigatorRejectsUnverifiedCitationAndWorkspaceChanges(t *testing.T) {
-	inner := `{"version":1,"finding":"finding","confidence":"medium","relationship":"refines","direction":"inspect","citations":[{"path":"pkg/retry.go","line_start":1,"line_end":1,"quote":"missing"}]}`
+	inner := `{"version":1,"state":"actionable_code_change","target":{"intent":"modify_symbol","path":"pkg/retry.go","symbol":"retry"},"finding":"finding","confidence":"medium","relationship":"refines","direction":"inspect","citations":[{"path":"pkg/retry.go","line_start":1,"line_end":1,"quote":"missing"}]}`
 	for _, tc := range []struct {
 		name   string
 		outer  StructuredResult
@@ -255,7 +257,7 @@ func TestSourceInvestigatorRecordsCleanupFailure(t *testing.T) {
 }
 
 func TestSourceInvestigatorRecordsVerifiedResultCleanupFailure(t *testing.T) {
-	inner := `{"version":1,"finding":"finding","confidence":"medium","relationship":"refines","direction":"inspect","citations":[{"path":"pkg/retry.go","line_start":1,"line_end":1,"quote":"retry"}]}`
+	inner := `{"version":1,"state":"actionable_code_change","target":{"intent":"modify_symbol","path":"pkg/retry.go","symbol":"retry"},"finding":"finding","confidence":"medium","relationship":"refines","direction":"inspect","citations":[{"path":"pkg/retry.go","line_start":1,"line_end":1,"quote":"retry"}]}`
 	results, done := resultServer(t, sourceOuterResult(t, inner))
 	defer done()
 	deleteErrs := make([]error, 10)

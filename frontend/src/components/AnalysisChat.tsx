@@ -207,6 +207,7 @@ function AssistantMessage({
   chatFixEnabled,
   fixEligible,
   sessionID,
+  sourceRepository,
   onReviewCorrection,
   onUseForFix,
   onSourceInvestigationChange,
@@ -218,6 +219,7 @@ function AssistantMessage({
   chatFixEnabled: boolean;
   fixEligible: boolean;
   sessionID: string;
+  sourceRepository?: { owner: string; name: string; revision: string };
   onReviewCorrection: (requestID: string) => void;
   onUseForFix: () => void;
   onSourceInvestigationChange: (requestID: string | null, view: SourceInvestigationView | null) => void;
@@ -365,6 +367,7 @@ function AssistantMessage({
           <SourceInvestigationPanel
             sessionID={sessionID}
             chatRequestID={message.request_id}
+            repository={sourceRepository}
             onInvestigationChange={onSourceInvestigationChange}
           />
         )}
@@ -1095,6 +1098,7 @@ export function AnalysisChat({
                     chatFixEnabled={Boolean(features.chat_fix)}
                     fixEligible={Boolean(message.request_id && message.citations?.length && fixPatterns.length)}
                     sessionID={session?.id ?? ""}
+                    sourceRepository={session?.source_repository}
                     onReviewCorrection={(requestID) => void reviewCorrection(requestID)}
                     onUseForFix={() => openFix(message)}
                     onSourceInvestigationChange={(requestID, view) =>

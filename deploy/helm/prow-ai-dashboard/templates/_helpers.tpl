@@ -231,6 +231,12 @@ because Helm release names are unique only within their own namespace.
 {{- printf "%s-fix-guard-%s" $base (include "prow-ai-dashboard.orkaReleaseScope" .) -}}
 {{- end -}}
 
+{{/* Source investigation Task admission policy name. */}}
+{{- define "prow-ai-dashboard.orkaSourceAdmissionName" -}}
+{{- $base := include "prow-ai-dashboard.fullname" . | trunc 36 | trimSuffix "-" -}}
+{{- printf "%s-source-guard-%s" $base (include "prow-ai-dashboard.orkaReleaseScope" .) -}}
+{{- end -}}
+
 {{/* Source investigation RBAC stays separate from fix-generation RBAC. */}}
 {{- define "prow-ai-dashboard.orkaSourceRBACName" -}}
 {{- $base := include "prow-ai-dashboard.fullname" . | trunc 39 | trimSuffix "-" -}}
@@ -288,6 +294,21 @@ Validate AI provider configuration.
 {{- $contextWindowInt := int64 $contextWindow -}}
 {{- if or (gt $contextWindowInt 1000000000) (and (gt $contextWindowInt 0) (lt $contextWindowInt 9217)) -}}
 {{- fail "ai.contextWindowTokens must be 0 or an integer from 9217 to 1000000000" -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Validate the fail-closed source investigation Task contract. */}}
+{{- define "prow-ai-dashboard.validateSourceInvestigation" -}}
+{{- if .Values.server.chat.sourceInvestigation.enabled -}}
+  {{- $cfg := .Values.server.chat.sourceInvestigation.admission -}}
+  {{- if not $cfg.agentRef -}}{{- fail "server.chat.sourceInvestigation.admission.agentRef is required" -}}{{- end -}}
+  {{- if not $cfg.repository.owner -}}{{- fail "server.chat.sourceInvestigation.admission.repository.owner is required" -}}{{- end -}}
+  {{- if not $cfg.repository.name -}}{{- fail "server.chat.sourceInvestigation.admission.repository.name is required" -}}{{- end -}}
+  {{- if not $cfg.gitSecret -}}{{- fail "server.chat.sourceInvestigation.admission.gitSecret is required and must be read-only" -}}{{- end -}}
+  {{- $goDurationPattern := "^(([0-9]+([.][0-9]+)?)|([.][0-9]+))(ns|us|µs|μs|ms|s|m|h)((([0-9]+([.][0-9]+)?)|([.][0-9]+))(ns|us|µs|μs|ms|s|m|h))*$" -}}
+  {{- $timeout := printf "%v" $cfg.timeout -}}
+  {{- if or (not (regexMatch $goDurationPattern $timeout)) (not (regexMatch "[1-9]" $timeout)) -}}{{- fail "server.chat.sourceInvestigation.admission.timeout must be a positive Go duration" -}}{{- end -}}
+  {{- if and (not .Values.orka.rbac.create) (not .Values.server.chat.sourceInvestigation.serviceAccountName) -}}{{- fail "server.chat.sourceInvestigation.serviceAccountName is required when chart-managed Orka RBAC is disabled" -}}{{- end -}}
 {{- end -}}
 {{- end -}}
 

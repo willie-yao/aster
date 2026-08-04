@@ -389,15 +389,16 @@ func enableSourceInvestigation(
 		return fmt.Errorf("configuring source investigation timeout: %w", err)
 	}
 	runner, err := orka.NewSourceInvestigatorFromEnv(orka.SourceInvestigationFromEnvConfig{
-		Namespace:   runtimeConfig.Namespace,
-		AgentRef:    runtimeConfig.AgentRef,
-		API:         runtimeConfig.API,
-		GitSecret:   runtimeConfig.GitSecret,
-		Version:     runtimeConfig.Version,
-		MaxRetries:  *runtimeConfig.Retries,
-		MaxTurns:    runtimeConfig.MaxTurns,
-		KubeContext: sourceInvestigationKubeContext(),
-		GitHubToken: os.Getenv("SOURCE_INVESTIGATION_GITHUB_TOKEN"),
+		Namespace:         runtimeConfig.Namespace,
+		AgentRef:          runtimeConfig.AgentRef,
+		API:               runtimeConfig.API,
+		GitSecret:         runtimeConfig.GitSecret,
+		Version:           runtimeConfig.Version,
+		MaxRetries:        *runtimeConfig.Retries,
+		MaxTurns:          runtimeConfig.MaxTurns,
+		AdmissionIdentity: strings.TrimSpace(os.Getenv("SOURCE_INVESTIGATION_ADMISSION_IDENTITY")),
+		KubeContext:       sourceInvestigationKubeContext(),
+		GitHubToken:       os.Getenv("SOURCE_INVESTIGATION_GITHUB_TOKEN"),
 	})
 	if err != nil {
 		return fmt.Errorf("configuring source investigation runtime: %w", err)

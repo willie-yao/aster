@@ -300,6 +300,11 @@ ai:
     timeout: 10m
 ```
 
+For Helm deployments, repeat the Agent, repository, read-only Git Secret, turn
+limit, timeout, and retries under `server.chat.sourceInvestigation.admission`.
+The duplicate values let Kubernetes admission reject any source Task that does
+not match the operator-approved read-only contract.
+
 `agent_ref` and `api` are required when the block is present. `timeout` must be
 positive and at most 30 minutes. `retries` must be `0` through `2`. A nonzero
 `max_turns` must be `1` through `1000`; zero uses the default. `git_secret`

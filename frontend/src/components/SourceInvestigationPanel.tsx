@@ -253,6 +253,7 @@ function SourceResult({ view }: { view: SourceInvestigationView }) {
         <Typography variant="label" sx={{ fontWeight: 750 }}>
           Source investigation
         </Typography>
+        {result.state && <Chip size="small" variant="outlined" label={result.state.replaceAll("_", " ")} />}
         <Stack
           direction="row"
           spacing={0.45}
@@ -351,10 +352,12 @@ function SourceResult({ view }: { view: SourceInvestigationView }) {
 export function SourceInvestigationPanel({
   sessionID,
   chatRequestID,
+  repository,
   onInvestigationChange,
 }: {
   sessionID: string;
   chatRequestID: string;
+  repository?: { owner: string; name: string; revision: string };
   onInvestigationChange?: (requestID: string | null, view: SourceInvestigationView | null) => void;
 }) {
   const auth = useAuth();
@@ -591,7 +594,8 @@ export function SourceInvestigationPanel({
           Investigate source
         </Button>
         <Typography variant="caption" color="text.secondary">
-          Verify this answer against the exact source revision.
+          Starts a separate read-only coding-agent Task with a larger cost and security boundary.
+          {repository ? ` Pinned to ${repository.owner}/${repository.name}@${repository.revision}.` : " The server will still require and verify an immutable repository revision before starting."}
         </Typography>
       </Stack>
     );

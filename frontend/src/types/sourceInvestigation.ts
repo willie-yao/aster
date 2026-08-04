@@ -24,7 +24,15 @@ export interface SourceInvestigationCitation {
   verified: boolean;
 }
 
+export type SourceInvestigationState =
+  | "already_present"
+  | "actionable_code_change"
+  | "actionable_configuration_change"
+  | "inconclusive";
+
 export interface SourceInvestigationResult {
+  state?: SourceInvestigationState;
+  target?: { intent: string; path?: string; symbol?: string; value?: string };
   finding: string;
   confidence: SourceInvestigationConfidence;
   relationship: SourceInvestigationRelationship;

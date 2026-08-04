@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actionverify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
@@ -42,6 +43,11 @@ const (
 	ConfidenceHigh   = "high"
 	ConfidenceMedium = "medium"
 	ConfidenceLow    = "low"
+
+	StateAlreadyPresent                = "already_present"
+	StateActionableCodeChange          = "actionable_code_change"
+	StateActionableConfigurationChange = "actionable_configuration_change"
+	StateInconclusive                  = "inconclusive"
 )
 
 var fullCommitPattern = regexp.MustCompile(`^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$`)
@@ -78,12 +84,14 @@ type Citation struct {
 
 // Result is the structured source investigation result.
 type Result struct {
-	Finding      string     `json:"finding"`
-	Confidence   string     `json:"confidence"`
-	Relationship string     `json:"relationship"`
-	Direction    string     `json:"direction"`
-	Citations    []Citation `json:"citations,omitempty"`
-	ElapsedMs    int        `json:"elapsed_ms,omitempty"`
+	State        string                    `json:"state,omitempty"`
+	Target       *models.RemediationTarget `json:"target,omitempty"`
+	Finding      string                    `json:"finding"`
+	Confidence   string                    `json:"confidence"`
+	Relationship string                    `json:"relationship"`
+	Direction    string                    `json:"direction"`
+	Citations    []Citation                `json:"citations,omitempty"`
+	ElapsedMs    int                       `json:"elapsed_ms,omitempty"`
 }
 
 // View is the owner-safe persisted request representation.
@@ -168,10 +176,36 @@ func ValidateResult(result Result) error {
 	default:
 		return fmt.Errorf("%w: unsupported relationship %q", ErrInvalidResult, result.Relationship)
 	}
+	switch result.State {
+	case "":
+		// Legacy persisted results predate deterministic state classification.
+	case StateInconclusive:
+		if result.Target != nil {
+			return fmt.Errorf("%w: inconclusive result must not claim a remediation target", ErrInvalidResult)
+		}
+	case StateAlreadyPresent, StateActionableCodeChange, StateActionableConfigurationChange:
+		if result.Target == nil {
+			return fmt.Errorf("%w: state %s requires a remediation target", ErrInvalidResult, result.State)
+		}
+		if reason := actionverify.InvalidTargetReason(*result.Target); reason != "" {
+			return fmt.Errorf("%w: %s", ErrInvalidResult, reason)
+		}
+		if result.State == StateActionableCodeChange && result.Target.Intent != models.RemediationIntentAddSymbol && result.Target.Intent != models.RemediationIntentModifySymbol {
+			return fmt.Errorf("%w: actionable_code_change requires a symbol target", ErrInvalidResult)
+		}
+		if result.State == StateActionableConfigurationChange && result.Target.Intent != models.RemediationIntentSetConfiguration && result.Target.Intent != models.RemediationIntentRemoveConfiguration {
+			return fmt.Errorf("%w: actionable_configuration_change requires a configuration target", ErrInvalidResult)
+		}
+	default:
+		return fmt.Errorf("%w: unsupported state %q", ErrInvalidResult, result.State)
+	}
 	if len(result.Citations) == 0 || len(result.Citations) > 10 {
 		return fmt.Errorf("%w: citations must contain 1-10 entries", ErrInvalidResult)
 	}
 	totalBytes := len(result.Finding) + len(result.Direction)
+	if result.Target != nil {
+		totalBytes += len(result.Target.Intent) + len(result.Target.Path) + len(result.Target.Symbol) + len(result.Target.Value)
+	}
 	seen := map[string]struct{}{}
 	for i, citation := range result.Citations {
 		clean := path.Clean(strings.TrimSpace(citation.Path))
@@ -190,6 +224,15 @@ func ValidateResult(result Result) error {
 			return fmt.Errorf("%w: duplicate citation %d", ErrInvalidResult, i)
 		}
 		seen[key] = struct{}{}
+	}
+	if result.Target != nil {
+		matched := false
+		for _, citation := range result.Citations {
+			matched = matched || citation.Path == result.Target.Path
+		}
+		if !matched {
+			return fmt.Errorf("%w: remediation target path is not cited", ErrInvalidResult)
+		}
 	}
 	if totalBytes > 28<<10 {
 		return fmt.Errorf("%w: result exceeds the persisted text budget", ErrInvalidResult)
@@ -217,5 +260,9 @@ func CloneResult(result *Result) *Result {
 	}
 	out := *result
 	out.Citations = slices.Clone(result.Citations)
+	if result.Target != nil {
+		target := *result.Target
+		out.Target = &target
+	}
 	return &out
 }

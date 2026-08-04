@@ -112,6 +112,7 @@ export interface AnalysisChatSession {
   active?: AnalysisChatActiveTurn;
   turns_used: number;
   max_turns: number;
+  source_repository?: { owner: string; name: string; revision: string };
 }
 
 export type AnalysisChatProgressPhase =

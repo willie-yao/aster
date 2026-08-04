@@ -1203,6 +1203,9 @@ func (c *Config) Validate() error {
 		if strings.TrimSpace(source.AgentRef) == "" || strings.TrimSpace(source.API) == "" {
 			return fmt.Errorf("ai.source_investigation requires agent_ref and api")
 		}
+		if strings.TrimSpace(source.GitSecret) == "" {
+			return fmt.Errorf("ai.source_investigation requires git_secret with read-only clone credentials")
+		}
 		if source.Retries != nil && (*source.Retries < 0 || *source.Retries > maxSourceInvestigationRetries) {
 			return fmt.Errorf("ai.source_investigation.retries must be between 0 and %d", maxSourceInvestigationRetries)
 		}
