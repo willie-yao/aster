@@ -82,17 +82,14 @@ The structured extraction must return evidence for this contract rather than Mar
 
 // generatePromptBody asks the model to draft the system.md body from bounded
 // source evidence and discovered Prow jobs.
-func generatePromptBody(ctx context.Context, c structuredCompleter, input promptDraftInput, credentials ...string) (string, bool, error) {
+func generatePromptBody(ctx context.Context, c structuredCompleter, input promptDraftInput, credentials ...string) (string, error) {
 	result, err := generatePromptBodyDetailed(ctx, c, input, credentials...)
-	return result.Body, result.RevisionFallback, err
+	return result.Body, err
 }
 
 type promptGenerationResult struct {
 	Body                      string
-	RevisionFallback          bool
-	RevisionFailure           *promptPreparationFailure
 	ExtractionDuration        time.Duration
-	RevisionDuration          time.Duration
 	RenderDuration            time.Duration
 	ExtractionChunks          int
 	CompletedExtractionChunks int
@@ -240,46 +237,8 @@ func generatePromptBodyDetailed(ctx context.Context, c structuredCompleter, inpu
 	}
 	result.ExtractionDuration = time.Since(extractionStart)
 
-	revisionUser := promptEvidenceRevisionUser(initial)
-	if gaps := promptEvidenceUnresolvedGaps(initial); len(gaps) > 0 {
-		revisionUser += "\n\nUNRESOLVED GAPS\n- " + strings.Join(gaps, "\n- ")
-	}
-	revisionUser = redactPromptText(revisionUser, credentials...)
-	var revised promptEvidence
-	var revisionValidation *promptEvidenceValidationError
-	revisionStart := time.Now()
-	revisionErr := c.CompleteStructured(ctx, promptSystemInstruction+"\n\n"+promptEvidenceRevisionInstruction, revisionUser, promptEvidenceResponseFormat(maxPromptEvidenceItems, maxPromptEvidenceItems), func(raw json.RawMessage) error {
-		err := decodeAndValidatePromptEvidence(raw, validationInput, credentials, &revised)
-		if err == nil {
-			err = validatePromptEvidenceRevision(initial, revised)
-		}
-		if typed, ok := err.(*promptEvidenceValidationError); ok {
-			revisionValidation = typed
-		}
-		return err
-	})
-	result.RevisionDuration = time.Since(revisionStart)
-	if errors.Is(revisionErr, context.Canceled) {
-		return result, revisionErr
-	}
-	selected := initial
-	if revisionErr == nil && !promptEvidenceRevisionRegresses(initial, revised) {
-		selected = revised
-	} else {
-		result.RevisionFallback = true
-		if revisionErr != nil {
-			result.RevisionFailure = classifyPromptFailure(promptStageStructuredRevision, revisionErr)
-			applyPromptValidationFailure(result.RevisionFailure, revisionValidation)
-			result.RevisionFailure.Stage = promptStageStructuredRevision
-		} else {
-			result.RevisionFailure = &promptPreparationFailure{Stage: promptStageStructuredRevision, Category: promptFailureRevisionRegressed}
-		}
-		result.RevisionFailure.Debug.Phase = "revision"
-		result.RevisionFailure.Debug.RetainedInitial = true
-	}
-
 	renderStart := time.Now()
-	body := renderPromptEvidence(selected)
+	body := renderPromptEvidence(initial)
 	if err := validatePromptBody(body); err != nil {
 		result.RenderDuration = time.Since(renderStart)
 		failure := &promptPreparationFailure{Stage: promptStageFinalPromptValidation, Category: promptFailurePromptValidation, cause: err}

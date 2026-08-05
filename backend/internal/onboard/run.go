@@ -445,9 +445,6 @@ func printReview(out io.Writer, plan *Plan) {
 			fmt.Fprintf(out, "  Prompt action:        %s\n", safeTerminal(plan.Prompt.FailureAction))
 		}
 	}
-	if plan.Prompt.RevisionFallback {
-		fmt.Fprintln(out, "  Prompt revision:      first validated extraction retained")
-	}
 	if plan.Destination.OpenPR {
 		fmt.Fprintln(out, "  Destination:          scaffold pull request")
 	} else {

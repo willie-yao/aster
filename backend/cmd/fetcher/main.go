@@ -131,7 +131,7 @@ func runOnboard(args []string) {
 	fs.BoolVar(&enableAI, "ai", true, "enable deployed AI failure analysis")
 	fs.BoolVar(&opts.NoPrompt, "no-prompt", false, "skip API prompt drafting and always write the prompts/system.md TODO template")
 	fs.BoolVar(&opts.PromptDebug, "prompt-debug", false, "write sanitized prompt-preparation diagnostics to stderr")
-	fs.DurationVar(&opts.PromptTimeout, "prompt-timeout", 5*time.Minute, "total timeout for source retrieval and experimental API prompt drafting")
+	fs.DurationVar(&opts.PromptTimeout, "prompt-timeout", onboard.DefaultPromptDraftTimeout, "total timeout for source retrieval and experimental API prompt drafting")
 	fs.BoolVar(&opts.RequirePromptDraft, "require-prompt-draft", false, "fail before writes unless experimental API prompt drafting succeeds")
 	fs.BoolVar(&opts.OpenPR, "open-pr", false, "open a PR against the dashboard repo instead of writing locally; needs GITHUB_TOKEN write access")
 	fs.BoolVar(&opts.UpdateExisting, "update-existing", false, "replace only known generated files in an existing local scaffold")

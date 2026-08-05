@@ -122,14 +122,15 @@ exact eligible files in the pinned snapshot, but cannot trigger arbitrary URLs, 
 provider-time retrieval, or secret access. Onboarding does not clone or execute
 the source repository.
 
-The provider first returns structured evidence with internal source references,
-then revises that validated object once against the quality rubric. Onboarding
-renders the Markdown itself. Invalid extraction falls back to the TODO template. Revision failure uses the
-first validated evidence. Safe warnings identify the failed stage, failure
-category, fallback, and operator action without printing the wrapped provider
-error. After an interactive API failure, choose whether to retry the same
-reviewed provider, continue with the TODO template, or cancel. The safe default
-is to continue with the template.
+The provider returns structured evidence with internal source references through
+bounded context, operations, and failure-pattern phases. Onboarding merges and
+grounds those results, adds validated engine metadata, and renders the Markdown
+itself. Invalid extraction, merging, grounding, or final validation falls back to
+the TODO template. Safe warnings identify the failed stage, failure category,
+fallback, and operator action without printing the wrapped provider error. After
+an interactive API failure, choose whether to retry the same reviewed provider,
+continue with the TODO template, or cancel. The safe default is to continue with
+the template.
 
 The final review labels the prompt as `TODO template`, `Experimental API draft`,
 or `TODO template after experimental API failure`. The final write confirmation
@@ -172,11 +173,11 @@ request creation unless the experimental API draft succeeds. The flag is valid
 only for experimental API drafting and requires `AI_TOKEN`, `AI_ENDPOINT`, and
 `AI_MODEL`.
 
-Prompt preparation has a five-minute total timeout by default. Slow providers
+Prompt preparation has a 15-minute total timeout by default. Slow providers
 can use `--prompt-timeout`, for example `--prompt-timeout 30m`. The accepted
 range is one minute through two hours. This timeout covers source retrieval and
-both structured drafting stages; it is separate from the normal fetcher timeout
-and deployed `ai.timeout`.
+phased structured extraction; it is separate from the normal fetcher timeout and
+deployed `ai.timeout`.
 
 ## Next steps
 

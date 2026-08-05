@@ -80,8 +80,8 @@ func TestBuildSystemPromptUsesEvidenceWithoutLeakingTokens(t *testing.T) {
 	if result.Status != promptStatusAPIDraft || !strings.Contains(prompt, "## Architecture") || !strings.Contains(prompt, "## Unresolved details") {
 		t.Fatalf("prompt was not drafted:\n%s", prompt)
 	}
-	if len(modelRequests) != len(promptExtractionPhases)+1 {
-		t.Fatalf("model requests = %d, want phased extraction and revision", len(modelRequests))
+	if len(modelRequests) != len(promptExtractionPhases) {
+		t.Fatalf("model requests = %d, want phased extraction", len(modelRequests))
 	}
 	for _, want := range []string{"DISCOVERED PROW JOBS", "SOURCE 1: docs/", "kind markdown"} {
 		if !strings.Contains(modelRequests[0], want) {

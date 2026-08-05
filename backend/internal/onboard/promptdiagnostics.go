@@ -44,7 +44,6 @@ const (
 	promptStageSourceExcerpt         promptPreparationStage = "source-excerpt-retrieval"
 	promptStageEvidenceExtraction    promptPreparationStage = "structured-evidence-extraction"
 	promptStageEvidenceGrounding     promptPreparationStage = "evidence-grounding-validation"
-	promptStageStructuredRevision    promptPreparationStage = "structured-revision"
 	promptStageFinalPromptValidation promptPreparationStage = "final-rendering-and-prompt-validation"
 )
 
@@ -62,8 +61,6 @@ func (s promptPreparationStage) label() string {
 		return "structured evidence extraction"
 	case promptStageEvidenceGrounding:
 		return "evidence grounding validation"
-	case promptStageStructuredRevision:
-		return "structured revision"
 	case promptStageFinalPromptValidation:
 		return "final rendering and prompt validation"
 	default:
@@ -84,7 +81,6 @@ const (
 	promptFailureProviderUnavailable promptFailureCategory = "provider-unavailable"
 	promptFailureInvalidStructured   promptFailureCategory = "invalid-structured-response"
 	promptFailureUngroundedEvidence  promptFailureCategory = "ungrounded-evidence"
-	promptFailureRevisionRegressed   promptFailureCategory = "revision-regressed"
 	promptFailurePromptValidation    promptFailureCategory = "prompt-validation-failed"
 	promptFailureTimedOut            promptFailureCategory = "timed-out"
 	promptFailureUnknown             promptFailureCategory = "prompt-preparation-failed"
@@ -112,8 +108,6 @@ func (c promptFailureCategory) reason() string {
 		return "the provider returned no valid structured response"
 	case promptFailureUngroundedEvidence:
 		return "the structured response failed evidence grounding"
-	case promptFailureRevisionRegressed:
-		return "the structured revision did not preserve validated evidence"
 	case promptFailurePromptValidation:
 		return "the rendered prompt failed deterministic validation"
 	case promptFailureTimedOut:
@@ -141,7 +135,7 @@ func (c promptFailureCategory) action() string {
 		return "Wait for the provider limit to recover, then retry the same reviewed provider."
 	case promptFailureProviderUnavailable:
 		return "Retry the same reviewed provider after it recovers."
-	case promptFailureInvalidStructured, promptFailureUngroundedEvidence, promptFailureRevisionRegressed:
+	case promptFailureInvalidStructured, promptFailureUngroundedEvidence:
 		return "Retry once or continue with the reviewable TODO template."
 	case promptFailureTimedOut:
 		return "Retry the same reviewed provider or continue with the TODO template."
@@ -160,7 +154,6 @@ type promptFailureDebug struct {
 	ValidationCode    string
 	ValidationField   string
 	Phase             string
-	RetainedInitial   bool
 }
 
 type promptPreparationFailure struct {
@@ -189,11 +182,10 @@ func (f *promptPreparationFailure) Unwrap() error {
 }
 
 type promptPreparationResult struct {
-	Requested        promptPreparationRequest
-	Status           promptPreparationStatus
-	Output           promptOutputKind
-	Failure          *promptPreparationFailure
-	RevisionFallback bool
+	Requested promptPreparationRequest
+	Status    promptPreparationStatus
+	Output    promptOutputKind
+	Failure   *promptPreparationFailure
 }
 
 func newTemplatePromptResult() promptPreparationResult {
@@ -226,11 +218,10 @@ func (r promptPreparationResult) reviewLabel() string {
 
 func (r promptPreparationResult) promptPlan(opts Options) PromptPlan {
 	plan := PromptPlan{
-		RequestedMode:    string(r.Requested),
-		FinalStatus:      string(r.Status),
-		Output:           string(r.Output),
-		Source:           r.reviewLabel(),
-		RevisionFallback: r.RevisionFallback,
+		RequestedMode: string(r.Requested),
+		FinalStatus:   string(r.Status),
+		Output:        string(r.Output),
+		Source:        r.reviewLabel(),
 	}
 	if r.Failure != nil {
 		plan.FailureStage = string(r.Failure.Stage)
@@ -290,16 +281,13 @@ func validatePromptPlan(plan PromptPlan) error {
 	if plan.FinalStatus != string(promptStatusFallback) && (plan.FailureStage != "" || plan.FailureCategory != "" || plan.FailureAction != "") {
 		return fmt.Errorf("onboarding plan successful prompt result retained failure diagnostics")
 	}
-	if plan.RevisionFallback && plan.FinalStatus != string(promptStatusAPIDraft) {
-		return fmt.Errorf("onboarding plan revision fallback requires an API draft")
-	}
 	return nil
 }
 
 func knownPromptStage(stage promptPreparationStage) bool {
 	switch stage {
 	case promptStageTokenPreflight, promptStageSourceRevision, promptStageSourceTree, promptStageSourceExcerpt,
-		promptStageEvidenceExtraction, promptStageEvidenceGrounding, promptStageStructuredRevision, promptStageFinalPromptValidation:
+		promptStageEvidenceExtraction, promptStageEvidenceGrounding, promptStageFinalPromptValidation:
 		return true
 	default:
 		return false
@@ -310,7 +298,7 @@ func knownPromptFailureCategory(category promptFailureCategory) bool {
 	switch category {
 	case promptFailureMissingToken, promptFailureMissingCoordinates, promptFailureSourceUnavailable, promptFailureNoSourceEvidence,
 		promptFailureProviderAuth, promptFailureProviderRejected, promptFailureProviderRateLimited, promptFailureProviderUnavailable,
-		promptFailureInvalidStructured, promptFailureUngroundedEvidence, promptFailureRevisionRegressed, promptFailurePromptValidation,
+		promptFailureInvalidStructured, promptFailureUngroundedEvidence, promptFailurePromptValidation,
 		promptFailureTimedOut, promptFailureUnknown:
 		return true
 	default:
@@ -458,7 +446,7 @@ func (d promptDebugger) failure(failure *promptPreparationFailure) {
 		d.line("validation_field=%s", safeTerminal(failure.Debug.ValidationField))
 	}
 	if failure.Debug.Phase != "" {
-		d.line("structured_phase=%s retained_initial=%t", safeTerminal(failure.Debug.Phase), failure.Debug.RetainedInitial)
+		d.line("structured_phase=%s", safeTerminal(failure.Debug.Phase))
 	}
 }
 

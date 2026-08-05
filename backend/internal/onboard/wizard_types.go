@@ -30,18 +30,17 @@ type DiscoveryPlan struct {
 
 // PromptPlan describes the generated prompt without carrying provider secrets.
 type PromptPlan struct {
-	RequestedMode    string `json:"requested_mode"`
-	FinalStatus      string `json:"final_status"`
-	Output           string `json:"output"`
-	Source           string `json:"source"`
-	FailureStage     string `json:"failure_stage,omitempty"`
-	FailureCategory  string `json:"failure_category,omitempty"`
-	FailureAction    string `json:"failure_action,omitempty"`
-	RevisionFallback bool   `json:"revision_fallback,omitempty"`
-	API              string `json:"api,omitempty"`
-	Endpoint         string `json:"endpoint,omitempty"`
-	Model            string `json:"model,omitempty"`
-	Timeout          string `json:"timeout,omitempty"`
+	RequestedMode   string `json:"requested_mode"`
+	FinalStatus     string `json:"final_status"`
+	Output          string `json:"output"`
+	Source          string `json:"source"`
+	FailureStage    string `json:"failure_stage,omitempty"`
+	FailureCategory string `json:"failure_category,omitempty"`
+	FailureAction   string `json:"failure_action,omitempty"`
+	API             string `json:"api,omitempty"`
+	Endpoint        string `json:"endpoint,omitempty"`
+	Model           string `json:"model,omitempty"`
+	Timeout         string `json:"timeout,omitempty"`
 }
 
 const (

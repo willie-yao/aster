@@ -178,14 +178,10 @@ When prompt drafting is selected, the wizard:
    bounded first-seen semantics, then grounds and validates the merge against the
    complete corpus.
 7. Adds credential-free engine-owned evidence for the source repository and up
-   to three representative Prow job records, caps unresolved details at 12, then
-   makes one schema-bound revision call using only the merged evidence and gaps.
-   The revision can remove or reorganize exact validated items, but cannot
-   change factual strings or source references.
+   to three representative Prow job records and caps unresolved details at 12.
 8. Renders Markdown deterministically and validates the final section contract.
-9. Falls back to a reviewable TODO template when any extraction chunk or merged
-   validation fails. If only revision fails, it renders the merged validated
-   evidence object.
+9. Falls back to a reviewable TODO template when any extraction phase, merge,
+   grounding check, or final prompt validation fails.
 
 The source corpus contains at most 8 Markdown, Go, YAML, or shell files or
 line-ranged excerpts. One source contributes at most 12,000 bytes and all source
@@ -200,11 +196,11 @@ Prow metadata includes job name, periodic or presubmit type, configuration file,
 repository when established, branches or refs, and TestGrid annotations. It uses
 compact one-line records and is limited to 60 jobs and 16,000 bytes, with an
 omitted-count summary. Runtime credentials are redacted from full source text and
-the complete serialized provider input. Source retrieval, phased extraction, and
-revision share the onboarding prompt timeout. Each extraction phase uses the
-existing schema, forced-function, and bounded plain-JSON transports and may retry
-once; revision uses the same transports without an extra model retry. Cancellation
-stops retrieval and provider calls. No free-form formatting stage is made.
+the complete serialized provider input. Source retrieval and phased extraction
+share the onboarding prompt timeout. Each extraction phase uses the existing
+schema, forced-function, and bounded plain-JSON transports and may retry once.
+Cancellation stops retrieval and provider calls. No second provider-backed
+refinement or free-form formatting stage is made.
 
 Generated prompts are drafts. Review every architecture, artifact, failure, and
 transient-classification claim before deployment.
@@ -231,8 +227,8 @@ generated `Unresolved details` section identifies important gaps. Choosing a
 more capable model does not substitute for missing source evidence.
 
 Prompt preparation records a credential-free result in the plan: requested mode,
-final status, output type, safe failure stage and category, revision fallback,
-and provider coordinates only for a successful API draft. The final review
+final status, output type, safe failure stage and category, and provider
+coordinates only for a successful API draft. The final review
 shows `TODO template`, `Experimental API draft`, or `TODO template after
 experimental API failure`.
 
@@ -248,8 +244,8 @@ deployed AI analysis. These flags control different features.
 stage timing, selected source paths and line ranges, source and job counts,
 extraction chunk totals, completed chunks, and bounded extraction attempts, API,
 endpoint hostname, model fingerprint, structured transport attempt, HTTP status,
-safe `Retry-After`, provider request ID, validation code and field, revision
-fallback, and total elapsed time. It excludes credentials, source-line contents,
+safe `Retry-After`, provider request ID, validation code and field, and total
+elapsed time. It excludes credentials, source-line contents,
 raw prompts, model responses, evidence text, provider bodies, endpoint query or
 fragment details, credential-bearing URLs, and full private model identifiers.
 No debug report file is created.
@@ -260,7 +256,7 @@ returns a nonzero error before any local write or pull request when the final
 result is not an API draft.
 
 `--prompt-timeout` controls the total source-retrieval and structured-drafting
-budget. It defaults to `5m` and accepts values from `1m` through `2h`. A slow
+budget. It defaults to `15m` and accepts values from `1m` through `2h`. A slow
 provider can use, for example, `--prompt-timeout 30m`. This option does not
 change the regular fetcher `--timeout` or the deployed project `ai.timeout`.
 The reviewed timeout is retained in the credential-free onboarding plan and

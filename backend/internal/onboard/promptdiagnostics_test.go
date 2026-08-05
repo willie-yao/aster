@@ -60,8 +60,7 @@ func TestPromptDebugOutputIsSanitized(t *testing.T) {
 			RequestID:         "request-" + token,
 			ValidationCode:    "content-grounding",
 			ValidationField:   "evidence",
-			Phase:             "revision",
-			RetainedInitial:   true,
+			Phase:             "context",
 		},
 	})
 	text := out.String()
@@ -76,7 +75,7 @@ func TestPromptDebugOutputIsSanitized(t *testing.T) {
 		"http_status=429",
 		"retry_after=12",
 		"validation_code=content-grounding",
-		"retained_initial=true",
+		"structured_phase=context",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("debug output missing %q:\n%s", want, text)
@@ -262,10 +261,9 @@ func TestPromptPreparationStageLabels(t *testing.T) {
 		promptStageSourceExcerpt:         "source excerpt retrieval",
 		promptStageEvidenceExtraction:    "structured evidence extraction",
 		promptStageEvidenceGrounding:     "evidence grounding validation",
-		promptStageStructuredRevision:    "structured revision",
 		promptStageFinalPromptValidation: "final rendering and prompt validation",
 	}
-	if len(stages) != 8 {
+	if len(stages) != 7 {
 		t.Fatalf("stages = %d", len(stages))
 	}
 	for stage, want := range stages {

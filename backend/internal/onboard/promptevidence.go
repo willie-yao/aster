@@ -77,21 +77,6 @@ const promptEvidenceExtractionInstruction = `Return one structured evidence obje
 
 const promptEvidenceExtractionRetryInstruction = `The previous structured attempt was invalid. Return a smaller complete object using the same schema. Prefer only the highest-value supported items, keep every section at one item or fewer, and return JSON only.`
 
-const promptEvidenceRevisionInstruction = `Revise one validated prompt evidence object against the quality rubric and return the complete structured object. The original repository excerpts are intentionally not supplied. You may remove exact duplicates or reorganize existing items, but factual strings, keyed evidence fields, unresolved entries, and source references must remain unchanged. You may not introduce new factual claims, source references, artifact paths, repositories, failure patterns, transient classes, or investigation capabilities. Keep unknown details unresolved. Do not introduce portal, SSH, shell, browser, local CLI, or live-cluster investigation as observed evidence.`
-
-const promptEvidenceQualityRubric = `Quality rubric:
-- Architecture relationships localize failures.
-- Lifecycle claims identify meaningful diagnostic phases.
-- Supplied job or template flavors are represented.
-- Exact artifact paths are grounded.
-- Failure patterns map symptoms to required evidence, causal guards, and remediation limits.
-- Transient rules include both positive and negative boundaries.
-- Triage is ordered and artifact-first.
-- Repositories are grounded owner/name values.
-- Unsupported capabilities and generic boilerplate are removed.
-- Invalid credentials, persistent quota exhaustion, and persistent SKU failures are not broadly transient.
-- Unknown details remain explicit TODOs.`
-
 func promptEvidenceResponseFormat(sectionMaxItems, nestedMaxItems int) ai.ResponseFormat {
 	ref := objectSchema(map[string]any{
 		"path":       stringSchema(),
@@ -922,40 +907,6 @@ func renderPromptEvidence(e promptEvidence) string {
 	return strings.TrimSpace(b.String())
 }
 
-func promptEvidenceRevisionUser(e promptEvidence) string {
-	encoded, _ := json.Marshal(e)
-	return promptEvidenceQualityRubric + "\n\nVALIDATED EVIDENCE TO REVISE\n" + string(encoded)
-}
-
-func promptEvidenceUnresolvedGaps(e promptEvidence) []string {
-	var gaps []string
-	if len(e.Architecture) == 0 {
-		gaps = append(gaps, "architecture")
-	}
-	if len(e.DiagnosticLifecycle) == 0 {
-		gaps = append(gaps, "diagnostic lifecycle")
-	}
-	if len(e.TestFlavors) == 0 {
-		gaps = append(gaps, "test and job flavors")
-	}
-	if len(e.Artifacts) == 0 {
-		gaps = append(gaps, "artifact layout")
-	}
-	if len(e.FailurePatterns) == 0 {
-		gaps = append(gaps, "failure patterns")
-	}
-	if len(e.TransientRules) == 0 {
-		gaps = append(gaps, "transient boundaries")
-	}
-	if len(e.TriageOrder) == 0 {
-		gaps = append(gaps, "triage order")
-	}
-	if len(e.Repositories) == 0 {
-		gaps = append(gaps, "source repositories")
-	}
-	return gaps
-}
-
 func promptQualityIssues(e promptEvidence, body string) []string {
 	var issues []string
 	checks := []struct {
@@ -976,15 +927,4 @@ func promptQualityIssues(e promptEvidence, body string) []string {
 		issues = append(issues, "contains unavailable investigation")
 	}
 	return issues
-}
-
-func promptEvidenceContentCount(e promptEvidence) int {
-	return len(e.Architecture) + len(e.DiagnosticLifecycle) + len(e.TestFlavors) + len(e.Artifacts) + len(e.FailurePatterns) + len(e.TransientRules) + len(e.TriageOrder) + len(e.Repositories)
-}
-
-func promptEvidenceRevisionRegresses(initial, revised promptEvidence) bool {
-	if promptEvidenceContentCount(initial) > 0 && promptEvidenceContentCount(revised) == 0 {
-		return true
-	}
-	return len(promptQualityIssues(revised, renderPromptEvidence(revised))) > len(promptQualityIssues(initial, renderPromptEvidence(initial)))
 }

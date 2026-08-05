@@ -123,7 +123,6 @@ func buildSystemPrompt(ctx context.Context, opts Options, data scaffoldData, inp
 	generation, err := generatePromptBodyDetailed(ctx, client, input, opts.AIToken, opts.GitHubToken)
 	debug.stage(promptStageEvidenceExtraction, generation.ExtractionDuration)
 	debug.extractionChunks(generation.ExtractionChunks, generation.CompletedExtractionChunks, generation.ExtractionAttempts)
-	debug.stage(promptStageStructuredRevision, generation.RevisionDuration)
 	debug.stage(promptStageFinalPromptValidation, generation.RenderDuration)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
@@ -134,11 +133,6 @@ func buildSystemPrompt(ctx context.Context, opts Options, data scaffoldData, inp
 	}
 
 	result := newAPIPromptResult()
-	if generation.RevisionFallback {
-		result.RevisionFallback = true
-		debug.failure(generation.RevisionFailure)
-		writePromptFailure(errOut, "prompts/system.md revision failed", generation.RevisionFailure, "first validated evidence extraction")
-	}
 	fmt.Fprintf(out, "Drafted prompts/system.md from %d source(s) and %d Prow job(s). Review it before deployment.\n", len(input.Sources), len(input.Jobs))
 	return composeGeneratedPrompt(data.Name, generation.Body), result, nil
 }
@@ -163,7 +157,9 @@ func promptFallback(opts Options, data scaffoldData, errOut io.Writer, debug pro
 }
 
 const (
-	defaultPromptDraftTimeout = 5 * time.Minute
+	// DefaultPromptDraftTimeout bounds source retrieval and phased prompt extraction.
+	DefaultPromptDraftTimeout = 15 * time.Minute
+	defaultPromptDraftTimeout = DefaultPromptDraftTimeout
 	minPromptDraftTimeout     = time.Minute
 	maxPromptDraftTimeout     = 2 * time.Hour
 )

@@ -97,12 +97,12 @@ func TestChunkEvidenceLimitIsValidatedWithoutSchemaSupport(t *testing.T) {
 
 func TestGeneratePromptBodyMergesChunkedEvidence(t *testing.T) {
 	input, first, second := twoChunkPromptInput()
-	c := &stubCompleter{outputs: []string{evidenceJSON(first), evidenceJSON(second), evidenceJSON(mergePromptEvidence([]promptEvidence{first, second}))}}
+	c := &stubCompleter{outputs: []string{evidenceJSON(first), evidenceJSON(second)}}
 	result, err := generatePromptBodyDetailed(context.Background(), c, input)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.ExtractionChunks != 2 || result.CompletedExtractionChunks != 2 || result.ExtractionAttempts != 6 || c.calls != 7 {
+	if result.ExtractionChunks != 2 || result.CompletedExtractionChunks != 2 || result.ExtractionAttempts != 6 || c.calls != 6 {
 		t.Fatalf("result=%+v calls=%d", result, c.calls)
 	}
 	for _, want := range []string{first.Architecture[0].Text, second.DiagnosticLifecycle[0].Text} {
@@ -134,7 +134,7 @@ func TestGeneratePromptBodyRetriesInvalidChunkOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.ExtractionAttempts != 4 || result.CompletedExtractionChunks != 1 || c.calls != 5 {
+	if result.ExtractionAttempts != 4 || result.CompletedExtractionChunks != 1 || c.calls != 4 {
 		t.Fatalf("result=%+v calls=%d", result, c.calls)
 	}
 	if !strings.Contains(c.systems[1], promptEvidenceExtractionRetryInstruction) {
@@ -163,49 +163,6 @@ func TestGeneratePromptBodyChunkCancellationPropagates(t *testing.T) {
 	}
 	if result.ExtractionChunks != 2 || result.CompletedExtractionChunks != 1 || result.ExtractionAttempts != 4 {
 		t.Fatalf("result = %+v", result)
-	}
-}
-
-func TestGeneratePromptBodyRevisionUsesMergedEvidenceOnly(t *testing.T) {
-	input, first, second := twoChunkPromptInput()
-	const rawMarker = "unique-raw-source-marker"
-	input.Sources[0].Text += " " + rawMarker
-	merged := mergePromptEvidence([]promptEvidence{first, second})
-	c := &stubCompleter{outputs: []string{evidenceJSON(first), evidenceJSON(second), evidenceJSON(merged)}}
-	if _, err := generatePromptBodyDetailed(context.Background(), c, input); err != nil {
-		t.Fatal(err)
-	}
-	if len(c.users) != 7 {
-		t.Fatalf("requests = %d", len(c.users))
-	}
-	revision := c.users[6]
-	for _, prohibited := range []string{rawMarker, "ORIGINAL BOUNDED INPUT", input.Sources[0].Text, input.Sources[1].Text} {
-		if strings.Contains(revision, prohibited) {
-			t.Fatalf("revision request retained raw input %q", prohibited)
-		}
-	}
-	if !strings.Contains(revision, "VALIDATED EVIDENCE TO REVISE") || !strings.Contains(revision, first.Architecture[0].Text) {
-		t.Fatalf("revision request omitted merged evidence: %s", revision)
-	}
-}
-
-func TestGeneratePromptBodyRevisionFailureRetainsMergedEvidence(t *testing.T) {
-	input, first, second := twoChunkPromptInput()
-	c := &stubCompleter{
-		outputs: []string{evidenceJSON(first), evidenceJSON(second)},
-		errs:    []error{nil, nil, errors.New("revision failed")},
-	}
-	result, err := generatePromptBodyDetailed(context.Background(), c, input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !result.RevisionFallback || result.RevisionFailure == nil {
-		t.Fatalf("result = %+v", result)
-	}
-	for _, want := range []string{first.Architecture[0].Text, second.DiagnosticLifecycle[0].Text} {
-		if !strings.Contains(result.Body, want) {
-			t.Fatalf("fallback body missing %q:\n%s", want, result.Body)
-		}
 	}
 }
 
@@ -292,147 +249,6 @@ func TestPromptDebugReportsChunkProgressWithoutCredentials(t *testing.T) {
 	}
 	if strings.Contains(text, token) {
 		t.Fatalf("debug output exposed credential: %s", text)
-	}
-}
-
-func TestValidatePromptEvidenceRevisionRejectsNewContentAndReferences(t *testing.T) {
-	initial := validGroundedPromptEvidence()
-	revised := clonePromptEvidence(initial)
-	revised.Architecture[0].Text = "A new source-supported fact not extracted initially."
-	if err := validatePromptEvidenceRevision(initial, revised); err == nil {
-		t.Fatal("new revision content was accepted")
-	}
-	revised = clonePromptEvidence(initial)
-	revised.Architecture[0].Sources = append(revised.Architecture[0].Sources, evidenceRef{Path: "docs/runbook.md", StartLine: 21, EndLine: 21})
-	if err := validatePromptEvidenceRevision(initial, revised); err == nil {
-		t.Fatal("new revision source reference was accepted")
-	}
-}
-
-func TestValidatePromptEvidenceRevisionRequiresExactClaims(t *testing.T) {
-	ref := []evidenceRef{{Path: "docs/runbook.md", StartLine: 1, EndLine: 1}}
-	initial := emptyPromptEvidence()
-	initial.Architecture = []evidenceClaim{{Text: "A timeout is transient only when retry succeeds.", Sources: ref}}
-
-	revised := clonePromptEvidence(initial)
-	revised.Architecture[0].Text = "A timeout is transient."
-	if err := validatePromptEvidenceRevision(initial, revised); err == nil {
-		t.Fatal("broadened claim was accepted")
-	}
-
-	revised = clonePromptEvidence(initial)
-	revised.Architecture[0].Text = "A timeout is transient only when Retry succeeds."
-	if err := validatePromptEvidenceRevision(initial, revised); err == nil {
-		t.Fatal("claim identifier case change was accepted")
-	}
-
-	revised = clonePromptEvidence(initial)
-	revised.Unresolved = []string{"Investigate an invented dependency."}
-	if err := validatePromptEvidenceRevision(initial, revised); err == nil {
-		t.Fatal("new unresolved text was accepted")
-	}
-	initial.Unresolved = []string{"Confirm MachinePool behavior."}
-	revised = clonePromptEvidence(initial)
-	revised.Unresolved[0] = "Confirm machinepool behavior."
-	if err := validatePromptEvidenceRevision(initial, revised); err == nil {
-		t.Fatal("unresolved identifier case change was accepted")
-	}
-
-	reorganized := clonePromptEvidence(initial)
-	reorganized.Architecture = []evidenceClaim{}
-	reorganized.DiagnosticLifecycle = []evidenceClaim{{Text: initial.Architecture[0].Text, Sources: ref}}
-	if err := validatePromptEvidenceRevision(initial, reorganized); err == nil {
-		t.Fatal("cross-section claim move was accepted")
-	}
-
-	initial.Architecture = append(initial.Architecture, evidenceClaim{Text: "Controller watches Machines.", Sources: ref})
-	reordered := clonePromptEvidence(initial)
-	reordered.Architecture[0], reordered.Architecture[1] = reordered.Architecture[1], reordered.Architecture[0]
-	if err := validatePromptEvidenceRevision(initial, reordered); err != nil {
-		t.Fatalf("same-section reordering was rejected: %v", err)
-	}
-
-	duplicated := clonePromptEvidence(initial)
-	duplicated.DiagnosticLifecycle = []evidenceClaim{{Text: initial.Architecture[0].Text, Sources: ref}}
-	if err := validatePromptEvidenceRevision(initial, duplicated); err == nil {
-		t.Fatal("duplicated claim was accepted")
-	}
-}
-
-func TestValidatePromptEvidenceRevisionCannotWeakenRetainedItems(t *testing.T) {
-	refs := []evidenceRef{
-		{Path: "docs/runbook.md", StartLine: 1, EndLine: 1},
-		{Path: "docs/runbook.md", StartLine: 2, EndLine: 2},
-	}
-	initial := emptyPromptEvidence()
-	initial.Architecture = []evidenceClaim{{Text: "Controller reconciles resources.", Sources: refs}}
-	initial.FailurePatterns = []failurePatternEvidence{{
-		Name: "Readiness stall", Signal: "Readiness remains false", RequiredEvidence: []string{"manager.log", "resource conditions"},
-		DoNotConclude: "Do not infer a test bug.", RemediationLimit: "Change code only when logs prove the fault.", Sources: refs,
-	}}
-	initial.Unresolved = []string{"Confirm artifact paths.", "Confirm controller namespaces."}
-
-	tests := map[string]func(*promptEvidence){
-		"claim reference":   func(e *promptEvidence) { e.Architecture[0].Sources = e.Architecture[0].Sources[:1] },
-		"pattern reference": func(e *promptEvidence) { e.FailurePatterns[0].Sources = e.FailurePatterns[0].Sources[:1] },
-		"required evidence": func(e *promptEvidence) {
-			e.FailurePatterns[0].RequiredEvidence = e.FailurePatterns[0].RequiredEvidence[:1]
-		},
-		"unresolved item": func(e *promptEvidence) { e.Unresolved = e.Unresolved[:1] },
-	}
-	for name, mutate := range tests {
-		t.Run(name, func(t *testing.T) {
-			revised := clonePromptEvidence(initial)
-			mutate(&revised)
-			if err := validatePromptEvidenceRevision(initial, revised); err == nil {
-				t.Fatal("weakened retained evidence was accepted")
-			}
-		})
-	}
-
-	reordered := clonePromptEvidence(initial)
-	reordered.Architecture[0].Sources[0], reordered.Architecture[0].Sources[1] = reordered.Architecture[0].Sources[1], reordered.Architecture[0].Sources[0]
-	reordered.FailurePatterns[0].RequiredEvidence[0], reordered.FailurePatterns[0].RequiredEvidence[1] = reordered.FailurePatterns[0].RequiredEvidence[1], reordered.FailurePatterns[0].RequiredEvidence[0]
-	reordered.Unresolved[0], reordered.Unresolved[1] = reordered.Unresolved[1], reordered.Unresolved[0]
-	if err := validatePromptEvidenceRevision(initial, reordered); err != nil {
-		t.Fatalf("order-only revision was rejected: %v", err)
-	}
-}
-
-func TestValidatePromptEvidenceRevisionKeepsKeyedFieldsLocal(t *testing.T) {
-	firstRef := []evidenceRef{{Path: "docs/runbook.md", StartLine: 1, EndLine: 10}}
-	secondRef := []evidenceRef{{Path: "docs/runbook.md", StartLine: 11, EndLine: 20}}
-	initial := emptyPromptEvidence()
-	initial.Artifacts = []artifactEvidence{
-		{PathPattern: "artifacts/a.log", Purpose: "Shows controller A failures.", Sources: firstRef},
-		{PathPattern: "artifacts/b.log", Purpose: "Shows controller B failures.", Sources: secondRef},
-	}
-	initial.FailurePatterns = []failurePatternEvidence{
-		{Name: "Pattern A", Signal: "Signal A", RequiredEvidence: []string{"Evidence A"}, DoNotConclude: "Guard A", RemediationLimit: "Limit A", Sources: firstRef},
-		{Name: "Pattern B", Signal: "Signal B", RequiredEvidence: []string{"Evidence B"}, DoNotConclude: "Guard B", RemediationLimit: "Limit B", Sources: secondRef},
-	}
-	initial.TransientRules = []transientEvidence{
-		{Class: "Class A", OnlyIf: "Recovery A", NotTransientIf: "Persistence A", Sources: firstRef},
-		{Class: "Class B", OnlyIf: "Recovery B", NotTransientIf: "Persistence B", Sources: secondRef},
-	}
-
-	tests := map[string]func(*promptEvidence){
-		"artifact purpose":   func(e *promptEvidence) { e.Artifacts[0].Purpose = e.Artifacts[1].Purpose },
-		"artifact reference": func(e *promptEvidence) { e.Artifacts[0].Sources = e.Artifacts[1].Sources },
-		"failure fields": func(e *promptEvidence) {
-			e.FailurePatterns[0].Signal = e.FailurePatterns[1].Signal
-			e.FailurePatterns[0].RequiredEvidence = e.FailurePatterns[1].RequiredEvidence
-		},
-		"transient fields": func(e *promptEvidence) { e.TransientRules[0].OnlyIf = e.TransientRules[1].OnlyIf },
-	}
-	for name, mutate := range tests {
-		t.Run(name, func(t *testing.T) {
-			revised := clonePromptEvidence(initial)
-			mutate(&revised)
-			if err := validatePromptEvidenceRevision(initial, revised); err == nil {
-				t.Fatal("cross-item revision was accepted")
-			}
-		})
 	}
 }
 

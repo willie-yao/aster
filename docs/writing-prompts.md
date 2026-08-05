@@ -81,9 +81,9 @@ of eligible files in the pinned snapshot, but cannot trigger arbitrary URLs,
 commands, provider-time retrieval, or secret access. The draft remains a
 starting point that requires human review.
 
-Generation uses deterministic chunked extraction plus one structured revision
-within a five-minute total timeout by default. `fetcher onboard --prompt-timeout`
-can raise the total budget for a slow provider:
+Generation uses deterministic chunked extraction within a 15-minute total
+timeout by default. `fetcher onboard --prompt-timeout` can change the total
+budget for a provider:
 
 1. Split the sorted source corpus at source boundaries with a 12,000-byte
    target and a 16,000-byte hard ceiling. Extract each chunk through three small
@@ -96,25 +96,20 @@ can raise the total budget for a slow provider:
    reference, and byte caps, then ground and validate the merge against the
    complete corpus.
 3. Add engine-owned evidence for the exact source repository and up to three
-   representative Prow job records, cap unresolved details at 12, then ask for one
-   complete structured revision using only the validated merged evidence and gaps.
-   The raw repository excerpts are not resent. The revision can remove or
-   reorganize exact validated items but cannot change factual strings or source
-   references.
-4. Validate the revision and render Markdown deterministically.
+   representative Prow job records, cap unresolved details at 12, render Markdown
+   deterministically, and validate the final section contract.
 
 Each model call uses the engine's existing structured transport: native JSON
 schema, then a forced function call, then bounded plain-JSON extraction when the
 provider rejects the earlier protocol. One invalid phase can be retried once,
 so each phase has at most six transport attempts and each three-phase chunk has
-at most eighteen. Revision has at most three. Validation failure never triggers
-an unbounded retry loop.
+at most eighteen. Validation failure never triggers an unbounded retry loop.
 
-If any extraction chunk or the merged validation fails, onboarding writes the
-reviewable stub instead of publishing partial evidence. If the revision fails,
-onboarding renders the merged validated evidence object. It never publishes an
-unvalidated object or asks a free-form call to format Markdown. Source references
-remain internal to generation unless their content is useful in the runbook.
+If any extraction phase, merge, grounding check, or final prompt validation
+fails, onboarding writes the reviewable stub instead of publishing partial
+model evidence. There is no second provider-backed refinement call and no
+free-form formatting stage. Source references remain internal to generation
+unless their content is useful in the runbook.
 
 A capable model does not replace source quality. Improve repository diagnostics,
 artifact documentation, or job metadata, then rerun onboarding when important
