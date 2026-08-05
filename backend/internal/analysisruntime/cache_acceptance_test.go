@@ -108,24 +108,30 @@ func TestContainerStateStoreAcceptCachedFailure(t *testing.T) {
 	}
 }
 
-func TestContainerStateStoreCritiqueRequirementFollowsRetryBudget(t *testing.T) {
+func TestContainerStateStoreCritiquePolicyIsIndependentFromRetryBudget(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	request := ai.FailureAnalysisRequest{
 		JobID: "job", BuildPrefix: "logs/job/1", Build: models.BuildInfo{BuildID: "1"},
 		TestCase: models.TestCase{Name: "test", Status: "failed", FailureMessage: "failed"},
 	}
 	for _, tc := range []struct {
-		name    string
-		retries int
-		want    ai.CacheRejectionReason
+		name         string
+		retries      int
+		policy       project.CritiqueCachePolicy
+		hardFailures []string
+		softWarnings []string
+		want         ai.CacheRejectionReason
 	}{
-		{name: "zero retries is advisory"},
-		{name: "positive retries requires critique", retries: 1, want: ai.CacheRejectedCritique},
+		{name: "legacy zero retries is advisory"},
+		{name: "legacy positive retries is strict", retries: 1, want: ai.CacheRejectedCritiqueUnclassified},
+		{name: "hard zero retries accepts soft warning", policy: project.CritiqueCachePolicyHard, softWarnings: []string{"remediation.punt"}},
+		{name: "strict zero retries rejects soft warning", policy: project.CritiqueCachePolicyStrict, softWarnings: []string{"remediation.punt"}, want: ai.CacheRejectedCritiqueStrictWarning},
+		{name: "advisory positive retries accepts hard failure", retries: 1, policy: project.CritiqueCachePolicyAdvisory, hardFailures: []string{"citation.unread"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			analysisProject := &Project{
 				Config: &project.Config{AI: &project.AI{Agentic: project.Agentic{
-					MinToolCalls: 2, MinGCSBytes: 50, Critique: project.AgenticCritique{MaxRetries: &tc.retries},
+					MinToolCalls: 2, MinGCSBytes: 50, Critique: project.AgenticCritique{MaxRetries: &tc.retries, CachePolicy: tc.policy},
 				}}},
 				Provider:     project.AIProvider{API: project.AIAPIChatCompletions, Endpoint: "https://model.invalid/v1/chat/completions", Model: "model"},
 				SystemPrompt: "system prompt",
@@ -140,6 +146,7 @@ func TestContainerStateStoreCritiqueRequirementFollowsRetryBudget(t *testing.T) 
 				Analysis: &models.AIAnalysis{
 					GeneratedAt: now.Format(time.RFC3339), Mode: ai.AgenticMode, RootCause: "root cause",
 					ToolCalls: 2, GCSBytes: 50, CritiqueVersion: ai.CurrentCritiqueVersion(),
+					CritiqueHardFailures: tc.hardFailures, CritiqueSoftWarnings: tc.softWarnings,
 					ModelHash: policy.ModelHash, PromptHash: policy.PromptHash,
 				},
 			}

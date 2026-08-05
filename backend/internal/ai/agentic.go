@@ -66,9 +66,13 @@ type AgenticOptions struct {
 	MinGCSBytes int
 
 	// CritiqueMaxRetries controls eligibility for one bounded deterministic repair.
-	// 0 evaluates once without repair and treats critique as advisory for caching;
-	// positive values require critique success and remain subject to headroom guards.
+	// 0 evaluates once without a critique repair request. Positive values remain
+	// subject to headroom guards. CritiqueCachePolicy controls reuse independently.
 	CritiqueMaxRetries int
+
+	// CritiqueCachePolicy independently controls which findings block cache reuse.
+	// Empty preserves the legacy max-retries behavior.
+	CritiqueCachePolicy CritiqueCachePolicy
 
 	// SingleToolCall caps the loop to one tool call per assistant turn. Extra
 	// tool calls in a multi-call response are dropped after the first. Needed
@@ -312,6 +316,10 @@ type agenticCacheData struct {
 	// invalidate uncritiqued entries when a consumer later enables
 	// critique.
 	CritiquePassed bool `json:"critique_passed,omitempty"`
+	// CritiqueHardFailures and CritiqueSoftWarnings retain content-free rule IDs
+	// for independent cache policy enforcement.
+	CritiqueHardFailures []string `json:"critique_hard_failures,omitempty"`
+	CritiqueSoftWarnings []string `json:"critique_soft_warnings,omitempty"`
 
 	// CritiqueVersion records which deterministic critique and publication
 	// contract processed the draft. CritiquePassed records whether it passed.
@@ -411,7 +419,12 @@ type agentState struct {
 	// critiquePassed records whether the accepted answer cleared the
 	// always-on critique gate. Stamped onto the published AIAnalysis so the
 	// build-level shouldReanalyze gate can invalidate uncritiqued entries.
-	critiquePassed bool
+	critiquePassed            bool
+	critiqueHardFailures      []string
+	critiqueSoftWarnings      []string
+	cachePersistenceAttempted bool
+	cachePersistenceAccepted  bool
+	cacheRejectionReason      CacheRejectionReason
 
 	// readArtifactsFull / readArtifactsBase track artifacts the agent
 	// successfully fetched via read_artifact / tail_artifact /
@@ -553,6 +566,11 @@ func stampAgenticTelemetry(analysis *models.AIAnalysis, state *agentState, mode 
 		analysis.GCSFloorRetryExhausted = state.gcsFloorRetryExhausted
 		analysis.BudgetExhausted = state.budgetExhausted
 		analysis.CritiquePassed = state.critiquePassed
+		analysis.CritiqueHardFailures = append([]string(nil), state.critiqueHardFailures...)
+		analysis.CritiqueSoftWarnings = append([]string(nil), state.critiqueSoftWarnings...)
+		analysis.CachePersistenceAttempted = state.cachePersistenceAttempted
+		analysis.CachePersistenceAccepted = state.cachePersistenceAccepted
+		analysis.CachePolicyRejectionReason = string(state.cacheRejectionReason)
 		analysis.CritiqueVersion = currentCritiqueVersion
 		if state.skillSet != nil {
 			analysis.SkillSetHash = state.skillSet.Hash()
@@ -562,6 +580,15 @@ func stampAgenticTelemetry(analysis *models.AIAnalysis, state *agentState, mode 
 		analysis.JudgeObjected = state.judgeObjected
 		analysis.JudgeRevised = state.judgeRevised
 	}
+}
+
+func (s *agentState) setCritiqueOutcome(out critiqueOutcome) {
+	if s == nil {
+		return
+	}
+	s.critiquePassed = out.Passed
+	s.critiqueHardFailures = critiqueRuleStrings(out.HardRuleIDs())
+	s.critiqueSoftWarnings = critiqueRuleStrings(out.SoftRuleIDs())
 }
 
 // AgenticInputs bundles the per-failure context required by the agentic loop.
@@ -1196,7 +1223,7 @@ agentLoop:
 
 	state.notifyDraftSelection()
 	summary, analysis := c.buildOutputs(parsed)
-	c.cacheAcceptedAnalysis(cacheKey, parsed, analysis.GeneratedAt, state, in.Opts, state.critiquePassed)
+	c.cacheAcceptedAnalysis(loopCtx, cacheKey, parsed, analysis.GeneratedAt, state, in.Opts)
 	stampAgenticTelemetry(analysis, state, in.Mode, false, start)
 	return summary, analysis, nil
 }
@@ -1210,9 +1237,19 @@ func (c *Client) prepareCacheablePublishedAnalysis(ctx context.Context, state *a
 			pruneAbsentSkillEvidence(parsed, &out, treeSet)
 		}
 	}
+	policy := effectiveCritiqueCachePolicy(opts.CritiqueCachePolicy, opts.CritiqueMaxRetries)
 	newlyPassed := out.Passed && !state.critiquePassed
-	state.critiquePassed = out.Passed
-	if !out.Passed {
+	state.setCritiqueOutcome(out)
+	accepted := critiqueAcceptedForPolicy(out, policy)
+	switch {
+	case out.Passed && newlyPassed:
+		recordTrace(ctx, critiqueTraceEvent("published_passed", out))
+	case accepted && len(out.RuleIDs()) > 0:
+		recordTrace(ctx, critiqueTraceEvent("published_warning", out))
+	case !accepted:
+		recordTrace(ctx, critiqueTraceEvent("published_rejected", out))
+	}
+	if !accepted {
 		return parsed
 	}
 	if state.bestDraft != nil {
@@ -1224,15 +1261,12 @@ func (c *Client) prepareCacheablePublishedAnalysis(ctx context.Context, state *a
 			state.bestDraft.providerItems = nil
 		}
 	}
-	if newlyPassed {
-		recordTrace(ctx, critiqueTraceEvent("published_passed", out))
-	}
-	if newlyPassed && opts.SemanticJudge && !state.judgeRan {
+	if opts.SemanticJudge && !state.judgeRan {
 		content := ""
 		if raw, err := json.Marshal(parsed); err == nil {
 			content = string(raw)
 		}
-		parsed = c.applySemanticJudgePostLoop(ctx, state, messages, content, nil, parsed, contextHeadroomFor(opts))
+		parsed = c.applySemanticJudgePostLoop(ctx, state, messages, content, nil, parsed, contextHeadroomFor(opts), policy)
 		parsed = sanitizePublishedCitations(parsed, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
 		parsed = state.preparePublishedAnalysis(parsed)
 		out = critiqueDraftWithContent(parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, parsed), state.consecutiveFailures, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
@@ -1241,7 +1275,7 @@ func (c *Client) prepareCacheablePublishedAnalysis(ctx context.Context, state *a
 				pruneAbsentSkillEvidence(parsed, &out, treeSet)
 			}
 		}
-		state.critiquePassed = out.Passed
+		state.setCritiqueOutcome(out)
 	}
 	return parsed
 }
@@ -1473,7 +1507,7 @@ func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, m
 	if out.Passed {
 		recordTrace(ctx, critiqueTraceEvent("passed", out))
 		if opts.SemanticJudge && !state.judgeRan {
-			c.applySemanticJudgePostLoop(ctx, state, messages, finalContent, finalProviderItems, parsed, contextHeadroomFor(opts))
+			c.applySemanticJudgePostLoop(ctx, state, messages, finalContent, finalProviderItems, parsed, contextHeadroomFor(opts), effectiveCritiqueCachePolicy(opts.CritiqueCachePolicy, opts.CritiqueMaxRetries))
 		}
 		state.critiquePassed = state.bestDraft != nil && state.bestDraft.quality.Passed
 		return state.bestDraft.parsed
@@ -1614,7 +1648,7 @@ func (c *Client) runBoundedCritiqueRepair(ctx context.Context, state *agentState
 	state.critiquePassed = state.bestDraft.quality.Passed
 	if state.critiquePassed && opts.SemanticJudge && !state.judgeRan {
 		selected := state.bestDraft
-		c.applySemanticJudgePostLoop(ctx, state, repairMessages, selected.content, selected.providerItems, selected.parsed, contextHeadroomFor(opts))
+		c.applySemanticJudgePostLoop(ctx, state, repairMessages, selected.content, selected.providerItems, selected.parsed, contextHeadroomFor(opts), effectiveCritiqueCachePolicy(opts.CritiqueCachePolicy, opts.CritiqueMaxRetries))
 		state.critiquePassed = state.bestDraft.quality.Passed
 	}
 	selected := state.bestDraft
@@ -2093,24 +2127,25 @@ func matchSkillsForDraft(state *agentState, parsed analysisResponse) []skills.Sk
 	return state.skillSet.Match(strings.Join(parsed.proseFields(), "\n"))
 }
 
-// cacheAcceptedAnalysis writes a parsed analysis after the agent meets the
-// investigation floors. Critique is advisory when no repair retries are
-// configured and required when the project enables a positive retry budget.
-func (c *Client) cacheAcceptedAnalysis(cacheKey string, parsed analysisResponse, generatedAt string, state *agentState, opts AgenticOptions, critiquePassed bool) {
-	if evalFloors(state, opts).anyUnmet() {
-		return
-	}
-	if opts.CritiqueMaxRetries > 0 && !critiquePassed {
-		return
-	}
-	if state.judgeObjected && !state.judgeRevised && !state.judgeRevisionRejected {
+// cacheAcceptedAnalysis evaluates the independent floor, critique, and semantic
+// gates, then records the exact persistence outcome.
+func (c *Client) cacheAcceptedAnalysis(ctx context.Context, cacheKey string, parsed analysisResponse, generatedAt string, state *agentState, opts AgenticOptions) {
+	state.cachePersistenceAttempted = false
+	state.cachePersistenceAccepted = false
+	state.cacheRejectionReason = cachePersistenceRejection(state, opts)
+	if state.cacheRejectionReason != CacheAccepted {
+		recordTrace(ctx, TraceEvent{
+			Kind: "cache_persistence", Outcome: "rejected", CacheRejectionReason: string(state.cacheRejectionReason),
+			CritiqueHardRules: append([]string(nil), state.critiqueHardFailures...), CritiqueSoftRules: append([]string(nil), state.critiqueSoftWarnings...),
+		})
 		return
 	}
 	skillHash := ""
 	if state.skillSet != nil {
 		skillHash = state.skillSet.Hash()
 	}
-	_ = c.cache.Set(cacheKey, agenticCacheData{
+	state.cachePersistenceAttempted = true
+	err := c.cache.Set(cacheKey, agenticCacheData{
 		analysisResponse:       parsed,
 		GeneratedAt:            generatedAt,
 		Model:                  c.model,
@@ -2123,12 +2158,46 @@ func (c *Client) cacheAcceptedAnalysis(cacheKey string, parsed analysisResponse,
 		JudgeRan:               state.judgeRan,
 		JudgeObjected:          state.judgeObjected,
 		JudgeRevised:           state.judgeRevised,
-		CritiquePassed:         critiquePassed,
+		CritiquePassed:         state.critiquePassed,
+		CritiqueHardFailures:   append([]string(nil), state.critiqueHardFailures...),
+		CritiqueSoftWarnings:   append([]string(nil), state.critiqueSoftWarnings...),
 		CritiqueVersion:        currentCritiqueVersion,
 		SkillSetHash:           skillHash,
 		ModelHash:              c.modelFingerprint(),
 		PromptHash:             state.promptHash,
 	})
+	if err != nil {
+		state.cacheRejectionReason = CacheRejectedNotPersisted
+		recordTrace(ctx, TraceEvent{Kind: "cache_persistence", Outcome: "error", CacheRejectionReason: string(state.cacheRejectionReason)})
+		return
+	}
+	state.cachePersistenceAccepted = true
+	recordTrace(ctx, TraceEvent{
+		Kind: "cache_persistence", Outcome: "accepted",
+		CritiqueHardRules: append([]string(nil), state.critiqueHardFailures...), CritiqueSoftRules: append([]string(nil), state.critiqueSoftWarnings...),
+	})
+}
+
+func cachePersistenceRejection(state *agentState, opts AgenticOptions) CacheRejectionReason {
+	floors := evalFloors(state, opts)
+	if floors.callsUnmet {
+		return CacheRejectedToolFloor
+	}
+	if floors.gcsUnmet {
+		return CacheRejectedEvidenceFloor
+	}
+	analysis := &models.AIAnalysis{
+		Mode: AgenticMode, CritiquePassed: state.critiquePassed, CritiqueVersion: currentCritiqueVersion,
+		CritiqueHardFailures: state.critiqueHardFailures, CritiqueSoftWarnings: state.critiqueSoftWarnings,
+	}
+	policy := effectiveCritiqueCachePolicy(opts.CritiqueCachePolicy, opts.CritiqueMaxRetries)
+	if reason := critiqueCacheRejection(analysis, policy); reason != CacheAccepted {
+		return reason
+	}
+	if state.judgeObjected && !state.judgeRevised && !state.judgeRevisionRejected {
+		return CacheRejectedSemanticObjection
+	}
+	return CacheAccepted
 }
 
 // runFinalizeRound asks the model for one more no-tools response containing

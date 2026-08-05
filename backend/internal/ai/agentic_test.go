@@ -1812,6 +1812,129 @@ func TestAgentic_CritiqueZeroRetriesMakesNoRepairRequest(t *testing.T) {
 	}
 }
 
+func TestAgentic_CritiqueCachePoliciesWithZeroRepairBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		policy        CritiqueCachePolicy
+		final         string
+		browser       artifacts.Browser
+		wantCached    bool
+		wantReason    CacheRejectionReason
+		wantHardRules []string
+		wantSoftRules []string
+	}{
+		{name: "strict rejects punt", policy: CritiqueCachePolicyStrict, final: puntyFinalJSON, browser: &fakeBrowser{}, wantReason: CacheRejectedCritiqueStrictWarning, wantSoftRules: []string{"remediation.punt"}},
+		{name: "hard accepts punt", policy: CritiqueCachePolicyHard, final: puntyFinalJSON, browser: &fakeBrowser{}, wantCached: true, wantSoftRules: []string{"remediation.punt"}},
+		{name: "hard rejects unread citation", policy: CritiqueCachePolicyHard, final: hallucinatedFinalJSON, browser: &fakeBrowser{files: map[string][]byte{"manager.log": []byte("controller failed")}}, wantReason: CacheRejectedCritiqueHardFailure, wantHardRules: []string{"citation.unread"}},
+		{name: "advisory accepts unread citation", policy: CritiqueCachePolicyAdvisory, final: hallucinatedFinalJSON, browser: &fakeBrowser{files: map[string][]byte{"manager.log": []byte("controller failed")}}, wantCached: true, wantHardRules: []string{"citation.unread"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			shrinkCallDelay(t)
+			srv := newScriptedChatServer(t)
+			srv.push(200, chatRespFinal(tc.final))
+			client := newAgenticTestClient(t, srv.URL)
+			key := "agentic:test:cache-policy:" + tc.name
+			_, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, tc.browser, AgenticOptions{
+				MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
+				CritiqueMaxRetries: 0, CritiqueCachePolicy: tc.policy,
+			}), key, "sys", "user")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := atomic.LoadInt32(&srv.calls); got != 1 {
+				t.Fatalf("call count = %d, want 1", got)
+			}
+			if !slices.Equal(analysis.CritiqueHardFailures, tc.wantHardRules) || !slices.Equal(analysis.CritiqueSoftWarnings, tc.wantSoftRules) {
+				t.Fatalf("critique rules = hard:%v soft:%v", analysis.CritiqueHardFailures, analysis.CritiqueSoftWarnings)
+			}
+			if analysis.CachePersistenceAttempted != tc.wantCached || analysis.CachePersistenceAccepted != tc.wantCached || CacheRejectionReason(analysis.CachePolicyRejectionReason) != tc.wantReason {
+				t.Fatalf("persistence = attempted:%t accepted:%t reason:%q", analysis.CachePersistenceAttempted, analysis.CachePersistenceAccepted, analysis.CachePolicyRejectionReason)
+			}
+			_, cached := client.Cache().Get(key)
+			if cached != tc.wantCached {
+				t.Fatalf("cached = %t, want %t", cached, tc.wantCached)
+			}
+		})
+	}
+}
+
+func TestAgentic_HardPolicyRunsSemanticJudgeWithSoftWarnings(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal(puntyFinalJSON))
+	srv.push(200, chatRespFinal(`{"objections":[]}`))
+	client := newAgenticTestClient(t, srv.URL)
+	key := "agentic:test:hard-policy-soft-semantic"
+	_, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
+		MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
+		CritiqueMaxRetries: 0, CritiqueCachePolicy: CritiqueCachePolicyHard, SemanticJudge: true,
+	}), key, "sys", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 2 {
+		t.Fatalf("call count = %d, want 2 (draft + semantic judge, no critique repair)", got)
+	}
+	if !analysis.JudgeRan || analysis.JudgeObjected || !analysis.CachePersistenceAccepted || !slices.Equal(analysis.CritiqueSoftWarnings, []string{"remediation.punt"}) {
+		t.Fatalf("analysis = %+v", analysis)
+	}
+	if _, ok := client.Cache().Get(key); !ok {
+		t.Fatal("hard-safe soft-warning draft was not cached")
+	}
+}
+
+func TestAgentic_CachePersistenceTraceRecordsPolicyReason(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal(puntyFinalJSON))
+	store := NewTraceStore()
+	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIChatCompletions})
+	ctx := withAnalysisTrace(context.Background(), trace)
+	_, _, err := newAgenticTestClient(t, srv.URL).doAnalyzeAgentic(ctx, newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
+		MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
+		CritiqueMaxRetries: 0, CritiqueCachePolicy: CritiqueCachePolicyStrict,
+	}), "agentic:test:cache-policy-trace", "sys", "user")
+	trace.Finish("success", err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range store.Snapshot().Traces[0].Events {
+		if event.Kind == "cache_persistence" && event.Outcome == "rejected" {
+			if event.CacheRejectionReason != string(CacheRejectedCritiqueStrictWarning) ||
+				!slices.Equal(event.CritiqueSoftRules, []string{"remediation.punt"}) || len(event.CritiqueHardRules) != 0 {
+				t.Fatalf("cache persistence event = %+v", event)
+			}
+			return
+		}
+	}
+	t.Fatalf("cache persistence rejection was not traced: %+v", store.Snapshot())
+}
+
+func TestAgentic_AdvisoryPolicyStillUsesRepairBudget(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal(puntyFinalJSON))
+	srv.push(200, chatRespFinal(puntyFinalJSON))
+	client := newAgenticTestClient(t, srv.URL)
+	key := "agentic:test:advisory-with-repair"
+	_, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
+		MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
+		CritiqueMaxRetries: 1, CritiqueCachePolicy: CritiqueCachePolicyAdvisory,
+	}), key, "sys", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 2 {
+		t.Fatalf("call count = %d, want 2 (draft + critique repair)", got)
+	}
+	if analysis.CritiquePassed || !analysis.CachePersistenceAccepted || !slices.Equal(analysis.CritiqueSoftWarnings, []string{"remediation.punt"}) {
+		t.Fatalf("analysis = %+v", analysis)
+	}
+	if _, ok := client.Cache().Get(key); !ok {
+		t.Fatal("advisory policy did not cache the repaired soft-warning draft")
+	}
+}
+
 func TestAgentic_CritiqueBudgetSharedAcrossLoopAndPostLoop(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)

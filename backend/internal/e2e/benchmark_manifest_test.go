@@ -218,6 +218,9 @@ type benchmarkJSONLResult struct {
 	EvidencePlanCovered     bool                       `json:"evidence_plan_covered,omitempty"`
 	GCSFloorRetryExhausted  bool                       `json:"gcs_floor_retry_exhausted,omitempty"`
 	CritiquePassed          *bool                      `json:"critique_passed,omitempty"`
+	CritiqueCachePolicy     string                     `json:"critique_cache_policy,omitempty"`
+	CritiqueHardFailures    []string                   `json:"critique_hard_failures,omitempty"`
+	CritiqueSoftWarnings    []string                   `json:"critique_soft_warnings,omitempty"`
 	BudgetExhausted         bool                       `json:"budget_exhausted,omitempty"`
 	FloorNudges             int                        `json:"floor_nudges,omitempty"`
 	FloorNudgeReasons       []string                   `json:"floor_nudge_reasons,omitempty"`
@@ -260,11 +263,14 @@ type benchmarkJSONLDraft struct {
 }
 
 type benchmarkCacheVerification struct {
-	Attempted              bool                    `json:"attempted"`
-	Saved                  bool                    `json:"saved"`
-	Accepted               bool                    `json:"accepted"`
-	RejectionReason        ai.CacheRejectionReason `json:"rejection_reason,omitempty"`
-	CacheHit               bool                    `json:"cache_hit"`
+	PersistenceAttempted   bool                    `json:"persistence_attempted"`
+	PersistenceAccepted    bool                    `json:"persistence_accepted"`
+	PolicyRejectionReason  ai.CacheRejectionReason `json:"policy_rejection_reason,omitempty"`
+	CacheSaveSucceeded     bool                    `json:"cache_save_succeeded"`
+	LookupAttempted        bool                    `json:"lookup_attempted"`
+	LookupAccepted         bool                    `json:"lookup_accepted"`
+	LookupRejectionReason  ai.CacheRejectionReason `json:"lookup_rejection_reason,omitempty"`
+	LookupHit              bool                    `json:"lookup_hit"`
 	ProviderRequests       int                     `json:"provider_requests"`
 	EvidencePlanCovered    bool                    `json:"evidence_plan_covered,omitempty"`
 	GCSFloorRetryExhausted bool                    `json:"gcs_floor_retry_exhausted,omitempty"`
@@ -284,7 +290,7 @@ type benchmarkJSONLTrace struct {
 	Critique          map[string]int `json:"critique"`
 }
 
-func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int, tc *models.TestCase, elapsed time.Duration, snapshot ai.AnalysisTraceFile, observations []benchmarkDraftObservation, selectedAttempt int, toolUsage benchmarkToolUsage, traceSummary benchmarkTraceSummary, cacheGeneration string, cacheVerification benchmarkCacheVerification) {
+func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int, tc *models.TestCase, elapsed time.Duration, snapshot ai.AnalysisTraceFile, observations []benchmarkDraftObservation, selectedAttempt int, toolUsage benchmarkToolUsage, traceSummary benchmarkTraceSummary, cacheGeneration string, critiquePolicy ai.CritiqueCachePolicy, cacheVerification benchmarkCacheVerification) {
 	t.Helper()
 	if path == "" {
 		return
@@ -303,6 +309,7 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 		ToolNames: append([]string(nil), toolUsage.names...), ToolCounts: append([]string(nil), toolUsage.counts...),
 		FloorNudges: traceSummary.floorNudges, FloorNudgeReasons: append([]string(nil), traceSummary.floorNudgeReasons...),
 		CacheGeneration: cacheGeneration, CacheVerification: cacheVerification,
+		CritiqueCachePolicy:     string(critiquePolicy),
 		Trace:                   benchmarkJSONLTrace{Finalize: map[string]int{}, FinalizeRecovery: map[string]int{}, Critique: map[string]int{}},
 		HumanScoreRubricVersion: benchmarkHumanScoreRubricVersion, HumanScoreMax: benchmarkHumanScoreMax,
 		HumanScoreDimensions: append([]string(nil), benchmarkHumanScoreDimensions...),
@@ -331,6 +338,8 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 		result.GCSFloorRetryExhausted = tc.AIAnalysis.GCSFloorRetryExhausted
 		result.CritiquePassed = new(bool)
 		*result.CritiquePassed = tc.AIAnalysis.CritiquePassed
+		result.CritiqueHardFailures = append([]string(nil), tc.AIAnalysis.CritiqueHardFailures...)
+		result.CritiqueSoftWarnings = append([]string(nil), tc.AIAnalysis.CritiqueSoftWarnings...)
 		result.BudgetExhausted = tc.AIAnalysis.BudgetExhausted
 		result.Evidence = append([]models.EvidenceCitation(nil), tc.AIAnalysis.EvidenceCitations...)
 		for key, value := range tc.AIAnalysis.FileLinks {
@@ -487,14 +496,18 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 		{Kind: "finalize_recovery", Outcome: "retained_draft"},
 		{Kind: "critique", Outcome: "objected", CritiquePunts: 1},
 	}}}}
-	cacheVerification := benchmarkCacheVerification{Attempted: true, Saved: true, Accepted: true, CacheHit: true, EvidencePlanCovered: true, GCSFloorRetryExhausted: true, CacheGeneration: "generation"}
+	cacheVerification := benchmarkCacheVerification{
+		PersistenceAttempted: true, PersistenceAccepted: true, CacheSaveSucceeded: true,
+		LookupAttempted: true, LookupAccepted: true, LookupHit: true,
+		EvidencePlanCovered: true, GCSFloorRetryExhausted: true, CacheGeneration: "generation",
+	}
 	observations := []benchmarkDraftObservation{{DraftObservation: ai.DraftObservation{
 		Attempt: 1, Phase: "initial", RuleIDs: []string{"remediation.punt"},
 		MatchedSkillIDs: []string{"skill-a"}, MissingGroups: []ai.CritiqueEvidenceGroupRef{{SkillID: "skill-a", GroupID: "group-a"}}, PuntCount: 1,
 	}}}
 	writeBenchmarkJSONL(t, path, bc, 2, tc, 3*time.Second, snapshot, observations, 1,
 		benchmarkToolUsage{names: []string{"read_artifact"}, counts: []string{"read_artifact=1"}},
-		benchmarkTraceSummary{floorNudges: 1, floorNudgeReasons: []string{"gcs_bytes"}}, "generation", cacheVerification)
+		benchmarkTraceSummary{floorNudges: 1, floorNudgeReasons: []string{"gcs_bytes"}}, "generation", ai.CritiqueCachePolicyHard, cacheVerification)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -511,7 +524,8 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 		!result.EvidencePlanCovered || !result.GCSFloorRetryExhausted || result.CritiquePassed == nil || !*result.CritiquePassed || !result.BudgetExhausted ||
 		result.FloorNudges != 1 || !slices.Equal(result.FloorNudgeReasons, []string{"gcs_bytes"}) ||
 		!slices.Equal(result.ToolNames, []string{"read_artifact"}) || !slices.Equal(result.ToolCounts, []string{"read_artifact=1"}) ||
-		!result.CacheVerification.Accepted || !result.CacheVerification.CacheHit || result.CacheGeneration != "generation" ||
+		!result.CacheVerification.LookupAccepted || !result.CacheVerification.LookupHit || result.CacheGeneration != "generation" ||
+		result.CritiqueCachePolicy != string(ai.CritiqueCachePolicyHard) ||
 		result.HumanScoreRubricVersion != 1 || result.HumanScoreMax != 10 || len(result.Drafts) != 1 ||
 		!slices.Equal(result.HumanScoreDimensions, benchmarkHumanScoreDimensions) ||
 		!slices.Equal(result.Drafts[0].RuleIDs, []string{"remediation.punt"}) || !result.Drafts[0].Selected {

@@ -153,6 +153,13 @@ type AIAnalysis struct {
 
 	// CritiquePassed reports whether this analysis cleared the critique gate.
 	CritiquePassed bool `json:"critique_passed,omitempty"`
+	// Critique rule and cache-persistence details remain private. Public output
+	// exposes only the aggregate pass bit and critique version.
+	CritiqueHardFailures       []string `json:"-"`
+	CritiqueSoftWarnings       []string `json:"-"`
+	CachePersistenceAttempted  bool     `json:"-"`
+	CachePersistenceAccepted   bool     `json:"-"`
+	CachePolicyRejectionReason string   `json:"-"`
 
 	// JudgeRan / JudgeObjected / JudgeRevised are the semantic-judge telemetry:
 	// whether the second-line LLM judge ran, whether it raised objections, and

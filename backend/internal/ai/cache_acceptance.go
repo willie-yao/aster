@@ -13,13 +13,19 @@ import (
 type CacheRejectionReason string
 
 const (
-	CacheAccepted              CacheRejectionReason = ""
-	CacheRejectedMissing       CacheRejectionReason = "missing"
-	CacheRejectedExpired       CacheRejectionReason = "expired"
-	CacheRejectedToolFloor     CacheRejectionReason = "tool_floor"
-	CacheRejectedEvidenceFloor CacheRejectionReason = "evidence_floor"
-	CacheRejectedCritique      CacheRejectionReason = "critique"
-	CacheRejectedMalformed     CacheRejectionReason = "malformed"
+	CacheAccepted                      CacheRejectionReason = ""
+	CacheRejectedLookupMissing         CacheRejectionReason = "lookup_missing"
+	CacheRejectedMissing                                    = CacheRejectedLookupMissing
+	CacheRejectedExpired               CacheRejectionReason = "expired"
+	CacheRejectedToolFloor             CacheRejectionReason = "tool_floor"
+	CacheRejectedEvidenceFloor         CacheRejectionReason = "evidence_floor"
+	CacheRejectedCritiqueHardFailure   CacheRejectionReason = "critique_hard_failure"
+	CacheRejectedCritiqueStrictWarning CacheRejectionReason = "critique_strict_warning"
+	CacheRejectedCritiqueUnclassified  CacheRejectionReason = "critique_unclassified"
+	CacheRejectedSemanticObjection     CacheRejectionReason = "semantic_objection"
+	CacheRejectedMalformed             CacheRejectionReason = "malformed"
+	CacheRejectedCacheGeneration       CacheRejectionReason = "cache_generation"
+	CacheRejectedNotPersisted          CacheRejectionReason = "not_persisted"
 )
 
 // AgenticCachePolicy contains the current cache acceptance contract.
@@ -32,9 +38,10 @@ type AgenticCachePolicy struct {
 	ModelHash           string
 	PromptHash          string
 	CacheGeneration     string
-	// CritiqueRequired makes critique success part of acceptance. The version is
-	// always required so cached output satisfies the current publication contract.
-	CritiqueRequired   bool
+	// CritiquePolicy independently controls deterministic critique enforcement.
+	// The version is always required so cached output satisfies the current
+	// publication contract.
+	CritiquePolicy     CritiqueCachePolicy
 	Now                time.Time
 	entryTimeValidated bool
 }
@@ -68,6 +75,9 @@ func AcceptAgenticCacheEntry(entry CacheEntry, expectedKey string, policy Agenti
 	if err := json.Unmarshal(entry.Data, &cached); err != nil || (cached.RootCause == "" && cached.Summary == "") {
 		return FailureAnalysisResult{}, CacheRejectedMalformed
 	}
+	if !validCritiqueRuleClassification(cached.CritiqueHardFailures, cached.CritiqueSoftWarnings) {
+		return FailureAnalysisResult{}, CacheRejectedMalformed
+	}
 	generatedAt := entry.CreatedAt
 	if cached.GeneratedAt != "" {
 		parsedGeneratedAt, err := time.Parse(time.RFC3339, cached.GeneratedAt)
@@ -93,6 +103,8 @@ func AcceptAgenticCacheEntry(entry CacheEntry, expectedKey string, policy Agenti
 	analysis.JudgeObjected = cached.JudgeObjected
 	analysis.JudgeRevised = cached.JudgeRevised
 	analysis.CritiquePassed = cached.CritiquePassed
+	analysis.CritiqueHardFailures = append([]string(nil), cached.CritiqueHardFailures...)
+	analysis.CritiqueSoftWarnings = append([]string(nil), cached.CritiqueSoftWarnings...)
 	analysis.CritiqueVersion = cached.CritiqueVersion
 	analysis.SkillSetHash = cached.SkillSetHash
 	analysis.ModelHash = cached.ModelHash
@@ -132,11 +144,14 @@ func AgenticResultRejection(result FailureAnalysisResult, policy AgenticCachePol
 	if gcsFloorUnmet(analysis.GCSBytes, policy.MinGCSBytes, analysis.EvidencePlanCovered, analysis.GCSFloorRetryExhausted) {
 		return CacheRejectedEvidenceFloor
 	}
-	if analysis.CritiqueVersion < currentCritiqueVersion || policy.CritiqueRequired && !analysis.CritiquePassed {
-		return CacheRejectedCritique
+	if analysis.CritiqueVersion < currentCritiqueVersion {
+		return CacheRejectedCritiqueUnclassified
+	}
+	if reason := critiqueCacheRejection(analysis, policy.CritiquePolicy); reason != CacheAccepted {
+		return reason
 	}
 	if analysis.CacheGeneration != policy.CacheGeneration {
-		return CacheRejectedMissing
+		return CacheRejectedCacheGeneration
 	}
 	return CacheAccepted
 }
@@ -151,6 +166,9 @@ func NewAgenticCacheEntry(key string, result FailureAnalysisResult, createdAt ti
 	}
 	if result.Summary == nil || strings.TrimSpace(result.Summary.Summary) == "" || result.Analysis == nil || result.Analysis.Mode != AgenticMode {
 		return CacheEntry{}, fmt.Errorf("agentic cache result is incomplete")
+	}
+	if !validCritiqueRuleClassification(result.Analysis.CritiqueHardFailures, result.Analysis.CritiqueSoftWarnings) {
+		return CacheEntry{}, fmt.Errorf("agentic cache result has invalid critique rule classification")
 	}
 	generatedAt := result.Analysis.GeneratedAt
 	if generatedAt == "" {
@@ -182,6 +200,8 @@ func NewAgenticCacheEntry(key string, result FailureAnalysisResult, createdAt ti
 		JudgeObjected:          result.Analysis.JudgeObjected,
 		JudgeRevised:           result.Analysis.JudgeRevised,
 		CritiquePassed:         result.Analysis.CritiquePassed,
+		CritiqueHardFailures:   append([]string(nil), result.Analysis.CritiqueHardFailures...),
+		CritiqueSoftWarnings:   append([]string(nil), result.Analysis.CritiqueSoftWarnings...),
 		CritiqueVersion:        result.Analysis.CritiqueVersion,
 		SkillSetHash:           result.Analysis.SkillSetHash,
 		ModelHash:              result.Analysis.ModelHash,
@@ -199,7 +219,7 @@ func agenticCachePolicy(client *Client, opts AgenticOptions, skillSetHash, promp
 		MinToolCalls:        opts.MinToolCalls,
 		MinGCSBytes:         opts.MinGCSBytes,
 		ConsecutiveFailures: consecutiveFailures,
-		CritiqueRequired:    opts.CritiqueMaxRetries > 0,
+		CritiquePolicy:      effectiveCritiqueCachePolicy(opts.CritiqueCachePolicy, opts.CritiqueMaxRetries),
 		SkillSetHash:        skillSetHash,
 		PromptHash:          promptHash,
 	}
@@ -208,6 +228,39 @@ func agenticCachePolicy(client *Client, opts AgenticOptions, skillSetHash, promp
 		policy.ModelHash = client.modelFingerprint()
 	}
 	return policy
+}
+
+func critiqueCacheRejection(analysis *models.AIAnalysis, policy CritiqueCachePolicy) CacheRejectionReason {
+	if policy == "" {
+		policy = CritiqueCachePolicyStrict
+	}
+	switch policy {
+	case CritiqueCachePolicyAdvisory:
+		return CacheAccepted
+	case CritiqueCachePolicyHard:
+		if len(analysis.CritiqueHardFailures) > 0 {
+			return CacheRejectedCritiqueHardFailure
+		}
+		if !analysis.CritiquePassed && len(analysis.CritiqueSoftWarnings) == 0 {
+			return CacheRejectedCritiqueUnclassified
+		}
+		return CacheAccepted
+	case CritiqueCachePolicyStrict:
+		if len(analysis.CritiqueHardFailures) > 0 {
+			return CacheRejectedCritiqueHardFailure
+		}
+		for _, warning := range analysis.CritiqueSoftWarnings {
+			if warning != string(CritiqueRuleEvidenceUnavailable) {
+				return CacheRejectedCritiqueStrictWarning
+			}
+		}
+		if !analysis.CritiquePassed && len(analysis.CritiqueSoftWarnings) == 0 {
+			return CacheRejectedCritiqueUnclassified
+		}
+		return CacheAccepted
+	default:
+		return CacheRejectedCritiqueUnclassified
+	}
 }
 
 // MeetsCurrentCritiqueContract reports whether an analysis passed the current deterministic critique contract.

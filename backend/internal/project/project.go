@@ -810,9 +810,9 @@ type Agentic struct {
 	// Defaults to 0, which disables the floor.
 	MinGCSBytes int `yaml:"min_gcs_bytes,omitempty" json:"min_gcs_bytes,omitempty"`
 
-	// Critique tunes the always-on deterministic critique gate. A positive
-	// MaxRetries makes one bounded repair eligible, subject to context and time
-	// headroom. Repair can fetch
+	// Critique tunes the always-on deterministic critique gate. MaxRetries
+	// controls bounded repair eligibility, while CachePolicy independently
+	// controls cache reuse. Repair can fetch
 	// cited-but-unread artifacts and inject capped content into feedback. Drafts
 	// that still fail are published but not cached. Recipes under
 	// <project_dir>/skills/*.yaml feed the gate whenever present.
@@ -838,10 +838,35 @@ type Agentic struct {
 // the operational semantics.
 type AgenticCritique struct {
 	// MaxRetries controls eligibility for one bounded deterministic repair.
-	// 0 evaluates without repair and treats critique as advisory for caching.
-	// Positive values require critique success and remain subject to headroom.
+	// 0 evaluates without a critique repair request. Positive values remain
+	// subject to headroom. CachePolicy controls enforcement independently.
 	// Defaults to 0.
 	MaxRetries *int `yaml:"max_retries,omitempty" json:"max_retries,omitempty"`
+
+	// CachePolicy controls which deterministic critique findings block reuse.
+	// Empty preserves the legacy max_retries behavior.
+	CachePolicy CritiqueCachePolicy `yaml:"cache_policy,omitempty" json:"cache_policy,omitempty"`
+}
+
+// CritiqueCachePolicy controls deterministic critique enforcement for cache reuse.
+type CritiqueCachePolicy string
+
+const (
+	CritiqueCachePolicyStrict   CritiqueCachePolicy = "strict"
+	CritiqueCachePolicyHard     CritiqueCachePolicy = "hard"
+	CritiqueCachePolicyAdvisory CritiqueCachePolicy = "advisory"
+)
+
+// EffectiveCachePolicy resolves an explicit policy or preserves the legacy
+// behavior for existing configurations.
+func (c AgenticCritique) EffectiveCachePolicy() CritiqueCachePolicy {
+	if c.CachePolicy != "" {
+		return c.CachePolicy
+	}
+	if c.MaxRetries != nil && *c.MaxRetries > 0 {
+		return CritiqueCachePolicyStrict
+	}
+	return CritiqueCachePolicyAdvisory
 }
 
 // MarshalJSON omits zero retry values from the published manifest.
@@ -851,8 +876,9 @@ func (c AgenticCritique) MarshalJSON() ([]byte, error) {
 		value = *c.MaxRetries
 	}
 	return json.Marshal(struct {
-		MaxRetries int `json:"max_retries,omitempty"`
-	}{MaxRetries: value})
+		MaxRetries  int                 `json:"max_retries,omitempty"`
+		CachePolicy CritiqueCachePolicy `json:"cache_policy,omitempty"`
+	}{MaxRetries: value, CachePolicy: c.CachePolicy})
 }
 
 // DefaultAgentic is the zero-config fallback for agentic loop tuning.
@@ -891,6 +917,7 @@ func (a *AI) EffectiveAgentic() Agentic {
 	if a.Agentic.Critique.MaxRetries != nil && *a.Agentic.Critique.MaxRetries >= 0 {
 		out.Critique.MaxRetries = a.Agentic.Critique.MaxRetries
 	}
+	out.Critique.CachePolicy = a.Agentic.Critique.CachePolicy
 	out.SingleToolCall = a.Agentic.SingleToolCall
 	if len(a.Agentic.Tools) > 0 {
 		out.Tools = append([]string(nil), a.Agentic.Tools...)
@@ -1183,6 +1210,12 @@ func (c *Config) Validate() error {
 		}
 		if c.AI.ConsumerSkills.MinimumCount < 0 {
 			return fmt.Errorf("ai.consumer_skills.minimum_count must be >= 0")
+		}
+		switch policy := c.AI.Agentic.Critique.CachePolicy; policy {
+		case "", CritiqueCachePolicyStrict, CritiqueCachePolicyHard, CritiqueCachePolicyAdvisory:
+		default:
+			return fmt.Errorf("ai.critique.cache_policy %q is not valid (want %q, %q, or %q)",
+				policy, CritiqueCachePolicyStrict, CritiqueCachePolicyHard, CritiqueCachePolicyAdvisory)
 		}
 
 		if usage := c.AI.Usage; usage != nil {

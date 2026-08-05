@@ -152,7 +152,7 @@ func (p *CacheRejectionProgress) Add(reason string) {
 		return
 	}
 	switch reason {
-	case "missing":
+	case "missing", "lookup_missing", "cache_generation":
 		p.Missing++
 	case "expired":
 		p.Expired++
@@ -160,7 +160,7 @@ func (p *CacheRejectionProgress) Add(reason string) {
 		p.ToolFloor++
 	case "evidence_floor":
 		p.EvidenceFloor++
-	case "critique":
+	case "critique", "critique_hard_failure", "critique_strict_warning", "critique_unclassified", "semantic_objection":
 		p.Critique++
 	case "malformed":
 		p.Malformed++

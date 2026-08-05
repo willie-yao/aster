@@ -537,6 +537,7 @@ func agenticEqual(a, b Agentic) bool {
 		a.Critique.MaxRetries != nil &&
 		b.Critique.MaxRetries != nil &&
 		*a.Critique.MaxRetries == *b.Critique.MaxRetries &&
+		a.Critique.CachePolicy == b.Critique.CachePolicy &&
 		a.SingleToolCall == b.SingleToolCall &&
 		equalStrings(a.Tools, b.Tools)
 }
@@ -616,6 +617,44 @@ func TestParse_CritiqueMaxRetries(t *testing.T) {
 				t.Errorf("MaxRetries = %v, want %d", got.Critique.MaxRetries, tc.want)
 			}
 		})
+	}
+}
+
+func TestAgenticCritiqueEffectiveCachePolicy(t *testing.T) {
+	zero, one := 0, 1
+	for _, tc := range []struct {
+		name string
+		in   AgenticCritique
+		want CritiqueCachePolicy
+	}{
+		{name: "legacy zero is advisory", in: AgenticCritique{MaxRetries: &zero}, want: CritiqueCachePolicyAdvisory},
+		{name: "legacy positive is strict", in: AgenticCritique{MaxRetries: &one}, want: CritiqueCachePolicyStrict},
+		{name: "explicit hard ignores retries", in: AgenticCritique{MaxRetries: &zero, CachePolicy: CritiqueCachePolicyHard}, want: CritiqueCachePolicyHard},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.in.EffectiveCachePolicy(); got != tc.want {
+				t.Fatalf("policy = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParse_CritiqueCachePolicy(t *testing.T) {
+	for _, policy := range []CritiqueCachePolicy{CritiqueCachePolicyStrict, CritiqueCachePolicyHard, CritiqueCachePolicyAdvisory} {
+		t.Run(string(policy), func(t *testing.T) {
+			cfg, err := parse(strings.NewReader(validYAML + "\nai:\n  critique:\n    cache_policy: " + string(policy) + "\n"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := cfg.AI.EffectiveAgentic().Critique.CachePolicy; got != policy {
+				t.Fatalf("policy = %q, want %q", got, policy)
+			}
+		})
+	}
+
+	_, err := parse(strings.NewReader(validYAML + "\nai:\n  critique:\n    cache_policy: unknown\n"))
+	if err == nil || !strings.Contains(err.Error(), "ai.critique.cache_policy") {
+		t.Fatalf("invalid policy error = %v", err)
 	}
 }
 
