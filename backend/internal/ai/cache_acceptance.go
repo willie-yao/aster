@@ -78,6 +78,9 @@ func AcceptAgenticCacheEntry(entry CacheEntry, expectedKey string, policy Agenti
 	if !validCritiqueRuleClassification(cached.CritiqueHardFailures, cached.CritiqueSoftWarnings) {
 		return FailureAnalysisResult{}, CacheRejectedMalformed
 	}
+	if !validSemanticResolution(cached.JudgeObjected, cached.JudgeRevised, cached.JudgeResolutionKnown, cached.JudgeRevisionRejected) {
+		return FailureAnalysisResult{}, CacheRejectedMalformed
+	}
 	generatedAt := entry.CreatedAt
 	if cached.GeneratedAt != "" {
 		parsedGeneratedAt, err := time.Parse(time.RFC3339, cached.GeneratedAt)
@@ -102,6 +105,15 @@ func AcceptAgenticCacheEntry(entry CacheEntry, expectedKey string, policy Agenti
 	analysis.JudgeRan = cached.JudgeRan
 	analysis.JudgeObjected = cached.JudgeObjected
 	analysis.JudgeRevised = cached.JudgeRevised
+	analysis.JudgeResolutionKnown = cached.JudgeResolutionKnown
+	analysis.JudgeRevisionRejected = cached.JudgeRevisionRejected
+	if cached.JudgeObjected && !cached.JudgeRevised && !cached.JudgeResolutionKnown && cached.CritiquePassed {
+		// PR #302 allowed only deterministically rejected semantic revisions to
+		// persist on the direct path. Preserve those legacy passing entries while
+		// all newly written entries carry an explicit resolution marker.
+		analysis.JudgeResolutionKnown = true
+		analysis.JudgeRevisionRejected = true
+	}
 	analysis.CritiquePassed = cached.CritiquePassed
 	analysis.CritiqueHardFailures = append([]string(nil), cached.CritiqueHardFailures...)
 	analysis.CritiqueSoftWarnings = append([]string(nil), cached.CritiqueSoftWarnings...)
@@ -150,6 +162,9 @@ func AgenticResultRejection(result FailureAnalysisResult, policy AgenticCachePol
 	if reason := critiqueCacheRejection(analysis, policy.CritiquePolicy); reason != CacheAccepted {
 		return reason
 	}
+	if reason := semanticCacheRejection(analysis); reason != CacheAccepted {
+		return reason
+	}
 	if analysis.CacheGeneration != policy.CacheGeneration {
 		return CacheRejectedCacheGeneration
 	}
@@ -169,6 +184,12 @@ func NewAgenticCacheEntry(key string, result FailureAnalysisResult, createdAt ti
 	}
 	if !validCritiqueRuleClassification(result.Analysis.CritiqueHardFailures, result.Analysis.CritiqueSoftWarnings) {
 		return CacheEntry{}, fmt.Errorf("agentic cache result has invalid critique rule classification")
+	}
+	if !validSemanticResolution(result.Analysis.JudgeObjected, result.Analysis.JudgeRevised, result.Analysis.JudgeResolutionKnown, result.Analysis.JudgeRevisionRejected) {
+		return CacheEntry{}, fmt.Errorf("agentic cache result has invalid semantic resolution")
+	}
+	if reason := semanticCacheRejection(result.Analysis); reason != CacheAccepted {
+		return CacheEntry{}, fmt.Errorf("agentic cache result has unresolved semantic objection")
 	}
 	generatedAt := result.Analysis.GeneratedAt
 	if generatedAt == "" {
@@ -199,6 +220,8 @@ func NewAgenticCacheEntry(key string, result FailureAnalysisResult, createdAt ti
 		JudgeRan:               result.Analysis.JudgeRan,
 		JudgeObjected:          result.Analysis.JudgeObjected,
 		JudgeRevised:           result.Analysis.JudgeRevised,
+		JudgeResolutionKnown:   result.Analysis.JudgeResolutionKnown,
+		JudgeRevisionRejected:  result.Analysis.JudgeRevisionRejected,
 		CritiquePassed:         result.Analysis.CritiquePassed,
 		CritiqueHardFailures:   append([]string(nil), result.Analysis.CritiqueHardFailures...),
 		CritiqueSoftWarnings:   append([]string(nil), result.Analysis.CritiqueSoftWarnings...),
@@ -261,6 +284,20 @@ func critiqueCacheRejection(analysis *models.AIAnalysis, policy CritiqueCachePol
 	default:
 		return CacheRejectedCritiqueUnclassified
 	}
+}
+
+func semanticCacheRejection(analysis *models.AIAnalysis) CacheRejectionReason {
+	if analysis != nil && analysis.JudgeObjected && !analysis.JudgeRevised && !analysis.JudgeRevisionRejected {
+		return CacheRejectedSemanticObjection
+	}
+	return CacheAccepted
+}
+
+func validSemanticResolution(objected, revised, resolutionKnown, revisionRejected bool) bool {
+	if revisionRejected && (!resolutionKnown || !objected || revised) {
+		return false
+	}
+	return true
 }
 
 // MeetsCurrentCritiqueContract reports whether an analysis passed the current deterministic critique contract.

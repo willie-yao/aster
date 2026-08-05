@@ -94,6 +94,14 @@ func TestAgenticCacheAcceptanceReasons(t *testing.T) {
 		}(), policy: func() AgenticCachePolicy { p := policy; p.CritiquePolicy = CritiqueCachePolicyAdvisory; return p }()},
 		{name: "critique version", entry: func() CacheEntry { d := base; d.CritiqueVersion--; return entry(d) }(), policy: policy, want: CacheRejectedCritiqueUnclassified},
 		{name: "publication contract rejects old version in advisory mode", entry: func() CacheEntry { d := base; d.CritiqueVersion--; return entry(d) }(), policy: func() AgenticCachePolicy { p := policy; p.CritiquePolicy = CritiqueCachePolicyAdvisory; return p }(), want: CacheRejectedCritiqueUnclassified},
+		{name: "unresolved semantic objection", entry: func() CacheEntry { d := base; d.JudgeObjected = true; d.JudgeResolutionKnown = true; return entry(d) }(), policy: policy, want: CacheRejectedSemanticObjection},
+		{name: "deterministically rejected semantic revision", entry: func() CacheEntry {
+			d := base
+			d.JudgeObjected = true
+			d.JudgeResolutionKnown = true
+			d.JudgeRevisionRejected = true
+			return entry(d)
+		}(), policy: policy},
 		{name: "unknown critique rule", entry: func() CacheEntry { d := base; d.CritiqueSoftWarnings = []string{"unknown.rule"}; return entry(d) }(), policy: policy, want: CacheRejectedMalformed},
 		{name: "hard rule misclassified as soft", entry: func() CacheEntry { d := base; d.CritiqueSoftWarnings = []string{"citation.unread"}; return entry(d) }(), policy: policy, want: CacheRejectedMalformed},
 		{name: "wrong cache key", entry: func() CacheEntry { e := entry(base); e.Key = "other"; return e }(), policy: policy, want: CacheRejectedMalformed},
@@ -211,6 +219,7 @@ func TestNewAgenticCacheEntryRoundTripsAcceptedResult(t *testing.T) {
 			ToolCalls: 2, ContextBytes: 100, GCSBytes: 50, EvidencePlanCovered: true, GCSFloorRetryExhausted: true, BudgetExhausted: true, SameFailureReuse: true,
 			CritiquePassed: true, CritiqueVersion: currentCritiqueVersion, SkillSetHash: "skills", ModelHash: "model-hash", PromptHash: "prompt-hash",
 			CritiqueSoftWarnings: []string{"evidence.unavailable"},
+			JudgeObjected:        true, JudgeResolutionKnown: true, JudgeRevisionRejected: true,
 		},
 	}
 	entry, err := NewAgenticCacheEntry(key, result, now.Add(-time.Minute))
@@ -227,7 +236,7 @@ func TestNewAgenticCacheEntryRoundTripsAcceptedResult(t *testing.T) {
 		got.Analysis.ContextBytes != result.Analysis.ContextBytes || got.Analysis.GCSBytes != result.Analysis.GCSBytes ||
 		!slices.Equal(got.Analysis.SearchSuggestions, result.Analysis.SearchSuggestions) || !slices.Equal(got.Analysis.EvidenceCitations, result.Analysis.EvidenceCitations) ||
 		!got.Analysis.EvidencePlanCovered || !got.Analysis.GCSFloorRetryExhausted || !got.Analysis.BudgetExhausted || !got.Analysis.SameFailureReuse || got.Analysis.SkillSetHash != result.Analysis.SkillSetHash ||
-		!slices.Equal(got.Analysis.CritiqueSoftWarnings, result.Analysis.CritiqueSoftWarnings) {
+		!slices.Equal(got.Analysis.CritiqueSoftWarnings, result.Analysis.CritiqueSoftWarnings) || !got.Analysis.JudgeResolutionKnown || !got.Analysis.JudgeRevisionRejected {
 		t.Fatalf("round trip result = %+v", got)
 	}
 }
@@ -250,15 +259,61 @@ func TestCritiquePolicyMetadataIsNotPublished(t *testing.T) {
 		CachePersistenceAttempted:  true,
 		CachePersistenceAccepted:   true,
 		CachePolicyRejectionReason: string(CacheRejectedCritiqueHardFailure),
+		JudgeResolutionKnown:       true, JudgeRevisionRejected: true,
 	}
 	raw, err := json.Marshal(analysis)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, private := range []string{"critique_hard", "critique_soft", "cache_persistence", "cache_policy_rejection", "citation.unread", "remediation.punt"} {
+	for _, private := range []string{"critique_hard", "critique_soft", "cache_persistence", "cache_policy_rejection", "judge_resolution", "judge_revision_rejected", "citation.unread", "remediation.punt"} {
 		if strings.Contains(string(raw), private) {
 			t.Fatalf("public analysis JSON leaked %q: %s", private, raw)
 		}
+	}
+}
+
+func TestLegacyPassingSemanticRevisionCacheIsPreserved(t *testing.T) {
+	now := time.Now().UTC()
+	const key = "agentic:universal:job:1:failure"
+	data := agenticCacheData{
+		analysisResponse: analysisResponse{Summary: "summary", RootCause: "root"},
+		CritiquePassed:   true, CritiqueVersion: currentCritiqueVersion, JudgeObjected: true,
+	}
+	raw, err := json.Marshal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, reason := AcceptAgenticCacheEntry(CacheEntry{Key: key, CreatedAt: now, Data: raw}, key, AgenticCachePolicy{Now: now, CritiquePolicy: CritiqueCachePolicyStrict})
+	if reason != CacheAccepted || result.Analysis == nil || !result.Analysis.JudgeResolutionKnown || !result.Analysis.JudgeRevisionRejected {
+		t.Fatalf("reason=%q result=%+v", reason, result)
+	}
+}
+
+func TestAgenticResultRejectionRejectsUnresolvedSemanticObjection(t *testing.T) {
+	now := time.Now().UTC()
+	result := FailureAnalysisResult{
+		Summary: &models.AISummary{GeneratedAt: now.Format(time.RFC3339), Summary: "summary"},
+		Analysis: &models.AIAnalysis{
+			GeneratedAt: now.Format(time.RFC3339), Mode: AgenticMode, RootCause: "root",
+			CritiquePassed: true, CritiqueVersion: currentCritiqueVersion,
+			JudgeObjected: true, JudgeResolutionKnown: true,
+		},
+	}
+	if got := AgenticResultRejection(result, AgenticCachePolicy{Now: now, CritiquePolicy: CritiqueCachePolicyStrict}); got != CacheRejectedSemanticObjection {
+		t.Fatalf("reason = %q, want %q", got, CacheRejectedSemanticObjection)
+	}
+}
+
+func TestNewAgenticCacheEntryRejectsUnresolvedSemanticObjection(t *testing.T) {
+	result := FailureAnalysisResult{
+		Summary: &models.AISummary{Summary: "summary"},
+		Analysis: &models.AIAnalysis{
+			Mode: AgenticMode, RootCause: "root", CritiquePassed: true, CritiqueVersion: currentCritiqueVersion,
+			JudgeObjected: true, JudgeResolutionKnown: true,
+		},
+	}
+	if _, err := NewAgenticCacheEntry("agentic:key", result, time.Now().UTC()); err == nil || !strings.Contains(err.Error(), "unresolved semantic objection") {
+		t.Fatalf("error = %v", err)
 	}
 }
 

@@ -99,6 +99,24 @@ func TestPrepareSameFailureReuseRejectsBelowFloor(t *testing.T) {
 	}
 }
 
+func TestPrepareSameFailureReuseRejectsUnresolvedSemanticObjection(t *testing.T) {
+	retries := 0
+	config := &project.Config{AI: &project.AI{Agentic: project.Agentic{MinToolCalls: 2, Critique: project.AgenticCritique{MaxRetries: &retries}}}}
+	analysisProject := testCacheAnalysisProject(config)
+	planner := analysisruntime.NewReusePlanner(analysisProject)
+	state, err := analysisruntime.NewContainerStateStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := cohortTestWork("job", "1", "DRA test beta", "same DRA test beta failure", "same body")
+	result := testSameFailureResult(analysisProject, "", 2)
+	result.Analysis.JudgeObjected = true
+	result.Analysis.JudgeResolutionKnown = true
+	if _, ok := prepareSameFailureReuse(t.Context(), &http.Client{}, item, result, state, planner, 1, ""); ok {
+		t.Fatal("unresolved semantic objection was reused")
+	}
+}
+
 type sameFailureAnalyzer struct {
 	state     *analysisruntime.ContainerStateStore
 	project   *analysisruntime.Project

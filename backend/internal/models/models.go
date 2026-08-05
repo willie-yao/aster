@@ -160,6 +160,8 @@ type AIAnalysis struct {
 	CachePersistenceAttempted  bool     `json:"-"`
 	CachePersistenceAccepted   bool     `json:"-"`
 	CachePolicyRejectionReason string   `json:"-"`
+	JudgeResolutionKnown       bool     `json:"-"`
+	JudgeRevisionRejected      bool     `json:"-"`
 
 	// JudgeRan / JudgeObjected / JudgeRevised are the semantic-judge telemetry:
 	// whether the second-line LLM judge ran, whether it raised objections, and

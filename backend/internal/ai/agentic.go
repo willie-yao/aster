@@ -309,6 +309,8 @@ type agenticCacheData struct {
 	JudgeRan               bool   `json:"judge_ran,omitempty"`
 	JudgeObjected          bool   `json:"judge_objected,omitempty"`
 	JudgeRevised           bool   `json:"judge_revised,omitempty"`
+	JudgeResolutionKnown   bool   `json:"judge_resolution_known,omitempty"`
+	JudgeRevisionRejected  bool   `json:"judge_revision_rejected,omitempty"`
 
 	// CritiquePassed marks entries that cleared the critique gate.
 	// Defaults to false on pre-critique entries and on entries written
@@ -579,6 +581,8 @@ func stampAgenticTelemetry(analysis *models.AIAnalysis, state *agentState, mode 
 		analysis.JudgeRan = state.judgeRan
 		analysis.JudgeObjected = state.judgeObjected
 		analysis.JudgeRevised = state.judgeRevised
+		analysis.JudgeResolutionKnown = true
+		analysis.JudgeRevisionRejected = state.judgeRevisionRejected
 	}
 }
 
@@ -2158,6 +2162,8 @@ func (c *Client) cacheAcceptedAnalysis(ctx context.Context, cacheKey string, par
 		JudgeRan:               state.judgeRan,
 		JudgeObjected:          state.judgeObjected,
 		JudgeRevised:           state.judgeRevised,
+		JudgeResolutionKnown:   true,
+		JudgeRevisionRejected:  state.judgeRevisionRejected,
 		CritiquePassed:         state.critiquePassed,
 		CritiqueHardFailures:   append([]string(nil), state.critiqueHardFailures...),
 		CritiqueSoftWarnings:   append([]string(nil), state.critiqueSoftWarnings...),
@@ -2189,15 +2195,14 @@ func cachePersistenceRejection(state *agentState, opts AgenticOptions) CacheReje
 	analysis := &models.AIAnalysis{
 		Mode: AgenticMode, CritiquePassed: state.critiquePassed, CritiqueVersion: currentCritiqueVersion,
 		CritiqueHardFailures: state.critiqueHardFailures, CritiqueSoftWarnings: state.critiqueSoftWarnings,
+		JudgeObjected: state.judgeObjected, JudgeRevised: state.judgeRevised,
+		JudgeResolutionKnown: true, JudgeRevisionRejected: state.judgeRevisionRejected,
 	}
 	policy := effectiveCritiqueCachePolicy(opts.CritiqueCachePolicy, opts.CritiqueMaxRetries)
 	if reason := critiqueCacheRejection(analysis, policy); reason != CacheAccepted {
 		return reason
 	}
-	if state.judgeObjected && !state.judgeRevised && !state.judgeRevisionRejected {
-		return CacheRejectedSemanticObjection
-	}
-	return CacheAccepted
+	return semanticCacheRejection(analysis)
 }
 
 // runFinalizeRound asks the model for one more no-tools response containing

@@ -327,6 +327,7 @@ func TestContainerAnalyzerCompatibleResultSafetyFailures(t *testing.T) {
 		wrongTask       bool
 		wrongCache      bool
 		wrongGeneration bool
+		unresolvedJudge bool
 		minTools        int
 		wantErr         bool
 		wantAuth        bool
@@ -337,6 +338,7 @@ func TestContainerAnalyzerCompatibleResultSafetyFailures(t *testing.T) {
 		{name: "cache identity", wrongCache: true, wantErr: true},
 		{name: "cache generation identity", wrongGeneration: true, wantErr: true},
 		{name: "below floor", minTools: 3},
+		{name: "unresolved semantic objection", unresolvedJudge: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store, err := analysisruntime.NewContainerStateStore(t.TempDir())
@@ -360,6 +362,10 @@ func TestContainerAnalyzerCompatibleResultSafetyFailures(t *testing.T) {
 				policy.MinToolCalls = tc.minTools
 			}
 			result := compatibleFailureResult(compatibleResultPolicy(opts))
+			if tc.unresolvedJudge {
+				result.Analysis.JudgeObjected = true
+				result.Analysis.JudgeResolutionKnown = true
+			}
 			prepared, err := prepareContainerAnalysisTask(analyzer.taskSpec(request, nil, nil))
 			if err != nil {
 				t.Fatal(err)
