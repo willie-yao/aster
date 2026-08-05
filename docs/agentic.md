@@ -493,7 +493,10 @@ headroom guards admit it. Repair is bounded to evidence injection, at most one
 Tool-enabled turn when evidence is unresolved, and one forced finalization. With
 `max_retries: 0`, critique remains visible telemetry but does not gate caching.
 With a positive retry budget, drafts that still fail after the bounded operation
-are published but not cached, so the next fetcher run retries them.
+are published but not cached, so the next fetcher run retries them. Before cache
+acceptance, the engine re-evaluates the exact deterministically sanitized
+published form. A newly passing published form still runs the semantic judge
+before it can be cached.
 
 **Coverage.** Critique evaluates parseable drafts in-loop, but deterministic
 repair runs once after draft selection. It injects evidence, optionally allows

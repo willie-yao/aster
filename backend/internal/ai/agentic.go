@@ -1181,14 +1181,58 @@ agentLoop:
 
 	parsed = c.applyPostLoopCritique(loopCtx, state, messages, finalContent, finalProviderItems, parsed, in.Opts, critiqueRetries, finalDraftObserved, draftPhase)
 	markGCSFloorRetryExhausted(loopCtx, state, in.Opts, gcsFloorOnlyRetries)
-	parsed = sanitizePublishedCitations(parsed, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
-	parsed = state.preparePublishedAnalysis(parsed)
+	parsed = c.prepareCacheablePublishedAnalysis(loopCtx, state, messages, parsed, in.Opts)
 
 	state.notifyDraftSelection()
 	summary, analysis := c.buildOutputs(parsed)
 	c.cacheAcceptedAnalysis(cacheKey, parsed, analysis.GeneratedAt, state, in.Opts, state.critiquePassed)
 	stampAgenticTelemetry(analysis, state, in.Mode, false, start)
 	return summary, analysis, nil
+}
+
+func (c *Client) prepareCacheablePublishedAnalysis(ctx context.Context, state *agentState, messages []modelMessage, parsed analysisResponse, opts AgenticOptions) analysisResponse {
+	parsed = sanitizePublishedCitations(parsed, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
+	parsed = state.preparePublishedAnalysis(parsed)
+	out := critiqueDraftWithContent(parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, parsed), state.consecutiveFailures, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
+	if len(out.MissingSkillEvidence) > 0 {
+		if treeSet := state.artifactTreeSet(); treeSet != nil {
+			pruneAbsentSkillEvidence(parsed, &out, treeSet)
+		}
+	}
+	newlyPassed := out.Passed && !state.critiquePassed
+	state.critiquePassed = out.Passed
+	if !out.Passed {
+		return parsed
+	}
+	if state.bestDraft != nil {
+		state.bestDraft.parsed = parsed
+		state.bestDraft.quality = critiqueQualityFor(out)
+		state.bestDraft.evidenceRevision = state.evidenceRevision
+		if raw, err := json.Marshal(parsed); err == nil {
+			state.bestDraft.content = string(raw)
+			state.bestDraft.providerItems = nil
+		}
+	}
+	if newlyPassed {
+		recordTrace(ctx, critiqueTraceEvent("published_passed", out))
+	}
+	if newlyPassed && opts.SemanticJudge && !state.judgeRan {
+		content := ""
+		if raw, err := json.Marshal(parsed); err == nil {
+			content = string(raw)
+		}
+		parsed = c.applySemanticJudgePostLoop(ctx, state, messages, content, nil, parsed, contextHeadroomFor(opts))
+		parsed = sanitizePublishedCitations(parsed, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
+		parsed = state.preparePublishedAnalysis(parsed)
+		out = critiqueDraftWithContent(parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, parsed), state.consecutiveFailures, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
+		if len(out.MissingSkillEvidence) > 0 {
+			if treeSet := state.artifactTreeSet(); treeSet != nil {
+				pruneAbsentSkillEvidence(parsed, &out, treeSet)
+			}
+		}
+		state.critiquePassed = out.Passed
+	}
+	return parsed
 }
 
 func sanitizePublishedCitations(parsed analysisResponse, context analysisCitationContext) analysisResponse {

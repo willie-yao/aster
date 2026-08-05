@@ -1487,7 +1487,7 @@ func TestAgentic_CritiqueRetryTieKeepsInitial(t *testing.T) {
 	}
 }
 
-func TestAgentic_FailingPostInjectionDraftKeepsInitial(t *testing.T) {
+func TestAgentic_PassingPostInjectionInitialIsCached(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 	srv.push(200, chatRespToolCall("c1", "list_artifacts", map[string]interface{}{"path": ""}))
@@ -1524,11 +1524,15 @@ required_evidence:
 	if selected != 1 || analysis.RootCause != "x509 webhook validation failure prevented cluster creation" {
 		t.Fatalf("failing post-injection draft selected: selected=%d root=%q", selected, analysis.RootCause)
 	}
-	if analysis.CritiquePassed {
-		t.Fatal("selected initial draft unexpectedly passed critique")
+	if !analysis.CritiquePassed {
+		t.Fatal("selected initial draft did not pass after injected evidence satisfied the published form")
 	}
-	if _, ok := client.Cache().Get(key); ok {
-		t.Fatal("selected failing draft was cached")
+	_, cached, err := client.doAnalyzeAgentic(context.Background(), in, key, "sys", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cached.CacheHit || atomic.LoadInt32(&srv.calls) != 3 {
+		t.Fatalf("cache result = %+v calls=%d", cached, atomic.LoadInt32(&srv.calls))
 	}
 }
 
@@ -1901,7 +1905,7 @@ required_evidence:
 	}
 }
 
-func TestAgentic_UnparseableEvidenceRepairCannotExceedBudget(t *testing.T) {
+func TestAgentic_UnparseableEvidenceRepairRetainsPassingInjectedDraft(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 	srv.push(200, chatRespToolCall("c1", "list_artifacts", map[string]interface{}{"path": ""}))
@@ -1935,11 +1939,15 @@ required_evidence:
 	if got := atomic.LoadInt32(&srv.calls); got != 3 {
 		t.Fatalf("call count = %d, want 3", got)
 	}
-	if summary.Summary != "webhook cert" || analysis.CritiquePassed {
-		t.Fatalf("unparseable repair did not retain the prior uncached draft: summary=%+v analysis=%+v", summary, analysis)
+	if summary.Summary != "webhook cert" || !analysis.CritiquePassed {
+		t.Fatalf("unparseable repair did not retain the now-passing injected draft: summary=%+v analysis=%+v", summary, analysis)
 	}
-	if _, ok := client.Cache().Get(key); ok {
-		t.Fatal("failing retained draft was cached")
+	_, cached, err := client.doAnalyzeAgentic(context.Background(), in, key, "sys", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cached.CacheHit || atomic.LoadInt32(&srv.calls) != 3 {
+		t.Fatalf("cache result = %+v calls=%d", cached, atomic.LoadInt32(&srv.calls))
 	}
 }
 
@@ -3728,5 +3736,43 @@ func TestAgenticCritiqueObjectedTraceCarriesCategoryCounts(t *testing.T) {
 	}
 	if !objected || !denied {
 		t.Fatalf("critique trace missing categories or denial: %+v", store.Snapshot())
+	}
+}
+
+func TestAgentic_PublishedSanitizationCanSatisfyCritiqueAndCache(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	ungrounded := `{"summary":"AKS version rejected","is_transient":false,"root_cause":"scripts/ci-e2e.sh selected an unsupported AKS version.","severity":"High","suggested_fix":"Update scripts/ci-e2e.sh to select a supported AKS version.","relevant_files":["scripts/ci-e2e.sh"]}`
+	srv.push(200, chatRespFinal(ungrounded))
+	srv.push(200, chatRespFinal(ungrounded))
+	srv.push(200, chatRespFinal(ungrounded))
+	srv.push(200, chatRespFinal(`{"objections":[]}`))
+
+	client := newAgenticTestClient(t, srv.URL)
+	opts := AgenticOptions{
+		MaxIters: 2, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+		Timeout: 30 * time.Second, CritiqueMaxRetries: 1, SemanticJudge: true,
+	}
+	in := newTestAgenticInputs(t, &fakeBrowser{}, opts)
+	in.SourceOwner = "example"
+	in.SourceName = "project"
+	in.Repo = &fakeSourceRepo{files: map[string]string{"other.go": "package example"}}
+	const key = "agentic:test:published-sanitization-cache"
+	_, analysis, err := client.doAnalyzeAgentic(context.Background(), in, key, "sys", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !analysis.CritiquePassed || !analysis.JudgeRan || analysis.JudgeObjected {
+		t.Fatalf("analysis gates = %+v", analysis)
+	}
+	if strings.Contains(analysis.RootCause, "scripts/ci-e2e.sh") || strings.Contains(analysis.SuggestedFix, "scripts/ci-e2e.sh") || len(analysis.RelevantFiles) != 0 {
+		t.Fatalf("ungrounded source survived publication: %+v", analysis)
+	}
+	_, cached, err := client.doAnalyzeAgentic(context.Background(), in, key, "sys", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cached.CacheHit || !cached.CritiquePassed || atomic.LoadInt32(&srv.calls) != 4 {
+		t.Fatalf("cache result = %+v calls=%d", cached, atomic.LoadInt32(&srv.calls))
 	}
 }
