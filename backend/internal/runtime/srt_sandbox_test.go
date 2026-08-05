@@ -292,6 +292,7 @@ func TestSRTSandboxValidatesNodeFromSandboxPATH(t *testing.T) {
 	binDir := t.TempDir()
 	for name, body := range map[string]string{
 		"node":         "#!/bin/sh\nprintf 'v20.10.0\\n'\n",
+		"bash":         "#!/bin/sh\nexit 0\n",
 		"rg":           "#!/bin/sh\nexit 0\n",
 		"sandbox-exec": "#!/bin/sh\nexit 0\n",
 	} {
@@ -328,6 +329,7 @@ func TestSRTSandboxResolvesToolsFromSandboxPATH(t *testing.T) {
 	}
 	for name, body := range map[string]string{
 		"node":         "#!/bin/sh\nprintf 'v25.6.0\\n'\n",
+		"bash":         "#!/bin/sh\nexit 0\n",
 		"rg":           "#!/bin/sh\nexit 0\n",
 		"sandbox-exec": "#!/bin/sh\nexit 0\n",
 	} {

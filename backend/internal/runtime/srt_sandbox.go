@@ -342,9 +342,9 @@ func verifySRTVersion(bin string) error {
 
 func srtDependencies(goos string) []string {
 	if goos == "linux" {
-		return []string{"bwrap", "socat", "rg"}
+		return []string{"bash", "bwrap", "socat", "rg"}
 	}
-	return []string{"sandbox-exec", "rg"}
+	return []string{"bash", "sandbox-exec", "rg"}
 }
 
 func checkSRTNodeVersion(lookPath func(string) (string, error)) error {

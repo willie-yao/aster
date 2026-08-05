@@ -24,8 +24,8 @@ export SRT_BIN="$tool_root/node_modules/.bin/srt"
 
 The package requires Node.js 20.11 or newer. Platform dependencies are:
 
-- macOS: `rg` (`ripgrep`).
-- Linux: `bwrap` (`bubblewrap`), `socat`, and `rg`.
+- macOS: `bash` and `rg` (`ripgrep`).
+- Linux: `bash`, `bwrap` (`bubblewrap`), `socat`, and `rg`.
 
 Linux also needs capability-bearing unprivileged user namespaces. If the host security policy prevents `bubblewrap` or the bundled seccomp helper from creating them, the runtime fails closed.
 
