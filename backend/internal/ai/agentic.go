@@ -1112,7 +1112,9 @@ agentLoop:
 									}
 									policy := effectiveCritiqueCachePolicy(in.Opts.CritiqueCachePolicy, in.Opts.CritiqueMaxRetries)
 									semanticCandidate := state.newDraftCandidate("semantic_retry", revised, revisedItems, rp, revisedCritique)
-									if critiqueHardRegression(semanticCandidate.rawQuality, state.bestDraft.rawQuality) || !critiqueQualityAcceptedForPolicy(semanticCandidate.quality, policy) {
+									currentRawQuality := critiqueQualityFor(state.currentCritiqueOutcome(state.bestDraft.parsed))
+									state.bestDraft.rawQuality = currentRawQuality
+									if critiqueHardRegression(semanticCandidate.rawQuality, currentRawQuality) || !critiqueQualityAcceptedForPolicy(semanticCandidate.quality, policy) {
 										state.judgeRevisionRejected = true
 										break
 									}
@@ -1851,6 +1853,10 @@ func (s *agentState) newDraftCandidate(phase, content string, providerItems []js
 func (s *agentState) publishedCritiqueOutcome(parsed analysisResponse) critiqueOutcome {
 	parsed = sanitizePublishedCitations(parsed, analysisCitationContext{Evidence: s.analysisEvidence, Full: s.analysisEvidenceFull})
 	parsed = s.preparePublishedAnalysis(parsed)
+	return s.currentCritiqueOutcome(parsed)
+}
+
+func (s *agentState) currentCritiqueOutcome(parsed analysisResponse) critiqueOutcome {
 	out := critiqueDraftWithContent(parsed, s.readArtifactsFull, s.readArtifactsBase, s.evidenceContentByPath, s.readSourceFull, matchSkillsForDraft(s, parsed), s.consecutiveFailures, analysisCitationContext{Evidence: s.analysisEvidence, Full: s.analysisEvidenceFull})
 	if len(out.MissingSkillEvidence) > 0 {
 		if treeSet := s.artifactTreeSet(); treeSet != nil {

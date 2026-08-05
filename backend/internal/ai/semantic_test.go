@@ -200,6 +200,11 @@ func TestApplySemanticJudgePostLoopRejectsInvalidCitationRevision(t *testing.T) 
 		analysisEvidence: map[string]*analysisChatEvidence{},
 	}
 	orig := analysisResponse{Summary: "sound", RootCause: "verified root cause", SuggestedFix: "Set the route table."}
+	state.bestDraft = &critiqueDraftCandidate{
+		parsed: orig, content: "sound-final", attempt: 1,
+		rawQuality: critiqueQuality{HardRules: []string{"claim.uncited_line"}, HardIssueCount: 1},
+		quality:    critiqueQuality{Passed: true},
+	}
 	got := client.applySemanticJudgePostLoop(context.Background(), state, []modelMessage{{Role: "user", Content: strPtr("u")}}, "sound-final", nil, orig, contextHeadroomFor(AgenticOptions{ContextByteBudget: 100_000}), CritiqueCachePolicyStrict)
 
 	if got.RootCause != orig.RootCause || state.judgeRevised {
