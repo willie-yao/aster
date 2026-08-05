@@ -32,6 +32,12 @@ type ProcessSandbox interface {
 	Command(context.Context, SandboxSpec) (*exec.Cmd, error)
 }
 
+// ProcessSandboxRunner executes a command with backend-specific supervision.
+// LocalAgentRuntime uses it when the sandbox provides one.
+type ProcessSandboxRunner interface {
+	Run(context.Context, SandboxSpec) ([]byte, error)
+}
+
 // directProcessSandbox preserves local execution without OS isolation. It is a
 // transition backend until callers opt into an enforcing sandbox.
 type directProcessSandbox struct{}

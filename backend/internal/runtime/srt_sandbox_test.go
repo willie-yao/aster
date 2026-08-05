@@ -29,8 +29,12 @@ func TestSRTSandboxCommandWritesDenyByDefaultSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(cmd.Args[1:4], []string{"--settings", filepath.Join(temp, "srt-settings.json"), "--"}) {
+	if len(cmd.Args) < 5 || cmd.Args[1] != "--settings" || cmd.Args[3] != "--" {
 		t.Fatalf("srt args = %v", cmd.Args)
+	}
+	settingsPath := cmd.Args[2]
+	if filepath.Dir(settingsPath) != filepath.Join(filepath.Dir(temp), ".srt-control") {
+		t.Fatalf("settings path = %s", settingsPath)
 	}
 	if !slices.Equal(cmd.Args[4:], []string{command, "--flag"}) {
 		t.Fatalf("wrapped command = %v", cmd.Args[4:])
@@ -38,7 +42,7 @@ func TestSRTSandboxCommandWritesDenyByDefaultSettings(t *testing.T) {
 	if got := environmentMap(cmd.Env); got["HOME"] != home || got["CLAUDE_CODE_TMPDIR"] != temp || got["BUN_TMPDIR"] != temp {
 		t.Fatalf("command environment = %v", got)
 	}
-	settings := readSRTSettings(t, filepath.Join(temp, "srt-settings.json"))
+	settings := readSRTSettings(t, settingsPath)
 	if !slices.Equal(settings.Filesystem.DenyRead, []string{"/"}) {
 		t.Fatalf("denyRead = %v", settings.Filesystem.DenyRead)
 	}
@@ -62,6 +66,56 @@ func TestSRTSandboxCommandWritesDenyByDefaultSettings(t *testing.T) {
 	}
 	if settings.Network.AllowLocalBinding || settings.Network.AllowAllUnixSockets || settings.AllowAppleEvents || settings.EnableWeakerNestedSandbox || settings.EnableWeakerNetworkIsolation {
 		t.Fatalf("weaker sandbox option enabled: %+v", settings)
+	}
+}
+
+func TestSRTSandboxUsesFreshProtectedSettings(t *testing.T) {
+	fake := newFakeSRTPackage(t, SRTVersion)
+	root := t.TempDir()
+	work := filepath.Join(root, "work")
+	home := filepath.Join(root, "home")
+	temp := filepath.Join(root, "tmp")
+	for _, path := range []string{work, home, temp} {
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	command := filepath.Join(work, "agent")
+	if err := os.WriteFile(command, []byte("binary"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sandbox := &SRTSandbox{Bin: fake, goos: "darwin", lookPath: fakeSRTLookPath(fake), nodeCheck: successfulNodeCheck}
+	spec := SandboxSpec{
+		Command: []string{command}, WorkDir: work, HomeDir: home, TempDir: temp,
+		ReadPaths: []string{work, home, temp, command}, WritePaths: []string{work, home, temp},
+	}
+	first, err := sandbox.Command(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstSettings := first.Args[2]
+	target := filepath.Join(work, ".git", "config")
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("safe"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(firstSettings); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, firstSettings); err != nil {
+		t.Fatal(err)
+	}
+	second, err := sandbox.Command(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Args[2] == firstSettings {
+		t.Fatal("settings path was reused")
+	}
+	if raw, err := os.ReadFile(target); err != nil || string(raw) != "safe" {
+		t.Fatalf("protected target = %q, %v", raw, err)
 	}
 }
 
@@ -165,7 +219,7 @@ func TestNormalizeSRTDomain(t *testing.T) {
 		"API.Example.COM":           "api.example.com",
 		"*.example.com:8443":        "*.example.com:8443",
 		"127.0.0.1:443":             "127.0.0.1:443",
-		"2001:db8::1":               "2001:db8::1",
+		"localhost:3000":            "localhost:3000",
 		"registry.example.internal": "registry.example.internal",
 	}
 	for input, want := range valid {
@@ -173,7 +227,7 @@ func TestNormalizeSRTDomain(t *testing.T) {
 			t.Errorf("normalizeSRTDomain(%q) = %q, %v; want %q", input, got, err, want)
 		}
 	}
-	for _, input := range []string{"", "https://example.com", "user:secret@example.com", "example.com/path", "bad..example", "-bad.example", "example.com:99999"} {
+	for _, input := range []string{"", "https://example.com", "user:secret@example.com", "example.com/path", "bad..example", "-bad.example", "example.com:99999", "example.com:0443", "internal", "2001:db8::1", "*.com"} {
 		if _, err := normalizeSRTDomain(input); err == nil {
 			t.Errorf("expected %q to fail", input)
 		} else if strings.Contains(err.Error(), "secret") {

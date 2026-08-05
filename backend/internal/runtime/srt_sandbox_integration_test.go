@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -78,15 +79,11 @@ func TestSRTSandboxHostileIntegration(t *testing.T) {
 		"SRT_ATTACK_REPORT="+reportPath,
 		"SRT_ATTACK_CHILD_REPORT="+childReportPath,
 	)
-	cmd, err := NewSRTSandbox(bin).Command(context.Background(), SandboxSpec{
+	output, err := NewSRTSandbox(bin).Run(context.Background(), SandboxSpec{
 		Command: []string{executable, "-test.run=^TestSRTSandboxAttackHelper$"},
 		WorkDir: work, HomeDir: home, TempDir: temp, Environment: env,
 		ReadPaths: []string{work, home, temp, executable}, WritePaths: []string{work, home, temp},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("sandbox helper: %v: %s", err, tail(string(output), 4096))
 	}
@@ -179,27 +176,34 @@ func TestSRTSandboxCancellationIntegration(t *testing.T) {
 	}
 	executable := copyTestExecutable(t, work)
 	ready := filepath.Join(work, "ready")
+	sessionReady := filepath.Join(work, "session-ready")
 	marker := filepath.Join(work, "child-survived")
 	ctx, cancel := context.WithCancel(context.Background())
 	env := srtIntegrationEnv(home, temp,
 		srtCancellationHelperEnv+"=1",
 		"SRT_CANCEL_READY="+ready,
+		"SRT_CANCEL_SESSION_READY="+sessionReady,
 		"SRT_CANCEL_MARKER="+marker,
 	)
-	cmd, err := NewSRTSandbox(bin).Command(ctx, SandboxSpec{
-		Command: []string{executable, "-test.run=^TestSRTSandboxCancellationHelper$"},
-		WorkDir: work, HomeDir: home, TempDir: temp, Environment: env,
-		ReadPaths: []string{work, home, temp, executable}, WritePaths: []string{work, home, temp},
-	})
-	if err != nil {
-		t.Fatal(err)
+	type runResult struct {
+		output []byte
+		err    error
 	}
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
+	done := make(chan runResult, 1)
+	go func() {
+		output, err := NewSRTSandbox(bin).Run(ctx, SandboxSpec{
+			Command: []string{executable, "-test.run=^TestSRTSandboxCancellationHelper$"},
+			WorkDir: work, HomeDir: home, TempDir: temp, Environment: env,
+			ReadPaths: []string{work, home, temp, executable}, WritePaths: []string{work, home, temp},
+		})
+		done <- runResult{output: output, err: err}
+	}()
 	waitForPath(t, ready, 5*time.Second)
 	cancel()
-	_ = cmd.Wait()
+	result := <-done
+	if result.err == nil {
+		t.Fatal("cancelled sandbox run returned no error")
+	}
 	time.Sleep(1200 * time.Millisecond)
 	if _, err := os.Stat(marker); err == nil {
 		t.Fatal("sandboxed child survived cancellation")
@@ -213,6 +217,12 @@ func TestSRTSandboxCancellationHelper(t *testing.T) {
 		return
 	}
 	if os.Getenv(srtCancellationChildEnv) == "1" {
+		if _, err := syscall.Setsid(); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(os.Getenv("SRT_CANCEL_SESSION_READY"), []byte("ready"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 		time.Sleep(800 * time.Millisecond)
 		if err := os.WriteFile(os.Getenv("SRT_CANCEL_MARKER"), []byte("survived"), 0o600); err != nil {
 			t.Fatal(err)
@@ -228,6 +238,7 @@ func TestSRTSandboxCancellationHelper(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
+	waitForPath(t, os.Getenv("SRT_CANCEL_SESSION_READY"), 5*time.Second)
 	if err := os.WriteFile(os.Getenv("SRT_CANCEL_READY"), []byte("ready"), 0o600); err != nil {
 		t.Fatal(err)
 	}

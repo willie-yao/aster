@@ -128,7 +128,6 @@ The Kubernetes server serves the same `/data/*.json` contract as Pages and adds
 - [Email notifications](docs/notifications.md)
 - [GitHub issues](docs/github-issues.md)
 - [Agent-proposed fix PRs](docs/fix-prs.md)
-- [Local OpenCode sandbox](docs/local-opencode-sandbox.md)
 - [Server and authenticated actions](docs/server.md)
 
 ### Orka runtimes

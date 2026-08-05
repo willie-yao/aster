@@ -1,6 +1,8 @@
 # Local OpenCode sandbox
 
-Local OpenCode execution can use [Anthropic Sandbox Runtime](https://github.com/anthropic-experimental/sandbox-runtime), `srt`, as its operating-system sandbox. The engine is tested against the exact npm package:
+This page documents the `srt` backend and its integration tests. In this phase, `NewLocalAgent` still uses the direct process backend. Exporting `SRT_BIN` alone does not change prompt authoring or fix generation until the separate caller-migration change is merged.
+
+The backend uses [Anthropic Sandbox Runtime](https://github.com/anthropic-experimental/sandbox-runtime), `srt`, and is tested against the exact npm package:
 
 ```text
 @anthropic-ai/sandbox-runtime@0.0.70
@@ -17,6 +19,8 @@ tool_root="$HOME/.local/share/prow-ai-dashboard/srt-0.0.70"
 npm install --prefix "$tool_root" --save-exact @anthropic-ai/sandbox-runtime@0.0.70
 export SRT_BIN="$tool_root/node_modules/.bin/srt"
 ```
+
+`NewSRTSandboxFromEnv` reads `SRT_BIN`. A local caller must select that backend explicitly; this backend does not replace `NewLocalAgent` by itself.
 
 The package requires Node.js 20.11 or newer. Platform dependencies are:
 

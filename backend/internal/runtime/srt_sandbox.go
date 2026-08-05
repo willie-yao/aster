@@ -1,17 +1,18 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 const (
@@ -92,13 +93,9 @@ func (s *SRTSandbox) Command(ctx context.Context, spec SandboxSpec) (*exec.Cmd, 
 	if err != nil {
 		return nil, err
 	}
-	settingsPath := filepath.Join(spec.TempDir, "srt-settings.json")
-	settingsJSON, err := json.MarshalIndent(settings, "", "  ")
+	settingsPath, err := writeSRTSettings(spec, settings)
 	if err != nil {
-		return nil, fmt.Errorf("runtime: encode srt settings: %w", err)
-	}
-	if err := os.WriteFile(settingsPath, settingsJSON, 0o600); err != nil {
-		return nil, fmt.Errorf("runtime: write srt settings: %w", err)
+		return nil, err
 	}
 	args := []string{"--settings", settingsPath}
 	if s.debug {
@@ -120,6 +117,44 @@ func (s *SRTSandbox) Command(ctx context.Context, spec SandboxSpec) (*exec.Cmd, 
 	cmd.Env = setSandboxEnvironment(spec.Environment, forcedEnvironment...)
 	configureProcessTreeCancellation(cmd)
 	return cmd, nil
+}
+
+// Run executes srt with process-tree supervision.
+func (s *SRTSandbox) Run(ctx context.Context, spec SandboxSpec) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	cmd, err := s.Command(context.Background(), spec)
+	if err != nil {
+		return nil, err
+	}
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	if err := cmd.Start(); err != nil {
+		return output.Bytes(), err
+	}
+	tracker, err := newProcessTreeTracker(cmd.Process.Pid)
+	if err != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_ = cmd.Wait()
+		return output.Bytes(), fmt.Errorf("%w: supervise srt process tree: %v", ErrSandboxUnavailable, err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		tracker.Close()
+		return output.Bytes(), err
+	case err := <-tracker.Errors():
+		tracker.Kill()
+		<-done
+		return output.Bytes(), fmt.Errorf("%w: %v", ErrSandboxUnavailable, err)
+	case <-ctx.Done():
+		tracker.Kill()
+		err := <-done
+		return output.Bytes(), err
+	}
 }
 
 func validateSRTSpec(spec SandboxSpec) error {
@@ -150,6 +185,70 @@ func validateSRTSpec(spec SandboxSpec) error {
 		}
 	}
 	return nil
+}
+
+func writeSRTSettings(spec SandboxSpec, settings srtSettings) (string, error) {
+	controlDir := filepath.Join(filepath.Dir(spec.TempDir), ".srt-control")
+	for _, writePath := range spec.WritePaths {
+		contains, err := pathContains(writePath, controlDir)
+		if err != nil {
+			return "", fmt.Errorf("runtime: protect srt control directory: %w", err)
+		}
+		if contains {
+			return "", fmt.Errorf("runtime: srt control directory is inside a writable path")
+		}
+	}
+	if err := os.Mkdir(controlDir, 0o700); err != nil && !os.IsExist(err) {
+		return "", fmt.Errorf("runtime: create srt control directory: %w", err)
+	}
+	info, err := os.Lstat(controlDir)
+	if err != nil {
+		return "", fmt.Errorf("runtime: inspect srt control directory: %w", err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("runtime: srt control path is not a directory")
+	}
+	if err := os.Chmod(controlDir, 0o700); err != nil {
+		return "", fmt.Errorf("runtime: protect srt control directory: %w", err)
+	}
+	file, err := os.CreateTemp(controlDir, "settings-*.json")
+	if err != nil {
+		return "", fmt.Errorf("runtime: create srt settings: %w", err)
+	}
+	path := file.Name()
+	ok := false
+	defer func() {
+		_ = file.Close()
+		if !ok {
+			_ = os.Remove(path)
+		}
+	}()
+	if err := file.Chmod(0o600); err != nil {
+		return "", fmt.Errorf("runtime: protect srt settings: %w", err)
+	}
+	encoder := json.NewEncoder(file)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(settings); err != nil {
+		return "", fmt.Errorf("runtime: encode srt settings: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return "", fmt.Errorf("runtime: close srt settings: %w", err)
+	}
+	ok = true
+	return path, nil
+}
+
+func pathContains(parent, child string) (bool, error) {
+	parent = filepath.Clean(parent)
+	child = filepath.Clean(child)
+	if !filepath.IsAbs(parent) || !filepath.IsAbs(child) {
+		return false, fmt.Errorf("paths must be absolute")
+	}
+	relative, err := filepath.Rel(parent, child)
+	if err != nil {
+		return false, err
+	}
+	return relative == "." || relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)), nil
 }
 
 func setSandboxEnvironment(environment []string, forced ...string) []string {
@@ -356,22 +455,12 @@ func normalizeSandboxPaths(paths []string, requireExisting bool) ([]string, erro
 
 func normalizeSRTDomain(value string) (string, error) {
 	value = strings.ToLower(strings.TrimSpace(value))
-	if value == "" || strings.ContainsAny(value, "/@ \\\t\r\n") || strings.Contains(value, "://") {
+	if value == "" || strings.ContainsAny(value, "/@ \t\r\n") || strings.Contains(value, "\\") || strings.Contains(value, "://") {
 		return "", errors.New("runtime: invalid srt network domain")
 	}
 	host, port, err := splitDomainPort(value)
-	if err != nil {
+	if err != nil || !validSRTDomainHost(host) {
 		return "", errors.New("runtime: invalid srt network domain")
-	}
-	wildcard := strings.HasPrefix(host, "*.")
-	if wildcard {
-		host = strings.TrimPrefix(host, "*.")
-	}
-	if net.ParseIP(strings.Trim(host, "[]")) == nil && !validDNSName(host) {
-		return "", errors.New("runtime: invalid srt network domain")
-	}
-	if wildcard {
-		host = "*." + host
 	}
 	if port != "" {
 		return host + ":" + port, nil
@@ -380,24 +469,11 @@ func normalizeSRTDomain(value string) (string, error) {
 }
 
 func splitDomainPort(value string) (string, string, error) {
-	if strings.HasPrefix(value, "[") {
-		host, port, err := net.SplitHostPort(value)
-		if err != nil {
-			return "", "", err
-		}
-		if err := validPort(port); err != nil {
-			return "", "", err
-		}
-		return host, port, nil
-	}
 	if strings.Count(value, ":") == 0 {
 		return value, "", nil
 	}
-	if strings.Count(value, ":") > 1 {
-		if net.ParseIP(value) == nil {
-			return "", "", errors.New("invalid host")
-		}
-		return value, "", nil
+	if strings.Count(value, ":") != 1 {
+		return "", "", errors.New("invalid port")
 	}
 	host, port, ok := strings.Cut(value, ":")
 	if !ok || host == "" || validPort(port) != nil {
@@ -406,7 +482,21 @@ func splitDomainPort(value string) (string, string, error) {
 	return host, port, nil
 }
 
+func validSRTDomainHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	if strings.HasPrefix(host, "*.") {
+		host = strings.TrimPrefix(host, "*.")
+		return strings.Contains(host, ".") && validDNSName(host)
+	}
+	return !strings.Contains(host, "*") && strings.Contains(host, ".") && validDNSName(host)
+}
+
 func validPort(value string) error {
+	if len(value) > 1 && value[0] == '0' {
+		return errors.New("invalid port")
+	}
 	port, err := strconv.Atoi(value)
 	if err != nil || port < 1 || port > 65535 {
 		return errors.New("invalid port")

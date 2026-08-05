@@ -178,17 +178,9 @@ func (r *LocalAgentRuntime) Generate(ctx context.Context, spec GenerateSpec) (Ge
 	if err != nil {
 		return GenerateResult{}, err
 	}
-	cmd, err := r.Sandbox.Command(ctx, processSpec)
-	if err != nil {
-		return GenerateResult{}, err
-	}
-	out, runErr := cmd.CombinedOutput()
+	out, runErr := runSandboxProcess(ctx, r.Sandbox, processSpec)
 	if ctx.Err() == nil && opencodeMigrationOnly(out) {
-		cmd, err = r.Sandbox.Command(ctx, processSpec)
-		if err != nil {
-			return GenerateResult{}, err
-		}
-		retryOut, retryErr := cmd.CombinedOutput()
+		retryOut, retryErr := runSandboxProcess(ctx, r.Sandbox, processSpec)
 		out = append(append(out, '\n'), retryOut...)
 		runErr = retryErr
 	}
@@ -210,6 +202,17 @@ func (r *LocalAgentRuntime) Generate(ctx context.Context, spec GenerateSpec) (Ge
 		return GenerateResult{Output: output}, err
 	}
 	return GenerateResult{Files: files, Diff: diff, Output: output}, nil
+}
+
+func runSandboxProcess(ctx context.Context, sandbox ProcessSandbox, spec SandboxSpec) ([]byte, error) {
+	if runner, ok := sandbox.(ProcessSandboxRunner); ok {
+		return runner.Run(ctx, spec)
+	}
+	cmd, err := sandbox.Command(ctx, spec)
+	if err != nil {
+		return nil, err
+	}
+	return cmd.CombinedOutput()
 }
 
 func opencodeMigrationOnly(output []byte) bool {
