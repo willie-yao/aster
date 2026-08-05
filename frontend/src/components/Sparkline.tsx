@@ -11,40 +11,43 @@ interface SparklineProps {
 }
 
 export function Sparkline({ runs, jobID }: SparklineProps) {
-  // recent_runs is newest-first; reverse the displayed subset so newest is rightmost.
   const recent = runs.slice(0, 8).reverse();
 
   return (
-    <Box sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
+    <Box sx={{ display: "flex", alignItems: "center", gap: 0.25 }}>
       {recent.map((run) => {
         const label =
           run.result === "PENDING" ? "Running" : run.passed ? "Passed" : "Failed";
         return (
-          <Tooltip key={run.build_id} title={`#${run.build_id} — ${label}`}>
+          <Tooltip key={run.build_id} title={`#${run.build_id} - ${label}`}>
             <Box
               component={RouterLink}
               to={jobRunPath(jobID, run.build_id)}
               aria-label={`Run ${run.build_id} ${label.toLowerCase()}`}
               onClick={(event) => event.stopPropagation()}
               sx={{
+                width: { xs: 32, sm: 24 },
+                height: { xs: 32, sm: 24 },
                 display: "inline-flex",
                 alignItems: "center",
                 justifyContent: "center",
-                p: 0.5,
-                m: -0.5,
-                borderRadius: "50%",
-                "&:hover > span": { transform: "scale(1.25)" },
+                borderRadius: "4px",
+                "&:hover": { bgcolor: "surface.containerHigh" },
+                "&:focus-visible": {
+                  outline: "2px solid",
+                  outlineColor: "primary.main",
+                  outlineOffset: -2,
+                },
               }}
             >
               <Box
                 component="span"
                 sx={{
                   display: "block",
-                  width: 10,
-                  height: 10,
-                  borderRadius: "50%",
+                  width: 8,
+                  height: 8,
+                  borderRadius: "2px",
                   bgcolor: (theme) => dotColorFor(theme, run.passed, run.result),
-                  transition: "transform 140ms ease",
                 }}
               />
             </Box>

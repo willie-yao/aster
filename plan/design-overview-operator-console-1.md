@@ -4,13 +4,13 @@ version: 1.0
 date_created: 2026-08-05
 last_updated: 2026-08-05
 owner: Frontend
-status: 'In progress'
+status: 'Completed'
 tags: [design, frontend, overview, accessibility, responsive, operator-console]
 ---
 
 # Introduction
 
-![Status: In progress](https://img.shields.io/badge/status-In_progress-yellow)
+![Status: Completed](https://img.shields.io/badge/status-Completed-brightgreen)
 
 This plan replaces the Overview page's glass, glow, pill, donut, and card-wall presentation with a dense graphite operator console. It preserves the current data contracts, filtering, navigation, search, status semantics, attention ranking, and run links.
 
@@ -77,10 +77,10 @@ The implementation uses focused phases. Shared visual foundations, application s
 
 | Task | Description | Completed | Date |
 |------|-------------|-----------|------|
-| TASK-001 | Update dark and light graphite palette values in `frontend/src/theme/tokens.ts`. | | |
-| TASK-002 | Update the typography scale and base radius in `frontend/src/theme/createAppTheme.ts`. | | |
-| TASK-003 | Remove the root 17px scaling exception in `frontend/src/index.css`. | | |
-| TASK-004 | Add theme contract tests and register them in `frontend/tests/run.ts`. | | |
+| TASK-001 | Update dark and light graphite palette values in `frontend/src/theme/tokens.ts`. | ✅ | 2026-08-05 |
+| TASK-002 | Update the typography scale and base radius in `frontend/src/theme/createAppTheme.ts`. | ✅ | 2026-08-05 |
+| TASK-003 | Remove the root 17px scaling exception in `frontend/src/index.css`. | ✅ | 2026-08-05 |
+| TASK-004 | Add theme contract tests and register them in `frontend/tests/run.ts`. | ✅ | 2026-08-05 |
 
 ### Implementation Phase 2
 
@@ -88,12 +88,12 @@ The implementation uses focused phases. Shared visual foundations, application s
 
 | Task | Description | Completed | Date |
 |------|-------------|-----------|------|
-| TASK-005 | Make `Panel` opaque, border-defined, and shadow-free. | | |
-| TASK-006 | Remove the obsolete `surface.glass` theme key after migrating callers. | | |
-| TASK-007 | Restyle `StatusChip` without glow or full pill geometry. | | |
-| TASK-008 | Replace rounded section ticks with a square Azure-blue rule. | | |
-| TASK-009 | Simplify `Sparkline` motion and marker sizing while preserving links. | | |
-| TASK-010 | Remove glow generation from the temporary `statusAccent` helper. | | |
+| TASK-005 | Make `Panel` opaque, border-defined, and shadow-free. | ✅ | 2026-08-05 |
+| TASK-006 | Remove the obsolete `surface.glass` theme key after migrating callers. | ✅ | 2026-08-05 |
+| TASK-007 | Restyle `StatusChip` without glow or full pill geometry. | ✅ | 2026-08-05 |
+| TASK-008 | Replace rounded section ticks with a square Azure-blue rule. | ✅ | 2026-08-05 |
+| TASK-009 | Simplify `Sparkline` motion and marker sizing while preserving links. | ✅ | 2026-08-05 |
+| TASK-010 | Remove glow generation from the temporary `statusAccent` helper. | ✅ | 2026-08-05 |
 
 ### Implementation Phase 3
 
@@ -101,11 +101,11 @@ The implementation uses focused phases. Shared visual foundations, application s
 
 | Task | Description | Completed | Date |
 |------|-------------|-----------|------|
-| TASK-011 | Make the AppBar opaque with a neutral bottom border. | | |
-| TASK-012 | Remove the brand tile glow and reduce its radius. | | |
-| TASK-013 | Replace navigation pills with text navigation and an active underline. | | |
-| TASK-014 | Preserve mobile navigation touch targets and horizontal access. | | |
-| TASK-015 | Restyle search surfaces without changing search behavior. | | |
+| TASK-011 | Make the AppBar opaque with a neutral bottom border. | ✅ | 2026-08-05 |
+| TASK-012 | Remove the brand tile glow and reduce its radius. | ✅ | 2026-08-05 |
+| TASK-013 | Replace navigation pills with text navigation and an active underline. | ✅ | 2026-08-05 |
+| TASK-014 | Preserve mobile navigation touch targets and horizontal access. | ✅ | 2026-08-05 |
+| TASK-015 | Restyle search surfaces without changing search behavior. | ✅ | 2026-08-05 |
 
 ### Implementation Phase 4
 
@@ -113,13 +113,13 @@ The implementation uses focused phases. Shared visual foundations, application s
 
 | Task | Description | Completed | Date |
 |------|-------------|-----------|------|
-| TASK-016 | Add `frontend/src/components/OverviewFilters.tsx`. | | |
-| TASK-017 | Render status as a compact segmented control and branch as a select. | | |
-| TASK-018 | Refactor `HealthPanel` into aligned total and status values. | | |
-| TASK-019 | Preserve status-filter toggle behavior and pressed state. | | |
-| TASK-020 | Remove the fixed summary height and decorative updated glow. | | |
-| TASK-021 | Delete `HealthDonut.tsx` after caller migration. | | |
-| TASK-022 | Add Overview presentation tests. | | |
+| TASK-016 | Add `frontend/src/components/OverviewFilters.tsx`. | ✅ | 2026-08-05 |
+| TASK-017 | Render status as a compact segmented control and branch as a select. | ✅ | 2026-08-05 |
+| TASK-018 | Refactor `HealthPanel` into aligned total and status values. | ✅ | 2026-08-05 |
+| TASK-019 | Preserve status-filter toggle behavior and pressed state. | ✅ | 2026-08-05 |
+| TASK-020 | Remove the fixed summary height and decorative updated glow. | ✅ | 2026-08-05 |
+| TASK-021 | Delete `HealthDonut.tsx` after caller migration. | ✅ | 2026-08-05 |
+| TASK-022 | Add Overview presentation tests. | ✅ | 2026-08-05 |
 
 ### Implementation Phase 5
 
@@ -127,13 +127,13 @@ The implementation uses focused phases. Shared visual foundations, application s
 
 | Task | Description | Completed | Date |
 |------|-------------|-----------|------|
-| TASK-023 | Refactor `NeedsAttention.tsx` without changing ranking or routing. | | |
-| TASK-024 | Add a local `AttentionRow` presentation helper. | | |
-| TASK-025 | Align subject, evidence, count, and confidence on desktop. | | |
-| TASK-026 | Keep confidence and build counts neutral. | | |
-| TASK-027 | Remove internal vertical scrolling. | | |
-| TASK-028 | Reflow rows without overlap below 768px. | | |
-| TASK-029 | Preserve resolved-pattern disclosure and all-clear handling. | | |
+| TASK-023 | Refactor `NeedsAttention.tsx` without changing ranking or routing. | ✅ | 2026-08-05 |
+| TASK-024 | Add a local `AttentionRow` presentation helper. | ✅ | 2026-08-05 |
+| TASK-025 | Align subject, evidence, count, and confidence on desktop. | ✅ | 2026-08-05 |
+| TASK-026 | Keep confidence and build counts neutral. | ✅ | 2026-08-05 |
+| TASK-027 | Remove internal vertical scrolling. | ✅ | 2026-08-05 |
+| TASK-028 | Reflow rows without overlap below 768px. | ✅ | 2026-08-05 |
+| TASK-029 | Preserve resolved-pattern disclosure and all-clear handling. | ✅ | 2026-08-05 |
 
 ### Implementation Phase 6
 
@@ -141,15 +141,15 @@ The implementation uses focused phases. Shared visual foundations, application s
 
 | Task | Description | Completed | Date |
 |------|-------------|-----------|------|
-| TASK-030 | Add `frontend/src/components/JobHealthTable.tsx`. | | |
-| TASK-031 | Align Job, Branch, Recent runs, Pass rate, Last run, Duration, and Status. | | |
-| TASK-032 | Use monospace identifiers and tabular metric values. | | |
-| TASK-033 | Preserve `Sparkline` run links and tooltips. | | |
-| TASK-034 | Keep job and run links as separate valid anchors. | | |
-| TASK-035 | Add medium and mobile row layouts without horizontal overflow. | | |
-| TASK-036 | Replace both `JobCard` render paths in `DashboardPage.tsx`. | | |
-| TASK-037 | Delete `JobCard.tsx` and the dead `statusAccent` helper. | | |
-| TASK-038 | Add row route, semantics, and nesting tests. | | |
+| TASK-030 | Add `frontend/src/components/JobHealthTable.tsx`. | ✅ | 2026-08-05 |
+| TASK-031 | Align Job, Branch, Recent runs, Pass rate, Last run, Duration, and Status. | ✅ | 2026-08-05 |
+| TASK-032 | Use monospace identifiers and tabular metric values. | ✅ | 2026-08-05 |
+| TASK-033 | Preserve `Sparkline` run links and tooltips. | ✅ | 2026-08-05 |
+| TASK-034 | Keep job and run links as separate valid anchors. | ✅ | 2026-08-05 |
+| TASK-035 | Add medium and mobile row layouts without horizontal overflow. | ✅ | 2026-08-05 |
+| TASK-036 | Replace both `JobCard` render paths in `DashboardPage.tsx`. | ✅ | 2026-08-05 |
+| TASK-037 | Delete `JobCard.tsx` and the dead `statusAccent` helper. | ✅ | 2026-08-05 |
+| TASK-038 | Add row route, semantics, and nesting tests. | ✅ | 2026-08-05 |
 
 ### Implementation Phase 7
 
@@ -157,13 +157,13 @@ The implementation uses focused phases. Shared visual foundations, application s
 
 | Task | Description | Completed | Date |
 |------|-------------|-----------|------|
-| TASK-039 | Test 390, 768, 1024, and 1440 widths in dark and light mode. | | |
-| TASK-040 | Verify no page-level horizontal overflow or internal vertical panel scrolling. | | |
-| TASK-041 | Keyboard-test all Overview and shell controls. | | |
-| TASK-042 | Verify visible focus and non-color status communication. | | |
-| TASK-043 | Remove dead glass, glow, donut, card, and lift references. | | |
-| TASK-044 | Run frontend tests, lint, type-check, and build. | | |
-| TASK-045 | Capture final screenshots and compare information presence against the baseline. | | |
+| TASK-039 | Test 390, 768, 1024, and 1440 widths in dark and light mode. | ✅ | 2026-08-05 |
+| TASK-040 | Verify no page-level horizontal overflow or internal vertical panel scrolling. | ✅ | 2026-08-05 |
+| TASK-041 | Keyboard-test all Overview and shell controls. | ✅ | 2026-08-05 |
+| TASK-042 | Verify visible focus and non-color status communication. | ✅ | 2026-08-05 |
+| TASK-043 | Remove dead glass, glow, donut, card, and lift references. | ✅ | 2026-08-05 |
+| TASK-044 | Run frontend tests, lint, type-check, and build. | ✅ | 2026-08-05 |
+| TASK-045 | Capture final screenshots and compare information presence against the baseline. | ✅ | 2026-08-05 |
 
 ## 3. Alternatives
 

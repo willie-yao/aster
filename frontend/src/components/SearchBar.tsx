@@ -227,7 +227,12 @@ export function SearchBar() {
         }}
         aria-label="Search"
         size="small"
-        sx={{ display: { xs: "inline-flex", md: "none" }, color: "text.secondary" }}
+        sx={{
+          display: { xs: "inline-flex", md: "none" },
+          width: 44,
+          height: 44,
+          color: "text.secondary",
+        }}
       >
         <Search sx={{ fontSize: 20 }} />
       </IconButton>
@@ -287,7 +292,7 @@ export function SearchBar() {
                         alignItems: "center",
                         border: "1px solid",
                         borderColor: "divider",
-                        borderRadius: 1,
+                        borderRadius: "3px",
                         bgcolor: (theme) => (theme.vars ?? theme).palette.surface.main,
                         px: 0.75,
                         py: 0.25,
@@ -305,7 +310,7 @@ export function SearchBar() {
             sx={{
               "& .MuiOutlinedInput-root": {
                 height: 36,
-                borderRadius: "8px",
+                borderRadius: "4px",
                 bgcolor: (theme) => (theme.vars ?? theme).palette.surface.container,
                 color: "text.primary",
                 fontSize: "0.875rem",
@@ -350,7 +355,7 @@ export function SearchBar() {
             left: mobileExpanded ? 16 : { md: 0 },
             right: mobileExpanded ? 16 : { xs: 0, md: "auto" },
             width: mobileExpanded ? "auto" : { xs: "min(28rem, calc(100vw - 32px))", md: "28rem" },
-            borderRadius: "8px",
+            borderRadius: "6px",
             overflow: "hidden",
             zIndex: (theme) => theme.zIndex.modal,
           }}

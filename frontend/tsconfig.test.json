@@ -32,6 +32,7 @@
     "src/types/fetchStatus.ts",
     "src/lib/actionRequests.ts",
     "src/lib/actionEligibility.ts",
+    "src/lib/dashboardOverview.ts",
     "src/types/actions.ts"
   ]
 }

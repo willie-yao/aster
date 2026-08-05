@@ -7,12 +7,6 @@ import "./augmentation";
 import { darkTokens, lightTokens, type ColorTokens } from "./tokens";
 import { buildComponents } from "./components";
 
-// Map raw MD3 tokens onto MUI palette slots. Semantic mapping:
-//   primary blue tokens -> primary
-//   secondary green PASSING tokens -> success
-//   tertiary amber FLAKY tokens -> warning
-//   error red tokens -> error
-// The extra surface-container levels live under the custom `surface` key.
 function paletteFromTokens(t: ColorTokens): PaletteOptions {
   return {
     primary: {
@@ -61,7 +55,6 @@ function paletteFromTokens(t: ColorTokens): PaletteOptions {
       containerHighest: t.surfaceContainerHighest,
       variant: t.surfaceVariant,
       tint: t.surfaceTint,
-      glass: t.glass,
     },
   };
 }
@@ -71,57 +64,54 @@ const monoFontFamily =
 
 const typography = {
   fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-  // The root html font-size is 17px in index.css. Keeping MUI's htmlFontSize at
-  // 16 preserves the dashboard's rem scale.
   htmlFontSize: 16,
-  h1: { fontWeight: 800, letterSpacing: "-0.02em" },
-  h2: { fontWeight: 700, letterSpacing: "-0.01em" },
-  h3: { fontWeight: 700, letterSpacing: "-0.01em" },
-  // Page titles and stat counts.
-  h4: { fontWeight: 800, fontSize: "1.75rem", letterSpacing: "-0.02em" },
-  h5: { fontWeight: 700, letterSpacing: "-0.01em" },
-  // Sub-section headings and empty/error titles.
-  h6: { fontWeight: 600, fontSize: "1.125rem" },
-  button: { fontWeight: 600 },
-  // Custom variants for reusable section titles and compact labels. Call sites
-  // override fontSize via `sx` for larger titles or smaller card titles.
+  h1: { fontWeight: 700, letterSpacing: "-0.015em" },
+  h2: { fontWeight: 650, letterSpacing: "-0.01em" },
+  h3: { fontWeight: 650, letterSpacing: "-0.01em" },
+  h4: {
+    fontWeight: 700,
+    fontSize: "1.5rem",
+    lineHeight: 4 / 3,
+    letterSpacing: "-0.015em",
+  },
+  h5: { fontWeight: 650, letterSpacing: "-0.01em" },
+  h6: { fontWeight: 600, fontSize: "1rem", lineHeight: 1.5 },
+  body1: { fontSize: "0.875rem", lineHeight: 10 / 7 },
+  body2: { fontSize: "0.8125rem", lineHeight: 20 / 13 },
+  caption: { fontSize: "0.75rem", lineHeight: 4 / 3 },
+  button: { fontWeight: 600, fontSize: "0.8125rem" },
   headline: {
     fontFamily: "inherit",
-    fontWeight: 700,
-    fontSize: "1.125rem",
-    letterSpacing: "-0.01em",
+    fontWeight: 600,
+    fontSize: "1rem",
+    lineHeight: 1.5,
+    letterSpacing: "-0.005em",
   },
   label: {
     fontFamily: "inherit",
     fontWeight: 600,
-    fontSize: "0.6875rem",
-    letterSpacing: "0.05em",
-    lineHeight: 1.4,
+    fontSize: "0.75rem",
+    letterSpacing: 0,
+    lineHeight: 4 / 3,
   },
-  // Monospace face for data values: build IDs, durations, percentages, counts.
-  // Tabular figures keep columns from shifting as digits change.
   data: {
     fontFamily: monoFontFamily,
     fontWeight: 500,
-    fontSize: "0.8125rem",
+    fontSize: "0.75rem",
+    lineHeight: 4 / 3,
     letterSpacing: "-0.01em",
     fontFeatureSettings: '"tnum" 1, "cv01" 1',
   },
-  // Large metric numbers for the summary strip and stat rows.
   stat: {
     fontFamily: monoFontFamily,
     fontWeight: 700,
-    fontSize: "1.75rem",
-    lineHeight: 1.1,
+    fontSize: "1.5rem",
+    lineHeight: 4 / 3,
     letterSpacing: "-0.02em",
     fontFeatureSettings: '"tnum" 1',
   },
 };
 
-// Build the dashboard theme. Light and dark schemes are generated from token
-// sets and switched at runtime by the class selector used by useColorScheme in
-// the app shell. To create another theme, pass different token sets or register
-// a new factory in themes.ts.
 export function createAppTheme(
   tokens: { light: ColorTokens; dark: ColorTokens } = {
     light: lightTokens,
@@ -135,7 +125,7 @@ export function createAppTheme(
       light: { palette: paletteFromTokens(tokens.light) },
       dark: { palette: paletteFromTokens(tokens.dark) },
     },
-    shape: { borderRadius: 12 },
+    shape: { borderRadius: 6 },
     typography,
     components: buildComponents(),
   });

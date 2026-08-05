@@ -15,7 +15,26 @@ export function buildComponents(): Components<Theme> {
     MuiButton: {
       defaultProps: { disableElevation: true },
       styleOverrides: {
-        root: { textTransform: "none", fontWeight: 600 },
+        root: {
+          textTransform: "none",
+          fontWeight: 600,
+          "&.Mui-focusVisible": {
+            outline: "2px solid",
+            outlineColor: "var(--mui-palette-primary-main)",
+            outlineOffset: 1,
+          },
+        },
+      },
+    },
+    MuiIconButton: {
+      styleOverrides: {
+        root: {
+          "&.Mui-focusVisible": {
+            outline: "2px solid",
+            outlineColor: "var(--mui-palette-primary-main)",
+            outlineOffset: 1,
+          },
+        },
       },
     },
     MuiChip: {

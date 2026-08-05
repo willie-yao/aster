@@ -4,7 +4,6 @@ export {
   soft,
   statusToMuiColor,
   dotColorFor,
-  statusAccent,
   type SoftColor,
   type DashboardStatus,
 } from "./helpers";

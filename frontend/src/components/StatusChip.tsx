@@ -5,11 +5,16 @@ import { statusToMuiColor, soft } from "../theme";
 interface StatusChipProps extends Omit<ChipProps, "color" | "label"> {
   /** Dashboard status such as "PASSING", "FAILING", "FLAKY", or "passed". */
   status: string;
-  /** Override the displayed text. Defaults to the status itself. */
+  /** Override the displayed text. Defaults to a sentence-case status. */
   label?: string;
 }
 
-// Pill showing a test or job status with a leading color dot and themed colors.
+function statusLabel(status: string): string {
+  const normalized = status.trim().toLowerCase();
+  return normalized ? normalized[0].toUpperCase() + normalized.slice(1) : status;
+}
+
+// Compact text and marker for a test or job status.
 export function StatusChip({ status, label, sx, ...rest }: StatusChipProps) {
   const color = statusToMuiColor(status);
   const isDefault = color === "default";
@@ -25,26 +30,30 @@ export function StatusChip({ status, label, sx, ...rest }: StatusChipProps) {
             borderRadius: "50%",
             flexShrink: 0,
             bgcolor: isDefault ? "text.secondary" : `${color}.main`,
-            boxShadow: (t) => (isDefault ? "none" : `0 0 6px ${soft(t, color, 0.8)}`),
           }}
         />
       }
-      label={label ?? status}
+      label={label ?? statusLabel(status)}
       sx={[
         {
-          height: 22,
-          textTransform: "uppercase",
-          letterSpacing: "0.05em",
-          fontWeight: 700,
-          fontSize: "0.625rem",
-          "& .MuiChip-icon": { ml: "8px", mr: "-2px" },
-          "& .MuiChip-label": { px: 0.9 },
+          height: 24,
+          borderRadius: "4px",
+          letterSpacing: 0,
+          fontWeight: 600,
+          fontSize: "0.6875rem",
+          "& .MuiChip-icon": { ml: "7px", mr: "-2px" },
+          "& .MuiChip-label": { px: 0.875 },
           ...(isDefault
-            ? { bgcolor: "action.selected", color: "text.secondary" }
+            ? {
+                bgcolor: "surface.containerHigh",
+                color: "text.secondary",
+                border: "1px solid",
+                borderColor: "divider",
+              }
             : {
-                bgcolor: (t) => soft(t, color, 0.15),
+                bgcolor: (theme) => soft(theme, color, 0.1),
                 color: `${color}.main`,
-                border: (t) => `1px solid ${soft(t, color, 0.28)}`,
+                border: (theme) => `1px solid ${soft(theme, color, 0.24)}`,
               }),
         },
         ...(Array.isArray(sx) ? sx : [sx]),

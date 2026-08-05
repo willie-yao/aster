@@ -20,10 +20,8 @@ import { useCapabilities } from "../hooks/useCapabilities";
 import { useFetchStatus } from "../hooks/useFetchStatus";
 import { FetchStatusContext } from "../hooks/useSharedFetchStatus";
 import { usePageDocumentTitle } from "../lib/pageMetadata";
-import { soft } from "../theme";
 
-// Primary top-nav tab: pill highlight for the active section, with aria-current
-// set only on the exact current page.
+// Primary top-nav tab with a restrained active indicator.
 function NavTab({
   to,
   label,
@@ -42,21 +40,34 @@ function NavTab({
       size="small"
       aria-current={current ? "page" : undefined}
       sx={{
-        px: { xs: 0.875, sm: 1.5 },
-        py: 0.5,
+        position: "relative",
+        px: { xs: 1, sm: 1.25 },
+        py: 0.75,
         minWidth: 0,
-        borderRadius: 999,
+        minHeight: { xs: 44, lg: 36 },
+        borderRadius: 0,
         fontSize: "0.8125rem",
         fontWeight: active ? 700 : 600,
-        textTransform: "none",
         whiteSpace: "nowrap",
-        color: active ? "primary.main" : "text.secondary",
-        bgcolor: (theme) => (active ? soft(theme, "primary", 0.12) : "transparent"),
-        transition: "color 150ms ease, background-color 150ms ease",
+        color: active ? "text.primary" : "text.secondary",
+        bgcolor: "transparent",
+        transition: "color 140ms ease, background-color 140ms ease",
+        "&::after": {
+          content: '""',
+          position: "absolute",
+          insetInline: 8,
+          bottom: 0,
+          height: 2,
+          bgcolor: active ? "primary.main" : "transparent",
+        },
         "&:hover": {
-          color: active ? "primary.main" : "text.primary",
-          bgcolor: (theme) =>
-            active ? soft(theme, "primary", 0.16) : (theme.vars ?? theme).palette.surface.containerHigh,
+          color: "text.primary",
+          bgcolor: "surface.containerHigh",
+        },
+        "&.Mui-focusVisible": {
+          outline: "2px solid",
+          outlineColor: "primary.main",
+          outlineOffset: -2,
         },
       }}
     >
@@ -87,10 +98,8 @@ export function Layout() {
         color="transparent"
         elevation={0}
         sx={{
-          bgcolor: (theme) => (theme.vars ?? theme).palette.surface.glass,
+          bgcolor: (theme) => (theme.vars ?? theme).palette.surface.container,
           backgroundImage: "none",
-          backdropFilter: "blur(12px)",
-          WebkitBackdropFilter: "blur(12px)",
           borderBottom: "1px solid",
           borderColor: "divider",
           width: "100%",
@@ -100,7 +109,7 @@ export function Layout() {
         <Toolbar
           disableGutters
           sx={{
-            minHeight: { xs: "auto !important", lg: "64px !important" },
+            minHeight: { xs: "auto !important", lg: "56px !important" },
             px: { xs: 2, sm: 3 },
             py: { xs: 1, lg: 0 },
             display: "grid",
@@ -140,12 +149,11 @@ export function Layout() {
                 justifyContent: "center",
                 width: 32,
                 height: 32,
-                borderRadius: "9px",
+                borderRadius: "4px",
                 flexShrink: 0,
                 bgcolor: (theme) => (theme.vars ?? theme).palette.surface.containerHigh,
                 border: "1px solid",
                 borderColor: "divider",
-                boxShadow: (theme) => `0 0 16px -6px ${(theme.vars ?? theme).palette.primary.main}`,
               }}
             >
               <SvgIcon
@@ -240,7 +248,12 @@ export function Layout() {
                 aria-label={`Switch to ${isDark ? "light" : "dark"} mode`}
                 onClick={() => setMode(isDark ? "light" : "dark")}
                 size="small"
-                sx={{ color: "text.secondary", "&:hover": { color: "text.primary" } }}
+                sx={{
+                  width: { xs: 44, sm: 32 },
+                  height: { xs: 44, sm: 32 },
+                  color: "text.secondary",
+                  "&:hover": { color: "text.primary", bgcolor: "surface.containerHigh" },
+                }}
               >
                 {isDark ? <LightMode fontSize="small" /> : <DarkMode fontSize="small" />}
               </IconButton>
@@ -255,7 +268,7 @@ export function Layout() {
         dismissedKey={dismissedFetchStrip}
         onDismiss={setDismissedFetchStrip}
       />
-      <Container component="main" maxWidth="xl" sx={{ minWidth: 0, py: 3 }}>
+      <Container component="main" maxWidth="xl" sx={{ minWidth: 0, py: { xs: 2, sm: 3 } }}>
         <Outlet />
       </Container>
     </Box>
