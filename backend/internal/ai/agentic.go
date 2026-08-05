@@ -137,6 +137,7 @@ type critiqueRetryBudget struct {
 type critiqueQuality struct {
 	Passed               bool
 	HardRules            []string
+	SoftRules            []string
 	HardIssueCount       int
 	MissingEvidenceCount int
 	PuntCount            int
@@ -151,6 +152,26 @@ type critiqueDraftCandidate struct {
 	attempt          int
 	evidenceRevision int
 }
+
+type draftReplacementDecision struct {
+	accepted                 bool
+	reason                   string
+	rootCauseChanged         bool
+	rawSemanticRegression    bool
+	publishedStrictDominance bool
+	currentQualityRefreshed  bool
+}
+
+const (
+	draftReasonCandidatePublishedDominates  = "candidate_published_dominates"
+	draftReasonCandidatePublishedHard       = "candidate_has_published_hard_failure"
+	draftReasonCandidateSemanticRegression  = "candidate_adds_semantic_regression"
+	draftReasonCandidateRootWithoutEvidence = "candidate_changes_root_without_evidence"
+	draftReasonCandidateNotBetter           = "candidate_not_strictly_better"
+	draftReasonTiePreservesEarlier          = "tie_preserves_earlier"
+	draftReasonSemanticTieReplaces          = "semantic_tie_replaces"
+	draftReasonFallbackPromoted             = "fallback_promoted"
+)
 
 func (b *critiqueRetryBudget) available() bool {
 	return b != nil && b.used < b.max
@@ -418,6 +439,7 @@ type agentState struct {
 	budgetExhausted    bool
 	draftObserver      DraftObserver
 	selectionObserver  DraftSelectionObserver
+	traceCtx           context.Context
 	draftAttempt       int
 	bestDraft          *critiqueDraftCandidate
 	fallbackDraft      *critiqueDraftCandidate
@@ -903,6 +925,7 @@ func (c *Client) doAnalyzeAgentic(
 	}
 	loopCtx, cancel := context.WithDeadline(ctx, state.deadline)
 	defer cancel()
+	state.traceCtx = loopCtx
 
 	var finalContent string
 	var finalProviderItems []json.RawMessage
@@ -1110,16 +1133,15 @@ agentLoop:
 											pruneAbsentSkillEvidence(rp, &revisedCritique, treeSet)
 										}
 									}
-									policy := effectiveCritiqueCachePolicy(in.Opts.CritiqueCachePolicy, in.Opts.CritiqueMaxRetries)
 									semanticCandidate := state.newDraftCandidate("semantic_retry", revised, revisedItems, rp, revisedCritique)
-									currentRawQuality := critiqueQualityFor(state.currentCritiqueOutcome(state.bestDraft.parsed))
-									state.bestDraft.rawQuality = currentRawQuality
-									if critiqueHardRegression(semanticCandidate.rawQuality, currentRawQuality) || !critiqueQualityAcceptedForPolicy(semanticCandidate.quality, policy) {
+									policy := effectiveCritiqueCachePolicy(in.Opts.CritiqueCachePolicy, in.Opts.CritiqueMaxRetries)
+									decision := state.considerDraftDecisionForPolicy(semanticCandidate, true, policy)
+									if !decision.accepted && semanticRevisionRejected(decision, semanticCandidate, policy) {
 										state.judgeRevisionRejected = true
 										break
 									}
-									state.considerFallbackDraft(semanticCandidate, true)
-									if state.considerDraft(semanticCandidate, true) {
+									if decision.accepted {
+										state.considerFallbackDraftForPolicy(semanticCandidate, true, policy)
 										state.judgeRevised = true
 									}
 								}
@@ -1733,6 +1755,7 @@ func critiqueQualityFor(out critiqueOutcome) critiqueQuality {
 	return critiqueQuality{
 		Passed:               out.Passed,
 		HardRules:            critiqueRuleStrings(out.HardRuleIDs()),
+		SoftRules:            critiqueRuleStrings(out.SoftRuleIDs()),
 		HardIssueCount:       critiqueHardIssueCount(out),
 		MissingEvidenceCount: out.MissingEvidenceCount(),
 		PuntCount:            len(out.PuntMatches),
@@ -1873,23 +1896,60 @@ func (s *agentState) currentCritiqueOutcome(parsed analysisResponse) critiqueOut
 	return out
 }
 
-// considerDraft applies deterministic quality ordering and the root-cause guard.
+// considerDraft applies deterministic quality ordering and records the decision.
 func (s *agentState) considerDraft(candidate *critiqueDraftCandidate, semanticAccepted bool) bool {
-	s.refreshPublishedDraftQuality(s.bestDraft)
-	if !draftShouldReplace(s.bestDraft, candidate, semanticAccepted) {
-		return false
+	return s.considerDraftDecision(candidate, semanticAccepted).accepted
+}
+
+func (s *agentState) considerDraftDecision(candidate *critiqueDraftCandidate, semanticAccepted bool) draftReplacementDecision {
+	policy := effectiveCritiqueCachePolicy(s.opts.CritiqueCachePolicy, s.opts.CritiqueMaxRetries)
+	return s.considerDraftDecisionForPolicy(candidate, semanticAccepted, policy)
+}
+
+func (s *agentState) considerDraftDecisionForPolicy(candidate *critiqueDraftCandidate, semanticAccepted bool, policy CritiqueCachePolicy) draftReplacementDecision {
+	decision := s.evaluateDraftReplacement(s.bestDraft, candidate, semanticAccepted, policy)
+	s.recordDraftDecision("best", s.bestDraft, candidate, decision)
+	if decision.accepted {
+		s.bestDraft = candidate
 	}
-	s.bestDraft = candidate
-	return true
+	return decision
 }
 
 func (s *agentState) considerFallbackDraft(candidate *critiqueDraftCandidate, semanticAccepted bool) bool {
-	s.refreshPublishedDraftQuality(s.fallbackDraft)
-	if !draftShouldReplace(s.fallbackDraft, candidate, semanticAccepted) {
-		return false
+	policy := effectiveCritiqueCachePolicy(s.opts.CritiqueCachePolicy, s.opts.CritiqueMaxRetries)
+	return s.considerFallbackDraftForPolicy(candidate, semanticAccepted, policy)
+}
+
+func (s *agentState) considerFallbackDraftForPolicy(candidate *critiqueDraftCandidate, semanticAccepted bool, policy CritiqueCachePolicy) bool {
+	decision := s.evaluateDraftReplacement(s.fallbackDraft, candidate, semanticAccepted, policy)
+	s.recordDraftDecision("fallback", s.fallbackDraft, candidate, decision)
+	if decision.accepted {
+		s.fallbackDraft = candidate
 	}
-	s.fallbackDraft = candidate
-	return true
+	return decision.accepted
+}
+
+func (s *agentState) evaluateDraftReplacement(current, candidate *critiqueDraftCandidate, semanticAccepted bool, policy CritiqueCachePolicy) draftReplacementDecision {
+	refreshed := false
+	if current != nil && candidate != nil {
+		rootChanged := rootCauseMateriallyChanged(current.parsed.RootCause, candidate.parsed.RootCause)
+		newEvidence := candidate.evidenceRevision > current.evidenceRevision
+		// Preserve the earlier draft's historical quality when new evidence drove a
+		// different diagnosis. Re-evaluating it with evidence fetched for the new
+		// diagnosis can give the earlier text credit for evidence it never used.
+		preserveHistorical := !semanticAccepted && rootChanged && newEvidence
+		if semanticAccepted {
+			current.rawQuality = critiqueQualityFor(s.currentCritiqueOutcome(current.parsed))
+		}
+		if current.evidenceRevision < candidate.evidenceRevision && !preserveHistorical {
+			s.refreshPublishedDraftQuality(current)
+			current.evidenceRevision = candidate.evidenceRevision
+			refreshed = true
+		}
+	}
+	decision := decideDraftReplacement(current, candidate, semanticAccepted, policy)
+	decision.currentQualityRefreshed = refreshed
+	return decision
 }
 
 func (s *agentState) refreshPublishedDraftQuality(candidate *critiqueDraftCandidate) {
@@ -1899,34 +1959,112 @@ func (s *agentState) refreshPublishedDraftQuality(candidate *critiqueDraftCandid
 	candidate.quality = critiqueQualityFor(s.publishedCritiqueOutcome(candidate.parsed))
 }
 
-func draftShouldReplace(current, candidate *critiqueDraftCandidate, semanticAccepted bool) bool {
+func decideDraftReplacement(current, candidate *critiqueDraftCandidate, semanticAccepted bool, policy CritiqueCachePolicy) draftReplacementDecision {
+	decision := draftReplacementDecision{reason: draftReasonCandidateNotBetter}
 	if candidate == nil {
-		return false
+		return decision
 	}
 	if current == nil {
-		return true
+		decision.accepted = true
+		decision.publishedStrictDominance = true
+		decision.reason = draftReasonCandidatePublishedDominates
+		return decision
+	}
+	decision.rootCauseChanged = rootCauseMateriallyChanged(current.parsed.RootCause, candidate.parsed.RootCause)
+	publishedHardRegression := critiqueHardRegression(candidate.quality, current.quality)
+	decision.rawSemanticRegression = semanticAccepted &&
+		critiqueHardRegression(candidate.rawQuality, current.rawQuality) && publishedHardRegression
+	if decision.rawSemanticRegression {
+		decision.reason = draftReasonCandidateSemanticRegression
+		return decision
+	}
+	if publishedHardRegression {
+		decision.reason = draftReasonCandidatePublishedHard
+		return decision
+	}
+	if semanticAccepted && !critiqueQualityAcceptedForPolicy(candidate.quality, policy) {
+		if candidate.quality.HardIssueCount > 0 {
+			decision.reason = draftReasonCandidatePublishedHard
+		}
+		return decision
+	}
+	if decision.rootCauseChanged && candidate.evidenceRevision <= current.evidenceRevision && !semanticAccepted {
+		decision.reason = draftReasonCandidateRootWithoutEvidence
+		return decision
 	}
 	comparison := compareCritiqueQuality(candidate.quality, current.quality)
-	rootCauseChanged := rootCauseMateriallyChanged(current.parsed.RootCause, candidate.parsed.RootCause)
-	evidenceBackedChange := !semanticAccepted && rootCauseChanged && candidate.evidenceRevision > current.evidenceRevision && critiqueQualityNoWorse(candidate.quality, current.quality)
+	evidenceBackedChange := !semanticAccepted && decision.rootCauseChanged && candidate.evidenceRevision > current.evidenceRevision && critiqueQualityNoWorse(candidate.quality, current.quality)
 	semanticTie := semanticAccepted && critiqueQualityEqual(candidate.quality, current.quality)
-	if comparison < 0 || comparison == 0 && !evidenceBackedChange && !semanticTie {
-		return false
+	switch {
+	case comparison > 0 || evidenceBackedChange:
+		decision.accepted = true
+		decision.publishedStrictDominance = true
+		decision.reason = draftReasonCandidatePublishedDominates
+	case semanticTie:
+		decision.accepted = true
+		decision.reason = draftReasonSemanticTieReplaces
+	case critiqueQualityEqual(candidate.quality, current.quality):
+		decision.reason = draftReasonTiePreservesEarlier
+	default:
+		decision.reason = draftReasonCandidateNotBetter
 	}
-	if rootCauseChanged &&
-		candidate.evidenceRevision <= current.evidenceRevision && !semanticAccepted {
-		return false
-	}
-	return true
+	return decision
+}
+
+func draftShouldReplace(current, candidate *critiqueDraftCandidate, semanticAccepted bool) bool {
+	return decideDraftReplacement(current, candidate, semanticAccepted, CritiqueCachePolicyHard).accepted
 }
 
 func critiqueQualityEqual(a, b critiqueQuality) bool {
 	return a.Passed == b.Passed && a.HardIssueCount == b.HardIssueCount &&
-		slices.Equal(a.HardRules, b.HardRules) && a.MissingEvidenceCount == b.MissingEvidenceCount && a.PuntCount == b.PuntCount
+		slices.Equal(a.HardRules, b.HardRules) && slices.Equal(a.SoftRules, b.SoftRules) &&
+		a.MissingEvidenceCount == b.MissingEvidenceCount && a.PuntCount == b.PuntCount
+}
+
+func (s *agentState) recordDraftDecision(target string, current, candidate *critiqueDraftCandidate, decision draftReplacementDecision) {
+	if candidate == nil {
+		return
+	}
+	trace := &DraftDecisionTrace{
+		Target:                          target,
+		CandidateAttempt:                candidate.attempt,
+		CandidateRawHardRules:           append([]string(nil), candidate.rawQuality.HardRules...),
+		CandidateRawSoftRules:           append([]string(nil), candidate.rawQuality.SoftRules...),
+		CandidatePublishedHardRules:     append([]string(nil), candidate.quality.HardRules...),
+		CandidatePublishedSoftRules:     append([]string(nil), candidate.quality.SoftRules...),
+		CandidatePublishedHardIssues:    candidate.quality.HardIssueCount,
+		CandidatePublishedMissingGroups: candidate.quality.MissingEvidenceCount,
+		CandidatePublishedPunts:         candidate.quality.PuntCount,
+		CandidateEvidenceRevision:       candidate.evidenceRevision,
+		RootCauseMateriallyChanged:      decision.rootCauseChanged,
+		RawSemanticRegression:           decision.rawSemanticRegression,
+		PublishedStrictDominance:        decision.publishedStrictDominance,
+		CurrentQualityRefreshed:         decision.currentQualityRefreshed,
+		ReplacementAccepted:             decision.accepted,
+		ReplacementReason:               decision.reason,
+	}
+	if current != nil {
+		trace.CurrentAttempt = current.attempt
+		trace.CurrentRawHardRules = append([]string(nil), current.rawQuality.HardRules...)
+		trace.CurrentRawSoftRules = append([]string(nil), current.rawQuality.SoftRules...)
+		trace.CurrentPublishedHardRules = append([]string(nil), current.quality.HardRules...)
+		trace.CurrentPublishedSoftRules = append([]string(nil), current.quality.SoftRules...)
+		trace.CurrentPublishedHardIssues = current.quality.HardIssueCount
+		trace.CurrentPublishedMissingGroups = current.quality.MissingEvidenceCount
+		trace.CurrentPublishedPunts = current.quality.PuntCount
+		trace.CurrentEvidenceRevision = current.evidenceRevision
+	}
+	outcome := "rejected"
+	if decision.accepted {
+		outcome = "accepted"
+	}
+	recordTrace(s.traceCtx, TraceEvent{Kind: "draft_selection", Outcome: outcome, Status: target, DraftDecision: trace})
 }
 
 func (s *agentState) promoteFallbackDraft() *critiqueDraftCandidate {
 	if s.fallbackDraft != nil {
+		decision := draftReplacementDecision{accepted: true, reason: draftReasonFallbackPromoted}
+		s.recordDraftDecision("promotion", s.bestDraft, s.fallbackDraft, decision)
 		s.bestDraft = s.fallbackDraft
 	}
 	return s.bestDraft

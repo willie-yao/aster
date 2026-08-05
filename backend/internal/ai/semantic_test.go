@@ -188,27 +188,48 @@ func TestApplySemanticJudgePostLoop_RefinalizesOnObjection(t *testing.T) {
 	}
 }
 
-func TestApplySemanticJudgePostLoopRejectsInvalidCitationRevision(t *testing.T) {
+func TestApplySemanticJudgePostLoopRejectsNonSanitizableRevision(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	srv.push(200, chatRespFinal(`{"objections":["verify the exact failure location"]}`))
-	srv.push(200, chatRespFinal(`{"summary":"revised","is_transient":false,"root_cause":"failure at line 999","severity":"High","suggested_fix":"Set the route table.","relevant_files":[]}`))
+	srv.push(200, chatRespFinal(`{"objections":["verify whether the failure is transient"]}`))
+	srv.push(200, chatRespFinal(`{"summary":"revised","is_transient":true,"root_cause":"temporary provider failure","severity":"High","suggested_fix":"Set the route table.","relevant_files":[]}`))
 	client := newAgenticTestClient(t, srv.URL)
 
 	state := &agentState{
 		readArtifactsFull: map[string]bool{}, readArtifactsBase: map[string]bool{},
-		analysisEvidence: map[string]*analysisChatEvidence{},
+		analysisEvidence: map[string]*analysisChatEvidence{}, consecutiveFailures: 3,
 	}
 	orig := analysisResponse{Summary: "sound", RootCause: "verified root cause", SuggestedFix: "Set the route table."}
 	state.bestDraft = &critiqueDraftCandidate{
 		parsed: orig, content: "sound-final", attempt: 1,
-		rawQuality: critiqueQuality{HardRules: []string{"claim.uncited_line"}, HardIssueCount: 1},
-		quality:    critiqueQuality{Passed: true},
+		rawQuality: critiqueQuality{Passed: true}, quality: critiqueQuality{Passed: true},
 	}
 	got := client.applySemanticJudgePostLoop(context.Background(), state, []modelMessage{{Role: "user", Content: strPtr("u")}}, "sound-final", nil, orig, contextHeadroomFor(AgenticOptions{ContextByteBudget: 100_000}), CritiqueCachePolicyStrict)
 
-	if got.RootCause != orig.RootCause || state.judgeRevised {
-		t.Fatalf("invalid semantic revision replaced the valid draft: got=%+v state=%+v", got, state)
+	if got.RootCause != orig.RootCause || state.judgeRevised || !state.judgeRevisionRejected {
+		t.Fatalf("non-sanitizable semantic revision replaced the valid draft: got=%+v state=%+v", got, state)
+	}
+}
+
+func TestApplySemanticJudgePostLoopMarksStrictPolicyRevisionRejected(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal(`{"objections":["make the remediation concrete"]}`))
+	srv.push(200, chatRespFinal(`{"summary":"revised","is_transient":false,"root_cause":"same cause","severity":"High","suggested_fix":"Check the controller logs.","relevant_files":[]}`))
+	client := newAgenticTestClient(t, srv.URL)
+
+	state := &agentState{
+		readArtifactsFull: map[string]bool{}, readArtifactsBase: map[string]bool{},
+		readSourceFull: map[string]bool{}, analysisEvidence: map[string]*analysisChatEvidence{},
+	}
+	orig := analysisResponse{Summary: "sound", RootCause: "same cause", SuggestedFix: "Apply the verified fix."}
+	state.bestDraft = &critiqueDraftCandidate{
+		parsed: orig, content: "sound-final", attempt: 1,
+		rawQuality: critiqueQuality{Passed: true}, quality: critiqueQuality{Passed: true},
+	}
+	got := client.applySemanticJudgePostLoop(context.Background(), state, nil, "sound-final", nil, orig, contextHeadroomFor(AgenticOptions{ContextByteBudget: 100_000}), CritiqueCachePolicyStrict)
+	if got.RootCause != orig.RootCause || state.judgeRevised || !state.judgeRevisionRejected {
+		t.Fatalf("strict-policy semantic revision was not retained as rejected: got=%+v state=%+v", got, state)
 	}
 }
 
@@ -283,17 +304,19 @@ func TestAgentic_SemanticJudge_DisabledByDefault(t *testing.T) {
 	}
 }
 
-func TestAgentic_SemanticRevisionRejectedKeepsPassingDraftCacheable(t *testing.T) {
+func TestAgentic_SemanticNonSanitizableRevisionRejectedKeepsPassingDraftCacheable(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 	initial := `{"summary":"sound","is_transient":false,"root_cause":"verified root cause","severity":"High","suggested_fix":"Set the supported configuration.","relevant_files":[]}`
 	srv.push(200, chatRespFinal(initial))
-	srv.push(200, chatRespFinal(`{"objections":["verify the exact failure location"]}`))
-	srv.push(200, chatRespFinal(`{"summary":"revised","is_transient":false,"root_cause":"failure at line 999","severity":"High","suggested_fix":"Set the supported configuration.","relevant_files":[]}`))
+	srv.push(200, chatRespFinal(`{"objections":["verify whether the failure is transient"]}`))
+	srv.push(200, chatRespFinal(`{"summary":"revised","is_transient":true,"root_cause":"temporary provider failure","severity":"High","suggested_fix":"Set the supported configuration.","relevant_files":[]}`))
 	client := newAgenticTestClient(t, srv.URL)
 	key := "agentic:test:semantic-rejected-cache"
 	opts := AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second, CritiqueMaxRetries: 1, CritiqueCachePolicy: CritiqueCachePolicyAdvisory, SemanticJudge: true}
-	_, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, opts), key, "sys", "user")
+	in := newTestAgenticInputs(t, &fakeBrowser{}, opts)
+	in.ConsecutiveFailures = transientPersistThreshold
+	_, analysis, err := client.doAnalyzeAgentic(context.Background(), in, key, "sys", "user")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,7 +326,9 @@ func TestAgentic_SemanticRevisionRejectedKeepsPassingDraftCacheable(t *testing.T
 	if _, ok := client.Cache().Get(key); !ok {
 		t.Fatalf("passing original was not cached: analysis=%+v", analysis)
 	}
-	_, cached, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, opts), key, "sys", "user")
+	cachedIn := newTestAgenticInputs(t, &fakeBrowser{}, opts)
+	cachedIn.ConsecutiveFailures = transientPersistThreshold
+	_, cached, err := client.doAnalyzeAgentic(context.Background(), cachedIn, key, "sys", "user")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -54,61 +54,91 @@ type AnalysisTrace struct {
 	Events     []TraceEvent `json:"events"`
 }
 
+// DraftDecisionTrace records one content-free draft replacement decision.
+type DraftDecisionTrace struct {
+	Target                          string   `json:"target"`
+	CurrentAttempt                  int      `json:"current_attempt"`
+	CandidateAttempt                int      `json:"candidate_attempt"`
+	CurrentRawHardRules             []string `json:"current_raw_hard_rules,omitempty"`
+	CandidateRawHardRules           []string `json:"candidate_raw_hard_rules,omitempty"`
+	CurrentRawSoftRules             []string `json:"current_raw_soft_rules,omitempty"`
+	CandidateRawSoftRules           []string `json:"candidate_raw_soft_rules,omitempty"`
+	CurrentPublishedHardRules       []string `json:"current_published_hard_rules,omitempty"`
+	CandidatePublishedHardRules     []string `json:"candidate_published_hard_rules,omitempty"`
+	CurrentPublishedSoftRules       []string `json:"current_published_soft_rules,omitempty"`
+	CandidatePublishedSoftRules     []string `json:"candidate_published_soft_rules,omitempty"`
+	CurrentPublishedHardIssues      int      `json:"current_published_hard_issues"`
+	CandidatePublishedHardIssues    int      `json:"candidate_published_hard_issues"`
+	CurrentPublishedMissingGroups   int      `json:"current_published_missing_groups"`
+	CandidatePublishedMissingGroups int      `json:"candidate_published_missing_groups"`
+	CurrentPublishedPunts           int      `json:"current_published_punts"`
+	CandidatePublishedPunts         int      `json:"candidate_published_punts"`
+	CurrentEvidenceRevision         int      `json:"current_evidence_revision"`
+	CandidateEvidenceRevision       int      `json:"candidate_evidence_revision"`
+	RootCauseMateriallyChanged      bool     `json:"root_cause_materially_changed"`
+	RawSemanticRegression           bool     `json:"raw_semantic_regression"`
+	PublishedStrictDominance        bool     `json:"published_strict_dominance"`
+	CurrentQualityRefreshed         bool     `json:"current_quality_refreshed"`
+	ReplacementAccepted             bool     `json:"replacement_accepted"`
+	ReplacementReason               string   `json:"replacement_reason"`
+}
+
 // TraceEvent is one bounded, content-free analysis event.
 type TraceEvent struct {
-	Sequence                  int      `json:"sequence"`
-	ElapsedMs                 int      `json:"elapsed_ms"`
-	Kind                      string   `json:"kind"`
-	Outcome                   string   `json:"outcome,omitempty"`
-	ResponseID                string   `json:"response_id,omitempty"`
-	Status                    string   `json:"status,omitempty"`
-	FinishReason              string   `json:"finish_reason,omitempty"`
-	Tool                      string   `json:"tool,omitempty"`
-	DurationMs                int      `json:"duration_ms,omitempty"`
-	Attempts                  int      `json:"attempts,omitempty"`
-	HTTPStatus                int      `json:"http_status,omitempty"`
-	UsageReported             bool     `json:"usage_reported,omitempty"`
-	InputTokens               int      `json:"input_tokens,omitempty"`
-	CachedInputTokens         int      `json:"cached_input_tokens,omitempty"`
-	OutputTokens              int      `json:"output_tokens,omitempty"`
-	ReasoningTokens           int      `json:"reasoning_tokens,omitempty"`
-	EstimatedPromptTokens     int      `json:"estimated_prompt_tokens,omitempty"`
-	ContextLimitTokens        int      `json:"context_limit_tokens,omitempty"`
-	ReservedTokens            int      `json:"reserved_tokens,omitempty"`
-	MessageCount              int      `json:"message_count,omitempty"`
-	ModelCallCount            int      `json:"model_call_count,omitempty"`
-	ToolCallCount             int      `json:"tool_call_count,omitempty"`
-	CandidateCount            int      `json:"candidate_count,omitempty"`
-	ValidCount                int      `json:"valid_count,omitempty"`
-	UniqueCandidateCount      int      `json:"unique_candidate_count,omitempty"`
-	IncompleteCount           int      `json:"incomplete_count,omitempty"`
-	ContractLikeRejectedCount int      `json:"contract_like_rejected_count,omitempty"`
-	ScanTruncated             bool     `json:"scan_truncated,omitempty"`
-	Bytes                     int      `json:"bytes,omitempty"`
-	Elided                    int      `json:"elided,omitempty"`
-	Retry                     int      `json:"retry,omitempty"`
-	IssueCount                int      `json:"issue_count,omitempty"`
-	CritiquePunts             int      `json:"critique_punts,omitempty"`
-	CritiqueUnread            int      `json:"critique_unread,omitempty"`
-	CritiqueCitations         int      `json:"critique_citations,omitempty"`
-	CritiqueSkills            int      `json:"critique_skills,omitempty"`
-	CritiqueGroups            int      `json:"critique_groups,omitempty"`
-	CritiqueTransient         int      `json:"critique_transient,omitempty"`
-	CritiqueRules             []string `json:"critique_rules,omitempty"`
-	CritiqueHardRules         []string `json:"critique_hard_rules,omitempty"`
-	CritiqueSoftRules         []string `json:"critique_soft_rules,omitempty"`
-	CacheRejectionReason      string   `json:"cache_rejection_reason,omitempty"`
-	RetryAdmitted             bool     `json:"retry_admitted,omitempty"`
-	RetryDeniedReason         string   `json:"retry_denied_reason,omitempty"`
-	InitialIssueCount         int      `json:"initial_issue_count,omitempty"`
-	RevisedIssueCount         int      `json:"revised_issue_count,omitempty"`
-	NewEvidenceReads          int      `json:"new_evidence_reads,omitempty"`
-	RootCauseChanged          bool     `json:"root_cause_changed,omitempty"`
-	SelectedAttempt           int      `json:"selected_attempt,omitempty"`
-	RetryDurationMs           int      `json:"retry_duration_ms,omitempty"`
-	RemainingTimeMs           int      `json:"remaining_time_ms,omitempty"`
-	ErrorCode                 string   `json:"error_code,omitempty"`
-	ValidationCode            string   `json:"validation_code,omitempty"`
+	Sequence                  int                 `json:"sequence"`
+	ElapsedMs                 int                 `json:"elapsed_ms"`
+	Kind                      string              `json:"kind"`
+	Outcome                   string              `json:"outcome,omitempty"`
+	ResponseID                string              `json:"response_id,omitempty"`
+	Status                    string              `json:"status,omitempty"`
+	FinishReason              string              `json:"finish_reason,omitempty"`
+	Tool                      string              `json:"tool,omitempty"`
+	DurationMs                int                 `json:"duration_ms,omitempty"`
+	Attempts                  int                 `json:"attempts,omitempty"`
+	HTTPStatus                int                 `json:"http_status,omitempty"`
+	UsageReported             bool                `json:"usage_reported,omitempty"`
+	InputTokens               int                 `json:"input_tokens,omitempty"`
+	CachedInputTokens         int                 `json:"cached_input_tokens,omitempty"`
+	OutputTokens              int                 `json:"output_tokens,omitempty"`
+	ReasoningTokens           int                 `json:"reasoning_tokens,omitempty"`
+	EstimatedPromptTokens     int                 `json:"estimated_prompt_tokens,omitempty"`
+	ContextLimitTokens        int                 `json:"context_limit_tokens,omitempty"`
+	ReservedTokens            int                 `json:"reserved_tokens,omitempty"`
+	MessageCount              int                 `json:"message_count,omitempty"`
+	ModelCallCount            int                 `json:"model_call_count,omitempty"`
+	ToolCallCount             int                 `json:"tool_call_count,omitempty"`
+	CandidateCount            int                 `json:"candidate_count,omitempty"`
+	ValidCount                int                 `json:"valid_count,omitempty"`
+	UniqueCandidateCount      int                 `json:"unique_candidate_count,omitempty"`
+	IncompleteCount           int                 `json:"incomplete_count,omitempty"`
+	ContractLikeRejectedCount int                 `json:"contract_like_rejected_count,omitempty"`
+	ScanTruncated             bool                `json:"scan_truncated,omitempty"`
+	Bytes                     int                 `json:"bytes,omitempty"`
+	Elided                    int                 `json:"elided,omitempty"`
+	Retry                     int                 `json:"retry,omitempty"`
+	IssueCount                int                 `json:"issue_count,omitempty"`
+	CritiquePunts             int                 `json:"critique_punts,omitempty"`
+	CritiqueUnread            int                 `json:"critique_unread,omitempty"`
+	CritiqueCitations         int                 `json:"critique_citations,omitempty"`
+	CritiqueSkills            int                 `json:"critique_skills,omitempty"`
+	CritiqueGroups            int                 `json:"critique_groups,omitempty"`
+	CritiqueTransient         int                 `json:"critique_transient,omitempty"`
+	CritiqueRules             []string            `json:"critique_rules,omitempty"`
+	CritiqueHardRules         []string            `json:"critique_hard_rules,omitempty"`
+	CritiqueSoftRules         []string            `json:"critique_soft_rules,omitempty"`
+	CacheRejectionReason      string              `json:"cache_rejection_reason,omitempty"`
+	DraftDecision             *DraftDecisionTrace `json:"draft_decision,omitempty"`
+	RetryAdmitted             bool                `json:"retry_admitted,omitempty"`
+	RetryDeniedReason         string              `json:"retry_denied_reason,omitempty"`
+	InitialIssueCount         int                 `json:"initial_issue_count,omitempty"`
+	RevisedIssueCount         int                 `json:"revised_issue_count,omitempty"`
+	NewEvidenceReads          int                 `json:"new_evidence_reads,omitempty"`
+	RootCauseChanged          bool                `json:"root_cause_changed,omitempty"`
+	SelectedAttempt           int                 `json:"selected_attempt,omitempty"`
+	RetryDurationMs           int                 `json:"retry_duration_ms,omitempty"`
+	RemainingTimeMs           int                 `json:"remaining_time_ms,omitempty"`
+	ErrorCode                 string              `json:"error_code,omitempty"`
+	ValidationCode            string              `json:"validation_code,omitempty"`
 }
 
 // TraceMetadata identifies one analysis without model or endpoint details.
@@ -241,6 +271,20 @@ func (s *TraceSession) Record(event TraceEvent) {
 	}
 	if event.ValidationCode != "" {
 		event.ValidationCode = traceCode(event.ValidationCode)
+	}
+	if event.DraftDecision != nil {
+		decision := *event.DraftDecision
+		decision.Target = traceCode(decision.Target)
+		decision.ReplacementReason = traceCode(decision.ReplacementReason)
+		decision.CurrentRawHardRules = append([]string(nil), decision.CurrentRawHardRules...)
+		decision.CandidateRawHardRules = append([]string(nil), decision.CandidateRawHardRules...)
+		decision.CurrentRawSoftRules = append([]string(nil), decision.CurrentRawSoftRules...)
+		decision.CandidateRawSoftRules = append([]string(nil), decision.CandidateRawSoftRules...)
+		decision.CurrentPublishedHardRules = append([]string(nil), decision.CurrentPublishedHardRules...)
+		decision.CandidatePublishedHardRules = append([]string(nil), decision.CandidatePublishedHardRules...)
+		decision.CurrentPublishedSoftRules = append([]string(nil), decision.CurrentPublishedSoftRules...)
+		decision.CandidatePublishedSoftRules = append([]string(nil), decision.CandidatePublishedSoftRules...)
+		event.DraftDecision = &decision
 	}
 	s.trace.Events = append(s.trace.Events, event)
 }
