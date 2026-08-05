@@ -1,9 +1,6 @@
-// Package runtime is the swappable agent-execution abstraction for the engine.
-// A Runtime materializes a workspace and runs a command in it, isolated from the
-// caller. LocalRuntime (a temp clone plus os/exec) ships first and needs no
-// cluster dependency; a SandboxRuntime backed by kubernetes-sigs/agent-sandbox
-// can be added later behind the same interface for stronger isolation and
-// per-session reuse.
+// Package runtime is the swappable execution abstraction for the engine.
+// A Runtime materializes a disposable workspace and runs a command in it.
+// Backends define their own process isolation and cleanup guarantees.
 //
 // The first consumer is fix-PR verification: build and vet a proposed change
 // against the real repository before the PR is opened. The batch fetcher stays
@@ -67,8 +64,8 @@ type Result struct {
 // Passed reports whether the command exited zero and did not time out.
 func (r Result) Passed() bool { return r.ExitCode == 0 && !r.TimedOut }
 
-// Runtime materializes a workspace and runs one command in it. Implementations
-// must isolate the workspace from the caller and tear it down before returning.
+// Runtime materializes a disposable workspace, runs one command in it, and
+// tears the workspace down before returning.
 type Runtime interface {
 	Run(ctx context.Context, spec Spec) (Result, error)
 }

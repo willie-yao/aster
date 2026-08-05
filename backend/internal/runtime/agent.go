@@ -6,11 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -51,6 +52,9 @@ type GenerateSpec struct {
 	MaxTurns int
 	// AllowBash lets the agent run shell commands (build, tests) while fixing.
 	AllowBash bool
+	// NetworkDomains are additional outbound destinations required by the task.
+	// The custom endpoint host is added automatically.
+	NetworkDomains []string
 	// Timeout bounds the whole run (clone plus agent). Zero uses defaultTimeout.
 	Timeout time.Duration
 	// ExecutionID scopes externally managed work to one action request.
@@ -83,10 +87,9 @@ type GenerateResult struct {
 	Output string
 }
 
-// AgentRuntime materializes a workspace and runs a coding agent that edits it,
-// returning the changed files. Implementations isolate the workspace from the
-// caller and tear it down before returning, mirroring Runtime. LocalAgentRuntime
-// ships first; a pod-backed impl can be added later behind this interface.
+// AgentRuntime materializes a disposable workspace and runs a coding agent that
+// edits it, returning the changed files. Each backend defines its own process
+// isolation and tears down the workspace before returning.
 type AgentRuntime interface {
 	Generate(ctx context.Context, spec GenerateSpec) (GenerateResult, error)
 }
@@ -97,23 +100,24 @@ type ManagedAgentRuntime interface {
 	Cleanup(context.Context, WorkRef) error
 }
 
-// LocalAgentRuntime runs a coding-agent CLI on the local host: it shallow-clones
-// the repo into a temp directory, runs the CLI against the model endpoint with
-// an isolated config, and returns the files the agent changed. It provides no
-// isolation beyond a scratch directory, so it suits a trusted CI host; a
-// pod-backed AgentRuntime is the path to isolated execution at scale. Returns
-// ErrUnavailable when git or the CLI binary is not on PATH.
+// LocalAgentRuntime shallow-clones a repository into temporary directories,
+// runs a coding-agent CLI through ProcessSandbox, and returns the changed files.
+// The default process backend preserves the existing local behavior and does
+// not provide OS isolation. Returns ErrUnavailable when git or the CLI binary
+// is not on PATH.
 type LocalAgentRuntime struct {
 	// Bin is the coding-agent CLI. Defaults to "opencode".
 	Bin string
-	// buildCmd constructs the CLI invocation in workdir with an isolated home.
+	// Sandbox constructs the agent process. It is required.
+	Sandbox ProcessSandbox
+	// buildSpec constructs the CLI invocation and resource policy.
 	// Overridable in tests; nil uses the opencode builder.
-	buildCmd func(ctx context.Context, spec GenerateSpec, workdir, home string) (*exec.Cmd, error)
+	buildSpec func(ctx context.Context, spec GenerateSpec, workdir, home, temp string) (SandboxSpec, error)
 }
 
 // NewLocalAgent returns a LocalAgentRuntime driving the opencode CLI.
 func NewLocalAgent() *LocalAgentRuntime {
-	return &LocalAgentRuntime{Bin: "opencode"}
+	return &LocalAgentRuntime{Bin: "opencode", Sandbox: directProcessSandbox{}}
 }
 
 // Generate materializes spec.Repo, runs the coding agent against it, and returns
@@ -138,12 +142,16 @@ func (r *LocalAgentRuntime) Generate(ctx context.Context, spec GenerateSpec) (Ge
 	if _, err := exec.LookPath("git"); err != nil {
 		return GenerateResult{}, fmt.Errorf("%w: git not found", ErrUnavailable)
 	}
-	build := r.buildCmd
+	if r.Sandbox == nil {
+		return GenerateResult{}, fmt.Errorf("runtime: process sandbox is required")
+	}
+	build := r.buildSpec
 	if build == nil {
-		build = opencodeCmd(bin)
-		if _, err := exec.LookPath(bin); err != nil {
+		resolvedBin, err := exec.LookPath(bin)
+		if err != nil {
 			return GenerateResult{}, fmt.Errorf("%w: %s not found", ErrUnavailable, bin)
 		}
+		build = opencodeSandboxSpec(resolvedBin)
 	}
 
 	timeout := spec.Timeout
@@ -163,6 +171,11 @@ func (r *LocalAgentRuntime) Generate(ctx context.Context, spec GenerateSpec) (Ge
 		return GenerateResult{}, fmt.Errorf("runtime: temp home: %w", err)
 	}
 	defer os.RemoveAll(home)
+	temp, err := os.MkdirTemp("", "pad-agent-tmp-*")
+	if err != nil {
+		return GenerateResult{}, fmt.Errorf("runtime: temp runtime dir: %w", err)
+	}
+	defer os.RemoveAll(temp)
 
 	if err := materialize(ctx, work, spec.Repo); err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
@@ -171,7 +184,11 @@ func (r *LocalAgentRuntime) Generate(ctx context.Context, spec GenerateSpec) (Ge
 		return GenerateResult{}, err
 	}
 
-	cmd, err := build(ctx, spec, work, home)
+	processSpec, err := build(ctx, spec, work, home, temp)
+	if err != nil {
+		return GenerateResult{}, err
+	}
+	cmd, err := r.Sandbox.Command(ctx, processSpec)
 	if err != nil {
 		return GenerateResult{}, err
 	}
@@ -252,62 +269,113 @@ func gitOut(ctx context.Context, dir string, args ...string) (string, error) {
 	return out.String(), nil
 }
 
-// opencodeCmd returns a buildCmd that runs the opencode CLI in non-interactive
-// mode against the spec's model endpoint. Provider config is written to an
-// isolated home so it never lands in the workspace or the resulting diff.
-func opencodeCmd(bin string) func(ctx context.Context, spec GenerateSpec, workdir, home string) (*exec.Cmd, error) {
-	return func(ctx context.Context, spec GenerateSpec, workdir, home string) (*exec.Cmd, error) {
+// opencodeSandboxSpec builds a non-interactive OpenCode invocation and its
+// process resource policy. Provider config stays outside the workspace diff.
+func opencodeSandboxSpec(bin string) func(context.Context, GenerateSpec, string, string, string) (SandboxSpec, error) {
+	return func(_ context.Context, spec GenerateSpec, workdir, home, temp string) (SandboxSpec, error) {
 		if spec.UseAmbientAuth {
 			if err := writeOpencodeAuth(home, spec.NativeModel); err != nil {
-				return nil, err
+				return SandboxSpec{}, err
 			}
 		}
 		if err := writeOpencodeSkills(home, spec.Skills); err != nil {
-			return nil, err
+			return SandboxSpec{}, err
 		}
 		if err := writeOpencodeConfig(home, spec); err != nil {
-			return nil, err
+			return SandboxSpec{}, err
 		}
 		// --dir pins opencode's project root to the clone. opencode's `run` can
-		// otherwise attach to an ambient server and ignore the process cwd,
-		// writing edits outside the workspace.
-		args := []string{"run", "--dir", workdir, "--format", "json", "--agent", "build"}
+		// otherwise attach to an ambient server and ignore the process cwd.
+		args := []string{bin, "run", "--dir", workdir, "--format", "json", "--agent", "build"}
 		if spec.NativeModel != "" {
 			args = append(args, "--model", spec.NativeModel)
 		} else if spec.Model != "" {
 			args = append(args, "--model", "engine/"+spec.Model)
 		}
 		args = append(args, spec.Instruction)
-		cmd := exec.CommandContext(ctx, bin, args...)
-		cmd.Dir = workdir
-		cmd.Env = isolatedOpencodeEnv(home)
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-		cmd.WaitDelay = waitDelay
-		cmd.Cancel = func() error {
-			if cmd.Process != nil {
-				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-			}
-			return os.ErrProcessDone
+		networkDomains, err := opencodeNetworkDomains(spec)
+		if err != nil {
+			return SandboxSpec{}, err
 		}
-		return cmd, nil
+		return SandboxSpec{
+			Command:        args,
+			WorkDir:        workdir,
+			HomeDir:        home,
+			TempDir:        temp,
+			Environment:    isolatedOpencodeEnv(home, temp),
+			ReadPaths:      opencodeReadPaths(bin, workdir, home, temp),
+			WritePaths:     []string{workdir, home, temp},
+			NetworkDomains: networkDomains,
+		}, nil
 	}
 }
 
-func isolatedOpencodeEnv(home string) []string {
-	env := make([]string, 0, len(os.Environ())+9)
-	for _, entry := range os.Environ() {
-		name, _, ok := strings.Cut(entry, "=")
-		if !ok || strings.HasPrefix(name, "OPENCODE_") {
+func opencodeReadPaths(bin, workdir, home, temp string) []string {
+	paths := []string{workdir, home, temp, bin}
+	if resolved, err := filepath.EvalSymlinks(bin); err == nil && resolved != bin {
+		paths = append(paths, resolved)
+	}
+	for _, name := range []string{"SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS"} {
+		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+			paths = append(paths, value)
+		}
+	}
+	for _, value := range filepath.SplitList(os.Getenv("SSL_CERT_DIR")) {
+		if value = strings.TrimSpace(value); value != "" {
+			paths = append(paths, value)
+		}
+	}
+	return uniqueStrings(paths)
+}
+
+func opencodeNetworkDomains(spec GenerateSpec) ([]string, error) {
+	domains := append([]string(nil), spec.NetworkDomains...)
+	if strings.TrimSpace(spec.Endpoint) == "" {
+		return uniqueStrings(domains), nil
+	}
+	endpoint, err := url.Parse(spec.Endpoint)
+	if err != nil || endpoint.Scheme == "" || endpoint.Hostname() == "" {
+		return nil, fmt.Errorf("runtime: invalid model endpoint")
+	}
+	host := endpoint.Hostname()
+	if port := endpoint.Port(); port != "" {
+		host = net.JoinHostPort(host, port)
+	}
+	return uniqueStrings(append(domains, host)), nil
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value == "" {
 			continue
 		}
-		switch name {
-		case "HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME":
+		if _, ok := seen[value]; ok {
 			continue
 		}
-		env = append(env, entry)
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func isolatedOpencodeEnv(home, temp string) []string {
+	env := make([]string, 0, 16)
+	for _, name := range []string{
+		"PATH",
+		"LANG", "LC_ALL", "LC_CTYPE",
+		"SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS",
+	} {
+		if value, ok := os.LookupEnv(name); ok && value != "" {
+			env = append(env, name+"="+value)
+		}
 	}
 	return append(env,
 		"HOME="+home,
+		"TMPDIR="+temp,
+		"TMP="+temp,
+		"TEMP="+temp,
 		"XDG_CONFIG_HOME="+filepath.Join(home, ".config"),
 		"XDG_DATA_HOME="+filepath.Join(home, ".local", "share"),
 		"XDG_CACHE_HOME="+filepath.Join(home, ".cache"),
