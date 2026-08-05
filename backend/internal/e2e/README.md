@@ -68,7 +68,10 @@ reasons, the hashed cache generation, zero-request cache reload results, and
 content-free draft metadata. Draft metadata contains stable critique rule IDs,
 matched skill IDs, applicable missing or unavailable evidence-group IDs, and the
 selected attempt. It records both raw findings and the findings that survive
-deterministic publication sanitization. It does not contain draft text.
+deterministic publication sanitization. It also records every best/fallback
+replacement decision with evidence revisions, strict-dominance state, and a
+stable acceptance or rejection reason. Decision events displace older ordinary
+trace events if the per-analysis cap is full. It does not contain draft text.
 
 Human review uses rubric version 1 with five dimensions scored from 0 to 2:
 diagnosis, artifact evidence, claim discipline, remediation, and source

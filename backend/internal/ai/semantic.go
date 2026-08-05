@@ -172,23 +172,27 @@ func (c *Client) applySemanticJudgePostLoop(ctx context.Context, state *agentSta
 		}
 	}
 	candidate := state.newDraftCandidate("semantic_retry", revised, revisedProviderItems, rp, out)
-	currentRawQuality := critiqueQualityFor(state.currentCritiqueOutcome(state.bestDraft.parsed))
-	state.bestDraft.rawQuality = currentRawQuality
-	if critiqueHardRegression(candidate.rawQuality, currentRawQuality) || !critiqueQualityAcceptedForPolicy(candidate.quality, policy) {
+	decision := state.considerDraftDecisionForPolicy(candidate, true, policy)
+	if !decision.accepted && semanticRevisionRejected(decision, candidate, policy) {
 		state.judgeRevisionRejected = true
 		recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Outcome: "revision_rejected", IssueCount: len(out.Matches())})
 		log.Printf("  ✗ semantic judge (post-loop): %d objection(s); revised draft failed critique %v, keeping original", len(objs), out.Matches())
 		return state.bestDraft.parsed
 	}
-	state.considerFallbackDraft(candidate, true)
-	selected := state.considerDraft(candidate, true)
-	if !selected {
+	if !decision.accepted {
 		recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Outcome: "revision_not_selected", IssueCount: len(objs)})
 		log.Printf("  ✗ semantic judge (post-loop): %d objection(s); refinalized draft was not better, keeping original", len(objs))
 		return state.bestDraft.parsed
 	}
+	state.considerFallbackDraftForPolicy(candidate, true, policy)
 	state.judgeRevised = true
 	recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Outcome: "revised", IssueCount: len(objs)})
 	log.Printf("  ✗ semantic judge (post-loop): %d objection(s); accepted refinalized draft", len(objs))
 	return state.bestDraft.parsed
+}
+
+func semanticRevisionRejected(decision draftReplacementDecision, candidate *critiqueDraftCandidate, policy CritiqueCachePolicy) bool {
+	return decision.reason == draftReasonCandidatePublishedHard ||
+		decision.reason == draftReasonCandidateSemanticRegression ||
+		!critiqueQualityAcceptedForPolicy(candidate.quality, policy)
 }

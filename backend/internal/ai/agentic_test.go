@@ -1646,14 +1646,167 @@ func TestConsiderDraftRefreshesSelectedPublishedQuality(t *testing.T) {
 	}
 	parsed := analysisResponse{Summary: "same", RootCause: "same cause", SuggestedFix: "Apply the fix."}
 	state.bestDraft = &critiqueDraftCandidate{
-		parsed: parsed, attempt: 1, quality: critiqueQuality{MissingEvidenceCount: 1},
+		parsed: parsed, attempt: 1, evidenceRevision: 1, quality: critiqueQuality{MissingEvidenceCount: 1},
 	}
-	candidate := &critiqueDraftCandidate{parsed: parsed, attempt: 2, quality: critiqueQuality{Passed: true}}
+	candidate := &critiqueDraftCandidate{parsed: parsed, attempt: 2, evidenceRevision: 2, quality: critiqueQuality{Passed: true}}
 	if state.considerDraft(candidate, false) {
 		t.Fatal("later draft replaced an earlier draft after refreshed quality became equal")
 	}
 	if state.bestDraft.attempt != 1 || !state.bestDraft.quality.Passed || state.bestDraft.quality.MissingEvidenceCount != 0 {
 		t.Fatalf("selected draft was not refreshed: %+v", state.bestDraft)
+	}
+}
+
+func TestAzureEvidenceBackedRepairUsesHistoricalPublishedQuality(t *testing.T) {
+	var currentRecipe strings.Builder
+	currentRecipe.WriteString("id: current-diagnosis\ntriggers: [\"current diagnosis\"]\nrequired_evidence:\n")
+	var candidateRecipe strings.Builder
+	candidateRecipe.WriteString("id: candidate-diagnosis\ntriggers: [\"candidate diagnosis\"]\nrequired_evidence:\n")
+	var paths []string
+	for i := 1; i <= 9; i++ {
+		fmt.Fprintf(&currentRecipe, "  - id: current-%d\n    any_of: [\"^current-%d\\\\.log$\"]\n", i, i)
+		paths = append(paths, fmt.Sprintf("current-%d.log", i))
+	}
+	for i := 1; i <= 7; i++ {
+		fmt.Fprintf(&candidateRecipe, "  - id: candidate-%d\n    any_of: [\"^candidate-%d\\\\.log$\"]\n", i, i)
+		paths = append(paths, fmt.Sprintf("candidate-%d.log", i))
+	}
+	set := loadAgenticSkillsForTest(t, map[string]string{
+		"current":   currentRecipe.String(),
+		"candidate": candidateRecipe.String(),
+	})
+	state := &agentState{
+		opts:                  AgenticOptions{CritiqueCachePolicy: CritiqueCachePolicyHard},
+		skillSet:              set,
+		readArtifactsFull:     map[string]bool{},
+		readArtifactsBase:     map[string]bool{},
+		readSourceFull:        map[string]bool{},
+		evidenceArtifactsFull: map[string]bool{},
+		evidenceContentByPath: map[string][]string{},
+		analysisEvidence:      map[string]*analysisChatEvidence{},
+		initialArtifactTree:   artifactTreeSnapshot{paths: paths},
+		evidenceRevision:      3,
+	}
+	currentParsed := analysisResponse{
+		Summary: "current diagnosis", RootCause: "current diagnosis from the earlier evidence", SuggestedFix: "Check the controller.",
+	}
+	currentOut := state.currentCritiqueOutcome(currentParsed)
+	current := state.newDraftCandidate("floor_retry", "current", nil, currentParsed, currentOut)
+	if current.quality.HardIssueCount != 0 || current.quality.MissingEvidenceCount != 9 || current.quality.PuntCount != 1 || current.evidenceRevision != 3 {
+		t.Fatalf("initial current quality = %+v revision=%d", current.quality, current.evidenceRevision)
+	}
+	for i := 1; i <= 4; i++ {
+		artifact := fmt.Sprintf("current-%d.log", i)
+		state.recordSuccessfulRead(artifact)
+		state.recordEvidenceRead(artifact)
+	}
+	candidateParsed := analysisResponse{
+		Summary: "candidate diagnosis", RootCause: "candidate diagnosis established by the new evidence", SuggestedFix: "Apply the verified configuration change.",
+	}
+	candidateOut := state.currentCritiqueOutcome(candidateParsed)
+	candidate := state.newDraftCandidate("critique_retry", "candidate", nil, candidateParsed, candidateOut)
+	if candidate.quality.HardIssueCount != 0 || candidate.quality.MissingEvidenceCount != 7 || candidate.quality.PuntCount != 0 || candidate.evidenceRevision != 7 {
+		t.Fatalf("candidate quality = %+v revision=%d", candidate.quality, candidate.evidenceRevision)
+	}
+
+	// Reproduce the old unconditional refresh: the candidate's four reads make
+	// the earlier draft look like missing=5, creating a crossed soft tradeoff.
+	historicalQuality := current.quality
+	state.refreshPublishedDraftQuality(current)
+	if current.quality.MissingEvidenceCount != 5 || current.quality.PuntCount != 1 {
+		t.Fatalf("refreshed current quality = %+v, want missing=5 punt=1", current.quality)
+	}
+	oldDecision := decideDraftReplacement(current, candidate, false, CritiqueCachePolicyHard)
+	if oldDecision.accepted || oldDecision.reason != draftReasonCandidateNotBetter {
+		t.Fatalf("old decision = %+v, want candidate_not_strictly_better", oldDecision)
+	}
+
+	current.quality = historicalQuality
+	current.evidenceRevision = 3
+	state.bestDraft = current
+	store := NewTraceStore()
+	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "azure-selection", APIMode: APIChatCompletions})
+	state.traceCtx = withAnalysisTrace(context.Background(), trace)
+	decision := state.considerDraftDecision(candidate, false)
+	trace.Finish("success", nil)
+	if !decision.accepted || decision.reason != draftReasonCandidatePublishedDominates || !decision.publishedStrictDominance || decision.currentQualityRefreshed {
+		t.Fatalf("fixed decision = %+v", decision)
+	}
+	if state.bestDraft.attempt != candidate.attempt {
+		t.Fatalf("selected attempt = %d, want %d", state.bestDraft.attempt, candidate.attempt)
+	}
+	var found *DraftDecisionTrace
+	for _, event := range store.Snapshot().Traces[0].Events {
+		if event.Kind == "draft_selection" && event.Status == "best" && event.DraftDecision != nil {
+			found = event.DraftDecision
+		}
+	}
+	if found == nil || found.CurrentPublishedMissingGroups != 9 || found.CandidatePublishedMissingGroups != 7 ||
+		found.CurrentPublishedPunts != 1 || found.CandidatePublishedPunts != 0 || found.CurrentEvidenceRevision != 3 ||
+		found.CandidateEvidenceRevision != 7 || !found.RootCauseMateriallyChanged || !found.PublishedStrictDominance ||
+		!found.ReplacementAccepted || found.ReplacementReason != draftReasonCandidatePublishedDominates {
+		t.Fatalf("decision trace = %+v", found)
+	}
+}
+
+func TestDraftReplacementReasons(t *testing.T) {
+	hardUnread := []string{"citation.unread"}
+	for _, tc := range []struct {
+		name      string
+		current   *critiqueDraftCandidate
+		candidate *critiqueDraftCandidate
+		semantic  bool
+		want      string
+	}{
+		{
+			name: "published hard failure", current: &critiqueDraftCandidate{quality: critiqueQuality{}, parsed: analysisResponse{RootCause: "same"}},
+			candidate: &critiqueDraftCandidate{quality: critiqueQuality{HardRules: hardUnread, HardIssueCount: 1}, parsed: analysisResponse{RootCause: "same"}},
+			want:      draftReasonCandidatePublishedHard,
+		},
+		{
+			name: "raw semantic regression", current: &critiqueDraftCandidate{rawQuality: critiqueQuality{}, quality: critiqueQuality{}, parsed: analysisResponse{RootCause: "same"}},
+			candidate: &critiqueDraftCandidate{
+				rawQuality: critiqueQuality{HardRules: hardUnread, HardIssueCount: 1},
+				quality:    critiqueQuality{HardRules: hardUnread, HardIssueCount: 1},
+				parsed:     analysisResponse{RootCause: "same"},
+			},
+			semantic: true, want: draftReasonCandidateSemanticRegression,
+		},
+		{
+			name: "sanitized raw semantic finding can dominate", current: &critiqueDraftCandidate{rawQuality: critiqueQuality{}, quality: critiqueQuality{MissingEvidenceCount: 2}, evidenceRevision: 1, parsed: analysisResponse{RootCause: "same"}},
+			candidate: &critiqueDraftCandidate{rawQuality: critiqueQuality{HardRules: hardUnread, HardIssueCount: 1}, quality: critiqueQuality{MissingEvidenceCount: 1}, evidenceRevision: 2, parsed: analysisResponse{RootCause: "same"}},
+			semantic:  true, want: draftReasonCandidatePublishedDominates,
+		},
+		{
+			name: "evidence-backed equal-quality root change", current: &critiqueDraftCandidate{quality: critiqueQuality{MissingEvidenceCount: 1}, evidenceRevision: 1, parsed: analysisResponse{RootCause: "old cause"}},
+			candidate: &critiqueDraftCandidate{quality: critiqueQuality{MissingEvidenceCount: 1}, evidenceRevision: 2, parsed: analysisResponse{RootCause: "new cause"}},
+			want:      draftReasonCandidateEvidenceBackedRoot,
+		},
+		{
+			name: "root change without evidence", current: &critiqueDraftCandidate{quality: critiqueQuality{MissingEvidenceCount: 2}, evidenceRevision: 1, parsed: analysisResponse{RootCause: "old cause"}},
+			candidate: &critiqueDraftCandidate{quality: critiqueQuality{MissingEvidenceCount: 1}, evidenceRevision: 1, parsed: analysisResponse{RootCause: "new cause"}},
+			want:      draftReasonCandidateRootWithoutEvidence,
+		},
+		{
+			name: "tie", current: &critiqueDraftCandidate{quality: critiqueQuality{}, evidenceRevision: 1, parsed: analysisResponse{RootCause: "same"}},
+			candidate: &critiqueDraftCandidate{quality: critiqueQuality{}, evidenceRevision: 1, parsed: analysisResponse{RootCause: "same"}},
+			want:      draftReasonTiePreservesEarlier,
+		},
+		{
+			name: "sanitized raw finding can dominate", current: &critiqueDraftCandidate{quality: critiqueQuality{MissingEvidenceCount: 2}, evidenceRevision: 1, parsed: analysisResponse{RootCause: "same"}},
+			candidate: &critiqueDraftCandidate{rawQuality: critiqueQuality{HardRules: hardUnread, HardIssueCount: 1}, quality: critiqueQuality{MissingEvidenceCount: 1}, evidenceRevision: 2, parsed: analysisResponse{RootCause: "same"}},
+			want:      draftReasonCandidatePublishedDominates,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			decision := decideDraftReplacement(tc.current, tc.candidate, tc.semantic, CritiqueCachePolicyHard)
+			if decision.reason != tc.want {
+				t.Fatalf("reason = %q, want %q; decision=%+v", decision.reason, tc.want, decision)
+			}
+			if tc.want == draftReasonCandidateEvidenceBackedRoot && (!decision.accepted || decision.publishedStrictDominance) {
+				t.Fatalf("evidence-backed decision = %+v, want accepted without strict dominance", decision)
+			}
+		})
 	}
 }
 
@@ -3949,6 +4102,54 @@ func TestCritiqueTraceEventCountsDoNotPersistContent(t *testing.T) {
 	if strings.Contains(string(encoded), private) {
 		t.Fatalf("critique trace leaked private content: %s", encoded)
 	}
+}
+
+func TestDraftDecisionTraceDoesNotPersistDraftContent(t *testing.T) {
+	const private = "PRIVATE_DRAFT_DECISION_SENTINEL"
+	store := NewTraceStore()
+	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIChatCompletions})
+	state := &agentState{
+		opts:     AgenticOptions{CritiqueCachePolicy: CritiqueCachePolicyHard},
+		traceCtx: withAnalysisTrace(context.Background(), trace),
+		bestDraft: &critiqueDraftCandidate{
+			attempt: 1, evidenceRevision: 1, parsed: analysisResponse{RootCause: private},
+			quality: critiqueQuality{SoftRules: []string{"remediation.punt"}, PuntCount: 1},
+		},
+	}
+	candidate := &critiqueDraftCandidate{
+		attempt: 2, evidenceRevision: 2, parsed: analysisResponse{RootCause: private + " changed"},
+		quality: critiqueQuality{SoftRules: []string{"evidence.available_unread"}, MissingEvidenceCount: 1},
+	}
+	state.considerDraftDecision(candidate, false)
+	trace.Finish("success", nil)
+	encoded, err := json.Marshal(store.Snapshot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), private) {
+		t.Fatalf("draft decision trace leaked draft content: %s", encoded)
+	}
+}
+
+func TestPromoteFallbackDraftRecordsReason(t *testing.T) {
+	store := NewTraceStore()
+	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIChatCompletions})
+	state := &agentState{
+		traceCtx:      withAnalysisTrace(context.Background(), trace),
+		bestDraft:     &critiqueDraftCandidate{attempt: 1},
+		fallbackDraft: &critiqueDraftCandidate{attempt: 2},
+	}
+	state.promoteFallbackDraft()
+	trace.Finish("success", nil)
+	for _, event := range store.Snapshot().Traces[0].Events {
+		if event.Kind == "draft_selection" && event.DraftDecision != nil && event.DraftDecision.ReplacementReason == draftReasonFallbackPromoted {
+			if !event.DraftDecision.ReplacementAccepted || event.DraftDecision.CurrentAttempt != 1 || event.DraftDecision.CandidateAttempt != 2 {
+				t.Fatalf("fallback decision = %+v", event.DraftDecision)
+			}
+			return
+		}
+	}
+	t.Fatal("fallback promotion decision was not traced")
 }
 
 func TestAgenticCritiqueObjectedTraceCarriesCategoryCounts(t *testing.T) {

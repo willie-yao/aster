@@ -37,6 +37,40 @@ func TestTraceStoreBoundsAndRedacts(t *testing.T) {
 	}
 }
 
+func TestTraceStoreRetainsDraftDecisionsAtEventCap(t *testing.T) {
+	store := NewTraceStore()
+	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIChatCompletions})
+	for i := 0; i < analysisTraceMaxEvents; i++ {
+		trace.Record(TraceEvent{Kind: "model_request"})
+	}
+	for i, reason := range []string{draftReasonCandidateNotBetter, draftReasonFallbackPromoted} {
+		trace.Record(TraceEvent{
+			Kind: "draft_selection",
+			DraftDecision: &DraftDecisionTrace{
+				CandidateAttempt: i + 1, ReplacementReason: reason,
+			},
+		})
+	}
+	trace.Finish("success", nil)
+
+	got := store.Snapshot().Traces[0]
+	if !got.Truncated || len(got.Events) != analysisTraceMaxEvents {
+		t.Fatalf("trace bounds = truncated:%v events:%d", got.Truncated, len(got.Events))
+	}
+	var decisions []TraceEvent
+	for _, event := range got.Events {
+		if event.Kind == "draft_selection" {
+			decisions = append(decisions, event)
+		}
+	}
+	if len(decisions) != 2 || decisions[0].DraftDecision == nil || decisions[1].DraftDecision == nil ||
+		decisions[0].DraftDecision.ReplacementReason != draftReasonCandidateNotBetter ||
+		decisions[1].DraftDecision.ReplacementReason != draftReasonFallbackPromoted ||
+		decisions[0].Sequence != analysisTraceMaxEvents-1 || decisions[1].Sequence != analysisTraceMaxEvents {
+		t.Fatalf("retained decisions = %+v", decisions)
+	}
+}
+
 func TestTraceErrorCodeDoesNotPersistProviderBody(t *testing.T) {
 	err := errors.New(`responses status "incomplete": {"prompt":"private prompt","arguments":"secret"}`)
 	if got := traceErrorCode(err); got != "provider_status" || strings.Contains(got, "private") {

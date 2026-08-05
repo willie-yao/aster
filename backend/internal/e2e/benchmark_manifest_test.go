@@ -212,6 +212,7 @@ type benchmarkJSONLResult struct {
 	MissingMust             []string                   `json:"missing_must,omitempty"`
 	SelectedAttempt         int                        `json:"selected_attempt,omitempty"`
 	Drafts                  []benchmarkJSONLDraft      `json:"drafts,omitempty"`
+	DraftDecisions          []ai.DraftDecisionTrace    `json:"draft_decisions,omitempty"`
 	ToolNames               []string                   `json:"tool_names,omitempty"`
 	ToolCounts              []string                   `json:"tool_counts,omitempty"`
 	GCSBytes                int                        `json:"gcs_bytes,omitempty"`
@@ -393,6 +394,10 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 				for _, rule := range event.CritiqueRules {
 					result.Trace.Critique["rule:"+rule]++
 				}
+			case "draft_selection":
+				if event.DraftDecision != nil {
+					result.DraftDecisions = append(result.DraftDecisions, *event.DraftDecision)
+				}
 			}
 		}
 	}
@@ -503,6 +508,12 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 		{Kind: "finalize", Outcome: "empty", ErrorCode: "unexpected_tool_call"},
 		{Kind: "finalize_recovery", Outcome: "retained_draft"},
 		{Kind: "critique", Outcome: "objected", CritiquePunts: 1},
+		{Kind: "draft_selection", Outcome: "accepted", Status: "best", DraftDecision: &ai.DraftDecisionTrace{
+			Target: "best", CurrentAttempt: 1, CandidateAttempt: 2,
+			CurrentPublishedSoftRules: []string{"remediation.punt"}, CandidatePublishedSoftRules: []string{"evidence.available_unread"},
+			CurrentEvidenceRevision: 3, CandidateEvidenceRevision: 7, RootCauseMateriallyChanged: true,
+			PublishedStrictDominance: true, ReplacementAccepted: true, ReplacementReason: "candidate_published_dominates",
+		}},
 	}}}}
 	cacheVerification := benchmarkCacheVerification{
 		PersistenceAttempted: true, PersistenceAccepted: true, CacheSaveSucceeded: true,
@@ -535,6 +546,7 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 		!result.CacheVerification.LookupAccepted || !result.CacheVerification.LookupHit || result.CacheGeneration != "generation" ||
 		result.CritiqueCachePolicy != string(ai.CritiqueCachePolicyHard) ||
 		result.HumanScoreRubricVersion != 1 || result.HumanScoreMax != 10 || len(result.Drafts) != 1 ||
+		len(result.DraftDecisions) != 1 || result.DraftDecisions[0].ReplacementReason != "candidate_published_dominates" ||
 		!slices.Equal(result.HumanScoreDimensions, benchmarkHumanScoreDimensions) ||
 		!slices.Equal(result.Drafts[0].RuleIDs, []string{"remediation.punt"}) || !result.Drafts[0].Selected {
 		t.Fatalf("result=%+v", result)

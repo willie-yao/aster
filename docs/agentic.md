@@ -534,13 +534,22 @@ A candidate must strictly dominate the selected draft:
    available evidence;
 4. without a hard improvement, it must reduce at least one soft dimension;
 5. an equal-quality draft can replace the earlier draft only when new evidence
-   supports a materially changed root cause;
+   supports a materially changed root cause; this is recorded as
+   `candidate_evidence_backed_root_change`, not strict dominance;
 6. crossed tradeoffs and all other exact ties keep the earlier draft.
+
+When later evidence supports the same diagnosis, the engine refreshes the
+earlier draft before comparison so wording-only retries do not win. When new
+evidence drives a materially different diagnosis, the earlier draft keeps the
+published quality it had when emitted. This prevents evidence fetched for the
+new diagnosis from retroactively satisfying the old text.
 
 The tie rule has one semantic-review exception: a revision explicitly driven by
 semantic objections may replace an exactly equal-quality draft so the semantic
-repair can take effect. A semantic revision with a new hard failure is rejected
-before selection.
+repair can take effect. A semantic revision with a new hard failure that remains
+after publication sanitization is rejected before selection. Raw citation and
+source findings removed by that sanitization do not block a published-safe
+revision.
 
 A materially different `root_cause` can replace the selected draft only after
 a new non-empty artifact read or when the semantic review explicitly drove the
@@ -548,6 +557,13 @@ revision. Otherwise the retry may improve wording, citations, and the suggested
 fix, but it cannot silently replace the diagnosis. Formatting-only root-cause
 changes are ignored; diagnosis-token additions, deletions, reordering, and
 negation are material. The selected attempt alone controls cache acceptance.
+
+Every best, fallback, and fallback-promotion decision is retained in the private
+trace with attempt numbers, raw and published hard and soft rule IDs, evidence
+revisions, root-cause-change and semantic-regression flags, strict-dominance
+status, acceptance, and a stable reason. Draft decisions displace older ordinary
+events when the per-analysis event cap is full. Draft text and critique feedback
+are not stored in this decision telemetry.
 
 #### Hallucinated citation check
 
