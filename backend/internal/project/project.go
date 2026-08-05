@@ -812,9 +812,9 @@ type Agentic struct {
 
 	// Critique tunes the always-on deterministic critique gate. MaxRetries
 	// controls bounded repair eligibility, while CachePolicy independently
-	// controls cache reuse. Repair can fetch
-	// cited-but-unread artifacts and inject capped content into feedback. Drafts
-	// that still fail are published but not cached. Recipes under
+	// controls cache reuse. Repair can fetch cited-but-unread artifacts and inject
+	// capped content into feedback. Sanitized drafts are published; CachePolicy
+	// decides whether each published draft is reusable. Recipes under
 	// <project_dir>/skills/*.yaml feed the gate whenever present.
 	Critique AgenticCritique `yaml:"critique,omitempty" json:"critique,omitempty"`
 
