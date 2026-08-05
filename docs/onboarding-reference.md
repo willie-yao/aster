@@ -150,8 +150,9 @@ installs, upgrades, or silently enables it.
 The deployed analysis provider and the one-time prompt-drafting provider are
 separate decisions.
 
-Provider presets can seed the API mode and endpoint for GitHub Copilot, OpenAI,
-NVIDIA, or a custom OpenAI-compatible provider. The model remains explicit
+Provider presets can seed the API mode and endpoint for GitHub Copilot Responses,
+GitHub Copilot Chat Completions, OpenAI, NVIDIA, or a custom OpenAI-compatible
+provider. The model remains explicit
 because model availability depends on the account and endpoint.
 
 The wizard never asks for or stores a token. `AI_TOKEN` authenticates one-time

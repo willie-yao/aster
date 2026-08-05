@@ -13,6 +13,7 @@ func TestAIProviderPresetTable(t *testing.T) {
 		t.Fatalf("validateAIPresetTable: %v", err)
 	}
 	wantOrder := []aiProviderID{
+		aiProviderGitHubCopilotResponses,
 		aiProviderGitHubCopilot,
 		aiProviderOpenAIResponse,
 		aiProviderOpenAIChat,
@@ -34,10 +35,11 @@ func TestAIProviderPresetTable(t *testing.T) {
 		api      string
 		endpoint string
 	}{
-		aiProviderGitHubCopilot:  {project.AIAPIChatCompletions, "https://api.githubcopilot.com/chat/completions"},
-		aiProviderOpenAIResponse: {project.AIAPIResponses, "https://api.openai.com/v1/responses"},
-		aiProviderOpenAIChat:     {project.AIAPIChatCompletions, "https://api.openai.com/v1/chat/completions"},
-		aiProviderNVIDIA:         {project.AIAPIChatCompletions, "https://integrate.api.nvidia.com/v1/chat/completions"},
+		aiProviderGitHubCopilotResponses: {project.AIAPIResponses, "https://api.githubcopilot.com/responses"},
+		aiProviderGitHubCopilot:          {project.AIAPIChatCompletions, "https://api.githubcopilot.com/chat/completions"},
+		aiProviderOpenAIResponse:         {project.AIAPIResponses, "https://api.openai.com/v1/responses"},
+		aiProviderOpenAIChat:             {project.AIAPIChatCompletions, "https://api.openai.com/v1/chat/completions"},
+		aiProviderNVIDIA:                 {project.AIAPIChatCompletions, "https://integrate.api.nvidia.com/v1/chat/completions"},
 	}
 	for id, want := range wantCoordinates {
 		preset, ok := aiProviderPresetForID(id)
@@ -74,6 +76,24 @@ func TestAIProviderOptionsDescribeDeploymentReachability(t *testing.T) {
 	}
 	if got := find(pages, aiProviderAzure).Description; !strings.Contains(got, "bearer token") {
 		t.Fatalf("Pages Azure description = %q", got)
+	}
+}
+
+func TestCopilotProviderOptionsExposeBothAPIs(t *testing.T) {
+	options := aiProviderOptions(modePages)
+	want := map[string]bool{
+		"GitHub Copilot Responses":        false,
+		"GitHub Copilot Chat Completions": false,
+	}
+	for _, option := range options {
+		if _, ok := want[option.Label]; ok {
+			want[option.Label] = true
+		}
+	}
+	for label, found := range want {
+		if !found {
+			t.Fatalf("provider option %q missing: %v", label, options)
+		}
 	}
 }
 

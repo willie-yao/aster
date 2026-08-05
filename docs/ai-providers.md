@@ -21,11 +21,13 @@ ai:
 ```
 
 Both `endpoint` and `model` are required when AI is enabled; provide them here
-or via the `AI_ENDPOINT` / `AI_MODEL` env vars (see below). For GitHub Copilot,
-the endpoint is `https://api.githubcopilot.com/chat/completions`.
+or via the `AI_ENDPOINT` / `AI_MODEL` env vars (see below). GitHub Copilot has
+separate Responses and Chat Completions endpoints. Choose the API listed in the
+model catalog's `supported_endpoints` field.
 
 The guided `fetcher onboard` wizard includes coordinate presets for GitHub
-Copilot, OpenAI Responses, OpenAI Chat Completions, and the public NVIDIA API.
+Copilot Responses, GitHub Copilot Chat Completions, OpenAI Responses, OpenAI
+Chat Completions, and the public NVIDIA API.
 It also provides guided self-hosted, Azure, custom, and configure-later paths.
 Preset endpoints remain editable. Models are never preset because availability
 varies by account and deployment. Selecting a preset does not test credentials,
@@ -102,16 +104,29 @@ puts them back in yaml.
 
 ## GitHub Copilot
 
-Set `endpoint` to the Copilot chat-completions URL. `AI_TOKEN` is a fine-grained
-PAT with the `copilot_chat` user permission. Set `model` explicitly to a model
-your Copilot plan exposes; a public model id keeps the config reproducible
-for anyone reading the repo:
+Use Responses for models whose catalog entry lists only `/responses`:
 
 ```yaml
 ai:
+  api: "responses"
+  endpoint: "https://api.githubcopilot.com/responses"
+  model: "gpt-5.6-sol"
+```
+
+Use Chat Completions only when the model advertises `/chat/completions`:
+
+```yaml
+ai:
+  api: "chat_completions"
   endpoint: "https://api.githubcopilot.com/chat/completions"
   model: "claude-sonnet-4.6"
 ```
+
+The Responses endpoint is live-verified with text output, strict structured
+output, forced function tools, and `function_call_output` continuation. In both
+modes, `AI_TOKEN` is a fine-grained PAT with the `copilot_chat` user permission.
+Set `model` explicitly to a model your Copilot plan exposes; a public model id
+keeps the config reproducible for anyone reading the repo.
 
 Copilot is metered, not free: it requires a subscription, and a full cold
 fetch (one agentic investigation per failure) consumes request and token

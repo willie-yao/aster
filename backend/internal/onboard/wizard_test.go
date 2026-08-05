@@ -254,7 +254,7 @@ func TestWizard_ConfigureLaterProducesDisabledScaffold(t *testing.T) {
 		"",                       // name
 		"",                       // short name
 		"",                       // enable AI
-		"9",                      // configure later
+		"10",                     // configure later
 		"",                       // output
 		"y",                      // confirm
 	}, "\n") + "\n"

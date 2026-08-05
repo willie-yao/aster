@@ -12,15 +12,16 @@ import (
 type aiProviderID string
 
 const (
-	aiProviderChoose         aiProviderID = "choose"
-	aiProviderGitHubCopilot  aiProviderID = "github_copilot"
-	aiProviderOpenAIResponse aiProviderID = "openai_responses"
-	aiProviderOpenAIChat     aiProviderID = "openai_chat_completions"
-	aiProviderNVIDIA         aiProviderID = "nvidia_api"
-	aiProviderSelfHosted     aiProviderID = "self_hosted"
-	aiProviderAzure          aiProviderID = "azure_openai"
-	aiProviderCustom         aiProviderID = "custom"
-	aiProviderConfigureLater aiProviderID = "configure_later"
+	aiProviderChoose                 aiProviderID = "choose"
+	aiProviderGitHubCopilotResponses aiProviderID = "github_copilot_responses"
+	aiProviderGitHubCopilot          aiProviderID = "github_copilot"
+	aiProviderOpenAIResponse         aiProviderID = "openai_responses"
+	aiProviderOpenAIChat             aiProviderID = "openai_chat_completions"
+	aiProviderNVIDIA                 aiProviderID = "nvidia_api"
+	aiProviderSelfHosted             aiProviderID = "self_hosted"
+	aiProviderAzure                  aiProviderID = "azure_openai"
+	aiProviderCustom                 aiProviderID = "custom"
+	aiProviderConfigureLater         aiProviderID = "configure_later"
 )
 
 type aiProviderPreset struct {
@@ -35,9 +36,16 @@ type aiProviderPreset struct {
 
 var aiProviderPresets = []aiProviderPreset{
 	{
+		ID:          aiProviderGitHubCopilotResponses,
+		Label:       "GitHub Copilot Responses",
+		Description: "Uses Copilot's Responses endpoint for Responses-only models and requires a fine-grained PAT with copilot_chat permission.",
+		API:         project.AIAPIResponses,
+		Endpoint:    "https://api.githubcopilot.com/responses",
+	},
+	{
 		ID:          aiProviderGitHubCopilot,
-		Label:       "GitHub Copilot",
-		Description: "Uses a Copilot subscription and a fine-grained PAT with copilot_chat permission.",
+		Label:       "GitHub Copilot Chat Completions",
+		Description: "Uses Copilot's Chat Completions endpoint and requires a fine-grained PAT with copilot_chat permission.",
 		API:         project.AIAPIChatCompletions,
 		Endpoint:    "https://api.githubcopilot.com/chat/completions",
 	},
