@@ -53,8 +53,10 @@ import (
 // otherwise a compact built-in prompt and the live CAPZ-Dynamo tuning are used.
 // BENCH_MANIFEST selects a strict external case manifest. BENCH_REPETITIONS
 // repeats every selected case with a fresh cache. BENCH_CACHE_MODE accepts only
-// "cold". BENCH_RESULTS_JSONL writes private scoring inputs and requires a
-// stable anonymous BENCH_MODEL_LABEL.
+// "cold". BENCH_CACHE_DIR retains the private cache for reload verification, and
+// BENCH_VERIFY_CACHE_REUSE performs a zero-request policy lookup after saving it.
+// BENCH_RESULTS_JSONL writes private scoring inputs and requires a stable
+// anonymous BENCH_MODEL_LABEL.
 
 // benchSignal is one scored expectation against the model's root cause text.
 type benchSignal struct {
@@ -401,6 +403,7 @@ func TestAIBenchmark(t *testing.T) {
 	// matches that live deploy. Otherwise use the built-in prompt and defaults.
 	systemPrompt := ComposeBenchPrompt()
 	agentic := defaultBenchAgentic()
+	configuredCacheGeneration := ""
 	skillProjectDir := t.TempDir()
 	if dir := os.Getenv("BENCH_PROJECT_DIR"); dir != "" {
 		cfg, prompt, err := project.LoadDir(dir)
@@ -409,7 +412,12 @@ func TestAIBenchmark(t *testing.T) {
 		}
 		systemPrompt = ai.ComposeSystemPrompt(prompt)
 		agentic = cfg.AI.EffectiveAgentic()
+		configuredCacheGeneration = cfg.AI.CacheGeneration
 		skillProjectDir = dir
+	}
+	cacheGenerationFingerprint, err := benchmarkCacheGenerationFingerprint(configuredCacheGeneration)
+	if err != nil {
+		t.Fatalf("benchmark cache generation: %v", err)
 	}
 	projectSkills, _, err := skills.LoadForTools(skillProjectDir, agentic.Tools)
 	if err != nil {
@@ -441,7 +449,7 @@ func TestAIBenchmark(t *testing.T) {
 		for repetition := 1; repetition <= repetitions; repetition++ {
 			repetition := repetition
 			t.Run(fmt.Sprintf("%s/rep-%02d", bc.name, repetition), func(t *testing.T) {
-				runBenchCase(t, bc, repetition, resultsPath, apiMode, endpoint, model, token, systemPrompt, agentic, projectSkills)
+				runBenchCase(t, bc, repetition, resultsPath, apiMode, endpoint, model, token, systemPrompt, agentic, projectSkills, cacheGenerationFingerprint)
 			})
 		}
 	}
@@ -485,14 +493,12 @@ func TestBenchmarkAPIMode(t *testing.T) {
 	}
 }
 
-func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMode, endpoint, model, token, systemPrompt string, agentic project.Agentic, projectSkills *skills.Set) {
-	client := ai.NewClientWithOptions(ai.Options{
-		Token:    token,
-		API:      apiMode,
-		Endpoint: endpoint,
-		Model:    model,
-		CacheDir: t.TempDir(), // isolated cache: always a cold analysis.
-	})
+func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMode, endpoint, model, token, systemPrompt string, agentic project.Agentic, projectSkills *skills.Set, cacheGeneration string) {
+	cacheDir := benchmarkCacheDir(t, bc, repetition)
+	clientOptions := ai.Options{
+		Token: token, API: apiMode, Endpoint: endpoint, Model: model, CacheDir: cacheDir,
+	}
+	client := ai.NewClientWithOptions(clientOptions)
 
 	backend, bucketLabel := benchStorage(t, bc)
 	factory := artifacts.NewBackendFactory(backend, bucketLabel)
@@ -518,6 +524,7 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 	}
 
 	service := ai.NewService(client, universal.New(), systemPrompt, consecutiveMap)
+	service.SetCacheGeneration(cacheGeneration)
 	service.SetSkills(projectSkills)
 	service.SetSourceRepo(bc.sourceRepo[0], bc.sourceRepo[1])
 	traceStore := ai.NewTraceStore()
@@ -569,8 +576,82 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 	snapshot := traceStore.Snapshot()
 	toolUsage := successfulBenchmarkToolUsage(snapshot)
 	traceSummary := summarizeBenchmarkTrace(snapshot)
-	writeBenchmarkJSONL(t, resultsPath, bc, repetition, tc, elapsed, snapshot, selectedAttempt)
+	if benchmarkPersistentCacheEnabled() {
+		if err := client.Cache().Save(); err != nil {
+			t.Fatalf("save benchmark cache: %v", err)
+		}
+	}
+	cacheVerification := benchmarkCacheVerification{}
+	if benchmarkCacheReuseEnabled() {
+		cacheVerification = verifyBenchmarkCacheReuse(t, client, clientOptions, service, cacheGeneration, jobID, bc, run)
+	}
+	writeBenchmarkJSONL(t, resultsPath, bc, repetition, tc, elapsed, snapshot, selectedAttempt, toolUsage, traceSummary, cacheGeneration, cacheVerification)
 	scoreBenchCase(t, bc, tc, elapsed, "in-process", agentic.MinGCSBytes, toolUsage, traceSummary, draftObservations, selectedAttempt)
+}
+
+func benchmarkCacheGenerationFingerprint(configValue string) (string, error) {
+	value, err := project.ResolveAICacheGeneration(configValue, os.Getenv(project.AICacheGenerationEnv))
+	if err != nil {
+		return "", err
+	}
+	return project.AICacheGenerationFingerprint(value), nil
+}
+
+func benchmarkCacheCaseKey(bc benchCase) string {
+	if bc.stableID != "" {
+		return bc.stableID
+	}
+	sum := sha256.Sum256([]byte(bc.name))
+	return fmt.Sprintf("case-%x", sum[:10])
+}
+
+func benchmarkPersistentCacheEnabled() bool {
+	return strings.TrimSpace(os.Getenv("BENCH_CACHE_DIR")) != ""
+}
+
+func benchmarkCacheDir(t *testing.T, bc benchCase, repetition int) string {
+	t.Helper()
+	root := strings.TrimSpace(os.Getenv("BENCH_CACHE_DIR"))
+	if root == "" {
+		return t.TempDir()
+	}
+	dir := filepath.Join(root, benchmarkCacheCaseKey(bc), fmt.Sprintf("rep-%02d", repetition))
+	if _, err := os.Stat(filepath.Join(dir, ai.CacheFilename)); err == nil {
+		t.Fatalf("BENCH_CACHE_DIR is not cold: %s", dir)
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("inspect BENCH_CACHE_DIR: %v", err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("create BENCH_CACHE_DIR: %v", err)
+	}
+	return dir
+}
+
+func benchmarkCacheReuseEnabled() bool {
+	return strings.TrimSpace(os.Getenv("BENCH_VERIFY_CACHE_REUSE")) == "1"
+}
+
+func verifyBenchmarkCacheReuse(t *testing.T, client *ai.Client, clientOptions ai.Options, service *ai.Service, cacheGeneration, jobID string, bc benchCase, run *models.BuildResult) benchmarkCacheVerification {
+	t.Helper()
+	out := benchmarkCacheVerification{Attempted: true, CacheGeneration: cacheGeneration}
+	if err := client.Cache().Save(); err != nil {
+		t.Fatalf("save benchmark cache: %v", err)
+	}
+	out.Saved = true
+	reloadedClient := ai.NewClientWithOptions(clientOptions)
+	fresh := benchTestCase(bc)
+	policy := service.FailureCachePolicy(context.Background(), &http.Client{Timeout: 60 * time.Second}, run, fresh, bc.consecutiveFailures)
+	key := ai.AgenticCacheKeyForGeneration(universal.New().Name(), cacheGeneration, jobID, bc.buildID, bc.testName, fresh.FailureMessage)
+	result, reason := ai.LookupAgenticCache(reloadedClient.Cache(), key, policy)
+	out.RejectionReason = reason
+	out.Accepted = reason == ai.CacheAccepted
+	if result.Analysis != nil {
+		out.CacheHit = result.Analysis.CacheHit
+		out.EvidencePlanCovered = result.Analysis.EvidencePlanCovered
+		out.GCSFloorRetryExhausted = result.Analysis.GCSFloorRetryExhausted
+		out.CacheGeneration = result.Analysis.CacheGeneration
+	}
+	return out
 }
 
 type benchmarkDraftObservation struct {
@@ -1365,4 +1446,92 @@ const benchPromptAddendum = `You are debugging Kubernetes CI failures for Cluste
 
 func ComposeBenchPrompt() string {
 	return ai.ComposeSystemPrompt(benchPromptAddendum)
+}
+
+func TestBenchmarkCacheGenerationFingerprint(t *testing.T) {
+	t.Setenv(project.AICacheGenerationEnv, "operation-one")
+	got, err := benchmarkCacheGenerationFingerprint("project-default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := project.AICacheGenerationFingerprint("operation-one")
+	if got != want || got == project.AICacheGenerationFingerprint("project-default") {
+		t.Fatalf("fingerprint = %q, want %q", got, want)
+	}
+
+	t.Setenv(project.AICacheGenerationEnv, "invalid value")
+	if _, err := benchmarkCacheGenerationFingerprint(""); err == nil {
+		t.Fatal("invalid cache generation was accepted")
+	}
+}
+
+func TestVerifyBenchmarkCacheReuseReloadsMarkerWithoutProviderRequest(t *testing.T) {
+	cacheDir := t.TempDir()
+	clientOptions := ai.Options{API: ai.APIChatCompletions, Endpoint: "https://example.invalid/v1/chat/completions", Model: "model", CacheDir: cacheDir}
+	client := ai.NewClientWithOptions(clientOptions)
+	const generation = "0123456789abcdef"
+	const jobID = "periodic:example"
+	bc := benchCase{
+		name: "cache-case", stableID: "0123456789abcdef0123", jobType: "periodic", jobName: "example", buildID: "123", testName: "failed test",
+		failureMsg: "failed", sourceRepo: [2]string{"example", "project"},
+	}
+	service := ai.NewService(client, universal.New(), "sys", nil)
+	service.SetCacheGeneration(generation)
+	service.EnableAgentic(ai.AgenticOptions{MinToolCalls: 1, MinGCSBytes: 50, CritiqueMaxRetries: 1}, nil, nil, nil)
+	now := time.Now().UTC()
+	result := ai.FailureAnalysisResult{
+		Summary: &models.AISummary{GeneratedAt: now.Format(time.RFC3339), Summary: "summary"},
+		Analysis: &models.AIAnalysis{
+			GeneratedAt: now.Format(time.RFC3339), Mode: ai.AgenticMode, Model: "model", RootCause: "root", Severity: "High", SuggestedFix: "fix",
+			ToolCalls: 1, GCSBytes: 1, GCSFloorRetryExhausted: true, CritiquePassed: true, CritiqueVersion: ai.CurrentCritiqueVersion(),
+			ModelHash: ai.ModelFingerprint(ai.APIChatCompletions, clientOptions.Endpoint, clientOptions.Model), PromptHash: ai.PromptFingerprint("sys"), CacheGeneration: generation,
+		},
+	}
+	key := ai.AgenticCacheKeyForGeneration(universal.New().Name(), generation, jobID, bc.buildID, bc.testName, bc.failureMsg)
+	entry, err := ai.NewAgenticCacheEntry(key, result, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Cache().StoreEntry(entry); err != nil {
+		t.Fatal(err)
+	}
+	run := &models.BuildResult{BuildInfo: models.BuildInfo{BuildID: bc.buildID, JobName: bc.jobName}}
+	got := verifyBenchmarkCacheReuse(t, client, clientOptions, service, generation, jobID, bc, run)
+	if !got.Attempted || !got.Saved || !got.Accepted || !got.CacheHit || got.ProviderRequests != 0 || !got.GCSFloorRetryExhausted || got.RejectionReason != ai.CacheAccepted {
+		t.Fatalf("verification = %+v", got)
+	}
+}
+
+func TestBenchmarkCacheCaseKeyFallsBackForBuiltInCases(t *testing.T) {
+	withStable := benchmarkCacheCaseKey(benchCase{name: "case", stableID: "0123456789abcdef0123"})
+	if withStable != "0123456789abcdef0123" {
+		t.Fatalf("stable key = %q", withStable)
+	}
+	first := benchmarkCacheCaseKey(benchCase{name: "first-case"})
+	second := benchmarkCacheCaseKey(benchCase{name: "second-case"})
+	if first == "" || first == second || first != benchmarkCacheCaseKey(benchCase{name: "first-case"}) {
+		t.Fatalf("fallback keys = %q, %q", first, second)
+	}
+}
+
+func TestBenchmarkPersistentCacheSavesWithoutReloadVerification(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BENCH_CACHE_DIR", root)
+	t.Setenv("BENCH_VERIFY_CACHE_REUSE", "")
+	if !benchmarkPersistentCacheEnabled() || benchmarkCacheReuseEnabled() {
+		t.Fatal("cache option detection is inconsistent")
+	}
+	bc := benchCase{name: "built-in-case"}
+	dir := benchmarkCacheDir(t, bc, 1)
+	client := ai.NewClientWithOptions(ai.Options{CacheDir: dir})
+	entry := ai.CacheEntry{Key: "key", CreatedAt: time.Now(), Data: []byte(`{"summary":"cached"}`)}
+	if err := client.Cache().StoreEntry(entry); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Cache().Save(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ai.CacheFilename)); err != nil {
+		t.Fatalf("persistent cache was not saved: %v", err)
+	}
 }

@@ -33,6 +33,15 @@ Options:
   Without it, a compact built-in prompt and the live CAPZ-Dynamo tuning are used.
 - `BENCH_USE_GCS=1` reads artifacts from live GCS instead of the committed
   fixture. Only works before Prow garbage-collects the build.
+- `AI_CACHE_GENERATION=<value>` applies the same validated, hashed cache-key
+  namespace used by production.
+- `BENCH_CACHE_DIR=<private-dir>` stores each case and repetition under a
+  deterministic isolated subdirectory. The harness rejects a pre-existing
+  `ai_cache.json` so a requested cold operation cannot silently become warm.
+- `BENCH_VERIFY_CACHE_REUSE=1` saves the analysis cache, reloads it with a new
+  client, and evaluates the exact current cache policy without a provider call.
+  The private JSONL result records acceptance, rejection reason, restored floor
+  markers, and a provider-request count of zero.
 - `BENCH_MIN_TOOL_CALLS`, `BENCH_MIN_GCS_BYTES`, `BENCH_MAX_ITERS`,
   `BENCH_TIMEOUT`, `BENCH_CRITIQUE_RETRIES` override the default (weak-model)
   floors so a stronger model can be benchmarked fairly, since the weak-model
@@ -45,7 +54,9 @@ Each completed analysis reports the configured quality-gate result and bounded
 usage counters. The output includes evidence-plan coverage, GCS-floor bypass,
 critique status and version, a short skill-set hash prefix, budget exhaustion,
 semantic-judge flags, context truncations, model and Tool failures, model
-requests, and provider-reported input and output tokens.
+requests, and provider-reported input and output tokens. Private JSONL output
+also records GCS bytes, floor markers, sorted safe Tool counts, floor-nudge
+reasons, the hashed cache generation, and zero-request cache reload results.
 
 The trace summary reports the floor-nudge count and ordered reasons, context
 compaction and over-budget counts, the final semantic-judge event outcome,
