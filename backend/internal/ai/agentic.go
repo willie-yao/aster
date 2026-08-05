@@ -289,14 +289,15 @@ If after this investigation the evidence is genuinely inconclusive, say so expli
 // project's current floors.
 type agenticCacheData struct {
 	analysisResponse
-	GeneratedAt         string `json:"generated_at,omitempty"`
-	Model               string `json:"model,omitempty"`
-	ToolCalls           int    `json:"tool_calls,omitempty"`
-	ModelBytes          int    `json:"model_bytes,omitempty"`
-	GCSBytes            int    `json:"gcs_bytes,omitempty"`
-	EvidencePlanCovered bool   `json:"evidence_plan_covered,omitempty"`
-	BudgetExhausted     bool   `json:"budget_exhausted,omitempty"`
-	SameFailureReuse    bool   `json:"same_failure_reuse,omitempty"`
+	GeneratedAt            string `json:"generated_at,omitempty"`
+	Model                  string `json:"model,omitempty"`
+	ToolCalls              int    `json:"tool_calls,omitempty"`
+	ModelBytes             int    `json:"model_bytes,omitempty"`
+	GCSBytes               int    `json:"gcs_bytes,omitempty"`
+	EvidencePlanCovered    bool   `json:"evidence_plan_covered,omitempty"`
+	GCSFloorRetryExhausted bool   `json:"gcs_floor_retry_exhausted,omitempty"`
+	BudgetExhausted        bool   `json:"budget_exhausted,omitempty"`
+	SameFailureReuse       bool   `json:"same_failure_reuse,omitempty"`
 
 	// CritiquePassed marks entries that cleared the critique gate.
 	// Defaults to false on pre-critique entries and on entries written
@@ -347,8 +348,26 @@ func (fs floorStatus) traceStatus() string {
 	}
 }
 
-func gcsFloorUnmet(gcsBytes, minGCSBytes int, evidencePlanCovered bool) bool {
-	return gcsBytes < minGCSBytes && !evidencePlanCovered
+func gcsFloorUnmet(gcsBytes, minGCSBytes int, evidencePlanCovered, retryExhausted bool) bool {
+	return gcsBytes < minGCSBytes && !evidencePlanCovered && !retryExhausted
+}
+
+// markGCSFloorRetryExhausted records a completed byte-only retry that still misses the floor.
+func markGCSFloorRetryExhausted(ctx context.Context, state *agentState, opts AgenticOptions, retries int) bool {
+	if state == nil || state.gcsFloorRetryExhausted || retries < 1 {
+		return false
+	}
+	floors := floorStatus{
+		callsUnmet: state.calls < opts.MinToolCalls,
+		gcsUnmet:   gcsFloorUnmet(state.gcsBytes, opts.MinGCSBytes, state.evidencePlanCovered(), false),
+	}
+	if floors.callsUnmet || !floors.gcsUnmet {
+		return false
+	}
+	state.gcsFloorRetryExhausted = true
+	recordTrace(ctx, TraceEvent{Kind: "floor_nudge", Outcome: "retry_exhausted", Status: floors.traceStatus(), ToolCallCount: state.calls, Bytes: state.gcsBytes})
+	log.Printf("  ⓘ agentic GCS byte-floor retry exhausted: gcs_kb=%d/min=%d", state.gcsBytes/1024, opts.MinGCSBytes/1024)
+	return true
 }
 
 // evalFloors returns which per-project floors the current agent state
@@ -356,7 +375,7 @@ func gcsFloorUnmet(gcsBytes, minGCSBytes int, evidencePlanCovered bool) bool {
 func evalFloors(state *agentState, opts AgenticOptions) floorStatus {
 	return floorStatus{
 		callsUnmet: state.calls < opts.MinToolCalls,
-		gcsUnmet:   gcsFloorUnmet(state.gcsBytes, opts.MinGCSBytes, state.evidencePlanCovered()),
+		gcsUnmet:   gcsFloorUnmet(state.gcsBytes, opts.MinGCSBytes, state.evidencePlanCovered(), state.gcsFloorRetryExhausted),
 	}
 }
 
@@ -404,6 +423,11 @@ type agentState struct {
 	// evaluating coverage of the initial ranked evidence plan. Listing calls,
 	// failed reads, and empty reads do not enter this set.
 	evidenceArtifactsFull map[string]bool
+
+	// gcsFloorRetryExhausted records that the loop used its one retry whose only
+	// remaining reason was the raw GCS byte floor. The marker makes the resulting
+	// analysis reusable without weakening old cache entries.
+	gcsFloorRetryExhausted bool
 
 	// evidenceContentByPath retains bounded tool-result content in memory so
 	// content-aware evidence groups can prove positive matches in the same file.
@@ -518,6 +542,7 @@ func stampAgenticTelemetry(analysis *models.AIAnalysis, state *agentState, mode 
 		analysis.ContextBytes = state.modelBytes
 		analysis.GCSBytes = state.gcsBytes
 		analysis.EvidencePlanCovered = state.evidencePlanCovered()
+		analysis.GCSFloorRetryExhausted = state.gcsFloorRetryExhausted
 		analysis.BudgetExhausted = state.budgetExhausted
 		analysis.CritiquePassed = state.critiquePassed
 		analysis.CritiqueVersion = currentCritiqueVersion
@@ -835,6 +860,9 @@ func (c *Client) doAnalyzeAgentic(
 
 	var finalContent string
 	var finalProviderItems []json.RawMessage
+	// The raw GCS byte floor gets at most one retry after all other floors pass.
+	gcsFloorOnlyRetries := 0
+
 	// Per-floor anti-thrash: track the calls + gcsBytes counters at the
 	// time we last nudged so we can detect whether the model has made
 	// progress on the unmet axis since then. A model that keeps coming
@@ -934,6 +962,10 @@ agentLoop:
 			}
 
 			floors := evalFloors(state, in.Opts)
+			gcsFloorOnly := floors.gcsUnmet && !floors.callsUnmet
+			if markGCSFloorRetryExhausted(loopCtx, state, in.Opts, gcsFloorOnlyRetries) {
+				floors = evalFloors(state, in.Opts)
+			}
 			if floors.anyUnmet() && !state.budgetExhausted {
 				progressed := false
 				if floors.callsUnmet && state.calls > nudgedAtCalls {
@@ -965,6 +997,14 @@ agentLoop:
 						recordTrace(loopCtx, TraceEvent{Kind: "context_headroom", Outcome: "retry_denied", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
 						recordTrace(loopCtx, TraceEvent{Kind: "context_headroom", Outcome: "best_draft", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
 						break agentLoop
+					}
+					if gcsFloorOnly {
+						// Leave room for the tools-enabled response when the nudge lands
+						// on the configured iteration boundary.
+						if iter+1 >= maxIters {
+							maxIters++
+						}
+						gcsFloorOnlyRetries++
 					}
 					nudgedAtCalls = state.calls
 					nudgedAtGCSBytes = state.gcsBytes
@@ -1140,6 +1180,7 @@ agentLoop:
 	}
 
 	parsed = c.applyPostLoopCritique(loopCtx, state, messages, finalContent, finalProviderItems, parsed, in.Opts, critiqueRetries, finalDraftObserved, draftPhase)
+	markGCSFloorRetryExhausted(loopCtx, state, in.Opts, gcsFloorOnlyRetries)
 	parsed = sanitizePublishedCitations(parsed, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
 	parsed = state.preparePublishedAnalysis(parsed)
 
@@ -2010,19 +2051,20 @@ func (c *Client) cacheAcceptedAnalysis(cacheKey string, parsed analysisResponse,
 		skillHash = state.skillSet.Hash()
 	}
 	_ = c.cache.Set(cacheKey, agenticCacheData{
-		analysisResponse:    parsed,
-		GeneratedAt:         generatedAt,
-		Model:               c.model,
-		ToolCalls:           state.calls,
-		ModelBytes:          state.modelBytes,
-		GCSBytes:            state.gcsBytes,
-		EvidencePlanCovered: state.evidencePlanCovered(),
-		BudgetExhausted:     state.budgetExhausted,
-		CritiquePassed:      critiquePassed,
-		CritiqueVersion:     currentCritiqueVersion,
-		SkillSetHash:        skillHash,
-		ModelHash:           c.modelFingerprint(),
-		PromptHash:          state.promptHash,
+		analysisResponse:       parsed,
+		GeneratedAt:            generatedAt,
+		Model:                  c.model,
+		ToolCalls:              state.calls,
+		ModelBytes:             state.modelBytes,
+		GCSBytes:               state.gcsBytes,
+		EvidencePlanCovered:    state.evidencePlanCovered(),
+		GCSFloorRetryExhausted: state.gcsFloorRetryExhausted,
+		BudgetExhausted:        state.budgetExhausted,
+		CritiquePassed:         critiquePassed,
+		CritiqueVersion:        currentCritiqueVersion,
+		SkillSetHash:           skillHash,
+		ModelHash:              c.modelFingerprint(),
+		PromptHash:             state.promptHash,
 	})
 }
 

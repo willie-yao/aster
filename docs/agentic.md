@@ -119,8 +119,11 @@ Minimum bytes fetched from GCS before a final answer is accepted. Default `0`
 (no floor). Complements `min_tool_calls` because call count alone is gameable
 (a model can satisfy it with cheap `list_artifacts` calls or tiny reads).
 Complete coverage of a matched initial evidence plan also satisfies this floor,
-without relaxing any other gate. `200000` (200 KB) is a reasonable starting
-value for weaker models. See [Investigation floors](#investigation-floors).
+without relaxing any other gate. When the raw byte floor is the only remaining
+floor, the loop sends at most one additional byte-floor-only nudge. A result
+that still misses the byte target records `gcs_floor_retry_exhausted` so the
+same accepted analysis remains reusable. `200000` (200 KB) is a reasonable
+starting value for weaker models. See [Investigation floors](#investigation-floors).
 
 ### `critique`
 
@@ -374,13 +377,15 @@ model from using normal artifact tools.
 The completed plan also provides a more direct depth signal than raw byte
 volume. The engine records `evidence_plan_covered` only when the initial tree
 scan succeeded without truncation, at least one recipe matched the bounded
-failure signal, every applicable group had a ranked candidate, and every group
-was satisfied by a successful non-empty `read_artifact`, `tail_artifact`, or
-`grep_artifact` result whose path matches that group's evidence regex. When a
-group declares `content_any_of` or `content_all_of`, the same artifact must also
-provide positive content proof. Signals from different parallel files are never
-combined. A partial read can prove a positive match but cannot prove absence.
-A path may satisfy multiple groups only when it satisfies each complete group.
+failure signal, every applicable group is satisfied or deterministically
+unavailable, and at least one group was satisfied by a successful non-empty
+`read_artifact`, `tail_artifact`, or `grep_artifact` result. A group is
+unavailable only when the complete initial tree has no matching candidate. A
+group with candidates remains unmet until a matching substantive read succeeds.
+When a group declares `content_any_of` or `content_all_of`, the same artifact
+must also provide positive content proof. Signals from different parallel files
+are never combined. A partial read can prove a positive match but cannot prove
+absence. A path may satisfy multiple groups only when it satisfies each group.
 Listing calls, failed reads, empty reads, unmatched failures, and unavailable
 skills never set the marker.
 
@@ -448,11 +453,12 @@ Evidence-plan coverage is narrower: a grep with no returned content does not
 cover a group even when it scanned many bytes.
 
 **Anti-thrash.** Progress is tracked per floor. A model that calls
-`list_artifacts` in a loop raises `tool_calls` but never `gcs_bytes`. The loop
-re-nudges only if the model has made progress on the specific axis that is
-still unmet; if neither calls nor bytes have advanced since the last nudge,
-the answer is accepted (but not cached) rather than looping until `max_iters`
-is exhausted.
+`list_artifacts` in a loop raises `tool_calls` but never `gcs_bytes`. Required
+Tool-call enforcement remains independent. Once it passes, the loop permits at
+most one retry whose sole remaining reason is the raw GCS byte floor. If the
+retry still misses the target, the accepted result records
+`gcs_floor_retry_exhausted: true` and can be cached. Old entries without that
+marker retain the normal byte-floor rule.
 
 **Cache invalidation (two layers).** Raising a floor on an existing project
 invalidates cached entries below it on the next fetcher run:
@@ -461,11 +467,12 @@ invalidates cached entries below it on the next fetcher run:
   pre-floor entries (no `tool_calls`/`gcs_bytes` field, default zero) are
   treated as a miss for any non-zero floor. Entries below `min_gcs_bytes` are
   reusable only when they carry `evidence_plan_covered: true` under the current
-  critique and skill contract. Old entries without the marker keep the byte
-  floor behavior.
+  critique and skill contract, or `gcs_floor_retry_exhausted: true` from the
+  bounded byte-only retry. Old entries without either marker keep the byte-floor
+  behavior.
 - The build-cache test data (`data/jobs/*.json`) carries the prior run's
   `AIAnalysis` on each failure. When the cached analysis falls below the
-  current floor and lacks the marker, the build-cache entry is also re-analyzed
+  current floor and lacks both markers, the build-cache entry is also re-analyzed
   rather than served as-is. Without this layer, pre-floor per-test analyses
   would bypass the floor forever.
 
@@ -738,10 +745,11 @@ agentic result, meet the current investigation floors, and have passed at least
 the current critique version.
 
 Entries also carry fingerprints for the composed prompt, model and endpoint,
-and loaded skill set, plus the factual `evidence_plan_covered` marker. These
-fingerprints are provenance only. Model, endpoint, prompt, skill, and
-transient-streak changes affect new analyses but do not invalidate an existing
-entry. The evidence marker can satisfy the GCS-byte floor. Set `ai.cache_generation` or `AI_CACHE_GENERATION` to a new non-empty value for
+and loaded skill set, plus the factual `evidence_plan_covered` and
+`gcs_floor_retry_exhausted` markers. These fingerprints are provenance only.
+Model, endpoint, prompt, skill, and transient-streak changes affect new analyses
+but do not invalidate an existing entry. Either marker can satisfy the GCS-byte
+floor. Set `ai.cache_generation` or `AI_CACHE_GENERATION` to a new non-empty value for
 an intentional full rebaseline. The value is hashed before it enters cache keys.
 Returning to a prior value reuses its unexpired entries. A manual cache clear
 remains available for emergency destructive cleanup.

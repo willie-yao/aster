@@ -616,6 +616,7 @@ func TestCoversPlanRequiresCompleteMatchingContentReads(t *testing.T) {
 	completePlan := set.Plan(signal, []string{"logs/first.log", "logs/second.log"}, 3)
 	sharedPlan := set.Plan(signal, []string{"logs/shared.log"}, 3)
 	missingCandidatePlan := set.Plan(signal, []string{"logs/first.log"}, 3)
+	noCandidatePlan := set.Plan(signal, nil, 3)
 
 	cases := []struct {
 		name    string
@@ -628,7 +629,8 @@ func TestCoversPlanRequiresCompleteMatchingContentReads(t *testing.T) {
 		{name: "shared path matches both groups", text: signal, plan: sharedPlan, reads: map[string]bool{"logs/shared.log": true}, covered: true},
 		{name: "missing group", text: signal, plan: completePlan, reads: map[string]bool{"logs/first.log": true}},
 		{name: "read path must match group", text: signal, plan: completePlan, reads: map[string]bool{"logs/first.log": true, "logs/unrelated.log": true}},
-		{name: "group without candidate", text: signal, plan: missingCandidatePlan, reads: map[string]bool{"logs/first.log": true, "logs/second.log": true}},
+		{name: "unavailable group with satisfied evidence", text: signal, plan: missingCandidatePlan, reads: map[string]bool{"logs/first.log": true}, covered: true},
+		{name: "all groups unavailable", text: signal, plan: noCandidatePlan, reads: map[string]bool{"logs/unrelated.log": true}},
 		{name: "no matched recipe", text: "unrelated failure", plan: completePlan, reads: map[string]bool{"logs/first.log": true, "logs/second.log": true}},
 		{name: "empty plan", text: signal, reads: map[string]bool{"logs/first.log": true, "logs/second.log": true}},
 		{name: "empty reads", text: signal, plan: completePlan},
@@ -639,6 +641,32 @@ func TestCoversPlanRequiresCompleteMatchingContentReads(t *testing.T) {
 				t.Fatalf("CoversPlan = %t, want %t", got, tc.covered)
 			}
 		})
+	}
+}
+
+func TestPlanCoverageClassifiesSatisfiedUnavailableAndUnmet(t *testing.T) {
+	set := mustSkillSetJSON(t, `{
+		"skills":[{
+			"id":"profiled",
+			"triggers":["profiled"],
+			"required_evidence":[
+				{"id":"satisfied","any_of":["logs/satisfied\\.log$"]},
+				{"id":"unavailable","any_of":["logs/unavailable\\.log$"]},
+				{"id":"unmet","any_of":["logs/unmet\\.log$"]},
+				{"id":"conditional","when":["other subtype"],"any_of":["logs/conditional\\.log$"]}
+			]
+		}]
+	}`)
+	signal := "profiled failure"
+	plan := set.Plan(signal, []string{"logs/satisfied.log", "logs/unmet.log"}, 3)
+	coverage := set.PlanCoverageWithContent(signal, plan, map[string]bool{"logs/satisfied.log": true}, nil)
+	if coverage.Applicable != 3 || coverage.Satisfied != 1 || coverage.Unavailable != 1 || coverage.Unmet != 1 || coverage.Covered() {
+		t.Fatalf("coverage = %+v", coverage)
+	}
+
+	coverage = set.PlanCoverageWithContent(signal, plan, map[string]bool{"logs/satisfied.log": true, "logs/unmet.log": true}, nil)
+	if coverage.Applicable != 3 || coverage.Satisfied != 2 || coverage.Unavailable != 1 || coverage.Unmet != 0 || !coverage.Covered() {
+		t.Fatalf("covered = %+v", coverage)
 	}
 }
 

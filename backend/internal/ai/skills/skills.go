@@ -297,32 +297,56 @@ func (s *Set) Plan(text string, artifactPaths []string, maxCandidates int) []Pla
 	return planned
 }
 
-// CoversPlan reports whether every applicable group in the matched initial
-// plan had a valid candidate and was satisfied by a matching content read.
-// At least one applicable evidence group is required.
+// PlanCoverage classifies every applicable initial evidence group. An unavailable
+// group has no matching candidate in a complete artifact-tree scan. An unmet
+// group has a candidate but no successful substantive matching read.
+type PlanCoverage struct {
+	Applicable  int
+	Satisfied   int
+	Unavailable int
+	Unmet       int
+}
+
+// Covered reports whether all available groups were satisfied and at least one
+// group contributed substantive evidence.
+func (c PlanCoverage) Covered() bool {
+	return c.Applicable > 0 && c.Satisfied > 0 && c.Unmet == 0
+}
+
+// CoversPlan reports whether every applicable group in the matched initial plan
+// is satisfied or deterministically unavailable.
 func (s *Set) CoversPlan(text string, plan []PlannedSkill, reads map[string]bool) bool {
 	return s.CoversPlanWithContent(text, plan, reads, nil)
 }
 
 // CoversPlanWithContent reports initial-plan coverage using positive content
-// proof captured from bounded reads. Raw content remains in-memory only.
+// proof captured from bounded reads. Raw content remains in-memory only. The
+// caller must reject failed or truncated artifact-tree scans before using this
+// result because only a complete scan can prove that a group is unavailable.
 func (s *Set) CoversPlanWithContent(text string, plan []PlannedSkill, reads map[string]bool, contentByPath map[string][]string) bool {
-	if s == nil || strings.TrimSpace(text) == "" || len(plan) == 0 || len(reads) == 0 {
-		return false
+	return s.PlanCoverageWithContent(text, plan, reads, contentByPath).Covered()
+}
+
+// PlanCoverageWithContent returns deterministic group states for a complete
+// initial artifact-tree plan.
+func (s *Set) PlanCoverageWithContent(text string, plan []PlannedSkill, reads map[string]bool, contentByPath map[string][]string) PlanCoverage {
+	var coverage PlanCoverage
+	if s == nil || strings.TrimSpace(text) == "" || len(plan) == 0 {
+		return coverage
 	}
 	matched := s.Match(text)
 	if len(matched) == 0 {
-		return false
+		return coverage
 	}
 	plannedSkills := make(map[string]PlannedSkill, len(plan))
 	for _, planned := range plan {
 		plannedSkills[planned.ID] = planned
 	}
-	applicableGroups := 0
 	for _, skill := range matched {
 		planned, ok := plannedSkills[skill.ID]
 		if !ok {
-			return false
+			coverage.Unmet++
+			continue
 		}
 		plannedGroups := make(map[string]PlannedEvidenceGroup, len(planned.RequiredEvidence))
 		for _, group := range planned.RequiredEvidence {
@@ -332,10 +356,15 @@ func (s *Set) CoversPlanWithContent(text string, plan []PlannedSkill, reads map[
 			if !group.Applies(text) {
 				continue
 			}
-			applicableGroups++
+			coverage.Applicable++
 			plannedGroup, ok := plannedGroups[group.ID]
-			if !ok || len(plannedGroup.CandidatePaths) == 0 {
-				return false
+			if !ok {
+				coverage.Unmet++
+				continue
+			}
+			if len(plannedGroup.CandidatePaths) == 0 {
+				coverage.Unavailable++
+				continue
 			}
 			candidates := make(map[string]bool, len(plannedGroup.CandidatePaths))
 			for _, candidate := range plannedGroup.CandidatePaths {
@@ -343,12 +372,14 @@ func (s *Set) CoversPlanWithContent(text string, plan []PlannedSkill, reads map[
 					candidates[normalized] = true
 				}
 			}
-			if !group.Satisfied(candidates) || !group.SatisfiedWithContent(reads, contentByPath) {
-				return false
+			if group.Satisfied(candidates) && group.SatisfiedWithContent(reads, contentByPath) {
+				coverage.Satisfied++
+			} else {
+				coverage.Unmet++
 			}
 		}
 	}
-	return applicableGroups > 0
+	return coverage
 }
 
 // CandidatePaths returns the highest-signal artifact paths matching this group.

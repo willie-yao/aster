@@ -790,6 +790,132 @@ required_evidence:
 	}
 }
 
+func TestAgentic_CompleteSparseEvidencePlanSatisfiesGCSFloor(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespToolCall("call_1", "read_artifact", map[string]interface{}{"path": "build-log.txt", "offset": 0, "length": 4096}))
+	final := `{"summary":"profiled failure","is_transient":false,"root_cause":"The profiled failure is proven by build-log.txt.","severity":"High","suggested_fix":"Correct the rejected configuration and rerun the job.","relevant_files":["build-log.txt"]}`
+	srv.push(200, chatRespFinal(final))
+
+	set := loadAgenticSkillsForTest(t, map[string]string{
+		"profiled": `
+id: profiled
+triggers: ["profiled"]
+required_evidence:
+  - id: build-log
+    any_of: ["build-log\\.txt$"]
+  - id: junit
+    any_of: ["junit.*\\.xml$"]
+`,
+	})
+	browser := &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("initiating failure\n")}}
+	opts := AgenticOptions{
+		MaxIters: 4, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
+		MinToolCalls: 1, MinGCSBytes: 50_000, CritiqueMaxRetries: 1,
+	}
+	in := newTestAgenticInputs(t, browser, opts)
+	in.Skills = set
+	in.FailureSignal = "profiled failure"
+	client := newAgenticTestClient(t, srv.URL)
+	const key = "agentic:test:complete-sparse-plan"
+	_, analysis, err := client.doAnalyzeAgentic(context.Background(), in, key, "sys", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !analysis.EvidencePlanCovered || analysis.GCSFloorRetryExhausted || analysis.GCSBytes >= opts.MinGCSBytes {
+		t.Fatalf("analysis = %+v", analysis)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 2 {
+		t.Fatalf("model calls = %d, want one read and one final", got)
+	}
+	_, cached, err := client.doAnalyzeAgentic(context.Background(), in, key, "sys", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cached.CacheHit || !cached.EvidencePlanCovered || atomic.LoadInt32(&srv.calls) != 2 {
+		t.Fatalf("cached analysis = %+v calls=%d", cached, atomic.LoadInt32(&srv.calls))
+	}
+}
+
+func TestAgentic_GCSFloorOnlyRetryIsCappedAndReusable(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespToolCall("call_1", "read_artifact", map[string]interface{}{"path": "build-log.txt", "offset": 0, "length": 1024}))
+	final := `{"summary":"configuration rejected","is_transient":false,"root_cause":"build-log.txt contains the configuration rejection.","severity":"High","suggested_fix":"Correct the rejected configuration and rerun the job.","relevant_files":["build-log.txt"]}`
+	srv.push(200, chatRespFinal(final))
+	srv.push(200, chatRespFinal(final))
+
+	browser := &fakeBrowser{files: map[string][]byte{"build-log.txt": bigPayload(1024)}}
+	opts := AgenticOptions{
+		MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
+		MinToolCalls: 1, MinGCSBytes: 50_000, CritiqueMaxRetries: 1,
+	}
+	client := newAgenticTestClient(t, srv.URL)
+	in := newTestAgenticInputs(t, browser, opts)
+	const key = "agentic:test:gcs-floor-retry-cap"
+	_, analysis, err := client.doAnalyzeAgentic(context.Background(), in, key, "sys", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if analysis.GCSBytes >= opts.MinGCSBytes || analysis.EvidencePlanCovered || !analysis.GCSFloorRetryExhausted || !analysis.CritiquePassed {
+		t.Fatalf("analysis = %+v", analysis)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 3 {
+		t.Fatalf("model calls = %d, want read, initial final, and one byte-floor retry", got)
+	}
+	srv.mu.Lock()
+	retryRequest := append([]byte(nil), srv.requests[2]...)
+	srv.mu.Unlock()
+	if !strings.Contains(string(retryRequest), "GCS evidence") {
+		t.Fatalf("byte-floor retry prompt missing from request: %s", retryRequest)
+	}
+
+	_, cached, err := client.doAnalyzeAgentic(context.Background(), in, key, "sys", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cached.CacheHit || !cached.GCSFloorRetryExhausted || atomic.LoadInt32(&srv.calls) != 3 {
+		t.Fatalf("cached analysis = %+v calls=%d", cached, atomic.LoadInt32(&srv.calls))
+	}
+}
+
+func TestAgentic_GCSFloorRetryMarkerSurvivesForcedFinalization(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespToolCall("call_1", "read_artifact", map[string]interface{}{"path": "build-log.txt", "offset": 0, "length": 1024}))
+	premature := `{"summary":"configuration rejected","is_transient":false,"root_cause":"build-log.txt contains the configuration rejection.","severity":"High","suggested_fix":"Correct the rejected configuration and rerun the job.","relevant_files":["build-log.txt"]}`
+	srv.push(200, chatRespFinal(premature))
+	srv.push(200, chatRespToolCall("call_2", "list_artifacts", map[string]interface{}{"path": ""}))
+	final := `{"summary":"configuration rejected","is_transient":false,"root_cause":"build-log.txt contains the configuration rejection.","severity":"High","suggested_fix":"Correct the rejected configuration and rerun the job.","relevant_files":["build-log.txt"]}`
+	srv.push(200, chatRespFinal(final))
+
+	browser := &fakeBrowser{files: map[string][]byte{"build-log.txt": bigPayload(1024)}}
+	opts := AgenticOptions{
+		MaxIters: 2, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
+		MinToolCalls: 1, MinGCSBytes: 50_000, CritiqueMaxRetries: 1,
+	}
+	client := newAgenticTestClient(t, srv.URL)
+	in := newTestAgenticInputs(t, browser, opts)
+	const key = "agentic:test:gcs-floor-forced-finalize"
+	_, analysis, err := client.doAnalyzeAgentic(context.Background(), in, key, "sys", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !analysis.GCSFloorRetryExhausted || analysis.GCSBytes >= opts.MinGCSBytes || !analysis.CritiquePassed {
+		t.Fatalf("analysis = %+v", analysis)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 4 {
+		t.Fatalf("model calls = %d, want read, initial final, last-iteration tool, and forced final", got)
+	}
+	_, cached, err := client.doAnalyzeAgentic(context.Background(), in, key, "sys", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cached.CacheHit || !cached.GCSFloorRetryExhausted || atomic.LoadInt32(&srv.calls) != 4 {
+		t.Fatalf("cached analysis = %+v calls=%d", cached, atomic.LoadInt32(&srv.calls))
+	}
+}
+
 func TestAgentic_OldCacheWithoutEvidenceMarkerRetainsGCSFloor(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
@@ -895,6 +1021,8 @@ triggers: ["profiled"]
 required_evidence:
   - id: log
     any_of: ["failure\\.log$"]
+  - id: absent
+    any_of: ["junit.*\\.xml$"]
 `,
 	})
 	signal := "profiled failure"

@@ -644,8 +644,10 @@ func summarizeBenchmarkTrace(snapshot ai.AnalysisTraceFile) benchmarkTraceSummar
 		for _, event := range trace.Events {
 			switch event.Kind {
 			case "floor_nudge":
-				summary.floorNudges++
-				summary.floorNudgeReasons = append(summary.floorNudgeReasons, benchmarkFloorNudgeReason(event.Status))
+				if event.Outcome == "" || event.Outcome == "retry" {
+					summary.floorNudges++
+					summary.floorNudgeReasons = append(summary.floorNudgeReasons, benchmarkFloorNudgeReason(event.Status))
+				}
 			case "context_compaction":
 				switch event.Outcome {
 				case "applied", "finalize":
@@ -717,7 +719,7 @@ func benchmarkSkillHashPrefix(hash string) string {
 }
 
 func benchmarkGCSFloorBypassed(analysis *models.AIAnalysis, minGCSBytes int) bool {
-	return analysis != nil && analysis.EvidencePlanCovered && analysis.GCSBytes < minGCSBytes
+	return analysis != nil && analysis.GCSBytes < minGCSBytes && (analysis.EvidencePlanCovered || analysis.GCSFloorRetryExhausted)
 }
 
 func benchmarkTelemetryLines(elapsed time.Duration, analysis *models.AIAnalysis, minGCSBytes int, toolUsage benchmarkToolUsage, trace benchmarkTraceSummary) []string {
@@ -732,8 +734,8 @@ func benchmarkTelemetryLines(elapsed time.Duration, analysis *models.AIAnalysis,
 			elapsed, analysis.ToolCalls, toolUsage.names, toolUsage.counts, analysis.GCSBytes, analysis.ContextBytes, trace.contextCompactionApplied,
 			trace.modelRequests, trace.modelFailures, trace.toolFailures, trace.inputTokens, trace.outputTokens))
 		lines = append(lines, fmt.Sprintf(
-			"quality evidence_plan_covered=%v gcs_floor_bypassed=%v critique_passed=%v critique_version=%d skill_set_hash=%s budget_exhausted=%v judge_ran=%v judge_objected=%v judge_revised=%v",
-			analysis.EvidencePlanCovered, benchmarkGCSFloorBypassed(analysis, minGCSBytes), analysis.CritiquePassed, analysis.CritiqueVersion,
+			"quality evidence_plan_covered=%v gcs_floor_retry_exhausted=%v gcs_floor_bypassed=%v critique_passed=%v critique_version=%d skill_set_hash=%s budget_exhausted=%v judge_ran=%v judge_objected=%v judge_revised=%v",
+			analysis.EvidencePlanCovered, analysis.GCSFloorRetryExhausted, benchmarkGCSFloorBypassed(analysis, minGCSBytes), analysis.CritiquePassed, analysis.CritiqueVersion,
 			benchmarkSkillHashPrefix(analysis.SkillSetHash), analysis.BudgetExhausted, analysis.JudgeRan, analysis.JudgeObjected, analysis.JudgeRevised))
 	}
 	lines = append(lines, fmt.Sprintf(
@@ -1013,6 +1015,16 @@ func TestBenchmarkDraftTelemetryUsesRuntimeSelection(t *testing.T) {
 	}
 }
 
+func TestSummarizeBenchmarkTraceCountsOnlyIssuedFloorNudges(t *testing.T) {
+	summary := summarizeBenchmarkTrace(ai.AnalysisTraceFile{Traces: []ai.AnalysisTrace{{Events: []ai.TraceEvent{
+		{Kind: "floor_nudge", Outcome: "retry", Status: "gcs_bytes"},
+		{Kind: "floor_nudge", Outcome: "retry_exhausted", Status: "gcs_bytes"},
+	}}}})
+	if summary.floorNudges != 1 || !slices.Equal(summary.floorNudgeReasons, []string{"gcs_bytes"}) {
+		t.Fatalf("summary = %+v", summary)
+	}
+}
+
 func TestBenchmarkGCSFloorBypassed(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -1022,6 +1034,7 @@ func TestBenchmarkGCSFloorBypassed(t *testing.T) {
 	}{
 		{name: "covered below floor", analysis: &models.AIAnalysis{EvidencePlanCovered: true, GCSBytes: 99}, minimum: 100, want: true},
 		{name: "covered at floor", analysis: &models.AIAnalysis{EvidencePlanCovered: true, GCSBytes: 100}, minimum: 100},
+		{name: "retry exhausted below floor", analysis: &models.AIAnalysis{GCSFloorRetryExhausted: true, GCSBytes: 99}, minimum: 100, want: true},
 		{name: "uncovered below floor", analysis: &models.AIAnalysis{GCSBytes: 99}, minimum: 100},
 		{name: "zero floor", analysis: &models.AIAnalysis{EvidencePlanCovered: true}, minimum: 0},
 		{name: "no analysis", minimum: 100},

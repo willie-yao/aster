@@ -305,14 +305,15 @@ func TestService_ToolsUnsupported_SetsUnavailable(t *testing.T) {
 // mismatches and agentic floor changes.
 func TestService_ShouldReanalyze_FloorTable(t *testing.T) {
 	cases := []struct {
-		name         string
-		cachedMode   string
-		cachedCalls  int
-		cachedGCS    int
-		covered      bool
-		minToolCalls int
-		minGCSBytes  int
-		want         bool
+		name           string
+		cachedMode     string
+		cachedCalls    int
+		cachedGCS      int
+		covered        bool
+		retryExhausted bool
+		minToolCalls   int
+		minGCSBytes    int
+		want           bool
 	}{
 		{name: "agentic_below_calls_floor", cachedMode: AgenticMode, cachedCalls: 0, minToolCalls: 3, want: true},
 		{name: "agentic_at_calls_floor", cachedMode: AgenticMode, cachedCalls: 3, minToolCalls: 3},
@@ -322,6 +323,8 @@ func TestService_ShouldReanalyze_FloorTable(t *testing.T) {
 		{name: "empty_mode_always_reanalyzes", cachedCalls: 5, cachedGCS: 200_000, want: true},
 		{name: "agentic_below_gcs_floor_only", cachedMode: AgenticMode, cachedCalls: 10, cachedGCS: 1_000, minGCSBytes: 50_000, want: true},
 		{name: "agentic_below_gcs_with_covered_plan", cachedMode: AgenticMode, cachedCalls: 10, cachedGCS: 1_000, covered: true, minGCSBytes: 50_000},
+		{name: "agentic_below_gcs_after_retry", cachedMode: AgenticMode, cachedCalls: 10, cachedGCS: 1_000, retryExhausted: true, minGCSBytes: 50_000},
+		{name: "agentic_below_calls_after_gcs_retry", cachedMode: AgenticMode, cachedCalls: 1, cachedGCS: 1_000, retryExhausted: true, minToolCalls: 5, minGCSBytes: 50_000, want: true},
 		{name: "agentic_at_gcs_floor_only", cachedMode: AgenticMode, cachedCalls: 10, cachedGCS: 50_000, minGCSBytes: 50_000},
 		{name: "agentic_above_gcs_floor_only", cachedMode: AgenticMode, cachedCalls: 10, cachedGCS: 200_000, minGCSBytes: 50_000},
 		{name: "agentic_meets_calls_misses_gcs", cachedMode: AgenticMode, cachedCalls: 5, cachedGCS: 10_000, minToolCalls: 5, minGCSBytes: 50_000, want: true},
@@ -334,7 +337,8 @@ func TestService_ShouldReanalyze_FloorTable(t *testing.T) {
 			// Use a critique-passing entry so this table isolates floor behavior.
 			testCase := reusablePublishedTestCase(&models.AIAnalysis{
 				Mode: tc.cachedMode, ToolCalls: tc.cachedCalls, GCSBytes: tc.cachedGCS, EvidencePlanCovered: tc.covered,
-				PromptHash: PromptFingerprint("sys"), CritiquePassed: true, CritiqueVersion: currentCritiqueVersion,
+				GCSFloorRetryExhausted: tc.retryExhausted,
+				PromptHash:             PromptFingerprint("sys"), CritiquePassed: true, CritiqueVersion: currentCritiqueVersion,
 			})
 			if got := s.shouldReanalyze(testCase); got != tc.want {
 				t.Errorf("shouldReanalyze cached(mode=%q, calls=%d, gcs=%d) floors(calls=%d, gcs=%d) = %v, want %v",

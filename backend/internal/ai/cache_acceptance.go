@@ -86,6 +86,7 @@ func AcceptAgenticCacheEntry(entry CacheEntry, expectedKey string, policy Agenti
 	analysis.ContextBytes = cached.ModelBytes
 	analysis.GCSBytes = cached.GCSBytes
 	analysis.EvidencePlanCovered = cached.EvidencePlanCovered
+	analysis.GCSFloorRetryExhausted = cached.GCSFloorRetryExhausted
 	analysis.BudgetExhausted = cached.BudgetExhausted
 	analysis.SameFailureReuse = cached.SameFailureReuse
 	analysis.CritiquePassed = cached.CritiquePassed
@@ -125,7 +126,7 @@ func AgenticResultRejection(result FailureAnalysisResult, policy AgenticCachePol
 	if analysis.ToolCalls < policy.MinToolCalls {
 		return CacheRejectedToolFloor
 	}
-	if gcsFloorUnmet(analysis.GCSBytes, policy.MinGCSBytes, analysis.EvidencePlanCovered) {
+	if gcsFloorUnmet(analysis.GCSBytes, policy.MinGCSBytes, analysis.EvidencePlanCovered, analysis.GCSFloorRetryExhausted) {
 		return CacheRejectedEvidenceFloor
 	}
 	if analysis.CritiqueVersion < currentCritiqueVersion || policy.CritiqueRequired && !analysis.CritiquePassed {
@@ -165,19 +166,20 @@ func NewAgenticCacheEntry(key string, result FailureAnalysisResult, createdAt ti
 			SearchSuggestions: append([]string(nil), result.Analysis.SearchSuggestions...),
 			EvidenceCitations: append([]models.EvidenceCitation(nil), result.Analysis.EvidenceCitations...),
 		},
-		GeneratedAt:         generatedAt,
-		Model:               result.Analysis.Model,
-		ToolCalls:           result.Analysis.ToolCalls,
-		ModelBytes:          result.Analysis.ContextBytes,
-		GCSBytes:            result.Analysis.GCSBytes,
-		EvidencePlanCovered: result.Analysis.EvidencePlanCovered,
-		BudgetExhausted:     result.Analysis.BudgetExhausted,
-		SameFailureReuse:    result.Analysis.SameFailureReuse,
-		CritiquePassed:      result.Analysis.CritiquePassed,
-		CritiqueVersion:     result.Analysis.CritiqueVersion,
-		SkillSetHash:        result.Analysis.SkillSetHash,
-		ModelHash:           result.Analysis.ModelHash,
-		PromptHash:          result.Analysis.PromptHash,
+		GeneratedAt:            generatedAt,
+		Model:                  result.Analysis.Model,
+		ToolCalls:              result.Analysis.ToolCalls,
+		ModelBytes:             result.Analysis.ContextBytes,
+		GCSBytes:               result.Analysis.GCSBytes,
+		EvidencePlanCovered:    result.Analysis.EvidencePlanCovered,
+		GCSFloorRetryExhausted: result.Analysis.GCSFloorRetryExhausted,
+		BudgetExhausted:        result.Analysis.BudgetExhausted,
+		SameFailureReuse:       result.Analysis.SameFailureReuse,
+		CritiquePassed:         result.Analysis.CritiquePassed,
+		CritiqueVersion:        result.Analysis.CritiqueVersion,
+		SkillSetHash:           result.Analysis.SkillSetHash,
+		ModelHash:              result.Analysis.ModelHash,
+		PromptHash:             result.Analysis.PromptHash,
 	}
 	raw, err := json.Marshal(data)
 	if err != nil {

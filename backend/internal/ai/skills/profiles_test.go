@@ -777,3 +777,23 @@ func TestLoadMergedReportsBundleMetadata(t *testing.T) {
 		t.Fatal("IDs returned an aliased slice")
 	}
 }
+
+func TestProwBuildPlanCoversCompleteSparseArtifactTree(t *testing.T) {
+	set, _, err := LoadForTools(t.TempDir(), []string{"filesystem"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	signal := "Failed Prow build: Prow job execution\nFailure message:\nThe Prow job failed without reporting a failed JUnit test case. Investigate build-log.txt for the root cause."
+	paths := []string{
+		"build-log.txt", "clone-log.txt", "clone-records.json", "finished.json",
+		"podinfo.json", "prowjob.json", "sidecar-logs.json", "started.json",
+	}
+	plan := set.Plan(signal, paths, 4)
+	coverage := set.PlanCoverageWithContent(signal, plan, map[string]bool{
+		"build-log.txt": true,
+		"podinfo.json":  true,
+	}, nil)
+	if coverage.Applicable != 3 || coverage.Satisfied != 2 || coverage.Unavailable != 1 || coverage.Unmet != 0 || !coverage.Covered() {
+		t.Fatalf("coverage = %+v, plan = %+v", coverage, plan)
+	}
+}
