@@ -229,3 +229,14 @@ func TestValidatePromptMode(t *testing.T) {
 		t.Fatal("expected invalid mode")
 	}
 }
+
+func TestValidatePromptAgentModel(t *testing.T) {
+	if err := validatePromptAgentModel(defaultPromptAgentModel); err != nil {
+		t.Fatal(err)
+	}
+	for _, model := range []string{"claude", "/claude", "provider/", "provider/model name"} {
+		if err := validatePromptAgentModel(model); err == nil {
+			t.Fatalf("model %q was accepted", model)
+		}
+	}
+}

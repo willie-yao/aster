@@ -114,6 +114,14 @@ func TestValidateOptionsRejectsNoPromptConflict(t *testing.T) {
 	}
 }
 
+func TestValidateOptionsRejectsMalformedAgentModel(t *testing.T) {
+	opts := testPromptModeOptions(promptModeAgent)
+	opts.PromptAgentModel = "claude"
+	if err := validateOptions(&opts); err == nil || !strings.Contains(err.Error(), "provider/model") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestRequirePromptDraftSupportsAgentWithoutAPICredentials(t *testing.T) {
 	opts := testPromptModeOptions(promptModeAgent)
 	opts.RequirePromptDraft = true
@@ -134,6 +142,25 @@ func TestRequirePromptDraftSupportsAgentWithoutAPICredentials(t *testing.T) {
 	var strictErr *requiredPromptDraftError
 	if !errors.As(err, &strictErr) {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestValidatePromptPlanRejectsModeIncompatibleDiagnostics(t *testing.T) {
+	tests := []promptPreparationResult{
+		{Requested: promptRequestAPIExperimental, Status: promptStatusFallback, Output: promptOutputTemplate, Failure: &promptPreparationFailure{Stage: promptStageAgentExecution, Category: promptFailureAgentExecution}},
+		{Requested: promptRequestAgent, Status: promptStatusAgentFallback, Output: promptOutputTemplate, Failure: &promptPreparationFailure{Stage: promptStageTokenPreflight, Category: promptFailureMissingToken}},
+	}
+	for _, result := range tests {
+		if err := validatePromptPlan(result.promptPlan(Options{})); err == nil {
+			t.Fatalf("plan was accepted: %+v", result.promptPlan(Options{}))
+		}
+	}
+}
+
+func TestValidatePromptPlanRejectsMalformedAgentModel(t *testing.T) {
+	plan := (promptPreparationResult{Requested: promptRequestAgent, Status: promptStatusAgentDraft, Output: promptOutputAgentDraft}).promptPlan(Options{PromptAgentModel: "claude"})
+	if err := validatePromptPlan(plan); err == nil {
+		t.Fatalf("plan was accepted: %+v", plan)
 	}
 }
 

@@ -286,7 +286,7 @@ func validatePromptPlan(plan PromptPlan) error {
 			return fmt.Errorf("onboarding plan API prompt result is missing provider coordinates")
 		}
 	case string(promptStatusAgentDraft):
-		if plan.RequestedMode != string(promptRequestAgent) || plan.Output != string(promptOutputAgentDraft) || plan.Source != "OpenCode agent draft" || plan.Runtime != "opencode" || strings.TrimSpace(plan.Model) == "" {
+		if plan.RequestedMode != string(promptRequestAgent) || plan.Output != string(promptOutputAgentDraft) || plan.Source != "OpenCode agent draft" || plan.Runtime != "opencode" || validatePromptAgentModel(plan.Model) != nil {
 			return fmt.Errorf("onboarding plan agent prompt result is inconsistent")
 		}
 	case string(promptStatusHandoff):
@@ -294,7 +294,7 @@ func validatePromptPlan(plan PromptPlan) error {
 			return fmt.Errorf("onboarding plan handoff result is inconsistent")
 		}
 	case string(promptStatusAgentFallback):
-		if plan.RequestedMode != string(promptRequestAgent) || plan.Output != string(promptOutputTemplate) || plan.Source != "Agent handoff bundle with TODO template" || plan.Runtime != "opencode" || strings.TrimSpace(plan.Model) == "" {
+		if plan.RequestedMode != string(promptRequestAgent) || plan.Output != string(promptOutputTemplate) || plan.Source != "Agent handoff bundle with TODO template" || plan.Runtime != "opencode" || validatePromptAgentModel(plan.Model) != nil {
 			return fmt.Errorf("onboarding plan agent fallback result is inconsistent")
 		}
 		if err := validatePromptFailureDiagnostics(plan); err != nil {
@@ -325,10 +325,40 @@ func validatePromptPlan(plan PromptPlan) error {
 func validatePromptFailureDiagnostics(plan PromptPlan) error {
 	stage := promptPreparationStage(plan.FailureStage)
 	category := promptFailureCategory(plan.FailureCategory)
-	if !knownPromptStage(stage) || !knownPromptFailureCategory(category) || plan.FailureAction != category.action() {
+	if !knownPromptStage(stage) || !knownPromptFailureCategory(category) || plan.FailureAction != category.action() || !promptFailureAllowed(promptPreparationRequest(plan.RequestedMode), stage, category) {
 		return fmt.Errorf("onboarding plan fallback diagnostics are invalid")
 	}
 	return nil
+}
+
+func promptFailureAllowed(request promptPreparationRequest, stage promptPreparationStage, category promptFailureCategory) bool {
+	switch request {
+	case promptRequestAgent:
+		switch stage {
+		case promptStageSourceRevision:
+			return category == promptFailureSourceUnavailable || category == promptFailureTimedOut
+		case promptStageAgentExecution:
+			return category == promptFailureAgentExecution || category == promptFailureTimedOut
+		case promptStageFinalPromptValidation:
+			return category == promptFailurePromptValidation
+		}
+	case promptRequestAPIExperimental:
+		switch stage {
+		case promptStageTokenPreflight:
+			return category == promptFailureMissingToken || category == promptFailureMissingCoordinates
+		case promptStageSourceRevision, promptStageSourceTree:
+			return category == promptFailureSourceUnavailable || category == promptFailureTimedOut
+		case promptStageSourceExcerpt:
+			return category == promptFailureSourceUnavailable || category == promptFailureNoSourceEvidence || category == promptFailureTimedOut
+		case promptStageEvidenceExtraction:
+			return category == promptFailureProviderAuth || category == promptFailureProviderRejected || category == promptFailureProviderRateLimited || category == promptFailureProviderUnavailable || category == promptFailureInvalidStructured || category == promptFailureTimedOut || category == promptFailureUnknown
+		case promptStageEvidenceGrounding:
+			return category == promptFailureUngroundedEvidence
+		case promptStageFinalPromptValidation:
+			return category == promptFailurePromptValidation
+		}
+	}
+	return false
 }
 
 func promptPlanIncludesHandoff(plan PromptPlan) bool {

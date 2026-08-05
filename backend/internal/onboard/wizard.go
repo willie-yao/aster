@@ -297,7 +297,7 @@ func wizardPromptAuthoring(ctx context.Context, prompt wizardUI, opts *Options) 
 	case promptModeAgent:
 		opts.NoPrompt = false
 		if opts.PromptAgentModel == "" {
-			model, err := prompt.Input(ctx, inputPrompt{Title: "OpenCode model", Description: "Provider/model configured in OpenCode.", Value: defaultPromptAgentModel, Required: true})
+			model, err := prompt.Input(ctx, inputPrompt{Title: "OpenCode model", Description: "Provider/model configured in OpenCode.", Value: defaultPromptAgentModel, Required: true, Validate: validatePromptAgentModel})
 			if err != nil {
 				return err
 			}

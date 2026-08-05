@@ -186,6 +186,11 @@ func validateOptions(opts *Options) error {
 	if err := validatePromptMode(opts.PromptMode); err != nil {
 		return err
 	}
+	if opts.PromptAgentModel != "" {
+		if err := validatePromptAgentModel(opts.PromptAgentModel); err != nil {
+			return err
+		}
+	}
 	if opts.NoPrompt && opts.PromptMode != "" && opts.PromptMode != promptModeTemplate {
 		return fmt.Errorf("--no-prompt cannot be combined with --prompt-mode=%s", opts.PromptMode)
 	}
