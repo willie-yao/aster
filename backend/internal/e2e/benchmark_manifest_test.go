@@ -253,6 +253,12 @@ type benchmarkJSONLDraft struct {
 	MatchedSkillIDs     []string                      `json:"matched_skill_ids,omitempty"`
 	MissingGroups       []ai.CritiqueEvidenceGroupRef `json:"missing_groups,omitempty"`
 	UnavailableGroups   []ai.CritiqueEvidenceGroupRef `json:"unavailable_groups,omitempty"`
+	PublishedRuleIDs    []string                      `json:"published_rule_ids,omitempty"`
+	PublishedHardRules  []string                      `json:"published_hard_rules,omitempty"`
+	PublishedSoftRules  []string                      `json:"published_soft_rules,omitempty"`
+	PublishedHardIssues int                           `json:"published_hard_issues,omitempty"`
+	PublishedPuntCount  int                           `json:"published_punt_count,omitempty"`
+	PublishedMissing    int                           `json:"published_missing_group_count,omitempty"`
 	PuntCount           int                           `json:"punt_count,omitempty"`
 	UnreadCitationCount int                           `json:"unread_citation_count,omitempty"`
 	CitationIssueCount  int                           `json:"citation_issue_count,omitempty"`
@@ -319,6 +325,8 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 			Attempt: observation.Attempt, Phase: observation.Phase, Selected: observation.Attempt == selectedAttempt,
 			RuleIDs: append([]string(nil), observation.RuleIDs...), MatchedSkillIDs: append([]string(nil), observation.MatchedSkillIDs...),
 			MissingGroups: append([]ai.CritiqueEvidenceGroupRef(nil), observation.MissingGroups...), UnavailableGroups: append([]ai.CritiqueEvidenceGroupRef(nil), observation.UnavailableGroups...),
+			PublishedRuleIDs: append([]string(nil), observation.PublishedRuleIDs...), PublishedHardRules: append([]string(nil), observation.PublishedHardRules...), PublishedSoftRules: append([]string(nil), observation.PublishedSoftRules...),
+			PublishedHardIssues: observation.PublishedHardIssues, PublishedPuntCount: observation.PublishedPuntCount, PublishedMissing: observation.PublishedMissing,
 			PuntCount: observation.PuntCount, UnreadCitationCount: observation.UnreadCitationCount,
 			CitationIssueCount: observation.CitationIssueCount, MissingGroupCount: observation.MissingGroupCount,
 			TransientConflict: observation.TransientConflict, ToolCalls: observation.ToolCalls, EvidenceReads: observation.EvidenceReads,

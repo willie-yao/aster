@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -110,6 +111,12 @@ type DraftObservation struct {
 	MatchedSkillIDs     []string
 	MissingGroups       []CritiqueEvidenceGroupRef
 	UnavailableGroups   []CritiqueEvidenceGroupRef
+	PublishedRuleIDs    []string
+	PublishedHardRules  []string
+	PublishedSoftRules  []string
+	PublishedHardIssues int
+	PublishedPuntCount  int
+	PublishedMissing    int
 	ToolCalls           int
 	EvidenceReads       int
 }
@@ -129,9 +136,8 @@ type critiqueRetryBudget struct {
 
 type critiqueQuality struct {
 	Passed               bool
-	TransientConflict    bool
-	UnreadCitationCount  int
-	CitationIssueCount   int
+	HardRules            []string
+	HardIssueCount       int
 	MissingEvidenceCount int
 	PuntCount            int
 }
@@ -140,6 +146,7 @@ type critiqueDraftCandidate struct {
 	parsed           analysisResponse
 	content          string
 	providerItems    []json.RawMessage
+	rawQuality       critiqueQuality
 	quality          critiqueQuality
 	attempt          int
 	evidenceRevision int
@@ -1103,10 +1110,14 @@ agentLoop:
 											pruneAbsentSkillEvidence(rp, &revisedCritique, treeSet)
 										}
 									}
-									if !revisedCritique.Passed {
-										state.judgeRevisionRejected = true
-									}
+									policy := effectiveCritiqueCachePolicy(in.Opts.CritiqueCachePolicy, in.Opts.CritiqueMaxRetries)
 									semanticCandidate := state.newDraftCandidate("semantic_retry", revised, revisedItems, rp, revisedCritique)
+									currentRawQuality := critiqueQualityFor(state.currentCritiqueOutcome(state.bestDraft.parsed))
+									state.bestDraft.rawQuality = currentRawQuality
+									if critiqueHardRegression(semanticCandidate.rawQuality, currentRawQuality) || !critiqueQualityAcceptedForPolicy(semanticCandidate.quality, policy) {
+										state.judgeRevisionRejected = true
+										break
+									}
 									state.considerFallbackDraft(semanticCandidate, true)
 									if state.considerDraft(semanticCandidate, true) {
 										state.judgeRevised = true
@@ -1128,7 +1139,7 @@ agentLoop:
 					}
 					// Reaching acceptance after the judge objected on an earlier
 					// draft means its objections drove an accepted revision.
-					if state.judgeObjected && state.bestDraft != nil && candidateDraft != nil && state.bestDraft.attempt == candidateDraft.attempt {
+					if state.judgeObjected && !state.judgeRevisionRejected && state.bestDraft != nil && candidateDraft != nil && state.bestDraft.attempt == candidateDraft.attempt {
 						state.judgeRevised = true
 					}
 					state.critiquePassed = state.bestDraft != nil && state.bestDraft.quality.Passed
@@ -1678,7 +1689,7 @@ func critiqueRepairNeedsTools(out critiqueOutcome) bool {
 	return len(out.UnreadCitations) > 0 || len(out.CitationIssues) > 0 || len(out.MissingSkillEvidence) > 0
 }
 
-func (s *agentState) observeDraft(phase string, parsed analysisResponse, out critiqueOutcome) int {
+func (s *agentState) observeDraft(phase string, parsed analysisResponse, out, publishedOut critiqueOutcome) int {
 	s.draftAttempt++
 	attempt := s.draftAttempt
 	if s.draftObserver == nil {
@@ -1706,6 +1717,12 @@ func (s *agentState) observeDraft(phase string, parsed analysisResponse, out cri
 		MatchedSkillIDs:     append([]string(nil), out.MatchedSkillIDs...),
 		MissingGroups:       critiqueEvidenceGroupRefs(out.MissingSkillEvidence),
 		UnavailableGroups:   critiqueEvidenceGroupRefs(out.UnavailableSkillEvidence),
+		PublishedRuleIDs:    critiqueRuleStrings(publishedOut.RuleIDs()),
+		PublishedHardRules:  critiqueRuleStrings(publishedOut.HardRuleIDs()),
+		PublishedSoftRules:  critiqueRuleStrings(publishedOut.SoftRuleIDs()),
+		PublishedHardIssues: critiqueHardIssueCount(publishedOut),
+		PublishedPuntCount:  len(publishedOut.PuntMatches),
+		PublishedMissing:    publishedOut.MissingEvidenceCount(),
 		ToolCalls:           s.calls,
 		EvidenceReads:       len(s.readArtifactsFull),
 	})
@@ -1715,42 +1732,89 @@ func (s *agentState) observeDraft(phase string, parsed analysisResponse, out cri
 func critiqueQualityFor(out critiqueOutcome) critiqueQuality {
 	return critiqueQuality{
 		Passed:               out.Passed,
-		TransientConflict:    out.TransientPersistCount > 0,
-		UnreadCitationCount:  len(out.UnreadCitations),
-		CitationIssueCount:   len(out.CitationIssues),
+		HardRules:            critiqueRuleStrings(out.HardRuleIDs()),
+		HardIssueCount:       critiqueHardIssueCount(out),
 		MissingEvidenceCount: out.MissingEvidenceCount(),
 		PuntCount:            len(out.PuntMatches),
 	}
 }
 
-// compareCritiqueQuality returns positive when a is better than b.
+func critiqueHardIssueCount(out critiqueOutcome) int {
+	n := len(out.UnreadCitations)
+	for _, issue := range out.CitationIssues {
+		if critiqueRuleSeverity(critiqueCitationRule(issue)) == CritiqueRuleHard {
+			n++
+		}
+	}
+	if out.TransientPersistCount > 0 {
+		n++
+	}
+	return n
+}
+
+// compareCritiqueQuality returns positive only when a strictly dominates b.
 func compareCritiqueQuality(a, b critiqueQuality) int {
-	if a.Passed != b.Passed {
-		if a.Passed {
-			return 1
-		}
-		return -1
+	if critiqueQualityDominates(a, b) {
+		return 1
 	}
-	if a.TransientConflict != b.TransientConflict {
-		if !a.TransientConflict {
-			return 1
-		}
+	if critiqueQualityDominates(b, a) {
 		return -1
-	}
-	for _, counts := range [][2]int{
-		{a.CitationIssueCount, b.CitationIssueCount},
-		{a.UnreadCitationCount, b.UnreadCitationCount},
-		{a.MissingEvidenceCount, b.MissingEvidenceCount},
-		{a.PuntCount, b.PuntCount},
-	} {
-		if counts[0] < counts[1] {
-			return 1
-		}
-		if counts[0] > counts[1] {
-			return -1
-		}
 	}
 	return 0
+}
+
+func critiqueQualityDominates(candidate, current critiqueQuality) bool {
+	if !critiqueQualityNoWorse(candidate, current) {
+		return false
+	}
+	hardImproved := candidate.HardIssueCount < current.HardIssueCount
+	if hardImproved {
+		return true
+	}
+	return candidate.PuntCount < current.PuntCount || candidate.MissingEvidenceCount < current.MissingEvidenceCount
+}
+
+func critiqueQualityNoWorse(candidate, current critiqueQuality) bool {
+	if critiqueHardRegression(candidate, current) {
+		return false
+	}
+	if candidate.HardIssueCount < current.HardIssueCount {
+		return true
+	}
+	return candidate.PuntCount <= current.PuntCount && candidate.MissingEvidenceCount <= current.MissingEvidenceCount
+}
+
+func critiqueHardRegression(candidate, current critiqueQuality) bool {
+	return candidate.HardIssueCount > current.HardIssueCount || !stringSetSubset(candidate.HardRules, current.HardRules)
+}
+
+func critiqueQualityAcceptedForPolicy(quality critiqueQuality, policy CritiqueCachePolicy) bool {
+	switch policy {
+	case CritiqueCachePolicyAdvisory:
+		return true
+	case CritiqueCachePolicyHard:
+		return quality.HardIssueCount == 0
+	case CritiqueCachePolicyStrict:
+		return quality.Passed
+	default:
+		return false
+	}
+}
+
+func stringSetSubset(candidate, current []string) bool {
+	if len(candidate) > len(current) {
+		return false
+	}
+	set := make(map[string]bool, len(current))
+	for _, value := range current {
+		set[value] = true
+	}
+	for _, value := range candidate {
+		if !set[value] {
+			return false
+		}
+	}
+	return true
 }
 
 var rootCauseTokenRE = regexp.MustCompile(`[a-z0-9]+(?:[._/-][a-z0-9]+)*`)
@@ -1781,18 +1845,37 @@ func rootCauseFingerprint(rootCause string) string {
 }
 
 func (s *agentState) newDraftCandidate(phase, content string, providerItems []json.RawMessage, parsed analysisResponse, out critiqueOutcome) *critiqueDraftCandidate {
+	publishedOut := s.publishedCritiqueOutcome(parsed)
 	return &critiqueDraftCandidate{
 		parsed:           parsed,
 		content:          content,
 		providerItems:    providerItems,
-		quality:          critiqueQualityFor(out),
-		attempt:          s.observeDraft(phase, parsed, out),
+		rawQuality:       critiqueQualityFor(out),
+		quality:          critiqueQualityFor(publishedOut),
+		attempt:          s.observeDraft(phase, parsed, out, publishedOut),
 		evidenceRevision: s.evidenceRevision,
 	}
 }
 
+func (s *agentState) publishedCritiqueOutcome(parsed analysisResponse) critiqueOutcome {
+	parsed = sanitizePublishedCitations(parsed, analysisCitationContext{Evidence: s.analysisEvidence, Full: s.analysisEvidenceFull})
+	parsed = s.preparePublishedAnalysis(parsed)
+	return s.currentCritiqueOutcome(parsed)
+}
+
+func (s *agentState) currentCritiqueOutcome(parsed analysisResponse) critiqueOutcome {
+	out := critiqueDraftWithContent(parsed, s.readArtifactsFull, s.readArtifactsBase, s.evidenceContentByPath, s.readSourceFull, matchSkillsForDraft(s, parsed), s.consecutiveFailures, analysisCitationContext{Evidence: s.analysisEvidence, Full: s.analysisEvidenceFull})
+	if len(out.MissingSkillEvidence) > 0 {
+		if treeSet := s.artifactTreeSet(); treeSet != nil {
+			pruneAbsentSkillEvidence(parsed, &out, treeSet)
+		}
+	}
+	return out
+}
+
 // considerDraft applies deterministic quality ordering and the root-cause guard.
 func (s *agentState) considerDraft(candidate *critiqueDraftCandidate, semanticAccepted bool) bool {
+	s.refreshPublishedDraftQuality(s.bestDraft)
 	if !draftShouldReplace(s.bestDraft, candidate, semanticAccepted) {
 		return false
 	}
@@ -1801,11 +1884,19 @@ func (s *agentState) considerDraft(candidate *critiqueDraftCandidate, semanticAc
 }
 
 func (s *agentState) considerFallbackDraft(candidate *critiqueDraftCandidate, semanticAccepted bool) bool {
+	s.refreshPublishedDraftQuality(s.fallbackDraft)
 	if !draftShouldReplace(s.fallbackDraft, candidate, semanticAccepted) {
 		return false
 	}
 	s.fallbackDraft = candidate
 	return true
+}
+
+func (s *agentState) refreshPublishedDraftQuality(candidate *critiqueDraftCandidate) {
+	if candidate == nil {
+		return
+	}
+	candidate.quality = critiqueQualityFor(s.publishedCritiqueOutcome(candidate.parsed))
 }
 
 func draftShouldReplace(current, candidate *critiqueDraftCandidate, semanticAccepted bool) bool {
@@ -1816,14 +1907,22 @@ func draftShouldReplace(current, candidate *critiqueDraftCandidate, semanticAcce
 		return true
 	}
 	comparison := compareCritiqueQuality(candidate.quality, current.quality)
-	if comparison < 0 || (comparison == 0 && !semanticAccepted) {
+	rootCauseChanged := rootCauseMateriallyChanged(current.parsed.RootCause, candidate.parsed.RootCause)
+	evidenceBackedChange := !semanticAccepted && rootCauseChanged && candidate.evidenceRevision > current.evidenceRevision && critiqueQualityNoWorse(candidate.quality, current.quality)
+	semanticTie := semanticAccepted && critiqueQualityEqual(candidate.quality, current.quality)
+	if comparison < 0 || comparison == 0 && !evidenceBackedChange && !semanticTie {
 		return false
 	}
-	if rootCauseMateriallyChanged(current.parsed.RootCause, candidate.parsed.RootCause) &&
+	if rootCauseChanged &&
 		candidate.evidenceRevision <= current.evidenceRevision && !semanticAccepted {
 		return false
 	}
 	return true
+}
+
+func critiqueQualityEqual(a, b critiqueQuality) bool {
+	return a.Passed == b.Passed && a.HardIssueCount == b.HardIssueCount &&
+		slices.Equal(a.HardRules, b.HardRules) && a.MissingEvidenceCount == b.MissingEvidenceCount && a.PuntCount == b.PuntCount
 }
 
 func (s *agentState) promoteFallbackDraft() *critiqueDraftCandidate {

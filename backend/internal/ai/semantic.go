@@ -172,14 +172,16 @@ func (c *Client) applySemanticJudgePostLoop(ctx context.Context, state *agentSta
 		}
 	}
 	candidate := state.newDraftCandidate("semantic_retry", revised, revisedProviderItems, rp, out)
-	state.considerFallbackDraft(candidate, true)
-	selected := state.considerDraft(candidate, true)
-	if len(out.HardRuleIDs()) > 0 || !critiqueAcceptedForPolicy(out, policy) {
+	currentRawQuality := critiqueQualityFor(state.currentCritiqueOutcome(state.bestDraft.parsed))
+	state.bestDraft.rawQuality = currentRawQuality
+	if critiqueHardRegression(candidate.rawQuality, currentRawQuality) || !critiqueQualityAcceptedForPolicy(candidate.quality, policy) {
 		state.judgeRevisionRejected = true
 		recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Outcome: "revision_rejected", IssueCount: len(out.Matches())})
 		log.Printf("  ✗ semantic judge (post-loop): %d objection(s); revised draft failed critique %v, keeping original", len(objs), out.Matches())
 		return state.bestDraft.parsed
 	}
+	state.considerFallbackDraft(candidate, true)
+	selected := state.considerDraft(candidate, true)
 	if !selected {
 		recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Outcome: "revision_not_selected", IssueCount: len(objs)})
 		log.Printf("  ✗ semantic judge (post-loop): %d objection(s); refinalized draft was not better, keeping original", len(objs))
