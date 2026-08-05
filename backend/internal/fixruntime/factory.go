@@ -23,12 +23,16 @@ func New(cfg *project.FixAgentRuntime) (runtime.AgentRuntime, error) {
 		maxRetries = *cfg.OrkaRetries
 	}
 	rt, err := orka.NewAgentRuntimeFromEnv(orka.FromEnvConfig{
-		Namespace:   cfg.OrkaNamespace,
-		AgentRef:    cfg.OrkaAgentRef,
-		API:         cfg.OrkaAPI,
-		Version:     cfg.OrkaVersion,
-		MaxRetries:  maxRetries,
-		KubeContext: os.Getenv("ORKA_KUBE_CONTEXT"),
+		Namespace:                        cfg.OrkaNamespace,
+		AgentRef:                         cfg.OrkaAgentRef,
+		API:                              cfg.OrkaAPI,
+		Version:                          cfg.OrkaVersion,
+		MaxRetries:                       maxRetries,
+		KubeContext:                      os.Getenv("ORKA_KUBE_CONTEXT"),
+		DelegatedServiceAccountName:      os.Getenv(orka.FixServiceAccountNameEnv),
+		DelegatedServiceAccountNamespace: os.Getenv(orka.FixServiceAccountNamespaceEnv),
+		PodName:                          os.Getenv(orka.PodNameEnv),
+		PodUID:                           os.Getenv(orka.PodUIDEnv),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("orka fix backend unavailable: %w", err)

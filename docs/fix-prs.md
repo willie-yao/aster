@@ -253,12 +253,19 @@ push settings, scheduling, sessions, webhooks, prior Tasks, tool overrides, and
 placement overrides. The referenced Agent is operator-owned, so protect changes
 to its runtime, Secret, tools, and resource settings separately.
 
-Source investigation and fix actions cannot currently share one server pod. A
-single pod has one Kubernetes requester identity, so admission cannot distinguish
-the two Task contracts without trusting caller-controlled labels. Deploy them
-separately until the runtimes have distinct requesters. Container analysis is
-unaffected because it uses a dedicated Task namespace and keeps its existing
-admission policy.
+Source investigation and fix actions may share one server pod without sharing
+a Task requester. The server pod runs as the source-investigation ServiceAccount.
+The fix runtime uses the Kubernetes TokenRequest API to obtain a short-lived fix
+ServiceAccount token bound to the current Pod name and UID. That delegated token
+is used for fix Task operations and fix result reads. The source ServiceAccount
+has only source Task RBAC plus permission to request a token for the exact fix
+ServiceAccount. It never receives direct fix Task access.
+
+The fix ServiceAccount remains constrained by its Task-only Role and the strict
+fix admission contract. Helm rejects equal source and fix ServiceAccount names.
+When chart-managed RBAC is disabled, operators must provide the same narrow
+`serviceaccounts/token` permission themselves. Container analysis remains
+independent in its dedicated Task namespace and admission policy.
 
 OpenCode support requires upstream PR #289. The generated chart, all 12 CRDs,
 complete AgentRuntime and SubstrateActorPool controller RBAC, and guarded CRD

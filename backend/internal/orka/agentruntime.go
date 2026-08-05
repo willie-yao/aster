@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 )
@@ -85,13 +86,17 @@ func NewAgentRuntime(kube *KubeClient, results *ResultClient, opts AgentOptions)
 
 // FromEnvConfig configures NewAgentRuntimeFromEnv.
 type FromEnvConfig struct {
-	Namespace   string
-	AgentRef    string
-	API         string
-	APIToken    string
-	Version     string
-	MaxRetries  int
-	KubeContext string
+	Namespace                        string
+	AgentRef                         string
+	API                              string
+	APIToken                         string
+	Version                          string
+	MaxRetries                       int
+	KubeContext                      string
+	DelegatedServiceAccountName      string
+	DelegatedServiceAccountNamespace string
+	PodName                          string
+	PodUID                           string
 }
 
 // NewAgentRuntimeFromEnv builds Kubernetes and Orka REST clients for fix generation.
@@ -109,12 +114,26 @@ func NewAgentRuntimeFromEnv(cfg FromEnvConfig) (*AgentRuntime, error) {
 	if err != nil {
 		return nil, fmt.Errorf("orka fix runtime: kube config: %w", err)
 	}
-	kube, err := NewKubeClient(rc)
+	kubeConfig := rc
+	resultTokens := resultTokenSourceFromEnv(cfg.APIToken)
+	delegation := delegatedServiceAccountConfig{
+		Namespace: cfg.DelegatedServiceAccountNamespace,
+		Name:      cfg.DelegatedServiceAccountName,
+		PodName:   cfg.PodName,
+		PodUID:    types.UID(cfg.PodUID),
+	}
+	if delegation.configured() {
+		kubeConfig, resultTokens, err = newDelegatedServiceAccountClients(rc, delegation)
+		if err != nil {
+			return nil, fmt.Errorf("orka fix runtime: delegated identity: %w", err)
+		}
+	}
+	kube, err := NewKubeClient(kubeConfig)
 	if err != nil {
 		return nil, fmt.Errorf("orka fix runtime: kube client: %w", err)
 	}
 	kube.Manager = FixerManagedByValue
-	return NewAgentRuntime(kube, newResultClientFromEnv(cfg.API, cfg.APIToken), AgentOptions{
+	return NewAgentRuntime(kube, newResultClient(cfg.API, resultTokens), AgentOptions{
 		Namespace:  cfg.Namespace,
 		AgentRef:   cfg.AgentRef,
 		Version:    strings.TrimSpace(cfg.Version),
@@ -579,6 +598,11 @@ func (c *ResultClient) Result(ctx context.Context, namespace, taskName string) (
 	}
 	if resp.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
+		if resp.StatusCode == http.StatusUnauthorized {
+			if invalidator, ok := c.tokens.(interface{ invalidate() }); ok {
+				invalidator.invalidate()
+			}
+		}
 		return "", false, &ResultHTTPError{StatusCode: resp.StatusCode}
 	}
 	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxFixResultBytes+1))

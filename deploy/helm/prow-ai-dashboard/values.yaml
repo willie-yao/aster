@@ -92,7 +92,8 @@ orka:
   fixRuntime:
     # Enables Task RBAC, ServiceAccount token mounts, and the git-capable fixer
     # image. The Agent and API are configured in project.yaml under
-    # ai.fix_prs.agent_runtime.
+    # ai.fix_prs.agent_runtime. When source investigation shares the server pod,
+    # the chart delegates a short-lived Pod-bound token for this runtime identity.
     enabled: false
     image:
       repository: ghcr.io/willie-yao/prow-ai-dashboard/fixer
@@ -253,6 +254,8 @@ server:
     correctionsEnabled: false
     sourceInvestigation:
       enabled: false
+      # Keep this distinct from orka.rbac.serviceAccountName when fix actions
+      # share the server pod. The chart grants only exact fix-token minting.
       serviceAccountName: ""
       maxPerSession: 8
       maxActivePerOwner: 1

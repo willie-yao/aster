@@ -863,7 +863,7 @@ if grep -Fq 'serviceAccountName: test-prow-ai-dashboard-orka' "$tmp/source-with-
   exit 1
 fi
 
-if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set server.chat.enabled=true \
   --set server.chat.sourceInvestigation.enabled=true \
   "${source_admission_args[@]}" \
@@ -873,12 +873,72 @@ if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set server.actions.proxy.botToken=test-token \
   --set orka.fixRuntime.enabled=true \
   "${fix_admission_args[@]}" \
+  --set orka.fixRuntime.image.tag=sha-test \
   --set ai.enabled=true \
-  --set ai.token=test-token > "$tmp/source-with-fix-actions.yaml" 2>&1; then
-  echo 'source investigation and fix generation shared one server ServiceAccount' >&2
+  --set ai.token=test-token > "$tmp/source-with-fix-actions.yaml"
+grep -Fq 'serviceAccountName: test-prow-ai-dashboard-source' "$tmp/source-with-fix-actions.yaml"
+grep -A1 -Fq 'name: ORKA_FIX_SERVICE_ACCOUNT_NAME' "$tmp/source-with-fix-actions.yaml"
+grep -Fq 'value: "test-prow-ai-dashboard-orka"' "$tmp/source-with-fix-actions.yaml"
+grep -A1 -Fq 'name: ORKA_FIX_SERVICE_ACCOUNT_NAMESPACE' "$tmp/source-with-fix-actions.yaml"
+grep -Fq 'value: "dashboard-test"' "$tmp/source-with-fix-actions.yaml"
+grep -A3 -Fq 'name: POD_NAME' "$tmp/source-with-fix-actions.yaml"
+grep -Fq 'fieldPath: metadata.name' "$tmp/source-with-fix-actions.yaml"
+grep -A3 -Fq 'name: POD_UID' "$tmp/source-with-fix-actions.yaml"
+grep -Fq 'fieldPath: metadata.uid' "$tmp/source-with-fix-actions.yaml"
+grep -Fq 'resources: ["serviceaccounts/token"]' "$tmp/source-with-fix-actions.yaml"
+grep -Fq 'resourceNames: ["test-prow-ai-dashboard-orka"]' "$tmp/source-with-fix-actions.yaml"
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.chat.enabled=true \
+  --set server.chat.sourceInvestigation.enabled=true \
+  "${source_admission_args[@]}" \
+  --set server.actions.enabled=true \
+  --set server.actions.mode=proxy \
+  --set server.actions.admins[0]=alice \
+  --set server.actions.proxy.botToken=test-token \
+  --set orka.fixRuntime.enabled=true \
+  "${fix_admission_args[@]}" \
+  --set orka.fixRuntime.image.tag=sha-test \
+  --set ai.enabled=true \
+  --set ai.token=test-token \
+  --show-only templates/orka-fix-runtime-rbac.yaml > "$tmp/source-with-fix-rbac.yaml"
+if [[ $(grep -Fc 'name: test-prow-ai-dashboard-source' "$tmp/source-with-fix-rbac.yaml") -ne 1 ]]; then
+  echo 'source ServiceAccount received direct fix Task RBAC' >&2
   exit 1
 fi
-validation_error_contains "$tmp/source-with-fix-actions.yaml" 'cannot share one server ServiceAccount safely'
+if [[ $(grep -Fc 'resources: ["tasks"]' "$tmp/source-with-fix-rbac.yaml") -ne 1 ]] ||
+   [[ $(grep -Fc 'resources: ["serviceaccounts/token"]' "$tmp/source-with-fix-rbac.yaml") -ne 1 ]] ||
+   [[ $(grep -Fc 'verbs: ["create"]' "$tmp/source-with-fix-rbac.yaml") -ne 1 ]]; then
+  echo 'combined Orka RBAC is broader than Task-only fix access plus exact token minting' >&2
+  exit 1
+fi
+
+if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.chat.enabled=true \
+  --set server.chat.sourceInvestigation.enabled=true \
+  --set server.chat.sourceInvestigation.serviceAccountName=shared-runtime \
+  "${source_admission_args[@]}" \
+  --set server.actions.enabled=true \
+  --set server.actions.mode=proxy \
+  --set server.actions.admins[0]=alice \
+  --set server.actions.proxy.botToken=test-token \
+  --set orka.fixRuntime.enabled=true \
+  --set orka.rbac.serviceAccountName=shared-runtime \
+  "${fix_admission_args[@]}" \
+  --set ai.enabled=true \
+  --set ai.token=test-token > "$tmp/source-with-shared-fix-identity.yaml" 2>&1; then
+  echo 'source investigation and fix generation accepted one ServiceAccount identity' >&2
+  exit 1
+fi
+validation_error_contains "$tmp/source-with-shared-fix-identity.yaml" 'require distinct ServiceAccounts'
+
+if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.extraEnv[0].name=ORKA_FIX_SERVICE_ACCOUNT_NAME \
+  --set server.extraEnv[0].value=attacker > "$tmp/reserved-fix-delegation-env.yaml" 2>&1; then
+  echo 'server.extraEnv overrode the delegated fix identity' >&2
+  exit 1
+fi
+validation_error_contains "$tmp/reserved-fix-delegation-env.yaml" 'must not set reserved Orka delegation variable'
 
 long_fullname=$(printf 'a%.0s' {1..63})
 long_source_name="${long_fullname:0:56}-source"

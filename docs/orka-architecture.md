@@ -168,15 +168,18 @@ that permits workspace edits and returns a diff.
 | --- | --- | --- | --- |
 | Dashboard model token | Dashboard namespace | Fetcher, pattern analysis, chat | Orka source workspace |
 | Analyzer model token | Dedicated analysis namespace | Container analyzer Task | Public dashboard output |
-| Projected ServiceAccount token | Dashboard pods | Orka Task and result APIs | GitHub or model provider |
+| Projected source ServiceAccount token | Dashboard server pod | Source Task and result APIs; exact fix TokenRequest | GitHub or model provider |
+| Pod-bound delegated fix ServiceAccount token | Dashboard server memory | Fix Task and result APIs | Source Task API, GitHub, model provider, or persistent storage |
 | Agent model Secret | Orka namespace | OpenCode or another AgentRuntime | Dashboard public data |
 | Read-only repository credential | Orka namespace | Source workspace initialization | GitHub write path |
 | OAuth or bot write token | Dashboard namespace | Confirmed issue or PR creation | Orka Task or Agent |
 
-The fix-generation and source-investigation ServiceAccounts receive Task-only
-permissions in the namespaces they use. Container analysis also receives
-narrow ConfigMap permissions for its immutable input bundles. Broader Orka
-controller and worker RBAC remains operator-owned.
+The fix-generation and source-investigation ServiceAccounts receive separate
+Task-only permissions. In a combined server pod, the source ServiceAccount can
+request only a short-lived fix token bound to that Pod; it does not receive the
+fix Task Role directly. Container analysis also receives narrow ConfigMap
+permissions for its immutable input bundles. Broader Orka controller and worker
+RBAC remains operator-owned.
 
 ## State and persistence
 

@@ -564,6 +564,44 @@ func TestResultTokenSourcePrecedence(t *testing.T) {
 	}
 }
 
+func TestAgentRuntimeConstructorUsesDelegatedServiceAccount(t *testing.T) {
+	configureTestKubeconfig(t)
+	t.Setenv("ORKA_API_TOKEN", "static-token-must-not-be-used")
+	t.Setenv("ORKA_API_TOKEN_FILE", "")
+	runtime, err := NewAgentRuntimeFromEnv(FromEnvConfig{
+		AgentRef: "fixer", API: "http://orka.invalid",
+		DelegatedServiceAccountNamespace: "dashboard",
+		DelegatedServiceAccountName:      "dashboard-fix",
+		PodName:                          "dashboard-server-abc",
+		PodUID:                           "pod-uid",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, ok := runtime.results.(*ResultClient)
+	if !ok {
+		t.Fatalf("result client = %T", runtime.results)
+	}
+	tokens, ok := client.tokens.(*boundServiceAccountTokenSource)
+	if !ok {
+		t.Fatalf("token source = %T", client.tokens)
+	}
+	if tokens.config.Namespace != "dashboard" || tokens.config.Name != "dashboard-fix" || tokens.config.PodName != "dashboard-server-abc" || tokens.config.PodUID != "pod-uid" {
+		t.Fatalf("delegated config = %+v", tokens.config)
+	}
+}
+
+func TestAgentRuntimeConstructorRejectsPartialDelegation(t *testing.T) {
+	configureTestKubeconfig(t)
+	_, err := NewAgentRuntimeFromEnv(FromEnvConfig{
+		AgentRef: "fixer", API: "http://orka.invalid",
+		DelegatedServiceAccountName: "dashboard-fix",
+	})
+	if err == nil || !strings.Contains(err.Error(), "delegated ServiceAccount namespace is required") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestRuntimeConstructorsUseFileBackedResultClients(t *testing.T) {
 	configureTestKubeconfig(t)
 	tokenPath := filepath.Join(t.TempDir(), "token")

@@ -10,6 +10,7 @@
 {{- $extraInsecureCookies := false -}}
 {{- $extraOAuthScope := false -}}
 {{- $extraOAuthPrivateRepositories := false -}}
+{{- $extraOrkaDelegation := "" -}}
 {{- range .Values.server.extraEnv -}}
 {{- if eq (default "" .name) "COOKIE_INSECURE" -}}
 {{- $extraInsecureCookies = true -}}
@@ -19,6 +20,9 @@
 {{- end -}}
 {{- if eq (default "" .name) "OAUTH_PRIVATE_REPOSITORIES" -}}
 {{- $extraOAuthPrivateRepositories = true -}}
+{{- end -}}
+{{- if has (default "" .name) (list "ORKA_FIX_SERVICE_ACCOUNT_NAME" "ORKA_FIX_SERVICE_ACCOUNT_NAMESPACE" "POD_NAME" "POD_UID") -}}
+{{- $extraOrkaDelegation = .name -}}
 {{- end -}}
 {{- end -}}
 {{- if $extraInsecureCookies -}}
@@ -32,6 +36,9 @@
 {{- end -}}
 {{- if $extraOAuthPrivateRepositories -}}
 {{- fail "server.extraEnv must not set OAUTH_PRIVATE_REPOSITORIES; use server.actions.oauth.privateRepositories" -}}
+{{- end -}}
+{{- if $extraOrkaDelegation -}}
+{{- fail (printf "server.extraEnv must not set reserved Orka delegation variable %s" $extraOrkaDelegation) -}}
 {{- end -}}
 {{- if and $a.oauth.privateRepositories (not $actions) -}}
 {{- fail "server.actions.oauth.privateRepositories=true requires server.actions.enabled=true; chat-only OAuth uses read:user" -}}
@@ -147,6 +154,20 @@ spec:
             {{- if or $source (and .Values.orka.fixRuntime.enabled $actions) }}
             - name: ORKA_API_TOKEN_FILE
               value: /var/run/secrets/kubernetes.io/serviceaccount/token
+            {{- end }}
+            {{- if and $source $actions .Values.orka.fixRuntime.enabled }}
+            - name: ORKA_FIX_SERVICE_ACCOUNT_NAME
+              value: {{ include "prow-ai-dashboard.orkaServiceAccountName" . | quote }}
+            - name: ORKA_FIX_SERVICE_ACCOUNT_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
             {{- end }}
             {{- if and $actions (not $source) (or .Values.ai.githubReadToken .Values.ai.githubReadTokenSecretName .Values.ai.existingSecret) }}
             - name: SOURCE_INVESTIGATION_GITHUB_TOKEN

@@ -453,7 +453,7 @@
             },
             "serviceAccountName": {
               "type": "string",
-              "description": "Existing Orka ServiceAccount name when chart-managed RBAC is disabled."
+              "description": "Existing fix and analysis Orka ServiceAccount name when chart-managed RBAC is disabled."
             }
           },
           "additionalProperties": false,
@@ -874,7 +874,7 @@
                 },
                 "serviceAccountName": {
                   "type": "string",
-                  "description": "Existing Orka ServiceAccount name when chart-managed RBAC is disabled."
+                  "description": "Existing source-investigation ServiceAccount name when chart-managed RBAC is disabled. Must differ from orka.rbac.serviceAccountName when fix actions share the server pod."
                 },
                 "maxPerSession": {
                   "type": "integer",

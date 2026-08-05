@@ -225,6 +225,12 @@ because Helm release names are unique only within their own namespace.
 {{- printf "%s-orka-%s" $base (include "prow-ai-dashboard.orkaReleaseScope" .) -}}
 {{- end -}}
 
+{{/* TokenRequest RBAC used to mint the isolated fix identity. */}}
+{{- define "prow-ai-dashboard.orkaFixTokenRBACName" -}}
+{{- $base := include "prow-ai-dashboard.fullname" . | trunc 40 | trimSuffix "-" -}}
+{{- printf "%s-fix-token-%s" $base (include "prow-ai-dashboard.orkaReleaseScope" .) -}}
+{{- end -}}
+
 {{/* Fix Task admission policy name. */}}
 {{- define "prow-ai-dashboard.orkaFixAdmissionName" -}}
 {{- $base := include "prow-ai-dashboard.fullname" . | trunc 39 | trimSuffix "-" -}}
@@ -329,7 +335,11 @@ Validate AI provider configuration.
   {{- $retries := printf "%v" $cfg.retries -}}
   {{- if not (regexMatch "^[0-2]$" $retries) -}}{{- fail "orka.fixRuntime.admission.retries must be an integer from 0 to 2" -}}{{- end -}}
   {{- if not (regexMatch "^([1-9]|[12][0-9]|30)m$" (printf "%v" $cfg.timeout)) -}}{{- fail "orka.fixRuntime.admission.timeout must be whole minutes from 1m through 30m" -}}{{- end -}}
-  {{- if and .Values.server.actions.enabled .Values.server.chat.sourceInvestigation.enabled -}}{{- fail "Orka fix generation and source investigation cannot share one server ServiceAccount safely; deploy them separately" -}}{{- end -}}
+  {{- if and .Values.server.actions.enabled .Values.server.chat.sourceInvestigation.enabled -}}
+    {{- $fixServiceAccount := include "prow-ai-dashboard.orkaServiceAccountName" . -}}
+    {{- $sourceServiceAccount := include "prow-ai-dashboard.orkaSourceServiceAccountName" . -}}
+    {{- if eq $fixServiceAccount $sourceServiceAccount -}}{{- fail "Orka fix generation and source investigation require distinct ServiceAccounts" -}}{{- end -}}
+  {{- end -}}
   {{- if and (not .Values.orka.rbac.create) (not .Values.orka.rbac.serviceAccountName) -}}{{- fail "orka.rbac.serviceAccountName is required when chart-managed Orka RBAC is disabled" -}}{{- end -}}
 {{- end -}}
 {{- end -}}

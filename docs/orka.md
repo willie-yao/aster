@@ -486,10 +486,20 @@ cannot be mounted into a worker Job in another namespace without copying the
 credential. Keep fix Tasks with the approved Agent in `orka.namespace` until
 Orka provides a brokered credential and cross-namespace Agent contract.
 
-Source investigation and fix actions also cannot share one server pod today.
-They would use one Kubernetes requester for two different Task shapes, which
-would either deny source Tasks or leave fix Tasks outside the strict policy. The
-chart rejects that combined mode until the requesters are separated.
+Source investigation and fix actions can share one server pod while retaining
+distinct Kubernetes requesters. The pod runs as the source-investigation
+ServiceAccount. For fix generation, it requests a short-lived token for the
+separate fix ServiceAccount through the Kubernetes TokenRequest API. The token
+is bound to the current server Pod name and UID, cached only in memory, and used
+for both fix Task requests and fix result reads. The source ServiceAccount has no
+direct fix Task permission.
+
+Chart-managed RBAC limits token creation to the exact fix ServiceAccount name in
+the dashboard namespace. The fix ServiceAccount remains limited to its Task-only
+Role and requester-scoped admission policy. If `orka.rbac.create=false`, the
+operator must provide the equivalent `serviceaccounts/token` permission without
+broadening either Task Role. Configurations that resolve source and fix to the
+same ServiceAccount fail Helm validation.
 
 When the dashboard namespace differs from `orka.namespace`, grant the dashboard
 ServiceAccount access to the Orka result API. Prefer projected ServiceAccount
