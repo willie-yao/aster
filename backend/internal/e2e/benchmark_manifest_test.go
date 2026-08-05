@@ -243,20 +243,20 @@ var benchmarkHumanScoreDimensions = []string{
 }
 
 type benchmarkJSONLDraft struct {
-	Attempt             int      `json:"attempt"`
-	Phase               string   `json:"phase"`
-	Selected            bool     `json:"selected"`
-	RuleIDs             []string `json:"rule_ids,omitempty"`
-	MatchedSkillIDs     []string `json:"matched_skill_ids,omitempty"`
-	MissingGroupIDs     []string `json:"missing_group_ids,omitempty"`
-	UnavailableGroupIDs []string `json:"unavailable_group_ids,omitempty"`
-	PuntCount           int      `json:"punt_count,omitempty"`
-	UnreadCitationCount int      `json:"unread_citation_count,omitempty"`
-	CitationIssueCount  int      `json:"citation_issue_count,omitempty"`
-	MissingGroupCount   int      `json:"missing_group_count,omitempty"`
-	TransientConflict   bool     `json:"transient_conflict,omitempty"`
-	ToolCalls           int      `json:"tool_calls,omitempty"`
-	EvidenceReads       int      `json:"evidence_reads,omitempty"`
+	Attempt             int                           `json:"attempt"`
+	Phase               string                        `json:"phase"`
+	Selected            bool                          `json:"selected"`
+	RuleIDs             []string                      `json:"rule_ids,omitempty"`
+	MatchedSkillIDs     []string                      `json:"matched_skill_ids,omitempty"`
+	MissingGroups       []ai.CritiqueEvidenceGroupRef `json:"missing_groups,omitempty"`
+	UnavailableGroups   []ai.CritiqueEvidenceGroupRef `json:"unavailable_groups,omitempty"`
+	PuntCount           int                           `json:"punt_count,omitempty"`
+	UnreadCitationCount int                           `json:"unread_citation_count,omitempty"`
+	CitationIssueCount  int                           `json:"citation_issue_count,omitempty"`
+	MissingGroupCount   int                           `json:"missing_group_count,omitempty"`
+	TransientConflict   bool                          `json:"transient_conflict,omitempty"`
+	ToolCalls           int                           `json:"tool_calls,omitempty"`
+	EvidenceReads       int                           `json:"evidence_reads,omitempty"`
 }
 
 type benchmarkCacheVerification struct {
@@ -311,7 +311,7 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 		result.Drafts = append(result.Drafts, benchmarkJSONLDraft{
 			Attempt: observation.Attempt, Phase: observation.Phase, Selected: observation.Attempt == selectedAttempt,
 			RuleIDs: append([]string(nil), observation.RuleIDs...), MatchedSkillIDs: append([]string(nil), observation.MatchedSkillIDs...),
-			MissingGroupIDs: append([]string(nil), observation.MissingGroupIDs...), UnavailableGroupIDs: append([]string(nil), observation.UnavailableGroupIDs...),
+			MissingGroups: append([]ai.CritiqueEvidenceGroupRef(nil), observation.MissingGroups...), UnavailableGroups: append([]ai.CritiqueEvidenceGroupRef(nil), observation.UnavailableGroups...),
 			PuntCount: observation.PuntCount, UnreadCitationCount: observation.UnreadCitationCount,
 			CitationIssueCount: observation.CitationIssueCount, MissingGroupCount: observation.MissingGroupCount,
 			TransientConflict: observation.TransientConflict, ToolCalls: observation.ToolCalls, EvidenceReads: observation.EvidenceReads,
@@ -490,7 +490,7 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 	cacheVerification := benchmarkCacheVerification{Attempted: true, Saved: true, Accepted: true, CacheHit: true, EvidencePlanCovered: true, GCSFloorRetryExhausted: true, CacheGeneration: "generation"}
 	observations := []benchmarkDraftObservation{{DraftObservation: ai.DraftObservation{
 		Attempt: 1, Phase: "initial", RuleIDs: []string{"remediation.punt"},
-		MatchedSkillIDs: []string{"skill-a"}, MissingGroupIDs: []string{"skill-a/group-a"}, PuntCount: 1,
+		MatchedSkillIDs: []string{"skill-a"}, MissingGroups: []ai.CritiqueEvidenceGroupRef{{SkillID: "skill-a", GroupID: "group-a"}}, PuntCount: 1,
 	}}}
 	writeBenchmarkJSONL(t, path, bc, 2, tc, 3*time.Second, snapshot, observations, 1,
 		benchmarkToolUsage{names: []string{"read_artifact"}, counts: []string{"read_artifact=1"}},

@@ -13,8 +13,9 @@ func TestCritiqueRuleIDs(t *testing.T) {
 		UnreadCitations: []string{"build-log.txt", "pkg/controller.go"},
 		CitationIssues: []string{
 			"citation 1 has an invalid path",
-			"citation 2 quote does not match the requested range",
+			"citation 2 quote does not occur at the claimed lines",
 			"citation 3 line range exceeds the stored artifact",
+			"citation 4 names an unread artifact",
 			"prose line claim build-log.txt:10-10 has no matching citation",
 		},
 		MissingSkillEvidence: []skillEvidenceMiss{{
@@ -57,13 +58,27 @@ required_evidence:
 	if dropped := pruneAbsentSkillEvidence(analysisResponse{Summary: "trigger", SuggestedFix: "Apply fix."}, &out, map[string]bool{"available.log": true}); dropped != 1 {
 		t.Fatalf("dropped = %d, want 1", dropped)
 	}
-	if got := critiqueEvidenceGroupIDs(out.MissingSkillEvidence); !slices.Equal(got, []string{"skill-a/available"}) {
+	if got := critiqueEvidenceGroupRefs(out.MissingSkillEvidence); !slices.Equal(got, []CritiqueEvidenceGroupRef{{SkillID: "skill-a", GroupID: "available"}}) {
 		t.Fatalf("missing groups = %v", got)
 	}
-	if got := critiqueEvidenceGroupIDs(out.UnavailableSkillEvidence); !slices.Equal(got, []string{"skill-a/absent"}) {
+	if got := critiqueEvidenceGroupRefs(out.UnavailableSkillEvidence); !slices.Equal(got, []CritiqueEvidenceGroupRef{{SkillID: "skill-a", GroupID: "absent"}}) {
 		t.Fatalf("unavailable groups = %v", got)
 	}
 	if got := out.RuleIDs(); !slices.Equal(got, []CritiqueRuleID{CritiqueRuleEvidenceAvailableUnread, CritiqueRuleEvidenceUnavailable}) {
 		t.Fatalf("rules = %v", got)
+	}
+}
+
+func TestCritiqueEvidenceGroupRefsPreserveIdentity(t *testing.T) {
+	got := critiqueEvidenceGroupRefs([]skillEvidenceMiss{
+		{Skill: skills.Skill{ID: "a/b"}, Missing: []skills.EvidenceGroup{{ID: "c"}}},
+		{Skill: skills.Skill{ID: "a"}, Missing: []skills.EvidenceGroup{{ID: "b/c"}}},
+	})
+	want := []CritiqueEvidenceGroupRef{
+		{SkillID: "a", GroupID: "b/c"},
+		{SkillID: "a/b", GroupID: "c"},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("refs = %v, want %v", got, want)
 	}
 }

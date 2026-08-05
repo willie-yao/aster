@@ -10,6 +10,13 @@ import (
 // CritiqueRuleID is a stable, privacy-safe deterministic critique identifier.
 type CritiqueRuleID string
 
+// CritiqueEvidenceGroupRef identifies one evidence group without ambiguous
+// string concatenation.
+type CritiqueEvidenceGroupRef struct {
+	SkillID string `json:"skill_id"`
+	GroupID string `json:"group_id"`
+}
+
 const (
 	CritiqueRulePathUnsafe              CritiqueRuleID = "path.unsafe"
 	CritiqueRuleCitationInvalidRange    CritiqueRuleID = "citation.invalid_range"
@@ -61,13 +68,13 @@ func critiqueCitationRule(issue string) CritiqueRuleID {
 	switch {
 	case strings.Contains(issue, "invalid path"):
 		return CritiqueRulePathUnsafe
-	case strings.Contains(issue, "quote does not match"):
+	case strings.Contains(issue, "quote does not match"), strings.Contains(issue, "quote does not occur"):
 		return CritiqueRuleCitationQuoteMismatch
 	case strings.Contains(issue, "line range"), strings.Contains(issue, "line_start"), strings.Contains(issue, "line_end"):
 		return CritiqueRuleCitationInvalidRange
 	case strings.Contains(issue, "prose line claim"):
 		return CritiqueRuleClaimUncitedLine
-	case strings.Contains(issue, "was not read"):
+	case strings.Contains(issue, "was not read"), strings.Contains(issue, "names an unread artifact"):
 		return CritiqueRuleCitationUnread
 	case strings.Contains(issue, "evidence read budget was exceeded"):
 		return CritiqueRuleEvidenceUnavailable
@@ -87,21 +94,25 @@ func critiqueMatchedSkillIDs(matched []skills.Skill) []string {
 	return out
 }
 
-func critiqueEvidenceGroupIDs(skills []skillEvidenceMiss) []string {
-	seen := map[string]bool{}
+func critiqueEvidenceGroupRefs(skills []skillEvidenceMiss) []CritiqueEvidenceGroupRef {
+	seen := map[CritiqueEvidenceGroupRef]bool{}
 	for _, miss := range skills {
 		for _, group := range miss.Missing {
-			id := miss.Skill.ID + "/" + group.ID
 			if miss.Skill.ID != "" && group.ID != "" {
-				seen[id] = true
+				seen[CritiqueEvidenceGroupRef{SkillID: miss.Skill.ID, GroupID: group.ID}] = true
 			}
 		}
 	}
-	out := make([]string, 0, len(seen))
-	for id := range seen {
-		out = append(out, id)
+	out := make([]CritiqueEvidenceGroupRef, 0, len(seen))
+	for ref := range seen {
+		out = append(out, ref)
 	}
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].SkillID != out[j].SkillID {
+			return out[i].SkillID < out[j].SkillID
+		}
+		return out[i].GroupID < out[j].GroupID
+	})
 	return out
 }
 

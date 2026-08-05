@@ -104,8 +104,8 @@ type DraftObservation struct {
 	TransientConflict   bool
 	RuleIDs             []string
 	MatchedSkillIDs     []string
-	MissingGroupIDs     []string
-	UnavailableGroupIDs []string
+	MissingGroups       []CritiqueEvidenceGroupRef
+	UnavailableGroups   []CritiqueEvidenceGroupRef
 	ToolCalls           int
 	EvidenceReads       int
 }
@@ -1666,8 +1666,8 @@ func (s *agentState) observeDraft(phase string, parsed analysisResponse, out cri
 		TransientConflict:   out.TransientPersistCount > 0,
 		RuleIDs:             critiqueRuleStrings(out.RuleIDs()),
 		MatchedSkillIDs:     append([]string(nil), out.MatchedSkillIDs...),
-		MissingGroupIDs:     critiqueEvidenceGroupIDs(out.MissingSkillEvidence),
-		UnavailableGroupIDs: critiqueEvidenceGroupIDs(out.UnavailableSkillEvidence),
+		MissingGroups:       critiqueEvidenceGroupRefs(out.MissingSkillEvidence),
+		UnavailableGroups:   critiqueEvidenceGroupRefs(out.UnavailableSkillEvidence),
 		ToolCalls:           s.calls,
 		EvidenceReads:       len(s.readArtifactsFull),
 	})
