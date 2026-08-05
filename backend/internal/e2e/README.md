@@ -58,7 +58,10 @@ Options:
 - The harness derives and enforces the maximum provider requests admitted by the
   exact agentic configuration. The cap includes the configured loop, the single
   byte-floor extension, forced finalization, one bounded critique repair, and
-  semantic review. The private JSONL row records it as `provider_request_cap`.
+  semantic review. Transport retries count through each trace event's `attempts`
+  value, and a truncated trace fails closed because request usage would be
+  incomplete. Private JSONL records `provider_request_cap`, logical
+  `model_requests`, actual `provider_attempts`, and `trace_truncated`.
 
 For the Claude hard-policy production-readiness matrix, the fixed configuration
 uses `max_iters: 11`, a non-zero byte floor, one critique retry, and semantic
@@ -74,7 +77,8 @@ review. Its exact maximum is:
 2 compatibility requests + 4 x 17 = 70 total Claude requests
 ```
 
-The selected operation cap is 17. A larger value would hide an unbounded or
+The selected operation cap is 17. Transport retries consume that same cap rather
+than receiving extra headroom. A larger value would hide an unbounded or
 unexpected runtime path rather than provide legitimate headroom.
 
 ## Telemetry

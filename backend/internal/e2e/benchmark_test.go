@@ -623,8 +623,11 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 	}
 	critiquePolicy := ai.CritiqueCachePolicy(agentic.Critique.EffectiveCachePolicy())
 	writeBenchmarkJSONL(t, resultsPath, bc, repetition, tc, elapsed, snapshot, draftObservations, selectedAttempt, toolUsage, traceSummary, requestCap.PerOperation, cacheGeneration, critiquePolicy, cacheVerification)
-	if traceSummary.modelRequests > requestCap.PerOperation {
-		t.Fatalf("provider request cap exceeded: requests=%d cap=%d", traceSummary.modelRequests, requestCap.PerOperation)
+	if traceSummary.truncated {
+		t.Fatalf("provider request cap cannot be verified from a truncated trace")
+	}
+	if traceSummary.modelRequests > requestCap.PerOperation || traceSummary.providerAttempts > requestCap.PerOperation {
+		t.Fatalf("provider request cap exceeded: model_requests=%d provider_attempts=%d cap=%d", traceSummary.modelRequests, traceSummary.providerAttempts, requestCap.PerOperation)
 	}
 	scoreBenchCase(t, bc, tc, elapsed, "in-process", benchmarkMinGCSBytes(bc, agentic.MinGCSBytes), toolUsage, traceSummary, draftObservations, selectedAttempt)
 }
@@ -734,7 +737,9 @@ type benchmarkTraceSummary struct {
 	evidenceRetries          int
 	unparseableRetries       int
 	acceptedUncached         int
+	truncated                bool
 	modelRequests            int
+	providerAttempts         int
 	modelFailures            int
 	toolFailures             int
 	inputTokens              int
@@ -774,6 +779,9 @@ func successfulBenchmarkToolUsage(snapshot ai.AnalysisTraceFile) benchmarkToolUs
 func summarizeBenchmarkTrace(snapshot ai.AnalysisTraceFile) benchmarkTraceSummary {
 	summary := benchmarkTraceSummary{semanticJudgeOutcome: "not_run"}
 	for _, trace := range snapshot.Traces {
+		if trace.Truncated {
+			summary.truncated = true
+		}
 		for _, event := range trace.Events {
 			switch event.Kind {
 			case "floor_nudge":
@@ -803,6 +811,7 @@ func summarizeBenchmarkTrace(snapshot ai.AnalysisTraceFile) benchmarkTraceSummar
 				}
 			case "model_request":
 				summary.modelRequests++
+				summary.providerAttempts += max(event.Attempts, 1)
 				if event.Outcome == "error" {
 					summary.modelFailures++
 				}
@@ -859,13 +868,13 @@ func benchmarkTelemetryLines(elapsed time.Duration, analysis *models.AIAnalysis,
 	lines := make([]string, 0, 3)
 	if analysis == nil {
 		lines = append(lines, fmt.Sprintf(
-			"elapsed=%s tool_names=%v tool_counts=%v context_truncations=%d model_requests=%d model_failures=%d tool_failures=%d input_tokens=%d output_tokens=%d",
-			elapsed, toolUsage.names, toolUsage.counts, trace.contextCompactionApplied, trace.modelRequests, trace.modelFailures, trace.toolFailures, trace.inputTokens, trace.outputTokens))
+			"elapsed=%s tool_names=%v tool_counts=%v context_truncations=%d model_requests=%d provider_attempts=%d model_failures=%d tool_failures=%d input_tokens=%d output_tokens=%d",
+			elapsed, toolUsage.names, toolUsage.counts, trace.contextCompactionApplied, trace.modelRequests, trace.providerAttempts, trace.modelFailures, trace.toolFailures, trace.inputTokens, trace.outputTokens))
 	} else {
 		lines = append(lines, fmt.Sprintf(
-			"elapsed=%s tool_calls=%d tool_names=%v tool_counts=%v gcs_bytes=%d context_bytes=%d context_truncations=%d model_requests=%d model_failures=%d tool_failures=%d input_tokens=%d output_tokens=%d",
+			"elapsed=%s tool_calls=%d tool_names=%v tool_counts=%v gcs_bytes=%d context_bytes=%d context_truncations=%d model_requests=%d provider_attempts=%d model_failures=%d tool_failures=%d input_tokens=%d output_tokens=%d",
 			elapsed, analysis.ToolCalls, toolUsage.names, toolUsage.counts, analysis.GCSBytes, analysis.ContextBytes, trace.contextCompactionApplied,
-			trace.modelRequests, trace.modelFailures, trace.toolFailures, trace.inputTokens, trace.outputTokens))
+			trace.modelRequests, trace.providerAttempts, trace.modelFailures, trace.toolFailures, trace.inputTokens, trace.outputTokens))
 		lines = append(lines, fmt.Sprintf(
 			"quality evidence_plan_covered=%v gcs_floor_retry_exhausted=%v gcs_floor_bypassed=%v critique_passed=%v critique_version=%d skill_set_hash=%s budget_exhausted=%v judge_ran=%v judge_objected=%v judge_revised=%v",
 			analysis.EvidencePlanCovered, analysis.GCSFloorRetryExhausted, benchmarkGCSFloorBypassed(analysis, minGCSBytes), analysis.CritiquePassed, analysis.CritiqueVersion,
@@ -1003,7 +1012,7 @@ func TestSuccessfulBenchmarkToolUsage(t *testing.T) {
 }
 
 func TestSummarizeBenchmarkTrace(t *testing.T) {
-	snapshot := ai.AnalysisTraceFile{Traces: []ai.AnalysisTrace{{Events: []ai.TraceEvent{
+	snapshot := ai.AnalysisTraceFile{Traces: []ai.AnalysisTrace{{Truncated: true, Events: []ai.TraceEvent{
 		{Kind: "floor_nudge", Status: "tool_calls"},
 		{Kind: "floor_nudge", Status: "tool_calls+gcs_bytes"},
 		{Kind: "floor_nudge"},
@@ -1016,7 +1025,7 @@ func TestSummarizeBenchmarkTrace(t *testing.T) {
 		{Kind: "critique", Outcome: "evidence_retry"},
 		{Kind: "critique", Outcome: "unparseable_retry"},
 		{Kind: "critique", Outcome: "accepted_uncached"},
-		{Kind: "model_request", Outcome: "success", InputTokens: 10, OutputTokens: 4},
+		{Kind: "model_request", Outcome: "success", Attempts: 2, InputTokens: 10, OutputTokens: 4},
 		{Kind: "model_request", Outcome: "error", InputTokens: 3, OutputTokens: 1},
 		{Kind: "tool_call", Outcome: "error"},
 	}}}}
@@ -1034,7 +1043,7 @@ func TestSummarizeBenchmarkTrace(t *testing.T) {
 	if got.critiqueRetries != 1 || got.evidenceRetries != 1 || got.unparseableRetries != 1 || got.acceptedUncached != 1 {
 		t.Fatalf("critique summary = retries:%d evidence:%d unparseable:%d uncached:%d", got.critiqueRetries, got.evidenceRetries, got.unparseableRetries, got.acceptedUncached)
 	}
-	if got.modelRequests != 2 || got.modelFailures != 1 || got.toolFailures != 1 || got.inputTokens != 13 || got.outputTokens != 5 {
+	if !got.truncated || got.modelRequests != 2 || got.providerAttempts != 3 || got.modelFailures != 1 || got.toolFailures != 1 || got.inputTokens != 13 || got.outputTokens != 5 {
 		t.Fatalf("usage summary = %+v", got)
 	}
 }
@@ -1045,12 +1054,12 @@ func TestBenchmarkTelemetryQualityFields(t *testing.T) {
 		CritiquePassed: true, CritiqueVersion: 7, SkillSetHash: strings.Repeat("a", 64),
 		BudgetExhausted: true, JudgeRan: true, JudgeObjected: true, JudgeRevised: true,
 	}
-	trace := benchmarkTraceSummary{contextCompactionApplied: 2, modelRequests: 4, modelFailures: 1, toolFailures: 2, inputTokens: 30, outputTokens: 12, semanticJudgeOutcome: "revised"}
+	trace := benchmarkTraceSummary{contextCompactionApplied: 2, modelRequests: 4, providerAttempts: 5, modelFailures: 1, toolFailures: 2, inputTokens: 30, outputTokens: 12, semanticJudgeOutcome: "revised"}
 	got := strings.Join(benchmarkTelemetryLines(time.Second, analysis, 100, benchmarkToolUsage{}, trace), "\n")
 	for _, want := range []string{
 		"evidence_plan_covered=true", "gcs_floor_bypassed=true", "critique_passed=true", "critique_version=7",
 		"skill_set_hash=aaaaaaaaaaaa", "budget_exhausted=true", "judge_ran=true", "judge_objected=true", "judge_revised=true",
-		"context_truncations=2", "model_requests=4", "model_failures=1", "tool_failures=2", "input_tokens=30", "output_tokens=12",
+		"context_truncations=2", "model_requests=4", "provider_attempts=5", "model_failures=1", "tool_failures=2", "input_tokens=30", "output_tokens=12",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("telemetry missing %q:\n%s", want, got)
