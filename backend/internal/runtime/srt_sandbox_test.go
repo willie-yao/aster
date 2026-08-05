@@ -304,7 +304,7 @@ func TestSRTSandboxValidatesNodeFromSandboxPATH(t *testing.T) {
 	if err := os.WriteFile(command, []byte("binary"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	_, err := NewSRTSandbox(fake).Command(context.Background(), SandboxSpec{
+	_, err := (&SRTSandbox{Bin: fake, goos: "darwin"}).Command(context.Background(), SandboxSpec{
 		Command: []string{command}, WorkDir: work, HomeDir: home, TempDir: temp,
 		Environment: []string{"PATH=" + binDir},
 		ReadPaths:   []string{work, home, temp, command}, WritePaths: []string{work, home, temp},
