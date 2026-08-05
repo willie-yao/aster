@@ -430,6 +430,10 @@ func (d promptDebugger) sourceSummary(sources []promptSource, jobs int, attempte
 	d.line("source_count=%d source_bytes=%d source_attempts=%d matched_prow_jobs=%d", len(sources), bytes, attempted, jobs)
 }
 
+func (d promptDebugger) extractionChunks(total, completed, attempts int) {
+	d.line("extraction_chunks_total=%d extraction_chunks_completed=%d extraction_attempts=%d", total, completed, attempts)
+}
+
 func (d promptDebugger) failure(failure *promptPreparationFailure) {
 	if failure == nil {
 		return

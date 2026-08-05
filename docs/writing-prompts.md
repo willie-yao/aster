@@ -81,24 +81,40 @@ of eligible files in the pinned snapshot, but cannot trigger arbitrary URLs,
 commands, provider-time retrieval, or secret access. The draft remains a
 starting point that requires human review.
 
-Generation uses two structured completion stages within a five-minute total timeout by default. `fetcher onboard --prompt-timeout` can raise the total budget for a slow provider:
+Generation uses deterministic chunked extraction plus one structured revision
+within a five-minute total timeout by default. `fetcher onboard --prompt-timeout`
+can raise the total budget for a slow provider:
 
-1. Extract an evidence object whose claims retain supplied source paths and line
-   ranges.
-2. Validate it deterministically, then ask for one complete structured revision
-   against the quality rubric.
-3. Validate the revision with the same rules and render Markdown deterministically.
+1. Split the sorted source corpus at source boundaries with a 12,000-byte
+   target and a 16,000-byte hard ceiling. Extract each chunk through three small
+   schema-bound phases for context, operations, and failure patterns. Every phase
+   receives the same compact Prow job metadata and is limited to one highest-value
+   item per evidence section and 300 characters per string.
+2. Retry one invalid extraction phase once with a smaller-output instruction,
+   then require every chunk to pass the normal grounding rules. Merge duplicate
+   claims and keyed evidence deterministically, enforce the existing item,
+   reference, and byte caps, then ground and validate the merge against the
+   complete corpus.
+3. Add engine-owned evidence for the exact source repository and up to three
+   representative Prow job records, cap unresolved details at 12, then ask for one
+   complete structured revision using only the validated merged evidence and gaps.
+   The raw repository excerpts are not resent. The revision can remove or
+   reorganize exact validated items but cannot change factual strings or source
+   references.
+4. Validate the revision and render Markdown deterministically.
 
-Each stage uses the engine's existing structured transport: native JSON schema,
-then a forced function call, then bounded plain-JSON extraction when the provider
-rejects the earlier protocol. This is at most three transport attempts per stage
-and six total; validation failure never triggers an unbounded retry loop.
+Each model call uses the engine's existing structured transport: native JSON
+schema, then a forced function call, then bounded plain-JSON extraction when the
+provider rejects the earlier protocol. One invalid phase can be retried once,
+so each phase has at most six transport attempts and each three-phase chunk has
+at most eighteen. Revision has at most three. Validation failure never triggers
+an unbounded retry loop.
 
-If the first extraction is invalid, onboarding writes the reviewable stub. If
-the revision fails, onboarding renders the first validated evidence object. It
-never publishes an unvalidated object or asks a third free-form call to format
-Markdown. Source references remain internal to generation unless their content
-is useful in the runbook.
+If any extraction chunk or the merged validation fails, onboarding writes the
+reviewable stub instead of publishing partial evidence. If the revision fails,
+onboarding renders the merged validated evidence object. It never publishes an
+unvalidated object or asks a free-form call to format Markdown. Source references
+remain internal to generation unless their content is useful in the runbook.
 
 A capable model does not replace source quality. Improve repository diagnostics,
 artifact documentation, or job metadata, then rerun onboarding when important

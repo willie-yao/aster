@@ -27,7 +27,12 @@ func TestBuildSystemPromptUsesEvidenceWithoutLeakingTokens(t *testing.T) {
 		}
 		body, _ := io.ReadAll(r.Body)
 		modelRequests = append(modelRequests, string(body))
-		fmt.Fprintf(w, `{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":%q}}]}`, validPromptEvidenceJSON())
+		response := validPromptEvidenceJSON()
+		if len(modelRequests) <= len(promptExtractionPhases) {
+			phase := promptExtractionPhases[len(modelRequests)-1]
+			response = projectStubStructuredOutput(response, promptEvidencePhaseResponseFormat(phase, maxPromptChunkEvidenceItems, maxPromptChunkNestedItems))
+		}
+		fmt.Fprintf(w, `{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":%q}}]}`, response)
 	}))
 	defer model.Close()
 
@@ -75,8 +80,8 @@ func TestBuildSystemPromptUsesEvidenceWithoutLeakingTokens(t *testing.T) {
 	if result.Status != promptStatusAPIDraft || !strings.Contains(prompt, "## Architecture") || !strings.Contains(prompt, "## Unresolved details") {
 		t.Fatalf("prompt was not drafted:\n%s", prompt)
 	}
-	if len(modelRequests) != 2 {
-		t.Fatalf("model requests = %d, want extraction and revision", len(modelRequests))
+	if len(modelRequests) != len(promptExtractionPhases)+1 {
+		t.Fatalf("model requests = %d, want phased extraction and revision", len(modelRequests))
 	}
 	for _, want := range []string{"DISCOVERED PROW JOBS", "SOURCE 1: docs/", "kind markdown"} {
 		if !strings.Contains(modelRequests[0], want) {

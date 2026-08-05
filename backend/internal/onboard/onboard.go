@@ -122,6 +122,7 @@ func buildSystemPrompt(ctx context.Context, opts Options, data scaffoldData, inp
 	})
 	generation, err := generatePromptBodyDetailed(ctx, client, input, opts.AIToken, opts.GitHubToken)
 	debug.stage(promptStageEvidenceExtraction, generation.ExtractionDuration)
+	debug.extractionChunks(generation.ExtractionChunks, generation.CompletedExtractionChunks, generation.ExtractionAttempts)
 	debug.stage(promptStageStructuredRevision, generation.RevisionDuration)
 	debug.stage(promptStageFinalPromptValidation, generation.RenderDuration)
 	if err != nil {

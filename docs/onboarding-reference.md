@@ -167,12 +167,24 @@ When prompt drafting is selected, the wizard:
 2. Requires explicit confirmation.
 3. Resolves the default branch to one commit and reads a bounded source corpus.
 4. Reuses matched discovery and final-sweep jobs without another Prow discovery.
-5. Makes one schema-bound evidence extraction call.
-6. Validates the evidence, makes one schema-bound revision call, and validates
-   the complete revision with the same rules.
-7. Renders Markdown deterministically and validates the final section contract.
-8. Falls back to a reviewable TODO template when extraction fails. If only
-   revision fails, it renders the first validated evidence object.
+5. Splits the sorted source corpus at source boundaries with a 12,000-byte
+   target and a 16,000-byte hard ceiling. Each chunk receives the same compact
+   Prow job metadata and is extracted through three small schema-bound phases:
+   context, operations, and failure patterns. Each phase is limited to one
+   highest-value item per evidence section and 300 characters per string.
+6. Retries one invalid extraction phase once with a smaller-output instruction,
+   then requires every chunk to validate. It merges the validated evidence with
+   bounded first-seen semantics, then grounds and validates the merge against the
+   complete corpus.
+7. Adds credential-free engine-owned evidence for the source repository and up
+   to three representative Prow job records, caps unresolved details at 12, then
+   makes one schema-bound revision call using only the merged evidence and gaps.
+   The revision can remove or reorganize exact validated items, but cannot
+   change factual strings or source references.
+8. Renders Markdown deterministically and validates the final section contract.
+9. Falls back to a reviewable TODO template when any extraction chunk or merged
+   validation fails. If only revision fails, it renders the merged validated
+   evidence object.
 
 The source corpus contains at most 8 Markdown, Go, YAML, or shell files or
 line-ranged excerpts. One source contributes at most 12,000 bytes and all source
@@ -186,12 +198,12 @@ fixture. A truncated recursive Git tree is rejected.
 Prow metadata includes job name, periodic or presubmit type, configuration file,
 repository when established, branches or refs, and TestGrid annotations. It uses
 compact one-line records and is limited to 60 jobs and 16,000 bytes, with an
-omitted-count summary. Runtime credentials are redacted from full source text before excerpting and from the
-complete serialized provider input. The two structured completion stages and source retrieval
-share a five-minute timeout. Each stage can use at most the existing schema,
-forced-function, and bounded plain-JSON transport attempts, for six provider
-requests total. Cancellation stops retrieval and provider calls. No third
-free-form formatting stage is made.
+omitted-count summary. Runtime credentials are redacted from full source text and
+the complete serialized provider input. Source retrieval, phased extraction, and
+revision share the onboarding prompt timeout. Each extraction phase uses the
+existing schema, forced-function, and bounded plain-JSON transports and may retry
+once; revision uses the same transports without an extra model retry. Cancellation
+stops retrieval and provider calls. No free-form formatting stage is made.
 
 Generated prompts are drafts. Review every architecture, artifact, failure, and
 transient-classification claim before deployment.
@@ -232,7 +244,8 @@ Use `--no-prompt` to force the TODO template. Use `--ai=false` to disable
 deployed AI analysis. These flags control different features.
 
 `--prompt-debug` writes sanitized diagnostics to stderr only. It may include
-stage timing, selected source paths and line ranges, source and job counts, API,
+stage timing, selected source paths and line ranges, source and job counts,
+extraction chunk totals, completed chunks, and bounded extraction attempts, API,
 endpoint hostname, model fingerprint, structured transport attempt, HTTP status,
 safe `Retry-After`, provider request ID, validation code and field, revision
 fallback, and total elapsed time. It excludes credentials, source-line contents,
