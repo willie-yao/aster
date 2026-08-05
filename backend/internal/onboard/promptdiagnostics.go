@@ -48,6 +48,7 @@ const (
 	promptStageSourceRevision        promptPreparationStage = "source-revision-resolution"
 	promptStageSourceTree            promptPreparationStage = "source-tree-listing"
 	promptStageSourceExcerpt         promptPreparationStage = "source-excerpt-retrieval"
+	promptStageAgentExecution        promptPreparationStage = "agent-execution"
 	promptStageEvidenceExtraction    promptPreparationStage = "structured-evidence-extraction"
 	promptStageEvidenceGrounding     promptPreparationStage = "evidence-grounding-validation"
 	promptStageFinalPromptValidation promptPreparationStage = "final-rendering-and-prompt-validation"
@@ -63,6 +64,8 @@ func (s promptPreparationStage) label() string {
 		return "source tree listing"
 	case promptStageSourceExcerpt:
 		return "source excerpt retrieval"
+	case promptStageAgentExecution:
+		return "agent execution"
 	case promptStageEvidenceExtraction:
 		return "structured evidence extraction"
 	case promptStageEvidenceGrounding:
@@ -88,6 +91,7 @@ const (
 	promptFailureInvalidStructured   promptFailureCategory = "invalid-structured-response"
 	promptFailureUngroundedEvidence  promptFailureCategory = "ungrounded-evidence"
 	promptFailurePromptValidation    promptFailureCategory = "prompt-validation-failed"
+	promptFailureAgentExecution      promptFailureCategory = "agent-execution-failed"
 	promptFailureTimedOut            promptFailureCategory = "timed-out"
 	promptFailureUnknown             promptFailureCategory = "prompt-preparation-failed"
 )
@@ -116,6 +120,8 @@ func (c promptFailureCategory) reason() string {
 		return "the structured response failed evidence grounding"
 	case promptFailurePromptValidation:
 		return "the rendered prompt failed deterministic validation"
+	case promptFailureAgentExecution:
+		return "OpenCode prompt authoring could not run to completion"
 	case promptFailureTimedOut:
 		return "prompt preparation exceeded its time limit"
 	default:
@@ -147,6 +153,8 @@ func (c promptFailureCategory) action() string {
 		return "Retry the same reviewed prompt authoring mode or continue with the TODO template."
 	case promptFailurePromptValidation:
 		return "Continue with the TODO template and inspect the deterministic validation tests."
+	case promptFailureAgentExecution:
+		return "Verify OpenCode availability, authentication, and repository access, then retry or use the handoff bundle."
 	default:
 		return "Continue with the reviewable TODO template."
 	}
@@ -329,7 +337,7 @@ func promptPlanIncludesHandoff(plan PromptPlan) bool {
 
 func knownPromptStage(stage promptPreparationStage) bool {
 	switch stage {
-	case promptStageTokenPreflight, promptStageSourceRevision, promptStageSourceTree, promptStageSourceExcerpt,
+	case promptStageTokenPreflight, promptStageSourceRevision, promptStageSourceTree, promptStageSourceExcerpt, promptStageAgentExecution,
 		promptStageEvidenceExtraction, promptStageEvidenceGrounding, promptStageFinalPromptValidation:
 		return true
 	default:
@@ -341,7 +349,7 @@ func knownPromptFailureCategory(category promptFailureCategory) bool {
 	switch category {
 	case promptFailureMissingToken, promptFailureMissingCoordinates, promptFailureSourceUnavailable, promptFailureNoSourceEvidence,
 		promptFailureProviderAuth, promptFailureProviderRejected, promptFailureProviderRateLimited, promptFailureProviderUnavailable,
-		promptFailureInvalidStructured, promptFailureUngroundedEvidence, promptFailurePromptValidation,
+		promptFailureInvalidStructured, promptFailureUngroundedEvidence, promptFailurePromptValidation, promptFailureAgentExecution,
 		promptFailureTimedOut, promptFailureUnknown:
 		return true
 	default:

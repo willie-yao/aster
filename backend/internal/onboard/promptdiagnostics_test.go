@@ -259,11 +259,12 @@ func TestPromptPreparationStageLabels(t *testing.T) {
 		promptStageSourceRevision:        "source revision resolution",
 		promptStageSourceTree:            "source tree listing",
 		promptStageSourceExcerpt:         "source excerpt retrieval",
+		promptStageAgentExecution:        "agent execution",
 		promptStageEvidenceExtraction:    "structured evidence extraction",
 		promptStageEvidenceGrounding:     "evidence grounding validation",
 		promptStageFinalPromptValidation: "final rendering and prompt validation",
 	}
-	if len(stages) != 7 {
+	if len(stages) != 8 {
 		t.Fatalf("stages = %d", len(stages))
 	}
 	for stage, want := range stages {

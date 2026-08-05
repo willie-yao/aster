@@ -112,9 +112,13 @@ func buildAgentPrompt(ctx context.Context, opts Options, data scaffoldData, inpu
 		if parentCtx.Err() != nil {
 			return "", promptPreparationResult{}, parentCtx.Err()
 		}
-		failure := &promptPreparationFailure{Stage: promptStageFinalPromptValidation, Category: promptFailureUnknown, cause: err}
+		failure := &promptPreparationFailure{Stage: promptStageAgentExecution, Category: promptFailureAgentExecution, cause: err}
+		if errors.Is(err, promptauthor.ErrOutputValidation) {
+			failure.Stage = promptStageFinalPromptValidation
+			failure.Category = promptFailurePromptValidation
+		}
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			failure = sourcePromptFailure(promptStageFinalPromptValidation, context.DeadlineExceeded)
+			failure = sourcePromptFailure(promptStageAgentExecution, context.DeadlineExceeded)
 		}
 		writePromptFailure(errOut, "OpenCode prompt authoring failed", failure, "agent handoff bundle with TODO template")
 		prompt, renderErr := render(systemPromptTmpl, data)

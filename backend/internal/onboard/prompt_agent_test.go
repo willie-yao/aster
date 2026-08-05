@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -164,11 +165,22 @@ func TestBuildAgentPromptFallsBackSafely(t *testing.T) {
 	if err != nil || result.Status != promptStatusAgentFallback || !strings.Contains(result.Handoff, "periodic-project") || !strings.Contains(body, "## Architecture") {
 		t.Fatalf("fallback result=%+v err=%v", result, err)
 	}
-	if result.Failure == nil || result.Failure.Category != promptFailureUnknown {
+	if result.Failure == nil || result.Failure.Stage != promptStageAgentExecution || result.Failure.Category != promptFailureAgentExecution {
 		t.Fatalf("fallback failure = %+v", result.Failure)
 	}
 	if strings.Contains(errOut.String(), "raw runtime output") || !strings.Contains(errOut.String(), "agent handoff bundle with TODO template") {
 		t.Fatalf("unsafe fallback warning: %s", errOut.String())
+	}
+}
+
+func TestBuildAgentPromptClassifiesOutputValidation(t *testing.T) {
+	author := &fakePromptAuthor{err: fmt.Errorf("%w: missing output", promptauthor.ErrOutputValidation)}
+	_, result, err := buildAgentPrompt(context.Background(), Options{}, scaffoldData{Name: "Project"}, agentPromptInput(), author, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Failure == nil || result.Failure.Stage != promptStageFinalPromptValidation || result.Failure.Category != promptFailurePromptValidation {
+		t.Fatalf("result = %+v", result)
 	}
 }
 

@@ -90,7 +90,7 @@ func TestBuildPlanAgentDraftHasNoHandoffFiles(t *testing.T) {
 }
 
 func TestValidatePromptPlanBindsAgentFallbackDiagnostics(t *testing.T) {
-	failure := &promptPreparationFailure{Stage: promptStageFinalPromptValidation, Category: promptFailureUnknown}
+	failure := &promptPreparationFailure{Stage: promptStageAgentExecution, Category: promptFailureAgentExecution}
 	plan := (promptPreparationResult{
 		Requested: promptRequestAgent,
 		Status:    promptStatusAgentFallback,
@@ -122,7 +122,7 @@ func TestRequirePromptDraftSupportsAgentWithoutAPICredentials(t *testing.T) {
 	}
 
 	deps, _, _, _ := wizardDependencies("")
-	failure := &promptPreparationFailure{Stage: promptStageFinalPromptValidation, Category: promptFailureUnknown}
+	failure := &promptPreparationFailure{Stage: promptStageAgentExecution, Category: promptFailureAgentExecution}
 	deps.prompts = &fakePromptBuilder{result: promptPreparationResult{
 		Requested: promptRequestAgent,
 		Status:    promptStatusAgentFallback,

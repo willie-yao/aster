@@ -3,12 +3,16 @@ package promptauthor
 import (
 	"context"
 	_ "embed"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	agentruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 )
+
+// ErrOutputValidation marks an agent result that failed the output contract.
+var ErrOutputValidation = errors.New("prompt author output validation failed")
 
 const (
 	OutputPath = "prompts/system.md"
@@ -84,17 +88,17 @@ func (r *OpenCodeRuntime) Generate(ctx context.Context, spec Spec) (Result, erro
 		return result, err
 	}
 	if diffHasDestructiveChange(generated.Diff) {
-		return result, fmt.Errorf("prompt author: agent deleted or renamed repository files")
+		return result, fmt.Errorf("%w: agent deleted or renamed repository files", ErrOutputValidation)
 	}
 	if len(generated.Files) != 1 {
-		return result, fmt.Errorf("prompt author: agent changed %d files, want only %s", len(generated.Files), OutputPath)
+		return result, fmt.Errorf("%w: agent changed %d files, want only %s", ErrOutputValidation, len(generated.Files), OutputPath)
 	}
 	body, ok := generated.Files[OutputPath]
 	if !ok {
-		return result, fmt.Errorf("prompt author: agent did not write %s", OutputPath)
+		return result, fmt.Errorf("%w: agent did not write %s", ErrOutputValidation, OutputPath)
 	}
 	if err := Validate(body); err != nil {
-		return result, err
+		return result, fmt.Errorf("%w: %v", ErrOutputValidation, err)
 	}
 	result.Body = body
 	return result, nil
