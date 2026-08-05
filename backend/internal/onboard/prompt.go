@@ -18,8 +18,8 @@ type structuredCompleter interface {
 }
 
 const (
-	maxPromptJobs     = 100
-	maxPromptJobBytes = 40_000
+	maxPromptJobs     = 60
+	maxPromptJobBytes = 16_000
 )
 
 var requiredPromptHeadings = []string{
@@ -259,17 +259,7 @@ func promptJobMetadataLine(job promptJobSummary) string {
 }
 
 func renderPromptJob(index int, job promptJobSummary) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "\n===== JOB %d =====\n", index)
-	fmt.Fprintf(&b, "Name: %s\n", sanitizePromptInline(job.Name))
-	fmt.Fprintf(&b, "Type: %s\n", sanitizePromptInline(job.Type))
-	fmt.Fprintf(&b, "Config file: %s\n", sanitizePromptInline(job.ConfigFile))
-	fmt.Fprintf(&b, "Repository under test: %s\n", sanitizePromptInline(job.Repo))
-	branches := sortedUniqueStrings(job.Branches)
-	dashboards := sortedUniqueStrings(job.Dashboards)
-	fmt.Fprintf(&b, "Branches or refs: %s\n", sanitizePromptInline(strings.Join(branches, ", ")))
-	fmt.Fprintf(&b, "TestGrid dashboards: %s\n", sanitizePromptInline(strings.Join(dashboards, ", ")))
-	return b.String()
+	return fmt.Sprintf("%d. %s\n", index, promptJobMetadataLine(job))
 }
 
 func hasMeaningfulPromptSources(sources []promptSource) bool {

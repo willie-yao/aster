@@ -2,6 +2,7 @@ package onboard
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -17,14 +19,16 @@ import (
 )
 
 const (
-	maxPromptSources          = 10
-	maxPromptSourceBytes      = 20_000
-	maxPromptSourceTotalBytes = 80_000
+	maxPromptSources          = 8
+	maxPromptSourceBytes      = 12_000
+	maxPromptSourceTotalBytes = 48_000
 	maxPromptSourceFetchBytes = 1 << 20
 	maxPromptSourceAttempts   = 30
 )
 
 var githubRawBaseURL = "https://raw.githubusercontent.com"
+
+var promptVersionPathComponent = regexp.MustCompile(`(?i)^(?:v?(?:[0-9]+\.)+[0-9]+|v[0-9]+(?:alpha|beta)[0-9]+)$`)
 
 type promptSource struct {
 	Path      string `json:"path"`
@@ -109,20 +113,27 @@ func fetchPromptSourcesDetailed(ctx context.Context, client *http.Client, repo R
 
 	excerptStart := time.Now()
 	selectedKinds := make(map[string]int)
+	selectedFamilies := make(map[string]struct{})
+	selectedContent := make(map[[32]byte]struct{})
 	attempted := make(map[string]bool)
 	sources := make([]promptSource, 0, maxPromptSources)
 	total := 0
 	fetchFailures := 0
 	var lastFetchErr error
-	for attempts := 0; attempts < maxPromptSourceAttempts && len(sources) < maxPromptSources && total < maxPromptSourceTotalBytes; attempts++ {
+	for result.Attempts < maxPromptSourceAttempts && len(sources) < maxPromptSources && total < maxPromptSourceTotalBytes {
 		sortPromptSourceCandidates(candidates, references, selectedKinds, len(sources))
 		var candidate promptSourceCandidate
 		found := false
 		for _, item := range candidates {
-			if !attempted[item.Path] {
-				candidate, found = item, true
-				break
+			if attempted[item.Path] {
+				continue
 			}
+			if _, duplicateFamily := selectedFamilies[promptSourceFamily(item.Path)]; duplicateFamily {
+				attempted[item.Path] = true
+				continue
+			}
+			candidate, found = item, true
+			break
 		}
 		if !found {
 			break
@@ -152,6 +163,12 @@ func fetchPromptSourcesDetailed(ctx context.Context, client *http.Client, repo R
 		if strings.TrimSpace(source.Text) == "" {
 			continue
 		}
+		contentKey := sha256.Sum256([]byte(source.Text))
+		if _, duplicateContent := selectedContent[contentKey]; duplicateContent {
+			continue
+		}
+		selectedContent[contentKey] = struct{}{}
+		selectedFamilies[promptSourceFamily(candidate.Path)] = struct{}{}
 		sources = append(sources, source)
 		selectedKinds[candidate.Kind]++
 		total += len(source.Text)
@@ -267,6 +284,15 @@ func promptSourceScore(candidate promptSourceCandidate, references map[string]st
 			score += weight
 		}
 	}
+	if strings.HasPrefix(lower, "test/e2e/data/") {
+		score -= 120
+	}
+	if strings.HasPrefix(lower, "templates/test/ci/") {
+		score -= 90
+	}
+	if candidate.Size > maxPromptSourceBytes {
+		score -= min(candidate.Size/maxPromptSourceBytes, 4) * 10
+	}
 	switch candidate.Kind {
 	case "yaml":
 		score += 30
@@ -283,6 +309,16 @@ func promptSourceScore(candidate promptSourceCandidate, references map[string]st
 	}
 	score -= strings.Count(candidate.Path, "/") * 3
 	return score
+}
+
+func promptSourceFamily(filename string) string {
+	parts := strings.Split(filename, "/")
+	for i, part := range parts {
+		if promptVersionPathComponent.MatchString(part) {
+			parts[i] = "<version>"
+		}
+	}
+	return strings.Join(parts, "/")
 }
 
 func selectPromptSourceExcerpt(candidate promptSourceCandidate, text string, limit int) promptSource {

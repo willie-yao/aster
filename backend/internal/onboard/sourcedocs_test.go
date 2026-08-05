@@ -409,3 +409,146 @@ func TestFetchPromptSourcesPropagatesRawFetchCancellation(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestPromptSourceFamilyCollapsesVersionedSnapshots(t *testing.T) {
+	paths := []string{
+		"test/e2e/data/infrastructure-azure/v1.25.1/cluster-template-prow.yaml",
+		"test/e2e/data/infrastructure-azure/v1.26.0/cluster-template-prow.yaml",
+		"test/e2e/data/infrastructure-azure/v1beta1/cluster-template-prow.yaml",
+	}
+	family := promptSourceFamily(paths[0])
+	for _, path := range paths[1:] {
+		if got := promptSourceFamily(path); got != family {
+			t.Fatalf("family(%q) = %q, want %q", path, got, family)
+		}
+	}
+	if got := promptSourceFamily("test/e2e/data/infrastructure-azure/v1.26.0/cluster-template-windows.yaml"); got == family {
+		t.Fatalf("distinct template collapsed into family %q", family)
+	}
+	if promptSourceFamily("docs/Foo.md") == promptSourceFamily("docs/foo.md") {
+		t.Fatal("case-distinct Git paths shared a source family")
+	}
+}
+
+func TestPromptSourceScorePrefersDiagnosticDocsOverVersionedTemplates(t *testing.T) {
+	candidates := []promptSourceCandidate{
+		{Path: "test/e2e/data/infrastructure-azure/v1.26.0/cluster-template-prow-machine-and-machine-pool.yaml", Kind: "yaml", Size: 40_000},
+		{Path: "docs/troubleshooting.md", Kind: "markdown", Size: 8_000},
+	}
+	sortPromptSourceCandidates(candidates, nil, nil, 0)
+	if candidates[0].Path != "docs/troubleshooting.md" {
+		t.Fatalf("candidate order = %+v", candidates)
+	}
+}
+
+func TestFetchPromptSourcesSkipsVersionedFamilyDuplicates(t *testing.T) {
+	paths := []string{
+		"test/e2e/data/infrastructure-azure/v1.25.1/cluster-template-prow.yaml",
+		"test/e2e/data/infrastructure-azure/v1.26.0/cluster-template-prow.yaml",
+		"test/e2e/data/infrastructure-azure/v1beta1/cluster-template-prow.yaml",
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if servePromptSourceRevision(w, r) {
+			return
+		}
+		switch r.URL.Path {
+		case "/repos/example/project":
+			_, _ = w.Write([]byte(`{"default_branch":"main"}`))
+		case "/repos/example/project/git/trees/" + promptSourceTestSHA:
+			entries := make([]map[string]any, 0, len(paths))
+			for _, path := range paths {
+				entries = append(entries, map[string]any{"path": path, "type": "blob", "size": 100})
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"tree": entries})
+		default:
+			for i, path := range paths {
+				if r.URL.Path == "/example/project/"+promptSourceTestSHA+"/"+path {
+					fmt.Fprintf(w, "cluster template diagnostic artifact version %d", i)
+					return
+				}
+			}
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	oldAPI, oldRaw := githubAPIBaseURL, githubRawBaseURL
+	githubAPIBaseURL, githubRawBaseURL = srv.URL, srv.URL
+	t.Cleanup(func() { githubAPIBaseURL, githubRawBaseURL = oldAPI, oldRaw })
+
+	sources, err := fetchPromptSources(context.Background(), srv.Client(), Repo{Owner: "example", Name: "project"}, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources) != 1 {
+		t.Fatalf("sources = %+v", sources)
+	}
+}
+
+func TestFetchPromptSourcesSkipsDuplicateExcerptContent(t *testing.T) {
+	const content = "troubleshoot controller artifact collection from captured logs"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if servePromptSourceRevision(w, r) {
+			return
+		}
+		switch r.URL.Path {
+		case "/repos/example/project":
+			_, _ = w.Write([]byte(`{"default_branch":"main"}`))
+		case "/repos/example/project/git/trees/" + promptSourceTestSHA:
+			_, _ = w.Write([]byte(`{"tree":[{"path":"README.md","type":"blob","size":80},{"path":"docs/troubleshooting.md","type":"blob","size":80}]}`))
+		case "/example/project/" + promptSourceTestSHA + "/README.md", "/example/project/" + promptSourceTestSHA + "/docs/troubleshooting.md":
+			_, _ = w.Write([]byte(content))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	oldAPI, oldRaw := githubAPIBaseURL, githubRawBaseURL
+	githubAPIBaseURL, githubRawBaseURL = srv.URL, srv.URL
+	t.Cleanup(func() { githubAPIBaseURL, githubRawBaseURL = oldAPI, oldRaw })
+
+	sources, err := fetchPromptSources(context.Background(), srv.Client(), Repo{Owner: "example", Name: "project"}, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources) != 1 {
+		t.Fatalf("sources = %+v", sources)
+	}
+}
+
+func TestFetchPromptSourcesPreservesWhitespaceDistinctContent(t *testing.T) {
+	contents := map[string]string{
+		"config/a.yaml": "spec:\n  containers:\n  - name: controller\n",
+		"config/b.yaml": "spec:\ncontainers:\n- name: controller\n",
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if servePromptSourceRevision(w, r) {
+			return
+		}
+		switch r.URL.Path {
+		case "/repos/example/project":
+			_, _ = w.Write([]byte(`{"default_branch":"main"}`))
+		case "/repos/example/project/git/trees/" + promptSourceTestSHA:
+			_, _ = w.Write([]byte(`{"tree":[{"path":"config/a.yaml","type":"blob","size":50},{"path":"config/b.yaml","type":"blob","size":50}]}`))
+		default:
+			for path, content := range contents {
+				if r.URL.Path == "/example/project/"+promptSourceTestSHA+"/"+path {
+					_, _ = w.Write([]byte(content))
+					return
+				}
+			}
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	oldAPI, oldRaw := githubAPIBaseURL, githubRawBaseURL
+	githubAPIBaseURL, githubRawBaseURL = srv.URL, srv.URL
+	t.Cleanup(func() { githubAPIBaseURL, githubRawBaseURL = oldAPI, oldRaw })
+
+	sources, err := fetchPromptSources(context.Background(), srv.Client(), Repo{Owner: "example", Name: "project"}, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources) != 2 {
+		t.Fatalf("sources = %+v", sources)
+	}
+}

@@ -61,13 +61,14 @@ combines:
 - Matched Prow job names, types, configuration files, repositories, branches or
   refs, and TestGrid annotations already found during planning.
 
-Selection is deterministic. It uses at most 10 source files or excerpts, at most
-20,000 bytes from one source, and at most 80,000 source bytes total. Large files
+Selection is deterministic. It uses at most 8 source files or excerpts, at most
+12,000 bytes from one source, and at most 48,000 source bytes total. Large files
 are excerpted around diagnostic terms and retain line ranges. Vendored,
 generated, unsupported binary, `node_modules`, and `.github` paths are excluded.
-Documentation references and Prow configuration paths can raise an exact source
-path's rank. The job section is separately limited to 100 jobs and 40,000
-bytes, with an omitted-count summary when more jobs match.
+Version-family and duplicate-content excerpts are collapsed. Documentation
+references and Prow configuration paths can raise an exact source path's rank.
+The job section uses compact one-line records and is separately limited to 60
+jobs and 16,000 bytes, with an omitted-count summary when more jobs match.
 
 Eligible source files up to 1 MiB are scanned before the line-ranged excerpt is
 selected. A truncated recursive Git tree is rejected rather than presented as a

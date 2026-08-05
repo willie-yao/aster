@@ -113,11 +113,12 @@ confirmation. `AI_TOKEN` authenticates that one-time draft and remains an
 environment-only value. It is never displayed, inspected, fingerprinted, or
 written into the plan or scaffold.
 
-Prompt drafting pins the source repository to one commit and sends at most 10
-line-ranged Markdown, Go, YAML, or shell excerpts, with a 20,000-byte per-source
-limit and an 80,000-byte total. Prow metadata is separately limited to 100 jobs
-and 40,000 bytes. Documentation references may raise the rank of exact eligible
-files in the pinned snapshot, but cannot trigger arbitrary URLs, commands,
+Prompt drafting pins the source repository to one commit and sends at most 8
+line-ranged Markdown, Go, YAML, or shell excerpts, with a 12,000-byte per-source
+limit and a 48,000-byte total. Version-family and duplicate-content excerpts are
+collapsed. Prow metadata uses compact one-line records and is separately limited
+to 60 jobs and 16,000 bytes. Documentation references may raise the rank of
+exact eligible files in the pinned snapshot, but cannot trigger arbitrary URLs, commands,
 provider-time retrieval, or secret access. Onboarding does not clone or execute
 the source repository.
 

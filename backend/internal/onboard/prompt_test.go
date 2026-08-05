@@ -143,8 +143,23 @@ func TestGeneratePromptBodyBoundsProwJobs(t *testing.T) {
 	if !strings.Contains(c.gotUser, "additional Prow job(s)") {
 		t.Fatalf("bounded request did not report omitted jobs: %s", c.gotUser)
 	}
-	if count := strings.Count(c.gotUser, "===== JOB "); count > maxPromptJobs {
-		t.Fatalf("serialized %d jobs, limit %d", count, maxPromptJobs)
+	if strings.Contains(c.gotUser, "===== JOB ") {
+		t.Fatalf("verbose job blocks were retained: %s", c.gotUser)
+	}
+	included, _ := boundedPromptJobs(input.Jobs)
+	if len(included) > maxPromptJobs {
+		t.Fatalf("included %d jobs, limit %d", len(included), maxPromptJobs)
+	}
+	total := 0
+	for i, job := range included {
+		block := renderPromptJob(i+1, job)
+		total += len(block)
+		if !strings.Contains(c.gotUser, block) {
+			t.Fatalf("user prompt missing compact job block %q", block)
+		}
+	}
+	if total > maxPromptJobBytes {
+		t.Fatalf("serialized job bytes = %d, limit %d", total, maxPromptJobBytes)
 	}
 }
 

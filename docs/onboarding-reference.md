@@ -174,16 +174,19 @@ When prompt drafting is selected, the wizard:
 8. Falls back to a reviewable TODO template when extraction fails. If only
    revision fails, it renders the first validated evidence object.
 
-The source corpus contains at most 10 Markdown, Go, YAML, or shell files or
-line-ranged excerpts. One source contributes at most 20,000 bytes and all source
-text contributes at most 80,000 bytes. Eligible files up to 1 MiB are scanned
+The source corpus contains at most 8 Markdown, Go, YAML, or shell files or
+line-ranged excerpts. One source contributes at most 12,000 bytes and all source
+text contributes at most 48,000 bytes. Eligible files up to 1 MiB are scanned
 before excerpt selection. Vendored, generated, binary, `node_modules`, and
-`.github` paths are excluded. A truncated recursive Git tree is rejected.
+`.github` paths are excluded. Versioned snapshots of the same source family and
+duplicate excerpt content are collapsed. Diagnostic documentation is preferred
+over large test-template fixtures unless an exact job reference requires the
+fixture. A truncated recursive Git tree is rejected.
 
 Prow metadata includes job name, periodic or presubmit type, configuration file,
-repository when established, branches or refs, and TestGrid annotations. It is
-limited to 100 jobs and 40,000 bytes, with an omitted-count summary. Runtime
-credentials are redacted from full source text before excerpting and from the
+repository when established, branches or refs, and TestGrid annotations. It uses
+compact one-line records and is limited to 60 jobs and 16,000 bytes, with an
+omitted-count summary. Runtime credentials are redacted from full source text before excerpting and from the
 complete serialized provider input. The two structured completion stages and source retrieval
 share a five-minute timeout. Each stage can use at most the existing schema,
 forced-function, and bounded plain-JSON transport attempts, for six provider
