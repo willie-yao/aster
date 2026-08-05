@@ -23,7 +23,7 @@ const (
 //go:embed skill/system-prompt-generation.md
 var systemPromptSkill string
 
-// Spec describes one isolated repository-aware prompt-authoring run.
+// Spec describes one temporary repository-aware prompt-authoring run.
 type Spec struct {
 	Repo           agentruntime.RepoRef
 	Instruction    string

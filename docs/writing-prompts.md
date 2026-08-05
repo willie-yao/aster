@@ -51,9 +51,10 @@ chat completions API as:
 
 ## How onboarding drafts the prompt
 
-Guided onboarding can generate this file with an isolated OpenCode agent, create
-an agent handoff bundle, draft it through the experimental bounded API path, or
-write the TODO template. The bounded API input combines:
+Guided onboarding can generate this file with a local OpenCode agent in a
+temporary checkout, create an agent handoff bundle, draft it through the
+experimental bounded API path, or write the TODO template. The bounded API input
+combines:
 
 - Markdown documentation.
 - Relevant Go, YAML, and shell excerpts from one commit resolved from the
@@ -76,9 +77,10 @@ complete deterministic corpus.
 
 The API path does not clone the repository, execute repository code, use GitHub
 code search, or send the whole repository. Agent mode instead resolves an
-immutable source commit and uses an isolated shallow checkout with shell access
-disabled. Repository text and job metadata are untrusted evidence in both paths.
-The draft remains a starting point that requires human review.
+immutable source commit and uses a temporary shallow checkout and config while
+denying OpenCode's shell tool. The local process is not OS-sandboxed. Repository
+text and job metadata are untrusted evidence in both paths. The draft remains a
+starting point that requires human review.
 
 Generation uses deterministic chunked extraction within a 15-minute total
 timeout by default. `fetcher onboard --prompt-timeout` can change the total

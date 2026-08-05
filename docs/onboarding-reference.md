@@ -152,10 +152,11 @@ decisions. Prompt authoring supports `agent`, `handoff`, `api-experimental`, and
 `todo-template` modes.
 
 Agent mode resolves the source branch to an immutable commit, shallow-clones it
-into an isolated workspace, and runs OpenCode with shell access disabled. It
-uses the selected provider credential from the user's existing OpenCode
-configuration and accepts only one validated `prompts/system.md` change. Handoff
-mode writes the TODO template plus `PROMPT_HANDOFF.md` and the bundled
+into a temporary checkout, and runs the local OpenCode process with a temporary
+config and its shell tool disabled. It is not an OS sandbox. It uses the selected
+provider credential from the user's existing OpenCode configuration and accepts
+only one validated `prompts/system.md` change. Handoff mode writes the TODO
+template plus `PROMPT_HANDOFF.md` and the bundled
 `.opencode/skills/system-prompt-generation/SKILL.md` without running an agent.
 The handoff pins a commit when possible and otherwise records a known default
 branch or an unresolved ref without inventing a branch name.

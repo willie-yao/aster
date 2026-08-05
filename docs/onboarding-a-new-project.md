@@ -118,9 +118,10 @@ Repository metadata, Prow configuration, source files, and job metadata are
 untrusted input. They cannot alter the wizard flow. Agent handoff metadata is
 serialized as data and tells the agent not to treat any field as an instruction.
 
-Agent mode resolves the source branch to an immutable commit, creates an
-isolated shallow checkout, and runs OpenCode with shell access disabled. The
-runtime accepts the result only when the agent changes exactly
+Agent mode resolves the source branch to an immutable commit, creates a
+temporary shallow checkout and OpenCode config, and runs the local OpenCode
+process with its shell tool disabled. This is not an OS sandbox. The runtime
+accepts the result only when the agent changes exactly
 `prompts/system.md` and the file passes deterministic structure and quality
 validation. It uses the selected provider credential from the user's existing
 OpenCode configuration. `AI_TOKEN` is not required for this mode.
@@ -234,7 +235,8 @@ Deployment references:
 
 ### Prompt authoring modes
 
-The wizard can generate `prompts/system.md` with an isolated OpenCode agent,
+The wizard can generate `prompts/system.md` with a local OpenCode agent in a
+temporary checkout,
 write a reusable agent handoff bundle, use the experimental bounded API path, or
 write the TODO template. Agent mode defaults to
 `github-copilot/claude-sonnet-4.6` and uses the selected provider credential from
