@@ -42,6 +42,8 @@ The local sandbox wraps the complete OpenCode process tree. Its generated policy
 
 On macOS, the runner tracks descendant process identities and kills recorded descendants on cancellation and normal command exit, including children that create another session. macOS does not provide a kernel process container here, so this lifecycle cleanup has a narrow polling race for a process that daemonizes and reparents before it is observed. Any surviving descendant remains subject to the inherited `srt` filesystem and network policy.
 
+The immutable system and toolchain paths in the policy are readable, not hidden. On macOS this includes `/System`, `/etc`, and the specific Homebrew Bash, readline, ncurses, and gettext directories required by the tested shell. Do not store project credentials or service secrets in those system paths.
+
 The Git clone occurs before sandbox execution, so a repository token is not sent into OpenCode merely to clone source. The sandbox shares the host kernel. It is not a VM, container, Orka runtime, or Kubernetes SIGs Agent Sandbox.
 
 ## Tests

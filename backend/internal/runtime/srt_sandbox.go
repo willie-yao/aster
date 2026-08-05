@@ -403,12 +403,23 @@ func buildSRTSettings(goos string, spec SandboxSpec) (srtSettings, error) {
 }
 
 func srtSystemReadPaths(goos string) []string {
-	paths := []string{"/bin", "/usr", "/lib", "/lib64", "/dev"}
+	paths := []string{
+		"/bin", "/sbin",
+		"/usr/bin", "/usr/sbin", "/usr/lib", "/usr/libexec",
+		"/usr/share",
+		"/lib", "/lib64", "/dev",
+	}
 	if goos == "darwin" {
 		paths = append(paths,
 			"/System",
-			"/opt/homebrew",
-			"/usr/local",
+			"/opt/homebrew/bin",
+			"/opt/homebrew/Cellar/bash",
+			"/opt/homebrew/Cellar/readline",
+			"/opt/homebrew/Cellar/ncurses",
+			"/opt/homebrew/Cellar/gettext",
+			"/opt/homebrew/opt/readline",
+			"/opt/homebrew/opt/ncurses",
+			"/opt/homebrew/opt/gettext",
 			"/etc", "/private/etc",
 			"/private/var/db/timezone",
 			"/var/select", "/private/var/select",
