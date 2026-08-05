@@ -262,6 +262,9 @@ type critiqueOutcome struct {
 	Passed   bool
 	Feedback string
 
+	// MatchedSkillIDs identifies every recipe whose trigger matched this draft.
+	MatchedSkillIDs []string
+
 	// PuntMatches lists exact substrings that triggered the suggested_fix
 	// punt regex. Quoted back in Feedback so the model sees its own
 	// offending text.
@@ -277,6 +280,10 @@ type critiqueOutcome struct {
 	// MissingSkillEvidence pairs each matched recipe with the evidence
 	// groups it still requires the agent to satisfy.
 	MissingSkillEvidence []skillEvidenceMiss
+
+	// UnavailableSkillEvidence records applicable groups that do not exist in a
+	// complete artifact tree. They do not fail critique.
+	UnavailableSkillEvidence []skillEvidenceMiss
 
 	// TransientPersistCount is the consecutive-failure count when the draft
 	// claimed is_transient=true on a persistent failure. Zero when the check
@@ -440,6 +447,7 @@ func critiqueDraftWithContent(parsed analysisResponse, readsFull, readsBase map[
 	}
 
 	out := critiqueOutcome{
+		MatchedSkillIDs:       critiqueMatchedSkillIDs(matchedSkills),
 		PuntMatches:           puntMatches,
 		CitationIssues:        citationIssues,
 		UnreadCitations:       unread,
@@ -701,8 +709,10 @@ func pruneAbsentSkillEvidence(parsed analysisResponse, out *critiqueOutcome, tre
 	}
 	dropped := 0
 	var kept []skillEvidenceMiss
+	var unavailable []skillEvidenceMiss
 	for _, m := range out.MissingSkillEvidence {
 		var keptGroups []skills.EvidenceGroup
+		var unavailableGroups []skills.EvidenceGroup
 		for _, g := range m.Missing {
 			if g.Satisfied(treeSet) {
 				// Evidence exists in the build but the agent never read
@@ -711,16 +721,21 @@ func pruneAbsentSkillEvidence(parsed analysisResponse, out *critiqueOutcome, tre
 			} else {
 				// Evidence is absent from the build: recipe inapplicable.
 				dropped++
+				unavailableGroups = append(unavailableGroups, g)
 			}
 		}
 		if len(keptGroups) > 0 {
 			kept = append(kept, skillEvidenceMiss{Skill: m.Skill, Missing: keptGroups})
+		}
+		if len(unavailableGroups) > 0 {
+			unavailable = append(unavailable, skillEvidenceMiss{Skill: m.Skill, Missing: unavailableGroups})
 		}
 	}
 	if dropped == 0 {
 		return 0
 	}
 	out.MissingSkillEvidence = kept
+	out.UnavailableSkillEvidence = unavailable
 	if len(out.PuntMatches) == 0 && len(out.UnreadCitations) == 0 && len(out.CitationIssues) == 0 && len(out.MissingSkillEvidence) == 0 && out.TransientPersistCount == 0 {
 		out.Passed = true
 		out.Feedback = ""

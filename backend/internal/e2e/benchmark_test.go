@@ -444,16 +444,45 @@ func TestAIBenchmark(t *testing.T) {
 	if cacheMode != "" && cacheMode != "cold" {
 		t.Fatalf("BENCH_CACHE_MODE only supports cold")
 	}
+	repetitionStart := benchmarkRepetitionStart(t)
 	resultsPath := strings.TrimSpace(os.Getenv("BENCH_RESULTS_JSONL"))
 	for _, bc := range cases {
 		bc := bc
-		for repetition := 1; repetition <= repetitions; repetition++ {
-			repetition := repetition
+		for index := 0; index < repetitions; index++ {
+			repetition := repetitionStart + index
 			t.Run(fmt.Sprintf("%s/rep-%02d", bc.name, repetition), func(t *testing.T) {
 				runBenchCase(t, bc, repetition, resultsPath, apiMode, endpoint, model, token, systemPrompt, agentic, projectSkills, cacheGenerationFingerprint)
 			})
 		}
 	}
+}
+
+func benchmarkRepetitionStart(t *testing.T) int {
+	t.Helper()
+	raw := strings.TrimSpace(os.Getenv("BENCH_REPETITION_START"))
+	if raw == "" {
+		return 1
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 1 || value > 1000 {
+		t.Fatalf("BENCH_REPETITION_START must be 1..1000")
+	}
+	return value
+}
+
+func TestBenchmarkRepetitionStart(t *testing.T) {
+	t.Run("default", func(t *testing.T) {
+		t.Setenv("BENCH_REPETITION_START", "")
+		if got := benchmarkRepetitionStart(t); got != 1 {
+			t.Fatalf("start = %d, want 1", got)
+		}
+	})
+	t.Run("configured", func(t *testing.T) {
+		t.Setenv("BENCH_REPETITION_START", "2")
+		if got := benchmarkRepetitionStart(t); got != 2 {
+			t.Fatalf("start = %d, want 2", got)
+		}
+	})
 }
 
 func benchmarkAPIMode() (string, error) {
@@ -586,7 +615,7 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 	if benchmarkCacheReuseEnabled() {
 		cacheVerification = verifyBenchmarkCacheReuse(t, client, clientOptions, service, cacheGeneration, jobID, bc, run)
 	}
-	writeBenchmarkJSONL(t, resultsPath, bc, repetition, tc, elapsed, snapshot, selectedAttempt, toolUsage, traceSummary, cacheGeneration, cacheVerification)
+	writeBenchmarkJSONL(t, resultsPath, bc, repetition, tc, elapsed, snapshot, draftObservations, selectedAttempt, toolUsage, traceSummary, cacheGeneration, cacheVerification)
 	scoreBenchCase(t, bc, tc, elapsed, "in-process", benchmarkMinGCSBytes(bc, agentic.MinGCSBytes), toolUsage, traceSummary, draftObservations, selectedAttempt)
 }
 
@@ -906,8 +935,9 @@ func benchmarkRepairPhase(phase string) bool {
 }
 
 func benchmarkDraftIssueVector(observation ai.DraftObservation) string {
-	return fmt.Sprintf("punt=%d,unread=%d,missing=%d,transient=%v",
-		observation.PuntCount, observation.UnreadCitationCount, observation.MissingGroupCount, observation.TransientConflict)
+	return fmt.Sprintf("punt=%d,unread=%d,citation=%d,missing=%d,transient=%v,rules=%v",
+		observation.PuntCount, observation.UnreadCitationCount, observation.CitationIssueCount,
+		observation.MissingGroupCount, observation.TransientConflict, observation.RuleIDs)
 }
 
 func normalizeBenchmarkRootCause(rootCause string) string {
@@ -1053,8 +1083,8 @@ func TestBenchmarkDraftScoringProducesPairedDeltas(t *testing.T) {
 		"draft attempt=2 phase=critique_retry score=2/2",
 		"initial_score=1/2 revised_score=2/2 score_delta=1",
 		"initial_required_signals=1/1 revised_required_signals=1/1",
-		"initial_issue_vector=punt=1,unread=0,missing=0,transient=false",
-		"revised_issue_vector=punt=0,unread=0,missing=0,transient=false",
+		"initial_issue_vector=punt=1,unread=0,citation=0,missing=0,transient=false,rules=[]",
+		"revised_issue_vector=punt=0,unread=0,citation=0,missing=0,transient=false,rules=[]",
 		"root_cause_changed=true new_evidence_reads=1 retry_duration_ms=1500 selected_attempt=2",
 	} {
 		if !strings.Contains(got, want) {
@@ -1096,10 +1126,10 @@ func TestBenchmarkDraftTelemetryUsesRuntimeSelection(t *testing.T) {
 		AIAnalysis: &models.AIAnalysis{RootCause: "cause", SuggestedFix: "fix"},
 	}
 	got := strings.Join(benchmarkDraftTelemetryLines(bc, observations, tc, 1), "\n")
-	if !strings.Contains(got, "attempt=1 phase=initial score=1/1 required_signals=0/0 issue_vector=punt=0,unread=0,missing=0,transient=false tool_calls=0 evidence_reads=0 selected=true") {
+	if !strings.Contains(got, "attempt=1 phase=initial score=1/1 required_signals=0/0 issue_vector=punt=0,unread=0,citation=0,missing=0,transient=false,rules=[] tool_calls=0 evidence_reads=0 selected=true") {
 		t.Fatalf("runtime selection was not reported:\n%s", got)
 	}
-	if strings.Contains(got, "attempt=2 phase=critique_retry score=1/1 required_signals=0/0 issue_vector=punt=0,unread=0,missing=0,transient=false tool_calls=0 evidence_reads=0 selected=true") {
+	if strings.Contains(got, "attempt=2 phase=critique_retry score=1/1 required_signals=0/0 issue_vector=punt=0,unread=0,citation=0,missing=0,transient=false,rules=[] tool_calls=0 evidence_reads=0 selected=true") {
 		t.Fatalf("identity fallback overrode runtime selection:\n%s", got)
 	}
 }

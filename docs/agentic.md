@@ -89,6 +89,14 @@ model produces a draft, only recipes whose triggers match that draft contribute
 procedures and required-evidence groups. Per-failure artifact reads satisfy
 those groups. No recipe can replace or override the universal engine contract.
 
+Deterministic critique findings also carry stable content-free rule IDs in the
+private trace. Current identifiers include `path.unsafe`,
+`citation.invalid_range`, `citation.quote_mismatch`, `citation.unread`,
+`claim.uncited_line`, `source.unverified`, `evidence.available_unread`,
+`evidence.unavailable`, `remediation.punt`, `transient.conflict`, and
+`structured.invalid`. These identifiers support policy calibration without
+retaining critique feedback, prompts, model responses, or artifact content.
+
 ### `max_iters`
 
 Tool-call rounds per failure. Default `15`. Lower it first if the model loops
