@@ -1,6 +1,8 @@
-/* Global styling comes from the MUI theme and <CssBaseline>. */
+/* Global styling comes from the MUI theme and <CssBaseline>. The 17px root
+   preserves the dashboard's original optical scale. Overview-specific type
+   tokens use explicit pixel sizes so its approved hierarchy stays stable. */
 html {
-  font-size: 16px;
+  font-size: 17px;
 }
 
 /* Honor the OS reduced-motion setting: neutralize transitions and animations

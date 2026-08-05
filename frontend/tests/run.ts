@@ -15,3 +15,4 @@ import "./actionEligibility.test.js";
 
 import "./theme.test.js";
 import "./dashboardOverview.test.js";
+import "./responsiveLayout.test.js";

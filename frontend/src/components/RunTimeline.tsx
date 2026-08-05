@@ -29,8 +29,8 @@ export function RunTimeline({
   );
 
   return (
-    <Box sx={{ overflowX: "auto" }}>
-      <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1, p: 0.5 }}>
+    <Box sx={{ minWidth: 0, maxWidth: "100%", overflowX: "auto" }}>
+      <Box sx={{ width: "max-content", minWidth: "100%", display: "flex", alignItems: "flex-start", gap: 1, p: 0.5 }}>
         {sorted.map((run, i) => {
           const isSelected = run.build_id === selectedBuildId;
           const showDate = sorted.length <= 10 || i % 5 === 0 || i === sorted.length - 1;

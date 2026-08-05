@@ -73,7 +73,7 @@ export function HealthPanel({ jobs, onFilterClick, activeFilter }: HealthPanelPr
         >
           Job health
         </Typography>
-        <Typography variant="stat" component="span" sx={{ mt: 0.25, fontSize: "1.3125rem", lineHeight: "1.75rem" }}>
+        <Typography variant="stat" component="span" sx={{ mt: 0.25, fontSize: "21px", lineHeight: "28px" }}>
           {countLabel(total, "job")}
         </Typography>
       </Box>
@@ -126,7 +126,7 @@ export function HealthPanel({ jobs, onFilterClick, activeFilter }: HealthPanelPr
                 {percentage}%
               </Typography>
             </Box>
-            <Typography variant="stat" component="span" sx={{ fontSize: "1.125rem", color: `${row.color}.main` }}>
+            <Typography variant="stat" component="span" sx={{ fontSize: "19px", color: `${row.color}.main` }}>
               {row.count}
             </Typography>
           </ButtonBase>

@@ -158,7 +158,7 @@ function JobHealthRow({ job }: { job: JobSummary }) {
         {duration}
       </Typography>
       <Box role="cell" sx={{ gridArea: "status", justifySelf: "end" }}>
-        <StatusChip status={job.overall_status} sx={{ height: 26, fontSize: "0.8125rem" }} />
+        <StatusChip status={job.overall_status} sx={{ height: 26, fontSize: "13px" }} />
       </Box>
 
       <Box

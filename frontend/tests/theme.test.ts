@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { test } from "node:test";
 import type { Theme } from "@mui/material/styles";
 import { createServer } from "vite";
@@ -41,21 +43,26 @@ test("operator console theme keeps compact technical typography", () => {
   assert.equal(defaultTheme.shape.borderRadius, 6);
   const data = (defaultTheme.typography as unknown as { data: { fontFamily?: string } }).data;
   assert.match(String(data.fontFamily), /ui-monospace/);
-  assert.equal(defaultTheme.typography.h4.fontSize, "1.5rem");
-  assert.equal(defaultTheme.typography.body1.fontSize, "0.875rem");
+  assert.equal(defaultTheme.typography.h4.fontSize, "1.75rem");
+  assert.equal(defaultTheme.typography.body1.fontSize, "1rem");
+  assert.equal(defaultTheme.typography.body2.fontSize, "0.875rem");
+  const customTypography = defaultTheme.typography as unknown as { data: { fontSize?: string }; stat: { fontSize?: string } };
+  assert.equal(customTypography.data.fontSize, "0.8125rem");
+  assert.equal(customTypography.stat.fontSize, "1.75rem");
+  assert.match(readFileSync(resolve(process.cwd(), "src/index.css"), "utf8"), /font-size: 17px/);
 });
 
 
 test("overview typography uses the approved compact readable scale", () => {
-  assert.equal(overviewTypography.pageHeadline.fontSize, "1.6875rem");
-  assert.equal(overviewTypography.majorHeading.fontSize, "1.125rem");
-  assert.equal(overviewTypography.categoryHeading.fontSize, "1rem");
-  assert.equal(overviewTypography.subsectionHeading.fontSize, "0.84375rem");
-  assert.equal(overviewTypography.primaryBody.fontSize, "0.9375rem");
-  assert.equal(overviewTypography.mobileFeaturedBody.fontSize, "1rem");
-  assert.equal(overviewTypography.jobIdentifier.fontSize, "0.875rem");
-  assert.equal(overviewTypography.data.fontSize, "0.8125rem");
-  assert.equal(overviewTypography.tableHeading.fontSize, "0.8125rem");
+  assert.equal(overviewTypography.pageHeadline.fontSize, "27px");
+  assert.equal(overviewTypography.majorHeading.fontSize, "18px");
+  assert.equal(overviewTypography.categoryHeading.fontSize, "16px");
+  assert.equal(overviewTypography.subsectionHeading.fontSize, "13.5px");
+  assert.equal(overviewTypography.primaryBody.fontSize, "15px");
+  assert.equal(overviewTypography.mobileFeaturedBody.fontSize, "16px");
+  assert.equal(overviewTypography.jobIdentifier.fontSize, "14px");
+  assert.equal(overviewTypography.data.fontSize, "13px");
+  assert.equal(overviewTypography.tableHeading.fontSize, "13px");
   assert.equal(overviewLayout.majorBandMinHeight, 48);
   assert.equal(overviewLayout.categoryBandMinHeight, 44);
   assert.equal(overviewLayout.ledgerRowMinHeight, 52);

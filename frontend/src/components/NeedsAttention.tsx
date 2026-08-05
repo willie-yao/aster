@@ -156,7 +156,7 @@ function FeaturedPatternRow({
       <Typography
         variant="stat"
         component="span"
-        sx={{ gridArea: "rank", alignSelf: "start", color: lead ? `${leadAccent}.main` : "text.secondary", fontSize: lead ? "1.5rem" : "1rem", [attentionDesktopBreakpoint]: { alignSelf: "center" } }}
+        sx={{ gridArea: "rank", alignSelf: "start", color: lead ? `${leadAccent}.main` : "text.secondary", fontSize: lead ? "24px" : "16px", [attentionDesktopBreakpoint]: { alignSelf: "center" } }}
       >
         {String(rank).padStart(2, "0")}
       </Typography>
