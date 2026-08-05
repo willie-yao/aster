@@ -2,9 +2,7 @@ package onboard
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -12,7 +10,6 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prow/jobconfig"
@@ -54,108 +51,6 @@ func scaffoldPRBody(name, mode string, aiEnabled bool) string {
 		"See %s for the full steps.", name, finalStep, guide)
 }
 
-// buildSystemPrompt drafts prompts/system.md from source docs when experimental
-// API drafting is selected. Failures fall back to the reviewable TODO template.
-func buildSystemPrompt(ctx context.Context, opts Options, data scaffoldData, input promptDraftInput, out, errOut io.Writer) (string, promptPreparationResult, error) {
-	started := time.Now()
-	debug := newPromptDebugger(opts.PromptDebug, errOut, opts.AIToken, opts.GitHubToken)
-	defer debug.total(started)
-
-	if requestedPromptPreparation(opts) == promptRequestTemplate {
-		if opts.AIToken == "" && !opts.NoPrompt {
-			fmt.Fprintln(out, "[info] no AI token is set; writing a prompts/system.md TODO template")
-		}
-		prompt, err := render(systemPromptTmpl, data)
-		return prompt, newTemplatePromptResult(), err
-	}
-
-	preflightStart := time.Now()
-	if opts.AIToken == "" {
-		failure := &promptPreparationFailure{Stage: promptStageTokenPreflight, Category: promptFailureMissingToken}
-		debug.stage(promptStageTokenPreflight, time.Since(preflightStart))
-		return promptFallback(opts, data, errOut, debug, failure)
-	}
-	if strings.TrimSpace(opts.AIEndpoint) == "" || strings.TrimSpace(opts.AIModel) == "" {
-		failure := &promptPreparationFailure{Stage: promptStageTokenPreflight, Category: promptFailureMissingCoordinates}
-		debug.stage(promptStageTokenPreflight, time.Since(preflightStart))
-		return promptFallback(opts, data, errOut, debug, failure)
-	}
-	debug.stage(promptStageTokenPreflight, time.Since(preflightStart))
-	debug.provider(opts)
-
-	// Bound the whole drafting phase so a hung endpoint degrades to the template
-	// instead of hanging the command.
-	ctx, cancel := context.WithTimeout(ctx, effectivePromptDraftTimeout(opts))
-	defer cancel()
-
-	httpClient := &http.Client{Timeout: 30 * time.Second}
-	fmt.Fprintf(out, "Drafting prompts/system.md from %s source evidence...\n", input.SourceRepo.FullName)
-	// Empty GitHub token means anonymous public reads. AI_TOKEN is used only by
-	// the configured prompt-drafting provider.
-	sourceResult, err := fetchPromptSourcesDetailed(ctx, httpClient, input.SourceRepo, input.Jobs, opts.GitHubToken, opts.AIToken, opts.GitHubToken)
-	debug.stage(promptStageSourceRevision, sourceResult.RevisionDuration)
-	debug.stage(promptStageSourceTree, sourceResult.TreeDuration)
-	debug.stage(promptStageSourceExcerpt, sourceResult.ExcerptDuration)
-	for _, source := range sourceResult.Sources {
-		debug.source(source)
-	}
-	debug.sourceSummary(sourceResult.Sources, len(input.Jobs), sourceResult.Attempts)
-	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			return "", promptPreparationResult{}, err
-		}
-		failure := promptFailureFromError(promptStageSourceExcerpt, err)
-		return promptFallback(opts, data, errOut, debug, failure)
-	}
-	redactPromptCredentials(sourceResult.Sources, opts.AIToken, opts.GitHubToken)
-	input.Sources = sourceResult.Sources
-	if !hasMeaningfulPromptSources(input.Sources) {
-		failure := &promptPreparationFailure{Stage: promptStageSourceExcerpt, Category: promptFailureNoSourceEvidence}
-		return promptFallback(opts, data, errOut, debug, failure)
-	}
-
-	client := ai.NewClientWithOptions(ai.Options{
-		Token:    opts.AIToken,
-		API:      opts.AIAPI,
-		Endpoint: opts.AIEndpoint,
-		Model:    opts.AIModel,
-	})
-	generation, err := generatePromptBodyDetailed(ctx, client, input, opts.AIToken, opts.GitHubToken)
-	debug.stage(promptStageEvidenceExtraction, generation.ExtractionDuration)
-	debug.extractionChunks(generation.ExtractionChunks, generation.CompletedExtractionChunks, generation.ExtractionAttempts)
-	debug.stage(promptStageFinalPromptValidation, generation.RenderDuration)
-	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			return "", promptPreparationResult{}, err
-		}
-		failure := promptFailureFromError(promptStageEvidenceExtraction, err)
-		return promptFallback(opts, data, errOut, debug, failure)
-	}
-
-	result := newAPIPromptResult()
-	fmt.Fprintf(out, "Drafted prompts/system.md from %d source(s) and %d Prow job(s). Review it before deployment.\n", len(input.Sources), len(input.Jobs))
-	return composeGeneratedPrompt(data.Name, generation.Body), result, nil
-}
-
-func promptFailureFromError(defaultStage promptPreparationStage, err error) *promptPreparationFailure {
-	var failure *promptPreparationFailure
-	if errors.As(err, &failure) {
-		return failure
-	}
-	return classifyPromptFailure(defaultStage, err)
-}
-
-func promptFallback(opts Options, data scaffoldData, errOut io.Writer, debug promptDebugger, failure *promptPreparationFailure) (string, promptPreparationResult, error) {
-	debug.failure(failure)
-	writePromptFailure(errOut, "prompts/system.md generation failed", failure, "reviewable TODO template")
-	result := newAPIFallbackResult(failure)
-	if opts.RequirePromptDraft {
-		return "", result, &requiredPromptDraftError{failure: failure}
-	}
-	prompt, err := render(systemPromptTmpl, data)
-	return prompt, result, err
-}
-
 const (
 	// DefaultPromptDraftTimeout bounds one prompt-authoring attempt.
 	DefaultPromptDraftTimeout = 15 * time.Minute
@@ -173,10 +68,10 @@ func effectivePromptDraftTimeout(opts Options) time.Duration {
 
 func validatePromptMode(mode string) error {
 	switch mode {
-	case "", promptModeAgent, promptModeHandoff, promptModeAPI, promptModeTemplate:
+	case "", promptModeAgent, promptModeHandoff, promptModeTemplate:
 		return nil
 	default:
-		return fmt.Errorf("--prompt-mode must be agent, handoff, api-experimental, or todo-template")
+		return fmt.Errorf("--prompt-mode must be agent, handoff, or todo-template")
 	}
 }
 
@@ -237,19 +132,8 @@ func validateOptions(opts *Options) error {
 	if opts.OpenPR && opts.UpdateExisting {
 		return fmt.Errorf("--update-existing applies only to local output and cannot be combined with --open-pr")
 	}
-	promptMode := effectivePromptMode(*opts)
-	if opts.RequirePromptDraft && promptMode != promptModeAPI && promptMode != promptModeAgent {
-		return fmt.Errorf("--require-prompt-draft is valid only with --prompt-mode=%s or --prompt-mode=%s", promptModeAgent, promptModeAPI)
-	}
-	if opts.RequirePromptDraft && promptMode == promptModeAPI && opts.AIToken == "" {
-		return fmt.Errorf("AI_TOKEN is required because it authenticates experimental API prompt drafting")
-	}
-	// API drafting needs explicit provider coordinates. Without an API request,
-	// onboarding writes the reviewable TODO template.
-	if promptMode == promptModeAPI {
-		if opts.AIEndpoint == "" || opts.AIModel == "" {
-			return fmt.Errorf("experimental API prompt drafting needs AI_ENDPOINT and AI_MODEL set; AI_TOKEN authenticates that provider")
-		}
+	if opts.RequirePromptDraft && effectivePromptMode(*opts) != promptModeAgent {
+		return fmt.Errorf("--require-prompt-draft is valid only with --prompt-mode=%s", promptModeAgent)
 	}
 	if opts.EngineRef == "" {
 		opts.EngineRef = "main"

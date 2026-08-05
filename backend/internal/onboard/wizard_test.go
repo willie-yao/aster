@@ -116,7 +116,7 @@ func (f *fakePromptBuilder) Build(_ context.Context, opts Options, _ scaffoldDat
 	}
 	if result.Requested == "" {
 		if f.drafted {
-			result = newAPIPromptResult()
+			result = promptPreparationResult{Requested: promptRequestAgent, Status: promptStatusAgentDraft, Output: promptOutputAgentDraft}
 		} else {
 			result = newTemplatePromptResult()
 		}
@@ -486,7 +486,7 @@ func TestBuildPlan_DoesNotContainTokens(t *testing.T) {
 	opts := Options{
 		TestGrid: "dashboard-a", DashboardRepo: "example/project-prow-ai-dashboard",
 		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out",
-		NoPrompt: true, AIToken: "fixture-ai-token", GitHubToken: "fixture-github-token",
+		NoPrompt: true, GitHubToken: "fixture-github-token",
 	}
 	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
 	if err != nil {
@@ -500,7 +500,7 @@ func TestBuildPlan_DoesNotContainTokens(t *testing.T) {
 	for _, content := range plan.Files {
 		all += content
 	}
-	for _, secret := range []string{"fixture-ai-token", "fixture-github-token"} {
+	for _, secret := range []string{"fixture-github-token"} {
 		if strings.Contains(all, secret) {
 			t.Fatalf("plan or generated files contain %q", secret)
 		}
@@ -605,21 +605,6 @@ func TestWizard_AdditionalCancellationStages(t *testing.T) {
 		}
 	})
 
-	t.Run("prompt drafting", func(t *testing.T) {
-		answers := []string{"", "", defaultTestDashboardRepo, "", "", "", "", "", "", "q"}
-		deps, _, writer, _ := wizardDependencies(strings.Join(answers, "\n") + "\n")
-		opts := Options{
-			SourceRepo: "example/project", EngineRef: "main", AIToken: "fixture-token",
-			AIEndpoint: "https://provider.example/v1/chat/completions", AIModel: "model",
-		}
-		if err := run(context.Background(), opts, deps); err != nil {
-			t.Fatalf("run: %v", err)
-		}
-		if writer.writes != 0 {
-			t.Fatalf("writes=%d", writer.writes)
-		}
-	})
-
 	t.Run("category editing", func(t *testing.T) {
 		answers := []string{"", "", defaultTestDashboardRepo, "", "", "", "n", "", "q"}
 		deps, _, writer, sweeper := wizardDependencies(strings.Join(answers, "\n") + "\n")
@@ -706,43 +691,42 @@ func TestRun_OpenPRDryRunDoesNotCallGitHub(t *testing.T) {
 func TestValidateOptions_RejectsCredentialsInPlanFieldsWithoutLeaking(t *testing.T) {
 	opts := testOpts()
 	opts.NoPrompt = true
-	opts.AIToken = "fixture-ai-token"
-	opts.Name = "fixture-ai-token"
+	opts.GitHubToken = "fixture-github-token"
+	opts.Name = "fixture-github-token"
 	err := validateOptions(&opts)
 	if err == nil || !strings.Contains(err.Error(), "credential was supplied") {
 		t.Fatalf("error = %v", err)
 	}
-	if strings.Contains(err.Error(), opts.AIToken) {
+	if strings.Contains(err.Error(), opts.GitHubToken) {
 		t.Fatalf("credential leaked into error: %v", err)
 	}
 }
 
 func TestBuildPlan_RejectsCredentialInRenderedFilesWithoutLeaking(t *testing.T) {
 	deps, _, _, _ := wizardDependencies("")
-	deps.prompts = &fakePromptBuilder{content: "fixture-ai-token"}
+	deps.prompts = &fakePromptBuilder{content: "fixture-github-token"}
 	opts := Options{
 		TestGrid: "dashboard-a", DashboardRepo: "example/project-prow-ai-dashboard",
 		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out",
-		NoPrompt: true, AIToken: "fixture-ai-token",
+		NoPrompt: true, GitHubToken: "fixture-github-token",
 	}
 	_, err := buildPlan(context.Background(), opts, planningContext{}, deps)
 	if err == nil || !strings.Contains(err.Error(), "contained a credential") {
 		t.Fatalf("error = %v", err)
 	}
-	if strings.Contains(err.Error(), opts.AIToken) {
+	if strings.Contains(err.Error(), opts.GitHubToken) {
 		t.Fatalf("credential leaked into error: %v", err)
 	}
 }
 
-func TestBuildPlan_SeparatesDraftingAndDeploymentProviders(t *testing.T) {
+func TestBuildPlan_SeparatesPromptAgentAndDeploymentProvider(t *testing.T) {
 	deps, _, _, _ := wizardDependencies("")
 	prompts := &fakePromptBuilder{drafted: true}
 	deps.prompts = prompts
 	opts := Options{
 		TestGrid: "dashboard-a", DashboardRepo: "example/project-prow-ai-dashboard",
 		SourceRepo: "example/project", Mode: modeK8s, EngineRef: "main", OutDir: "out",
-		AIToken: "fixture-ai-token", AIAPI: project.AIAPIChatCompletions,
-		AIEndpoint: "https://draft.example/v1/chat/completions", AIModel: "draft-model",
+		PromptMode: promptModeAgent, PromptAgentModel: "github-copilot/claude-sonnet-4.6",
 		DeploymentAIAPI: project.AIAPIResponses, DeploymentAIEndpoint: "https://deploy.example/v1/responses",
 		DeploymentAIModel: "deploy-model",
 	}
@@ -750,17 +734,17 @@ func TestBuildPlan_SeparatesDraftingAndDeploymentProviders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildPlan: %v", err)
 	}
-	if prompts.gotOpts.AIEndpoint != "https://draft.example/v1/chat/completions" || prompts.gotOpts.AIModel != "draft-model" {
-		t.Fatalf("draft provider = %+v", prompts.gotOpts)
+	if prompts.gotOpts.PromptAgentModel != opts.PromptAgentModel {
+		t.Fatalf("prompt agent = %+v", prompts.gotOpts)
 	}
 	if plan.Deployment.Endpoint != "https://deploy.example/v1/responses" || plan.Deployment.Model != "deploy-model" {
 		t.Fatalf("deployment provider = %+v", plan.Deployment)
 	}
-	if plan.Prompt.Endpoint != "https://draft.example/v1/chat/completions" || plan.Prompt.Model != "draft-model" {
+	if plan.Prompt.Runtime != "opencode" || plan.Prompt.Model != opts.PromptAgentModel {
 		t.Fatalf("prompt plan = %+v", plan.Prompt)
 	}
 	values := plan.Files["deploy/values.yaml"]
-	if !strings.Contains(values, "https://deploy.example/v1/responses") || strings.Contains(values, "https://draft.example") {
+	if !strings.Contains(values, "https://deploy.example/v1/responses") || strings.Contains(values, opts.PromptAgentModel) {
 		t.Fatalf("deployment values mixed providers:\n%s", values)
 	}
 }
@@ -801,18 +785,18 @@ func TestSetPlanCategoryTokens_RejectsCredentialBeforeMutation(t *testing.T) {
 	opts := Options{
 		TestGrid: "dashboard-a", DashboardRepo: "example/project-prow-ai-dashboard",
 		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out",
-		NoPrompt: true, AIToken: "fixture-ai-token",
+		NoPrompt: true, GitHubToken: "fixture-github-token",
 	}
 	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
 	if err != nil {
 		t.Fatalf("buildPlan: %v", err)
 	}
 	before := plan.Files["project.yaml"]
-	err = setPlanCategoryTokens(plan, opts, opts.AIToken)
+	err = setPlanCategoryTokens(plan, opts, opts.GitHubToken)
 	if err == nil || !strings.Contains(err.Error(), "contained a credential") {
 		t.Fatalf("error = %v", err)
 	}
-	if strings.Contains(err.Error(), opts.AIToken) {
+	if strings.Contains(err.Error(), opts.GitHubToken) {
 		t.Fatalf("credential leaked into error: %v", err)
 	}
 	if plan.Files["project.yaml"] != before {
@@ -823,7 +807,7 @@ func TestSetPlanCategoryTokens_RejectsCredentialBeforeMutation(t *testing.T) {
 func TestWizard_ValidatesSeedCredentialsBeforeOutput(t *testing.T) {
 	deps, out, writer, _ := wizardDependencies("")
 	opts := Options{
-		SourceRepo: "example/project", AIToken: "fixture-ai-token", AIModel: "fixture-ai-token",
+		SourceRepo: "example/project", GitHubToken: "fixture-github-token", AIModel: "fixture-github-token",
 	}
 	err := run(context.Background(), opts, deps)
 	if err == nil || !strings.Contains(err.Error(), "credential was supplied") {
@@ -837,7 +821,7 @@ func TestWizard_ValidatesSeedCredentialsBeforeOutput(t *testing.T) {
 	}
 }
 
-func TestWizard_APIModeValueIsExplicitWithoutBookkeeping(t *testing.T) {
+func TestWizard_DeploymentModeValueIsExplicitWithoutBookkeeping(t *testing.T) {
 	input := strings.Join([]string{
 		"",                       // strongest dashboard
 		defaultTestDashboardRepo, // dashboard repo
@@ -854,7 +838,7 @@ func TestWizard_APIModeValueIsExplicitWithoutBookkeeping(t *testing.T) {
 		t.Fatalf("run: %v\n%s", err, out.String())
 	}
 	if _, ok := writer.files["deploy/values.yaml"]; !ok {
-		t.Fatalf("API-supplied mode was overwritten: %v", writer.files)
+		t.Fatalf("supplied deployment mode was overwritten: %v", writer.files)
 	}
 	if strings.Contains(out.String(), "Deployment profile") {
 		t.Fatalf("API-supplied mode triggered a deployment prompt:\n%s", out.String())
@@ -893,7 +877,7 @@ func TestWizard_ClearSentinelsRemoveOptionalSuggestions(t *testing.T) {
 func TestCredentialSeparationCoversShortTokens(t *testing.T) {
 	opts := testOpts()
 	opts.NoPrompt = true
-	opts.AIToken = "short"
+	opts.GitHubToken = "short"
 	opts.Name = "short"
 	err := validateOptions(&opts)
 	if err == nil || !strings.Contains(err.Error(), "credential was supplied") {
@@ -903,13 +887,13 @@ func TestCredentialSeparationCoversShortTokens(t *testing.T) {
 
 func TestWizard_RejectsCredentialsEnteredAsRepositoriesWithoutLeaking(t *testing.T) {
 	t.Run("source", func(t *testing.T) {
-		deps, _, writer, _ := wizardDependencies("fixture-ai-token\n")
-		opts := Options{AIToken: "fixture-ai-token", EngineRef: "main", NoPrompt: true}
+		deps, _, writer, _ := wizardDependencies("fixture-github-token\n")
+		opts := Options{GitHubToken: "fixture-github-token", EngineRef: "main", NoPrompt: true}
 		err := run(context.Background(), opts, deps)
 		if err == nil || !strings.Contains(err.Error(), "credential was supplied") {
 			t.Fatalf("error = %v", err)
 		}
-		if strings.Contains(err.Error(), opts.AIToken) {
+		if strings.Contains(err.Error(), opts.GitHubToken) {
 			t.Fatalf("credential leaked into error: %v", err)
 		}
 		if writer.writes != 0 {
@@ -918,14 +902,14 @@ func TestWizard_RejectsCredentialsEnteredAsRepositoriesWithoutLeaking(t *testing
 	})
 
 	t.Run("dashboard", func(t *testing.T) {
-		input := strings.Join([]string{"", "", "fixture-ai-token"}, "\n") + "\n"
+		input := strings.Join([]string{"", "", "fixture-github-token"}, "\n") + "\n"
 		deps, _, writer, _ := wizardDependencies(input)
-		opts := Options{SourceRepo: "example/project", AIToken: "fixture-ai-token", EngineRef: "main", NoPrompt: true}
+		opts := Options{SourceRepo: "example/project", GitHubToken: "fixture-github-token", EngineRef: "main", NoPrompt: true}
 		err := run(context.Background(), opts, deps)
 		if err == nil || !strings.Contains(err.Error(), "credential was supplied") {
 			t.Fatalf("error = %v", err)
 		}
-		if strings.Contains(err.Error(), opts.AIToken) {
+		if strings.Contains(err.Error(), opts.GitHubToken) {
 			t.Fatalf("credential leaked into error: %v", err)
 		}
 		if writer.writes != 0 {

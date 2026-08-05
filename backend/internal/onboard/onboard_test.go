@@ -230,10 +230,8 @@ func TestValidateOptions(t *testing.T) {
 		{"trailing slash repo", func(o *Options) { o.DashboardRepo = "owner/" }, "owner/name"},
 		{"three-part repo", func(o *Options) { o.SourceRepo = "a/b/c" }, "owner/name"},
 		{"gcsweb without bucket", func(o *Options) { o.GCSWebBase = "https://x" }, "gcsweb-base"},
-		{"ai token without endpoint or model", func(o *Options) { o.AIToken = "fixture-token" }, "AI_ENDPOINT and AI_MODEL"},
-		{"ai token without model", func(o *Options) { o.AIToken = "fixture-token"; o.AIEndpoint = "https://x" }, "AI_ENDPOINT and AI_MODEL"},
 		{"required draft with no-prompt", func(o *Options) { o.NoPrompt = true; o.RequirePromptDraft = true }, "valid only"},
-		{"required draft without token", func(o *Options) { o.RequirePromptDraft = true }, "AI_TOKEN is required"},
+		{"required draft without agent mode", func(o *Options) { o.RequirePromptDraft = true }, "valid only"},
 		{"update existing with open PR", func(o *Options) { o.UpdateExisting = true; o.OpenPR = true }, "cannot be combined"},
 		{"endpoint userinfo", func(o *Options) { o.AIEndpoint = "https://user:fixture-secret@example.test/v1" }, "must not contain credentials"},
 		{"endpoint token query", func(o *Options) { o.AIEndpoint = "https://example.test/v1?api_key=fixture-secret" }, "must not contain credential query"},
@@ -265,19 +263,10 @@ func TestValidateOptions_DefaultsOutDir(t *testing.T) {
 	}
 }
 
-// TestValidateOptions_AIProviderExplicit checks AI drafting requires endpoint
-// and model unless -no-prompt is set.
-func TestValidateOptions_AIProviderExplicit(t *testing.T) {
+func TestValidateOptions_DeploymentProvider(t *testing.T) {
 	t.Run("full provider ok", func(t *testing.T) {
 		opts := testOpts()
-		opts.AIToken, opts.AIEndpoint, opts.AIModel = "secret-987654", "https://x/chat/completions", "m"
-		if err := validateOptions(&opts); err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	})
-	t.Run("no-prompt skips the requirement", func(t *testing.T) {
-		opts := testOpts()
-		opts.AIToken, opts.NoPrompt = "secret-987654", true
+		opts.AIEndpoint, opts.AIModel = "https://x/chat/completions", "m"
 		if err := validateOptions(&opts); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -699,13 +688,13 @@ func TestChecklist_UsesSelectedAPIAndExplainsDeferredAI(t *testing.T) {
 func TestValidateOptions_CredentialCheckPrecedesAPIValidation(t *testing.T) {
 	opts := testOpts()
 	opts.NoPrompt = true
-	opts.AIToken = "fixture-ai-token"
-	opts.AIAPI = opts.AIToken
+	opts.GitHubToken = "fixture-github-token"
+	opts.AIAPI = opts.GitHubToken
 	err := validateOptions(&opts)
 	if err == nil || !strings.Contains(err.Error(), "credential was supplied") {
 		t.Fatalf("error = %v", err)
 	}
-	if strings.Contains(err.Error(), opts.AIToken) {
+	if strings.Contains(err.Error(), opts.GitHubToken) {
 		t.Fatalf("credential leaked into error: %v", err)
 	}
 }

@@ -73,7 +73,7 @@ func defaultDependencies(opts Options, terminal Terminal) dependencies {
 		catalogs:     prowCatalogClient{client: client},
 		sweeper:      defaultSweeper{},
 		remotes:      gitRemoteDetector{},
-		prompts:      defaultPromptBuilder{out: terminal.Out, err: terminal.Err},
+		prompts:      defaultPromptBuilder{err: terminal.Err},
 		files:        localScaffoldWriter{},
 		pullRequests: githubPullRequestWriter{client: &http.Client{Timeout: 30 * time.Second}, token: opts.GitHubToken},
 		terminal:     terminal,
@@ -446,12 +446,8 @@ func printReview(out io.Writer, plan *Plan) {
 	}
 	fmt.Fprintf(out, "  Prompt:               %s\n", safeTerminal(plan.Prompt.Source))
 	fmt.Fprintf(out, "  Prompt requested:     %s\n", safeTerminal(plan.Prompt.RequestedMode))
-	if plan.Prompt.RequestedMode == string(promptRequestAPIExperimental) || plan.Prompt.RequestedMode == string(promptRequestAgent) {
+	if plan.Prompt.RequestedMode == string(promptRequestAgent) {
 		fmt.Fprintf(out, "  Prompt timeout:       %s\n", safeTerminal(plan.Prompt.Timeout))
-	}
-	if plan.Prompt.Output == string(promptOutputAPIDraft) {
-		fmt.Fprintf(out, "  Prompt provider:      %s, %s, %s\n", safeTerminal(plan.Prompt.API), reviewValue(plan.Prompt.Endpoint), safeTerminal(plan.Prompt.Model))
-	} else if plan.Prompt.RequestedMode == string(promptRequestAgent) {
 		fmt.Fprintf(out, "  Prompt agent:         %s, %s\n", safeTerminal(plan.Prompt.Runtime), safeTerminal(plan.Prompt.Model))
 	}
 	if plan.Prompt.FailureStage != "" {
