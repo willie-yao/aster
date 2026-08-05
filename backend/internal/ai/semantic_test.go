@@ -247,3 +247,31 @@ func TestAgentic_SemanticJudge_DisabledByDefault(t *testing.T) {
 		t.Errorf("call count = %d, want 1 (judge disabled, no extra call)", got)
 	}
 }
+
+func TestAgentic_SemanticRevisionRejectedKeepsPassingDraftCacheable(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	initial := `{"summary":"sound","is_transient":false,"root_cause":"verified root cause","severity":"High","suggested_fix":"Set the supported configuration.","relevant_files":[]}`
+	srv.push(200, chatRespFinal(initial))
+	srv.push(200, chatRespFinal(`{"objections":["verify the exact failure location"]}`))
+	srv.push(200, chatRespFinal(`{"summary":"revised","is_transient":false,"root_cause":"failure at line 999","severity":"High","suggested_fix":"Set the supported configuration.","relevant_files":[]}`))
+	client := newAgenticTestClient(t, srv.URL)
+	key := "agentic:test:semantic-rejected-cache"
+	_, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second, CritiqueMaxRetries: 1, SemanticJudge: true}), key, "sys", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !analysis.CritiquePassed || !analysis.JudgeObjected || analysis.JudgeRevised || analysis.RootCause != "verified root cause" {
+		t.Fatalf("analysis = %+v", analysis)
+	}
+	if _, ok := client.Cache().Get(key); !ok {
+		t.Fatalf("passing original was not cached: analysis=%+v", analysis)
+	}
+	_, cached, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second, CritiqueMaxRetries: 1, SemanticJudge: true}), key, "sys", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cached.CacheHit || !cached.JudgeRan || !cached.JudgeObjected || cached.JudgeRevised || atomic.LoadInt32(&srv.calls) != 3 {
+		t.Fatalf("cached=%+v calls=%d", cached, atomic.LoadInt32(&srv.calls))
+	}
+}

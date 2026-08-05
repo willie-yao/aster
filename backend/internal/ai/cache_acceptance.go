@@ -89,6 +89,9 @@ func AcceptAgenticCacheEntry(entry CacheEntry, expectedKey string, policy Agenti
 	analysis.GCSFloorRetryExhausted = cached.GCSFloorRetryExhausted
 	analysis.BudgetExhausted = cached.BudgetExhausted
 	analysis.SameFailureReuse = cached.SameFailureReuse
+	analysis.JudgeRan = cached.JudgeRan
+	analysis.JudgeObjected = cached.JudgeObjected
+	analysis.JudgeRevised = cached.JudgeRevised
 	analysis.CritiquePassed = cached.CritiquePassed
 	analysis.CritiqueVersion = cached.CritiqueVersion
 	analysis.SkillSetHash = cached.SkillSetHash
@@ -175,6 +178,9 @@ func NewAgenticCacheEntry(key string, result FailureAnalysisResult, createdAt ti
 		GCSFloorRetryExhausted: result.Analysis.GCSFloorRetryExhausted,
 		BudgetExhausted:        result.Analysis.BudgetExhausted,
 		SameFailureReuse:       result.Analysis.SameFailureReuse,
+		JudgeRan:               result.Analysis.JudgeRan,
+		JudgeObjected:          result.Analysis.JudgeObjected,
+		JudgeRevised:           result.Analysis.JudgeRevised,
 		CritiquePassed:         result.Analysis.CritiquePassed,
 		CritiqueVersion:        result.Analysis.CritiqueVersion,
 		SkillSetHash:           result.Analysis.SkillSetHash,

@@ -614,7 +614,9 @@ the regex gate cannot see (a fluent-but-wrong root cause, a conclusion the cited
 evidence does not support). It never redoes the investigation. On objections it
 re-prompts once, in-loop or in a tools-free post-loop finalize round; a revised
 draft is used only if it still clears the deterministic gate, so the judge can
-never downgrade an answer below the gate it already passed. It is best-effort: a
+never downgrade an answer below the gate it already passed. A semantic revision that fails deterministic critique is discarded. The
+original deterministic-passing draft remains cacheable, while the objection and
+rejected revision remain visible in telemetry. It is best-effort: a
 failed judge call publishes the draft rather than blocking, and it runs at most
 once per analysis.
 

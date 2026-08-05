@@ -298,6 +298,9 @@ type agenticCacheData struct {
 	GCSFloorRetryExhausted bool   `json:"gcs_floor_retry_exhausted,omitempty"`
 	BudgetExhausted        bool   `json:"budget_exhausted,omitempty"`
 	SameFailureReuse       bool   `json:"same_failure_reuse,omitempty"`
+	JudgeRan               bool   `json:"judge_ran,omitempty"`
+	JudgeObjected          bool   `json:"judge_objected,omitempty"`
+	JudgeRevised           bool   `json:"judge_revised,omitempty"`
 
 	// CritiquePassed marks entries that cleared the critique gate.
 	// Defaults to false on pre-critique entries and on entries written
@@ -467,9 +470,10 @@ type agentState struct {
 	// Semantic-judge telemetry, for measuring the always-on second-line judge.
 	// judgeRan is set when the judge was invoked; judgeObjected when it raised
 	// objections; judgeRevised when its objections drove an accepted revision.
-	judgeRan      bool
-	judgeObjected bool
-	judgeRevised  bool
+	judgeRan              bool
+	judgeObjected         bool
+	judgeRevised          bool
+	judgeRevisionRejected bool
 
 	// initialArtifactTree is the single bounded listing shared by the seed and
 	// ranked plan. A complete snapshot also supports absence pruning without a
@@ -1063,6 +1067,9 @@ agentLoop:
 										if treeSet := state.artifactTreeSet(); treeSet != nil {
 											pruneAbsentSkillEvidence(rp, &revisedCritique, treeSet)
 										}
+									}
+									if !revisedCritique.Passed {
+										state.judgeRevisionRejected = true
 									}
 									semanticCandidate := state.newDraftCandidate("semantic_retry", revised, revisedItems, rp, revisedCritique)
 									state.considerFallbackDraft(semanticCandidate, true)
@@ -2087,7 +2094,7 @@ func (c *Client) cacheAcceptedAnalysis(cacheKey string, parsed analysisResponse,
 	if opts.CritiqueMaxRetries > 0 && !critiquePassed {
 		return
 	}
-	if state.judgeObjected && !state.judgeRevised {
+	if state.judgeObjected && !state.judgeRevised && !state.judgeRevisionRejected {
 		return
 	}
 	skillHash := ""
@@ -2104,6 +2111,9 @@ func (c *Client) cacheAcceptedAnalysis(cacheKey string, parsed analysisResponse,
 		EvidencePlanCovered:    state.evidencePlanCovered(),
 		GCSFloorRetryExhausted: state.gcsFloorRetryExhausted,
 		BudgetExhausted:        state.budgetExhausted,
+		JudgeRan:               state.judgeRan,
+		JudgeObjected:          state.judgeObjected,
+		JudgeRevised:           state.judgeRevised,
 		CritiquePassed:         critiquePassed,
 		CritiqueVersion:        currentCritiqueVersion,
 		SkillSetHash:           skillHash,
