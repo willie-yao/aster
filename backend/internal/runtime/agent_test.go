@@ -487,3 +487,73 @@ func TestOpencodeSandboxSpecPopulatesResourcePolicy(t *testing.T) {
 		t.Fatalf("network domains = %v, want %v", got.NetworkDomains, want)
 	}
 }
+
+func TestLocalAgentRetriesAfterOpenCodeMigration(t *testing.T) {
+	repo := initRepo(t)
+	r := &LocalAgentRuntime{
+		Bin:     "true",
+		Sandbox: directProcessSandbox{},
+		buildSpec: func(_ context.Context, _ GenerateSpec, workdir, home, temp string) (SandboxSpec, error) {
+			script := `if [ ! -f "$HOME/migrated" ]; then
+  touch "$HOME/migrated"
+  printf 'Performing one time database migration, may take a few minutes...\nsqlite-migration:done Database migration complete.\n'
+  exit 0
+fi
+printf 'fixed\n' > fix.txt`
+			return SandboxSpec{
+				Command: []string{"sh", "-c", script}, WorkDir: workdir, HomeDir: home, TempDir: temp,
+				Environment: append(isolatedOpencodeEnv(home, temp), "HOME="+home),
+			}, nil
+		},
+	}
+	got, err := r.Generate(context.Background(), GenerateSpec{
+		Repo: RepoRef{Owner: "o", Name: "n", Ref: "main", CloneURL: repo}, Instruction: "fix",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Files["fix.txt"] != "fixed\n" {
+		t.Fatalf("files = %v", got.Files)
+	}
+	if !strings.Contains(got.Output, "Database migration complete") {
+		t.Fatalf("output = %q", got.Output)
+	}
+}
+
+func TestOpenCodeMigrationOnlyRejectsAgentEvents(t *testing.T) {
+	migration := []byte("Performing one time database migration\nDatabase migration complete.\n")
+	if !opencodeMigrationOnly(migration) {
+		t.Fatal("expected migration-only output")
+	}
+	if opencodeMigrationOnly(append(migration, []byte(`{"type":"step_finish"}`)...)) {
+		t.Fatal("agent events must not trigger a retry")
+	}
+}
+
+type testAgentTempSandbox struct {
+	directProcessSandbox
+	base string
+}
+
+func (s testAgentTempSandbox) agentTempBase() (string, error) { return s.base, nil }
+
+func TestAgentTempDirsUsesSandboxBase(t *testing.T) {
+	base := t.TempDir()
+	work, home, temp, cleanup, err := agentTempDirs(testAgentTempSandbox{base: base})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Dir(work)
+	for _, path := range []string{work, home, temp} {
+		if filepath.Dir(path) != root {
+			t.Fatalf("temporary paths do not share a root: %s, %s, %s", work, home, temp)
+		}
+		if !strings.HasPrefix(path, base+string(filepath.Separator)) {
+			t.Fatalf("temporary path %s is outside %s", path, base)
+		}
+	}
+	cleanup()
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatalf("sandbox temporary root still exists: %s", root)
+	}
+}

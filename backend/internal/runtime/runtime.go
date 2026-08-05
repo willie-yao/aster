@@ -19,6 +19,10 @@ import (
 // distroless deployment without a toolchain degrades gracefully.
 var ErrUnavailable = errors.New("runtime unavailable")
 
+// ErrSandboxUnavailable reports that a required process sandbox cannot enforce
+// its policy in the current environment. Callers must not run unsandboxed.
+var ErrSandboxUnavailable = errors.New("runtime sandbox unavailable")
+
 // ErrWorkIdentityChanged means a named external execution now has another UID.
 var ErrWorkIdentityChanged = errors.New("runtime work identity changed")
 
