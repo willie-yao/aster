@@ -7,7 +7,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { createServer } from "vite";
-import { attentionSignal, countLabel, orderedDashboardBranches, overviewHeadline } from "../src/lib/dashboardOverview.js";
+import { attentionSignal, countLabel, orderedDashboardBranches, overviewHeadline, overviewHeadlineForReport } from "../src/lib/dashboardOverview.js";
 import type { JobSummary } from "../src/types/dashboard.js";
 
 const vite = await createServer({
@@ -103,6 +103,9 @@ test("overview count labels and headline pluralize published values", () => {
   assert.equal(countLabel(1, "job"), "1 job");
   assert.equal(countLabel(2, "job"), "2 jobs");
   assert.equal(overviewHeadline(2, 5), "2 failing jobs · 5 recurring patterns");
+  assert.equal(overviewHeadlineForReport(2, null, true, false), "2 failing jobs · recurring patterns loading");
+  assert.equal(overviewHeadlineForReport(2, null, false, true), "2 failing jobs · recurring patterns unavailable");
+  assert.equal(overviewHeadlineForReport(2, 5, false, false), "2 failing jobs · 5 recurring patterns");
   assert.equal(attentionSignal("high", false), "high confidence");
   assert.equal(attentionSignal("medium", true), "medium confidence · Last known good");
 });
@@ -136,7 +139,7 @@ test("overview source uses ledger rows without nested panel scrolling", () => {
   assert.match(attention, /Resolved patterns/);
   assert.match(attention, /leadAccent = color === "error" \? "error" : "primary"/);
   assert.match(attention, /<DisclosureButton[\s\S]*<Collapse id=\{controls\}/);
-  assert.match(dashboard, /overviewHeadline\(failingJobs, recurringPatterns\)/);
+  assert.match(dashboard, /overviewHeadlineForReport\(failingJobs, recurringPatterns, attention\.loading/);
   assert.match(dashboard, />\s*Incident briefing\s*</);
   assert.doesNotMatch(dashboard, /CAPZ incident briefing/);
   assert.match(filters, /minHeight: 44/);
@@ -148,8 +151,10 @@ test("overview source uses ledger rows without nested panel scrolling", () => {
   assert.match(sparkline, /width: 44[\s\S]*height: 44/);
   assert.match(ledger, /@media \(min-width: 1024px\)/);
   assert.match(ledger, /JobHealthSection/);
-  assert.match(ledger, /position: "absolute"[\s\S]*clip: "rect\(0 0 0 0\)"/);
-  assert.match(ledger, /<Box role="cell" aria-colspan=\{7\}[\s\S]*component="h3"/);
+  assert.match(ledger, /function MobileJobRow/);
+  assert.match(ledger, /role="listitem"/);
+  assert.match(ledger, /role="list"/);
+  assert.match(ledger, /function DesktopJobRow/);
   assert.match(overviewTheme, /pageHeadline/);
   assert.match(overviewTheme, /mobileFeaturedBody/);
   assert.match(overviewTheme, /subsectionHeading/);

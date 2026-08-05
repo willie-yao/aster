@@ -12,6 +12,19 @@ export function overviewHeadline(failingJobs: number, recurringPatterns: number)
   return `${countLabel(failingJobs, "failing job")} · ${countLabel(recurringPatterns, "recurring pattern")}`;
 }
 
+export function overviewHeadlineForReport(
+  failingJobs: number,
+  recurringPatterns: number | null,
+  loading: boolean,
+  failed: boolean,
+): string {
+  if (loading) return `${countLabel(failingJobs, "failing job")} · recurring patterns loading`;
+  if (failed || recurringPatterns === null) {
+    return `${countLabel(failingJobs, "failing job")} · recurring patterns unavailable`;
+  }
+  return overviewHeadline(failingJobs, recurringPatterns);
+}
+
 export function attentionSignal(confidence: string, stale: boolean): string {
   return `${confidence} confidence${stale ? " · Last known good" : ""}`;
 }

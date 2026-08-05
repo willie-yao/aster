@@ -291,7 +291,7 @@ function AttentionRow({
         sx={{
           gridArea: "subject",
           minWidth: 0,
-          minHeight: { xs: 44, md: 0 },
+          minHeight: 44,
           display: "flex",
           alignItems: "center",
           overflow: "hidden",
@@ -301,6 +301,7 @@ function AttentionRow({
           ...overviewTypography.jobIdentifier,
           "&:hover": { color: "primary.main", textDecoration: "underline" },
           "&:focus-visible": { outline: "2px solid", outlineColor: "primary.main", outlineOffset: 1 },
+          [attentionDesktopBreakpoint]: { minHeight: 0 },
         }}
       >
         {subject}

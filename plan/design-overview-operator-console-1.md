@@ -1,6 +1,6 @@
 ---
 goal: Redesign the Overview page as a quiet, evidence-first Kubernetes test-health operator console
-version: 1.3
+version: 1.4
 date_created: 2026-08-05
 last_updated: 2026-08-05
 owner: Frontend
@@ -14,7 +14,7 @@ tags: [design, frontend, overview, accessibility, responsive, operator-console]
 
 This plan replaces the Overview page's glass, glow, pill, donut, and card-wall presentation with a dense graphite operator console. It preserves the current data contracts, filtering, navigation, search, status semantics, attention content and ordering, and run links.
 
-The implementation uses focused phases. Shared visual foundations, application shell changes, summary presentation, attention rows, and job rows remain independently reviewable and revertible. Version 1.1 applies the approved CAPZ incident briefing composition, continuous category ledger, progressive attention disclosure, and PR review corrections. Version 1.2 applies the approved compact-readable Overview typography scale with the 16px/24px mobile treatment limited to the lead incident summary. Version 1.3 restores the original 17px global optical scale while pinning the approved Overview sizes in pixels.
+The implementation uses focused phases. Shared visual foundations, application shell changes, summary presentation, attention rows, and job rows remain independently reviewable and revertible. Version 1.1 applies the approved CAPZ incident briefing composition, continuous category ledger, progressive attention disclosure, and PR review corrections. Version 1.2 applies the approved compact-readable Overview typography scale with the 16px/24px mobile treatment limited to the lead incident summary. Version 1.3 restores the original 17px global optical scale while pinning the approved Overview sizes in pixels. Version 1.4 hardens that correction with explicit hover contrast, loading and unavailable headline states, separate mobile list semantics, and narrow detail-page containment.
 
 ## 1. Requirements & Constraints
 

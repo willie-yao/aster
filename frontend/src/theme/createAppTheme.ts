@@ -23,6 +23,7 @@ function paletteFromTokens(t: ColorTokens): PaletteOptions {
     },
     warning: {
       main: t.tertiary,
+      dark: t.tertiaryDim,
       light: t.tertiaryContainer,
       contrastText: t.onTertiary,
     },

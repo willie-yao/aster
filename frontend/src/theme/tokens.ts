@@ -25,6 +25,7 @@ export interface ColorTokens {
   onSecondary: string;
 
   tertiary: string;
+  tertiaryDim: string;
   tertiaryContainer: string;
   onTertiary: string;
 
@@ -56,7 +57,7 @@ export const darkTokens: ColorTokens = {
   onSurfaceVariant: "#8b949e",
 
   primary: "#2f81f7",
-  primaryDim: "#1f6feb",
+  primaryDim: "#388bfd",
   primaryContainer: "#58a6ff",
   onPrimary: "#0d1117",
 
@@ -66,6 +67,7 @@ export const darkTokens: ColorTokens = {
   onSecondary: "#0d1117",
 
   tertiary: "#d29922",
+  tertiaryDim: "#a9791b",
   tertiaryContainer: "#9e6a03",
   onTertiary: "#0d1117",
 
@@ -107,6 +109,7 @@ export const lightTokens: ColorTokens = {
   onSecondary: "#ffffff",
 
   tertiary: "#9a6700",
+  tertiaryDim: "#7d4e00",
   tertiaryContainer: "#fff8c5",
   onTertiary: "#ffffff",
 

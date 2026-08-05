@@ -17,7 +17,7 @@ import { OverviewFilters } from "../components/OverviewFilters";
 import {
   MAX_OVERVIEW_PATTERNS,
   orderedDashboardBranches,
-  overviewHeadline,
+  overviewHeadlineForReport,
   type OverviewStatusFilter,
 } from "../lib/dashboardOverview";
 import { LoadingState } from "../components/LoadingState";
@@ -125,10 +125,13 @@ export function DashboardPage() {
       }))
     : [{ id: "all-jobs", jobs: filtered }];
   const failingJobs = data.jobs.filter((job) => job.overall_status === "FAILING").length;
-  const recurringPatterns = Math.min(
-    (attention.data?.recurring_patterns ?? []).filter((pattern) => pattern.job_id).length,
-    MAX_OVERVIEW_PATTERNS,
-  );
+  const recurringPatterns = attention.data
+    ? Math.min(
+        (attention.data.recurring_patterns ?? []).filter((pattern) => pattern.job_id).length,
+        MAX_OVERVIEW_PATTERNS,
+      )
+    : null;
+  const headline = overviewHeadlineForReport(failingJobs, recurringPatterns, attention.loading, Boolean(attention.error));
   const jobsByID = Object.fromEntries(data.jobs.map((job) => [job.job_id, job]));
 
   return (
@@ -146,7 +149,7 @@ export function DashboardPage() {
             Incident briefing
           </Typography>
           <Typography variant="h4" component="h1" sx={{ mt: 0.5, ...overviewTypography.pageHeadline }}>
-            {overviewHeadline(failingJobs, recurringPatterns)}
+            {headline}
           </Typography>
         </Box>
         <Typography variant="data" color="text.secondary" sx={{ justifySelf: { sm: "end" }, ...overviewTypography.data }}>
