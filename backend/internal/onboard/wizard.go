@@ -309,7 +309,7 @@ func wizardPromptAuthoring(ctx context.Context, prompt wizardUI, opts *Options) 
 		opts.NoPrompt = true
 	case promptModeAPI:
 		opts.NoPrompt = false
-		if opts.AIEndpoint == "" && opts.AIModel == "" && effectiveAIEnabled(*opts) {
+		if (opts.AIEndpoint == "" || opts.AIModel == "") && effectiveAIEnabled(*opts) && opts.DeploymentAIEndpoint != "" && opts.DeploymentAIModel != "" {
 			opts.AIAPI = opts.DeploymentAIAPI
 			opts.AIEndpoint = opts.DeploymentAIEndpoint
 			opts.AIModel = opts.DeploymentAIModel

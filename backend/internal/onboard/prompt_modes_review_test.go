@@ -191,3 +191,18 @@ func TestWizardPromptAuthoringDeclinedAPIUsesTemplate(t *testing.T) {
 		t.Fatalf("confirmation = %+v", ui.confirmPrompts)
 	}
 }
+
+func TestWizardPromptAuthoringReplacesPartialAPIProvider(t *testing.T) {
+	enabled := true
+	opts := Options{
+		AIEnabled: &enabled, AIEndpoint: "https://partial.example/v1/responses",
+		DeploymentAIAPI: "responses", DeploymentAIEndpoint: "https://provider.example/v1/responses", DeploymentAIModel: "deployed-model",
+	}
+	ui := &queuedWizardUI{selects: []string{promptModeAPI}, confirms: []bool{true}}
+	if err := wizardPromptAuthoring(context.Background(), ui, &opts); err != nil {
+		t.Fatal(err)
+	}
+	if opts.AIAPI != "responses" || opts.AIEndpoint != opts.DeploymentAIEndpoint || opts.AIModel != opts.DeploymentAIModel {
+		t.Fatalf("prompt provider = %s %s %s", opts.AIAPI, opts.AIEndpoint, opts.AIModel)
+	}
+}
