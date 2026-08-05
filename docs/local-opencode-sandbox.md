@@ -40,6 +40,8 @@ The local sandbox wraps the complete OpenCode process tree. Its generated policy
 - denies local port binding, Apple Events, and Unix sockets by default;
 - keeps the weaker nested and weaker macOS network modes disabled.
 
+On macOS, the runner tracks descendant process identities and kills recorded descendants on cancellation and normal command exit, including children that create another session. macOS does not provide a kernel process container here, so this lifecycle cleanup has a narrow polling race for a process that daemonizes and reparents before it is observed. Any surviving descendant remains subject to the inherited `srt` filesystem and network policy.
+
 The Git clone occurs before sandbox execution, so a repository token is not sent into OpenCode merely to clone source. The sandbox shares the host kernel. It is not a VM, container, Orka runtime, or Kubernetes SIGs Agent Sandbox.
 
 ## Tests

@@ -144,7 +144,7 @@ func (s *SRTSandbox) Run(ctx context.Context, spec SandboxSpec) ([]byte, error) 
 	go func() { done <- cmd.Wait() }()
 	select {
 	case err := <-done:
-		tracker.Close()
+		tracker.Kill()
 		return output.Bytes(), err
 	case err := <-tracker.Errors():
 		tracker.Kill()
@@ -152,8 +152,8 @@ func (s *SRTSandbox) Run(ctx context.Context, spec SandboxSpec) ([]byte, error) 
 		return output.Bytes(), fmt.Errorf("%w: %v", ErrSandboxUnavailable, err)
 	case <-ctx.Done():
 		tracker.Kill()
-		err := <-done
-		return output.Bytes(), err
+		<-done
+		return output.Bytes(), ctx.Err()
 	}
 }
 

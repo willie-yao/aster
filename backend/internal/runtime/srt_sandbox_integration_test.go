@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
 	"os/exec"
@@ -19,6 +20,8 @@ const (
 	srtAttackChildEnv        = "SRT_ATTACK_CHILD"
 	srtCancellationHelperEnv = "SRT_CANCELLATION_HELPER"
 	srtCancellationChildEnv  = "SRT_CANCELLATION_CHILD"
+	srtNormalExitHelperEnv   = "SRT_NORMAL_EXIT_HELPER"
+	srtNormalExitChildEnv    = "SRT_NORMAL_EXIT_CHILD"
 )
 
 type srtAttackReport struct {
@@ -160,6 +163,76 @@ func runSRTAttacks() srtAttackReport {
 	}
 }
 
+func TestSRTSandboxNormalExitKillsDetachedChild(t *testing.T) {
+	bin := strings.TrimSpace(os.Getenv("SRT_TEST_BIN"))
+	if bin == "" {
+		t.Skip("set SRT_TEST_BIN to the pinned srt executable")
+	}
+	root := newSRTIntegrationRoot(t)
+	work := filepath.Join(root, "work")
+	home := filepath.Join(root, "home")
+	temp := filepath.Join(root, "tmp")
+	for _, path := range []string{work, home, temp} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	executable := copyTestExecutable(t, work)
+	sessionReady := filepath.Join(work, "normal-session-ready")
+	marker := filepath.Join(work, "normal-child-survived")
+	env := srtIntegrationEnv(home, temp,
+		srtNormalExitHelperEnv+"=1",
+		"SRT_NORMAL_SESSION_READY="+sessionReady,
+		"SRT_NORMAL_MARKER="+marker,
+	)
+	output, err := NewSRTSandbox(bin).Run(context.Background(), SandboxSpec{
+		Command: []string{executable, "-test.run=^TestSRTSandboxNormalExitHelper$"},
+		WorkDir: work, HomeDir: home, TempDir: temp, Environment: env,
+		ReadPaths: []string{work, home, temp, executable}, WritePaths: []string{work, home, temp},
+	})
+	if err != nil {
+		t.Fatalf("normal-exit helper: %v: %s", err, tail(string(output), 2048))
+	}
+	time.Sleep(1200 * time.Millisecond)
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("detached sandbox child survived normal command exit")
+	} else if !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+}
+
+func TestSRTSandboxNormalExitHelper(t *testing.T) {
+	if os.Getenv(srtNormalExitHelperEnv) != "1" {
+		return
+	}
+	if os.Getenv(srtNormalExitChildEnv) == "1" {
+		if _, err := syscall.Setsid(); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(os.Getenv("SRT_NORMAL_SESSION_READY"), []byte("ready"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(800 * time.Millisecond)
+		if err := os.WriteFile(os.Getenv("SRT_NORMAL_MARKER"), []byte("survived"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(executable, "-test.run=^TestSRTSandboxNormalExitHelper$")
+	cmd.Env = append(os.Environ(), srtNormalExitChildEnv+"=1")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitForPath(t, os.Getenv("SRT_NORMAL_SESSION_READY"), 5*time.Second)
+	// Give the macOS descendant monitor a polling interval to record the child
+	// before this parent exits and launchd reparents it.
+	time.Sleep(200 * time.Millisecond)
+}
+
 func TestSRTSandboxCancellationIntegration(t *testing.T) {
 	bin := strings.TrimSpace(os.Getenv("SRT_TEST_BIN"))
 	if bin == "" {
@@ -201,8 +274,8 @@ func TestSRTSandboxCancellationIntegration(t *testing.T) {
 	waitForPath(t, ready, 5*time.Second)
 	cancel()
 	result := <-done
-	if result.err == nil {
-		t.Fatal("cancelled sandbox run returned no error")
+	if !errors.Is(result.err, context.Canceled) {
+		t.Fatalf("cancelled sandbox run error = %v, want context.Canceled", result.err)
 	}
 	time.Sleep(1200 * time.Millisecond)
 	if _, err := os.Stat(marker); err == nil {
