@@ -244,7 +244,7 @@ type TraceSession struct {
 	finished bool
 }
 
-// Record appends one sanitized event while the per-analysis cap has room.
+// Record appends one sanitized event while preserving draft decisions at the cap.
 func (s *TraceSession) Record(event TraceEvent) {
 	if s == nil {
 		return
@@ -254,11 +254,6 @@ func (s *TraceSession) Record(event TraceEvent) {
 	if s.finished {
 		return
 	}
-	if len(s.trace.Events) >= analysisTraceMaxEvents {
-		s.trace.Truncated = true
-		return
-	}
-	event.Sequence = len(s.trace.Events) + 1
 	event.ElapsedMs = int(time.Since(s.start) / time.Millisecond)
 	event.Kind = traceText(event.Kind)
 	event.Outcome = traceText(event.Outcome)
@@ -286,7 +281,30 @@ func (s *TraceSession) Record(event TraceEvent) {
 		decision.CandidatePublishedSoftRules = append([]string(nil), decision.CandidatePublishedSoftRules...)
 		event.DraftDecision = &decision
 	}
-	s.trace.Events = append(s.trace.Events, event)
+	event.Sequence = nextTraceSequence(s.trace.Events)
+	if len(s.trace.Events) < analysisTraceMaxEvents {
+		s.trace.Events = append(s.trace.Events, event)
+		return
+	}
+	s.trace.Truncated = true
+	if event.Kind != "draft_selection" {
+		return
+	}
+	for i := range s.trace.Events {
+		if s.trace.Events[i].Kind == "draft_selection" {
+			continue
+		}
+		copy(s.trace.Events[i:], s.trace.Events[i+1:])
+		s.trace.Events[len(s.trace.Events)-1] = event
+		return
+	}
+}
+
+func nextTraceSequence(events []TraceEvent) int {
+	if len(events) == 0 {
+		return 1
+	}
+	return events[len(events)-1].Sequence + 1
 }
 
 // Finish completes the trace and transfers it to the store.

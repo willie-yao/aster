@@ -167,6 +167,7 @@ const (
 	draftReasonCandidatePublishedHard       = "candidate_has_published_hard_failure"
 	draftReasonCandidateSemanticRegression  = "candidate_adds_semantic_regression"
 	draftReasonCandidateRootWithoutEvidence = "candidate_changes_root_without_evidence"
+	draftReasonCandidateEvidenceBackedRoot  = "candidate_evidence_backed_root_change"
 	draftReasonCandidateNotBetter           = "candidate_not_strictly_better"
 	draftReasonTiePreservesEarlier          = "tie_preserves_earlier"
 	draftReasonSemanticTieReplaces          = "semantic_tie_replaces"
@@ -1996,10 +1997,13 @@ func decideDraftReplacement(current, candidate *critiqueDraftCandidate, semantic
 	evidenceBackedChange := !semanticAccepted && decision.rootCauseChanged && candidate.evidenceRevision > current.evidenceRevision && critiqueQualityNoWorse(candidate.quality, current.quality)
 	semanticTie := semanticAccepted && critiqueQualityEqual(candidate.quality, current.quality)
 	switch {
-	case comparison > 0 || evidenceBackedChange:
+	case comparison > 0:
 		decision.accepted = true
 		decision.publishedStrictDominance = true
 		decision.reason = draftReasonCandidatePublishedDominates
+	case evidenceBackedChange:
+		decision.accepted = true
+		decision.reason = draftReasonCandidateEvidenceBackedRoot
 	case semanticTie:
 		decision.accepted = true
 		decision.reason = draftReasonSemanticTieReplaces

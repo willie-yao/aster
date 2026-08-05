@@ -534,7 +534,8 @@ A candidate must strictly dominate the selected draft:
    available evidence;
 4. without a hard improvement, it must reduce at least one soft dimension;
 5. an equal-quality draft can replace the earlier draft only when new evidence
-   supports a materially changed root cause;
+   supports a materially changed root cause; this is recorded as
+   `candidate_evidence_backed_root_change`, not strict dominance;
 6. crossed tradeoffs and all other exact ties keep the earlier draft.
 
 When later evidence supports the same diagnosis, the engine refreshes the
@@ -560,8 +561,9 @@ negation are material. The selected attempt alone controls cache acceptance.
 Every best, fallback, and fallback-promotion decision is retained in the private
 trace with attempt numbers, raw and published hard and soft rule IDs, evidence
 revisions, root-cause-change and semantic-regression flags, strict-dominance
-status, acceptance, and a stable reason. Draft text and critique feedback are not
-stored in this decision telemetry.
+status, acceptance, and a stable reason. Draft decisions displace older ordinary
+events when the per-analysis event cap is full. Draft text and critique feedback
+are not stored in this decision telemetry.
 
 #### Hallucinated citation check
 

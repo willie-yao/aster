@@ -1778,6 +1778,11 @@ func TestDraftReplacementReasons(t *testing.T) {
 			semantic:  true, want: draftReasonCandidatePublishedDominates,
 		},
 		{
+			name: "evidence-backed equal-quality root change", current: &critiqueDraftCandidate{quality: critiqueQuality{MissingEvidenceCount: 1}, evidenceRevision: 1, parsed: analysisResponse{RootCause: "old cause"}},
+			candidate: &critiqueDraftCandidate{quality: critiqueQuality{MissingEvidenceCount: 1}, evidenceRevision: 2, parsed: analysisResponse{RootCause: "new cause"}},
+			want:      draftReasonCandidateEvidenceBackedRoot,
+		},
+		{
 			name: "root change without evidence", current: &critiqueDraftCandidate{quality: critiqueQuality{MissingEvidenceCount: 2}, evidenceRevision: 1, parsed: analysisResponse{RootCause: "old cause"}},
 			candidate: &critiqueDraftCandidate{quality: critiqueQuality{MissingEvidenceCount: 1}, evidenceRevision: 1, parsed: analysisResponse{RootCause: "new cause"}},
 			want:      draftReasonCandidateRootWithoutEvidence,
@@ -1797,6 +1802,9 @@ func TestDraftReplacementReasons(t *testing.T) {
 			decision := decideDraftReplacement(tc.current, tc.candidate, tc.semantic, CritiqueCachePolicyHard)
 			if decision.reason != tc.want {
 				t.Fatalf("reason = %q, want %q; decision=%+v", decision.reason, tc.want, decision)
+			}
+			if tc.want == draftReasonCandidateEvidenceBackedRoot && (!decision.accepted || decision.publishedStrictDominance) {
+				t.Fatalf("evidence-backed decision = %+v, want accepted without strict dominance", decision)
 			}
 		})
 	}
