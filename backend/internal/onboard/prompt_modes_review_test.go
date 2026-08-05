@@ -187,8 +187,13 @@ func TestWizardPromptAuthoringDeclinedAPIUsesTemplate(t *testing.T) {
 	if opts.PromptMode != promptModeTemplate || !opts.NoPrompt {
 		t.Fatalf("opts = %+v", opts)
 	}
-	if len(ui.confirmPrompts) != 1 || ui.confirmPrompts[0].Value || !strings.Contains(ui.confirmPrompts[0].Description, "bounded repository") {
+	if len(ui.confirmPrompts) != 1 || ui.confirmPrompts[0].Value {
 		t.Fatalf("confirmation = %+v", ui.confirmPrompts)
+	}
+	for _, want := range []string{"repository documentation", "source excerpts", "matched Prow job metadata", "AI_TOKEN"} {
+		if !strings.Contains(ui.confirmPrompts[0].Description, want) {
+			t.Fatalf("confirmation disclosure missing %q: %s", want, ui.confirmPrompts[0].Description)
+		}
 	}
 }
 
