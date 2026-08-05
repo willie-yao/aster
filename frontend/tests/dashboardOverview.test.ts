@@ -142,6 +142,7 @@ test("overview source uses ledger rows without nested panel scrolling", () => {
   assert.match(filters, /minHeight: 44/);
   assert.match(filters, /height: 44/);
   assert.match(filters, /boxShadow: "inset 0 -3px 0/);
+  assert.match(filters, /color: "text.primary"/);
   assert.match(search, /width: 44[\s\S]*height: 44[\s\S]*p: 0/);
   assert.match(sparkline, /repeat\(4, 44px\)/);
   assert.match(sparkline, /width: 44[\s\S]*height: 44/);

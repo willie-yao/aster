@@ -73,7 +73,7 @@ export function OverviewFilters({
             "&.Mui-selected": {
               position: "relative",
               zIndex: 1,
-              color: "primary.main",
+              color: "text.primary",
               borderColor: "primary.main !important",
               bgcolor: (theme) => soft(theme, "primary", 0.12),
               boxShadow: "inset 0 -3px 0 var(--mui-palette-primary-main)",
