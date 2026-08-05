@@ -51,9 +51,9 @@ chat completions API as:
 
 ## How onboarding drafts the prompt
 
-Guided onboarding can draft this file from a bounded evidence corpus after you
-confirm that repository content may be sent to the selected provider. The input
-combines:
+Guided onboarding can generate this file with an isolated OpenCode agent, create
+an agent handoff bundle, draft it through the experimental bounded API path, or
+write the TODO template. The bounded API input combines:
 
 - Markdown documentation.
 - Relevant Go, YAML, and shell excerpts from one commit resolved from the
@@ -74,12 +74,11 @@ Eligible source files up to 1 MiB are scanned before the line-ranged excerpt is
 selected. A truncated recursive Git tree is rejected rather than presented as a
 complete deterministic corpus.
 
-Onboarding does not clone the repository, execute repository code, use GitHub
-code search, or send the whole repository. Repository text and job metadata are
-untrusted evidence. Documentation references may influence deterministic ranking
-of eligible files in the pinned snapshot, but cannot trigger arbitrary URLs,
-commands, provider-time retrieval, or secret access. The draft remains a
-starting point that requires human review.
+The API path does not clone the repository, execute repository code, use GitHub
+code search, or send the whole repository. Agent mode instead resolves an
+immutable source commit and uses an isolated shallow checkout with shell access
+disabled. Repository text and job metadata are untrusted evidence in both paths.
+The draft remains a starting point that requires human review.
 
 Generation uses deterministic chunked extraction within a 15-minute total
 timeout by default. `fetcher onboard --prompt-timeout` can change the total

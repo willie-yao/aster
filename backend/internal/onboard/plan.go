@@ -222,11 +222,24 @@ func (b defaultPromptBuilder) Build(ctx context.Context, opts Options, data scaf
 		if a == nil {
 			a = promptauthor.NewOpenCodeRuntime()
 		}
-		return buildAgentPrompt(ctx, opts, data, input, a)
+		return buildAgentPrompt(ctx, opts, data, input, a, b.err)
 	case promptModeHandoff:
+		ref := strings.TrimSpace(input.SourceRepo.Branch)
+		if ref == "" {
+			ref = "main"
+		}
+		handoff, err := buildPromptHandoff(input, ref, "default-branch")
+		if err != nil {
+			return "", promptPreparationResult{}, err
+		}
 		p, err := render(systemPromptTmpl, data)
-		return p, promptPreparationResult{Requested: promptRequestHandoff, Status: promptStatusHandoff, Output: promptOutputTemplate, Handoff: buildPromptHandoff(input)}, err
-	default:
+		return p, promptPreparationResult{Requested: promptRequestHandoff, Status: promptStatusHandoff, Output: promptOutputTemplate, Handoff: handoff}, err
+	case promptModeTemplate:
+		p, err := render(systemPromptTmpl, data)
+		return p, newTemplatePromptResult(), err
+	case promptModeAPI:
 		return buildSystemPrompt(ctx, opts, data, input, b.out, b.err)
+	default:
+		return "", promptPreparationResult{}, fmt.Errorf("unsupported prompt mode %q", effectivePromptMode(opts))
 	}
 }

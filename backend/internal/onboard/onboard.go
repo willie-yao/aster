@@ -157,7 +157,7 @@ func promptFallback(opts Options, data scaffoldData, errOut io.Writer, debug pro
 }
 
 const (
-	// DefaultPromptDraftTimeout bounds source retrieval and phased prompt extraction.
+	// DefaultPromptDraftTimeout bounds one prompt-authoring attempt.
 	DefaultPromptDraftTimeout = 15 * time.Minute
 	defaultPromptDraftTimeout = DefaultPromptDraftTimeout
 	minPromptDraftTimeout     = time.Minute
@@ -181,8 +181,13 @@ func validatePromptMode(mode string) error {
 }
 
 func validateOptions(opts *Options) error {
+	opts.PromptMode = strings.TrimSpace(opts.PromptMode)
+	opts.PromptAgentModel = strings.TrimSpace(opts.PromptAgentModel)
 	if err := validatePromptMode(opts.PromptMode); err != nil {
 		return err
+	}
+	if opts.NoPrompt && opts.PromptMode != "" && opts.PromptMode != promptModeTemplate {
+		return fmt.Errorf("--no-prompt cannot be combined with --prompt-mode=%s", opts.PromptMode)
 	}
 	if err := validateCredentialSeparation(*opts); err != nil {
 		return err
@@ -227,15 +232,16 @@ func validateOptions(opts *Options) error {
 	if opts.OpenPR && opts.UpdateExisting {
 		return fmt.Errorf("--update-existing applies only to local output and cannot be combined with --open-pr")
 	}
-	if opts.RequirePromptDraft && opts.NoPrompt {
-		return fmt.Errorf("--require-prompt-draft is valid only when experimental API prompt drafting is selected")
+	promptMode := effectivePromptMode(*opts)
+	if opts.RequirePromptDraft && promptMode != promptModeAPI && promptMode != promptModeAgent {
+		return fmt.Errorf("--require-prompt-draft is valid only with --prompt-mode=%s or --prompt-mode=%s", promptModeAgent, promptModeAPI)
 	}
-	if opts.RequirePromptDraft && opts.AIToken == "" {
+	if opts.RequirePromptDraft && promptMode == promptModeAPI && opts.AIToken == "" {
 		return fmt.Errorf("AI_TOKEN is required because it authenticates experimental API prompt drafting")
 	}
 	// API drafting needs explicit provider coordinates. Without an API request,
 	// onboarding writes the reviewable TODO template.
-	if requestedPromptPreparation(*opts) == promptRequestAPIExperimental {
+	if promptMode == promptModeAPI {
 		if opts.AIEndpoint == "" || opts.AIModel == "" {
 			return fmt.Errorf("experimental API prompt drafting needs AI_ENDPOINT and AI_MODEL set; AI_TOKEN authenticates that provider")
 		}
@@ -262,6 +268,7 @@ func validateCredentialSeparation(opts Options) error {
 	values := []string{
 		opts.TestGrid, opts.Bucket, opts.GCSWebBase, opts.DashboardRepo, opts.SourceRepo,
 		opts.ID, opts.Name, opts.ShortName, opts.EngineRef, opts.OutDir,
+		opts.PromptAgentModel,
 		opts.AIAPI, opts.AIEndpoint, opts.AIModel,
 		opts.DeploymentAIAPI, opts.DeploymentAIEndpoint, opts.DeploymentAIModel,
 	}

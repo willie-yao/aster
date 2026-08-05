@@ -16,6 +16,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/onboard/promptauthor"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"golang.org/x/term"
 )
@@ -320,6 +321,10 @@ func validatePlan(planValue *Plan) error {
 	expected := map[string]struct{}{
 		"project.yaml": {}, "prompts/system.md": {},
 	}
+	if promptPlanIncludesHandoff(planValue.Prompt) {
+		expected["PROMPT_HANDOFF.md"] = struct{}{}
+		expected[".opencode/skills/system-prompt-generation/SKILL.md"] = struct{}{}
+	}
 	switch planValue.Deployment.Mode {
 	case modePages:
 		expected[".github/workflows/deploy.yml"] = struct{}{}
@@ -380,6 +385,14 @@ func validatePlan(planValue *Plan) error {
 	if strings.TrimSpace(planValue.Files["prompts/system.md"]) == "" {
 		return fmt.Errorf("onboarding plan prompt is empty")
 	}
+	if promptPlanIncludesHandoff(planValue.Prompt) {
+		if strings.TrimSpace(planValue.Files["PROMPT_HANDOFF.md"]) == "" {
+			return fmt.Errorf("onboarding plan prompt handoff is empty")
+		}
+		if planValue.Files[".opencode/skills/system-prompt-generation/SKILL.md"] != promptauthor.SkillContent() {
+			return fmt.Errorf("onboarding plan prompt authoring skill is invalid")
+		}
+	}
 	parsed, err := project.Parse([]byte(planValue.Files["project.yaml"]))
 	if err != nil {
 		return fmt.Errorf("onboarding plan project.yaml failed validation: %w", err)
@@ -433,11 +446,13 @@ func printReview(out io.Writer, plan *Plan) {
 	}
 	fmt.Fprintf(out, "  Prompt:               %s\n", safeTerminal(plan.Prompt.Source))
 	fmt.Fprintf(out, "  Prompt requested:     %s\n", safeTerminal(plan.Prompt.RequestedMode))
-	if plan.Prompt.RequestedMode == string(promptRequestAPIExperimental) {
+	if plan.Prompt.RequestedMode == string(promptRequestAPIExperimental) || plan.Prompt.RequestedMode == string(promptRequestAgent) {
 		fmt.Fprintf(out, "  Prompt timeout:       %s\n", safeTerminal(plan.Prompt.Timeout))
 	}
 	if plan.Prompt.Output == string(promptOutputAPIDraft) {
 		fmt.Fprintf(out, "  Prompt provider:      %s, %s, %s\n", safeTerminal(plan.Prompt.API), reviewValue(plan.Prompt.Endpoint), safeTerminal(plan.Prompt.Model))
+	} else if plan.Prompt.RequestedMode == string(promptRequestAgent) {
+		fmt.Fprintf(out, "  Prompt agent:         %s, %s\n", safeTerminal(plan.Prompt.Runtime), safeTerminal(plan.Prompt.Model))
 	}
 	if plan.Prompt.FailureStage != "" {
 		fmt.Fprintf(out, "  Prompt failure:       %s (%s)\n", safeTerminal(promptPreparationStage(plan.Prompt.FailureStage).label()), safeTerminal(plan.Prompt.FailureCategory))

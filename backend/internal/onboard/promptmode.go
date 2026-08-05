@@ -8,10 +8,13 @@ const (
 )
 
 func effectivePromptMode(opts Options) string {
+	if opts.NoPrompt {
+		return promptModeTemplate
+	}
 	if opts.PromptMode != "" {
 		return opts.PromptMode
 	}
-	if opts.NoPrompt || opts.AIToken == "" {
+	if opts.AIToken == "" && !opts.RequirePromptDraft {
 		return promptModeTemplate
 	}
 	return promptModeAPI

@@ -144,7 +144,7 @@ func (c promptFailureCategory) action() string {
 	case promptFailureInvalidStructured, promptFailureUngroundedEvidence:
 		return "Retry once or continue with the reviewable TODO template."
 	case promptFailureTimedOut:
-		return "Retry the same reviewed provider or continue with the TODO template."
+		return "Retry the same reviewed prompt authoring mode or continue with the TODO template."
 	case promptFailurePromptValidation:
 		return "Continue with the TODO template and inspect the deterministic validation tests."
 	default:
@@ -239,13 +239,16 @@ func (r promptPreparationResult) promptPlan(opts Options) PromptPlan {
 		plan.FailureCategory = string(r.Failure.Category)
 		plan.FailureAction = r.Failure.Category.action()
 	}
-	if r.Requested == promptRequestAPIExperimental {
+	if r.Requested == promptRequestAPIExperimental || r.Requested == promptRequestAgent {
 		plan.Timeout = effectivePromptDraftTimeout(opts).String()
 	}
 	if r.Status == promptStatusAPIDraft {
 		plan.API = opts.AIAPI
 		plan.Endpoint = opts.AIEndpoint
 		plan.Model = opts.AIModel
+	} else if r.Requested == promptRequestAgent {
+		plan.Runtime = "opencode"
+		plan.Model = effectivePromptAgentModel(opts)
 	}
 	return plan
 }
@@ -254,13 +257,13 @@ func validatePromptPlan(plan PromptPlan) error {
 	if plan.RequestedMode != string(promptRequestTemplate) && plan.RequestedMode != string(promptRequestAPIExperimental) && plan.RequestedMode != string(promptRequestAgent) && plan.RequestedMode != string(promptRequestHandoff) {
 		return fmt.Errorf("onboarding plan prompt request %q is invalid", plan.RequestedMode)
 	}
-	if plan.RequestedMode == string(promptRequestAPIExperimental) {
+	if plan.RequestedMode == string(promptRequestAPIExperimental) || plan.RequestedMode == string(promptRequestAgent) {
 		timeout, err := time.ParseDuration(plan.Timeout)
 		if err != nil || timeout < minPromptDraftTimeout || timeout > maxPromptDraftTimeout {
 			return fmt.Errorf("onboarding plan prompt timeout is invalid")
 		}
 	} else if plan.Timeout != "" {
-		return fmt.Errorf("onboarding plan TODO prompt retained an API timeout")
+		return fmt.Errorf("onboarding plan prompt retained an inapplicable timeout")
 	}
 	switch plan.FinalStatus {
 	case string(promptStatusTemplate):
@@ -275,32 +278,53 @@ func validatePromptPlan(plan PromptPlan) error {
 			return fmt.Errorf("onboarding plan API prompt result is missing provider coordinates")
 		}
 	case string(promptStatusAgentDraft):
-		if plan.RequestedMode != string(promptRequestAgent) || plan.Output != string(promptOutputAgentDraft) || plan.Source != "OpenCode agent draft" {
+		if plan.RequestedMode != string(promptRequestAgent) || plan.Output != string(promptOutputAgentDraft) || plan.Source != "OpenCode agent draft" || plan.Runtime != "opencode" || strings.TrimSpace(plan.Model) == "" {
 			return fmt.Errorf("onboarding plan agent prompt result is inconsistent")
 		}
-	case string(promptStatusHandoff), string(promptStatusAgentFallback):
-		if plan.Output != string(promptOutputTemplate) || plan.Source != "Agent handoff bundle with TODO template" {
+	case string(promptStatusHandoff):
+		if plan.RequestedMode != string(promptRequestHandoff) || plan.Output != string(promptOutputTemplate) || plan.Source != "Agent handoff bundle with TODO template" {
 			return fmt.Errorf("onboarding plan handoff result is inconsistent")
+		}
+	case string(promptStatusAgentFallback):
+		if plan.RequestedMode != string(promptRequestAgent) || plan.Output != string(promptOutputTemplate) || plan.Source != "Agent handoff bundle with TODO template" || plan.Runtime != "opencode" || strings.TrimSpace(plan.Model) == "" {
+			return fmt.Errorf("onboarding plan agent fallback result is inconsistent")
+		}
+		if err := validatePromptFailureDiagnostics(plan); err != nil {
+			return err
 		}
 	case string(promptStatusFallback):
 		if plan.RequestedMode != string(promptRequestAPIExperimental) || plan.Output != string(promptOutputTemplate) || plan.Source != "TODO template after experimental API failure" {
 			return fmt.Errorf("onboarding plan fallback prompt result is inconsistent")
 		}
-		stage := promptPreparationStage(plan.FailureStage)
-		category := promptFailureCategory(plan.FailureCategory)
-		if !knownPromptStage(stage) || !knownPromptFailureCategory(category) || plan.FailureAction != category.action() {
-			return fmt.Errorf("onboarding plan fallback diagnostics are invalid")
+		if err := validatePromptFailureDiagnostics(plan); err != nil {
+			return err
 		}
 	default:
 		return fmt.Errorf("onboarding plan prompt status %q is invalid", plan.FinalStatus)
 	}
-	if plan.FinalStatus != string(promptStatusAPIDraft) && (plan.API != "" || plan.Endpoint != "" || plan.Model != "") {
+	if plan.FinalStatus != string(promptStatusAPIDraft) && (plan.API != "" || plan.Endpoint != "") {
 		return fmt.Errorf("onboarding plan non-API prompt result retained provider coordinates")
 	}
-	if plan.FinalStatus != string(promptStatusFallback) && (plan.FailureStage != "" || plan.FailureCategory != "" || plan.FailureAction != "") {
+	if plan.RequestedMode != string(promptRequestAgent) && (plan.Runtime != "" || plan.Model != "" && plan.FinalStatus != string(promptStatusAPIDraft)) {
+		return fmt.Errorf("onboarding plan non-agent prompt result retained agent coordinates")
+	}
+	if plan.FinalStatus != string(promptStatusFallback) && plan.FinalStatus != string(promptStatusAgentFallback) && (plan.FailureStage != "" || plan.FailureCategory != "" || plan.FailureAction != "") {
 		return fmt.Errorf("onboarding plan successful prompt result retained failure diagnostics")
 	}
 	return nil
+}
+
+func validatePromptFailureDiagnostics(plan PromptPlan) error {
+	stage := promptPreparationStage(plan.FailureStage)
+	category := promptFailureCategory(plan.FailureCategory)
+	if !knownPromptStage(stage) || !knownPromptFailureCategory(category) || plan.FailureAction != category.action() {
+		return fmt.Errorf("onboarding plan fallback diagnostics are invalid")
+	}
+	return nil
+}
+
+func promptPlanIncludesHandoff(plan PromptPlan) bool {
+	return plan.FinalStatus == string(promptStatusHandoff) || plan.FinalStatus == string(promptStatusAgentFallback)
 }
 
 func knownPromptStage(stage promptPreparationStage) bool {
@@ -326,10 +350,16 @@ func knownPromptFailureCategory(category promptFailureCategory) bool {
 }
 
 func requestedPromptPreparation(opts Options) promptPreparationRequest {
-	if opts.NoPrompt || (opts.AIToken == "" && !opts.RequirePromptDraft) {
+	switch effectivePromptMode(opts) {
+	case promptModeAgent:
+		return promptRequestAgent
+	case promptModeHandoff:
+		return promptRequestHandoff
+	case promptModeAPI:
+		return promptRequestAPIExperimental
+	default:
 		return promptRequestTemplate
 	}
-	return promptRequestAPIExperimental
 }
 
 func isPromptDeadline(err error) bool {
@@ -387,9 +417,9 @@ type requiredPromptDraftError struct {
 
 func (e *requiredPromptDraftError) Error() string {
 	if e == nil || e.failure == nil {
-		return "required experimental API prompt draft was not produced"
+		return "required prompt draft was not produced"
 	}
-	return fmt.Sprintf("required experimental API prompt draft was not produced: %s: %s", e.failure.Stage.label(), e.failure.Category.reason())
+	return fmt.Sprintf("required prompt draft was not produced: %s: %s", e.failure.Stage.label(), e.failure.Category.reason())
 }
 
 func (e *requiredPromptDraftError) Unwrap() error {
