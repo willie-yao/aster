@@ -453,3 +453,37 @@ func (r *recordingProcessSandbox) Command(ctx context.Context, spec SandboxSpec)
 	r.specs = append(r.specs, spec)
 	return r.delegate.Command(ctx, spec)
 }
+
+func TestOpencodeSandboxSpecPopulatesResourcePolicy(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "opencode")
+	if err := os.WriteFile(bin, []byte("binary"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	certFile := filepath.Join(dir, "cert.pem")
+	certDir := filepath.Join(dir, "certs")
+	t.Setenv("SSL_CERT_FILE", certFile)
+	t.Setenv("SSL_CERT_DIR", certDir)
+	workdir, home, temp := t.TempDir(), t.TempDir(), t.TempDir()
+
+	got, err := opencodeSandboxSpec(bin)(context.Background(), GenerateSpec{
+		Instruction: "fix it", Model: "model", Endpoint: "https://api.example.test:8443/v1",
+		NetworkDomains: []string{"registry.example.test", "registry.example.test"},
+	}, workdir, home, temp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{bin, certFile, certDir, workdir, home, temp} {
+		if !slices.Contains(got.ReadPaths, path) {
+			t.Errorf("read paths %v do not contain %q", got.ReadPaths, path)
+		}
+	}
+	for _, path := range []string{workdir, home, temp} {
+		if !slices.Contains(got.WritePaths, path) {
+			t.Errorf("write paths %v do not contain %q", got.WritePaths, path)
+		}
+	}
+	if want := []string{"registry.example.test", "api.example.test:8443"}; !slices.Equal(got.NetworkDomains, want) {
+		t.Fatalf("network domains = %v, want %v", got.NetworkDomains, want)
+	}
+}

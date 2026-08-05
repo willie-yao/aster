@@ -8,7 +8,11 @@ import (
 	"syscall"
 )
 
-// SandboxSpec describes one process and the resources a sandbox may expose.
+// SandboxSpec describes one process and the additional resources a sandbox may
+// expose beyond its minimal immutable platform runtime. Environment is the
+// complete child environment. Path entries are recursive after symlink
+// resolution, and writable paths are also readable. Empty resource allowlists
+// deny that resource rather than making it unrestricted.
 type SandboxSpec struct {
 	Command        []string
 	WorkDir        string
@@ -23,6 +27,7 @@ type SandboxSpec struct {
 }
 
 // ProcessSandbox constructs a command under one process isolation policy.
+// Enforcing backends must apply the requested allowlists or return an error.
 type ProcessSandbox interface {
 	Command(context.Context, SandboxSpec) (*exec.Cmd, error)
 }

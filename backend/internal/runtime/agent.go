@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -50,6 +52,9 @@ type GenerateSpec struct {
 	MaxTurns int
 	// AllowBash lets the agent run shell commands (build, tests) while fixing.
 	AllowBash bool
+	// NetworkDomains are additional outbound destinations required by the task.
+	// The custom endpoint host is added automatically.
+	NetworkDomains []string
 	// Timeout bounds the whole run (clone plus agent). Zero uses defaultTimeout.
 	Timeout time.Duration
 	// ExecutionID scopes externally managed work to one action request.
@@ -288,16 +293,71 @@ func opencodeSandboxSpec(bin string) func(context.Context, GenerateSpec, string,
 			args = append(args, "--model", "engine/"+spec.Model)
 		}
 		args = append(args, spec.Instruction)
+		networkDomains, err := opencodeNetworkDomains(spec)
+		if err != nil {
+			return SandboxSpec{}, err
+		}
 		return SandboxSpec{
-			Command:     args,
-			WorkDir:     workdir,
-			HomeDir:     home,
-			TempDir:     temp,
-			Environment: isolatedOpencodeEnv(home, temp),
-			ReadPaths:   []string{workdir, home, temp},
-			WritePaths:  []string{workdir, home, temp},
+			Command:        args,
+			WorkDir:        workdir,
+			HomeDir:        home,
+			TempDir:        temp,
+			Environment:    isolatedOpencodeEnv(home, temp),
+			ReadPaths:      opencodeReadPaths(bin, workdir, home, temp),
+			WritePaths:     []string{workdir, home, temp},
+			NetworkDomains: networkDomains,
 		}, nil
 	}
+}
+
+func opencodeReadPaths(bin, workdir, home, temp string) []string {
+	paths := []string{workdir, home, temp, bin}
+	if resolved, err := filepath.EvalSymlinks(bin); err == nil && resolved != bin {
+		paths = append(paths, resolved)
+	}
+	for _, name := range []string{"SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS"} {
+		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+			paths = append(paths, value)
+		}
+	}
+	for _, value := range filepath.SplitList(os.Getenv("SSL_CERT_DIR")) {
+		if value = strings.TrimSpace(value); value != "" {
+			paths = append(paths, value)
+		}
+	}
+	return uniqueStrings(paths)
+}
+
+func opencodeNetworkDomains(spec GenerateSpec) ([]string, error) {
+	domains := append([]string(nil), spec.NetworkDomains...)
+	if strings.TrimSpace(spec.Endpoint) == "" {
+		return uniqueStrings(domains), nil
+	}
+	endpoint, err := url.Parse(spec.Endpoint)
+	if err != nil || endpoint.Scheme == "" || endpoint.Hostname() == "" {
+		return nil, fmt.Errorf("runtime: invalid model endpoint")
+	}
+	host := endpoint.Hostname()
+	if port := endpoint.Port(); port != "" {
+		host = net.JoinHostPort(host, port)
+	}
+	return uniqueStrings(append(domains, host)), nil
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func isolatedOpencodeEnv(home, temp string) []string {
