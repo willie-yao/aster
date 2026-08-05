@@ -62,6 +62,7 @@ ai:
   single_tool_call: false       # send at most one tool call per turn (for single-tool-call-only models)
   critique:
     max_retries: 0              # default; positive values enable one bounded repair
+    cache_policy: advisory      # strict, hard, or advisory; omit to preserve legacy behavior
   tools: [filesystem, k8s]      # registered tool groups exposed to the model
 ```
 
@@ -135,13 +136,18 @@ starting value for weaker models. See [Investigation floors](#investigation-floo
 
 ### `critique`
 
-The deterministic critique gate always runs. It rejects punt-shaped and
-ungrounded drafts. `max_retries`, which defaults to `0`, controls eligibility for the single
-bounded deterministic repair operation. `0` evaluates the draft once but makes
-no critique repair model request. Positive values remain subject to context and
-time-headroom guards. A
-still-failing draft is published uncached. See
-[The critique gate](#the-critique-gate).
+The deterministic critique gate always runs. `max_retries`, which defaults to
+`0`, controls only eligibility for the single bounded deterministic repair
+operation. `0` evaluates the draft once but makes no critique repair model
+request. Positive values remain subject to context and time-headroom guards.
+
+`cache_policy` independently controls cache reuse. `strict` rejects actionable
+hard failures and soft warnings. `hard` rejects only hard safety, grounding, and
+correctness failures. `advisory` records findings without blocking cache reuse.
+If the field is omitted, existing behavior is preserved: zero retries resolve
+to `advisory`, and positive retries resolve to `strict`. Structural validation,
+publication sanitization, and critique-version validation remain mandatory for
+all policies. See [The critique gate](#the-critique-gate).
 
 ### `single_tool_call`
 
@@ -496,29 +502,25 @@ system prompt forbidding this shape. The check is a deterministic regex (see
 When the regex matches, the loop appends targeted feedback that quotes the
 offending suggested_fix back to the model, lists the exact phrases that
 tripped the gate, and re-states the two allowed shapes (concrete remediation
-OR the strict no-remediation escape hatch). It performs the bounded repair when `max_retries` is positive and the
-headroom guards admit it. Repair is bounded to evidence injection, at most one
-Tool-enabled turn when evidence is unresolved, and one forced finalization. With
-`max_retries: 0`, critique remains visible telemetry but does not gate caching.
-With a positive retry budget, drafts that still fail after the bounded operation
-are published but not cached, so the next fetcher run retries them. Before cache
-acceptance, the engine re-evaluates the exact deterministically sanitized
-published form. A newly passing published form still runs the semantic judge
-before it can be cached.
+OR the strict no-remediation escape hatch). It performs the bounded repair when
+`max_retries` is positive and the headroom guards admit it. Repair is bounded to
+evidence injection, at most one Tool-enabled turn when evidence is unresolved,
+and one forced finalization. Cache enforcement is independent of that repair
+budget. Before cache acceptance, the engine re-evaluates the exact
+deterministically sanitized published form. A hard-safe published form still
+runs the semantic judge when only soft warnings remain.
 
 **Coverage.** Critique evaluates parseable drafts in-loop, but deterministic
 repair runs once after draft selection. It injects evidence, optionally allows
 one Tool-enabled turn when evidence remains unresolved, then forces one final
 JSON response. It never reopens the general investigation loop.
 
-**Cache invalidation.** With `max_retries: 0`, critique is advisory and
-analyses that meet the investigation floors remain cacheable even when critique
-objects. A positive retry budget requires critique success before cache write or
-reuse; a draft that still fails publishes but is not cached. A
-`critique_version` int is stamped onto analyses, and positive-retry policies
-reject entries below the current engine version. Switching from zero to a
-positive retry count therefore re-enables the current critique gate without a
-cache clear.
+**Cache invalidation.** `strict`, `hard`, and `advisory` are evaluated from
+content-free rule IDs stored in the private cache. Existing passing entries do
+not need regeneration. Older objection-bearing entries without rule
+classification are rejected by `strict` and `hard` as
+`critique_unclassified`. Every policy rejects entries below the current
+`critique_version`.
 
 **Best-draft selection.** A repair never replaces an earlier draft merely
 because it arrived later. The engine compares parseable attempts in this order:

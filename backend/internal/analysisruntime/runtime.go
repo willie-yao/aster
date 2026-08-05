@@ -328,6 +328,7 @@ func (r *Runtime) NewService(opts ServiceOptions) (*ai.Service, error) {
 		MinToolCalls:        eff.MinToolCalls,
 		MinGCSBytes:         eff.MinGCSBytes,
 		CritiqueMaxRetries:  *eff.Critique.MaxRetries,
+		CritiqueCachePolicy: ai.CritiqueCachePolicy(eff.Critique.EffectiveCachePolicy()),
 		SingleToolCall:      eff.SingleToolCall,
 		SemanticJudge:       true,
 	}, factory, r.Registry, r.EnabledTools)
@@ -349,8 +350,9 @@ func (r *Runtime) LogConfiguration() {
 		return
 	}
 	eff := r.Project.Config.AI.EffectiveAgentic()
-	log.Printf("🤖 Agentic AI enabled (%d iters, %dKB model, %dMB gcs, %s timeout, min_tools=%d, min_gcs_kb=%d, critique=on/%d, tools=%v)",
-		eff.MaxIters, r.ModelByteBudget/1024, gcsByteBudget/1024/1024, eff.Timeout, eff.MinToolCalls, eff.MinGCSBytes/1024, *eff.Critique.MaxRetries, r.EnabledTools)
+	log.Printf("🤖 Agentic AI enabled (%d iters, %dKB model, %dMB gcs, %s timeout, min_tools=%d, min_gcs_kb=%d, critique=on/%d cache_policy=%s, tools=%v)",
+		eff.MaxIters, r.ModelByteBudget/1024, gcsByteBudget/1024/1024, eff.Timeout, eff.MinToolCalls, eff.MinGCSBytes/1024,
+		*eff.Critique.MaxRetries, eff.Critique.EffectiveCachePolicy(), r.EnabledTools)
 	if set := r.Project.SkillSet; set != nil {
 		log.Printf("🧰 AI skills loaded (profiles=%s engine=%d consumer=%d consumer_bundle=%t hash=%s)",
 			r.Project.ProfileSelection.String(), set.EngineCount(), set.ConsumerCount(), set.ConsumerBundlePresent(), ShortHash(set.Hash()))
@@ -385,9 +387,10 @@ func NewReusePlanner(project *Project) *ai.Service {
 	service.SetCacheGeneration(project.CacheGenerationFingerprint)
 	eff := project.Config.AI.EffectiveAgentic()
 	service.EnableAgentic(ai.AgenticOptions{
-		MinToolCalls:       eff.MinToolCalls,
-		MinGCSBytes:        eff.MinGCSBytes,
-		CritiqueMaxRetries: *eff.Critique.MaxRetries,
+		MinToolCalls:        eff.MinToolCalls,
+		MinGCSBytes:         eff.MinGCSBytes,
+		CritiqueMaxRetries:  *eff.Critique.MaxRetries,
+		CritiqueCachePolicy: ai.CritiqueCachePolicy(eff.Critique.EffectiveCachePolicy()),
 	}, nil, nil, nil)
 	service.SetSkills(project.SkillSet)
 	return service

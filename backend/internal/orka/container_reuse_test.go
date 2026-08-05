@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -142,7 +143,10 @@ func TestContainerAnalyzerReusesExactResultWithoutCreatingTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	policy := compatibleResultPolicy(opts)
+	policy.CritiquePolicy = ai.CritiqueCachePolicyHard
 	result := compatibleFailureResult(policy)
+	result.Analysis.CritiquePassed = false
+	result.Analysis.CritiqueSoftWarnings = []string{"remediation.punt"}
 	prepared, err := prepareContainerAnalysisTask(analyzer.taskSpec(request, store.CacheSeed(request), nil))
 	if err != nil {
 		t.Fatal(err)
@@ -150,17 +154,22 @@ func TestContainerAnalyzerReusesExactResultWithoutCreatingTask(t *testing.T) {
 	workItem := fetchprogress.WorkItemID(analysisruntime.FailureCacheKey(request))
 	exact := compatibleTaskObject(opts.Namespace, prepared.Name, workItem, prepared.BundleDigest, containerStateKeyFingerprint(key), "Succeeded", true, time.Now().UTC().Add(-time.Minute))
 	kube.exact = &exact
+	cacheKey := analysisruntime.FailureCacheKey(request)
+	entry, err := ai.NewAgenticCacheEntry(cacheKey, result, time.Now().UTC().Add(-time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
 	results.values[prepared.Name] = struct {
 		raw string
 		ok  bool
 		err error
-	}{raw: compatibleRawResult(t, opts.Namespace, prepared.Name, request, key, result, nil), ok: true}
+	}{raw: compatibleRawResult(t, opts.Namespace, prepared.Name, request, key, result, map[string]ai.CacheEntry{cacheKey: entry}), ok: true}
 
 	got, reused, err := analyzer.ReuseExactResult(t.Context(), request, policy)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reused || !sameAgenticResult(got, result) {
+	if !reused || !sameAgenticResult(got, result) || !slices.Equal(got.Analysis.CritiqueSoftWarnings, []string{"remediation.punt"}) {
 		t.Fatalf("reused=%t result=%+v", reused, got)
 	}
 	if kube.namespace != opts.Namespace || kube.name != prepared.Name || !reflect.DeepEqual(results.calls, []string{opts.Namespace + "/" + prepared.Name}) {
@@ -169,7 +178,6 @@ func TestContainerAnalyzerReusesExactResultWithoutCreatingTask(t *testing.T) {
 	if len(resources.created) != 0 || len(resources.applied) != 0 || kube.selector != "" {
 		t.Fatalf("exact reuse mutated resources: created=%v applied=%v selector=%q", resources.created, resources.applied, kube.selector)
 	}
-	cacheKey := analysisruntime.FailureCacheKey(request)
 	accepted, reason := ai.AcceptAgenticCacheEntry(store.CacheSeed(request)[cacheKey], cacheKey, policy)
 	if reason != ai.CacheAccepted || !sameAgenticResult(accepted, result) {
 		t.Fatalf("promoted cache reason=%q result=%+v", reason, accepted)
@@ -319,6 +327,7 @@ func TestContainerAnalyzerCompatibleResultSafetyFailures(t *testing.T) {
 		wrongTask       bool
 		wrongCache      bool
 		wrongGeneration bool
+		unresolvedJudge bool
 		minTools        int
 		wantErr         bool
 		wantAuth        bool
@@ -329,6 +338,7 @@ func TestContainerAnalyzerCompatibleResultSafetyFailures(t *testing.T) {
 		{name: "cache identity", wrongCache: true, wantErr: true},
 		{name: "cache generation identity", wrongGeneration: true, wantErr: true},
 		{name: "below floor", minTools: 3},
+		{name: "unresolved semantic objection", unresolvedJudge: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store, err := analysisruntime.NewContainerStateStore(t.TempDir())
@@ -352,6 +362,10 @@ func TestContainerAnalyzerCompatibleResultSafetyFailures(t *testing.T) {
 				policy.MinToolCalls = tc.minTools
 			}
 			result := compatibleFailureResult(compatibleResultPolicy(opts))
+			if tc.unresolvedJudge {
+				result.Analysis.JudgeObjected = true
+				result.Analysis.JudgeResolutionKnown = true
+			}
 			prepared, err := prepareContainerAnalysisTask(analyzer.taskSpec(request, nil, nil))
 			if err != nil {
 				t.Fatal(err)

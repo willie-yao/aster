@@ -95,6 +95,9 @@ type TraceEvent struct {
 	CritiqueGroups            int      `json:"critique_groups,omitempty"`
 	CritiqueTransient         int      `json:"critique_transient,omitempty"`
 	CritiqueRules             []string `json:"critique_rules,omitempty"`
+	CritiqueHardRules         []string `json:"critique_hard_rules,omitempty"`
+	CritiqueSoftRules         []string `json:"critique_soft_rules,omitempty"`
+	CacheRejectionReason      string   `json:"cache_rejection_reason,omitempty"`
 	RetryAdmitted             bool     `json:"retry_admitted,omitempty"`
 	RetryDeniedReason         string   `json:"retry_denied_reason,omitempty"`
 	InitialIssueCount         int      `json:"initial_issue_count,omitempty"`

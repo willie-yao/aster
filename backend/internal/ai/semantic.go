@@ -129,9 +129,9 @@ func (s *agentState) readPathList() []string {
 // and, on objections, drives one tools-free refinalize round. The post-loop path
 // has no tools, so the model reconsiders from evidence already in context rather
 // than re-investigating. The revised draft is used only if it still clears the
-// deterministic critique, so the judge can never downgrade an answer below the
-// gate it already passed. Returns the draft to publish.
-func (c *Client) applySemanticJudgePostLoop(ctx context.Context, state *agentState, messages []modelMessage, finalContent string, finalProviderItems []json.RawMessage, parsed analysisResponse, headroom contextHeadroom) analysisResponse {
+// configured deterministic cache policy, so the judge cannot downgrade an
+// answer below the gate it already passed. Returns the draft to publish.
+func (c *Client) applySemanticJudgePostLoop(ctx context.Context, state *agentState, messages []modelMessage, finalContent string, finalProviderItems []json.RawMessage, parsed analysisResponse, headroom contextHeadroom, policy CritiqueCachePolicy) analysisResponse {
 	if state.bestDraft == nil {
 		out := critiqueDraftWithContent(parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, parsed), state.consecutiveFailures, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
 		candidate := state.newDraftCandidate("finalize", finalContent, finalProviderItems, parsed, out)
@@ -174,7 +174,7 @@ func (c *Client) applySemanticJudgePostLoop(ctx context.Context, state *agentSta
 	candidate := state.newDraftCandidate("semantic_retry", revised, revisedProviderItems, rp, out)
 	state.considerFallbackDraft(candidate, true)
 	selected := state.considerDraft(candidate, true)
-	if !out.Passed {
+	if len(out.HardRuleIDs()) > 0 || !critiqueAcceptedForPolicy(out, policy) {
 		state.judgeRevisionRejected = true
 		recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Outcome: "revision_rejected", IssueCount: len(out.Matches())})
 		log.Printf("  ✗ semantic judge (post-loop): %d objection(s); revised draft failed critique %v, keeping original", len(objs), out.Matches())

@@ -82,3 +82,27 @@ func TestCritiqueEvidenceGroupRefsPreserveIdentity(t *testing.T) {
 		t.Fatalf("refs = %v, want %v", got, want)
 	}
 }
+
+func TestCritiqueAcceptedForPolicy(t *testing.T) {
+	soft := critiqueOutcome{PuntMatches: []string{"Check logs"}}
+	hard := critiqueOutcome{UnreadCitations: []string{"build-log.txt"}}
+	unavailable := critiqueOutcome{UnavailableSkillEvidence: []skillEvidenceMiss{{Skill: skills.Skill{ID: "skill"}, Missing: []skills.EvidenceGroup{{ID: "group"}}}}}
+	for _, tc := range []struct {
+		name   string
+		out    critiqueOutcome
+		policy CritiqueCachePolicy
+		want   bool
+	}{
+		{name: "strict rejects soft", out: soft, policy: CritiqueCachePolicyStrict},
+		{name: "hard accepts soft", out: soft, policy: CritiqueCachePolicyHard, want: true},
+		{name: "hard rejects hard", out: hard, policy: CritiqueCachePolicyHard},
+		{name: "advisory accepts hard", out: hard, policy: CritiqueCachePolicyAdvisory, want: true},
+		{name: "strict accepts unavailable", out: unavailable, policy: CritiqueCachePolicyStrict, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := critiqueAcceptedForPolicy(tc.out, tc.policy); got != tc.want {
+				t.Fatalf("accepted = %t, want %t", got, tc.want)
+			}
+		})
+	}
+}

@@ -175,7 +175,7 @@ func TestApplySemanticJudgePostLoop_RefinalizesOnObjection(t *testing.T) {
 
 	state := &agentState{readArtifactsFull: map[string]bool{}, readArtifactsBase: map[string]bool{}}
 	orig := analysisResponse{Summary: "shallow", RootCause: "the PR broke it", SuggestedFix: "revert it"}
-	got := client.applySemanticJudgePostLoop(context.Background(), state, []modelMessage{{Role: "user", Content: strPtr("u")}}, "shallow-final", nil, orig, contextHeadroomFor(AgenticOptions{ContextByteBudget: 100_000}))
+	got := client.applySemanticJudgePostLoop(context.Background(), state, []modelMessage{{Role: "user", Content: strPtr("u")}}, "shallow-final", nil, orig, contextHeadroomFor(AgenticOptions{ContextByteBudget: 100_000}), CritiqueCachePolicyStrict)
 
 	if !strings.Contains(got.RootCause, "route table") {
 		t.Errorf("expected the refinalized draft, got root_cause=%q", got.RootCause)
@@ -197,7 +197,7 @@ func TestApplySemanticJudgePostLoopRejectsInvalidCitationRevision(t *testing.T) 
 		analysisEvidence: map[string]*analysisChatEvidence{},
 	}
 	orig := analysisResponse{Summary: "sound", RootCause: "verified root cause", SuggestedFix: "Set the route table."}
-	got := client.applySemanticJudgePostLoop(context.Background(), state, []modelMessage{{Role: "user", Content: strPtr("u")}}, "sound-final", nil, orig, contextHeadroomFor(AgenticOptions{ContextByteBudget: 100_000}))
+	got := client.applySemanticJudgePostLoop(context.Background(), state, []modelMessage{{Role: "user", Content: strPtr("u")}}, "sound-final", nil, orig, contextHeadroomFor(AgenticOptions{ContextByteBudget: 100_000}), CritiqueCachePolicyStrict)
 
 	if got.RootCause != orig.RootCause || state.judgeRevised {
 		t.Fatalf("invalid semantic revision replaced the valid draft: got=%+v state=%+v", got, state)
@@ -214,7 +214,7 @@ func TestApplySemanticJudgePostLoop_NoObjectionsKeepsDraft(t *testing.T) {
 
 	state := &agentState{readArtifactsFull: map[string]bool{}, readArtifactsBase: map[string]bool{}}
 	orig := analysisResponse{Summary: "sound", RootCause: "real cause", SuggestedFix: "real fix"}
-	got := client.applySemanticJudgePostLoop(context.Background(), state, nil, "final", nil, orig, contextHeadroomFor(AgenticOptions{ContextByteBudget: 100_000}))
+	got := client.applySemanticJudgePostLoop(context.Background(), state, nil, "final", nil, orig, contextHeadroomFor(AgenticOptions{ContextByteBudget: 100_000}), CritiqueCachePolicyStrict)
 
 	if got.RootCause != "real cause" {
 		t.Errorf("sound draft should be unchanged, got %q", got.RootCause)
@@ -257,7 +257,8 @@ func TestAgentic_SemanticRevisionRejectedKeepsPassingDraftCacheable(t *testing.T
 	srv.push(200, chatRespFinal(`{"summary":"revised","is_transient":false,"root_cause":"failure at line 999","severity":"High","suggested_fix":"Set the supported configuration.","relevant_files":[]}`))
 	client := newAgenticTestClient(t, srv.URL)
 	key := "agentic:test:semantic-rejected-cache"
-	_, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second, CritiqueMaxRetries: 1, SemanticJudge: true}), key, "sys", "user")
+	opts := AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second, CritiqueMaxRetries: 1, CritiqueCachePolicy: CritiqueCachePolicyAdvisory, SemanticJudge: true}
+	_, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, opts), key, "sys", "user")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +268,7 @@ func TestAgentic_SemanticRevisionRejectedKeepsPassingDraftCacheable(t *testing.T
 	if _, ok := client.Cache().Get(key); !ok {
 		t.Fatalf("passing original was not cached: analysis=%+v", analysis)
 	}
-	_, cached, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second, CritiqueMaxRetries: 1, SemanticJudge: true}), key, "sys", "user")
+	_, cached, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, opts), key, "sys", "user")
 	if err != nil {
 		t.Fatal(err)
 	}

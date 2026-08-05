@@ -192,11 +192,21 @@ ai:
   single_tool_call: false
   critique:
     max_retries: 0
+    cache_policy: advisory
 ```
 
-`critique.max_retries: 0` publishes and caches the model's original answer when
-the investigation floors pass, while retaining critique telemetry. Positive
-values enable bounded repair and require critique success for cache reuse.
+`critique.max_retries` controls provider repair attempts only. `0` evaluates
+critique without making a critique repair request. `critique.cache_policy`
+independently controls cache reuse:
+
+- `strict`: actionable hard failures and soft warnings block reuse.
+- `hard`: only hard safety, grounding, and correctness failures block reuse.
+- `advisory`: critique findings never block reuse.
+
+If `cache_policy` is omitted, existing behavior is preserved. Zero retries use
+`advisory`; positive retries use `strict`. Evidence that is deterministically
+unavailable remains a warning under every policy. Structural validation,
+publication sanitization, and critique-version validation remain mandatory.
 
 Do not commit credentials under `ai.headers`. `AI_TOKEN` is the supported bearer
 token channel. Use a trusted proxy or custom deployment for providers that need
