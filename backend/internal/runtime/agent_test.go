@@ -11,22 +11,33 @@ import (
 	"testing"
 )
 
-// fakeAgent returns a buildCmd that runs a shell script in the workspace,
+// fakeAgent returns a buildSpec that runs a shell script in the workspace,
 // standing in for a coding CLI that edits files.
-func fakeAgent(script string) func(ctx context.Context, spec GenerateSpec, workdir, home string) (*exec.Cmd, error) {
-	return func(ctx context.Context, _ GenerateSpec, workdir, _ string) (*exec.Cmd, error) {
-		cmd := exec.CommandContext(ctx, "sh", "-c", script)
-		cmd.Dir = workdir
-		return cmd, nil
+func fakeAgent(script string) func(context.Context, GenerateSpec, string, string, string) (SandboxSpec, error) {
+	return func(_ context.Context, _ GenerateSpec, workdir, home, temp string) (SandboxSpec, error) {
+		return SandboxSpec{
+			Command:     []string{"sh", "-c", script},
+			WorkDir:     workdir,
+			HomeDir:     home,
+			TempDir:     temp,
+			Environment: isolatedOpencodeEnv(home, temp),
+			ReadPaths:   []string{workdir, home, temp},
+			WritePaths:  []string{workdir, home, temp},
+		}, nil
+	}
+}
+
+func testLocalAgent(script string) *LocalAgentRuntime {
+	return &LocalAgentRuntime{
+		Bin:       "true",
+		Sandbox:   directProcessSandbox{},
+		buildSpec: fakeAgent(script),
 	}
 }
 
 func TestLocalAgent_ReturnsChangedFiles(t *testing.T) {
 	repo := initRepo(t)
-	r := &LocalAgentRuntime{
-		Bin:      "true", // present on PATH; the fake buildCmd is what runs
-		buildCmd: fakeAgent(`printf 'fixed\n' > fix.txt && printf 'more\n' >> orig.txt`),
-	}
+	r := testLocalAgent(`printf 'fixed\n' > fix.txt && printf 'more\n' >> orig.txt`)
 	got, err := r.Generate(context.Background(), GenerateSpec{
 		Repo:        RepoRef{Owner: "o", Name: "n", Ref: "main", CloneURL: repo},
 		Instruction: "fix the thing",
@@ -47,7 +58,7 @@ func TestLocalAgent_ReturnsChangedFiles(t *testing.T) {
 
 func TestLocalAgent_NoChangeEmpty(t *testing.T) {
 	repo := initRepo(t)
-	r := &LocalAgentRuntime{Bin: "true", buildCmd: fakeAgent(`true`)}
+	r := testLocalAgent(`true`)
 	got, err := r.Generate(context.Background(), GenerateSpec{
 		Repo:        RepoRef{Owner: "o", Name: "n", Ref: "main", CloneURL: repo},
 		Instruction: "do nothing",
@@ -63,7 +74,7 @@ func TestLocalAgent_NoChangeEmpty(t *testing.T) {
 func TestLocalAgent_NonzeroExitStillCollectsEdits(t *testing.T) {
 	repo := initRepo(t)
 	// The CLI edits a file then exits non-zero; the edit must still be collected.
-	r := &LocalAgentRuntime{Bin: "true", buildCmd: fakeAgent(`printf 'x\n' > fix.txt; exit 3`)}
+	r := testLocalAgent(`printf 'x\n' > fix.txt; exit 3`)
 	got, err := r.Generate(context.Background(), GenerateSpec{
 		Repo:        RepoRef{Owner: "o", Name: "n", Ref: "main", CloneURL: repo},
 		Instruction: "fix and fail",
@@ -77,7 +88,7 @@ func TestLocalAgent_NonzeroExitStillCollectsEdits(t *testing.T) {
 }
 
 func TestLocalAgent_Validation(t *testing.T) {
-	r := &LocalAgentRuntime{Bin: "true", buildCmd: fakeAgent(`true`)}
+	r := testLocalAgent(`true`)
 	if _, err := r.Generate(context.Background(), GenerateSpec{Instruction: ""}); err == nil {
 		t.Error("expected error for empty instruction")
 	}
@@ -198,22 +209,22 @@ func TestOpencodeCmdPinsRuntimeConfig(t *testing.T) {
 	t.Setenv("OPENCODE_CONFIG_CONTENT", `{"default_agent":"other"}`)
 	t.Setenv(opencodeDisableProjectEnv, "false")
 
-	cmd, err := opencodeCmd("opencode")(context.Background(), GenerateSpec{
+	cmd, err := opencodeSandboxSpec("opencode")(context.Background(), GenerateSpec{
 		Instruction: "fix it", Endpoint: "https://host/v1", Token: "tok", MaxTurns: 30,
-	}, workdir, home)
+	}, workdir, home, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(cmd.Args, "--agent") {
-		t.Fatalf("args missing --agent: %v", cmd.Args)
+	if !slices.Contains(cmd.Command, "--agent") {
+		t.Fatalf("args missing --agent: %v", cmd.Command)
 	}
-	for i, arg := range cmd.Args {
-		if arg == "--agent" && (i+1 >= len(cmd.Args) || cmd.Args[i+1] != "build") {
-			t.Fatalf("agent args = %v, want build", cmd.Args)
+	for i, arg := range cmd.Command {
+		if arg == "--agent" && (i+1 >= len(cmd.Command) || cmd.Command[i+1] != "build") {
+			t.Fatalf("agent args = %v, want build", cmd.Command)
 		}
 	}
 	env := map[string]string{}
-	for _, entry := range cmd.Env {
+	for _, entry := range cmd.Environment {
 		name, value, ok := strings.Cut(entry, "=")
 		if ok {
 			env[name] = value
@@ -316,14 +327,14 @@ func TestOpencodeCmdUsesNativeModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	home, workdir := t.TempDir(), t.TempDir()
-	cmd, err := opencodeCmd("opencode")(context.Background(), GenerateSpec{
+	cmd, err := opencodeSandboxSpec("opencode")(context.Background(), GenerateSpec{
 		Instruction: "author prompt", NativeModel: "github-copilot/claude-sonnet-4.6", UseAmbientAuth: true,
-	}, workdir, home)
+	}, workdir, home, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(cmd.Args, "github-copilot/claude-sonnet-4.6") {
-		t.Fatalf("args = %v", cmd.Args)
+	if !slices.Contains(cmd.Command, "github-copilot/claude-sonnet-4.6") {
+		t.Fatalf("args = %v", cmd.Command)
 	}
 	raw, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "opencode.json"))
 	if err != nil {
@@ -332,4 +343,113 @@ func TestOpencodeCmdUsesNativeModel(t *testing.T) {
 	if strings.Contains(string(raw), `"engine"`) {
 		t.Fatalf("native config retained custom provider: %s", raw)
 	}
+}
+
+func TestIsolatedOpencodeEnvUsesStrictAllowlist(t *testing.T) {
+	t.Setenv("PATH", "/usr/bin:/bin")
+	t.Setenv("LANG", "en_US.UTF-8")
+	t.Setenv("SSL_CERT_FILE", "/etc/ssl/cert.pem")
+	t.Setenv("AI_TOKEN", "host-ai-secret")
+	t.Setenv("GITHUB_TOKEN", "host-github-secret")
+	t.Setenv("KUBECONFIG", "/host/kubeconfig")
+	t.Setenv("SSH_AUTH_SOCK", "/host/ssh-agent")
+	t.Setenv("DOCKER_HOST", "unix:///host/docker.sock")
+	t.Setenv("HTTPS_PROXY", "https://user:secret@proxy.invalid")
+	t.Setenv("OPENCODE_CONFIG_CONTENT", `{"ambient":true}`)
+
+	home, temp := t.TempDir(), t.TempDir()
+	got := environmentMap(isolatedOpencodeEnv(home, temp))
+	for name, want := range map[string]string{
+		"PATH":                   "/usr/bin:/bin",
+		"LANG":                   "en_US.UTF-8",
+		"SSL_CERT_FILE":          "/etc/ssl/cert.pem",
+		"HOME":                   home,
+		"TMPDIR":                 temp,
+		"XDG_CONFIG_HOME":        filepath.Join(home, ".config"),
+		opencodeConfigEnv:        filepath.Join(home, ".config", "opencode", "opencode.json"),
+		opencodeDisableUpdateEnv: "true",
+	} {
+		if got[name] != want {
+			t.Errorf("%s = %q, want %q", name, got[name], want)
+		}
+	}
+	for _, name := range []string{
+		"AI_TOKEN", "GITHUB_TOKEN", "KUBECONFIG", "SSH_AUTH_SOCK",
+		"DOCKER_HOST", "HTTPS_PROXY", "OPENCODE_CONFIG_CONTENT",
+	} {
+		if _, ok := got[name]; ok {
+			t.Errorf("unexpected inherited environment variable %s", name)
+		}
+	}
+}
+
+func TestLocalAgentRoutesThroughSandboxAndCleansTempPaths(t *testing.T) {
+	repo := initRepo(t)
+	recording := &recordingProcessSandbox{delegate: directProcessSandbox{}}
+	r := &LocalAgentRuntime{
+		Bin:       "true",
+		Sandbox:   recording,
+		buildSpec: fakeAgent(`printf 'fixed\n' > fix.txt`),
+	}
+	if _, err := r.Generate(context.Background(), GenerateSpec{
+		Repo: RepoRef{Owner: "o", Name: "n", Ref: "main", CloneURL: repo}, Instruction: "fix it",
+	}); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if len(recording.specs) != 1 {
+		t.Fatalf("sandbox calls = %d, want 1", len(recording.specs))
+	}
+	got := recording.specs[0]
+	for _, path := range []string{got.WorkDir, got.HomeDir, got.TempDir} {
+		if path == "" {
+			t.Fatal("sandbox received an empty temporary path")
+		}
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("temporary path still exists: %s", path)
+		}
+	}
+}
+
+func TestLocalAgentRedactsTokenFromOutput(t *testing.T) {
+	repo := initRepo(t)
+	r := testLocalAgent(`printf '%s\n' "$ENGINE_TEST_TOKEN"`)
+	r.buildSpec = func(_ context.Context, _ GenerateSpec, workdir, home, temp string) (SandboxSpec, error) {
+		env := isolatedOpencodeEnv(home, temp)
+		env = append(env, "ENGINE_TEST_TOKEN=agent-secret")
+		return SandboxSpec{
+			Command: []string{"sh", "-c", `printf '%s\n' "$ENGINE_TEST_TOKEN"`}, WorkDir: workdir,
+			HomeDir: home, TempDir: temp, Environment: env,
+		}, nil
+	}
+	got, err := r.Generate(context.Background(), GenerateSpec{
+		Repo:        RepoRef{Owner: "o", Name: "n", Ref: "main", CloneURL: repo},
+		Instruction: "report", Token: "agent-secret",
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if strings.Contains(got.Output, "agent-secret") || !strings.Contains(got.Output, "REDACTED") {
+		t.Fatalf("output was not redacted: %q", got.Output)
+	}
+}
+
+func environmentMap(entries []string) map[string]string {
+	out := make(map[string]string, len(entries))
+	for _, entry := range entries {
+		name, value, ok := strings.Cut(entry, "=")
+		if ok {
+			out[name] = value
+		}
+	}
+	return out
+}
+
+type recordingProcessSandbox struct {
+	delegate ProcessSandbox
+	specs    []SandboxSpec
+}
+
+func (r *recordingProcessSandbox) Command(ctx context.Context, spec SandboxSpec) (*exec.Cmd, error) {
+	r.specs = append(r.specs, spec)
+	return r.delegate.Command(ctx, spec)
 }
