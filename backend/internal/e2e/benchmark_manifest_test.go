@@ -188,41 +188,75 @@ func loadBenchmarkManifest(path string) ([]benchCase, error) {
 }
 
 type benchmarkJSONLResult struct {
-	CaseID                 string                     `json:"case_id"`
-	StableID               string                     `json:"stable_id"`
-	Repetition             int                        `json:"repetition"`
-	ModelLabel             string                     `json:"model_label"`
-	JobName                string                     `json:"job_name"`
-	BuildID                string                     `json:"build_id"`
-	CheckoutCommit         string                     `json:"checkout_commit"`
-	SourceRevision         string                     `json:"source_revision,omitempty"`
-	SourceUnavailable      bool                       `json:"source_unavailable,omitempty"`
-	TestName               string                     `json:"test_name"`
-	TestSource             string                     `json:"test_source,omitempty"`
-	ElapsedMS              int64                      `json:"elapsed_ms"`
-	Usable                 bool                       `json:"usable"`
-	Summary                string                     `json:"summary,omitempty"`
-	RootCause              string                     `json:"root_cause,omitempty"`
-	SuggestedFix           string                     `json:"suggested_fix,omitempty"`
-	Severity               string                     `json:"severity,omitempty"`
-	Evidence               []models.EvidenceCitation  `json:"evidence_citations,omitempty"`
-	FileLinks              map[string]string          `json:"file_links,omitempty"`
-	SignalHits             int                        `json:"signal_hits"`
-	SignalTotal            int                        `json:"signal_total"`
-	MissingMust            []string                   `json:"missing_must,omitempty"`
-	SelectedAttempt        int                        `json:"selected_attempt,omitempty"`
-	ToolNames              []string                   `json:"tool_names,omitempty"`
-	ToolCounts             []string                   `json:"tool_counts,omitempty"`
-	GCSBytes               int                        `json:"gcs_bytes,omitempty"`
-	EvidencePlanCovered    bool                       `json:"evidence_plan_covered,omitempty"`
-	GCSFloorRetryExhausted bool                       `json:"gcs_floor_retry_exhausted,omitempty"`
-	CritiquePassed         bool                       `json:"critique_passed,omitempty"`
-	BudgetExhausted        bool                       `json:"budget_exhausted,omitempty"`
-	FloorNudges            int                        `json:"floor_nudges,omitempty"`
-	FloorNudgeReasons      []string                   `json:"floor_nudge_reasons,omitempty"`
-	CacheGeneration        string                     `json:"cache_generation,omitempty"`
-	CacheVerification      benchmarkCacheVerification `json:"cache_verification"`
-	Trace                  benchmarkJSONLTrace        `json:"trace"`
+	CaseID                  string                     `json:"case_id"`
+	StableID                string                     `json:"stable_id"`
+	Repetition              int                        `json:"repetition"`
+	ModelLabel              string                     `json:"model_label"`
+	JobName                 string                     `json:"job_name"`
+	BuildID                 string                     `json:"build_id"`
+	CheckoutCommit          string                     `json:"checkout_commit"`
+	SourceRevision          string                     `json:"source_revision,omitempty"`
+	SourceUnavailable       bool                       `json:"source_unavailable,omitempty"`
+	TestName                string                     `json:"test_name"`
+	TestSource              string                     `json:"test_source,omitempty"`
+	ElapsedMS               int64                      `json:"elapsed_ms"`
+	Usable                  bool                       `json:"usable"`
+	Summary                 string                     `json:"summary,omitempty"`
+	RootCause               string                     `json:"root_cause,omitempty"`
+	SuggestedFix            string                     `json:"suggested_fix,omitempty"`
+	Severity                string                     `json:"severity,omitempty"`
+	Evidence                []models.EvidenceCitation  `json:"evidence_citations,omitempty"`
+	FileLinks               map[string]string          `json:"file_links,omitempty"`
+	SignalHits              int                        `json:"signal_hits"`
+	SignalTotal             int                        `json:"signal_total"`
+	MissingMust             []string                   `json:"missing_must,omitempty"`
+	SelectedAttempt         int                        `json:"selected_attempt,omitempty"`
+	Drafts                  []benchmarkJSONLDraft      `json:"drafts,omitempty"`
+	ToolNames               []string                   `json:"tool_names,omitempty"`
+	ToolCounts              []string                   `json:"tool_counts,omitempty"`
+	GCSBytes                int                        `json:"gcs_bytes,omitempty"`
+	EvidencePlanCovered     bool                       `json:"evidence_plan_covered,omitempty"`
+	GCSFloorRetryExhausted  bool                       `json:"gcs_floor_retry_exhausted,omitempty"`
+	CritiquePassed          *bool                      `json:"critique_passed,omitempty"`
+	BudgetExhausted         bool                       `json:"budget_exhausted,omitempty"`
+	FloorNudges             int                        `json:"floor_nudges,omitempty"`
+	FloorNudgeReasons       []string                   `json:"floor_nudge_reasons,omitempty"`
+	CacheGeneration         string                     `json:"cache_generation,omitempty"`
+	CacheVerification       benchmarkCacheVerification `json:"cache_verification"`
+	Trace                   benchmarkJSONLTrace        `json:"trace"`
+	HumanScoreRubricVersion int                        `json:"human_score_rubric_version"`
+	HumanScoreMax           int                        `json:"human_score_max"`
+	HumanScoreDimensions    []string                   `json:"human_score_dimensions"`
+}
+
+const (
+	benchmarkHumanScoreRubricVersion = 1
+	benchmarkHumanScoreMax           = 10
+)
+
+var benchmarkHumanScoreDimensions = []string{
+	"diagnosis",
+	"artifact_evidence",
+	"claim_discipline",
+	"remediation",
+	"source_grounding",
+}
+
+type benchmarkJSONLDraft struct {
+	Attempt             int      `json:"attempt"`
+	Phase               string   `json:"phase"`
+	Selected            bool     `json:"selected"`
+	RuleIDs             []string `json:"rule_ids,omitempty"`
+	MatchedSkillIDs     []string `json:"matched_skill_ids,omitempty"`
+	MissingGroupIDs     []string `json:"missing_group_ids,omitempty"`
+	UnavailableGroupIDs []string `json:"unavailable_group_ids,omitempty"`
+	PuntCount           int      `json:"punt_count,omitempty"`
+	UnreadCitationCount int      `json:"unread_citation_count,omitempty"`
+	CitationIssueCount  int      `json:"citation_issue_count,omitempty"`
+	MissingGroupCount   int      `json:"missing_group_count,omitempty"`
+	TransientConflict   bool     `json:"transient_conflict,omitempty"`
+	ToolCalls           int      `json:"tool_calls,omitempty"`
+	EvidenceReads       int      `json:"evidence_reads,omitempty"`
 }
 
 type benchmarkCacheVerification struct {
@@ -250,7 +284,7 @@ type benchmarkJSONLTrace struct {
 	Critique          map[string]int `json:"critique"`
 }
 
-func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int, tc *models.TestCase, elapsed time.Duration, snapshot ai.AnalysisTraceFile, selectedAttempt int, toolUsage benchmarkToolUsage, traceSummary benchmarkTraceSummary, cacheGeneration string, cacheVerification benchmarkCacheVerification) {
+func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int, tc *models.TestCase, elapsed time.Duration, snapshot ai.AnalysisTraceFile, observations []benchmarkDraftObservation, selectedAttempt int, toolUsage benchmarkToolUsage, traceSummary benchmarkTraceSummary, cacheGeneration string, cacheVerification benchmarkCacheVerification) {
 	t.Helper()
 	if path == "" {
 		return
@@ -269,7 +303,19 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 		ToolNames: append([]string(nil), toolUsage.names...), ToolCounts: append([]string(nil), toolUsage.counts...),
 		FloorNudges: traceSummary.floorNudges, FloorNudgeReasons: append([]string(nil), traceSummary.floorNudgeReasons...),
 		CacheGeneration: cacheGeneration, CacheVerification: cacheVerification,
-		Trace: benchmarkJSONLTrace{Finalize: map[string]int{}, FinalizeRecovery: map[string]int{}, Critique: map[string]int{}},
+		Trace:                   benchmarkJSONLTrace{Finalize: map[string]int{}, FinalizeRecovery: map[string]int{}, Critique: map[string]int{}},
+		HumanScoreRubricVersion: benchmarkHumanScoreRubricVersion, HumanScoreMax: benchmarkHumanScoreMax,
+		HumanScoreDimensions: append([]string(nil), benchmarkHumanScoreDimensions...),
+	}
+	for _, observation := range observations {
+		result.Drafts = append(result.Drafts, benchmarkJSONLDraft{
+			Attempt: observation.Attempt, Phase: observation.Phase, Selected: observation.Attempt == selectedAttempt,
+			RuleIDs: append([]string(nil), observation.RuleIDs...), MatchedSkillIDs: append([]string(nil), observation.MatchedSkillIDs...),
+			MissingGroupIDs: append([]string(nil), observation.MissingGroupIDs...), UnavailableGroupIDs: append([]string(nil), observation.UnavailableGroupIDs...),
+			PuntCount: observation.PuntCount, UnreadCitationCount: observation.UnreadCitationCount,
+			CitationIssueCount: observation.CitationIssueCount, MissingGroupCount: observation.MissingGroupCount,
+			TransientConflict: observation.TransientConflict, ToolCalls: observation.ToolCalls, EvidenceReads: observation.EvidenceReads,
+		})
 	}
 	build := models.BuildInfo{Commit: bc.commit, RepoVersion: bc.repoVersion, RepoRefs: maps.Clone(bc.repoRefs)}
 	if source, ok := ai.ResolveBuildSource(build, bc.sourceRepo[0], bc.sourceRepo[1]); ok {
@@ -283,7 +329,8 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 		result.GCSBytes = tc.AIAnalysis.GCSBytes
 		result.EvidencePlanCovered = tc.AIAnalysis.EvidencePlanCovered
 		result.GCSFloorRetryExhausted = tc.AIAnalysis.GCSFloorRetryExhausted
-		result.CritiquePassed = tc.AIAnalysis.CritiquePassed
+		result.CritiquePassed = new(bool)
+		*result.CritiquePassed = tc.AIAnalysis.CritiquePassed
 		result.BudgetExhausted = tc.AIAnalysis.BudgetExhausted
 		result.Evidence = append([]models.EvidenceCitation(nil), tc.AIAnalysis.EvidenceCitations...)
 		for key, value := range tc.AIAnalysis.FileLinks {
@@ -326,6 +373,9 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 				result.Trace.Critique["skills"] += event.CritiqueSkills
 				result.Trace.Critique["groups"] += event.CritiqueGroups
 				result.Trace.Critique["transient"] += event.CritiqueTransient
+				for _, rule := range event.CritiqueRules {
+					result.Trace.Critique["rule:"+rule]++
+				}
 			}
 		}
 	}
@@ -438,7 +488,11 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 		{Kind: "critique", Outcome: "objected", CritiquePunts: 1},
 	}}}}
 	cacheVerification := benchmarkCacheVerification{Attempted: true, Saved: true, Accepted: true, CacheHit: true, EvidencePlanCovered: true, GCSFloorRetryExhausted: true, CacheGeneration: "generation"}
-	writeBenchmarkJSONL(t, path, bc, 2, tc, 3*time.Second, snapshot, 1,
+	observations := []benchmarkDraftObservation{{DraftObservation: ai.DraftObservation{
+		Attempt: 1, Phase: "initial", RuleIDs: []string{"remediation.punt"},
+		MatchedSkillIDs: []string{"skill-a"}, MissingGroupIDs: []string{"skill-a/group-a"}, PuntCount: 1,
+	}}}
+	writeBenchmarkJSONL(t, path, bc, 2, tc, 3*time.Second, snapshot, observations, 1,
 		benchmarkToolUsage{names: []string{"read_artifact"}, counts: []string{"read_artifact=1"}},
 		benchmarkTraceSummary{floorNudges: 1, floorNudgeReasons: []string{"gcs_bytes"}}, "generation", cacheVerification)
 	data, err := os.ReadFile(path)
@@ -454,10 +508,13 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 	}
 	if result.ModelLabel != "model-a" || result.Repetition != 2 || result.SignalHits != 1 || result.SourceRevision != strings.Repeat("a", 40) || result.SourceUnavailable || result.TestSource != models.TestCaseSourceBuild ||
 		result.Trace.Finalize["empty:unexpected_tool_call"] != 1 || result.Trace.Critique["punts"] != 1 || result.GCSBytes != 42 ||
-		!result.EvidencePlanCovered || !result.GCSFloorRetryExhausted || !result.CritiquePassed || !result.BudgetExhausted ||
+		!result.EvidencePlanCovered || !result.GCSFloorRetryExhausted || result.CritiquePassed == nil || !*result.CritiquePassed || !result.BudgetExhausted ||
 		result.FloorNudges != 1 || !slices.Equal(result.FloorNudgeReasons, []string{"gcs_bytes"}) ||
 		!slices.Equal(result.ToolNames, []string{"read_artifact"}) || !slices.Equal(result.ToolCounts, []string{"read_artifact=1"}) ||
-		!result.CacheVerification.Accepted || !result.CacheVerification.CacheHit || result.CacheGeneration != "generation" {
+		!result.CacheVerification.Accepted || !result.CacheVerification.CacheHit || result.CacheGeneration != "generation" ||
+		result.HumanScoreRubricVersion != 1 || result.HumanScoreMax != 10 || len(result.Drafts) != 1 ||
+		!slices.Equal(result.HumanScoreDimensions, benchmarkHumanScoreDimensions) ||
+		!slices.Equal(result.Drafts[0].RuleIDs, []string{"remediation.punt"}) || !result.Drafts[0].Selected {
 		t.Fatalf("result=%+v", result)
 	}
 	info, err := os.Stat(path)

@@ -102,6 +102,10 @@ type DraftObservation struct {
 	CitationIssueCount  int
 	MissingGroupCount   int
 	TransientConflict   bool
+	RuleIDs             []string
+	MatchedSkillIDs     []string
+	MissingGroupIDs     []string
+	UnavailableGroupIDs []string
 	ToolCalls           int
 	EvidenceReads       int
 }
@@ -1500,6 +1504,7 @@ func critiqueTraceEvent(outcome string, out critiqueOutcome) TraceEvent {
 		CritiquePunts: len(out.PuntMatches), CritiqueUnread: len(out.UnreadCitations),
 		CritiqueCitations: len(out.CitationIssues), CritiqueSkills: len(out.MissingSkillEvidence),
 		CritiqueGroups: out.MissingEvidenceCount(), CritiqueTransient: out.TransientPersistCount,
+		CritiqueRules: critiqueRuleStrings(out.RuleIDs()),
 	}
 }
 
@@ -1659,6 +1664,10 @@ func (s *agentState) observeDraft(phase string, parsed analysisResponse, out cri
 		CitationIssueCount:  len(out.CitationIssues),
 		MissingGroupCount:   out.MissingEvidenceCount(),
 		TransientConflict:   out.TransientPersistCount > 0,
+		RuleIDs:             critiqueRuleStrings(out.RuleIDs()),
+		MatchedSkillIDs:     append([]string(nil), out.MatchedSkillIDs...),
+		MissingGroupIDs:     critiqueEvidenceGroupIDs(out.MissingSkillEvidence),
+		UnavailableGroupIDs: critiqueEvidenceGroupIDs(out.UnavailableSkillEvidence),
 		ToolCalls:           s.calls,
 		EvidenceReads:       len(s.readArtifactsFull),
 	})

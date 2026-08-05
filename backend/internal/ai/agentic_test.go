@@ -3695,7 +3695,10 @@ func TestCritiqueTraceEventCountsDoNotPersistContent(t *testing.T) {
 	event := critiqueTraceEvent("objected", out)
 	if event.IssueCount != 7 || event.CritiquePunts != 2 || event.CritiqueUnread != 1 ||
 		event.CritiqueCitations != 2 || event.CritiqueSkills != 1 ||
-		event.CritiqueGroups != 2 || event.CritiqueTransient != 4 {
+		event.CritiqueGroups != 2 || event.CritiqueTransient != 4 ||
+		!slices.Equal(event.CritiqueRules, []string{
+			"citation.unread", "evidence.available_unread", "remediation.punt", "structured.invalid", "transient.conflict",
+		}) {
 		t.Fatalf("critique trace counts = %+v", event)
 	}
 	encoded, err := json.Marshal(event)
@@ -3727,7 +3730,8 @@ func TestAgenticCritiqueObjectedTraceCarriesCategoryCounts(t *testing.T) {
 	}
 	var objected, denied bool
 	for _, event := range store.Snapshot().Traces[0].Events {
-		if event.Kind == "critique" && event.Outcome == "objected" && event.IssueCount == 1 && event.CritiquePunts == 1 {
+		if event.Kind == "critique" && event.Outcome == "objected" && event.IssueCount == 1 && event.CritiquePunts == 1 &&
+			slices.Equal(event.CritiqueRules, []string{"remediation.punt"}) {
 			objected = true
 		}
 		if event.Kind == "critique_retry_denied" && event.Outcome == "retry_budget" {

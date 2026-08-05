@@ -36,6 +36,9 @@ Options:
   and build-specific floor policy.
 - `BENCH_USE_GCS=1` reads artifacts from live GCS instead of the committed
   fixture. Only works before Prow garbage-collects the build.
+- `BENCH_REPETITIONS=<count>` runs consecutive logical repetitions. Set
+  `BENCH_REPETITION_START=<index>` when an isolated operation must retain its
+  planned repetition number instead of restarting at 1.
 - `AI_CACHE_GENERATION=<value>` applies the same validated, hashed cache-key
   namespace used by production.
 - `BENCH_CACHE_DIR=<private-dir>` stores each case and repetition under a
@@ -44,7 +47,8 @@ Options:
 - `BENCH_VERIFY_CACHE_REUSE=1` saves the analysis cache, reloads it with a new
   client, and evaluates the exact current cache policy without a provider call.
   The private JSONL result records acceptance, rejection reason, restored floor
-  markers, and a provider-request count of zero.
+  markers, the exact policy rejection reason, and a provider-request count of
+  zero.
 - `BENCH_MIN_TOOL_CALLS`, `BENCH_MIN_GCS_BYTES`, `BENCH_MAX_ITERS`,
   `BENCH_TIMEOUT`, `BENCH_CRITIQUE_RETRIES` override the default (weak-model)
   floors so a stronger model can be benchmarked fairly, since the weak-model
@@ -59,7 +63,16 @@ critique status and version, a short skill-set hash prefix, budget exhaustion,
 semantic-judge flags, context truncations, model and Tool failures, model
 requests, and provider-reported input and output tokens. Private JSONL output
 also records GCS bytes, floor markers, sorted safe Tool counts, floor-nudge
-reasons, the hashed cache generation, and zero-request cache reload results.
+reasons, the hashed cache generation, zero-request cache reload results, and
+content-free draft metadata. Draft metadata contains stable critique rule IDs,
+matched skill IDs, applicable missing or unavailable evidence-group IDs, and the
+selected attempt. It does not contain draft text.
+
+Human review uses rubric version 1 with five dimensions scored from 0 to 2:
+diagnosis, artifact evidence, claim discipline, remediation, and source
+grounding. The maximum human score is 10. Every private JSONL row records the
+rubric version and maximum so report generation cannot describe the same totals
+with a different denominator.
 
 The trace summary reports the floor-nudge count and ordered reasons, context
 compaction and over-budget counts, the final semantic-judge event outcome,
