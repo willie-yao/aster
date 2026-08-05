@@ -16,9 +16,14 @@ func testPromptModeOptions(mode string) Options {
 	}
 }
 
-func TestDefaultPromptBuilderHonorsExplicitTemplateWithProviderCredentials(t *testing.T) {
+func TestDefaultPromptModeIsHandoff(t *testing.T) {
+	if got := effectivePromptMode(Options{}); got != promptModeHandoff {
+		t.Fatalf("mode = %q", got)
+	}
+}
+
+func TestDefaultPromptBuilderHonorsExplicitTemplate(t *testing.T) {
 	opts := testPromptModeOptions(promptModeTemplate)
-	opts.AIToken = "fixture-token"
 	opts.AIEndpoint = "https://provider.example/v1/responses"
 	opts.AIModel = "fixture-model"
 	prompt, result, err := (defaultPromptBuilder{}).Build(context.Background(), opts, buildScaffoldData(opts, nil), promptDraftInput{})
@@ -89,23 +94,6 @@ func TestBuildPlanAgentDraftHasNoHandoffFiles(t *testing.T) {
 	}
 }
 
-func TestValidatePromptPlanBindsAgentFallbackDiagnostics(t *testing.T) {
-	failure := &promptPreparationFailure{Stage: promptStageAgentExecution, Category: promptFailureAgentExecution}
-	plan := (promptPreparationResult{
-		Requested: promptRequestAgent,
-		Status:    promptStatusAgentFallback,
-		Output:    promptOutputTemplate,
-		Failure:   failure,
-	}).promptPlan(Options{})
-	if err := validatePromptPlan(plan); err != nil {
-		t.Fatalf("validatePromptPlan: %v", err)
-	}
-	plan.RequestedMode = string(promptRequestHandoff)
-	if err := validatePromptPlan(plan); err == nil {
-		t.Fatal("expected mismatched agent fallback request to fail")
-	}
-}
-
 func TestValidateOptionsRejectsNoPromptConflict(t *testing.T) {
 	opts := testPromptModeOptions(promptModeAgent)
 	opts.NoPrompt = true
@@ -122,7 +110,7 @@ func TestValidateOptionsRejectsMalformedAgentModel(t *testing.T) {
 	}
 }
 
-func TestRequirePromptDraftSupportsAgentWithoutAPICredentials(t *testing.T) {
+func TestRequirePromptDraftSupportsOnlyAgent(t *testing.T) {
 	opts := testPromptModeOptions(promptModeAgent)
 	opts.RequirePromptDraft = true
 	if err := validateOptions(&opts); err != nil {
@@ -143,98 +131,40 @@ func TestRequirePromptDraftSupportsAgentWithoutAPICredentials(t *testing.T) {
 	if !errors.As(err, &strictErr) {
 		t.Fatalf("error = %v", err)
 	}
-}
 
-func TestValidatePromptPlanRejectsModeIncompatibleDiagnostics(t *testing.T) {
-	tests := []promptPreparationResult{
-		{Requested: promptRequestAPIExperimental, Status: promptStatusFallback, Output: promptOutputTemplate, Failure: &promptPreparationFailure{Stage: promptStageAgentExecution, Category: promptFailureAgentExecution}},
-		{Requested: promptRequestAgent, Status: promptStatusAgentFallback, Output: promptOutputTemplate, Failure: &promptPreparationFailure{Stage: promptStageTokenPreflight, Category: promptFailureMissingToken}},
-	}
-	for _, result := range tests {
-		if err := validatePromptPlan(result.promptPlan(Options{})); err == nil {
-			t.Fatalf("plan was accepted: %+v", result.promptPlan(Options{}))
+	for _, mode := range []string{promptModeHandoff, promptModeTemplate} {
+		invalid := testPromptModeOptions(mode)
+		invalid.RequirePromptDraft = true
+		if err := validateOptions(&invalid); err == nil {
+			t.Fatalf("strict mode %q was accepted", mode)
 		}
-	}
-}
-
-func TestValidatePromptPlanRejectsMalformedAgentModel(t *testing.T) {
-	plan := (promptPreparationResult{Requested: promptRequestAgent, Status: promptStatusAgentDraft, Output: promptOutputAgentDraft}).promptPlan(Options{PromptAgentModel: "claude"})
-	if err := validatePromptPlan(plan); err == nil {
-		t.Fatalf("plan was accepted: %+v", plan)
 	}
 }
 
 func TestWizardPromptAuthoringKeepsSelectedMode(t *testing.T) {
 	tests := []struct {
-		name            string
-		mode            string
-		inputs          []string
-		confirms        []bool
-		wantNoPrompt    bool
-		wantModel       string
-		wantPromptAPI   string
-		wantPromptModel string
+		mode         string
+		inputs       []string
+		wantNoPrompt bool
+		wantModel    string
 	}{
-		{name: "agent", mode: promptModeAgent, inputs: []string{usePromptDefault}, wantModel: defaultPromptAgentModel},
-		{name: "handoff", mode: promptModeHandoff},
-		{name: "template", mode: promptModeTemplate, wantNoPrompt: true},
-		{name: "api", mode: promptModeAPI, confirms: []bool{true}, wantPromptAPI: "responses", wantPromptModel: "deployed-model"},
+		{mode: promptModeAgent, inputs: []string{usePromptDefault}, wantModel: defaultPromptAgentModel},
+		{mode: promptModeHandoff},
+		{mode: promptModeTemplate, wantNoPrompt: true},
 	}
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			enabled := true
-			opts := Options{
-				AIEnabled: &enabled, DeploymentAIAPI: "responses",
-				DeploymentAIEndpoint: "https://provider.example/v1/responses", DeploymentAIModel: "deployed-model",
-			}
-			ui := &queuedWizardUI{selects: []string{tt.mode}, inputs: tt.inputs, confirms: tt.confirms}
+		t.Run(tt.mode, func(t *testing.T) {
+			opts := Options{}
+			ui := &queuedWizardUI{selects: []string{tt.mode}, inputs: tt.inputs}
 			if err := wizardPromptAuthoring(context.Background(), ui, &opts); err != nil {
 				t.Fatal(err)
 			}
 			if opts.PromptMode != tt.mode || opts.NoPrompt != tt.wantNoPrompt || opts.PromptAgentModel != tt.wantModel {
 				t.Fatalf("opts = %+v", opts)
 			}
-			if tt.wantPromptAPI != "" && (opts.AIAPI != tt.wantPromptAPI || opts.AIModel != tt.wantPromptModel) {
-				t.Fatalf("prompt provider = %s %s", opts.AIAPI, opts.AIModel)
+			if len(ui.confirmPrompts) != 0 {
+				t.Fatalf("unexpected confirmation = %+v", ui.confirmPrompts)
 			}
 		})
-	}
-}
-
-func TestWizardPromptAuthoringDeclinedAPIUsesTemplate(t *testing.T) {
-	enabled := true
-	opts := Options{
-		AIEnabled: &enabled, DeploymentAIAPI: "responses",
-		DeploymentAIEndpoint: "https://provider.example/v1/responses", DeploymentAIModel: "deployed-model",
-	}
-	ui := &queuedWizardUI{selects: []string{promptModeAPI}, confirms: []bool{false}}
-	if err := wizardPromptAuthoring(context.Background(), ui, &opts); err != nil {
-		t.Fatal(err)
-	}
-	if opts.PromptMode != promptModeTemplate || !opts.NoPrompt {
-		t.Fatalf("opts = %+v", opts)
-	}
-	if len(ui.confirmPrompts) != 1 || ui.confirmPrompts[0].Value {
-		t.Fatalf("confirmation = %+v", ui.confirmPrompts)
-	}
-	for _, want := range []string{"repository documentation", "source excerpts", "matched Prow job metadata", "AI_TOKEN"} {
-		if !strings.Contains(ui.confirmPrompts[0].Description, want) {
-			t.Fatalf("confirmation disclosure missing %q: %s", want, ui.confirmPrompts[0].Description)
-		}
-	}
-}
-
-func TestWizardPromptAuthoringReplacesPartialAPIProvider(t *testing.T) {
-	enabled := true
-	opts := Options{
-		AIEnabled: &enabled, AIEndpoint: "https://partial.example/v1/responses",
-		DeploymentAIAPI: "responses", DeploymentAIEndpoint: "https://provider.example/v1/responses", DeploymentAIModel: "deployed-model",
-	}
-	ui := &queuedWizardUI{selects: []string{promptModeAPI}, confirms: []bool{true}}
-	if err := wizardPromptAuthoring(context.Background(), ui, &opts); err != nil {
-		t.Fatal(err)
-	}
-	if opts.AIAPI != "responses" || opts.AIEndpoint != opts.DeploymentAIEndpoint || opts.AIModel != opts.DeploymentAIModel {
-		t.Fatalf("prompt provider = %s %s %s", opts.AIAPI, opts.AIEndpoint, opts.AIModel)
 	}
 }

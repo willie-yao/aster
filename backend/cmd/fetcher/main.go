@@ -130,11 +130,10 @@ func runOnboard(args []string) {
 	fs.StringVar(&opts.OutDir, "out", "", "dashboard consumer directory for the scaffold")
 	fs.BoolVar(&enableAI, "ai", true, "enable deployed AI failure analysis")
 	fs.BoolVar(&opts.NoPrompt, "no-prompt", false, "skip prompt authoring and always write the prompts/system.md TODO template")
-	fs.StringVar(&opts.PromptMode, "prompt-mode", "", "prompt authoring mode: agent, handoff, api-experimental, or todo-template")
+	fs.StringVar(&opts.PromptMode, "prompt-mode", "", "prompt authoring mode: agent, handoff, or todo-template")
 	fs.StringVar(&opts.PromptAgentModel, "prompt-agent-model", "", "OpenCode provider/model for agent prompt authoring")
-	fs.BoolVar(&opts.PromptDebug, "prompt-debug", false, "write sanitized prompt-preparation diagnostics to stderr")
 	fs.DurationVar(&opts.PromptTimeout, "prompt-timeout", onboard.DefaultPromptDraftTimeout, "total timeout for prompt authoring, including agent execution")
-	fs.BoolVar(&opts.RequirePromptDraft, "require-prompt-draft", false, "fail before writes unless agent or experimental API prompt drafting succeeds")
+	fs.BoolVar(&opts.RequirePromptDraft, "require-prompt-draft", false, "fail before writes unless agent prompt drafting succeeds")
 	fs.BoolVar(&opts.OpenPR, "open-pr", false, "open a PR against the dashboard repo instead of writing locally; needs GITHUB_TOKEN write access")
 	fs.BoolVar(&opts.UpdateExisting, "update-existing", false, "replace only known generated files in an existing local scaffold")
 	fs.BoolVar(&opts.DryRun, "dry-run", false, "discover, render, and validate without writing files or opening a pull request")
@@ -150,8 +149,8 @@ func runOnboard(args []string) {
 		}
 	})
 
-	// These variables configure prompt drafting and seed the deployed provider.
-	// Tokens remain environment-only and are never copied into the plan.
+	// These variables seed the deployed provider. The token is retained only for
+	// credential-leak validation and is never sent during prompt authoring.
 	opts.AIToken = os.Getenv("AI_TOKEN")
 	opts.AIAPI = os.Getenv("AI_API")
 	opts.AIEndpoint = os.Getenv("AI_ENDPOINT")

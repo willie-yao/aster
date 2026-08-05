@@ -38,8 +38,6 @@ type PromptPlan struct {
 	FailureCategory string `json:"failure_category,omitempty"`
 	FailureAction   string `json:"failure_action,omitempty"`
 	Runtime         string `json:"runtime,omitempty"`
-	API             string `json:"api,omitempty"`
-	Endpoint        string `json:"endpoint,omitempty"`
 	Model           string `json:"model,omitempty"`
 	Timeout         string `json:"timeout,omitempty"`
 }

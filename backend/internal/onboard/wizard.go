@@ -11,8 +11,6 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 )
 
-const promptDraftDisclosure = "The experimental API mode sends bounded repository documentation, source excerpts, and matched Prow job metadata to the reviewed provider. AI_TOKEN authenticates that one-time request."
-
 func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Options, error) {
 	if err := validateCredentialSeparation(opts); err != nil {
 		return nil, opts, err
@@ -227,7 +225,7 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 
 	planning := planningContext{discovery: &report, selected: selected}
 	fmt.Fprintln(deps.terminal.Out, "\nRunning the real job sweep and validating the scaffold...")
-	plan, err := buildPlanWithPromptRecovery(ctx, opts, planning, deps, prompt)
+	plan, err := buildPlan(ctx, opts, planning, deps)
 	if err != nil {
 		return nil, opts, err
 	}
@@ -285,7 +283,6 @@ func wizardPromptAuthoring(ctx context.Context, prompt wizardUI, opts *Options) 
 		mode, err := prompt.Select(ctx, selectPrompt{Title: "Project prompt authoring", Description: "Choose how prompts/system.md is prepared.", Options: []selectOption{
 			{Value: promptModeAgent, Label: "Generate with OpenCode (recommended)", Description: "Uses a temporary repository checkout with the shell tool denied."},
 			{Value: promptModeHandoff, Label: "Create an agent handoff bundle", Description: "Writes a reusable skill and reviewable TODO prompt."},
-			{Value: promptModeAPI, Label: "Experimental API draft", Description: "Uses bounded source excerpts."},
 			{Value: promptModeTemplate, Label: "TODO template", Description: "Does not call a model."},
 		}})
 		if err != nil {
@@ -307,25 +304,6 @@ func wizardPromptAuthoring(ctx context.Context, prompt wizardUI, opts *Options) 
 		opts.NoPrompt = false
 	case promptModeTemplate:
 		opts.NoPrompt = true
-	case promptModeAPI:
-		opts.NoPrompt = false
-		if (opts.AIEndpoint == "" || opts.AIModel == "") && effectiveAIEnabled(*opts) && opts.DeploymentAIEndpoint != "" && opts.DeploymentAIModel != "" {
-			opts.AIAPI = opts.DeploymentAIAPI
-			opts.AIEndpoint = opts.DeploymentAIEndpoint
-			opts.AIModel = opts.DeploymentAIModel
-		}
-		confirmed, err := prompt.Confirm(ctx, confirmPrompt{
-			Title:       "Send bounded evidence to this API provider?",
-			Description: promptDraftDisclosure,
-			Value:       false,
-		})
-		if err != nil {
-			return err
-		}
-		if !confirmed {
-			opts.PromptMode = promptModeTemplate
-			opts.NoPrompt = true
-		}
 	}
 	return nil
 }
@@ -395,39 +373,6 @@ func prepareInteractiveDestination(ctx context.Context, prompt wizardUI, opts *O
 			return nil
 		default:
 			return ErrCancelled
-		}
-	}
-}
-
-func buildPlanWithPromptRecovery(ctx context.Context, opts Options, planning planningContext, deps dependencies, prompt wizardUI) (*Plan, error) {
-	for {
-		plan, err := buildPlan(ctx, opts, planning, deps)
-		if err != nil {
-			return nil, err
-		}
-		if plan.Prompt.RequestedMode != string(promptRequestAPIExperimental) || plan.Prompt.FinalStatus != string(promptStatusFallback) {
-			return plan, nil
-		}
-		choice, err := prompt.Select(ctx, selectPrompt{
-			Title:       "Experimental API prompt drafting failed",
-			Description: "Retry the same reviewed provider, continue safely, or cancel onboarding.",
-			Options: []selectOption{
-				{Value: "retry", Label: "Retry bounded draft", Description: "Use the same reviewed API, endpoint, and model."},
-				{Value: "template", Label: "Continue with TODO template", Description: "Keep the reviewable template and proceed."},
-				{Value: "cancel", Label: "Cancel onboarding", Description: "Stop without writing files or opening a pull request."},
-			},
-			Value: "template",
-		})
-		if err != nil {
-			return nil, err
-		}
-		switch choice {
-		case "retry":
-			continue
-		case "template":
-			return plan, nil
-		default:
-			return nil, ErrCancelled
 		}
 	}
 }

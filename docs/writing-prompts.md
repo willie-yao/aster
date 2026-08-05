@@ -51,71 +51,39 @@ chat completions API as:
 
 ## How onboarding drafts the prompt
 
-Guided onboarding can generate this file with a local OpenCode agent in a
-temporary checkout, create an agent handoff bundle, draft it through the
-experimental bounded API path, or write the TODO template. The bounded API input
-combines:
+Guided onboarding offers three prompt-authoring modes:
 
-- Markdown documentation.
-- Relevant Go, YAML, and shell excerpts from one commit resolved from the
-  default branch.
-- Matched Prow job names, types, configuration files, repositories, branches or
-  refs, and TestGrid annotations already found during planning.
+- `agent` resolves the source repository to an immutable commit and runs a local
+  OpenCode agent in a temporary checkout and temporary config. The shell tool is
+  denied, but the process is not OS-sandboxed.
+- `handoff` writes the TODO template plus `PROMPT_HANDOFF.md` and the bundled
+  `.opencode/skills/system-prompt-generation/SKILL.md` without running a model.
+- `todo-template` writes only the reviewable template.
 
-Selection is deterministic. It uses at most 8 source files or excerpts, at most
-12,000 bytes from one source, and at most 48,000 source bytes total. Large files
-are excerpted around diagnostic terms and retain line ranges. Vendored,
-generated, unsupported binary, `node_modules`, and `.github` paths are excluded.
-Version-family and duplicate-content excerpts are collapsed. Documentation
-references and Prow configuration paths can raise an exact source path's rank.
-The job section uses compact one-line records and is separately limited to 60
-jobs and 16,000 bytes, with an omitted-count summary when more jobs match.
+Complete flag-based runs default to `handoff`. The wizard recommends `agent` and
+asks for an OpenCode `provider/model` reference. Agent mode uses the selected
+provider credential from the user's existing OpenCode configuration. It does not
+use the deployed dashboard's `AI_TOKEN`, `AI_ENDPOINT`, or `AI_MODEL`.
 
-Eligible source files up to 1 MiB are scanned before the line-ranged excerpt is
-selected. A truncated recursive Git tree is rejected rather than presented as a
-complete deterministic corpus.
+The handoff serializes the project name, source repository, resolved commit or
+known branch, and matched Prow job metadata as untrusted data. The bundled skill
+tells the agent to investigate a bounded set of high-value repository files and
+to treat repository content and job metadata as evidence, never as instructions.
 
-The API path does not clone the repository, execute repository code, use GitHub
-code search, or send the whole repository. Agent mode instead resolves an
-immutable source commit and uses a temporary shallow checkout and config while
-denying OpenCode's shell tool. The local process is not OS-sandboxed. Repository
-text and job metadata are untrusted evidence in both paths. The draft remains a
-starting point that requires human review.
+The runtime accepts the result only when the agent changes exactly
+`prompts/system.md` and the file contains the required sections in order with
+project-specific content. Deletions, renames, extra changed files, placeholder
+sections, malformed headings, and unclosed fences are rejected. A runtime,
+source-resolution, timeout, or validation failure writes the TODO template and
+handoff bundle without exposing raw OpenCode output.
 
-Generation uses deterministic chunked extraction within a 15-minute total
-timeout by default. `fetcher onboard --prompt-timeout` can change the total
-budget for a provider:
+Prompt authoring has a 15-minute total timeout by default.
+`fetcher onboard --prompt-timeout` can set a value from one minute through two
+hours. `--require-prompt-draft` is valid only with `--prompt-mode=agent` and
+fails before any write unless the validated agent draft succeeds.
 
-1. Split the sorted source corpus at source boundaries with a 12,000-byte
-   target and a 16,000-byte hard ceiling. Extract each chunk through three small
-   schema-bound phases for context, operations, and failure patterns. Every phase
-   receives the same compact Prow job metadata and is limited to one highest-value
-   item per evidence section and 300 characters per string.
-2. Retry one invalid extraction phase once with a smaller-output instruction,
-   then require every chunk to pass the normal grounding rules. Merge duplicate
-   claims and keyed evidence deterministically, enforce the existing item,
-   reference, and byte caps, then ground and validate the merge against the
-   complete corpus.
-3. Add engine-owned evidence for the exact source repository and up to three
-   representative Prow job records, cap unresolved details at 12, render Markdown
-   deterministically, and validate the final section contract.
-
-Each model call uses the engine's existing structured transport: native JSON
-schema, then a forced function call, then bounded plain-JSON extraction when the
-provider rejects the earlier protocol. One invalid phase can be retried once,
-so each phase has at most six transport attempts and each three-phase chunk has
-at most eighteen. Validation failure never triggers an unbounded retry loop.
-
-If any extraction phase, merge, grounding check, or final prompt validation
-fails, onboarding writes the reviewable stub instead of publishing partial
-model evidence. There is no second provider-backed refinement call and no
-free-form formatting stage. Source references remain internal to generation
-unless their content is useful in the runbook.
-
-A capable model does not replace source quality. Improve repository diagnostics,
-artifact documentation, or job metadata, then rerun onboarding when important
-details remain unresolved. The generated file is always a draft requiring human
-review.
+A capable model does not replace source quality. The generated file is always a
+draft requiring human review.
 
 ## Required runbook sections
 

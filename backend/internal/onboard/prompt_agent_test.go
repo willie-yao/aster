@@ -22,6 +22,16 @@ type fakePromptAuthor struct {
 	calls  int
 }
 
+const promptSourceTestSHA = "0123456789abcdef0123456789abcdef01234567"
+
+func servePromptSourceRevision(w http.ResponseWriter, r *http.Request) bool {
+	if r.URL.Path != "/repos/example/project/commits/main" {
+		return false
+	}
+	_, _ = w.Write([]byte(promptSourceTestSHA))
+	return true
+}
+
 func (f *fakePromptAuthor) Generate(ctx context.Context, spec promptauthor.Spec) (promptauthor.Result, error) {
 	f.calls++
 	f.got = spec
@@ -42,11 +52,14 @@ func withPromptGitHubAPI(t *testing.T, handler http.Handler) {
 }
 
 func agentPromptInput() promptDraftInput {
-	input := promptTestInput("Project", []promptSource{{Path: "README.md", Text: "docs"}})
-	input.SourceRepo.Branch = "main"
-	input.SourceRevision = "abcdef1234567890abcdef1234567890abcdef12"
-	input.Jobs = []promptJobSummary{{Name: "periodic-project", Type: "periodic", Repo: "example/project", Branches: []string{"main"}}}
-	return input
+	return promptDraftInput{
+		ProjectName: "Project",
+		SourceRepo: Repo{
+			Owner: "example", Name: "project", FullName: "example/project", Branch: "main",
+		},
+		SourceRevision: "abcdef1234567890abcdef1234567890abcdef12",
+		Jobs:           []promptJobSummary{{Name: "periodic-project", Type: "periodic", Repo: "example/project", Branches: []string{"main"}}},
+	}
 }
 
 func TestBuildAgentPromptUsesPinnedRevision(t *testing.T) {
@@ -225,8 +238,10 @@ func TestBuildPromptHandoffSerializesUntrustedMetadata(t *testing.T) {
 }
 
 func TestValidatePromptMode(t *testing.T) {
-	if validatePromptMode("bad") == nil {
-		t.Fatal("expected invalid mode")
+	for _, mode := range []string{"bad", "api-experimental"} {
+		if validatePromptMode(mode) == nil {
+			t.Fatalf("expected mode %q to be invalid", mode)
+		}
 	}
 }
 

@@ -1,6 +1,6 @@
 # Onboarding reference
 
-This page documents discovery, automation, prompt drafting, validation, and the
+This page documents discovery, automation, prompt authoring, validation, and the
 full `fetcher onboard` command surface. For a first project, start with
 [Onboarding a project](onboarding-a-new-project.md).
 
@@ -30,11 +30,10 @@ the wizard uses equivalent numbered and line-oriented prompts. Set
 `ACCESSIBLE=1` to select this mode in any terminal. Cancellation and EOF leave
 no scaffold. The final confirmation defaults to no.
 
-Repository metadata, Prow configuration, source excerpts, job metadata, and
-model output are untrusted data. They cannot authorize commands, alter fixed
-instructions, or request credentials. Documentation references may influence
-deterministic ranking of eligible files in a pinned source snapshot, but cannot
-trigger arbitrary URLs, commands, provider-time retrieval, or secret access.
+Repository metadata, Prow configuration, source files, job metadata, and model
+output are untrusted data. They cannot authorize commands, alter fixed
+instructions, or request credentials. Agent mode denies the shell tool and
+accepts only one validated `prompts/system.md` change.
 
 ## Accepted repository forms
 
@@ -145,135 +144,50 @@ DNS and ingress. Follow the generated guide or the
 Orka remains a separate optional integration. The onboarding command never
 installs, upgrades, or silently enables it.
 
-## AI provider and prompt drafting
+## AI provider and prompt authoring
 
 The deployed analysis provider and one-time prompt authoring are separate
-decisions. Prompt authoring supports `agent`, `handoff`, `api-experimental`, and
-`todo-template` modes.
+decisions. Provider presets configure deployed analysis only. Prompt authoring
+supports `agent`, `handoff`, and `todo-template`.
 
 Agent mode resolves the source branch to an immutable commit, shallow-clones it
 into a temporary checkout, and runs the local OpenCode process with a temporary
 config and its shell tool disabled. It is not an OS sandbox. It uses the selected
 provider credential from the user's existing OpenCode configuration and accepts
-only one validated `prompts/system.md` change. Handoff mode writes the TODO
-template plus `PROMPT_HANDOFF.md` and the bundled
+only one validated `prompts/system.md` change.
+
+Handoff mode writes the TODO template plus `PROMPT_HANDOFF.md` and the bundled
 `.opencode/skills/system-prompt-generation/SKILL.md` without running an agent.
 The handoff pins a commit when possible and otherwise records a known default
-branch or an unresolved ref without inventing a branch name.
+branch or an unresolved ref without inventing a branch name. Repository and Prow
+metadata are serialized as untrusted data.
 
-Provider presets can seed the API mode and endpoint for GitHub Copilot Responses,
-GitHub Copilot Chat Completions, OpenAI, NVIDIA, or a custom OpenAI-compatible
-provider. The model remains explicit
-because model availability depends on the account and endpoint.
+TODO-template mode writes only `prompts/system.md`. `--no-prompt` is an alias for
+this mode and cannot be combined with another explicit prompt mode.
 
-The wizard never asks for or stores a token. `AI_TOKEN` authenticates only the
-experimental API mode and is read only from the environment. It is never printed,
-inspected, fingerprinted, or placed in the plan or generated files. Supply
-deployment credentials through the documented GitHub Secret or Kubernetes
-Secret path.
+Complete flag-based runs default to handoff mode. The wizard recommends agent
+mode and defaults its model to `github-copilot/claude-sonnet-4.6`. Override it
+with `--prompt-agent-model=<provider/model>`. A malformed model reference fails
+before source resolution or agent execution.
 
-When experimental API drafting is selected, the wizard:
+Prompt preparation records a credential-free result in the plan: requested mode,
+final status, output type, timeout for agent mode, safe failure stage and category,
+and the OpenCode runtime and model. Agent failures distinguish source revision,
+agent execution, timeout, and deterministic output validation. Raw OpenCode
+output is never included in the plan or safe warning.
 
-1. Explains that documentation, source excerpts, and matched Prow job metadata
-   may be sent.
-2. Requires explicit confirmation.
-3. Resolves the default branch to one commit and reads a bounded source corpus.
-4. Reuses matched discovery and final-sweep jobs without another Prow discovery.
-5. Splits the sorted source corpus at source boundaries with a 12,000-byte
-   target and a 16,000-byte hard ceiling. Each chunk receives the same compact
-   Prow job metadata and is extracted through three small schema-bound phases:
-   context, operations, and failure patterns. Each phase is limited to one
-   highest-value item per evidence section and 300 characters per string.
-6. Retries one invalid extraction phase once with a smaller-output instruction,
-   then requires every chunk to validate. It merges the validated evidence with
-   bounded first-seen semantics, then grounds and validates the merge against the
-   complete corpus.
-7. Adds credential-free engine-owned evidence for the source repository and up
-   to three representative Prow job records and caps unresolved details at 12.
-8. Renders Markdown deterministically and validates the final section contract.
-9. Falls back to a reviewable TODO template when any extraction phase, merge,
-   grounding check, or final prompt validation fails.
+`--require-prompt-draft` is for strict automation. It is valid only for `agent`
+and returns a nonzero error before any local write or pull request when drafting
+falls back.
 
-The source corpus contains at most 8 Markdown, Go, YAML, or shell files or
-line-ranged excerpts. One source contributes at most 12,000 bytes and all source
-text contributes at most 48,000 bytes. Eligible files up to 1 MiB are scanned
-before excerpt selection. Vendored, generated, binary, `node_modules`, and
-`.github` paths are excluded. Versioned snapshots of the same source family and
-duplicate excerpt content are collapsed. Diagnostic documentation is preferred
-over large test-template fixtures unless an exact job reference requires the
-fixture. A truncated recursive Git tree is rejected.
-
-Prow metadata includes job name, periodic or presubmit type, configuration file,
-repository when established, branches or refs, and TestGrid annotations. It uses
-compact one-line records and is limited to 60 jobs and 16,000 bytes, with an
-omitted-count summary. Runtime credentials are redacted from full source text and
-the complete serialized provider input. Source retrieval and phased extraction
-share the onboarding prompt timeout. Each extraction phase uses the existing
-schema, forced-function, and bounded plain-JSON transports and may retry once.
-Cancellation stops retrieval and provider calls. No second provider-backed
-refinement or free-form formatting stage is made.
+`--prompt-timeout` controls source revision resolution and agent execution. It
+defaults to `15m` and accepts values from `1m` through `2h`. This option does not
+change the regular fetcher `--timeout` or the deployed project `ai.timeout`.
 
 Generated prompts are drafts. Review every architecture, artifact, failure, and
 transient-classification claim before deployment.
 
-The generated draft is an operational diagnostic runbook, not a repository
-summary. It uses a fixed section order covering architecture, lifecycle, job
-flavors, artifact layout, failure patterns, transient boundaries, triage,
-source repositories, and unresolved details. Project-specific claims and exact
-artifact paths must come from the bounded source corpus. Missing details remain
-explicitly unresolved instead of being replaced with generic guidance.
-
-Transient rules require positive evidence that permits the classification and a
-boundary that makes the failure non-transient. The generator does not add common
-transient classes when the source material is silent. The analyzer can inspect
-supplied Prow artifacts. Optional Kubernetes tools navigate Kubernetes-shaped
-logs and resource dumps already captured in the artifact tree. They do not
-connect to a live Kubernetes API. The analyzer also does not have portal, SSH,
-arbitrary shell, browser, or local CLI access.
-
-When the source repository yields no meaningful source evidence, onboarding
-skips the model request and writes the reviewable TODO template. Improve
-repository artifact documentation or job metadata and rerun onboarding when the
-generated `Unresolved details` section identifies important gaps. Choosing a
-more capable model does not substitute for missing source evidence.
-
-Prompt preparation records a credential-free result in the plan: requested mode,
-final status, output type, timeout where applicable, safe failure stage and
-category, the OpenCode runtime and model for agent mode, and provider coordinates
-only for a successful API draft.
-
-Normal failures write a safe warning to stderr with the stage, category,
-fallback, and a short action. They do not print the wrapped source or provider
-error. Interactive API failures offer retry with the same reviewed coordinates,
-continue with the TODO template, or cancel. Continue is the default.
-
-Use `--no-prompt` to force the TODO template. Use `--ai=false` to disable
-deployed AI analysis. These flags control different features.
-
-`--prompt-debug` writes sanitized diagnostics to stderr only. It may include
-stage timing, selected source paths and line ranges, source and job counts,
-extraction chunk totals, completed chunks, and bounded extraction attempts, API,
-endpoint hostname, model fingerprint, structured transport attempt, HTTP status,
-safe `Retry-After`, provider request ID, validation code and field, and total
-elapsed time. It excludes credentials, source-line contents,
-raw prompts, model responses, evidence text, provider bodies, endpoint query or
-fragment details, credential-bearing URLs, and full private model identifiers.
-No debug report file is created.
-
-`--require-prompt-draft` is for strict automation. It is valid for `agent` and
-`api-experimental`. Agent mode uses OpenCode ambient authentication. The API
-mode requires `AI_TOKEN`, `AI_ENDPOINT`, and `AI_MODEL`. Both return a nonzero
-error before any local write or pull request when drafting falls back.
-
-`--prompt-timeout` controls the total agent or API prompt-authoring budget. It
-defaults to `15m` and accepts values from `1m` through `2h`. A slow provider or
-agent run can use, for example, `--prompt-timeout 30m`. This option does not
-change the regular fetcher `--timeout` or the deployed project `ai.timeout`. The
-reviewed timeout is retained in the credential-free onboarding plan and shown
-before any write.
-
-See [AI providers](ai-providers.md) and
-[Writing the project prompt](writing-prompts.md).
+See [Writing the project prompt](writing-prompts.md).
 
 ## Scaffold destination and local updates
 
@@ -294,8 +208,8 @@ refuses any replacement. Interactive onboarding offers:
 
 Choosing another directory is the default. Update mode replaces only files in
 the validated plan. It preserves unrelated files, never deletes the destination,
-and never removes stale files from another deployment or prompt mode. Existing stale
-Pages or Kubernetes deployment files are reported and left untouched. Partial
+and never removes stale files from another deployment or prompt mode. Existing
+stale generated files are reported and left untouched. Partial
 path conflicts, symbolic links in generated paths, and unsafe plan paths are
 rejected.
 
@@ -356,27 +270,23 @@ For a project outside Kubernetes TestGrid, replace `-testgrid` with:
 Add `-gcsweb-base "https://gcsweb.example.net/s3"` when the bucket is served
 through gcsweb.
 
-For automation that must receive an API-authored prompt rather than a safe
-fallback, export the reviewed provider coordinates, select the mode, and add the
-strict flag:
+For automation that must receive a validated agent-authored prompt rather than a
+handoff fallback, select agent mode and add the strict flag:
 
 ```bash
-export AI_TOKEN="..."
-export AI_API="responses"
-export AI_ENDPOINT="https://provider.example/v1/responses"
-export AI_MODEL="reviewed-model"
 fetcher onboard \
   -non-interactive \
   -testgrid "<testgrid-dashboard>" \
   -dashboard-repo "<owner>/<dashboard-repo>" \
   -source-repo "<owner>/<source-repo>" \
-  --prompt-mode=api-experimental \
+  --prompt-mode=agent \
+  --prompt-agent-model=github-copilot/claude-sonnet-4.6 \
   --require-prompt-draft
 ```
 
-Strict agent automation instead uses `--prompt-mode=agent` and
-`--require-prompt-draft`. It does not require the API variables above, but the
-selected OpenCode provider must already be authenticated.
+The selected OpenCode provider must already be authenticated. The deployed
+`AI_TOKEN` may be read only to prevent accidental serialization into nonsecret
+fields; it is never sent during prompt authoring.
 
 ## Open a scaffold pull request
 

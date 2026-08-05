@@ -32,8 +32,7 @@ The wizard asks you to choose or confirm:
 5. Whether to include presubmit jobs.
 6. Whether to enable AI analysis and which provider to use.
 7. Whether to generate `prompts/system.md` with OpenCode, write an agent
-   handoff bundle, use the experimental bounded API path, or keep the TODO
-   template.
+   handoff bundle, or keep the TODO template.
 8. The output directory or pull request destination.
 
 In the interactive form, use the arrow keys to move, Enter to select, and
@@ -126,29 +125,11 @@ accepts the result only when the agent changes exactly
 validation. It uses the selected provider credential from the user's existing
 OpenCode configuration. `AI_TOKEN` is not required for this mode.
 
-The experimental API mode does not clone or execute the source repository. It
-sends at most 8 line-ranged Markdown, Go, YAML, or shell excerpts, with a
-12,000-byte per-source limit and a 48,000-byte total. Version-family and
-duplicate-content excerpts are collapsed. Prow metadata uses compact one-line
-records and is separately limited to 60 jobs and 16,000 bytes. Documentation
-references may raise the rank of exact eligible files in the pinned snapshot,
-but cannot trigger arbitrary URLs, commands, provider-time retrieval, or secret
-access. `AI_TOKEN` authenticates this path and remains environment-only. It is
-never displayed, inspected, fingerprinted, or written into the plan or scaffold.
-
-The provider returns structured evidence with internal source references through
-bounded context, operations, and failure-pattern phases. Onboarding merges and
-grounds those results, adds validated engine metadata, and renders the Markdown
-itself. Invalid extraction, merging, grounding, or final validation falls back to
-the TODO template. Safe warnings identify the failed stage, failure category,
-fallback, and operator action without printing the wrapped provider error. After
-an interactive API failure, choose whether to retry the same reviewed provider,
-continue with the TODO template, or cancel. The safe default is to continue with
-the template.
-
-The final review shows the requested mode, timeout where applicable, agent model
-or API provider, final prompt status, and any safe fallback diagnostics. The
-final write confirmation defaults to no.
+Agent failures fall back to the TODO template and handoff bundle. Safe warnings
+identify source-resolution, execution, timeout, or output-validation failures
+without printing raw OpenCode output. The final review shows the requested mode,
+agent model and timeout where applicable, final prompt status, and safe fallback
+diagnostics. The final write confirmation defaults to no.
 
 Press `Ctrl+C`, send EOF, or answer no at the final confirmation to leave the
 filesystem unchanged.
@@ -165,9 +146,8 @@ go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboar
   -dry-run
 ```
 
-Use `--no-prompt` when you want the reviewable TODO template instead of
-sending source evidence and matched Prow metadata to an AI provider. This flag
-controls prompt drafting. It does not disable the interactive wizard.
+Use `--no-prompt` when you want only the reviewable TODO template. This flag
+controls prompt authoring. It does not disable the interactive wizard.
 
 Local onboarding refuses to replace generated files unless `--update-existing`
 is explicit. Interactive onboarding instead offers another directory, updating
@@ -177,22 +157,14 @@ Unrelated files and stale generated files from another deployment or prompt mode
 are left untouched.
 Open-PR mode continues to use a GitHub diff and does not use local update mode.
 
-Use `--prompt-debug` for sanitized diagnostics on stderr. Debug output contains
-stage timing, bounded source paths and line ranges, counts, provider hostname,
-model fingerprint, safe HTTP metadata, and validation codes. It never creates a
-report file and excludes tokens, source contents, prompts, model responses,
-provider bodies, endpoint paths or query strings, and full model identifiers.
-
 Automation can add `--require-prompt-draft` to fail before local writes or pull
-request creation unless agent or experimental API drafting succeeds. Agent mode
-uses OpenCode ambient authentication. The API mode requires `AI_TOKEN`,
-`AI_ENDPOINT`, and `AI_MODEL`.
+request creation unless agent drafting succeeds. It is valid only with
+`--prompt-mode=agent` and uses OpenCode ambient authentication.
 
-Prompt preparation has a 15-minute total timeout by default. Slow providers or
-agent runs can use `--prompt-timeout`, for example `--prompt-timeout 30m`. The
-accepted range is one minute through two hours. This timeout covers agent source
-revision resolution and execution or API source retrieval and structured
-extraction. It is separate from the normal fetcher timeout and deployed
+Prompt preparation has a 15-minute total timeout by default. Slow agent runs can
+use `--prompt-timeout`, for example `--prompt-timeout 30m`. The accepted range is
+one minute through two hours. This timeout covers source revision resolution and
+agent execution. It is separate from the normal fetcher timeout and deployed
 `ai.timeout`.
 
 ## Next steps
@@ -223,7 +195,7 @@ Use the [onboarding reference](onboarding-reference.md) for:
 - Accepted repository forms.
 - Fully flagged and non-interactive automation.
 - Opening a scaffold pull request.
-- AI prompt drafting and inference limits.
+- Prompt authoring modes and safety limits.
 - Doctor checks and the complete command surface.
 
 Deployment references:
@@ -236,9 +208,8 @@ Deployment references:
 ### Prompt authoring modes
 
 The wizard can generate `prompts/system.md` with a local OpenCode agent in a
-temporary checkout,
-write a reusable agent handoff bundle, use the experimental bounded API path, or
-write the TODO template. Agent mode defaults to
+temporary checkout, write a reusable agent handoff bundle, or write the TODO
+template. Agent mode defaults to
 `github-copilot/claude-sonnet-4.6` and uses the selected provider credential from
 the user's existing OpenCode configuration. Handoff mode writes
 `PROMPT_HANDOFF.md` and `.opencode/skills/system-prompt-generation/SKILL.md`

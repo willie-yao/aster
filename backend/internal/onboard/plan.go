@@ -104,7 +104,7 @@ func buildPlan(ctx context.Context, opts Options, planning planningContext, deps
 	if err != nil {
 		return nil, fmt.Errorf("rendering prompts/system.md: %w", err)
 	}
-	if opts.RequirePromptDraft && promptResult.Status != promptStatusAPIDraft && promptResult.Status != promptStatusAgentDraft {
+	if opts.RequirePromptDraft && promptResult.Status != promptStatusAgentDraft {
 		failure := promptResult.Failure
 		if failure == nil {
 			failure = &promptPreparationFailure{Stage: promptStageFinalPromptValidation, Category: promptFailurePromptValidation}
@@ -210,7 +210,6 @@ func effectiveAIEnabled(opts Options) bool {
 }
 
 type defaultPromptBuilder struct {
-	out    io.Writer
 	err    io.Writer
 	author promptauthor.Runtime
 }
@@ -247,8 +246,6 @@ func (b defaultPromptBuilder) Build(ctx context.Context, opts Options, data scaf
 	case promptModeTemplate:
 		p, err := render(systemPromptTmpl, data)
 		return p, newTemplatePromptResult(), err
-	case promptModeAPI:
-		return buildSystemPrompt(ctx, opts, data, input, b.out, b.err)
 	default:
 		return "", promptPreparationResult{}, fmt.Errorf("unsupported prompt mode %q", effectivePromptMode(opts))
 	}

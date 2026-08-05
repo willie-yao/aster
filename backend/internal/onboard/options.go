@@ -46,21 +46,20 @@ type Options struct {
 	// enabled-by-default scaffold behavior.
 	AIEnabled *bool
 
-	// AI prompt drafting is optional.
-	// PromptMode selects agent, handoff, api-experimental, or todo-template.
+	// PromptMode selects agent, handoff, or todo-template.
 	PromptMode string
 	// PromptAgentModel is an OpenCode provider/model reference.
 	PromptAgentModel string
 
-	// AIToken authenticates the provider used to draft prompts/system.md. It is
-	// never copied into a plan or generated file.
-	AIToken string
 	// AIAPI selects chat_completions (default) or responses.
 	AIAPI string
-	// AIEndpoint and AIModel identify the provider used for prompt drafting and
-	// seed deployed provider settings when explicitly confirmed by the wizard.
+	// AIEndpoint and AIModel seed deployed provider settings for complete
+	// flag-based runs.
 	AIEndpoint string
 	AIModel    string
+	// AIToken is read only to ensure the deployment secret is not copied into a
+	// generated file or other nonsecret field. Prompt authoring never sends it.
+	AIToken string
 
 	// DeploymentAIAPI, DeploymentAIEndpoint, and DeploymentAIModel are the
 	// deployed dashboard provider selected by the wizard. Empty values preserve
@@ -76,13 +75,11 @@ type Options struct {
 	// GitHubToken authenticates metadata/doc reads and scaffold PR creation. It
 	// is never copied into a plan or generated file.
 	GitHubToken string
-	// NoPrompt forces the stub even when an AI token is available.
+	// NoPrompt forces the TODO template.
 	NoPrompt bool
-	// PromptDebug writes sanitized prompt-preparation diagnostics to stderr.
-	PromptDebug bool
 	// PromptTimeout bounds prompt authoring, including agent execution.
 	PromptTimeout time.Duration
-	// RequirePromptDraft fails before writes unless agent or API drafting succeeds.
+	// RequirePromptDraft fails before writes unless agent drafting succeeds.
 	RequirePromptDraft bool
 
 	// OpenPR opens a pull request against the dashboard repo with the scaffold
