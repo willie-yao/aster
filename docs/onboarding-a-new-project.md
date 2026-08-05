@@ -216,3 +216,13 @@ Deployment references:
 - [Kubernetes quickstart](kubernetes.md)
 - [Project configuration](project-configuration.md)
 - [Troubleshooting](troubleshooting.md)
+
+### Prompt authoring modes
+
+The wizard can generate `prompts/system.md` with an isolated OpenCode agent,
+write a reusable agent handoff bundle, use the experimental bounded API path, or
+write the TODO template. Agent mode defaults to
+`github-copilot/claude-sonnet-4.6` and uses the selected provider credential from
+the user's existing OpenCode configuration. Handoff mode writes
+`PROMPT_HANDOFF.md` and `.opencode/skills/system-prompt-generation/SKILL.md`
+without running an agent.

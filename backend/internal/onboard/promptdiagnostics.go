@@ -17,22 +17,28 @@ type promptPreparationRequest string
 
 const (
 	promptRequestTemplate        promptPreparationRequest = "todo-template"
+	promptRequestAgent           promptPreparationRequest = "agent"
+	promptRequestHandoff         promptPreparationRequest = "handoff"
 	promptRequestAPIExperimental promptPreparationRequest = "api-experimental"
 )
 
 type promptPreparationStatus string
 
 const (
-	promptStatusTemplate promptPreparationStatus = "todo-template"
-	promptStatusAPIDraft promptPreparationStatus = "api-draft"
-	promptStatusFallback promptPreparationStatus = "api-fallback"
+	promptStatusTemplate      promptPreparationStatus = "todo-template"
+	promptStatusAPIDraft      promptPreparationStatus = "api-draft"
+	promptStatusFallback      promptPreparationStatus = "api-fallback"
+	promptStatusAgentDraft    promptPreparationStatus = "agent-draft"
+	promptStatusAgentFallback promptPreparationStatus = "agent-fallback"
+	promptStatusHandoff       promptPreparationStatus = "handoff"
 )
 
 type promptOutputKind string
 
 const (
-	promptOutputTemplate promptOutputKind = "todo-template"
-	promptOutputAPIDraft promptOutputKind = "api-draft"
+	promptOutputTemplate   promptOutputKind = "todo-template"
+	promptOutputAPIDraft   promptOutputKind = "api-draft"
+	promptOutputAgentDraft promptOutputKind = "agent-draft"
 )
 
 type promptPreparationStage string
@@ -186,6 +192,7 @@ type promptPreparationResult struct {
 	Status    promptPreparationStatus
 	Output    promptOutputKind
 	Failure   *promptPreparationFailure
+	Handoff   string
 }
 
 func newTemplatePromptResult() promptPreparationResult {
@@ -209,6 +216,10 @@ func (r promptPreparationResult) reviewLabel() string {
 	switch r.Status {
 	case promptStatusAPIDraft:
 		return "Experimental API draft"
+	case promptStatusAgentDraft:
+		return "OpenCode agent draft"
+	case promptStatusAgentFallback, promptStatusHandoff:
+		return "Agent handoff bundle with TODO template"
 	case promptStatusFallback:
 		return "TODO template after experimental API failure"
 	default:
@@ -240,7 +251,7 @@ func (r promptPreparationResult) promptPlan(opts Options) PromptPlan {
 }
 
 func validatePromptPlan(plan PromptPlan) error {
-	if plan.RequestedMode != string(promptRequestTemplate) && plan.RequestedMode != string(promptRequestAPIExperimental) {
+	if plan.RequestedMode != string(promptRequestTemplate) && plan.RequestedMode != string(promptRequestAPIExperimental) && plan.RequestedMode != string(promptRequestAgent) && plan.RequestedMode != string(promptRequestHandoff) {
 		return fmt.Errorf("onboarding plan prompt request %q is invalid", plan.RequestedMode)
 	}
 	if plan.RequestedMode == string(promptRequestAPIExperimental) {
@@ -262,6 +273,14 @@ func validatePromptPlan(plan PromptPlan) error {
 		}
 		if strings.TrimSpace(plan.API) == "" || strings.TrimSpace(plan.Endpoint) == "" || strings.TrimSpace(plan.Model) == "" {
 			return fmt.Errorf("onboarding plan API prompt result is missing provider coordinates")
+		}
+	case string(promptStatusAgentDraft):
+		if plan.RequestedMode != string(promptRequestAgent) || plan.Output != string(promptOutputAgentDraft) || plan.Source != "OpenCode agent draft" {
+			return fmt.Errorf("onboarding plan agent prompt result is inconsistent")
+		}
+	case string(promptStatusHandoff), string(promptStatusAgentFallback):
+		if plan.Output != string(promptOutputTemplate) || plan.Source != "Agent handoff bundle with TODO template" {
+			return fmt.Errorf("onboarding plan handoff result is inconsistent")
 		}
 	case string(promptStatusFallback):
 		if plan.RequestedMode != string(promptRequestAPIExperimental) || plan.Output != string(promptOutputTemplate) || plan.Source != "TODO template after experimental API failure" {

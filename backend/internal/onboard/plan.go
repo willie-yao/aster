@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/onboard/promptauthor"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prow/jobconfig"
 )
@@ -103,7 +104,7 @@ func buildPlan(ctx context.Context, opts Options, planning planningContext, deps
 	if err != nil {
 		return nil, fmt.Errorf("rendering prompts/system.md: %w", err)
 	}
-	if opts.RequirePromptDraft && promptResult.Status != promptStatusAPIDraft {
+	if opts.RequirePromptDraft && promptResult.Status != promptStatusAPIDraft && promptResult.Status != promptStatusAgentDraft {
 		failure := promptResult.Failure
 		if failure == nil {
 			failure = &promptPreparationFailure{Stage: promptStageFinalPromptValidation, Category: promptFailurePromptValidation}
@@ -111,6 +112,10 @@ func buildPlan(ctx context.Context, opts Options, planning planningContext, deps
 		return nil, &requiredPromptDraftError{failure: failure}
 	}
 	files["prompts/system.md"] = prompt
+	if promptResult.Handoff != "" {
+		files["PROMPT_HANDOFF.md"] = promptResult.Handoff
+		files[".opencode/skills/system-prompt-generation/SKILL.md"] = promptauthor.SkillContent()
+	}
 	if err := validateRenderedFilesNoCredentials(opts, files); err != nil {
 		return nil, err
 	}
@@ -205,10 +210,23 @@ func effectiveAIEnabled(opts Options) bool {
 }
 
 type defaultPromptBuilder struct {
-	out io.Writer
-	err io.Writer
+	out    io.Writer
+	err    io.Writer
+	author promptauthor.Runtime
 }
 
 func (b defaultPromptBuilder) Build(ctx context.Context, opts Options, data scaffoldData, input promptDraftInput) (string, promptPreparationResult, error) {
-	return buildSystemPrompt(ctx, opts, data, input, b.out, b.err)
+	switch effectivePromptMode(opts) {
+	case promptModeAgent:
+		a := b.author
+		if a == nil {
+			a = promptauthor.NewOpenCodeRuntime()
+		}
+		return buildAgentPrompt(ctx, opts, data, input, a)
+	case promptModeHandoff:
+		p, err := render(systemPromptTmpl, data)
+		return p, promptPreparationResult{Requested: promptRequestHandoff, Status: promptStatusHandoff, Output: promptOutputTemplate, Handoff: buildPromptHandoff(input)}, err
+	default:
+		return buildSystemPrompt(ctx, opts, data, input, b.out, b.err)
+	}
 }

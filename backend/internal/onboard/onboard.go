@@ -171,7 +171,19 @@ func effectivePromptDraftTimeout(opts Options) time.Duration {
 	return opts.PromptTimeout
 }
 
+func validatePromptMode(mode string) error {
+	switch mode {
+	case "", promptModeAgent, promptModeHandoff, promptModeAPI, promptModeTemplate:
+		return nil
+	default:
+		return fmt.Errorf("--prompt-mode must be agent, handoff, api-experimental, or todo-template")
+	}
+}
+
 func validateOptions(opts *Options) error {
+	if err := validatePromptMode(opts.PromptMode); err != nil {
+		return err
+	}
 	if err := validateCredentialSeparation(*opts); err != nil {
 		return err
 	}

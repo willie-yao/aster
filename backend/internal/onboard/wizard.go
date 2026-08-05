@@ -193,6 +193,31 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 		return nil, opts, err
 	}
 
+	if opts.PromptMode == "" && !opts.NoPrompt {
+		mode, selectErr := prompt.Select(ctx, selectPrompt{Title: "Project prompt authoring", Description: "Choose how prompts/system.md is prepared.", Options: []selectOption{
+			{Value: promptModeAgent, Label: "Generate with OpenCode (recommended)", Description: "Uses an isolated repository-aware coding agent."},
+			{Value: promptModeHandoff, Label: "Create an agent handoff bundle", Description: "Writes a reusable skill and reviewable TODO prompt."},
+			{Value: promptModeAPI, Label: "Experimental API draft", Description: "Uses bounded source excerpts."},
+			{Value: promptModeTemplate, Label: "TODO template", Description: "Does not call a model."},
+		}})
+		if selectErr != nil {
+			return nil, opts, selectErr
+		}
+		opts.PromptMode = mode
+		if mode == promptModeAgent && opts.PromptAgentModel == "" {
+			opts.PromptAgentModel, err = prompt.Input(ctx, inputPrompt{Title: "OpenCode model", Description: "Provider/model configured in OpenCode.", Value: "github-copilot/claude-sonnet-4.6", Required: true})
+			if err != nil {
+				return nil, opts, err
+			}
+		}
+	}
+	switch opts.PromptMode {
+	case promptModeAgent, promptModeHandoff:
+		opts.NoPrompt = false
+	case promptModeTemplate:
+		opts.NoPrompt = true
+	}
+
 	if opts.NoPrompt || opts.AIToken == "" {
 		opts.NoPrompt = true
 	} else if opts.AIEndpoint != "" && opts.AIModel != "" {

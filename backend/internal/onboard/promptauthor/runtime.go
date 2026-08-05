@@ -99,3 +99,6 @@ func (r *OpenCodeRuntime) Generate(ctx context.Context, spec Spec) (Result, erro
 	result.Body = body
 	return result, nil
 }
+
+// SkillContent returns the engine-owned prompt-generation skill.
+func SkillContent() string { return systemPromptSkill }

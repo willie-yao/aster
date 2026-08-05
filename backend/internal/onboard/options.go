@@ -47,6 +47,10 @@ type Options struct {
 	AIEnabled *bool
 
 	// AI prompt drafting is optional.
+	// PromptMode selects agent, handoff, api-experimental, or todo-template.
+	PromptMode string
+	// PromptAgentModel is an OpenCode provider/model reference.
+	PromptAgentModel string
 
 	// AIToken authenticates the provider used to draft prompts/system.md. It is
 	// never copied into a plan or generated file.
