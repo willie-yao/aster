@@ -319,3 +319,36 @@ func TestLookPathInRejectsRelativePATH(t *testing.T) {
 		t.Fatal("expected relative PATH entry to fail")
 	}
 }
+
+func TestSRTSandboxResolvesToolsFromSandboxPATH(t *testing.T) {
+	fake := newFakeSRTPackage(t, SRTVersion)
+	binDir := t.TempDir()
+	if err := os.Symlink(fake, filepath.Join(binDir, "srt")); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"node":         "#!/bin/sh\nprintf 'v25.6.0\\n'\n",
+		"rg":           "#!/bin/sh\nexit 0\n",
+		"sandbox-exec": "#!/bin/sh\nexit 0\n",
+	} {
+		if err := os.WriteFile(filepath.Join(binDir, name), []byte(body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	work, home, temp := t.TempDir(), t.TempDir(), t.TempDir()
+	command := filepath.Join(work, "agent")
+	if err := os.WriteFile(command, []byte("binary"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cmd, err := (&SRTSandbox{Bin: "srt", goos: "darwin"}).Command(context.Background(), SandboxSpec{
+		Command: []string{command}, WorkDir: work, HomeDir: home, TempDir: temp,
+		Environment: []string{"PATH=" + binDir},
+		ReadPaths:   []string{work, home, temp, command}, WritePaths: []string{work, home, temp},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.Path != filepath.Join(binDir, "srt") {
+		t.Fatalf("srt path = %q", cmd.Path)
+	}
+}
