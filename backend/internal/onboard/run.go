@@ -372,14 +372,14 @@ func validatePlan(planValue *Plan) error {
 			return err
 		}
 		known := false
-		for _, candidate := range knownDeploymentFiles {
+		for _, candidate := range knownGeneratedFiles {
 			if stale == candidate {
 				known = true
 				break
 			}
 		}
 		if !known {
-			return fmt.Errorf("onboarding plan stale file %q is not a known deployment file", stale)
+			return fmt.Errorf("onboarding plan stale file %q is not a known generated file", stale)
 		}
 	}
 	if strings.TrimSpace(planValue.Files["prompts/system.md"]) == "" {
@@ -479,7 +479,7 @@ func printReview(out io.Writer, plan *Plan) {
 		}
 	}
 	for _, stale := range plan.Destination.StaleFiles {
-		fmt.Fprintf(out, "  Warning: existing deployment file %s is stale for the selected mode and will be left untouched.\n", stale)
+		fmt.Fprintf(out, "  Warning: existing generated file %s is stale for the selected modes and will be left untouched.\n", stale)
 	}
 	fmt.Fprintln(out, "\nNo files or external resources have been changed.")
 }

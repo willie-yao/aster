@@ -452,7 +452,7 @@ func defaultBranch(ctx context.Context, client *http.Client, owner, repo, token 
 		return "", err
 	}
 	if out.DefaultBranch == "" {
-		return "main", nil
+		return "", fmt.Errorf("source repository response did not include a default branch")
 	}
 	return out.DefaultBranch, nil
 }

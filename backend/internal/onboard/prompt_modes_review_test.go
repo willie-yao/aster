@@ -142,6 +142,7 @@ func TestWizardPromptAuthoringKeepsSelectedMode(t *testing.T) {
 		name            string
 		mode            string
 		inputs          []string
+		confirms        []bool
 		wantNoPrompt    bool
 		wantModel       string
 		wantPromptAPI   string
@@ -150,7 +151,7 @@ func TestWizardPromptAuthoringKeepsSelectedMode(t *testing.T) {
 		{name: "agent", mode: promptModeAgent, inputs: []string{usePromptDefault}, wantModel: defaultPromptAgentModel},
 		{name: "handoff", mode: promptModeHandoff},
 		{name: "template", mode: promptModeTemplate, wantNoPrompt: true},
-		{name: "api", mode: promptModeAPI, wantPromptAPI: "responses", wantPromptModel: "deployed-model"},
+		{name: "api", mode: promptModeAPI, confirms: []bool{true}, wantPromptAPI: "responses", wantPromptModel: "deployed-model"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -159,7 +160,7 @@ func TestWizardPromptAuthoringKeepsSelectedMode(t *testing.T) {
 				AIEnabled: &enabled, DeploymentAIAPI: "responses",
 				DeploymentAIEndpoint: "https://provider.example/v1/responses", DeploymentAIModel: "deployed-model",
 			}
-			ui := &queuedWizardUI{selects: []string{tt.mode}, inputs: tt.inputs}
+			ui := &queuedWizardUI{selects: []string{tt.mode}, inputs: tt.inputs, confirms: tt.confirms}
 			if err := wizardPromptAuthoring(context.Background(), ui, &opts); err != nil {
 				t.Fatal(err)
 			}
@@ -170,5 +171,23 @@ func TestWizardPromptAuthoringKeepsSelectedMode(t *testing.T) {
 				t.Fatalf("prompt provider = %s %s", opts.AIAPI, opts.AIModel)
 			}
 		})
+	}
+}
+
+func TestWizardPromptAuthoringDeclinedAPIUsesTemplate(t *testing.T) {
+	enabled := true
+	opts := Options{
+		AIEnabled: &enabled, DeploymentAIAPI: "responses",
+		DeploymentAIEndpoint: "https://provider.example/v1/responses", DeploymentAIModel: "deployed-model",
+	}
+	ui := &queuedWizardUI{selects: []string{promptModeAPI}, confirms: []bool{false}}
+	if err := wizardPromptAuthoring(context.Background(), ui, &opts); err != nil {
+		t.Fatal(err)
+	}
+	if opts.PromptMode != promptModeTemplate || !opts.NoPrompt {
+		t.Fatalf("opts = %+v", opts)
+	}
+	if len(ui.confirmPrompts) != 1 || ui.confirmPrompts[0].Value || !strings.Contains(ui.confirmPrompts[0].Description, "bounded repository") {
+		t.Fatalf("confirmation = %+v", ui.confirmPrompts)
 	}
 }

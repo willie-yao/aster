@@ -224,11 +224,21 @@ func (b defaultPromptBuilder) Build(ctx context.Context, opts Options, data scaf
 		}
 		return buildAgentPrompt(ctx, opts, data, input, a, b.err)
 	case promptModeHandoff:
-		ref := strings.TrimSpace(input.SourceRepo.Branch)
-		if ref == "" {
-			ref = "main"
+		parentCtx := ctx
+		ctx, cancel := context.WithTimeout(ctx, effectivePromptDraftTimeout(opts))
+		defer cancel()
+		branch, revision, resolveErr := resolveAgentSourceRevision(ctx, input, opts.GitHubToken)
+		if resolveErr != nil && parentCtx.Err() != nil {
+			return "", promptPreparationResult{}, parentCtx.Err()
 		}
-		handoff, err := buildPromptHandoff(input, ref, "default-branch")
+		ref, refKind := revision, "commit"
+		if resolveErr != nil {
+			ref, refKind = branch, "default-branch"
+			if branch == "" {
+				refKind = "unresolved"
+			}
+		}
+		handoff, err := buildPromptHandoff(input, ref, refKind)
 		if err != nil {
 			return "", promptPreparationResult{}, err
 		}

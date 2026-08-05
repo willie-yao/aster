@@ -11,6 +11,8 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 )
 
+const promptDraftDisclosure = "The experimental API mode sends bounded repository documentation, source excerpts, and matched Prow job metadata to the reviewed provider. AI_TOKEN authenticates that one-time request."
+
 func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Options, error) {
 	if err := validateCredentialSeparation(opts); err != nil {
 		return nil, opts, err
@@ -311,6 +313,18 @@ func wizardPromptAuthoring(ctx context.Context, prompt wizardUI, opts *Options) 
 			opts.AIAPI = opts.DeploymentAIAPI
 			opts.AIEndpoint = opts.DeploymentAIEndpoint
 			opts.AIModel = opts.DeploymentAIModel
+		}
+		confirmed, err := prompt.Confirm(ctx, confirmPrompt{
+			Title:       "Send bounded evidence to this API provider?",
+			Description: promptDraftDisclosure,
+			Value:       false,
+		})
+		if err != nil {
+			return err
+		}
+		if !confirmed {
+			opts.PromptMode = promptModeTemplate
+			opts.NoPrompt = true
 		}
 	}
 	return nil

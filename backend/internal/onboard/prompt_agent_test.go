@@ -18,15 +18,26 @@ type fakePromptAuthor struct {
 	err    error
 	got    promptauthor.Spec
 	wait   bool
+	calls  int
 }
 
 func (f *fakePromptAuthor) Generate(ctx context.Context, spec promptauthor.Spec) (promptauthor.Result, error) {
+	f.calls++
 	f.got = spec
 	if f.wait {
 		<-ctx.Done()
 		return promptauthor.Result{}, ctx.Err()
 	}
 	return f.result, f.err
+}
+
+func withPromptGitHubAPI(t *testing.T, handler http.Handler) {
+	t.Helper()
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	oldAPI := githubAPIBaseURL
+	githubAPIBaseURL = server.URL
+	t.Cleanup(func() { githubAPIBaseURL = oldAPI })
 }
 
 func agentPromptInput() promptDraftInput {
@@ -60,15 +71,11 @@ func TestBuildAgentPromptUsesPinnedRevision(t *testing.T) {
 }
 
 func TestBuildAgentPromptResolvesBranchToCommit(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	withPromptGitHubAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !servePromptSourceRevision(w, r) {
 			http.NotFound(w, r)
 		}
 	}))
-	defer server.Close()
-	oldAPI := githubAPIBaseURL
-	githubAPIBaseURL = server.URL
-	t.Cleanup(func() { githubAPIBaseURL = oldAPI })
 
 	input := agentPromptInput()
 	input.SourceRevision = ""
@@ -79,6 +86,73 @@ func TestBuildAgentPromptResolvesBranchToCommit(t *testing.T) {
 	}
 	if author.got.Repo.Ref != promptSourceTestSHA {
 		t.Fatalf("agent ref = %q, want %q", author.got.Repo.Ref, promptSourceTestSHA)
+	}
+}
+
+func TestBuildAgentPromptFallbackPreservesResolvedDefaultBranch(t *testing.T) {
+	withPromptGitHubAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/example/project":
+			_, _ = w.Write([]byte(`{"default_branch":"trunk"}`))
+		case "/repos/example/project/commits/trunk":
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	input := agentPromptInput()
+	input.SourceRepo.Branch = ""
+	input.SourceRevision = ""
+	author := &fakePromptAuthor{}
+	_, result, err := buildAgentPrompt(context.Background(), Options{}, scaffoldData{Name: "Project"}, input, author, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if author.calls != 0 || !strings.Contains(result.Handoff, `"source_ref": "trunk"`) || !strings.Contains(result.Handoff, `"source_ref_kind": "default-branch"`) {
+		t.Fatalf("calls=%d handoff:\n%s", author.calls, result.Handoff)
+	}
+	if strings.Contains(result.Handoff, `"source_ref": "main"`) {
+		t.Fatalf("handoff fabricated main branch:\n%s", result.Handoff)
+	}
+}
+
+func TestBuildAgentPromptFallbackMarksUnknownDefaultBranchUnresolved(t *testing.T) {
+	withPromptGitHubAPI(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	input := agentPromptInput()
+	input.SourceRepo.Branch = ""
+	input.SourceRevision = ""
+	_, result, err := buildAgentPrompt(context.Background(), Options{}, scaffoldData{Name: "Project"}, input, &fakePromptAuthor{}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Handoff, `"source_ref": ""`) || !strings.Contains(result.Handoff, `"source_ref_kind": "unresolved"`) {
+		t.Fatalf("handoff:\n%s", result.Handoff)
+	}
+}
+
+func TestHandoffModeResolvesCompleteFlagSourceToCommit(t *testing.T) {
+	withPromptGitHubAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/example/project":
+			_, _ = w.Write([]byte(`{"default_branch":"trunk"}`))
+		case "/repos/example/project/commits/trunk":
+			_, _ = w.Write([]byte(promptSourceTestSHA))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	input := agentPromptInput()
+	input.SourceRepo.Branch = ""
+	input.SourceRevision = ""
+	opts := Options{PromptMode: promptModeHandoff}
+	_, result, err := (defaultPromptBuilder{}).Build(context.Background(), opts, scaffoldData{Name: "Project"}, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Handoff, `"source_ref": "`+promptSourceTestSHA+`"`) || !strings.Contains(result.Handoff, `"source_ref_kind": "commit"`) {
+		t.Fatalf("handoff:\n%s", result.Handoff)
 	}
 }
 

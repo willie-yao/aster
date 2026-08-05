@@ -105,6 +105,41 @@ func TestInspectFileDestinationWarnsAboutStaleDeploymentFiles(t *testing.T) {
 	}
 }
 
+func TestInspectFileDestinationWarnsAboutStaleHandoffFiles(t *testing.T) {
+	dir := t.TempDir()
+	staleContents := map[string]string{
+		"PROMPT_HANDOFF.md": "old handoff",
+		".opencode/skills/system-prompt-generation/SKILL.md": "old skill",
+	}
+	for rel, content := range staleContents {
+		filename := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(filename), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filename, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	planned := map[string]string{"project.yaml": "new", "prompts/system.md": "prompt"}
+	_, staleFiles, err := inspectFileDestination(dir, planned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"PROMPT_HANDOFF.md", ".opencode/skills/system-prompt-generation/SKILL.md"}
+	if !reflect.DeepEqual(staleFiles, want) {
+		t.Fatalf("stale files = %v, want %v", staleFiles, want)
+	}
+	if err := writeFiles(dir, planned, true, nil); err != nil {
+		t.Fatal(err)
+	}
+	for rel, want := range staleContents {
+		content, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
+		if err != nil || string(content) != want {
+			t.Fatalf("stale %s changed: %q %v", rel, content, err)
+		}
+	}
+}
+
 func TestInspectFileDestinationRejectsPartialPathConflict(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, ".github"), []byte("not a directory"), 0o644); err != nil {

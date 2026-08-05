@@ -172,7 +172,8 @@ Local onboarding refuses to replace generated files unless `--update-existing`
 is explicit. Interactive onboarding instead offers another directory, updating
 only the listed scaffold files, or cancellation. The safe default is another
 directory. Before confirmation, review every file marked `create` or `replace`.
-Unrelated files and stale files from another deployment mode are left untouched.
+Unrelated files and stale generated files from another deployment or prompt mode
+are left untouched.
 Open-PR mode continues to use a GitHub diff and does not use local update mode.
 
 Use `--prompt-debug` for sanitized diagnostics on stderr. Debug output contains
@@ -241,4 +242,6 @@ the user's existing OpenCode configuration. Handoff mode writes
 `PROMPT_HANDOFF.md` and `.opencode/skills/system-prompt-generation/SKILL.md`
 without running an agent. `--no-prompt` is equivalent to
 `--prompt-mode=todo-template` and cannot be combined with another explicit
-prompt mode.
+prompt mode. The handoff records a pinned commit when GitHub resolution
+succeeds. If source resolution is unavailable, it preserves the known default
+branch or marks the ref unresolved instead of guessing one.

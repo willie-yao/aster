@@ -13,7 +13,7 @@ cases below.
 | `AI_TOKEN is required because it authenticates experimental API prompt drafting` | Strict prompt drafting was selected without an environment token. | Export `AI_TOKEN`; do not pass it as a flag or endpoint query parameter. |
 | Prompt drafting falls back with a safe warning | Source retrieval, structured extraction, grounding, merging, or final validation failed. | Use the reported stage and action. Add `--prompt-debug` for sanitized stderr metadata without source or provider bodies. |
 | Local onboarding refuses existing scaffold files | A planned generated file already exists and update mode was not selected. | Choose another dashboard consumer directory or rerun with `--update-existing` after reviewing every replacement. |
-| Onboarding warns about stale deployment files | Files from the unselected Pages or Kubernetes mode exist in the destination. | Review them manually. Onboarding leaves them untouched and never deletes them automatically. |
+| Onboarding warns about stale generated files | Files from an unselected deployment or prompt mode exist in the destination. | Review them manually. Onboarding leaves them untouched and never deletes them automatically. |
 | `AI endpoint rejected tools` | The endpoint or model does not support OpenAI-style function calling. | Enable the provider's tool-call parser or choose a tool-capable model. |
 | Zero jobs in `dashboard.json` | Discovery found no matches, or every discovered job failed while loading build data. | Check fetcher storage and artifact errors first, then validate the discovery selector. |
 | Pages workflow cannot find `project.yaml` | `project_dir` does not match the consumer layout. | Use `.` for the repository root or the exact subdirectory in the deploy workflow. |

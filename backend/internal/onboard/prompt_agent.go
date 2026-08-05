@@ -49,9 +49,9 @@ func buildPromptHandoff(input promptDraftInput, sourceRef, sourceRefKind string)
 		indented + "\n", nil
 }
 
-func resolveAgentSourceRevision(ctx context.Context, input promptDraftInput, token string) (string, error) {
+func resolveAgentSourceRevision(ctx context.Context, input promptDraftInput, token string) (string, string, error) {
 	if revision := strings.TrimSpace(input.SourceRevision); revision != "" {
-		return revision, nil
+		return strings.TrimSpace(input.SourceRepo.Branch), revision, nil
 	}
 	client := &http.Client{Timeout: 30 * time.Second}
 	branch := strings.TrimSpace(input.SourceRepo.Branch)
@@ -59,10 +59,11 @@ func resolveAgentSourceRevision(ctx context.Context, input promptDraftInput, tok
 		var err error
 		branch, err = defaultBranch(ctx, client, input.SourceRepo.Owner, input.SourceRepo.Name, token)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 	}
-	return resolvePromptSourceRevision(ctx, client, input.SourceRepo.Owner, input.SourceRepo.Name, branch, token)
+	revision, err := resolvePromptSourceRevision(ctx, client, input.SourceRepo.Owner, input.SourceRepo.Name, branch, token)
+	return branch, revision, err
 }
 
 func buildAgentPrompt(ctx context.Context, opts Options, data scaffoldData, input promptDraftInput, author promptauthor.Runtime, errOut io.Writer) (string, promptPreparationResult, error) {
@@ -70,18 +71,18 @@ func buildAgentPrompt(ctx context.Context, opts Options, data scaffoldData, inpu
 	ctx, cancel := context.WithTimeout(ctx, effectivePromptDraftTimeout(opts))
 	defer cancel()
 
-	branch := strings.TrimSpace(input.SourceRepo.Branch)
-	if branch == "" {
-		branch = "main"
-	}
-	revision, err := resolveAgentSourceRevision(ctx, input, opts.GitHubToken)
+	branch, revision, err := resolveAgentSourceRevision(ctx, input, opts.GitHubToken)
 	if err != nil {
 		if parentCtx.Err() != nil {
 			return "", promptPreparationResult{}, parentCtx.Err()
 		}
 		failure := sourcePromptFailure(promptStageSourceRevision, err)
 		writePromptFailure(errOut, "OpenCode prompt authoring failed", failure, "agent handoff bundle with TODO template")
-		handoff, handoffErr := buildPromptHandoff(input, branch, "default-branch")
+		refKind := "default-branch"
+		if branch == "" {
+			refKind = "unresolved"
+		}
+		handoff, handoffErr := buildPromptHandoff(input, branch, refKind)
 		if handoffErr != nil {
 			return "", promptPreparationResult{}, handoffErr
 		}

@@ -157,6 +157,8 @@ uses the selected provider credential from the user's existing OpenCode
 configuration and accepts only one validated `prompts/system.md` change. Handoff
 mode writes the TODO template plus `PROMPT_HANDOFF.md` and the bundled
 `.opencode/skills/system-prompt-generation/SKILL.md` without running an agent.
+The handoff pins a commit when possible and otherwise records a known default
+branch or an unresolved ref without inventing a branch name.
 
 Provider presets can seed the API mode and endpoint for GitHub Copilot Responses,
 GitHub Copilot Chat Completions, OpenAI, NVIDIA, or a custom OpenAI-compatible
@@ -291,7 +293,7 @@ refuses any replacement. Interactive onboarding offers:
 
 Choosing another directory is the default. Update mode replaces only files in
 the validated plan. It preserves unrelated files, never deletes the destination,
-and never removes stale files from the other deployment mode. Existing stale
+and never removes stale files from another deployment or prompt mode. Existing stale
 Pages or Kubernetes deployment files are reported and left untouched. Partial
 path conflicts, symbolic links in generated paths, and unsafe plan paths are
 rejected.
