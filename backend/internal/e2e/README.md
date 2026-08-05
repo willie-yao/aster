@@ -55,6 +55,27 @@ Options:
   floors so a stronger model can be benchmarked fairly, since the weak-model
   floors distort a strong model that answers concisely. Example for a strong
   hosted model: `BENCH_MIN_TOOL_CALLS=3 BENCH_MIN_GCS_BYTES=0`.
+- The harness derives and enforces the maximum provider requests admitted by the
+  exact agentic configuration. The cap includes the configured loop, the single
+  byte-floor extension, forced finalization, one bounded critique repair, and
+  semantic review. The private JSONL row records it as `provider_request_cap`.
+
+For the Claude hard-policy production-readiness matrix, the fixed configuration
+uses `max_iters: 11`, a non-zero byte floor, one critique retry, and semantic
+review. Its exact maximum is:
+
+```text
+11 configured iterations + 1 byte-floor extension = 12 main-loop requests
++ 1 forced finalization
++ 1 optional critique Tool turn + 1 critique finalization
++ 1 semantic judge + 1 semantic refinalization
+= 17 provider requests per operation
+
+2 compatibility requests + 4 x 17 = 70 total Claude requests
+```
+
+The selected operation cap is 17. A larger value would hide an unbounded or
+unexpected runtime path rather than provide legitimate headroom.
 
 ## Telemetry
 
@@ -63,7 +84,7 @@ usage counters. The output includes evidence-plan coverage, GCS-floor bypass,
 critique status and version, a short skill-set hash prefix, budget exhaustion,
 semantic-judge flags, context truncations, model and Tool failures, model
 requests, and provider-reported input and output tokens. Private JSONL output
-also records GCS bytes, floor markers, sorted safe Tool counts, floor-nudge
+also records the derived provider-request cap, GCS bytes, floor markers, sorted safe Tool counts, floor-nudge
 reasons, the hashed cache generation, zero-request cache reload results, and
 content-free draft metadata. Draft metadata contains stable critique rule IDs,
 matched skill IDs, applicable missing or unavailable evidence-group IDs, and the

@@ -607,6 +607,11 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 	snapshot := traceStore.Snapshot()
 	toolUsage := successfulBenchmarkToolUsage(snapshot)
 	traceSummary := summarizeBenchmarkTrace(snapshot)
+	requestCap := deriveBenchmarkRequestCap(agentic, true)
+	t.Logf("provider request cap: configured_iterations=%d byte_floor_extensions=%d main_loop=%d forced_finalizations=%d critique_tool_turns=%d critique_finalizations=%d semantic_judges=%d semantic_finalizations=%d per_operation=%d",
+		requestCap.ConfiguredIterations, requestCap.ByteFloorExtensions, requestCap.MainLoopRequests, requestCap.ForcedFinalizationRequests,
+		requestCap.CritiqueToolRequests, requestCap.CritiqueFinalizationRequests, requestCap.SemanticJudgeRequests,
+		requestCap.SemanticFinalizationRequests, requestCap.PerOperation)
 	if benchmarkPersistentCacheEnabled() {
 		if err := client.Cache().Save(); err != nil {
 			t.Fatalf("save benchmark cache: %v", err)
@@ -617,7 +622,10 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 		cacheVerification = verifyBenchmarkCacheReuse(t, client, clientOptions, service, cacheGeneration, jobID, bc, run, tc.AIAnalysis)
 	}
 	critiquePolicy := ai.CritiqueCachePolicy(agentic.Critique.EffectiveCachePolicy())
-	writeBenchmarkJSONL(t, resultsPath, bc, repetition, tc, elapsed, snapshot, draftObservations, selectedAttempt, toolUsage, traceSummary, cacheGeneration, critiquePolicy, cacheVerification)
+	writeBenchmarkJSONL(t, resultsPath, bc, repetition, tc, elapsed, snapshot, draftObservations, selectedAttempt, toolUsage, traceSummary, requestCap.PerOperation, cacheGeneration, critiquePolicy, cacheVerification)
+	if traceSummary.modelRequests > requestCap.PerOperation {
+		t.Fatalf("provider request cap exceeded: requests=%d cap=%d", traceSummary.modelRequests, requestCap.PerOperation)
+	}
 	scoreBenchCase(t, bc, tc, elapsed, "in-process", benchmarkMinGCSBytes(bc, agentic.MinGCSBytes), toolUsage, traceSummary, draftObservations, selectedAttempt)
 }
 

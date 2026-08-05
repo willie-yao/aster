@@ -225,6 +225,7 @@ type benchmarkJSONLResult struct {
 	BudgetExhausted         bool                       `json:"budget_exhausted,omitempty"`
 	FloorNudges             int                        `json:"floor_nudges,omitempty"`
 	FloorNudgeReasons       []string                   `json:"floor_nudge_reasons,omitempty"`
+	ProviderRequestCap      int                        `json:"provider_request_cap"`
 	CacheGeneration         string                     `json:"cache_generation,omitempty"`
 	CacheVerification       benchmarkCacheVerification `json:"cache_verification"`
 	Trace                   benchmarkJSONLTrace        `json:"trace"`
@@ -297,7 +298,7 @@ type benchmarkJSONLTrace struct {
 	Critique          map[string]int `json:"critique"`
 }
 
-func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int, tc *models.TestCase, elapsed time.Duration, snapshot ai.AnalysisTraceFile, observations []benchmarkDraftObservation, selectedAttempt int, toolUsage benchmarkToolUsage, traceSummary benchmarkTraceSummary, cacheGeneration string, critiquePolicy ai.CritiqueCachePolicy, cacheVerification benchmarkCacheVerification) {
+func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int, tc *models.TestCase, elapsed time.Duration, snapshot ai.AnalysisTraceFile, observations []benchmarkDraftObservation, selectedAttempt int, toolUsage benchmarkToolUsage, traceSummary benchmarkTraceSummary, providerRequestCap int, cacheGeneration string, critiquePolicy ai.CritiqueCachePolicy, cacheVerification benchmarkCacheVerification) {
 	t.Helper()
 	if path == "" {
 		return
@@ -315,7 +316,7 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 		FileLinks: map[string]string{}, SignalTotal: len(bc.signals), SelectedAttempt: selectedAttempt,
 		ToolNames: append([]string(nil), toolUsage.names...), ToolCounts: append([]string(nil), toolUsage.counts...),
 		FloorNudges: traceSummary.floorNudges, FloorNudgeReasons: append([]string(nil), traceSummary.floorNudgeReasons...),
-		CacheGeneration: cacheGeneration, CacheVerification: cacheVerification,
+		ProviderRequestCap: providerRequestCap, CacheGeneration: cacheGeneration, CacheVerification: cacheVerification,
 		CritiqueCachePolicy:     string(critiquePolicy),
 		Trace:                   benchmarkJSONLTrace{Finalize: map[string]int{}, FinalizeRecovery: map[string]int{}, Critique: map[string]int{}},
 		HumanScoreRubricVersion: benchmarkHumanScoreRubricVersion, HumanScoreMax: benchmarkHumanScoreMax,
@@ -526,7 +527,7 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 	}}}
 	writeBenchmarkJSONL(t, path, bc, 2, tc, 3*time.Second, snapshot, observations, 1,
 		benchmarkToolUsage{names: []string{"read_artifact"}, counts: []string{"read_artifact=1"}},
-		benchmarkTraceSummary{floorNudges: 1, floorNudgeReasons: []string{"gcs_bytes"}}, "generation", ai.CritiqueCachePolicyHard, cacheVerification)
+		benchmarkTraceSummary{floorNudges: 1, floorNudgeReasons: []string{"gcs_bytes"}}, 17, "generation", ai.CritiqueCachePolicyHard, cacheVerification)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -544,7 +545,7 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 		result.FloorNudges != 1 || !slices.Equal(result.FloorNudgeReasons, []string{"gcs_bytes"}) ||
 		!slices.Equal(result.ToolNames, []string{"read_artifact"}) || !slices.Equal(result.ToolCounts, []string{"read_artifact=1"}) ||
 		!result.CacheVerification.LookupAccepted || !result.CacheVerification.LookupHit || result.CacheGeneration != "generation" ||
-		result.CritiqueCachePolicy != string(ai.CritiqueCachePolicyHard) ||
+		result.ProviderRequestCap != 17 || result.CritiqueCachePolicy != string(ai.CritiqueCachePolicyHard) ||
 		result.HumanScoreRubricVersion != 1 || result.HumanScoreMax != 10 || len(result.Drafts) != 1 ||
 		len(result.DraftDecisions) != 1 || result.DraftDecisions[0].ReplacementReason != "candidate_published_dominates" ||
 		!slices.Equal(result.HumanScoreDimensions, benchmarkHumanScoreDimensions) ||
