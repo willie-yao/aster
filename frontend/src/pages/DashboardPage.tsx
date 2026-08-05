@@ -22,6 +22,7 @@ import {
 } from "../lib/dashboardOverview";
 import { LoadingState } from "../components/LoadingState";
 import { ErrorState } from "../components/ErrorState";
+import { overviewLayout, overviewTypography } from "../theme/overview";
 
 function EmptyDashboardState({ generatedAt }: { generatedAt: string }) {
   return (
@@ -131,7 +132,7 @@ export function DashboardPage() {
   const jobsByID = Object.fromEntries(data.jobs.map((job) => [job.job_id, job]));
 
   return (
-    <Box sx={{ display: "flex", flexDirection: "column", gap: { xs: 3, sm: 3.5 } }}>
+    <Box sx={{ display: "flex", flexDirection: "column", gap: { xs: 3, sm: overviewLayout.majorSectionGap } }}>
       <Box
         sx={{
           display: "grid",
@@ -141,14 +142,14 @@ export function DashboardPage() {
         }}
       >
         <Box>
-          <Typography variant="label" component="p" color="text.secondary">
+          <Typography variant="label" component="p" color="text.secondary" sx={overviewTypography.eyebrow}>
             CAPZ incident briefing
           </Typography>
-          <Typography variant="h4" component="h1" sx={{ mt: 0.5 }}>
+          <Typography variant="h4" component="h1" sx={{ mt: 0.5, ...overviewTypography.pageHeadline }}>
             {overviewHeadline(failingJobs, recurringPatterns)}
           </Typography>
         </Box>
-        <Typography variant="data" color="text.secondary" sx={{ justifySelf: { sm: "end" } }}>
+        <Typography variant="data" color="text.secondary" sx={{ justifySelf: { sm: "end" }, ...overviewTypography.data }}>
           Updated {timeAgo(data.generated_at)}
         </Typography>
       </Box>
@@ -167,9 +168,24 @@ export function DashboardPage() {
       />
 
       <Box component="section" aria-labelledby="job-ledger-heading">
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1.5 }}>
-          <Box sx={{ width: 2, height: 18, bgcolor: "primary.main", flexShrink: 0 }} />
-          <Typography id="job-ledger-heading" variant="headline" component="h2">
+        <Box
+          sx={{
+            minHeight: overviewLayout.majorBandMinHeight,
+            display: "flex",
+            alignItems: "center",
+            px: 1.5,
+            bgcolor: "surface.containerHigh",
+            borderBlock: "1px solid",
+            borderColor: "divider",
+            boxShadow: "inset 3px 0 0 var(--mui-palette-primary-main)",
+          }}
+        >
+          <Typography
+            id="job-ledger-heading"
+            variant="headline"
+            component="h2"
+            sx={overviewTypography.majorHeading}
+          >
             Job ledger
           </Typography>
         </Box>

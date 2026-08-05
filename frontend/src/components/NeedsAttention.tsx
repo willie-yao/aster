@@ -15,6 +15,7 @@ import { shortJobName, shortTestName } from "../lib/utils";
 import { statusToMuiColor } from "../theme";
 import type { FlakinessReport, JobSummary, PatternAnalysis, TestFlakiness } from "../types/dashboard";
 import { Sparkline } from "./Sparkline";
+import { overviewLayout, overviewTypography } from "../theme/overview";
 
 const MAX_ITEMS = 10;
 const FEATURED_PATTERNS = 3;
@@ -62,8 +63,9 @@ function DisclosureButton({
         minHeight: 44,
         appearance: "none",
         border: 0,
-        borderTop: "1px solid",
+        borderBlock: "1px solid",
         borderColor: "divider",
+        bgcolor: "surface.containerHigh",
         m: 0,
         px: 1,
         py: 0.75,
@@ -84,7 +86,12 @@ function DisclosureButton({
         },
       }}
     >
-      <Typography variant="label" component="span" color="text.secondary">
+      <Typography
+        variant="label"
+        component="span"
+        color="text.secondary"
+        sx={overviewTypography.subsectionHeading}
+      >
         {label} ({count})
       </Typography>
       <ExpandMore
@@ -163,9 +170,7 @@ function FeaturedPatternRow({
             display: "flex",
             alignItems: "center",
             color: "text.primary",
-            fontFamily: "monospace",
-            fontSize: "0.75rem",
-            fontWeight: 600,
+            ...overviewTypography.jobIdentifier,
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
@@ -176,7 +181,7 @@ function FeaturedPatternRow({
         >
           {shortJobName(pattern.subject, prefix)}
         </Link>
-        <Typography variant="caption" color="text.secondary">
+        <Typography variant="caption" color="text.secondary" sx={overviewTypography.description}>
           {job?.category || "Recurring pattern"} · {job?.branch || "branch unavailable"}
         </Typography>
       </Box>
@@ -186,15 +191,17 @@ function FeaturedPatternRow({
         sx={{
           gridArea: "summary",
           minWidth: 0,
-          fontSize: lead ? "1rem" : "0.8125rem",
+          ...overviewTypography.primaryBody,
           fontWeight: lead ? 650 : 400,
-          lineHeight: lead ? 1.45 : 1.4,
           display: "-webkit-box",
           WebkitBoxOrient: "vertical",
           WebkitLineClamp: compactOnMobile ? 1 : 4,
           overflow: "hidden",
+          ...(lead && {
+            "@media (max-width: 599.95px)": overviewTypography.mobileFeaturedBody,
+          }),
           [attentionDesktopBreakpoint]: {
-            fontSize: lead ? "1.0625rem" : "0.8125rem",
+            ...overviewTypography.primaryBody,
             WebkitLineClamp: compactOnMobile ? 2 : 3,
           },
         }}
@@ -203,13 +210,16 @@ function FeaturedPatternRow({
       </Typography>
 
       <Box sx={{ gridArea: "evidence", minWidth: 0, [attentionDesktopBreakpoint]: { justifySelf: "end", textAlign: "right" } }}>
-        <Typography variant="caption" sx={{ color: color === "default" ? "text.secondary" : `${color}.main`, fontWeight: 700 }}>
+        <Typography
+          variant="caption"
+          sx={{ color: color === "default" ? "text.secondary" : `${color}.main`, fontWeight: 700, ...overviewTypography.secondaryBody }}
+        >
           {status}
         </Typography>
-        <Typography variant="data" color="text.secondary" sx={{ display: "block", mt: 0.25 }}>
+        <Typography variant="data" color="text.secondary" sx={{ display: "block", mt: 0.25, ...overviewTypography.data }}>
           {countLabel(pattern.builds_analyzed, "build")}
         </Typography>
-        <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.25 }}>
+        <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.25, ...overviewTypography.description }}>
           {signal}
         </Typography>
         {job && (
@@ -287,9 +297,7 @@ function AttentionRow({
           textOverflow: "ellipsis",
           whiteSpace: "nowrap",
           color: "text.primary",
-          fontFamily: "monospace",
-          fontSize: "0.75rem",
-          fontWeight: 600,
+          ...overviewTypography.jobIdentifier,
           "&:hover": { color: "primary.main", textDecoration: "underline" },
           "&:focus-visible": { outline: "2px solid", outlineColor: "primary.main", outlineOffset: 1 },
         }}
@@ -297,25 +305,34 @@ function AttentionRow({
         {subject}
       </Link>
       <Box sx={{ gridArea: "summary", minWidth: 0 }}>
-        <Typography variant="body2" title={summary} sx={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        <Typography
+          variant="body2"
+          title={summary}
+          sx={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", ...overviewTypography.secondaryBody }}
+        >
           {summary}
         </Typography>
         {detail && (
-          <Typography variant="caption" color="text.secondary" title={detail} sx={{ display: "block", mt: 0.25, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            title={detail}
+            sx={{ display: "block", mt: 0.25, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", ...overviewTypography.description }}
+          >
             {detail}
           </Typography>
         )}
       </Box>
-      <Typography variant="data" color="text.secondary" sx={{ gridArea: "count", display: "none", whiteSpace: "nowrap", [attentionDesktopBreakpoint]: { display: "block" } }}>
+      <Typography variant="data" color="text.secondary" sx={{ gridArea: "count", display: "none", whiteSpace: "nowrap", ...overviewTypography.data, [attentionDesktopBreakpoint]: { display: "block" } }}>
         {count}
       </Typography>
-      <Typography variant="caption" color={statusColor ? `${statusColor}.main` : "text.secondary"} sx={{ gridArea: "signal", display: "none", textAlign: "right", whiteSpace: "nowrap", [attentionDesktopBreakpoint]: { display: "block" } }}>
+      <Typography variant="caption" color={statusColor ? `${statusColor}.main` : "text.secondary"} sx={{ gridArea: "signal", display: "none", textAlign: "right", whiteSpace: "nowrap", ...overviewTypography.description, [attentionDesktopBreakpoint]: { display: "block" } }}>
         {signal}
       </Typography>
       {(count || signal) && (
         <Box sx={{ gridArea: "meta", display: "flex", alignItems: "center", gap: 1.5, flexWrap: "wrap", [attentionDesktopBreakpoint]: { display: "none" } }}>
-          {count && <Typography variant="data" color="text.secondary">{count}</Typography>}
-          {signal && <Typography variant="caption" color={statusColor ? `${statusColor}.main` : "text.secondary"}>{signal}</Typography>}
+          {count && <Typography variant="data" color="text.secondary" sx={overviewTypography.data}>{count}</Typography>}
+          {signal && <Typography variant="caption" color={statusColor ? `${statusColor}.main` : "text.secondary"} sx={overviewTypography.description}>{signal}</Typography>}
         </Box>
       )}
     </Box>
@@ -375,8 +392,8 @@ export function NeedsAttention({ report, loading, error, jobsByID }: NeedsAttent
     return (
       <Box sx={{ borderBlock: "1px solid", borderColor: "divider", py: 5, textAlign: "center" }}>
         <CheckCircleOutlined sx={{ fontSize: 28, color: "success.main" }} />
-        <Typography variant="headline" component="h2" sx={{ mt: 1 }}>All clear</Typography>
-        <Typography variant="body2" color="text.secondary">No tests currently need attention.</Typography>
+        <Typography variant="headline" component="h2" sx={{ mt: 1, ...overviewTypography.majorHeading }}>All clear</Typography>
+        <Typography variant="body2" color="text.secondary" sx={overviewTypography.primaryBody}>No tests currently need attention.</Typography>
       </Box>
     );
   }
@@ -387,10 +404,30 @@ export function NeedsAttention({ report, loading, error, jobsByID }: NeedsAttent
 
   return (
     <Box component="section" aria-labelledby="needs-attention-heading" sx={{ borderBlock: "1px solid", borderColor: "divider" }}>
-      <Box sx={{ minHeight: 52, display: "flex", alignItems: "center", gap: 1, px: 1, py: 1 }}>
+      <Box
+        sx={{
+          minHeight: overviewLayout.majorBandMinHeight,
+          display: "flex",
+          alignItems: "center",
+          gap: 1,
+          px: 1.5,
+          py: 1,
+          bgcolor: "surface.containerHigh",
+          boxShadow: "inset 3px 0 0 var(--mui-palette-primary-main)",
+        }}
+      >
         <ReportProblem color="warning" sx={{ fontSize: 20 }} />
-        <Typography id="needs-attention-heading" variant="headline" component="h2">Needs attention</Typography>
-        <Typography variant="data" color="text.secondary" sx={{ ml: "auto" }}>{totalItems} active items</Typography>
+        <Typography
+          id="needs-attention-heading"
+          variant="headline"
+          component="h2"
+          sx={overviewTypography.majorHeading}
+        >
+          Needs attention
+        </Typography>
+        <Typography variant="data" color="text.secondary" sx={{ ml: "auto", ...overviewTypography.data }}>
+          {totalItems} active items
+        </Typography>
       </Box>
 
       {featured.map((pattern, index) => {
@@ -444,9 +481,31 @@ export function NeedsAttention({ report, loading, error, jobsByID }: NeedsAttent
         const controls = `attention-group-${group.label.toLowerCase().replace(/\s+/g, "-")}`;
         return (
           <Box key={group.label} component="section" aria-label={group.label} sx={{ mt: 1 }}>
-            <Box sx={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 1, px: 1, py: 1 }}>
-              <Typography variant="label" component="h3" color="text.secondary">{group.label}</Typography>
-              <Typography variant="data" color="text.secondary">{group.items.length}</Typography>
+            <Box
+              sx={{
+                minHeight: overviewLayout.subsectionBandMinHeight,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 1,
+                px: 1.25,
+                py: 0.75,
+                bgcolor: "surface.containerHigh",
+                borderBlock: "1px solid",
+                borderColor: "divider",
+              }}
+            >
+              <Typography
+                variant="label"
+                component="h3"
+                color="text.secondary"
+                sx={overviewTypography.subsectionHeading}
+              >
+                {group.label}
+              </Typography>
+              <Typography variant="data" color="text.secondary" sx={overviewTypography.data}>
+                {group.items.length}
+              </Typography>
             </Box>
             <Box id={controls}>
               {visibleItems.map((item) => {

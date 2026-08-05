@@ -7,6 +7,7 @@ import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
 import Typography from "@mui/material/Typography";
 import { soft } from "../theme";
 import type { OverviewStatusFilter } from "../lib/dashboardOverview";
+import { overviewTypography } from "../theme/overview";
 
 const statusFilters: { label: string; value: OverviewStatusFilter }[] = [
   { label: "All", value: "ALL" },
@@ -66,6 +67,7 @@ export function OverviewFilters({
             borderRadius: "4px !important",
             color: "text.secondary",
             textTransform: "none",
+            ...overviewTypography.tableHeading,
             "&:not(:first-of-type)": { ml: "-1px" },
             "&:hover": { bgcolor: "surface.containerHigh", color: "text.primary" },
             "&.Mui-selected": {
@@ -100,14 +102,13 @@ export function OverviewFilters({
           sx={{
             height: 44,
             borderRadius: "4px",
-            fontFamily: "monospace",
-            fontSize: "0.75rem",
+            ...overviewTypography.data,
             bgcolor: "surface.container",
           }}
         >
           <MenuItem value="ALL">All branches</MenuItem>
           {branches.map((branch) => (
-            <MenuItem key={branch} value={branch} sx={{ fontFamily: "monospace", fontSize: "0.8125rem" }}>
+            <MenuItem key={branch} value={branch} sx={overviewTypography.data}>
               {branch}
             </MenuItem>
           ))}
@@ -117,7 +118,7 @@ export function OverviewFilters({
       <Typography
         variant="data"
         color="text.secondary"
-        sx={{ justifySelf: { xs: "start", sm: "end" } }}
+        sx={{ justifySelf: { xs: "start", sm: "end" }, ...overviewTypography.data }}
       >
         {matchingJobs} {matchingJobs === 1 ? "job" : "jobs"}
       </Typography>

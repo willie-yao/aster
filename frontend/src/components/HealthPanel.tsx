@@ -5,6 +5,7 @@ import Typography from "@mui/material/Typography";
 import { soft, type SoftColor } from "../theme";
 import { countLabel } from "../lib/dashboardOverview";
 import type { JobSummary } from "../types/dashboard";
+import { overviewTypography } from "../theme/overview";
 
 interface HealthPanelProps {
   jobs: JobSummary[];
@@ -54,7 +55,7 @@ export function HealthPanel({ jobs, onFilterClick, activeFilter }: HealthPanelPr
       <Box
         sx={{
           gridColumn: { xs: "1 / -1", md: "auto" },
-          minHeight: 68,
+          minHeight: 70,
           display: "flex",
           flexDirection: "column",
           justifyContent: "center",
@@ -63,10 +64,16 @@ export function HealthPanel({ jobs, onFilterClick, activeFilter }: HealthPanelPr
           borderColor: "divider",
         }}
       >
-        <Typography id="job-health-heading" variant="label" component="h2" color="text.secondary">
+        <Typography
+          id="job-health-heading"
+          variant="label"
+          component="h2"
+          color="text.secondary"
+          sx={overviewTypography.subsectionHeading}
+        >
           Job health
         </Typography>
-        <Typography variant="stat" component="span" sx={{ mt: 0.25, fontSize: "1.25rem" }}>
+        <Typography variant="stat" component="span" sx={{ mt: 0.25, fontSize: "1.3125rem", lineHeight: "1.75rem" }}>
           {countLabel(total, "job")}
         </Typography>
       </Box>
@@ -84,7 +91,7 @@ export function HealthPanel({ jobs, onFilterClick, activeFilter }: HealthPanelPr
             sx={{
               position: "relative",
               minWidth: 0,
-              minHeight: 68,
+              minHeight: 70,
               display: "grid",
               gridTemplateColumns: "auto minmax(0, 1fr) auto",
               alignItems: "center",
@@ -110,12 +117,12 @@ export function HealthPanel({ jobs, onFilterClick, activeFilter }: HealthPanelPr
             <Box aria-hidden="true" sx={{ width: 8, height: 8, borderRadius: "2px", bgcolor: `${row.color}.main` }} />
             <Box sx={{ minWidth: 0 }}>
               <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
-                <Typography variant="body2" component="span" sx={{ fontWeight: 600 }}>
+                <Typography variant="body2" component="span" sx={{ fontWeight: 600, ...overviewTypography.primaryBody }}>
                   {row.label}
                 </Typography>
                 {active && <Check aria-hidden="true" sx={{ fontSize: 15, color: "primary.main" }} />}
               </Box>
-              <Typography variant="data" component="span" color="text.secondary">
+              <Typography variant="data" component="span" color="text.secondary" sx={overviewTypography.data}>
                 {percentage}%
               </Typography>
             </Box>

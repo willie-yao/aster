@@ -92,7 +92,7 @@ test("job health ledger keeps job and run links separate", () => {
   const html = render(createElement(JobHealthTable, { sections: [{ id: "capz-e2e", label: "CAPZ E2E", jobs: [job()] }] }));
 
   assert.match(html, /role="table"/);
-  assert.match(html, /CAPZ E2E/);
+  assert.match(html, /<h3[^>]*>CAPZ E2E<\/h3>/);
   assert.match(html, /href="\/job\/capz-periodic-e2e-main"/);
   assert.match(html, /href="\/job\/capz-periodic-e2e-main\?run=123"/);
   assert.match(html, />Passing</);
@@ -124,6 +124,7 @@ test("overview source uses ledger rows without nested panel scrolling", () => {
   const ledger = readFileSync(resolve(process.cwd(), "src/components/JobHealthTable.tsx"), "utf8");
   const search = readFileSync(resolve(process.cwd(), "src/components/SearchBar.tsx"), "utf8");
   const sparkline = readFileSync(resolve(process.cwd(), "src/components/Sparkline.tsx"), "utf8");
+  const overviewTheme = readFileSync(resolve(process.cwd(), "src/theme/overview.ts"), "utf8");
 
   assert.match(dashboard, /<JobHealthTable sections=/);
   assert.doesNotMatch(dashboard, /JobCard/);
@@ -142,4 +143,8 @@ test("overview source uses ledger rows without nested panel scrolling", () => {
   assert.match(sparkline, /width: 44[\s\S]*height: 44/);
   assert.match(ledger, /@media \(min-width: 1024px\)/);
   assert.match(ledger, /JobHealthSection/);
+  assert.match(overviewTheme, /pageHeadline/);
+  assert.match(overviewTheme, /mobileFeaturedBody/);
+  assert.match(overviewTheme, /subsectionHeading/);
+  assert.doesNotMatch(ledger, /position:\s*"sticky"/);
 });
