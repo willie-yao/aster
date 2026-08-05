@@ -24,6 +24,8 @@ test("operator console palette uses graphite surfaces and Azure blue", () => {
   assert.equal(darkTokens.surfaceContainer, "#161b22");
   assert.equal(darkTokens.outlineVariant, "#30363d");
   assert.equal(darkTokens.primary, "#2f81f7");
+  assert.equal(darkTokens.onPrimary, "#0d1117");
+  assert.equal(darkTokens.onSecondary, "#0d1117");
   assert.equal(lightTokens.background, "#f6f8fa");
   assert.equal(lightTokens.surfaceContainer, "#ffffff");
   assert.equal(lightTokens.outlineVariant, "#d0d7de");

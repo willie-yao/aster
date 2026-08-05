@@ -7,7 +7,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { createServer } from "vite";
-import { orderedDashboardBranches } from "../src/lib/dashboardOverview.js";
+import { attentionSignal, countLabel, orderedDashboardBranches, overviewHeadline } from "../src/lib/dashboardOverview.js";
 import type { JobSummary } from "../src/types/dashboard.js";
 
 const vite = await createServer({
@@ -25,7 +25,7 @@ const { HealthPanel } = (await vite.ssrLoadModule("/src/components/HealthPanel.t
   }) => ReturnType<typeof createElement>;
 };
 const { JobHealthTable } = (await vite.ssrLoadModule("/src/components/JobHealthTable.tsx")) as {
-  JobHealthTable: (props: { jobs: JobSummary[] }) => ReturnType<typeof createElement>;
+  JobHealthTable: (props: { sections: Array<{ id: string; label?: string; jobs: JobSummary[] }> }) => ReturnType<typeof createElement>;
 };
 const { defaultTheme } = (await vite.ssrLoadModule("/src/theme/index.ts")) as {
   defaultTheme: Theme;
@@ -79,22 +79,32 @@ test("health summary exposes counts and pressed filter state", () => {
   ];
   const html = render(createElement(HealthPanel, { jobs, activeFilter: "FLAKY", onFilterClick: () => undefined }));
 
-  assert.match(html, /Health/);
+  assert.match(html, /Job health/);
   assert.match(html, /3 jobs/);
-  assert.match(html, /aria-label="Passing: 1 jobs, 33%"/);
-  assert.match(html, /aria-label="Flaky: 1 jobs, 33%"/);
+  assert.match(html, /aria-label="Passing: 1 job, 33%"/);
+  assert.match(html, /aria-label="Flaky: 1 job, 33%"/);
   assert.match(html, /aria-pressed="true"/);
-  assert.match(html, /aria-label="Failing: 1 jobs, 33%"/);
+  assert.match(html, /aria-label="Failing: 1 job, 33%"/);
+  assert.match(html, /inset 0 -3px 0/);
 });
 
 test("job health ledger keeps job and run links separate", () => {
-  const html = render(createElement(JobHealthTable, { jobs: [job()] }));
+  const html = render(createElement(JobHealthTable, { sections: [{ id: "capz-e2e", label: "CAPZ E2E", jobs: [job()] }] }));
 
   assert.match(html, /role="table"/);
+  assert.match(html, /CAPZ E2E/);
   assert.match(html, /href="\/job\/capz-periodic-e2e-main"/);
   assert.match(html, /href="\/job\/capz-periodic-e2e-main\?run=123"/);
   assert.match(html, />Passing</);
   assert.doesNotMatch(html, /<a\b[^>]*>(?:(?!<\/a>)[\s\S])*<a\b/);
+});
+
+test("overview count labels and headline pluralize published values", () => {
+  assert.equal(countLabel(1, "job"), "1 job");
+  assert.equal(countLabel(2, "job"), "2 jobs");
+  assert.equal(overviewHeadline(2, 5), "2 failing jobs · 5 recurring patterns");
+  assert.equal(attentionSignal("high", false), "high confidence");
+  assert.equal(attentionSignal("medium", true), "medium confidence · Last known good");
 });
 
 test("dashboard branches keep main first and release branches newest first", () => {
@@ -110,11 +120,26 @@ test("dashboard branches keep main first and release branches newest first", () 
 test("overview source uses ledger rows without nested panel scrolling", () => {
   const dashboard = readFileSync(resolve(process.cwd(), "src/pages/DashboardPage.tsx"), "utf8");
   const attention = readFileSync(resolve(process.cwd(), "src/components/NeedsAttention.tsx"), "utf8");
+  const filters = readFileSync(resolve(process.cwd(), "src/components/OverviewFilters.tsx"), "utf8");
+  const ledger = readFileSync(resolve(process.cwd(), "src/components/JobHealthTable.tsx"), "utf8");
+  const search = readFileSync(resolve(process.cwd(), "src/components/SearchBar.tsx"), "utf8");
+  const sparkline = readFileSync(resolve(process.cwd(), "src/components/Sparkline.tsx"), "utf8");
 
-  assert.match(dashboard, /<JobHealthTable jobs=/);
+  assert.match(dashboard, /<JobHealthTable sections=/);
   assert.doesNotMatch(dashboard, /JobCard/);
   assert.doesNotMatch(dashboard, /HealthDonut/);
   assert.doesNotMatch(attention, /overflowY:\s*"auto"/);
   assert.match(attention, /jobPath\(pattern\.job_id/);
   assert.match(attention, /testRunPath\(item\.job_id, item\.test_name, item\.last_failure\.build_id\)/);
+  assert.match(attention, /Additional recurring patterns/);
+  assert.match(attention, /Resolved patterns/);
+  assert.match(dashboard, /overviewHeadline\(failingJobs, recurringPatterns\)/);
+  assert.match(filters, /minHeight: 44/);
+  assert.match(filters, /height: 44/);
+  assert.match(filters, /boxShadow: "inset 0 -3px 0/);
+  assert.match(search, /width: 44[\s\S]*height: 44[\s\S]*p: 0/);
+  assert.match(sparkline, /repeat\(4, 44px\)/);
+  assert.match(sparkline, /width: 44[\s\S]*height: 44/);
+  assert.match(ledger, /@media \(min-width: 1024px\)/);
+  assert.match(ledger, /JobHealthSection/);
 });

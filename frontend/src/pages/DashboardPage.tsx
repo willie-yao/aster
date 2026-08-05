@@ -1,7 +1,7 @@
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import { useMemo, useState } from "react";
-import { useDashboard } from "../hooks/useData";
+import { useDashboard, useFlakinessReport } from "../hooks/useData";
 import { useManifest } from "../hooks/useManifest";
 import {
   timeAgo,
@@ -12,9 +12,14 @@ import {
 import type { JobSummary } from "../types/dashboard";
 import { HealthPanel } from "../components/HealthPanel";
 import { NeedsAttention } from "../components/NeedsAttention";
-import { JobHealthTable } from "../components/JobHealthTable";
+import { JobHealthTable, type JobHealthSection } from "../components/JobHealthTable";
 import { OverviewFilters } from "../components/OverviewFilters";
-import { orderedDashboardBranches, type OverviewStatusFilter } from "../lib/dashboardOverview";
+import {
+  MAX_OVERVIEW_PATTERNS,
+  orderedDashboardBranches,
+  overviewHeadline,
+  type OverviewStatusFilter,
+} from "../lib/dashboardOverview";
 import { LoadingState } from "../components/LoadingState";
 import { ErrorState } from "../components/ErrorState";
 
@@ -71,6 +76,7 @@ function EmptyDashboardState({ generatedAt }: { generatedAt: string }) {
 
 export function DashboardPage() {
   const { data, loading, error } = useDashboard();
+  const attention = useFlakinessReport();
   const manifest = useManifest();
   const categoryLabels = useMemo(
     () => categoryLabelsFromRules(manifest.categories),
@@ -110,66 +116,81 @@ export function DashboardPage() {
     const bi = categoryOrder.indexOf(b);
     return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
   });
+  const sections: JobHealthSection[] = hasCategories
+    ? sortedCategories.map((category) => ({
+        id: category,
+        label: categoryLabels[category] ?? category.charAt(0).toUpperCase() + category.slice(1),
+        jobs: grouped[category],
+      }))
+    : [{ id: "all-jobs", jobs: filtered }];
+  const failingJobs = data.jobs.filter((job) => job.overall_status === "FAILING").length;
+  const recurringPatterns = Math.min(
+    (attention.data?.recurring_patterns ?? []).filter((pattern) => pattern.job_id).length,
+    MAX_OVERVIEW_PATTERNS,
+  );
+  const jobsByID = Object.fromEntries(data.jobs.map((job) => [job.job_id, job]));
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: { xs: 3, sm: 3.5 } }}>
-      <Box>
-        <Typography variant="h4" component="h1">
-          Test Health Overview
-        </Typography>
-        <Typography variant="data" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
+      <Box
+        sx={{
+          display: "grid",
+          gridTemplateColumns: { xs: "1fr", sm: "minmax(0, 1fr) auto" },
+          alignItems: "end",
+          gap: 1,
+        }}
+      >
+        <Box>
+          <Typography variant="label" component="p" color="text.secondary">
+            CAPZ incident briefing
+          </Typography>
+          <Typography variant="h4" component="h1" sx={{ mt: 0.5 }}>
+            {overviewHeadline(failingJobs, recurringPatterns)}
+          </Typography>
+        </Box>
+        <Typography variant="data" color="text.secondary" sx={{ justifySelf: { sm: "end" } }}>
           Updated {timeAgo(data.generated_at)}
         </Typography>
       </Box>
 
-      <Box
-        sx={{
-          display: "grid",
-          gridTemplateColumns: { xs: "1fr", lg: "300px minmax(0, 1fr)" },
-          gap: 2,
-          alignItems: "start",
-        }}
-      >
-        <HealthPanel
-          jobs={data.jobs}
-          onFilterClick={(status) => setStatusFilter(status as OverviewStatusFilter)}
-          activeFilter={statusFilter}
-        />
-        <NeedsAttention />
-      </Box>
-
-      <OverviewFilters
-        statusFilter={statusFilter}
-        branchFilter={branchFilter}
-        branches={branches}
-        matchingJobs={filtered.length}
-        onStatusChange={setStatusFilter}
-        onBranchChange={setBranchFilter}
+      <HealthPanel
+        jobs={data.jobs}
+        onFilterClick={(status) => setStatusFilter(status as OverviewStatusFilter)}
+        activeFilter={statusFilter}
       />
 
-      {filtered.length === 0 ? (
-        <Box sx={{ py: 8, textAlign: "center" }}>
-          <Typography color="text.secondary">No jobs match filters</Typography>
+      <NeedsAttention
+        report={attention.data}
+        loading={attention.loading}
+        error={attention.error}
+        jobsByID={jobsByID}
+      />
+
+      <Box component="section" aria-labelledby="job-ledger-heading">
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1.5 }}>
+          <Box sx={{ width: 2, height: 18, bgcolor: "primary.main", flexShrink: 0 }} />
+          <Typography id="job-ledger-heading" variant="headline" component="h2">
+            Job ledger
+          </Typography>
         </Box>
-      ) : !hasCategories ? (
-        <JobHealthTable jobs={filtered} />
-      ) : (
-        sortedCategories.map((category) => (
-          <Box key={category} component="section">
-            <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1.5 }}>
-              <Box sx={{ width: 2, height: 18, bgcolor: "primary.main", flexShrink: 0 }} />
-              <Typography variant="headline" component="h2">
-                {categoryLabels[category] ??
-                  category.charAt(0).toUpperCase() + category.slice(1)}
-              </Typography>
-              <Typography variant="data" color="text.secondary">
-                {grouped[category].length}
-              </Typography>
-            </Box>
-            <JobHealthTable jobs={grouped[category]} />
+
+        <OverviewFilters
+          statusFilter={statusFilter}
+          branchFilter={branchFilter}
+          branches={branches}
+          matchingJobs={filtered.length}
+          onStatusChange={setStatusFilter}
+          onBranchChange={setBranchFilter}
+        />
+
+        {filtered.length === 0 ? (
+          <Box sx={{ py: 8, textAlign: "center" }}>
+            <Typography color="text.secondary">No jobs match filters</Typography>
           </Box>
-        ))
-      )}
+        ) : (
+          <JobHealthTable sections={sections} />
+        )}
+      </Box>
     </Box>
   );
 }

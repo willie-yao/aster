@@ -58,12 +58,12 @@ export const darkTokens: ColorTokens = {
   primary: "#2f81f7",
   primaryDim: "#1f6feb",
   primaryContainer: "#58a6ff",
-  onPrimary: "#ffffff",
+  onPrimary: "#0d1117",
 
   secondary: "#3fb950",
   secondaryDim: "#2ea043",
   secondaryContainer: "#1a7f37",
-  onSecondary: "#ffffff",
+  onSecondary: "#0d1117",
 
   tertiary: "#d29922",
   tertiaryContainer: "#9e6a03",

@@ -58,7 +58,7 @@ export function OverviewFilters({
           gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
           "& .MuiToggleButtonGroup-grouped": {
             minWidth: 0,
-            minHeight: 36,
+            minHeight: 44,
             px: 1.25,
             py: 0.5,
             border: "1px solid !important",
@@ -73,8 +73,9 @@ export function OverviewFilters({
               zIndex: 1,
               color: "primary.main",
               borderColor: "primary.main !important",
-              bgcolor: (theme) => soft(theme, "primary", 0.1),
-              "&:hover": { bgcolor: (theme) => soft(theme, "primary", 0.14) },
+              bgcolor: (theme) => soft(theme, "primary", 0.12),
+              boxShadow: "inset 0 -3px 0 var(--mui-palette-primary-main)",
+              "&:hover": { bgcolor: (theme) => soft(theme, "primary", 0.16) },
             },
             "&.Mui-focusVisible": {
               outline: "2px solid",
@@ -97,7 +98,7 @@ export function OverviewFilters({
           onChange={(event) => onBranchChange(event.target.value)}
           inputProps={{ "aria-label": "Branch filter" }}
           sx={{
-            height: 36,
+            height: 44,
             borderRadius: "4px",
             fontFamily: "monospace",
             fontSize: "0.75rem",

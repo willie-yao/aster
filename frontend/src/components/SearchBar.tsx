@@ -231,7 +231,19 @@ export function SearchBar() {
           display: { xs: "inline-flex", md: "none" },
           width: 44,
           height: 44,
+          minWidth: 44,
+          flexShrink: 0,
+          p: 0,
+          alignItems: "center",
+          justifyContent: "center",
+          borderRadius: "4px",
           color: "text.secondary",
+          "&:hover": { color: "text.primary", bgcolor: "surface.containerHigh" },
+          "&.Mui-focusVisible": {
+            outline: "2px solid",
+            outlineColor: "primary.main",
+            outlineOffset: 1,
+          },
         }}
       >
         <Search sx={{ fontSize: 20 }} />
@@ -309,7 +321,7 @@ export function SearchBar() {
             }}
             sx={{
               "& .MuiOutlinedInput-root": {
-                height: 36,
+                height: { xs: 44, md: 36 },
                 borderRadius: "4px",
                 bgcolor: (theme) => (theme.vars ?? theme).palette.surface.container,
                 color: "text.primary",

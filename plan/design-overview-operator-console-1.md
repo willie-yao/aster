@@ -1,6 +1,6 @@
 ---
 goal: Redesign the Overview page as a quiet, evidence-first Kubernetes test-health operator console
-version: 1.0
+version: 1.1
 date_created: 2026-08-05
 last_updated: 2026-08-05
 owner: Frontend
@@ -12,9 +12,9 @@ tags: [design, frontend, overview, accessibility, responsive, operator-console]
 
 ![Status: Completed](https://img.shields.io/badge/status-Completed-brightgreen)
 
-This plan replaces the Overview page's glass, glow, pill, donut, and card-wall presentation with a dense graphite operator console. It preserves the current data contracts, filtering, navigation, search, status semantics, attention ranking, and run links.
+This plan replaces the Overview page's glass, glow, pill, donut, and card-wall presentation with a dense graphite operator console. It preserves the current data contracts, filtering, navigation, search, status semantics, attention content and ordering, and run links.
 
-The implementation uses focused phases. Shared visual foundations, application shell changes, summary presentation, attention rows, and job rows remain independently reviewable and revertible.
+The implementation uses focused phases. Shared visual foundations, application shell changes, summary presentation, attention rows, and job rows remain independently reviewable and revertible. Version 1.1 applies the approved CAPZ incident briefing composition, continuous category ledger, progressive attention disclosure, and PR review corrections.
 
 ## 1. Requirements & Constraints
 
@@ -157,7 +157,7 @@ The implementation uses focused phases. Shared visual foundations, application s
 
 | Task | Description | Completed | Date |
 |------|-------------|-----------|------|
-| TASK-039 | Test 390, 768, 1024, and 1440 widths in dark and light mode. | ✅ | 2026-08-05 |
+| TASK-039 | Test 390, 768, 900, 1024, and 1440 widths in dark and light mode. | ✅ | 2026-08-05 |
 | TASK-040 | Verify no page-level horizontal overflow or internal vertical panel scrolling. | ✅ | 2026-08-05 |
 | TASK-041 | Keyboard-test all Overview and shell controls. | ✅ | 2026-08-05 |
 | TASK-042 | Verify visible focus and non-color status communication. | ✅ | 2026-08-05 |

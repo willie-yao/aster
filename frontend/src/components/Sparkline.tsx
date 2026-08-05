@@ -14,10 +14,23 @@ export function Sparkline({ runs, jobID }: SparklineProps) {
   const recent = runs.slice(0, 8).reverse();
 
   return (
-    <Box sx={{ display: "flex", alignItems: "center", gap: 0.25 }}>
+    <Box
+      sx={{
+        display: "grid",
+        gridTemplateColumns: { xs: "repeat(4, 44px)", sm: "repeat(8, 44px)" },
+        alignItems: "center",
+        gap: 0,
+        "@media (min-width: 1024px)": {
+          gridTemplateColumns: "repeat(8, 20px)",
+          gap: "2px",
+        },
+        "@media (min-width: 1200px)": {
+          gridTemplateColumns: "repeat(8, 22px)",
+        },
+      }}
+    >
       {recent.map((run) => {
-        const label =
-          run.result === "PENDING" ? "Running" : run.passed ? "Passed" : "Failed";
+        const label = run.result === "PENDING" ? "Running" : run.passed ? "Passed" : "Failed";
         return (
           <Tooltip key={run.build_id} title={`#${run.build_id} - ${label}`}>
             <Box
@@ -26,12 +39,14 @@ export function Sparkline({ runs, jobID }: SparklineProps) {
               aria-label={`Run ${run.build_id} ${label.toLowerCase()}`}
               onClick={(event) => event.stopPropagation()}
               sx={{
-                width: { xs: 32, sm: 24 },
-                height: { xs: 32, sm: 24 },
+                width: 44,
+                height: 44,
                 display: "inline-flex",
                 alignItems: "center",
                 justifyContent: "center",
                 borderRadius: "4px",
+                "@media (min-width: 1024px)": { width: 20, height: 28 },
+                "@media (min-width: 1200px)": { width: 22 },
                 "&:hover": { bgcolor: "surface.containerHigh" },
                 "&:focus-visible": {
                   outline: "2px solid",

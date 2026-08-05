@@ -1,8 +1,9 @@
+import Check from "@mui/icons-material/Check";
 import Box from "@mui/material/Box";
 import ButtonBase from "@mui/material/ButtonBase";
 import Typography from "@mui/material/Typography";
-import { Panel } from "./Panel";
 import { soft, type SoftColor } from "../theme";
+import { countLabel } from "../lib/dashboardOverview";
 import type { JobSummary } from "../types/dashboard";
 
 interface HealthPanelProps {
@@ -40,74 +41,90 @@ export function HealthPanel({ jobs, onFilterClick, activeFilter }: HealthPanelPr
   ];
 
   return (
-    <Panel sx={{ borderRadius: "6px", p: 2 }}>
-      <Box sx={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 2, mb: 1.5 }}>
-        <Typography variant="headline" component="h2">
-          Health
+    <Box
+      component="section"
+      aria-labelledby="job-health-heading"
+      sx={{
+        display: "grid",
+        gridTemplateColumns: { xs: "repeat(3, minmax(0, 1fr))", md: "minmax(180px, 1fr) repeat(3, minmax(120px, 170px))" },
+        borderBlock: "1px solid",
+        borderColor: "divider",
+      }}
+    >
+      <Box
+        sx={{
+          gridColumn: { xs: "1 / -1", md: "auto" },
+          minHeight: 68,
+          display: "flex",
+          flexDirection: "column",
+          justifyContent: "center",
+          px: { xs: 1.5, md: 2 },
+          borderRight: { md: "1px solid" },
+          borderColor: "divider",
+        }}
+      >
+        <Typography id="job-health-heading" variant="label" component="h2" color="text.secondary">
+          Job health
         </Typography>
-        <Typography variant="data" color="text.secondary">
-          {total} {total === 1 ? "job" : "jobs"}
+        <Typography variant="stat" component="span" sx={{ mt: 0.25, fontSize: "1.25rem" }}>
+          {countLabel(total, "job")}
         </Typography>
       </Box>
 
-      <Box sx={{ display: "grid", gridTemplateColumns: { xs: "repeat(3, minmax(0, 1fr))", lg: "1fr" }, gap: 1 }}>
-        {rows.map((row) => {
-          const active = activeFilter === row.status;
-          const percentage = total === 0 ? 0 : Math.round((row.count / total) * 100);
-          return (
-            <ButtonBase
-              key={row.status}
-              onClick={() => onFilterClick?.(active ? "ALL" : row.status)}
-              disabled={!onFilterClick}
-              aria-pressed={active}
-              aria-label={`${row.label}: ${row.count} jobs, ${percentage}%`}
-              sx={{
-                minWidth: 0,
-                minHeight: 64,
-                display: "grid",
-                gridTemplateColumns: { xs: "1fr", lg: "auto minmax(0, 1fr) auto" },
-                alignItems: "center",
-                gap: { xs: 0.5, lg: 1 },
-                px: 1.25,
-                py: 1,
-                border: "1px solid",
-                borderColor: active ? "primary.main" : "divider",
-                borderRadius: "4px",
-                textAlign: { xs: "center", lg: "left" },
-                bgcolor: (theme) => (active ? soft(theme, "primary", 0.08) : "transparent"),
-                "&:hover": { bgcolor: "surface.containerHigh" },
-                "&.Mui-focusVisible": {
-                  outline: "2px solid",
-                  outlineColor: "primary.main",
-                  outlineOffset: 1,
-                },
-              }}
-            >
-              <Box
-                aria-hidden="true"
-                sx={{
-                  width: 8,
-                  height: 8,
-                  borderRadius: "2px",
-                  bgcolor: `${row.color}.main`,
-                  justifySelf: { xs: "center", lg: "start" },
-                }}
-              />
-              <Box sx={{ minWidth: 0 }}>
-                <Typography variant="body2" component="span" sx={{ display: "block", fontWeight: 600 }}>
+      {rows.map((row) => {
+        const active = activeFilter === row.status;
+        const percentage = total === 0 ? 0 : Math.round((row.count / total) * 100);
+        return (
+          <ButtonBase
+            key={row.status}
+            onClick={() => onFilterClick?.(active ? "ALL" : row.status)}
+            disabled={!onFilterClick}
+            aria-pressed={active}
+            aria-label={`${row.label}: ${countLabel(row.count, "job")}, ${percentage}%`}
+            sx={{
+              position: "relative",
+              minWidth: 0,
+              minHeight: 68,
+              display: "grid",
+              gridTemplateColumns: "auto minmax(0, 1fr) auto",
+              alignItems: "center",
+              gap: 1,
+              px: { xs: 1, sm: 1.5 },
+              py: 1,
+              border: 0,
+              borderTop: { xs: "1px solid", md: 0 },
+              borderRight: "1px solid",
+              borderColor: "divider",
+              textAlign: "left",
+              bgcolor: (theme) => (active ? soft(theme, "primary", 0.12) : "transparent"),
+              boxShadow: active ? "inset 0 -3px 0 var(--mui-palette-primary-main)" : "none",
+              "&:last-of-type": { borderRight: 0 },
+              "&:hover": { bgcolor: active ? (theme) => soft(theme, "primary", 0.16) : "surface.containerHigh" },
+              "&.Mui-focusVisible": {
+                outline: "2px solid",
+                outlineColor: "primary.main",
+                outlineOffset: -2,
+              },
+            }}
+          >
+            <Box aria-hidden="true" sx={{ width: 8, height: 8, borderRadius: "2px", bgcolor: `${row.color}.main` }} />
+            <Box sx={{ minWidth: 0 }}>
+              <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+                <Typography variant="body2" component="span" sx={{ fontWeight: 600 }}>
                   {row.label}
                 </Typography>
-                <Typography variant="data" component="span" color="text.secondary">
-                  {percentage}%
-                </Typography>
+                {active && <Check aria-hidden="true" sx={{ fontSize: 15, color: "primary.main" }} />}
               </Box>
-              <Typography variant="stat" component="span" sx={{ fontSize: "1.125rem", color: `${row.color}.main` }}>
-                {row.count}
+              <Typography variant="data" component="span" color="text.secondary">
+                {percentage}%
               </Typography>
-            </ButtonBase>
-          );
-        })}
-      </Box>
-    </Panel>
+            </Box>
+            <Typography variant="stat" component="span" sx={{ fontSize: "1.125rem", color: `${row.color}.main` }}>
+              {row.count}
+            </Typography>
+          </ButtonBase>
+        );
+      })}
+    </Box>
   );
 }
