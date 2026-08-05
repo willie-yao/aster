@@ -29,15 +29,24 @@ type GenerateSpec struct {
 	Repo RepoRef
 	// Instruction is the fix task handed to the coding agent.
 	Instruction string
-	// Model is the provider/model id the CLI should use. Empty uses the CLI's
-	// own default.
+	// Model is the custom endpoint model id. Empty uses the CLI's own default.
 	Model string
+	// NativeModel is an OpenCode provider/model reference such as
+	// github-copilot/claude-sonnet-4.6. It is mutually exclusive with Model.
+	NativeModel string
+	// UseAmbientAuth copies only NativeModel's configured OpenCode credential into
+	// the isolated home.
+	UseAmbientAuth bool
 	// Endpoint is the OpenAI-compatible base the model is served from. A full
 	// chat-completions URL is accepted; the trailing /chat/completions is
 	// stripped to the base the CLI expects.
 	Endpoint string
 	// Token authenticates the model endpoint.
 	Token string
+	// ExtraHeaders are sent by the isolated model provider.
+	ExtraHeaders map[string]string
+	// Skills are engine-owned OpenCode skills injected into the isolated home.
+	Skills map[string]string
 	// MaxTurns bounds the agent loop; zero uses the CLI default.
 	MaxTurns int
 	// AllowBash lets the agent run shell commands (build, tests) while fixing.
@@ -115,6 +124,12 @@ func (r *LocalAgentRuntime) Generate(ctx context.Context, spec GenerateSpec) (Ge
 	}
 	if spec.Repo.Owner == "" || spec.Repo.Name == "" || spec.Repo.Ref == "" {
 		return GenerateResult{}, fmt.Errorf("runtime: repo owner, name, and ref are required")
+	}
+	if spec.Model != "" && spec.NativeModel != "" {
+		return GenerateResult{}, fmt.Errorf("runtime: model and native model are mutually exclusive")
+	}
+	if spec.UseAmbientAuth && spec.NativeModel == "" {
+		return GenerateResult{}, fmt.Errorf("runtime: ambient auth requires a native model")
 	}
 	bin := r.Bin
 	if bin == "" {
@@ -242,6 +257,14 @@ func gitOut(ctx context.Context, dir string, args ...string) (string, error) {
 // isolated home so it never lands in the workspace or the resulting diff.
 func opencodeCmd(bin string) func(ctx context.Context, spec GenerateSpec, workdir, home string) (*exec.Cmd, error) {
 	return func(ctx context.Context, spec GenerateSpec, workdir, home string) (*exec.Cmd, error) {
+		if spec.UseAmbientAuth {
+			if err := writeOpencodeAuth(home, spec.NativeModel); err != nil {
+				return nil, err
+			}
+		}
+		if err := writeOpencodeSkills(home, spec.Skills); err != nil {
+			return nil, err
+		}
 		if err := writeOpencodeConfig(home, spec); err != nil {
 			return nil, err
 		}
@@ -249,7 +272,9 @@ func opencodeCmd(bin string) func(ctx context.Context, spec GenerateSpec, workdi
 		// otherwise attach to an ambient server and ignore the process cwd,
 		// writing edits outside the workspace.
 		args := []string{"run", "--dir", workdir, "--format", "json", "--agent", "build"}
-		if spec.Model != "" {
+		if spec.NativeModel != "" {
+			args = append(args, "--model", spec.NativeModel)
+		} else if spec.Model != "" {
 			args = append(args, "--model", "engine/"+spec.Model)
 		}
 		args = append(args, spec.Instruction)
@@ -294,6 +319,78 @@ func isolatedOpencodeEnv(home string) []string {
 	)
 }
 
+func writeOpencodeAuth(home, nativeModel string) error {
+	provider, _, ok := strings.Cut(nativeModel, "/")
+	if !ok || provider == "" {
+		return fmt.Errorf("runtime: invalid native model %q", nativeModel)
+	}
+	dataHome := strings.TrimSpace(os.Getenv("XDG_DATA_HOME"))
+	if dataHome == "" {
+		userHome, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("runtime: resolve opencode auth home: %w", err)
+		}
+		dataHome = filepath.Join(userHome, ".local", "share")
+	}
+	source := filepath.Join(dataHome, "opencode", "auth.json")
+	raw, err := os.ReadFile(source)
+	if err != nil {
+		return fmt.Errorf("runtime: read opencode auth: %w", err)
+	}
+	var credentials map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &credentials); err != nil {
+		return fmt.Errorf("runtime: decode opencode auth: %w", err)
+	}
+	credential, ok := credentials[provider]
+	if !ok {
+		return fmt.Errorf("runtime: opencode auth has no credential for %q", provider)
+	}
+	targetDir := filepath.Join(home, ".local", "share", "opencode")
+	if err := os.MkdirAll(targetDir, 0o700); err != nil {
+		return fmt.Errorf("runtime: opencode auth dir: %w", err)
+	}
+	filtered, err := json.Marshal(map[string]json.RawMessage{provider: credential})
+	if err != nil {
+		return fmt.Errorf("runtime: encode opencode auth: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(targetDir, "auth.json"), filtered, 0o600); err != nil {
+		return fmt.Errorf("runtime: write opencode auth: %w", err)
+	}
+	return nil
+}
+
+func writeOpencodeSkills(home string, skills map[string]string) error {
+	for name, content := range skills {
+		if !validSkillName(name) {
+			return fmt.Errorf("runtime: invalid opencode skill name %q", name)
+		}
+		if strings.TrimSpace(content) == "" {
+			return fmt.Errorf("runtime: empty opencode skill %q", name)
+		}
+		dir := filepath.Join(home, ".config", "opencode", "skills", name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("runtime: opencode skill dir: %w", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o600); err != nil {
+			return fmt.Errorf("runtime: write opencode skill: %w", err)
+		}
+	}
+	return nil
+}
+
+func validSkillName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i, r := range name {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' && i > 0 {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 // writeOpencodeConfig writes an opencode config to home's XDG config dir defining
 // a single OpenAI-compatible provider "engine" pointed at the spec's endpoint,
 // with edit and (optionally) bash permissions pre-approved for non-interactive
@@ -321,27 +418,37 @@ func writeOpencodeConfig(home string, spec GenerateSpec) error {
 	if spec.MaxTurns > 0 {
 		agents["build"] = map[string]any{"steps": spec.MaxTurns}
 	}
+	providerOptions := map[string]any{
+		"baseURL": openAIBase(spec.Endpoint),
+		"apiKey":  spec.Token,
+	}
+	if len(spec.ExtraHeaders) > 0 {
+		headers := make(map[string]string, len(spec.ExtraHeaders))
+		for key, value := range spec.ExtraHeaders {
+			headers[key] = value
+		}
+		providerOptions["headers"] = headers
+	}
 	cfg := map[string]any{
 		"$schema":    "https://opencode.ai/config.json",
 		"share":      "disabled",
 		"autoupdate": false,
 		"snapshot":   false,
-		"provider": map[string]any{
-			"engine": map[string]any{
-				"npm":  "@ai-sdk/openai-compatible",
-				"name": "engine",
-				"options": map[string]any{
-					"baseURL": openAIBase(spec.Endpoint),
-					"apiKey":  spec.Token,
-				},
-				"models": models,
-			},
-		},
-		"agent": agents,
+		"agent":      agents,
 		"permission": map[string]any{
 			"edit": "allow",
 			"bash": bashPerm,
 		},
+	}
+	if spec.NativeModel == "" {
+		cfg["provider"] = map[string]any{
+			"engine": map[string]any{
+				"npm":     "@ai-sdk/openai-compatible",
+				"name":    "engine",
+				"options": providerOptions,
+				"models":  models,
+			},
+		}
 	}
 	b, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {

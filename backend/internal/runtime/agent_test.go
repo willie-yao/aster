@@ -84,6 +84,13 @@ func TestLocalAgent_Validation(t *testing.T) {
 	if _, err := r.Generate(context.Background(), GenerateSpec{Instruction: "x", Repo: RepoRef{Owner: "o"}}); err == nil {
 		t.Error("expected error for missing repo fields")
 	}
+	fullRepo := RepoRef{Owner: "o", Name: "n", Ref: "r"}
+	if _, err := r.Generate(context.Background(), GenerateSpec{Instruction: "x", Repo: fullRepo, Model: "m", NativeModel: "p/m"}); err == nil {
+		t.Error("expected model mode conflict")
+	}
+	if _, err := r.Generate(context.Background(), GenerateSpec{Instruction: "x", Repo: fullRepo, UseAmbientAuth: true}); err == nil {
+		t.Error("expected ambient auth without native model to fail")
+	}
 }
 
 func TestOpenAIBase(t *testing.T) {
@@ -103,11 +110,12 @@ func TestOpenAIBase(t *testing.T) {
 func TestWriteOpencodeConfig(t *testing.T) {
 	home := t.TempDir()
 	spec := GenerateSpec{
-		Model:     "moonshotai/Kimi-K2",
-		Endpoint:  "https://host/v1/chat/completions",
-		Token:     "tok",
-		MaxTurns:  30,
-		AllowBash: true,
+		Model:        "moonshotai/Kimi-K2",
+		Endpoint:     "https://host/v1/chat/completions",
+		Token:        "tok",
+		MaxTurns:     30,
+		AllowBash:    true,
+		ExtraHeaders: map[string]string{"Copilot-Integration-Id": "copilot-developer-cli"},
 	}
 	if err := writeOpencodeConfig(home, spec); err != nil {
 		t.Fatalf("writeOpencodeConfig: %v", err)
@@ -119,8 +127,9 @@ func TestWriteOpencodeConfig(t *testing.T) {
 	var cfg struct {
 		Provider map[string]struct {
 			Options struct {
-				BaseURL string `json:"baseURL"`
-				APIKey  string `json:"apiKey"`
+				BaseURL string            `json:"baseURL"`
+				APIKey  string            `json:"apiKey"`
+				Headers map[string]string `json:"headers"`
 			} `json:"options"`
 			Models map[string]any `json:"models"`
 		} `json:"provider"`
@@ -141,6 +150,9 @@ func TestWriteOpencodeConfig(t *testing.T) {
 	}
 	if eng.Options.APIKey != "tok" {
 		t.Errorf("apiKey = %q, want tok", eng.Options.APIKey)
+	}
+	if eng.Options.Headers["Copilot-Integration-Id"] != "copilot-developer-cli" {
+		t.Errorf("headers = %v", eng.Options.Headers)
 	}
 	if _, ok := eng.Models["moonshotai/Kimi-K2"]; !ok {
 		t.Errorf("model not registered: %v", eng.Models)
@@ -223,5 +235,101 @@ func TestOpencodeCmdPinsRuntimeConfig(t *testing.T) {
 func TestOpenAIBaseResponses(t *testing.T) {
 	if got := openAIBase("https://api.example.test/v1/responses"); got != "https://api.example.test/v1" {
 		t.Fatalf("openAIBase = %q", got)
+	}
+}
+
+func TestWriteOpencodeSkills(t *testing.T) {
+	home := t.TempDir()
+	if err := writeOpencodeSkills(home, map[string]string{"system-prompt-generation": "---\nname: system-prompt-generation\n---\nbody\n"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "skills", "system-prompt-generation", "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "system-prompt-generation") {
+		t.Fatalf("skill contents = %q", got)
+	}
+	for _, name := range []string{"", "../escape", "Uppercase", "bad_name"} {
+		if err := writeOpencodeSkills(home, map[string]string{name: "body"}); err == nil {
+			t.Errorf("expected invalid skill name %q to fail", name)
+		}
+	}
+	if err := writeOpencodeSkills(home, map[string]string{"empty": " \n"}); err == nil {
+		t.Error("expected empty skill to fail")
+	}
+}
+
+func TestWriteOpencodeAuthFiltersProvider(t *testing.T) {
+	userHome := t.TempDir()
+	t.Setenv("HOME", userHome)
+	sourceDir := filepath.Join(userHome, ".local", "share", "opencode")
+	if err := os.MkdirAll(sourceDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "auth.json"), []byte(`{"github-copilot":{"type":"oauth","access":"secret"},"other":{"type":"api","key":"other-secret"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	if err := writeOpencodeAuth(home, "github-copilot/claude-sonnet-4.6"); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(home, ".local", "share", "opencode", "auth.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got["github-copilot"] == nil {
+		t.Fatalf("auth providers = %v", got)
+	}
+	if strings.Contains(string(raw), "other-secret") {
+		t.Fatal("unselected credential copied")
+	}
+}
+
+func TestWriteOpencodeAuthUsesXDGDataHome(t *testing.T) {
+	dataHome := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dataHome)
+	sourceDir := filepath.Join(dataHome, "opencode")
+	if err := os.MkdirAll(sourceDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "auth.json"), []byte(`{"github-copilot":{"type":"oauth","access":"secret"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeOpencodeAuth(t.TempDir(), "github-copilot/model"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOpencodeCmdUsesNativeModel(t *testing.T) {
+	userHome := t.TempDir()
+	t.Setenv("HOME", userHome)
+	sourceDir := filepath.Join(userHome, ".local", "share", "opencode")
+	if err := os.MkdirAll(sourceDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "auth.json"), []byte(`{"github-copilot":{"type":"oauth","access":"secret"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	home, workdir := t.TempDir(), t.TempDir()
+	cmd, err := opencodeCmd("opencode")(context.Background(), GenerateSpec{
+		Instruction: "author prompt", NativeModel: "github-copilot/claude-sonnet-4.6", UseAmbientAuth: true,
+	}, workdir, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(cmd.Args, "github-copilot/claude-sonnet-4.6") {
+		t.Fatalf("args = %v", cmd.Args)
+	}
+	raw, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "opencode.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `"engine"`) {
+		t.Fatalf("native config retained custom provider: %s", raw)
 	}
 }
