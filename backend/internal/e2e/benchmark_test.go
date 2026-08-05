@@ -942,9 +942,10 @@ func benchmarkRepairPhase(phase string) bool {
 }
 
 func benchmarkDraftIssueVector(observation ai.DraftObservation) string {
-	return fmt.Sprintf("punt=%d,unread=%d,citation=%d,missing=%d,transient=%v,rules=%v",
+	return fmt.Sprintf("punt=%d,unread=%d,citation=%d,missing=%d,transient=%v,rules=%v,published_hard=%d,published_punt=%d,published_missing=%d,published_rules=%v",
 		observation.PuntCount, observation.UnreadCitationCount, observation.CitationIssueCount,
-		observation.MissingGroupCount, observation.TransientConflict, observation.RuleIDs)
+		observation.MissingGroupCount, observation.TransientConflict, observation.RuleIDs,
+		observation.PublishedHardIssues, observation.PublishedPuntCount, observation.PublishedMissing, observation.PublishedRuleIDs)
 }
 
 func normalizeBenchmarkRootCause(rootCause string) string {
@@ -1090,8 +1091,8 @@ func TestBenchmarkDraftScoringProducesPairedDeltas(t *testing.T) {
 		"draft attempt=2 phase=critique_retry score=2/2",
 		"initial_score=1/2 revised_score=2/2 score_delta=1",
 		"initial_required_signals=1/1 revised_required_signals=1/1",
-		"initial_issue_vector=punt=1,unread=0,citation=0,missing=0,transient=false,rules=[]",
-		"revised_issue_vector=punt=0,unread=0,citation=0,missing=0,transient=false,rules=[]",
+		"initial_issue_vector=punt=1,unread=0,citation=0,missing=0,transient=false,rules=[],published_hard=0,published_punt=0,published_missing=0,published_rules=[]",
+		"revised_issue_vector=punt=0,unread=0,citation=0,missing=0,transient=false,rules=[],published_hard=0,published_punt=0,published_missing=0,published_rules=[]",
 		"root_cause_changed=true new_evidence_reads=1 retry_duration_ms=1500 selected_attempt=2",
 	} {
 		if !strings.Contains(got, want) {
@@ -1133,10 +1134,10 @@ func TestBenchmarkDraftTelemetryUsesRuntimeSelection(t *testing.T) {
 		AIAnalysis: &models.AIAnalysis{RootCause: "cause", SuggestedFix: "fix"},
 	}
 	got := strings.Join(benchmarkDraftTelemetryLines(bc, observations, tc, 1), "\n")
-	if !strings.Contains(got, "attempt=1 phase=initial score=1/1 required_signals=0/0 issue_vector=punt=0,unread=0,citation=0,missing=0,transient=false,rules=[] tool_calls=0 evidence_reads=0 selected=true") {
+	if !strings.Contains(got, "attempt=1 phase=initial score=1/1 required_signals=0/0 issue_vector=punt=0,unread=0,citation=0,missing=0,transient=false,rules=[],published_hard=0,published_punt=0,published_missing=0,published_rules=[] tool_calls=0 evidence_reads=0 selected=true") {
 		t.Fatalf("runtime selection was not reported:\n%s", got)
 	}
-	if strings.Contains(got, "attempt=2 phase=critique_retry score=1/1 required_signals=0/0 issue_vector=punt=0,unread=0,citation=0,missing=0,transient=false,rules=[] tool_calls=0 evidence_reads=0 selected=true") {
+	if strings.Contains(got, "attempt=2 phase=critique_retry score=1/1 required_signals=0/0 issue_vector=punt=0,unread=0,citation=0,missing=0,transient=false,rules=[],published_hard=0,published_punt=0,published_missing=0,published_rules=[] tool_calls=0 evidence_reads=0 selected=true") {
 		t.Fatalf("identity fallback overrode runtime selection:\n%s", got)
 	}
 }

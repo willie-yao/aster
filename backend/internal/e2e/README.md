@@ -67,7 +67,8 @@ also records GCS bytes, floor markers, sorted safe Tool counts, floor-nudge
 reasons, the hashed cache generation, zero-request cache reload results, and
 content-free draft metadata. Draft metadata contains stable critique rule IDs,
 matched skill IDs, applicable missing or unavailable evidence-group IDs, and the
-selected attempt. It does not contain draft text.
+selected attempt. It records both raw findings and the findings that survive
+deterministic publication sanitization. It does not contain draft text.
 
 Human review uses rubric version 1 with five dimensions scored from 0 to 2:
 diagnosis, artifact evidence, claim discipline, remediation, and source

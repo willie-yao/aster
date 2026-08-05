@@ -523,18 +523,22 @@ classification are rejected by `strict` and `hard` as
 `critique_version`.
 
 **Best-draft selection.** A repair never replaces an earlier draft merely
-because it arrived later. The engine compares parseable attempts in this order:
+because it arrived later. Selection evaluates the exact sanitized form that
+would be published, while retaining the unsanitized draft for repair feedback.
+A candidate must strictly dominate the selected draft:
 
-1. passing critique beats failing critique;
-2. no transient-versus-persistent conflict beats a conflict;
-3. fewer unread citations wins;
-4. fewer missing evidence groups wins;
-5. fewer punt matches wins;
-6. a tie keeps the earlier draft.
+1. it cannot add a new hard-rule category or increase the hard-issue count;
+2. removing a hard issue is sufficient improvement, even when a soft warning
+   remains;
+3. without a hard improvement, it cannot add a punt or increase missing
+   available evidence;
+4. without a hard improvement, it must reduce at least one soft dimension;
+5. crossed tradeoffs and exact ties keep the earlier draft.
 
 The tie rule has one semantic-review exception: a revision explicitly driven by
-semantic objections may replace an otherwise tied draft so the semantic repair
-can take effect.
+semantic objections may replace an exactly equal-quality draft so the semantic
+repair can take effect. A semantic revision with a new hard failure is rejected
+before selection.
 
 A materially different `root_cause` can replace the selected draft only after
 a new non-empty artifact read or when the semantic review explicitly drove the

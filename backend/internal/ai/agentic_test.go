@@ -25,6 +25,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/filesystem"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/repotree"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
 // newTestRegistry returns a filesystem registry so tests hit real dispatch.
@@ -1537,24 +1538,102 @@ required_evidence:
 }
 
 func TestCompareCritiqueQuality(t *testing.T) {
-	base := critiqueQuality{PuntCount: 1}
+	hardUnread := []string{"citation.unread"}
 	tests := []struct {
 		name string
 		a    critiqueQuality
 		b    critiqueQuality
 		want int
 	}{
-		{name: "passing", a: critiqueQuality{Passed: true}, b: base, want: 1},
-		{name: "transient conflict", a: base, b: critiqueQuality{TransientConflict: true}, want: 1},
-		{name: "unread citations", a: base, b: critiqueQuality{UnreadCitationCount: 1}, want: 1},
-		{name: "missing evidence", a: base, b: critiqueQuality{MissingEvidenceCount: 1}, want: 1},
-		{name: "punts", a: critiqueQuality{}, b: base, want: 1},
-		{name: "tie", a: base, b: base, want: 0},
+		{name: "hard issue removal dominates soft regressions", a: critiqueQuality{HardRules: hardUnread, HardIssueCount: 2, MissingEvidenceCount: 20, PuntCount: 3}, b: critiqueQuality{HardRules: hardUnread, HardIssueCount: 3, MissingEvidenceCount: 12, PuntCount: 2}, want: 1},
+		{name: "new hard rule is non-dominating", a: critiqueQuality{HardRules: []string{"citation.unread", "path.unsafe"}, HardIssueCount: 3}, b: critiqueQuality{HardRules: hardUnread, HardIssueCount: 3}, want: 0},
+		{name: "kimi azure repair dominates", a: critiqueQuality{HardRules: hardUnread, HardIssueCount: 3, MissingEvidenceCount: 2}, b: critiqueQuality{HardRules: hardUnread, HardIssueCount: 3, MissingEvidenceCount: 12, PuntCount: 2}, want: 1},
+		{name: "new punt blocks missing-evidence tradeoff", a: critiqueQuality{MissingEvidenceCount: 0, PuntCount: 1}, b: critiqueQuality{MissingEvidenceCount: 2}, want: 0},
+		{name: "missing evidence improvement dominates", a: critiqueQuality{MissingEvidenceCount: 1}, b: critiqueQuality{MissingEvidenceCount: 2}, want: 1},
+		{name: "crossed soft dimensions keep earlier", a: critiqueQuality{MissingEvidenceCount: 1, PuntCount: 1}, b: critiqueQuality{MissingEvidenceCount: 2}, want: 0},
+		{name: "tie", a: critiqueQuality{MissingEvidenceCount: 1}, b: critiqueQuality{MissingEvidenceCount: 1}, want: 0},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := compareCritiqueQuality(tc.a, tc.b); got != tc.want {
 				t.Fatalf("compareCritiqueQuality() = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestNewDraftCandidateUsesPublishedCritiqueQuality(t *testing.T) {
+	state := &agentState{
+		readArtifactsFull:     map[string]bool{},
+		readArtifactsBase:     map[string]bool{},
+		readSourceFull:        map[string]bool{},
+		analysisEvidence:      map[string]*analysisChatEvidence{},
+		evidenceContentByPath: map[string][]string{},
+	}
+	parsed := analysisResponse{
+		Summary:      "failure at line 999",
+		RootCause:    "The failure occurred at line 999.",
+		SuggestedFix: "Apply the verified fix.",
+		EvidenceCitations: []models.EvidenceCitation{{
+			Path: "missing.log", LineStart: 999, LineEnd: 999, Quote: "missing",
+		}},
+	}
+	raw := critiqueDraftWithContent(parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, nil, 0, analysisCitationContext{Evidence: state.analysisEvidence})
+	if critiqueHardIssueCount(raw) == 0 {
+		t.Fatal("raw draft did not contain the expected hard citation findings")
+	}
+	var observed DraftObservation
+	state.draftObserver = func(observation DraftObservation) { observed = observation }
+	candidate := state.newDraftCandidate("critique_retry", "raw", nil, parsed, raw)
+	if candidate.quality.HardIssueCount != 0 || !candidate.quality.Passed || observed.PublishedHardIssues != 0 || len(observed.PublishedRuleIDs) != 0 {
+		t.Fatalf("published quality = %+v observation=%+v", candidate.quality, observed)
+	}
+}
+
+func TestDraftShouldReplaceMonotonicRegressions(t *testing.T) {
+	hardUnread := []string{"citation.unread"}
+	for _, tc := range []struct {
+		name          string
+		current       critiqueQuality
+		candidate     critiqueQuality
+		currentRev    int
+		candidateRev  int
+		currentRoot   string
+		candidateRoot string
+		want          bool
+	}{
+		{
+			name: "azure repair with more evidence dominates", current: critiqueQuality{HardRules: hardUnread, HardIssueCount: 3, MissingEvidenceCount: 12, PuntCount: 2},
+			candidate: critiqueQuality{HardRules: hardUnread, HardIssueCount: 3, MissingEvidenceCount: 2}, currentRev: 7, candidateRev: 12,
+			currentRoot: "first control plane node used join configuration", candidateRoot: "joining control plane node hit an etcd timeout", want: true,
+		},
+		{
+			name: "changed diagnosis without evidence stays earlier", current: critiqueQuality{HardRules: hardUnread, HardIssueCount: 3, MissingEvidenceCount: 12, PuntCount: 2},
+			candidate: critiqueQuality{HardRules: hardUnread, HardIssueCount: 3, MissingEvidenceCount: 2}, currentRev: 7, candidateRev: 7,
+			currentRoot: "first control plane node used join configuration", candidateRoot: "joining control plane node hit an etcd timeout",
+		},
+		{
+			name: "new punt blocks missing evidence tradeoff", current: critiqueQuality{MissingEvidenceCount: 2},
+			candidate: critiqueQuality{PuntCount: 1}, currentRev: 1, candidateRev: 2, currentRoot: "same cause", candidateRoot: "same cause",
+		},
+		{
+			name: "hard removal can justify a new punt", current: critiqueQuality{HardRules: hardUnread, HardIssueCount: 1},
+			candidate: critiqueQuality{PuntCount: 1}, currentRev: 1, candidateRev: 2, currentRoot: "same cause", candidateRoot: "same cause", want: true,
+		},
+		{
+			name: "new hard failure never replaces safe draft", current: critiqueQuality{MissingEvidenceCount: 2},
+			candidate: critiqueQuality{HardRules: hardUnread, HardIssueCount: 1}, currentRev: 1, candidateRev: 2, currentRoot: "same cause", candidateRoot: "same cause",
+		},
+		{
+			name: "equivalent published diagnoses keep earlier", current: critiqueQuality{}, candidate: critiqueQuality{},
+			currentRev: 1, candidateRev: 1, currentRoot: "The provider rejected the version.", candidateRoot: "the provider rejected the version",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			current := &critiqueDraftCandidate{quality: tc.current, evidenceRevision: tc.currentRev, parsed: analysisResponse{RootCause: tc.currentRoot}}
+			candidate := &critiqueDraftCandidate{quality: tc.candidate, evidenceRevision: tc.candidateRev, parsed: analysisResponse{RootCause: tc.candidateRoot}}
+			if got := draftShouldReplace(current, candidate, false); got != tc.want {
+				t.Fatalf("draftShouldReplace() = %t, want %t", got, tc.want)
 			}
 		})
 	}
