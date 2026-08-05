@@ -533,7 +533,9 @@ A candidate must strictly dominate the selected draft:
 3. without a hard improvement, it cannot add a punt or increase missing
    available evidence;
 4. without a hard improvement, it must reduce at least one soft dimension;
-5. crossed tradeoffs and exact ties keep the earlier draft.
+5. an equal-quality draft can replace the earlier draft only when new evidence
+   supports a materially changed root cause;
+6. crossed tradeoffs and all other exact ties keep the earlier draft.
 
 The tie rule has one semantic-review exception: a revision explicitly driven by
 semantic objections may replace an exactly equal-quality draft so the semantic

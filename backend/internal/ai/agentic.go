@@ -1764,17 +1764,24 @@ func compareCritiqueQuality(a, b critiqueQuality) int {
 }
 
 func critiqueQualityDominates(candidate, current critiqueQuality) bool {
-	if critiqueHardRegression(candidate, current) {
+	if !critiqueQualityNoWorse(candidate, current) {
 		return false
 	}
 	hardImproved := candidate.HardIssueCount < current.HardIssueCount
 	if hardImproved {
 		return true
 	}
-	if candidate.PuntCount > current.PuntCount || candidate.MissingEvidenceCount > current.MissingEvidenceCount {
+	return candidate.PuntCount < current.PuntCount || candidate.MissingEvidenceCount < current.MissingEvidenceCount
+}
+
+func critiqueQualityNoWorse(candidate, current critiqueQuality) bool {
+	if critiqueHardRegression(candidate, current) {
 		return false
 	}
-	return candidate.PuntCount < current.PuntCount || candidate.MissingEvidenceCount < current.MissingEvidenceCount
+	if candidate.HardIssueCount < current.HardIssueCount {
+		return true
+	}
+	return candidate.PuntCount <= current.PuntCount && candidate.MissingEvidenceCount <= current.MissingEvidenceCount
 }
 
 func critiqueHardRegression(candidate, current critiqueQuality) bool {
@@ -1868,6 +1875,7 @@ func (s *agentState) currentCritiqueOutcome(parsed analysisResponse) critiqueOut
 
 // considerDraft applies deterministic quality ordering and the root-cause guard.
 func (s *agentState) considerDraft(candidate *critiqueDraftCandidate, semanticAccepted bool) bool {
+	s.refreshPublishedDraftQuality(s.bestDraft)
 	if !draftShouldReplace(s.bestDraft, candidate, semanticAccepted) {
 		return false
 	}
@@ -1876,11 +1884,19 @@ func (s *agentState) considerDraft(candidate *critiqueDraftCandidate, semanticAc
 }
 
 func (s *agentState) considerFallbackDraft(candidate *critiqueDraftCandidate, semanticAccepted bool) bool {
+	s.refreshPublishedDraftQuality(s.fallbackDraft)
 	if !draftShouldReplace(s.fallbackDraft, candidate, semanticAccepted) {
 		return false
 	}
 	s.fallbackDraft = candidate
 	return true
+}
+
+func (s *agentState) refreshPublishedDraftQuality(candidate *critiqueDraftCandidate) {
+	if candidate == nil {
+		return
+	}
+	candidate.quality = critiqueQualityFor(s.publishedCritiqueOutcome(candidate.parsed))
 }
 
 func draftShouldReplace(current, candidate *critiqueDraftCandidate, semanticAccepted bool) bool {
@@ -1891,10 +1907,13 @@ func draftShouldReplace(current, candidate *critiqueDraftCandidate, semanticAcce
 		return true
 	}
 	comparison := compareCritiqueQuality(candidate.quality, current.quality)
-	if comparison < 0 || comparison == 0 && (!semanticAccepted || !critiqueQualityEqual(candidate.quality, current.quality)) {
+	rootCauseChanged := rootCauseMateriallyChanged(current.parsed.RootCause, candidate.parsed.RootCause)
+	evidenceBackedChange := !semanticAccepted && rootCauseChanged && candidate.evidenceRevision > current.evidenceRevision && critiqueQualityNoWorse(candidate.quality, current.quality)
+	semanticTie := semanticAccepted && critiqueQualityEqual(candidate.quality, current.quality)
+	if comparison < 0 || comparison == 0 && !evidenceBackedChange && !semanticTie {
 		return false
 	}
-	if rootCauseMateriallyChanged(current.parsed.RootCause, candidate.parsed.RootCause) &&
+	if rootCauseChanged &&
 		candidate.evidenceRevision <= current.evidenceRevision && !semanticAccepted {
 		return false
 	}

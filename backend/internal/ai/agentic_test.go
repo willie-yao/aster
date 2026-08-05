@@ -1639,6 +1639,24 @@ func TestDraftShouldReplaceMonotonicRegressions(t *testing.T) {
 	}
 }
 
+func TestConsiderDraftRefreshesSelectedPublishedQuality(t *testing.T) {
+	state := &agentState{
+		readArtifactsFull: map[string]bool{}, readArtifactsBase: map[string]bool{}, readSourceFull: map[string]bool{},
+		evidenceContentByPath: map[string][]string{}, analysisEvidence: map[string]*analysisChatEvidence{},
+	}
+	parsed := analysisResponse{Summary: "same", RootCause: "same cause", SuggestedFix: "Apply the fix."}
+	state.bestDraft = &critiqueDraftCandidate{
+		parsed: parsed, attempt: 1, quality: critiqueQuality{MissingEvidenceCount: 1},
+	}
+	candidate := &critiqueDraftCandidate{parsed: parsed, attempt: 2, quality: critiqueQuality{Passed: true}}
+	if state.considerDraft(candidate, false) {
+		t.Fatal("later draft replaced an earlier draft after refreshed quality became equal")
+	}
+	if state.bestDraft.attempt != 1 || !state.bestDraft.quality.Passed || state.bestDraft.quality.MissingEvidenceCount != 0 {
+		t.Fatalf("selected draft was not refreshed: %+v", state.bestDraft)
+	}
+}
+
 func TestRootCauseMateriallyChanged(t *testing.T) {
 	base := "The worker Node registered, but providerID remained empty because cloud-node-manager could not reach the Kubernetes API."
 	if rootCauseMateriallyChanged(base, "  the worker node registered, but providerID remained empty because cloud-node-manager could not reach the Kubernetes API. ") {
