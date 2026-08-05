@@ -11,11 +11,13 @@ import (
 	"unicode"
 )
 
-var knownDeploymentFiles = []string{
+var knownGeneratedFiles = []string{
 	".github/workflows/deploy.yml",
 	"CHECKLIST.md",
 	"deploy/values.yaml",
 	"deploy/README.md",
+	"PROMPT_HANDOFF.md",
+	".opencode/skills/system-prompt-generation/SKILL.md",
 }
 
 type destinationConflictError struct {
@@ -64,7 +66,7 @@ func inspectFileDestination(outDir string, files map[string]string) ([]Destinati
 		planned[rel] = struct{}{}
 	}
 	var stale []string
-	for _, rel := range knownDeploymentFiles {
+	for _, rel := range knownGeneratedFiles {
 		if _, ok := planned[rel]; ok {
 			continue
 		}

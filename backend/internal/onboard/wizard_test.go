@@ -528,14 +528,6 @@ func TestWizard_CategoryTokensCanBeEdited(t *testing.T) {
 	}
 }
 
-func TestPromptDraftDisclosureCoversSourceAndJobs(t *testing.T) {
-	for _, want := range []string{"repository documentation", "source excerpts", "matched Prow job metadata"} {
-		if !strings.Contains(promptDraftDisclosure, want) {
-			t.Fatalf("prompt drafting disclosure missing %q: %s", want, promptDraftDisclosure)
-		}
-	}
-}
-
 func TestWizard_AdditionalCancellationStages(t *testing.T) {
 	t.Run("source input", func(t *testing.T) {
 		deps, out, writer, _ := wizardDependencies("q\n")

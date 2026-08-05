@@ -147,21 +147,32 @@ installs, upgrades, or silently enables it.
 
 ## AI provider and prompt drafting
 
-The deployed analysis provider and the one-time prompt-drafting provider are
-separate decisions.
+The deployed analysis provider and one-time prompt authoring are separate
+decisions. Prompt authoring supports `agent`, `handoff`, `api-experimental`, and
+`todo-template` modes.
+
+Agent mode resolves the source branch to an immutable commit, shallow-clones it
+into a temporary checkout, and runs the local OpenCode process with a temporary
+config and its shell tool disabled. It is not an OS sandbox. It uses the selected
+provider credential from the user's existing OpenCode configuration and accepts
+only one validated `prompts/system.md` change. Handoff mode writes the TODO
+template plus `PROMPT_HANDOFF.md` and the bundled
+`.opencode/skills/system-prompt-generation/SKILL.md` without running an agent.
+The handoff pins a commit when possible and otherwise records a known default
+branch or an unresolved ref without inventing a branch name.
 
 Provider presets can seed the API mode and endpoint for GitHub Copilot Responses,
 GitHub Copilot Chat Completions, OpenAI, NVIDIA, or a custom OpenAI-compatible
 provider. The model remains explicit
 because model availability depends on the account and endpoint.
 
-The wizard never asks for or stores a token. `AI_TOKEN` authenticates one-time
-prompt drafting and is read only from the environment. It is never printed,
+The wizard never asks for or stores a token. `AI_TOKEN` authenticates only the
+experimental API mode and is read only from the environment. It is never printed,
 inspected, fingerprinted, or placed in the plan or generated files. Supply
 deployment credentials through the documented GitHub Secret or Kubernetes
 Secret path.
 
-When prompt drafting is selected, the wizard:
+When experimental API drafting is selected, the wizard:
 
 1. Explains that documentation, source excerpts, and matched Prow job metadata
    may be sent.
@@ -227,10 +238,9 @@ generated `Unresolved details` section identifies important gaps. Choosing a
 more capable model does not substitute for missing source evidence.
 
 Prompt preparation records a credential-free result in the plan: requested mode,
-final status, output type, safe failure stage and category, and provider
-coordinates only for a successful API draft. The final review
-shows `TODO template`, `Experimental API draft`, or `TODO template after
-experimental API failure`.
+final status, output type, timeout where applicable, safe failure stage and
+category, the OpenCode runtime and model for agent mode, and provider coordinates
+only for a successful API draft.
 
 Normal failures write a safe warning to stderr with the stage, category,
 fallback, and a short action. They do not print the wrapped source or provider
@@ -250,17 +260,17 @@ raw prompts, model responses, evidence text, provider bodies, endpoint query or
 fragment details, credential-bearing URLs, and full private model identifiers.
 No debug report file is created.
 
-`--require-prompt-draft` is for strict automation. It is valid only for the
-experimental API path, requires `AI_TOKEN`, `AI_ENDPOINT`, and `AI_MODEL`, and
-returns a nonzero error before any local write or pull request when the final
-result is not an API draft.
+`--require-prompt-draft` is for strict automation. It is valid for `agent` and
+`api-experimental`. Agent mode uses OpenCode ambient authentication. The API
+mode requires `AI_TOKEN`, `AI_ENDPOINT`, and `AI_MODEL`. Both return a nonzero
+error before any local write or pull request when drafting falls back.
 
-`--prompt-timeout` controls the total source-retrieval and structured-drafting
-budget. It defaults to `15m` and accepts values from `1m` through `2h`. A slow
-provider can use, for example, `--prompt-timeout 30m`. This option does not
-change the regular fetcher `--timeout` or the deployed project `ai.timeout`.
-The reviewed timeout is retained in the credential-free onboarding plan and
-shown before any write.
+`--prompt-timeout` controls the total agent or API prompt-authoring budget. It
+defaults to `15m` and accepts values from `1m` through `2h`. A slow provider or
+agent run can use, for example, `--prompt-timeout 30m`. This option does not
+change the regular fetcher `--timeout` or the deployed project `ai.timeout`. The
+reviewed timeout is retained in the credential-free onboarding plan and shown
+before any write.
 
 See [AI providers](ai-providers.md) and
 [Writing the project prompt](writing-prompts.md).
@@ -284,7 +294,7 @@ refuses any replacement. Interactive onboarding offers:
 
 Choosing another directory is the default. Update mode replaces only files in
 the validated plan. It preserves unrelated files, never deletes the destination,
-and never removes stale files from the other deployment mode. Existing stale
+and never removes stale files from another deployment or prompt mode. Existing stale
 Pages or Kubernetes deployment files are reported and left untouched. Partial
 path conflicts, symbolic links in generated paths, and unsafe plan paths are
 rejected.
@@ -347,7 +357,8 @@ Add `-gcsweb-base "https://gcsweb.example.net/s3"` when the bucket is served
 through gcsweb.
 
 For automation that must receive an API-authored prompt rather than a safe
-fallback, export the reviewed provider coordinates and add the strict flag:
+fallback, export the reviewed provider coordinates, select the mode, and add the
+strict flag:
 
 ```bash
 export AI_TOKEN="..."
@@ -359,8 +370,13 @@ fetcher onboard \
   -testgrid "<testgrid-dashboard>" \
   -dashboard-repo "<owner>/<dashboard-repo>" \
   -source-repo "<owner>/<source-repo>" \
+  --prompt-mode=api-experimental \
   --require-prompt-draft
 ```
+
+Strict agent automation instead uses `--prompt-mode=agent` and
+`--require-prompt-draft`. It does not require the API variables above, but the
+selected OpenCode provider must already be authenticated.
 
 ## Open a scaffold pull request
 

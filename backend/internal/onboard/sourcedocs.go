@@ -39,19 +39,21 @@ type promptSource struct {
 }
 
 type promptJobSummary struct {
-	Name       string
-	Type       string
-	ConfigFile string
-	Repo       string
-	Branches   []string
-	Dashboards []string
+	Name       string   `json:"name"`
+	Type       string   `json:"type"`
+	ConfigFile string   `json:"config_file,omitempty"`
+	Repo       string   `json:"repository,omitempty"`
+	Branches   []string `json:"branches_or_refs,omitempty"`
+	Dashboards []string `json:"testgrid_dashboards,omitempty"`
 }
 
 type promptDraftInput struct {
 	ProjectName string
 	SourceRepo  Repo
-	Jobs        []promptJobSummary
-	Sources     []promptSource
+	// SourceRevision pins an already-resolved source commit when available.
+	SourceRevision string
+	Jobs           []promptJobSummary
+	Sources        []promptSource
 }
 
 type promptSourceCandidate struct {
@@ -450,7 +452,7 @@ func defaultBranch(ctx context.Context, client *http.Client, owner, repo, token 
 		return "", err
 	}
 	if out.DefaultBranch == "" {
-		return "main", nil
+		return "", fmt.Errorf("source repository response did not include a default branch")
 	}
 	return out.DefaultBranch, nil
 }

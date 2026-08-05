@@ -31,7 +31,9 @@ The wizard asks you to choose or confirm:
 4. Project and dashboard names.
 5. Whether to include presubmit jobs.
 6. Whether to enable AI analysis and which provider to use.
-7. Whether to use the experimental API path to draft `prompts/system.md` from bounded source evidence and matched Prow job metadata.
+7. Whether to generate `prompts/system.md` with OpenCode, write an agent
+   handoff bundle, use the experimental bounded API path, or keep the TODO
+   template.
 8. The output directory or pull request destination.
 
 In the interactive form, use the arrow keys to move, Enter to select, and
@@ -68,6 +70,9 @@ prompts/system.md
 CHECKLIST.md
 ```
 
+Handoff mode also includes `PROMPT_HANDOFF.md` and
+`.opencode/skills/system-prompt-generation/SKILL.md`.
+
 After generation, follow `CHECKLIST.md` to configure GitHub Pages, repository
 variables, and the `AI_TOKEN` repository Secret.
 
@@ -84,6 +89,9 @@ prompts/system.md
 deploy/values.yaml
 deploy/README.md
 ```
+
+Handoff mode also includes `PROMPT_HANDOFF.md` and
+`.opencode/skills/system-prompt-generation/SKILL.md`.
 
 After generation, make `deploy/values.yaml` your deployment configuration and
 follow the copyable commands in `deploy/README.md`. The generated values keep
@@ -106,21 +114,27 @@ anything. Review:
 - Every project-specific claim in `prompts/system.md`.
 - The deployment files and their destination paths.
 
-Repository metadata, Prow configuration, source excerpts, and job metadata are
-untrusted input. They cannot alter the wizard flow or cause command execution.
-Repository content is sent to a prompt-drafting provider only after explicit
-confirmation. `AI_TOKEN` authenticates that one-time draft and remains an
-environment-only value. It is never displayed, inspected, fingerprinted, or
-written into the plan or scaffold.
+Repository metadata, Prow configuration, source files, and job metadata are
+untrusted input. They cannot alter the wizard flow. Agent handoff metadata is
+serialized as data and tells the agent not to treat any field as an instruction.
 
-Prompt drafting pins the source repository to one commit and sends at most 8
-line-ranged Markdown, Go, YAML, or shell excerpts, with a 12,000-byte per-source
-limit and a 48,000-byte total. Version-family and duplicate-content excerpts are
-collapsed. Prow metadata uses compact one-line records and is separately limited
-to 60 jobs and 16,000 bytes. Documentation references may raise the rank of
-exact eligible files in the pinned snapshot, but cannot trigger arbitrary URLs, commands,
-provider-time retrieval, or secret access. Onboarding does not clone or execute
-the source repository.
+Agent mode resolves the source branch to an immutable commit, creates a
+temporary shallow checkout and OpenCode config, and runs the local OpenCode
+process with its shell tool disabled. This is not an OS sandbox. The runtime
+accepts the result only when the agent changes exactly
+`prompts/system.md` and the file passes deterministic structure and quality
+validation. It uses the selected provider credential from the user's existing
+OpenCode configuration. `AI_TOKEN` is not required for this mode.
+
+The experimental API mode does not clone or execute the source repository. It
+sends at most 8 line-ranged Markdown, Go, YAML, or shell excerpts, with a
+12,000-byte per-source limit and a 48,000-byte total. Version-family and
+duplicate-content excerpts are collapsed. Prow metadata uses compact one-line
+records and is separately limited to 60 jobs and 16,000 bytes. Documentation
+references may raise the rank of exact eligible files in the pinned snapshot,
+but cannot trigger arbitrary URLs, commands, provider-time retrieval, or secret
+access. `AI_TOKEN` authenticates this path and remains environment-only. It is
+never displayed, inspected, fingerprinted, or written into the plan or scaffold.
 
 The provider returns structured evidence with internal source references through
 bounded context, operations, and failure-pattern phases. Onboarding merges and
@@ -132,9 +146,9 @@ an interactive API failure, choose whether to retry the same reviewed provider,
 continue with the TODO template, or cancel. The safe default is to continue with
 the template.
 
-The final review labels the prompt as `TODO template`, `Experimental API draft`,
-or `TODO template after experimental API failure`. The final write confirmation
-defaults to no.
+The final review shows the requested mode, timeout where applicable, agent model
+or API provider, final prompt status, and any safe fallback diagnostics. The
+final write confirmation defaults to no.
 
 Press `Ctrl+C`, send EOF, or answer no at the final confirmation to leave the
 filesystem unchanged.
@@ -159,7 +173,8 @@ Local onboarding refuses to replace generated files unless `--update-existing`
 is explicit. Interactive onboarding instead offers another directory, updating
 only the listed scaffold files, or cancellation. The safe default is another
 directory. Before confirmation, review every file marked `create` or `replace`.
-Unrelated files and stale files from another deployment mode are left untouched.
+Unrelated files and stale generated files from another deployment or prompt mode
+are left untouched.
 Open-PR mode continues to use a GitHub diff and does not use local update mode.
 
 Use `--prompt-debug` for sanitized diagnostics on stderr. Debug output contains
@@ -169,15 +184,16 @@ report file and excludes tokens, source contents, prompts, model responses,
 provider bodies, endpoint paths or query strings, and full model identifiers.
 
 Automation can add `--require-prompt-draft` to fail before local writes or pull
-request creation unless the experimental API draft succeeds. The flag is valid
-only for experimental API drafting and requires `AI_TOKEN`, `AI_ENDPOINT`, and
-`AI_MODEL`.
+request creation unless agent or experimental API drafting succeeds. Agent mode
+uses OpenCode ambient authentication. The API mode requires `AI_TOKEN`,
+`AI_ENDPOINT`, and `AI_MODEL`.
 
-Prompt preparation has a 15-minute total timeout by default. Slow providers
-can use `--prompt-timeout`, for example `--prompt-timeout 30m`. The accepted
-range is one minute through two hours. This timeout covers source retrieval and
-phased structured extraction; it is separate from the normal fetcher timeout and
-deployed `ai.timeout`.
+Prompt preparation has a 15-minute total timeout by default. Slow providers or
+agent runs can use `--prompt-timeout`, for example `--prompt-timeout 30m`. The
+accepted range is one minute through two hours. This timeout covers agent source
+revision resolution and execution or API source retrieval and structured
+extraction. It is separate from the normal fetcher timeout and deployed
+`ai.timeout`.
 
 ## Next steps
 
@@ -219,10 +235,15 @@ Deployment references:
 
 ### Prompt authoring modes
 
-The wizard can generate `prompts/system.md` with an isolated OpenCode agent,
+The wizard can generate `prompts/system.md` with a local OpenCode agent in a
+temporary checkout,
 write a reusable agent handoff bundle, use the experimental bounded API path, or
 write the TODO template. Agent mode defaults to
 `github-copilot/claude-sonnet-4.6` and uses the selected provider credential from
 the user's existing OpenCode configuration. Handoff mode writes
 `PROMPT_HANDOFF.md` and `.opencode/skills/system-prompt-generation/SKILL.md`
-without running an agent.
+without running an agent. `--no-prompt` is equivalent to
+`--prompt-mode=todo-template` and cannot be combined with another explicit
+prompt mode. The handoff records a pinned commit when GitHub resolution
+succeeds. If source resolution is unavailable, it preserves the known default
+branch or marks the ref unresolved instead of guessing one.

@@ -80,9 +80,9 @@ type Options struct {
 	NoPrompt bool
 	// PromptDebug writes sanitized prompt-preparation diagnostics to stderr.
 	PromptDebug bool
-	// PromptTimeout bounds source retrieval and structured prompt drafting.
+	// PromptTimeout bounds prompt authoring, including agent execution.
 	PromptTimeout time.Duration
-	// RequirePromptDraft fails before writes unless experimental API drafting succeeds.
+	// RequirePromptDraft fails before writes unless agent or API drafting succeeds.
 	RequirePromptDraft bool
 
 	// OpenPR opens a pull request against the dashboard repo with the scaffold

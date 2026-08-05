@@ -48,6 +48,7 @@ const (
 	promptStageSourceRevision        promptPreparationStage = "source-revision-resolution"
 	promptStageSourceTree            promptPreparationStage = "source-tree-listing"
 	promptStageSourceExcerpt         promptPreparationStage = "source-excerpt-retrieval"
+	promptStageAgentExecution        promptPreparationStage = "agent-execution"
 	promptStageEvidenceExtraction    promptPreparationStage = "structured-evidence-extraction"
 	promptStageEvidenceGrounding     promptPreparationStage = "evidence-grounding-validation"
 	promptStageFinalPromptValidation promptPreparationStage = "final-rendering-and-prompt-validation"
@@ -63,6 +64,8 @@ func (s promptPreparationStage) label() string {
 		return "source tree listing"
 	case promptStageSourceExcerpt:
 		return "source excerpt retrieval"
+	case promptStageAgentExecution:
+		return "agent execution"
 	case promptStageEvidenceExtraction:
 		return "structured evidence extraction"
 	case promptStageEvidenceGrounding:
@@ -88,6 +91,7 @@ const (
 	promptFailureInvalidStructured   promptFailureCategory = "invalid-structured-response"
 	promptFailureUngroundedEvidence  promptFailureCategory = "ungrounded-evidence"
 	promptFailurePromptValidation    promptFailureCategory = "prompt-validation-failed"
+	promptFailureAgentExecution      promptFailureCategory = "agent-execution-failed"
 	promptFailureTimedOut            promptFailureCategory = "timed-out"
 	promptFailureUnknown             promptFailureCategory = "prompt-preparation-failed"
 )
@@ -116,6 +120,8 @@ func (c promptFailureCategory) reason() string {
 		return "the structured response failed evidence grounding"
 	case promptFailurePromptValidation:
 		return "the rendered prompt failed deterministic validation"
+	case promptFailureAgentExecution:
+		return "OpenCode prompt authoring could not run to completion"
 	case promptFailureTimedOut:
 		return "prompt preparation exceeded its time limit"
 	default:
@@ -144,9 +150,11 @@ func (c promptFailureCategory) action() string {
 	case promptFailureInvalidStructured, promptFailureUngroundedEvidence:
 		return "Retry once or continue with the reviewable TODO template."
 	case promptFailureTimedOut:
-		return "Retry the same reviewed provider or continue with the TODO template."
+		return "Retry the same reviewed prompt authoring mode or continue with the TODO template."
 	case promptFailurePromptValidation:
 		return "Continue with the TODO template and inspect the deterministic validation tests."
+	case promptFailureAgentExecution:
+		return "Verify OpenCode availability, authentication, and repository access, then retry or use the handoff bundle."
 	default:
 		return "Continue with the reviewable TODO template."
 	}
@@ -239,13 +247,16 @@ func (r promptPreparationResult) promptPlan(opts Options) PromptPlan {
 		plan.FailureCategory = string(r.Failure.Category)
 		plan.FailureAction = r.Failure.Category.action()
 	}
-	if r.Requested == promptRequestAPIExperimental {
+	if r.Requested == promptRequestAPIExperimental || r.Requested == promptRequestAgent {
 		plan.Timeout = effectivePromptDraftTimeout(opts).String()
 	}
 	if r.Status == promptStatusAPIDraft {
 		plan.API = opts.AIAPI
 		plan.Endpoint = opts.AIEndpoint
 		plan.Model = opts.AIModel
+	} else if r.Requested == promptRequestAgent {
+		plan.Runtime = "opencode"
+		plan.Model = effectivePromptAgentModel(opts)
 	}
 	return plan
 }
@@ -254,13 +265,13 @@ func validatePromptPlan(plan PromptPlan) error {
 	if plan.RequestedMode != string(promptRequestTemplate) && plan.RequestedMode != string(promptRequestAPIExperimental) && plan.RequestedMode != string(promptRequestAgent) && plan.RequestedMode != string(promptRequestHandoff) {
 		return fmt.Errorf("onboarding plan prompt request %q is invalid", plan.RequestedMode)
 	}
-	if plan.RequestedMode == string(promptRequestAPIExperimental) {
+	if plan.RequestedMode == string(promptRequestAPIExperimental) || plan.RequestedMode == string(promptRequestAgent) {
 		timeout, err := time.ParseDuration(plan.Timeout)
 		if err != nil || timeout < minPromptDraftTimeout || timeout > maxPromptDraftTimeout {
 			return fmt.Errorf("onboarding plan prompt timeout is invalid")
 		}
 	} else if plan.Timeout != "" {
-		return fmt.Errorf("onboarding plan TODO prompt retained an API timeout")
+		return fmt.Errorf("onboarding plan prompt retained an inapplicable timeout")
 	}
 	switch plan.FinalStatus {
 	case string(promptStatusTemplate):
@@ -275,37 +286,88 @@ func validatePromptPlan(plan PromptPlan) error {
 			return fmt.Errorf("onboarding plan API prompt result is missing provider coordinates")
 		}
 	case string(promptStatusAgentDraft):
-		if plan.RequestedMode != string(promptRequestAgent) || plan.Output != string(promptOutputAgentDraft) || plan.Source != "OpenCode agent draft" {
+		if plan.RequestedMode != string(promptRequestAgent) || plan.Output != string(promptOutputAgentDraft) || plan.Source != "OpenCode agent draft" || plan.Runtime != "opencode" || validatePromptAgentModel(plan.Model) != nil {
 			return fmt.Errorf("onboarding plan agent prompt result is inconsistent")
 		}
-	case string(promptStatusHandoff), string(promptStatusAgentFallback):
-		if plan.Output != string(promptOutputTemplate) || plan.Source != "Agent handoff bundle with TODO template" {
+	case string(promptStatusHandoff):
+		if plan.RequestedMode != string(promptRequestHandoff) || plan.Output != string(promptOutputTemplate) || plan.Source != "Agent handoff bundle with TODO template" {
 			return fmt.Errorf("onboarding plan handoff result is inconsistent")
+		}
+	case string(promptStatusAgentFallback):
+		if plan.RequestedMode != string(promptRequestAgent) || plan.Output != string(promptOutputTemplate) || plan.Source != "Agent handoff bundle with TODO template" || plan.Runtime != "opencode" || validatePromptAgentModel(plan.Model) != nil {
+			return fmt.Errorf("onboarding plan agent fallback result is inconsistent")
+		}
+		if err := validatePromptFailureDiagnostics(plan); err != nil {
+			return err
 		}
 	case string(promptStatusFallback):
 		if plan.RequestedMode != string(promptRequestAPIExperimental) || plan.Output != string(promptOutputTemplate) || plan.Source != "TODO template after experimental API failure" {
 			return fmt.Errorf("onboarding plan fallback prompt result is inconsistent")
 		}
-		stage := promptPreparationStage(plan.FailureStage)
-		category := promptFailureCategory(plan.FailureCategory)
-		if !knownPromptStage(stage) || !knownPromptFailureCategory(category) || plan.FailureAction != category.action() {
-			return fmt.Errorf("onboarding plan fallback diagnostics are invalid")
+		if err := validatePromptFailureDiagnostics(plan); err != nil {
+			return err
 		}
 	default:
 		return fmt.Errorf("onboarding plan prompt status %q is invalid", plan.FinalStatus)
 	}
-	if plan.FinalStatus != string(promptStatusAPIDraft) && (plan.API != "" || plan.Endpoint != "" || plan.Model != "") {
+	if plan.FinalStatus != string(promptStatusAPIDraft) && (plan.API != "" || plan.Endpoint != "") {
 		return fmt.Errorf("onboarding plan non-API prompt result retained provider coordinates")
 	}
-	if plan.FinalStatus != string(promptStatusFallback) && (plan.FailureStage != "" || plan.FailureCategory != "" || plan.FailureAction != "") {
+	if plan.RequestedMode != string(promptRequestAgent) && (plan.Runtime != "" || plan.Model != "" && plan.FinalStatus != string(promptStatusAPIDraft)) {
+		return fmt.Errorf("onboarding plan non-agent prompt result retained agent coordinates")
+	}
+	if plan.FinalStatus != string(promptStatusFallback) && plan.FinalStatus != string(promptStatusAgentFallback) && (plan.FailureStage != "" || plan.FailureCategory != "" || plan.FailureAction != "") {
 		return fmt.Errorf("onboarding plan successful prompt result retained failure diagnostics")
 	}
 	return nil
 }
 
+func validatePromptFailureDiagnostics(plan PromptPlan) error {
+	stage := promptPreparationStage(plan.FailureStage)
+	category := promptFailureCategory(plan.FailureCategory)
+	if !knownPromptStage(stage) || !knownPromptFailureCategory(category) || plan.FailureAction != category.action() || !promptFailureAllowed(promptPreparationRequest(plan.RequestedMode), stage, category) {
+		return fmt.Errorf("onboarding plan fallback diagnostics are invalid")
+	}
+	return nil
+}
+
+func promptFailureAllowed(request promptPreparationRequest, stage promptPreparationStage, category promptFailureCategory) bool {
+	switch request {
+	case promptRequestAgent:
+		switch stage {
+		case promptStageSourceRevision:
+			return category == promptFailureSourceUnavailable || category == promptFailureTimedOut
+		case promptStageAgentExecution:
+			return category == promptFailureAgentExecution || category == promptFailureTimedOut
+		case promptStageFinalPromptValidation:
+			return category == promptFailurePromptValidation
+		}
+	case promptRequestAPIExperimental:
+		switch stage {
+		case promptStageTokenPreflight:
+			return category == promptFailureMissingToken || category == promptFailureMissingCoordinates
+		case promptStageSourceRevision, promptStageSourceTree:
+			return category == promptFailureSourceUnavailable || category == promptFailureTimedOut
+		case promptStageSourceExcerpt:
+			return category == promptFailureSourceUnavailable || category == promptFailureNoSourceEvidence || category == promptFailureTimedOut
+		case promptStageEvidenceExtraction:
+			return category == promptFailureProviderAuth || category == promptFailureProviderRejected || category == promptFailureProviderRateLimited || category == promptFailureProviderUnavailable || category == promptFailureInvalidStructured || category == promptFailureTimedOut || category == promptFailureUnknown
+		case promptStageEvidenceGrounding:
+			return category == promptFailureUngroundedEvidence
+		case promptStageFinalPromptValidation:
+			return category == promptFailurePromptValidation
+		}
+	}
+	return false
+}
+
+func promptPlanIncludesHandoff(plan PromptPlan) bool {
+	return plan.FinalStatus == string(promptStatusHandoff) || plan.FinalStatus == string(promptStatusAgentFallback)
+}
+
 func knownPromptStage(stage promptPreparationStage) bool {
 	switch stage {
-	case promptStageTokenPreflight, promptStageSourceRevision, promptStageSourceTree, promptStageSourceExcerpt,
+	case promptStageTokenPreflight, promptStageSourceRevision, promptStageSourceTree, promptStageSourceExcerpt, promptStageAgentExecution,
 		promptStageEvidenceExtraction, promptStageEvidenceGrounding, promptStageFinalPromptValidation:
 		return true
 	default:
@@ -317,7 +379,7 @@ func knownPromptFailureCategory(category promptFailureCategory) bool {
 	switch category {
 	case promptFailureMissingToken, promptFailureMissingCoordinates, promptFailureSourceUnavailable, promptFailureNoSourceEvidence,
 		promptFailureProviderAuth, promptFailureProviderRejected, promptFailureProviderRateLimited, promptFailureProviderUnavailable,
-		promptFailureInvalidStructured, promptFailureUngroundedEvidence, promptFailurePromptValidation,
+		promptFailureInvalidStructured, promptFailureUngroundedEvidence, promptFailurePromptValidation, promptFailureAgentExecution,
 		promptFailureTimedOut, promptFailureUnknown:
 		return true
 	default:
@@ -326,10 +388,16 @@ func knownPromptFailureCategory(category promptFailureCategory) bool {
 }
 
 func requestedPromptPreparation(opts Options) promptPreparationRequest {
-	if opts.NoPrompt || (opts.AIToken == "" && !opts.RequirePromptDraft) {
+	switch effectivePromptMode(opts) {
+	case promptModeAgent:
+		return promptRequestAgent
+	case promptModeHandoff:
+		return promptRequestHandoff
+	case promptModeAPI:
+		return promptRequestAPIExperimental
+	default:
 		return promptRequestTemplate
 	}
-	return promptRequestAPIExperimental
 }
 
 func isPromptDeadline(err error) bool {
@@ -387,9 +455,9 @@ type requiredPromptDraftError struct {
 
 func (e *requiredPromptDraftError) Error() string {
 	if e == nil || e.failure == nil {
-		return "required experimental API prompt draft was not produced"
+		return "required prompt draft was not produced"
 	}
-	return fmt.Sprintf("required experimental API prompt draft was not produced: %s: %s", e.failure.Stage.label(), e.failure.Category.reason())
+	return fmt.Sprintf("required prompt draft was not produced: %s: %s", e.failure.Stage.label(), e.failure.Category.reason())
 }
 
 func (e *requiredPromptDraftError) Unwrap() error {

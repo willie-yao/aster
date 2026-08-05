@@ -11,7 +11,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 )
 
-const promptDraftDisclosure = "AI_TOKEN authenticates prompt drafting. Bounded repository documentation, source excerpts, and matched Prow job metadata will be sent only to that reviewed provider."
+const promptDraftDisclosure = "The experimental API mode sends bounded repository documentation, source excerpts, and matched Prow job metadata to the reviewed provider. AI_TOKEN authenticates that one-time request."
 
 func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Options, error) {
 	if err := validateCredentialSeparation(opts); err != nil {
@@ -193,60 +193,8 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 		return nil, opts, err
 	}
 
-	if opts.PromptMode == "" && !opts.NoPrompt {
-		mode, selectErr := prompt.Select(ctx, selectPrompt{Title: "Project prompt authoring", Description: "Choose how prompts/system.md is prepared.", Options: []selectOption{
-			{Value: promptModeAgent, Label: "Generate with OpenCode (recommended)", Description: "Uses an isolated repository-aware coding agent."},
-			{Value: promptModeHandoff, Label: "Create an agent handoff bundle", Description: "Writes a reusable skill and reviewable TODO prompt."},
-			{Value: promptModeAPI, Label: "Experimental API draft", Description: "Uses bounded source excerpts."},
-			{Value: promptModeTemplate, Label: "TODO template", Description: "Does not call a model."},
-		}})
-		if selectErr != nil {
-			return nil, opts, selectErr
-		}
-		opts.PromptMode = mode
-		if mode == promptModeAgent && opts.PromptAgentModel == "" {
-			opts.PromptAgentModel, err = prompt.Input(ctx, inputPrompt{Title: "OpenCode model", Description: "Provider/model configured in OpenCode.", Value: "github-copilot/claude-sonnet-4.6", Required: true})
-			if err != nil {
-				return nil, opts, err
-			}
-		}
-	}
-	switch opts.PromptMode {
-	case promptModeAgent, promptModeHandoff:
-		opts.NoPrompt = false
-	case promptModeTemplate:
-		opts.NoPrompt = true
-	}
-
-	if opts.NoPrompt || opts.AIToken == "" {
-		opts.NoPrompt = true
-	} else if opts.AIEndpoint != "" && opts.AIModel != "" {
-		draft, confirmErr := prompt.Confirm(ctx, confirmPrompt{
-			Title:       "Use AI_ENDPOINT and AI_MODEL now to draft prompts/system.md?",
-			Description: promptDraftDisclosure,
-			Value:       false,
-		})
-		if confirmErr != nil {
-			return nil, opts, confirmErr
-		}
-		opts.NoPrompt = !draft
-	} else if effectiveAIEnabled(opts) {
-		draft, confirmErr := prompt.Confirm(ctx, confirmPrompt{
-			Title:       "Also use the deployed provider to draft prompts/system.md?",
-			Description: promptDraftDisclosure,
-			Value:       false,
-		})
-		if confirmErr != nil {
-			return nil, opts, confirmErr
-		}
-		opts.NoPrompt = !draft
-		if draft {
-			opts.AIAPI = opts.DeploymentAIAPI
-			opts.AIEndpoint = opts.DeploymentAIEndpoint
-			opts.AIModel = opts.DeploymentAIModel
-		}
-	} else {
-		opts.NoPrompt = true
+	if err := wizardPromptAuthoring(ctx, prompt, &opts); err != nil {
+		return nil, opts, err
 	}
 
 	if !opts.OpenPR && opts.OutDir == "" {
@@ -323,6 +271,63 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 		return nil, opts, ErrCancelled
 	}
 	return plan, opts, nil
+}
+
+func wizardPromptAuthoring(ctx context.Context, prompt wizardUI, opts *Options) error {
+	opts.PromptMode = strings.TrimSpace(opts.PromptMode)
+	if err := validatePromptMode(opts.PromptMode); err != nil {
+		return err
+	}
+	if opts.NoPrompt && opts.PromptMode != "" && opts.PromptMode != promptModeTemplate {
+		return fmt.Errorf("--no-prompt cannot be combined with --prompt-mode=%s", opts.PromptMode)
+	}
+	if opts.PromptMode == "" && !opts.NoPrompt {
+		mode, err := prompt.Select(ctx, selectPrompt{Title: "Project prompt authoring", Description: "Choose how prompts/system.md is prepared.", Options: []selectOption{
+			{Value: promptModeAgent, Label: "Generate with OpenCode (recommended)", Description: "Uses a temporary repository checkout with the shell tool denied."},
+			{Value: promptModeHandoff, Label: "Create an agent handoff bundle", Description: "Writes a reusable skill and reviewable TODO prompt."},
+			{Value: promptModeAPI, Label: "Experimental API draft", Description: "Uses bounded source excerpts."},
+			{Value: promptModeTemplate, Label: "TODO template", Description: "Does not call a model."},
+		}})
+		if err != nil {
+			return err
+		}
+		opts.PromptMode = mode
+	}
+	switch effectivePromptMode(*opts) {
+	case promptModeAgent:
+		opts.NoPrompt = false
+		if opts.PromptAgentModel == "" {
+			model, err := prompt.Input(ctx, inputPrompt{Title: "OpenCode model", Description: "Provider/model configured in OpenCode.", Value: defaultPromptAgentModel, Required: true, Validate: validatePromptAgentModel})
+			if err != nil {
+				return err
+			}
+			opts.PromptAgentModel = model
+		}
+	case promptModeHandoff:
+		opts.NoPrompt = false
+	case promptModeTemplate:
+		opts.NoPrompt = true
+	case promptModeAPI:
+		opts.NoPrompt = false
+		if (opts.AIEndpoint == "" || opts.AIModel == "") && effectiveAIEnabled(*opts) && opts.DeploymentAIEndpoint != "" && opts.DeploymentAIModel != "" {
+			opts.AIAPI = opts.DeploymentAIAPI
+			opts.AIEndpoint = opts.DeploymentAIEndpoint
+			opts.AIModel = opts.DeploymentAIModel
+		}
+		confirmed, err := prompt.Confirm(ctx, confirmPrompt{
+			Title:       "Send bounded evidence to this API provider?",
+			Description: promptDraftDisclosure,
+			Value:       false,
+		})
+		if err != nil {
+			return err
+		}
+		if !confirmed {
+			opts.PromptMode = promptModeTemplate
+			opts.NoPrompt = true
+		}
+	}
+	return nil
 }
 
 func siblingDashboardConsumerDir(sourceRoot, workingDir, dashboardName string) string {

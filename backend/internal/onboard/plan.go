@@ -222,11 +222,34 @@ func (b defaultPromptBuilder) Build(ctx context.Context, opts Options, data scaf
 		if a == nil {
 			a = promptauthor.NewOpenCodeRuntime()
 		}
-		return buildAgentPrompt(ctx, opts, data, input, a)
+		return buildAgentPrompt(ctx, opts, data, input, a, b.err)
 	case promptModeHandoff:
+		parentCtx := ctx
+		ctx, cancel := context.WithTimeout(ctx, effectivePromptDraftTimeout(opts))
+		defer cancel()
+		branch, revision, resolveErr := resolveAgentSourceRevision(ctx, input, opts.GitHubToken)
+		if resolveErr != nil && parentCtx.Err() != nil {
+			return "", promptPreparationResult{}, parentCtx.Err()
+		}
+		ref, refKind := revision, "commit"
+		if resolveErr != nil {
+			ref, refKind = branch, "default-branch"
+			if branch == "" {
+				refKind = "unresolved"
+			}
+		}
+		handoff, err := buildPromptHandoff(input, ref, refKind)
+		if err != nil {
+			return "", promptPreparationResult{}, err
+		}
 		p, err := render(systemPromptTmpl, data)
-		return p, promptPreparationResult{Requested: promptRequestHandoff, Status: promptStatusHandoff, Output: promptOutputTemplate, Handoff: buildPromptHandoff(input)}, err
-	default:
+		return p, promptPreparationResult{Requested: promptRequestHandoff, Status: promptStatusHandoff, Output: promptOutputTemplate, Handoff: handoff}, err
+	case promptModeTemplate:
+		p, err := render(systemPromptTmpl, data)
+		return p, newTemplatePromptResult(), err
+	case promptModeAPI:
 		return buildSystemPrompt(ctx, opts, data, input, b.out, b.err)
+	default:
+		return "", promptPreparationResult{}, fmt.Errorf("unsupported prompt mode %q", effectivePromptMode(opts))
 	}
 }
