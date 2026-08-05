@@ -125,6 +125,7 @@ function FeaturedPatternRow({
   const color = job ? statusToMuiColor(job.overall_status) : "default";
   const status = job ? statusLabel(job.overall_status) : "Recurring";
   const signal = attentionSignal(pattern.confidence, stale);
+  const leadAccent = color === "error" ? "error" : "primary";
 
   return (
     <Box
@@ -148,14 +149,14 @@ function FeaturedPatternRow({
           py: lead ? 2 : 1.25,
         },
         borderTop: "1px solid",
-        borderColor: lead ? "error.main" : "divider",
-        boxShadow: lead ? "inset 3px 0 0 var(--mui-palette-error-main)" : "none",
+        borderColor: lead ? `${leadAccent}.main` : "divider",
+        boxShadow: lead ? `inset 3px 0 0 var(--mui-palette-${leadAccent}-main)` : "none",
       }}
     >
       <Typography
         variant="stat"
         component="span"
-        sx={{ gridArea: "rank", alignSelf: "start", color: lead ? "error.main" : "text.secondary", fontSize: lead ? "1.5rem" : "1rem", [attentionDesktopBreakpoint]: { alignSelf: "center" } }}
+        sx={{ gridArea: "rank", alignSelf: "start", color: lead ? `${leadAccent}.main` : "text.secondary", fontSize: lead ? "1.5rem" : "1rem", [attentionDesktopBreakpoint]: { alignSelf: "center" } }}
       >
         {String(rank).padStart(2, "0")}
       </Typography>
@@ -476,9 +477,29 @@ export function NeedsAttention({ report, loading, error, jobsByID }: NeedsAttent
         const progressive = group.label === "Persistent failures" || group.label === "Flaky tests";
         const initialCount = group.label === "Persistent failures" ? 1 : group.label === "Flaky tests" ? 3 : group.items.length;
         const open = expandedGroups[group.label] ?? false;
-        const visibleItems = progressive && !open ? group.items.slice(0, initialCount) : group.items;
-        const remaining = Math.max(0, group.items.length - initialCount);
+        const initialItems = progressive ? group.items.slice(0, initialCount) : group.items;
+        const additionalItems = progressive ? group.items.slice(initialCount) : [];
         const controls = `attention-group-${group.label.toLowerCase().replace(/\s+/g, "-")}`;
+        const renderItem = (item: TestFlakiness) => {
+          const failing = item.classification !== "flaky";
+          const consecutive = item.consecutive_failures > 0
+            ? `${item.consecutive_failures} consecutive ${item.consecutive_failures === 1 ? "failure" : "failures"}`
+            : undefined;
+          return (
+            <AttentionRow
+              key={`${item.job_id}/${item.test_name}`}
+              to={item.last_failure?.build_id
+                ? testRunPath(item.job_id, item.test_name, item.last_failure.build_id)
+                : testPath(item.job_id, item.test_name)}
+              subject={shortJobName(item.job_name, filePrefix)}
+              summary={shortTestName(item.test_name)}
+              detail={item.last_failure?.failure_message}
+              count={consecutive}
+              signal={failing ? "Failing" : "Flaky"}
+              statusColor={failing ? "error" : "warning"}
+            />
+          );
+        };
         return (
           <Box key={group.label} component="section" aria-label={group.label} sx={{ mt: 1 }}>
             <Box
@@ -507,36 +528,20 @@ export function NeedsAttention({ report, loading, error, jobsByID }: NeedsAttent
                 {group.items.length}
               </Typography>
             </Box>
-            <Box id={controls}>
-              {visibleItems.map((item) => {
-                const failing = item.classification !== "flaky";
-                const consecutive = item.consecutive_failures > 0
-                  ? `${item.consecutive_failures} consecutive ${item.consecutive_failures === 1 ? "failure" : "failures"}`
-                  : undefined;
-                return (
-                  <AttentionRow
-                    key={`${item.job_id}/${item.test_name}`}
-                    to={item.last_failure?.build_id
-                      ? testRunPath(item.job_id, item.test_name, item.last_failure.build_id)
-                      : testPath(item.job_id, item.test_name)}
-                    subject={shortJobName(item.job_name, filePrefix)}
-                    summary={shortTestName(item.test_name)}
-                    detail={item.last_failure?.failure_message}
-                    count={consecutive}
-                    signal={failing ? "Failing" : "Flaky"}
-                    statusColor={failing ? "error" : "warning"}
-                  />
-                );
-              })}
-            </Box>
-            {progressive && remaining > 0 && (
-              <DisclosureButton
-                label={open ? `Hide additional ${group.label.toLowerCase()}` : `Show additional ${group.label.toLowerCase()}`}
-                count={remaining}
-                open={open}
-                controls={controls}
-                onClick={() => setExpandedGroups((current) => ({ ...current, [group.label]: !open }))}
-              />
+            <Box>{initialItems.map(renderItem)}</Box>
+            {progressive && additionalItems.length > 0 && (
+              <>
+                <DisclosureButton
+                  label={open ? `Hide additional ${group.label.toLowerCase()}` : `Show additional ${group.label.toLowerCase()}`}
+                  count={additionalItems.length}
+                  open={open}
+                  controls={controls}
+                  onClick={() => setExpandedGroups((current) => ({ ...current, [group.label]: !open }))}
+                />
+                <Collapse id={controls} in={open} timeout="auto" unmountOnExit>
+                  {additionalItems.map(renderItem)}
+                </Collapse>
+              </>
             )}
           </Box>
         );

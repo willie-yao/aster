@@ -196,16 +196,34 @@ export function JobHealthTable({ sections }: JobHealthTableProps) {
       <Box
         role="row"
         sx={{
-          display: "none",
-          alignItems: "center",
-          columnGap: 1,
-          px: 1.5,
-          py: 1,
-          minHeight: 42,
-          borderBottom: "1px solid",
-          borderColor: "divider",
-          bgcolor: "surface.containerHigh",
-          [desktopBreakpoint]: { display: "grid", gridTemplateColumns: compactColumns },
+          position: "absolute",
+          width: "1px",
+          height: "1px",
+          m: "-1px",
+          p: 0,
+          overflow: "hidden",
+          clip: "rect(0 0 0 0)",
+          whiteSpace: "nowrap",
+          border: 0,
+          [desktopBreakpoint]: {
+            position: "static",
+            width: "auto",
+            height: "auto",
+            m: 0,
+            display: "grid",
+            gridTemplateColumns: compactColumns,
+            alignItems: "center",
+            columnGap: 1,
+            px: 1.5,
+            py: 1,
+            minHeight: 42,
+            overflow: "visible",
+            clip: "auto",
+            whiteSpace: "normal",
+            borderBottom: "1px solid",
+            borderColor: "divider",
+            bgcolor: "surface.containerHigh",
+          },
           [wideBreakpoint]: { gridTemplateColumns: wideColumns, columnGap: 1.5, px: 2 },
         }}
       >
@@ -240,18 +258,18 @@ export function JobHealthTable({ sections }: JobHealthTableProps) {
                 boxShadow: "inset 3px 0 0 var(--mui-palette-primary-main)",
               }}
             >
-              <Typography
-                role="cell"
-                aria-colspan={7}
-                variant="headline"
-                component="h3"
-                sx={overviewTypography.categoryHeading}
-              >
-                {section.label}
-              </Typography>
-              <Typography variant="data" color="text.secondary" sx={overviewTypography.data}>
-                {section.jobs.length} {section.jobs.length === 1 ? "job" : "jobs"}
-              </Typography>
+              <Box role="cell" aria-colspan={7} sx={{ display: "flex", alignItems: "baseline", gap: 1 }}>
+                <Typography
+                  variant="headline"
+                  component="h3"
+                  sx={overviewTypography.categoryHeading}
+                >
+                  {section.label}
+                </Typography>
+                <Typography variant="data" color="text.secondary" sx={overviewTypography.data}>
+                  {section.jobs.length} {section.jobs.length === 1 ? "job" : "jobs"}
+                </Typography>
+              </Box>
             </Box>
           )}
           {section.jobs.map((job) => (

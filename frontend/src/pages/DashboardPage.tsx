@@ -143,7 +143,7 @@ export function DashboardPage() {
       >
         <Box>
           <Typography variant="label" component="p" color="text.secondary" sx={overviewTypography.eyebrow}>
-            CAPZ incident briefing
+            Incident briefing
           </Typography>
           <Typography variant="h4" component="h1" sx={{ mt: 0.5, ...overviewTypography.pageHeadline }}>
             {overviewHeadline(failingJobs, recurringPatterns)}

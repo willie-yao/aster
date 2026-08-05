@@ -92,7 +92,7 @@ test("job health ledger keeps job and run links separate", () => {
   const html = render(createElement(JobHealthTable, { sections: [{ id: "capz-e2e", label: "CAPZ E2E", jobs: [job()] }] }));
 
   assert.match(html, /role="table"/);
-  assert.match(html, /<h3[^>]*>CAPZ E2E<\/h3>/);
+  assert.match(html, /role="cell"[^>]*>[\s\S]*<h3[^>]*>CAPZ E2E<\/h3>/);
   assert.match(html, /href="\/job\/capz-periodic-e2e-main"/);
   assert.match(html, /href="\/job\/capz-periodic-e2e-main\?run=123"/);
   assert.match(html, />Passing</);
@@ -134,7 +134,11 @@ test("overview source uses ledger rows without nested panel scrolling", () => {
   assert.match(attention, /testRunPath\(item\.job_id, item\.test_name, item\.last_failure\.build_id\)/);
   assert.match(attention, /Additional recurring patterns/);
   assert.match(attention, /Resolved patterns/);
+  assert.match(attention, /leadAccent = color === "error" \? "error" : "primary"/);
+  assert.match(attention, /<DisclosureButton[\s\S]*<Collapse id=\{controls\}/);
   assert.match(dashboard, /overviewHeadline\(failingJobs, recurringPatterns\)/);
+  assert.match(dashboard, />\s*Incident briefing\s*</);
+  assert.doesNotMatch(dashboard, /CAPZ incident briefing/);
   assert.match(filters, /minHeight: 44/);
   assert.match(filters, /height: 44/);
   assert.match(filters, /boxShadow: "inset 0 -3px 0/);
@@ -143,6 +147,8 @@ test("overview source uses ledger rows without nested panel scrolling", () => {
   assert.match(sparkline, /width: 44[\s\S]*height: 44/);
   assert.match(ledger, /@media \(min-width: 1024px\)/);
   assert.match(ledger, /JobHealthSection/);
+  assert.match(ledger, /position: "absolute"[\s\S]*clip: "rect\(0 0 0 0\)"/);
+  assert.match(ledger, /<Box role="cell" aria-colspan=\{7\}[\s\S]*component="h3"/);
   assert.match(overviewTheme, /pageHeadline/);
   assert.match(overviewTheme, /mobileFeaturedBody/);
   assert.match(overviewTheme, /subsectionHeading/);
