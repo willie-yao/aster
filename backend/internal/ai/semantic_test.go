@@ -2,10 +2,13 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
 func TestSemanticCritique_ParsesObjections(t *testing.T) {
@@ -201,6 +204,33 @@ func TestApplySemanticJudgePostLoopRejectsInvalidCitationRevision(t *testing.T) 
 
 	if got.RootCause != orig.RootCause || state.judgeRevised {
 		t.Fatalf("invalid semantic revision replaced the valid draft: got=%+v state=%+v", got, state)
+	}
+}
+
+func TestApplySemanticJudgePostLoopAllowsPreservedRawHardFinding(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal(`{"objections":["clarify the cause"]}`))
+	revisedJSON := `{"summary":"revised","is_transient":false,"root_cause":"revised cause","severity":"High","suggested_fix":"Apply the fix.","evidence_citations":[{"path":"missing.log","line_start":1,"line_end":1,"quote":"missing"}]}`
+	srv.push(200, chatRespFinal(revisedJSON))
+	client := newAgenticTestClient(t, srv.URL)
+	state := &agentState{
+		readArtifactsFull: map[string]bool{}, readArtifactsBase: map[string]bool{}, readSourceFull: map[string]bool{},
+		evidenceArtifactsFull: map[string]bool{}, evidenceContentByPath: map[string][]string{}, analysisEvidence: map[string]*analysisChatEvidence{},
+	}
+	orig := analysisResponse{
+		Summary: "original", RootCause: "original cause", Severity: "High", SuggestedFix: "Apply the fix.",
+		EvidenceCitations: []models.EvidenceCitation{{Path: "missing.log", LineStart: 1, LineEnd: 1, Quote: "missing"}},
+	}
+	origOut := critiqueDraftWithContent(orig, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, nil, 0, analysisCitationContext{Evidence: state.analysisEvidence})
+	origJSON, err := json.Marshal(orig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.considerDraft(state.newDraftCandidate("initial", string(origJSON), nil, orig, origOut), false)
+	got := client.applySemanticJudgePostLoop(context.Background(), state, nil, string(origJSON), nil, orig, contextHeadroomFor(AgenticOptions{ContextByteBudget: 100_000}), CritiqueCachePolicyStrict)
+	if got.RootCause != "revised cause" || !state.judgeRevised || state.judgeRevisionRejected {
+		t.Fatalf("semantic revision was not selected: got=%+v state=%+v", got, state)
 	}
 }
 

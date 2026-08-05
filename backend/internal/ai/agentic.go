@@ -146,6 +146,7 @@ type critiqueDraftCandidate struct {
 	parsed           analysisResponse
 	content          string
 	providerItems    []json.RawMessage
+	rawQuality       critiqueQuality
 	quality          critiqueQuality
 	attempt          int
 	evidenceRevision int
@@ -1110,11 +1111,11 @@ agentLoop:
 										}
 									}
 									policy := effectiveCritiqueCachePolicy(in.Opts.CritiqueCachePolicy, in.Opts.CritiqueMaxRetries)
-									if len(revisedCritique.HardRuleIDs()) > 0 || !critiqueAcceptedForPolicy(revisedCritique, policy) {
+									semanticCandidate := state.newDraftCandidate("semantic_retry", revised, revisedItems, rp, revisedCritique)
+									if critiqueHardRegression(semanticCandidate.rawQuality, state.bestDraft.rawQuality) || !critiqueQualityAcceptedForPolicy(semanticCandidate.quality, policy) {
 										state.judgeRevisionRejected = true
 										break
 									}
-									semanticCandidate := state.newDraftCandidate("semantic_retry", revised, revisedItems, rp, revisedCritique)
 									state.considerFallbackDraft(semanticCandidate, true)
 									if state.considerDraft(semanticCandidate, true) {
 										state.judgeRevised = true
@@ -1761,7 +1762,7 @@ func compareCritiqueQuality(a, b critiqueQuality) int {
 }
 
 func critiqueQualityDominates(candidate, current critiqueQuality) bool {
-	if candidate.HardIssueCount > current.HardIssueCount || !stringSetSubset(candidate.HardRules, current.HardRules) {
+	if critiqueHardRegression(candidate, current) {
 		return false
 	}
 	hardImproved := candidate.HardIssueCount < current.HardIssueCount
@@ -1772,6 +1773,23 @@ func critiqueQualityDominates(candidate, current critiqueQuality) bool {
 		return false
 	}
 	return candidate.PuntCount < current.PuntCount || candidate.MissingEvidenceCount < current.MissingEvidenceCount
+}
+
+func critiqueHardRegression(candidate, current critiqueQuality) bool {
+	return candidate.HardIssueCount > current.HardIssueCount || !stringSetSubset(candidate.HardRules, current.HardRules)
+}
+
+func critiqueQualityAcceptedForPolicy(quality critiqueQuality, policy CritiqueCachePolicy) bool {
+	switch policy {
+	case CritiqueCachePolicyAdvisory:
+		return true
+	case CritiqueCachePolicyHard:
+		return quality.HardIssueCount == 0
+	case CritiqueCachePolicyStrict:
+		return quality.Passed
+	default:
+		return false
+	}
 }
 
 func stringSetSubset(candidate, current []string) bool {
@@ -1823,6 +1841,7 @@ func (s *agentState) newDraftCandidate(phase, content string, providerItems []js
 		parsed:           parsed,
 		content:          content,
 		providerItems:    providerItems,
+		rawQuality:       critiqueQualityFor(out),
 		quality:          critiqueQualityFor(publishedOut),
 		attempt:          s.observeDraft(phase, parsed, out, publishedOut),
 		evidenceRevision: s.evidenceRevision,
