@@ -1935,6 +1935,27 @@ func TestAgentic_AdvisoryPolicyStillUsesRepairBudget(t *testing.T) {
 	}
 }
 
+func TestAgentic_AdvisoryPolicySkipsSemanticJudgeForHardFailures(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal(hallucinatedFinalJSON))
+	client := newAgenticTestClient(t, srv.URL)
+	key := "agentic:test:advisory-hard-no-semantic"
+	_, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{files: map[string][]byte{"manager.log": []byte("controller failed")}}, AgenticOptions{
+		MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
+		CritiqueMaxRetries: 0, CritiqueCachePolicy: CritiqueCachePolicyAdvisory, SemanticJudge: true,
+	}), key, "sys", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 1 {
+		t.Fatalf("call count = %d, want 1 (no critique repair or semantic judge)", got)
+	}
+	if analysis.JudgeRan || !analysis.CachePersistenceAccepted || !slices.Equal(analysis.CritiqueHardFailures, []string{"citation.unread"}) {
+		t.Fatalf("analysis = %+v", analysis)
+	}
+}
+
 func TestAgentic_CritiqueBudgetSharedAcrossLoopAndPostLoop(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)

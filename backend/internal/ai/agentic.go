@@ -1261,7 +1261,7 @@ func (c *Client) prepareCacheablePublishedAnalysis(ctx context.Context, state *a
 			state.bestDraft.providerItems = nil
 		}
 	}
-	if opts.SemanticJudge && !state.judgeRan {
+	if opts.SemanticJudge && !state.judgeRan && len(out.HardRuleIDs()) == 0 {
 		content := ""
 		if raw, err := json.Marshal(parsed); err == nil {
 			content = string(raw)

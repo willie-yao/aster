@@ -257,7 +257,8 @@ func TestAgentic_SemanticRevisionRejectedKeepsPassingDraftCacheable(t *testing.T
 	srv.push(200, chatRespFinal(`{"summary":"revised","is_transient":false,"root_cause":"failure at line 999","severity":"High","suggested_fix":"Set the supported configuration.","relevant_files":[]}`))
 	client := newAgenticTestClient(t, srv.URL)
 	key := "agentic:test:semantic-rejected-cache"
-	_, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second, CritiqueMaxRetries: 1, SemanticJudge: true}), key, "sys", "user")
+	opts := AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second, CritiqueMaxRetries: 1, CritiqueCachePolicy: CritiqueCachePolicyAdvisory, SemanticJudge: true}
+	_, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, opts), key, "sys", "user")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +268,7 @@ func TestAgentic_SemanticRevisionRejectedKeepsPassingDraftCacheable(t *testing.T
 	if _, ok := client.Cache().Get(key); !ok {
 		t.Fatalf("passing original was not cached: analysis=%+v", analysis)
 	}
-	_, cached, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second, CritiqueMaxRetries: 1, SemanticJudge: true}), key, "sys", "user")
+	_, cached, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, opts), key, "sys", "user")
 	if err != nil {
 		t.Fatal(err)
 	}

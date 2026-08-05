@@ -119,7 +119,7 @@ func (a *ContainerAnalyzer) reuseContainerResultCandidate(
 		return ai.FailureAnalysisResult{}, false, nil
 	}
 	result, parseErr := ParseContainerAnalysisResult(raw)
-	if parseErr != nil || ai.AgenticResultRejection(result, policy) != ai.CacheAccepted {
+	if parseErr != nil {
 		return ai.FailureAnalysisResult{}, false, nil
 	}
 	identity := analysisruntime.NewContainerStateIdentity(candidate.Namespace, candidate.Name, taskRequest)
@@ -137,7 +137,11 @@ func (a *ContainerAnalyzer) reuseContainerResultCandidate(
 		if reason != ai.CacheAccepted || !sameAgenticResult(cachedResult, result) {
 			return ai.FailureAnalysisResult{}, false, nil
 		}
+		result = cachedResult
 	} else {
+		if ai.AgenticResultRejection(result, policy) != ai.CacheAccepted {
+			return ai.FailureAnalysisResult{}, false, nil
+		}
 		var entryErr error
 		entry, entryErr = ai.NewAgenticCacheEntry(cacheKey, result, candidate.CompletedAt)
 		if entryErr != nil {
@@ -263,8 +267,6 @@ func sameAgenticResult(left, right ai.FailureAnalysisResult) bool {
 		left.Analysis.BudgetExhausted == right.Analysis.BudgetExhausted &&
 		left.Analysis.SameFailureReuse == right.Analysis.SameFailureReuse &&
 		left.Analysis.CritiquePassed == right.Analysis.CritiquePassed &&
-		slices.Equal(left.Analysis.CritiqueHardFailures, right.Analysis.CritiqueHardFailures) &&
-		slices.Equal(left.Analysis.CritiqueSoftWarnings, right.Analysis.CritiqueSoftWarnings) &&
 		left.Analysis.CritiqueVersion == right.Analysis.CritiqueVersion &&
 		left.Analysis.SkillSetHash == right.Analysis.SkillSetHash &&
 		left.Analysis.ModelHash == right.Analysis.ModelHash &&
