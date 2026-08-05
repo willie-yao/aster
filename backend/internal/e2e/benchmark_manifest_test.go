@@ -48,6 +48,7 @@ type benchmarkManifestCase struct {
 	SourceOwner         string                    `json:"source_owner"`
 	SourceName          string                    `json:"source_name"`
 	TestName            string                    `json:"test_name"`
+	TestSource          string                    `json:"test_source,omitempty"`
 	JUnitFile           string                    `json:"junit_file,omitempty"`
 	FailureMessage      string                    `json:"failure_message"`
 	ConsecutiveFailures int                       `json:"consecutive_failures,omitempty"`
@@ -130,6 +131,12 @@ func loadBenchmarkManifest(path string) ([]benchCase, error) {
 		if item.Bucket == "" || item.JobName == "" || item.WebURL == "" || item.TestName == "" || item.FailureMessage == "" || item.SourceOwner == "" || item.SourceName == "" {
 			return nil, fmt.Errorf("benchmark manifest case %q is missing required identity", item.ID)
 		}
+		if item.TestSource != "" && item.TestSource != models.TestCaseSourceBuild {
+			return nil, fmt.Errorf("benchmark manifest case %q has invalid test_source", item.ID)
+		}
+		if item.TestSource == models.TestCaseSourceBuild && item.JUnitFile != "" {
+			return nil, fmt.Errorf("benchmark manifest case %q build source must not set junit_file", item.ID)
+		}
 		for label, value := range map[string]string{
 			"bucket": item.Bucket, "job_name": item.JobName, "repo": item.Repo, "web_url": item.WebURL,
 			"source_owner": item.SourceOwner, "source_name": item.SourceName, "junit_file": item.JUnitFile,
@@ -172,7 +179,7 @@ func loadBenchmarkManifest(path string) ([]benchCase, error) {
 			fixtureSHA256: item.FixtureSHA256, jobType: item.JobType, repo: item.Repo, jobName: item.JobName,
 			buildID: item.BuildID, pullNumber: item.PullNumber, webURL: item.WebURL,
 			commit: item.Commit, repoVersion: item.RepoVersion, repoRefs: maps.Clone(item.RepoRefs),
-			sourceRepo: [2]string{item.SourceOwner, item.SourceName}, testName: item.TestName,
+			sourceRepo: [2]string{item.SourceOwner, item.SourceName}, testName: item.TestName, testSource: item.TestSource,
 			junitFile: item.JUnitFile, failureMsg: item.FailureMessage, consecutiveFailures: item.ConsecutiveFailures,
 			oppositeDiagnosis: item.OppositeDiagnosis, signals: signals,
 		})
@@ -191,6 +198,7 @@ type benchmarkJSONLResult struct {
 	SourceRevision         string                     `json:"source_revision,omitempty"`
 	SourceUnavailable      bool                       `json:"source_unavailable,omitempty"`
 	TestName               string                     `json:"test_name"`
+	TestSource             string                     `json:"test_source,omitempty"`
 	ElapsedMS              int64                      `json:"elapsed_ms"`
 	Usable                 bool                       `json:"usable"`
 	Summary                string                     `json:"summary,omitempty"`
@@ -256,7 +264,7 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 	}
 	result := benchmarkJSONLResult{
 		CaseID: bc.name, StableID: bc.stableID, Repetition: repetition, ModelLabel: label,
-		JobName: bc.jobName, BuildID: bc.buildID, CheckoutCommit: bc.commit, TestName: bc.testName, ElapsedMS: elapsed.Milliseconds(),
+		JobName: bc.jobName, BuildID: bc.buildID, CheckoutCommit: bc.commit, TestName: bc.testName, TestSource: bc.testSource, ElapsedMS: elapsed.Milliseconds(),
 		FileLinks: map[string]string{}, SignalTotal: len(bc.signals), SelectedAttempt: selectedAttempt,
 		ToolNames: append([]string(nil), toolUsage.names...), ToolCounts: append([]string(nil), toolUsage.counts...),
 		FloorNudges: traceSummary.floorNudges, FloorNudgeReasons: append([]string(nil), traceSummary.floorNudgeReasons...),
@@ -366,12 +374,31 @@ func TestLoadBenchmarkManifest(t *testing.T) {
 		t.Fatalf("cases=%+v", cases)
 	}
 
+	buildValue := strings.Replace(valid, `"junit_file": "junit.xml",`, `"test_source": "build",`, 1)
+	buildPath := filepath.Join(t.TempDir(), "build-manifest.json")
+	if err := os.WriteFile(buildPath, []byte(buildValue), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	buildCases, err := loadBenchmarkManifest(buildPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(buildCases) != 1 || buildCases[0].testSource != models.TestCaseSourceBuild || buildCases[0].junitFile != "" {
+		t.Fatalf("build cases = %+v", buildCases)
+	}
+
 	for name, mutate := range map[string]func(string) string{
 		"unknown field": func(value string) string {
 			return strings.Replace(value, `"version": 1`, `"version": 1, "extra": true`, 1)
 		},
 		"bad stable id": func(value string) string { return strings.Replace(value, "0123456789abcdef0123", "model-name", 1) },
 		"bad regexp":    func(value string) string { return strings.Replace(value, "(?i)root cause", "[", 1) },
+		"bad test source": func(value string) string {
+			return strings.Replace(value, `"test_name": "Example test"`, `"test_name": "Example test", "test_source": "junit"`, 1)
+		},
+		"build source with junit": func(value string) string {
+			return strings.Replace(value, `"junit_file": "junit.xml"`, `"test_source": "build", "junit_file": "junit.xml"`, 1)
+		},
 		"second object": func(value string) string { return value + `{}` },
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -390,7 +417,7 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 	t.Setenv("BENCH_MODEL_LABEL", "model-a")
 	path := filepath.Join(t.TempDir(), "results.jsonl")
 	bc := benchCase{
-		name: "case-one", stableID: "0123456789abcdef0123", jobName: "job", buildID: "123", testName: "test",
+		name: "case-one", stableID: "0123456789abcdef0123", jobName: "job", buildID: "123", testName: "test", testSource: models.TestCaseSourceBuild,
 		commit: strings.Repeat("a", 40), repoVersion: strings.Repeat("a", 40), repoRefs: map[string]string{"example/project": "main"},
 		sourceRepo: [2]string{"example", "project"},
 		signals:    []benchSignal{{name: "cause", re: regexp.MustCompile(`root cause`), must: true}},
@@ -425,7 +452,7 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 	if err := json.Unmarshal(data, &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.ModelLabel != "model-a" || result.Repetition != 2 || result.SignalHits != 1 || result.SourceRevision != strings.Repeat("a", 40) || result.SourceUnavailable ||
+	if result.ModelLabel != "model-a" || result.Repetition != 2 || result.SignalHits != 1 || result.SourceRevision != strings.Repeat("a", 40) || result.SourceUnavailable || result.TestSource != models.TestCaseSourceBuild ||
 		result.Trace.Finalize["empty:unexpected_tool_call"] != 1 || result.Trace.Critique["punts"] != 1 || result.GCSBytes != 42 ||
 		!result.EvidencePlanCovered || !result.GCSFloorRetryExhausted || !result.CritiquePassed || !result.BudgetExhausted ||
 		result.FloorNudges != 1 || !slices.Equal(result.FloorNudgeReasons, []string{"gcs_bytes"}) ||

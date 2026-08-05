@@ -92,6 +92,7 @@ type benchCase struct {
 	repoRefs      map[string]string
 	sourceRepo    [2]string // owner, name for repo-relative file-link resolution
 	testName      string
+	testSource    string
 	junitFile     string
 	failureMsg    string
 	// consecutiveFailures is how many consecutive builds this test had failed at
@@ -586,7 +587,14 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 		cacheVerification = verifyBenchmarkCacheReuse(t, client, clientOptions, service, cacheGeneration, jobID, bc, run)
 	}
 	writeBenchmarkJSONL(t, resultsPath, bc, repetition, tc, elapsed, snapshot, selectedAttempt, toolUsage, traceSummary, cacheGeneration, cacheVerification)
-	scoreBenchCase(t, bc, tc, elapsed, "in-process", agentic.MinGCSBytes, toolUsage, traceSummary, draftObservations, selectedAttempt)
+	scoreBenchCase(t, bc, tc, elapsed, "in-process", benchmarkMinGCSBytes(bc, agentic.MinGCSBytes), toolUsage, traceSummary, draftObservations, selectedAttempt)
+}
+
+func benchmarkMinGCSBytes(bc benchCase, configured int) int {
+	if bc.testSource == models.TestCaseSourceBuild {
+		return 0
+	}
+	return configured
 }
 
 func benchmarkCacheGenerationFingerprint(configValue string) (string, error) {
@@ -1180,6 +1188,7 @@ func TestBenchCasesRejectOppositeDiagnoses(t *testing.T) {
 func benchTestCase(bc benchCase) *models.TestCase {
 	return &models.TestCase{
 		Name:           bc.testName,
+		Source:         bc.testSource,
 		Status:         "failed",
 		FailureMessage: bc.failureMsg,
 		JUnitFile:      bc.junitFile,
@@ -1533,5 +1542,21 @@ func TestBenchmarkPersistentCacheSavesWithoutReloadVerification(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, ai.CacheFilename)); err != nil {
 		t.Fatalf("persistent cache was not saved: %v", err)
+	}
+}
+
+func TestBenchTestCasePreservesBuildSource(t *testing.T) {
+	tc := benchTestCase(benchCase{testName: "Prow job execution", testSource: models.TestCaseSourceBuild, failureMsg: "failed"})
+	if tc.Source != models.TestCaseSourceBuild || tc.JUnitFile != "" {
+		t.Fatalf("test case = %+v", tc)
+	}
+}
+
+func TestBenchmarkMinGCSBytesMatchesBuildPolicy(t *testing.T) {
+	if got := benchmarkMinGCSBytes(benchCase{testSource: models.TestCaseSourceBuild}, 5_000_000); got != 0 {
+		t.Fatalf("build floor = %d, want 0", got)
+	}
+	if got := benchmarkMinGCSBytes(benchCase{}, 5_000_000); got != 5_000_000 {
+		t.Fatalf("JUnit floor = %d, want 5000000", got)
 	}
 }

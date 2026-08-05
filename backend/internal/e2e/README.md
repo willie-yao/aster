@@ -31,6 +31,9 @@ Options:
 - `BENCH_PROJECT_DIR=<consumer-repo>` loads that consumer's real `project.yaml`
   AI tuning and `prompts/system.md`, so the run matches that live deploy exactly.
   Without it, a compact built-in prompt and the live CAPZ-Dynamo tuning are used.
+- External manifest cases may set `test_source: build` for a Prow build-level
+  failure that has no JUnit case. This preserves the production failure signal
+  and build-specific floor policy.
 - `BENCH_USE_GCS=1` reads artifacts from live GCS instead of the committed
   fixture. Only works before Prow garbage-collects the build.
 - `AI_CACHE_GENERATION=<value>` applies the same validated, hashed cache-key
