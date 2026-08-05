@@ -286,3 +286,36 @@ func readSRTSettings(t *testing.T, path string) srtSettings {
 }
 
 func successfulNodeCheck(func(string) (string, error)) error { return nil }
+
+func TestSRTSandboxValidatesNodeFromSandboxPATH(t *testing.T) {
+	fake := newFakeSRTPackage(t, SRTVersion)
+	binDir := t.TempDir()
+	for name, body := range map[string]string{
+		"node":         "#!/bin/sh\nprintf 'v20.10.0\\n'\n",
+		"rg":           "#!/bin/sh\nexit 0\n",
+		"sandbox-exec": "#!/bin/sh\nexit 0\n",
+	} {
+		if err := os.WriteFile(filepath.Join(binDir, name), []byte(body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	work, home, temp := t.TempDir(), t.TempDir(), t.TempDir()
+	command := filepath.Join(work, "agent")
+	if err := os.WriteFile(command, []byte("binary"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, err := NewSRTSandbox(fake).Command(context.Background(), SandboxSpec{
+		Command: []string{command}, WorkDir: work, HomeDir: home, TempDir: temp,
+		Environment: []string{"PATH=" + binDir},
+		ReadPaths:   []string{work, home, temp, command}, WritePaths: []string{work, home, temp},
+	})
+	if !errors.Is(err, ErrSandboxUnavailable) || !strings.Contains(err.Error(), "older than 20.11") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestLookPathInRejectsRelativePATH(t *testing.T) {
+	if _, err := lookPathIn("node", "relative:/usr/bin"); err == nil {
+		t.Fatal("expected relative PATH entry to fail")
+	}
+}

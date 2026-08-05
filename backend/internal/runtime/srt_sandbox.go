@@ -64,7 +64,11 @@ func (s *SRTSandbox) Command(ctx context.Context, spec SandboxSpec) (*exec.Cmd, 
 	}
 	lookPath := s.lookPath
 	if lookPath == nil {
-		lookPath = exec.LookPath
+		pathValue, ok := environmentValue(spec.Environment, "PATH")
+		if !ok {
+			return nil, fmt.Errorf("%w: sandbox PATH is not configured", ErrSandboxUnavailable)
+		}
+		lookPath = func(name string) (string, error) { return lookPathIn(name, pathValue) }
 	}
 	bin := s.Bin
 	if bin == "" {
@@ -155,6 +159,45 @@ func (s *SRTSandbox) Run(ctx context.Context, spec SandboxSpec) ([]byte, error) 
 		<-done
 		return output.Bytes(), ctx.Err()
 	}
+}
+
+func environmentValue(environment []string, target string) (string, bool) {
+	for i := len(environment) - 1; i >= 0; i-- {
+		name, value, ok := strings.Cut(environment[i], "=")
+		if ok && name == target {
+			return value, true
+		}
+	}
+	return "", false
+}
+
+func lookPathIn(name, pathValue string) (string, error) {
+	if strings.ContainsRune(name, filepath.Separator) {
+		if !filepath.IsAbs(name) {
+			return "", fmt.Errorf("executable path is not absolute")
+		}
+		return executableFile(name)
+	}
+	for _, directory := range filepath.SplitList(pathValue) {
+		if !filepath.IsAbs(directory) {
+			return "", fmt.Errorf("PATH contains a relative directory")
+		}
+		if path, err := executableFile(filepath.Join(directory, name)); err == nil {
+			return path, nil
+		}
+	}
+	return "", exec.ErrNotFound
+}
+
+func executableFile(path string) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	if info.IsDir() || info.Mode().Perm()&0o111 == 0 {
+		return "", exec.ErrNotFound
+	}
+	return path, nil
 }
 
 func validateSRTSpec(spec SandboxSpec) error {
