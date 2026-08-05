@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestBuildSystemPromptUsesEvidenceWithoutLeakingTokens(t *testing.T) {
@@ -255,5 +256,36 @@ func TestBuildSystemPromptCancellationPropagates(t *testing.T) {
 	}, io.Discard, io.Discard)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestBuildSystemPromptHonorsPromptTimeout(t *testing.T) {
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer source.Close()
+	oldAPI := githubAPIBaseURL
+	githubAPIBaseURL = source.URL
+	t.Cleanup(func() { githubAPIBaseURL = oldAPI })
+
+	opts := testOpts()
+	opts.AIToken = "fixture-token"
+	opts.AIEndpoint = "https://provider.example/v1/chat/completions"
+	opts.AIModel = "fixture-model"
+	opts.PromptTimeout = 20 * time.Millisecond
+	data := buildScaffoldData(opts, nil)
+	start := time.Now()
+	_, result, err := buildSystemPrompt(context.Background(), opts, data, promptDraftInput{
+		ProjectName: data.Name,
+		SourceRepo:  Repo{Owner: "example", Name: "project", FullName: "example/project"},
+	}, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("elapsed = %s", elapsed)
+	}
+	if result.Failure == nil || result.Failure.Category != promptFailureTimedOut || result.Failure.Stage != promptStageSourceRevision {
+		t.Fatalf("result = %+v", result)
 	}
 }

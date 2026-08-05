@@ -433,6 +433,9 @@ func printReview(out io.Writer, plan *Plan) {
 	}
 	fmt.Fprintf(out, "  Prompt:               %s\n", safeTerminal(plan.Prompt.Source))
 	fmt.Fprintf(out, "  Prompt requested:     %s\n", safeTerminal(plan.Prompt.RequestedMode))
+	if plan.Prompt.RequestedMode == string(promptRequestAPIExperimental) {
+		fmt.Fprintf(out, "  Prompt timeout:       %s\n", safeTerminal(plan.Prompt.Timeout))
+	}
 	if plan.Prompt.Output == string(promptOutputAPIDraft) {
 		fmt.Fprintf(out, "  Prompt provider:      %s, %s, %s\n", safeTerminal(plan.Prompt.API), reviewValue(plan.Prompt.Endpoint), safeTerminal(plan.Prompt.Model))
 	}

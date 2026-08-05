@@ -237,6 +237,9 @@ func (r promptPreparationResult) promptPlan(opts Options) PromptPlan {
 		plan.FailureCategory = string(r.Failure.Category)
 		plan.FailureAction = r.Failure.Category.action()
 	}
+	if r.Requested == promptRequestAPIExperimental {
+		plan.Timeout = effectivePromptDraftTimeout(opts).String()
+	}
 	if r.Status == promptStatusAPIDraft {
 		plan.API = opts.AIAPI
 		plan.Endpoint = opts.AIEndpoint
@@ -248,6 +251,14 @@ func (r promptPreparationResult) promptPlan(opts Options) PromptPlan {
 func validatePromptPlan(plan PromptPlan) error {
 	if plan.RequestedMode != string(promptRequestTemplate) && plan.RequestedMode != string(promptRequestAPIExperimental) {
 		return fmt.Errorf("onboarding plan prompt request %q is invalid", plan.RequestedMode)
+	}
+	if plan.RequestedMode == string(promptRequestAPIExperimental) {
+		timeout, err := time.ParseDuration(plan.Timeout)
+		if err != nil || timeout < minPromptDraftTimeout || timeout > maxPromptDraftTimeout {
+			return fmt.Errorf("onboarding plan prompt timeout is invalid")
+		}
+	} else if plan.Timeout != "" {
+		return fmt.Errorf("onboarding plan TODO prompt retained an API timeout")
 	}
 	switch plan.FinalStatus {
 	case string(promptStatusTemplate):

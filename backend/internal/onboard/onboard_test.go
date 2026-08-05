@@ -3,6 +3,7 @@ package onboard
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 )
@@ -718,5 +719,37 @@ func TestValidateAIEndpoint_RejectsCommonCredentialQueryKeys(t *testing.T) {
 		if err := validateAIEndpoint(endpoint); err == nil || !strings.Contains(err.Error(), "credential query") {
 			t.Errorf("validateAIEndpoint(%q) error = %v", endpoint, err)
 		}
+	}
+}
+
+func TestValidateOptionsPromptTimeout(t *testing.T) {
+	t.Run("default", func(t *testing.T) {
+		opts := testOpts()
+		if err := validateOptions(&opts); err != nil {
+			t.Fatal(err)
+		}
+		if opts.PromptTimeout != defaultPromptDraftTimeout {
+			t.Fatalf("prompt timeout = %s", opts.PromptTimeout)
+		}
+	})
+	for _, test := range []struct {
+		name    string
+		timeout time.Duration
+		wantErr bool
+	}{
+		{name: "minimum", timeout: time.Minute},
+		{name: "slow provider", timeout: 30 * time.Minute},
+		{name: "maximum", timeout: 2 * time.Hour},
+		{name: "too short", timeout: time.Second, wantErr: true},
+		{name: "too long", timeout: 2*time.Hour + time.Second, wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			opts := testOpts()
+			opts.PromptTimeout = test.timeout
+			err := validateOptions(&opts)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("error = %v", err)
+			}
+		})
 	}
 }

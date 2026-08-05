@@ -80,7 +80,7 @@ of eligible files in the pinned snapshot, but cannot trigger arbitrary URLs,
 commands, provider-time retrieval, or secret access. The draft remains a
 starting point that requires human review.
 
-Generation uses two structured completion stages within a five-minute total timeout:
+Generation uses two structured completion stages within a five-minute total timeout by default. `fetcher onboard --prompt-timeout` can raise the total budget for a slow provider:
 
 1. Extract an evidence object whose claims retain supplied source paths and line
    ranges.

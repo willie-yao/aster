@@ -85,7 +85,7 @@ func buildSystemPrompt(ctx context.Context, opts Options, data scaffoldData, inp
 
 	// Bound the whole drafting phase so a hung endpoint degrades to the template
 	// instead of hanging the command.
-	ctx, cancel := context.WithTimeout(ctx, promptDraftTimeout)
+	ctx, cancel := context.WithTimeout(ctx, effectivePromptDraftTimeout(opts))
 	defer cancel()
 
 	httpClient := &http.Client{Timeout: 30 * time.Second}
@@ -161,8 +161,18 @@ func promptFallback(opts Options, data scaffoldData, errOut io.Writer, debug pro
 	return prompt, result, err
 }
 
-// promptDraftTimeout bounds source retrieval and two structured completion stages.
-const promptDraftTimeout = 5 * time.Minute
+const (
+	defaultPromptDraftTimeout = 5 * time.Minute
+	minPromptDraftTimeout     = time.Minute
+	maxPromptDraftTimeout     = 2 * time.Hour
+)
+
+func effectivePromptDraftTimeout(opts Options) time.Duration {
+	if opts.PromptTimeout <= 0 {
+		return defaultPromptDraftTimeout
+	}
+	return opts.PromptTimeout
+}
 
 func validateOptions(opts *Options) error {
 	if err := validateCredentialSeparation(*opts); err != nil {
@@ -185,6 +195,12 @@ func validateOptions(opts *Options) error {
 		opts.AIAPI = project.AIAPIChatCompletions
 	}
 	opts.DeploymentAIAPI = strings.ToLower(strings.TrimSpace(opts.DeploymentAIAPI))
+	if opts.PromptTimeout == 0 {
+		opts.PromptTimeout = defaultPromptDraftTimeout
+	}
+	if opts.PromptTimeout < minPromptDraftTimeout || opts.PromptTimeout > maxPromptDraftTimeout {
+		return fmt.Errorf("--prompt-timeout must be between %s and %s", minPromptDraftTimeout, maxPromptDraftTimeout)
+	}
 	if (opts.TestGrid == "") == (opts.Bucket == "") {
 		return fmt.Errorf("provide exactly one of --testgrid or --bucket")
 	}

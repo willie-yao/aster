@@ -171,6 +171,12 @@ request creation unless the experimental API draft succeeds. The flag is valid
 only for experimental API drafting and requires `AI_TOKEN`, `AI_ENDPOINT`, and
 `AI_MODEL`.
 
+Prompt preparation has a five-minute total timeout by default. Slow providers
+can use `--prompt-timeout`, for example `--prompt-timeout 30m`. The accepted
+range is one minute through two hours. This timeout covers source retrieval and
+both structured drafting stages; it is separate from the normal fetcher timeout
+and deployed `ai.timeout`.
+
 ## Next steps
 
 After the scaffold is written:

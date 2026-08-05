@@ -1,5 +1,7 @@
 package onboard
 
+import "time"
+
 // Options configures a scaffold run. Complete flag-based runs require one
 // discovery selector plus the dashboard and source repositories. Interactive
 // runs may infer or prompt for missing values.
@@ -74,6 +76,8 @@ type Options struct {
 	NoPrompt bool
 	// PromptDebug writes sanitized prompt-preparation diagnostics to stderr.
 	PromptDebug bool
+	// PromptTimeout bounds source retrieval and structured prompt drafting.
+	PromptTimeout time.Duration
 	// RequirePromptDraft fails before writes unless experimental API drafting succeeds.
 	RequirePromptDraft bool
 

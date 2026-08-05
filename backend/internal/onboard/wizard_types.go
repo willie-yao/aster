@@ -41,6 +41,7 @@ type PromptPlan struct {
 	API              string `json:"api,omitempty"`
 	Endpoint         string `json:"endpoint,omitempty"`
 	Model            string `json:"model,omitempty"`
+	Timeout          string `json:"timeout,omitempty"`
 }
 
 const (

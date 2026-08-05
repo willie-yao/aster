@@ -242,6 +242,13 @@ experimental API path, requires `AI_TOKEN`, `AI_ENDPOINT`, and `AI_MODEL`, and
 returns a nonzero error before any local write or pull request when the final
 result is not an API draft.
 
+`--prompt-timeout` controls the total source-retrieval and structured-drafting
+budget. It defaults to `5m` and accepts values from `1m` through `2h`. A slow
+provider can use, for example, `--prompt-timeout 30m`. This option does not
+change the regular fetcher `--timeout` or the deployed project `ai.timeout`.
+The reviewed timeout is retained in the credential-free onboarding plan and
+shown before any write.
+
 See [AI providers](ai-providers.md) and
 [Writing the project prompt](writing-prompts.md).
 
