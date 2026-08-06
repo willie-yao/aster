@@ -51,7 +51,8 @@
       "forbidden": [
         {
           "name": "temporary security-scanner attribution",
-          "pattern": "(?is)(?:(?:temporary|transient|one-off).{0,100}(?:scanner|database|trivy).{0,140}(?:caused|root cause|primary)|(?:caused by|root cause|primary).{0,140}(?:temporary|transient|one-off).{0,100}(?:scanner|database|trivy))"
+          "pattern": "(?is)(?:(?:temporary|transient|one-off).{0,100}(?:scanner|database|trivy).{0,160}(?:caused|root cause|primary|responsible|attributed|due)|(?:caused by|root cause|primary|responsible|attributed to|due to).{0,160}(?:temporary|transient|one-off).{0,100}(?:scanner|database|trivy))",
+          "negated": "(?is)(?:not|isn.t|wasn.t|cannot be|could not be).{0,80}(?:responsible|root cause|primary|attributed|due)"
         }
       ],
       "reference_diagnosis": "At the pinned commit, the driver image is compiled with Go 1.26.4 and includes google.golang.org/grpc v1.81.1 and golang.org/x/text v0.38.0. Trivy reports those exact installed versions as affected by four vulnerabilities with fixes available, and the Makefile intentionally fails the image-scan target when any fixed MEDIUM, HIGH, or CRITICAL finding is present.",

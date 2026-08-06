@@ -81,6 +81,24 @@ func TestCrossProjectEvaluationManifest(t *testing.T) {
 				t.Errorf("case %q adversarial diagnosis did not fail %q: %v", bc.name, want, assessment.missingMust)
 			}
 		}
+		if bc.name == "secrets-store-csi-image-scan" {
+			alternate := &models.TestCase{
+				AISummary:  &models.AISummary{Summary: "Trivy found four fixable vulnerabilities and the --exit-code 1 gate fired."},
+				AIAnalysis: &models.AIAnalysis{RootCause: "A temporary scanner database state was responsible for the failure."},
+			}
+			if assessment := assessBenchmarkCase(bc, alternate); !slices.Contains(assessment.missingMust, "forbidden: temporary security-scanner attribution") {
+				t.Errorf("case %q accepts responsible-for scanner attribution: %v", bc.name, assessment.missingMust)
+			}
+		}
+		if bc.name == "gcp-pd-csi-windows-mount-visibility" {
+			negated := &models.TestCase{
+				AISummary:  &models.AISummary{Summary: bc.referenceDiagnosis},
+				AIAnalysis: &models.AIAnalysis{RootCause: bc.referenceDiagnosis + " The GCE PD node driver is not definitively responsible."},
+			}
+			if assessment := assessBenchmarkCase(bc, negated); slices.Contains(assessment.missingMust, "forbidden: unsupported component ownership") {
+				t.Errorf("case %q rejects negated ownership statement: %v", bc.name, assessment.missingMust)
+			}
+		}
 	}
 	if allowedUnavailable != 1 {
 		t.Fatalf("allow_unavailable cases = %d, want 1", allowedUnavailable)

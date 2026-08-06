@@ -1521,7 +1521,7 @@ func assessBenchmarkCase(bc benchCase, tc *models.TestCase) benchmarkAssessment 
 		}
 	}
 	for _, forbidden := range bc.forbidden {
-		hit := !forbidden.re.MatchString(scored)
+		hit := !forbidden.matches(scored)
 		name := "forbidden: " + forbidden.name
 		assessment.results = append(assessment.results, benchmarkSignalResult{name: name, hit: hit, required: true})
 		if hit {
