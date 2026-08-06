@@ -13,7 +13,8 @@ The runtime verifies the package name and version from the installed package met
 The `0.0.70` npm package is not published in every registry. The repository
 installer downloads the pinned upstream source archive, verifies its SHA-256,
 builds the package from its lock file, installs only the runtime dependencies,
-and records the verified source identity in `INSTALL_PROVENANCE`.
+builds the Linux seccomp helper when needed, and records the verified source,
+platform, architecture, and installer schema in `INSTALL_PROVENANCE`.
 Install it into a dedicated tool directory rather than globally:
 
 ```bash

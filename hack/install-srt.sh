@@ -8,6 +8,21 @@ readonly srt_version="0.0.70"
 readonly srt_commit="44ab607c46f20381aeaf3e22ca0e0151d4c6b29c"
 readonly source_sha256="5fc9680a0431bb9172eba591f5289756b8d57a5353941b139df4106c000979f0"
 readonly source_url="https://github.com/anthropic-experimental/sandbox-runtime/archive/${srt_commit}.tar.gz"
+readonly installer_schema="2"
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+platform="$(node -p 'process.platform')"
+architecture="$(node -p 'process.arch')"
+seccomp_helper=""
+if [[ "${platform}" == "linux" ]]; then
+	case "${architecture}" in
+	x64 | arm64) seccomp_helper="node_modules/@anthropic-ai/sandbox-runtime/vendor/seccomp/${architecture}/apply-seccomp" ;;
+	*)
+		echo "unsupported Linux architecture for srt seccomp helper: ${architecture}" >&2
+		exit 1
+		;;
+	esac
+fi
 
 destination="${1:-}"
 if [[ -z "${destination}" || "${destination}" != /* ]]; then
@@ -30,8 +45,12 @@ if [[ -e "${destination}" ]]; then
 		installed_name="$(node -p "require(process.argv[1]).name" "${installed_package}")"
 		installed_version="$(node -p "require(process.argv[1]).version" "${installed_package}")"
 		if [[ "${installed_name}" == "@anthropic-ai/sandbox-runtime" && "${installed_version}" == "${srt_version}" ]] \
+			&& grep -Fxq "installer_schema=${installer_schema}" "${installed_provenance}" \
 			&& grep -Fxq "source_commit=${srt_commit}" "${installed_provenance}" \
-			&& grep -Fxq "source_sha256=${source_sha256}" "${installed_provenance}"; then
+			&& grep -Fxq "source_sha256=${source_sha256}" "${installed_provenance}" \
+			&& grep -Fxq "platform=${platform}" "${installed_provenance}" \
+			&& grep -Fxq "architecture=${architecture}" "${installed_provenance}" \
+			&& { [[ -z "${seccomp_helper}" ]] || [[ -x "${destination}/${seccomp_helper}" ]]; }; then
 			printf '%s\n' "${installed_bin}"
 			exit 0
 		fi
@@ -71,6 +90,16 @@ if [[ "${source_version}" != "${srt_version}" ]]; then
 	exit 1
 fi
 
+if [[ "${platform}" == "linux" ]]; then
+	for command in gcc strip; do
+		if ! command -v "${command}" >/dev/null 2>&1; then
+			echo "required Linux srt build command not found: ${command}" >&2
+			exit 1
+		fi
+	done
+	node "${script_dir}/build-srt-seccomp.mjs" "${source_dir}" >&2
+fi
+
 (
 	cd "${source_dir}"
 	npm ci --ignore-scripts --no-audit --no-fund >&2
@@ -90,11 +119,15 @@ ln -s ../@anthropic-ai/sandbox-runtime/dist/cli.js "${stage}/node_modules/.bin/s
 cat > "${stage}/INSTALL_PROVENANCE" <<EOF_PROVENANCE
 package=@anthropic-ai/sandbox-runtime
 version=${srt_version}
+installer_schema=${installer_schema}
 source_commit=${srt_commit}
 source_sha256=${source_sha256}
+platform=${platform}
+architecture=${architecture}
 EOF_PROVENANCE
 staged_version="$(node -p "require(process.argv[1]).version" "${stage}/node_modules/@anthropic-ai/sandbox-runtime/package.json")"
-if [[ "${staged_version}" != "${srt_version}" || ! -x "${stage}/node_modules/.bin/srt" ]]; then
+if [[ "${staged_version}" != "${srt_version}" || ! -x "${stage}/node_modules/.bin/srt" ]] \
+	|| { [[ -n "${seccomp_helper}" ]] && [[ ! -x "${stage}/${seccomp_helper}" ]]; }; then
 	echo "built srt install failed verification" >&2
 	exit 1
 fi

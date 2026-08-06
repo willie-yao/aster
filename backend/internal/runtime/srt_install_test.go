@@ -25,11 +25,14 @@ func TestSRTInstallerContract(t *testing.T) {
 		`srt_version="` + SRTVersion + `"`,
 		`srt_commit="44ab607c46f20381aeaf3e22ca0e0151d4c6b29c"`,
 		`source_sha256="5fc9680a0431bb9172eba591f5289756b8d57a5353941b139df4106c000979f0"`,
+		`installer_schema="2"`,
 		"npm ci --ignore-scripts",
 		"npm run build",
 		"npm ci --ignore-scripts --no-audit --no-fund --omit=dev",
 		"cp -R \"${source_dir}/node_modules/.\" \"${stage}/node_modules/\"",
+		`node "${script_dir}/build-srt-seccomp.mjs" "${source_dir}"`,
 		`installed_provenance="${destination}/INSTALL_PROVENANCE"`,
+		`installer_schema=${installer_schema}`,
 		`source_commit=${srt_commit}`,
 		`source_sha256=${source_sha256}`,
 	} {
@@ -44,6 +47,13 @@ func TestSRTInstallerContract(t *testing.T) {
 		cmd := exec.Command(bash, "-n", installerPath)
 		if output, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("bash -n: %v: %s", err, output)
+		}
+	}
+	seccompBuilder := filepath.Join(root, "hack", "build-srt-seccomp.mjs")
+	if node, err := exec.LookPath("node"); err == nil {
+		cmd := exec.Command(node, "--check", seccompBuilder)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("node --check: %v: %s", err, output)
 		}
 	}
 
@@ -64,7 +74,12 @@ func TestSRTInstallerContract(t *testing.T) {
 		t.Fatalf("read CI workflow: %v", err)
 	}
 	workflowText := string(workflow)
-	for _, want := range []string{"srt-installer:", `./hack/install-srt.sh "$RUNNER_TEMP/srt-0.0.70"`, `"$SRT_BIN" --help`} {
+	for _, want := range []string{
+		"srt-installer:",
+		`./hack/install-srt.sh "$RUNNER_TEMP/srt-0.0.70"`,
+		`"$SRT_BIN" --help`,
+		"TestSRTSandboxHostileIntegration",
+	} {
 		if !strings.Contains(workflowText, want) {
 			t.Errorf("CI workflow missing %q", want)
 		}
