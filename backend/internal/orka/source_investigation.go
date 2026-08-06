@@ -59,14 +59,12 @@ type SourceInvestigationFromEnvConfig struct {
 type SourceInvestigator struct {
 	kube    taskAPI
 	results resultAPI
-	reader  SourceReader
+	reader  sourceinvestigation.Reader
 	opts    SourceInvestigationOptions
 }
 
-// SourceReader reads one file from an exact repository revision.
-type SourceReader interface {
-	ReadFile(context.Context, sourceinvestigation.Repository, string) (string, error)
-}
+// SourceReader is retained as an alias for the shared source verifier contract.
+type SourceReader = sourceinvestigation.Reader
 
 var _ sourceinvestigation.Runner = (*SourceInvestigator)(nil)
 
@@ -74,7 +72,7 @@ var _ sourceinvestigation.Runner = (*SourceInvestigator)(nil)
 func NewSourceInvestigator(
 	kube *KubeClient,
 	results *ResultClient,
-	reader SourceReader,
+	reader sourceinvestigation.Reader,
 	opts SourceInvestigationOptions,
 ) *SourceInvestigator {
 	if reader == nil {
@@ -207,9 +205,11 @@ func (r *SourceInvestigator) Investigate(
 		return sourceinvestigation.Result{}, fmt.Errorf("source investigation Task %s: %w", name, err)
 	}
 	request.ReportProgress(sourceinvestigation.PhaseVerifying)
-	if err := r.verifyCitations(ctx, request.Subject.Repository, &result); err != nil {
+	verified, err := sourceinvestigation.VerifyCitations(ctx, r.reader, request.Subject.Repository, result.Citations)
+	if err != nil {
 		return sourceinvestigation.Result{}, fmt.Errorf("source investigation Task %s: %w", name, err)
 	}
+	result.Citations = verified
 	if err := sourceinvestigation.ValidateVerifiedResult(result); err != nil {
 		return sourceinvestigation.Result{}, err
 	}
@@ -286,36 +286,6 @@ func parseSourceResult(raw string) (sourceinvestigation.Result, error) {
 		return sourceinvestigation.Result{}, err
 	}
 	return result, nil
-}
-
-func (r *SourceInvestigator) verifyCitations(
-	ctx context.Context,
-	repo sourceinvestigation.Repository,
-	result *sourceinvestigation.Result,
-) error {
-	cache := map[string]string{}
-	for i := range result.Citations {
-		citation := &result.Citations[i]
-		content, ok := cache[citation.Path]
-		if !ok {
-			var err error
-			content, err = r.reader.ReadFile(ctx, repo, citation.Path)
-			if err != nil {
-				return fmt.Errorf("%w: reading cited source %q: %v", sourceinvestigation.ErrInvalidResult, citation.Path, err)
-			}
-			cache[citation.Path] = content
-		}
-		lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
-		if citation.LineEnd > len(lines) {
-			return fmt.Errorf("%w: citation %q exceeds file length", sourceinvestigation.ErrInvalidResult, citation.Path)
-		}
-		selected := strings.Join(lines[citation.LineStart-1:citation.LineEnd], "\n")
-		if !strings.Contains(selected, citation.Quote) {
-			return fmt.Errorf("%w: citation quote does not match %s:%d-%d", sourceinvestigation.ErrInvalidResult, citation.Path, citation.LineStart, citation.LineEnd)
-		}
-		citation.Verified = true
-	}
-	return nil
 }
 
 func (r *SourceInvestigator) buildSourceTask(name string, request sourceinvestigation.Request) map[string]any {

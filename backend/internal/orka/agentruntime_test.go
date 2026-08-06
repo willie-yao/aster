@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -33,6 +34,7 @@ type fakeTaskAPI struct {
 	uid         string
 	annotations map[string]string
 	preexisting bool
+	attempts    int
 }
 
 func (f *fakeTaskAPI) Apply(_ context.Context, gvr schema.GroupVersionResource, _ string, obj map[string]any) error {
@@ -107,7 +109,7 @@ func (f *fakeTaskAPI) TaskState(_ context.Context, _, _ string) (TaskState, erro
 	if uid == "" {
 		uid = "uid-1"
 	}
-	return TaskState{Exists: true, Phase: phase, UID: uid, ResourceVersion: "1", Annotations: annotations}, nil
+	return TaskState{Exists: true, Phase: phase, UID: uid, ResourceVersion: "1", Annotations: annotations, Attempts: f.attempts}, nil
 }
 
 func (f *fakeTaskAPI) DeleteTaskIfIdentity(_ context.Context, _, _ string, uid, _ string) (bool, error) {
@@ -1005,4 +1007,81 @@ func TestAgentRuntimeCleanupAdoptsPlannedOwnedTask(t *testing.T) {
 	if !kube.deleted {
 		t.Fatal("owned planned Task was not cleaned")
 	}
+}
+
+func TestAgentRuntimeFailureAnalysisPurposeIsConstrained(t *testing.T) {
+	kube := &fakeTaskAPI{phases: []string{"Succeeded"}, attempts: 2}
+	results, done := resultServer(t, StructuredResult{BaseSHA: strings.Repeat("a", 40)})
+	defer done()
+	s := spec()
+	s.Repo.Ref = strings.Repeat("a", 40)
+	s.AllowBash = false
+	r := &AgentRuntime{kube: kube, results: results, opts: AgentOptions{
+		AgentRef: "analysis-agent", GitSecret: "source-readonly", Purpose: AgentPurposeFailureAnalysis, PollEvery: time.Millisecond,
+	}}
+	got, err := r.Generate(t.Context(), s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", got.Attempts)
+	}
+	metadata := kube.applied["metadata"].(map[string]any)
+	labels := metadata["labels"].(map[string]any)
+	annotations := metadata["annotations"].(map[string]any)
+	if labels[ManagedByLabel] != AgentAnalysisManagedByValue || labels[agentContractLabel] != string(AgentPurposeFailureAnalysis) {
+		t.Fatalf("labels = %+v", labels)
+	}
+	if annotations[analysisContractAnnotation] != "agent-analysis-v1" || annotations["orka.ai/disable-coordination-tool-injection"] != "true" {
+		t.Fatalf("annotations = %+v", annotations)
+	}
+	if !strings.HasPrefix(metadata["name"].(string), "analysis-") {
+		t.Fatalf("Task name = %q", metadata["name"])
+	}
+	taskSpec := kube.applied["spec"].(map[string]any)
+	agentRuntime := taskSpec["agentRuntime"].(map[string]any)
+	if agentRuntime["allowBash"] != false {
+		t.Fatalf("agent runtime = %+v", agentRuntime)
+	}
+	wantAllowed := []any{"Read", "Glob", "Grep", "Write"}
+	wantDisallowed := []any{"Bash", "Edit", "MultiEdit", "NotebookEdit", "WebFetch", "WebSearch", "Task", "TodoWrite", "Question"}
+	if !reflect.DeepEqual(agentRuntime["allowedTools"], wantAllowed) || !reflect.DeepEqual(agentRuntime["disallowedTools"], wantDisallowed) {
+		t.Fatalf("tool policy = %+v", agentRuntime)
+	}
+	workspace := agentRuntime["workspace"].(map[string]any)
+	if !reflect.DeepEqual(workspace["gitSecretRef"], map[string]any{"name": "source-readonly"}) {
+		t.Fatalf("workspace = %+v", workspace)
+	}
+}
+
+func TestAgentRuntimeFailureAnalysisRejectsBashBeforeClusterWrite(t *testing.T) {
+	kube := &fakeTaskAPI{}
+	r := &AgentRuntime{kube: kube, results: &delayedResultAPI{}, opts: AgentOptions{AgentRef: "analysis-agent", Purpose: AgentPurposeFailureAnalysis}}
+	if _, err := r.Generate(t.Context(), spec()); err == nil || !strings.Contains(err.Error(), "does not permit Bash") {
+		t.Fatalf("error = %v", err)
+	}
+	if kube.applied != nil {
+		t.Fatal("invalid analysis Task reached the cluster")
+	}
+}
+
+func TestAgentRuntimePreservesAttemptsOnTaskAndResultFailures(t *testing.T) {
+	t.Run("Task failed", func(t *testing.T) {
+		kube := &fakeTaskAPI{phases: []string{"Failed"}, attempts: 3}
+		r := &AgentRuntime{kube: kube, results: &delayedResultAPI{}, opts: AgentOptions{AgentRef: "agent", PollEvery: time.Millisecond}}
+		got, err := r.Generate(t.Context(), spec())
+		if err == nil || got.Attempts != 3 {
+			t.Fatalf("result=%+v error=%v", got, err)
+		}
+	})
+	t.Run("invalid result", func(t *testing.T) {
+		kube := &fakeTaskAPI{phases: []string{"Succeeded"}, attempts: 2}
+		results, done := rawResultServer(t, "not-json")
+		defer done()
+		r := &AgentRuntime{kube: kube, results: results, opts: AgentOptions{AgentRef: "agent", PollEvery: time.Millisecond}}
+		got, err := r.Generate(t.Context(), spec())
+		if err == nil || got.Attempts != 2 {
+			t.Fatalf("result=%+v error=%v", got, err)
+		}
+	})
 }

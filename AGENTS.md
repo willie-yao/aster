@@ -71,6 +71,7 @@ backend/                         Go 1.25
       skills/                    Diagnostic recipe registry (+ builtin/{prow,kubernetes})
       modules/universal/         Builds the per-failure seed prompt
     aiusage/                     Private token usage and cost accounting
+    agentanalysis/               Private experimental Agent failure-analysis adapter
     analysisruntime/             Selects the failure-analysis runtime (in-process default)
     analysischat/                Bounded conversations about a published analysis
     corrections/                 Promotes reviewed chat revisions without mutating output
