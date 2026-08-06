@@ -126,16 +126,57 @@ jobs:
         with:
           path: consumer
 
+      - name: Resolve reusable workflow identity
+        id: engine-identity
+        env:
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_REF: ${{ job.workflow_ref }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          if ! echo "$WORKFLOW_REPOSITORY" | grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'; then
+            echo "::error::Reusable workflow repository is unavailable or invalid"
+            exit 1
+          fi
+          if ! echo "$WORKFLOW_SHA" | grep -Eq '^[0-9a-fA-F]{40}$'; then
+            echo "::error::Reusable workflow SHA is unavailable or invalid"
+            exit 1
+          fi
+          if [ -z "$WORKFLOW_REF" ]; then
+            echo "::error::Reusable workflow ref is unavailable"
+            exit 1
+          fi
+          NORMALIZED_SHA="$(printf '%s' "$WORKFLOW_SHA" | tr '[:upper:]' '[:lower:]')"
+          {
+            echo "repository=$WORKFLOW_REPOSITORY"
+            echo "ref=$WORKFLOW_REF"
+            echo "sha=$NORMALIZED_SHA"
+          } >> "$GITHUB_OUTPUT"
+          echo "Resolved reusable workflow $WORKFLOW_REF at $NORMALIZED_SHA"
+
       - name: Checkout engine repo
         uses: actions/checkout@v4
         with:
-          repository: willie-yao/prow-ai-dashboard
+          repository: ${{ steps.engine-identity.outputs.repository }}
           # Build the engine code from the exact commit of the reusable workflow
           # the consumer pinned (uses:@<ref>), so the pinned ref controls both
           # the pipeline and the code with no separate engine-ref knob.
-          ref: ${{ github.job_workflow_sha }}
+          ref: ${{ steps.engine-identity.outputs.sha }}
           fetch-tags: true
           path: engine
+
+      - name: Verify engine checkout
+        id: engine-checkout
+        working-directory: engine
+        env:
+          EXPECTED_SHA: ${{ steps.engine-identity.outputs.sha }}
+        run: |
+          ACTUAL_SHA="$(git rev-parse HEAD)"
+          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+            echo "::error::Engine checkout resolved to $ACTUAL_SHA, expected $EXPECTED_SHA"
+            exit 1
+          fi
+          echo "sha=$ACTUAL_SHA" >> "$GITHUB_OUTPUT"
+          echo "Verified engine checkout at $ACTUAL_SHA"
 
       - name: Resolve project paths and base path
         id: cfg
@@ -255,13 +296,56 @@ jobs:
           echo "Copied pre-fetched data from $DATA_SRC"
           ls -la "$GITHUB_WORKSPACE/engine/frontend/public/data"
 
-      # --- React frontend ---
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: npm
           cache-dependency-path: engine/frontend/package-lock.json
 
+      - name: Write public build provenance
+        env:
+          CALLER_REPOSITORY: ${{ github.repository }}
+          CALLER_SHA: ${{ github.sha }}
+          WORKFLOW_REPOSITORY: ${{ steps.engine-identity.outputs.repository }}
+          WORKFLOW_REF: ${{ steps.engine-identity.outputs.ref }}
+          WORKFLOW_SHA: ${{ steps.engine-identity.outputs.sha }}
+          ENGINE_COMMIT: ${{ steps.engine-checkout.outputs.sha }}
+        run: |
+          node <<'JS'
+          const fs = require("fs");
+          const path = require("path");
+
+          const output = path.join(process.env.GITHUB_WORKSPACE, "engine/frontend/public/data/provenance.json");
+          for (const name of [
+            "CALLER_REPOSITORY",
+            "CALLER_SHA",
+            "WORKFLOW_REPOSITORY",
+            "WORKFLOW_REF",
+            "WORKFLOW_SHA",
+            "ENGINE_COMMIT",
+          ]) {
+            if (!process.env[name]) {
+              throw new Error(`${name} is required`);
+            }
+          }
+          if (process.env.WORKFLOW_SHA !== process.env.ENGINE_COMMIT) {
+            throw new Error("Reusable workflow and engine commits differ");
+          }
+          const provenance = {
+            version: 1,
+            caller_repository: process.env.CALLER_REPOSITORY,
+            caller_sha: process.env.CALLER_SHA,
+            reusable_workflow_repository: process.env.WORKFLOW_REPOSITORY,
+            reusable_workflow_ref: process.env.WORKFLOW_REF,
+            reusable_workflow_sha: process.env.WORKFLOW_SHA,
+            engine_commit: process.env.ENGINE_COMMIT,
+          };
+          fs.mkdirSync(path.dirname(output), {recursive: true});
+          fs.writeFileSync(output, JSON.stringify(provenance, null, 2) + "\n");
+          console.log(`Wrote ${output}`);
+          JS
+
+      # --- React frontend ---
       - name: Install frontend dependencies
         working-directory: engine/frontend
         run: npm ci
