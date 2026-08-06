@@ -385,6 +385,7 @@ type benchmarkJSONLResult struct {
 	ElapsedMS               int64                      `json:"elapsed_ms"`
 	Outcome                 string                     `json:"outcome"`
 	Usable                  bool                       `json:"usable"`
+	IsTransient             *bool                      `json:"is_transient,omitempty"`
 	Summary                 string                     `json:"summary,omitempty"`
 	RootCause               string                     `json:"root_cause,omitempty"`
 	SuggestedFix            string                     `json:"suggested_fix,omitempty"`
@@ -528,6 +529,8 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 	}
 	if tc != nil && tc.AISummary != nil {
 		result.Summary = tc.AISummary.Summary
+		result.IsTransient = new(bool)
+		*result.IsTransient = tc.AISummary.IsTransient
 	}
 	if tc != nil && tc.AIAnalysis != nil && tc.AISummary != nil {
 		result.Usable = true
@@ -729,7 +732,7 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 	if err := json.Unmarshal(data, &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.ModelLabel != "model-a" || result.Repetition != 2 || result.Outcome != string(benchmarkOutcomeUsable) || result.SignalHits != 1 || result.SourceRevision != strings.Repeat("a", 40) || result.SourceUnavailable || result.TestSource != models.TestCaseSourceBuild ||
+	if result.ModelLabel != "model-a" || result.Repetition != 2 || result.Outcome != string(benchmarkOutcomeUsable) || result.IsTransient == nil || *result.IsTransient || result.SignalHits != 1 || result.SourceRevision != strings.Repeat("a", 40) || result.SourceUnavailable || result.TestSource != models.TestCaseSourceBuild ||
 		result.Trace.Finalize["empty:unexpected_tool_call"] != 1 || result.Trace.Critique["punts"] != 1 || result.GCSBytes != 42 ||
 		!result.EvidencePlanCovered || !result.GCSFloorRetryExhausted || result.CritiquePassed == nil || !*result.CritiquePassed || !result.BudgetExhausted ||
 		result.FloorNudges != 1 || !slices.Equal(result.FloorNudgeReasons, []string{"gcs_bytes"}) ||
@@ -769,7 +772,7 @@ func TestWriteBenchmarkJSONLRecordsGroundedUnavailableOutcome(t *testing.T) {
 	if err := json.Unmarshal(data, &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.Outcome != string(benchmarkOutcomeGroundedPolicyUnavailable) || result.Usable || result.Summary != tc.AISummary.Summary {
+	if result.Outcome != string(benchmarkOutcomeGroundedPolicyUnavailable) || result.Usable || result.IsTransient == nil || *result.IsTransient || result.Summary != tc.AISummary.Summary {
 		t.Fatalf("result = %+v", result)
 	}
 }
