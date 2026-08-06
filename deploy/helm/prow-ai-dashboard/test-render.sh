@@ -787,6 +787,8 @@ fi
 for contract in \
   'operations: ["CREATE", "UPDATE", "DELETE"]' \
   "allowedTools == ['Read', 'Glob', 'Grep', 'Write']" \
+  "request.operation == 'DELETE' ?" \
+  "disallowedTools == ['Bash', 'WebFetch', 'WebSearch', 'Task', 'TodoWrite', 'Question']" \
   "disallowedTools == ['Bash', 'Edit', 'MultiEdit', 'NotebookEdit', 'WebFetch', 'WebSearch', 'Task', 'TodoWrite', 'Question']" \
   "app.kubernetes.io/managed-by'] == 'orka-agent-analysis'" \
   "prow-ai-dashboard/runtime'] == 'failure-analysis-shadow'" \

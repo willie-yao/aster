@@ -40,7 +40,7 @@ func TestRuntimeGenerate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Attempts != 2 || got.AgentNamespace != "orka-system" || got.AgentRef != "analysis-agent" || got.EvidenceHash != bundle.Hash || got.SkillHash != SkillHash() || got.IdentityHash == "" {
+	if got.Attempts != 2 || got.AgentNamespace != "orka-system" || got.AgentRef != "analysis-agent" || got.EvidenceHash != bundle.Hash || got.SkillHash != SkillHash() || got.ToolPolicyVersion != ToolPolicyVersion || got.IdentityHash == "" {
 		t.Fatalf("result = %+v", got)
 	}
 	if agent.got.AllowBash || agent.got.Model != "" || agent.got.Endpoint != "" || agent.got.Token != "" || len(agent.got.NetworkDomains) != 0 {
@@ -106,6 +106,9 @@ func TestRuntimeIdentityIncludesExecutionContract(t *testing.T) {
 	baseRuntime := &Runtime{AgentNamespace: "orka-system", AgentRef: "analysis-agent", AgentVersion: "v1", Retries: 1}
 	baseSpec := Spec{Bundle: bundle, MaxTurns: 10, Timeout: 5 * time.Minute}
 	base := baseRuntime.identityHash(baseSpec)
+	if changed := baseRuntime.identityHashWithPolicy(baseSpec, "agent-analysis-tools-other"); changed == base {
+		t.Fatal("tool policy version did not change runtime identity")
+	}
 	tests := []struct {
 		name    string
 		runtime Runtime

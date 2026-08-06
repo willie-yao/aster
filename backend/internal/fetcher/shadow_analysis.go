@@ -209,8 +209,8 @@ func (p *pipeline) runShadowCandidate(ctx context.Context, candidate shadowCandi
 		RequestHash: candidate.requestHash, AuthoritativeHash: candidate.authoritativeHash,
 		Provenance: agentanalysis.Provenance{
 			Runtime: "orka", AgentNamespace: cfg.Namespace, AgentRef: cfg.AgentRef, AgentVersion: cfg.AgentVersion, GitSecret: cfg.GitSecret,
-			ContractVersion: agentanalysis.ContractVersion, SourceSHA: candidate.source.Revision,
-			Timeout: cfg.Timeout.String(), MaxTurns: cfg.MaxTurns, Retries: cfg.Retries,
+			ContractVersion: agentanalysis.ContractVersion, ToolPolicyVersion: agentanalysis.ToolPolicyVersion,
+			SourceSHA: candidate.source.Revision, Timeout: cfg.Timeout.String(), MaxTurns: cfg.MaxTurns, Retries: cfg.Retries,
 		},
 	}
 	skillSetHash := ""
@@ -259,6 +259,7 @@ func (p *pipeline) runShadowCandidate(ctx context.Context, candidate shadowCandi
 		Bundle: bundle, SourceReader: orka.NewGitHubSourceReader("", os.Getenv("GITHUB_READ_TOKEN")), MaxTurns: cfg.MaxTurns, Timeout: cfg.Timeout,
 	})
 	record.Provenance = agentanalysis.ProvenanceFromResult(generated)
+	record.Provenance.ToolPolicyVersion = agentanalysis.ToolPolicyVersion
 	record.Provenance.GitSecret = cfg.GitSecret
 	record.CleanupPending = generated.CleanupPending
 	record.CleanupWork = generated.CleanupWork

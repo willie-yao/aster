@@ -144,6 +144,9 @@ func TestRunShadowAnalysisNeverMutatesAuthoritativeDetails(t *testing.T) {
 			if len(records) != 1 || records[0].Status != test.wantStatus {
 				t.Fatalf("records = %+v", records)
 			}
+			if records[0].Provenance.ToolPolicyVersion != agentanalysis.ToolPolicyVersion {
+				t.Fatalf("tool policy version = %q", records[0].Provenance.ToolPolicyVersion)
+			}
 			for name, want := range publicSentinels {
 				got, err := os.ReadFile(filepath.Join(p.opts.OutDir, name))
 				if err != nil || string(got) != string(want) {
