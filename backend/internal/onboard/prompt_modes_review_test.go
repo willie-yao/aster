@@ -3,6 +3,8 @@ package onboard
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -256,12 +258,26 @@ func TestValidateOptionsRejectsOrkaAPIQueryAndFragment(t *testing.T) {
 }
 
 func TestValidateOptionsRejectsOrkaTokenInPlanFields(t *testing.T) {
-	t.Setenv("ORKA_API_TOKEN", "orka-result-secret")
-	opts := testPromptModeOptions(promptModeAgent)
-	opts.PromptAgentRuntime = promptRuntimeOrka
-	opts.PromptOrkaAPI = "http://orka.example.test:8080"
-	opts.PromptOrkaAgentRef = "orka-result-secret"
-	if err := validateOptions(&opts); err == nil || !strings.Contains(err.Error(), "credential was supplied") || strings.Contains(err.Error(), "orka-result-secret") {
-		t.Fatalf("error = %v", err)
+	for _, setup := range []func(*testing.T){
+		func(t *testing.T) { t.Setenv("ORKA_API_TOKEN", "  orka-result-secret  ") },
+		func(t *testing.T) {
+			t.Setenv("ORKA_API_TOKEN", "")
+			path := filepath.Join(t.TempDir(), "token")
+			if err := os.WriteFile(path, []byte("orka-result-secret\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("ORKA_API_TOKEN_FILE", path)
+		},
+	} {
+		t.Run("source", func(t *testing.T) {
+			setup(t)
+			opts := testPromptModeOptions(promptModeAgent)
+			opts.PromptAgentRuntime = promptRuntimeOrka
+			opts.PromptOrkaAPI = "http://orka.example.test:8080"
+			opts.PromptOrkaAgentRef = "orka-result-secret"
+			if err := validateOptions(&opts); err == nil || !strings.Contains(err.Error(), "credential was supplied") || strings.Contains(err.Error(), "orka-result-secret") {
+				t.Fatalf("error = %v", err)
+			}
+		})
 	}
 }

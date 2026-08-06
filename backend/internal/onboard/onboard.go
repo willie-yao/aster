@@ -3,6 +3,7 @@ package onboard
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -261,7 +262,31 @@ func validateCredentialSeparation(opts Options) error {
 }
 
 func onboardingCredentialValues(opts Options) []string {
-	return []string{opts.AIToken, opts.GitHubToken, os.Getenv("ORKA_API_TOKEN")}
+	values := []string{opts.AIToken, opts.GitHubToken}
+	if token := strings.TrimSpace(os.Getenv("ORKA_API_TOKEN")); token != "" {
+		return append(values, token)
+	}
+	path := strings.TrimSpace(os.Getenv("ORKA_API_TOKEN_FILE"))
+	if path == "" {
+		path = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+	}
+	if token := readOnboardingCredentialFile(path); token != "" {
+		values = append(values, token)
+	}
+	return values
+}
+
+func readOnboardingCredentialFile(path string) string {
+	file, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+	raw, err := io.ReadAll(io.LimitReader(file, 64<<10))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(raw))
 }
 
 func validateAIEndpoint(endpoint string) error {
