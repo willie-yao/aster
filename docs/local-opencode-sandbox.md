@@ -37,8 +37,10 @@ The local sandbox wraps the complete OpenCode process tree. Its generated policy
 - permits writes only in the temporary checkout, home, and temporary directory;
 - denies writes to the checkout's `.git` directory and to `srt`'s shared default temporary path;
 - denies outbound network access except reviewed domain and optional port entries;
-- denies local port binding, Apple Events, and Unix sockets by default;
+- denies host-visible local port binding, Apple Events, and Unix sockets by default;
 - keeps the weaker nested and weaker macOS network modes disabled.
+
+On Linux, a process can bind only inside `srt`'s isolated network namespace, so it cannot expose a host port. Requests to enable local binding are rejected because v0.0.70 does not implement that option on Linux.
 
 On macOS, the runner tracks descendant process identities and kills recorded descendants on cancellation and normal command exit, including children that create another session. macOS does not provide a kernel process container here, so this lifecycle cleanup has a narrow polling race for a process that daemonizes and reparents before it is observed. Any surviving descendant remains subject to the inherited `srt` filesystem and network policy.
 

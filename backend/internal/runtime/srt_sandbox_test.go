@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSRTSandboxCommandWritesDenyByDefaultSettings(t *testing.T) {
@@ -165,11 +166,58 @@ func TestCheckSRTNodeVersion(t *testing.T) {
 			if err := os.WriteFile(node, []byte("#!/bin/sh\nprintf '%s\n' '"+tc.version+"'\n"), 0o700); err != nil {
 				t.Fatal(err)
 			}
-			err := checkSRTNodeVersion(func(string) (string, error) { return node, nil })
+			err := checkSRTNodeVersion(context.Background(), func(string) (string, error) { return node, nil })
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("error = %v, wantErr %v", err, tc.wantErr)
 			}
 		})
+	}
+}
+
+func TestCheckSRTNodeVersionHonorsContext(t *testing.T) {
+	node := filepath.Join(t.TempDir(), "node")
+	if err := os.WriteFile(node, []byte("#!/bin/sh\nsleep 10\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	err := checkSRTNodeVersion(ctx, func(string) (string, error) { return node, nil })
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want context deadline", err)
+	}
+}
+
+func TestSRTSandboxRejectsLinuxLocalBindingRequest(t *testing.T) {
+	command := filepath.Join(t.TempDir(), "agent")
+	if err := os.WriteFile(command, []byte("binary"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, err := (&SRTSandbox{goos: "linux"}).Command(context.Background(), SandboxSpec{
+		Command: []string{command}, WorkDir: t.TempDir(), HomeDir: t.TempDir(), TempDir: t.TempDir(),
+		AllowLocalBind: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot expose local bindings") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestSRTSandboxRunFailsClosedOnPreflightError(t *testing.T) {
+	fake := newFakeSRTPackage(t, SRTVersion)
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\nexit 7\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	work, home, temp := t.TempDir(), t.TempDir(), t.TempDir()
+	command := filepath.Join(work, "agent")
+	if err := os.WriteFile(command, []byte("binary"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, err := (&SRTSandbox{Bin: fake, goos: "darwin", lookPath: fakeSRTLookPath(fake), nodeCheck: successfulNodeCheck}).Run(context.Background(), SandboxSpec{
+		Command: []string{command}, WorkDir: work, HomeDir: home, TempDir: temp,
+		Environment: []string{"PATH=/usr/bin:/bin"},
+		ReadPaths:   []string{work, home, temp, command}, WritePaths: []string{work, home, temp},
+	})
+	if !errors.Is(err, ErrSandboxUnavailable) || !strings.Contains(err.Error(), "preflight failed") {
+		t.Fatalf("error = %v", err)
 	}
 }
 
@@ -285,7 +333,7 @@ func readSRTSettings(t *testing.T, path string) srtSettings {
 	return settings
 }
 
-func successfulNodeCheck(func(string) (string, error)) error { return nil }
+func successfulNodeCheck(context.Context, func(string) (string, error)) error { return nil }
 
 func TestSRTSandboxValidatesNodeFromSandboxPATH(t *testing.T) {
 	fake := newFakeSRTPackage(t, SRTVersion)

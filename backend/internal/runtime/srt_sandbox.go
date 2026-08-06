@@ -30,7 +30,7 @@ type SRTSandbox struct {
 
 	goos      string
 	lookPath  func(string) (string, error)
-	nodeCheck func(func(string) (string, error)) error
+	nodeCheck func(context.Context, func(string) (string, error)) error
 	debug     bool
 }
 
@@ -46,6 +46,10 @@ func NewSRTSandboxFromEnv() *SRTSandbox {
 }
 
 func (s *SRTSandbox) Command(ctx context.Context, spec SandboxSpec) (*exec.Cmd, error) {
+	return s.command(ctx, ctx, spec)
+}
+
+func (s *SRTSandbox) command(validationCtx, executionCtx context.Context, spec SandboxSpec) (*exec.Cmd, error) {
 	if len(spec.Command) == 0 || strings.TrimSpace(spec.Command[0]) == "" {
 		return nil, fmt.Errorf("runtime: sandbox command is required")
 	}
@@ -61,6 +65,9 @@ func (s *SRTSandbox) Command(ctx context.Context, spec SandboxSpec) (*exec.Cmd, 
 	}
 	if goos == "linux" && len(spec.UnixSockets) > 0 {
 		return nil, fmt.Errorf("runtime: srt cannot allow individual Unix sockets on linux")
+	}
+	if goos == "linux" && spec.AllowLocalBind {
+		return nil, fmt.Errorf("runtime: srt cannot expose local bindings from its linux network namespace")
 	}
 	lookPath := s.lookPath
 	if lookPath == nil {
@@ -90,7 +97,7 @@ func (s *SRTSandbox) Command(ctx context.Context, spec SandboxSpec) (*exec.Cmd, 
 	if nodeCheck == nil {
 		nodeCheck = checkSRTNodeVersion
 	}
-	if err := nodeCheck(lookPath); err != nil {
+	if err := nodeCheck(validationCtx, lookPath); err != nil {
 		return nil, err
 	}
 	settings, err := buildSRTSettings(goos, spec)
@@ -107,7 +114,7 @@ func (s *SRTSandbox) Command(ctx context.Context, spec SandboxSpec) (*exec.Cmd, 
 	}
 	args = append(args, "--")
 	args = append(args, spec.Command...)
-	cmd := exec.CommandContext(ctx, resolvedBin, args...)
+	cmd := exec.CommandContext(executionCtx, resolvedBin, args...)
 	cmd.Dir = spec.WorkDir
 	forcedEnvironment := []string{
 		"CLAUDE_CODE_TMPDIR=" + spec.TempDir,
@@ -128,8 +135,11 @@ func (s *SRTSandbox) Run(ctx context.Context, spec SandboxSpec) ([]byte, error) 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	cmd, err := s.Command(context.Background(), spec)
+	cmd, err := s.command(ctx, context.Background(), spec)
 	if err != nil {
+		return nil, err
+	}
+	if err := preflightSRT(ctx, cmd); err != nil {
 		return nil, err
 	}
 	var output bytes.Buffer
@@ -226,6 +236,26 @@ func validateSRTSpec(spec SandboxSpec) error {
 		if !info.IsDir() {
 			return fmt.Errorf("runtime: sandbox %s is not a directory", name)
 		}
+	}
+	return nil
+}
+
+func preflightSRT(ctx context.Context, cmd *exec.Cmd) error {
+	if len(cmd.Args) < 4 || cmd.Args[1] != "--settings" {
+		return fmt.Errorf("%w: invalid srt command", ErrSandboxUnavailable)
+	}
+	truePath := "/usr/bin/true"
+	if _, err := os.Stat(truePath); err != nil {
+		truePath = "/bin/true"
+	}
+	preflight := exec.CommandContext(ctx, cmd.Path, "--settings", cmd.Args[2], "--", truePath)
+	preflight.Dir = cmd.Dir
+	preflight.Env = append([]string{}, cmd.Env...)
+	if err := preflight.Run(); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fmt.Errorf("%w: srt preflight failed", ErrSandboxUnavailable)
 	}
 	return nil
 }
@@ -347,13 +377,16 @@ func srtDependencies(goos string) []string {
 	return []string{"bash", "sandbox-exec", "rg"}
 }
 
-func checkSRTNodeVersion(lookPath func(string) (string, error)) error {
+func checkSRTNodeVersion(ctx context.Context, lookPath func(string) (string, error)) error {
 	node, err := lookPath("node")
 	if err != nil {
 		return fmt.Errorf("%w: node executable not found", ErrSandboxUnavailable)
 	}
-	output, err := exec.Command(node, "--version").Output()
+	output, err := exec.CommandContext(ctx, node, "--version").Output()
 	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return fmt.Errorf("%w: read node version", ErrSandboxUnavailable)
 	}
 	version := strings.TrimPrefix(strings.TrimSpace(string(output)), "v")
