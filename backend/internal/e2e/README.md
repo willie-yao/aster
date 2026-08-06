@@ -61,6 +61,12 @@ Options:
 - `BENCH_PROJECT_DIR=<consumer-repo>` loads that consumer's real `project.yaml`
   AI tuning and `prompts/system.md`, so the run matches that live deploy exactly.
   Without it, a compact built-in prompt and the live CAPZ-Dynamo tuning are used.
+- `BENCH_VARIANT_DIR=<consumer-variant>` evaluates a prompt or recipe variant
+  while keeping `BENCH_PROJECT_DIR` as the immutable pinned baseline. The
+  variant must have a byte-identical `project.yaml`; only the effective
+  `prompts/system.md` and `skills/*.yaml` inputs may change. Set a stable
+  `BENCH_ARM` whenever a variant is used. The baseline arm defaults to
+  `baseline`.
 - `BENCH_CASE=<case-id>` selects one exact external-manifest case. Pinned
   cross-project consumers require this so one project's prompt is never applied
   to another project's fixture.
@@ -136,6 +142,12 @@ diagnosis, artifact evidence, claim discipline, remediation, and source
 grounding. The maximum human score is 10. Every private JSONL row records the
 rubric version and maximum so report generation cannot describe the same totals
 with a different denominator.
+
+Every private JSONL row also records the experiment arm, engine commit, fixture
+digest, pinned baseline consumer commit, effective project and prompt digests,
+merged skill-set hash, API mode, and one effective-input digest. Persistent
+cold-cache paths include the arm and effective-input digest, so separate arms
+cannot silently share an analysis cache.
 
 The trace summary reports the floor-nudge count and ordered reasons, context
 compaction and over-budget counts, the final semantic-judge event outcome,

@@ -433,48 +433,7 @@ func TestAIBenchmark(t *testing.T) {
 		}
 	}
 
-	// Optional: load a real consumer's AI tuning + system prompt so the selected
-	// case matches that live deploy. Otherwise use the built-in prompt and defaults.
-	systemPrompt := ComposeBenchPrompt()
-	agentic := defaultBenchAgentic()
-	configuredCacheGeneration := ""
-	skillProjectDir := t.TempDir()
-	if dir := os.Getenv("BENCH_PROJECT_DIR"); dir != "" {
-		if len(cases) != 1 {
-			for _, bc := range cases {
-				if bc.consumerCommit != "" {
-					t.Fatal("BENCH_PROJECT_DIR with pinned external consumers requires BENCH_CASE to select exactly one case")
-				}
-			}
-		}
-		if len(cases) == 1 && cases[0].consumerCommit != "" {
-			if err := validateBenchmarkProjectDir(dir, cases[0]); err != nil {
-				t.Fatalf("BENCH_PROJECT_DIR=%s: %v", dir, err)
-			}
-		}
-		cfg, prompt, err := project.LoadDir(dir)
-		if err != nil {
-			t.Fatalf("BENCH_PROJECT_DIR=%s: %v", dir, err)
-		}
-		systemPrompt = ai.ComposeSystemPrompt(prompt)
-		agentic = cfg.AI.EffectiveAgentic()
-		configuredCacheGeneration = cfg.AI.CacheGeneration
-		skillProjectDir = dir
-	} else {
-		for _, bc := range cases {
-			if bc.consumerCommit != "" {
-				t.Fatal("pinned external benchmark cases require BENCH_CASE and BENCH_PROJECT_DIR")
-			}
-		}
-	}
-	cacheGenerationFingerprint, err := benchmarkCacheGenerationFingerprint(configuredCacheGeneration)
-	if err != nil {
-		t.Fatalf("benchmark cache generation: %v", err)
-	}
-	projectSkills, _, err := skills.LoadForTools(skillProjectDir, agentic.Tools)
-	if err != nil {
-		t.Fatalf("load benchmark skills: %v", err)
-	}
+	inputs := loadBenchmarkInputs(t, cases, apiMode)
 
 	repetitions := 1
 	if raw := strings.TrimSpace(os.Getenv("BENCH_REPETITIONS")); raw != "" {
@@ -495,7 +454,7 @@ func TestAIBenchmark(t *testing.T) {
 		for index := 0; index < repetitions; index++ {
 			repetition := repetitionStart + index
 			t.Run(fmt.Sprintf("%s/rep-%02d", bc.name, repetition), func(t *testing.T) {
-				runBenchCase(t, bc, repetition, resultsPath, apiMode, endpoint, model, token, systemPrompt, agentic, projectSkills, cacheGenerationFingerprint)
+				runBenchCase(t, bc, repetition, resultsPath, apiMode, endpoint, model, token, inputs.systemPrompt, inputs.agentic, inputs.projectSkills, inputs.cacheGeneration, inputs.identity)
 			})
 		}
 	}
@@ -674,8 +633,9 @@ func TestBenchmarkAPIMode(t *testing.T) {
 	}
 }
 
-func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMode, endpoint, model, token, systemPrompt string, agentic project.Agentic, projectSkills *skills.Set, cacheGeneration string) {
-	cacheDir := benchmarkCacheDir(t, bc, repetition)
+func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMode, endpoint, model, token, systemPrompt string, agentic project.Agentic, projectSkills *skills.Set, cacheGeneration string, identity benchmarkRunIdentity) {
+	identity.FixtureSHA256 = bc.fixtureSHA256
+	cacheDir := benchmarkCacheDir(t, bc, repetition, identity)
 	clientOptions := ai.Options{
 		Token: token, API: apiMode, Endpoint: endpoint, Model: model, CacheDir: cacheDir,
 	}
@@ -781,7 +741,7 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 		cacheVerification = verifyBenchmarkCacheReuse(t, client, clientOptions, service, cacheGeneration, jobID, bc, run, tc.AIAnalysis)
 	}
 	critiquePolicy := ai.CritiqueCachePolicy(agentic.Critique.EffectiveCachePolicy())
-	writeBenchmarkJSONL(t, resultsPath, bc, repetition, tc, outcome, elapsed, snapshot, draftObservations, selectedAttempt, toolUsage, traceSummary, requestCap.PerOperation, cacheGeneration, critiquePolicy, cacheVerification)
+	writeBenchmarkJSONL(t, resultsPath, bc, repetition, tc, outcome, elapsed, snapshot, draftObservations, selectedAttempt, toolUsage, traceSummary, requestCap.PerOperation, cacheGeneration, critiquePolicy, cacheVerification, identity)
 	if traceSummary.truncated {
 		t.Fatalf("provider request cap cannot be verified from a truncated trace")
 	}
@@ -850,13 +810,16 @@ func benchmarkPersistentCacheEnabled() bool {
 	return strings.TrimSpace(os.Getenv("BENCH_CACHE_DIR")) != ""
 }
 
-func benchmarkCacheDir(t *testing.T, bc benchCase, repetition int) string {
+func benchmarkCacheDir(t *testing.T, bc benchCase, repetition int, identity benchmarkRunIdentity) string {
 	t.Helper()
 	root := strings.TrimSpace(os.Getenv("BENCH_CACHE_DIR"))
 	if root == "" {
 		return t.TempDir()
 	}
-	dir := filepath.Join(root, benchmarkCacheCaseKey(bc), fmt.Sprintf("rep-%02d", repetition))
+	if !benchmarkCaseIDRE.MatchString(identity.Arm) || !benchmarkSHA256RE.MatchString(identity.EffectiveInputSHA256) {
+		t.Fatal("benchmark cache identity requires a valid arm and effective input SHA-256")
+	}
+	dir := filepath.Join(root, benchmarkCacheCaseKey(bc), identity.Arm+"-"+identity.EffectiveInputSHA256[:12], fmt.Sprintf("rep-%02d", repetition))
 	if _, err := os.Stat(filepath.Join(dir, ai.CacheFilename)); err == nil {
 		t.Fatalf("BENCH_CACHE_DIR is not cold: %s", dir)
 	} else if !os.IsNotExist(err) {
@@ -1881,7 +1844,7 @@ func TestBenchmarkPersistentCacheSavesWithoutReloadVerification(t *testing.T) {
 		t.Fatal("cache option detection is inconsistent")
 	}
 	bc := benchCase{name: "built-in-case"}
-	dir := benchmarkCacheDir(t, bc, 1)
+	dir := benchmarkCacheDir(t, bc, 1, benchmarkRunIdentity{Arm: "baseline", EffectiveInputSHA256: strings.Repeat("a", 64)})
 	client := ai.NewClientWithOptions(ai.Options{CacheDir: dir})
 	entry := ai.CacheEntry{Key: "key", CreatedAt: time.Now(), Data: []byte(`{"summary":"cached"}`)}
 	if err := client.Cache().StoreEntry(entry); err != nil {
