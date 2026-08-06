@@ -2,7 +2,7 @@ package onboard
 
 import (
 	"context"
-	"crypto/sha256"
+	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -102,12 +102,16 @@ func buildAgentPrompt(ctx context.Context, opts Options, data scaffoldData, inpu
 	if err != nil {
 		return "", promptPreparationResult{}, err
 	}
+	executionID, err := promptExecutionID()
+	if err != nil {
+		return "", promptPreparationResult{}, err
+	}
 	authorSpec := promptauthor.Spec{
 		Repo:        agentruntime.RepoRef{Owner: input.SourceRepo.Owner, Name: input.SourceRepo.Name, Ref: revision, Token: opts.GitHubToken},
 		Instruction: handoff,
 		MaxTurns:    12,
 		Timeout:     effectivePromptDraftTimeout(opts),
-		ExecutionID: promptExecutionID(revision, handoff),
+		ExecutionID: executionID,
 	}
 	if effectivePromptAgentRuntime(opts) == promptRuntimeOpenCode {
 		authorSpec.NativeModel = effectivePromptAgentModel(opts)
@@ -138,12 +142,19 @@ func buildAgentPrompt(ctx context.Context, opts Options, data scaffoldData, inpu
 		}, renderErr
 	}
 	if res.CleanupPending {
-		fmt.Fprintln(errOut, "Prompt authoring completed, but Orka Task cleanup is still pending.")
+		if res.CleanupWork != nil {
+			fmt.Fprintf(errOut, "Prompt authoring completed, but Orka Task cleanup is still pending for %s/%s.\n", res.CleanupWork.Namespace, res.CleanupWork.Name)
+		} else {
+			fmt.Fprintln(errOut, "Prompt authoring completed, but Orka Task cleanup is still pending.")
+		}
 	}
 	return res.Body, promptPreparationResult{Requested: promptRequestAgent, Status: promptStatusAgentDraft, Output: promptOutputAgentDraft}, nil
 }
 
-func promptExecutionID(revision, handoff string) string {
-	sum := sha256.Sum256([]byte(revision + "\x00" + handoff))
-	return "onboard-prompt-" + hex.EncodeToString(sum[:8])
+func promptExecutionID() (string, error) {
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return "", fmt.Errorf("generate prompt execution id: %w", err)
+	}
+	return "onboard-prompt-" + hex.EncodeToString(value[:]), nil
 }

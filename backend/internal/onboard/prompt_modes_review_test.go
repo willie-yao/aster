@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func testPromptModeOptions(mode string) Options {
@@ -216,6 +217,28 @@ func TestValidateOptionsRejectsLocalPolicyForOrkaPromptRuntime(t *testing.T) {
 	opts.PromptOrkaAgentRef = "prompt-author"
 	opts.PromptAgentModel = defaultPromptAgentModel
 	if err := validateOptions(&opts); err == nil || !strings.Contains(err.Error(), "apply only") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestValidateOptionsBoundsOrkaPromptTimeout(t *testing.T) {
+	opts := testPromptModeOptions(promptModeAgent)
+	opts.PromptAgentRuntime = promptRuntimeOrka
+	opts.PromptOrkaAPI = "http://orka.example.test:8080"
+	opts.PromptOrkaAgentRef = "prompt-author"
+	opts.PromptTimeout = 31 * time.Minute
+	if err := validateOptions(&opts); err == nil || !strings.Contains(err.Error(), "at most 30m") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestValidateOptionsUsesOrkaAPITerminology(t *testing.T) {
+	opts := testPromptModeOptions(promptModeAgent)
+	opts.PromptAgentRuntime = promptRuntimeOrka
+	opts.PromptOrkaAPI = "https://user:secret@orka.example.test"
+	opts.PromptOrkaAgentRef = "prompt-author"
+	err := validateOptions(&opts)
+	if err == nil || !strings.Contains(err.Error(), "--prompt-orka-api") || !strings.Contains(err.Error(), "ORKA_API_TOKEN") || strings.Contains(err.Error(), "AI_ENDPOINT") {
 		t.Fatalf("error = %v", err)
 	}
 }

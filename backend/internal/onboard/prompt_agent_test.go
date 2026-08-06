@@ -212,11 +212,25 @@ func TestBuildAgentPromptUsesOrkaOwnedProvider(t *testing.T) {
 }
 
 func TestBuildAgentPromptWarnsWhenCleanupIsPending(t *testing.T) {
-	author := &fakePromptAuthor{result: promptauthor.Result{Body: "agent prompt", Runtime: "orka", CleanupPending: true}}
+	author := &fakePromptAuthor{result: promptauthor.Result{Body: "agent prompt", Runtime: "orka", CleanupPending: true, CleanupWork: &agentruntime.WorkRef{Namespace: "orka-system", Name: "prompt-task"}}}
 	var errOut bytes.Buffer
 	body, result, err := buildAgentPrompt(context.Background(), Options{PromptAgentRuntime: promptRuntimeOrka}, scaffoldData{Name: "Project"}, agentPromptInput(), author, &errOut)
-	if err != nil || body != "agent prompt" || result.Status != promptStatusAgentDraft || !strings.Contains(errOut.String(), "cleanup is still pending") {
+	if err != nil || body != "agent prompt" || result.Status != promptStatusAgentDraft || !strings.Contains(errOut.String(), "orka-system/prompt-task") {
 		t.Fatalf("body=%q result=%+v error=%v warning=%q", body, result, err, errOut.String())
+	}
+}
+
+func TestPromptExecutionIDIsRequestScoped(t *testing.T) {
+	first, err := promptExecutionID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := promptExecutionID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second || !strings.HasPrefix(first, "onboard-prompt-") || !strings.HasPrefix(second, "onboard-prompt-") {
+		t.Fatalf("execution ids = %q, %q", first, second)
 	}
 }
 

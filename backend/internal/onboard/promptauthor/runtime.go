@@ -52,6 +52,7 @@ type Result struct {
 	Duration       time.Duration
 	Output         string
 	CleanupPending bool
+	CleanupWork    *agentruntime.WorkRef
 }
 
 // Runtime authors one project prompt in an isolated source workspace.
@@ -121,6 +122,13 @@ func (r *OpenCodeRuntime) Generate(ctx context.Context, spec Spec) (Result, erro
 		MaxTurns: spec.MaxTurns, AllowBash: false, Timeout: spec.Timeout,
 		ExecutionID: spec.ExecutionID,
 	}
+	var observedWork agentruntime.WorkRef
+	if r.AgentOwnsProvider {
+		generateSpec.WorkObserver = func(_ context.Context, work agentruntime.WorkRef) error {
+			observedWork = work
+			return nil
+		}
+	}
 	if !r.AgentOwnsProvider {
 		generateSpec.Model, generateSpec.NativeModel, generateSpec.UseAmbientAuth = spec.Model, spec.NativeModel, spec.UseAmbientAuth
 		generateSpec.Endpoint, generateSpec.Token, generateSpec.ExtraHeaders = spec.Endpoint, spec.Token, spec.ExtraHeaders
@@ -151,6 +159,10 @@ func (r *OpenCodeRuntime) Generate(ctx context.Context, spec Spec) (Result, erro
 	}
 	result.Body = body
 	result.CleanupPending = cleanupPending
+	if cleanupPending && observedWork.Name != "" {
+		work := observedWork
+		result.CleanupWork = &work
+	}
 	return result, nil
 }
 

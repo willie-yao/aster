@@ -125,8 +125,11 @@ func validateOptions(opts *Options) error {
 			if opts.PromptAgentModel != "" || len(opts.PromptNetworkDomains) > 0 {
 				return fmt.Errorf("--prompt-agent-model and --prompt-network-domain apply only to the local opencode runtime")
 			}
-			if err := validateAIEndpoint(opts.PromptOrkaAPI); err != nil {
-				return fmt.Errorf("--prompt-orka-api: %w", err)
+			if err := validatePromptOrkaAPI(opts.PromptOrkaAPI); err != nil {
+				return err
+			}
+			if opts.PromptTimeout > 30*time.Minute {
+				return fmt.Errorf("--prompt-timeout must be at most 30m with --prompt-agent-runtime=%s", promptRuntimeOrka)
 			}
 		default:
 			return fmt.Errorf("--prompt-agent-runtime must be %q or %q", promptRuntimeOpenCode, promptRuntimeOrka)
@@ -203,6 +206,26 @@ func validateOptions(opts *Options) error {
 	opts.OutDir = filepath.Clean(opts.OutDir)
 	if opts.PlanOut != "" {
 		opts.PlanOut = filepath.Clean(opts.PlanOut)
+	}
+	return nil
+}
+
+func validatePromptOrkaAPI(raw string) error {
+	parsed, err := url.Parse(raw)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return fmt.Errorf("--prompt-orka-api must be an absolute HTTP or HTTPS URL")
+	}
+	if parsed.User != nil {
+		return fmt.Errorf("--prompt-orka-api must not contain credentials; use ORKA_API_TOKEN")
+	}
+	query, err := url.ParseQuery(parsed.RawQuery)
+	if err != nil {
+		return fmt.Errorf("--prompt-orka-api contains an invalid query string")
+	}
+	for key := range query {
+		if credentialQueryKey(key) {
+			return fmt.Errorf("--prompt-orka-api must not contain credential query parameters; use ORKA_API_TOKEN")
+		}
 	}
 	return nil
 }

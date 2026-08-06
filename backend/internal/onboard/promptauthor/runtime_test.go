@@ -18,6 +18,9 @@ type fakeAgent struct {
 
 func (f *fakeAgent) Generate(_ context.Context, spec agentruntime.GenerateSpec) (agentruntime.GenerateResult, error) {
 	f.got = spec
+	if spec.WorkObserver != nil {
+		_ = spec.WorkObserver(context.Background(), agentruntime.WorkRef{Backend: "orka", Namespace: "orka-system", Name: "prompt-task", UID: "task-uid", ExecutionID: spec.ExecutionID})
+	}
 	return f.res, f.err
 }
 
@@ -75,7 +78,7 @@ func TestOpenCodeRuntimePreservesValidPromptOnCleanupPending(t *testing.T) {
 	got, err := (&OpenCodeRuntime{Agent: agent, Runtime: "orka", AgentOwnsProvider: true}).Generate(context.Background(), Spec{
 		Repo: agentruntime.RepoRef{Owner: "o", Name: "n", Ref: "sha"}, Instruction: "Generate.",
 	})
-	if err != nil || !got.CleanupPending || got.Body == "" {
+	if err != nil || !got.CleanupPending || got.Body == "" || got.CleanupWork == nil || got.CleanupWork.Name != "prompt-task" {
 		t.Fatalf("result=%+v error=%v", got, err)
 	}
 }

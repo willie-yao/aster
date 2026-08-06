@@ -215,7 +215,8 @@ Prompt preparation has a 15-minute total timeout by default. Slow agent runs can
 use `--prompt-timeout`, for example `--prompt-timeout 30m`. The accepted range is
 one minute through two hours. This timeout covers source revision resolution and
 agent execution. It is separate from the normal fetcher timeout and deployed
-`ai.timeout`.
+`ai.timeout`. Orka prompt authoring is limited to 30 minutes by the Orka Task
+contract.
 
 ## Next steps
 
