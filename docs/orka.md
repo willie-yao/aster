@@ -138,6 +138,12 @@ adds its exact contents to a trusted Task-prompt preamble. Current Orka Agent
 Tasks do not support per-Task skill overrides, so the dashboard does not modify
 the operator-owned Agent.
 
+Onboarding may opt into this backend with `fetcher onboard
+--prompt-mode=agent --prompt-agent-runtime=orka`. Supply the Orka result API and
+Agent reference through `--prompt-orka-api` and `--prompt-orka-agent-ref`.
+Namespace and read-only private-clone Secret overrides are optional. The local
+OpenCode model and network flags are intentionally rejected in this mode.
+
 For an OpenCode Agent:
 
 - Set `spec.runtime.type: opencode`.

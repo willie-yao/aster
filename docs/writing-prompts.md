@@ -66,6 +66,13 @@ asks for an OpenCode `provider/model` reference. Agent mode uses the selected
 provider credential from the user's existing OpenCode configuration. It does not
 use the deployed dashboard's `AI_TOKEN`, `AI_ENDPOINT`, or `AI_MODEL`.
 
+For cluster-backed authoring, add `--prompt-agent-runtime=orka`,
+`--prompt-orka-api`, and `--prompt-orka-agent-ref`. The referenced Orka Agent
+owns model and network configuration. The bundled skill is carried through the
+generic agent runtime, Bash remains disabled, and the same one-file validator
+applies. An optional `--prompt-orka-git-secret` must name a read-only clone
+credential.
+
 The handoff serializes the project name, source repository, resolved commit or
 known branch, and matched Prow job metadata as untrusted data. The bundled skill
 tells the agent to investigate a bounded set of high-value repository files and

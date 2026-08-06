@@ -42,14 +42,17 @@ type Spec struct {
 	NetworkDomains []string
 	MaxTurns       int
 	Timeout        time.Duration
+	ExecutionID    string
 }
 
 // Result is the validated prompt-authoring output.
 type Result struct {
-	Body     string
-	Runtime  string
-	Duration time.Duration
-	Output   string
+	Body           string
+	Runtime        string
+	Duration       time.Duration
+	Output         string
+	CleanupPending bool
+	CleanupWork    *agentruntime.WorkRef
 }
 
 // Runtime authors one project prompt in an isolated source workspace.
@@ -59,11 +62,13 @@ type Runtime interface {
 
 // OpenCodeRuntime delegates prompt authoring to an AgentRuntime.
 type OpenCodeRuntime struct {
-	Agent agentruntime.AgentRuntime
+	Agent             agentruntime.AgentRuntime
+	Runtime           string
+	AgentOwnsProvider bool
 }
 
 func NewOpenCodeRuntime() *OpenCodeRuntime {
-	return &OpenCodeRuntime{Agent: agentruntime.NewLocalAgent()}
+	return &OpenCodeRuntime{Agent: agentruntime.NewLocalAgent(), Runtime: "opencode"}
 }
 
 func promptNetworkDomains(spec Spec) ([]string, error) {
@@ -102,21 +107,46 @@ func (r *OpenCodeRuntime) Generate(ctx context.Context, spec Spec) (Result, erro
 	if strings.TrimSpace(spec.Instruction) == "" {
 		return Result{}, fmt.Errorf("prompt author: instruction is required")
 	}
-	networkDomains, err := promptNetworkDomains(spec)
-	if err != nil {
-		return Result{}, err
+	var networkDomains []string
+	var err error
+	if !r.AgentOwnsProvider {
+		networkDomains, err = promptNetworkDomains(spec)
+		if err != nil {
+			return Result{}, err
+		}
 	}
 	started := time.Now()
-	generated, err := r.Agent.Generate(ctx, agentruntime.GenerateSpec{
+	generateSpec := agentruntime.GenerateSpec{
 		Repo: spec.Repo, Instruction: "Use the " + SkillName + " skill. " + spec.Instruction,
-		Model: spec.Model, NativeModel: spec.NativeModel, UseAmbientAuth: spec.UseAmbientAuth,
-		Endpoint: spec.Endpoint, Token: spec.Token,
-		ExtraHeaders: spec.ExtraHeaders, Skills: map[string]string{SkillName: systemPromptSkill},
-		NetworkDomains: networkDomains,
-		MaxTurns:       spec.MaxTurns, AllowBash: false, Timeout: spec.Timeout,
-	})
-	result := Result{Runtime: "opencode", Duration: time.Since(started), Output: generated.Output}
-	if err != nil {
+		Skills:   map[string]string{SkillName: systemPromptSkill},
+		MaxTurns: spec.MaxTurns, AllowBash: false, Timeout: spec.Timeout,
+		ExecutionID: spec.ExecutionID,
+	}
+	var observedWork agentruntime.WorkRef
+	if r.AgentOwnsProvider {
+		generateSpec.WorkObserver = func(_ context.Context, work agentruntime.WorkRef) error {
+			observedWork = work
+			return nil
+		}
+	}
+	if !r.AgentOwnsProvider {
+		generateSpec.Model, generateSpec.NativeModel, generateSpec.UseAmbientAuth = spec.Model, spec.NativeModel, spec.UseAmbientAuth
+		generateSpec.Endpoint, generateSpec.Token, generateSpec.ExtraHeaders = spec.Endpoint, spec.Token, spec.ExtraHeaders
+		generateSpec.NetworkDomains = networkDomains
+	}
+	generated, err := r.Agent.Generate(ctx, generateSpec)
+	runtimeName := strings.TrimSpace(r.Runtime)
+	if runtimeName == "" {
+		runtimeName = "opencode"
+	}
+	result := Result{Runtime: runtimeName, Duration: time.Since(started), Output: generated.Output}
+	cleanupPending := errors.Is(err, agentruntime.ErrCleanupPending)
+	result.CleanupPending = cleanupPending
+	if cleanupPending && observedWork.Name != "" {
+		work := observedWork
+		result.CleanupWork = &work
+	}
+	if err != nil && (!cleanupPending || len(generated.Files) == 0) {
 		return result, err
 	}
 	if diffHasDestructiveChange(generated.Diff) {

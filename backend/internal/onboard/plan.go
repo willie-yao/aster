@@ -181,7 +181,7 @@ func candidateConfidence(candidate DashboardCandidate) Confidence {
 }
 
 func validateRenderedFilesNoCredentials(opts Options, files map[string]string) error {
-	for _, credential := range []string{opts.AIToken, opts.GitHubToken} {
+	for _, credential := range onboardingCredentialValues(opts) {
 		if credential == "" {
 			continue
 		}
@@ -224,7 +224,7 @@ func (b defaultPromptBuilder) Build(ctx context.Context, opts Options, data scaf
 	case promptModeAgent:
 		a := b.author
 		if a == nil {
-			a = promptauthor.NewOpenCodeRuntime()
+			a = newPromptAuthor(opts)
 		}
 		return buildAgentPrompt(ctx, opts, data, input, a, b.err)
 	case promptModeHandoff:

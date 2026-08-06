@@ -298,7 +298,32 @@ func wizardPromptAuthoring(ctx context.Context, prompt wizardUI, opts *Options) 
 	switch effectivePromptMode(*opts) {
 	case promptModeAgent:
 		opts.NoPrompt = false
-		if opts.PromptAgentModel == "" {
+		if opts.PromptAgentRuntime == "" {
+			runtimeChoice, err := prompt.Select(ctx, selectPrompt{Title: "Prompt agent runtime", Description: "Choose where OpenCode authors prompts/system.md.", Options: []selectOption{
+				{Value: promptRuntimeOpenCode, Label: "Local sandboxed OpenCode", Description: "Uses the pinned local srt sandbox."},
+				{Value: promptRuntimeOrka, Label: "Orka OpenCode", Description: "Uses an operator-owned Orka Agent."},
+			}})
+			if err != nil {
+				return err
+			}
+			opts.PromptAgentRuntime = runtimeChoice
+		}
+		if effectivePromptAgentRuntime(*opts) == promptRuntimeOrka {
+			if opts.PromptOrkaAPI == "" {
+				value, err := prompt.Input(ctx, inputPrompt{Title: "Orka result API", Description: "Absolute HTTP or HTTPS base URL.", Required: true, Validate: validatePromptOrkaAPI})
+				if err != nil {
+					return err
+				}
+				opts.PromptOrkaAPI = value
+			}
+			if opts.PromptOrkaAgentRef == "" {
+				value, err := prompt.Input(ctx, inputPrompt{Title: "Orka Agent", Description: "Operator-owned OpenCode Agent name.", Required: true})
+				if err != nil {
+					return err
+				}
+				opts.PromptOrkaAgentRef = value
+			}
+		} else if opts.PromptAgentModel == "" {
 			model, err := prompt.Input(ctx, inputPrompt{Title: "OpenCode model", Description: "Provider/model configured in OpenCode.", Value: defaultPromptAgentModel, Required: true, Validate: validatePromptAgentModel})
 			if err != nil {
 				return err

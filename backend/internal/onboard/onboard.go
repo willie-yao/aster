@@ -3,8 +3,10 @@ package onboard
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"text/template"
@@ -58,7 +60,16 @@ const (
 	defaultPromptDraftTimeout = DefaultPromptDraftTimeout
 	minPromptDraftTimeout     = time.Minute
 	maxPromptDraftTimeout     = 2 * time.Hour
+	promptRuntimeOpenCode     = "opencode"
+	promptRuntimeOrka         = "orka"
 )
+
+func effectivePromptAgentRuntime(opts Options) string {
+	if value := strings.TrimSpace(opts.PromptAgentRuntime); value != "" {
+		return value
+	}
+	return promptRuntimeOpenCode
+}
 
 func effectivePromptDraftTimeout(opts Options) time.Duration {
 	if opts.PromptTimeout <= 0 {
@@ -79,6 +90,11 @@ func validatePromptMode(mode string) error {
 func validateOptions(opts *Options) error {
 	opts.PromptMode = strings.TrimSpace(opts.PromptMode)
 	opts.PromptAgentModel = strings.TrimSpace(opts.PromptAgentModel)
+	opts.PromptAgentRuntime = strings.TrimSpace(opts.PromptAgentRuntime)
+	opts.PromptOrkaAPI = strings.TrimSpace(opts.PromptOrkaAPI)
+	opts.PromptOrkaAgentRef = strings.TrimSpace(opts.PromptOrkaAgentRef)
+	opts.PromptOrkaNamespace = strings.TrimSpace(opts.PromptOrkaNamespace)
+	opts.PromptOrkaGitSecret = strings.TrimSpace(opts.PromptOrkaGitSecret)
 	if err := validatePromptMode(opts.PromptMode); err != nil {
 		return err
 	}
@@ -97,6 +113,31 @@ func validateOptions(opts *Options) error {
 	}
 	if len(opts.PromptNetworkDomains) > 0 && effectivePromptMode(*opts) != promptModeAgent {
 		return fmt.Errorf("--prompt-network-domain is valid only with --prompt-mode=%s", promptModeAgent)
+	}
+	if effectivePromptMode(*opts) == promptModeAgent {
+		switch effectivePromptAgentRuntime(*opts) {
+		case promptRuntimeOpenCode:
+			if opts.PromptOrkaAPI != "" || opts.PromptOrkaAgentRef != "" || opts.PromptOrkaNamespace != "" || opts.PromptOrkaGitSecret != "" {
+				return fmt.Errorf("--prompt-orka-* fields require --prompt-agent-runtime=%s", promptRuntimeOrka)
+			}
+		case promptRuntimeOrka:
+			if opts.PromptOrkaAPI == "" || opts.PromptOrkaAgentRef == "" {
+				return fmt.Errorf("--prompt-agent-runtime=%s requires --prompt-orka-api and --prompt-orka-agent-ref", promptRuntimeOrka)
+			}
+			if opts.PromptAgentModel != "" || len(opts.PromptNetworkDomains) > 0 {
+				return fmt.Errorf("--prompt-agent-model and --prompt-network-domain apply only to the local opencode runtime")
+			}
+			if err := validatePromptOrkaAPI(opts.PromptOrkaAPI); err != nil {
+				return err
+			}
+			if opts.PromptTimeout > 30*time.Minute {
+				return fmt.Errorf("--prompt-timeout must be at most 30m with --prompt-agent-runtime=%s", promptRuntimeOrka)
+			}
+		default:
+			return fmt.Errorf("--prompt-agent-runtime must be %q or %q", promptRuntimeOpenCode, promptRuntimeOrka)
+		}
+	} else if opts.PromptAgentRuntime != "" || opts.PromptOrkaAPI != "" || opts.PromptOrkaAgentRef != "" || opts.PromptOrkaNamespace != "" || opts.PromptOrkaGitSecret != "" {
+		return fmt.Errorf("prompt runtime fields are valid only with --prompt-mode=%s", promptModeAgent)
 	}
 	if err := validateCredentialSeparation(*opts); err != nil {
 		return err
@@ -171,16 +212,43 @@ func validateOptions(opts *Options) error {
 	return nil
 }
 
+func validatePromptOrkaAPI(raw string) error {
+	parsed, err := url.Parse(raw)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return fmt.Errorf("--prompt-orka-api must be an absolute HTTP or HTTPS URL")
+	}
+	if parsed.User != nil {
+		return fmt.Errorf("--prompt-orka-api must not contain credentials; use ORKA_API_TOKEN")
+	}
+	query, err := url.ParseQuery(parsed.RawQuery)
+	if err != nil {
+		return fmt.Errorf("--prompt-orka-api contains an invalid query string")
+	}
+	for key := range query {
+		if credentialQueryKey(key) {
+			return fmt.Errorf("--prompt-orka-api must not contain credential query parameters; use ORKA_API_TOKEN")
+		}
+	}
+	if parsed.RawQuery != "" {
+		return fmt.Errorf("--prompt-orka-api must not contain a query string")
+	}
+	if parsed.Fragment != "" {
+		return fmt.Errorf("--prompt-orka-api must not contain a fragment")
+	}
+	return nil
+}
+
 func validateCredentialSeparation(opts Options) error {
 	values := []string{
 		opts.TestGrid, opts.Bucket, opts.GCSWebBase, opts.DashboardRepo, opts.SourceRepo,
 		opts.ID, opts.Name, opts.ShortName, opts.EngineRef, opts.OutDir, opts.PlanOut,
 		opts.PromptAgentModel,
+		opts.PromptAgentRuntime, opts.PromptOrkaAPI, opts.PromptOrkaAgentRef, opts.PromptOrkaNamespace, opts.PromptOrkaGitSecret,
 		strings.Join(opts.PromptNetworkDomains, ","),
 		opts.AIAPI, opts.AIEndpoint, opts.AIModel,
 		opts.DeploymentAIAPI, opts.DeploymentAIEndpoint, opts.DeploymentAIModel,
 	}
-	for _, credential := range []string{opts.AIToken, opts.GitHubToken} {
+	for _, credential := range onboardingCredentialValues(opts) {
 		if credential == "" {
 			continue
 		}
@@ -191,6 +259,34 @@ func validateCredentialSeparation(opts Options) error {
 		}
 	}
 	return nil
+}
+
+func onboardingCredentialValues(opts Options) []string {
+	values := []string{opts.AIToken, opts.GitHubToken}
+	if token := strings.TrimSpace(os.Getenv("ORKA_API_TOKEN")); token != "" {
+		return append(values, token)
+	}
+	path := strings.TrimSpace(os.Getenv("ORKA_API_TOKEN_FILE"))
+	if path == "" {
+		path = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+	}
+	if token := readOnboardingCredentialFile(path); token != "" {
+		values = append(values, token)
+	}
+	return values
+}
+
+func readOnboardingCredentialFile(path string) string {
+	file, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+	raw, err := io.ReadAll(io.LimitReader(file, 64<<10))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(raw))
 }
 
 func validateAIEndpoint(endpoint string) error {

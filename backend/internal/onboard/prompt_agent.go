@@ -2,6 +2,8 @@ package onboard
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -100,16 +102,25 @@ func buildAgentPrompt(ctx context.Context, opts Options, data scaffoldData, inpu
 	if err != nil {
 		return "", promptPreparationResult{}, err
 	}
-	res, err := author.Generate(ctx, promptauthor.Spec{
-		Repo:           agentruntime.RepoRef{Owner: input.SourceRepo.Owner, Name: input.SourceRepo.Name, Ref: revision, Token: opts.GitHubToken},
-		Instruction:    handoff,
-		NativeModel:    effectivePromptAgentModel(opts),
-		UseAmbientAuth: true,
-		NetworkDomains: opts.PromptNetworkDomains,
-		MaxTurns:       12,
-		Timeout:        effectivePromptDraftTimeout(opts),
-	})
+	executionID, err := promptExecutionID()
 	if err != nil {
+		return "", promptPreparationResult{}, err
+	}
+	authorSpec := promptauthor.Spec{
+		Repo:        agentruntime.RepoRef{Owner: input.SourceRepo.Owner, Name: input.SourceRepo.Name, Ref: revision, Token: opts.GitHubToken},
+		Instruction: handoff,
+		MaxTurns:    12,
+		Timeout:     effectivePromptDraftTimeout(opts),
+		ExecutionID: executionID,
+	}
+	if effectivePromptAgentRuntime(opts) == promptRuntimeOpenCode {
+		authorSpec.NativeModel = effectivePromptAgentModel(opts)
+		authorSpec.UseAmbientAuth = true
+		authorSpec.NetworkDomains = opts.PromptNetworkDomains
+	}
+	res, err := author.Generate(ctx, authorSpec)
+	if err != nil {
+		writePromptCleanupWarning(errOut, res)
 		if parentCtx.Err() != nil {
 			return "", promptPreparationResult{}, parentCtx.Err()
 		}
@@ -131,5 +142,27 @@ func buildAgentPrompt(ctx context.Context, opts Options, data scaffoldData, inpu
 			Failure:   failure,
 		}, renderErr
 	}
+	if res.CleanupPending {
+		writePromptCleanupWarning(errOut, res)
+	}
 	return res.Body, promptPreparationResult{Requested: promptRequestAgent, Status: promptStatusAgentDraft, Output: promptOutputAgentDraft}, nil
+}
+
+func writePromptCleanupWarning(out io.Writer, res promptauthor.Result) {
+	if !res.CleanupPending {
+		return
+	}
+	if res.CleanupWork != nil {
+		fmt.Fprintf(out, "Orka Task cleanup is still pending for %s/%s.\n", res.CleanupWork.Namespace, res.CleanupWork.Name)
+		return
+	}
+	fmt.Fprintln(out, "Orka Task cleanup is still pending.")
+}
+
+func promptExecutionID() (string, error) {
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return "", fmt.Errorf("generate prompt execution id: %w", err)
+	}
+	return "onboard-prompt-" + hex.EncodeToString(value[:]), nil
 }

@@ -3,8 +3,11 @@ package onboard
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func testPromptModeOptions(mode string) Options {
@@ -155,7 +158,11 @@ func TestWizardPromptAuthoringKeepsSelectedMode(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.mode, func(t *testing.T) {
 			opts := Options{}
-			ui := &queuedWizardUI{selects: []string{tt.mode}, inputs: tt.inputs}
+			selects := []string{tt.mode}
+			if tt.mode == promptModeAgent {
+				selects = append(selects, promptRuntimeOpenCode)
+			}
+			ui := &queuedWizardUI{selects: selects, inputs: tt.inputs}
 			if err := wizardPromptAuthoring(context.Background(), ui, &opts); err != nil {
 				t.Fatal(err)
 			}
@@ -187,5 +194,90 @@ func TestValidateOptionsNormalizesPromptNetworkDomains(t *testing.T) {
 	}
 	if len(opts.PromptNetworkDomains) != 1 || opts.PromptNetworkDomains[0] != "provider.example.com:443" {
 		t.Fatalf("network domains = %v", opts.PromptNetworkDomains)
+	}
+}
+
+func TestValidateOptionsAcceptsOrkaPromptRuntime(t *testing.T) {
+	opts := testPromptModeOptions(promptModeAgent)
+	opts.PromptAgentRuntime = promptRuntimeOrka
+	opts.PromptOrkaAPI = "http://orka.example.test:8080"
+	opts.PromptOrkaAgentRef = "prompt-author"
+	opts.PromptOrkaNamespace = "orka-system"
+	opts.PromptOrkaGitSecret = "source-read"
+	if err := validateOptions(&opts); err != nil {
+		t.Fatal(err)
+	}
+	if effectivePromptAgentRuntime(opts) != promptRuntimeOrka {
+		t.Fatalf("runtime = %q", effectivePromptAgentRuntime(opts))
+	}
+}
+
+func TestValidateOptionsRejectsLocalPolicyForOrkaPromptRuntime(t *testing.T) {
+	opts := testPromptModeOptions(promptModeAgent)
+	opts.PromptAgentRuntime = promptRuntimeOrka
+	opts.PromptOrkaAPI = "http://orka.example.test:8080"
+	opts.PromptOrkaAgentRef = "prompt-author"
+	opts.PromptAgentModel = defaultPromptAgentModel
+	if err := validateOptions(&opts); err == nil || !strings.Contains(err.Error(), "apply only") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestValidateOptionsBoundsOrkaPromptTimeout(t *testing.T) {
+	opts := testPromptModeOptions(promptModeAgent)
+	opts.PromptAgentRuntime = promptRuntimeOrka
+	opts.PromptOrkaAPI = "http://orka.example.test:8080"
+	opts.PromptOrkaAgentRef = "prompt-author"
+	opts.PromptTimeout = 31 * time.Minute
+	if err := validateOptions(&opts); err == nil || !strings.Contains(err.Error(), "at most 30m") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestValidateOptionsUsesOrkaAPITerminology(t *testing.T) {
+	opts := testPromptModeOptions(promptModeAgent)
+	opts.PromptAgentRuntime = promptRuntimeOrka
+	opts.PromptOrkaAPI = "https://user:secret@orka.example.test"
+	opts.PromptOrkaAgentRef = "prompt-author"
+	err := validateOptions(&opts)
+	if err == nil || !strings.Contains(err.Error(), "--prompt-orka-api") || !strings.Contains(err.Error(), "ORKA_API_TOKEN") || strings.Contains(err.Error(), "AI_ENDPOINT") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestValidateOptionsRejectsOrkaAPIQueryAndFragment(t *testing.T) {
+	for _, api := range []string{"https://orka.example.test?tenant=x", "https://orka.example.test#results"} {
+		opts := testPromptModeOptions(promptModeAgent)
+		opts.PromptAgentRuntime = promptRuntimeOrka
+		opts.PromptOrkaAPI = api
+		opts.PromptOrkaAgentRef = "prompt-author"
+		if err := validateOptions(&opts); err == nil || !strings.Contains(err.Error(), "--prompt-orka-api") {
+			t.Fatalf("API %q error = %v", api, err)
+		}
+	}
+}
+
+func TestValidateOptionsRejectsOrkaTokenInPlanFields(t *testing.T) {
+	for _, setup := range []func(*testing.T){
+		func(t *testing.T) { t.Setenv("ORKA_API_TOKEN", "  orka-result-secret  ") },
+		func(t *testing.T) {
+			t.Setenv("ORKA_API_TOKEN", "")
+			path := filepath.Join(t.TempDir(), "token")
+			if err := os.WriteFile(path, []byte("orka-result-secret\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("ORKA_API_TOKEN_FILE", path)
+		},
+	} {
+		t.Run("source", func(t *testing.T) {
+			setup(t)
+			opts := testPromptModeOptions(promptModeAgent)
+			opts.PromptAgentRuntime = promptRuntimeOrka
+			opts.PromptOrkaAPI = "http://orka.example.test:8080"
+			opts.PromptOrkaAgentRef = "orka-result-secret"
+			if err := validateOptions(&opts); err == nil || !strings.Contains(err.Error(), "credential was supplied") || strings.Contains(err.Error(), "orka-result-secret") {
+				t.Fatalf("error = %v", err)
+			}
+		})
 	}
 }
