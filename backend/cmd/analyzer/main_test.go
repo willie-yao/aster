@@ -234,9 +234,9 @@ func TestRunRejectsMalformedOrMismatchedBundle(t *testing.T) {
 func TestRunWithScriptedModelEndpoint(t *testing.T) {
 	script := aitest.NewScriptServer(t)
 	script.PushToolCall("c1", "read_artifact", map[string]any{"path": "build-log.txt"})
-	script.PushToolCall("c2", "tail_artifact", map[string]any{"path": "build-log.txt"})
+	script.PushToolCall("c2", "grep_artifact", map[string]any{"path": "build-log.txt", "pattern": "2 of 3", "context_lines": 0})
 	script.PushToolCall("c3", "read_artifact", map[string]any{"path": "artifacts/junit.xml"})
-	script.PushFinal(`{"summary":"Control plane provisioning timed out","is_transient":false,"root_cause":"Only 2 of 3 control plane machines registered before the timeout","severity":"High","suggested_fix":"Raise the bootstrap timeout so all machines can register","relevant_files":[]}`)
+	script.PushFinal(`{"summary":"Control plane provisioning timed out","is_transient":false,"root_cause":"Only 2 of 3 control plane machines registered before the timeout","severity":"High","suggested_fix":"Raise the bootstrap timeout so all machines can register","relevant_files":[],"evidence_citations":[{"path":"build-log.txt","line_start":1,"line_end":1,"quote":"2 of 3 control plane machines registered"}]}`)
 	script.PushFinal(`{"objections":[]}`)
 
 	root := t.TempDir()
