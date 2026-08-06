@@ -411,6 +411,13 @@ func TestAgentTaskName_ContentAddressedAndStable(t *testing.T) {
 	if AgentTaskName(withSkills, opts) == AgentTaskName(changedSkill, opts) {
 		t.Fatal("skill content did not change the Task name")
 	}
+	candidateA := baseSpec
+	candidateA.Skills = map[string]string{"alpha": "x", "beta": "y"}
+	candidateB := baseSpec
+	candidateB.Skills = map[string]string{"alpha": "x\x00beta\x00y"}
+	if AgentTaskName(candidateA, opts) == AgentTaskName(candidateB, opts) {
+		t.Fatal("length-delimited skill identities collided")
+	}
 }
 
 func TestAgentRuntimeTransfersSkillsThroughPrompt(t *testing.T) {
@@ -468,7 +475,11 @@ func TestAgentRuntimeRejectsUnsupportedExecutionPolicyBeforeClusterWrite(t *test
 		{name: "network", edit: func(s *runtime.GenerateSpec, _ *AgentOptions) { s.NetworkDomains = []string{"model.invalid:443"} }, want: "network policy"},
 		{name: "purpose", edit: func(_ *runtime.GenerateSpec, o *AgentOptions) { o.Purpose = "unknown" }, want: "purpose"},
 		{name: "git secret", edit: func(_ *runtime.GenerateSpec, o *AgentOptions) { o.GitSecret = "Bad_Name" }, want: "git secret"},
+		{name: "fix git secret", edit: func(_ *runtime.GenerateSpec, o *AgentOptions) { o.GitSecret = "source-read" }, want: "fix generation does not permit"},
 		{name: "skill name", edit: func(s *runtime.GenerateSpec, _ *AgentOptions) { s.Skills = map[string]string{"Bad_Name": "content"} }, want: "skill name"},
+		{name: "long skill name", edit: func(s *runtime.GenerateSpec, _ *AgentOptions) {
+			s.Skills = map[string]string{strings.Repeat("a", maxAgentSkillNameBytes+1): "content"}
+		}, want: "skill name is"},
 		{name: "empty skill", edit: func(s *runtime.GenerateSpec, _ *AgentOptions) { s.Skills = map[string]string{"empty": " \n"} }, want: "empty"},
 	}
 	for _, tc := range tests {
@@ -485,6 +496,19 @@ func TestAgentRuntimeRejectsUnsupportedExecutionPolicyBeforeClusterWrite(t *test
 				t.Fatalf("invalid policy wrote a cluster resource: task=%v", kube.applied)
 			}
 		})
+	}
+}
+
+func TestNormalizeAgentSkillsCountsRenderedFraming(t *testing.T) {
+	content := strings.Repeat("x", maxAgentSkillBytes)
+	_, err := normalizeAgentSkills(map[string]string{
+		"alpha": content,
+		"beta":  content,
+		"gamma": content,
+		"delta": content,
+	})
+	if err == nil || !strings.Contains(err.Error(), "skill contents") {
+		t.Fatalf("aggregate skill framing error = %v", err)
 	}
 }
 

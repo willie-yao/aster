@@ -3,6 +3,7 @@ package orka
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -39,6 +40,7 @@ const (
 	maxAgentResultBytes        = 4 << 20
 	maxAgentSkillBytes         = 256 << 10
 	maxAgentSkillsBytes        = 1 << 20
+	maxAgentSkillNameBytes     = 63
 	actionRequestAnnotation    = "prow-ai-dashboard/action-request"
 	defaultAgentCleanupTimeout = 30 * time.Second
 )
@@ -379,6 +381,9 @@ func validateAgentGenerateSpec(spec runtime.GenerateSpec, opts AgentOptions) (ag
 	if opts.GitSecret != "" && (len(opts.GitSecret) > 253 || !kubernetesObjectName.MatchString(opts.GitSecret)) {
 		return agentTaskContract{}, nil, fmt.Errorf("orka: git secret must be a Kubernetes object name")
 	}
+	if opts.GitSecret != "" && contract.purpose == AgentPurposeFix {
+		return agentTaskContract{}, nil, fmt.Errorf("orka: fix generation does not permit a git secret")
+	}
 	switch {
 	case strings.TrimSpace(spec.Model) != "":
 		return agentTaskContract{}, nil, fmt.Errorf("orka: model is owned by the referenced Agent")
@@ -415,13 +420,16 @@ func normalizeAgentSkills(values map[string]string) ([]agentSkill, error) {
 		if !agentSkillName.MatchString(name) {
 			return nil, fmt.Errorf("orka: invalid skill name %q", name)
 		}
+		if len(name) > maxAgentSkillNameBytes {
+			return nil, fmt.Errorf("orka: skill name is %d bytes, exceeds %d", len(name), maxAgentSkillNameBytes)
+		}
 		if strings.TrimSpace(content) == "" {
 			return nil, fmt.Errorf("orka: skill %q is empty", name)
 		}
 		if len(content) > maxAgentSkillBytes {
 			return nil, fmt.Errorf("orka: skill %q is %d bytes, exceeds %d", name, len(content), maxAgentSkillBytes)
 		}
-		total += len(content)
+		total += len("## Engine skill: ") + len(name) + 1 + len(content) + 2
 		if total > maxAgentSkillsBytes {
 			return nil, fmt.Errorf("orka: skill contents are %d bytes, exceeds %d", total, maxAgentSkillsBytes)
 		}
@@ -637,8 +645,14 @@ func AgentTaskName(spec runtime.GenerateSpec, opts AgentOptions) string {
 	if executionID := strings.TrimSpace(spec.ExecutionID); executionID != "" {
 		parts = append(parts, executionID)
 	}
-	data := strings.Join(parts, "\x00")
-	sum := sha256.Sum256([]byte(data))
+	h := sha256.New()
+	var length [8]byte
+	for _, part := range parts {
+		binary.BigEndian.PutUint64(length[:], uint64(len(part)))
+		_, _ = h.Write(length[:])
+		_, _ = h.Write([]byte(part))
+	}
+	sum := h.Sum(nil)
 	return Sanitize(contract.namePrefix + "-" + hex.EncodeToString(sum[:8]) + "-" + opts.Version)
 }
 
