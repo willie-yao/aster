@@ -81,6 +81,7 @@ jobs:
           test -x "$SRT_BIN"
           "$SRT_BIN" --help >/dev/null
           node -e "if (require('$RUNNER_TEMP/srt-0.0.70/node_modules/@anthropic-ai/sandbox-runtime/package.json').version !== '0.0.70') process.exit(1)"
+          grep -Fxq 'installer_schema=2' "$RUNNER_TEMP/srt-0.0.70/INSTALL_PROVENANCE"
           test -x "$RUNNER_TEMP/srt-0.0.70/node_modules/@anthropic-ai/sandbox-runtime/vendor/seccomp/x64/apply-seccomp"
           cd backend
           SRT_TEST_BIN="$SRT_BIN" go test ./internal/runtime -run '^TestSRTSandboxHostileIntegration$' -count=1

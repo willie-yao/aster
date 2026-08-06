@@ -78,6 +78,7 @@ func TestSRTInstallerContract(t *testing.T) {
 		"srt-installer:",
 		`./hack/install-srt.sh "$RUNNER_TEMP/srt-0.0.70"`,
 		`"$SRT_BIN" --help`,
+		"installer_schema=2",
 		"TestSRTSandboxHostileIntegration",
 	} {
 		if !strings.Contains(workflowText, want) {
