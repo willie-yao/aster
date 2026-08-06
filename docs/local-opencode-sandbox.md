@@ -31,6 +31,15 @@ The package requires Node.js 20.11 or newer. Platform dependencies are:
 - Linux: `bash`, `bwrap` (`bubblewrap`), `socat`, and `rg`.
 
 Linux also needs capability-bearing unprivileged user namespaces. If the host security policy prevents `bubblewrap` or the bundled seccomp helper from creating them, the runtime fails closed.
+Ubuntu 24.04 and newer enable an AppArmor restriction that removes those
+capabilities by default. On a dedicated sandbox host, either grant `userns` to
+the required binaries with an AppArmor profile or disable that restriction:
+
+```bash
+sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+```
+
+The CI integration job applies this setting only to its disposable runner.
 
 ## Enforced boundary
 

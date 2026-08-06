@@ -77,6 +77,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bubblewrap gcc libc6-dev libseccomp-dev ripgrep socat
+          if [[ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || true)" == "1" ]]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
           SRT_BIN="$(./hack/install-srt.sh "$RUNNER_TEMP/srt-0.0.70")"
           test -x "$SRT_BIN"
           "$SRT_BIN" --help >/dev/null
