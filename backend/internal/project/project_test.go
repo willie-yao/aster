@@ -1291,3 +1291,29 @@ func TestValidateAIUsage(t *testing.T) {
 		})
 	}
 }
+
+func TestFixAgentRuntimeNetworkDomains(t *testing.T) {
+	c := validConfig()
+	c.AI = &AI{FixPRs: &FixPRs{Enabled: true, AuthorName: "Jane", AuthorEmail: "jane@example.com", AgentRuntime: &FixAgentRuntime{
+		Type: "opencode", NetworkDomains: []string{"Registry.Example.COM:443"},
+	}}}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	got := c.EffectiveFixPRs().AgentRuntime.NetworkDomains
+	if len(got) != 1 || got[0] != "registry.example.com:443" {
+		t.Fatalf("network domains = %v", got)
+	}
+
+	c.AI.FixPRs.AgentRuntime.NetworkDomains = []string{"https://user:secret@example.com"}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "network_domains") || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("credential-bearing domain error = %v", err)
+	}
+
+	c.AI.FixPRs.AgentRuntime = &FixAgentRuntime{
+		Type: "orka", OrkaAgentRef: "agent", OrkaAPI: "http://orka.invalid", NetworkDomains: []string{"registry.example.com"},
+	}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "applies only") {
+		t.Fatalf("Orka network domains error = %v", err)
+	}
+}

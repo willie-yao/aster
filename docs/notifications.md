@@ -82,7 +82,7 @@ a URL.
 
 Do not enable `action_links` for a static Pages deployment. Pages has no action
 API or administrator authentication. Fix proposal links also require a server
-image that contains `opencode` and git.
+image that contains OpenCode, git, and the pinned `srt` sandbox.
 
 ## SMTP security modes
 

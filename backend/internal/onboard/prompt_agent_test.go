@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/onboard/promptauthor"
+	agentruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 )
 
 type fakePromptAuthor struct {
@@ -183,6 +184,34 @@ func TestBuildAgentPromptFallsBackSafely(t *testing.T) {
 	}
 	if strings.Contains(errOut.String(), "raw runtime output") || !strings.Contains(errOut.String(), "agent handoff bundle with TODO template") {
 		t.Fatalf("unsafe fallback warning: %s", errOut.String())
+	}
+}
+
+func TestBuildAgentPromptPassesNetworkDomains(t *testing.T) {
+	author := &fakePromptAuthor{result: promptauthor.Result{Body: "agent prompt"}}
+	_, _, err := buildAgentPrompt(context.Background(), Options{
+		PromptAgentModel: "other/model", PromptNetworkDomains: []string{"provider.example.test:443"},
+	}, scaffoldData{Name: "Project"}, agentPromptInput(), author, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(author.got.NetworkDomains) != 1 || author.got.NetworkDomains[0] != "provider.example.test:443" {
+		t.Fatalf("network domains = %v", author.got.NetworkDomains)
+	}
+}
+
+func TestBuildAgentPromptFallsBackWhenSandboxUnavailable(t *testing.T) {
+	author := &fakePromptAuthor{err: fmt.Errorf("%w: srt missing", agentruntime.ErrSandboxUnavailable)}
+	var errOut bytes.Buffer
+	body, result, err := buildAgentPrompt(context.Background(), Options{}, scaffoldData{Name: "Project"}, agentPromptInput(), author, &errOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != promptStatusAgentFallback || !strings.Contains(body, "## Architecture") || result.Handoff == "" {
+		t.Fatalf("body=%q result=%+v", body, result)
+	}
+	if strings.Contains(errOut.String(), "srt missing") {
+		t.Fatalf("raw sandbox error leaked: %s", errOut.String())
 	}
 }
 

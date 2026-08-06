@@ -1,8 +1,6 @@
 # Local OpenCode sandbox
 
-This page documents the `srt` backend and its integration tests. In this phase, `NewLocalAgent` still uses the direct process backend. Exporting `SRT_BIN` alone does not change prompt authoring or fix generation until the separate caller-migration change is merged.
-
-The backend uses [Anthropic Sandbox Runtime](https://github.com/anthropic-experimental/sandbox-runtime), `srt`, and is tested against the exact npm package:
+Local OpenCode callers use the `srt` backend by default. This includes onboarding prompt authoring and local fix generation. The backend uses [Anthropic Sandbox Runtime](https://github.com/anthropic-experimental/sandbox-runtime), `srt`, and is tested against the exact npm package:
 
 ```text
 @anthropic-ai/sandbox-runtime@0.0.70
@@ -20,7 +18,7 @@ npm install --prefix "$tool_root" --save-exact @anthropic-ai/sandbox-runtime@0.0
 export SRT_BIN="$tool_root/node_modules/.bin/srt"
 ```
 
-`NewSRTSandboxFromEnv` reads `SRT_BIN`. A local caller must select that backend explicitly; this backend does not replace `NewLocalAgent` by itself.
+`NewLocalAgent` reads `SRT_BIN` through `NewSRTSandboxFromEnv`. Missing, mismatched, or unusable `srt` fails closed. There is no direct-execution fallback.
 
 The package requires Node.js 20.11 or newer. Platform dependencies are:
 
@@ -68,3 +66,11 @@ go test ./internal/runtime -run '^TestSRTSandboxRealOpenCode$' -count=1
 ```
 
 Those three Copilot destinations were observed from `srt` violation logs with an empty allowlist. Other providers and dependency registries require their own explicit reviewed domains.
+
+## Network policy by caller
+
+Onboarding with `github-copilot/*` always includes the three domains observed in the controlled smoke test above. Repeated `--prompt-network-domain=<domain[:port]>` flags can add other explicitly reviewed destinations. Other native OpenCode providers require at least one such flag.
+
+Local fix generation automatically allows the configured AI endpoint host. Add `ai.fix_prs.agent_runtime.network_domains` only for dependency registries or other reviewed destinations required by Bash-enabled fix and test commands. Entries are domains with an optional port, not URLs. Credential-bearing URLs are rejected.
+
+OpenCode `allow_bash` controls only the OpenCode Bash tool. It never broadens the filesystem, socket, local binding, environment, or network sandbox policy.

@@ -57,7 +57,7 @@ image:
 analyzer-image:
 	docker build -f deploy/analyzer.Dockerfile -t $(IMAGE)/analyzer:$(VERSION) .
 
-# Build the drop-in engine image with git for fix generation.
+# Build the sandboxed local OpenCode image for fix generation.
 fixer-image:
 	docker build --target fixer-runtime --build-arg VERSION=$(VERSION) -t $(IMAGE)/fixer:$(VERSION) .
 
@@ -198,7 +198,7 @@ help:
 	@echo "  dist-ai            Full pipeline with AI analysis"
 	@echo "  image              Build the container image (fetcher + server + SPA)"
 	@echo "  analyzer-image     Build the one-shot Orka container analyzer image"
-	@echo "  fixer-image        Build the git-capable drop-in Orka fix image"
+	@echo "  fixer-image        Build the sandboxed local OpenCode fix image"
 	@echo "  clean              Remove build artifacts and data"
 	@echo "  clean-cache        Clear AI analysis cache"
 	@echo "  clean-all          Clean everything including cache"

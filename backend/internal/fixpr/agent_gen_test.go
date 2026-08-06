@@ -41,7 +41,7 @@ func TestGenerateWithAgent_HappyPath(t *testing.T) {
 		Diff:  "--- a/templates/cluster.yaml\n+++ b/templates/cluster.yaml\n",
 	}}
 	observer := func(context.Context, runtime.WorkRef) error { return nil }
-	gp := agentGenParams(&AgentConfig{Runtime: fa, Model: "m", Endpoint: "e", ModelToken: "t", AllowBash: true, ExecutionID: "request-1", WorkObserver: observer})
+	gp := agentGenParams(&AgentConfig{Runtime: fa, Model: "m", Endpoint: "e", ModelToken: "t", AllowBash: true, NetworkDomains: []string{"registry.example.test:443"}, ExecutionID: "request-1", WorkObserver: observer})
 
 	fix, err := generateWithAgent(context.Background(), gp, systemicPattern("etcd"))
 	if err != nil {
@@ -62,6 +62,9 @@ func TestGenerateWithAgent_HappyPath(t *testing.T) {
 	}
 	if fa.spec.Model != "m" || fa.spec.Endpoint != "e" || fa.spec.Token != "t" {
 		t.Errorf("model config not passed: %+v", fa.spec)
+	}
+	if len(fa.spec.NetworkDomains) != 1 || fa.spec.NetworkDomains[0] != "registry.example.test:443" {
+		t.Errorf("network domains not passed: %+v", fa.spec.NetworkDomains)
 	}
 	if fa.spec.ExecutionID != "request-1" || fa.spec.WorkObserver == nil {
 		t.Errorf("runtime work identity not passed: %+v", fa.spec)
@@ -93,6 +96,14 @@ func TestGenerateWithAgent_UnavailableSurfaces(t *testing.T) {
 	_, err := generateWithAgent(context.Background(), agentGenParams(&AgentConfig{Runtime: fa}), systemicPattern("etcd"))
 	if err == nil || !strings.Contains(err.Error(), "unavailable") {
 		t.Errorf("expected an unavailable error, got %v", err)
+	}
+}
+
+func TestGenerateWithAgent_SandboxUnavailableSurfaces(t *testing.T) {
+	fa := &fakeAgentRuntime{err: errWrap{runtime.ErrSandboxUnavailable}}
+	_, err := generateWithAgent(context.Background(), agentGenParams(&AgentConfig{Runtime: fa}), systemicPattern("etcd"))
+	if err == nil || !strings.Contains(err.Error(), "unavailable") {
+		t.Errorf("expected a sandbox-unavailable error, got %v", err)
 	}
 }
 

@@ -50,6 +50,8 @@ type Options struct {
 	PromptMode string
 	// PromptAgentModel is an OpenCode provider/model reference.
 	PromptAgentModel string
+	// PromptNetworkDomains are additional reviewed provider destinations.
+	PromptNetworkDomains []string
 
 	// AIAPI selects chat_completions (default) or responses.
 	AIAPI string

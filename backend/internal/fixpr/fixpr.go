@@ -101,6 +101,8 @@ type AgentConfig struct {
 	MaxTurns int
 	// AllowBash lets the agent run build/tests while fixing.
 	AllowBash bool
+	// NetworkDomains are additional dependency registry destinations.
+	NetworkDomains []string
 	// Timeout bounds the whole generation. Zero uses the Runtime default.
 	Timeout time.Duration
 	// GitToken authenticates the source clone. Empty clones anonymously, which

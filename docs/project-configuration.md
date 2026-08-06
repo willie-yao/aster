@@ -278,6 +278,8 @@ publishes the expected jobs:
 - `notifications.email`: [Email notifications](notifications.md)
 - `issues`: [GitHub issues](github-issues.md)
 - `ai.fix_prs`: [Agent-proposed fix PRs](fix-prs.md)
+  Local `opencode` uses pinned `srt`; `agent_runtime.network_domains` is an
+  explicit domain and optional-port allowlist for required dependency tools.
 - `ai.source_investigation`: optional read-only Orka source runtime for analysis chat
 
 These features require deployment secrets and, in some cases, additional writer

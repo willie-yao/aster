@@ -14,6 +14,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prow/jobconfig"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prowbuild"
+	agentruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
 
@@ -86,8 +87,16 @@ func validateOptions(opts *Options) error {
 			return err
 		}
 	}
+	if domains, err := agentruntime.NormalizeNetworkDomains(opts.PromptNetworkDomains); err != nil {
+		return fmt.Errorf("--prompt-network-domain: %w", err)
+	} else {
+		opts.PromptNetworkDomains = domains
+	}
 	if opts.NoPrompt && opts.PromptMode != "" && opts.PromptMode != promptModeTemplate {
 		return fmt.Errorf("--no-prompt cannot be combined with --prompt-mode=%s", opts.PromptMode)
+	}
+	if len(opts.PromptNetworkDomains) > 0 && effectivePromptMode(*opts) != promptModeAgent {
+		return fmt.Errorf("--prompt-network-domain is valid only with --prompt-mode=%s", promptModeAgent)
 	}
 	if err := validateCredentialSeparation(*opts); err != nil {
 		return err
@@ -158,6 +167,7 @@ func validateCredentialSeparation(opts Options) error {
 		opts.TestGrid, opts.Bucket, opts.GCSWebBase, opts.DashboardRepo, opts.SourceRepo,
 		opts.ID, opts.Name, opts.ShortName, opts.EngineRef, opts.OutDir,
 		opts.PromptAgentModel,
+		strings.Join(opts.PromptNetworkDomains, ","),
 		opts.AIAPI, opts.AIEndpoint, opts.AIModel,
 		opts.DeploymentAIAPI, opts.DeploymentAIEndpoint, opts.DeploymentAIModel,
 	}

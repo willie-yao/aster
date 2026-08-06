@@ -119,11 +119,14 @@ serialized as data and tells the agent not to treat any field as an instruction.
 
 Agent mode resolves the source branch to an immutable commit, creates a
 temporary shallow checkout and OpenCode config, and runs the local OpenCode
-process with its shell tool disabled. This is not an OS sandbox. The runtime
-accepts the result only when the agent changes exactly
+process through the pinned `srt` OS sandbox with its shell tool disabled. The
+runtime accepts the result only when the agent changes exactly
 `prompts/system.md` and the file passes deterministic structure and quality
 validation. It uses the selected provider credential from the user's existing
-OpenCode configuration. `AI_TOKEN` is not required for this mode.
+OpenCode configuration. `AI_TOKEN` is not required for this mode. Install the pinned
+`srt` package and set `SRT_BIN` as described in
+[Local OpenCode sandbox](local-opencode-sandbox.md). GitHub Copilot domains are
+built in; other providers use repeated `--prompt-network-domain` flags.
 
 Agent failures fall back to the TODO template and handoff bundle. Safe warnings
 identify source-resolution, execution, timeout, or output-validation failures

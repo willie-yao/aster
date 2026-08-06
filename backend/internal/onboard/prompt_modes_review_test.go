@@ -168,3 +168,24 @@ func TestWizardPromptAuthoringKeepsSelectedMode(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateOptionsRejectsInvalidPromptNetworkDomain(t *testing.T) {
+	opts := testPromptModeOptions(promptModeAgent)
+	opts.PromptAgentModel = defaultPromptAgentModel
+	opts.PromptNetworkDomains = []string{"https://user:secret@example.com"}
+	if err := validateOptions(&opts); err == nil || !strings.Contains(err.Error(), "prompt-network-domain") || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestValidateOptionsNormalizesPromptNetworkDomains(t *testing.T) {
+	opts := testPromptModeOptions(promptModeAgent)
+	opts.PromptAgentModel = "other/model"
+	opts.PromptNetworkDomains = []string{"Provider.Example.COM:443", "provider.example.com:443"}
+	if err := validateOptions(&opts); err != nil {
+		t.Fatal(err)
+	}
+	if len(opts.PromptNetworkDomains) != 1 || opts.PromptNetworkDomains[0] != "provider.example.com:443" {
+		t.Fatalf("network domains = %v", opts.PromptNetworkDomains)
+	}
+}

@@ -84,7 +84,7 @@ func (c promptFailureCategory) action() string {
 	case promptFailurePromptValidation:
 		return "Use the handoff bundle and inspect the generated prompt against the deterministic validation contract."
 	case promptFailureAgentExecution:
-		return "Verify OpenCode availability, authentication, and repository access, then retry or use the handoff bundle."
+		return "Verify pinned srt and OpenCode availability, authentication, provider domains, and repository access, then retry or use the handoff bundle."
 	case promptFailureTimedOut:
 		return "Retry with a larger --prompt-timeout or use the handoff bundle."
 	default:

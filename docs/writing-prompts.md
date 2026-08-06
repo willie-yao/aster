@@ -55,7 +55,8 @@ Guided onboarding offers three prompt-authoring modes:
 
 - `agent` resolves the source repository to an immutable commit and runs a local
   OpenCode agent in a temporary checkout and temporary config. The shell tool is
-  denied, but the process is not OS-sandboxed.
+  denied and the complete process tree runs through the pinned local `srt` OS
+  sandbox.
 - `handoff` writes the TODO template plus `PROMPT_HANDOFF.md` and the bundled
   `.opencode/skills/system-prompt-generation/SKILL.md` without running a model.
 - `todo-template` writes only the reviewable template.

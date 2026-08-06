@@ -102,9 +102,9 @@ type ManagedAgentRuntime interface {
 
 // LocalAgentRuntime shallow-clones a repository into temporary directories,
 // runs a coding-agent CLI through ProcessSandbox, and returns the changed files.
-// The default process backend preserves the existing local behavior and does
-// not provide OS isolation. Returns ErrUnavailable when git or the CLI binary
-// is not on PATH.
+// NewLocalAgent requires the enforcing srt backend and never falls back to
+// direct execution. Returns ErrUnavailable when git or the CLI binary is not on
+// PATH.
 type LocalAgentRuntime struct {
 	// Bin is the coding-agent CLI. Defaults to "opencode".
 	Bin string
@@ -117,7 +117,7 @@ type LocalAgentRuntime struct {
 
 // NewLocalAgent returns a LocalAgentRuntime driving the opencode CLI.
 func NewLocalAgent() *LocalAgentRuntime {
-	return &LocalAgentRuntime{Bin: "opencode", Sandbox: directProcessSandbox{}}
+	return &LocalAgentRuntime{Bin: "opencode", Sandbox: NewSRTSandboxFromEnv()}
 }
 
 // Generate materializes spec.Repo, runs the coding agent against it, and returns

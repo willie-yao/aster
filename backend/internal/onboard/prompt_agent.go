@@ -105,6 +105,7 @@ func buildAgentPrompt(ctx context.Context, opts Options, data scaffoldData, inpu
 		Instruction:    handoff,
 		NativeModel:    effectivePromptAgentModel(opts),
 		UseAmbientAuth: true,
+		NetworkDomains: opts.PromptNetworkDomains,
 		MaxTurns:       12,
 		Timeout:        effectivePromptDraftTimeout(opts),
 	})

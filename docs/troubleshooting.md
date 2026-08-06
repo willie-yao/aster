@@ -10,7 +10,7 @@ cases below.
 | Missing or empty `prompts/system.md` | AI was enabled without a project prompt. | Add a non-empty prompt under `<project_dir>/prompts/system.md`. |
 | `required agent prompt draft was not produced` | `--require-prompt-draft` was set and agent prompt preparation safely fell back. | Read the safe stage and category, fix source access, OpenCode availability, authentication, or the generated output, then retry. |
 | Prompt authoring times out | Source revision resolution or agent execution exceeded the onboarding-specific budget. | Retry with `--prompt-timeout 30m` or use handoff mode. The fetcher timeout and project `ai.timeout` do not change onboarding prompt authoring. |
-| Prompt authoring falls back with a safe warning | Source revision resolution, agent execution, or output validation failed. | Use the reported stage and action. Raw OpenCode output is not printed; use the generated handoff bundle for a manual retry. |
+| Prompt authoring falls back with a safe warning | Source revision resolution, `srt` availability, provider network policy, agent execution, or output validation failed. | Use the reported stage and action. Verify the pinned `srt` package, `SRT_BIN`, platform dependencies, and provider domains. Raw OpenCode output is not printed; use the generated handoff bundle for a manual retry. |
 | Local onboarding refuses existing scaffold files | A planned generated file already exists and update mode was not selected. | Choose another dashboard consumer directory or rerun with `--update-existing` after reviewing every replacement. |
 | Onboarding warns about stale generated files | Files from an unselected deployment or prompt mode exist in the destination. | Review them manually. Onboarding leaves them untouched and never deletes them automatically. |
 | `AI endpoint rejected tools` | The endpoint or model does not support OpenAI-style function calling. | Enable the provider's tool-call parser or choose a tool-capable model. |
@@ -21,7 +21,7 @@ cases below.
 | Private endpoint times out | The GitHub-hosted runner cannot reach the network. | Use Kubernetes-native mode, a self-hosted runner, or `skip-fetch` with committed data. |
 | Analysis is generic | The project prompt lacks architecture, artifact layout, or real failure signatures. | Expand `prompts/system.md`. The update applies to new analyses; use an intentional cache rebaseline if existing entries must be replaced. |
 | Cached analysis came from the old provider | Existing reusable entries retain their provider provenance after a provider change. | Set a new cache generation for a reversible full rebaseline. |
-| `Propose fix` reports unavailable | The process cannot find `opencode` or git. | Use a runner or custom server image containing both tools. |
+| `Propose fix` reports unavailable | The process cannot use git, OpenCode, or the pinned `srt` sandbox, or a required domain is not allowed. | Use the fixer image or install the pinned tools, set `SRT_BIN`, and configure only the required `agent_runtime.network_domains`. |
 | Helm rejects `server.actions.oauth.scope` or `chatScope` | The chart now derives a least-privilege OAuth scope. | Remove both legacy keys. Keep `server.actions.oauth.privateRepositories=false` for public targets or set it to `true` only for private action targets. |
 | OAuth actions cannot access a private repository | The public-only default requested `public_repo`. | Set `server.actions.oauth.privateRepositories=true`, upgrade, then sign out and authorize the OAuth App again. |
 

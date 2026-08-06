@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 )
@@ -56,5 +57,54 @@ current-context: test
 	})
 	if err == nil || !strings.Contains(err.Error(), "delegated ServiceAccount namespace is required") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestNewLocalRuntimeUsesSRTSandbox(t *testing.T) {
+	got, err := New(&project.FixAgentRuntime{Type: "opencode"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	local, ok := got.(*runtime.LocalAgentRuntime)
+	if !ok {
+		t.Fatalf("runtime = %T, want LocalAgentRuntime", got)
+	}
+	if _, ok := local.Sandbox.(*runtime.SRTSandbox); !ok {
+		t.Fatalf("sandbox = %T, want SRTSandbox", local.Sandbox)
+	}
+}
+
+func TestNewOrkaSelectionUnchanged(t *testing.T) {
+	kubeconfig := filepath.Join(t.TempDir(), "kubeconfig")
+	config := `apiVersion: v1
+kind: Config
+clusters:
+- name: test
+  cluster:
+    server: https://127.0.0.1:65535
+    insecure-skip-tls-verify: true
+users:
+- name: test
+  user:
+    token: test
+contexts:
+- name: test
+  context:
+    cluster: test
+    user: test
+current-context: test
+`
+	if err := os.WriteFile(kubeconfig, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KUBECONFIG", kubeconfig)
+	got, err := New(&project.FixAgentRuntime{
+		Type: "orka", OrkaAgentRef: "fixer", OrkaAPI: "http://orka.invalid", OrkaNamespace: "orka-system",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got.(*orka.AgentRuntime); !ok {
+		t.Fatalf("runtime = %T, want Orka AgentRuntime", got)
 	}
 }

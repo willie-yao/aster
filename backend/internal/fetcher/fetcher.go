@@ -1041,6 +1041,7 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 		ModelToken:          aiToken,
 		MaxTurns:            ar.MaxTurns,
 		AllowBash:           allowBash,
+		NetworkDomains:      ar.NetworkDomains,
 		Timeout:             ar.ParsedTimeout(),
 		GitToken:            fixToken,
 	}

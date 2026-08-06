@@ -438,9 +438,9 @@ an action request, or send draft-ready email. Draft endpoints repeat verificatio
 and remain authoritative.
 
 File issue and Mark resolved work in the standard server image. Propose fix
-starts the local `opencode` runtime and also needs git. The standard distroless
-image contains neither tool, so fix previews report unavailable unless you
-deploy a custom server image that includes them.
+starts the local OpenCode runtime and also needs git plus the pinned `srt`
+sandbox. The standard distroless image omits those tools, so fix previews report
+unavailable unless you deploy the fixer image or an equivalent custom image.
 
 Systemic-pattern email links can deep-link into this flow with the public pattern
 id and requested action. The link itself is an inert GET. After authentication,

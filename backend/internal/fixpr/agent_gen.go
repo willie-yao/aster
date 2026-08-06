@@ -27,18 +27,19 @@ func generateWithAgent(ctx context.Context, gp genParams, p models.PatternAnalys
 	var reviewFeedback string
 	for attempt := 0; ; attempt++ {
 		res, err := a.Runtime.Generate(ctx, runtime.GenerateSpec{
-			Repo:        runtime.RepoRef{Owner: gp.owner, Name: gp.repo, Ref: gp.ref, Token: a.GitToken},
-			Instruction: agentInstruction(p, gp.context, gp.instruction, reviewFeedback, gp.maxFiles, a.AllowBash),
-			Model:       a.Model,
-			Endpoint:    a.Endpoint,
-			Token:       a.ModelToken,
-			MaxTurns:    a.MaxTurns,
-			AllowBash:   a.AllowBash,
-			Timeout:     a.Timeout,
-			ExecutionID: a.ExecutionID, WorkObserver: a.WorkObserver,
+			Repo:           runtime.RepoRef{Owner: gp.owner, Name: gp.repo, Ref: gp.ref, Token: a.GitToken},
+			Instruction:    agentInstruction(p, gp.context, gp.instruction, reviewFeedback, gp.maxFiles, a.AllowBash),
+			Model:          a.Model,
+			Endpoint:       a.Endpoint,
+			Token:          a.ModelToken,
+			MaxTurns:       a.MaxTurns,
+			AllowBash:      a.AllowBash,
+			NetworkDomains: a.NetworkDomains,
+			Timeout:        a.Timeout,
+			ExecutionID:    a.ExecutionID, WorkObserver: a.WorkObserver,
 		})
 		if err != nil {
-			if errors.Is(err, runtime.ErrUnavailable) {
+			if errors.Is(err, runtime.ErrUnavailable) || errors.Is(err, runtime.ErrSandboxUnavailable) {
 				return nil, fmt.Errorf("agent fix generation unavailable: %w", err)
 			}
 			return nil, fmt.Errorf("agent fix generation: %w", err)
