@@ -92,7 +92,7 @@
         },
         {
           "name": "identifies unavailable PodGroup API response",
-          "pattern": "(?i)(?:404|not found|not served|no resources|podgroups.{0,120}forbidden|forbidden.{0,120}podgroups)",
+          "pattern": "(?is)(?:404.{0,160}(?:scheduling\\.k8s\\.io/v1beta1|v1beta1/podgroups)|(?:scheduling\\.k8s\\.io/v1beta1|v1beta1\\.PodGroup|v1beta1 PodGroup|v1beta1/podgroups).{0,160}(?:404|not found|not served|unavailable|has no resources)|Skipping API scheduling\\.k8s\\.io/v1beta1 because it has no resources)",
           "must": true
         },
         {

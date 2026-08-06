@@ -100,9 +100,43 @@ func TestCrossProjectEvaluationManifest(t *testing.T) {
 			}
 		}
 		if bc.name == "kueue-was-podgroup-api-mismatch" {
+			var responseSignal *benchSignal
 			for _, signal := range bc.signals {
-				if signal.name == "identifies unavailable PodGroup API response" && !signal.matches("The v1beta1 PodGroup endpoint was not served; the scheduler reported podgroups forbidden because that API had no resources.") {
-					t.Errorf("case %q rejects equivalent unavailable-API wording", bc.name)
+				if signal.name == "identifies unavailable PodGroup API response" {
+					copy := signal
+					responseSignal = &copy
+				}
+			}
+			if responseSignal == nil {
+				t.Fatalf("case %q is missing unavailable PodGroup API response signal", bc.name)
+			}
+			for _, text := range []string{
+				"The API server returned 404 for scheduling.k8s.io/v1beta1 PodGroups.",
+				"The v1beta1 PodGroup endpoint was not served.",
+				"The requested v1beta1 PodGroup API was unavailable.",
+				"Skipping API scheduling.k8s.io/v1beta1 because it has no resources.",
+			} {
+				if !responseSignal.matches(text) {
+					t.Errorf("case %q rejects equivalent unavailable-API wording %q", bc.name, text)
+				}
+			}
+			for _, text := range []string{
+				"No resources were available to place the workload.",
+				"The service account was forbidden to list podgroups, while the v1beta1 endpoint was available.",
+				"The v1beta1 PodGroup request succeeded.",
+			} {
+				if responseSignal.matches(text) {
+					t.Errorf("case %q accepts unrelated or successful API wording %q", bc.name, text)
+				}
+			}
+			base := "The scheduler requested v1beta1 PodGroup while the API server served v1alpha3. Scheduler handlers never synchronized. "
+			for _, text := range []string{
+				"No resources were available to place the workload.",
+				"The service account was forbidden to list podgroups, while the v1beta1 endpoint was available.",
+			} {
+				wrong := &models.TestCase{AISummary: &models.AISummary{Summary: base + text}, AIAnalysis: &models.AIAnalysis{RootCause: base + text}}
+				if assessment := assessBenchmarkCase(bc, wrong); !slices.Contains(assessment.missingMust, "identifies unavailable PodGroup API response") {
+					t.Errorf("case %q accepts wrong complete diagnosis %q: %v", bc.name, text, assessment.missingMust)
 				}
 			}
 		}
