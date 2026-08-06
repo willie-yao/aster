@@ -7,6 +7,7 @@
 package project
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -134,6 +135,12 @@ type Storage struct {
 //	                              under logs/ and pr-logs/directory/.
 type Discovery struct {
 	Source string `yaml:"source,omitempty" json:"source,omitempty"`
+	// TestInfraRevision optionally pins TestGrid discovery to one exact
+	// kubernetes/test-infra commit. Empty follows the current master revision.
+	TestInfraRevision string `yaml:"test_infra_revision,omitempty" json:"test_infra_revision,omitempty"`
+	// ResolvedTestInfraRevision records the effective revision for public
+	// provenance. It is populated at runtime and cannot be set in project.yaml.
+	ResolvedTestInfraRevision string `yaml:"-" json:"resolved_test_infra_revision,omitempty"`
 	// ExactJobs bypasses bucket-root enumeration and validates only these exact
 	// periodic or postsubmit job names. It cannot be combined with JobFilters.
 	ExactJobs []string `yaml:"exact_jobs,omitempty" json:"exact_jobs,omitempty"`
@@ -161,6 +168,14 @@ func validExactJobName(name string) bool {
 	}
 	first := name[0]
 	return first >= 'a' && first <= 'z' || first >= 'A' && first <= 'Z' || first >= '0' && first <= '9'
+}
+
+func validTestInfraRevision(value string) bool {
+	if len(value) != 40 || strings.ToLower(value) != value {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
 
 // EffectiveDiscoverySource returns the configured discovery source, defaulting
@@ -1114,6 +1129,9 @@ func (c *Config) Validate() error {
 	switch c.EffectiveDiscoverySource() {
 	case DiscoveryTestGrid:
 		require("testgrid.dashboard", c.TestGrid.Dashboard)
+		if c.Discovery.TestInfraRevision != "" && !validTestInfraRevision(c.Discovery.TestInfraRevision) {
+			missing = append(missing, "discovery.test_infra_revision must be a lowercase 40-character commit SHA")
+		}
 		if len(c.Discovery.ExactJobs) > 0 {
 			missing = append(missing, "discovery.exact_jobs requires discovery.source bucket")
 		}
@@ -1122,6 +1140,9 @@ func (c *Config) Validate() error {
 		}
 	case DiscoveryBucket:
 		// No testgrid dashboard needed; jobs come from the bucket itself.
+		if c.Discovery.TestInfraRevision != "" {
+			missing = append(missing, "discovery.test_infra_revision requires discovery.source testgrid")
+		}
 		if len(c.Discovery.ExactJobs) > 0 && len(c.Discovery.JobFilters) > 0 {
 			missing = append(missing, "discovery.exact_jobs and discovery.job_filters cannot be combined")
 		}

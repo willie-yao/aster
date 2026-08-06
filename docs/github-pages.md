@@ -113,7 +113,9 @@ published. Do not use `@v1` before that alias exists.
 The reusable workflow fails closed when GitHub does not provide its resolved
 repository, ref, or commit SHA. After checkout it verifies that the engine HEAD
 matches that commit. Every published site includes `data/provenance.json` with
-the caller commit, reusable-workflow commit, and engine commit.
+the caller commit, reusable-workflow commit, and engine commit. TestGrid
+consumers also include the effective test-infra revision when `manifest.json`
+reports one.
 
 ## Host repository layout
 
@@ -148,7 +150,8 @@ After the run succeeds, check:
 
 - The Pages root returns the dashboard.
 - `/data/manifest.json` has the expected branding.
-- `/data/provenance.json` reports matching reusable-workflow and engine commits.
+- `/data/provenance.json` reports matching reusable-workflow and engine commits,
+  plus the effective test-infra revision for TestGrid discovery.
 - `/data/dashboard.json` contains the discovered jobs.
 - A failed test in `/data/jobs/*.json` contains grounded AI analysis.
 

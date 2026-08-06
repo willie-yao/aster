@@ -31,10 +31,12 @@ type fakeTestInfra struct {
 	forcedTreeStatus   int      // nonzero overrides tree response status
 	forcedTreeBody     string   // body returned with forcedTreeStatus
 	forcedCommitStatus int      // nonzero overrides /commits/master status
+	forcedCommitBody   string   // non-empty overrides the successful commit body
 	failRawPath        string   // when set, returns 404 for this exact path
 	extraTreeEntries   []string // extra paths emitted in the tree for coverage
 
-	rawCalls atomic.Int64
+	rawCalls    atomic.Int64
+	commitCalls atomic.Int64
 }
 
 const fakeSHA = "deadbeefcafef00d000000000000000000000000"
@@ -52,6 +54,10 @@ func (f *fakeTestInfra) start(t *testing.T) (rawURL, apiURL string, stop func())
 			http.NotFound(w, r)
 			return
 		}
+		if rest[:slash] != fakeSHA {
+			http.NotFound(w, r)
+			return
+		}
 		path := rest[slash+1:]
 		if path == f.failRawPath {
 			http.Error(w, "fake 404", http.StatusNotFound)
@@ -65,14 +71,23 @@ func (f *fakeTestInfra) start(t *testing.T) (rawURL, apiURL string, stop func())
 		_, _ = w.Write([]byte(body))
 	})
 	mux.HandleFunc("/api/commits/master", func(w http.ResponseWriter, r *http.Request) {
+		f.commitCalls.Add(1)
 		if f.forcedCommitStatus != 0 {
 			w.WriteHeader(f.forcedCommitStatus)
 			_, _ = w.Write([]byte("forced commit failure"))
 			return
 		}
-		_, _ = w.Write([]byte(fakeSHA))
+		body := f.forcedCommitBody
+		if body == "" {
+			body = fakeSHA
+		}
+		_, _ = w.Write([]byte(body))
 	})
 	mux.HandleFunc("/api/git/trees/", func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(strings.TrimPrefix(r.URL.Path, "/api/git/trees/"), fakeSHA) {
+			http.NotFound(w, r)
+			return
+		}
 		if f.forcedTreeStatus != 0 {
 			w.WriteHeader(f.forcedTreeStatus)
 			_, _ = w.Write([]byte(f.forcedTreeBody))
@@ -157,6 +172,9 @@ func TestFetchJobConfigs_DiscoversAcrossDirectoriesAndNames(t *testing.T) {
 	jobs, err := FetchJobConfigs(context.Background(), http.DefaultClient, cfg)
 	if err != nil {
 		t.Fatalf("FetchJobConfigs: %v", err)
+	}
+	if tf.commitCalls.Load() != 1 {
+		t.Fatalf("master resolution calls = %d, want 1", tf.commitCalls.Load())
 	}
 	if got := len(jobs); got != 2 {
 		t.Fatalf("expected 2 dashboard-matching jobs, got %d (%+v)", got, jobs)
@@ -515,5 +533,54 @@ postsubmits:
 	}
 	if counts[models.JobTypePeriodic] != 2 || counts[models.JobTypePresubmit] != 1 || counts[JobTypePostsubmit] != 1 {
 		t.Fatalf("job type counts = %v", counts)
+	}
+}
+
+func TestFetchJobConfigs_UsesConfiguredRevisionWithoutResolvingMaster(t *testing.T) {
+	const dashboard = "project-dashboard"
+	tf := &fakeTestInfra{
+		files: map[string]string{
+			"config/jobs/example/project-periodics.yaml": periodicJob("periodic-project", dashboard),
+		},
+		forcedCommitStatus: http.StatusInternalServerError,
+	}
+	raw, api, stop := tf.start(t)
+	defer stop()
+	setURLs(t, raw, api)
+
+	cfg := &project.Config{
+		TestGrid: project.TestGrid{Dashboard: dashboard},
+		Discovery: project.Discovery{
+			TestInfraRevision: fakeSHA,
+		},
+	}
+	jobs, catalog, err := FetchJobConfigsAndCatalog(context.Background(), http.DefaultClient, cfg, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tf.commitCalls.Load() != 0 {
+		t.Fatalf("master resolution calls = %d, want 0", tf.commitCalls.Load())
+	}
+	if catalog.Revision != fakeSHA || len(jobs) != 1 {
+		t.Fatalf("jobs=%+v catalog=%+v", jobs, catalog)
+	}
+}
+
+func TestResolveConfiguredRevisionRejectsInvalidPin(t *testing.T) {
+	for _, revision := range []string{"short", strings.Repeat("A", 40), strings.Repeat("z", 40), "../" + strings.Repeat("a", 37)} {
+		if _, err := resolveConfiguredRevision(t.Context(), http.DefaultClient, revision); err == nil {
+			t.Errorf("revision %q was accepted", revision)
+		}
+	}
+}
+
+func TestFetchJobConfigs_RejectsInvalidResolvedRevision(t *testing.T) {
+	tf := &fakeTestInfra{files: map[string]string{}, forcedCommitBody: "deadbee"}
+	raw, api, stop := tf.start(t)
+	defer stop()
+	setURLs(t, raw, api)
+	cfg := &project.Config{TestGrid: project.TestGrid{Dashboard: "dashboard"}}
+	if _, err := FetchJobConfigs(t.Context(), http.DefaultClient, cfg); err == nil || !strings.Contains(err.Error(), "unexpected SHA response") {
+		t.Fatalf("error = %v", err)
 	}
 }

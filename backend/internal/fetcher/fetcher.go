@@ -395,6 +395,13 @@ func validateAnalysisRuntimeOptions(opts Options) error {
 	}
 }
 
+func (p *pipeline) setJobCatalog(catalog *jobconfig.Catalog) {
+	p.jobCatalog = catalog
+	if catalog != nil && p.cfg.EffectiveDiscoverySource() == project.DiscoveryTestGrid {
+		p.cfg.Discovery.ResolvedTestInfraRevision = catalog.Revision
+	}
+}
+
 // discover lists the project's jobs from test-infra or the artifact bucket.
 func (p *pipeline) discover(ctx context.Context) ([]models.ProwJob, error) {
 	cfg := p.cfg
@@ -418,10 +425,12 @@ func (p *pipeline) discover(ctx context.Context) ([]models.ProwJob, error) {
 	default:
 		log.Println("Fetching job configs from test-infra...")
 		targetRepo := configuredFixRepo(cfg)
-		jobs, p.jobCatalog, err = jobconfig.FetchJobConfigsAndCatalog(ctx, p.client, cfg, targetRepo)
+		var catalog *jobconfig.Catalog
+		jobs, catalog, err = jobconfig.FetchJobConfigsAndCatalog(ctx, p.client, cfg, targetRepo)
 		if err != nil {
 			return nil, fmt.Errorf("fetching job configs: %w", err)
 		}
+		p.setJobCatalog(catalog)
 		if !p.includePresubmits {
 			var periodic []models.ProwJob
 			for _, j := range jobs {
@@ -1360,7 +1369,7 @@ func (p *pipeline) processRemediations(ctx context.Context, patterns []models.Pa
 		if err != nil {
 			log.Printf("Warning: test-infra verification metadata unavailable: %v", err)
 		} else {
-			p.jobCatalog = catalog
+			p.setJobCatalog(catalog)
 		}
 	}
 	if p.jobCatalog == nil && p.cfg.EffectiveDiscoverySource() == project.DiscoveryBucket {

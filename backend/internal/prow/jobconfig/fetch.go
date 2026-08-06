@@ -2,6 +2,7 @@ package jobconfig
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -83,9 +84,9 @@ func FetchCatalogForRepo(ctx context.Context, client *http.Client, targetRepo st
 // FetchJobConfigsAndCatalog returns dashboard jobs plus definitions that test
 // targetRepo. Both results come from one pinned test-infra snapshot.
 func FetchJobConfigsAndCatalog(ctx context.Context, client *http.Client, cfg *project.Config, targetRepo string) ([]models.ProwJob, *Catalog, error) {
-	sha, err := resolveMasterSHA(ctx, client)
+	sha, err := resolveConfiguredRevision(ctx, client, cfg.Discovery.TestInfraRevision)
 	if err != nil {
-		return nil, nil, fmt.Errorf("resolving kubernetes/test-infra master SHA: %w", err)
+		return nil, nil, err
 	}
 
 	files, err := listConfigJobsYAMLs(ctx, client, sha)
@@ -103,6 +104,28 @@ func FetchJobConfigsAndCatalog(ctx context.Context, client *http.Client, cfg *pr
 			cfg.TestGrid.Dashboard, len(files), sha[:7])
 	}
 	return allJobs, catalog, nil
+}
+
+func validCommitSHA(value string) bool {
+	if len(value) != 40 || strings.ToLower(value) != value {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
+
+func resolveConfiguredRevision(ctx context.Context, client *http.Client, configured string) (string, error) {
+	if configured != "" {
+		if !validCommitSHA(configured) {
+			return "", fmt.Errorf("configured test-infra revision must be a lowercase 40-character commit SHA")
+		}
+		return configured, nil
+	}
+	sha, err := resolveMasterSHA(ctx, client)
+	if err != nil {
+		return "", fmt.Errorf("resolving kubernetes/test-infra master SHA: %w", err)
+	}
+	return sha, nil
 }
 
 // resolveMasterSHA returns the current commit SHA of kubernetes/test-infra's
@@ -132,7 +155,7 @@ func resolveMasterSHA(ctx context.Context, client *http.Client) (string, error) 
 		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, snippet(body))
 	}
 	sha := strings.TrimSpace(string(body))
-	if len(sha) < 7 {
+	if !validCommitSHA(sha) {
 		return "", fmt.Errorf("unexpected SHA response: %q", sha)
 	}
 	return sha, nil

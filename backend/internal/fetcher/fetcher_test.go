@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prow/jobconfig"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prowbuild"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
@@ -364,4 +366,24 @@ func TestNormalizeBuildResultExcludesBuildSubjectFromJUnitCounts(t *testing.T) {
 	if result.TestsTotal != 2 || result.TestsPassed != 1 || result.TestsFailed != 0 || result.TestsSkipped != 1 {
 		t.Fatalf("JUnit counts = total:%d passed:%d failed:%d skipped:%d", result.TestsTotal, result.TestsPassed, result.TestsFailed, result.TestsSkipped)
 	}
+}
+
+func TestSetJobCatalogRecordsResolvedTestInfraRevision(t *testing.T) {
+	revision := strings.Repeat("a", 40)
+	t.Run("testgrid", func(t *testing.T) {
+		p := &pipeline{cfg: &project.Config{TestGrid: project.TestGrid{Dashboard: "dashboard"}}}
+		catalog := &jobconfig.Catalog{Revision: revision}
+		p.setJobCatalog(catalog)
+		if p.jobCatalog != catalog || p.cfg.Discovery.ResolvedTestInfraRevision != revision {
+			t.Fatalf("pipeline = %+v", p)
+		}
+	})
+	t.Run("bucket", func(t *testing.T) {
+		p := &pipeline{cfg: &project.Config{Discovery: project.Discovery{Source: project.DiscoveryBucket}}}
+		catalog := &jobconfig.Catalog{Revision: "bucket"}
+		p.setJobCatalog(catalog)
+		if p.jobCatalog != catalog || p.cfg.Discovery.ResolvedTestInfraRevision != "" {
+			t.Fatalf("pipeline = %+v", p)
+		}
+	})
 }
