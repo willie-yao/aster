@@ -92,7 +92,7 @@
         },
         {
           "name": "identifies unavailable PodGroup API response",
-          "pattern": "(?is)(?:API server returned (?:404|not[ -]?found)(?:.{0,100}(?:v1beta1|that version))|(?:API server response|API endpoint|scheduler request|scheduler listed|scheduler watched).{0,100}(?:scheduling\\.k8s\\.io/v1beta1|v1beta1(?:\\.PodGroup| PodGroup|/podgroups)).{0,80}(?:returned (?:404|not[ -]?found)|was unavailable|was not served|failed with 404)|(?:scheduling\\.k8s\\.io/v1beta1|v1beta1(?:\\.PodGroup| PodGroup|/podgroups)).{0,80}(?:API endpoint was not served|API was unavailable|API request returned (?:404|not[ -]?found)|API response returned (?:404|not[ -]?found))|Skipping API scheduling\\.k8s\\.io/v1beta1 because it has no resources)",
+          "pattern": "(?is)(?:API server response (?:for|to) (?:the )?v1beta1(?:\\.PodGroup| PodGroups?|/podgroups) (?:returned|was) (?:404|not[ -]?found|unavailable)|API server returned (?:404|not[ -]?found) (?:when|while) (?:the )?scheduler (?:listed|watched|requested) (?:the )?v1beta1(?:\\.PodGroup| PodGroups?|/podgroups)|scheduler request (?:for|to list|to watch) (?:the )?v1beta1(?:\\.PodGroup| PodGroups?|/podgroups) (?:returned (?:404|not[ -]?found)|was unavailable|failed with 404)|v1beta1(?:\\.PodGroup| PodGroups?|/podgroups) (?:API(?: endpoint| request| response)?|endpoint|request|response) (?:was not served|was unavailable|returned (?:404|not[ -]?found)|failed with 404)|Skipping API scheduling\\.k8s\\.io/v1beta1 because it has no resources|API server returned (?:404|not[ -]?found) for that version)",
           "must": true
         },
         {

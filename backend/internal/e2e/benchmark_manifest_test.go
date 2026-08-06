@@ -111,7 +111,7 @@ func TestCrossProjectEvaluationManifest(t *testing.T) {
 				t.Fatalf("case %q is missing unavailable PodGroup API response signal", bc.name)
 			}
 			for _, text := range []string{
-				"The API server response for scheduling.k8s.io/v1beta1 PodGroups returned 404.",
+				"The API server response for v1beta1 PodGroups returned 404.",
 				"The v1beta1 PodGroup API endpoint was not served.",
 				"The scheduler request for v1beta1 PodGroup was unavailable.",
 				"The API server returned NotFound when the scheduler listed v1beta1 PodGroups.",
@@ -129,6 +129,10 @@ func TestCrossProjectEvaluationManifest(t *testing.T) {
 				"The API server response for v1beta1 PodGroup was not 404; it returned 200 OK.",
 				"The scheduler request for v1beta1 PodGroup was not unavailable; it completed successfully.",
 				"The scheduler list contained a v1beta1 PodGroup whose workload was unavailable.",
+				"The scheduler request for v1beta1 PodGroup succeeded. The image registry returned 404.",
+				"The scheduler listed a v1beta1 PodGroup whose workload endpoint returned 404.",
+				"The API server returned 404 for an unrelated admission webhook. The scheduler requested v1beta1 PodGroup, whose API request succeeded.",
+				"The API server returned 404 for v1alpha3, not for v1beta1 PodGroup.",
 			} {
 				if responseSignal.matches(text) {
 					t.Errorf("case %q accepts unrelated or successful API wording %q", bc.name, text)
@@ -138,6 +142,10 @@ func TestCrossProjectEvaluationManifest(t *testing.T) {
 			for _, text := range []string{
 				"No resources were available to place the workload.",
 				"The service account was forbidden to list podgroups, while the v1beta1 endpoint was available.",
+				"The scheduler request for v1beta1 PodGroup succeeded. The image registry returned 404.",
+				"The scheduler listed a v1beta1 PodGroup whose workload endpoint returned 404.",
+				"The API server returned 404 for an unrelated admission webhook. The scheduler requested v1beta1 PodGroup, whose API request succeeded.",
+				"The API server returned 404 for v1alpha3, not for v1beta1 PodGroup.",
 			} {
 				wrong := &models.TestCase{AISummary: &models.AISummary{Summary: base + text}, AIAnalysis: &models.AIAnalysis{RootCause: base + text}}
 				if assessment := assessBenchmarkCase(bc, wrong); !slices.Contains(assessment.missingMust, "identifies unavailable PodGroup API response") {
