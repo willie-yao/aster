@@ -1,0 +1,4 @@
+interface:
+  display_name: "Author Prow AI Diagnostics"
+  short_description: "Author and validate grounded Prow diagnostics"
+  default_prompt: "Use $author-prow-ai-diagnostics to improve a consumer prompt, propose bounded diagnostic recipes, validate them, and benchmark held-out failures without activating recipes."
