@@ -339,6 +339,123 @@
           "type": "string",
           "description": "Namespace of the separately installed Orka release."
         },
+        "agentAnalysisShadow": {
+          "type": "object",
+          "description": "Private disabled-by-default Agent comparison after authoritative in-process analysis.",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "api": {
+              "type": "string",
+              "description": "Absolute Orka result API URL."
+            },
+            "agentVersion": {
+              "type": "string",
+              "description": "Declared Agent contract version used in Task identity."
+            },
+            "serviceAccountName": {
+              "type": "string",
+              "description": "Existing dedicated shadow ServiceAccount when chart-managed RBAC is disabled."
+            },
+            "maxPerRun": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10
+            },
+            "admission": {
+              "type": "object",
+              "properties": {
+                "agentRef": {
+                  "type": "string"
+                },
+                "repository": {
+                  "type": "object",
+                  "properties": {
+                    "owner": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false,
+                  "required": [
+                    "owner",
+                    "name"
+                  ]
+                },
+                "gitSecret": {
+                  "type": "string"
+                },
+                "maxTurns": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000
+                },
+                "timeout": {
+                  "type": "string"
+                },
+                "retries": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 2
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "agentRef",
+                "repository",
+                "gitSecret",
+                "maxTurns",
+                "timeout",
+                "retries"
+              ]
+            },
+            "ledger": {
+              "type": "object",
+              "properties": {
+                "existingClaim": {
+                  "type": "string"
+                },
+                "retain": {
+                  "type": "boolean"
+                },
+                "accessMode": {
+                  "type": "string",
+                  "enum": [
+                    "ReadWriteOnce",
+                    "ReadWriteMany"
+                  ]
+                },
+                "size": {
+                  "type": "string"
+                },
+                "storageClass": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "existingClaim",
+                "retain",
+                "accessMode",
+                "size",
+                "storageClass"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "api",
+            "agentVersion",
+            "serviceAccountName",
+            "maxPerRun",
+            "admission",
+            "ledger"
+          ]
+        },
         "fixRuntime": {
           "type": "object",
           "description": "Orka fix generation settings.",
@@ -466,6 +583,7 @@
       "additionalProperties": false,
       "required": [
         "namespace",
+        "agentAnalysisShadow",
         "fixRuntime",
         "rbac"
       ]

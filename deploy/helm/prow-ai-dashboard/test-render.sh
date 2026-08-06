@@ -110,6 +110,10 @@ if grep -Fq -- '-analysis-runtime=orka-container' "$tmp/default.yaml"; then
   echo 'default render enabled Orka container analysis' >&2
   exit 1
 fi
+if grep -Fq -- '-agent-analysis-shadow' "$tmp/default.yaml" || grep -Fq 'app.kubernetes.io/component: agent-analysis-shadow' "$tmp/default.yaml"; then
+  echo 'default render enabled Agent analysis shadow resources' >&2
+  exit 1
+fi
 
 container_args=(
   --set mode=cron
@@ -141,6 +145,21 @@ source_admission_args=(
   --set server.chat.sourceInvestigation.admission.maxTurns=30
   --set server.chat.sourceInvestigation.admission.timeout=10m
   --set server.chat.sourceInvestigation.admission.retries=1
+ )
+
+shadow_args=(
+  --set ai.enabled=true
+  --set ai.endpoint=http://model.orka-system.svc.cluster.local/v1/chat/completions
+  --set ai.model=script-model
+  --set ai.token=dashboard-token
+  --set orka.agentAnalysisShadow.enabled=true
+  --set orka.agentAnalysisShadow.agentVersion=v1
+  --set orka.agentAnalysisShadow.admission.agentRef=analysis-agent
+  --set orka.agentAnalysisShadow.admission.repository.owner=example
+  --set orka.agentAnalysisShadow.admission.repository.name=repo
+  --set orka.agentAnalysisShadow.admission.maxTurns=12
+  --set orka.agentAnalysisShadow.admission.timeout=10m
+  --set orka.agentAnalysisShadow.admission.retries=0
 )
 
 # Image-specific tags override the shared snapshot tag. Empty image-specific
@@ -720,6 +739,130 @@ if grep -Eq '^[[:space:]]*- name: ORKA_API_TOKEN$' "$tmp/combined-orka-runtimes.
   echo 'combined Orka runtimes share the analysis static token' >&2
   exit 1
 fi
+
+# Agent analysis shadow uses a dedicated ServiceAccount, Task-only Role, private
+# PVC, fixed admission contract, and projected result token in both writer modes.
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  "${shadow_args[@]}" > "$tmp/shadow-watch.yaml"
+for expected in \
+  '-agent-analysis-shadow' \
+  '-agent-analysis-shadow-namespace=orka-system' \
+  '-agent-analysis-shadow-api=http://orka.orka-system.svc.cluster.local:8080' \
+  '-agent-analysis-shadow-agent-ref=analysis-agent' \
+  '-agent-analysis-shadow-agent-version=v1' \
+  '-agent-analysis-shadow-ledger=/private/agent-analysis-shadow/analysis_shadow.json' \
+  '-agent-analysis-shadow-max-per-run=1' \
+  '-agent-analysis-shadow-max-turns=12' \
+  '-agent-analysis-shadow-timeout=10m' \
+  '-agent-analysis-shadow-retries=0'; do
+  grep -Fq -- "$expected" "$tmp/shadow-watch.yaml"
+done
+grep -Fq 'serviceAccountName: test-prow-ai-dashboard-shadow' "$tmp/shadow-watch.yaml"
+grep -Fq 'name: ORKA_API_TOKEN_FILE' "$tmp/shadow-watch.yaml"
+grep -Fq 'mountPath: /private/agent-analysis-shadow' "$tmp/shadow-watch.yaml"
+grep -Fq 'claimName: test-prow-ai-dashboard-shadow-ledger' "$tmp/shadow-watch.yaml"
+grep -Fq 'verbs: ["create", "get", "patch", "delete"]' "$tmp/shadow-watch.yaml"
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  "${shadow_args[@]}" --show-only templates/orka-agent-analysis-shadow-rbac.yaml > "$tmp/shadow-rbac.yaml"
+if [[ $(grep -Fc '  - apiGroups:' "$tmp/shadow-rbac.yaml") -ne 1 ]] ||
+   [[ $(grep -Fc '    resources: ["tasks"]' "$tmp/shadow-rbac.yaml") -ne 1 ]] ||
+   [[ $(grep -Fc '    verbs: ["create", "get", "patch", "delete"]' "$tmp/shadow-rbac.yaml") -ne 1 ]]; then
+  echo 'shadow Role is not exactly Task-only create/get/patch/delete' >&2
+  exit 1
+fi
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  "${shadow_args[@]}" --show-only templates/orka-agent-analysis-shadow-admission.yaml > "$tmp/shadow-admission.yaml"
+grep -Fq 'the shadow ServiceAccount may delete only exact shadow-analysis Tasks' "$tmp/shadow-admission.yaml"
+grep -Fq "request.operation == 'DELETE' ? request.userInfo.username" "$tmp/shadow-admission.yaml"
+if grep -Eq '^kind: (Agent|AgentRuntime)$|name: orka-controller|app.kubernetes.io/component: orka-controller' "$tmp/shadow-watch.yaml"; then
+  echo 'shadow integration installed Orka or an Agent' >&2
+  exit 1
+fi
+if grep -Fq 'resources: ["secrets"]' "$tmp/shadow-watch.yaml" || grep -Fq 'verbs: ["list"' "$tmp/shadow-watch.yaml"; then
+  echo 'shadow Role exceeded Task-only permissions' >&2
+  exit 1
+fi
+for contract in \
+  'operations: ["CREATE", "UPDATE", "DELETE"]' \
+  "allowedTools == ['Read', 'Glob', 'Grep', 'Write']" \
+  "disallowedTools == ['Bash', 'Edit', 'MultiEdit', 'NotebookEdit', 'WebFetch', 'WebSearch', 'Task', 'TodoWrite', 'Question']" \
+  "app.kubernetes.io/managed-by'] == 'orka-agent-analysis'" \
+  "prow-ai-dashboard/runtime'] == 'failure-analysis-shadow'" \
+  "prow-ai-dashboard/agent-analysis-contract'] == 'agent-analysis-v1'" \
+  "action-request'].matches('^agent-analysis-[0-9a-f]{16}$')" \
+  'https://github.com/example/repo.git'; do
+  grep -Fq "$contract" "$tmp/shadow-watch.yaml"
+done
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set mode=cron "${shadow_args[@]}" > "$tmp/shadow-cron.yaml"
+for expected in '-agent-analysis-shadow' 'serviceAccountName: test-prow-ai-dashboard-shadow' 'mountPath: /private/agent-analysis-shadow' 'name: ORKA_API_TOKEN_FILE'; do
+  grep -Fq -- "$expected" "$tmp/shadow-cron.yaml"
+done
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  "${shadow_args[@]}" --show-only templates/server-deployment.yaml > "$tmp/shadow-server.yaml"
+if grep -Fq 'agent-analysis-shadow' "$tmp/shadow-server.yaml" || grep -Fq 'shadow-ledger' "$tmp/shadow-server.yaml"; then
+  echo 'server mounted or referenced the private shadow ledger' >&2
+  exit 1
+fi
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  "${shadow_args[@]}" --set orka.agentAnalysisShadow.ledger.existingClaim=external-shadow-ledger > "$tmp/shadow-existing-ledger.yaml"
+grep -Fq 'claimName: external-shadow-ledger' "$tmp/shadow-existing-ledger.yaml"
+if grep -Fq 'templates/orka-agent-analysis-shadow-pvc.yaml' "$tmp/shadow-existing-ledger.yaml"; then
+  echo 'existing shadow ledger claim still rendered a chart-managed PVC' >&2
+  exit 1
+fi
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  "${shadow_args[@]}" --set orka.agentAnalysisShadow.ledger.retain=false \
+  --show-only templates/orka-agent-analysis-shadow-pvc.yaml > "$tmp/shadow-ledger-deletable.yaml"
+if grep -Fq 'helm.sh/resource-policy: keep' "$tmp/shadow-ledger-deletable.yaml"; then
+  echo 'shadow ledger retain=false still rendered the keep policy' >&2
+  exit 1
+fi
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  "${shadow_args[@]}" --set orka.rbac.create=false \
+  --set orka.agentAnalysisShadow.serviceAccountName=external-shadow > "$tmp/shadow-external-rbac.yaml"
+grep -Fq 'serviceAccountName: external-shadow' "$tmp/shadow-external-rbac.yaml"
+if grep -Fq 'templates/orka-agent-analysis-shadow-rbac.yaml' "$tmp/shadow-external-rbac.yaml"; then
+  echo 'external shadow RBAC mode rendered chart-managed shadow RBAC resources' >&2
+  exit 1
+fi
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  "${shadow_args[@]}" --set orka.agentAnalysisShadow.admission.gitSecret=source-readonly \
+  --set ai.githubReadTokenSecretName=github-read > "$tmp/shadow-private-source.yaml"
+grep -Fq -- '-agent-analysis-shadow-git-secret=source-readonly' "$tmp/shadow-private-source.yaml"
+grep -Fq 'gitSecretRef.name == \"source-readonly\"' "$tmp/shadow-private-source.yaml"
+
+for invalid_shadow in ai-disabled container-runtime fix-runtime cron-concurrency missing-agent missing-owner missing-repo bad-api bad-version max-per-run max-turns timeout retries shared-pvc missing-service-account private-without-read-token reserved-env shared-source-account; do
+  invalid_args=("${shadow_args[@]}")
+  want=
+  case "$invalid_shadow" in
+    ai-disabled) invalid_args+=(--set ai.enabled=false); want='requires ai.enabled=true' ;;
+    container-runtime) invalid_args+=("${container_args[@]}"); want='requires analysisRuntime.type=inprocess' ;;
+    fix-runtime) invalid_args+=(--set orka.fixRuntime.enabled=true "${fix_admission_args[@]}" --set orka.fixRuntime.image.tag=sha-test); want='cannot be enabled together' ;;
+    cron-concurrency) invalid_args+=(--set mode=cron --set fetcher.concurrencyPolicy=Allow); want='requires fetcher.concurrencyPolicy=Forbid' ;;
+    missing-agent) invalid_args+=(--set-string orka.agentAnalysisShadow.admission.agentRef=); want='admission.agentRef is required' ;;
+    missing-owner) invalid_args+=(--set-string orka.agentAnalysisShadow.admission.repository.owner=); want='repository.owner is required' ;;
+    missing-repo) invalid_args+=(--set-string orka.agentAnalysisShadow.admission.repository.name=); want='repository.name is required' ;;
+    bad-api) invalid_args+=(--set-string orka.agentAnalysisShadow.api='https://user:secret@orka.invalid?token=x'); want='must be an absolute http or https URL without credentials' ;;
+    bad-version) invalid_args+=(--set-string orka.agentAnalysisShadow.agentVersion='Bad_Version'); want='agentVersion must be a lowercase DNS label' ;;
+    max-per-run) invalid_args+=(--set orka.agentAnalysisShadow.maxPerRun=11); want='maxPerRun must be an integer from 1 to 10' ;;
+    max-turns) invalid_args+=(--set orka.agentAnalysisShadow.admission.maxTurns=1001); want='maxTurns must be an integer from 1 to 1000' ;;
+    timeout) invalid_args+=(--set orka.agentAnalysisShadow.admission.timeout=31m); want='timeout must be whole minutes from 1m through 30m' ;;
+    retries) invalid_args+=(--set orka.agentAnalysisShadow.admission.retries=3); want='retries must be an integer from 0 to 2' ;;
+    shared-pvc) invalid_args+=(--set persistence.existingClaim=shared-data --set orka.agentAnalysisShadow.ledger.existingClaim=shared-data); want='PVC distinct from public dashboard data' ;;
+    missing-service-account) invalid_args+=(--set orka.rbac.create=false); want='serviceAccountName is required' ;;
+    private-without-read-token) invalid_args+=(--set orka.agentAnalysisShadow.admission.gitSecret=source-readonly); want='requires a dashboard-side GITHUB_READ_TOKEN Secret' ;;
+    reserved-env) invalid_args+=(--set fetcher.extraEnv[0].name=ORKA_API_TOKEN_FILE --set fetcher.extraEnv[0].value=/tmp/token); want='must not override reserved shadow credential variable' ;;
+    shared-source-account) invalid_args+=(--set server.chat.enabled=true --set server.chat.sourceInvestigation.enabled=true "${source_admission_args[@]}" --set server.chat.sourceInvestigation.serviceAccountName=test-prow-ai-dashboard-shadow --set server.actions.mode=proxy --set server.actions.admins[0]=alice); want='require distinct ServiceAccounts' ;;
+  esac
+  if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" "${invalid_args[@]}" > "$tmp/shadow-invalid-${invalid_shadow}.yaml" 2>&1; then
+    echo "invalid Agent analysis shadow configuration was accepted: $invalid_shadow" >&2
+    exit 1
+  fi
+  validation_error_contains "$tmp/shadow-invalid-${invalid_shadow}.yaml" "$want"
+done
 
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --show-only templates/pvc.yaml > "$tmp/pvc-retained.yaml"

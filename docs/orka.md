@@ -8,8 +8,9 @@ The dashboard chart does not install Orka and does not list it as a dependency.
 Orka is a separate cluster-level release that may be shared by multiple
 dashboard releases.
 
-Orka can support three independent integrations:
+Orka can support four independent integrations:
 
+- Private experimental Agent analysis shadowing.
 - Experimental containerized failure analysis.
 - Read-only source investigation from analysis chat.
 - Agent-proposed fix generation.
@@ -213,6 +214,69 @@ the dashboard implementation.
 
 Use this mode unless Orka Task isolation or Task retry history is a real
 operational requirement.
+
+## Private experimental Agent analysis shadow
+
+The Agent analysis shadow keeps `analysisRuntime.type: inprocess` authoritative.
+After public output and side-effect processing finish, the worker or fetcher freezes
+a bounded artifact evidence bundle and may submit one private `type: agent` Task.
+The result is never published or used for cache acceptance, patterns, issues,
+fixes, or remediation.
+
+The Helm integration is disabled by default and supports watch or cron mode:
+
+```yaml
+ai:
+  enabled: true
+  githubReadTokenSecretName: github-read # required for private source verification
+
+analysisRuntime:
+  type: inprocess
+
+orka:
+  namespace: orka-system
+  agentAnalysisShadow:
+    enabled: true
+    api: http://orka.orka-system.svc.cluster.local:8080
+    agentVersion: v1
+    maxPerRun: 1
+    admission:
+      agentRef: analysis-agent-v1
+      repository:
+        owner: example
+        name: repo
+      gitSecret: "" # optional existing read-only Secret in orka.namespace
+      maxTurns: 12
+      timeout: 10m
+      retries: 0
+    ledger:
+      existingClaim: ""
+      retain: true
+      accessMode: ReadWriteOnce
+      size: 1Gi
+      storageClass: ""
+```
+
+With `orka.rbac.create=true`, the chart creates a dedicated shadow
+ServiceAccount and Task-only Role. Otherwise the operator must supply the exact
+ServiceAccount and equivalent Role. The chart always renders the
+requester-scoped admission policy and a private PVC mounted only into the
+writer. The server never mounts the shadow claim. Result retrieval uses the
+projected ServiceAccount token. The Orka result API must authorize that exact
+ServiceAccount.
+
+Admission pins the Agent name and namespace, repository, immutable 40-character
+commit, no-Bash tool policy, turn limit, timeout, retries, Task name version,
+and fixed contract metadata. It also restricts deletes to exact shadow Tasks.
+Kubernetes cannot prove that the operator-owned Agent or Git Secret is safe, so
+use a versioned Agent name, audit its model and network policy, and keep the Git
+Secret read-only.
+
+Shadow analysis is mutually exclusive with Orka fix generation and Orka
+container analysis in the first Helm version. Do not change admission identity
+values while a shadow Task is active. The private ledger records bounded
+attempt, duration, validation, retry, and cleanup state. A pending cleanup or
+invalid result remains private and never changes the authoritative dashboard.
 
 ## Experimental Orka container analysis
 

@@ -259,6 +259,7 @@ main operator controls.
 | `ai.contextWindowTokens` | Optional operator-provided provider context window. Set only with endpoint evidence. |
 | `ai.existingSecret`, `ai.tokenSecretKey` | Existing provider token Secret and key. |
 | `ai.githubReadTokenSecretName`, `ai.githubReadTokenSecretKey` | Optional separate read-only GitHub token for source grounding. |
+| `orka.agentAnalysisShadow.*` | Disabled private Agent comparison, exact admission identity, limits, and private ledger claim. |
 | `fetcher.schedule` | Cron schedule. Used only in cron mode. |
 | `fetcher.suspend` | Suspend CronJob starts. Keep true when preserving a safe cron rollback from watch mode. |
 | `fetcher.watchInterval`, `fetcher.reconcileInterval` | Watch refresh and full reconciliation cadence. |
@@ -292,6 +293,11 @@ backups to dashboard operators.
 
 Do not point multiple releases at the same claim. Do not delete a retained PVC
 until rollback and data-retention requirements are resolved.
+
+Agent analysis shadowing uses a second claim, defaulting to `ReadWriteOnce`,
+mounted only into the single writer at `/private/agent-analysis-shadow`. The
+chart rejects reuse of the public dashboard claim. The server never mounts the
+shadow claim, and Helm retains chart-managed shadow data by default.
 
 ## Secure server origin topologies
 
@@ -439,6 +445,10 @@ The server blocks private files from `/data`, including:
 
 Pages publication strips these files. Kubernetes operators must protect the PVC,
 backups, and server access.
+
+The optional Agent shadow ledger is stricter: it lives on a separate private PVC
+outside the server data directory. It stores bounded comparison and cleanup
+telemetry and is never served through `/data` or an authenticated API.
 
 When AI usage accounting is enabled, the worker writes
 `ai_usage_fetcher.json` and the server writes `ai_usage_server.json`. Both stay

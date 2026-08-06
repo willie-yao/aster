@@ -15,6 +15,7 @@ This guide explains how the components fit together. See
 | Integration | Orka execution | Status | Main benefit |
 | --- | --- | --- | --- |
 | Failure analysis | One `type: container` Task per failure | Experimental Helm watch or cron option | Isolation and per-failure Task history |
+| Agent analysis shadow | Bounded `type: agent` comparison after in-process publication | Private experimental Helm option | Compare another runtime without changing authority |
 | Fix generation | `type: agent` Task using an AgentRuntime such as OpenCode | Optional | Isolated source workspace and structured diff result |
 | Source investigation | Read-only `type: agent` Task at a pinned source revision | Optional | Deeper source inspection with verified citations |
 
@@ -31,6 +32,7 @@ flowchart LR
         Analyzer["FailureAnalyzer image"]
         Validator["Result and diff validation"]
         Data["RWX dashboard data"]
+        ShadowLedger["Private shadow ledger PVC"]
     end
 
     subgraph Orka["Orka platform"]
@@ -47,6 +49,7 @@ flowchart LR
     GitHub["GitHub API"]
 
     Fetcher -->|container Task| Task
+    Fetcher -->|private shadow agent Task| Task
     Server -->|agent Task| Task
     Task --> Controller
     Controller --> Worker
@@ -60,6 +63,7 @@ flowchart LR
     API -->|Task result| Fetcher
     API -->|Task result| Server
     Fetcher -->|validated state and output| Data
+    Fetcher -->|private comparison only| ShadowLedger
     Server --> Validator
     Validator -->|confirmed action or enabled automation| GitHub
 ```
@@ -83,6 +87,7 @@ policy.
 | Task retry, timeout, and execution history | Orka |
 | Durable Task result retrieval | Orka with a persistent store |
 | Cache acceptance and private trace schema | Dashboard |
+| Shadow bundle, validation, and private comparison ledger | Dashboard |
 | Fix diff and source citation validation | Dashboard |
 | Public dashboard output | Dashboard |
 | Final issue or pull request creation | Dashboard, based on confirmation and `dry_run` settings |
@@ -122,6 +127,29 @@ Helm deployments may select `analysisRuntime.type: orka-container` with
 Orka does not select evidence, define prompts, judge diagnoses, or decide which
 analysis is safe to cache. It supplies isolation and Task lifecycle around the
 existing dashboard analyzer.
+
+## Private Agent shadow path
+
+The private Agent shadow is not an analysis runtime selector. It requires
+`analysisRuntime.type: inprocess`, and the published in-process result remains
+authoritative.
+
+1. The dashboard completes authoritative analysis and public publication.
+2. It selects a deterministic bounded failure whose result passed critique and
+   whose source commit is pinned.
+3. It freezes ranked artifact excerpts and records their hashes without giving
+   the Agent GCS, Kubernetes, Bash, browser, or arbitrary network tools.
+4. A dedicated ServiceAccount creates one constrained Agent Task in
+   `orka.namespace`. Admission pins the versioned Agent, repository, commit,
+   tools, timeout, retries, and metadata.
+5. The dashboard accepts only a newly created
+   `.prow-ai-dashboard/analysis.json`, verifies artifact and source citations,
+   and deletes only the exact Task identity.
+6. It records the comparison and cleanup state on a dedicated private PVC. The
+   server never mounts that claim.
+
+The shadow does not implement `FailureAnalyzer`, update `TestCase`, write cache
+entries, publish JSON, or trigger any issue, fix, pattern, or remediation path.
 
 ## Fix generation path
 
@@ -172,6 +200,7 @@ that permits workspace edits and returns a diff.
 | Dashboard model token | Dashboard namespace | Fetcher, pattern analysis, chat | Orka source workspace |
 | Analyzer model token | Dedicated analysis namespace | Container analyzer Task | Public dashboard output |
 | Projected source ServiceAccount token | Dashboard server pod | Source Task and result APIs; exact fix TokenRequest | GitHub or model provider |
+| Projected shadow ServiceAccount token | Worker or fetcher pod | Shadow Task and result APIs | GitHub, model provider, or public dashboard data |
 | Pod-bound delegated fix ServiceAccount token | Dashboard server memory | Fix Task and result APIs | Source Task API, GitHub, model provider, or persistent storage |
 | Agent model Secret | Orka namespace | OpenCode or another AgentRuntime | Dashboard public data |
 | Read-only repository credential | Orka namespace | Source workspace initialization | GitHub write path |
@@ -191,6 +220,7 @@ RBAC remains operator-owned.
 | Public dashboard JSON | Dashboard RWX volume | SPA data contract |
 | `ai_cache.json` | Dashboard RWX volume | Accepted analysis and pattern cache |
 | `ai_traces.json` | Dashboard RWX volume | Private content-free execution traces |
+| `analysis_shadow.json` | Dedicated private shadow PVC | Bounded non-authoritative comparisons and cleanup telemetry |
 | Analysis checkpoint | Dashboard RWX volume | Private cache and trace rollback baseline, distinct from public publication |
 | `.analysis-chat` | Dashboard RWX volume | Owner-bound chat and source requests |
 | Task resources | Kubernetes API | Lifecycle, phase, identity, and history |
@@ -250,6 +280,7 @@ for a complete investigation.
 | --- | --- |
 | In-process failure analysis | Default and recommended production runtime |
 | Orka container analysis | Experimental Helm-only cron option |
+| Orka Agent analysis shadow | Private experimental Helm watch or cron option |
 | Orka fix generation | Optional experimental upstream integration |
 | Orka source investigation | Optional experimental upstream integration |
 | Patched generic Orka AI worker | Removed |
