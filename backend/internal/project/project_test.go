@@ -1316,4 +1316,11 @@ func TestFixAgentRuntimeNetworkDomains(t *testing.T) {
 	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "applies only") {
 		t.Fatalf("Orka network domains error = %v", err)
 	}
+
+	c.AI.FixPRs.AgentRuntime = &FixAgentRuntime{
+		Type: "orka", OrkaAgentRef: "agent", OrkaAPI: "http://orka.invalid", Model: "explicit-model",
+	}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "agent_runtime.model applies only") {
+		t.Fatalf("Orka model error = %v", err)
+	}
 }

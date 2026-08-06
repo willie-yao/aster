@@ -41,7 +41,7 @@ func TestGenerateWithAgent_HappyPath(t *testing.T) {
 		Diff:  "--- a/templates/cluster.yaml\n+++ b/templates/cluster.yaml\n",
 	}}
 	observer := func(context.Context, runtime.WorkRef) error { return nil }
-	gp := agentGenParams(&AgentConfig{Runtime: fa, Model: "m", Endpoint: "e", ModelToken: "t", AllowBash: true, NetworkDomains: []string{"registry.example.test:443"}, ExecutionID: "request-1", WorkObserver: observer})
+	gp := agentGenParams(&AgentConfig{Runtime: fa, SharedModelEndpoint: true, Model: "m", Endpoint: "e", ModelToken: "t", AllowBash: true, NetworkDomains: []string{"registry.example.test:443"}, ExecutionID: "request-1", WorkObserver: observer})
 
 	fix, err := generateWithAgent(context.Background(), gp, systemicPattern("etcd"))
 	if err != nil {
@@ -68,6 +68,20 @@ func TestGenerateWithAgent_HappyPath(t *testing.T) {
 	}
 	if fa.spec.ExecutionID != "request-1" || fa.spec.WorkObserver == nil {
 		t.Errorf("runtime work identity not passed: %+v", fa.spec)
+	}
+}
+
+func TestAgentRuntimeSpecOmitsProviderPolicyForAgentOwnedEndpoint(t *testing.T) {
+	observer := func(context.Context, runtime.WorkRef) error { return nil }
+	spec := agentRuntimeSpec(&AgentConfig{
+		Model: "model", Endpoint: "https://model.example.test/v1", ModelToken: "secret",
+		NetworkDomains: []string{"model.example.test:443"}, ExecutionID: "request-1", WorkObserver: observer,
+	}, runtime.RepoRef{Owner: "o", Name: "r", Ref: "ref", Token: "git-token"}, "fix")
+	if spec.Model != "" || spec.Endpoint != "" || spec.Token != "" || len(spec.NetworkDomains) != 0 {
+		t.Fatalf("agent-owned provider policy leaked into runtime spec: %+v", spec)
+	}
+	if spec.Repo.Token != "git-token" || spec.ExecutionID != "request-1" || spec.WorkObserver == nil {
+		t.Fatalf("repository and work identity were not preserved: %+v", spec)
 	}
 }
 

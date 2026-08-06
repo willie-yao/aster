@@ -185,6 +185,12 @@ Orka `Agent` selects its coding CLI independently. For example,
 `spec.runtime.type: opencode` selects OpenCode without adding a dashboard runtime
 type such as `orka-opencode`.
 
+The Orka boundary accepts only repository, instruction, turn, Bash, timeout,
+retry, and Agent-reference policy. Local model endpoint, token, header, ambient
+authentication, and network-domain settings are rejected rather than silently
+ignored. The repository token remains dashboard-local for result
+reconstruction and is not added to the Task.
+
 The backend creates a generation-only `type: agent` Task in an isolated
 workspace. Orka captures the final workspace and returns its structured result
 with `version`, `summary`, the pinned `baseSHA`, a unified `diff`, and the changed

@@ -1315,6 +1315,9 @@ func (c *Config) Validate() error {
 			switch runtimeType {
 			case "", "opencode":
 			case "orka":
+				if strings.TrimSpace(ar.Model) != "" {
+					return fmt.Errorf("ai.fix_prs.agent_runtime.model applies only to the local opencode runtime")
+				}
 				if len(ar.NetworkDomains) > 0 {
 					return fmt.Errorf("ai.fix_prs.agent_runtime.network_domains applies only to the local opencode runtime")
 				}
