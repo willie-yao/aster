@@ -605,6 +605,10 @@ retains the finding in telemetry but preserves its existing publication and
 cache behavior. Evidence overflow remains exempt because no citation can be
 validated after the bounded evidence store is full.
 
+The container analyzer frames this unavailable result and exits successfully.
+It is a completed policy outcome, not an execution failure, so Orka does not
+repeat the entire analysis after bounded citation repair is exhausted.
+
 #### Skills and recipes
 
 The hallucination check catches structural hallucinations but not semantic

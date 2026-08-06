@@ -4296,3 +4296,44 @@ func TestAgentic_MissingCitationPublicationPolicy(t *testing.T) {
 		})
 	}
 }
+
+func TestAgentic_SynthesizedFallbackMissingCitationPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		policy    CritiqueCachePolicy
+		wantError bool
+	}{
+		{name: "hard", policy: CritiqueCachePolicyHard, wantError: true},
+		{name: "strict", policy: CritiqueCachePolicyStrict, wantError: true},
+		{name: "advisory", policy: CritiqueCachePolicyAdvisory},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			shrinkCallDelay(t)
+			srv := newScriptedChatServer(t)
+			srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
+			srv.push(200, chatRespFinal("unparseable causal claim"))
+			srv.push(200, chatRespFinal("still unparseable causal claim"))
+			client := newAgenticTestClient(t, srv.URL)
+			browser := &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("initiating failure\n")}}
+			opts := AgenticOptions{
+				MaxIters: 2, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+				Timeout: 30 * time.Second, CritiqueMaxRetries: 0, CritiqueCachePolicy: tc.policy,
+			}
+			key := "agentic:test:synthesized-missing-citation:" + tc.name
+			summary, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), key, "sys", "user")
+			if tc.wantError {
+				if !errors.Is(err, ErrMissingArtifactCitation) || summary != nil || analysis != nil {
+					t.Fatalf("result = summary:%+v analysis:%+v err:%v", summary, analysis, err)
+				}
+			} else if err != nil || analysis == nil || !slices.Contains(analysis.CritiqueHardFailures, string(CritiqueRuleCitationMissing)) {
+				t.Fatalf("advisory result = summary:%+v analysis:%+v err:%v", summary, analysis, err)
+			}
+			if _, ok := client.Cache().Get(key); ok {
+				t.Fatal("synthesized fallback was cached")
+			}
+			if got := atomic.LoadInt32(&srv.calls); got != 3 {
+				t.Fatalf("model calls = %d, want 3", got)
+			}
+		})
+	}
+}

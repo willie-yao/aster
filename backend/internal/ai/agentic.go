@@ -1255,6 +1255,17 @@ agentLoop:
 		}
 		parsed = sanitizePublishedCitations(parsed, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
 		parsed = state.preparePublishedAnalysis(parsed)
+		out := state.currentCritiqueOutcome(parsed)
+		state.setCritiqueOutcome(out)
+		if critiqueAcceptedForPolicy(out, effectiveCritiqueCachePolicy(in.Opts.CritiqueCachePolicy, in.Opts.CritiqueMaxRetries)) {
+			recordTrace(loopCtx, critiqueTraceEvent("published_warning", out))
+		} else {
+			recordTrace(loopCtx, critiqueTraceEvent("published_rejected", out))
+		}
+		if rejectMissingCitationPublication(state, in.Opts) {
+			recordTrace(loopCtx, TraceEvent{Kind: "publication", Outcome: "unavailable", ErrorCode: "missing_artifact_citation"})
+			return nil, nil, ErrMissingArtifactCitation
+		}
 		summary, analysis := c.buildOutputs(parsed)
 		stampAgenticTelemetry(analysis, state, in.Mode, false, start)
 		return summary, analysis, nil
