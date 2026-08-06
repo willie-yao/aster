@@ -134,6 +134,11 @@ type Runner interface {
 	Investigate(context.Context, Request) (Result, error)
 }
 
+// Reader reads one file from an exact repository revision.
+type Reader interface {
+	ReadFile(context.Context, Repository, string) (string, error)
+}
+
 // ValidPhase reports whether phase is safe to expose to an owner.
 func ValidPhase(phase string) bool {
 	switch phase {
@@ -199,31 +204,15 @@ func ValidateResult(result Result) error {
 	default:
 		return fmt.Errorf("%w: unsupported state %q", ErrInvalidResult, result.State)
 	}
-	if len(result.Citations) == 0 || len(result.Citations) > 10 {
-		return fmt.Errorf("%w: citations must contain 1-10 entries", ErrInvalidResult)
+	if err := ValidateCitations(result.Citations, 1, 10); err != nil {
+		return err
 	}
 	totalBytes := len(result.Finding) + len(result.Direction)
 	if result.Target != nil {
 		totalBytes += len(result.Target.Intent) + len(result.Target.Path) + len(result.Target.Symbol) + len(result.Target.Value)
 	}
-	seen := map[string]struct{}{}
-	for i, citation := range result.Citations {
-		clean := path.Clean(strings.TrimSpace(citation.Path))
-		if clean == "." || clean == ".." || clean != citation.Path || strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "/") || strings.Contains(clean, "\\") {
-			return fmt.Errorf("%w: citation %d has unsafe path %q", ErrInvalidResult, i, citation.Path)
-		}
-		if citation.LineStart < 1 || citation.LineEnd < citation.LineStart || citation.LineEnd-citation.LineStart+1 > 200 {
-			return fmt.Errorf("%w: citation %d has invalid line range", ErrInvalidResult, i)
-		}
-		if strings.TrimSpace(citation.Quote) == "" || len(citation.Quote) > 2<<10 {
-			return fmt.Errorf("%w: citation %d quote must be 1-%d bytes", ErrInvalidResult, i, 2<<10)
-		}
+	for _, citation := range result.Citations {
 		totalBytes += len(citation.Path) + len(citation.Quote)
-		key := fmt.Sprintf("%s:%d:%d:%s", citation.Path, citation.LineStart, citation.LineEnd, citation.Quote)
-		if _, ok := seen[key]; ok {
-			return fmt.Errorf("%w: duplicate citation %d", ErrInvalidResult, i)
-		}
-		seen[key] = struct{}{}
 	}
 	if result.Target != nil {
 		matched := false
@@ -238,6 +227,69 @@ func ValidateResult(result Result) error {
 		return fmt.Errorf("%w: result exceeds the persisted text budget", ErrInvalidResult)
 	}
 	return nil
+}
+
+// ValidateCitations bounds source citations before any repository read.
+func ValidateCitations(citations []Citation, minCount, maxCount int) error {
+	if minCount < 0 || maxCount < minCount || len(citations) < minCount || len(citations) > maxCount {
+		return fmt.Errorf("%w: citations must contain %d-%d entries", ErrInvalidResult, minCount, maxCount)
+	}
+	seen := map[string]struct{}{}
+	for i, citation := range citations {
+		clean := path.Clean(strings.TrimSpace(citation.Path))
+		if clean == "." || clean == ".." || clean != citation.Path || strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "/") || strings.Contains(clean, "\\") {
+			return fmt.Errorf("%w: citation %d has unsafe path %q", ErrInvalidResult, i, citation.Path)
+		}
+		if citation.LineStart < 1 || citation.LineEnd < citation.LineStart || citation.LineEnd-citation.LineStart+1 > 200 {
+			return fmt.Errorf("%w: citation %d has invalid line range", ErrInvalidResult, i)
+		}
+		if strings.TrimSpace(citation.Quote) == "" || len(citation.Quote) > 2<<10 {
+			return fmt.Errorf("%w: citation %d quote must be 1-%d bytes", ErrInvalidResult, i, 2<<10)
+		}
+		key := fmt.Sprintf("%s:%d:%d:%s", citation.Path, citation.LineStart, citation.LineEnd, citation.Quote)
+		if _, ok := seen[key]; ok {
+			return fmt.Errorf("%w: duplicate citation %d", ErrInvalidResult, i)
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
+}
+
+// VerifyCitations requires every citation quote to match the pinned source.
+func VerifyCitations(ctx context.Context, reader Reader, repo Repository, citations []Citation) ([]Citation, error) {
+	if reader == nil {
+		return nil, fmt.Errorf("%w: source reader is not configured", ErrInvalidResult)
+	}
+	if err := ValidateRepository(repo); err != nil {
+		return nil, err
+	}
+	if err := ValidateCitations(citations, 0, 10); err != nil {
+		return nil, err
+	}
+	verified := slices.Clone(citations)
+	cache := map[string]string{}
+	for i := range verified {
+		citation := &verified[i]
+		content, ok := cache[citation.Path]
+		if !ok {
+			var err error
+			content, err = reader.ReadFile(ctx, repo, citation.Path)
+			if err != nil {
+				return nil, fmt.Errorf("%w: reading cited source %q: %v", ErrInvalidResult, citation.Path, err)
+			}
+			cache[citation.Path] = content
+		}
+		lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+		if citation.LineStart < 1 || citation.LineEnd < citation.LineStart || citation.LineEnd > len(lines) {
+			return nil, fmt.Errorf("%w: citation %q has an invalid line range", ErrInvalidResult, citation.Path)
+		}
+		selected := strings.Join(lines[citation.LineStart-1:citation.LineEnd], "\n")
+		if !strings.Contains(selected, citation.Quote) {
+			return nil, fmt.Errorf("%w: citation quote does not match %s:%d-%d", ErrInvalidResult, citation.Path, citation.LineStart, citation.LineEnd)
+		}
+		citation.Verified = true
+	}
+	return verified, nil
 }
 
 // ValidateVerifiedResult requires every citation to match the pinned source.

@@ -26,25 +26,29 @@ import (
 )
 
 const (
-	FixerManagedByValue        = "orka-fixer"
-	PromptAuthorManagedByValue = "orka-prompt-author"
-	defaultAgentNamespace      = "orka-system"
-	defaultAgentVersion        = "v1"
-	defaultAgentPriority       = int64(500)
-	agentContractLabel         = "prow-ai-dashboard/runtime"
-	fixContractLabelValue      = "fix-generation"
-	promptContractLabelValue   = "prompt-authoring"
-	fixContractAnnotation      = "prow-ai-dashboard/fix-contract"
-	promptContractAnnotation   = "prow-ai-dashboard/prompt-contract"
-	agentContractVersion       = "v1"
-	serviceAccountToken        = "/var/run/secrets/kubernetes.io/serviceaccount/token"
-	maxAgentResultBytes        = 4 << 20
-	maxAgentSkillBytes         = 256 << 10
-	maxAgentSkillsBytes        = 1 << 20
-	maxAgentSkillNameBytes     = 63
-	maxAgentTaskBytes          = 1 << 20
-	actionRequestAnnotation    = "prow-ai-dashboard/action-request"
-	defaultAgentCleanupTimeout = 30 * time.Second
+	FixerManagedByValue         = "orka-fixer"
+	PromptAuthorManagedByValue  = "orka-prompt-author"
+	AgentAnalysisManagedByValue = "orka-agent-analysis"
+	defaultAgentNamespace       = "orka-system"
+	defaultAgentVersion         = "v1"
+	defaultAgentPriority        = int64(500)
+	agentContractLabel          = "prow-ai-dashboard/runtime"
+	fixContractLabelValue       = "fix-generation"
+	promptContractLabelValue    = "prompt-authoring"
+	analysisContractLabelValue  = "failure-analysis-shadow"
+	fixContractAnnotation       = "prow-ai-dashboard/fix-contract"
+	promptContractAnnotation    = "prow-ai-dashboard/prompt-contract"
+	analysisContractAnnotation  = "prow-ai-dashboard/agent-analysis-contract"
+	agentContractVersion        = "v1"
+	analysisContractVersion     = "agent-analysis-v1"
+	serviceAccountToken         = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+	maxAgentResultBytes         = 4 << 20
+	maxAgentSkillBytes          = 256 << 10
+	maxAgentSkillsBytes         = 1 << 20
+	maxAgentSkillNameBytes      = 63
+	maxAgentTaskBytes           = 1 << 20
+	actionRequestAnnotation     = "prow-ai-dashboard/action-request"
+	defaultAgentCleanupTimeout  = 30 * time.Second
 )
 
 var (
@@ -61,13 +65,16 @@ const (
 	AgentPurposeFix AgentPurpose = fixContractLabelValue
 	// AgentPurposePromptAuthor identifies onboarding prompt-authoring Tasks.
 	AgentPurposePromptAuthor AgentPurpose = promptContractLabelValue
+	// AgentPurposeFailureAnalysis identifies private experimental analysis Tasks.
+	AgentPurposeFailureAnalysis AgentPurpose = analysisContractLabelValue
 )
 
 type agentTaskContract struct {
-	purpose       AgentPurpose
-	managedBy     string
-	namePrefix    string
-	annotationKey string
+	purpose           AgentPurpose
+	managedBy         string
+	namePrefix        string
+	annotationKey     string
+	annotationVersion string
 }
 
 // StructuredResult is the generation result returned by an Orka agent Task.
@@ -219,9 +226,11 @@ func agentContract(purpose AgentPurpose) (agentTaskContract, error) {
 	}
 	switch purpose {
 	case AgentPurposeFix:
-		return agentTaskContract{purpose: purpose, managedBy: FixerManagedByValue, namePrefix: "fix", annotationKey: fixContractAnnotation}, nil
+		return agentTaskContract{purpose: purpose, managedBy: FixerManagedByValue, namePrefix: "fix", annotationKey: fixContractAnnotation, annotationVersion: agentContractVersion}, nil
 	case AgentPurposePromptAuthor:
-		return agentTaskContract{purpose: purpose, managedBy: PromptAuthorManagedByValue, namePrefix: "prompt", annotationKey: promptContractAnnotation}, nil
+		return agentTaskContract{purpose: purpose, managedBy: PromptAuthorManagedByValue, namePrefix: "prompt", annotationKey: promptContractAnnotation, annotationVersion: agentContractVersion}, nil
+	case AgentPurposeFailureAnalysis:
+		return agentTaskContract{purpose: purpose, managedBy: AgentAnalysisManagedByValue, namePrefix: "analysis", annotationKey: analysisContractAnnotation, annotationVersion: analysisContractVersion}, nil
 	default:
 		return agentTaskContract{}, fmt.Errorf("orka: unsupported agent purpose %q", purpose)
 	}
@@ -318,25 +327,33 @@ func (r *AgentRuntime) Generate(ctx context.Context, spec runtime.GenerateSpec) 
 
 	phase, err := r.waitTerminal(ctx, name)
 	if err != nil {
-		return runtime.GenerateResult{}, err
+		if terminalState, stateErr := r.kube.TaskState(ctx, r.opts.Namespace, name); stateErr == nil && terminalState.Exists && terminalState.UID == work.UID {
+			result.Attempts = terminalState.Attempts
+		}
+		return result, err
+	}
+	if terminalState, stateErr := r.kube.TaskState(ctx, r.opts.Namespace, name); stateErr == nil && terminalState.Exists && terminalState.UID == work.UID {
+		result.Attempts = terminalState.Attempts
 	}
 	if phase != "Succeeded" {
-		return runtime.GenerateResult{}, fmt.Errorf("orka agent Task %s ended %s", name, phase)
+		return result, fmt.Errorf("orka agent Task %s ended %s", name, phase)
 	}
 
 	raw, err := r.waitResult(ctx, name)
 	if err != nil {
-		return runtime.GenerateResult{}, err
+		return result, err
 	}
 	var parsed StructuredResult
 	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
-		return runtime.GenerateResult{}, fmt.Errorf("orka agent Task %s: parsing result: %w", name, err)
+		return result, fmt.Errorf("orka agent Task %s: parsing result: %w", name, err)
 	}
 	if err := validateStructuredResult(parsed, spec.Repo.Ref); err != nil {
-		return runtime.GenerateResult{Output: parsed.Summary}, fmt.Errorf("orka agent Task %s: %w", name, err)
+		result.Output = parsed.Summary
+		return result, fmt.Errorf("orka agent Task %s: %w", name, err)
 	}
 	if strings.TrimSpace(parsed.Diff) == "" {
-		return runtime.GenerateResult{Output: parsed.Summary}, nil
+		result.Output = parsed.Summary
+		return result, nil
 	}
 
 	apply := r.applyDiff
@@ -345,12 +362,17 @@ func (r *AgentRuntime) Generate(ctx context.Context, spec runtime.GenerateSpec) 
 	}
 	files, diff, err := apply(ctx, spec.Repo, parsed.Diff)
 	if err != nil {
-		return runtime.GenerateResult{Output: parsed.Summary}, fmt.Errorf("reconstructing agent files: %w", err)
+		result.Output = parsed.Summary
+		return result, fmt.Errorf("reconstructing agent files: %w", err)
 	}
 	if err := validateResultFiles(parsed.Files, files); err != nil {
-		return runtime.GenerateResult{Output: parsed.Summary}, fmt.Errorf("orka agent Task %s: %w", name, err)
+		result.Output = parsed.Summary
+		return result, fmt.Errorf("orka agent Task %s: %w", name, err)
 	}
-	return runtime.GenerateResult{Files: files, Diff: diff, Output: parsed.Summary}, nil
+	result.Files = files
+	result.Diff = diff
+	result.Output = parsed.Summary
+	return result, nil
 }
 
 type agentSkill struct {
@@ -392,6 +414,9 @@ func validateAgentGenerateSpec(spec runtime.GenerateSpec, opts AgentOptions) (ag
 	}
 	if opts.GitSecret != "" && contract.purpose == AgentPurposeFix {
 		return agentTaskContract{}, nil, fmt.Errorf("orka: fix generation does not permit a git secret")
+	}
+	if contract.purpose == AgentPurposeFailureAnalysis && spec.AllowBash {
+		return agentTaskContract{}, nil, fmt.Errorf("orka: failure analysis does not permit Bash")
 	}
 	switch {
 	case strings.TrimSpace(spec.Model) != "":
@@ -606,6 +631,10 @@ func (r *AgentRuntime) buildTask(name string, spec runtime.GenerateSpec, skills 
 		"maxTurns":  int64(spec.MaxTurns),
 		"allowBash": spec.AllowBash,
 	}
+	if contract.purpose == AgentPurposeFailureAnalysis {
+		agentRuntime["allowedTools"] = []any{"Read", "Glob", "Grep", "Write"}
+		agentRuntime["disallowedTools"] = []any{"Bash", "Edit", "MultiEdit", "NotebookEdit", "WebFetch", "WebSearch", "Task", "TodoWrite", "Question"}
+	}
 	taskSpec := map[string]any{
 		"type":         "agent",
 		"agentRef":     map[string]any{"name": r.opts.AgentRef, "namespace": r.opts.Namespace},
@@ -615,13 +644,17 @@ func (r *AgentRuntime) buildTask(name string, spec runtime.GenerateSpec, skills 
 		"priority":     defaultAgentPriority,
 		"retryPolicy":  map[string]any{"maxRetries": int64(r.opts.MaxRetries)},
 	}
+	annotations := map[string]any{contract.annotationKey: contract.annotationVersion}
+	if contract.purpose == AgentPurposeFailureAnalysis {
+		annotations["orka.ai/disable-coordination-tool-injection"] = "true"
+	}
 	metadata := map[string]any{
 		"name": name, "namespace": r.opts.Namespace,
 		"labels": map[string]any{
 			ManagedByLabel:     contract.managedBy,
 			agentContractLabel: string(contract.purpose),
 		},
-		"annotations": map[string]any{contract.annotationKey: agentContractVersion},
+		"annotations": annotations,
 	}
 	if executionID := strings.TrimSpace(spec.ExecutionID); executionID != "" {
 		metadata["annotations"].(map[string]any)[actionRequestAnnotation] = executionID
@@ -656,6 +689,9 @@ func AgentTaskName(spec runtime.GenerateSpec, opts AgentOptions) string {
 		spec.Repo.Owner, spec.Repo.Name, spec.Repo.Ref, spec.Instruction,
 		opts.AgentRef, opts.Namespace, opts.GitSecret, opts.Version, fmt.Sprintf("%d", opts.MaxRetries),
 		string(contract.purpose), fmt.Sprintf("%t", spec.AllowBash), fmt.Sprintf("%d", spec.MaxTurns), spec.Timeout.String(),
+	}
+	if contract.purpose == AgentPurposeFailureAnalysis {
+		parts = append(parts, contract.annotationVersion)
 	}
 	names := make([]string, 0, len(spec.Skills))
 	for name := range spec.Skills {

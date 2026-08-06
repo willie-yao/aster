@@ -87,6 +87,8 @@ type GenerateResult struct {
 	// Output is the tail of the CLI's own output, redacted and bounded, for
 	// debugging.
 	Output string
+	// Attempts is the number of external Task attempts when the backend reports it.
+	Attempts int
 }
 
 // AgentRuntime materializes a disposable workspace and runs a coding agent that

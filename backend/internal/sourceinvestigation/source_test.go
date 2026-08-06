@@ -1,6 +1,7 @@
 package sourceinvestigation
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -67,5 +68,51 @@ func TestValidateResultBoundsTargetMetadata(t *testing.T) {
 	}
 	if err := ValidateResult(result); !errors.Is(err, ErrInvalidResult) {
 		t.Fatalf("ValidateResult(oversized target) = %v", err)
+	}
+}
+
+type countingSourceReader struct {
+	files map[string]string
+	calls map[string]int
+}
+
+func (r *countingSourceReader) ReadFile(_ context.Context, _ Repository, path string) (string, error) {
+	if r.calls == nil {
+		r.calls = map[string]int{}
+	}
+	r.calls[path]++
+	content, ok := r.files[path]
+	if !ok {
+		return "", errors.New("missing")
+	}
+	return content, nil
+}
+
+func TestVerifyCitationsReturnsVerifiedClone(t *testing.T) {
+	reader := &countingSourceReader{files: map[string]string{"pkg/retry.go": "first\r\nreturn err\nthird\n"}}
+	input := []Citation{
+		{Path: "pkg/retry.go", LineStart: 2, LineEnd: 2, Quote: "return err"},
+		{Path: "pkg/retry.go", LineStart: 1, LineEnd: 2, Quote: "first"},
+	}
+	got, err := VerifyCitations(t.Context(), reader, Repository{Owner: "example", Name: "repo", Revision: strings.Repeat("a", 40)}, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got[0].Verified || !got[1].Verified || input[0].Verified || reader.calls["pkg/retry.go"] != 1 {
+		t.Fatalf("verified=%+v input=%+v calls=%v", got, input, reader.calls)
+	}
+}
+
+func TestVerifyCitationsDoesNotPartiallyVerifyOnFailure(t *testing.T) {
+	reader := &countingSourceReader{files: map[string]string{"pkg/retry.go": "first\nreturn err\n"}}
+	input := []Citation{
+		{Path: "pkg/retry.go", LineStart: 2, LineEnd: 2, Quote: "return err"},
+		{Path: "pkg/retry.go", LineStart: 1, LineEnd: 1, Quote: "missing"},
+	}
+	if _, err := VerifyCitations(t.Context(), reader, Repository{Owner: "example", Name: "repo", Revision: strings.Repeat("a", 40)}, input); !errors.Is(err, ErrInvalidResult) {
+		t.Fatalf("error = %v", err)
+	}
+	if input[0].Verified || input[1].Verified {
+		t.Fatalf("input was mutated: %+v", input)
 	}
 }
