@@ -20,7 +20,7 @@ import { Panel } from "../components/Panel";
 import { useFlakinessReport } from "../hooks/useData";
 import { useManifest } from "../hooks/useManifest";
 import { useSharedFetchStatus } from "../hooks/useSharedFetchStatus";
-import { analysisProgressBreakdown } from "../lib/fetchStatus";
+import { fetchStatusPresentation } from "../lib/fetchStatus";
 import { jobPath, testPath, testRunPath } from "../lib/routes";
 import { formatPercent, shortJobName, shortTestName, timeAgo } from "../lib/utils";
 import { soft } from "../theme";
@@ -488,7 +488,7 @@ export function FlakinessPage() {
   const testItems = activeTab === "build_failures" ? [] : testListMap[activeTab];
   const activeDescription = tabs.find((t) => t.value === activeTab)?.tooltip;
   const refreshStatus = fetchStatus?.state === "active" ? fetchStatus.status : undefined;
-  const refreshProgress = refreshStatus ? analysisProgressBreakdown(refreshStatus) : null;
+  const refreshPresentation = fetchStatus?.state === "active" ? fetchStatusPresentation(fetchStatus) : null;
 
   return (
     <Stack spacing={4}>
@@ -540,12 +540,10 @@ export function FlakinessPage() {
               </Box>
               <Box>
                 <Typography variant="data" sx={{ display: "block", color: "info.main", fontSize: "0.75rem" }}>
-                  Refresh in progress
+                  {refreshPresentation?.title ?? "Refresh in progress"}
                 </Typography>
                 <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
-                  {refreshProgress && refreshProgress.total > 0
-                    ? `${refreshProgress.ready} of ${refreshProgress.total} results ready`
-                    : "Preparing the next published snapshot"}
+                  {refreshPresentation?.detail ?? "Preparing the next published snapshot"}
                 </Typography>
                 <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
                   {activeTab === "build_failures"

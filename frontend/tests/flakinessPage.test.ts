@@ -97,11 +97,12 @@ test("focusable tabs own their visible names and descriptions", () => {
 
 test("published freshness stays separate from background refresh progress", () => {
   assert.match(source, />\s*Published results\s*</);
-  assert.match(source, />\s*Refresh in progress\s*</);
+  assert.match(source, /refreshPresentation\?\.title \?\? "Refresh in progress"/);
   assert.match(source, /Published results remain available until the refresh completes\./);
   assert.match(source, /Showing the last published build failures\. A new snapshot is currently being prepared\./);
   assert.match(source, /fetchStatus\?\.state === "active"/);
-  assert.match(source, /refreshProgress\.ready} of \$\{refreshProgress\.total} results ready/);
+  assert.match(source, /refreshPresentation\?\.detail \?\? "Preparing the next published snapshot"/);
+  assert.match(source, /fetchStatusPresentation\(fetchStatus\)/);
   assert.doesNotMatch(source, /aria-live=/);
 });
 
