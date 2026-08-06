@@ -9,8 +9,10 @@
 | Subdirectory | A monorepo owns the consumer in a dedicated directory | The subdirectory |
 | Separate directory | Source and consumer should remain independent | A sibling or explicit path |
 
-Existing generated files require a reviewed dry run and explicit
-`-update-existing`. Unrelated and stale files remain untouched.
+Existing generated files require two confirmations. First, run without
+`-update-existing` and present the reported conflict paths. After replacement
+authorization, run a new dry run with `-update-existing`, save its plan artifact,
+and review the full plan and digest. Unrelated and stale files remain untouched.
 
 ## Deployment
 
@@ -49,7 +51,8 @@ The setup agent must not request or write the token value.
 
 ## Write boundaries
 
-A request to set up the local consumer authorizes the reviewed scaffold write.
-It does not automatically authorize Git initialization, GitHub repository
-creation, pushes, pull requests, Pages configuration, Secret writes, Helm
-installation, or deployment.
+A request to set up the local consumer authorizes applying the exact reviewed
+plan artifact after confirmation. It does not authorize rerunning discovery and
+writing a newly rebuilt plan. It also does not automatically authorize Git
+initialization, GitHub repository creation, pushes, pull requests, Pages
+configuration, Secret writes, Helm installation, or deployment.

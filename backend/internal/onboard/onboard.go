@@ -124,6 +124,9 @@ func validateOptions(opts *Options) error {
 	if opts.PromptTimeout < minPromptDraftTimeout || opts.PromptTimeout > maxPromptDraftTimeout {
 		return fmt.Errorf("--prompt-timeout must be between %s and %s", minPromptDraftTimeout, maxPromptDraftTimeout)
 	}
+	if opts.PlanOut != "" && !opts.DryRun {
+		return fmt.Errorf("--plan-out requires --dry-run")
+	}
 	if (opts.TestGrid == "") == (opts.Bucket == "") {
 		return fmt.Errorf("provide exactly one of --testgrid or --bucket")
 	}
@@ -159,13 +162,16 @@ func validateOptions(opts *Options) error {
 		opts.OutDir = name
 	}
 	opts.OutDir = filepath.Clean(opts.OutDir)
+	if opts.PlanOut != "" {
+		opts.PlanOut = filepath.Clean(opts.PlanOut)
+	}
 	return nil
 }
 
 func validateCredentialSeparation(opts Options) error {
 	values := []string{
 		opts.TestGrid, opts.Bucket, opts.GCSWebBase, opts.DashboardRepo, opts.SourceRepo,
-		opts.ID, opts.Name, opts.ShortName, opts.EngineRef, opts.OutDir,
+		opts.ID, opts.Name, opts.ShortName, opts.EngineRef, opts.OutDir, opts.PlanOut,
 		opts.PromptAgentModel,
 		strings.Join(opts.PromptNetworkDomains, ","),
 		opts.AIAPI, opts.AIEndpoint, opts.AIModel,

@@ -226,8 +226,8 @@ Open-PR mode continues to submit the generated file map as a GitHub diff.
 
 `-dry-run` performs discovery, the real job sweep, planning, rendering,
 destination checks, and strict configuration validation. It prints the same
-create/replace plan and stale-file warnings without writing files or opening a
-pull request.
+create/replace plan and stale-file warnings without writing scaffold files or
+opening a pull request.
 
 ```bash
 go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboard \
@@ -237,6 +237,28 @@ go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboar
 
 An interactive dry run stops after review. A fully flagged dry run stays
 non-interactive.
+
+`-plan-out <path>` is valid only with `-dry-run`. It writes a versioned,
+credential-free artifact containing the exact rendered files and reviewed
+destination actions. The output prints a `sha256:` digest for that file. The
+path must not already exist.
+
+Apply the exact reviewed artifact with no discovery or scaffold flags:
+
+```bash
+fetcher onboard \
+  -apply-plan /private/path/onboard-plan.json \
+  -plan-digest 'sha256:<reviewed-digest>'
+```
+
+The command rejects a changed digest, malformed artifact, unsupported schema,
+symlinked plan file, invalid plan, or destination whose create/replace state no
+longer matches the review.
+
+For an existing scaffold, the first non-interactive run without
+`-update-existing` stops and lists conflicts. After the user authorizes those
+replacement paths, rerun the dry run with `-update-existing` and `-plan-out`,
+then review and apply that artifact.
 
 ## Non-interactive automation
 

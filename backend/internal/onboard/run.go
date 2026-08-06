@@ -143,8 +143,7 @@ func run(ctx context.Context, opts Options, deps dependencies) error {
 		}
 		printReview(deps.terminal.Out, plan)
 		if opts.DryRun {
-			printDryRun(deps.terminal.Out, plan)
-			return nil
+			return finishDryRun(deps.terminal.Out, plan, opts.PlanOut)
 		}
 		return applyPlan(ctx, plan, opts.GitHubToken, deps)
 	}
@@ -163,8 +162,7 @@ func run(ctx context.Context, opts Options, deps dependencies) error {
 		return err
 	}
 	if opts.DryRun {
-		printDryRun(deps.terminal.Out, plan)
-		return nil
+		return finishDryRun(deps.terminal.Out, plan, opts.PlanOut)
 	}
 	return applyPlan(ctx, plan, opts.GitHubToken, deps)
 }
@@ -498,7 +496,21 @@ func reviewValue(value string) string {
 
 func printDryRun(out io.Writer, plan *Plan) {
 	fmt.Fprintln(out, "\nDry run complete. The scaffold rendered, project.yaml passed strict validation, and the create/replace plan was reviewed.")
-	fmt.Fprintln(out, "No files were written and no pull request was opened.")
+	fmt.Fprintln(out, "No scaffold files were written and no pull request was opened.")
+}
+
+func finishDryRun(out io.Writer, plan *Plan, planOut string) error {
+	printDryRun(out, plan)
+	if planOut == "" {
+		return nil
+	}
+	digest, err := WritePlanArtifact(planOut, plan)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "Reviewed plan artifact: %s\n", safeTerminal(planOut))
+	fmt.Fprintf(out, "Reviewed plan digest: %s\n", digest)
+	return nil
 }
 
 func deploymentLabel(mode string) string {

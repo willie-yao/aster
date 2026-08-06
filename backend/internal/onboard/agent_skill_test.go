@@ -37,8 +37,9 @@ func TestConsumerSetupAgentSkill(t *testing.T) {
 	}
 	for _, anchor := range []string{
 		"go -C backend run ./cmd/fetcher", "onboard discover", "-json", "-dry-run", "-non-interactive",
-		"-prompt-mode handoff", "PROMPT_HANDOFF.md", "onboard doctor",
-		"Get confirmation before applying", "Never delete stale or unrelated files",
+		"-prompt-mode handoff", "-plan-out", "-apply-plan", "-plan-digest",
+		"PROMPT_HANDOFF.md", "onboard doctor", "After the user confirms the reviewed plan",
+		"Never delete stale or unrelated files",
 	} {
 		if !strings.Contains(text, anchor) {
 			t.Errorf("skill missing %q", anchor)

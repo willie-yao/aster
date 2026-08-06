@@ -125,13 +125,20 @@ The agent should:
 1. Determine the source and intended consumer repository identities.
 2. Run `fetcher onboard discover -json`.
 3. Ask for unresolved placement, deployment, and discovery decisions.
-4. Run a complete non-interactive dry run with `-prompt-mode handoff`.
-5. Present every planned create or replace action.
-6. Apply the identical plan after confirmation.
+4. Run a complete non-interactive dry run with `-prompt-mode handoff` and
+   `-plan-out`.
+5. Present every planned create or replace action and the plan digest.
+6. Apply the saved artifact with `-apply-plan` and `-plan-digest` after
+   confirmation.
 7. Follow `PROMPT_HANDOFF.md` and the generated
    `system-prompt-generation/SKILL.md` to complete `prompts/system.md`.
 8. Run `fetcher onboard doctor`.
 9. Report remaining checklist and deployment work.
+
+For existing generated files, the first dry run reports conflicts. The agent
+must ask before rerunning with `-update-existing`, then review that full plan.
+Onboarding's direct `-open-pr` mode is intentionally not used because prompt
+completion and doctor require local files.
 
 The skill must use `fetcher onboard` rather than hand-writing `project.yaml`,
 workflows, Helm values, or deployment guides. This keeps agent-driven setup on
