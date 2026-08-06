@@ -129,7 +129,7 @@ func TestDiagnosticAuthoringAgentSkill(t *testing.T) {
 	}
 	for _, anchor := range []string{
 		"onboard doctor", "<validation-engine>", "pinned engine checkout", "proposals/skills/", "reports/failure-corpus.json", "reports/diagnostic-authoring.md",
-		"reports/benchmark-results.json", "fresh isolated LLM CLI", "private source or artifacts to a provider", "repeated prompt-only misses", "final holdout",
+		"reports/benchmark-results.json", "python3 -m json.tool", "fresh isolated LLM CLI", "private source or artifacts to a provider", "repeated prompt-only misses", "final holdout",
 		"recommended", "experimental", "rejected", "unresolved",
 		"Never write them to the authoring consumer's active `skills/`", "without a later explicit approval",
 	} {
@@ -165,7 +165,7 @@ func TestDiagnosticAuthoringAgentSkill(t *testing.T) {
 	}
 
 	references := map[string][]string{
-		"failure-corpus.md": {"## Build a representative corpus", "At least six diagnosed failures", "same-wrapper, different-cause counterexample", "## Diagnose each failure", "reports/failure-corpus.json", `"split": "authoring"`, "## Validate the prompt with fresh sessions", "two bounded revision rounds", "## Apply the prompt quality rubric"},
+		"failure-corpus.md": {"## Build a representative corpus", "At least six diagnosed failures", "authorized Prow artifact indexes", "same-wrapper, different-cause counterexample", "## Diagnose each failure", "reports/failure-corpus.json", `"split": "authoring"`, "## Validate the prompt with fresh sessions", "two bounded revision rounds", "## Apply the prompt quality rubric"},
 		"decisions.md":      {"## Choose the corpus and splits", "prompt-only validation cases", "## Classify prompt and recipe outcomes", "## Promotion boundary"},
 		"recipe-authoring.md": {
 			"second-line intervention", "at least two independent prompt-only misses", "## Design triggers", "## Build the applicability matrix", "## Run deterministic engine validation",

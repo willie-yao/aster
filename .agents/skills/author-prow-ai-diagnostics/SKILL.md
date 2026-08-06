@@ -40,7 +40,7 @@ Determine or request:
 - Consumer directory and repository identity.
 - Source repository and exact source revision.
 - Deployment mode when it changes artifact or capability expectations.
-- Public artifact location.
+- Artifact location and whether access is public or explicitly authorized.
 - Test-infra repository, config path, and exact revision.
 - Exact Prow job scope.
 - Whether fresh isolated LLM CLI sessions are available.
@@ -83,7 +83,7 @@ profiles, and the engine-computed merged skill-set hash before editing.
 
 ## 3. Build and split a representative failure corpus
 
-Use engine discovery and public Prow artifact indexes to enumerate candidate
+Use engine discovery and authorized Prow artifact indexes to enumerate candidate
 failures across jobs, flavors, lifecycle phases, and initiating-error classes.
 Do not accept a caller-provided build list as representative without checking its
 coverage.
@@ -239,6 +239,9 @@ go -C <validation-engine>/backend test ./internal/e2e \
 
 go -C <validation-engine>/backend run ./cmd/fetcher onboard doctor \
   -project-dir <disposable-consumer>
+
+python3 -m json.tool <consumer>/reports/failure-corpus.json >/dev/null
+python3 -m json.tool <consumer>/reports/benchmark-results.json >/dev/null
 ```
 
 Validate derived condition manifests with a temporary provider-free test only in

@@ -13,8 +13,9 @@
 
 ## Build a representative corpus
 
-Use engine discovery and public Prow artifact indexes to enumerate candidate
-failures. Do not select only the first recent failures or only builds that share
+Use engine discovery and authorized Prow artifact indexes to enumerate candidate
+failures. Record whether access is public or explicitly approved, and do not
+expand access while building the corpus. Do not select only the first recent failures or only builds that share
 one terminal wrapper.
 
 When the project has enough history, target:
