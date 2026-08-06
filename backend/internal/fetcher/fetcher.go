@@ -373,7 +373,11 @@ func (p *pipeline) discover(ctx context.Context) ([]models.ProwJob, error) {
 	switch cfg.EffectiveDiscoverySource() {
 	case project.DiscoveryBucket:
 		log.Println("Discovering jobs from the storage bucket...")
-		jobs, err = prowbuild.DiscoverJobs(ctx, p.backend, p.includePresubmits, cfg.Discovery.JobFilters)
+		if len(cfg.Discovery.ExactJobs) > 0 {
+			jobs, err = prowbuild.DiscoverExactJobs(ctx, p.backend, p.includePresubmits, cfg.Discovery.ExactJobs)
+		} else {
+			jobs, err = prowbuild.DiscoverJobs(ctx, p.backend, p.includePresubmits, cfg.Discovery.JobFilters)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("discovering jobs from bucket: %w", err)
 		}

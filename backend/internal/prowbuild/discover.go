@@ -2,6 +2,7 @@ package prowbuild
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -66,6 +67,50 @@ func DiscoverJobs(ctx context.Context, b storage.Backend, includePresubmits bool
 	}
 
 	sort.Slice(jobs, func(i, j int) bool { return jobs[i].Name < jobs[j].Name })
+	return jobs, nil
+}
+
+// DiscoverExactJobs validates configured job names through their direct bucket
+// indexes without listing the bucket root. Missing names fail the complete
+// discovery so a typo cannot silently publish an empty or partial dashboard.
+func DiscoverExactJobs(ctx context.Context, b storage.Backend, includePresubmits bool, names []string) ([]models.ProwJob, error) {
+	jobs := make([]models.ProwJob, 0, len(names))
+	var missing []string
+	for _, name := range names {
+		found := false
+		listing, err := b.List(ctx, "logs/"+name+"/")
+		if err != nil {
+			return nil, fmt.Errorf("listing exact bucket job %q: %w", name, err)
+		}
+		if len(listing.Dirs) > 0 || len(listing.Files) > 0 {
+			jobs = append(jobs, models.ProwJob{
+				Name: name, TabName: name, JobType: models.JobTypePeriodic,
+				JobID: models.JobIDFor(models.JobTypePeriodic, "", name),
+			})
+			found = true
+		}
+		if includePresubmits {
+			if repo, ok := resolvePresubmitRepo(ctx, b, name); ok {
+				jobs = append(jobs, models.ProwJob{
+					Name: name, TabName: name, JobType: models.JobTypePresubmit, Repo: repo,
+					JobID: models.JobIDFor(models.JobTypePresubmit, repo, name),
+				})
+				found = true
+			}
+		}
+		if !found {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("exact bucket job(s) not found: %s", strings.Join(missing, ", "))
+	}
+	sort.Slice(jobs, func(i, j int) bool {
+		if jobs[i].Name != jobs[j].Name {
+			return jobs[i].Name < jobs[j].Name
+		}
+		return jobs[i].JobID < jobs[j].JobID
+	})
 	return jobs, nil
 }
 

@@ -19,6 +19,7 @@ type fakeBackend struct {
 	objects     map[string]string
 	listErr     error
 	listTreeErr error
+	listCalls   []string
 }
 
 func (f *fakeBackend) Open(_ context.Context, path string) (io.ReadCloser, int64, error) {
@@ -56,6 +57,7 @@ func (f *fakeBackend) ReadTail(_ context.Context, path string, maxBytes int64) (
 }
 
 func (f *fakeBackend) List(_ context.Context, prefix string) (*storage.Listing, error) {
+	f.listCalls = append(f.listCalls, prefix)
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
@@ -85,6 +87,37 @@ func (f *fakeBackend) List(_ context.Context, prefix string) (*storage.Listing, 
 	sort.Strings(out.Dirs)
 	sort.Slice(out.Files, func(i, j int) bool { return out.Files[i].Name < out.Files[j].Name })
 	return out, nil
+}
+
+func TestDiscoverExactJobsUsesDirectIndexes(t *testing.T) {
+	b := &fakeBackend{objects: map[string]string{
+		"logs/periodic-a/1/started.json":                    "x",
+		"logs/unrelated/1/started.json":                     "x",
+		"pr-logs/directory/pull-e2e/9.txt":                  "pr-logs/pull/example_project/3/pull-e2e/9",
+		"pr-logs/directory/unrelated-presubmit/10.txt":      "pr-logs/pull/example_project/4/unrelated-presubmit/10",
+		"pr-logs/pull/example_project/3/pull-e2e/9/prowjob": "x",
+	}}
+	jobs, err := DiscoverExactJobs(context.Background(), b, true, []string{"periodic-a", "pull-e2e"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 2 || jobs[0].Name != "periodic-a" || jobs[0].JobType != models.JobTypePeriodic ||
+		jobs[1].Name != "pull-e2e" || jobs[1].JobType != models.JobTypePresubmit || jobs[1].Repo != "example/project" {
+		t.Fatalf("exact jobs = %+v", jobs)
+	}
+	for _, prefix := range b.listCalls {
+		if prefix == "logs/" || prefix == "pr-logs/directory/" {
+			t.Fatalf("exact discovery enumerated bucket root %q", prefix)
+		}
+	}
+}
+
+func TestDiscoverExactJobsRejectsMissingName(t *testing.T) {
+	b := &fakeBackend{objects: map[string]string{"logs/present/1/started.json": "x"}}
+	_, err := DiscoverExactJobs(context.Background(), b, false, []string{"present", "missing"})
+	if err == nil || !strings.Contains(err.Error(), "exact bucket job(s) not found: missing") {
+		t.Fatalf("missing exact job error = %v", err)
+	}
 }
 
 func (f *fakeBackend) ListTree(_ context.Context, prefix string, max int) ([]string, bool, error) {

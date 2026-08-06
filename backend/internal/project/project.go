@@ -134,6 +134,9 @@ type Storage struct {
 //	                              under logs/ and pr-logs/directory/.
 type Discovery struct {
 	Source string `yaml:"source,omitempty" json:"source,omitempty"`
+	// ExactJobs bypasses bucket-root enumeration and validates only these exact
+	// periodic or postsubmit job names. It cannot be combined with JobFilters.
+	ExactJobs []string `yaml:"exact_jobs,omitempty" json:"exact_jobs,omitempty"`
 	// JobFilters, when set, keeps only discovered job names that contain one
 	// of these substrings. Only used by the bucket source; omit to take every
 	// job in the bucket.
@@ -145,6 +148,20 @@ const (
 	DiscoveryTestGrid = "testgrid"
 	DiscoveryBucket   = "bucket"
 )
+
+func validExactJobName(name string) bool {
+	if len(name) == 0 || len(name) > 253 {
+		return false
+	}
+	for _, r := range name {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.' {
+			continue
+		}
+		return false
+	}
+	first := name[0]
+	return first >= 'a' && first <= 'z' || first >= 'A' && first <= 'Z' || first >= '0' && first <= '9'
+}
 
 // EffectiveDiscoverySource returns the configured discovery source, defaulting
 // to "testgrid" when unset.
@@ -1097,11 +1114,36 @@ func (c *Config) Validate() error {
 	switch c.EffectiveDiscoverySource() {
 	case DiscoveryTestGrid:
 		require("testgrid.dashboard", c.TestGrid.Dashboard)
+		if len(c.Discovery.ExactJobs) > 0 {
+			missing = append(missing, "discovery.exact_jobs requires discovery.source bucket")
+		}
+		if len(c.Discovery.JobFilters) > 0 {
+			missing = append(missing, "discovery.job_filters requires discovery.source bucket")
+		}
 	case DiscoveryBucket:
 		// No testgrid dashboard needed; jobs come from the bucket itself.
+		if len(c.Discovery.ExactJobs) > 0 && len(c.Discovery.JobFilters) > 0 {
+			missing = append(missing, "discovery.exact_jobs and discovery.job_filters cannot be combined")
+		}
 	default:
 		missing = append(missing, fmt.Sprintf("discovery.source %q (want %q or %q)",
 			c.Discovery.Source, DiscoveryTestGrid, DiscoveryBucket))
+	}
+	seenExactJobs := make(map[string]bool, len(c.Discovery.ExactJobs))
+	for i, name := range c.Discovery.ExactJobs {
+		trimmed := strings.TrimSpace(name)
+		if trimmed == "" || trimmed != name {
+			missing = append(missing, fmt.Sprintf("discovery.exact_jobs[%d] must be non-empty with no surrounding whitespace", i))
+			continue
+		}
+		if !validExactJobName(trimmed) {
+			missing = append(missing, fmt.Sprintf("discovery.exact_jobs[%d] %q is not a safe Prow job name", i, name))
+			continue
+		}
+		if seenExactJobs[trimmed] {
+			missing = append(missing, fmt.Sprintf("discovery.exact_jobs[%d] duplicates %q", i, name))
+		}
+		seenExactJobs[trimmed] = true
 	}
 
 	switch c.Storage.Provider {

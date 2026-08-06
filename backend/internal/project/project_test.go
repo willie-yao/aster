@@ -1324,3 +1324,32 @@ func TestFixAgentRuntimeNetworkDomains(t *testing.T) {
 		t.Fatalf("Orka model error = %v", err)
 	}
 }
+
+func TestValidateExactBucketJobs(t *testing.T) {
+	valid := validConfig()
+	valid.Discovery = Discovery{Source: DiscoveryBucket, ExactJobs: []string{"periodic-project-e2e", "ci_project.unit"}}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid exact jobs rejected: %v", err)
+	}
+
+	cases := []struct {
+		name      string
+		discovery Discovery
+		want      string
+	}{
+		{name: "combined filters", discovery: Discovery{Source: DiscoveryBucket, ExactJobs: []string{"job"}, JobFilters: []string{"job"}}, want: "cannot be combined"},
+		{name: "unsafe", discovery: Discovery{Source: DiscoveryBucket, ExactJobs: []string{"../job"}}, want: "not a safe Prow job name"},
+		{name: "whitespace", discovery: Discovery{Source: DiscoveryBucket, ExactJobs: []string{" job"}}, want: "no surrounding whitespace"},
+		{name: "duplicate", discovery: Discovery{Source: DiscoveryBucket, ExactJobs: []string{"job", "job"}}, want: "duplicates"},
+		{name: "testgrid", discovery: Discovery{Source: DiscoveryTestGrid, ExactJobs: []string{"job"}}, want: "requires discovery.source bucket"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.Discovery = tc.discovery
+			if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("validation error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
