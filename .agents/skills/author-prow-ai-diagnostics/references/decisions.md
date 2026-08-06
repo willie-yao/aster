@@ -3,9 +3,9 @@
 ## Contents
 
 - [Start or route to consumer setup](#start-or-route-to-consumer-setup)
-- [Choose evidence and holdouts](#choose-evidence-and-holdouts)
+- [Choose the corpus and splits](#choose-the-corpus-and-splits)
 - [Choose prompt guidance or a recipe](#choose-prompt-guidance-or-a-recipe)
-- [Classify a proposal](#classify-a-proposal)
+- [Classify prompt and recipe outcomes](#classify-prompt-and-recipe-outcomes)
 - [Handle unavailable providers](#handle-unavailable-providers)
 - [Promotion boundary](#promotion-boundary)
 
@@ -22,27 +22,31 @@ prompt, proposal, and report paths. It does not authorize deployment, source
 repository changes, upstream comments, Secret access, live-cluster changes, or
 recipe activation.
 
-## Choose evidence and holdouts
+## Choose the corpus and splits
 
 Pin source, test-infra, engine, consumer, job, build, and artifact identities
 before making project claims. Use exact revisions when they exist. Treat the
 current default branch only as supplemental context.
 
-Use at least two training examples for a recurring recipe candidate and reserve
-independent held-out examples. Prefer multiple failure classes when improving
-the general prompt. When several training builds share the same terminal wrapper,
-include an independent example where that wrapper has a different initiating
-cause before encoding a causal prompt rule. Never move a held-out case into
-training to make a weak candidate pass.
+Build a representative corpus before authoring. Split it into authoring,
+validation, and final-holdout cases before reading answer-bearing material. Use
+the authoring set for the first prompt, the validation set for bounded revision,
+and the final holdout once after freezing.
+
+Prefer multiple jobs, lifecycle phases, and initiating-error classes. When
+several builds share one terminal wrapper, include an independent example where
+that wrapper has a different initiating cause before encoding a causal rule.
+Never move a failed validation or final-holdout case into authoring and then count
+it as independent evidence.
 
 Keep answer-bearing material hidden during authoring. This includes locked
 reference diagnoses, expected dashboard answers, scoring regexes, manual
-intervention recipes, and prior proposed recipes for the same holdout. Freeze
-and hash proposals before a separate evaluator reads that material.
+intervention recipes, and prior proposed recipes for the final holdout. Freeze
+and hash output before a separate evaluator reads that material.
 
-If independent training examples are insufficient, improve only the prompt or
-classify the recipe candidate `unresolved`. Producing no recipe is a valid
-result.
+If authoring or validation evidence is insufficient, improve only stable prompt
+sections or classify the recipe candidate `unresolved`. Producing no recipe is a
+valid result.
 
 ## Choose prompt guidance or a recipe
 
@@ -56,41 +60,46 @@ it as a prompt-only change.
 Propose a recipe only when all of these are established:
 
 - A narrow failure relationship recurs across independent examples.
+- The best prompt still misses the same evidence relationship in at least two
+  independent prompt-only validation cases.
 - The model needs a repeatable evidence procedure beyond prompt guidance.
 - Stable bounded artifact paths can prove or disprove the relationship.
 - Trigger wording can preserve polarity and reject negation, reversal, and
   terminal wrappers.
 - The procedure does not encode an expected diagnosis.
 
-Do not create a recipe solely because a failure is important or because a known
-manual intervention worked once.
+Do not create a recipe solely because a failure is important, because it recurs,
+or because a known manual intervention worked once. If stable project knowledge
+is missing from the prompt, fix the prompt first.
 
-## Classify a proposal
+## Classify prompt and recipe outcomes
 
 Use one of these exact values in the deterministic report.
 
 ### `recommended`
 
-Use only when recurrence, applicability, required evidence, repeated cold
-held-out improvement, citation grounding, transient classification, and
-cross-project controls all pass. Keep the file in `proposals/skills/` until a
-separate promotion approval.
+Use only when the prompt or recipe shows repeated cold final-holdout
+improvement, grounded citations, correct transient classification, and no
+cross-project regression. A recipe also requires recurrence, safe applicability,
+and sufficient required evidence. Keep every recommended recipe in
+`proposals/skills/` until separate promotion approval.
 
 ### `experimental`
 
-Use when the hypothesis, trigger, and evidence procedure are defensible, but
-repeated held-out improvement or regression safety is not established.
+Use when prompt guidance or a recipe hypothesis is defensible and validation is
+promising, but repeated final-holdout improvement or regression safety is not
+established.
 
 ### `rejected`
 
-Use when the trigger is unsafe, evidence is unstable, the procedure overclaims,
-the candidate regresses held-out behavior, or it causes invalid citations or
-cross-project collisions. Preserve the rejected proposal and evidence unless
-the user asks to remove it.
+Use when prompt guidance or a recipe selects the wrong cause, evidence is
+unstable, the procedure overclaims, final-holdout behavior regresses, or invalid
+citations or cross-project collisions appear. Preserve rejected output and
+evidence unless the user asks to remove it.
 
 ### `unresolved`
 
-Use when training evidence, independent holdouts, provider execution, artifact
+Use when corpus evidence, independent final holdouts, provider execution, artifact
 access, or evaluation evidence is insufficient. State exactly what is missing.
 
 A parser pass is not evidence of diagnostic improvement. Similarity to a manual
@@ -105,8 +114,10 @@ is unavailable:
    validation.
 2. Freeze proposal and prompt hashes.
 3. Prepare exact condition-specific benchmark manifests and commands.
-4. Set model-backed trial status and recipe classification to `unresolved`.
-5. Do not claim improvement.
+4. Set dashboard-provider trial and behavior-improvement claims to `unresolved`.
+   A prompt or recipe may remain `experimental` when independent fresh-session
+   validation is promising, but it cannot become `recommended`.
+5. Do not claim dashboard model improvement.
 
 Record malformed tool calls, provider errors, and partial trials as outcomes.
 Do not silently discard them or tune on the same holdout afterward.

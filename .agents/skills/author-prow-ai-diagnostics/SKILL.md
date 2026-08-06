@@ -1,14 +1,14 @@
 ---
 name: author-prow-ai-diagnostics
-description: Investigate a prow-ai-dashboard consumer and its pinned Prow evidence to improve prompts/system.md, propose bounded consumer diagnostic recipes, validate applicability and grounding, benchmark held-out failures, classify proposals, and produce review artifacts without activating recipes. Use for offline diagnostic authoring, recipe evaluation, prompt improvement, or cross-project regression assessment after a valid consumer already exists.
+description: Diagnose a representative corpus of historical Prow and E2E failures for a prow-ai-dashboard consumer, use the artifact-grounded knowledge to improve prompts/system.md, validate the prompt on separate cases, propose recipes only for repeated prompt-only misses, benchmark final holdouts, and produce review artifacts without activating recipes. Use for offline diagnostic authoring, LLM CLI prompt improvement, recipe evaluation, or cross-project regression assessment after a valid consumer exists.
 ---
 
 # Author prow-ai-dashboard diagnostics
 
 Build a reviewable project diagnostic package from pinned source and Prow
-evidence. Write consumer prompt, proposal, and report files only. Keep the
-pinned engine, source repositories, artifacts, live systems, and active recipes
-read-only.
+evidence. Make deep failure diagnosis and prompt quality the primary workflow.
+Keep the pinned engine, source repositories, artifacts, live systems, and active
+recipes read-only.
 
 ## Safety and product boundary
 
@@ -20,15 +20,17 @@ read-only.
 - Keep this workflow separate from `$setup-prow-ai-consumer` and the engine's
   narrow system-prompt-generation skill.
 - Do not change engine built-ins or add project facts to the engine.
-- Write candidates only under `proposals/skills/`. Never activate a proposal
+- Write recipe candidates only under `proposals/skills/`. Never activate one
   without a later explicit approval naming the proposal.
-- Allow abstention. A prompt-only result or no changes can be correct.
+- Allow abstention. A prompt-only result, architecture-only improvement, or no
+  change can be correct.
 
-Read [references/decisions.md](references/decisions.md) before selecting training
-cases or classifying a proposal. Read
+Read [references/failure-corpus.md](references/failure-corpus.md) before selecting
+or diagnosing failures. Read [references/decisions.md](references/decisions.md)
+before choosing prompt guidance or recipes. Read
 [references/recipe-authoring.md](references/recipe-authoring.md) before writing
 recipe YAML. Read [references/benchmarking.md](references/benchmarking.md) before
-freezing proposals or opening held-out evaluation material.
+freezing output or opening final-holdout material.
 
 ## 1. Establish the engine and consumer
 
@@ -38,11 +40,11 @@ Determine or request:
 - Consumer directory and repository identity.
 - Source repository and exact source revision.
 - Deployment mode when it changes artifact or capability expectations.
-- Public artifact location.
+- Artifact location and whether access is public or explicitly authorized.
 - Test-infra repository, config path, and exact revision.
 - Exact Prow job scope.
-- Training and held-out build IDs.
-- Whether model-backed benchmark execution is available.
+- Whether fresh isolated LLM CLI sessions are available.
+- Whether dashboard-provider benchmark execution is available.
 
 Use one current engine CLI consistently:
 
@@ -63,70 +65,70 @@ engine command and output digest in `reports/diagnostic-authoring.md`.
 Do not modify the pinned engine checkout, public baseline consumers, or
 investigated source repositories. Create a disposable detached clone of the
 exact engine commit outside those directories and call it `<validation-engine>`.
-Run any generated Go validation tests only in that clone. Verify its HEAD before
-use and record the path and commit. Use separate disposable clean consumer copies
-for authoring validation and benchmark conditions.
+Run generated Go validation tests only in that clone. Verify and record its HEAD.
+Use separate disposable consumer copies for validation and benchmark conditions.
 
-Keep the selected consumer as the only destination for these outputs:
+Keep the selected consumer as the only destination for authoring output:
 
 ```text
 prompts/system.md
 proposals/skills/*.yaml
+reports/failure-corpus.json
 reports/diagnostic-authoring.md
 reports/benchmark-results.json
 ```
 
-Record the original prompt hash and active recipe state before editing. Record
-Git commits, SHA-256 hashes, selected profiles, and the engine-computed merged
-skill-set hash. A recipe has no independent schema version in the current engine;
-record that fact instead of adding an unsupported YAML field.
+Record the original prompt hash, active recipe state, Git identities, selected
+profiles, and the engine-computed merged skill-set hash before editing.
 
-## 3. Pin the evidence set
+## 3. Build and split a representative failure corpus
 
-Record all of these before drawing conclusions:
+Use engine discovery and authorized Prow artifact indexes to enumerate candidate
+failures across jobs, flavors, lifecycle phases, and initiating-error classes.
+Do not accept a caller-provided build list as representative without checking its
+coverage.
 
-- Source and consumer repositories and commits.
-- Engine commit.
-- Test-infra repository, config path, and revision.
-- Exact jobs and build IDs.
-- Training and held-out split.
-- Artifact manifests and hashes where available.
-- Existing prompt hash and active skill-set hash.
+Assign cases to `authoring`, `validation`, and `final_holdout` splits before
+reading answer-bearing material. Keep retries and duplicate symptoms from one
+causal event in the same split. Preserve final-holdout identities without reading
+their locked diagnoses or expected outputs.
 
-Use `prowjob.json` as the authoritative execution record for a historical run.
-Use current source only for stable architecture and relationship context. Do not
-let a moving default branch override the run's pinned revisions.
+Follow [references/failure-corpus.md](references/failure-corpus.md) for coverage
+targets, counterexamples, passing neighbors, split integrity, and stop conditions.
+Write the selected identities and achieved diversity to
+`reports/failure-corpus.json` before drafting the prompt.
 
-Keep answer-bearing holdout material embargoed during authoring. Do not inspect
-locked diagnoses, expected answers, scoring regexes, manual intervention
-recipes, or selected held-out dashboard output. Give independent authoring
-agents only training evidence and excluded held-out IDs.
+## 4. Diagnose every authoring failure
 
-## 4. Investigate stable project knowledge
+For each authoring case, trace from the effective Prow execution record to the
+initiating error, terminal wrapper, component evidence, pinned source control
+flow, competing hypotheses, transient boundary, and any passing comparison.
 
-Use bounded reads and exact line ranges. Prefer at most a small set of high-value
-files per claim instead of ingesting whole repositories or large E2E suites.
-Investigate:
+Use `prowjob.json` as the authoritative execution record. List the artifact tree
+before declaring evidence absent. Do not stop at a timeout, generic exit status,
+cleanup error, or the last log line. Do not infer ownership from timing proximity.
 
-- Architecture and diagnostic lifecycle.
-- Controller, component, API, and resource relationships.
-- Test and Prow job families.
-- Artifact production and stable path patterns.
+Record one structured case entry in `reports/failure-corpus.json` before using
+that case to change the prompt. Unsupported details remain `unresolved`.
+
+## 5. Extract stable project knowledge
+
+Synthesize only knowledge supported by pinned source or multiple relevant cases:
+
+- Architecture and ownership relationships.
+- Diagnostic and reconciliation lifecycle.
+- Job and flavor distinctions.
+- Artifact paths and what they prove.
+- Failure rules with competing-cause boundaries.
+- Transient rules with same-run recovery and non-transient evidence.
 - Relevant source repositories.
-- Recurring historical failure classes.
-- Evidence that proves or disproves each class.
-- Transient signals and their non-transient boundaries.
+- Important unresolved details.
 
-Use multiple training failures from more than one failure class. If repeated
-training builds share one terminal wrapper, inspect an independent cause for the
-same wrapper before writing a causal rule. Do not treat an issue discussion as
-proof without pinned source and artifact support. Do not execute source tests or
-binaries.
+Do not convert one repeatedly observed wrapper into a preferred cause without an
+independent same-wrapper, different-cause check. Use strong existing consumer
+prompts only as structural exemplars, never as sources of project facts.
 
-Log every inspected source, revision, artifact, and bounded range in the
-report. Put unsupported important details in `Unresolved` rather than guessing.
-
-## 5. Improve `prompts/system.md`
+## 6. Draft `prompts/system.md`
 
 Preserve these level-two sections exactly once and in this order:
 
@@ -142,71 +144,85 @@ Preserve these level-two sections exactly once and in this order:
 ## Unresolved details
 ```
 
-Write short operational rules grounded in inspected evidence. Preserve exact
-case-sensitive paths, APIs, resources, and repositories. Keep the guidance broad
-enough for several jobs and failure classes. Do not move a narrow, unvalidated
-recipe hypothesis into the prompt. Prompt-only causal rules need competing-cause
-evidence and the same held-out regression discipline as recipes.
+Write concise operational rules grounded in the corpus. Preserve exact
+case-sensitive paths, APIs, resources, and repositories. Keep guidance useful
+across jobs and failure classes. Do not move an unvalidated recipe hypothesis or
+validation answer into the prompt.
 
-Do not invent artifact paths or tell the analyzer to use unavailable live or
-local capabilities. Mark a failure transient only when the same run shows later
-success or forward progress. Give every transient rule a non-transient boundary.
-Separate initiating errors from terminal wrappers and timeouts.
+Do not invent artifact paths or unavailable investigation capabilities. Separate
+initiating errors from terminal wrappers. Mark a failure transient only when the
+same run shows later success or forward progress, and state the non-transient
+boundary.
 
-Run the current prompt validator and `onboard doctor` after editing. If the
-engine has no prompt-validation CLI, create one temporary Go test only in
-`<validation-engine>/backend/internal/onboard/promptauthor`. Have it read the
-consumer file and call `promptauthor.Validate`. Run it with the existing
-promptauthor tests, then remove the temporary file from the disposable clone. Do
-not reimplement the heading contract in shell or Python.
+Validate the actual prompt with `promptauthor.Validate` in the disposable engine
+clone, then run `onboard doctor` against a disposable consumer copy.
 
-## 6. Propose only justified recipes
+## 7. Run prompt-only validation and revision
 
-For each recurring class, decide whether prompt guidance is sufficient. When a
-recipe is justified, write it to:
+Evaluate the proposed prompt on the validation split before generating recipes.
+Use fresh isolated LLM CLI or agent sessions only in a user-approved environment.
+Transmit the minimum public or explicitly authorized evidence. Do not send
+private source or artifacts to a provider without explicit authorization. Give
+each session the proposed prompt and raw pinned evidence, but not the corpus
+diagnosis, expected answer, prior model output, or recipe.
+
+Compare initiating error, causal chain, ownership discipline, transient result,
+and citations with the artifact-backed diagnosis. Revise only stable prompt
+guidance. Re-run earlier validation cases after each revision. Use at most two
+bounded revision rounds by default.
+
+Record prompt version hashes and per-case outcomes in
+`reports/benchmark-results.json`. If fresh sessions are unavailable, complete the
+corpus and deterministic rubric, mark independent prompt validation unavailable,
+and do not claim generalization.
+
+## 8. Propose recipes only for repeated prompt-only misses
+
+Consider a recipe only after the best prompt still misses the same evidence
+relationship across at least two independent cases. Do not create a recipe to
+compensate for stable project knowledge missing from the prompt.
+
+For every candidate, record the prompt-only miss case IDs, what the prompt
+already supplied, what evidence procedure remained missing, and why another
+prompt revision would be broader or less reliable than a recipe. If the prompt
+solves the class, generate no recipe.
+
+Write justified candidates only to:
 
 ```text
 proposals/skills/<candidate-id>.yaml
 ```
 
-Never write it to active `skills/`. Do not embed build IDs, generated object
-instances, pod names, or expected answers. Require evidence that can disprove as
-well as support the hypothesis. Keep triggers relationship-aware and bounded.
+Never write them to the authoring consumer's active `skills/`. Require evidence
+that can disprove as well as support the hypothesis. Prefer safe initial failure
+signal matching over final-draft-only activation.
 
-Follow the current engine contract in `docs/skills.md`. Use the detailed trigger,
-evidence, and procedure rules in
-[references/recipe-authoring.md](references/recipe-authoring.md).
+## 9. Generate and run recipe applicability tests
 
-## 7. Generate and run applicability tests
-
-For every candidate, create a deterministic matrix that covers positive,
+For every candidate, create a deterministic matrix covering positive,
 unrelated, negated, reversed, missing-evidence, partial-evidence, collision,
-overlapping-vocabulary, case-sensitive-path, and terminal-wrapper cases.
+overlapping-vocabulary, normalized-path, successful-response, contradictory, and
+terminal-wrapper cases.
 
-Exercise the matrix through the current engine recipe implementation. Do not
-replace Go matching or evidence logic with Python or shell regexes. Validate the
-proposal in a disposable consumer by temporarily copying it to active `skills/`
-there, never in the authoring consumer.
+Exercise the matrix through the current engine implementation in the disposable
+engine and consumer copies. Do not replace Go matching or evidence semantics
+with Python or shell regexes. Record every case and result in
+`reports/benchmark-results.json`.
 
-Record every case and result in `reports/benchmark-results.json`. A lexical match
-without the intended causal relationship is a failure.
+## 10. Freeze authoring output
 
-## 8. Freeze prompt and proposals
+Before revealing final-holdout answers or manual comparison material:
 
-Before revealing any held-out answer or manual comparison:
+1. Finish the failure corpus and prompt-only validation rounds.
+2. Finish prompt and proposal edits.
+3. Finish deterministic prompt and applicability validation.
+4. Record prompt versions, proposal hashes, corpus hash, active skill-set hash,
+   applicability snapshot hash, and all pinned identities.
+5. Mark the authoring set frozen in `reports/diagnostic-authoring.md`.
 
-1. Finish prompt and proposal edits.
-2. Finish deterministic applicability validation.
-3. Record the proposed prompt hash, every proposal hash, the active skill-set
-   hash, the applicability snapshot hash, and all pinned identities.
-4. Mark the proposal set frozen in the authoring report.
-5. Give the frozen files to independent Kueue and GCP PD CSI authoring validators
-   when performing the cross-project evaluation. Do not give either validator
-   the other project's answers or recipes.
+Do not revise from a final holdout and still count it as blind evidence.
 
-Do not tune a frozen proposal on its held-out case and still call that case blind.
-
-## 9. Run deterministic validation
+## 11. Run deterministic validation
 
 At minimum run against the disposable validation clone:
 
@@ -223,24 +239,24 @@ go -C <validation-engine>/backend test ./internal/e2e \
 
 go -C <validation-engine>/backend run ./cmd/fetcher onboard doctor \
   -project-dir <disposable-consumer>
+
+python3 -m json.tool <consumer>/reports/failure-corpus.json >/dev/null
+python3 -m json.tool <consumer>/reports/benchmark-results.json >/dev/null
 ```
 
-The committed benchmark tests validate the engine suite, not derived condition
-manifests. After condition manifests are created, add one temporary provider-free
-test only in `<validation-engine>/backend/internal/e2e`. Enumerate every derived
-manifest and matching clean consumer directory, call `loadBenchmarkManifest` and
-`validateBenchmarkProjectDir`, load the merged recipe set, and fail on any
-mismatch. Run it, record the full hashes and IDs, then remove the temporary file
-from the disposable clone.
+Validate derived condition manifests with a temporary provider-free test only in
+`<validation-engine>/backend/internal/e2e`. Call the existing manifest loader,
+clean-consumer identity checker, project loader, and merged recipe loader. Remove
+the temporary test from the disposable clone afterward. Keep the pinned engine
+clean and do not change Go production code during authoring.
 
-Use exact current test names if they differ at the selected engine revision. Run
-`make check-repo-map` only if repository package layout changes. Do not change Go
-production code during authoring. Confirm the pinned engine remains clean and no
-temporary validation test remains in the disposable clone.
+## 12. Evaluate the final holdout and provider matrix
 
-## 10. Benchmark held-out failures
+After freezing, use a fresh evaluator for the final holdout. Do not reuse the
+prompt-authoring session. Compare the frozen prompt-only diagnosis with the
+artifact-backed reference before considering recipe behavior.
 
-After the freeze, use a separate evaluator and the A/B/C matrix:
+Then use the cold A/B/C engine matrix when provider access is available:
 
 ```text
 A. Existing prompt and existing active skills
@@ -248,46 +264,36 @@ B. Proposed prompt and existing active skills
 C. Proposed prompt and proposed recipes active only in a disposable copy
 ```
 
-Use cold caches and separate result files. Run repeated trials when access and
-cost permit. Include the target project and an unrelated control. For the frozen
-cross-project evaluation, include Kueue, GCP PD CSI, and Secrets Store CSI.
+Include unrelated controls, separate caches, and repeated trials. If provider
+access is unavailable, preserve exact manifests and commands, mark model-backed
+results `unresolved`, and do not infer improvement from parser or LLM CLI results.
 
-Follow [references/benchmarking.md](references/benchmarking.md) for manifest
-repinning, command shape, telemetry, blind evaluation, and JSON structure.
+## 13. Classify and report
 
-If provider access is unavailable, preserve exact manifests and commands, mark
-model-backed results `unresolved`, and do not claim improvement.
-
-## 11. Classify and report
-
-Classify every candidate exactly as `recommended`, `experimental`, `rejected`,
-or `unresolved` using [references/decisions.md](references/decisions.md). Even a
-`recommended` proposal remains inactive.
+Classify every prompt assessment and recipe as `recommended`, `experimental`,
+`rejected`, or `unresolved`. Even a `recommended` recipe remains inactive.
 
 Write `reports/diagnostic-authoring.md` with:
 
-- Pinned identities and hashes.
-- Evidence sources and historical samples.
-- Training and held-out separation.
-- Prompt changes and prompt-only assessment.
-- Recipe rationale and applicability results.
-- A/B/C benchmark matrix and cross-project controls.
-- Recipe classifications and missing evidence.
-- Provider usage, duration, malformed calls, and limitations.
+- Corpus selection, diversity, and split integrity.
+- Pinned identities, hashes, and evidence sources.
+- Per-class diagnosis summary and unresolved evidence.
+- Prompt versions, validation cases, revisions, and prompt-only assessment.
+- Recipe rationale tied to repeated prompt-only miss case IDs.
+- Applicability tests, final holdout, A/B/C matrix, and controls.
+- Provider or LLM CLI usage, duration, malformed calls, and limitations.
 - Generic engine gaps without implementing them.
-- Explicit promotion recommendations.
-- Confirmation that no recipe was activated.
+- Promotion recommendations and confirmation that no recipe was activated.
 
-Write deterministic machine-readable classifications and trial outcomes to
-`reports/benchmark-results.json`. Do not make a downstream consumer parse prose
-to learn a recipe's classification.
+Keep deterministic corpus, classifications, and trials in the JSON reports. Do
+not make downstream consumers parse prose to determine outcomes.
 
-## 12. Finish without promotion
+## 14. Finish without promotion
 
 Run final doctor, loader, skill validator, relevant Go tests, and `git diff
 --check`. Review the exact changed files and ensure no active `skills/` file was
 created or modified.
 
-Report the output paths, hashes, validation commands, benchmark status,
-classifications, unresolved items, and the exact approval needed for any later
-promotion. Do not deploy or promote as part of this workflow.
+Report the corpus coverage, output paths, hashes, prompt revisions, recipe count,
+validation status, final classifications, unresolved items, and exact approval
+needed for any later promotion. Do not deploy or promote as part of this workflow.

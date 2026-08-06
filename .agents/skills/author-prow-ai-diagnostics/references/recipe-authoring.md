@@ -11,6 +11,11 @@
 
 ## Use the current engine contract
 
+A recipe is a second-line intervention. Before authoring YAML, require the
+failure corpus to identify at least two independent prompt-only misses for the
+same evidence relationship. Record those case IDs and the prompt hash. If prompt
+guidance was incomplete, revise the prompt instead of creating a recipe.
+
 Read the selected engine revision's `docs/skills.md` and
 `backend/internal/ai/skills/skills.go` before authoring. They are the source of
 truth for fields, matching, ordering, profiles, evidence satisfaction, and
@@ -40,7 +45,7 @@ specific recipe as an override.
 
 Treat a final-draft-only trigger as high risk because it can activate after the
 model invents the relationship and then reinforce that draft. Do not classify
-such a proposal `recommended` without repeated held-out evidence. Prefer a safe
+such a proposal `recommended` without repeated final-holdout evidence. Prefer a safe
 initial failure-signal match plus evidence that distinguishes the closest
 competing cause.
 
@@ -112,9 +117,10 @@ Include these safeguards when relevant:
 
 ## Build the applicability matrix
 
-Record every case with a stable ID, input draft text, artifact paths and bounded
-content when needed, expected matched recipe IDs, expected applicable evidence
-groups, and expected satisfaction result.
+Record every case with a stable ID, its corpus split, linked prompt-only miss
+case IDs, input failure signal or draft text, artifact paths and bounded content,
+expected matched recipe IDs, expected applicable evidence groups, and expected
+satisfaction result.
 
 Cover at least:
 
@@ -163,6 +169,6 @@ go test ./internal/ai/skills -count=1
    profiles, and full skill-set hash.
 
 A temporary test must contain only the frozen proposal paths and the explicit
-matrix. It must not contain locked diagnoses or held-out answers. If the engine
+matrix. It must not contain locked diagnoses or final-holdout answers. If the engine
 lacks a stable non-test command for this workflow, record that as a generic
 engine gap instead of adding a new production package during authoring.

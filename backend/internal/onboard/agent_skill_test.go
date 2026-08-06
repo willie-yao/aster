@@ -128,10 +128,10 @@ func TestDiagnosticAuthoringAgentSkill(t *testing.T) {
 		}
 	}
 	for _, anchor := range []string{
-		"onboard doctor", "<validation-engine>", "pinned engine remains clean", "proposals/skills/", "reports/diagnostic-authoring.md",
-		"reports/benchmark-results.json",
+		"onboard doctor", "<validation-engine>", "pinned engine checkout", "proposals/skills/", "reports/failure-corpus.json", "reports/diagnostic-authoring.md",
+		"reports/benchmark-results.json", "python3 -m json.tool", "fresh isolated LLM CLI", "private source or artifacts to a provider", "repeated prompt-only misses", "final holdout",
 		"recommended", "experimental", "rejected", "unresolved",
-		"Never write it to active `skills/`", "without a later explicit approval",
+		"Never write them to the authoring consumer's active `skills/`", "without a later explicit approval",
 	} {
 		if !strings.Contains(text, anchor) {
 			t.Errorf("skill missing %q", anchor)
@@ -160,17 +160,18 @@ func TestDiagnosticAuthoringAgentSkill(t *testing.T) {
 	if openAI.Interface.DisplayName == "" || len(openAI.Interface.ShortDescription) < 25 || len(openAI.Interface.ShortDescription) > 64 {
 		t.Fatalf("openai interface metadata = %+v", openAI.Interface)
 	}
-	if !strings.Contains(openAI.Interface.DefaultPrompt, "$author-prow-ai-diagnostics") || !strings.Contains(openAI.Interface.DefaultPrompt, "without activating recipes") {
+	if !strings.Contains(openAI.Interface.DefaultPrompt, "$author-prow-ai-diagnostics") || !strings.Contains(openAI.Interface.DefaultPrompt, "representative failure corpus") || !strings.Contains(openAI.Interface.DefaultPrompt, "prompt-only misses") || !strings.Contains(openAI.Interface.DefaultPrompt, "without activating") {
 		t.Fatalf("default prompt does not preserve the skill boundary: %q", openAI.Interface.DefaultPrompt)
 	}
 
 	references := map[string][]string{
-		"decisions.md": {"## Choose evidence and holdouts", "## Classify a proposal", "## Promotion boundary"},
+		"failure-corpus.md": {"## Build a representative corpus", "At least six diagnosed failures", "authorized Prow artifact indexes", "same-wrapper, different-cause counterexample", "## Diagnose each failure", "reports/failure-corpus.json", `"split": "authoring"`, "## Validate the prompt with fresh sessions", "two bounded revision rounds", "## Apply the prompt quality rubric"},
+		"decisions.md":      {"## Choose the corpus and splits", "prompt-only validation cases", "## Classify prompt and recipe outcomes", "## Promotion boundary"},
 		"recipe-authoring.md": {
-			"## Design triggers", "## Build the applicability matrix", "## Run deterministic engine validation",
+			"second-line intervention", "at least two independent prompt-only misses", "## Design triggers", "## Build the applicability matrix", "## Run deterministic engine validation",
 			"bounded failure signal", "final-draft-only trigger", "positive successful-operation evidence", "competing initiating cause", "slash-normalizes and lowercases", "Doctor does not validate recipe YAML", "ParseAndValidate",
 		},
-		"benchmarking.md": {"## Protect the blind boundary", "## Validate derived manifests without a provider", "validateBenchmarkProjectDir", "## Run the benchmark matrix", "## Write deterministic results", "BENCH_REPETITIONS=3", "quality floors failed"},
+		"benchmarking.md": {"## Protect the blind boundary", "## Record prompt-authoring validation", "authoring_validation", "## Validate derived manifests without a provider", "validateBenchmarkProjectDir", "## Run the benchmark matrix", "## Write deterministic results", "BENCH_REPETITIONS=3", "quality floors failed"},
 	}
 	for name, anchors := range references {
 		raw, err := os.ReadFile(filepath.Join(skillDir, "references", name))

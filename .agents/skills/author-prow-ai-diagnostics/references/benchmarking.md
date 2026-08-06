@@ -3,6 +3,7 @@
 ## Contents
 
 - [Protect the blind boundary](#protect-the-blind-boundary)
+- [Record prompt-authoring validation](#record-prompt-authoring-validation)
 - [Freeze authoring output](#freeze-authoring-output)
 - [Prepare condition copies](#prepare-condition-copies)
 - [Validate derived manifests without a provider](#validate-derived-manifests-without-a-provider)
@@ -14,24 +15,37 @@
 
 During authoring, do not read or expose locked reference diagnoses, expected
 answers, manual recipes, scoring regexes, forbidden-answer regexes, or prior
-held-out dashboard output. Give authoring agents only pinned identities, public
-source, artifact access, approved training builds, and excluded held-out build
-IDs.
+final-holdout dashboard output. Give prompt authors only the authoring split.
+Give fresh validation sessions the proposed prompt plus raw validation evidence,
+not the corpus diagnosis. Keep final-holdout cases excluded until freeze.
 
 After prompt and proposal hashes are frozen, use a separate evaluator for
 answer-bearing material. Do not reuse the authoring agent as the blind evaluator.
 Anonymize project and model labels when practical.
 
+## Record prompt-authoring validation
+
+Keep fresh LLM CLI validation distinct from the dashboard provider benchmark.
+For each validation case, record the prompt hash, anonymous evaluator label,
+input split, initiating-error result, causal-chain result, transient result,
+citations, ownership discipline, duration, usage when reported, and whether the
+session saw any expected answer.
+
+Fresh-session validation may justify another prompt revision. It cannot establish
+engine condition B or C behavior, cache acceptance, Tool compatibility, or
+cross-project regression safety. Preserve those as separate benchmark outcomes.
+
 ## Freeze authoring output
 
-Before any held-out result is revealed, record SHA-256 hashes for:
+Before any final-holdout result is revealed, record SHA-256 hashes for:
 
 - Existing and proposed `prompts/system.md`.
 - Existing active recipe files and the engine-computed merged skill-set hash.
 - Every proposal file.
 - The authoring report and applicability matrix snapshot.
 - Engine commit, consumer commit, source commit, test-infra revision, selected
-  jobs, training builds, held-out builds, and artifact manifests.
+  jobs, authoring builds, validation builds, final-holdout builds, and artifact
+  manifests.
 
 Use a timestamped evidence directory and append-only result files. Do not delete
 failed or malformed trials.
@@ -104,7 +118,7 @@ access and cost permit. Record cold-cache state, cache generation, duration,
 usage, provider attempts, tool failures, malformed calls, citations, source
 grounding, initiating error, transient outcome, and score dimensions.
 
-At minimum include the target held-out case and an unrelated control. For the
+At minimum include the target final-holdout case and an unrelated control. For the
 frozen cross-project suite, include Kueue, GCP PD CSI, and Secrets Store CSI.
 
 ## Evaluate without tuning
@@ -113,9 +127,9 @@ Compare A, B, and C separately so prompt value is not attributed to a recipe.
 Score initiating-error accuracy, ownership, transient classification, citation
 validity, source grounding, and causal overclaiming.
 
-Do not revise a proposal after seeing its held-out answer and then count the same
+Do not revise a proposal after seeing its final-holdout answer and then count the same
 case as blind validation. Preserve failures. A later revision requires a new
-holdout or an `experimental` or `unresolved` classification.
+final holdout or an `experimental` or `unresolved` classification.
 
 Do not count a usable-looking text response as a successful trial when tool calls
 were malformed or unexecuted, required artifact reads were zero, finalization was
@@ -124,12 +138,13 @@ persistence was rejected. Record the structured provider limitation and keep the
 behavioral conclusion unresolved.
 
 Read any embargoed manual comparison only after frozen proposal hashes exist.
-Use it as a comparison, not as training evidence and not as proof that the
+Use it as a comparison, not as authoring evidence and not as proof that the
 independent proposal works.
 
 ## Write deterministic results
 
-Write `reports/benchmark-results.json` as one JSON object with at least:
+Write `reports/benchmark-results.json` as one JSON object with separate
+`authoring_validation` and engine `trials` arrays. At minimum include:
 
 ```json
 {
@@ -144,6 +159,15 @@ Write `reports/benchmark-results.json` as one JSON object with at least:
     "proposed_prompt_sha256": "<sha256>",
     "existing_skill_set_hash": "<engine hash>"
   },
+  "corpus": {
+    "sha256": "<sha256>",
+    "authoring_cases": [],
+    "validation_cases": [],
+    "final_holdout_cases": [],
+    "coverage_limitations": []
+  },
+  "prompt_versions": [],
+  "authoring_validation": [],
   "proposals": [
     {
       "id": "candidate-id",
