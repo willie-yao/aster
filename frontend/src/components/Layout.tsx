@@ -13,6 +13,7 @@ import { useColorScheme } from "@mui/material/styles";
 import { useState } from "react";
 import { Link as RouterLink, Outlet, useLocation } from "react-router-dom";
 import { SearchBar } from "./SearchBar";
+import { RouteErrorBoundary } from "./RouteErrorBoundary";
 import { ProfileMenu } from "./ProfileMenu";
 import { FetchStatusControl, FetchStatusStrip } from "./FetchStatus";
 import { useManifest } from "../hooks/useManifest";
@@ -269,7 +270,9 @@ export function Layout() {
         onDismiss={setDismissedFetchStrip}
       />
       <Container component="main" maxWidth="xl" sx={{ minWidth: 0, py: { xs: 2, sm: 3 } }}>
-        <Outlet />
+        <RouteErrorBoundary resetKey={`${location.pathname}${location.search}`}>
+          <Outlet />
+        </RouteErrorBoundary>
       </Container>
     </Box>
     </FetchStatusContext.Provider>

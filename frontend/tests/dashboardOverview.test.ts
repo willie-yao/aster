@@ -11,10 +11,15 @@ import {
   attentionSignal,
   countLabel,
   disclosureLabel,
+  mergeOverviewHistoryState,
   needsAttentionSummary,
   orderedDashboardBranches,
+  overviewBranchFromParam,
+  overviewStatusFromParam,
+  readOverviewHistoryState,
+  withOverviewFilters,
 } from "../src/lib/dashboardOverview.js";
-import type { JobSummary, PatternAnalysis } from "../src/types/dashboard.js";
+import type { BuildResult, JobSummary, PatternAnalysis } from "../src/types/dashboard.js";
 
 const vite = await createServer({
   root: process.cwd(),
@@ -61,6 +66,13 @@ const {
     prefix: string;
     stale: boolean;
     job?: JobSummary;
+  }) => ReturnType<typeof createElement>;
+};
+const { RunTimeline } = (await vite.ssrLoadModule("/src/components/RunTimeline.tsx")) as {
+  RunTimeline: (props: {
+    runs: BuildResult[];
+    selectedBuildId?: string;
+    onSelect: (buildId: string) => void;
   }) => ReturnType<typeof createElement>;
 };
 const { defaultTheme } = (await vite.ssrLoadModule("/src/theme/index.ts")) as {
@@ -131,8 +143,38 @@ test("job health ledger keeps job and run links separate", () => {
   assert.match(html, /role="cell"[^>]*>[\s\S]*<h3[^>]*>CAPZ E2E<\/h3>/);
   assert.match(html, /href="\/job\/capz-periodic-e2e-main"/);
   assert.match(html, /href="\/job\/capz-periodic-e2e-main\?run=123"/);
+  assert.match(html, /aria-label="Run 123, passed, Aug 5, 2026"/);
   assert.match(html, />Passing</);
   assert.doesNotMatch(html, /<a\b[^>]*>(?:(?!<\/a>)[\s\S])*<a\b/);
+});
+
+test("detail run controls include result build and date context", () => {
+  const run: BuildResult = {
+    build_id: "123",
+    job_name: "capz-periodic-e2e-main",
+    started: "2026-08-05T10:00:00Z",
+    finished: "2026-08-05T11:00:00Z",
+    passed: false,
+    result: "FAILURE",
+    duration_seconds: 3600,
+    commit: "abcdef12",
+    prow_url: "https://prow.example/123",
+    web_url: "https://storage.example/123",
+    build_log_url: "https://storage.example/123/build-log.txt",
+    test_cases: [],
+    tests_total: 1,
+    tests_passed: 0,
+    tests_failed: 1,
+    tests_skipped: 0,
+  };
+  const html = render(createElement(RunTimeline, {
+    runs: [run],
+    selectedBuildId: "123",
+    onSelect: () => undefined,
+  }));
+
+  assert.match(html, /aria-label="#123 — Failed · Aug 5, 2026"/);
+  assert.match(html, />8\/5</);
 });
 
 test("overview count labels place dynamic counts in Needs attention", () => {
@@ -230,6 +272,57 @@ test("featured diagnosis link precedes separate recent-run links", () => {
   assert.doesNotMatch(html, /tabindex="[1-9]/);
 });
 
+test("overview filters use canonical query parameters", () => {
+  assert.equal(overviewStatusFromParam("flaky"), "FLAKY");
+  assert.equal(overviewStatusFromParam("unknown"), "ALL");
+  assert.equal(overviewBranchFromParam("main", ["main", "release-1.26"]), "main");
+  assert.equal(overviewBranchFromParam("release-1.25", ["main"]), "ALL");
+
+  const filtered = withOverviewFilters(
+    new URLSearchParams("trace=1&status=passing&branch=release-1.24"),
+    "FLAKY",
+    "main",
+  );
+  assert.equal(filtered.toString(), "trace=1&status=flaky&branch=main");
+  assert.equal(withOverviewFilters(filtered, "ALL", "ALL").toString(), "trace=1");
+});
+
+test("overview history state preserves disclosures and scroll per entry", () => {
+  const merged = mergeOverviewHistoryState(
+    { key: "overview", idx: 2, usr: { caller: "kept" } },
+    {
+      additionalOpen: true,
+      expandedGroups: { "Persistent failures": true },
+      scrollY: 712,
+    },
+  );
+  assert.deepEqual(merged, {
+    key: "overview",
+    idx: 2,
+    usr: {
+      caller: "kept",
+      overview: {
+        additionalOpen: true,
+        resolvedOpen: false,
+        expandedGroups: { "Persistent failures": true },
+        scrollY: 712,
+      },
+    },
+  });
+  assert.deepEqual(readOverviewHistoryState(merged), {
+    additionalOpen: true,
+    resolvedOpen: false,
+    expandedGroups: { "Persistent failures": true },
+    scrollY: 712,
+  });
+  assert.deepEqual(readOverviewHistoryState({ usr: { overview: { scrollY: -5, expandedGroups: { valid: true, invalid: "yes" } } } }), {
+    additionalOpen: false,
+    resolvedOpen: false,
+    expandedGroups: { valid: true },
+    scrollY: 0,
+  });
+});
+
 test("dashboard branches keep main first and release branches newest first", () => {
   const branches = orderedDashboardBranches([
     job({ branch: "release-1.24" }),
@@ -249,6 +342,7 @@ test("overview source uses ledger rows without nested panel scrolling", () => {
   const search = readFileSync(resolve(process.cwd(), "src/components/SearchBar.tsx"), "utf8");
   const sparkline = readFileSync(resolve(process.cwd(), "src/components/Sparkline.tsx"), "utf8");
   const overviewTheme = readFileSync(resolve(process.cwd(), "src/theme/overview.ts"), "utf8");
+  const sectionNav = readFileSync(resolve(process.cwd(), "src/components/OverviewSectionNav.tsx"), "utf8");
 
   assert.match(dashboard, /<JobHealthTable sections=/);
   assert.doesNotMatch(dashboard, /JobCard/);
@@ -269,17 +363,32 @@ test("overview source uses ledger rows without nested panel scrolling", () => {
   assert.match(attention, /destinationLabel=/);
   assert.match(attention, /data-featured-diagnosis-link/);
   assert.match(attention, /fontSize: "18px"/);
+  assert.match(attention, /maxInlineSize: "56ch"/);
+  assert.match(attention, /persistOverviewHistoryState/);
+  assert.match(attention, /scrollMarginTop: \{ xs: "128px", lg: "72px" \}/);
   assert.doesNotMatch(attention, /fontSize: lead \? "24px" : "16px"/);
   assert.match(filters, /minHeight: 44/);
   assert.match(filters, /height: 44/);
   assert.match(filters, /boxShadow: "inset 0 -3px 0/);
   assert.match(filters, /color: "text.primary"/);
+  assert.match(filters, /borderRadius: "0 !important"/);
+  assert.match(filters, /borderRadius: "4px 0 0 4px !important"/);
+  assert.match(filters, /borderRadius: "0 4px 4px 0 !important"/);
   assert.match(health, /onFilterClick\?\.\(active \? "ALL" : row\.status\)/);
   assert.match(health, /borderLeft: "1px solid"/);
   assert.doesNotMatch(health, /borderRight:/);
   assert.match(search, /width: 44[\s\S]*height: 44[\s\S]*p: 0/);
   assert.match(sparkline, /repeat\(4, 44px\)/);
   assert.match(sparkline, /width: 44[\s\S]*height: 44/);
+  assert.match(sparkline, /formatAccessibleDate\(run\.timestamp\)/);
+  assert.match(dashboard, /useSearchParams\(\)/);
+  assert.match(dashboard, /persistOverviewHistoryState\(\{ scrollY: window\.scrollY \}\)/);
+  assert.match(dashboard, /<OverviewSectionNav \/>/);
+  assert.match(sectionNav, /aria-label="Overview sections"/);
+  assert.match(sectionNav, /minHeight: 44/);
+  assert.match(sectionNav, /prefers-reduced-motion: reduce/);
+  assert.match(sectionNav, /target\.focus\(\{ preventScroll: true \}\)/);
+  assert.match(sectionNav, /target\.scrollIntoView/);
   assert.match(ledger, /@media \(min-width: 1024px\)/);
   assert.match(ledger, /JobHealthSection/);
   assert.match(ledger, /function MobileJobRow/);

@@ -64,10 +64,12 @@ export function OverviewFilters({
             py: 0.5,
             border: "1px solid !important",
             borderColor: "divider !important",
-            borderRadius: "4px !important",
+            borderRadius: "0 !important",
             color: "text.secondary",
             textTransform: "none",
             ...overviewTypography.tableHeading,
+            "&:first-of-type": { borderRadius: "4px 0 0 4px !important" },
+            "&:last-of-type": { borderRadius: "0 4px 4px 0 !important" },
             "&:not(:first-of-type)": { ml: "-1px" },
             "&:hover": { bgcolor: "surface.containerHigh", color: "text.primary" },
             "&.Mui-selected": {

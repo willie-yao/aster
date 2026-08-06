@@ -2,7 +2,6 @@ import { useState, useEffect } from "react";
 import type { AnalysisCorrectionState } from "../types/corrections";
 import type {
   Dashboard,
-  FlakinessReport,
   JobDetail,
   RemediationState,
   ResolvedState,
@@ -10,6 +9,7 @@ import type {
 } from "../types/dashboard";
 import { jobDataFilename } from "../lib/utils";
 import { searchIndexPath } from "../lib/search";
+import { normalizeFlakinessReport, type FlakinessReportWire } from "../lib/flakinessReport";
 
 const DATA_BASE =
   import.meta.env.VITE_DATA_URL ?? `${import.meta.env.BASE_URL}data`;
@@ -64,7 +64,11 @@ export function useDashboard() {
 }
 
 export function useFlakinessReport() {
-  return useJSON<FlakinessReport>("flakiness.json");
+  const result = useJSON<FlakinessReportWire>("flakiness.json");
+  return {
+    ...result,
+    data: result.data ? normalizeFlakinessReport(result.data) : null,
+  };
 }
 
 export function useJobDetail(jobName: string | undefined) {

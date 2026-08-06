@@ -3,6 +3,7 @@ import Tooltip from "@mui/material/Tooltip";
 import { Link as RouterLink } from "react-router-dom";
 import type { RunSummary } from "../types/dashboard";
 import { jobRunPath } from "../lib/routes";
+import { formatAccessibleDate } from "../lib/utils";
 import { dotColorFor } from "../theme";
 
 interface SparklineProps {
@@ -31,12 +32,14 @@ export function Sparkline({ runs, jobID }: SparklineProps) {
     >
       {recent.map((run) => {
         const label = run.result === "PENDING" ? "Running" : run.passed ? "Passed" : "Failed";
+        const date = formatAccessibleDate(run.timestamp);
+        const context = `Run ${run.build_id}, ${label.toLowerCase()}, ${date}`;
         return (
-          <Tooltip key={run.build_id} title={`#${run.build_id} - ${label}`}>
+          <Tooltip key={run.build_id} title={`#${run.build_id} - ${label} - ${date}`}>
             <Box
               component={RouterLink}
               to={jobRunPath(jobID, run.build_id)}
-              aria-label={`Run ${run.build_id} ${label.toLowerCase()}`}
+              aria-label={context}
               onClick={(event) => event.stopPropagation()}
               sx={{
                 width: 44,

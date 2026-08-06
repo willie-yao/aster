@@ -5,8 +5,8 @@ import Box from "@mui/material/Box";
 import Collapse from "@mui/material/Collapse";
 import Link from "@mui/material/Link";
 import Typography from "@mui/material/Typography";
-import { useMemo, useState } from "react";
-import { Link as RouterLink } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { Link as RouterLink, useLocation } from "react-router-dom";
 import { useResolved } from "../hooks/useData";
 import { useManifest } from "../hooks/useManifest";
 import {
@@ -15,6 +15,8 @@ import {
   disclosureLabel,
   MAX_OVERVIEW_PATTERNS,
   needsAttentionSummary,
+  persistOverviewHistoryState,
+  readOverviewHistoryState,
 } from "../lib/dashboardOverview";
 import { jobPath, testPath, testRunPath } from "../lib/routes";
 import { shortJobName, shortTestName } from "../lib/utils";
@@ -259,6 +261,7 @@ export function FeaturedPatternRow({
                   overviewTypography.mobileFeaturedBody,
               }),
               [attentionDesktopBreakpoint]: {
+                maxInlineSize: "56ch",
                 ...overviewTypography.primaryBody,
                 WebkitLineClamp: compactOnMobile ? 2 : 3,
               },
@@ -532,11 +535,20 @@ export function NeedsAttention({
   const manifest = useManifest();
   const filePrefix = manifest.short_name_prefix ?? "";
   const { data: resolved } = useResolved();
-  const [additionalOpen, setAdditionalOpen] = useState(false);
-  const [resolvedOpen, setResolvedOpen] = useState(false);
-  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>(
-    {},
+  const location = useLocation();
+  const [additionalOpen, setAdditionalOpen] = useState(
+    () => readOverviewHistoryState(typeof window === "undefined" ? undefined : window.history.state).additionalOpen,
   );
+  const [resolvedOpen, setResolvedOpen] = useState(
+    () => readOverviewHistoryState(typeof window === "undefined" ? undefined : window.history.state).resolvedOpen,
+  );
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>(
+    () => readOverviewHistoryState(typeof window === "undefined" ? undefined : window.history.state).expandedGroups,
+  );
+
+  useEffect(() => {
+    persistOverviewHistoryState({ additionalOpen, resolvedOpen, expandedGroups });
+  }, [additionalOpen, expandedGroups, location.key, resolvedOpen]);
 
   const recurring = useMemo<PatternAnalysis[]>(
     () =>
@@ -630,7 +642,17 @@ export function NeedsAttention({
           id="needs-attention-heading"
           variant="headline"
           component="h2"
-          sx={{ gridArea: "heading", ...overviewTypography.majorHeading }}
+          tabIndex={-1}
+          sx={{
+            gridArea: "heading",
+            scrollMarginTop: { xs: "128px", lg: "72px" },
+            ...overviewTypography.majorHeading,
+            "&:focus": {
+              outline: "2px solid",
+              outlineColor: "primary.main",
+              outlineOffset: 2,
+            },
+          }}
         >
           Needs attention
         </Typography>

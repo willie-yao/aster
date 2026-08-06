@@ -26,6 +26,14 @@ export function shortDate(dateStr: string): string {
   return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
+export function formatAccessibleDate(dateStr: string): string {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(new Date(dateStr));
+}
+
 export function formatPercent(rate: number): string {
   return `${Math.round(rate * 100)}%`;
 }

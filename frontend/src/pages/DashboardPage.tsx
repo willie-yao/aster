@@ -1,6 +1,7 @@
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
-import { useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { useLocation, useSearchParams } from "react-router-dom";
 import { useDashboard, useFlakinessReport } from "../hooks/useData";
 import { useManifest } from "../hooks/useManifest";
 import {
@@ -14,8 +15,14 @@ import { HealthPanel } from "../components/HealthPanel";
 import { NeedsAttention } from "../components/NeedsAttention";
 import { JobHealthTable, type JobHealthSection } from "../components/JobHealthTable";
 import { OverviewFilters } from "../components/OverviewFilters";
+import { OverviewSectionNav } from "../components/OverviewSectionNav";
 import {
   orderedDashboardBranches,
+  overviewBranchFromParam,
+  overviewStatusFromParam,
+  persistOverviewHistoryState,
+  readOverviewHistoryState,
+  withOverviewFilters,
   type OverviewStatusFilter,
 } from "../lib/dashboardOverview";
 import { LoadingState } from "../components/LoadingState";
@@ -85,13 +92,56 @@ export function DashboardPage() {
     () => categoryDisplayOrder(manifest.categories, manifest.category_display_order),
     [manifest.categories, manifest.category_display_order],
   );
-  const [statusFilter, setStatusFilter] = useState<OverviewStatusFilter>("ALL");
-  const [branchFilter, setBranchFilter] = useState("ALL");
+  const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialHistoryState = useRef(
+    readOverviewHistoryState(typeof window === "undefined" ? undefined : window.history.state),
+  );
+  const restoredScroll = useRef(false);
 
   const branches = useMemo(
     () => (data ? orderedDashboardBranches(data.jobs) : []),
     [data],
   );
+  const statusFilter = overviewStatusFromParam(searchParams.get("status"));
+  const branchFilter = overviewBranchFromParam(searchParams.get("branch"), branches);
+
+  function updateFilters(status: OverviewStatusFilter, branch: string) {
+    setSearchParams(withOverviewFilters(searchParams, status, branch), { replace: true });
+  }
+
+  useLayoutEffect(() => {
+    if (!data || attention.loading || restoredScroll.current) return;
+    const frame = requestAnimationFrame(() => {
+      restoredScroll.current = true;
+      if (initialHistoryState.current.scrollY > 0) {
+        window.scrollTo({ top: initialHistoryState.current.scrollY, behavior: "auto" });
+        return;
+      }
+      const targetID = location.hash.replace(/^#/, "");
+      const target = targetID ? document.getElementById(targetID) : null;
+      if (!target) return;
+      const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      target.focus({ preventScroll: true });
+      target.scrollIntoView({ behavior: reducedMotion ? "auto" : "smooth", block: "start" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [attention.loading, data, location.hash]);
+
+  useEffect(() => {
+    let frame = 0;
+    const saveScroll = () => persistOverviewHistoryState({ scrollY: window.scrollY });
+    if (restoredScroll.current) saveScroll();
+    const handleScroll = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(saveScroll);
+    };
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("scroll", handleScroll);
+    };
+  }, [location.key]);
 
   const filtered = useMemo(() => {
     if (!data) return [];
@@ -142,9 +192,11 @@ export function DashboardPage() {
         </Typography>
       </Box>
 
+      <OverviewSectionNav />
+
       <HealthPanel
         jobs={data.jobs}
-        onFilterClick={(status) => setStatusFilter(status as OverviewStatusFilter)}
+        onFilterClick={(status) => updateFilters(status as OverviewStatusFilter, branchFilter)}
         activeFilter={statusFilter}
       />
 
@@ -172,7 +224,16 @@ export function DashboardPage() {
             id="job-ledger-heading"
             variant="headline"
             component="h2"
-            sx={overviewTypography.majorHeading}
+            tabIndex={-1}
+            sx={{
+              scrollMarginTop: { xs: "128px", lg: "72px" },
+              ...overviewTypography.majorHeading,
+              "&:focus": {
+                outline: "2px solid",
+                outlineColor: "primary.main",
+                outlineOffset: 2,
+              },
+            }}
           >
             Job ledger
           </Typography>
@@ -183,8 +244,8 @@ export function DashboardPage() {
           branchFilter={branchFilter}
           branches={branches}
           matchingJobs={filtered.length}
-          onStatusChange={setStatusFilter}
-          onBranchChange={setBranchFilter}
+          onStatusChange={(status) => updateFilters(status, branchFilter)}
+          onBranchChange={(branch) => updateFilters(statusFilter, branch)}
         />
 
         {filtered.length === 0 ? (
