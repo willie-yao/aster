@@ -76,6 +76,22 @@ type OrkaContainerAnalysisOptions struct {
 	Affinity            map[string]any
 }
 
+// ShadowAnalysisOptions configure the private experimental Agent comparison path.
+type ShadowAnalysisOptions struct {
+	Enabled      bool
+	Namespace    string
+	ResultAPI    string
+	AgentRef     string
+	AgentVersion string
+	GitSecret    string
+	KubeContext  string
+	LedgerPath   string
+	MaxPerRun    int
+	MaxTurns     int
+	Timeout      time.Duration
+	Retries      int
+}
+
 // AnalysisRuntimeOptions select where single-failure analysis runs.
 type AnalysisRuntimeOptions struct {
 	Type          string
@@ -89,6 +105,7 @@ type Options struct {
 	Workers         int
 	Timeout         time.Duration
 	AnalysisRuntime AnalysisRuntimeOptions
+	ShadowAnalysis  ShadowAnalysisOptions
 	// IncludePresubmits fetches presubmit jobs in addition to periodics.
 	// It is combined with cfg.Source.IncludePresubmits, so either source can
 	// enable presubmits.
@@ -127,6 +144,11 @@ type pipeline struct {
 	progress             *fetchprogress.Tracker
 	aiRefreshTransaction *aiRefreshStateTransaction
 	lastPatternOutcomes  map[string]patterns.JobOutcome
+	shadowRunner         shadowAnalysisRunner
+	shadowFreeze         shadowEvidenceFreezer
+	shadowAppend         shadowLedgerAppender
+	shadowContains       shadowLedgerContains
+	shadowNow            func() time.Time
 }
 
 // refreshResult carries the outputs a pass needs for its side effects.
@@ -166,6 +188,7 @@ func setupPipeline(opts Options) (*pipeline, error) {
 	if opts.AnalysisRuntime.Type == "" {
 		opts.AnalysisRuntime.Type = AnalysisRuntimeInProcess
 	}
+	normalizeShadowAnalysisOptions(&opts.ShadowAnalysis)
 	if err := validateAnalysisRuntimeOptions(opts); err != nil {
 		return nil, err
 	}
@@ -188,6 +211,9 @@ func setupPipeline(opts Options) (*pipeline, error) {
 	enableAI := opts.EnableAI
 	aiToken := os.Getenv("AI_TOKEN")
 	if enableAI && aiToken == "" {
+		if opts.ShadowAnalysis.Enabled {
+			return nil, fmt.Errorf("agent analysis shadow requires AI_TOKEN for authoritative in-process analysis")
+		}
 		if opts.AnalysisRuntime.Type == AnalysisRuntimeOrkaContainer {
 			return nil, fmt.Errorf("orka-container analysis requires AI_TOKEN for the in-process cross-build pattern pass")
 		}
@@ -285,6 +311,7 @@ func (p *pipeline) fullPass(ctx context.Context) ([]models.ProwJob, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer p.runShadowAnalysis(ctx, res)
 	if p.opts.SkipSideEffects {
 		p.skipProgressSideEffects()
 		return jobs, nil
@@ -306,6 +333,9 @@ func passExecutionContexts(root, bounded context.Context, runtimeType string) (c
 }
 
 func validateAnalysisRuntimeOptions(opts Options) error {
+	if err := validateShadowAnalysisOptions(opts); err != nil {
+		return err
+	}
 	switch opts.AnalysisRuntime.Type {
 	case AnalysisRuntimeInProcess:
 		return nil

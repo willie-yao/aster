@@ -71,3 +71,30 @@ func TestParseOptionsRejectsInvalidPlacement(t *testing.T) {
 		t.Fatal("invalid placement JSON was accepted")
 	}
 }
+
+func TestParseOptionsAgentAnalysisShadow(t *testing.T) {
+	opts, _, _, err := parseOptions([]string{
+		"-ai", "-analysis-runtime=inprocess", "-agent-analysis-shadow",
+		"-agent-analysis-shadow-namespace=orka-system",
+		"-agent-analysis-shadow-api=https://orka.example.invalid",
+		"-agent-analysis-shadow-agent-ref=analysis-agent",
+		"-agent-analysis-shadow-agent-version=v2",
+		"-agent-analysis-shadow-git-secret=source-readonly",
+		"-agent-analysis-shadow-kube-context=kind-shadow",
+		"-agent-analysis-shadow-ledger=/private/analysis-shadow.json",
+		"-agent-analysis-shadow-max-per-run=2",
+		"-agent-analysis-shadow-max-turns=20",
+		"-agent-analysis-shadow-timeout=8m",
+		"-agent-analysis-shadow-retries=1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := opts.ShadowAnalysis
+	if !cfg.Enabled || cfg.Namespace != "orka-system" || cfg.ResultAPI != "https://orka.example.invalid" ||
+		cfg.AgentRef != "analysis-agent" || cfg.AgentVersion != "v2" || cfg.GitSecret != "source-readonly" ||
+		cfg.KubeContext != "kind-shadow" || cfg.LedgerPath != "/private/analysis-shadow.json" ||
+		cfg.MaxPerRun != 2 || cfg.MaxTurns != 20 || cfg.Timeout != 8*time.Minute || cfg.Retries != 1 {
+		t.Fatalf("shadow options = %+v", cfg)
+	}
+}

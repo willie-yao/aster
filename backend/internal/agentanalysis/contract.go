@@ -200,6 +200,15 @@ func ValidateEvidenceBundle(bundle EvidenceBundle) error {
 	return nil
 }
 
+// FailureRequestHash fingerprints the canonical failure input without published AI output.
+func FailureRequestHash(request ai.FailureAnalysisRequest) string {
+	data, err := json.Marshal(canonicalRequest(request))
+	if err != nil {
+		return ""
+	}
+	return hashString(string(data))
+}
+
 func canonicalRequest(request ai.FailureAnalysisRequest) ai.FailureAnalysisRequest {
 	request = analysisruntime.CanonicalFailureAnalysisRequest(request)
 	if request.ConsecutiveFailures < 0 {
