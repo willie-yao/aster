@@ -29,14 +29,14 @@ ARG OPENCODE_VERSION=1.18.2
 COPY hack/install-srt.sh /usr/local/bin/install-srt
 COPY hack/build-srt-seccomp.mjs /usr/local/bin/build-srt-seccomp.mjs
 RUN apt-get update \
- && apt-get install -y --no-install-recommends bash bubblewrap ca-certificates curl gcc git libseccomp-dev ripgrep socat \
+ && apt-get install -y --no-install-recommends bash bubblewrap ca-certificates curl gcc git libc6-dev libseccomp-dev ripgrep socat \
  && npm install -g "opencode-ai@${OPENCODE_VERSION}" \
  && install-srt /usr/local/share/prow-ai-dashboard/srt \
  && ln -s /usr/local/share/prow-ai-dashboard/srt/node_modules/.bin/srt /usr/local/bin/srt \
  && opencode --version \
  && node -e "if (require('/usr/local/share/prow-ai-dashboard/srt/node_modules/@anthropic-ai/sandbox-runtime/package.json').version !== '0.0.70') process.exit(1)" \
  && node -e "const fs=require('fs'); const arch={x64:'x64',arm64:'arm64'}[process.arch]; if (!arch || !fs.existsSync('/usr/local/share/prow-ai-dashboard/srt/node_modules/@anthropic-ai/sandbox-runtime/vendor/seccomp/'+arch+'/apply-seccomp')) process.exit(1)" \
- && apt-get purge -y --auto-remove curl gcc libseccomp-dev \
+ && apt-get purge -y --auto-remove curl gcc libc6-dev libseccomp-dev \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/fetcher /usr/local/bin/fetcher
 COPY --from=build /out/worker /usr/local/bin/worker

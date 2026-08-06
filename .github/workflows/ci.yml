@@ -76,7 +76,7 @@ jobs:
       - name: Build verified sandbox runtime
         run: |
           sudo apt-get update
-          sudo apt-get install -y bubblewrap gcc libseccomp-dev ripgrep socat
+          sudo apt-get install -y bubblewrap gcc libc6-dev libseccomp-dev ripgrep socat
           SRT_BIN="$(./hack/install-srt.sh "$RUNNER_TEMP/srt-0.0.70")"
           test -x "$SRT_BIN"
           "$SRT_BIN" --help >/dev/null
