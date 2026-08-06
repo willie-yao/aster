@@ -24,10 +24,14 @@ done
 
 installed_bin="${destination}/node_modules/.bin/srt"
 installed_package="${destination}/node_modules/@anthropic-ai/sandbox-runtime/package.json"
+installed_provenance="${destination}/INSTALL_PROVENANCE"
 if [[ -e "${destination}" ]]; then
-	if [[ -x "${installed_bin}" && -f "${installed_package}" ]]; then
+	if [[ -x "${installed_bin}" && -f "${installed_package}" && -f "${installed_provenance}" ]]; then
+		installed_name="$(node -p "require(process.argv[1]).name" "${installed_package}")"
 		installed_version="$(node -p "require(process.argv[1]).version" "${installed_package}")"
-		if [[ "${installed_version}" == "${srt_version}" ]]; then
+		if [[ "${installed_name}" == "@anthropic-ai/sandbox-runtime" && "${installed_version}" == "${srt_version}" ]] \
+			&& grep -Fxq "source_commit=${srt_commit}" "${installed_provenance}" \
+			&& grep -Fxq "source_sha256=${source_sha256}" "${installed_provenance}"; then
 			printf '%s\n' "${installed_bin}"
 			exit 0
 		fi
@@ -83,6 +87,12 @@ cp -R "${source_dir}/dist" "${source_dir}/vendor" "${runtime_package}/"
 chmod +x "${runtime_package}/dist/cli.js"
 mkdir -p "${stage}/node_modules/.bin"
 ln -s ../@anthropic-ai/sandbox-runtime/dist/cli.js "${stage}/node_modules/.bin/srt"
+cat > "${stage}/INSTALL_PROVENANCE" <<EOF_PROVENANCE
+package=@anthropic-ai/sandbox-runtime
+version=${srt_version}
+source_commit=${srt_commit}
+source_sha256=${source_sha256}
+EOF_PROVENANCE
 staged_version="$(node -p "require(process.argv[1]).version" "${stage}/node_modules/@anthropic-ai/sandbox-runtime/package.json")"
 if [[ "${staged_version}" != "${srt_version}" || ! -x "${stage}/node_modules/.bin/srt" ]]; then
 	echo "built srt install failed verification" >&2

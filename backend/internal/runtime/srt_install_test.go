@@ -29,6 +29,9 @@ func TestSRTInstallerContract(t *testing.T) {
 		"npm run build",
 		"npm ci --ignore-scripts --no-audit --no-fund --omit=dev",
 		"cp -R \"${source_dir}/node_modules/.\" \"${stage}/node_modules/\"",
+		`installed_provenance="${destination}/INSTALL_PROVENANCE"`,
+		`source_commit=${srt_commit}`,
+		`source_sha256=${source_sha256}`,
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("srt installer missing %q", want)
