@@ -128,6 +128,15 @@ func ReadPlanArtifact(path, expectedDigest string) (*Plan, error) {
 	if !artifact.Plan.Destination.OpenPR && !filepath.IsAbs(artifact.Plan.Destination.OutDir) {
 		return nil, fmt.Errorf("onboarding plan artifact local destination is not absolute")
 	}
+	if !artifact.Plan.Destination.OpenPR {
+		canonical, err := canonicalLocalDestination(artifact.Plan.Destination.OutDir)
+		if err != nil {
+			return nil, err
+		}
+		if canonical != artifact.Plan.Destination.OutDir {
+			return nil, fmt.Errorf("onboarding plan artifact local destination no longer resolves to the reviewed target")
+		}
+	}
 	if err := validatePlan(&artifact.Plan); err != nil {
 		return nil, fmt.Errorf("validate onboarding plan artifact: %w", err)
 	}
@@ -177,6 +186,65 @@ func bindPlanArtifactDestination(plan *Plan) error {
 	if err != nil {
 		return fmt.Errorf("resolve reviewed dashboard consumer directory: %w", err)
 	}
-	plan.Destination.OutDir = filepath.Clean(abs)
+	canonical, err := canonicalLocalDestination(abs)
+	if err != nil {
+		return err
+	}
+	plan.Destination.OutDir = canonical
 	return nil
+}
+
+func canonicalLocalDestination(path string) (string, error) {
+	path = filepath.Clean(path)
+	if !filepath.IsAbs(path) {
+		return "", fmt.Errorf("reviewed dashboard consumer directory is not absolute")
+	}
+	if info, err := os.Lstat(path); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("reviewed dashboard consumer directory must not be a symlink")
+		}
+		resolved, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			return "", fmt.Errorf("resolve reviewed dashboard consumer directory: %w", err)
+		}
+		return filepath.Clean(resolved), nil
+	} else if !os.IsNotExist(err) {
+		return "", fmt.Errorf("inspect reviewed dashboard consumer directory: %w", err)
+	}
+
+	current := path
+	var suffix []string
+	for {
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", fmt.Errorf("resolve reviewed dashboard consumer directory: no existing ancestor")
+		}
+		suffix = append(suffix, filepath.Base(current))
+		current = parent
+		info, err := os.Lstat(current)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("inspect reviewed dashboard consumer directory ancestor: %w", err)
+		}
+		if !info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
+			return "", fmt.Errorf("reviewed dashboard consumer directory ancestor %s is not a directory", current)
+		}
+		resolvedInfo, err := os.Stat(current)
+		if err != nil {
+			return "", fmt.Errorf("inspect resolved dashboard consumer directory ancestor: %w", err)
+		}
+		if !resolvedInfo.IsDir() {
+			return "", fmt.Errorf("reviewed dashboard consumer directory ancestor %s does not resolve to a directory", current)
+		}
+		resolved, err := filepath.EvalSymlinks(current)
+		if err != nil {
+			return "", fmt.Errorf("resolve reviewed dashboard consumer directory ancestor: %w", err)
+		}
+		for i := len(suffix) - 1; i >= 0; i-- {
+			resolved = filepath.Join(resolved, suffix[i])
+		}
+		return filepath.Clean(resolved), nil
+	}
 }

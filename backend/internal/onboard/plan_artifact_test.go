@@ -22,7 +22,8 @@ func testReviewedPlan(t *testing.T) (*Plan, dependencies, *fakeScaffoldWriter) {
 		TestGrid: "dashboard-a", DashboardRepo: defaultTestDashboardRepo,
 		SourceRepo: "example/project", Mode: modePages, EngineRef: "main",
 		OutDir: filepath.Join(t.TempDir(), "consumer"), NoPrompt: true,
-		AIEnabled: &disabled, GitHubToken: "fixture-github-token",
+		AIEnabled: &disabled, GitHubToken: "fixture-github-token", DryRun: true,
+		PlanOut: filepath.Join(t.TempDir(), "reviewed-plan.json"),
 	}
 	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
 	if err != nil {
@@ -121,10 +122,14 @@ func TestRunDryRunBindsRelativeDestinationToReviewedDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Destination.OutDir != work {
-		t.Fatalf("destination = %q, want %q", loaded.Destination.OutDir, work)
+	want, err := canonicalLocalDestination(work)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "Dashboard consumer directory: "+work) {
+	if loaded.Destination.OutDir != want {
+		t.Fatalf("destination = %q, want %q", loaded.Destination.OutDir, want)
+	}
+	if !strings.Contains(out.String(), "Dashboard consumer directory: "+want) {
 		t.Fatalf("review did not show absolute destination:\n%s", out.String())
 	}
 }
@@ -182,6 +187,82 @@ func TestPlanArtifactRejectsRelativeLocalDestination(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := ReadPlanArtifact(path, planArtifactDigest(data)); err == nil || !strings.Contains(err.Error(), "not absolute") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestPlanArtifactCanonicalizesSymlinkAncestor(t *testing.T) {
+	plan, _, _ := testReviewedPlan(t)
+	base := t.TempDir()
+	target := filepath.Join(base, "repo-a")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "current")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	plan.Destination.OutDir = filepath.Join(link, "consumer")
+	path := filepath.Join(base, "plan.json")
+	digest, err := WritePlanArtifact(path, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := ReadPlanArtifact(path, digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := canonicalLocalDestination(filepath.Join(target, "consumer"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Destination.OutDir != want {
+		t.Fatalf("destination = %q, want %q", loaded.Destination.OutDir, want)
+	}
+}
+
+func TestPlanArtifactRejectsRetargetedSymlinkAncestor(t *testing.T) {
+	plan, _, _ := testReviewedPlan(t)
+	base := t.TempDir()
+	anchor := filepath.Join(base, "reviewed")
+	if err := os.Mkdir(anchor, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plan.Destination.OutDir = filepath.Join(anchor, "consumer")
+	path := filepath.Join(base, "plan.json")
+	digest, err := WritePlanArtifact(path, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := filepath.Join(base, "reviewed-original")
+	if err := os.Rename(anchor, original); err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(base, "repo-b")
+	if err := os.Mkdir(other, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(other, anchor); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadPlanArtifact(path, digest); err == nil || !strings.Contains(err.Error(), "no longer resolves") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestWritePlanArtifactRejectsSymlinkDestination(t *testing.T) {
+	plan, _, _ := testReviewedPlan(t)
+	base := t.TempDir()
+	target := filepath.Join(base, "target")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "consumer")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	plan.Destination.OutDir = link
+	if _, err := WritePlanArtifact(filepath.Join(base, "plan.json"), plan); err == nil || !strings.Contains(err.Error(), "must not be a symlink") {
 		t.Fatalf("error = %v", err)
 	}
 }

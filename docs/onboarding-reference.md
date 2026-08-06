@@ -241,8 +241,10 @@ non-interactive.
 `-plan-out <path>` is valid only with `-dry-run`. It writes a versioned,
 credential-free artifact containing the exact rendered files and reviewed
 destination actions. The output prints a `sha256:` digest for that file. The
-path must not already exist. Local destinations are stored as absolute paths so
-applying from another working directory cannot retarget the reviewed scaffold.
+path must not already exist. Local destinations are stored as canonical absolute
+paths with existing symlink ancestors resolved. Apply rechecks that target so a
+different working directory or retargeted ancestor cannot redirect the reviewed
+scaffold.
 
 Apply the exact reviewed artifact with no discovery or scaffold flags:
 
