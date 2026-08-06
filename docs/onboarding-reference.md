@@ -4,6 +4,9 @@ This page documents discovery, automation, prompt authoring, validation, and the
 full `fetcher onboard` command surface. For a first project, start with
 [Onboarding a project](onboarding-a-new-project.md).
 
+For a conversational agent workflow over the same command surface, see
+[Agent-driven consumer setup](agent-onboarding.md).
+
 ## Discovery behavior
 
 When required flags are missing and stdin is an interactive terminal, the

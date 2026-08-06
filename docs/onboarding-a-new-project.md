@@ -4,6 +4,11 @@
 Kubernetes. Start with the guided wizard, review the generated files, then
 follow the deployment guide included in the scaffold.
 
+An agent can run the same discovery, dry-run, scaffold, prompt handoff, and
+doctor flow with the repo-owned
+[`setup-prow-ai-consumer` skill](agent-onboarding.md). The skill uses the CLI as
+the scaffold authority rather than maintaining separate templates.
+
 ## Run the wizard
 
 From the source repository checkout:
