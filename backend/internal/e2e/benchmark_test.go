@@ -101,6 +101,7 @@ type benchCase struct {
 	// transient-vs-persistent check) see the real persistence signal.
 	consecutiveFailures int
 	oppositeDiagnosis   string
+	allowUnavailable    bool
 	signals             []benchSignal
 }
 
@@ -1260,6 +1261,10 @@ func scoreBenchCase(t *testing.T, bc benchCase, tc *models.TestCase, elapsed tim
 		t.Log(line)
 	}
 	if tc.AIAnalysis == nil {
+		if benchmarkAllowsUnavailable(bc, tc) {
+			t.Logf("ALLOWED: %s produced a grounded-policy unavailable result after %s", backend, elapsed)
+			return
+		}
 		t.Fatalf("%s analysis produced no AIAnalysis after %s (ai_summary_present=%v)", backend, elapsed, tc.AISummary != nil)
 	}
 	if tc.AISummary == nil {
@@ -1293,6 +1298,34 @@ func scoreBenchCase(t *testing.T, bc benchCase, tc *models.TestCase, elapsed tim
 
 	if len(missedMust) > 0 {
 		t.Errorf("benchmark %s missed required root-cause signal(s): %s", bc.name, strings.Join(missedMust, ", "))
+	}
+}
+
+func benchmarkAllowsUnavailable(bc benchCase, tc *models.TestCase) bool {
+	return bc.allowUnavailable && tc != nil && tc.AIAnalysis == nil && tc.AISummary != nil &&
+		!tc.AISummary.IsTransient && strings.HasPrefix(tc.AISummary.Summary, "AI analysis unavailable: ")
+}
+
+func TestBenchmarkAllowsUnavailable(t *testing.T) {
+	valid := &models.TestCase{AISummary: &models.AISummary{Summary: "AI analysis unavailable: evidence remained inconclusive"}}
+	if !benchmarkAllowsUnavailable(benchCase{allowUnavailable: true}, valid) {
+		t.Fatal("allowed unavailable result was rejected")
+	}
+	for _, tc := range []struct {
+		name string
+		bc   benchCase
+		tc   *models.TestCase
+	}{
+		{name: "case disabled", tc: valid},
+		{name: "transient", bc: benchCase{allowUnavailable: true}, tc: &models.TestCase{AISummary: &models.AISummary{Summary: "AI analysis unavailable: x", IsTransient: true}}},
+		{name: "ordinary summary", bc: benchCase{allowUnavailable: true}, tc: &models.TestCase{AISummary: &models.AISummary{Summary: "inconclusive"}}},
+		{name: "analysis attached", bc: benchCase{allowUnavailable: true}, tc: &models.TestCase{AISummary: valid.AISummary, AIAnalysis: &models.AIAnalysis{RootCause: "cause"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if benchmarkAllowsUnavailable(tc.bc, tc.tc) {
+				t.Fatal("unexpected allowed unavailable result")
+			}
+		})
 	}
 }
 

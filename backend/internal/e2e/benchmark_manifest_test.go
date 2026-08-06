@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -28,6 +29,41 @@ var benchmarkCommitRE = regexp.MustCompile(`^[0-9a-f]{40}$`)
 type benchmarkManifest struct {
 	Version int                     `json:"version"`
 	Cases   []benchmarkManifestCase `json:"cases"`
+}
+
+func TestCrossProjectEvaluationManifest(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	path := filepath.Join(filepath.Dir(thisFile), "testdata", "benchmarks", "cross-project-eval.json")
+	cases, err := loadBenchmarkManifest(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cases) != 3 {
+		t.Fatalf("cases = %d, want 3", len(cases))
+	}
+	allowedUnavailable := 0
+	for _, bc := range cases {
+		if bc.fixtureAsset == "" || len(bc.fixtureSHA256) != 64 {
+			t.Fatalf("case %q has incomplete fixture identity", bc.name)
+		}
+		if bc.allowUnavailable {
+			allowedUnavailable++
+			if bc.name != "gcp-pd-csi-windows-mount-visibility" {
+				t.Fatalf("case %q unexpectedly allows unavailable", bc.name)
+			}
+		}
+		for _, signal := range bc.signals {
+			if signal.must && signal.matches(strings.ToLower(bc.oppositeDiagnosis)) {
+				t.Errorf("case %q required signal %q accepts opposite diagnosis", bc.name, signal.name)
+			}
+		}
+	}
+	if allowedUnavailable != 1 {
+		t.Fatalf("allow_unavailable cases = %d, want 1", allowedUnavailable)
+	}
 }
 
 type benchmarkManifestCase struct {
@@ -53,6 +89,7 @@ type benchmarkManifestCase struct {
 	FailureMessage      string                    `json:"failure_message"`
 	ConsecutiveFailures int                       `json:"consecutive_failures,omitempty"`
 	OppositeDiagnosis   string                    `json:"opposite_diagnosis,omitempty"`
+	AllowUnavailable    bool                      `json:"allow_unavailable,omitempty"`
 	Signals             []benchmarkManifestSignal `json:"signals"`
 }
 
@@ -181,7 +218,7 @@ func loadBenchmarkManifest(path string) ([]benchCase, error) {
 			commit: item.Commit, repoVersion: item.RepoVersion, repoRefs: maps.Clone(item.RepoRefs),
 			sourceRepo: [2]string{item.SourceOwner, item.SourceName}, testName: item.TestName, testSource: item.TestSource,
 			junitFile: item.JUnitFile, failureMsg: item.FailureMessage, consecutiveFailures: item.ConsecutiveFailures,
-			oppositeDiagnosis: item.OppositeDiagnosis, signals: signals,
+			oppositeDiagnosis: item.OppositeDiagnosis, allowUnavailable: item.AllowUnavailable, signals: signals,
 		})
 	}
 	return out, nil

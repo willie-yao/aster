@@ -26,6 +26,20 @@ AI_MODEL=moonshotai/Kimi-K2.7-Code AI_TOKEN=x \
 go test ./internal/e2e -run TestAIBenchmark -v -timeout 60m
 ```
 
+The frozen cross-project evaluation cohort is available as an external manifest:
+
+```bash
+RUN_AI_BENCHMARK=1 \
+BENCH_MANIFEST=./internal/e2e/testdata/benchmarks/cross-project-eval.json \
+BENCH_PROJECT_DIR=/path/to/consumer \
+AI_ENDPOINT=<chat-completions-url> AI_MODEL=<model> AI_TOKEN=<token> \
+go test ./internal/e2e -run TestAIBenchmark -v -timeout 90m
+```
+
+Its Secrets Store CSI and Kueue cases require a grounded diagnosis. The GCP PD
+CSI reference is medium confidence, so that case also accepts the engine's
+grounded-policy unavailable result instead of rewarding an unsupported owner.
+
 Options:
 
 - `BENCH_PROJECT_DIR=<consumer-repo>` loads that consumer's real `project.yaml`
