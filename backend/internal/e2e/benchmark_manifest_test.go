@@ -99,6 +99,13 @@ func TestCrossProjectEvaluationManifest(t *testing.T) {
 				t.Errorf("case %q rejects negated ownership statement: %v", bc.name, assessment.missingMust)
 			}
 		}
+		if bc.name == "kueue-was-podgroup-api-mismatch" {
+			for _, signal := range bc.signals {
+				if signal.name == "identifies unavailable PodGroup API response" && !signal.matches("The v1beta1 PodGroup endpoint was not served; the scheduler reported podgroups forbidden because that API had no resources.") {
+					t.Errorf("case %q rejects equivalent unavailable-API wording", bc.name)
+				}
+			}
+		}
 	}
 	if allowedUnavailable != 1 {
 		t.Fatalf("allow_unavailable cases = %d, want 1", allowedUnavailable)
