@@ -2,6 +2,7 @@ package prowbuild
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -69,6 +70,54 @@ func DiscoverJobs(ctx context.Context, b storage.Backend, includePresubmits bool
 	return jobs, nil
 }
 
+// DiscoverExactJobs validates configured job names through their direct bucket
+// indexes without listing the bucket root. Missing names fail the complete
+// discovery so a typo cannot silently publish an empty or partial dashboard.
+func DiscoverExactJobs(ctx context.Context, b storage.Backend, includePresubmits bool, names []string) ([]models.ProwJob, error) {
+	jobs := make([]models.ProwJob, 0, len(names))
+	var missing []string
+	for _, name := range names {
+		found := false
+		listing, err := b.List(ctx, "logs/"+name+"/")
+		if err != nil {
+			return nil, fmt.Errorf("listing exact bucket job %q: %w", name, err)
+		}
+		if len(listing.Dirs) > 0 || len(listing.Files) > 0 {
+			jobs = append(jobs, models.ProwJob{
+				Name: name, TabName: name, JobType: models.JobTypePeriodic,
+				JobID: models.JobIDFor(models.JobTypePeriodic, "", name),
+			})
+			found = true
+		}
+		if includePresubmits {
+			repo, ok, err := resolvePresubmitRepoStrict(ctx, b, name)
+			if err != nil {
+				return nil, fmt.Errorf("resolving exact presubmit job %q: %w", name, err)
+			}
+			if ok {
+				jobs = append(jobs, models.ProwJob{
+					Name: name, TabName: name, JobType: models.JobTypePresubmit, Repo: repo,
+					JobID: models.JobIDFor(models.JobTypePresubmit, repo, name),
+				})
+				found = true
+			}
+		}
+		if !found {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("exact bucket job(s) not found: %s", strings.Join(missing, ", "))
+	}
+	sort.Slice(jobs, func(i, j int) bool {
+		if jobs[i].Name != jobs[j].Name {
+			return jobs[i].Name < jobs[j].Name
+		}
+		return jobs[i].JobID < jobs[j].JobID
+	})
+	return jobs, nil
+}
+
 // matchesFilters reports whether name contains any filter substring.
 // An empty filter list matches everything.
 func matchesFilters(name string, filters []string) bool {
@@ -89,9 +138,14 @@ func matchesFilters(name string, filters []string) bool {
 // only encodes "<org>_<repo>" in the entry body, so the first underscore is
 // treated as the org/repo separator.
 func resolvePresubmitRepo(ctx context.Context, b storage.Backend, jobName string) (string, bool) {
+	repo, found, err := resolvePresubmitRepoStrict(ctx, b, jobName)
+	return repo, found && err == nil
+}
+
+func resolvePresubmitRepoStrict(ctx context.Context, b storage.Backend, jobName string) (string, bool, error) {
 	listing, err := b.List(ctx, "pr-logs/directory/"+jobName+"/")
 	if err != nil {
-		return "", false
+		return "", false, err
 	}
 	var ids []string
 	for _, f := range listing.Files {
@@ -101,16 +155,16 @@ func resolvePresubmitRepo(ctx context.Context, b storage.Backend, jobName string
 		}
 	}
 	if len(ids) == 0 {
-		return "", false
+		return "", false, nil
 	}
 	sort.Sort(sort.Reverse(sort.StringSlice(ids)))
 	body, err := storage.ReadAll(ctx, b, "pr-logs/directory/"+jobName+"/"+ids[0]+".txt")
 	if err != nil {
-		return "", false
+		return "", false, err
 	}
 	parts, ok := splitPresubmitRef(string(body))
 	if !ok {
-		return "", false
+		return "", false, nil
 	}
-	return strings.Replace(parts[2], "_", "/", 1), true
+	return strings.Replace(parts[2], "_", "/", 1), true, nil
 }

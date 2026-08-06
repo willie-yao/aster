@@ -373,7 +373,11 @@ func (p *pipeline) discover(ctx context.Context) ([]models.ProwJob, error) {
 	switch cfg.EffectiveDiscoverySource() {
 	case project.DiscoveryBucket:
 		log.Println("Discovering jobs from the storage bucket...")
-		jobs, err = prowbuild.DiscoverJobs(ctx, p.backend, p.includePresubmits, cfg.Discovery.JobFilters)
+		if len(cfg.Discovery.ExactJobs) > 0 {
+			jobs, err = prowbuild.DiscoverExactJobs(ctx, p.backend, p.includePresubmits, cfg.Discovery.ExactJobs)
+		} else {
+			jobs, err = prowbuild.DiscoverJobs(ctx, p.backend, p.includePresubmits, cfg.Discovery.JobFilters)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("discovering jobs from bucket: %w", err)
 		}
@@ -1330,7 +1334,13 @@ func (p *pipeline) processRemediations(ctx context.Context, patterns []models.Pa
 		}
 	}
 	if p.jobCatalog == nil && p.cfg.EffectiveDiscoverySource() == project.DiscoveryBucket {
-		jobs, err := prowbuild.DiscoverJobs(ctx, p.backend, true, nil)
+		var jobs []models.ProwJob
+		var err error
+		if len(p.cfg.Discovery.ExactJobs) > 0 {
+			jobs, err = prowbuild.DiscoverExactJobs(ctx, p.backend, true, p.cfg.Discovery.ExactJobs)
+		} else {
+			jobs, err = prowbuild.DiscoverJobs(ctx, p.backend, true, nil)
+		}
 		if err != nil {
 			log.Printf("Warning: bucket verification metadata unavailable: %v", err)
 		} else {

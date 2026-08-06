@@ -128,6 +128,23 @@ discovery:
 
 Omit `job_filters` to include every job in the bucket.
 
+For a narrow dashboard or evaluation, list exact periodic or postsubmit job
+names. Exact discovery validates each job through its direct bucket index and
+does not enumerate the bucket root:
+
+```yaml
+discovery:
+  source: bucket
+  exact_jobs:
+    - periodic-project-e2e
+    - periodic-project-upgrade
+```
+
+`exact_jobs` and `job_filters` are mutually exclusive. Exact names are
+case-sensitive and a missing name fails discovery instead of silently publishing
+a partial dashboard. When presubmits are enabled, an exact name may also resolve
+through its direct `pr-logs/directory/<job>/` index.
+
 Periodics are included by default. Add presubmits with:
 
 ```yaml

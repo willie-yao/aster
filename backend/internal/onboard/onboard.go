@@ -348,6 +348,9 @@ func discover(ctx context.Context, cfg *project.Config, includePresubmits bool) 
 		if err != nil {
 			return nil, fmt.Errorf("configuring storage: %w", err)
 		}
+		if len(cfg.Discovery.ExactJobs) > 0 {
+			return prowbuild.DiscoverExactJobs(ctx, backend, includePresubmits, cfg.Discovery.ExactJobs)
+		}
 		return prowbuild.DiscoverJobs(ctx, backend, includePresubmits, cfg.Discovery.JobFilters)
 	}
 	jobs, err := jobconfig.FetchJobConfigs(ctx, client, cfg)

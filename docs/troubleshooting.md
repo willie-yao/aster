@@ -84,8 +84,10 @@ found no matching jobs, or every discovered job failed while loading build data.
 
 4. If the logs contain no job fetch errors, confirm `testgrid.dashboard` exactly
    matches the jobs' `testgrid-dashboards` annotation.
-5. For bucket discovery, remove `discovery.job_filters` temporarily and confirm
-   the storage provider, bucket, and gcsweb base.
+5. For broad bucket discovery, remove `discovery.job_filters` temporarily and
+   confirm the storage provider, bucket, and gcsweb base. For
+   `discovery.exact_jobs`, verify the exact case-sensitive job name and its
+   direct `logs/<job>/` or `pr-logs/directory/<job>/` index.
 6. Add `source.include_presubmits: true` only when the expected jobs are
    presubmits rather than periodics.
 

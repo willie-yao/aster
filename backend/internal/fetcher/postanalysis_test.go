@@ -18,6 +18,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediation"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
 
 func TestRunFinalizedSideEffectsLoadsFinalizedOutput(t *testing.T) {
@@ -96,6 +97,16 @@ func (finalizedFakeAgent) Generate(context.Context, runtime.GenerateSpec) (runti
 		Files: map[string]string{"config/fix.yaml": "fixed: true\n"},
 		Diff:  "diff --git a/config/fix.yaml b/config/fix.yaml\n+fixed: true\n",
 	}, nil
+}
+
+type recordingListBackend struct {
+	storage.Backend
+	prefixes []string
+}
+
+func (b *recordingListBackend) List(ctx context.Context, prefix string) (*storage.Listing, error) {
+	b.prefixes = append(b.prefixes, prefix)
+	return b.Backend.List(ctx, prefix)
 }
 
 func TestRunFinalizedSideEffectsProducesFixPreview(t *testing.T) {
@@ -352,6 +363,19 @@ func TestProcessRemediationsClearsStateForChangedRepo(t *testing.T) {
 
 func TestProcessRemediationsSkipsFixWithoutPatternSnapshot(t *testing.T) {
 	dataDir := t.TempDir()
+	storageDir := t.TempDir()
+	buildDir := filepath.Join(storageDir, "logs", "exact-job", "1")
+	if err := os.MkdirAll(buildDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(buildDir, "started.json"), []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	localBackend, err := storage.NewLocalBackend(storageDir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordingBackend := &recordingListBackend{Backend: localBackend}
 	fixState := statefile.State[fixpr.TrackedFix]{
 		Repo: "o/r",
 		Tracked: map[string]fixpr.TrackedFix{
@@ -363,9 +387,13 @@ func TestProcessRemediationsSkipsFixWithoutPatternSnapshot(t *testing.T) {
 	}
 	p := &pipeline{
 		opts: Options{OutDir: dataDir},
-		cfg: &project.Config{AI: &project.AI{FixPRs: &project.FixPRs{
-			Repo: &project.SourceRepo{Owner: "o", Name: "r"},
-		}}},
+		cfg: &project.Config{
+			Discovery: project.Discovery{Source: project.DiscoveryBucket, ExactJobs: []string{"exact-job"}},
+			AI: &project.AI{FixPRs: &project.FixPRs{
+				Repo: &project.SourceRepo{Owner: "o", Name: "r"},
+			}},
+		},
+		backend: recordingBackend,
 	}
 	if err := p.processRemediations(context.Background(), nil, nil); err != nil {
 		t.Fatal(err)
@@ -376,6 +404,11 @@ func TestProcessRemediationsSkipsFixWithoutPatternSnapshot(t *testing.T) {
 	}
 	if len(got.Remediations) != 0 {
 		t.Fatalf("remediations = %+v", got.Remediations)
+	}
+	for _, prefix := range recordingBackend.prefixes {
+		if prefix == "logs/" || prefix == "pr-logs/directory/" {
+			t.Fatalf("exact remediation discovery enumerated bucket root %q", prefix)
+		}
 	}
 }
 
