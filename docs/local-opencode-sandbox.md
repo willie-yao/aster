@@ -39,7 +39,11 @@ the required binaries with an AppArmor profile or disable that restriction:
 sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 ```
 
-The CI integration job applies this setting only to its disposable runner.
+The repository runs the hostile and cancellation integrations in a separate
+Ubuntu 22.04 workflow only for SRT-related changes, on a weekly schedule, or by
+manual dispatch. The normal CI workflow retains the deterministic installer and
+policy contract tests but does not require a host-kernel integration for every
+unrelated pull request.
 
 ## Enforced boundary
 
