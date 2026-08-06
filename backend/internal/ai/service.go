@@ -235,6 +235,13 @@ func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, b
 			usageOutcome = aiusage.OutcomeUnavailable
 			return unavailableErr
 		}
+		if errors.Is(err, ErrMissingArtifactCitation) {
+			log.Printf("  ⚠ AI analysis unavailable after citation policy: %v", err)
+			s.setPolicyUnavailable(tc, err)
+			trace.Finish("unavailable", err)
+			usageOutcome = aiusage.OutcomeUnavailable
+			return err
+		}
 		log.Printf("  ⚠ Agentic AI analysis failed for %s: %v", tc.Name, err)
 		s.setUnavailable(tc, err)
 		trace.Finish("error", err)
@@ -334,6 +341,15 @@ func (s *Service) toolCacheFor(buildPrefix string) *tools.Cache {
 	fresh := tools.NewBoundedCache(512, 64<<20)
 	actual, _ := s.toolCaches.LoadOrStore(buildPrefix, fresh)
 	return actual.(*tools.Cache)
+}
+
+func (s *Service) setPolicyUnavailable(tc *models.TestCase, err error) {
+	if tc == nil {
+		return
+	}
+	tc.AISummary = nil
+	tc.AIAnalysis = nil
+	s.setUnavailable(tc, err)
 }
 
 func (s *Service) setUnavailable(tc *models.TestCase, err error) {

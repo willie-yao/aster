@@ -640,3 +640,41 @@ func TestService_ShouldReanalyze_CacheGeneration(t *testing.T) {
 		t.Fatal("matching generation was not reusable")
 	}
 }
+
+func TestService_MissingCitationReanalysisReplacesStaleAnalysis(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
+	srv.push(200, chatRespFinal(missingCitationFinalJSON))
+
+	client := newAgenticTestClient(t, srv.URL)
+	registry, enabled := newServiceTestRegistry(t)
+	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
+	factory := &serviceFixedBrowserFactory{browser: &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("initiating failure\n")}}}
+	s.EnableAgentic(AgenticOptions{
+		MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
+		CritiqueMaxRetries: 0, CritiqueCachePolicy: CritiqueCachePolicyHard,
+	}, factory, registry, enabled)
+
+	generatedAt := time.Now().UTC().Format(time.RFC3339)
+	tc := newFailedTC("Test A", "failure msg")
+	tc.AISummary = &models.AISummary{GeneratedAt: generatedAt, Summary: "stale uncited summary"}
+	tc.AIAnalysis = &models.AIAnalysis{
+		GeneratedAt: generatedAt, RootCause: "stale uncited cause", Mode: AgenticMode,
+		CritiquePassed: true, CritiqueVersion: currentCritiqueVersion - 1,
+	}
+	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
+
+	if tc.AISummary == nil || !isUnavailableSummary(tc.AISummary) || tc.AIAnalysis != nil {
+		t.Fatalf("policy-rejected reanalysis retained stale result: summary=%+v analysis=%+v", tc.AISummary, tc.AIAnalysis)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 2 {
+		t.Fatalf("model calls = %d, want read plus final", got)
+	}
+}
+
+type serviceFixedBrowserFactory struct {
+	browser artifacts.Browser
+}
+
+func (f *serviceFixedBrowserFactory) ForBuild(_, _ string) artifacts.Browser { return f.browser }
