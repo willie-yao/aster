@@ -242,3 +242,15 @@ func TestValidateOptionsUsesOrkaAPITerminology(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestValidateOptionsRejectsOrkaAPIQueryAndFragment(t *testing.T) {
+	for _, api := range []string{"https://orka.example.test?tenant=x", "https://orka.example.test#results"} {
+		opts := testPromptModeOptions(promptModeAgent)
+		opts.PromptAgentRuntime = promptRuntimeOrka
+		opts.PromptOrkaAPI = api
+		opts.PromptOrkaAgentRef = "prompt-author"
+		if err := validateOptions(&opts); err == nil || !strings.Contains(err.Error(), "--prompt-orka-api") {
+			t.Fatalf("API %q error = %v", api, err)
+		}
+	}
+}

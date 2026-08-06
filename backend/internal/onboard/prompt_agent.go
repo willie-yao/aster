@@ -120,6 +120,7 @@ func buildAgentPrompt(ctx context.Context, opts Options, data scaffoldData, inpu
 	}
 	res, err := author.Generate(ctx, authorSpec)
 	if err != nil {
+		writePromptCleanupWarning(errOut, res)
 		if parentCtx.Err() != nil {
 			return "", promptPreparationResult{}, parentCtx.Err()
 		}
@@ -142,13 +143,20 @@ func buildAgentPrompt(ctx context.Context, opts Options, data scaffoldData, inpu
 		}, renderErr
 	}
 	if res.CleanupPending {
-		if res.CleanupWork != nil {
-			fmt.Fprintf(errOut, "Prompt authoring completed, but Orka Task cleanup is still pending for %s/%s.\n", res.CleanupWork.Namespace, res.CleanupWork.Name)
-		} else {
-			fmt.Fprintln(errOut, "Prompt authoring completed, but Orka Task cleanup is still pending.")
-		}
+		writePromptCleanupWarning(errOut, res)
 	}
 	return res.Body, promptPreparationResult{Requested: promptRequestAgent, Status: promptStatusAgentDraft, Output: promptOutputAgentDraft}, nil
+}
+
+func writePromptCleanupWarning(out io.Writer, res promptauthor.Result) {
+	if !res.CleanupPending {
+		return
+	}
+	if res.CleanupWork != nil {
+		fmt.Fprintf(out, "Prompt authoring completed, but Orka Task cleanup is still pending for %s/%s.\n", res.CleanupWork.Namespace, res.CleanupWork.Name)
+		return
+	}
+	fmt.Fprintln(out, "Prompt authoring completed, but Orka Task cleanup is still pending.")
 }
 
 func promptExecutionID() (string, error) {

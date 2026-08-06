@@ -227,6 +227,12 @@ func validatePromptOrkaAPI(raw string) error {
 			return fmt.Errorf("--prompt-orka-api must not contain credential query parameters; use ORKA_API_TOKEN")
 		}
 	}
+	if parsed.RawQuery != "" {
+		return fmt.Errorf("--prompt-orka-api must not contain a query string")
+	}
+	if parsed.Fragment != "" {
+		return fmt.Errorf("--prompt-orka-api must not contain a fragment")
+	}
 	return nil
 }
 

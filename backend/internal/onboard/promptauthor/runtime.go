@@ -141,6 +141,11 @@ func (r *OpenCodeRuntime) Generate(ctx context.Context, spec Spec) (Result, erro
 	}
 	result := Result{Runtime: runtimeName, Duration: time.Since(started), Output: generated.Output}
 	cleanupPending := errors.Is(err, agentruntime.ErrCleanupPending) && len(generated.Files) > 0
+	result.CleanupPending = cleanupPending
+	if cleanupPending && observedWork.Name != "" {
+		work := observedWork
+		result.CleanupWork = &work
+	}
 	if err != nil && !cleanupPending {
 		return result, err
 	}
@@ -158,11 +163,6 @@ func (r *OpenCodeRuntime) Generate(ctx context.Context, spec Spec) (Result, erro
 		return result, fmt.Errorf("%w: %v", ErrOutputValidation, err)
 	}
 	result.Body = body
-	result.CleanupPending = cleanupPending
-	if cleanupPending && observedWork.Name != "" {
-		work := observedWork
-		result.CleanupWork = &work
-	}
 	return result, nil
 }
 

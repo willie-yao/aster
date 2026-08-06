@@ -220,6 +220,18 @@ func TestBuildAgentPromptWarnsWhenCleanupIsPending(t *testing.T) {
 	}
 }
 
+func TestBuildAgentPromptFallbackRetainsCleanupIdentity(t *testing.T) {
+	author := &fakePromptAuthor{
+		result: promptauthor.Result{Runtime: "orka", CleanupPending: true, CleanupWork: &agentruntime.WorkRef{Namespace: "orka-system", Name: "prompt-task"}},
+		err:    fmt.Errorf("%w: invalid output", promptauthor.ErrOutputValidation),
+	}
+	var errOut bytes.Buffer
+	_, result, err := buildAgentPrompt(context.Background(), Options{PromptAgentRuntime: promptRuntimeOrka}, scaffoldData{Name: "Project"}, agentPromptInput(), author, &errOut)
+	if err != nil || result.Status != promptStatusAgentFallback || !strings.Contains(errOut.String(), "orka-system/prompt-task") {
+		t.Fatalf("result=%+v error=%v warning=%q", result, err, errOut.String())
+	}
+}
+
 func TestPromptExecutionIDIsRequestScoped(t *testing.T) {
 	first, err := promptExecutionID()
 	if err != nil {
