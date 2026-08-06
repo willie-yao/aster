@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 )
 
@@ -152,8 +153,12 @@ func (r promptPreparationResult) promptPlan(opts Options) PromptPlan {
 		plan.FailureAction = r.Failure.Category.action()
 	}
 	if r.Requested == promptRequestAgent {
-		plan.Runtime = "opencode"
-		plan.Model = effectivePromptAgentModel(opts)
+		plan.Runtime = effectivePromptAgentRuntime(opts)
+		if plan.Runtime == promptRuntimeOrka {
+			plan.AgentRef = opts.PromptOrkaAgentRef
+		} else {
+			plan.Model = effectivePromptAgentModel(opts)
+		}
 		plan.Timeout = effectivePromptDraftTimeout(opts).String()
 	}
 	return plan
@@ -180,11 +185,11 @@ func validatePromptPlan(plan PromptPlan) error {
 			return fmt.Errorf("onboarding plan TODO prompt result is inconsistent")
 		}
 	case string(promptStatusAgentDraft):
-		if plan.RequestedMode != string(promptRequestAgent) || plan.Output != string(promptOutputAgentDraft) || plan.Source != "OpenCode agent draft" || plan.Runtime != "opencode" || validatePromptAgentModel(plan.Model) != nil {
+		if plan.RequestedMode != string(promptRequestAgent) || plan.Output != string(promptOutputAgentDraft) || plan.Source != "OpenCode agent draft" || !validPromptPlanRuntime(plan) {
 			return fmt.Errorf("onboarding plan agent prompt result is inconsistent")
 		}
 	case string(promptStatusAgentFallback):
-		if plan.RequestedMode != string(promptRequestAgent) || plan.Output != string(promptOutputTemplate) || plan.Source != "Agent handoff bundle with TODO template" || plan.Runtime != "opencode" || validatePromptAgentModel(plan.Model) != nil {
+		if plan.RequestedMode != string(promptRequestAgent) || plan.Output != string(promptOutputTemplate) || plan.Source != "Agent handoff bundle with TODO template" || !validPromptPlanRuntime(plan) {
 			return fmt.Errorf("onboarding plan agent fallback result is inconsistent")
 		}
 		if err := validatePromptFailureDiagnostics(plan); err != nil {
@@ -197,13 +202,24 @@ func validatePromptPlan(plan PromptPlan) error {
 	default:
 		return fmt.Errorf("onboarding plan prompt status %q is invalid", plan.FinalStatus)
 	}
-	if plan.RequestedMode != string(promptRequestAgent) && (plan.Runtime != "" || plan.Model != "") {
+	if plan.RequestedMode != string(promptRequestAgent) && (plan.Runtime != "" || plan.Model != "" || plan.AgentRef != "") {
 		return fmt.Errorf("onboarding plan non-agent prompt result retained agent coordinates")
 	}
 	if plan.FinalStatus != string(promptStatusAgentFallback) && (plan.FailureStage != "" || plan.FailureCategory != "" || plan.FailureAction != "") {
 		return fmt.Errorf("onboarding plan successful prompt result retained failure diagnostics")
 	}
 	return nil
+}
+
+func validPromptPlanRuntime(plan PromptPlan) bool {
+	switch plan.Runtime {
+	case promptRuntimeOpenCode:
+		return plan.AgentRef == "" && validatePromptAgentModel(plan.Model) == nil
+	case promptRuntimeOrka:
+		return plan.Model == "" && strings.TrimSpace(plan.AgentRef) != ""
+	default:
+		return false
+	}
 }
 
 func validatePromptFailureDiagnostics(plan PromptPlan) error {

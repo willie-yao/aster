@@ -58,7 +58,16 @@ const (
 	defaultPromptDraftTimeout = DefaultPromptDraftTimeout
 	minPromptDraftTimeout     = time.Minute
 	maxPromptDraftTimeout     = 2 * time.Hour
+	promptRuntimeOpenCode     = "opencode"
+	promptRuntimeOrka         = "orka"
 )
+
+func effectivePromptAgentRuntime(opts Options) string {
+	if value := strings.TrimSpace(opts.PromptAgentRuntime); value != "" {
+		return value
+	}
+	return promptRuntimeOpenCode
+}
 
 func effectivePromptDraftTimeout(opts Options) time.Duration {
 	if opts.PromptTimeout <= 0 {
@@ -79,6 +88,11 @@ func validatePromptMode(mode string) error {
 func validateOptions(opts *Options) error {
 	opts.PromptMode = strings.TrimSpace(opts.PromptMode)
 	opts.PromptAgentModel = strings.TrimSpace(opts.PromptAgentModel)
+	opts.PromptAgentRuntime = strings.TrimSpace(opts.PromptAgentRuntime)
+	opts.PromptOrkaAPI = strings.TrimSpace(opts.PromptOrkaAPI)
+	opts.PromptOrkaAgentRef = strings.TrimSpace(opts.PromptOrkaAgentRef)
+	opts.PromptOrkaNamespace = strings.TrimSpace(opts.PromptOrkaNamespace)
+	opts.PromptOrkaGitSecret = strings.TrimSpace(opts.PromptOrkaGitSecret)
 	if err := validatePromptMode(opts.PromptMode); err != nil {
 		return err
 	}
@@ -97,6 +111,28 @@ func validateOptions(opts *Options) error {
 	}
 	if len(opts.PromptNetworkDomains) > 0 && effectivePromptMode(*opts) != promptModeAgent {
 		return fmt.Errorf("--prompt-network-domain is valid only with --prompt-mode=%s", promptModeAgent)
+	}
+	if effectivePromptMode(*opts) == promptModeAgent {
+		switch effectivePromptAgentRuntime(*opts) {
+		case promptRuntimeOpenCode:
+			if opts.PromptOrkaAPI != "" || opts.PromptOrkaAgentRef != "" || opts.PromptOrkaNamespace != "" || opts.PromptOrkaGitSecret != "" {
+				return fmt.Errorf("--prompt-orka-* fields require --prompt-agent-runtime=%s", promptRuntimeOrka)
+			}
+		case promptRuntimeOrka:
+			if opts.PromptOrkaAPI == "" || opts.PromptOrkaAgentRef == "" {
+				return fmt.Errorf("--prompt-agent-runtime=%s requires --prompt-orka-api and --prompt-orka-agent-ref", promptRuntimeOrka)
+			}
+			if opts.PromptAgentModel != "" || len(opts.PromptNetworkDomains) > 0 {
+				return fmt.Errorf("--prompt-agent-model and --prompt-network-domain apply only to the local opencode runtime")
+			}
+			if err := validateAIEndpoint(opts.PromptOrkaAPI); err != nil {
+				return fmt.Errorf("--prompt-orka-api: %w", err)
+			}
+		default:
+			return fmt.Errorf("--prompt-agent-runtime must be %q or %q", promptRuntimeOpenCode, promptRuntimeOrka)
+		}
+	} else if opts.PromptAgentRuntime != "" || opts.PromptOrkaAPI != "" || opts.PromptOrkaAgentRef != "" || opts.PromptOrkaNamespace != "" || opts.PromptOrkaGitSecret != "" {
+		return fmt.Errorf("prompt runtime fields are valid only with --prompt-mode=%s", promptModeAgent)
 	}
 	if err := validateCredentialSeparation(*opts); err != nil {
 		return err
@@ -176,6 +212,7 @@ func validateCredentialSeparation(opts Options) error {
 		opts.TestGrid, opts.Bucket, opts.GCSWebBase, opts.DashboardRepo, opts.SourceRepo,
 		opts.ID, opts.Name, opts.ShortName, opts.EngineRef, opts.OutDir, opts.PlanOut,
 		opts.PromptAgentModel,
+		opts.PromptAgentRuntime, opts.PromptOrkaAPI, opts.PromptOrkaAgentRef, opts.PromptOrkaNamespace, opts.PromptOrkaGitSecret,
 		strings.Join(opts.PromptNetworkDomains, ","),
 		opts.AIAPI, opts.AIEndpoint, opts.AIModel,
 		opts.DeploymentAIAPI, opts.DeploymentAIEndpoint, opts.DeploymentAIModel,

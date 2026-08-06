@@ -155,7 +155,11 @@ func TestWizardPromptAuthoringKeepsSelectedMode(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.mode, func(t *testing.T) {
 			opts := Options{}
-			ui := &queuedWizardUI{selects: []string{tt.mode}, inputs: tt.inputs}
+			selects := []string{tt.mode}
+			if tt.mode == promptModeAgent {
+				selects = append(selects, promptRuntimeOpenCode)
+			}
+			ui := &queuedWizardUI{selects: selects, inputs: tt.inputs}
 			if err := wizardPromptAuthoring(context.Background(), ui, &opts); err != nil {
 				t.Fatal(err)
 			}
@@ -187,5 +191,31 @@ func TestValidateOptionsNormalizesPromptNetworkDomains(t *testing.T) {
 	}
 	if len(opts.PromptNetworkDomains) != 1 || opts.PromptNetworkDomains[0] != "provider.example.com:443" {
 		t.Fatalf("network domains = %v", opts.PromptNetworkDomains)
+	}
+}
+
+func TestValidateOptionsAcceptsOrkaPromptRuntime(t *testing.T) {
+	opts := testPromptModeOptions(promptModeAgent)
+	opts.PromptAgentRuntime = promptRuntimeOrka
+	opts.PromptOrkaAPI = "http://orka.example.test:8080"
+	opts.PromptOrkaAgentRef = "prompt-author"
+	opts.PromptOrkaNamespace = "orka-system"
+	opts.PromptOrkaGitSecret = "source-read"
+	if err := validateOptions(&opts); err != nil {
+		t.Fatal(err)
+	}
+	if effectivePromptAgentRuntime(opts) != promptRuntimeOrka {
+		t.Fatalf("runtime = %q", effectivePromptAgentRuntime(opts))
+	}
+}
+
+func TestValidateOptionsRejectsLocalPolicyForOrkaPromptRuntime(t *testing.T) {
+	opts := testPromptModeOptions(promptModeAgent)
+	opts.PromptAgentRuntime = promptRuntimeOrka
+	opts.PromptOrkaAPI = "http://orka.example.test:8080"
+	opts.PromptOrkaAgentRef = "prompt-author"
+	opts.PromptAgentModel = defaultPromptAgentModel
+	if err := validateOptions(&opts); err == nil || !strings.Contains(err.Error(), "apply only") {
+		t.Fatalf("error = %v", err)
 	}
 }

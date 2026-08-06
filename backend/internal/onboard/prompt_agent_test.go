@@ -200,6 +200,26 @@ func TestBuildAgentPromptPassesNetworkDomains(t *testing.T) {
 	}
 }
 
+func TestBuildAgentPromptUsesOrkaOwnedProvider(t *testing.T) {
+	author := &fakePromptAuthor{result: promptauthor.Result{Body: "agent prompt", Runtime: "orka"}}
+	_, _, err := buildAgentPrompt(context.Background(), Options{PromptAgentRuntime: promptRuntimeOrka}, scaffoldData{Name: "Project"}, agentPromptInput(), author, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if author.got.NativeModel != "" || author.got.UseAmbientAuth || len(author.got.NetworkDomains) != 0 || !strings.HasPrefix(author.got.ExecutionID, "onboard-prompt-") {
+		t.Fatalf("Orka prompt spec = %+v", author.got)
+	}
+}
+
+func TestBuildAgentPromptWarnsWhenCleanupIsPending(t *testing.T) {
+	author := &fakePromptAuthor{result: promptauthor.Result{Body: "agent prompt", Runtime: "orka", CleanupPending: true}}
+	var errOut bytes.Buffer
+	body, result, err := buildAgentPrompt(context.Background(), Options{PromptAgentRuntime: promptRuntimeOrka}, scaffoldData{Name: "Project"}, agentPromptInput(), author, &errOut)
+	if err != nil || body != "agent prompt" || result.Status != promptStatusAgentDraft || !strings.Contains(errOut.String(), "cleanup is still pending") {
+		t.Fatalf("body=%q result=%+v error=%v warning=%q", body, result, err, errOut.String())
+	}
+}
+
 func TestBuildAgentPromptFallsBackWhenSandboxUnavailable(t *testing.T) {
 	author := &fakePromptAuthor{err: fmt.Errorf("%w: srt missing", agentruntime.ErrSandboxUnavailable)}
 	var errOut bytes.Buffer

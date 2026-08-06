@@ -2,6 +2,8 @@ package onboard
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -100,15 +102,19 @@ func buildAgentPrompt(ctx context.Context, opts Options, data scaffoldData, inpu
 	if err != nil {
 		return "", promptPreparationResult{}, err
 	}
-	res, err := author.Generate(ctx, promptauthor.Spec{
-		Repo:           agentruntime.RepoRef{Owner: input.SourceRepo.Owner, Name: input.SourceRepo.Name, Ref: revision, Token: opts.GitHubToken},
-		Instruction:    handoff,
-		NativeModel:    effectivePromptAgentModel(opts),
-		UseAmbientAuth: true,
-		NetworkDomains: opts.PromptNetworkDomains,
-		MaxTurns:       12,
-		Timeout:        effectivePromptDraftTimeout(opts),
-	})
+	authorSpec := promptauthor.Spec{
+		Repo:        agentruntime.RepoRef{Owner: input.SourceRepo.Owner, Name: input.SourceRepo.Name, Ref: revision, Token: opts.GitHubToken},
+		Instruction: handoff,
+		MaxTurns:    12,
+		Timeout:     effectivePromptDraftTimeout(opts),
+		ExecutionID: promptExecutionID(revision, handoff),
+	}
+	if effectivePromptAgentRuntime(opts) == promptRuntimeOpenCode {
+		authorSpec.NativeModel = effectivePromptAgentModel(opts)
+		authorSpec.UseAmbientAuth = true
+		authorSpec.NetworkDomains = opts.PromptNetworkDomains
+	}
+	res, err := author.Generate(ctx, authorSpec)
 	if err != nil {
 		if parentCtx.Err() != nil {
 			return "", promptPreparationResult{}, parentCtx.Err()
@@ -131,5 +137,13 @@ func buildAgentPrompt(ctx context.Context, opts Options, data scaffoldData, inpu
 			Failure:   failure,
 		}, renderErr
 	}
+	if res.CleanupPending {
+		fmt.Fprintln(errOut, "Prompt authoring completed, but Orka Task cleanup is still pending.")
+	}
 	return res.Body, promptPreparationResult{Requested: promptRequestAgent, Status: promptStatusAgentDraft, Output: promptOutputAgentDraft}, nil
+}
+
+func promptExecutionID(revision, handoff string) string {
+	sum := sha256.Sum256([]byte(revision + "\x00" + handoff))
+	return "onboard-prompt-" + hex.EncodeToString(sum[:8])
 }

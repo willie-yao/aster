@@ -2,6 +2,7 @@ package promptauthor
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -44,6 +45,38 @@ func TestOpenCodeRuntimeGenerate(t *testing.T) {
 	}
 	if agent.got.AllowBash || !strings.Contains(agent.got.Instruction, SkillName) || agent.got.Skills[SkillName] == "" {
 		t.Fatalf("agent spec = %+v", agent.got)
+	}
+}
+
+func TestOpenCodeRuntimeUsesAgentOwnedProvider(t *testing.T) {
+	agent := &fakeAgent{res: agentruntime.GenerateResult{Files: map[string]string{OutputPath: validPrompt()}, Diff: "diff"}}
+	r := &OpenCodeRuntime{Agent: agent, Runtime: "orka", AgentOwnsProvider: true}
+	got, err := r.Generate(context.Background(), Spec{
+		Repo: agentruntime.RepoRef{Owner: "o", Name: "n", Ref: "sha"}, Instruction: "Generate.",
+		NativeModel: "host/model", UseAmbientAuth: true, Endpoint: "https://host.invalid/v1", Token: "secret",
+		NetworkDomains: []string{"host.invalid:443"}, ExecutionID: "onboard-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Runtime != "orka" || agent.got.NativeModel != "" || agent.got.UseAmbientAuth || agent.got.Endpoint != "" || agent.got.Token != "" || len(agent.got.NetworkDomains) != 0 {
+		t.Fatalf("result=%+v spec=%+v", got, agent.got)
+	}
+	if agent.got.ExecutionID != "onboard-1" || agent.got.Skills[SkillName] == "" {
+		t.Fatalf("execution identity or skill missing: %+v", agent.got)
+	}
+}
+
+func TestOpenCodeRuntimePreservesValidPromptOnCleanupPending(t *testing.T) {
+	agent := &fakeAgent{
+		res: agentruntime.GenerateResult{Files: map[string]string{OutputPath: validPrompt()}, Diff: "diff"},
+		err: fmt.Errorf("%w: deletion pending", agentruntime.ErrCleanupPending),
+	}
+	got, err := (&OpenCodeRuntime{Agent: agent, Runtime: "orka", AgentOwnsProvider: true}).Generate(context.Background(), Spec{
+		Repo: agentruntime.RepoRef{Owner: "o", Name: "n", Ref: "sha"}, Instruction: "Generate.",
+	})
+	if err != nil || !got.CleanupPending || got.Body == "" {
+		t.Fatalf("result=%+v error=%v", got, err)
 	}
 }
 

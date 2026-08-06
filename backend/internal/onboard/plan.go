@@ -224,7 +224,7 @@ func (b defaultPromptBuilder) Build(ctx context.Context, opts Options, data scaf
 	case promptModeAgent:
 		a := b.author
 		if a == nil {
-			a = promptauthor.NewOpenCodeRuntime()
+			a = newPromptAuthor(opts)
 		}
 		return buildAgentPrompt(ctx, opts, data, input, a, b.err)
 	case promptModeHandoff:

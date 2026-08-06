@@ -133,7 +133,12 @@ func runOnboard(args []string) {
 	fs.BoolVar(&enableAI, "ai", true, "enable deployed AI failure analysis")
 	fs.BoolVar(&opts.NoPrompt, "no-prompt", false, "skip prompt authoring and always write the prompts/system.md TODO template")
 	fs.StringVar(&opts.PromptMode, "prompt-mode", "", "prompt authoring mode: agent, handoff, or todo-template")
+	fs.StringVar(&opts.PromptAgentRuntime, "prompt-agent-runtime", "", "agent prompt runtime: opencode (default) or orka")
 	fs.StringVar(&opts.PromptAgentModel, "prompt-agent-model", "", "OpenCode provider/model for agent prompt authoring")
+	fs.StringVar(&opts.PromptOrkaAPI, "prompt-orka-api", "", "Orka result API base URL for prompt authoring")
+	fs.StringVar(&opts.PromptOrkaAgentRef, "prompt-orka-agent-ref", "", "Orka Agent name for prompt authoring")
+	fs.StringVar(&opts.PromptOrkaNamespace, "prompt-orka-namespace", "", "Orka namespace for prompt authoring")
+	fs.StringVar(&opts.PromptOrkaGitSecret, "prompt-orka-git-secret", "", "optional read-only Orka git Secret for prompt authoring")
 	fs.Func("prompt-network-domain", "additional provider domain[:port] allowed during prompt authoring; repeat as needed", func(value string) error {
 		opts.PromptNetworkDomains = append(opts.PromptNetworkDomains, value)
 		return nil

@@ -39,6 +39,7 @@ type PromptPlan struct {
 	FailureAction   string `json:"failure_action,omitempty"`
 	Runtime         string `json:"runtime,omitempty"`
 	Model           string `json:"model,omitempty"`
+	AgentRef        string `json:"agent_ref,omitempty"`
 	Timeout         string `json:"timeout,omitempty"`
 }
 

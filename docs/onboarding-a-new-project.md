@@ -133,6 +133,14 @@ OpenCode configuration. `AI_TOKEN` is not required for this mode. Install the pi
 [Local OpenCode sandbox](local-opencode-sandbox.md). GitHub Copilot domains are
 built in; other providers use repeated `--prompt-network-domain` flags.
 
+Local OpenCode is the default. `--prompt-agent-runtime=orka` selects an
+operator-owned Orka Agent instead and requires `--prompt-orka-api` plus
+`--prompt-orka-agent-ref`. `--prompt-orka-namespace` selects the Orka namespace,
+and `--prompt-orka-git-secret` may name a read-only clone Secret for private
+source repositories. Orka owns the model, credentials, and network policy, so
+`--prompt-agent-model` and `--prompt-network-domain` are invalid in Orka mode.
+Set `ORKA_KUBE_CONTEXT` only for an explicitly selected non-default context.
+
 Agent failures fall back to the TODO template and handoff bundle. Safe warnings
 identify source-resolution, execution, timeout, or output-validation failures
 without printing raw OpenCode output. The final review shows the requested mode,
@@ -200,7 +208,8 @@ Open-PR mode continues to use a GitHub diff and does not use local update mode.
 
 Automation can add `--require-prompt-draft` to fail before local writes or pull
 request creation unless agent drafting succeeds. It is valid only with
-`--prompt-mode=agent` and uses OpenCode ambient authentication.
+`--prompt-mode=agent`. Local mode uses OpenCode ambient authentication. Orka
+mode uses only the referenced Agent's provider credential.
 
 Prompt preparation has a 15-minute total timeout by default. Slow agent runs can
 use `--prompt-timeout`, for example `--prompt-timeout 30m`. The accepted range is

@@ -50,6 +50,13 @@ type Options struct {
 	PromptMode string
 	// PromptAgentModel is an OpenCode provider/model reference.
 	PromptAgentModel string
+	// PromptAgentRuntime selects local opencode or the Orka backend.
+	PromptAgentRuntime string
+	// PromptOrka fields configure the optional Orka prompt backend.
+	PromptOrkaAPI       string
+	PromptOrkaAgentRef  string
+	PromptOrkaNamespace string
+	PromptOrkaGitSecret string
 	// PromptNetworkDomains are additional reviewed provider destinations.
 	PromptNetworkDomains []string
 
