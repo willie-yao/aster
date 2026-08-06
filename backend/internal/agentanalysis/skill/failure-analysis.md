@@ -38,5 +38,12 @@ any other file. The file must contain one JSON object with exactly this shape:
 }
 ```
 
+Artifact `line_start` and `line_end` values are 1-based within that excerpt's
+`content`, not the original artifact. Copy short quote lines verbatim. Prefix text
+may be omitted only when each quoted line remains an exact substring of consecutive
+excerpt lines. Prefer text that occurs once in the excerpt. For repeated text, provide
+a range that contains exactly one matching occurrence. Do not paraphrase, use blank
+quote lines as wildcards, merge nonconsecutive lines, or invent line ranges.
+
 Every relevant file must be supported by an evidence or source citation. Include
 at least one citation. Do not add Markdown fences or prose outside the JSON object.

@@ -3,6 +3,7 @@ package agentanalysis
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -46,6 +47,95 @@ func TestParseAndValidateAnalysis(t *testing.T) {
 	}
 	if reader.calls["pkg/retry.go"] != 1 {
 		t.Fatalf("source reads = %v", reader.calls)
+	}
+}
+
+func TestParseAndValidateAnalysisRepairsEvidenceCitationRanges(t *testing.T) {
+	bundle, err := NewEvidenceBundle(
+		testRequest(),
+		sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: strings.Repeat("a", 40)},
+		ArtifactScan{PathCount: 1}, nil,
+		[]EvidenceExcerpt{{Path: "build-log.txt", Kind: "tail", Content: "prefix\n2026-08-06 Node is NotReady worker\n2026-08-06 Node is NotReady worker2\n"}}, "",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quote := "Node is NotReady worker\nNode is NotReady worker2"
+	raw := fmt.Sprintf(`{"version":1,"contract_version":"agent-analysis-v1","summary":"request failed","is_transient":false,"root_cause":"the artifact records a failure","severity":"High","suggested_fix":"Correct the retry behavior.","relevant_files":["build-log.txt","pkg/retry.go"],"evidence_citations":[{"excerpt_id":%q,"line_start":1,"line_end":1,"quote":%q}],"source_citations":[{"path":"pkg/retry.go","line_start":2,"line_end":2,"quote":"return err"}],"unresolved_details":[]}`, bundle.Excerpts[0].ID, quote)
+	got, err := parseAndValidateAnalysis(t.Context(), raw, bundle, &testSourceReader{files: map[string]string{"pkg/retry.go": "func retry() {\nreturn err\n}\n"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if citation := got.EvidenceCitations[0]; citation.LineStart != 2 || citation.LineEnd != 3 || citation.Quote != quote {
+		t.Fatalf("citation = %+v", citation)
+	}
+}
+
+func TestParseAndValidateAnalysisRejectsNonconsecutiveEvidenceQuote(t *testing.T) {
+	bundle, err := NewEvidenceBundle(
+		testRequest(),
+		sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: strings.Repeat("a", 40)},
+		ArtifactScan{PathCount: 1}, nil,
+		[]EvidenceExcerpt{{Path: "build-log.txt", Kind: "tail", Content: "first signal\nunrelated\nsecond signal\n"}}, "",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := fmt.Sprintf(`{"version":1,"contract_version":"agent-analysis-v1","summary":"request failed","is_transient":false,"root_cause":"the artifact records a failure","severity":"High","suggested_fix":"Correct the retry behavior.","relevant_files":["build-log.txt","pkg/retry.go"],"evidence_citations":[{"excerpt_id":%q,"line_start":1,"line_end":3,"quote":"first signal\nsecond signal"}],"source_citations":[{"path":"pkg/retry.go","line_start":2,"line_end":2,"quote":"return err"}],"unresolved_details":[]}`, bundle.Excerpts[0].ID)
+	if _, err := parseAndValidateAnalysis(t.Context(), raw, bundle, &testSourceReader{files: map[string]string{"pkg/retry.go": "func retry() {\nreturn err\n}\n"}}); !errors.Is(err, ErrInvalidResult) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestParseAndValidateAnalysisRejectsBlankQuoteWildcard(t *testing.T) {
+	bundle, err := NewEvidenceBundle(
+		testRequest(),
+		sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: strings.Repeat("a", 40)},
+		ArtifactScan{PathCount: 1}, nil,
+		[]EvidenceExcerpt{{Path: "build-log.txt", Kind: "tail", Content: "first signal\nunrelated content\nsecond signal\n"}}, "",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := fmt.Sprintf(`{"version":1,"contract_version":"agent-analysis-v1","summary":"request failed","is_transient":false,"root_cause":"the artifact records a failure","severity":"High","suggested_fix":"Correct the retry behavior.","relevant_files":["build-log.txt","pkg/retry.go"],"evidence_citations":[{"excerpt_id":%q,"line_start":1,"line_end":3,"quote":"first signal\n\nsecond signal"}],"source_citations":[{"path":"pkg/retry.go","line_start":2,"line_end":2,"quote":"return err"}],"unresolved_details":[]}`, bundle.Excerpts[0].ID)
+	if _, err := parseAndValidateAnalysis(t.Context(), raw, bundle, &testSourceReader{files: map[string]string{"pkg/retry.go": "func retry() {\nreturn err\n}\n"}}); !errors.Is(err, ErrInvalidResult) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestParseAndValidateAnalysisUsesHintForRepeatedQuote(t *testing.T) {
+	bundle, err := NewEvidenceBundle(
+		testRequest(),
+		sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: strings.Repeat("a", 40)},
+		ArtifactScan{PathCount: 1}, nil,
+		[]EvidenceExcerpt{{Path: "build-log.txt", Kind: "tail", Content: "same signal\nother\nsame signal\n"}}, "",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := fmt.Sprintf(`{"version":1,"contract_version":"agent-analysis-v1","summary":"request failed","is_transient":false,"root_cause":"the artifact records a failure","severity":"High","suggested_fix":"Correct the retry behavior.","relevant_files":["build-log.txt","pkg/retry.go"],"evidence_citations":[{"excerpt_id":%q,"line_start":3,"line_end":3,"quote":"same signal"}],"source_citations":[{"path":"pkg/retry.go","line_start":2,"line_end":2,"quote":"return err"}],"unresolved_details":[]}`, bundle.Excerpts[0].ID)
+	got, err := parseAndValidateAnalysis(t.Context(), raw, bundle, &testSourceReader{files: map[string]string{"pkg/retry.go": "func retry() {\nreturn err\n}\n"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if citation := got.EvidenceCitations[0]; citation.LineStart != 3 || citation.LineEnd != 3 {
+		t.Fatalf("citation = %+v", citation)
+	}
+}
+
+func TestParseAndValidateAnalysisRejectsAmbiguousQuoteWithoutHint(t *testing.T) {
+	bundle, err := NewEvidenceBundle(
+		testRequest(),
+		sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: strings.Repeat("a", 40)},
+		ArtifactScan{PathCount: 1}, nil,
+		[]EvidenceExcerpt{{Path: "build-log.txt", Kind: "tail", Content: "same signal\nother\nsame signal\n"}}, "",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := fmt.Sprintf(`{"version":1,"contract_version":"agent-analysis-v1","summary":"request failed","is_transient":false,"root_cause":"the artifact records a failure","severity":"High","suggested_fix":"Correct the retry behavior.","relevant_files":["build-log.txt","pkg/retry.go"],"evidence_citations":[{"excerpt_id":%q,"line_start":1,"line_end":3,"quote":"same signal"}],"source_citations":[{"path":"pkg/retry.go","line_start":2,"line_end":2,"quote":"return err"}],"unresolved_details":[]}`, bundle.Excerpts[0].ID)
+	if _, err := parseAndValidateAnalysis(t.Context(), raw, bundle, &testSourceReader{files: map[string]string{"pkg/retry.go": "func retry() {\nreturn err\n}\n"}}); !errors.Is(err, ErrInvalidResult) {
+		t.Fatalf("error = %v", err)
 	}
 }
 
