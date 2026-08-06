@@ -241,17 +241,21 @@ func validateEvidenceCitations(citations []EvidenceCitation, excerpts []Evidence
 		if !ok {
 			return fmt.Errorf("%w: evidence citation %d references unknown excerpt %q", ErrInvalidResult, i, citation.ExcerptID)
 		}
-		lines := strings.Split(strings.ReplaceAll(excerpt.Content, "\r\n", "\n"), "\n")
-		if citation.LineStart < 1 || citation.LineEnd < citation.LineStart || citation.LineEnd > len(lines) || citation.LineEnd-citation.LineStart+1 > maxCitationLines {
-			return fmt.Errorf("%w: evidence citation %d has invalid line range", ErrInvalidResult, i)
-		}
+		citation.Quote = strings.ReplaceAll(citation.Quote, "\r\n", "\n")
 		if strings.TrimSpace(citation.Quote) == "" || len(citation.Quote) > maxCitationQuoteBytes {
 			return fmt.Errorf("%w: evidence citation %d quote is empty or oversized", ErrInvalidResult, i)
 		}
-		selected := strings.Join(lines[citation.LineStart-1:citation.LineEnd], "\n")
-		if !strings.Contains(selected, citation.Quote) {
+		lines := strings.Split(strings.ReplaceAll(excerpt.Content, "\r\n", "\n"), "\n")
+		quoteLines := strings.Split(citation.Quote, "\n")
+		if len(quoteLines) > maxCitationLines {
+			return fmt.Errorf("%w: evidence citation %d quote spans too many lines", ErrInvalidResult, i)
+		}
+		lineStart, lineEnd, ok := findEvidenceQuoteRange(lines, quoteLines, citation.LineStart, citation.LineEnd)
+		if !ok {
 			return fmt.Errorf("%w: evidence citation %d quote does not match excerpt", ErrInvalidResult, i)
 		}
+		citation.LineStart, citation.LineEnd = lineStart, lineEnd
+		citations[i] = citation
 		key := fmt.Sprintf("%s:%d:%d:%s", citation.ExcerptID, citation.LineStart, citation.LineEnd, citation.Quote)
 		if seen[key] {
 			return fmt.Errorf("%w: duplicate evidence citation %d", ErrInvalidResult, i)
@@ -259,6 +263,50 @@ func validateEvidenceCitations(citations []EvidenceCitation, excerpts []Evidence
 		seen[key] = true
 	}
 	return nil
+}
+
+type evidenceLineRange struct {
+	start int
+	end   int
+}
+
+func findEvidenceQuoteRange(lines, quoteLines []string, hintedStart, hintedEnd int) (int, int, bool) {
+	if len(quoteLines) == 0 || len(quoteLines) > len(lines) {
+		return 0, 0, false
+	}
+	matches := make([]evidenceLineRange, 0, 1)
+	for start := 0; start+len(quoteLines) <= len(lines); start++ {
+		matched := true
+		for offset, quoteLine := range quoteLines {
+			excerptLine := lines[start+offset]
+			if strings.TrimSpace(quoteLine) == "" {
+				matched = excerptLine == quoteLine
+			} else {
+				matched = strings.Contains(excerptLine, quoteLine)
+			}
+			if !matched {
+				break
+			}
+		}
+		if matched {
+			matches = append(matches, evidenceLineRange{start: start + 1, end: start + len(quoteLines)})
+		}
+	}
+	if len(matches) == 1 {
+		return matches[0].start, matches[0].end, true
+	}
+	if hintedStart > 0 && hintedEnd >= hintedStart {
+		hinted := matches[:0]
+		for _, match := range matches {
+			if match.start >= hintedStart && match.end <= hintedEnd {
+				hinted = append(hinted, match)
+			}
+		}
+		if len(hinted) == 1 {
+			return hinted[0].start, hinted[0].end, true
+		}
+	}
+	return 0, 0, false
 }
 
 func validateRelevantFiles(files []string, analysis Analysis, excerpts []EvidenceExcerpt) error {
