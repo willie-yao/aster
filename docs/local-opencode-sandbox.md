@@ -31,6 +31,21 @@ The package requires Node.js 20.11 or newer. Platform dependencies are:
 - Linux: `bash`, `bwrap` (`bubblewrap`), `socat`, and `rg`.
 
 Linux also needs capability-bearing unprivileged user namespaces. If the host security policy prevents `bubblewrap` or the bundled seccomp helper from creating them, the runtime fails closed.
+Ubuntu 24.04 and newer enable an AppArmor restriction that removes those
+capabilities by default. On a dedicated sandbox host, either grant `userns` to
+the required binaries with an AppArmor profile or disable that restriction:
+
+```bash
+sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+```
+
+The repository builds and verifies the pinned installer in a separate workflow
+only for SRT-related changes, on a weekly schedule, or by manual dispatch. The
+normal CI workflow retains deterministic installer-contract, policy, and
+fail-closed tests. GitHub-hosted runners do not provide the nested
+capability-bearing namespace environment required by the hostile and
+cancellation integrations, so those tests must run manually on a dedicated
+compatible Linux host.
 
 ## Enforced boundary
 

@@ -71,20 +71,33 @@ func TestSRTInstallerContract(t *testing.T) {
 		t.Fatal("fixer image still installs srt from the package registry")
 	}
 
-	workflow, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "ci.yml"))
+	workflow, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "srt-integration.yml"))
 	if err != nil {
 		t.Fatalf("read CI workflow: %v", err)
 	}
 	workflowText := string(workflow)
 	for _, want := range []string{
-		"srt-installer:",
+		"name: SRT installer",
+		"runs-on: ubuntu-latest",
+		"workflow_dispatch:",
+		`cron: "17 9 * * 1"`,
+		`"backend/internal/runtime/srt_*.go"`,
 		`./hack/install-srt.sh "$RUNNER_TEMP/srt-0.0.70"`,
 		`"$SRT_BIN" --help`,
 		"installer_schema=2",
-		"TestSRTSandboxHostileIntegration",
 	} {
 		if !strings.Contains(workflowText, want) {
 			t.Errorf("CI workflow missing %q", want)
 		}
+	}
+	ciWorkflow, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatalf("read CI workflow: %v", err)
+	}
+	if strings.Contains(string(ciWorkflow), "srt-installer:") || strings.Contains(string(ciWorkflow), "TestSRTSandboxHostileIntegration") {
+		t.Fatal("host-dependent srt integration is still part of required per-PR CI")
+	}
+	if strings.Contains(workflowText, "SRT_TEST_BIN") || strings.Contains(workflowText, "TestSRTSandbox") {
+		t.Fatal("GitHub-hosted installer workflow still runs host-kernel sandbox integrations")
 	}
 }
