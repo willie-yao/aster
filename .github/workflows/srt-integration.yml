@@ -7,7 +7,7 @@ on:
       - "Dockerfile"
       - "hack/build-srt-seccomp.mjs"
       - "hack/install-srt.sh"
-      - "backend/internal/runtime/sandbox.go"
+      - "backend/internal/runtime/process_sandbox.go"
       - "backend/internal/runtime/srt_*.go"
   push:
     branches: [main]
@@ -16,7 +16,7 @@ on:
       - "Dockerfile"
       - "hack/build-srt-seccomp.mjs"
       - "hack/install-srt.sh"
-      - "backend/internal/runtime/sandbox.go"
+      - "backend/internal/runtime/process_sandbox.go"
       - "backend/internal/runtime/srt_*.go"
   schedule:
     - cron: "17 9 * * 1"
