@@ -25,6 +25,7 @@ const benchmarkManifestVersion = 1
 var benchmarkCaseIDRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 var benchmarkStableIDRE = regexp.MustCompile(`^[0-9a-f]{20}$`)
 var benchmarkCommitRE = regexp.MustCompile(`^[0-9a-f]{40}$`)
+var benchmarkSHA256RE = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 type benchmarkManifest struct {
 	Version int                     `json:"version"`
@@ -49,16 +50,22 @@ func TestCrossProjectEvaluationManifest(t *testing.T) {
 		if bc.fixtureAsset == "" || len(bc.fixtureSHA256) != 64 {
 			t.Fatalf("case %q has incomplete fixture identity", bc.name)
 		}
+		if bc.consumerCommit == "" || bc.projectSHA256 == "" || bc.promptSHA256 == "" || bc.expectedTransient == nil {
+			t.Fatalf("case %q has incomplete consumer or transient identity", bc.name)
+		}
 		if bc.allowUnavailable {
 			allowedUnavailable++
 			if bc.name != "gcp-pd-csi-windows-mount-visibility" {
 				t.Fatalf("case %q unexpectedly allows unavailable", bc.name)
 			}
 		}
-		for _, signal := range bc.signals {
-			if signal.must && signal.matches(strings.ToLower(bc.oppositeDiagnosis)) {
-				t.Errorf("case %q required signal %q accepts opposite diagnosis", bc.name, signal.name)
-			}
+		opposite := &models.TestCase{
+			AISummary:  &models.AISummary{Summary: bc.oppositeDiagnosis, IsTransient: bc.oppositeTransient},
+			AIAnalysis: &models.AIAnalysis{RootCause: bc.oppositeDiagnosis},
+		}
+		assessment := assessBenchmarkCase(bc, opposite)
+		if len(assessment.missingMust) == 0 {
+			t.Errorf("case %q accepts adversarial opposite diagnosis", bc.name)
 		}
 	}
 	if allowedUnavailable != 1 {
@@ -89,7 +96,13 @@ type benchmarkManifestCase struct {
 	FailureMessage      string                    `json:"failure_message"`
 	ConsecutiveFailures int                       `json:"consecutive_failures,omitempty"`
 	OppositeDiagnosis   string                    `json:"opposite_diagnosis,omitempty"`
+	OppositeTransient   bool                      `json:"opposite_is_transient,omitempty"`
 	AllowUnavailable    bool                      `json:"allow_unavailable,omitempty"`
+	ExpectedTransient   *bool                     `json:"expected_transient,omitempty"`
+	Forbidden           []benchmarkManifestSignal `json:"forbidden,omitempty"`
+	ConsumerCommit      string                    `json:"consumer_commit,omitempty"`
+	ProjectSHA256       string                    `json:"project_sha256,omitempty"`
+	PromptSHA256        string                    `json:"prompt_sha256,omitempty"`
 	Signals             []benchmarkManifestSignal `json:"signals"`
 }
 
@@ -185,6 +198,10 @@ func loadBenchmarkManifest(path string) ([]benchCase, error) {
 		if len(item.TestName) > 4096 || len(item.FailureMessage) > 16384 || len(item.OppositeDiagnosis) > 16384 {
 			return nil, fmt.Errorf("benchmark manifest case %q text exceeds limits", item.ID)
 		}
+		consumerPinned := item.ConsumerCommit != "" || item.ProjectSHA256 != "" || item.PromptSHA256 != ""
+		if consumerPinned && (!benchmarkCommitRE.MatchString(item.ConsumerCommit) || !benchmarkSHA256RE.MatchString(item.ProjectSHA256) || !benchmarkSHA256RE.MatchString(item.PromptSHA256)) {
+			return nil, fmt.Errorf("benchmark manifest case %q has incomplete consumer identity", item.ID)
+		}
 		if item.FixtureAsset != "" {
 			if filepath.Base(item.FixtureAsset) != item.FixtureAsset || !strings.HasSuffix(item.FixtureAsset, ".tar.gz") || len(item.FixtureSHA256) != 64 {
 				return nil, fmt.Errorf("benchmark manifest case %q has invalid fixture identity", item.ID)
@@ -211,6 +228,20 @@ func loadBenchmarkManifest(path string) ([]benchCase, error) {
 			}
 			signals = append(signals, benchSignal{name: signal.Name, re: positive, negated: negative, must: signal.Must})
 		}
+		if len(item.Forbidden) > 16 {
+			return nil, fmt.Errorf("benchmark manifest case %q forbidden count exceeds 16", item.ID)
+		}
+		forbidden := make([]benchSignal, 0, len(item.Forbidden))
+		for forbiddenIndex, signal := range item.Forbidden {
+			if signal.Name == "" || signal.Pattern == "" || signal.Negated != "" || signal.Must {
+				return nil, fmt.Errorf("benchmark manifest case %q forbidden %d is invalid", item.ID, forbiddenIndex)
+			}
+			pattern, err := regexp.Compile(signal.Pattern)
+			if err != nil {
+				return nil, fmt.Errorf("benchmark manifest case %q forbidden %d pattern: %w", item.ID, forbiddenIndex, err)
+			}
+			forbidden = append(forbidden, benchSignal{name: signal.Name, re: pattern})
+		}
 		out = append(out, benchCase{
 			name: item.ID, stableID: item.StableID, bucket: item.Bucket, fixtureAsset: item.FixtureAsset,
 			fixtureSHA256: item.FixtureSHA256, jobType: item.JobType, repo: item.Repo, jobName: item.JobName,
@@ -218,7 +249,10 @@ func loadBenchmarkManifest(path string) ([]benchCase, error) {
 			commit: item.Commit, repoVersion: item.RepoVersion, repoRefs: maps.Clone(item.RepoRefs),
 			sourceRepo: [2]string{item.SourceOwner, item.SourceName}, testName: item.TestName, testSource: item.TestSource,
 			junitFile: item.JUnitFile, failureMsg: item.FailureMessage, consecutiveFailures: item.ConsecutiveFailures,
-			oppositeDiagnosis: item.OppositeDiagnosis, allowUnavailable: item.AllowUnavailable, signals: signals,
+			oppositeDiagnosis: item.OppositeDiagnosis, oppositeTransient: item.OppositeTransient,
+			allowUnavailable: item.AllowUnavailable, expectedTransient: item.ExpectedTransient, forbidden: forbidden,
+			consumerCommit: item.ConsumerCommit, projectSHA256: item.ProjectSHA256, promptSHA256: item.PromptSHA256,
+			signals: signals,
 		})
 	}
 	return out, nil
@@ -237,6 +271,7 @@ type benchmarkJSONLResult struct {
 	TestName                string                     `json:"test_name"`
 	TestSource              string                     `json:"test_source,omitempty"`
 	ElapsedMS               int64                      `json:"elapsed_ms"`
+	Outcome                 string                     `json:"outcome"`
 	Usable                  bool                       `json:"usable"`
 	Summary                 string                     `json:"summary,omitempty"`
 	RootCause               string                     `json:"root_cause,omitempty"`
@@ -337,7 +372,7 @@ type benchmarkJSONLTrace struct {
 	Critique          map[string]int `json:"critique"`
 }
 
-func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int, tc *models.TestCase, elapsed time.Duration, snapshot ai.AnalysisTraceFile, observations []benchmarkDraftObservation, selectedAttempt int, toolUsage benchmarkToolUsage, traceSummary benchmarkTraceSummary, providerRequestCap int, cacheGeneration string, critiquePolicy ai.CritiqueCachePolicy, cacheVerification benchmarkCacheVerification) {
+func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int, tc *models.TestCase, outcome benchmarkOutcome, elapsed time.Duration, snapshot ai.AnalysisTraceFile, observations []benchmarkDraftObservation, selectedAttempt int, toolUsage benchmarkToolUsage, traceSummary benchmarkTraceSummary, providerRequestCap int, cacheGeneration string, critiquePolicy ai.CritiqueCachePolicy, cacheVerification benchmarkCacheVerification) {
 	t.Helper()
 	if path == "" {
 		return
@@ -351,8 +386,8 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 	}
 	result := benchmarkJSONLResult{
 		CaseID: bc.name, StableID: bc.stableID, Repetition: repetition, ModelLabel: label,
-		JobName: bc.jobName, BuildID: bc.buildID, CheckoutCommit: bc.commit, TestName: bc.testName, TestSource: bc.testSource, ElapsedMS: elapsed.Milliseconds(),
-		FileLinks: map[string]string{}, SignalTotal: len(bc.signals), SelectedAttempt: selectedAttempt,
+		JobName: bc.jobName, BuildID: bc.buildID, CheckoutCommit: bc.commit, TestName: bc.testName, TestSource: bc.testSource, ElapsedMS: elapsed.Milliseconds(), Outcome: string(outcome),
+		FileLinks: map[string]string{}, SelectedAttempt: selectedAttempt,
 		ToolNames: append([]string(nil), toolUsage.names...), ToolCounts: append([]string(nil), toolUsage.counts...),
 		FloorNudges: traceSummary.floorNudges, FloorNudgeReasons: append([]string(nil), traceSummary.floorNudgeReasons...),
 		ProviderRequestCap: providerRequestCap, TraceTruncated: traceSummary.truncated, CacheGeneration: cacheGeneration, CacheVerification: cacheVerification,
@@ -379,9 +414,12 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 	} else {
 		result.SourceUnavailable = true
 	}
+	if tc != nil && tc.AISummary != nil {
+		result.Summary = tc.AISummary.Summary
+	}
 	if tc != nil && tc.AIAnalysis != nil && tc.AISummary != nil {
 		result.Usable = true
-		result.Summary, result.RootCause, result.SuggestedFix, result.Severity = tc.AISummary.Summary, tc.AIAnalysis.RootCause, tc.AIAnalysis.SuggestedFix, tc.AIAnalysis.Severity
+		result.RootCause, result.SuggestedFix, result.Severity = tc.AIAnalysis.RootCause, tc.AIAnalysis.SuggestedFix, tc.AIAnalysis.Severity
 		result.GCSBytes = tc.AIAnalysis.GCSBytes
 		result.EvidencePlanCovered = tc.AIAnalysis.EvidencePlanCovered
 		result.GCSFloorRetryExhausted = tc.AIAnalysis.GCSFloorRetryExhausted
@@ -394,13 +432,13 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 		for key, value := range tc.AIAnalysis.FileLinks {
 			result.FileLinks[key] = value
 		}
-		scored := strings.ToLower(strings.Join([]string{result.Summary, result.RootCause, result.SuggestedFix}, "\n"))
-		for _, signal := range bc.signals {
-			if signal.matches(scored) {
-				result.SignalHits++
-			} else if signal.must {
-				result.MissingMust = append(result.MissingMust, signal.name)
-			}
+		assessment := assessBenchmarkCase(bc, tc)
+		result.SignalHits, result.SignalTotal = assessment.hits, assessment.total
+		result.MissingMust = append(result.MissingMust, assessment.missingMust...)
+	} else {
+		result.SignalTotal = len(bc.signals) + len(bc.forbidden)
+		if bc.expectedTransient != nil {
+			result.SignalTotal++
 		}
 	}
 	for _, trace := range snapshot.Traces {
@@ -565,7 +603,7 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 		Attempt: 1, Phase: "initial", RuleIDs: []string{"remediation.punt"},
 		MatchedSkillIDs: []string{"skill-a"}, MissingGroups: []ai.CritiqueEvidenceGroupRef{{SkillID: "skill-a", GroupID: "group-a"}}, PuntCount: 1,
 	}}}
-	writeBenchmarkJSONL(t, path, bc, 2, tc, 3*time.Second, snapshot, observations, 1,
+	writeBenchmarkJSONL(t, path, bc, 2, tc, benchmarkOutcomeUsable, 3*time.Second, snapshot, observations, 1,
 		benchmarkToolUsage{names: []string{"read_artifact"}, counts: []string{"read_artifact=1"}},
 		benchmarkTraceSummary{floorNudges: 1, floorNudgeReasons: []string{"gcs_bytes"}}, 17, "generation", ai.CritiqueCachePolicyHard, cacheVerification)
 	data, err := os.ReadFile(path)
@@ -579,7 +617,7 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 	if err := json.Unmarshal(data, &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.ModelLabel != "model-a" || result.Repetition != 2 || result.SignalHits != 1 || result.SourceRevision != strings.Repeat("a", 40) || result.SourceUnavailable || result.TestSource != models.TestCaseSourceBuild ||
+	if result.ModelLabel != "model-a" || result.Repetition != 2 || result.Outcome != string(benchmarkOutcomeUsable) || result.SignalHits != 1 || result.SourceRevision != strings.Repeat("a", 40) || result.SourceUnavailable || result.TestSource != models.TestCaseSourceBuild ||
 		result.Trace.Finalize["empty:unexpected_tool_call"] != 1 || result.Trace.Critique["punts"] != 1 || result.GCSBytes != 42 ||
 		!result.EvidencePlanCovered || !result.GCSFloorRetryExhausted || result.CritiquePassed == nil || !*result.CritiquePassed || !result.BudgetExhausted ||
 		result.FloorNudges != 1 || !slices.Equal(result.FloorNudgeReasons, []string{"gcs_bytes"}) ||
@@ -598,5 +636,28 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("result mode=%o", info.Mode().Perm())
+	}
+}
+
+func TestWriteBenchmarkJSONLRecordsGroundedUnavailableOutcome(t *testing.T) {
+	t.Setenv("BENCH_MODEL_LABEL", "model-a")
+	path := filepath.Join(t.TempDir(), "results.jsonl")
+	bc := benchCase{
+		name: "case-unavailable", stableID: "abcdef0123456789abcd", jobName: "job", buildID: "123", testName: "test",
+		commit: strings.Repeat("a", 40), repoVersion: strings.Repeat("a", 40), repoRefs: map[string]string{"example/project": strings.Repeat("a", 40)},
+		sourceRepo: [2]string{"example", "project"}, allowUnavailable: true,
+	}
+	tc := &models.TestCase{AISummary: &models.AISummary{Summary: "AI analysis unavailable: no validated artifact citation supports the analysis"}}
+	writeBenchmarkJSONL(t, path, bc, 1, tc, benchmarkOutcomeGroundedPolicyUnavailable, time.Second, ai.AnalysisTraceFile{}, nil, 0, benchmarkToolUsage{}, benchmarkTraceSummary{}, 1, "", ai.CritiqueCachePolicyHard, benchmarkCacheVerification{})
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result benchmarkJSONLResult
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Outcome != string(benchmarkOutcomeGroundedPolicyUnavailable) || result.Usable || result.Summary != tc.AISummary.Summary {
+		t.Fatalf("result = %+v", result)
 	}
 }

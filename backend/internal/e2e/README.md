@@ -26,15 +26,31 @@ AI_MODEL=moonshotai/Kimi-K2.7-Code AI_TOKEN=x \
 go test ./internal/e2e -run TestAIBenchmark -v -timeout 60m
 ```
 
-The frozen cross-project evaluation cohort is available as an external manifest:
+The frozen cross-project evaluation cohort is available as an external manifest.
+Run each case separately with its matching consumer. The manifest validates the
+consumer commit plus `project.yaml` and `prompts/system.md` hashes before making
+provider requests:
 
 ```bash
-RUN_AI_BENCHMARK=1 \
-BENCH_MANIFEST=./internal/e2e/testdata/benchmarks/cross-project-eval.json \
-BENCH_PROJECT_DIR=/path/to/consumer \
-AI_ENDPOINT=<chat-completions-url> AI_MODEL=<model> AI_TOKEN=<token> \
-go test ./internal/e2e -run TestAIBenchmark -v -timeout 90m
+manifest=./internal/e2e/testdata/benchmarks/cross-project-eval.json
+
+run_case() {
+  RUN_AI_BENCHMARK=1 BENCH_MANIFEST="$manifest" \
+  BENCH_CASE="$1" BENCH_PROJECT_DIR="$2" \
+  AI_ENDPOINT=<chat-completions-url> AI_MODEL=<model> AI_TOKEN=<token> \
+  go test ./internal/e2e -run TestAIBenchmark -v -timeout 90m
+}
+
+run_case secrets-store-csi-image-scan /path/to/secrets-store-csi-prow-dashboard-eval
+run_case kueue-was-podgroup-api-mismatch /path/to/kueue-prow-ai-dashboard-eval
+run_case gcp-pd-csi-windows-mount-visibility /path/to/gcp-pd-csi-prow-dashboard-eval
 ```
+
+The pinned baseline consumer commits are:
+
+- Secrets Store CSI: `cf63e830080f203fbda95a3077c5e02da55fb6f1`
+- Kueue: `e4257c64fc9c5344b01919488fc76aa3fb0618b7`
+- GCP PD CSI: `f74fc047a1f6de10eec334207c4e58ce743bdcac`
 
 Its Secrets Store CSI and Kueue cases require a grounded diagnosis. The GCP PD
 CSI reference is medium confidence, so that case also accepts the engine's
@@ -45,6 +61,9 @@ Options:
 - `BENCH_PROJECT_DIR=<consumer-repo>` loads that consumer's real `project.yaml`
   AI tuning and `prompts/system.md`, so the run matches that live deploy exactly.
   Without it, a compact built-in prompt and the live CAPZ-Dynamo tuning are used.
+- `BENCH_CASE=<case-id>` selects one exact external-manifest case. Pinned
+  cross-project consumers require this so one project's prompt is never applied
+  to another project's fixture.
 - External manifest cases may set `test_source: build` for a Prow build-level
   failure that has no JUnit case. This preserves the production failure signal
   and build-specific floor policy.

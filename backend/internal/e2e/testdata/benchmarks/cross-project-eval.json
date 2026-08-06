@@ -21,7 +21,7 @@
       "test_name": "Prow job execution",
       "test_source": "build",
       "failure_message": "Trivy image scan found fixable vulnerabilities and make image-scan exited with Error 1.",
-      "opposite_diagnosis": "A transient Kubernetes startup timeout caused the job to fail before any security scan completed.",
+      "opposite_diagnosis": "Trivy found four fixable vulnerabilities and the --exit-code 1 security gate fired, but the root cause was a transient scanner database flake.",
       "signals": [
         {
           "name": "identifies Trivy security scan",
@@ -47,6 +47,17 @@
           "name": "names dependency or toolchain remediation",
           "pattern": "(?i)(?:golang\\.org/x/text|google\\.golang\\.org/grpc|go\\s+1\\.26\\.5)"
         }
+      ],
+      "consumer_commit": "cf63e830080f203fbda95a3077c5e02da55fb6f1",
+      "project_sha256": "10873d2458089155433d834f70d836166dc940c9e61c174fc389a28aed783b5a",
+      "prompt_sha256": "2eb191dd8303bdead6d0465d0ca0ec96a4f55b3553df7b8d6850f7a7c0cd764e",
+      "expected_transient": false,
+      "opposite_is_transient": true,
+      "forbidden": [
+        {
+          "name": "transient security-scanner attribution",
+          "pattern": "(?is)(?:(?:root cause|caused by|primary failure).{0,120}(?:transient|flake).{0,80}(?:scanner|database|trivy)|(?:transient|flake).{0,80}(?:scanner|database|trivy).{0,120}(?:root cause|caused|primary))"
+        }
       ]
     },
     {
@@ -69,7 +80,7 @@
       "test_name": "Prow job execution",
       "test_source": "build",
       "failure_message": "error: timed out waiting for the condition on deployments/kubeflow-trainer-controller-manager; make run-test-e2e-k8s-main-was failed.",
-      "opposite_diagnosis": "The controller timeout was a transient image-readiness flake; no scheduler API incompatibility was involved.",
+      "opposite_diagnosis": "The scheduler requested v1alpha3 while the cluster served v1beta1; PodGroup returned 404 and the handler failed to sync, but a transient image-readiness flake was the primary cause.",
       "signals": [
         {
           "name": "identifies PodGroup API",
@@ -78,7 +89,7 @@
         },
         {
           "name": "identifies requested and served version mismatch",
-          "pattern": "(?is)(?:v1beta1.{0,160}v1alpha3|v1alpha3.{0,160}v1beta1)",
+          "pattern": "(?is)(?:(?:request(?:ed|ing)?|attempt(?:ed|ing)?).{0,100}v1beta1.{0,220}(?:served|available|configured|provided).{0,100}v1alpha3|v1beta1.{0,100}(?:request(?:ed|ing)?|attempt(?:ed|ing)?).{0,220}v1alpha3.{0,100}(?:served|available|configured|provided))",
           "must": true
         },
         {
@@ -95,6 +106,17 @@
           "name": "rejects transient-flake classification",
           "pattern": "(?i)(?:non-transient|not\\s+(?:a\\s+)?transient|deterministic(?:\\s+api)?(?:-| )version mismatch)",
           "must": true
+        }
+      ],
+      "consumer_commit": "e4257c64fc9c5344b01919488fc76aa3fb0618b7",
+      "project_sha256": "aaec4a9ca30c5c74e5529164b3bfc1e5dfe6b8b51154956aa3b6949529c9d17b",
+      "prompt_sha256": "16b51ec1c39bd7c2b76d5bc33cb360b820ffd3b85d8b40cd0ec7fadc3118e6fc",
+      "expected_transient": false,
+      "opposite_is_transient": true,
+      "forbidden": [
+        {
+          "name": "transient readiness as primary cause",
+          "pattern": "(?is)(?:(?:root cause|primary cause|caused by).{0,140}(?:transient|image.{0,40}flake|readiness flake)|(?:transient|image.{0,40}flake|readiness flake).{0,140}(?:root cause|primary cause|caused))"
         }
       ]
     },
@@ -118,7 +140,7 @@
       "test_name": "[It] External Storage [Driver: csi-gcepd-sc-windows--pd-volumesnapshotclass] [Testpattern: Dynamic PV (default fs)] provisioning should provision correct filesystem size when restoring snapshot to larger size pvc [Feature:VolumeSnapshotDataSource]",
       "junit_file": "junit_pdcsi.xml",
       "failure_message": "[FAILED] Failed to obtain filesystem size of a volume mount: resolved empty volumeID for mountPath \"/mnt/volume1\" at provisioning.go:525.",
-      "opposite_diagnosis": "NodePublishVolume failed and definitively proves a GCE PD CSI node-driver defect.",
+      "opposite_diagnosis": "The Windows mount path was missing and the volume ID was empty. NodePublishVolume did not succeed. Ownership was briefly considered uncertain, but this definitively proves a GCE PD CSI node-driver defect.",
       "allow_unavailable": true,
       "signals": [
         {
@@ -129,7 +151,8 @@
         {
           "name": "recognizes NodePublishVolume succeeded",
           "pattern": "(?is)nodepublishvolume.{0,120}(?:success|succeed|completed)",
-          "must": true
+          "must": true,
+          "negated": "(?is)nodepublishvolume.{0,100}(?:did not|didn.t|failed|never|not).{0,100}(?:success|succeed|complete)"
         },
         {
           "name": "preserves ownership uncertainty",
@@ -143,6 +166,17 @@
         {
           "name": "classifies repeated failure as non-transient",
           "pattern": "(?i)(?:non-transient|not\\s+(?:a\\s+)?transient|deterministic|reproduced)"
+        }
+      ],
+      "consumer_commit": "f74fc047a1f6de10eec334207c4e58ce743bdcac",
+      "project_sha256": "77fed959893ab309306faf4dd9e58e56b70d6a45fd4ae40fec915306a080d957",
+      "prompt_sha256": "5009dffcbd676f595e1702ff04c8fb24785cce14220f1624583d45a11cefd581",
+      "expected_transient": false,
+      "opposite_is_transient": false,
+      "forbidden": [
+        {
+          "name": "unsupported component ownership",
+          "pattern": "(?is)(?:(?:definitively|conclusively|proves?|confirmed root cause).{0,160}(?:node driver|gce pd|csi.?proxy|test helper)|(?:node driver|gce pd|csi.?proxy|test helper).{0,160}(?:definitively|conclusively|proves?|confirmed root cause))"
         }
       ]
     }
