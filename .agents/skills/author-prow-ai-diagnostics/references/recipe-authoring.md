@@ -150,14 +150,15 @@ go test ./internal/ai/skills -count=1
 ```
 
 5. Exercise the proposal matrix through the current engine implementation. If
-   the engine revision has no proposal-test CLI, create one temporary Go test in
-   `backend/internal/ai/skills` that loads the disposable consumer with
-   `LoadForTools` and calls the existing `ParseAndValidate`, `LoadMerged`,
-   `Match`, `Plan`, `EvidenceGroup.Applies`, and evidence satisfaction methods.
-   This is the loader check for unknown fields, duplicate IDs, reserved prefixes,
-   selected profiles, regex compilation, and merged-set hashing. Do not
-   reimplement regex or evidence semantics. Run only that test, then remove the
-   temporary file and confirm the engine checkout is clean.
+   the engine revision has no proposal-test CLI, create one temporary Go test
+   only in the disposable validation engine clone under
+   `backend/internal/ai/skills`. Load the disposable consumer with `LoadForTools`
+   and call the existing `ParseAndValidate`, `LoadMerged`, `Match`, `Plan`,
+   `EvidenceGroup.Applies`, and evidence satisfaction methods. This is the loader
+   check for unknown fields, duplicate IDs, reserved prefixes, selected profiles,
+   regex compilation, and merged-set hashing. Do not reimplement regex or
+   evidence semantics. Run only that test, then remove the temporary file from
+   the validation clone. The pinned engine checkout must remain untouched.
 6. Record the exact command, engine SHA, case results, merged IDs, selected
    profiles, and full skill-set hash.
 

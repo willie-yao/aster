@@ -6,8 +6,9 @@ description: Investigate a prow-ai-dashboard consumer and its pinned Prow eviden
 # Author prow-ai-dashboard diagnostics
 
 Build a reviewable project diagnostic package from pinned source and Prow
-evidence. Write consumer prompt, proposal, and report files only. Keep source
-repositories, artifacts, live systems, and active recipes read-only.
+evidence. Write consumer prompt, proposal, and report files only. Keep the
+pinned engine, source repositories, artifacts, live systems, and active recipes
+read-only.
 
 ## Safety and product boundary
 
@@ -59,8 +60,13 @@ engine command and output digest in `reports/diagnostic-authoring.md`.
 
 ## 2. Create a write-safe evidence workspace
 
-Do not modify public baseline consumers or investigated source repositories.
-Use disposable clean copies for authoring validation and benchmark conditions.
+Do not modify the pinned engine checkout, public baseline consumers, or
+investigated source repositories. Create a disposable detached clone of the
+exact engine commit outside those directories and call it `<validation-engine>`.
+Run any generated Go validation tests only in that clone. Verify its HEAD before
+use and record the path and commit. Use separate disposable clean consumer copies
+for authoring validation and benchmark conditions.
+
 Keep the selected consumer as the only destination for these outputs:
 
 ```text
@@ -148,11 +154,11 @@ success or forward progress. Give every transient rule a non-transient boundary.
 Separate initiating errors from terminal wrappers and timeouts.
 
 Run the current prompt validator and `onboard doctor` after editing. If the
-engine has no prompt-validation CLI, create one temporary Go test in
-`backend/internal/onboard/promptauthor` that reads the consumer file and calls
-`promptauthor.Validate`. Run it with the existing promptauthor tests, remove the
-temporary file, and confirm the engine checkout is clean. Do not reimplement the
-heading contract in shell or Python.
+engine has no prompt-validation CLI, create one temporary Go test only in
+`<validation-engine>/backend/internal/onboard/promptauthor`. Have it read the
+consumer file and call `promptauthor.Validate`. Run it with the existing
+promptauthor tests, then remove the temporary file from the disposable clone. Do
+not reimplement the heading contract in shell or Python.
 
 ## 6. Propose only justified recipes
 
@@ -202,29 +208,35 @@ Do not tune a frozen proposal on its held-out case and still call that case blin
 
 ## 9. Run deterministic validation
 
-At minimum run:
+At minimum run against the disposable validation clone:
 
 ```bash
-python3 <skill-creator>/scripts/quick_validate.py \
-  <engine>/.agents/skills/author-prow-ai-diagnostics
-
 git -C <engine> diff --check
+git -C <validation-engine> diff --check
 
-go -C <engine>/backend test ./internal/ai/skills -count=1
-go -C <engine>/backend test ./internal/onboard/promptauthor -count=1
-go -C <engine>/backend test ./internal/onboard -run 'Doctor|Prompt' -count=1
-go -C <engine>/backend test ./internal/e2e -run 'BenchmarkManifest' -count=1
+go -C <validation-engine>/backend test ./internal/ai/skills -count=1
+go -C <validation-engine>/backend test ./internal/onboard/promptauthor -count=1
+go -C <validation-engine>/backend test ./internal/onboard \
+  -run '^(TestDiagnosticAuthoringAgentSkill|.*Doctor.*|.*Prompt.*)$' -count=1
+go -C <validation-engine>/backend test ./internal/e2e \
+  -run '^Test(CrossProjectEvaluationManifest|LoadBenchmarkManifest|ValidateBenchmarkProjectDir)$' -count=1
 
-go -C <engine>/backend run ./cmd/fetcher onboard doctor \
+go -C <validation-engine>/backend run ./cmd/fetcher onboard doctor \
   -project-dir <disposable-consumer>
 ```
 
-Use exact current test names if they differ at the selected engine revision. Run
-`make check-repo-map` only if repository package layout changes. If Go code
-changes unexpectedly, reassess scope, then run focused tests and the full backend
-checks required by the repository.
+The committed benchmark tests validate the engine suite, not derived condition
+manifests. After condition manifests are created, add one temporary provider-free
+test only in `<validation-engine>/backend/internal/e2e`. Enumerate every derived
+manifest and matching clean consumer directory, call `loadBenchmarkManifest` and
+`validateBenchmarkProjectDir`, load the merged recipe set, and fail on any
+mismatch. Run it, record the full hashes and IDs, then remove the temporary file
+from the disposable clone.
 
-Confirm the engine checkout has no temporary applicability test left behind.
+Use exact current test names if they differ at the selected engine revision. Run
+`make check-repo-map` only if repository package layout changes. Do not change Go
+production code during authoring. Confirm the pinned engine remains clean and no
+temporary validation test remains in the disposable clone.
 
 ## 10. Benchmark held-out failures
 

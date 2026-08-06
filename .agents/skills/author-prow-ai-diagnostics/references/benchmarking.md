@@ -5,6 +5,7 @@
 - [Protect the blind boundary](#protect-the-blind-boundary)
 - [Freeze authoring output](#freeze-authoring-output)
 - [Prepare condition copies](#prepare-condition-copies)
+- [Validate derived manifests without a provider](#validate-derived-manifests-without-a-provider)
 - [Run the benchmark matrix](#run-the-benchmark-matrix)
 - [Evaluate without tuning](#evaluate-without-tuning)
 - [Write deterministic results](#write-deterministic-results)
@@ -54,6 +55,20 @@ copy by retaining the selected case, fixture, source, scoring, and reference
 fields and updating only the disposable consumer commit, `project.yaml` hash,
 and prompt hash. Commit each condition copy so the benchmark's clean-tree and
 identity checks remain effective. Hash every derived manifest.
+
+## Validate derived manifests without a provider
+
+The committed manifest tests do not open condition-specific manifests. Before
+any provider run, create a temporary Go test only in the disposable validation
+engine clone under `backend/internal/e2e`. For every condition, call the existing
+`loadBenchmarkManifest` on its derived manifest and
+`validateBenchmarkProjectDir` on its clean consumer directory. Also load the
+consumer project and merged recipes to record the full skill-set hash and IDs.
+
+Run the temporary test without `RUN_AI_BENCHMARK`, record the result, then remove
+it from the disposable clone. Do not set `BENCH_MANIFEST` on `TestAIBenchmark`
+merely to validate identity because that test requires provider coordinates
+before loading the manifest.
 
 ## Run the benchmark matrix
 

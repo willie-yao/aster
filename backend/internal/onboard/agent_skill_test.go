@@ -128,7 +128,7 @@ func TestDiagnosticAuthoringAgentSkill(t *testing.T) {
 		}
 	}
 	for _, anchor := range []string{
-		"onboard doctor", "proposals/skills/", "reports/diagnostic-authoring.md",
+		"onboard doctor", "<validation-engine>", "pinned engine remains clean", "proposals/skills/", "reports/diagnostic-authoring.md",
 		"reports/benchmark-results.json",
 		"recommended", "experimental", "rejected", "unresolved",
 		"Never write it to active `skills/`", "without a later explicit approval",
@@ -170,7 +170,7 @@ func TestDiagnosticAuthoringAgentSkill(t *testing.T) {
 			"## Design triggers", "## Build the applicability matrix", "## Run deterministic engine validation",
 			"bounded failure signal", "final-draft-only trigger", "positive successful-operation evidence", "competing initiating cause", "slash-normalizes and lowercases", "Doctor does not validate recipe YAML", "ParseAndValidate",
 		},
-		"benchmarking.md": {"## Protect the blind boundary", "## Run the benchmark matrix", "## Write deterministic results", "BENCH_REPETITIONS=3", "quality floors failed"},
+		"benchmarking.md": {"## Protect the blind boundary", "## Validate derived manifests without a provider", "validateBenchmarkProjectDir", "## Run the benchmark matrix", "## Write deterministic results", "BENCH_REPETITIONS=3", "quality floors failed"},
 	}
 	for name, anchors := range references {
 		raw, err := os.ReadFile(filepath.Join(skillDir, "references", name))
