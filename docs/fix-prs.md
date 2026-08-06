@@ -159,8 +159,9 @@ ai:
 The runner needs `opencode`, git, and the pinned `srt` runtime with its platform
 dependencies. The standard distroless Kubernetes image
 does not contain them. Local `opencode` deployments should build
-[`deploy/fixer.Dockerfile`](../deploy/fixer.Dockerfile), which installs all
-three at pinned versions and sets `SRT_BIN`.
+the root [`Dockerfile`](../Dockerfile) `fixer-runtime` target, which installs
+all three at pinned versions, includes the server, worker, fetcher, and SPA, and
+sets `SRT_BIN`.
 The chart's `orka.fixRuntime.enabled` image contains git only because it
 reconstructs diffs returned by an Orka Agent; it does not support the local
 `opencode` backend.

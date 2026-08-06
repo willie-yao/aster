@@ -69,7 +69,7 @@ Those three Copilot destinations were observed from `srt` violation logs with an
 
 ## Network policy by caller
 
-Onboarding with `github-copilot/*` allows only the three domains observed in the controlled smoke test above. Other native OpenCode providers require one or more repeated `--prompt-network-domain=<domain[:port]>` flags.
+Onboarding with `github-copilot/*` always includes the three domains observed in the controlled smoke test above. Repeated `--prompt-network-domain=<domain[:port]>` flags can add other explicitly reviewed destinations. Other native OpenCode providers require at least one such flag.
 
 Local fix generation automatically allows the configured AI endpoint host. Add `ai.fix_prs.agent_runtime.network_domains` only for dependency registries or other reviewed destinations required by Bash-enabled fix and test commands. Entries are domains with an optional port, not URLs. Credential-bearing URLs are rejected.
 

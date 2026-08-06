@@ -1,6 +1,6 @@
 # Multi-stage build producing the default minimal engine image plus an optional
-# fixer-runtime target with git. Both targets include the server, fetcher, worker,
-# and SPA.
+# fixer-runtime target with git, OpenCode, and pinned local srt sandboxing. Both
+# targets include the server, fetcher, worker, and SPA.
 
 # Stage 1: build the SPA. Default base path "/" suits server mode.
 FROM node:20-alpine AS web
@@ -23,16 +23,22 @@ RUN CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION} -X main.commit=$
  && CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION} -X main.commit=${COMMIT} -X main.imageTag=${IMAGE_TAG}" -o /out/worker ./cmd/worker \
  && CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION} -X main.commit=${COMMIT} -X main.imageTag=${IMAGE_TAG}" -o /out/server ./cmd/server
 
-# Optional drop-in chart image with git for Orka diff reconstruction.
-FROM debian:bookworm-slim AS fixer-runtime
+# Optional full engine image for local sandboxed OpenCode fix generation.
+FROM node:20-slim AS fixer-runtime
+ARG OPENCODE_VERSION=1.18.2
+ARG SRT_VERSION=0.0.70
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git ca-certificates \
- && rm -rf /var/lib/apt/lists/*
+ && apt-get install -y --no-install-recommends bash bubblewrap ca-certificates git ripgrep socat \
+ && rm -rf /var/lib/apt/lists/* \
+ && npm install -g "opencode-ai@${OPENCODE_VERSION}" "@anthropic-ai/sandbox-runtime@${SRT_VERSION}" \
+ && opencode --version \
+ && node -e "if (require('/usr/local/lib/node_modules/@anthropic-ai/sandbox-runtime/package.json').version !== '${SRT_VERSION}') process.exit(1)"
 COPY --from=build /out/fetcher /usr/local/bin/fetcher
 COPY --from=build /out/worker /usr/local/bin/worker
 COPY --from=build /out/server /usr/local/bin/server
 COPY --from=web /src/frontend/dist /app/web
-ENV HOME=/tmp
+ENV HOME=/tmp \
+    SRT_BIN=/usr/local/bin/srt
 USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/server"]
 
