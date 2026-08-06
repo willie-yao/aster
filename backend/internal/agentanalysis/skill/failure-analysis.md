@@ -45,5 +45,6 @@ excerpt lines. Prefer text that occurs once in the excerpt. For repeated text, p
 a range that contains exactly one matching occurrence. Do not paraphrase, use blank
 quote lines as wildcards, merge nonconsecutive lines, or invent line ranges.
 
-Every relevant file must be supported by an evidence or source citation. Include
+List only paths supported by an evidence or source citation in `relevant_files`.
+The dashboard drops uncited safe paths and rejects unsafe or duplicate paths. Include
 at least one citation. Do not add Markdown fences or prose outside the JSON object.
