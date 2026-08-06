@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { test } from "node:test";
 import * as ts from "typescript";
+import { normalizeFlakinessReport } from "../src/lib/flakinessReport.js";
 
 const source = readFileSync(resolve(process.cwd(), "src/pages/FlakinessPage.tsx"), "utf8");
 const sourceFile = ts.createSourceFile(
@@ -115,4 +116,33 @@ test("build failures use a bounded summary surface and canonical links", () => {
   assert.match(source, /item\.provenance === "cache"/);
   assert.doesNotMatch(source, /item\.root_cause/);
   assert.doesNotMatch(source, /item\.suggested_fix/);
+});
+
+test("nullable production collections normalize before page rendering", () => {
+  const report = normalizeFlakinessReport({
+    generated_at: "2026-08-06T08:26:27Z",
+    most_flaky: null,
+    persistent_failures: null,
+    recently_broken: null,
+    build_failures: null,
+    recurring_patterns: null,
+  });
+
+  assert.deepEqual(report.most_flaky, []);
+  assert.deepEqual(report.persistent_failures, []);
+  assert.deepEqual(report.recently_broken, []);
+  assert.deepEqual(report.build_failures, []);
+  assert.deepEqual(report.recurring_patterns, []);
+});
+
+test("layout contains route rendering failures without removing shared navigation", () => {
+  const layout = readFileSync(resolve(process.cwd(), "src/components/Layout.tsx"), "utf8");
+  const boundary = readFileSync(resolve(process.cwd(), "src/components/RouteErrorBoundary.tsx"), "utf8");
+  const dataHook = readFileSync(resolve(process.cwd(), "src/hooks/useData.ts"), "utf8");
+
+  assert.match(dataHook, /normalizeFlakinessReport\(result\.data\)/);
+  assert.match(layout, /<RouteErrorBoundary[\s\S]*<Outlet \/>[\s\S]*<\/RouteErrorBoundary>/);
+  assert.match(boundary, /role="alert"/);
+  assert.match(boundary, /title="Page unavailable"/);
+  assert.match(boundary, /previous\.resetKey !== this\.props\.resetKey/);
 });

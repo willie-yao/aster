@@ -98,6 +98,9 @@ export function AiAnalysisPanel({
       component="section"
       className="ai-aurora"
       sx={{
+        minWidth: 0,
+        maxWidth: "100%",
+        overflowWrap: "anywhere",
         borderRadius: "12px",
         bgcolor: (t) => soft(t, "primary", 0.05),
         p: { xs: 2, sm: 2.5 },

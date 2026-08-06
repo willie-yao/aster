@@ -278,7 +278,7 @@ export function JobDetailPage() {
   );
 
   const runHistorySection = (
-    <Box component="section">
+    <Box component="section" sx={{ minWidth: 0 }}>
       <SectionHeading title="Run History" />
       <RunTimeline
         runs={runs}
@@ -388,8 +388,9 @@ export function JobDetailPage() {
             <Box
               sx={{
                 display: "grid",
-                gridTemplateColumns: { xs: "1fr", lg: "minmax(0, 1.5fr) minmax(300px, 1fr)" },
+                gridTemplateColumns: { xs: "minmax(0, 1fr)", lg: "minmax(0, 1.5fr) minmax(300px, 1fr)" },
                 gap: 2,
+                minWidth: 0,
                 alignItems: "start",
               }}
             >

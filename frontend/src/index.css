@@ -1,6 +1,6 @@
-/* Tailwind has been removed; global styling now comes from the MUI theme and
-   <CssBaseline>. Only the root font-size override remains so the dashboard keeps
-   its original visual scale (matched by typography.htmlFontSize in the theme). */
+/* Global styling comes from the MUI theme and <CssBaseline>. The 17px root
+   preserves the dashboard's original optical scale. Overview-specific type
+   tokens use explicit pixel sizes so its approved hierarchy stays stable. */
 html {
   font-size: 17px;
 }

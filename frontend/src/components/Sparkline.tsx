@@ -3,6 +3,7 @@ import Tooltip from "@mui/material/Tooltip";
 import { Link as RouterLink } from "react-router-dom";
 import type { RunSummary } from "../types/dashboard";
 import { jobRunPath } from "../lib/routes";
+import { formatAccessibleDate } from "../lib/utils";
 import { dotColorFor } from "../theme";
 
 interface SparklineProps {
@@ -11,40 +12,60 @@ interface SparklineProps {
 }
 
 export function Sparkline({ runs, jobID }: SparklineProps) {
-  // recent_runs is newest-first; reverse the displayed subset so newest is rightmost.
   const recent = runs.slice(0, 8).reverse();
 
   return (
-    <Box sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
+    <Box
+      sx={{
+        display: "grid",
+        gridTemplateColumns: { xs: "repeat(4, 44px)", sm: "repeat(8, 44px)" },
+        alignItems: "center",
+        gap: 0,
+        "@media (min-width: 1024px)": {
+          gridTemplateColumns: "repeat(8, 20px)",
+          gap: "2px",
+        },
+        "@media (min-width: 1200px)": {
+          gridTemplateColumns: "repeat(8, 22px)",
+        },
+      }}
+    >
       {recent.map((run) => {
-        const label =
-          run.result === "PENDING" ? "Running" : run.passed ? "Passed" : "Failed";
+        const label = run.result === "PENDING" ? "Running" : run.passed ? "Passed" : "Failed";
+        const date = formatAccessibleDate(run.timestamp);
+        const context = `Run ${run.build_id}, ${label.toLowerCase()}, ${date}`;
         return (
-          <Tooltip key={run.build_id} title={`#${run.build_id} — ${label}`}>
+          <Tooltip key={run.build_id} title={`#${run.build_id} - ${label} - ${date}`}>
             <Box
               component={RouterLink}
               to={jobRunPath(jobID, run.build_id)}
-              aria-label={`Run ${run.build_id} ${label.toLowerCase()}`}
+              aria-label={context}
               onClick={(event) => event.stopPropagation()}
               sx={{
+                width: 44,
+                height: 44,
                 display: "inline-flex",
                 alignItems: "center",
                 justifyContent: "center",
-                p: 0.5,
-                m: -0.5,
-                borderRadius: "50%",
-                "&:hover > span": { transform: "scale(1.25)" },
+                borderRadius: "4px",
+                "@media (min-width: 1024px)": { width: 20, height: 28 },
+                "@media (min-width: 1200px)": { width: 22 },
+                "&:hover": { bgcolor: "surface.containerHigh" },
+                "&:focus-visible": {
+                  outline: "2px solid",
+                  outlineColor: "primary.main",
+                  outlineOffset: -2,
+                },
               }}
             >
               <Box
                 component="span"
                 sx={{
                   display: "block",
-                  width: 10,
-                  height: 10,
-                  borderRadius: "50%",
+                  width: 8,
+                  height: 8,
+                  borderRadius: "2px",
                   bgcolor: (theme) => dotColorFor(theme, run.passed, run.result),
-                  transition: "transform 140ms ease",
                 }}
               />
             </Box>

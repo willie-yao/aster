@@ -12,3 +12,7 @@ import "./testResults.test.js";
 import "./buildFailures.test.js";
 import "./actionRequests.test.js";
 import "./actionEligibility.test.js";
+
+import "./theme.test.js";
+import "./dashboardOverview.test.js";
+import "./responsiveLayout.test.js";

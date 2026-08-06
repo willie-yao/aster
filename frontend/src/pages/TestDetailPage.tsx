@@ -346,7 +346,7 @@ export function TestDetailPage() {
   );
 
   return (
-    <Stack spacing={{ xs: 3, sm: 4 }}>
+    <Stack spacing={{ xs: 3, sm: 4 }} sx={{ minWidth: 0, maxWidth: "100%", overflowX: "clip" }}>
       <Breadcrumbs separator="›" sx={{ fontSize: "0.875rem" }}>
         <Link component={RouterLink} to="/" underline="hover" color="text.secondary">
           Dashboard
@@ -456,7 +456,8 @@ export function TestDetailPage() {
             <Box
               sx={{
                 display: "grid",
-                gridTemplateColumns: { xs: "1fr", lg: "minmax(0, 1.5fr) minmax(300px, 1fr)" },
+                minWidth: 0,
+                gridTemplateColumns: { xs: "minmax(0, 1fr)", lg: "minmax(0, 1.5fr) minmax(300px, 1fr)" },
                 gap: 2,
                 alignItems: "start",
               }}
@@ -498,8 +499,8 @@ export function TestDetailPage() {
           )}
 
           {hasEvidence && (
-            <Panel component="section" sx={{ borderRadius: "12px", p: { xs: 2, sm: 3 } }}>
-              <Stack spacing={2.5}>
+            <Panel component="section" sx={{ minWidth: 0, maxWidth: "100%", borderRadius: "12px", p: { xs: 2, sm: 3 } }}>
+              <Stack spacing={2.5} sx={{ minWidth: 0 }}>
             {selectedTc.failure_message && (
               <Box
                 component="pre"
@@ -546,7 +547,7 @@ export function TestDetailPage() {
             )}
 
             {selectedTc.failure_location && (
-              <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+              <Stack direction="row" spacing={1} sx={{ minWidth: 0, alignItems: "center" }}>
                 <Place sx={{ fontSize: 16, color: "text.secondary" }} />
                 {selectedTc.failure_location_url ? (
                   <Link
@@ -554,13 +555,13 @@ export function TestDetailPage() {
                     target="_blank"
                     rel="noopener noreferrer"
                     underline="hover"
-                    sx={{ fontFamily: "monospace", fontSize: "0.75rem" }}
+                    sx={{ minWidth: 0, fontFamily: "monospace", fontSize: "0.75rem", overflowWrap: "anywhere" }}
                   >
                     {selectedTc.failure_location}
                   </Link>
                 ) : (
                   <Typography
-                    sx={{ fontFamily: "monospace", fontSize: "0.75rem" }}
+                    sx={{ minWidth: 0, fontFamily: "monospace", fontSize: "0.75rem", overflowWrap: "anywhere" }}
                     color="text.secondary"
                   >
                     {selectedTc.failure_location}

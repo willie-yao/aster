@@ -15,7 +15,6 @@ export interface SurfacePalette {
   containerHighest: string;
   variant: string;
   tint: string;
-  glass: string;
 }
 
 // Pass/fail colors for the run-history dot/bar visualizations, kept separate

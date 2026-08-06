@@ -7,12 +7,6 @@ import "./augmentation";
 import { darkTokens, lightTokens, type ColorTokens } from "./tokens";
 import { buildComponents } from "./components";
 
-// Map raw MD3 tokens onto MUI palette slots. Semantic mapping:
-//   primary blue tokens -> primary
-//   secondary green PASSING tokens -> success
-//   tertiary amber FLAKY tokens -> warning
-//   error red tokens -> error
-// The extra surface-container levels live under the custom `surface` key.
 function paletteFromTokens(t: ColorTokens): PaletteOptions {
   return {
     primary: {
@@ -29,6 +23,7 @@ function paletteFromTokens(t: ColorTokens): PaletteOptions {
     },
     warning: {
       main: t.tertiary,
+      dark: t.tertiaryDim,
       light: t.tertiaryContainer,
       contrastText: t.onTertiary,
     },
@@ -61,7 +56,6 @@ function paletteFromTokens(t: ColorTokens): PaletteOptions {
       containerHighest: t.surfaceContainerHighest,
       variant: t.surfaceVariant,
       tint: t.surfaceTint,
-      glass: t.glass,
     },
   };
 }
@@ -71,57 +65,54 @@ const monoFontFamily =
 
 const typography = {
   fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-  // The root html font-size is 17px in index.css. Keeping MUI's htmlFontSize at
-  // 16 preserves the dashboard's rem scale.
   htmlFontSize: 16,
   h1: { fontWeight: 800, letterSpacing: "-0.02em" },
   h2: { fontWeight: 700, letterSpacing: "-0.01em" },
   h3: { fontWeight: 700, letterSpacing: "-0.01em" },
-  // Page titles and stat counts.
-  h4: { fontWeight: 800, fontSize: "1.75rem", letterSpacing: "-0.02em" },
+  h4: {
+    fontWeight: 800,
+    fontSize: "1.75rem",
+    lineHeight: 1.25,
+    letterSpacing: "-0.02em",
+  },
   h5: { fontWeight: 700, letterSpacing: "-0.01em" },
-  // Sub-section headings and empty/error titles.
-  h6: { fontWeight: 600, fontSize: "1.125rem" },
-  button: { fontWeight: 600 },
-  // Custom variants for reusable section titles and compact labels. Call sites
-  // override fontSize via `sx` for larger titles or smaller card titles.
+  h6: { fontWeight: 600, fontSize: "1.125rem", lineHeight: 1.5 },
+  body1: { fontSize: "1rem", lineHeight: 1.5 },
+  body2: { fontSize: "0.875rem", lineHeight: 1.5 },
+  caption: { fontSize: "0.75rem", lineHeight: 1.4 },
+  button: { fontWeight: 600, fontSize: "0.875rem" },
   headline: {
     fontFamily: "inherit",
     fontWeight: 700,
     fontSize: "1.125rem",
+    lineHeight: 1.4,
     letterSpacing: "-0.01em",
   },
   label: {
     fontFamily: "inherit",
     fontWeight: 600,
-    fontSize: "0.6875rem",
-    letterSpacing: "0.05em",
+    fontSize: "0.75rem",
+    letterSpacing: 0,
     lineHeight: 1.4,
   },
-  // Monospace face for data values: build IDs, durations, percentages, counts.
-  // Tabular figures keep columns from shifting as digits change.
   data: {
     fontFamily: monoFontFamily,
     fontWeight: 500,
     fontSize: "0.8125rem",
+    lineHeight: 1.45,
     letterSpacing: "-0.01em",
     fontFeatureSettings: '"tnum" 1, "cv01" 1',
   },
-  // Large metric numbers for the summary strip and stat rows.
   stat: {
     fontFamily: monoFontFamily,
     fontWeight: 700,
     fontSize: "1.75rem",
-    lineHeight: 1.1,
+    lineHeight: 1.15,
     letterSpacing: "-0.02em",
     fontFeatureSettings: '"tnum" 1',
   },
 };
 
-// Build the dashboard theme. Light and dark schemes are generated from token
-// sets and switched at runtime by the class selector used by useColorScheme in
-// the app shell. To create another theme, pass different token sets or register
-// a new factory in themes.ts.
 export function createAppTheme(
   tokens: { light: ColorTokens; dark: ColorTokens } = {
     light: lightTokens,
@@ -135,7 +126,7 @@ export function createAppTheme(
       light: { palette: paletteFromTokens(tokens.light) },
       dark: { palette: paletteFromTokens(tokens.dark) },
     },
-    shape: { borderRadius: 12 },
+    shape: { borderRadius: 6 },
     typography,
     components: buildComponents(),
   });
