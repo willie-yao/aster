@@ -9,11 +9,22 @@ import { useMemo, useState } from "react";
 import { Link as RouterLink } from "react-router-dom";
 import { useResolved } from "../hooks/useData";
 import { useManifest } from "../hooks/useManifest";
-import { attentionSignal, countLabel, MAX_OVERVIEW_PATTERNS } from "../lib/dashboardOverview";
+import {
+  attentionSignal,
+  countLabel,
+  disclosureLabel,
+  MAX_OVERVIEW_PATTERNS,
+  needsAttentionSummary,
+} from "../lib/dashboardOverview";
 import { jobPath, testPath, testRunPath } from "../lib/routes";
 import { shortJobName, shortTestName } from "../lib/utils";
 import { statusToMuiColor } from "../theme";
-import type { FlakinessReport, JobSummary, PatternAnalysis, TestFlakiness } from "../types/dashboard";
+import type {
+  FlakinessReport,
+  JobSummary,
+  PatternAnalysis,
+  TestFlakiness,
+} from "../types/dashboard";
 import { Sparkline } from "./Sparkline";
 import { overviewLayout, overviewTypography } from "../theme/overview";
 
@@ -35,18 +46,18 @@ interface NeedsAttentionProps {
 
 function statusLabel(status: string): string {
   const normalized = status.toLowerCase();
-  return normalized ? normalized[0].toUpperCase() + normalized.slice(1) : status;
+  return normalized
+    ? normalized[0].toUpperCase() + normalized.slice(1)
+    : status;
 }
 
-function DisclosureButton({
+export function DisclosureButton({
   label,
-  count,
   open,
   controls,
   onClick,
 }: {
   label: string;
-  count: number;
   open: boolean;
   controls: string;
   onClick: () => void;
@@ -69,7 +80,6 @@ function DisclosureButton({
         m: 0,
         px: 1,
         py: 0.75,
-        background: "transparent",
         cursor: "pointer",
         textAlign: "left",
         font: "inherit",
@@ -78,7 +88,10 @@ function DisclosureButton({
         alignItems: "center",
         justifyContent: "space-between",
         gap: 1,
-        "&:hover": { bgcolor: "surface.containerHigh" },
+        "&:hover": {
+          bgcolor: "surface.containerHighest",
+          color: "text.primary",
+        },
         "&:focus-visible": {
           outline: "2px solid",
           outlineColor: "primary.main",
@@ -92,7 +105,7 @@ function DisclosureButton({
         color="text.secondary"
         sx={overviewTypography.subsectionHeading}
       >
-        {label} ({count})
+        {label}
       </Typography>
       <ExpandMore
         aria-hidden="true"
@@ -107,7 +120,7 @@ function DisclosureButton({
   );
 }
 
-function FeaturedPatternRow({
+export function FeaturedPatternRow({
   pattern,
   rank,
   prefix,
@@ -125,102 +138,190 @@ function FeaturedPatternRow({
   const color = job ? statusToMuiColor(job.overall_status) : "default";
   const status = job ? statusLabel(job.overall_status) : "Recurring";
   const signal = attentionSignal(pattern.confidence, stale);
-  const leadAccent = color === "error" ? "error" : "primary";
+  const jobName = shortJobName(pattern.subject, prefix);
 
   return (
     <Box
       sx={{
         display: "grid",
-        gridTemplateColumns: "40px minmax(0, 1fr)",
-        gridTemplateAreas: '"rank subject" ". summary" ". evidence"',
-        alignItems: "center",
-        columnGap: 1,
-        rowGap: 0.5,
+        gridTemplateColumns: "minmax(0, 1fr)",
+        gridTemplateAreas: '"diagnosis" "evidence"',
+        alignItems: "stretch",
         minHeight: lead ? 156 : 92,
-        px: 1,
-        py: lead ? 1.5 : 1,
-        [attentionDesktopBreakpoint]: {
-          gridTemplateColumns: "56px minmax(210px, 1fr) minmax(300px, 2fr) 190px",
-          gridTemplateAreas: '"rank subject summary evidence"',
-          columnGap: 1.5,
-          rowGap: 0,
-          minHeight: lead ? 126 : 96,
-          px: 1.5,
-          py: lead ? 2 : 1.25,
-        },
         borderTop: "1px solid",
-        borderColor: lead ? `${leadAccent}.main` : "divider",
-        boxShadow: lead ? `inset 3px 0 0 var(--mui-palette-${leadAccent}-main)` : "none",
+        borderColor: "divider",
+        boxShadow: lead
+          ? "inset 3px 0 0 var(--mui-palette-error-main)"
+          : "none",
+        transition: "background-color 140ms ease",
+        "&:hover, &:focus-within": { bgcolor: "surface.containerHigh" },
+        [attentionDesktopBreakpoint]: {
+          gridTemplateColumns: "minmax(0, 1fr) 190px",
+          gridTemplateAreas: '"diagnosis evidence"',
+          minHeight: lead ? 126 : 96,
+        },
       }}
     >
-      <Typography
-        variant="stat"
-        component="span"
-        sx={{ gridArea: "rank", alignSelf: "start", color: lead ? `${leadAccent}.main` : "text.secondary", fontSize: lead ? "24px" : "16px", [attentionDesktopBreakpoint]: { alignSelf: "center" } }}
-      >
-        {String(rank).padStart(2, "0")}
-      </Typography>
-
-      <Box sx={{ gridArea: "subject", minWidth: 0 }}>
-        <Link
-          component={RouterLink}
-          to={jobPath(pattern.job_id ?? "")}
-          underline="none"
-          sx={{
-            minHeight: 44,
-            display: "flex",
-            alignItems: "center",
-            color: "text.primary",
-            ...overviewTypography.jobIdentifier,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            "&:hover": { color: "primary.main", textDecoration: "underline" },
-            "&:focus-visible": { outline: "2px solid", outlineColor: "primary.main", outlineOffset: 1 },
-            [attentionDesktopBreakpoint]: { minHeight: 0 },
-          }}
-        >
-          {shortJobName(pattern.subject, prefix)}
-        </Link>
-        <Typography variant="caption" color="text.secondary" sx={overviewTypography.description}>
-          {job?.category || "Recurring pattern"} · {job?.branch || "branch unavailable"}
-        </Typography>
-      </Box>
-
-      <Typography
-        variant="body2"
+      <Link
+        component={RouterLink}
+        to={jobPath(pattern.job_id ?? "")}
+        data-featured-diagnosis-link
+        aria-label={`View diagnosis for ${jobName}`}
+        underline="none"
         sx={{
-          gridArea: "summary",
+          gridArea: "diagnosis",
           minWidth: 0,
-          ...overviewTypography.primaryBody,
-          fontWeight: lead ? 650 : 400,
-          display: "-webkit-box",
-          WebkitBoxOrient: "vertical",
-          WebkitLineClamp: compactOnMobile ? 1 : 4,
-          overflow: "hidden",
-          ...(lead && {
-            "@media (max-width: 599.95px)": overviewTypography.mobileFeaturedBody,
-          }),
+          minHeight: 44,
+          display: "grid",
+          gridTemplateColumns: "40px minmax(0, 1fr)",
+          gridTemplateAreas: '"rank subject" ". summary"',
+          alignItems: "center",
+          columnGap: 1,
+          rowGap: 0.5,
+          px: 1,
+          py: lead ? 1.5 : 1,
+          color: "text.primary",
+          cursor: "pointer",
+          borderRadius: "2px",
+          "&:hover .diagnosis-action": {
+            color: "primary.main",
+            textDecoration: "underline",
+          },
+          "&:focus-visible": {
+            outline: "2px solid",
+            outlineColor: "primary.main",
+            outlineOffset: -2,
+          },
           [attentionDesktopBreakpoint]: {
-            ...overviewTypography.primaryBody,
-            WebkitLineClamp: compactOnMobile ? 2 : 3,
+            gridTemplateColumns: "56px minmax(210px, 1fr) minmax(300px, 2fr)",
+            gridTemplateAreas: '"rank subject summary"',
+            columnGap: 1.5,
+            rowGap: 0,
+            px: 1.5,
+            py: lead ? 2 : 1.25,
           },
         }}
       >
-        {pattern.shared_root_cause || pattern.summary}
-      </Typography>
+        <Typography
+          variant="stat"
+          component="span"
+          sx={{
+            gridArea: "rank",
+            alignSelf: "start",
+            color: lead ? "error.main" : "text.secondary",
+            fontSize: "18px",
+            lineHeight: "24px",
+            fontWeight: lead ? 700 : 600,
+            [attentionDesktopBreakpoint]: { alignSelf: "center" },
+          }}
+        >
+          {String(rank).padStart(2, "0")}
+        </Typography>
 
-      <Box sx={{ gridArea: "evidence", minWidth: 0, [attentionDesktopBreakpoint]: { justifySelf: "end", textAlign: "right" } }}>
+        <Box sx={{ gridArea: "subject", minWidth: 0 }}>
+          <Typography
+            component="span"
+            title={jobName}
+            sx={{
+              display: "block",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              ...overviewTypography.jobIdentifier,
+            }}
+          >
+            {jobName}
+          </Typography>
+          <Typography
+            component="span"
+            color="text.secondary"
+            sx={{ display: "block", ...overviewTypography.description }}
+          >
+            {job?.category || "Recurring pattern"} ·{" "}
+            {job?.branch || "branch unavailable"}
+          </Typography>
+        </Box>
+
+        <Box sx={{ gridArea: "summary", minWidth: 0 }}>
+          <Typography
+            variant="body2"
+            component="span"
+            sx={{
+              display: "-webkit-box",
+              minWidth: 0,
+              overflow: "hidden",
+              WebkitBoxOrient: "vertical",
+              WebkitLineClamp: compactOnMobile ? 1 : 4,
+              ...overviewTypography.primaryBody,
+              fontWeight: lead ? 650 : 400,
+              ...(lead && {
+                "@media (max-width: 599.95px)":
+                  overviewTypography.mobileFeaturedBody,
+              }),
+              [attentionDesktopBreakpoint]: {
+                ...overviewTypography.primaryBody,
+                WebkitLineClamp: compactOnMobile ? 2 : 3,
+              },
+            }}
+          >
+            {pattern.shared_root_cause || pattern.summary}
+          </Typography>
+          <Typography
+            className="diagnosis-action"
+            component="span"
+            sx={{
+              display: "block",
+              mt: 0.5,
+              color: "primary.main",
+              fontSize: "13px",
+              lineHeight: "19px",
+              fontWeight: 700,
+            }}
+          >
+            View diagnosis →
+          </Typography>
+        </Box>
+      </Link>
+
+      <Box
+        sx={{
+          gridArea: "evidence",
+          minWidth: 0,
+          pl: 6,
+          pr: 1,
+          pb: 1,
+          [attentionDesktopBreakpoint]: {
+            alignSelf: "center",
+            justifySelf: "stretch",
+            pl: 0,
+            pr: 1.5,
+            py: 1.25,
+            textAlign: "right",
+          },
+        }}
+      >
         <Typography
           variant="caption"
-          sx={{ color: color === "default" ? "text.secondary" : `${color}.main`, fontWeight: 700, ...overviewTypography.secondaryBody }}
+          sx={{
+            color: color === "default" ? "text.secondary" : `${color}.main`,
+            fontWeight: 700,
+            ...overviewTypography.secondaryBody,
+          }}
         >
           {status}
         </Typography>
-        <Typography variant="data" color="text.secondary" sx={{ display: "block", mt: 0.25, ...overviewTypography.data }}>
+        <Typography
+          variant="data"
+          color="text.secondary"
+          sx={{ display: "block", mt: 0.25, ...overviewTypography.data }}
+        >
           {countLabel(pattern.builds_analyzed, "build")}
         </Typography>
-        <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.25, ...overviewTypography.description }}>
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{ display: "block", mt: 0.25, ...overviewTypography.description }}
+        >
           {signal}
         </Typography>
         {job && (
@@ -228,7 +329,10 @@ function FeaturedPatternRow({
             sx={{
               mt: 0.75,
               display: compactOnMobile ? "none" : "flex",
-              [attentionDesktopBreakpoint]: { display: "flex", justifyContent: "flex-end" },
+              [attentionDesktopBreakpoint]: {
+                display: "flex",
+                justifyContent: "flex-end",
+              },
             }}
           >
             <Sparkline runs={job.recent_runs} jobID={job.job_id} />
@@ -241,6 +345,7 @@ function FeaturedPatternRow({
 
 interface AttentionRowProps {
   to: string;
+  destinationLabel: string;
   subject: string;
   summary: string;
   detail?: string;
@@ -250,8 +355,9 @@ interface AttentionRowProps {
   muted?: boolean;
 }
 
-function AttentionRow({
+export function AttentionRow({
   to,
+  destinationLabel,
   subject,
   summary,
   detail,
@@ -262,6 +368,9 @@ function AttentionRow({
 }: AttentionRowProps) {
   return (
     <Box
+      component={RouterLink}
+      to={to}
+      aria-label={destinationLabel}
       sx={{
         display: "grid",
         gridTemplateColumns: "minmax(0, 1fr)",
@@ -270,7 +379,8 @@ function AttentionRow({
         columnGap: 1.5,
         rowGap: 0.5,
         [attentionDesktopBreakpoint]: {
-          gridTemplateColumns: "minmax(210px, 1fr) minmax(280px, 2fr) auto 170px",
+          gridTemplateColumns:
+            "minmax(210px, 1fr) minmax(280px, 2fr) auto 170px",
           gridTemplateAreas: '"subject summary count signal"',
           rowGap: 0,
         },
@@ -280,13 +390,22 @@ function AttentionRow({
         opacity: muted ? 0.72 : 1,
         borderTop: "1px solid",
         borderColor: "divider",
+        borderRadius: "2px",
+        color: "text.primary",
+        textDecoration: "none",
+        cursor: "pointer",
+        transition: "background-color 140ms ease",
         "&:hover": { bgcolor: "surface.containerHigh" },
+        "&:focus-visible": {
+          bgcolor: "surface.containerHigh",
+          outline: "2px solid",
+          outlineColor: "primary.main",
+          outlineOffset: -2,
+        },
       }}
     >
-      <Link
-        component={RouterLink}
-        to={to}
-        underline="none"
+      <Typography
+        component="span"
         title={subject}
         sx={{
           gridArea: "subject",
@@ -297,62 +416,135 @@ function AttentionRow({
           overflow: "hidden",
           textOverflow: "ellipsis",
           whiteSpace: "nowrap",
-          color: "text.primary",
           ...overviewTypography.jobIdentifier,
-          "&:hover": { color: "primary.main", textDecoration: "underline" },
-          "&:focus-visible": { outline: "2px solid", outlineColor: "primary.main", outlineOffset: 1 },
           [attentionDesktopBreakpoint]: { minHeight: 0 },
         }}
       >
         {subject}
-      </Link>
+      </Typography>
       <Box sx={{ gridArea: "summary", minWidth: 0 }}>
         <Typography
           variant="body2"
+          component="span"
           title={summary}
-          sx={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", ...overviewTypography.secondaryBody }}
+          sx={{
+            display: "block",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            ...overviewTypography.secondaryBody,
+          }}
         >
           {summary}
         </Typography>
         {detail && (
           <Typography
             variant="caption"
+            component="span"
             color="text.secondary"
             title={detail}
-            sx={{ display: "block", mt: 0.25, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", ...overviewTypography.description }}
+            sx={{
+              display: "block",
+              mt: 0.25,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              ...overviewTypography.description,
+            }}
           >
             {detail}
           </Typography>
         )}
       </Box>
-      <Typography variant="data" color="text.secondary" sx={{ gridArea: "count", display: "none", whiteSpace: "nowrap", ...overviewTypography.data, [attentionDesktopBreakpoint]: { display: "block" } }}>
+      <Typography
+        variant="data"
+        component="span"
+        color="text.secondary"
+        sx={{
+          gridArea: "count",
+          display: "none",
+          whiteSpace: "nowrap",
+          ...overviewTypography.data,
+          [attentionDesktopBreakpoint]: { display: "block" },
+        }}
+      >
         {count}
       </Typography>
-      <Typography variant="caption" color={statusColor ? `${statusColor}.main` : "text.secondary"} sx={{ gridArea: "signal", display: "none", textAlign: "right", whiteSpace: "nowrap", ...overviewTypography.description, [attentionDesktopBreakpoint]: { display: "block" } }}>
+      <Typography
+        variant="caption"
+        component="span"
+        color={statusColor ? `${statusColor}.main` : "text.secondary"}
+        sx={{
+          gridArea: "signal",
+          display: "none",
+          textAlign: "right",
+          whiteSpace: "nowrap",
+          ...overviewTypography.description,
+          [attentionDesktopBreakpoint]: { display: "block" },
+        }}
+      >
         {signal}
       </Typography>
       {(count || signal) && (
-        <Box sx={{ gridArea: "meta", display: "flex", alignItems: "center", gap: 1.5, flexWrap: "wrap", [attentionDesktopBreakpoint]: { display: "none" } }}>
-          {count && <Typography variant="data" color="text.secondary" sx={overviewTypography.data}>{count}</Typography>}
-          {signal && <Typography variant="caption" color={statusColor ? `${statusColor}.main` : "text.secondary"} sx={overviewTypography.description}>{signal}</Typography>}
+        <Box
+          component="span"
+          sx={{
+            gridArea: "meta",
+            display: "flex",
+            alignItems: "center",
+            gap: 1.5,
+            flexWrap: "wrap",
+            [attentionDesktopBreakpoint]: { display: "none" },
+          }}
+        >
+          {count && (
+            <Typography
+              variant="data"
+              component="span"
+              color="text.secondary"
+              sx={overviewTypography.data}
+            >
+              {count}
+            </Typography>
+          )}
+          {signal && (
+            <Typography
+              variant="caption"
+              component="span"
+              color={statusColor ? `${statusColor}.main` : "text.secondary"}
+              sx={overviewTypography.description}
+            >
+              {signal}
+            </Typography>
+          )}
         </Box>
       )}
     </Box>
   );
 }
 
-export function NeedsAttention({ report, loading, error, jobsByID }: NeedsAttentionProps) {
+export function NeedsAttention({
+  report,
+  loading,
+  error,
+  jobsByID,
+}: NeedsAttentionProps) {
   const manifest = useManifest();
   const filePrefix = manifest.short_name_prefix ?? "";
   const { data: resolved } = useResolved();
   const [additionalOpen, setAdditionalOpen] = useState(false);
   const [resolvedOpen, setResolvedOpen] = useState(false);
-  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>(
+    {},
+  );
 
   const recurring = useMemo<PatternAnalysis[]>(
     () =>
       (report?.recurring_patterns ?? [])
-        .filter((pattern) => pattern.job_id && !(pattern.id && resolved.resolved[pattern.id]))
+        .filter(
+          (pattern) =>
+            pattern.job_id && !(pattern.id && resolved.resolved[pattern.id]),
+        )
         .slice(0, MAX_OVERVIEW_PATTERNS),
     [report, resolved],
   );
@@ -360,7 +552,8 @@ export function NeedsAttention({ report, loading, error, jobsByID }: NeedsAttent
   const resolvedPatterns = useMemo<PatternAnalysis[]>(
     () =>
       (report?.recurring_patterns ?? []).filter(
-        (pattern) => pattern.job_id && pattern.id && resolved.resolved[pattern.id],
+        (pattern) =>
+          pattern.job_id && pattern.id && resolved.resolved[pattern.id],
       ),
     [report, resolved],
   );
@@ -381,201 +574,281 @@ export function NeedsAttention({ report, loading, error, jobsByID }: NeedsAttent
         remaining -= items.length;
       }
       if (persistent.length > 0 && remaining > 0) {
-        result.push({ label: "Persistent failures", items: persistent.slice(0, remaining) });
+        result.push({
+          label: "Persistent failures",
+          items: persistent.slice(0, remaining),
+        });
       }
       return result;
     }
-    return flaky.length > 0 ? [{ label: "Flaky tests", items: flaky.slice(0, MAX_ITEMS) }] : [];
+    return flaky.length > 0
+      ? [{ label: "Flaky tests", items: flaky.slice(0, MAX_ITEMS) }]
+      : [];
   }, [report]);
 
-  if (loading || error || !report) return null;
-
-  if (recurring.length === 0 && groups.length === 0 && resolvedPatterns.length === 0) {
-    return (
-      <Box sx={{ borderBlock: "1px solid", borderColor: "divider", py: 5, textAlign: "center" }}>
-        <CheckCircleOutlined sx={{ fontSize: 28, color: "success.main" }} />
-        <Typography variant="headline" component="h2" sx={{ mt: 1, ...overviewTypography.majorHeading }}>All clear</Typography>
-        <Typography variant="body2" color="text.secondary" sx={overviewTypography.primaryBody}>No tests currently need attention.</Typography>
-      </Box>
-    );
-  }
-
-  const totalItems = recurring.length + groups.reduce((sum, group) => sum + group.items.length, 0);
+  const totalItems = report
+    ? recurring.length + groups.reduce((sum, group) => sum + group.items.length, 0)
+    : null;
+  const summary = needsAttentionSummary(
+    report ? recurring.length : null,
+    totalItems,
+    loading,
+    Boolean(error) || (!loading && !report),
+  );
   const featured = recurring.slice(0, FEATURED_PATTERNS);
   const additional = recurring.slice(FEATURED_PATTERNS);
+  const allClear = Boolean(
+    report &&
+      recurring.length === 0 &&
+      groups.length === 0 &&
+      resolvedPatterns.length === 0,
+  );
 
   return (
-    <Box component="section" aria-labelledby="needs-attention-heading" sx={{ borderBlock: "1px solid", borderColor: "divider" }}>
+    <Box
+      component="section"
+      aria-labelledby="needs-attention-heading"
+      sx={{ borderBlock: "1px solid", borderColor: "divider" }}
+    >
       <Box
         sx={{
           minHeight: overviewLayout.majorBandMinHeight,
-          display: "flex",
+          display: "grid",
+          gridTemplateColumns: { xs: "20px minmax(0, 1fr)", sm: "20px auto minmax(0, 1fr)" },
+          gridTemplateAreas: { xs: '"icon heading" ". summary"', sm: '"icon heading summary"' },
           alignItems: "center",
-          gap: 1,
+          columnGap: 1,
+          rowGap: 0.25,
           px: 1.5,
           py: 1,
           bgcolor: "surface.containerHigh",
           boxShadow: "inset 3px 0 0 var(--mui-palette-primary-main)",
         }}
       >
-        <ReportProblem color="warning" sx={{ fontSize: 20 }} />
+        <ReportProblem color="warning" sx={{ gridArea: "icon", fontSize: 20 }} />
         <Typography
           id="needs-attention-heading"
           variant="headline"
           component="h2"
-          sx={overviewTypography.majorHeading}
+          sx={{ gridArea: "heading", ...overviewTypography.majorHeading }}
         >
           Needs attention
         </Typography>
-        <Typography variant="data" color="text.secondary" sx={{ ml: "auto", ...overviewTypography.data }}>
-          {totalItems} active items
+        <Typography
+          variant="data"
+          color="text.secondary"
+          sx={{ gridArea: "summary", justifySelf: { sm: "end" }, ...overviewTypography.data }}
+        >
+          {summary}
         </Typography>
       </Box>
 
-      {featured.map((pattern, index) => {
-        const refreshStatus = report.pattern_refresh?.jobs?.[pattern.job_id ?? ""];
-        return (
-          <FeaturedPatternRow
-            key={pattern.id ?? pattern.job_id ?? pattern.subject}
-            pattern={pattern}
-            rank={index + 1}
-            prefix={filePrefix}
-            stale={Boolean(refreshStatus && refreshStatus.state !== "current")}
-            job={pattern.job_id ? jobsByID[pattern.job_id] : undefined}
-          />
-        );
-      })}
+      {loading && (
+        <Typography color="text.secondary" sx={{ px: 1.5, py: 2, ...overviewTypography.secondaryBody }}>
+          Attention data is loading.
+        </Typography>
+      )}
 
-      {additional.length > 0 && (
-        <Box component="section">
-          <DisclosureButton
-            label="Additional recurring patterns"
-            count={additional.length}
-            open={additionalOpen}
-            controls="additional-recurring-patterns"
-            onClick={() => setAdditionalOpen((open) => !open)}
-          />
-          <Collapse id="additional-recurring-patterns" in={additionalOpen} timeout="auto" unmountOnExit>
-            {additional.map((pattern) => {
-              const refreshStatus = report.pattern_refresh?.jobs?.[pattern.job_id ?? ""];
-              const stale = Boolean(refreshStatus && refreshStatus.state !== "current");
-              return (
-                <AttentionRow
-                  key={pattern.id ?? pattern.job_id ?? pattern.subject}
-                  to={jobPath(pattern.job_id ?? "")}
-                  subject={shortJobName(pattern.subject, filePrefix)}
-                  summary={pattern.shared_root_cause || pattern.summary}
-                  count={countLabel(pattern.builds_analyzed, "build")}
-                  signal={attentionSignal(pattern.confidence, stale)}
-                />
-              );
-            })}
-          </Collapse>
+      {!loading && (error || !report) && (
+        <Typography color="text.secondary" sx={{ px: 1.5, py: 2, ...overviewTypography.secondaryBody }}>
+          Attention data is unavailable.
+        </Typography>
+      )}
+
+      {allClear && (
+        <Box sx={{ py: 5, textAlign: "center" }}>
+          <CheckCircleOutlined sx={{ fontSize: 28, color: "success.main" }} />
+          <Typography
+            variant="headline"
+            component="h3"
+            sx={{ mt: 1, ...overviewTypography.majorHeading }}
+          >
+            All clear
+          </Typography>
+          <Typography
+            variant="body2"
+            color="text.secondary"
+            sx={overviewTypography.primaryBody}
+          >
+            No tests currently need attention.
+          </Typography>
         </Box>
       )}
 
-      {groups.map((group) => {
-        const progressive = group.label === "Persistent failures" || group.label === "Flaky tests";
-        const initialCount = group.label === "Persistent failures" ? 1 : group.label === "Flaky tests" ? 3 : group.items.length;
-        const open = expandedGroups[group.label] ?? false;
-        const initialItems = progressive ? group.items.slice(0, initialCount) : group.items;
-        const additionalItems = progressive ? group.items.slice(initialCount) : [];
-        const controls = `attention-group-${group.label.toLowerCase().replace(/\s+/g, "-")}`;
-        const renderItem = (item: TestFlakiness) => {
-          const failing = item.classification !== "flaky";
-          const consecutive = item.consecutive_failures > 0
-            ? `${item.consecutive_failures} consecutive ${item.consecutive_failures === 1 ? "failure" : "failures"}`
-            : undefined;
-          return (
-            <AttentionRow
-              key={`${item.job_id}/${item.test_name}`}
-              to={item.last_failure?.build_id
-                ? testRunPath(item.job_id, item.test_name, item.last_failure.build_id)
-                : testPath(item.job_id, item.test_name)}
-              subject={shortJobName(item.job_name, filePrefix)}
-              summary={shortTestName(item.test_name)}
-              detail={item.last_failure?.failure_message}
-              count={consecutive}
-              signal={failing ? "Failing" : "Flaky"}
-              statusColor={failing ? "error" : "warning"}
-            />
-          );
-        };
-        return (
-          <Box key={group.label} component="section" aria-label={group.label} sx={{ mt: 1 }}>
-            <Box
-              sx={{
-                minHeight: overviewLayout.subsectionBandMinHeight,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: 1,
-                px: 1.25,
-                py: 0.75,
-                bgcolor: "surface.containerHigh",
-                borderBlock: "1px solid",
-                borderColor: "divider",
-              }}
-            >
-              <Typography
-                variant="label"
-                component="h3"
-                color="text.secondary"
-                sx={overviewTypography.subsectionHeading}
-              >
-                {group.label}
-              </Typography>
-              <Typography variant="data" color="text.secondary" sx={overviewTypography.data}>
-                {group.items.length}
-              </Typography>
-            </Box>
-            <Box>{initialItems.map(renderItem)}</Box>
-            {progressive && additionalItems.length > 0 && (
-              <>
-                <DisclosureButton
-                  label={open ? `Hide additional ${group.label.toLowerCase()}` : `Show additional ${group.label.toLowerCase()}`}
-                  count={additionalItems.length}
-                  open={open}
-                  controls={controls}
-                  onClick={() => setExpandedGroups((current) => ({ ...current, [group.label]: !open }))}
-                />
-                <Collapse id={controls} in={open} timeout="auto" unmountOnExit>
-                  {additionalItems.map(renderItem)}
-                </Collapse>
-              </>
-            )}
-          </Box>
-        );
-      })}
+      {report && !allClear && (
+        <>
+          {featured.map((pattern, index) => {
+            const refreshStatus = report.pattern_refresh?.jobs?.[pattern.job_id ?? ""];
+            return (
+              <FeaturedPatternRow
+                key={pattern.id ?? pattern.job_id ?? pattern.subject}
+                pattern={pattern}
+                rank={index + 1}
+                prefix={filePrefix}
+                stale={Boolean(refreshStatus && refreshStatus.state !== "current")}
+                job={pattern.job_id ? jobsByID[pattern.job_id] : undefined}
+              />
+            );
+          })}
 
-      {resolvedPatterns.length > 0 && (
-        <Box component="section">
-          <DisclosureButton
-            label="Resolved patterns"
-            count={resolvedPatterns.length}
-            open={resolvedOpen}
-            controls="resolved-patterns"
-            onClick={() => setResolvedOpen((open) => !open)}
-          />
-          <Collapse id="resolved-patterns" in={resolvedOpen} timeout="auto" unmountOnExit>
-            {resolvedPatterns.map((pattern) => {
-              const entry = pattern.id ? resolved.resolved[pattern.id] : undefined;
+          {additional.length > 0 && (
+            <Box component="section">
+              <DisclosureButton
+                label={disclosureLabel(
+                  additionalOpen,
+                  additional.length,
+                  "additional recurring pattern",
+                  "additional recurring patterns",
+                )}
+                open={additionalOpen}
+                controls="additional-recurring-patterns"
+                onClick={() => setAdditionalOpen((open) => !open)}
+              />
+              <Collapse
+                id="additional-recurring-patterns"
+                in={additionalOpen}
+                timeout="auto"
+                unmountOnExit
+              >
+                {additional.map((pattern) => {
+                  const refreshStatus = report.pattern_refresh?.jobs?.[pattern.job_id ?? ""];
+                  const stale = Boolean(refreshStatus && refreshStatus.state !== "current");
+                  const subject = shortJobName(pattern.subject, filePrefix);
+                  return (
+                    <AttentionRow
+                      key={pattern.id ?? pattern.job_id ?? pattern.subject}
+                      to={jobPath(pattern.job_id ?? "")}
+                      destinationLabel={`View diagnosis for ${subject}`}
+                      subject={subject}
+                      summary={pattern.shared_root_cause || pattern.summary}
+                      count={countLabel(pattern.builds_analyzed, "build")}
+                      signal={attentionSignal(pattern.confidence, stale)}
+                    />
+                  );
+                })}
+              </Collapse>
+            </Box>
+          )}
+
+          {groups.map((group) => {
+            const progressive = group.label === "Persistent failures" || group.label === "Flaky tests";
+            const initialCount = group.label === "Persistent failures" ? 1 : group.label === "Flaky tests" ? 3 : group.items.length;
+            const open = expandedGroups[group.label] ?? false;
+            const initialItems = progressive ? group.items.slice(0, initialCount) : group.items;
+            const additionalItems = progressive ? group.items.slice(initialCount) : [];
+            const controls = `attention-group-${group.label.toLowerCase().replace(/\s+/g, "-")}`;
+            const itemNoun = group.label === "Persistent failures"
+              ? ["additional persistent failure", "additional persistent failures"] as const
+              : ["additional flaky test", "additional flaky tests"] as const;
+            const renderItem = (item: TestFlakiness) => {
+              const failing = item.classification !== "flaky";
+              const consecutive = item.consecutive_failures > 0
+                ? `${item.consecutive_failures} consecutive ${item.consecutive_failures === 1 ? "failure" : "failures"}`
+                : undefined;
+              const subject = shortJobName(item.job_name, filePrefix);
+              const testName = shortTestName(item.test_name);
+              const destination = item.last_failure
+                ? testRunPath(item.job_id, item.test_name, item.last_failure.build_id)
+                : testPath(item.job_id, item.test_name);
               return (
                 <AttentionRow
-                  key={pattern.id ?? pattern.job_id ?? pattern.subject}
-                  to={jobPath(pattern.job_id ?? "")}
-                  subject={shortJobName(pattern.subject, filePrefix)}
-                  summary={pattern.shared_root_cause || pattern.summary}
-                  detail={entry?.note}
-                  signal="Resolved"
-                  statusColor="success"
-                  muted
+                  key={`${item.job_id}/${item.test_name}`}
+                  to={destination}
+                  destinationLabel={`${item.last_failure ? "Open latest test run" : "Open test"} for ${testName} in ${subject}`}
+                  subject={subject}
+                  summary={testName}
+                  detail={item.last_failure?.failure_message}
+                  count={consecutive}
+                  signal={failing ? "Failing" : "Flaky"}
+                  statusColor={failing ? "error" : "warning"}
                 />
               );
-            })}
-          </Collapse>
-        </Box>
+            };
+            return (
+              <Box key={group.label} component="section" aria-label={group.label} sx={{ mt: 1 }}>
+                <Box
+                  sx={{
+                    minHeight: overviewLayout.subsectionBandMinHeight,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 1,
+                    px: 1.25,
+                    py: 0.75,
+                    bgcolor: "surface.containerHigh",
+                    borderBlock: "1px solid",
+                    borderColor: "divider",
+                  }}
+                >
+                  <Typography
+                    variant="label"
+                    component="h3"
+                    color="text.secondary"
+                    sx={overviewTypography.subsectionHeading}
+                  >
+                    {group.label}
+                  </Typography>
+                  <Typography variant="data" color="text.secondary" sx={overviewTypography.data}>
+                    {group.items.length}
+                  </Typography>
+                </Box>
+                <Box>{initialItems.map(renderItem)}</Box>
+                {progressive && additionalItems.length > 0 && (
+                  <>
+                    <DisclosureButton
+                      label={disclosureLabel(open, additionalItems.length, itemNoun[0], itemNoun[1])}
+                      open={open}
+                      controls={controls}
+                      onClick={() =>
+                        setExpandedGroups((current) => ({ ...current, [group.label]: !open }))
+                      }
+                    />
+                    <Collapse id={controls} in={open} timeout="auto" unmountOnExit>
+                      {additionalItems.map(renderItem)}
+                    </Collapse>
+                  </>
+                )}
+              </Box>
+            );
+          })}
+
+          {resolvedPatterns.length > 0 && (
+            <Box component="section">
+              <DisclosureButton
+                label={disclosureLabel(
+                  resolvedOpen,
+                  resolvedPatterns.length,
+                  "resolved pattern",
+                  "resolved patterns",
+                )}
+                open={resolvedOpen}
+                controls="resolved-patterns"
+                onClick={() => setResolvedOpen((open) => !open)}
+              />
+              <Collapse id="resolved-patterns" in={resolvedOpen} timeout="auto" unmountOnExit>
+                {resolvedPatterns.map((pattern) => {
+                  const entry = pattern.id ? resolved.resolved[pattern.id] : undefined;
+                  const subject = shortJobName(pattern.subject, filePrefix);
+                  return (
+                    <AttentionRow
+                      key={pattern.id ?? pattern.job_id ?? pattern.subject}
+                      to={jobPath(pattern.job_id ?? "")}
+                      destinationLabel={`View resolved diagnosis for ${subject}`}
+                      subject={subject}
+                      summary={pattern.shared_root_cause || pattern.summary}
+                      detail={entry?.note}
+                      signal="Resolved"
+                      statusColor="success"
+                      muted
+                    />
+                  );
+                })}
+              </Collapse>
+            </Box>
+          )}
+        </>
       )}
     </Box>
   );
+
 }

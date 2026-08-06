@@ -15,9 +15,7 @@ import { NeedsAttention } from "../components/NeedsAttention";
 import { JobHealthTable, type JobHealthSection } from "../components/JobHealthTable";
 import { OverviewFilters } from "../components/OverviewFilters";
 import {
-  MAX_OVERVIEW_PATTERNS,
   orderedDashboardBranches,
-  overviewHeadlineForReport,
   type OverviewStatusFilter,
 } from "../lib/dashboardOverview";
 import { LoadingState } from "../components/LoadingState";
@@ -124,14 +122,6 @@ export function DashboardPage() {
         jobs: grouped[category],
       }))
     : [{ id: "all-jobs", jobs: filtered }];
-  const failingJobs = data.jobs.filter((job) => job.overall_status === "FAILING").length;
-  const recurringPatterns = attention.data
-    ? Math.min(
-        (attention.data.recurring_patterns ?? []).filter((pattern) => pattern.job_id).length,
-        MAX_OVERVIEW_PATTERNS,
-      )
-    : null;
-  const headline = overviewHeadlineForReport(failingJobs, recurringPatterns, attention.loading, Boolean(attention.error));
   const jobsByID = Object.fromEntries(data.jobs.map((job) => [job.job_id, job]));
 
   return (
@@ -144,15 +134,10 @@ export function DashboardPage() {
           gap: 1,
         }}
       >
-        <Box>
-          <Typography variant="label" component="p" color="text.secondary" sx={overviewTypography.eyebrow}>
-            Incident briefing
-          </Typography>
-          <Typography variant="h4" component="h1" sx={{ mt: 0.5, ...overviewTypography.pageHeadline }}>
-            {headline}
-          </Typography>
-        </Box>
-        <Typography variant="data" color="text.secondary" sx={{ justifySelf: { sm: "end" }, ...overviewTypography.data }}>
+        <Typography variant="h4" component="h1" sx={overviewTypography.pageHeadline}>
+          Test health overview
+        </Typography>
+        <Typography variant="data" color="text.secondary" sx={{ justifySelf: "end", ...overviewTypography.data }}>
           Updated {timeAgo(data.generated_at)}
         </Typography>
       </Box>

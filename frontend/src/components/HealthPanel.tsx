@@ -60,8 +60,6 @@ export function HealthPanel({ jobs, onFilterClick, activeFilter }: HealthPanelPr
           flexDirection: "column",
           justifyContent: "center",
           px: { xs: 1.5, md: 2 },
-          borderRight: { md: "1px solid" },
-          borderColor: "divider",
         }}
       >
         <Typography
@@ -100,14 +98,14 @@ export function HealthPanel({ jobs, onFilterClick, activeFilter }: HealthPanelPr
               py: 1,
               border: 0,
               borderTop: { xs: "1px solid", md: 0 },
-              borderRight: "1px solid",
+              borderLeft: "1px solid",
               borderColor: "divider",
               textAlign: "left",
               bgcolor: (theme) => (active ? soft(theme, "primary", 0.12) : "transparent"),
               boxShadow: active ? "inset 0 -3px 0 var(--mui-palette-primary-main)" : "none",
-              "&:last-of-type": { borderRight: 0 },
               "&:hover": { bgcolor: active ? (theme) => soft(theme, "primary", 0.16) : "surface.containerHigh" },
               "&.Mui-focusVisible": {
+                borderLeftColor: "divider",
                 outline: "2px solid",
                 outlineColor: "primary.main",
                 outlineOffset: -2,

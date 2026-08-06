@@ -8,21 +8,26 @@ export function countLabel(count: number, singular: string, plural = `${singular
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
-export function overviewHeadline(failingJobs: number, recurringPatterns: number): string {
-  return `${countLabel(failingJobs, "failing job")} · ${countLabel(recurringPatterns, "recurring pattern")}`;
-}
-
-export function overviewHeadlineForReport(
-  failingJobs: number,
+export function needsAttentionSummary(
   recurringPatterns: number | null,
+  activeItems: number | null,
   loading: boolean,
   failed: boolean,
 ): string {
-  if (loading) return `${countLabel(failingJobs, "failing job")} · recurring patterns loading`;
-  if (failed || recurringPatterns === null) {
-    return `${countLabel(failingJobs, "failing job")} · recurring patterns unavailable`;
+  if (loading) return "recurring patterns loading · active items loading";
+  if (failed || recurringPatterns === null || activeItems === null) {
+    return "recurring patterns unavailable · active items unavailable";
   }
-  return overviewHeadline(failingJobs, recurringPatterns);
+  return `${countLabel(recurringPatterns, "recurring pattern")} · ${countLabel(activeItems, "active item")}`;
+}
+
+export function disclosureLabel(
+  open: boolean,
+  count: number,
+  singular: string,
+  plural = `${singular}s`,
+): string {
+  return `${open ? "Hide" : "Show"} ${countLabel(count, singular, plural)}`;
 }
 
 export function attentionSignal(confidence: string, stale: boolean): string {
