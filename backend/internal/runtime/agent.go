@@ -161,21 +161,11 @@ func (r *LocalAgentRuntime) Generate(ctx context.Context, spec GenerateSpec) (Ge
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	work, err := os.MkdirTemp("", "pad-agent-*")
+	work, home, temp, cleanup, err := agentTempDirs(r.Sandbox)
 	if err != nil {
-		return GenerateResult{}, fmt.Errorf("runtime: temp dir: %w", err)
+		return GenerateResult{}, err
 	}
-	defer os.RemoveAll(work)
-	home, err := os.MkdirTemp("", "pad-agent-home-*")
-	if err != nil {
-		return GenerateResult{}, fmt.Errorf("runtime: temp home: %w", err)
-	}
-	defer os.RemoveAll(home)
-	temp, err := os.MkdirTemp("", "pad-agent-tmp-*")
-	if err != nil {
-		return GenerateResult{}, fmt.Errorf("runtime: temp runtime dir: %w", err)
-	}
-	defer os.RemoveAll(temp)
+	defer cleanup()
 
 	if err := materialize(ctx, work, spec.Repo); err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
@@ -188,11 +178,12 @@ func (r *LocalAgentRuntime) Generate(ctx context.Context, spec GenerateSpec) (Ge
 	if err != nil {
 		return GenerateResult{}, err
 	}
-	cmd, err := r.Sandbox.Command(ctx, processSpec)
-	if err != nil {
-		return GenerateResult{}, err
+	out, runErr := runSandboxProcess(ctx, r.Sandbox, processSpec)
+	if ctx.Err() == nil && opencodeMigrationOnly(out) {
+		retryOut, retryErr := runSandboxProcess(ctx, r.Sandbox, processSpec)
+		out = append(append(out, '\n'), retryOut...)
+		runErr = retryErr
 	}
-	out, runErr := cmd.CombinedOutput()
 	output := redactToken(tail(string(out), maxOutputBytes), spec.Token)
 	if ctx.Err() == context.DeadlineExceeded {
 		return GenerateResult{Output: output}, fmt.Errorf("runtime: agent timed out")
@@ -211,6 +202,79 @@ func (r *LocalAgentRuntime) Generate(ctx context.Context, spec GenerateSpec) (Ge
 		return GenerateResult{Output: output}, err
 	}
 	return GenerateResult{Files: files, Diff: diff, Output: output}, nil
+}
+
+func runSandboxProcess(ctx context.Context, sandbox ProcessSandbox, spec SandboxSpec) ([]byte, error) {
+	if runner, ok := sandbox.(ProcessSandboxRunner); ok {
+		return runner.Run(ctx, spec)
+	}
+	cmd, err := sandbox.Command(ctx, spec)
+	if err != nil {
+		return nil, err
+	}
+	return cmd.CombinedOutput()
+}
+
+func opencodeMigrationOnly(output []byte) bool {
+	text := string(output)
+	if !strings.Contains(text, "Performing one time database migration") || !strings.Contains(text, "Database migration complete.") {
+		return false
+	}
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "{") {
+			return false
+		}
+	}
+	return true
+}
+
+type agentTempBaseProvider interface {
+	agentTempBase() (string, error)
+}
+
+func agentTempDirs(sandbox ProcessSandbox) (work, home, temp string, cleanup func(), err error) {
+	if provider, ok := sandbox.(agentTempBaseProvider); ok {
+		base, err := provider.agentTempBase()
+		if err != nil {
+			return "", "", "", nil, err
+		}
+		root, err := os.MkdirTemp(base, "agent-*")
+		if err != nil {
+			return "", "", "", nil, fmt.Errorf("runtime: sandbox temp root: %w", err)
+		}
+		cleanup := func() { _ = os.RemoveAll(root) }
+		work = filepath.Join(root, "work")
+		home = filepath.Join(root, "home")
+		temp = filepath.Join(root, "tmp")
+		for _, dir := range []string{work, home, temp} {
+			if err := os.Mkdir(dir, 0o700); err != nil {
+				cleanup()
+				return "", "", "", nil, fmt.Errorf("runtime: sandbox temp dir: %w", err)
+			}
+		}
+		return work, home, temp, cleanup, nil
+	}
+	work, err = os.MkdirTemp("", "pad-agent-*")
+	if err != nil {
+		return "", "", "", nil, fmt.Errorf("runtime: temp dir: %w", err)
+	}
+	home, err = os.MkdirTemp("", "pad-agent-home-*")
+	if err != nil {
+		_ = os.RemoveAll(work)
+		return "", "", "", nil, fmt.Errorf("runtime: temp home: %w", err)
+	}
+	temp, err = os.MkdirTemp("", "pad-agent-tmp-*")
+	if err != nil {
+		_ = os.RemoveAll(work)
+		_ = os.RemoveAll(home)
+		return "", "", "", nil, fmt.Errorf("runtime: temp runtime dir: %w", err)
+	}
+	cleanup = func() {
+		_ = os.RemoveAll(work)
+		_ = os.RemoveAll(home)
+		_ = os.RemoveAll(temp)
+	}
+	return work, home, temp, cleanup, nil
 }
 
 // gitChanges stages every change in dir and returns the modified/added files as
