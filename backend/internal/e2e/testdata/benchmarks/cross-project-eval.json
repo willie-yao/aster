@@ -92,7 +92,7 @@
         },
         {
           "name": "identifies unavailable PodGroup API response",
-          "pattern": "(?is)(?:(?:api(?: server)? (?:request|response|endpoint)|scheduler (?:request|list|watch)).{0,100}(?:scheduling\\.k8s\\.io/v1beta1|v1beta1(?:\\.PodGroup| PodGroup|/podgroups)).{0,100}(?:returned|responded|was|is|failed with).{0,40}(?:404|not[ -]?found|unavailable|not served)|(?:scheduling\\.k8s\\.io/v1beta1|v1beta1(?:\\.PodGroup| PodGroup|/podgroups)).{0,80}(?:api )?(?:request|response|endpoint).{0,60}(?:returned|responded|was|is|failed with).{0,40}(?:404|not[ -]?found|unavailable|not served)|(?:404|not[ -]?found|unavailable|not served).{0,80}(?:api(?: server)? (?:request|response|endpoint)|scheduler (?:request|list|watch)).{0,100}(?:scheduling\\.k8s\\.io/v1beta1|v1beta1(?:\\.PodGroup| PodGroup|/podgroups))|Skipping API scheduling\\.k8s\\.io/v1beta1 because it has no resources|API server returned (?:404|not[ -]?found) for that version)",
+          "pattern": "(?is)(?:API server returned (?:404|not[ -]?found)(?:.{0,100}(?:v1beta1|that version))|(?:API server response|API endpoint|scheduler request|scheduler listed|scheduler watched).{0,100}(?:scheduling\\.k8s\\.io/v1beta1|v1beta1(?:\\.PodGroup| PodGroup|/podgroups)).{0,80}(?:returned (?:404|not[ -]?found)|was unavailable|was not served|failed with 404)|(?:scheduling\\.k8s\\.io/v1beta1|v1beta1(?:\\.PodGroup| PodGroup|/podgroups)).{0,80}(?:API endpoint was not served|API was unavailable|API request returned (?:404|not[ -]?found)|API response returned (?:404|not[ -]?found))|Skipping API scheduling\\.k8s\\.io/v1beta1 because it has no resources)",
           "must": true
         },
         {
@@ -114,10 +114,6 @@
         {
           "name": "transient readiness as primary cause",
           "pattern": "(?is)(?:(?:root cause|primary cause|caused by|caused the timeout).{0,140}(?:transient|one-off|image.{0,40}(?:pull|flake)|readiness flake)|(?:transient|one-off|image.{0,40}(?:pull|flake)|readiness flake).{0,140}(?:root cause|primary cause|caused))"
-        },
-        {
-          "name": "v1beta1 API explicitly available",
-          "pattern": "(?is)(?:(?:scheduling\\.k8s\\.io/v1beta1|v1beta1(?:\\.PodGroup| PodGroup|/podgroups)).{0,140}(?:request succeeded|endpoint (?:was|is) available|api (?:was|is) available|successfully served|responded successfully)|(?:request succeeded|endpoint (?:was|is) available|api (?:was|is) available|successfully served|responded successfully).{0,140}(?:scheduling\\.k8s\\.io/v1beta1|v1beta1(?:\\.PodGroup| PodGroup|/podgroups)))"
         }
       ],
       "reference_diagnosis": "The WAS kind configuration at the pinned Kueue revision enables GenericWorkload but explicitly serves scheduling.k8s.io/v1alpha3. The job fetched Kubernetes main v1.37.0-beta.0.568+4f5591ab57b75c, whose scheduler initializes a v1beta1.PodGroup informer. The API server returned 404 for that version, so the scheduler handlers never synchronized, the Kubeflow Trainer pod remained unscheduled, and the deployment wait timed out.",
