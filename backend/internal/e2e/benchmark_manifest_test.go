@@ -111,9 +111,11 @@ func TestCrossProjectEvaluationManifest(t *testing.T) {
 				t.Fatalf("case %q is missing unavailable PodGroup API response signal", bc.name)
 			}
 			for _, text := range []string{
-				"The API server returned 404 for scheduling.k8s.io/v1beta1 PodGroups.",
-				"The v1beta1 PodGroup endpoint was not served.",
-				"The requested v1beta1 PodGroup API was unavailable.",
+				"The API server response for scheduling.k8s.io/v1beta1 PodGroups returned 404.",
+				"The v1beta1 PodGroup API endpoint was not served.",
+				"The scheduler request for v1beta1 PodGroup was unavailable.",
+				"The API server returned NotFound when the scheduler listed v1beta1 PodGroups.",
+				"The API server returned 404 for that version.",
 				"Skipping API scheduling.k8s.io/v1beta1 because it has no resources.",
 			} {
 				if !responseSignal.matches(text) {
@@ -138,6 +140,23 @@ func TestCrossProjectEvaluationManifest(t *testing.T) {
 				if assessment := assessBenchmarkCase(bc, wrong); !slices.Contains(assessment.missingMust, "identifies unavailable PodGroup API response") {
 					t.Errorf("case %q accepts wrong complete diagnosis %q: %v", bc.name, text, assessment.missingMust)
 				}
+			}
+			for _, text := range []string{
+				"The v1beta1 PodGroup API did not return 404; the endpoint was available, and RBAC caused the synchronization failure.",
+				"The v1beta1 PodGroup object was unavailable to the workload, but the v1beta1 PodGroup API responded successfully.",
+				"The v1beta1 PodGroup was not found because it had not been created; the v1beta1 PodGroup API was available.",
+			} {
+				wrong := &models.TestCase{AISummary: &models.AISummary{Summary: base + text}, AIAnalysis: &models.AIAnalysis{RootCause: base + text}}
+				if assessment := assessBenchmarkCase(bc, wrong); !slices.Contains(assessment.missingMust, "forbidden: v1beta1 API explicitly available") {
+					t.Errorf("case %q accepts explicit API success %q: %v", bc.name, text, assessment.missingMust)
+				}
+			}
+			correct := &models.TestCase{
+				AISummary:  &models.AISummary{Summary: base + "The API server returned NotFound when the scheduler listed v1beta1 PodGroups."},
+				AIAnalysis: &models.AIAnalysis{RootCause: base + "The API server returned NotFound when the scheduler listed v1beta1 PodGroups."},
+			}
+			if assessment := assessBenchmarkCase(bc, correct); slices.Contains(assessment.missingMust, "identifies unavailable PodGroup API response") {
+				t.Errorf("case %q rejects correct response-first NotFound diagnosis: %v", bc.name, assessment.missingMust)
 			}
 		}
 	}
