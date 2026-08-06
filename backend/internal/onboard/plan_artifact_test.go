@@ -98,6 +98,37 @@ func TestRunDryRunWritesReviewedPlanArtifact(t *testing.T) {
 	}
 }
 
+func TestRunDryRunBindsRelativeDestinationToReviewedDirectory(t *testing.T) {
+	work := t.TempDir()
+	t.Chdir(work)
+	deps, out, _, _ := wizardDependencies("")
+	disabled := false
+	planPath := filepath.Join(t.TempDir(), "reviewed-plan.json")
+	opts := Options{
+		TestGrid: "dashboard-a", DashboardRepo: defaultTestDashboardRepo,
+		SourceRepo: "example/project", Mode: modePages, EngineRef: "main",
+		OutDir: ".", NoPrompt: true, AIEnabled: &disabled,
+		DryRun: true, PlanOut: planPath,
+	}
+	if err := run(context.Background(), opts, deps); err != nil {
+		t.Fatal(err)
+	}
+	match := reviewedPlanDigestPattern.FindStringSubmatch(out.String())
+	if len(match) != 2 {
+		t.Fatalf("dry-run output omitted digest:\n%s", out.String())
+	}
+	loaded, err := ReadPlanArtifact(planPath, match[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Destination.OutDir != work {
+		t.Fatalf("destination = %q, want %q", loaded.Destination.OutDir, work)
+	}
+	if !strings.Contains(out.String(), "Dashboard consumer directory: "+work) {
+		t.Fatalf("review did not show absolute destination:\n%s", out.String())
+	}
+}
+
 func TestPlanArtifactRejectsDigestMismatch(t *testing.T) {
 	plan, _, _ := testReviewedPlan(t)
 	path := filepath.Join(t.TempDir(), "plan.json")
@@ -119,7 +150,7 @@ func TestPlanArtifactRejectsDigestMismatch(t *testing.T) {
 
 func TestPlanArtifactRejectsInvalidPlanWithMatchingDigest(t *testing.T) {
 	plan, _, _ := testReviewedPlan(t)
-	plan.Destination.OutDir = ""
+	plan.Deployment.Mode = "invalid"
 	planCopy := *plan
 	planCopy.Files = nil
 	artifact := planArtifact{SchemaVersion: planArtifactSchemaVersion, Plan: planCopy, Files: copyPlanFiles(plan.Files)}
@@ -131,7 +162,26 @@ func TestPlanArtifactRejectsInvalidPlanWithMatchingDigest(t *testing.T) {
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReadPlanArtifact(path, planArtifactDigest(data)); err == nil || !strings.Contains(err.Error(), "directory is required") {
+	if _, err := ReadPlanArtifact(path, planArtifactDigest(data)); err == nil || !strings.Contains(err.Error(), "mode") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestPlanArtifactRejectsRelativeLocalDestination(t *testing.T) {
+	plan, _, _ := testReviewedPlan(t)
+	plan.Destination.OutDir = "relative-consumer"
+	planCopy := *plan
+	planCopy.Files = nil
+	artifact := planArtifact{SchemaVersion: planArtifactSchemaVersion, Plan: planCopy, Files: copyPlanFiles(plan.Files)}
+	data, err := json.Marshal(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "plan.json")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadPlanArtifact(path, planArtifactDigest(data)); err == nil || !strings.Contains(err.Error(), "not absolute") {
 		t.Fatalf("error = %v", err)
 	}
 }

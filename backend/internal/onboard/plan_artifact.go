@@ -35,6 +35,9 @@ func WritePlanArtifact(path string, plan *Plan) (string, error) {
 	}
 	planCopy := *plan
 	planCopy.Files = nil
+	if err := bindPlanArtifactDestination(&planCopy); err != nil {
+		return "", err
+	}
 	artifact := planArtifact{
 		SchemaVersion: planArtifactSchemaVersion,
 		Plan:          planCopy,
@@ -122,6 +125,9 @@ func ReadPlanArtifact(path, expectedDigest string) (*Plan, error) {
 		return nil, fmt.Errorf("onboarding plan artifact schema %d is unsupported", artifact.SchemaVersion)
 	}
 	artifact.Plan.Files = copyPlanFiles(artifact.Files)
+	if !artifact.Plan.Destination.OpenPR && !filepath.IsAbs(artifact.Plan.Destination.OutDir) {
+		return nil, fmt.Errorf("onboarding plan artifact local destination is not absolute")
+	}
 	if err := validatePlan(&artifact.Plan); err != nil {
 		return nil, fmt.Errorf("validate onboarding plan artifact: %w", err)
 	}
@@ -161,4 +167,16 @@ func copyPlanFiles(files map[string]string) map[string]string {
 		out[path] = content
 	}
 	return out
+}
+
+func bindPlanArtifactDestination(plan *Plan) error {
+	if plan == nil || plan.Destination.OpenPR {
+		return nil
+	}
+	abs, err := filepath.Abs(plan.Destination.OutDir)
+	if err != nil {
+		return fmt.Errorf("resolve reviewed dashboard consumer directory: %w", err)
+	}
+	plan.Destination.OutDir = filepath.Clean(abs)
+	return nil
 }

@@ -136,6 +136,9 @@ Present:
 - Warnings and unresolved decisions.
 - The plan artifact path and printed `sha256:` digest.
 
+Confirm that the review shows the intended absolute consumer directory. The
+saved plan remains bound to that directory even if apply runs elsewhere.
+
 Stop on a validation error or unexpected replacement. Do not weaken path,
 credential, repository, or generated-file validation to continue.
 
