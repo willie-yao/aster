@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -41,6 +42,7 @@ const (
 	maxAgentSkillBytes         = 256 << 10
 	maxAgentSkillsBytes        = 1 << 20
 	maxAgentSkillNameBytes     = 63
+	maxAgentTaskBytes          = 1 << 20
 	actionRequestAnnotation    = "prow-ai-dashboard/action-request"
 	defaultAgentCleanupTimeout = 30 * time.Second
 )
@@ -249,6 +251,10 @@ func (r *AgentRuntime) Generate(ctx context.Context, spec runtime.GenerateSpec) 
 	}
 
 	name := AgentTaskName(spec, r.opts)
+	task := r.buildTask(name, spec, skills, contract)
+	if err := validateAgentTaskSize(task); err != nil {
+		return runtime.GenerateResult{}, err
+	}
 	work := runtime.WorkRef{Backend: "orka", Namespace: r.opts.Namespace, Name: name, ExecutionID: strings.TrimSpace(spec.ExecutionID)}
 	if spec.WorkObserver != nil {
 		if err := spec.WorkObserver(ctx, work); err != nil {
@@ -273,7 +279,7 @@ func (r *AgentRuntime) Generate(ctx context.Context, spec runtime.GenerateSpec) 
 		state = TaskState{}
 	}
 
-	if err := r.kube.Apply(ctx, TasksGVR, r.opts.Namespace, r.buildTask(name, spec, skills, contract)); err != nil {
+	if err := r.kube.Apply(ctx, TasksGVR, r.opts.Namespace, task); err != nil {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), defaultAgentCleanupTimeout)
 		cleanupErr := r.Cleanup(cleanupCtx, work)
 		cancel()
@@ -360,6 +366,9 @@ func validateAgentGenerateSpec(spec runtime.GenerateSpec, opts AgentOptions) (ag
 	if strings.TrimSpace(spec.Instruction) == "" {
 		return agentTaskContract{}, nil, fmt.Errorf("orka: empty instruction")
 	}
+	if !utf8.ValidString(spec.Instruction) {
+		return agentTaskContract{}, nil, fmt.Errorf("orka: instruction must be valid UTF-8")
+	}
 	if spec.Repo.Owner == "" || spec.Repo.Name == "" || spec.Repo.Ref == "" || opts.AgentRef == "" {
 		return agentTaskContract{}, nil, fmt.Errorf("orka: repo owner, name, ref, and agent_ref are required")
 	}
@@ -426,6 +435,9 @@ func normalizeAgentSkills(values map[string]string) ([]agentSkill, error) {
 		if strings.TrimSpace(content) == "" {
 			return nil, fmt.Errorf("orka: skill %q is empty", name)
 		}
+		if !utf8.ValidString(content) {
+			return nil, fmt.Errorf("orka: skill %q must be valid UTF-8", name)
+		}
 		if len(content) > maxAgentSkillBytes {
 			return nil, fmt.Errorf("orka: skill %q is %d bytes, exceeds %d", name, len(content), maxAgentSkillBytes)
 		}
@@ -436,6 +448,17 @@ func normalizeAgentSkills(values map[string]string) ([]agentSkill, error) {
 		skills = append(skills, agentSkill{name: name, content: content})
 	}
 	return skills, nil
+}
+
+func validateAgentTaskSize(task map[string]any) error {
+	raw, err := json.Marshal(task)
+	if err != nil {
+		return fmt.Errorf("orka: marshal agent Task: %w", err)
+	}
+	if len(raw) > maxAgentTaskBytes {
+		return fmt.Errorf("orka: encoded agent Task is %d bytes, exceeds %d", len(raw), maxAgentTaskBytes)
+	}
+	return nil
 }
 
 // Cleanup deletes only the exact observed Orka Task and waits for completion.

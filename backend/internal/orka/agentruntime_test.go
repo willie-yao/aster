@@ -466,6 +466,7 @@ func TestAgentRuntimeRejectsUnsupportedExecutionPolicyBeforeClusterWrite(t *test
 		want string
 	}{
 		{name: "clone URL", edit: func(s *runtime.GenerateSpec, _ *AgentOptions) { s.Repo.CloneURL = "https://mirror.invalid/repo.git" }, want: "clone URL"},
+		{name: "instruction UTF-8", edit: func(s *runtime.GenerateSpec, _ *AgentOptions) { s.Instruction = string([]byte{0xff}) }, want: "instruction must be valid UTF-8"},
 		{name: "model", edit: func(s *runtime.GenerateSpec, _ *AgentOptions) { s.Model = "model" }, want: "model is owned"},
 		{name: "native model", edit: func(s *runtime.GenerateSpec, _ *AgentOptions) { s.NativeModel = "provider/model" }, want: "native model"},
 		{name: "ambient auth", edit: func(s *runtime.GenerateSpec, _ *AgentOptions) { s.UseAmbientAuth = true }, want: "ambient"},
@@ -481,6 +482,9 @@ func TestAgentRuntimeRejectsUnsupportedExecutionPolicyBeforeClusterWrite(t *test
 			s.Skills = map[string]string{strings.Repeat("a", maxAgentSkillNameBytes+1): "content"}
 		}, want: "skill name is"},
 		{name: "empty skill", edit: func(s *runtime.GenerateSpec, _ *AgentOptions) { s.Skills = map[string]string{"empty": " \n"} }, want: "empty"},
+		{name: "skill UTF-8", edit: func(s *runtime.GenerateSpec, _ *AgentOptions) {
+			s.Skills = map[string]string{"invalid": string([]byte{0xff})}
+		}, want: "must be valid UTF-8"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -496,6 +500,22 @@ func TestAgentRuntimeRejectsUnsupportedExecutionPolicyBeforeClusterWrite(t *test
 				t.Fatalf("invalid policy wrote a cluster resource: task=%v", kube.applied)
 			}
 		})
+	}
+}
+
+func TestAgentRuntimeRejectsExpandedTaskBeforeClusterWrite(t *testing.T) {
+	s := spec()
+	s.Skills = map[string]string{"expanded": strings.Repeat("<", maxAgentSkillBytes)}
+	kube := &fakeTaskAPI{}
+	r := &AgentRuntime{
+		kube: kube, results: &delayedResultAPI{},
+		opts: AgentOptions{AgentRef: "agent", Purpose: AgentPurposePromptAuthor},
+	}
+	if _, err := r.Generate(context.Background(), s); err == nil || !strings.Contains(err.Error(), "encoded agent Task") {
+		t.Fatalf("expanded Task error = %v", err)
+	}
+	if kube.applied != nil {
+		t.Fatalf("oversized Task reached Kubernetes: %+v", kube.applied)
 	}
 }
 
