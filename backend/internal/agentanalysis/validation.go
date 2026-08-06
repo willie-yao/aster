@@ -125,9 +125,11 @@ func parseAndValidateAnalysis(ctx context.Context, raw string, bundle EvidenceBu
 	if len(analysis.EvidenceCitations) == 0 {
 		return Analysis{}, fmt.Errorf("%w: at least one verified artifact citation is required", ErrInvalidResult)
 	}
-	if err := validateRelevantFiles(analysis.RelevantFiles, analysis, bundle.Excerpts); err != nil {
+	relevantFiles, err := validateRelevantFiles(analysis.RelevantFiles, analysis, bundle.Excerpts)
+	if err != nil {
 		return Analysis{}, err
 	}
+	analysis.RelevantFiles = relevantFiles
 	return analysis, nil
 }
 
@@ -309,9 +311,9 @@ func findEvidenceQuoteRange(lines, quoteLines []string, hintedStart, hintedEnd i
 	return 0, 0, false
 }
 
-func validateRelevantFiles(files []string, analysis Analysis, excerpts []EvidenceExcerpt) error {
+func validateRelevantFiles(files []string, analysis Analysis, excerpts []EvidenceExcerpt) ([]string, error) {
 	if len(files) > maxRelevantFiles {
-		return fmt.Errorf("%w: relevant files exceed %d", ErrInvalidResult, maxRelevantFiles)
+		return nil, fmt.Errorf("%w: relevant files exceed %d", ErrInvalidResult, maxRelevantFiles)
 	}
 	grounded := map[string]bool{}
 	byID := map[string]string{}
@@ -325,20 +327,20 @@ func validateRelevantFiles(files []string, analysis Analysis, excerpts []Evidenc
 		grounded[citation.Path] = true
 	}
 	seen := map[string]bool{}
+	groundedFiles := make([]string, 0, len(files))
 	for i, file := range files {
 		file = strings.TrimSpace(file)
 		clean, err := artifacts.SafePath(file)
 		if err != nil || clean == "" || clean != file {
-			return fmt.Errorf("%w: relevant file %d has unsafe path %q", ErrInvalidResult, i, file)
+			return nil, fmt.Errorf("%w: relevant file %d has unsafe path %q", ErrInvalidResult, i, file)
 		}
 		if seen[file] {
-			return fmt.Errorf("%w: duplicate relevant file %q", ErrInvalidResult, file)
+			return nil, fmt.Errorf("%w: duplicate relevant file %q", ErrInvalidResult, file)
 		}
 		seen[file] = true
-		if !grounded[file] {
-			return fmt.Errorf("%w: relevant file %q is not cited", ErrInvalidResult, file)
+		if grounded[file] {
+			groundedFiles = append(groundedFiles, file)
 		}
-		files[i] = file
 	}
-	return nil
+	return groundedFiles, nil
 }

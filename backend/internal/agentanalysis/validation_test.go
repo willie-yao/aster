@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -160,9 +161,22 @@ func TestParseAndValidateAnalysisRejectsMalformedOutput(t *testing.T) {
 	}
 }
 
-func TestParseAndValidateAnalysisRejectsUngroundedRelevantFile(t *testing.T) {
+func TestParseAndValidateAnalysisDropsUngroundedRelevantFile(t *testing.T) {
 	bundle := testBundle(t)
 	raw := strings.Replace(validAnalysisJSON(bundle), `"build-log.txt","pkg/retry.go"`, `"build-log.txt","pkg/other.go"`, 1)
+	reader := &testSourceReader{files: map[string]string{"pkg/retry.go": "func retry() {\nreturn err\n}\n"}}
+	got, err := parseAndValidateAnalysis(t.Context(), raw, bundle, reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.RelevantFiles, []string{"build-log.txt"}) {
+		t.Fatalf("relevant files = %v", got.RelevantFiles)
+	}
+}
+
+func TestParseAndValidateAnalysisRejectsUnsafeRelevantFile(t *testing.T) {
+	bundle := testBundle(t)
+	raw := strings.Replace(validAnalysisJSON(bundle), `"build-log.txt","pkg/retry.go"`, `"../unsafe","pkg/retry.go"`, 1)
 	reader := &testSourceReader{files: map[string]string{"pkg/retry.go": "func retry() {\nreturn err\n}\n"}}
 	if _, err := parseAndValidateAnalysis(t.Context(), raw, bundle, reader); !errors.Is(err, ErrInvalidResult) {
 		t.Fatalf("error = %v", err)
