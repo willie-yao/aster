@@ -35,6 +35,19 @@ func BindAnalysisRuntimeFlags(fs *flag.FlagSet, opts *Options) *AnalysisRuntimeF
 	fs.StringVar(&values.nodeSelectorJSON, "orka-analysis-node-selector-json", "", "JSON node selector for analyzer Tasks")
 	fs.StringVar(&values.tolerationsJSON, "orka-analysis-tolerations-json", "", "JSON tolerations for analyzer Tasks")
 	fs.StringVar(&values.affinityJSON, "orka-analysis-affinity-json", "", "JSON affinity for analyzer Tasks")
+	shadow := &opts.ShadowAnalysis
+	fs.BoolVar(&shadow.Enabled, "agent-analysis-shadow", false, "run private experimental Agent analysis after authoritative publication")
+	fs.StringVar(&shadow.Namespace, "agent-analysis-shadow-namespace", "", "Orka namespace for shadow analysis Tasks")
+	fs.StringVar(&shadow.ResultAPI, "agent-analysis-shadow-api", "", "Orka result API base URL for shadow analysis")
+	fs.StringVar(&shadow.AgentRef, "agent-analysis-shadow-agent-ref", "", "operator-owned Orka Agent name for shadow analysis")
+	fs.StringVar(&shadow.AgentVersion, "agent-analysis-shadow-agent-version", "v1", "declared shadow analysis Agent version")
+	fs.StringVar(&shadow.GitSecret, "agent-analysis-shadow-git-secret", "", "optional read-only Orka git Secret for shadow analysis")
+	fs.StringVar(&shadow.KubeContext, "agent-analysis-shadow-kube-context", "", "optional kubeconfig context for shadow analysis")
+	fs.StringVar(&shadow.LedgerPath, "agent-analysis-shadow-ledger", "", "private shadow comparison ledger path outside the public output directory")
+	fs.IntVar(&shadow.MaxPerRun, "agent-analysis-shadow-max-per-run", 1, "maximum shadow analyses per refresh")
+	fs.IntVar(&shadow.MaxTurns, "agent-analysis-shadow-max-turns", 12, "maximum Agent turns per shadow analysis")
+	fs.DurationVar(&shadow.Timeout, "agent-analysis-shadow-timeout", 10*time.Minute, "total timeout for one shadow analysis")
+	fs.IntVar(&shadow.Retries, "agent-analysis-shadow-retries", 0, "Orka Task retries for shadow analysis")
 	return values
 }
 

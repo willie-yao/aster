@@ -31,6 +31,7 @@ type Spec struct {
 type Result struct {
 	Analysis        Analysis
 	Runtime         string
+	AgentNamespace  string
 	AgentRef        string
 	AgentVersion    string
 	ContractVersion string
@@ -50,11 +51,12 @@ type Result struct {
 
 // Runtime delegates one bounded analysis to a generic AgentRuntime.
 type Runtime struct {
-	Agent        agentruntime.AgentRuntime
-	Name         string
-	AgentRef     string
-	AgentVersion string
-	Retries      int
+	Agent          agentruntime.AgentRuntime
+	Name           string
+	AgentNamespace string
+	AgentRef       string
+	AgentVersion   string
+	Retries        int
 }
 
 // Generate runs the Agent and validates its one-file structured result.
@@ -90,7 +92,7 @@ func (r *Runtime) Generate(ctx context.Context, spec Spec) (Result, error) {
 		},
 	})
 	result := Result{
-		Runtime: strings.TrimSpace(r.Name), AgentRef: strings.TrimSpace(r.AgentRef), AgentVersion: strings.TrimSpace(r.AgentVersion),
+		Runtime: strings.TrimSpace(r.Name), AgentNamespace: strings.TrimSpace(r.AgentNamespace), AgentRef: strings.TrimSpace(r.AgentRef), AgentVersion: strings.TrimSpace(r.AgentVersion),
 		ContractVersion: ContractVersion, EvidenceHash: spec.Bundle.Hash, SkillHash: SkillHash(), SourceSHA: spec.Bundle.Source.Revision,
 		IdentityHash: identity, ExecutionID: executionID, MaxTurns: spec.MaxTurns, Timeout: spec.Timeout,
 		Retries: r.Retries, Attempts: generated.Attempts, Duration: time.Since(started),
@@ -125,8 +127,8 @@ func (r *Runtime) Generate(ctx context.Context, spec Spec) (Result, error) {
 func SkillHash() string { return hashString(failureAnalysisSkill) }
 
 func (r *Runtime) validateSpec(spec Spec) error {
-	if strings.TrimSpace(r.AgentRef) == "" || strings.TrimSpace(r.AgentVersion) == "" {
-		return fmt.Errorf("agent analysis: Agent reference and declared version are required")
+	if strings.TrimSpace(r.AgentNamespace) == "" || strings.TrimSpace(r.AgentRef) == "" || strings.TrimSpace(r.AgentVersion) == "" {
+		return fmt.Errorf("agent analysis: Agent namespace, reference, and declared version are required")
 	}
 	if r.Retries < 0 || r.Retries > 2 {
 		return fmt.Errorf("agent analysis: retries must be between 0 and 2")
@@ -152,7 +154,7 @@ func (r *Runtime) validateSpec(spec Spec) error {
 func (r *Runtime) identityHash(spec Spec) string {
 	parts := []string{
 		ContractVersion, spec.Bundle.Hash, SkillHash(), spec.Bundle.Source.Revision,
-		strings.TrimSpace(r.AgentRef), strings.TrimSpace(r.AgentVersion),
+		strings.TrimSpace(r.AgentNamespace), strings.TrimSpace(r.AgentRef), strings.TrimSpace(r.AgentVersion),
 		spec.Timeout.String(), fmt.Sprintf("%d", spec.MaxTurns), fmt.Sprintf("%d", r.Retries),
 	}
 	return hashString(strings.Join(parts, "\x00"))

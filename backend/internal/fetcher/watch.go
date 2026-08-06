@@ -51,9 +51,10 @@ func (p *pipeline) watchPass(ctx context.Context, jobs []models.ProwJob) error {
 	fetchCtx, cancel := context.WithTimeout(ctx, p.opts.Timeout)
 	defer cancel()
 	analysisCtx, _ := passExecutionContexts(ctx, fetchCtx, p.opts.AnalysisRuntime.Type)
-	_, err := p.refreshWithAnalysisContext(fetchCtx, analysisCtx, jobs)
+	result, err := p.refreshWithAnalysisContext(fetchCtx, analysisCtx, jobs)
 	if err == nil {
 		p.skipProgressSideEffects()
+		p.runShadowAnalysis(ctx, result)
 	}
 	return err
 }

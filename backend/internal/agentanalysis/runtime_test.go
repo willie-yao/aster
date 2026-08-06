@@ -31,7 +31,7 @@ func TestRuntimeGenerate(t *testing.T) {
 	agent := &fakeAgentRuntime{res: agentruntime.GenerateResult{
 		Files: map[string]string{OutputPath: body}, Diff: validOutputDiff(body), Attempts: 2,
 	}}
-	runtime := &Runtime{Agent: agent, Name: "orka", AgentRef: "analysis-agent", AgentVersion: "v1", Retries: 1}
+	runtime := &Runtime{Agent: agent, Name: "orka", AgentNamespace: "orka-system", AgentRef: "analysis-agent", AgentVersion: "v1", Retries: 1}
 	reader := &testSourceReader{files: map[string]string{"pkg/retry.go": "func retry() {\nreturn err\n}\n"}}
 	got, err := runtime.Generate(t.Context(), Spec{
 		Repo:   agentruntime.RepoRef{Owner: bundle.Source.Owner, Name: bundle.Source.Name, Ref: bundle.Source.Revision},
@@ -40,7 +40,7 @@ func TestRuntimeGenerate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Attempts != 2 || got.AgentRef != "analysis-agent" || got.EvidenceHash != bundle.Hash || got.SkillHash != SkillHash() || got.IdentityHash == "" {
+	if got.Attempts != 2 || got.AgentNamespace != "orka-system" || got.AgentRef != "analysis-agent" || got.EvidenceHash != bundle.Hash || got.SkillHash != SkillHash() || got.IdentityHash == "" {
 		t.Fatalf("result = %+v", got)
 	}
 	if agent.got.AllowBash || agent.got.Model != "" || agent.got.Endpoint != "" || agent.got.Token != "" || len(agent.got.NetworkDomains) != 0 {
@@ -58,7 +58,7 @@ func TestRuntimePreservesValidResultOnCleanupPending(t *testing.T) {
 		res: agentruntime.GenerateResult{Files: map[string]string{OutputPath: body}, Diff: validOutputDiff(body), Attempts: 1},
 		err: agentruntime.ErrCleanupPending,
 	}
-	runtime := &Runtime{Agent: agent, AgentRef: "analysis-agent", AgentVersion: "v1"}
+	runtime := &Runtime{Agent: agent, AgentNamespace: "orka-system", AgentRef: "analysis-agent", AgentVersion: "v1"}
 	got, err := runtime.Generate(t.Context(), Spec{
 		Repo:   agentruntime.RepoRef{Owner: bundle.Source.Owner, Name: bundle.Source.Name, Ref: bundle.Source.Revision},
 		Bundle: bundle, SourceReader: &testSourceReader{files: map[string]string{"pkg/retry.go": "func retry() {\nreturn err\n}\n"}},
@@ -71,7 +71,7 @@ func TestRuntimePreservesValidResultOnCleanupPending(t *testing.T) {
 
 func TestRuntimeRejectsUnsafeOutputAndRepo(t *testing.T) {
 	bundle := testBundle(t)
-	runtime := &Runtime{Agent: &fakeAgentRuntime{}, AgentRef: "analysis-agent", AgentVersion: "v1"}
+	runtime := &Runtime{Agent: &fakeAgentRuntime{}, AgentNamespace: "orka-system", AgentRef: "analysis-agent", AgentVersion: "v1"}
 	_, err := runtime.Generate(t.Context(), Spec{
 		Repo:   agentruntime.RepoRef{Owner: "other", Name: bundle.Source.Name, Ref: bundle.Source.Revision},
 		Bundle: bundle, MaxTurns: 5, Timeout: time.Minute,
@@ -96,7 +96,7 @@ func TestRuntimeRejectsUnsafeOutputAndRepo(t *testing.T) {
 
 func TestRuntimeIdentityIncludesExecutionContract(t *testing.T) {
 	bundle := testBundle(t)
-	baseRuntime := &Runtime{AgentRef: "analysis-agent", AgentVersion: "v1", Retries: 1}
+	baseRuntime := &Runtime{AgentNamespace: "orka-system", AgentRef: "analysis-agent", AgentVersion: "v1", Retries: 1}
 	baseSpec := Spec{Bundle: bundle, MaxTurns: 10, Timeout: 5 * time.Minute}
 	base := baseRuntime.identityHash(baseSpec)
 	tests := []struct {
@@ -104,9 +104,10 @@ func TestRuntimeIdentityIncludesExecutionContract(t *testing.T) {
 		runtime Runtime
 		spec    Spec
 	}{
-		{name: "agent", runtime: Runtime{AgentRef: "other-agent", AgentVersion: "v1", Retries: 1}, spec: baseSpec},
-		{name: "agent version", runtime: Runtime{AgentRef: "analysis-agent", AgentVersion: "v2", Retries: 1}, spec: baseSpec},
-		{name: "retries", runtime: Runtime{AgentRef: "analysis-agent", AgentVersion: "v1", Retries: 2}, spec: baseSpec},
+		{name: "namespace", runtime: Runtime{AgentNamespace: "other-system", AgentRef: "analysis-agent", AgentVersion: "v1", Retries: 1}, spec: baseSpec},
+		{name: "agent", runtime: Runtime{AgentNamespace: "orka-system", AgentRef: "other-agent", AgentVersion: "v1", Retries: 1}, spec: baseSpec},
+		{name: "agent version", runtime: Runtime{AgentNamespace: "orka-system", AgentRef: "analysis-agent", AgentVersion: "v2", Retries: 1}, spec: baseSpec},
+		{name: "retries", runtime: Runtime{AgentNamespace: "orka-system", AgentRef: "analysis-agent", AgentVersion: "v1", Retries: 2}, spec: baseSpec},
 		{name: "turns", runtime: *baseRuntime, spec: Spec{Bundle: bundle, MaxTurns: 11, Timeout: baseSpec.Timeout}},
 		{name: "timeout", runtime: *baseRuntime, spec: Spec{Bundle: bundle, MaxTurns: baseSpec.MaxTurns, Timeout: 6 * time.Minute}},
 	}

@@ -138,3 +138,18 @@ func mustJSON(t *testing.T, value any) string {
 	}
 	return string(data)
 }
+
+func TestFailureRequestHashUsesCanonicalFailureInput(t *testing.T) {
+	first := testRequest()
+	second := testRequest()
+	second.Build.JUnitURLs = []string{"other-private-url"}
+	second.TestCase.AISummary = &models.AISummary{Summary: "different prior output"}
+	second.TestCase.AIAnalysis = &models.AIAnalysis{RootCause: "different prior output"}
+	if FailureRequestHash(first) != FailureRequestHash(second) {
+		t.Fatal("non-authoritative fields changed the request hash")
+	}
+	second.TestCase.FailureMessage = "different failure"
+	if FailureRequestHash(first) == FailureRequestHash(second) {
+		t.Fatal("failure evidence did not change the request hash")
+	}
+}
