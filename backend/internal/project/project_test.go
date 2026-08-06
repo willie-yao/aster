@@ -1353,3 +1353,76 @@ func TestValidateExactBucketJobs(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateTestInfraRevision(t *testing.T) {
+	valid := validConfig()
+	valid.Discovery.TestInfraRevision = strings.Repeat("a", 40)
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid test-infra revision rejected: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name      string
+		revision  string
+		source    string
+		wantError string
+	}{
+		{name: "short", revision: "abcdef", wantError: "lowercase 40-character"},
+		{name: "uppercase", revision: strings.Repeat("A", 40), wantError: "lowercase 40-character"},
+		{name: "non hex", revision: strings.Repeat("z", 40), wantError: "lowercase 40-character"},
+		{name: "whitespace", revision: " " + strings.Repeat("a", 40), wantError: "lowercase 40-character"},
+		{name: "bucket", revision: strings.Repeat("a", 40), source: DiscoveryBucket, wantError: "requires discovery.source testgrid"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.Discovery.Source = tc.source
+			cfg.Discovery.TestInfraRevision = tc.revision
+			if tc.source == DiscoveryBucket {
+				cfg.TestGrid.Dashboard = ""
+			}
+			if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), tc.wantError) {
+				t.Fatalf("validation error = %v, want %q", err, tc.wantError)
+			}
+		})
+	}
+}
+
+func TestResolvedTestInfraRevisionCannotBeConfigured(t *testing.T) {
+	_, err := parse(strings.NewReader(`
+id: example
+discovery:
+  resolved_test_infra_revision: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+`))
+	if err == nil || !strings.Contains(err.Error(), "resolved_test_infra_revision") {
+		t.Fatalf("parse error = %v", err)
+	}
+}
+
+func TestParseTestInfraRevision(t *testing.T) {
+	revision := strings.Repeat("a", 40)
+	cfg, err := parse(strings.NewReader(`
+id: example
+name: Example
+testgrid:
+  dashboard: example-dashboard
+storage:
+  provider: gcs
+  bucket: kubernetes-ci-logs
+discovery:
+  source: testgrid
+  test_infra_revision: ` + revision + `
+branding:
+  title: Example
+  base_path: /example
+  site_url: https://example.invalid
+  source_repo:
+    owner: example
+    name: project
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Discovery.TestInfraRevision != revision {
+		t.Fatalf("revision = %q, want %q", cfg.Discovery.TestInfraRevision, revision)
+	}
+}

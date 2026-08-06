@@ -88,6 +88,12 @@ Add `-json` for machine-readable output. The report includes:
 - Warnings and unresolved fields.
 - The pinned `kubernetes/test-infra` revision.
 
+This revision makes the discovery operation internally consistent but is not
+written as a permanent consumer pin by default. For a reproducible evaluation,
+copy it into `discovery.test_infra_revision` after scaffolding and before the
+first fetch or deployment, then run `onboard doctor` again. Normal dashboards
+can leave the field unset to follow current job configuration.
+
 Each TestGrid candidate separates direct source matches from the complete
 periodic, presubmit, and postsubmit tab counts. Direct source matches drive
 ranking. Dashboard totals describe the selected TestGrid dashboard.

@@ -340,6 +340,17 @@ jobs:
             reusable_workflow_sha: process.env.WORKFLOW_SHA,
             engine_commit: process.env.ENGINE_COMMIT,
           };
+          const manifestPath = path.join(path.dirname(output), "manifest.json");
+          if (fs.existsSync(manifestPath)) {
+            const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+            const revision = manifest?.discovery?.resolved_test_infra_revision;
+            if (revision !== undefined) {
+              if (!/^[0-9a-f]{40}$/.test(revision)) {
+                throw new Error("manifest resolved test-infra revision is invalid");
+              }
+              provenance.test_infra_revision = revision;
+            }
+          }
           fs.mkdirSync(path.dirname(output), {recursive: true});
           fs.writeFileSync(output, JSON.stringify(provenance, null, 2) + "\n");
           console.log(`Wrote ${output}`);

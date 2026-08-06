@@ -286,7 +286,10 @@ func TestWriteAll(t *testing.T) {
 		GeneratedAt: "2025-01-15T12:00:00Z",
 	}
 
-	if err := WriteAll(dir, sampleConfig(), dash, details, flakiness, models.SearchIndex{GeneratedAt: "2025-01-15T12:00:00Z"}); err != nil {
+	cfg := sampleConfig()
+	cfg.Discovery.TestInfraRevision = strings.Repeat("a", 40)
+	cfg.Discovery.ResolvedTestInfraRevision = strings.Repeat("a", 40)
+	if err := WriteAll(dir, cfg, dash, details, flakiness, models.SearchIndex{GeneratedAt: "2025-01-15T12:00:00Z"}); err != nil {
 		t.Fatalf("WriteAll: %v", err)
 	}
 
@@ -299,7 +302,7 @@ func TestWriteAll(t *testing.T) {
 	if err := json.Unmarshal(manifestData, &gotManifest); err != nil {
 		t.Fatalf("unmarshal manifest.json: %v", err)
 	}
-	if gotManifest.ID != "capz" || gotManifest.Branding.Title != "CAPZ Prow Dashboard" {
+	if gotManifest.ID != "capz" || gotManifest.Branding.Title != "CAPZ Prow Dashboard" || gotManifest.Discovery.TestInfraRevision != strings.Repeat("a", 40) || gotManifest.Discovery.ResolvedTestInfraRevision != strings.Repeat("a", 40) {
 		t.Errorf("manifest round-trip mismatch: %+v", gotManifest)
 	}
 

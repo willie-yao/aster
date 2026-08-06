@@ -33,6 +33,8 @@ func TestReusableDeployContract(t *testing.T) {
 		"engine/frontend/public/data/provenance.json",
 		"reusable_workflow_sha: process.env.WORKFLOW_SHA",
 		"engine_commit: process.env.ENGINE_COMMIT",
+		"manifest?.discovery?.resolved_test_infra_revision",
+		"provenance.test_infra_revision = revision",
 	} {
 		if !strings.Contains(workflow, want) {
 			t.Errorf("reusable deploy workflow missing %q", want)

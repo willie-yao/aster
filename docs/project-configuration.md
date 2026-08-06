@@ -118,6 +118,21 @@ local provider is intended for tests and offline fetches.
 The default source reads Kubernetes test-infra job configuration and keeps jobs
 whose `testgrid-dashboards` annotation contains `testgrid.dashboard`.
 
+For a reproducible evaluation or incident replay, optionally pin discovery to an
+exact lowercase 40-character `kubernetes/test-infra` commit:
+
+```yaml
+discovery:
+  source: testgrid
+  test_infra_revision: 2e1a38bcca26b0fe1a46e7b2bf652e1de49cacca
+```
+
+When omitted, each fetch resolves the current test-infra `master` commit and
+uses that one snapshot consistently for the run. A configured pin never falls
+back to `master`. The effective revision is published as
+`discovery.resolved_test_infra_revision` in `manifest.json`; the Pages workflow
+also copies it to `provenance.json`. The field is invalid with bucket discovery.
+
 For another Prow installation, discover directly from its artifact bucket:
 
 ```yaml
