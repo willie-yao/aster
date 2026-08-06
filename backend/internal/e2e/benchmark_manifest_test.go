@@ -99,6 +99,76 @@ func TestCrossProjectEvaluationManifest(t *testing.T) {
 				t.Errorf("case %q rejects negated ownership statement: %v", bc.name, assessment.missingMust)
 			}
 		}
+		if bc.name == "kueue-was-podgroup-api-mismatch" {
+			var responseSignal *benchSignal
+			for _, signal := range bc.signals {
+				if signal.name == "identifies unavailable PodGroup API response" {
+					copy := signal
+					responseSignal = &copy
+				}
+			}
+			if responseSignal == nil {
+				t.Fatalf("case %q is missing unavailable PodGroup API response signal", bc.name)
+			}
+			for _, text := range []string{
+				"The API server response for v1beta1 PodGroups returned 404.",
+				"The v1beta1 PodGroup API endpoint was not served.",
+				"The scheduler request for v1beta1 PodGroup was unavailable.",
+				"The API server returned NotFound when the scheduler listed v1beta1 PodGroups.",
+				"The API server returned 404 for that version.",
+				"Skipping API scheduling.k8s.io/v1beta1 because it has no resources.",
+			} {
+				if !responseSignal.matches(text) {
+					t.Errorf("case %q rejects equivalent unavailable-API wording %q", bc.name, text)
+				}
+			}
+			for _, text := range []string{
+				"No resources were available to place the workload.",
+				"The service account was forbidden to list podgroups, while the v1beta1 endpoint was available.",
+				"The v1beta1 PodGroup request succeeded.",
+				"The API server response for v1beta1 PodGroup was not 404; it returned 200 OK.",
+				"The scheduler request for v1beta1 PodGroup was not unavailable; it completed successfully.",
+				"The scheduler list contained a v1beta1 PodGroup whose workload was unavailable.",
+				"The scheduler request for v1beta1 PodGroup succeeded. The image registry returned 404.",
+				"The scheduler listed a v1beta1 PodGroup whose workload endpoint returned 404.",
+				"The API server returned 404 for an unrelated admission webhook. The scheduler requested v1beta1 PodGroup, whose API request succeeded.",
+				"The API server returned 404 for v1alpha3, not for v1beta1 PodGroup.",
+			} {
+				if responseSignal.matches(text) {
+					t.Errorf("case %q accepts unrelated or successful API wording %q", bc.name, text)
+				}
+			}
+			base := "The scheduler requested v1beta1 PodGroup while the API server served v1alpha3. Scheduler handlers never synchronized. "
+			for _, text := range []string{
+				"No resources were available to place the workload.",
+				"The service account was forbidden to list podgroups, while the v1beta1 endpoint was available.",
+				"The scheduler request for v1beta1 PodGroup succeeded. The image registry returned 404.",
+				"The scheduler listed a v1beta1 PodGroup whose workload endpoint returned 404.",
+				"The API server returned 404 for an unrelated admission webhook. The scheduler requested v1beta1 PodGroup, whose API request succeeded.",
+				"The API server returned 404 for v1alpha3, not for v1beta1 PodGroup.",
+			} {
+				wrong := &models.TestCase{AISummary: &models.AISummary{Summary: base + text}, AIAnalysis: &models.AIAnalysis{RootCause: base + text}}
+				if assessment := assessBenchmarkCase(bc, wrong); !slices.Contains(assessment.missingMust, "identifies unavailable PodGroup API response") {
+					t.Errorf("case %q accepts wrong complete diagnosis %q: %v", bc.name, text, assessment.missingMust)
+				}
+			}
+			correct := &models.TestCase{
+				AISummary:  &models.AISummary{Summary: base + "The API server returned NotFound when the scheduler listed v1beta1 PodGroups."},
+				AIAnalysis: &models.AIAnalysis{RootCause: base + "The API server returned NotFound when the scheduler listed v1beta1 PodGroups."},
+			}
+			if assessment := assessBenchmarkCase(bc, correct); slices.Contains(assessment.missingMust, "identifies unavailable PodGroup API response") {
+				t.Errorf("case %q rejects correct response-first NotFound diagnosis: %v", bc.name, assessment.missingMust)
+			}
+			for _, text := range []string{
+				"The API server served v1alpha3. The v1alpha3 API was available, but the scheduler request for v1beta1 PodGroup returned NotFound. Scheduler handlers never synchronized.",
+				"The API server served v1alpha3 and that endpoint was available only for v1alpha3; the scheduler request for v1beta1 PodGroup returned NotFound. Scheduler handlers never synchronized.",
+			} {
+				correct := &models.TestCase{AISummary: &models.AISummary{Summary: text}, AIAnalysis: &models.AIAnalysis{RootCause: text}}
+				if assessment := assessBenchmarkCase(bc, correct); slices.Contains(assessment.missingMust, "identifies unavailable PodGroup API response") {
+					t.Errorf("case %q rejects v1alpha3-only availability %q: %v", bc.name, text, assessment.missingMust)
+				}
+			}
+		}
 	}
 	if allowedUnavailable != 1 {
 		t.Fatalf("allow_unavailable cases = %d, want 1", allowedUnavailable)
