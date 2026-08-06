@@ -249,6 +249,11 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 	if err := prepareInteractiveDestination(ctx, prompt, &opts, plan, deps); err != nil {
 		return nil, opts, err
 	}
+	if opts.PlanOut != "" {
+		if err := bindPlanArtifactDestination(plan); err != nil {
+			return nil, opts, err
+		}
+	}
 	printReview(deps.terminal.Out, plan)
 	if opts.DryRun {
 		return plan, opts, nil

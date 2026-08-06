@@ -4,6 +4,11 @@
 Kubernetes. Start with the guided wizard, review the generated files, then
 follow the deployment guide included in the scaffold.
 
+An agent can run the same discovery, dry-run, scaffold, prompt handoff, and
+doctor flow with the repo-owned
+[`setup-prow-ai-consumer` skill](agent-onboarding.md). The skill uses the CLI as
+the scaffold authority rather than maintaining separate templates.
+
 ## Run the wizard
 
 From the source repository checkout:
@@ -140,8 +145,8 @@ filesystem unchanged.
 ## Preview with a dry run
 
 A dry run performs discovery, the final job sweep, rendering, output-path
-checks, and strict configuration validation without writing files or opening a
-pull request:
+checks, and strict configuration validation without writing scaffold files or
+opening a pull request:
 
 ```bash
 go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboard \
@@ -149,13 +154,46 @@ go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboar
   -dry-run
 ```
 
+Automation can save and apply the exact reviewed plan instead of rebuilding
+discovery before the write:
+
+```bash
+PLAN_DIR="$(mktemp -d)"
+PLAN_FILE="$PLAN_DIR/onboard-plan.json"
+go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboard \
+  -non-interactive \
+  -source-repo owner/source \
+  -dashboard-repo owner/consumer \
+  -testgrid dashboard-name \
+  -out ./consumer \
+  -prompt-mode handoff \
+  -dry-run \
+  -plan-out "$PLAN_FILE"
+```
+
+Record the printed `sha256:` digest. After reviewing the full plan, apply only
+that artifact:
+
+```bash
+go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboard \
+  -apply-plan "$PLAN_FILE" \
+  -plan-digest 'sha256:<reviewed-digest>'
+```
+
+The apply command verifies the digest, validates the complete artifact, and
+refuses the write if the destination's create/replace state changed after
+review.
+
 Use `--no-prompt` when you want only the reviewable TODO template. This flag
 controls prompt authoring. It does not disable the interactive wizard.
 
 Local onboarding refuses to replace generated files unless `--update-existing`
-is explicit. Interactive onboarding instead offers another directory, updating
-only the listed scaffold files, or cancellation. The safe default is another
-directory. Before confirmation, review every file marked `create` or `replace`.
+is explicit. For non-interactive automation, first run without the flag and
+review the reported conflict paths. After replacement authorization, rerun the
+dry run with `--update-existing`, save that full plan, and review every file
+marked `create` or `replace`. Interactive onboarding instead offers another
+directory, updating only the listed scaffold files, or cancellation. The safe
+default is another directory.
 Unrelated files and stale generated files from another deployment or prompt mode
 are left untouched.
 Open-PR mode continues to use a GitHub diff and does not use local update mode.

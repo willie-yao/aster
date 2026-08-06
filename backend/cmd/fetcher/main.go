@@ -116,6 +116,8 @@ func runOnboard(args []string) {
 	var opts onboard.Options
 	var enableAI bool
 	var includePresubmits bool
+	var applyPlanPath string
+	var applyPlanDigest string
 	fs.StringVar(&opts.TestGrid, "testgrid", "", "testgrid dashboard name to discover jobs from (kubernetes-ecosystem Prow)")
 	fs.StringVar(&opts.Bucket, "bucket", "", "artifact bucket name for bucket-based discovery (any Prow); alternative to -testgrid")
 	fs.StringVar(&opts.GCSWebBase, "gcsweb-base", "", "gcsweb gateway root for the bucket (for example, https://gcsweb.istio.io/s3); selects the gcsweb provider")
@@ -140,11 +142,16 @@ func runOnboard(args []string) {
 	fs.BoolVar(&opts.RequirePromptDraft, "require-prompt-draft", false, "fail before writes unless agent prompt drafting succeeds")
 	fs.BoolVar(&opts.OpenPR, "open-pr", false, "open a PR against the dashboard repo instead of writing locally; needs GITHUB_TOKEN write access")
 	fs.BoolVar(&opts.UpdateExisting, "update-existing", false, "replace only known generated files in an existing local scaffold")
-	fs.BoolVar(&opts.DryRun, "dry-run", false, "discover, render, and validate without writing files or opening a pull request")
+	fs.BoolVar(&opts.DryRun, "dry-run", false, "discover, render, and validate without applying scaffold files or opening a pull request")
+	fs.StringVar(&opts.PlanOut, "plan-out", "", "write the exact reviewed dry-run plan to a new private file")
+	fs.StringVar(&applyPlanPath, "apply-plan", "", "apply an exact reviewed plan artifact instead of rebuilding discovery")
+	fs.StringVar(&applyPlanDigest, "plan-digest", "", "required sha256 digest for -apply-plan")
 	fs.BoolVar(&opts.NonInteractive, "non-interactive", false, "forbid prompts and require all necessary flags")
 	_ = fs.Parse(args)
 
+	visited := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) {
+		visited[f.Name] = true
 		switch f.Name {
 		case "include-presubmits":
 			opts.IncludePresubmits = &includePresubmits
@@ -152,6 +159,32 @@ func runOnboard(args []string) {
 			opts.AIEnabled = &enableAI
 		}
 	})
+	if applyPlanPath != "" {
+		for name := range visited {
+			if name != "apply-plan" && name != "plan-digest" {
+				fmt.Fprintf(os.Stderr, "error: -apply-plan cannot be combined with -%s\n", name)
+				os.Exit(2)
+			}
+		}
+		if applyPlanDigest == "" {
+			fmt.Fprintln(os.Stderr, "error: -apply-plan requires -plan-digest")
+			os.Exit(2)
+		}
+		plan, err := onboard.ReadPlanArtifact(applyPlanPath, applyPlanDigest)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		if err := onboard.Apply(context.Background(), plan, os.Getenv("GITHUB_TOKEN")); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if applyPlanDigest != "" {
+		fmt.Fprintln(os.Stderr, "error: -plan-digest requires -apply-plan")
+		os.Exit(2)
+	}
 
 	// These variables seed the deployed provider. The token is retained only for
 	// credential-leak validation and is never sent during prompt authoring.

@@ -92,8 +92,10 @@ type Options struct {
 	UpdateExisting bool
 
 	// DryRun performs discovery, planning, rendering, and validation without
-	// writing files or opening a pull request.
+	// applying scaffold files or opening a pull request.
 	DryRun bool
+	// PlanOut writes the exact reviewed dry-run plan to a new private file.
+	PlanOut string
 	// NonInteractive forbids terminal reads even when stdin is a TTY.
 	NonInteractive bool
 }

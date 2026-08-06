@@ -109,6 +109,7 @@ The Kubernetes server serves the same `/data/*.json` contract as Pages and adds
 ### Get started
 
 - [Onboarding a project](docs/onboarding-a-new-project.md)
+- [Agent-driven consumer setup](docs/agent-onboarding.md)
 - [Onboarding reference](docs/onboarding-reference.md)
 - [GitHub Actions and Pages](docs/github-pages.md)
 - [Kubernetes deployment](docs/kubernetes.md)

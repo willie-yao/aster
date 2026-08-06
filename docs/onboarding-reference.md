@@ -4,6 +4,9 @@ This page documents discovery, automation, prompt authoring, validation, and the
 full `fetcher onboard` command surface. For a first project, start with
 [Onboarding a project](onboarding-a-new-project.md).
 
+For a conversational agent workflow over the same command surface, see
+[Agent-driven consumer setup](agent-onboarding.md).
+
 ## Discovery behavior
 
 When required flags are missing and stdin is an interactive terminal, the
@@ -223,8 +226,8 @@ Open-PR mode continues to submit the generated file map as a GitHub diff.
 
 `-dry-run` performs discovery, the real job sweep, planning, rendering,
 destination checks, and strict configuration validation. It prints the same
-create/replace plan and stale-file warnings without writing files or opening a
-pull request.
+create/replace plan and stale-file warnings without writing scaffold files or
+opening a pull request.
 
 ```bash
 go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboard \
@@ -234,6 +237,32 @@ go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboar
 
 An interactive dry run stops after review. A fully flagged dry run stays
 non-interactive.
+
+`-plan-out <path>` is valid only with `-dry-run`. It writes a versioned,
+credential-free artifact containing the exact rendered files and reviewed
+destination actions. The output prints a `sha256:` digest for that file. The
+path must not already exist. Local destinations are stored as canonical absolute
+paths with existing symlink ancestors resolved. Apply rechecks that target so a
+different working directory or retargeted ancestor cannot redirect the reviewed
+scaffold. The plan artifact must be outside the consumer destination and cannot
+represent an open-PR plan.
+
+Apply the exact reviewed artifact with no discovery or scaffold flags:
+
+```bash
+fetcher onboard \
+  -apply-plan /private/path/onboard-plan.json \
+  -plan-digest 'sha256:<reviewed-digest>'
+```
+
+The command rejects a changed digest, malformed artifact, unsupported schema,
+symlinked plan file, invalid plan, or destination whose create/replace state or
+reviewed replacement content no longer matches the review.
+
+For an existing scaffold, the first non-interactive run without
+`-update-existing` stops and lists conflicts. After the user authorizes those
+replacement paths, rerun the dry run with `-update-existing` and `-plan-out`,
+then review and apply that artifact.
 
 ## Non-interactive automation
 

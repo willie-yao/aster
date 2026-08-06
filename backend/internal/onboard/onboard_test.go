@@ -233,6 +233,8 @@ func TestValidateOptions(t *testing.T) {
 		{"required draft with no-prompt", func(o *Options) { o.NoPrompt = true; o.RequirePromptDraft = true }, "valid only"},
 		{"required draft without agent mode", func(o *Options) { o.RequirePromptDraft = true }, "valid only"},
 		{"update existing with open PR", func(o *Options) { o.UpdateExisting = true; o.OpenPR = true }, "cannot be combined"},
+		{"plan out without dry run", func(o *Options) { o.PlanOut = "plan.json" }, "requires --dry-run"},
+		{"plan out with open PR", func(o *Options) { o.DryRun = true; o.PlanOut = "plan.json"; o.OpenPR = true }, "cannot be combined"},
 		{"endpoint userinfo", func(o *Options) { o.AIEndpoint = "https://user:fixture-secret@example.test/v1" }, "must not contain credentials"},
 		{"endpoint token query", func(o *Options) { o.AIEndpoint = "https://example.test/v1?api_key=fixture-secret" }, "must not contain credential query"},
 		{"relative endpoint", func(o *Options) { o.AIEndpoint = "not-a-url" }, "absolute HTTP or HTTPS"},

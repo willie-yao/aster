@@ -159,6 +159,11 @@ func buildPlan(ctx context.Context, opts Options, planning planningContext, deps
 		plan.Provenance["project_name"] = confirmedInference(opts.Name, planning.discovery.Identity.Name, "interactive input")
 		plan.Provenance["dashboard_repo"] = confirmedInference(dashboardRepo.FullName, planning.discovery.DashboardRepo, "confirmed dashboard repository input")
 	}
+	if opts.PlanOut != "" {
+		if err := bindPlanArtifactDestination(plan); err != nil {
+			return nil, err
+		}
+	}
 	if err := inspectPlanDestination(plan, deps); err != nil {
 		return nil, fmt.Errorf("planning dashboard consumer directory: %w", err)
 	}
