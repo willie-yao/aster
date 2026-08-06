@@ -20,9 +20,14 @@ type fakeBackend struct {
 	listErr     error
 	listTreeErr error
 	listCalls   []string
+	listErrors  map[string]error
+	openErrors  map[string]error
 }
 
 func (f *fakeBackend) Open(_ context.Context, path string) (io.ReadCloser, int64, error) {
+	if err := f.openErrors[path]; err != nil {
+		return nil, 0, err
+	}
 	body, ok := f.objects[path]
 	if !ok {
 		return nil, 0, storage.ErrNotFound
@@ -58,6 +63,9 @@ func (f *fakeBackend) ReadTail(_ context.Context, path string, maxBytes int64) (
 
 func (f *fakeBackend) List(_ context.Context, prefix string) (*storage.Listing, error) {
 	f.listCalls = append(f.listCalls, prefix)
+	if err := f.listErrors[prefix]; err != nil {
+		return nil, err
+	}
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
@@ -117,6 +125,38 @@ func TestDiscoverExactJobsRejectsMissingName(t *testing.T) {
 	_, err := DiscoverExactJobs(context.Background(), b, false, []string{"present", "missing"})
 	if err == nil || !strings.Contains(err.Error(), "exact bucket job(s) not found: missing") {
 		t.Fatalf("missing exact job error = %v", err)
+	}
+}
+
+func TestDiscoverExactJobsPropagatesPresubmitErrors(t *testing.T) {
+	sentinel := errors.New("storage unavailable")
+	tests := []struct {
+		name string
+		b    *fakeBackend
+	}{
+		{
+			name: "list",
+			b: &fakeBackend{objects: map[string]string{}, listErrors: map[string]error{
+				"pr-logs/directory/pull-e2e/": sentinel,
+			}},
+		},
+		{
+			name: "read",
+			b: &fakeBackend{
+				objects: map[string]string{"pr-logs/directory/pull-e2e/9.txt": "index"},
+				openErrors: map[string]error{
+					"pr-logs/directory/pull-e2e/9.txt": sentinel,
+				},
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := DiscoverExactJobs(context.Background(), tc.b, true, []string{"pull-e2e"})
+			if !errors.Is(err, sentinel) || !strings.Contains(err.Error(), `resolving exact presubmit job "pull-e2e"`) {
+				t.Fatalf("exact presubmit error = %v", err)
+			}
+		})
 	}
 }
 

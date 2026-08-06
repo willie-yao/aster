@@ -90,7 +90,11 @@ func DiscoverExactJobs(ctx context.Context, b storage.Backend, includePresubmits
 			found = true
 		}
 		if includePresubmits {
-			if repo, ok := resolvePresubmitRepo(ctx, b, name); ok {
+			repo, ok, err := resolvePresubmitRepoStrict(ctx, b, name)
+			if err != nil {
+				return nil, fmt.Errorf("resolving exact presubmit job %q: %w", name, err)
+			}
+			if ok {
 				jobs = append(jobs, models.ProwJob{
 					Name: name, TabName: name, JobType: models.JobTypePresubmit, Repo: repo,
 					JobID: models.JobIDFor(models.JobTypePresubmit, repo, name),
@@ -134,9 +138,14 @@ func matchesFilters(name string, filters []string) bool {
 // only encodes "<org>_<repo>" in the entry body, so the first underscore is
 // treated as the org/repo separator.
 func resolvePresubmitRepo(ctx context.Context, b storage.Backend, jobName string) (string, bool) {
+	repo, found, err := resolvePresubmitRepoStrict(ctx, b, jobName)
+	return repo, found && err == nil
+}
+
+func resolvePresubmitRepoStrict(ctx context.Context, b storage.Backend, jobName string) (string, bool, error) {
 	listing, err := b.List(ctx, "pr-logs/directory/"+jobName+"/")
 	if err != nil {
-		return "", false
+		return "", false, err
 	}
 	var ids []string
 	for _, f := range listing.Files {
@@ -146,16 +155,16 @@ func resolvePresubmitRepo(ctx context.Context, b storage.Backend, jobName string
 		}
 	}
 	if len(ids) == 0 {
-		return "", false
+		return "", false, nil
 	}
 	sort.Sort(sort.Reverse(sort.StringSlice(ids)))
 	body, err := storage.ReadAll(ctx, b, "pr-logs/directory/"+jobName+"/"+ids[0]+".txt")
 	if err != nil {
-		return "", false
+		return "", false, err
 	}
 	parts, ok := splitPresubmitRef(string(body))
 	if !ok {
-		return "", false
+		return "", false, nil
 	}
-	return strings.Replace(parts[2], "_", "/", 1), true
+	return strings.Replace(parts[2], "_", "/", 1), true, nil
 }

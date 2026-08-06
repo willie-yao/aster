@@ -1334,7 +1334,13 @@ func (p *pipeline) processRemediations(ctx context.Context, patterns []models.Pa
 		}
 	}
 	if p.jobCatalog == nil && p.cfg.EffectiveDiscoverySource() == project.DiscoveryBucket {
-		jobs, err := prowbuild.DiscoverJobs(ctx, p.backend, true, nil)
+		var jobs []models.ProwJob
+		var err error
+		if len(p.cfg.Discovery.ExactJobs) > 0 {
+			jobs, err = prowbuild.DiscoverExactJobs(ctx, p.backend, true, p.cfg.Discovery.ExactJobs)
+		} else {
+			jobs, err = prowbuild.DiscoverJobs(ctx, p.backend, true, nil)
+		}
 		if err != nil {
 			log.Printf("Warning: bucket verification metadata unavailable: %v", err)
 		} else {
