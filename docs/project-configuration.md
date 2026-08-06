@@ -220,6 +220,11 @@ independently controls cache reuse:
 - `hard`: only hard safety, grounding, and correctness failures block reuse.
 - `advisory`: critique findings never block reuse.
 
+One grounding rule also controls immediate publication: when readable artifact
+evidence exists but the selected causal draft has no validated artifact citation,
+`strict` and `hard` publish an unavailable result rather than the unsupported
+diagnosis. `advisory` records `citation.missing` without blocking publication.
+
 If `cache_policy` is omitted, existing behavior is preserved. Zero retries use
 `advisory`; positive retries use `strict`. Evidence that is deterministically
 unavailable remains a warning under every policy. Structural validation,

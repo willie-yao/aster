@@ -109,7 +109,7 @@ func findPunts(text string) []string {
 // weaker version are invalidated on read. Cosmetic prompt-shape changes
 // do not bump; only behavior changes that make an existing cached answer
 // invalid under today's contract.
-const currentCritiqueVersion = 7
+const currentCritiqueVersion = 8
 
 // transientPersistThreshold is the consecutive-failure count at or above which a
 // draft claiming is_transient=true is contradicted. It matches the engine's
@@ -276,6 +276,12 @@ type critiqueOutcome struct {
 
 	// CitationIssues lists invalid structured evidence or line claims.
 	CitationIssues []string
+	// MissingArtifactCitation means readable artifact evidence exists but the
+	// draft contains no structured citation supporting its causal claims.
+	MissingArtifactCitation bool
+	// MissingArtifactCitationNeedsTool means the stored evidence has no
+	// line-numbered text long enough to form a valid citation.
+	MissingArtifactCitationNeedsTool bool
 
 	// MissingSkillEvidence pairs each matched recipe with the evidence
 	// groups it still requires the agent to satisfy.
@@ -303,6 +309,9 @@ type skillEvidenceMiss struct {
 // for callers that just want "what tripped the gate".
 func (o critiqueOutcome) Matches() []string {
 	n := len(o.PuntMatches) + len(o.UnreadCitations) + len(o.CitationIssues) + len(o.MissingSkillEvidence)
+	if o.MissingArtifactCitation {
+		n++
+	}
 	if o.TransientPersistCount > 0 {
 		n++
 	}
@@ -314,6 +323,9 @@ func (o critiqueOutcome) Matches() []string {
 	out = append(out, o.UnreadCitations...)
 	for _, issue := range o.CitationIssues {
 		out = append(out, "citation:"+issue)
+	}
+	if o.MissingArtifactCitation {
+		out = append(out, "citation:missing")
 	}
 	for _, m := range o.MissingSkillEvidence {
 		// Keep each skill miss as one short token in logs.
@@ -442,24 +454,44 @@ func critiqueDraftWithContent(parsed analysisResponse, readsFull, readsBase map[
 	}
 
 	var citationIssues []string
+	missingArtifactCitation := false
+	missingArtifactCitationNeedsTool := false
 	if len(citationContexts) > 0 {
 		citationIssues = validateAnalysisCitations(parsed, citationContexts[0])
+		missingArtifactCitation = !citationContexts[0].Full && len(citationContexts[0].Evidence) > 0 && len(parsed.EvidenceCitations) == 0
+		missingArtifactCitationNeedsTool = missingArtifactCitation && !hasCitableArtifactEvidence(citationContexts[0].Evidence)
 	}
 
 	out := critiqueOutcome{
-		MatchedSkillIDs:       critiqueMatchedSkillIDs(matchedSkills),
-		PuntMatches:           puntMatches,
-		CitationIssues:        citationIssues,
-		UnreadCitations:       unread,
-		MissingSkillEvidence:  missingSkillEv,
-		TransientPersistCount: transientPersist,
+		MatchedSkillIDs:                  critiqueMatchedSkillIDs(matchedSkills),
+		PuntMatches:                      puntMatches,
+		CitationIssues:                   citationIssues,
+		MissingArtifactCitation:          missingArtifactCitation,
+		MissingArtifactCitationNeedsTool: missingArtifactCitationNeedsTool,
+		UnreadCitations:                  unread,
+		MissingSkillEvidence:             missingSkillEv,
+		TransientPersistCount:            transientPersist,
 	}
-	if len(puntMatches) == 0 && len(unread) == 0 && len(citationIssues) == 0 && len(missingSkillEv) == 0 && transientPersist == 0 {
+	if len(puntMatches) == 0 && len(unread) == 0 && len(citationIssues) == 0 && !missingArtifactCitation && len(missingSkillEv) == 0 && transientPersist == 0 {
 		out.Passed = true
 		return out
 	}
 	out.Feedback = formatCritiqueFeedback(parsed, out)
 	return out
+}
+
+func hasCitableArtifactEvidence(evidence map[string]*analysisChatEvidence) bool {
+	for _, artifact := range evidence {
+		if artifact == nil {
+			continue
+		}
+		for _, line := range artifact.Lines {
+			if len(strings.TrimSpace(line)) >= 4 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 var proseLineClaimRE = regexp.MustCompile(`(?i)\blines?\s+(?:number\s+)?L?(\d+)(?:\s*(?:-|–|to)\s*L?(\d+))?`)
@@ -736,7 +768,7 @@ func pruneAbsentSkillEvidence(parsed analysisResponse, out *critiqueOutcome, tre
 	}
 	out.MissingSkillEvidence = kept
 	out.UnavailableSkillEvidence = unavailable
-	if len(out.PuntMatches) == 0 && len(out.UnreadCitations) == 0 && len(out.CitationIssues) == 0 && len(out.MissingSkillEvidence) == 0 && out.TransientPersistCount == 0 {
+	if len(out.PuntMatches) == 0 && len(out.UnreadCitations) == 0 && len(out.CitationIssues) == 0 && !out.MissingArtifactCitation && len(out.MissingSkillEvidence) == 0 && out.TransientPersistCount == 0 {
 		out.Passed = true
 		out.Feedback = ""
 	} else {
@@ -762,6 +794,9 @@ func formatCritiqueFeedback(parsed analysisResponse, out critiqueOutcome) string
 	if len(out.CitationIssues) > 0 {
 		sections = append(sections, formatCitationIssues(out.CitationIssues))
 	}
+	if out.MissingArtifactCitation {
+		sections = append(sections, formatMissingArtifactCitationSection())
+	}
 	if len(out.MissingSkillEvidence) > 0 {
 		sections = append(sections, formatSkillEvidenceSection(out.MissingSkillEvidence))
 	}
@@ -772,6 +807,10 @@ func formatCritiqueFeedback(parsed analysisResponse, out critiqueOutcome) string
 	sections = append(sections, `Re-emit your JSON addressing every issue above. Do NOT re-emit the same draft. If you re-emit the same issues, your answer will be rejected again.`)
 
 	return strings.Join(sections, "\n\n")
+}
+
+func formatMissingArtifactCitationSection() string {
+	return `Your draft states a causal diagnosis but includes no structured artifact citation, even though artifact evidence was read. Before re-emitting, use grep_artifact when needed to obtain exact line-numbered evidence. Then include at least one evidence_citations entry whose exact path, line range, and quote support the initiating failure or a causal link. If the evidence does not establish component ownership or a complete root cause, state that uncertainty explicitly, but still cite the artifact evidence that establishes the strongest supported fact and the boundary of what remains unresolved.`
 }
 
 // formatTransientPersistSection is the feedback for a draft that marked a

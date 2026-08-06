@@ -18,6 +18,7 @@ func TestCritiqueRuleIDs(t *testing.T) {
 			"citation 4 names an unread artifact",
 			"prose line claim build-log.txt:10-10 has no matching citation",
 		},
+		MissingArtifactCitation: true,
 		MissingSkillEvidence: []skillEvidenceMiss{{
 			Skill: skills.Skill{ID: "skill-a"}, Missing: []skills.EvidenceGroup{{ID: "group-a"}},
 		}},
@@ -28,6 +29,7 @@ func TestCritiqueRuleIDs(t *testing.T) {
 	}
 	want := []CritiqueRuleID{
 		CritiqueRuleCitationInvalidRange,
+		CritiqueRuleCitationMissing,
 		CritiqueRuleCitationQuoteMismatch,
 		CritiqueRuleCitationUnread,
 		CritiqueRuleClaimUncitedLine,
@@ -86,6 +88,7 @@ func TestCritiqueEvidenceGroupRefsPreserveIdentity(t *testing.T) {
 func TestCritiqueAcceptedForPolicy(t *testing.T) {
 	soft := critiqueOutcome{PuntMatches: []string{"Check logs"}}
 	hard := critiqueOutcome{UnreadCitations: []string{"build-log.txt"}}
+	missingCitation := critiqueOutcome{MissingArtifactCitation: true}
 	unavailable := critiqueOutcome{UnavailableSkillEvidence: []skillEvidenceMiss{{Skill: skills.Skill{ID: "skill"}, Missing: []skills.EvidenceGroup{{ID: "group"}}}}}
 	for _, tc := range []struct {
 		name   string
@@ -96,6 +99,7 @@ func TestCritiqueAcceptedForPolicy(t *testing.T) {
 		{name: "strict rejects soft", out: soft, policy: CritiqueCachePolicyStrict},
 		{name: "hard accepts soft", out: soft, policy: CritiqueCachePolicyHard, want: true},
 		{name: "hard rejects hard", out: hard, policy: CritiqueCachePolicyHard},
+		{name: "hard rejects missing citation", out: missingCitation, policy: CritiqueCachePolicyHard},
 		{name: "advisory accepts hard", out: hard, policy: CritiqueCachePolicyAdvisory, want: true},
 		{name: "strict accepts unavailable", out: unavailable, policy: CritiqueCachePolicyStrict, want: true},
 	} {

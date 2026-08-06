@@ -123,7 +123,8 @@ func run(ctx context.Context, args []string, getenv envGetter, stdout, stderr io
 	if stateErr == nil {
 		stateWriteErr = analysisruntime.WriteEncryptedContainerAnalysisState(stdout, state, stateKey, identity)
 	}
-	if analyzeErr != nil {
+	completedPolicyOutcome := errors.Is(analyzeErr, ai.ErrMissingArtifactCitation)
+	if analyzeErr != nil && !completedPolicyOutcome {
 		return errors.Join(fmt.Errorf("AnalyzeFailure: %w", analyzeErr), stateErr, stateWriteErr)
 	}
 	if stateErr != nil {

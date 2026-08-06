@@ -92,7 +92,7 @@ those groups. No recipe can replace or override the universal engine contract.
 
 Deterministic critique findings also carry stable content-free rule IDs in the
 private trace. Current identifiers include `path.unsafe`,
-`citation.invalid_range`, `citation.quote_mismatch`, `citation.unread`,
+`citation.invalid_range`, `citation.missing`, `citation.quote_mismatch`, `citation.unread`,
 `claim.uncited_line`, `source.unverified`, `evidence.available_unread`,
 `evidence.unavailable`, `remediation.punt`, `transient.conflict`, and
 `structured.invalid`. These identifiers support policy calibration without
@@ -588,6 +588,26 @@ by reading a non-existent file.
 
 The read-tracking maps are pre-allocated even before the first successful read,
 so the hallucination check is active from the first tools-free final.
+
+#### Missing artifact citation check
+
+When the agent has read non-empty artifact evidence, a causal draft must include
+at least one structured artifact citation. Critique uses its bounded Tool turn to
+request line-numbered evidence through `grep_artifact` when necessary, then
+forces a revised final response. A valid uncertainty statement still cites the
+strongest supported fact and explains which ownership or causal link remains
+unresolved.
+
+If the selected draft still has no validated artifact citation, `strict` and
+`hard` policy mark that failure's analysis unavailable for the current run
+instead of publishing or caching the unsupported causal diagnosis. `advisory`
+retains the finding in telemetry but preserves its existing publication and
+cache behavior. Evidence overflow remains exempt because no citation can be
+validated after the bounded evidence store is full.
+
+The container analyzer frames this unavailable result and exits successfully.
+It is a completed policy outcome, not an execution failure, so Orka does not
+repeat the entire analysis after bounded citation repair is exhausted.
 
 #### Skills and recipes
 

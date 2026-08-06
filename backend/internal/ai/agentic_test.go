@@ -356,8 +356,8 @@ func TestAgentic_HappyPath_ToolThenFinalJSON(t *testing.T) {
 func TestAgenticTraceRecordsModelToolAndCritique(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	srv.push(200, chatRespToolCall("call_1", "read_artifact", map[string]interface{}{"path": "build-log.txt", "offset": 0, "length": 1024}))
-	srv.push(200, chatRespFinal(`{"summary":"failure","is_transient":false,"root_cause":"build-log.txt contains the initiating error","severity":"High","suggested_fix":"fix the configuration","relevant_files":["build-log.txt"]}`))
+	srv.push(200, chatRespToolCall("call_1", "grep_artifact", map[string]interface{}{"path": "build-log.txt", "pattern": "initiating error", "context_lines": 0}))
+	srv.push(200, chatRespFinal(`{"summary":"failure","is_transient":false,"root_cause":"build-log.txt contains the initiating error","severity":"High","suggested_fix":"fix the configuration","relevant_files":["build-log.txt"],"evidence_citations":[{"path":"build-log.txt","line_start":1,"line_end":1,"quote":"initiating error"}]}`))
 
 	store := NewTraceStore()
 	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIChatCompletions})
@@ -373,7 +373,7 @@ func TestAgenticTraceRecordsModelToolAndCritique(t *testing.T) {
 	counts := map[string]int{}
 	for _, event := range store.Snapshot().Traces[0].Events {
 		counts[event.Kind]++
-		if event.Kind == "tool_call" && (event.Tool != "read_artifact" || event.Outcome != "success" || event.Bytes == 0) {
+		if event.Kind == "tool_call" && (event.Tool != "grep_artifact" || event.Outcome != "success" || event.Bytes == 0) {
 			t.Fatalf("tool event = %+v", event)
 		}
 	}
@@ -731,8 +731,8 @@ func TestAgentic_EvidencePlanCoverageSatisfiesGCSFloorAndSurvivesReload(t *testi
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 	path := "artifacts/issuer.yaml"
-	srv.push(200, chatRespToolCall("call_1", "tail_artifact", map[string]interface{}{"path": path, "lines": 200}))
-	srv.push(200, chatRespFinal(`{"summary":"x509","is_transient":false,"root_cause":"x509 issuer mismatch shown in artifacts/issuer.yaml","severity":"High","suggested_fix":"Update the issuer with the correct CA and redeploy.","relevant_files":["artifacts/issuer.yaml"]}`))
+	srv.push(200, chatRespToolCall("call_1", "grep_artifact", map[string]interface{}{"path": path, "pattern": "x509 issuer mismatch", "context_lines": 0}))
+	srv.push(200, chatRespFinal(`{"summary":"x509","is_transient":false,"root_cause":"x509 issuer mismatch shown in artifacts/issuer.yaml","severity":"High","suggested_fix":"Update the issuer with the correct CA and redeploy.","relevant_files":["artifacts/issuer.yaml"],"evidence_citations":[{"path":"artifacts/issuer.yaml","line_start":1,"line_end":1,"quote":"x509 issuer mismatch"}]}`))
 
 	set := loadAgenticSkillsForTest(t, map[string]string{
 		"x509": `
@@ -743,7 +743,7 @@ required_evidence:
     any_of: ["issuer\\.yaml$"]
 `,
 	})
-	browser := &trackingBrowser{fakeBrowser: &fakeBrowser{files: map[string][]byte{path: []byte("kind: Issuer\n")}}}
+	browser := &trackingBrowser{fakeBrowser: &fakeBrowser{files: map[string][]byte{path: []byte("x509 issuer mismatch\n")}}}
 	opts := AgenticOptions{
 		MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
 		MinToolCalls: 1, MinGCSBytes: 50_000, CritiqueMaxRetries: 2,
@@ -794,8 +794,8 @@ required_evidence:
 func TestAgentic_CompleteSparseEvidencePlanSatisfiesGCSFloor(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	srv.push(200, chatRespToolCall("call_1", "read_artifact", map[string]interface{}{"path": "build-log.txt", "offset": 0, "length": 4096}))
-	final := `{"summary":"profiled failure","is_transient":false,"root_cause":"The profiled failure is proven by build-log.txt.","severity":"High","suggested_fix":"Correct the rejected configuration and rerun the job.","relevant_files":["build-log.txt"]}`
+	srv.push(200, chatRespToolCall("call_1", "grep_artifact", map[string]interface{}{"path": "build-log.txt", "pattern": "initiating failure", "context_lines": 0}))
+	final := `{"summary":"profiled failure","is_transient":false,"root_cause":"The profiled failure is proven by build-log.txt.","severity":"High","suggested_fix":"Correct the rejected configuration and rerun the job.","relevant_files":["build-log.txt"],"evidence_citations":[{"path":"build-log.txt","line_start":1,"line_end":1,"quote":"initiating failure"}]}`
 	srv.push(200, chatRespFinal(final))
 
 	set := loadAgenticSkillsForTest(t, map[string]string{
@@ -841,8 +841,8 @@ required_evidence:
 func TestAgentic_GCSFloorOnlyRetryIsCappedAndReusable(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	srv.push(200, chatRespToolCall("call_1", "read_artifact", map[string]interface{}{"path": "build-log.txt", "offset": 0, "length": 1024}))
-	final := `{"summary":"configuration rejected","is_transient":false,"root_cause":"build-log.txt contains the configuration rejection.","severity":"High","suggested_fix":"Correct the rejected configuration and rerun the job.","relevant_files":["build-log.txt"]}`
+	srv.push(200, chatRespToolCall("call_1", "grep_artifact", map[string]interface{}{"path": "build-log.txt", "pattern": "ABCDE", "context_lines": 0}))
+	final := `{"summary":"configuration rejected","is_transient":false,"root_cause":"build-log.txt contains the configuration rejection.","severity":"High","suggested_fix":"Correct the rejected configuration and rerun the job.","relevant_files":["build-log.txt"],"evidence_citations":[{"path":"build-log.txt","line_start":1,"line_end":1,"quote":"ABCDE"}]}`
 	srv.push(200, chatRespFinal(final))
 	srv.push(200, chatRespFinal(final))
 
@@ -883,11 +883,11 @@ func TestAgentic_GCSFloorOnlyRetryIsCappedAndReusable(t *testing.T) {
 func TestAgentic_GCSFloorRetryMarkerSurvivesForcedFinalization(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	srv.push(200, chatRespToolCall("call_1", "read_artifact", map[string]interface{}{"path": "build-log.txt", "offset": 0, "length": 1024}))
-	premature := `{"summary":"configuration rejected","is_transient":false,"root_cause":"build-log.txt contains the configuration rejection.","severity":"High","suggested_fix":"Correct the rejected configuration and rerun the job.","relevant_files":["build-log.txt"]}`
+	srv.push(200, chatRespToolCall("call_1", "grep_artifact", map[string]interface{}{"path": "build-log.txt", "pattern": "ABCDE", "context_lines": 0}))
+	premature := `{"summary":"configuration rejected","is_transient":false,"root_cause":"build-log.txt contains the configuration rejection.","severity":"High","suggested_fix":"Correct the rejected configuration and rerun the job.","relevant_files":["build-log.txt"],"evidence_citations":[{"path":"build-log.txt","line_start":1,"line_end":1,"quote":"ABCDE"}]}`
 	srv.push(200, chatRespFinal(premature))
 	srv.push(200, chatRespToolCall("call_2", "list_artifacts", map[string]interface{}{"path": ""}))
-	final := `{"summary":"configuration rejected","is_transient":false,"root_cause":"build-log.txt contains the configuration rejection.","severity":"High","suggested_fix":"Correct the rejected configuration and rerun the job.","relevant_files":["build-log.txt"]}`
+	final := premature
 	srv.push(200, chatRespFinal(final))
 
 	browser := &fakeBrowser{files: map[string][]byte{"build-log.txt": bigPayload(1024)}}
@@ -971,8 +971,8 @@ func TestAgentic_EvidencePlanCoverageDoesNotBypassMinToolCalls(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 	path := "artifacts/issuer.yaml"
-	final := `{"summary":"x509","is_transient":false,"root_cause":"x509 issuer mismatch shown in artifacts/issuer.yaml","severity":"High","suggested_fix":"Update the issuer with the correct CA and redeploy.","relevant_files":["artifacts/issuer.yaml"]}`
-	srv.push(200, chatRespToolCall("call_1", "tail_artifact", map[string]interface{}{"path": path, "lines": 200}))
+	final := `{"summary":"x509","is_transient":false,"root_cause":"x509 issuer mismatch shown in artifacts/issuer.yaml","severity":"High","suggested_fix":"Update the issuer with the correct CA and redeploy.","relevant_files":["artifacts/issuer.yaml"],"evidence_citations":[{"path":"artifacts/issuer.yaml","line_start":1,"line_end":1,"quote":"x509 issuer mismatch"}]}`
+	srv.push(200, chatRespToolCall("call_1", "grep_artifact", map[string]interface{}{"path": path, "pattern": "x509 issuer mismatch", "context_lines": 0}))
 	srv.push(200, chatRespFinal(final))
 	srv.push(200, chatRespToolCall("call_2", "list_artifacts", map[string]interface{}{"path": ""}))
 	srv.push(200, chatRespFinal(final))
@@ -986,7 +986,7 @@ required_evidence:
     any_of: ["issuer\\.yaml$"]
 `,
 	})
-	browser := &trackingBrowser{fakeBrowser: &fakeBrowser{files: map[string][]byte{path: []byte("kind: Issuer\n")}}}
+	browser := &trackingBrowser{fakeBrowser: &fakeBrowser{files: map[string][]byte{path: []byte("x509 issuer mismatch\n")}}}
 	in := newTestAgenticInputs(t, browser, AgenticOptions{
 		MaxIters: 6, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
 		MinToolCalls: 2, MinGCSBytes: 50_000, CritiqueMaxRetries: 2,
@@ -2574,8 +2574,8 @@ func TestAgentic_BoundedRepairAllowsOneToolTurnThenFinal(t *testing.T) {
 	srv := newScriptedChatServer(t)
 	initial := `{"summary":"s","is_transient":false,"root_cause":"build-log.txt shows the controller failed","severity":"High","suggested_fix":"Update the controller configuration.","relevant_files":[]}`
 	srv.push(200, chatRespFinal(initial))
-	srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
-	clean := `{"summary":"deep","is_transient":false,"root_cause":"controller configuration mismatch","severity":"High","suggested_fix":"Update the controller configuration.","relevant_files":[]}`
+	srv.push(200, chatRespToolCall("c1", "grep_artifact", map[string]interface{}{"path": "build-log.txt", "pattern": "mismatch", "context_lines": 0}))
+	clean := `{"summary":"deep","is_transient":false,"root_cause":"controller configuration mismatch","severity":"High","suggested_fix":"Update the controller configuration.","relevant_files":[],"evidence_citations":[{"path":"build-log.txt","line_start":1,"line_end":1,"quote":"mismatch"}]}`
 	srv.push(200, chatRespFinal(clean))
 	browser := &trackingBrowser{fakeBrowser: &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("mismatch")}}, treeResponses: []treeResponse{{truncated: true}, {truncated: true}}}
 	client := newAgenticTestClient(t, srv.URL)
@@ -3623,8 +3623,8 @@ func TestAgentic_StrongModelReadsPlannedEvidenceWithoutRepair(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 	path := "artifacts/issuer.yaml"
-	srv.push(200, chatRespToolCall("call_1", "tail_artifact", map[string]interface{}{"path": path, "lines": 200}))
-	srv.push(200, chatRespFinal(`{"summary":"x509","is_transient":false,"root_cause":"x509 issuer mismatch shown in artifacts/issuer.yaml","severity":"High","suggested_fix":"Update issuer.yaml with the correct CA and redeploy.","relevant_files":["artifacts/issuer.yaml"]}`))
+	srv.push(200, chatRespToolCall("call_1", "grep_artifact", map[string]interface{}{"path": path, "pattern": "x509 issuer mismatch", "context_lines": 0}))
+	srv.push(200, chatRespFinal(`{"summary":"x509","is_transient":false,"root_cause":"x509 issuer mismatch shown in artifacts/issuer.yaml","severity":"High","suggested_fix":"Update issuer.yaml with the correct CA and redeploy.","relevant_files":["artifacts/issuer.yaml"],"evidence_citations":[{"path":"artifacts/issuer.yaml","line_start":1,"line_end":1,"quote":"x509 issuer mismatch"}]}`))
 	set := loadAgenticSkillsForTest(t, map[string]string{
 		"x509": `
 id: x509
@@ -3634,7 +3634,7 @@ required_evidence:
     any_of: ["issuer\\.yaml$"]
 `,
 	})
-	browser := &trackingBrowser{fakeBrowser: &fakeBrowser{files: map[string][]byte{path: []byte("kind: Issuer\n")}}}
+	browser := &trackingBrowser{fakeBrowser: &fakeBrowser{files: map[string][]byte{path: []byte("x509 issuer mismatch\n")}}}
 	in := newTestAgenticInputs(t, browser, AgenticOptions{
 		MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
 		CritiqueMaxRetries: 2,
@@ -3648,8 +3648,8 @@ required_evidence:
 	if !analysis.CritiquePassed {
 		t.Fatalf("strong-model draft did not pass critique: %+v", analysis)
 	}
-	if browser.listTreeCalls != 1 || len(browser.tailCalls) != 1 || browser.tailCalls[0] != path {
-		t.Fatalf("unexpected planning or repair reads: ListTree=%d Tail=%v", browser.listTreeCalls, browser.tailCalls)
+	if browser.listTreeCalls != 1 || analysis.ToolCalls != 1 {
+		t.Fatalf("unexpected planning or repair reads: ListTree=%d ToolCalls=%d", browser.listTreeCalls, analysis.ToolCalls)
 	}
 	if got := atomic.LoadInt32(&srv.calls); got != 2 {
 		t.Fatalf("model calls = %d, want tool plus final only", got)
@@ -4220,5 +4220,120 @@ func TestAgentic_PublishedSanitizationCanSatisfyCritiqueAndCache(t *testing.T) {
 	}
 	if !cached.CacheHit || !cached.CritiquePassed || atomic.LoadInt32(&srv.calls) != 4 {
 		t.Fatalf("cache result = %+v calls=%d", cached, atomic.LoadInt32(&srv.calls))
+	}
+}
+
+const missingCitationFinalJSON = `{"summary":"deep","is_transient":false,"root_cause":"A vnet peering mismatch blocked provisioning.","severity":"High","suggested_fix":"Correct the vnet peering configuration and retry.","relevant_files":[]}`
+const missingCitationRepairedJSON = `{"summary":"deep","is_transient":false,"root_cause":"A vnet peering mismatch blocked provisioning.","severity":"High","suggested_fix":"Correct the vnet peering configuration and retry.","relevant_files":[],"evidence_citations":[{"path":"build-log.txt","line_start":42,"line_end":42,"quote":"vnet peering mismatch"}]}`
+
+func TestAgentic_MissingCitationRepairsFromReadEvidence(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
+	srv.push(200, chatRespFinal(missingCitationFinalJSON))
+	srv.push(200, chatRespToolCall("c2", "grep_artifact", map[string]interface{}{
+		"path": "build-log.txt", "pattern": "vnet peering mismatch", "context_lines": 0,
+	}))
+	srv.push(200, chatRespFinal(missingCitationRepairedJSON))
+	client := newAgenticTestClient(t, srv.URL)
+	browser := &fakeBrowser{files: map[string][]byte{
+		"build-log.txt": []byte(strings.Repeat("\n", 41) + "vnet peering mismatch on line 42\n"),
+	}}
+	opts := AgenticOptions{
+		MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+		Timeout: 30 * time.Second, CritiqueMaxRetries: 1, CritiqueCachePolicy: CritiqueCachePolicyHard,
+	}
+	var observations []DraftObservation
+	in := newTestAgenticInputs(t, browser, opts)
+	in.DraftObserver = func(observation DraftObservation) { observations = append(observations, observation) }
+	_, analysis, err := client.doAnalyzeAgentic(context.Background(), in, "agentic:test:missing-citation-repair", "sys", "user")
+	if err != nil {
+		t.Fatalf("%v (model calls=%d observations=%+v)", err, atomic.LoadInt32(&srv.calls), observations)
+	}
+	if !analysis.CritiquePassed || len(analysis.EvidenceCitations) != 1 || slices.Contains(analysis.CritiqueHardFailures, string(CritiqueRuleCitationMissing)) {
+		t.Fatalf("repaired analysis = %+v", analysis)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 4 {
+		t.Fatalf("model calls = %d, want 4", got)
+	}
+}
+
+func TestAgentic_MissingCitationPublicationPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		policy    CritiqueCachePolicy
+		wantError bool
+	}{
+		{name: "hard", policy: CritiqueCachePolicyHard, wantError: true},
+		{name: "strict", policy: CritiqueCachePolicyStrict, wantError: true},
+		{name: "advisory", policy: CritiqueCachePolicyAdvisory},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			shrinkCallDelay(t)
+			srv := newScriptedChatServer(t)
+			srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
+			srv.push(200, chatRespFinal(missingCitationFinalJSON))
+			client := newAgenticTestClient(t, srv.URL)
+			browser := &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("vnet peering mismatch\n")}}
+			opts := AgenticOptions{
+				MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+				Timeout: 30 * time.Second, CritiqueMaxRetries: 0, CritiqueCachePolicy: tc.policy,
+			}
+			key := "agentic:test:missing-citation-policy:" + tc.name
+			summary, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), key, "sys", "user")
+			if tc.wantError {
+				if !errors.Is(err, ErrMissingArtifactCitation) || summary != nil || analysis != nil {
+					t.Fatalf("result = summary:%+v analysis:%+v err:%v", summary, analysis, err)
+				}
+				if _, ok := client.Cache().Get(key); ok {
+					t.Fatal("ungrounded analysis was cached")
+				}
+				return
+			}
+			if err != nil || analysis == nil || !slices.Contains(analysis.CritiqueHardFailures, string(CritiqueRuleCitationMissing)) || !analysis.CachePersistenceAccepted {
+				t.Fatalf("advisory result = summary:%+v analysis:%+v err:%v", summary, analysis, err)
+			}
+		})
+	}
+}
+
+func TestAgentic_SynthesizedFallbackMissingCitationPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		policy    CritiqueCachePolicy
+		wantError bool
+	}{
+		{name: "hard", policy: CritiqueCachePolicyHard, wantError: true},
+		{name: "strict", policy: CritiqueCachePolicyStrict, wantError: true},
+		{name: "advisory", policy: CritiqueCachePolicyAdvisory},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			shrinkCallDelay(t)
+			srv := newScriptedChatServer(t)
+			srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
+			srv.push(200, chatRespFinal("unparseable causal claim"))
+			srv.push(200, chatRespFinal("still unparseable causal claim"))
+			client := newAgenticTestClient(t, srv.URL)
+			browser := &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("initiating failure\n")}}
+			opts := AgenticOptions{
+				MaxIters: 2, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+				Timeout: 30 * time.Second, CritiqueMaxRetries: 0, CritiqueCachePolicy: tc.policy,
+			}
+			key := "agentic:test:synthesized-missing-citation:" + tc.name
+			summary, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), key, "sys", "user")
+			if tc.wantError {
+				if !errors.Is(err, ErrMissingArtifactCitation) || summary != nil || analysis != nil {
+					t.Fatalf("result = summary:%+v analysis:%+v err:%v", summary, analysis, err)
+				}
+			} else if err != nil || analysis == nil || !slices.Contains(analysis.CritiqueHardFailures, string(CritiqueRuleCitationMissing)) {
+				t.Fatalf("advisory result = summary:%+v analysis:%+v err:%v", summary, analysis, err)
+			}
+			if _, ok := client.Cache().Get(key); ok {
+				t.Fatal("synthesized fallback was cached")
+			}
+			if got := atomic.LoadInt32(&srv.calls); got != 3 {
+				t.Fatalf("model calls = %d, want 3", got)
+			}
+		})
 	}
 }

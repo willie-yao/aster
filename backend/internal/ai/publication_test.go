@@ -351,3 +351,38 @@ func TestPublishedEvidenceCitationsAreBounded(t *testing.T) {
 		t.Fatalf("published citations = %d, want 20", len(sanitized.EvidenceCitations))
 	}
 }
+
+func TestAnalysisRequiresArtifactCitationWhenEvidenceIsAvailable(t *testing.T) {
+	evidence := map[string]*analysisChatEvidence{
+		"build-log.txt": {Lines: map[int]string{42: "vnet peering mismatch"}},
+	}
+	parsed := analysisResponse{
+		Summary:      "network mismatch",
+		RootCause:    "The network configuration mismatch blocked provisioning.",
+		Severity:     "High",
+		SuggestedFix: "Correct the network configuration and retry.",
+	}
+	out := critiqueDraftWithContent(parsed, nil, nil, nil, nil, nil, 0, analysisCitationContext{Evidence: evidence})
+	if out.Passed || !out.MissingArtifactCitation || out.MissingArtifactCitationNeedsTool || !slices.Contains(out.HardRuleIDs(), CritiqueRuleCitationMissing) {
+		t.Fatalf("missing-citation outcome = %+v", out)
+	}
+	if !strings.Contains(out.Feedback, "includes no structured artifact citation") {
+		t.Fatalf("missing-citation feedback = %q", out.Feedback)
+	}
+
+	segmentOnly := map[string]*analysisChatEvidence{"build-log.txt": {Segments: []string{"vnet peering mismatch"}, Bytes: 21, Lines: map[int]string{}}}
+	out = critiqueDraftWithContent(parsed, nil, nil, nil, nil, nil, 0, analysisCitationContext{Evidence: segmentOnly})
+	if !out.MissingArtifactCitation || !out.MissingArtifactCitationNeedsTool {
+		t.Fatalf("segment-only evidence did not request line evidence: %+v", out)
+	}
+
+	out = critiqueDraftWithContent(parsed, nil, nil, nil, nil, nil, 0, analysisCitationContext{})
+	if !out.Passed || out.MissingArtifactCitation {
+		t.Fatalf("draft without readable artifact evidence was blocked: %+v", out)
+	}
+
+	out = critiqueDraftWithContent(parsed, nil, nil, nil, nil, nil, 0, analysisCitationContext{Full: true})
+	if !out.Passed || out.MissingArtifactCitation {
+		t.Fatalf("evidence-overflow draft was blocked: %+v", out)
+	}
+}

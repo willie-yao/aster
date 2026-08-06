@@ -391,6 +391,27 @@ func TestParseAndApplyContainerAnalysisResult(t *testing.T) {
 	}
 }
 
+func TestParseAndApplyContainerUnavailableResult(t *testing.T) {
+	want := ai.FailureAnalysisResult{
+		Summary: &models.AISummary{GeneratedAt: "2026-08-06T12:00:00Z", Summary: "AI analysis unavailable: no validated artifact citation supports the analysis"},
+	}
+	var framed bytes.Buffer
+	if err := analysisruntime.WriteFailureAnalysisResult(&framed, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ParseContainerAnalysisResult(framed.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tc := models.TestCase{Name: "Test A", Status: "failed"}
+	if err := ApplyContainerAnalysisResult(&tc, got); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(tc.AISummary, want.Summary) || tc.AIAnalysis != nil {
+		t.Fatalf("test case = %+v", tc)
+	}
+}
+
 func TestParseContainerAnalysisResultRejectsMalformedOrAbsentResult(t *testing.T) {
 	for _, raw := range []string{
 		"",

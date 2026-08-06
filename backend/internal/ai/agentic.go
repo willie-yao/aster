@@ -35,6 +35,11 @@ var ErrToolsUnsupported = errors.New("ai endpoint does not support function call
 // ErrContextHeadroom means no safe provider request could be formed after compaction.
 var ErrContextHeadroom = errors.New("agentic request exceeds context headroom")
 
+// ErrMissingArtifactCitation means a non-advisory analysis could not produce a
+// validated artifact citation after bounded repair, so no causal draft is safe
+// to publish for this run.
+var ErrMissingArtifactCitation = errors.New("no validated artifact citation supports the analysis")
+
 // AgenticOptions is the resolved per-failure budget config. Build it once per
 // fetcher run via project.AI.EffectiveAgentic and reuse it.
 type AgenticOptions struct {
@@ -1250,6 +1255,17 @@ agentLoop:
 		}
 		parsed = sanitizePublishedCitations(parsed, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
 		parsed = state.preparePublishedAnalysis(parsed)
+		out := state.currentCritiqueOutcome(parsed)
+		state.setCritiqueOutcome(out)
+		if critiqueAcceptedForPolicy(out, effectiveCritiqueCachePolicy(in.Opts.CritiqueCachePolicy, in.Opts.CritiqueMaxRetries)) {
+			recordTrace(loopCtx, critiqueTraceEvent("published_warning", out))
+		} else {
+			recordTrace(loopCtx, critiqueTraceEvent("published_rejected", out))
+		}
+		if rejectMissingCitationPublication(state, in.Opts) {
+			recordTrace(loopCtx, TraceEvent{Kind: "publication", Outcome: "unavailable", ErrorCode: "missing_artifact_citation"})
+			return nil, nil, ErrMissingArtifactCitation
+		}
 		summary, analysis := c.buildOutputs(parsed)
 		stampAgenticTelemetry(analysis, state, in.Mode, false, start)
 		return summary, analysis, nil
@@ -1258,12 +1274,23 @@ agentLoop:
 	parsed = c.applyPostLoopCritique(loopCtx, state, messages, finalContent, finalProviderItems, parsed, in.Opts, critiqueRetries, finalDraftObserved, draftPhase)
 	markGCSFloorRetryExhausted(loopCtx, state, in.Opts, gcsFloorOnlyRetries)
 	parsed = c.prepareCacheablePublishedAnalysis(loopCtx, state, messages, parsed, in.Opts)
+	if rejectMissingCitationPublication(state, in.Opts) {
+		recordTrace(loopCtx, TraceEvent{Kind: "publication", Outcome: "unavailable", ErrorCode: "missing_artifact_citation"})
+		return nil, nil, ErrMissingArtifactCitation
+	}
 
 	state.notifyDraftSelection()
 	summary, analysis := c.buildOutputs(parsed)
 	c.cacheAcceptedAnalysis(loopCtx, cacheKey, parsed, analysis.GeneratedAt, state, in.Opts)
 	stampAgenticTelemetry(analysis, state, in.Mode, false, start)
 	return summary, analysis, nil
+}
+
+func rejectMissingCitationPublication(state *agentState, opts AgenticOptions) bool {
+	if state == nil || effectiveCritiqueCachePolicy(opts.CritiqueCachePolicy, opts.CritiqueMaxRetries) == CritiqueCachePolicyAdvisory {
+		return false
+	}
+	return slices.Contains(state.critiqueHardFailures, string(CritiqueRuleCitationMissing))
 }
 
 func (c *Client) prepareCacheablePublishedAnalysis(ctx context.Context, state *agentState, messages []modelMessage, parsed analysisResponse, opts AgenticOptions) analysisResponse {
@@ -1709,7 +1736,7 @@ func (c *Client) runBoundedCritiqueRepair(ctx context.Context, state *agentState
 }
 
 func critiqueRepairNeedsTools(out critiqueOutcome) bool {
-	return len(out.UnreadCitations) > 0 || len(out.CitationIssues) > 0 || len(out.MissingSkillEvidence) > 0
+	return out.MissingArtifactCitationNeedsTool || len(out.UnreadCitations) > 0 || len(out.CitationIssues) > 0 || len(out.MissingSkillEvidence) > 0
 }
 
 func (s *agentState) observeDraft(phase string, parsed analysisResponse, out, publishedOut critiqueOutcome) int {
@@ -1765,6 +1792,9 @@ func critiqueQualityFor(out critiqueOutcome) critiqueQuality {
 
 func critiqueHardIssueCount(out critiqueOutcome) int {
 	n := len(out.UnreadCitations)
+	if out.MissingArtifactCitation {
+		n++
+	}
 	for _, issue := range out.CitationIssues {
 		if critiqueRuleSeverity(critiqueCitationRule(issue)) == CritiqueRuleHard {
 			n++

@@ -39,6 +39,7 @@ const (
 	CritiqueRuleCitationInvalidRange    CritiqueRuleID = "citation.invalid_range"
 	CritiqueRuleCitationQuoteMismatch   CritiqueRuleID = "citation.quote_mismatch"
 	CritiqueRuleCitationUnread          CritiqueRuleID = "citation.unread"
+	CritiqueRuleCitationMissing         CritiqueRuleID = "citation.missing"
 	CritiqueRuleClaimUncitedLine        CritiqueRuleID = "claim.uncited_line"
 	CritiqueRuleEvidenceAvailableUnread CritiqueRuleID = "evidence.available_unread"
 	CritiqueRuleEvidenceUnavailable     CritiqueRuleID = "evidence.unavailable"
@@ -62,6 +63,9 @@ func (o critiqueOutcome) RuleIDs() []CritiqueRuleID {
 	}
 	for _, issue := range o.CitationIssues {
 		rules[critiqueCitationRule(issue)] = true
+	}
+	if o.MissingArtifactCitation {
+		rules[CritiqueRuleCitationMissing] = true
 	}
 	if len(o.MissingSkillEvidence) > 0 {
 		rules[CritiqueRuleEvidenceAvailableUnread] = true
@@ -123,7 +127,7 @@ func knownCritiqueRule(rule CritiqueRuleID) bool {
 	switch rule {
 	case CritiqueRulePathUnsafe, CritiqueRuleCitationInvalidRange,
 		CritiqueRuleCitationQuoteMismatch, CritiqueRuleCitationUnread,
-		CritiqueRuleClaimUncitedLine, CritiqueRuleEvidenceAvailableUnread,
+		CritiqueRuleCitationMissing, CritiqueRuleClaimUncitedLine, CritiqueRuleEvidenceAvailableUnread,
 		CritiqueRuleEvidenceUnavailable, CritiqueRuleRemediationPunt,
 		CritiqueRuleTransientConflict, CritiqueRuleStructuredInvalid,
 		CritiqueRuleSourceUnverified:
