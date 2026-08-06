@@ -32,7 +32,7 @@ consumer commit plus `project.yaml` and `prompts/system.md` hashes before making
 provider requests:
 
 ```bash
-manifest=./internal/e2e/testdata/benchmarks/cross-project-eval.json
+manifest="$PWD/internal/e2e/testdata/benchmarks/cross-project-eval.json"
 
 run_case() {
   RUN_AI_BENCHMARK=1 BENCH_MANIFEST="$manifest" \

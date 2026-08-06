@@ -21,7 +21,7 @@
       "test_name": "Prow job execution",
       "test_source": "build",
       "failure_message": "Trivy image scan found fixable vulnerabilities and make image-scan exited with Error 1.",
-      "opposite_diagnosis": "Trivy found four fixable vulnerabilities and the --exit-code 1 security gate fired, but the root cause was a transient scanner database flake.",
+      "opposite_diagnosis": "Trivy found four fixable vulnerabilities and the --exit-code 1 security gate fired, but temporary scanner database state caused the failure.",
       "signals": [
         {
           "name": "identifies Trivy security scan",
@@ -35,12 +35,7 @@
         },
         {
           "name": "identifies the gating exit",
-          "pattern": "(?i)(?:--exit-code\\s+1|exit(?:ed)?\\s+(?:with\\s+)?(?:code\\s+)?1|gating scan)",
-          "must": true
-        },
-        {
-          "name": "classifies as non-transient security failure",
-          "pattern": "(?i)(?:non-transient|not\\s+(?:a\\s+)?(?:transient|flake)|security gate)",
+          "pattern": "(?is)(?:--exit-code\\s+1|exit(?:ed)?\\s+(?:with\\s+)?(?:code\\s+)?1|gating scan|(?:intentionally\\s+)?fails?.{0,100}image-scan|image-scan.{0,100}(?:fails?|error 1))",
           "must": true
         },
         {
@@ -52,13 +47,15 @@
       "project_sha256": "10873d2458089155433d834f70d836166dc940c9e61c174fc389a28aed783b5a",
       "prompt_sha256": "2eb191dd8303bdead6d0465d0ca0ec96a4f55b3553df7b8d6850f7a7c0cd764e",
       "expected_transient": false,
-      "opposite_is_transient": true,
+      "opposite_is_transient": false,
       "forbidden": [
         {
-          "name": "transient security-scanner attribution",
-          "pattern": "(?is)(?:(?:root cause|caused by|primary failure).{0,120}(?:transient|flake).{0,80}(?:scanner|database|trivy)|(?:transient|flake).{0,80}(?:scanner|database|trivy).{0,120}(?:root cause|caused|primary))"
+          "name": "temporary security-scanner attribution",
+          "pattern": "(?is)(?:(?:temporary|transient|one-off).{0,100}(?:scanner|database|trivy).{0,140}(?:caused|root cause|primary)|(?:caused by|root cause|primary).{0,140}(?:temporary|transient|one-off).{0,100}(?:scanner|database|trivy))"
         }
-      ]
+      ],
+      "reference_diagnosis": "At the pinned commit, the driver image is compiled with Go 1.26.4 and includes google.golang.org/grpc v1.81.1 and golang.org/x/text v0.38.0. Trivy reports those exact installed versions as affected by four vulnerabilities with fixes available, and the Makefile intentionally fails the image-scan target when any fixed MEDIUM, HIGH, or CRITICAL finding is present.",
+      "reference_is_transient": false
     },
     {
       "id": "kueue-was-podgroup-api-mismatch",
@@ -80,7 +77,7 @@
       "test_name": "Prow job execution",
       "test_source": "build",
       "failure_message": "error: timed out waiting for the condition on deployments/kubeflow-trainer-controller-manager; make run-test-e2e-k8s-main-was failed.",
-      "opposite_diagnosis": "The scheduler requested v1alpha3 while the cluster served v1beta1; PodGroup returned 404 and the handler failed to sync, but a transient image-readiness flake was the primary cause.",
+      "opposite_diagnosis": "The scheduler requested v1beta1 while the cluster served v1alpha3; PodGroup returned 404 and the handler failed to sync, but the API mismatch was incidental and a one-off image-pull delay caused the timeout.",
       "signals": [
         {
           "name": "identifies PodGroup API",
@@ -89,7 +86,7 @@
         },
         {
           "name": "identifies requested and served version mismatch",
-          "pattern": "(?is)(?:(?:request(?:ed|ing)?|attempt(?:ed|ing)?).{0,100}v1beta1.{0,220}(?:served|available|configured|provided).{0,100}v1alpha3|v1beta1.{0,100}(?:request(?:ed|ing)?|attempt(?:ed|ing)?).{0,220}v1alpha3.{0,100}(?:served|available|configured|provided))",
+          "pattern": "(?is)(?:(?:serves?|served|configured|provided).{0,100}v1alpha3.{0,260}(?:scheduler|informer|request(?:ed|ing)?|attempt(?:ed|ing)?).{0,120}v1beta1|v1beta1.{0,120}(?:scheduler|informer|request(?:ed|ing)?|attempt(?:ed|ing)?).{0,260}(?:serves?|served|configured|provided).{0,100}v1alpha3)",
           "must": true
         },
         {
@@ -101,24 +98,25 @@
           "name": "traces scheduler synchronization failure",
           "pattern": "(?is)(?:scheduler.{0,180}(?:sync|handler)|(?:sync|handler).{0,180}scheduler)",
           "must": true
-        },
-        {
-          "name": "rejects transient-flake classification",
-          "pattern": "(?i)(?:non-transient|not\\s+(?:a\\s+)?transient|deterministic(?:\\s+api)?(?:-| )version mismatch)",
-          "must": true
         }
       ],
       "consumer_commit": "e4257c64fc9c5344b01919488fc76aa3fb0618b7",
       "project_sha256": "aaec4a9ca30c5c74e5529164b3bfc1e5dfe6b8b51154956aa3b6949529c9d17b",
       "prompt_sha256": "16b51ec1c39bd7c2b76d5bc33cb360b820ffd3b85d8b40cd0ec7fadc3118e6fc",
       "expected_transient": false,
-      "opposite_is_transient": true,
+      "opposite_is_transient": false,
       "forbidden": [
         {
+          "name": "API mismatch treated as incidental",
+          "pattern": "(?is)(?:api|version).{0,80}mismatch.{0,80}(?:incidental|secondary|unrelated)|(?:incidental|secondary|unrelated).{0,80}(?:api|version).{0,80}mismatch"
+        },
+        {
           "name": "transient readiness as primary cause",
-          "pattern": "(?is)(?:(?:root cause|primary cause|caused by).{0,140}(?:transient|image.{0,40}flake|readiness flake)|(?:transient|image.{0,40}flake|readiness flake).{0,140}(?:root cause|primary cause|caused))"
+          "pattern": "(?is)(?:(?:root cause|primary cause|caused by|caused the timeout).{0,140}(?:transient|one-off|image.{0,40}(?:pull|flake)|readiness flake)|(?:transient|one-off|image.{0,40}(?:pull|flake)|readiness flake).{0,140}(?:root cause|primary cause|caused))"
         }
-      ]
+      ],
+      "reference_diagnosis": "The WAS kind configuration at the pinned Kueue revision enables GenericWorkload but explicitly serves scheduling.k8s.io/v1alpha3. The job fetched Kubernetes main v1.37.0-beta.0.568+4f5591ab57b75c, whose scheduler initializes a v1beta1.PodGroup informer. The API server returned 404 for that version, so the scheduler handlers never synchronized, the Kubeflow Trainer pod remained unscheduled, and the deployment wait timed out.",
+      "reference_is_transient": false
     },
     {
       "id": "gcp-pd-csi-windows-mount-visibility",
@@ -140,32 +138,28 @@
       "test_name": "[It] External Storage [Driver: csi-gcepd-sc-windows--pd-volumesnapshotclass] [Testpattern: Dynamic PV (default fs)] provisioning should provision correct filesystem size when restoring snapshot to larger size pvc [Feature:VolumeSnapshotDataSource]",
       "junit_file": "junit_pdcsi.xml",
       "failure_message": "[FAILED] Failed to obtain filesystem size of a volume mount: resolved empty volumeID for mountPath \"/mnt/volume1\" at provisioning.go:525.",
-      "opposite_diagnosis": "The Windows mount path was missing and the volume ID was empty. NodePublishVolume did not succeed. Ownership was briefly considered uncertain, but this definitively proves a GCE PD CSI node-driver defect.",
+      "opposite_diagnosis": "The Windows mount path was absent and the volume ID was empty. NodePublishVolume did not succeed. The evidence was insufficient to distinguish ownership, but the GCE PD CSI node driver was unquestionably responsible.",
       "allow_unavailable": true,
       "signals": [
         {
           "name": "identifies missing Windows mount path",
-          "pattern": "(?is)(?:(?:c:\\\\mnt\\\\volume1|/mnt/volume1).{0,160}(?:missing|not exist|could not find|empty volumeid)|empty volumeid.{0,160}(?:/mnt/volume1|c:\\\\mnt\\\\volume1))",
+          "pattern": "(?is)(?:(?:c:\\\\mnt\\\\volume1|/mnt/volume1).{0,180}(?:missing|absent|not exist|could not find|empty volumeid)|empty volumeid.{0,180}(?:/mnt/volume1|c:\\\\mnt\\\\volume1))",
           "must": true
         },
         {
           "name": "recognizes NodePublishVolume succeeded",
-          "pattern": "(?is)nodepublishvolume.{0,120}(?:success|succeed|completed)",
+          "pattern": "(?is)(?:nodepublishvolume.{0,140}(?:success|succeed|completed)|successfully.{0,80}staged.{0,80}(?:and\\s+)?published|staged and published)",
           "must": true,
           "negated": "(?is)nodepublishvolume.{0,100}(?:did not|didn.t|failed|never|not).{0,100}(?:success|succeed|complete)"
         },
         {
           "name": "preserves ownership uncertainty",
-          "pattern": "(?is)(?:(?:cannot|could not|unable to|insufficient evidence|does not).{0,160}(?:distinguish|determine|attribute|prove|establish)|(?:ownership|owner).{0,100}(?:uncertain|ambiguous|unresolved))",
+          "pattern": "(?is)(?:(?:cannot|could not|unable to|insufficient evidence|does not|do not).{0,180}(?:distinguish|determine|attribute|prove|establish)|(?:ownership|owner).{0,100}(?:uncertain|ambiguous|unresolved))",
           "must": true
         },
         {
           "name": "names plausible Windows mount boundary",
           "pattern": "(?i)(?:volumemount|kubelet|containerd|hcs|csi.?proxy)"
-        },
-        {
-          "name": "classifies repeated failure as non-transient",
-          "pattern": "(?i)(?:non-transient|not\\s+(?:a\\s+)?transient|deterministic|reproduced)"
         }
       ],
       "consumer_commit": "f74fc047a1f6de10eec334207c4e58ce743bdcac",
@@ -176,9 +170,12 @@
       "forbidden": [
         {
           "name": "unsupported component ownership",
-          "pattern": "(?is)(?:(?:definitively|conclusively|proves?|confirmed root cause).{0,160}(?:node driver|gce pd|csi.?proxy|test helper)|(?:node driver|gce pd|csi.?proxy|test helper).{0,160}(?:definitively|conclusively|proves?|confirmed root cause))"
+          "pattern": "(?is)(?:(?:definitively|conclusively|unquestionably|solely|clearly).{0,180}(?:node driver|gce pd|csi.?proxy|test helper)|(?:node driver|gce pd|csi.?proxy|test helper).{0,180}(?:definitively|conclusively|unquestionably|solely|clearly|responsible|confirmed root cause))",
+          "negated": "(?is)(?:not|isn.t|wasn.t).{0,40}(?:definitively|conclusively|unquestionably|solely|clearly|responsible)"
         }
-      ]
+      ],
+      "reference_diagnosis": "Most likely an upstream Kubernetes Windows test/runtime mount-visibility defect at the publish-to-container handoff. The GCE PD CSI driver successfully staged and published each NTFS volume and each target pod became Running and Ready, but /mnt/volume1 was absent inside the Windows container. The failure repeated in two filesystem-size snapshot test variants on separate target pods and nodes after an earlier Windows suite passed. The available artifacts do not distinguish an incorrect or missing test volumeMount from kubelet/containerd/HCS failing to expose a valid host target, or CSI-proxy reporting symlink creation success without a usable target.",
+      "reference_is_transient": false
     }
   ]
 }

@@ -46,11 +46,16 @@ func TestCrossProjectEvaluationManifest(t *testing.T) {
 		t.Fatalf("cases = %d, want 3", len(cases))
 	}
 	allowedUnavailable := 0
+	adversarialFailures := map[string][]string{
+		"secrets-store-csi-image-scan":        {"forbidden: temporary security-scanner attribution"},
+		"kueue-was-podgroup-api-mismatch":     {"forbidden: API mismatch treated as incidental", "forbidden: transient readiness as primary cause"},
+		"gcp-pd-csi-windows-mount-visibility": {"recognizes NodePublishVolume succeeded", "forbidden: unsupported component ownership"},
+	}
 	for _, bc := range cases {
 		if bc.fixtureAsset == "" || len(bc.fixtureSHA256) != 64 {
 			t.Fatalf("case %q has incomplete fixture identity", bc.name)
 		}
-		if bc.consumerCommit == "" || bc.projectSHA256 == "" || bc.promptSHA256 == "" || bc.expectedTransient == nil {
+		if bc.consumerCommit == "" || bc.projectSHA256 == "" || bc.promptSHA256 == "" || bc.expectedTransient == nil || bc.referenceDiagnosis == "" {
 			t.Fatalf("case %q has incomplete consumer or transient identity", bc.name)
 		}
 		if bc.allowUnavailable {
@@ -59,13 +64,22 @@ func TestCrossProjectEvaluationManifest(t *testing.T) {
 				t.Fatalf("case %q unexpectedly allows unavailable", bc.name)
 			}
 		}
+		reference := &models.TestCase{
+			AISummary:  &models.AISummary{Summary: bc.referenceDiagnosis, IsTransient: bc.referenceTransient},
+			AIAnalysis: &models.AIAnalysis{RootCause: bc.referenceDiagnosis},
+		}
+		if assessment := assessBenchmarkCase(bc, reference); len(assessment.missingMust) > 0 {
+			t.Errorf("case %q rejects locked reference: %v", bc.name, assessment.missingMust)
+		}
 		opposite := &models.TestCase{
 			AISummary:  &models.AISummary{Summary: bc.oppositeDiagnosis, IsTransient: bc.oppositeTransient},
 			AIAnalysis: &models.AIAnalysis{RootCause: bc.oppositeDiagnosis},
 		}
 		assessment := assessBenchmarkCase(bc, opposite)
-		if len(assessment.missingMust) == 0 {
-			t.Errorf("case %q accepts adversarial opposite diagnosis", bc.name)
+		for _, want := range adversarialFailures[bc.name] {
+			if !slices.Contains(assessment.missingMust, want) {
+				t.Errorf("case %q adversarial diagnosis did not fail %q: %v", bc.name, want, assessment.missingMust)
+			}
 		}
 	}
 	if allowedUnavailable != 1 {
@@ -97,6 +111,8 @@ type benchmarkManifestCase struct {
 	ConsecutiveFailures int                       `json:"consecutive_failures,omitempty"`
 	OppositeDiagnosis   string                    `json:"opposite_diagnosis,omitempty"`
 	OppositeTransient   bool                      `json:"opposite_is_transient,omitempty"`
+	ReferenceDiagnosis  string                    `json:"reference_diagnosis,omitempty"`
+	ReferenceTransient  bool                      `json:"reference_is_transient,omitempty"`
 	AllowUnavailable    bool                      `json:"allow_unavailable,omitempty"`
 	ExpectedTransient   *bool                     `json:"expected_transient,omitempty"`
 	Forbidden           []benchmarkManifestSignal `json:"forbidden,omitempty"`
@@ -233,14 +249,21 @@ func loadBenchmarkManifest(path string) ([]benchCase, error) {
 		}
 		forbidden := make([]benchSignal, 0, len(item.Forbidden))
 		for forbiddenIndex, signal := range item.Forbidden {
-			if signal.Name == "" || signal.Pattern == "" || signal.Negated != "" || signal.Must {
+			if signal.Name == "" || signal.Pattern == "" || signal.Must {
 				return nil, fmt.Errorf("benchmark manifest case %q forbidden %d is invalid", item.ID, forbiddenIndex)
 			}
 			pattern, err := regexp.Compile(signal.Pattern)
 			if err != nil {
 				return nil, fmt.Errorf("benchmark manifest case %q forbidden %d pattern: %w", item.ID, forbiddenIndex, err)
 			}
-			forbidden = append(forbidden, benchSignal{name: signal.Name, re: pattern})
+			var negative *regexp.Regexp
+			if signal.Negated != "" {
+				negative, err = regexp.Compile(signal.Negated)
+				if err != nil {
+					return nil, fmt.Errorf("benchmark manifest case %q forbidden %d negated: %w", item.ID, forbiddenIndex, err)
+				}
+			}
+			forbidden = append(forbidden, benchSignal{name: signal.Name, re: pattern, negated: negative})
 		}
 		out = append(out, benchCase{
 			name: item.ID, stableID: item.StableID, bucket: item.Bucket, fixtureAsset: item.FixtureAsset,
@@ -250,6 +273,7 @@ func loadBenchmarkManifest(path string) ([]benchCase, error) {
 			sourceRepo: [2]string{item.SourceOwner, item.SourceName}, testName: item.TestName, testSource: item.TestSource,
 			junitFile: item.JUnitFile, failureMsg: item.FailureMessage, consecutiveFailures: item.ConsecutiveFailures,
 			oppositeDiagnosis: item.OppositeDiagnosis, oppositeTransient: item.OppositeTransient,
+			referenceDiagnosis: item.ReferenceDiagnosis, referenceTransient: item.ReferenceTransient,
 			allowUnavailable: item.AllowUnavailable, expectedTransient: item.ExpectedTransient, forbidden: forbidden,
 			consumerCommit: item.ConsumerCommit, projectSHA256: item.ProjectSHA256, promptSHA256: item.PromptSHA256,
 			signals: signals,

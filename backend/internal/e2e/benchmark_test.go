@@ -104,6 +104,8 @@ type benchCase struct {
 	consecutiveFailures int
 	oppositeDiagnosis   string
 	oppositeTransient   bool
+	referenceDiagnosis  string
+	referenceTransient  bool
 	allowUnavailable    bool
 	expectedTransient   *bool
 	forbidden           []benchSignal
@@ -458,6 +460,12 @@ func TestAIBenchmark(t *testing.T) {
 		agentic = cfg.AI.EffectiveAgentic()
 		configuredCacheGeneration = cfg.AI.CacheGeneration
 		skillProjectDir = dir
+	} else {
+		for _, bc := range cases {
+			if bc.consumerCommit != "" {
+				t.Fatal("pinned external benchmark cases require BENCH_CASE and BENCH_PROJECT_DIR")
+			}
+		}
 	}
 	cacheGenerationFingerprint, err := benchmarkCacheGenerationFingerprint(configuredCacheGeneration)
 	if err != nil {
@@ -535,6 +543,13 @@ func validateBenchmarkProjectDir(dir string, bc benchCase) error {
 	if got := strings.TrimSpace(string(output)); got != bc.consumerCommit {
 		return fmt.Errorf("pinned benchmark consumer commit = %s, want %s", got, bc.consumerCommit)
 	}
+	status, err := exec.Command("git", "-C", dir, "status", "--porcelain", "--untracked-files=all").Output()
+	if err != nil {
+		return fmt.Errorf("inspect pinned benchmark consumer worktree: %w", err)
+	}
+	if strings.TrimSpace(string(status)) != "" {
+		return fmt.Errorf("pinned benchmark consumer worktree is not clean")
+	}
 	return nil
 }
 
@@ -578,6 +593,18 @@ func TestValidateBenchmarkProjectDir(t *testing.T) {
 	}
 	if err := validateBenchmarkProjectDir(dir, bc); err == nil || !strings.Contains(err.Error(), "SHA-256") {
 		t.Fatalf("changed prompt error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "prompts", "system.md"), promptData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "skills"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "skills", "variant.yaml"), []byte("id: variant\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateBenchmarkProjectDir(dir, bc); err == nil || !strings.Contains(err.Error(), "not clean") {
+		t.Fatalf("untracked skill error = %v", err)
 	}
 }
 
