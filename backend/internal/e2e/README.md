@@ -156,6 +156,14 @@ names and per-Tool counts remain sorted. If an analysis fails before producing
 `AIAnalysis`, the benchmark prints the available trace and Tool summaries before
 failing the test.
 
+External cases may define bounded `evidence_groups` containing path and content
+regexes. The benchmark observes successful artifact reads and records only the
+sorted group IDs under `evidence_groups_hit` and `evidence_groups_missed` in the
+private JSONL. It never stores the matching content. These groups are
+informational: they are not sent to the model, do not change Tool output, do not
+contribute to the scored signals, and cannot trigger a retry or reject an
+analysis.
+
 The telemetry never prints prompts, model response text, Tool arguments, Tool
 output, endpoints, model coordinates, credentials, or full hashes.
 
