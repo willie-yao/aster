@@ -36,10 +36,10 @@ const (
 	OutputPath          = ".prow-ai-dashboard/analysis.json"
 	SkillName           = "failure-analysis"
 
-	maxBundleBytes        = 512 << 10
+	maxBundleBytes        = 104 << 10
 	maxPlanBytes          = 64 << 10
 	maxExcerptBytes       = 64 << 10
-	maxExcerptTotalBytes  = 256 << 10
+	maxExcerptTotalBytes  = 96 << 10
 	maxExcerpts           = 16
 	maxArtifactPathCount  = 5000
 	maxFailureStringBytes = 32 << 10
