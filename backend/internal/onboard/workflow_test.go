@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestReusableDeploySerializesProjectRuns(t *testing.T) {
+func TestReusableDeployContract(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller failed")
@@ -24,9 +24,26 @@ func TestReusableDeploySerializesProjectRuns(t *testing.T) {
 		"cancel-in-progress: false",
 		"ai-cache-generation:",
 		"AI_CACHE_GENERATION: ${{ inputs.ai-cache-generation }}",
+		"WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}",
+		"WORKFLOW_REF: ${{ job.workflow_ref }}",
+		"WORKFLOW_SHA: ${{ job.workflow_sha }}",
+		"repository: ${{ steps.engine-identity.outputs.repository }}",
+		"ref: ${{ steps.engine-identity.outputs.sha }}",
+		"ACTUAL_SHA=\"$(git rev-parse HEAD)\"",
+		"engine/frontend/public/data/provenance.json",
+		"reusable_workflow_sha: process.env.WORKFLOW_SHA",
+		"engine_commit: process.env.ENGINE_COMMIT",
 	} {
 		if !strings.Contains(workflow, want) {
 			t.Errorf("reusable deploy workflow missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{
+		"github.job_workflow_sha",
+		"repository: willie-yao/prow-ai-dashboard\n          # Build the engine code",
+	} {
+		if strings.Contains(workflow, forbidden) {
+			t.Errorf("reusable deploy workflow contains stale contract %q", forbidden)
 		}
 	}
 }
