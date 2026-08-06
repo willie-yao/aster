@@ -17,6 +17,9 @@ import (
 //go:embed skill/failure-analysis.md
 var failureAnalysisSkill string
 
+// maxAgentPromptBytes leaves room for runtime framing under the Linux per-string exec limit.
+const maxAgentPromptBytes = 112 << 10
+
 // Spec describes one private experimental Agent analysis.
 type Spec struct {
 	Repo         agentruntime.RepoRef
@@ -165,7 +168,11 @@ func buildInstruction(bundle EvidenceBundle) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("agent analysis: encode evidence bundle: %w", err)
 	}
-	return "Use the " + SkillName + " skill. Analyze only the frozen evidence bundle below and the checked-out source at its pinned revision. Write exactly " + OutputPath + ".\n\nFrozen evidence bundle:\n" + string(data), nil
+	instruction := "Use the " + SkillName + " skill. Analyze only the frozen evidence bundle below and the checked-out source at its pinned revision. Write exactly " + OutputPath + ".\n\nFrozen evidence bundle:\n" + string(data)
+	if len(instruction)+len(failureAnalysisSkill) > maxAgentPromptBytes {
+		return "", fmt.Errorf("%w: composed agent prompt exceeds %d bytes", ErrInvalidBundle, maxAgentPromptBytes)
+	}
+	return instruction, nil
 }
 
 func validateGeneratedOutput(generated agentruntime.GenerateResult) error {

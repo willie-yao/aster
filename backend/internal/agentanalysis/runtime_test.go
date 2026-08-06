@@ -51,6 +51,13 @@ func TestRuntimeGenerate(t *testing.T) {
 	}
 }
 
+func TestBuildInstructionRejectsOversizedBundle(t *testing.T) {
+	bundle := EvidenceBundle{Excerpts: []EvidenceExcerpt{{Content: strings.Repeat("x", maxAgentPromptBytes)}}}
+	if _, err := buildInstruction(bundle); !errors.Is(err, ErrInvalidBundle) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestRuntimePreservesValidResultOnCleanupPending(t *testing.T) {
 	bundle := testBundle(t)
 	body := validAnalysisJSON(bundle)
