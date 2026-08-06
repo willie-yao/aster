@@ -86,9 +86,42 @@ analysisRuntime:
     tolerations: []
     affinity: {}
 
-# Orka fix generation is independent from the analysis runtime selector.
+# Orka Agent integrations are independent from the analysis runtime selector.
 orka:
   namespace: orka-system
+  # Private experimental Agent analysis runs only after authoritative in-process
+  # publication. It never changes public output, caches, issues, fixes, patterns,
+  # or remediation. Enabling this does not install Orka or create an Agent.
+  agentAnalysisShadow:
+    enabled: false
+    # Orka REST API used to retrieve durable Task results.
+    api: http://orka.orka-system.svc.cluster.local:8080
+    # Declared provenance version. Use versioned Agent names and update this when
+    # the operator-owned Agent contract changes.
+    agentVersion: v1
+    # Existing dedicated ServiceAccount when orka.rbac.create=false.
+    serviceAccountName: ""
+    maxPerRun: 1
+    admission:
+      # Required when enabled. Admission permits only this exact Agent and repo.
+      agentRef: ""
+      repository:
+        owner: ""
+        name: ""
+      # Optional read-only clone Secret already present in orka.namespace.
+      gitSecret: ""
+      maxTurns: 12
+      timeout: 10m
+      retries: 0
+    # Dedicated private PVC mounted only into the worker or fetcher. The server
+    # never mounts this claim. Empty existingClaim creates a release-scoped PVC.
+    ledger:
+      existingClaim: ""
+      retain: true
+      accessMode: ReadWriteOnce
+      size: 1Gi
+      storageClass: ""
+  # Fix generation is separately configured in project.yaml.
   fixRuntime:
     # Enables Task RBAC, ServiceAccount token mounts, and the git-capable fixer
     # image. The Agent and API are configured in project.yaml under

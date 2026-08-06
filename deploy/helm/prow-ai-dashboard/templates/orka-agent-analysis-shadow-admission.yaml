@@ -1,0 +1,82 @@
+{{- include "prow-ai-dashboard.validateAgentAnalysisShadow" . -}}
+{{- if .Values.orka.agentAnalysisShadow.enabled }}
+{{- $cfg := .Values.orka.agentAnalysisShadow -}}
+{{- $admission := $cfg.admission -}}
+{{- $serviceAccount := include "prow-ai-dashboard.agentAnalysisShadowServiceAccountName" . -}}
+{{- $requester := printf "system:serviceaccount:%s:%s" .Release.Namespace $serviceAccount -}}
+{{- $repository := printf "https://github.com/%s/%s.git" $admission.repository.owner $admission.repository.name -}}
+{{- $taskNamePattern := printf "^analysis-[0-9a-f]{16}-%s$" $cfg.agentVersion -}}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "prow-ai-dashboard.agentAnalysisShadowAdmissionName" . }}
+  labels:
+    {{- include "prow-ai-dashboard.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-analysis-shadow
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["core.orka.ai"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["tasks"]
+        scope: Namespaced
+  matchConditions:
+    - name: dashboard-shadow-requester
+      expression: {{ printf "request.operation == 'CREATE' ? request.userInfo.username == %s : (request.operation == 'DELETE' ? request.userInfo.username == %s : (request.userInfo.username == %s || (has(oldObject.metadata.labels) && 'app.kubernetes.io/managed-by' in oldObject.metadata.labels && 'prow-ai-dashboard/runtime' in oldObject.metadata.labels && oldObject.metadata.labels['app.kubernetes.io/managed-by'] == 'orka-agent-analysis' && oldObject.metadata.labels['prow-ai-dashboard/runtime'] == 'failure-analysis-shadow' && has(oldObject.metadata.annotations) && 'prow-ai-dashboard/agent-analysis-contract' in oldObject.metadata.annotations && oldObject.metadata.annotations['prow-ai-dashboard/agent-analysis-contract'] == 'agent-analysis-v1')))" (toJson $requester) (toJson $requester) (toJson $requester) | quote }}
+    - name: dashboard-shadow-namespace
+      expression: {{ printf "(request.operation == 'DELETE' ? oldObject.metadata.namespace : object.metadata.namespace) == %s" (toJson .Values.orka.namespace) | quote }}
+  variables:
+    - name: task
+      expression: "request.operation == 'DELETE' ? oldObject : object"
+  validations:
+    - expression: "request.operation != 'UPDATE' || (object.spec == oldObject.spec && object.metadata.labels == oldObject.metadata.labels && object.metadata.annotations == oldObject.metadata.annotations)"
+      message: "agent analysis shadow Task contracts are immutable after creation"
+    - expression: {{ printf "variables.task.metadata.name.matches(%s)" (toJson $taskNamePattern) | quote }}
+      message: "agent analysis shadow Tasks must use the declared Agent version identity"
+    - expression: "variables.task.spec.type == 'agent' && (!has(variables.task.spec.image) || variables.task.spec.image == '') && (!has(variables.task.spec.command) || size(variables.task.spec.command) == 0) && (!has(variables.task.spec.args) || size(variables.task.spec.args) == 0) && (!has(variables.task.spec.env) || size(variables.task.spec.env) == 0) && !has(variables.task.spec.secretRef)"
+      message: "agent analysis shadow Tasks must use only the approved Agent runtime"
+    - expression: {{ printf "has(variables.task.spec.agentRef) && variables.task.spec.agentRef.name == %s && variables.task.spec.agentRef.namespace == %s" (toJson $admission.agentRef) (toJson .Values.orka.namespace) | quote }}
+      message: "agent analysis shadow Tasks must use the approved Agent"
+    - expression: {{ printf "has(variables.task.spec.agentRuntime) && has(variables.task.spec.agentRuntime.workspace) && variables.task.spec.agentRuntime.workspace.gitRepo == %s && variables.task.spec.agentRuntime.workspace.ref.matches('^[0-9a-f]{40}$')" (toJson $repository) | quote }}
+      message: "agent analysis shadow Tasks must use the approved repository at an immutable commit"
+    {{- if $admission.gitSecret }}
+    - expression: {{ printf "has(variables.task.spec.agentRuntime.workspace.gitSecretRef) && variables.task.spec.agentRuntime.workspace.gitSecretRef.name == %s" (toJson $admission.gitSecret) | quote }}
+      message: "agent analysis shadow Tasks must use the approved read-only git Secret"
+    {{- else }}
+    - expression: "!has(variables.task.spec.agentRuntime.workspace.gitSecretRef)"
+      message: "agent analysis shadow Tasks must not add a git Secret"
+    {{- end }}
+    - expression: "!has(variables.task.spec.agentRuntime.workspace.branch) && !has(variables.task.spec.agentRuntime.workspace.subPath) && !has(variables.task.spec.agentRuntime.workspace.forkRepo) && !has(variables.task.spec.agentRuntime.workspace.prBaseBranch) && !has(variables.task.spec.agentRuntime.workspace.pushBranch)"
+      message: "agent analysis shadow Tasks must use the fixed generation-only workspace shape"
+    - expression: {{ printf "variables.task.spec.agentRuntime.maxTurns == %v && variables.task.spec.agentRuntime.allowBash == false && variables.task.spec.agentRuntime.allowedTools == ['Read', 'Glob', 'Grep', 'Write'] && variables.task.spec.agentRuntime.disallowedTools == ['Bash', 'Edit', 'MultiEdit', 'NotebookEdit', 'WebFetch', 'WebSearch', 'Task', 'TodoWrite', 'Question']" $admission.maxTurns | quote }}
+      message: "agent analysis shadow Tasks must use the bounded no-Bash tool policy"
+    - expression: {{ printf "has(variables.task.spec.timeout) && duration(variables.task.spec.timeout) == duration(%s) && has(variables.task.spec.retryPolicy) && variables.task.spec.retryPolicy.maxRetries == %v && (!has(variables.task.spec.retryPolicy.backoffMultiplier) || variables.task.spec.retryPolicy.backoffMultiplier == 2.0) && !has(variables.task.spec.retryPolicy.initialDelay) && variables.task.spec.priority == 500" (toJson (printf "%v" $admission.timeout)) $admission.retries | quote }}
+      message: "agent analysis shadow Tasks must use the configured execution bounds"
+    - expression: "!has(variables.task.spec.resources) || ((!has(variables.task.spec.resources.limits) || size(variables.task.spec.resources.limits) == 0) && (!has(variables.task.spec.resources.requests) || size(variables.task.spec.resources.requests) == 0) && (!has(variables.task.spec.resources.claims) || size(variables.task.spec.resources.claims) == 0))"
+      message: "agent analysis shadow Tasks must inherit resources from the approved Agent"
+    - expression: "!has(variables.task.spec.execution) || ((!has(variables.task.spec.execution.runtimeClassName) || variables.task.spec.execution.runtimeClassName == '') && (!has(variables.task.spec.execution.nodeSelector) || size(variables.task.spec.execution.nodeSelector) == 0) && (!has(variables.task.spec.execution.tolerations) || size(variables.task.spec.execution.tolerations) == 0) && (!has(variables.task.spec.execution.affinity) || variables.task.spec.execution.affinity == {}) && !has(variables.task.spec.execution.workspace))"
+      message: "agent analysis shadow Tasks must not override scheduling or execution workspaces"
+    - expression: "(!has(variables.task.spec.webhookURL) || variables.task.spec.webhookURL == '') && !has(variables.task.spec.sessionRef) && !has(variables.task.spec.priorTaskRef) && (!has(variables.task.spec.schedule) || variables.task.spec.schedule == '') && !has(variables.task.spec.timeZone) && (!has(variables.task.spec.concurrencyPolicy) || variables.task.spec.concurrencyPolicy == 'Forbid') && (!has(variables.task.spec.startingDeadlineSeconds) || variables.task.spec.startingDeadlineSeconds == 100) && (!has(variables.task.spec.successfulRunsHistoryLimit) || variables.task.spec.successfulRunsHistoryLimit == 3) && (!has(variables.task.spec.failedRunsHistoryLimit) || variables.task.spec.failedRunsHistoryLimit == 1) && (!has(variables.task.spec.suspend) || variables.task.spec.suspend == false)"
+      message: "agent analysis shadow Tasks must not use alternate lifecycle or scheduling fields"
+    - expression: "!has(variables.task.spec.ai) && !has(variables.task.spec.workspace) && !has(variables.task.spec.requestedBy) && !has(variables.task.spec.transaction)"
+      message: "agent analysis shadow Tasks must not add alternate AI, workspace, or transaction fields"
+    - expression: "has(variables.task.spec.prompt) && size(variables.task.spec.prompt) <= 1048576 && variables.task.spec.prompt.startsWith('Trusted engine-owned skills follow.') && variables.task.spec.prompt.contains('agent-analysis-v1') && variables.task.spec.prompt.contains('.prow-ai-dashboard/analysis.json')"
+      message: "agent analysis shadow Tasks must carry the bounded engine-owned analysis contract"
+    - expression: "has(variables.task.metadata.labels) && size(variables.task.metadata.labels) == 2 && 'app.kubernetes.io/managed-by' in variables.task.metadata.labels && 'prow-ai-dashboard/runtime' in variables.task.metadata.labels && variables.task.metadata.labels['app.kubernetes.io/managed-by'] == 'orka-agent-analysis' && variables.task.metadata.labels['prow-ai-dashboard/runtime'] == 'failure-analysis-shadow'"
+      message: "agent analysis shadow Tasks must carry the exact lifecycle labels"
+    - expression: "has(variables.task.metadata.annotations) && size(variables.task.metadata.annotations) == 3 && 'prow-ai-dashboard/agent-analysis-contract' in variables.task.metadata.annotations && 'orka.ai/disable-coordination-tool-injection' in variables.task.metadata.annotations && 'prow-ai-dashboard/action-request' in variables.task.metadata.annotations && variables.task.metadata.annotations['prow-ai-dashboard/agent-analysis-contract'] == 'agent-analysis-v1' && variables.task.metadata.annotations['orka.ai/disable-coordination-tool-injection'] == 'true' && variables.task.metadata.annotations['prow-ai-dashboard/action-request'].matches('^agent-analysis-[0-9a-f]{16}$')"
+      message: "agent analysis shadow Tasks must carry the exact immutable identity metadata"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "prow-ai-dashboard.agentAnalysisShadowAdmissionName" . }}
+  labels:
+    {{- include "prow-ai-dashboard.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-analysis-shadow
+spec:
+  policyName: {{ include "prow-ai-dashboard.agentAnalysisShadowAdmissionName" . }}
+  validationActions: [Deny]
+{{- end }}

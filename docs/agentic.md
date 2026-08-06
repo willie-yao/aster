@@ -19,7 +19,9 @@ is just the failing test's context.
 The fetcher and worker run the dashboard-owned `FailureAnalyzer` directly. The
 same Go implementation owns provider behavior, tools, evidence planning,
 critique, cache acceptance, private traces, and result schemas on Pages and
-Kubernetes.
+Kubernetes. An optional Helm Agent shadow may run after authoritative
+publication, but it does not implement `FailureAnalyzer`, mutate a test result,
+or participate in cache or publication policy.
 
 ## Endpoint requirements
 
@@ -784,6 +786,21 @@ volume. When admin authentication is enabled, server mode also exposes the
 decoded snapshot through `GET /api/analysis-traces` and the private **Traces**
 page. Exact query filters can correlate a response ID or a job/build/test tuple
 without exposing prompt or tool content.
+
+### Private Agent shadow ledger
+
+When the disabled-by-default Helm Agent shadow is enabled, it writes a separate
+`analysis_shadow.json` ledger on a dedicated PVC mounted only into the writer.
+The ledger stores bounded comparison fields, hashes, timings, attempts, retry
+configuration, validation status, and cleanup state. It does not store prompts
+or artifact excerpt contents. The server never mounts or serves this claim, and
+the Pages path does not use it.
+
+The in-process result remains authoritative. A shadow timeout, invalid result,
+ledger failure, or cleanup-pending Task cannot change public JSON, private cache
+acceptance, pattern state, or GitHub actions. Coding-agent token usage remains
+external and unmetered unless the operator-owned provider exposes a separate
+usage source.
 
 ### Private token and cost accounting
 

@@ -137,6 +137,31 @@ analysisRuntime:
 orka:
   namespace: orka-system
 
+  # Private experimental comparison after authoritative in-process analysis.
+  # This does not install Orka or create an Agent. Use a dedicated private PVC
+  # and a separate read-only Git credential for private repositories.
+  agentAnalysisShadow:
+    enabled: false
+    # api: http://orka.orka-system.svc.cluster.local:8080
+    # agentVersion: v1
+    # serviceAccountName: ""
+    # maxPerRun: 1
+    # admission:
+    #   agentRef: "<versioned-orka-agent-name>"
+    #   repository:
+    #     owner: "<github-owner>"
+    #     name: "<github-repository>"
+    #   gitSecret: ""
+    #   maxTurns: 12
+    #   timeout: 10m
+    #   retries: 0
+    # ledger:
+    #   existingClaim: ""
+    #   retain: true
+    #   accessMode: ReadWriteOnce
+    #   size: 1Gi
+    #   storageClass: ""
+
   fixRuntime:
     enabled: false
     # Empty clears an older image-specific tag during upgrades.

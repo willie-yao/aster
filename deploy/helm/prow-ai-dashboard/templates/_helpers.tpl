@@ -270,6 +270,78 @@ because Helm release names are unique only within their own namespace.
 {{- printf "%s-analysis-guard-%s" $base (include "prow-ai-dashboard.orkaReleaseScope" .) -}}
 {{- end -}}
 
+
+{{/* Dedicated ServiceAccount used only by Agent analysis shadow Tasks. */}}
+{{- define "prow-ai-dashboard.agentAnalysisShadowServiceAccountName" -}}
+{{- if .Values.orka.agentAnalysisShadow.serviceAccountName -}}
+{{- .Values.orka.agentAnalysisShadow.serviceAccountName -}}
+{{- else -}}
+{{- printf "%s-shadow" (include "prow-ai-dashboard.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Private shadow ledger PVC, never mounted by the server. */}}
+{{- define "prow-ai-dashboard.agentAnalysisShadowPVCName" -}}
+{{- if .Values.orka.agentAnalysisShadow.ledger.existingClaim -}}
+{{- .Values.orka.agentAnalysisShadow.ledger.existingClaim -}}
+{{- else -}}
+{{- printf "%s-shadow-ledger" (include "prow-ai-dashboard.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "prow-ai-dashboard.agentAnalysisShadowRBACName" -}}
+{{- $base := include "prow-ai-dashboard.fullname" . | trunc 37 | trimSuffix "-" -}}
+{{- printf "%s-shadow-%s" $base (include "prow-ai-dashboard.orkaReleaseScope" .) -}}
+{{- end -}}
+
+{{- define "prow-ai-dashboard.agentAnalysisShadowAdmissionName" -}}
+{{- $base := include "prow-ai-dashboard.fullname" . | trunc 31 | trimSuffix "-" -}}
+{{- printf "%s-shadow-guard-%s" $base (include "prow-ai-dashboard.orkaReleaseScope" .) -}}
+{{- end -}}
+
+{{- define "prow-ai-dashboard.agentAnalysisShadowLedgerMountPath" -}}/private/agent-analysis-shadow{{- end -}}
+{{- define "prow-ai-dashboard.agentAnalysisShadowLedgerPath" -}}/private/agent-analysis-shadow/analysis_shadow.json{{- end -}}
+
+{{/* Validate the fail-closed Agent analysis shadow deployment contract. */}}
+{{- define "prow-ai-dashboard.validateAgentAnalysisShadow" -}}
+{{- if .Values.orka.agentAnalysisShadow.enabled -}}
+  {{- $cfg := .Values.orka.agentAnalysisShadow -}}
+  {{- $admission := $cfg.admission -}}
+  {{- if not .Values.ai.enabled -}}{{- fail "orka.agentAnalysisShadow.enabled requires ai.enabled=true" -}}{{- end -}}
+  {{- if ne .Values.analysisRuntime.type "inprocess" -}}{{- fail "orka.agentAnalysisShadow.enabled requires analysisRuntime.type=inprocess" -}}{{- end -}}
+  {{- if .Values.orka.fixRuntime.enabled -}}{{- fail "orka.agentAnalysisShadow and orka.fixRuntime cannot be enabled together" -}}{{- end -}}
+  {{- if and (eq .Values.mode "cron") (ne .Values.fetcher.concurrencyPolicy "Forbid") -}}{{- fail "orka.agentAnalysisShadow requires fetcher.concurrencyPolicy=Forbid in cron mode" -}}{{- end -}}
+  {{- if not .Values.orka.namespace -}}{{- fail "orka.namespace is required when agentAnalysisShadow is enabled" -}}{{- end -}}
+  {{- if or (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" .Values.orka.namespace)) (gt (len .Values.orka.namespace) 63) -}}{{- fail "orka.namespace must be a lowercase DNS label of at most 63 characters" -}}{{- end -}}
+  {{- if not (regexMatch "^https?://[^/@?#]+(/[^?#]*)?$" $cfg.api) -}}{{- fail "orka.agentAnalysisShadow.api must be an absolute http or https URL without credentials" -}}{{- end -}}
+  {{- if or (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $cfg.agentVersion)) (gt (len $cfg.agentVersion) 30) -}}{{- fail "orka.agentAnalysisShadow.agentVersion must be a lowercase DNS label of at most 30 characters" -}}{{- end -}}
+  {{- if not $admission.agentRef -}}{{- fail "orka.agentAnalysisShadow.admission.agentRef is required" -}}{{- end -}}
+  {{- if or (not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $admission.agentRef)) (gt (len $admission.agentRef) 253) -}}{{- fail "orka.agentAnalysisShadow.admission.agentRef must be a lowercase DNS name of at most 253 characters" -}}{{- end -}}
+  {{- if not $admission.repository.owner -}}{{- fail "orka.agentAnalysisShadow.admission.repository.owner is required" -}}{{- end -}}
+  {{- if not $admission.repository.name -}}{{- fail "orka.agentAnalysisShadow.admission.repository.name is required" -}}{{- end -}}
+  {{- if not (regexMatch "^[A-Za-z0-9][A-Za-z0-9-]{0,38}$" $admission.repository.owner) -}}{{- fail "orka.agentAnalysisShadow.admission.repository.owner must be a GitHub owner name" -}}{{- end -}}
+  {{- if or (not (regexMatch "^[A-Za-z0-9_.-]+$" $admission.repository.name)) (hasSuffix ".git" $admission.repository.name) -}}{{- fail "orka.agentAnalysisShadow.admission.repository.name must be a GitHub repository name without .git" -}}{{- end -}}
+  {{- if and $admission.gitSecret (or (not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $admission.gitSecret)) (gt (len $admission.gitSecret) 253)) -}}{{- fail "orka.agentAnalysisShadow.admission.gitSecret must be a lowercase Kubernetes object name of at most 253 characters" -}}{{- end -}}
+  {{- if and $admission.gitSecret (not (or .Values.ai.githubReadToken .Values.ai.githubReadTokenSecretName)) -}}{{- fail "orka.agentAnalysisShadow.admission.gitSecret requires a dashboard-side GITHUB_READ_TOKEN Secret" -}}{{- end -}}
+  {{- $maxPerRun := printf "%v" $cfg.maxPerRun -}}
+  {{- if not (regexMatch "^([1-9]|10)$" $maxPerRun) -}}{{- fail "orka.agentAnalysisShadow.maxPerRun must be an integer from 1 to 10" -}}{{- end -}}
+  {{- $maxTurns := printf "%v" $admission.maxTurns -}}
+  {{- if not (regexMatch "^([1-9][0-9]{0,2}|1000)$" $maxTurns) -}}{{- fail "orka.agentAnalysisShadow.admission.maxTurns must be an integer from 1 to 1000" -}}{{- end -}}
+  {{- $retries := printf "%v" $admission.retries -}}
+  {{- if not (regexMatch "^[0-2]$" $retries) -}}{{- fail "orka.agentAnalysisShadow.admission.retries must be an integer from 0 to 2" -}}{{- end -}}
+  {{- if not (regexMatch "^([1-9]|[12][0-9]|30)m$" (printf "%v" $admission.timeout)) -}}{{- fail "orka.agentAnalysisShadow.admission.timeout must be whole minutes from 1m through 30m" -}}{{- end -}}
+  {{- if not (has $cfg.ledger.accessMode (list "ReadWriteOnce" "ReadWriteMany")) -}}{{- fail "orka.agentAnalysisShadow.ledger.accessMode must be ReadWriteOnce or ReadWriteMany" -}}{{- end -}}
+  {{- if not $cfg.ledger.size -}}{{- fail "orka.agentAnalysisShadow.ledger.size is required" -}}{{- end -}}
+  {{- if eq (include "prow-ai-dashboard.agentAnalysisShadowPVCName" .) (include "prow-ai-dashboard.pvcName" .) -}}{{- fail "orka.agentAnalysisShadow must use a PVC distinct from public dashboard data" -}}{{- end -}}
+  {{- if and (not .Values.orka.rbac.create) (not $cfg.serviceAccountName) -}}{{- fail "orka.agentAnalysisShadow.serviceAccountName is required when chart-managed Orka RBAC is disabled" -}}{{- end -}}
+  {{- if and $cfg.serviceAccountName (or (not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $cfg.serviceAccountName)) (gt (len $cfg.serviceAccountName) 253)) -}}{{- fail "orka.agentAnalysisShadow.serviceAccountName must be a lowercase Kubernetes object name of at most 253 characters" -}}{{- end -}}
+  {{- if and .Values.server.chat.sourceInvestigation.enabled (eq (include "prow-ai-dashboard.agentAnalysisShadowServiceAccountName" .) (include "prow-ai-dashboard.orkaSourceServiceAccountName" .)) -}}{{- fail "Agent analysis shadow and source investigation require distinct ServiceAccounts" -}}{{- end -}}
+  {{- range .Values.fetcher.extraEnv -}}
+    {{- if has .name (list "ORKA_API_TOKEN" "ORKA_API_TOKEN_FILE" "GITHUB_READ_TOKEN" "AGENT_ANALYSIS_SHADOW_API_TOKEN") -}}{{- fail (printf "fetcher.extraEnv must not override reserved shadow credential variable %s" .name) -}}{{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{/* State key Secret shared by the dashboard and Orka namespaces. */}}
 {{- define "prow-ai-dashboard.orkaAnalysisStateSecret" -}}
 {{- if .Values.analysisRuntime.orkaContainer.state.existingSecret -}}

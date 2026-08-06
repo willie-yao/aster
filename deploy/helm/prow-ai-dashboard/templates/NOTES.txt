@@ -13,6 +13,11 @@ Fetcher CronJob:  {{ include "prow-ai-dashboard.fullname" . }}-fetcher (schedule
 {{- end }}
 Server:           {{ include "prow-ai-dashboard.fullname" . }}-server
 Shared volume:    {{ include "prow-ai-dashboard.pvcName" . }} ({{ .Values.persistence.accessMode }})
+{{- if .Values.orka.agentAnalysisShadow.enabled }}
+Shadow analysis:  configured, authoritative runtime remains inprocess
+Shadow identity:  ServiceAccount {{ include "prow-ai-dashboard.agentAnalysisShadowServiceAccountName" . }}
+Private ledger:   {{ include "prow-ai-dashboard.agentAnalysisShadowPVCName" . }} (not mounted by server)
+{{- end }}
 
 The server serves the SPA at / and the JSON contract at /data/*, with a
 capability descriptor at /api/capabilities.

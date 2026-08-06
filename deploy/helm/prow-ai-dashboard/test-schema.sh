@@ -95,6 +95,24 @@ analysisRuntime:
 VALUES
 expect_pass orka "$tmp/orka.yaml"
 
+cat > "$tmp/shadow.yaml" <<'VALUES'
+ai:
+  enabled: true
+  endpoint: https://model.example.test/v1/chat/completions
+  model: fixture-model
+  existingSecret: fixture-model-auth
+orka:
+  agentAnalysisShadow:
+    enabled: true
+    agentVersion: v1
+    admission:
+      agentRef: analysis-agent
+      repository:
+        owner: example
+        name: repo
+VALUES
+expect_pass shadow "$tmp/shadow.yaml"
+
 cat > "$tmp/oauth.yaml" <<'VALUES'
 ai:
   enabled: true
@@ -214,6 +232,28 @@ ai:
   api: completions
 VALUES
 expect_fail invalid-api "$tmp/invalid-api.yaml" /ai/api
+
+cat > "$tmp/invalid-shadow-access.yaml" <<'VALUES'
+orka:
+  agentAnalysisShadow:
+    ledger:
+      accessMode: ReadOnlyMany
+VALUES
+expect_fail invalid-shadow-access "$tmp/invalid-shadow-access.yaml" /orka/agentAnalysisShadow/ledger/accessMode
+
+cat > "$tmp/invalid-shadow-bound.yaml" <<'VALUES'
+orka:
+  agentAnalysisShadow:
+    maxPerRun: 0
+VALUES
+expect_fail invalid-shadow-bound "$tmp/invalid-shadow-bound.yaml" /orka/agentAnalysisShadow/maxPerRun
+
+cat > "$tmp/invalid-shadow-key.yaml" <<'VALUES'
+orka:
+  agentAnalysisShadow:
+    modelSecret: forbidden
+VALUES
+expect_fail invalid-shadow-key "$tmp/invalid-shadow-key.yaml" /orka/agentAnalysisShadow
 
 cat > "$tmp/invalid-actions.yaml" <<'VALUES'
 server:

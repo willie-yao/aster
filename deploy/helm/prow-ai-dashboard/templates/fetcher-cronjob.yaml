@@ -1,11 +1,13 @@
 {{- include "prow-ai-dashboard.validateFixRuntime" . -}}
 {{- include "prow-ai-dashboard.validateAnalysisRuntime" . -}}
+{{- include "prow-ai-dashboard.validateAgentAnalysisShadow" . -}}
 {{- include "prow-ai-dashboard.validateAI" . -}}
 {{- if not (or (eq .Values.mode "cron") (eq .Values.mode "watch")) }}
 {{- fail (printf "mode must be \"cron\" or \"watch\", got %q" .Values.mode) }}
 {{- end }}
 {{- if eq .Values.mode "cron" }}
 {{- $containerAnalysis := eq .Values.analysisRuntime.type "orka-container" }}
+{{- $shadow := .Values.orka.agentAnalysisShadow.enabled }}
 {{- $defaultRestartPolicy := ternary "Never" "OnFailure" $containerAnalysis }}
 {{- $restartPolicy := .Values.fetcher.restartPolicy | default $defaultRestartPolicy }}
 {{- if not (or (eq $restartPolicy "Never") (eq $restartPolicy "OnFailure")) }}
@@ -52,7 +54,9 @@ spec:
             app.kubernetes.io/component: fetcher
         spec:
           restartPolicy: {{ $restartPolicy }}
-          {{- if or .Values.orka.fixRuntime.enabled $containerAnalysis }}
+          {{- if $shadow }}
+          serviceAccountName: {{ include "prow-ai-dashboard.agentAnalysisShadowServiceAccountName" . }}
+          {{- else if or .Values.orka.fixRuntime.enabled $containerAnalysis }}
           serviceAccountName: {{ include "prow-ai-dashboard.orkaServiceAccountName" . }}
           {{- end }}
           automountServiceAccountToken: false
@@ -136,6 +140,21 @@ spec:
                 - {{ printf "-orka-analysis-tolerations-json=%s" (toJson .Values.analysisRuntime.orkaContainer.tolerations) | quote }}
                 - {{ printf "-orka-analysis-affinity-json=%s" (toJson .Values.analysisRuntime.orkaContainer.affinity) | quote }}
                 {{- end }}
+                {{- if $shadow }}
+                - -agent-analysis-shadow
+                - -agent-analysis-shadow-namespace={{ .Values.orka.namespace }}
+                - -agent-analysis-shadow-api={{ .Values.orka.agentAnalysisShadow.api }}
+                - -agent-analysis-shadow-agent-ref={{ .Values.orka.agentAnalysisShadow.admission.agentRef }}
+                - -agent-analysis-shadow-agent-version={{ .Values.orka.agentAnalysisShadow.agentVersion }}
+                {{- if .Values.orka.agentAnalysisShadow.admission.gitSecret }}
+                - -agent-analysis-shadow-git-secret={{ .Values.orka.agentAnalysisShadow.admission.gitSecret }}
+                {{- end }}
+                - -agent-analysis-shadow-ledger={{ include "prow-ai-dashboard.agentAnalysisShadowLedgerPath" . }}
+                - -agent-analysis-shadow-max-per-run={{ .Values.orka.agentAnalysisShadow.maxPerRun }}
+                - -agent-analysis-shadow-max-turns={{ .Values.orka.agentAnalysisShadow.admission.maxTurns }}
+                - -agent-analysis-shadow-timeout={{ .Values.orka.agentAnalysisShadow.admission.timeout }}
+                - -agent-analysis-shadow-retries={{ .Values.orka.agentAnalysisShadow.admission.retries }}
+                {{- end }}
               env:
                 {{- if .Values.ai.enabled }}
                 - name: AI_TOKEN
@@ -198,7 +217,7 @@ spec:
                 - name: ORKA_API_TOKEN_FILE
                   value: /var/run/secrets/kubernetes.io/serviceaccount/token
                 {{- end }}
-                {{- else if .Values.orka.fixRuntime.enabled }}
+                {{- else if or .Values.orka.fixRuntime.enabled $shadow }}
                 - name: ORKA_API_TOKEN_FILE
                   value: /var/run/secrets/kubernetes.io/serviceaccount/token
                 {{- end }}
@@ -210,6 +229,10 @@ spec:
               volumeMounts:
                 - name: data
                   mountPath: {{ .Values.persistence.mountPath }}
+                {{- if $shadow }}
+                - name: agent-analysis-shadow-ledger
+                  mountPath: {{ include "prow-ai-dashboard.agentAnalysisShadowLedgerMountPath" . }}
+                {{- end }}
                 {{- if $containerAnalysis }}
                 - name: project-runtime
                   mountPath: {{ .Values.project.mountPath }}
@@ -221,7 +244,7 @@ spec:
                 {{- end }}
                 - name: tmp
                   mountPath: /tmp
-                {{- if or .Values.orka.fixRuntime.enabled $containerAnalysis }}
+                {{- if or .Values.orka.fixRuntime.enabled $containerAnalysis $shadow }}
                 - name: orka-api-token
                   mountPath: /var/run/secrets/kubernetes.io/serviceaccount
                   readOnly: true
@@ -244,6 +267,11 @@ spec:
             - name: data
               persistentVolumeClaim:
                 claimName: {{ include "prow-ai-dashboard.pvcName" . }}
+            {{- if $shadow }}
+            - name: agent-analysis-shadow-ledger
+              persistentVolumeClaim:
+                claimName: {{ include "prow-ai-dashboard.agentAnalysisShadowPVCName" . }}
+            {{- end }}
             - name: project
               configMap:
                 name: {{ include "prow-ai-dashboard.projectConfigMap" . }}
@@ -253,7 +281,7 @@ spec:
             - name: project-runtime
               emptyDir: {}
             {{- end }}
-            {{- if or .Values.orka.fixRuntime.enabled $containerAnalysis }}
+            {{- if or .Values.orka.fixRuntime.enabled $containerAnalysis $shadow }}
             - name: orka-api-token
               projected:
                 defaultMode: 420
