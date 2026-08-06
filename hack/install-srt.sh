@@ -100,11 +100,30 @@ if [[ "${platform}" == "linux" ]]; then
 	node "${script_dir}/build-srt-seccomp.mjs" "${source_dir}" >&2
 fi
 
+run_npm_ci() {
+	local mode="$1"
+	shift
+	local attempt
+	for attempt in 1 2 3; do
+		if npm ci --ignore-scripts --no-audit --no-fund "$@" >&2; then
+			if [[ "${mode}" == "build" && -x node_modules/.bin/tsc ]]; then
+				return 0
+			fi
+			if [[ "${mode}" == "runtime" && -f node_modules/commander/package.json ]]; then
+				return 0
+			fi
+		fi
+		echo "npm ci ${mode} dependency attempt ${attempt} failed verification" >&2
+		sleep "${attempt}"
+	done
+	return 1
+}
+
 (
 	cd "${source_dir}"
-	npm ci --ignore-scripts --no-audit --no-fund >&2
+	run_npm_ci build
 	npm run build >&2
-	npm ci --ignore-scripts --no-audit --no-fund --omit=dev >&2
+	run_npm_ci runtime --omit=dev
 )
 
 stage="${tmp}/install"
