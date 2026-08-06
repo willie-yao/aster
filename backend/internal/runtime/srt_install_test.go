@@ -77,15 +77,14 @@ func TestSRTInstallerContract(t *testing.T) {
 	}
 	workflowText := string(workflow)
 	for _, want := range []string{
-		"name: SRT integration",
-		"runs-on: ubuntu-22.04",
+		"name: SRT installer",
+		"runs-on: ubuntu-latest",
 		"workflow_dispatch:",
 		`cron: "17 9 * * 1"`,
 		`"backend/internal/runtime/srt_*.go"`,
 		`./hack/install-srt.sh "$RUNNER_TEMP/srt-0.0.70"`,
 		`"$SRT_BIN" --help`,
 		"installer_schema=2",
-		"TestSRTSandbox(Hostile|Cancellation)Integration",
 	} {
 		if !strings.Contains(workflowText, want) {
 			t.Errorf("CI workflow missing %q", want)
@@ -97,5 +96,8 @@ func TestSRTInstallerContract(t *testing.T) {
 	}
 	if strings.Contains(string(ciWorkflow), "srt-installer:") || strings.Contains(string(ciWorkflow), "TestSRTSandboxHostileIntegration") {
 		t.Fatal("host-dependent srt integration is still part of required per-PR CI")
+	}
+	if strings.Contains(workflowText, "SRT_TEST_BIN") || strings.Contains(workflowText, "TestSRTSandbox") {
+		t.Fatal("GitHub-hosted installer workflow still runs host-kernel sandbox integrations")
 	}
 }

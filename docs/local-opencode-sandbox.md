@@ -39,11 +39,13 @@ the required binaries with an AppArmor profile or disable that restriction:
 sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 ```
 
-The repository runs the hostile and cancellation integrations in a separate
-Ubuntu 22.04 workflow only for SRT-related changes, on a weekly schedule, or by
-manual dispatch. The normal CI workflow retains the deterministic installer and
-policy contract tests but does not require a host-kernel integration for every
-unrelated pull request.
+The repository builds and verifies the pinned installer in a separate workflow
+only for SRT-related changes, on a weekly schedule, or by manual dispatch. The
+normal CI workflow retains deterministic installer-contract, policy, and
+fail-closed tests. GitHub-hosted runners do not provide the nested
+capability-bearing namespace environment required by the hostile and
+cancellation integrations, so those tests must run manually on a dedicated
+compatible Linux host.
 
 ## Enforced boundary
 

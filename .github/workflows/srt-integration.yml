@@ -1,4 +1,4 @@
-name: SRT integration
+name: SRT installer
 
 on:
   pull_request:
@@ -26,16 +26,13 @@ permissions:
   contents: read
 
 jobs:
-  sandbox:
-    runs-on: ubuntu-22.04
+  installer:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: backend/go.mod
       - name: Build verified sandbox runtime
         run: |
           sudo apt-get update
@@ -46,5 +43,3 @@ jobs:
           node -e "if (require('$RUNNER_TEMP/srt-0.0.70/node_modules/@anthropic-ai/sandbox-runtime/package.json').version !== '0.0.70') process.exit(1)"
           grep -Fxq 'installer_schema=2' "$RUNNER_TEMP/srt-0.0.70/INSTALL_PROVENANCE"
           test -x "$RUNNER_TEMP/srt-0.0.70/node_modules/@anthropic-ai/sandbox-runtime/vendor/seccomp/x64/apply-seccomp"
-          cd backend
-          SRT_TEST_BIN="$SRT_BIN" go test ./internal/runtime -run '^TestSRTSandbox(Hostile|Cancellation)Integration$' -count=1
