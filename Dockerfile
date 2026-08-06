@@ -26,13 +26,15 @@ RUN CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION} -X main.commit=$
 # Optional full engine image for local sandboxed OpenCode fix generation.
 FROM node:20-slim AS fixer-runtime
 ARG OPENCODE_VERSION=1.18.2
-ARG SRT_VERSION=0.0.70
+COPY hack/install-srt.sh /usr/local/bin/install-srt
 RUN apt-get update \
- && apt-get install -y --no-install-recommends bash bubblewrap ca-certificates git ripgrep socat \
+ && apt-get install -y --no-install-recommends bash bubblewrap ca-certificates curl git ripgrep socat \
  && rm -rf /var/lib/apt/lists/* \
- && npm install -g "opencode-ai@${OPENCODE_VERSION}" "@anthropic-ai/sandbox-runtime@${SRT_VERSION}" \
+ && npm install -g "opencode-ai@${OPENCODE_VERSION}" \
+ && install-srt /usr/local/share/prow-ai-dashboard/srt \
+ && ln -s /usr/local/share/prow-ai-dashboard/srt/node_modules/.bin/srt /usr/local/bin/srt \
  && opencode --version \
- && node -e "if (require('/usr/local/lib/node_modules/@anthropic-ai/sandbox-runtime/package.json').version !== '${SRT_VERSION}') process.exit(1)"
+ && node -e "if (require('/usr/local/share/prow-ai-dashboard/srt/node_modules/@anthropic-ai/sandbox-runtime/package.json').version !== '0.0.70') process.exit(1)"
 COPY --from=build /out/fetcher /usr/local/bin/fetcher
 COPY --from=build /out/worker /usr/local/bin/worker
 COPY --from=build /out/server /usr/local/bin/server

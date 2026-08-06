@@ -1,6 +1,6 @@
 # Local OpenCode sandbox
 
-Local OpenCode callers use the `srt` backend by default. This includes onboarding prompt authoring and local fix generation. The backend uses [Anthropic Sandbox Runtime](https://github.com/anthropic-experimental/sandbox-runtime), `srt`, and is tested against the exact npm package:
+Local OpenCode callers use the `srt` backend by default. This includes onboarding prompt authoring and local fix generation. The backend uses [Anthropic Sandbox Runtime](https://github.com/anthropic-experimental/sandbox-runtime), `srt`, and is tested against release `v0.0.70` at commit `44ab607c46f20381aeaf3e22ca0e0151d4c6b29c`.
 
 ```text
 @anthropic-ai/sandbox-runtime@0.0.70
@@ -10,11 +10,14 @@ The runtime verifies the package name and version from the installed package met
 
 ## Install the pinned executable
 
-Install `srt` into a dedicated tool directory rather than globally:
+The `0.0.70` npm package is not published in every registry. The repository
+installer downloads the pinned upstream source archive, verifies its SHA-256,
+builds the package from its lock file, and installs only the runtime dependencies.
+Install it into a dedicated tool directory rather than globally:
 
 ```bash
 tool_root="$HOME/.local/share/prow-ai-dashboard/srt-0.0.70"
-npm install --prefix "$tool_root" --save-exact @anthropic-ai/sandbox-runtime@0.0.70
+./hack/install-srt.sh "$tool_root"
 export SRT_BIN="$tool_root/node_modules/.bin/srt"
 ```
 
