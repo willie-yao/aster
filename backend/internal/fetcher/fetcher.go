@@ -147,7 +147,7 @@ type pipeline struct {
 	shadowRunner         shadowAnalysisRunner
 	shadowFreeze         shadowEvidenceFreezer
 	shadowAppend         shadowLedgerAppender
-	shadowContains       shadowLedgerContains
+	shadowClaim          shadowLedgerClaimer
 	shadowNow            func() time.Time
 }
 

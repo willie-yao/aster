@@ -20,17 +20,19 @@ import (
 )
 
 const (
-	LedgerSchemaVersion = 1
-	maxLedgerRecords    = 100
-	maxLedgerAttempts   = 4096
-	maxLedgerBytes      = 4 << 20
-	ledgerRetention     = 30 * 24 * time.Hour
+	LedgerSchemaVersion     = 1
+	maxLedgerRecords        = 100
+	maxLedgerAttempts       = 4096
+	maxLedgerBytes          = 4 << 20
+	ledgerRetention         = 30 * 24 * time.Hour
+	pendingAttemptRetention = time.Hour
 )
 
 // ShadowStatus classifies one non-authoritative experiment outcome.
 type ShadowStatus string
 
 const (
+	ShadowStatusPending        ShadowStatus = "pending"
 	ShadowStatusSucceeded      ShadowStatus = "succeeded"
 	ShadowStatusCleanupPending ShadowStatus = "cleanup_pending"
 	ShadowStatusEvidenceFailed ShadowStatus = "evidence_failed"
@@ -127,8 +129,9 @@ type ShadowRecord struct {
 
 // AttemptRecord retains a compact deduplication identity after detailed records are pruned.
 type AttemptRecord struct {
-	Hash      string `json:"hash"`
-	CreatedAt string `json:"created_at"`
+	Hash      string       `json:"hash"`
+	CreatedAt string       `json:"created_at"`
+	Status    ShadowStatus `json:"status"`
 }
 
 // ShadowLedger is the bounded private on-disk comparison history.
@@ -217,27 +220,29 @@ func NewRecordID(subject Subject, createdAt time.Time, identity string) string {
 	}, "\x00"))[:24]
 }
 
+// ValidatePrivateLedgerPath rejects ledger paths that resolve inside public output or through a symlink target.
+func ValidatePrivateLedgerPath(publicDir, ledgerPath string) error {
+	_, err := resolvePrivateLedgerPath(publicDir, ledgerPath, false)
+	return err
+}
+
 // LedgerAttemptHashes returns the exact comparison contracts already attempted.
-func LedgerAttemptHashes(path string) (map[string]bool, error) {
-	if strings.TrimSpace(path) == "" {
-		return nil, fmt.Errorf("agent analysis ledger path is required")
-	}
+func LedgerAttemptHashes(publicDir, path string) (map[string]bool, error) {
 	attempts := map[string]bool{}
-	err := withLedgerLock(path, func() error {
-		ledger, err := loadLedger(path)
+	err := withLedgerLock(publicDir, path, func(resolvedPath string) error {
+		ledger, err := loadLedger(resolvedPath)
 		if err != nil {
 			return err
 		}
-		cutoff := time.Now().UTC().Add(-ledgerRetention)
+		reference := time.Now().UTC()
 		for _, attempt := range ledger.Attempts {
-			createdAt, parseErr := time.Parse(time.RFC3339Nano, attempt.CreatedAt)
-			if parseErr == nil && !createdAt.Before(cutoff) {
+			if attemptActive(attempt, reference) {
 				attempts[attempt.Hash] = true
 			}
 		}
 		for _, record := range ledger.Records {
-			createdAt, parseErr := time.Parse(time.RFC3339Nano, record.CreatedAt)
-			if parseErr == nil && !createdAt.Before(cutoff) {
+			attempt := AttemptRecord{Hash: record.AttemptHash, CreatedAt: record.CreatedAt, Status: record.Status}
+			if attemptActive(attempt, reference) {
 				attempts[record.AttemptHash] = true
 			}
 		}
@@ -247,119 +252,183 @@ func LedgerAttemptHashes(path string) (map[string]bool, error) {
 }
 
 // LedgerContainsAttempt reports whether this exact comparison contract was already attempted.
-func LedgerContainsAttempt(path, attemptHash string) (bool, error) {
+func LedgerContainsAttempt(publicDir, path, attemptHash string) (bool, error) {
 	if !validSHA256(attemptHash) {
 		return false, fmt.Errorf("agent analysis ledger lookup is invalid")
 	}
-	attempts, err := LedgerAttemptHashes(path)
+	attempts, err := LedgerAttemptHashes(publicDir, path)
 	return attempts[attemptHash], err
 }
 
-// AppendLedger atomically appends or replaces one bounded private record.
-func AppendLedger(path string, record ShadowRecord) error {
-	if strings.TrimSpace(path) == "" {
-		return fmt.Errorf("agent analysis ledger path is required")
+// ClaimLedgerAttempt atomically reserves one comparison identity before external work starts.
+func ClaimLedgerAttempt(publicDir, path string, record ShadowRecord) (bool, error) {
+	record.Status = ShadowStatusPending
+	record.ErrorCode = ""
+	record.ComparisonHash = ""
+	record.Shadow = nil
+	record.TotalDurationMs = 0
+	createdAt, err := validateShadowRecord(record)
+	if err != nil {
+		return false, fmt.Errorf("agent analysis ledger claim: %w", err)
 	}
+	claimed := false
+	err = withLedgerLock(publicDir, path, func(resolvedPath string) error {
+		ledger, err := loadLedger(resolvedPath)
+		if err != nil {
+			return err
+		}
+		reference := ledgerReference(ledger, createdAt)
+		pruneLedger(&ledger, reference)
+		for _, attempt := range ledger.Attempts {
+			if attempt.Hash == record.AttemptHash && attemptActive(attempt, reference) {
+				return nil
+			}
+		}
+		for _, existing := range ledger.Records {
+			attempt := AttemptRecord{Hash: existing.AttemptHash, CreatedAt: existing.CreatedAt, Status: existing.Status}
+			if attempt.Hash == record.AttemptHash && attemptActive(attempt, reference) {
+				return nil
+			}
+		}
+		upsertAttempt(&ledger, AttemptRecord{Hash: record.AttemptHash, CreatedAt: record.CreatedAt, Status: ShadowStatusPending})
+		upsertRecord(&ledger, record)
+		ledger.UpdatedAt = reference.UTC().Format(time.RFC3339Nano)
+		if err := writeLedger(resolvedPath, &ledger); err != nil {
+			return err
+		}
+		claimed = true
+		return nil
+	})
+	return claimed, err
+}
+
+// AppendLedger atomically replaces a claimed attempt with its final bounded record.
+func AppendLedger(publicDir, path string, record ShadowRecord) error {
 	createdAt, err := validateShadowRecord(record)
 	if err != nil {
 		return fmt.Errorf("agent analysis ledger record: %w", err)
 	}
-	return withLedgerLock(path, func() error {
-		ledger, err := loadLedger(path)
+	return withLedgerLock(publicDir, path, func(resolvedPath string) error {
+		ledger, err := loadLedger(resolvedPath)
 		if err != nil {
 			return err
 		}
-		reference := createdAt
-		if previous, parseErr := time.Parse(time.RFC3339Nano, ledger.UpdatedAt); parseErr == nil && previous.After(reference) {
-			reference = previous
+		reference := ledgerReference(ledger, createdAt)
+		pruneLedger(&ledger, reference)
+		upsertAttempt(&ledger, AttemptRecord{Hash: record.AttemptHash, CreatedAt: record.CreatedAt, Status: record.Status})
+		upsertRecord(&ledger, record)
+		ledger.UpdatedAt = reference.UTC().Format(time.RFC3339Nano)
+		return writeLedger(resolvedPath, &ledger)
+	})
+}
+
+func ledgerReference(ledger ShadowLedger, createdAt time.Time) time.Time {
+	reference := createdAt
+	if previous, err := time.Parse(time.RFC3339Nano, ledger.UpdatedAt); err == nil && previous.After(reference) {
+		reference = previous
+	}
+	return reference
+}
+
+func pruneLedger(ledger *ShadowLedger, reference time.Time) {
+	records := ledger.Records[:0]
+	for _, record := range ledger.Records {
+		attempt := AttemptRecord{Hash: record.AttemptHash, CreatedAt: record.CreatedAt, Status: record.Status}
+		if attemptActive(attempt, reference) {
+			records = append(records, record)
 		}
-		cutoff := reference.Add(-ledgerRetention)
-		kept := ledger.Records[:0]
-		for _, existing := range ledger.Records {
-			timestamp, parseErr := time.Parse(time.RFC3339Nano, existing.CreatedAt)
-			if parseErr == nil && !timestamp.Before(cutoff) {
-				kept = append(kept, existing)
-			}
-		}
-		ledger.Records = kept
-		attempts := ledger.Attempts[:0]
-		attemptReplaced := false
-		for _, attempt := range ledger.Attempts {
-			timestamp, parseErr := time.Parse(time.RFC3339Nano, attempt.CreatedAt)
-			if parseErr != nil || timestamp.Before(cutoff) {
-				continue
-			}
-			if attempt.Hash == record.AttemptHash {
-				attempt = AttemptRecord{Hash: record.AttemptHash, CreatedAt: record.CreatedAt}
-				attemptReplaced = true
-			}
+	}
+	ledger.Records = records
+	attempts := ledger.Attempts[:0]
+	for _, attempt := range ledger.Attempts {
+		if attemptActive(attempt, reference) {
 			attempts = append(attempts, attempt)
 		}
-		if !attemptReplaced {
-			attempts = append(attempts, AttemptRecord{Hash: record.AttemptHash, CreatedAt: record.CreatedAt})
+	}
+	ledger.Attempts = attempts
+}
+
+func attemptActive(attempt AttemptRecord, reference time.Time) bool {
+	createdAt, err := time.Parse(time.RFC3339Nano, attempt.CreatedAt)
+	if err != nil {
+		return false
+	}
+	retention := ledgerRetention
+	if attempt.Status == ShadowStatusPending {
+		retention = pendingAttemptRetention
+	}
+	return !createdAt.Before(reference.Add(-retention))
+}
+
+func upsertAttempt(ledger *ShadowLedger, attempt AttemptRecord) {
+	for i := range ledger.Attempts {
+		if ledger.Attempts[i].Hash == attempt.Hash {
+			ledger.Attempts[i] = attempt
+			return
 		}
-		slices.SortFunc(attempts, func(a, b AttemptRecord) int {
-			aTime, _ := time.Parse(time.RFC3339Nano, a.CreatedAt)
-			bTime, _ := time.Parse(time.RFC3339Nano, b.CreatedAt)
-			if !aTime.Equal(bTime) {
-				if aTime.Before(bTime) {
-					return -1
-				}
-				return 1
-			}
-			return strings.Compare(a.Hash, b.Hash)
-		})
-		if len(attempts) > maxLedgerAttempts {
-			attempts = slices.Clone(attempts[len(attempts)-maxLedgerAttempts:])
+	}
+	ledger.Attempts = append(ledger.Attempts, attempt)
+}
+
+func upsertRecord(ledger *ShadowLedger, record ShadowRecord) {
+	for i := range ledger.Records {
+		if ledger.Records[i].ID == record.ID {
+			ledger.Records[i] = record
+			return
 		}
-		ledger.Attempts = attempts
-		replaced := false
-		for i := range ledger.Records {
-			if ledger.Records[i].ID == record.ID {
-				ledger.Records[i] = record
-				replaced = true
-				break
+	}
+	ledger.Records = append(ledger.Records, record)
+}
+
+func writeLedger(path string, ledger *ShadowLedger) error {
+	slices.SortFunc(ledger.Attempts, func(a, b AttemptRecord) int {
+		aTime, _ := time.Parse(time.RFC3339Nano, a.CreatedAt)
+		bTime, _ := time.Parse(time.RFC3339Nano, b.CreatedAt)
+		if !aTime.Equal(bTime) {
+			if aTime.Before(bTime) {
+				return -1
 			}
+			return 1
 		}
-		if !replaced {
-			ledger.Records = append(ledger.Records, record)
-		}
-		slices.SortFunc(ledger.Records, func(a, b ShadowRecord) int {
-			aTime, _ := time.Parse(time.RFC3339Nano, a.CreatedAt)
-			bTime, _ := time.Parse(time.RFC3339Nano, b.CreatedAt)
-			if !aTime.Equal(bTime) {
-				if aTime.Before(bTime) {
-					return -1
-				}
-				return 1
-			}
-			return strings.Compare(a.ID, b.ID)
-		})
-		if len(ledger.Records) > maxLedgerRecords {
-			ledger.Records = slices.Clone(ledger.Records[len(ledger.Records)-maxLedgerRecords:])
-		}
-		ledger.UpdatedAt = reference.UTC().Format(time.RFC3339Nano)
-		for {
-			data, marshalErr := json.MarshalIndent(ledger, "", "  ")
-			if marshalErr != nil {
-				return marshalErr
-			}
-			if len(data)+1 <= maxLedgerBytes {
-				break
-			}
-			if len(ledger.Records) <= 1 {
-				return fmt.Errorf("agent analysis ledger record exceeds %d bytes", maxLedgerBytes)
-			}
-			ledger.Records = slices.Clone(ledger.Records[1:])
-		}
-		return statefile.WritePrivateJSONDurable(path, ledger)
+		return strings.Compare(a.Hash, b.Hash)
 	})
+	if len(ledger.Attempts) > maxLedgerAttempts {
+		ledger.Attempts = slices.Clone(ledger.Attempts[len(ledger.Attempts)-maxLedgerAttempts:])
+	}
+	slices.SortFunc(ledger.Records, func(a, b ShadowRecord) int {
+		aTime, _ := time.Parse(time.RFC3339Nano, a.CreatedAt)
+		bTime, _ := time.Parse(time.RFC3339Nano, b.CreatedAt)
+		if !aTime.Equal(bTime) {
+			if aTime.Before(bTime) {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(a.ID, b.ID)
+	})
+	if len(ledger.Records) > maxLedgerRecords {
+		ledger.Records = slices.Clone(ledger.Records[len(ledger.Records)-maxLedgerRecords:])
+	}
+	for {
+		data, err := json.MarshalIndent(ledger, "", "  ")
+		if err != nil {
+			return err
+		}
+		if len(data)+1 <= maxLedgerBytes {
+			break
+		}
+		if len(ledger.Records) <= 1 {
+			return fmt.Errorf("agent analysis ledger record exceeds %d bytes", maxLedgerBytes)
+		}
+		ledger.Records = slices.Clone(ledger.Records[1:])
+	}
+	return statefile.WritePrivateJSONDurable(path, ledger)
 }
 
 func loadLedger(path string) (ShadowLedger, error) {
 	ledger := ShadowLedger{SchemaVersion: LedgerSchemaVersion}
-	file, err := os.Open(filepath.Clean(path))
-	if os.IsNotExist(err) {
+	file, err := openNoFollow(path, unix.O_RDONLY, 0)
+	if errors.Is(err, syscall.ENOENT) {
 		return ledger, nil
 	}
 	if err != nil {
@@ -386,6 +455,9 @@ func loadLedger(path string) (ShadowLedger, error) {
 		if _, err := time.Parse(time.RFC3339Nano, attempt.CreatedAt); err != nil {
 			return ShadowLedger{}, fmt.Errorf("invalid agent analysis attempt time: %w", err)
 		}
+		if !validShadowStatus(attempt.Status) {
+			return ShadowLedger{}, fmt.Errorf("invalid agent analysis attempt status %q", attempt.Status)
+		}
 	}
 	for _, record := range ledger.Records {
 		if _, err := validateShadowRecord(record); err != nil {
@@ -401,9 +473,7 @@ func validateShadowRecord(record ShadowRecord) (time.Time, error) {
 		record.ComparisonHash != "" && !validSHA256(record.ComparisonHash) {
 		return time.Time{}, fmt.Errorf("record identity is incomplete")
 	}
-	switch record.Status {
-	case ShadowStatusSucceeded, ShadowStatusCleanupPending, ShadowStatusEvidenceFailed, ShadowStatusSetupFailed, ShadowStatusRuntimeFailed, ShadowStatusInvalidResult, ShadowStatusCancelled:
-	default:
+	if !validShadowStatus(record.Status) {
 		return time.Time{}, fmt.Errorf("unsupported shadow status %q", record.Status)
 	}
 	if err := sourceinvestigation.ValidateRepository(record.Source); err != nil {
@@ -416,16 +486,21 @@ func validateShadowRecord(record ShadowRecord) (time.Time, error) {
 	return createdAt, nil
 }
 
-func withLedgerLock(path string, fn func() error) error {
-	path = filepath.Clean(path)
-	parent := filepath.Dir(path)
-	if err := os.MkdirAll(parent, 0o700); err != nil {
+func validShadowStatus(status ShadowStatus) bool {
+	switch status {
+	case ShadowStatusPending, ShadowStatusSucceeded, ShadowStatusCleanupPending, ShadowStatusEvidenceFailed, ShadowStatusSetupFailed, ShadowStatusRuntimeFailed, ShadowStatusInvalidResult, ShadowStatusCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
+func withLedgerLock(publicDir, path string, fn func(string) error) error {
+	resolvedPath, err := resolvePrivateLedgerPath(publicDir, path, true)
+	if err != nil {
 		return err
 	}
-	if err := os.Chmod(parent, 0o700); err != nil && !errors.Is(err, syscall.EPERM) && !errors.Is(err, syscall.ENOTSUP) && !errors.Is(err, syscall.ENOSYS) {
-		return err
-	}
-	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	lock, err := openNoFollow(resolvedPath+".lock", unix.O_CREAT|unix.O_RDWR, 0o600)
 	if err != nil {
 		return err
 	}
@@ -437,5 +512,103 @@ func withLedgerLock(path string, fn func() error) error {
 	if fn == nil {
 		return nil
 	}
-	return fn()
+	return fn(resolvedPath)
+}
+
+func resolvePrivateLedgerPath(publicDir, ledgerPath string, createParent bool) (string, error) {
+	if !filepath.IsAbs(ledgerPath) {
+		return "", fmt.Errorf("agent analysis ledger path must be absolute")
+	}
+	publicResolved, err := resolvePathWithMissing(publicDir)
+	if err != nil {
+		return "", err
+	}
+	parentResolved, err := resolvePathWithMissing(filepath.Dir(filepath.Clean(ledgerPath)))
+	if err != nil {
+		return "", err
+	}
+	resolvedPath := filepath.Join(parentResolved, filepath.Base(filepath.Clean(ledgerPath)))
+	if pathWithin(publicResolved, resolvedPath) {
+		return "", fmt.Errorf("agent analysis ledger resolves inside public output")
+	}
+	if createParent {
+		if err := os.MkdirAll(parentResolved, 0o700); err != nil {
+			return "", err
+		}
+		if err := os.Chmod(parentResolved, 0o700); err != nil && !errors.Is(err, syscall.EPERM) && !errors.Is(err, syscall.ENOTSUP) && !errors.Is(err, syscall.ENOSYS) {
+			return "", err
+		}
+		realParent, err := filepath.EvalSymlinks(parentResolved)
+		if err != nil {
+			return "", err
+		}
+		resolvedPath = filepath.Join(realParent, filepath.Base(resolvedPath))
+		publicResolved, err = resolvePathWithMissing(publicDir)
+		if err != nil {
+			return "", err
+		}
+		if pathWithin(publicResolved, resolvedPath) {
+			return "", fmt.Errorf("agent analysis ledger resolves inside public output")
+		}
+	}
+	for _, target := range []string{resolvedPath, resolvedPath + ".lock"} {
+		info, err := os.Lstat(target)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		if info.Mode()&os.ModeSymlink != 0 || info.IsDir() {
+			return "", fmt.Errorf("agent analysis ledger target must be a regular file")
+		}
+	}
+	return resolvedPath, nil
+}
+
+func resolvePathWithMissing(path string) (string, error) {
+	absolute, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return "", err
+	}
+	current := absolute
+	var suffix []string
+	for {
+		_, err := os.Lstat(current)
+		if err == nil {
+			resolved, err := filepath.EvalSymlinks(current)
+			if err != nil {
+				return "", err
+			}
+			for i := len(suffix) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, suffix[i])
+			}
+			return filepath.Clean(resolved), nil
+		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", err
+		}
+		suffix = append(suffix, filepath.Base(current))
+		current = parent
+	}
+}
+
+func pathWithin(root, target string) bool {
+	rel, err := filepath.Rel(root, target)
+	if err != nil {
+		return false
+	}
+	return rel == "." || rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
+}
+
+func openNoFollow(path string, flags int, perm uint32) (*os.File, error) {
+	fd, err := unix.Open(path, flags|unix.O_NOFOLLOW, perm)
+	if err != nil {
+		return nil, &os.PathError{Op: "open", Path: path, Err: err}
+	}
+	return os.NewFile(uintptr(fd), path), nil
 }

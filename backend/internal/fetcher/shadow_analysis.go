@@ -30,8 +30,8 @@ type shadowAnalysisRunner interface {
 }
 
 type shadowEvidenceFreezer func(context.Context, artifacts.Browser, ai.FailureAnalysisRequest, sourceinvestigation.Repository, *skills.Set) (agentanalysis.EvidenceBundle, error)
-type shadowLedgerAppender func(string, agentanalysis.ShadowRecord) error
-type shadowLedgerContains func(string, string) (bool, error)
+type shadowLedgerAppender func(string, string, agentanalysis.ShadowRecord) error
+type shadowLedgerClaimer func(string, string, agentanalysis.ShadowRecord) (bool, error)
 
 type shadowCandidate struct {
 	sortKey           string
@@ -81,8 +81,6 @@ func validateShadowAnalysisOptions(opts Options) error {
 		return fmt.Errorf("agent analysis shadow private ledger path is required")
 	case !filepath.IsAbs(cfg.LedgerPath):
 		return fmt.Errorf("agent analysis shadow private ledger path must be absolute")
-	case !shadowLedgerOutsideOutput(opts.OutDir, cfg.LedgerPath):
-		return fmt.Errorf("agent analysis shadow ledger must be outside the public output directory")
 	case cfg.MaxPerRun < 1 || cfg.MaxPerRun > 10:
 		return fmt.Errorf("agent analysis shadow max per run must be between 1 and 10")
 	case cfg.MaxTurns < 1 || cfg.MaxTurns > 1000:
@@ -91,6 +89,9 @@ func validateShadowAnalysisOptions(opts Options) error {
 		return fmt.Errorf("agent analysis shadow timeout must be greater than zero and at most 30m")
 	case cfg.Retries < 0 || cfg.Retries > 2:
 		return fmt.Errorf("agent analysis shadow retries must be between 0 and 2")
+	}
+	if err := agentanalysis.ValidatePrivateLedgerPath(opts.OutDir, cfg.LedgerPath); err != nil {
+		return fmt.Errorf("agent analysis shadow private ledger: %w", err)
 	}
 	resultAPI, err := url.ParseRequestURI(cfg.ResultAPI)
 	if err != nil || resultAPI.Host == "" || resultAPI.User != nil || resultAPI.RawQuery != "" || resultAPI.Fragment != "" || resultAPI.Scheme != "http" && resultAPI.Scheme != "https" {
@@ -108,21 +109,16 @@ func (p *pipeline) runShadowAnalysis(ctx context.Context, result *refreshResult)
 		log.Printf("🧪 agent analysis shadow: no eligible pinned failures")
 		return
 	}
-	contains := p.shadowContains
-	if contains == nil {
-		attempts, err := agentanalysis.LedgerAttemptHashes(p.opts.ShadowAnalysis.LedgerPath)
-		if err != nil {
-			log.Printf("⚠ agent analysis shadow ledger read failed: %v", err)
-			return
-		}
-		contains = func(_ string, attemptHash string) (bool, error) { return attempts[attemptHash], nil }
+	claim := agentanalysis.ClaimLedgerAttempt
+	if p.shadowClaim != nil {
+		claim = p.shadowClaim
 	}
 	attempted := 0
 	for _, candidate := range candidates {
 		if attempted >= p.opts.ShadowAnalysis.MaxPerRun {
 			break
 		}
-		if p.runShadowCandidate(ctx, candidate, contains) {
+		if p.runShadowCandidate(ctx, candidate, claim) {
 			attempted++
 		}
 	}
@@ -199,7 +195,7 @@ func (p *pipeline) selectShadowCandidates(details []models.JobDetail, report mod
 	return deduped
 }
 
-func (p *pipeline) runShadowCandidate(ctx context.Context, candidate shadowCandidate, contains shadowLedgerContains) bool {
+func (p *pipeline) runShadowCandidate(ctx context.Context, candidate shadowCandidate, claim shadowLedgerClaimer) bool {
 	started := time.Now()
 	cfg := p.opts.ShadowAnalysis
 	now := time.Now
@@ -223,12 +219,12 @@ func (p *pipeline) runShadowCandidate(ctx context.Context, candidate shadowCandi
 	}
 	record.AttemptHash = agentanalysis.AttemptIdentity(candidate.subject, candidate.requestHash, candidate.authoritativeHash, skillSetHash, candidate.source, cfg.Namespace, cfg.AgentRef, cfg.AgentVersion, cfg.GitSecret, cfg.Timeout, cfg.MaxTurns, cfg.Retries)
 	record.ID = agentanalysis.NewRecordID(candidate.subject, createdAt, record.AttemptHash)
-	alreadyAttempted, ledgerErr := contains(cfg.LedgerPath, record.AttemptHash)
+	claimed, ledgerErr := claim(p.opts.OutDir, cfg.LedgerPath, record)
 	if ledgerErr != nil {
-		log.Printf("⚠ agent analysis shadow ledger read failed: %v", ledgerErr)
+		log.Printf("⚠ agent analysis shadow ledger claim failed: %v", ledgerErr)
 		return false
 	}
-	if alreadyAttempted {
+	if !claimed {
 		log.Printf("🧪 agent analysis shadow: exact comparison already attempted job=%s build=%s test=%s", record.Subject.JobID, record.Subject.BuildID, record.Subject.TestName)
 		return false
 	}
@@ -309,25 +305,9 @@ func (p *pipeline) appendShadowRecord(record agentanalysis.ShadowRecord) {
 	if p.shadowAppend != nil {
 		appendLedger = p.shadowAppend
 	}
-	if err := appendLedger(p.opts.ShadowAnalysis.LedgerPath, record); err != nil {
+	if err := appendLedger(p.opts.OutDir, p.opts.ShadowAnalysis.LedgerPath, record); err != nil {
 		log.Printf("⚠ agent analysis shadow ledger write failed: %v", err)
 	}
-}
-
-func shadowLedgerOutsideOutput(outDir, ledgerPath string) bool {
-	outAbs, err := filepath.Abs(filepath.Clean(outDir))
-	if err != nil {
-		return false
-	}
-	ledgerAbs, err := filepath.Abs(filepath.Clean(ledgerPath))
-	if err != nil {
-		return false
-	}
-	rel, err := filepath.Rel(outAbs, ledgerAbs)
-	if err != nil {
-		return false
-	}
-	return rel != "." && rel != "" && rel != ".." && strings.HasPrefix(rel, ".."+string(os.PathSeparator))
 }
 
 func classifyShadowFailure(err error, evidence bool) (agentanalysis.ShadowStatus, string) {

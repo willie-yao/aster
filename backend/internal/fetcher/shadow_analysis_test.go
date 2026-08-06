@@ -73,7 +73,8 @@ func shadowTestPipeline(t *testing.T) *pipeline {
 		aiProject: &analysisruntime.Project{
 			Config: &project.Config{AI: &project.AI{}}, AnalysisSource: project.SourceRepo{Owner: "example", Name: "repo"},
 		},
-		shadowNow: func() time.Time { return time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC) },
+		shadowClaim: func(string, string, agentanalysis.ShadowRecord) (bool, error) { return true, nil },
+		shadowNow:   func() time.Time { return time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC) },
 	}
 }
 
@@ -131,7 +132,7 @@ func TestRunShadowAnalysisNeverMutatesAuthoritativeDetails(t *testing.T) {
 				return shadowTestBundle(t, request, source), nil
 			}
 			var records []agentanalysis.ShadowRecord
-			p.shadowAppend = func(_ string, record agentanalysis.ShadowRecord) error {
+			p.shadowAppend = func(_, _ string, record agentanalysis.ShadowRecord) error {
 				records = append(records, record)
 				return test.appendErr
 			}
@@ -172,14 +173,14 @@ func TestRunShadowAnalysisSkipsAttemptedIdentity(t *testing.T) {
 	p := shadowTestPipeline(t)
 	runner := &fakeShadowRunner{result: agentanalysis.Result{Analysis: agentanalysis.Analysis{Summary: "shadow"}}}
 	p.shadowRunner = runner
-	p.shadowContains = func(string, string) (bool, error) { return true, nil }
+	p.shadowClaim = func(string, string, agentanalysis.ShadowRecord) (bool, error) { return false, nil }
 	freezeCalls := 0
 	p.shadowFreeze = func(context.Context, artifacts.Browser, ai.FailureAnalysisRequest, sourceinvestigation.Repository, *skills.Set) (agentanalysis.EvidenceBundle, error) {
 		freezeCalls++
 		return agentanalysis.EvidenceBundle{}, nil
 	}
 	appendCalls := 0
-	p.shadowAppend = func(string, agentanalysis.ShadowRecord) error { appendCalls++; return nil }
+	p.shadowAppend = func(string, string, agentanalysis.ShadowRecord) error { appendCalls++; return nil }
 	p.runShadowAnalysis(t.Context(), &refreshResult{details: shadowTestDetails("TestFailure")})
 	if freezeCalls != 0 || runner.calls != 0 || appendCalls != 0 {
 		t.Fatalf("freeze=%d runner=%d append=%d", freezeCalls, runner.calls, appendCalls)
@@ -191,15 +192,15 @@ func TestRunShadowAnalysisAdvancesPastAttemptedCandidate(t *testing.T) {
 	runner := &fakeShadowRunner{result: agentanalysis.Result{Analysis: agentanalysis.Analysis{Summary: "shadow"}}}
 	p.shadowRunner = runner
 	containsCalls := 0
-	p.shadowContains = func(string, string) (bool, error) {
+	p.shadowClaim = func(string, string, agentanalysis.ShadowRecord) (bool, error) {
 		containsCalls++
-		return containsCalls == 1, nil
+		return containsCalls != 1, nil
 	}
 	p.shadowFreeze = func(_ context.Context, _ artifacts.Browser, request ai.FailureAnalysisRequest, source sourceinvestigation.Repository, _ *skills.Set) (agentanalysis.EvidenceBundle, error) {
 		return shadowTestBundle(t, request, source), nil
 	}
 	appendCalls := 0
-	p.shadowAppend = func(string, agentanalysis.ShadowRecord) error { appendCalls++; return nil }
+	p.shadowAppend = func(string, string, agentanalysis.ShadowRecord) error { appendCalls++; return nil }
 	p.runShadowAnalysis(t.Context(), &refreshResult{details: shadowTestDetails("TestA", "TestB")})
 	if containsCalls != 2 || runner.calls != 1 || appendCalls != 1 {
 		t.Fatalf("contains=%d runner=%d append=%d", containsCalls, runner.calls, appendCalls)
@@ -220,8 +221,21 @@ func TestValidateShadowAnalysisOptions(t *testing.T) {
 	}
 	inside := valid
 	inside.ShadowAnalysis.LedgerPath = filepath.Join(out, "analysis_shadow.json")
-	if err := validateAnalysisRuntimeOptions(inside); err == nil || !strings.Contains(err.Error(), "outside") {
+	if err := validateAnalysisRuntimeOptions(inside); err == nil || !strings.Contains(err.Error(), "inside public output") {
 		t.Fatalf("inside ledger error = %v", err)
+	}
+	if err := os.MkdirAll(out, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	symlinkRoot := t.TempDir()
+	symlinkParent := filepath.Join(symlinkRoot, "private-link")
+	if err := os.Symlink(out, symlinkParent); err != nil {
+		t.Fatal(err)
+	}
+	symlinked := valid
+	symlinked.ShadowAnalysis.LedgerPath = filepath.Join(symlinkParent, "analysis_shadow.json")
+	if err := validateAnalysisRuntimeOptions(symlinked); err == nil || !strings.Contains(err.Error(), "inside public output") {
+		t.Fatalf("symlink ledger error = %v", err)
 	}
 	badAPI := valid
 	badAPI.ShadowAnalysis.ResultAPI = "https://user:secret@orka.invalid?token=secret"
