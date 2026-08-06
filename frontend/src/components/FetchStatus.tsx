@@ -6,7 +6,6 @@ import Schedule from "@mui/icons-material/Schedule";
 import WarningAmber from "@mui/icons-material/WarningAmber";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
-import Chip from "@mui/material/Chip";
 import CircularProgress from "@mui/material/CircularProgress";
 import Collapse from "@mui/material/Collapse";
 import Container from "@mui/material/Container";
@@ -17,14 +16,21 @@ import Popover from "@mui/material/Popover";
 import Stack from "@mui/material/Stack";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
+import useMediaQuery from "@mui/material/useMediaQuery";
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import {
   analysisProgressBreakdown,
   fetchStatusCompactPresentation,
+  fetchStatusHasCompletedPipeline,
+  fetchStatusMacroStages,
   fetchStatusPresentation,
   fetchStatusStripKey,
+  formatFetchRelativeTime,
   formatFetchTimestamp,
   patternFailureLabel,
+  shouldShowFetchStatusStrip,
+  type FetchMacroStagePresentation,
+  type FetchMacroStageState,
 } from "../lib/fetchStatus";
 import type { FetchPassSummary, FetchProgressStatus, FetchStatusResponse } from "../types/fetchStatus";
 import { soft } from "../theme";
@@ -40,6 +46,18 @@ interface FetchStatusStripProps {
 }
 
 const activeSpinnerDuration = 1400;
+
+const visuallyHidden = {
+  border: 0,
+  clip: "rect(0 0 0 0)",
+  height: "1px",
+  m: "-1px",
+  overflow: "hidden",
+  p: 0,
+  position: "absolute",
+  whiteSpace: "nowrap",
+  width: "1px",
+} as const;
 
 export function FetchActivityIcon({ size }: { size: number }) {
   const spinnerRef = useRef<HTMLSpanElement>(null);
@@ -58,7 +76,7 @@ export function FetchActivityIcon({ size }: { size: number }) {
 
       animation = spinner.animate(
         [{ transform: "rotate(0deg)" }, { transform: "rotate(360deg)" }],
-        { duration: activeSpinnerDuration, iterations: Infinity, easing: "linear" }
+        { duration: activeSpinnerDuration, iterations: Infinity, easing: "linear" },
       );
       animation.startTime = 0;
     };
@@ -114,6 +132,7 @@ function stateIcon(response: FetchStatusResponse, size = 18): ReactNode {
     case "interrupted":
     case "cancelled":
       return <WarningAmber sx={{ fontSize: size }} />;
+    case "idle":
     case "completed":
       return <CheckCircleOutlined sx={{ fontSize: size }} />;
     default:
@@ -131,6 +150,34 @@ function DetailRow({ label, value }: { label: string; value: ReactNode }) {
         {value}
       </Typography>
     </Box>
+  );
+}
+
+function TimestampValue({ value }: { value?: string }) {
+  const relative = formatFetchRelativeTime(value);
+  const exact = formatFetchTimestamp(value);
+  if (!value || relative === "Unknown") return <>{relative}</>;
+  return (
+    <Tooltip title={exact} arrow>
+      <Box
+        component="time"
+        dateTime={value}
+        tabIndex={0}
+        aria-label={`${relative}. ${exact}`}
+        sx={{
+          cursor: "help",
+          borderRadius: 0.5,
+          outline: "none",
+          "&:focus-visible": {
+            outline: "2px solid",
+            outlineColor: "primary.main",
+            outlineOffset: 2,
+          },
+        }}
+      >
+        {relative}
+      </Box>
+    </Tooltip>
   );
 }
 
@@ -164,7 +211,7 @@ function recentPassDetail(pass: FetchPassSummary): string {
 
 function cacheRejectionDetail(status: FetchProgressStatus): string {
   const rejections = status.analyses.cache_rejections;
-  if (!rejections) return "0";
+  if (!rejections) return "None recorded";
   const entries: Array<[string, number]> = [
     ["missing", rejections.missing],
     ["expired", rejections.expired],
@@ -176,13 +223,122 @@ function cacheRejectionDetail(status: FetchProgressStatus): string {
   const details = entries
     .filter(([, count]) => count > 0)
     .map(([label, count]) => `${count} ${label}`);
-  return details.length > 0 ? details.join(" · ") : "0";
+  return details.length > 0 ? details.join(" · ") : "None";
+}
+
+function phaseDurationDetail(status: FetchProgressStatus): string {
+  const durations = Object.entries(status.phase_durations_ms ?? {});
+  if (durations.length === 0) return "Not recorded";
+  return durations
+    .map(([phase, duration]) => `${phase.replaceAll("-", " ")} ${formatPassDuration(duration)}`)
+    .join(" · ");
+}
+
+function stageColor(state: FetchMacroStageState): string {
+  switch (state) {
+    case "complete":
+      return "success.main";
+    case "active":
+      return "info.main";
+    case "failed":
+      return "error.main";
+    case "stale":
+    case "interrupted":
+    case "cancelled":
+      return "warning.main";
+    default:
+      return "text.disabled";
+  }
+}
+
+function stageIcon(stage: FetchMacroStagePresentation): ReactNode {
+  switch (stage.state) {
+    case "complete":
+      return <CheckCircleOutlined sx={{ fontSize: 17 }} />;
+    case "active":
+      return <FetchActivityIcon size={17} />;
+    case "failed":
+      return <ErrorOutlineOutlined sx={{ fontSize: 17 }} />;
+    case "stale":
+    case "interrupted":
+    case "cancelled":
+      return <WarningAmber sx={{ fontSize: 17 }} />;
+    default:
+      return <Schedule sx={{ fontSize: 17 }} />;
+  }
+}
+
+function MacroStageProgress({ stages }: { stages: FetchMacroStagePresentation[] }) {
+  return (
+    <Box
+      component="ol"
+      aria-label="Refresh stages"
+      sx={{
+        display: "grid",
+        gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+        gap: 0.5,
+        m: 0,
+        p: 0.75,
+        listStyle: "none",
+        border: "1px solid",
+        borderColor: "divider",
+        borderRadius: 1,
+        bgcolor: "surface.containerHigh",
+      }}
+    >
+      {stages.map((stage) => (
+        <Box
+          component="li"
+          key={stage.id}
+          aria-label={`${stage.label}: ${stage.stateLabel}`}
+          sx={{ minWidth: 0, px: 0.25, py: 0.5, textAlign: "center" }}
+        >
+          <Box aria-hidden="true" sx={{ color: stageColor(stage.state), display: "flex", justifyContent: "center", mb: 0.375 }}>
+            {stageIcon(stage)}
+          </Box>
+          <Typography variant="caption" sx={{ display: "block", color: "text.primary", fontWeight: 700, lineHeight: 1.2 }}>
+            {stage.label}
+          </Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", fontSize: "0.6875rem", lineHeight: 1.2, mt: 0.25 }}>
+            {stage.stateLabel}
+          </Typography>
+        </Box>
+      ))}
+    </Box>
+  );
+}
+
+function statusWarnings(status: FetchProgressStatus): string[] {
+  const warnings: string[] = [];
+  if (status.analyses.failed > 0) {
+    warnings.push(`${status.analyses.failed} ${status.analyses.failed === 1 ? "analysis" : "analyses"} failed`);
+  }
+  if (status.analyses.cancelled > 0) {
+    warnings.push(`${status.analyses.cancelled} ${status.analyses.cancelled === 1 ? "analysis was" : "analyses were"} cancelled`);
+  }
+  if ((status.patterns?.failed ?? 0) > 0) {
+    warnings.push(`${status.patterns?.failed} pattern ${status.patterns?.failed === 1 ? "attempt" : "attempts"} failed`);
+  }
+  if ((status.patterns?.repair_failed ?? 0) > 0) {
+    warnings.push(`${status.patterns?.repair_failed} pattern ${status.patterns?.repair_failed === 1 ? "repair" : "repairs"} failed`);
+  }
+  if (status.patterns?.repair_failure_category) {
+    warnings.push(`Pattern repair reported ${patternFailureLabel(status.patterns.repair_failure_category)}`);
+  }
+  if (status.patterns?.failure_category) {
+    warnings.push(`Pattern processing reported ${patternFailureLabel(status.patterns.failure_category)}`);
+  }
+  if (status.pattern_phase === "failed" && !status.patterns?.failure_category) warnings.push("Pattern processing failed");
+  if (status.publication_phase === "failed") warnings.push("Dashboard publication failed");
+  if (status.side_effect_phase === "failed") warnings.push("Refresh follow-up work failed");
+  return [...new Set(warnings)];
 }
 
 export function FetchStatusControl({ response }: FetchStatusControlProps) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const [technicalOpen, setTechnicalOpen] = useState(false);
   const technicalID = useId();
+  const reduceMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
   const compact = response ? fetchStatusCompactPresentation(response) : null;
   const presentation = response ? fetchStatusPresentation(response) : null;
   const status = response?.status;
@@ -191,68 +347,70 @@ export function FetchStatusControl({ response }: FetchStatusControlProps) {
   const popoverID = anchor ? "fetch-status-details" : undefined;
   const analysis = analysisProgressBreakdown(status);
   const patterns = status.patterns;
+  const stages = fetchStatusMacroStages(response);
+  const warnings = statusWarnings(status);
   const progress = presentation.determinateTotal && presentation.determinateTotal > 0
     ? Math.min(100, (presentation.determinateCompleted / presentation.determinateTotal) * 100)
     : null;
-
-  const control = (
-    <Button
-      size="small"
-      aria-label={compact.ariaLabel}
-      aria-haspopup="dialog"
-      aria-controls={popoverID}
-      aria-expanded={Boolean(anchor)}
-      onClick={(event) => setAnchor(event.currentTarget)}
-      endIcon={<ExpandMore sx={{ fontSize: 16 }} />}
-      sx={{
-        minWidth: { xs: 34, md: "auto" },
-        width: { xs: 34, md: "auto" },
-        height: 34,
-        px: { xs: 0, md: 1.1 },
-        border: "1px solid",
-        borderColor: "divider",
-        borderRadius: 999,
-        color: `${compact.severity}.main`,
-        bgcolor: (theme) => (theme.vars ?? theme).palette.surface.container,
-        textTransform: "none",
-        whiteSpace: "nowrap",
-        boxShadow: "none",
-        "& .MuiButton-endIcon": {
-          display: { xs: "none", md: "inherit" },
-        },
-        "&:hover": {
-          borderColor: `${compact.severity}.main`,
-          bgcolor: (theme) => soft(theme, compact.severity, 0.08),
-        },
-      }}
-    >
-      <Box
-        component="span"
-        sx={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: { xs: 0, md: 1 },
-        }}
-      >
-        {stateIcon(response)}
-        <Box
-          component="span"
-          sx={{
-            display: { xs: "none", md: "inline" },
-            color: "text.primary",
-            fontSize: "0.75rem",
-            fontWeight: 700,
-          }}
-        >
-          {compact.label}
-        </Box>
-      </Box>
-    </Button>
-  );
+  const completedPipeline = fetchStatusHasCompletedPipeline(response);
 
   return (
     <>
-      {control}
+      <Button
+        size="small"
+        aria-label={compact.ariaLabel}
+        aria-haspopup="dialog"
+        aria-controls={popoverID}
+        aria-expanded={Boolean(anchor)}
+        onClick={(event) => setAnchor(event.currentTarget)}
+        endIcon={<ExpandMore sx={{ fontSize: 16 }} />}
+        sx={{
+          minWidth: { xs: 44, md: "auto" },
+          width: { xs: 44, md: "auto" },
+          height: { xs: 44, md: 34 },
+          px: { xs: 0, md: 1.1 },
+          border: "1px solid",
+          borderColor: "divider",
+          borderRadius: 999,
+          color: `${compact.severity}.main`,
+          bgcolor: (theme) => (theme.vars ?? theme).palette.surface.container,
+          textTransform: "none",
+          whiteSpace: "nowrap",
+          boxShadow: "none",
+          "& .MuiButton-endIcon": {
+            display: { xs: "none", md: "inherit" },
+          },
+          "&:hover": {
+            borderColor: `${compact.severity}.main`,
+            bgcolor: (theme) => soft(theme, compact.severity, 0.08),
+          },
+        }}
+      >
+        <Box
+          component="span"
+          sx={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: { xs: 0, md: 1 },
+          }}
+        >
+          {stateIcon(response)}
+          <Box
+            component="span"
+            sx={{
+              display: { xs: "none", md: "inline" },
+              color: "text.primary",
+              fontSize: "0.75rem",
+              fontWeight: 700,
+            }}
+          >
+            {compact.label}
+          </Box>
+        </Box>
+      </Button>
+      <Box component="span" role="status" aria-live="polite" aria-atomic="true" sx={visuallyHidden}>
+        {presentation.announcement}
+      </Box>
       <Popover
         id={popoverID}
         open={Boolean(anchor)}
@@ -266,6 +424,8 @@ export function FetchStatusControl({ response }: FetchStatusControlProps) {
               mt: 1,
               width: { xs: "calc(100vw - 32px)", sm: 390 },
               maxWidth: 390,
+              maxHeight: "calc(100vh - 32px)",
+              overflowY: "auto",
               border: "1px solid",
               borderColor: "divider",
               borderRadius: "8px",
@@ -277,66 +437,80 @@ export function FetchStatusControl({ response }: FetchStatusControlProps) {
         }}
       >
         <Box role="dialog" aria-label="Fetch status details" sx={{ p: 2 }}>
-          <Stack direction="row" spacing={1.25} sx={{ alignItems: "center" }}>
-            <Box sx={{ color: `${compact.severity}.main`, display: "flex" }}>{stateIcon(response, 20)}</Box>
+          <Stack direction="row" spacing={1.25} sx={{ alignItems: "flex-start" }}>
+            <Box sx={{ color: `${compact.severity}.main`, display: "flex", mt: 0.25 }}>{stateIcon(response, 20)}</Box>
             <Box sx={{ minWidth: 0, flex: 1 }}>
-              <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+              <Typography variant="caption" color="text.secondary" sx={{ display: "block", fontWeight: 700 }}>
                 Data refresh
               </Typography>
-              <Typography variant="caption" color="text.secondary">
+              <Typography variant="subtitle2" sx={{ fontWeight: 700, mt: 0.125 }}>
                 {presentation.title}
               </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 0.25 }}>
+                {presentation.detail}
+              </Typography>
             </Box>
-            <Chip
-              size="small"
-              label={compact.label}
-              sx={{
-                color: `${compact.severity}.main`,
-                bgcolor: (theme) => soft(theme, compact.severity, 0.12),
-                fontWeight: 700,
-              }}
-            />
           </Stack>
 
-          {response.state === "active" && (
-            <Box sx={{ mt: 1.5 }}>
-              <LinearProgress
-                aria-label="Fetch progress"
-                variant={progress === null ? "indeterminate" : "determinate"}
-                value={progress ?? undefined}
-                sx={{ height: 4, borderRadius: 999 }}
-              />
-            </Box>
+          {progress !== null && (
+            <LinearProgress
+              aria-label={`${presentation.title} progress`}
+              aria-valuetext={`${presentation.determinateCompleted} of ${presentation.determinateTotal}`}
+              variant="determinate"
+              value={progress}
+              sx={{ height: 4, borderRadius: 999, mt: 1.5 }}
+            />
           )}
 
-          <Stack spacing={0.75} sx={{ mt: 2 }}>
-            <DetailRow label="Last checked" value={formatFetchTimestamp(status.last_checked_at)} />
-            <DetailRow label="Last published" value={formatFetchTimestamp(status.last_successful_publication_at)} />
-            {status.next_watch_at && <DetailRow label="Next watch" value={formatFetchTimestamp(status.next_watch_at)} />}
-            {status.next_reconcile_at && <DetailRow label="Next reconcile" value={formatFetchTimestamp(status.next_reconcile_at)} />}
+          <Box sx={{ mt: 1.5 }}>
+            <MacroStageProgress stages={stages} />
+          </Box>
+
+          {warnings.length > 0 && (
+            <Stack
+              aria-label="Refresh warnings"
+              direction="row"
+              spacing={1}
+              sx={{
+                mt: 1.25,
+                p: 1,
+                borderRadius: 1,
+                color: "warning.main",
+                bgcolor: (theme) => soft(theme, "warning", 0.1),
+                alignItems: "flex-start",
+              }}
+            >
+              <WarningAmber sx={{ fontSize: 17, mt: 0.125, flex: "0 0 auto" }} />
+              <Typography variant="caption" sx={{ color: "text.primary" }}>
+                {warnings.join(" · ")}
+              </Typography>
+            </Stack>
+          )}
+
+          <Stack spacing={0.75} sx={{ mt: 1.5 }}>
+            <DetailRow label="Last published" value={<TimestampValue value={status.last_successful_publication_at} />} />
+            {completedPipeline ? (
+              <>
+                {status.next_watch_at && <DetailRow label="Next check" value={<TimestampValue value={status.next_watch_at} />} />}
+                {status.next_reconcile_at && status.next_reconcile_at !== status.next_watch_at && (
+                  <DetailRow label="Next full reconciliation" value={<TimestampValue value={status.next_reconcile_at} />} />
+                )}
+              </>
+            ) : (
+              <>
+                <DetailRow label="Current pass began" value={<TimestampValue value={status.pass_started_at} />} />
+                <DetailRow label="Last activity" value={<TimestampValue value={status.last_progress_at} />} />
+              </>
+            )}
           </Stack>
 
-          <Divider sx={{ my: 1.5 }} />
-
-          <Stack spacing={0.75}>
-            <DetailRow
-              label="Results ready"
-              value={analysis.total > 0 ? `${analysis.ready} / ${analysis.total}` : "Not planned"}
-            />
-            <DetailRow label="Reused from cache" value={analysis.reusedFromCache} />
-            <DetailRow label="Compatible results" value={analysis.compatibleResults} />
-            <DetailRow label="Exact results reused" value={analysis.exactResultsReused} />
-            <DetailRow label="Same-failure results reused" value={analysis.sameFailureResultsReused} />
-            <DetailRow label="Existing Tasks adopted" value={analysis.lateTasksAdopted} />
-            <DetailRow label="New analyzer Tasks" value={analysis.newTasksCreated} />
-            <DetailRow label="Fresh analyses completed" value={analysis.freshAnalysesCompleted} />
-            <DetailRow label="Currently analyzing" value={analysis.analyzing} />
-            <DetailRow label="Waiting to check" value={analysis.waiting} />
-            <DetailRow
-              label="Failures"
-              value={analysis.cancelled > 0 ? `${analysis.failed} · ${analysis.cancelled} cancelled` : analysis.failed}
-            />
-          </Stack>
+          {!completedPipeline && (
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1.25, lineHeight: 1.5 }}>
+              {response.state === "active"
+                ? "The last published dashboard remains available while this refresh finishes."
+                : "The last published dashboard remains available."}
+            </Typography>
+          )}
 
           <Button
             size="small"
@@ -348,7 +522,7 @@ export function FetchStatusControl({ response }: FetchStatusControlProps) {
                 sx={{
                   fontSize: 16,
                   transform: technicalOpen ? "rotate(180deg)" : "rotate(0deg)",
-                  transition: "transform 150ms ease",
+                  transition: reduceMotion ? "none" : "transform 150ms ease",
                 }}
               />
             )}
@@ -356,8 +530,38 @@ export function FetchStatusControl({ response }: FetchStatusControlProps) {
           >
             Technical details
           </Button>
-          <Collapse in={technicalOpen} timeout="auto">
+          <Collapse in={technicalOpen} timeout={reduceMotion ? 0 : "auto"}>
             <Stack id={technicalID} spacing={0.75} sx={{ mt: 0.75 }}>
+              <Divider sx={{ mb: 0.5 }} />
+              <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>
+                Pipeline
+              </Typography>
+              <DetailRow label="Phase" value={status.phase} />
+              <DetailRow label="Pattern stage" value={status.pattern_phase} />
+              <DetailRow label="Publication stage" value={status.publication_phase} />
+              <DetailRow label="Follow-up stage" value={status.side_effect_phase} />
+              <DetailRow label="Phase began" value={formatFetchTimestamp(status.phase_started_at)} />
+              <DetailRow label="Last checked" value={formatFetchTimestamp(status.last_checked_at)} />
+              <DetailRow label="Phase durations" value={phaseDurationDetail(status)} />
+              <DetailRow label="Run ID" value={status.run_id} />
+              <DetailRow label="Pass ID" value={status.pass_id} />
+
+              <Divider sx={{ my: 0.5 }} />
+              <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>
+                Analysis accounting
+              </Typography>
+              <DetailRow label="Results ready" value={analysis.total > 0 ? `${analysis.ready} / ${analysis.total}` : "Not planned"} />
+              <DetailRow label="Reused from cache" value={analysis.reusedFromCache} />
+              <DetailRow label="Compatible results" value={analysis.compatibleResults} />
+              <DetailRow label="Exact results reused" value={analysis.exactResultsReused} />
+              <DetailRow label="Same-failure results reused" value={analysis.sameFailureResultsReused} />
+              <DetailRow label="Existing Tasks adopted" value={analysis.lateTasksAdopted} />
+              <DetailRow label="New analyzer Tasks" value={analysis.newTasksCreated} />
+              <DetailRow label="Fresh analyses completed" value={analysis.freshAnalysesCompleted} />
+              <DetailRow label="Currently analyzing" value={analysis.analyzing} />
+              <DetailRow label="Waiting to check" value={analysis.waiting} />
+              <DetailRow label="Analysis failures" value={analysis.failed} />
+              <DetailRow label="Analysis cancellations" value={analysis.cancelled} />
               <DetailRow label="Task attempts" value={status.analyses.task_attempts} />
               <DetailRow
                 label="Results retrieved"
@@ -371,32 +575,36 @@ export function FetchStatusControl({ response }: FetchStatusControlProps) {
                 label="Planned Task work"
                 value={`${status.analyses.new_work} without cache · ${status.analyses.stale_work} stale`}
               />
-              {(status.analyses.potential_tasks_saved ?? 0) > 0 && (
-                <DetailRow
-                  label="Same-failure candidates"
-                  value={`${status.analyses.same_failure_candidates ?? 0} subjects · ${status.analyses.same_failure_groups ?? 0} groups · up to ${status.analyses.potential_tasks_saved ?? 0} fewer Tasks · largest ${status.analyses.largest_same_failure_group ?? 0}`}
-                />
-              )}
+              <DetailRow
+                label="Same-failure candidates"
+                value={`${analysis.sameFailureCandidates} subjects · ${analysis.sameFailureGroups} groups · up to ${analysis.potentialTasksSaved} fewer Tasks · largest ${analysis.largestSameFailureGroup}`}
+              />
               <DetailRow label="Cache rejections" value={cacheRejectionDetail(status)} />
-              {status.analyses.checkpoint_committed && <DetailRow label="Checkpoint" value="Saved" />}
-              {patterns && (patterns.eligible > 0 || patterns.attempts > 0 || (patterns.cache_hits ?? 0) > 0) && (
-                <DetailRow
-                  label="Patterns"
-                  value={`${patterns.current ?? patterns.completed} current · ${patterns.retained ?? 0} retained · ${patterns.cache_hits ?? 0} cached`}
-                />
+              <DetailRow label="Checkpoint" value={status.analyses.checkpoint_committed ? "Saved" : "Not saved"} />
+
+              {patterns && (
+                <>
+                  <Divider sx={{ my: 0.5 }} />
+                  <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>
+                    Pattern accounting
+                  </Typography>
+                  <DetailRow
+                    label="Patterns"
+                    value={`${patterns.current ?? patterns.completed} current · ${patterns.retained ?? 0} retained · ${patterns.cache_hits ?? 0} cached · ${patterns.failed} failed`}
+                  />
+                  <DetailRow
+                    label="Pattern repairs"
+                    value={`${patterns.repairs ?? 0} attempted · ${patterns.repair_succeeded ?? 0} succeeded · ${patterns.repair_failed ?? 0} failed`}
+                  />
+                  {patterns.repair_failure_category && (
+                    <DetailRow label="Repair failure" value={patternFailureLabel(patterns.repair_failure_category)} />
+                  )}
+                  {patterns.failure_category && (
+                    <DetailRow label="Pattern failure" value={patternFailureLabel(patterns.failure_category)} />
+                  )}
+                </>
               )}
-              {patterns && (patterns.repairs ?? 0) > 0 && (
-                <DetailRow
-                  label="Repairs"
-                  value={`${patterns.repair_succeeded ?? 0} succeeded · ${patterns.repair_failed ?? 0} failed`}
-                />
-              )}
-              {patterns?.repair_failure_category && (
-                <DetailRow label="Repair failure" value={patternFailureLabel(patterns.repair_failure_category)} />
-              )}
-              {patterns?.failure_category && (
-                <DetailRow label="Pattern failure" value={patternFailureLabel(patterns.failure_category)} />
-              )}
+
               {response.history && response.history.length > 0 && (
                 <>
                   <Divider sx={{ my: 0.5 }} />
@@ -423,15 +631,10 @@ export function FetchStatusControl({ response }: FetchStatusControlProps) {
 export function FetchStatusStrip({ response, dismissedKey, onDismiss }: FetchStatusStripProps) {
   const presentation = response ? fetchStatusPresentation(response) : null;
   const status = response?.status;
-  if (!response || !presentation || !status) return null;
-  if (!["active", "failed", "stale", "interrupted", "cancelled"].includes(response.state)) return null;
+  if (!response || !presentation || !status || !shouldShowFetchStatusStrip(response)) return null;
 
   const stripKey = fetchStatusStripKey(response);
   if (dismissedKey === stripKey) return null;
-
-  const progress = presentation.determinateTotal && presentation.determinateTotal > 0
-    ? Math.min(100, (presentation.determinateCompleted / presentation.determinateTotal) * 100)
-    : null;
 
   return (
     <Box
@@ -440,28 +643,9 @@ export function FetchStatusStrip({ response, dismissedKey, onDismiss }: FetchSta
       sx={{
         borderBottom: "1px solid",
         borderColor: "divider",
-        bgcolor: (theme) => soft(theme, presentation.severity, response.state === "active" ? 0.04 : 0.08),
+        bgcolor: (theme) => soft(theme, presentation.severity, 0.08),
       }}
     >
-      <Box
-        component="span"
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-        sx={{
-          border: 0,
-          clip: "rect(0 0 0 0)",
-          height: "1px",
-          m: "-1px",
-          overflow: "hidden",
-          p: 0,
-          position: "absolute",
-          whiteSpace: "nowrap",
-          width: "1px",
-        }}
-      >
-        {presentation.announcement}
-      </Box>
       <Container
         maxWidth="xl"
         sx={{
@@ -497,14 +681,6 @@ export function FetchStatusStrip({ response, dismissedKey, onDismiss }: FetchSta
           </IconButton>
         </Tooltip>
       </Container>
-      {response.state === "active" && (
-        <LinearProgress
-          aria-label="Fetch progress"
-          variant={progress === null ? "indeterminate" : "determinate"}
-          value={progress ?? undefined}
-          sx={{ height: 2 }}
-        />
-      )}
     </Box>
   );
 }

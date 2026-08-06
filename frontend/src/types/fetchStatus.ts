@@ -17,6 +17,7 @@ export type FetchPhase =
   | "interrupted";
 
 export type FetchOutcome = "running" | "succeeded" | "failed" | "cancelled" | "interrupted";
+export type FetchStageState = "pending" | "running" | "completed" | "skipped" | "failed" | "cancelled";
 export type FetchStatusState = "missing" | "unavailable" | "active" | "idle" | "completed" | "failed" | "cancelled" | "interrupted" | "stale";
 
 export interface FetchProgressStatus {
@@ -114,9 +115,9 @@ export interface FetchProgressStatus {
     ids?: string[];
     hash?: string;
   };
-  pattern_phase: string;
-  publication_phase: string;
-  side_effect_phase: string;
+  pattern_phase: FetchStageState;
+  publication_phase: FetchStageState;
+  side_effect_phase: FetchStageState;
   phase_durations_ms?: Record<string, number>;
   next_watch_at?: string;
   next_reconcile_at?: string;
