@@ -32,24 +32,25 @@ type Spec struct {
 
 // Result is one validated private experimental analysis.
 type Result struct {
-	Analysis        Analysis
-	Runtime         string
-	AgentNamespace  string
-	AgentRef        string
-	AgentVersion    string
-	ContractVersion string
-	EvidenceHash    string
-	SkillHash       string
-	SourceSHA       string
-	IdentityHash    string
-	ExecutionID     string
-	MaxTurns        int
-	Timeout         time.Duration
-	Retries         int
-	Attempts        int
-	Duration        time.Duration
-	CleanupPending  bool
-	CleanupWork     *agentruntime.WorkRef
+	Analysis          Analysis
+	Runtime           string
+	AgentNamespace    string
+	AgentRef          string
+	AgentVersion      string
+	ContractVersion   string
+	ToolPolicyVersion string
+	EvidenceHash      string
+	SkillHash         string
+	SourceSHA         string
+	IdentityHash      string
+	ExecutionID       string
+	MaxTurns          int
+	Timeout           time.Duration
+	Retries           int
+	Attempts          int
+	Duration          time.Duration
+	CleanupPending    bool
+	CleanupWork       *agentruntime.WorkRef
 }
 
 // Runtime delegates one bounded analysis to a generic AgentRuntime.
@@ -96,7 +97,8 @@ func (r *Runtime) Generate(ctx context.Context, spec Spec) (Result, error) {
 	})
 	result := Result{
 		Runtime: strings.TrimSpace(r.Name), AgentNamespace: strings.TrimSpace(r.AgentNamespace), AgentRef: strings.TrimSpace(r.AgentRef), AgentVersion: strings.TrimSpace(r.AgentVersion),
-		ContractVersion: ContractVersion, EvidenceHash: spec.Bundle.Hash, SkillHash: SkillHash(), SourceSHA: spec.Bundle.Source.Revision,
+		ContractVersion: ContractVersion, ToolPolicyVersion: ToolPolicyVersion,
+		EvidenceHash: spec.Bundle.Hash, SkillHash: SkillHash(), SourceSHA: spec.Bundle.Source.Revision,
 		IdentityHash: identity, ExecutionID: executionID, MaxTurns: spec.MaxTurns, Timeout: spec.Timeout,
 		Retries: r.Retries, Attempts: generated.Attempts, Duration: time.Since(started),
 	}
@@ -155,8 +157,12 @@ func (r *Runtime) validateSpec(spec Spec) error {
 }
 
 func (r *Runtime) identityHash(spec Spec) string {
+	return r.identityHashWithPolicy(spec, ToolPolicyVersion)
+}
+
+func (r *Runtime) identityHashWithPolicy(spec Spec, toolPolicyVersion string) string {
 	parts := []string{
-		ContractVersion, spec.Bundle.Hash, SkillHash(), spec.Bundle.Source.Revision,
+		ContractVersion, strings.TrimSpace(toolPolicyVersion), spec.Bundle.Hash, SkillHash(), spec.Bundle.Source.Revision,
 		strings.TrimSpace(r.AgentNamespace), strings.TrimSpace(r.AgentRef), strings.TrimSpace(r.AgentVersion),
 		spec.Timeout.String(), fmt.Sprintf("%d", spec.MaxTurns), fmt.Sprintf("%d", r.Retries),
 	}

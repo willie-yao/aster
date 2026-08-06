@@ -86,22 +86,23 @@ type EvidenceManifestEntry struct {
 
 // Provenance records the complete private runtime identity.
 type Provenance struct {
-	Runtime         string `json:"runtime,omitempty"`
-	AgentNamespace  string `json:"agent_namespace,omitempty"`
-	AgentRef        string `json:"agent_ref,omitempty"`
-	GitSecret       string `json:"git_secret,omitempty"`
-	AgentVersion    string `json:"agent_version,omitempty"`
-	ContractVersion string `json:"contract_version,omitempty"`
-	EvidenceHash    string `json:"evidence_hash,omitempty"`
-	SkillHash       string `json:"skill_hash,omitempty"`
-	SourceSHA       string `json:"source_sha,omitempty"`
-	IdentityHash    string `json:"identity_hash,omitempty"`
-	ExecutionID     string `json:"execution_id,omitempty"`
-	Timeout         string `json:"timeout,omitempty"`
-	MaxTurns        int    `json:"max_turns,omitempty"`
-	Retries         int    `json:"retries,omitempty"`
-	Attempts        int    `json:"attempts,omitempty"`
-	DurationMs      int64  `json:"duration_ms,omitempty"`
+	Runtime           string `json:"runtime,omitempty"`
+	AgentNamespace    string `json:"agent_namespace,omitempty"`
+	AgentRef          string `json:"agent_ref,omitempty"`
+	GitSecret         string `json:"git_secret,omitempty"`
+	AgentVersion      string `json:"agent_version,omitempty"`
+	ContractVersion   string `json:"contract_version,omitempty"`
+	ToolPolicyVersion string `json:"tool_policy_version,omitempty"`
+	EvidenceHash      string `json:"evidence_hash,omitempty"`
+	SkillHash         string `json:"skill_hash,omitempty"`
+	SourceSHA         string `json:"source_sha,omitempty"`
+	IdentityHash      string `json:"identity_hash,omitempty"`
+	ExecutionID       string `json:"execution_id,omitempty"`
+	Timeout           string `json:"timeout,omitempty"`
+	MaxTurns          int    `json:"max_turns,omitempty"`
+	Retries           int    `json:"retries,omitempty"`
+	Attempts          int    `json:"attempts,omitempty"`
+	DurationMs        int64  `json:"duration_ms,omitempty"`
 }
 
 // ShadowRecord is one private comparison ledger entry.
@@ -191,7 +192,8 @@ func EvidenceManifest(bundle EvidenceBundle) ([]EvidenceManifestEntry, []string)
 func ProvenanceFromResult(result Result) Provenance {
 	return Provenance{
 		Runtime: result.Runtime, AgentNamespace: result.AgentNamespace, AgentRef: result.AgentRef, AgentVersion: result.AgentVersion,
-		ContractVersion: result.ContractVersion, EvidenceHash: result.EvidenceHash, SkillHash: result.SkillHash,
+		ContractVersion: result.ContractVersion, ToolPolicyVersion: result.ToolPolicyVersion,
+		EvidenceHash: result.EvidenceHash, SkillHash: result.SkillHash,
 		SourceSHA: result.SourceSHA, IdentityHash: result.IdentityHash, ExecutionID: result.ExecutionID,
 		Timeout: result.Timeout.String(), MaxTurns: result.MaxTurns, Retries: result.Retries,
 		Attempts: result.Attempts, DurationMs: result.Duration.Milliseconds(),
@@ -200,8 +202,12 @@ func ProvenanceFromResult(result Result) Provenance {
 
 // AttemptIdentity fingerprints an authoritative result and runtime settings before evidence collection.
 func AttemptIdentity(subject Subject, requestHash, authoritativeHash, skillSetHash string, source sourceinvestigation.Repository, agentNamespace, agentRef, agentVersion, gitSecret string, timeout time.Duration, maxTurns, retries int) string {
+	return attemptIdentityWithPolicy(subject, requestHash, authoritativeHash, skillSetHash, source, agentNamespace, agentRef, agentVersion, gitSecret, timeout, maxTurns, retries, ToolPolicyVersion)
+}
+
+func attemptIdentityWithPolicy(subject Subject, requestHash, authoritativeHash, skillSetHash string, source sourceinvestigation.Repository, agentNamespace, agentRef, agentVersion, gitSecret string, timeout time.Duration, maxTurns, retries int, toolPolicyVersion string) string {
 	return hashString(strings.Join([]string{
-		ContractVersion, SkillHash(), requestHash, authoritativeHash, skillSetHash,
+		ContractVersion, strings.TrimSpace(toolPolicyVersion), SkillHash(), requestHash, authoritativeHash, skillSetHash,
 		source.Owner, source.Name, source.Revision, subject.JobID, subject.BuildID, subject.TestName, subject.TestSource, subject.JUnitFile, subject.SuiteName, subject.ClassName,
 		strings.TrimSpace(agentNamespace), strings.TrimSpace(agentRef), strings.TrimSpace(agentVersion), strings.TrimSpace(gitSecret), timeout.String(), fmt.Sprintf("%d", maxTurns), fmt.Sprintf("%d", retries),
 	}, "\x00"))

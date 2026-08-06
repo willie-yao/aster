@@ -633,7 +633,8 @@ func (r *AgentRuntime) buildTask(name string, spec runtime.GenerateSpec, skills 
 	}
 	if contract.purpose == AgentPurposeFailureAnalysis {
 		agentRuntime["allowedTools"] = []any{"Read", "Glob", "Grep", "Write"}
-		agentRuntime["disallowedTools"] = []any{"Bash", "Edit", "MultiEdit", "NotebookEdit", "WebFetch", "WebSearch", "Task", "TodoWrite", "Question"}
+		// OpenCode maps Write and edit aliases to one permission. Denying an alias would also deny Write.
+		agentRuntime["disallowedTools"] = []any{"Bash", "WebFetch", "WebSearch", "Task", "TodoWrite", "Question"}
 	}
 	taskSpec := map[string]any{
 		"type":         "agent",

@@ -1044,7 +1044,7 @@ func TestAgentRuntimeFailureAnalysisPurposeIsConstrained(t *testing.T) {
 		t.Fatalf("agent runtime = %+v", agentRuntime)
 	}
 	wantAllowed := []any{"Read", "Glob", "Grep", "Write"}
-	wantDisallowed := []any{"Bash", "Edit", "MultiEdit", "NotebookEdit", "WebFetch", "WebSearch", "Task", "TodoWrite", "Question"}
+	wantDisallowed := []any{"Bash", "WebFetch", "WebSearch", "Task", "TodoWrite", "Question"}
 	if !reflect.DeepEqual(agentRuntime["allowedTools"], wantAllowed) || !reflect.DeepEqual(agentRuntime["disallowedTools"], wantDisallowed) {
 		t.Fatalf("tool policy = %+v", agentRuntime)
 	}

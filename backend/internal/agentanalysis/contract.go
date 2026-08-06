@@ -33,6 +33,7 @@ const (
 	BundleSchemaVersion = 1
 	ResultSchemaVersion = 1
 	ContractVersion     = "agent-analysis-v1"
+	ToolPolicyVersion   = "agent-analysis-tools-v2"
 	OutputPath          = ".prow-ai-dashboard/analysis.json"
 	SkillName           = "failure-analysis"
 
