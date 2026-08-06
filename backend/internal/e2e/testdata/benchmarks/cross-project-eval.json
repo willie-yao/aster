@@ -56,7 +56,27 @@
         }
       ],
       "reference_diagnosis": "At the pinned commit, the driver image is compiled with Go 1.26.4 and includes google.golang.org/grpc v1.81.1 and golang.org/x/text v0.38.0. Trivy reports those exact installed versions as affected by four vulnerabilities with fixes available, and the Makefile intentionally fails the image-scan target when any fixed MEDIUM, HIGH, or CRITICAL finding is present.",
-      "reference_is_transient": false
+      "reference_is_transient": false,
+      "evidence_groups": [
+        {
+          "id": "trivy-findings",
+          "paths": [
+            "(?i)(?:^|/)build-log\\.txt$"
+          ],
+          "content": [
+            "(?i)Total:\\s*4\\s*\\(MEDIUM:\\s*1,\\s*HIGH:\\s*3,\\s*CRITICAL:\\s*0\\)"
+          ]
+        },
+        {
+          "id": "security-gate",
+          "paths": [
+            "(?i)(?:^|/)build-log\\.txt$"
+          ],
+          "content": [
+            "(?i)(?:trivy image --exit-code\\s+1|make: \\*\\*\\* \\[Makefile:[0-9]+: image-scan\\] Error 1)"
+          ]
+        }
+      ]
     },
     {
       "id": "kueue-was-podgroup-api-mismatch",
@@ -117,7 +137,37 @@
         }
       ],
       "reference_diagnosis": "The WAS kind configuration at the pinned Kueue revision enables GenericWorkload but explicitly serves scheduling.k8s.io/v1alpha3. The job fetched Kubernetes main v1.37.0-beta.0.568+4f5591ab57b75c, whose scheduler initializes a v1beta1.PodGroup informer. The API server returned 404 for that version, so the scheduler handlers never synchronized, the Kubeflow Trainer pod remained unscheduled, and the deployment wait timed out.",
-      "reference_is_transient": false
+      "reference_is_transient": false,
+      "evidence_groups": [
+        {
+          "id": "apiserver-runtime-config",
+          "paths": [
+            "(?i)(?:^|/)build-log\\.txt$",
+            "(?i)kube-apiserver.*\\.log$"
+          ],
+          "content": [
+            "(?i)scheduling\\.k8s\\.io/v1alpha3(?:=true)?"
+          ]
+        },
+        {
+          "id": "podgroup-api-response",
+          "paths": [
+            "(?i)(?:kube-scheduler|kube-controller-manager).*\\.log$"
+          ],
+          "content": [
+            "(?i)(?:failed to list \\*v1beta1\\.PodGroup.{0,160}(?:could not find the requested resource|forbidden)|Skipping API scheduling\\.k8s\\.io/v1beta1 because it has no resources)"
+          ]
+        },
+        {
+          "id": "scheduler-handler-readiness",
+          "paths": [
+            "(?i)kube-scheduler.*\\.log$"
+          ],
+          "content": [
+            "(?i)(?:sched-handler-sync|handlers are not fully synchronized|readyz.{0,80}(?:500|failed))"
+          ]
+        }
+      ]
     },
     {
       "id": "gcp-pd-csi-windows-mount-visibility",
@@ -176,7 +226,28 @@
         }
       ],
       "reference_diagnosis": "Most likely an upstream Kubernetes Windows test/runtime mount-visibility defect at the publish-to-container handoff. The GCE PD CSI driver successfully staged and published each NTFS volume and each target pod became Running and Ready, but /mnt/volume1 was absent inside the Windows container. The failure repeated in two filesystem-size snapshot test variants on separate target pods and nodes after an earlier Windows suite passed. The available artifacts do not distinguish an incorrect or missing test volumeMount from kubelet/containerd/HCS failing to expose a valid host target, or CSI-proxy reporting symlink creation success without a usable target.",
-      "reference_is_transient": false
+      "reference_is_transient": false,
+      "evidence_groups": [
+        {
+          "id": "windows-mount-missing",
+          "paths": [
+            "(?i)(?:^|/)build-log\\.txt$",
+            "(?i)(?:^|/)junit[^/]*\\.xml$"
+          ],
+          "content": [
+            "(?i)(?:Could not find item C:\\\\mnt\\\\volume1|resolved empty volumeID for mountPath)"
+          ]
+        },
+        {
+          "id": "node-publish-success",
+          "paths": [
+            "(?i)pd-csi-driver/[^/]*gce-pd-driver\\.log$"
+          ],
+          "content": [
+            "(?i)NodePublishVolume succeeded on volume"
+          ]
+        }
+      ]
     }
   ]
 }

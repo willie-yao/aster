@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"runtime"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -51,12 +52,25 @@ func TestCrossProjectEvaluationManifest(t *testing.T) {
 		"kueue-was-podgroup-api-mismatch":     {"forbidden: API mismatch treated as incidental", "forbidden: transient readiness as primary cause"},
 		"gcp-pd-csi-windows-mount-visibility": {"recognizes NodePublishVolume succeeded", "forbidden: unsupported component ownership"},
 	}
+	expectedEvidenceGroups := map[string][]string{
+		"secrets-store-csi-image-scan":        {"security-gate", "trivy-findings"},
+		"kueue-was-podgroup-api-mismatch":     {"apiserver-runtime-config", "podgroup-api-response", "scheduler-handler-readiness"},
+		"gcp-pd-csi-windows-mount-visibility": {"node-publish-success", "windows-mount-missing"},
+	}
 	for _, bc := range cases {
 		if bc.fixtureAsset == "" || len(bc.fixtureSHA256) != 64 {
 			t.Fatalf("case %q has incomplete fixture identity", bc.name)
 		}
 		if bc.consumerCommit == "" || bc.projectSHA256 == "" || bc.promptSHA256 == "" || bc.expectedTransient == nil || bc.referenceDiagnosis == "" {
 			t.Fatalf("case %q has incomplete consumer or transient identity", bc.name)
+		}
+		var evidenceGroupIDs []string
+		for _, group := range bc.evidenceGroups {
+			evidenceGroupIDs = append(evidenceGroupIDs, group.id)
+		}
+		sort.Strings(evidenceGroupIDs)
+		if !slices.Equal(evidenceGroupIDs, expectedEvidenceGroups[bc.name]) {
+			t.Fatalf("case %q evidence groups = %v, want %v", bc.name, evidenceGroupIDs, expectedEvidenceGroups[bc.name])
 		}
 		if bc.allowUnavailable {
 			allowedUnavailable++
@@ -176,38 +190,39 @@ func TestCrossProjectEvaluationManifest(t *testing.T) {
 }
 
 type benchmarkManifestCase struct {
-	ID                  string                    `json:"id"`
-	StableID            string                    `json:"stable_id"`
-	Bucket              string                    `json:"bucket"`
-	FixtureAsset        string                    `json:"fixture_asset,omitempty"`
-	FixtureSHA256       string                    `json:"fixture_sha256,omitempty"`
-	JobType             string                    `json:"job_type"`
-	Repo                string                    `json:"repo,omitempty"`
-	JobName             string                    `json:"job_name"`
-	BuildID             string                    `json:"build_id"`
-	PullNumber          string                    `json:"pull_number,omitempty"`
-	WebURL              string                    `json:"web_url"`
-	Commit              string                    `json:"commit"`
-	RepoVersion         string                    `json:"repo_version"`
-	RepoRefs            map[string]string         `json:"repo_refs"`
-	SourceOwner         string                    `json:"source_owner"`
-	SourceName          string                    `json:"source_name"`
-	TestName            string                    `json:"test_name"`
-	TestSource          string                    `json:"test_source,omitempty"`
-	JUnitFile           string                    `json:"junit_file,omitempty"`
-	FailureMessage      string                    `json:"failure_message"`
-	ConsecutiveFailures int                       `json:"consecutive_failures,omitempty"`
-	OppositeDiagnosis   string                    `json:"opposite_diagnosis,omitempty"`
-	OppositeTransient   bool                      `json:"opposite_is_transient,omitempty"`
-	ReferenceDiagnosis  string                    `json:"reference_diagnosis,omitempty"`
-	ReferenceTransient  bool                      `json:"reference_is_transient,omitempty"`
-	AllowUnavailable    bool                      `json:"allow_unavailable,omitempty"`
-	ExpectedTransient   *bool                     `json:"expected_transient,omitempty"`
-	Forbidden           []benchmarkManifestSignal `json:"forbidden,omitempty"`
-	ConsumerCommit      string                    `json:"consumer_commit,omitempty"`
-	ProjectSHA256       string                    `json:"project_sha256,omitempty"`
-	PromptSHA256        string                    `json:"prompt_sha256,omitempty"`
-	Signals             []benchmarkManifestSignal `json:"signals"`
+	ID                  string                           `json:"id"`
+	StableID            string                           `json:"stable_id"`
+	Bucket              string                           `json:"bucket"`
+	FixtureAsset        string                           `json:"fixture_asset,omitempty"`
+	FixtureSHA256       string                           `json:"fixture_sha256,omitempty"`
+	JobType             string                           `json:"job_type"`
+	Repo                string                           `json:"repo,omitempty"`
+	JobName             string                           `json:"job_name"`
+	BuildID             string                           `json:"build_id"`
+	PullNumber          string                           `json:"pull_number,omitempty"`
+	WebURL              string                           `json:"web_url"`
+	Commit              string                           `json:"commit"`
+	RepoVersion         string                           `json:"repo_version"`
+	RepoRefs            map[string]string                `json:"repo_refs"`
+	SourceOwner         string                           `json:"source_owner"`
+	SourceName          string                           `json:"source_name"`
+	TestName            string                           `json:"test_name"`
+	TestSource          string                           `json:"test_source,omitempty"`
+	JUnitFile           string                           `json:"junit_file,omitempty"`
+	FailureMessage      string                           `json:"failure_message"`
+	ConsecutiveFailures int                              `json:"consecutive_failures,omitempty"`
+	OppositeDiagnosis   string                           `json:"opposite_diagnosis,omitempty"`
+	OppositeTransient   bool                             `json:"opposite_is_transient,omitempty"`
+	ReferenceDiagnosis  string                           `json:"reference_diagnosis,omitempty"`
+	ReferenceTransient  bool                             `json:"reference_is_transient,omitempty"`
+	AllowUnavailable    bool                             `json:"allow_unavailable,omitempty"`
+	ExpectedTransient   *bool                            `json:"expected_transient,omitempty"`
+	Forbidden           []benchmarkManifestSignal        `json:"forbidden,omitempty"`
+	ConsumerCommit      string                           `json:"consumer_commit,omitempty"`
+	ProjectSHA256       string                           `json:"project_sha256,omitempty"`
+	PromptSHA256        string                           `json:"prompt_sha256,omitempty"`
+	Signals             []benchmarkManifestSignal        `json:"signals"`
+	EvidenceGroups      []benchmarkManifestEvidenceGroup `json:"evidence_groups,omitempty"`
 }
 
 type benchmarkManifestSignal struct {
@@ -215,6 +230,12 @@ type benchmarkManifestSignal struct {
 	Pattern string `json:"pattern"`
 	Negated string `json:"negated,omitempty"`
 	Must    bool   `json:"must,omitempty"`
+}
+
+type benchmarkManifestEvidenceGroup struct {
+	ID      string   `json:"id"`
+	Paths   []string `json:"paths"`
+	Content []string `json:"content,omitempty"`
 }
 
 func loadBenchmarkManifest(path string) ([]benchCase, error) {
@@ -335,6 +356,39 @@ func loadBenchmarkManifest(path string) ([]benchCase, error) {
 		if len(item.Forbidden) > 16 {
 			return nil, fmt.Errorf("benchmark manifest case %q forbidden count exceeds 16", item.ID)
 		}
+		if len(item.EvidenceGroups) > 16 {
+			return nil, fmt.Errorf("benchmark manifest case %q evidence group count exceeds 16", item.ID)
+		}
+		evidenceGroups := make([]benchmarkEvidenceGroup, 0, len(item.EvidenceGroups))
+		seenEvidenceGroups := map[string]bool{}
+		for groupIndex, group := range item.EvidenceGroups {
+			if !benchmarkCaseIDRE.MatchString(group.ID) || seenEvidenceGroups[group.ID] || len(group.Paths) == 0 || len(group.Paths) > 8 || len(group.Content) > 8 {
+				return nil, fmt.Errorf("benchmark manifest case %q evidence group %d is invalid", item.ID, groupIndex)
+			}
+			seenEvidenceGroups[group.ID] = true
+			compiled := benchmarkEvidenceGroup{id: group.ID}
+			for patternIndex, pattern := range group.Paths {
+				if pattern == "" || len(pattern) > 1024 {
+					return nil, fmt.Errorf("benchmark manifest case %q evidence group %q path %d is invalid", item.ID, group.ID, patternIndex)
+				}
+				re, err := regexp.Compile(pattern)
+				if err != nil {
+					return nil, fmt.Errorf("benchmark manifest case %q evidence group %q path %d: %w", item.ID, group.ID, patternIndex, err)
+				}
+				compiled.pathREs = append(compiled.pathREs, re)
+			}
+			for patternIndex, pattern := range group.Content {
+				if pattern == "" || len(pattern) > 1024 {
+					return nil, fmt.Errorf("benchmark manifest case %q evidence group %q content %d is invalid", item.ID, group.ID, patternIndex)
+				}
+				re, err := regexp.Compile(pattern)
+				if err != nil {
+					return nil, fmt.Errorf("benchmark manifest case %q evidence group %q content %d: %w", item.ID, group.ID, patternIndex, err)
+				}
+				compiled.contentREs = append(compiled.contentREs, re)
+			}
+			evidenceGroups = append(evidenceGroups, compiled)
+		}
 		forbidden := make([]benchSignal, 0, len(item.Forbidden))
 		for forbiddenIndex, signal := range item.Forbidden {
 			if signal.Name == "" || signal.Pattern == "" || signal.Must {
@@ -364,7 +418,7 @@ func loadBenchmarkManifest(path string) ([]benchCase, error) {
 			referenceDiagnosis: item.ReferenceDiagnosis, referenceTransient: item.ReferenceTransient,
 			allowUnavailable: item.AllowUnavailable, expectedTransient: item.ExpectedTransient, forbidden: forbidden,
 			consumerCommit: item.ConsumerCommit, projectSHA256: item.ProjectSHA256, promptSHA256: item.PromptSHA256,
-			signals: signals,
+			signals: signals, evidenceGroups: evidenceGroups,
 		})
 	}
 	return out, nil
@@ -384,6 +438,8 @@ type benchmarkJSONLResult struct {
 	SkillSetHash            string                     `json:"skill_set_hash"`
 	EffectiveInputSHA256    string                     `json:"effective_input_sha256"`
 	APIMode                 string                     `json:"api_mode"`
+	EvidenceGroupsHit       []string                   `json:"evidence_groups_hit,omitempty"`
+	EvidenceGroupsMissed    []string                   `json:"evidence_groups_missed,omitempty"`
 	JobName                 string                     `json:"job_name"`
 	BuildID                 string                     `json:"build_id"`
 	CheckoutCommit          string                     `json:"checkout_commit"`
@@ -494,7 +550,7 @@ type benchmarkJSONLTrace struct {
 	Critique          map[string]int `json:"critique"`
 }
 
-func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int, tc *models.TestCase, outcome benchmarkOutcome, elapsed time.Duration, snapshot ai.AnalysisTraceFile, observations []benchmarkDraftObservation, selectedAttempt int, toolUsage benchmarkToolUsage, traceSummary benchmarkTraceSummary, providerRequestCap int, cacheGeneration string, critiquePolicy ai.CritiqueCachePolicy, cacheVerification benchmarkCacheVerification, identity benchmarkRunIdentity) {
+func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int, tc *models.TestCase, outcome benchmarkOutcome, elapsed time.Duration, snapshot ai.AnalysisTraceFile, observations []benchmarkDraftObservation, selectedAttempt int, toolUsage benchmarkToolUsage, traceSummary benchmarkTraceSummary, providerRequestCap int, cacheGeneration string, critiquePolicy ai.CritiqueCachePolicy, cacheVerification benchmarkCacheVerification, identity benchmarkRunIdentity, evidenceCoverage benchmarkEvidenceCoverage) {
 	t.Helper()
 	if path == "" {
 		return
@@ -515,6 +571,7 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 		BaselineConsumerCommit: identity.BaselineConsumerCommit, ProjectSHA256: identity.ProjectSHA256,
 		EffectivePromptSHA256: identity.EffectivePromptSHA256, SkillSetHash: identity.SkillSetHash,
 		EffectiveInputSHA256: identity.EffectiveInputSHA256, APIMode: identity.APIMode,
+		EvidenceGroupsHit: append([]string(nil), evidenceCoverage.hit...), EvidenceGroupsMissed: append([]string(nil), evidenceCoverage.missed...),
 		JobName: bc.jobName, BuildID: bc.buildID, CheckoutCommit: bc.commit, TestName: bc.testName, TestSource: bc.testSource, ElapsedMS: elapsed.Milliseconds(), Outcome: string(outcome),
 		FileLinks: map[string]string{}, SelectedAttempt: selectedAttempt,
 		ToolNames: append([]string(nil), toolUsage.names...), ToolCounts: append([]string(nil), toolUsage.counts...),
@@ -641,7 +698,8 @@ func TestLoadBenchmarkManifest(t *testing.T) {
     "junit_file": "junit.xml",
     "failure_message": "failed",
     "consecutive_failures": 2,
-    "signals": [{"name":"cause","pattern":"(?i)root cause","must":true}]
+    "signals": [{"name":"cause","pattern":"(?i)root cause","must":true}],
+    "evidence_groups": [{"id":"initiating-error","paths":["build-log\\.txt$"],"content":["root cause"]}]
   }]
 }`
 	path := filepath.Join(t.TempDir(), "manifest.json")
@@ -652,7 +710,7 @@ func TestLoadBenchmarkManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cases) != 1 || cases[0].name != "case-one" || cases[0].stableID != "0123456789abcdef0123" || !cases[0].signals[0].must {
+	if len(cases) != 1 || cases[0].name != "case-one" || cases[0].stableID != "0123456789abcdef0123" || !cases[0].signals[0].must || len(cases[0].evidenceGroups) != 1 || cases[0].evidenceGroups[0].id != "initiating-error" {
 		t.Fatalf("cases=%+v", cases)
 	}
 
@@ -675,6 +733,12 @@ func TestLoadBenchmarkManifest(t *testing.T) {
 		},
 		"bad stable id": func(value string) string { return strings.Replace(value, "0123456789abcdef0123", "model-name", 1) },
 		"bad regexp":    func(value string) string { return strings.Replace(value, "(?i)root cause", "[", 1) },
+		"bad evidence regexp": func(value string) string {
+			return strings.Replace(value, `"paths":["build-log\\.txt$"]`, `"paths":["["]`, 1)
+		},
+		"duplicate evidence id": func(value string) string {
+			return strings.Replace(value, `"evidence_groups": [{"id":"initiating-error","paths":["build-log\\.txt$"],"content":["root cause"]}]`, `"evidence_groups": [{"id":"initiating-error","paths":["build-log\\.txt$"]},{"id":"initiating-error","paths":["other"]}]`, 1)
+		},
 		"bad test source": func(value string) string {
 			return strings.Replace(value, `"test_name": "Example test"`, `"test_name": "Example test", "test_source": "junit"`, 1)
 		},
@@ -737,7 +801,7 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 	writeBenchmarkJSONL(t, path, bc, 2, tc, benchmarkOutcomeUsable, 3*time.Second, snapshot, observations, 1,
 		benchmarkToolUsage{names: []string{"read_artifact"}, counts: []string{"read_artifact=1"}},
 		benchmarkTraceSummary{floorNudges: 1, floorNudgeReasons: []string{"gcs_bytes"}}, 17, "generation", ai.CritiqueCachePolicyHard, cacheVerification,
-		benchmarkRunIdentity{Arm: "variant", EngineCommit: strings.Repeat("b", 40), FixtureSHA256: strings.Repeat("c", 64), BaselineConsumerCommit: strings.Repeat("d", 40), ProjectSHA256: strings.Repeat("e", 64), EffectivePromptSHA256: strings.Repeat("f", 64), SkillSetHash: strings.Repeat("1", 64), EffectiveInputSHA256: strings.Repeat("2", 64), APIMode: ai.APIChatCompletions})
+		benchmarkRunIdentity{Arm: "variant", EngineCommit: strings.Repeat("b", 40), FixtureSHA256: strings.Repeat("c", 64), BaselineConsumerCommit: strings.Repeat("d", 40), ProjectSHA256: strings.Repeat("e", 64), EffectivePromptSHA256: strings.Repeat("f", 64), SkillSetHash: strings.Repeat("1", 64), EffectiveInputSHA256: strings.Repeat("2", 64), APIMode: ai.APIChatCompletions}, benchmarkEvidenceCoverage{hit: []string{"initiating-error"}, missed: []string{"secondary-evidence"}})
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -749,7 +813,7 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 	if err := json.Unmarshal(data, &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.ModelLabel != "model-a" || result.Arm != "variant" || result.EngineCommit != strings.Repeat("b", 40) || result.FixtureSHA256 != strings.Repeat("c", 64) || result.BaselineConsumerCommit != strings.Repeat("d", 40) || result.ProjectSHA256 != strings.Repeat("e", 64) || result.EffectivePromptSHA256 != strings.Repeat("f", 64) || result.SkillSetHash != strings.Repeat("1", 64) || result.EffectiveInputSHA256 != strings.Repeat("2", 64) || result.APIMode != ai.APIChatCompletions || result.Repetition != 2 || result.Outcome != string(benchmarkOutcomeUsable) || result.IsTransient == nil || *result.IsTransient || result.SignalHits != 1 || result.SourceRevision != strings.Repeat("a", 40) || result.SourceUnavailable || result.TestSource != models.TestCaseSourceBuild ||
+	if !slices.Equal(result.EvidenceGroupsHit, []string{"initiating-error"}) || !slices.Equal(result.EvidenceGroupsMissed, []string{"secondary-evidence"}) || result.ModelLabel != "model-a" || result.Arm != "variant" || result.EngineCommit != strings.Repeat("b", 40) || result.FixtureSHA256 != strings.Repeat("c", 64) || result.BaselineConsumerCommit != strings.Repeat("d", 40) || result.ProjectSHA256 != strings.Repeat("e", 64) || result.EffectivePromptSHA256 != strings.Repeat("f", 64) || result.SkillSetHash != strings.Repeat("1", 64) || result.EffectiveInputSHA256 != strings.Repeat("2", 64) || result.APIMode != ai.APIChatCompletions || result.Repetition != 2 || result.Outcome != string(benchmarkOutcomeUsable) || result.IsTransient == nil || *result.IsTransient || result.SignalHits != 1 || result.SourceRevision != strings.Repeat("a", 40) || result.SourceUnavailable || result.TestSource != models.TestCaseSourceBuild ||
 		result.Trace.Finalize["empty:unexpected_tool_call"] != 1 || result.Trace.Critique["punts"] != 1 || result.GCSBytes != 42 ||
 		!result.EvidencePlanCovered || !result.GCSFloorRetryExhausted || result.CritiquePassed == nil || !*result.CritiquePassed || !result.BudgetExhausted ||
 		result.FloorNudges != 1 || !slices.Equal(result.FloorNudgeReasons, []string{"gcs_bytes"}) ||
@@ -782,7 +846,7 @@ func TestWriteBenchmarkJSONLRecordsGroundedUnavailableOutcome(t *testing.T) {
 	tc := &models.TestCase{AISummary: &models.AISummary{Summary: "AI analysis unavailable: no validated artifact citation supports the analysis"}}
 	writeBenchmarkJSONL(t, path, bc, 1, tc, benchmarkOutcomeGroundedPolicyUnavailable, time.Second, ai.AnalysisTraceFile{}, nil, 0, benchmarkToolUsage{}, benchmarkTraceSummary{}, 1, "", ai.CritiqueCachePolicyHard, benchmarkCacheVerification{}, benchmarkRunIdentity{
 		Arm: "baseline", EngineCommit: strings.Repeat("b", 40), EffectivePromptSHA256: strings.Repeat("f", 64), SkillSetHash: strings.Repeat("1", 64), EffectiveInputSHA256: strings.Repeat("2", 64), APIMode: ai.APIChatCompletions,
-	})
+	}, benchmarkEvidenceCoverage{})
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)

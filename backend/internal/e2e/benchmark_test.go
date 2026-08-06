@@ -113,6 +113,7 @@ type benchCase struct {
 	projectSHA256       string
 	promptSHA256        string
 	signals             []benchSignal
+	evidenceGroups      []benchmarkEvidenceGroup
 }
 
 type benchmarkOutcome string
@@ -642,7 +643,11 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 	client := ai.NewClientWithOptions(clientOptions)
 
 	backend, bucketLabel := benchStorage(t, bc)
-	factory := artifacts.NewBackendFactory(backend, bucketLabel)
+	evidenceRecorder := newBenchmarkEvidenceRecorder(bc.evidenceGroups)
+	var factory artifacts.Factory = artifacts.NewBackendFactory(backend, bucketLabel)
+	if len(bc.evidenceGroups) > 0 {
+		factory = benchmarkEvidenceFactory{inner: factory, recorder: evidenceRecorder}
+	}
 
 	registry := tools.NewRegistry()
 	filesystem.Register(registry)
@@ -741,7 +746,11 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 		cacheVerification = verifyBenchmarkCacheReuse(t, client, clientOptions, service, cacheGeneration, jobID, bc, run, tc.AIAnalysis)
 	}
 	critiquePolicy := ai.CritiqueCachePolicy(agentic.Critique.EffectiveCachePolicy())
-	writeBenchmarkJSONL(t, resultsPath, bc, repetition, tc, outcome, elapsed, snapshot, draftObservations, selectedAttempt, toolUsage, traceSummary, requestCap.PerOperation, cacheGeneration, critiquePolicy, cacheVerification, identity)
+	evidenceCoverage := evidenceRecorder.coverage()
+	if len(bc.evidenceGroups) > 0 {
+		t.Logf("evidence_groups hit=%v missed=%v", evidenceCoverage.hit, evidenceCoverage.missed)
+	}
+	writeBenchmarkJSONL(t, resultsPath, bc, repetition, tc, outcome, elapsed, snapshot, draftObservations, selectedAttempt, toolUsage, traceSummary, requestCap.PerOperation, cacheGeneration, critiquePolicy, cacheVerification, identity, evidenceCoverage)
 	if traceSummary.truncated {
 		t.Fatalf("provider request cap cannot be verified from a truncated trace")
 	}
