@@ -631,6 +631,7 @@ func (s *Service) buildFixManager(ctx context.Context, userToken string) (*fixpr
 		ModelToken:          s.ai.Token,
 		MaxTurns:            ar.MaxTurns,
 		AllowBash:           allowBash,
+		NetworkDomains:      ar.NetworkDomains,
 		Timeout:             ar.ParsedTimeout(),
 		GitToken:            userToken,
 		ExecutionID:         actionRequestID(ctx),

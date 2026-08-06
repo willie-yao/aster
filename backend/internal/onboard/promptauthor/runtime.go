@@ -20,6 +20,12 @@ const (
 	maxBytes   = 64 << 10
 )
 
+var githubCopilotNetworkDomains = []string{
+	"models.dev:443",
+	"api.githubcopilot.com:443",
+	"github.com:443",
+}
+
 //go:embed skill/system-prompt-generation.md
 var systemPromptSkill string
 
@@ -33,6 +39,7 @@ type Spec struct {
 	Endpoint       string
 	Token          string
 	ExtraHeaders   map[string]string
+	NetworkDomains []string
 	MaxTurns       int
 	Timeout        time.Duration
 }
@@ -59,6 +66,26 @@ func NewOpenCodeRuntime() *OpenCodeRuntime {
 	return &OpenCodeRuntime{Agent: agentruntime.NewLocalAgent()}
 }
 
+func promptNetworkDomains(spec Spec) ([]string, error) {
+	domains := append([]string(nil), spec.NetworkDomains...)
+	if spec.NativeModel != "" {
+		provider, _, ok := strings.Cut(spec.NativeModel, "/")
+		if !ok || provider == "" {
+			return nil, fmt.Errorf("prompt author: invalid native model %q", spec.NativeModel)
+		}
+		if provider == "github-copilot" {
+			domains = append(domains, githubCopilotNetworkDomains...)
+		} else if len(domains) == 0 {
+			return nil, fmt.Errorf("prompt author: network domains are required for native provider %q", provider)
+		}
+	}
+	normalized, err := agentruntime.NormalizeNetworkDomains(domains)
+	if err != nil {
+		return nil, fmt.Errorf("prompt author: network domains: %w", err)
+	}
+	return normalized, nil
+}
+
 func diffHasDestructiveChange(diff string) bool {
 	for _, line := range strings.Split(diff, "\n") {
 		if strings.HasPrefix(line, "deleted file mode ") || strings.HasPrefix(line, "rename from ") || strings.HasPrefix(line, "rename to ") {
@@ -75,13 +102,18 @@ func (r *OpenCodeRuntime) Generate(ctx context.Context, spec Spec) (Result, erro
 	if strings.TrimSpace(spec.Instruction) == "" {
 		return Result{}, fmt.Errorf("prompt author: instruction is required")
 	}
+	networkDomains, err := promptNetworkDomains(spec)
+	if err != nil {
+		return Result{}, err
+	}
 	started := time.Now()
 	generated, err := r.Agent.Generate(ctx, agentruntime.GenerateSpec{
 		Repo: spec.Repo, Instruction: "Use the " + SkillName + " skill. " + spec.Instruction,
 		Model: spec.Model, NativeModel: spec.NativeModel, UseAmbientAuth: spec.UseAmbientAuth,
 		Endpoint: spec.Endpoint, Token: spec.Token,
 		ExtraHeaders: spec.ExtraHeaders, Skills: map[string]string{SkillName: systemPromptSkill},
-		MaxTurns: spec.MaxTurns, AllowBash: false, Timeout: spec.Timeout,
+		NetworkDomains: networkDomains,
+		MaxTurns:       spec.MaxTurns, AllowBash: false, Timeout: spec.Timeout,
 	})
 	result := Result{Runtime: "opencode", Duration: time.Since(started), Output: generated.Output}
 	if err != nil {

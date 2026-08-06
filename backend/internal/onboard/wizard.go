@@ -281,7 +281,7 @@ func wizardPromptAuthoring(ctx context.Context, prompt wizardUI, opts *Options) 
 	}
 	if opts.PromptMode == "" && !opts.NoPrompt {
 		mode, err := prompt.Select(ctx, selectPrompt{Title: "Project prompt authoring", Description: "Choose how prompts/system.md is prepared.", Options: []selectOption{
-			{Value: promptModeAgent, Label: "Generate with OpenCode (recommended)", Description: "Uses a temporary repository checkout with the shell tool denied."},
+			{Value: promptModeAgent, Label: "Generate with OpenCode (recommended)", Description: "Uses pinned local srt sandboxing with the shell tool denied."},
 			{Value: promptModeHandoff, Label: "Create an agent handoff bundle", Description: "Writes a reusable skill and reviewable TODO prompt."},
 			{Value: promptModeTemplate, Label: "TODO template", Description: "Does not call a model."},
 		}})

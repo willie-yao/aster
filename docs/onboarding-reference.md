@@ -151,10 +151,11 @@ decisions. Provider presets configure deployed analysis only. Prompt authoring
 supports `agent`, `handoff`, and `todo-template`.
 
 Agent mode resolves the source branch to an immutable commit, shallow-clones it
-into a temporary checkout, and runs the local OpenCode process with a temporary
-config and its shell tool disabled. It is not an OS sandbox. It uses the selected
-provider credential from the user's existing OpenCode configuration and accepts
-only one validated `prompts/system.md` change.
+into a temporary checkout, and runs the local OpenCode process through pinned
+`srt` OS sandboxing with a temporary config and its shell tool disabled. It uses
+only the selected provider credential from the user's existing OpenCode
+configuration and accepts one validated `prompts/system.md` change. Missing
+`srt` safely falls back to the TODO template and handoff bundle.
 
 Handoff mode writes the TODO template plus `PROMPT_HANDOFF.md` and the bundled
 `.opencode/skills/system-prompt-generation/SKILL.md` without running an agent.
@@ -167,8 +168,10 @@ this mode and cannot be combined with another explicit prompt mode.
 
 Complete flag-based runs default to handoff mode. The wizard recommends agent
 mode and defaults its model to `github-copilot/claude-sonnet-4.6`. Override it
-with `--prompt-agent-model=<provider/model>`. A malformed model reference fails
-before source resolution or agent execution.
+with `--prompt-agent-model=<provider/model>`. GitHub Copilot uses the reviewed
+provider allowlist automatically. For another provider, repeat
+`--prompt-network-domain=<domain[:port]>` for its reviewed destinations. A
+malformed model or domain fails before source resolution or agent execution.
 
 Prompt preparation records a credential-free result in the plan: requested mode,
 final status, output type, timeout for agent mode, safe failure stage and category,

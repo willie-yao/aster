@@ -17,7 +17,7 @@ func TestPromptFailureWarningIsSafeAndActionable(t *testing.T) {
 	var out bytes.Buffer
 	writePromptFailure(&out, "OpenCode prompt authoring failed", failure, "agent handoff bundle with TODO template")
 	text := out.String()
-	for _, want := range []string{"agent execution", "OpenCode prompt authoring could not run to completion", "agent handoff bundle", "Verify OpenCode availability"} {
+	for _, want := range []string{"agent execution", "OpenCode prompt authoring could not run to completion", "agent handoff bundle", "Verify pinned srt and OpenCode availability"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("warning missing %q:\n%s", want, text)
 		}

@@ -2,6 +2,7 @@ package promptauthor
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -105,5 +106,43 @@ func TestValidatePromptQuality(t *testing.T) {
 	inline = strings.Replace(inline, "## Architecture\n\n- Grounded project-specific guidance.", "## Architecture\n", 1)
 	if err := Validate(inline); err == nil {
 		t.Fatal("inline heading mention bypassed empty section validation")
+	}
+}
+
+func TestNewOpenCodeRuntimeUsesSandboxedLocalAgent(t *testing.T) {
+	r := NewOpenCodeRuntime()
+	local, ok := r.Agent.(*agentruntime.LocalAgentRuntime)
+	if !ok {
+		t.Fatalf("agent = %T, want LocalAgentRuntime", r.Agent)
+	}
+	if _, ok := local.Sandbox.(*agentruntime.SRTSandbox); !ok {
+		t.Fatalf("sandbox = %T, want SRTSandbox", local.Sandbox)
+	}
+}
+
+func TestOpenCodeRuntimeCopilotNetworkDomains(t *testing.T) {
+	agent := &fakeAgent{res: agentruntime.GenerateResult{Files: map[string]string{OutputPath: validPrompt()}, Diff: "diff"}}
+	r := &OpenCodeRuntime{Agent: agent}
+	_, err := r.Generate(context.Background(), Spec{
+		Repo: agentruntime.RepoRef{Owner: "o", Name: "n", Ref: "sha"}, Instruction: "Generate.",
+		NativeModel: "github-copilot/claude-sonnet-4.6", UseAmbientAuth: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"models.dev:443", "api.githubcopilot.com:443", "github.com:443"}
+	if !slices.Equal(agent.got.NetworkDomains, want) {
+		t.Fatalf("network domains = %v, want %v", agent.got.NetworkDomains, want)
+	}
+}
+
+func TestOpenCodeRuntimeRequiresDomainsForOtherNativeProvider(t *testing.T) {
+	r := &OpenCodeRuntime{Agent: &fakeAgent{}}
+	_, err := r.Generate(context.Background(), Spec{
+		Repo: agentruntime.RepoRef{Owner: "o", Name: "n", Ref: "sha"}, Instruction: "Generate.",
+		NativeModel: "other/model", UseAmbientAuth: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "network domains are required") {
+		t.Fatalf("error = %v", err)
 	}
 }

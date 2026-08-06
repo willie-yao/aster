@@ -151,15 +151,27 @@ ai:
       model: ""
       max_turns: 30
       allow_bash: true
+      network_domains:
+        - registry.example.com:443  # only when a reviewed dependency registry is required
       timeout: 10m
 ```
 
-The runner needs `opencode` and git. The standard distroless Kubernetes image
+The runner needs `opencode`, git, and the pinned `srt` runtime with its platform
+dependencies. The standard distroless Kubernetes image
 does not contain them. Local `opencode` deployments should build
-[`deploy/fixer.Dockerfile`](../deploy/fixer.Dockerfile), which installs both.
+[`deploy/fixer.Dockerfile`](../deploy/fixer.Dockerfile), which installs all
+three at pinned versions and sets `SRT_BIN`.
 The chart's `orka.fixRuntime.enabled` image contains git only because it
 reconstructs diffs returned by an Orka Agent; it does not support the local
 `opencode` backend.
+
+
+The local backend never executes without `srt`. The configured AI endpoint host
+is allowed automatically. `network_domains` adds only reviewed dependency or
+tool destinations and rejects URLs, credentials, invalid wildcards, and invalid
+ports. `allow_bash` changes OpenCode's Bash permission only; it does not expand
+filesystem or network access. `network_domains` is invalid for `type: orka`
+because the Orka Agent owns that runtime policy.
 
 #### `orka` (in-cluster)
 

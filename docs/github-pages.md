@@ -219,6 +219,7 @@ Email notifications, automatic issues, and scheduled fix PRs run during the
 fetch step when configured. Interactive actions are not available on a static
 Pages site.
 
-Scheduled fix PR generation also requires `opencode` and git on the runner. The
-standard GitHub-hosted workflow does not install `opencode`, so use a
-preconfigured self-hosted runner before enabling that feature.
+Scheduled fix PR generation also requires OpenCode, git, and the pinned `srt`
+sandbox on the runner. The standard GitHub-hosted workflow does not install
+those tools, so use a preconfigured self-hosted runner before enabling that
+feature.

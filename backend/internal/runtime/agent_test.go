@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -555,5 +556,47 @@ func TestAgentTempDirsUsesSandboxBase(t *testing.T) {
 	cleanup()
 	if _, err := os.Stat(root); !os.IsNotExist(err) {
 		t.Fatalf("sandbox temporary root still exists: %s", root)
+	}
+}
+
+func TestNewLocalAgentUsesSRTSandbox(t *testing.T) {
+	r := NewLocalAgent()
+	if _, ok := r.Sandbox.(*SRTSandbox); !ok {
+		t.Fatalf("sandbox = %T, want *SRTSandbox", r.Sandbox)
+	}
+}
+
+func TestNewLocalAgentFailsClosedWithoutSRT(t *testing.T) {
+	repo := initRepo(t)
+	bin := filepath.Join(t.TempDir(), "opencode")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(SRTBinEnv, filepath.Join(t.TempDir(), "missing-srt"))
+	r := NewLocalAgent()
+	r.Bin = bin
+	_, err := r.Generate(context.Background(), GenerateSpec{
+		Repo: RepoRef{Owner: "o", Name: "n", Ref: "main", CloneURL: repo}, Instruction: "fix",
+	})
+	if !errors.Is(err, ErrSandboxUnavailable) {
+		t.Fatalf("error = %v, want ErrSandboxUnavailable", err)
+	}
+}
+
+func TestAllowBashDoesNotChangeSandboxBoundary(t *testing.T) {
+	work, home, temp := t.TempDir(), t.TempDir(), t.TempDir()
+	base := GenerateSpec{Instruction: "fix", Model: "model", Endpoint: "https://api.example.test/v1", NetworkDomains: []string{"registry.example.test:443"}}
+	denied, err := opencodeSandboxSpec("/usr/bin/true")(context.Background(), base, work, home, temp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base.AllowBash = true
+	allowed, err := opencodeSandboxSpec("/usr/bin/true")(context.Background(), base, work, home, temp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(denied.ReadPaths, allowed.ReadPaths) || !slices.Equal(denied.WritePaths, allowed.WritePaths) ||
+		!slices.Equal(denied.NetworkDomains, allowed.NetworkDomains) || denied.AllowLocalBind != allowed.AllowLocalBind {
+		t.Fatalf("Bash changed sandbox boundary:\ndenied=%+v\nallowed=%+v", denied, allowed)
 	}
 }

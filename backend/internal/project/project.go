@@ -19,6 +19,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	agentruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
 
@@ -639,6 +640,9 @@ type FixAgentRuntime struct {
 	// AllowBash lets the agent run shell commands (build, tests) while fixing.
 	// Defaults to true.
 	AllowBash *bool `yaml:"allow_bash,omitempty" json:"allow_bash,omitempty"`
+	// NetworkDomains are additional dependency registry domains for local
+	// OpenCode. The configured model endpoint host is added automatically.
+	NetworkDomains []string `yaml:"network_domains,omitempty" json:"network_domains,omitempty"`
 	// Timeout bounds the whole generation, e.g. "10m". Empty uses the Runtime
 	// default.
 	Timeout string `yaml:"timeout,omitempty" json:"-"`
@@ -749,6 +753,10 @@ func (c *Config) EffectiveFixPRs() FixPRs {
 	if out.AgentRuntime.AllowBash == nil {
 		t := true
 		out.AgentRuntime.AllowBash = &t
+	}
+	out.AgentRuntime.NetworkDomains = append([]string(nil), out.AgentRuntime.NetworkDomains...)
+	if domains, err := agentruntime.NormalizeNetworkDomains(out.AgentRuntime.NetworkDomains); err == nil {
+		out.AgentRuntime.NetworkDomains = domains
 	}
 	if out.AgentRuntime.Type == "orka" {
 		out.AgentRuntime.OrkaAgentRef = strings.TrimSpace(out.AgentRuntime.OrkaAgentRef)
@@ -1286,6 +1294,9 @@ func (c *Config) Validate() error {
 		}
 		if ar := f.AgentRuntime; ar != nil {
 			runtimeType := strings.TrimSpace(ar.Type)
+			if err := agentruntime.ValidateNetworkDomains(ar.NetworkDomains); err != nil {
+				return fmt.Errorf("ai.fix_prs.agent_runtime.network_domains: %w", err)
+			}
 			if ar.OrkaRetries != nil && *ar.OrkaRetries < 0 {
 				return fmt.Errorf("ai.fix_prs.agent_runtime.retries must be >= 0")
 			}
@@ -1304,6 +1315,9 @@ func (c *Config) Validate() error {
 			switch runtimeType {
 			case "", "opencode":
 			case "orka":
+				if len(ar.NetworkDomains) > 0 {
+					return fmt.Errorf("ai.fix_prs.agent_runtime.network_domains applies only to the local opencode runtime")
+				}
 				if strings.TrimSpace(ar.OrkaAgentRef) == "" || strings.TrimSpace(ar.OrkaAPI) == "" {
 					return fmt.Errorf("ai.fix_prs.agent_runtime type %q requires agent_ref and api", "orka")
 				}

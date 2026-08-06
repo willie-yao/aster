@@ -38,8 +38,8 @@ type ProcessSandboxRunner interface {
 	Run(context.Context, SandboxSpec) ([]byte, error)
 }
 
-// directProcessSandbox preserves local execution without OS isolation. It is a
-// transition backend until callers opt into an enforcing sandbox.
+// directProcessSandbox executes without OS isolation. Production local-agent
+// callers use SRTSandbox; this backend remains for focused unit tests.
 type directProcessSandbox struct{}
 
 func (directProcessSandbox) Command(ctx context.Context, spec SandboxSpec) (*exec.Cmd, error) {

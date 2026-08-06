@@ -132,6 +132,10 @@ func runOnboard(args []string) {
 	fs.BoolVar(&opts.NoPrompt, "no-prompt", false, "skip prompt authoring and always write the prompts/system.md TODO template")
 	fs.StringVar(&opts.PromptMode, "prompt-mode", "", "prompt authoring mode: agent, handoff, or todo-template")
 	fs.StringVar(&opts.PromptAgentModel, "prompt-agent-model", "", "OpenCode provider/model for agent prompt authoring")
+	fs.Func("prompt-network-domain", "additional provider domain[:port] allowed during prompt authoring; repeat as needed", func(value string) error {
+		opts.PromptNetworkDomains = append(opts.PromptNetworkDomains, value)
+		return nil
+	})
 	fs.DurationVar(&opts.PromptTimeout, "prompt-timeout", onboard.DefaultPromptDraftTimeout, "total timeout for prompt authoring, including agent execution")
 	fs.BoolVar(&opts.RequirePromptDraft, "require-prompt-draft", false, "fail before writes unless agent prompt drafting succeeds")
 	fs.BoolVar(&opts.OpenPR, "open-pr", false, "open a PR against the dashboard repo instead of writing locally; needs GITHUB_TOKEN write access")

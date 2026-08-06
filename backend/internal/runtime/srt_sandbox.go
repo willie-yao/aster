@@ -446,13 +446,9 @@ func buildSRTSettings(goos string, spec SandboxSpec) (srtSettings, error) {
 	if err != nil {
 		return srtSettings{}, fmt.Errorf("runtime: srt deny-write paths: %w", err)
 	}
-	domains := make([]string, 0, len(spec.NetworkDomains))
-	for _, domain := range spec.NetworkDomains {
-		normalized, err := normalizeSRTDomain(domain)
-		if err != nil {
-			return srtSettings{}, err
-		}
-		domains = append(domains, normalized)
+	domains, err := NormalizeNetworkDomains(spec.NetworkDomains)
+	if err != nil {
+		return srtSettings{}, err
 	}
 	sockets, err := normalizeSandboxPaths(spec.UnixSockets, false)
 	if err != nil {
@@ -538,6 +534,25 @@ func normalizeSandboxPaths(paths []string, requireExisting bool) ([]string, erro
 		}
 	}
 	return uniqueStrings(out), nil
+}
+
+// NormalizeNetworkDomains validates and canonicalizes srt domain allowlists.
+func NormalizeNetworkDomains(values []string) ([]string, error) {
+	domains := make([]string, 0, len(values))
+	for _, domain := range values {
+		normalized, err := normalizeSRTDomain(domain)
+		if err != nil {
+			return nil, err
+		}
+		domains = append(domains, normalized)
+	}
+	return uniqueStrings(domains), nil
+}
+
+// ValidateNetworkDomains validates an srt domain allowlist.
+func ValidateNetworkDomains(values []string) error {
+	_, err := NormalizeNetworkDomains(values)
+	return err
 }
 
 func normalizeSRTDomain(value string) (string, error) {
