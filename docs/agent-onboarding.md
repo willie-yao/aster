@@ -138,7 +138,9 @@ The agent should:
 For existing generated files, the first dry run reports conflicts. The agent
 must ask before rerunning with `-update-existing`, then review that full plan.
 Onboarding's direct `-open-pr` mode is intentionally not used because prompt
-completion and doctor require local files.
+completion and doctor require local files. The temporary plan artifact must stay
+outside the consumer destination. Apply also rejects a replacement file edited
+after review.
 
 The skill must use `fetcher onboard` rather than hand-writing `project.yaml`,
 workflows, Helm values, or deployment guides. This keeps agent-driven setup on

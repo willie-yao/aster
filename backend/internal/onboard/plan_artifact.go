@@ -30,6 +30,12 @@ func WritePlanArtifact(path string, plan *Plan) (string, error) {
 	if path == "" {
 		return "", fmt.Errorf("onboarding plan output path is required")
 	}
+	if plan == nil {
+		return "", fmt.Errorf("onboarding plan is nil")
+	}
+	if plan.Destination.OpenPR {
+		return "", fmt.Errorf("onboarding plan artifacts do not support open-PR destinations")
+	}
 	if err := validatePlan(plan); err != nil {
 		return "", err
 	}
@@ -37,6 +43,17 @@ func WritePlanArtifact(path string, plan *Plan) (string, error) {
 	planCopy.Files = nil
 	if err := bindPlanArtifactDestination(&planCopy); err != nil {
 		return "", err
+	}
+	canonicalPath, err := canonicalPlanArtifactPath(path)
+	if err != nil {
+		return "", err
+	}
+	inside, err := pathWithinDirectory(canonicalPath, planCopy.Destination.OutDir)
+	if err != nil {
+		return "", fmt.Errorf("compare onboarding plan artifact and destination paths: %w", err)
+	}
+	if inside {
+		return "", fmt.Errorf("onboarding plan artifact must be outside the dashboard consumer directory")
 	}
 	artifact := planArtifact{
 		SchemaVersion: planArtifactSchemaVersion,
@@ -51,14 +68,14 @@ func WritePlanArtifact(path string, plan *Plan) (string, error) {
 	if len(data) > maxPlanArtifactBytes {
 		return "", fmt.Errorf("onboarding plan artifact is %d bytes, exceeds %d bytes", len(data), maxPlanArtifactBytes)
 	}
-	file, err := os.OpenFile(filepath.Clean(path), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	file, err := os.OpenFile(canonicalPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return "", fmt.Errorf("create onboarding plan artifact: %w", err)
 	}
 	complete := false
 	defer func() {
 		if !complete {
-			_ = os.Remove(filepath.Clean(path))
+			_ = os.Remove(canonicalPath)
 		}
 	}()
 	if _, err := file.Write(data); err != nil {
@@ -86,7 +103,11 @@ func ReadPlanArtifact(path, expectedDigest string) (*Plan, error) {
 	if err != nil {
 		return nil, err
 	}
-	info, err := os.Lstat(filepath.Clean(path))
+	canonicalPath, err := canonicalPlanArtifactPath(path)
+	if err != nil {
+		return nil, err
+	}
+	info, err := os.Lstat(canonicalPath)
 	if err != nil {
 		return nil, fmt.Errorf("inspect onboarding plan artifact: %w", err)
 	}
@@ -96,7 +117,7 @@ func ReadPlanArtifact(path, expectedDigest string) (*Plan, error) {
 	if info.Size() > maxPlanArtifactBytes {
 		return nil, fmt.Errorf("onboarding plan artifact exceeds %d bytes", maxPlanArtifactBytes)
 	}
-	file, err := os.Open(filepath.Clean(path))
+	file, err := os.Open(canonicalPath)
 	if err != nil {
 		return nil, fmt.Errorf("open onboarding plan artifact: %w", err)
 	}
@@ -125,6 +146,9 @@ func ReadPlanArtifact(path, expectedDigest string) (*Plan, error) {
 		return nil, fmt.Errorf("onboarding plan artifact schema %d is unsupported", artifact.SchemaVersion)
 	}
 	artifact.Plan.Files = copyPlanFiles(artifact.Files)
+	if artifact.Plan.Destination.OpenPR {
+		return nil, fmt.Errorf("onboarding plan artifacts do not support open-PR destinations")
+	}
 	if !artifact.Plan.Destination.OpenPR && !filepath.IsAbs(artifact.Plan.Destination.OutDir) {
 		return nil, fmt.Errorf("onboarding plan artifact local destination is not absolute")
 	}
@@ -159,13 +183,17 @@ func planArtifactDigest(data []byte) string {
 }
 
 func parsePlanArtifactDigest(value string) ([]byte, error) {
+	return parseSHA256Digest(value, "onboarding plan digest")
+}
+
+func parseSHA256Digest(value, label string) ([]byte, error) {
 	value = strings.TrimSpace(value)
 	if !strings.HasPrefix(value, "sha256:") {
-		return nil, fmt.Errorf("onboarding plan digest must use sha256:<hex>")
+		return nil, fmt.Errorf("%s must use sha256:<hex>", label)
 	}
 	decoded, err := hex.DecodeString(strings.TrimPrefix(value, "sha256:"))
 	if err != nil || len(decoded) != sha256.Size {
-		return nil, fmt.Errorf("onboarding plan digest must use sha256:<hex>")
+		return nil, fmt.Errorf("%s must use sha256:<hex>", label)
 	}
 	return decoded, nil
 }
@@ -195,21 +223,33 @@ func bindPlanArtifactDestination(plan *Plan) error {
 }
 
 func canonicalLocalDestination(path string) (string, error) {
+	return canonicalPathWithExistingAncestors(path, "reviewed dashboard consumer directory")
+}
+
+func canonicalPlanArtifactPath(path string) (string, error) {
+	abs, err := filepath.Abs(strings.TrimSpace(path))
+	if err != nil {
+		return "", fmt.Errorf("resolve onboarding plan artifact path: %w", err)
+	}
+	return canonicalPathWithExistingAncestors(abs, "onboarding plan artifact path")
+}
+
+func canonicalPathWithExistingAncestors(path, label string) (string, error) {
 	path = filepath.Clean(path)
 	if !filepath.IsAbs(path) {
-		return "", fmt.Errorf("reviewed dashboard consumer directory is not absolute")
+		return "", fmt.Errorf("%s is not absolute", label)
 	}
 	if info, err := os.Lstat(path); err == nil {
 		if info.Mode()&os.ModeSymlink != 0 {
-			return "", fmt.Errorf("reviewed dashboard consumer directory must not be a symlink")
+			return "", fmt.Errorf("%s must not be a symlink", label)
 		}
 		resolved, err := filepath.EvalSymlinks(path)
 		if err != nil {
-			return "", fmt.Errorf("resolve reviewed dashboard consumer directory: %w", err)
+			return "", fmt.Errorf("resolve %s: %w", label, err)
 		}
 		return filepath.Clean(resolved), nil
 	} else if !os.IsNotExist(err) {
-		return "", fmt.Errorf("inspect reviewed dashboard consumer directory: %w", err)
+		return "", fmt.Errorf("inspect %s: %w", label, err)
 	}
 
 	current := path
@@ -217,7 +257,7 @@ func canonicalLocalDestination(path string) (string, error) {
 	for {
 		parent := filepath.Dir(current)
 		if parent == current {
-			return "", fmt.Errorf("resolve reviewed dashboard consumer directory: no existing ancestor")
+			return "", fmt.Errorf("resolve %s: no existing ancestor", label)
 		}
 		suffix = append(suffix, filepath.Base(current))
 		current = parent
@@ -226,25 +266,33 @@ func canonicalLocalDestination(path string) (string, error) {
 			continue
 		}
 		if err != nil {
-			return "", fmt.Errorf("inspect reviewed dashboard consumer directory ancestor: %w", err)
+			return "", fmt.Errorf("inspect %s ancestor: %w", label, err)
 		}
 		if !info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
-			return "", fmt.Errorf("reviewed dashboard consumer directory ancestor %s is not a directory", current)
+			return "", fmt.Errorf("%s ancestor %s is not a directory", label, current)
 		}
 		resolvedInfo, err := os.Stat(current)
 		if err != nil {
-			return "", fmt.Errorf("inspect resolved dashboard consumer directory ancestor: %w", err)
+			return "", fmt.Errorf("inspect resolved %s ancestor: %w", label, err)
 		}
 		if !resolvedInfo.IsDir() {
-			return "", fmt.Errorf("reviewed dashboard consumer directory ancestor %s does not resolve to a directory", current)
+			return "", fmt.Errorf("%s ancestor %s does not resolve to a directory", label, current)
 		}
 		resolved, err := filepath.EvalSymlinks(current)
 		if err != nil {
-			return "", fmt.Errorf("resolve reviewed dashboard consumer directory ancestor: %w", err)
+			return "", fmt.Errorf("resolve %s ancestor: %w", label, err)
 		}
 		for i := len(suffix) - 1; i >= 0; i-- {
 			resolved = filepath.Join(resolved, suffix[i])
 		}
 		return filepath.Clean(resolved), nil
 	}
+}
+
+func pathWithinDirectory(path, directory string) (bool, error) {
+	rel, err := filepath.Rel(directory, path)
+	if err != nil {
+		return false, err
+	}
+	return rel == "." || rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)), nil
 }

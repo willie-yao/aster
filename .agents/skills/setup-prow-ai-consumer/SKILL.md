@@ -112,7 +112,8 @@ mode in this workflow because prompt completion and doctor require local files.
 
 ## 5. Review a dry-run plan
 
-Choose a new private temporary plan path and run the assembled command with:
+Choose a new private temporary plan path outside the consumer destination and
+run the assembled command with:
 
 ```text
 -dry-run
@@ -155,7 +156,8 @@ After the user confirms the reviewed plan, apply the saved artifact using only:
 
 Do not rerun discovery or reconstruct the scaffold flags. Do not edit the plan
 artifact or recompute its digest. The apply command revalidates the artifact and
-refuses a destination whose create/replace state changed after review.
+refuses a destination whose create/replace state or reviewed replacement content
+changed after review.
 
 If the destination or any decision changes, discard the old plan artifact, run a
 new dry run, and review the new digest. Remove the temporary plan artifact after

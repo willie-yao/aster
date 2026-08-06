@@ -145,16 +145,26 @@ func (f *fakeScaffoldWriter) Inspect(outDir string, files map[string]string) ([]
 		return nil, nil, f.validateErr
 	}
 	if inspection, ok := f.inspections[outDir]; ok {
-		return append([]DestinationFilePlan(nil), inspection...), append([]string(nil), f.staleFiles...), nil
+		return reviewedTestActions(inspection), append([]string(nil), f.staleFiles...), nil
 	}
 	if f.inspection != nil {
-		return append([]DestinationFilePlan(nil), f.inspection...), append([]string(nil), f.staleFiles...), nil
+		return reviewedTestActions(f.inspection), append([]string(nil), f.staleFiles...), nil
 	}
 	actions := make([]DestinationFilePlan, 0, len(files))
 	for _, path := range sortedFilePaths(files) {
 		actions = append(actions, DestinationFilePlan{Path: path, Action: destinationActionCreate})
 	}
 	return actions, append([]string(nil), f.staleFiles...), nil
+}
+
+func reviewedTestActions(actions []DestinationFilePlan) []DestinationFilePlan {
+	out := append([]DestinationFilePlan(nil), actions...)
+	for i := range out {
+		if out[i].Action == destinationActionReplace && out[i].ReviewedDigest == "" {
+			out[i].ReviewedDigest = planArtifactDigest([]byte("reviewed test content"))
+		}
+	}
+	return out
 }
 
 func (f *fakeScaffoldWriter) Write(outDir string, files map[string]string, updateExisting bool, _ []DestinationFilePlan) error {

@@ -244,7 +244,8 @@ destination actions. The output prints a `sha256:` digest for that file. The
 path must not already exist. Local destinations are stored as canonical absolute
 paths with existing symlink ancestors resolved. Apply rechecks that target so a
 different working directory or retargeted ancestor cannot redirect the reviewed
-scaffold.
+scaffold. The plan artifact must be outside the consumer destination and cannot
+represent an open-PR plan.
 
 Apply the exact reviewed artifact with no discovery or scaffold flags:
 
@@ -255,8 +256,8 @@ fetcher onboard \
 ```
 
 The command rejects a changed digest, malformed artifact, unsupported schema,
-symlinked plan file, invalid plan, or destination whose create/replace state no
-longer matches the review.
+symlinked plan file, invalid plan, or destination whose create/replace state or
+reviewed replacement content no longer matches the review.
 
 For an existing scaffold, the first non-interactive run without
 `-update-existing` stops and lists conflicts. After the user authorizes those

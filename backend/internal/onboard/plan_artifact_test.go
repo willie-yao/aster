@@ -299,6 +299,39 @@ func TestPlanArtifactRejectsExistingOutput(t *testing.T) {
 	}
 }
 
+func TestPlanArtifactRejectsOutputInsideDestination(t *testing.T) {
+	plan, _, _ := testReviewedPlan(t)
+	path := filepath.Join(plan.Destination.OutDir, "onboard-plan.json")
+	if _, err := WritePlanArtifact(path, plan); err == nil || !strings.Contains(err.Error(), "outside") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestPlanArtifactRejectsOpenPRPlan(t *testing.T) {
+	plan, _, _ := testReviewedPlan(t)
+	plan.Destination.OpenPR = true
+	plan.Destination.Files = nil
+	plan.Destination.StaleFiles = nil
+	if _, err := WritePlanArtifact(filepath.Join(t.TempDir(), "plan.json"), plan); err == nil || !strings.Contains(err.Error(), "open-PR") {
+		t.Fatalf("error = %v", err)
+	}
+
+	planCopy := *plan
+	planCopy.Files = nil
+	artifact := planArtifact{SchemaVersion: planArtifactSchemaVersion, Plan: planCopy, Files: copyPlanFiles(plan.Files)}
+	data, err := json.Marshal(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "open-pr-plan.json")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadPlanArtifact(path, planArtifactDigest(data)); err == nil || !strings.Contains(err.Error(), "open-PR") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestPlanArtifactRejectsUnknownFieldsAndTrailingValues(t *testing.T) {
 	plan, _, _ := testReviewedPlan(t)
 	planCopy := *plan

@@ -2,7 +2,10 @@ package onboard
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -53,7 +56,11 @@ func inspectFileDestination(outDir string, files map[string]string) ([]Destinati
 			if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 				return nil, nil, fmt.Errorf("generated file path %s conflicts with a non-regular filesystem entry", full)
 			}
-			actions = append(actions, DestinationFilePlan{Path: rel, Action: destinationActionReplace})
+			digest, err := digestDestinationFile(full)
+			if err != nil {
+				return nil, nil, fmt.Errorf("hashing %s: %w", full, err)
+			}
+			actions = append(actions, DestinationFilePlan{Path: rel, Action: destinationActionReplace, ReviewedDigest: digest})
 		case os.IsNotExist(err):
 			actions = append(actions, DestinationFilePlan{Path: rel, Action: destinationActionCreate})
 		default:
@@ -218,6 +225,13 @@ func writeReviewedFileAtRoot(root *os.Root, reviewed DestinationFilePlan, conten
 		return fmt.Errorf("dashboard consumer directory changed after review; %s is now %s instead of %s", reviewed.Path, actual, reviewed.Action)
 	}
 	if reviewed.Action == destinationActionReplace {
+		actualDigest, err := digestDestinationFileAtRoot(root, reviewed.Path)
+		if err != nil {
+			return fmt.Errorf("hashing %s before replacement: %w", reviewed.Path, err)
+		}
+		if actualDigest != reviewed.ReviewedDigest {
+			return fmt.Errorf("dashboard consumer directory changed after review; %s content no longer matches the reviewed digest", reviewed.Path)
+		}
 		if err := replaceFileAtomic(root, reviewed.Path, content); err != nil {
 			return fmt.Errorf("replacing %s: %w", reviewed.Path, err)
 		}
@@ -227,6 +241,32 @@ func writeReviewedFileAtRoot(root *os.Root, reviewed DestinationFilePlan, conten
 		return fmt.Errorf("creating %s: %w", reviewed.Path, err)
 	}
 	return nil
+}
+
+func digestDestinationFile(filename string) (string, error) {
+	file, err := os.Open(filename)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	return digestDestinationReader(file)
+}
+
+func digestDestinationFileAtRoot(root *os.Root, filename string) (string, error) {
+	file, err := root.Open(filename)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	return digestDestinationReader(file)
+}
+
+func digestDestinationReader(reader io.Reader) (string, error) {
+	hash := sha256.New()
+	if _, err := io.Copy(hash, reader); err != nil {
+		return "", err
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 func ensureDestinationParents(root *os.Root, rel string) error {

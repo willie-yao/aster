@@ -360,6 +360,14 @@ func validatePlan(planValue *Plan) error {
 			if file.Action != destinationActionCreate && file.Action != destinationActionReplace {
 				return fmt.Errorf("onboarding plan destination action %q is invalid", file.Action)
 			}
+			if file.Action == destinationActionCreate && file.ReviewedDigest != "" {
+				return fmt.Errorf("onboarding plan create action for %q retained a reviewed digest", file.Path)
+			}
+			if file.Action == destinationActionReplace {
+				if _, err := parseSHA256Digest(file.ReviewedDigest, "reviewed destination digest"); err != nil {
+					return fmt.Errorf("onboarding plan replacement for %q has an invalid reviewed digest", file.Path)
+				}
+			}
 			if file.Action == destinationActionReplace && !planValue.Destination.UpdateExisting {
 				return fmt.Errorf("onboarding plan replacement requires update-existing mode")
 			}
@@ -504,11 +512,15 @@ func finishDryRun(out io.Writer, plan *Plan, planOut string) error {
 	if planOut == "" {
 		return nil
 	}
-	digest, err := WritePlanArtifact(planOut, plan)
+	canonicalPlanOut, err := canonicalPlanArtifactPath(planOut)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "Reviewed plan artifact: %s\n", safeTerminal(planOut))
+	digest, err := WritePlanArtifact(canonicalPlanOut, plan)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "Reviewed plan artifact: %s\n", safeTerminal(canonicalPlanOut))
 	fmt.Fprintf(out, "Reviewed plan digest: %s\n", digest)
 	return nil
 }

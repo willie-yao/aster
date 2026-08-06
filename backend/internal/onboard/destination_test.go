@@ -209,7 +209,7 @@ func TestWriteFilesUsesTheInspectedNormalizedDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	outDir := "  " + dir + "  "
-	expected := []DestinationFilePlan{{Path: "project.yaml", Action: destinationActionReplace}}
+	expected := []DestinationFilePlan{{Path: "project.yaml", Action: destinationActionReplace, ReviewedDigest: planArtifactDigest([]byte("old"))}}
 	if err := writeFiles(outDir, map[string]string{"project.yaml": "new"}, true, expected); err != nil {
 		t.Fatal(err)
 	}
@@ -219,6 +219,28 @@ func TestWriteFilesUsesTheInspectedNormalizedDirectory(t *testing.T) {
 	}
 	if _, err := os.Stat(outDir); !os.IsNotExist(err) {
 		t.Fatalf("untrimmed destination was used: %v", err)
+	}
+}
+
+func TestWriteFilesRejectsReviewedReplacementContentDrift(t *testing.T) {
+	dir := t.TempDir()
+	filename := filepath.Join(dir, "project.yaml")
+	if err := os.WriteFile(filename, []byte("reviewed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	actions, _, err := inspectFileDestination(dir, map[string]string{"project.yaml": "generated"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filename, []byte("edited after review"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFiles(dir, map[string]string{"project.yaml": "generated"}, true, actions); err == nil || !strings.Contains(err.Error(), "changed after review") {
+		t.Fatalf("error = %v", err)
+	}
+	content, err := os.ReadFile(filename)
+	if err != nil || string(content) != "edited after review" {
+		t.Fatalf("post-review content changed: %q %v", content, err)
 	}
 }
 

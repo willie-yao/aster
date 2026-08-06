@@ -127,6 +127,9 @@ func validateOptions(opts *Options) error {
 	if opts.PlanOut != "" && !opts.DryRun {
 		return fmt.Errorf("--plan-out requires --dry-run")
 	}
+	if opts.PlanOut != "" && opts.OpenPR {
+		return fmt.Errorf("--plan-out cannot be combined with --open-pr")
+	}
 	if (opts.TestGrid == "") == (opts.Bucket == "") {
 		return fmt.Errorf("provide exactly one of --testgrid or --bucket")
 	}

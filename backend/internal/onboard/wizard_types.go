@@ -49,8 +49,9 @@ const (
 
 // DestinationFilePlan describes one reviewed local scaffold mutation.
 type DestinationFilePlan struct {
-	Path   string `json:"path"`
-	Action string `json:"action"`
+	Path           string `json:"path"`
+	Action         string `json:"action"`
+	ReviewedDigest string `json:"reviewed_digest,omitempty"`
 }
 
 // DestinationPlan describes the only mutation the apply phase may perform.
