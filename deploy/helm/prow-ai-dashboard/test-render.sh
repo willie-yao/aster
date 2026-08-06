@@ -772,8 +772,10 @@ if [[ $(grep -Fc '  - apiGroups:' "$tmp/shadow-rbac.yaml") -ne 1 ]] ||
 fi
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   "${shadow_args[@]}" --show-only templates/orka-agent-analysis-shadow-admission.yaml > "$tmp/shadow-admission.yaml"
-grep -Fq 'the shadow ServiceAccount may delete only exact shadow-analysis Tasks' "$tmp/shadow-admission.yaml"
 grep -Fq "request.operation == 'DELETE' ? request.userInfo.username" "$tmp/shadow-admission.yaml"
+grep -Fq "expression: \"request.operation == 'DELETE' ? oldObject : object\"" "$tmp/shadow-admission.yaml"
+grep -Fq 'variables.task.spec.agentRuntime.allowedTools' "$tmp/shadow-admission.yaml"
+grep -Fq 'variables.task.spec.agentRuntime.workspace.gitRepo' "$tmp/shadow-admission.yaml"
 if grep -Eq '^kind: (Agent|AgentRuntime)$|name: orka-controller|app.kubernetes.io/component: orka-controller' "$tmp/shadow-watch.yaml"; then
   echo 'shadow integration installed Orka or an Agent' >&2
   exit 1
