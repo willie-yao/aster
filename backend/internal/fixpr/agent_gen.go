@@ -26,18 +26,11 @@ func generateWithAgent(ctx context.Context, gp genParams, p models.PatternAnalys
 	}
 	var reviewFeedback string
 	for attempt := 0; ; attempt++ {
-		res, err := a.Runtime.Generate(ctx, runtime.GenerateSpec{
-			Repo:           runtime.RepoRef{Owner: gp.owner, Name: gp.repo, Ref: gp.ref, Token: a.GitToken},
-			Instruction:    agentInstruction(p, gp.context, gp.instruction, reviewFeedback, gp.maxFiles, a.AllowBash),
-			Model:          a.Model,
-			Endpoint:       a.Endpoint,
-			Token:          a.ModelToken,
-			MaxTurns:       a.MaxTurns,
-			AllowBash:      a.AllowBash,
-			NetworkDomains: a.NetworkDomains,
-			Timeout:        a.Timeout,
-			ExecutionID:    a.ExecutionID, WorkObserver: a.WorkObserver,
-		})
+		res, err := a.Runtime.Generate(ctx, agentRuntimeSpec(
+			a,
+			runtime.RepoRef{Owner: gp.owner, Name: gp.repo, Ref: gp.ref, Token: a.GitToken},
+			agentInstruction(p, gp.context, gp.instruction, reviewFeedback, gp.maxFiles, a.AllowBash),
+		))
 		if err != nil {
 			if errors.Is(err, runtime.ErrUnavailable) || errors.Is(err, runtime.ErrSandboxUnavailable) {
 				return nil, fmt.Errorf("agent fix generation unavailable: %w", err)
@@ -71,6 +64,21 @@ func generateWithAgent(ctx context.Context, gp genParams, p models.PatternAnalys
 		}
 		reviewFeedback = issues
 	}
+}
+
+func agentRuntimeSpec(a *AgentConfig, repo runtime.RepoRef, instruction string) runtime.GenerateSpec {
+	spec := runtime.GenerateSpec{
+		Repo: repo, Instruction: instruction,
+		MaxTurns: a.MaxTurns, AllowBash: a.AllowBash, Timeout: a.Timeout,
+		ExecutionID: a.ExecutionID, WorkObserver: a.WorkObserver,
+	}
+	if a.SharedModelEndpoint {
+		spec.Model = a.Model
+		spec.Endpoint = a.Endpoint
+		spec.Token = a.ModelToken
+		spec.NetworkDomains = a.NetworkDomains
+	}
+	return spec
 }
 
 // critiqueAgentFix asks a reviewer model whether the agent's change has concrete

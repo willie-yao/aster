@@ -133,13 +133,16 @@ Agent may select `spec.runtime.type: opencode`.
 2. The dashboard pins the source repository and base commit.
 3. The dashboard creates an Orka agent Task with a read-only clone credential.
 4. Orka prepares an isolated workspace and runs the configured AgentRuntime.
-5. OpenCode edits the workspace. Orka captures the final workspace and creates
+5. Engine-owned generation skills, when present, are validated and included in
+   a trusted Task-prompt preamble. Orka Agent Tasks do not support per-Task
+   skill overrides, so the dashboard does not mutate the operator-owned Agent.
+6. OpenCode edits the workspace. Orka captures the final workspace and creates
    the outer `StructuredResult`, including the base SHA, diff, and file list.
-6. The dashboard rejects malformed results, unexpected files, unsafe paths,
+7. The dashboard rejects malformed results, unexpected files, unsafe paths,
    base mismatches, binary changes, deletions, and push instructions.
-7. The dashboard may reconstruct the change in a clean workspace and run build
+8. The dashboard may reconstruct the change in a clean workspace and run build
    or vet commands.
-8. For on-demand actions, a maintainer reviews the preview before the dashboard
+9. For on-demand actions, a maintainer reviews the preview before the dashboard
    uses its GitHub write credential. Scheduled reconciliation can open a draft
    automatically when the consumer enables it with `dry_run: false`.
 

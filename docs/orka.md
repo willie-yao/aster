@@ -130,6 +130,14 @@ The Orka chart does not create model credentials or a project Agent. Create the
 Agent model Secret separately, apply a reviewed Agent with the endpoint-specific
 model ID, and wait for its `Ready` condition.
 
+The dashboard's generic Orka generation runtime treats the referenced Agent as
+the owner of model endpoint, model ID, credentials, and outbound policy. It
+rejects local provider fields rather than copying or ignoring them. When an
+engine caller supplies a bundled skill, the dashboard validates the skill and
+adds its exact contents to a trusted Task-prompt preamble. Current Orka Agent
+Tasks do not support per-Task skill overrides, so the dashboard does not modify
+the operator-owned Agent.
+
 For an OpenCode Agent:
 
 - Set `spec.runtime.type: opencode`.

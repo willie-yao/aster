@@ -46,7 +46,9 @@ type GenerateSpec struct {
 	Token string
 	// ExtraHeaders are sent by the isolated model provider.
 	ExtraHeaders map[string]string
-	// Skills are engine-owned OpenCode skills injected into the isolated home.
+	// Skills are engine-owned instructions made available through the backend's
+	// bounded native mechanism. Local OpenCode writes skill files; remote
+	// backends may include the validated contents in their trusted prompt.
 	Skills map[string]string
 	// MaxTurns bounds the agent loop; zero uses the CLI default.
 	MaxTurns int

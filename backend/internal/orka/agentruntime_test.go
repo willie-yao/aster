@@ -35,7 +35,8 @@ type fakeTaskAPI struct {
 	preexisting bool
 }
 
-func (f *fakeTaskAPI) Apply(_ context.Context, _ schema.GroupVersionResource, _ string, obj map[string]any) error {
+func (f *fakeTaskAPI) Apply(_ context.Context, gvr schema.GroupVersionResource, _ string, obj map[string]any) error {
+	_ = gvr
 	if f.deleted && len(f.phases) > 1 {
 		f.calls++
 	}
@@ -118,6 +119,13 @@ func (f *fakeTaskAPI) DeleteTaskIfIdentity(_ context.Context, _, _ string, uid, 
 		return false, nil
 	}
 	f.deleteCalls++
+	if len(f.deleteErrs) > 0 {
+		err := f.deleteErrs[0]
+		f.deleteErrs = f.deleteErrs[1:]
+		if err != nil {
+			return false, err
+		}
+	}
 	f.deleted = true
 	return true, nil
 }
@@ -233,7 +241,7 @@ func TestAgentRuntime_HappyPath(t *testing.T) {
 	metadata := kube.applied["metadata"].(map[string]any)
 	labels := metadata["labels"].(map[string]any)
 	annotations := metadata["annotations"].(map[string]any)
-	if labels[ManagedByLabel] != FixerManagedByValue || labels[fixContractLabel] != fixContractLabelValue || annotations[fixContractAnnotation] != fixContractVersion {
+	if labels[ManagedByLabel] != FixerManagedByValue || labels[agentContractLabel] != fixContractLabelValue || annotations[fixContractAnnotation] != agentContractVersion {
 		t.Errorf("Task identity metadata not pinned: labels=%v annotations=%v", labels, annotations)
 	}
 }
@@ -367,25 +375,137 @@ func TestAgentRuntimeRejectsUnsafeBounds(t *testing.T) {
 	}
 }
 
-func TestFixTaskName_ContentAddressedAndStable(t *testing.T) {
+func TestAgentTaskName_ContentAddressedAndStable(t *testing.T) {
 	baseSpec := spec()
 	opts := AgentOptions{AgentRef: "codex-fixer", Version: "v1"}
-	a := FixTaskName(baseSpec, opts)
-	b := FixTaskName(baseSpec, opts)
+	a := AgentTaskName(baseSpec, opts)
+	b := AgentTaskName(baseSpec, opts)
 	if a != b {
 		t.Errorf("same inputs must give the same name: %s vs %s", a, b)
 	}
 	changed := baseSpec
 	changed.Instruction = "different"
-	if c := FixTaskName(changed, opts); c == a {
+	if c := AgentTaskName(changed, opts); c == a {
 		t.Error("different instruction did not change the name")
 	}
 	opts.AgentRef = "other-agent"
-	if c := FixTaskName(baseSpec, opts); c == a {
+	if c := AgentTaskName(baseSpec, opts); c == a {
 		t.Error("different AgentRef did not change the name")
 	}
 	if !strings.HasPrefix(a, "fix-") {
 		t.Errorf("name should be fix-prefixed: %s", a)
+	}
+	prompt := AgentTaskName(baseSpec, AgentOptions{AgentRef: "codex-fixer", Version: "v1", Purpose: AgentPurposePromptAuthor})
+	if prompt == a || !strings.HasPrefix(prompt, "prompt-") {
+		t.Fatalf("prompt purpose name = %q, fix name = %q", prompt, a)
+	}
+	withSkills := baseSpec
+	withSkills.Skills = map[string]string{"alpha": "first", "beta": "second"}
+	reordered := baseSpec
+	reordered.Skills = map[string]string{"beta": "second", "alpha": "first"}
+	if AgentTaskName(withSkills, opts) != AgentTaskName(reordered, opts) {
+		t.Fatal("skill map ordering changed the Task name")
+	}
+	changedSkill := baseSpec
+	changedSkill.Skills = map[string]string{"alpha": "changed", "beta": "second"}
+	if AgentTaskName(withSkills, opts) == AgentTaskName(changedSkill, opts) {
+		t.Fatal("skill content did not change the Task name")
+	}
+}
+
+func TestAgentRuntimeTransfersSkillsThroughPrompt(t *testing.T) {
+	kube := &fakeTaskAPI{phases: []string{"Succeeded"}}
+	results, done := resultServer(t, StructuredResult{
+		BaseSHA: "0123456789abcdef0123456789abcdef01234567",
+		Diff:    "diff --git a/prompts/system.md b/prompts/system.md\n+prompt\n",
+		Files:   []string{"prompts/system.md"},
+	})
+	defer done()
+	s := spec()
+	s.AllowBash = false
+	s.Skills = map[string]string{"system-prompt-generation": "---\nname: system-prompt-generation\n---\nWrite the prompt.\n"}
+	r := &AgentRuntime{
+		kube: kube, results: results,
+		opts:      AgentOptions{AgentRef: "prompt-author", Purpose: AgentPurposePromptAuthor, PollEvery: time.Millisecond},
+		applyDiff: stubApply(map[string]string{"prompts/system.md": "prompt\n"}, nil),
+	}
+	res, err := r.Generate(context.Background(), s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Files["prompts/system.md"] != "prompt\n" {
+		t.Fatalf("result=%+v", res)
+	}
+	taskSpec := kube.applied["spec"].(map[string]any)
+	prompt, _ := taskSpec["prompt"].(string)
+	if !strings.Contains(prompt, "## Engine skill: system-prompt-generation") || !strings.Contains(prompt, "Write the prompt") || !strings.HasSuffix(prompt, s.Instruction) {
+		t.Fatalf("Task prompt did not carry the engine skill and instruction: %q", prompt)
+	}
+	if _, ok := taskSpec["skills"]; ok {
+		t.Fatalf("agent Task used unsupported dynamic skills: %+v", taskSpec)
+	}
+	metadata := kube.applied["metadata"].(map[string]any)
+	labels := metadata["labels"].(map[string]any)
+	annotations := metadata["annotations"].(map[string]any)
+	if labels[ManagedByLabel] != PromptAuthorManagedByValue || labels[agentContractLabel] != promptContractLabelValue || annotations[promptContractAnnotation] != agentContractVersion {
+		t.Fatalf("prompt Task metadata labels=%v annotations=%v", labels, annotations)
+	}
+}
+
+func TestAgentRuntimeRejectsUnsupportedExecutionPolicyBeforeClusterWrite(t *testing.T) {
+	tests := []struct {
+		name string
+		edit func(*runtime.GenerateSpec, *AgentOptions)
+		want string
+	}{
+		{name: "clone URL", edit: func(s *runtime.GenerateSpec, _ *AgentOptions) { s.Repo.CloneURL = "https://mirror.invalid/repo.git" }, want: "clone URL"},
+		{name: "model", edit: func(s *runtime.GenerateSpec, _ *AgentOptions) { s.Model = "model" }, want: "model is owned"},
+		{name: "native model", edit: func(s *runtime.GenerateSpec, _ *AgentOptions) { s.NativeModel = "provider/model" }, want: "native model"},
+		{name: "ambient auth", edit: func(s *runtime.GenerateSpec, _ *AgentOptions) { s.UseAmbientAuth = true }, want: "ambient"},
+		{name: "endpoint", edit: func(s *runtime.GenerateSpec, _ *AgentOptions) { s.Endpoint = "https://model.invalid/v1" }, want: "endpoint"},
+		{name: "token", edit: func(s *runtime.GenerateSpec, _ *AgentOptions) { s.Token = "secret" }, want: "token"},
+		{name: "headers", edit: func(s *runtime.GenerateSpec, _ *AgentOptions) { s.ExtraHeaders = map[string]string{"x": "secret"} }, want: "headers"},
+		{name: "network", edit: func(s *runtime.GenerateSpec, _ *AgentOptions) { s.NetworkDomains = []string{"model.invalid:443"} }, want: "network policy"},
+		{name: "purpose", edit: func(_ *runtime.GenerateSpec, o *AgentOptions) { o.Purpose = "unknown" }, want: "purpose"},
+		{name: "git secret", edit: func(_ *runtime.GenerateSpec, o *AgentOptions) { o.GitSecret = "Bad_Name" }, want: "git secret"},
+		{name: "skill name", edit: func(s *runtime.GenerateSpec, _ *AgentOptions) { s.Skills = map[string]string{"Bad_Name": "content"} }, want: "skill name"},
+		{name: "empty skill", edit: func(s *runtime.GenerateSpec, _ *AgentOptions) { s.Skills = map[string]string{"empty": " \n"} }, want: "empty"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := spec()
+			opts := AgentOptions{AgentRef: "agent"}
+			tc.edit(&s, &opts)
+			kube := &fakeTaskAPI{}
+			r := &AgentRuntime{kube: kube, results: &delayedResultAPI{}, opts: opts}
+			if _, err := r.Generate(context.Background(), s); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+			if kube.applied != nil {
+				t.Fatalf("invalid policy wrote a cluster resource: task=%v", kube.applied)
+			}
+		})
+	}
+}
+
+func TestAgentRuntimePreservesResultWhenCleanupIsPending(t *testing.T) {
+	kube := &fakeTaskAPI{phases: []string{"Succeeded"}, deleteErrs: []error{errors.New("delete denied")}}
+	results, done := resultServer(t, StructuredResult{
+		BaseSHA: "0123456789abcdef0123456789abcdef01234567", Diff: "diff", Files: []string{"x"},
+	})
+	defer done()
+	s := spec()
+	s.Skills = map[string]string{"prompt": "content"}
+	r := &AgentRuntime{
+		kube: kube, results: results, opts: AgentOptions{AgentRef: "agent", PollEvery: time.Millisecond},
+		applyDiff: stubApply(map[string]string{"x": "value"}, nil),
+	}
+	res, err := r.Generate(context.Background(), s)
+	if !errors.Is(err, runtime.ErrCleanupPending) {
+		t.Fatalf("error = %v", err)
+	}
+	if res.Files["x"] != "value" {
+		t.Fatalf("result=%+v", res)
 	}
 }
 
@@ -738,17 +858,17 @@ func TestAgentRuntimeRecreatesFailedTask(t *testing.T) {
 	}
 }
 
-func TestFixTaskNameSeparatesActionRequestExecutions(t *testing.T) {
+func TestAgentTaskNameSeparatesActionRequestExecutions(t *testing.T) {
 	first := spec()
 	first.ExecutionID = "request-one"
 	second := first
 	second.ExecutionID = "request-two"
-	if FixTaskName(first, AgentOptions{AgentRef: "agent"}) == FixTaskName(second, AgentOptions{AgentRef: "agent"}) {
+	if AgentTaskName(first, AgentOptions{AgentRef: "agent"}) == AgentTaskName(second, AgentOptions{AgentRef: "agent"}) {
 		t.Fatal("request-scoped executions shared a Task name")
 	}
 	legacy := spec()
 	legacyAgain := spec()
-	if FixTaskName(legacy, AgentOptions{AgentRef: "agent"}) != FixTaskName(legacyAgain, AgentOptions{AgentRef: "agent"}) {
+	if AgentTaskName(legacy, AgentOptions{AgentRef: "agent"}) != AgentTaskName(legacyAgain, AgentOptions{AgentRef: "agent"}) {
 		t.Fatal("legacy content-addressed name is unstable")
 	}
 }

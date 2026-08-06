@@ -87,7 +87,7 @@ func NewSourceInvestigator(
 func NewSourceInvestigatorFromEnv(cfg SourceInvestigationFromEnvConfig) (*SourceInvestigator, error) {
 	cfg.Namespace = strings.TrimSpace(cfg.Namespace)
 	if cfg.Namespace == "" {
-		cfg.Namespace = defaultFixNamespace
+		cfg.Namespace = defaultAgentNamespace
 	}
 	cfg.AgentRef = strings.TrimSpace(cfg.AgentRef)
 	cfg.API = strings.TrimSpace(cfg.API)
@@ -124,10 +124,10 @@ func validateSourceInvestigationAPI(raw string) error {
 
 func normalizeSourceInvestigationOptions(opts SourceInvestigationOptions) SourceInvestigationOptions {
 	if strings.TrimSpace(opts.Namespace) == "" {
-		opts.Namespace = defaultFixNamespace
+		opts.Namespace = defaultAgentNamespace
 	}
 	if strings.TrimSpace(opts.Version) == "" {
-		opts.Version = defaultFixVersion
+		opts.Version = defaultAgentVersion
 	}
 	if opts.MaxRetries < 0 {
 		opts.MaxRetries = 0
