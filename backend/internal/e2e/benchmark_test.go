@@ -6,11 +6,13 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -101,8 +103,25 @@ type benchCase struct {
 	// transient-vs-persistent check) see the real persistence signal.
 	consecutiveFailures int
 	oppositeDiagnosis   string
+	oppositeTransient   bool
+	referenceDiagnosis  string
+	referenceTransient  bool
+	allowUnavailable    bool
+	expectedTransient   *bool
+	forbidden           []benchSignal
+	consumerCommit      string
+	projectSHA256       string
+	promptSHA256        string
 	signals             []benchSignal
 }
+
+type benchmarkOutcome string
+
+const (
+	benchmarkOutcomeUsable                    benchmarkOutcome = "usable"
+	benchmarkOutcomeGroundedPolicyUnavailable benchmarkOutcome = "grounded_policy_unavailable"
+	benchmarkOutcomeUnknown                   benchmarkOutcome = "unknown"
+)
 
 // fixtureReleaseBase is the download root for benchmark-fixtures release assets.
 const fixtureReleaseBase = "https://github.com/willie-yao/prow-ai-dashboard/releases/download/benchmark-fixtures/"
@@ -400,13 +419,39 @@ func TestAIBenchmark(t *testing.T) {
 		token = "benchmark" // Dynamo needs no key; keep the client happy.
 	}
 
-	// Optional: load a real consumer's AI tuning + system prompt so the run
-	// matches that live deploy. Otherwise use the built-in prompt and defaults.
+	cases := benchCases
+	if path := strings.TrimSpace(os.Getenv("BENCH_MANIFEST")); path != "" {
+		cases, err = loadBenchmarkManifest(path)
+		if err != nil {
+			t.Fatalf("BENCH_MANIFEST=%s: %v", path, err)
+		}
+	}
+	if selected := strings.TrimSpace(os.Getenv("BENCH_CASE")); selected != "" {
+		cases, err = selectBenchmarkCases(cases, selected)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Optional: load a real consumer's AI tuning + system prompt so the selected
+	// case matches that live deploy. Otherwise use the built-in prompt and defaults.
 	systemPrompt := ComposeBenchPrompt()
 	agentic := defaultBenchAgentic()
 	configuredCacheGeneration := ""
 	skillProjectDir := t.TempDir()
 	if dir := os.Getenv("BENCH_PROJECT_DIR"); dir != "" {
+		if len(cases) != 1 {
+			for _, bc := range cases {
+				if bc.consumerCommit != "" {
+					t.Fatal("BENCH_PROJECT_DIR with pinned external consumers requires BENCH_CASE to select exactly one case")
+				}
+			}
+		}
+		if len(cases) == 1 && cases[0].consumerCommit != "" {
+			if err := validateBenchmarkProjectDir(dir, cases[0]); err != nil {
+				t.Fatalf("BENCH_PROJECT_DIR=%s: %v", dir, err)
+			}
+		}
 		cfg, prompt, err := project.LoadDir(dir)
 		if err != nil {
 			t.Fatalf("BENCH_PROJECT_DIR=%s: %v", dir, err)
@@ -415,6 +460,12 @@ func TestAIBenchmark(t *testing.T) {
 		agentic = cfg.AI.EffectiveAgentic()
 		configuredCacheGeneration = cfg.AI.CacheGeneration
 		skillProjectDir = dir
+	} else {
+		for _, bc := range cases {
+			if bc.consumerCommit != "" {
+				t.Fatal("pinned external benchmark cases require BENCH_CASE and BENCH_PROJECT_DIR")
+			}
+		}
 	}
 	cacheGenerationFingerprint, err := benchmarkCacheGenerationFingerprint(configuredCacheGeneration)
 	if err != nil {
@@ -425,13 +476,6 @@ func TestAIBenchmark(t *testing.T) {
 		t.Fatalf("load benchmark skills: %v", err)
 	}
 
-	cases := benchCases
-	if path := strings.TrimSpace(os.Getenv("BENCH_MANIFEST")); path != "" {
-		cases, err = loadBenchmarkManifest(path)
-		if err != nil {
-			t.Fatalf("BENCH_MANIFEST=%s: %v", path, err)
-		}
-	}
 	repetitions := 1
 	if raw := strings.TrimSpace(os.Getenv("BENCH_REPETITIONS")); raw != "" {
 		value, err := strconv.Atoi(raw)
@@ -454,6 +498,113 @@ func TestAIBenchmark(t *testing.T) {
 				runBenchCase(t, bc, repetition, resultsPath, apiMode, endpoint, model, token, systemPrompt, agentic, projectSkills, cacheGenerationFingerprint)
 			})
 		}
+	}
+}
+
+func selectBenchmarkCases(cases []benchCase, selected string) ([]benchCase, error) {
+	for _, bc := range cases {
+		if bc.name == selected {
+			return []benchCase{bc}, nil
+		}
+	}
+	return nil, fmt.Errorf("BENCH_CASE %q does not match any benchmark case", selected)
+}
+
+func TestSelectBenchmarkCases(t *testing.T) {
+	cases := []benchCase{{name: "a"}, {name: "b"}}
+	selected, err := selectBenchmarkCases(cases, "b")
+	if err != nil || len(selected) != 1 || selected[0].name != "b" {
+		t.Fatalf("selected = %+v, error = %v", selected, err)
+	}
+	if _, err := selectBenchmarkCases(cases, "missing"); err == nil {
+		t.Fatal("missing BENCH_CASE was accepted")
+	}
+}
+
+func validateBenchmarkProjectDir(dir string, bc benchCase) error {
+	for path, want := range map[string]string{
+		filepath.Join(dir, "project.yaml"):         bc.projectSHA256,
+		filepath.Join(dir, "prompts", "system.md"): bc.promptSHA256,
+	} {
+		data, err := os.ReadFile(filepath.Clean(path))
+		if err != nil {
+			return fmt.Errorf("read pinned benchmark consumer file %s: %w", path, err)
+		}
+		got := fmt.Sprintf("%x", sha256.Sum256(data))
+		if got != want {
+			return fmt.Errorf("pinned benchmark consumer file %s SHA-256 = %s, want %s", path, got, want)
+		}
+	}
+	command := exec.Command("git", "-C", dir, "rev-parse", "HEAD")
+	output, err := command.Output()
+	if err != nil {
+		return fmt.Errorf("resolve pinned benchmark consumer commit: %w", err)
+	}
+	if got := strings.TrimSpace(string(output)); got != bc.consumerCommit {
+		return fmt.Errorf("pinned benchmark consumer commit = %s, want %s", got, bc.consumerCommit)
+	}
+	status, err := exec.Command("git", "-C", dir, "status", "--porcelain", "--untracked-files=all").Output()
+	if err != nil {
+		return fmt.Errorf("inspect pinned benchmark consumer worktree: %w", err)
+	}
+	if strings.TrimSpace(string(status)) != "" {
+		return fmt.Errorf("pinned benchmark consumer worktree is not clean")
+	}
+	return nil
+}
+
+func TestValidateBenchmarkProjectDir(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "prompts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	projectData := []byte("id: test\n")
+	promptData := []byte("test prompt\n")
+	if err := os.WriteFile(filepath.Join(dir, "project.yaml"), projectData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "prompts", "system.md"), promptData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"init", "-q"},
+		{"add", "project.yaml", "prompts/system.md"},
+		{"-c", "commit.gpgsign=false", "-c", "user.name=Benchmark", "-c", "user.email=benchmark@example.invalid", "commit", "-qm", "fixture"},
+	} {
+		command := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+	}
+	head, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bc := benchCase{
+		consumerCommit: strings.TrimSpace(string(head)),
+		projectSHA256:  fmt.Sprintf("%x", sha256.Sum256(projectData)),
+		promptSHA256:   fmt.Sprintf("%x", sha256.Sum256(promptData)),
+	}
+	if err := validateBenchmarkProjectDir(dir, bc); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "prompts", "system.md"), []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateBenchmarkProjectDir(dir, bc); err == nil || !strings.Contains(err.Error(), "SHA-256") {
+		t.Fatalf("changed prompt error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "prompts", "system.md"), promptData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "skills"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "skills", "variant.yaml"), []byte("id: variant\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateBenchmarkProjectDir(dir, bc); err == nil || !strings.Contains(err.Error(), "not clean") {
+		t.Fatalf("untracked skill error = %v", err)
 	}
 }
 
@@ -601,7 +752,15 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 	tc := benchTestCase(bc)
 
 	start := time.Now()
-	service.Analyze(context.Background(), &http.Client{Timeout: 60 * time.Second}, jobID, loc.BuildPath(), run, tc)
+	result, analysisErr := service.AnalyzeFailure(context.Background(), &http.Client{Timeout: 60 * time.Second}, ai.FailureAnalysisRequest{
+		JobID: jobID, BuildPrefix: loc.BuildPath(), Build: run.BuildInfo, TestCase: *tc,
+		ConsecutiveFailures: bc.consecutiveFailures, CacheGeneration: cacheGeneration,
+	})
+	tc.AISummary, tc.AIAnalysis = result.Summary, result.Analysis
+	outcome, outcomeErr := benchmarkOutcomeForAnalysisError(analysisErr)
+	if outcomeErr != nil {
+		t.Fatalf("analysis failed before scoring: %v", outcomeErr)
+	}
 	elapsed := time.Since(start).Round(time.Second)
 
 	snapshot := traceStore.Snapshot()
@@ -622,14 +781,46 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 		cacheVerification = verifyBenchmarkCacheReuse(t, client, clientOptions, service, cacheGeneration, jobID, bc, run, tc.AIAnalysis)
 	}
 	critiquePolicy := ai.CritiqueCachePolicy(agentic.Critique.EffectiveCachePolicy())
-	writeBenchmarkJSONL(t, resultsPath, bc, repetition, tc, elapsed, snapshot, draftObservations, selectedAttempt, toolUsage, traceSummary, requestCap.PerOperation, cacheGeneration, critiquePolicy, cacheVerification)
+	writeBenchmarkJSONL(t, resultsPath, bc, repetition, tc, outcome, elapsed, snapshot, draftObservations, selectedAttempt, toolUsage, traceSummary, requestCap.PerOperation, cacheGeneration, critiquePolicy, cacheVerification)
 	if traceSummary.truncated {
 		t.Fatalf("provider request cap cannot be verified from a truncated trace")
 	}
 	if traceSummary.modelRequests > requestCap.PerOperation || traceSummary.providerAttempts > requestCap.PerOperation {
 		t.Fatalf("provider request cap exceeded: model_requests=%d provider_attempts=%d cap=%d", traceSummary.modelRequests, traceSummary.providerAttempts, requestCap.PerOperation)
 	}
-	scoreBenchCase(t, bc, tc, elapsed, "in-process", benchmarkMinGCSBytes(bc, agentic.MinGCSBytes), toolUsage, traceSummary, draftObservations, selectedAttempt)
+	scoreBenchCase(t, bc, tc, outcome, elapsed, "in-process", benchmarkMinGCSBytes(bc, agentic.MinGCSBytes), toolUsage, traceSummary, draftObservations, selectedAttempt)
+}
+
+func benchmarkOutcomeForAnalysisError(err error) (benchmarkOutcome, error) {
+	if err == nil {
+		return benchmarkOutcomeUsable, nil
+	}
+	if errors.Is(err, ai.ErrMissingArtifactCitation) {
+		return benchmarkOutcomeGroundedPolicyUnavailable, nil
+	}
+	return benchmarkOutcomeUnknown, err
+}
+
+func TestBenchmarkOutcomeForAnalysisError(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		err     error
+		outcome benchmarkOutcome
+		ok      bool
+	}{
+		{name: "usable", outcome: benchmarkOutcomeUsable, ok: true},
+		{name: "grounded policy", err: fmt.Errorf("wrapped: %w", ai.ErrMissingArtifactCitation), outcome: benchmarkOutcomeGroundedPolicyUnavailable, ok: true},
+		{name: "provider", err: errors.New("provider 503"), outcome: benchmarkOutcomeUnknown},
+		{name: "timeout", err: context.DeadlineExceeded, outcome: benchmarkOutcomeUnknown},
+		{name: "tools", err: ai.ErrToolsUnsupported, outcome: benchmarkOutcomeUnknown},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			outcome, err := benchmarkOutcomeForAnalysisError(tc.err)
+			if outcome != tc.outcome || (err == nil) != tc.ok {
+				t.Fatalf("outcome = %q, error = %v", outcome, err)
+			}
+		})
+	}
 }
 
 func benchmarkMinGCSBytes(bc benchCase, configured int) int {
@@ -1250,7 +1441,7 @@ func benchTestCase(bc benchCase) *models.TestCase {
 	}
 }
 
-func scoreBenchCase(t *testing.T, bc benchCase, tc *models.TestCase, elapsed time.Duration, backend string, minGCSBytes int, toolUsage benchmarkToolUsage, traceSummary benchmarkTraceSummary, draftObservations []benchmarkDraftObservation, selectedAttempt int) {
+func scoreBenchCase(t *testing.T, bc benchCase, tc *models.TestCase, outcome benchmarkOutcome, elapsed time.Duration, backend string, minGCSBytes int, toolUsage benchmarkToolUsage, traceSummary benchmarkTraceSummary, draftObservations []benchmarkDraftObservation, selectedAttempt int) {
 	t.Helper()
 	t.Logf("\n===== %s (%s) =====", bc.name, backend)
 	for _, line := range benchmarkTelemetryLines(elapsed, tc.AIAnalysis, minGCSBytes, toolUsage, traceSummary) {
@@ -1260,39 +1451,123 @@ func scoreBenchCase(t *testing.T, bc benchCase, tc *models.TestCase, elapsed tim
 		t.Log(line)
 	}
 	if tc.AIAnalysis == nil {
+		if benchmarkAllowsUnavailable(bc, tc, outcome) {
+			t.Logf("ALLOWED: %s produced a grounded-policy unavailable result after %s", backend, elapsed)
+			return
+		}
 		t.Fatalf("%s analysis produced no AIAnalysis after %s (ai_summary_present=%v)", backend, elapsed, tc.AISummary != nil)
 	}
 	if tc.AISummary == nil {
 		t.Fatalf("%s analysis produced AIAnalysis without AISummary after %s", backend, elapsed)
 	}
 
-	a := tc.AIAnalysis
-	scored := strings.ToLower(strings.Join([]string{tc.AISummary.Summary, a.RootCause, a.SuggestedFix}, "\n"))
-
-	var missedMust []string
-	hit, total := 0, len(bc.signals)
-	for _, s := range bc.signals {
-		ok := s.matches(scored)
-		if ok {
-			hit++
-		}
+	assessment := assessBenchmarkCase(bc, tc)
+	for _, result := range assessment.results {
 		tier := "nice"
-		if s.must {
+		if result.required {
 			tier = "MUST"
 		}
 		mark := "MISS"
-		if ok {
+		if result.hit {
 			mark = "hit"
 		}
-		t.Logf("  [%s] %-4s %s", tier, mark, s.name)
-		if s.must && !ok {
-			missedMust = append(missedMust, s.name)
+		t.Logf("  [%s] %-4s %s", tier, mark, result.name)
+	}
+	t.Logf("SCORE: %d/%d signals hit", assessment.hits, assessment.total)
+
+	if len(assessment.missingMust) > 0 {
+		t.Errorf("benchmark %s missed required root-cause signal(s): %s", bc.name, strings.Join(assessment.missingMust, ", "))
+	}
+}
+
+type benchmarkSignalResult struct {
+	name     string
+	hit      bool
+	required bool
+}
+
+type benchmarkAssessment struct {
+	hits        int
+	total       int
+	missingMust []string
+	results     []benchmarkSignalResult
+}
+
+func assessBenchmarkCase(bc benchCase, tc *models.TestCase) benchmarkAssessment {
+	assessment := benchmarkAssessment{total: len(bc.signals) + len(bc.forbidden)}
+	if bc.expectedTransient != nil {
+		assessment.total++
+	}
+	if tc == nil || tc.AISummary == nil || tc.AIAnalysis == nil {
+		return assessment
+	}
+	scored := strings.ToLower(strings.Join([]string{tc.AISummary.Summary, tc.AIAnalysis.RootCause, tc.AIAnalysis.SuggestedFix}, "\n"))
+	for _, signal := range bc.signals {
+		hit := signal.matches(scored)
+		assessment.results = append(assessment.results, benchmarkSignalResult{name: signal.name, hit: hit, required: signal.must})
+		if hit {
+			assessment.hits++
+		} else if signal.must {
+			assessment.missingMust = append(assessment.missingMust, signal.name)
 		}
 	}
-	t.Logf("SCORE: %d/%d signals hit", hit, total)
+	if bc.expectedTransient != nil {
+		hit := tc.AISummary.IsTransient == *bc.expectedTransient
+		assessment.results = append(assessment.results, benchmarkSignalResult{name: "transient classification", hit: hit, required: true})
+		if hit {
+			assessment.hits++
+		} else {
+			assessment.missingMust = append(assessment.missingMust, "transient classification")
+		}
+	}
+	for _, forbidden := range bc.forbidden {
+		hit := !forbidden.matches(scored)
+		name := "forbidden: " + forbidden.name
+		assessment.results = append(assessment.results, benchmarkSignalResult{name: name, hit: hit, required: true})
+		if hit {
+			assessment.hits++
+		} else {
+			assessment.missingMust = append(assessment.missingMust, name)
+		}
+	}
+	return assessment
+}
 
-	if len(missedMust) > 0 {
-		t.Errorf("benchmark %s missed required root-cause signal(s): %s", bc.name, strings.Join(missedMust, ", "))
+func benchmarkAllowsUnavailable(bc benchCase, tc *models.TestCase, outcome benchmarkOutcome) bool {
+	return bc.allowUnavailable && outcome == benchmarkOutcomeGroundedPolicyUnavailable && tc != nil && tc.AIAnalysis == nil && tc.AISummary != nil && !tc.AISummary.IsTransient
+}
+
+func benchmarkContainerOutcome(tc *models.TestCase) benchmarkOutcome {
+	if tc != nil && tc.AIAnalysis != nil {
+		return benchmarkOutcomeUsable
+	}
+	if tc != nil && tc.AISummary != nil && !tc.AISummary.IsTransient && strings.HasPrefix(tc.AISummary.Summary, "AI analysis unavailable: no validated artifact citation") {
+		return benchmarkOutcomeGroundedPolicyUnavailable
+	}
+	return benchmarkOutcomeUnknown
+}
+
+func TestBenchmarkAllowsUnavailable(t *testing.T) {
+	valid := &models.TestCase{AISummary: &models.AISummary{Summary: "AI analysis unavailable: evidence remained inconclusive"}}
+	if !benchmarkAllowsUnavailable(benchCase{allowUnavailable: true}, valid, benchmarkOutcomeGroundedPolicyUnavailable) {
+		t.Fatal("allowed unavailable result was rejected")
+	}
+	for _, tc := range []struct {
+		name string
+		bc   benchCase
+		tc   *models.TestCase
+		out  benchmarkOutcome
+	}{
+		{name: "case disabled", tc: valid, out: benchmarkOutcomeGroundedPolicyUnavailable},
+		{name: "wrong outcome", bc: benchCase{allowUnavailable: true}, tc: valid, out: benchmarkOutcomeUnknown},
+		{name: "transient", bc: benchCase{allowUnavailable: true}, tc: &models.TestCase{AISummary: &models.AISummary{Summary: "AI analysis unavailable: x", IsTransient: true}}, out: benchmarkOutcomeGroundedPolicyUnavailable},
+		{name: "analysis attached", bc: benchCase{allowUnavailable: true}, tc: &models.TestCase{AISummary: valid.AISummary, AIAnalysis: &models.AIAnalysis{RootCause: "cause"}}, out: benchmarkOutcomeGroundedPolicyUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if benchmarkAllowsUnavailable(tc.bc, tc.tc, tc.out) {
+				t.Fatal("unexpected allowed unavailable result")
+			}
+		})
 	}
 }
 
