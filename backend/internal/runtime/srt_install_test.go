@@ -81,6 +81,7 @@ func TestSRTInstallerContract(t *testing.T) {
 		`./hack/install-srt.sh "$RUNNER_TEMP/srt-0.0.70"`,
 		`"$SRT_BIN" --help`,
 		"kernel.apparmor_restrict_unprivileged_userns=0",
+		`test "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns)" = "0"`,
 		"installer_schema=2",
 		"TestSRTSandboxHostileIntegration",
 	} {
