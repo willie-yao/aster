@@ -153,10 +153,10 @@ func writePromptCleanupWarning(out io.Writer, res promptauthor.Result) {
 		return
 	}
 	if res.CleanupWork != nil {
-		fmt.Fprintf(out, "Prompt authoring completed, but Orka Task cleanup is still pending for %s/%s.\n", res.CleanupWork.Namespace, res.CleanupWork.Name)
+		fmt.Fprintf(out, "Orka Task cleanup is still pending for %s/%s.\n", res.CleanupWork.Namespace, res.CleanupWork.Name)
 		return
 	}
-	fmt.Fprintln(out, "Prompt authoring completed, but Orka Task cleanup is still pending.")
+	fmt.Fprintln(out, "Orka Task cleanup is still pending.")
 }
 
 func promptExecutionID() (string, error) {

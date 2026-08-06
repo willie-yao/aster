@@ -310,7 +310,7 @@ func wizardPromptAuthoring(ctx context.Context, prompt wizardUI, opts *Options) 
 		}
 		if effectivePromptAgentRuntime(*opts) == promptRuntimeOrka {
 			if opts.PromptOrkaAPI == "" {
-				value, err := prompt.Input(ctx, inputPrompt{Title: "Orka result API", Description: "Absolute HTTP or HTTPS base URL.", Required: true, Validate: validateAIEndpoint})
+				value, err := prompt.Input(ctx, inputPrompt{Title: "Orka result API", Description: "Absolute HTTP or HTTPS base URL.", Required: true, Validate: validatePromptOrkaAPI})
 				if err != nil {
 					return err
 				}

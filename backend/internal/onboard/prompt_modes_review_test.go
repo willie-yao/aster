@@ -254,3 +254,14 @@ func TestValidateOptionsRejectsOrkaAPIQueryAndFragment(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateOptionsRejectsOrkaTokenInPlanFields(t *testing.T) {
+	t.Setenv("ORKA_API_TOKEN", "orka-result-secret")
+	opts := testPromptModeOptions(promptModeAgent)
+	opts.PromptAgentRuntime = promptRuntimeOrka
+	opts.PromptOrkaAPI = "http://orka.example.test:8080"
+	opts.PromptOrkaAgentRef = "orka-result-secret"
+	if err := validateOptions(&opts); err == nil || !strings.Contains(err.Error(), "credential was supplied") || strings.Contains(err.Error(), "orka-result-secret") {
+		t.Fatalf("error = %v", err)
+	}
+}

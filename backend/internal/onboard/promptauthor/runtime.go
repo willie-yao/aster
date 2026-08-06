@@ -140,13 +140,13 @@ func (r *OpenCodeRuntime) Generate(ctx context.Context, spec Spec) (Result, erro
 		runtimeName = "opencode"
 	}
 	result := Result{Runtime: runtimeName, Duration: time.Since(started), Output: generated.Output}
-	cleanupPending := errors.Is(err, agentruntime.ErrCleanupPending) && len(generated.Files) > 0
+	cleanupPending := errors.Is(err, agentruntime.ErrCleanupPending)
 	result.CleanupPending = cleanupPending
 	if cleanupPending && observedWork.Name != "" {
 		work := observedWork
 		result.CleanupWork = &work
 	}
-	if err != nil && !cleanupPending {
+	if err != nil && (!cleanupPending || len(generated.Files) == 0) {
 		return result, err
 	}
 	if diffHasDestructiveChange(generated.Diff) {

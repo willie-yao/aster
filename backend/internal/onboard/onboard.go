@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"text/template"
@@ -246,7 +247,7 @@ func validateCredentialSeparation(opts Options) error {
 		opts.AIAPI, opts.AIEndpoint, opts.AIModel,
 		opts.DeploymentAIAPI, opts.DeploymentAIEndpoint, opts.DeploymentAIModel,
 	}
-	for _, credential := range []string{opts.AIToken, opts.GitHubToken} {
+	for _, credential := range onboardingCredentialValues(opts) {
 		if credential == "" {
 			continue
 		}
@@ -257,6 +258,10 @@ func validateCredentialSeparation(opts Options) error {
 		}
 	}
 	return nil
+}
+
+func onboardingCredentialValues(opts Options) []string {
+	return []string{opts.AIToken, opts.GitHubToken, os.Getenv("ORKA_API_TOKEN")}
 }
 
 func validateAIEndpoint(endpoint string) error {

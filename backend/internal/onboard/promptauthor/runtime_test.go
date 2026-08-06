@@ -83,6 +83,16 @@ func TestOpenCodeRuntimePreservesValidPromptOnCleanupPending(t *testing.T) {
 	}
 }
 
+func TestOpenCodeRuntimePreservesCleanupIdentityWithoutFiles(t *testing.T) {
+	agent := &fakeAgent{err: fmt.Errorf("execution failed: %w", agentruntime.ErrCleanupPending)}
+	got, err := (&OpenCodeRuntime{Agent: agent, Runtime: "orka", AgentOwnsProvider: true}).Generate(context.Background(), Spec{
+		Repo: agentruntime.RepoRef{Owner: "o", Name: "n", Ref: "sha"}, Instruction: "Generate.",
+	})
+	if err == nil || !got.CleanupPending || got.CleanupWork == nil || got.CleanupWork.Name != "prompt-task" {
+		t.Fatalf("result=%+v error=%v", got, err)
+	}
+}
+
 func TestOpenCodeRuntimeRejectsUnsafeChanges(t *testing.T) {
 	tests := map[string]agentruntime.GenerateResult{
 		"missing prompt": {Files: map[string]string{"other.txt": "x"}},

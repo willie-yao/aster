@@ -181,7 +181,7 @@ func candidateConfidence(candidate DashboardCandidate) Confidence {
 }
 
 func validateRenderedFilesNoCredentials(opts Options, files map[string]string) error {
-	for _, credential := range []string{opts.AIToken, opts.GitHubToken} {
+	for _, credential := range onboardingCredentialValues(opts) {
 		if credential == "" {
 			continue
 		}
