@@ -149,13 +149,17 @@ type critiqueQuality struct {
 }
 
 type critiqueDraftCandidate struct {
-	parsed           analysisResponse
-	content          string
-	providerItems    []json.RawMessage
-	rawQuality       critiqueQuality
-	quality          critiqueQuality
-	attempt          int
-	evidenceRevision int
+	parsed                 analysisResponse
+	content                string
+	providerItems          []json.RawMessage
+	rawQuality             critiqueQuality
+	quality                critiqueQuality
+	attempt                int
+	evidenceRevision       int
+	supportedFacts         []supportedCausalFact
+	semanticFindingClasses []string
+	semanticReviewPassed   bool
+	semanticRevision       bool
 }
 
 type draftReplacementDecision struct {
@@ -165,6 +169,12 @@ type draftReplacementDecision struct {
 	rawSemanticRegression    bool
 	publishedStrictDominance bool
 	currentQualityRefreshed  bool
+	currentSupportedFacts    int
+	candidateSupportedFacts  int
+	supportedFactsRetained   int
+	supportedFactsAdded      int
+	supportedFactsDropped    int
+	supportedCauseRegression bool
 }
 
 const (
@@ -173,6 +183,9 @@ const (
 	draftReasonCandidateSemanticRegression  = "candidate_adds_semantic_regression"
 	draftReasonCandidateRootWithoutEvidence = "candidate_changes_root_without_evidence"
 	draftReasonCandidateEvidenceBackedRoot  = "candidate_evidence_backed_root_change"
+	draftReasonCandidateSemanticFindings    = "candidate_has_semantic_findings"
+	draftReasonCandidateSemanticUnavailable = "candidate_semantic_review_unavailable"
+	draftReasonCandidateDropsSupportedCause = "candidate_drops_supported_cause"
 	draftReasonCandidateNotBetter           = "candidate_not_strictly_better"
 	draftReasonTiePreservesEarlier          = "tie_preserves_earlier"
 	draftReasonSemanticTieReplaces          = "semantic_tie_replaces"
@@ -953,10 +966,6 @@ func (c *Client) doAnalyzeAgentic(
 	critiqueRetries := &critiqueRetryBudget{max: in.Opts.CritiqueMaxRetries}
 	maxIters := in.Opts.MaxIters
 
-	// semanticJudged bounds the LLM semantic judge to at most one call per
-	// analysis, so the second-line reasoning check does not multiply cost.
-	semanticJudged := false
-
 	// Fixed schema cost added to every size estimate so compaction budgets
 	// against the real request, not just message content.
 	schemaBytes := schemaPayloadBytes(schemas)
@@ -1109,26 +1118,24 @@ agentLoop:
 					// count, so it still engages on hard drafts that spent those
 					// retries) and only drives a re-prompt. Best-effort: a failed
 					// judge call publishes the draft rather than blocking.
-					if in.Opts.SemanticJudge && !semanticJudged {
-						semanticJudged = true
+					if in.Opts.SemanticJudge && !state.judgeRan {
 						state.judgeRan = true
-						requestStart := time.Now()
-						objs, err := c.semanticCritique(loopCtx, parsed, state.readPathList(), headroom)
-						state.recentModelRequest = time.Since(requestStart)
+						result, err := c.semanticCritiqueTracked(loopCtx, state, semanticJudgeStageDraft, parsed, nil, nil, headroom)
 						switch {
 						case err != nil:
-							recordTrace(loopCtx, TraceEvent{Kind: "semantic_judge", Outcome: "error", ErrorCode: "semantic_judge_error"})
+							recordTrace(loopCtx, semanticJudgeTraceEvent(semanticJudgeStageDraft, "error", result, "semantic_judge_error"))
 							log.Printf("  ⓘ semantic judge: skipped (%v)", err)
-						case len(objs) > 0:
-							recordTrace(loopCtx, TraceEvent{Kind: "semantic_judge", Outcome: "objected", IssueCount: len(objs)})
+						case len(result.Findings) > 0:
+							recordTrace(loopCtx, semanticJudgeTraceEvent(semanticJudgeStageDraft, "objected", result, ""))
 							state.judgeObjected = true
+							prior := parsed
 							echo := modelMessage{Role: "assistant", ProviderItems: msg.ProviderItems}
 							if msg.Content != nil {
 								echo.Content = msg.Content
 							}
 							repairMessages := append(messages, echo, modelMessage{
 								Role:    "user",
-								Content: strPtr(formatSemanticObjections(objs)),
+								Content: strPtr(formatSemanticFindings(result.Findings)),
 							})
 							revised, revisedItems, safe := c.runFinalizeRoundTracked(loopCtx, state, repairMessages, headroom)
 							if safe {
@@ -1141,15 +1148,19 @@ agentLoop:
 									}
 									semanticCandidate := state.newDraftCandidate("semantic_retry", revised, revisedItems, rp, revisedCritique)
 									policy := effectiveCritiqueCachePolicy(in.Opts.CritiqueCachePolicy, in.Opts.CritiqueMaxRetries)
-									decision := state.considerDraftDecisionForPolicy(semanticCandidate, true, policy)
+									decision := c.reviewSemanticRevision(loopCtx, state, prior, result.Findings, semanticCandidate, headroom, policy)
 									if !decision.accepted && semanticRevisionRejected(decision, semanticCandidate, policy) {
 										state.judgeRevisionRejected = true
-										break
-									}
-									if decision.accepted {
+										recordTrace(loopCtx, TraceEvent{Kind: "semantic_judge", Status: semanticJudgeStageRevision, Outcome: "revision_rejected", IssueCount: len(semanticCandidate.semanticFindingClasses)})
+									} else if decision.accepted {
 										state.considerFallbackDraftForPolicy(semanticCandidate, true, policy)
 										state.judgeRevised = true
+										recordTrace(loopCtx, TraceEvent{Kind: "semantic_judge", Status: semanticJudgeStageRevision, Outcome: "revised"})
+									} else {
+										recordTrace(loopCtx, TraceEvent{Kind: "semantic_judge", Status: semanticJudgeStageRevision, Outcome: "revision_not_selected"})
 									}
+								} else {
+									recordTrace(loopCtx, TraceEvent{Kind: "semantic_judge", Status: semanticJudgeStageRevision, Outcome: "revision_unparseable", IssueCount: len(result.Findings)})
 								}
 							}
 							fallback := state.promoteFallbackDraft()
@@ -1159,8 +1170,8 @@ agentLoop:
 							state.critiquePassed = fallback.quality.Passed
 							break agentLoop
 						default:
-							recordTrace(loopCtx, TraceEvent{Kind: "semantic_judge", Outcome: "passed"})
-							log.Printf("  ✓ semantic judge: no objections")
+							recordTrace(loopCtx, semanticJudgeTraceEvent(semanticJudgeStageDraft, "passed", result, ""))
+							log.Printf("  ✓ semantic judge: no findings")
 							state.considerDraft(candidateDraft, true)
 							state.considerFallbackDraft(candidateDraft, true)
 						}
@@ -1558,7 +1569,7 @@ func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, m
 		state.considerFallbackDraft(candidate, semanticAccepted)
 		if state.considerDraft(candidate, semanticAccepted) && semanticAccepted {
 			state.judgeRevised = true
-			recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Outcome: "revised"})
+			recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Status: semanticJudgeStageRevision, Outcome: "revised"})
 		}
 	} else if state.bestDraft == nil {
 		candidate := state.newDraftCandidate(draftPhase, finalContent, finalProviderItems, parsed, out)
@@ -1566,7 +1577,7 @@ func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, m
 		state.considerFallbackDraft(candidate, semanticAccepted)
 		if state.considerDraft(candidate, semanticAccepted) && semanticAccepted {
 			state.judgeRevised = true
-			recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Outcome: "revised"})
+			recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Status: semanticJudgeStageRevision, Outcome: "revised"})
 		}
 	}
 	if out.Passed {
@@ -1590,11 +1601,11 @@ func (c *Client) runFinalizeRoundTracked(ctx context.Context, state *agentState,
 	return content, items, safe
 }
 
-func (c *Client) semanticCritiqueTracked(ctx context.Context, state *agentState, parsed analysisResponse, paths []string, headroom contextHeadroom) ([]string, error) {
+func (c *Client) semanticCritiqueTracked(ctx context.Context, state *agentState, stage string, parsed analysisResponse, prior *analysisResponse, initialFindings []semanticFinding, headroom contextHeadroom) (semanticJudgeResult, error) {
 	started := time.Now()
-	objections, err := c.semanticCritique(ctx, parsed, paths, headroom)
+	result, err := c.semanticCritique(ctx, state, stage, parsed, prior, initialFindings, headroom)
 	state.recentModelRequest = time.Since(started)
-	return objections, err
+	return result, err
 }
 
 func critiqueTraceEvent(outcome string, out critiqueOutcome) TraceEvent {
@@ -1899,7 +1910,8 @@ func rootCauseFingerprint(rootCause string) string {
 }
 
 func (s *agentState) newDraftCandidate(phase, content string, providerItems []json.RawMessage, parsed analysisResponse, out critiqueOutcome) *critiqueDraftCandidate {
-	publishedOut := s.publishedCritiqueOutcome(parsed)
+	published := s.publishedAnalysis(parsed)
+	publishedOut := s.currentCritiqueOutcome(published)
 	return &critiqueDraftCandidate{
 		parsed:           parsed,
 		content:          content,
@@ -1908,13 +1920,19 @@ func (s *agentState) newDraftCandidate(phase, content string, providerItems []js
 		quality:          critiqueQualityFor(publishedOut),
 		attempt:          s.observeDraft(phase, parsed, out, publishedOut),
 		evidenceRevision: s.evidenceRevision,
+		supportedFacts:   supportedCausalFacts(published, s.analysisEvidence),
+		semanticRevision: phase == "semantic_retry",
 	}
 }
 
 func (s *agentState) publishedCritiqueOutcome(parsed analysisResponse) critiqueOutcome {
+	return s.currentCritiqueOutcome(s.publishedAnalysis(parsed))
+}
+
+func (s *agentState) publishedAnalysis(parsed analysisResponse) analysisResponse {
 	parsed = sanitizePublishedCitations(parsed, analysisCitationContext{Evidence: s.analysisEvidence, Full: s.analysisEvidenceFull})
 	parsed = s.preparePublishedAnalysis(parsed)
-	return s.currentCritiqueOutcome(parsed)
+	return parsed
 }
 
 func (s *agentState) currentCritiqueOutcome(parsed analysisResponse) critiqueOutcome {
@@ -2001,6 +2019,12 @@ func decideDraftReplacement(current, candidate *critiqueDraftCandidate, semantic
 		decision.reason = draftReasonCandidatePublishedDominates
 		return decision
 	}
+	factDelta := compareSupportedCausalFacts(current.supportedFacts, candidate.supportedFacts)
+	decision.currentSupportedFacts = len(current.supportedFacts)
+	decision.candidateSupportedFacts = len(candidate.supportedFacts)
+	decision.supportedFactsRetained = factDelta.retained
+	decision.supportedFactsAdded = factDelta.added
+	decision.supportedFactsDropped = factDelta.dropped
 	decision.rootCauseChanged = rootCauseMateriallyChanged(current.parsed.RootCause, candidate.parsed.RootCause)
 	publishedHardRegression := critiqueHardRegression(candidate.quality, current.quality)
 	decision.rawSemanticRegression = semanticAccepted &&
@@ -2017,6 +2041,19 @@ func decideDraftReplacement(current, candidate *critiqueDraftCandidate, semantic
 		if candidate.quality.HardIssueCount > 0 {
 			decision.reason = draftReasonCandidatePublishedHard
 		}
+		return decision
+	}
+	if semanticAccepted && candidate.semanticRevision && len(candidate.semanticFindingClasses) > 0 {
+		decision.reason = draftReasonCandidateSemanticFindings
+		return decision
+	}
+	if semanticAccepted && candidate.semanticRevision && !candidate.semanticReviewPassed {
+		decision.reason = draftReasonCandidateSemanticUnavailable
+		return decision
+	}
+	if semanticAccepted && candidate.semanticRevision && decision.rootCauseChanged && factDelta.dropped > 0 && !factDelta.strongerReplacement {
+		decision.supportedCauseRegression = true
+		decision.reason = draftReasonCandidateDropsSupportedCause
 		return decision
 	}
 	if decision.rootCauseChanged && candidate.evidenceRevision <= current.evidenceRevision && !semanticAccepted {
@@ -2074,6 +2111,12 @@ func (s *agentState) recordDraftDecision(target string, current, candidate *crit
 		RawSemanticRegression:           decision.rawSemanticRegression,
 		PublishedStrictDominance:        decision.publishedStrictDominance,
 		CurrentQualityRefreshed:         decision.currentQualityRefreshed,
+		CurrentSupportedFacts:           decision.currentSupportedFacts,
+		CandidateSupportedFacts:         decision.candidateSupportedFacts,
+		SupportedFactsRetained:          decision.supportedFactsRetained,
+		SupportedFactsAdded:             decision.supportedFactsAdded,
+		SupportedFactsDropped:           decision.supportedFactsDropped,
+		SupportedCauseRegression:        decision.supportedCauseRegression,
 		ReplacementAccepted:             decision.accepted,
 		ReplacementReason:               decision.reason,
 	}

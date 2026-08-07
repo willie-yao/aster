@@ -497,83 +497,91 @@ func loadBenchmarkManifest(path string) ([]benchCase, error) {
 }
 
 type benchmarkJSONLResult struct {
-	CaseID                   string                      `json:"case_id"`
-	StableID                 string                      `json:"stable_id"`
-	Repetition               int                         `json:"repetition"`
-	ModelLabel               string                      `json:"model_label"`
-	Arm                      string                      `json:"arm"`
-	EngineCommit             string                      `json:"engine_commit"`
-	FixtureSHA256            string                      `json:"fixture_sha256,omitempty"`
-	BaselineConsumerCommit   string                      `json:"baseline_consumer_commit,omitempty"`
-	BaselinePromptSHA256     string                      `json:"baseline_prompt_sha256,omitempty"`
-	ProjectSHA256            string                      `json:"project_sha256,omitempty"`
-	EffectivePromptSHA256    string                      `json:"effective_prompt_sha256"`
-	SkillSetHash             string                      `json:"skill_set_hash"`
-	EffectiveInputSHA256     string                      `json:"effective_input_sha256"`
-	APIMode                  string                      `json:"api_mode"`
-	ProviderPath             string                      `json:"provider_path,omitempty"`
-	TransportID              string                      `json:"transport_id,omitempty"`
-	EvidenceTelemetryVersion int                         `json:"evidence_telemetry_version"`
-	EvidenceCondition        string                      `json:"evidence_condition"`
-	FrozenEvidenceSHA256     string                      `json:"frozen_evidence_sha256,omitempty"`
-	EvidenceStageSHA256      string                      `json:"evidence_stage_sha256"`
-	EvidenceStageIDs         []string                    `json:"evidence_stage_ids"`
-	ModelRequestMade         bool                        `json:"model_request_made"`
-	TrialStatus              string                      `json:"trial_status"`
-	EvidenceStages           []benchmarkEvidenceStage    `json:"evidence_stages"`
-	EvidenceRevisions        []benchmarkEvidenceRevision `json:"evidence_revisions"`
-	EvidenceGroupsSelected   []string                    `json:"evidence_groups_selected,omitempty"`
-	EvidenceGroupsHit        []string                    `json:"evidence_groups_hit,omitempty"`
-	EvidenceGroupsMissed     []string                    `json:"evidence_groups_missed,omitempty"`
-	EvidenceGroupSources     map[string][]string         `json:"evidence_group_sources,omitempty"`
-	JobName                  string                      `json:"job_name"`
-	BuildID                  string                      `json:"build_id"`
-	CheckoutCommit           string                      `json:"checkout_commit"`
-	SourceRevision           string                      `json:"source_revision,omitempty"`
-	SourceUnavailable        bool                        `json:"source_unavailable,omitempty"`
-	TestName                 string                      `json:"test_name"`
-	TestSource               string                      `json:"test_source,omitempty"`
-	ElapsedMS                int64                       `json:"elapsed_ms"`
-	Outcome                  string                      `json:"outcome"`
-	Usable                   bool                        `json:"usable"`
-	IsTransient              *bool                       `json:"is_transient,omitempty"`
-	Summary                  string                      `json:"summary,omitempty"`
-	RootCause                string                      `json:"root_cause,omitempty"`
-	SuggestedFix             string                      `json:"suggested_fix,omitempty"`
-	Severity                 string                      `json:"severity,omitempty"`
-	Evidence                 []models.EvidenceCitation   `json:"evidence_citations,omitempty"`
-	FileLinks                map[string]string           `json:"file_links,omitempty"`
-	SignalHits               int                         `json:"signal_hits"`
-	SignalTotal              int                         `json:"signal_total"`
-	DiagnosisSignalHits      int                         `json:"diagnosis_signal_hits"`
-	DiagnosisSignalTotal     int                         `json:"diagnosis_signal_total"`
-	TransientCorrect         *bool                       `json:"transient_classification_correct,omitempty"`
-	ForbiddenChecksPassed    int                         `json:"forbidden_checks_passed"`
-	ForbiddenChecksTotal     int                         `json:"forbidden_checks_total"`
-	MissingMust              []string                    `json:"missing_must,omitempty"`
-	SelectedAttempt          int                         `json:"selected_attempt,omitempty"`
-	Drafts                   []benchmarkJSONLDraft       `json:"drafts,omitempty"`
-	DraftDecisions           []ai.DraftDecisionTrace     `json:"draft_decisions,omitempty"`
-	ToolNames                []string                    `json:"tool_names,omitempty"`
-	ToolCounts               []string                    `json:"tool_counts,omitempty"`
-	GCSBytes                 int                         `json:"gcs_bytes,omitempty"`
-	EvidencePlanCovered      bool                        `json:"evidence_plan_covered,omitempty"`
-	GCSFloorRetryExhausted   bool                        `json:"gcs_floor_retry_exhausted,omitempty"`
-	CritiquePassed           *bool                       `json:"critique_passed,omitempty"`
-	CritiqueCachePolicy      string                      `json:"critique_cache_policy,omitempty"`
-	CritiqueHardFailures     []string                    `json:"critique_hard_failures,omitempty"`
-	CritiqueSoftWarnings     []string                    `json:"critique_soft_warnings,omitempty"`
-	BudgetExhausted          bool                        `json:"budget_exhausted,omitempty"`
-	FloorNudges              int                         `json:"floor_nudges,omitempty"`
-	FloorNudgeReasons        []string                    `json:"floor_nudge_reasons,omitempty"`
-	ProviderRequestCap       int                         `json:"provider_request_cap"`
-	TraceTruncated           bool                        `json:"trace_truncated,omitempty"`
-	CacheGeneration          string                      `json:"cache_generation,omitempty"`
-	CacheVerification        benchmarkCacheVerification  `json:"cache_verification"`
-	Trace                    benchmarkJSONLTrace         `json:"trace"`
-	HumanScoreRubricVersion  int                         `json:"human_score_rubric_version"`
-	HumanScoreMax            int                         `json:"human_score_max"`
-	HumanScoreDimensions     []string                    `json:"human_score_dimensions"`
+	CaseID                    string                      `json:"case_id"`
+	StableID                  string                      `json:"stable_id"`
+	Repetition                int                         `json:"repetition"`
+	ModelLabel                string                      `json:"model_label"`
+	Arm                       string                      `json:"arm"`
+	EngineCommit              string                      `json:"engine_commit"`
+	FixtureSHA256             string                      `json:"fixture_sha256,omitempty"`
+	BaselineConsumerCommit    string                      `json:"baseline_consumer_commit,omitempty"`
+	BaselinePromptSHA256      string                      `json:"baseline_prompt_sha256,omitempty"`
+	ProjectSHA256             string                      `json:"project_sha256,omitempty"`
+	EffectivePromptSHA256     string                      `json:"effective_prompt_sha256"`
+	SkillSetHash              string                      `json:"skill_set_hash"`
+	EffectiveInputSHA256      string                      `json:"effective_input_sha256"`
+	APIMode                   string                      `json:"api_mode"`
+	ProviderPath              string                      `json:"provider_path,omitempty"`
+	TransportID               string                      `json:"transport_id,omitempty"`
+	EvidenceTelemetryVersion  int                         `json:"evidence_telemetry_version"`
+	EvidenceCondition         string                      `json:"evidence_condition"`
+	FrozenEvidenceSHA256      string                      `json:"frozen_evidence_sha256,omitempty"`
+	EvidenceStageSHA256       string                      `json:"evidence_stage_sha256"`
+	EvidenceStageIDs          []string                    `json:"evidence_stage_ids"`
+	ModelRequestMade          bool                        `json:"model_request_made"`
+	TrialStatus               string                      `json:"trial_status"`
+	EvidenceStages            []benchmarkEvidenceStage    `json:"evidence_stages"`
+	EvidenceRevisions         []benchmarkEvidenceRevision `json:"evidence_revisions"`
+	EvidenceGroupsSelected    []string                    `json:"evidence_groups_selected,omitempty"`
+	EvidenceGroupsHit         []string                    `json:"evidence_groups_hit,omitempty"`
+	EvidenceGroupsMissed      []string                    `json:"evidence_groups_missed,omitempty"`
+	EvidenceGroupSources      map[string][]string         `json:"evidence_group_sources,omitempty"`
+	JobName                   string                      `json:"job_name"`
+	BuildID                   string                      `json:"build_id"`
+	CheckoutCommit            string                      `json:"checkout_commit"`
+	SourceRevision            string                      `json:"source_revision,omitempty"`
+	SourceUnavailable         bool                        `json:"source_unavailable,omitempty"`
+	TestName                  string                      `json:"test_name"`
+	TestSource                string                      `json:"test_source,omitempty"`
+	ElapsedMS                 int64                       `json:"elapsed_ms"`
+	Outcome                   string                      `json:"outcome"`
+	Usable                    bool                        `json:"usable"`
+	IsTransient               *bool                       `json:"is_transient,omitempty"`
+	Summary                   string                      `json:"summary,omitempty"`
+	RootCause                 string                      `json:"root_cause,omitempty"`
+	SuggestedFix              string                      `json:"suggested_fix,omitempty"`
+	Severity                  string                      `json:"severity,omitempty"`
+	Evidence                  []models.EvidenceCitation   `json:"evidence_citations,omitempty"`
+	FileLinks                 map[string]string           `json:"file_links,omitempty"`
+	SignalHits                int                         `json:"signal_hits"`
+	SignalTotal               int                         `json:"signal_total"`
+	DiagnosisSignalHits       int                         `json:"diagnosis_signal_hits"`
+	DiagnosisSignalTotal      int                         `json:"diagnosis_signal_total"`
+	TransientCorrect          *bool                       `json:"transient_classification_correct,omitempty"`
+	ForbiddenChecksPassed     int                         `json:"forbidden_checks_passed"`
+	ForbiddenChecksTotal      int                         `json:"forbidden_checks_total"`
+	MissingMust               []string                    `json:"missing_must,omitempty"`
+	SelectedAttempt           int                         `json:"selected_attempt,omitempty"`
+	Drafts                    []benchmarkJSONLDraft       `json:"drafts,omitempty"`
+	DraftDecisions            []ai.DraftDecisionTrace     `json:"draft_decisions,omitempty"`
+	SemanticJudgeOutcomes     []string                    `json:"semantic_judge_outcomes,omitempty"`
+	SemanticFindingClasses    []string                    `json:"semantic_finding_classes,omitempty"`
+	SemanticRevisionAttempted bool                        `json:"semantic_revision_attempted,omitempty"`
+	SemanticRevisionSelected  bool                        `json:"semantic_revision_selected,omitempty"`
+	SemanticRevisionRejected  bool                        `json:"semantic_revision_rejected,omitempty"`
+	SupportedFactsRetained    int                         `json:"supported_facts_retained,omitempty"`
+	SupportedFactsAdded       int                         `json:"supported_facts_added,omitempty"`
+	SupportedFactsDropped     int                         `json:"supported_facts_dropped,omitempty"`
+	ToolNames                 []string                    `json:"tool_names,omitempty"`
+	ToolCounts                []string                    `json:"tool_counts,omitempty"`
+	GCSBytes                  int                         `json:"gcs_bytes,omitempty"`
+	EvidencePlanCovered       bool                        `json:"evidence_plan_covered,omitempty"`
+	GCSFloorRetryExhausted    bool                        `json:"gcs_floor_retry_exhausted,omitempty"`
+	CritiquePassed            *bool                       `json:"critique_passed,omitempty"`
+	CritiqueCachePolicy       string                      `json:"critique_cache_policy,omitempty"`
+	CritiqueHardFailures      []string                    `json:"critique_hard_failures,omitempty"`
+	CritiqueSoftWarnings      []string                    `json:"critique_soft_warnings,omitempty"`
+	BudgetExhausted           bool                        `json:"budget_exhausted,omitempty"`
+	FloorNudges               int                         `json:"floor_nudges,omitempty"`
+	FloorNudgeReasons         []string                    `json:"floor_nudge_reasons,omitempty"`
+	ProviderRequestCap        int                         `json:"provider_request_cap"`
+	TraceTruncated            bool                        `json:"trace_truncated,omitempty"`
+	CacheGeneration           string                      `json:"cache_generation,omitempty"`
+	CacheVerification         benchmarkCacheVerification  `json:"cache_verification"`
+	Trace                     benchmarkJSONLTrace         `json:"trace"`
+	HumanScoreRubricVersion   int                         `json:"human_score_rubric_version"`
+	HumanScoreMax             int                         `json:"human_score_max"`
+	HumanScoreDimensions      []string                    `json:"human_score_dimensions"`
 }
 
 const (
@@ -674,7 +682,7 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 		ProjectSHA256: identity.ProjectSHA256, EffectivePromptSHA256: identity.EffectivePromptSHA256,
 		SkillSetHash: identity.SkillSetHash, EffectiveInputSHA256: identity.EffectiveInputSHA256,
 		APIMode: identity.APIMode, ProviderPath: identity.ProviderPath, TransportID: identity.TransportID,
-		EvidenceTelemetryVersion: 1, EvidenceCondition: stageReport.Condition, FrozenEvidenceSHA256: stageReport.FrozenSHA256,
+		EvidenceTelemetryVersion: 2, EvidenceCondition: stageReport.Condition, FrozenEvidenceSHA256: stageReport.FrozenSHA256,
 		EvidenceStageSHA256: identity.EvidenceStageSHA256, EvidenceStageIDs: benchmarkEvidenceStageIDs(bc.evidenceGroups), ModelRequestMade: stageReport.ModelRequestMade,
 		TrialStatus: stageReport.TrialStatus, EvidenceStages: append([]benchmarkEvidenceStage{}, stageReport.Stages...),
 		EvidenceRevisions:      append([]benchmarkEvidenceRevision{}, stageReport.Revisions...),
@@ -684,7 +692,9 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 		FileLinks: map[string]string{}, SelectedAttempt: selectedAttempt,
 		ToolNames: append([]string(nil), toolUsage.names...), ToolCounts: append([]string(nil), toolUsage.counts...),
 		FloorNudges: traceSummary.floorNudges, FloorNudgeReasons: append([]string(nil), traceSummary.floorNudgeReasons...),
-		ProviderRequestCap: providerRequestCap, TraceTruncated: traceSummary.truncated, CacheGeneration: cacheGeneration, CacheVerification: cacheVerification,
+		SemanticJudgeOutcomes:  append([]string(nil), traceSummary.semanticJudgeOutcomes...),
+		SemanticFindingClasses: append([]string(nil), traceSummary.semanticFindingClasses...),
+		ProviderRequestCap:     providerRequestCap, TraceTruncated: traceSummary.truncated, CacheGeneration: cacheGeneration, CacheVerification: cacheVerification,
 		CritiqueCachePolicy:     string(critiquePolicy),
 		Trace:                   benchmarkJSONLTrace{Finalize: map[string]int{}, FinalizeRecovery: map[string]int{}, Critique: map[string]int{}},
 		HumanScoreRubricVersion: benchmarkHumanScoreRubricVersion, HumanScoreMax: benchmarkHumanScoreMax,
@@ -776,6 +786,21 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 			case "draft_selection":
 				if event.DraftDecision != nil {
 					result.DraftDecisions = append(result.DraftDecisions, *event.DraftDecision)
+					if event.DraftDecision.Target == "best" {
+						result.SupportedFactsRetained = event.DraftDecision.SupportedFactsRetained
+						result.SupportedFactsAdded = event.DraftDecision.SupportedFactsAdded
+						result.SupportedFactsDropped = event.DraftDecision.SupportedFactsDropped
+					}
+				}
+			case "semantic_judge":
+				if event.Status == "revision" {
+					result.SemanticRevisionAttempted = true
+				}
+				if event.Outcome == "revised" {
+					result.SemanticRevisionSelected = true
+				}
+				if event.Outcome == "revision_rejected" || event.Outcome == "revision_not_selected" {
+					result.SemanticRevisionRejected = true
 				}
 			}
 		}
@@ -906,10 +931,14 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 		{Kind: "finalize", Outcome: "empty", ErrorCode: "unexpected_tool_call"},
 		{Kind: "finalize_recovery", Outcome: "retained_draft"},
 		{Kind: "critique", Outcome: "objected", CritiquePunts: 1},
+		{Kind: "semantic_judge", Status: "draft", Outcome: "objected", SemanticFindings: []string{"specific_error_ignored"}},
+		{Kind: "semantic_judge", Status: "revision", Outcome: "passed"},
+		{Kind: "semantic_judge", Status: "revision", Outcome: "revised"},
 		{Kind: "draft_selection", Outcome: "accepted", Status: "best", DraftDecision: &ai.DraftDecisionTrace{
 			Target: "best", CurrentAttempt: 1, CandidateAttempt: 2,
 			CurrentPublishedSoftRules: []string{"remediation.punt"}, CandidatePublishedSoftRules: []string{"evidence.available_unread"},
 			CurrentEvidenceRevision: 3, CandidateEvidenceRevision: 7, RootCauseMateriallyChanged: true,
+			CurrentSupportedFacts: 1, CandidateSupportedFacts: 2, SupportedFactsRetained: 1, SupportedFactsAdded: 1,
 			PublishedStrictDominance: true, ReplacementAccepted: true, ReplacementReason: "candidate_published_dominates",
 		}},
 	}}}}
@@ -924,7 +953,7 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 	}}}
 	writeBenchmarkJSONL(t, path, bc, 2, tc, benchmarkOutcomeUsable, 3*time.Second, snapshot, observations, 1,
 		benchmarkToolUsage{names: []string{"read_artifact"}, counts: []string{"read_artifact=1"}},
-		benchmarkTraceSummary{floorNudges: 1, floorNudgeReasons: []string{"gcs_bytes"}}, 17, "generation", ai.CritiqueCachePolicyHard, cacheVerification,
+		benchmarkTraceSummary{floorNudges: 1, floorNudgeReasons: []string{"gcs_bytes"}, semanticJudgeOutcomes: []string{"draft:objected", "revision:passed", "revision:revised"}, semanticFindingClasses: []string{"specific_error_ignored"}}, 18, "generation", ai.CritiqueCachePolicyHard, cacheVerification,
 		benchmarkRunIdentity{Arm: "variant", EngineCommit: strings.Repeat("b", 40), FixtureSHA256: strings.Repeat("c", 64), BaselineConsumerCommit: strings.Repeat("d", 40), BaselinePromptSHA256: strings.Repeat("3", 64), ProjectSHA256: strings.Repeat("e", 64), EffectivePromptSHA256: strings.Repeat("f", 64), SkillSetHash: strings.Repeat("1", 64), EffectiveInputSHA256: strings.Repeat("2", 64), EvidenceCondition: benchmarkEvidenceConditionFixture, EvidenceStageSHA256: benchmarkEvidenceStageSHA256(bc.evidenceGroups), APIMode: ai.APIChatCompletions, ProviderPath: "github-copilot/claude-sonnet-4.6", TransportID: "copilot-structural-proxy-v1"}, benchmarkEvidenceCoverage{selected: []string{"initiating-error"}, hit: []string{"initiating-error"}, missed: []string{"secondary-evidence"}, sources: map[string][]string{"initiating-error": {"model_tool"}}}, benchmarkEvidenceStageReport{Condition: benchmarkEvidenceConditionFixture, ModelRequestMade: true, TrialStatus: "contract_violation"})
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -937,15 +966,18 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 	if err := json.Unmarshal(data, &result); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(result.EvidenceGroupsSelected, []string{"initiating-error"}) || !slices.Equal(result.EvidenceGroupsHit, []string{"initiating-error"}) || !slices.Equal(result.EvidenceGroupsMissed, []string{"secondary-evidence"}) || !slices.Equal(result.EvidenceGroupSources["initiating-error"], []string{"model_tool"}) || result.EvidenceTelemetryVersion != 1 || result.EvidenceCondition != benchmarkEvidenceConditionFixture || result.EvidenceStageSHA256 != benchmarkEvidenceStageSHA256(bc.evidenceGroups) || !result.ModelRequestMade || result.TrialStatus != "contract_violation" || result.EvidenceStages == nil || result.EvidenceRevisions == nil || result.ModelLabel != "model-a" || result.Arm != "variant" || result.EngineCommit != strings.Repeat("b", 40) || result.FixtureSHA256 != strings.Repeat("c", 64) || result.BaselineConsumerCommit != strings.Repeat("d", 40) || result.BaselinePromptSHA256 != strings.Repeat("3", 64) || result.ProjectSHA256 != strings.Repeat("e", 64) || result.EffectivePromptSHA256 != strings.Repeat("f", 64) || result.SkillSetHash != strings.Repeat("1", 64) || result.EffectiveInputSHA256 != strings.Repeat("2", 64) || result.APIMode != ai.APIChatCompletions || result.ProviderPath != "github-copilot/claude-sonnet-4.6" || result.TransportID != "copilot-structural-proxy-v1" || result.Repetition != 2 || result.Outcome != string(benchmarkOutcomeUsable) || result.IsTransient == nil || *result.IsTransient || result.SignalHits != 1 || result.DiagnosisSignalHits != 1 || result.DiagnosisSignalTotal != 1 || result.TransientCorrect != nil || result.ForbiddenChecksPassed != 0 || result.ForbiddenChecksTotal != 0 || result.SourceRevision != strings.Repeat("a", 40) || result.SourceUnavailable || result.TestSource != models.TestCaseSourceBuild ||
+	if !slices.Equal(result.EvidenceGroupsSelected, []string{"initiating-error"}) || !slices.Equal(result.EvidenceGroupsHit, []string{"initiating-error"}) || !slices.Equal(result.EvidenceGroupsMissed, []string{"secondary-evidence"}) || !slices.Equal(result.EvidenceGroupSources["initiating-error"], []string{"model_tool"}) || result.EvidenceTelemetryVersion != 2 || result.EvidenceCondition != benchmarkEvidenceConditionFixture || result.EvidenceStageSHA256 != benchmarkEvidenceStageSHA256(bc.evidenceGroups) || !result.ModelRequestMade || result.TrialStatus != "contract_violation" || result.EvidenceStages == nil || result.EvidenceRevisions == nil || result.ModelLabel != "model-a" || result.Arm != "variant" || result.EngineCommit != strings.Repeat("b", 40) || result.FixtureSHA256 != strings.Repeat("c", 64) || result.BaselineConsumerCommit != strings.Repeat("d", 40) || result.BaselinePromptSHA256 != strings.Repeat("3", 64) || result.ProjectSHA256 != strings.Repeat("e", 64) || result.EffectivePromptSHA256 != strings.Repeat("f", 64) || result.SkillSetHash != strings.Repeat("1", 64) || result.EffectiveInputSHA256 != strings.Repeat("2", 64) || result.APIMode != ai.APIChatCompletions || result.ProviderPath != "github-copilot/claude-sonnet-4.6" || result.TransportID != "copilot-structural-proxy-v1" || result.Repetition != 2 || result.Outcome != string(benchmarkOutcomeUsable) || result.IsTransient == nil || *result.IsTransient || result.SignalHits != 1 || result.DiagnosisSignalHits != 1 || result.DiagnosisSignalTotal != 1 || result.TransientCorrect != nil || result.ForbiddenChecksPassed != 0 || result.ForbiddenChecksTotal != 0 || result.SourceRevision != strings.Repeat("a", 40) || result.SourceUnavailable || result.TestSource != models.TestCaseSourceBuild ||
 		result.Trace.Finalize["empty:unexpected_tool_call"] != 1 || result.Trace.Critique["punts"] != 1 || result.GCSBytes != 42 ||
 		!result.EvidencePlanCovered || !result.GCSFloorRetryExhausted || result.CritiquePassed == nil || !*result.CritiquePassed || !result.BudgetExhausted ||
 		result.FloorNudges != 1 || !slices.Equal(result.FloorNudgeReasons, []string{"gcs_bytes"}) ||
 		!slices.Equal(result.ToolNames, []string{"read_artifact"}) || !slices.Equal(result.ToolCounts, []string{"read_artifact=1"}) ||
 		!result.CacheVerification.LookupAccepted || !result.CacheVerification.LookupHit || result.CacheGeneration != "generation" ||
-		result.ProviderRequestCap != 17 || result.Trace.ProviderAttempts != 2 || result.TraceTruncated || result.CritiqueCachePolicy != string(ai.CritiqueCachePolicyHard) ||
+		result.ProviderRequestCap != 18 || result.Trace.ProviderAttempts != 2 || result.TraceTruncated || result.CritiqueCachePolicy != string(ai.CritiqueCachePolicyHard) ||
 		result.HumanScoreRubricVersion != 1 || result.HumanScoreMax != 10 || len(result.Drafts) != 1 ||
 		len(result.DraftDecisions) != 1 || result.DraftDecisions[0].ReplacementReason != "candidate_published_dominates" ||
+		!result.SemanticRevisionAttempted || !result.SemanticRevisionSelected || result.SemanticRevisionRejected ||
+		!slices.Equal(result.SemanticJudgeOutcomes, []string{"draft:objected", "revision:passed", "revision:revised"}) ||
+		!slices.Equal(result.SemanticFindingClasses, []string{"specific_error_ignored"}) || result.SupportedFactsRetained != 1 || result.SupportedFactsAdded != 1 || result.SupportedFactsDropped != 0 ||
 		!slices.Equal(result.HumanScoreDimensions, benchmarkHumanScoreDimensions) ||
 		!slices.Equal(result.Drafts[0].RuleIDs, []string{"remediation.punt"}) || !result.Drafts[0].Selected {
 		t.Fatalf("result=%+v", result)

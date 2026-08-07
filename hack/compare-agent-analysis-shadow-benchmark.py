@@ -181,8 +181,8 @@ def validate_common_contract(path, line_no, record, kind):
 
 
 def validate_inprocess(path, line_no, record):
-    if record["evidence_telemetry_version"] != 1:
-        invalid(path, line_no, "in-process evidence_telemetry_version must be 1")
+    if record["evidence_telemetry_version"] != 2:
+        invalid(path, line_no, "in-process evidence_telemetry_version must be 2")
     status = record["trial_status"]
     if status not in TRIAL_STATUSES:
         invalid(path, line_no, "in-process trial_status is invalid")

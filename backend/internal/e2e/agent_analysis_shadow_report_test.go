@@ -404,7 +404,7 @@ func TestAgentAnalysisShadowReportRejectsEvidenceTelemetryViolations(t *testing.
 		mutate func(map[string]any)
 		want   string
 	}{
-		{name: "telemetry version", mutate: func(record map[string]any) { record["evidence_telemetry_version"] = 2 }, want: "in-process evidence_telemetry_version must be 1"},
+		{name: "telemetry version", mutate: func(record map[string]any) { record["evidence_telemetry_version"] = 1 }, want: "in-process evidence_telemetry_version must be 2"},
 		{name: "trial status", mutate: func(record map[string]any) { record["trial_status"] = "unknown" }, want: "in-process trial_status is invalid"},
 		{name: "missing stages", mutate: func(record map[string]any) { record["evidence_stages"] = []map[string]any{} }, want: "in-process evidence_stages must not be empty"},
 		{name: "partial stages", mutate: func(record map[string]any) {
@@ -470,7 +470,7 @@ func validShadowReportRecords() (map[string]any, map[string]any) {
 	inprocess["signal_hits"] = 2
 	inprocess["elapsed_ms"] = 100
 	inprocess["trace"] = map[string]any{"input_tokens": 10, "output_tokens": 5}
-	inprocess["evidence_telemetry_version"] = 1
+	inprocess["evidence_telemetry_version"] = 2
 	inprocess["trial_status"] = "valid_result"
 	inprocess["model_request_made"] = true
 	inprocess["evidence_stages"] = []map[string]any{

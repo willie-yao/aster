@@ -181,7 +181,7 @@ func TestPipeline_WithAI(t *testing.T) {
 		`"relevant_files":["build-log.txt"]}`)
 	// The semantic judge reviews the accepted draft; return no objections so it
 	// publishes as-is.
-	script.PushFinal(`{"objections":[]}`)
+	script.PushFinal(`{"findings":[]}`)
 
 	t.Setenv("AI_TOKEN", "test-token")
 	aiBlock := "  endpoint: \"" + script.URL + "\"\n  model: \"script-model\"\n  tools: [filesystem]\n"

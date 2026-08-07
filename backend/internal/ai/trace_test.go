@@ -37,6 +37,21 @@ func TestTraceStoreBoundsAndRedacts(t *testing.T) {
 	}
 }
 
+func TestTraceStoreKeepsOnlyAllowlistedSemanticFindings(t *testing.T) {
+	store := NewTraceStore()
+	trace := store.Start(TraceMetadata{JobID: "job"})
+	trace.Record(TraceEvent{Kind: "semantic_judge", SemanticFindings: []string{
+		semanticFindingSpecificErrorIgnored, "private detail", semanticFindingSpecificErrorIgnored,
+		semanticFindingDownstreamSymptomSelected,
+	}})
+	trace.Finish("success", nil)
+	got := store.Snapshot().Traces[0].Events[0].SemanticFindings
+	want := []string{semanticFindingDownstreamSymptomSelected, semanticFindingSpecificErrorIgnored}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("semantic findings = %v, want %v", got, want)
+	}
+}
+
 func TestTraceStoreRetainsDraftDecisionsAtEventCap(t *testing.T) {
 	store := NewTraceStore()
 	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIChatCompletions})
