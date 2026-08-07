@@ -715,3 +715,16 @@ func TestServiceHardPolicyStoresAndReusesGroundedUnavailableCooldown(t *testing.
 		t.Fatalf("provider calls after cooldown hit = %d, want 2", got)
 	}
 }
+
+func TestFailureCachePolicyNormalizesZeroConsecutiveFailures(t *testing.T) {
+	client := NewClientWithOptions(Options{API: APIChatCompletions, Endpoint: "https://provider.example.invalid/chat/completions", Model: "model"})
+	service := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
+	service.EnableAgentic(AgenticOptions{CritiqueCachePolicy: CritiqueCachePolicyHard}, nil, nil, nil)
+	run := newRun("job", "1")
+	tc := newFailedTC("Test A", "failure")
+	zero := service.FailureCachePolicy(t.Context(), &http.Client{}, run, tc, 0)
+	one := service.FailureCachePolicy(t.Context(), &http.Client{}, run, tc, 1)
+	if zero.ConsecutiveFailures != 1 || zero != one {
+		t.Fatalf("zero policy = %+v, one policy = %+v", zero, one)
+	}
+}
