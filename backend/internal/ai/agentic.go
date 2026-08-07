@@ -835,7 +835,7 @@ func effectiveAgenticPromptHash(in AgenticInputs, sysPrompt string) string {
 	if in.PromptHash != "" {
 		return in.PromptHash
 	}
-	return PromptFingerprint(sysPrompt)
+	return PromptFingerprint(sysPrompt + agToolDocs)
 }
 
 func (c *Client) cachedAgenticAnalysis(in AgenticInputs, cacheKey, sysPrompt string, start time.Time) (*models.AISummary, *models.AIAnalysis, bool) {

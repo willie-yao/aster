@@ -256,6 +256,23 @@ func TestPathMatchesFailureTokenUsesBoundedPrefixMatch(t *testing.T) {
 	}
 }
 
+func TestFreezeEvidenceUsesUnusedBudgetForSingleCandidate(t *testing.T) {
+	content := "PRIMARY_FAILURE_MARKER\n" + strings.Repeat("x", 40<<10)
+	bundle, err := FreezeEvidence(
+		t.Context(),
+		&snapshotBrowser{paths: []string{"build-log.txt"}, files: map[string]string{"build-log.txt": content}},
+		testRequest(),
+		sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: strings.Repeat("a", 40)},
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bundle.Excerpts) != 1 || !strings.Contains(bundle.Excerpts[0].Content, "PRIMARY_FAILURE_MARKER") || len(bundle.Excerpts[0].Content) != len(content) {
+		t.Fatalf("excerpt = %+v", bundle.Excerpts)
+	}
+}
+
 func TestFreezeEvidenceReservesBudgetForLaterCandidates(t *testing.T) {
 	paths := make([]string, 0, freezeMaxExcerpts)
 	files := map[string]string{}

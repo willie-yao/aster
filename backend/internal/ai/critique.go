@@ -109,7 +109,7 @@ func findPunts(text string) []string {
 // weaker version are invalidated on read. Cosmetic prompt-shape changes
 // do not bump; only behavior changes that make an existing cached answer
 // invalid under today's contract.
-const currentCritiqueVersion = 8
+const currentCritiqueVersion = 9
 
 // transientPersistThreshold is the consecutive-failure count at or above which a
 // draft claiming is_transient=true is contradicted. It matches the engine's

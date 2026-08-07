@@ -133,8 +133,13 @@ func TestCrossProjectEvaluationManifest(t *testing.T) {
 					t.Errorf("ownership-uncertainty signal rejects equivalent wording %q", text)
 				}
 			}
-			if mountSignal.matches(`The helper resolved volumeID "disk-1" for /mnt/volume1.`) {
-				t.Error("missing-mount signal accepted a successful resolution")
+			for _, text := range []string{
+				`The helper resolved volumeID "disk-1" for /mnt/volume1.`,
+				`The helper could not resolve the kubelet hostname. It then mapped volumeID "disk-1" to /mnt/volume1 successfully.`,
+			} {
+				if mountSignal.matches(text) {
+					t.Errorf("missing-mount signal accepted unrelated or successful resolution %q", text)
+				}
 			}
 			if uncertaintySignal.matches("The owning component boundary is established by the evidence.") {
 				t.Error("ownership-uncertainty signal accepted established ownership")

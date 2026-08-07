@@ -58,7 +58,6 @@ func FreezeEvidence(
 	candidates := selectEvidenceCandidates(request, plan, paths)
 	excerpts := make([]EvidenceExcerpt, 0, min(len(candidates), freezeMaxExcerpts))
 	seenContent := map[string]bool{}
-	totalContentBytes := 0
 	skillHash := ""
 	if set != nil {
 		skillHash = set.Hash()
@@ -67,13 +66,10 @@ func FreezeEvidence(
 		return EvidenceBundle{}, err
 	}
 	for _, candidate := range candidates {
-		if len(excerpts) >= freezeMaxExcerpts || totalContentBytes >= maxExcerptTotalBytes {
+		if len(excerpts) >= freezeMaxExcerpts {
 			break
 		}
-		remainingSlots := freezeMaxExcerpts - len(excerpts)
-		remainingBytes := maxExcerptTotalBytes - totalContentBytes
-		maxBytes := min(freezeExcerptBytes, max(1, remainingBytes/remainingSlots))
-		result, readErr := browser.Tail(ctx, candidate, freezeExcerptLines, maxBytes)
+		result, readErr := browser.Tail(ctx, candidate, freezeExcerptLines, freezeExcerptBytes)
 		if readErr != nil || result == nil {
 			if ctx.Err() != nil {
 				return EvidenceBundle{}, ctx.Err()
@@ -89,16 +85,10 @@ func FreezeEvidence(
 		if seenContent[contentHash] {
 			continue
 		}
-		originalContentBytes := len(content)
-		content = tailUTF8(content, maxExcerptTotalBytes-totalContentBytes)
-		if strings.TrimSpace(content) == "" {
-			continue
-		}
 		seenContent[contentHash] = true
-		totalContentBytes += len(content)
 		excerpts = append(excerpts, EvidenceExcerpt{
 			Path: candidate, Kind: "tail", Content: content,
-			Truncated: len(content) < originalContentBytes || result.FileSize > int64(len(result.Content)) || result.LinesReturned >= freezeExcerptLines,
+			Truncated: result.FileSize > int64(len(result.Content)) || result.LinesReturned >= freezeExcerptLines,
 		})
 	}
 	if len(excerpts) == 0 {

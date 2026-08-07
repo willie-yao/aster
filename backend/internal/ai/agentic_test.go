@@ -1136,6 +1136,15 @@ func TestDispatchAgenticToolEvidenceReadsRequireNonEmptyContent(t *testing.T) {
 // TestAgToolDocs_AntiPuntAnchors pins the anti-punt language in agToolDocs
 // that drives weaker models to investigate via tools rather than emit
 // investigation TODOs in suggested_fix.
+
+func TestEffectiveAgenticPromptHashIncludesToolGuidance(t *testing.T) {
+	got := effectiveAgenticPromptHash(AgenticInputs{}, "system")
+	want := PromptFingerprint("system" + agToolDocs)
+	if got != want {
+		t.Fatalf("prompt hash = %q, want %q", got, want)
+	}
+}
+
 func TestAgToolDocs_AntiPuntAnchors(t *testing.T) {
 	required := []string{
 		"Investigation is YOUR job",

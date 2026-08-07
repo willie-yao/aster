@@ -487,10 +487,11 @@ func (s *Service) shouldReanalyzeWithPromptHash(tc *models.TestCase, promptHash 
 }
 
 func (s *Service) analysisPromptHash(tc *models.TestCase, userPrompt string) string {
+	effectiveSystemPrompt := s.systemPrompt + agToolDocs
 	if tc != nil && tc.Source == models.TestCaseSourceBuild && userPrompt != "" {
-		return PromptFingerprint(s.systemPrompt + "\x00" + userPrompt)
+		return PromptFingerprint(effectiveSystemPrompt + "\x00" + userPrompt)
 	}
-	return PromptFingerprint(s.systemPrompt)
+	return PromptFingerprint(effectiveSystemPrompt)
 }
 
 // belowCurrentAgenticFloor returns true when the cached analysis fails a
