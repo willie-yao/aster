@@ -44,6 +44,11 @@ Use `-testgrid` for Kubernetes TestGrid dashboards. Use `-bucket` for a Prow
 artifact bucket that is not discovered through TestGrid. Add `-gcsweb-base` only
 when that bucket is served through a gcsweb gateway.
 
+When the user names exact jobs, prefer `-bucket` plus repeated `-exact-job`
+flags. The exact names are a hard boundary, not a hint. A shared TestGrid
+candidate containing additional jobs is unresolved unless the user explicitly
+accepts the broader scope.
+
 Postsubmit tabs may appear in discovery totals but are not ingested. Enable
 `-include-presubmits` only when the selected dashboard requires presubmit
 coverage and the user accepts the additional history and fetch cost.

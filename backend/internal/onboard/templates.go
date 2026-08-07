@@ -19,6 +19,7 @@ type scaffoldData struct {
 	Provider          string // "gcs" or "gcsweb"
 	Bucket            string
 	GCSWebBase        string // gcsweb gateway root
+	ExactJobs         []string
 	Title             string
 	BasePath          string
 	SiteURL           string
@@ -61,7 +62,11 @@ testgrid:
 # Jobs are discovered by listing the storage bucket's own job indexes.
 discovery:
   source: bucket
-{{- if .IncludePresubmits}}
+{{- if .ExactJobs}}
+  exact_jobs:
+{{- range .ExactJobs}}
+    - {{quote .}}
+{{- end}}
 {{- end}}
 {{end}}
 # Where this project's Prow build artifacts live.

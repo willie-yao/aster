@@ -42,6 +42,8 @@ func TestConsumerSetupAgentSkill(t *testing.T) {
 		"Never delete stale or unrelated files", "Use values already supplied anywhere in the user's request", "Never turn literal template placeholders",
 		"Run discovery as soon as the source is known", "discovery-suggested consumer identity", "Do not ask for a slug",
 		"process them as separate", "current checkout is not the `prow-ai-dashboard` engine",
+		"fetch `origin`, compare", "stale local engine merely", "repeat `-exact-job`",
+		"hard scope boundary", "manifest/locations.json", "manifest/consumer-files.sha256", "reports/setup-summary.md",
 	} {
 		if !strings.Contains(text, anchor) {
 			t.Errorf("skill missing %q", anchor)
@@ -215,7 +217,8 @@ func TestAgentOnboardingDocsAdvertiseInstallableSkills(t *testing.T) {
 			"--skill setup-prow-ai-consumer author-prow-ai-diagnostics",
 			"--agent codex",
 			"--global",
-			"Use $setup-prow-ai-consumer", "The agent should not ask again",
+			"Use $setup-prow-ai-consumer", "The agent should not ask again", "-exact-job",
+			"manifest/consumer-files.sha256", "reports/setup-summary.md",
 			"Use $author-prow-ai-diagnostics",
 			"npx --yes skills@latest update",
 		},

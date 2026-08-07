@@ -14,6 +14,9 @@ type Options struct {
 	// GCSWebBase selects the gcsweb provider for bucket discovery.
 	// Empty means native gcs.
 	GCSWebBase string
+	// ExactJobs selects exact bucket job indexes without bucket-root discovery.
+	// It is valid only with Bucket and may be repeated on the CLI.
+	ExactJobs []string
 
 	// DashboardRepo is the owner/name repo that will publish the dashboard.
 	DashboardRepo string

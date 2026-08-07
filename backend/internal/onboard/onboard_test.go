@@ -178,6 +178,7 @@ func TestRenderProjectYAML_ValidatesForBucketGCSWeb(t *testing.T) {
 	opts := Options{
 		Bucket:        "istio-prow",
 		GCSWebBase:    "https://gcsweb.istio.io/s3",
+		ExactJobs:     []string{"periodic-istio-e2e", "periodic-istio-upgrade"},
 		DashboardRepo: "me/istio-dash",
 		SourceRepo:    "istio/istio",
 		EngineRef:     "main",
@@ -195,6 +196,9 @@ func TestRenderProjectYAML_ValidatesForBucketGCSWeb(t *testing.T) {
 		`provider: gcsweb`,
 		`bucket: "istio-prow"`,
 		`base: "https://gcsweb.istio.io/s3"`,
+		`exact_jobs:`,
+		`- "periodic-istio-e2e"`,
+		`- "periodic-istio-upgrade"`,
 	} {
 		if !strings.Contains(yamlText, want) {
 			t.Errorf("bucket yaml missing %q\n---\n%s", want, yamlText)
@@ -230,6 +234,9 @@ func TestValidateOptions(t *testing.T) {
 		{"trailing slash repo", func(o *Options) { o.DashboardRepo = "owner/" }, "owner/name"},
 		{"three-part repo", func(o *Options) { o.SourceRepo = "a/b/c" }, "owner/name"},
 		{"gcsweb without bucket", func(o *Options) { o.GCSWebBase = "https://x" }, "gcsweb-base"},
+		{"exact job without bucket", func(o *Options) { o.ExactJobs = []string{"periodic-job"} }, "requires --bucket"},
+		{"unsafe exact job", func(o *Options) { o.TestGrid = ""; o.Bucket = "b"; o.ExactJobs = []string{"../job"} }, "safe Prow job name"},
+		{"duplicate exact job", func(o *Options) { o.TestGrid = ""; o.Bucket = "b"; o.ExactJobs = []string{"job", "job"} }, "duplicates"},
 		{"required draft with no-prompt", func(o *Options) { o.NoPrompt = true; o.RequirePromptDraft = true }, "valid only"},
 		{"required draft without agent mode", func(o *Options) { o.RequirePromptDraft = true }, "valid only"},
 		{"update existing with open PR", func(o *Options) { o.UpdateExisting = true; o.OpenPR = true }, "cannot be combined"},
@@ -742,5 +749,17 @@ func TestValidateOptionsPromptTimeout(t *testing.T) {
 				t.Fatalf("error = %v", err)
 			}
 		})
+	}
+}
+
+func TestSweepConfigPreservesExactBucketJobs(t *testing.T) {
+	opts := Options{Bucket: "kubernetes-ci-logs", ExactJobs: []string{"periodic-a", "periodic-b"}}
+	cfg := sweepConfig(opts)
+	if cfg.EffectiveDiscoverySource() != project.DiscoveryBucket || len(cfg.Discovery.ExactJobs) != 2 || cfg.Discovery.ExactJobs[0] != "periodic-a" || cfg.Discovery.ExactJobs[1] != "periodic-b" {
+		t.Fatalf("discovery = %+v", cfg.Discovery)
+	}
+	opts.ExactJobs[0] = "changed"
+	if cfg.Discovery.ExactJobs[0] != "periodic-a" {
+		t.Fatal("sweep config retained the caller's mutable exact-job slice")
 	}
 }

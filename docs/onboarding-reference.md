@@ -305,6 +305,17 @@ For a project outside Kubernetes TestGrid, replace `-testgrid` with:
 -bucket "<bucket>"
 ```
 
+For a bounded evaluation, repeat `-exact-job` with bucket discovery:
+
+```text
+-bucket "kubernetes-ci-logs"
+-exact-job "periodic-project-e2e"
+-exact-job "periodic-project-upgrade"
+```
+
+Exact-job discovery validates the named direct bucket indexes and fails when a
+name is missing. It cannot be combined with `-testgrid`.
+
 Add `-gcsweb-base "https://gcsweb.example.net/s3"` when the bucket is served
 through gcsweb.
 

@@ -174,6 +174,19 @@ func validateOptions(opts *Options) error {
 	if (opts.TestGrid == "") == (opts.Bucket == "") {
 		return fmt.Errorf("provide exactly one of --testgrid or --bucket")
 	}
+	if len(opts.ExactJobs) > 0 && opts.Bucket == "" {
+		return fmt.Errorf("--exact-job requires --bucket")
+	}
+	seenExactJobs := map[string]bool{}
+	for i, name := range opts.ExactJobs {
+		if strings.TrimSpace(name) != name || !project.ValidExactJobName(name) {
+			return fmt.Errorf("--exact-job value %d %q is not a safe Prow job name", i+1, name)
+		}
+		if seenExactJobs[name] {
+			return fmt.Errorf("--exact-job value %d duplicates %q", i+1, name)
+		}
+		seenExactJobs[name] = true
+	}
 	if _, _, err := parseRepo(opts.DashboardRepo); err != nil {
 		return fmt.Errorf("--dashboard-repo %w", err)
 	}
@@ -335,7 +348,7 @@ func sweepConfig(opts Options) *project.Config {
 	if opts.TestGrid != "" {
 		cfg.TestGrid = project.TestGrid{Dashboard: opts.TestGrid}
 	} else {
-		cfg.Discovery = project.Discovery{Source: project.DiscoveryBucket}
+		cfg.Discovery = project.Discovery{Source: project.DiscoveryBucket, ExactJobs: append([]string(nil), opts.ExactJobs...)}
 	}
 	return cfg
 }
@@ -426,6 +439,7 @@ func buildScaffoldData(opts Options, cats []project.CategoryRule) scaffoldData {
 		Provider:          provider(opts),
 		Bucket:            bucket(opts),
 		GCSWebBase:        opts.GCSWebBase,
+		ExactJobs:         append([]string(nil), opts.ExactJobs...),
 		Title:             derivedName(opts) + " Prow Dashboard",
 		BasePath:          "/" + name,
 		SiteURL:           "https://" + owner + ".github.io/" + name,

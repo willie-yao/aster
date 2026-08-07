@@ -22,6 +22,7 @@ type DiscoveryPlan struct {
 	TestGrid           string              `json:"testgrid,omitempty"`
 	Bucket             string              `json:"bucket,omitempty"`
 	GCSWebBase         string              `json:"gcsweb_base,omitempty"`
+	ExactJobs          []string            `json:"exact_jobs,omitempty"`
 	CatalogRevision    string              `json:"catalog_revision,omitempty"`
 	Jobs               []models.ProwJob    `json:"jobs"`
 	SelectedCandidate  *DashboardCandidate `json:"selected_candidate,omitempty"`
