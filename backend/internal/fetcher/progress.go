@@ -102,6 +102,12 @@ func (p *pipeline) skipProgressSideEffects() {
 	}
 }
 
+func (p *pipeline) setProgressFollowUp(component fetchprogress.FollowUpComponent, state fetchprogress.FollowUpState, reason fetchprogress.FollowUpReason, code fetchprogress.FollowUpFailureCode) {
+	if p.progress != nil {
+		p.progress.SetFollowUp(component, state, reason, code)
+	}
+}
+
 func (p *pipeline) beginWatchPass(passType fetchprogress.PassType) {
 	if p.progress != nil {
 		p.progress.StartPass(passType)

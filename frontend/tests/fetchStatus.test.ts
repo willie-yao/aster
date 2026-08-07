@@ -10,6 +10,7 @@ import {
   fetchStatusMacroStages,
   fetchStatusPresentation,
   fetchStatusStripKey,
+  fetchStatusWarningGroups,
   formatFetchRelativeTime,
   nextFetchStatusDelay,
   nextFetchTime,
@@ -21,7 +22,7 @@ import type { FetchProgressStatus, FetchStatusResponse } from "../src/types/fetc
 const fetchStatusSource = readFileSync(resolve(process.cwd(), "src/components/FetchStatus.tsx"), "utf8");
 
 const activeStatus: FetchProgressStatus = {
-  schema_version: 6,
+  schema_version: 12,
   run_id: "safe-run",
   pass_id: "safe-pass",
   pass_type: "lightweight-watch",
@@ -76,6 +77,113 @@ const activeStatus: FetchProgressStatus = {
 function response(state: FetchStatusResponse["state"], status: FetchProgressStatus = activeStatus): FetchStatusResponse {
   return { available: true, state, stale: state === "stale", status };
 }
+
+const completedStatus: FetchProgressStatus = {
+  ...activeStatus,
+  phase: "complete",
+  outcome: "succeeded",
+  analyses: { ...activeStatus.analyses, logical_total: 79, completed: 79, running: 0, queued: 0 },
+  pattern_phase: "completed",
+  publication_phase: "completed",
+  side_effect_phase: "completed",
+  follow_up: {
+    notifications: { state: "completed" },
+    remediation: { state: "completed" },
+    automatic_issues: { state: "skipped", reason: "not-configured" },
+    automatic_fix_prs: { state: "disabled" },
+  },
+};
+
+const statusFixtures = {
+  activeAnalysis: response("active", {
+    ...activeStatus,
+    analyses: { ...activeStatus.analyses, logical_total: 79, completed: 43, running: 2, queued: 34 },
+  }),
+  successfulIdleWatch: response("idle", {
+    ...completedStatus,
+    phase: "idle",
+    pass_type: "lightweight-watch",
+    next_watch_at: "2026-08-07T19:15:00Z",
+    next_reconcile_at: "2026-08-07T20:00:00Z",
+  }),
+  analysisQualityWarning: response("completed", {
+    ...completedStatus,
+    analyses: { ...completedStatus.analyses, logical_total: 100, completed: 79, failed: 21 },
+  }),
+  patternRepairWarning: response("completed", {
+    ...completedStatus,
+    patterns: {
+      eligible: 6, completed: 5, failed: 1, attempts: 6, retries: 0,
+      repairs: 1, repair_succeeded: 0, repair_failed: 1, repair_failure_category: "schema", current: 5,
+    },
+  }),
+  publicationFailure: response("failed", {
+    ...activeStatus,
+    phase: "failed",
+    outcome: "failed",
+    failure_category: "publication",
+    pattern_phase: "completed",
+    publication_phase: "failed",
+  }),
+  publishedFollowUpFailure: response("failed", {
+    ...completedStatus,
+    phase: "failed",
+    outcome: "failed",
+    failure_category: "side-effects",
+    analyses: { ...completedStatus.analyses, logical_total: 100, completed: 79, failed: 21 },
+    patterns: {
+      eligible: 6, completed: 5, failed: 1, attempts: 6, retries: 0,
+      repairs: 1, repair_succeeded: 0, repair_failed: 1, repair_failure_category: "schema", current: 5,
+    },
+    side_effect_phase: "failed",
+    follow_up: {
+      notifications: {
+        state: "failed", code: "notification-delivery", summary: "Email notification delivery failed",
+      },
+      remediation: { state: "completed" },
+      automatic_issues: { state: "skipped", reason: "not-configured" },
+      automatic_fix_prs: { state: "disabled" },
+    },
+  }),
+  missingAutomaticTokens: response("completed", completedStatus),
+  notificationFailure: response("failed", {
+    ...completedStatus,
+    phase: "failed",
+    outcome: "failed",
+    failure_category: "side-effects",
+    side_effect_phase: "failed",
+    follow_up: {
+      notifications: {
+        state: "failed", code: "notification-delivery", summary: "Email notification delivery failed",
+      },
+      remediation: { state: "completed" },
+    },
+  }),
+  staleIdle: response("stale", {
+    ...completedStatus,
+    phase: "idle",
+    next_watch_at: "2026-08-07T18:00:00Z",
+  }),
+  interruptedPrePublication: response("interrupted", {
+    ...activeStatus,
+    phase: "interrupted",
+    outcome: "interrupted",
+    failure_category: "interrupted",
+    pattern_phase: "completed",
+    publication_phase: "pending",
+  }),
+  interruptedPostPublication: response("interrupted", {
+    ...completedStatus,
+    phase: "interrupted",
+    outcome: "interrupted",
+    failure_category: "interrupted",
+    side_effect_phase: "cancelled",
+    follow_up: {
+      notifications: { state: "completed" },
+      remediation: { state: "cancelled" },
+    },
+  }),
+};
 
 test("analysis progress distinguishes reuse, adoption, and new Tasks", () => {
   const progress = analysisProgressBreakdown(activeStatus);
@@ -209,6 +317,7 @@ test("completed analyses do not override pattern finalization", () => {
     ["Analyze", "Complete"],
     ["Patterns", "Active"],
     ["Publish", "Pending"],
+    ["Follow-up", "Pending"],
   ]);
 });
 
@@ -251,6 +360,62 @@ test("publication and side effects retain phase-first labels", () => {
   assert.equal(sideEffects?.label, "Finishing refresh");
 });
 
+test("representative refresh fixtures keep publication, quality, and follow-up semantics separate", () => {
+  assert.equal(fetchStatusPresentation(statusFixtures.activeAnalysis)?.title, "Analyzing failures");
+  assert.equal(fetchStatusPresentation(statusFixtures.successfulIdleWatch)?.title, "Up to date");
+
+  assert.deepEqual(fetchStatusWarningGroups(statusFixtures.analysisQualityWarning.status!), [
+    { label: "Analysis quality", items: ["21 analyses unavailable"] },
+  ]);
+  assert.deepEqual(fetchStatusWarningGroups(statusFixtures.patternRepairWarning.status!), [
+    { label: "Pattern quality", items: ["1 pattern attempt failed", "1 repair failed because the response had an invalid schema"] },
+  ]);
+
+  const publicationFailure = fetchStatusPresentation(statusFixtures.publicationFailure);
+  assert.equal(publicationFailure?.title, "Refresh failed");
+  assert.equal(publicationFailure?.severity, "error");
+
+  const missingTokens = statusFixtures.missingAutomaticTokens.status?.follow_up;
+  assert.equal(missingTokens?.automatic_issues?.state, "skipped");
+  assert.equal(missingTokens?.automatic_issues?.reason, "not-configured");
+  assert.equal(missingTokens?.automatic_fix_prs?.state, "disabled");
+  assert.deepEqual(fetchStatusWarningGroups(statusFixtures.missingAutomaticTokens.status!), []);
+
+  assert.deepEqual(fetchStatusWarningGroups(statusFixtures.notificationFailure.status!), [
+    { label: "Follow-up", items: ["Email notification delivery failed"] },
+  ]);
+  assert.equal(fetchStatusPresentation(statusFixtures.staleIdle)?.title, "Status stale");
+  assert.equal(fetchStatusPresentation(statusFixtures.interruptedPrePublication)?.title, "Refresh interrupted");
+  const interruptedAfterPublish = fetchStatusPresentation(statusFixtures.interruptedPostPublication);
+  assert.equal(interruptedAfterPublish?.title, "Dashboard updated with a follow-up warning");
+  assert.equal(interruptedAfterPublish?.detail, "The latest dashboard is live, but follow-up work was interrupted.");
+  assert.match(interruptedAfterPublish?.ariaLabel ?? "", /latest dashboard is live/i);
+});
+
+test("published follow-up failure keeps Publish complete and presents a warning", () => {
+  const presentation = fetchStatusPresentation(statusFixtures.publishedFollowUpFailure);
+  const stages = fetchStatusMacroStages(statusFixtures.publishedFollowUpFailure);
+
+  assert.deepEqual(stages.map((stage) => [stage.label, stage.stateLabel]), [
+    ["Fetch data", "Complete"],
+    ["Analyze", "Complete"],
+    ["Patterns", "Complete"],
+    ["Publish", "Complete"],
+    ["Follow-up", "Failed"],
+  ]);
+  assert.equal(presentation?.title, "Dashboard updated with a follow-up warning");
+  assert.equal(presentation?.detail, "The latest dashboard is live, but email notification delivery failed.");
+  assert.equal(presentation?.severity, "warning");
+  assert.match(presentation?.ariaLabel ?? "", /latest dashboard is live/i);
+  assert.doesNotMatch(presentation?.ariaLabel ?? "", /\.\./);
+  assert.doesNotMatch(`${presentation?.title} ${presentation?.detail}`, /Publish failed|Refresh failed/);
+  assert.deepEqual(fetchStatusWarningGroups(statusFixtures.publishedFollowUpFailure.status!), [
+    { label: "Analysis quality", items: ["21 analyses unavailable"] },
+    { label: "Pattern quality", items: ["1 pattern attempt failed", "1 repair failed because the response had an invalid schema"] },
+    { label: "Follow-up", items: ["Email notification delivery failed"] },
+  ]);
+});
+
 test("idle status is up to date and exposes future checks", () => {
   const idleStatus: FetchProgressStatus = {
     ...activeStatus,
@@ -284,11 +449,11 @@ test("stale idle schedules keep the completed pipeline distinct from the overdue
   assert.equal(presentation?.title, "Status stale");
   assert.equal(presentation?.detail, "The next scheduled refresh check is overdue");
   assert.equal(fetchStatusHasCompletedPipeline(staleIdle), true);
-  assert.deepEqual(stages.map((stage) => stage.stateLabel), ["Complete", "Complete", "Complete", "Complete"]);
+  assert.deepEqual(stages.map((stage) => stage.stateLabel), ["Complete", "Complete", "Complete", "Complete", "Complete"]);
   assert.equal(shouldShowFetchStatusStrip(staleIdle), true);
   assert.match(fetchStatusSource, /const completedPipeline = fetchStatusHasCompletedPipeline\(response\)/);
   assert.match(fetchStatusSource, /\{completedPipeline \? \([\s\S]*Next check/);
-  assert.match(fetchStatusSource, /\{!completedPipeline && \(/);
+  assert.match(fetchStatusSource, /publishedThisPass \|\| completedPipeline/);
 });
 
 test("degraded states retain severity and the persistent alert strip", () => {
@@ -322,36 +487,43 @@ test("degraded states retain severity and the persistent alert strip", () => {
   assert.equal(fetchStatusPresentation({ available: false, state: "missing" }), null);
 });
 
-test("default popover stays user-facing and technical details retain diagnostics", () => {
+test("default popover is compact and nests debug identifiers and recent history", () => {
   const technicalIndex = fetchStatusSource.indexOf("Technical details");
-  assert.ok(technicalIndex > 0);
+  const debugIndex = fetchStatusSource.indexOf("Debug identifiers", technicalIndex);
+  assert.ok(technicalIndex > 0 && debugIndex > technicalIndex);
   const summarySource = fetchStatusSource.slice(0, technicalIndex);
-  const technicalSource = fetchStatusSource.slice(technicalIndex);
+  const technicalSource = fetchStatusSource.slice(technicalIndex, debugIndex);
+  const debugSource = fetchStatusSource.slice(debugIndex);
 
-  for (const label of [
-    "Compatible results",
-    "Exact results reused",
-    "Same-failure results reused",
-    "Existing Tasks adopted",
-    "New analyzer Tasks",
-    "Task attempts",
-    "Same-failure candidates",
-    "Cache rejections",
-    "Phase durations",
-    "Run ID",
-    "Pass ID",
-    "Recent passes",
-  ]) {
-    assert.doesNotMatch(summarySource, new RegExp(`label="${label}"`));
-    assert.match(technicalSource, new RegExp(label));
+  for (const label of ["Timing", "Analysis", "Cache", "Patterns", "Follow-up", "Retries", "Failures and cancellations"]) {
+    assert.match(technicalSource, new RegExp(`label="${label}"`));
   }
+  for (const removed of [
+    "Phase", "Pattern stage", "Publication stage", "Follow-up stage", "Phase began", "Last checked",
+    "Compatible results", "Exact results reused", "Same-failure results reused", "Existing Tasks adopted",
+    "New analyzer Tasks", "Task attempts", "Same-failure candidates", "Cache rejections", "Phase durations",
+  ]) {
+    assert.doesNotMatch(technicalSource, new RegExp(`label="${removed}"`));
+  }
+  assert.doesNotMatch(summarySource, /Run ID|Pass ID|Engine version/);
+  assert.doesNotMatch(technicalSource, /Run ID|Pass ID|Engine version/);
+  assert.match(debugSource, /Run ID/);
+  assert.match(debugSource, /Pass ID/);
+  assert.match(debugSource, /Engine version/);
+  assert.match(debugSource, /Follow-up code/);
+  assert.match(debugSource, /Recent refreshes/);
+  assert.match(debugSource, /history\.slice\(-3\)/);
+  assert.match(fetchStatusSource, /navigator\.clipboard\.writeText/);
   assert.match(summarySource, /Last published/);
   assert.match(summarySource, /Current pass began/);
   assert.match(summarySource, /Last activity/);
   assert.match(summarySource, /Next check/);
   assert.match(summarySource, /Next full reconciliation/);
-  assert.match(summarySource, /last published dashboard remains available/);
+  assert.match(summarySource, /published dashboard.*available/i);
+  assert.match(fetchStatusSource, /overflowX: "hidden"/);
   assert.match(fetchStatusSource, /<Collapse in=\{technicalOpen\} timeout=\{reduceMotion \? 0 : "auto"\}>/);
+  assert.match(fetchStatusSource, /<Collapse in=\{debugOpen\} timeout=\{reduceMotion \? 0 : "auto"\}>/);
+  assert.match(fetchStatusSource, /<Collapse in=\{historyOpen\} timeout=\{reduceMotion \? 0 : "auto"\}>/);
 });
 
 test("phase changes are announced politely without counter churn", () => {

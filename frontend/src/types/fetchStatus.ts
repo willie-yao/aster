@@ -19,6 +19,22 @@ export type FetchPhase =
 export type FetchOutcome = "running" | "succeeded" | "failed" | "cancelled" | "interrupted";
 export type FetchStageState = "pending" | "running" | "completed" | "skipped" | "failed" | "cancelled";
 export type FetchStatusState = "missing" | "unavailable" | "active" | "idle" | "completed" | "failed" | "cancelled" | "interrupted" | "stale";
+export type FetchFollowUpState = "running" | "completed" | "skipped" | "disabled" | "failed" | "cancelled";
+export type FetchFollowUpReason = "not-configured" | "no-work" | "dependency-failed";
+
+export interface FetchFollowUpComponent {
+  state: FetchFollowUpState;
+  reason?: FetchFollowUpReason;
+  code?: string;
+  summary?: string;
+}
+
+export interface FetchFollowUpProgress {
+  notifications?: FetchFollowUpComponent;
+  remediation?: FetchFollowUpComponent;
+  automatic_issues?: FetchFollowUpComponent;
+  automatic_fix_prs?: FetchFollowUpComponent;
+}
 
 export interface FetchProgressStatus {
   schema_version: number;
@@ -118,6 +134,7 @@ export interface FetchProgressStatus {
   pattern_phase: FetchStageState;
   publication_phase: FetchStageState;
   side_effect_phase: FetchStageState;
+  follow_up?: FetchFollowUpProgress;
   phase_durations_ms?: Record<string, number>;
   next_watch_at?: string;
   next_reconcile_at?: string;

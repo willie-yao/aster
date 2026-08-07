@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fetchprogress"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/issues"
@@ -97,6 +100,62 @@ func (finalizedFakeAgent) Generate(context.Context, runtime.GenerateSpec) (runti
 		Files: map[string]string{"config/fix.yaml": "fixed: true\n"},
 		Diff:  "diff --git a/config/fix.yaml b/config/fix.yaml\n+fixed: true\n",
 	}, nil
+}
+
+type recordingScheduledIssueManager struct {
+	reconcileCalls int
+	saveCalls      int
+	reconcileErr   error
+	saveErr        error
+}
+
+func (m *recordingScheduledIssueManager) Reconcile(context.Context, []issues.IssueSpec) (issues.Stats, error) {
+	m.reconcileCalls++
+	return issues.Stats{}, m.reconcileErr
+}
+
+func (m *recordingScheduledIssueManager) SaveState() error {
+	m.saveCalls++
+	return m.saveErr
+}
+
+func automaticIssueTestConfig() *project.Config {
+	return &project.Config{
+		Name: "Test", Branding: project.Branding{
+			SiteURL:    "https://dashboard.example.test",
+			SourceRepo: project.SourceRepo{Owner: "example", Name: "repo"},
+		},
+		Issues: &project.Issues{Enabled: true},
+	}
+}
+
+func TestProcessIssuesSkipsWithoutStaticToken(t *testing.T) {
+	t.Setenv("ISSUE_TOKEN", "")
+	oldFactory := newBatchIssueManager
+	newBatchIssueManager = func(*issues.Client, string, string, issues.Options) scheduledIssueManager {
+		t.Fatal("issue manager was created without ISSUE_TOKEN")
+		return nil
+	}
+	t.Cleanup(func() { newBatchIssueManager = oldFactory })
+
+	if err := processIssues(t.Context(), automaticIssueTestConfig(), models.FlakinessReport{}, nil, "", false, t.TempDir(), nil); err != nil {
+		t.Fatalf("processIssues error = %v", err)
+	}
+}
+
+func TestProcessIssuesRunsWithStaticToken(t *testing.T) {
+	t.Setenv("ISSUE_TOKEN", "test-token")
+	manager := &recordingScheduledIssueManager{}
+	oldFactory := newBatchIssueManager
+	newBatchIssueManager = func(*issues.Client, string, string, issues.Options) scheduledIssueManager { return manager }
+	t.Cleanup(func() { newBatchIssueManager = oldFactory })
+
+	if err := processIssues(t.Context(), automaticIssueTestConfig(), models.FlakinessReport{}, nil, "", false, t.TempDir(), nil); err != nil {
+		t.Fatalf("processIssues error = %v", err)
+	}
+	if manager.reconcileCalls != 1 || manager.saveCalls != 1 {
+		t.Fatalf("issue manager calls = reconcile %d save %d", manager.reconcileCalls, manager.saveCalls)
+	}
 }
 
 type recordingListBackend struct {
@@ -213,6 +272,34 @@ func TestProcessFixPRsReportsPersistedReference(t *testing.T) {
 	state := statefile.Load[fixpr.TrackedFix](filepath.Join(dataDir, "fix_pr_state.json"), "example/repo", "fix PRs")
 	if len(state.Tracked) != 1 {
 		t.Fatalf("tracked fixes = %+v", state.Tracked)
+	}
+}
+
+func TestProcessFixPRsSkipsWithoutStaticToken(t *testing.T) {
+	zero := 0
+	cfg := &project.Config{AI: &project.AI{FixPRs: &project.FixPRs{
+		Enabled: true, Repo: &project.SourceRepo{Owner: "example", Name: "repo"},
+		AuthorName: "Test", AuthorEmail: "test@example.com", CritiqueRetries: &zero,
+		AgentRuntime: &project.FixAgentRuntime{Type: "orka"},
+	}}}
+	t.Setenv("FIX_TOKEN", "")
+	oldRuntime, oldManager := newBatchFixRuntime, newBatchFixManager
+	newBatchFixRuntime = func(*project.FixAgentRuntime) (runtime.AgentRuntime, error) {
+		t.Fatal("fix runtime was created without FIX_TOKEN")
+		return nil, nil
+	}
+	newBatchFixManager = func(string, string, fixpr.Options) *fixpr.Manager {
+		t.Fatal("fix manager was created without FIX_TOKEN")
+		return nil
+	}
+	t.Cleanup(func() { newBatchFixRuntime, newBatchFixManager = oldRuntime, oldManager })
+
+	changed, err := processFixPRs(t.Context(), cfg, []models.PatternAnalysis{{
+		ID: "pattern", JobID: "job", Subject: "job", Systemic: true, Confidence: "high",
+		SharedRootCause: "configuration is stale", SuggestedFix: "update config/fix.yaml",
+	}}, "", t.TempDir(), nil)
+	if err != nil || changed {
+		t.Fatalf("processFixPRs changed=%t error=%v", changed, err)
 	}
 }
 
@@ -548,5 +635,104 @@ func TestRemediationIssueLifecycleKeys(t *testing.T) {
 	}
 	if len(keepOpen) != 1 || len(retire) != 1 {
 		t.Fatalf("keepOpen = %+v, retire = %+v", keepOpen, retire)
+	}
+}
+
+func TestRunSideEffectsReportsSanitizedAutomaticIssueFailure(t *testing.T) {
+	t.Setenv("ISSUE_TOKEN", "test-token")
+	manager := &recordingScheduledIssueManager{reconcileErr: errors.New("private provider response with token=secret")}
+	oldFactory := newBatchIssueManager
+	newBatchIssueManager = func(*issues.Client, string, string, issues.Options) scheduledIssueManager { return manager }
+	t.Cleanup(func() { newBatchIssueManager = oldFactory })
+
+	dataDir := t.TempDir()
+	backend, err := storage.NewLocalBackend(t.TempDir(), "https://prow.example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracker := fetchprogress.New(dataDir, "sha-test")
+	tracker.StartPass(fetchprogress.PassOneShot)
+	tracker.StartPhase(fetchprogress.PhaseSideEffects)
+	p := &pipeline{
+		cfg: automaticIssueTestConfig(), opts: Options{OutDir: dataDir}, backend: backend,
+		client: &http.Client{}, progress: tracker,
+	}
+
+	err = p.runSideEffects(t.Context(), &refreshResult{})
+	if err == nil || !strings.Contains(err.Error(), "private provider response") {
+		t.Fatalf("runSideEffects error = %v", err)
+	}
+	status := tracker.Snapshot()
+	if status.FollowUp == nil || status.FollowUp.AutomaticIssues == nil {
+		t.Fatalf("follow-up status = %+v", status.FollowUp)
+	}
+	issueStatus := status.FollowUp.AutomaticIssues
+	if issueStatus.State != fetchprogress.FollowUpFailed || issueStatus.Code != fetchprogress.FollowUpFailureAutomaticIssues ||
+		issueStatus.Summary != "Automatic issue reconciliation failed" || strings.Contains(issueStatus.Summary, "secret") {
+		t.Fatalf("automatic issue status = %+v", issueStatus)
+	}
+}
+
+type countingRoundTripper struct {
+	calls atomic.Int64
+}
+
+func (t *countingRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
+	t.calls.Add(1)
+	return nil, errors.New("unexpected network request")
+}
+
+func TestRunSideEffectsSkipsFixAutomationWithoutStaticToken(t *testing.T) {
+	t.Setenv("FIX_TOKEN", "")
+	zero := 0
+	cfg := &project.Config{
+		Name: "Test", Branding: project.Branding{SiteURL: "https://dashboard.example.test"},
+		AI: &project.AI{FixPRs: &project.FixPRs{
+			Enabled: true, Repo: &project.SourceRepo{Owner: "example", Name: "repo"},
+			AuthorName: "Test", AuthorEmail: "test@example.com", CritiqueRetries: &zero,
+			AgentRuntime: &project.FixAgentRuntime{Type: "orka"},
+		}},
+	}
+	oldRuntime, oldManager := newBatchFixRuntime, newBatchFixManager
+	newBatchFixRuntime = func(*project.FixAgentRuntime) (runtime.AgentRuntime, error) {
+		t.Fatal("fix runtime was created without FIX_TOKEN")
+		return nil, nil
+	}
+	newBatchFixManager = func(string, string, fixpr.Options) *fixpr.Manager {
+		t.Fatal("fix manager was created without FIX_TOKEN")
+		return nil
+	}
+	t.Cleanup(func() { newBatchFixRuntime, newBatchFixManager = oldRuntime, oldManager })
+
+	dataDir := t.TempDir()
+	backend, err := storage.NewLocalBackend(t.TempDir(), "https://prow.example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := &countingRoundTripper{}
+	tracker := fetchprogress.New(dataDir, "sha-test")
+	tracker.StartPass(fetchprogress.PassOneShot)
+	tracker.StartPhase(fetchprogress.PhaseSideEffects)
+	p := &pipeline{
+		cfg: cfg, opts: Options{OutDir: dataDir}, backend: backend,
+		client: &http.Client{Transport: transport}, progress: tracker,
+	}
+	res := &refreshResult{flakiness: models.FlakinessReport{RecurringPatterns: []models.PatternAnalysis{{
+		ID: "pattern", JobID: "job", Subject: "job", Systemic: true, Confidence: "high",
+		SharedRootCause: "configuration is stale", SuggestedFix: "update config/fix.yaml",
+	}}}}
+
+	if err := p.runSideEffects(t.Context(), res); err != nil {
+		t.Fatalf("runSideEffects error = %v", err)
+	}
+	if transport.calls.Load() != 0 {
+		t.Fatalf("network calls = %d, want 0", transport.calls.Load())
+	}
+	status := tracker.Snapshot()
+	if status.FollowUp == nil || status.FollowUp.AutomaticFixPRs == nil || status.FollowUp.Remediation == nil ||
+		status.FollowUp.AutomaticFixPRs.State != fetchprogress.FollowUpSkipped ||
+		status.FollowUp.AutomaticFixPRs.Reason != fetchprogress.FollowUpReasonNotConfigured ||
+		status.FollowUp.Remediation.State != fetchprogress.FollowUpSkipped {
+		t.Fatalf("follow-up status = %+v", status.FollowUp)
 	}
 }

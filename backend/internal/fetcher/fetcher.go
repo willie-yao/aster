@@ -809,15 +809,19 @@ func (p *pipeline) runSideEffects(ctx context.Context, res *refreshResult) error
 	var sideEffectErrs []error
 
 	if email, enabled := cfg.EffectiveEmailNotifications(); enabled {
+		p.setProgressFollowUp(fetchprogress.FollowUpNotifications, fetchprogress.FollowUpRunning, fetchprogress.FollowUpReasonNone, fetchprogress.FollowUpFailureNone)
+		failureCode := fetchprogress.FollowUpFailureNone
 		password := os.Getenv("EMAIL_SMTP_PASSWORD")
 		if email.SMTP.Username != "" && password == "" {
 			log.Println("Notifications: skipped (EMAIL_SMTP_PASSWORD is unset)")
 			sideEffectErrs = append(sideEffectErrs, fmt.Errorf("email notifications: EMAIL_SMTP_PASSWORD is unset"))
+			failureCode = fetchprogress.FollowUpFailureNotificationCredentials
 		} else {
 			from, recipients, err := notify.ParseAddresses(email.From, email.To)
 			if err != nil {
 				log.Printf("Warning: invalid email notification addresses: %v", err)
 				sideEffectErrs = append(sideEffectErrs, fmt.Errorf("email addresses: %w", err))
+				failureCode = fetchprogress.FollowUpFailureNotificationConfiguration
 			} else {
 				sender, err := newEmailSender(notify.SMTPConfig{
 					Host:     email.SMTP.Host,
@@ -829,6 +833,7 @@ func (p *pipeline) runSideEffects(ctx context.Context, res *refreshResult) error
 				if err != nil {
 					log.Printf("Warning: invalid email notification config: %v", err)
 					sideEffectErrs = append(sideEffectErrs, fmt.Errorf("email config: %w", err))
+					failureCode = fetchprogress.FollowUpFailureNotificationConfiguration
 				} else {
 					notifier := notify.NewNotifier(
 						sender,
@@ -846,49 +851,109 @@ func (p *pipeline) runSideEffects(ctx context.Context, res *refreshResult) error
 					if processErr != nil {
 						log.Printf("Warning: email notification processing failed: %v", processErr)
 						sideEffectErrs = append(sideEffectErrs, fmt.Errorf("email notifications: %w", processErr))
+						failureCode = fetchprogress.FollowUpFailureNotificationDelivery
 					}
 					if err := notifier.SaveState(); err != nil {
 						log.Printf("Warning: failed to save notification state: %v", err)
 						sideEffectErrs = append(sideEffectErrs, err)
+						failureCode = fetchprogress.FollowUpFailureNotificationStatePersistence
 					}
 				}
 			}
 		}
+		if failureCode == fetchprogress.FollowUpFailureNone {
+			p.setProgressFollowUp(fetchprogress.FollowUpNotifications, fetchprogress.FollowUpCompleted, fetchprogress.FollowUpReasonNone, fetchprogress.FollowUpFailureNone)
+		} else {
+			p.setProgressFollowUp(fetchprogress.FollowUpNotifications, fetchprogress.FollowUpFailed, fetchprogress.FollowUpReasonNone, failureCode)
+		}
 	} else {
 		log.Println("Notifications: skipped (email disabled)")
+		p.setProgressFollowUp(fetchprogress.FollowUpNotifications, fetchprogress.FollowUpDisabled, fetchprogress.FollowUpReasonNone, fetchprogress.FollowUpFailureNone)
 	}
 
-	// Recover existing fix state before issue recovery or new automatic writes.
+	fixEnabled := cfg.AI != nil && cfg.AI.FixPRs != nil && cfg.AI.FixPRs.Enabled
+	fixTokenConfigured := os.Getenv("FIX_TOKEN") != ""
 	remediationReady := true
-	if err := p.processRemediations(ctx, flakinessReport.RecurringPatterns, details); err != nil {
-		sideEffectErrs = append(sideEffectErrs, err)
-		remediationReady = false
+	if fixEnabled && !fixTokenConfigured {
+		if _, err := remediation.LoadForRepo(opts.OutDir, configuredFixRepo(cfg)); err != nil {
+			sideEffectErrs = append(sideEffectErrs, fmt.Errorf("load remediation state: %w", err))
+			p.setProgressFollowUp(fetchprogress.FollowUpRemediation, fetchprogress.FollowUpFailed, fetchprogress.FollowUpReasonNone, fetchprogress.FollowUpFailureRemediation)
+			remediationReady = false
+		} else {
+			log.Println("Remediation: skipped automatic reconciliation (FIX_TOKEN is unset)")
+			p.setProgressFollowUp(fetchprogress.FollowUpRemediation, fetchprogress.FollowUpSkipped, fetchprogress.FollowUpReasonNotConfigured, fetchprogress.FollowUpFailureNone)
+		}
+	} else {
+		p.setProgressFollowUp(fetchprogress.FollowUpRemediation, fetchprogress.FollowUpRunning, fetchprogress.FollowUpReasonNone, fetchprogress.FollowUpFailureNone)
+		if err := p.processRemediations(ctx, flakinessReport.RecurringPatterns, details); err != nil {
+			sideEffectErrs = append(sideEffectErrs, err)
+			p.setProgressFollowUp(fetchprogress.FollowUpRemediation, fetchprogress.FollowUpFailed, fetchprogress.FollowUpReasonNone, fetchprogress.FollowUpFailureRemediation)
+			remediationReady = false
+		} else {
+			p.setProgressFollowUp(fetchprogress.FollowUpRemediation, fetchprogress.FollowUpCompleted, fetchprogress.FollowUpReasonNone, fetchprogress.FollowUpFailureNone)
+		}
 	}
+
 	fixStateChanged := false
-	if remediationReady {
+	switch {
+	case !fixEnabled:
+		p.setProgressFollowUp(fetchprogress.FollowUpAutomaticFixPRs, fetchprogress.FollowUpDisabled, fetchprogress.FollowUpReasonNone, fetchprogress.FollowUpFailureNone)
+	case !remediationReady:
+		p.setProgressFollowUp(fetchprogress.FollowUpAutomaticFixPRs, fetchprogress.FollowUpSkipped, fetchprogress.FollowUpReasonDependencyFailed, fetchprogress.FollowUpFailureNone)
+	case !fixTokenConfigured:
+		log.Println("Fix PRs: enabled but FIX_TOKEN is unset; skipping automatic generation")
+		p.setProgressFollowUp(fetchprogress.FollowUpAutomaticFixPRs, fetchprogress.FollowUpSkipped, fetchprogress.FollowUpReasonNotConfigured, fetchprogress.FollowUpFailureNone)
+	default:
 		ledger, err := remediation.LoadForRepo(opts.OutDir, configuredFixRepo(cfg))
 		if err != nil {
 			sideEffectErrs = append(sideEffectErrs, fmt.Errorf("load remediation state for fix PRs: %w", err))
+			p.setProgressFollowUp(fetchprogress.FollowUpAutomaticFixPRs, fetchprogress.FollowUpFailed, fetchprogress.FollowUpReasonNone, fetchprogress.FollowUpFailureAutomaticFixPRs)
 		} else {
 			fixPatterns := remediation.UntrackedPatterns(ledger, flakinessReport.RecurringPatterns, details)
 			if skipped := len(flakinessReport.RecurringPatterns) - len(fixPatterns); skipped > 0 {
 				log.Printf("Fix PRs: %d pattern(s) already have remediation history; skipping duplicate proposals", skipped)
 			}
-			var fixErr error
-			fixStateChanged, fixErr = processFixPRs(ctx, cfg, fixPatterns, p.aiToken, opts.OutDir, p.usageRecorder)
-			if fixErr != nil {
-				sideEffectErrs = append(sideEffectErrs, fixErr)
+			if len(fixPatterns) == 0 {
+				p.setProgressFollowUp(fetchprogress.FollowUpAutomaticFixPRs, fetchprogress.FollowUpSkipped, fetchprogress.FollowUpReasonNoWork, fetchprogress.FollowUpFailureNone)
+			} else {
+				p.setProgressFollowUp(fetchprogress.FollowUpAutomaticFixPRs, fetchprogress.FollowUpRunning, fetchprogress.FollowUpReasonNone, fetchprogress.FollowUpFailureNone)
+				var fixErr error
+				fixStateChanged, fixErr = processFixPRs(ctx, cfg, fixPatterns, p.aiToken, opts.OutDir, p.usageRecorder)
+				if fixErr != nil {
+					sideEffectErrs = append(sideEffectErrs, fixErr)
+					p.setProgressFollowUp(fetchprogress.FollowUpAutomaticFixPRs, fetchprogress.FollowUpFailed, fetchprogress.FollowUpReasonNone, fetchprogress.FollowUpFailureAutomaticFixPRs)
+				} else {
+					p.setProgressFollowUp(fetchprogress.FollowUpAutomaticFixPRs, fetchprogress.FollowUpCompleted, fetchprogress.FollowUpReasonNone, fetchprogress.FollowUpFailureNone)
+				}
 			}
 		}
 	}
-	// Adopt a PR created in this pass before issues evaluate recovery.
+
 	if fixStateChanged {
+		p.setProgressFollowUp(fetchprogress.FollowUpRemediation, fetchprogress.FollowUpRunning, fetchprogress.FollowUpReasonNone, fetchprogress.FollowUpFailureNone)
 		if err := p.processRemediations(ctx, flakinessReport.RecurringPatterns, details); err != nil {
 			sideEffectErrs = append(sideEffectErrs, err)
+			p.setProgressFollowUp(fetchprogress.FollowUpRemediation, fetchprogress.FollowUpFailed, fetchprogress.FollowUpReasonNone, fetchprogress.FollowUpFailureRemediation)
+		} else {
+			p.setProgressFollowUp(fetchprogress.FollowUpRemediation, fetchprogress.FollowUpCompleted, fetchprogress.FollowUpReasonNone, fetchprogress.FollowUpFailureNone)
 		}
 	}
-	if err := processIssues(ctx, cfg, flakinessReport, details, p.aiToken, p.enableAI, opts.OutDir, p.usageRecorder); err != nil {
-		sideEffectErrs = append(sideEffectErrs, err)
+
+	issuesEnabled := cfg.Issues != nil && cfg.Issues.Enabled
+	switch {
+	case !issuesEnabled:
+		p.setProgressFollowUp(fetchprogress.FollowUpAutomaticIssues, fetchprogress.FollowUpDisabled, fetchprogress.FollowUpReasonNone, fetchprogress.FollowUpFailureNone)
+	case os.Getenv("ISSUE_TOKEN") == "":
+		log.Println("Issues: enabled but ISSUE_TOKEN is unset; skipping automatic reconciliation")
+		p.setProgressFollowUp(fetchprogress.FollowUpAutomaticIssues, fetchprogress.FollowUpSkipped, fetchprogress.FollowUpReasonNotConfigured, fetchprogress.FollowUpFailureNone)
+	default:
+		p.setProgressFollowUp(fetchprogress.FollowUpAutomaticIssues, fetchprogress.FollowUpRunning, fetchprogress.FollowUpReasonNone, fetchprogress.FollowUpFailureNone)
+		if err := processIssues(ctx, cfg, flakinessReport, details, p.aiToken, p.enableAI, opts.OutDir, p.usageRecorder); err != nil {
+			sideEffectErrs = append(sideEffectErrs, err)
+			p.setProgressFollowUp(fetchprogress.FollowUpAutomaticIssues, fetchprogress.FollowUpFailed, fetchprogress.FollowUpReasonNone, fetchprogress.FollowUpFailureAutomaticIssues)
+		} else {
+			p.setProgressFollowUp(fetchprogress.FollowUpAutomaticIssues, fetchprogress.FollowUpCompleted, fetchprogress.FollowUpReasonNone, fetchprogress.FollowUpFailureNone)
+		}
 	}
 	return errors.Join(sideEffectErrs...)
 }
@@ -911,8 +976,8 @@ func processIssues(ctx context.Context, cfg *project.Config, report models.Flaki
 	}
 	token := os.Getenv("ISSUE_TOKEN")
 	if token == "" {
-		log.Println("Issues: enabled in config but ISSUE_TOKEN is unset; skipping")
-		return fmt.Errorf("issues: ISSUE_TOKEN is unset")
+		log.Println("Issues: enabled but ISSUE_TOKEN is unset; skipping automatic reconciliation")
+		return nil
 	}
 	eff := cfg.EffectiveIssues()
 	if eff.Repo == nil || eff.Repo.Owner == "" || eff.Repo.Name == "" {
@@ -959,7 +1024,7 @@ func processIssues(ctx context.Context, cfg *project.Config, report models.Flaki
 		}
 		keepOpen[issues.KeyPrefixPattern+detail.JobID] = true
 	}
-	mgr := issues.NewManager(client, filepath.Join(outDir, "issue_state.json"), targetRepo, issues.Options{
+	mgr := newBatchIssueManager(client, filepath.Join(outDir, "issue_state.json"), targetRepo, issues.Options{
 		CommentOnRecovery: eff.CommentOnRecovery == nil || *eff.CommentOnRecovery,
 		CloseOnRecovery:   eff.CloseOnRecovery,
 		MaxNewPerRun:      eff.MaxNewPerRun,
@@ -991,6 +1056,15 @@ var newBatchFixManager = func(token, stateFile string, opts fixpr.Options) *fixp
 	return fixpr.NewManager(fixpr.NewClients(token), stateFile, opts)
 }
 
+type scheduledIssueManager interface {
+	Reconcile(context.Context, []issues.IssueSpec) (issues.Stats, error)
+	SaveState() error
+}
+
+var newBatchIssueManager = func(client *issues.Client, stateFile, repo string, opts issues.Options) scheduledIssueManager {
+	return issues.NewManager(client, stateFile, repo, opts)
+}
+
 // processFixPRs drafts minimal fix PRs against the source repo for systemic
 // recurring patterns. Gated on ai.fix_prs.enabled and FIX_TOKEN (a CLA-signed
 // operator PAT). In dry-run it writes previews instead of opening PRs. Any
@@ -1009,8 +1083,8 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 	}
 	fixToken := os.Getenv("FIX_TOKEN")
 	if fixToken == "" {
-		log.Println("Fix PRs: enabled but FIX_TOKEN is unset; skipping")
-		return false, fmt.Errorf("fix PRs: FIX_TOKEN is unset")
+		log.Println("Fix PRs: enabled but FIX_TOKEN is unset; skipping automatic generation")
+		return false, nil
 	}
 
 	provider := cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"))

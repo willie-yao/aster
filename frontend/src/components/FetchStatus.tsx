@@ -24,15 +24,16 @@ import {
   fetchStatusHasCompletedPipeline,
   fetchStatusMacroStages,
   fetchStatusPresentation,
+  fetchStatusPublishedThisPass,
   fetchStatusStripKey,
+  fetchStatusWarningGroups,
   formatFetchRelativeTime,
   formatFetchTimestamp,
-  patternFailureLabel,
   shouldShowFetchStatusStrip,
   type FetchMacroStagePresentation,
   type FetchMacroStageState,
 } from "../lib/fetchStatus";
-import type { FetchPassSummary, FetchProgressStatus, FetchStatusResponse } from "../types/fetchStatus";
+import type { FetchFollowUpComponent, FetchPassSummary, FetchProgressStatus, FetchStatusResponse } from "../types/fetchStatus";
 import { soft } from "../theme";
 
 interface FetchStatusControlProps {
@@ -122,12 +123,12 @@ export function FetchActivityIcon({ size }: { size: number }) {
   );
 }
 
-function stateIcon(response: FetchStatusResponse, size = 18): ReactNode {
+function stateIcon(response: FetchStatusResponse, size = 18, severity?: "info" | "warning" | "error" | "success"): ReactNode {
   switch (response.state) {
     case "active":
       return <FetchActivityIcon size={size} />;
     case "failed":
-      return <ErrorOutlineOutlined sx={{ fontSize: size }} />;
+      return severity === "warning" ? <WarningAmber sx={{ fontSize: size }} /> : <ErrorOutlineOutlined sx={{ fontSize: size }} />;
     case "stale":
     case "interrupted":
     case "cancelled":
@@ -203,35 +204,102 @@ function passTypeLabel(passType: FetchPassSummary["pass_type"]): string {
 }
 
 function recentPassDetail(pass: FetchPassSummary): string {
-  const published = pass.published ? "published" : "not published";
-  const cohort = (pass.potential_tasks_saved ?? 0) > 0 ? ` · ${pass.potential_tasks_saved} potential dedupe` : "";
-  const shared = (pass.same_failure_results_reused ?? 0) > 0 ? ` · ${pass.same_failure_results_reused} same failure` : "";
-  return `${pass.outcome} · ${formatPassDuration(pass.duration_ms)} · ${pass.cache_hits} cache · ${pass.compatible_results_reused} compatible · ${pass.exact_results_reused} exact${shared} · ${pass.new_tasks_created} new Tasks${cohort} · ${published}`;
+  const outcome = pass.outcome === "succeeded" ? "Succeeded" : pass.outcome.charAt(0).toUpperCase() + pass.outcome.slice(1);
+  return `${outcome} · ${formatPassDuration(pass.duration_ms)} · ${pass.published ? "published" : "not published"}`;
 }
 
-function cacheRejectionDetail(status: FetchProgressStatus): string {
+function cacheRejectionCount(status: FetchProgressStatus): number {
   const rejections = status.analyses.cache_rejections;
-  if (!rejections) return "None recorded";
-  const entries: Array<[string, number]> = [
-    ["missing", rejections.missing],
-    ["expired", rejections.expired],
-    ["tool floor", rejections.tool_floor],
-    ["evidence floor", rejections.evidence_floor],
-    ["critique", rejections.critique],
-    ["malformed", rejections.malformed],
-  ];
-  const details = entries
-    .filter(([, count]) => count > 0)
-    .map(([label, count]) => `${count} ${label}`);
-  return details.length > 0 ? details.join(" · ") : "None";
+  if (!rejections) return 0;
+  return rejections.missing + rejections.expired + rejections.tool_floor
+    + rejections.evidence_floor + rejections.critique + rejections.malformed;
 }
 
-function phaseDurationDetail(status: FetchProgressStatus): string {
-  const durations = Object.entries(status.phase_durations_ms ?? {});
-  if (durations.length === 0) return "Not recorded";
-  return durations
-    .map(([phase, duration]) => `${phase.replaceAll("-", " ")} ${formatPassDuration(duration)}`)
-    .join(" · ");
+function timingDetail(status: FetchProgressStatus): string | null {
+  const durations = status.phase_durations_ms ?? {};
+  const groups: Array<[string, string[]]> = [
+    ["Fetch", ["setup", "discovery", "artifacts", "aggregation"]],
+    ["Analyze", ["analysis-planning", "analysis"]],
+    ["Patterns", ["patterns"]],
+    ["Publish", ["publication"]],
+    ["Follow-up", ["side-effects"]],
+  ];
+  const details = groups.flatMap(([label, phases]) => {
+    const present = phases.some((phase) => durations[phase] !== undefined);
+    if (!present) return [];
+    const duration = phases.reduce((total, phase) => total + Math.max(0, durations[phase] ?? 0), 0);
+    return [`${label} ${formatPassDuration(duration)}`];
+  });
+  return details.length > 0 ? details.join(" · ") : null;
+}
+
+function analysisDetail(status: FetchProgressStatus): string | null {
+  const analysis = analysisProgressBreakdown(status);
+  if (analysis.total <= 0) return null;
+  const unavailable = analysis.failed + analysis.cancelled;
+  return `${analysis.ready} ready · ${unavailable} unavailable · ${analysis.reused} reused · ${analysis.analyzing} running`;
+}
+
+function cacheDetail(status: FetchProgressStatus): string | null {
+  const accepted = Math.max(0, status.analyses.accepted_cache_hits);
+  const rejected = cacheRejectionCount(status);
+  if (accepted === 0 && rejected === 0) return null;
+  return `${accepted} accepted · ${rejected} rejected`;
+}
+
+function failureDetail(status: FetchProgressStatus): string | null {
+  const parts: string[] = [];
+  if (status.analyses.failed > 0) parts.push(`${status.analyses.failed} failed`);
+  if (status.analyses.cancelled > 0) parts.push(`${status.analyses.cancelled} cancelled`);
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+function patternDetail(status: FetchProgressStatus): string | null {
+  const patterns = status.patterns;
+  if (!patterns) return null;
+  const parts = [`${patterns.current ?? patterns.completed} current`];
+  if ((patterns.retained ?? 0) > 0) parts.push(`${patterns.retained} retained`);
+  if (patterns.failed > 0) parts.push(`${patterns.failed} ${patterns.failed === 1 ? "attempt" : "attempts"} failed`);
+  if ((patterns.repairs ?? 0) > 0) parts.push(`${patterns.repairs} ${patterns.repairs === 1 ? "repair" : "repairs"} attempted`);
+  if ((patterns.repair_failed ?? 0) > 0) parts.push(`${patterns.repair_failed} ${patterns.repair_failed === 1 ? "repair" : "repairs"} failed`);
+  return parts.join(" · ");
+}
+
+function followUpComponentDetail(label: string, component?: FetchFollowUpComponent): string | null {
+  if (!component) return null;
+  switch (component.state) {
+    case "completed":
+      return `${label} complete`;
+    case "running":
+      return `${label} running`;
+    case "skipped":
+      return `${label} skipped`;
+    case "disabled":
+      return `${label} disabled`;
+    case "cancelled":
+      return `${label} cancelled`;
+    case "failed":
+      return component.summary ?? `${label} failed`;
+  }
+}
+
+function followUpDetail(status: FetchProgressStatus): string | null {
+  const followUp = status.follow_up;
+  if (!followUp) return null;
+  const details = [
+    followUpComponentDetail("Notifications", followUp.notifications),
+    followUpComponentDetail("Remediation", followUp.remediation),
+    followUpComponentDetail("Automatic issues", followUp.automatic_issues),
+    followUpComponentDetail("Automatic Fix PRs", followUp.automatic_fix_prs),
+  ].filter((value): value is string => Boolean(value));
+  return details.length > 0 ? details.join(" · ") : null;
+}
+
+function followUpFailureCodes(status: FetchProgressStatus): string[] {
+  const followUp = status.follow_up;
+  if (!followUp) return [];
+  return [followUp.notifications, followUp.remediation, followUp.automatic_issues, followUp.automatic_fix_prs]
+    .flatMap((component) => component?.code ? [component.code] : []);
 }
 
 function stageColor(state: FetchMacroStageState): string {
@@ -275,7 +343,7 @@ function MacroStageProgress({ stages }: { stages: FetchMacroStagePresentation[] 
       aria-label="Refresh stages"
       sx={{
         display: "grid",
-        gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+        gridTemplateColumns: `repeat(${stages.length}, minmax(0, 1fr))`,
         gap: 0.5,
         m: 0,
         p: 0.75,
@@ -308,36 +376,45 @@ function MacroStageProgress({ stages }: { stages: FetchMacroStagePresentation[] 
   );
 }
 
-function statusWarnings(status: FetchProgressStatus): string[] {
-  const warnings: string[] = [];
-  if (status.analyses.failed > 0) {
-    warnings.push(`${status.analyses.failed} ${status.analyses.failed === 1 ? "analysis" : "analyses"} failed`);
+
+function CopyableDebugRow({ label, value }: { label: string; value: string }) {
+  const [copied, setCopied] = useState(false);
+
+  async function copy() {
+    if (!navigator.clipboard) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      setCopied(false);
+    }
   }
-  if (status.analyses.cancelled > 0) {
-    warnings.push(`${status.analyses.cancelled} ${status.analyses.cancelled === 1 ? "analysis was" : "analyses were"} cancelled`);
-  }
-  if ((status.patterns?.failed ?? 0) > 0) {
-    warnings.push(`${status.patterns?.failed} pattern ${status.patterns?.failed === 1 ? "attempt" : "attempts"} failed`);
-  }
-  if ((status.patterns?.repair_failed ?? 0) > 0) {
-    warnings.push(`${status.patterns?.repair_failed} pattern ${status.patterns?.repair_failed === 1 ? "repair" : "repairs"} failed`);
-  }
-  if (status.patterns?.repair_failure_category) {
-    warnings.push(`Pattern repair reported ${patternFailureLabel(status.patterns.repair_failure_category)}`);
-  }
-  if (status.patterns?.failure_category) {
-    warnings.push(`Pattern processing reported ${patternFailureLabel(status.patterns.failure_category)}`);
-  }
-  if (status.pattern_phase === "failed" && !status.patterns?.failure_category) warnings.push("Pattern processing failed");
-  if (status.publication_phase === "failed") warnings.push("Dashboard publication failed");
-  if (status.side_effect_phase === "failed") warnings.push("Refresh follow-up work failed");
-  return [...new Set(warnings)];
+
+  return (
+    <Box sx={{ display: "grid", gridTemplateColumns: "minmax(96px, auto) minmax(0, 1fr) auto", gap: 1, alignItems: "center" }}>
+      <Typography variant="caption" color="text.secondary">{label}</Typography>
+      <Typography component="code" variant="caption" sx={{ textAlign: "right", overflowWrap: "anywhere" }}>{value}</Typography>
+      <Button
+        size="small"
+        onClick={() => void copy()}
+        aria-label={`Copy ${label.toLowerCase()}`}
+        sx={{ minWidth: 44, minHeight: 32, px: 0.75, textTransform: "none" }}
+      >
+        {copied ? "Copied" : "Copy"}
+      </Button>
+    </Box>
+  );
 }
 
 export function FetchStatusControl({ response }: FetchStatusControlProps) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const [technicalOpen, setTechnicalOpen] = useState(false);
+  const [debugOpen, setDebugOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const technicalID = useId();
+  const debugID = useId();
+  const historyID = useId();
   const reduceMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
   const compact = response ? fetchStatusCompactPresentation(response) : null;
   const presentation = response ? fetchStatusPresentation(response) : null;
@@ -345,14 +422,26 @@ export function FetchStatusControl({ response }: FetchStatusControlProps) {
   if (!response || !compact || !presentation || !status) return null;
 
   const popoverID = anchor ? "fetch-status-details" : undefined;
-  const analysis = analysisProgressBreakdown(status);
-  const patterns = status.patterns;
   const stages = fetchStatusMacroStages(response);
-  const warnings = statusWarnings(status);
+  const warningGroups = fetchStatusWarningGroups(status);
   const progress = presentation.determinateTotal && presentation.determinateTotal > 0
     ? Math.min(100, (presentation.determinateCompleted / presentation.determinateTotal) * 100)
     : null;
   const completedPipeline = fetchStatusHasCompletedPipeline(response);
+  const publishedThisPass = fetchStatusPublishedThisPass(response);
+  const timing = timingDetail(status);
+  const analysisSummary = analysisDetail(status);
+  const cacheSummary = cacheDetail(status);
+  const patternsSummary = patternDetail(status);
+  const followUpSummary = followUpDetail(status);
+  const retryCount = Math.max(0, status.analyses.retries) + Math.max(0, status.analyses.result_retrieval_retries);
+  const failures = failureDetail(status);
+  const failureCodes = followUpFailureCodes(status);
+  const availabilityMessage = response.state === "active"
+    ? "The last published dashboard remains available while this refresh finishes."
+    : publishedThisPass || completedPipeline
+      ? "The latest published dashboard remains available."
+      : "The last published dashboard remains available.";
 
   return (
     <>
@@ -377,32 +466,18 @@ export function FetchStatusControl({ response }: FetchStatusControlProps) {
           textTransform: "none",
           whiteSpace: "nowrap",
           boxShadow: "none",
-          "& .MuiButton-endIcon": {
-            display: { xs: "none", md: "inherit" },
-          },
+          "& .MuiButton-endIcon": { display: { xs: "none", md: "inherit" } },
           "&:hover": {
             borderColor: `${compact.severity}.main`,
             bgcolor: (theme) => soft(theme, compact.severity, 0.08),
           },
         }}
       >
-        <Box
-          component="span"
-          sx={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: { xs: 0, md: 1 },
-          }}
-        >
-          {stateIcon(response)}
+        <Box component="span" sx={{ display: "inline-flex", alignItems: "center", gap: { xs: 0, md: 1 } }}>
+          {stateIcon(response, 18, presentation.severity)}
           <Box
             component="span"
-            sx={{
-              display: { xs: "none", md: "inline" },
-              color: "text.primary",
-              fontSize: "0.75rem",
-              fontWeight: 700,
-            }}
+            sx={{ display: { xs: "none", md: "inline" }, color: "text.primary", fontSize: "0.75rem", fontWeight: 700 }}
           >
             {compact.label}
           </Box>
@@ -426,6 +501,7 @@ export function FetchStatusControl({ response }: FetchStatusControlProps) {
               maxWidth: 390,
               maxHeight: "calc(100vh - 32px)",
               overflowY: "auto",
+              overflowX: "hidden",
               border: "1px solid",
               borderColor: "divider",
               borderRadius: "8px",
@@ -438,7 +514,9 @@ export function FetchStatusControl({ response }: FetchStatusControlProps) {
       >
         <Box role="dialog" aria-label="Fetch status details" sx={{ p: 2 }}>
           <Stack direction="row" spacing={1.25} sx={{ alignItems: "flex-start" }}>
-            <Box sx={{ color: `${compact.severity}.main`, display: "flex", mt: 0.25 }}>{stateIcon(response, 20)}</Box>
+            <Box sx={{ color: `${compact.severity}.main`, display: "flex", mt: 0.25 }}>
+              {stateIcon(response, 20, presentation.severity)}
+            </Box>
             <Box sx={{ minWidth: 0, flex: 1 }}>
               <Typography variant="caption" color="text.secondary" sx={{ display: "block", fontWeight: 700 }}>
                 Data refresh
@@ -466,7 +544,7 @@ export function FetchStatusControl({ response }: FetchStatusControlProps) {
             <MacroStageProgress stages={stages} />
           </Box>
 
-          {warnings.length > 0 && (
+          {warningGroups.length > 0 && (
             <Stack
               aria-label="Refresh warnings"
               direction="row"
@@ -481,9 +559,20 @@ export function FetchStatusControl({ response }: FetchStatusControlProps) {
               }}
             >
               <WarningAmber sx={{ fontSize: 17, mt: 0.125, flex: "0 0 auto" }} />
-              <Typography variant="caption" sx={{ color: "text.primary" }}>
-                {warnings.join(" · ")}
-              </Typography>
+              <Stack spacing={0.75} sx={{ minWidth: 0 }}>
+                {warningGroups.map((group) => (
+                  <Box key={group.label}>
+                    <Typography variant="caption" sx={{ display: "block", color: "text.primary", fontWeight: 700 }}>
+                      {group.label}
+                    </Typography>
+                    {group.items.map((item) => (
+                      <Typography key={item} variant="caption" color="text.secondary" sx={{ display: "block", lineHeight: 1.45 }}>
+                        {item}
+                      </Typography>
+                    ))}
+                  </Box>
+                ))}
+              </Stack>
             </Stack>
           )}
 
@@ -504,11 +593,9 @@ export function FetchStatusControl({ response }: FetchStatusControlProps) {
             )}
           </Stack>
 
-          {!completedPipeline && (
+          {status.last_successful_publication_at && (
             <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1.25, lineHeight: 1.5 }}>
-              {response.state === "active"
-                ? "The last published dashboard remains available while this refresh finishes."
-                : "The last published dashboard remains available."}
+              {availabilityMessage}
             </Typography>
           )}
 
@@ -533,91 +620,81 @@ export function FetchStatusControl({ response }: FetchStatusControlProps) {
           <Collapse in={technicalOpen} timeout={reduceMotion ? 0 : "auto"}>
             <Stack id={technicalID} spacing={0.75} sx={{ mt: 0.75 }}>
               <Divider sx={{ mb: 0.5 }} />
-              <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>
-                Pipeline
-              </Typography>
-              <DetailRow label="Phase" value={status.phase} />
-              <DetailRow label="Pattern stage" value={status.pattern_phase} />
-              <DetailRow label="Publication stage" value={status.publication_phase} />
-              <DetailRow label="Follow-up stage" value={status.side_effect_phase} />
-              <DetailRow label="Phase began" value={formatFetchTimestamp(status.phase_started_at)} />
-              <DetailRow label="Last checked" value={formatFetchTimestamp(status.last_checked_at)} />
-              <DetailRow label="Phase durations" value={phaseDurationDetail(status)} />
-              <DetailRow label="Run ID" value={status.run_id} />
-              <DetailRow label="Pass ID" value={status.pass_id} />
+              {timing && <DetailRow label="Timing" value={timing} />}
+              {analysisSummary && <DetailRow label="Analysis" value={analysisSummary} />}
+              {cacheSummary && <DetailRow label="Cache" value={cacheSummary} />}
+              {patternsSummary && <DetailRow label="Patterns" value={patternsSummary} />}
+              {followUpSummary && <DetailRow label="Follow-up" value={followUpSummary} />}
+              {retryCount > 0 && <DetailRow label="Retries" value={retryCount} />}
+              {failures && <DetailRow label="Failures and cancellations" value={failures} />}
 
-              <Divider sx={{ my: 0.5 }} />
-              <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>
-                Analysis accounting
-              </Typography>
-              <DetailRow label="Results ready" value={analysis.total > 0 ? `${analysis.ready} / ${analysis.total}` : "Not planned"} />
-              <DetailRow label="Reused from cache" value={analysis.reusedFromCache} />
-              <DetailRow label="Compatible results" value={analysis.compatibleResults} />
-              <DetailRow label="Exact results reused" value={analysis.exactResultsReused} />
-              <DetailRow label="Same-failure results reused" value={analysis.sameFailureResultsReused} />
-              <DetailRow label="Existing Tasks adopted" value={analysis.lateTasksAdopted} />
-              <DetailRow label="New analyzer Tasks" value={analysis.newTasksCreated} />
-              <DetailRow label="Fresh analyses completed" value={analysis.freshAnalysesCompleted} />
-              <DetailRow label="Currently analyzing" value={analysis.analyzing} />
-              <DetailRow label="Waiting to check" value={analysis.waiting} />
-              <DetailRow label="Analysis failures" value={analysis.failed} />
-              <DetailRow label="Analysis cancellations" value={analysis.cancelled} />
-              <DetailRow label="Task attempts" value={status.analyses.task_attempts} />
-              <DetailRow
-                label="Results retrieved"
-                value={`${status.analyses.results_retrieved} total, including adopted existing Tasks`}
-              />
-              <DetailRow
-                label="Retries"
-                value={`${status.analyses.retries} Task · ${status.analyses.result_retrieval_retries} result retrieval`}
-              />
-              <DetailRow
-                label="Planned Task work"
-                value={`${status.analyses.new_work} without cache · ${status.analyses.stale_work} stale`}
-              />
-              <DetailRow
-                label="Same-failure candidates"
-                value={`${analysis.sameFailureCandidates} subjects · ${analysis.sameFailureGroups} groups · up to ${analysis.potentialTasksSaved} fewer Tasks · largest ${analysis.largestSameFailureGroup}`}
-              />
-              <DetailRow label="Cache rejections" value={cacheRejectionDetail(status)} />
-              <DetailRow label="Checkpoint" value={status.analyses.checkpoint_committed ? "Saved" : "Not saved"} />
-
-              {patterns && (
-                <>
-                  <Divider sx={{ my: 0.5 }} />
-                  <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>
-                    Pattern accounting
-                  </Typography>
-                  <DetailRow
-                    label="Patterns"
-                    value={`${patterns.current ?? patterns.completed} current · ${patterns.retained ?? 0} retained · ${patterns.cache_hits ?? 0} cached · ${patterns.failed} failed`}
+              <Button
+                size="small"
+                aria-expanded={debugOpen}
+                aria-controls={debugID}
+                onClick={() => setDebugOpen((open) => !open)}
+                endIcon={(
+                  <ExpandMore
+                    sx={{
+                      fontSize: 16,
+                      transform: debugOpen ? "rotate(180deg)" : "rotate(0deg)",
+                      transition: reduceMotion ? "none" : "transform 150ms ease",
+                    }}
                   />
-                  <DetailRow
-                    label="Pattern repairs"
-                    value={`${patterns.repairs ?? 0} attempted · ${patterns.repair_succeeded ?? 0} succeeded · ${patterns.repair_failed ?? 0} failed`}
-                  />
-                  {patterns.repair_failure_category && (
-                    <DetailRow label="Repair failure" value={patternFailureLabel(patterns.repair_failure_category)} />
+                )}
+                sx={{ alignSelf: "flex-start", px: 0.5, textTransform: "none" }}
+              >
+                Debug identifiers
+              </Button>
+              <Collapse in={debugOpen} timeout={reduceMotion ? 0 : "auto"}>
+                <Stack id={debugID} spacing={0.75} sx={{ pt: 0.25 }}>
+                  <CopyableDebugRow label="Run ID" value={status.run_id} />
+                  <CopyableDebugRow label="Pass ID" value={status.pass_id} />
+                  {status.engine_version && <CopyableDebugRow label="Engine version" value={status.engine_version} />}
+                  {status.failure_category && <CopyableDebugRow label="Failure category" value={status.failure_category} />}
+                  {failureCodes.length > 0 && <CopyableDebugRow label="Follow-up code" value={failureCodes.join(", ")} />}
+                  <CopyableDebugRow label="Run started" value={formatFetchTimestamp(status.run_started_at)} />
+                  <CopyableDebugRow label="Pass started" value={formatFetchTimestamp(status.pass_started_at)} />
+                  <CopyableDebugRow label="Phase started" value={formatFetchTimestamp(status.phase_started_at)} />
+                  <CopyableDebugRow label="Last activity" value={formatFetchTimestamp(status.last_progress_at)} />
+                  {status.last_checked_at && <CopyableDebugRow label="Last checked" value={formatFetchTimestamp(status.last_checked_at)} />}
+                  {status.last_successful_publication_at && (
+                    <CopyableDebugRow label="Last published" value={formatFetchTimestamp(status.last_successful_publication_at)} />
                   )}
-                  {patterns.failure_category && (
-                    <DetailRow label="Pattern failure" value={patternFailureLabel(patterns.failure_category)} />
-                  )}
-                </>
-              )}
+                </Stack>
+              </Collapse>
 
               {response.history && response.history.length > 0 && (
                 <>
-                  <Divider sx={{ my: 0.5 }} />
-                  <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>
-                    Recent passes
-                  </Typography>
-                  {response.history.slice(-5).reverse().map((pass) => (
-                    <DetailRow
-                      key={`${pass.started_at}/${pass.pass_type}`}
-                      label={passTypeLabel(pass.pass_type)}
-                      value={recentPassDetail(pass)}
-                    />
-                  ))}
+                  <Button
+                    size="small"
+                    aria-expanded={historyOpen}
+                    aria-controls={historyID}
+                    onClick={() => setHistoryOpen((open) => !open)}
+                    endIcon={(
+                      <ExpandMore
+                        sx={{
+                          fontSize: 16,
+                          transform: historyOpen ? "rotate(180deg)" : "rotate(0deg)",
+                          transition: reduceMotion ? "none" : "transform 150ms ease",
+                        }}
+                      />
+                    )}
+                    sx={{ alignSelf: "flex-start", px: 0.5, textTransform: "none" }}
+                  >
+                    Recent refreshes
+                  </Button>
+                  <Collapse in={historyOpen} timeout={reduceMotion ? 0 : "auto"}>
+                    <Stack id={historyID} spacing={0.75} sx={{ pt: 0.25 }}>
+                      {response.history.slice(-3).reverse().map((pass) => (
+                        <DetailRow
+                          key={`${pass.started_at}/${pass.pass_type}`}
+                          label={passTypeLabel(pass.pass_type)}
+                          value={recentPassDetail(pass)}
+                        />
+                      ))}
+                    </Stack>
+                  </Collapse>
                 </>
               )}
             </Stack>
@@ -657,7 +734,7 @@ export function FetchStatusStrip({ response, dismissedKey, onDismiss }: FetchSta
           alignItems: "center",
         }}
       >
-        <Box sx={{ color: `${presentation.severity}.main`, display: "flex" }}>{stateIcon(response, 19)}</Box>
+        <Box sx={{ color: `${presentation.severity}.main`, display: "flex" }}>{stateIcon(response, 19, presentation.severity)}</Box>
         <Box sx={{ minWidth: 0 }}>
           <Typography variant="caption" sx={{ display: "block", color: "text.primary", fontWeight: 700 }}>
             {presentation.title}

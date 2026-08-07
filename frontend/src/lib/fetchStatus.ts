@@ -16,7 +16,7 @@ export interface FetchStatusCompactPresentation {
   severity: FetchStatusPresentation["severity"];
 }
 
-export type FetchMacroStageID = "fetch" | "analyze" | "patterns" | "publish";
+export type FetchMacroStageID = "fetch" | "analyze" | "patterns" | "publish" | "follow-up";
 export type FetchMacroStageState =
   | "complete"
   | "active"
@@ -81,7 +81,8 @@ const macroStageDefinitions: Array<{
   { id: "fetch", label: "Fetch data", phases: ["setup", "discovery", "artifacts", "aggregation"] },
   { id: "analyze", label: "Analyze", phases: ["analysis-planning", "analysis"] },
   { id: "patterns", label: "Patterns", phases: ["patterns"] },
-  { id: "publish", label: "Publish", phases: ["publication", "side-effects"] },
+  { id: "publish", label: "Publish", phases: ["publication"] },
+  { id: "follow-up", label: "Follow-up", phases: ["side-effects"] },
 ];
 
 const macroStageStateLabels: Record<FetchMacroStageState, string> = {
@@ -118,6 +119,10 @@ export interface AnalysisProgressBreakdown {
 
 function nonNegative(value: number | undefined): number {
   return Math.max(0, value ?? 0);
+}
+
+function sentence(value: string): string {
+  return /[.!?]$/.test(value) ? value : `${value}.`;
 }
 
 export function analysisProgressBreakdown(status: FetchProgressStatus): AnalysisProgressBreakdown {
@@ -170,7 +175,10 @@ function activePhaseDetail(status: FetchProgressStatus, analysis: AnalysisProgre
   if (status.phase === "artifacts" && status.jobs.total > 0) {
     return `${nonNegative(status.jobs.completed)} of ${nonNegative(status.jobs.total)} jobs checked`;
   }
-  if (["analysis", "patterns", "publication", "side-effects"].includes(status.phase) && analysis.total > 0) {
+  if (status.phase === "side-effects") {
+    return "Post-publication follow-up work is in progress";
+  }
+  if (["analysis", "patterns", "publication"].includes(status.phase) && analysis.total > 0) {
     return analysisReadyDetail(analysis);
   }
   if (status.phase === "analysis-planning" && analysis.total > 0) {
@@ -189,9 +197,8 @@ function effectivePhase(response: FetchStatusResponse): string | null {
   if (status.failure_category && macroStageDefinitions.some((stage) => stage.phases.includes(status.failure_category ?? ""))) {
     return status.failure_category;
   }
-  if (!["pending", "skipped"].includes(status.side_effect_phase) || !["pending", "skipped"].includes(status.publication_phase)) {
-    return "publication";
-  }
+  if (!["pending", "skipped"].includes(status.side_effect_phase)) return "side-effects";
+  if (!["pending", "skipped"].includes(status.publication_phase)) return "publication";
   if (!["pending", "skipped"].includes(status.pattern_phase)) return "patterns";
   if (status.analyses.logical_total > 0) return "analysis";
   return "artifacts";
@@ -219,6 +226,72 @@ export function fetchStatusHasCompletedPipeline(response: FetchStatusResponse): 
   return response.state === "idle"
     || response.state === "completed"
     || Boolean(status?.outcome === "succeeded" && ["idle", "complete"].includes(status.phase));
+}
+
+export function fetchStatusPublishedThisPass(response: FetchStatusResponse): boolean {
+  return response.status?.publication_phase === "completed";
+}
+
+export function fetchStatusFollowUpFailureSummary(status: FetchProgressStatus): string | null {
+  const components = status.follow_up;
+  if (!components) return null;
+  for (const component of [
+    components.notifications,
+    components.remediation,
+    components.automatic_issues,
+    components.automatic_fix_prs,
+  ]) {
+    if (component?.state === "failed" && component.summary) return component.summary;
+  }
+  return null;
+}
+
+export interface FetchStatusWarningGroup {
+  label: "Analysis quality" | "Pattern quality" | "Follow-up";
+  items: string[];
+}
+
+export function fetchStatusWarningGroups(status: FetchProgressStatus): FetchStatusWarningGroup[] {
+  const groups: FetchStatusWarningGroup[] = [];
+  const analysisItems: string[] = [];
+  if (status.analyses.failed > 0) {
+    analysisItems.push(`${status.analyses.failed} ${status.analyses.failed === 1 ? "analysis" : "analyses"} unavailable`);
+  }
+  if (status.analyses.cancelled > 0) {
+    analysisItems.push(`${status.analyses.cancelled} ${status.analyses.cancelled === 1 ? "analysis" : "analyses"} cancelled`);
+  }
+  if (analysisItems.length > 0) groups.push({ label: "Analysis quality", items: analysisItems });
+
+  const patternItems: string[] = [];
+  const patternFailures = status.patterns?.failed ?? 0;
+  if (patternFailures > 0) {
+    patternItems.push(`${patternFailures} pattern ${patternFailures === 1 ? "attempt" : "attempts"} failed`);
+  } else if (status.pattern_phase === "failed") {
+    patternItems.push("Pattern processing failed");
+  }
+  const repairFailures = status.patterns?.repair_failed ?? 0;
+  if (repairFailures > 0) {
+    const reason = patternFailureLabel(status.patterns?.repair_failure_category);
+    patternItems.push(
+      `${repairFailures} ${repairFailures === 1 ? "repair" : "repairs"} failed${reason ? ` because the response had ${reason === "invalid schema" ? "an invalid schema" : reason}` : ""}`,
+    );
+  }
+  if (patternItems.length > 0) groups.push({ label: "Pattern quality", items: patternItems });
+
+  const followUpItems: string[] = [];
+  const followUp = status.follow_up;
+  if (followUp) {
+    for (const component of [followUp.notifications, followUp.remediation, followUp.automatic_issues, followUp.automatic_fix_prs]) {
+      if (component?.state === "failed" && component.summary && !followUpItems.includes(component.summary)) {
+        followUpItems.push(component.summary);
+      }
+    }
+  }
+  if (status.side_effect_phase === "failed" && followUpItems.length === 0) {
+    followUpItems.push("Follow-up work did not complete");
+  }
+  if (followUpItems.length > 0) groups.push({ label: "Follow-up", items: followUpItems });
+  return groups;
 }
 
 export function fetchStatusMacroStages(response: FetchStatusResponse): FetchMacroStagePresentation[] {
@@ -264,6 +337,15 @@ export function fetchStatusPresentation(response: FetchStatusResponse): FetchSta
       severity = "success";
       break;
     case "failed": {
+      if (fetchStatusPublishedThisPass(response)) {
+        const followUpSummary = fetchStatusFollowUpFailureSummary(status);
+        title = "Dashboard updated with a follow-up warning";
+        detail = followUpSummary
+          ? `The latest dashboard is live, but ${followUpSummary.charAt(0).toLowerCase()}${followUpSummary.slice(1)}.`
+          : "The latest dashboard is live, but follow-up work did not complete.";
+        severity = "warning";
+        break;
+      }
       const failedPhase = phaseHeadlines[status.failure_category ?? ""];
       title = "Refresh failed";
       detail = failedPhase ? `Stopped while ${failedPhase.toLowerCase()}` : "The latest refresh did not complete";
@@ -278,13 +360,23 @@ export function fetchStatusPresentation(response: FetchStatusResponse): FetchSta
       severity = "warning";
       break;
     case "interrupted":
-      title = "Refresh interrupted";
-      detail = "The previous refresh stopped before publication completed";
+      if (fetchStatusPublishedThisPass(response)) {
+        title = "Dashboard updated with a follow-up warning";
+        detail = "The latest dashboard is live, but follow-up work was interrupted.";
+      } else {
+        title = "Refresh interrupted";
+        detail = "The previous refresh stopped before publication completed";
+      }
       severity = "warning";
       break;
     case "cancelled":
-      title = "Refresh cancelled";
-      detail = "The current refresh was cancelled before it completed";
+      if (fetchStatusPublishedThisPass(response)) {
+        title = "Dashboard updated with a follow-up warning";
+        detail = "The latest dashboard is live, but follow-up work was cancelled.";
+      } else {
+        title = "Refresh cancelled";
+        detail = "The current refresh was cancelled before it completed";
+      }
       severity = "warning";
       break;
   }
@@ -302,7 +394,7 @@ export function fetchStatusPresentation(response: FetchStatusResponse): FetchSta
   return {
     title,
     detail,
-    ariaLabel: `${title}. ${detail}.`,
+    ariaLabel: `${title}. ${sentence(detail)}`,
     announcement: title,
     severity,
     determinateTotal,
@@ -326,7 +418,7 @@ export function fetchStatusCompactPresentation(response: FetchStatusResponse): F
   }
   return {
     label,
-    ariaLabel: `${label}. ${presentation.detail}. Open fetch status details.`,
+    ariaLabel: `${label}. ${sentence(presentation.detail)} Open fetch status details.`,
     severity: presentation.severity,
   };
 }
