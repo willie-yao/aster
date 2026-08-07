@@ -1153,6 +1153,18 @@ func TestAgToolDocs_AntiPuntAnchors(t *testing.T) {
 // tells the agent to honor the project's known-transient classes and stop
 // before drilling, so the anti-punt / deep-investigation framing does not
 // override the consumer's transient rules and flag infra flake as a real bug.
+func TestAgToolDocs_CausalPriorityAnchors(t *testing.T) {
+	for _, anchor := range []string{
+		"compare specific request/list/watch/assertion failures with repeated timeout, readiness, and cleanup noise",
+		"Treat a later successful operation as counterevidence against assigning that component ownership",
+		"keep the remaining boundary unresolved",
+	} {
+		if !strings.Contains(agToolDocs, anchor) {
+			t.Errorf("agToolDocs missing causal-priority anchor %q", anchor)
+		}
+	}
+}
+
 func TestAgToolDocs_TransientTriageAnchors(t *testing.T) {
 	required := []string{
 		"Triage for a known transient FIRST",
