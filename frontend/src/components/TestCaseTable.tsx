@@ -5,20 +5,18 @@ import AccordionSummary from "@mui/material/AccordionSummary";
 import Box from "@mui/material/Box";
 import Chip from "@mui/material/Chip";
 import Collapse from "@mui/material/Collapse";
+import IconButton from "@mui/material/IconButton";
 import Link from "@mui/material/Link";
 import Typography from "@mui/material/Typography";
 import {
   Assignment,
   AutoAwesome,
-  Cancel,
-  CheckCircle,
   ChevronRight,
   Cloud,
   Dns,
   Inventory2,
   OpenInNew,
   Place,
-  RemoveCircle,
 } from "@mui/icons-material";
 import { Link as RouterLink } from "react-router-dom";
 import type { TestCase } from "../types/dashboard";
@@ -28,6 +26,8 @@ import { RichText } from "./RichText";
 import { soft } from "../theme";
 import { Panel } from "./Panel";
 import { junitTestCases } from "../lib/buildFailures";
+import { parseTestDisplayName } from "../lib/detailTitles";
+import { overviewTypography } from "../theme/overview";
 
 interface TestCaseTableProps {
   testCases: TestCase[];
@@ -43,15 +43,14 @@ const statusOrder: Record<string, number> = {
   skipped: 2,
 };
 
-function statusIcon(status: string) {
-  const iconSx = { fontSize: 20 };
+function testStatusPresentation(status: TestCase["status"]) {
   switch (status) {
     case "passed":
-      return <CheckCircle color="success" sx={iconSx} />;
+      return { label: "Passed", color: "success.main" } as const;
     case "failed":
-      return <Cancel color="error" sx={iconSx} />;
+      return { label: "Failed", color: "error.main" } as const;
     default:
-      return <RemoveCircle color="disabled" sx={iconSx} />;
+      return { label: "Skipped", color: "text.disabled" } as const;
   }
 }
 
@@ -95,47 +94,29 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
   }
 
   return (
-    <Panel sx={{ overflowX: "auto", borderRadius: 3 }}>
+    <Box sx={{ overflowX: "auto", bgcolor: "surface.container" }}>
       <Box sx={{ minWidth: 0 }}>
         <Box
           sx={{
-            display: "grid",
-            gridTemplateColumns: { xs: "40px minmax(0, 1fr)", sm: "40px minmax(0, 1fr) 116px" },
-            borderBottom: 1,
+            display: { xs: "none", sm: "grid" },
+            gridTemplateColumns: "110px minmax(0, 1fr) 90px 44px",
+            alignItems: "center",
+            minHeight: 42,
+            borderBottom: "1px solid",
             borderColor: "divider",
-            bgcolor: (t) => (t.vars ?? t).palette.surface.container,
+            bgcolor: "surface.containerHigh",
           }}
         >
-          <Box sx={{ px: 1.5, py: 1.25 }} />
-          <Typography
-            variant="label"
-            component="div"
-            sx={{
-              px: 1.5,
-              py: 1.25,
-              color: "text.secondary",
-              textTransform: "uppercase",
-              letterSpacing: "0.08em",
-            }}
-          >
-            Test Name
+          <Typography component="div" color="text.secondary" sx={{ px: 1.5, ...overviewTypography.tableHeading }}>
+            Status
           </Typography>
-          <Typography
-            variant="label"
-            component="div"
-            sx={{
-              display: { xs: "none", sm: "block" },
-              pl: 1.5,
-              pr: 2.5,
-              py: 1.25,
-              color: "text.secondary",
-              textAlign: "right",
-              textTransform: "uppercase",
-              letterSpacing: "0.08em",
-            }}
-          >
+          <Typography component="div" color="text.secondary" sx={{ px: 1.5, ...overviewTypography.tableHeading }}>
+            Test name
+          </Typography>
+          <Typography component="div" color="text.secondary" sx={{ px: 1.5, textAlign: "right", ...overviewTypography.tableHeading }}>
             Duration
           </Typography>
+          <Box />
         </Box>
 
         {sorted.map((tc, idx) => {
@@ -152,65 +133,98 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
           return (
             <Fragment key={idx}>
               <Box
-                role={hasFail ? "button" : undefined}
-                tabIndex={hasFail ? 0 : undefined}
-                onClick={() => hasFail && toggleRow(idx)}
-                onKeyDown={(e) => {
-                  if (hasFail && (e.key === "Enter" || e.key === " ")) {
-                    e.preventDefault();
-                    toggleRow(idx);
-                  }
-                }}
                 sx={{
                   display: "grid",
-                  gridTemplateColumns: { xs: "40px minmax(0, 1fr)", sm: "40px minmax(0, 1fr) 116px" },
+                  gridTemplateColumns: {
+                    xs: "minmax(0, 1fr) 44px",
+                    sm: "110px minmax(0, 1fr) 90px 44px",
+                  },
+                  gridTemplateAreas: {
+                    xs: '"name action" "status duration"',
+                    sm: '"status name duration action"',
+                  },
                   alignItems: "center",
+                  minHeight: 54,
                   bgcolor: stripeBg,
-                  cursor: hasFail ? "pointer" : "default",
-                  transition: (t) => t.transitions.create("background-color"),
-                  ...(hasFail && {
-                    "&:hover": { bgcolor: "surface.containerHighest" },
-                    "&:focus-visible": {
-                      outline: "2px solid",
-                      outlineColor: "primary.main",
-                      outlineOffset: -2,
-                    },
-                  }),
+                  borderBottom: "1px solid",
+                  borderColor: "divider",
+                  transition: (theme) => theme.transitions.create("background-color"),
+                  "&:hover": { bgcolor: "surface.containerHighest" },
                 }}
               >
-                <Box sx={{ width: 40, px: { xs: 1, sm: 1.5 }, py: 1 }}>
-                  {statusIcon(tc.status)}
-                </Box>
+                {(() => {
+                  const status = testStatusPresentation(tc.status);
+                  return (
+                    <Box
+                      sx={{
+                        gridArea: "status",
+                        minWidth: 0,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 0.75,
+                        px: 1.5,
+                        py: { xs: 0.5, sm: 1 },
+                        color: status.color,
+                      }}
+                    >
+                      <Box
+                        component="span"
+                        sx={{ width: 7, height: 7, borderRadius: "2px", bgcolor: "currentColor", flexShrink: 0 }}
+                      />
+                      <Typography component="span" sx={{ fontSize: "13px", lineHeight: "18px", fontWeight: 700 }}>
+                        {status.label}
+                      </Typography>
+                    </Box>
+                  );
+                })()}
                 <Box
                   sx={{
+                    gridArea: "name",
                     minWidth: 0,
-                    px: { xs: 1, sm: 1.5 },
+                    px: 1.5,
                     py: 1,
                     color: "text.primary",
                     overflowWrap: "anywhere",
                   }}
                 >
-                  {jobID && tc.status === "failed" ? (
-                    <Link
-                      component={RouterLink}
-                      to={buildId
-                        ? testRunPath(jobID, tc.name, buildId)
-                        : testPath(jobID, tc.name)}
-                      underline="none"
-                      onClick={(e) => e.stopPropagation()}
-                      sx={{ color: "inherit", "&:hover": { color: "primary.main" } }}
-                    >
-                      {tc.name}
-                    </Link>
-                  ) : (
-                    tc.name
-                  )}
+                  {(() => {
+                    const parsed = parseTestDisplayName(tc.name);
+                    const displayName = parsed.displayName;
+                    return jobID ? (
+                      <Link
+                        component={RouterLink}
+                        to={buildId
+                          ? testRunPath(jobID, tc.name, buildId)
+                          : testPath(jobID, tc.name)}
+                        underline="none"
+                        title={tc.name}
+                        aria-label={`Open test details for ${displayName}`}
+                        sx={{
+                          color: "inherit",
+                          fontSize: "14px",
+                          lineHeight: "20px",
+                          fontWeight: 650,
+                          "&:hover": { color: "primary.main" },
+                          "&:focus-visible": {
+                            outline: "2px solid",
+                            outlineColor: "primary.main",
+                            outlineOffset: 2,
+                          },
+                        }}
+                      >
+                        {displayName}
+                      </Link>
+                    ) : (
+                      <Typography component="span" title={tc.name} sx={{ fontSize: "14px", lineHeight: "20px", fontWeight: 650 }}>
+                        {displayName}
+                      </Typography>
+                    );
+                  })()}
                   {tc.failure_location_url && (
                     <Link
                       href={tc.failure_location_url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      onClick={(e) => e.stopPropagation()}
                       title="View source on GitHub"
                       aria-label="View source on GitHub"
                       sx={{ ml: 1, display: "inline-flex", color: "primary.main", verticalAlign: "text-bottom" }}
@@ -222,24 +236,57 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                     <Chip
                       size="small"
                       label="Build failure"
-                      sx={{ ml: 1, height: 20, fontSize: "0.625rem", verticalAlign: "middle" }}
+                      sx={{ ml: 1, height: 20, borderRadius: "4px", fontSize: "0.625rem", verticalAlign: "middle" }}
                     />
                   )}
                 </Box>
                 <Typography
-                  variant="label"
                   component="div"
+                  color="text.secondary"
                   sx={{
-                    display: { xs: "none", sm: "block" },
-                    pl: 1.5,
-                    pr: 2.5,
-                    py: 1,
+                    gridArea: "duration",
+                    px: 1.5,
+                    py: { xs: 0.5, sm: 1 },
                     textAlign: "right",
-                    color: "text.secondary",
+                    ...overviewTypography.data,
                   }}
                 >
                   {formatDuration(tc.duration_seconds)}
                 </Typography>
+                {hasFail ? (
+                  <IconButton
+                    type="button"
+                    onClick={() => toggleRow(idx)}
+                    aria-label={isExpanded ? `Hide failure details for ${tc.name}` : `Show failure details for ${tc.name}`}
+                    aria-expanded={isExpanded}
+                    aria-controls={`test-result-details-${idx}`}
+                    sx={{
+                      gridArea: "action",
+                      width: 44,
+                      height: 44,
+                      borderRadius: "4px",
+                      color: "text.secondary",
+                      "&.Mui-focusVisible": {
+                        outline: "2px solid",
+                        outlineColor: "primary.main",
+                        outlineOffset: -2,
+                      },
+                    }}
+                  >
+                    <ChevronRight
+                      sx={{
+                        transform: isExpanded ? "rotate(90deg)" : "rotate(0deg)",
+                        transition: (theme) =>
+                          theme.transitions.create("transform", {
+                            duration: theme.transitions.duration.shortest,
+                          }),
+                        "@media (prefers-reduced-motion: reduce)": { transition: "none" },
+                      }}
+                    />
+                  </IconButton>
+                ) : (
+                  <Box sx={{ gridArea: "action", width: 44 }} />
+                )}
               </Box>
 
               {tc.ai_summary && (
@@ -248,10 +295,11 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                     display: "flex",
                     alignItems: "flex-start",
                     gap: 1,
-                    pl: { xs: 5, sm: 8 },
-                    pr: { xs: 2, sm: 3 },
+                    px: 1.5,
                     py: 0.75,
                     bgcolor: stripeBg,
+                    borderBottom: "1px solid",
+                    borderColor: "divider",
                   }}
                 >
                   <AutoAwesome sx={{ fontSize: 16, flexShrink: 0, color: "primary.main" }} />
@@ -272,6 +320,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
               {hasFail && (
                 <Collapse key={isExpanded ? "expanded" : "collapsed"} in={isExpanded} timeout="auto" unmountOnExit>
                   <Box
+                    id={`test-result-details-${idx}`}
                     sx={{
                       borderTop: 1,
                       borderColor: "divider",
@@ -288,7 +337,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                       sx={{
                         m: 0,
                         p: 2,
-                        borderRadius: 2,
+                        borderRadius: "4px",
                         bgcolor: (t) => soft(t, "error", 0.08),
                         color: "error.main",
                         fontFamily: "monospace",
@@ -309,7 +358,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                           bgcolor: "transparent",
                           border: 1,
                           borderColor: "divider",
-                          borderRadius: 2,
+                          borderRadius: "4px",
                           "&:before": { display: "none" },
                         }}
                       >
@@ -370,7 +419,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                     {tc.cluster_artifacts && (
                       <Panel
                         sx={{
-                          borderRadius: 2,
+                          borderRadius: "4px",
                           p: 1.5,
                           bgcolor: (t) => (t.vars ?? t).palette.surface.container,
                           display: "flex",
@@ -379,7 +428,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                         }}
                       >
                         <Typography variant="label" color="text.primary" sx={{ fontWeight: 700 }}>
-                          Debug Artifacts — {tc.cluster_artifacts.cluster_name}
+                          Debug Artifacts: {tc.cluster_artifacts.cluster_name}
                         </Typography>
 
                         <Box sx={{ display: "flex", flexWrap: "wrap", columnGap: 2, rowGap: 0.75 }}>
@@ -492,7 +541,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                     {tc.ai_analysis && (
                       <Panel
                         sx={{
-                          borderRadius: 2,
+                          borderRadius: "4px",
                           border: 1,
                           borderColor: (t) => soft(t, "primary", 0.3),
                           bgcolor: (t) => soft(t, "primary", 0.05),
@@ -588,6 +637,6 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
           );
         })}
       </Box>
-    </Panel>
+    </Box>
   );
 }

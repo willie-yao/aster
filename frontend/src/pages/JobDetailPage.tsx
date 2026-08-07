@@ -1,180 +1,88 @@
 import { useMemo, useState } from "react";
 import Box from "@mui/material/Box";
 import Breadcrumbs from "@mui/material/Breadcrumbs";
-import Button from "@mui/material/Button";
-import Chip from "@mui/material/Chip";
+import ButtonBase from "@mui/material/ButtonBase";
 import Collapse from "@mui/material/Collapse";
 import Link from "@mui/material/Link";
 import Typography from "@mui/material/Typography";
-import { ChevronRight, ErrorOutlined, HourglassEmpty, OpenInNew, WarningAmber } from "@mui/icons-material";
+import {
+  ChevronRight,
+  ErrorOutlined,
+  HourglassEmpty,
+  OpenInNew,
+  WarningAmber,
+} from "@mui/icons-material";
 import { Link as RouterLink, useParams, useSearchParams } from "react-router-dom";
 import { useJobDetail } from "../hooks/useData";
-import { formatDuration, formatPercent, timeAgo } from "../lib/utils";
-import type { BuildResult, TestCase } from "../types/dashboard";
+import {
+  formatDuration,
+  formatPercent,
+  shortJobName,
+  timeAgo,
+} from "../lib/utils";
+import type { BuildResult } from "../types/dashboard";
 import { RunHistory } from "../components/RunHistory";
 import { TestResultsGrid } from "../components/TestResultsGrid";
 import { TestCaseTable } from "../components/TestCaseTable";
 import { PatternBanner } from "../components/PatternBanner";
-import { StatusChip } from "../components/StatusChip";
 import { DetailSectionBand } from "../components/DetailSectionBand";
-import { Panel } from "../components/Panel";
 import { LoadingState } from "../components/LoadingState";
 import { ErrorState } from "../components/ErrorState";
-import { soft } from "../theme";
 import { emptyTestResultsPresentation } from "../lib/testResults";
 import { BuildFailurePanel } from "../components/BuildFailurePanel";
-import { buildFailure as findBuildFailure, junitTestCases as onlyJUnitTestCases } from "../lib/buildFailures";
+import { buildFailure as findBuildFailure } from "../lib/buildFailures";
 import { useSharedFetchStatus } from "../hooks/useSharedFetchStatus";
+import { useManifest } from "../hooks/useManifest";
+import { MetricStrip, type MetricStripItem } from "../components/MetricStrip";
+import { TechnicalIdentity } from "../components/TechnicalIdentity";
+import { RunMetadata } from "../components/RunMetadata";
+import { ResultLedger } from "../components/ResultLedger";
+import { overviewTypography } from "../theme/overview";
+import {
+  executedResultTests,
+  filterResultTests,
+  normalizeResultLedgerFilter,
+  withJobDetailParam,
+} from "../lib/jobDetail";
 
-function passRateColor(rate: number): "success" | "warning" | "error" {
-  if (rate >= 0.9) return "success";
-  if (rate <= 0.3) return "error";
-  return "warning";
+function passRateColor(
+  rate: number,
+): "success.main" | "warning.main" | "error.main" {
+  if (rate >= 0.9) return "success.main";
+  if (rate <= 0.3) return "error.main";
+  return "warning.main";
 }
 
-// Derive the job's overall status from its recent pass rate, matching the
-// backend thresholds in aggregator.computeOverallStatus (>=0.9 PASSING,
-// <=0.3 FAILING, else FLAKY).
-function deriveJobStatus(rate: number | null): "PASSING" | "FLAKY" | "FAILING" | null {
+function deriveJobStatus(
+  rate: number | null,
+): "PASSING" | "FLAKY" | "FAILING" | null {
   if (rate === null) return null;
   if (rate >= 0.9) return "PASSING";
   if (rate <= 0.3) return "FAILING";
   return "FLAKY";
 }
 
-interface StatTile {
-  label: string;
-  value: string;
-  color?: string;
+function statusPresentation(status: "PASSING" | "FLAKY" | "FAILING") {
+  switch (status) {
+    case "PASSING":
+      return { label: "Passing", color: "success.main" } as const;
+    case "FLAKY":
+      return { label: "Flaky", color: "warning.main" } as const;
+    case "FAILING":
+      return { label: "Failing", color: "error.main" } as const;
+  }
 }
 
-// A single KPI tile: uppercase label over a large mono metric.
-function MetricTile({ tile }: { tile: StatTile }) {
-  return (
-    <Panel sx={{ borderRadius: "12px", px: 1.75, py: 1.25 }}>
-      <Typography
-        variant="label"
-        color="text.secondary"
-        sx={{ display: "block", textTransform: "uppercase", fontSize: "0.625rem" }}
-      >
-        {tile.label}
-      </Typography>
-      <Typography
-        variant="stat"
-        component="span"
-        sx={{ fontSize: "1.375rem", color: tile.color ?? "text.primary" }}
-      >
-        {tile.value}
-      </Typography>
-    </Panel>
-  );
+function runResultLabel(run: BuildResult): string {
+  if (run.result === "PENDING") return "Running";
+  return run.passed ? "Passed" : "Failed";
 }
 
-// Metadata for a single build. "row" spreads the fields into a horizontal
-// strip; "column" packs them two-up to fill the sidebar rail.
-function RunDetailsPanel({ run, orientation }: { run: BuildResult; orientation: "row" | "column" }) {
-  const isPending = run.result === "PENDING";
-  return (
-    <Panel component="section" sx={{ borderRadius: 3, p: { xs: 2, sm: 3 } }}>
-      <Box sx={{ mb: 2, display: "flex", alignItems: "center", gap: 1.5, flexWrap: "wrap" }}>
-        <Typography variant="headline" component="h3" sx={{ fontSize: "1rem" }}>
-          Run Details
-        </Typography>
-        {isPending ? (
-          <Chip
-            size="small"
-            label="In Progress"
-            sx={{
-              bgcolor: (t) => soft(t, "primary", 0.15),
-              color: "primary.main",
-              fontWeight: 600,
-            }}
-          />
-        ) : (
-          <StatusChip
-            status={run.passed ? "passed" : "failed"}
-            label={run.passed ? "Passed" : "Failed"}
-          />
-        )}
-        <Box sx={{ ml: "auto", display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
-          {run.prow_url && (
-            <Link
-              href={run.prow_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, color: "primary.main", fontSize: "0.875rem" }}
-            >
-              View in Prow <OpenInNew sx={{ fontSize: 16 }} />
-            </Link>
-          )}
-          {run.build_log_url && (
-            <Link
-              href={run.build_log_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, color: "primary.main", fontSize: "0.875rem" }}
-            >
-              Build Log <OpenInNew sx={{ fontSize: 16 }} />
-            </Link>
-          )}
-        </Box>
-      </Box>
-
-      <Box
-        sx={{
-          display: "grid",
-          gridTemplateColumns:
-            orientation === "row"
-              ? { xs: "1fr 1fr", sm: "repeat(3, minmax(0, 1fr))", lg: "repeat(5, minmax(0, 1fr))" }
-              : { xs: "1fr", sm: "repeat(2, minmax(0, 1fr))" },
-          columnGap: 4,
-          rowGap: 1.5,
-        }}
-      >
-        <Box>
-          <Typography variant="label" color="text.secondary">
-            Build ID
-          </Typography>
-          <Typography variant="data" component="p" color="text.primary" sx={{ overflowWrap: "anywhere" }}>
-            {run.build_id}
-          </Typography>
-        </Box>
-        <Box>
-          <Typography variant="label" color="text.secondary">
-            Started
-          </Typography>
-          <Typography variant="body2" color="text.primary">
-            {new Date(run.started).toLocaleString()}
-          </Typography>
-        </Box>
-        <Box>
-          <Typography variant="label" color="text.secondary">
-            Finished
-          </Typography>
-          <Typography variant="body2" color="text.primary">
-            {isPending ? "Still running…" : new Date(run.finished).toLocaleString()}
-          </Typography>
-        </Box>
-        <Box>
-          <Typography variant="label" color="text.secondary">
-            Duration
-          </Typography>
-          <Typography variant="data" component="p" color="text.primary">
-            {isPending ? "—" : formatDuration(run.duration_seconds)}
-          </Typography>
-        </Box>
-        <Box>
-          <Typography variant="label" color="text.secondary">
-            Commit
-          </Typography>
-          <Typography variant="data" component="p" color="text.primary">
-            {run.commit ? run.commit.slice(0, 8) : "—"}
-          </Typography>
-        </Box>
-      </Box>
-    </Panel>
-  );
+function runResultColor(run: BuildResult): "warning.main" | "success.main" | "error.main" {
+  if (run.result === "PENDING") return "warning.main";
+  return run.passed ? "success.main" : "error.main";
 }
+
 
 export function JobDetailPage() {
   const { jobName: jobID } = useParams<{ jobName: string }>();
@@ -182,47 +90,70 @@ export function JobDetailPage() {
   const [gridOpen, setGridOpen] = useState(false);
   const { data, loading, error } = useJobDetail(jobID);
   const fetchStatus = useSharedFetchStatus();
+  const manifest = useManifest();
 
   const runs = useMemo(() => data?.runs ?? [], [data]);
-  const displayName = data?.name ?? jobID ?? "";
+  const canonicalJobID = data?.job_id ?? jobID ?? "";
+  const shortenedName = shortJobName(
+    data?.name ?? canonicalJobID,
+    manifest.short_name_prefix ?? "",
+  );
+  const displayName = shortenedName || canonicalJobID;
 
-  const selectedBuildId =
-    searchParams.get("run") ?? runs[0]?.build_id ?? undefined;
+  const selectedBuildId = searchParams.get("run") ?? runs[0]?.build_id;
+  const selectedRun = useMemo(
+    () => runs.find((run) => run.build_id === selectedBuildId),
+    [runs, selectedBuildId],
+  );
+  const selectedTestCases = useMemo(
+    () => executedResultTests(selectedRun?.test_cases ?? []),
+    [selectedRun],
+  );
+  const buildFailure = findBuildFailure(selectedRun?.test_cases ?? []);
+  const hasJUnitCases = runs.some(
+    (run) => executedResultTests(run.test_cases).length > 0,
+  );
+  const emptyTestResults = selectedRun
+    ? emptyTestResultsPresentation(selectedRun)
+    : null;
 
-  const selectedRun: BuildResult | undefined = useMemo(() => {
-    if (!selectedBuildId) return undefined;
-    return runs.find((r) => r.build_id === selectedBuildId);
-  }, [runs, selectedBuildId]);
-
-  const testCases: TestCase[] = selectedRun?.test_cases ?? [];
-  const buildFailure = findBuildFailure(testCases);
-  const junitTestCases = onlyJUnitTestCases(testCases);
-  const hasJUnitCases = runs.some((run) => onlyJUnitTestCases(run.test_cases).length > 0);
-  const emptyTestResults = selectedRun ? emptyTestResultsPresentation(selectedRun) : null;
-
-  // Pass rate over the most recent 10 runs.
   const passRateRecent = useMemo(() => {
     if (runs.length === 0) return null;
     const recent = runs.slice(0, 10);
-    return recent.filter((r) => r.passed).length / recent.length;
+    return recent.filter((run) => run.passed).length / recent.length;
   }, [runs]);
 
-  // Average duration across completed runs.
   const avgDuration = useMemo(() => {
-    const done = runs.filter(
-      (r) => r.result !== "PENDING" && r.duration_seconds != null,
+    const completed = runs.filter(
+      (run) => run.result !== "PENDING" && run.duration_seconds != null,
     );
-    if (done.length === 0) return null;
-    return done.reduce((sum, r) => sum + r.duration_seconds, 0) / done.length;
+    if (completed.length === 0) return null;
+    return (
+      completed.reduce((sum, run) => sum + run.duration_seconds, 0) /
+      completed.length
+    );
   }, [runs]);
 
-  function handleSelectRun(buildId: string) {
-    setSearchParams({ run: buildId });
+  const selectedFilter = normalizeResultLedgerFilter(searchParams.get("results"));
+  const resultQuery = searchParams.get("test") ?? "";
+  const visibleTestCases = useMemo(
+    () => filterResultTests(selectedTestCases, selectedFilter, resultQuery),
+    [resultQuery, selectedFilter, selectedTestCases],
+  );
+
+  function updateSearchParam(
+    name: string,
+    value: string | null,
+    options?: { replace?: boolean },
+  ) {
+    setSearchParams(withJobDetailParam(searchParams, name, value), options);
   }
 
-  if (loading) {
-    return <LoadingState />;
+  function handleSelectRun(buildID: string) {
+    updateSearchParam("run", buildID);
   }
+
+  if (loading) return <LoadingState />;
 
   if (error) {
     return (
@@ -239,45 +170,26 @@ export function JobDetailPage() {
   const lastRun = runs[0] ?? null;
   const pattern = data.pattern_analyses?.[0];
   const hasRuns = runs.length > 0;
-
-  const rateColor = passRateRecent !== null ? passRateColor(passRateRecent) : "primary";
-  const statTiles: StatTile[] = [
+  const jobStatus = deriveJobStatus(passRateRecent);
+  const jobStatusView = jobStatus ? statusPresentation(jobStatus) : null;
+  const metricItems: MetricStripItem[] = [
     {
       label: "Pass rate",
-      value: passRateRecent !== null ? formatPercent(passRateRecent) : "—",
-      color: `${rateColor}.main`,
+      value: passRateRecent !== null ? formatPercent(passRateRecent) : "Not available",
+      color: passRateRecent !== null ? passRateColor(passRateRecent) : "text.primary",
     },
-    { label: "Total runs", value: String(runs.length) },
+    { label: "Runs", value: runs.length.toLocaleString() },
     {
-      label: "Avg duration",
-      value: avgDuration !== null ? formatDuration(avgDuration) : "—",
+      label: "Average duration",
+      value: avgDuration !== null ? formatDuration(avgDuration) : "Not available",
+    },
+    {
+      label: "Last run",
+      value: lastRun ? timeAgo(lastRun.started) : "No runs",
     },
   ];
 
-  const statsRow = (
-    <Box
-      sx={{
-        display: "grid",
-        gridTemplateColumns: { xs: "repeat(2, 1fr)", sm: "repeat(3, 1fr)" },
-        gap: 1.5,
-        maxWidth: 560,
-      }}
-    >
-      {statTiles.map((tile) => (
-        <MetricTile key={tile.label} tile={tile} />
-      ))}
-    </Box>
-  );
-
-  const statsColumn = (
-    <Box sx={{ display: "grid", gridTemplateColumns: "1fr", gap: 1.5 }}>
-      {statTiles.map((tile) => (
-        <MetricTile key={tile.label} tile={tile} />
-      ))}
-    </Box>
-  );
-
-  const runHistorySection = (
+  const runHistory = (
     <RunHistory
       runs={runs}
       selectedBuildId={selectedBuildId}
@@ -286,99 +198,230 @@ export function JobDetailPage() {
     />
   );
 
-  const gridSection = (
-    <Box component="section">
-      <Button
+  const runMetadata = selectedRun ? (
+    <RunMetadata
+      status={runResultLabel(selectedRun)}
+      statusColor={runResultColor(selectedRun)}
+      items={[
+        { label: "Build ID", value: selectedRun.build_id },
+        {
+          label: "Started",
+          value: new Date(selectedRun.started).toLocaleString(),
+        },
+        {
+          label: "Duration",
+          value:
+            selectedRun.result === "PENDING"
+              ? "Running"
+              : formatDuration(selectedRun.duration_seconds),
+        },
+        {
+          label: "Commit",
+          value: selectedRun.commit ? selectedRun.commit.slice(0, 8) : "Not available",
+        },
+      ]}
+      links={[
+        ...(selectedRun.prow_url
+          ? [{ label: "View in Prow", href: selectedRun.prow_url }]
+          : []),
+        ...(selectedRun.build_log_url
+          ? [{ label: "Build log", href: selectedRun.build_log_url }]
+          : []),
+      ]}
+    />
+  ) : null;
+
+  const crossRunGrid = hasJUnitCases ? (
+    <Box
+      component="section"
+      sx={{
+        bgcolor: "surface.container",
+        borderBottom: "1px solid",
+        borderColor: "divider",
+      }}
+    >
+      <DetailSectionBand
+        title="Cross-run test grid"
+        metadata={`${runs.length} ${runs.length === 1 ? "run" : "runs"} · executed tests`}
+      />
+      <ButtonBase
         type="button"
-        variant="text"
-        onClick={() => setGridOpen(!gridOpen)}
+        onClick={() => setGridOpen((value) => !value)}
+        aria-expanded={gridOpen}
+        aria-controls="cross-run-test-grid"
         sx={{
-          minWidth: 0,
-          p: 0,
+          width: "100%",
+          minHeight: 48,
+          px: 1.5,
+          py: 0.75,
+          justifyContent: "flex-start",
+          gap: 1,
           color: "text.primary",
-          textTransform: "none",
-          gap: 1.25,
-          "&:hover": { color: "primary.main", bgcolor: "transparent" },
+          textAlign: "left",
+          borderTop: "1px solid",
+          borderColor: "divider",
+          "&:hover": { bgcolor: "surface.containerHigh" },
+          "&.Mui-focusVisible": {
+            outline: "2px solid",
+            outlineColor: "primary.main",
+            outlineOffset: -2,
+          },
         }}
       >
-        <Box sx={{ width: 4, height: 18, borderRadius: 999, bgcolor: "primary.main", flexShrink: 0 }} />
-        <Typography variant="headline" component="span">
-          Test Results Grid
+        <Typography
+          component="span"
+          sx={{ ...overviewTypography.secondaryBody, fontWeight: 650 }}
+        >
+          Compare test outcomes across runs
+        </Typography>
+        <Typography
+          component="span"
+          color="text.secondary"
+          sx={{ ml: "auto", ...overviewTypography.data }}
+        >
+          {gridOpen ? "Hide grid" : "Show grid"}
         </Typography>
         <ChevronRight
           sx={{
-            fontSize: 22,
+            flexShrink: 0,
             color: "text.secondary",
-            transition: (t) => t.transitions.create("transform", { duration: t.transitions.duration.short }),
             transform: gridOpen ? "rotate(90deg)" : "rotate(0deg)",
+            transition: (theme) =>
+              theme.transitions.create("transform", {
+                duration: theme.transitions.duration.shortest,
+              }),
+            "@media (prefers-reduced-motion: reduce)": { transition: "none" },
           }}
         />
-      </Button>
+      </ButtonBase>
       <Collapse in={gridOpen} timeout="auto" unmountOnExit>
-        <Box sx={{ pt: 1.5 }}>
-          <TestResultsGrid runs={runs} jobID={jobID!} />
+        <Box id="cross-run-test-grid" sx={{ borderTop: "1px solid", borderColor: "divider" }}>
+          <TestResultsGrid runs={runs} jobID={canonicalJobID} />
         </Box>
       </Collapse>
     </Box>
-  );
+  ) : null;
 
   return (
-    <Box sx={{ display: "flex", flexDirection: "column", gap: { xs: 3, sm: 4 } }}>
-      <Breadcrumbs separator="›" sx={{ color: "text.secondary", fontSize: "0.875rem" }}>
+    <Box
+      sx={{
+        display: "flex",
+        flexDirection: "column",
+        gap: { xs: 2.5, sm: 3.5 },
+        minWidth: 0,
+      }}
+    >
+      <Breadcrumbs
+        separator="›"
+        aria-label="Breadcrumb"
+        sx={{ color: "text.secondary", ...overviewTypography.description }}
+      >
         <Link
           component={RouterLink}
           to="/"
           underline="none"
           sx={{ color: "text.secondary", "&:hover": { color: "primary.main" } }}
         >
-          Dashboard
+          Overview
         </Link>
-        <Typography variant="inherit" color="text.primary">
+        <Typography variant="inherit" color="text.primary" noWrap>
           {displayName}
         </Typography>
       </Breadcrumbs>
 
-      <Box>
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, flexWrap: "wrap" }}>
+      <Box
+        sx={{
+          display: "grid",
+          gridTemplateColumns: { xs: "minmax(0, 1fr)", sm: "minmax(0, 1fr) auto" },
+          alignItems: "start",
+          gap: { xs: 1, sm: 2 },
+        }}
+      >
+        <Box sx={{ minWidth: 0 }}>
           <Typography
-            variant="h5"
             component="h1"
-            sx={{ fontWeight: 700, color: "text.primary", fontSize: { xs: "1.25rem", sm: "1.5rem" } }}
+            sx={{
+              ...overviewTypography.pageHeadline,
+              fontSize: { xs: "25px", sm: overviewTypography.pageHeadline.fontSize },
+              lineHeight: { xs: "31px", sm: overviewTypography.pageHeadline.lineHeight },
+              color: "text.primary",
+              overflowWrap: "anywhere",
+            }}
           >
             {displayName}
           </Typography>
-          {(() => {
-            const jobStatus = deriveJobStatus(passRateRecent);
-            return jobStatus ? <StatusChip status={jobStatus} /> : null;
-          })()}
-        </Box>
-        {lastRun && (
           <Typography
-            variant="data"
+            component="p"
             color="text.secondary"
-            sx={{ display: "block", mt: 0.75, fontSize: "0.75rem" }}
+            sx={{ m: 0, mt: 0.75, ...overviewTypography.secondaryBody }}
           >
-            Last run {timeAgo(lastRun.started)}
+            {lastRun ? `Last run ${timeAgo(lastRun.started)} · ` : ""}
+            {data.job_type} job
           </Typography>
+        </Box>
+        {jobStatusView && (
+          <Box
+            role="status"
+            sx={{
+              minHeight: 34,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 1,
+              color: jobStatusView.color,
+              fontSize: "14px",
+              lineHeight: "20px",
+              fontWeight: 700,
+              whiteSpace: "nowrap",
+            }}
+          >
+            <Box component="span" sx={{ width: 8, height: 8, borderRadius: "2px", bgcolor: "currentColor" }} />
+            {jobStatusView.label}
+          </Box>
         )}
       </Box>
+
+      <TechnicalIdentity
+        desktopInline
+        summary="Canonical job ID"
+        items={[
+          {
+            label: "Canonical job ID",
+            value: canonicalJobID,
+            copyLabel: "Copy canonical job ID",
+          },
+        ]}
+      />
+
+      <MetricStrip items={metricItems} label="Job metrics" />
 
       {!hasRuns ? (
         <>
           {pattern && (
-            <Box sx={{ maxWidth: 860 }}>
-              <PatternBanner pattern={pattern} jobID={jobID} runs={runs} refreshStatus={data.pattern_refresh} />
-            </Box>
+            <PatternBanner
+              pattern={pattern}
+              jobID={canonicalJobID}
+              runs={runs}
+              refreshStatus={data.pattern_refresh}
+            />
           )}
-          {statsRow}
-          <Panel sx={{ borderRadius: 3, p: 6, textAlign: "center" }}>
-            <Typography variant="headline" sx={{ fontSize: "1rem", color: "text.primary" }}>
+          <Box
+            component="section"
+            sx={{
+              bgcolor: "surface.container",
+              borderBlock: "1px solid",
+              borderColor: "divider",
+              px: 2,
+              py: 4,
+              textAlign: "center",
+            }}
+          >
+            <Typography component="h2" sx={overviewTypography.majorHeading}>
               No runs found
             </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+            <Typography color="text.secondary" sx={{ mt: 0.5, ...overviewTypography.secondaryBody }}>
               This job has no recorded builds in the current window.
             </Typography>
-          </Panel>
+          </Box>
         </>
       ) : (
         <>
@@ -386,13 +429,21 @@ export function JobDetailPage() {
             <Box
               sx={{
                 display: "grid",
-                gridTemplateColumns: { xs: "minmax(0, 1fr)", lg: "minmax(0, 1.5fr) minmax(300px, 1fr)" },
+                gridTemplateColumns: {
+                  xs: "minmax(0, 1fr)",
+                  lg: "minmax(0, 1.5fr) minmax(360px, 0.85fr)",
+                },
                 gap: 2,
                 minWidth: 0,
                 alignItems: "start",
               }}
             >
-              <PatternBanner pattern={pattern} jobID={jobID} runs={runs} refreshStatus={data.pattern_refresh} />
+              <PatternBanner
+                pattern={pattern}
+                jobID={canonicalJobID}
+                runs={runs}
+                refreshStatus={data.pattern_refresh}
+              />
               <Box
                 sx={{
                   display: "flex",
@@ -404,82 +455,113 @@ export function JobDetailPage() {
                   alignSelf: "start",
                 }}
               >
-                {statsColumn}
-                {runHistorySection}
-                {selectedRun && <RunDetailsPanel run={selectedRun} orientation="column" />}
+                {runHistory}
+                {runMetadata}
               </Box>
             </Box>
           ) : (
-            <>
-              {statsRow}
-              {runHistorySection}
-            </>
+            <Box
+              sx={{
+                display: "grid",
+                gridTemplateColumns: {
+                  xs: "minmax(0, 1fr)",
+                  lg: "minmax(0, 1fr) minmax(360px, 0.8fr)",
+                },
+                gap: 2,
+                minWidth: 0,
+                alignItems: "start",
+              }}
+            >
+              {runHistory}
+              {runMetadata}
+            </Box>
           )}
 
-          {hasJUnitCases && gridSection}
+          {crossRunGrid}
 
-          {selectedRun && (
-            <>
-              {!pattern && <RunDetailsPanel run={selectedRun} orientation="row" />}
-              {buildFailure && (
-                <BuildFailurePanel
-                  jobID={jobID ?? ""}
-                  run={selectedRun}
-                  failure={buildFailure}
-                  fetchStatus={fetchStatus}
+          {selectedRun && buildFailure && (
+            <BuildFailurePanel
+              jobID={canonicalJobID}
+              run={selectedRun}
+              failure={buildFailure}
+              fetchStatus={fetchStatus}
+            />
+          )}
+
+          {selectedRun && selectedTestCases.length > 0 ? (
+            <ResultLedger
+              filter={selectedFilter}
+              query={resultQuery}
+              executedCount={selectedRun.tests_passed + selectedRun.tests_failed}
+              skippedCount={selectedRun.tests_skipped}
+              shownCount={visibleTestCases.length}
+              onFilterChange={(filter) => updateSearchParam("results", filter)}
+              onQueryChange={(query) =>
+                updateSearchParam("test", query || null, { replace: true })
+              }
+            >
+              {visibleTestCases.length > 0 ? (
+                <TestCaseTable
+                  testCases={visibleTestCases}
+                  jobID={canonicalJobID}
+                  buildId={selectedRun.build_id}
+                  buildLogUrl={selectedRun.build_log_url}
+                  webUrl={selectedRun.web_url}
                 />
+              ) : (
+                <Typography
+                  role="status"
+                  color="text.secondary"
+                  sx={{ px: 1.5, py: 3, ...overviewTypography.secondaryBody }}
+                >
+                  No executed tests match the current status and text filters.
+                </Typography>
               )}
-              {junitTestCases.length > 0 ? (
-                <Box component="section">
-                  <DetailSectionBand title="Test cases" />
-                  <TestCaseTable
-                    testCases={junitTestCases}
-                    jobID={jobID}
-                    buildId={selectedRun.build_id}
-                    buildLogUrl={selectedRun.build_log_url}
-                    webUrl={selectedRun.web_url}
-                  />
-                </Box>
-              ) : !buildFailure ? (
-                <Panel component="section" sx={{ borderRadius: 3, p: 4, textAlign: "center" }}>
-                  {emptyTestResults?.kind === "pending" ? (
-                    <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 1, color: "text.secondary" }}>
-                      <HourglassEmpty sx={{ fontSize: 20 }} />
-                      <Typography color="text.secondary">
-                        {emptyTestResults.detail}
+            </ResultLedger>
+          ) : selectedRun && !buildFailure ? (
+            <Box
+              component="section"
+              sx={{ bgcolor: "surface.container", borderBottom: "1px solid", borderColor: "divider" }}
+            >
+              <DetailSectionBand title="Test results" metadata="No executed tests" />
+              <Box sx={{ px: 2, py: 4, textAlign: "center" }}>
+                {emptyTestResults?.kind === "pending" ? (
+                  <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 1 }}>
+                    <HourglassEmpty sx={{ fontSize: 20, color: "text.secondary" }} />
+                    <Typography color="text.secondary" sx={overviewTypography.secondaryBody}>
+                      {emptyTestResults.detail}
+                    </Typography>
+                  </Box>
+                ) : (
+                  <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
+                    <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                      {emptyTestResults?.severity === "error" ? (
+                        <ErrorOutlined color="error" sx={{ fontSize: 20 }} />
+                      ) : emptyTestResults?.severity === "warning" ? (
+                        <WarningAmber color="warning" sx={{ fontSize: 20 }} />
+                      ) : null}
+                      <Typography component="h3" sx={overviewTypography.categoryHeading}>
+                        {emptyTestResults?.title ?? "No test cases available"}
                       </Typography>
                     </Box>
-                  ) : (
-                    <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
-                      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                        {emptyTestResults?.severity === "error" ? (
-                          <ErrorOutlined color="error" sx={{ fontSize: 20 }} />
-                        ) : emptyTestResults?.severity === "warning" ? (
-                          <WarningAmber color="warning" sx={{ fontSize: 20 }} />
-                        ) : null}
-                        <Typography variant="headline" sx={{ fontSize: "1rem", color: "text.primary" }}>
-                          {emptyTestResults?.title ?? "No test cases available"}
-                        </Typography>
-                      </Box>
-                      <Typography color="text.secondary">
-                        {emptyTestResults?.detail ?? "No test cases are available for this run."}
-                      </Typography>
-                      {selectedRun.build_log_url && (
-                        <Link
-                          href={selectedRun.build_log_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, color: "primary.main" }}
-                        >
-                          Open build log <OpenInNew sx={{ fontSize: 16 }} />
-                        </Link>
-                      )}
-                    </Box>
-                  )}
-                </Panel>
-              ) : null}
-            </>
-          )}
+                    <Typography color="text.secondary" sx={overviewTypography.secondaryBody}>
+                      {emptyTestResults?.detail ?? "No test cases are available for this run."}
+                    </Typography>
+                    {selectedRun.build_log_url && (
+                      <Link
+                        href={selectedRun.build_log_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        sx={{ minHeight: 36, display: "inline-flex", alignItems: "center", gap: 0.5 }}
+                      >
+                        Open build log <OpenInNew sx={{ fontSize: 16 }} />
+                      </Link>
+                    )}
+                  </Box>
+                )}
+              </Box>
+            </Box>
+          ) : null}
         </>
       )}
     </Box>

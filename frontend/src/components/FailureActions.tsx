@@ -137,13 +137,16 @@ export function FailureActions({
   failureID,
   resolvable = true,
   eligibilityHint = null,
+  appearance = "default",
 }: {
   failureID: string;
   resolvable?: boolean;
   eligibilityHint?: ActionEligibility | null;
+  appearance?: "default" | "detail";
 }) {
   const { features } = useCapabilities();
   const { status, signIn, login, mode } = useAuth();
+  const detailAppearance = appearance === "detail";
   const [searchParams, setSearchParams] = useSearchParams();
   const linkedFailure = searchParams.get("failure");
   const linkedAction = requestedAction(searchParams.get("action"));
@@ -706,15 +709,30 @@ export function FailureActions({
     <Box>
       <Stack
         direction="row"
-        spacing={1}
-        sx={{ alignItems: "center", flexWrap: "wrap", rowGap: 1 }}
+        spacing={detailAppearance ? 0 : 1}
+        sx={{
+          alignItems: "center",
+          flexWrap: "wrap",
+          rowGap: 1,
+          ...(detailAppearance && {
+            "& .MuiButton-root": {
+              minHeight: { xs: 44, sm: 36 },
+              borderRadius: 0,
+              borderLeft: "1px solid",
+              borderColor: "divider",
+              px: 1.25,
+              textTransform: "none",
+              "&:first-of-type": { borderLeft: 0, pl: 0 },
+            },
+          }),
+        }}
       >
         {features.action_requests && canStartActions && (
           <>
             <Button
               size="small"
-              variant="outlined"
-              color="warning"
+              variant={detailAppearance ? "text" : "outlined"}
+              color={detailAppearance ? "primary" : "warning"}
               startIcon={<BugReport sx={{ fontSize: 18 }} />}
               disabled={action !== null}
               onClick={() => open("create-issue")}
@@ -723,8 +741,8 @@ export function FailureActions({
             </Button>
             <Button
               size="small"
-              variant="outlined"
-              color="warning"
+              variant={detailAppearance ? "text" : "outlined"}
+              color={detailAppearance ? "primary" : "warning"}
               startIcon={<Build sx={{ fontSize: 18 }} />}
               disabled={action !== null}
               onClick={() => open("propose-fix")}
@@ -736,8 +754,8 @@ export function FailureActions({
         {resolvable && (isResolved ? (
           <Button
             size="small"
-            variant="outlined"
-            color="success"
+            variant={detailAppearance ? "text" : "outlined"}
+            color={detailAppearance ? "primary" : "success"}
             startIcon={<Replay sx={{ fontSize: 18 }} />}
             disabled={resolveBusy}
             onClick={unresolve}
@@ -747,8 +765,8 @@ export function FailureActions({
         ) : (
           <Button
             size="small"
-            variant="outlined"
-            color="success"
+            variant={detailAppearance ? "text" : "outlined"}
+            color={detailAppearance ? "primary" : "success"}
             startIcon={<CheckCircleOutlined sx={{ fontSize: 18 }} />}
             disabled={resolveBusy}
             onClick={() => {

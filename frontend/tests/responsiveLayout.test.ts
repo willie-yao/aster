@@ -22,11 +22,14 @@ test("test analysis and run history reflow at mobile and zoom widths", () => {
   const testDetail = source("src/pages/TestDetailPage.tsx");
   const analysis = source("src/components/AiAnalysisPanel.tsx");
   const pattern = source("src/components/PatternBanner.tsx");
+  const briefing = source("src/components/AnalysisBriefing.tsx");
 
   assert.match(testDetail, /gridTemplateColumns: \{ xs: "minmax\(0, 1fr\)"/);
   assert.match(testDetail, /display: "grid",[\s\S]*minWidth: 0/);
   assert.match(analysis, /component="section"[\s\S]*minWidth: 0[\s\S]*maxWidth: "100%"[\s\S]*overflowWrap: "anywhere"/);
-  assert.match(pattern, /className="ai-aurora"[\s\S]*minWidth: 0[\s\S]*overflowWrap: "anywhere"/);
+  assert.match(pattern, /<AnalysisBriefing[\s\S]*mobileSynopsis/);
+  assert.doesNotMatch(pattern, /className="ai-aurora"/);
+  assert.match(briefing, /component="section"[\s\S]*minWidth: 0[\s\S]*maxWidth: "100%"/);
   assert.match(testDetail, /overflowX: "clip"/);
   assert.match(testDetail, /failure_location[\s\S]*overflowWrap: "anywhere"/);
   assert.match(timeline, /width: "100%"[\s\S]*overflowX: "auto"[\s\S]*overflowY: "hidden"/);

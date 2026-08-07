@@ -1,16 +1,24 @@
-import Box from "@mui/material/Box";
 import Alert from "@mui/material/Alert";
+import Box from "@mui/material/Box";
 import Chip from "@mui/material/Chip";
 import Link from "@mui/material/Link";
 import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
 import { Link as RouterLink } from "react-router-dom";
-import { Insights } from "@mui/icons-material";
-import type { BuildResult, PatternAnalysis, PatternRefreshStatus, RemediationObservation } from "../types/dashboard";
+import type {
+  BuildResult,
+  PatternAnalysis,
+  PatternRefreshStatus,
+  RemediationObservation,
+} from "../types/dashboard";
 import type { AnalysisChatReference } from "../types/analysisChat";
-import { confidenceColor, meetsConfidenceFloor, type FileToUrlContext } from "../lib/utils";
+import {
+  fileSortKey,
+  fileToUrl,
+  meetsConfidenceFloor,
+  type FileToUrlContext,
+} from "../lib/utils";
 import { RichText } from "./RichText";
-import { LabeledBlock } from "./LabeledBlock";
 import { FailureActions } from "./FailureActions";
 import { useRemediations, useResolved } from "../hooks/useData";
 import { soft } from "../theme";
@@ -19,6 +27,8 @@ import { useCapabilities } from "../hooks/useCapabilities";
 import { patternChatAvailability } from "../lib/patternChat";
 import { patternActionEligibilityHint } from "../lib/actionEligibility";
 import { jobRunPath } from "../lib/routes";
+import { AnalysisBriefing } from "./AnalysisBriefing";
+import { overviewTypography } from "../theme/overview";
 
 function remediationStatusLabel(status: string): string {
   return status.replaceAll("_", " ");
@@ -31,10 +41,33 @@ function remediationStatusColor(status: string): "success" | "warning" | "error"
     status === "failing_different_cause" ||
     status === "presubmit_failed_same_cause" ||
     status === "presubmit_failed_different_cause"
-  )
+  ) {
     return "error";
+  }
   if (status === "inconclusive") return "warning";
   return "info";
+}
+
+function firstSentence(value: string): string {
+  const match = value.trim().match(/^.*?[.!?](?:\s|$)/u);
+  return match?.[0].trim() || value.trim();
+}
+
+function BriefingSection({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <Box>
+      <Typography component="h3" color="text.secondary" sx={overviewTypography.subsectionHeading}>
+        {label}
+      </Typography>
+      <Box sx={{ mt: 0.5, ...overviewTypography.primaryBody }}>{children}</Box>
+    </Box>
+  );
 }
 
 export function PatternBanner({
@@ -48,9 +81,6 @@ export function PatternBanner({
   runs?: BuildResult[];
   refreshStatus?: PatternRefreshStatus;
 }) {
-  const color = pattern.systemic ? "warning" : "success";
-  const confColor = confidenceColor(pattern.confidence, color);
-
   const { data: resolved } = useResolved();
   const { data: remediations } = useRemediations();
   const { features } = useCapabilities();
@@ -66,9 +96,15 @@ export function PatternBanner({
     return observedAt > latestObservedAt ? observation : latest;
   }, undefined as RemediationObservation | undefined);
   const hasEvidenceBuild = Boolean(
-    pattern.shared_builds?.length && pattern.shared_builds.every((buildID) => runs.some((run) => run.build_id === buildID)),
+    pattern.shared_builds?.length &&
+      pattern.shared_builds.every((buildID) => runs.some((run) => run.build_id === buildID)),
   );
-  const chatAvailability = patternChatAvailability(pattern, jobID, hasEvidenceBuild, Boolean(features.analysis_chat));
+  const chatAvailability = patternChatAvailability(
+    pattern,
+    jobID,
+    hasEvidenceBuild,
+    Boolean(features.analysis_chat),
+  );
   const chatRef: AnalysisChatReference | null =
     chatAvailability === "ready" && pattern.id && pattern.content_hash && jobID
       ? {
@@ -84,57 +120,38 @@ export function PatternBanner({
       { buildLogUrl: run.build_log_url, webUrl: run.web_url } satisfies FileToUrlContext,
     ]),
   );
-  const patternFileCtx = { builds: buildContexts, fileLinks: pattern.file_links } satisfies FileToUrlContext;
+  const patternFileCtx = {
+    builds: buildContexts,
+    fileLinks: pattern.file_links,
+  } satisfies FileToUrlContext;
   const isCurrent = !refreshStatus || refreshStatus.state === "current";
-  const actionEligibility = patternActionEligibilityHint(pattern.remediation_targets, attempt?.status);
+  const actionEligibility = patternActionEligibilityHint(
+    pattern.remediation_targets,
+    attempt?.status,
+  );
   const fixPatterns =
-    isCurrent && pattern.id && pattern.content_hash && pattern.suggested_fix &&
+    isCurrent &&
+    pattern.id &&
+    pattern.content_hash &&
+    pattern.suggested_fix &&
     meetsConfidenceFloor(pattern.confidence, features.chat_fix_min_confidence ?? "high")
       ? [pattern]
       : [];
+  const patternLabel = pattern.systemic ? "Recurring pattern" : "No shared root cause";
+  const metadata = `${pattern.builds_analyzed} ${pattern.builds_analyzed === 1 ? "build" : "builds"} · ${pattern.confidence} confidence`;
 
-  return (
-    <Box
-      id={pattern.id ? `pattern-${pattern.id}` : undefined}
-      component="section"
-      className="ai-aurora"
-      sx={{
-        minWidth: 0,
-        maxWidth: "100%",
-        overflowWrap: "anywhere",
-        borderRadius: "12px",
-        bgcolor: (t) => soft(t, color, 0.05),
-        p: { xs: 2, sm: 2.5 },
-      }}
-    >
-      <Stack spacing={2}>
-        <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap" }}>
-          <Insights sx={{ fontSize: 20, color: `${color}.main` }} />
-          <Typography variant="label" sx={{ fontWeight: 600 }} color={`${color}.main`}>
-            {pattern.systemic ? "Recurring failure pattern" : "No shared root cause"}
-          </Typography>
-          <Chip
-            size="small"
-            label={`${pattern.builds_analyzed} builds analyzed`}
-            sx={{ bgcolor: "action.selected", color: "text.secondary", fontWeight: 600 }}
-          />
-          <Chip
-            size="small"
-            label={`Confidence: ${pattern.confidence}`}
-            sx={{
-              fontWeight: 600,
-              ...(confColor
-                ? { bgcolor: (t) => soft(t, confColor, 0.2), color: `${confColor}.main` }
-                : { bgcolor: "action.selected", color: "text.secondary" }),
-            }}
-          />
+  const details = (
+    <>
+      {(resolvedEntry || attempt) && (
+        <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap", rowGap: 1 }}>
           {resolvedEntry && (
             <Chip
               size="small"
               label="Resolved"
               sx={{
-                fontWeight: 600,
-                bgcolor: (t) => soft(t, "success", 0.2),
+                borderRadius: "4px",
+                fontWeight: 650,
+                bgcolor: (theme) => soft(theme, "success", 0.16),
                 color: "success.main",
               }}
             />
@@ -144,127 +161,171 @@ export function PatternBanner({
               size="small"
               label={remediationStatusLabel(attempt.status)}
               sx={{
-                fontWeight: 600,
-                bgcolor: (t) => soft(t, remediationStatusColor(attempt.status), 0.2),
+                borderRadius: "4px",
+                fontWeight: 650,
+                bgcolor: (theme) => soft(theme, remediationStatusColor(attempt.status), 0.16),
                 color: `${remediationStatusColor(attempt.status)}.main`,
               }}
             />
           )}
         </Stack>
+      )}
 
-        {resolvedEntry && (
-          <Typography variant="caption" color="text.secondary">
-            Marked resolved by {resolvedEntry.resolved_by}
-            {resolvedEntry.note ? ` — ${resolvedEntry.note}` : ""}. Re-opens
-            automatically if it recurs.
-          </Typography>
-        )}
-
-        {attempt && (
-          <Stack spacing={0.5}>
-            <Typography variant="caption" color="text.secondary">
-              Remediation attempt {attempt.number}: {remediationStatusLabel(attempt.status)}
-              {attempt.outcome_reason ? `. ${attempt.outcome_reason}` : ""}
-            </Typography>
-            <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap", rowGap: 0.5 }}>
-              <Link href={attempt.url} target="_blank" rel="noreferrer" variant="caption">
-                Pull request #{attempt.pr_number}
-              </Link>
-              {remediation?.issue && (
-                <Link href={remediation.issue.url} target="_blank" rel="noreferrer" variant="caption">
-                  Issue #{remediation.issue.number}
-                </Link>
-              )}
-              {latestObservation?.prow_url && (
-                <Link href={latestObservation.prow_url} target="_blank" rel="noreferrer" variant="caption">
-                  Latest Prow observation
-                </Link>
-              )}
-            </Stack>
-          </Stack>
-        )}
-
-        {refreshStatus && refreshStatus.state !== "current" && (
-          <Alert severity="warning" variant="outlined">
-            Last known good pattern from {refreshStatus.last_successful_at ?? "an earlier refresh"}. Current refresh: {refreshStatus.failure_category ?? refreshStatus.state}.
-          </Alert>
-        )}
-
-        <Typography variant="body2" sx={{ whiteSpace: "pre-line", lineHeight: 1.6 }}>
-          <RichText text={pattern.summary} steps fileCtx={patternFileCtx} />
+      {resolvedEntry && (
+        <Typography color="text.secondary" sx={overviewTypography.description}>
+          Marked resolved by {resolvedEntry.resolved_by}
+          {resolvedEntry.note ? `. ${resolvedEntry.note}` : ""}. It reopens automatically if it recurs.
         </Typography>
+      )}
 
-        {pattern.systemic && pattern.shared_root_cause && (
-          <LabeledBlock label="Shared Root Cause" accent={color}>
-            <Typography variant="body2" sx={{ whiteSpace: "pre-line", lineHeight: 1.6 }}>
-              <RichText text={pattern.shared_root_cause} steps fileCtx={patternFileCtx} />
-            </Typography>
-          </LabeledBlock>
-        )}
-
-        {pattern.systemic && pattern.suggested_fix && (
-          <LabeledBlock label="Suggested Fix" accent="primary">
-            <Typography variant="body2" sx={{ whiteSpace: "pre-line", lineHeight: 1.6 }}>
-              <RichText text={pattern.suggested_fix} steps fileCtx={patternFileCtx} />
-            </Typography>
-          </LabeledBlock>
-        )}
-
-        {pattern.source_ref && (
-          <Typography variant="caption" color="text.secondary">
-            Source grounding: {pattern.source_ref}
+      {attempt && (
+        <BriefingSection label="Remediation status">
+          <Typography component="p" sx={{ m: 0, ...overviewTypography.secondaryBody }}>
+            Attempt {attempt.number}: {remediationStatusLabel(attempt.status)}
+            {attempt.outcome_reason ? `. ${attempt.outcome_reason}` : ""}
           </Typography>
-        )}
+          <Stack direction="row" spacing={2} sx={{ mt: 0.5, flexWrap: "wrap", rowGap: 0.5 }}>
+            <Link href={attempt.url} target="_blank" rel="noreferrer">
+              Pull request #{attempt.pr_number}
+            </Link>
+            {remediation?.issue && (
+              <Link href={remediation.issue.url} target="_blank" rel="noreferrer">
+                Issue #{remediation.issue.number}
+              </Link>
+            )}
+            {latestObservation?.prow_url && (
+              <Link href={latestObservation.prow_url} target="_blank" rel="noreferrer">
+                Latest Prow observation
+              </Link>
+            )}
+          </Stack>
+        </BriefingSection>
+      )}
 
-        {pattern.systemic && pattern.shared_builds && pattern.shared_builds.length > 0 && (
-          <Box>
-            <Typography variant="label" color="text.secondary" sx={{ fontWeight: 600, display: "block", mb: 0.5 }}>
-              Affected Builds
-            </Typography>
-            <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap", rowGap: 1 }}>
-              {pattern.shared_builds.map((b) => (
-                <Link
-                  key={b}
-                  component={RouterLink}
-                  to={jobID ? jobRunPath(jobID, b) : "#"}
-                  underline="none"
-                  sx={{
-                    fontFamily: "monospace",
-                    fontSize: "0.8125rem",
-                    px: 0.75,
-                    py: 0.25,
-                    borderRadius: "4px",
-                    bgcolor: "action.selected",
-                    color: "primary.main",
-                    "&:hover": { bgcolor: (t) => soft(t, "primary", 0.15) },
-                  }}
-                >
-                  {b}
-                </Link>
-              ))}
-            </Stack>
+      {refreshStatus && refreshStatus.state !== "current" && (
+        <Alert severity="warning" variant="outlined" sx={{ borderRadius: "4px" }}>
+          Last known good pattern from {refreshStatus.last_successful_at ?? "an earlier refresh"}.
+          Current refresh: {refreshStatus.failure_category ?? refreshStatus.state}.
+        </Alert>
+      )}
+
+      {pattern.systemic && pattern.shared_root_cause && (
+        <BriefingSection label="Root cause">
+          <RichText text={pattern.shared_root_cause} steps fileCtx={patternFileCtx} />
+        </BriefingSection>
+      )}
+
+      {pattern.systemic && pattern.suggested_fix && (
+        <BriefingSection label="Suggested remediation">
+          <RichText text={pattern.suggested_fix} steps fileCtx={patternFileCtx} />
+        </BriefingSection>
+      )}
+
+      {pattern.source_ref && (
+        <BriefingSection label="Source grounding">
+          <Typography component="code" sx={{ ...overviewTypography.data, overflowWrap: "anywhere" }}>
+            {pattern.source_ref}
+          </Typography>
+        </BriefingSection>
+      )}
+
+      {pattern.systemic && pattern.shared_builds && pattern.shared_builds.length > 0 && (
+        <BriefingSection label="Affected builds">
+          <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap", rowGap: 1 }}>
+            {pattern.shared_builds.map((buildID) => (
+              <Link
+                key={buildID}
+                component={RouterLink}
+                to={jobID ? jobRunPath(jobID, buildID) : "#"}
+                underline="none"
+                sx={{
+                  minHeight: 32,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  px: 0.75,
+                  borderRadius: "4px",
+                  bgcolor: "action.selected",
+                  color: "primary.main",
+                  ...overviewTypography.data,
+                  "&:hover": { bgcolor: "surface.containerHigh" },
+                  "&:focus-visible": {
+                    outline: "2px solid",
+                    outlineColor: "primary.main",
+                    outlineOffset: 2,
+                  },
+                }}
+              >
+                {buildID}
+              </Link>
+            ))}
+          </Stack>
+        </BriefingSection>
+      )}
+
+      {pattern.relevant_files && pattern.relevant_files.length > 0 && (
+        <BriefingSection label="Related files">
+          <Box component="ul" sx={{ m: 0, pl: 2.5 }}>
+            {[...pattern.relevant_files]
+              .sort((left, right) => fileSortKey(left, patternFileCtx) - fileSortKey(right, patternFileCtx))
+              .map((file) => {
+                const url = fileToUrl(file, patternFileCtx);
+                return (
+                  <Box component="li" key={file} sx={{ py: 0.25, ...overviewTypography.data }}>
+                    {url ? (
+                      <Link href={url} target="_blank" rel="noopener noreferrer">
+                        {file}
+                      </Link>
+                    ) : (
+                      file
+                    )}
+                  </Box>
+                );
+              })}
           </Box>
-        )}
+        </BriefingSection>
+      )}
 
-        {chatAvailability === "stale" && (
-          <Alert severity="info" variant="outlined">
-            Recurring-pattern chat is unavailable because this dashboard data predates content hashing. Refresh the dashboard data to enable it.
-          </Alert>
-        )}
+      {chatAvailability === "stale" && (
+        <Alert severity="info" variant="outlined" sx={{ borderRadius: "4px" }}>
+          Recurring-pattern chat is unavailable because this dashboard data predates content hashing.
+          Refresh the dashboard data to enable it.
+        </Alert>
+      )}
+    </>
+  );
 
-        {chatRef && (
-          <AnalysisChat
-            key={`${chatRef.job_id}\u0000${chatRef.pattern_id}\u0000${chatRef.pattern_hash}`}
-            analysisRef={chatRef}
-            fileCtx={{ builds: buildContexts }}
-            fixPatterns={fixPatterns}
-          />
-        )}
+  const actions = chatRef || (isCurrent && pattern.systemic && pattern.id) ? (
+    <Stack spacing={1.25}>
+      {chatRef && (
+        <AnalysisChat
+          key={`${chatRef.job_id}\u0000${chatRef.pattern_id}\u0000${chatRef.pattern_hash}`}
+          analysisRef={chatRef}
+          fileCtx={{ builds: buildContexts }}
+          fixPatterns={fixPatterns}
+          appearance="detail"
+        />
+      )}
+      {isCurrent && pattern.systemic && pattern.id && (
+        <FailureActions
+          failureID={pattern.id}
+          eligibilityHint={actionEligibility}
+          appearance="detail"
+        />
+      )}
+    </Stack>
+  ) : undefined;
 
-        {isCurrent && pattern.systemic && pattern.id && (
-          <FailureActions failureID={pattern.id} eligibilityHint={actionEligibility} />
-        )}
-      </Stack>
-    </Box>
+  return (
+    <AnalysisBriefing
+      id={pattern.id ? `pattern-${pattern.id}` : undefined}
+      title="Analysis briefing"
+      mobileTitle={patternLabel}
+      metadata={`${patternLabel} · ${metadata}`}
+      mobileMetadata={metadata}
+      summary={<RichText text={pattern.summary} steps fileCtx={patternFileCtx} />}
+      mobileSynopsis={firstSentence(pattern.shared_root_cause ?? pattern.summary)}
+      details={details}
+      actions={actions}
+    />
   );
 }
