@@ -25,34 +25,24 @@ function isStructuredLabel(value: string): boolean {
 }
 
 interface PrefixRule {
-  name: string;
   pattern: RegExp;
   allowed: (labels: string[]) => boolean;
 }
 
 const prefixRules: PrefixRule[] = [
   {
-    name: "Workload cluster creation Creating",
     pattern: /^Workload cluster creation\s+Creating\s+(?:a\s+)?/iu,
     allowed: () => true,
   },
   {
-    name: "Running the Cluster API E2E tests",
     pattern: /^Running the Cluster API E2E tests\s+/iu,
     allowed: () => true,
   },
   {
-    name: "Conformance Tests",
     pattern: /^Conformance Tests\s+/iu,
     allowed: () => true,
   },
   {
-    name: "Running",
-    pattern: /^Running\s+/iu,
-    allowed: () => true,
-  },
-  {
-    name: "kubelet",
     pattern: /^kubelet\s+/iu,
     allowed: (labels) =>
       labels.includes("[DRA]") && labels.some((label) => label.startsWith("[FeatureGate:")),
@@ -76,9 +66,11 @@ export function parseTestDisplayName(canonicalName: string): TestDisplayName {
   const removedPrefixes: string[] = [];
 
   for (const rule of prefixRules) {
-    if (!rule.allowed(labels) || !rule.pattern.test(displayName)) continue;
-    displayName = displayName.replace(rule.pattern, "").trim();
-    removedPrefixes.push(rule.name);
+    if (!rule.allowed(labels)) continue;
+    const match = displayName.match(rule.pattern);
+    if (!match) continue;
+    displayName = displayName.slice(match[0].length).trim();
+    removedPrefixes.push(match[0].trim());
     break;
   }
 

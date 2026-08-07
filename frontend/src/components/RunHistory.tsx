@@ -79,7 +79,7 @@ export function RunHistory({
 
   return (
     <Box component="section" sx={{ minWidth: 0, maxWidth: "100%" }}>
-      <DetailSectionBand title={title} metadata={bandMetadata} headingLevel="h3" />
+      <DetailSectionBand title={title} metadata={bandMetadata} />
       <Box
         ref={scrollerRef}
         aria-label={title}
@@ -140,11 +140,14 @@ export function RunHistory({
                       outlineColor: isSelected ? "primary.main" : "transparent",
                       outlineOffset: 2,
                       transition: (currentTheme) =>
-                        currentTheme.transitions.create(["filter", "outline-color"], {
+                        currentTheme.transitions.create(["filter", "outline-color", "box-shadow"], {
                           duration: currentTheme.transitions.duration.shortest,
                         }),
                       "&:hover": { filter: "brightness(1.12)" },
-                      "&.Mui-focusVisible": { outlineColor: "primary.main" },
+                      "&.Mui-focusVisible": {
+                        outlineColor: "primary.main",
+                        boxShadow: "0 0 0 5px var(--mui-palette-background-default), 0 0 0 7px var(--mui-palette-text-primary)",
+                      },
                     }}
                   />
                 </Tooltip>

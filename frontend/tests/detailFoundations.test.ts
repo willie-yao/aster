@@ -123,7 +123,23 @@ const titleCases = [
     input: "[It] Workload cluster creation Creating a highly-available cluster",
     displayName: "Highly-available cluster",
     labels: ["[It]"],
-    prefixes: ["Workload cluster creation Creating"],
+    prefixes: ["Workload cluster creation Creating a"],
+    fallback: false,
+  },
+  {
+    name: "structured suite prefix capture",
+    input: "[It] Running the Cluster API E2E tests should create a cluster",
+    displayName: "Should create a cluster",
+    labels: ["[It]"],
+    prefixes: ["Running the Cluster API E2E tests"],
+    fallback: false,
+  },
+  {
+    name: "legitimate running title",
+    input: "[It] Running pods retain readiness",
+    displayName: "Running pods retain readiness",
+    labels: ["[It]"],
+    prefixes: [],
     fallback: false,
   },
   {
@@ -175,6 +191,8 @@ test("run history exposes square selected runs with date and result context", ()
     metadata: "1 failed · 1 passed",
   }));
 
+  assert.match(html, /<h2[^>]*>Run history<\/h2>/);
+  assert.doesNotMatch(html, /<h3[^>]*>Run history<\/h3>/);
   assert.match(html, /aria-label="#123 · Failed · Aug 5, 2026"/);
   assert.match(html, /aria-pressed="true"/);
   assert.match(html, /aria-label="#124 · Passed · Aug 6, 2026"/);
@@ -191,5 +209,6 @@ test("shared detail foundations follow the Overview structural language", () => 
   assert.match(history, /height: \{ xs: 44, sm: 32 \}/);
   assert.match(history, /borderRadius: "2px"/);
   assert.match(history, /outlineColor: isSelected \? "primary\.main" : "transparent"/);
+  assert.match(history, /boxShadow: "0 0 0 5px var\(--mui-palette-background-default\), 0 0 0 7px var\(--mui-palette-text-primary\)"/);
   assert.match(history, /Scroll runs ↔/);
 });
