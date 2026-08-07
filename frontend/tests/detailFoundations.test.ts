@@ -6,8 +6,9 @@ import { ThemeProvider, type Theme } from "@mui/material/styles";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createServer } from "vite";
+import { MemoryRouter } from "react-router-dom";
 import { parseTestDisplayName } from "../src/lib/detailTitles.js";
-import type { BuildResult } from "../src/types/dashboard.js";
+import type { BuildResult, TestCase } from "../src/types/dashboard.js";
 
 const vite = await createServer({
   root: process.cwd(),
@@ -29,6 +30,15 @@ const { RunHistory } = (await vite.ssrLoadModule("/src/components/RunHistory.tsx
     selectedBuildId?: string;
     onSelect: (buildId: string) => void;
     metadata?: string;
+  }) => ReturnType<typeof createElement>;
+};
+const { TestCaseTable } = (await vite.ssrLoadModule("/src/components/TestCaseTable.tsx")) as {
+  TestCaseTable: (props: {
+    testCases: TestCase[];
+    jobID?: string;
+    buildId?: string;
+    buildLogUrl?: string;
+    webUrl?: string;
   }) => ReturnType<typeof createElement>;
 };
 const { defaultTheme } = (await vite.ssrLoadModule("/src/theme/index.ts")) as {
@@ -197,6 +207,41 @@ test("run history exposes square selected runs with date and result context", ()
   assert.match(html, /aria-pressed="true"/);
   assert.match(html, /aria-label="#124 · Passed · Aug 6, 2026"/);
   assert.match(html, />Selected #123 · Failed</);
+});
+
+test("test result navigation names include status duration and source context", () => {
+  const testCase: TestCase = {
+    name: "[It] fails cluster",
+    status: "failed",
+    duration_seconds: 5,
+    failure_message: "boom",
+    failure_location_url: "https://github.com/example/repo/blob/main/test.go#L10",
+  };
+  const html = render(
+    createElement(
+      MemoryRouter,
+      { initialEntries: ["/"] },
+      createElement(TestCaseTable, {
+        testCases: [testCase],
+        jobID: "job-main",
+        buildId: "123",
+      }),
+    ),
+  );
+
+  assert.match(
+    html,
+    /aria-label="Open diagnosis for Fails cluster\. Failed\. Duration 5s"/,
+  );
+  assert.match(
+    html,
+    /aria-label="View source for Fails cluster on GitHub"/,
+  );
+  const diagnosis = html.match(
+    /<a[^>]*aria-label="Open diagnosis[^"]*"[^>]*>([\s\S]*?)<\/a>/,
+  );
+  assert.ok(diagnosis);
+  assert.doesNotMatch(diagnosis[1], /<a|<button/);
 });
 
 test("shared detail foundations follow the Overview structural language", () => {

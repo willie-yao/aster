@@ -18,13 +18,14 @@ function BriefingBody({
   details?: ReactNode;
 }) {
   return (
-    <Box sx={{ px: { xs: 1.5, sm: 2 }, py: { xs: 1.5, sm: 1.75 } }}>
+    <Box sx={{ px: { xs: 1.5, sm: 2 }, py: { xs: 1.75, sm: 2 } }}>
       <Box
         sx={{
-          maxWidth: "74ch",
+          maxWidth: "68ch",
           color: "text.primary",
-          ...overviewTypography.primaryBody,
-          fontWeight: 600,
+          fontSize: "16px",
+          lineHeight: "25px",
+          fontWeight: 550,
           overflowWrap: "anywhere",
         }}
       >
@@ -32,13 +33,13 @@ function BriefingBody({
       </Box>
       {details && (
         <>
-          <Divider sx={{ my: 1.75 }} />
+          <Divider sx={{ my: 2.25, borderColor: "divider" }} />
           <Box
             sx={{
-              maxWidth: "74ch",
+              maxWidth: "68ch",
               display: "flex",
               flexDirection: "column",
-              gap: 1.75,
+              gap: 2.25,
               overflowWrap: "anywhere",
             }}
           >

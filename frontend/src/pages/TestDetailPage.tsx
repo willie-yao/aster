@@ -750,11 +750,12 @@ export function TestDetailPage() {
               ...overviewTypography.pageHeadline,
               color: "text.primary",
               fontSize: parsedTitle.usedFallback
-                ? { xs: "20px", sm: "23px", md: "25px" }
-                : { xs: "25px", sm: overviewTypography.pageHeadline.fontSize },
+                ? { xs: "22px", sm: "26px", md: "28px" }
+                : { xs: "26px", sm: "30px" },
               lineHeight: parsedTitle.usedFallback
-                ? { xs: "27px", sm: "30px", md: "32px" }
-                : { xs: "31px", sm: overviewTypography.pageHeadline.lineHeight },
+                ? { xs: "29px", sm: "34px", md: "36px" }
+                : { xs: "33px", sm: "38px" },
+              fontWeight: 720,
               display: parsedTitle.usedFallback ? "-webkit-box" : "block",
               WebkitBoxOrient: parsedTitle.usedFallback ? "vertical" : undefined,
               WebkitLineClamp: parsedTitle.usedFallback ? { xs: 3, sm: 2 } : undefined,

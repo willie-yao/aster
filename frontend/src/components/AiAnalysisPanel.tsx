@@ -49,10 +49,14 @@ function DetailAnalysisSection({
 }) {
   return (
     <Box>
-      <Typography component="h3" color="text.secondary" sx={overviewTypography.subsectionHeading}>
+      <Typography
+        component="h3"
+        color="text.secondary"
+        sx={{ ...overviewTypography.subsectionHeading, fontSize: "14px", lineHeight: "20px" }}
+      >
         {label}
       </Typography>
-      <Box sx={{ mt: 0.5, ...overviewTypography.primaryBody }}>{children}</Box>
+      <Box sx={{ mt: 0.75, fontSize: "16px", lineHeight: "25px" }}>{children}</Box>
     </Box>
   );
 }
@@ -453,7 +457,7 @@ export function AiAnalysisPanel({
   ) : null;
 
   const content = (
-    <Stack spacing={detailAppearance ? 1.75 : 2}>
+    <Stack spacing={detailAppearance ? 2.25 : 2}>
       {statusRow}
       {correctionPanel}
       {rootCause}

@@ -94,8 +94,8 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
       <Box sx={{ minWidth: 0 }}>
         <Box
           sx={{
-            display: { xs: "none", sm: "grid" },
-            gridTemplateColumns: "110px minmax(0, 1fr) 90px 176px",
+            display: { xs: "none", md: "grid" },
+            gridTemplateColumns: "110px minmax(0, 1fr) 90px 110px 90px",
             alignItems: "center",
             minHeight: 42,
             borderBottom: "1px solid",
@@ -113,6 +113,9 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
             Duration
           </Typography>
           <Typography component="div" color="text.secondary" sx={{ px: 1.5, ...overviewTypography.tableHeading }}>
+            Diagnosis
+          </Typography>
+          <Typography component="div" color="text.secondary" sx={{ px: 1, ...overviewTypography.tableHeading }}>
             Evidence
           </Typography>
         </Box>
@@ -122,6 +125,8 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
           const hasEvidence = hasInlineTestEvidence(tc);
           const stripeBg = idx % 2 === 0 ? "surface.container" : "surface.containerHigh";
           const displayName = parseTestDisplayName(tc.name).displayName;
+          const status = testStatusPresentation(tc.status);
+          const duration = formatDuration(tc.duration_seconds);
           const diagnosisPath = jobID
             ? buildId
               ? testRunPath(jobID, tc.name, buildId)
@@ -140,25 +145,54 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                 sx={{
                   display: "grid",
                   gridTemplateColumns: {
-                    xs: "minmax(0, 1fr) auto",
-                    sm: "110px minmax(0, 1fr) 90px 176px",
+                    xs: "minmax(0, 1fr)",
+                    md: "110px minmax(0, 1fr) 90px 110px 90px",
                   },
-                  gridTemplateAreas: {
-                    xs: '"name action" "status duration"',
-                    sm: '"status name duration action"',
-                  },
-                  alignItems: "center",
+                  alignItems: "stretch",
                   minHeight: 54,
                   bgcolor: stripeBg,
-                  borderBottom: "1px solid",
-                  borderColor: "divider",
-                  transition: (theme) => theme.transitions.create("background-color"),
-                  "&:hover": { bgcolor: "surface.containerHighest" },
+                  borderBottomWidth: tc.ai_summary ? 0 : "1px",
+                  borderBottomStyle: "solid",
+                  borderBottomColor: "divider",
                 }}
               >
-                {(() => {
-                  const status = testStatusPresentation(tc.status);
-                  return (
+                {diagnosisPath ? (
+                  <Link
+                    component={RouterLink}
+                    to={diagnosisPath}
+                    underline="none"
+                    aria-label={`Open diagnosis for ${displayName}. ${status.label}. Duration ${duration}`}
+                    sx={{
+                      gridColumn: { xs: "1", md: "1 / 5" },
+                      display: "grid",
+                      gridTemplateColumns: {
+                        xs: "minmax(0, 1fr) auto",
+                        md: "110px minmax(0, 1fr) 90px 110px",
+                      },
+                      gridTemplateAreas: {
+                        xs: '"name diagnosis" "status duration"',
+                        md: '"status name duration diagnosis"',
+                      },
+                      minWidth: 0,
+                      minHeight: 54,
+                      alignItems: "center",
+                      color: "inherit",
+                      cursor: "pointer",
+                      transition: (theme) =>
+                        theme.transitions.create("background-color", {
+                          duration: theme.transitions.duration.shortest,
+                        }),
+                      "&:hover": {
+                        bgcolor: "surface.containerHighest",
+                        textDecoration: "none",
+                      },
+                      "&.Mui-focusVisible": {
+                        outline: "2px solid",
+                        outlineColor: "primary.main",
+                        outlineOffset: -2,
+                      },
+                    }}
+                  >
                     <Box
                       sx={{
                         gridArea: "status",
@@ -188,103 +222,110 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                         {status.label}
                       </Typography>
                     </Box>
-                  );
-                })()}
+                    <Box
+                      sx={{
+                        gridArea: "name",
+                        minWidth: 0,
+                        px: 1.5,
+                        py: 1,
+                        color: "text.primary",
+                        overflowWrap: "anywhere",
+                      }}
+                    >
+                      <Typography
+                        component="span"
+                        title={tc.name}
+                        sx={{ fontSize: "14px", lineHeight: "20px", fontWeight: 650 }}
+                      >
+                        {displayName}
+                      </Typography>
+                      {tc.source === "build" && (
+                        <Chip
+                          size="small"
+                          label="Build failure"
+                          sx={{
+                            ml: 1,
+                            height: 20,
+                            borderRadius: "4px",
+                            fontSize: "0.625rem",
+                            verticalAlign: "middle",
+                          }}
+                        />
+                      )}
+                    </Box>
+                    <Typography
+                      component="div"
+                      color="text.secondary"
+                      sx={{
+                        gridArea: "duration",
+                        px: 1.5,
+                        py: { xs: 0.5, sm: 1 },
+                        textAlign: "right",
+                        ...overviewTypography.data,
+                      }}
+                    >
+                      {duration}
+                    </Typography>
+                    <Typography
+                      component="span"
+                      color="primary.main"
+                      sx={{
+                        gridArea: "diagnosis",
+                        minHeight: 44,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: { xs: "flex-end", md: "flex-start" },
+                        px: { xs: 0.75, sm: 1.5 },
+                        fontSize: "13px",
+                        fontWeight: 700,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      Diagnosis →
+                    </Typography>
+                  </Link>
+                ) : (
+                  <Box sx={{ gridColumn: { xs: "1", md: "1 / 5" }, minHeight: 54 }} />
+                )}
                 <Box
                   sx={{
-                    gridArea: "name",
-                    minWidth: 0,
-                    px: 1.5,
-                    py: 1,
-                    color: "text.primary",
-                    overflowWrap: "anywhere",
+                    gridColumn: { xs: "1", md: "5" },
+                    gridRow: { xs: "2", md: "1" },
+                    minHeight: 44,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: { xs: "flex-end", md: "center" },
+                    gap: 0.25,
+                    px: 0.5,
+                    borderTopWidth: { xs: "1px", md: 0 },
+                    borderTopStyle: "solid",
+                    borderTopColor: "divider",
                   }}
                 >
-                  <Typography
-                    component="span"
-                    title={tc.name}
-                    sx={{ fontSize: "14px", lineHeight: "20px", fontWeight: 650 }}
-                  >
-                    {displayName}
-                  </Typography>
                   {tc.failure_location_url && (
                     <Link
                       href={tc.failure_location_url}
                       target="_blank"
                       rel="noopener noreferrer"
                       title="View source on GitHub"
-                      aria-label="View source on GitHub"
+                      aria-label={`View source for ${displayName} on GitHub`}
                       sx={{
-                        ml: 1,
-                        display: "inline-flex",
-                        color: "primary.main",
-                        verticalAlign: "text-bottom",
-                      }}
-                    >
-                      <OpenInNew sx={{ fontSize: 14 }} />
-                    </Link>
-                  )}
-                  {tc.source === "build" && (
-                    <Chip
-                      size="small"
-                      label="Build failure"
-                      sx={{
-                        ml: 1,
-                        height: 20,
-                        borderRadius: "4px",
-                        fontSize: "0.625rem",
-                        verticalAlign: "middle",
-                      }}
-                    />
-                  )}
-                </Box>
-                <Typography
-                  component="div"
-                  color="text.secondary"
-                  sx={{
-                    gridArea: "duration",
-                    px: 1.5,
-                    py: { xs: 0.5, sm: 1 },
-                    textAlign: "right",
-                    ...overviewTypography.data,
-                  }}
-                >
-                  {formatDuration(tc.duration_seconds)}
-                </Typography>
-                <Box
-                  sx={{
-                    gridArea: "action",
-                    minHeight: 44,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "flex-end",
-                    gap: 0.5,
-                    pr: 0.5,
-                  }}
-                >
-                  {diagnosisPath && (
-                    <Link
-                      component={RouterLink}
-                      to={diagnosisPath}
-                      underline="none"
-                      aria-label={`Open diagnosis for ${displayName}`}
-                      sx={{
-                        minHeight: 44,
+                        width: 44,
+                        height: 44,
                         display: "inline-flex",
                         alignItems: "center",
-                        px: 0.75,
-                        fontSize: "13px",
-                        fontWeight: 700,
-                        whiteSpace: "nowrap",
-                        "&:hover": { textDecoration: "underline" },
+                        justifyContent: "center",
+                        color: "primary.main",
+                        borderRadius: "4px",
+                        "&:hover": { bgcolor: "surface.containerHighest" },
                         "&:focus-visible": {
                           outline: "2px solid",
                           outlineColor: "primary.main",
-                          outlineOffset: 2,
+                          outlineOffset: -2,
                         },
                       }}
                     >
-                      Diagnosis →
+                      <OpenInNew sx={{ fontSize: 15 }} />
                     </Link>
                   )}
                   {hasEvidence && (
@@ -303,7 +344,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                         color: "text.secondary",
                         fontSize: "12px",
                         fontWeight: 650,
-                        "&:hover": { bgcolor: "surface.containerHigh" },
+                        "&:hover": { bgcolor: "surface.containerHighest" },
                         "&.Mui-focusVisible": {
                           outline: "2px solid",
                           outlineColor: "primary.main",
@@ -343,12 +384,20 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                 >
                   <AutoAwesome sx={{ fontSize: 16, flexShrink: 0, color: "primary.main" }} />
                   <Typography
-                    variant="caption"
-                    sx={{ color: tc.ai_summary.is_transient ? "text.secondary" : "warning.main" }}
+                    component="div"
+                    sx={{
+                      color: "text.primary",
+                      fontSize: "13.5px",
+                      lineHeight: "20px",
+                      fontWeight: 450,
+                    }}
                   >
                     <RichText text={tc.ai_summary.summary} fileCtx={aiFileCtx} />
                     {tc.ai_summary.is_transient && (
-                      <Box component="span" sx={{ ml: 0.5, color: "text.disabled" }}>
+                      <Box
+                        component="span"
+                        sx={{ ml: 0.75, color: "text.secondary", fontSize: "13px" }}
+                      >
                         · Likely transient
                       </Box>
                     )}
