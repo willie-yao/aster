@@ -2723,21 +2723,17 @@ func (s *agentState) recordAnalysisEvidenceRevisions(rawPath string, before map[
 	if err != nil || path == "" || s.analysisEvidence[path] == nil {
 		return
 	}
-	revisionPath := NormalizeArtifactCitation(path)
-	if revisionPath == "" {
-		return
-	}
 	if s.analysisEvidenceRevision == nil {
 		s.analysisEvidenceRevision = map[string]map[int]int{}
 	}
-	if s.analysisEvidenceRevision[revisionPath] == nil {
-		s.analysisEvidenceRevision[revisionPath] = map[int]int{}
+	if s.analysisEvidenceRevision[path] == nil {
+		s.analysisEvidenceRevision[path] = map[int]int{}
 	}
 	for line, text := range s.analysisEvidence[path].Lines {
 		if previous, ok := before[line]; ok && previous == text {
 			continue
 		}
-		s.analysisEvidenceRevision[revisionPath][line] = s.evidenceRevision
+		s.analysisEvidenceRevision[path][line] = s.evidenceRevision
 	}
 }
 

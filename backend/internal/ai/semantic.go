@@ -413,7 +413,7 @@ type semanticLineCandidate struct {
 }
 
 var (
-	semanticSuccessRE        = regexp.MustCompile(`(?i)\b(success|succeeded|successful|ready|completed|created|connected|healthy|available|found|passed|registered|running|reconciled|synced|synchronized)\b`)
+	semanticSuccessRE        = regexp.MustCompile(`(?i)\b(success|succeeded|successful|ready|completed|created|connected|healthy|available|found|passed|registered|running|reconciled|recovered|recovery|synced|synchronized)\b`)
 	semanticTimestampRE      = regexp.MustCompile(`\b(?:\d{4}-\d{2}-\d{2}[T ][0-2]\d:[0-5]\d:[0-5]\d(?:\.\d+)?Z?|[0-2]\d:[0-5]\d:[0-5](?:\.\d+)?)\b`)
 	semanticTokenRE          = regexp.MustCompile(`[A-Za-z][A-Za-z0-9]*(?:[._/:~-][A-Za-z0-9]+)*|[1-5][0-9]{2}`)
 	semanticWordRE           = regexp.MustCompile(`[a-z0-9]+`)
@@ -708,7 +708,7 @@ func supportedCausalFacts(parsed analysisResponse, evidence map[string]*analysis
 	}
 	var out []supportedCausalFact
 	seen := map[string]bool{}
-	for _, citation := range validatedSemanticCitations(parsed, evidence) {
+	for _, citation := range validatedFactCitations(parsed, evidence) {
 		quoteIdentity := semanticSpecificTokens(citation.Quote)
 		quoteStatuses := semanticStatusAnchors(citation.Quote)
 		identity := semanticTokenIntersection(rootIdentity, quoteIdentity)
@@ -736,31 +736,116 @@ func supportedCausalFacts(parsed analysisResponse, evidence map[string]*analysis
 	return out
 }
 
+func validatedFactCitations(parsed analysisResponse, evidence map[string]*analysisChatEvidence) []models.EvidenceCitation {
+	out := make([]models.EvidenceCitation, 0, min(len(parsed.EvidenceCitations), 20))
+	for _, citation := range parsed.EvidenceCitations {
+		if evidenceCitationIssue(citation, evidence) == "" {
+			out = append(out, citation)
+		}
+	}
+	return out
+}
+
 func semanticCitationFactAcquisitionRevision(citation models.EvidenceCitation, evidence map[string]*analysisChatEvidence, revisions map[string]map[int]int, identity, statuses map[string]int) int {
 	evidencePath, err := artifacts.SafePath(strings.TrimSpace(citation.Path))
 	if err != nil || evidencePath == "" || evidence[evidencePath] == nil {
 		return 0
 	}
-	revisionPath := NormalizeArtifactCitation(evidencePath)
-	if revisions[revisionPath] == nil {
+	if revisions[evidencePath] == nil {
 		return 0
 	}
-	revision := 0
+	quoteLines := semanticCitationQuoteLines(citation, evidence[evidencePath])
+	if len(quoteLines) == 0 {
+		return 0
+	}
+	type contribution struct {
+		line     int
+		revision int
+		identity map[string]int
+		statuses map[string]int
+	}
+	var contributions []contribution
 	for line := citation.LineStart; line <= citation.LineEnd; line++ {
+		if !quoteLines[line] {
+			continue
+		}
 		text, ok := evidence[evidencePath].Lines[line]
 		if !ok {
 			continue
 		}
-		lineIdentity := semanticTokenIntersection(identity, semanticSpecificTokens(text))
-		lineStatuses := semanticTokenIntersection(statuses, semanticStatusAnchors(text))
-		if !semanticFactHasStrongIdentity(lineIdentity) || !semanticFactHasSpecificStatus(lineStatuses) {
+		if semanticSuccessRE.MatchString(text) {
 			continue
 		}
-		if revisions[revisionPath][line] > revision {
-			revision = revisions[revisionPath][line]
+		lineIdentity := semanticTokenIntersection(identity, semanticSpecificTokens(text))
+		lineStatuses := semanticTokenIntersection(statuses, semanticStatusAnchors(text))
+		if len(lineIdentity) == 0 && len(lineStatuses) == 0 {
+			continue
+		}
+		contributions = append(contributions, contribution{
+			line: line, revision: revisions[evidencePath][line], identity: lineIdentity, statuses: lineStatuses,
+		})
+	}
+	sort.Slice(contributions, func(i, j int) bool {
+		if contributions[i].revision != contributions[j].revision {
+			return contributions[i].revision < contributions[j].revision
+		}
+		return contributions[i].line < contributions[j].line
+	})
+	accumulatedIdentity := map[string]int{}
+	accumulatedStatuses := map[string]int{}
+	for i := 0; i < len(contributions); {
+		revision := contributions[i].revision
+		for i < len(contributions) && contributions[i].revision == revision {
+			mergeSemanticTokenWeights(accumulatedIdentity, contributions[i].identity)
+			mergeSemanticTokenWeights(accumulatedStatuses, contributions[i].statuses)
+			i++
+		}
+		if semanticFactHasStrongIdentity(accumulatedIdentity) && semanticFactHasSpecificStatus(accumulatedStatuses) {
+			return revision
 		}
 	}
-	return revision
+	return 0
+}
+
+func semanticCitationQuoteLines(citation models.EvidenceCitation, evidence *analysisChatEvidence) map[int]bool {
+	if evidence == nil {
+		return nil
+	}
+	quote := normalizeCitationText(citation.Quote)
+	if quote == "" {
+		return nil
+	}
+	for width := 1; width <= citation.LineEnd-citation.LineStart+1; width++ {
+		for start := citation.LineStart; start+width-1 <= citation.LineEnd; start++ {
+			parts := make([]string, 0, width)
+			valid := true
+			for line := start; line < start+width; line++ {
+				text, ok := evidence.Lines[line]
+				if !ok {
+					valid = false
+					break
+				}
+				parts = append(parts, text)
+			}
+			if !valid || !strings.Contains(normalizeCitationText(strings.Join(parts, "\n")), quote) {
+				continue
+			}
+			out := make(map[int]bool, width)
+			for line := start; line < start+width; line++ {
+				out[line] = true
+			}
+			return out
+		}
+	}
+	return nil
+}
+
+func mergeSemanticTokenWeights(dst, src map[string]int) {
+	for token, weight := range src {
+		if weight > dst[token] {
+			dst[token] = weight
+		}
+	}
 }
 
 func semanticFactHasStrongIdentity(identity map[string]int) bool {
