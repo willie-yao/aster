@@ -125,6 +125,8 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
           const hasEvidence = hasInlineTestEvidence(tc);
           const stripeBg = idx % 2 === 0 ? "surface.container" : "surface.containerHigh";
           const displayName = parseTestDisplayName(tc.name).displayName;
+          const status = testStatusPresentation(tc.status);
+          const duration = formatDuration(tc.duration_seconds);
           const diagnosisPath = jobID
             ? buildId
               ? testRunPath(jobID, tc.name, buildId)
@@ -159,7 +161,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                     component={RouterLink}
                     to={diagnosisPath}
                     underline="none"
-                    aria-label={`Open diagnosis for ${displayName}`}
+                    aria-label={`Open diagnosis for ${displayName}. ${status.label}. Duration ${duration}`}
                     sx={{
                       gridColumn: { xs: "1", md: "1 / 5" },
                       display: "grid",
@@ -191,40 +193,35 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                       },
                     }}
                   >
-                    {(() => {
-                      const status = testStatusPresentation(tc.status);
-                      return (
-                        <Box
-                          sx={{
-                            gridArea: "status",
-                            minWidth: 0,
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: 0.75,
-                            px: 1.5,
-                            py: { xs: 0.5, sm: 1 },
-                            color: status.color,
-                          }}
-                        >
-                          <Box
-                            component="span"
-                            sx={{
-                              width: 7,
-                              height: 7,
-                              borderRadius: "2px",
-                              bgcolor: "currentColor",
-                              flexShrink: 0,
-                            }}
-                          />
-                          <Typography
-                            component="span"
-                            sx={{ fontSize: "13px", lineHeight: "18px", fontWeight: 700 }}
-                          >
-                            {status.label}
-                          </Typography>
-                        </Box>
-                      );
-                    })()}
+                    <Box
+                      sx={{
+                        gridArea: "status",
+                        minWidth: 0,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 0.75,
+                        px: 1.5,
+                        py: { xs: 0.5, sm: 1 },
+                        color: status.color,
+                      }}
+                    >
+                      <Box
+                        component="span"
+                        sx={{
+                          width: 7,
+                          height: 7,
+                          borderRadius: "2px",
+                          bgcolor: "currentColor",
+                          flexShrink: 0,
+                        }}
+                      />
+                      <Typography
+                        component="span"
+                        sx={{ fontSize: "13px", lineHeight: "18px", fontWeight: 700 }}
+                      >
+                        {status.label}
+                      </Typography>
+                    </Box>
                     <Box
                       sx={{
                         gridArea: "name",
@@ -267,7 +264,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                         ...overviewTypography.data,
                       }}
                     >
-                      {formatDuration(tc.duration_seconds)}
+                      {duration}
                     </Typography>
                     <Typography
                       component="span"
@@ -311,7 +308,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                       target="_blank"
                       rel="noopener noreferrer"
                       title="View source on GitHub"
-                      aria-label="View source on GitHub"
+                      aria-label={`View source for ${displayName} on GitHub`}
                       sx={{
                         width: 44,
                         height: 44,
