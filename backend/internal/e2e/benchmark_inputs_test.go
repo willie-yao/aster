@@ -20,12 +20,15 @@ type benchmarkRunIdentity struct {
 	Arm                    string
 	EngineCommit           string
 	BaselineConsumerCommit string
+	BaselinePromptSHA256   string
 	FixtureSHA256          string
 	ProjectSHA256          string
 	EffectivePromptSHA256  string
 	SkillSetHash           string
 	EffectiveInputSHA256   string
 	APIMode                string
+	ProviderPath           string
+	TransportID            string
 }
 
 type benchmarkInputs struct {
@@ -36,7 +39,7 @@ type benchmarkInputs struct {
 	identity        benchmarkRunIdentity
 }
 
-func loadBenchmarkInputs(t *testing.T, cases []benchCase, apiMode string) benchmarkInputs {
+func loadBenchmarkInputs(t *testing.T, cases []benchCase, apiMode, model string) benchmarkInputs {
 	t.Helper()
 	variantDir := strings.TrimSpace(os.Getenv("BENCH_VARIANT_DIR"))
 	arm, err := benchmarkArm(variantDir != "")
@@ -44,13 +47,24 @@ func loadBenchmarkInputs(t *testing.T, cases []benchCase, apiMode string) benchm
 		t.Fatal(err)
 	}
 
+	resultsEnabled := strings.TrimSpace(os.Getenv("BENCH_RESULTS_JSONL")) != ""
+	providerPath := strings.TrimSpace(os.Getenv("BENCH_PROVIDER_PATH"))
+	transportID := strings.TrimSpace(os.Getenv("BENCH_TRANSPORT_ID"))
+	if resultsEnabled && (providerPath == "" || transportID == "") {
+		t.Fatal("BENCH_PROVIDER_PATH and BENCH_TRANSPORT_ID are required when BENCH_RESULTS_JSONL is set")
+	}
+	if err := validateBenchmarkProviderPath(providerPath, model); err != nil {
+		t.Fatal(err)
+	}
 	out := benchmarkInputs{
 		systemPrompt: ComposeBenchPrompt(),
 		agentic:      defaultBenchAgentic(),
 		identity: benchmarkRunIdentity{
 			Arm:          arm,
-			EngineCommit: benchmarkEngineCommit(t),
+			EngineCommit: benchmarkEngineCommit(t, resultsEnabled),
 			APIMode:      apiMode,
+			ProviderPath: providerPath,
+			TransportID:  transportID,
 		},
 	}
 	skillProjectDir := t.TempDir()
@@ -71,6 +85,7 @@ func loadBenchmarkInputs(t *testing.T, cases []benchCase, apiMode string) benchm
 				t.Fatalf("BENCH_PROJECT_DIR=%s: %v", baseDir, err)
 			}
 			out.identity.BaselineConsumerCommit = cases[0].consumerCommit
+			out.identity.BaselinePromptSHA256 = cases[0].promptSHA256
 			out.identity.FixtureSHA256 = cases[0].fixtureSHA256
 		}
 		effectiveDir := baseDir
@@ -128,6 +143,15 @@ func loadBenchmarkInputs(t *testing.T, cases []benchCase, apiMode string) benchm
 	return out
 }
 
+func validateBenchmarkProviderPath(providerPath, model string) error {
+	providerPath = strings.TrimSpace(providerPath)
+	model = strings.TrimSpace(model)
+	if providerPath != "" && !strings.HasSuffix(providerPath, "/"+model) {
+		return fmt.Errorf("BENCH_PROVIDER_PATH %q does not match AI_MODEL %q", providerPath, model)
+	}
+	return nil
+}
+
 func validateBenchmarkRunIdentity(identity benchmarkRunIdentity) error {
 	if !benchmarkCaseIDRE.MatchString(identity.Arm) {
 		return fmt.Errorf("benchmark arm is invalid")
@@ -137,6 +161,7 @@ func validateBenchmarkRunIdentity(identity benchmarkRunIdentity) error {
 	}
 	for name, value := range map[string]string{
 		"fixture SHA-256":          identity.FixtureSHA256,
+		"baseline prompt SHA-256":  identity.BaselinePromptSHA256,
 		"project SHA-256":          identity.ProjectSHA256,
 		"effective prompt SHA-256": identity.EffectivePromptSHA256,
 		"skill-set hash":           identity.SkillSetHash,
@@ -155,6 +180,12 @@ func validateBenchmarkRunIdentity(identity benchmarkRunIdentity) error {
 	if identity.APIMode != ai.APIChatCompletions && identity.APIMode != ai.APIResponses {
 		return fmt.Errorf("benchmark API mode is invalid")
 	}
+	if identity.ProviderPath != "" && (len(identity.ProviderPath) > 160 || strings.ContainsAny(identity.ProviderPath, " \t\r\n")) {
+		return fmt.Errorf("benchmark provider path is invalid")
+	}
+	if identity.TransportID != "" && (len(identity.TransportID) > 80 || strings.ContainsAny(identity.TransportID, " \t\r\n")) {
+		return fmt.Errorf("benchmark transport id is invalid")
+	}
 	return nil
 }
 
@@ -168,6 +199,12 @@ func benchmarkArm(variant bool) (string, error) {
 	}
 	if !benchmarkCaseIDRE.MatchString(arm) {
 		return "", fmt.Errorf("BENCH_ARM must match %s", benchmarkCaseIDRE.String())
+	}
+	if variant && arm == "baseline" {
+		return "", fmt.Errorf("BENCH_ARM=baseline is reserved for runs without BENCH_VARIANT_DIR")
+	}
+	if !variant && arm != "baseline" {
+		return "", fmt.Errorf("non-baseline BENCH_ARM requires BENCH_VARIANT_DIR")
 	}
 	return arm, nil
 }
@@ -190,14 +227,18 @@ func validateBenchmarkVariantDir(baseDir, variantDir string) error {
 func benchmarkEffectiveInputSHA256(identity benchmarkRunIdentity, agentic project.Agentic, cacheGeneration string) string {
 	data, err := json.Marshal(struct {
 		ProjectSHA256         string          `json:"project_sha256,omitempty"`
+		BaselinePromptSHA256  string          `json:"baseline_prompt_sha256,omitempty"`
 		EffectivePromptSHA256 string          `json:"effective_prompt_sha256"`
 		SkillSetHash          string          `json:"skill_set_hash"`
 		APIMode               string          `json:"api_mode"`
+		ProviderPath          string          `json:"provider_path,omitempty"`
+		TransportID           string          `json:"transport_id,omitempty"`
 		CacheGeneration       string          `json:"cache_generation,omitempty"`
 		Agentic               project.Agentic `json:"agentic"`
 	}{
-		ProjectSHA256: identity.ProjectSHA256, EffectivePromptSHA256: identity.EffectivePromptSHA256,
-		SkillSetHash: identity.SkillSetHash, APIMode: identity.APIMode,
+		ProjectSHA256: identity.ProjectSHA256, BaselinePromptSHA256: identity.BaselinePromptSHA256,
+		EffectivePromptSHA256: identity.EffectivePromptSHA256, SkillSetHash: identity.SkillSetHash,
+		APIMode: identity.APIMode, ProviderPath: identity.ProviderPath, TransportID: identity.TransportID,
 		CacheGeneration: cacheGeneration, Agentic: agentic,
 	})
 	if err != nil {
@@ -206,8 +247,17 @@ func benchmarkEffectiveInputSHA256(identity benchmarkRunIdentity, agentic projec
 	return sha256Hex(data)
 }
 
-func benchmarkEngineCommit(t *testing.T) string {
+func benchmarkEngineCommit(t *testing.T, requireClean bool) string {
 	t.Helper()
+	if requireClean {
+		status, err := exec.Command("git", "status", "--porcelain", "--untracked-files=all").Output()
+		if err != nil {
+			t.Fatalf("inspect benchmark engine worktree: %v", err)
+		}
+		if err := validateBenchmarkWorktreeStatus(status); err != nil {
+			t.Fatal(err)
+		}
+	}
 	output, err := exec.Command("git", "rev-parse", "HEAD").Output()
 	if err != nil {
 		t.Fatalf("resolve benchmark engine commit: %v", err)
@@ -217,6 +267,13 @@ func benchmarkEngineCommit(t *testing.T) string {
 		t.Fatalf("benchmark engine commit is invalid: %q", commit)
 	}
 	return commit
+}
+
+func validateBenchmarkWorktreeStatus(status []byte) error {
+	if strings.TrimSpace(string(status)) != "" {
+		return fmt.Errorf("BENCH_RESULTS_JSONL requires a clean engine worktree")
+	}
+	return nil
 }
 
 func sha256Hex(data []byte) string {
@@ -322,7 +379,7 @@ func TestLoadBenchmarkInputsDoesNotAlterBaselineAnalysisInputs(t *testing.T) {
 	t.Setenv("BENCH_VARIANT_DIR", "")
 	t.Setenv("BENCH_ARM", "")
 
-	got := loadBenchmarkInputs(t, []benchCase{{}}, ai.APIChatCompletions)
+	got := loadBenchmarkInputs(t, []benchCase{{}}, ai.APIChatCompletions, "model")
 	cfg, prompt, err := project.LoadDir(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -359,7 +416,7 @@ func TestLoadBenchmarkInputsAppliesOnlyPromptAndSkillVariant(t *testing.T) {
 	t.Setenv("BENCH_VARIANT_DIR", variant)
 	t.Setenv("BENCH_ARM", "proposed-recipes")
 
-	got := loadBenchmarkInputs(t, []benchCase{{fixtureSHA256: strings.Repeat("a", 64)}}, ai.APIChatCompletions)
+	got := loadBenchmarkInputs(t, []benchCase{{fixtureSHA256: strings.Repeat("a", 64)}}, ai.APIChatCompletions, "model")
 	if got.identity.Arm != "proposed-recipes" || got.identity.ProjectSHA256 == "" || got.identity.EffectivePromptSHA256 == "" || got.identity.SkillSetHash == "" || got.identity.EffectiveInputSHA256 == "" {
 		t.Fatalf("variant identity is incomplete: %+v", got.identity)
 	}
@@ -382,12 +439,41 @@ func TestBenchmarkCacheDirIsolatesArmsAndInputs(t *testing.T) {
 	}
 }
 
+func TestValidateBenchmarkProviderPath(t *testing.T) {
+	if err := validateBenchmarkProviderPath("github-copilot/claude-sonnet-4.6", "claude-sonnet-4.6"); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateBenchmarkProviderPath("github-copilot/claude-sonnet-4.6", "different-model"); err == nil {
+		t.Fatal("mismatched provider and model were accepted")
+	}
+}
+
+func TestValidateBenchmarkWorktreeStatus(t *testing.T) {
+	if err := validateBenchmarkWorktreeStatus(nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateBenchmarkWorktreeStatus([]byte(" M file.go\n?? new.go\n")); err == nil {
+		t.Fatal("dirty worktree was accepted")
+	}
+}
+
+func TestBenchmarkArmRejectsVariantAsBaseline(t *testing.T) {
+	t.Setenv("BENCH_ARM", "baseline")
+	if _, err := benchmarkArm(true); err == nil {
+		t.Fatal("variant was allowed to identify as baseline")
+	}
+	t.Setenv("BENCH_ARM", "variant-a")
+	if _, err := benchmarkArm(false); err == nil {
+		t.Fatal("non-baseline arm without variant inputs was accepted")
+	}
+}
+
 func TestValidateBenchmarkRunIdentity(t *testing.T) {
 	valid := benchmarkRunIdentity{
 		Arm: "baseline", EngineCommit: strings.Repeat("a", 40), FixtureSHA256: strings.Repeat("b", 64),
-		BaselineConsumerCommit: strings.Repeat("c", 40), ProjectSHA256: strings.Repeat("d", 64),
-		EffectivePromptSHA256: strings.Repeat("e", 64), SkillSetHash: strings.Repeat("f", 64),
-		EffectiveInputSHA256: strings.Repeat("1", 64), APIMode: ai.APIChatCompletions,
+		BaselineConsumerCommit: strings.Repeat("c", 40), BaselinePromptSHA256: strings.Repeat("2", 64),
+		ProjectSHA256: strings.Repeat("d", 64), EffectivePromptSHA256: strings.Repeat("e", 64), SkillSetHash: strings.Repeat("f", 64),
+		EffectiveInputSHA256: strings.Repeat("1", 64), APIMode: ai.APIChatCompletions, ProviderPath: "github-copilot/claude-sonnet-4.6", TransportID: "copilot-structural-proxy-v1",
 	}
 	if err := validateBenchmarkRunIdentity(valid); err != nil {
 		t.Fatal(err)
@@ -396,5 +482,10 @@ func TestValidateBenchmarkRunIdentity(t *testing.T) {
 	invalid.EffectiveInputSHA256 = "short"
 	if err := validateBenchmarkRunIdentity(invalid); err == nil {
 		t.Fatal("invalid input identity was accepted")
+	}
+	invalid = valid
+	invalid.ProviderPath = "provider path"
+	if err := validateBenchmarkRunIdentity(invalid); err == nil {
+		t.Fatal("invalid provider path was accepted")
 	}
 }

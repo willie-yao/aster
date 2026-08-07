@@ -233,3 +233,94 @@ plus the root-cause signals a correct analysis should contain.
   finds it by reading the logs. Persistent (7+ consecutive builds); the real fix
   is partly upstream in cluster-api's clusterctl upgrade sequencing. This is the
   achievable case: a strong analysis scores full marks.
+
+## Agent analysis shadow comparison
+
+`TestAgentAnalysisShadowBenchmark` is a separate opt-in benchmark for the
+private Orka OpenCode shadow added by PRs 327, 329, and 332. It reuses the same
+pinned artifact fixtures, source SHAs, consumer skills, signal scorer, and human
+rubric as `TestAIBenchmark`.
+
+The live comparison requires a disposable kind cluster with an Orka build that
+contains the OpenCode runtime. The exact source used for the first evaluation is:
+
+```text
+Orka ref: 450086966d93f32a8aeb608fd818ab00a155dad9
+Provider path: github-copilot/claude-sonnet-4.6
+```
+
+Configure one structural Copilot proxy so the in-process benchmark reaches it
+at `127.0.0.1` and the Orka Agent reaches the same process through
+`host.docker.internal`. The Agent must use `runtime.type: opencode`, declare
+model `claude-sonnet-4.6`, disable Bash, expose exactly `Read`, `Glob`, `Grep`,
+and `Write`, and carry annotations
+`prow-ai-dashboard/benchmark-agent-version: v1` and
+`prow-ai-dashboard/benchmark-orka-commit: 450086966d93f32a8aeb608fd818ab00a155dad9`.
+Its Secret must contain exactly
+`OPENAI_API_KEY` and `OPENAI_BASE_URL`. Never print either value.
+
+The benchmark refuses every Kubernetes context except the disposable
+`kind-prow-ai-shadow-bench` cluster. Before creating a Task, it verifies the kind
+cluster exists and that the selected context has the same API server and CA identity
+as `kind get kubeconfig --name prow-ai-shadow-bench`.
+
+Run the in-process side first from `backend/`:
+
+```bash
+RUN_AI_BENCHMARK=1 \
+AI_API=chat_completions \
+AI_ENDPOINT=http://127.0.0.1:18083/chat/completions \
+AI_MODEL=claude-sonnet-4.6 \
+AI_TOKEN=benchmark \
+BENCH_MODEL_LABEL=copilot-sonnet-4-6 \
+BENCH_PROVIDER_PATH=github-copilot/claude-sonnet-4.6 \
+BENCH_TRANSPORT_ID=copilot-structural-proxy-v1 \
+BENCH_MANIFEST="$PWD/internal/e2e/testdata/benchmarks/cross-project-eval.json" \
+BENCH_CASE=kueue-was-podgroup-api-mismatch \
+BENCH_PROJECT_DIR=/private/bench/kueue-consumer \
+BENCH_REPETITIONS=1 \
+BENCH_RESULTS_JSONL=/private/bench/inprocess.jsonl \
+go test ./internal/e2e -run TestAIBenchmark -v -timeout 60m
+```
+
+Run the Orka OpenCode side against the same proxy, manifest, consumer, and case.
+`ORKA_API_TOKEN_FILE` must point to a private file containing a short-lived
+ServiceAccount token authorized only to read Task results in the disposable cluster.
+
+```bash
+RUN_AGENT_ANALYSIS_SHADOW_BENCHMARK=1 \
+AI_MODEL=claude-sonnet-4.6 \
+BENCH_MODEL_LABEL=copilot-sonnet-4-6 \
+BENCH_PROVIDER_PATH=github-copilot/claude-sonnet-4.6 \
+BENCH_TRANSPORT_ID=copilot-structural-proxy-v1 \
+BENCH_MANIFEST="$PWD/internal/e2e/testdata/benchmarks/cross-project-eval.json" \
+BENCH_CASE=kueue-was-podgroup-api-mismatch \
+BENCH_PROJECT_DIR=/private/bench/kueue-consumer \
+BENCH_REPETITIONS=1 \
+ORKA_API_TOKEN_FILE=/private/bench/orka-result-reader.token \
+SHADOW_BENCH_ORKA_COMMIT=450086966d93f32a8aeb608fd818ab00a155dad9 \
+SHADOW_BENCH_KUBE_CONTEXT=kind-prow-ai-shadow-bench \
+SHADOW_BENCH_ORKA_API=http://127.0.0.1:18082 \
+SHADOW_BENCH_NAMESPACE=orka-system \
+SHADOW_BENCH_AGENT_REF=analysis-agent-v1 \
+SHADOW_BENCH_AGENT_VERSION=v1 \
+SHADOW_BENCH_AGENT_BASE_URL=http://host.docker.internal:18083 \
+SHADOW_BENCH_RESULTS_JSONL=/private/bench/shadow.jsonl \
+go test ./internal/e2e -run TestAgentAnalysisShadowBenchmark -v -timeout 60m
+```
+
+Generate the content-free comparison table:
+
+```bash
+python3 ../hack/compare-agent-analysis-shadow-benchmark.py \
+  --inprocess /private/bench/inprocess.jsonl \
+  --shadow /private/bench/shadow.jsonl \
+  --output /private/bench/comparison.md
+```
+
+The shadow JSONL includes validated analysis text for private human review,
+verified citation counts, unresolved details, signal scores, latency, retries,
+attempts, and cleanup state. It never stores prompts or frozen artifact excerpt
+contents. Orka OpenCode token usage and cost are marked unavailable because the
+current `StructuredResult` does not report provider usage. Do not estimate cost
+from bytes or latency.
