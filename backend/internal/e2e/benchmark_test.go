@@ -763,10 +763,10 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 	if selectedAttempt == 0 {
 		selectedAttempt = selectedBenchmarkDraftAttempt(draftObservations, tc)
 	}
-	if len(draftObservations) > 0 && selectedAttempt == 0 {
-		t.Fatal("benchmark draft selection identity is unavailable")
-	}
 	trialStatus := benchmarkTrialStatus(outcome, analysisErr, tc, snapshot)
+	if len(draftObservations) > 0 && selectedAttempt == 0 {
+		trialStatus = "contract_violation"
+	}
 	stageReport := buildBenchmarkEvidenceStageReport(bc, preparation, evidenceCoverage, tc, draftObservations, selectedAttempt, trialStatus)
 	if err := validateBenchmarkEvidenceStageReport(bc, stageReport); err != nil {
 		t.Fatalf("validate benchmark evidence stages: %v", err)
