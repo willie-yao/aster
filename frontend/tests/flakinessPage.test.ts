@@ -20,7 +20,13 @@ function tagName(node: ts.JsxOpeningLikeElement): string {
 
 function interactiveKind(node: ts.JsxOpeningLikeElement): "button" | "link" | null {
   const name = tagName(node);
-  if (name === "IconButton" || name === "Button" || name === "AccordionSummary" || name === "button") {
+  if (
+    name === "IconButton" ||
+    name === "ButtonBase" ||
+    name === "Button" ||
+    name === "AccordionSummary" ||
+    name === "button"
+  ) {
     return "button";
   }
   if (name === "Link" || name === "RouterLink" || name === "a") {
@@ -70,15 +76,22 @@ test("test and job links stay separate from the disclosure button", () => {
   assert.match(source, /testRunPath\(item\.job_id, item\.test_name, item\.last_failure\.build_id\)/);
   assert.match(source, /testPath\(item\.job_id, item\.test_name\)/);
   assert.match(source, /jobPath\(item\.job_id\)/);
-  assert.match(source, /<IconButton[\s\S]*aria-controls=\{detailsId\}[\s\S]*aria-expanded=\{expanded\}/);
+  assert.match(
+    source,
+    /<ButtonBase[\s\S]*aria-controls=\{detailsId\}[\s\S]*aria-expanded=\{expanded\}/,
+  );
   assert.match(source, /<Collapse in=\{expanded\} timeout="auto">/);
   assert.doesNotMatch(source, /unmountOnExit/);
 });
 
-test("mobile rows reserve the first line for test and job names", () => {
-  assert.match(source, /flex: \{ xs: "1 1 100%", sm: "1 1 auto" \}/);
-  assert.match(source, /width: \{ xs: "100%", sm: "auto" \}/);
-  assert.match(source, /flexWrap: \{ xs: "wrap", sm: "nowrap" \}/);
+test("mobile rows stack identity metrics and disclosure without clipping", () => {
+  assert.match(source, /xs: '"primary details" "metrics metrics"'/);
+  assert.match(source, /display: \{ xs: "grid", md: "contents" \}/);
+  assert.match(
+    source,
+    /gridTemplateColumns: \{ xs: "repeat\(3, minmax\(0, 1fr\)\)" \}/,
+  );
+  assert.match(source, /minHeight: 44/);
 });
 
 test("focusable tabs own their visible names and descriptions", () => {
@@ -86,9 +99,15 @@ test("focusable tabs own their visible names and descriptions", () => {
   assert.match(source, /label: "Persistent Failures"/);
   assert.match(source, /label: "Recently Broken"/);
   assert.match(source, /label: "Build Failures"/);
-  assert.match(source, /aria-describedby={`failure-analysis-\$\{t\.value\}-description`}/);
-  assert.match(source, /label={`\$\{t\.label\} \$\{tabCounts\[t\.value\]}`}/);
-  assert.match(source, /title=\{t\.tooltip\}/);
+  assert.match(
+    source,
+    /aria-describedby={`failure-analysis-\$\{tab\.value\}-description`}/,
+  );
+  assert.match(
+    source,
+    /label=\{<TabLabel label=\{tab\.label\} count=\{tabCounts\[tab\.value\]\} \/>\}/,
+  );
+  assert.match(source, /title=\{tab\.tooltip\}/);
   assert.match(source, /height: "1px"[\s\S]*width: "1px"/);
   assert.doesNotMatch(source, /<Tooltip/);
   assert.doesNotMatch(source, /<Tab(?=[\s>])[^>]*aria-label=/);
@@ -117,6 +136,28 @@ test("build failures use a bounded summary surface and canonical links", () => {
   assert.match(source, /item\.provenance === "cache"/);
   assert.doesNotMatch(source, /item\.root_cause/);
   assert.doesNotMatch(source, /item\.suggested_fix/);
+});
+
+test("failure analysis uses continuous operator-console structure", () => {
+  assert.match(source, /<DetailSectionBand/);
+  assert.match(source, /borderRadius: 0/);
+  assert.match(
+    source,
+    /boxShadow: "inset 0 -3px 0 var\(--mui-palette-primary-main\)"/,
+  );
+  assert.match(
+    source,
+    /borderTopColor: "var\(--mui-palette-divider\)"/,
+  );
+  assert.match(
+    source,
+    /fontSize: \{ xs: "26px", sm: "30px" \}/,
+  );
+  assert.doesNotMatch(source, /<Panel/);
+  assert.doesNotMatch(source, /<Chip/);
+  assert.doesNotMatch(source, /<LinearProgress/);
+  assert.doesNotMatch(source, /borderRadius: 999/);
+  assert.doesNotMatch(source, /0 0 8px/);
 });
 
 test("nullable production collections normalize before page rendering", () => {
