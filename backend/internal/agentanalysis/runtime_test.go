@@ -194,3 +194,18 @@ func TestResolveShadowStatus(t *testing.T) {
 		})
 	}
 }
+
+func TestRuntimeNoResultPrecedesCleanupPending(t *testing.T) {
+	bundle := testBundle(t)
+	runtime := &Runtime{
+		Agent:          &fakeAgentRuntime{err: agentruntime.ErrCleanupPending},
+		AgentNamespace: "orka-system", AgentRef: "analysis-agent", AgentVersion: "v1",
+	}
+	got, err := runtime.Generate(t.Context(), Spec{
+		Repo:   agentruntime.RepoRef{Owner: bundle.Source.Owner, Name: bundle.Source.Name, Ref: bundle.Source.Revision},
+		Bundle: bundle, MaxTurns: 5, Timeout: time.Minute,
+	})
+	if !errors.Is(err, ErrInvalidResult) || got.Status != ShadowStatusNoResult || !got.CleanupPending {
+		t.Fatalf("result=%+v error=%v", got, err)
+	}
+}

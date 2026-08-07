@@ -274,6 +274,12 @@ def validate_shadow(path, line_no, record):
     if record["deterministic_status"] != "passed" and record["deterministic_passed"]:
         invalid(path, line_no, "shadow deterministic_passed is inconsistent")
 
+    for field in ("runtime_duration_ms", "finalization_duration_ms", "task_finalized_ms", "result_available_ms", "cleanup_duration_ms"):
+        if field in record and not nonnegative_integer(record[field]):
+            invalid(path, line_no, f"shadow field {field} must be a non-negative integer")
+    if record.get("result_available_ms", 0) < record.get("task_finalized_ms", 0):
+        invalid(path, line_no, "shadow result_available_ms must be at least task_finalized_ms")
+
     status = record["status"]
     if status not in SHADOW_ERROR_CODES:
         allowed = ", ".join(sorted(SHADOW_ERROR_CODES))

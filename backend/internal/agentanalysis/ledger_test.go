@@ -305,3 +305,30 @@ func TestValidatePrivateLedgerPathRejectsSymlinkTargets(t *testing.T) {
 		t.Fatal("ledger lock symlink was accepted")
 	}
 }
+
+func TestLoadLedgerMigratesSchemaOne(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "analysis_shadow.json")
+	record := ledgerRecord("legacy", time.Now().UTC())
+	record.Status = ShadowStatus("runtime_failed")
+	record.Quality = ShadowQuality{}
+	record.Provenance.DurationMs = 42
+	legacy := ShadowLedger{
+		SchemaVersion: 1, UpdatedAt: record.CreatedAt,
+		Attempts: []AttemptRecord{{Hash: record.AttemptHash, CreatedAt: record.CreatedAt, Status: ShadowStatus("cancelled")}},
+		Records:  []ShadowRecord{record},
+	}
+	data, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadLedger(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SchemaVersion != LedgerSchemaVersion || got.Attempts[0].Status != ShadowStatusCancellation || got.Records[0].Status != ShadowStatusRuntimeFailed || got.Records[0].Provenance.RuntimeDurationMs != 42 || got.Records[0].Provenance.DurationMs != 0 || got.Records[0].Quality.DeterministicStatus != "not_run" || got.Records[0].Quality.SemanticStatus != "not_run" {
+		t.Fatalf("ledger = %+v", got)
+	}
+}

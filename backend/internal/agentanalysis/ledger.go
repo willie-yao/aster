@@ -109,6 +109,7 @@ type Provenance struct {
 	Retries                   int    `json:"retries,omitempty"`
 	Attempts                  int    `json:"attempts,omitempty"`
 	RuntimeDurationMs         int64  `json:"runtime_duration_ms,omitempty"`
+	DurationMs                int64  `json:"duration_ms,omitempty"`
 	FinalizationDurationMs    int64  `json:"finalization_duration_ms,omitempty"`
 	TaskFinalized             bool   `json:"task_finalized,omitempty"`
 	TaskFinalizedMs           int64  `json:"task_finalized_ms,omitempty"`
@@ -494,8 +495,11 @@ func loadLedger(path string) (ShadowLedger, error) {
 	if err := json.Unmarshal(data, &ledger); err != nil {
 		return ShadowLedger{}, fmt.Errorf("parse agent analysis ledger: %w", err)
 	}
-	if ledger.SchemaVersion != LedgerSchemaVersion {
+	if ledger.SchemaVersion != 1 && ledger.SchemaVersion != LedgerSchemaVersion {
 		return ShadowLedger{}, fmt.Errorf("unsupported agent analysis ledger schema %d", ledger.SchemaVersion)
+	}
+	if ledger.SchemaVersion == 1 {
+		normalizeLegacyLedger(&ledger)
 	}
 	for _, attempt := range ledger.Attempts {
 		if !validSHA256(attempt.Hash) {
@@ -514,6 +518,38 @@ func loadLedger(path string) (ShadowLedger, error) {
 		}
 	}
 	return ledger, nil
+}
+
+func normalizeLegacyLedger(ledger *ShadowLedger) {
+	if ledger == nil {
+		return
+	}
+	ledger.SchemaVersion = LedgerSchemaVersion
+	for i := range ledger.Attempts {
+		ledger.Attempts[i].Status = normalizeLegacyShadowStatus(ledger.Attempts[i].Status)
+	}
+	for i := range ledger.Records {
+		record := &ledger.Records[i]
+		record.Status = normalizeLegacyShadowStatus(record.Status)
+		if record.Provenance.RuntimeDurationMs == 0 {
+			record.Provenance.RuntimeDurationMs = record.Provenance.DurationMs
+		}
+		record.Provenance.DurationMs = 0
+		normalizeShadowQuality(&record.Quality)
+	}
+}
+
+func normalizeLegacyShadowStatus(status ShadowStatus) ShadowStatus {
+	switch status {
+	case "runtime_failed":
+		return ShadowStatusRuntimeFailed
+	case "invalid_result":
+		return ShadowStatusContractViolation
+	case "cancelled":
+		return ShadowStatusCancellation
+	default:
+		return status
+	}
 }
 
 func validateShadowRecord(record ShadowRecord) (time.Time, error) {

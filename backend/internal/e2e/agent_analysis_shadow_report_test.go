@@ -582,3 +582,17 @@ func runShadowReport(t *testing.T, inprocessData, shadowData string) ([]byte, er
 	command := exec.Command("python3", filepath.Join("..", "..", "..", "hack", "compare-agent-analysis-shadow-benchmark.py"), "--inprocess", inprocess, "--shadow", shadow)
 	return command.CombinedOutput()
 }
+
+func TestAgentAnalysisShadowReportRejectsInvalidLifecycleTiming(t *testing.T) {
+	t.Run("negative", func(t *testing.T) {
+		inprocess, shadow := validShadowReportRecords()
+		shadow["runtime_duration_ms"] = -1
+		assertShadowReportError(t, marshalJSONL(t, inprocess), marshalJSONL(t, shadow), "shadow field runtime_duration_ms must be a non-negative integer")
+	})
+	t.Run("non-monotonic", func(t *testing.T) {
+		inprocess, shadow := validShadowReportRecords()
+		shadow["task_finalized_ms"] = 20
+		shadow["result_available_ms"] = 10
+		assertShadowReportError(t, marshalJSONL(t, inprocess), marshalJSONL(t, shadow), "shadow result_available_ms must be at least task_finalized_ms")
+	})
+}

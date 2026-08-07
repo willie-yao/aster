@@ -69,9 +69,7 @@ type Runtime struct {
 
 // Generate runs the Agent and validates its one-file structured result.
 func (r *Runtime) Generate(ctx context.Context, spec Spec) (result Result, retErr error) {
-	started := time.Now()
 	defer func() {
-		result.Duration = time.Since(started)
 		result.Status = ResolveShadowStatus(result, retErr)
 	}()
 	if r == nil || r.Agent == nil {
@@ -93,6 +91,7 @@ func (r *Runtime) Generate(ctx context.Context, spec Spec) (result Result, retEr
 		return Result{}, err
 	}
 	var observed agentruntime.WorkRef
+	runtimeStarted := time.Now()
 	generated, runErr := r.Agent.Generate(ctx, agentruntime.GenerateSpec{
 		Repo: spec.Repo, Instruction: instruction,
 		Skills:   map[string]string{SkillName: failureAnalysisSkill},
@@ -108,7 +107,7 @@ func (r *Runtime) Generate(ctx context.Context, spec Spec) (result Result, retEr
 		ContractVersion: ContractVersion, ToolPolicyVersion: ToolPolicyVersion,
 		EvidenceHash: spec.Bundle.Hash, SkillHash: SkillHash(), SourceSHA: spec.Bundle.Source.Revision,
 		IdentityHash: identity, ExecutionID: executionID, MaxTurns: spec.MaxTurns, Timeout: spec.Timeout,
-		Retries: r.Retries, Attempts: generated.Attempts, Telemetry: generated.Telemetry,
+		Retries: r.Retries, Attempts: generated.Attempts, Duration: time.Since(runtimeStarted), Telemetry: generated.Telemetry,
 	}
 	if result.Runtime == "" {
 		result.Runtime = "agent"
@@ -119,7 +118,7 @@ func (r *Runtime) Generate(ctx context.Context, spec Spec) (result Result, retEr
 		work := observed
 		result.CleanupWork = &work
 	}
-	if runErr != nil && (!cleanupPending || len(generated.Files) == 0) {
+	if runErr != nil && !cleanupPending {
 		return result, runErr
 	}
 	finalizationStarted := time.Now()
