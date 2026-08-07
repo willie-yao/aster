@@ -1,5 +1,12 @@
 # AI diagnostic skills and project recipes
 
+This page describes runtime diagnostic recipe YAML loaded by the dashboard
+analyzer. It is separate from the installable LLM CLI Agent Skills
+`$setup-prow-ai-consumer` and `$author-prow-ai-diagnostics`. Install and invoke
+those Agent Skills through the
+[agent-driven setup and diagnostic-authoring guide](agent-onboarding.md); they
+coordinate onboarding and authoring but do not become active runtime recipes.
+
 > Status: Engine profiles plus consumer extensions. Skills extend the always-on
 > critique gate and deterministic evidence planner.
 

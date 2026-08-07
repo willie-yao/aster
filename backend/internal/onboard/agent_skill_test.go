@@ -194,3 +194,37 @@ func onboardingRepoRoot(t *testing.T) string {
 	}
 	return filepath.Clean(filepath.Join(filepath.Dir(filename), "..", "..", ".."))
 }
+
+func TestAgentOnboardingDocsAdvertiseInstallableSkills(t *testing.T) {
+	root := onboardingRepoRoot(t)
+	checks := map[string][]string{
+		"README.md": {
+			"$setup-prow-ai-consumer",
+			"docs/agent-onboarding.md",
+		},
+		"docs/onboarding-a-new-project.md": {
+			"npx --yes skills@latest add willie-yao/prow-ai-dashboard",
+			"Use $setup-prow-ai-consumer to set up a Pages consumer",
+			"$author-prow-ai-diagnostics",
+		},
+		"docs/agent-onboarding.md": {
+			"--skill setup-prow-ai-consumer author-prow-ai-diagnostics",
+			"--agent codex",
+			"--global",
+			"Use $setup-prow-ai-consumer",
+			"Use $author-prow-ai-diagnostics",
+			"npx --yes skills@latest update",
+		},
+	}
+	for name, anchors := range checks {
+		raw, err := os.ReadFile(filepath.Join(root, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, anchor := range anchors {
+			if !strings.Contains(string(raw), anchor) {
+				t.Errorf("%s missing %q", name, anchor)
+			}
+		}
+	}
+}
