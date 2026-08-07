@@ -87,8 +87,9 @@ Options:
   client, and evaluates the exact current cache policy without a provider call.
   The private JSONL result separately records whether persistence was attempted
   and accepted, the policy rejection reason, whether lookup was attempted and
-  accepted, the lookup rejection reason, restored floor markers, and a
-  provider-request count of zero.
+  accepted, the lookup rejection reason, restored floor markers, whether a
+  hard-policy unavailable cooldown was found, and a provider-request count of
+  zero.
 - `BENCH_MIN_TOOL_CALLS`, `BENCH_MIN_GCS_BYTES`, `BENCH_MAX_ITERS`,
   `BENCH_TIMEOUT`, `BENCH_CRITIQUE_RETRIES` override the default (weak-model)
   floors so a stronger model can be benchmarked fairly, since the weak-model

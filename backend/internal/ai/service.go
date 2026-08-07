@@ -211,6 +211,19 @@ func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, b
 		return nil
 	}
 
+	agenticKey := s.agenticCacheKey(jobID, run.BuildID, tc.Name, tc.FailureMessage)
+	unavailableKey := PolicyUnavailableCacheKey(agenticKey)
+	cachePolicy := s.agenticCachePolicyFor(tc, promptHash, consecutiveFailures)
+	if LookupPolicyUnavailableCooldown(s.client.cache, unavailableKey, cachePolicy, time.Now()) {
+		err := ErrMissingArtifactCitation
+		log.Printf("  ⏭ Reusing grounded unavailable cooldown: %s", tc.Name)
+		s.setPolicyUnavailable(tc, err)
+		recordTrace(ctx, TraceEvent{Kind: "cache", Outcome: "policy_unavailable_hit"})
+		trace.Finish("unavailable_cache_hit", err)
+		usageOutcome = aiusage.OutcomeCacheHit
+		return err
+	}
+
 	log.Printf("  🔍 Analyzing: %s [%s]", tc.Name, AgenticMode)
 
 	failureSignal := evidenceplan.FailureSignal(*tc)
@@ -237,6 +250,11 @@ func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, b
 		}
 		if errors.Is(err, ErrMissingArtifactCitation) {
 			log.Printf("  ⚠ AI analysis unavailable after citation policy: %v", err)
+			if cacheErr := storePolicyUnavailable(s.client.cache, unavailableKey, cachePolicy, time.Now().UTC()); cacheErr != nil {
+				log.Printf("Warning: failed to store grounded unavailable cooldown: %v", cacheErr)
+			} else if cachePolicy.CritiquePolicy == CritiqueCachePolicyHard {
+				recordTrace(ctx, TraceEvent{Kind: "cache_persistence", Outcome: "policy_unavailable"})
+			}
 			s.setPolicyUnavailable(tc, err)
 			trace.Finish("unavailable", err)
 			usageOutcome = aiusage.OutcomeUnavailable
@@ -252,6 +270,7 @@ func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, b
 		}
 		return err
 	}
+	s.client.cache.Delete(unavailableKey)
 	tc.AISummary = summary
 	tc.AIAnalysis = analysis
 	if analysis != nil {
