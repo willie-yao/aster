@@ -16,5 +16,6 @@ import "./actionEligibility.test.js";
 import "./theme.test.js";
 import "./detailFoundations.test.js";
 import "./jobDetail.test.js";
+import "./testDetail.test.js";
 import "./dashboardOverview.test.js";
 import "./responsiveLayout.test.js";

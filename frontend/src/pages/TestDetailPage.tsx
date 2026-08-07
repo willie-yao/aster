@@ -1,60 +1,68 @@
-import { useMemo, useState, type ReactNode } from "react";
-import { Link as RouterLink, useParams, useSearchParams } from "react-router-dom";
-import {
-  Box,
-  Typography,
-  Breadcrumbs,
-  Link,
-  Chip,
-  Stack,
-  Accordion,
-  AccordionSummary,
-  AccordionDetails,
-} from "@mui/material";
+import { useMemo, useState } from "react";
+import Box from "@mui/material/Box";
+import Breadcrumbs from "@mui/material/Breadcrumbs";
+import ButtonBase from "@mui/material/ButtonBase";
+import Collapse from "@mui/material/Collapse";
+import Link from "@mui/material/Link";
+import Stack from "@mui/material/Stack";
+import Typography from "@mui/material/Typography";
+import Accordion from "@mui/material/Accordion";
+import AccordionDetails from "@mui/material/AccordionDetails";
+import AccordionSummary from "@mui/material/AccordionSummary";
 import { useTheme } from "@mui/material/styles";
 import {
-  AutoAwesome,
   Assignment,
-  Inventory2,
+  AutoAwesome,
+  ChevronRight,
   Cloud,
   Dns,
-  Place,
-  ExpandMore,
+  Inventory2,
   OpenInNew,
+  Place,
 } from "@mui/icons-material";
+import { Link as RouterLink, useParams, useSearchParams } from "react-router-dom";
 import { useJobDetail } from "../hooks/useData";
 import { useCapabilities } from "../hooks/useCapabilities";
+import { useManifest } from "../hooks/useManifest";
 import { jobPath, jobRunPath } from "../lib/routes";
 import {
   formatDuration,
   highlightStackTrace,
   meetsConfidenceFloor,
-  timeAgo,
+  shortJobName,
 } from "../lib/utils";
+import { parseTestDisplayName } from "../lib/detailTitles";
+import { withJobDetailParam } from "../lib/jobDetail";
 import { RichText } from "../components/RichText";
 import { RunHistory } from "../components/RunHistory";
-import { Panel } from "../components/Panel";
-import { StatusChip } from "../components/StatusChip";
 import { DetailSectionBand } from "../components/DetailSectionBand";
 import { AiAnalysisPanel } from "../components/AiAnalysisPanel";
 import { LoadingState } from "../components/LoadingState";
 import { ErrorState } from "../components/ErrorState";
-import { soft } from "../theme";
+import { TechnicalIdentity } from "../components/TechnicalIdentity";
+import { MetricStrip, type MetricStripItem } from "../components/MetricStrip";
+import { RunMetadata } from "../components/RunMetadata";
+import { AnalysisBriefing } from "../components/AnalysisBriefing";
+import { overviewTypography } from "../theme/overview";
 import type { BuildResult, PatternAnalysis, TestCase } from "../types/dashboard";
 
-/** Strip numbers and hex strings to normalize error messages for grouping. */
-function normalizeMessage(msg: string): string {
-  return msg
-    .replace(/0x[0-9a-fA-F]+/g, "…")
-    .replace(/[0-9a-f]{8,}/gi, "…")
-    .replace(/\d+/g, "…")
-    .replace(/…[.…]+/g, "…")
+function normalizeMessage(message: string): string {
+  return message
+    .replace(/0x[0-9a-fA-F]+/gu, "…")
+    .replace(/[0-9a-f]{8,}/giu, "…")
+    .replace(/\d+/gu, "…")
+    .replace(/…[.…]+/gu, "…")
     .trim();
+}
+
+function firstSentence(value: string): string {
+  const match = value.trim().match(/^.*?[.!?](?:\s|$)/u);
+  return match?.[0].trim() || value.trim();
 }
 
 interface TestOccurrence {
   run: BuildResult;
-  testCase: TestCase | null; // Absent from this run.
+  testCase: TestCase | null;
 }
 
 interface FailureGroup {
@@ -63,205 +71,157 @@ interface FailureGroup {
   count: number;
 }
 
-const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+type DisplayStatus = TestCase["status"] | "absent";
 
-/** A labelled value used in the run-detail grid. */
-function Field({ label, children, mono }: { label: string; children: ReactNode; mono?: boolean }) {
-  return (
-    <Box>
-      <Typography variant="label" color="text.secondary" sx={{ display: "block" }}>
-        {label}
-      </Typography>
-      <Typography variant={mono ? "data" : "body2"} component="p">
-        {children}
-      </Typography>
-    </Box>
-  );
+function statusPresentation(status: DisplayStatus) {
+  switch (status) {
+    case "passed":
+      return { label: "Passed", color: "success.main" } as const;
+    case "failed":
+      return { label: "Failed", color: "error.main" } as const;
+    case "skipped":
+      return { label: "Skipped", color: "warning.main" } as const;
+    case "absent":
+      return { label: "Absent", color: "text.secondary" } as const;
+  }
+}
+
+function statusMetricColor(
+  status: DisplayStatus,
+): "success.main" | "error.main" | "warning.main" | "text.primary" {
+  if (status === "passed") return "success.main";
+  if (status === "failed") return "error.main";
+  if (status === "skipped") return "warning.main";
+  return "text.primary";
 }
 
 const preSx = {
-  whiteSpace: "pre-wrap",
-  fontFamily: "monospace",
-  fontSize: "0.75rem",
-  lineHeight: 1.6,
   m: 0,
+  whiteSpace: "pre-wrap",
   overflowX: "auto",
+  fontFamily: overviewTypography.data.fontFamily,
+  fontSize: "13px",
+  lineHeight: "20px",
 } as const;
 
-const artifactLinkSx = {
+const evidenceLinkSx = {
+  minHeight: { xs: 44, sm: 36 },
   display: "inline-flex",
   alignItems: "center",
   gap: 0.5,
-  fontSize: "0.75rem",
+  fontSize: "13px",
+  fontWeight: 650,
 } as const;
-
-const runLinkSx = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 0.5,
-  color: "primary.main",
-  fontSize: "0.875rem",
-} as const;
-
-/**
- * RunMetaPanel shows metadata for the selected run of this test. "column"
- * stacks fields for the sticky rail; "row" spreads them full-width.
- */
-function RunMetaPanel({
-  run,
-  tc,
-  orientation,
-}: {
-  run: BuildResult;
-  tc: TestCase;
-  orientation: "row" | "column";
-}) {
-  return (
-    <Panel component="section" sx={{ borderRadius: "12px", p: { xs: 2, sm: 3 } }}>
-      <Box sx={{ mb: 2, display: "flex", alignItems: "center", gap: 1.5, flexWrap: "wrap" }}>
-        <Typography variant="headline" component="h2" sx={{ fontSize: "1rem" }}>
-          Run Detail
-        </Typography>
-        <StatusChip status={tc.status} label={cap(tc.status)} />
-        <Box sx={{ ml: "auto", display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
-          {run.prow_url && (
-            <Link href={run.prow_url} target="_blank" rel="noopener noreferrer" underline="hover" sx={runLinkSx}>
-              View in Prow <OpenInNew sx={{ fontSize: 16 }} />
-            </Link>
-          )}
-          {run.build_log_url && (
-            <Link href={run.build_log_url} target="_blank" rel="noopener noreferrer" underline="hover" sx={runLinkSx}>
-              Build Log <OpenInNew sx={{ fontSize: 16 }} />
-            </Link>
-          )}
-        </Box>
-      </Box>
-      <Box
-        sx={{
-          display: "grid",
-          columnGap: 4,
-          rowGap: 1.5,
-          gridTemplateColumns:
-            orientation === "row"
-              ? { xs: "1fr 1fr", sm: "repeat(4, minmax(0, 1fr))" }
-              : "1fr",
-        }}
-      >
-        <Field label="Build ID" mono>{run.build_id}</Field>
-        <Field label="Started">{new Date(run.started).toLocaleString()}</Field>
-        <Field label="Duration" mono>{formatDuration(tc.duration_seconds)}</Field>
-        <Field label="Run finished">{timeAgo(run.finished)}</Field>
-      </Box>
-    </Panel>
-  );
-}
 
 export function TestDetailPage() {
   const theme = useTheme();
   const { features } = useCapabilities();
+  const manifest = useManifest();
   const { jobName: jobID, testName: encodedTestName } = useParams<{
     jobName: string;
     testName: string;
   }>();
   const testName = encodedTestName ? decodeURIComponent(encodedTestName) : "";
+  const parsedTitle = parseTestDisplayName(testName);
   const { data, loading, error } = useJobDetail(jobID);
-  const displayName = data?.name ?? jobID ?? "";
-  const [searchParams] = useSearchParams();
-  const [selectedBuildId, setSelectedBuildId] = useState<string | null>(
-    searchParams.get("run")
-  );
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [stackOpenFor, setStackOpenFor] = useState<string | null>(null);
 
-  // Build per-run test occurrences oldest first for the timeline.
-  const occurrences: TestOccurrence[] = useMemo(() => {
+  const canonicalJobID = data?.job_id ?? jobID ?? "";
+  const jobDisplayName = shortJobName(
+    data?.name ?? canonicalJobID,
+    manifest.short_name_prefix ?? "",
+  ) || canonicalJobID;
+
+  const occurrences = useMemo<TestOccurrence[]>(() => {
     if (!data) return [];
-    const sorted = [...(data.runs ?? [])].sort(
-      (a, b) => new Date(a.started).getTime() - new Date(b.started).getTime()
-    );
-    return sorted.map((run) => {
-      const tc =
-        (run.test_cases ?? []).find((t) => t.name === testName) ?? null;
-      return { run, testCase: tc };
-    });
+    return [...(data.runs ?? [])]
+      .sort(
+        (left, right) =>
+          new Date(left.started).getTime() - new Date(right.started).getTime(),
+      )
+      .map((run) => ({
+        run,
+        testCase:
+          (run.test_cases ?? []).find((testCase) => testCase.name === testName) ??
+          null,
+      }));
   }, [data, testName]);
 
-  // Most recent run containing this test.
   const latestOccurrence = useMemo(() => {
-    for (let i = occurrences.length - 1; i >= 0; i--) {
-      if (occurrences[i].testCase) return occurrences[i];
+    for (let index = occurrences.length - 1; index >= 0; index -= 1) {
+      if (occurrences[index].testCase) return occurrences[index];
     }
     return null;
   }, [occurrences]);
 
-  // Classify based on the latest streak and past pass/fail mix.
+  const requestedBuildID = searchParams.get("run");
+  const effectiveSelectedID =
+    requestedBuildID &&
+    occurrences.some((occurrence) => occurrence.run.build_id === requestedBuildID)
+      ? requestedBuildID
+      : latestOccurrence?.run.build_id ?? null;
+  const selectedOccurrence = useMemo(
+    () =>
+      occurrences.find(
+        (occurrence) => occurrence.run.build_id === effectiveSelectedID,
+      ) ?? null,
+    [effectiveSelectedID, occurrences],
+  );
+
+  const stackOpen = Boolean(
+    effectiveSelectedID && stackOpenFor === effectiveSelectedID,
+  );
+
+  const presentOccurrences = occurrences.filter(
+    (occurrence) => occurrence.testCase !== null,
+  );
+  const failedOccurrences = presentOccurrences.filter(
+    (occurrence) => occurrence.testCase?.status === "failed",
+  );
+  const passedOccurrences = presentOccurrences.filter(
+    (occurrence) => occurrence.testCase?.status === "passed",
+  );
+  const skippedOccurrences = presentOccurrences.filter(
+    (occurrence) => occurrence.testCase?.status === "skipped",
+  );
+  const absentCount = occurrences.length - presentOccurrences.length;
+
   const classification = useMemo(() => {
     if (!latestOccurrence) return null;
-    // Count consecutive failures from the latest run backwards.
-    let consecutive = 0;
-    for (let i = occurrences.length - 1; i >= 0; i--) {
-      const tc = occurrences[i].testCase;
-      if (!tc) continue; // Skip runs where the test was absent.
-      if (tc.status === "failed") consecutive++;
+    let consecutiveFailures = 0;
+    for (let index = occurrences.length - 1; index >= 0; index -= 1) {
+      const testCase = occurrences[index].testCase;
+      if (!testCase) continue;
+      if (testCase.status === "failed") consecutiveFailures += 1;
       else break;
     }
-    if (consecutive === 0) return null;
-
-    const failedRuns = occurrences.filter(
-      (o) => o.testCase?.status === "failed"
-    );
-    const presentRuns = occurrences.filter((o) => o.testCase !== null);
-    const passedRuns = presentRuns.filter(
-      (o) => o.testCase!.status === "passed"
-    );
-
-    if (consecutive >= 3) return `Persistent (${consecutive}×)`;
-    if (failedRuns.length > 1 && passedRuns.length > 0) return "Flaky";
-    return "One-off";
-  }, [occurrences, latestOccurrence]);
-
-  // Group failure messages after normalizing volatile values.
-  const failureGroups: FailureGroup[] = useMemo(() => {
-    const failures = occurrences.filter(
-      (o) => o.testCase?.status === "failed" && o.testCase?.failure_message
-    );
-    if (failures.length === 0) return [];
-
-    const groups = new Map<string, { sample: string; count: number }>();
-    for (const f of failures) {
-      const msg = f.testCase!.failure_message!;
-      const key = normalizeMessage(msg);
-      const existing = groups.get(key);
-      if (existing) {
-        existing.count++;
-      } else {
-        groups.set(key, { sample: msg, count: 1 });
-      }
+    if (consecutiveFailures >= 3) return `Persistent (${consecutiveFailures}×)`;
+    if (failedOccurrences.length > 1 && passedOccurrences.length > 0) {
+      return "Flaky";
     }
+    if (failedOccurrences.length === 1) return "One-off failure";
+    return null;
+  }, [failedOccurrences.length, latestOccurrence, occurrences, passedOccurrences.length]);
 
+  const failureGroups = useMemo<FailureGroup[]>(() => {
+    const groups = new Map<string, { sample: string; count: number }>();
+    for (const occurrence of failedOccurrences) {
+      const message = occurrence.testCase?.failure_message;
+      if (!message) continue;
+      const normalized = normalizeMessage(message);
+      const current = groups.get(normalized);
+      if (current) current.count += 1;
+      else groups.set(normalized, { sample: message, count: 1 });
+    }
     return Array.from(groups.entries())
-      .map(([normalized, { sample, count }]) => ({
-        normalizedMessage: normalized,
-        sampleMessage: sample,
-        count,
+      .map(([normalizedMessage, value]) => ({
+        normalizedMessage,
+        sampleMessage: value.sample,
+        count: value.count,
       }))
-      .sort((a, b) => b.count - a.count);
-  }, [occurrences]);
-
-  const totalFailures = occurrences.filter(
-    (o) => o.testCase?.status === "failed"
-  ).length;
-  const totalPassed = occurrences.filter(
-    (o) => o.testCase?.status === "passed"
-  ).length;
-
-  // Resolve the selected run from the URL or latest occurrence.
-  const effectiveSelectedId =
-    selectedBuildId ?? latestOccurrence?.run.build_id ?? null;
-  const selectedOccurrence = useMemo(() => {
-    if (!effectiveSelectedId) return null;
-    return (
-      occurrences.find((o) => o.run.build_id === effectiveSelectedId) ?? null
-    );
-  }, [occurrences, effectiveSelectedId]);
+      .sort((left, right) => right.count - left.count);
+  }, [failedOccurrences]);
 
   if (loading) return <LoadingState />;
 
@@ -277,46 +237,65 @@ export function TestDetailPage() {
 
   if (!data) return null;
 
-  const testFound = occurrences.some((o) => o.testCase !== null);
+  const testFound = occurrences.some((occurrence) => occurrence.testCase !== null);
   if (!testFound) {
     return (
-      <Stack spacing={4}>
-        <Breadcrumbs separator="›" sx={{ fontSize: "0.875rem" }}>
-          <Link component={RouterLink} to="/" underline="hover" color="text.secondary">
-            Dashboard
+      <Stack spacing={3}>
+        <Breadcrumbs separator="›" aria-label="Breadcrumb">
+          <Link component={RouterLink} to="/" color="text.secondary" underline="hover">
+            Overview
           </Link>
           <Link
             component={RouterLink}
-            to={jobPath(jobID ?? "")}
-            underline="hover"
+            to={jobPath(canonicalJobID)}
             color="text.secondary"
+            underline="hover"
           >
-            {displayName}
+            {jobDisplayName}
           </Link>
-          <Typography variant="inherit" color="text.primary" noWrap>
-            {testName}
+          <Typography color="text.primary" noWrap>
+            {parsedTitle.displayName}
           </Typography>
         </Breadcrumbs>
-        <Panel sx={{ borderRadius: "12px", p: 4, textAlign: "center" }}>
-          <Typography color="text.secondary">
-            Test not found in any run of this job.
+        <Box
+          component="section"
+          sx={{
+            bgcolor: "surface.container",
+            borderBlock: "1px solid",
+            borderColor: "divider",
+            px: 2,
+            py: 4,
+            textAlign: "center",
+          }}
+        >
+          <Typography component="h1" sx={overviewTypography.majorHeading}>
+            Test not found
           </Typography>
-        </Panel>
+          <Typography color="text.secondary" sx={{ mt: 0.5, ...overviewTypography.secondaryBody }}>
+            This test is not present in the current job window.
+          </Typography>
+        </Box>
       </Stack>
     );
   }
 
-  const selectedTc = selectedOccurrence?.testCase ?? null;
   const selectedRun = selectedOccurrence?.run ?? null;
-  const displayStatus =
-    selectedTc?.status ?? latestOccurrence?.testCase?.status ?? "skipped";
-  const clsColor = classification
-    ? classification.startsWith("Persistent")
-      ? "error"
-      : classification === "Flaky"
-        ? "warning"
-        : undefined
-    : undefined;
+  const selectedTestCase = selectedOccurrence?.testCase ?? null;
+  const latestTestCase = latestOccurrence?.testCase ?? null;
+  const selectedStatus: DisplayStatus = selectedTestCase?.status ?? "absent";
+  const statusView = statusPresentation(selectedStatus);
+  const failureRate =
+    presentOccurrences.length > 0
+      ? failedOccurrences.length / presentOccurrences.length
+      : null;
+  const matchingFailures = selectedTestCase?.failure_message
+    ? failureGroups.find(
+        (group) =>
+          group.normalizedMessage ===
+          normalizeMessage(selectedTestCase.failure_message ?? ""),
+      )?.count ?? failedOccurrences.length
+    : failedOccurrences.length;
+  const selectedMetadataCase = selectedTestCase ?? latestTestCase;
 
   const fixPatterns: PatternAnalysis[] = selectedRun
     ? (data.pattern_analyses ?? []).filter(
@@ -326,411 +305,651 @@ export function TestDetailPage() {
           Boolean(pattern.id) &&
           Boolean(pattern.content_hash) &&
           Boolean(pattern.suggested_fix) &&
-          meetsConfidenceFloor(pattern.confidence, features.chat_fix_min_confidence ?? "high") &&
+          meetsConfidenceFloor(
+            pattern.confidence,
+            features.chat_fix_min_confidence ?? "high",
+          ) &&
           Boolean(pattern.shared_builds?.includes(selectedRun.build_id)),
       )
     : [];
 
-  const fileCtx = (run: BuildResult | null, tc: TestCase) => ({
-    buildLogUrl: run?.build_log_url,
-    clusterArtifacts: tc.cluster_artifacts,
-    webUrl: run?.web_url,
-    fileLinks: tc.ai_analysis?.file_links,
-  });
+  const selectedFileContext = selectedTestCase
+    ? {
+        buildLogUrl: selectedRun?.build_log_url,
+        clusterArtifacts: selectedTestCase.cluster_artifacts,
+        webUrl: selectedRun?.web_url,
+        fileLinks: selectedTestCase.ai_analysis?.file_links,
+      }
+    : {};
 
-  // Whether the selected run has failure output or artifacts to show below the band.
-  const hasEvidence = !!(
-    selectedTc &&
-    (selectedTc.failure_message ||
-      selectedTc.failure_body ||
-      selectedTc.failure_location ||
-      selectedTc.cluster_artifacts ||
-      (selectedTc.ai_summary && !selectedTc.ai_analysis))
+  const traceHref =
+    selectedRun && selectedTestCase && features.analysis_traces
+      ? `/analysis-traces?job_id=${encodeURIComponent(canonicalJobID)}` +
+        `&build_id=${encodeURIComponent(selectedRun.build_id)}` +
+        `&test_name=${encodeURIComponent(testName)}`
+      : undefined;
+
+  const metricItems: MetricStripItem[] = [
+    {
+      label: "Result",
+      value: statusView.label,
+      color: statusMetricColor(selectedStatus),
+    },
+    {
+      label: "Failure rate",
+      value:
+        failureRate !== null ? `${Math.round(failureRate * 100)}%` : "Not available",
+      color:
+        failureRate === null
+          ? "text.primary"
+          : failureRate > 0
+            ? "error.main"
+            : "success.main",
+    },
+    {
+      label: "Runs observed",
+      value: presentOccurrences.length.toLocaleString(),
+    },
+    {
+      label: "Selected duration",
+      value: selectedTestCase
+        ? formatDuration(selectedTestCase.duration_seconds)
+        : "Not present",
+    },
+  ];
+
+  const technicalItems = [
+    {
+      label: "Canonical test name",
+      value: testName,
+      copyLabel: "Copy canonical test name",
+    },
+    {
+      label: "Structured labels",
+      value:
+        parsedTitle.labels.length > 0
+          ? parsedTitle.labels.join(" ")
+          : "No structured labels",
+    },
+    ...(parsedTitle.removedPrefixes.length > 0
+      ? [
+          {
+            label:
+              parsedTitle.removedPrefixes.length === 1
+                ? "Removed suite prefix"
+                : "Removed suite prefixes",
+            value: parsedTitle.removedPrefixes.join(" · "),
+          },
+        ]
+      : []),
+    ...(selectedMetadataCase?.suite_name
+      ? [{ label: "Suite", value: selectedMetadataCase.suite_name }]
+      : []),
+    ...(selectedMetadataCase?.class_name
+      ? [{ label: "Class", value: selectedMetadataCase.class_name }]
+      : []),
+  ];
+  const technicalSummary = [
+    `${parsedTitle.labels.length} ${parsedTitle.labels.length === 1 ? "label" : "labels"}`,
+    `${parsedTitle.removedPrefixes.length} ${parsedTitle.removedPrefixes.length === 1 ? "suite prefix" : "suite prefixes"}`,
+    "canonical name",
+  ].join(" · ");
+
+  function selectRun(buildID: string) {
+    setSearchParams(withJobDetailParam(searchParams, "run", buildID));
+  }
+
+  const runHistory = (
+    <RunHistory
+      runs={data.runs ?? []}
+      selectedBuildId={effectiveSelectedID ?? undefined}
+      onSelect={selectRun}
+      metadata={[
+        `${failedOccurrences.length} failed`,
+        `${passedOccurrences.length} passed`,
+        ...(skippedOccurrences.length > 0
+          ? [`${skippedOccurrences.length} skipped`]
+          : []),
+        ...(absentCount > 0 ? [`${absentCount} absent`] : []),
+      ].join(" · ")}
+      colorFn={(run) => {
+        const palette = (theme.vars ?? theme).palette;
+        const testCase = (run.test_cases ?? []).find(
+          (candidate) => candidate.name === testName,
+        );
+        if (!testCase) return palette.text.disabled;
+        if (testCase.status === "passed") return palette.success.main;
+        if (testCase.status === "failed") return palette.error.main;
+        return palette.warning.main;
+      }}
+      resultLabelFn={(run) => {
+        const testCase = (run.test_cases ?? []).find(
+          (candidate) => candidate.name === testName,
+        );
+        return testCase ? statusPresentation(testCase.status).label : "Absent";
+      }}
+    />
   );
 
+  const runMetadata = selectedRun && selectedTestCase ? (
+    <RunMetadata
+      status={statusView.label}
+      statusColor={
+        selectedStatus === "passed"
+          ? "success.main"
+          : selectedStatus === "failed"
+            ? "error.main"
+            : "warning.main"
+      }
+      items={[
+        { label: "Build ID", value: selectedRun.build_id },
+        { label: "Started", value: new Date(selectedRun.started).toLocaleString() },
+        { label: "Duration", value: formatDuration(selectedTestCase.duration_seconds) },
+        { label: "JUnit", value: selectedTestCase.junit_file || "Not reported" },
+      ]}
+      links={[
+        ...(selectedRun.prow_url
+          ? [{ label: "View in Prow", href: selectedRun.prow_url }]
+          : []),
+        ...(selectedRun.build_log_url
+          ? [{ label: "Build log", href: selectedRun.build_log_url }]
+          : []),
+      ]}
+    />
+  ) : (
+    <Box component="section" sx={{ bgcolor: "surface.container", borderBottom: "1px solid", borderColor: "divider" }}>
+      <DetailSectionBand title="Run metadata" metadata="Test absent" />
+      <Typography color="text.secondary" sx={{ px: 1.5, py: 2, ...overviewTypography.secondaryBody }}>
+        This test was not reported in the selected run.
+      </Typography>
+    </Box>
+  );
+
+  const analysisBriefing = selectedTestCase?.ai_analysis ? (
+    <AnalysisBriefing
+      title="Analysis briefing"
+      icon={<AutoAwesome aria-hidden sx={{ fontSize: 18, color: "primary.main" }} />}
+      metadata={`${selectedTestCase.ai_analysis.severity} severity · ${matchingFailures} ${matchingFailures === 1 ? "matching failure" : "matching failures"}`}
+      summary={(
+        <RichText
+          text={
+            selectedTestCase.ai_summary?.summary ??
+            firstSentence(selectedTestCase.ai_analysis.root_cause)
+          }
+          fileCtx={selectedFileContext}
+        />
+      )}
+      details={(
+        <AiAnalysisPanel
+          analysis={selectedTestCase.ai_analysis}
+          fileCtx={selectedFileContext}
+          traceHref={traceHref}
+          fixPatterns={fixPatterns}
+          chatRef={{
+            job_id: canonicalJobID,
+            build_id: selectedRun?.build_id ?? "",
+            test_name: selectedTestCase.name,
+            suite_name: selectedTestCase.suite_name,
+            class_name: selectedTestCase.class_name,
+            junit_file: selectedTestCase.junit_file,
+            analysis_generated_at: selectedTestCase.ai_analysis.generated_at,
+          }}
+          appearance="detail"
+        />
+      )}
+      collapseDetailsOnMobile={false}
+    />
+  ) : selectedTestCase?.ai_summary ? (
+    <AnalysisBriefing
+      title="Analysis briefing"
+      icon={<AutoAwesome aria-hidden sx={{ fontSize: 18, color: "primary.main" }} />}
+      metadata="Summary only"
+      summary={(
+        <RichText
+          text={selectedTestCase.ai_summary.summary}
+          fileCtx={selectedFileContext}
+        />
+      )}
+      collapseDetailsOnMobile={false}
+    />
+  ) : (
+    <Box component="section" sx={{ bgcolor: "surface.container", borderBottom: "1px solid", borderColor: "divider" }}>
+      <DetailSectionBand title="Analysis briefing" metadata="Unavailable" />
+      <Typography color="text.secondary" sx={{ px: 1.5, py: 2, ...overviewTypography.secondaryBody }}>
+        {selectedTestCase?.status === "passed"
+          ? "No failure analysis is needed for this passing result."
+          : selectedTestCase
+            ? "No accepted analysis is available for this result."
+            : "Select a run where this test was reported to inspect its analysis."}
+      </Typography>
+    </Box>
+  );
+
+  const stackLineCount = selectedTestCase?.failure_body
+    ? selectedTestCase.failure_body.split("\n").length
+    : 0;
+  const clusterArtifacts = selectedTestCase?.cluster_artifacts;
+  const evidenceLinkCount = [
+    selectedTestCase?.failure_location_url,
+    selectedRun?.web_url,
+    ...(selectedRun?.junit_urls ?? []),
+    clusterArtifacts?.provider_activity_log,
+    clusterArtifacts?.bootstrap_resources_url,
+    ...Object.values(clusterArtifacts?.pod_log_dirs ?? {}),
+    ...Object.values(selectedRun?.controller_log_urls ?? {}),
+    ...((clusterArtifacts?.machines ?? []).flatMap((machine) =>
+      Object.values(machine.logs),
+    )),
+  ].filter(Boolean).length;
+
+  const evidenceSection =
+    selectedTestCase && selectedRun &&
+    (evidenceLinkCount > 0 || selectedTestCase.failure_location) ? (
+      <Box component="section" sx={{ bgcolor: "surface.container", borderBottom: "1px solid", borderColor: "divider" }}>
+        <DetailSectionBand
+          title="Files and evidence"
+          metadata={`${evidenceLinkCount} ${evidenceLinkCount === 1 ? "link" : "links"}`}
+        />
+        <Box
+          sx={{
+            minHeight: 44,
+            display: "flex",
+            alignItems: "center",
+            flexWrap: "wrap",
+            gap: 2,
+            px: 1.5,
+            py: 0.5,
+            borderTop: "1px solid",
+            borderColor: "divider",
+          }}
+        >
+          {selectedTestCase.failure_location_url ? (
+            <Link
+              href={selectedTestCase.failure_location_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              sx={evidenceLinkSx}
+            >
+              <Place sx={{ fontSize: 15 }} /> Failure location <OpenInNew sx={{ fontSize: 14 }} />
+            </Link>
+          ) : selectedTestCase.failure_location ? (
+            <Typography component="code" color="text.secondary" sx={{ ...overviewTypography.data, overflowWrap: "anywhere" }}>
+              {selectedTestCase.failure_location}
+            </Typography>
+          ) : null}
+          {selectedRun.web_url && (
+            <Link href={selectedRun.web_url} target="_blank" rel="noopener noreferrer" sx={evidenceLinkSx}>
+              <Inventory2 sx={{ fontSize: 15 }} /> Run artifacts <OpenInNew sx={{ fontSize: 14 }} />
+            </Link>
+          )}
+          {(selectedRun.junit_urls ?? []).map((url, index) => (
+            <Link key={url} href={url} target="_blank" rel="noopener noreferrer" sx={evidenceLinkSx}>
+              <Assignment sx={{ fontSize: 15 }} /> JUnit artifact {index + 1} <OpenInNew sx={{ fontSize: 14 }} />
+            </Link>
+          ))}
+          {clusterArtifacts?.provider_activity_log && (
+            <Link
+              href={clusterArtifacts.provider_activity_log}
+              target="_blank"
+              rel="noopener noreferrer"
+              sx={evidenceLinkSx}
+            >
+              <Cloud sx={{ fontSize: 15 }} /> Provider activity <OpenInNew sx={{ fontSize: 14 }} />
+            </Link>
+          )}
+          {clusterArtifacts?.bootstrap_resources_url && (
+            <Link
+              href={clusterArtifacts.bootstrap_resources_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              sx={evidenceLinkSx}
+            >
+              <Assignment sx={{ fontSize: 15 }} /> Cluster resources <OpenInNew sx={{ fontSize: 14 }} />
+            </Link>
+          )}
+          {Object.entries(clusterArtifacts?.pod_log_dirs ?? {}).map(
+            ([directory, url]) => (
+              <Link key={directory} href={url} target="_blank" rel="noopener noreferrer" sx={evidenceLinkSx}>
+                <Inventory2 sx={{ fontSize: 15 }} /> {directory} <OpenInNew sx={{ fontSize: 14 }} />
+              </Link>
+            ),
+          )}
+          {Object.entries(selectedRun.controller_log_urls ?? {}).map(
+            ([controller, url]) => (
+              <Link key={controller} href={url} target="_blank" rel="noopener noreferrer" sx={evidenceLinkSx}>
+                <Dns sx={{ fontSize: 15 }} /> {controller} <OpenInNew sx={{ fontSize: 14 }} />
+              </Link>
+            ),
+          )}
+        </Box>
+        {clusterArtifacts?.machines && clusterArtifacts.machines.length > 0 && (
+          <Accordion
+            disableGutters
+            elevation={0}
+            square
+            sx={{
+              bgcolor: "transparent",
+              borderTop: "1px solid",
+              borderColor: "divider",
+              "&:before": { display: "none" },
+            }}
+          >
+            <AccordionSummary
+              expandIcon={<ChevronRight sx={{ fontSize: 18 }} />}
+              sx={{
+                minHeight: 44,
+                px: 1.5,
+                "& .MuiAccordionSummary-content": { my: 0.75 },
+                "& .MuiAccordionSummary-expandIconWrapper.Mui-expanded": {
+                  transform: "rotate(90deg)",
+                },
+              }}
+            >
+              <Typography sx={{ ...overviewTypography.secondaryBody, fontWeight: 650 }}>
+                Machine logs ({clusterArtifacts.machines.length} machines)
+              </Typography>
+            </AccordionSummary>
+            <AccordionDetails sx={{ px: 1.5, pt: 0 }}>
+              <Stack spacing={1}>
+                {clusterArtifacts.machines.map((machine) => (
+                  <Box key={machine.name}>
+                    <Typography component="code" color="text.secondary" sx={overviewTypography.data}>
+                      {machine.name}
+                    </Typography>
+                    <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1.5, mt: 0.5 }}>
+                      {Object.entries(machine.logs).map(([logType, url]) => (
+                        <Link key={logType} href={url} target="_blank" rel="noopener noreferrer" sx={evidenceLinkSx}>
+                          {logType}
+                        </Link>
+                      ))}
+                    </Box>
+                  </Box>
+                ))}
+              </Stack>
+            </AccordionDetails>
+          </Accordion>
+        )}
+      </Box>
+    ) : null;
+
+  const headerMetadata = [
+    selectedMetadataCase?.suite_name || "Kubernetes test",
+    selectedRun
+      ? `selected run ${new Date(selectedRun.started).toLocaleDateString()}`
+      : null,
+    classification,
+  ].filter(Boolean).join(" · ");
+
   return (
-    <Stack spacing={{ xs: 3, sm: 4 }} sx={{ minWidth: 0, maxWidth: "100%", overflowX: "clip" }}>
-      <Breadcrumbs separator="›" sx={{ fontSize: "0.875rem" }}>
-        <Link component={RouterLink} to="/" underline="hover" color="text.secondary">
-          Dashboard
+    <Stack
+      spacing={{ xs: 2.5, sm: 3.5 }}
+      sx={{ minWidth: 0, maxWidth: "100%", overflowX: "clip" }}
+    >
+      <Box
+        component="nav"
+        aria-label="Breadcrumb"
+        sx={{ display: { xs: "block", sm: "none" } }}
+      >
+        <Link
+          component={RouterLink}
+          to={
+            effectiveSelectedID
+              ? jobRunPath(canonicalJobID, effectiveSelectedID)
+              : jobPath(canonicalJobID)
+          }
+          underline="none"
+          sx={{ fontSize: "13px", fontWeight: 650 }}
+        >
+          ← {jobDisplayName}
+        </Link>
+      </Box>
+      <Breadcrumbs
+        separator="›"
+        aria-label="Breadcrumb"
+        sx={{ display: { xs: "none", sm: "flex" }, ...overviewTypography.description }}
+      >
+        <Link component={RouterLink} to="/" underline="none" color="text.secondary">
+          Overview
         </Link>
         <Link
           component={RouterLink}
-          to={effectiveSelectedId
-            ? jobRunPath(jobID ?? "", effectiveSelectedId)
-            : jobPath(jobID ?? "")}
-          underline="hover"
+          to={
+            effectiveSelectedID
+              ? jobRunPath(canonicalJobID, effectiveSelectedID)
+              : jobPath(canonicalJobID)
+          }
+          underline="none"
           color="text.secondary"
         >
-          {displayName}
+          {jobDisplayName}
         </Link>
-        <Typography variant="inherit" color="text.primary" noWrap sx={{ maxWidth: 360 }} title={testName}>
-          {testName}
+        <Typography color="text.primary" noWrap sx={{ maxWidth: 420 }}>
+          {parsedTitle.displayName}
         </Typography>
       </Breadcrumbs>
 
-      <Box>
-        <Typography
-          variant="headline"
-          component="h1"
-          sx={{ fontSize: { xs: "1.25rem", sm: "1.5rem" }, wordBreak: "break-all" }}
+      <Box
+        sx={{
+          display: "grid",
+          gridTemplateColumns: { xs: "minmax(0, 1fr)", sm: "minmax(0, 1fr) auto" },
+          alignItems: "start",
+          gap: { xs: 1, sm: 2 },
+        }}
+      >
+        <Box sx={{ minWidth: 0 }}>
+          <Typography
+            component="h1"
+            title={testName}
+            aria-label={parsedTitle.usedFallback ? testName : undefined}
+            sx={{
+              ...overviewTypography.pageHeadline,
+              color: "text.primary",
+              fontSize: parsedTitle.usedFallback
+                ? { xs: "20px", sm: "23px", md: "25px" }
+                : { xs: "25px", sm: overviewTypography.pageHeadline.fontSize },
+              lineHeight: parsedTitle.usedFallback
+                ? { xs: "27px", sm: "30px", md: "32px" }
+                : { xs: "31px", sm: overviewTypography.pageHeadline.lineHeight },
+              display: parsedTitle.usedFallback ? "-webkit-box" : "block",
+              WebkitBoxOrient: parsedTitle.usedFallback ? "vertical" : undefined,
+              WebkitLineClamp: parsedTitle.usedFallback ? { xs: 3, sm: 2 } : undefined,
+              overflow: "hidden",
+              overflowWrap: "anywhere",
+            }}
+          >
+            {parsedTitle.displayName}
+          </Typography>
+          <Typography
+            component="p"
+            color="text.secondary"
+            sx={{ m: 0, mt: 0.75, ...overviewTypography.secondaryBody }}
+          >
+            {headerMetadata}
+          </Typography>
+        </Box>
+        <Box
+          role="status"
+          sx={{
+            minHeight: 34,
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 1,
+            color: statusView.color,
+            fontSize: "14px",
+            lineHeight: "20px",
+            fontWeight: 700,
+            whiteSpace: "nowrap",
+          }}
         >
-          {testName}
-        </Typography>
-        <Stack direction="row" spacing={1.5} sx={{ mt: 1.5, flexWrap: "wrap" }}>
-          <StatusChip status={displayStatus} label={cap(displayStatus)} />
-          {classification && (
-            <Chip
-              size="small"
-              label={classification}
-              sx={{
-                fontWeight: 600,
-                ...(clsColor
-                  ? { bgcolor: (t) => soft(t, clsColor, 0.2), color: `${clsColor}.main` }
-                  : { bgcolor: "action.selected", color: "text.secondary" }),
-              }}
-            />
-          )}
-        </Stack>
+          <Box component="span" sx={{ width: 8, height: 8, borderRadius: "2px", bgcolor: "currentColor" }} />
+          {statusView.label}
+        </Box>
       </Box>
 
-      <RunHistory
-        runs={data?.runs ?? []}
-        selectedBuildId={effectiveSelectedId ?? undefined}
-        onSelect={setSelectedBuildId}
-        metadata={`${totalFailures} failed · ${totalPassed} passed`}
-        colorFn={(run) => {
-          const p = (theme.vars ?? theme).palette;
-          const tc = (run.test_cases ?? []).find((t) => t.name === testName);
-          if (!tc) return p.text.disabled;
-          return tc.status === "passed"
-            ? p.success.main
-            : tc.status === "failed"
-              ? p.error.main
-              : p.text.secondary;
-        }}
-        resultLabelFn={(run) => {
-          const tc = (run.test_cases ?? []).find((t) => t.name === testName);
-          return tc ? cap(tc.status) : "Absent";
-        }}
+      <TechnicalIdentity
+        summary={technicalSummary}
+        items={technicalItems}
       />
 
-      {failureGroups.length > 0 && (
-        <Box component="section">
-          <DetailSectionBand
-            title="Failure patterns"
-            metadata={`${failureGroups.length} ${failureGroups.length === 1 ? "pattern" : "patterns"}`}
-          />
-          <Panel sx={{ borderRadius: "12px", p: 2 }}>
-            <Stack spacing={1}>
-              {failureGroups.map((group, i) => (
-                <Stack key={i} direction="row" spacing={1.5} sx={{ alignItems: "flex-start" }}>
-                  <Chip
-                    size="small"
-                    label={`${group.count} of ${totalFailures}`}
-                    sx={{
-                      flexShrink: 0,
-                      fontWeight: 600,
-                      bgcolor: (t) => soft(t, "error", 0.2),
-                      color: "error.main",
-                    }}
-                  />
-                  <Typography
-                    variant="body2"
-                    color="text.secondary"
-                    noWrap
-                    title={group.sampleMessage}
-                  >
-                    {group.sampleMessage.length > 120
-                      ? group.sampleMessage.slice(0, 120) + "…"
-                      : group.sampleMessage}
-                  </Typography>
-                </Stack>
-              ))}
-            </Stack>
-          </Panel>
-        </Box>
-      )}
+      <MetricStrip items={metricItems} label="Test metrics" />
 
-      {selectedRun && selectedTc && (
-        <>
-          {selectedTc.ai_analysis ? (
-            <Box
-              sx={{
-                display: "grid",
-                minWidth: 0,
-                gridTemplateColumns: { xs: "minmax(0, 1fr)", lg: "minmax(0, 1.5fr) minmax(300px, 1fr)" },
-                gap: 2,
-                alignItems: "start",
-              }}
-            >
-              <AiAnalysisPanel
-                analysis={selectedTc.ai_analysis}
-                fileCtx={fileCtx(selectedRun, selectedTc)}
-                traceHref={
-                  features.analysis_traces
-                    ? `/analysis-traces?job_id=${encodeURIComponent(jobID ?? "")}` +
-                      `&build_id=${encodeURIComponent(selectedRun.build_id)}` +
-                      `&test_name=${encodeURIComponent(testName)}`
-                    : undefined
-                }
-                fixPatterns={fixPatterns}
-                chatRef={{
-                  job_id: jobID ?? "",
-                  build_id: selectedRun.build_id,
-                  test_name: selectedTc.name,
-                  suite_name: selectedTc.suite_name,
-                  class_name: selectedTc.class_name,
-                  junit_file: selectedTc.junit_file,
-                  analysis_generated_at: selectedTc.ai_analysis.generated_at,
-                }}
+      <Box
+        sx={{
+          display: "grid",
+          minWidth: 0,
+          gridTemplateColumns: {
+            xs: "minmax(0, 1fr)",
+            lg: "minmax(0, 1.5fr) minmax(360px, 0.85fr)",
+          },
+          gap: 2,
+          alignItems: "start",
+        }}
+      >
+        <Stack spacing={2} sx={{ minWidth: 0 }}>
+          {analysisBriefing}
+
+          {failureGroups.length > 0 && (
+            <Box component="section" sx={{ bgcolor: "surface.container", borderBottom: "1px solid", borderColor: "divider" }}>
+              <DetailSectionBand
+                title="Failure patterns"
+                metadata={`${failureGroups.length} ${failureGroups.length === 1 ? "pattern" : "patterns"}`}
               />
-              <Box
-                sx={{
-                  minWidth: 0,
-                  position: { lg: "sticky" },
-                  top: { lg: 80 },
-                  alignSelf: "start",
-                }}
-              >
-                <RunMetaPanel run={selectedRun} tc={selectedTc} orientation="column" />
-              </Box>
+              {failureGroups.map((group) => (
+                <Box
+                  key={group.normalizedMessage}
+                  sx={{
+                    display: "grid",
+                    gridTemplateColumns: "96px minmax(0, 1fr)",
+                    gap: 1.5,
+                    px: 1.5,
+                    py: 1,
+                    borderTop: "1px solid",
+                    borderColor: "divider",
+                  }}
+                >
+                  <Typography color="error.main" sx={{ ...overviewTypography.data, fontWeight: 700 }}>
+                    {group.count} of {failedOccurrences.length}
+                  </Typography>
+                  <Typography
+                    color="text.secondary"
+                    title={group.sampleMessage}
+                    sx={{
+                      ...overviewTypography.description,
+                      display: "-webkit-box",
+                      WebkitBoxOrient: "vertical",
+                      WebkitLineClamp: 2,
+                      overflow: "hidden",
+                    }}
+                  >
+                    {group.sampleMessage}
+                  </Typography>
+                </Box>
+              ))}
             </Box>
-          ) : (
-            <RunMetaPanel run={selectedRun} tc={selectedTc} orientation="row" />
           )}
 
-          {hasEvidence && (
-            <Panel component="section" sx={{ minWidth: 0, maxWidth: "100%", borderRadius: "12px", p: { xs: 2, sm: 3 } }}>
-              <Stack spacing={2.5} sx={{ minWidth: 0 }}>
-            {selectedTc.failure_message && (
+          {selectedTestCase?.failure_message && (
+            <Box component="section" sx={{ bgcolor: "surface.container", borderBottom: "1px solid", borderColor: "divider" }}>
+              <DetailSectionBand title="Failure evidence" metadata="Selected run" />
               <Box
                 component="pre"
                 sx={{
                   ...preSx,
-                  borderRadius: "8px",
-                  p: 2,
-                  bgcolor: (t) => soft(t, "error", 0.05),
+                  px: 1.5,
+                  py: 1.5,
+                  borderTop: "1px solid",
+                  borderColor: "divider",
                   color: "error.main",
+                  bgcolor: "surface.containerHigh",
                 }}
               >
-                {selectedTc.failure_message}
+                {selectedTestCase.failure_message}
               </Box>
-            )}
+            </Box>
+          )}
 
-            {selectedTc.failure_body && (
-              <Accordion
-                disableGutters
-                elevation={0}
-                square
+          {selectedTestCase?.failure_body && (
+            <Box component="section" sx={{ bgcolor: "surface.container", borderBottom: "1px solid", borderColor: "divider" }}>
+              <DetailSectionBand
+                title="Stack trace"
+                metadata={`${stackOpen ? "Expanded" : "Collapsed"} · ${stackLineCount} ${stackLineCount === 1 ? "line" : "lines"}`}
+              />
+              <ButtonBase
+                type="button"
+                onClick={() =>
+                  setStackOpenFor(stackOpen ? null : effectiveSelectedID)
+                }
+                aria-expanded={stackOpen}
+                aria-controls="test-stack-trace"
                 sx={{
-                  bgcolor: "transparent",
-                  "&:before": { display: "none" },
+                  width: "100%",
+                  minHeight: 44,
+                  px: 1.5,
+                  py: 0.75,
+                  justifyContent: "flex-start",
+                  color: "text.primary",
+                  textAlign: "left",
+                  borderTop: "1px solid",
+                  borderColor: "divider",
+                  "&:hover": { bgcolor: "surface.containerHigh" },
+                  "&.Mui-focusVisible": {
+                    outline: "2px solid",
+                    outlineColor: "primary.main",
+                    outlineOffset: -2,
+                  },
                 }}
               >
-                <AccordionSummary
-                  expandIcon={<ExpandMore />}
+                <Typography sx={{ ...overviewTypography.secondaryBody, fontWeight: 650 }}>
+                  {stackOpen ? "Hide stack trace" : "Show stack trace"}
+                </Typography>
+                <ChevronRight
                   sx={{
-                    px: 0,
-                    minHeight: 0,
-                    "& .MuiAccordionSummary-content": { my: 0 },
+                    ml: "auto",
+                    color: "text.secondary",
+                    transform: stackOpen ? "rotate(90deg)" : "rotate(0deg)",
+                    transition: (currentTheme) =>
+                      currentTheme.transitions.create("transform", {
+                        duration: currentTheme.transitions.duration.shortest,
+                      }),
+                    "@media (prefers-reduced-motion: reduce)": { transition: "none" },
+                  }}
+                />
+              </ButtonBase>
+              <Collapse in={stackOpen} timeout="auto" unmountOnExit>
+                <Box
+                  id="test-stack-trace"
+                  component="pre"
+                  sx={{
+                    ...preSx,
+                    px: 1.5,
+                    py: 1.5,
+                    borderTop: "1px solid",
+                    borderColor: "divider",
+                    color: "text.secondary",
                   }}
                 >
-                  <Typography variant="label" color="text.secondary">
-                    Stack Trace
-                  </Typography>
-                </AccordionSummary>
-                <AccordionDetails sx={{ px: 0 }}>
-                  <Box component="pre" sx={{ ...preSx, color: "text.secondary" }}>
-                    {highlightStackTrace(selectedTc.failure_body)}
-                  </Box>
-                </AccordionDetails>
-              </Accordion>
-            )}
-
-            {selectedTc.failure_location && (
-              <Stack direction="row" spacing={1} sx={{ minWidth: 0, alignItems: "center" }}>
-                <Place sx={{ fontSize: 16, color: "text.secondary" }} />
-                {selectedTc.failure_location_url ? (
-                  <Link
-                    href={selectedTc.failure_location_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    underline="hover"
-                    sx={{ minWidth: 0, fontFamily: "monospace", fontSize: "0.75rem", overflowWrap: "anywhere" }}
-                  >
-                    {selectedTc.failure_location}
-                  </Link>
-                ) : (
-                  <Typography
-                    sx={{ minWidth: 0, fontFamily: "monospace", fontSize: "0.75rem", overflowWrap: "anywhere" }}
-                    color="text.secondary"
-                  >
-                    {selectedTc.failure_location}
-                  </Typography>
-                )}
-              </Stack>
-            )}
-
-            {selectedTc.cluster_artifacts && (
-              <Box
-                sx={{
-                  borderRadius: "8px",
-                  border: 1,
-                  borderColor: "divider",
-                  bgcolor: (t) => (t.vars ?? t).palette.surface.container,
-                  p: 1.5,
-                }}
-              >
-                <Typography variant="label" sx={{ fontWeight: 600 }}>
-                  Debug Artifacts — {selectedTc.cluster_artifacts.cluster_name}
-                </Typography>
-
-                <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1.5, mt: 1 }}>
-                  {selectedTc.cluster_artifacts.provider_activity_log && (
-                    <Link
-                      href={selectedTc.cluster_artifacts.provider_activity_log}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      underline="hover"
-                      sx={artifactLinkSx}
-                    >
-                      <Cloud sx={{ fontSize: 14 }} /> Provider Activity Log
-                    </Link>
-                  )}
-                  {selectedTc.cluster_artifacts.bootstrap_resources_url && (
-                    <Link
-                      href={selectedTc.cluster_artifacts.bootstrap_resources_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      underline="hover"
-                      sx={artifactLinkSx}
-                    >
-                      <Assignment sx={{ fontSize: 14 }} /> Cluster Resources
-                    </Link>
-                  )}
-                  {selectedTc.cluster_artifacts.pod_log_dirs &&
-                    Object.entries(selectedTc.cluster_artifacts.pod_log_dirs).map(
-                      ([dir, url]) => (
-                        <Link
-                          key={dir}
-                          href={url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          underline="hover"
-                          sx={artifactLinkSx}
-                        >
-                          <Inventory2 sx={{ fontSize: 14 }} /> {dir}
-                        </Link>
-                      )
-                    )}
-                  {selectedRun?.web_url && (
-                    <Link
-                      href={`${selectedRun.web_url}artifacts/clusters/bootstrap/logs/`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      underline="hover"
-                      sx={artifactLinkSx}
-                    >
-                      <Dns sx={{ fontSize: 14 }} /> Controller Logs
-                    </Link>
-                  )}
+                  {highlightStackTrace(selectedTestCase.failure_body)}
                 </Box>
-
-                {selectedTc.cluster_artifacts.machines &&
-                  selectedTc.cluster_artifacts.machines.length > 0 && (
-                    <Accordion
-                      disableGutters
-                      elevation={0}
-                      square
-                      sx={{
-                        bgcolor: "transparent",
-                        mt: 1,
-                        "&:before": { display: "none" },
-                      }}
-                    >
-                      <AccordionSummary
-                        expandIcon={<ExpandMore />}
-                        sx={{
-                          px: 0,
-                          minHeight: 0,
-                          "& .MuiAccordionSummary-content": { my: 0, alignItems: "center", gap: 0.5 },
-                        }}
-                      >
-                        <Dns sx={{ fontSize: 14, color: "text.secondary" }} />
-                        <Typography variant="label" color="text.secondary">
-                          Machine Logs ({selectedTc.cluster_artifacts.machines.length} machines)
-                        </Typography>
-                      </AccordionSummary>
-                      <AccordionDetails sx={{ px: 0 }}>
-                        <Stack spacing={1}>
-                          {selectedTc.cluster_artifacts.machines.map((m) => (
-                            <Box key={m.name} sx={{ pl: 2 }}>
-                              <Typography
-                                sx={{ fontFamily: "monospace", fontSize: "0.75rem" }}
-                                color="text.secondary"
-                              >
-                                {m.name}
-                              </Typography>
-                              <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1.5, mt: 0.5 }}>
-                                {Object.entries(m.logs).map(([logType, url]) => (
-                                  <Link
-                                    key={logType}
-                                    href={url}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    underline="hover"
-                                    sx={{ fontSize: "0.6875rem" }}
-                                  >
-                                    {logType}
-                                  </Link>
-                                ))}
-                              </Box>
-                            </Box>
-                          ))}
-                        </Stack>
-                      </AccordionDetails>
-                    </Accordion>
-                  )}
-              </Box>
-            )}
-
-            {selectedTc.ai_summary && !selectedTc.ai_analysis && (
-              <Stack
-                direction="row"
-                spacing={1}
-                sx={{
-                  alignItems: "flex-start",
-                  borderRadius: "8px",
-                  bgcolor: (t) => (t.vars ?? t).palette.surface.container,
-                  p: 1.5,
-                }}
-              >
-                <AutoAwesome sx={{ fontSize: 16, color: "primary.main", mt: "2px" }} />
-                <Typography
-                  variant="caption"
-                  color={selectedTc.ai_summary.is_transient ? "text.secondary" : "warning.main"}
-                >
-                  <RichText
-                    text={selectedTc.ai_summary.summary}
-                    fileCtx={fileCtx(selectedRun, selectedTc)}
-                  />
-                </Typography>
-              </Stack>
-            )}
-              </Stack>
-            </Panel>
+              </Collapse>
+            </Box>
           )}
-        </>
-      )}
 
-      {selectedRun && !selectedTc && (
-        <Panel component="section" sx={{ borderRadius: "12px", p: 4, textAlign: "center" }}>
-          <Typography color="text.secondary">
-            This test was not present in build #{selectedRun.build_id}.
-          </Typography>
-        </Panel>
-      )}
+          {evidenceSection}
+        </Stack>
+
+        <Stack
+          spacing={2}
+          sx={{
+            minWidth: 0,
+            position: { lg: "sticky" },
+            top: { lg: 80 },
+            alignSelf: "start",
+          }}
+        >
+          {runHistory}
+          {runMetadata}
+        </Stack>
+      </Box>
     </Stack>
   );
 }

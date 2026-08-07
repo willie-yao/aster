@@ -62,6 +62,7 @@ export function AnalysisBriefing({
   mobileNotice,
   details,
   actions,
+  collapseDetailsOnMobile = true,
 }: {
   id?: string;
   title: string;
@@ -74,6 +75,7 @@ export function AnalysisBriefing({
   mobileNotice?: ReactNode;
   details?: ReactNode;
   actions?: ReactNode;
+  collapseDetailsOnMobile?: boolean;
 }) {
   const theme = useTheme();
   const desktop = useMediaQuery(theme.breakpoints.up("md"));
@@ -98,6 +100,35 @@ export function AnalysisBriefing({
         <BriefingBody summary={summary} details={details} />
         {actions && (
           <Box sx={{ px: 2, pb: 1.5, borderTop: "1px solid", borderColor: "divider" }}>
+            {actions}
+          </Box>
+        )}
+      </Box>
+    );
+  }
+
+  if (!collapseDetailsOnMobile) {
+    return (
+      <Box
+        id={id}
+        component="section"
+        sx={{
+          minWidth: 0,
+          maxWidth: "100%",
+          bgcolor: "surface.container",
+          borderBottom: "1px solid",
+          borderColor: "divider",
+        }}
+      >
+        <DetailSectionBand
+          title={mobileTitle ?? title}
+          icon={icon}
+          metadata={mobileMetadata ?? metadata}
+        />
+        {mobileNotice && <Box sx={{ px: 1.5, pt: 1.5 }}>{mobileNotice}</Box>}
+        <BriefingBody summary={summary} details={details} />
+        {actions && (
+          <Box sx={{ px: 1.5, pb: 1.5, borderTop: "1px solid", borderColor: "divider" }}>
             {actions}
           </Box>
         )}
