@@ -74,11 +74,11 @@ export function TestResultsGrid({ runs, jobID }: TestResultsGridProps) {
 
   if (runs.length === 0 || gridRows.length === 0) {
     return (
-      <Panel sx={{ borderRadius: 3, p: 3, textAlign: "center" }}>
+      <Panel sx={{ border: 0, borderRadius: 0, p: 3, textAlign: "center" }}>
         <Typography variant="body2" color="text.secondary">
           {runs.length === 0
             ? "No runs available."
-            : "All tests passed across all runs — nothing to display."}
+            : "All tests passed across all runs; nothing to display."}
         </Typography>
       </Panel>
     );
@@ -89,7 +89,8 @@ export function TestResultsGrid({ runs, jobID }: TestResultsGridProps) {
       <Panel
         sx={{
           display: { xs: "block", md: "none" },
-          borderRadius: 3,
+          border: 0,
+          borderRadius: 0,
           p: 3,
           textAlign: "center",
         }}
@@ -102,7 +103,8 @@ export function TestResultsGrid({ runs, jobID }: TestResultsGridProps) {
       <Panel
         sx={{
           display: { xs: "none", md: "block" },
-          borderRadius: 3,
+          border: 0,
+          borderRadius: 0,
           overflow: "hidden",
           bgcolor: (t) => (t.vars ?? t).palette.surface.main,
         }}
@@ -221,7 +223,7 @@ export function TestResultsGrid({ runs, jobID }: TestResultsGridProps) {
 
                       const cell = (
                         <Box
-                          title={`${shortTestName(row.testName)}\n#${run.build_id} — ${status}`}
+                          title={`${shortTestName(row.testName)}\n#${run.build_id} · ${status}`}
                           sx={{
                             mx: "auto",
                             height: 20,

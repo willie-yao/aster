@@ -463,14 +463,17 @@ export function AnalysisChat({
   fileCtx,
   fixPatterns = [],
   onCorrectionChanged,
+  appearance = "default",
 }: {
   analysisRef: AnalysisChatReference;
   fileCtx: FileToUrlContext;
   fixPatterns?: PatternAnalysis[];
   onCorrectionChanged?: () => void;
+  appearance?: "default" | "detail";
 }) {
   const { features } = useCapabilities();
   const auth = useAuth();
+  const detailAppearance = appearance === "detail";
   const [expanded, setExpanded] = useState(false);
   const [question, setQuestion] = useState("");
   const [session, setSession] = useState<AnalysisChatSession | null>(null);
@@ -938,14 +941,23 @@ export function AnalysisChat({
   }
 
   return (
-    <Box sx={{ mt: 0.5 }}>
-      <Divider sx={{ mb: 1.5 }} />
+    <Box
+      sx={{
+        mt: detailAppearance ? 0 : 0.5,
+        ...(detailAppearance && {
+          "& .MuiAlert-root, & .MuiInputBase-root, & .MuiButton-root, & .MuiIconButton-root": {
+            borderRadius: "4px",
+          },
+        }),
+      }}
+    >
+      {!detailAppearance && <Divider sx={{ mb: 1.5 }} />}
       <Box
         sx={{
-          borderRadius: "14px",
-          border: "1px solid",
+          borderRadius: detailAppearance ? "4px" : "14px",
+          border: detailAppearance ? 0 : "1px solid",
           borderColor: (theme) => soft(theme, "primary", 0.3),
-          bgcolor: (theme) => soft(theme, "primary", 0.025),
+          bgcolor: detailAppearance ? "transparent" : (theme) => soft(theme, "primary", 0.025),
           overflow: "hidden",
         }}
       >
@@ -971,7 +983,8 @@ export function AnalysisChat({
               flex: 1,
               justifyContent: "flex-start",
               gap: 1,
-              borderRadius: "10px",
+              borderRadius: detailAppearance ? "4px" : "10px",
+              minHeight: 44,
               px: 0.5,
               py: 0.75,
               textAlign: "left",
@@ -984,8 +997,8 @@ export function AnalysisChat({
                 height: 30,
                 display: "grid",
                 placeItems: "center",
-                borderRadius: "9px",
-                bgcolor: (theme) => soft(theme, "primary", 0.14),
+                borderRadius: detailAppearance ? "4px" : "9px",
+                bgcolor: detailAppearance ? "transparent" : (theme) => soft(theme, "primary", 0.14),
                 color: "primary.main",
                 flexShrink: 0,
               }}
@@ -1161,7 +1174,7 @@ export function AnalysisChat({
                     slotProps={{
                       input: {
                         sx: {
-                          borderRadius: "10px",
+                          borderRadius: detailAppearance ? "4px" : "10px",
                           bgcolor: "background.paper",
                           fontSize: "0.875rem",
                         },
@@ -1179,7 +1192,7 @@ export function AnalysisChat({
                         sx={{
                           width: 48,
                           height: 48,
-                          borderRadius: "10px",
+                          borderRadius: detailAppearance ? "4px" : "10px",
                           bgcolor: "primary.main",
                           color: "primary.contrastText",
                           "&:hover": { bgcolor: "primary.dark" },
@@ -1200,7 +1213,7 @@ export function AnalysisChat({
                           sx={{
                             width: 48,
                             height: 48,
-                            borderRadius: "10px",
+                            borderRadius: detailAppearance ? "4px" : "10px",
                             border: "1px solid",
                             borderColor: "divider",
                             color: "text.secondary",

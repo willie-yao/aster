@@ -35,6 +35,7 @@
     "src/lib/dashboardOverview.ts",
     "src/lib/flakinessReport.ts",
     "src/lib/detailTitles.ts",
+    "src/lib/jobDetail.ts",
     "src/types/actions.ts"
   ]
 }

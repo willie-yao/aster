@@ -1,0 +1,136 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { test } from "node:test";
+import {
+  executedResultTests,
+  filterResultTests,
+  hasInlineTestEvidence,
+  normalizeResultLedgerFilter,
+  withJobDetailParam,
+} from "../src/lib/jobDetail.js";
+import type { TestCase } from "../src/types/dashboard.js";
+
+function source(path: string): string {
+  return readFileSync(resolve(process.cwd(), path), "utf8");
+}
+
+function testCase(overrides: Partial<TestCase>): TestCase {
+  return {
+    name: "executes workload",
+    status: "passed",
+    duration_seconds: 1,
+    ...overrides,
+  };
+}
+
+test("job result filters omit skipped and non-failing setup rows", () => {
+  const executed = executedResultTests([
+    testCase({ name: "passes", status: "passed" }),
+    testCase({ name: "fails", status: "failed", failure_message: "boom" }),
+    testCase({ name: "skips", status: "skipped" }),
+    testCase({ name: "BeforeSuite", status: "passed" }),
+    testCase({ name: "AfterSuite", status: "failed", failure_message: "setup failed" }),
+  ]);
+
+  assert.deepEqual(executed.map((item) => item.name), ["passes", "fails", "AfterSuite"]);
+  assert.deepEqual(filterResultTests(executed, "failed", "").map((item) => item.name), ["fails", "AfterSuite"]);
+  assert.deepEqual(filterResultTests(executed, "passed", "").map((item) => item.name), ["passes"]);
+  assert.deepEqual(filterResultTests(executed, "all", "SETUP FAILED").map((item) => item.name), ["AfterSuite"]);
+});
+
+test("inline evidence includes analyzed failures without a failure message", () => {
+  assert.equal(
+    hasInlineTestEvidence(
+      testCase({
+        status: "failed",
+        failure_body: "stack trace",
+      }),
+    ),
+    true,
+  );
+  assert.equal(
+    hasInlineTestEvidence(
+      testCase({
+        status: "failed",
+        ai_analysis: {
+          generated_at: "2026-08-07T00:00:00Z",
+          model: "test",
+          root_cause: "cause",
+          severity: "High",
+          suggested_fix: "fix",
+        },
+      }),
+    ),
+    true,
+  );
+  assert.equal(hasInlineTestEvidence(testCase({ status: "failed" })), false);
+  assert.equal(
+    hasInlineTestEvidence(
+      testCase({ status: "passed", failure_body: "historical output" }),
+    ),
+    false,
+  );
+});
+
+test("job result filter state uses bounded URL values", () => {
+  assert.equal(normalizeResultLedgerFilter("failed"), "failed");
+  assert.equal(normalizeResultLedgerFilter("passed"), "passed");
+  assert.equal(normalizeResultLedgerFilter("all"), "all");
+  assert.equal(normalizeResultLedgerFilter("skipped"), "failed");
+
+  const current = new URLSearchParams("run=123&results=passed&test=pod&failure=pattern-1");
+  const next = withJobDetailParam(current, "run", "456");
+  assert.equal(next.toString(), "run=456&results=passed&test=pod&failure=pattern-1");
+  const cleared = withJobDetailParam(next, "test", null);
+  assert.equal(cleared.toString(), "run=456&results=passed&failure=pattern-1");
+});
+
+test("job detail uses the approved shared detail composition", () => {
+  const page = source("src/pages/JobDetailPage.tsx");
+  const pattern = source("src/components/PatternBanner.tsx");
+  const briefing = source("src/components/AnalysisBriefing.tsx");
+  const buildFailure = source("src/components/BuildFailurePanel.tsx");
+  const identity = source("src/components/TechnicalIdentity.tsx");
+  const testTable = source("src/components/TestCaseTable.tsx");
+  const analysis = source("src/components/AiAnalysisPanel.tsx");
+  const ledger = source("src/components/ResultLedger.tsx");
+
+  assert.match(page, /shortJobName\([\s\S]*manifest\.short_name_prefix/);
+  assert.match(page, /<TechnicalIdentity[\s\S]*Canonical job ID[\s\S]*Copy canonical job ID/);
+  assert.match(page, /<MetricStrip items=\{metricItems\} label="Job metrics"/);
+  assert.match(page, /<RunMetadata[\s\S]*View in Prow[\s\S]*Build log/);
+  assert.match(page, /<TestResultsGrid runs=\{runs\}/);
+  assert.match(page, /<ResultLedger[\s\S]*executedCount[\s\S]*skippedCount/);
+  assert.match(page, /updateSearchParam\("results", filter\)/);
+  assert.match(page, /updateSearchParam\("test", query \|\| null, \{ replace: true \}\)/);
+
+  assert.match(pattern, /<AnalysisBriefing/);
+  assert.match(pattern, /icon=\{<AutoAwesome/);
+  assert.match(pattern, /mobileNotice=\{staleNotice\}/);
+  assert.match(pattern, /Last known good ·/);
+  assert.match(pattern, /<AnalysisChat[\s\S]*appearance="detail"/);
+  assert.match(pattern, /<FailureActions[\s\S]*appearance="detail"/);
+  assert.match(pattern, /label="Root cause"/);
+  assert.match(pattern, /label="Suggested remediation"/);
+  assert.match(pattern, /label="Source grounding"/);
+  assert.match(pattern, /label="Affected builds"/);
+  assert.match(pattern, /label="Related files"/);
+
+  assert.match(briefing, /mobileNotice[\s\S]*\{mobileNotice &&/);
+  assert.match(buildFailure, /if \(detailAppearance\)[\s\S]*<AnalysisBriefing/);
+  assert.match(buildFailure, /<AiAnalysisPanel[\s\S]*appearance="detail"/);
+  assert.match(page, /<BuildFailurePanel[\s\S]*appearance="detail"/);
+  assert.match(identity, /display: \{ xs: "none", md: "flex" \}/);
+  assert.match(identity, /desktopInline \? \{ xs: "block", md: "none" \}/);
+  assert.match(testTable, /Evidence/);
+  assert.match(testTable, /Diagnosis →/);
+  assert.match(testTable, /Show inline evidence/);
+  assert.match(testTable, /<AiAnalysisPanel[\s\S]*appearance="detail"/);
+  assert.doesNotMatch(testTable, /<Panel/);
+  assert.match(analysis, /appearance\?: "default" \| "detail"/);
+
+  assert.match(ledger, /failed: "Failed"[\s\S]*passed: "Passed"[\s\S]*all: "All executed"/);
+  assert.doesNotMatch(ledger, /Skipped"/);
+  assert.doesNotMatch(page, /virtual/i);
+});

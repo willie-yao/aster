@@ -6,6 +6,7 @@ import { overviewLayout, overviewTypography } from "../theme/overview";
 
 interface DetailSectionBandProps {
   title: string;
+  icon?: ReactNode;
   metadata?: ReactNode;
   headingLevel?: "h2" | "h3";
   id?: string;
@@ -14,6 +15,7 @@ interface DetailSectionBandProps {
 
 export function DetailSectionBand({
   title,
+  icon,
   metadata,
   headingLevel = "h2",
   id,
@@ -44,13 +46,12 @@ export function DetailSectionBand({
         ...(sx ? (Array.isArray(sx) ? sx : [sx]) : []),
       ]}
     >
-      <Typography
-        id={id}
-        component={headingLevel}
-        sx={{ gridArea: "title", ...headingStyle }}
-      >
-        {title}
-      </Typography>
+      <Box sx={{ gridArea: "title", minWidth: 0, display: "flex", alignItems: "center", gap: 0.75 }}>
+        {icon}
+        <Typography id={id} component={headingLevel} sx={headingStyle}>
+          {title}
+        </Typography>
+      </Box>
       {metadata && (
         <Typography
           component="div"
