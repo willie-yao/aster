@@ -639,6 +639,37 @@ func TestSupportedFactReplacementRequiresFactSpecificNewEvidence(t *testing.T) {
 	if delta := compareSupportedCausalFacts(current, newCandidate, false, 1); !delta.strongerReplacement {
 		t.Fatalf("fact-specific new evidence did not authorize replacement: %+v", delta)
 	}
+	widenedEvidence := map[string]*analysisChatEvidence{
+		"build.log": {Lines: map[int]string{
+			2: "ImagePull operation for worker-1 returned 404 NotFound",
+			3: "ImagePull operation for worker-1 reconciled successfully",
+		}},
+	}
+	widened := candidateParsed
+	widened.EvidenceCitations = []models.EvidenceCitation{{
+		Path: "build.log", LineStart: 2, LineEnd: 3, Quote: "ImagePull operation for worker-1 returned 404 NotFound",
+	}}
+	widenedCandidate := supportedCausalFacts(widened, widenedEvidence, map[string]map[int]int{"build.log": {2: 1, 3: 2}})
+	if len(widenedCandidate) != 1 || widenedCandidate[0].acquisitionRevision != 1 {
+		t.Fatalf("unrelated cited line changed fact acquisition: %+v", widenedCandidate)
+	}
+	if delta := compareSupportedCausalFacts(current, widenedCandidate, false, 1); delta.strongerReplacement {
+		t.Fatalf("widened citation borrowed unrelated new evidence: %+v", delta)
+	}
+}
+
+func TestSupportedFactAcquisitionUsesNormalizedMixedCasePath(t *testing.T) {
+	evidence := map[string]*analysisChatEvidence{
+		"Build.LOG": {Lines: map[int]string{1: "Widget v1 request returned 404 NotFound"}},
+	}
+	parsed := analysisResponse{
+		RootCause:         "The Widget v1 request returned 404 NotFound and blocked startup.",
+		EvidenceCitations: []models.EvidenceCitation{{Path: "Build.LOG", LineStart: 1, LineEnd: 1, Quote: "Widget v1 request returned 404"}},
+	}
+	facts := supportedCausalFacts(parsed, evidence, map[string]map[int]int{"build.log": {1: 7}})
+	if len(facts) != 1 || facts[0].acquisitionRevision != 7 {
+		t.Fatalf("mixed-case acquisition = %+v", facts)
+	}
 }
 
 func TestAgentic_SemanticRevisionReviewFailureKeepsEarlierDraft(t *testing.T) {
@@ -722,11 +753,11 @@ func TestRecordAnalysisEvidenceRevisionsTracksChangedLines(t *testing.T) {
 	state := &agentState{
 		evidenceRevision: 4,
 		analysisEvidence: map[string]*analysisChatEvidence{
-			"build.log": {Lines: map[int]string{1: "existing", 2: "new evidence"}},
+			"Build.LOG": {Lines: map[int]string{1: "existing", 2: "new evidence"}},
 		},
 		analysisEvidenceRevision: map[string]map[int]int{"build.log": {1: 2}},
 	}
-	state.recordAnalysisEvidenceRevisions("build.log", map[int]string{1: "existing"})
+	state.recordAnalysisEvidenceRevisions("Build.LOG", map[int]string{1: "existing"})
 	if state.analysisEvidenceRevision["build.log"][1] != 2 || state.analysisEvidenceRevision["build.log"][2] != 4 {
 		t.Fatalf("evidence revisions = %+v", state.analysisEvidenceRevision)
 	}

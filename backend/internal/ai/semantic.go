@@ -14,6 +14,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
@@ -367,7 +368,7 @@ func validatedSemanticCitations(parsed analysisResponse, evidence map[string]*an
 		if evidenceCitationIssue(citation, evidence) != "" {
 			continue
 		}
-		citation.Path = semanticClamp(NormalizeArtifactCitation(citation.Path), 1024)
+		citation.Path = semanticClamp(citation.Path, 1024)
 		if entry := evidence[citation.Path]; entry != nil {
 			lines := make([]string, 0, citation.LineEnd-citation.LineStart+1)
 			for line := citation.LineStart; line <= citation.LineEnd; line++ {
@@ -723,7 +724,7 @@ func supportedCausalFacts(parsed analysisResponse, evidence map[string]*analysis
 		out = append(out, supportedCausalFact{
 			identity: identity, statuses: statuses,
 			score:               semanticSpecificityScore(identity) + semanticSpecificityScore(statuses),
-			acquisitionRevision: semanticCitationAcquisitionRevision(citation, revisions),
+			acquisitionRevision: semanticCitationFactAcquisitionRevision(citation, evidence, revisions, identity, statuses),
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -735,15 +736,28 @@ func supportedCausalFacts(parsed analysisResponse, evidence map[string]*analysis
 	return out
 }
 
-func semanticCitationAcquisitionRevision(citation models.EvidenceCitation, revisions map[string]map[int]int) int {
-	path := NormalizeArtifactCitation(citation.Path)
-	if revisions[path] == nil {
+func semanticCitationFactAcquisitionRevision(citation models.EvidenceCitation, evidence map[string]*analysisChatEvidence, revisions map[string]map[int]int, identity, statuses map[string]int) int {
+	evidencePath, err := artifacts.SafePath(strings.TrimSpace(citation.Path))
+	if err != nil || evidencePath == "" || evidence[evidencePath] == nil {
+		return 0
+	}
+	revisionPath := NormalizeArtifactCitation(evidencePath)
+	if revisions[revisionPath] == nil {
 		return 0
 	}
 	revision := 0
 	for line := citation.LineStart; line <= citation.LineEnd; line++ {
-		if revisions[path][line] > revision {
-			revision = revisions[path][line]
+		text, ok := evidence[evidencePath].Lines[line]
+		if !ok {
+			continue
+		}
+		lineIdentity := semanticTokenIntersection(identity, semanticSpecificTokens(text))
+		lineStatuses := semanticTokenIntersection(statuses, semanticStatusAnchors(text))
+		if !semanticFactHasStrongIdentity(lineIdentity) || !semanticFactHasSpecificStatus(lineStatuses) {
+			continue
+		}
+		if revisions[revisionPath][line] > revision {
+			revision = revisions[revisionPath][line]
 		}
 	}
 	return revision
