@@ -415,7 +415,8 @@ type semanticLineCandidate struct {
 var (
 	semanticSuccessRE         = regexp.MustCompile(`(?i)\b(success|succeeded|successful|ready|completed|created|connected|healthy|available|found|passed|registered|running|reconciled|recovered|recovery|synced|synchronized)\b`)
 	semanticRecoveryRE        = regexp.MustCompile(`(?i)\b(recovered|recovery|succeeded|successful|healthy|reconciled)\b|\b(?:now|later|eventually|subsequently)\b.{0,40}\b(?:ready|available|completed|connected|running|synced|synchronized)\b`)
-	semanticNegativeSuccessRE = regexp.MustCompile(`(?i)\b(?:not|never)\s+(?:found|ready|available|completed|connected|running|synced|synchronized)\b|\b(?:failed|unable)\b.{0,40}\b(?:become\s+)?(?:ready|available|complete|connect|run|sync|synchronize|reconcile)\b`)
+	semanticNegativeSuccessRE = regexp.MustCompile(`(?i)\b(?:not|never)\s+(?:found|ready|available|completed|connected|running|synced|synchronized|recovered|healthy|successful|reconciled)\b|\b(?:recovery|reconciliation)\s+failed\b|\b(?:failed|unable)\b.{0,40}\b(?:become\s+)?(?:ready|available|complete|connect|run|sync|synchronize|recover|reconcile|healthy|successful)\b`)
+	semanticStructuredFalseRE = regexp.MustCompile(`(?i)\b(?:ready|available|healthy|successful|reconciled|recovered|connected|running|synced|synchronized)\s*[:=]\s*false\b`)
 	semanticTimestampRE       = regexp.MustCompile(`\b(?:\d{4}-\d{2}-\d{2}[T ][0-2]\d:[0-5]\d:[0-5]\d(?:\.\d+)?Z?|[0-2]\d:[0-5]\d:[0-5](?:\.\d+)?)\b`)
 	semanticTokenRE           = regexp.MustCompile(`[A-Za-z][A-Za-z0-9]*(?:[._/:~-][A-Za-z0-9]+)*|[1-5][0-9]{2}`)
 	semanticWordRE            = regexp.MustCompile(`[a-z0-9]+`)
@@ -574,10 +575,13 @@ func semanticLaterSuccessEvidence(evidence map[string]*analysisChatEvidence, err
 }
 
 func semanticAffirmativeSuccess(text string) bool {
+	if semanticNegativeSuccessRE.MatchString(text) || semanticStructuredFalseRE.MatchString(text) {
+		return false
+	}
 	if semanticRecoveryRE.MatchString(text) {
 		return true
 	}
-	if semanticNegativeSuccessRE.MatchString(text) || semanticFactHasSpecificStatus(semanticStatusAnchors(text)) {
+	if semanticFactHasSpecificStatus(semanticStatusAnchors(text)) {
 		return false
 	}
 	return semanticSuccessRE.MatchString(text)

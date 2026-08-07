@@ -816,3 +816,28 @@ func TestFactAcquisitionTreatsNotFoundAsFailure(t *testing.T) {
 		t.Fatal("recovery line was not classified as affirmative success")
 	}
 }
+
+func TestSemanticAffirmativeSuccessRejectsNegativeRecoveryAndConditions(t *testing.T) {
+	for _, text := range []string{
+		"Widget v1 has not recovered from 404 NotFound",
+		"Widget v1 recovery failed with 404 NotFound",
+		"Widget v1 is not healthy after 404 NotFound",
+		"Widget v1 reconciliation failed with 404 NotFound",
+		"Widget v1 Ready=false",
+		"Widget v1 Available: False",
+		"Widget v1 Healthy=False",
+	} {
+		if semanticAffirmativeSuccess(text) {
+			t.Errorf("negative condition classified as success: %q", text)
+		}
+	}
+	evidence := map[string]*analysisChatEvidence{
+		"build.log": {Lines: map[int]string{
+			1: "Widget v1 request returned 404 NotFound",
+			2: "Widget v1 Ready=false",
+		}},
+	}
+	if got := semanticLaterSuccessEvidence(evidence, semanticErrorCandidates(evidence, analysisResponse{})); len(got) != 0 {
+		t.Fatalf("negative condition emitted as later success: %+v", got)
+	}
+}
