@@ -8,17 +8,17 @@ function source(path: string): string {
 }
 
 test("run history remains contained on narrow detail pages", () => {
-  const timeline = source("src/components/RunTimeline.tsx");
+  const timeline = source("src/components/RunHistory.tsx");
   const jobDetail = source("src/pages/JobDetailPage.tsx");
 
-  assert.match(timeline, /minWidth: 0, maxWidth: "100%", overflowX: "auto"/);
-  assert.match(timeline, /width: "max-content", minWidth: "100%"/);
-  assert.match(jobDetail, /component="section" sx=\{\{ minWidth: 0 \}\}[\s\S]*SectionHeading title="Run History"/);
+  assert.match(timeline, /width: "100%"[\s\S]*minWidth: 0[\s\S]*maxWidth: "100%"[\s\S]*overflowX: "auto"/);
+  assert.match(timeline, /width: "max-content"[\s\S]*minWidth: "100%"/);
+  assert.match(jobDetail, /<RunHistory[\s\S]*metadata=\{`\$\{runs\.length\} recent/);
   assert.match(jobDetail, /gridTemplateColumns: \{ xs: "minmax\(0, 1fr\)"[\s\S]*minWidth: 0/);
 });
 
 test("test analysis and run history reflow at mobile and zoom widths", () => {
-  const timeline = source("src/components/RunTimeline.tsx");
+  const timeline = source("src/components/RunHistory.tsx");
   const testDetail = source("src/pages/TestDetailPage.tsx");
   const analysis = source("src/components/AiAnalysisPanel.tsx");
   const pattern = source("src/components/PatternBanner.tsx");
@@ -31,7 +31,7 @@ test("test analysis and run history reflow at mobile and zoom widths", () => {
   assert.match(testDetail, /failure_location[\s\S]*overflowWrap: "anywhere"/);
   assert.match(timeline, /width: "100%"[\s\S]*overflowX: "auto"[\s\S]*overflowY: "hidden"/);
   assert.match(timeline, /<Tooltip title=\{tooltip\}>/);
-  assert.match(timeline, /width: \{ xs: 44, sm: 40 \}/);
-  assert.match(timeline, /height: \{ xs: 44, sm: 24 \}/);
+  assert.match(timeline, /width: \{ xs: 44, sm: 32 \}/);
+  assert.match(timeline, /height: \{ xs: 44, sm: 32 \}/);
   assert.match(timeline, /formatAccessibleDate\(run\.started\)/);
 });

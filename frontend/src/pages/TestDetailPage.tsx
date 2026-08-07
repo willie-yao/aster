@@ -32,10 +32,10 @@ import {
   timeAgo,
 } from "../lib/utils";
 import { RichText } from "../components/RichText";
-import { RunTimeline } from "../components/RunTimeline";
+import { RunHistory } from "../components/RunHistory";
 import { Panel } from "../components/Panel";
 import { StatusChip } from "../components/StatusChip";
-import { SectionHeading } from "../components/SectionHeading";
+import { DetailSectionBand } from "../components/DetailSectionBand";
 import { AiAnalysisPanel } from "../components/AiAnalysisPanel";
 import { LoadingState } from "../components/LoadingState";
 import { ErrorState } from "../components/ErrorState";
@@ -249,6 +249,9 @@ export function TestDetailPage() {
   const totalFailures = occurrences.filter(
     (o) => o.testCase?.status === "failed"
   ).length;
+  const totalPassed = occurrences.filter(
+    (o) => o.testCase?.status === "passed"
+  ).length;
 
   // Resolve the selected run from the URL or latest occurrence.
   const effectiveSelectedId =
@@ -391,34 +394,33 @@ export function TestDetailPage() {
         </Stack>
       </Box>
 
-      <Box component="section">
-        <SectionHeading title="History" />
-        <RunTimeline
-          runs={data?.runs ?? []}
-          selectedBuildId={effectiveSelectedId ?? undefined}
-          onSelect={setSelectedBuildId}
-          colorFn={(run) => {
-            const p = (theme.vars ?? theme).palette;
-            const tc = (run.test_cases ?? []).find((t) => t.name === testName);
-            if (!tc) return p.text.disabled;
-            return tc.status === "passed"
-              ? p.success.main
-              : tc.status === "failed"
-                ? p.error.main
-                : p.text.secondary;
-          }}
-          tooltipFn={(run) => {
-            const tc = (run.test_cases ?? []).find((t) => t.name === testName);
-            return tc
-              ? `#${run.build_id} — ${cap(tc.status)}`
-              : `#${run.build_id} — Absent`;
-          }}
-        />
-      </Box>
+      <RunHistory
+        runs={data?.runs ?? []}
+        selectedBuildId={effectiveSelectedId ?? undefined}
+        onSelect={setSelectedBuildId}
+        metadata={`${totalFailures} failed · ${totalPassed} passed`}
+        colorFn={(run) => {
+          const p = (theme.vars ?? theme).palette;
+          const tc = (run.test_cases ?? []).find((t) => t.name === testName);
+          if (!tc) return p.text.disabled;
+          return tc.status === "passed"
+            ? p.success.main
+            : tc.status === "failed"
+              ? p.error.main
+              : p.text.secondary;
+        }}
+        resultLabelFn={(run) => {
+          const tc = (run.test_cases ?? []).find((t) => t.name === testName);
+          return tc ? cap(tc.status) : "Absent";
+        }}
+      />
 
       {failureGroups.length > 0 && (
         <Box component="section">
-          <SectionHeading title="Failure Patterns" />
+          <DetailSectionBand
+            title="Failure patterns"
+            metadata={`${failureGroups.length} ${failureGroups.length === 1 ? "pattern" : "patterns"}`}
+          />
           <Panel sx={{ borderRadius: "12px", p: 2 }}>
             <Stack spacing={1}>
               {failureGroups.map((group, i) => (

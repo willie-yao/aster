@@ -34,6 +34,7 @@
     "src/lib/actionEligibility.ts",
     "src/lib/dashboardOverview.ts",
     "src/lib/flakinessReport.ts",
+    "src/lib/detailTitles.ts",
     "src/types/actions.ts"
   ]
 }
