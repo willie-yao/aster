@@ -539,6 +539,7 @@ type benchmarkCacheVerification struct {
 	LookupAccepted         bool                    `json:"lookup_accepted"`
 	LookupRejectionReason  ai.CacheRejectionReason `json:"lookup_rejection_reason,omitempty"`
 	LookupHit              bool                    `json:"lookup_hit"`
+	UnavailableCooldownHit bool                    `json:"unavailable_cooldown_hit"`
 	ProviderRequests       int                     `json:"provider_requests"`
 	EvidencePlanCovered    bool                    `json:"evidence_plan_covered,omitempty"`
 	GCSFloorRetryExhausted bool                    `json:"gcs_floor_retry_exhausted,omitempty"`

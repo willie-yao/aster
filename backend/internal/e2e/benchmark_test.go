@@ -861,6 +861,7 @@ func verifyBenchmarkCacheReuse(t *testing.T, client *ai.Client, clientOptions ai
 	policy := service.FailureCachePolicy(context.Background(), &http.Client{Timeout: 60 * time.Second}, run, fresh, bc.consecutiveFailures)
 	key := ai.AgenticCacheKeyForGeneration(universal.New().Name(), cacheGeneration, jobID, bc.buildID, bc.testName, fresh.FailureMessage)
 	result, reason := ai.LookupAgenticCache(reloadedClient.Cache(), key, policy)
+	out.UnavailableCooldownHit = ai.LookupPolicyUnavailableCooldown(reloadedClient.Cache(), ai.PolicyUnavailableCacheKey(key), policy, time.Now())
 	out.LookupRejectionReason = reason
 	out.LookupAccepted = reason == ai.CacheAccepted
 	if result.Analysis != nil {

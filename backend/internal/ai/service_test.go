@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -470,9 +471,12 @@ func newServiceTestRegistry(t *testing.T) (*tools.Registry, []string) {
 	return r, enabled
 }
 
-type fakeFactory struct{}
+type fakeFactory struct{ browser artifacts.Browser }
 
 func (f *fakeFactory) ForBuild(_, _ string) artifacts.Browser {
+	if f.browser != nil {
+		return f.browser
+	}
 	return &fakeBrowser{}
 }
 
@@ -678,3 +682,36 @@ type serviceFixedBrowserFactory struct {
 }
 
 func (f *serviceFixedBrowserFactory) ForBuild(_, _ string) artifacts.Browser { return f.browser }
+
+func TestServiceHardPolicyStoresAndReusesGroundedUnavailableCooldown(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
+	srv.push(200, chatRespFinal(missingCitationFinalJSON))
+	client := newAgenticTestClient(t, srv.URL)
+	registry, enabled := newServiceTestRegistry(t)
+	service := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
+	service.EnableAgentic(AgenticOptions{
+		MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+		Timeout: 30 * time.Second, CritiqueMaxRetries: 0, CritiqueCachePolicy: CritiqueCachePolicyHard,
+	}, &fakeFactory{browser: &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("vnet peering mismatch\n")}}}, registry, enabled)
+
+	request := FailureAnalysisRequest{
+		JobID: "job", BuildPrefix: "logs/job/1/", Build: newRun("job", "1").BuildInfo,
+		TestCase: *newFailedTC("Test A", "failure"), ConsecutiveFailures: 1,
+	}
+	first, err := service.AnalyzeFailure(t.Context(), &http.Client{}, request)
+	if !errors.Is(err, ErrMissingArtifactCitation) || first.Summary == nil || first.Analysis != nil {
+		t.Fatalf("first result = %+v, error = %v", first, err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 2 {
+		t.Fatalf("first provider calls = %d, want 2", got)
+	}
+	second, err := service.AnalyzeFailure(t.Context(), &http.Client{}, request)
+	if !errors.Is(err, ErrMissingArtifactCitation) || second.Summary == nil || second.Analysis != nil {
+		t.Fatalf("second result = %+v, error = %v", second, err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 2 {
+		t.Fatalf("provider calls after cooldown hit = %d, want 2", got)
+	}
+}

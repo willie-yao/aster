@@ -105,6 +105,21 @@ func (c *Cache) Set(key string, data any) error {
 	return nil
 }
 
+// Delete removes one cache entry and reports whether it existed.
+func (c *Cache) Delete(key string) bool {
+	if c == nil || key == "" {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.entries[key]; !ok {
+		return false
+	}
+	delete(c.entries, key)
+	c.dirty = true
+	return true
+}
+
 // Entries returns copies of selected unexpired cache entries.
 func (c *Cache) Entries(keys ...string) map[string]CacheEntry {
 	out := map[string]CacheEntry{}

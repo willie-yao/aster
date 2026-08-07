@@ -854,6 +854,17 @@ Cached agentic entries are scoped to a specific build because answers cite
 build-specific paths and line numbers; the same test failing in two different
 builds gets two separate agentic analyses.
 
+Under `critique.cache_policy: hard`, a result that exhausts bounded repair but
+still lacks a validated artifact citation is published as unavailable and gets a
+private six-hour cooldown marker. A matching model, prompt, skill set, cache
+generation, critique version, investigation floor, and consecutive-failure
+streak reuses that unavailable outcome without another provider request. The
+marker is not a successful analysis entry, never supplies `AIAnalysis`, and is
+removed when it expires or any identity field changes. Advisory and strict
+policies do not use this cooldown. This prevents a scheduled dashboard from
+paying for the same hard-policy failure every refresh while still retrying later
+the same day.
+
 After all individual analyses reach an accepted or unavailable terminal state,
 the fetcher persists `ai_cache.json` and `ai_traces.json` as a private analysis
 checkpoint before recurring-pattern correlation starts. This checkpoint is not
