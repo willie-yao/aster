@@ -156,7 +156,7 @@ const (
 	DiscoveryBucket   = "bucket"
 )
 
-func validExactJobName(name string) bool {
+func ValidExactJobName(name string) bool {
 	if len(name) == 0 || len(name) > 253 {
 		return false
 	}
@@ -1157,7 +1157,7 @@ func (c *Config) Validate() error {
 			missing = append(missing, fmt.Sprintf("discovery.exact_jobs[%d] must be non-empty with no surrounding whitespace", i))
 			continue
 		}
-		if !validExactJobName(trimmed) {
+		if !ValidExactJobName(trimmed) {
 			missing = append(missing, fmt.Sprintf("discovery.exact_jobs[%d] %q is not a safe Prow job name", i, name))
 			continue
 		}

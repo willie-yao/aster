@@ -39,6 +39,15 @@ go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboar
 
 Use one form consistently for discovery, planning, application, and doctor.
 
+When the request asks for the current or latest engine, fetch `origin`, compare
+`HEAD` with `origin/main`, and record both SHAs before running onboarding. If the
+local checkout is stale, dirty, or its primary branch must remain untouched,
+create a detached engine worktree at current `origin/main` under the task's
+Codex workspace and use that checkout for every command. Do not silently use a
+stale local engine merely because it is the current working directory. Preserve
+an explicitly requested engine ref or commit instead of replacing it with
+`origin/main`.
+
 ## 2. Resolve the source and destination
 
 Use values already supplied anywhere in the user's request before asking a
@@ -106,6 +115,15 @@ default branch, suggested consumer repository, and warnings. Do not invent a
 TestGrid dashboard or artifact bucket when discovery does not establish one.
 Ask the user to choose when several plausible candidates remain.
 
+When the request supplies exact job names, treat them as a hard scope boundary.
+If a TestGrid candidate contains additional jobs, do not silently accept the
+broader dashboard. Use bucket discovery with the supplied artifact bucket and
+repeat `-exact-job` for every requested name. If no artifact bucket is supplied
+or established, report the unresolved scope instead of generating a broad
+consumer. After the final sweep, verify the discovered job names exactly match
+the requested set, allowing only distinct periodic and presubmit identities for
+the same requested name when presubmits were explicitly enabled.
+
 ## 4. Build explicit non-interactive flags
 
 Use exactly one discovery selector:
@@ -117,7 +135,7 @@ Use exactly one discovery selector:
 or:
 
 ```text
--bucket <bucket> [-gcsweb-base <base-url>]
+-bucket <bucket> [-gcsweb-base <base-url>] [-exact-job <name> ...]
 ```
 
 Always include:
@@ -134,6 +152,7 @@ Always include:
 Add only when selected:
 
 ```text
+-exact-job <name>       # repeat for each exact bucket job
 -include-presubmits
 -ai=false
 -update-existing
@@ -250,6 +269,25 @@ Only when separately authorized:
 Use existing authenticated tools without displaying credentials. Do not choose a
 GitHub owner, repository visibility, deployment target, cluster context, or
 namespace for the user.
+
+## Evaluation workspace deliverables
+
+When the user requests a Codex-readable evaluation workspace, write these
+operator artifacts outside the generated consumer after doctor completes:
+
+```text
+manifest/locations.json
+manifest/consumer-files.sha256
+reports/setup-summary.md
+```
+
+`locations.json` records absolute source, engine, consumer, plan, log, report,
+and manifest paths plus the exact engine and source commits. The hash manifest
+covers every generated consumer file that exists. The setup summary records the
+selected discovery mode, exact requested and discovered jobs, doctor result,
+warnings, generated or replaced paths, and prohibited remote actions that did
+not occur. Do not substitute differently named files when the request names
+these outputs.
 
 ## Completion report
 

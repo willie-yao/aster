@@ -113,6 +113,12 @@ ask only when the source is absent or discovery leaves a materially ambiguous
 choice. Running the skill from the dashboard engine checkout does not make the
 engine repository the source project.
 
+When exact jobs are named, the agent should use bucket discovery with repeated
+`-exact-job` flags rather than accepting a shared TestGrid dashboard containing
+unrelated jobs. For a Codex evaluation workspace it also records exact engine
+identity and writes `manifest/locations.json`,
+`manifest/consumer-files.sha256`, and `reports/setup-summary.md`.
+
 The skill should also trigger for requests such as:
 
 - “Set up a prow-ai-dashboard consumer for this project.”

@@ -140,7 +140,7 @@ func buildPlan(ctx context.Context, opts Options, planning planningContext, deps
 		DashboardRepo: dashboardRepo,
 		Deployment:    deployment,
 		Discovery: DiscoveryPlan{
-			TestGrid: opts.TestGrid, Bucket: opts.Bucket, GCSWebBase: opts.GCSWebBase,
+			TestGrid: opts.TestGrid, Bucket: opts.Bucket, GCSWebBase: opts.GCSWebBase, ExactJobs: append([]string(nil), opts.ExactJobs...),
 			CatalogRevision: catalogRevision, Jobs: append([]models.ProwJob(nil), jobs...),
 			SelectedCandidate: copyCandidate(planning.selected), TestGridProvenance: testGridProvenance,
 		},
