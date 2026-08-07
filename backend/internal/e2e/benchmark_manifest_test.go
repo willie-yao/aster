@@ -273,11 +273,11 @@ type benchmarkManifestSignal struct {
 }
 
 type benchmarkManifestEvidenceGroup struct {
-	ID                 string   `json:"id"`
-	Paths              []string `json:"paths"`
-	Content            []string `json:"content,omitempty"`
-	Causal             []string `json:"causal,omitempty"`
-	OracleContextLines *int     `json:"oracle_context_lines,omitempty"`
+	ID                 string                    `json:"id"`
+	Paths              []string                  `json:"paths"`
+	Content            []string                  `json:"content,omitempty"`
+	Causal             []benchmarkManifestSignal `json:"causal,omitempty"`
+	OracleContextLines *int                      `json:"oracle_context_lines,omitempty"`
 }
 
 func loadBenchmarkManifest(path string) ([]benchCase, error) {
@@ -439,15 +439,22 @@ func loadBenchmarkManifest(path string) ([]benchCase, error) {
 				}
 				compiled.contentREs = append(compiled.contentREs, re)
 			}
-			for patternIndex, pattern := range group.Causal {
-				if pattern == "" || len(pattern) > 2048 {
-					return nil, fmt.Errorf("benchmark manifest case %q evidence group %q causal %d is invalid", item.ID, group.ID, patternIndex)
+			for signalIndex, signal := range group.Causal {
+				if signal.Name == "" || signal.Pattern == "" || signal.Must || len(signal.Pattern) > 2048 || len(signal.Negated) > 2048 {
+					return nil, fmt.Errorf("benchmark manifest case %q evidence group %q causal %d is invalid", item.ID, group.ID, signalIndex)
 				}
-				re, err := regexp.Compile(pattern)
+				positive, err := regexp.Compile(signal.Pattern)
 				if err != nil {
-					return nil, fmt.Errorf("benchmark manifest case %q evidence group %q causal %d: %w", item.ID, group.ID, patternIndex, err)
+					return nil, fmt.Errorf("benchmark manifest case %q evidence group %q causal %d pattern: %w", item.ID, group.ID, signalIndex, err)
 				}
-				compiled.causalREs = append(compiled.causalREs, re)
+				var negative *regexp.Regexp
+				if signal.Negated != "" {
+					negative, err = regexp.Compile(signal.Negated)
+					if err != nil {
+						return nil, fmt.Errorf("benchmark manifest case %q evidence group %q causal %d negated: %w", item.ID, group.ID, signalIndex, err)
+					}
+				}
+				compiled.causalSignals = append(compiled.causalSignals, benchSignal{name: signal.Name, re: positive, negated: negative})
 			}
 			evidenceGroups = append(evidenceGroups, compiled)
 		}
@@ -509,6 +516,9 @@ type benchmarkJSONLResult struct {
 	EvidenceTelemetryVersion int                         `json:"evidence_telemetry_version"`
 	EvidenceCondition        string                      `json:"evidence_condition"`
 	FrozenEvidenceSHA256     string                      `json:"frozen_evidence_sha256,omitempty"`
+	EvidenceStageSHA256      string                      `json:"evidence_stage_sha256"`
+	EvidenceStageIDs         []string                    `json:"evidence_stage_ids"`
+	ModelRequestMade         bool                        `json:"model_request_made"`
 	TrialStatus              string                      `json:"trial_status"`
 	EvidenceStages           []benchmarkEvidenceStage    `json:"evidence_stages"`
 	EvidenceRevisions        []benchmarkEvidenceRevision `json:"evidence_revisions"`
@@ -646,9 +656,16 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 	if err := validateBenchmarkEvidenceStageReport(bc, stageReport); err != nil {
 		t.Fatalf("benchmark evidence stages: %v", err)
 	}
+	if identity.EvidenceStageSHA256 != benchmarkEvidenceStageSHA256(bc.evidenceGroups) {
+		t.Fatal("benchmark evidence stage identity does not match the case")
+	}
 	label := strings.TrimSpace(os.Getenv("BENCH_MODEL_LABEL"))
 	if !benchmarkCaseIDRE.MatchString(label) {
 		t.Fatalf("BENCH_MODEL_LABEL must be a stable anonymous label when BENCH_RESULTS_JSONL is set")
+	}
+	recordedOutcome := outcome
+	if stageReport.TrialStatus == "no_result" || stageReport.TrialStatus == "timeout" || stageReport.TrialStatus == "runtime_failure" || (stageReport.TrialStatus == "contract_violation" && (tc == nil || tc.AIAnalysis == nil)) {
+		recordedOutcome = benchmarkOutcomeUnknown
 	}
 	result := benchmarkJSONLResult{
 		CaseID: bc.name, StableID: bc.stableID, Repetition: repetition, ModelLabel: label,
@@ -658,11 +675,12 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 		SkillSetHash: identity.SkillSetHash, EffectiveInputSHA256: identity.EffectiveInputSHA256,
 		APIMode: identity.APIMode, ProviderPath: identity.ProviderPath, TransportID: identity.TransportID,
 		EvidenceTelemetryVersion: 1, EvidenceCondition: stageReport.Condition, FrozenEvidenceSHA256: stageReport.FrozenSHA256,
+		EvidenceStageSHA256: identity.EvidenceStageSHA256, EvidenceStageIDs: benchmarkEvidenceStageIDs(bc.evidenceGroups), ModelRequestMade: stageReport.ModelRequestMade,
 		TrialStatus: stageReport.TrialStatus, EvidenceStages: append([]benchmarkEvidenceStage{}, stageReport.Stages...),
 		EvidenceRevisions:      append([]benchmarkEvidenceRevision{}, stageReport.Revisions...),
 		EvidenceGroupsSelected: append([]string(nil), evidenceCoverage.selected...), EvidenceGroupsHit: append([]string(nil), evidenceCoverage.hit...), EvidenceGroupsMissed: append([]string(nil), evidenceCoverage.missed...),
 		EvidenceGroupSources: cloneBenchmarkEvidenceSources(evidenceCoverage.sources),
-		JobName:              bc.jobName, BuildID: bc.buildID, CheckoutCommit: bc.commit, TestName: bc.testName, TestSource: bc.testSource, ElapsedMS: elapsed.Milliseconds(), Outcome: string(outcome),
+		JobName:              bc.jobName, BuildID: bc.buildID, CheckoutCommit: bc.commit, TestName: bc.testName, TestSource: bc.testSource, ElapsedMS: elapsed.Milliseconds(), Outcome: string(recordedOutcome),
 		FileLinks: map[string]string{}, SelectedAttempt: selectedAttempt,
 		ToolNames: append([]string(nil), toolUsage.names...), ToolCounts: append([]string(nil), toolUsage.counts...),
 		FloorNudges: traceSummary.floorNudges, FloorNudgeReasons: append([]string(nil), traceSummary.floorNudgeReasons...),
@@ -907,7 +925,7 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 	writeBenchmarkJSONL(t, path, bc, 2, tc, benchmarkOutcomeUsable, 3*time.Second, snapshot, observations, 1,
 		benchmarkToolUsage{names: []string{"read_artifact"}, counts: []string{"read_artifact=1"}},
 		benchmarkTraceSummary{floorNudges: 1, floorNudgeReasons: []string{"gcs_bytes"}}, 17, "generation", ai.CritiqueCachePolicyHard, cacheVerification,
-		benchmarkRunIdentity{Arm: "variant", EngineCommit: strings.Repeat("b", 40), FixtureSHA256: strings.Repeat("c", 64), BaselineConsumerCommit: strings.Repeat("d", 40), BaselinePromptSHA256: strings.Repeat("3", 64), ProjectSHA256: strings.Repeat("e", 64), EffectivePromptSHA256: strings.Repeat("f", 64), SkillSetHash: strings.Repeat("1", 64), EffectiveInputSHA256: strings.Repeat("2", 64), EvidenceCondition: benchmarkEvidenceConditionFixture, APIMode: ai.APIChatCompletions, ProviderPath: "github-copilot/claude-sonnet-4.6", TransportID: "copilot-structural-proxy-v1"}, benchmarkEvidenceCoverage{selected: []string{"initiating-error"}, hit: []string{"initiating-error"}, missed: []string{"secondary-evidence"}, sources: map[string][]string{"initiating-error": {"model_tool"}}}, benchmarkEvidenceStageReport{Condition: benchmarkEvidenceConditionFixture, TrialStatus: "contract_violation"})
+		benchmarkRunIdentity{Arm: "variant", EngineCommit: strings.Repeat("b", 40), FixtureSHA256: strings.Repeat("c", 64), BaselineConsumerCommit: strings.Repeat("d", 40), BaselinePromptSHA256: strings.Repeat("3", 64), ProjectSHA256: strings.Repeat("e", 64), EffectivePromptSHA256: strings.Repeat("f", 64), SkillSetHash: strings.Repeat("1", 64), EffectiveInputSHA256: strings.Repeat("2", 64), EvidenceCondition: benchmarkEvidenceConditionFixture, EvidenceStageSHA256: benchmarkEvidenceStageSHA256(bc.evidenceGroups), APIMode: ai.APIChatCompletions, ProviderPath: "github-copilot/claude-sonnet-4.6", TransportID: "copilot-structural-proxy-v1"}, benchmarkEvidenceCoverage{selected: []string{"initiating-error"}, hit: []string{"initiating-error"}, missed: []string{"secondary-evidence"}, sources: map[string][]string{"initiating-error": {"model_tool"}}}, benchmarkEvidenceStageReport{Condition: benchmarkEvidenceConditionFixture, ModelRequestMade: true, TrialStatus: "contract_violation"})
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -919,7 +937,7 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 	if err := json.Unmarshal(data, &result); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(result.EvidenceGroupsSelected, []string{"initiating-error"}) || !slices.Equal(result.EvidenceGroupsHit, []string{"initiating-error"}) || !slices.Equal(result.EvidenceGroupsMissed, []string{"secondary-evidence"}) || !slices.Equal(result.EvidenceGroupSources["initiating-error"], []string{"model_tool"}) || result.EvidenceTelemetryVersion != 1 || result.EvidenceCondition != benchmarkEvidenceConditionFixture || result.TrialStatus != "contract_violation" || result.EvidenceStages == nil || result.EvidenceRevisions == nil || result.ModelLabel != "model-a" || result.Arm != "variant" || result.EngineCommit != strings.Repeat("b", 40) || result.FixtureSHA256 != strings.Repeat("c", 64) || result.BaselineConsumerCommit != strings.Repeat("d", 40) || result.BaselinePromptSHA256 != strings.Repeat("3", 64) || result.ProjectSHA256 != strings.Repeat("e", 64) || result.EffectivePromptSHA256 != strings.Repeat("f", 64) || result.SkillSetHash != strings.Repeat("1", 64) || result.EffectiveInputSHA256 != strings.Repeat("2", 64) || result.APIMode != ai.APIChatCompletions || result.ProviderPath != "github-copilot/claude-sonnet-4.6" || result.TransportID != "copilot-structural-proxy-v1" || result.Repetition != 2 || result.Outcome != string(benchmarkOutcomeUsable) || result.IsTransient == nil || *result.IsTransient || result.SignalHits != 1 || result.DiagnosisSignalHits != 1 || result.DiagnosisSignalTotal != 1 || result.TransientCorrect != nil || result.ForbiddenChecksPassed != 0 || result.ForbiddenChecksTotal != 0 || result.SourceRevision != strings.Repeat("a", 40) || result.SourceUnavailable || result.TestSource != models.TestCaseSourceBuild ||
+	if !slices.Equal(result.EvidenceGroupsSelected, []string{"initiating-error"}) || !slices.Equal(result.EvidenceGroupsHit, []string{"initiating-error"}) || !slices.Equal(result.EvidenceGroupsMissed, []string{"secondary-evidence"}) || !slices.Equal(result.EvidenceGroupSources["initiating-error"], []string{"model_tool"}) || result.EvidenceTelemetryVersion != 1 || result.EvidenceCondition != benchmarkEvidenceConditionFixture || result.EvidenceStageSHA256 != benchmarkEvidenceStageSHA256(bc.evidenceGroups) || !result.ModelRequestMade || result.TrialStatus != "contract_violation" || result.EvidenceStages == nil || result.EvidenceRevisions == nil || result.ModelLabel != "model-a" || result.Arm != "variant" || result.EngineCommit != strings.Repeat("b", 40) || result.FixtureSHA256 != strings.Repeat("c", 64) || result.BaselineConsumerCommit != strings.Repeat("d", 40) || result.BaselinePromptSHA256 != strings.Repeat("3", 64) || result.ProjectSHA256 != strings.Repeat("e", 64) || result.EffectivePromptSHA256 != strings.Repeat("f", 64) || result.SkillSetHash != strings.Repeat("1", 64) || result.EffectiveInputSHA256 != strings.Repeat("2", 64) || result.APIMode != ai.APIChatCompletions || result.ProviderPath != "github-copilot/claude-sonnet-4.6" || result.TransportID != "copilot-structural-proxy-v1" || result.Repetition != 2 || result.Outcome != string(benchmarkOutcomeUsable) || result.IsTransient == nil || *result.IsTransient || result.SignalHits != 1 || result.DiagnosisSignalHits != 1 || result.DiagnosisSignalTotal != 1 || result.TransientCorrect != nil || result.ForbiddenChecksPassed != 0 || result.ForbiddenChecksTotal != 0 || result.SourceRevision != strings.Repeat("a", 40) || result.SourceUnavailable || result.TestSource != models.TestCaseSourceBuild ||
 		result.Trace.Finalize["empty:unexpected_tool_call"] != 1 || result.Trace.Critique["punts"] != 1 || result.GCSBytes != 42 ||
 		!result.EvidencePlanCovered || !result.GCSFloorRetryExhausted || result.CritiquePassed == nil || !*result.CritiquePassed || !result.BudgetExhausted ||
 		result.FloorNudges != 1 || !slices.Equal(result.FloorNudgeReasons, []string{"gcs_bytes"}) ||
@@ -951,7 +969,7 @@ func TestWriteBenchmarkJSONLRecordsGroundedUnavailableOutcome(t *testing.T) {
 	}
 	tc := &models.TestCase{AISummary: &models.AISummary{Summary: "AI analysis unavailable: no validated artifact citation supports the analysis"}}
 	writeBenchmarkJSONL(t, path, bc, 1, tc, benchmarkOutcomeGroundedPolicyUnavailable, time.Second, ai.AnalysisTraceFile{}, nil, 0, benchmarkToolUsage{}, benchmarkTraceSummary{}, 1, "", ai.CritiqueCachePolicyHard, benchmarkCacheVerification{}, benchmarkRunIdentity{
-		Arm: "baseline", EngineCommit: strings.Repeat("b", 40), EffectivePromptSHA256: strings.Repeat("f", 64), SkillSetHash: strings.Repeat("1", 64), EffectiveInputSHA256: strings.Repeat("2", 64), EvidenceCondition: benchmarkEvidenceConditionFixture, APIMode: ai.APIChatCompletions,
+		Arm: "baseline", EngineCommit: strings.Repeat("b", 40), EffectivePromptSHA256: strings.Repeat("f", 64), SkillSetHash: strings.Repeat("1", 64), EffectiveInputSHA256: strings.Repeat("2", 64), EvidenceCondition: benchmarkEvidenceConditionFixture, EvidenceStageSHA256: benchmarkEvidenceStageSHA256(bc.evidenceGroups), APIMode: ai.APIChatCompletions,
 	}, benchmarkEvidenceCoverage{}, benchmarkEvidenceStageReport{Condition: benchmarkEvidenceConditionFixture, TrialStatus: "invalid_result"})
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -963,5 +981,80 @@ func TestWriteBenchmarkJSONLRecordsGroundedUnavailableOutcome(t *testing.T) {
 	}
 	if result.Outcome != string(benchmarkOutcomeGroundedPolicyUnavailable) || result.TrialStatus != "invalid_result" || result.EvidenceCondition != benchmarkEvidenceConditionFixture || result.Usable || result.IsTransient == nil || *result.IsTransient || result.Summary != tc.AISummary.Summary {
 		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestWriteBenchmarkJSONLRecordsFailedTrials(t *testing.T) {
+	t.Setenv("BENCH_MODEL_LABEL", "model-a")
+	group := benchmarkEvidenceGroup{id: "stage"}
+	bc := benchCase{
+		name: "case-failed", stableID: "abcdef0123456789abcd", jobName: "job", buildID: "123", testName: "test",
+		commit: strings.Repeat("a", 40), repoVersion: strings.Repeat("a", 40), repoRefs: map[string]string{"example/project": strings.Repeat("a", 40)},
+		sourceRepo: [2]string{"example", "project"}, evidenceGroups: []benchmarkEvidenceGroup{group},
+		fixtureSHA256: strings.Repeat("f", 64), consumerCommit: strings.Repeat("1", 40), promptSHA256: strings.Repeat("2", 64), projectSHA256: strings.Repeat("3", 64),
+		signals: []benchSignal{{name: "cause", re: regexp.MustCompile(`cause`)}},
+	}
+	identity := benchmarkRunIdentity{
+		Arm: "baseline", EngineCommit: strings.Repeat("b", 40), FixtureSHA256: bc.fixtureSHA256,
+		BaselineConsumerCommit: bc.consumerCommit, BaselinePromptSHA256: bc.promptSHA256, ProjectSHA256: bc.projectSHA256,
+		EffectivePromptSHA256: strings.Repeat("c", 64), SkillSetHash: strings.Repeat("d", 64), EffectiveInputSHA256: strings.Repeat("e", 64),
+		EvidenceCondition: benchmarkEvidenceConditionFixture, EvidenceStageSHA256: benchmarkEvidenceStageSHA256(bc.evidenceGroups),
+		APIMode: ai.APIChatCompletions, ProviderPath: "local/model", TransportID: "chat-v1",
+	}
+	valid := &models.TestCase{AISummary: &models.AISummary{Summary: "summary"}, AIAnalysis: &models.AIAnalysis{RootCause: "cause"}}
+	invalid := &models.TestCase{AISummary: &models.AISummary{Summary: "unavailable"}}
+	for _, tc := range []struct {
+		name         string
+		status       string
+		outcome      benchmarkOutcome
+		result       *models.TestCase
+		modelRequest bool
+		wantOutcome  benchmarkOutcome
+		wantUsable   bool
+	}{
+		{name: "no result", status: "no_result", outcome: benchmarkOutcomeUsable, wantOutcome: benchmarkOutcomeUnknown},
+		{name: "invalid result", status: "invalid_result", outcome: benchmarkOutcomeGroundedPolicyUnavailable, result: invalid, modelRequest: true, wantOutcome: benchmarkOutcomeGroundedPolicyUnavailable},
+		{name: "timeout", status: "timeout", outcome: benchmarkOutcomeUnknown, modelRequest: true, wantOutcome: benchmarkOutcomeUnknown},
+		{name: "runtime failure", status: "runtime_failure", outcome: benchmarkOutcomeUnknown, modelRequest: true, wantOutcome: benchmarkOutcomeUnknown},
+		{name: "contract violation", status: "contract_violation", outcome: benchmarkOutcomeUsable, result: valid, modelRequest: true, wantOutcome: benchmarkOutcomeUsable, wantUsable: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "results.jsonl")
+			stage := benchmarkEvidenceStage{GroupID: group.id}
+			report := benchmarkEvidenceStageReport{
+				Condition: benchmarkEvidenceConditionFixture, ModelRequestMade: tc.modelRequest,
+				Stages: []benchmarkEvidenceStage{stage}, TrialStatus: tc.status,
+			}
+			writeBenchmarkJSONL(t, path, bc, 1, tc.result, tc.outcome, time.Second, ai.AnalysisTraceFile{}, nil, 0,
+				benchmarkToolUsage{}, benchmarkTraceSummary{}, 1, "", ai.CritiqueCachePolicyHard,
+				benchmarkCacheVerification{}, identity, benchmarkEvidenceCoverage{}, report)
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var result benchmarkJSONLResult
+			if err := json.Unmarshal(data, &result); err != nil {
+				t.Fatal(err)
+			}
+			if result.TrialStatus != tc.status || result.Outcome != string(tc.wantOutcome) || result.Usable != tc.wantUsable || result.ModelRequestMade != tc.modelRequest {
+				t.Fatalf("result = %+v", result)
+			}
+			var inprocess map[string]any
+			if err := json.Unmarshal(data, &inprocess); err != nil {
+				t.Fatal(err)
+			}
+			_, shadow := validShadowReportRecords()
+			for _, field := range []string{"case_id", "repetition", "arm", "engine_commit", "fixture_sha256", "baseline_consumer_commit", "baseline_prompt_sha256", "project_sha256", "skill_set_hash", "provider_path", "transport_id", "api_mode", "model_label", "stable_id", "evidence_condition", "evidence_stage_sha256", "evidence_stage_ids", "source_revision", "human_score_rubric_version", "human_score_max", "human_score_dimensions", "signal_total"} {
+				shadow[field] = inprocess[field]
+			}
+			shadow["signal_hits"] = 0
+			output, err := runShadowReport(t, string(data), marshalJSONL(t, shadow))
+			if err != nil {
+				t.Fatalf("failed trial record was rejected by report: %v: %s", err, output)
+			}
+			if !strings.Contains(string(output), tc.status) {
+				t.Fatalf("report omitted trial status %q: %s", tc.status, output)
+			}
+		})
 	}
 }

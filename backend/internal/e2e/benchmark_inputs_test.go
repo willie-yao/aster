@@ -28,6 +28,7 @@ type benchmarkRunIdentity struct {
 	EffectiveInputSHA256   string
 	EvidenceCondition      string
 	FrozenEvidenceSHA256   string
+	EvidenceStageSHA256    string
 	APIMode                string
 	ProviderPath           string
 	TransportID            string
@@ -174,6 +175,7 @@ func validateBenchmarkRunIdentity(identity benchmarkRunIdentity) error {
 		"skill-set hash":           identity.SkillSetHash,
 		"effective input SHA-256":  identity.EffectiveInputSHA256,
 		"frozen evidence SHA-256":  identity.FrozenEvidenceSHA256,
+		"evidence stage SHA-256":   identity.EvidenceStageSHA256,
 	} {
 		if value != "" && !benchmarkSHA256RE.MatchString(value) {
 			return fmt.Errorf("benchmark %s is invalid", name)
@@ -249,13 +251,14 @@ func benchmarkEffectiveInputSHA256(identity benchmarkRunIdentity, agentic projec
 		TransportID           string          `json:"transport_id,omitempty"`
 		EvidenceCondition     string          `json:"evidence_condition"`
 		FrozenEvidenceSHA256  string          `json:"frozen_evidence_sha256,omitempty"`
+		EvidenceStageSHA256   string          `json:"evidence_stage_sha256,omitempty"`
 		CacheGeneration       string          `json:"cache_generation,omitempty"`
 		Agentic               project.Agentic `json:"agentic"`
 	}{
 		ProjectSHA256: identity.ProjectSHA256, BaselinePromptSHA256: identity.BaselinePromptSHA256,
 		EffectivePromptSHA256: identity.EffectivePromptSHA256, SkillSetHash: identity.SkillSetHash,
 		APIMode: identity.APIMode, ProviderPath: identity.ProviderPath, TransportID: identity.TransportID,
-		EvidenceCondition: identity.EvidenceCondition, FrozenEvidenceSHA256: identity.FrozenEvidenceSHA256,
+		EvidenceCondition: identity.EvidenceCondition, FrozenEvidenceSHA256: identity.FrozenEvidenceSHA256, EvidenceStageSHA256: identity.EvidenceStageSHA256,
 		CacheGeneration: cacheGeneration, Agentic: agentic,
 	})
 	if err != nil {
@@ -519,5 +522,9 @@ func TestBenchmarkEffectiveInputIncludesEvidenceCondition(t *testing.T) {
 	oracle := benchmarkEffectiveInputSHA256(identity, project.Agentic{}, "generation")
 	if fixture == oracle {
 		t.Fatal("evidence conditions shared an effective input identity")
+	}
+	identity.EvidenceStageSHA256 = strings.Repeat("e", 64)
+	if withStages := benchmarkEffectiveInputSHA256(identity, project.Agentic{}, "generation"); withStages == oracle {
+		t.Fatal("evidence stage identities shared an effective input identity")
 	}
 }

@@ -18,7 +18,7 @@ type benchmarkEvidenceGroup struct {
 	id                 string
 	pathREs            []*regexp.Regexp
 	contentREs         []*regexp.Regexp
-	causalREs          []*regexp.Regexp
+	causalSignals      []benchSignal
 	oracleContextLines *int
 }
 

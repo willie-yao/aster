@@ -57,6 +57,8 @@ COMMON_SCHEMA = {
     "api_mode": (nonempty_string, "a non-empty string"),
     "model_label": (nonempty_string, "a non-empty string"),
     "evidence_condition": (no_whitespace_string, "a non-empty string without whitespace"),
+    "evidence_stage_sha256": (LOWER_HEX_64, "64 lowercase hexadecimal characters"),
+    "evidence_stage_ids": (lambda value: string_list(value) and bool(value), "a non-empty string list"),
     "source_revision": (LOWER_HEX_40, "40 lowercase hexadecimal characters"),
     "signal_hits": (nonnegative_integer, "a non-negative integer"),
     "signal_total": (positive_integer, "a positive integer"),
@@ -76,6 +78,7 @@ INPROCESS_SCHEMA = {
     "trace": (lambda value: isinstance(value, dict), "an object"),
     "evidence_telemetry_version": (positive_integer, "a positive integer"),
     "trial_status": (nonempty_string, "a non-empty string"),
+    "model_request_made": (lambda value: type(value) is bool, "a boolean"),
     "evidence_stages": (lambda value: isinstance(value, list), "a list"),
     "evidence_revisions": (lambda value: isinstance(value, list), "a list"),
 }
@@ -122,6 +125,8 @@ PAIR_FIELDS = (
     "model_label",
     "stable_id",
     "evidence_condition",
+    "evidence_stage_sha256",
+    "evidence_stage_ids",
     "source_revision",
     "human_score_rubric_version",
     "human_score_max",
@@ -131,11 +136,6 @@ PAIR_FIELDS = (
 
 EVIDENCE_CONDITIONS = {"fixture-v1", "kueue-oracle-v1"}
 TRIAL_STATUSES = {"valid_result", "no_result", "invalid_result", "contract_violation", "timeout", "runtime_failure"}
-
-INPROCESS_OUTCOMES = {
-    "usable": True,
-    "grounded_policy_unavailable": False,
-}
 
 SHADOW_ERROR_CODES = {
     "succeeded": None,
@@ -164,7 +164,8 @@ def validate_common_contract(path, line_no, record, kind):
 def validate_inprocess(path, line_no, record):
     if record["evidence_telemetry_version"] != 1:
         invalid(path, line_no, "in-process evidence_telemetry_version must be 1")
-    if record["trial_status"] not in TRIAL_STATUSES:
+    status = record["trial_status"]
+    if status not in TRIAL_STATUSES:
         invalid(path, line_no, "in-process trial_status is invalid")
     if record["evidence_condition"] == "kueue-oracle-v1" and not LOWER_HEX_64(record.get("frozen_evidence_sha256")):
         invalid(path, line_no, "oracle in-process record requires frozen_evidence_sha256")
@@ -184,10 +185,15 @@ def validate_inprocess(path, line_no, record):
         for field in stage_booleans:
             if type(stage.get(field)) is not bool:
                 invalid(path, line_no, f"in-process evidence stage {field} must be a boolean")
-        if record["evidence_condition"] == "kueue-oracle-v1" and not all(
-            stage[field] for field in stage_booleans[:4]
-        ):
-            invalid(path, line_no, "oracle in-process evidence stage is incomplete")
+        if not record["model_request_made"] and stage["model_received_evidence"]:
+            invalid(path, line_no, "in-process evidence stage reports receipt without a model request")
+        if record["evidence_condition"] == "kueue-oracle-v1":
+            if not all(stage[field] for field in stage_booleans[:3]):
+                invalid(path, line_no, "oracle in-process evidence stage is incomplete")
+            if stage["model_received_evidence"] is not record["model_request_made"]:
+                invalid(path, line_no, "oracle in-process evidence stage has invalid model receipt")
+    if sorted(seen_groups) != record["evidence_stage_ids"]:
+        invalid(path, line_no, "in-process evidence stage IDs do not match stages")
     for revision in record["evidence_revisions"]:
         if not isinstance(revision, dict) or not positive_integer(revision.get("initial_attempt")) or not positive_integer(revision.get("revised_attempt")) or not nonempty_string(revision.get("phase")) or type(revision.get("selected")) is not bool:
             invalid(path, line_no, "in-process evidence revision is malformed")
@@ -196,16 +202,22 @@ def validate_inprocess(path, line_no, record):
                 invalid(path, line_no, f"in-process evidence revision {field} must be a string list")
 
     outcome = record["outcome"]
-    if outcome not in INPROCESS_OUTCOMES:
-        allowed = ", ".join(sorted(INPROCESS_OUTCOMES))
-        invalid(path, line_no, f"in-process outcome must be one of: {allowed}")
-    expected_usable = INPROCESS_OUTCOMES[outcome]
-    if record["usable"] is not expected_usable:
-        invalid(path, line_no, f"in-process usable must be {str(expected_usable).lower()} for outcome {outcome}")
-    if record["trial_status"] == "valid_result" and not record["usable"]:
-        invalid(path, line_no, "in-process valid_result requires usable=true")
-    if record["trial_status"] in {"no_result", "invalid_result", "timeout", "runtime_failure"} and record["usable"]:
-        invalid(path, line_no, f"in-process {record['trial_status']} requires usable=false")
+    allowed_outcomes = {"usable", "grounded_policy_unavailable", "unknown"}
+    if outcome not in allowed_outcomes:
+        invalid(path, line_no, "in-process outcome is invalid")
+    usable = record["usable"]
+    if status == "valid_result":
+        if outcome != "usable" or not usable or not record["model_request_made"]:
+            invalid(path, line_no, "in-process valid_result requires outcome=usable, usable=true, and a model request")
+    elif status == "invalid_result":
+        if outcome != "grounded_policy_unavailable" or usable:
+            invalid(path, line_no, "in-process invalid_result requires grounded_policy_unavailable and usable=false")
+    elif status in {"no_result", "timeout", "runtime_failure"}:
+        if outcome != "unknown" or usable:
+            invalid(path, line_no, f"in-process {status} requires outcome=unknown and usable=false")
+    elif status == "contract_violation":
+        if (outcome, usable) not in {("usable", True), ("unknown", False)}:
+            invalid(path, line_no, "in-process contract_violation has inconsistent outcome or usability")
 
     trace = record["trace"]
     for field in ("input_tokens", "output_tokens"):
@@ -349,7 +361,7 @@ def main():
                 condition=key[1],
                 rep=key[2],
                 model=direct["model_label"],
-                direct_status=direct["outcome"],
+                direct_status=direct["trial_status"],
                 direct_hits=direct["signal_hits"],
                 direct_total=direct["signal_total"],
                 direct_ms=direct["elapsed_ms"],

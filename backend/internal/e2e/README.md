@@ -164,25 +164,33 @@ scans the pinned fixture and records whether each required signal exists. During
 the trial it separately records candidate-path selection, decisive excerpt
 delivery, model receipt, final citation, and root-cause-only causal use.
 `evidence_group_sources` distinguishes native model Tool calls (`model_tool`),
-deterministic critique repair (`repair_injection`), and a frozen benchmark bundle
-(`oracle_prompt`). An untagged test-only read is `unknown` and does not count as
-model receipt. The private JSONL stores only content-free group states and never
-stores matching content.
+deterministic critique repair (`repair_injection`), and a prepared frozen
+benchmark bundle (`oracle_prompt`). An oracle excerpt counts as model receipt
+only after the trace shows that a model request containing the prepared prompt
+was made. An untagged
+test-only read is `unknown` and does not count as model receipt. The private
+JSONL stores only content-free group states and never stores matching content.
 
 Draft telemetry records which supported causal facts a critique, evidence, or
 semantic retry retained, added, or dropped. It does not claim per-draft citation
 retention because the benchmark observer does not receive draft citations.
 `trial_status` distinguishes `valid_result`, `no_result`, `invalid_result`,
 `contract_violation`, `timeout`, and `runtime_failure`. The JSONL row is written
-before a failing trial stops the test.
+before a failing trial stops the test. Comparison reports display this status,
+not the legacy analysis outcome, so a contract violation cannot appear as a
+normal usable trial.
 
 `BENCH_EVIDENCE_CONDITION` defaults to `fixture-v1`. The benchmark-only
 `kueue-oracle-v1` condition is available only for the pinned Kueue API-version
 case. It extracts a compact line-centered bundle from the verified fixture,
 checks the committed bundle hash, and gives those raw artifact lines to the
-in-process model. Scoring names, regexes, and the reference diagnosis are not
-included in the model-visible bundle. This condition changes only benchmark
-input and identity. It does not change production analysis behavior.
+in-process model. Preparation has one 30-second deadline and a 128 MiB aggregate
+scan budget. Scoring names, regexes, and the reference diagnosis are not included
+in the model-visible bundle. The evidence-stage configuration is hashed, and
+its expected sorted IDs are paired across comparison records so missing stages
+fail closed. This condition
+changes only benchmark input and identity. It does not change production
+analysis behavior.
 
 JSONL also separates `diagnosis_signal_hits` from transient and forbidden-claim
 policy checks. This prevents a placeholder or abstaining answer from appearing

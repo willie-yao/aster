@@ -652,6 +652,7 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 	}
 	effectivePrompt := systemPrompt + preparation.prompt
 	identity.FrozenEvidenceSHA256 = preparation.frozenSHA256
+	identity.EvidenceStageSHA256 = benchmarkEvidenceStageSHA256(bc.evidenceGroups)
 	identity.EffectivePromptSHA256 = sha256Hex([]byte(effectivePrompt))
 	identity.EffectiveInputSHA256 = benchmarkEffectiveInputSHA256(identity, agentic, cacheGeneration)
 	if err := validateBenchmarkRunIdentity(identity); err != nil {
@@ -767,7 +768,7 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 	if len(draftObservations) > 0 && selectedAttempt == 0 {
 		trialStatus = "contract_violation"
 	}
-	stageReport := buildBenchmarkEvidenceStageReport(bc, preparation, evidenceCoverage, tc, draftObservations, selectedAttempt, trialStatus)
+	stageReport := buildBenchmarkEvidenceStageReport(bc, preparation, evidenceCoverage, tc, draftObservations, selectedAttempt, traceSummary.modelRequests > 0, trialStatus)
 	if err := validateBenchmarkEvidenceStageReport(bc, stageReport); err != nil {
 		t.Fatalf("validate benchmark evidence stages: %v", err)
 	}

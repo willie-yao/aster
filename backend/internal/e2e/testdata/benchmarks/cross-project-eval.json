@@ -149,7 +149,11 @@
             "(?i)scheduling\\.k8s\\.io/v1alpha3(?:=true)?"
           ],
           "causal": [
-            "(?is)(?:served|configured|runtime-config).{0,120}scheduling\\.k8s\\.io/v1alpha3|scheduling\\.k8s\\.io/v1alpha3.{0,120}(?:served|configured|runtime-config)"
+            {
+              "name": "served v1alpha3 configuration is causal",
+              "pattern": "(?is)(?:served|configured|runtime-config).{0,120}scheduling\\.k8s\\.io/v1alpha3|scheduling\\.k8s\\.io/v1alpha3.{0,120}(?:served|configured|runtime-config)",
+              "negated": "(?is)(?:not|was not|wasn.t|did not).{0,120}(?:serve|configure|runtime-config).{0,120}v1alpha3|v1alpha3.{0,120}(?:not served|not configured|was not served|was not configured|unrelated|incidental|not causal)"
+            }
           ],
           "oracle_context_lines": 2
         },
@@ -164,7 +168,11 @@
             "(?i)URI=\"/apis/scheduling\\.k8s\\.io/v1beta1/podgroups[^\\\"]*\".{0,300}resp=404"
           ],
           "causal": [
-            "(?is)v1beta1(?:\\.PodGroup| PodGroups?|/podgroups).{0,180}(?:404|not[ -]?found|could not find the requested resource|unavailable)|(?:404|not[ -]?found|could not find the requested resource|unavailable).{0,180}v1beta1(?:\\.PodGroup| PodGroups?|/podgroups)"
+            {
+              "name": "rejected v1beta1 PodGroup request is causal",
+              "pattern": "(?is)v1beta1(?:\\.PodGroup| PodGroups?|/podgroups).{0,180}(?:404|not[ -]?found|could not find the requested resource|unavailable)|(?:404|not[ -]?found|could not find the requested resource|unavailable).{0,180}v1beta1(?:\\.PodGroup| PodGroups?|/podgroups)",
+              "negated": "(?is)(?:not|did not|didn.t|was not|wasn.t).{0,160}(?:unavailable|return(?:ed)? 404|not[ -]?found|could not find)|(?:unavailable|404|not[ -]?found|could not find).{0,160}(?:not causal|did not cause|was not causal|incidental|unrelated|succeeded|completed successfully)"
+            }
           ],
           "oracle_context_lines": 1
         },
@@ -177,7 +185,11 @@
             "(?i)(?:sched-handler-sync|handlers are not fully synchronized|readyz.{0,80}(?:500|failed))"
           ],
           "causal": [
-            "(?is)(?:scheduler.{0,180}(?:sync|handler)|(?:sync|handler).{0,180}scheduler)"
+            {
+              "name": "scheduler handler synchronization failure is causal",
+              "pattern": "(?is)(?:sched-handler-sync.{0,80}(?:failed|not fully synchronized)|handlers? (?:are|were) not fully synchronized|scheduler.{0,180}(?:failed|unable|never).{0,120}(?:sync|handler)|(?:sync|handler).{0,180}(?:failure|failed).{0,120}scheduler)",
+              "negated": "(?is)(?:scheduler|handler|sync).{0,180}(?:completed successfully|not causal|did not cause|was not causal|incidental|unrelated)|(?:completed successfully|not causal|did not cause|was not causal|incidental|unrelated).{0,180}(?:scheduler|handler|sync)"
+            }
           ],
           "oracle_context_lines": 1
         },

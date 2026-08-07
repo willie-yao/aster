@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
@@ -24,9 +25,10 @@ const (
 	benchmarkEvidenceConditionFixture = "fixture-v1"
 	benchmarkEvidenceConditionOracle  = "kueue-oracle-v1"
 
-	benchmarkEvidenceTreeMaxPaths = 5000
-	benchmarkEvidenceScanMaxBytes = 64 * 1024 * 1024
-	benchmarkOraclePromptMaxBytes = 24 * 1024
+	benchmarkEvidenceTreeMaxPaths        = 5000
+	benchmarkEvidencePreparationMaxBytes = 128 * 1024 * 1024
+	benchmarkEvidencePreparationTimeout  = 30 * time.Second
+	benchmarkOraclePromptMaxBytes        = 24 * 1024
 )
 
 type benchmarkEvidencePreparation struct {
@@ -60,11 +62,12 @@ type benchmarkEvidenceRevision struct {
 }
 
 type benchmarkEvidenceStageReport struct {
-	Condition    string
-	FrozenSHA256 string
-	Stages       []benchmarkEvidenceStage
-	Revisions    []benchmarkEvidenceRevision
-	TrialStatus  string
+	Condition        string
+	FrozenSHA256     string
+	ModelRequestMade bool
+	Stages           []benchmarkEvidenceStage
+	Revisions        []benchmarkEvidenceRevision
+	TrialStatus      string
 }
 
 type benchmarkOracleExcerpt struct {
@@ -89,6 +92,8 @@ func benchmarkEvidenceCondition() (string, error) {
 }
 
 func prepareBenchmarkEvidence(ctx context.Context, browser artifacts.Browser, bc benchCase, condition string, recorder *benchmarkEvidenceRecorder) (benchmarkEvidencePreparation, error) {
+	ctx, cancel := context.WithTimeout(ctx, benchmarkEvidencePreparationTimeout)
+	defer cancel()
 	out := benchmarkEvidencePreparation{
 		condition:       condition,
 		fixtureContains: map[string]bool{},
@@ -109,17 +114,31 @@ func prepareBenchmarkEvidence(ctx context.Context, browser artifacts.Browser, bc
 	}
 	sort.Strings(paths)
 
+	var bytesScanned int64
 	var excerpts []benchmarkOracleExcerpt
 	for _, group := range bc.evidenceGroups {
 		candidates := benchmarkEvidenceCandidates(group, paths)
 		for _, candidate := range candidates {
+			if err := ctx.Err(); err != nil {
+				return out, fmt.Errorf("scan benchmark evidence: %w", err)
+			}
 			clean, err := artifacts.SafePath(candidate)
 			if err != nil || clean != candidate || clean == "" {
 				return out, fmt.Errorf("benchmark evidence group %q selected unsafe path %q", group.id, candidate)
 			}
-			result, err := grepBenchmarkEvidence(ctx, browser, candidate, group)
+			remaining := int64(benchmarkEvidencePreparationMaxBytes) - bytesScanned
+			if remaining <= 0 {
+				return out, fmt.Errorf("scan benchmark evidence exceeded %d bytes", benchmarkEvidencePreparationMaxBytes)
+			}
+			result, err := grepBenchmarkEvidence(ctx, browser, candidate, group, int(remaining))
 			if err != nil {
 				return out, fmt.Errorf("scan benchmark evidence group %q in %s: %w", group.id, candidate, err)
+			}
+			if result != nil {
+				bytesScanned += result.BytesScanned
+			}
+			if bytesScanned > int64(benchmarkEvidencePreparationMaxBytes) {
+				return out, fmt.Errorf("scan benchmark evidence exceeded %d bytes", benchmarkEvidencePreparationMaxBytes)
 			}
 			if result == nil || len(result.Matches) == 0 {
 				continue
@@ -180,21 +199,20 @@ func benchmarkEvidenceCandidates(group benchmarkEvidenceGroup, paths []string) [
 	return out
 }
 
-func grepBenchmarkEvidence(ctx context.Context, browser artifacts.Browser, path string, group benchmarkEvidenceGroup) (*artifacts.GrepResult, error) {
-	patterns := group.contentREs
-	if len(patterns) == 0 {
-		patterns = []*regexp.Regexp{regexp.MustCompile(`(?s).+`)}
-	}
-	for _, pattern := range patterns {
-		result, err := browser.Grep(ctx, path, pattern, benchmarkOracleContext(group), 1, 4096, benchmarkEvidenceScanMaxBytes)
+func grepBenchmarkEvidence(ctx context.Context, browser artifacts.Browser, path string, group benchmarkEvidenceGroup, maxBytes int) (*artifacts.GrepResult, error) {
+	pattern := regexp.MustCompile(`(?s).+`)
+	if len(group.contentREs) > 0 {
+		parts := make([]string, 0, len(group.contentREs))
+		for _, contentRE := range group.contentREs {
+			parts = append(parts, "(?:"+contentRE.String()+")")
+		}
+		combined, err := regexp.Compile(strings.Join(parts, "|"))
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("combine benchmark evidence patterns: %w", err)
 		}
-		if result != nil && len(result.Matches) > 0 {
-			return result, nil
-		}
+		pattern = combined
 	}
-	return &artifacts.GrepResult{}, nil
+	return browser.Grep(ctx, path, pattern, benchmarkOracleContext(group), 1, 4096, maxBytes)
 }
 
 func benchmarkOracleContext(group benchmarkEvidenceGroup) int {
@@ -240,8 +258,8 @@ func renderBenchmarkOraclePrompt(excerpts []benchmarkOracleExcerpt) string {
 	return out.String()
 }
 
-func buildBenchmarkEvidenceStageReport(bc benchCase, prep benchmarkEvidencePreparation, coverage benchmarkEvidenceCoverage, tc *models.TestCase, observations []benchmarkDraftObservation, selectedAttempt int, trialStatus string) benchmarkEvidenceStageReport {
-	report := benchmarkEvidenceStageReport{Condition: prep.condition, FrozenSHA256: prep.frozenSHA256, TrialStatus: trialStatus}
+func buildBenchmarkEvidenceStageReport(bc benchCase, prep benchmarkEvidencePreparation, coverage benchmarkEvidenceCoverage, tc *models.TestCase, observations []benchmarkDraftObservation, selectedAttempt int, modelRequestMade bool, trialStatus string) benchmarkEvidenceStageReport {
+	report := benchmarkEvidenceStageReport{Condition: prep.condition, FrozenSHA256: prep.frozenSHA256, ModelRequestMade: modelRequestMade, TrialStatus: trialStatus}
 	selected := sliceSet(coverage.selected)
 	rootCause := ""
 	var citations []models.EvidenceCitation
@@ -251,12 +269,12 @@ func buildBenchmarkEvidenceStageReport(bc benchCase, prep benchmarkEvidencePrepa
 	}
 	for _, group := range bc.evidenceGroups {
 		sources := append([]string(nil), coverage.sources[group.id]...)
-		received := slices.Contains(sources, "model_tool") || slices.Contains(sources, "repair_injection") || slices.Contains(sources, "oracle_prompt")
+		received := slices.Contains(sources, "model_tool") || slices.Contains(sources, "repair_injection") || (modelRequestMade && slices.Contains(sources, "oracle_prompt"))
 		report.Stages = append(report.Stages, benchmarkEvidenceStage{
 			GroupID: group.id, RequiredSignalInFixture: prep.fixtureContains[group.id], CandidatePathSelected: selected[group.id],
 			FrozenExcerptContains: prep.excerptContains[group.id] || slices.Contains(coverage.hit, group.id), ModelReceivedEvidence: received,
-			EvidenceCited: benchmarkEvidenceGroupCited(group, citations), CausallyUsedInRootCause: matchesBenchmarkEvidence(group.causalREs, []byte(rootCause)),
-			CausalSignalConfigured: len(group.causalREs) > 0, DeliverySources: sources,
+			EvidenceCited: benchmarkEvidenceGroupCited(group, citations), CausallyUsedInRootCause: benchmarkCausalSignalMatches(group.causalSignals, rootCause),
+			CausalSignalConfigured: len(group.causalSignals) > 0, DeliverySources: sources,
 		})
 	}
 	report.Revisions = benchmarkEvidenceRevisions(bc.evidenceGroups, observations, selectedAttempt)
@@ -293,15 +311,72 @@ func benchmarkEvidenceRevisions(groups []benchmarkEvidenceGroup, observations []
 	return out
 }
 
+func benchmarkCausalSignalMatches(signals []benchSignal, rootCause string) bool {
+	for _, signal := range signals {
+		if signal.matches(rootCause) {
+			return true
+		}
+	}
+	return false
+}
+
 func benchmarkCausalGroups(groups []benchmarkEvidenceGroup, rootCause string) []string {
 	var out []string
 	for _, group := range groups {
-		if len(group.causalREs) > 0 && matchesBenchmarkEvidence(group.causalREs, []byte(rootCause)) {
+		if len(group.causalSignals) > 0 && benchmarkCausalSignalMatches(group.causalSignals, rootCause) {
 			out = append(out, group.id)
 		}
 	}
 	sort.Strings(out)
 	return out
+}
+
+func benchmarkEvidenceStageIDs(groups []benchmarkEvidenceGroup) []string {
+	ids := make([]string, 0, len(groups))
+	for _, group := range groups {
+		ids = append(ids, group.id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func benchmarkEvidenceStageSHA256(groups []benchmarkEvidenceGroup) string {
+	type causalIdentity struct {
+		Name    string `json:"name"`
+		Pattern string `json:"pattern"`
+		Negated string `json:"negated,omitempty"`
+	}
+	type groupIdentity struct {
+		ID                 string           `json:"id"`
+		Paths              []string         `json:"paths"`
+		Content            []string         `json:"content,omitempty"`
+		Causal             []causalIdentity `json:"causal,omitempty"`
+		OracleContextLines *int             `json:"oracle_context_lines,omitempty"`
+	}
+	identities := make([]groupIdentity, 0, len(groups))
+	for _, group := range groups {
+		identity := groupIdentity{ID: group.id, OracleContextLines: group.oracleContextLines}
+		for _, pathRE := range group.pathREs {
+			identity.Paths = append(identity.Paths, pathRE.String())
+		}
+		for _, contentRE := range group.contentREs {
+			identity.Content = append(identity.Content, contentRE.String())
+		}
+		for _, signal := range group.causalSignals {
+			causal := causalIdentity{Name: signal.name, Pattern: signal.re.String()}
+			if signal.negated != nil {
+				causal.Negated = signal.negated.String()
+			}
+			identity.Causal = append(identity.Causal, causal)
+		}
+		identities = append(identities, identity)
+	}
+	sort.Slice(identities, func(i, j int) bool { return identities[i].ID < identities[j].ID })
+	data, err := json.Marshal(identities)
+	if err != nil {
+		panic(fmt.Sprintf("marshal benchmark evidence stage identity: %v", err))
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(data))
 }
 
 func sliceSet(values []string) map[string]bool {
@@ -349,9 +424,20 @@ func validateBenchmarkEvidenceStageReport(bc benchCase, report benchmarkEvidence
 		if stage.GroupID != group.id {
 			return fmt.Errorf("benchmark evidence stage %d does not match group %q", i, group.id)
 		}
-		if report.Condition == benchmarkEvidenceConditionOracle && group.oracleContextLines != nil && (!stage.RequiredSignalInFixture || !stage.CandidatePathSelected || !stage.FrozenExcerptContains || !stage.ModelReceivedEvidence) {
-			return fmt.Errorf("benchmark oracle evidence stage %q is incomplete", group.id)
+		if !report.ModelRequestMade && stage.ModelReceivedEvidence {
+			return fmt.Errorf("benchmark evidence stage %q reports receipt without a model request", group.id)
 		}
+		if report.Condition == benchmarkEvidenceConditionOracle && group.oracleContextLines != nil {
+			if !stage.RequiredSignalInFixture || !stage.CandidatePathSelected || !stage.FrozenExcerptContains {
+				return fmt.Errorf("benchmark oracle evidence stage %q is incomplete", group.id)
+			}
+			if stage.ModelReceivedEvidence != report.ModelRequestMade {
+				return fmt.Errorf("benchmark oracle evidence stage %q has invalid model receipt", group.id)
+			}
+		}
+	}
+	if report.TrialStatus == "valid_result" && !report.ModelRequestMade {
+		return fmt.Errorf("benchmark valid result requires a model request")
 	}
 	switch report.TrialStatus {
 	case "valid_result", "no_result", "invalid_result", "contract_violation", "timeout", "runtime_failure":
@@ -410,10 +496,11 @@ func benchmarkTraceHasContractViolation(snapshot ai.AnalysisTraceFile) bool {
 }
 
 type benchmarkStageBrowser struct {
-	files     map[string]string
-	paths     []string
-	truncated bool
-	err       error
+	files        map[string]string
+	paths        []string
+	truncated    bool
+	bytesScanned int64
+	err          error
 }
 
 func (b *benchmarkStageBrowser) BuildRoot() string { return "build" }
@@ -438,7 +525,11 @@ func (b *benchmarkStageBrowser) Grep(_ context.Context, path string, re *regexp.
 		return &artifacts.GrepResult{}, nil
 	}
 	lines := strings.Split(text, "\n")
-	result := &artifacts.GrepResult{FileSize: int64(len(text)), BytesScanned: int64(len(text))}
+	bytesScanned := b.bytesScanned
+	if bytesScanned == 0 {
+		bytesScanned = int64(len(text))
+	}
+	result := &artifacts.GrepResult{FileSize: int64(len(text)), BytesScanned: bytesScanned}
 	for i, line := range lines {
 		if !re.MatchString(line) {
 			continue
@@ -481,7 +572,7 @@ func TestBenchmarkEvidenceCondition(t *testing.T) {
 func TestPrepareBenchmarkEvidenceOracle(t *testing.T) {
 	contextLines := 1
 	groups := []benchmarkEvidenceGroup{
-		{id: "served-version", pathREs: []*regexp.Regexp{regexp.MustCompile(`^logs/a\.log$`)}, contentREs: []*regexp.Regexp{regexp.MustCompile(`v1alpha3`)}, causalREs: []*regexp.Regexp{regexp.MustCompile(`CAUSE_SCORE_ONLY`)}, oracleContextLines: &contextLines},
+		{id: "served-version", pathREs: []*regexp.Regexp{regexp.MustCompile(`^logs/a\.log$`)}, contentREs: []*regexp.Regexp{regexp.MustCompile(`v1alpha3`)}, causalSignals: []benchSignal{{name: "score-only", re: regexp.MustCompile(`CAUSE_SCORE_ONLY`)}}, oracleContextLines: &contextLines},
 		{id: "api-response", pathREs: []*regexp.Regexp{regexp.MustCompile(`^logs/b\.log$`)}, contentREs: []*regexp.Regexp{regexp.MustCompile(`v1beta1.*404`)}, oracleContextLines: &contextLines},
 	}
 	browser := &benchmarkStageBrowser{
@@ -553,7 +644,7 @@ func TestPrepareBenchmarkEvidenceFixtureSeparatesSelectionAndDelivery(t *testing
 func TestBuildBenchmarkEvidenceStageReportUsesRootCauseOnly(t *testing.T) {
 	group := benchmarkEvidenceGroup{
 		id: "api-response", pathREs: []*regexp.Regexp{regexp.MustCompile(`scheduler\.log$`)},
-		contentREs: []*regexp.Regexp{regexp.MustCompile(`v1beta1.*404`)}, causalREs: []*regexp.Regexp{regexp.MustCompile(`v1beta1.*404`)},
+		contentREs: []*regexp.Regexp{regexp.MustCompile(`v1beta1.*404`)}, causalSignals: []benchSignal{{name: "api-response", re: regexp.MustCompile(`v1beta1.*404`), negated: regexp.MustCompile(`(?i)(?:not|did not).{0,80}(?:unavailable|404)`)}},
 	}
 	bc := benchCase{evidenceGroups: []benchmarkEvidenceGroup{group}}
 	prep := benchmarkEvidencePreparation{condition: benchmarkEvidenceConditionFixture, fixtureContains: map[string]bool{"api-response": true}, excerptContains: map[string]bool{}}
@@ -566,7 +657,7 @@ func TestBuildBenchmarkEvidenceStageReportUsesRootCauseOnly(t *testing.T) {
 		{DraftObservation: ai.DraftObservation{Attempt: 1, Phase: "initial", RootCause: "scheduler v1beta1 request returned 404"}},
 		{DraftObservation: ai.DraftObservation{Attempt: 2, Phase: "semantic_retry", RootCause: "generic readiness timeout"}},
 	}
-	report := buildBenchmarkEvidenceStageReport(bc, prep, coverage, tc, observations, 2, "valid_result")
+	report := buildBenchmarkEvidenceStageReport(bc, prep, coverage, tc, observations, 2, true, "valid_result")
 	if err := validateBenchmarkEvidenceStageReport(bc, report); err != nil {
 		t.Fatal(err)
 	}
@@ -581,7 +672,7 @@ func TestBuildBenchmarkEvidenceStageReportUsesRootCauseOnly(t *testing.T) {
 	tc.AIAnalysis.RootCause = "generic readiness timeout"
 	tc.AISummary.Summary = "scheduler v1beta1 request returned 404"
 	tc.AIAnalysis.SuggestedFix = "Handle v1beta1 404"
-	report = buildBenchmarkEvidenceStageReport(bc, prep, coverage, tc, nil, 0, "valid_result")
+	report = buildBenchmarkEvidenceStageReport(bc, prep, coverage, tc, nil, 0, true, "valid_result")
 	if report.Stages[0].CausallyUsedInRootCause {
 		t.Fatalf("summary or fix satisfied root-cause-only stage: %+v", report.Stages[0])
 	}
@@ -638,10 +729,109 @@ func TestKueueOracleEvidenceFixture(t *testing.T) {
 		if preparation.frozenSHA256 != bc.oracleEvidenceSHA256 || len(preparation.prompt) == 0 {
 			t.Fatalf("oracle preparation = %+v", preparation)
 		}
-		if err := validateBenchmarkEvidenceStageReport(bc, buildBenchmarkEvidenceStageReport(bc, preparation, recorder.coverage(), nil, nil, 0, "no_result")); err != nil {
+		if err := validateBenchmarkEvidenceStageReport(bc, buildBenchmarkEvidenceStageReport(bc, preparation, recorder.coverage(), nil, nil, 0, false, "no_result")); err != nil {
 			t.Fatal(err)
 		}
 		return
 	}
 	t.Fatal("Kueue oracle case not found")
+}
+
+func TestPrepareBenchmarkEvidenceEnforcesAggregateBudgetAndDeadline(t *testing.T) {
+	group := benchmarkEvidenceGroup{id: "bounded", pathREs: []*regexp.Regexp{regexp.MustCompile(`^log\.txt$`)}, contentREs: []*regexp.Regexp{regexp.MustCompile(`signal`)}}
+	bc := benchCase{evidenceGroups: []benchmarkEvidenceGroup{group}}
+	browser := &benchmarkStageBrowser{
+		paths: []string{"log.txt"}, files: map[string]string{"log.txt": "signal"},
+		bytesScanned: int64(benchmarkEvidencePreparationMaxBytes) + 1,
+	}
+	if _, err := prepareBenchmarkEvidence(t.Context(), browser, bc, benchmarkEvidenceConditionFixture, newBenchmarkEvidenceRecorder(bc.evidenceGroups)); err == nil || !strings.Contains(err.Error(), "exceeded") {
+		t.Fatalf("aggregate byte budget error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := prepareBenchmarkEvidence(ctx, &benchmarkStageBrowser{paths: []string{"log.txt"}, files: map[string]string{"log.txt": "signal"}}, bc, benchmarkEvidenceConditionFixture, newBenchmarkEvidenceRecorder(bc.evidenceGroups)); err == nil || !strings.Contains(err.Error(), "canceled") {
+		t.Fatalf("preparation deadline error = %v", err)
+	}
+}
+
+func TestOracleModelReceiptRequiresModelRequest(t *testing.T) {
+	contextLines := 0
+	group := benchmarkEvidenceGroup{id: "oracle", pathREs: []*regexp.Regexp{regexp.MustCompile(`^log\.txt$`)}, contentREs: []*regexp.Regexp{regexp.MustCompile(`signal`)}, oracleContextLines: &contextLines}
+	excerpts := []benchmarkOracleExcerpt{{GroupID: "oracle", Path: "log.txt", LineStart: 1, LineEnd: 1, Content: "> 1: signal"}}
+	hash, err := benchmarkOracleEvidenceSHA256(excerpts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bc := benchCase{evidenceGroups: []benchmarkEvidenceGroup{group}, oracleEvidenceSHA256: hash}
+	recorder := newBenchmarkEvidenceRecorder(bc.evidenceGroups)
+	prep, err := prepareBenchmarkEvidence(t.Context(), &benchmarkStageBrowser{paths: []string{"log.txt"}, files: map[string]string{"log.txt": "signal"}}, bc, benchmarkEvidenceConditionOracle, recorder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := buildBenchmarkEvidenceStageReport(bc, prep, recorder.coverage(), nil, nil, 0, false, "no_result")
+	if report.Stages[0].ModelReceivedEvidence {
+		t.Fatalf("prepared oracle evidence was reported as received without a model request: %+v", report.Stages[0])
+	}
+	if err := validateBenchmarkEvidenceStageReport(bc, report); err != nil {
+		t.Fatal(err)
+	}
+	report.ModelRequestMade = true
+	if err := validateBenchmarkEvidenceStageReport(bc, report); err == nil || !strings.Contains(err.Error(), "model receipt") {
+		t.Fatalf("missing oracle receipt error = %v", err)
+	}
+}
+
+func TestBenchmarkCausalSignalsRejectNegatedFacts(t *testing.T) {
+	cases, err := loadBenchmarkManifest("testdata/benchmarks/cross-project-eval.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kueue benchCase
+	for _, bc := range cases {
+		if bc.name == "kueue-was-podgroup-api-mismatch" {
+			kueue = bc
+			break
+		}
+	}
+	groups := map[string]benchmarkEvidenceGroup{}
+	for _, group := range kueue.evidenceGroups {
+		groups[group.id] = group
+	}
+	for _, tc := range []struct {
+		name    string
+		groupID string
+		text    string
+		want    bool
+	}{
+		{name: "rejected request causal", groupID: "podgroup-api-response", text: "The scheduler's v1beta1 PodGroup request returned 404, which prevented startup.", want: true},
+		{name: "rejected request negated", groupID: "podgroup-api-response", text: "The v1beta1 PodGroup API was not unavailable and did not return 404; the image pull failure caused the timeout."},
+		{name: "scheduler sync causal", groupID: "scheduler-handler-readiness", text: "Scheduler handlers never synchronized, which kept the Trainer pod unscheduled.", want: true},
+		{name: "scheduler sync noncausal", groupID: "scheduler-handler-readiness", text: "Scheduler handler synchronization completed successfully and was not causal; the image pull failure caused the timeout."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := benchmarkCausalSignalMatches(groups[tc.groupID].causalSignals, tc.text); got != tc.want {
+				t.Fatalf("causal match = %v, want %v for %q", got, tc.want, tc.text)
+			}
+		})
+	}
+
+	observations := []benchmarkDraftObservation{
+		{DraftObservation: ai.DraftObservation{Attempt: 1, Phase: "initial", RootCause: "The scheduler's v1beta1 PodGroup request returned 404, which prevented startup."}},
+		{DraftObservation: ai.DraftObservation{Attempt: 2, Phase: "semantic_retry", RootCause: "The v1beta1 PodGroup API was not unavailable and did not return 404; the image pull failure caused the timeout."}},
+	}
+	revisions := benchmarkEvidenceRevisions(kueue.evidenceGroups, observations, 1)
+	if len(revisions) != 1 || !slices.Contains(revisions[0].Dropped, "podgroup-api-response") {
+		t.Fatalf("negated revision did not drop causal fact: %+v", revisions)
+	}
+}
+
+func TestBenchmarkEvidenceStageIdentityIncludesConfiguration(t *testing.T) {
+	base := []benchmarkEvidenceGroup{{id: "group", pathREs: []*regexp.Regexp{regexp.MustCompile(`a\.log$`)}, contentREs: []*regexp.Regexp{regexp.MustCompile(`signal`)}}}
+	changed := []benchmarkEvidenceGroup{{id: "group", pathREs: []*regexp.Regexp{regexp.MustCompile(`b\.log$`)}, contentREs: []*regexp.Regexp{regexp.MustCompile(`signal`)}}}
+	if benchmarkEvidenceStageSHA256(base) == benchmarkEvidenceStageSHA256(changed) {
+		t.Fatal("evidence stage configuration did not change its identity")
+	}
+	if !slices.Equal(benchmarkEvidenceStageIDs(base), []string{"group"}) {
+		t.Fatalf("stage ids = %v", benchmarkEvidenceStageIDs(base))
+	}
 }
