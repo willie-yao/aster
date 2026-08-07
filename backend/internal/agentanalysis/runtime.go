@@ -32,25 +32,29 @@ type Spec struct {
 
 // Result is one validated private experimental analysis.
 type Result struct {
-	Analysis          Analysis
-	Runtime           string
-	AgentNamespace    string
-	AgentRef          string
-	AgentVersion      string
-	ContractVersion   string
-	ToolPolicyVersion string
-	EvidenceHash      string
-	SkillHash         string
-	SourceSHA         string
-	IdentityHash      string
-	ExecutionID       string
-	MaxTurns          int
-	Timeout           time.Duration
-	Retries           int
-	Attempts          int
-	Duration          time.Duration
-	CleanupPending    bool
-	CleanupWork       *agentruntime.WorkRef
+	Status               ShadowStatus
+	Analysis             Analysis
+	Quality              ShadowQuality
+	Runtime              string
+	AgentNamespace       string
+	AgentRef             string
+	AgentVersion         string
+	ContractVersion      string
+	ToolPolicyVersion    string
+	EvidenceHash         string
+	SkillHash            string
+	SourceSHA            string
+	IdentityHash         string
+	ExecutionID          string
+	MaxTurns             int
+	Timeout              time.Duration
+	Retries              int
+	Attempts             int
+	Duration             time.Duration
+	FinalizationDuration time.Duration
+	Telemetry            agentruntime.GenerateTelemetry
+	CleanupPending       bool
+	CleanupWork          *agentruntime.WorkRef
 }
 
 // Runtime delegates one bounded analysis to a generic AgentRuntime.
@@ -64,7 +68,12 @@ type Runtime struct {
 }
 
 // Generate runs the Agent and validates its one-file structured result.
-func (r *Runtime) Generate(ctx context.Context, spec Spec) (Result, error) {
+func (r *Runtime) Generate(ctx context.Context, spec Spec) (result Result, retErr error) {
+	started := time.Now()
+	defer func() {
+		result.Duration = time.Since(started)
+		result.Status = ResolveShadowStatus(result, retErr)
+	}()
 	if r == nil || r.Agent == nil {
 		return Result{}, fmt.Errorf("agent analysis: runtime is unavailable")
 	}
@@ -84,7 +93,6 @@ func (r *Runtime) Generate(ctx context.Context, spec Spec) (Result, error) {
 		return Result{}, err
 	}
 	var observed agentruntime.WorkRef
-	started := time.Now()
 	generated, runErr := r.Agent.Generate(ctx, agentruntime.GenerateSpec{
 		Repo: spec.Repo, Instruction: instruction,
 		Skills:   map[string]string{SkillName: failureAnalysisSkill},
@@ -95,12 +103,12 @@ func (r *Runtime) Generate(ctx context.Context, spec Spec) (Result, error) {
 			return nil
 		},
 	})
-	result := Result{
+	result = Result{
 		Runtime: strings.TrimSpace(r.Name), AgentNamespace: strings.TrimSpace(r.AgentNamespace), AgentRef: strings.TrimSpace(r.AgentRef), AgentVersion: strings.TrimSpace(r.AgentVersion),
 		ContractVersion: ContractVersion, ToolPolicyVersion: ToolPolicyVersion,
 		EvidenceHash: spec.Bundle.Hash, SkillHash: SkillHash(), SourceSHA: spec.Bundle.Source.Revision,
 		IdentityHash: identity, ExecutionID: executionID, MaxTurns: spec.MaxTurns, Timeout: spec.Timeout,
-		Retries: r.Retries, Attempts: generated.Attempts, Duration: time.Since(started),
+		Retries: r.Retries, Attempts: generated.Attempts, Telemetry: generated.Telemetry,
 	}
 	if result.Runtime == "" {
 		result.Runtime = "agent"
@@ -114,11 +122,17 @@ func (r *Runtime) Generate(ctx context.Context, spec Spec) (Result, error) {
 	if runErr != nil && (!cleanupPending || len(generated.Files) == 0) {
 		return result, runErr
 	}
+	finalizationStarted := time.Now()
 	if err := validateGeneratedOutput(generated); err != nil {
+		result.FinalizationDuration = time.Since(finalizationStarted)
 		return result, err
 	}
 	analysis, err := parseAndValidateAnalysis(ctx, generated.Files[OutputPath], spec.Bundle, spec.SourceReader)
+	result.FinalizationDuration = time.Since(finalizationStarted)
 	if err != nil {
+		if _, ok := shadowStatusFromError(err); !ok {
+			err = newShadowResultError(ShadowStatusContractViolation, err)
+		}
 		return result, err
 	}
 	result.Analysis = analysis
@@ -126,6 +140,56 @@ func (r *Runtime) Generate(ctx context.Context, spec Spec) (Result, error) {
 		return result, runErr
 	}
 	return result, nil
+}
+
+type shadowResultError struct {
+	status ShadowStatus
+	err    error
+}
+
+func (e *shadowResultError) Error() string        { return e.err.Error() }
+func (e *shadowResultError) Unwrap() error        { return e.err }
+func (e *shadowResultError) Is(target error) bool { return target == ErrInvalidResult }
+
+func newShadowResultError(status ShadowStatus, err error) error {
+	return &shadowResultError{status: status, err: err}
+}
+
+func shadowStatusFromError(err error) (ShadowStatus, bool) {
+	var resultErr *shadowResultError
+	if errors.As(err, &resultErr) {
+		return resultErr.status, true
+	}
+	return "", false
+}
+
+// ResolveShadowStatus returns the canonical private outcome for one Agent run.
+func ResolveShadowStatus(result Result, err error) ShadowStatus {
+	if status, ok := shadowStatusFromError(err); ok {
+		return status
+	}
+	switch {
+	case err == nil:
+		return ShadowStatusSucceeded
+	case errors.Is(err, agentruntime.ErrMalformedResult):
+		return ShadowStatusMalformedResult
+	case errors.Is(err, agentruntime.ErrResultDeletion):
+		return ShadowStatusDeletion
+	case errors.Is(err, agentruntime.ErrResultRename):
+		return ShadowStatusRename
+	case errors.Is(err, agentruntime.ErrResultExtraFile):
+		return ShadowStatusExtraFile
+	case errors.Is(err, agentruntime.ErrResultContract):
+		return ShadowStatusContractViolation
+	case errors.Is(err, context.DeadlineExceeded):
+		return ShadowStatusTimeout
+	case errors.Is(err, context.Canceled), errors.Is(err, agentruntime.ErrCancelled):
+		return ShadowStatusCancellation
+	case errors.Is(err, agentruntime.ErrCleanupPending) && result.Analysis.Summary != "":
+		return ShadowStatusCleanupPending
+	default:
+		return ShadowStatusRuntimeFailed
+	}
 }
 
 // SkillHash returns the immutable embedded analysis-skill fingerprint.
@@ -182,15 +246,19 @@ func buildInstruction(bundle EvidenceBundle) (string, error) {
 }
 
 func validateGeneratedOutput(generated agentruntime.GenerateResult) error {
-	if len(generated.Files) != 1 {
-		return fmt.Errorf("%w: agent changed %d files, want only %s", ErrInvalidResult, len(generated.Files), OutputPath)
+	switch len(generated.Files) {
+	case 0:
+		return newShadowResultError(ShadowStatusNoResult, fmt.Errorf("agent did not write %s", OutputPath))
+	case 1:
+	default:
+		return newShadowResultError(ShadowStatusExtraFile, fmt.Errorf("agent changed %d files, want only %s", len(generated.Files), OutputPath))
 	}
 	body, ok := generated.Files[OutputPath]
 	if !ok {
-		return fmt.Errorf("%w: agent did not write %s", ErrInvalidResult, OutputPath)
+		return newShadowResultError(ShadowStatusExtraFile, fmt.Errorf("agent did not write %s", OutputPath))
 	}
 	if body == "" || len(body) > maxResultBytes {
-		return fmt.Errorf("%w: output file is empty or oversized", ErrInvalidResult)
+		return newShadowResultError(ShadowStatusMalformedResult, fmt.Errorf("output file is empty or oversized"))
 	}
 	return validateNewFileDiff(generated.Diff)
 }
@@ -203,7 +271,7 @@ func validateNewFileDiff(diff string) error {
 		case strings.HasPrefix(line, "diff --git "):
 			sections++
 			if line != "diff --git a/"+OutputPath+" b/"+OutputPath {
-				return fmt.Errorf("%w: diff contains unexpected path metadata", ErrInvalidResult)
+				return newShadowResultError(ShadowStatusExtraFile, fmt.Errorf("diff contains unexpected path metadata"))
 			}
 		case line == "new file mode 100644":
 			newFileMode = true
@@ -211,14 +279,18 @@ func validateNewFileDiff(diff string) error {
 			oldNull = true
 		case line == "+++ b/"+OutputPath:
 			newPath = true
-		case strings.HasPrefix(line, "deleted file mode "), strings.HasPrefix(line, "rename from "), strings.HasPrefix(line, "rename to "),
-			strings.HasPrefix(line, "copy from "), strings.HasPrefix(line, "copy to "), strings.HasPrefix(line, "similarity index "),
-			strings.HasPrefix(line, "old mode "), strings.HasPrefix(line, "new mode "), strings.HasPrefix(line, "Binary files "):
-			return fmt.Errorf("%w: diff contains destructive or non-text metadata", ErrInvalidResult)
+		case strings.HasPrefix(line, "deleted file mode "):
+			return newShadowResultError(ShadowStatusDeletion, fmt.Errorf("diff contains deletion metadata"))
+		case strings.HasPrefix(line, "rename from "), strings.HasPrefix(line, "rename to "), strings.HasPrefix(line, "similarity index "):
+			return newShadowResultError(ShadowStatusRename, fmt.Errorf("diff contains rename metadata"))
+		case strings.HasPrefix(line, "copy from "), strings.HasPrefix(line, "copy to "):
+			return newShadowResultError(ShadowStatusExtraFile, fmt.Errorf("diff contains copy metadata"))
+		case strings.HasPrefix(line, "old mode "), strings.HasPrefix(line, "new mode "), strings.HasPrefix(line, "Binary files "):
+			return newShadowResultError(ShadowStatusContractViolation, fmt.Errorf("diff contains unsupported metadata"))
 		}
 	}
 	if sections != 1 || !newFileMode || !oldNull || !newPath {
-		return fmt.Errorf("%w: output must be one newly added regular file", ErrInvalidResult)
+		return newShadowResultError(ShadowStatusContractViolation, fmt.Errorf("output must be one newly added regular file"))
 	}
 	return nil
 }

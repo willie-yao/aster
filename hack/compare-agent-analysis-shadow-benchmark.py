@@ -109,6 +109,18 @@ SHADOW_SCHEMA = {
     "retries": (nonnegative_integer, "a non-negative integer"),
     "token_usage_available": (lambda value: type(value) is bool, "a boolean"),
     "cost_status": (nonempty_string, "a non-empty string"),
+    "task_finalized": (lambda value: type(value) is bool, "a boolean"),
+    "result_available": (lambda value: type(value) is bool, "a boolean"),
+    "finalization_checked": (lambda value: type(value) is bool, "a boolean"),
+    "finalization_valid": (lambda value: type(value) is bool, "a boolean"),
+    "cleanup_completed": (lambda value: type(value) is bool, "a boolean"),
+    "model_identity_available": (lambda value: type(value) is bool, "a boolean"),
+    "provider_identity_available": (lambda value: type(value) is bool, "a boolean"),
+    "identity_status": (nonempty_string, "a non-empty string"),
+    "deterministic_status": (nonempty_string, "a non-empty string"),
+    "deterministic_passed": (lambda value: type(value) is bool, "a boolean"),
+    "semantic_status": (nonempty_string, "a non-empty string"),
+    "semantic_valid": (lambda value: type(value) is bool, "a boolean"),
 }
 
 PAIR_FIELDS = (
@@ -140,10 +152,17 @@ TRIAL_STATUSES = {"valid_result", "no_result", "invalid_result", "contract_viola
 SHADOW_ERROR_CODES = {
     "succeeded": None,
     "cleanup_pending": "cleanup_pending",
-    "invalid_result": "invalid_result",
-    "cancelled": "cancelled",
-    "runtime_failed": "runtime",
+    "no_result": "no_result",
+    "malformed_result": "malformed_result",
+    "extra_file": "extra_file",
+    "deletion": "deletion",
+    "rename": "rename",
+    "contract_violation": "contract_violation",
+    "runtime_failure": "runtime_failure",
+    "timeout": "timeout",
+    "cancellation": "cancellation",
 }
+
 
 
 def invalid(path, line_no, message):
@@ -228,8 +247,8 @@ def validate_inprocess(path, line_no, record):
 
 
 def validate_shadow(path, line_no, record):
-    if record["version"] != 2:
-        invalid(path, line_no, "shadow record version must be 2")
+    if record["version"] != 3:
+        invalid(path, line_no, "shadow record version must be 3")
     if record["evidence_condition"] != "fixture-v1":
         invalid(path, line_no, "shadow evidence_condition must be fixture-v1")
     if record["runtime"] != "orka-opencode-shadow":
@@ -240,8 +259,20 @@ def validate_shadow(path, line_no, record):
         invalid(path, line_no, "shadow tool_policy_version must be agent-analysis-tools-v2")
     if record["token_usage_available"]:
         invalid(path, line_no, "shadow token_usage_available must be false")
-    if record["cost_status"] != "external_runtime_usage_unavailable":
-        invalid(path, line_no, "shadow cost_status must be external_runtime_usage_unavailable")
+    if record["cost_status"] != "unavailable_from_agent_runtime":
+        invalid(path, line_no, "shadow cost_status must be unavailable_from_agent_runtime")
+    if record["model_identity_available"] or record["provider_identity_available"]:
+        invalid(path, line_no, "shadow live model and provider identities must remain unavailable")
+    if record["identity_status"] != "agent_owned_identity_unavailable":
+        invalid(path, line_no, "shadow identity_status must be agent_owned_identity_unavailable")
+    if record["semantic_status"] != "unavailable" or record["semantic_valid"]:
+        invalid(path, line_no, "shadow semantic judge must be explicitly unavailable")
+    if record["deterministic_status"] not in {"not_run", "unavailable", "passed", "objected"}:
+        invalid(path, line_no, "shadow deterministic_status is invalid")
+    if record["deterministic_status"] == "passed" and not record["deterministic_passed"]:
+        invalid(path, line_no, "shadow passed deterministic critique requires deterministic_passed=true")
+    if record["deterministic_status"] != "passed" and record["deterministic_passed"]:
+        invalid(path, line_no, "shadow deterministic_passed is inconsistent")
 
     status = record["status"]
     if status not in SHADOW_ERROR_CODES:
@@ -259,6 +290,14 @@ def validate_shadow(path, line_no, record):
             invalid(path, line_no, f"shadow status {status} requires attempts of at least 1")
         if record["artifact_citation_count"] < 1:
             invalid(path, line_no, f"shadow status {status} requires at least 1 artifact citation")
+        if not record["task_finalized"] or not record["result_available"] or not record["finalization_checked"] or not record["finalization_valid"]:
+            invalid(path, line_no, f"shadow status {status} requires successful result finalization")
+        if record["deterministic_status"] not in ("passed", "objected"):
+            invalid(path, line_no, f"shadow status {status} requires deterministic critique telemetry")
+    if status == "succeeded" and not record["cleanup_completed"]:
+        invalid(path, line_no, "shadow status succeeded requires cleanup_completed=true")
+    if status == "cleanup_pending" and record["cleanup_completed"]:
+        invalid(path, line_no, "shadow status cleanup_pending requires cleanup_completed=false")
 
     expected_source_verified = record["source_citation_count"] > 0
     if record["source_verified"] is not expected_source_verified:

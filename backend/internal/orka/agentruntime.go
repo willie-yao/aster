@@ -253,6 +253,8 @@ func (r *AgentRuntime) Generate(ctx context.Context, spec runtime.GenerateSpec) 
 	if err != nil {
 		return runtime.GenerateResult{}, err
 	}
+	started := time.Now()
+	result.Telemetry.UsageStatus = "unavailable_from_agent_runtime"
 	if spec.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, spec.Timeout)
@@ -317,9 +319,12 @@ func (r *AgentRuntime) Generate(ctx context.Context, spec runtime.GenerateSpec) 
 		}
 	}
 	defer func() {
+		cleanupStarted := time.Now()
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), defaultAgentCleanupTimeout)
 		cleanupErr := r.Cleanup(cleanupCtx, work)
 		cancel()
+		result.Telemetry.CleanupDurationMs = time.Since(cleanupStarted).Milliseconds()
+		result.Telemetry.CleanupCompleted = cleanupErr == nil
 		if cleanupErr != nil {
 			retErr = errors.Join(retErr, cleanupErr)
 		}
@@ -332,8 +337,13 @@ func (r *AgentRuntime) Generate(ctx context.Context, spec runtime.GenerateSpec) 
 		}
 		return result, err
 	}
+	result.Telemetry.TaskFinalized = true
+	result.Telemetry.TaskFinalizedMs = time.Since(started).Milliseconds()
 	if terminalState, stateErr := r.kube.TaskState(ctx, r.opts.Namespace, name); stateErr == nil && terminalState.Exists && terminalState.UID == work.UID {
 		result.Attempts = terminalState.Attempts
+	}
+	if phase == "Cancelled" {
+		return result, fmt.Errorf("%w: Orka agent Task %s ended Cancelled", runtime.ErrCancelled, name)
 	}
 	if phase != "Succeeded" {
 		return result, fmt.Errorf("orka agent Task %s ended %s", name, phase)
@@ -343,13 +353,21 @@ func (r *AgentRuntime) Generate(ctx context.Context, spec runtime.GenerateSpec) 
 	if err != nil {
 		return result, err
 	}
+	result.Telemetry.ResultAvailable = true
+	result.Telemetry.ResultAvailableMs = time.Since(started).Milliseconds()
+	result.Telemetry.FinalizationChecked = true
+	finalState, finalErr := r.kube.TaskState(ctx, r.opts.Namespace, name)
+	if finalErr != nil || !finalState.Exists || finalState.UID != work.UID || finalState.Phase != "Succeeded" || work.ExecutionID != "" && finalState.Annotations[actionRequestAnnotation] != work.ExecutionID {
+		return result, fmt.Errorf("%w: Orka agent Task %s changed after result became available", runtime.ErrResultContract, name)
+	}
+	result.Telemetry.FinalizationValid = true
 	var parsed StructuredResult
 	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
-		return result, fmt.Errorf("orka agent Task %s: parsing result: %w", name, err)
+		return result, fmt.Errorf("%w: Orka agent Task %s result JSON: %v", runtime.ErrMalformedResult, name, err)
 	}
 	if err := validateStructuredResult(parsed, spec.Repo.Ref); err != nil {
 		result.Output = parsed.Summary
-		return result, fmt.Errorf("orka agent Task %s: %w", name, err)
+		return result, fmt.Errorf("%w: Orka agent Task %s: %v", runtime.ErrResultContract, name, err)
 	}
 	if strings.TrimSpace(parsed.Diff) == "" {
 		result.Output = parsed.Summary
@@ -367,7 +385,7 @@ func (r *AgentRuntime) Generate(ctx context.Context, spec runtime.GenerateSpec) 
 	}
 	if err := validateResultFiles(parsed.Files, files); err != nil {
 		result.Output = parsed.Summary
-		return result, fmt.Errorf("orka agent Task %s: %w", name, err)
+		return result, fmt.Errorf("%w: Orka agent Task %s: %v", runtime.ErrResultExtraFile, name, err)
 	}
 	result.Files = files
 	result.Diff = diff

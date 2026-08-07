@@ -99,10 +99,16 @@ func TestRunShadowAnalysisNeverMutatesAuthoritativeDetails(t *testing.T) {
 		wantStatus agentanalysis.ShadowStatus
 	}{
 		{name: "success", runner: &fakeShadowRunner{result: agentanalysis.Result{Analysis: agentanalysis.Analysis{Summary: "shadow"}}}, wantStatus: agentanalysis.ShadowStatusSucceeded},
-		{name: "invalid", runner: &fakeShadowRunner{err: agentanalysis.ErrInvalidResult}, wantStatus: agentanalysis.ShadowStatusInvalidResult},
+		{name: "invalid", runner: &fakeShadowRunner{result: agentanalysis.Result{Status: agentanalysis.ShadowStatusContractViolation}, err: agentanalysis.ErrInvalidResult}, wantStatus: agentanalysis.ShadowStatusContractViolation},
 		{name: "runtime unavailable", runner: &fakeShadowRunner{err: agentruntime.ErrUnavailable}, wantStatus: agentanalysis.ShadowStatusRuntimeFailed},
-		{name: "cancelled", runner: &fakeShadowRunner{err: context.DeadlineExceeded}, wantStatus: agentanalysis.ShadowStatusCancelled},
-		{name: "cleanup pending", runner: &fakeShadowRunner{result: agentanalysis.Result{Analysis: agentanalysis.Analysis{Summary: "shadow"}, CleanupPending: true}, err: agentruntime.ErrCleanupPending}, wantStatus: agentanalysis.ShadowStatusCleanupPending},
+		{name: "no result", runner: &fakeShadowRunner{result: agentanalysis.Result{Status: agentanalysis.ShadowStatusNoResult}}, wantStatus: agentanalysis.ShadowStatusNoResult},
+		{name: "malformed", runner: &fakeShadowRunner{result: agentanalysis.Result{Status: agentanalysis.ShadowStatusMalformedResult}}, wantStatus: agentanalysis.ShadowStatusMalformedResult},
+		{name: "extra file", runner: &fakeShadowRunner{result: agentanalysis.Result{Status: agentanalysis.ShadowStatusExtraFile}}, wantStatus: agentanalysis.ShadowStatusExtraFile},
+		{name: "deletion", runner: &fakeShadowRunner{result: agentanalysis.Result{Status: agentanalysis.ShadowStatusDeletion}}, wantStatus: agentanalysis.ShadowStatusDeletion},
+		{name: "rename", runner: &fakeShadowRunner{result: agentanalysis.Result{Status: agentanalysis.ShadowStatusRename}}, wantStatus: agentanalysis.ShadowStatusRename},
+		{name: "timeout", runner: &fakeShadowRunner{err: context.DeadlineExceeded}, wantStatus: agentanalysis.ShadowStatusTimeout},
+		{name: "cancellation", runner: &fakeShadowRunner{err: context.Canceled}, wantStatus: agentanalysis.ShadowStatusCancellation},
+		{name: "cleanup pending", runner: &fakeShadowRunner{result: agentanalysis.Result{Status: agentanalysis.ShadowStatusCleanupPending, Analysis: agentanalysis.Analysis{Summary: "shadow"}, CleanupPending: true}, err: agentruntime.ErrCleanupPending}, wantStatus: agentanalysis.ShadowStatusCleanupPending},
 		{name: "evidence failed", runner: &fakeShadowRunner{}, freezeErr: agentanalysis.ErrEvidenceUnavailable, wantStatus: agentanalysis.ShadowStatusEvidenceFailed},
 		{name: "ledger write failed", runner: &fakeShadowRunner{result: agentanalysis.Result{Analysis: agentanalysis.Analysis{Summary: "shadow"}}}, appendErr: errors.New("disk unavailable"), wantStatus: agentanalysis.ShadowStatusSucceeded},
 	}

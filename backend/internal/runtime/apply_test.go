@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,8 +64,12 @@ func TestApplyDiffRejectsNonMatchingAndDeletion(t *testing.T) {
 		t.Fatal("non-matching patch was accepted")
 	}
 	deletion := "diff --git a/orig.txt b/orig.txt\ndeleted file mode 100644\n--- a/orig.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-base\n"
-	if _, _, err := ApplyDiff(context.Background(), RepoRef{Ref: "main", CloneURL: repo}, deletion); err == nil || !strings.Contains(err.Error(), "unsupported D") {
+	if _, _, err := ApplyDiff(context.Background(), RepoRef{Ref: "main", CloneURL: repo}, deletion); !errors.Is(err, ErrResultDeletion) {
 		t.Fatalf("deletion error = %v", err)
+	}
+	rename := "diff --git a/orig.txt b/renamed.txt\nsimilarity index 100%\nrename from orig.txt\nrename to renamed.txt\n"
+	if _, _, err := ApplyDiff(context.Background(), RepoRef{Ref: "main", CloneURL: repo}, rename); !errors.Is(err, ErrResultRename) {
+		t.Fatalf("rename error = %v", err)
 	}
 }
 

@@ -22,7 +22,7 @@ func TestAgentAnalysisShadowReport(t *testing.T) {
 		t.Fatalf("report: %v: %s", err, output)
 	}
 	text := string(output)
-	for _, want := range []string{"case", "2/3", "10/5", "external_runtime_usage_unavailable"} {
+	for _, want := range []string{"case", "2/3", "10/5", "unavailable_from_agent_runtime"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("report missing %q:\n%s", want, text)
 		}
@@ -53,26 +53,36 @@ func TestAgentAnalysisShadowReportAcceptsGroundedPolicyUnavailable(t *testing.T)
 
 func TestAgentAnalysisShadowReportAcceptsEveryShadowStatus(t *testing.T) {
 	tests := []struct {
-		status    string
-		errorCode string
-		success   bool
+		status  string
+		success bool
 	}{
 		{status: "succeeded", success: true},
-		{status: "cleanup_pending", errorCode: "cleanup_pending", success: true},
-		{status: "invalid_result", errorCode: "invalid_result"},
-		{status: "cancelled", errorCode: "cancelled"},
-		{status: "runtime_failed", errorCode: "runtime"},
+		{status: "cleanup_pending", success: true},
+		{status: "no_result"},
+		{status: "malformed_result"},
+		{status: "extra_file"},
+		{status: "deletion"},
+		{status: "rename"},
+		{status: "contract_violation"},
+		{status: "runtime_failure"},
+		{status: "timeout"},
+		{status: "cancellation"},
 	}
 	for _, test := range tests {
 		t.Run(test.status, func(t *testing.T) {
 			inprocess, shadow := validShadowReportRecords()
 			shadow["status"] = test.status
-			if test.errorCode != "" {
-				shadow["error_code"] = test.errorCode
+			if test.status != "succeeded" {
+				shadow["error_code"] = test.status
+			}
+			if test.status == "cleanup_pending" {
+				shadow["cleanup_completed"] = false
 			}
 			if !test.success {
 				shadow["attempts"] = 0
 				shadow["artifact_citation_count"] = 0
+				shadow["deterministic_status"] = "not_run"
+				shadow["deterministic_passed"] = false
 			}
 			output, err := runShadowReport(t, marshalJSONL(t, inprocess), marshalJSONL(t, shadow))
 			if err != nil {
@@ -87,12 +97,13 @@ func TestShadowRecordWriterMatchesReportSchema(t *testing.T) {
 		name         string
 		err          error
 		wantStatus   string
+		resultStatus agentanalysis.ShadowStatus
 		withAnalysis bool
 	}{
 		{name: "success", wantStatus: "succeeded", withAnalysis: true},
-		{name: "runtime failure", err: errors.New("runtime failed"), wantStatus: "runtime_failed"},
-		{name: "invalid result", err: agentanalysis.ErrInvalidResult, wantStatus: "invalid_result"},
-		{name: "cancelled", err: context.DeadlineExceeded, wantStatus: "cancelled"},
+		{name: "runtime failure", err: errors.New("runtime failed"), wantStatus: "runtime_failure"},
+		{name: "contract violation", resultStatus: agentanalysis.ShadowStatusContractViolation, err: agentanalysis.ErrInvalidResult, wantStatus: "contract_violation"},
+		{name: "timeout", err: context.DeadlineExceeded, wantStatus: "timeout"},
 		{name: "cleanup pending", err: agentruntime.ErrCleanupPending, wantStatus: "cleanup_pending", withAnalysis: true},
 	}
 	for _, test := range tests {
@@ -113,12 +124,15 @@ func TestShadowRecordWriterMatchesReportSchema(t *testing.T) {
 				Excerpts:     []agentanalysis.EvidenceExcerpt{{ID: "evidence-id", Path: "build-log.txt"}},
 			}
 			result := agentanalysis.Result{
+				Status:    test.resultStatus,
 				SourceSHA: "456789abcdef0123456789abcdef0123456789ab", EvidenceHash: "89abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567",
 				SkillHash:    "789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456",
 				IdentityHash: "9abcdef0123456789abcdef0123456789abcdef0123456789abcdef012345678",
 				ExecutionID:  "agent-analysis-0123456789abcdef", Attempts: 1,
 			}
 			if test.withAnalysis {
+				result.Telemetry = agentruntime.GenerateTelemetry{TaskFinalized: true, ResultAvailable: true, FinalizationChecked: true, FinalizationValid: true, CleanupCompleted: test.err == nil, UsageStatus: "unavailable_from_agent_runtime"}
+				result.Quality = agentanalysis.ShadowQuality{DeterministicStatus: "passed", DeterministicPassed: true, SemanticStatus: "unavailable", SemanticReason: "evidence_aware_semantic_judge_not_exposed"}
 				result.Analysis = agentanalysis.Analysis{
 					Summary: "summary", EvidenceCitations: []agentanalysis.EvidenceCitation{{ExcerptID: "evidence-id", LineStart: 1, LineEnd: 1, Quote: "private quote"}},
 					UnresolvedDetails: []string{},
@@ -476,7 +490,7 @@ func validShadowReportRecords() (map[string]any, map[string]any) {
 	inprocess["root_cause"] = "root cause content"
 
 	shadow := cloneReportRecord(common)
-	shadow["version"] = 2
+	shadow["version"] = 3
 	shadow["runtime"] = "orka-opencode-shadow"
 	shadow["status"] = "succeeded"
 	shadow["attempts"] = 1
@@ -499,7 +513,19 @@ func validShadowReportRecords() (map[string]any, map[string]any) {
 	shadow["timeout"] = "5m0s"
 	shadow["retries"] = 1
 	shadow["token_usage_available"] = false
-	shadow["cost_status"] = "external_runtime_usage_unavailable"
+	shadow["cost_status"] = "unavailable_from_agent_runtime"
+	shadow["task_finalized"] = true
+	shadow["result_available"] = true
+	shadow["finalization_checked"] = true
+	shadow["finalization_valid"] = true
+	shadow["cleanup_completed"] = true
+	shadow["model_identity_available"] = false
+	shadow["provider_identity_available"] = false
+	shadow["identity_status"] = "agent_owned_identity_unavailable"
+	shadow["deterministic_status"] = "passed"
+	shadow["deterministic_passed"] = true
+	shadow["semantic_status"] = "unavailable"
+	shadow["semantic_valid"] = false
 	shadow["signal_hits"] = 3
 	shadow["elapsed_ms"] = 80
 	shadow["summary"] = "artifact contents"

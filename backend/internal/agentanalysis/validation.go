@@ -70,20 +70,20 @@ type sourceCitationEnvelope struct {
 
 func parseAndValidateAnalysis(ctx context.Context, raw string, bundle EvidenceBundle, reader sourceinvestigation.Reader) (Analysis, error) {
 	if raw == "" || len(raw) > maxResultBytes || !utf8.ValidString(raw) || strings.IndexByte(raw, 0) >= 0 {
-		return Analysis{}, fmt.Errorf("%w: output is empty, invalid, or oversized", ErrInvalidResult)
+		return Analysis{}, newShadowResultError(ShadowStatusMalformedResult, fmt.Errorf("output is empty, invalid, or oversized"))
 	}
 	if err := rejectDuplicateJSONFields(raw); err != nil {
-		return Analysis{}, fmt.Errorf("%w: %v", ErrInvalidResult, err)
+		return Analysis{}, newShadowResultError(ShadowStatusMalformedResult, err)
 	}
 	decoder := json.NewDecoder(io.LimitReader(strings.NewReader(raw), maxResultBytes+1))
 	decoder.DisallowUnknownFields()
 	var parsed analysisEnvelope
 	if err := decoder.Decode(&parsed); err != nil {
-		return Analysis{}, fmt.Errorf("%w: decode output: %v", ErrInvalidResult, err)
+		return Analysis{}, newShadowResultError(ShadowStatusMalformedResult, fmt.Errorf("decode output: %v", err))
 	}
 	var extra any
 	if err := decoder.Decode(&extra); err != io.EOF {
-		return Analysis{}, fmt.Errorf("%w: output contains trailing data", ErrInvalidResult)
+		return Analysis{}, newShadowResultError(ShadowStatusMalformedResult, fmt.Errorf("output contains trailing data"))
 	}
 	if parsed.Version != ResultSchemaVersion || parsed.ContractVersion != ContractVersion {
 		return Analysis{}, fmt.Errorf("%w: unsupported result or contract version", ErrInvalidResult)

@@ -30,6 +30,7 @@ func TestRuntimeGenerate(t *testing.T) {
 	body := validAnalysisJSON(bundle)
 	agent := &fakeAgentRuntime{res: agentruntime.GenerateResult{
 		Files: map[string]string{OutputPath: body}, Diff: validOutputDiff(body), Attempts: 2,
+		Telemetry: agentruntime.GenerateTelemetry{TaskFinalized: true, ResultAvailable: true, FinalizationChecked: true, FinalizationValid: true, CleanupCompleted: true, UsageStatus: "unavailable_from_agent_runtime"},
 	}}
 	runtime := &Runtime{Agent: agent, Name: "orka", AgentNamespace: "orka-system", AgentRef: "analysis-agent", AgentVersion: "v1", Retries: 1}
 	reader := &testSourceReader{files: map[string]string{"pkg/retry.go": "func retry() {\nreturn err\n}\n"}}
@@ -40,7 +41,7 @@ func TestRuntimeGenerate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Attempts != 2 || got.AgentNamespace != "orka-system" || got.AgentRef != "analysis-agent" || got.EvidenceHash != bundle.Hash || got.SkillHash != SkillHash() || got.ToolPolicyVersion != ToolPolicyVersion || got.IdentityHash == "" {
+	if got.Status != ShadowStatusSucceeded || got.Attempts != 2 || !got.Telemetry.FinalizationValid || got.AgentNamespace != "orka-system" || got.AgentRef != "analysis-agent" || got.EvidenceHash != bundle.Hash || got.SkillHash != SkillHash() || got.ToolPolicyVersion != ToolPolicyVersion || got.IdentityHash == "" {
 		t.Fatalf("result = %+v", got)
 	}
 	if agent.got.AllowBash || agent.got.Model != "" || agent.got.Endpoint != "" || agent.got.Token != "" || len(agent.got.NetworkDomains) != 0 {
@@ -83,7 +84,7 @@ func TestRuntimePreservesValidResultOnCleanupPending(t *testing.T) {
 		Bundle: bundle, SourceReader: &testSourceReader{files: map[string]string{"pkg/retry.go": "func retry() {\nreturn err\n}\n"}},
 		MaxTurns: 5, Timeout: time.Minute,
 	})
-	if !errors.Is(err, agentruntime.ErrCleanupPending) || !got.CleanupPending || got.CleanupWork == nil || got.Analysis.Summary == "" {
+	if !errors.Is(err, agentruntime.ErrCleanupPending) || got.Status != ShadowStatusCleanupPending || !got.CleanupPending || got.CleanupWork == nil || got.Analysis.Summary == "" {
 		t.Fatalf("result=%+v error=%v", got, err)
 	}
 }
@@ -137,6 +138,58 @@ func TestRuntimeIdentityIncludesExecutionContract(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			if got := test.runtime.identityHash(test.spec); got == base {
 				t.Fatalf("identity did not change: %s", got)
+			}
+		})
+	}
+}
+
+func TestValidateGeneratedOutputStatuses(t *testing.T) {
+	validBody := "{}"
+	for _, tc := range []struct {
+		name   string
+		result agentruntime.GenerateResult
+		want   ShadowStatus
+	}{
+		{name: "no result", result: agentruntime.GenerateResult{}, want: ShadowStatusNoResult},
+		{name: "extra file", result: agentruntime.GenerateResult{Files: map[string]string{OutputPath: validBody, "extra.txt": "x"}}, want: ShadowStatusExtraFile},
+		{name: "wrong file", result: agentruntime.GenerateResult{Files: map[string]string{"other.json": validBody}}, want: ShadowStatusExtraFile},
+		{name: "empty file", result: agentruntime.GenerateResult{Files: map[string]string{OutputPath: ""}}, want: ShadowStatusMalformedResult},
+		{name: "deletion", result: agentruntime.GenerateResult{Files: map[string]string{OutputPath: validBody}, Diff: "deleted file mode 100644"}, want: ShadowStatusDeletion},
+		{name: "rename", result: agentruntime.GenerateResult{Files: map[string]string{OutputPath: validBody}, Diff: "rename from old\nrename to " + OutputPath}, want: ShadowStatusRename},
+		{name: "contract", result: agentruntime.GenerateResult{Files: map[string]string{OutputPath: validBody}, Diff: "diff --git a/" + OutputPath + " b/" + OutputPath}, want: ShadowStatusContractViolation},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateGeneratedOutput(tc.result)
+			if status, ok := shadowStatusFromError(err); !ok || status != tc.want || !errors.Is(err, ErrInvalidResult) {
+				t.Fatalf("status=%q ok=%v error=%v", status, ok, err)
+			}
+		})
+	}
+}
+
+func TestResolveShadowStatus(t *testing.T) {
+	valid := Result{Analysis: Analysis{Summary: "valid"}}
+	for _, tc := range []struct {
+		name   string
+		result Result
+		err    error
+		want   ShadowStatus
+	}{
+		{name: "success", want: ShadowStatusSucceeded},
+		{name: "malformed", err: agentruntime.ErrMalformedResult, want: ShadowStatusMalformedResult},
+		{name: "extra", err: agentruntime.ErrResultExtraFile, want: ShadowStatusExtraFile},
+		{name: "deletion", err: agentruntime.ErrResultDeletion, want: ShadowStatusDeletion},
+		{name: "rename", err: agentruntime.ErrResultRename, want: ShadowStatusRename},
+		{name: "contract", err: agentruntime.ErrResultContract, want: ShadowStatusContractViolation},
+		{name: "timeout", err: context.DeadlineExceeded, want: ShadowStatusTimeout},
+		{name: "cancellation", err: context.Canceled, want: ShadowStatusCancellation},
+		{name: "runtime cancellation", err: agentruntime.ErrCancelled, want: ShadowStatusCancellation},
+		{name: "cleanup", result: valid, err: agentruntime.ErrCleanupPending, want: ShadowStatusCleanupPending},
+		{name: "runtime", err: agentruntime.ErrUnavailable, want: ShadowStatusRuntimeFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ResolveShadowStatus(tc.result, tc.err); got != tc.want {
+				t.Fatalf("status=%q want=%q", got, tc.want)
 			}
 		})
 	}
