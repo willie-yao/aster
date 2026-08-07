@@ -32,13 +32,18 @@ const { RunHistory } = (await vite.ssrLoadModule("/src/components/RunHistory.tsx
     metadata?: string;
   }) => ReturnType<typeof createElement>;
 };
-const { TestCaseTable } = (await vite.ssrLoadModule("/src/components/TestCaseTable.tsx")) as {
+const { TestCaseTable, EvidenceSourceLink } = (await vite.ssrLoadModule("/src/components/TestCaseTable.tsx")) as {
   TestCaseTable: (props: {
     testCases: TestCase[];
     jobID?: string;
     buildId?: string;
     buildLogUrl?: string;
     webUrl?: string;
+  }) => ReturnType<typeof createElement>;
+  EvidenceSourceLink: (props: {
+    href: string;
+    label: string;
+    text: string;
   }) => ReturnType<typeof createElement>;
 };
 const { defaultTheme } = (await vite.ssrLoadModule("/src/theme/index.ts")) as {
@@ -233,15 +238,23 @@ test("test result navigation names include status duration and source context", 
     html,
     /aria-label="Open diagnosis for Fails cluster\. Failed\. Duration 5s"/,
   );
-  assert.match(
-    html,
-    /aria-label="View source for Fails cluster on GitHub"/,
-  );
   const diagnosis = html.match(
     /<a[^>]*aria-label="Open diagnosis[^"]*"[^>]*>([\s\S]*?)<\/a>/,
   );
   assert.ok(diagnosis);
   assert.doesNotMatch(diagnosis[1], /<a|<button/);
+});
+
+test("expanded evidence source links keep context and a 44px target", () => {
+  const html = render(createElement(EvidenceSourceLink, {
+    href: "https://github.com/example/repo/blob/main/test.go#L10",
+    label: "View source for Fails cluster on GitHub",
+    text: "test.go:10",
+  }));
+
+  assert.match(html, /aria-label="View source for Fails cluster on GitHub"/);
+  assert.match(html, /min-height:44px/);
+  assert.match(html, /:focus-visible/);
 });
 
 test("shared detail foundations follow the Overview structural language", () => {

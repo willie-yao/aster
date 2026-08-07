@@ -15,7 +15,6 @@ import {
   Cloud,
   Dns,
   Inventory2,
-  OpenInNew,
   Place,
 } from "@mui/icons-material";
 import { Link as RouterLink } from "react-router-dom";
@@ -59,6 +58,44 @@ function testStatusPresentation(status: TestCase["status"]) {
 const setupPatterns = /synchronizedbeforesuite|synchronizedaftersuite|beforesuite|aftersuite/i;
 
 
+export function EvidenceSourceLink({
+  href,
+  label,
+  text,
+}: {
+  href: string;
+  label: string;
+  text: string;
+}) {
+  return (
+    <Link
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label={label}
+      sx={{
+        minHeight: 44,
+        display: "inline-flex",
+        alignItems: "center",
+        px: 0.5,
+        borderRadius: "4px",
+        fontFamily: overviewTypography.data.fontFamily,
+        fontSize: "13px",
+        lineHeight: "20px",
+        color: "primary.main",
+        overflowWrap: "anywhere",
+        "&:focus-visible": {
+          outline: "2px solid",
+          outlineColor: "primary.main",
+          outlineOffset: 2,
+        },
+      }}
+    >
+      {text}
+    </Link>
+  );
+}
+
 const externalLinkSx = {
   display: "inline-flex",
   alignItems: "center",
@@ -90,7 +127,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
   }
 
   return (
-    <Box sx={{ overflowX: "auto", bgcolor: "surface.container" }}>
+    <Box sx={{ overflowX: "clip", bgcolor: "surface.container" }}>
       <Box sx={{ minWidth: 0 }}>
         <Box
           sx={{
@@ -115,7 +152,11 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
           <Typography component="div" color="text.secondary" sx={{ px: 1.5, ...overviewTypography.tableHeading }}>
             Diagnosis
           </Typography>
-          <Typography component="div" color="text.secondary" sx={{ px: 1, ...overviewTypography.tableHeading }}>
+          <Typography
+            component="div"
+            color="text.secondary"
+            sx={{ px: 0.5, textAlign: "center", ...overviewTypography.tableHeading }}
+          >
             Evidence
           </Typography>
         </Box>
@@ -302,32 +343,6 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                     borderTopColor: "divider",
                   }}
                 >
-                  {tc.failure_location_url && (
-                    <Link
-                      href={tc.failure_location_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      title="View source on GitHub"
-                      aria-label={`View source for ${displayName} on GitHub`}
-                      sx={{
-                        width: 44,
-                        height: 44,
-                        display: "inline-flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        color: "primary.main",
-                        borderRadius: "4px",
-                        "&:hover": { bgcolor: "surface.containerHighest" },
-                        "&:focus-visible": {
-                          outline: "2px solid",
-                          outlineColor: "primary.main",
-                          outlineOffset: -2,
-                        },
-                      }}
-                    >
-                      <OpenInNew sx={{ fontSize: 15 }} />
-                    </Link>
-                  )}
                   {hasEvidence && (
                     <ButtonBase
                       type="button"
@@ -336,15 +351,20 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                       aria-expanded={isExpanded}
                       aria-controls={`test-result-details-${idx}`}
                       sx={{
-                        minWidth: 44,
+                        width: "100%",
+                        minWidth: 0,
                         minHeight: 44,
-                        gap: 0.25,
-                        px: 0.5,
+                        justifyContent: "center",
+                        gap: 0.5,
+                        px: 0.75,
                         borderRadius: "4px",
                         color: "text.secondary",
                         fontSize: "12px",
                         fontWeight: 650,
-                        "&:hover": { bgcolor: "surface.containerHighest" },
+                        "&:hover": {
+                          bgcolor: "surface.containerHighest",
+                          color: "text.primary",
+                        },
                         "&.Mui-focusVisible": {
                           outline: "2px solid",
                           outlineColor: "primary.main",
@@ -489,15 +509,11 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                       <Box sx={{ display: "flex", alignItems: "center", gap: 1, fontSize: "0.75rem" }}>
                         <Place sx={{ fontSize: 16, color: "text.secondary" }} />
                         {tc.failure_location_url ? (
-                          <Link
+                          <EvidenceSourceLink
                             href={tc.failure_location_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={(e) => e.stopPropagation()}
-                            sx={{ fontFamily: "monospace", color: "primary.main" }}
-                          >
-                            {tc.failure_location}
-                          </Link>
+                            label={`View source for ${displayName} on GitHub`}
+                            text={tc.failure_location}
+                          />
                         ) : (
                           <Typography variant="caption" sx={{ fontFamily: "monospace", color: "text.secondary" }}>
                             {tc.failure_location}
