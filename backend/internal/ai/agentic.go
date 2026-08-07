@@ -149,17 +149,19 @@ type critiqueQuality struct {
 }
 
 type critiqueDraftCandidate struct {
-	parsed                 analysisResponse
-	content                string
-	providerItems          []json.RawMessage
-	rawQuality             critiqueQuality
-	quality                critiqueQuality
-	attempt                int
-	evidenceRevision       int
-	supportedFacts         []supportedCausalFact
-	semanticFindingClasses []string
-	semanticReviewPassed   bool
-	semanticRevision       bool
+	parsed                        analysisResponse
+	content                       string
+	providerItems                 []json.RawMessage
+	rawQuality                    critiqueQuality
+	quality                       critiqueQuality
+	attempt                       int
+	evidenceRevision              int
+	createdEvidenceRevision       int
+	supportedFacts                []supportedCausalFact
+	semanticInitialFindingClasses []string
+	semanticFindingClasses        []string
+	semanticReviewPassed          bool
+	semanticRevision              bool
 }
 
 type draftReplacementDecision struct {
@@ -1158,6 +1160,8 @@ agentLoop:
 								} else {
 									recordTrace(loopCtx, TraceEvent{Kind: "semantic_judge", Status: semanticJudgeStageRevision, Outcome: "revision_unparseable", IssueCount: len(result.Findings)})
 								}
+							} else {
+								recordTrace(loopCtx, TraceEvent{Kind: "semantic_judge", Status: semanticJudgeStageRevision, Outcome: "revision_denied", IssueCount: len(result.Findings)})
 							}
 							fallback := state.promoteFallbackDraft()
 							finalContent = fallback.content
@@ -1909,15 +1913,16 @@ func (s *agentState) newDraftCandidate(phase, content string, providerItems []js
 	published := s.publishedAnalysis(parsed)
 	publishedOut := s.currentCritiqueOutcome(published)
 	return &critiqueDraftCandidate{
-		parsed:           parsed,
-		content:          content,
-		providerItems:    providerItems,
-		rawQuality:       critiqueQualityFor(out),
-		quality:          critiqueQualityFor(publishedOut),
-		attempt:          s.observeDraft(phase, parsed, out, publishedOut),
-		evidenceRevision: s.evidenceRevision,
-		supportedFacts:   supportedCausalFacts(published, s.analysisEvidence),
-		semanticRevision: phase == "semantic_retry",
+		parsed:                  parsed,
+		content:                 content,
+		providerItems:           providerItems,
+		rawQuality:              critiqueQualityFor(out),
+		quality:                 critiqueQualityFor(publishedOut),
+		attempt:                 s.observeDraft(phase, parsed, out, publishedOut),
+		evidenceRevision:        s.evidenceRevision,
+		createdEvidenceRevision: s.evidenceRevision,
+		supportedFacts:          supportedCausalFacts(published, s.analysisEvidence),
+		semanticRevision:        phase == "semantic_retry",
 	}
 }
 
@@ -2015,7 +2020,12 @@ func decideDraftReplacement(current, candidate *critiqueDraftCandidate, semantic
 		decision.reason = draftReasonCandidatePublishedDominates
 		return decision
 	}
-	factDelta := compareSupportedCausalFacts(current.supportedFacts, candidate.supportedFacts)
+	factDelta := compareSupportedCausalFacts(
+		current.supportedFacts,
+		candidate.supportedFacts,
+		semanticInitialFindingsAllowCauseReplacement(candidate.semanticInitialFindingClasses),
+		candidate.createdEvidenceRevision > current.createdEvidenceRevision,
+	)
 	decision.currentSupportedFacts = len(current.supportedFacts)
 	decision.candidateSupportedFacts = len(candidate.supportedFacts)
 	decision.supportedFactsRetained = factDelta.retained

@@ -554,14 +554,14 @@ type benchmarkJSONLResult struct {
 	SelectedAttempt           int                         `json:"selected_attempt,omitempty"`
 	Drafts                    []benchmarkJSONLDraft       `json:"drafts,omitempty"`
 	DraftDecisions            []ai.DraftDecisionTrace     `json:"draft_decisions,omitempty"`
-	SemanticJudgeOutcomes     []string                    `json:"semantic_judge_outcomes,omitempty"`
-	SemanticFindingClasses    []string                    `json:"semantic_finding_classes,omitempty"`
-	SemanticRevisionAttempted bool                        `json:"semantic_revision_attempted,omitempty"`
-	SemanticRevisionSelected  bool                        `json:"semantic_revision_selected,omitempty"`
-	SemanticRevisionRejected  bool                        `json:"semantic_revision_rejected,omitempty"`
-	SupportedFactsRetained    int                         `json:"supported_facts_retained,omitempty"`
-	SupportedFactsAdded       int                         `json:"supported_facts_added,omitempty"`
-	SupportedFactsDropped     int                         `json:"supported_facts_dropped,omitempty"`
+	SemanticJudgeOutcomes     []string                    `json:"semantic_judge_outcomes"`
+	SemanticFindingClasses    []string                    `json:"semantic_finding_classes"`
+	SemanticRevisionAttempted bool                        `json:"semantic_revision_attempted"`
+	SemanticRevisionSelected  bool                        `json:"semantic_revision_selected"`
+	SemanticRevisionRejected  bool                        `json:"semantic_revision_rejected"`
+	SupportedFactsRetained    int                         `json:"supported_facts_retained"`
+	SupportedFactsAdded       int                         `json:"supported_facts_added"`
+	SupportedFactsDropped     int                         `json:"supported_facts_dropped"`
 	ToolNames                 []string                    `json:"tool_names,omitempty"`
 	ToolCounts                []string                    `json:"tool_counts,omitempty"`
 	GCSBytes                  int                         `json:"gcs_bytes,omitempty"`
@@ -692,8 +692,8 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 		FileLinks: map[string]string{}, SelectedAttempt: selectedAttempt,
 		ToolNames: append([]string(nil), toolUsage.names...), ToolCounts: append([]string(nil), toolUsage.counts...),
 		FloorNudges: traceSummary.floorNudges, FloorNudgeReasons: append([]string(nil), traceSummary.floorNudgeReasons...),
-		SemanticJudgeOutcomes:  append([]string(nil), traceSummary.semanticJudgeOutcomes...),
-		SemanticFindingClasses: append([]string(nil), traceSummary.semanticFindingClasses...),
+		SemanticJudgeOutcomes:  append([]string{}, traceSummary.semanticJudgeOutcomes...),
+		SemanticFindingClasses: append([]string{}, traceSummary.semanticFindingClasses...),
 		ProviderRequestCap:     providerRequestCap, TraceTruncated: traceSummary.truncated, CacheGeneration: cacheGeneration, CacheVerification: cacheVerification,
 		CritiqueCachePolicy:     string(critiquePolicy),
 		Trace:                   benchmarkJSONLTrace{Finalize: map[string]int{}, FinalizeRecovery: map[string]int{}, Critique: map[string]int{}},
@@ -793,15 +793,7 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 					}
 				}
 			case "semantic_judge":
-				if event.Status == "revision" {
-					result.SemanticRevisionAttempted = true
-				}
-				if event.Outcome == "revised" {
-					result.SemanticRevisionSelected = true
-				}
-				if event.Outcome == "revision_rejected" || event.Outcome == "revision_not_selected" {
-					result.SemanticRevisionRejected = true
-				}
+				recordBenchmarkSemanticRevision(&result, event)
 			}
 		}
 	}
@@ -812,6 +804,19 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 	defer file.Close()
 	if err := json.NewEncoder(file).Encode(result); err != nil {
 		t.Fatalf("write BENCH_RESULTS_JSONL: %v", err)
+	}
+}
+
+func recordBenchmarkSemanticRevision(result *benchmarkJSONLResult, event ai.TraceEvent) {
+	if result == nil || event.Status != "revision" {
+		return
+	}
+	result.SemanticRevisionAttempted = true
+	switch event.Outcome {
+	case "revised":
+		result.SemanticRevisionSelected = true
+	case "revision_denied", "revision_unparseable", "revision_rejected", "revision_not_selected":
+		result.SemanticRevisionRejected = true
 	}
 }
 
@@ -1086,6 +1091,18 @@ func TestWriteBenchmarkJSONLRecordsFailedTrials(t *testing.T) {
 			}
 			if !strings.Contains(string(output), tc.status) {
 				t.Fatalf("report omitted trial status %q: %s", tc.status, output)
+			}
+		})
+	}
+}
+
+func TestRecordBenchmarkSemanticRevisionCountsUnparseableAndDeniedAsRejected(t *testing.T) {
+	for _, outcome := range []string{"revision_unparseable", "revision_denied"} {
+		t.Run(outcome, func(t *testing.T) {
+			result := benchmarkJSONLResult{}
+			recordBenchmarkSemanticRevision(&result, ai.TraceEvent{Kind: "semantic_judge", Status: "revision", Outcome: outcome})
+			if !result.SemanticRevisionAttempted || !result.SemanticRevisionRejected || result.SemanticRevisionSelected {
+				t.Fatalf("result = %+v", result)
 			}
 		})
 	}

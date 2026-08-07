@@ -1060,7 +1060,7 @@ func benchmarkFloorNudgeReason(status string) string {
 
 func benchmarkSemanticJudgeOutcome(outcome string) string {
 	switch outcome {
-	case "passed", "error", "objected", "revision_unparseable", "revision_rejected", "revision_not_selected", "revised":
+	case "passed", "error", "objected", "revision_denied", "revision_unparseable", "revision_rejected", "revision_not_selected", "revised":
 		return outcome
 	default:
 		return "unknown"

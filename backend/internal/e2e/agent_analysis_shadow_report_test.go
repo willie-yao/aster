@@ -427,6 +427,18 @@ func TestAgentAnalysisShadowReportRejectsEvidenceTelemetryViolations(t *testing.
 			record["usable"] = false
 			record["outcome"] = "grounded_policy_unavailable"
 		}, want: "in-process valid_result requires outcome=usable, usable=true, and a model request"},
+		{name: "malformed semantic outcomes", mutate: func(record map[string]any) {
+			record["semantic_judge_outcomes"] = "draft:passed"
+		}, want: "in-process field semantic_judge_outcomes must be a string list"},
+		{name: "unknown semantic finding", mutate: func(record map[string]any) {
+			record["semantic_finding_classes"] = []string{"invented"}
+		}, want: "in-process semantic_finding_classes contains an invalid value"},
+		{name: "negative supported facts", mutate: func(record map[string]any) {
+			record["supported_facts_retained"] = -1
+		}, want: "in-process field supported_facts_retained must be a non-negative integer"},
+		{name: "revision selected without outcome", mutate: func(record map[string]any) {
+			record["semantic_revision_selected"] = true
+		}, want: "in-process semantic_revision_selected does not match revision outcomes"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -486,6 +498,14 @@ func validShadowReportRecords() (map[string]any, map[string]any) {
 		},
 	}
 	inprocess["evidence_revisions"] = []map[string]any{}
+	inprocess["semantic_judge_outcomes"] = []string{"draft:passed"}
+	inprocess["semantic_finding_classes"] = []string{}
+	inprocess["semantic_revision_attempted"] = false
+	inprocess["semantic_revision_selected"] = false
+	inprocess["semantic_revision_rejected"] = false
+	inprocess["supported_facts_retained"] = 0
+	inprocess["supported_facts_added"] = 0
+	inprocess["supported_facts_dropped"] = 0
 	inprocess["summary"] = "summary content"
 	inprocess["root_cause"] = "root cause content"
 
