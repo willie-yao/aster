@@ -435,6 +435,7 @@ function BuildSignal({ label, color }: { label: string; color: string }) {
 function BuildFailureRow({ item }: { item: BuildFailureSummary }) {
   const manifest = useManifest();
   const filePrefix = manifest.short_name_prefix ?? "";
+  const summaryId = useId();
   const severity = item.severity || (item.is_transient ? "Transient" : "Unavailable");
   const summary = item.summary || "No accepted build analysis is available for this run.";
   const jobTitle = shortJobName(item.job_name, filePrefix);
@@ -469,6 +470,7 @@ function BuildFailureRow({ item }: { item: BuildFailureSummary }) {
           to={item.job_detail_url}
           underline="none"
           aria-label={`Open details for ${item.job_name} build ${item.build_id}`}
+          aria-describedby={summaryId}
           sx={{
             minWidth: 0,
             px: 1.5,
@@ -488,7 +490,7 @@ function BuildFailureRow({ item }: { item: BuildFailureSummary }) {
           <Typography color="text.secondary" sx={{ mt: 0.25, ...overviewTypography.data, fontSize: "13px" }}>
             Build {item.build_id}{item.started_at ? ` · ${timeAgo(item.started_at)}` : ""}
           </Typography>
-          <Typography color="text.secondary" sx={{ mt: 0.75, fontSize: "13.5px", lineHeight: "20px" }}>
+          <Typography id={summaryId} color="text.secondary" sx={{ mt: 0.75, fontSize: "13.5px", lineHeight: "20px" }}>
             {summary}
           </Typography>
         </Link>
