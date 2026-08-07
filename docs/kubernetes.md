@@ -9,11 +9,12 @@ Start with `fetcher onboard` and select **Kubernetes with Helm**. The generated
 `deploy/README.md` contains project-specific commands. This page shows the same
 first-run path with generic variables.
 
-The default deployment uses the in-process analysis runtime. It does not require
-or install Orka. Add optional features only after the basic dashboard works.
+The default deployment uses the supported in-process analysis runtime.
+Experimental external runtimes are outside normal onboarding. Add optional
+features only after the basic dashboard works.
 
 The generated values are a curated starting configuration. Common settings are
-active, while cron, Orka, authentication, ingress, NetworkPolicy, resources, and
+active, while cron, authentication, ingress, NetworkPolicy, resources, and
 placement remain commented examples. Comments do not pin chart defaults. The
 header also links compatible YAML editors to the schema at the selected engine
 reference. If the installed chart version differs, use the schema and complete
@@ -101,7 +102,7 @@ For the first install:
 - Keep `mode: watch` unless you specifically need a scheduled CronJob.
 - Set `persistence.storageClass`, or configure `persistence.existingClaim`.
 - Confirm the AI API, endpoint, model, Secret name, and Secret key.
-- Leave chat, write actions, ingress, NetworkPolicy, and Orka disabled.
+- Leave chat, write actions, ingress, and NetworkPolicy disabled.
 
 Never put provider tokens in `project.yaml`, `deploy/values.yaml`, command-line
 `--set` arguments, or committed documentation.
@@ -356,12 +357,11 @@ rolls back on failure.
 
 Keep the first deployment small. Add optional features one at a time:
 
+- [Optional features](optional-features.md) for the supported order to add chat,
+  File Issue, Mark Resolved, notifications, and issue automation.
 - [Kubernetes operator reference](kubernetes-reference.md) for architecture,
   watch and cron behavior, manual Helm, configuration, and upgrade internals.
-- [Orka integration](orka.md) for the optional separate Orka release and its
-  experimental analysis, source-investigation, and fix-generation paths.
-- [Server mode](server.md) for chat, authentication, and write actions.
-- [Email notifications](notifications.md).
-- [Automatic GitHub issues](github-issues.md).
-- [Agent-proposed fix PRs](fix-prs.md).
+- [Server mode](server.md) for authentication, chat, and write-action details.
 - [Troubleshooting](troubleshooting.md).
+- [Complete documentation map](README.md) for experimental and contributor
+  references.

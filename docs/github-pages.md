@@ -224,11 +224,11 @@ no authenticated action API. See [Email notifications](notifications.md) for the
 project configuration and TLS modes.
 
 
-Email notifications, automatic issues, and scheduled fix PRs run during the
-fetch step when configured. Interactive actions are not available on a static
-Pages site.
+Email notifications and automatic issues run during the fetch step when
+configured. Interactive chat, File Issue, and Mark Resolved are Kubernetes
+server features and are not available on a static Pages site.
 
-Scheduled fix PR generation also requires OpenCode, git, and the pinned `srt`
-sandbox on the runner. The standard GitHub-hosted workflow does not install
-those tools, so use a preconfigured self-hosted runner before enabling that
-feature.
+Fix PR generation is experimental and is not part of the standard Pages
+workflow. It requires a preconfigured self-hosted runner with OpenCode, git, and
+the pinned `srt` sandbox. See [Experimental Fix PR generation](fix-prs.md) before
+evaluating it.

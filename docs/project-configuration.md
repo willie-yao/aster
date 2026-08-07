@@ -22,16 +22,15 @@ The consumer files have different owners:
 | `project.yaml` | Portable project identity, discovery, storage, branding, analysis policy, and optional features |
 | `prompts/system.md` | Project-specific architecture and failure knowledge |
 | `skills/*.yaml` | Optional portable diagnostic recipes and evidence requirements |
-| Pages workflow or Helm values | Infrastructure, credentials, runner or cluster settings, and Orka execution settings |
+| Pages workflow or Helm values | Infrastructure, credentials, runner or cluster settings, and runtime placement |
 
 Do not copy Helm or workflow tuning into `project.yaml`. Do not put project
 identity or artifact routing into Helm values.
 
-Failure-analysis placement follows the same boundary. The default in-process
-runtime and the experimental Helm `analysisRuntime.type: orka-container`
-selector are deployment infrastructure. Do not add an analysis runtime field to
-`project.yaml`. The `ai:` block continues to own analysis policy for both
-runtimes.
+Failure-analysis placement follows the same boundary. The supported in-process
+runtime is selected by the deployment. Experimental external runtime selectors
+are Helm infrastructure and are documented separately. Do not add an analysis
+runtime field to `project.yaml`; the `ai:` block owns analysis policy.
 
 ## Minimal configuration
 
@@ -309,70 +308,24 @@ Errors report counts only and do not expose recipe contents.
 
 ## Optional features
 
-Keep these sections out of the first-run config. Add them after the dashboard
-publishes the expected jobs:
+Keep optional sections out of the first-run config. Add them only after the
+dashboard publishes the expected jobs and analyses.
 
 - `notifications.email`: [Email notifications](notifications.md)
 - `issues`: [GitHub issues](github-issues.md)
-- `ai.fix_prs`: [Agent-proposed fix PRs](fix-prs.md)
-  Local `opencode` uses pinned `srt`; `agent_runtime.network_domains` is an
-  explicit domain and optional-port allowlist for required dependency tools.
-- `ai.source_investigation`: optional read-only Orka source runtime for analysis chat
+- `ai.fix_prs`: [Experimental Fix PR generation](fix-prs.md)
+- `ai.source_investigation`: experimental Orka-backed source investigation for
+  authenticated analysis chat. See [Server mode](server.md#source-investigation-api)
+  and the [experimental Orka maintainer reference](orka.md).
 
-These features require deployment secrets and, in some cases, additional writer
-runtime dependencies. Their focused guides contain complete examples.
+Authenticated chat, File Issue, and Mark Resolved are server deployment features,
+not separate analysis runtimes. They do not require Orka or a Fix PR runtime.
+See [Optional features](optional-features.md) for deployment requirements and the
+recommended enablement order.
 
-For Orka fix generation, `agent_runtime.type: orka` selects the dashboard
-backend. The operator-managed Orka Agent selects its CLI with
-`spec.runtime.type: opencode` and owns the model endpoint, model ID, and model
-Secret. Keep those settings out of `project.yaml`. The dashboard rejects local
-model, ambient-auth, header, and network-domain policy at the Orka boundary
-instead of silently ignoring it.
-Helm deployments must also configure the matching
-`orka.fixRuntime.admission` contract. The duplicate values are intentional: the
-Kubernetes API must know the exact Agent, public repository, turns, Bash policy,
-timeout, and retries before it admits a Task. Guarded fix Tasks do not accept
-`git_secret`; private repository generation is unavailable until Orka exposes a
-pinnable credential binding.
-
-The shared Orka generation backend can receive engine-owned skills. Current
-Orka Agent Tasks do not expose a per-Task skill override, so the dashboard
-validates and includes exact skill contents in a trusted prompt preamble. The
-skill contents and selected runtime purpose are part of the Task fingerprint.
-The dashboard never mutates the operator-owned Agent or its default skills.
-
-Source investigation is a separate read-only contract and does not inherit
-`ai.fix_prs`. Configure it only for Kubernetes-native analysis chat:
-
-```yaml
-ai:
-  source_investigation:
-    agent_ref: guarded-source-reader
-    api: http://orka.orka-system.svc.cluster.local:8080
-    namespace: orka-system
-    git_secret: source-repo-readonly
-    version: v1
-    retries: 1
-    max_turns: 30
-    timeout: 10m
-```
-
-For Helm deployments, repeat the Agent, repository, read-only Git Secret, turn
-limit, timeout, and retries under `server.chat.sourceInvestigation.admission`.
-The duplicate values let Kubernetes admission reject any source Task that does
-not match the operator-approved read-only contract.
-
-`agent_ref` and `api` are required when the block is present. `timeout` must be
-positive and at most 30 minutes. `retries` must be `0` through `2`. A nonzero
-`max_turns` must be `1` through `1000`; zero uses the default. `git_secret`
-belongs to Orka and must provide read-only clone credentials. Provider and model
-credentials remain owned by the Agent. The Agent runtime must support Orka's
-enforced `orka.ai/agent-read-only`
-contract; an Orka release that rejects guarded OpenCode cannot use OpenCode here.
-The dashboard uses the effective `ai.source_repo` and the selected build's exact
-`repo_refs` commit, so there is no repository override or branch fallback. Bare
-full SHAs and unambiguous `ref:fullSHA` values are supported. Composite
-presubmit refs are rejected rather than guessing which commit was tested.
+The focused feature guides own their credential, admission, timeout, and
+security contracts. Avoid duplicating those settings into a first-run
+`project.yaml`.
 
 ## Validate a config
 

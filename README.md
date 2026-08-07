@@ -13,58 +13,40 @@ open guarded GitHub actions without requiring each project to fork the engine.
 
 ## Start here
 
-The fastest way to try the dashboard is the GitHub Actions and Pages scaffold:
+Run the guided onboarding wizard from the source repository you want to monitor:
 
 ```bash
-go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboard \
-  -testgrid "<testgrid-dashboard>" \
-  -dashboard-repo "<owner>/<dashboard-repo>" \
-  -source-repo "<owner>/<source-repo>" \
-  -out ./my-dashboard
+go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboard
 ```
 
-The command verifies discovery before writing a small consumer repository. It
-generates `project.yaml`, `prompts/system.md`, one deploy workflow, and a short
-checklist. Continue with [Onboarding a project](docs/onboarding-a-new-project.md).
+The wizard detects the current GitHub repository where possible and walks you
+through Prow discovery, deployment, AI, and output choices. It validates the
+result before writing a small consumer repository.
 
-A compatible LLM CLI can perform the same setup with the repository's
-`$setup-prow-ai-consumer` skill. Install it and the optional diagnostic-authoring
-skill with `npx skills`, then ask the agent to set up the dashboard. See
-[Agent-driven setup and diagnostic authoring](docs/agent-onboarding.md).
+Continue with [Onboarding a project](docs/onboarding-a-new-project.md). Flagged,
+dry-run, pull-request, and non-interactive usage is in the
+[onboarding reference](docs/onboarding-reference.md).
+
+An LLM CLI can run the same engine-owned workflow with
+`$setup-prow-ai-consumer`. See the
+[agent-driven setup guide](docs/agent-onboarding.md).
 
 ## Choose a deployment
 
-Deployment and analysis are separate choices.
-
-### Deployment
-
 | Need | Use |
 | --- | --- |
-| Fast evaluation or a public read-only dashboard | GitHub Actions and Pages |
-| A private in-cluster model endpoint | Kubernetes with Helm |
-| Authenticated issue, fix, or resolve actions | Kubernetes with Helm |
-| No cluster to operate | GitHub Actions and Pages |
+| Fast evaluation or a public read-only dashboard | [GitHub Actions and Pages](docs/github-pages.md) |
+| A private in-cluster model endpoint or persistent shared data | [Kubernetes with Helm](docs/kubernetes.md) |
+| Authenticated chat, File Issue, or Mark Resolved | [Kubernetes with Helm](docs/kubernetes.md) |
+| No cluster to operate | [GitHub Actions and Pages](docs/github-pages.md) |
 
-**GitHub Actions and Pages** runs the fetcher on a schedule, builds the SPA, and
-publishes static JSON and assets. It is inexpensive and read-only.
+Both deployment paths use the dashboard-owned in-process analyzer. It is the
+supported and recommended runtime. Pages publishes static JSON and assets.
+Kubernetes adds a server for authentication, chat, and guarded actions.
 
-**Kubernetes with Helm** runs a worker or CronJob beside a small API and SPA
-server. Use it for private inference endpoints, persistent shared data, and
-server-side actions. See [Kubernetes deployment](docs/kubernetes.md).
-
-### Analysis runtime
-
-The dashboard-owned in-process analyzer remains the default and the only
-recommended production mode on Pages and Kubernetes. It keeps prompts, Tools,
-evidence policy, critique, cache acceptance, traces, and result schemas in one
-implementation.
-
-Kubernetes deployments can opt into the experimental Orka container runtime
-when a concrete Task lifecycle or per-failure isolation requirement justifies a
-separate control plane. Orka is not required for the default deployment and is
-installed as a separate release. See [Orka integration](docs/orka.md), the
-[analysis runtime evaluation](docs/analysis-runtime-evaluation.md), and the
-[ownership decision](docs/architecture-decisions/0001-analysis-runtime-ownership.md).
+Experimental external runtimes and Fix PR generation are not part of standard
+onboarding. Maintainers evaluating them can start from the
+[complete documentation map](docs/README.md#experimental-features-and-runtimes).
 
 ## What a project owns
 
@@ -73,21 +55,22 @@ A consumer normally contains only:
 ```text
 project.yaml
 prompts/system.md
-.github/workflows/deploy.yml   # Pages
-# or deploy/values.yaml        # Kubernetes
+.github/workflows/deploy.yml   # GitHub Pages
+# or
+deploy/values.yaml             # Kubernetes
 ```
 
-- **`project.yaml`** identifies jobs, storage, branding, and optional features.
-  Start with [the minimal example](configs/example/project.yaml) and use the
-  [configuration reference](docs/project-configuration.md) only when adding an
-  optional field.
+- **`project.yaml`** identifies jobs, storage, branding, analysis policy, and
+  optional features. Start with guided onboarding or the
+  [configuration reference](docs/project-configuration.md).
 - **`prompts/system.md`** supplies project-specific architecture, artifact, and
   failure knowledge. It is required when AI analysis is enabled.
 - **Deployment configuration** supplies infrastructure details such as runner
-  selection, model credentials, persistence, and Orka settings.
+  selection, model credentials, persistence, and authenticated server settings.
 
-`branding.base_path` and `branding.site_url` remain deployment-specific, and
-`onboard` generates the correct values for Pages or Kubernetes.
+The files under [`configs/example`](configs/example) are references, not a
+ready-to-deploy consumer. Replace every placeholder and validate the result with
+`onboard doctor`.
 
 ## How data flows
 
@@ -96,8 +79,7 @@ Prow job configuration and artifact storage
                   |
             fetcher or worker
                   |
- in-process analysis (default)
-     or Orka container Tasks (experimental Helm cron)
+       in-process analysis
                   |
  dashboard.json, jobs/*.json, flakiness.json
                   |
@@ -111,49 +93,14 @@ The Kubernetes server serves the same `/data/*.json` contract as Pages and adds
 
 ## Documentation
 
-### Get started
-
-- [Onboarding a project](docs/onboarding-a-new-project.md)
-- [Agent-driven setup and diagnostic authoring](docs/agent-onboarding.md)
-- [Onboarding reference](docs/onboarding-reference.md)
-- [GitHub Actions and Pages](docs/github-pages.md)
-- [Kubernetes deployment](docs/kubernetes.md)
-- [Kubernetes operator reference](docs/kubernetes-reference.md)
+- [Onboarding](docs/onboarding-a-new-project.md)
+- [GitHub Pages](docs/github-pages.md)
+- [Kubernetes](docs/kubernetes.md)
 - [Project configuration](docs/project-configuration.md)
+- [Optional features](docs/optional-features.md)
 - [Troubleshooting](docs/troubleshooting.md)
-
-### Improve analysis
-
-- [AI providers](docs/ai-providers.md)
-- [Writing the project prompt](docs/writing-prompts.md)
-- [Agentic analysis](docs/agentic.md)
-- [Custom diagnostic skills](docs/skills.md)
-- [Agent-assisted diagnostic authoring](docs/agent-onboarding.md#improve-diagnostics-after-setup)
-
-### Optional features
-
-- [Email notifications](docs/notifications.md)
-- [GitHub issues](docs/github-issues.md)
-- [Agent-proposed fix PRs](docs/fix-prs.md)
-- [Local OpenCode sandbox](docs/local-opencode-sandbox.md)
-- [Server and authenticated actions](docs/server.md)
-
-### Orka runtimes
-
-- [Orka installation and runtime integration](docs/orka.md)
-- [CAPZ Orka consumer reference](https://github.com/willie-yao/capz-prow-ai-dashboard-orka-demo)
-- [Orka architecture and dashboard integration](docs/orka-architecture.md)
-- [Failure analysis runtime evaluation](docs/analysis-runtime-evaluation.md)
-- [Analysis runtime ownership decision](docs/architecture-decisions/0001-analysis-runtime-ownership.md)
-- [Agent-proposed fix PRs](docs/fix-prs.md)
-
-### Development
-
-- [Contributing](CONTRIBUTING.md)
-- [Local development](docs/development.md)
-- [Testing](docs/testing.md)
-- [Releasing](docs/releasing.md)
+- [Complete documentation map and contributor guides](docs/README.md)
 
 ## License
 
-[Apache 2.0](LICENSE)
+[Apache License 2.0](LICENSE)

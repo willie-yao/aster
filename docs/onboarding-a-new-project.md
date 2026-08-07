@@ -1,37 +1,28 @@
 # Onboarding a project
 
-`fetcher onboard` creates a validated consumer scaffold for GitHub Pages or
-Kubernetes. Start with the guided wizard, review the generated files, then
-follow the deployment guide included in the scaffold.
+This is the guided quickstart for a first deployment. For every flag, discovery
+rule, prompt-authoring mode, update behavior, and automation contract, use the
+[complete onboarding reference](onboarding-reference.md).
 
-An agent can run the same discovery, dry-run, scaffold, prompt handoff, and
-doctor flow with the repo-owned
-[`setup-prow-ai-consumer` skill](agent-onboarding.md). Install it with the Skills
-CLI, then ask the agent to set up the dashboard:
+## What onboarding creates
 
-```bash
-npx --yes skills@latest add willie-yao/prow-ai-dashboard \
-  --skill setup-prow-ai-consumer author-prow-ai-diagnostics \
-  --agent codex \
-  --global \
-  --yes
-```
+`fetcher onboard` discovers the jobs that test your source repository, validates
+the result, and creates a small consumer repository. The consumer points at the
+shared engine instead of copying engine code.
+
+The common files are:
 
 ```text
-Use $setup-prow-ai-consumer to create a Pages consumer for
-https://github.com/kubernetes-sigs/kueue. Store it under
-~/.codex/deployments/prow-ai-dashboard and do not ask me to clone the source.
+project.yaml
+prompts/system.md
+.github/workflows/deploy.yml   # GitHub Pages
+# or
+deploy/values.yaml             # Kubernetes
 ```
 
-When a source URL or `owner/name` is present, the setup skill fills it directly,
-derives a project slug, runs read-only discovery, and uses the discovery
-suggestion for the local consumer identity when safe. It should not turn prompt
-template placeholders into a questionnaire.
-
-The setup skill uses the engine CLI as the scaffold authority rather than
-maintaining separate templates. The optional `$author-prow-ai-diagnostics`
-skill can improve the project prompt and propose reviewed diagnostic recipes
-after the baseline consumer passes `onboard doctor`.
+The generated scaffold also includes a short deployment guide. Pages receives
+`CHECKLIST.md`. Kubernetes receives `deploy/README.md`. Prompt handoff mode may
+add agent instructions for completing `prompts/system.md`.
 
 ## Run the wizard
 
@@ -41,258 +32,150 @@ From the source repository checkout:
 go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboard
 ```
 
-The wizard normally detects the GitHub repository from `origin`. You can also
-provide it explicitly:
+The wizard detects the current GitHub `origin` where possible. It then walks you
+through:
 
-```bash
-go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboard \
-  -source-repo kubernetes-sigs/cluster-api-provider-azure
-```
+1. Prow or TestGrid discovery.
+2. GitHub Pages or Kubernetes deployment.
+3. Project identity and dashboard destination.
+4. AI provider and prompt choices.
+5. The output directory or pull request target.
 
 For a private repository, export `GITHUB_TOKEN` before starting. The token is
-used for GitHub API reads. It is never printed or written into generated files.
+used for GitHub API reads and is not written to the scaffold.
 
-The wizard asks you to choose or confirm:
+Review the final plan before confirming. The default final answer is no, and
+cancellation leaves the filesystem unchanged.
 
-1. The source repository.
-2. A TestGrid dashboard or artifact bucket.
-3. GitHub Pages or Kubernetes deployment.
-4. Project and dashboard names.
-5. Whether to include presubmit jobs.
-6. Whether to enable AI analysis and which provider to use.
-7. Whether to generate `prompts/system.md` with OpenCode, write an agent
-   handoff bundle, or keep the TODO template.
-8. The output directory or pull request destination.
+## Review the generated files
 
-In the interactive form, use the arrow keys to move, Enter to select, and
-`Ctrl+C` to cancel. Press Esc to clear the current prefilled text input without
-submitting it. Inferred text values remain editable. The final confirmation
-defaults to no.
+Before deployment, check:
 
-The dashboard repository must be a consumer repository you control. The wizard
-prefers the authenticated GitHub login, then the owner of an automatically
-detected Git remote. Selecting an upstream fork source for Prow discovery does
-not change that destination owner. If no safe owner is known, enter `owner/name`
-explicitly. The optional short name starts empty because repository initials do
-not reliably identify established project abbreviations.
+- `project.yaml`: source repository, TestGrid dashboard or bucket, storage,
+  branding, and inferred job categories.
+- `prompts/system.md`: every project-specific architecture, artifact, failure,
+  and transient-classification claim.
+- `.github/workflows/deploy.yml` or `deploy/values.yaml`: provider coordinates,
+  credentials, persistence, and deployment-specific paths.
+- `CHECKLIST.md` or `deploy/README.md`: the remaining setup commands.
 
-When the source comes from the current Git checkout, the local destination
-defaults to a sibling such as `../<dashboard-repository-name>`. This keeps the
-source and dashboard consumer repositories separate. When the source was
-provided explicitly, the default is a relative directory under the current
-working directory. `--out` always overrides the default.
+Generated prompts and categories are drafts. Keep unresolved details explicit
+instead of accepting plausible guesses. Do not commit provider tokens or other
+Secrets.
 
-## Choose a deployment
+## Choose Pages or Kubernetes
 
-### GitHub Pages
+| Deployment | Choose it when | First deployment guide |
+| --- | --- | --- |
+| GitHub Pages | The dashboard is public and read-only, and artifacts and the model endpoint are reachable from the runner | [GitHub Actions and Pages](github-pages.md) |
+| Kubernetes | The model endpoint is private to the cluster, data needs shared persistence, or you want authenticated server features | [Kubernetes quickstart](kubernetes.md) |
 
-Choose Pages for a public read-only dashboard when the artifact store and model
-endpoint are reachable from GitHub Actions.
+Both paths use in-process analysis. New users do not need to choose or install an
+external runtime.
 
-The scaffold contains:
+Start with the smallest working deployment. Add authenticated chat, File Issue,
+Mark Resolved, notifications, or other optional features only after the expected
+jobs and analyses are visible. See [Optional features](optional-features.md).
 
-```text
-project.yaml
-prompts/system.md
-.github/workflows/deploy.yml
-CHECKLIST.md
-```
+## Set up the files manually
 
-Handoff mode also includes `PROMPT_HANDOFF.md` and
-`.opencode/skills/system-prompt-generation/SKILL.md`.
+Manual setup is a supported alternative when you prefer to create the consumer
+files yourself.
 
-After generation, follow `CHECKLIST.md` to configure GitHub Pages, repository
-variables, and the `AI_TOKEN` repository Secret.
-
-### Kubernetes
-
-Choose Kubernetes for a private in-cluster model endpoint, persistent shared
-data, or authenticated server features.
-
-The scaffold contains:
+Create this minimal structure:
 
 ```text
 project.yaml
 prompts/system.md
-deploy/values.yaml
-deploy/README.md
+.github/workflows/deploy.yml   # GitHub Pages
+# or
+deploy/values.yaml             # Kubernetes
 ```
 
-Handoff mode also includes `PROMPT_HANDOFF.md` and
-`.opencode/skills/system-prompt-generation/SKILL.md`.
+Use these references:
 
-After generation, make `deploy/values.yaml` your deployment configuration and
-follow the copyable commands in `deploy/README.md`. The generated values keep
-common settings active and optional features commented. The header links to the
-complete values and the matching `values.schema.json`; Helm validates supplied
-values against the schema before rendering. The engine quickstart is in
-[Kubernetes deployment](kubernetes.md).
+- [`configs/example/project.yaml`](../configs/example/project.yaml) for the
+  minimal required project fields.
+- [`configs/example/prompts/system.md`](../configs/example/prompts/system.md) for
+  the prompt file shape.
+- [Project configuration](project-configuration.md) for the strict schema.
+- [GitHub Actions and Pages](github-pages.md) for the reusable workflow.
+- [Kubernetes quickstart](kubernetes.md) for consumer values and the deployment
+  wrapper.
+- [CAPZ Prow AI Dashboard](https://github.com/willie-yao/capz-prow-ai-dashboard)
+  for a current public Pages consumer.
 
-Orka is optional. The normal Kubernetes deployment uses the in-process analysis
-runtime and does not install or require Orka.
+`configs/example` is documentation-only. It contains placeholders and is not a
+ready-to-deploy project configuration. Replace the project identity, discovery,
+storage, branding, prompt, and deployment settings for your repository.
 
-## Review before writing
-
-The wizard renders and validates the complete plan in memory before it writes
-anything. Review:
-
-- The selected jobs and discovery source.
-- Project identity and dashboard repository.
-- Inferred categories in `project.yaml`.
-- Every project-specific claim in `prompts/system.md`.
-- The deployment files and their destination paths.
-
-Repository metadata, Prow configuration, source files, and job metadata are
-untrusted input. They cannot alter the wizard flow. Agent handoff metadata is
-serialized as data and tells the agent not to treat any field as an instruction.
-
-Agent mode resolves the source branch to an immutable commit, creates a
-temporary shallow checkout and OpenCode config, and runs the local OpenCode
-process through the pinned `srt` OS sandbox with its shell tool disabled. The
-runtime accepts the result only when the agent changes exactly
-`prompts/system.md` and the file passes deterministic structure and quality
-validation. It uses the selected provider credential from the user's existing
-OpenCode configuration. `AI_TOKEN` is not required for this mode. Install the pinned
-`srt` package and set `SRT_BIN` as described in
-[Local OpenCode sandbox](local-opencode-sandbox.md). GitHub Copilot domains are
-built in; other providers use repeated `--prompt-network-domain` flags.
-
-Local OpenCode is the default. `--prompt-agent-runtime=orka` selects an
-operator-owned Orka Agent instead and requires `--prompt-orka-api` plus
-`--prompt-orka-agent-ref`. `--prompt-orka-namespace` selects the Orka namespace,
-and `--prompt-orka-git-secret` may name a read-only clone Secret for private
-source repositories. Orka owns the model, credentials, and network policy, so
-`--prompt-agent-model` and `--prompt-network-domain` are invalid in Orka mode.
-Set `ORKA_KUBE_CONTEXT` only for an explicitly selected non-default context.
-
-Agent failures fall back to the TODO template and handoff bundle. Safe warnings
-identify source-resolution, execution, timeout, or output-validation failures
-without printing raw OpenCode output. The final review shows the requested mode,
-agent model and timeout where applicable, final prompt status, and safe fallback
-diagnostics. The final write confirmation defaults to no.
-
-Press `Ctrl+C`, send EOF, or answer no at the final confirmation to leave the
-filesystem unchanged.
-
-## Preview with a dry run
-
-A dry run performs discovery, the final job sweep, rendering, output-path
-checks, and strict configuration validation without writing scaffold files or
-opening a pull request:
+When the files are ready, run:
 
 ```bash
-go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboard \
-  -source-repo owner/source \
-  -dry-run
+go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest \
+  onboard doctor \
+  -project-dir ./my-dashboard
 ```
 
-Automation can save and apply the exact reviewed plan instead of rebuilding
-discovery before the write:
+## Validate with `onboard doctor`
 
-```bash
-PLAN_DIR="$(mktemp -d)"
-PLAN_FILE="$PLAN_DIR/onboard-plan.json"
-go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboard \
-  -non-interactive \
-  -source-repo owner/source \
-  -dashboard-repo owner/consumer \
-  -testgrid dashboard-name \
-  -out ./consumer \
-  -prompt-mode handoff \
-  -dry-run \
-  -plan-out "$PLAN_FILE"
-```
+Run the same doctor command after wizard or manual setup. It checks:
 
-Record the printed `sha256:` digest. After reviewing the full plan, apply only
-that artifact:
+- Strict `project.yaml` parsing.
+- A non-empty `prompts/system.md`.
+- Pages workflow or Kubernetes values wiring.
+- AI provider coordinates and credential source.
+- The real Prow discovery sweep and a nonzero job count.
 
-```bash
-go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboard \
-  -apply-plan "$PLAN_FILE" \
-  -plan-digest 'sha256:<reviewed-digest>'
-```
+Doctor is read-only. It does not call the model provider or inspect a Kubernetes
+cluster. Fix failures before deploying and review warnings that depend on
+external settings.
 
-The apply command verifies the digest, validates the complete artifact, and
-refuses the write if the destination's create/replace state changed after
-review.
+## Deploy
 
-Use `--no-prompt` when you want only the reviewable TODO template. This flag
-controls prompt authoring. It does not disable the interactive wizard.
+For Pages, complete `CHECKLIST.md` and follow
+[GitHub Actions and Pages](github-pages.md).
 
-Local onboarding refuses to replace generated files unless `--update-existing`
-is explicit. For non-interactive automation, first run without the flag and
-review the reported conflict paths. After replacement authorization, rerun the
-dry run with `--update-existing`, save that full plan, and review every file
-marked `create` or `replace`. Interactive onboarding instead offers another
-directory, updating only the listed scaffold files, or cancellation. The safe
-default is another directory.
-Unrelated files and stale generated files from another deployment or prompt mode
-are left untouched.
-Open-PR mode continues to use a GitHub diff and does not use local update mode.
+For Kubernetes, edit `deploy/values.yaml`, follow `deploy/README.md`, and use the
+[Kubernetes quickstart](kubernetes.md).
 
-Automation can add `--require-prompt-draft` to fail before local writes or pull
-request creation unless agent drafting succeeds. It is valid only with
-`--prompt-mode=agent`. Local mode uses OpenCode ambient authentication. Orka
-mode uses only the referenced Agent's provider credential.
+A successful first deployment shows the expected branding and jobs, publishes
+grounded analysis when AI is enabled, and serves healthy data endpoints. Keep
+optional automation disabled until that baseline works.
 
-Prompt preparation has a 15-minute total timeout by default. Slow agent runs can
-use `--prompt-timeout`, for example `--prompt-timeout 30m`. The accepted range is
-one minute through two hours. This timeout covers source revision resolution and
-agent execution. It is separate from the normal fetcher timeout and deployed
-`ai.timeout`. Orka prompt authoring is limited to 30 minutes by the Orka Task
-contract.
-
-## Next steps
-
-After the scaffold is written:
-
-1. Review `project.yaml` and `prompts/system.md`.
-2. Follow `CHECKLIST.md` for Pages or `deploy/README.md` for Kubernetes.
-3. Run the read-only doctor before deployment:
-
-   ```bash
-   go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest \
-     onboard doctor \
-     -project-dir ./my-dashboard
-   ```
-
-4. Deploy the smallest working configuration first.
-5. Confirm that the expected jobs appear before enabling optional automation.
-6. Optionally use `$author-prow-ai-diagnostics` to investigate representative
-   failures, improve `prompts/system.md`, and write inactive recipe proposals
-   under `proposals/skills/`.
-
-Do not add notifications, issue automation, fix generation, source
-investigation, or Orka until the first fetch publishes the expected dashboard.
-
-## More detail
+## Complete reference
 
 Use the [onboarding reference](onboarding-reference.md) for:
 
-- Read-only discovery output and ranking behavior.
-- Accepted repository forms.
-- Fully flagged and non-interactive automation.
-- Opening a scaffold pull request.
-- Prompt authoring modes and safety limits.
-- Doctor checks and the complete command surface.
+- Read-only discovery output and repository resolution.
+- Flagged, dry-run, and non-interactive usage.
+- Opening or updating a scaffold pull request.
+- Prompt-authoring modes, timeouts, and fallback behavior.
+- Complete doctor behavior and command contracts.
 
-Deployment references:
+For a conversational agent workflow over the same engine commands, install the
+setup and diagnostic-authoring skills:
 
-- [GitHub Actions and Pages](github-pages.md)
-- [Kubernetes quickstart](kubernetes.md)
-- [Project configuration](project-configuration.md)
-- [Troubleshooting](troubleshooting.md)
+```bash
+npx --yes skills@latest add willie-yao/prow-ai-dashboard \
+  --skill setup-prow-ai-consumer author-prow-ai-diagnostics \
+  --agent codex \
+  --global \
+  --yes
+```
 
-### Prompt authoring modes
+Then ask the agent to use `$setup-prow-ai-consumer`, for example:
 
-The wizard can generate `prompts/system.md` with a local OpenCode agent in a
-temporary checkout, write a reusable agent handoff bundle, or write the TODO
-template. Agent mode defaults to
-`github-copilot/claude-sonnet-4.6` and uses the selected provider credential from
-the user's existing OpenCode configuration. Handoff mode writes
-`PROMPT_HANDOFF.md` and `.opencode/skills/system-prompt-generation/SKILL.md`
-without running an agent. `--no-prompt` is equivalent to
-`--prompt-mode=todo-template` and cannot be combined with another explicit
-prompt mode. The handoff records a pinned commit when GitHub resolution
-succeeds. If source resolution is unavailable, it preserves the known default
-branch or marks the ref unresolved instead of guessing one.
+```text
+Use $setup-prow-ai-consumer to create a Pages consumer for
+https://github.com/kubernetes-sigs/kueue.
+```
+
+The setup skill uses the engine CLI and should leave prompt template placeholders
+for review instead of turning them into a long questionnaire. After the baseline
+passes `onboard doctor`, `$author-prow-ai-diagnostics` can improve the prompt and
+propose inactive diagnostic recipes.
+
+See [Agent-driven setup and diagnostic authoring](agent-onboarding.md) for the
+complete workflow. The [documentation map](README.md) links the remaining
+deployment, analysis, operator, experimental, and contributor references.

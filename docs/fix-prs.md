@@ -1,4 +1,9 @@
-# Agent-proposed fix PRs
+# Experimental Fix PR generation
+
+> **Status: experimental.** Fix PR generation and its coding-agent runtimes are
+> not part of standard onboarding. There is no recommended turnkey Orka-backed
+> installation. Analysis chat, File Issue, and Mark Resolved are separate server
+> features and do not require Orka or a Fix PR runtime.
 
 The dashboard can draft a **minimal code fix** for a systemic recurring failure
 and open a **draft pull request** against the source repo. It is **off by
@@ -10,7 +15,8 @@ so read this whole page before enabling it.
 
 The standard deployments do not include the coding-agent runtime. Scheduled and
 interactive fix generation require `opencode` and git in the process that runs
-the feature. File issue and Mark resolved do not have this requirement.
+the feature. File Issue and Mark Resolved work in the standard server image and
+do not have this requirement.
 
 ## What it does
 
@@ -174,11 +180,12 @@ ports. `allow_bash` changes OpenCode's Bash permission only; it does not expand
 filesystem or network access. `network_domains` is invalid for `type: orka`
 because the Orka Agent owns that runtime policy.
 
-#### `orka` (in-cluster)
+#### `orka` (experimental, in-cluster)
 
-See [Orka architecture in prow-ai-dashboard](orka-architecture.md) for how the
-Agent Task, isolated workspace, structured result, and dashboard validation
-boundary fit with the other Orka integrations.
+See the
+[Orka architecture and lifecycle reference](orka.md#architecture-and-lifecycle)
+for how the Agent Task, isolated workspace, structured result, and dashboard
+validation boundary fit with the other Orka integrations.
 
 The dashboard runtime type `orka` selects the execution backend. The referenced
 Orka `Agent` selects its coding CLI independently. For example,
@@ -295,10 +302,12 @@ This repository does not configure a verified published Orka release containing
 those changes. Do not install older raw manifests or add a supplemental
 controller RBAC patch. Source-commit packaging is maintainer-only and limited to
 local lint, render, and temporary kind validation until matching immutable
-runtime artifacts are available. See [Orka integration](orka.md) and the
-[CAPZ Orka consumer reference](https://github.com/willie-yao/capz-prow-ai-dashboard-orka-demo/tree/main/deploy/orka).
+runtime artifacts are available. See the
+[experimental Orka maintainer reference](orka.md).
 
-Orka labels the project experimental, so treat this integration accordingly.
+Treat this integration as maintainer evaluation only. It is not a recommended
+turnkey deployment.
+
 The dashboard ServiceAccount must remain limited to Orka Tasks; controller and
 worker RBAC stays with the separate Orka release.
 
