@@ -36,6 +36,7 @@
     "src/lib/flakinessReport.ts",
     "src/lib/detailTitles.ts",
     "src/lib/jobDetail.ts",
+    "src/lib/testDetail.ts",
     "src/types/actions.ts"
   ]
 }
