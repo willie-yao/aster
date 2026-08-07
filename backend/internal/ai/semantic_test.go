@@ -826,6 +826,13 @@ func TestSemanticAffirmativeSuccessRejectsNegativeRecoveryAndConditions(t *testi
 		"Widget v1 Ready=false",
 		"Widget v1 Available: False",
 		"Widget v1 Healthy=False",
+		"Widget v1 Succeeded=False",
+		"Widget v1 Completed=false",
+		"Widget v1 Created: False",
+		"Widget v1 Passed=False",
+		"Widget v1 Registered=False",
+		"Widget v1 Recovery=False",
+		"Widget v1 Reconciliation=False",
 	} {
 		if semanticAffirmativeSuccess(text) {
 			t.Errorf("negative condition classified as success: %q", text)
