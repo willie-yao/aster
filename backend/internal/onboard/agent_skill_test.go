@@ -39,7 +39,9 @@ func TestConsumerSetupAgentSkill(t *testing.T) {
 		"go -C backend run ./cmd/fetcher", "onboard discover", "-json", "-dry-run", "-non-interactive",
 		"-prompt-mode handoff", "-plan-out", "-apply-plan", "-plan-digest",
 		"PROMPT_HANDOFF.md", "onboard doctor", "After the user confirms the reviewed plan",
-		"Never delete stale or unrelated files",
+		"Never delete stale or unrelated files", "Use values already supplied anywhere in the user's request", "Never turn literal template placeholders",
+		"Run discovery as soon as the source is known", "discovery-suggested consumer identity", "Do not ask for a slug",
+		"process them as separate", "current checkout is not the `prow-ai-dashboard` engine",
 	} {
 		if !strings.Contains(text, anchor) {
 			t.Errorf("skill missing %q", anchor)
@@ -69,8 +71,10 @@ func TestConsumerSetupAgentSkill(t *testing.T) {
 	if openAI.Interface.DisplayName == "" || len(openAI.Interface.ShortDescription) < 25 || len(openAI.Interface.ShortDescription) > 64 {
 		t.Fatalf("openai interface metadata = %+v", openAI.Interface)
 	}
-	if !strings.Contains(openAI.Interface.DefaultPrompt, "$setup-prow-ai-consumer") {
-		t.Fatalf("default prompt does not invoke the skill: %q", openAI.Interface.DefaultPrompt)
+	for _, anchor := range []string{"$setup-prow-ai-consumer", "source repository named or linked", "infer safe local defaults", "read-only discovery", "template placeholders"} {
+		if !strings.Contains(openAI.Interface.DefaultPrompt, anchor) {
+			t.Fatalf("default prompt missing %q: %q", anchor, openAI.Interface.DefaultPrompt)
+		}
 	}
 
 	referencePath := filepath.Join(filepath.Dir(skillPath), "references", "decisions.md")
@@ -78,7 +82,7 @@ func TestConsumerSetupAgentSkill(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, anchor := range []string{"## Placement", "## Deployment", "## Discovery", "## Write boundaries"} {
+	for _, anchor := range []string{"## Input resolution", "## Placement", "## Deployment", "## Discovery", "## Write boundaries"} {
 		if !strings.Contains(string(reference), anchor) {
 			t.Errorf("decision reference missing %q", anchor)
 		}
@@ -204,14 +208,14 @@ func TestAgentOnboardingDocsAdvertiseInstallableSkills(t *testing.T) {
 		},
 		"docs/onboarding-a-new-project.md": {
 			"npx --yes skills@latest add willie-yao/prow-ai-dashboard",
-			"Use $setup-prow-ai-consumer to set up a Pages consumer",
+			"https://github.com/kubernetes-sigs/kueue", "template placeholders",
 			"$author-prow-ai-diagnostics",
 		},
 		"docs/agent-onboarding.md": {
 			"--skill setup-prow-ai-consumer author-prow-ai-diagnostics",
 			"--agent codex",
 			"--global",
-			"Use $setup-prow-ai-consumer",
+			"Use $setup-prow-ai-consumer", "The agent should not ask again",
 			"Use $author-prow-ai-diagnostics",
 			"npx --yes skills@latest update",
 		},

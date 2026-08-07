@@ -84,19 +84,34 @@ portable `.agents/skills` locations.
 
 ## Set up a dashboard with an agent
 
-Invoke the initial setup skill with a request such as:
+Invoke the initial setup skill with a concrete source repository or URL. The
+agent should use supplied values directly, derive the project slug, run discovery
+before asking about selectors, and use the discovery-suggested consumer identity
+when one is available:
 
 ```text
-Use $setup-prow-ai-consumer to set up a Pages consumer for this repository.
+Use $setup-prow-ai-consumer to create a Pages consumer for
+https://github.com/kubernetes-sigs/kueue. Store it in a timestamped Codex
+workspace under ~/.codex/deployments/prow-ai-dashboard, exclude presubmits,
+and keep deployed AI enabled. Do not ask me to clone the source repository.
 ```
 
 ```text
-Use $setup-prow-ai-consumer to put the consumer files in the current directory.
+Use $setup-prow-ai-consumer for
+https://github.com/kubernetes-sigs/gcp-compute-persistent-disk-csi-driver and
+put the consumer files in the current directory.
 ```
 
 ```text
-Use $setup-prow-ai-consumer to create a separate Kubernetes consumer checkout.
+Use $setup-prow-ai-consumer to create a separate Kubernetes consumer checkout
+for kubernetes-sigs/secrets-store-csi-driver.
 ```
+
+The agent should not ask again for a source URL, project slug, job name,
+deployment mode, or workspace path already supplied in the request. It should
+ask only when the source is absent or discovery leaves a materially ambiguous
+choice. Running the skill from the dashboard engine checkout does not make the
+engine repository the source project.
 
 The skill should also trigger for requests such as:
 

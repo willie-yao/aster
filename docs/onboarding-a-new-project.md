@@ -18,8 +18,15 @@ npx --yes skills@latest add willie-yao/prow-ai-dashboard \
 ```
 
 ```text
-Use $setup-prow-ai-consumer to set up a Pages consumer for this repository.
+Use $setup-prow-ai-consumer to create a Pages consumer for
+https://github.com/kubernetes-sigs/kueue. Store it under
+~/.codex/deployments/prow-ai-dashboard and do not ask me to clone the source.
 ```
+
+When a source URL or `owner/name` is present, the setup skill fills it directly,
+derives a project slug, runs read-only discovery, and uses the discovery
+suggestion for the local consumer identity when safe. It should not turn prompt
+template placeholders into a questionnaire.
 
 The setup skill uses the engine CLI as the scaffold authority rather than
 maintaining separate templates. The optional `$author-prow-ai-diagnostics`

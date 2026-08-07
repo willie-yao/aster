@@ -1,5 +1,19 @@
 # Consumer setup decisions
 
+## Input resolution
+
+Do not ask again for a repository, URL, job, mode, or path already present in
+the user's request. Normalize explicit GitHub URLs to `owner/name`, derive the
+project slug from the source repository name, and run read-only discovery before
+asking for a discovery selector or consumer identity. A non-empty discovery
+suggestion may be used for the local dry-run plan and must still be shown during
+plan review. It does not authorize remote repository creation.
+
+When invoked from the `prow-ai-dashboard` engine checkout, never treat the
+engine's own Git `origin` as the source project unless the user explicitly names
+it. If no source repository is named or linked, ask only that blocking question
+before discovery.
+
 ## Placement
 
 | Choice | Use when | `-out` |
