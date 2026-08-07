@@ -104,12 +104,19 @@ func validateRemoteChange(ctx context.Context, work string) error {
 			continue
 		}
 		kind := parts[0][0]
-		if strings.ContainsRune("DRTCU", rune(kind)) {
-			return fmt.Errorf("runtime: remote diff contains unsupported %c change for %s", kind, parts[1])
+		switch kind {
+		case 'D':
+			return fmt.Errorf("%w: %s", ErrResultDeletion, parts[1])
+		case 'R':
+			return fmt.Errorf("%w: %s", ErrResultRename, parts[1])
+		case 'C':
+			return fmt.Errorf("%w: copied file %s", ErrResultExtraFile, parts[len(parts)-1])
+		case 'T', 'U':
+			return fmt.Errorf("%w: unsupported %c change for %s", ErrResultContract, kind, parts[1])
 		}
 		file := parts[len(parts)-1]
 		if file == ".gitmodules" {
-			return fmt.Errorf("runtime: remote diff may not modify .gitmodules")
+			return fmt.Errorf("%w: remote diff may not modify .gitmodules", ErrResultContract)
 		}
 		changed = append(changed, file)
 	}
@@ -120,7 +127,7 @@ func validateRemoteChange(ctx context.Context, work string) error {
 	for _, line := range strings.Split(strings.TrimSpace(numstat), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) >= 2 && (fields[0] == "-" || fields[1] == "-") {
-			return fmt.Errorf("runtime: remote diff contains a binary file")
+			return fmt.Errorf("%w: remote diff contains a binary file", ErrResultContract)
 		}
 	}
 	for _, file := range changed {
@@ -130,7 +137,7 @@ func validateRemoteChange(ctx context.Context, work string) error {
 		}
 		fields := strings.Fields(entry)
 		if len(fields) > 0 && (fields[0] == "120000" || fields[0] == "160000") {
-			return fmt.Errorf("runtime: remote diff contains an unsupported symlink or submodule at %s", file)
+			return fmt.Errorf("%w: unsupported symlink or submodule at %s", ErrResultContract, file)
 		}
 	}
 	summary, err := gitOut(ctx, work, "diff", "--cached", "--summary")
@@ -138,7 +145,7 @@ func validateRemoteChange(ctx context.Context, work string) error {
 		return err
 	}
 	if strings.Contains(summary, "mode change") {
-		return fmt.Errorf("runtime: remote diff contains an unsupported mode change")
+		return fmt.Errorf("%w: unsupported mode change", ErrResultContract)
 	}
 	return nil
 }

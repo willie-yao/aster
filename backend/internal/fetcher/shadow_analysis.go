@@ -207,6 +207,7 @@ func (p *pipeline) runShadowCandidate(ctx context.Context, candidate shadowCandi
 		CreatedAt: createdAt.Format(time.RFC3339Nano), Subject: candidate.subject,
 		Source: candidate.source, Authoritative: candidate.authoritative,
 		RequestHash: candidate.requestHash, AuthoritativeHash: candidate.authoritativeHash,
+		Quality: agentanalysis.ShadowQuality{DeterministicStatus: "not_run", SemanticStatus: "unavailable", SemanticReason: "evidence_aware_semantic_judge_not_exposed"},
 		Provenance: agentanalysis.Provenance{
 			Runtime: "orka", AgentNamespace: cfg.Namespace, AgentRef: cfg.AgentRef, AgentVersion: cfg.AgentVersion, GitSecret: cfg.GitSecret,
 			ContractVersion: agentanalysis.ContractVersion, ToolPolicyVersion: agentanalysis.ToolPolicyVersion,
@@ -266,14 +267,14 @@ func (p *pipeline) runShadowCandidate(ctx context.Context, candidate shadowCandi
 	if generated.Analysis.Summary != "" {
 		analysis := generated.Analysis
 		record.Shadow = &analysis
+		record.Quality = agentanalysis.EvaluateQuality(bundle, analysis, p.aiProject.SkillSet, candidate.request.ConsecutiveFailures)
 	}
-	switch {
-	case runErr == nil:
-		record.Status = agentanalysis.ShadowStatusSucceeded
-	case errors.Is(runErr, agentruntime.ErrCleanupPending) && record.Shadow != nil:
-		record.Status, record.ErrorCode = agentanalysis.ShadowStatusCleanupPending, "cleanup_pending"
-	default:
-		record.Status, record.ErrorCode = classifyShadowFailure(runErr, false)
+	record.Status = generated.Status
+	if record.Status == "" {
+		record.Status = agentanalysis.ResolveShadowStatus(generated, runErr)
+	}
+	if record.Status != agentanalysis.ShadowStatusSucceeded {
+		record.ErrorCode = string(record.Status)
 	}
 	record.TotalDurationMs = time.Since(started).Milliseconds()
 	p.appendShadowRecord(record)
@@ -312,14 +313,9 @@ func (p *pipeline) appendShadowRecord(record agentanalysis.ShadowRecord) {
 }
 
 func classifyShadowFailure(err error, evidence bool) (agentanalysis.ShadowStatus, string) {
-	switch {
-	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-		return agentanalysis.ShadowStatusCancelled, "cancelled"
-	case evidence || errors.Is(err, agentanalysis.ErrEvidenceUnavailable), errors.Is(err, agentanalysis.ErrInvalidBundle):
+	if evidence || errors.Is(err, agentanalysis.ErrEvidenceUnavailable) || errors.Is(err, agentanalysis.ErrInvalidBundle) {
 		return agentanalysis.ShadowStatusEvidenceFailed, "evidence"
-	case errors.Is(err, agentanalysis.ErrInvalidResult):
-		return agentanalysis.ShadowStatusInvalidResult, "invalid_result"
-	default:
-		return agentanalysis.ShadowStatusRuntimeFailed, "runtime"
 	}
+	status := agentanalysis.ResolveShadowStatus(agentanalysis.Result{}, err)
+	return status, string(status)
 }

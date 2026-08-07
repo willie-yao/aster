@@ -77,6 +77,21 @@ type WorkRef struct {
 // WorkObserver persists external runtime identity as it becomes available.
 type WorkObserver func(context.Context, WorkRef) error
 
+// GenerateTelemetry records lifecycle facts observable through the runtime contract.
+type GenerateTelemetry struct {
+	TaskFinalized       bool
+	TaskFinalizedMs     int64
+	ResultAvailable     bool
+	ResultAvailableMs   int64
+	FinalizationChecked bool
+	FinalizationValid   bool
+	CleanupCompleted    bool
+	CleanupDurationMs   int64
+	TokenUsageAvailable bool
+	CostAvailable       bool
+	UsageStatus         string
+}
+
 // GenerateResult is the outcome of a generative run.
 type GenerateResult struct {
 	// Files maps repo-relative path to full new content for every file the agent
@@ -88,7 +103,8 @@ type GenerateResult struct {
 	// debugging.
 	Output string
 	// Attempts is the number of external Task attempts when the backend reports it.
-	Attempts int
+	Attempts  int
+	Telemetry GenerateTelemetry
 }
 
 // AgentRuntime materializes a disposable workspace and runs a coding agent that
@@ -205,7 +221,7 @@ func (r *LocalAgentRuntime) Generate(ctx context.Context, spec GenerateSpec) (Ge
 	if err != nil {
 		return GenerateResult{Output: output}, err
 	}
-	return GenerateResult{Files: files, Diff: diff, Output: output}, nil
+	return GenerateResult{Files: files, Diff: diff, Output: output, Telemetry: GenerateTelemetry{UsageStatus: "unavailable_from_agent_runtime"}}, nil
 }
 
 func runSandboxProcess(ctx context.Context, sandbox ProcessSandbox, spec SandboxSpec) ([]byte, error) {

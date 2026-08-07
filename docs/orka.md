@@ -218,6 +218,11 @@ operational requirement.
 ## Private experimental Agent analysis shadow
 
 The Agent analysis shadow keeps `analysisRuntime.type: inprocess` authoritative.
+It remains disabled by default and private. Dashboard telemetry records exact
+result-contract outcomes and observed lifecycle milestones, but does not claim
+provider token usage, cost, live model identity, Orka result-store persistence
+time, or completion of post-terminal Orka reconciliation.
+
 After public output and side-effect processing finish, the worker or fetcher freezes
 a bounded artifact evidence bundle and may submit one private `type: agent` Task.
 The result is never published or used for cache acceptance, patterns, issues,

@@ -791,16 +791,27 @@ without exposing prompt or tool content.
 
 When the disabled-by-default Helm Agent shadow is enabled, it writes a separate
 `analysis_shadow.json` ledger on a dedicated PVC mounted only into the writer.
-The ledger stores bounded comparison fields, hashes, timings, attempts, retry
-configuration, validation status, and cleanup state. It does not store prompts
-or artifact excerpt contents. The server never mounts or serves this claim, and
-the Pages path does not use it.
+The ledger stores bounded comparison fields, exact identities, attempts, retry
+configuration, deterministic critique telemetry, result validation, and cleanup
+state. Runtime timing separates Task terminal observation, result availability,
+dashboard validation, and Task deletion. It does not store prompts or artifact
+excerpt contents. The server never mounts or serves this claim, and the Pages
+path does not use it.
 
-The in-process result remains authoritative. A shadow timeout, invalid result,
-ledger failure, or cleanup-pending Task cannot change public JSON, private cache
-acceptance, pattern state, or GitHub actions. Coding-agent token usage remains
-external and unmetered unless the operator-owned provider exposes a separate
-usage source.
+Shadow outcomes distinguish `no_result`, `malformed_result`, `extra_file`,
+`deletion`, `rename`, `contract_violation`, `runtime_failure`, `timeout`,
+`cancellation`, and `cleanup_pending`. A valid result receives the existing
+deterministic critique privately without a repair or publication decision. The
+evidence-aware semantic judge is recorded as unavailable because its provider
+and state contract are not exposed to the shadow adapter.
+
+The in-process result remains authoritative. A shadow failure, ledger failure,
+or cleanup-pending Task cannot change public JSON, private cache acceptance,
+pattern state, or GitHub actions. Agent token and cost fields remain explicitly
+unavailable unless an operator-owned usage source reports them. The live Agent
+model and provider identities are also marked unavailable; the ledger still
+pins the declared Agent reference, version, runtime, source, evidence, prompt
+contract, and configuration identity owned by the dashboard.
 
 ### Private token and cost accounting
 

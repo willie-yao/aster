@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	LedgerSchemaVersion     = 1
+	LedgerSchemaVersion     = 2
 	maxLedgerRecords        = 100
 	maxLedgerAttempts       = 4096
 	maxLedgerBytes          = 4 << 20
@@ -32,14 +32,20 @@ const (
 type ShadowStatus string
 
 const (
-	ShadowStatusPending        ShadowStatus = "pending"
-	ShadowStatusSucceeded      ShadowStatus = "succeeded"
-	ShadowStatusCleanupPending ShadowStatus = "cleanup_pending"
-	ShadowStatusEvidenceFailed ShadowStatus = "evidence_failed"
-	ShadowStatusSetupFailed    ShadowStatus = "setup_failed"
-	ShadowStatusRuntimeFailed  ShadowStatus = "runtime_failed"
-	ShadowStatusInvalidResult  ShadowStatus = "invalid_result"
-	ShadowStatusCancelled      ShadowStatus = "cancelled"
+	ShadowStatusPending           ShadowStatus = "pending"
+	ShadowStatusSucceeded         ShadowStatus = "succeeded"
+	ShadowStatusCleanupPending    ShadowStatus = "cleanup_pending"
+	ShadowStatusEvidenceFailed    ShadowStatus = "evidence_failed"
+	ShadowStatusSetupFailed       ShadowStatus = "setup_failed"
+	ShadowStatusRuntimeFailed     ShadowStatus = "runtime_failure"
+	ShadowStatusNoResult          ShadowStatus = "no_result"
+	ShadowStatusMalformedResult   ShadowStatus = "malformed_result"
+	ShadowStatusExtraFile         ShadowStatus = "extra_file"
+	ShadowStatusDeletion          ShadowStatus = "deletion"
+	ShadowStatusRename            ShadowStatus = "rename"
+	ShadowStatusContractViolation ShadowStatus = "contract_violation"
+	ShadowStatusTimeout           ShadowStatus = "timeout"
+	ShadowStatusCancellation      ShadowStatus = "cancellation"
 )
 
 // Subject identifies the failure compared by one private record.
@@ -86,23 +92,52 @@ type EvidenceManifestEntry struct {
 
 // Provenance records the complete private runtime identity.
 type Provenance struct {
-	Runtime           string `json:"runtime,omitempty"`
-	AgentNamespace    string `json:"agent_namespace,omitempty"`
-	AgentRef          string `json:"agent_ref,omitempty"`
-	GitSecret         string `json:"git_secret,omitempty"`
-	AgentVersion      string `json:"agent_version,omitempty"`
-	ContractVersion   string `json:"contract_version,omitempty"`
-	ToolPolicyVersion string `json:"tool_policy_version,omitempty"`
-	EvidenceHash      string `json:"evidence_hash,omitempty"`
-	SkillHash         string `json:"skill_hash,omitempty"`
-	SourceSHA         string `json:"source_sha,omitempty"`
-	IdentityHash      string `json:"identity_hash,omitempty"`
-	ExecutionID       string `json:"execution_id,omitempty"`
-	Timeout           string `json:"timeout,omitempty"`
-	MaxTurns          int    `json:"max_turns,omitempty"`
-	Retries           int    `json:"retries,omitempty"`
-	Attempts          int    `json:"attempts,omitempty"`
-	DurationMs        int64  `json:"duration_ms,omitempty"`
+	Runtime                   string `json:"runtime,omitempty"`
+	AgentNamespace            string `json:"agent_namespace,omitempty"`
+	AgentRef                  string `json:"agent_ref,omitempty"`
+	GitSecret                 string `json:"git_secret,omitempty"`
+	AgentVersion              string `json:"agent_version,omitempty"`
+	ContractVersion           string `json:"contract_version,omitempty"`
+	ToolPolicyVersion         string `json:"tool_policy_version,omitempty"`
+	EvidenceHash              string `json:"evidence_hash,omitempty"`
+	SkillHash                 string `json:"skill_hash,omitempty"`
+	SourceSHA                 string `json:"source_sha,omitempty"`
+	IdentityHash              string `json:"identity_hash,omitempty"`
+	ExecutionID               string `json:"execution_id,omitempty"`
+	Timeout                   string `json:"timeout,omitempty"`
+	MaxTurns                  int    `json:"max_turns,omitempty"`
+	Retries                   int    `json:"retries,omitempty"`
+	Attempts                  int    `json:"attempts,omitempty"`
+	RuntimeDurationMs         int64  `json:"runtime_duration_ms,omitempty"`
+	DurationMs                int64  `json:"duration_ms,omitempty"`
+	FinalizationDurationMs    int64  `json:"finalization_duration_ms,omitempty"`
+	TaskFinalized             bool   `json:"task_finalized,omitempty"`
+	TaskFinalizedMs           int64  `json:"task_finalized_ms,omitempty"`
+	ResultAvailable           bool   `json:"result_available,omitempty"`
+	ResultAvailableMs         int64  `json:"result_available_ms,omitempty"`
+	FinalizationChecked       bool   `json:"finalization_checked,omitempty"`
+	FinalizationValid         bool   `json:"finalization_valid,omitempty"`
+	CleanupCompleted          bool   `json:"cleanup_completed,omitempty"`
+	CleanupDurationMs         int64  `json:"cleanup_duration_ms,omitempty"`
+	TokenUsageAvailable       bool   `json:"token_usage_available"`
+	CostAvailable             bool   `json:"cost_available"`
+	UsageStatus               string `json:"usage_status,omitempty"`
+	ModelIdentityAvailable    bool   `json:"model_identity_available"`
+	ProviderIdentityAvailable bool   `json:"provider_identity_available"`
+	IdentityStatus            string `json:"identity_status,omitempty"`
+}
+
+// ShadowQuality records private critique and judge telemetry without changing authority.
+type ShadowQuality struct {
+	DeterministicStatus string   `json:"deterministic_status"`
+	DeterministicPassed bool     `json:"deterministic_passed"`
+	RuleIDs             []string `json:"rule_ids,omitempty"`
+	HardRules           []string `json:"hard_rules,omitempty"`
+	SoftRules           []string `json:"soft_rules,omitempty"`
+	SemanticStatus      string   `json:"semantic_status"`
+	SemanticValid       bool     `json:"semantic_valid"`
+	SemanticObjections  []string `json:"semantic_objections,omitempty"`
+	SemanticReason      string   `json:"semantic_reason,omitempty"`
 }
 
 // ShadowRecord is one private comparison ledger entry.
@@ -123,6 +158,7 @@ type ShadowRecord struct {
 	Evidence          []EvidenceManifestEntry        `json:"evidence,omitempty"`
 	PlanIDs           []string                       `json:"plan_ids,omitempty"`
 	Provenance        Provenance                     `json:"provenance"`
+	Quality           ShadowQuality                  `json:"quality"`
 	TotalDurationMs   int64                          `json:"total_duration_ms,omitempty"`
 	CleanupPending    bool                           `json:"cleanup_pending,omitempty"`
 	CleanupWork       *agentruntime.WorkRef          `json:"cleanup_work,omitempty"`
@@ -196,7 +232,13 @@ func ProvenanceFromResult(result Result) Provenance {
 		EvidenceHash: result.EvidenceHash, SkillHash: result.SkillHash,
 		SourceSHA: result.SourceSHA, IdentityHash: result.IdentityHash, ExecutionID: result.ExecutionID,
 		Timeout: result.Timeout.String(), MaxTurns: result.MaxTurns, Retries: result.Retries,
-		Attempts: result.Attempts, DurationMs: result.Duration.Milliseconds(),
+		Attempts: result.Attempts, RuntimeDurationMs: result.Duration.Milliseconds(), FinalizationDurationMs: result.FinalizationDuration.Milliseconds(),
+		TaskFinalized: result.Telemetry.TaskFinalized, TaskFinalizedMs: result.Telemetry.TaskFinalizedMs,
+		ResultAvailable: result.Telemetry.ResultAvailable, ResultAvailableMs: result.Telemetry.ResultAvailableMs,
+		FinalizationChecked: result.Telemetry.FinalizationChecked, FinalizationValid: result.Telemetry.FinalizationValid,
+		CleanupCompleted: result.Telemetry.CleanupCompleted, CleanupDurationMs: result.Telemetry.CleanupDurationMs,
+		TokenUsageAvailable: result.Telemetry.TokenUsageAvailable, CostAvailable: result.Telemetry.CostAvailable, UsageStatus: result.Telemetry.UsageStatus,
+		ModelIdentityAvailable: false, ProviderIdentityAvailable: false, IdentityStatus: "agent_owned_identity_unavailable",
 	}
 }
 
@@ -268,6 +310,7 @@ func LedgerContainsAttempt(publicDir, path, attemptHash string) (bool, error) {
 
 // ClaimLedgerAttempt atomically reserves one comparison identity before external work starts.
 func ClaimLedgerAttempt(publicDir, path string, record ShadowRecord) (bool, error) {
+	normalizeShadowQuality(&record.Quality)
 	record.Status = ShadowStatusPending
 	record.ErrorCode = ""
 	record.ComparisonHash = ""
@@ -310,6 +353,7 @@ func ClaimLedgerAttempt(publicDir, path string, record ShadowRecord) (bool, erro
 
 // AppendLedger atomically replaces a claimed attempt with its final bounded record.
 func AppendLedger(publicDir, path string, record ShadowRecord) error {
+	normalizeShadowQuality(&record.Quality)
 	createdAt, err := validateShadowRecord(record)
 	if err != nil {
 		return fmt.Errorf("agent analysis ledger record: %w", err)
@@ -451,8 +495,11 @@ func loadLedger(path string) (ShadowLedger, error) {
 	if err := json.Unmarshal(data, &ledger); err != nil {
 		return ShadowLedger{}, fmt.Errorf("parse agent analysis ledger: %w", err)
 	}
-	if ledger.SchemaVersion != LedgerSchemaVersion {
+	if ledger.SchemaVersion != 1 && ledger.SchemaVersion != LedgerSchemaVersion {
 		return ShadowLedger{}, fmt.Errorf("unsupported agent analysis ledger schema %d", ledger.SchemaVersion)
+	}
+	if ledger.SchemaVersion == 1 {
+		normalizeLegacyLedger(&ledger)
 	}
 	for _, attempt := range ledger.Attempts {
 		if !validSHA256(attempt.Hash) {
@@ -473,6 +520,38 @@ func loadLedger(path string) (ShadowLedger, error) {
 	return ledger, nil
 }
 
+func normalizeLegacyLedger(ledger *ShadowLedger) {
+	if ledger == nil {
+		return
+	}
+	ledger.SchemaVersion = LedgerSchemaVersion
+	for i := range ledger.Attempts {
+		ledger.Attempts[i].Status = normalizeLegacyShadowStatus(ledger.Attempts[i].Status)
+	}
+	for i := range ledger.Records {
+		record := &ledger.Records[i]
+		record.Status = normalizeLegacyShadowStatus(record.Status)
+		if record.Provenance.RuntimeDurationMs == 0 {
+			record.Provenance.RuntimeDurationMs = record.Provenance.DurationMs
+		}
+		record.Provenance.DurationMs = 0
+		normalizeShadowQuality(&record.Quality)
+	}
+}
+
+func normalizeLegacyShadowStatus(status ShadowStatus) ShadowStatus {
+	switch status {
+	case "runtime_failed":
+		return ShadowStatusRuntimeFailed
+	case "invalid_result":
+		return ShadowStatusContractViolation
+	case "cancelled":
+		return ShadowStatusCancellation
+	default:
+		return status
+	}
+}
+
 func validateShadowRecord(record ShadowRecord) (time.Time, error) {
 	if record.ID == "" || record.CreatedAt == "" || record.Subject.JobID == "" || record.Subject.BuildID == "" || record.Subject.TestName == "" ||
 		!validSHA256(record.AttemptHash) || !validSHA256(record.RequestHash) || !validSHA256(record.AuthoritativeHash) ||
@@ -481,6 +560,9 @@ func validateShadowRecord(record ShadowRecord) (time.Time, error) {
 	}
 	if !validShadowStatus(record.Status) {
 		return time.Time{}, fmt.Errorf("unsupported shadow status %q", record.Status)
+	}
+	if !validShadowQuality(record.Quality) {
+		return time.Time{}, fmt.Errorf("invalid shadow quality telemetry")
 	}
 	if err := sourceinvestigation.ValidateRepository(record.Source); err != nil {
 		return time.Time{}, err
@@ -492,9 +574,51 @@ func validateShadowRecord(record ShadowRecord) (time.Time, error) {
 	return createdAt, nil
 }
 
+func normalizeShadowQuality(quality *ShadowQuality) {
+	if quality == nil {
+		return
+	}
+	if quality.DeterministicStatus == "" {
+		quality.DeterministicStatus = "not_run"
+	}
+	if quality.SemanticStatus == "" {
+		quality.SemanticStatus = "not_run"
+	}
+}
+
+func validShadowQuality(quality ShadowQuality) bool {
+	switch quality.DeterministicStatus {
+	case "not_run", "unavailable":
+		if quality.DeterministicPassed || len(quality.RuleIDs) > 0 || len(quality.HardRules) > 0 || len(quality.SoftRules) > 0 {
+			return false
+		}
+	case "passed":
+		if !quality.DeterministicPassed || len(quality.HardRules) > 0 {
+			return false
+		}
+	case "objected":
+		if quality.DeterministicPassed || len(quality.RuleIDs) == 0 {
+			return false
+		}
+	default:
+		return false
+	}
+	switch quality.SemanticStatus {
+	case "not_run", "unavailable", "passed", "objected", "error":
+	default:
+		return false
+	}
+	if quality.SemanticStatus == "passed" && !quality.SemanticValid || quality.SemanticStatus != "passed" && quality.SemanticValid {
+		return false
+	}
+	return true
+}
+
 func validShadowStatus(status ShadowStatus) bool {
 	switch status {
-	case ShadowStatusPending, ShadowStatusSucceeded, ShadowStatusCleanupPending, ShadowStatusEvidenceFailed, ShadowStatusSetupFailed, ShadowStatusRuntimeFailed, ShadowStatusInvalidResult, ShadowStatusCancelled:
+	case ShadowStatusPending, ShadowStatusSucceeded, ShadowStatusCleanupPending, ShadowStatusEvidenceFailed, ShadowStatusSetupFailed,
+		ShadowStatusRuntimeFailed, ShadowStatusNoResult, ShadowStatusMalformedResult, ShadowStatusExtraFile, ShadowStatusDeletion,
+		ShadowStatusRename, ShadowStatusContractViolation, ShadowStatusTimeout, ShadowStatusCancellation:
 		return true
 	default:
 		return false

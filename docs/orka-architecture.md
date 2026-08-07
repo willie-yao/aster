@@ -230,6 +230,20 @@ RBAC remains operator-owned.
 Orka Task identity stays in the Task and encrypted state wrapper. It is not added
 to the dashboard's private analysis trace schema.
 
+For Agent shadow work, the dashboard can observe terminal Task state, successful
+result retrieval, strict post-result Task identity checks, result validation,
+and Task deletion. It cannot observe completion of Orka's later post-terminal
+reconciliation or the result store's internal persistence timestamp. A future
+Orka `Finalized=True` condition should be set only after Job cleanup, lease
+release, webhook and history handling, and terminal event persistence finish.
+
+The current Agent workspace is one read-write Git checkout. Strict one-file diff
+validation prevents accepted source changes, but it is not filesystem-enforced
+source immutability. The required Orka follow-up is a read-only source volume and
+a separate empty result volume that accepts exactly one bounded regular file,
+rejects symlinks and extra files, and publishes that file through the existing
+result API.
+
 ## How Orka improves the inference stack
 
 Orka improves the operational control plane around inference:

@@ -1,7 +1,6 @@
 package e2e
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -30,7 +29,7 @@ import (
 )
 
 const (
-	shadowBenchmarkRecordVersion   = 2
+	shadowBenchmarkRecordVersion   = 3
 	shadowBenchmarkKindContext     = "kind-prow-ai-shadow-bench"
 	shadowBenchmarkAgentVersionKey = "prow-ai-dashboard/benchmark-agent-version"
 	shadowBenchmarkOrkaCommitKey   = "prow-ai-dashboard/benchmark-orka-commit"
@@ -78,65 +77,87 @@ type shadowSourceCitation struct {
 }
 
 type shadowBenchmarkRecord struct {
-	Version                 int                      `json:"version"`
-	CaseID                  string                   `json:"case_id"`
-	StableID                string                   `json:"stable_id"`
-	Repetition              int                      `json:"repetition"`
-	Runtime                 string                   `json:"runtime"`
-	ProviderPath            string                   `json:"provider_path"`
-	ModelLabel              string                   `json:"model_label"`
-	Arm                     string                   `json:"arm"`
-	EngineCommit            string                   `json:"engine_commit"`
-	FixtureSHA256           string                   `json:"fixture_sha256"`
-	BaselineConsumerCommit  string                   `json:"baseline_consumer_commit"`
-	BaselinePromptSHA256    string                   `json:"baseline_prompt_sha256"`
-	ProjectSHA256           string                   `json:"project_sha256"`
-	SkillSetHash            string                   `json:"skill_set_hash"`
-	APIMode                 string                   `json:"api_mode"`
-	TransportID             string                   `json:"transport_id"`
-	EvidenceCondition       string                   `json:"evidence_condition"`
-	EvidenceStageSHA256     string                   `json:"evidence_stage_sha256"`
-	EvidenceStageIDs        []string                 `json:"evidence_stage_ids"`
-	Status                  string                   `json:"status"`
-	ErrorCode               string                   `json:"error_code,omitempty"`
-	SourceRevision          string                   `json:"source_revision"`
-	EvidenceHash            string                   `json:"evidence_hash"`
-	AgentSkillHash          string                   `json:"agent_skill_hash"`
-	ContractVersion         string                   `json:"contract_version"`
-	ToolPolicyVersion       string                   `json:"tool_policy_version"`
-	AgentNamespace          string                   `json:"agent_namespace"`
-	AgentRef                string                   `json:"agent_ref"`
-	AgentVersion            string                   `json:"agent_version"`
-	AgentConfigSHA256       string                   `json:"agent_config_sha256"`
-	OrkaCommit              string                   `json:"orka_commit"`
-	RuntimeIdentityHash     string                   `json:"runtime_identity_hash"`
-	ExecutionID             string                   `json:"execution_id"`
-	MaxTurns                int                      `json:"max_turns"`
-	Timeout                 string                   `json:"timeout"`
-	Retries                 int                      `json:"retries"`
-	Attempts                int                      `json:"attempts"`
-	ElapsedMS               int64                    `json:"elapsed_ms"`
-	CleanupPending          bool                     `json:"cleanup_pending,omitempty"`
-	IsTransient             *bool                    `json:"is_transient,omitempty"`
-	Summary                 string                   `json:"summary,omitempty"`
-	RootCause               string                   `json:"root_cause,omitempty"`
-	SuggestedFix            string                   `json:"suggested_fix,omitempty"`
-	Severity                string                   `json:"severity,omitempty"`
-	RelevantFiles           []string                 `json:"relevant_files,omitempty"`
-	EvidenceCitations       []shadowEvidenceCitation `json:"evidence_citations,omitempty"`
-	SourceCitations         []shadowSourceCitation   `json:"source_citations,omitempty"`
-	UnresolvedDetails       []string                 `json:"unresolved_details"`
-	ArtifactCitationCount   int                      `json:"artifact_citation_count"`
-	SourceCitationCount     int                      `json:"source_citation_count"`
-	SourceVerified          bool                     `json:"source_verified"`
-	SignalHits              int                      `json:"signal_hits"`
-	SignalTotal             int                      `json:"signal_total"`
-	MissingMust             []string                 `json:"missing_must,omitempty"`
-	TokenUsageAvailable     bool                     `json:"token_usage_available"`
-	CostStatus              string                   `json:"cost_status"`
-	HumanScoreRubricVersion int                      `json:"human_score_rubric_version"`
-	HumanScoreMax           int                      `json:"human_score_max"`
-	HumanScoreDimensions    []string                 `json:"human_score_dimensions"`
+	Version                   int                      `json:"version"`
+	CaseID                    string                   `json:"case_id"`
+	StableID                  string                   `json:"stable_id"`
+	Repetition                int                      `json:"repetition"`
+	Runtime                   string                   `json:"runtime"`
+	ProviderPath              string                   `json:"provider_path"`
+	ModelLabel                string                   `json:"model_label"`
+	Arm                       string                   `json:"arm"`
+	EngineCommit              string                   `json:"engine_commit"`
+	FixtureSHA256             string                   `json:"fixture_sha256"`
+	BaselineConsumerCommit    string                   `json:"baseline_consumer_commit"`
+	BaselinePromptSHA256      string                   `json:"baseline_prompt_sha256"`
+	ProjectSHA256             string                   `json:"project_sha256"`
+	SkillSetHash              string                   `json:"skill_set_hash"`
+	APIMode                   string                   `json:"api_mode"`
+	TransportID               string                   `json:"transport_id"`
+	EvidenceCondition         string                   `json:"evidence_condition"`
+	EvidenceStageSHA256       string                   `json:"evidence_stage_sha256"`
+	EvidenceStageIDs          []string                 `json:"evidence_stage_ids"`
+	Status                    string                   `json:"status"`
+	ErrorCode                 string                   `json:"error_code,omitempty"`
+	SourceRevision            string                   `json:"source_revision"`
+	EvidenceHash              string                   `json:"evidence_hash"`
+	AgentSkillHash            string                   `json:"agent_skill_hash"`
+	ContractVersion           string                   `json:"contract_version"`
+	ToolPolicyVersion         string                   `json:"tool_policy_version"`
+	AgentNamespace            string                   `json:"agent_namespace"`
+	AgentRef                  string                   `json:"agent_ref"`
+	AgentVersion              string                   `json:"agent_version"`
+	AgentConfigSHA256         string                   `json:"agent_config_sha256"`
+	OrkaCommit                string                   `json:"orka_commit"`
+	RuntimeIdentityHash       string                   `json:"runtime_identity_hash"`
+	ExecutionID               string                   `json:"execution_id"`
+	MaxTurns                  int                      `json:"max_turns"`
+	Timeout                   string                   `json:"timeout"`
+	Retries                   int                      `json:"retries"`
+	Attempts                  int                      `json:"attempts"`
+	ElapsedMS                 int64                    `json:"elapsed_ms"`
+	RuntimeDurationMS         int64                    `json:"runtime_duration_ms,omitempty"`
+	FinalizationDurationMS    int64                    `json:"finalization_duration_ms,omitempty"`
+	TaskFinalized             bool                     `json:"task_finalized"`
+	TaskFinalizedMS           int64                    `json:"task_finalized_ms,omitempty"`
+	ResultAvailable           bool                     `json:"result_available"`
+	ResultAvailableMS         int64                    `json:"result_available_ms,omitempty"`
+	FinalizationChecked       bool                     `json:"finalization_checked"`
+	FinalizationValid         bool                     `json:"finalization_valid"`
+	CleanupCompleted          bool                     `json:"cleanup_completed"`
+	CleanupDurationMS         int64                    `json:"cleanup_duration_ms,omitempty"`
+	ModelIdentityAvailable    bool                     `json:"model_identity_available"`
+	ProviderIdentityAvailable bool                     `json:"provider_identity_available"`
+	IdentityStatus            string                   `json:"identity_status"`
+	DeterministicStatus       string                   `json:"deterministic_status"`
+	DeterministicPassed       bool                     `json:"deterministic_passed"`
+	DeterministicRuleIDs      []string                 `json:"deterministic_rule_ids,omitempty"`
+	DeterministicHardRules    []string                 `json:"deterministic_hard_rules,omitempty"`
+	DeterministicSoftRules    []string                 `json:"deterministic_soft_rules,omitempty"`
+	SemanticStatus            string                   `json:"semantic_status"`
+	SemanticValid             bool                     `json:"semantic_valid"`
+	SemanticObjections        []string                 `json:"semantic_objections,omitempty"`
+	SemanticReason            string                   `json:"semantic_reason,omitempty"`
+	CleanupPending            bool                     `json:"cleanup_pending,omitempty"`
+	IsTransient               *bool                    `json:"is_transient,omitempty"`
+	Summary                   string                   `json:"summary,omitempty"`
+	RootCause                 string                   `json:"root_cause,omitempty"`
+	SuggestedFix              string                   `json:"suggested_fix,omitempty"`
+	Severity                  string                   `json:"severity,omitempty"`
+	RelevantFiles             []string                 `json:"relevant_files,omitempty"`
+	EvidenceCitations         []shadowEvidenceCitation `json:"evidence_citations,omitempty"`
+	SourceCitations           []shadowSourceCitation   `json:"source_citations,omitempty"`
+	UnresolvedDetails         []string                 `json:"unresolved_details"`
+	ArtifactCitationCount     int                      `json:"artifact_citation_count"`
+	SourceCitationCount       int                      `json:"source_citation_count"`
+	SourceVerified            bool                     `json:"source_verified"`
+	SignalHits                int                      `json:"signal_hits"`
+	SignalTotal               int                      `json:"signal_total"`
+	MissingMust               []string                 `json:"missing_must,omitempty"`
+	TokenUsageAvailable       bool                     `json:"token_usage_available"`
+	CostStatus                string                   `json:"cost_status"`
+	HumanScoreRubricVersion   int                      `json:"human_score_rubric_version"`
+	HumanScoreMax             int                      `json:"human_score_max"`
+	HumanScoreDimensions      []string                 `json:"human_score_dimensions"`
 }
 
 func TestAgentAnalysisShadowBenchmark(t *testing.T) {
@@ -465,6 +486,9 @@ func runShadowBenchmarkCase(t *testing.T, cfg shadowBenchmarkConfig, bc benchCas
 		Bundle: bundle, SourceReader: orka.NewGitHubSourceReader("", os.Getenv("GITHUB_READ_TOKEN")),
 		MaxTurns: cfg.MaxTurns, Timeout: cfg.Timeout, ExecutionID: executionID,
 	})
+	if result.Analysis.Summary != "" {
+		result.Quality = agentanalysis.EvaluateQuality(bundle, result.Analysis, projectSkills, bc.consecutiveFailures)
+	}
 	elapsed := time.Since(started)
 	if runErr != nil {
 		t.Logf("shadow runtime error: %v", runErr)
@@ -487,16 +511,13 @@ func runShadowBenchmarkCase(t *testing.T, cfg shadowBenchmarkConfig, bc benchCas
 }
 
 func shadowRecordForResult(cfg shadowBenchmarkConfig, bc benchCase, repetition int, bundle agentanalysis.EvidenceBundle, result agentanalysis.Result, elapsed time.Duration, err error, agentConfigSHA256 string) shadowBenchmarkRecord {
-	status, code := "succeeded", ""
-	switch {
-	case errors.Is(err, agentruntime.ErrCleanupPending):
-		status, code = "cleanup_pending", "cleanup_pending"
-	case errors.Is(err, agentanalysis.ErrInvalidResult):
-		status, code = "invalid_result", "invalid_result"
-	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-		status, code = "cancelled", "cancelled"
-	case err != nil:
-		status, code = "runtime_failed", "runtime"
+	statusValue := result.Status
+	if statusValue == "" {
+		statusValue = agentanalysis.ResolveShadowStatus(result, err)
+	}
+	status, code := string(statusValue), ""
+	if statusValue != agentanalysis.ShadowStatusSucceeded {
+		code = status
 	}
 	record := shadowBenchmarkRecord{
 		Version: shadowBenchmarkRecordVersion, CaseID: bc.name, StableID: bc.stableID, Repetition: repetition,
@@ -511,10 +532,30 @@ func shadowRecordForResult(cfg shadowBenchmarkConfig, bc benchCase, repetition i
 		AgentConfigSHA256: agentConfigSHA256, OrkaCommit: cfg.OrkaCommit,
 		RuntimeIdentityHash: result.IdentityHash, ExecutionID: result.ExecutionID,
 		MaxTurns: cfg.MaxTurns, Timeout: cfg.Timeout.String(), Retries: cfg.Retries,
-		Attempts: result.Attempts, ElapsedMS: elapsed.Milliseconds(), CleanupPending: result.CleanupPending,
-		TokenUsageAvailable: false, CostStatus: "external_runtime_usage_unavailable",
+		Attempts: result.Attempts, ElapsedMS: elapsed.Milliseconds(), RuntimeDurationMS: result.Duration.Milliseconds(), FinalizationDurationMS: result.FinalizationDuration.Milliseconds(),
+		TaskFinalized: result.Telemetry.TaskFinalized, TaskFinalizedMS: result.Telemetry.TaskFinalizedMs,
+		ResultAvailable: result.Telemetry.ResultAvailable, ResultAvailableMS: result.Telemetry.ResultAvailableMs,
+		FinalizationChecked: result.Telemetry.FinalizationChecked, FinalizationValid: result.Telemetry.FinalizationValid,
+		CleanupCompleted: result.Telemetry.CleanupCompleted, CleanupDurationMS: result.Telemetry.CleanupDurationMs,
+		ModelIdentityAvailable: false, ProviderIdentityAvailable: false, IdentityStatus: "agent_owned_identity_unavailable",
+		DeterministicStatus: result.Quality.DeterministicStatus, DeterministicPassed: result.Quality.DeterministicPassed,
+		DeterministicRuleIDs: append([]string(nil), result.Quality.RuleIDs...), DeterministicHardRules: append([]string(nil), result.Quality.HardRules...), DeterministicSoftRules: append([]string(nil), result.Quality.SoftRules...),
+		SemanticStatus: result.Quality.SemanticStatus, SemanticValid: result.Quality.SemanticValid,
+		SemanticObjections: append([]string(nil), result.Quality.SemanticObjections...), SemanticReason: result.Quality.SemanticReason,
+		CleanupPending:      result.CleanupPending,
+		TokenUsageAvailable: result.Telemetry.TokenUsageAvailable, CostStatus: result.Telemetry.UsageStatus,
 		HumanScoreRubricVersion: benchmarkHumanScoreRubricVersion, HumanScoreMax: benchmarkHumanScoreMax,
 		HumanScoreDimensions: append([]string(nil), benchmarkHumanScoreDimensions...), UnresolvedDetails: []string{},
+	}
+	if record.CostStatus == "" {
+		record.CostStatus = "unavailable_from_agent_runtime"
+	}
+	if record.DeterministicStatus == "" {
+		record.DeterministicStatus = "not_run"
+	}
+	if record.SemanticStatus == "" {
+		record.SemanticStatus = "unavailable"
+		record.SemanticReason = "evidence_aware_semantic_judge_not_exposed"
 	}
 
 	if result.Analysis.Summary != "" {

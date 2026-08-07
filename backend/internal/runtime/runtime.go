@@ -29,6 +29,24 @@ var ErrWorkIdentityChanged = errors.New("runtime work identity changed")
 // ErrCleanupPending means external runtime cleanup could not be confirmed yet.
 var ErrCleanupPending = errors.New("runtime cleanup is still pending")
 
+// ErrMalformedResult means the external runtime returned an unreadable result envelope.
+var ErrMalformedResult = errors.New("runtime result is malformed")
+
+// ErrResultContract means the external runtime result violated its declared contract.
+var ErrResultContract = errors.New("runtime result contract violation")
+
+// ErrResultDeletion means the external runtime attempted to delete a repository file.
+var ErrResultDeletion = errors.New("runtime result attempted deletion")
+
+// ErrResultRename means the external runtime attempted to rename a repository file.
+var ErrResultRename = errors.New("runtime result attempted rename")
+
+// ErrResultExtraFile means the external runtime returned an unexpected file set.
+var ErrResultExtraFile = errors.New("runtime result contains unexpected files")
+
+// ErrCancelled means the external runtime reported a cancelled execution.
+var ErrCancelled = errors.New("runtime execution cancelled")
+
 // RepoRef identifies a Git repository and the ref to materialize.
 type RepoRef struct {
 	Owner string

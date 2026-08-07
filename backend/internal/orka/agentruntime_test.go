@@ -209,6 +209,9 @@ func TestAgentRuntime_HappyPath(t *testing.T) {
 	if !strings.Contains(gotDiff, "Premium_LRS") {
 		t.Errorf("diff not passed to applyDiff: %q", gotDiff)
 	}
+	if !res.Telemetry.TaskFinalized || !res.Telemetry.ResultAvailable || !res.Telemetry.FinalizationChecked || !res.Telemetry.FinalizationValid || !res.Telemetry.CleanupCompleted || res.Telemetry.UsageStatus != "unavailable_from_agent_runtime" {
+		t.Fatalf("telemetry = %+v", res.Telemetry)
+	}
 
 	// The applied Task is generation-only: type agent, no pushBranch, pinned ref.
 	taskSpec, _ := kube.applied["spec"].(map[string]any)
@@ -285,8 +288,8 @@ func TestAgentRuntimeRejectsNonJSONResult(t *testing.T) {
 				results: results,
 				opts:    AgentOptions{AgentRef: "opencode-fixer", PollEvery: time.Millisecond},
 			}
-			if _, err := r.Generate(context.Background(), spec()); err == nil || !strings.Contains(err.Error(), "parsing result") {
-				t.Fatalf("error = %v, want strict JSON parse failure", err)
+			if _, err := r.Generate(context.Background(), spec()); err == nil || !errors.Is(err, runtime.ErrMalformedResult) {
+				t.Fatalf("error = %v, want malformed result failure", err)
 			}
 		})
 	}
@@ -301,6 +304,17 @@ func TestAgentRuntime_TaskFailed(t *testing.T) {
 
 	if _, err := r.Generate(context.Background(), spec()); err == nil || !strings.Contains(err.Error(), "ended Failed") {
 		t.Errorf("expected a Failed-phase error, got %v", err)
+	}
+}
+
+func TestAgentRuntime_TaskCancelled(t *testing.T) {
+	kube := &fakeTaskAPI{phases: []string{"Running", "Cancelled"}}
+	results, done := resultServer(t, StructuredResult{})
+	defer done()
+	r := &AgentRuntime{kube: kube, results: results, opts: AgentOptions{AgentRef: "codex-fixer", PollEvery: time.Millisecond}, applyDiff: stubApply(nil, nil)}
+	result, err := r.Generate(context.Background(), spec())
+	if !errors.Is(err, runtime.ErrCancelled) || !result.Telemetry.TaskFinalized {
+		t.Fatalf("result=%+v error=%v", result, err)
 	}
 }
 
