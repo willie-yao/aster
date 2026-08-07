@@ -68,8 +68,8 @@ const {
     job?: JobSummary;
   }) => ReturnType<typeof createElement>;
 };
-const { RunTimeline } = (await vite.ssrLoadModule("/src/components/RunTimeline.tsx")) as {
-  RunTimeline: (props: {
+const { RunHistory } = (await vite.ssrLoadModule("/src/components/RunHistory.tsx")) as {
+  RunHistory: (props: {
     runs: BuildResult[];
     selectedBuildId?: string;
     onSelect: (buildId: string) => void;
@@ -167,13 +167,13 @@ test("detail run controls include result build and date context", () => {
     tests_failed: 1,
     tests_skipped: 0,
   };
-  const html = render(createElement(RunTimeline, {
+  const html = render(createElement(RunHistory, {
     runs: [run],
     selectedBuildId: "123",
     onSelect: () => undefined,
   }));
 
-  assert.match(html, /aria-label="#123 — Failed · Aug 5, 2026"/);
+  assert.match(html, /aria-label="#123 · Failed · Aug 5, 2026"/);
   assert.match(html, />8\/5</);
 });
 

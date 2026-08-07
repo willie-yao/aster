@@ -11,12 +11,12 @@ import { Link as RouterLink, useParams, useSearchParams } from "react-router-dom
 import { useJobDetail } from "../hooks/useData";
 import { formatDuration, formatPercent, timeAgo } from "../lib/utils";
 import type { BuildResult, TestCase } from "../types/dashboard";
-import { RunTimeline } from "../components/RunTimeline";
+import { RunHistory } from "../components/RunHistory";
 import { TestResultsGrid } from "../components/TestResultsGrid";
 import { TestCaseTable } from "../components/TestCaseTable";
 import { PatternBanner } from "../components/PatternBanner";
 import { StatusChip } from "../components/StatusChip";
-import { SectionHeading } from "../components/SectionHeading";
+import { DetailSectionBand } from "../components/DetailSectionBand";
 import { Panel } from "../components/Panel";
 import { LoadingState } from "../components/LoadingState";
 import { ErrorState } from "../components/ErrorState";
@@ -278,14 +278,12 @@ export function JobDetailPage() {
   );
 
   const runHistorySection = (
-    <Box component="section" sx={{ minWidth: 0 }}>
-      <SectionHeading title="Run History" />
-      <RunTimeline
-        runs={runs}
-        selectedBuildId={selectedBuildId}
-        onSelect={handleSelectRun}
-      />
-    </Box>
+    <RunHistory
+      runs={runs}
+      selectedBuildId={selectedBuildId}
+      onSelect={handleSelectRun}
+      metadata={`${runs.length} recent ${runs.length === 1 ? "run" : "runs"}`}
+    />
   );
 
   const gridSection = (
@@ -433,7 +431,7 @@ export function JobDetailPage() {
               )}
               {junitTestCases.length > 0 ? (
                 <Box component="section">
-                  <SectionHeading title="Test Cases" />
+                  <DetailSectionBand title="Test cases" />
                   <TestCaseTable
                     testCases={junitTestCases}
                     jobID={jobID}
