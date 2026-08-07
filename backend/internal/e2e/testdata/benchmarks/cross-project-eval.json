@@ -194,7 +194,7 @@
       "signals": [
         {
           "name": "identifies missing Windows mount path",
-          "pattern": "(?is)(?:(?:c:\\\\mnt\\\\volume1|/mnt/volume1).{0,180}(?:missing|absent|not exist|could not find|empty volumeid)|empty volumeid.{0,180}(?:/mnt/volume1|c:\\\\mnt\\\\volume1))",
+          "pattern": "(?is)(?:(?:c:\\\\mnt\\\\volume1|/mnt/volume1).{0,180}(?:missing|absent|not exist|could not find|could not resolve|failed to resolve|empty volumeid)|empty volumeid.{0,180}(?:/mnt/volume1|c:\\\\mnt\\\\volume1)|(?:could not|failed to|unable to).{0,40}(?:resolve|map).{0,120}(?:volumeid|volume id).{0,120}(?:/mnt/volume1|c:\\\\mnt\\\\volume1))",
           "must": true
         },
         {
@@ -205,7 +205,7 @@
         },
         {
           "name": "preserves ownership uncertainty",
-          "pattern": "(?is)(?:(?:cannot|could not|unable to|insufficient evidence|does not|do not).{0,180}(?:distinguish|determine|attribute|prove|establish)|(?:ownership|owner).{0,100}(?:uncertain|ambiguous|unresolved))",
+          "pattern": "(?is)(?:(?:cannot|could not|unable to|insufficient evidence|does not|do not).{0,180}(?:distinguish|determine|attribute|prove|establish)|(?:ownership|owner).{0,100}(?:uncertain|ambiguous|unresolved)|(?:component|ownership|owner|boundary).{0,140}(?:is not|was not|remains?)(?: directly)? (?:established|proven|determined|attributed|resolved))",
           "must": true
         },
         {
