@@ -443,6 +443,7 @@ type benchmarkJSONLResult struct {
 	TransportID             string                     `json:"transport_id,omitempty"`
 	EvidenceGroupsHit       []string                   `json:"evidence_groups_hit,omitempty"`
 	EvidenceGroupsMissed    []string                   `json:"evidence_groups_missed,omitempty"`
+	EvidenceGroupSources    map[string][]string        `json:"evidence_group_sources,omitempty"`
 	JobName                 string                     `json:"job_name"`
 	BuildID                 string                     `json:"build_id"`
 	CheckoutCommit          string                     `json:"checkout_commit"`
@@ -462,6 +463,11 @@ type benchmarkJSONLResult struct {
 	FileLinks               map[string]string          `json:"file_links,omitempty"`
 	SignalHits              int                        `json:"signal_hits"`
 	SignalTotal             int                        `json:"signal_total"`
+	DiagnosisSignalHits     int                        `json:"diagnosis_signal_hits"`
+	DiagnosisSignalTotal    int                        `json:"diagnosis_signal_total"`
+	TransientCorrect        *bool                      `json:"transient_classification_correct,omitempty"`
+	ForbiddenChecksPassed   int                        `json:"forbidden_checks_passed"`
+	ForbiddenChecksTotal    int                        `json:"forbidden_checks_total"`
 	MissingMust             []string                   `json:"missing_must,omitempty"`
 	SelectedAttempt         int                        `json:"selected_attempt,omitempty"`
 	Drafts                  []benchmarkJSONLDraft      `json:"drafts,omitempty"`
@@ -576,7 +582,8 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 		SkillSetHash: identity.SkillSetHash, EffectiveInputSHA256: identity.EffectiveInputSHA256,
 		APIMode: identity.APIMode, ProviderPath: identity.ProviderPath, TransportID: identity.TransportID,
 		EvidenceGroupsHit: append([]string(nil), evidenceCoverage.hit...), EvidenceGroupsMissed: append([]string(nil), evidenceCoverage.missed...),
-		JobName: bc.jobName, BuildID: bc.buildID, CheckoutCommit: bc.commit, TestName: bc.testName, TestSource: bc.testSource, ElapsedMS: elapsed.Milliseconds(), Outcome: string(outcome),
+		EvidenceGroupSources: cloneBenchmarkEvidenceSources(evidenceCoverage.sources),
+		JobName:              bc.jobName, BuildID: bc.buildID, CheckoutCommit: bc.commit, TestName: bc.testName, TestSource: bc.testSource, ElapsedMS: elapsed.Milliseconds(), Outcome: string(outcome),
 		FileLinks: map[string]string{}, SelectedAttempt: selectedAttempt,
 		ToolNames: append([]string(nil), toolUsage.names...), ToolCounts: append([]string(nil), toolUsage.counts...),
 		FloorNudges: traceSummary.floorNudges, FloorNudgeReasons: append([]string(nil), traceSummary.floorNudgeReasons...),
@@ -626,12 +633,16 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 		}
 		assessment := assessBenchmarkCase(bc, tc)
 		result.SignalHits, result.SignalTotal = assessment.hits, assessment.total
+		result.DiagnosisSignalHits, result.DiagnosisSignalTotal = assessment.diagnosisHits, assessment.diagnosisTotal
+		result.TransientCorrect = assessment.transientCorrect
+		result.ForbiddenChecksPassed, result.ForbiddenChecksTotal = assessment.forbiddenPassed, assessment.forbiddenTotal
 		result.MissingMust = append(result.MissingMust, assessment.missingMust...)
 	} else {
-		result.SignalTotal = len(bc.signals) + len(bc.forbidden)
-		if bc.expectedTransient != nil {
-			result.SignalTotal++
-		}
+		assessment := assessBenchmarkCase(bc, tc)
+		result.SignalTotal = assessment.total
+		result.DiagnosisSignalTotal = assessment.diagnosisTotal
+		result.TransientCorrect = assessment.transientCorrect
+		result.ForbiddenChecksTotal = assessment.forbiddenTotal
 	}
 	for _, trace := range snapshot.Traces {
 		for _, event := range trace.Events {
@@ -805,7 +816,7 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 	writeBenchmarkJSONL(t, path, bc, 2, tc, benchmarkOutcomeUsable, 3*time.Second, snapshot, observations, 1,
 		benchmarkToolUsage{names: []string{"read_artifact"}, counts: []string{"read_artifact=1"}},
 		benchmarkTraceSummary{floorNudges: 1, floorNudgeReasons: []string{"gcs_bytes"}}, 17, "generation", ai.CritiqueCachePolicyHard, cacheVerification,
-		benchmarkRunIdentity{Arm: "variant", EngineCommit: strings.Repeat("b", 40), FixtureSHA256: strings.Repeat("c", 64), BaselineConsumerCommit: strings.Repeat("d", 40), BaselinePromptSHA256: strings.Repeat("3", 64), ProjectSHA256: strings.Repeat("e", 64), EffectivePromptSHA256: strings.Repeat("f", 64), SkillSetHash: strings.Repeat("1", 64), EffectiveInputSHA256: strings.Repeat("2", 64), APIMode: ai.APIChatCompletions, ProviderPath: "github-copilot/claude-sonnet-4.6", TransportID: "copilot-structural-proxy-v1"}, benchmarkEvidenceCoverage{hit: []string{"initiating-error"}, missed: []string{"secondary-evidence"}})
+		benchmarkRunIdentity{Arm: "variant", EngineCommit: strings.Repeat("b", 40), FixtureSHA256: strings.Repeat("c", 64), BaselineConsumerCommit: strings.Repeat("d", 40), BaselinePromptSHA256: strings.Repeat("3", 64), ProjectSHA256: strings.Repeat("e", 64), EffectivePromptSHA256: strings.Repeat("f", 64), SkillSetHash: strings.Repeat("1", 64), EffectiveInputSHA256: strings.Repeat("2", 64), APIMode: ai.APIChatCompletions, ProviderPath: "github-copilot/claude-sonnet-4.6", TransportID: "copilot-structural-proxy-v1"}, benchmarkEvidenceCoverage{hit: []string{"initiating-error"}, missed: []string{"secondary-evidence"}, sources: map[string][]string{"initiating-error": {"model_tool"}}})
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -817,7 +828,7 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 	if err := json.Unmarshal(data, &result); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(result.EvidenceGroupsHit, []string{"initiating-error"}) || !slices.Equal(result.EvidenceGroupsMissed, []string{"secondary-evidence"}) || result.ModelLabel != "model-a" || result.Arm != "variant" || result.EngineCommit != strings.Repeat("b", 40) || result.FixtureSHA256 != strings.Repeat("c", 64) || result.BaselineConsumerCommit != strings.Repeat("d", 40) || result.BaselinePromptSHA256 != strings.Repeat("3", 64) || result.ProjectSHA256 != strings.Repeat("e", 64) || result.EffectivePromptSHA256 != strings.Repeat("f", 64) || result.SkillSetHash != strings.Repeat("1", 64) || result.EffectiveInputSHA256 != strings.Repeat("2", 64) || result.APIMode != ai.APIChatCompletions || result.ProviderPath != "github-copilot/claude-sonnet-4.6" || result.TransportID != "copilot-structural-proxy-v1" || result.Repetition != 2 || result.Outcome != string(benchmarkOutcomeUsable) || result.IsTransient == nil || *result.IsTransient || result.SignalHits != 1 || result.SourceRevision != strings.Repeat("a", 40) || result.SourceUnavailable || result.TestSource != models.TestCaseSourceBuild ||
+	if !slices.Equal(result.EvidenceGroupsHit, []string{"initiating-error"}) || !slices.Equal(result.EvidenceGroupsMissed, []string{"secondary-evidence"}) || !slices.Equal(result.EvidenceGroupSources["initiating-error"], []string{"model_tool"}) || result.ModelLabel != "model-a" || result.Arm != "variant" || result.EngineCommit != strings.Repeat("b", 40) || result.FixtureSHA256 != strings.Repeat("c", 64) || result.BaselineConsumerCommit != strings.Repeat("d", 40) || result.BaselinePromptSHA256 != strings.Repeat("3", 64) || result.ProjectSHA256 != strings.Repeat("e", 64) || result.EffectivePromptSHA256 != strings.Repeat("f", 64) || result.SkillSetHash != strings.Repeat("1", 64) || result.EffectiveInputSHA256 != strings.Repeat("2", 64) || result.APIMode != ai.APIChatCompletions || result.ProviderPath != "github-copilot/claude-sonnet-4.6" || result.TransportID != "copilot-structural-proxy-v1" || result.Repetition != 2 || result.Outcome != string(benchmarkOutcomeUsable) || result.IsTransient == nil || *result.IsTransient || result.SignalHits != 1 || result.DiagnosisSignalHits != 1 || result.DiagnosisSignalTotal != 1 || result.TransientCorrect != nil || result.ForbiddenChecksPassed != 0 || result.ForbiddenChecksTotal != 0 || result.SourceRevision != strings.Repeat("a", 40) || result.SourceUnavailable || result.TestSource != models.TestCaseSourceBuild ||
 		result.Trace.Finalize["empty:unexpected_tool_call"] != 1 || result.Trace.Critique["punts"] != 1 || result.GCSBytes != 42 ||
 		!result.EvidencePlanCovered || !result.GCSFloorRetryExhausted || result.CritiquePassed == nil || !*result.CritiquePassed || !result.BudgetExhausted ||
 		result.FloorNudges != 1 || !slices.Equal(result.FloorNudgeReasons, []string{"gcs_bytes"}) ||
