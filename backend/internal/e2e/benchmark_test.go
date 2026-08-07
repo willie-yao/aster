@@ -434,7 +434,7 @@ func TestAIBenchmark(t *testing.T) {
 		}
 	}
 
-	inputs := loadBenchmarkInputs(t, cases, apiMode)
+	inputs := loadBenchmarkInputs(t, cases, apiMode, model)
 
 	repetitions := 1
 	if raw := strings.TrimSpace(os.Getenv("BENCH_REPETITIONS")); raw != "" {
