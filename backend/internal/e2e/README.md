@@ -146,9 +146,10 @@ with a different denominator.
 
 Every private JSONL row also records the experiment arm, engine commit, fixture
 digest, pinned baseline consumer commit, effective project and prompt digests,
-merged skill-set hash, API mode, and one effective-input digest. Persistent
-cold-cache paths include the arm and effective-input digest, so separate arms
-cannot silently share an analysis cache.
+merged skill-set hash, API mode, evidence condition, frozen-evidence digest when
+present, and one effective-input digest. Persistent cold-cache paths include the
+arm and effective-input digest, so separate arms and evidence conditions cannot
+silently share an analysis cache.
 
 The trace summary reports the floor-nudge count and ordered reasons, context
 compaction and over-budget counts, the final semantic-judge event outcome,
@@ -157,15 +158,39 @@ names and per-Tool counts remain sorted. If an analysis fails before producing
 `AIAnalysis`, the benchmark prints the available trace and Tool summaries before
 failing the test.
 
-External cases may define bounded `evidence_groups` containing path and content
-regexes. The benchmark observes successful artifact reads and records only the
-sorted group IDs under `evidence_groups_hit` and `evidence_groups_missed` in the
-private JSONL. `evidence_group_sources` distinguishes reads initiated by a
-native model Tool call (`model_tool`) from deterministic critique repair
-(`repair_injection`); an untagged test-only read is `unknown`. It never stores
-the matching content. These groups are informational: they are not sent to the
-model, do not change Tool output, do not contribute to the scored signals, and
-cannot trigger a retry or reject an analysis.
+External cases may define bounded `evidence_groups` containing path, content,
+and scoring-only root-cause regexes. Before a provider request, the benchmark
+scans the pinned fixture and records whether each required signal exists. During
+the trial it separately records candidate-path selection, decisive excerpt
+delivery, model receipt, final citation, and root-cause-only causal use.
+`evidence_group_sources` distinguishes native model Tool calls (`model_tool`),
+deterministic critique repair (`repair_injection`), and a prepared frozen
+benchmark bundle (`oracle_prompt`). An oracle excerpt counts as model receipt
+only after the trace shows that a model request containing the prepared prompt
+was made. An untagged
+test-only read is `unknown` and does not count as model receipt. The private
+JSONL stores only content-free group states and never stores matching content.
+
+Draft telemetry records which supported causal facts a critique, evidence, or
+semantic retry retained, added, or dropped. It does not claim per-draft citation
+retention because the benchmark observer does not receive draft citations.
+`trial_status` distinguishes `valid_result`, `no_result`, `invalid_result`,
+`contract_violation`, `timeout`, and `runtime_failure`. The JSONL row is written
+before a failing trial stops the test. Comparison reports display this status,
+not the legacy analysis outcome, so a contract violation cannot appear as a
+normal usable trial.
+
+`BENCH_EVIDENCE_CONDITION` defaults to `fixture-v1`. The benchmark-only
+`kueue-oracle-v1` condition is available only for the pinned Kueue API-version
+case. It extracts a compact line-centered bundle from the verified fixture,
+checks the committed bundle hash, and gives those raw artifact lines to the
+in-process model. Preparation has one 30-second deadline and a 128 MiB aggregate
+scan budget. Scoring names, regexes, and the reference diagnosis are not included
+in the model-visible bundle. The evidence-stage configuration is hashed, and
+its expected sorted IDs are paired across comparison records so missing stages
+fail closed. This condition
+changes only benchmark input and identity. It does not change production
+analysis behavior.
 
 JSONL also separates `diagnosis_signal_hits` from transient and forbidden-claim
 policy checks. This prevents a placeholder or abstaining answer from appearing
@@ -173,6 +198,37 @@ moderately successful merely because it avoids forbidden claims.
 
 The telemetry never prints prompts, model response text, Tool arguments, Tool
 output, endpoints, model coordinates, credentials, or full hashes.
+
+
+To separate retrieval from reasoning on the Kueue case, run the same cold trial
+with the frozen oracle condition:
+
+```bash
+BENCH_EVIDENCE_CONDITION=kueue-oracle-v1 \
+RUN_AI_BENCHMARK=1 \
+AI_API=chat_completions \
+AI_ENDPOINT=<endpoint> \
+AI_MODEL=<model> \
+AI_TOKEN=<available-in-environment> \
+BENCH_MODEL_LABEL=<anonymous-label> \
+BENCH_PROVIDER_PATH=<provider>/<model> \
+BENCH_TRANSPORT_ID=<transport-id> \
+BENCH_MANIFEST="$PWD/internal/e2e/testdata/benchmarks/cross-project-eval.json" \
+BENCH_CASE=kueue-was-podgroup-api-mismatch \
+BENCH_PROJECT_DIR=/private/bench/kueue-consumer \
+BENCH_CACHE_MODE=cold \
+BENCH_RESULTS_JSONL=/private/bench/kueue-oracle.jsonl \
+go test ./internal/e2e -run TestAIBenchmark -v -timeout 60m
+```
+
+A miss with `model_received_evidence=true` is evidence of a reasoning or causal
+synthesis failure. A miss with that field false remains a retrieval failure.
+Verify the pinned extraction without a provider by running:
+
+```bash
+RUN_BENCHMARK_FIXTURE_VALIDATION=1 \
+go test ./internal/e2e -run TestKueueOracleEvidenceFixture -v -count=1
+```
 
 ## Signal tiers
 
@@ -249,7 +305,10 @@ pinned artifact fixtures, source SHAs, consumer skills, signal scorer, and human
 rubric as `TestAIBenchmark`.
 
 The live comparison requires a disposable kind cluster with an Orka build that
-contains the OpenCode runtime. The exact source used for the first evaluation is:
+contains the OpenCode runtime. Shadow comparison currently accepts only the
+`fixture-v1` evidence condition. It rejects `kueue-oracle-v1` until both arms can
+use one shared deterministic broker. The exact source used for the first
+evaluation is:
 
 ```text
 Orka ref: 450086966d93f32a8aeb608fd818ab00a155dad9

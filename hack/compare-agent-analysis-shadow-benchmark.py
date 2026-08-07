@@ -56,6 +56,9 @@ COMMON_SCHEMA = {
     "transport_id": (no_whitespace_string, "a non-empty string without whitespace"),
     "api_mode": (nonempty_string, "a non-empty string"),
     "model_label": (nonempty_string, "a non-empty string"),
+    "evidence_condition": (no_whitespace_string, "a non-empty string without whitespace"),
+    "evidence_stage_sha256": (LOWER_HEX_64, "64 lowercase hexadecimal characters"),
+    "evidence_stage_ids": (lambda value: string_list(value) and bool(value), "a non-empty string list"),
     "source_revision": (LOWER_HEX_40, "40 lowercase hexadecimal characters"),
     "signal_hits": (nonnegative_integer, "a non-negative integer"),
     "signal_total": (positive_integer, "a positive integer"),
@@ -73,6 +76,11 @@ INPROCESS_SCHEMA = {
     "outcome": (nonempty_string, "a non-empty string"),
     "usable": (lambda value: type(value) is bool, "a boolean"),
     "trace": (lambda value: isinstance(value, dict), "an object"),
+    "evidence_telemetry_version": (positive_integer, "a positive integer"),
+    "trial_status": (nonempty_string, "a non-empty string"),
+    "model_request_made": (lambda value: type(value) is bool, "a boolean"),
+    "evidence_stages": (lambda value: isinstance(value, list), "a list"),
+    "evidence_revisions": (lambda value: isinstance(value, list), "a list"),
 }
 
 SHADOW_SCHEMA = {
@@ -116,6 +124,9 @@ PAIR_FIELDS = (
     "api_mode",
     "model_label",
     "stable_id",
+    "evidence_condition",
+    "evidence_stage_sha256",
+    "evidence_stage_ids",
     "source_revision",
     "human_score_rubric_version",
     "human_score_max",
@@ -123,10 +134,8 @@ PAIR_FIELDS = (
     "signal_total",
 )
 
-INPROCESS_OUTCOMES = {
-    "usable": True,
-    "grounded_policy_unavailable": False,
-}
+EVIDENCE_CONDITIONS = {"fixture-v1", "kueue-oracle-v1"}
+TRIAL_STATUSES = {"valid_result", "no_result", "invalid_result", "contract_violation", "timeout", "runtime_failure"}
 
 SHADOW_ERROR_CODES = {
     "succeeded": None,
@@ -142,6 +151,8 @@ def invalid(path, line_no, message):
 
 
 def validate_common_contract(path, line_no, record, kind):
+    if record["evidence_condition"] not in EVIDENCE_CONDITIONS:
+        invalid(path, line_no, f"{kind} evidence_condition is invalid")
     if record["arm"] != "baseline":
         invalid(path, line_no, f"{kind} arm must be baseline")
     if record["api_mode"] != "chat_completions":
@@ -151,13 +162,62 @@ def validate_common_contract(path, line_no, record, kind):
 
 
 def validate_inprocess(path, line_no, record):
+    if record["evidence_telemetry_version"] != 1:
+        invalid(path, line_no, "in-process evidence_telemetry_version must be 1")
+    status = record["trial_status"]
+    if status not in TRIAL_STATUSES:
+        invalid(path, line_no, "in-process trial_status is invalid")
+    if record["evidence_condition"] == "kueue-oracle-v1" and not LOWER_HEX_64(record.get("frozen_evidence_sha256")):
+        invalid(path, line_no, "oracle in-process record requires frozen_evidence_sha256")
+    if not record["evidence_stages"]:
+        invalid(path, line_no, "in-process evidence_stages must not be empty")
+    seen_groups = set()
+    stage_booleans = (
+        "required_signal_in_fixture", "candidate_path_selected", "frozen_excerpt_contains_signal",
+        "model_received_evidence", "evidence_cited", "causally_used_in_root_cause", "causal_signal_configured",
+    )
+    for stage in record["evidence_stages"]:
+        if not isinstance(stage, dict) or not nonempty_string(stage.get("group_id")):
+            invalid(path, line_no, "in-process evidence stage is malformed")
+        if stage["group_id"] in seen_groups:
+            invalid(path, line_no, "in-process evidence stage group_id is duplicated")
+        seen_groups.add(stage["group_id"])
+        for field in stage_booleans:
+            if type(stage.get(field)) is not bool:
+                invalid(path, line_no, f"in-process evidence stage {field} must be a boolean")
+        if not record["model_request_made"] and stage["model_received_evidence"]:
+            invalid(path, line_no, "in-process evidence stage reports receipt without a model request")
+        if record["evidence_condition"] == "kueue-oracle-v1":
+            if not all(stage[field] for field in stage_booleans[:3]):
+                invalid(path, line_no, "oracle in-process evidence stage is incomplete")
+            if stage["model_received_evidence"] is not record["model_request_made"]:
+                invalid(path, line_no, "oracle in-process evidence stage has invalid model receipt")
+    if sorted(seen_groups) != record["evidence_stage_ids"]:
+        invalid(path, line_no, "in-process evidence stage IDs do not match stages")
+    for revision in record["evidence_revisions"]:
+        if not isinstance(revision, dict) or not positive_integer(revision.get("initial_attempt")) or not positive_integer(revision.get("revised_attempt")) or not nonempty_string(revision.get("phase")) or type(revision.get("selected")) is not bool:
+            invalid(path, line_no, "in-process evidence revision is malformed")
+        for field in ("retained_supported_evidence", "dropped_supported_evidence", "newly_used_supported_evidence"):
+            if field in revision and not string_list(revision[field]):
+                invalid(path, line_no, f"in-process evidence revision {field} must be a string list")
+
     outcome = record["outcome"]
-    if outcome not in INPROCESS_OUTCOMES:
-        allowed = ", ".join(sorted(INPROCESS_OUTCOMES))
-        invalid(path, line_no, f"in-process outcome must be one of: {allowed}")
-    expected_usable = INPROCESS_OUTCOMES[outcome]
-    if record["usable"] is not expected_usable:
-        invalid(path, line_no, f"in-process usable must be {str(expected_usable).lower()} for outcome {outcome}")
+    allowed_outcomes = {"usable", "grounded_policy_unavailable", "unknown"}
+    if outcome not in allowed_outcomes:
+        invalid(path, line_no, "in-process outcome is invalid")
+    usable = record["usable"]
+    if status == "valid_result":
+        if outcome != "usable" or not usable or not record["model_request_made"]:
+            invalid(path, line_no, "in-process valid_result requires outcome=usable, usable=true, and a model request")
+    elif status == "invalid_result":
+        if outcome != "grounded_policy_unavailable" or usable:
+            invalid(path, line_no, "in-process invalid_result requires grounded_policy_unavailable and usable=false")
+    elif status in {"no_result", "timeout", "runtime_failure"}:
+        if outcome != "unknown" or usable:
+            invalid(path, line_no, f"in-process {status} requires outcome=unknown and usable=false")
+    elif status == "contract_violation":
+        if (outcome, usable) not in {("usable", True), ("unknown", False)}:
+            invalid(path, line_no, "in-process contract_violation has inconsistent outcome or usability")
 
     trace = record["trace"]
     for field in ("input_tokens", "output_tokens"):
@@ -168,8 +228,10 @@ def validate_inprocess(path, line_no, record):
 
 
 def validate_shadow(path, line_no, record):
-    if record["version"] != 1:
-        invalid(path, line_no, "shadow record version must be 1")
+    if record["version"] != 2:
+        invalid(path, line_no, "shadow record version must be 2")
+    if record["evidence_condition"] != "fixture-v1":
+        invalid(path, line_no, "shadow evidence_condition must be fixture-v1")
     if record["runtime"] != "orka-opencode-shadow":
         invalid(path, line_no, "shadow runtime must be orka-opencode-shadow")
     if record["contract_version"] != "agent-analysis-v1":
@@ -237,13 +299,13 @@ def load(path, kind):
             if not isinstance(record, dict):
                 invalid(path, line_no, f"{kind} record must be an object")
             validate_schema(path, line_no, record, kind)
-            key = (record["case_id"], record["repetition"])
+            key = (record["case_id"], record["evidence_condition"], record["repetition"])
             if key in records:
-                case_id, repetition = key
+                case_id, condition, repetition = key
                 invalid(
                     path,
                     line_no,
-                    f"duplicate benchmark record {case_id}/rep-{repetition:02d}; first seen on line {record_lines[key]}",
+                    f"duplicate benchmark record {case_id}/{condition}/rep-{repetition:02d}; first seen on line {record_lines[key]}",
                 )
             records[key] = record
             record_lines[key] = line_no
@@ -275,30 +337,31 @@ def main():
     if missing:
         raise SystemExit(
             "unpaired benchmark records: "
-            + ", ".join(f"{case}/rep-{rep:02d}" for case, rep in missing)
+            + ", ".join(f"{case}/{condition}/rep-{rep:02d}" for case, condition, rep in missing)
         )
 
     lines = [
         "# Agent analysis shadow comparison",
         "",
-        "| Case | Rep | Model | In-process | Signals | Latency ms | Tokens in/out | Shadow | Signals | Latency ms | Attempts | Artifact/source citations | Source verified | Unresolved | Cost |",
-        "| --- | ---: | --- | --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | --- | ---: | --- |",
+        "| Case | Evidence | Rep | Model | In-process | Signals | Latency ms | Tokens in/out | Shadow | Signals | Latency ms | Attempts | Artifact/source citations | Source verified | Unresolved | Cost |",
+        "| --- | --- | ---: | --- | --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | --- | ---: | --- |",
     ]
     for key in keys:
         direct = inprocess[key]
         agent = shadow[key]
         for field in PAIR_FIELDS:
             if direct[field] != agent[field]:
-                raise SystemExit(f"{field} mismatch for {key[0]}/rep-{key[1]:02d}")
+                raise SystemExit(f"{field} mismatch for {key[0]}/{key[1]}/rep-{key[2]:02d}")
         direct_tokens = f"{value(direct, 'trace', 'input_tokens')}/{value(direct, 'trace', 'output_tokens')}"
         citations = f"{agent['artifact_citation_count']}/{agent['source_citation_count']}"
         lines.append(
-            "| {case} | {rep} | {model} | {direct_status} | {direct_hits}/{direct_total} | {direct_ms} | {tokens} | "
+            "| {case} | {condition} | {rep} | {model} | {direct_status} | {direct_hits}/{direct_total} | {direct_ms} | {tokens} | "
             "{shadow_status} | {shadow_hits}/{shadow_total} | {shadow_ms} | {attempts} | {citations} | {verified} | {unresolved} | {cost} |".format(
                 case=key[0],
-                rep=key[1],
+                condition=key[1],
+                rep=key[2],
                 model=direct["model_label"],
-                direct_status=direct["outcome"],
+                direct_status=direct["trial_status"],
                 direct_hits=direct["signal_hits"],
                 direct_total=direct["signal_total"],
                 direct_ms=direct["elapsed_ms"],

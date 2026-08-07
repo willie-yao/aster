@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "cases": [
     {
       "id": "secrets-store-csi-image-scan",
@@ -147,16 +147,34 @@
           ],
           "content": [
             "(?i)scheduling\\.k8s\\.io/v1alpha3(?:=true)?"
-          ]
+          ],
+          "causal": [
+            {
+              "name": "served v1alpha3 configuration is causal",
+              "pattern": "(?is)(?:served|configured|runtime-config).{0,120}scheduling\\.k8s\\.io/v1alpha3|scheduling\\.k8s\\.io/v1alpha3.{0,120}(?:served|configured|runtime-config)",
+              "negated": "(?is)(?:scheduling\\.k8s\\.io/v1alpha3|v1alpha3 configuration|runtime-config).{0,160}(?:not served|not configured|was not served|was not configured|(?:(?:that|the) (?:configuration|setting)|it).{0,60}(?:unrelated|incidental|not causal|did not cause))|(?:unrelated|incidental|not causal|did not cause).{0,100}(?:v1alpha3 configuration|runtime-config)"
+            }
+          ],
+          "oracle_context_lines": 2
         },
         {
           "id": "podgroup-api-response",
           "paths": [
-            "(?i)(?:kube-scheduler|kube-controller-manager).*\\.log$"
+            "(?i)(?:kube-scheduler|kube-controller-manager).*\\.log$",
+            "(?i)kube-apiserver.*\\.log$"
           ],
           "content": [
-            "(?i)(?:failed to list \\*v1beta1\\.PodGroup.{0,160}(?:could not find the requested resource|forbidden)|Skipping API scheduling\\.k8s\\.io/v1beta1 because it has no resources)"
-          ]
+            "(?i)(?:failed to list \\*v1beta1\\.PodGroup.{0,160}(?:could not find the requested resource|forbidden)|Skipping API scheduling\\.k8s\\.io/v1beta1 because it has no resources)",
+            "(?i)URI=\"/apis/scheduling\\.k8s\\.io/v1beta1/podgroups[^\\\"]*\".{0,300}resp=404"
+          ],
+          "causal": [
+            {
+              "name": "rejected v1beta1 PodGroup request is causal",
+              "pattern": "(?is)v1beta1(?:\\.PodGroup| PodGroups?|/podgroups).{0,180}(?:404|not[ -]?found|could not find the requested resource|unavailable)|(?:404|not[ -]?found|could not find the requested resource|unavailable).{0,180}v1beta1(?:\\.PodGroup| PodGroups?|/podgroups)",
+              "negated": "(?is)(?:v1beta1(?:\\.PodGroup| PodGroups?|/podgroups)|PodGroup API|API mismatch|scheduler request).{0,200}(?:not unavailable|did not return 404|was not 404|succeeded|completed successfully|(?:(?:that|the) (?:mismatch|request|response|failure)|it).{0,80}(?:incidental|unrelated|not causal|did not cause|was not causal))|(?:incidental|unrelated|not causal|did not cause|was not causal).{0,100}(?:v1beta1(?:\\.PodGroup| PodGroups?|/podgroups)|PodGroup API|API mismatch|scheduler request)"
+            }
+          ],
+          "oracle_context_lines": 1
         },
         {
           "id": "scheduler-handler-readiness",
@@ -165,9 +183,38 @@
           ],
           "content": [
             "(?i)(?:sched-handler-sync|handlers are not fully synchronized|readyz.{0,80}(?:500|failed))"
-          ]
+          ],
+          "causal": [
+            {
+              "name": "scheduler handler synchronization failure is causal",
+              "pattern": "(?is)(?:sched-handler-sync.{0,80}(?:failed|not fully synchronized)|handlers? (?:are|were) not fully synchronized|scheduler.{0,180}(?:failed|unable|never).{0,120}(?:sync|handler)|(?:sync|handler).{0,180}(?:failure|failed).{0,120}scheduler)",
+              "negated": "(?is)(?:scheduler handlers?|sched-handler-sync|handler synchronization|synchronization failure).{0,200}(?:completed successfully|fully synchronized|(?:(?:that|the) (?:condition|failure|synchronization)|it).{0,80}(?:not causal|did not cause|was not causal|incidental|unrelated))|(?:not causal|did not cause|was not causal|incidental|unrelated).{0,100}(?:scheduler handlers?|sched-handler-sync|handler synchronization|synchronization failure)"
+            }
+          ],
+          "oracle_context_lines": 1
+        },
+        {
+          "id": "terminal-deployment-timeout",
+          "paths": [
+            "(?i)(?:^|/)build-log\\.txt$"
+          ],
+          "content": [
+            "(?i)timed out waiting for the condition on deployments/kubeflow-trainer-controller-manager"
+          ],
+          "oracle_context_lines": 1
+        },
+        {
+          "id": "competing-readiness-noise",
+          "paths": [
+            "(?i)(?:^|/)build-log\\.txt$"
+          ],
+          "content": [
+            "(?i)timed out waiting for the condition on nodes/kind-(?:control-plane|worker2?)"
+          ],
+          "oracle_context_lines": 2
         }
-      ]
+      ],
+      "oracle_evidence_sha256": "92376ed20f725db6b210eabc538dc77feb15373e3fa59341651cca30c5c6ba9c"
     },
     {
       "id": "gcp-pd-csi-windows-mount-visibility",

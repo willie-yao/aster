@@ -15,29 +15,54 @@ import (
 )
 
 type benchmarkEvidenceGroup struct {
-	id         string
-	pathREs    []*regexp.Regexp
-	contentREs []*regexp.Regexp
+	id                 string
+	pathREs            []*regexp.Regexp
+	contentREs         []*regexp.Regexp
+	causalSignals      []benchSignal
+	oracleContextLines *int
 }
 
 type benchmarkEvidenceCoverage struct {
-	hit     []string
-	missed  []string
-	sources map[string][]string
+	selected []string
+	hit      []string
+	missed   []string
+	sources  map[string][]string
 }
 
 type benchmarkEvidenceRecorder struct {
-	groups  []benchmarkEvidenceGroup
-	mu      sync.Mutex
-	hit     map[string]bool
-	sources map[string]map[string]bool
+	groups   []benchmarkEvidenceGroup
+	mu       sync.Mutex
+	selected map[string]bool
+	hit      map[string]bool
+	sources  map[string]map[string]bool
 }
 
 func newBenchmarkEvidenceRecorder(groups []benchmarkEvidenceGroup) *benchmarkEvidenceRecorder {
-	return &benchmarkEvidenceRecorder{groups: groups, hit: map[string]bool{}, sources: map[string]map[string]bool{}}
+	return &benchmarkEvidenceRecorder{groups: groups, selected: map[string]bool{}, hit: map[string]bool{}, sources: map[string]map[string]bool{}}
+}
+
+func (r *benchmarkEvidenceRecorder) selectPath(path string) {
+	if r == nil || len(r.groups) == 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, group := range r.groups {
+		if matchesBenchmarkEvidence(group.pathREs, []byte(path)) {
+			r.selected[group.id] = true
+		}
+	}
 }
 
 func (r *benchmarkEvidenceRecorder) observe(ctx context.Context, path string, content []byte) {
+	source := string(ai.EvidenceReadSourceFromContext(ctx))
+	if source == "" {
+		source = "unknown"
+	}
+	r.observeSource(path, content, source)
+}
+
+func (r *benchmarkEvidenceRecorder) observeSource(path string, content []byte, source string) {
 	if r == nil || len(r.groups) == 0 {
 		return
 	}
@@ -47,10 +72,6 @@ func (r *benchmarkEvidenceRecorder) observe(ctx context.Context, path string, co
 		}
 		if len(group.contentREs) > 0 && !matchesBenchmarkEvidence(group.contentREs, content) {
 			continue
-		}
-		source := string(ai.EvidenceReadSourceFromContext(ctx))
-		if source == "" {
-			source = "unknown"
 		}
 		r.mu.Lock()
 		r.hit[group.id] = true
@@ -79,6 +100,9 @@ func (r *benchmarkEvidenceRecorder) coverage() benchmarkEvidenceCoverage {
 	defer r.mu.Unlock()
 	out := benchmarkEvidenceCoverage{sources: map[string][]string{}}
 	for _, group := range r.groups {
+		if r.selected[group.id] {
+			out.selected = append(out.selected, group.id)
+		}
 		if r.hit[group.id] {
 			out.hit = append(out.hit, group.id)
 			for source := range r.sources[group.id] {
@@ -89,6 +113,7 @@ func (r *benchmarkEvidenceRecorder) coverage() benchmarkEvidenceCoverage {
 			out.missed = append(out.missed, group.id)
 		}
 	}
+	sort.Strings(out.selected)
 	sort.Strings(out.hit)
 	sort.Strings(out.missed)
 	return out
@@ -109,6 +134,7 @@ type benchmarkEvidenceBrowser struct {
 }
 
 func (b *benchmarkEvidenceBrowser) Read(ctx context.Context, file string, offset, length int) ([]byte, int64, error) {
+	b.recorder.selectPath(file)
 	content, size, err := b.Browser.Read(ctx, file, offset, length)
 	if err == nil {
 		b.recorder.observe(ctx, file, content)
@@ -117,6 +143,7 @@ func (b *benchmarkEvidenceBrowser) Read(ctx context.Context, file string, offset
 }
 
 func (b *benchmarkEvidenceBrowser) Tail(ctx context.Context, file string, lines, maxBytes int) (*artifacts.TailResult, error) {
+	b.recorder.selectPath(file)
 	result, err := b.Browser.Tail(ctx, file, lines, maxBytes)
 	if err == nil && result != nil {
 		b.recorder.observe(ctx, file, result.Content)
@@ -125,6 +152,7 @@ func (b *benchmarkEvidenceBrowser) Tail(ctx context.Context, file string, lines,
 }
 
 func (b *benchmarkEvidenceBrowser) Grep(ctx context.Context, file string, re *regexp.Regexp, contextLines, maxMatches, maxLineLen, maxBytes int) (*artifacts.GrepResult, error) {
+	b.recorder.selectPath(file)
 	result, err := b.Browser.Grep(ctx, file, re, contextLines, maxMatches, maxLineLen, maxBytes)
 	if err == nil && result != nil {
 		var content strings.Builder
@@ -241,6 +269,8 @@ func TestCrossProjectEvidenceGroupsMatchKnownExamples(t *testing.T) {
 			{path: "build-log.txt", content: "runtime-config: scheduling.k8s.io/v1alpha3=true"},
 			{path: "artifacts/kind-control-plane/pods/kube-system_kube-scheduler/kube-scheduler/0.log", content: "failed to list *v1beta1.PodGroup: the server could not find the requested resource"},
 			{path: "artifacts/kind-control-plane/pods/kube-system_kube-scheduler/kube-scheduler/0.log", content: "sched-handler-sync check failed: handlers are not fully synchronized"},
+			{path: "build-log.txt", content: "timed out waiting for the condition on deployments/kubeflow-trainer-controller-manager"},
+			{path: "build-log.txt", content: "timed out waiting for the condition on nodes/kind-worker2"},
 		},
 		"gcp-pd-csi-windows-mount-visibility": {
 			{path: "build-log.txt", content: `Get-Item : Could not find item C:\mnt\volume1`},

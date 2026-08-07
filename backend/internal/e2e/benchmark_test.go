@@ -101,19 +101,20 @@ type benchCase struct {
 	// the time of the snapshot. The live engine derives this from the flakiness
 	// report; the benchmark feeds it so the analysis (and the critique gate's
 	// transient-vs-persistent check) see the real persistence signal.
-	consecutiveFailures int
-	oppositeDiagnosis   string
-	oppositeTransient   bool
-	referenceDiagnosis  string
-	referenceTransient  bool
-	allowUnavailable    bool
-	expectedTransient   *bool
-	forbidden           []benchSignal
-	consumerCommit      string
-	projectSHA256       string
-	promptSHA256        string
-	signals             []benchSignal
-	evidenceGroups      []benchmarkEvidenceGroup
+	consecutiveFailures  int
+	oppositeDiagnosis    string
+	oppositeTransient    bool
+	referenceDiagnosis   string
+	referenceTransient   bool
+	allowUnavailable     bool
+	expectedTransient    *bool
+	forbidden            []benchSignal
+	consumerCommit       string
+	projectSHA256        string
+	promptSHA256         string
+	signals              []benchSignal
+	evidenceGroups       []benchmarkEvidenceGroup
+	oracleEvidenceSHA256 string
 }
 
 type benchmarkOutcome string
@@ -636,15 +637,34 @@ func TestBenchmarkAPIMode(t *testing.T) {
 
 func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMode, endpoint, model, token, systemPrompt string, agentic project.Agentic, projectSkills *skills.Set, cacheGeneration string, identity benchmarkRunIdentity) {
 	identity.FixtureSHA256 = bc.fixtureSHA256
+	backend, bucketLabel := benchStorage(t, bc)
+	loc := prowbuild.BuildLocation{
+		JobLocation: prowbuild.JobLocation{JobType: bc.jobType, Repo: bc.repo},
+		JobName:     bc.jobName,
+		BuildID:     bc.buildID,
+		PullNumber:  bc.pullNumber,
+	}
+	evidenceRecorder := newBenchmarkEvidenceRecorder(bc.evidenceGroups)
+	baseFactory := artifacts.NewBackendFactory(backend, bucketLabel)
+	preparation, err := prepareBenchmarkEvidence(context.Background(), baseFactory.ForBuild(loc.BuildPath(), bc.jobName), bc, identity.EvidenceCondition, evidenceRecorder)
+	if err != nil {
+		t.Fatalf("prepare benchmark evidence: %v", err)
+	}
+	effectivePrompt := systemPrompt + preparation.prompt
+	identity.FrozenEvidenceSHA256 = preparation.frozenSHA256
+	identity.EvidenceStageSHA256 = benchmarkEvidenceStageSHA256(bc.evidenceGroups)
+	identity.EffectivePromptSHA256 = sha256Hex([]byte(effectivePrompt))
+	identity.EffectiveInputSHA256 = benchmarkEffectiveInputSHA256(identity, agentic, cacheGeneration)
+	if err := validateBenchmarkRunIdentity(identity); err != nil {
+		t.Fatal(err)
+	}
 	cacheDir := benchmarkCacheDir(t, bc, repetition, identity)
 	clientOptions := ai.Options{
 		Token: token, API: apiMode, Endpoint: endpoint, Model: model, CacheDir: cacheDir,
 	}
 	client := ai.NewClientWithOptions(clientOptions)
 
-	backend, bucketLabel := benchStorage(t, bc)
-	evidenceRecorder := newBenchmarkEvidenceRecorder(bc.evidenceGroups)
-	var factory artifacts.Factory = artifacts.NewBackendFactory(backend, bucketLabel)
+	var factory artifacts.Factory = baseFactory
 	if len(bc.evidenceGroups) > 0 {
 		factory = benchmarkEvidenceFactory{inner: factory, recorder: evidenceRecorder}
 	}
@@ -669,7 +689,7 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 		consecutiveMap = map[string]int{jobID + "::" + bc.testName: bc.consecutiveFailures}
 	}
 
-	service := ai.NewService(client, universal.New(), systemPrompt, consecutiveMap)
+	service := ai.NewService(client, universal.New(), effectivePrompt, consecutiveMap)
 	service.SetCacheGeneration(cacheGeneration)
 	service.SetSkills(projectSkills)
 	service.SetSourceRepo(bc.sourceRepo[0], bc.sourceRepo[1])
@@ -704,12 +724,6 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 		SemanticJudge:       true,
 	}, factory, registry, enabled)
 
-	loc := prowbuild.BuildLocation{
-		JobLocation: prowbuild.JobLocation{JobType: bc.jobType, Repo: bc.repo},
-		JobName:     bc.jobName,
-		BuildID:     bc.buildID,
-		PullNumber:  bc.pullNumber,
-	}
 	run := &models.BuildResult{BuildInfo: models.BuildInfo{
 		BuildID: bc.buildID, JobName: bc.jobName, PullNumber: bc.pullNumber, WebURL: bc.webURL,
 		Commit: bc.commit, RepoVersion: bc.repoVersion, RepoRefs: maps.Clone(bc.repoRefs),
@@ -723,9 +737,6 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 	})
 	tc.AISummary, tc.AIAnalysis = result.Summary, result.Analysis
 	outcome, outcomeErr := benchmarkOutcomeForAnalysisError(analysisErr)
-	if outcomeErr != nil {
-		t.Fatalf("analysis failed before scoring: %v", outcomeErr)
-	}
 	elapsed := time.Since(start).Round(time.Second)
 
 	snapshot := traceStore.Snapshot()
@@ -742,15 +753,32 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 		}
 	}
 	cacheVerification := benchmarkCacheVerification{}
-	if benchmarkCacheReuseEnabled() {
+	if benchmarkCacheReuseEnabled() && tc.AIAnalysis != nil {
 		cacheVerification = verifyBenchmarkCacheReuse(t, client, clientOptions, service, cacheGeneration, jobID, bc, run, tc.AIAnalysis)
 	}
 	critiquePolicy := ai.CritiqueCachePolicy(agentic.Critique.EffectiveCachePolicy())
 	evidenceCoverage := evidenceRecorder.coverage()
 	if len(bc.evidenceGroups) > 0 {
-		t.Logf("evidence_groups hit=%v missed=%v sources=%v", evidenceCoverage.hit, evidenceCoverage.missed, evidenceCoverage.sources)
+		t.Logf("evidence_groups selected=%v hit=%v missed=%v sources=%v", evidenceCoverage.selected, evidenceCoverage.hit, evidenceCoverage.missed, evidenceCoverage.sources)
 	}
-	writeBenchmarkJSONL(t, resultsPath, bc, repetition, tc, outcome, elapsed, snapshot, draftObservations, selectedAttempt, toolUsage, traceSummary, requestCap.PerOperation, cacheGeneration, critiquePolicy, cacheVerification, identity, evidenceCoverage)
+	if selectedAttempt == 0 {
+		selectedAttempt = selectedBenchmarkDraftAttempt(draftObservations, tc)
+	}
+	trialStatus := benchmarkTrialStatus(outcome, analysisErr, tc, snapshot)
+	if len(draftObservations) > 0 && selectedAttempt == 0 {
+		trialStatus = "contract_violation"
+	}
+	stageReport := buildBenchmarkEvidenceStageReport(bc, preparation, evidenceCoverage, tc, draftObservations, selectedAttempt, traceSummary.modelRequests > 0, trialStatus)
+	if err := validateBenchmarkEvidenceStageReport(bc, stageReport); err != nil {
+		t.Fatalf("validate benchmark evidence stages: %v", err)
+	}
+	writeBenchmarkJSONL(t, resultsPath, bc, repetition, tc, outcome, elapsed, snapshot, draftObservations, selectedAttempt, toolUsage, traceSummary, requestCap.PerOperation, cacheGeneration, critiquePolicy, cacheVerification, identity, evidenceCoverage, stageReport)
+	if trialStatus == "contract_violation" || trialStatus == "no_result" {
+		t.Fatalf("benchmark trial status is %s", trialStatus)
+	}
+	if outcomeErr != nil {
+		t.Fatalf("analysis failed before scoring: %v", outcomeErr)
+	}
 	if traceSummary.truncated {
 		t.Fatalf("provider request cap cannot be verified from a truncated trace")
 	}

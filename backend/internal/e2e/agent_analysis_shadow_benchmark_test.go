@@ -30,7 +30,7 @@ import (
 )
 
 const (
-	shadowBenchmarkRecordVersion   = 1
+	shadowBenchmarkRecordVersion   = 2
 	shadowBenchmarkKindContext     = "kind-prow-ai-shadow-bench"
 	shadowBenchmarkAgentVersionKey = "prow-ai-dashboard/benchmark-agent-version"
 	shadowBenchmarkOrkaCommitKey   = "prow-ai-dashboard/benchmark-orka-commit"
@@ -94,6 +94,9 @@ type shadowBenchmarkRecord struct {
 	SkillSetHash            string                   `json:"skill_set_hash"`
 	APIMode                 string                   `json:"api_mode"`
 	TransportID             string                   `json:"transport_id"`
+	EvidenceCondition       string                   `json:"evidence_condition"`
+	EvidenceStageSHA256     string                   `json:"evidence_stage_sha256"`
+	EvidenceStageIDs        []string                 `json:"evidence_stage_ids"`
 	Status                  string                   `json:"status"`
 	ErrorCode               string                   `json:"error_code,omitempty"`
 	SourceRevision          string                   `json:"source_revision"`
@@ -141,6 +144,13 @@ func TestAgentAnalysisShadowBenchmark(t *testing.T) {
 		t.Skip("set RUN_AGENT_ANALYSIS_SHADOW_BENCHMARK=1 to run the Orka OpenCode comparison benchmark")
 	}
 	cfg := loadShadowBenchmarkConfig(t)
+	condition, err := benchmarkEvidenceCondition()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if condition != benchmarkEvidenceConditionFixture {
+		t.Fatalf("shadow benchmark supports only %q evidence until the shared broker is available", benchmarkEvidenceConditionFixture)
+	}
 	verifyShadowBenchmarkCluster(t, cfg.KubeContext)
 	cases := shadowBenchmarkCases(t)
 	projectSkills := shadowBenchmarkSkills(t, cases)
@@ -494,6 +504,7 @@ func shadowRecordForResult(cfg shadowBenchmarkConfig, bc benchCase, repetition i
 		Arm: "baseline", EngineCommit: cfg.EngineCommit, FixtureSHA256: bc.fixtureSHA256,
 		BaselineConsumerCommit: bc.consumerCommit, BaselinePromptSHA256: bc.promptSHA256,
 		ProjectSHA256: bc.projectSHA256, SkillSetHash: bundle.SkillSetHash, APIMode: ai.APIChatCompletions, TransportID: cfg.TransportID,
+		EvidenceCondition: benchmarkEvidenceConditionFixture, EvidenceStageSHA256: benchmarkEvidenceStageSHA256(bc.evidenceGroups), EvidenceStageIDs: benchmarkEvidenceStageIDs(bc.evidenceGroups),
 		Status: status, ErrorCode: code, SourceRevision: result.SourceSHA, EvidenceHash: result.EvidenceHash,
 		AgentSkillHash: result.SkillHash, ContractVersion: agentanalysis.ContractVersion, ToolPolicyVersion: agentanalysis.ToolPolicyVersion,
 		AgentNamespace: cfg.Namespace, AgentRef: cfg.AgentRef, AgentVersion: cfg.AgentVersion,
@@ -666,7 +677,7 @@ func TestShadowRecordForResult(t *testing.T) {
 	bundle := agentanalysis.EvidenceBundle{SkillSetHash: strings.Repeat("1", 64), Excerpts: []agentanalysis.EvidenceExcerpt{{ID: "e", Path: "build-log.txt"}}}
 	bc := benchCase{name: "case", stableID: "0123456789abcdef0123", fixtureSHA256: strings.Repeat("2", 64), consumerCommit: strings.Repeat("3", 40), promptSHA256: strings.Repeat("4", 64), projectSHA256: strings.Repeat("5", 64)}
 	record := shadowRecordForResult(cfg, bc, 1, bundle, result, time.Second, agentruntime.ErrCleanupPending, strings.Repeat("6", 64))
-	if record.Status != "cleanup_pending" || record.Attempts != 2 || record.ArtifactCitationCount != 1 || record.TokenUsageAvailable || record.CostStatus == "" || record.ToolPolicyVersion != agentanalysis.ToolPolicyVersion || record.AgentConfigSHA256 != strings.Repeat("6", 64) || record.RuntimeIdentityHash != strings.Repeat("f", 64) ||
+	if record.Status != "cleanup_pending" || record.Attempts != 2 || record.ArtifactCitationCount != 1 || record.TokenUsageAvailable || record.CostStatus == "" || record.ToolPolicyVersion != agentanalysis.ToolPolicyVersion || record.EvidenceStageSHA256 != benchmarkEvidenceStageSHA256(bc.evidenceGroups) || record.AgentConfigSHA256 != strings.Repeat("6", 64) || record.RuntimeIdentityHash != strings.Repeat("f", 64) ||
 		len(record.EvidenceCitations) != 1 || record.EvidenceCitations[0].Path != "build-log.txt" || len(record.SourceCitations) != 1 || !record.SourceCitations[0].Verified {
 		t.Fatalf("record = %+v", record)
 	}
