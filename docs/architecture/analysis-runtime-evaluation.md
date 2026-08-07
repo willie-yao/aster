@@ -1,10 +1,12 @@
-# Failure analysis runtime evaluation
+# Historical failure-analysis runtime evaluation
 
-For the current component and ownership model, see
-[Orka architecture in prow-ai-dashboard](orka-architecture.md). This document
-records the evaluation and tradeoffs that led to that design.
+For the current experimental component and ownership model, see the
+[Orka architecture and lifecycle reference](../orka.md#architecture-and-lifecycle).
+This document preserves the engineering evaluation and tradeoffs that led to the
+current dashboard-owned analysis design.
 
-Status: Current recommendation as of July 23, 2026.
+Status: Historical maintainer record from July 23, 2026. It is not deployment
+guidance.
 
 This document summarizes the evaluation of three ways to run failure analysis in
 `prow-ai-dashboard`:
@@ -13,7 +15,7 @@ This document summarizes the evaluation of three ways to run failure analysis in
 2. Orka's generic `type: ai` worker with a dashboard compatibility patch.
 3. The dashboard-owned analyzer inside an Orka `type: container` Task.
 
-[ADR 0001](architecture-decisions/0001-analysis-runtime-ownership.md) records
+[ADR 0001](../architecture-decisions/0001-analysis-runtime-ownership.md) records
 the supported mainline architecture. This document explains the engineering
 tradeoffs behind that decision and why the containerized Orka design is still
 worth preserving as an experimental evaluation and demonstration option.
@@ -39,19 +41,19 @@ highly variable results in both runtimes, while the container path added bundle,
 result, cache, trace, encryption, RBAC, retention, and cleanup transports around
 an ordinary Kubernetes Job.
 
-The recommended portfolio is:
+The evaluation conclusion at the time was:
 
 - Failure analysis runs in-process in the fetcher or worker for supported
   deployments.
-- Orka remains available for fix generation through
-  `ai.fix_prs.agent_runtime.type: orka`.
+- Orka fix generation remains available only for experimental maintainer
+  evaluation through `ai.fix_prs.agent_runtime.type: orka`.
 - The patched Orka AI worker stays retired.
 - The containerized Orka analyzer remains available as an explicitly
   experimental option for repeated evaluation, lifecycle demonstrations, and
   manager-facing prototypes.
 
-The supported main branch ships the in-process analyzer, the independent Orka
-fix runtime, and an explicitly experimental Helm `orka-container` option. The
+At the time, the main branch shipped the in-process analyzer, an independent
+experimental Orka fix runtime, and a Helm `orka-container` evaluation option. The
 container selector is off by default, cron-only, Kubernetes-only, and carries no
 backward compatibility guarantee.
 
@@ -391,7 +393,7 @@ placements because the container adapter calls the same implementation.
 
 ## Where Orka still fits
 
-Orka remains a better production fit for fix generation than for failure
+Orka has a clearer experimental boundary for fix generation than for failure
 analysis. Fix generation has a meaningful runtime boundary:
 
 - It needs an isolated source workspace.
@@ -434,7 +436,7 @@ The isolated kind harness remains the reproducible evaluation path:
 3. Permanently avoid worker patches for dashboard-specific model-loop policy.
 4. Keep the Helm containerized Orka option explicitly experimental, cron-only,
    and free of compatibility guarantees.
-5. Retain Orka for `ai.fix_prs.agent_runtime.type: orka` fix generation.
+5. Retain Orka fix generation only as an experimental maintainer option.
 6. Continue improving model quality with repeated benchmarks rather than
    single-run comparisons.
 7. Productize the container path only when a concrete lifecycle need justifies

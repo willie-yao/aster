@@ -5,8 +5,9 @@ advanced chart configuration that do not belong in the first-run path. Start
 with the [Kubernetes quickstart](kubernetes.md) or the generated
 `deploy/README.md`.
 
-Orka is documented separately in [Orka integration](orka.md). It is not required
-for the default in-process deployment.
+Orka is documented separately in the
+[experimental Orka maintainer reference](orka.md). It is not required for the
+default in-process deployment.
 
 ## Why run in-cluster
 
@@ -458,7 +459,7 @@ ledgers.
 ## Related references
 
 - [Kubernetes quickstart](kubernetes.md)
-- [Orka integration](orka.md)
+- [Experimental Orka maintainer reference](orka.md)
 - [Server mode](server.md)
 - [Project configuration](project-configuration.md)
 - [Troubleshooting](troubleshooting.md)

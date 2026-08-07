@@ -360,7 +360,7 @@ live deploy.
 - `docs/kubernetes.md` - first-run Kubernetes deployment quickstart.
 - `docs/kubernetes-reference.md` - architecture, modes, chart values, upgrades,
   and advanced Kubernetes operations.
-- `docs/orka.md` - optional separate Orka installation and runtime integration.
+- `docs/orka.md` - experimental Orka maintainer and evaluation reference.
 
 ## When in doubt
 

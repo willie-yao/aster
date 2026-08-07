@@ -32,7 +32,7 @@ The implementation includes:
 - CPU-only placement and bounded Task execution
 - retry, cache reuse, concurrent merge, and cleanup checks
 
-See [the runtime evaluation](../../docs/analysis-runtime-evaluation.md) and
+See [the runtime evaluation](../../docs/architecture/analysis-runtime-evaluation.md) and
 [ADR 0001](../../docs/architecture-decisions/0001-analysis-runtime-ownership.md)
 for the decision boundary.
 

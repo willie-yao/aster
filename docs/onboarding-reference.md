@@ -1,7 +1,8 @@
 # Onboarding reference
 
 This page documents discovery, automation, prompt authoring, validation, and the
-full `fetcher onboard` command surface. For a first project, start with
+full `fetcher onboard` command surface. It includes advanced and experimental
+flags that do not belong in the first-run path. For a first project, start with
 [Onboarding a project](onboarding-a-new-project.md).
 
 For a conversational agent workflow over the same command surface, see
@@ -28,7 +29,8 @@ builder, strict loader, local writer, and pull request writer as the fully
 flagged path. It does not maintain a separate scaffold generator.
 
 The interactive wizard uses keyboard forms. Use the arrow keys to move, Enter
-to accept a choice or prefilled input, and `Ctrl+C` to cancel. When `TERM=dumb`,
+to accept a choice or prefilled input, Esc to clear the current text field, and
+`Ctrl+C` to cancel. When `TERM=dumb`,
 the wizard uses equivalent numbered and line-oriented prompts. Set
 `ACCESSIBLE=1` to select this mode in any terminal. Cancellation and EOF leave
 no scaffold. The final confirmation defaults to no.
@@ -150,8 +152,9 @@ storage class, create a namespace or Secret, install Helm releases, or configure
 DNS and ingress. Follow the generated guide or the
 [Kubernetes quickstart](kubernetes.md).
 
-Orka remains a separate optional integration. The onboarding command never
-installs, upgrades, or silently enables it.
+Standard onboarding configures the in-process analyzer. Experimental external
+runtimes are outside the normal onboarding flow and are never installed,
+upgraded, or enabled by this command.
 
 ## AI provider and prompt authoring
 
@@ -164,7 +167,9 @@ into a temporary checkout, and runs the local OpenCode process through pinned
 `srt` OS sandboxing with a temporary config and its shell tool disabled. It uses
 only the selected provider credential from the user's existing OpenCode
 configuration and accepts one validated `prompts/system.md` change. Missing
-`srt` safely falls back to the TODO template and handoff bundle.
+`srt` safely falls back to the TODO template and handoff bundle. See the
+[Local OpenCode sandbox](local-opencode-sandbox.md) for installation and network
+policy details.
 
 Handoff mode writes the TODO template plus `PROMPT_HANDOFF.md` and the bundled
 `.opencode/skills/system-prompt-generation/SKILL.md` without running an agent.
@@ -195,6 +200,22 @@ falls back.
 `--prompt-timeout` controls source revision resolution and agent execution. It
 defaults to `15m` and accepts values from `1m` through `2h`. This option does not
 change the regular fetcher `--timeout` or the deployed project `ai.timeout`.
+
+### Experimental Orka prompt runtime
+
+The standard agent mode runs local OpenCode. Maintainers evaluating an existing
+Orka installation may select `--prompt-agent-runtime=orka` and provide
+`--prompt-orka-api` plus `--prompt-orka-agent-ref`.
+`--prompt-orka-namespace` selects the Orka namespace, and
+`--prompt-orka-git-secret` may name a read-only clone Secret for a private source
+repository. Orka owns the model, credentials, and network policy, so local
+`--prompt-agent-model` and `--prompt-network-domain` settings are invalid in this
+mode. `ORKA_KUBE_CONTEXT` is accepted only for an explicitly selected context.
+
+This runtime is experimental and is not part of guided onboarding. It requires a
+separately installed, operator-owned Orka release, and the Orka Task contract
+limits prompt authoring to 30 minutes. See the
+[experimental Orka maintainer reference](orka.md).
 
 Generated prompts are drafts. Review every architecture, artifact, failure, and
 transient-classification claim before deployment.
@@ -434,6 +455,7 @@ Related guides:
 - [GitHub Actions and Pages](github-pages.md)
 - [Kubernetes quickstart](kubernetes.md)
 - [Kubernetes operator reference](kubernetes-reference.md)
-- [Orka integration](orka.md)
 - [Project configuration](project-configuration.md)
+- [Optional features](optional-features.md)
 - [Troubleshooting](troubleshooting.md)
+- [Complete documentation map](README.md)

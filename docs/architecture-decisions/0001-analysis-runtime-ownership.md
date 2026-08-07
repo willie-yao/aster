@@ -1,7 +1,7 @@
 # ADR 0001: Dashboard ownership of analysis policy
 
-See [Orka architecture in prow-ai-dashboard](../orka-architecture.md) for the
-current end-to-end component, credential, and state flows built on this
+See [Orka architecture in prow-ai-dashboard](../orka.md#architecture-and-lifecycle)
+for the current end-to-end component, credential, and state flows built on this
 decision.
 
 - Status: Accepted
