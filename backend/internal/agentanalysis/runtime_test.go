@@ -51,6 +51,18 @@ func TestRuntimeGenerate(t *testing.T) {
 	}
 }
 
+func TestFailureAnalysisSkillIncludesCausalPriorityAnchors(t *testing.T) {
+	for _, anchor := range []string{
+		"compare specific request, list, watch, or assertion",
+		"later successful operation as counterevidence",
+		"keep the remaining boundary",
+	} {
+		if !strings.Contains(failureAnalysisSkill, anchor) {
+			t.Errorf("failure analysis skill missing causal-priority anchor %q", anchor)
+		}
+	}
+}
+
 func TestBuildInstructionRejectsOversizedBundle(t *testing.T) {
 	bundle := EvidenceBundle{Excerpts: []EvidenceExcerpt{{Content: strings.Repeat("x", maxAgentPromptBytes)}}}
 	if _, err := buildInstruction(bundle); !errors.Is(err, ErrInvalidBundle) {

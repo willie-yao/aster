@@ -24,7 +24,7 @@ var ErrEvidenceUnavailable = errors.New("agent analysis evidence unavailable")
 const (
 	freezeTreeMaxPaths   = 5000
 	freezeMaxCandidates  = 32
-	freezeMaxExcerpts    = 8
+	freezeMaxExcerpts    = 10
 	freezeExcerptLines   = 200
 	freezeExcerptBytes   = 64 << 10
 	freezeCandidateLimit = 4
@@ -58,7 +58,6 @@ func FreezeEvidence(
 	candidates := selectEvidenceCandidates(request, plan, paths)
 	excerpts := make([]EvidenceExcerpt, 0, min(len(candidates), freezeMaxExcerpts))
 	seenContent := map[string]bool{}
-	totalContentBytes := 0
 	skillHash := ""
 	if set != nil {
 		skillHash = set.Hash()
@@ -67,7 +66,7 @@ func FreezeEvidence(
 		return EvidenceBundle{}, err
 	}
 	for _, candidate := range candidates {
-		if len(excerpts) >= freezeMaxExcerpts || totalContentBytes >= maxExcerptTotalBytes {
+		if len(excerpts) >= freezeMaxExcerpts {
 			break
 		}
 		result, readErr := browser.Tail(ctx, candidate, freezeExcerptLines, freezeExcerptBytes)
@@ -86,16 +85,10 @@ func FreezeEvidence(
 		if seenContent[contentHash] {
 			continue
 		}
-		originalContentBytes := len(content)
-		content = tailUTF8(content, maxExcerptTotalBytes-totalContentBytes)
-		if strings.TrimSpace(content) == "" {
-			continue
-		}
 		seenContent[contentHash] = true
-		totalContentBytes += len(content)
 		excerpts = append(excerpts, EvidenceExcerpt{
 			Path: candidate, Kind: "tail", Content: content,
-			Truncated: len(content) < originalContentBytes || result.FileSize > int64(len(result.Content)) || result.LinesReturned >= freezeExcerptLines,
+			Truncated: result.FileSize > int64(len(result.Content)) || result.LinesReturned >= freezeExcerptLines,
 		})
 	}
 	if len(excerpts) == 0 {
@@ -230,10 +223,8 @@ func selectEvidenceCandidates(request ai.FailureAnalysisRequest, plan []skills.P
 			}
 		}
 	}
-	for _, base := range []string{"build-log.txt", "prowjob.json", "finished.json", "started.json"} {
-		for _, candidate := range byBase[base] {
-			add(candidate)
-		}
+	for _, candidate := range byBase["build-log.txt"] {
+		add(candidate)
 	}
 	if len(candidates) < freezeMaxCandidates {
 		type rankedPath struct {
@@ -258,8 +249,11 @@ func selectEvidenceCandidates(request ai.FailureAnalysisRequest, plan []skills.P
 				continue
 			}
 			lower := strings.ToLower(artifactPath)
+			pathTokens := strings.FieldsFunc(lower, func(r rune) bool {
+				return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+			})
 			for _, token := range tokens {
-				if strings.Contains(lower, token) {
+				if pathMatchesFailureToken(lower, pathTokens, token) {
 					score += len(token)
 				}
 			}
@@ -275,7 +269,27 @@ func selectEvidenceCandidates(request ai.FailureAnalysisRequest, plan []skills.P
 			add(candidate.path)
 		}
 	}
+	for _, base := range []string{"prowjob.json", "finished.json", "started.json"} {
+		for _, candidate := range byBase[base] {
+			add(candidate)
+		}
+	}
 	return candidates
+}
+
+func pathMatchesFailureToken(path string, pathTokens []string, token string) bool {
+	if strings.Contains(path, token) {
+		return true
+	}
+	for _, pathToken := range pathTokens {
+		if len(pathToken) < 3 {
+			continue
+		}
+		if strings.HasPrefix(pathToken, token) || strings.HasPrefix(token, pathToken) {
+			return true
+		}
+	}
+	return false
 }
 
 func failureTokens(value string) []string {

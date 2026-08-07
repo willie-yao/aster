@@ -15,6 +15,13 @@ paths or claim evidence outside those excerpts. Use source only to explain behav
 that the cited source lines establish. Keep unsupported details under
 `unresolved_details`.
 
+Before selecting a cause, compare specific request, list, watch, or assertion
+failures with repeated timeout, readiness, and cleanup noise. Prefer a specific
+failure only when its timing and mechanism explain the downstream symptom. Treat
+a later successful operation as counterevidence against assigning that component
+ownership; if no other cited error proves ownership, keep the remaining boundary
+unresolved.
+
 Write exactly `.prow-ai-dashboard/analysis.json`. Do not modify, delete, or rename
 any other file. The file must contain one JSON object with exactly this shape:
 

@@ -50,6 +50,15 @@ func reusablePublishedTestCase(analysis *models.AIAnalysis) *models.TestCase {
 	}
 }
 
+func TestAnalysisPromptHashIncludesAgenticToolGuidance(t *testing.T) {
+	service := &Service{systemPrompt: "system"}
+	got := service.analysisPromptHash(&models.TestCase{}, "")
+	want := PromptFingerprint("system" + agToolDocs)
+	if got != want {
+		t.Fatalf("prompt hash = %q, want %q", got, want)
+	}
+}
+
 func TestService_Agentic_TagsModeAgentic(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)

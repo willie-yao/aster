@@ -105,6 +105,45 @@ func TestCrossProjectEvaluationManifest(t *testing.T) {
 			}
 		}
 		if bc.name == "gcp-pd-csi-windows-mount-visibility" {
+			var mountSignal, uncertaintySignal *benchSignal
+			for i := range bc.signals {
+				switch bc.signals[i].name {
+				case "identifies missing Windows mount path":
+					mountSignal = &bc.signals[i]
+				case "preserves ownership uncertainty":
+					uncertaintySignal = &bc.signals[i]
+				}
+			}
+			if mountSignal == nil || uncertaintySignal == nil {
+				t.Fatal("GCP benchmark signals are incomplete")
+			}
+			for _, text := range []string{
+				`The helper could not resolve a volumeID for mountPath "/mnt/volume1".`,
+				`The helper failed to map the volume ID to C:\mnt\volume1.`,
+			} {
+				if !mountSignal.matches(text) {
+					t.Errorf("missing-mount signal rejects equivalent wording %q", text)
+				}
+			}
+			for _, text := range []string{
+				"The owning component boundary is not established by the evidence.",
+				"The remaining ownership boundary remains unresolved.",
+			} {
+				if !uncertaintySignal.matches(text) {
+					t.Errorf("ownership-uncertainty signal rejects equivalent wording %q", text)
+				}
+			}
+			for _, text := range []string{
+				`The helper resolved volumeID "disk-1" for /mnt/volume1.`,
+				`The helper could not resolve the kubelet hostname. It then mapped volumeID "disk-1" to /mnt/volume1 successfully.`,
+			} {
+				if mountSignal.matches(text) {
+					t.Errorf("missing-mount signal accepted unrelated or successful resolution %q", text)
+				}
+			}
+			if uncertaintySignal.matches("The owning component boundary is established by the evidence.") {
+				t.Error("ownership-uncertainty signal accepted established ownership")
+			}
 			negated := &models.TestCase{
 				AISummary:  &models.AISummary{Summary: bc.referenceDiagnosis},
 				AIAnalysis: &models.AIAnalysis{RootCause: bc.referenceDiagnosis + " The GCE PD node driver is not definitively responsible."},

@@ -221,7 +221,7 @@ func TestFreezeEvidenceCapsUniqueExcerptContent(t *testing.T) {
 	for _, excerpt := range bundle.Excerpts {
 		total += len(excerpt.Content)
 	}
-	if total > maxExcerptTotalBytes || len(bundle.Excerpts) != 2 {
+	if total > maxExcerptTotalBytes || len(bundle.Excerpts) != 3 {
 		t.Fatalf("excerpt count=%d bytes=%d", len(bundle.Excerpts), total)
 	}
 	instruction, err := buildInstruction(bundle)
@@ -230,6 +230,76 @@ func TestFreezeEvidenceCapsUniqueExcerptContent(t *testing.T) {
 	}
 	if len(instruction)+len(failureAnalysisSkill) > maxAgentPromptBytes {
 		t.Fatalf("composed prompt bytes=%d", len(instruction)+len(failureAnalysisSkill))
+	}
+}
+
+func TestSelectEvidenceCandidatesRanksAbbreviatedFailurePathsBeforeMetadata(t *testing.T) {
+	request := testRequest()
+	request.TestCase.Name = "Windows volume mount failure"
+	got := selectEvidenceCandidates(request, nil, []string{
+		"finished.json",
+		"logs/controller.log",
+		"logs/node-win.log",
+	})
+	want := []string{"logs/node-win.log", "logs/controller.log", "finished.json"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("candidates = %v, want %v", got, want)
+	}
+}
+
+func TestPathMatchesFailureTokenUsesBoundedPrefixMatch(t *testing.T) {
+	if !pathMatchesFailureToken("logs/node-win.log", []string{"logs", "node", "win", "log"}, "windows") {
+		t.Fatal("windows token did not match node-win path")
+	}
+	if pathMatchesFailureToken("logs/api.log", []string{"logs", "api", "log"}, "failure") {
+		t.Fatal("unrelated short path token matched failure")
+	}
+}
+
+func TestFreezeEvidenceUsesUnusedBudgetForSingleCandidate(t *testing.T) {
+	content := "PRIMARY_FAILURE_MARKER\n" + strings.Repeat("x", 40<<10)
+	bundle, err := FreezeEvidence(
+		t.Context(),
+		&snapshotBrowser{paths: []string{"build-log.txt"}, files: map[string]string{"build-log.txt": content}},
+		testRequest(),
+		sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: strings.Repeat("a", 40)},
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bundle.Excerpts) != 1 || !strings.Contains(bundle.Excerpts[0].Content, "PRIMARY_FAILURE_MARKER") || len(bundle.Excerpts[0].Content) != len(content) {
+		t.Fatalf("excerpt = %+v", bundle.Excerpts)
+	}
+}
+
+func TestFreezeEvidenceReservesBudgetForLaterCandidates(t *testing.T) {
+	paths := make([]string, 0, freezeMaxExcerpts)
+	files := map[string]string{}
+	for i := 0; i < freezeMaxExcerpts; i++ {
+		path := fmt.Sprintf("%02d.log", i)
+		paths = append(paths, path)
+		files[path] = strings.Repeat(string(rune('a'+i)), freezeExcerptBytes)
+	}
+	bundle, err := FreezeEvidence(
+		t.Context(),
+		&snapshotBrowser{paths: paths, files: files},
+		testRequest(),
+		sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: strings.Repeat("a", 40)},
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bundle.Excerpts) != freezeMaxExcerpts {
+		t.Fatalf("excerpt count = %d, want %d", len(bundle.Excerpts), freezeMaxExcerpts)
+	}
+	total := 0
+	for _, excerpt := range bundle.Excerpts {
+		total += len(excerpt.Content)
+	}
+	if total > maxExcerptTotalBytes {
+		t.Fatalf("excerpt bytes = %d", total)
 	}
 }
 
