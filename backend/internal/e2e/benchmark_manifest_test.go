@@ -21,7 +21,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
-const benchmarkManifestVersion = 1
+const benchmarkManifestVersion = 2
 
 var benchmarkCaseIDRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 var benchmarkStableIDRE = regexp.MustCompile(`^[0-9a-f]{20}$`)
@@ -774,7 +774,7 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 
 func TestLoadBenchmarkManifest(t *testing.T) {
 	valid := `{
-  "version": 1,
+  "version": 2,
   "cases": [{
     "id": "case-one",
     "stable_id": "0123456789abcdef0123",
@@ -823,7 +823,7 @@ func TestLoadBenchmarkManifest(t *testing.T) {
 
 	for name, mutate := range map[string]func(string) string{
 		"unknown field": func(value string) string {
-			return strings.Replace(value, `"version": 1`, `"version": 1, "extra": true`, 1)
+			return strings.Replace(value, `"version": 2`, `"version": 2, "extra": true`, 1)
 		},
 		"bad stable id": func(value string) string { return strings.Replace(value, "0123456789abcdef0123", "model-name", 1) },
 		"bad regexp":    func(value string) string { return strings.Replace(value, "(?i)root cause", "[", 1) },
