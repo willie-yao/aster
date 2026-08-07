@@ -6,8 +6,25 @@ follow the deployment guide included in the scaffold.
 
 An agent can run the same discovery, dry-run, scaffold, prompt handoff, and
 doctor flow with the repo-owned
-[`setup-prow-ai-consumer` skill](agent-onboarding.md). The skill uses the CLI as
-the scaffold authority rather than maintaining separate templates.
+[`setup-prow-ai-consumer` skill](agent-onboarding.md). Install it with the Skills
+CLI, then ask the agent to set up the dashboard:
+
+```bash
+npx --yes skills@latest add willie-yao/prow-ai-dashboard \
+  --skill setup-prow-ai-consumer author-prow-ai-diagnostics \
+  --agent codex \
+  --global \
+  --yes
+```
+
+```text
+Use $setup-prow-ai-consumer to set up a Pages consumer for this repository.
+```
+
+The setup skill uses the engine CLI as the scaffold authority rather than
+maintaining separate templates. The optional `$author-prow-ai-diagnostics`
+skill can improve the project prompt and propose reviewed diagnostic recipes
+after the baseline consumer passes `onboard doctor`.
 
 ## Run the wizard
 
@@ -234,6 +251,9 @@ After the scaffold is written:
 
 4. Deploy the smallest working configuration first.
 5. Confirm that the expected jobs appear before enabling optional automation.
+6. Optionally use `$author-prow-ai-diagnostics` to investigate representative
+   failures, improve `prompts/system.md`, and write inactive recipe proposals
+   under `proposals/skills/`.
 
 Do not add notifications, issue automation, fix generation, source
 investigation, or Orka until the first fetch publishes the expected dashboard.

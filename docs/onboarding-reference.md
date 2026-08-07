@@ -5,7 +5,7 @@ full `fetcher onboard` command surface. For a first project, start with
 [Onboarding a project](onboarding-a-new-project.md).
 
 For a conversational agent workflow over the same command surface, see
-[Agent-driven consumer setup](agent-onboarding.md).
+[Agent-driven setup and diagnostic authoring](agent-onboarding.md).
 
 ## Discovery behavior
 

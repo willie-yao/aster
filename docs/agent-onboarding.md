@@ -1,16 +1,111 @@
-# Agent-driven consumer setup
+# Agent-driven setup and diagnostic authoring
 
-The repository ships a portable Agent Skill that lets an agent set up a
-`prow-ai-dashboard` consumer without walking through the interactive wizard:
+The repository ships two portable Agent Skills for compatible LLM CLIs:
 
-[`setup-prow-ai-consumer`](../.agents/skills/setup-prow-ai-consumer/SKILL.md)
+- [`setup-prow-ai-consumer`](../.agents/skills/setup-prow-ai-consumer/SKILL.md)
+  creates or updates a validated consumer through the engine CLI.
+- [`author-prow-ai-diagnostics`](../.agents/skills/author-prow-ai-diagnostics/SKILL.md)
+  investigates a valid consumer, improves its project prompt, proposes bounded
+  diagnostic recipes, and benchmarks held-out failures without activating the
+  recipes.
 
-The skill does not replace onboarding logic. It gathers decisions
-conversationally, runs read-only discovery, uses the real `fetcher onboard`
-dry-run and apply paths, completes the generated prompt handoff, and runs the
-read-only doctor.
+Use the setup skill first. Use the diagnostic-authoring skill only after the
+consumer passes `onboard doctor`.
 
-## What the skill can set up
+The skills do not replace engine behavior. They gather decisions and coordinate
+the existing discovery, dry-run, apply, prompt, validation, and benchmark
+contracts instead of maintaining separate scaffold or recipe implementations.
+
+## Install with the Skills CLI
+
+The recommended installation method is the cross-agent
+[Skills CLI](https://github.com/sozercan/skills). It discovers both skills from
+this repository and manages project or personal installation without manually
+copying their supporting files.
+
+Install both skills for Codex at personal scope:
+
+```bash
+npx --yes skills@latest add willie-yao/prow-ai-dashboard \
+  --skill setup-prow-ai-consumer author-prow-ai-diagnostics \
+  --agent codex \
+  --global \
+  --yes
+```
+
+Verify the installation:
+
+```bash
+npx --yes skills@latest list --global --agent codex
+```
+
+For project scope, run the same command from the intended workspace without
+`--global`:
+
+```bash
+npx --yes skills@latest add willie-yao/prow-ai-dashboard \
+  --skill setup-prow-ai-consumer author-prow-ai-diagnostics \
+  --agent codex \
+  --yes
+```
+
+Omit `--agent codex` to let the CLI select another detected Agent Skills client.
+The dashboard engine does not depend on the Skills CLI at runtime. It is only an
+installation and update convenience for the LLM CLI.
+
+Start a new agent session after installation. Restart the client if it does not
+refresh installed skills automatically. Codex skill discovery and locations are
+documented in the [Codex Skills guide](https://developers.openai.com/codex/skills/).
+
+## Manual installation fallback
+
+If the Skills CLI is unavailable, copy each complete directory from a cloned
+engine checkout. Do not copy only `SKILL.md`, because the skills include UI
+metadata and references.
+
+Project scope:
+
+```bash
+mkdir -p .agents/skills
+cp -R /path/to/prow-ai-dashboard/.agents/skills/setup-prow-ai-consumer .agents/skills/
+cp -R /path/to/prow-ai-dashboard/.agents/skills/author-prow-ai-diagnostics .agents/skills/
+```
+
+Personal scope:
+
+```bash
+mkdir -p ~/.agents/skills
+cp -R /path/to/prow-ai-dashboard/.agents/skills/setup-prow-ai-consumer ~/.agents/skills/
+cp -R /path/to/prow-ai-dashboard/.agents/skills/author-prow-ai-diagnostics ~/.agents/skills/
+```
+
+Use the client-specific personal directory only when the client does not support
+portable `.agents/skills` locations.
+
+## Set up a dashboard with an agent
+
+Invoke the initial setup skill with a request such as:
+
+```text
+Use $setup-prow-ai-consumer to set up a Pages consumer for this repository.
+```
+
+```text
+Use $setup-prow-ai-consumer to put the consumer files in the current directory.
+```
+
+```text
+Use $setup-prow-ai-consumer to create a separate Kubernetes consumer checkout.
+```
+
+The skill should also trigger for requests such as:
+
+- “Set up a prow-ai-dashboard consumer for this project.”
+- “Create a dashboard consumer repo for this repository.”
+- “Run onboarding without the interactive wizard.”
+- “Add the consumer files to this repository.”
+
+### What the setup skill can prepare
 
 - Consumer files in the current directory, a subdirectory, an existing checkout,
   or a separate repository directory.
@@ -25,100 +120,7 @@ Git initialization, GitHub repository creation, pushes, pull requests, Pages
 configuration, Secret writes, Helm installation, and deployment remain separate
 confirmation-gated actions.
 
-## Install the complete skill directory
-
-Copy the complete `setup-prow-ai-consumer` directory. Do not copy only
-`SKILL.md`, because the skill includes UI metadata and decision references.
-
-Set the source path to a cloned `prow-ai-dashboard` checkout:
-
-```bash
-SKILL_SOURCE=/path/to/prow-ai-dashboard/.agents/skills/setup-prow-ai-consumer
-```
-
-### OpenCode
-
-Project scope:
-
-```bash
-mkdir -p .agents/skills
-cp -R "$SKILL_SOURCE" .agents/skills/
-```
-
-Personal scope:
-
-```bash
-mkdir -p ~/.agents/skills
-cp -R "$SKILL_SOURCE" ~/.agents/skills/
-```
-
-OpenCode discovers skills from `.agents/skills`, `.opencode/skills`, and
-compatible Claude skill directories. See the
-[OpenCode skills documentation](https://opencode.ai/docs/skills/).
-
-### Claude Code
-
-Project scope:
-
-```bash
-mkdir -p .claude/skills
-cp -R "$SKILL_SOURCE" .claude/skills/
-```
-
-Personal scope:
-
-```bash
-mkdir -p ~/.claude/skills
-cp -R "$SKILL_SOURCE" ~/.claude/skills/
-```
-
-See the [Claude Code Agent Skills documentation](https://code.claude.com/docs/en/skills)
-for managed, personal, and project skill locations.
-
-### Codex
-
-Personal CLI installation:
-
-```bash
-CODEX_SKILLS_DIR="${CODEX_HOME:-$HOME/.codex}/skills"
-mkdir -p "$CODEX_SKILLS_DIR"
-cp -R "$SKILL_SOURCE" "$CODEX_SKILLS_DIR/"
-```
-
-The skill can also be imported from a GitHub checkout through supported Codex
-Skills surfaces. OpenAI Skills follow the portable Agent Skills standard; see
-[Skills in ChatGPT](https://help.openai.com/en/articles/20001066).
-
-### Other Agent Skills clients
-
-Copy the complete directory into the client's project or personal skills
-location. The canonical skill uses standard `SKILL.md` frontmatter and keeps
-supporting material under `references/`.
-
-## Invoke the skill
-
-Examples:
-
-```text
-Use $setup-prow-ai-consumer to set up a Pages consumer for this repository.
-```
-
-```text
-Use $setup-prow-ai-consumer to put the consumer files in the current directory.
-```
-
-```text
-Use $setup-prow-ai-consumer to create a separate Kubernetes consumer checkout.
-```
-
-The skill should trigger naturally for requests such as:
-
-- “Set up a prow-ai-dashboard consumer for this project.”
-- “Create a dashboard consumer repo for CAPZ.”
-- “Run onboarding without the interactive wizard.”
-- “Add the consumer files to this repository.”
-
-## Expected workflow
+### Expected setup workflow
 
 The agent should:
 
@@ -136,19 +138,60 @@ The agent should:
 9. Report remaining checklist and deployment work.
 
 For existing generated files, the first dry run reports conflicts. The agent
-must ask before rerunning with `-update-existing`, then review that full plan.
-Onboarding's direct `-open-pr` mode is intentionally not used because prompt
-completion and doctor require local files. The temporary plan artifact must stay
-outside the consumer destination. Apply also rejects a replacement file edited
-after review.
+must ask before rerunning with `-update-existing`, then review the complete
+replacement plan. Onboarding's direct `-open-pr` mode is intentionally not used
+because prompt completion and doctor require local files. The temporary plan
+artifact must stay outside the consumer destination.
 
 The skill must use `fetcher onboard` rather than hand-writing `project.yaml`,
 workflows, Helm values, or deployment guides. This keeps agent-driven setup on
 the same discovery, validation, credential, path, and generated-file contracts
 as the wizard.
 
-## Update the installed skill
+## Improve diagnostics after setup
 
-Skills are ordinary directories. To update an installed copy, remove or rename
-the old copy and copy the complete directory from the newer engine checkout.
-Review the skill diff before using a new revision in an automated workflow.
+After the consumer passes doctor, invoke:
+
+```text
+Use $author-prow-ai-diagnostics to investigate representative historical
+failures for this consumer, improve prompts/system.md, and propose recipes only
+under proposals/skills without activating them.
+```
+
+The diagnostic-authoring skill:
+
+- Pins engine, source, test-infra, job, build, prompt, and recipe identities.
+- Uses a representative historical failure corpus rather than tuning to one
+  selected failure.
+- Preserves the required nine-section project prompt contract.
+- Proposes recipes only for repeated prompt-only misses.
+- Validates trigger polarity, evidence groups, collisions, and held-out cases.
+- Writes proposals under `proposals/skills/` and reports under `reports/`.
+- Can abstain when the evidence does not justify a prompt or recipe change.
+- Never promotes proposals into active `skills/` without later explicit
+  approval.
+
+Keep held-out diagnoses, benchmark scoring rules, prior dashboard answers, and
+manual intervention recipes out of the authoring session until its outputs are
+frozen.
+
+## Update installed skills
+
+List the currently linked global skills:
+
+```bash
+npx --yes skills@latest list --global --agent codex
+```
+
+Update these global installations from their recorded source:
+
+```bash
+npx --yes skills@latest update \
+  setup-prow-ai-consumer author-prow-ai-diagnostics \
+  --global \
+  --yes
+```
+
+Review upstream skill changes before using a new revision in automated or
+write-enabled workflows. For manual copies, replace the complete skill
+directory from a newer trusted engine checkout.

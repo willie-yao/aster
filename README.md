@@ -27,6 +27,11 @@ The command verifies discovery before writing a small consumer repository. It
 generates `project.yaml`, `prompts/system.md`, one deploy workflow, and a short
 checklist. Continue with [Onboarding a project](docs/onboarding-a-new-project.md).
 
+A compatible LLM CLI can perform the same setup with the repository's
+`$setup-prow-ai-consumer` skill. Install it and the optional diagnostic-authoring
+skill with `npx skills`, then ask the agent to set up the dashboard. See
+[Agent-driven setup and diagnostic authoring](docs/agent-onboarding.md).
+
 ## Choose a deployment
 
 Deployment and analysis are separate choices.
@@ -109,7 +114,7 @@ The Kubernetes server serves the same `/data/*.json` contract as Pages and adds
 ### Get started
 
 - [Onboarding a project](docs/onboarding-a-new-project.md)
-- [Agent-driven consumer setup](docs/agent-onboarding.md)
+- [Agent-driven setup and diagnostic authoring](docs/agent-onboarding.md)
 - [Onboarding reference](docs/onboarding-reference.md)
 - [GitHub Actions and Pages](docs/github-pages.md)
 - [Kubernetes deployment](docs/kubernetes.md)
@@ -123,6 +128,7 @@ The Kubernetes server serves the same `/data/*.json` contract as Pages and adds
 - [Writing the project prompt](docs/writing-prompts.md)
 - [Agentic analysis](docs/agentic.md)
 - [Custom diagnostic skills](docs/skills.md)
+- [Agent-assisted diagnostic authoring](docs/agent-onboarding.md#improve-diagnostics-after-setup)
 
 ### Optional features
 
