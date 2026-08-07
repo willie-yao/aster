@@ -415,7 +415,7 @@ type semanticLineCandidate struct {
 var (
 	semanticRecoveryRE             = regexp.MustCompile(`(?i)\b(recovered|recovery|succeeded|successful|healthy|reconciled)\b|\b(?:now|later|eventually|subsequently)\b.{0,40}\b(?:ready|available|completed|connected|running|synced|synchronized)\b`)
 	semanticNegativeSuccessRE      = regexp.MustCompile(`(?i)\b(?:not|never)\s+(?:found|ready|available|completed|connected|running|synced|synchronized|recovered|healthy|successful|reconciled)\b|\b(?:recovery|reconciliation)\s+failed\b|\b(?:failed|unable)\b.{0,40}\b(?:become\s+)?(?:ready|available|complete|connect|run|sync|synchronize|recover|reconcile|healthy|successful)\b`)
-	semanticStructuredAssignmentRE = regexp.MustCompile(`(?i)(?:"([a-z][a-z0-9_-]*)"|'([a-z][a-z0-9_-]*)'|\b([a-z][a-z0-9_-]*))\s*[:=]\s*(?:"([a-z][a-z0-9_-]*)"|'([a-z][a-z0-9_-]*)'|([a-z][a-z0-9_-]*))`)
+	semanticStructuredAssignmentRE = regexp.MustCompile(`(?i)(?:"([a-z][a-z0-9_-]*)"|'([a-z][a-z0-9_-]*)'|\b([a-z][a-z0-9_-]*))\s*[:=]\s*(?:"([^"]*)"|'([^']*)'|([^,\s}\]]+))`)
 	semanticTimestampRE            = regexp.MustCompile(`\b(?:\d{4}-\d{2}-\d{2}[T ][0-2]\d:[0-5]\d:[0-5]\d(?:\.\d+)?Z?|[0-2]\d:[0-5]\d:[0-5](?:\.\d+)?)\b`)
 	semanticTokenRE                = regexp.MustCompile(`[A-Za-z][A-Za-z0-9]*(?:[._/:~-][A-Za-z0-9]+)*|[1-5][0-9]{2}`)
 	semanticWordRE                 = regexp.MustCompile(`[a-z0-9]+`)
@@ -610,7 +610,7 @@ func semanticStructuredSuccess(text string) (bool, bool) {
 		}
 		key := firstSemanticAssignmentPart(match[1], match[2], match[3])
 		value := firstSemanticAssignmentPart(match[4], match[5], match[6])
-		if key != "" && value != "" {
+		if key != "" {
 			assignments[key] = append(assignments[key], value)
 		}
 	}
