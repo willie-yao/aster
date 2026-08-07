@@ -33,6 +33,7 @@ import {
 } from "../lib/utils";
 import { parseTestDisplayName } from "../lib/detailTitles";
 import { withJobDetailParam } from "../lib/jobDetail";
+import { summarizeTestHistory } from "../lib/testDetail";
 import { RichText } from "../components/RichText";
 import { RunHistory } from "../components/RunHistory";
 import { DetailSectionBand } from "../components/DetailSectionBand";
@@ -179,30 +180,8 @@ export function TestDetailPage() {
   const failedOccurrences = presentOccurrences.filter(
     (occurrence) => occurrence.testCase?.status === "failed",
   );
-  const passedOccurrences = presentOccurrences.filter(
-    (occurrence) => occurrence.testCase?.status === "passed",
-  );
-  const skippedOccurrences = presentOccurrences.filter(
-    (occurrence) => occurrence.testCase?.status === "skipped",
-  );
-  const absentCount = occurrences.length - presentOccurrences.length;
-
-  const classification = useMemo(() => {
-    if (!latestOccurrence) return null;
-    let consecutiveFailures = 0;
-    for (let index = occurrences.length - 1; index >= 0; index -= 1) {
-      const testCase = occurrences[index].testCase;
-      if (!testCase) continue;
-      if (testCase.status === "failed") consecutiveFailures += 1;
-      else break;
-    }
-    if (consecutiveFailures >= 3) return `Persistent (${consecutiveFailures}×)`;
-    if (failedOccurrences.length > 1 && passedOccurrences.length > 0) {
-      return "Flaky";
-    }
-    if (failedOccurrences.length === 1) return "One-off failure";
-    return null;
-  }, [failedOccurrences.length, latestOccurrence, occurrences, passedOccurrences.length]);
+  const historySummary = summarizeTestHistory(occurrences);
+  const classification = historySummary.classification;
 
   const failureGroups = useMemo<FailureGroup[]>(() => {
     const groups = new Map<string, { sample: string; count: number }>();
@@ -284,10 +263,7 @@ export function TestDetailPage() {
   const latestTestCase = latestOccurrence?.testCase ?? null;
   const selectedStatus: DisplayStatus = selectedTestCase?.status ?? "absent";
   const statusView = statusPresentation(selectedStatus);
-  const failureRate =
-    presentOccurrences.length > 0
-      ? failedOccurrences.length / presentOccurrences.length
-      : null;
+  const failureRate = historySummary.failureRate;
   const matchingFailures = selectedTestCase?.failure_message
     ? failureGroups.find(
         (group) =>
@@ -405,12 +381,14 @@ export function TestDetailPage() {
       selectedBuildId={effectiveSelectedID ?? undefined}
       onSelect={selectRun}
       metadata={[
-        `${failedOccurrences.length} failed`,
-        `${passedOccurrences.length} passed`,
-        ...(skippedOccurrences.length > 0
-          ? [`${skippedOccurrences.length} skipped`]
+        `${historySummary.failed} failed`,
+        `${historySummary.passed} passed`,
+        ...(historySummary.skipped > 0
+          ? [`${historySummary.skipped} skipped`]
           : []),
-        ...(absentCount > 0 ? [`${absentCount} absent`] : []),
+        ...(historySummary.absent > 0
+          ? [`${historySummary.absent} absent`]
+          : []),
       ].join(" · ")}
       colorFn={(run) => {
         const palette = (theme.vars ?? theme).palette;
@@ -431,7 +409,7 @@ export function TestDetailPage() {
     />
   );
 
-  const runMetadata = selectedRun && selectedTestCase ? (
+  const runMetadata = selectedRun ? (
     <RunMetadata
       status={statusView.label}
       statusColor={
@@ -439,13 +417,23 @@ export function TestDetailPage() {
           ? "success.main"
           : selectedStatus === "failed"
             ? "error.main"
-            : "warning.main"
+            : selectedStatus === "skipped"
+              ? "warning.main"
+              : "text.secondary"
       }
       items={[
         { label: "Build ID", value: selectedRun.build_id },
         { label: "Started", value: new Date(selectedRun.started).toLocaleString() },
-        { label: "Duration", value: formatDuration(selectedTestCase.duration_seconds) },
-        { label: "JUnit", value: selectedTestCase.junit_file || "Not reported" },
+        {
+          label: "Duration",
+          value: selectedTestCase
+            ? formatDuration(selectedTestCase.duration_seconds)
+            : "Not present",
+        },
+        {
+          label: "JUnit",
+          value: selectedTestCase?.junit_file || "Not present",
+        },
       ]}
       links={[
         ...(selectedRun.prow_url
@@ -458,9 +446,9 @@ export function TestDetailPage() {
     />
   ) : (
     <Box component="section" sx={{ bgcolor: "surface.container", borderBottom: "1px solid", borderColor: "divider" }}>
-      <DetailSectionBand title="Run metadata" metadata="Test absent" />
+      <DetailSectionBand title="Run metadata" metadata="Unavailable" />
       <Typography color="text.secondary" sx={{ px: 1.5, py: 2, ...overviewTypography.secondaryBody }}>
-        This test was not reported in the selected run.
+        Select a published run to inspect its metadata.
       </Typography>
     </Box>
   );
@@ -529,6 +517,13 @@ export function TestDetailPage() {
     ? selectedTestCase.failure_body.split("\n").length
     : 0;
   const clusterArtifacts = selectedTestCase?.cluster_artifacts;
+  const controllerLogEntries = Object.entries(
+    selectedRun?.controller_log_urls ?? {},
+  );
+  const controllerLogsFallback =
+    selectedRun?.web_url && controllerLogEntries.length === 0
+      ? `${selectedRun.web_url.replace(/\/+$/u, "")}/artifacts/clusters/bootstrap/logs/`
+      : null;
   const evidenceLinkCount = [
     selectedTestCase?.failure_location_url,
     selectedRun?.web_url,
@@ -536,7 +531,8 @@ export function TestDetailPage() {
     clusterArtifacts?.provider_activity_log,
     clusterArtifacts?.bootstrap_resources_url,
     ...Object.values(clusterArtifacts?.pod_log_dirs ?? {}),
-    ...Object.values(selectedRun?.controller_log_urls ?? {}),
+    ...controllerLogEntries.map(([, url]) => url),
+    controllerLogsFallback,
     ...((clusterArtifacts?.machines ?? []).flatMap((machine) =>
       Object.values(machine.logs),
     )),
@@ -614,12 +610,21 @@ export function TestDetailPage() {
               </Link>
             ),
           )}
-          {Object.entries(selectedRun.controller_log_urls ?? {}).map(
-            ([controller, url]) => (
+          {controllerLogEntries.map(([controller, url]) => (
               <Link key={controller} href={url} target="_blank" rel="noopener noreferrer" sx={evidenceLinkSx}>
                 <Dns sx={{ fontSize: 15 }} /> {controller} <OpenInNew sx={{ fontSize: 14 }} />
               </Link>
             ),
+          )}
+          {controllerLogsFallback && (
+            <Link
+              href={controllerLogsFallback}
+              target="_blank"
+              rel="noopener noreferrer"
+              sx={evidenceLinkSx}
+            >
+              <Dns sx={{ fontSize: 15 }} /> Controller logs <OpenInNew sx={{ fontSize: 14 }} />
+            </Link>
           )}
         </Box>
         {clusterArtifacts?.machines && clusterArtifacts.machines.length > 0 && (
