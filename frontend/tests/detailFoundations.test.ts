@@ -233,10 +233,6 @@ test("test result navigation names include status duration and source context", 
     html,
     /aria-label="Open diagnosis for Fails cluster\. Failed\. Duration 5s"/,
   );
-  assert.match(
-    html,
-    /aria-label="View source for Fails cluster on GitHub"/,
-  );
   const diagnosis = html.match(
     /<a[^>]*aria-label="Open diagnosis[^"]*"[^>]*>([\s\S]*?)<\/a>/,
   );

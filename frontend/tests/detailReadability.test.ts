@@ -57,7 +57,9 @@ test("test rows provide a large diagnosis link and separate evidence controls", 
   assert.match(table, /Diagnosis →/);
   assert.match(table, /gridColumn: \{ xs: "1", md: "5" \}/);
   assert.match(table, /Show inline evidence/);
+  assert.match(table, /overflowX: "clip"/);
   assert.doesNotMatch(table.slice(linkStart, linkEnd), /failure_location_url/);
+  assert.doesNotMatch(table, /<OpenInNew/);
 });
 
 test("AI summaries use readable body contrast instead of caption styling", () => {
