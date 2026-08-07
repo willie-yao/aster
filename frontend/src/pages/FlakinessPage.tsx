@@ -1,55 +1,80 @@
 import { useId, useState } from "react";
 import Box from "@mui/material/Box";
-import Chip from "@mui/material/Chip";
+import ButtonBase from "@mui/material/ButtonBase";
 import Collapse from "@mui/material/Collapse";
-import LinearProgress from "@mui/material/LinearProgress";
-import IconButton from "@mui/material/IconButton";
 import Link from "@mui/material/Link";
 import Stack from "@mui/material/Stack";
 import Tab from "@mui/material/Tab";
 import Tabs from "@mui/material/Tabs";
 import Typography from "@mui/material/Typography";
-import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
-import SentimentSatisfiedAltIcon from "@mui/icons-material/SentimentSatisfiedAlt";
+import ChevronRight from "@mui/icons-material/ChevronRight";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import { Link as RouterLink } from "react-router-dom";
+import { DetailSectionBand } from "../components/DetailSectionBand";
 import { ErrorState } from "../components/ErrorState";
 import { FetchActivityIcon } from "../components/FetchStatus";
 import { LoadingState } from "../components/LoadingState";
-import { Panel } from "../components/Panel";
 import { useFlakinessReport } from "../hooks/useData";
 import { useManifest } from "../hooks/useManifest";
 import { useSharedFetchStatus } from "../hooks/useSharedFetchStatus";
 import { fetchStatusPresentation } from "../lib/fetchStatus";
 import { jobPath, testPath, testRunPath } from "../lib/routes";
 import { formatPercent, shortJobName, shortTestName, timeAgo } from "../lib/utils";
-import { soft } from "../theme";
+import { overviewTypography } from "../theme/overview";
 import type { BuildFailureSummary, TestFlakiness } from "../types/dashboard";
 
-type Tab = "most_flaky" | "persistent" | "recently_broken" | "build_failures";
-type TestTab = Exclude<Tab, "build_failures">;
-type ClassificationColor = "error" | "warning" | "default";
+type FailureTab =
+  | "most_flaky"
+  | "persistent"
+  | "recently_broken"
+  | "build_failures";
+type TestTab = Exclude<FailureTab, "build_failures">;
 
-const tabs: { label: string; value: Tab; tooltip: string }[] = [
-  { label: "Most Flaky", value: "most_flaky", tooltip: "Tests that alternate between passing and failing. Sorted by flip rate, the percentage of runs where the result changed from the previous run." },
-  { label: "Persistent Failures", value: "persistent", tooltip: "Tests that have failed 3 or more times in a row with the same error. These are consistently broken, not flaky." },
-  { label: "Recently Broken", value: "recently_broken", tooltip: "Tests that started a new failure streak within the last 48 hours. These are likely new regressions." },
-  { label: "Build Failures", value: "build_failures", tooltip: "Build-level failures that were not reported as JUnit test cases. These remain separate from test flakiness and pass-rate calculations." },
+type TabDefinition = {
+  label: string;
+  value: FailureTab;
+  tooltip: string;
+};
+
+const tabs: TabDefinition[] = [
+  {
+    label: "Most Flaky",
+    value: "most_flaky",
+    tooltip:
+      "Tests that alternate between passing and failing. Sorted by flip rate, the percentage of runs where the result changed from the previous run.",
+  },
+  {
+    label: "Persistent Failures",
+    value: "persistent",
+    tooltip:
+      "Tests that have failed 3 or more times in a row with the same error. These are consistently broken, not flaky.",
+  },
+  {
+    label: "Recently Broken",
+    value: "recently_broken",
+    tooltip:
+      "Tests that started a new failure streak within the last 48 hours. These are likely new regressions.",
+  },
+  {
+    label: "Build Failures",
+    value: "build_failures",
+    tooltip:
+      "Build-level failures that were not reported as JUnit test cases. These remain separate from test flakiness and pass-rate calculations.",
+  },
 ];
 
-function classificationStyle(c: TestFlakiness["classification"]): ClassificationColor {
-  switch (c) {
-    case "persistent":
-      return "error";
-    case "flaky":
-      return "warning";
-    case "one-off":
-      return "default";
-  }
+function classificationLabel(
+  classification: TestFlakiness["classification"],
+): string {
+  return classification.charAt(0).toUpperCase() + classification.slice(1);
 }
 
-function classificationLabel(c: TestFlakiness["classification"]): string {
-  return c.charAt(0).toUpperCase() + c.slice(1);
+function classificationColor(
+  classification: TestFlakiness["classification"],
+): "error.main" | "warning.main" | "text.secondary" {
+  if (classification === "persistent") return "error.main";
+  if (classification === "flaky") return "warning.main";
+  return "text.secondary";
 }
 
 function metricValue(tab: TestTab, item: TestFlakiness): string {
@@ -59,14 +84,14 @@ function metricValue(tab: TestTab, item: TestFlakiness): string {
     case "persistent":
       return `${item.consecutive_failures}×`;
     case "recently_broken":
-      return item.first_failed_at ? timeAgo(item.first_failed_at) : "—";
+      return item.first_failed_at ? timeAgo(item.first_failed_at) : "Not available";
   }
 }
 
 function metricLabel(tab: TestTab): string {
   switch (tab) {
     case "most_flaky":
-      return "Flip Rate";
+      return "Flip rate";
     case "persistent":
       return "Consecutive";
     case "recently_broken":
@@ -74,198 +99,221 @@ function metricLabel(tab: TestTab): string {
   }
 }
 
+function MetricCell({ label, value }: { label: string; value: string }) {
+  return (
+    <Box sx={{ minWidth: 0 }}>
+      <Typography component="div" color="text.secondary" sx={overviewTypography.tableHeading}>
+        {label}
+      </Typography>
+      <Typography
+        component="div"
+        color="text.primary"
+        sx={{ mt: 0.25, ...overviewTypography.data, fontWeight: 700 }}
+      >
+        {value}
+      </Typography>
+    </Box>
+  );
+}
+
+function ClassificationSignal({
+  classification,
+}: {
+  classification: TestFlakiness["classification"];
+}) {
+  const color = classificationColor(classification);
+  return (
+    <Box
+      sx={{
+        minHeight: 44,
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 0.75,
+        color,
+        fontSize: "13px",
+        fontWeight: 700,
+      }}
+    >
+      <Box
+        component="span"
+        sx={{ width: 7, height: 7, borderRadius: "2px", bgcolor: "currentColor" }}
+      />
+      {classificationLabel(classification)}
+    </Box>
+  );
+}
+
 function TestRow({ item, tab }: { item: TestFlakiness; tab: TestTab }) {
   const manifest = useManifest();
   const filePrefix = manifest.short_name_prefix ?? "";
   const [expanded, setExpanded] = useState(false);
   const detailsId = useId();
-  const failPct = Math.round(item.fail_rate * 100);
-  const progressValue = Math.min(100, Math.max(0, failPct));
-  const classificationColor = classificationStyle(item.classification);
   const lastFailureMessage = item.last_failure?.failure_message;
+  const diagnosisPath = item.last_failure?.build_id
+    ? testRunPath(item.job_id, item.test_name, item.last_failure.build_id)
+    : testPath(item.job_id, item.test_name);
+  const testTitle = shortTestName(item.test_name);
+  const jobTitle = shortJobName(item.job_name, filePrefix);
 
   return (
-    <Panel
+    <Box
+      component="article"
       sx={{
-        borderRadius: "12px",
-        overflow: "hidden",
-        position: "relative",
-        "&::before": {
-          content: '""',
-          position: "absolute",
-          insetBlock: 0,
-          insetInlineStart: 0,
-          width: 3,
-          bgcolor: (theme) =>
-            classificationColor === "default"
-              ? (theme.vars ?? theme).palette.divider
-              : soft(theme, classificationColor, 0.9),
-        },
+        minWidth: 0,
+        bgcolor: "surface.container",
+        borderTopWidth: "1px",
+        borderTopStyle: "solid",
+        borderTopColor: "var(--mui-palette-divider)",
+        boxShadow: `inset 3px 0 0 var(--mui-palette-${
+          item.classification === "persistent"
+            ? "error-main"
+            : item.classification === "flaky"
+              ? "warning-main"
+              : "divider"
+        })`,
       }}
     >
-      <Stack spacing={1} sx={{ px: { xs: 1.5, sm: 2 }, py: 1 }}>
-        <Box
-          sx={{
-            alignItems: "center",
-            display: "flex",
-            flexWrap: { xs: "wrap", sm: "nowrap" },
-            gap: { xs: 1.25, sm: 2 },
-            minWidth: 0,
-            width: "100%",
-          }}
-        >
-          <Box
+      <Box
+        sx={{
+          display: "grid",
+          gridTemplateColumns: {
+            xs: "minmax(0, 1fr) auto",
+            md: "minmax(0, 1fr) 100px 100px 120px 92px",
+          },
+          gridTemplateAreas: {
+            xs: '"primary details" "metrics metrics"',
+            md: '"primary metric fail classification details"',
+          },
+          alignItems: "center",
+          minWidth: 0,
+        }}
+      >
+        <Box sx={{ gridArea: "primary", minWidth: 0, px: 1.5, py: 1.25 }}>
+          <Link
+            component={RouterLink}
+            to={diagnosisPath}
+            underline="none"
+            title={item.test_name}
+            aria-label={`Open diagnosis for ${testTitle} in ${jobTitle}`}
             sx={{
-              flex: { xs: "1 1 100%", sm: "1 1 auto" },
-              minWidth: 0,
-              width: { xs: "100%", sm: "auto" },
-            }}
-          >
-            <Link
-              component={RouterLink}
-              to={item.last_failure?.build_id
-                ? testRunPath(item.job_id, item.test_name, item.last_failure.build_id)
-                : testPath(item.job_id, item.test_name)}
-              underline="none"
-              title={item.test_name}
-              sx={{
-                color: "text.primary",
-                display: "block",
-                fontSize: "0.875rem",
-                fontWeight: 600,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                transition: "color 150ms ease",
-                whiteSpace: "nowrap",
-                "&:hover": { color: "primary.main" },
-              }}
-            >
-              {shortTestName(item.test_name)}
-            </Link>
-            <Link
-              component={RouterLink}
-              to={jobPath(item.job_id)}
-              underline="none"
-              title={item.job_name}
-              variant="label"
-              sx={{
-                color: "text.secondary",
-                display: "inline-block",
-                maxWidth: "100%",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                transition: "color 150ms ease",
-                whiteSpace: "nowrap",
-                "&:hover": { color: "primary.main" },
-              }}
-            >
-              {shortJobName(item.job_name, filePrefix)}
-            </Link>
-          </Box>
-
-          <Box
-            sx={{
-              alignItems: "center",
+              minHeight: { xs: 44, md: 28 },
               display: "flex",
-              flex: { xs: "1 1 auto", sm: "0 0 auto" },
-              flexWrap: "nowrap",
-              gap: { xs: 1.25, sm: 2 },
-              minWidth: 0,
+              alignItems: "center",
+              color: "text.primary",
+              fontSize: "14px",
+              lineHeight: "20px",
+              fontWeight: 680,
+              overflowWrap: "anywhere",
+              "&:hover": { color: "primary.main" },
+              "&:focus-visible": {
+                outline: "2px solid",
+                outlineColor: "primary.main",
+                outlineOffset: 2,
+              },
             }}
           >
-            <Box
+            {testTitle}
+          </Link>
+          <Link
+            component={RouterLink}
+            to={jobPath(item.job_id)}
+            underline="none"
+            title={item.job_name}
+            sx={{
+              display: "inline-block",
+              mt: 0.25,
+              maxWidth: "100%",
+              color: "text.secondary",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              ...overviewTypography.data,
+              fontSize: "13px",
+              "&:hover": { color: "primary.main" },
+            }}
+          >
+            {jobTitle}
+          </Link>
+          {lastFailureMessage && (
+            <Typography
+              color="text.secondary"
+              title={lastFailureMessage}
               sx={{
-                flexShrink: 0,
-                textAlign: { xs: "left", sm: "right" },
-                width: { xs: 72, sm: 80 },
+                mt: 0.75,
+                display: "-webkit-box",
+                WebkitBoxOrient: "vertical",
+                WebkitLineClamp: 2,
+                overflow: "hidden",
+                fontSize: "13.5px",
+                lineHeight: "20px",
               }}
             >
-              <Typography variant="label" component="div" color="text.secondary">
-                {metricLabel(tab)}
-              </Typography>
-              <Typography
-                variant="data"
-                component="div"
-                color="text.primary"
-                sx={{ fontSize: "0.9375rem", fontWeight: 700 }}
-              >
-                {metricValue(tab, item)}
-              </Typography>
-            </Box>
-
-            <Box sx={{ flexShrink: 0, width: { xs: 100, sm: 96 } }}>
-              <Typography variant="label" color="text.secondary" sx={{ mb: 0.5 }}>
-                Fail {failPct}%
-              </Typography>
-              <LinearProgress
-                variant="determinate"
-                value={progressValue}
-                color="error"
-                sx={{
-                  bgcolor: (theme) => soft(theme, "error", 0.14),
-                  borderRadius: 999,
-                  height: 8,
-                  "& .MuiLinearProgress-bar": { borderRadius: 999 },
-                }}
-              />
-            </Box>
-
-            <Chip
-              size="small"
-              label={classificationLabel(item.classification)}
-              color={classificationColor}
-              sx={{
-                bgcolor: (theme) =>
-                  classificationColor === "default"
-                    ? (theme.vars ?? theme).palette.action.selected
-                    : soft(theme, classificationColor, 0.18),
-                color:
-                  classificationColor === "default"
-                    ? "text.secondary"
-                    : `${classificationColor}.main`,
-                flexShrink: 0,
-                fontSize: "0.75rem",
-                fontWeight: 600,
-                height: 24,
-                px: 0.5,
-              }}
-            />
-          </Box>
-
-          <IconButton
-            aria-controls={detailsId}
-            aria-expanded={expanded}
-            aria-label={`${expanded ? "Collapse" : "Expand"} details for ${item.test_name}`}
-            onClick={() => setExpanded((value) => !value)}
-            size="small"
-            sx={{
-              color: "text.secondary",
-              flexShrink: 0,
-              ml: { xs: "auto", sm: 0 },
-            }}
-          >
-            <ExpandMoreIcon
-              fontSize="small"
-              sx={{
-                transform: expanded ? "rotate(180deg)" : "rotate(0deg)",
-                transition: "transform 150ms ease",
-              }}
-            />
-          </IconButton>
+              {lastFailureMessage}
+            </Typography>
+          )}
         </Box>
 
-        {lastFailureMessage && (
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            title={lastFailureMessage}
-            noWrap
-            sx={{ display: "block" }}
-          >
-            {lastFailureMessage}
-          </Typography>
-        )}
-      </Stack>
+        <Box
+          sx={{
+            gridArea: "metrics",
+            display: { xs: "grid", md: "contents" },
+            gridTemplateColumns: { xs: "repeat(3, minmax(0, 1fr))" },
+            gap: { xs: 1, md: 0 },
+            px: { xs: 1.5, md: 0 },
+            pb: { xs: 1.25, md: 0 },
+          }}
+        >
+          <Box sx={{ gridArea: { md: "metric" }, px: { md: 1.25 } }}>
+            <MetricCell label={metricLabel(tab)} value={metricValue(tab, item)} />
+          </Box>
+          <Box sx={{ gridArea: { md: "fail" }, px: { md: 1.25 } }}>
+            <MetricCell label="Fail rate" value={formatPercent(item.fail_rate)} />
+          </Box>
+          <Box sx={{ gridArea: { md: "classification" }, px: { md: 1.25 } }}>
+            <ClassificationSignal classification={item.classification} />
+          </Box>
+        </Box>
+
+        <ButtonBase
+          type="button"
+          aria-controls={detailsId}
+          aria-expanded={expanded}
+          aria-label={`${expanded ? "Hide" : "Show"} details for ${item.test_name}`}
+          onClick={() => setExpanded((value) => !value)}
+          sx={{
+            gridArea: "details",
+            minWidth: { xs: 44, md: 92 },
+            minHeight: 44,
+            justifyContent: "center",
+            gap: 0.25,
+            px: 0.75,
+            color: "text.secondary",
+            fontSize: "13px",
+            fontWeight: 650,
+            "&:hover": { bgcolor: "surface.containerHighest", color: "text.primary" },
+            "&.Mui-focusVisible": {
+              outline: "2px solid",
+              outlineColor: "primary.main",
+              outlineOffset: -2,
+            },
+          }}
+        >
+          <Box component="span" sx={{ display: { xs: "none", md: "inline" } }}>
+            Details
+          </Box>
+          <ChevronRight
+            sx={{
+              fontSize: 18,
+              transform: expanded ? "rotate(90deg)" : "rotate(0deg)",
+              transition: (theme) =>
+                theme.transitions.create("transform", {
+                  duration: theme.transitions.duration.shortest,
+                }),
+              "@media (prefers-reduced-motion: reduce)": { transition: "none" },
+            }}
+          />
+        </ButtonBase>
+      </Box>
 
       <Collapse in={expanded} timeout="auto">
         <Box
@@ -273,34 +321,32 @@ function TestRow({ item, tab }: { item: TestFlakiness; tab: TestTab }) {
           role="region"
           aria-label={`Details for ${item.test_name}`}
           sx={{
-            borderTop: "1px solid",
-            borderColor: "divider",
-            px: 2,
-            py: 2,
+            borderTopWidth: "1px",
+            borderTopStyle: "solid",
+            borderTopColor: "var(--mui-palette-divider)",
+            px: { xs: 1.5, sm: 2 },
+            py: 1.5,
           }}
         >
-          <Stack spacing={2}>
+          <Stack spacing={2} sx={{ maxWidth: "74ch" }}>
             {lastFailureMessage && (
               <Box>
-                <Typography
-                  variant="label"
-                  color="text.secondary"
-                  sx={{ display: "block", mb: 0.75 }}
-                >
-                  Last Error
+                <Typography component="h3" color="text.secondary" sx={overviewTypography.subsectionHeading}>
+                  Last error
                 </Typography>
                 <Box
                   component="pre"
                   sx={{
-                    bgcolor: (theme) => soft(theme, "error", 0.05),
-                    borderRadius: "8px",
-                    color: "error.main",
-                    fontFamily: "monospace",
-                    fontSize: "0.75rem",
-                    lineHeight: 1.6,
-                    m: 0,
-                    overflowX: "auto",
+                    mt: 0.75,
+                    mb: 0,
                     p: 1.5,
+                    borderRadius: "4px",
+                    bgcolor: "surface.containerHigh",
+                    color: "error.main",
+                    fontFamily: overviewTypography.data.fontFamily,
+                    fontSize: "13px",
+                    lineHeight: "20px",
+                    overflowX: "auto",
                     whiteSpace: "pre-wrap",
                   }}
                 >
@@ -311,166 +357,230 @@ function TestRow({ item, tab }: { item: TestFlakiness; tab: TestTab }) {
 
             {item.error_patterns && item.error_patterns.length > 0 && (
               <Box>
-                <Typography
-                  variant="label"
-                  color="text.secondary"
-                  sx={{ display: "block", mb: 1 }}
-                >
-                  Error Patterns
+                <Typography component="h3" color="text.secondary" sx={overviewTypography.subsectionHeading}>
+                  Error patterns
                 </Typography>
-                <Stack spacing={1}>
-                  {item.error_patterns.map((pat, i) => (
+                <Box sx={{ mt: 0.75 }}>
+                  {item.error_patterns.map((pattern, index) => (
                     <Box
-                      key={`${pat.error_hash}-${i}`}
+                      key={`${pattern.error_hash}-${index}`}
                       sx={{
-                        alignItems: "flex-start",
-                        display: "flex",
+                        display: "grid",
+                        gridTemplateColumns: "56px minmax(0, 1fr)",
                         gap: 1.5,
-                        minWidth: 0,
+                        py: 0.75,
+                        borderTopWidth: index === 0 ? 0 : "1px",
+                        borderTopStyle: "solid",
+                        borderTopColor: "var(--mui-palette-divider)",
                       }}
                     >
-                      <Chip
-                        size="small"
-                        label={`${pat.count}×`}
-                        sx={{
-                          bgcolor: (theme) => soft(theme, "error", 0.18),
-                          color: "error.main",
-                          flexShrink: 0,
-                          fontSize: "0.75rem",
-                          fontWeight: 600,
-                          height: 22,
-                        }}
-                      />
-                      <Box sx={{ flex: 1, minWidth: 0 }}>
-                        <Typography
-                          variant="caption"
-                          color="text.secondary"
-                          title={pat.normalized_message}
-                          noWrap
-                          sx={{ display: "block" }}
-                        >
-                          {pat.normalized_message}
+                      <Typography color="error.main" sx={{ ...overviewTypography.data, fontWeight: 700 }}>
+                        {pattern.count}×
+                      </Typography>
+                      <Box sx={{ minWidth: 0 }}>
+                        <Typography sx={{ fontSize: "14px", lineHeight: "20px" }}>
+                          {pattern.normalized_message}
                         </Typography>
-                        <Typography
-                          variant="caption"
-                          color="text.secondary"
-                          title={pat.example_message}
-                          noWrap
-                          sx={{ display: "block", opacity: 0.65 }}
-                        >
-                          e.g. {pat.example_message}
+                        <Typography color="text.secondary" sx={overviewTypography.description}>
+                          Example: {pattern.example_message}
                         </Typography>
                       </Box>
                     </Box>
                   ))}
-                </Stack>
+                </Box>
               </Box>
             )}
           </Stack>
         </Box>
       </Collapse>
-    </Panel>
+    </Box>
   );
 }
 
-function buildSeverityColor(severity?: string): "error" | "warning" | "info" | "default" {
+function buildSeverityColor(
+  severity?: string,
+): "error.main" | "warning.main" | "info.main" | "text.secondary" {
   switch (severity?.toLowerCase()) {
     case "critical":
     case "high":
-      return "error";
+      return "error.main";
     case "medium":
-      return "warning";
+      return "warning.main";
     case "low":
-      return "info";
+      return "info.main";
     default:
-      return "default";
+      return "text.secondary";
   }
+}
+
+function BuildSignal({ label, color }: { label: string; color: string }) {
+  return (
+    <Box
+      sx={{
+        minHeight: 36,
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 0.75,
+        color,
+        fontSize: "13px",
+        fontWeight: 700,
+      }}
+    >
+      <Box component="span" sx={{ width: 7, height: 7, borderRadius: "2px", bgcolor: "currentColor" }} />
+      {label}
+    </Box>
+  );
 }
 
 function BuildFailureRow({ item }: { item: BuildFailureSummary }) {
   const manifest = useManifest();
   const filePrefix = manifest.short_name_prefix ?? "";
+  const summaryId = useId();
   const severity = item.severity || (item.is_transient ? "Transient" : "Unavailable");
   const summary = item.summary || "No accepted build analysis is available for this run.";
+  const jobTitle = shortJobName(item.job_name, filePrefix);
+  const stateColor = item.analysis_state === "succeeded" ? "error.main" : "warning.main";
 
   return (
-    <Panel
+    <Box
       component="article"
       sx={{
-        borderRadius: "12px",
-        overflow: "hidden",
-        position: "relative",
-        "&::before": {
-          content: '""',
-          position: "absolute",
-          insetBlock: 0,
-          insetInlineStart: 0,
-          width: 3,
-          bgcolor: (theme) => soft(theme, item.analysis_state === "succeeded" ? "error" : "warning", 0.9),
-        },
+        bgcolor: "surface.container",
+        borderTopWidth: "1px",
+        borderTopStyle: "solid",
+        borderTopColor: "var(--mui-palette-divider)",
+        boxShadow: `inset 3px 0 0 var(--mui-palette-${
+          item.analysis_state === "succeeded" ? "error-main" : "warning-main"
+        })`,
       }}
     >
-      <Stack spacing={1.25} sx={{ px: { xs: 1.5, sm: 2 }, py: 1.5 }}>
-        <Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ alignItems: { sm: "center" }, minWidth: 0 }}>
-          <Box sx={{ flex: 1, minWidth: 0 }}>
-            <Link
-              component={RouterLink}
-              to={item.job_detail_url}
-              underline="none"
-              sx={{ color: "text.primary", display: "block", fontSize: "0.875rem", fontWeight: 700 }}
-            >
-              {shortJobName(item.job_name, filePrefix)}
-            </Link>
-            <Typography variant="caption" color="text.secondary">
-              Build {item.build_id}{item.started_at ? ` · ${timeAgo(item.started_at)}` : ""}
+      <Box
+        sx={{
+          display: "grid",
+          gridTemplateColumns: {
+            xs: "minmax(0, 1fr)",
+            md: "minmax(0, 1fr) 120px 120px 190px",
+          },
+          alignItems: "center",
+          minWidth: 0,
+        }}
+      >
+        <Link
+          component={RouterLink}
+          to={item.job_detail_url}
+          underline="none"
+          aria-label={`Open details for ${item.job_name} build ${item.build_id}`}
+          aria-describedby={summaryId}
+          sx={{
+            minWidth: 0,
+            px: 1.5,
+            py: 1.25,
+            color: "text.primary",
+            "&:hover": { bgcolor: "surface.containerHighest", textDecoration: "none" },
+            "&:focus-visible": {
+              outline: "2px solid",
+              outlineColor: "primary.main",
+              outlineOffset: -2,
+            },
+          }}
+        >
+          <Typography sx={{ fontSize: "14px", lineHeight: "20px", fontWeight: 680 }}>
+            {jobTitle}
+          </Typography>
+          <Typography color="text.secondary" sx={{ mt: 0.25, ...overviewTypography.data, fontSize: "13px" }}>
+            Build {item.build_id}{item.started_at ? ` · ${timeAgo(item.started_at)}` : ""}
+          </Typography>
+          <Typography id={summaryId} color="text.secondary" sx={{ mt: 0.75, fontSize: "13.5px", lineHeight: "20px" }}>
+            {summary}
+          </Typography>
+        </Link>
+
+        <Box sx={{ px: { xs: 1.5, md: 1.25 } }}>
+          <BuildSignal label={item.result || "Failed"} color={stateColor} />
+        </Box>
+        <Box sx={{ px: { xs: 1.5, md: 1.25 } }}>
+          <BuildSignal label={severity} color={buildSeverityColor(item.severity)} />
+        </Box>
+        <Box
+          sx={{
+            minHeight: 44,
+            display: "flex",
+            alignItems: "center",
+            gap: 1.5,
+            flexWrap: "wrap",
+            px: 1.5,
+            py: { xs: 0.5, md: 0 },
+          }}
+        >
+          {item.provenance === "cache" && (
+            <Typography color="text.secondary" sx={overviewTypography.description}>
+              Cached analysis
             </Typography>
-          </Box>
-          <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", flexWrap: "wrap" }}>
-            {item.result && <Chip size="small" variant="outlined" label={item.result} />}
-            <Chip size="small" color={buildSeverityColor(item.severity)} variant="outlined" label={severity} />
-            {item.provenance === "cache" && <Chip size="small" label="Cached" />}
-            {item.is_transient && severity.toLowerCase() !== "transient" && <Chip size="small" color="info" variant="outlined" label="Transient" />}
-          </Stack>
-        </Stack>
-
-        <Typography variant="body2" color="text.secondary" sx={{ overflowWrap: "anywhere" }}>
-          {summary}
-        </Typography>
-
-        <Stack direction="row" spacing={1.5} sx={{ alignItems: "center", flexWrap: "wrap" }}>
-          <Link
-            component={RouterLink}
-            to={item.job_detail_url}
-            aria-label={`Open details for ${item.job_name} build ${item.build_id}`}
-            underline="hover"
-            sx={{ fontSize: "0.8125rem", fontWeight: 600 }}
-          >
-            Open details
-          </Link>
+          )}
+          {item.is_transient && severity.toLowerCase() !== "transient" && (
+            <Typography color="info.main" sx={overviewTypography.description}>
+              Transient
+            </Typography>
+          )}
           {item.build_log_url && (
-            <Link href={item.build_log_url} target="_blank" rel="noopener noreferrer" sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, fontSize: "0.8125rem" }}>
-              Build log <OpenInNewIcon sx={{ fontSize: 15 }} />
+            <Link
+              href={item.build_log_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              sx={{ minHeight: { xs: 44, md: 36 }, display: "inline-flex", alignItems: "center", gap: 0.5, fontSize: "13px", fontWeight: 650 }}
+            >
+              Build log <OpenInNewIcon sx={{ fontSize: 14 }} />
             </Link>
           )}
-        </Stack>
-      </Stack>
-    </Panel>
+        </Box>
+      </Box>
+    </Box>
+  );
+}
+
+function TabLabel({ label, count }: { label: string; count: number }) {
+  return (
+    <Box component="span" sx={{ display: "inline-flex", alignItems: "center", gap: 0.75 }}>
+      <Box component="span">{label}</Box>
+      <Box component="span" sx={{ ...overviewTypography.data, fontSize: "13px" }}>
+        {count}
+      </Box>
+    </Box>
+  );
+}
+
+function EmptyCategory({ title }: { title: string }) {
+  return (
+    <Box
+      sx={{
+        minHeight: 180,
+        display: "grid",
+        placeItems: "center",
+        bgcolor: "surface.container",
+        borderBottomWidth: "1px",
+        borderBottomStyle: "solid",
+        borderBottomColor: "var(--mui-palette-divider)",
+        px: 2,
+        py: 4,
+        textAlign: "center",
+      }}
+    >
+      <Typography color="text.secondary" sx={overviewTypography.categoryHeading}>
+        {title}
+      </Typography>
+    </Box>
   );
 }
 
 export function FlakinessPage() {
   const { data, loading, error } = useFlakinessReport();
   const fetchStatus = useSharedFetchStatus();
-  const [activeTab, setActiveTab] = useState<Tab>("most_flaky");
+  const [activeTab, setActiveTab] = useState<FailureTab>("most_flaky");
 
-  if (loading) {
-    return <LoadingState />;
-  }
-
+  if (loading) return <LoadingState />;
   if (error) {
     return <ErrorState message={error} onRetry={() => window.location.reload()} />;
   }
-
   if (!data) return null;
 
   const testListMap: Record<TestTab, TestFlakiness[]> = {
@@ -479,132 +589,145 @@ export function FlakinessPage() {
     recently_broken: data.recently_broken,
   };
   const buildFailures = data.build_failures ?? [];
-  const tabCounts: Record<Tab, number> = {
+  const tabCounts: Record<FailureTab, number> = {
     most_flaky: data.most_flaky.length,
     persistent: data.persistent_failures.length,
     recently_broken: data.recently_broken.length,
     build_failures: buildFailures.length,
   };
+  const activeDefinition = tabs.find((tab) => tab.value === activeTab) ?? tabs[0];
   const testItems = activeTab === "build_failures" ? [] : testListMap[activeTab];
-  const activeDescription = tabs.find((t) => t.value === activeTab)?.tooltip;
+  const activeCount = tabCounts[activeTab];
   const refreshStatus = fetchStatus?.state === "active" ? fetchStatus.status : undefined;
-  const refreshPresentation = fetchStatus?.state === "active" ? fetchStatusPresentation(fetchStatus) : null;
+  const refreshPresentation = fetchStatus?.state === "active"
+    ? fetchStatusPresentation(fetchStatus)
+    : null;
 
   return (
-    <Stack spacing={4}>
-      <Stack spacing={1.25}>
-        <Typography variant="h4" component="h1">
+    <Stack spacing={{ xs: 2.5, sm: 3.5 }}>
+      <Box>
+        <Typography
+          component="h1"
+          sx={{
+            ...overviewTypography.pageHeadline,
+            fontSize: { xs: "26px", sm: "30px" },
+            lineHeight: { xs: "33px", sm: "38px" },
+            fontWeight: 720,
+          }}
+        >
           Failure Analysis
         </Typography>
         <Stack
           direction={{ xs: "column", sm: "row" }}
-          spacing={{ xs: 1.25, sm: 2.5 }}
-          sx={{ alignItems: { xs: "flex-start", sm: "stretch" } }}
+          spacing={{ xs: 1, sm: 2.5 }}
+          sx={{ mt: 1, alignItems: { xs: "flex-start", sm: "stretch" } }}
         >
-          <Stack direction="row" spacing={1} sx={{ alignItems: "flex-start" }}>
+          <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1 }}>
             <Box
               aria-hidden="true"
-              sx={{
-                width: 8,
-                height: 8,
-                mt: 0.5,
-                borderRadius: "50%",
-                bgcolor: "success.main",
-                boxShadow: (theme) => `0 0 8px ${(theme.vars ?? theme).palette.success.main}`,
-                flex: "0 0 auto",
-              }}
+              sx={{ width: 8, height: 8, mt: 0.75, borderRadius: "2px", bgcolor: "success.main" }}
             />
             <Box>
-              <Typography variant="data" sx={{ display: "block", color: "text.primary", fontSize: "0.75rem" }}>
+              <Typography sx={{ ...overviewTypography.data, color: "text.primary" }}>
                 Published results
               </Typography>
-              <Typography variant="caption" color="text.secondary">
+              <Typography color="text.secondary" sx={overviewTypography.description}>
                 Updated {timeAgo(data.generated_at)}
               </Typography>
             </Box>
-          </Stack>
+          </Box>
 
           {refreshStatus && (
-            <Stack
-              direction="row"
-              spacing={1}
+            <Box
               sx={{
+                display: "flex",
                 alignItems: "flex-start",
-                borderLeft: { xs: 0, sm: "1px solid" },
-                borderColor: { sm: "divider" },
+                gap: 1,
                 pl: { xs: 0, sm: 2.5 },
+                borderInlineStartWidth: { xs: 0, sm: "1px" },
+                borderInlineStartStyle: "solid",
+                borderInlineStartColor: "var(--mui-palette-divider)",
               }}
             >
               <Box aria-hidden="true" sx={{ color: "info.main", display: "flex", mt: 0.25 }}>
                 <FetchActivityIcon size={16} />
               </Box>
               <Box>
-                <Typography variant="data" sx={{ display: "block", color: "info.main", fontSize: "0.75rem" }}>
+                <Typography sx={{ ...overviewTypography.data, color: "info.main" }}>
                   {refreshPresentation?.title ?? "Refresh in progress"}
                 </Typography>
-                <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+                <Typography color="text.secondary" sx={overviewTypography.description}>
                   {refreshPresentation?.detail ?? "Preparing the next published snapshot"}
                 </Typography>
-                <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+                <Typography color="text.secondary" sx={overviewTypography.description}>
                   {activeTab === "build_failures"
                     ? "Showing the last published build failures. A new snapshot is currently being prepared."
                     : "Published results remain available until the refresh completes."}
                 </Typography>
               </Box>
-            </Stack>
+            </Box>
           )}
         </Stack>
-      </Stack>
+      </Box>
 
-      <Stack spacing={1.5}>
+      <Box>
         <Tabs
           value={activeTab}
-          onChange={(_, value: Tab) => setActiveTab(value)}
+          onChange={(_, value: FailureTab) => setActiveTab(value)}
           variant="scrollable"
           scrollButtons="auto"
           aria-label="Failure analysis categories"
           sx={{
-            minHeight: 34,
-            "& .MuiTabs-flexContainer": { gap: 0.5 },
+            minHeight: 44,
+            bgcolor: "surface.container",
+            borderBlockWidth: "1px",
+            borderBlockStyle: "solid",
+            borderBlockColor: "var(--mui-palette-divider)",
+            "& .MuiTabs-flexContainer": { gap: 0 },
             "& .MuiTabs-indicator": { display: "none" },
             "& .MuiTab-root": {
-              bgcolor: (theme) => (theme.vars ?? theme).palette.surface.container,
-              borderRadius: 999,
-              color: "text.secondary",
-              fontSize: "0.75rem",
-              fontWeight: 600,
-              minHeight: 34,
+              minHeight: 44,
               minWidth: 0,
               px: 1.5,
-              py: 0.5,
+              py: 0.75,
+              borderInlineEndWidth: "1px",
+              borderInlineEndStyle: "solid",
+              borderInlineEndColor: "var(--mui-palette-divider)",
+              borderRadius: 0,
+              color: "text.secondary",
+              fontSize: "13px",
+              fontWeight: 700,
               textTransform: "none",
-              transition: "background-color 150ms ease, color 150ms ease",
-              "&:hover": {
-                bgcolor: (theme) => (theme.vars ?? theme).palette.surface.containerHigh,
-              },
+              "&:hover": { bgcolor: "surface.containerHigh", color: "text.primary" },
               "&.Mui-selected": {
-                bgcolor: "primary.main",
-                color: "primary.contrastText",
+                bgcolor: "action.selected",
+                color: "text.primary",
+                boxShadow: "inset 0 -3px 0 var(--mui-palette-primary-main)",
+              },
+              "&.Mui-focusVisible": {
+                outline: "2px solid",
+                outlineColor: "primary.main",
+                outlineOffset: -2,
               },
             },
           }}
         >
-          {tabs.map((t) => (
+          {tabs.map((tab) => (
             <Tab
-              key={t.value}
-              value={t.value}
-              aria-describedby={`failure-analysis-${t.value}-description`}
-              label={`${t.label} ${tabCounts[t.value]}`}
-              title={t.tooltip}
+              key={tab.value}
+              value={tab.value}
+              aria-describedby={`failure-analysis-${tab.value}-description`}
+              label={<TabLabel label={tab.label} count={tabCounts[tab.value]} />}
+              title={tab.tooltip}
             />
           ))}
         </Tabs>
 
-        {tabs.map((t) => (
+        {tabs.map((tab) => (
           <Box
             component="span"
-            id={`failure-analysis-${t.value}-description`}
-            key={`${t.value}-description`}
+            id={`failure-analysis-${tab.value}-description`}
+            key={`${tab.value}-description`}
             sx={{
               border: 0,
               clip: "rect(0 0 0 0)",
@@ -617,49 +740,51 @@ export function FlakinessPage() {
               width: "1px",
             }}
           >
-            {t.tooltip}
+            {tab.tooltip}
           </Box>
         ))}
+      </Box>
 
-        <Typography variant="body2" color="text.secondary">
-          {activeDescription}
+      <Box component="section" sx={{ minWidth: 0 }}>
+        <DetailSectionBand
+          title={activeDefinition.label}
+          metadata={`${activeCount} ${activeCount === 1 ? "item" : "items"}`}
+        />
+        <Typography
+          color="text.secondary"
+          sx={{
+            px: 1.5,
+            py: 1.25,
+            bgcolor: "surface.container",
+            borderBottomWidth: "1px",
+            borderBottomStyle: "solid",
+            borderBottomColor: "var(--mui-palette-divider)",
+            ...overviewTypography.secondaryBody,
+          }}
+        >
+          {activeDefinition.tooltip}
         </Typography>
-      </Stack>
 
-      {activeTab === "build_failures" ? (
-        buildFailures.length === 0 ? (
-          <Panel sx={{ borderRadius: "12px", px: 2, py: 8, textAlign: "center" }}>
-            <Typography variant="h6" color="text.secondary">No build failures in this snapshot</Typography>
-          </Panel>
+        {activeTab === "build_failures" ? (
+          buildFailures.length === 0 ? (
+            <EmptyCategory title="No build failures in this snapshot" />
+          ) : (
+            <Box>
+              {buildFailures.map((item) => (
+                <BuildFailureRow key={`${item.job_id}/${item.build_id}`} item={item} />
+              ))}
+            </Box>
+          )
+        ) : testItems.length === 0 ? (
+          <EmptyCategory title="No tests match this category" />
         ) : (
-          <Stack spacing={1.5}>
-            {buildFailures.map((item) => <BuildFailureRow key={`${item.job_id}/${item.build_id}`} item={item} />)}
-          </Stack>
-        )
-      ) : testItems.length === 0 ? (
-        <Panel sx={{ borderRadius: "12px", px: 2, py: 8, textAlign: "center" }}>
-          <Stack
-            direction="row"
-            spacing={1}
-            sx={{ alignItems: "center", justifyContent: "center", color: "text.secondary" }}
-          >
-            <Typography variant="h6" color="inherit">
-              No tests match this category
-            </Typography>
-            <SentimentSatisfiedAltIcon fontSize="small" />
-          </Stack>
-        </Panel>
-      ) : (
-        <Stack spacing={1.5}>
-          {testItems.map((item) => (
-            <TestRow
-              key={`${item.job_id}/${item.test_name}`}
-              item={item}
-              tab={activeTab}
-            />
-          ))}
-        </Stack>
-      )}
+          <Box>
+            {testItems.map((item) => (
+              <TestRow key={`${item.job_id}/${item.test_name}`} item={item} tab={activeTab} />
+            ))}
+          </Box>
+        )}
+      </Box>
     </Stack>
   );
 }
