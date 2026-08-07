@@ -404,6 +404,7 @@ func (s *Service) NeedsAnalysis(ctx context.Context, httpClient *http.Client, ru
 	if tc == nil || tc.AISummary == nil || tc.AIAnalysis == nil {
 		return true
 	}
+	consecutiveFailures = max(1, consecutiveFailures)
 	basePrompt := s.baseFailurePrompt(ctx, httpClient, run, tc, consecutiveFailures)
 	return s.shouldReanalyzeWithPromptHash(tc, s.analysisPromptHash(tc, basePrompt))
 }
@@ -413,6 +414,7 @@ func (s *Service) FailureCachePolicy(ctx context.Context, httpClient *http.Clien
 	if s == nil {
 		return AgenticCachePolicy{}
 	}
+	consecutiveFailures = max(1, consecutiveFailures)
 	basePrompt := s.baseFailurePrompt(ctx, httpClient, run, tc, consecutiveFailures)
 	return s.agenticCachePolicyFor(tc, s.analysisPromptHash(tc, basePrompt), consecutiveFailures)
 }
