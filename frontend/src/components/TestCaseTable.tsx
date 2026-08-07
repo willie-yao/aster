@@ -58,6 +58,44 @@ function testStatusPresentation(status: TestCase["status"]) {
 const setupPatterns = /synchronizedbeforesuite|synchronizedaftersuite|beforesuite|aftersuite/i;
 
 
+export function EvidenceSourceLink({
+  href,
+  label,
+  text,
+}: {
+  href: string;
+  label: string;
+  text: string;
+}) {
+  return (
+    <Link
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label={label}
+      sx={{
+        minHeight: 44,
+        display: "inline-flex",
+        alignItems: "center",
+        px: 0.5,
+        borderRadius: "4px",
+        fontFamily: overviewTypography.data.fontFamily,
+        fontSize: "13px",
+        lineHeight: "20px",
+        color: "primary.main",
+        overflowWrap: "anywhere",
+        "&:focus-visible": {
+          outline: "2px solid",
+          outlineColor: "primary.main",
+          outlineOffset: 2,
+        },
+      }}
+    >
+      {text}
+    </Link>
+  );
+}
+
 const externalLinkSx = {
   display: "inline-flex",
   alignItems: "center",
@@ -471,16 +509,11 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                       <Box sx={{ display: "flex", alignItems: "center", gap: 1, fontSize: "0.75rem" }}>
                         <Place sx={{ fontSize: 16, color: "text.secondary" }} />
                         {tc.failure_location_url ? (
-                          <Link
+                          <EvidenceSourceLink
                             href={tc.failure_location_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={(e) => e.stopPropagation()}
-                            aria-label={`View source for ${displayName} on GitHub`}
-                            sx={{ fontFamily: "monospace", color: "primary.main" }}
-                          >
-                            {tc.failure_location}
-                          </Link>
+                            label={`View source for ${displayName} on GitHub`}
+                            text={tc.failure_location}
+                          />
                         ) : (
                           <Typography variant="caption" sx={{ fontFamily: "monospace", color: "text.secondary" }}>
                             {tc.failure_location}
