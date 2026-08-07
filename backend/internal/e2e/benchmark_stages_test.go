@@ -811,9 +811,11 @@ func TestBenchmarkCausalSignalsRejectNegatedFacts(t *testing.T) {
 		{name: "rejected request negated", groupID: "podgroup-api-response", text: "The v1beta1 PodGroup API was not unavailable and did not return 404; the image pull failure caused the timeout."},
 		{name: "rejected request incidental contrast", groupID: "podgroup-api-response", text: "The v1beta1 PodGroup API returned 404, but that mismatch was incidental and did not cause the timeout."},
 		{name: "rejected request unrelated sentence", groupID: "podgroup-api-response", text: "The v1beta1 PodGroup API returned 404. That mismatch was unrelated; the image pull failure caused the timeout."},
+		{name: "rejected request causal with unrelated noise", groupID: "podgroup-api-response", text: "The scheduler v1beta1 PodGroup request returned 404, which prevented handler synchronization and caused the timeout. The later image-pull warning was unrelated.", want: true},
 		{name: "scheduler sync causal", groupID: "scheduler-handler-readiness", text: "Scheduler handlers never synchronized, which kept the Trainer pod unscheduled.", want: true},
 		{name: "scheduler sync noncausal", groupID: "scheduler-handler-readiness", text: "Scheduler handler synchronization completed successfully and was not causal; the image pull failure caused the timeout."},
 		{name: "scheduler sync incidental contrast", groupID: "scheduler-handler-readiness", text: "Scheduler handlers never synchronized, but that condition was not causal; the image pull failure caused the timeout."},
+		{name: "scheduler sync causal with unrelated noise", groupID: "scheduler-handler-readiness", text: "Scheduler handlers never synchronized, which kept the Trainer pod unscheduled and caused the timeout. The later image-pull warning was unrelated.", want: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := benchmarkCausalSignalMatches(groups[tc.groupID].causalSignals, tc.text); got != tc.want {
@@ -829,6 +831,13 @@ func TestBenchmarkCausalSignalsRejectNegatedFacts(t *testing.T) {
 	revisions := benchmarkEvidenceRevisions(kueue.evidenceGroups, observations, 1)
 	if len(revisions) != 1 || !slices.Contains(revisions[0].Dropped, "podgroup-api-response") {
 		t.Fatalf("negated revision did not drop causal fact: %+v", revisions)
+	}
+	retained := benchmarkEvidenceRevisions(kueue.evidenceGroups, []benchmarkDraftObservation{
+		{DraftObservation: ai.DraftObservation{Attempt: 1, Phase: "initial", RootCause: "The scheduler's v1beta1 PodGroup request returned 404, which prevented startup."}},
+		{DraftObservation: ai.DraftObservation{Attempt: 2, Phase: "semantic_retry", RootCause: "The scheduler v1beta1 PodGroup request returned 404, which prevented handler synchronization and caused the timeout. The later image-pull warning was unrelated."}},
+	}, 2)
+	if len(retained) != 1 || !slices.Contains(retained[0].Retained, "podgroup-api-response") || slices.Contains(retained[0].Dropped, "podgroup-api-response") {
+		t.Fatalf("unrelated noise dropped a causal fact: %+v", retained)
 	}
 }
 
