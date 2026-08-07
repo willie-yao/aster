@@ -673,6 +673,22 @@ func TestSupportedFactReplacementRequiresFactSpecificNewEvidence(t *testing.T) {
 	if len(splitFacts) != 1 || splitFacts[0].acquisitionRevision != 4 {
 		t.Fatalf("split-line fact acquisition = %+v", splitFacts)
 	}
+	conflictingEvidence := map[string]*analysisChatEvidence{
+		"build.log": {Lines: map[int]string{
+			10: "ImagePull operation for worker-1 started",
+			11: "Widget request returned 404 NotFound",
+		}},
+	}
+	conflicting := analysisResponse{
+		RootCause: "ImagePull operation for worker-1 returned 404 NotFound and blocked startup.",
+		EvidenceCitations: []models.EvidenceCitation{{
+			Path: "build.log", LineStart: 10, LineEnd: 11, Quote: "ImagePull operation for worker-1 started Widget request returned 404 NotFound",
+		}},
+	}
+	conflictingFacts := supportedCausalFacts(conflicting, conflictingEvidence, map[string]map[int]int{"build.log": {10: 1, 11: 2}})
+	if len(conflictingFacts) != 1 || conflictingFacts[0].acquisitionRevision != 0 {
+		t.Fatalf("conflicting resource lent fact acquisition: %+v", conflictingFacts)
+	}
 }
 
 func TestSupportedFactAcquisitionUsesNormalizedMixedCasePath(t *testing.T) {
@@ -778,5 +794,25 @@ func TestRecordAnalysisEvidenceRevisionsTracksChangedLines(t *testing.T) {
 	state.recordAnalysisEvidenceRevisions("Build.LOG", map[int]string{1: "existing"})
 	if state.analysisEvidenceRevision["build.log"][1] != 2 || state.analysisEvidenceRevision["Build.LOG"][2] != 4 || state.analysisEvidenceRevision["Build.LOG"][1] != 0 {
 		t.Fatalf("evidence revisions = %+v", state.analysisEvidenceRevision)
+	}
+}
+
+func TestFactAcquisitionTreatsNotFoundAsFailure(t *testing.T) {
+	evidence := map[string]*analysisChatEvidence{
+		"build.log": {Lines: map[int]string{1: "Widget v1 request returned 404 not found"}},
+	}
+	parsed := analysisResponse{
+		RootCause:         "The Widget v1 request returned 404 not found and blocked startup.",
+		EvidenceCitations: []models.EvidenceCitation{{Path: "build.log", LineStart: 1, LineEnd: 1, Quote: "Widget v1 request returned 404 not found"}},
+	}
+	facts := supportedCausalFacts(parsed, evidence, map[string]map[int]int{"build.log": {1: 9}})
+	if len(facts) != 1 || facts[0].acquisitionRevision != 9 {
+		t.Fatalf("not-found fact acquisition = %+v", facts)
+	}
+	if semanticAffirmativeSuccess(evidence["build.log"].Lines[1]) {
+		t.Fatal("not-found failure was classified as success")
+	}
+	if !semanticAffirmativeSuccess("Widget v1 recovered from 404 NotFound and is now healthy") {
+		t.Fatal("recovery line was not classified as affirmative success")
 	}
 }

@@ -413,14 +413,16 @@ type semanticLineCandidate struct {
 }
 
 var (
-	semanticSuccessRE        = regexp.MustCompile(`(?i)\b(success|succeeded|successful|ready|completed|created|connected|healthy|available|found|passed|registered|running|reconciled|recovered|recovery|synced|synchronized)\b`)
-	semanticTimestampRE      = regexp.MustCompile(`\b(?:\d{4}-\d{2}-\d{2}[T ][0-2]\d:[0-5]\d:[0-5]\d(?:\.\d+)?Z?|[0-2]\d:[0-5]\d:[0-5](?:\.\d+)?)\b`)
-	semanticTokenRE          = regexp.MustCompile(`[A-Za-z][A-Za-z0-9]*(?:[._/:~-][A-Za-z0-9]+)*|[1-5][0-9]{2}`)
-	semanticWordRE           = regexp.MustCompile(`[a-z0-9]+`)
-	semanticStatusCodeRE     = regexp.MustCompile(`^[45][0-9]{2}$`)
-	semanticAPIVersionRE     = regexp.MustCompile(`^v[0-9]+(?:(?:alpha|beta)[0-9]+)?$`)
-	semanticSentenceRE       = regexp.MustCompile(`[.!?;\n]+`)
-	semanticCausalNegationRE = regexp.MustCompile(`(?i)\b(?:not|never|unrelated|incidental|noncausal|non-causal)\b.{0,80}\b(?:cause|causal|trigger|responsible|prevent|block|lead)\b|\b(?:did not|does not|was not|were not)\b.{0,80}\b(?:cause|trigger|prevent|block|lead)\b`)
+	semanticSuccessRE         = regexp.MustCompile(`(?i)\b(success|succeeded|successful|ready|completed|created|connected|healthy|available|found|passed|registered|running|reconciled|recovered|recovery|synced|synchronized)\b`)
+	semanticRecoveryRE        = regexp.MustCompile(`(?i)\b(recovered|recovery|succeeded|successful|healthy|reconciled)\b|\b(?:now|later|eventually|subsequently)\b.{0,40}\b(?:ready|available|completed|connected|running|synced|synchronized)\b`)
+	semanticNegativeSuccessRE = regexp.MustCompile(`(?i)\b(?:not|never)\s+(?:found|ready|available|completed|connected|running|synced|synchronized)\b|\b(?:failed|unable)\b.{0,40}\b(?:become\s+)?(?:ready|available|complete|connect|run|sync|synchronize|reconcile)\b`)
+	semanticTimestampRE       = regexp.MustCompile(`\b(?:\d{4}-\d{2}-\d{2}[T ][0-2]\d:[0-5]\d:[0-5]\d(?:\.\d+)?Z?|[0-2]\d:[0-5]\d:[0-5](?:\.\d+)?)\b`)
+	semanticTokenRE           = regexp.MustCompile(`[A-Za-z][A-Za-z0-9]*(?:[._/:~-][A-Za-z0-9]+)*|[1-5][0-9]{2}`)
+	semanticWordRE            = regexp.MustCompile(`[a-z0-9]+`)
+	semanticStatusCodeRE      = regexp.MustCompile(`^[45][0-9]{2}$`)
+	semanticAPIVersionRE      = regexp.MustCompile(`^v[0-9]+(?:(?:alpha|beta)[0-9]+)?$`)
+	semanticSentenceRE        = regexp.MustCompile(`[.!?;\n]+`)
+	semanticCausalNegationRE  = regexp.MustCompile(`(?i)\b(?:not|never|unrelated|incidental|noncausal|non-causal)\b.{0,80}\b(?:cause|causal|trigger|responsible|prevent|block|lead)\b|\b(?:did not|does not|was not|were not)\b.{0,80}\b(?:cause|trigger|prevent|block|lead)\b`)
 )
 
 var semanticStatusWords = map[string]int{
@@ -447,7 +449,9 @@ var semanticGenericTokens = map[string]bool{
 
 var semanticWeakIdentityTokens = map[string]bool{
 	"cluster": true, "component": true, "controller": true, "machine": true,
-	"node": true, "operation": true, "pod": true, "request": true,
+	"code": true, "encountered": true, "message": true, "node": true, "observed": true,
+	"operation": true, "pod": true, "received": true, "reported": true, "request": true,
+	"returned": true, "status": true,
 	"resource": true, "service": true, "volume": true, "worker": true,
 }
 
@@ -540,7 +544,7 @@ func semanticLaterSuccessEvidence(evidence map[string]*analysisChatEvidence, err
 	all := semanticEvidenceLines(evidence)
 	byPath := map[string][]semanticLineCandidate{}
 	for _, candidate := range all {
-		if semanticSuccessRE.MatchString(candidate.line.Text) {
+		if semanticAffirmativeSuccess(candidate.line.Text) {
 			candidate.score = semanticSpecificityScore(candidate.tokens)
 			byPath[candidate.line.Path] = append(byPath[candidate.line.Path], candidate)
 		}
@@ -567,6 +571,16 @@ func semanticLaterSuccessEvidence(evidence map[string]*analysisChatEvidence, err
 		}
 	}
 	return out
+}
+
+func semanticAffirmativeSuccess(text string) bool {
+	if semanticRecoveryRE.MatchString(text) {
+		return true
+	}
+	if semanticNegativeSuccessRE.MatchString(text) || semanticFactHasSpecificStatus(semanticStatusAnchors(text)) {
+		return false
+	}
+	return semanticSuccessRE.MatchString(text)
 }
 
 func semanticStrongIdentityOverlap(left, right map[string]int) bool {
@@ -773,10 +787,14 @@ func semanticCitationFactAcquisitionRevision(citation models.EvidenceCitation, e
 		if !ok {
 			continue
 		}
-		if semanticSuccessRE.MatchString(text) {
+		if semanticAffirmativeSuccess(text) {
 			continue
 		}
-		lineIdentity := semanticTokenIntersection(identity, semanticSpecificTokens(text))
+		allLineIdentity := semanticSpecificTokens(text)
+		if semanticLineHasConflictingIdentity(allLineIdentity, identity) {
+			continue
+		}
+		lineIdentity := semanticTokenIntersection(identity, allLineIdentity)
 		lineStatuses := semanticTokenIntersection(statuses, semanticStatusAnchors(text))
 		if len(lineIdentity) == 0 && len(lineStatuses) == 0 {
 			continue
@@ -805,6 +823,18 @@ func semanticCitationFactAcquisitionRevision(citation models.EvidenceCitation, e
 		}
 	}
 	return 0
+}
+
+func semanticLineHasConflictingIdentity(lineIdentity, targetIdentity map[string]int) bool {
+	for token, weight := range lineIdentity {
+		if targetIdentity[token] > 0 || semanticWeakIdentityTokens[token] || semanticAPIVersionRE.MatchString(token) {
+			continue
+		}
+		if weight >= 2 || strings.ContainsAny(token, "._/:~-") || strings.IndexFunc(token, unicode.IsDigit) >= 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func semanticCitationQuoteLines(citation models.EvidenceCitation, evidence *analysisChatEvidence) map[int]bool {
