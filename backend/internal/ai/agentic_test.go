@@ -2135,7 +2135,7 @@ func TestAgentic_HardPolicyRunsSemanticJudgeWithSoftWarnings(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 	srv.push(200, chatRespFinal(puntyFinalJSON))
-	srv.push(200, chatRespFinal(`{"objections":[]}`))
+	srv.push(200, chatRespFinal(`{"findings":[]}`))
 	client := newAgenticTestClient(t, srv.URL)
 	key := "agentic:test:hard-policy-soft-semantic"
 	_, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
@@ -4220,7 +4220,7 @@ func TestAgentic_PublishedSanitizationCanSatisfyCritiqueAndCache(t *testing.T) {
 	srv.push(200, chatRespFinal(ungrounded))
 	srv.push(200, chatRespFinal(ungrounded))
 	srv.push(200, chatRespFinal(ungrounded))
-	srv.push(200, chatRespFinal(`{"objections":[]}`))
+	srv.push(200, chatRespFinal(`{"findings":[]}`))
 
 	client := newAgenticTestClient(t, srv.URL)
 	opts := AgenticOptions{

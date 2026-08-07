@@ -404,7 +404,7 @@ func TestAgentAnalysisShadowReportRejectsEvidenceTelemetryViolations(t *testing.
 		mutate func(map[string]any)
 		want   string
 	}{
-		{name: "telemetry version", mutate: func(record map[string]any) { record["evidence_telemetry_version"] = 2 }, want: "in-process evidence_telemetry_version must be 1"},
+		{name: "telemetry version", mutate: func(record map[string]any) { record["evidence_telemetry_version"] = 1 }, want: "in-process evidence_telemetry_version must be 2"},
 		{name: "trial status", mutate: func(record map[string]any) { record["trial_status"] = "unknown" }, want: "in-process trial_status is invalid"},
 		{name: "missing stages", mutate: func(record map[string]any) { record["evidence_stages"] = []map[string]any{} }, want: "in-process evidence_stages must not be empty"},
 		{name: "partial stages", mutate: func(record map[string]any) {
@@ -427,6 +427,18 @@ func TestAgentAnalysisShadowReportRejectsEvidenceTelemetryViolations(t *testing.
 			record["usable"] = false
 			record["outcome"] = "grounded_policy_unavailable"
 		}, want: "in-process valid_result requires outcome=usable, usable=true, and a model request"},
+		{name: "malformed semantic outcomes", mutate: func(record map[string]any) {
+			record["semantic_judge_outcomes"] = "draft:passed"
+		}, want: "in-process field semantic_judge_outcomes must be a string list"},
+		{name: "unknown semantic finding", mutate: func(record map[string]any) {
+			record["semantic_finding_classes"] = []string{"invented"}
+		}, want: "in-process semantic_finding_classes contains an invalid value"},
+		{name: "negative supported facts", mutate: func(record map[string]any) {
+			record["supported_facts_retained"] = -1
+		}, want: "in-process field supported_facts_retained must be a non-negative integer"},
+		{name: "revision selected without outcome", mutate: func(record map[string]any) {
+			record["semantic_revision_selected"] = true
+		}, want: "in-process semantic_revision_selected does not match revision outcomes"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -470,7 +482,7 @@ func validShadowReportRecords() (map[string]any, map[string]any) {
 	inprocess["signal_hits"] = 2
 	inprocess["elapsed_ms"] = 100
 	inprocess["trace"] = map[string]any{"input_tokens": 10, "output_tokens": 5}
-	inprocess["evidence_telemetry_version"] = 1
+	inprocess["evidence_telemetry_version"] = 2
 	inprocess["trial_status"] = "valid_result"
 	inprocess["model_request_made"] = true
 	inprocess["evidence_stages"] = []map[string]any{
@@ -486,6 +498,14 @@ func validShadowReportRecords() (map[string]any, map[string]any) {
 		},
 	}
 	inprocess["evidence_revisions"] = []map[string]any{}
+	inprocess["semantic_judge_outcomes"] = []string{"draft:passed"}
+	inprocess["semantic_finding_classes"] = []string{}
+	inprocess["semantic_revision_attempted"] = false
+	inprocess["semantic_revision_selected"] = false
+	inprocess["semantic_revision_rejected"] = false
+	inprocess["supported_facts_retained"] = 0
+	inprocess["supported_facts_added"] = 0
+	inprocess["supported_facts_dropped"] = 0
 	inprocess["summary"] = "summary content"
 	inprocess["root_cause"] = "root cause content"
 

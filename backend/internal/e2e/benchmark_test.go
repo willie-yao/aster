@@ -743,10 +743,10 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 	toolUsage := successfulBenchmarkToolUsage(snapshot)
 	traceSummary := summarizeBenchmarkTrace(snapshot)
 	requestCap := deriveBenchmarkRequestCap(agentic, true)
-	t.Logf("provider request cap: configured_iterations=%d byte_floor_extensions=%d main_loop=%d forced_finalizations=%d critique_tool_turns=%d critique_finalizations=%d semantic_judges=%d semantic_finalizations=%d per_operation=%d",
+	t.Logf("provider request cap: configured_iterations=%d byte_floor_extensions=%d main_loop=%d forced_finalizations=%d critique_tool_turns=%d critique_finalizations=%d semantic_judges=%d semantic_finalizations=%d semantic_revision_reviews=%d per_operation=%d",
 		requestCap.ConfiguredIterations, requestCap.ByteFloorExtensions, requestCap.MainLoopRequests, requestCap.ForcedFinalizationRequests,
 		requestCap.CritiqueToolRequests, requestCap.CritiqueFinalizationRequests, requestCap.SemanticJudgeRequests,
-		requestCap.SemanticFinalizationRequests, requestCap.PerOperation)
+		requestCap.SemanticFinalizationRequests, requestCap.SemanticRevisionReviewRequests, requestCap.PerOperation)
 	if benchmarkPersistentCacheEnabled() {
 		if err := client.Cache().Save(); err != nil {
 			t.Fatalf("save benchmark cache: %v", err)
@@ -925,6 +925,8 @@ type benchmarkTraceSummary struct {
 	contextCompactionApplied int
 	contextOverBudget        int
 	semanticJudgeOutcome     string
+	semanticJudgeOutcomes    []string
+	semanticFindingClasses   []string
 	critiqueRetries          int
 	evidenceRetries          int
 	unparseableRetries       int
@@ -990,6 +992,9 @@ func summarizeBenchmarkTrace(snapshot ai.AnalysisTraceFile) benchmarkTraceSummar
 				}
 			case "semantic_judge":
 				summary.semanticJudgeOutcome = benchmarkSemanticJudgeOutcome(event.Outcome)
+				stage := benchmarkSemanticJudgeStage(event.Status)
+				summary.semanticJudgeOutcomes = append(summary.semanticJudgeOutcomes, stage+":"+summary.semanticJudgeOutcome)
+				summary.semanticFindingClasses = append(summary.semanticFindingClasses, event.SemanticFindings...)
 			case "critique":
 				switch event.Outcome {
 				case "retry":
@@ -1016,7 +1021,32 @@ func summarizeBenchmarkTrace(snapshot ai.AnalysisTraceFile) benchmarkTraceSummar
 			}
 		}
 	}
+	summary.semanticJudgeOutcomes = uniqueSortedStrings(summary.semanticJudgeOutcomes)
+	summary.semanticFindingClasses = uniqueSortedStrings(summary.semanticFindingClasses)
 	return summary
+}
+
+func benchmarkSemanticJudgeStage(stage string) string {
+	switch stage {
+	case "draft", "revision":
+		return stage
+	default:
+		return "unknown"
+	}
+}
+
+func uniqueSortedStrings(values []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func benchmarkFloorNudgeReason(status string) string {
@@ -1030,7 +1060,7 @@ func benchmarkFloorNudgeReason(status string) string {
 
 func benchmarkSemanticJudgeOutcome(outcome string) string {
 	switch outcome {
-	case "passed", "error", "objected", "revision_unparseable", "revision_rejected", "revision_not_selected", "revised":
+	case "passed", "error", "objected", "revision_denied", "revision_unparseable", "revision_rejected", "revision_not_selected", "revised":
 		return outcome
 	default:
 		return "unknown"
@@ -1211,8 +1241,9 @@ func TestSummarizeBenchmarkTrace(t *testing.T) {
 		{Kind: "context_compaction", Outcome: "applied"},
 		{Kind: "context_compaction", Outcome: "finalize"},
 		{Kind: "context_compaction", Outcome: "over_budget"},
-		{Kind: "semantic_judge", Outcome: "objected"},
-		{Kind: "semantic_judge", Outcome: "revised"},
+		{Kind: "semantic_judge", Status: "draft", Outcome: "objected", SemanticFindings: []string{"specific_error_ignored"}},
+		{Kind: "semantic_judge", Status: "revision", Outcome: "passed"},
+		{Kind: "semantic_judge", Status: "revision", Outcome: "revised"},
 		{Kind: "critique", Outcome: "retry"},
 		{Kind: "critique", Outcome: "evidence_retry"},
 		{Kind: "critique", Outcome: "unparseable_retry"},
@@ -1231,6 +1262,9 @@ func TestSummarizeBenchmarkTrace(t *testing.T) {
 	}
 	if got.semanticJudgeOutcome != "revised" {
 		t.Fatalf("semantic judge outcome = %q", got.semanticJudgeOutcome)
+	}
+	if !slices.Equal(got.semanticJudgeOutcomes, []string{"draft:objected", "revision:passed", "revision:revised"}) || !slices.Equal(got.semanticFindingClasses, []string{"specific_error_ignored"}) {
+		t.Fatalf("semantic judge telemetry = outcomes:%v findings:%v", got.semanticJudgeOutcomes, got.semanticFindingClasses)
 	}
 	if got.critiqueRetries != 1 || got.evidenceRetries != 1 || got.unparseableRetries != 1 || got.acceptedUncached != 1 {
 		t.Fatalf("critique summary = retries:%d evidence:%d unparseable:%d uncached:%d", got.critiqueRetries, got.evidenceRetries, got.unparseableRetries, got.acceptedUncached)

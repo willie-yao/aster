@@ -149,13 +149,19 @@ type critiqueQuality struct {
 }
 
 type critiqueDraftCandidate struct {
-	parsed           analysisResponse
-	content          string
-	providerItems    []json.RawMessage
-	rawQuality       critiqueQuality
-	quality          critiqueQuality
-	attempt          int
-	evidenceRevision int
+	parsed                        analysisResponse
+	content                       string
+	providerItems                 []json.RawMessage
+	rawQuality                    critiqueQuality
+	quality                       critiqueQuality
+	attempt                       int
+	evidenceRevision              int
+	createdEvidenceRevision       int
+	supportedFacts                []supportedCausalFact
+	semanticInitialFindingClasses []string
+	semanticFindingClasses        []string
+	semanticReviewPassed          bool
+	semanticRevision              bool
 }
 
 type draftReplacementDecision struct {
@@ -165,6 +171,12 @@ type draftReplacementDecision struct {
 	rawSemanticRegression    bool
 	publishedStrictDominance bool
 	currentQualityRefreshed  bool
+	currentSupportedFacts    int
+	candidateSupportedFacts  int
+	supportedFactsRetained   int
+	supportedFactsAdded      int
+	supportedFactsDropped    int
+	supportedCauseRegression bool
 }
 
 const (
@@ -173,6 +185,9 @@ const (
 	draftReasonCandidateSemanticRegression  = "candidate_adds_semantic_regression"
 	draftReasonCandidateRootWithoutEvidence = "candidate_changes_root_without_evidence"
 	draftReasonCandidateEvidenceBackedRoot  = "candidate_evidence_backed_root_change"
+	draftReasonCandidateSemanticFindings    = "candidate_has_semantic_findings"
+	draftReasonCandidateSemanticUnavailable = "candidate_semantic_review_unavailable"
+	draftReasonCandidateDropsSupportedCause = "candidate_drops_supported_cause"
 	draftReasonCandidateNotBetter           = "candidate_not_strictly_better"
 	draftReasonTiePreservesEarlier          = "tie_preserves_earlier"
 	draftReasonSemanticTieReplaces          = "semantic_tie_replaces"
@@ -491,8 +506,9 @@ type agentState struct {
 	// It is never copied into caches, traces, manifests, or progress state.
 	evidenceContentByPath map[string][]string
 	// analysisEvidence retains bounded artifact lines for citation validation.
-	analysisEvidence     map[string]*analysisChatEvidence
-	analysisEvidenceFull bool
+	analysisEvidence         map[string]*analysisChatEvidence
+	analysisEvidenceRevision map[string]map[int]int
+	analysisEvidenceFull     bool
 	// sourceContentByPath retains bounded repo-tool snippets for CLI grounding.
 	// Neither map is copied into caches, traces, or public output.
 	sourceContentByPath map[string][]string
@@ -903,6 +919,7 @@ func (c *Client) doAnalyzeAgentic(
 	}
 	state.evidenceArtifactsFull = map[string]bool{}
 	state.analysisEvidence = map[string]*analysisChatEvidence{}
+	state.analysisEvidenceRevision = map[string]map[int]int{}
 
 	fullSysPrompt := sysPrompt + agToolDocs
 	state.initialArtifactTree = listInitialArtifactTree(ctx, in.Browser)
@@ -952,10 +969,6 @@ func (c *Client) doAnalyzeAgentic(
 	// follow-up tool calls plus a re-emit.
 	critiqueRetries := &critiqueRetryBudget{max: in.Opts.CritiqueMaxRetries}
 	maxIters := in.Opts.MaxIters
-
-	// semanticJudged bounds the LLM semantic judge to at most one call per
-	// analysis, so the second-line reasoning check does not multiply cost.
-	semanticJudged := false
 
 	// Fixed schema cost added to every size estimate so compaction budgets
 	// against the real request, not just message content.
@@ -1102,33 +1115,27 @@ agentLoop:
 				state.considerDraft(candidateDraft, semanticAccepted)
 				if out.Passed {
 					recordTrace(loopCtx, critiqueTraceEvent("passed", out))
-					// Second-line semantic judge: a focused LLM review that
-					// catches a fluent-but-wrong root cause the deterministic
-					// gate accepts. Runs at most once per analysis (its own
-					// one-shot budget, independent of the deterministic retry
-					// count, so it still engages on hard drafts that spent those
-					// retries) and only drives a re-prompt. Best-effort: a failed
-					// judge call publishes the draft rather than blocking.
-					if in.Opts.SemanticJudge && !semanticJudged {
-						semanticJudged = true
+					// The initial semantic review runs only on the selected draft.
+					// An objected draft may spend one tools-free refinalization and
+					// one revision-review call. Failures preserve the selected draft.
+					if in.Opts.SemanticJudge && !state.judgeRan && state.bestDraft == candidateDraft {
 						state.judgeRan = true
-						requestStart := time.Now()
-						objs, err := c.semanticCritique(loopCtx, parsed, state.readPathList(), headroom)
-						state.recentModelRequest = time.Since(requestStart)
+						result, err := c.semanticCritiqueTracked(loopCtx, state, semanticJudgeStageDraft, parsed, nil, nil, headroom)
 						switch {
 						case err != nil:
-							recordTrace(loopCtx, TraceEvent{Kind: "semantic_judge", Outcome: "error", ErrorCode: "semantic_judge_error"})
+							recordTrace(loopCtx, semanticJudgeTraceEvent(semanticJudgeStageDraft, "error", result, "semantic_judge_error"))
 							log.Printf("  ⓘ semantic judge: skipped (%v)", err)
-						case len(objs) > 0:
-							recordTrace(loopCtx, TraceEvent{Kind: "semantic_judge", Outcome: "objected", IssueCount: len(objs)})
+						case len(result.Findings) > 0:
+							recordTrace(loopCtx, semanticJudgeTraceEvent(semanticJudgeStageDraft, "objected", result, ""))
 							state.judgeObjected = true
+							prior := parsed
 							echo := modelMessage{Role: "assistant", ProviderItems: msg.ProviderItems}
 							if msg.Content != nil {
 								echo.Content = msg.Content
 							}
 							repairMessages := append(messages, echo, modelMessage{
 								Role:    "user",
-								Content: strPtr(formatSemanticObjections(objs)),
+								Content: strPtr(formatSemanticFindings(result.Findings)),
 							})
 							revised, revisedItems, safe := c.runFinalizeRoundTracked(loopCtx, state, repairMessages, headroom)
 							if safe {
@@ -1141,16 +1148,24 @@ agentLoop:
 									}
 									semanticCandidate := state.newDraftCandidate("semantic_retry", revised, revisedItems, rp, revisedCritique)
 									policy := effectiveCritiqueCachePolicy(in.Opts.CritiqueCachePolicy, in.Opts.CritiqueMaxRetries)
-									decision := state.considerDraftDecisionForPolicy(semanticCandidate, true, policy)
+									decision := c.reviewSemanticRevision(loopCtx, state, prior, result.Findings, semanticCandidate, headroom, policy)
 									if !decision.accepted && semanticRevisionRejected(decision, semanticCandidate, policy) {
 										state.judgeRevisionRejected = true
-										break
-									}
-									if decision.accepted {
+										recordTrace(loopCtx, TraceEvent{Kind: "semantic_judge", Status: semanticJudgeStageRevision, Outcome: "revision_rejected", IssueCount: len(semanticCandidate.semanticFindingClasses)})
+									} else if decision.accepted {
 										state.considerFallbackDraftForPolicy(semanticCandidate, true, policy)
 										state.judgeRevised = true
+										recordTrace(loopCtx, TraceEvent{Kind: "semantic_judge", Status: semanticJudgeStageRevision, Outcome: "revised"})
+									} else {
+										recordTrace(loopCtx, TraceEvent{Kind: "semantic_judge", Status: semanticJudgeStageRevision, Outcome: "revision_not_selected"})
 									}
+								} else {
+									state.judgeRevisionRejected = true
+									recordTrace(loopCtx, TraceEvent{Kind: "semantic_judge", Status: semanticJudgeStageRevision, Outcome: "revision_unparseable", IssueCount: len(result.Findings)})
 								}
+							} else {
+								state.judgeRevisionRejected = true
+								recordTrace(loopCtx, TraceEvent{Kind: "semantic_judge", Status: semanticJudgeStageRevision, Outcome: "revision_denied", IssueCount: len(result.Findings)})
 							}
 							fallback := state.promoteFallbackDraft()
 							finalContent = fallback.content
@@ -1159,8 +1174,8 @@ agentLoop:
 							state.critiquePassed = fallback.quality.Passed
 							break agentLoop
 						default:
-							recordTrace(loopCtx, TraceEvent{Kind: "semantic_judge", Outcome: "passed"})
-							log.Printf("  ✓ semantic judge: no objections")
+							recordTrace(loopCtx, semanticJudgeTraceEvent(semanticJudgeStageDraft, "passed", result, ""))
+							log.Printf("  ✓ semantic judge: no findings")
 							state.considerDraft(candidateDraft, true)
 							state.considerFallbackDraft(candidateDraft, true)
 						}
@@ -1558,7 +1573,7 @@ func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, m
 		state.considerFallbackDraft(candidate, semanticAccepted)
 		if state.considerDraft(candidate, semanticAccepted) && semanticAccepted {
 			state.judgeRevised = true
-			recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Outcome: "revised"})
+			recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Status: semanticJudgeStageRevision, Outcome: "revised"})
 		}
 	} else if state.bestDraft == nil {
 		candidate := state.newDraftCandidate(draftPhase, finalContent, finalProviderItems, parsed, out)
@@ -1566,7 +1581,7 @@ func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, m
 		state.considerFallbackDraft(candidate, semanticAccepted)
 		if state.considerDraft(candidate, semanticAccepted) && semanticAccepted {
 			state.judgeRevised = true
-			recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Outcome: "revised"})
+			recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Status: semanticJudgeStageRevision, Outcome: "revised"})
 		}
 	}
 	if out.Passed {
@@ -1590,11 +1605,11 @@ func (c *Client) runFinalizeRoundTracked(ctx context.Context, state *agentState,
 	return content, items, safe
 }
 
-func (c *Client) semanticCritiqueTracked(ctx context.Context, state *agentState, parsed analysisResponse, paths []string, headroom contextHeadroom) ([]string, error) {
+func (c *Client) semanticCritiqueTracked(ctx context.Context, state *agentState, stage string, parsed analysisResponse, prior *analysisResponse, initialFindings []semanticFinding, headroom contextHeadroom) (semanticJudgeResult, error) {
 	started := time.Now()
-	objections, err := c.semanticCritique(ctx, parsed, paths, headroom)
+	result, err := c.semanticCritique(ctx, state, stage, parsed, prior, initialFindings, headroom)
 	state.recentModelRequest = time.Since(started)
-	return objections, err
+	return result, err
 }
 
 func critiqueTraceEvent(outcome string, out critiqueOutcome) TraceEvent {
@@ -1899,22 +1914,30 @@ func rootCauseFingerprint(rootCause string) string {
 }
 
 func (s *agentState) newDraftCandidate(phase, content string, providerItems []json.RawMessage, parsed analysisResponse, out critiqueOutcome) *critiqueDraftCandidate {
-	publishedOut := s.publishedCritiqueOutcome(parsed)
+	published := s.publishedAnalysis(parsed)
+	publishedOut := s.currentCritiqueOutcome(published)
 	return &critiqueDraftCandidate{
-		parsed:           parsed,
-		content:          content,
-		providerItems:    providerItems,
-		rawQuality:       critiqueQualityFor(out),
-		quality:          critiqueQualityFor(publishedOut),
-		attempt:          s.observeDraft(phase, parsed, out, publishedOut),
-		evidenceRevision: s.evidenceRevision,
+		parsed:                  parsed,
+		content:                 content,
+		providerItems:           providerItems,
+		rawQuality:              critiqueQualityFor(out),
+		quality:                 critiqueQualityFor(publishedOut),
+		attempt:                 s.observeDraft(phase, parsed, out, publishedOut),
+		evidenceRevision:        s.evidenceRevision,
+		createdEvidenceRevision: s.evidenceRevision,
+		supportedFacts:          supportedCausalFacts(published, s.analysisEvidence, s.analysisEvidenceRevision),
+		semanticRevision:        phase == "semantic_retry",
 	}
 }
 
 func (s *agentState) publishedCritiqueOutcome(parsed analysisResponse) critiqueOutcome {
+	return s.currentCritiqueOutcome(s.publishedAnalysis(parsed))
+}
+
+func (s *agentState) publishedAnalysis(parsed analysisResponse) analysisResponse {
 	parsed = sanitizePublishedCitations(parsed, analysisCitationContext{Evidence: s.analysisEvidence, Full: s.analysisEvidenceFull})
 	parsed = s.preparePublishedAnalysis(parsed)
-	return s.currentCritiqueOutcome(parsed)
+	return parsed
 }
 
 func (s *agentState) currentCritiqueOutcome(parsed analysisResponse) critiqueOutcome {
@@ -2001,6 +2024,17 @@ func decideDraftReplacement(current, candidate *critiqueDraftCandidate, semantic
 		decision.reason = draftReasonCandidatePublishedDominates
 		return decision
 	}
+	factDelta := compareSupportedCausalFacts(
+		current.supportedFacts,
+		candidate.supportedFacts,
+		semanticInitialFindingsAllowCauseReplacement(candidate.semanticInitialFindingClasses),
+		current.createdEvidenceRevision,
+	)
+	decision.currentSupportedFacts = len(current.supportedFacts)
+	decision.candidateSupportedFacts = len(candidate.supportedFacts)
+	decision.supportedFactsRetained = factDelta.retained
+	decision.supportedFactsAdded = factDelta.added
+	decision.supportedFactsDropped = factDelta.dropped
 	decision.rootCauseChanged = rootCauseMateriallyChanged(current.parsed.RootCause, candidate.parsed.RootCause)
 	publishedHardRegression := critiqueHardRegression(candidate.quality, current.quality)
 	decision.rawSemanticRegression = semanticAccepted &&
@@ -2017,6 +2051,19 @@ func decideDraftReplacement(current, candidate *critiqueDraftCandidate, semantic
 		if candidate.quality.HardIssueCount > 0 {
 			decision.reason = draftReasonCandidatePublishedHard
 		}
+		return decision
+	}
+	if semanticAccepted && candidate.semanticRevision && len(candidate.semanticFindingClasses) > 0 {
+		decision.reason = draftReasonCandidateSemanticFindings
+		return decision
+	}
+	if semanticAccepted && candidate.semanticRevision && !candidate.semanticReviewPassed {
+		decision.reason = draftReasonCandidateSemanticUnavailable
+		return decision
+	}
+	if semanticAccepted && candidate.semanticRevision && decision.rootCauseChanged && factDelta.dropped > 0 && !factDelta.strongerReplacement {
+		decision.supportedCauseRegression = true
+		decision.reason = draftReasonCandidateDropsSupportedCause
 		return decision
 	}
 	if decision.rootCauseChanged && candidate.evidenceRevision <= current.evidenceRevision && !semanticAccepted {
@@ -2074,6 +2121,12 @@ func (s *agentState) recordDraftDecision(target string, current, candidate *crit
 		RawSemanticRegression:           decision.rawSemanticRegression,
 		PublishedStrictDominance:        decision.publishedStrictDominance,
 		CurrentQualityRefreshed:         decision.currentQualityRefreshed,
+		CurrentSupportedFacts:           decision.currentSupportedFacts,
+		CandidateSupportedFacts:         decision.candidateSupportedFacts,
+		SupportedFactsRetained:          decision.supportedFactsRetained,
+		SupportedFactsAdded:             decision.supportedFactsAdded,
+		SupportedFactsDropped:           decision.supportedFactsDropped,
+		SupportedCauseRegression:        decision.supportedCauseRegression,
 		ReplacementAccepted:             decision.accepted,
 		ReplacementReason:               decision.reason,
 	}
@@ -2613,6 +2666,7 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc model
 		if !toolFailed {
 			if p := extractToolPathArg(tc.Function.Arguments); p != "" && visiblePayload != nil {
 				s.recordSuccessfulRead(p)
+				beforeLines := analysisEvidenceLineSnapshot(s.analysisEvidence, p)
 				if !recordAnalysisChatEvidence(s.analysisEvidence, tc, visiblePayload) {
 					s.analysisEvidenceFull = true
 				}
@@ -2628,6 +2682,7 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc model
 				if contentAdded && !newPath {
 					s.evidenceRevision++
 				}
+				s.recordAnalysisEvidenceRevisions(p, beforeLines)
 			}
 		}
 	}
@@ -2649,6 +2704,37 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc model
 	}
 
 	return envelope, result.Payload
+}
+
+func analysisEvidenceLineSnapshot(evidence map[string]*analysisChatEvidence, rawPath string) map[int]string {
+	path, err := artifacts.SafePath(strings.TrimSpace(rawPath))
+	if err != nil || path == "" || evidence[path] == nil {
+		return nil
+	}
+	out := make(map[int]string, len(evidence[path].Lines))
+	for line, text := range evidence[path].Lines {
+		out[line] = text
+	}
+	return out
+}
+
+func (s *agentState) recordAnalysisEvidenceRevisions(rawPath string, before map[int]string) {
+	path, err := artifacts.SafePath(strings.TrimSpace(rawPath))
+	if err != nil || path == "" || s.analysisEvidence[path] == nil {
+		return
+	}
+	if s.analysisEvidenceRevision == nil {
+		s.analysisEvidenceRevision = map[string]map[int]int{}
+	}
+	if s.analysisEvidenceRevision[path] == nil {
+		s.analysisEvidenceRevision[path] = map[int]int{}
+	}
+	for line, text := range s.analysisEvidence[path].Lines {
+		if previous, ok := before[line]; ok && previous == text {
+			continue
+		}
+		s.analysisEvidenceRevision[path][line] = s.evidenceRevision
+	}
 }
 
 func modelVisibleToolPayload(envelope string) map[string]interface{} {

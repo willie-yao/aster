@@ -547,11 +547,14 @@ published quality it had when emitted. This prevents evidence fetched for the
 new diagnosis from retroactively satisfying the old text.
 
 The tie rule has one semantic-review exception: a revision explicitly driven by
-semantic objections may replace an exactly equal-quality draft so the semantic
-repair can take effect. A semantic revision with a new hard failure that remains
-after publication sanitization is rejected before selection. Raw citation and
-source findings removed by that sanitization do not block a published-safe
-revision.
+semantic findings may replace an exactly equal-quality draft only after a
+bounded revision review passes. Before the tie is accepted, the monotonic guard
+compares high-confidence causal facts that share specific identity and error
+anchors with validated citations. Dropping such a fact without an equally strong
+supported replacement keeps the earlier draft. A semantic revision with a new
+hard failure that remains after publication sanitization is rejected before
+selection. Raw citation and source findings removed by that sanitization do not
+block a published-safe revision.
 
 A materially different `root_cause` can replace the selected draft only after
 a new non-empty artifact read or when the semantic review explicitly drove the
@@ -562,10 +565,12 @@ negation are material. The selected attempt alone controls cache acceptance.
 
 Every best, fallback, and fallback-promotion decision is retained in the private
 trace with attempt numbers, raw and published hard and soft rule IDs, evidence
-revisions, root-cause-change and semantic-regression flags, strict-dominance
-status, acceptance, and a stable reason. Draft decisions displace older ordinary
-events when the per-analysis event cap is full. Draft text and critique feedback
-are not stored in this decision telemetry.
+revisions, root-cause-change and semantic-regression flags, supported-fact
+counts, strict-dominance status, acceptance, and a stable reason. Semantic trace
+events retain only allowlisted finding classes, stages, counts, and input size.
+Draft decisions displace older ordinary events when the per-analysis event cap
+is full. Draft text, evidence lines, and finding details are not stored in this
+decision telemetry.
 
 #### Hallucinated citation check
 
@@ -663,16 +668,25 @@ observability notes.
 ### The semantic judge
 
 After a draft clears the deterministic critique gate, a second-line **semantic
-judge** reviews it: one focused LLM call that checks the *reasoning* for defects
-the regex gate cannot see (a fluent-but-wrong root cause, a conclusion the cited
-evidence does not support). It never redoes the investigation. On objections it
-re-prompts once, in-loop or in a tools-free post-loop finalize round; a revised
-draft is used only if it still clears the deterministic gate, so the judge can
-never downgrade an answer below the gate it already passed. A semantic revision that fails deterministic critique is discarded. The
-original deterministic-passing draft remains cacheable, while the objection and
-rejected revision remain visible in telemetry. It is best-effort: a
-failed judge call publishes the draft rather than blocking, and it runs at most
-once per analysis.
+judge** checks reasoning defects the regex gate cannot see. The request contains
+a bounded digest of validated cited lines, specific errors already found, later
+success for the same operation, and applicable mandatory evidence that the draft
+did not use. The judge returns only allowlisted generic finding classes. It does
+not reread artifacts or redo the investigation.
+
+On findings, the engine drives one tools-free refinalization. A parseable
+revision may spend one additional bounded judge call that compares it with the
+prior draft. The revision must pass deterministic critique, the revision review,
+and a monotonic supported-cause guard. A revision that drops a validated,
+specific causal fact without an equally strong replacement is discarded even
+when its structural critique score is cleaner. The original deterministic-
+passing draft remains cacheable, while finding classes, revision outcomes, and
+content-free supported-fact counts remain visible in private telemetry.
+
+The initial judge is best-effort: transport or parse failure publishes the
+existing draft rather than blocking. A revision-review failure also preserves
+the earlier valid draft. At most one initial review, one refinalization, and one
+revision review run per analysis.
 
 The judge is currently always on for the agentic path (there is no config knob).
 Each analysis records whether the judge ran, objected, and drove a revision

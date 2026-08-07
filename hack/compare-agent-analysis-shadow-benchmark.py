@@ -37,6 +37,30 @@ def string_list(value):
     return isinstance(value, list) and all(nonempty_string(item) for item in value)
 
 
+SEMANTIC_FINDING_CLASSES = {
+    "downstream_symptom_selected",
+    "specific_error_ignored",
+    "success_counterevidence_ignored",
+    "ownership_not_established",
+    "causal_link_unsupported",
+    "revision_dropped_supported_cause",
+}
+
+SEMANTIC_JUDGE_OUTCOMES = {
+    "draft:passed",
+    "draft:error",
+    "draft:objected",
+    "revision:passed",
+    "revision:error",
+    "revision:objected",
+    "revision:revision_denied",
+    "revision:revision_unparseable",
+    "revision:revision_rejected",
+    "revision:revision_not_selected",
+    "revision:revised",
+}
+
+
 LOWER_HEX_20 = exact_lower_hex(20)
 LOWER_HEX_40 = exact_lower_hex(40)
 LOWER_HEX_64 = exact_lower_hex(64)
@@ -81,6 +105,14 @@ INPROCESS_SCHEMA = {
     "model_request_made": (lambda value: type(value) is bool, "a boolean"),
     "evidence_stages": (lambda value: isinstance(value, list), "a list"),
     "evidence_revisions": (lambda value: isinstance(value, list), "a list"),
+    "semantic_judge_outcomes": (string_list, "a string list"),
+    "semantic_finding_classes": (string_list, "a string list"),
+    "semantic_revision_attempted": (lambda value: type(value) is bool, "a boolean"),
+    "semantic_revision_selected": (lambda value: type(value) is bool, "a boolean"),
+    "semantic_revision_rejected": (lambda value: type(value) is bool, "a boolean"),
+    "supported_facts_retained": (nonnegative_integer, "a non-negative integer"),
+    "supported_facts_added": (nonnegative_integer, "a non-negative integer"),
+    "supported_facts_dropped": (nonnegative_integer, "a non-negative integer"),
 }
 
 SHADOW_SCHEMA = {
@@ -181,8 +213,32 @@ def validate_common_contract(path, line_no, record, kind):
 
 
 def validate_inprocess(path, line_no, record):
-    if record["evidence_telemetry_version"] != 1:
-        invalid(path, line_no, "in-process evidence_telemetry_version must be 1")
+    if record["evidence_telemetry_version"] != 2:
+        invalid(path, line_no, "in-process evidence_telemetry_version must be 2")
+    invalid_outcomes = sorted(set(record["semantic_judge_outcomes"]) - SEMANTIC_JUDGE_OUTCOMES)
+    if invalid_outcomes:
+        invalid(path, line_no, "in-process semantic_judge_outcomes contains an invalid value")
+    invalid_classes = sorted(set(record["semantic_finding_classes"]) - SEMANTIC_FINDING_CLASSES)
+    if invalid_classes:
+        invalid(path, line_no, "in-process semantic_finding_classes contains an invalid value")
+    attempted = record["semantic_revision_attempted"]
+    selected = record["semantic_revision_selected"]
+    rejected = record["semantic_revision_rejected"]
+    revision_outcomes = {value for value in record["semantic_judge_outcomes"] if value.startswith("revision:")}
+    rejection_outcomes = {
+        "revision:revision_denied",
+        "revision:revision_unparseable",
+        "revision:revision_rejected",
+        "revision:revision_not_selected",
+    }
+    if selected and rejected:
+        invalid(path, line_no, "in-process semantic revision cannot be both selected and rejected")
+    if attempted != bool(revision_outcomes):
+        invalid(path, line_no, "in-process semantic_revision_attempted does not match revision outcomes")
+    if selected != ("revision:revised" in revision_outcomes):
+        invalid(path, line_no, "in-process semantic_revision_selected does not match revision outcomes")
+    if rejected != bool(revision_outcomes & rejection_outcomes):
+        invalid(path, line_no, "in-process semantic_revision_rejected does not match revision outcomes")
     status = record["trial_status"]
     if status not in TRIAL_STATUSES:
         invalid(path, line_no, "in-process trial_status is invalid")
