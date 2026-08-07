@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -166,8 +167,8 @@ func loadShadowBenchmarkConfig(t *testing.T) shadowBenchmarkConfig {
 	}
 	model := require("AI_MODEL")
 	providerPath := require("BENCH_PROVIDER_PATH")
-	if providerPath != "github-copilot/"+model || model != "claude-sonnet-4.6" {
-		t.Fatalf("benchmark requires github-copilot/claude-sonnet-4.6, got provider=%q model=%q", providerPath, model)
+	if err := validateShadowBenchmarkProvider(providerPath, model); err != nil {
+		t.Fatal(err)
 	}
 	maxTurns := shadowBenchmarkInt(t, "SHADOW_BENCH_MAX_TURNS", 12, 1, 1000)
 	retries := shadowBenchmarkInt(t, "SHADOW_BENCH_RETRIES", 0, 0, 2)
@@ -197,6 +198,21 @@ func loadShadowBenchmarkConfig(t *testing.T) shadowBenchmarkConfig {
 		MaxTurns: maxTurns, Timeout: timeout, Retries: retries, ResultsPath: require("SHADOW_BENCH_RESULTS_JSONL"),
 		Repetitions: repetitions, RepetitionBase: benchmarkRepetitionStart(t),
 	}
+}
+
+func validateShadowBenchmarkProvider(providerPath, model string) error {
+	want := "github-copilot/" + strings.TrimSpace(model)
+	if providerPath != want {
+		return fmt.Errorf("shadow benchmark provider must be %q", want)
+	}
+	return nil
+}
+
+func shadowBenchmarkExecutionID(bundleHash, agentConfigSHA256, providerPath string, repetition int) string {
+	digest := sha256Hex([]byte(strings.Join([]string{
+		strings.TrimSpace(bundleHash), strings.TrimSpace(agentConfigSHA256), strings.TrimSpace(providerPath), strconv.Itoa(repetition),
+	}, "\x00")))
+	return "agent-analysis-" + digest[:16]
 }
 
 func shadowBenchmarkCases(t *testing.T) []benchCase {
@@ -433,10 +449,11 @@ func runShadowBenchmarkCase(t *testing.T, cfg shadowBenchmarkConfig, bc benchCas
 		AgentRef: cfg.AgentRef, AgentVersion: cfg.AgentVersion, Retries: cfg.Retries,
 	}
 	started := time.Now()
+	executionID := shadowBenchmarkExecutionID(bundle.Hash, agentConfigSHA256, cfg.ProviderPath, repetition)
 	result, runErr := runner.Generate(t.Context(), agentanalysis.Spec{
 		Repo:   agentruntime.RepoRef{Owner: source.Owner, Name: source.Name, Ref: source.Revision},
 		Bundle: bundle, SourceReader: orka.NewGitHubSourceReader("", os.Getenv("GITHUB_READ_TOKEN")),
-		MaxTurns: cfg.MaxTurns, Timeout: cfg.Timeout,
+		MaxTurns: cfg.MaxTurns, Timeout: cfg.Timeout, ExecutionID: executionID,
 	})
 	elapsed := time.Since(started)
 	if runErr != nil {
@@ -583,6 +600,44 @@ func shadowBenchmarkDuration(t *testing.T, name string, fallback time.Duration) 
 		t.Fatalf("%s must be a Go duration", name)
 	}
 	return value
+}
+
+func TestValidateShadowBenchmarkProvider(t *testing.T) {
+	for _, model := range []string{"claude-sonnet-4.6", "claude-opus-5"} {
+		if err := validateShadowBenchmarkProvider("github-copilot/"+model, model); err != nil {
+			t.Fatalf("model %q: %v", model, err)
+		}
+	}
+	for _, test := range []struct {
+		provider string
+		model    string
+	}{
+		{provider: "other/claude-opus-5", model: "claude-opus-5"},
+		{provider: "github-copilot/claude-opus-5", model: "claude-sonnet-5"},
+		{provider: "github-copilot/extra/claude-opus-5", model: "claude-opus-5"},
+		{provider: "github-copilot//claude-opus-5", model: "claude-opus-5"},
+	} {
+		if err := validateShadowBenchmarkProvider(test.provider, test.model); err == nil {
+			t.Fatalf("provider=%q model=%q was accepted", test.provider, test.model)
+		}
+	}
+}
+
+func TestShadowBenchmarkExecutionIDIncludesAgentConfiguration(t *testing.T) {
+	base := shadowBenchmarkExecutionID(strings.Repeat("a", 64), strings.Repeat("b", 64), "github-copilot/claude-sonnet-4.6", 1)
+	for _, changed := range []string{
+		shadowBenchmarkExecutionID(strings.Repeat("c", 64), strings.Repeat("b", 64), "github-copilot/claude-sonnet-4.6", 1),
+		shadowBenchmarkExecutionID(strings.Repeat("a", 64), strings.Repeat("d", 64), "github-copilot/claude-sonnet-4.6", 1),
+		shadowBenchmarkExecutionID(strings.Repeat("a", 64), strings.Repeat("b", 64), "github-copilot/claude-opus-5", 1),
+		shadowBenchmarkExecutionID(strings.Repeat("a", 64), strings.Repeat("b", 64), "github-copilot/claude-sonnet-4.6", 2),
+	} {
+		if changed == base {
+			t.Fatalf("execution identity did not change: %s", base)
+		}
+	}
+	if !regexp.MustCompile(`^agent-analysis-[0-9a-f]{16}$`).MatchString(base) {
+		t.Fatalf("execution id = %q", base)
+	}
 }
 
 func TestShadowAnalysisTestCase(t *testing.T) {
