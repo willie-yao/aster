@@ -28,6 +28,7 @@ import { AiAnalysisPanel } from "./AiAnalysisPanel";
 import { junitTestCases } from "../lib/buildFailures";
 import { parseTestDisplayName } from "../lib/detailTitles";
 import { overviewTypography } from "../theme/overview";
+import { hasInlineTestEvidence } from "../lib/jobDetail";
 
 interface TestCaseTableProps {
   testCases: TestCase[];
@@ -118,7 +119,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
 
         {sorted.map((tc, idx) => {
           const isExpanded = expandedRows.has(idx);
-          const hasFail = tc.status === "failed" && Boolean(tc.failure_message);
+          const hasEvidence = hasInlineTestEvidence(tc);
           const stripeBg = idx % 2 === 0 ? "surface.container" : "surface.containerHigh";
           const displayName = parseTestDisplayName(tc.name).displayName;
           const diagnosisPath = jobID
@@ -286,7 +287,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                       Diagnosis →
                     </Link>
                   )}
-                  {hasFail && (
+                  {hasEvidence && (
                     <ButtonBase
                       type="button"
                       onClick={() => toggleRow(idx)}
@@ -355,7 +356,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                 </Box>
               )}
 
-              {hasFail && (
+              {hasEvidence && (
                 <Collapse key={isExpanded ? "expanded" : "collapsed"} in={isExpanded} timeout="auto" unmountOnExit>
                   <Box
                     id={`test-result-details-${idx}`}
@@ -370,23 +371,25 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                       gap: 1.5,
                     }}
                   >
-                    <Box
-                      component="pre"
-                      sx={{
-                        m: 0,
-                        p: 2,
-                        borderRadius: "4px",
-                        bgcolor: (t) => soft(t, "error", 0.08),
-                        color: "error.main",
-                        fontFamily: "monospace",
-                        fontSize: "0.75rem",
-                        lineHeight: 1.6,
-                        whiteSpace: "pre-wrap",
-                        overflowX: "auto",
-                      }}
-                    >
-                      {tc.failure_message}
-                    </Box>
+                    {tc.failure_message && (
+                      <Box
+                        component="pre"
+                        sx={{
+                          m: 0,
+                          p: 2,
+                          borderRadius: "4px",
+                          bgcolor: (t) => soft(t, "error", 0.08),
+                          color: "error.main",
+                          fontFamily: "monospace",
+                          fontSize: "0.75rem",
+                          lineHeight: 1.6,
+                          whiteSpace: "pre-wrap",
+                          overflowX: "auto",
+                        }}
+                      >
+                        {tc.failure_message}
+                      </Box>
+                    )}
 
                     {tc.failure_body && (
                       <Accordion

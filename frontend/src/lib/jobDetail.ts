@@ -42,6 +42,17 @@ export function filterResultTests(
   });
 }
 
+
+export function hasInlineTestEvidence(testCase: TestCase): boolean {
+  return Boolean(
+    testCase.status === "failed" &&
+      (testCase.failure_message ||
+        testCase.failure_body ||
+        testCase.cluster_artifacts ||
+        testCase.ai_analysis),
+  );
+}
+
 export function withJobDetailParam(
   current: URLSearchParams,
   name: string,

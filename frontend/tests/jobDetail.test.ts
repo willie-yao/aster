@@ -5,6 +5,7 @@ import { test } from "node:test";
 import {
   executedResultTests,
   filterResultTests,
+  hasInlineTestEvidence,
   normalizeResultLedgerFilter,
   withJobDetailParam,
 } from "../src/lib/jobDetail.js";
@@ -36,6 +37,40 @@ test("job result filters omit skipped and non-failing setup rows", () => {
   assert.deepEqual(filterResultTests(executed, "failed", "").map((item) => item.name), ["fails", "AfterSuite"]);
   assert.deepEqual(filterResultTests(executed, "passed", "").map((item) => item.name), ["passes"]);
   assert.deepEqual(filterResultTests(executed, "all", "SETUP FAILED").map((item) => item.name), ["AfterSuite"]);
+});
+
+test("inline evidence includes analyzed failures without a failure message", () => {
+  assert.equal(
+    hasInlineTestEvidence(
+      testCase({
+        status: "failed",
+        failure_body: "stack trace",
+      }),
+    ),
+    true,
+  );
+  assert.equal(
+    hasInlineTestEvidence(
+      testCase({
+        status: "failed",
+        ai_analysis: {
+          generated_at: "2026-08-07T00:00:00Z",
+          model: "test",
+          root_cause: "cause",
+          severity: "High",
+          suggested_fix: "fix",
+        },
+      }),
+    ),
+    true,
+  );
+  assert.equal(hasInlineTestEvidence(testCase({ status: "failed" })), false);
+  assert.equal(
+    hasInlineTestEvidence(
+      testCase({ status: "passed", failure_body: "historical output" }),
+    ),
+    false,
+  );
 });
 
 test("job result filter state uses bounded URL values", () => {
