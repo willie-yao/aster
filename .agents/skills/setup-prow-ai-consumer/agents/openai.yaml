@@ -1,4 +1,4 @@
 interface:
   display_name: "Prow AI Consumer Setup"
   short_description: "Safely scaffold a prow-ai-dashboard consumer"
-  default_prompt: "Use $setup-prow-ai-consumer to set up a consumer repository for this project."
+  default_prompt: "Use $setup-prow-ai-consumer for the source repository named or linked in my request. Fill supplied values directly, infer safe local defaults, run read-only discovery before asking for remaining choices, and do not present unresolved template placeholders as a questionnaire."

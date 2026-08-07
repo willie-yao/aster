@@ -39,25 +39,59 @@ go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboar
 
 Use one form consistently for discovery, planning, application, and doctor.
 
-## 2. Establish the source and destination
+## 2. Resolve the source and destination
 
-Determine or ask for:
+Use values already supplied anywhere in the user's request before asking a
+question. A GitHub URL, `owner/name`, project list, consumer name, job name,
+workspace path, deployment mode, or policy statement is an input even when it
+appears outside a formal field list.
 
-- Source GitHub repository as `owner/name`.
-- Consumer repository as `owner/name`.
-- Destination: current directory, existing checkout, subdirectory, or separate directory.
-- Deployment mode: `pages` or `k8s`.
-- Whether presubmit jobs are required.
-- Whether deployed AI analysis starts enabled.
+Never turn literal template placeholders such as `<SOURCE_OWNER>`,
+`<CONSUMER_REPOSITORY>`, or `<project-slug>` into a multi-field questionnaire.
+Placeholders are drafting markers, not user-provided values. Resolve concrete
+values in this order:
+
+1. **Source repository.** Normalize an explicit `owner/name` or public GitHub URL
+   from the request. If none is supplied, use the current Git `origin` only when
+   the current checkout is not the `prow-ai-dashboard` engine. When the agent is
+   running from the engine checkout and no source is named or linked, ask one
+   blocking source-repository question.
+2. **Project slug.** Derive it from the normalized source repository name using
+   short lowercase hyphenated text. Do not ask for a slug unless the derived
+   value collides with another project in the same task or the user requested a
+   different naming convention.
+3. **Read-only discovery.** Run discovery as soon as the source is known. Do not
+   ask the user to choose a TestGrid dashboard, bucket, or consumer identity
+   before discovery can provide candidates and suggestions.
+4. **Consumer repository identity.** Preserve an explicit `owner/name`. When it
+   is absent, use the non-empty consumer repository suggested by discovery for
+   the local plan and present it during plan review. Ask only when discovery
+   cannot suggest one or several owners or destinations remain genuinely
+   ambiguous. Using the suggestion does not authorize creating that remote
+   repository.
+5. **Destination.** Preserve an explicit absolute path. When the request asks
+   for a Codex-readable evaluation workspace, derive a timestamped directory
+   under `${CODEX_HOME:-$HOME/.codex}/deployments/prow-ai-dashboard/` and keep
+   plan, logs, reports, and manifest files outside its `consumer/` directory.
+   Otherwise use the placement guidance in `references/decisions.md`.
+6. **Deployment and policy.** Preserve explicit Pages or Kubernetes mode,
+   presubmit policy, deployed-AI policy, artifact bucket, exact job names, and
+   update policy. Ask only for a remaining choice that materially changes the
+   generated plan.
+
+For a request containing multiple source repositories, process them as separate
+consumer setups with separate workspaces, plans, and doctor results. Do not ask
+for all fields in one form when each project's values are already present.
 
 Do not assume the source repository and consumer repository are the same. A
-consumer may live in the source repository, but it still needs an explicit
-consumer repository identity for Pages URLs, project metadata, and future GitHub
-operations. Private repository discovery may use an already configured
-`GITHUB_TOKEN`; never request, print, or place its value in a command argument.
+consumer may live in the source repository, but it still needs an explicit or
+discovery-suggested consumer identity for Pages URLs and project metadata.
+Private repository discovery may use an already configured `GITHUB_TOKEN`;
+never request, print, or place its value in a command argument.
 
-Read [references/decisions.md](references/decisions.md) when the user has not
-chosen the deployment, placement, discovery selector, or update behavior.
+Read [references/decisions.md](references/decisions.md) when placement,
+deployment, discovery, or update behavior remains unresolved after applying the
+rules above.
 
 ## 3. Run read-only discovery
 
