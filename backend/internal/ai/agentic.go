@@ -1111,14 +1111,10 @@ agentLoop:
 				state.considerDraft(candidateDraft, semanticAccepted)
 				if out.Passed {
 					recordTrace(loopCtx, critiqueTraceEvent("passed", out))
-					// Second-line semantic judge: a focused LLM review that
-					// catches a fluent-but-wrong root cause the deterministic
-					// gate accepts. Runs at most once per analysis (its own
-					// one-shot budget, independent of the deterministic retry
-					// count, so it still engages on hard drafts that spent those
-					// retries) and only drives a re-prompt. Best-effort: a failed
-					// judge call publishes the draft rather than blocking.
-					if in.Opts.SemanticJudge && !state.judgeRan {
+					// The initial semantic review runs only on the selected draft.
+					// An objected draft may spend one tools-free refinalization and
+					// one revision-review call. Failures preserve the selected draft.
+					if in.Opts.SemanticJudge && !state.judgeRan && state.bestDraft == candidateDraft {
 						state.judgeRan = true
 						result, err := c.semanticCritiqueTracked(loopCtx, state, semanticJudgeStageDraft, parsed, nil, nil, headroom)
 						switch {
