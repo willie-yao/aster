@@ -27,8 +27,9 @@ export function MetricStrip({
           md: `repeat(${items.length}, minmax(0, 1fr))`,
         },
         bgcolor: "surface.container",
-        borderBlock: "1px solid",
-        borderColor: "divider",
+        borderBlockWidth: "1px",
+        borderBlockStyle: "solid",
+        borderBlockColor: "var(--mui-palette-divider)",
       }}
     >
       {items.map((item, index) => (
@@ -42,16 +43,15 @@ export function MetricStrip({
             display: "flex",
             flexDirection: "column",
             justifyContent: "center",
-            borderLeft: "1px solid",
-            borderTop: {
-              xs: index >= 2 ? "1px solid" : "none",
-              md: "none",
+            borderInlineStartWidth: {
+              xs: index % 2 === 1 ? "1px" : 0,
+              md: index > 0 ? "1px" : 0,
             },
-            borderColor: "divider",
-            "&:nth-of-type(odd)": {
-              borderLeft: { xs: "none", md: index === 0 ? "none" : "1px solid" },
-            },
-            ...(index === 0 ? { borderLeft: "none" } : {}),
+            borderInlineStartStyle: "solid",
+            borderInlineStartColor: "var(--mui-palette-divider)",
+            borderTopWidth: { xs: index >= 2 ? "1px" : 0, md: 0 },
+            borderTopStyle: "solid",
+            borderTopColor: "var(--mui-palette-divider)",
           }}
         >
           <Typography

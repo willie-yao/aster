@@ -342,8 +342,9 @@ export function JobDetailPage() {
             component="h1"
             sx={{
               ...overviewTypography.pageHeadline,
-              fontSize: { xs: "25px", sm: overviewTypography.pageHeadline.fontSize },
-              lineHeight: { xs: "31px", sm: overviewTypography.pageHeadline.lineHeight },
+              fontSize: { xs: "26px", sm: "30px" },
+              lineHeight: { xs: "33px", sm: "38px" },
+              fontWeight: 720,
               color: "text.primary",
               overflowWrap: "anywhere",
             }}

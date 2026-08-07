@@ -47,9 +47,15 @@ export function RunMetadata({
               minHeight: 60,
               px: 1.5,
               py: 1,
-              borderTop: "1px solid",
-              borderLeft: { xs: "none", sm: index % 2 === 1 ? "1px solid" : "none" },
-              borderColor: "divider",
+              borderTopWidth: "1px",
+              borderTopStyle: "solid",
+              borderTopColor: "var(--mui-palette-divider)",
+              borderInlineStartWidth: {
+                xs: 0,
+                sm: index % 2 === 1 ? "1px" : 0,
+              },
+              borderInlineStartStyle: "solid",
+              borderInlineStartColor: "var(--mui-palette-divider)",
             }}
           >
             <Typography component="div" color="text.secondary" sx={overviewTypography.tableHeading}>
