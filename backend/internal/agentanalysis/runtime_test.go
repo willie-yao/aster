@@ -209,3 +209,33 @@ func TestRuntimeNoResultPrecedesCleanupPending(t *testing.T) {
 		t.Fatalf("result=%+v error=%v", got, err)
 	}
 }
+
+func TestRuntimePrimaryFailurePrecedesCleanupPending(t *testing.T) {
+	bundle := testBundle(t)
+	for _, tc := range []struct {
+		name string
+		err  error
+		want ShadowStatus
+	}{
+		{name: "malformed", err: agentruntime.ErrMalformedResult, want: ShadowStatusMalformedResult},
+		{name: "deletion", err: agentruntime.ErrResultDeletion, want: ShadowStatusDeletion},
+		{name: "rename", err: agentruntime.ErrResultRename, want: ShadowStatusRename},
+		{name: "timeout", err: context.DeadlineExceeded, want: ShadowStatusTimeout},
+		{name: "cancellation", err: context.Canceled, want: ShadowStatusCancellation},
+		{name: "runtime", err: agentruntime.ErrUnavailable, want: ShadowStatusRuntimeFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runtime := &Runtime{
+				Agent:          &fakeAgentRuntime{err: errors.Join(tc.err, agentruntime.ErrCleanupPending)},
+				AgentNamespace: "orka-system", AgentRef: "analysis-agent", AgentVersion: "v1",
+			}
+			got, err := runtime.Generate(t.Context(), Spec{
+				Repo:   agentruntime.RepoRef{Owner: bundle.Source.Owner, Name: bundle.Source.Name, Ref: bundle.Source.Revision},
+				Bundle: bundle, MaxTurns: 5, Timeout: time.Minute,
+			})
+			if got.Status != tc.want || !got.CleanupPending || !errors.Is(err, tc.err) {
+				t.Fatalf("result=%+v error=%v", got, err)
+			}
+		})
+	}
+}

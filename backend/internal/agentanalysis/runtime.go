@@ -118,7 +118,7 @@ func (r *Runtime) Generate(ctx context.Context, spec Spec) (result Result, retEr
 		work := observed
 		result.CleanupWork = &work
 	}
-	if runErr != nil && !cleanupPending {
+	if runErr != nil && !cleanupOnly(runErr) {
 		return result, runErr
 	}
 	finalizationStarted := time.Now()
@@ -160,6 +160,28 @@ func shadowStatusFromError(err error) (ShadowStatus, bool) {
 		return resultErr.status, true
 	}
 	return "", false
+}
+
+func cleanupOnly(err error) bool {
+	if err == nil {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !cleanupOnly(child) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped := errors.Unwrap(err); wrapped != nil {
+		return cleanupOnly(wrapped)
+	}
+	return err == agentruntime.ErrCleanupPending
 }
 
 // ResolveShadowStatus returns the canonical private outcome for one Agent run.
