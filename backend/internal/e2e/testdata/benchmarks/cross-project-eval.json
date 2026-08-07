@@ -147,16 +147,26 @@
           ],
           "content": [
             "(?i)scheduling\\.k8s\\.io/v1alpha3(?:=true)?"
-          ]
+          ],
+          "causal": [
+            "(?is)(?:served|configured|runtime-config).{0,120}scheduling\\.k8s\\.io/v1alpha3|scheduling\\.k8s\\.io/v1alpha3.{0,120}(?:served|configured|runtime-config)"
+          ],
+          "oracle_context_lines": 2
         },
         {
           "id": "podgroup-api-response",
           "paths": [
-            "(?i)(?:kube-scheduler|kube-controller-manager).*\\.log$"
+            "(?i)(?:kube-scheduler|kube-controller-manager).*\\.log$",
+            "(?i)kube-apiserver.*\\.log$"
           ],
           "content": [
-            "(?i)(?:failed to list \\*v1beta1\\.PodGroup.{0,160}(?:could not find the requested resource|forbidden)|Skipping API scheduling\\.k8s\\.io/v1beta1 because it has no resources)"
-          ]
+            "(?i)(?:failed to list \\*v1beta1\\.PodGroup.{0,160}(?:could not find the requested resource|forbidden)|Skipping API scheduling\\.k8s\\.io/v1beta1 because it has no resources)",
+            "(?i)URI=\"/apis/scheduling\\.k8s\\.io/v1beta1/podgroups[^\\\"]*\".{0,300}resp=404"
+          ],
+          "causal": [
+            "(?is)v1beta1(?:\\.PodGroup| PodGroups?|/podgroups).{0,180}(?:404|not[ -]?found|could not find the requested resource|unavailable)|(?:404|not[ -]?found|could not find the requested resource|unavailable).{0,180}v1beta1(?:\\.PodGroup| PodGroups?|/podgroups)"
+          ],
+          "oracle_context_lines": 1
         },
         {
           "id": "scheduler-handler-readiness",
@@ -165,9 +175,34 @@
           ],
           "content": [
             "(?i)(?:sched-handler-sync|handlers are not fully synchronized|readyz.{0,80}(?:500|failed))"
-          ]
+          ],
+          "causal": [
+            "(?is)(?:scheduler.{0,180}(?:sync|handler)|(?:sync|handler).{0,180}scheduler)"
+          ],
+          "oracle_context_lines": 1
+        },
+        {
+          "id": "terminal-deployment-timeout",
+          "paths": [
+            "(?i)(?:^|/)build-log\\.txt$"
+          ],
+          "content": [
+            "(?i)timed out waiting for the condition on deployments/kubeflow-trainer-controller-manager"
+          ],
+          "oracle_context_lines": 1
+        },
+        {
+          "id": "competing-readiness-noise",
+          "paths": [
+            "(?i)(?:^|/)build-log\\.txt$"
+          ],
+          "content": [
+            "(?i)timed out waiting for the condition on nodes/kind-(?:control-plane|worker2?)"
+          ],
+          "oracle_context_lines": 2
         }
-      ]
+      ],
+      "oracle_evidence_sha256": "92376ed20f725db6b210eabc538dc77feb15373e3fa59341651cca30c5c6ba9c"
     },
     {
       "id": "gcp-pd-csi-windows-mount-visibility",

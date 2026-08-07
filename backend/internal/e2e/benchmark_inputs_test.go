@@ -26,6 +26,8 @@ type benchmarkRunIdentity struct {
 	EffectivePromptSHA256  string
 	SkillSetHash           string
 	EffectiveInputSHA256   string
+	EvidenceCondition      string
+	FrozenEvidenceSHA256   string
 	APIMode                string
 	ProviderPath           string
 	TransportID            string
@@ -47,6 +49,10 @@ func loadBenchmarkInputs(t *testing.T, cases []benchCase, apiMode, model string)
 		t.Fatal(err)
 	}
 
+	condition, err := benchmarkEvidenceCondition()
+	if err != nil {
+		t.Fatal(err)
+	}
 	resultsEnabled := strings.TrimSpace(os.Getenv("BENCH_RESULTS_JSONL")) != ""
 	providerPath := strings.TrimSpace(os.Getenv("BENCH_PROVIDER_PATH"))
 	transportID := strings.TrimSpace(os.Getenv("BENCH_TRANSPORT_ID"))
@@ -60,11 +66,12 @@ func loadBenchmarkInputs(t *testing.T, cases []benchCase, apiMode, model string)
 		systemPrompt: ComposeBenchPrompt(),
 		agentic:      defaultBenchAgentic(),
 		identity: benchmarkRunIdentity{
-			Arm:          arm,
-			EngineCommit: benchmarkEngineCommit(t, resultsEnabled),
-			APIMode:      apiMode,
-			ProviderPath: providerPath,
-			TransportID:  transportID,
+			Arm:               arm,
+			EngineCommit:      benchmarkEngineCommit(t, resultsEnabled),
+			EvidenceCondition: condition,
+			APIMode:           apiMode,
+			ProviderPath:      providerPath,
+			TransportID:       transportID,
 		},
 	}
 	skillProjectDir := t.TempDir()
@@ -166,6 +173,7 @@ func validateBenchmarkRunIdentity(identity benchmarkRunIdentity) error {
 		"effective prompt SHA-256": identity.EffectivePromptSHA256,
 		"skill-set hash":           identity.SkillSetHash,
 		"effective input SHA-256":  identity.EffectiveInputSHA256,
+		"frozen evidence SHA-256":  identity.FrozenEvidenceSHA256,
 	} {
 		if value != "" && !benchmarkSHA256RE.MatchString(value) {
 			return fmt.Errorf("benchmark %s is invalid", name)
@@ -176,6 +184,12 @@ func validateBenchmarkRunIdentity(identity benchmarkRunIdentity) error {
 	}
 	if identity.BaselineConsumerCommit != "" && !benchmarkCommitRE.MatchString(identity.BaselineConsumerCommit) {
 		return fmt.Errorf("benchmark baseline consumer commit is invalid")
+	}
+	if identity.EvidenceCondition != benchmarkEvidenceConditionFixture && identity.EvidenceCondition != benchmarkEvidenceConditionOracle {
+		return fmt.Errorf("benchmark evidence condition is invalid")
+	}
+	if identity.EvidenceCondition == benchmarkEvidenceConditionOracle && identity.FrozenEvidenceSHA256 != "" && !benchmarkSHA256RE.MatchString(identity.FrozenEvidenceSHA256) {
+		return fmt.Errorf("benchmark frozen evidence identity is invalid")
 	}
 	if identity.APIMode != ai.APIChatCompletions && identity.APIMode != ai.APIResponses {
 		return fmt.Errorf("benchmark API mode is invalid")
@@ -233,12 +247,15 @@ func benchmarkEffectiveInputSHA256(identity benchmarkRunIdentity, agentic projec
 		APIMode               string          `json:"api_mode"`
 		ProviderPath          string          `json:"provider_path,omitempty"`
 		TransportID           string          `json:"transport_id,omitempty"`
+		EvidenceCondition     string          `json:"evidence_condition"`
+		FrozenEvidenceSHA256  string          `json:"frozen_evidence_sha256,omitempty"`
 		CacheGeneration       string          `json:"cache_generation,omitempty"`
 		Agentic               project.Agentic `json:"agentic"`
 	}{
 		ProjectSHA256: identity.ProjectSHA256, BaselinePromptSHA256: identity.BaselinePromptSHA256,
 		EffectivePromptSHA256: identity.EffectivePromptSHA256, SkillSetHash: identity.SkillSetHash,
 		APIMode: identity.APIMode, ProviderPath: identity.ProviderPath, TransportID: identity.TransportID,
+		EvidenceCondition: identity.EvidenceCondition, FrozenEvidenceSHA256: identity.FrozenEvidenceSHA256,
 		CacheGeneration: cacheGeneration, Agentic: agentic,
 	})
 	if err != nil {
@@ -473,7 +490,7 @@ func TestValidateBenchmarkRunIdentity(t *testing.T) {
 		Arm: "baseline", EngineCommit: strings.Repeat("a", 40), FixtureSHA256: strings.Repeat("b", 64),
 		BaselineConsumerCommit: strings.Repeat("c", 40), BaselinePromptSHA256: strings.Repeat("2", 64),
 		ProjectSHA256: strings.Repeat("d", 64), EffectivePromptSHA256: strings.Repeat("e", 64), SkillSetHash: strings.Repeat("f", 64),
-		EffectiveInputSHA256: strings.Repeat("1", 64), APIMode: ai.APIChatCompletions, ProviderPath: "github-copilot/claude-sonnet-4.6", TransportID: "copilot-structural-proxy-v1",
+		EffectiveInputSHA256: strings.Repeat("1", 64), EvidenceCondition: benchmarkEvidenceConditionFixture, APIMode: ai.APIChatCompletions, ProviderPath: "github-copilot/claude-sonnet-4.6", TransportID: "copilot-structural-proxy-v1",
 	}
 	if err := validateBenchmarkRunIdentity(valid); err != nil {
 		t.Fatal(err)
@@ -487,5 +504,20 @@ func TestValidateBenchmarkRunIdentity(t *testing.T) {
 	invalid.ProviderPath = "provider path"
 	if err := validateBenchmarkRunIdentity(invalid); err == nil {
 		t.Fatal("invalid provider path was accepted")
+	}
+}
+
+func TestBenchmarkEffectiveInputIncludesEvidenceCondition(t *testing.T) {
+	identity := benchmarkRunIdentity{
+		ProjectSHA256: strings.Repeat("a", 64), EffectivePromptSHA256: strings.Repeat("b", 64),
+		SkillSetHash: strings.Repeat("c", 64), APIMode: ai.APIChatCompletions,
+		EvidenceCondition: benchmarkEvidenceConditionFixture,
+	}
+	fixture := benchmarkEffectiveInputSHA256(identity, project.Agentic{}, "generation")
+	identity.EvidenceCondition = benchmarkEvidenceConditionOracle
+	identity.FrozenEvidenceSHA256 = strings.Repeat("d", 64)
+	oracle := benchmarkEffectiveInputSHA256(identity, project.Agentic{}, "generation")
+	if fixture == oracle {
+		t.Fatal("evidence conditions shared an effective input identity")
 	}
 }

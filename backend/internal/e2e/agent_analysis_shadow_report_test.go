@@ -41,6 +41,7 @@ func TestAgentAnalysisShadowReportAcceptsGroundedPolicyUnavailable(t *testing.T)
 	inprocess, shadow := validShadowReportRecords()
 	inprocess["outcome"] = "grounded_policy_unavailable"
 	inprocess["usable"] = false
+	inprocess["trial_status"] = "invalid_result"
 	output, err := runShadowReport(t, marshalJSONL(t, inprocess), marshalJSONL(t, shadow))
 	if err != nil {
 		t.Fatalf("report: %v: %s", err, output)
@@ -136,7 +137,7 @@ func TestShadowRecordWriterMatchesReportSchema(t *testing.T) {
 				t.Fatal(err)
 			}
 			inprocess, _ := validShadowReportRecords()
-			for _, field := range []string{"arm", "engine_commit", "fixture_sha256", "baseline_consumer_commit", "baseline_prompt_sha256", "project_sha256", "skill_set_hash", "provider_path", "transport_id", "api_mode", "model_label", "stable_id", "source_revision", "human_score_rubric_version", "human_score_max", "human_score_dimensions", "signal_total"} {
+			for _, field := range []string{"arm", "engine_commit", "fixture_sha256", "baseline_consumer_commit", "baseline_prompt_sha256", "project_sha256", "skill_set_hash", "provider_path", "transport_id", "api_mode", "model_label", "stable_id", "evidence_condition", "source_revision", "human_score_rubric_version", "human_score_max", "human_score_dimensions", "signal_total"} {
 				inprocess[field] = shadow[field]
 			}
 			if _, err := runShadowReport(t, marshalJSONL(t, inprocess), string(data)+"\n"); err != nil {
@@ -158,7 +159,7 @@ func TestAgentAnalysisShadowReportRejectsDuplicateRecords(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			assertShadowReportError(t, test.inprocess, test.shadow, "duplicate benchmark record case/rep-01")
+			assertShadowReportError(t, test.inprocess, test.shadow, "duplicate benchmark record case/fixture-v1/rep-01")
 		})
 	}
 }
@@ -188,7 +189,7 @@ func TestAgentAnalysisShadowReportRejectsUnpairedRecords(t *testing.T) {
 		t,
 		marshalJSONL(t, inprocess),
 		marshalJSONL(t, shadow),
-		"unpaired benchmark records: case/rep-01, other-case/rep-01",
+		"unpaired benchmark records: case/fixture-v1/rep-01, other-case/fixture-v1/rep-01",
 	)
 }
 
@@ -217,7 +218,7 @@ func TestAgentAnalysisShadowReportRejectsPairMismatches(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			inprocess, shadow := validShadowReportRecords()
 			shadow[test.field] = test.value
-			assertShadowReportError(t, marshalJSONL(t, inprocess), marshalJSONL(t, shadow), test.field+" mismatch for case/rep-01")
+			assertShadowReportError(t, marshalJSONL(t, inprocess), marshalJSONL(t, shadow), test.field+" mismatch for case/fixture-v1/rep-01")
 		})
 	}
 }
@@ -226,7 +227,7 @@ func TestAgentAnalysisShadowReportRejectsMissingRequiredFields(t *testing.T) {
 	commonFields := []string{
 		"case_id", "stable_id", "repetition", "arm", "engine_commit", "fixture_sha256",
 		"baseline_consumer_commit", "baseline_prompt_sha256", "project_sha256", "skill_set_hash",
-		"provider_path", "api_mode", "model_label", "source_revision", "signal_hits", "signal_total",
+		"provider_path", "api_mode", "model_label", "evidence_condition", "source_revision", "signal_hits", "signal_total",
 		"elapsed_ms", "human_score_rubric_version", "human_score_max", "human_score_dimensions",
 	}
 	inprocessFields := append(append([]string(nil), commonFields...), "outcome", "usable", "trace")
@@ -350,7 +351,7 @@ func TestAgentAnalysisShadowReportRejectsShadowContractViolations(t *testing.T) 
 		value any
 		want  string
 	}{
-		{name: "version", field: "version", value: 2, want: "shadow record version must be 1"},
+		{name: "version", field: "version", value: 1, want: "shadow record version must be 2"},
 		{name: "runtime", field: "runtime", value: "other-runtime", want: "shadow runtime must be orka-opencode-shadow"},
 		{name: "contract", field: "contract_version", value: "other", want: "shadow contract_version must be agent-analysis-v1"},
 		{name: "tool policy", field: "tool_policy_version", value: "other", want: "shadow tool_policy_version must be agent-analysis-tools-v2"},
@@ -474,6 +475,39 @@ func TestAgentAnalysisShadowReportRejectsShadowStatusViolations(t *testing.T) {
 	}
 }
 
+func TestAgentAnalysisShadowReportRejectsEvidenceTelemetryViolations(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(map[string]any)
+		want   string
+	}{
+		{name: "telemetry version", mutate: func(record map[string]any) { record["evidence_telemetry_version"] = 2 }, want: "in-process evidence_telemetry_version must be 1"},
+		{name: "trial status", mutate: func(record map[string]any) { record["trial_status"] = "unknown" }, want: "in-process trial_status is invalid"},
+		{name: "missing stages", mutate: func(record map[string]any) { record["evidence_stages"] = []map[string]any{} }, want: "in-process evidence_stages must not be empty"},
+		{name: "duplicate stage", mutate: func(record map[string]any) {
+			stages := record["evidence_stages"].([]map[string]any)
+			record["evidence_stages"] = append(stages, cloneReportRecord(stages[0]))
+		}, want: "in-process evidence stage group_id is duplicated"},
+		{name: "malformed stage boolean", mutate: func(record map[string]any) {
+			record["evidence_stages"].([]map[string]any)[0]["model_received_evidence"] = "yes"
+		}, want: "in-process evidence stage model_received_evidence must be a boolean"},
+		{name: "oracle missing hash", mutate: func(record map[string]any) {
+			record["evidence_condition"] = benchmarkEvidenceConditionOracle
+		}, want: "oracle in-process record requires frozen_evidence_sha256"},
+		{name: "valid result without usable", mutate: func(record map[string]any) {
+			record["usable"] = false
+			record["outcome"] = "grounded_policy_unavailable"
+		}, want: "in-process valid_result requires usable=true"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			inprocess, shadow := validShadowReportRecords()
+			test.mutate(inprocess)
+			assertShadowReportError(t, marshalJSONL(t, inprocess), marshalJSONL(t, shadow), test.want)
+		})
+	}
+}
+
 func validShadowReportRecords() (map[string]any, map[string]any) {
 	dimensions := []string{"diagnosis", "artifact_evidence", "claim_discipline", "remediation", "source_grounding"}
 	common := map[string]any{
@@ -491,6 +525,7 @@ func validShadowReportRecords() (map[string]any, map[string]any) {
 		"transport_id":               "copilot-structural-proxy-v1",
 		"api_mode":                   "chat_completions",
 		"model_label":                "model",
+		"evidence_condition":         benchmarkEvidenceConditionFixture,
 		"source_revision":            "456789abcdef0123456789abcdef0123456789ab",
 		"signal_total":               3,
 		"human_score_rubric_version": 1,
@@ -503,11 +538,19 @@ func validShadowReportRecords() (map[string]any, map[string]any) {
 	inprocess["signal_hits"] = 2
 	inprocess["elapsed_ms"] = 100
 	inprocess["trace"] = map[string]any{"input_tokens": 10, "output_tokens": 5}
+	inprocess["evidence_telemetry_version"] = 1
+	inprocess["trial_status"] = "valid_result"
+	inprocess["evidence_stages"] = []map[string]any{{
+		"group_id": "evidence-group", "required_signal_in_fixture": true, "candidate_path_selected": true,
+		"frozen_excerpt_contains_signal": true, "model_received_evidence": true, "evidence_cited": true,
+		"causally_used_in_root_cause": true, "causal_signal_configured": true,
+	}}
+	inprocess["evidence_revisions"] = []map[string]any{}
 	inprocess["summary"] = "summary content"
 	inprocess["root_cause"] = "root cause content"
 
 	shadow := cloneReportRecord(common)
-	shadow["version"] = 1
+	shadow["version"] = 2
 	shadow["runtime"] = "orka-opencode-shadow"
 	shadow["status"] = "succeeded"
 	shadow["attempts"] = 1

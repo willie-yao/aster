@@ -30,7 +30,7 @@ import (
 )
 
 const (
-	shadowBenchmarkRecordVersion   = 1
+	shadowBenchmarkRecordVersion   = 2
 	shadowBenchmarkKindContext     = "kind-prow-ai-shadow-bench"
 	shadowBenchmarkAgentVersionKey = "prow-ai-dashboard/benchmark-agent-version"
 	shadowBenchmarkOrkaCommitKey   = "prow-ai-dashboard/benchmark-orka-commit"
@@ -94,6 +94,7 @@ type shadowBenchmarkRecord struct {
 	SkillSetHash            string                   `json:"skill_set_hash"`
 	APIMode                 string                   `json:"api_mode"`
 	TransportID             string                   `json:"transport_id"`
+	EvidenceCondition       string                   `json:"evidence_condition"`
 	Status                  string                   `json:"status"`
 	ErrorCode               string                   `json:"error_code,omitempty"`
 	SourceRevision          string                   `json:"source_revision"`
@@ -141,6 +142,13 @@ func TestAgentAnalysisShadowBenchmark(t *testing.T) {
 		t.Skip("set RUN_AGENT_ANALYSIS_SHADOW_BENCHMARK=1 to run the Orka OpenCode comparison benchmark")
 	}
 	cfg := loadShadowBenchmarkConfig(t)
+	condition, err := benchmarkEvidenceCondition()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if condition != benchmarkEvidenceConditionFixture {
+		t.Fatalf("shadow benchmark supports only %q evidence until the shared broker is available", benchmarkEvidenceConditionFixture)
+	}
 	verifyShadowBenchmarkCluster(t, cfg.KubeContext)
 	cases := shadowBenchmarkCases(t)
 	projectSkills := shadowBenchmarkSkills(t, cases)
@@ -494,7 +502,8 @@ func shadowRecordForResult(cfg shadowBenchmarkConfig, bc benchCase, repetition i
 		Arm: "baseline", EngineCommit: cfg.EngineCommit, FixtureSHA256: bc.fixtureSHA256,
 		BaselineConsumerCommit: bc.consumerCommit, BaselinePromptSHA256: bc.promptSHA256,
 		ProjectSHA256: bc.projectSHA256, SkillSetHash: bundle.SkillSetHash, APIMode: ai.APIChatCompletions, TransportID: cfg.TransportID,
-		Status: status, ErrorCode: code, SourceRevision: result.SourceSHA, EvidenceHash: result.EvidenceHash,
+		EvidenceCondition: benchmarkEvidenceConditionFixture,
+		Status:            status, ErrorCode: code, SourceRevision: result.SourceSHA, EvidenceHash: result.EvidenceHash,
 		AgentSkillHash: result.SkillHash, ContractVersion: agentanalysis.ContractVersion, ToolPolicyVersion: agentanalysis.ToolPolicyVersion,
 		AgentNamespace: cfg.Namespace, AgentRef: cfg.AgentRef, AgentVersion: cfg.AgentVersion,
 		AgentConfigSHA256: agentConfigSHA256, OrkaCommit: cfg.OrkaCommit,

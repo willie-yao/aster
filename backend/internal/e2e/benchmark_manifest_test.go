@@ -54,7 +54,7 @@ func TestCrossProjectEvaluationManifest(t *testing.T) {
 	}
 	expectedEvidenceGroups := map[string][]string{
 		"secrets-store-csi-image-scan":        {"security-gate", "trivy-findings"},
-		"kueue-was-podgroup-api-mismatch":     {"apiserver-runtime-config", "podgroup-api-response", "scheduler-handler-readiness"},
+		"kueue-was-podgroup-api-mismatch":     {"apiserver-runtime-config", "competing-readiness-noise", "podgroup-api-response", "scheduler-handler-readiness", "terminal-deployment-timeout"},
 		"gcp-pd-csi-windows-mount-visibility": {"node-publish-success", "windows-mount-missing"},
 	}
 	for _, bc := range cases {
@@ -229,39 +229,40 @@ func TestCrossProjectEvaluationManifest(t *testing.T) {
 }
 
 type benchmarkManifestCase struct {
-	ID                  string                           `json:"id"`
-	StableID            string                           `json:"stable_id"`
-	Bucket              string                           `json:"bucket"`
-	FixtureAsset        string                           `json:"fixture_asset,omitempty"`
-	FixtureSHA256       string                           `json:"fixture_sha256,omitempty"`
-	JobType             string                           `json:"job_type"`
-	Repo                string                           `json:"repo,omitempty"`
-	JobName             string                           `json:"job_name"`
-	BuildID             string                           `json:"build_id"`
-	PullNumber          string                           `json:"pull_number,omitempty"`
-	WebURL              string                           `json:"web_url"`
-	Commit              string                           `json:"commit"`
-	RepoVersion         string                           `json:"repo_version"`
-	RepoRefs            map[string]string                `json:"repo_refs"`
-	SourceOwner         string                           `json:"source_owner"`
-	SourceName          string                           `json:"source_name"`
-	TestName            string                           `json:"test_name"`
-	TestSource          string                           `json:"test_source,omitempty"`
-	JUnitFile           string                           `json:"junit_file,omitempty"`
-	FailureMessage      string                           `json:"failure_message"`
-	ConsecutiveFailures int                              `json:"consecutive_failures,omitempty"`
-	OppositeDiagnosis   string                           `json:"opposite_diagnosis,omitempty"`
-	OppositeTransient   bool                             `json:"opposite_is_transient,omitempty"`
-	ReferenceDiagnosis  string                           `json:"reference_diagnosis,omitempty"`
-	ReferenceTransient  bool                             `json:"reference_is_transient,omitempty"`
-	AllowUnavailable    bool                             `json:"allow_unavailable,omitempty"`
-	ExpectedTransient   *bool                            `json:"expected_transient,omitempty"`
-	Forbidden           []benchmarkManifestSignal        `json:"forbidden,omitempty"`
-	ConsumerCommit      string                           `json:"consumer_commit,omitempty"`
-	ProjectSHA256       string                           `json:"project_sha256,omitempty"`
-	PromptSHA256        string                           `json:"prompt_sha256,omitempty"`
-	Signals             []benchmarkManifestSignal        `json:"signals"`
-	EvidenceGroups      []benchmarkManifestEvidenceGroup `json:"evidence_groups,omitempty"`
+	ID                   string                           `json:"id"`
+	StableID             string                           `json:"stable_id"`
+	Bucket               string                           `json:"bucket"`
+	FixtureAsset         string                           `json:"fixture_asset,omitempty"`
+	FixtureSHA256        string                           `json:"fixture_sha256,omitempty"`
+	JobType              string                           `json:"job_type"`
+	Repo                 string                           `json:"repo,omitempty"`
+	JobName              string                           `json:"job_name"`
+	BuildID              string                           `json:"build_id"`
+	PullNumber           string                           `json:"pull_number,omitempty"`
+	WebURL               string                           `json:"web_url"`
+	Commit               string                           `json:"commit"`
+	RepoVersion          string                           `json:"repo_version"`
+	RepoRefs             map[string]string                `json:"repo_refs"`
+	SourceOwner          string                           `json:"source_owner"`
+	SourceName           string                           `json:"source_name"`
+	TestName             string                           `json:"test_name"`
+	TestSource           string                           `json:"test_source,omitempty"`
+	JUnitFile            string                           `json:"junit_file,omitempty"`
+	FailureMessage       string                           `json:"failure_message"`
+	ConsecutiveFailures  int                              `json:"consecutive_failures,omitempty"`
+	OppositeDiagnosis    string                           `json:"opposite_diagnosis,omitempty"`
+	OppositeTransient    bool                             `json:"opposite_is_transient,omitempty"`
+	ReferenceDiagnosis   string                           `json:"reference_diagnosis,omitempty"`
+	ReferenceTransient   bool                             `json:"reference_is_transient,omitempty"`
+	AllowUnavailable     bool                             `json:"allow_unavailable,omitempty"`
+	ExpectedTransient    *bool                            `json:"expected_transient,omitempty"`
+	Forbidden            []benchmarkManifestSignal        `json:"forbidden,omitempty"`
+	ConsumerCommit       string                           `json:"consumer_commit,omitempty"`
+	ProjectSHA256        string                           `json:"project_sha256,omitempty"`
+	PromptSHA256         string                           `json:"prompt_sha256,omitempty"`
+	Signals              []benchmarkManifestSignal        `json:"signals"`
+	EvidenceGroups       []benchmarkManifestEvidenceGroup `json:"evidence_groups,omitempty"`
+	OracleEvidenceSHA256 string                           `json:"oracle_evidence_sha256,omitempty"`
 }
 
 type benchmarkManifestSignal struct {
@@ -272,9 +273,11 @@ type benchmarkManifestSignal struct {
 }
 
 type benchmarkManifestEvidenceGroup struct {
-	ID      string   `json:"id"`
-	Paths   []string `json:"paths"`
-	Content []string `json:"content,omitempty"`
+	ID                 string   `json:"id"`
+	Paths              []string `json:"paths"`
+	Content            []string `json:"content,omitempty"`
+	Causal             []string `json:"causal,omitempty"`
+	OracleContextLines *int     `json:"oracle_context_lines,omitempty"`
 }
 
 func loadBenchmarkManifest(path string) ([]benchCase, error) {
@@ -398,14 +401,24 @@ func loadBenchmarkManifest(path string) ([]benchCase, error) {
 		if len(item.EvidenceGroups) > 16 {
 			return nil, fmt.Errorf("benchmark manifest case %q evidence group count exceeds 16", item.ID)
 		}
+		if item.OracleEvidenceSHA256 != "" && !benchmarkSHA256RE.MatchString(item.OracleEvidenceSHA256) {
+			return nil, fmt.Errorf("benchmark manifest case %q oracle evidence SHA-256 is invalid", item.ID)
+		}
 		evidenceGroups := make([]benchmarkEvidenceGroup, 0, len(item.EvidenceGroups))
 		seenEvidenceGroups := map[string]bool{}
+		oracleGroups := 0
 		for groupIndex, group := range item.EvidenceGroups {
-			if !benchmarkCaseIDRE.MatchString(group.ID) || seenEvidenceGroups[group.ID] || len(group.Paths) == 0 || len(group.Paths) > 8 || len(group.Content) > 8 {
+			if !benchmarkCaseIDRE.MatchString(group.ID) || seenEvidenceGroups[group.ID] || len(group.Paths) == 0 || len(group.Paths) > 8 || len(group.Content) > 8 || len(group.Causal) > 8 {
 				return nil, fmt.Errorf("benchmark manifest case %q evidence group %d is invalid", item.ID, groupIndex)
 			}
 			seenEvidenceGroups[group.ID] = true
-			compiled := benchmarkEvidenceGroup{id: group.ID}
+			if group.OracleContextLines != nil && (*group.OracleContextLines < 0 || *group.OracleContextLines > 5 || len(group.Content) == 0) {
+				return nil, fmt.Errorf("benchmark manifest case %q evidence group %q oracle context is invalid", item.ID, group.ID)
+			}
+			compiled := benchmarkEvidenceGroup{id: group.ID, oracleContextLines: group.OracleContextLines}
+			if group.OracleContextLines != nil {
+				oracleGroups++
+			}
 			for patternIndex, pattern := range group.Paths {
 				if pattern == "" || len(pattern) > 1024 {
 					return nil, fmt.Errorf("benchmark manifest case %q evidence group %q path %d is invalid", item.ID, group.ID, patternIndex)
@@ -426,7 +439,20 @@ func loadBenchmarkManifest(path string) ([]benchCase, error) {
 				}
 				compiled.contentREs = append(compiled.contentREs, re)
 			}
+			for patternIndex, pattern := range group.Causal {
+				if pattern == "" || len(pattern) > 2048 {
+					return nil, fmt.Errorf("benchmark manifest case %q evidence group %q causal %d is invalid", item.ID, group.ID, patternIndex)
+				}
+				re, err := regexp.Compile(pattern)
+				if err != nil {
+					return nil, fmt.Errorf("benchmark manifest case %q evidence group %q causal %d: %w", item.ID, group.ID, patternIndex, err)
+				}
+				compiled.causalREs = append(compiled.causalREs, re)
+			}
 			evidenceGroups = append(evidenceGroups, compiled)
+		}
+		if (oracleGroups > 0) != (item.OracleEvidenceSHA256 != "") {
+			return nil, fmt.Errorf("benchmark manifest case %q oracle evidence identity is incomplete", item.ID)
 		}
 		forbidden := make([]benchSignal, 0, len(item.Forbidden))
 		for forbiddenIndex, signal := range item.Forbidden {
@@ -457,80 +483,87 @@ func loadBenchmarkManifest(path string) ([]benchCase, error) {
 			referenceDiagnosis: item.ReferenceDiagnosis, referenceTransient: item.ReferenceTransient,
 			allowUnavailable: item.AllowUnavailable, expectedTransient: item.ExpectedTransient, forbidden: forbidden,
 			consumerCommit: item.ConsumerCommit, projectSHA256: item.ProjectSHA256, promptSHA256: item.PromptSHA256,
-			signals: signals, evidenceGroups: evidenceGroups,
+			signals: signals, evidenceGroups: evidenceGroups, oracleEvidenceSHA256: item.OracleEvidenceSHA256,
 		})
 	}
 	return out, nil
 }
 
 type benchmarkJSONLResult struct {
-	CaseID                  string                     `json:"case_id"`
-	StableID                string                     `json:"stable_id"`
-	Repetition              int                        `json:"repetition"`
-	ModelLabel              string                     `json:"model_label"`
-	Arm                     string                     `json:"arm"`
-	EngineCommit            string                     `json:"engine_commit"`
-	FixtureSHA256           string                     `json:"fixture_sha256,omitempty"`
-	BaselineConsumerCommit  string                     `json:"baseline_consumer_commit,omitempty"`
-	BaselinePromptSHA256    string                     `json:"baseline_prompt_sha256,omitempty"`
-	ProjectSHA256           string                     `json:"project_sha256,omitempty"`
-	EffectivePromptSHA256   string                     `json:"effective_prompt_sha256"`
-	SkillSetHash            string                     `json:"skill_set_hash"`
-	EffectiveInputSHA256    string                     `json:"effective_input_sha256"`
-	APIMode                 string                     `json:"api_mode"`
-	ProviderPath            string                     `json:"provider_path,omitempty"`
-	TransportID             string                     `json:"transport_id,omitempty"`
-	EvidenceGroupsHit       []string                   `json:"evidence_groups_hit,omitempty"`
-	EvidenceGroupsMissed    []string                   `json:"evidence_groups_missed,omitempty"`
-	EvidenceGroupSources    map[string][]string        `json:"evidence_group_sources,omitempty"`
-	JobName                 string                     `json:"job_name"`
-	BuildID                 string                     `json:"build_id"`
-	CheckoutCommit          string                     `json:"checkout_commit"`
-	SourceRevision          string                     `json:"source_revision,omitempty"`
-	SourceUnavailable       bool                       `json:"source_unavailable,omitempty"`
-	TestName                string                     `json:"test_name"`
-	TestSource              string                     `json:"test_source,omitempty"`
-	ElapsedMS               int64                      `json:"elapsed_ms"`
-	Outcome                 string                     `json:"outcome"`
-	Usable                  bool                       `json:"usable"`
-	IsTransient             *bool                      `json:"is_transient,omitempty"`
-	Summary                 string                     `json:"summary,omitempty"`
-	RootCause               string                     `json:"root_cause,omitempty"`
-	SuggestedFix            string                     `json:"suggested_fix,omitempty"`
-	Severity                string                     `json:"severity,omitempty"`
-	Evidence                []models.EvidenceCitation  `json:"evidence_citations,omitempty"`
-	FileLinks               map[string]string          `json:"file_links,omitempty"`
-	SignalHits              int                        `json:"signal_hits"`
-	SignalTotal             int                        `json:"signal_total"`
-	DiagnosisSignalHits     int                        `json:"diagnosis_signal_hits"`
-	DiagnosisSignalTotal    int                        `json:"diagnosis_signal_total"`
-	TransientCorrect        *bool                      `json:"transient_classification_correct,omitempty"`
-	ForbiddenChecksPassed   int                        `json:"forbidden_checks_passed"`
-	ForbiddenChecksTotal    int                        `json:"forbidden_checks_total"`
-	MissingMust             []string                   `json:"missing_must,omitempty"`
-	SelectedAttempt         int                        `json:"selected_attempt,omitempty"`
-	Drafts                  []benchmarkJSONLDraft      `json:"drafts,omitempty"`
-	DraftDecisions          []ai.DraftDecisionTrace    `json:"draft_decisions,omitempty"`
-	ToolNames               []string                   `json:"tool_names,omitempty"`
-	ToolCounts              []string                   `json:"tool_counts,omitempty"`
-	GCSBytes                int                        `json:"gcs_bytes,omitempty"`
-	EvidencePlanCovered     bool                       `json:"evidence_plan_covered,omitempty"`
-	GCSFloorRetryExhausted  bool                       `json:"gcs_floor_retry_exhausted,omitempty"`
-	CritiquePassed          *bool                      `json:"critique_passed,omitempty"`
-	CritiqueCachePolicy     string                     `json:"critique_cache_policy,omitempty"`
-	CritiqueHardFailures    []string                   `json:"critique_hard_failures,omitempty"`
-	CritiqueSoftWarnings    []string                   `json:"critique_soft_warnings,omitempty"`
-	BudgetExhausted         bool                       `json:"budget_exhausted,omitempty"`
-	FloorNudges             int                        `json:"floor_nudges,omitempty"`
-	FloorNudgeReasons       []string                   `json:"floor_nudge_reasons,omitempty"`
-	ProviderRequestCap      int                        `json:"provider_request_cap"`
-	TraceTruncated          bool                       `json:"trace_truncated,omitempty"`
-	CacheGeneration         string                     `json:"cache_generation,omitempty"`
-	CacheVerification       benchmarkCacheVerification `json:"cache_verification"`
-	Trace                   benchmarkJSONLTrace        `json:"trace"`
-	HumanScoreRubricVersion int                        `json:"human_score_rubric_version"`
-	HumanScoreMax           int                        `json:"human_score_max"`
-	HumanScoreDimensions    []string                   `json:"human_score_dimensions"`
+	CaseID                   string                      `json:"case_id"`
+	StableID                 string                      `json:"stable_id"`
+	Repetition               int                         `json:"repetition"`
+	ModelLabel               string                      `json:"model_label"`
+	Arm                      string                      `json:"arm"`
+	EngineCommit             string                      `json:"engine_commit"`
+	FixtureSHA256            string                      `json:"fixture_sha256,omitempty"`
+	BaselineConsumerCommit   string                      `json:"baseline_consumer_commit,omitempty"`
+	BaselinePromptSHA256     string                      `json:"baseline_prompt_sha256,omitempty"`
+	ProjectSHA256            string                      `json:"project_sha256,omitempty"`
+	EffectivePromptSHA256    string                      `json:"effective_prompt_sha256"`
+	SkillSetHash             string                      `json:"skill_set_hash"`
+	EffectiveInputSHA256     string                      `json:"effective_input_sha256"`
+	APIMode                  string                      `json:"api_mode"`
+	ProviderPath             string                      `json:"provider_path,omitempty"`
+	TransportID              string                      `json:"transport_id,omitempty"`
+	EvidenceTelemetryVersion int                         `json:"evidence_telemetry_version"`
+	EvidenceCondition        string                      `json:"evidence_condition"`
+	FrozenEvidenceSHA256     string                      `json:"frozen_evidence_sha256,omitempty"`
+	TrialStatus              string                      `json:"trial_status"`
+	EvidenceStages           []benchmarkEvidenceStage    `json:"evidence_stages"`
+	EvidenceRevisions        []benchmarkEvidenceRevision `json:"evidence_revisions"`
+	EvidenceGroupsSelected   []string                    `json:"evidence_groups_selected,omitempty"`
+	EvidenceGroupsHit        []string                    `json:"evidence_groups_hit,omitempty"`
+	EvidenceGroupsMissed     []string                    `json:"evidence_groups_missed,omitempty"`
+	EvidenceGroupSources     map[string][]string         `json:"evidence_group_sources,omitempty"`
+	JobName                  string                      `json:"job_name"`
+	BuildID                  string                      `json:"build_id"`
+	CheckoutCommit           string                      `json:"checkout_commit"`
+	SourceRevision           string                      `json:"source_revision,omitempty"`
+	SourceUnavailable        bool                        `json:"source_unavailable,omitempty"`
+	TestName                 string                      `json:"test_name"`
+	TestSource               string                      `json:"test_source,omitempty"`
+	ElapsedMS                int64                       `json:"elapsed_ms"`
+	Outcome                  string                      `json:"outcome"`
+	Usable                   bool                        `json:"usable"`
+	IsTransient              *bool                       `json:"is_transient,omitempty"`
+	Summary                  string                      `json:"summary,omitempty"`
+	RootCause                string                      `json:"root_cause,omitempty"`
+	SuggestedFix             string                      `json:"suggested_fix,omitempty"`
+	Severity                 string                      `json:"severity,omitempty"`
+	Evidence                 []models.EvidenceCitation   `json:"evidence_citations,omitempty"`
+	FileLinks                map[string]string           `json:"file_links,omitempty"`
+	SignalHits               int                         `json:"signal_hits"`
+	SignalTotal              int                         `json:"signal_total"`
+	DiagnosisSignalHits      int                         `json:"diagnosis_signal_hits"`
+	DiagnosisSignalTotal     int                         `json:"diagnosis_signal_total"`
+	TransientCorrect         *bool                       `json:"transient_classification_correct,omitempty"`
+	ForbiddenChecksPassed    int                         `json:"forbidden_checks_passed"`
+	ForbiddenChecksTotal     int                         `json:"forbidden_checks_total"`
+	MissingMust              []string                    `json:"missing_must,omitempty"`
+	SelectedAttempt          int                         `json:"selected_attempt,omitempty"`
+	Drafts                   []benchmarkJSONLDraft       `json:"drafts,omitempty"`
+	DraftDecisions           []ai.DraftDecisionTrace     `json:"draft_decisions,omitempty"`
+	ToolNames                []string                    `json:"tool_names,omitempty"`
+	ToolCounts               []string                    `json:"tool_counts,omitempty"`
+	GCSBytes                 int                         `json:"gcs_bytes,omitempty"`
+	EvidencePlanCovered      bool                        `json:"evidence_plan_covered,omitempty"`
+	GCSFloorRetryExhausted   bool                        `json:"gcs_floor_retry_exhausted,omitempty"`
+	CritiquePassed           *bool                       `json:"critique_passed,omitempty"`
+	CritiqueCachePolicy      string                      `json:"critique_cache_policy,omitempty"`
+	CritiqueHardFailures     []string                    `json:"critique_hard_failures,omitempty"`
+	CritiqueSoftWarnings     []string                    `json:"critique_soft_warnings,omitempty"`
+	BudgetExhausted          bool                        `json:"budget_exhausted,omitempty"`
+	FloorNudges              int                         `json:"floor_nudges,omitempty"`
+	FloorNudgeReasons        []string                    `json:"floor_nudge_reasons,omitempty"`
+	ProviderRequestCap       int                         `json:"provider_request_cap"`
+	TraceTruncated           bool                        `json:"trace_truncated,omitempty"`
+	CacheGeneration          string                      `json:"cache_generation,omitempty"`
+	CacheVerification        benchmarkCacheVerification  `json:"cache_verification"`
+	Trace                    benchmarkJSONLTrace         `json:"trace"`
+	HumanScoreRubricVersion  int                         `json:"human_score_rubric_version"`
+	HumanScoreMax            int                         `json:"human_score_max"`
+	HumanScoreDimensions     []string                    `json:"human_score_dimensions"`
 }
 
 const (
@@ -599,7 +632,7 @@ type benchmarkJSONLTrace struct {
 	Critique          map[string]int `json:"critique"`
 }
 
-func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int, tc *models.TestCase, outcome benchmarkOutcome, elapsed time.Duration, snapshot ai.AnalysisTraceFile, observations []benchmarkDraftObservation, selectedAttempt int, toolUsage benchmarkToolUsage, traceSummary benchmarkTraceSummary, providerRequestCap int, cacheGeneration string, critiquePolicy ai.CritiqueCachePolicy, cacheVerification benchmarkCacheVerification, identity benchmarkRunIdentity, evidenceCoverage benchmarkEvidenceCoverage) {
+func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int, tc *models.TestCase, outcome benchmarkOutcome, elapsed time.Duration, snapshot ai.AnalysisTraceFile, observations []benchmarkDraftObservation, selectedAttempt int, toolUsage benchmarkToolUsage, traceSummary benchmarkTraceSummary, providerRequestCap int, cacheGeneration string, critiquePolicy ai.CritiqueCachePolicy, cacheVerification benchmarkCacheVerification, identity benchmarkRunIdentity, evidenceCoverage benchmarkEvidenceCoverage, stageReport benchmarkEvidenceStageReport) {
 	t.Helper()
 	if path == "" {
 		return
@@ -609,6 +642,9 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 	}
 	if err := validateBenchmarkRunIdentity(identity); err != nil {
 		t.Fatalf("benchmark run identity: %v", err)
+	}
+	if err := validateBenchmarkEvidenceStageReport(bc, stageReport); err != nil {
+		t.Fatalf("benchmark evidence stages: %v", err)
 	}
 	label := strings.TrimSpace(os.Getenv("BENCH_MODEL_LABEL"))
 	if !benchmarkCaseIDRE.MatchString(label) {
@@ -621,7 +657,10 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 		ProjectSHA256: identity.ProjectSHA256, EffectivePromptSHA256: identity.EffectivePromptSHA256,
 		SkillSetHash: identity.SkillSetHash, EffectiveInputSHA256: identity.EffectiveInputSHA256,
 		APIMode: identity.APIMode, ProviderPath: identity.ProviderPath, TransportID: identity.TransportID,
-		EvidenceGroupsHit: append([]string(nil), evidenceCoverage.hit...), EvidenceGroupsMissed: append([]string(nil), evidenceCoverage.missed...),
+		EvidenceTelemetryVersion: 1, EvidenceCondition: stageReport.Condition, FrozenEvidenceSHA256: stageReport.FrozenSHA256,
+		TrialStatus: stageReport.TrialStatus, EvidenceStages: append([]benchmarkEvidenceStage{}, stageReport.Stages...),
+		EvidenceRevisions:      append([]benchmarkEvidenceRevision{}, stageReport.Revisions...),
+		EvidenceGroupsSelected: append([]string(nil), evidenceCoverage.selected...), EvidenceGroupsHit: append([]string(nil), evidenceCoverage.hit...), EvidenceGroupsMissed: append([]string(nil), evidenceCoverage.missed...),
 		EvidenceGroupSources: cloneBenchmarkEvidenceSources(evidenceCoverage.sources),
 		JobName:              bc.jobName, BuildID: bc.buildID, CheckoutCommit: bc.commit, TestName: bc.testName, TestSource: bc.testSource, ElapsedMS: elapsed.Milliseconds(), Outcome: string(outcome),
 		FileLinks: map[string]string{}, SelectedAttempt: selectedAttempt,
@@ -794,6 +833,18 @@ func TestLoadBenchmarkManifest(t *testing.T) {
 		"duplicate evidence id": func(value string) string {
 			return strings.Replace(value, `"evidence_groups": [{"id":"initiating-error","paths":["build-log\\.txt$"],"content":["root cause"]}]`, `"evidence_groups": [{"id":"initiating-error","paths":["build-log\\.txt$"]},{"id":"initiating-error","paths":["other"]}]`, 1)
 		},
+		"bad causal regexp": func(value string) string {
+			return strings.Replace(value, `"content":["root cause"]`, `"content":["root cause"],"causal":["["]`, 1)
+		},
+		"oracle context without hash": func(value string) string {
+			return strings.Replace(value, `"content":["root cause"]`, `"content":["root cause"],"oracle_context_lines":1`, 1)
+		},
+		"oracle hash without context": func(value string) string {
+			return strings.Replace(value, `"signals": [{"name":"cause","pattern":"(?i)root cause","must":true}]`, `"signals": [{"name":"cause","pattern":"(?i)root cause","must":true}],"oracle_evidence_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"`, 1)
+		},
+		"oracle context too large": func(value string) string {
+			return strings.Replace(value, `"content":["root cause"]`, `"content":["root cause"],"oracle_context_lines":6`, 1)
+		},
 		"bad test source": func(value string) string {
 			return strings.Replace(value, `"test_name": "Example test"`, `"test_name": "Example test", "test_source": "junit"`, 1)
 		},
@@ -856,7 +907,7 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 	writeBenchmarkJSONL(t, path, bc, 2, tc, benchmarkOutcomeUsable, 3*time.Second, snapshot, observations, 1,
 		benchmarkToolUsage{names: []string{"read_artifact"}, counts: []string{"read_artifact=1"}},
 		benchmarkTraceSummary{floorNudges: 1, floorNudgeReasons: []string{"gcs_bytes"}}, 17, "generation", ai.CritiqueCachePolicyHard, cacheVerification,
-		benchmarkRunIdentity{Arm: "variant", EngineCommit: strings.Repeat("b", 40), FixtureSHA256: strings.Repeat("c", 64), BaselineConsumerCommit: strings.Repeat("d", 40), BaselinePromptSHA256: strings.Repeat("3", 64), ProjectSHA256: strings.Repeat("e", 64), EffectivePromptSHA256: strings.Repeat("f", 64), SkillSetHash: strings.Repeat("1", 64), EffectiveInputSHA256: strings.Repeat("2", 64), APIMode: ai.APIChatCompletions, ProviderPath: "github-copilot/claude-sonnet-4.6", TransportID: "copilot-structural-proxy-v1"}, benchmarkEvidenceCoverage{hit: []string{"initiating-error"}, missed: []string{"secondary-evidence"}, sources: map[string][]string{"initiating-error": {"model_tool"}}})
+		benchmarkRunIdentity{Arm: "variant", EngineCommit: strings.Repeat("b", 40), FixtureSHA256: strings.Repeat("c", 64), BaselineConsumerCommit: strings.Repeat("d", 40), BaselinePromptSHA256: strings.Repeat("3", 64), ProjectSHA256: strings.Repeat("e", 64), EffectivePromptSHA256: strings.Repeat("f", 64), SkillSetHash: strings.Repeat("1", 64), EffectiveInputSHA256: strings.Repeat("2", 64), EvidenceCondition: benchmarkEvidenceConditionFixture, APIMode: ai.APIChatCompletions, ProviderPath: "github-copilot/claude-sonnet-4.6", TransportID: "copilot-structural-proxy-v1"}, benchmarkEvidenceCoverage{selected: []string{"initiating-error"}, hit: []string{"initiating-error"}, missed: []string{"secondary-evidence"}, sources: map[string][]string{"initiating-error": {"model_tool"}}}, benchmarkEvidenceStageReport{Condition: benchmarkEvidenceConditionFixture, TrialStatus: "contract_violation"})
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -868,7 +919,7 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 	if err := json.Unmarshal(data, &result); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(result.EvidenceGroupsHit, []string{"initiating-error"}) || !slices.Equal(result.EvidenceGroupsMissed, []string{"secondary-evidence"}) || !slices.Equal(result.EvidenceGroupSources["initiating-error"], []string{"model_tool"}) || result.ModelLabel != "model-a" || result.Arm != "variant" || result.EngineCommit != strings.Repeat("b", 40) || result.FixtureSHA256 != strings.Repeat("c", 64) || result.BaselineConsumerCommit != strings.Repeat("d", 40) || result.BaselinePromptSHA256 != strings.Repeat("3", 64) || result.ProjectSHA256 != strings.Repeat("e", 64) || result.EffectivePromptSHA256 != strings.Repeat("f", 64) || result.SkillSetHash != strings.Repeat("1", 64) || result.EffectiveInputSHA256 != strings.Repeat("2", 64) || result.APIMode != ai.APIChatCompletions || result.ProviderPath != "github-copilot/claude-sonnet-4.6" || result.TransportID != "copilot-structural-proxy-v1" || result.Repetition != 2 || result.Outcome != string(benchmarkOutcomeUsable) || result.IsTransient == nil || *result.IsTransient || result.SignalHits != 1 || result.DiagnosisSignalHits != 1 || result.DiagnosisSignalTotal != 1 || result.TransientCorrect != nil || result.ForbiddenChecksPassed != 0 || result.ForbiddenChecksTotal != 0 || result.SourceRevision != strings.Repeat("a", 40) || result.SourceUnavailable || result.TestSource != models.TestCaseSourceBuild ||
+	if !slices.Equal(result.EvidenceGroupsSelected, []string{"initiating-error"}) || !slices.Equal(result.EvidenceGroupsHit, []string{"initiating-error"}) || !slices.Equal(result.EvidenceGroupsMissed, []string{"secondary-evidence"}) || !slices.Equal(result.EvidenceGroupSources["initiating-error"], []string{"model_tool"}) || result.EvidenceTelemetryVersion != 1 || result.EvidenceCondition != benchmarkEvidenceConditionFixture || result.TrialStatus != "contract_violation" || result.EvidenceStages == nil || result.EvidenceRevisions == nil || result.ModelLabel != "model-a" || result.Arm != "variant" || result.EngineCommit != strings.Repeat("b", 40) || result.FixtureSHA256 != strings.Repeat("c", 64) || result.BaselineConsumerCommit != strings.Repeat("d", 40) || result.BaselinePromptSHA256 != strings.Repeat("3", 64) || result.ProjectSHA256 != strings.Repeat("e", 64) || result.EffectivePromptSHA256 != strings.Repeat("f", 64) || result.SkillSetHash != strings.Repeat("1", 64) || result.EffectiveInputSHA256 != strings.Repeat("2", 64) || result.APIMode != ai.APIChatCompletions || result.ProviderPath != "github-copilot/claude-sonnet-4.6" || result.TransportID != "copilot-structural-proxy-v1" || result.Repetition != 2 || result.Outcome != string(benchmarkOutcomeUsable) || result.IsTransient == nil || *result.IsTransient || result.SignalHits != 1 || result.DiagnosisSignalHits != 1 || result.DiagnosisSignalTotal != 1 || result.TransientCorrect != nil || result.ForbiddenChecksPassed != 0 || result.ForbiddenChecksTotal != 0 || result.SourceRevision != strings.Repeat("a", 40) || result.SourceUnavailable || result.TestSource != models.TestCaseSourceBuild ||
 		result.Trace.Finalize["empty:unexpected_tool_call"] != 1 || result.Trace.Critique["punts"] != 1 || result.GCSBytes != 42 ||
 		!result.EvidencePlanCovered || !result.GCSFloorRetryExhausted || result.CritiquePassed == nil || !*result.CritiquePassed || !result.BudgetExhausted ||
 		result.FloorNudges != 1 || !slices.Equal(result.FloorNudgeReasons, []string{"gcs_bytes"}) ||
@@ -900,8 +951,8 @@ func TestWriteBenchmarkJSONLRecordsGroundedUnavailableOutcome(t *testing.T) {
 	}
 	tc := &models.TestCase{AISummary: &models.AISummary{Summary: "AI analysis unavailable: no validated artifact citation supports the analysis"}}
 	writeBenchmarkJSONL(t, path, bc, 1, tc, benchmarkOutcomeGroundedPolicyUnavailable, time.Second, ai.AnalysisTraceFile{}, nil, 0, benchmarkToolUsage{}, benchmarkTraceSummary{}, 1, "", ai.CritiqueCachePolicyHard, benchmarkCacheVerification{}, benchmarkRunIdentity{
-		Arm: "baseline", EngineCommit: strings.Repeat("b", 40), EffectivePromptSHA256: strings.Repeat("f", 64), SkillSetHash: strings.Repeat("1", 64), EffectiveInputSHA256: strings.Repeat("2", 64), APIMode: ai.APIChatCompletions,
-	}, benchmarkEvidenceCoverage{})
+		Arm: "baseline", EngineCommit: strings.Repeat("b", 40), EffectivePromptSHA256: strings.Repeat("f", 64), SkillSetHash: strings.Repeat("1", 64), EffectiveInputSHA256: strings.Repeat("2", 64), EvidenceCondition: benchmarkEvidenceConditionFixture, APIMode: ai.APIChatCompletions,
+	}, benchmarkEvidenceCoverage{}, benchmarkEvidenceStageReport{Condition: benchmarkEvidenceConditionFixture, TrialStatus: "invalid_result"})
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -910,7 +961,7 @@ func TestWriteBenchmarkJSONLRecordsGroundedUnavailableOutcome(t *testing.T) {
 	if err := json.Unmarshal(data, &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.Outcome != string(benchmarkOutcomeGroundedPolicyUnavailable) || result.Usable || result.IsTransient == nil || *result.IsTransient || result.Summary != tc.AISummary.Summary {
+	if result.Outcome != string(benchmarkOutcomeGroundedPolicyUnavailable) || result.TrialStatus != "invalid_result" || result.EvidenceCondition != benchmarkEvidenceConditionFixture || result.Usable || result.IsTransient == nil || *result.IsTransient || result.Summary != tc.AISummary.Summary {
 		t.Fatalf("result = %+v", result)
 	}
 }
